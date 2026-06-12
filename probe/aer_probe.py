@@ -122,9 +122,14 @@ def main() -> int:
             print(f"\r{n} packets", end="", file=sys.stderr, flush=True)
 
         next_t += dt
+        # hybrid wait: coarse sleep, then spin for the last ms — at 144 Hz the
+        # period is ~6.9 ms, so plain sleep() jitter would be real phase noise
         delay = next_t - time.perf_counter()
         if delay > 0:
-            time.sleep(delay)
+            if delay > 0.0015:
+                time.sleep(delay - 0.001)
+            while time.perf_counter() < next_t:
+                pass
         else:
             next_t = time.perf_counter()  # fell behind; resync
 
