@@ -25,12 +25,24 @@ nebulae) carries the depth of what is behind it, and the HUD needs masking.
   from BlueSkyDefender/Depth3D.
 * `vkshade-shader-check SuperDepth3D.fx` → `success: true, usesDepth: true`.
 
+## Finding: vkShade requires a native Wayland surface
+
+First attempt (X4 default = SDL3 X11 video driver under XWayland) produced
+a black screen: vkShade logs `unsupported non-Wayland Vulkan surface via
+vkCreateXlibSurfaceKHR; vkShade will pass through only`, and its
+pass-through still interposes the swapchain — black screen instead of a
+clean fallback (upstream bug worth reporting). Overlay input is also
+Wayland-only. Fix: run X4 with SDL3's Wayland driver
+(`SDL_VIDEO_DRIVER=wayland,x11` + `-prefer-wayland`). Note Egosoft's
+caveat: Steam Input does not work on Wayland (SDL handles controllers
+directly instead).
+
 ## Smoke-test procedure (flat screen, no headset)
 
 Steam launch options:
 
 ```
-ENABLE_VKSHADE=1 mangohud gamemoderun %command% -nocputhrottle -nosoundthrottle -skipintro
+ENABLE_VKSHADE=1 SDL_VIDEO_DRIVER=wayland,x11 mangohud gamemoderun %command% -nocputhrottle -nosoundthrottle -skipintro -prefer-wayland
 ```
 
 (no fps lock needed for this track; FreeSync may stay on)
