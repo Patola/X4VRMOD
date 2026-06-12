@@ -1,0 +1,240 @@
+diff --git a/src/config_serializer.cpp b/src/config_serializer.cpp
+index 50bf021..7879bbc 100644
+--- a/src/config_serializer.cpp
++++ b/src/config_serializer.cpp
+@@ -828,8 +828,13 @@ namespace vkShade
+             auto defsIt = defsByEffect.find(effectName);
+             if (defsIt != defsByEffect.end())
+             {
++                // Only persist user-changed definitions. Unchanged defaults must
++                // not round-trip through the config: the value parser strips
++                // spaces and quote characters, which corrupts string macros
++                // (e.g. SuperDepth3D's G_Note) a little more on every session.
+                 for (const auto* def : defsIt->second)
+-                    file << def->effectName << "@" << def->name << " = " << def->value << "\n";
++                    if (def->value != def->defaultValue)
++                        file << def->effectName << "@" << def->name << " = " << def->value << "\n";
+             }
+             file << "\n";
+         }
+@@ -844,7 +849,8 @@ namespace vkShade
+             if (pathIt != effectPaths.end() && !pathIt->second.empty())
+                 file << effectName << " = " << pathIt->second << "\n";
+             for (const auto* def : effectDefs)
+-                file << def->effectName << "@" << def->name << " = " << def->value << "\n";
++                if (def->value != def->defaultValue) // see comment above
++                    file << def->effectName << "@" << def->name << " = " << def->value << "\n";
+             file << "\n";
+         }
+ 
+diff --git a/src/effects/effect_reshade.cpp b/src/effects/effect_reshade.cpp
+index 70c0f10..653d005 100644
+--- a/src/effects/effect_reshade.cpp
++++ b/src/effects/effect_reshade.cpp
+@@ -1927,9 +1927,14 @@ namespace vkShade
+             "#define ddx_coarse(x) ddx(x)\n"
+             "#define ddy_coarse(x) ddy(x)\n");
+ 
+-        // Add custom preprocessor definitions (user-configurable macros)
++        // Add custom preprocessor definitions (user-configurable macros).
++        // Unchanged defaults are skipped: the shader's own #define is the
++        // authoritative value, and stored defaults may be corrupted by the
++        // config parser's space/quote stripping (lossy round-trip).
+         for (const auto& def : customPreprocessorDefs)
+         {
++            if (def.value == def.defaultValue)
++                continue;
+             preprocessor.add_macro_definition(def.name, def.value);
+             Logger::debug("  custom macro: " + def.name + " = " + def.value);
+         }
+@@ -1968,7 +1973,11 @@ namespace vkShade
+         if (shaderPath.empty() || !preprocessor.append_file(shaderPath))
+         {
+             Logger::err("failed to load shader file: " + shaderPath);
+-            Logger::err("Does the filepath exist and does it not include spaces?");
++            const std::string ppErrors = preprocessor.errors();
++            if (!ppErrors.empty())
++                Logger::err("preprocessor errors:\n" + ppErrors);
++            else
++                Logger::err("Does the filepath exist and does it not include spaces?");
+             throw std::runtime_error("failed to load shader: " + effectName);
+         }
+ 
+diff --git a/src/reshade/effect_preprocessor.cpp b/src/reshade/effect_preprocessor.cpp
+index d95f1fd..684cd95 100644
+--- a/src/reshade/effect_preprocessor.cpp
++++ b/src/reshade/effect_preprocessor.cpp
+@@ -125,7 +125,15 @@ void reshadefx::preprocessor::add_include_path(const std::filesystem::path &path
+ bool reshadefx::preprocessor::add_macro_definition(const std::string &name, const macro &macro)
+ {
+ 	assert(!name.empty());
+-	return _macros.emplace(name, macro).second;
++	const auto res = _macros.emplace(name, macro);
++	if (!res.second && res.first->second.is_predefined)
++	{
++		// Externally injected macros are defaults; the effect file's own
++		// #define wins without raising a redefinition error.
++		res.first->second = macro;
++		return true;
++	}
++	return res.second;
+ }
+ 
+ bool reshadefx::preprocessor::append_file(const std::filesystem::path &path)
+diff --git a/src/reshade/effect_preprocessor.hpp b/src/reshade/effect_preprocessor.hpp
+index 20a2751..ee62131 100644
+--- a/src/reshade/effect_preprocessor.hpp
++++ b/src/reshade/effect_preprocessor.hpp
+@@ -25,6 +25,10 @@ namespace reshadefx
+ 			std::vector<std::string> parameters;
+ 			bool is_variadic = false;
+ 			bool is_function_like = false;
++			// Set for macros injected via the external add_macro_definition API.
++			// Those act as defaults: an in-file #define overrides them silently
++			// (unguarded internal defines would otherwise be "redefinition" errors).
++			bool is_predefined = false;
+ 		};
+ 
+ 		// Define constructor explicitly because lexer class is not included here
+@@ -50,7 +54,12 @@ namespace reshadefx
+ 		/// <param name="name">The name of the macro to define.</param>
+ 		/// <param name="value">The value to define that macro to.</param>
+ 		/// <returns></returns>
+-		bool add_macro_definition(const std::string &name, std::string value = "1") { return add_macro_definition(name, macro { std::move(value), {} }); }
++		bool add_macro_definition(const std::string &name, std::string value = "1")
++		{
++			macro m { std::move(value), {} };
++			m.is_predefined = true;
++			return add_macro_definition(name, m);
++		}
+ 
+ 		/// <summary>
+ 		/// Open the specified file, parse its contents and append them to the output.
+diff --git a/src/reshade_parser.cpp b/src/reshade_parser.cpp
+index 66bea86..f44439b 100644
+--- a/src/reshade_parser.cpp
++++ b/src/reshade_parser.cpp
+@@ -660,7 +660,8 @@ namespace vkShade
+     ShaderTestResult testShaderCompilation(
+         const std::string& effectName,
+         const std::string& effectPath,
+-        const std::vector<std::string>& includePaths)
++        const std::vector<std::string>& includePaths,
++        const std::vector<std::pair<std::string, std::string>>& extraDefines)
+     {
+         ShaderTestResult result;
+         result.effectName = effectName;
+@@ -684,6 +685,10 @@ namespace vkShade
+             reshadefx::preprocessor preprocessor;
+             setupPreprocessor(preprocessor, includePaths);
+ 
++            // Mimic runtime-injected custom preprocessor definitions
++            for (const auto& def : extraDefines)
++                preprocessor.add_macro_definition(def.first, def.second);
++
+             // Try to load and preprocess the file
+             if (!preprocessor.append_file(effectPath))
+             {
+diff --git a/src/reshade_parser.hpp b/src/reshade_parser.hpp
+index 1a5c6f4..7bf0389 100644
+--- a/src/reshade_parser.hpp
++++ b/src/reshade_parser.hpp
+@@ -4,6 +4,7 @@
+ #include <string>
+ #include <vector>
+ #include <memory>
++#include <utility>
+ 
+ #include "effects/effect_config.hpp"
+ #include "effects/params/effect_param.hpp"
+@@ -39,7 +40,8 @@ namespace vkShade
+     ShaderTestResult testShaderCompilation(
+         const std::string& effectName,
+         const std::string& effectPath,
+-        const std::vector<std::string>& includePaths);
++        const std::vector<std::string>& includePaths,
++        const std::vector<std::pair<std::string, std::string>>& extraDefines = {});
+ 
+     // Check if a compiled shader uses depth buffer (has DEPTH semantic textures).
+     // Uses cached test results if available, otherwise compiles the shader.
+diff --git a/src/shader_check.cpp b/src/shader_check.cpp
+index 22ba295..b2890b3 100644
+--- a/src/shader_check.cpp
++++ b/src/shader_check.cpp
+@@ -11,7 +11,7 @@ namespace
+ {
+     void printUsage(const char* argv0)
+     {
+-        std::cerr << "Usage: " << argv0 << " <shader.fx> [--effect-name NAME] [--include DIR ...]\n";
++        std::cerr << "Usage: " << argv0 << " <shader.fx> [--effect-name NAME] [--include DIR ...] [--define NAME=VALUE ...]\n";
+     }
+ }
+ 
+@@ -26,6 +26,8 @@ int main(int argc, char** argv)
+     std::string shaderPath;
+     std::string effectName;
+     std::vector<std::string> includePaths;
++    std::vector<std::pair<std::string, std::string>> extraDefines;
++    bool dumpDefines = false;
+ 
+     for (int i = 1; i < argc; ++i)
+     {
+@@ -52,6 +54,28 @@ int main(int argc, char** argv)
+             continue;
+         }
+ 
++        if (arg == "--dump-defines")
++        {
++            dumpDefines = true;
++            continue;
++        }
++
++        if (arg == "--define")
++        {
++            if (i + 1 >= argc)
++            {
++                std::cerr << "Missing value for --define\n";
++                return 1;
++            }
++            std::string def = argv[++i];
++            const size_t eq = def.find('=');
++            if (eq == std::string::npos)
++                extraDefines.emplace_back(def, "1");
++            else
++                extraDefines.emplace_back(def.substr(0, eq), def.substr(eq + 1));
++            continue;
++        }
++
+         if (shaderPath.empty())
+         {
+             shaderPath = arg;
+@@ -72,14 +96,27 @@ int main(int argc, char** argv)
+     if (effectName.empty())
+         effectName = std::filesystem::path(shaderPath).stem().string();
+ 
++    if (dumpDefines)
++    {
++        const auto defs = vkShade::extractPreprocessorDefinitions(effectName, shaderPath);
++        for (const auto& def : defs)
++            std::cout << def.name << " = [" << def.defaultValue << "]\n";
++        return 0;
++    }
++
+     vkShade::ShaderTestResult result;
+-    if (includePaths.empty())
++    if (includePaths.empty() && extraDefines.empty())
+     {
+         result = vkShade::testShaderCompilation(effectName, shaderPath);
+     }
+     else
+     {
+-        result = vkShade::testShaderCompilation(effectName, shaderPath, includePaths);
++        if (includePaths.empty())
++        {
++            const auto smConfig = vkShade::ConfigSerializer::loadShaderManagerConfig();
++            includePaths = smConfig.discoveredShaderPaths;
++        }
++        result = vkShade::testShaderCompilation(effectName, shaderPath, includePaths, extraDefines);
+     }
+ 
+     std::cout << "effect: " << result.effectName << "\n";
