@@ -39,38 +39,32 @@ Intended use: game window shown as a **head-locked screen** in the headset
 bridge drives the in-game cockpit camera with 6DOF — look-around without
 stereo.
 
-### `probe/` — AER feasibility probe
+### `vendor/vkShade` + SuperDepth3D — stereo (active path)
 
-Tests whether Luke-Ross-style **Alternate Eye Rendering** could ever work
-through the OpenTrack channel: send a per-frame square wave of ±IPD/2
-lateral offsets and measure whether the camera follows it faithfully.
+Stereoscopic SBS is produced by **Depth-Image-Based Rendering**: the
+vkShade Vulkan post-processing layer (depth-buffer aware, with a ReShade FX
+compiler) runs the SuperDepth3D shader on each frame. No synchronization,
+no locked frame rate, FreeSync stays on. See `docs/dibr-vkshade.md` and
+`CLAUDE.md` for the full setup, current blocker, and target architecture
+(SBS stereo + xr2x4 head-look + a head-locked SBS viewer in the headset).
 
-```sh
-./probe/aer_probe.py --mode aer --fps 72 --ipd 6.4
-```
+### `probe/` — AER feasibility probe (historical)
 
-Go/no-go criteria (details in the script header):
-
-1. **Responsiveness** — camera must move on a *per-frame* basis with in-game
-   filter strength / deadzones at minimum.
-2. **Amplitude** — fast alternation must retain the full ±IPD/2 offset
-   (compare against `--mode step`).
-3. **Phase stability** — pose→frame latency jitter must stay well under one
-   frame, else eye parity flips (instant nausea). Measure with `--log` +
-   high-fps screen capture.
-
-If (and only if) the probe passes, phase 3 would be a Vulkan implicit layer
-in X4's process that phase-locks pose injection to `vkQueuePresentKHR`,
-copies out each frame tagged with eye parity, and an OpenXR client that
-reprojects the stale eye and submits both views to WiVRn. If the probe
-fails (the expected outcome — the channel is asynchronous and filtered),
-the honest ceiling on Linux remains mono + 6DOF head-look.
+Route 1 (Luke-Ross-style **Alternate Eye Rendering** over the OpenTrack
+channel) was **abandoned**: technically promising but too many user-side
+requirements (locked vsync, FreeSync off, halved frame rate, frame-perfect
+parity) to be practical for a distributable project. These scripts and
+`probe/RESULTS.md` are retained as the record of that investigation.
 
 ## Roadmap
 
 - [x] Binary analysis (no stereo backend on Linux; OpenTrack path confirmed)
-- [x] xr2x4 pose bridge
-- [x] AER probe scripts
-- [ ] Calibrate bridge axes against X4 (signs, scale, in-game factors)
-- [ ] Run probe, record measurements in `probe/RESULTS.md`
-- [ ] (conditional) Vulkan layer + OpenXR compositor for AER
+- [x] xr2x4 pose bridge (full 6DOF verified)
+- [x] AER probe + measurements (Route 1, now abandoned — see CLAUDE.md)
+- [x] vkShade built & patched; SuperDepth3D compiles/loads
+- [ ] **Blocker:** effects produce no visible change — diagnose vkShade
+      compositing vs SuperDepth3D-specific (Test A/B in CLAUDE.md)
+- [ ] Confirm depth access in X4 (DisplayDepth shows real scene depth)
+- [ ] Tune SuperDepth3D SBS; survey artifacts (cockpit MFDs, HUD, trails)
+- [ ] Head-locked SBS delivery to headset (wlx-overlay-s or OpenXR quads)
+- [ ] Compose with xr2x4 head-look; package for distribution
