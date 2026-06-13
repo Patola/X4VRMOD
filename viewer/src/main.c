@@ -57,6 +57,9 @@ static const char *track_host = "127.0.0.1";
 static int track_port = 4242;
 static int track_ix = 1, track_iy = 1, track_iz = 1;       /* axis sign flips */
 static int track_iyaw = 1, track_ipitch = 1, track_iroll = 1;
+/* per-angle scale (default 1; 0 disables that angle — set SROLL=0 to kill the
+ * gimbal-lock roll and yaw/roll coupling, which are the main nausea source). */
+static double track_syaw = 1.0, track_spitch = 1.0, track_sroll = 1.0;
 
 /* Cylinder layer (XR_KHR_composition_layer_cylinder): a curved wrap-around
  * screen that fills the horizontal FOV more naturally than a flat quad.
@@ -105,6 +108,9 @@ static void read_view_env(void)
     if (getenv("X4VR_TRACK_IYAW"))   track_iyaw = -1;
     if (getenv("X4VR_TRACK_IPITCH")) track_ipitch = -1;
     if (getenv("X4VR_TRACK_IROLL"))  track_iroll = -1;
+    if ((e = getenv("X4VR_TRACK_SYAW")))   track_syaw = atof(e);
+    if ((e = getenv("X4VR_TRACK_SPITCH"))) track_spitch = atof(e);
+    if ((e = getenv("X4VR_TRACK_SROLL")))  track_sroll = atof(e);
 }
 
 /* ------------------------------- globals --------------------------------- */
@@ -499,7 +505,9 @@ static void send_head_pose(XrTime t)
 
     double pkt[6] = {
         track_ix * rp.x * 100.0, track_iy * rp.y * 100.0, track_iz * rp.z * 100.0,
-        track_iyaw * yaw, track_ipitch * pitch, track_iroll * roll,
+        track_iyaw * track_syaw * yaw,
+        track_ipitch * track_spitch * pitch,
+        track_iroll * track_sroll * roll,
     };
     sendto(track_sock, pkt, sizeof(pkt), 0,
            (struct sockaddr *)&track_dst, sizeof(track_dst));

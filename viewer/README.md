@@ -90,8 +90,33 @@ it works on SteamVR too. In X4: **Controls → enable OpenTrack Support**.
 - Env: `X4VR_NOTRACK=1` disables it; `X4VR_TRACK_HOST`/`_PORT`;
   `X4VR_TRACK_IX/IY/IZ/IYAW/IPITCH/IROLL` flip an axis if any motion is
   mirrored (defaults match the verified xr2x4 axes — no flips needed).
-- In-game `opentrackfilterstrength` (config.xml): for head-look a little
-  smoothing (vs the 0 used for AER testing) is usually nicer — tune to taste.
+- Per-angle scale: `X4VR_TRACK_SYAW` / `SPITCH` / `SROLL` (default 1; 0
+  disables). **`X4VR_TRACK_SROLL=0` is the comfort setting** — it removes
+  roll, which is the main nausea source and the Euler gimbal-lock artifact
+  (wild roll when pitching far down) and rarely useful in a cockpit.
+
+### Comfort / nausea notes (OpenTrack channel limits)
+
+OpenTrack sends orientation as Euler yaw/pitch/roll, which has two issues
+this channel can't fully escape:
+- **Gimbal lock:** near ±90° pitch, roll spikes → looking far down can
+  suddenly roll. Made worse by amplifying pitch.
+- **Don't over-drive `opentrackanglefactor`** (config.xml). Keep it ~1.0
+  (1:1 head→camera, correct for VR and far from the singularity). A high
+  factor (e.g. 1.51) pushes pitch into gimbal lock and amplifies incidental
+  roll → the "yaw also rolls" coupling.
+
+**Comfort preset:** `opentrackanglefactor=1.0`, `X4VR_TRACK_SROLL=0`, keep
+position (6DOF lean) on. If 1.0 feels under-sensitive, that's a visual
+FOV/cylinder scale mismatch, not tracking — fix via `CYL_ANGLE`/FOV, not
+the angle factor.
+
+X4's head tracking is **cockpit/on-foot only** by design — menus and the
+map don't track (they stay head-locked on the screen, which is fine to
+read). Genuinely correct, gimbal-free camera control (and tracking that
+knows game mode) is what the in-engine path would provide: it can set the
+camera orientation directly as a quaternion/matrix, with no Euler, no
+gimbal lock, no coupling.
 
 ## Roadmap
 

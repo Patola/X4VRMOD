@@ -319,6 +319,13 @@ can't do well:
   overlay). (Our DIBR path currently requires Wayland because vkShade needs a
   Wayland surface.)
 
+- **gimbal-free camera control.** The OpenTrack channel is Euler
+  (yaw/pitch/roll), so it suffers gimbal lock (roll spikes near ±90° pitch
+  — looking far down rolls) and Euler cross-coupling, made worse by X4's
+  `opentrackanglefactor`. Mitigation in the viewer: `X4VR_TRACK_SROLL=0`
+  (drop roll) + keep `opentrackanglefactor≈1.0`. Real fix = set the camera
+  orientation directly as a quaternion/matrix in-engine (no Euler).
+
 Mechanism candidates: an `LD_PRELOAD` shim or SDL3 proxy intercepting the
 game's calls, and/or a `.so` loaded into the process that calls X4's own
 **LuaJIT FFI** functions directly. Reference/model:
