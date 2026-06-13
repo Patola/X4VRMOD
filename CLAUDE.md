@@ -191,12 +191,19 @@ irrelevant.
 
 **Tuned in-headset preset (Quest 3, tentative — see docs/dibr-vkshade.md):**
 the dominant depth lever for X4 is **Near Plane Adjustment**
-(`Depth_Map_Adjust`) ≈ **15** (default 7.5 looks flat — it sets depth-buffer
+(`Depth_Map_Adjust`) ≈ **14** (default 7.5 looks flat — it sets depth-buffer
 linearization; too low compresses all depth into a tiny range). **ZPD**
-(`Zero_Parallax_Distance`) ≈ **0.031** (compromise: ~0.05 great in space but
+(`Zero_Parallax_Distance`) ≈ **0.028** (compromise: ~0.05 great in space but
 wrong when landed). **Depth Adjustment** left at 50 — changing it barely
 moved perceived depth (it only scales existing parallax). **DM0 (Normal)**,
-not DM1. vkShade persists only changed values to X4.conf.
+not DM1. Set **X4 in-game FOV to 120 (max)** for immersion. vkShade persists
+only changed values to X4.conf. (Ctrl+Click types exact values into a
+vkShade slider; right-click resets.)
+
+**Viewer cylinder layer:** set `X4VR_CYL_ANGLE` = X4's horizontal FOV (120)
+or content is squished (too small→thin people); `X4VR_CYL_ASPECT` controls
+height (lower=taller, closes the top/bottom black band), ~1.2 for a 2:1
+window. Defaults now 120 / 1.2.
 
 ## FRAME TRANSPORT (decided: vkShade exports via shm)
 

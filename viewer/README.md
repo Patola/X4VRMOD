@@ -35,14 +35,21 @@ runtime supports `XR_KHR_composition_layer_cylinder`, else a flat quad.
 |-----|---------|---------|
 | `X4VR_LAYER` | cylinder | `cylinder` or `quad` |
 | `X4VR_CYL_RADIUS` | 1.4 | cylinder distance (m) |
-| `X4VR_CYL_ANGLE`  | 100 | horizontal arc wrapped (degrees) |
-| `X4VR_CYL_ASPECT` | 1.6 | width:height; **2.0 un-squishes the 2:1 view**, lower = taller |
+| `X4VR_CYL_ANGLE`  | 120 | horizontal arc wrapped (deg) — **set = X4's in-game FOV** |
+| `X4VR_CYL_ASPECT` | 1.2 | height control: lower = taller (closes top/bottom black border) |
 | `X4VR_QUAD_W/H/DIST` | 2.4/2.4/1.4 | flat-quad size + distance (m) |
 
-Note: each eye holds X4's 2:1 (2560×1280) view squeezed into a square, so
-`ASPECT=2.0` is geometrically correct; for natural 1:1 scale also raise
-X4's in-game FOV toward the wrap angle. Edge-to-edge "inside the world"
-immersion needs the in-engine path (see CLAUDE.md), not a virtual screen.
+Cylinder tuning (two independent levers):
+- **ANGLE = horizontal scale.** Must equal X4's horizontal FOV or content
+  is squished (too small → people too thin; too large → too fat). X4 max
+  FOV is 120.
+- **ASPECT = height.** height = (radius·angle)/aspect, so lower = taller.
+  ~1.2 fills a 2:1 window's ~82° vertical FOV; go lower to kill a residual
+  top/bottom black band (eventually stretches people tall, since X4 only
+  renders ~82° vertical at 2:1 — render a less-wide window for more).
+
+Edge-to-edge "inside the world" immersion (and native headset resolution)
+needs the in-engine path (see CLAUDE.md), not a virtual screen.
 
 ## Roadmap
 

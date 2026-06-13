@@ -73,10 +73,12 @@ community refinement):
 
 | Control (label)            | vkShade conf key                  | Value  | Note |
 |----------------------------|-----------------------------------|--------|------|
-| Near Plane Adjustment      | `SuperDepth3D.Depth_Map_Adjust`   | ~15.1  | default 7.5; **the dominant depth lever** |
-| Zero Parallax Distance     | `SuperDepth3D.Zero_Parallax_Distance` | 0.031 | default 0.025; compromise between space and station-landing |
+| Near Plane Adjustment      | `SuperDepth3D.Depth_Map_Adjust`   | ~14    | default 7.5; **the dominant depth lever** |
+| Zero Parallax Distance     | `SuperDepth3D.Zero_Parallax_Distance` | 0.028 | default 0.025; compromise between space and station-landing |
 | ·Depth Adjustment·         | (default, unsaved)                | 50     | changing it barely moved perceived depth |
 | ·Depth Map Selection·      | (default, unsaved)                | DM0 (Normal) | DM1 is inverted/wrong for X4 |
+| In-game FOV (X4 options)   | n/a                               | 120 (max) | wider = more immersive; set cylinder ANGLE to match |
+| Tip: enter exact values    | n/a                               | Ctrl+Click | type into any vkShade slider; right-click resets |
 
 **Key insight:** for X4, **Near Plane Adjustment** matters far more than
 Depth Adjustment. It sets how X4's depth buffer is linearized; too low and

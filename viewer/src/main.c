@@ -54,7 +54,11 @@ static float quad_w = 2.4f, quad_h = 2.4f, quad_dist = 1.4f;
  *   central_angle= horizontal arc the image wraps (degrees)
  *   aspect       = displayed width:height. 2.0 un-squishes the 2:1 game view
  *                  held in each square eye; LOWER = taller. */
-static float cyl_radius = 1.4f, cyl_angle_deg = 100.0f, cyl_aspect = 1.6f;
+/* Defaults assume a wide in-game FOV (~120, the X4 max) and a 2:1 window:
+ *   ANGLE should match X4's horizontal FOV (else content is squished — too
+ *   thin / too fat); ASPECT sets height (lower = taller, closes the top/
+ *   bottom black border). ~1.2 matches a 2:1 window's ~82 vertical FOV. */
+static float cyl_radius = 1.4f, cyl_angle_deg = 120.0f, cyl_aspect = 1.2f;
 
 /* layer mode: true = cylinder (default, if the runtime supports it). */
 static bool want_cylinder = true;
