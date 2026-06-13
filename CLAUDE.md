@@ -191,6 +191,33 @@ irrelevant. Recommended VR start: Depth Adjustment ~15–20 (50 too strong;
 DIBR edge artifacts scale with it), ZPD so the cockpit dash sits near the
 screen plane.
 
+## FRAME TRANSPORT (decided: vkShade exports via shm)
+
+Decision: vkShade exports the composited SBS frame to POSIX shm; the viewer
+reads it (chosen over PipeWire/portal capture for latency + no portal
+dialog). Protocol in `shared/x4vr_shm.h` (copied into vkShade as
+`src/x4vr_shm.h` — keep in sync, bump version on change): a header + 3
+round-robin frame buffers, publish via release-store of `seq`, read newest
+at `(seq-1)%buffers`; no locks/tearing.
+
+- **Writer (vkShade)**: env-gated `X4VR_EXPORT=1`. On swapchain create it ORs
+  `TRANSFER_SRC` into image usage; each present, after the effect+overlay
+  submit, it copies `images[index]` (the real swapchain image, final SBS, in
+  PRESENT_SRC layout) → host-visible staging → shm, and makes present wait on
+  the export semaphore. One fence wait per frame (a GPU/CPU stall —
+  optimization later: pipeline it). All in `vkshade.cpp` anon-namespace
+  `sbs*` helpers; mirrors the existing depth-dump readback pattern.
+- **Consumer**: `tools/shmdump.c` (verification: dumps newest frame to PPM —
+  works on the flat screen, no headset). Protocol round-trip verified with a
+  synthetic writer (BGRA→RGB swizzle, halves, dims all correct). Next: the
+  viewer reads the same shm and blits left half→L eye, right half→R eye.
+
+VERIFY (you, flat screen, no headset): run X4 with `X4VR_EXPORT=1` added to
+the launch env (alongside ENABLE_VKSHADE etc.), enable SuperDepth3D, then
+`./tools/shmdump frame.ppm` (build: `cc -O2 -o tools/shmdump tools/shmdump.c
+-I shared`). Open frame.ppm — should be the 2560x1280 SBS image. `--watch`
+shows the live seq counter incrementing.
+
 ## VIEWER STATUS
 
 `viewer/` milestone 1 DONE and verified in-headset on Quest 3/WiVRn:
