@@ -117,26 +117,40 @@ Fixes landed:
    repro. Stale `SuperDepth3D@` lines were purged from X4.conf (backup:
    X4.conf.bak).
 
-Result: SuperDepth3D now **compiles and loads** (warnings X4576 about
-`texcoord` semantics are benign).
+5. **Multi-technique rendering.** vkShade hardcoded
+   `module.techniques[0].passes` in both the backbuffer-write count loop and
+   the pass-build loop, so it rendered only the FIRST technique's passes.
+   SuperDepth3D declares two techniques: `Information_SD` (1 offscreen pass →
+   `Info_Tex`) then `SuperDepth3D` (the ~14-pass stereo pipeline). vkShade
+   built only `Information_SD`'s `InfoOut` pass → no visible output. Fixed by
+   flattening ALL techniques' passes into one ordered chain (textures resolve
+   globally by `unique_name`, so the cross-technique `Info_Tex` feed works).
+   Single-technique effects unaffected; descriptor pool sizing is independent
+   of pass count (sets are pre-allocated from samplers/images and reused).
+   Limitation: no per-technique enable UI yet — every technique in a file
+   runs (correct for helper+main; could double-composite a file of several
+   independent full-screen techniques).
 
-## CURRENT BLOCKER (next step)
+Confirmed working on this setup: **vkShade compositing is alive and depth
+access works in X4** — Daltonize shows a clear color shift; DisplayDepth
+shows a real B/W scene-depth view. This is the green light for DIBR.
 
-SuperDepth3D loads but **produces no visible change**; tweaking other
-effects' params also shows nothing on the game canvas, while the vkShade
-**overlay renders fine**. So either vkShade's effect-compositing path is
-inert on this setup (separate from overlay drawing) or it's
-SuperDepth3D-specific. Discriminating test queued for the user:
-- **Test A:** enable **Daltonize** (or built-in `cas` maxed) — unmissable
-  color shift. No change ⇒ compositing path inert (vkShade present/copy
-  bug). Change ⇒ SuperDepth3D-specific.
-- **Test B (the one that matters):** enable **DisplayDepth** — should show a
-  B/W depth view. Cockpit-near vs skybox-far (any polarity) ⇒ **depth
-  access works in X4**, green light for DIBR. Stay in a busy scene
-  (cockpit/station), not empty starfield, so the depth buffer isn't
-  legitimately near-empty.
-Then collect: `grep -E "err|technique|pass|pipeline|creating"
-/tmp/vkshade.log | tail -40`.
+## CURRENT STATE (next step)
+
+Multi-technique fix built & installed; awaiting in-game retest of
+SuperDepth3D. Expected: enabling it now produces a doubled/SBS image.
+- If it renders: go to the **Depth Map** category, set polarity so near=dark
+  / far=light, then Stereoscopic Mode → **Side by Side**, low divergence
+  (~25) to start; cross-eye check on the monitor. SBS packs both eyes into
+  the existing window — it does NOT widen the window; resolution/fullscreen
+  is irrelevant to whether it works.
+- If still blank or wrong: capture both
+  `grep -E "err|technique|pass|pipeline|creating|Reconstruction"
+  /tmp/vkshade.log | tail -60` (should now list MANY passes + two
+  techniques) and note any Vulkan validation errors.
+
+After SBS is confirmed: tune artifacts, then build head-locked SBS delivery
+to the headset and compose with `bridge/xr2x4` head-look.
 
 ## Standard launch line (DIBR path, flat-screen test)
 
