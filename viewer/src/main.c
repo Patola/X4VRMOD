@@ -15,14 +15,17 @@
  *         XR_RUNTIME_JSON=~/.config/openxr/1/active_runtime.json ./build/x4vr-viewer
  */
 
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <math.h>
+#include <netinet/in.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -47,6 +50,13 @@
  * quad (W > H, e.g. W=2*H) un-squishes it, which also helps stereo fusion.
  * Defaults below are a large-ish square; widen W if geometry looks squished. */
 static float quad_w = 2.4f, quad_h = 2.4f, quad_dist = 1.4f;
+
+/* head tracking config (read from env); state/helpers defined further down. */
+static bool track_enabled = true;
+static const char *track_host = "127.0.0.1";
+static int track_port = 4242;
+static int track_ix = 1, track_iy = 1, track_iz = 1;       /* axis sign flips */
+static int track_iyaw = 1, track_ipitch = 1, track_iroll = 1;
 
 /* Cylinder layer (XR_KHR_composition_layer_cylinder): a curved wrap-around
  * screen that fills the horizontal FOV more naturally than a flat quad.
@@ -85,12 +95,61 @@ static void read_view_env(void)
     if ((e = getenv("X4VR_CYL_ANGLE")))  cyl_angle_deg = (float)atof(e);
     if ((e = getenv("X4VR_CYL_ASPECT"))) { cyl_aspect = (float)atof(e); cyl_aspect_set = true; }
     if ((e = getenv("X4VR_VOFFSET")))    view_voffset = (float)atof(e);
+    /* head tracking */
+    if ((e = getenv("X4VR_NOTRACK")) && e[0] && e[0] != '0') track_enabled = false;
+    if ((e = getenv("X4VR_TRACK_HOST"))) track_host = e;
+    if ((e = getenv("X4VR_TRACK_PORT"))) track_port = atoi(e);
+    if (getenv("X4VR_TRACK_IX"))     track_ix = -1;
+    if (getenv("X4VR_TRACK_IY"))     track_iy = -1;
+    if (getenv("X4VR_TRACK_IZ"))     track_iz = -1;
+    if (getenv("X4VR_TRACK_IYAW"))   track_iyaw = -1;
+    if (getenv("X4VR_TRACK_IPITCH")) track_ipitch = -1;
+    if (getenv("X4VR_TRACK_IROLL"))  track_iroll = -1;
 }
 
 /* ------------------------------- globals --------------------------------- */
 
 static volatile sig_atomic_t g_quit = 0;
+static volatile sig_atomic_t g_recenter = 1; /* recenter on first pose */
 static void on_signal(int s) { (void)s; g_quit = 1; }
+static void on_usr1(int s) { (void)s; g_recenter = 1; }
+
+/* --- head tracking: HMD pose -> OpenTrack UDP to X4 (absorbs bridge/xr2x4) -- */
+
+static int track_sock = -1;
+static struct sockaddr_in track_dst;
+static XrSpace local_space = XR_NULL_HANDLE; /* world-fixed, for head pose */
+
+typedef struct { double x, y, z, w; } quatd;
+typedef struct { double x, y, z; } vec3d;
+
+static quatd q_conj(quatd q) { return (quatd){-q.x, -q.y, -q.z, q.w}; }
+static quatd q_mul(quatd a, quatd b)
+{
+    return (quatd){
+        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+        a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+    };
+}
+static vec3d q_rotate(quatd q, vec3d v)
+{
+    quatd p = {v.x, v.y, v.z, 0.0};
+    quatd r = q_mul(q_mul(q, p), q_conj(q));
+    return (vec3d){r.x, r.y, r.z};
+}
+/* OpenXR (+x right,+y up,-z fwd) -> aerospace ypr, matching bridge/xr2x4. */
+static void q_to_ypr_deg(quatd q, double *yaw, double *pitch, double *roll)
+{
+    double qw = q.w, qx = -q.z, qy = q.x, qz = -q.y;
+    double sp = 2.0 * (qw * qy - qz * qx);
+    if (sp > 1.0) sp = 1.0;
+    if (sp < -1.0) sp = -1.0;
+    *yaw   = atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)) * 180.0 / M_PI;
+    *pitch = asin(sp) * 180.0 / M_PI;
+    *roll  = atan2(2.0 * (qw * qx + qy * qz), 1.0 - 2.0 * (qx * qx + qy * qy)) * 180.0 / M_PI;
+}
 
 /* OpenXR */
 static XrInstance xr_instance = XR_NULL_HANDLE;
@@ -381,7 +440,69 @@ static bool create_session_and_space(void)
     };
     XR_CHECK(xrCreateReferenceSpace(xr_session, &rsci, &xr_view_space),
              "xrCreateReferenceSpace(VIEW)");
+
+    /* World-fixed space, so locating VIEW within it yields the head pose. */
+    rsci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+    XR_CHECK(xrCreateReferenceSpace(xr_session, &rsci, &local_space),
+             "xrCreateReferenceSpace(LOCAL)");
     return true;
+}
+
+/* UDP socket to X4's OpenTrack listener. */
+static bool setup_tracking(void)
+{
+    if (!track_enabled) { fprintf(stderr, "head tracking: disabled\n"); return true; }
+    track_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (track_sock < 0) { perror("socket"); return false; }
+    track_dst.sin_family = AF_INET;
+    track_dst.sin_port = htons((uint16_t)track_port);
+    if (inet_pton(AF_INET, track_host, &track_dst.sin_addr) != 1) {
+        fprintf(stderr, "bad track host: %s\n", track_host); return false;
+    }
+    signal(SIGUSR1, on_usr1);
+    fprintf(stderr, "head tracking: HMD pose -> OpenTrack UDP %s:%d "
+            "(SIGUSR1 or `kill -USR1 %d` to recenter)\n",
+            track_host, track_port, (int)getpid());
+    return true;
+}
+
+/* Locate the head in LOCAL space at `t`, convert to OpenTrack format
+ * (relative to the recenter origin), and send it to X4. */
+static void send_head_pose(XrTime t)
+{
+    static vec3d origin_pos = {0, 0, 0};
+    static quatd origin_inv = {0, 0, 0, 1};
+    if (!track_enabled || track_sock < 0) return;
+
+    XrSpaceLocation loc = { .type = XR_TYPE_SPACE_LOCATION };
+    if (XR_FAILED(xrLocateSpace(xr_view_space, local_space, t, &loc)))
+        return;
+    if (!(loc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT))
+        return;
+
+    quatd q = { loc.pose.orientation.x, loc.pose.orientation.y,
+                loc.pose.orientation.z, loc.pose.orientation.w };
+    vec3d p = { loc.pose.position.x, loc.pose.position.y, loc.pose.position.z };
+
+    if (g_recenter) {
+        origin_pos = p;
+        origin_inv = q_conj(q);
+        g_recenter = 0;
+        fprintf(stderr, "recentered\n");
+    }
+
+    vec3d dp = { p.x - origin_pos.x, p.y - origin_pos.y, p.z - origin_pos.z };
+    vec3d rp = q_rotate(origin_inv, dp);
+    quatd rq = q_mul(origin_inv, q);
+    double yaw, pitch, roll;
+    q_to_ypr_deg(rq, &yaw, &pitch, &roll);
+
+    double pkt[6] = {
+        track_ix * rp.x * 100.0, track_iy * rp.y * 100.0, track_iz * rp.z * 100.0,
+        track_iyaw * yaw, track_ipitch * pitch, track_iroll * roll,
+    };
+    sendto(track_sock, pkt, sizeof(pkt), 0,
+           (struct sockaddr *)&track_dst, sizeof(track_dst));
 }
 
 /* One swapchain at the full SBS size; verify the runtime offers our format. */
@@ -521,6 +642,9 @@ static bool render_frame(void)
     XrFrameBeginInfo fbi = { .type = XR_TYPE_FRAME_BEGIN_INFO };
     XR_CHECK(xrBeginFrame(xr_session, &fbi), "xrBeginFrame");
 
+    /* Drive X4's cockpit camera from the real head pose. */
+    send_head_pose(fs.predictedDisplayTime);
+
     /* Storage for whichever layer type we emit (cylinder or quad), 2 each. */
     XrCompositionLayerCylinderKHR cyls[2];
     XrCompositionLayerQuad quads[2];
@@ -633,6 +757,8 @@ static void cleanup(void)
     if (staging_mapped) vkUnmapMemory(vk_device, staging_mem);
     if (staging) vkDestroyBuffer(vk_device, staging, NULL);
     if (staging_mem) vkFreeMemory(vk_device, staging_mem, NULL);
+    if (track_sock >= 0) close(track_sock);
+    if (local_space) xrDestroySpace(local_space);
     if (xr_view_space) xrDestroySpace(xr_view_space);
     if (xr_session) xrDestroySession(xr_session);
     if (vk_cmd_pool) vkDestroyCommandPool(vk_device, vk_cmd_pool, NULL);
@@ -655,6 +781,7 @@ int main(void)
     if (!create_xr_instance()) goto out;   /* sets have_cylinder_ext */
     if (!create_vulkan_via_xr()) goto out;
     if (!create_session_and_space()) goto out;
+    if (!setup_tracking()) goto out;
     if (!create_swapchain()) goto out;
     if (!create_staging()) goto out;
 

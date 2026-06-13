@@ -75,12 +75,29 @@ wide) and "native sharpness" (needs a ~4128-wide window) pull apart. The
 in-engine path (CLAUDE.md) renders each eye full-res natively and escapes
 this; here, pick your balance via the window resolution.
 
+## Head tracking (6DOF look-around)
+
+The viewer reads the HMD pose each frame and sends it to X4's OpenTrack
+listener (UDP, default 127.0.0.1:4242) in OpenTrack format — so turning
+your head pans the in-game cockpit camera. This absorbs `bridge/xr2x4`
+and uses the viewer's normal rendering session (no `XR_MND_headless`), so
+it works on SteamVR too. In X4: **Controls → enable OpenTrack Support**.
+
+- **Recenter:** `kill -USR1 <pid>` (the viewer prints its PID at startup);
+  also auto-recenters on the first pose.
+- **Do NOT run `bridge/xr2x4` at the same time** — two senders to :4242
+  fight each other.
+- Env: `X4VR_NOTRACK=1` disables it; `X4VR_TRACK_HOST`/`_PORT`;
+  `X4VR_TRACK_IX/IY/IZ/IYAW/IPITCH/IROLL` flip an axis if any motion is
+  mirrored (defaults match the verified xr2x4 axes — no flips needed).
+- In-game `opentrackfilterstrength` (config.xml): for head-look a little
+  smoothing (vs the 0 used for AER testing) is usually nicer — tune to taste.
+
 ## Roadmap
 
 - [x] OpenXR+Vulkan session, head-locked quad layers, per-eye test pattern
 - [x] Consume the vkShade shm SBS frame; left half→L eye, right half→R eye
-- [ ] HMD pose → OpenTrack UDP :4242 (absorb `bridge/xr2x4`; no headless, so
-      it works on SteamVR too)
-- [ ] Recenter, quad distance/size tuning, config flags
+- [x] Cylinder/quad layers, auto-aspect, vertical recenter
+- [x] HMD pose → OpenTrack UDP :4242 (absorbed `bridge/xr2x4`)
 - [ ] Drop the per-frame queue wait / per-frame cmd-buffer alloc if needed
 - [ ] Launcher that sets ENABLE_VKSHADE + X4VR_EXPORT + SDL Wayland + flags

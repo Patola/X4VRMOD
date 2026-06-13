@@ -252,12 +252,18 @@ shows the live seq counter incrementing.
 
 ## VIEWER STATUS
 
-`viewer/` milestone 1 DONE and verified in-headset on Quest 3/WiVRn:
-head-locked stereo quad layers, correct L/R eye mapping (left=red,
-right=blue test pattern), comfortable placement (1.8 m, 1.6 m). Pure OpenXR
-via XR_KHR_vulkan_enable2. Next: get the X4 SBS frame into the eye images
-(capture mechanism is an open decision — see below), then fold in
-pose→OpenTrack-UDP (absorbing bridge/xr2x4, dropping headless for SteamVR).
+`viewer/` is now a full end-to-end VR client, verified in-headset on Quest
+3/WiVRn: reads the vkShade shm SBS frame → uploads to one OpenXR swapchain
+→ presents as two head-locked layers (cylinder via
+XR_KHR_composition_layer_cylinder, or flat quad) with each eye's SBS half,
+auto-deriving the undistorted aspect from the shm dims + a vertical
+recenter (X4VR_VOFFSET) for the headset's asymmetric vertical FOV. **Head
+tracking is folded in** (absorbed bridge/xr2x4): each frame it locates the
+HMD pose in LOCAL space and sends OpenTrack UDP to X4 :4242 for 6DOF
+look-around; recenter via SIGUSR1. Pure OpenXR (no headless) → WiVRn +
+SteamVR. The standalone `bridge/xr2x4` still exists but must NOT run
+alongside the viewer (two senders to :4242). Remaining: optimize the
+per-frame viewer upload (queue wait + cmd alloc), and a launcher.
 
 ## (earlier) DIBR tuning — still to do in-headset
 
