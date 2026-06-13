@@ -187,9 +187,16 @@ now): "divergence"/3D strength = **·Depth Adjustment·** (category "Divergence
 DM0/DM1, Near Plane Adjustment 1–250). **View Mode** (VM1 Alpha) occlusion
 fill; **Performance Level**. SBS is the default output, no mode switch
 needed. SBS packs both eyes into the existing window — resolution/fullscreen
-irrelevant. Recommended VR start: Depth Adjustment ~15–20 (50 too strong;
-DIBR edge artifacts scale with it), ZPD so the cockpit dash sits near the
-screen plane.
+irrelevant.
+
+**Tuned in-headset preset (Quest 3, tentative — see docs/dibr-vkshade.md):**
+the dominant depth lever for X4 is **Near Plane Adjustment**
+(`Depth_Map_Adjust`) ≈ **15** (default 7.5 looks flat — it sets depth-buffer
+linearization; too low compresses all depth into a tiny range). **ZPD**
+(`Zero_Parallax_Distance`) ≈ **0.031** (compromise: ~0.05 great in space but
+wrong when landed). **Depth Adjustment** left at 50 — changing it barely
+moved perceived depth (it only scales existing parallax). **DM0 (Normal)**,
+not DM1. vkShade persists only changed values to X4.conf.
 
 ## FRAME TRANSPORT (decided: vkShade exports via shm)
 
