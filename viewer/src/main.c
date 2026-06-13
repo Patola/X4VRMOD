@@ -1,27 +1,29 @@
 /*
- * x4vr-viewer — milestone 1: head-locked stereo quad layers (test pattern).
+ * x4vr-viewer — milestone 2: head-locked stereo from X4's live SBS frame.
  *
- * Brings up an OpenXR session with a Vulkan graphics binding (via
- * XR_KHR_vulkan_enable2, so it works on WiVRn/Monado and SteamVR alike),
- * creates two quad-layer swapchains, fills them with a distinct per-eye test
- * pattern, and submits them as two head-locked XrCompositionLayerQuad layers
- * (eyeVisibility LEFT / RIGHT). Purpose: verify the OpenXR<->Vulkan handshake
- * and correct per-eye placement before wiring real content.
+ * Reads the composited side-by-side frame that the DIBR layer (our vkShade,
+ * X4VR_EXPORT=1) publishes to POSIX shm, uploads it to one full-width OpenXR
+ * swapchain, and presents it as two head-locked XrCompositionLayerQuad layers
+ * whose imageRect selects the left / right half for each eye. Pure OpenXR via
+ * XR_KHR_vulkan_enable2, so it runs on WiVRn/Monado and SteamVR.
  *
- * Next milestones: replace the test pattern with a PipeWire capture of the
- * X4 SBS window (left half -> left eye, right half -> right eye), then fold in
- * the HMD-pose -> OpenTrack-UDP sender (absorbing bridge/xr2x4).
+ * Next: fold in HMD-pose -> OpenTrack-UDP for 6DOF look-around (absorbing
+ * bridge/xr2x4) and a recenter; tune quad distance/size.
  *
  * Build:  cmake -S . -B build && cmake --build build
- * Run:    XR_RUNTIME_JSON=~/.config/openxr/1/active_runtime.json ./build/x4vr-viewer
+ * Run:    (X4 already running with X4VR_EXPORT=1)
+ *         XR_RUNTIME_JSON=~/.config/openxr/1/active_runtime.json ./build/x4vr-viewer
  */
 
+#include <fcntl.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <vulkan/vulkan.h>
@@ -32,15 +34,11 @@
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
+#include "x4vr_shm.h"
+
 /* ------------------------------- config ---------------------------------- */
 
-/* Per-eye test-pattern swapchain size (square, matching one 1280x1280 SBS
- * half once capture is wired). Small here — it is just a flat fill. */
-#define EYE_W 256
-#define EYE_H 256
-
-/* Head-locked quad placement (meters), relative to the VIEW space (the head).
- * 1.6 m wide screen, 1.6 m tall, 1.8 m in front. Tune later. */
+/* Head-locked quad placement (meters), relative to VIEW space (the head). */
 static const float QUAD_DISTANCE = 1.8f;
 static const float QUAD_SIZE_M = 1.6f;
 
@@ -64,14 +62,22 @@ static uint32_t vk_queue_family = 0;
 static VkQueue vk_queue = VK_NULL_HANDLE;
 static VkCommandPool vk_cmd_pool = VK_NULL_HANDLE;
 
-/* Per-eye swapchain */
-typedef struct {
-    XrSwapchain swapchain;
-    uint32_t image_count;
-    XrSwapchainImageVulkanKHR *images; /* .image is a VkImage */
-    int32_t width, height;
-} EyeSwapchain;
-static EyeSwapchain eye[2]; /* 0 = left, 1 = right */
+/* shm source */
+static int shm_fd = -1;
+static uint8_t *shm_base = NULL;
+static size_t shm_size = 0;
+static volatile X4VRShmHeader *shm_hdr = NULL;
+static uint8_t *shm_data = NULL;
+static uint32_t sbs_w = 0, sbs_h = 0; /* full SBS dimensions */
+static uint32_t eye_w = 0;            /* per-eye width = sbs_w / 2 */
+
+/* one full-SBS swapchain + an upload staging buffer */
+static XrSwapchain swapchain = XR_NULL_HANDLE;
+static uint32_t sc_image_count = 0;
+static XrSwapchainImageVulkanKHR *sc_images = NULL;
+static VkBuffer staging = VK_NULL_HANDLE;
+static VkDeviceMemory staging_mem = VK_NULL_HANDLE;
+static void *staging_mapped = NULL;
 
 /* ------------------------------- helpers --------------------------------- */
 
@@ -95,12 +101,64 @@ static EyeSwapchain eye[2]; /* 0 = left, 1 = right */
         }                                                                     \
     } while (0)
 
-/* Resolve an extension function pointer from the loader. */
+static uint32_t find_mem_type(uint32_t filter, VkMemoryPropertyFlags props)
+{
+    VkPhysicalDeviceMemoryProperties mp;
+    vkGetPhysicalDeviceMemoryProperties(vk_phys, &mp);
+    for (uint32_t i = 0; i < mp.memoryTypeCount; i++)
+        if ((filter & (1u << i)) &&
+            (mp.memoryTypes[i].propertyFlags & props) == props)
+            return i;
+    return UINT32_MAX;
+}
+
+/* --------------------------------- shm ----------------------------------- */
+
+/* Open the shm and wait for the writer to publish a frame. Returns false on
+ * timeout (X4 not running with X4VR_EXPORT=1). */
+static bool open_shm(int timeout_s)
+{
+    fprintf(stderr, "waiting for X4 SBS frame on shm %s "
+                    "(start X4 with X4VR_EXPORT=1)...\n", X4VR_SHM_NAME);
+    for (int waited = 0; waited <= timeout_s * 10 && !g_quit; waited++) {
+        if (shm_fd < 0)
+            shm_fd = shm_open(X4VR_SHM_NAME, O_RDONLY, 0);
+        if (shm_fd >= 0) {
+            X4VRShmHeader h;
+            if (pread(shm_fd, &h, sizeof(h), 0) == (long)sizeof(h) &&
+                h.magic == X4VR_SHM_MAGIC && h.seq > 0 &&
+                h.width > 1 && h.height > 0) {
+                shm_size = (size_t)h.data_offset + (size_t)h.buffers * h.buffer_bytes;
+                shm_base = mmap(NULL, shm_size, PROT_READ, MAP_SHARED, shm_fd, 0);
+                if (shm_base == MAP_FAILED) { perror("mmap shm"); return false; }
+                shm_hdr = (volatile X4VRShmHeader *)shm_base;
+                shm_data = shm_base + h.data_offset;
+                sbs_w = h.width; sbs_h = h.height; eye_w = h.width / 2;
+                fprintf(stderr, "SBS source: %ux%u (per-eye %ux%u), fmt=%u\n",
+                        sbs_w, sbs_h, eye_w, sbs_h, h.format);
+                return true;
+            }
+        }
+        struct timespec ts = {0, 100 * 1000 * 1000};
+        nanosleep(&ts, NULL);
+    }
+    fprintf(stderr, "timed out waiting for shm\n");
+    return false;
+}
+
+/* Map the shm pixel format to a Vulkan swapchain format (match channel order
+ * so the upload is a straight copy; UNORM — the bytes are display-ready). */
+static int64_t shm_to_vk_format(void)
+{
+    return (shm_hdr->format == X4VR_FMT_R8G8B8A8)
+        ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_B8G8R8A8_UNORM;
+}
+
+/* ------------------------------- OpenXR ---------------------------------- */
+
 #define XR_PFN(name) \
     PFN_##name name = NULL; \
     xrGetInstanceProcAddr(xr_instance, #name, (PFN_xrVoidFunction *)&name)
-
-/* ------------------------------- OpenXR ---------------------------------- */
 
 static bool create_xr_instance(void)
 {
@@ -117,8 +175,7 @@ static bool create_xr_instance(void)
         .enabledExtensionNames = exts,
     };
     XR_CHECK(xrCreateInstance(&ci, &xr_instance),
-             "xrCreateInstance (is WiVRn/Monado/SteamVR running? "
-             "set XR_RUNTIME_JSON; needs XR_KHR_vulkan_enable2)");
+             "xrCreateInstance (is WiVRn/Monado/SteamVR running?)");
 
     XrSystemGetInfo sgi = {
         .type = XR_TYPE_SYSTEM_GET_INFO,
@@ -130,7 +187,6 @@ static bool create_xr_instance(void)
     if (XR_SUCCEEDED(xrGetSystemProperties(xr_instance, xr_system, &sp)))
         fprintf(stderr, "HMD: %s\n", sp.systemName);
 
-    /* Pick an environment blend mode the runtime supports (OPAQUE for VR). */
     uint32_t bm_count = 0;
     xrEnumerateEnvironmentBlendModes(xr_instance, xr_system,
         XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &bm_count, NULL);
@@ -138,14 +194,12 @@ static bool create_xr_instance(void)
         XrEnvironmentBlendMode *modes = calloc(bm_count, sizeof(*modes));
         xrEnumerateEnvironmentBlendModes(xr_instance, xr_system,
             XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, bm_count, &bm_count, modes);
-        xr_blend = modes[0]; /* first supported; OPAQUE on a VR HMD */
+        xr_blend = modes[0];
         free(modes);
     }
     return true;
 }
 
-/* Create the Vulkan instance + device through OpenXR so they satisfy the
- * runtime's requirements (XR_KHR_vulkan_enable2 path). */
 static bool create_vulkan_via_xr(void)
 {
     XR_PFN(xrGetVulkanGraphicsRequirements2KHR);
@@ -181,10 +235,7 @@ static bool create_vulkan_via_xr(void)
     VkResult vk_err = VK_SUCCESS;
     XR_CHECK(xrCreateVulkanInstanceKHR(xr_instance, &xvi, &vk_instance, &vk_err),
              "xrCreateVulkanInstanceKHR");
-    if (vk_err != VK_SUCCESS) {
-        fprintf(stderr, "FATAL: VkInstance creation failed: %d\n", vk_err);
-        return false;
-    }
+    if (vk_err != VK_SUCCESS) { fprintf(stderr, "VkInstance err %d\n", vk_err); return false; }
 
     XrVulkanGraphicsDeviceGetInfoKHR gdi = {
         .type = XR_TYPE_VULKAN_GRAPHICS_DEVICE_GET_INFO_KHR,
@@ -194,36 +245,24 @@ static bool create_vulkan_via_xr(void)
     XR_CHECK(xrGetVulkanGraphicsDevice2KHR(xr_instance, &gdi, &vk_phys),
              "xrGetVulkanGraphicsDevice2KHR");
 
-    /* Find a graphics-capable queue family. */
     uint32_t qf_count = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(vk_phys, &qf_count, NULL);
     VkQueueFamilyProperties *qfs = calloc(qf_count, sizeof(*qfs));
     vkGetPhysicalDeviceQueueFamilyProperties(vk_phys, &qf_count, qfs);
     bool found = false;
-    for (uint32_t i = 0; i < qf_count; i++) {
-        if (qfs[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-            vk_queue_family = i;
-            found = true;
-            break;
-        }
-    }
+    for (uint32_t i = 0; i < qf_count; i++)
+        if (qfs[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) { vk_queue_family = i; found = true; break; }
     free(qfs);
-    if (!found) {
-        fprintf(stderr, "FATAL: no graphics queue family\n");
-        return false;
-    }
+    if (!found) { fprintf(stderr, "no graphics queue family\n"); return false; }
 
     float prio = 1.0f;
     VkDeviceQueueCreateInfo qci = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-        .queueFamilyIndex = vk_queue_family,
-        .queueCount = 1,
-        .pQueuePriorities = &prio,
+        .queueFamilyIndex = vk_queue_family, .queueCount = 1, .pQueuePriorities = &prio,
     };
     VkDeviceCreateInfo dci = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .queueCreateInfoCount = 1,
-        .pQueueCreateInfos = &qci,
+        .queueCreateInfoCount = 1, .pQueueCreateInfos = &qci,
     };
     XrVulkanDeviceCreateInfoKHR xdi = {
         .type = XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR,
@@ -234,20 +273,15 @@ static bool create_vulkan_via_xr(void)
     };
     XR_CHECK(xrCreateVulkanDeviceKHR(xr_instance, &xdi, &vk_device, &vk_err),
              "xrCreateVulkanDeviceKHR");
-    if (vk_err != VK_SUCCESS) {
-        fprintf(stderr, "FATAL: VkDevice creation failed: %d\n", vk_err);
-        return false;
-    }
+    if (vk_err != VK_SUCCESS) { fprintf(stderr, "VkDevice err %d\n", vk_err); return false; }
 
     vkGetDeviceQueue(vk_device, vk_queue_family, 0, &vk_queue);
-
     VkCommandPoolCreateInfo pci = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
         .queueFamilyIndex = vk_queue_family,
     };
-    VK_CHECK(vkCreateCommandPool(vk_device, &pci, NULL, &vk_cmd_pool),
-             "vkCreateCommandPool");
+    VK_CHECK(vkCreateCommandPool(vk_device, &pci, NULL, &vk_cmd_pool), "vkCreateCommandPool");
     return true;
 }
 
@@ -255,20 +289,14 @@ static bool create_session_and_space(void)
 {
     XrGraphicsBindingVulkan2KHR gb = {
         .type = XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR,
-        .instance = vk_instance,
-        .physicalDevice = vk_phys,
-        .device = vk_device,
-        .queueFamilyIndex = vk_queue_family,
-        .queueIndex = 0,
+        .instance = vk_instance, .physicalDevice = vk_phys, .device = vk_device,
+        .queueFamilyIndex = vk_queue_family, .queueIndex = 0,
     };
     XrSessionCreateInfo sci = {
-        .type = XR_TYPE_SESSION_CREATE_INFO,
-        .next = &gb,
-        .systemId = xr_system,
+        .type = XR_TYPE_SESSION_CREATE_INFO, .next = &gb, .systemId = xr_system,
     };
     XR_CHECK(xrCreateSession(xr_instance, &sci, &xr_session), "xrCreateSession");
 
-    /* VIEW space => the quads are head-locked (XR-glasses-like screen). */
     XrReferenceSpaceCreateInfo rsci = {
         .type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
         .referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW,
@@ -279,171 +307,132 @@ static bool create_session_and_space(void)
     return true;
 }
 
-/* Pick a color swapchain format the runtime offers (prefer 8-bit BGRA/RGBA). */
-static int64_t choose_format(void)
+/* One swapchain at the full SBS size; verify the runtime offers our format. */
+static bool create_swapchain(void)
 {
+    int64_t want = shm_to_vk_format();
     uint32_t n = 0;
     xrEnumerateSwapchainFormats(xr_session, 0, &n, NULL);
     int64_t *fmts = calloc(n, sizeof(int64_t));
     xrEnumerateSwapchainFormats(xr_session, n, &n, fmts);
-    int64_t want[] = { VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB,
-                       VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM };
-    int64_t chosen = fmts[0];
-    for (size_t w = 0; w < sizeof(want) / sizeof(want[0]); w++)
-        for (uint32_t i = 0; i < n; i++)
-            if (fmts[i] == want[w]) { chosen = fmts[i]; goto done; }
-done:
+    bool ok = false;
+    for (uint32_t i = 0; i < n; i++) if (fmts[i] == want) { ok = true; break; }
+    int64_t chosen = ok ? want : fmts[0];
     free(fmts);
-    return chosen;
-}
+    if (!ok)
+        fprintf(stderr, "warning: preferred format %ld unsupported, using %ld "
+                "(colors/channels may be off)\n", (long)want, (long)chosen);
 
-static bool create_eye_swapchain(EyeSwapchain *e, int64_t format)
-{
     XrSwapchainCreateInfo ci = {
         .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
         .usageFlags = XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT |
                       XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
-        .format = format,
-        .sampleCount = 1,
-        .width = EYE_W,
-        .height = EYE_H,
-        .faceCount = 1,
-        .arraySize = 1,
-        .mipCount = 1,
+        .format = chosen, .sampleCount = 1,
+        .width = sbs_w, .height = sbs_h,
+        .faceCount = 1, .arraySize = 1, .mipCount = 1,
     };
-    e->width = EYE_W;
-    e->height = EYE_H;
-    XR_CHECK(xrCreateSwapchain(xr_session, &ci, &e->swapchain),
-             "xrCreateSwapchain");
-
-    XR_CHECK(xrEnumerateSwapchainImages(e->swapchain, 0, &e->image_count, NULL),
+    XR_CHECK(xrCreateSwapchain(xr_session, &ci, &swapchain), "xrCreateSwapchain");
+    XR_CHECK(xrEnumerateSwapchainImages(swapchain, 0, &sc_image_count, NULL),
              "xrEnumerateSwapchainImages(count)");
-    e->images = calloc(e->image_count, sizeof(XrSwapchainImageVulkanKHR));
-    for (uint32_t i = 0; i < e->image_count; i++)
-        e->images[i].type = XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR;
-    XR_CHECK(xrEnumerateSwapchainImages(
-                 e->swapchain, e->image_count, &e->image_count,
-                 (XrSwapchainImageBaseHeader *)e->images),
+    sc_images = calloc(sc_image_count, sizeof(XrSwapchainImageVulkanKHR));
+    for (uint32_t i = 0; i < sc_image_count; i++)
+        sc_images[i].type = XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR;
+    XR_CHECK(xrEnumerateSwapchainImages(swapchain, sc_image_count, &sc_image_count,
+                                        (XrSwapchainImageBaseHeader *)sc_images),
              "xrEnumerateSwapchainImages");
     return true;
 }
 
-/* Clear one acquired swapchain image to a flat color (the test pattern). */
-static bool fill_image(VkImage image, VkClearColorValue color)
+static bool create_staging(void)
 {
+    VkDeviceSize bytes = (VkDeviceSize)sbs_w * sbs_h * 4;
+    VkBufferCreateInfo bi = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = bytes, .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+    VK_CHECK(vkCreateBuffer(vk_device, &bi, NULL, &staging), "vkCreateBuffer");
+    VkMemoryRequirements mr;
+    vkGetBufferMemoryRequirements(vk_device, staging, &mr);
+    /* CPU writes into this buffer (memcpy from shm), GPU reads it — coherent
+     * (write-combined) is fine for writes. */
+    uint32_t mt = find_mem_type(mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (mt == UINT32_MAX) { fprintf(stderr, "no host-visible mem type\n"); return false; }
+    VkMemoryAllocateInfo ai = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = mr.size, .memoryTypeIndex = mt,
+    };
+    VK_CHECK(vkAllocateMemory(vk_device, &ai, NULL, &staging_mem), "vkAllocateMemory");
+    VK_CHECK(vkBindBufferMemory(vk_device, staging, staging_mem, 0), "vkBindBufferMemory");
+    VK_CHECK(vkMapMemory(vk_device, staging_mem, 0, bytes, 0, &staging_mapped), "vkMapMemory");
+    return true;
+}
+
+/* Copy the newest shm frame into the acquired swapchain image. */
+static bool upload_frame(VkImage image)
+{
+    /* newest published frame; (seq-1)%buffers is the buffer not being written */
+    uint64_t seq = __atomic_load_n(&shm_hdr->seq, __ATOMIC_ACQUIRE);
+    if (seq == 0) return true;
+    uint32_t idx = (uint32_t)((seq - 1) % shm_hdr->buffers);
+    memcpy(staging_mapped, shm_data + (size_t)idx * shm_hdr->buffer_bytes,
+           (size_t)sbs_w * sbs_h * 4);
+
     VkCommandBufferAllocateInfo ai = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .commandPool = vk_cmd_pool,
-        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandPool = vk_cmd_pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
         .commandBufferCount = 1,
     };
     VkCommandBuffer cmd;
-    VK_CHECK(vkAllocateCommandBuffers(vk_device, &ai, &cmd),
-             "vkAllocateCommandBuffers");
-
+    VK_CHECK(vkAllocateCommandBuffers(vk_device, &ai, &cmd), "vkAllocateCommandBuffers");
     VkCommandBufferBeginInfo bi = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
     };
     vkBeginCommandBuffer(cmd, &bi);
 
-    VkImageSubresourceRange range = {
-        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-        .levelCount = 1, .layerCount = 1,
-    };
-
-    /* UNDEFINED -> TRANSFER_DST for the clear. */
+    VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
     VkImageMemoryBarrier to_dst = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
         .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        .srcAccessMask = 0,
-        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-        .image = image,
-        .subresourceRange = range,
+        .srcAccessMask = 0, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .image = image, .subresourceRange = range,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
     };
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL,
-                         1, &to_dst);
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &to_dst);
 
-    vkCmdClearColorImage(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                         &color, 1, &range);
+    VkBufferImageCopy region = {
+        .bufferOffset = 0, .bufferRowLength = sbs_w, .bufferImageHeight = sbs_h,
+        .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        .imageOffset = { 0, 0, 0 }, .imageExtent = { sbs_w, sbs_h, 1 },
+    };
+    vkCmdCopyBufferToImage(cmd, staging, image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-    /* TRANSFER_DST -> COLOR_ATTACHMENT for the compositor. */
     VkImageMemoryBarrier to_color = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
         .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
         .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-        .image = image,
-        .subresourceRange = range,
+        .image = image, .subresourceRange = range,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
     };
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
                          0, NULL, 0, NULL, 1, &to_color);
-
     vkEndCommandBuffer(cmd);
 
-    VkSubmitInfo si = {
-        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-        .commandBufferCount = 1,
-        .pCommandBuffers = &cmd,
-    };
+    VkSubmitInfo si = { .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                        .commandBufferCount = 1, .pCommandBuffers = &cmd };
     VK_CHECK(vkQueueSubmit(vk_queue, 1, &si, VK_NULL_HANDLE), "vkQueueSubmit");
-    vkQueueWaitIdle(vk_queue); /* simple sync for milestone 1 */
+    vkQueueWaitIdle(vk_queue);
     vkFreeCommandBuffers(vk_device, vk_cmd_pool, 1, &cmd);
-    return true;
-}
-
-/* Acquire/clear/release one eye and fill out its quad layer descriptor. */
-static bool render_eye(int idx, XrCompositionLayerQuad *quad)
-{
-    EyeSwapchain *e = &eye[idx];
-
-    uint32_t img_index = 0;
-    XrSwapchainImageAcquireInfo ai = {
-        .type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
-    XR_CHECK(xrAcquireSwapchainImage(e->swapchain, &ai, &img_index),
-             "xrAcquireSwapchainImage");
-    XrSwapchainImageWaitInfo wi = {
-        .type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO,
-        .timeout = XR_INFINITE_DURATION };
-    XR_CHECK(xrWaitSwapchainImage(e->swapchain, &wi), "xrWaitSwapchainImage");
-
-    /* Distinct per-eye color so L/R mapping is unambiguous in-headset. */
-    VkClearColorValue color = idx == 0
-        ? (VkClearColorValue){ { 0.20f, 0.02f, 0.02f, 1.0f } }  /* L: red  */
-        : (VkClearColorValue){ { 0.02f, 0.02f, 0.20f, 1.0f } }; /* R: blue */
-    if (!fill_image(e->images[img_index].image, color))
-        return false;
-
-    XrSwapchainImageReleaseInfo ri = {
-        .type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
-    XR_CHECK(xrReleaseSwapchainImage(e->swapchain, &ri),
-             "xrReleaseSwapchainImage");
-
-    *quad = (XrCompositionLayerQuad){
-        .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
-        .layerFlags = 0,
-        .space = xr_view_space,
-        .eyeVisibility = idx == 0 ? XR_EYE_VISIBILITY_LEFT
-                                  : XR_EYE_VISIBILITY_RIGHT,
-        .subImage = {
-            .swapchain = e->swapchain,
-            .imageRect = { { 0, 0 }, { e->width, e->height } },
-            .imageArrayIndex = 0,
-        },
-        .pose = {
-            .orientation = { 0, 0, 0, 1 },
-            .position = { 0, 0, -QUAD_DISTANCE },
-        },
-        .size = { QUAD_SIZE_M, QUAD_SIZE_M },
-    };
     return true;
 }
 
@@ -452,7 +441,6 @@ static bool render_frame(void)
     XrFrameWaitInfo fwi = { .type = XR_TYPE_FRAME_WAIT_INFO };
     XrFrameState fs = { .type = XR_TYPE_FRAME_STATE };
     XR_CHECK(xrWaitFrame(xr_session, &fwi, &fs), "xrWaitFrame");
-
     XrFrameBeginInfo fbi = { .type = XR_TYPE_FRAME_BEGIN_INFO };
     XR_CHECK(xrBeginFrame(xr_session, &fbi), "xrBeginFrame");
 
@@ -461,10 +449,36 @@ static bool render_frame(void)
     uint32_t layer_count = 0;
 
     if (fs.shouldRender) {
-        for (int i = 0; i < 2; i++) {
-            if (!render_eye(i, &quads[i]))
-                return false;
-            layers[i] = (const XrCompositionLayerBaseHeader *)&quads[i];
+        uint32_t img = 0;
+        XrSwapchainImageAcquireInfo ai = { .type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
+        XR_CHECK(xrAcquireSwapchainImage(swapchain, &ai, &img), "xrAcquireSwapchainImage");
+        XrSwapchainImageWaitInfo wi = {
+            .type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, .timeout = XR_INFINITE_DURATION };
+        XR_CHECK(xrWaitSwapchainImage(swapchain, &wi), "xrWaitSwapchainImage");
+
+        if (!upload_frame(sc_images[img].image)) return false;
+
+        XrSwapchainImageReleaseInfo ri = { .type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
+        XR_CHECK(xrReleaseSwapchainImage(swapchain, &ri), "xrReleaseSwapchainImage");
+
+        /* Two quads over the same swapchain: each eye sees its half. */
+        for (int e = 0; e < 2; e++) {
+            quads[e] = (XrCompositionLayerQuad){
+                .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
+                .space = xr_view_space,
+                .eyeVisibility = e == 0 ? XR_EYE_VISIBILITY_LEFT
+                                        : XR_EYE_VISIBILITY_RIGHT,
+                .subImage = {
+                    .swapchain = swapchain,
+                    .imageRect = { { (int32_t)(e * eye_w), 0 },
+                                   { (int32_t)eye_w, (int32_t)sbs_h } },
+                    .imageArrayIndex = 0,
+                },
+                .pose = { .orientation = { 0, 0, 0, 1 },
+                          .position = { 0, 0, -QUAD_DISTANCE } },
+                .size = { QUAD_SIZE_M, QUAD_SIZE_M },
+            };
+            layers[e] = (const XrCompositionLayerBaseHeader *)&quads[e];
         }
         layer_count = 2;
     }
@@ -482,57 +496,51 @@ static bool render_frame(void)
 
 static bool run_loop(void)
 {
-    bool session_running = false;
-    XrSessionState state = XR_SESSION_STATE_UNKNOWN;
-
+    bool running = false;
     while (!g_quit) {
-        /* Drain events. */
         XrEventDataBuffer ev = { .type = XR_TYPE_EVENT_DATA_BUFFER };
         while (xrPollEvent(xr_instance, &ev) == XR_SUCCESS) {
             if (ev.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
                 XrEventDataSessionStateChanged *sc = (void *)&ev;
-                state = sc->state;
-                if (state == XR_SESSION_STATE_READY) {
+                if (sc->state == XR_SESSION_STATE_READY) {
                     XrSessionBeginInfo bi = {
                         .type = XR_TYPE_SESSION_BEGIN_INFO,
                         .primaryViewConfigurationType =
                             XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO };
                     XR_CHECK(xrBeginSession(xr_session, &bi), "xrBeginSession");
-                    session_running = true;
+                    running = true;
                     fprintf(stderr, "session running\n");
-                } else if (state == XR_SESSION_STATE_STOPPING) {
+                } else if (sc->state == XR_SESSION_STATE_STOPPING) {
                     XR_CHECK(xrEndSession(xr_session), "xrEndSession");
-                    session_running = false;
-                } else if (state == XR_SESSION_STATE_EXITING ||
-                           state == XR_SESSION_STATE_LOSS_PENDING) {
+                    running = false;
+                } else if (sc->state == XR_SESSION_STATE_EXITING ||
+                           sc->state == XR_SESSION_STATE_LOSS_PENDING) {
                     g_quit = 1;
                 }
             }
             ev.type = XR_TYPE_EVENT_DATA_BUFFER;
         }
-
-        if (session_running) {
-            if (!render_frame())
-                return false;
-        } else {
-            usleep(20 * 1000);
-        }
+        if (running) { if (!render_frame()) return false; }
+        else { struct timespec ts = {0, 20 * 1000 * 1000}; nanosleep(&ts, NULL); }
     }
     return true;
 }
 
 static void cleanup(void)
 {
-    for (int i = 0; i < 2; i++) {
-        if (eye[i].swapchain) xrDestroySwapchain(eye[i].swapchain);
-        free(eye[i].images);
-    }
+    if (swapchain) xrDestroySwapchain(swapchain);
+    free(sc_images);
+    if (staging_mapped) vkUnmapMemory(vk_device, staging_mem);
+    if (staging) vkDestroyBuffer(vk_device, staging, NULL);
+    if (staging_mem) vkFreeMemory(vk_device, staging_mem, NULL);
     if (xr_view_space) xrDestroySpace(xr_view_space);
     if (xr_session) xrDestroySession(xr_session);
     if (vk_cmd_pool) vkDestroyCommandPool(vk_device, vk_cmd_pool, NULL);
     if (vk_device) vkDestroyDevice(vk_device, NULL);
     if (vk_instance) vkDestroyInstance(vk_instance, NULL);
     if (xr_instance) xrDestroyInstance(xr_instance);
+    if (shm_base) munmap(shm_base, shm_size);
+    if (shm_fd >= 0) close(shm_fd);
 }
 
 int main(void)
@@ -541,20 +549,16 @@ int main(void)
     signal(SIGTERM, on_signal);
 
     int rc = 1;
+    if (!open_shm(60)) goto out;           /* wait up to 60s for X4 */
     if (!create_xr_instance()) goto out;
     if (!create_vulkan_via_xr()) goto out;
     if (!create_session_and_space()) goto out;
+    if (!create_swapchain()) goto out;
+    if (!create_staging()) goto out;
 
-    int64_t format = choose_format();
-    fprintf(stderr, "swapchain format: %ld\n", (long)format);
-    if (!create_eye_swapchain(&eye[0], format)) goto out;
-    if (!create_eye_swapchain(&eye[1], format)) goto out;
-
-    fprintf(stderr, "init OK — left eye should be red, right eye blue. "
-                    "Ctrl-C to quit.\n");
+    fprintf(stderr, "init OK — streaming X4 SBS to the headset. Ctrl-C to quit.\n");
     if (!run_loop()) goto out;
     rc = 0;
-
 out:
     cleanup();
     return rc;
