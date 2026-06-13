@@ -484,7 +484,7 @@ index 22ba295..b2890b3 100644
  
      std::cout << "effect: " << result.effectName << "\n";
 diff --git a/src/vkshade.cpp b/src/vkshade.cpp
-index 57520e0..a52b05e 100644
+index 57520e0..73aec25 100644
 --- a/src/vkshade.cpp
 +++ b/src/vkshade.cpp
 @@ -18,6 +18,9 @@
@@ -505,7 +505,7 @@ index 57520e0..a52b05e 100644
  
  #include "effects/effect.hpp"
  #include "effects/effect_reshade.hpp"
-@@ -86,6 +90,191 @@ namespace vkShade
+@@ -86,6 +90,205 @@ namespace vkShade
      std::shared_ptr<Config> pConfig = nullptr;      // Current config (base + overlay)
      EffectRegistry effectRegistry;                   // Single source of truth for effect configs
  
@@ -528,6 +528,7 @@ index 57520e0..a52b05e 100644
 +            VkDeviceMemory stagingMem = VK_NULL_HANDLE;
 +            void *stagingMapped = nullptr;
 +            uint32_t w = 0, h = 0; VkDeviceSize bytes = 0;
++            bool havePending = false; // a copy is in flight, publish it next frame
 +        };
 +        SbsExport g_sbs;
 +
@@ -631,9 +632,29 @@ index 57520e0..a52b05e 100644
 +        VkSemaphore sbsExportFrame(LogicalDevice *dev, VkImage image,
 +                                   uint32_t w, uint32_t h, VkFormat format,
 +                                   VkSemaphore waitSem) {
++            DeviceDispatch &vkd = dev->vkd;
++
++            // Pipeline the readback: publish the PREVIOUS frame's copy (its
++            // fence is signalled by now), so we never block the GPU pipeline
++            // waiting on the current frame. Drop the pending frame instead of
++            // publishing if the surface is about to be resized (shm layout
++            // would no longer match the old staging buffer).
++            bool resizing = (g_sbs.w != w || g_sbs.h != h);
++            if (g_sbs.havePending) {
++                vkd.WaitForFences(dev->device, 1, &g_sbs.fence, VK_TRUE, UINT64_MAX);
++                vkd.ResetFences(dev->device, 1, &g_sbs.fence);
++                if (!resizing) {
++                    uint32_t idx = (uint32_t)(g_sbs.seq % X4VR_SHM_BUFFERS);
++                    memcpy(g_sbs.data + (size_t)idx * g_sbs.hdr->buffer_bytes,
++                           g_sbs.stagingMapped, g_sbs.hdr->buffer_bytes);
++                    g_sbs.seq++;
++                    __atomic_store_n(&g_sbs.hdr->seq, g_sbs.seq, __ATOMIC_RELEASE);
++                }
++                g_sbs.havePending = false;
++            }
++
 +            if (!sbsEnsureShm(w, h, sbsMapFormat(format))) return VK_NULL_HANDLE;
 +            if (!sbsEnsureVk(dev, w, h)) return VK_NULL_HANDLE;
-+            DeviceDispatch &vkd = dev->vkd;
 +
 +            // Pool has RESET_COMMAND_BUFFER_BIT, so BeginCommandBuffer
 +            // implicitly resets the (previously executable) command buffer.
@@ -680,16 +701,9 @@ index 57520e0..a52b05e 100644
 +            if (vkd.QueueSubmit(dev->queue, 1, &si, g_sbs.fence) != VK_SUCCESS)
 +                return VK_NULL_HANDLE;
 +
-+            // Wait for the copy, then publish to shm. One sync per frame; a
-+            // future optimization can pipeline this to avoid the stall.
-+            vkd.WaitForFences(dev->device, 1, &g_sbs.fence, VK_TRUE, UINT64_MAX);
-+            vkd.ResetFences(dev->device, 1, &g_sbs.fence);
-+
-+            uint32_t idx = (uint32_t)(g_sbs.seq % X4VR_SHM_BUFFERS);
-+            memcpy(g_sbs.data + (size_t)idx * g_sbs.hdr->buffer_bytes,
-+                   g_sbs.stagingMapped, g_sbs.hdr->buffer_bytes);
-+            g_sbs.seq++;
-+            __atomic_store_n(&g_sbs.hdr->seq, g_sbs.seq, __ATOMIC_RELEASE);
++            // Don't wait here — the copy result is published next frame. Present
++            // waits on g_sbs.sem so the image's layout is restored before present.
++            g_sbs.havePending = true;
 +            return g_sbs.sem;
 +        }
 +    } // anonymous namespace
@@ -697,7 +711,7 @@ index 57520e0..a52b05e 100644
      // layer book-keeping information, to store dispatch tables by key
      std::unordered_map<void*, InstanceDispatch>                           instanceDispatchMap;
      std::unordered_map<void*, VkInstance>                                 instanceMap;
-@@ -2429,6 +2618,9 @@ namespace vkShade
+@@ -2429,6 +2632,9 @@ namespace vkShade
              // Keep application-requested usage bits and add the ones vkShade needs.
              modifiedCreateInfo.imageUsage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
                                               ; // mutable path renders final pass directly into swapchain
@@ -707,7 +721,7 @@ index 57520e0..a52b05e 100644
              modifiedCreateInfo.flags |= VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR;
              // TODO what if the application already uses multiple formats for the swapchain?
  
-@@ -2992,6 +3184,20 @@ namespace vkShade
+@@ -2992,6 +3198,20 @@ namespace vkShade
                  return vr;
              }
  
