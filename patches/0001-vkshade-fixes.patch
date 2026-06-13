@@ -484,7 +484,7 @@ index 22ba295..b2890b3 100644
  
      std::cout << "effect: " << result.effectName << "\n";
 diff --git a/src/vkshade.cpp b/src/vkshade.cpp
-index 57520e0..3d2dd58 100644
+index 57520e0..c5764b5 100644
 --- a/src/vkshade.cpp
 +++ b/src/vkshade.cpp
 @@ -18,6 +18,9 @@
@@ -505,7 +505,7 @@ index 57520e0..3d2dd58 100644
  
  #include "effects/effect.hpp"
  #include "effects/effect_reshade.hpp"
-@@ -86,6 +90,248 @@ namespace vkShade
+@@ -86,6 +90,252 @@ namespace vkShade
      std::shared_ptr<Config> pConfig = nullptr;      // Current config (base + overlay)
      EffectRegistry effectRegistry;                   // Single source of truth for effect configs
  
@@ -692,7 +692,11 @@ index 57520e0..3d2dd58 100644
 +                    __atomic_store_n(&g_sbs.hdr->seq, g_sbs.seq, __ATOMIC_RELEASE);
 +                }
 +                s.inFlight = false;
-+                if (++g_sbs.diagFrames % 300 == 0) {
++                // Opt-in diagnostic (X4VR_DIAG=1): fence-wait avg should be ~0
++                // and blocked ~0 when the pipeline is healthy.
++                static const bool diag = []{ const char *e = std::getenv("X4VR_DIAG");
++                                             return e && e[0] && e[0] != '0'; }();
++                if (diag && ++g_sbs.diagFrames % 300 == 0) {
 +                    Logger::info("X4VR diag: 300 frames, fence-wait avg " +
 +                                 std::to_string(g_sbs.diagWaitMs / 300.0) +
 +                                 " ms, blocked " + std::to_string(g_sbs.diagBlocked) + "/300");
@@ -754,7 +758,7 @@ index 57520e0..3d2dd58 100644
      // layer book-keeping information, to store dispatch tables by key
      std::unordered_map<void*, InstanceDispatch>                           instanceDispatchMap;
      std::unordered_map<void*, VkInstance>                                 instanceMap;
-@@ -2429,6 +2675,9 @@ namespace vkShade
+@@ -2429,6 +2679,9 @@ namespace vkShade
              // Keep application-requested usage bits and add the ones vkShade needs.
              modifiedCreateInfo.imageUsage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
                                               ; // mutable path renders final pass directly into swapchain
@@ -764,7 +768,7 @@ index 57520e0..3d2dd58 100644
              modifiedCreateInfo.flags |= VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR;
              // TODO what if the application already uses multiple formats for the swapchain?
  
-@@ -2992,6 +3241,20 @@ namespace vkShade
+@@ -2992,6 +3245,20 @@ namespace vkShade
                  return vr;
              }
  

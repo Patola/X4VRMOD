@@ -209,8 +209,20 @@ at `(seq-1)%buffers`; no locks/tearing.
   `sbs*` helpers; mirrors the existing depth-dump readback pattern.
 - **Consumer**: `tools/shmdump.c` (verification: dumps newest frame to PPM —
   works on the flat screen, no headset). Protocol round-trip verified with a
-  synthetic writer (BGRA→RGB swizzle, halves, dims all correct). Next: the
-  viewer reads the same shm and blits left half→L eye, right half→R eye.
+  synthetic writer (BGRA→RGB swizzle, halves, dims all correct).
+- **Status: DONE and performant.** Verified in-game: shmdump shows the live
+  SBS frame, seq climbs, colors correct. **Frame rate is back to the
+  no-export baseline (110–147 fps at 2560×1280).** The export had cratered
+  FPS to 45 until the staging buffer was made HOST_CACHED — it was
+  write-combined memory whose CPU reads (the per-frame 13 MB memcpy) were
+  pathologically slow; neither the fence nor resolution was the cause.
+  Opt-in `X4VR_DIAG=1` logs fence-wait stats. Possible future optimization:
+  dmabuf zero-copy to drop the readback+upload entirely (not needed now).
+- **Next: the viewer reads the same shm** and blits left half→L eye, right
+  half→R eye (CopyBufferToImage with bufferRowLength = full SBS width and a
+  half-width column offset for the right eye). Eye swapchains then need to be
+  (shm.width/2 × shm.height) = 1280×1280, sized from the shm header at
+  startup (wait for the writer's magic).
 
 VERIFY (you, flat screen, no headset): run X4 with `X4VR_EXPORT=1` added to
 the launch env (alongside ENABLE_VKSHADE etc.), enable SuperDepth3D, then
