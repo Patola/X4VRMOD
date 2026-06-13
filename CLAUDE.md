@@ -67,14 +67,43 @@ content (holo cockpit MFDs, engine trails, nebulae) gets wrong depth; HUD
 needs masking. Space scenes are otherwise DIBR-friendly (stars at infinity
 = zero parallax).
 
-**Target architecture (all independent, no sync between them):**
-1. `vkShade + SuperDepth3D` → SBS stereo image, full frame rate.
-2. `bridge/xr2x4` → 6DOF head-look fed to X4's OpenTrack listener (WORKS).
-3. SBS delivery to headset: prefer `wlx-overlay-s` SBS/stereo screen mode
-   if it has one; else a minimal OpenXR viewer (two
-   `XrCompositionLayerQuad`, `eyeVisibility` LEFT/RIGHT, fed by PipeWire
-   window capture). Head-locked so OpenTrack look-around and the screen
-   don't fight.
+**KEY CONSTRAINT — depth needs an in-process Vulkan layer.** DIBR needs the
+game's depth buffer. Window/screen capture (PipeWire) only yields the final
+COLOR image, never depth — depth lives in the game's Vulkan device memory.
+The only way to read it is a Vulkan layer inside the game process. So the
+stereo-generation step CANNOT be a standalone capture app; it must be a
+layer. vkShade is exactly that layer. "Extracting just SuperDepth3D into the
+standalone app" is therefore not possible — a SuperDepth3D-equivalent must
+run as a layer. (A future slimmed X4-specific DIBR layer could replace
+vkShade, but it's still a layer.)
+
+**PORTABILITY decision — target OpenXR, not OpenVR.** Both Monado/WiVRn AND
+SteamVR expose OpenXR runtimes, so a plain OpenXR *application* runs on both
+with no runtime-specific code — meeting the "work on WiVRn/Monado and
+SteamVR" goal. Caveat: `XR_MND_headless` (used by the current bridge) is
+Monado-only; a normal *rendering* OpenXR app needs no headless and works on
+SteamVR too — so merging the bridge into the rendering viewer also fixes the
+bridge's SteamVR portability.
+
+**Chosen architecture — two parts:**
+1. **DIBR layer (dependency):** our modified vkShade (separate repo) running
+   SuperDepth3D → SBS into the X4 window. Unavoidable (depth). Full rate, no
+   sync.
+2. **`viewer/` — x4vr-viewer (the standalone OpenXR app, heart of the mod),
+   TO BUILD:** captures the X4 SBS window (PipeWire) → presents left/right
+   halves as two head-locked `XrCompositionLayerQuad`s (eyeVisibility
+   LEFT/RIGHT); AND reads HMD pose → sends OpenTrack UDP to X4 for 6DOF
+   look-around (absorbs `bridge/xr2x4`, dropping the headless dependency so
+   it runs on SteamVR too). Pure OpenXR → Monado/WiVRn + SteamVR. Plus a
+   launcher that sets ENABLE_VKSHADE + SDL Wayland + flags + the vkShade X4
+   profile.
+   Future optimization: have the layer submit eye images to OpenXR directly
+   (no capture) — lower latency, no SBS-on-desktop — but harder (in-process
+   OpenXR session sharing the game's VkDevice) and riskier for SteamVR; defer.
+
+Note: `wlx-overlay-s` is now **wayvr** (github.com/wayvr-org/wayvr). It has
+NO SBS/per-eye mode (flat desktop panels only), so it can't do delivery — we
+write the viewer.
 
 ## Components in this repo
 
