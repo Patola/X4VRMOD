@@ -191,7 +191,16 @@ irrelevant. Recommended VR start: Depth Adjustment ~15–20 (50 too strong;
 DIBR edge artifacts scale with it), ZPD so the cockpit dash sits near the
 screen plane.
 
-## CURRENT STATE (next step)
+## VIEWER STATUS
+
+`viewer/` milestone 1 DONE and verified in-headset on Quest 3/WiVRn:
+head-locked stereo quad layers, correct L/R eye mapping (left=red,
+right=blue test pattern), comfortable placement (1.8 m, 1.6 m). Pure OpenXR
+via XR_KHR_vulkan_enable2. Next: get the X4 SBS frame into the eye images
+(capture mechanism is an open decision — see below), then fold in
+pose→OpenTrack-UDP (absorbing bridge/xr2x4, dropping headless for SteamVR).
+
+## (earlier) DIBR tuning — still to do in-headset
 
 SBS confirmed; category-grouping fix built & installed (retest the overlay —
 SuperDepth3D controls should now appear under collapsible headers like
@@ -221,6 +230,30 @@ Edit `~/.config/EgoSoft/X4/<steam_id>/config.xml` (game closed):
 `res_width`/`res_height` (custom window res), `opentrackfilterstrength`
 (UI floor 5; Route-1 testing used 0 — for Route 2, head-look wants light
 smoothing, tune to taste).
+
+## FUTURE / post-v1 — invasive in-process component (NOT now)
+
+Once a first end-to-end version works, consider an in-process component that
+inspects/acts on X4's internal state, for things the external DIBR pipeline
+can't do well:
+- read game mode (cockpit vs walking) and camera pose/FOV → fix the
+  different perspective/angle between walking and cockpit modes;
+- mitigate specific graphical artifacts;
+- a TRUE stereoscopic mode (render two real eye views) instead of DIBR's
+  single-eye + reconstruction;
+- potentially make X11 output workable too — many users still run Xorg, and
+  X4's Wayland output has drawbacks (disables Steam Input and the Steam
+  overlay). (Our DIBR path currently requires Wayland because vkShade needs a
+  Wayland surface.)
+
+Mechanism candidates: an `LD_PRELOAD` shim or SDL3 proxy intercepting the
+game's calls, and/or a `.so` loaded into the process that calls X4's own
+**LuaJIT FFI** functions directly. Reference/model:
+github.com/bekopharm/X4-rest-server (Beko) — loads a .so into X4 and drives
+the game's FFI (the same FFI the UI Lua uses); builds a Linux .so. Our binary
+links `libluajit-5.1.so.2`, so the FFI path is viable here. This likely
+merges with the eventual custom DIBR layer (the "integrate vkShade
+functionality into our executable" direction).
 
 ## Conventions
 
