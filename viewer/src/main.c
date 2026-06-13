@@ -658,9 +658,14 @@ int main(void)
     if (!create_swapchain()) goto out;
     if (!create_staging()) goto out;
 
-    if (want_cylinder && have_cylinder_ext)
-        fprintf(stderr, "layer: cylinder (radius %.2f m, %.0f deg arc, aspect %.2f, voffset %.2f)\n",
-                cyl_radius, cyl_angle_deg, cyl_aspect, view_voffset);
+    if (want_cylinder && have_cylinder_ext) {
+        /* derived vertical extent: height = radius*angle/aspect */
+        double h = cyl_radius * (cyl_angle_deg * M_PI / 180.0) / cyl_aspect;
+        double vdeg = 2.0 * atan((h / 2.0) / cyl_radius) * 180.0 / M_PI;
+        fprintf(stderr, "layer: cylinder (radius %.2f m, %.0f deg H arc, "
+                "aspect %.2f -> ~%.0f deg V, voffset %.2f)\n",
+                cyl_radius, cyl_angle_deg, cyl_aspect, vdeg, view_voffset);
+    }
     else
         fprintf(stderr, "layer: flat quad (%.2f x %.2f m at %.2f m, ~%.0f deg, voffset %.2f)\n",
                 quad_w, quad_h, quad_dist,
