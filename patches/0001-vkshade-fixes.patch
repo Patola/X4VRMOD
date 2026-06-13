@@ -100,6 +100,145 @@ index 70c0f10..7fa0d0e 100644
              throw std::runtime_error("failed to load shader: " + effectName);
          }
  
+diff --git a/src/effects/params/effect_param.hpp b/src/effects/params/effect_param.hpp
+index fdd848e..2e020f0 100644
+--- a/src/effects/params/effect_param.hpp
++++ b/src/effects/params/effect_param.hpp
+@@ -42,6 +42,8 @@ namespace vkShade
+         std::string label;       // Display label (from ui_label or name)
+         std::string tooltip;     // ui_tooltip - hover description
+         std::string uiType;      // ui_type - "slider", "drag", "combo", etc.
++        std::string category;    // ui_category - groups controls under a header
++        bool categoryClosed = false; // ui_category_closed - start collapsed
+ 
+         virtual ParamType getType() const = 0;
+         virtual const char* getTypeName() const = 0;
+@@ -81,6 +83,8 @@ namespace vkShade
+             p->label = label;
+             p->tooltip = tooltip;
+             p->uiType = uiType;
++            p->category = category;
++            p->categoryClosed = categoryClosed;
+             p->value = value;
+             p->defaultValue = defaultValue;
+             p->minValue = minValue;
+@@ -141,6 +145,8 @@ namespace vkShade
+             p->label = label;
+             p->tooltip = tooltip;
+             p->uiType = uiType;
++            p->category = category;
++            p->categoryClosed = categoryClosed;
+             p->componentCount = componentCount;
+             for (uint32_t i = 0; i < 4; i++)
+             {
+@@ -185,6 +191,8 @@ namespace vkShade
+             p->label = label;
+             p->tooltip = tooltip;
+             p->uiType = uiType;
++            p->category = category;
++            p->categoryClosed = categoryClosed;
+             p->value = value;
+             p->defaultValue = defaultValue;
+             p->minValue = minValue;
+@@ -246,6 +254,8 @@ namespace vkShade
+             p->label = label;
+             p->tooltip = tooltip;
+             p->uiType = uiType;
++            p->category = category;
++            p->categoryClosed = categoryClosed;
+             p->componentCount = componentCount;
+             for (uint32_t i = 0; i < 4; i++)
+             {
+@@ -289,6 +299,8 @@ namespace vkShade
+             p->label = label;
+             p->tooltip = tooltip;
+             p->uiType = uiType;
++            p->category = category;
++            p->categoryClosed = categoryClosed;
+             p->value = value;
+             p->defaultValue = defaultValue;
+             p->minValue = minValue;
+@@ -349,6 +361,8 @@ namespace vkShade
+             p->label = label;
+             p->tooltip = tooltip;
+             p->uiType = uiType;
++            p->category = category;
++            p->categoryClosed = categoryClosed;
+             p->componentCount = componentCount;
+             for (uint32_t i = 0; i < 4; i++)
+             {
+@@ -389,6 +403,8 @@ namespace vkShade
+             p->label = label;
+             p->tooltip = tooltip;
+             p->uiType = uiType;
++            p->category = category;
++            p->categoryClosed = categoryClosed;
+             p->value = value;
+             p->defaultValue = defaultValue;
+             return p;
+diff --git a/src/overlay/view_main.cpp b/src/overlay/view_main.cpp
+index afa176a..19f8d21 100644
+--- a/src/overlay/view_main.cpp
++++ b/src/overlay/view_main.cpp
+@@ -548,18 +548,56 @@ namespace vkShade
+                 }
+             }
+ 
+-            // Show parameters for this effect
++            // Show parameters for this effect, grouped under ui_category headers
++            // (declaration order preserved; a header spans its contiguous run of
++            // params, matching ReShade). Params with no category render directly.
+             auto effectParams = pEffectRegistry->getParametersForEffect(effectName);
++            std::string activeCategory;   // category of the header currently open
++            bool haveCategory = false;    // currently inside a category header?
++            bool categoryVisible = true;  // is that header expanded?
+             for (size_t paramIdx = 0; paramIdx < effectParams.size(); paramIdx++)
+             {
++                EffectParam* param = effectParams[paramIdx];
++                const std::string& cat = param->category;
++
++                if (!(haveCategory && cat == activeCategory))
++                {
++                    // Category boundary: close the previous header's indent first.
++                    if (haveCategory && categoryVisible)
++                        ImGui::Unindent();
++
++                    haveCategory = !cat.empty();
++                    activeCategory = cat;
++
++                    if (haveCategory)
++                    {
++                        ImGuiTreeNodeFlags flags = param->categoryClosed
++                            ? 0 : ImGuiTreeNodeFlags_DefaultOpen;
++                        // ## suffix keeps the ImGui id unique across effects.
++                        std::string header = cat + "##cat_" + effectName;
++                        categoryVisible = ImGui::CollapsingHeader(header.c_str(), flags);
++                        if (categoryVisible)
++                            ImGui::Indent();
++                    }
++                    else
++                    {
++                        categoryVisible = true; // uncategorized params always show
++                    }
++                }
++
++                if (haveCategory && !categoryVisible)
++                    continue; // header collapsed: skip its controls
++
+                 ImGui::PushID(static_cast<int>(paramIdx));
+-                if (renderFieldEditor(*effectParams[paramIdx]))
++                if (renderFieldEditor(*param))
+                 {
+                     paramsDirty = true;
+                     lastChangeTime = std::chrono::steady_clock::now();
+                 }
+                 ImGui::PopID();
+             }
++            if (haveCategory && categoryVisible)
++                ImGui::Unindent(); // balance the final open category's indent
+ 
+             ImGui::TreePop();
+         }
 diff --git a/src/reshade/effect_preprocessor.cpp b/src/reshade/effect_preprocessor.cpp
 index d95f1fd..684cd95 100644
 --- a/src/reshade/effect_preprocessor.cpp
@@ -151,10 +290,73 @@ index 20a2751..ee62131 100644
  		/// <summary>
  		/// Open the specified file, parse its contents and append them to the output.
 diff --git a/src/reshade_parser.cpp b/src/reshade_parser.cpp
-index 66bea86..f44439b 100644
+index 66bea86..65346ba 100644
 --- a/src/reshade_parser.cpp
 +++ b/src/reshade_parser.cpp
-@@ -660,7 +660,8 @@ namespace vkShade
+@@ -498,6 +498,22 @@ namespace vkShade
+         reshadefx::module module;
+         codegen->write_result(module);
+ 
++        // Stamp ReShade ui_category / ui_category_closed onto a built param so
++        // the overlay can group controls under collapsible headers. vkShade
++        // previously ignored ui_category and rendered every control in one flat
++        // list, which is unusable for big shaders like SuperDepth3D (~50 knobs).
++        auto stampUiCategory = [](EffectParam* p, const auto& annotations) {
++            if (!p) return;
++            auto catIt = findAnnotation(annotations, "ui_category");
++            if (catIt != annotations.end())
++                p->category = catIt->value.string_data;
++            auto closedIt = findAnnotation(annotations, "ui_category_closed");
++            if (closedIt != annotations.end())
++                p->categoryClosed = closedIt->type.is_integral()
++                    ? (closedIt->value.as_int[0] != 0)
++                    : (closedIt->value.as_float[0] != 0.0f);
++        };
++
+         // Process spec_constants
+         // Note: float2/float3/float4 are split into multiple scalar spec_constants with the same name
+         // We need to detect and combine them
+@@ -556,6 +572,7 @@ namespace vkShade
+                     if (stepIt != spec.annotations.end())
+                         p->step = getAnnotationFloat(*stepIt);
+ 
++                    stampUiCategory(p.get(), spec.annotations);
+                     params.push_back(std::move(p));
+                 }
+                 else if (spec.type.is_integral() && spec.type.is_signed())
+@@ -582,6 +599,7 @@ namespace vkShade
+                     if (stepIt != spec.annotations.end())
+                         p->step = getAnnotationFloat(*stepIt);
+ 
++                    stampUiCategory(p.get(), spec.annotations);
+                     params.push_back(std::move(p));
+                 }
+                 else if (spec.type.is_integral() && !spec.type.is_signed())
+@@ -608,6 +626,7 @@ namespace vkShade
+                     if (stepIt != spec.annotations.end())
+                         p->step = getAnnotationFloat(*stepIt);
+ 
++                    stampUiCategory(p.get(), spec.annotations);
+                     params.push_back(std::move(p));
+                 }
+ 
+@@ -618,6 +637,7 @@ namespace vkShade
+             {
+                 // Regular scalar parameter
+                 auto param = convertSpecConstant(spec, effectName, pConfig);
++                stampUiCategory(param.get(), spec.annotations);
+                 if (param)
+                     params.push_back(std::move(param));
+             }
+@@ -630,6 +650,7 @@ namespace vkShade
+                 continue;
+ 
+             auto param = convertSpecConstant(uniform, effectName, pConfig);
++            stampUiCategory(param.get(), uniform.annotations);
+             if (param)
+                 params.push_back(std::move(param));
+         }
+@@ -660,7 +681,8 @@ namespace vkShade
      ShaderTestResult testShaderCompilation(
          const std::string& effectName,
          const std::string& effectPath,
@@ -164,7 +366,7 @@ index 66bea86..f44439b 100644
      {
          ShaderTestResult result;
          result.effectName = effectName;
-@@ -684,6 +685,10 @@ namespace vkShade
+@@ -684,6 +706,10 @@ namespace vkShade
              reshadefx::preprocessor preprocessor;
              setupPreprocessor(preprocessor, includePaths);
  

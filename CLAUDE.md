@@ -133,24 +133,49 @@ Fixes landed:
 
 Confirmed working on this setup: **vkShade compositing is alive and depth
 access works in X4** — Daltonize shows a clear color shift; DisplayDepth
-shows a real B/W scene-depth view. This is the green light for DIBR.
+shows a real B/W scene-depth view. **SuperDepth3D now renders a correct
+side-by-side pair** (default Stereoscopic Mode is already SBS). DIBR works.
+
+6. **ui_category grouping in the overlay.** vkShade never parsed
+   `ui_category`/`ui_category_closed` and rendered every control in one flat
+   list (only the "Preprocessor" node was collapsible) — unusable for
+   SuperDepth3D's ~50 controls. Fixed: parser stamps category onto each param
+   (incl. the float2/3/4 vector branch and clone()); the main view groups
+   contiguous same-category params under a collapsible `CollapsingHeader`
+   (honors `ui_category_closed`), uncategorized params render directly.
+   KNOWN-REMAINING (cosmetic): a couple of "unlabeled" controls show because
+   vkShade lists uniforms that lack a `ui_type` (ReShade hides those);
+   `shouldSkipSpecConstant` could skip `!hasAnnotation("ui_type")` to match —
+   deferred to avoid hiding legit controls in other shaders.
+
+## SuperDepth3D control map (this build)
+
+Generic names I used earlier → actual labels (grouped under category headers
+now): "divergence"/3D strength = **·Depth Adjustment·** (category "Divergence
+& Separation", 0–100). "convergence" = **Zero Parallax Distance (ZPD)**.
+**Smart Convergence** (0–1) auto-converge, leave 0 while tuning. Depth debug
+= **Depth Map ▸ Depth Map View** (+ Depth Map Flip, ·Depth Map Selection·
+DM0/DM1, Near Plane Adjustment 1–250). **View Mode** (VM1 Alpha) occlusion
+fill; **Performance Level**. SBS is the default output, no mode switch
+needed. SBS packs both eyes into the existing window — resolution/fullscreen
+irrelevant. Recommended VR start: Depth Adjustment ~15–20 (50 too strong;
+DIBR edge artifacts scale with it), ZPD so the cockpit dash sits near the
+screen plane.
 
 ## CURRENT STATE (next step)
 
-Multi-technique fix built & installed; awaiting in-game retest of
-SuperDepth3D. Expected: enabling it now produces a doubled/SBS image.
-- If it renders: go to the **Depth Map** category, set polarity so near=dark
-  / far=light, then Stereoscopic Mode → **Side by Side**, low divergence
-  (~25) to start; cross-eye check on the monitor. SBS packs both eyes into
-  the existing window — it does NOT widen the window; resolution/fullscreen
-  is irrelevant to whether it works.
-- If still blank or wrong: capture both
-  `grep -E "err|technique|pass|pipeline|creating|Reconstruction"
-  /tmp/vkshade.log | tail -60` (should now list MANY passes + two
-  techniques) and note any Vulkan validation errors.
-
-After SBS is confirmed: tune artifacts, then build head-locked SBS delivery
-to the headset and compose with `bridge/xr2x4` head-look.
+SBS confirmed; category-grouping fix built & installed (retest the overlay —
+SuperDepth3D controls should now appear under collapsible headers like
+"Divergence & Separation", "Depth Map", "Occlusion Masking"). Then:
+1. Tune for comfort on the flat monitor (Depth Adjustment down, ZPD), survey
+   artifacts on holo MFDs / HUD brackets / engine trails (DIBR weak spots).
+2. **Build head-locked SBS delivery to the headset** — the last missing
+   component. Options: check if `wlx-overlay-s` has an SBS/stereo screen
+   mode; else a minimal OpenXR viewer (two `XrCompositionLayerQuad`,
+   `eyeVisibility` LEFT/RIGHT, left half→left eye, right half→right eye,
+   fed by PipeWire window capture; head-locked).
+3. Compose with `bridge/xr2x4` for 6DOF look-around. No sync between any of
+   the three components.
 
 ## Standard launch line (DIBR path, flat-screen test)
 
