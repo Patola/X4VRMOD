@@ -54,15 +54,18 @@ static float quad_w = 2.4f, quad_h = 2.4f, quad_dist = 1.4f;
  *   central_angle= horizontal arc the image wraps (degrees)
  *   aspect       = displayed width:height. 2.0 un-squishes the 2:1 game view
  *                  held in each square eye; LOWER = taller. */
-/* Defaults assume a wide in-game FOV (~120, the X4 max) and a 2:1 window:
- *   ANGLE should match X4's horizontal FOV (else content is squished — too
- *   thin / too fat); ASPECT sets height (lower = taller, closes the top/
- *   bottom black border). ~1.2 matches a 2:1 window's ~82 vertical FOV. */
-static float cyl_radius = 1.4f, cyl_angle_deg = 120.0f, cyl_aspect = 1.2f;
+/* ANGLE should match X4's horizontal FOV (else content is angularly
+ * magnified/minified). ASPECT (= image width:height) MUST equal the game
+ * window's aspect to look undistorted — each eye holds the full window view
+ * squeezed into its half, so a 2:1 window needs a 2:1 display. By default we
+ * AUTO-DERIVE aspect from the shm dimensions (sbs_w/sbs_h); env overrides. */
+static float cyl_radius = 1.4f, cyl_angle_deg = 120.0f, cyl_aspect = 2.0f;
 
 /* layer mode: true = cylinder (default, if the runtime supports it). */
 static bool want_cylinder = true;
 static bool have_cylinder_ext = false; /* set after extension enumeration */
+static bool cyl_aspect_set = false;    /* did the user pin aspect via env? */
+static bool quad_h_set = false;
 
 static void read_view_env(void)
 {
@@ -70,11 +73,11 @@ static void read_view_env(void)
     if ((e = getenv("X4VR_LAYER")))
         want_cylinder = (strcmp(e, "quad") != 0);
     if ((e = getenv("X4VR_QUAD_W")))     quad_w = (float)atof(e);
-    if ((e = getenv("X4VR_QUAD_H")))     quad_h = (float)atof(e);
+    if ((e = getenv("X4VR_QUAD_H")))     { quad_h = (float)atof(e); quad_h_set = true; }
     if ((e = getenv("X4VR_QUAD_DIST")))  quad_dist = (float)atof(e);
     if ((e = getenv("X4VR_CYL_RADIUS"))) cyl_radius = (float)atof(e);
     if ((e = getenv("X4VR_CYL_ANGLE")))  cyl_angle_deg = (float)atof(e);
-    if ((e = getenv("X4VR_CYL_ASPECT"))) cyl_aspect = (float)atof(e);
+    if ((e = getenv("X4VR_CYL_ASPECT"))) { cyl_aspect = (float)atof(e); cyl_aspect_set = true; }
 }
 
 /* ------------------------------- globals --------------------------------- */
@@ -105,6 +108,19 @@ static volatile X4VRShmHeader *shm_hdr = NULL;
 static uint8_t *shm_data = NULL;
 static uint32_t sbs_w = 0, sbs_h = 0; /* full SBS dimensions */
 static uint32_t eye_w = 0;            /* per-eye width = sbs_w / 2 */
+
+/* Derive undistorted aspect from the source once shm dimensions are known.
+ * Each eye holds the full game-window view squeezed into its half, so the
+ * correct display aspect equals the game window aspect (sbs_w/sbs_h). */
+static void apply_source_aspect(void)
+{
+    float src = (float)sbs_w / (float)sbs_h;
+    if (!cyl_aspect_set) cyl_aspect = src;
+    if (!quad_h_set)     quad_h = quad_w / src; /* keep W:H = window aspect */
+    fprintf(stderr, "source aspect %ux%u = %.3f -> cyl_aspect %.3f, "
+            "quad %.2fx%.2f%s\n", sbs_w, sbs_h, src, cyl_aspect,
+            quad_w, quad_h, cyl_aspect_set ? " (aspect pinned via env)" : "");
+}
 
 /* one full-SBS swapchain + an upload staging buffer */
 static XrSwapchain swapchain = XR_NULL_HANDLE;
@@ -627,6 +643,7 @@ int main(void)
     int rc = 1;
     read_view_env();
     if (!open_shm(60)) goto out;           /* wait up to 60s for X4 */
+    apply_source_aspect();                 /* auto aspect from shm dims */
     if (!create_xr_instance()) goto out;   /* sets have_cylinder_ext */
     if (!create_vulkan_via_xr()) goto out;
     if (!create_session_and_space()) goto out;

@@ -200,10 +200,16 @@ not DM1. Set **X4 in-game FOV to 120 (max)** for immersion. vkShade persists
 only changed values to X4.conf. (Ctrl+Click types exact values into a
 vkShade slider; right-click resets.)
 
-**Viewer cylinder layer:** set `X4VR_CYL_ANGLE` = X4's horizontal FOV (120)
-or content is squished (too small→thin people); `X4VR_CYL_ASPECT` controls
-height (lower=taller, closes the top/bottom black band), ~1.2 for a 2:1
-window. Defaults now 120 / 1.2.
+**Viewer cylinder layer:** `X4VR_CYL_ASPECT` (image width:height) **must
+equal the game window aspect** or geometry is wrong (oval spinner, thin
+people) — each eye holds the full window view squeezed into its half, so a
+2:1 window needs a 2:1 display. The viewer now **auto-derives aspect from
+the shm dims (sbs_w/sbs_h)**, so don't set it manually. `X4VR_CYL_ANGLE` ≈
+X4's horizontal FOV (120). Black top/bottom bars at correct aspect are
+INHERENT to a 2:1 window in a ~1:1 headset FOV — to fill the vertical
+without distortion, render X4 at a squarer resolution (the viewer
+auto-uses that aspect). (Earlier "aspect 1.2" advice was wrong — aspect
+governs image shape, not FOV match.)
 
 ## FRAME TRANSPORT (decided: vkShade exports via shm)
 

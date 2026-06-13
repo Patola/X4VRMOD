@@ -35,21 +35,27 @@ runtime supports `XR_KHR_composition_layer_cylinder`, else a flat quad.
 |-----|---------|---------|
 | `X4VR_LAYER` | cylinder | `cylinder` or `quad` |
 | `X4VR_CYL_RADIUS` | 1.4 | cylinder distance (m) |
-| `X4VR_CYL_ANGLE`  | 120 | horizontal arc wrapped (deg) — **set = X4's in-game FOV** |
-| `X4VR_CYL_ASPECT` | 1.2 | height control: lower = taller (closes top/bottom black border) |
-| `X4VR_QUAD_W/H/DIST` | 2.4/2.4/1.4 | flat-quad size + distance (m) |
+| `X4VR_CYL_ANGLE`  | 120 | horizontal arc wrapped (deg) — set = X4's in-game FOV |
+| `X4VR_CYL_ASPECT` | auto | image width:height; **defaults to the source aspect (sbs_w/sbs_h)** — override only to experiment |
+| `X4VR_QUAD_W` / `_DIST` | 2.4 / 1.4 | flat-quad width + distance (m); H auto from source aspect |
+| `X4VR_QUAD_H` | auto | override quad height (else W ÷ source aspect) |
 
-Cylinder tuning (two independent levers):
-- **ANGLE = horizontal scale.** Must equal X4's horizontal FOV or content
-  is squished (too small → people too thin; too large → too fat). X4 max
-  FOV is 120.
-- **ASPECT = height.** height = (radius·angle)/aspect, so lower = taller.
-  ~1.2 fills a 2:1 window's ~82° vertical FOV; go lower to kill a residual
-  top/bottom black band (eventually stretches people tall, since X4 only
-  renders ~82° vertical at 2:1 — render a less-wide window for more).
+**ASPECT must equal the game window's aspect or geometry is wrong** (a
+circle/loading-spinner renders oval; people too thin). Each eye holds the
+full window view squeezed into its half, so a 2:1 window (2560×1280) needs
+a 2:1 display. The viewer auto-derives this from the shm dimensions — you
+normally never set `CYL_ASPECT`.
 
-Edge-to-edge "inside the world" immersion (and native headset resolution)
-needs the in-engine path (see CLAUDE.md), not a virtual screen.
+**ANGLE** just scales the angular size (set ≈ X4's FOV for 1:1 scale;
+larger magnifies and fills more, overspilling your FOV).
+
+Black top/bottom bars at correct aspect are **inherent to a wide (2:1)
+window in a squarish (~1:1) headset FOV** — not a tuning miss. The only
+distortion-free way to fill the vertical is to render X4 at a **more square
+resolution** (e.g. 1600×1280 = 1.25:1, or 1440×1440); the viewer then
+auto-uses that aspect. Trade-off: fewer horizontal pixels per eye, and X4's
+wide-screen HUD gets cramped. True edge-to-edge fill (and native headset
+resolution) needs the in-engine path (see CLAUDE.md).
 
 ## Roadmap
 
