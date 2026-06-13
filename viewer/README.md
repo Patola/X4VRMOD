@@ -49,13 +49,24 @@ normally never set `CYL_ASPECT`.
 **ANGLE** just scales the angular size (set ≈ X4's FOV for 1:1 scale;
 larger magnifies and fills more, overspilling your FOV).
 
-Black top/bottom bars at correct aspect are **inherent to a wide (2:1)
-window in a squarish (~1:1) headset FOV** — not a tuning miss. The only
-distortion-free way to fill the vertical is to render X4 at a **more square
-resolution** (e.g. 1600×1280 = 1.25:1, or 1440×1440); the viewer then
-auto-uses that aspect. Trade-off: fewer horizontal pixels per eye, and X4's
-wide-screen HUD gets cramped. True edge-to-edge fill (and native headset
-resolution) needs the in-engine path (see CLAUDE.md).
+Black top/bottom bars at correct aspect are **inherent to a wide window in
+a squarish (~1:1) headset FOV** — not a tuning miss. Displayed proportions
+equal the *game window* aspect, so to fill the vertical FOV without
+distortion, render X4 at a **near-square** window.
+
+Choosing the window resolution — match the **per-eye** shape, NOT the
+combined panel:
+- Quest 3 per-eye FOV ≈ 110°×96° → **~1.15:1** → e.g. `1656×1440`.
+- Per-eye panel 2064×2208 → 0.935:1 (slightly taller) → e.g. `1346×1440`.
+- Do **not** target the combined 4128×2208 (1.869:1) — that's two eyes; our
+  SBS splits horizontally, so a 1.869:1 window is *wide* and letterboxes
+  more.
+
+Inherent trade-off (capture approach): the horizontal SBS split halves
+per-eye horizontal resolution, so "fill the FOV" (near-square, ~828px/eye
+wide) and "native sharpness" (needs a ~4128-wide window) pull apart. The
+in-engine path (CLAUDE.md) renders each eye full-res natively and escapes
+this; here, pick your balance via the window resolution.
 
 ## Roadmap
 
