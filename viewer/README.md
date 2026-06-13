@@ -39,6 +39,13 @@ runtime supports `XR_KHR_composition_layer_cylinder`, else a flat quad.
 | `X4VR_CYL_ASPECT` | auto | image width:height; **defaults to the source aspect (sbs_w/sbs_h)** — override only to experiment |
 | `X4VR_QUAD_W` / `_DIST` | 2.4 / 1.4 | flat-quad width + distance (m); H auto from source aspect |
 | `X4VR_QUAD_H` | auto | override quad height (else W ÷ source aspect) |
+| `X4VR_VOFFSET` | 0 | vertical image offset (m; **negative = down**) to recenter |
+
+**Vertical recenter:** headsets (Quest 3 included) have an asymmetric
+vertical FOV — more visible *below* the horizontal axis than above — so a
+symmetric layer centered at eye level shows a black gap at the *bottom*.
+Nudge `X4VR_VOFFSET` negative (e.g. -0.15) to slide the image down and
+close it.
 
 **ASPECT must equal the game window's aspect or geometry is wrong** (a
 circle/loading-spinner renders oval; people too thin). Each eye holds the

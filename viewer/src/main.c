@@ -61,6 +61,12 @@ static float quad_w = 2.4f, quad_h = 2.4f, quad_dist = 1.4f;
  * AUTO-DERIVE aspect from the shm dimensions (sbs_w/sbs_h); env overrides. */
 static float cyl_radius = 1.4f, cyl_angle_deg = 120.0f, cyl_aspect = 2.0f;
 
+/* Vertical offset of the image (m, VIEW space; negative = down). Headsets
+ * (Quest 3 included) have an asymmetric vertical FOV — more visible below
+ * the horizontal axis than above — so a symmetric layer centered at eye
+ * level leaves a black gap at the bottom. Nudge it down to recenter. */
+static float view_voffset = 0.0f;
+
 /* layer mode: true = cylinder (default, if the runtime supports it). */
 static bool want_cylinder = true;
 static bool have_cylinder_ext = false; /* set after extension enumeration */
@@ -78,6 +84,7 @@ static void read_view_env(void)
     if ((e = getenv("X4VR_CYL_RADIUS"))) cyl_radius = (float)atof(e);
     if ((e = getenv("X4VR_CYL_ANGLE")))  cyl_angle_deg = (float)atof(e);
     if ((e = getenv("X4VR_CYL_ASPECT"))) { cyl_aspect = (float)atof(e); cyl_aspect_set = true; }
+    if ((e = getenv("X4VR_VOFFSET")))    view_voffset = (float)atof(e);
 }
 
 /* ------------------------------- globals --------------------------------- */
@@ -547,7 +554,8 @@ static bool render_frame(void)
             XrEyeVisibility eye = e == 0 ? XR_EYE_VISIBILITY_LEFT
                                          : XR_EYE_VISIBILITY_RIGHT;
             XrPosef pose = { .orientation = { 0, 0, 0, 1 },
-                             .position = { 0, 0, use_cyl ? 0.0f : -quad_dist } };
+                             .position = { 0, view_voffset,
+                                           use_cyl ? 0.0f : -quad_dist } };
             if (use_cyl) {
                 cyls[e] = (XrCompositionLayerCylinderKHR){
                     .type = XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR,
@@ -651,12 +659,12 @@ int main(void)
     if (!create_staging()) goto out;
 
     if (want_cylinder && have_cylinder_ext)
-        fprintf(stderr, "layer: cylinder (radius %.2f m, %.0f deg arc, aspect %.2f)\n",
-                cyl_radius, cyl_angle_deg, cyl_aspect);
+        fprintf(stderr, "layer: cylinder (radius %.2f m, %.0f deg arc, aspect %.2f, voffset %.2f)\n",
+                cyl_radius, cyl_angle_deg, cyl_aspect, view_voffset);
     else
-        fprintf(stderr, "layer: flat quad (%.2f x %.2f m at %.2f m, ~%.0f deg)\n",
+        fprintf(stderr, "layer: flat quad (%.2f x %.2f m at %.2f m, ~%.0f deg, voffset %.2f)\n",
                 quad_w, quad_h, quad_dist,
-                2.0 * atan((quad_w / 2.0) / quad_dist) * 180.0 / M_PI);
+                2.0 * atan((quad_w / 2.0) / quad_dist) * 180.0 / M_PI, view_voffset);
     fprintf(stderr, "init OK — streaming X4 SBS to the headset. Ctrl-C to quit.\n");
     if (!run_loop()) goto out;
     rc = 0;
