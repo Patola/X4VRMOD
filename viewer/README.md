@@ -26,6 +26,24 @@ The viewer waits up to 60 s for the shm, sizes itself from the header
 head-locked. If colors look off (too dark/bright), the swapchain format's
 sRGB-ness likely needs flipping — see `shm_to_vk_format()`.
 
+### Display surface (env-tunable, no rebuild)
+
+Defaults to a **cylinder** layer (curved wrap-around screen) when the
+runtime supports `XR_KHR_composition_layer_cylinder`, else a flat quad.
+
+| Env | Default | Meaning |
+|-----|---------|---------|
+| `X4VR_LAYER` | cylinder | `cylinder` or `quad` |
+| `X4VR_CYL_RADIUS` | 1.4 | cylinder distance (m) |
+| `X4VR_CYL_ANGLE`  | 100 | horizontal arc wrapped (degrees) |
+| `X4VR_CYL_ASPECT` | 1.6 | width:height; **2.0 un-squishes the 2:1 view**, lower = taller |
+| `X4VR_QUAD_W/H/DIST` | 2.4/2.4/1.4 | flat-quad size + distance (m) |
+
+Note: each eye holds X4's 2:1 (2560×1280) view squeezed into a square, so
+`ASPECT=2.0` is geometrically correct; for natural 1:1 scale also raise
+X4's in-game FOV toward the wrap angle. Edge-to-edge "inside the world"
+immersion needs the in-engine path (see CLAUDE.md), not a virtual screen.
+
 ## Roadmap
 
 - [x] OpenXR+Vulkan session, head-locked quad layers, per-eye test pattern

@@ -48,15 +48,29 @@
  * Defaults below are a large-ish square; widen W if geometry looks squished. */
 static float quad_w = 2.4f, quad_h = 2.4f, quad_dist = 1.4f;
 
-static void read_quad_env(void)
+/* Cylinder layer (XR_KHR_composition_layer_cylinder): a curved wrap-around
+ * screen that fills the horizontal FOV more naturally than a flat quad.
+ *   radius       = distance to the surface (m)
+ *   central_angle= horizontal arc the image wraps (degrees)
+ *   aspect       = displayed width:height. 2.0 un-squishes the 2:1 game view
+ *                  held in each square eye; LOWER = taller. */
+static float cyl_radius = 1.4f, cyl_angle_deg = 100.0f, cyl_aspect = 1.6f;
+
+/* layer mode: true = cylinder (default, if the runtime supports it). */
+static bool want_cylinder = true;
+static bool have_cylinder_ext = false; /* set after extension enumeration */
+
+static void read_view_env(void)
 {
     const char *e;
-    if ((e = getenv("X4VR_QUAD_W")))    quad_w = (float)atof(e);
-    if ((e = getenv("X4VR_QUAD_H")))    quad_h = (float)atof(e);
-    if ((e = getenv("X4VR_QUAD_DIST"))) quad_dist = (float)atof(e);
-    fprintf(stderr, "quad: %.2f x %.2f m at %.2f m "
-            "(~%.0f deg horizontal)\n", quad_w, quad_h, quad_dist,
-            2.0 * atan((quad_w / 2.0) / quad_dist) * 180.0 / M_PI);
+    if ((e = getenv("X4VR_LAYER")))
+        want_cylinder = (strcmp(e, "quad") != 0);
+    if ((e = getenv("X4VR_QUAD_W")))     quad_w = (float)atof(e);
+    if ((e = getenv("X4VR_QUAD_H")))     quad_h = (float)atof(e);
+    if ((e = getenv("X4VR_QUAD_DIST")))  quad_dist = (float)atof(e);
+    if ((e = getenv("X4VR_CYL_RADIUS"))) cyl_radius = (float)atof(e);
+    if ((e = getenv("X4VR_CYL_ANGLE")))  cyl_angle_deg = (float)atof(e);
+    if ((e = getenv("X4VR_CYL_ASPECT"))) cyl_aspect = (float)atof(e);
 }
 
 /* ------------------------------- globals --------------------------------- */
@@ -179,7 +193,26 @@ static int64_t shm_to_vk_format(void)
 
 static bool create_xr_instance(void)
 {
-    const char *exts[] = { XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME };
+    /* Discover whether the cylinder layer extension is available. */
+    uint32_t ext_n = 0;
+    xrEnumerateInstanceExtensionProperties(NULL, 0, &ext_n, NULL);
+    XrExtensionProperties *ext_props = calloc(ext_n, sizeof(XrExtensionProperties));
+    for (uint32_t i = 0; i < ext_n; i++) ext_props[i].type = XR_TYPE_EXTENSION_PROPERTIES;
+    xrEnumerateInstanceExtensionProperties(NULL, ext_n, &ext_n, ext_props);
+    for (uint32_t i = 0; i < ext_n; i++)
+        if (!strcmp(ext_props[i].extensionName,
+                    XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME))
+            have_cylinder_ext = true;
+    free(ext_props);
+
+    const char *exts[2] = { XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME };
+    uint32_t ext_count = 1;
+    if (want_cylinder && have_cylinder_ext)
+        exts[ext_count++] = XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME;
+    else if (want_cylinder && !have_cylinder_ext)
+        fprintf(stderr, "note: runtime lacks %s — falling back to flat quad\n",
+                XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
+
     XrInstanceCreateInfo ci = {
         .type = XR_TYPE_INSTANCE_CREATE_INFO,
         .applicationInfo = {
@@ -188,7 +221,7 @@ static bool create_xr_instance(void)
             .engineName = "none",
             .apiVersion = XR_API_VERSION_1_0,
         },
-        .enabledExtensionCount = 1,
+        .enabledExtensionCount = ext_count,
         .enabledExtensionNames = exts,
     };
     XR_CHECK(xrCreateInstance(&ci, &xr_instance),
@@ -461,9 +494,12 @@ static bool render_frame(void)
     XrFrameBeginInfo fbi = { .type = XR_TYPE_FRAME_BEGIN_INFO };
     XR_CHECK(xrBeginFrame(xr_session, &fbi), "xrBeginFrame");
 
+    /* Storage for whichever layer type we emit (cylinder or quad), 2 each. */
+    XrCompositionLayerCylinderKHR cyls[2];
     XrCompositionLayerQuad quads[2];
     const XrCompositionLayerBaseHeader *layers[2];
     uint32_t layer_count = 0;
+    bool use_cyl = want_cylinder && have_cylinder_ext;
 
     if (fs.shouldRender) {
         uint32_t img = 0;
@@ -478,24 +514,43 @@ static bool render_frame(void)
         XrSwapchainImageReleaseInfo ri = { .type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
         XR_CHECK(xrReleaseSwapchainImage(swapchain, &ri), "xrReleaseSwapchainImage");
 
-        /* Two quads over the same swapchain: each eye sees its half. */
+        /* Both layer types: same swapchain, each eye sees its SBS half via
+         * imageRect + eyeVisibility, centered in front in head-locked VIEW
+         * space. */
         for (int e = 0; e < 2; e++) {
-            quads[e] = (XrCompositionLayerQuad){
-                .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
-                .space = xr_view_space,
-                .eyeVisibility = e == 0 ? XR_EYE_VISIBILITY_LEFT
-                                        : XR_EYE_VISIBILITY_RIGHT,
-                .subImage = {
-                    .swapchain = swapchain,
-                    .imageRect = { { (int32_t)(e * eye_w), 0 },
-                                   { (int32_t)eye_w, (int32_t)sbs_h } },
-                    .imageArrayIndex = 0,
-                },
-                .pose = { .orientation = { 0, 0, 0, 1 },
-                          .position = { 0, 0, -quad_dist } },
-                .size = { quad_w, quad_h },
+            XrSwapchainSubImage sub = {
+                .swapchain = swapchain,
+                .imageRect = { { (int32_t)(e * eye_w), 0 },
+                               { (int32_t)eye_w, (int32_t)sbs_h } },
+                .imageArrayIndex = 0,
             };
-            layers[e] = (const XrCompositionLayerBaseHeader *)&quads[e];
+            XrEyeVisibility eye = e == 0 ? XR_EYE_VISIBILITY_LEFT
+                                         : XR_EYE_VISIBILITY_RIGHT;
+            XrPosef pose = { .orientation = { 0, 0, 0, 1 },
+                             .position = { 0, 0, use_cyl ? 0.0f : -quad_dist } };
+            if (use_cyl) {
+                cyls[e] = (XrCompositionLayerCylinderKHR){
+                    .type = XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR,
+                    .space = xr_view_space,
+                    .eyeVisibility = eye,
+                    .subImage = sub,
+                    .pose = pose,
+                    .radius = cyl_radius,
+                    .centralAngle = (float)(cyl_angle_deg * M_PI / 180.0),
+                    .aspectRatio = cyl_aspect,
+                };
+                layers[e] = (const XrCompositionLayerBaseHeader *)&cyls[e];
+            } else {
+                quads[e] = (XrCompositionLayerQuad){
+                    .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
+                    .space = xr_view_space,
+                    .eyeVisibility = eye,
+                    .subImage = sub,
+                    .pose = pose,
+                    .size = { quad_w, quad_h },
+                };
+                layers[e] = (const XrCompositionLayerBaseHeader *)&quads[e];
+            }
         }
         layer_count = 2;
     }
@@ -566,14 +621,21 @@ int main(void)
     signal(SIGTERM, on_signal);
 
     int rc = 1;
-    read_quad_env();
+    read_view_env();
     if (!open_shm(60)) goto out;           /* wait up to 60s for X4 */
-    if (!create_xr_instance()) goto out;
+    if (!create_xr_instance()) goto out;   /* sets have_cylinder_ext */
     if (!create_vulkan_via_xr()) goto out;
     if (!create_session_and_space()) goto out;
     if (!create_swapchain()) goto out;
     if (!create_staging()) goto out;
 
+    if (want_cylinder && have_cylinder_ext)
+        fprintf(stderr, "layer: cylinder (radius %.2f m, %.0f deg arc, aspect %.2f)\n",
+                cyl_radius, cyl_angle_deg, cyl_aspect);
+    else
+        fprintf(stderr, "layer: flat quad (%.2f x %.2f m at %.2f m, ~%.0f deg)\n",
+                quad_w, quad_h, quad_dist,
+                2.0 * atan((quad_w / 2.0) / quad_dist) * 180.0 / M_PI);
     fprintf(stderr, "init OK — streaming X4 SBS to the headset. Ctrl-C to quit.\n");
     if (!run_loop()) goto out;
     rc = 0;
