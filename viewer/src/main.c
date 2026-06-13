@@ -38,9 +38,26 @@
 
 /* ------------------------------- config ---------------------------------- */
 
-/* Head-locked quad placement (meters), relative to VIEW space (the head). */
-static const float QUAD_DISTANCE = 1.8f;
-static const float QUAD_SIZE_M = 1.6f;
+/* Head-locked quad placement (meters), relative to VIEW space (the head).
+ * Live-tunable via env so depth/FOV/aspect can be dialled in without a
+ * rebuild: X4VR_QUAD_W, X4VR_QUAD_H, X4VR_QUAD_DIST.
+ *
+ * Note on aspect: at 2560x1280 each eye is a square (1280x1280) holding the
+ * game's 2:1-wide view squeezed in — i.e. horizontally compressed. A wider
+ * quad (W > H, e.g. W=2*H) un-squishes it, which also helps stereo fusion.
+ * Defaults below are a large-ish square; widen W if geometry looks squished. */
+static float quad_w = 2.4f, quad_h = 2.4f, quad_dist = 1.4f;
+
+static void read_quad_env(void)
+{
+    const char *e;
+    if ((e = getenv("X4VR_QUAD_W")))    quad_w = (float)atof(e);
+    if ((e = getenv("X4VR_QUAD_H")))    quad_h = (float)atof(e);
+    if ((e = getenv("X4VR_QUAD_DIST"))) quad_dist = (float)atof(e);
+    fprintf(stderr, "quad: %.2f x %.2f m at %.2f m "
+            "(~%.0f deg horizontal)\n", quad_w, quad_h, quad_dist,
+            2.0 * atan((quad_w / 2.0) / quad_dist) * 180.0 / M_PI);
+}
 
 /* ------------------------------- globals --------------------------------- */
 
@@ -475,8 +492,8 @@ static bool render_frame(void)
                     .imageArrayIndex = 0,
                 },
                 .pose = { .orientation = { 0, 0, 0, 1 },
-                          .position = { 0, 0, -QUAD_DISTANCE } },
-                .size = { QUAD_SIZE_M, QUAD_SIZE_M },
+                          .position = { 0, 0, -quad_dist } },
+                .size = { quad_w, quad_h },
             };
             layers[e] = (const XrCompositionLayerBaseHeader *)&quads[e];
         }
@@ -549,6 +566,7 @@ int main(void)
     signal(SIGTERM, on_signal);
 
     int rc = 1;
+    read_quad_env();
     if (!open_shm(60)) goto out;           /* wait up to 60s for X4 */
     if (!create_xr_instance()) goto out;
     if (!create_vulkan_via_xr()) goto out;
