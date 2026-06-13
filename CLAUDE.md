@@ -287,6 +287,14 @@ can't do well:
 - mitigate specific graphical artifacts;
 - a TRUE stereoscopic mode (render two real eye views) instead of DIBR's
   single-eye + reconstruction;
+- **render at the headset's native per-eye resolution.** The current path
+  captures X4's desktop *window* swapchain, so per-eye res ≈ (window_w/2 ×
+  window_h) and is bounded by the desktop monitor — e.g. 2560×1280 → 1280×1280
+  per eye, upscaled to the Quest 3's 2064×2208 = visible pixelation; far worse
+  on a 1080p monitor. An in-engine renderer would render off-screen at
+  headset resolution, decoupled from the desktop, fixing definition for
+  everyone. Interim workaround: raise `res_width`/`res_height` in config.xml
+  above the desktop fit (FPS cost; Wayland may clip the on-desktop window).
 - potentially make X11 output workable too — many users still run Xorg, and
   X4's Wayland output has drawbacks (disables Steam Input and the Steam
   overlay). (Our DIBR path currently requires Wayland because vkShade needs a
