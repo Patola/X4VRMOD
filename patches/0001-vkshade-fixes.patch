@@ -484,7 +484,7 @@ index 22ba295..b2890b3 100644
  
      std::cout << "effect: " << result.effectName << "\n";
 diff --git a/src/vkshade.cpp b/src/vkshade.cpp
-index 57520e0..fa4dbea 100644
+index 57520e0..3d2dd58 100644
 --- a/src/vkshade.cpp
 +++ b/src/vkshade.cpp
 @@ -18,6 +18,9 @@
@@ -505,7 +505,7 @@ index 57520e0..fa4dbea 100644
  
  #include "effects/effect.hpp"
  #include "effects/effect_reshade.hpp"
-@@ -86,6 +90,241 @@ namespace vkShade
+@@ -86,6 +90,248 @@ namespace vkShade
      std::shared_ptr<Config> pConfig = nullptr;      // Current config (base + overlay)
      EffectRegistry effectRegistry;                   // Single source of truth for effect configs
  
@@ -638,8 +638,15 @@ index 57520e0..fa4dbea 100644
 +                }
 +                if (s.staging) { vkd.DestroyBuffer(dev->device, s.staging, nullptr); s.staging = VK_NULL_HANDLE; }
 +                if (s.mem) { vkd.FreeMemory(dev->device, s.mem, nullptr); s.mem = VK_NULL_HANDLE; }
++                // HOST_CACHED is essential: we memcpy READ 13 MB/frame out of
++                // this buffer. Without it AMD hands back write-combined memory,
++                // whose CPU reads are pathologically slow (tens of ms/frame) —
++                // that, not the fence, was the 45fps wall. COHERENT too so we
++                // need no manual cache invalidation before reading.
 +                createBuffer(dev, bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
++                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
++                             VK_MEMORY_PROPERTY_HOST_CACHED_BIT |
++                             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 +                             s.staging, s.mem);
 +                if (vkd.MapMemory(dev->device, s.mem, 0, bytes, 0, &s.mapped) != VK_SUCCESS)
 +                    { g_sbs.enabled = false; return false; }
@@ -747,7 +754,7 @@ index 57520e0..fa4dbea 100644
      // layer book-keeping information, to store dispatch tables by key
      std::unordered_map<void*, InstanceDispatch>                           instanceDispatchMap;
      std::unordered_map<void*, VkInstance>                                 instanceMap;
-@@ -2429,6 +2668,9 @@ namespace vkShade
+@@ -2429,6 +2675,9 @@ namespace vkShade
              // Keep application-requested usage bits and add the ones vkShade needs.
              modifiedCreateInfo.imageUsage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
                                               ; // mutable path renders final pass directly into swapchain
@@ -757,7 +764,7 @@ index 57520e0..fa4dbea 100644
              modifiedCreateInfo.flags |= VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR;
              // TODO what if the application already uses multiple formats for the swapchain?
  
-@@ -2992,6 +3234,20 @@ namespace vkShade
+@@ -2992,6 +3241,20 @@ namespace vkShade
                  return vr;
              }
  
