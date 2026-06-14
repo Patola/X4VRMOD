@@ -1,6 +1,3 @@
-diff --git a/patches/0001-vkshade-fix-predefined-macro-redefinition-and-log-pp-errors.patch b/patches/0001-vkshade-fix-predefined-macro-redefinition-and-log-pp-errors.patch
-new file mode 100644
-index 0000000..e69de29
 diff --git a/src/config_serializer.cpp b/src/config_serializer.cpp
 index 50bf021..7879bbc 100644
 --- a/src/config_serializer.cpp
