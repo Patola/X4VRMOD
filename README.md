@@ -11,6 +11,13 @@ binary. Built and tested on Arch Linux / KDE Wayland, a Meta **Quest 3** via
 > [Shortcomings](#shortcomings) before getting your hopes up. Developed with
 > Claude Code (Claude Opus 4.8).
 
+## Demo
+
+[![X4VRMOD v0.1 — proof of concept demo](https://img.youtube.com/vi/lyjp4NC8BW4/hqdefault.jpg)](https://youtu.be/lyjp4NC8BW4)
+
+The mod running under **WiVRn**, captured through **WayVR** (used to see the
+flat desktop inside the headset during setup): ▶ <https://youtu.be/lyjp4NC8BW4>
+
 ## How it works
 
 The Linux X4 binary has **no OpenVR/OpenXR/SteamVR** backend, but it *does*
