@@ -325,6 +325,14 @@ can't do well:
   `opentrackanglefactor`. Mitigation in the viewer: `X4VR_TRACK_SROLL=0`
   (drop roll) + keep `opentrackanglefactor≈1.0`. Real fix = set the camera
   orientation directly as a quaternion/matrix in-engine (no Euler).
+- **world-locked rendering + correct pivot.** Even with tracking tuned, the
+  head-look feels off: at `opentrackanglefactor=1.0` it seems to rotate
+  *less* than the head moves, and the rotation pivot is wrong. Root cause:
+  the cylinder is **head-locked** (it moves with the head), so the world is
+  not fixed in space the way real VR is; and OpenTrack rotates about X4's
+  camera pivot, not the user's neck. Cranking the angle factor to compensate
+  reintroduces gimbal lock. The only real fix is in-engine: render
+  world-locked from the headset's actual pose with the correct pivot.
 
 Mechanism candidates: an `LD_PRELOAD` shim or SDL3 proxy intercepting the
 game's calls, and/or a `.so` loaded into the process that calls X4's own
