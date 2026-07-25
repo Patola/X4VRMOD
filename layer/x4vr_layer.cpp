@@ -29,6 +29,7 @@
 
 #define X4VR_LOG_TAG "layer"
 #include "../common/x4vr_log.hpp"
+#include "../common/x4vr_spirv.hpp"
 #include "../common/x4vr_view.hpp"
 
 namespace {
@@ -66,6 +67,7 @@ struct DeviceData {
     PFN_vkUnmapMemory UnmapMemory = nullptr;
     PFN_vkBindBufferMemory BindBufferMemory = nullptr;
     PFN_vkQueueSubmit QueueSubmit = nullptr;
+    PFN_vkCreateShaderModule CreateShaderModule = nullptr;
 };
 
 std::mutex g_mu;
@@ -334,6 +336,70 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDrawIndexed(VkCommandBuffer cb,
     }
     d->CmdDrawIndexed(cb, idxc, ic, fi, vo, fin);
     credit_draw(cb);
+}
+
+// Phase 3b: bake a constant clip-space matrix into every scene vertex
+// shader (see common/x4vr_spirv.hpp). Zero per-frame cost — the whole
+// point of the camera-relative clip-space identity.
+//
+// X4VR_CLIP_K = 16 comma-separated floats (column-major). For a quick
+// visible proof, X4VR_CLIP_SHIFT=<x> is shorthand for a clip-space
+// x-translation, which slides the image sideways in NDC.
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
+    VkDevice device, const VkShaderModuleCreateInfo *ci,
+    const VkAllocationCallbacks *ac, VkShaderModule *out) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+
+    static bool have_k = false;
+    static float K[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    static std::once_flag once;
+    std::call_once(once, [] {
+        if (const char *s = getenv("X4VR_CLIP_K")) {
+            int i = 0;
+            for (const char *p = s; *p && i < 16; i++) {
+                K[i] = strtof(p, (char **)&p);
+                if (*p == ',')
+                    p++;
+            }
+            have_k = (i == 16);
+        } else if (const char *sh = getenv("X4VR_CLIP_SHIFT")) {
+            K[12] = strtof(sh, nullptr); // column-major: column 3 = translation
+            have_k = true;
+        }
+        if (have_k)
+            X4VR_LOG("clip-space K enabled: [%.3f %.3f %.3f %.3f | ... | "
+                     "%.3f %.3f %.3f %.3f]",
+                     K[0], K[1], K[2], K[3], K[12], K[13], K[14], K[15]);
+    });
+
+    if (!have_k || !ci->pCode || ci->codeSize < 20)
+        return d->CreateShaderModule(device, ci, ac, out);
+
+    std::vector<uint32_t> code(ci->codeSize / 4);
+    memcpy(code.data(), ci->pCode, ci->codeSize);
+
+    static uint32_t patched = 0;
+    if (x4vr::spv::patch_vertex_clip(code, K)) {
+        VkShaderModuleCreateInfo mod = *ci;
+        mod.codeSize = code.size() * 4;
+        mod.pCode = code.data();
+        VkResult r = d->CreateShaderModule(device, &mod, ac, out);
+        if (r == VK_SUCCESS) {
+            if (++patched <= 3 || (patched % 50) == 0)
+                X4VR_LOG("patched vertex shader #%u (%zu -> %zu bytes)",
+                         patched, (size_t)ci->codeSize, (size_t)mod.codeSize);
+            return r;
+        }
+        // Patched module rejected by the driver: fall back to the original
+        // rather than failing the game's shader creation.
+        X4VR_LOG("WARNING: driver rejected patched module (%d); using original",
+                 (int)r);
+    }
+    return d->CreateShaderModule(device, ci, ac, out);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_MapMemory(VkDevice device,
@@ -785,6 +851,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(UnmapMemory);
     RESOLVE(BindBufferMemory);
     RESOLVE(QueueSubmit);
+    RESOLVE(CreateShaderModule);
 #undef RESOLVE
     {
         std::lock_guard<std::mutex> lock(g_mu);
@@ -833,6 +900,7 @@ const NameFunc kHooks[] = {
     {"vkUnmapMemory", (PFN_vkVoidFunction)x4vr_UnmapMemory},
     {"vkBindBufferMemory", (PFN_vkVoidFunction)x4vr_BindBufferMemory},
     {"vkQueueSubmit", (PFN_vkVoidFunction)x4vr_QueueSubmit},
+    {"vkCreateShaderModule", (PFN_vkVoidFunction)x4vr_CreateShaderModule},
 };
 
 PFN_vkVoidFunction find_hook(const char *name) {

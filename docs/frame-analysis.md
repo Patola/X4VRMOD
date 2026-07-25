@@ -330,3 +330,42 @@ Open question for the next step: per-object blocks are numerous (724×768 B +
 touches a lot of memory; the alternative is a GPU-side `vkCmdUpdateBuffer`
 injected per draw, or SPIR-V patching of the vertex stage to apply the eye
 transform once. Measure before choosing.
+
+## Phase 3b: clip-space injection works (the Phase-4 mechanism)
+
+`common/x4vr_spirv.hpp` patches scene vertex shaders to append
+`gl_Position = K * gl_Position`, with `K` baked in as SPIR-V constants at
+`vkCreateShaderModule` time — **zero per-frame CPU or GPU cost** beyond one
+mat4×vec4 per vertex.
+
+Validation, offline against all 140 shader modules extracted from the
+capture:
+
+- **136 patched, 0 rejected by `spirv-val`, 4 correctly skipped** (compute).
+- X4's modules are **multi-entry**: 136 contain *both* a Vertex and a
+  Fragment entry point in the same module. The patcher scopes its injection
+  to the Vertex entry function only — verified by disassembly (the injected
+  `OpMatrixTimesVector` appears exactly once, inside `%main` (Vertex), never
+  in `%main_0` (Fragment)).
+
+Live in X4 (`X4VR_CLIP_SHIFT=0.35`): shaders patch during load with no
+driver rejections, and the rendered scene is visibly translated in NDC.
+**This is the mechanism Phase 4 will use**, with `K = P·T(−d)·P⁻¹` per eye.
+
+### Known follow-up: the UI shifts too
+
+The 2D UI/HUD is drawn with vertex shaders as well, so it is displaced by
+`K` along with the world. For stereo this is wrong — the UI must either be
+excluded from the patch or given its own (smaller, or zero) eye offset so it
+sits at a comfortable fixed depth. Options, cheapest first:
+
+1. Skip patching modules whose vertex shader does **not** bind the set-3
+   `BLOCK_BUFFER_BINDING_SLOT_WORLD` block (UI draws are unlikely to use
+   per-object world transforms) — a static, zero-cost classification made at
+   module creation.
+2. Patch UI shaders with a separate `K_ui` (identity, or a mild depth
+   offset), which also gives us the "UI at a chosen depth plane" the design
+   wants for menu mode.
+
+The frame map already shows the UI is a **separate late SRGB pass**, so a
+per-pass distinction is available as a fallback.
