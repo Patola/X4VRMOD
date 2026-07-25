@@ -26,6 +26,10 @@
 #                         frame over the right half. Both halves are the same
 #                         eye for now -- this validates the container, not the
 #                         stereo. Best with X4VR_GAMESCOPE=1.
+#   X4VR_SDL_DRIVER=<d>   SDL video driver for the game inside gamescope
+#                         (default x11). The SBS split render REQUIRES x11:
+#                         a Wayland surface reports no preferred extent, and
+#                         the split works by halving that extent.
 #   X4VR_X11=1            clear WAYLAND_DISPLAY for the game (force X11/SDL-x11;
 #                         X4's Wayland output is new and may misbehave)
 #   X4VR_FOSSILIZE=1      keep Valve's fossilize layer (default: disabled to
@@ -115,8 +119,18 @@ if [[ "${X4VR_GAMESCOPE:-0}" == 1 ]]; then
     fi
     # Inside gamescope the game must NOT see the outer Wayland display; it
     # runs on gamescope's XWayland (empirically required on Plasma Wayland).
+    #
+    # Clearing WAYLAND_DISPLAY is not enough on its own: SDL's Wayland driver
+    # still connects to a default socket, and X4 ends up with a Wayland
+    # surface. That matters beyond which backend is used, because a Wayland
+    # surface reports currentExtent = 0xFFFFFFFF ("no preferred size"), and
+    # the SBS split render works by reporting *half* that extent so X4 sizes
+    # its whole pipeline to one eye. With no extent to halve there is nothing
+    # to intercept. X11 reports the real window size, so force the driver.
+    # SDL_VIDEODRIVER is set on the child only -- gamescope itself is an SDL
+    # app too and must keep its own backend.
     exec gamescope -w "$W" -h "$H" -W "$W" -H "$H" --backend sdl -- \
-        env WAYLAND_DISPLAY= "$@"
+        env WAYLAND_DISPLAY= "SDL_VIDEODRIVER=${X4VR_SDL_DRIVER:-x11}" "$@"
 else
     exec "$@"
 fi

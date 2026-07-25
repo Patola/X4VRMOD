@@ -1187,6 +1187,16 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetPhysicalDeviceSurfaceCapabilitiesKHR(
     }
     if (was == 0xFFFFFFFFu || was < 2) {
         forget_halved_surface(surface);
+        static bool told = false;
+        if (!told) {
+            told = true;
+            X4VR_LOG("sbs: surface reports no preferred extent "
+                     "(currentExtent=0x%X) — this is the Wayland WSI; X11 "
+                     "reports the real window size. Cannot make X4 render one "
+                     "eye, falling back to duplicating the left half. Force "
+                     "the X11 driver (SDL_VIDEODRIVER=x11).",
+                     was);
+        }
         return r;
     }
     caps->currentExtent.width = was / 2;
