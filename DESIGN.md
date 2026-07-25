@@ -250,3 +250,41 @@ LICENSE, LICENSE.exception   GPLv3 + Linux-only linking exception (X4)
 - Settle reversed-Z / depth handedness once, up front.
 - `X4VR_FORCE_FLAT` and `X4VR_FORCE_MONO` kill-switch env vars for debugging.
 - X4 is single-player with no anti-cheat, so injection is safe to distribute.
+
+## Phase 4a: how to actually get two eyes (open design question)
+
+`eye_shear_validated` proves a baked constant `K` produces correct per-eye
+geometry. Turning that into SBS is harder than "render it twice", because
+**`K` is baked into the shader modules, and therefore into the pipelines**.
+Re-submitting X4's command buffers unchanged re-renders the *same* eye.
+
+So a double-submit needs `K` to become dynamic, which is most of the work:
+
+| Approach | What it needs | Cost | Notes |
+|---|---|---|---|
+| (a) Double-submit, `K` in a layer-owned uniform | patch shaders to *read* `K` instead of baking it; add a descriptor set or push-constant range to every pipeline layout | ~2x | The DESIGN "correctness reference". The descriptor plumbing is nearly as invasive as (b). |
+| (b) Multiview | render passes recreated with `viewMask`, framebuffers/attachments become 2-layer, shader selects `K` by `gl_ViewIndex` | ~1.2–1.4x | No host-side state change per eye; the eye index is a shader built-in. Touches every render pass and attachment. |
+| (c) Geometry doubling via instancing | double `instanceCount` at every draw, shader derives eye from `gl_InstanceIndex` and offsets to a viewport half | ~1.5–1.8x | **Conflicts with X4's own instancing** — the shader cannot recover the original instance count. Rejected. |
+
+Since (a)'s plumbing is nearly as invasive as (b)'s and (b) is the one we
+actually want to ship, the split into "simple 4a then fast 4b" is weaker than
+it looked when written.
+
+**Recommended path — build the container first,independent of the eye mechanism:**
+
+1. **SBS scaffolding.** X4 renders square (1408x1408 via the config
+   override, so its projection is 1:1); the layer owns a 2816x1408 swapchain
+   and composites X4's single frame into **both** halves. Zero parallax, but
+   it validates framing, aspect, letterboxing, the composite blit, that the
+   mouse still maps correctly, and that it fits an SBS viewer. Independently
+   testable and independently taggable.
+2. **Swap in the eye mechanism** — (b), with (a) only if multiview proves
+   blocked. This is now an isolated change behind a working container.
+3. **Per-eye lighting**: each view also gets its own camera-block values
+   (`M_view`, `M_viewprojection`, `M_invprojection(_uj)`,
+   `V_cameraposition` @736, `V_light_direction_view` @864). Only meaningful
+   once step 2 exists.
+
+Step 1 is worth doing first precisely because it fails loudly and early on
+the things that are easy to get wrong (aspect, letterboxing, cursor mapping)
+without any of the per-eye complexity in the way.
