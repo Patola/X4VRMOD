@@ -36,7 +36,9 @@ namespace x4vr {
     X(BeginCommandBuffer) X(EndCommandBuffer) X(ResetCommandBuffer)            \
     X(CmdPipelineBarrier) X(CmdCopyImage) X(CreateSemaphore)                   \
     X(DestroySemaphore) X(CreateFence) X(DestroyFence) X(WaitForFences)        \
-    X(ResetFences) X(GetSwapchainImagesKHR) X(QueueSubmit) X(DeviceWaitIdle)
+    X(ResetFences) X(GetSwapchainImagesKHR) X(QueueSubmit) X(DeviceWaitIdle)   \
+    X(CreateImage) X(DestroyImage) X(GetImageMemoryRequirements)               \
+    X(AllocateMemory) X(FreeMemory) X(BindImageMemory)
 
 struct SbsFns {
 #define X4VR_DECL(name) PFN_vk##name name = nullptr;
@@ -60,7 +62,17 @@ public:
     // back from vkAcquireNextImageKHR until its previous present is done
     // with it. The fence makes that guarantee explicit before we re-record.
     struct Chain {
-        VkExtent2D extent{};
+        VkExtent2D extent{};  // the real swapchain image, e.g. 2816x1408
+        // When virtualized, X4 renders into images we own, one per swapchain
+        // image, each half as wide -- and it believes those *are* the
+        // swapchain, because we report half width from the surface
+        // capabilities it sizes itself from. Present time copies each into
+        // both halves. When not virtualized, X4 renders the full width and
+        // we copy its left half over its right.
+        bool virtualized = false;
+        VkExtent2D eye{};
+        std::vector<VkImage> eye_images;
+        std::vector<VkDeviceMemory> eye_memory;
         VkCommandPool pool = VK_NULL_HANDLE;
         // Which queue family `pool` was created for. A command buffer may
         // only be submitted to a queue of its pool's family, and X4 asks for
@@ -74,17 +86,30 @@ public:
         bool usable = false;
     };
 
-    void configure(VkDevice device, const SbsFns &fns) {
+    void configure(VkDevice device, const SbsFns &fns,
+                   const VkPhysicalDeviceMemoryProperties &mem) {
         std::lock_guard<std::mutex> lock(mu_);
         device_ = device;
         fns_ = fns;
+        mem_ = mem;
+    }
+
+    // Images X4 should be handed instead of the real swapchain's, or nullptr
+    // if this chain is not virtualized.
+    const std::vector<VkImage> *eye_images(VkSwapchainKHR sc) {
+        std::lock_guard<std::mutex> lock(mu_);
+        auto it = chains_.find(sc);
+        if (it == chains_.end() || !it->second.virtualized)
+            return nullptr;
+        return &it->second.eye_images;
     }
 
     bool ready() const { return device_ && fns_.complete(); }
 
     // Called after the real swapchain has been created. Failure here is not
     // fatal: the chain is simply left unusable and frames present untouched.
-    void add_swapchain(VkSwapchainKHR sc, const VkSwapchainCreateInfoKHR &ci) {
+    void add_swapchain(VkSwapchainKHR sc, const VkSwapchainCreateInfoKHR &ci,
+                       bool want_split) {
         std::lock_guard<std::mutex> lock(mu_);
         if (!device_ || !fns_.complete())
             return;
@@ -111,6 +136,14 @@ public:
             return;
         }
 
+        // Try to give X4 its own half-width images. If this fails we keep
+        // the chain usable in the un-virtualized form (X4 renders full width,
+        // we copy left over right) rather than losing the composite -- but
+        // the caller has already reported half width from the surface caps,
+        // so it must be told to stop doing that.
+        c.eye = {c.extent.width / 2, c.extent.height};
+        c.virtualized = want_split && make_eye_images(c, ci, n);
+
         // The command pool waits until the first present tells us which
         // queue family to build it for.
         c.done.resize(n, VK_NULL_HANDLE);
@@ -133,10 +166,15 @@ public:
         }
 
         c.usable = true;
+        const VkExtent2D eye = c.eye;
+        const bool virt = c.virtualized;
         chains_[sc] = std::move(c);
-        X4VR_LOG("sbs: composite armed for %ux%u (%u images), each eye %ux%u",
-                 ci.imageExtent.width, ci.imageExtent.height, n,
-                 ci.imageExtent.width / 2, ci.imageExtent.height);
+        X4VR_LOG("sbs: composite armed for %ux%u (%u images), each eye %ux%u "
+                 "(%s)",
+                 ci.imageExtent.width, ci.imageExtent.height, n, eye.width,
+                 eye.height,
+                 virt ? "X4 renders one eye, we own its images"
+                      : "X4 renders full width, left half duplicated");
     }
 
     void remove_swapchain(VkSwapchainKHR sc) {
@@ -182,41 +220,85 @@ public:
         if (fns_.BeginCommandBuffer(cb, &bi) != VK_SUCCESS)
             return VK_NULL_HANDLE;
 
-        // X4 leaves the image ready to present; take it to GENERAL so it can
-        // be both source and destination of the copy, then hand it back.
-        VkImageMemoryBarrier b{};
-        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.image = c.images[image];
-        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-
-        b.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-        b.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-        b.dstAccessMask =
-            VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-        fns_.CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr,
-                                0, nullptr, 1, &b);
-
+        VkImageMemoryBarrier b[2]{};
+        for (auto &x : b) {
+            x.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            x.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            x.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            x.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        }
         const uint32_t half = c.extent.width / 2;
-        VkImageCopy region{};
-        region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.srcOffset = {0, 0, 0};
-        region.dstOffset = {(int32_t)half, 0, 0};
-        region.extent = {half, c.extent.height, 1};
-        fns_.CmdCopyImage(cb, c.images[image], VK_IMAGE_LAYOUT_GENERAL,
-                          c.images[image], VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+        // Both copies write the real swapchain image; the source is either
+        // the eye image X4 rendered into, or -- un-virtualized -- the left
+        // half of that same image.
+        const VkImage src = c.virtualized ? c.eye_images[image] : c.images[image];
+        VkImageCopy region[2]{};
+        for (auto &r : region) {
+            r.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            r.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            r.srcOffset = {0, 0, 0};
+            r.extent = {half, c.extent.height, 1};
+        }
+        region[0].dstOffset = {0, 0, 0};
+        region[1].dstOffset = {(int32_t)half, 0, 0};
 
-        b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        b.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-        fns_.CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0,
-                                nullptr, 0, nullptr, 1, &b);
+        if (c.virtualized) {
+            // Distinct images, so each gets its optimal layout. X4 left the
+            // eye image ready to present, believing it was the swapchain.
+            b[0].image = src;
+            b[0].oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            b[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            b[0].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+            b[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            // The real image's previous contents are entirely overwritten by
+            // the two copies, so its old layout does not matter.
+            b[1].image = c.images[image];
+            b[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b[1].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+            b[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            fns_.CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                    VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                                    nullptr, 0, nullptr, 2, b);
+            fns_.CmdCopyImage(cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                              c.images[image],
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, region);
+            b[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            b[0].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            b[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            b[0].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+            b[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b[1].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            b[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b[1].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+            fns_.CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0,
+                                    nullptr, 0, nullptr, 2, b);
+        } else {
+            // One image as both source and destination, so it must be
+            // GENERAL -- an image has a single layout at a time. Only the
+            // right half is written; region[0] would be a no-op copy onto
+            // itself, which is not legal, so just do region[1].
+            b[0].image = c.images[image];
+            b[0].oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            b[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b[0].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+            b[0].dstAccessMask =
+                VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+            fns_.CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                    VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                                    nullptr, 0, nullptr, 1, b);
+            fns_.CmdCopyImage(cb, src, VK_IMAGE_LAYOUT_GENERAL,
+                              c.images[image], VK_IMAGE_LAYOUT_GENERAL, 1,
+                              &region[1]);
+            b[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            b[0].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            b[0].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b[0].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+            fns_.CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0,
+                                    nullptr, 0, nullptr, 1, b);
+        }
 
         if (fns_.EndCommandBuffer(cb) != VK_SUCCESS)
             return VK_NULL_HANDLE;
@@ -255,6 +337,78 @@ public:
     }
 
 private:
+    // One image per swapchain image, half width, with the same format and
+    // usage X4 asked the swapchain for (plus TRANSFER_SRC so we can copy out
+    // of it). These are what X4 gets back from vkGetSwapchainImagesKHR.
+    bool make_eye_images(Chain &c, const VkSwapchainCreateInfoKHR &ci,
+                         uint32_t n) {
+        VkImageCreateInfo ii{};
+        ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ii.imageType = VK_IMAGE_TYPE_2D;
+        ii.format = ci.imageFormat;
+        ii.extent = {c.eye.width, c.eye.height, 1};
+        ii.mipLevels = 1;
+        ii.arrayLayers = ci.imageArrayLayers ? ci.imageArrayLayers : 1;
+        ii.samples = VK_SAMPLE_COUNT_1_BIT;
+        ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ii.usage = ci.imageUsage | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        ii.sharingMode = ci.imageSharingMode;
+        ii.queueFamilyIndexCount = ci.queueFamilyIndexCount;
+        ii.pQueueFamilyIndices = ci.pQueueFamilyIndices;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        c.eye_images.assign(n, VK_NULL_HANDLE);
+        c.eye_memory.assign(n, VK_NULL_HANDLE);
+        for (uint32_t i = 0; i < n; i++) {
+            if (fns_.CreateImage(device_, &ii, nullptr, &c.eye_images[i]) !=
+                VK_SUCCESS) {
+                X4VR_LOG("sbs: eye image %u creation failed", i);
+                free_eye_images(c);
+                return false;
+            }
+            VkMemoryRequirements req{};
+            fns_.GetImageMemoryRequirements(device_, c.eye_images[i], &req);
+            uint32_t type = UINT32_MAX;
+            for (uint32_t t = 0; t < mem_.memoryTypeCount; t++)
+                if ((req.memoryTypeBits & (1u << t)) &&
+                    (mem_.memoryTypes[t].propertyFlags &
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+                    type = t;
+                    break;
+                }
+            if (type == UINT32_MAX) {
+                X4VR_LOG("sbs: no device-local memory type for the eye image");
+                free_eye_images(c);
+                return false;
+            }
+            VkMemoryAllocateInfo ai{};
+            ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            ai.allocationSize = req.size;
+            ai.memoryTypeIndex = type;
+            if (fns_.AllocateMemory(device_, &ai, nullptr, &c.eye_memory[i]) !=
+                    VK_SUCCESS ||
+                fns_.BindImageMemory(device_, c.eye_images[i], c.eye_memory[i],
+                                     0) != VK_SUCCESS) {
+                X4VR_LOG("sbs: eye image %u memory failed (%llu bytes)", i,
+                         (unsigned long long)req.size);
+                free_eye_images(c);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void free_eye_images(Chain &c) {
+        for (VkImage im : c.eye_images)
+            if (im)
+                fns_.DestroyImage(device_, im, nullptr);
+        for (VkDeviceMemory m : c.eye_memory)
+            if (m)
+                fns_.FreeMemory(device_, m, nullptr);
+        c.eye_images.clear();
+        c.eye_memory.clear();
+    }
+
     // Build (or rebuild) the command pool for the family that actually
     // presents. Called under mu_ from composite(), so the first frame pays
     // for it and the rest hit the fast path.
@@ -306,6 +460,7 @@ private:
     void destroy_chain(Chain &c) {
         if (!device_)
             return;
+        free_eye_images(c);
         for (VkSemaphore s : c.done)
             if (s)
                 fns_.DestroySemaphore(device_, s, nullptr);
@@ -320,6 +475,7 @@ private:
     std::mutex mu_;
     VkDevice device_ = VK_NULL_HANDLE;
     SbsFns fns_;
+    VkPhysicalDeviceMemoryProperties mem_{};
     std::unordered_map<VkSwapchainKHR, Chain> chains_;
 };
 

@@ -72,6 +72,7 @@ struct DeviceData {
     PFN_vkQueueSubmit QueueSubmit = nullptr;
     PFN_vkGetDeviceQueue GetDeviceQueue = nullptr;
     PFN_vkGetDeviceQueue2 GetDeviceQueue2 = nullptr;
+    PFN_vkGetSwapchainImagesKHR GetSwapchainImagesKHR = nullptr;
     PFN_vkCreateShaderModule CreateShaderModule = nullptr;
     PFN_vkDestroyShaderModule DestroyShaderModule = nullptr;
     PFN_vkCreateRenderPass CreateRenderPass = nullptr;
@@ -92,6 +93,15 @@ const bool g_sbs_enabled = [] {
     return e && *e && *e != '0';
 }();
 
+// Whether X4 is made to render one eye's worth (half width) rather than the
+// full frame. On by default with X4VR_SBS=1; X4VR_SBS_SPLIT=0 falls back to
+// duplicating the left half of a full-width frame, which is the older and
+// less invasive behaviour.
+const bool g_sbs_split_render = [] {
+    const char *e = getenv("X4VR_SBS_SPLIT");
+    return !(e && *e && *e == '0');
+}();
+
 // The layer is switched on through the environment, and every child process
 // inherits it: under gamescope we are loaded into gamescope and its Xwayland
 // as well as into X4. Compositing *their* swapchains would apply the effect a
@@ -105,6 +115,28 @@ bool g_active = false;
 // present queue's family has to be observed, not assumed.
 std::mutex g_queue_mu;
 std::unordered_map<VkQueue, uint32_t> g_queue_family;
+
+// Surfaces whose capabilities we reported at half width. Doubling the extent
+// back at swapchain creation is only correct for exactly these -- a surface
+// with an undefined currentExtent was never halved, and doubling it would
+// silently make the swapchain twice the size the app asked for.
+std::mutex g_surface_mu;
+std::unordered_map<VkSurfaceKHR, bool> g_halved_surfaces;
+
+bool note_halved_surface(VkSurfaceKHR s) { // true the first time only
+    std::lock_guard<std::mutex> lock(g_surface_mu);
+    return g_halved_surfaces.emplace(s, true).second;
+}
+
+void forget_halved_surface(VkSurfaceKHR s) {
+    std::lock_guard<std::mutex> lock(g_surface_mu);
+    g_halved_surfaces.erase(s);
+}
+
+bool surface_was_halved(VkSurfaceKHR s) {
+    std::lock_guard<std::mutex> lock(g_surface_mu);
+    return g_halved_surfaces.count(s) > 0;
+}
 
 bool queue_family_of(VkQueue q, uint32_t &out) {
     std::lock_guard<std::mutex> lock(g_queue_mu);
@@ -1047,6 +1079,13 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
     // that, and fall back to X4's own usage if the surface refuses -- a
     // direct test of what matters, rather than a caps query.
     VkSwapchainCreateInfoKHR sbs_ci = *ci;
+    // We halved the width X4 read from the surface, so double it back: the
+    // real swapchain has to match the surface, and it is what holds both
+    // eyes. X4 never sees these images -- it gets ours.
+    const bool split = g_sbs_enabled && g_active && g_sbs_split_render &&
+                       surface_was_halved(ci->surface);
+    if (split)
+        sbs_ci.imageExtent.width *= 2;
     bool sbs_usage = false;
     VkResult r = VK_ERROR_INITIALIZATION_FAILED;
     if (g_sbs_enabled && g_active) {
@@ -1059,8 +1098,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
                      "with X4's own flags; composite off",
                      (int)r);
     }
-    if (!sbs_usage)
-        r = d->CreateSwapchainKHR(device, ci, ac, out);
+    if (!sbs_usage) {
+        VkSwapchainCreateInfoKHR plain = sbs_ci;
+        plain.imageUsage = ci->imageUsage;
+        r = d->CreateSwapchainKHR(device, &plain, ac, out);
+    }
     // The definitive record of what resolution the game is actually running
     // at (Phase 1 verification: should be the SBS size we forced).
     X4VR_LOG("swapchain created: %ux%u images>=%u format=%d presentMode=%d -> %s",
@@ -1088,8 +1130,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
                      w, h, X4VR_SBS_WIDTH, X4VR_SBS_HEIGHT, X4VR_SBS_WIDTH,
                      X4VR_SBS_HEIGHT);
         }
-        if (sbs_usage)
-            g_sbs.add_swapchain(*out, sbs_ci);
+            if (sbs_usage)
+            g_sbs.add_swapchain(*out, sbs_ci, split);
     }
     return r;
 }
@@ -1103,6 +1145,86 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroySwapchainKHR(
     }
     g_sbs.remove_swapchain(sc); // waits for the device before freeing
     d->DestroySwapchainKHR(device, sc, ac);
+}
+
+// X4 sizes its whole pipeline from the surface's currentExtent -- that is
+// exactly why it ignores res_width/res_height while borderless. Reporting
+// half the width therefore makes it render one eye's worth *natively*:
+// G-buffer, luminance pyramid, bloom, the AO compute dispatches and
+// V_viewportpixelsize all come out consistent at 1408x1408, with nothing
+// wasted and no per-pass viewport surgery. The layer keeps the real
+// full-width swapchain and copies the eye into both halves at present.
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetPhysicalDeviceSurfaceCapabilitiesKHR(
+    VkPhysicalDevice phys, VkSurfaceKHR surface,
+    VkSurfaceCapabilitiesKHR *caps) {
+    PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR next;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        auto it = g_instances.find(dispatch_key(phys));
+        if (it == g_instances.end())
+            return VK_ERROR_INITIALIZATION_FAILED;
+        next = (PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR)it->second.gipa(
+            it->second.instance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
+    }
+    if (!next)
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
+    VkResult r = next(phys, surface, caps);
+    if (r != VK_SUCCESS || !g_sbs_enabled || !g_active || !g_sbs_split_render)
+        return r;
+
+    // 0xFFFFFFFF means "the surface has no preferred size" -- the app picks
+    // its own extent and never consults this, so there is nothing to halve
+    // and, crucially, nothing to double back at swapchain creation. Halving
+    // and doubling must be one decision, recorded per surface.
+    const uint32_t was = caps->currentExtent.width;
+    static bool first = true;
+    if (first) {
+        first = false;
+        X4VR_LOG("sbs: surface caps currentExtent=%ux%u min=%ux%u max=%ux%u",
+                 caps->currentExtent.width, caps->currentExtent.height,
+                 caps->minImageExtent.width, caps->minImageExtent.height,
+                 caps->maxImageExtent.width, caps->maxImageExtent.height);
+    }
+    if (was == 0xFFFFFFFFu || was < 2) {
+        forget_halved_surface(surface);
+        return r;
+    }
+    caps->currentExtent.width = was / 2;
+    if (caps->minImageExtent.width >= 2)
+        caps->minImageExtent.width /= 2;
+    if (caps->maxImageExtent.width >= 2)
+        caps->maxImageExtent.width /= 2;
+    if (note_halved_surface(surface))
+        X4VR_LOG("sbs: reporting surface width %u instead of %u — X4 renders "
+                 "one eye at %ux%u",
+                 caps->currentExtent.width, was, caps->currentExtent.width,
+                 caps->currentExtent.height);
+    return r;
+}
+
+// X4 must see the images it will actually render into, which when the split
+// render is active are ours, not the swapchain's.
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetSwapchainImagesKHR(
+    VkDevice device, VkSwapchainKHR sc, uint32_t *count, VkImage *images) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    const std::vector<VkImage> *eyes =
+        (g_sbs_enabled && g_active) ? g_sbs.eye_images(sc) : nullptr;
+    if (!eyes)
+        return d->GetSwapchainImagesKHR(device, sc, count, images);
+    if (!images) {
+        *count = (uint32_t)eyes->size();
+        return VK_SUCCESS;
+    }
+    const uint32_t n =
+        *count < eyes->size() ? *count : (uint32_t)eyes->size();
+    for (uint32_t i = 0; i < n; i++)
+        images[i] = (*eyes)[i];
+    *count = n;
+    return n < eyes->size() ? VK_INCOMPLETE : VK_SUCCESS;
 }
 
 VKAPI_ATTR void VKAPI_CALL x4vr_GetDeviceQueue(VkDevice device, uint32_t family,
@@ -1284,6 +1406,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(QueueSubmit);
     RESOLVE(GetDeviceQueue);
     RESOLVE(GetDeviceQueue2);
+    RESOLVE(GetSwapchainImagesKHR);
     RESOLVE(CreateShaderModule);
     RESOLVE(DestroyShaderModule);
     RESOLVE(CreateRenderPass);
@@ -1305,7 +1428,20 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
         X4VR_SBS_FNS(RESOLVE)
 #undef RESOLVE
         if (f.complete()) {
-            g_sbs.configure(*out, f);
+            // gipa resolves physical-device entry points only against a
+            // real instance, not VK_NULL_HANDLE (that is for global ones).
+            VkInstance inst = VK_NULL_HANDLE;
+            {
+                std::lock_guard<std::mutex> lock(g_mu);
+                auto it = g_instances.find(dispatch_key(phys));
+                if (it != g_instances.end())
+                    inst = it->second.instance;
+            }
+            VkPhysicalDeviceMemoryProperties mem{};
+            if (auto gpmp = (PFN_vkGetPhysicalDeviceMemoryProperties)gipa(
+                    inst, "vkGetPhysicalDeviceMemoryProperties"))
+                gpmp(phys, &mem);
+            g_sbs.configure(*out, f, mem);
         } else {
             X4VR_LOG("sbs: could not resolve every entry point — composite off");
         }
@@ -1348,6 +1484,10 @@ const NameFunc kHooks[] = {
     {"vkCmdDraw", (PFN_vkVoidFunction)x4vr_CmdDraw},
     {"vkCmdDrawIndexed", (PFN_vkVoidFunction)x4vr_CmdDrawIndexed},
     {"vkQueuePresentKHR", (PFN_vkVoidFunction)x4vr_QueuePresentKHR},
+    {"vkGetPhysicalDeviceSurfaceCapabilitiesKHR",
+     (PFN_vkVoidFunction)x4vr_GetPhysicalDeviceSurfaceCapabilitiesKHR},
+    {"vkGetSwapchainImagesKHR",
+     (PFN_vkVoidFunction)x4vr_GetSwapchainImagesKHR},
     {"vkGetDeviceQueue", (PFN_vkVoidFunction)x4vr_GetDeviceQueue},
     {"vkGetDeviceQueue2", (PFN_vkVoidFunction)x4vr_GetDeviceQueue2},
     {"vkCreateSwapchainKHR", (PFN_vkVoidFunction)x4vr_CreateSwapchainKHR},
