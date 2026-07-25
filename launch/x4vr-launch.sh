@@ -32,6 +32,13 @@
 #                         shows. Incompatible with X4VR_SBS.
 #   X4VR_RES=WxH          force X4's render resolution (config res_width /
 #                         res_height); set automatically by X4VR_ONE_EYE
+#   X4VR_NODCC=0          stop forcing RADV_DEBUG=nodcc (default: forced).
+#                         Without it, antialiasing=none paints the frame with
+#                         saturated RGB blocks -- stale DCC metadata. Turning
+#                         it off is only useful for measuring its cost.
+#   X4VR_DECORATED=1      leave gamescope's host window decorated. The
+#                         titlebar shortens it by 23px, so gamescope scales
+#                         its nested display to fit and pads the sides.
 #   X4VR_ZEROVRAM=1       RADV_DEBUG=zerovram — zero VRAM allocations. Works
 #                         around X4 reading uninitialised memory (saturated
 #                         RGB blocks) when antialiasing is off. Costs a little
@@ -104,6 +111,16 @@ if [[ $# -eq 0 ]]; then
     set -- "$GAME" -skipintro -nocputhrottle -nosoundthrottle
 fi
 
+# X4 reads colour targets whose DCC (Delta Color Compression) metadata is
+# stale, which paints the frame with a grid of saturated RGB blocks. It only
+# bites when antialiasing is off -- which the mod forces -- so this is on by
+# default; without it the mod is visibly broken out of the box. Confirmed by
+# elimination on Mesa 26.1.5 / RX 7900 XTX: nodcc clears it completely, and
+# zerovram (a different, older X4 bug) does not. Costs memory bandwidth.
+if [[ "${X4VR_NODCC:-1}" == 1 ]]; then
+    export RADV_DEBUG="nodcc${RADV_DEBUG:+,$RADV_DEBUG}"
+fi
+
 if [[ "${X4VR_ZEROVRAM:-0}" == 1 ]]; then
     export RADV_DEBUG="zerovram${RADV_DEBUG:+,$RADV_DEBUG}"
 fi
@@ -164,7 +181,10 @@ if [[ "${X4VR_GAMESCOPE:-0}" == 1 ]]; then
     # titlebar costs it 23px of height, and it then scales its square
     # nested display down to fit and pads the sides -- which shows up as
     # thin black bars left and right of the game.
-    exec gamescope -b -w "$W" -h "$H" -W "$W" -H "$H" --backend sdl -- \
+    GS_DECOR=(-b)
+    [[ "${X4VR_DECORATED:-0}" == 1 ]] && GS_DECOR=()
+    exec gamescope "${GS_DECOR[@]}" -w "$W" -h "$H" -W "$W" -H "$H" \
+        --backend sdl -- \
         env WAYLAND_DISPLAY= "SDL_VIDEODRIVER=${X4VR_SDL_DRIVER:-x11}" \
             "SDL_VIDEO_DRIVER=${X4VR_SDL_DRIVER:-x11}" "$@"
 else

@@ -222,6 +222,31 @@ module variants and choose per pipeline. Static, zero per-frame cost.
 The same mechanism separates the UI: passes 46/47 are 8-bit UNORM/SRGB, while
 every world pass writes multi-attachment float targets.
 
+### Antialiasing off paints the frame with saturated RGB blocks (RADV)
+
+With `antialiasing=none` — which the mod forces — the frame fills with a
+regular grid of saturated red/green/blue/magenta/cyan/yellow blocks over
+otherwise-correct rendering. Reproduces reliably in the map view. FXAA shows
+it too, MSAA less so, **TAA not at all**.
+
+*Cause:* stale **DCC** (Delta Color Compression) metadata. Confirmed by
+elimination on Mesa 26.1.5 / RX 7900 XTX: `RADV_DEBUG=nodcc` clears it
+completely.
+
+*Do:* `RADV_DEBUG=nodcc` (the launcher forces it; `X4VR_NODCC=0` opts out).
+Costs memory bandwidth.
+
+*Not* `RADV_DEBUG=zerovram`. That addresses a different, older X4 bug fixed
+in Mesa around 25.1, and does nothing here — the artefact looks like
+uninitialised memory but the many *distinct* saturated colours in fixed-size
+blocks are the giveaway for compression metadata rather than garbage VRAM. A
+fast-clear bug would paint blocks of a *single* colour instead.
+
+*Why not just use TAA:* it is clean, but it keeps a history buffer. Once two
+eyes are rendered, one eye's history blends into the other's frame — per-eye
+ghosting with no fix available from a layer. The jitter is the easy half
+(`M_jitter` / `M_projection_uj` are mapped); the history is not.
+
 ### Setting `pom` to Off can break X4's own shader compilation
 
 With POM genuinely disabled (`pom=none`) *and* our other effect overrides
@@ -272,6 +297,16 @@ fresh gamescope core that looks like evidence.
 |---|---|---|
 | X4 actually crashed | ~430 MB | SIGSEGV |
 | gamescope teardown (ignore) | ~1.8 MB | SIGABRT |
+
+### gamescope's own window steals height from its nested display
+
+If gamescope's host window is decorated, the titlebar takes 23px off it
+(1408 → 1385). gamescope then scales its square nested display down to fit
+and pads the sides, which shows up as thin black bars left and right of the
+game — nothing to do with the game's own rendering.
+
+*Do:* run gamescope with `-b` (borderless). The launcher does;
+`X4VR_DECORATED=1` opts out and accepts the bars.
 
 ### Relaunching gamescope too quickly fails
 
