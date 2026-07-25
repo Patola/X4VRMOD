@@ -70,6 +70,8 @@ struct DeviceData {
     PFN_vkUnmapMemory UnmapMemory = nullptr;
     PFN_vkBindBufferMemory BindBufferMemory = nullptr;
     PFN_vkQueueSubmit QueueSubmit = nullptr;
+    PFN_vkGetDeviceQueue GetDeviceQueue = nullptr;
+    PFN_vkGetDeviceQueue2 GetDeviceQueue2 = nullptr;
     PFN_vkCreateShaderModule CreateShaderModule = nullptr;
     PFN_vkDestroyShaderModule DestroyShaderModule = nullptr;
     PFN_vkCreateRenderPass CreateRenderPass = nullptr;
@@ -89,6 +91,44 @@ const bool g_sbs_enabled = [] {
     const char *e = getenv("X4VR_SBS");
     return e && *e && *e != '0';
 }();
+
+// The layer is switched on through the environment, and every child process
+// inherits it: under gamescope we are loaded into gamescope and its Xwayland
+// as well as into X4. Compositing *their* swapchains would apply the effect a
+// second time on the way to the display, and patching their shaders is
+// pointless work. Act only in the game's own process.
+bool g_active = false;
+
+// VkQueue -> queue family, learned from vkGetDeviceQueue. The composite
+// records into a command pool, and a command buffer may only be submitted to
+// a queue of its pool's family -- X4 requests more than one family, so the
+// present queue's family has to be observed, not assumed.
+std::mutex g_queue_mu;
+std::unordered_map<VkQueue, uint32_t> g_queue_family;
+
+bool queue_family_of(VkQueue q, uint32_t &out) {
+    std::lock_guard<std::mutex> lock(g_queue_mu);
+    auto it = g_queue_family.find(q);
+    if (it == g_queue_family.end())
+        return false;
+    out = it->second;
+    return true;
+}
+
+bool app_is_target(const char *app_name) {
+    if (const char *e = getenv("X4VR_APP")) // override if X4 ever renames
+        return app_name && !strcmp(app_name, e);
+    if (app_name && !strcmp(app_name, "X4"))
+        return true;
+    // VkApplicationInfo is optional, so fall back to the executable name.
+    char exe[512];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (n <= 0)
+        return false;
+    exe[n] = 0;
+    const char *slash = strrchr(exe, '/');
+    return !strcmp(slash ? slash + 1 : exe, "X4");
+}
 
 // ---------------------------------------------------------------- tracking
 struct ViewSlot {
@@ -1009,7 +1049,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
     VkSwapchainCreateInfoKHR sbs_ci = *ci;
     bool sbs_usage = false;
     VkResult r = VK_ERROR_INITIALIZATION_FAILED;
-    if (g_sbs_enabled) {
+    if (g_sbs_enabled && g_active) {
         sbs_ci.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                              VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         r = d->CreateSwapchainKHR(device, &sbs_ci, ac, out);
@@ -1065,6 +1105,35 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroySwapchainKHR(
     d->DestroySwapchainKHR(device, sc, ac);
 }
 
+VKAPI_ATTR void VKAPI_CALL x4vr_GetDeviceQueue(VkDevice device, uint32_t family,
+                                               uint32_t index, VkQueue *out) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    d->GetDeviceQueue(device, family, index, out);
+    if (out && *out) {
+        std::lock_guard<std::mutex> lock(g_queue_mu);
+        g_queue_family[*out] = family;
+    }
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_GetDeviceQueue2(VkDevice device,
+                                                const VkDeviceQueueInfo2 *qi,
+                                                VkQueue *out) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    d->GetDeviceQueue2(device, qi, out);
+    if (out && *out && qi) {
+        std::lock_guard<std::mutex> lock(g_queue_mu);
+        g_queue_family[*out] = qi->queueFamilyIndex;
+    }
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     VkQueue queue, const VkPresentInfoKHR *pi) {
     DeviceData *d;
@@ -1075,10 +1144,23 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     // One swapchain is all X4 presents; anything else is not a case we have
     // seen, so leave it alone rather than guess which image is the eye pair.
     VkSemaphore composited = VK_NULL_HANDLE;
-    if (g_sbs_enabled && pi->swapchainCount == 1)
-        composited = g_sbs.composite(queue, pi->pSwapchains[0],
-                                     pi->pImageIndices[0], pi->pWaitSemaphores,
-                                     pi->waitSemaphoreCount);
+    uint32_t family = 0;
+    if (g_sbs_enabled && g_active && pi->swapchainCount == 1) {
+        if (queue_family_of(queue, family)) {
+            composited = g_sbs.composite(queue, family, pi->pSwapchains[0],
+                                         pi->pImageIndices[0],
+                                         pi->pWaitSemaphores,
+                                         pi->waitSemaphoreCount);
+        } else {
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                X4VR_LOG("sbs: present queue was never seen through "
+                         "vkGetDeviceQueue — composite off (would risk "
+                         "submitting to the wrong queue family)");
+            }
+        }
+    }
 
     VkResult r;
     if (composited != VK_NULL_HANDLE) {
@@ -1144,10 +1226,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateInstance(
         std::lock_guard<std::mutex> lock(g_mu);
         g_instances[dispatch_key(*out)] = data;
     }
-    X4VR_LOG("instance created (app=%s)",
-             ci->pApplicationInfo && ci->pApplicationInfo->pApplicationName
-                 ? ci->pApplicationInfo->pApplicationName
-                 : "?");
+    const char *app = ci->pApplicationInfo && ci->pApplicationInfo->pApplicationName
+                          ? ci->pApplicationInfo->pApplicationName
+                          : nullptr;
+    g_active = app_is_target(app);
+    X4VR_LOG("instance created (app=%s)%s", app ? app : "?",
+             g_active ? "" : " — not the game, layer inert in this process");
     return VK_SUCCESS;
 }
 
@@ -1198,6 +1282,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(UnmapMemory);
     RESOLVE(BindBufferMemory);
     RESOLVE(QueueSubmit);
+    RESOLVE(GetDeviceQueue);
+    RESOLVE(GetDeviceQueue2);
     RESOLVE(CreateShaderModule);
     RESOLVE(DestroyShaderModule);
     RESOLVE(CreateRenderPass);
@@ -1211,26 +1297,15 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     }
     X4VR_LOG("device created");
 
-    if (g_sbs_enabled) {
+    if (g_sbs_enabled && g_active) {
         x4vr::SbsFns f;
         // The X-macro list has no separators, so each expansion terminates
         // itself.
 #define RESOLVE(name) f.name = (PFN_vk##name)gdpa(*out, "vk" #name);
         X4VR_SBS_FNS(RESOLVE)
 #undef RESOLVE
-        // The composite submits on the queue X4 presents from, so its pool
-        // must come from that queue's family. X4 presents from the first
-        // family it asked for; if it ever asks for several we would need to
-        // track VkQueue -> family through vkGetDeviceQueue.
-        const uint32_t family = ci->queueCreateInfoCount
-                                    ? ci->pQueueCreateInfos[0].queueFamilyIndex
-                                    : 0;
-        if (ci->queueCreateInfoCount > 1)
-            X4VR_LOG("sbs: %u queue families requested; assuming the present "
-                     "queue is family %u",
-                     ci->queueCreateInfoCount, family);
         if (f.complete()) {
-            g_sbs.configure(*out, f, family);
+            g_sbs.configure(*out, f);
         } else {
             X4VR_LOG("sbs: could not resolve every entry point — composite off");
         }
@@ -1273,6 +1348,8 @@ const NameFunc kHooks[] = {
     {"vkCmdDraw", (PFN_vkVoidFunction)x4vr_CmdDraw},
     {"vkCmdDrawIndexed", (PFN_vkVoidFunction)x4vr_CmdDrawIndexed},
     {"vkQueuePresentKHR", (PFN_vkVoidFunction)x4vr_QueuePresentKHR},
+    {"vkGetDeviceQueue", (PFN_vkVoidFunction)x4vr_GetDeviceQueue},
+    {"vkGetDeviceQueue2", (PFN_vkVoidFunction)x4vr_GetDeviceQueue2},
     {"vkCreateSwapchainKHR", (PFN_vkVoidFunction)x4vr_CreateSwapchainKHR},
     {"vkDestroySwapchainKHR", (PFN_vkVoidFunction)x4vr_DestroySwapchainKHR},
     {"vkMapMemory", (PFN_vkVoidFunction)x4vr_MapMemory},

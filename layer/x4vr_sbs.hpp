@@ -62,6 +62,11 @@ public:
     struct Chain {
         VkExtent2D extent{};
         VkCommandPool pool = VK_NULL_HANDLE;
+        // Which queue family `pool` was created for. A command buffer may
+        // only be submitted to a queue of its pool's family, and X4 asks for
+        // more than one family, so this is discovered from the queue that
+        // actually presents rather than assumed.
+        uint32_t family = UINT32_MAX;
         std::vector<VkImage> images;
         std::vector<VkCommandBuffer> cmds;
         std::vector<VkSemaphore> done;
@@ -69,11 +74,10 @@ public:
         bool usable = false;
     };
 
-    void configure(VkDevice device, const SbsFns &fns, uint32_t queue_family) {
+    void configure(VkDevice device, const SbsFns &fns) {
         std::lock_guard<std::mutex> lock(mu_);
         device_ = device;
         fns_ = fns;
-        queue_family_ = queue_family;
     }
 
     bool ready() const { return device_ && fns_.complete(); }
@@ -107,31 +111,8 @@ public:
             return;
         }
 
-        VkCommandPoolCreateInfo pci{};
-        pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        pci.queueFamilyIndex = queue_family_;
-        if (fns_.CreateCommandPool(device_, &pci, nullptr, &c.pool) !=
-            VK_SUCCESS) {
-            X4VR_LOG("sbs: command pool creation failed — composite off");
-            chains_[sc] = c;
-            return;
-        }
-
-        c.cmds.resize(n);
-        VkCommandBufferAllocateInfo ai{};
-        ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        ai.commandPool = c.pool;
-        ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        ai.commandBufferCount = n;
-        if (fns_.AllocateCommandBuffers(device_, &ai, c.cmds.data()) !=
-            VK_SUCCESS) {
-            fns_.DestroyCommandPool(device_, c.pool, nullptr);
-            c.pool = VK_NULL_HANDLE;
-            chains_[sc] = c;
-            return;
-        }
-
+        // The command pool waits until the first present tells us which
+        // queue family to build it for.
         c.done.resize(n, VK_NULL_HANDLE);
         c.fences.resize(n, VK_NULL_HANDLE);
         VkSemaphoreCreateInfo si{};
@@ -171,14 +152,17 @@ public:
 
     // Records and submits the half-to-half copy. Returns the semaphore the
     // present must wait on, or VK_NULL_HANDLE to present as X4 asked.
-    VkSemaphore composite(VkQueue queue, VkSwapchainKHR sc, uint32_t image,
-                          const VkSemaphore *wait, uint32_t wait_count) {
+    VkSemaphore composite(VkQueue queue, uint32_t family, VkSwapchainKHR sc,
+                          uint32_t image, const VkSemaphore *wait,
+                          uint32_t wait_count) {
         std::lock_guard<std::mutex> lock(mu_);
         auto it = chains_.find(sc);
         if (it == chains_.end() || !it->second.usable)
             return VK_NULL_HANDLE;
         Chain &c = it->second;
         if (image >= c.images.size())
+            return VK_NULL_HANDLE;
+        if (!ensure_cmds(c, family))
             return VK_NULL_HANDLE;
 
         // The previous use of this slot's command buffer must have retired.
@@ -271,6 +255,54 @@ public:
     }
 
 private:
+    // Build (or rebuild) the command pool for the family that actually
+    // presents. Called under mu_ from composite(), so the first frame pays
+    // for it and the rest hit the fast path.
+    bool ensure_cmds(Chain &c, uint32_t family) {
+        if (c.pool != VK_NULL_HANDLE && c.family == family)
+            return true;
+        if (c.pool != VK_NULL_HANDLE) {
+            // Presenting from a different family than last time would be
+            // very strange; rebuild rather than submit to the wrong one.
+            X4VR_LOG("sbs: present queue moved from family %u to %u — "
+                     "rebuilding command pool",
+                     c.family, family);
+            if (fns_.DeviceWaitIdle)
+                fns_.DeviceWaitIdle(device_);
+            fns_.DestroyCommandPool(device_, c.pool, nullptr);
+            c.pool = VK_NULL_HANDLE;
+            c.cmds.clear();
+        }
+
+        VkCommandPoolCreateInfo pci{};
+        pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        pci.queueFamilyIndex = family;
+        if (fns_.CreateCommandPool(device_, &pci, nullptr, &c.pool) !=
+            VK_SUCCESS) {
+            X4VR_LOG("sbs: command pool creation failed — composite off");
+            c.usable = false;
+            return false;
+        }
+        c.cmds.resize(c.images.size());
+        VkCommandBufferAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        ai.commandPool = c.pool;
+        ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ai.commandBufferCount = (uint32_t)c.cmds.size();
+        if (fns_.AllocateCommandBuffers(device_, &ai, c.cmds.data()) !=
+            VK_SUCCESS) {
+            fns_.DestroyCommandPool(device_, c.pool, nullptr);
+            c.pool = VK_NULL_HANDLE;
+            c.usable = false;
+            X4VR_LOG("sbs: command buffer allocation failed — composite off");
+            return false;
+        }
+        c.family = family;
+        X4VR_LOG("sbs: composite recording on queue family %u", family);
+        return true;
+    }
+
     void destroy_chain(Chain &c) {
         if (!device_)
             return;
@@ -288,7 +320,6 @@ private:
     std::mutex mu_;
     VkDevice device_ = VK_NULL_HANDLE;
     SbsFns fns_;
-    uint32_t queue_family_ = 0;
     std::unordered_map<VkSwapchainKHR, Chain> chains_;
 };
 
