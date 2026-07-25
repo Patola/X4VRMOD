@@ -205,3 +205,59 @@ we start writing eye matrices.
   overlay point).
 - All three captures are 2816×1385 (config height fix hadn't taken effect);
   re-verify 2816×1408 next session.
+
+## Phase 3 findings: camera-relative rendering (the blocker)
+
+Live experiments with the layer writing into the view arena (all under
+gamescope, menu 3D scene, verified by screenshots):
+
+| Experiment | Result |
+|---|---|
+| Read the view block | **Works.** Values are live and correct: the projection's aspect tracked the swapchain exactly (1.778/0.889 = 2.000 at 2816×1408; 1.778/0.744 = 2.39 at 3440×1440). |
+| `M_view` contents | **Always IDENTITY**, in every block of the arena (survey of 128 blocks). |
+| `M_projection` | Reversed-Z, infinite far plane, near = 0.1, column-major (m[11]=±1, m[15]=0), Y-flipped (m[5] negative). |
+| Write eye offset into `M_view` + rebuild `M_viewprojection`/`M_viewinverse` | **No visual effect.** |
+| Zero `M_viewprojection` in the credited block | **No visual effect.** |
+| Hammer-zero `M_viewprojection`+`M_projection` at ~10 kHz from a thread | **No visual effect** (rules out any write/read race). |
+| Write-then-verify at present time | Block is **STILL ZERO** at present → X4 does not rewrite it; the GPU is reading its camera data from elsewhere. |
+| Zero the **entire** arena buffer (229,376 B) | **Screen goes fully black** → the arena *is* consumed by the GPU. |
+
+**Interpretation.** `M_view` being identity everywhere means X4 renders
+**camera-relative**: object transforms are baked against the camera on the
+CPU (normal for a space sim, to avoid float precision loss at astronomical
+distances). So the per-view `M_view`/`M_viewprojection` are not what
+positions the geometry — which is exactly why writing them changes nothing,
+while wiping the whole arena still kills the image (the deferred lighting
+and post passes *do* read this block, most likely `M_invprojection` /
+`M_viewinverse` for depth→view reconstruction).
+
+**Also fixed along the way:** draw-crediting ignored the descriptor *set
+index*, so an auxiliary/UI view could win the frame. The capture shows the
+main camera block is the range-1792 UBO bound at **descriptor set 1** during
+the 6-attachment G-buffer pass (84% of its 249 draws). Crediting is now
+scoped to set 1, though in the menu scene the winner is unchanged.
+
+### Consequences for the stereo design
+
+Patching one per-view matrix is **not** sufficient on this engine. The
+realistic options, in order of preference:
+
+1. **Pre-multiply the per-object transforms.** With `V = I`, an object's
+   baked transform already includes the camera. An eye offset `d` is then a
+   fixed pre-multiplication: `MVP_eye = P · T(−d) · P⁻¹ · MVP`. This needs
+   the per-object constant layout (the range-204/256/768/4096 blocks bound
+   at set 2+) — a renderdoc shader-reflection job, same method that gave us
+   the 11 view matrices.
+2. **Patch the projection only** for a *sheared* stereo (off-axis frustum).
+   Cheap, but gives parallax without a true eye translation — needs testing
+   for comfort, and depends on `M_projection` actually being consumed by
+   geometry (not yet proven: zeroing it had no effect, which suggests
+   geometry uses baked MVPs including projection).
+3. **Intercept at the shader level** (SPIR-V patching) to inject an eye
+   offset into the vertex stage uniformly — heaviest, most invasive, but
+   independent of how the CPU bakes transforms.
+
+Next diagnostic (cheap, decisive between the above): zero **only**
+`M_invprojection` (float offset 32) and only `M_projection` (offset 16),
+separately, in every block. If invprojection alone blackens the image, the
+view block is confirmed lighting-only and option 1 becomes the main path.

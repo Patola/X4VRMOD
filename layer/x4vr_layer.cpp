@@ -17,14 +17,19 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_layer.h>
 
+#include <cmath>
+#include <ctime>
 #include <cstring>
 #include <map>
 #include <mutex>
 #include <unordered_map>
+#include <thread>
+#include <unistd.h>
 #include <vector>
 
 #define X4VR_LOG_TAG "layer"
 #include "../common/x4vr_log.hpp"
+#include "../common/x4vr_view.hpp"
 
 namespace {
 
@@ -57,6 +62,10 @@ struct DeviceData {
     PFN_vkCmdDrawIndexed CmdDrawIndexed = nullptr;
     PFN_vkQueuePresentKHR QueuePresentKHR = nullptr;
     PFN_vkCreateSwapchainKHR CreateSwapchainKHR = nullptr;
+    PFN_vkMapMemory MapMemory = nullptr;
+    PFN_vkUnmapMemory UnmapMemory = nullptr;
+    PFN_vkBindBufferMemory BindBufferMemory = nullptr;
+    PFN_vkQueueSubmit QueueSubmit = nullptr;
 };
 
 std::mutex g_mu;
@@ -87,7 +96,44 @@ struct Tracking {
     // so "did the winner change" must ignore expected alternation: keep the
     // set of recently seen winners and only log genuinely new ones.
     std::vector<ViewSlot> known_winners;
+
+    // --- host-memory mapping, so we can read/write the view block ---
+    // X4 keeps its constant arenas persistently mapped and coherent.
+    struct Mapping {
+        void *ptr = nullptr;      // host pointer of the mapped range
+        VkDeviceSize offset = 0;  // where in the memory object it starts
+        VkDeviceSize size = 0;
+    };
+    std::unordered_map<VkDeviceMemory, Mapping> mapped;
+    struct BufferBinding {
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkDeviceSize offset = 0;
+    };
+    std::unordered_map<VkBuffer, BufferBinding> buf_binding;
+
+    x4vr::Major major = x4vr::Major::Unknown;
+    bool logged_matrices = false;
 } g_track;
+
+// Host pointer for a (buffer, offset) view slot, or nullptr if the backing
+// memory is not currently mapped. Caller holds g_track.mu.
+float *slot_host_ptr(const ViewSlot &s) {
+    auto b = g_track.buf_binding.find(s.buffer);
+    if (b == g_track.buf_binding.end())
+        return nullptr;
+    auto m = g_track.mapped.find(b->second.memory);
+    if (m == g_track.mapped.end() || !m->second.ptr)
+        return nullptr;
+    // absolute offset within the memory object
+    const VkDeviceSize abs = b->second.offset + s.offset;
+    if (abs < m->second.offset)
+        return nullptr;
+    const VkDeviceSize rel = abs - m->second.offset;
+    if (m->second.size != VK_WHOLE_SIZE &&
+        rel + x4vr::kViewBlockBytes > m->second.size)
+        return nullptr;
+    return (float *)((uint8_t *)m->second.ptr + rel);
+}
 
 void credit_draw(VkCommandBuffer cb) {
     std::lock_guard<std::mutex> lock(g_track.mu);
@@ -98,9 +144,29 @@ void credit_draw(VkCommandBuffer cb) {
         g_track.credit[s]++;
 }
 
+// Set by the submit-time patch when X4VR_TEST_VERIFY=1: the block we wrote
+// zeros into, checked again at present time. If it is no longer zero, X4
+// rewrote the constants after our patch (a timing problem we can fix). If
+// it is still zero yet the image is fine, the GPU is reading a different
+// copy of the data (an indirection we must find).
+float *g_verify_ptr = nullptr;
+
 void frame_flush() {
     std::lock_guard<std::mutex> lock(g_track.mu);
     g_track.frame++;
+    if (g_verify_ptr && (g_track.frame % 120) == 0) {
+        const x4vr::Mat4 vp = x4vr::load(g_verify_ptr + x4vr::kViewProjection);
+        bool still_zero = true;
+        for (float f : vp.m)
+            if (f != 0.0f)
+                still_zero = false;
+        X4VR_LOG("VERIFY frame %llu: block we zeroed at submit is %s at "
+                 "present (m0=%.4f m5=%.4f)",
+                 (unsigned long long)g_track.frame,
+                 still_zero ? "STILL ZERO -> GPU reads elsewhere"
+                            : "REWRITTEN by X4 -> timing problem",
+                 vp.m[0], vp.m[5]);
+    }
     if (g_track.credit.empty())
         return;
     // winner = the most-drawn view slot this frame (the main camera)
@@ -223,9 +289,20 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindDescriptorSets(
     }
     d->CmdBindDescriptorSets(cb, bindPoint, layout, firstSet, setCount, sets,
                              dynCount, dyn);
+    // Only descriptor set 1 carries the per-view camera block for the main
+    // geometry (established from the renderdoc capture: the range-1792 UBO
+    // is bound at set 1 in 84% of the G-buffer pass's draws). Crediting any
+    // set index made an auxiliary/UI view win the frame, which is why
+    // patching it had no visible effect.
+    static const uint32_t view_set = [] {
+        const char *e = getenv("X4VR_VIEW_SET");
+        return e ? (uint32_t)atoi(e) : 1u;
+    }();
     std::lock_guard<std::mutex> lock(g_track.mu);
     auto &bound = g_track.bound[cb];
     for (uint32_t i = 0; i < setCount; i++) {
+        if (firstSet + i != view_set)
+            continue;
         auto it = g_track.sets.find(sets[i]);
         if (it == g_track.sets.end())
             continue;
@@ -257,6 +334,324 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDrawIndexed(VkCommandBuffer cb,
     }
     d->CmdDrawIndexed(cb, idxc, ic, fi, vo, fin);
     credit_draw(cb);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_MapMemory(VkDevice device,
+                                              VkDeviceMemory memory,
+                                              VkDeviceSize offset,
+                                              VkDeviceSize size,
+                                              VkMemoryMapFlags flags,
+                                              void **ppData) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    VkResult r = d->MapMemory(device, memory, offset, size, flags, ppData);
+    if (r == VK_SUCCESS && ppData) {
+        std::lock_guard<std::mutex> lock(g_track.mu);
+        g_track.mapped[memory] = {*ppData, offset, size};
+    }
+    return r;
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_UnmapMemory(VkDevice device,
+                                            VkDeviceMemory memory) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_track.mu);
+        g_track.mapped.erase(memory);
+    }
+    d->UnmapMemory(device, memory);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_BindBufferMemory(VkDevice device,
+                                                     VkBuffer buffer,
+                                                     VkDeviceMemory memory,
+                                                     VkDeviceSize offset) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    VkResult r = d->BindBufferMemory(device, buffer, memory, offset);
+    if (r == VK_SUCCESS) {
+        std::lock_guard<std::mutex> lock(g_track.mu);
+        g_track.buf_binding[buffer] = {memory, offset};
+    }
+    return r;
+}
+
+// Read (and optionally perturb) the main view block just before the GPU
+// consumes it. Submit time is the correct moment: X4 has finished its CPU
+// writes for this frame, and the command buffers that read the block have
+// already been recorded, so the winning slot for this frame is known.
+void patch_view_before_submit() {
+    static const float ox = [] {
+        const char *e = getenv("X4VR_TEST_EYE_X");
+        return e ? (float)atof(e) : 0.0f;
+    }();
+    static const float oy = [] {
+        const char *e = getenv("X4VR_TEST_EYE_Y");
+        return e ? (float)atof(e) : 0.0f;
+    }();
+    static const float oz = [] {
+        const char *e = getenv("X4VR_TEST_EYE_Z");
+        return e ? (float)atof(e) : 0.0f;
+    }();
+    static const bool dump = [] {
+        const char *e = getenv("X4VR_DUMP_MATRICES");
+        return e && *e && *e != '0';
+    }();
+    if (ox == 0.0f && oy == 0.0f && oz == 0.0f && !dump)
+        return;
+
+    std::lock_guard<std::mutex> lock(g_track.mu);
+    // winner of the frame so far = the main camera
+    const ViewSlot *best = nullptr;
+    uint32_t best_n = 0;
+    for (auto &[slot, n] : g_track.credit)
+        if (n > best_n) {
+            best = &slot;
+            best_n = n;
+        }
+    // Require a real scene: the splash/menu transition renders a couple of
+    // draws against a block X4 has not populated yet (reads back all zeros).
+    if (!best || best_n < 50)
+        return;
+    float *blk = slot_host_ptr(*best);
+    if (!blk)
+        return;
+
+    x4vr::Mat4 view = x4vr::load(blk + x4vr::kView);
+    // Sanity: a real view matrix is affine with m[15] == 1.
+    if (std::fabs(view.m[15] - 1.0f) > 1e-3f)
+        return;
+
+    const x4vr::Mat4 proj_probe = x4vr::load(blk + x4vr::kProjection);
+    if (g_track.major == x4vr::Major::Unknown) {
+        // Prefer the projection matrix: X4 renders camera-relative, so its
+        // M_view is identity and cannot disambiguate the storage order.
+        g_track.major = x4vr::detect_major_proj(proj_probe);
+        if (g_track.major == x4vr::Major::Unknown)
+            g_track.major = x4vr::detect_major(view);
+    }
+    const x4vr::Major major = g_track.major;
+
+    if (dump && !g_track.logged_matrices) {
+        g_track.logged_matrices = true;
+        char b[512];
+        x4vr::format_mat(b, sizeof(b), view);
+        X4VR_LOG("M_view          %s", b);
+        x4vr::format_mat(b, sizeof(b), x4vr::load(blk + x4vr::kProjection));
+        X4VR_LOG("M_projection    %s", b);
+        x4vr::format_mat(b, sizeof(b), x4vr::load(blk + x4vr::kViewProjection));
+        X4VR_LOG("M_viewprojection%s", b);
+        x4vr::format_mat(b, sizeof(b), x4vr::load(blk + x4vr::kViewInverse));
+        X4VR_LOG("M_viewinverse   %s", b);
+        X4VR_LOG("storage order detected: %s (draws=%u)",
+                 major == x4vr::Major::Column ? "column-major"
+                 : major == x4vr::Major::Row  ? "row-major"
+                                              : "UNKNOWN",
+                 best_n);
+    }
+
+    if (ox == 0.0f && oy == 0.0f && oz == 0.0f)
+        return;
+    if (major == x4vr::Major::Unknown)
+        return; // refuse to guess
+
+    // X4VR_TEST_PERIOD=<seconds>: alternate the offset on/off so a single
+    // run shows both viewpoints. The menu background scene is randomised per
+    // launch, so comparing across runs proves nothing; comparing within one
+    // run does.
+    static const double period = [] {
+        const char *e = getenv("X4VR_TEST_PERIOD");
+        return e ? atof(e) : 0.0;
+    }();
+    if (period > 0.0) {
+        timespec ts{};
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        const double t = ts.tv_sec + ts.tv_nsec * 1e-9;
+        if (((long)(t / period)) % 2 == 0)
+            return; // "off" half of the cycle: leave X4's camera alone
+    }
+
+    // X4VR_TEST_ZAP=vp|view|proj — destroy one matrix outright. A blunt but
+    // decisive probe of whether the geometry actually consumes this block:
+    // if zeroing it does not change the image, the vertex path is getting
+    // its transform from somewhere else (e.g. per-object constants).
+    static const char *zap = getenv("X4VR_TEST_ZAP");
+    if (zap && *zap) {
+        x4vr::Mat4 zero{};
+        if (!strcmp(zap, "survey")) {
+            // Walk every block of the arena and report the ones that look
+            // like real view constants. The main camera is identified by a
+            // perspective projection whose aspect matches the swapchain and
+            // (unlike the block draw-crediting picks) a non-identity view.
+            static bool surveyed = false;
+            if (!surveyed) {
+                surveyed = true;
+                auto bb = g_track.buf_binding.find(best->buffer);
+                auto sz = g_track.ubo_buffers.find(best->buffer);
+                auto mp = (bb != g_track.buf_binding.end())
+                              ? g_track.mapped.find(bb->second.memory)
+                              : g_track.mapped.end();
+                if (mp != g_track.mapped.end() && mp->second.ptr &&
+                    sz != g_track.ubo_buffers.end()) {
+                    uint8_t *base = (uint8_t *)mp->second.ptr +
+                                    (bb->second.offset - mp->second.offset);
+                    const uint32_t nblocks =
+                        (uint32_t)(sz->second / x4vr::kViewBlockBytes);
+                    X4VR_LOG("SURVEY of %u blocks in arena %p:", nblocks,
+                             (void *)best->buffer);
+                    for (uint32_t b = 0; b < nblocks; b++) {
+                        float *pb = (float *)(base + (size_t)b *
+                                              x4vr::kViewBlockBytes);
+                        x4vr::Mat4 v = x4vr::load(pb + x4vr::kView);
+                        x4vr::Mat4 pr = x4vr::load(pb + x4vr::kProjection);
+                        const bool view_ok =
+                            std::fabs(v.m[15] - 1.0f) < 1e-3f;
+                        const bool proj_ok =
+                            std::fabs(pr.m[15]) < 1e-4f &&
+                            std::fabs(std::fabs(pr.m[11]) - 1.0f) < 1e-3f &&
+                            std::fabs(pr.m[0]) > 1e-6f;
+                        if (!view_ok || !proj_ok)
+                            continue;
+                        uint32_t cred = 0;
+                        for (auto &[sl, n] : g_track.credit)
+                            if (sl.buffer == best->buffer &&
+                                sl.offset == (VkDeviceSize)b *
+                                                 x4vr::kViewBlockBytes)
+                                cred = n;
+                        const bool ident =
+                            std::fabs(v.m[0] - 1.0f) < 1e-4f &&
+                            std::fabs(v.m[5] - 1.0f) < 1e-4f &&
+                            std::fabs(v.m[12]) < 1e-4f &&
+                            std::fabs(v.m[13]) < 1e-4f &&
+                            std::fabs(v.m[14]) < 1e-4f;
+                        X4VR_LOG("  blk %3u draws=%4u view=%s trans=(%.1f,%.1f,%.1f) "
+                                 "proj m0=%.4f m5=%.4f aspect=%.3f near=%.3f",
+                                 b, cred, ident ? "IDENTITY" : "real   ",
+                                 v.m[12], v.m[13], v.m[14], pr.m[0], pr.m[5],
+                                 pr.m[0] != 0.0f ? pr.m[5] / pr.m[0] : 0.0f,
+                                 pr.m[14]);
+                    }
+                }
+            }
+            return;
+        }
+        if (!strcmp(zap, "arena")) {
+            // Zero the WHOLE arena buffer, not just one block. If the image
+            // still renders, this buffer is not consumed by the GPU at all
+            // and our identification of the view arena is wrong.
+            auto bb = g_track.buf_binding.find(best->buffer);
+            auto sz = g_track.ubo_buffers.find(best->buffer);
+            if (bb != g_track.buf_binding.end() && sz != g_track.ubo_buffers.end()) {
+                auto mp = g_track.mapped.find(bb->second.memory);
+                if (mp != g_track.mapped.end() && mp->second.ptr) {
+                    uint8_t *base = (uint8_t *)mp->second.ptr +
+                                    (bb->second.offset - mp->second.offset);
+                    memset(base, 0, (size_t)sz->second);
+                    static bool once1 = false;
+                    if (!once1) {
+                        once1 = true;
+                        X4VR_LOG("TEST: zeroing ENTIRE arena buffer %p (%llu bytes)",
+                                 (void *)best->buffer,
+                                 (unsigned long long)sz->second);
+                    }
+                }
+            }
+            return;
+        }
+        if (!strcmp(zap, "arena")) {
+            // Zero the WHOLE arena buffer, not just one block. If the image
+            // still renders, this buffer is not consumed by the GPU at all
+            // and our identification of the view arena is wrong.
+            auto bb = g_track.buf_binding.find(best->buffer);
+            auto sz = g_track.ubo_buffers.find(best->buffer);
+            if (bb != g_track.buf_binding.end() && sz != g_track.ubo_buffers.end()) {
+                auto mp = g_track.mapped.find(bb->second.memory);
+                if (mp != g_track.mapped.end() && mp->second.ptr) {
+                    uint8_t *base = (uint8_t *)mp->second.ptr +
+                                    (bb->second.offset - mp->second.offset);
+                    memset(base, 0, (size_t)sz->second);
+                    static bool once1 = false;
+                    if (!once1) {
+                        once1 = true;
+                        X4VR_LOG("TEST: zeroing ENTIRE arena buffer %p (%llu bytes)",
+                                 (void *)best->buffer,
+                                 (unsigned long long)sz->second);
+                    }
+                }
+            }
+            return;
+        }
+        if (!strcmp(zap, "vp"))
+            x4vr::store(blk + x4vr::kViewProjection, zero);
+        else if (!strcmp(zap, "view"))
+            x4vr::store(blk + x4vr::kView, zero);
+        else if (!strcmp(zap, "proj"))
+            x4vr::store(blk + x4vr::kProjection, zero);
+        g_verify_ptr = blk;
+        static bool once = false;
+        if (!once) {
+            once = true;
+            X4VR_LOG("TEST: zapping %s of block at %p (draws=%u)", zap,
+                     (void *)blk, best_n);
+        }
+        return;
+    }
+
+    // Shift the camera and rebuild every matrix derived from the view.
+    const x4vr::Mat4 proj = x4vr::load(blk + x4vr::kProjection);
+    const x4vr::Mat4 view2 = x4vr::offset_camera(view, major, ox, oy, oz);
+    x4vr::store(blk + x4vr::kView, view2);
+    x4vr::store(blk + x4vr::kViewProjection, x4vr::mul(proj, view2, major));
+    x4vr::Mat4 vinv;
+    if (x4vr::invert(view2, vinv))
+        x4vr::store(blk + x4vr::kViewInverse, vinv);
+}
+
+// X4VR_TEST_HAMMER=1 — continuously zero M_viewprojection in every known
+// view block from a background thread. This is a race-based oracle: if the
+// GPU ever reads these blocks, hammering them at ~10 kHz is guaranteed to
+// corrupt the image. If the image stays pristine, the blocks we identified
+// are not what the visible geometry consumes, and no amount of careful
+// timing on our side would have helped.
+void hammer_thread() {
+    X4VR_LOG("TEST: hammer thread started");
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(g_track.mu);
+            for (auto &[slot, n] : g_track.credit) {
+                (void)n;
+                if (float *blk = slot_host_ptr(slot)) {
+                    x4vr::Mat4 zero{};
+                    x4vr::store(blk + x4vr::kViewProjection, zero);
+                    x4vr::store(blk + x4vr::kProjection, zero);
+                }
+            }
+        }
+        usleep(100);
+    }
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueueSubmit(VkQueue queue,
+                                                uint32_t submitCount,
+                                                const VkSubmitInfo *submits,
+                                                VkFence fence) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(queue));
+    }
+    patch_view_before_submit();
+    return d->QueueSubmit(queue, submitCount, submits, fence);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
@@ -386,12 +781,20 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(CmdDrawIndexed);
     RESOLVE(QueuePresentKHR);
     RESOLVE(CreateSwapchainKHR);
+    RESOLVE(MapMemory);
+    RESOLVE(UnmapMemory);
+    RESOLVE(BindBufferMemory);
+    RESOLVE(QueueSubmit);
 #undef RESOLVE
     {
         std::lock_guard<std::mutex> lock(g_mu);
         g_devices[dispatch_key(*out)] = d;
     }
     X4VR_LOG("device created");
+    if (const char *h = getenv("X4VR_TEST_HAMMER"); h && *h && *h != '0') {
+        static std::thread t(hammer_thread);
+        t.detach();
+    }
     return VK_SUCCESS;
 }
 
@@ -426,6 +829,10 @@ const NameFunc kHooks[] = {
     {"vkCmdDrawIndexed", (PFN_vkVoidFunction)x4vr_CmdDrawIndexed},
     {"vkQueuePresentKHR", (PFN_vkVoidFunction)x4vr_QueuePresentKHR},
     {"vkCreateSwapchainKHR", (PFN_vkVoidFunction)x4vr_CreateSwapchainKHR},
+    {"vkMapMemory", (PFN_vkVoidFunction)x4vr_MapMemory},
+    {"vkUnmapMemory", (PFN_vkVoidFunction)x4vr_UnmapMemory},
+    {"vkBindBufferMemory", (PFN_vkVoidFunction)x4vr_BindBufferMemory},
+    {"vkQueueSubmit", (PFN_vkVoidFunction)x4vr_QueueSubmit},
 };
 
 PFN_vkVoidFunction find_hook(const char *name) {
