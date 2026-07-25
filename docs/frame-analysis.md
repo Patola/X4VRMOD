@@ -63,17 +63,84 @@ Note X4 renders the 2:1 frame with a 2:1 projection; per eye we replace the
 projection with a 1:1 one, so no squish. Handedness / reversed-Z convention
 must be read off `P` once and matched exactly.
 
-## Still to capture (next Phase-2 steps)
+## Full-frame analysis (capture: `x4-capture-cockpit.rdc`, cockpit, static)
 
-- The **VkBuffer + descriptor binding** for this UBO, and **how it is
-  updated** (vkCmdUpdateBuffer? persistently-mapped host write? staged copy?)
-  — this determines *where* we patch it per eye.
-- Whether it is written **once per frame** or multiple times (e.g. a separate
-  copy for shadow passes with the light's view).
-- Which **passes/draws** read it (should be all main-view passes:
-  depth/G-buffer, lighting, forward, post).
-- The **UI/HUD pass** location and how it composites (per-eye vs single depth
-  plane).
-- The **final present** image and whether intermediate targets are full-frame
-  (2816×1408) or already split — decides "render eye into a half" vs "render
-  eye full then composite".
+Parsed with `tools/parse_capture.py` from the XML conversion
+(`renderdoccmd convert -c xml`). Frame = 2816×1385 (window at capture time),
+742 draws, 52 dispatches, 47 render passes, ~2 queue submits.
+
+### THE key finding: the view-constants arena (buffer 967)
+
+- `VkBuffer` **967**: size **229,376 = 128 × 1792**, usage UNIFORM_BUFFER,
+  bound at **memory 793 + 251,887,616**.
+- It is an **array of per-view constant blocks, stride 1792 bytes**. The
+  11-mat4 camera block (704 bytes) documented above is the head of each
+  block; the remaining ~1088 bytes are other per-view constants.
+- 62 descriptor-set slots reference it with `range 1792` at different
+  offsets — one block per *view* in the frame:
+  - **offset 3584 (block #2) = the main camera** — credited by ~211 scene
+    draws (the G-buffer pass alone has 249);
+  - other offsets (105728, 111104, 16128, 53760, 75264, 17920, 5376, …) are
+    shadow-cascade and auxiliary views (~40–120 draws each).
+- Memory 793 (and 829) are **huge (~268 MB) host-coherent persistently
+  mapped arenas**; X4 updates constants by **plain CPU memcpy into the
+  mapping** (zero `vkCmdUpdateBuffer` in the whole frame; renderdoc shows
+  whole-arena `Coherent Mapped Memory Write` flushes).
+- Descriptor sets are **baked** (1652 allocations, no dynamic offsets, no
+  in-frame UBO descriptor writes — set state appears as renderdoc
+  `Initial Contents`). So per-draw constants are addressed by *static*
+  (buffer, offset) pairs in per-object sets.
+
+**Interception consequences:**
+1. The per-eye patch is a **CPU write into mapped memory** (the main-view
+   1792-byte block), not a command-stream edit.
+2. Because both eyes' submissions would read the *same* block, double-render
+   needs either (a) submit-L → sync → rewrite block → submit-R
+   (simple, serializes eyes), or (b) a layer-recorded clone command buffer
+   with the eye-R constants sourced from a different block/copy (parallel,
+   more machinery). Start with (a), optimize to (b).
+3. Offsets are likely ring-allocated and can move frame to frame; at runtime
+   the layer identifies the arena by "UBO with descriptor range 1792" and
+   the *main* view block as the one bound by draws in the big G-buffer pass.
+
+### Render-pass skeleton (frame order)
+
+| # | Passes | FB size / formats | Content |
+|---|--------|-------------------|---------|
+| 1–4 | 4 | 2816×1385, 6 att: D32 + 3×RGBA16F + 2×RG16F | **G-buffer** (pass 3 = main geometry, 249 draws) |
+| 5–8 | 4 | 2048×2048 D16 | **Shadow cascades** (4) |
+| 9 | 1 | 2816×1385, 5 att | secondary geometry (60 draws) |
+| 10 | 1 | 2816×1385, D32+R8_UINT | ID/stencil-ish pass (41 draws) |
+| 11–22 | 12 | 1408×692 → 1×1, R32F | **depth/luminance pyramid** (auto-exposure) |
+| 23–25 | 3 | 1408×692 RGBA16F | half-res ping-pong (bloom/blur head) |
+| 26–31 | 6 | 2816×1385, 6 att | **deferred lighting/composite** (31 has 53 draws — light volumes) |
+| 32–39 | 8 | 704×346 RGBA16F | bloom pyramid ping-pong |
+| 40–41 | 2 | 2816×1385 R16F (+52 dispatches) | AO/exposure compute block |
+| 42–45 | 4 | 2816×1385 | more composite (2×RGBA16F pairs) |
+| 46 | 1 | 2816×1385 **B8G8R8A8_SRGB, 232 draws** | **UI/HUD pass** |
+| 47 | 1 | 2816×1385 B8G8R8A8_UNORM, 1 draw | final blit → present |
+
+Other UBO patterns for reference: per-object slots of range 768 (×724) and
+4096 (×587); big arenas buffer 7243 (8 MB) / 9805 (4 MB) in memory 829.
+
+### Notes / caveats
+
+- The plain-`xml` conversion **omits buffer payloads** (`MapData` bodies),
+  so matrix *values* can't be read from the XML — structure only. Values can
+  be inspected in the qrenderdoc UI when needed.
+- All 6-attachment targets are **full-frame sized**: intermediate passes are
+  not split. First SBS implementation should therefore be **sequential
+  full-frame per eye + composite into halves at the end** (option (a)),
+  rather than trying to halve every intermediate target.
+- The UI pass (46) is a separate SRGB pass after all 3D — good news: it can
+  be rendered once and composited per-eye at a chosen depth plane.
+
+## Still to determine
+
+- Whether block #2 (offset 3584) is *stably* the main view across frames, or
+  ring-moves (needs a second capture / runtime logging from the layer).
+- The exact remaining ~1088 bytes of the 1792 block (per-view params that may
+  also need per-eye patching, e.g. camera world position for specular).
+- Present-time details: swapchain image count, present mode, and how pass 47
+  maps onto the swapchain image (single full-screen draw — easy overlay
+  point).
