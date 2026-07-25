@@ -82,7 +82,10 @@ struct Tracking {
     // per-frame draw credit
     std::map<ViewSlot, uint32_t> credit;
     uint64_t frame = 0;
-    ViewSlot last_logged{VK_NULL_HANDLE, 0};
+    // X4 double-buffers the view arena (two buffers alternate per frame),
+    // so "did the winner change" must ignore expected alternation: keep the
+    // set of recently seen winners and only log genuinely new ones.
+    std::vector<ViewSlot> known_winners;
 } g_track;
 
 void credit_draw(VkCommandBuffer cb) {
@@ -108,21 +111,35 @@ void frame_flush() {
             best_n = n;
         }
     }
-    const char *every = getenv("X4VR_LOG_EVERY_FRAME");
-    bool changed = best && (best->buffer != g_track.last_logged.buffer ||
-                            best->offset != g_track.last_logged.offset);
-    if (best && (changed || (every && *every && *every != '0'))) {
+    static const bool log_every = [] {
+        const char *e = getenv("X4VR_LOG_EVERY_FRAME");
+        return e && *e && *e != '0';
+    }();
+    bool is_new = false;
+    if (best) {
+        is_new = true;
+        for (const ViewSlot &k : g_track.known_winners)
+            if (k.buffer == best->buffer && k.offset == best->offset)
+                is_new = false;
+        if (is_new) {
+            g_track.known_winners.push_back(*best);
+            if (g_track.known_winners.size() > 8) // window: 2 arenas x views
+                g_track.known_winners.erase(g_track.known_winners.begin());
+        }
+    }
+    bool heartbeat = (g_track.frame % 600) == 0;
+    if (best && (is_new || heartbeat || log_every)) {
         VkDeviceSize bufsize = 0;
         auto b = g_track.ubo_buffers.find(best->buffer);
         if (b != g_track.ubo_buffers.end())
             bufsize = b->second;
-        X4VR_LOG("frame %llu: main view slot buffer=%p offset=%llu "
+        X4VR_LOG("frame %llu%s: main view slot buffer=%p offset=%llu "
                  "(block #%llu) draws=%u slots=%zu arena_size=%llu",
-                 (unsigned long long)g_track.frame, (void *)best->buffer,
-                 (unsigned long long)best->offset,
+                 (unsigned long long)g_track.frame,
+                 is_new ? " NEW" : (heartbeat ? " hb" : ""),
+                 (void *)best->buffer, (unsigned long long)best->offset,
                  (unsigned long long)(best->offset / kViewBlockRange), best_n,
                  g_track.credit.size(), (unsigned long long)bufsize);
-        g_track.last_logged = *best;
     }
     g_track.credit.clear();
 }
