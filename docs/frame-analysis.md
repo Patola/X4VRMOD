@@ -261,3 +261,72 @@ Next diagnostic (cheap, decisive between the above): zero **only**
 `M_invprojection` (float offset 32) and only `M_projection` (offset 16),
 separately, in every block. If invprojection alone blackens the image, the
 view block is confirmed lighting-only and option 1 becomes the main path.
+
+## Ground truth: shader reflection (SPIR-V debug names)
+
+X4 ships its shaders **with full debug info**, so the constant layouts can be
+read directly instead of inferred. Extracted all 140 `vkCreateShaderModule`
+payloads from the capture's blob archive and disassembled with `spirv-dis`
+(see `tools/extract_shaders.py`). The engine binds **five** descriptor sets:
+
+| Set | Block | Purpose |
+|-----|-------|---------|
+| 1 | `BLOCK_BUFFER_BINDING_SLOT_CAMERA` (64 members, 1792 B) | per-view constants |
+| 2 | `BLOCK_BUFFER_BINDING_SLOT_MATERIAL` (64 members) | material params |
+| 3 | `BLOCK_BUFFER_BINDING_SLOT_WORLD` (15 members) | **per-object transforms** |
+| 4 | `BLOCK_BUFFER_BINDING_SLOT_DYNAMIC` (11 members) | texture/envmap matrices |
+
+### Set 3 — `BLOCK_BUFFER_BINDING_SLOT_WORLD` (the missing piece)
+
+| Off | Member |
+|-----|--------|
+| 0 | **`M_worldviewprojection`** |
+| 64 | `M_world` |
+| 128 | `M_prevworldviewprojection` |
+| 192..448 | `M_shadowCSM0..4` |
+| 512 | `V_blendcolor` |
+| 528 | `F_alphascale` |
+| 532+ | `B_packedtangentframe`, `B_vertexdata0..2`, `B_useskinning` |
+
+**This explains every Phase-3 result.** Geometry is transformed by
+`M_worldviewprojection` from the *per-object* set-3 block — already baked on
+the CPU, camera included (hence `M_view` = identity). The set-1 camera block
+we were patching is consumed by lighting/post (and by `V_cameraposition`,
+`M_invprojection`, …), which is why zeroing the whole arena blackened the
+screen while patching `M_view`/`M_viewprojection` did nothing at all.
+
+### Set 1 — camera block, beyond the 11 matrices
+
+The block is 64 members; the first 11 are the matrices already documented.
+The rest matter for stereo correctness:
+
+| Off | Member | Note |
+|-----|--------|------|
+| 704 | `V_viewportpixelsize` | per-eye viewport size |
+| 720 | `V_screenresolution` | |
+| 736 | **`V_cameraposition`** | must move with the eye (specular/parallax) |
+| 752..848 | `V_ambient1`, `V_direction1..3`, `V_lightcolor1..3` | |
+| 864 | `V_light_direction_view` | **view-space** light dirs — per-eye |
+| 928 | `V_csmthresholds` | |
+
+### Revised stereo plan
+
+Per eye we must patch **two** places, not one:
+
+1. **Set 3, offset 0** — `M_worldviewprojection` for *every object drawn*:
+   `MVP_eye = P · T(−d) · P⁻¹ · MVP`, a single fixed 4×4 pre-multiplication
+   (`M_view` is identity, so the eye offset is a pure view-space translate).
+   `M_prevworldviewprojection` (off 128) needs the same treatment for
+   motion-vector correctness.
+2. **Set 1** — the camera block: `M_view`/`M_viewprojection`/`M_invprojection`
+   (+`_uj` variants) *and* `V_cameraposition` and `V_light_direction_view`,
+   so deferred lighting matches the eye. This is the "per-eye lighting" the
+   design called for.
+
+Shadow matrices (`M_shadowCSM*` in both blocks) stay shared — light-space.
+
+Open question for the next step: per-object blocks are numerous (724×768 B +
+587×4096 B observed). Patching them on the CPU each frame is feasible but
+touches a lot of memory; the alternative is a GPU-side `vkCmdUpdateBuffer`
+injected per draw, or SPIR-V patching of the vertex stage to apply the eye
+transform once. Measure before choosing.
