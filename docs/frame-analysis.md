@@ -369,3 +369,41 @@ sits at a comfortable fixed depth. Options, cheapest first:
 
 The frame map already shows the UI is a **separate late SRGB pass**, so a
 per-pass distinction is available as a fallback.
+
+### Classification attempt 1: set-3 presence (partial success)
+
+`x4vr::spv::classify()` splits vertex modules by whether they declare the
+set-3 per-object world block. On X4's 140 modules: **96 WORLD, 40 UI, 4
+compute**. The 40 "UI" modules all have the interface signature
+`%IO_uv0 %_ %gl_VertexIndex` — the classic fullscreen-triangle pattern, i.e.
+**fullscreen post-process passes** (bloom, lighting composite, blits).
+
+Keeping those at identity is important in its own right: giving a screen-space
+pass a world eye offset would corrupt it, not merely misplace it. So this
+classification earns its keep regardless of what happens with the HUD.
+
+**But it does not isolate the HUD.** Live test with `K_world` shifted and
+`K_ui` identity: the menu text still moved with the world (its origin went
+from x≈215 to x≈500 in a 2000-px-wide capture). So X4's UI/text shaders
+*also* declare set 3 — presumably they share the standard pipeline layout
+even when the block's contents are irrelevant to them. Declaring a set is
+not the same as being positioned by it.
+
+Better discriminators to try, cheapest first:
+
+1. **Vertex input attributes.** World geometry declares
+   `SPECIAL_VERTEXLOCATION_POSITION/NORMAL/TANGENT`; UI/text quads are far
+   more likely to be index- or uv-driven. X4 names its interface variables,
+   so this is readable straight from the SPIR-V at module creation — still
+   zero per-frame cost.
+2. **Per-render-pass selection.** The frame map already shows the UI is a
+   separate late SRGB pass. This is exact, but needs two pipeline variants of
+   the same module (one per K) selected at bind time, so it costs pipeline
+   memory and some bookkeeping.
+3. **Whether the shader actually *reads* `M_worldviewprojection`** (member 0
+   of the set-3 block) rather than merely declaring the block — a data-flow
+   check on the SPIR-V. More precise than (1), more work.
+
+Note for Phase 4: a shifted HUD is not fatal to a first SBS milestone (it
+lands at *some* depth rather than the right one), so this can be solved in
+parallel with the eye split rather than blocking it.

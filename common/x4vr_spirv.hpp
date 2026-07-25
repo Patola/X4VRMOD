@@ -61,11 +61,22 @@ enum : uint32_t {
     StorageClassOutput = 3,
 };
 
+enum : uint32_t { DecorationDescriptorSet = 34 };
+
 struct Inst {
     uint32_t op = 0;
     uint32_t len = 0;
     size_t start = 0; // word index of the instruction header
 };
+
+// What kind of geometry a vertex module draws, decided statically from the
+// descriptor sets it declares (see docs/frame-analysis.md for the binding
+// slots). World geometry is positioned by the per-object
+// BLOCK_BUFFER_BINDING_SLOT_WORLD block at set 3; UI/HUD draws are not.
+// This lets each class get its own baked clip-space matrix: the world gets
+// the eye offset, the UI gets its own (identity = screen depth, or a chosen
+// depth plane).
+enum class Kind { NotVertex, World, UI };
 
 inline bool iterate(const std::vector<uint32_t> &code,
                     std::vector<Inst> &out) {
@@ -89,6 +100,27 @@ inline void emit(std::vector<uint32_t> &dst, uint32_t op,
     dst.push_back(((uint32_t)(operands.size() + 1) << 16) | op);
     for (uint32_t w : operands)
         dst.push_back(w);
+}
+
+/// Classifies a module without modifying it: does it have a Vertex entry
+/// point, and does it declare the set-3 per-object world block?
+inline Kind classify(const std::vector<uint32_t> &code) {
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return Kind::NotVertex;
+    bool vertex = false, set3 = false;
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (in.op == OpEntryPoint && in.len >= 3 &&
+            w[1] == ExecutionModelVertex)
+            vertex = true;
+        else if (in.op == OpDecorate && in.len >= 4 &&
+                 w[2] == DecorationDescriptorSet && w[3] == 3)
+            set3 = true;
+    }
+    if (!vertex)
+        return Kind::NotVertex;
+    return set3 ? Kind::World : Kind::UI;
 }
 
 /// Rewrites `code` so every Vertex entry point ends with

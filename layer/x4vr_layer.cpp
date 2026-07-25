@@ -354,26 +354,41 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
         d = &g_devices.at(dispatch_key(device));
     }
 
+    // Two matrices, chosen per module by static classification:
+    //   K_world — world geometry (set-3 per-object block): gets the eye offset
+    //   K_ui    — screen-space modules (UI/HUD *and* fullscreen post passes):
+    //             identity by default. Giving these the world eye offset would
+    //             not just misplace the HUD, it would corrupt every fullscreen
+    //             post pass, so they must never share K_world.
     static bool have_k = false;
-    static float K[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    static float K_world[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    static float K_ui[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     static std::once_flag once;
     std::call_once(once, [] {
-        if (const char *s = getenv("X4VR_CLIP_K")) {
+        auto parse16 = [](const char *s, float *m) {
             int i = 0;
             for (const char *p = s; *p && i < 16; i++) {
-                K[i] = strtof(p, (char **)&p);
+                m[i] = strtof(p, (char **)&p);
                 if (*p == ',')
                     p++;
             }
-            have_k = (i == 16);
-        } else if (const char *sh = getenv("X4VR_CLIP_SHIFT")) {
-            K[12] = strtof(sh, nullptr); // column-major: column 3 = translation
+            return i == 16;
+        };
+        if (const char *s = getenv("X4VR_CLIP_K"))
+            have_k |= parse16(s, K_world);
+        if (const char *sh = getenv("X4VR_CLIP_SHIFT")) {
+            K_world[12] = strtof(sh, nullptr); // column-major: col 3 = translation
+            have_k = true;
+        }
+        if (const char *s = getenv("X4VR_CLIP_K_UI"))
+            have_k |= parse16(s, K_ui);
+        if (const char *sh = getenv("X4VR_CLIP_SHIFT_UI")) {
+            K_ui[12] = strtof(sh, nullptr);
             have_k = true;
         }
         if (have_k)
-            X4VR_LOG("clip-space K enabled: [%.3f %.3f %.3f %.3f | ... | "
-                     "%.3f %.3f %.3f %.3f]",
-                     K[0], K[1], K[2], K[3], K[12], K[13], K[14], K[15]);
+            X4VR_LOG("clip-space enabled: K_world.x=%.3f K_ui.x=%.3f",
+                     K_world[12], K_ui[12]);
     });
 
     if (!have_k || !ci->pCode || ci->codeSize < 20)
@@ -382,7 +397,13 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     std::vector<uint32_t> code(ci->codeSize / 4);
     memcpy(code.data(), ci->pCode, ci->codeSize);
 
-    static uint32_t patched = 0;
+    const x4vr::spv::Kind kind = x4vr::spv::classify(code);
+    if (kind == x4vr::spv::Kind::NotVertex)
+        return d->CreateShaderModule(device, ci, ac, out);
+    const float *K = (kind == x4vr::spv::Kind::World) ? K_world : K_ui;
+
+    static uint32_t patched = 0, n_world = 0, n_ui = 0;
+    (kind == x4vr::spv::Kind::World ? n_world : n_ui)++;
     if (x4vr::spv::patch_vertex_clip(code, K)) {
         VkShaderModuleCreateInfo mod = *ci;
         mod.codeSize = code.size() * 4;
@@ -390,8 +411,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
         VkResult r = d->CreateShaderModule(device, &mod, ac, out);
         if (r == VK_SUCCESS) {
             if (++patched <= 3 || (patched % 50) == 0)
-                X4VR_LOG("patched vertex shader #%u (%zu -> %zu bytes)",
-                         patched, (size_t)ci->codeSize, (size_t)mod.codeSize);
+                X4VR_LOG("patched vertex shader #%u (%s) [world=%u ui=%u]",
+                         patched,
+                         kind == x4vr::spv::Kind::World ? "world" : "ui",
+                         n_world, n_ui);
             return r;
         }
         // Patched module rejected by the driver: fall back to the original
