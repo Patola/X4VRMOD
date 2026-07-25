@@ -102,25 +102,67 @@ inline void emit(std::vector<uint32_t> &dst, uint32_t op,
         dst.push_back(w);
 }
 
-/// Classifies a module without modifying it: does it have a Vertex entry
-/// point, and does it declare the set-3 per-object world block?
+/// Classifies a module without modifying it.
+///
+/// A module counts as World only if its vertex stage actually *reads member
+/// 0* (`M_worldviewprojection`) of the set-3 per-object block. Merely
+/// declaring the block is not enough — X4's UI shaders declare it too, and
+/// shadow-pass shaders declare it but transform through `M_shadowCSM*`
+/// (members 3..7) instead. Since the per-eye matrix is derived from the main
+/// camera's projection, it is only valid for draws that go through
+/// `M_worldviewprojection`; applying it to a light-space shadow pass would be
+/// simply wrong (there, clip z is not the constant near plane the derivation
+/// assumes).
 inline Kind classify(const std::vector<uint32_t> &code) {
     std::vector<Inst> insts;
     if (!iterate(code, insts))
         return Kind::NotVertex;
-    bool vertex = false, set3 = false;
+
+    bool vertex = false;
+    std::unordered_map<uint32_t, uint32_t> const_val; // id -> literal value
+    std::vector<uint32_t> set3_vars;
+    // Pass 1: entry stage, integer constants, and set-3 variables.
     for (const Inst &in : insts) {
         const uint32_t *w = &code[in.start];
-        if (in.op == OpEntryPoint && in.len >= 3 &&
-            w[1] == ExecutionModelVertex)
-            vertex = true;
-        else if (in.op == OpDecorate && in.len >= 4 &&
-                 w[2] == DecorationDescriptorSet && w[3] == 3)
-            set3 = true;
+        switch (in.op) {
+        case OpEntryPoint:
+            if (in.len >= 3 && w[1] == ExecutionModelVertex)
+                vertex = true;
+            break;
+        case OpConstant:
+            if (in.len >= 4)
+                const_val[w[2]] = w[3];
+            break;
+        case OpDecorate:
+            if (in.len >= 4 && w[2] == DecorationDescriptorSet && w[3] == 3)
+                set3_vars.push_back(w[1]);
+            break;
+        default:
+            break;
+        }
     }
     if (!vertex)
         return Kind::NotVertex;
-    return set3 ? Kind::World : Kind::UI;
+    if (set3_vars.empty())
+        return Kind::UI;
+
+    // Pass 2: does anything index member 0 of a set-3 block?
+    for (const Inst &in : insts) {
+        if (in.op != OpAccessChain || in.len < 5)
+            continue;
+        const uint32_t *w = &code[in.start];
+        const uint32_t base = w[3];
+        bool is_set3 = false;
+        for (uint32_t v : set3_vars)
+            if (v == base)
+                is_set3 = true;
+        if (!is_set3)
+            continue;
+        auto it = const_val.find(w[4]); // first index = struct member
+        if (it != const_val.end() && it->second == 0)
+            return Kind::World;
+    }
+    return Kind::UI;
 }
 
 /// Rewrites `code` so every Vertex entry point ends with

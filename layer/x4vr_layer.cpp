@@ -380,6 +380,29 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
             K_world[12] = strtof(sh, nullptr); // column-major: col 3 = translation
             have_k = true;
         }
+        // Phase 4a: a real per-eye matrix derived from X4's projection.
+        //   X4VR_EYE=left|right, X4VR_IPD=<metres>
+        // sx / near default to the values measured at 2816x1408 (see
+        // docs/frame-analysis.md); they are overridable until the layer
+        // derives them from the live camera block automatically.
+        if (const char *eye = getenv("X4VR_EYE")) {
+            const float ipd = getenv("X4VR_IPD")
+                                  ? strtof(getenv("X4VR_IPD"), nullptr)
+                                  : 0.064f;
+            const float sx = getenv("X4VR_PROJ_SX")
+                                 ? strtof(getenv("X4VR_PROJ_SX"), nullptr)
+                                 : 0.889f;
+            const float nz = getenv("X4VR_PROJ_NEAR")
+                                 ? strtof(getenv("X4VR_PROJ_NEAR"), nullptr)
+                                 : 0.1f;
+            const bool right = (eye[0] == 'r' || eye[0] == 'R');
+            const float dx = (right ? +0.5f : -0.5f) * ipd;
+            const x4vr::Mat4 k = x4vr::make_eye_shear(sx, 0.0f, nz, dx);
+            memcpy(K_world, k.m, sizeof(k.m));
+            have_k = true;
+            X4VR_LOG("eye=%s ipd=%.4f sx=%.4f near=%.3f -> K shear m8=%.5f",
+                     right ? "right" : "left", ipd, sx, nz, K_world[8]);
+        }
         if (const char *s = getenv("X4VR_CLIP_K_UI"))
             have_k |= parse16(s, K_ui);
         if (const char *sh = getenv("X4VR_CLIP_SHIFT_UI")) {

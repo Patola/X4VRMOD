@@ -190,6 +190,39 @@ inline Mat4 offset_camera(const Mat4 &view, Major major, float dx, float dy,
     return mul(t, view, major);
 }
 
+// Per-eye clip-space matrix K, derived analytically from X4's projection.
+//
+// X4's projection is (column-major storage; values as measured):
+//     m[0]=sx  m[5]=sy(neg, Y-flip)  m[11]=1  m[14]=near  m[15]=0
+// which for a view-space point (x, y, z, 1) gives
+//     x_c = sx*x     y_c = sy*y     z_c = near     w_c = z
+// (reversed-Z with an infinite far plane: depth = near/z).
+//
+// Offsetting the camera by dx along view-space X means translating the
+// world by -dx, so
+//     x_c' = sx*(x - dx) = x_c - sx*dx
+// and because z_c is the constant `near` for every vertex, that constant
+// term can be expressed against z_c:
+//     x_c' = x_c + (-sx*dx/near) * z_c
+//
+// So K is the identity with a single shear term. In NDC this becomes
+//     x_ndc' = x_ndc - (sx*dx)/z
+// i.e. the shift falls off with view depth — true stereo parallax: near
+// geometry separates strongly, distant stars not at all. (A plain clip-space
+// translation, by contrast, would slide the whole image uniformly and
+// produce no depth cue at all.)
+inline Mat4 make_eye_shear(float sx, float sy, float near_z, float dx,
+                           float dy = 0.0f) {
+    Mat4 k{};
+    for (int i = 0; i < 4; i++)
+        k.m[i * 4 + i] = 1.0f;
+    if (near_z != 0.0f) {
+        k.m[8] = -sx * dx / near_z;  // K[0][2]
+        k.m[9] = -sy * dy / near_z;  // K[1][2]
+    }
+    return k;
+}
+
 inline void format_mat(char *buf, size_t n, const Mat4 &a) {
     snprintf(buf, n,
              "[%8.3f %8.3f %8.3f %8.3f | %8.3f %8.3f %8.3f %8.3f | "

@@ -407,3 +407,68 @@ Better discriminators to try, cheapest first:
 Note for Phase 4: a shifted HUD is not fatal to a first SBS milestone (it
 lands at *some* depth rather than the right one), so this can be solved in
 parallel with the eye split rather than blocking it.
+
+## Phase 4a: the per-eye matrix, and where it may/may not be applied
+
+### Derivation (implemented in `x4vr::make_eye_shear`)
+
+X4's projection gives, for a view-space point `(x, y, z, 1)`:
+
+```
+x_c = sx*x     y_c = sy*y     z_c = near (constant!)     w_c = z
+```
+
+Offsetting the camera by `dx` means translating the world by `-dx`, so
+`x_c' = x_c - sx*dx`. Because `z_c` is the constant `near` for every vertex,
+that constant term can be carried by `z_c`, giving an identity matrix with a
+single shear term:
+
+```
+K[0][2] = -sx*dx/near        (column-major m[8])
+```
+
+In NDC this is `x_ndc' = x_ndc - (sx*dx)/z`: the shift falls off with view
+depth, i.e. **true stereo parallax** — near geometry separates strongly,
+distant stars not at all. (The Phase-3b proof used a plain clip-space
+translation, which slides everything uniformly and carries no depth cue; it
+proved the injection mechanism, not the stereo math.)
+
+Env: `X4VR_EYE=left|right`, `X4VR_IPD=<metres>` (default 0.064),
+`X4VR_PROJ_SX` / `X4VR_PROJ_NEAR` (defaults are the values measured at
+2816×1408; to be derived from the live camera block later).
+
+**Caution:** the shear scales as `dx/near` with `near = 0.1`, so it is ~10×
+`sx*dx`. An "exaggerated for visibility" IPD must stay small — 0.3 m is
+already a strong effect; several metres produces meaningless output.
+
+### Where the matrix is valid — and where it is not
+
+The derivation assumes clip `z_c` is the constant camera near plane. That
+holds only for draws going through the main perspective projection. It is
+**wrong for shadow passes**, which transform through `M_shadowCSM*` in
+light space.
+
+Classification was therefore tightened: a module counts as World only if its
+vertex stage actually **reads member 0 (`M_worldviewprojection`)** of the
+set-3 block, not merely declares the block. On X4's shaders: **94 World / 42
+UI / 4 compute** (this correctly moved two shadow-related fullscreen modules
+into the non-shifted bucket).
+
+That still does not separate shadow *geometry* draws, because X4 bakes the
+light-space matrix into the same `M_worldviewprojection` slot and reuses the
+same shader modules. But the capture settles how to handle it:
+
+> **Shadow and main passes share no pipelines** (shadow passes 5–8 use 9
+> pipelines, main geometry passes 3/46 use 11, intersection = **0**).
+
+So the exclusion belongs at **pipeline creation**, not module creation:
+
+1. Hook `vkCreateRenderPass` and record which passes are depth-only
+   (shadow passes are 2048×2048, D16, no colour attachments).
+2. In `vkCreateShaderModule`, keep **both** variants — the original and the
+   K-patched one.
+3. In `vkCreateGraphicsPipelines`, pick the original variant when the
+   pipeline's render pass is depth-only, the patched variant otherwise.
+
+Static, decided once per pipeline, zero per-frame cost — and it generalises
+to the two-eye case (one pipeline variant per eye) that Phase 4b needs.
