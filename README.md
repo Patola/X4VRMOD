@@ -24,10 +24,15 @@ world-locked quads. See [DESIGN.md](DESIGN.md).
 ## License
 
 **GPLv3** (see [LICENSE](LICENSE)) with a **Section-7 additional permission**
-([LICENSE.exception](LICENSE.exception)) allowing linking / loading /
-hooking / injecting / overlaying against the proprietary X4: Foundations
-Linux binary and its shipped libraries — **GNU/Linux only** (no exception for
-macOS or Windows).
+([LICENSE.exception](LICENSE.exception)) allowing the Program to be linked,
+loaded, injected, interposed or otherwise combined with the **official
+GNU/Linux version of X4: Foundations** published by Egosoft GmbH — including
+via ELF dynamic loading, symbol interposition, runtime code injection,
+function hooking, and Vulkan layer/overlay mechanisms.
+
+The exception does not extend to the Windows, macOS or any other
+non-GNU/Linux version of X4, nor to any other GPL-incompatible program, and
+it grants no rights in X4: Foundations, its trademarks, or any Egosoft code.
 
 ## Credits
 
