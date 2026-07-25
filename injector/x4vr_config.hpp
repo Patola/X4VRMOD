@@ -72,19 +72,28 @@ inline const std::vector<TagOverride> &default_overrides() {
         {"glow", "0"},
         {"uiglow", "0"},
         {"distortion", "false"},
-        // Parallax occlusion mapping. The stored value for "Off" is "none",
-        // NOT "off" -- confirmed by setting it in-game and reading back the
-        // file. "off" round-trips through the config but the options menu
-        // then shows "--", matching no known option (see
-        // injector/README.md).
+        // NOTE: `pom` (parallax occlusion mapping) is deliberately NOT
+        // overridden. Setting it to "none" appears to break X4's own shader
+        // compilation:
         //
-        // This one is *temporary*: POM displaces texture lookups using the
-        // per-fragment view vector, which comes from the camera constants.
-        // Those are not per-eye yet, so both eyes currently compute identical
-        // surface parallax. Once the camera block is patched per eye, POM
-        // becomes correct and should go back on -- unlike ssr, which is
-        // awkward in stereo regardless.
-        {"pom", "none"},
+        //   Failed to compile shader 'shadergl\ogl\p2_complex_water'!
+        //   ERROR: common_frag.glsl:1732: 'textureLod' : no matching
+        //          overloaded function
+        //
+        // which is consistent with POM's height-map sampler being compiled
+        // out while a use of it survives. The evidence is a timeline: the
+        // last run that reached the cockpit served the *invalid* value "off"
+        // (X4 rejects it silently -- the options menu shows "--"), so POM was
+        // never really disabled. The first runs to serve the real value
+        // "none" are the ones that fail. Every other override, ssr=false
+        // included, was already in effect during the good run.
+        //
+        // Disabling it bought nothing yet anyway: POM displaces texture
+        // lookups using the per-fragment view vector from the camera
+        // constants, and those are not per-eye, so today both eyes compute
+        // identical surface parallax either way. Revisit -- carefully, and
+        // only with the compile error reproduced and understood -- when
+        // per-eye lighting lands.
         {"chromaticaberration", "false"},
         {"colorcorrection", "0"},
     };
