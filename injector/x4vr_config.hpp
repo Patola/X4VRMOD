@@ -63,19 +63,19 @@ inline const std::vector<TagOverride> &default_overrides() {
         {"glow", "0"},
         {"uiglow", "0"},
         {"distortion", "false"},
-        // NOTE: <pom> (parallax occlusion mapping) is deliberately NOT
-        // overridden yet. "off" was tried and is *not* a valid config value:
-        // X4 round-trips it through the file but the options menu then shows
-        // "--" (nothing selected), i.e. it matched no known option. The menu
-        // offers Off/Low/Medium/High but the stored string for Off is not
-        // "off", and guessing again risks silently disabling nothing.
+        // Parallax occlusion mapping. The stored value for "Off" is "none",
+        // NOT "off" -- confirmed by setting it in-game and reading back the
+        // file. "off" round-trips through the config but the options menu
+        // then shows "--", matching no known option (see
+        // injector/README.md).
         //
-        // Worth resolving because POM is only a *temporary* problem: it
-        // displaces texture lookups using the per-fragment view vector, which
-        // comes from the camera constants. Those are not per-eye yet, so both
-        // eyes currently compute identical surface parallax. Once the camera
-        // block is patched per eye, POM becomes correct and should stay on --
-        // unlike ssr, which is awkward in stereo regardless.
+        // This one is *temporary*: POM displaces texture lookups using the
+        // per-fragment view vector, which comes from the camera constants.
+        // Those are not per-eye yet, so both eyes currently compute identical
+        // surface parallax. Once the camera block is patched per eye, POM
+        // becomes correct and should go back on -- unlike ssr, which is
+        // awkward in stereo regardless.
+        {"pom", "none"},
         {"chromaticaberration", "false"},
         {"colorcorrection", "0"},
     };
