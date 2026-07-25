@@ -23,7 +23,11 @@ lighting*, the mod intercepts the engine rather than post-processing it:
 
 - The **injector** rewrites `config.xml` **in memory** as X4 reads it, forcing
   a 2:1 side-by-side resolution (2816×1408) and disabling VR-hostile effects.
-  **Your settings file on disk is never modified.**
+  We never write that file — and because X4 itself saves its settings on exit
+  (which would otherwise persist *our* values into your config), the injector
+  restores your original values for exactly the tags it overrode, leaving
+  everything else X4 saved untouched. **Your settings survive a modded
+  session.**
 - **gamescope** provides a virtual display so the game can render larger than
   the monitor, with the mouse still confined correctly.
 - The **Vulkan layer** patches X4's vertex shaders (SPIR-V) to apply a
@@ -57,11 +61,14 @@ blocks every frame.
 | **Stereo**: per-eye `K`, per-eye lighting, SBS composite | next | `sbs_lighting_done` |
 | VR output via OpenXR/WiVRn, menu mode, VR cursor | planned | — |
 
-Known open problem: X4's UI shaders declare the same descriptor set as world
-geometry, so the current classifier does not isolate the HUD, which therefore
-inherits the world eye offset. Candidate fixes are recorded in
-[docs/frame-analysis.md](docs/frame-analysis.md); it affects HUD *depth*, not
-whether stereo works.
+X4's UI shaders don't merely declare the same descriptor set as world
+geometry — they genuinely *read* it, so no static shader analysis can tell
+them apart. Both the UI and the shadow cascades are instead excluded at
+**pipeline creation**, where they are cleanly separable by render pass. This
+matters beyond appearance: X4 hit-tests its UI on the CPU in unshifted screen
+space, so shifting UI on the GPU alone moves what you see away from what you
+can click. Any VR repositioning of menus must therefore go through the cursor
+shim, not the layer — see [docs/frame-analysis.md](docs/frame-analysis.md).
 
 ## Requirements
 
