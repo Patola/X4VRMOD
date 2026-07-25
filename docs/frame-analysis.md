@@ -135,12 +135,48 @@ Other UBO patterns for reference: per-object slots of range 768 (×724) and
 - The UI pass (46) is a separate SRGB pass after all 3D — good news: it can
   be rendered once and composited per-eye at a chosen depth plane.
 
+## Cross-capture comparison (cockpit vs walking vs map)
+
+Three captures parsed (`x4-capture-cockpit.rdc`, `x4-walking-cockpit.rdc`,
+`x4-map.rdc`). The architecture is **identical across scene types**:
+
+| | Cockpit | Walking | Map open |
+|---|---|---|---|
+| Passes / draws | 47 / 742 | 43 / 273 | 50 / 1283 |
+| View arena | buffer 967 | buffer **838** (different run) | buffer 967 (same run as cockpit) |
+| Arena stride/mem | 1792, mem 793+251.9M | 1792, mem 793+251.7M | 1792, mem 793+251.9M |
+| Main-view block | off 3584 (211 draws) | off 8960 (59 draws) | off 8960 (498) **+ 91392 (256), 12544 (131), …** |
+| Shadow cascades | 4× 2048² D16 | 4× | 4× |
+| Compute block | 52 dispatches | 52 | 52 |
+| UI pass | SRGB, 232 draws | SRGB | SRGB, 255 draws |
+| Final | 1-draw blit | same | same |
+
+Conclusions:
+
+1. **Stable architecture.** Same pipeline in every mode; the view arena is
+   always "the UNIFORM_BUFFER referenced by descriptor slots of range 1792"
+   in the memory-793 arena. Buffer *ID and block offsets vary by run and
+   scene* → runtime discovery must be dynamic (pattern-match, don't hardcode).
+2. **The map is a real 3D scene**, not a 2D overlay — 717-draw G-buffer pass
+   of galaxy/sector geometry, plus *multiple* simultaneously-active view
+   blocks. Menu-mode (mono, world-locked quad) remains the right first
+   design, but stereo-map is genuinely possible later.
+3. Consequently, **mode detection cannot come from the render graph** (map
+   looks like gameplay to Vulkan) — it must come from the injector (Lua /
+   game state), as designed.
+4. **Main-view selection rule** for the layer: the range-1792 block bound by
+   draws of the *largest* 6-attachment G-buffer pass. Unambiguous in
+   cockpit/walking; with the map open there are several big views, which is
+   fine because menu mode doesn't patch cameras.
+
 ## Still to determine
 
-- Whether block #2 (offset 3584) is *stably* the main view across frames, or
-  ring-moves (needs a second capture / runtime logging from the layer).
-- The exact remaining ~1088 bytes of the 1792 block (per-view params that may
-  also need per-eye patching, e.g. camera world position for specular).
-- Present-time details: swapchain image count, present mode, and how pass 47
-  maps onto the swapchain image (single full-screen draw — easy overlay
-  point).
+- Frame-to-frame stability of the main-view block offset *within* a run
+  (ring behavior) — answered definitively by Phase-0 layer logging.
+- The remaining ~1088 bytes of the 1792 block (per-view params that may also
+  need per-eye patching, e.g. camera world position for specular).
+- Present-time details: swapchain image count, present mode, and how the
+  final pass maps onto the swapchain image (single full-screen draw — easy
+  overlay point).
+- All three captures are 2816×1385 (config height fix hadn't taken effect);
+  re-verify 2816×1408 next session.
