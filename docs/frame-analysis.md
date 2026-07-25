@@ -516,3 +516,44 @@ multi-attachment float targets (RGBA16F / RG16F / D32). So a render pass
 whose colour attachments are **all 8-bit UNORM/SRGB** is screen-space, and
 its pipelines take the unpatched module variant — decided once, at pipeline
 creation, exactly like the depth-only case.
+
+## Phase 4a validated: the shear is real parallax
+
+Measured 2026-07-25 with `tools/measure_parallax.py`, comparing two captures
+of the same save at the same camera pose: one with `X4VR_EYE` unset (no
+shader patching at all) and one with `X4VR_EYE=right X4VR_IPD=0.3`.
+
+| Region | Shift | Corr | Implied z |
+|---|---:|---:|---:|
+| Starfield (top right) | **0 px** | 0.999 | ∞ |
+| HUD radar (screen space) | **0 px** | 0.708 | — |
+| HUD bars (screen space) | **0 px** | 0.892 | — |
+| Canopy strut (mid) | **−117 px** | 0.788 | 1.60 m |
+| Right hull panel (near) | **−172 px** | 0.801 | 1.09 m |
+
+Three distinct behaviours from one constant matrix:
+
+- **Screen-space UI: exactly 0** — the pipeline-creation exclusion works.
+- **Stars: 0 at correlation 0.999** — this is simultaneously the strongest
+  possible camera-alignment check (the two loads are pixel-identical at
+  infinity) and the far reference. Anything other than 0 here would have
+  meant the poses did not match, not that parallax vanished.
+- **Cockpit: −117 and −172 px** — and crucially the two near regions differ
+  *from each other*, ordered correctly: the hull panel is nearer than the
+  canopy strut, so it moves more.
+
+A uniform clip-space translation would have moved all five regions by an
+identical amount. Four distinct values (0, 0, −117, −172) can only come from
+a shift proportional to 1/z. **The clip-space identity holds in the engine,
+not just on paper.**
+
+The measured displacements are below the 190–375 px band predicted before the
+run, but that band assumed cockpit geometry at 0.5–1 m. The implied depths are
+1.09 m and 1.60 m, and `shift = sx·dx/z` reproduces the measured values there
+exactly — the model is confirmed; only the guessed distances were off.
+
+Note this validates the **geometry** half of a stereo eye. Per-eye *lighting*
+still requires patching the camera block (`M_view`, `M_viewprojection`,
+`M_invprojection(_uj)`, `V_cameraposition` @736, `V_light_direction_view`
+@864), which the deferred passes read; that is the remaining Phase-4a work
+before `sbs_lighting_done`.
