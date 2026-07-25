@@ -83,30 +83,66 @@ position/visibility, effect flags, IPD/convergence.
 
 X4 renders one mono view; stereo needs two eye views **with per-eye
 lighting** (a deferred engine computes view-dependent lighting, so splitting
-only the final image is wrong). Candidate techniques:
+only the final image is wrong).
 
-| Technique | How | Feasibility | Cost |
+Phases 2–3 replaced guesswork with measurement, and the conclusion is not
+what this document originally assumed. Full evidence in
+[docs/frame-analysis.md](docs/frame-analysis.md); the essentials:
+
+- X4 renders **camera-relative**: `M_view` is *identity* in every view block
+  (a space sim must do this for float precision at astronomical distances).
+- Geometry is positioned by a **per-object, CPU-baked
+  `M_worldviewprojection`** in descriptor **set 3**
+  (`BLOCK_BUFFER_BINDING_SLOT_WORLD`), not by the camera block.
+- The **set 1** camera block (`BLOCK_BUFFER_BINDING_SLOT_CAMERA`, 64 members,
+  1792 B) feeds **lighting and post** (`M_invprojection`, `V_cameraposition`,
+  `V_light_direction_view`, …). Patching it alone moves nothing; wiping it
+  blackens the screen.
+- Layouts are known exactly: X4 ships shaders **with SPIR-V debug names**, so
+  every block's members and offsets are readable (`tools/extract_shaders.py`).
+
+### The key simplification (and our main performance lever)
+
+Because `M_view = I`, an eye offset `d` is a pure **view-space translation**,
+so the per-eye transform is a *single constant matrix applied in clip space*:
+
+```
+MVP_eye = P · T(−d) · P⁻¹ · MVP        =>      clip_eye = K_eye · clip
+K_eye   = P · T(−d) · P⁻¹              (one 4×4, changes only with IPD/FOV/res)
+```
+
+This means **we never have to touch the ~1300 per-object constant blocks**.
+One matrix multiply appended to the vertex stage produces the eye view. That
+single fact is what makes a performant implementation realistic.
+
+### Candidate techniques (performance-ranked)
+
+| Technique | How | Cost | Verdict |
 |---|---|---|---|
-| **A. Double-render (replay)** — *primary* | Intercept the scene submit; per eye, patch the camera UBO (IPD offset + projection), set viewport to the L/R half, replay the whole pipeline (geometry + lighting) | Robust; no shader changes; per-eye lighting by construction | ~2x GPU |
-| **B. Multiview (`VK_KHR_multiview`)** — *probe only* | One pass, per-view matrices via `gl_ViewIndex` | Driver supports it, but X4's shaders don't use it -> would need SPIR-V patching of every scene shader. Low feasibility without source | ~1.3x if it worked |
-| **C. Reprojection / DIBR** | *Rejected* — the `v0.1` dead end | — | — |
+| **Multiview + SPIR-V patch** — *target* | Make scene render targets 2-layer arrays, enable `VK_KHR_multiview` on the render passes, patch vertex shaders to apply `K[gl_ViewIndex]` in clip space; lighting/post indexed per view | **~1.2–1.4×** — one draw stream, vertex work amortised, no CPU-side duplication, no sync | Driver supports it (`maxMultiviewViewCount = 8` on RADV). Highest engineering cost, best result |
+| **Double submit (replay)** | Submit X4's command buffers twice with different `K`, capturing each eye's output | ~2× GPU **plus** a CPU/GPU sync between eyes and extra full-frame copies | Fallback / correctness reference only |
+| **Per-object CPU patching** | Rewrite every `M_worldviewprojection` per eye | ~83 KB of scattered writes/frame *plus* serialization | Rejected — needless once the clip-space identity is used |
+| **Reprojection / DIBR** | — | — | Rejected (the `v0.1` dead end) |
 
-Primary path is **A**, but the exact interception point (which submit, which
-UBO holds view/proj, deferred vs forward, where the UI is drawn) is unknown
-until we map the frame in renderdoc. That mapping is an explicit gate — no
-stereo code before it.
+`K_eye` is constant while IPD, FOV and resolution are constant, so it can be
+**baked into the patched pipelines** and only recompiled when those change
+(rare). Shadow matrices (`M_shadowCSM*`) stay shared — they are light-space
+and view-independent, so shadow passes are *not* duplicated.
 
-**Early Phase-2 win (see [docs/frame-analysis.md](docs/frame-analysis.md)):**
-renderdoc already located a single per-view "frame constants" UBO with 11
-named `mat4`s (`M_view`, `M_projection`, `M_invprojection`, `M_viewprojection`,
-`M_viewinverse`, unjittered + jitter variants, and two shadow-CSM clip
-matrices). It contains the depth→view reconstruction matrices, which both
-**confirms X4 is deferred** and means **patching this one UBO per eye makes
-geometry *and* lighting render for that eye** — the per-eye-lighting
-requirement solved at a single interception point. 7 of the 11 matrices are
-patched per eye; the 2 shadow (light-space) and 2 jitter (AA-off) matrices are
-left. Remaining unknown: *how/where* that UBO is written and bound, which
-decides the patch site.
+### Performance principles (this is a mod others will run)
+
+1. **No per-frame CPU work proportional to object count.** The clip-space
+   `K_eye` exists precisely to avoid it.
+2. **No CPU↔GPU sync points** in the frame loop. Anything requiring
+   "submit, wait, patch, submit" is a correctness crutch, not a shipping
+   design.
+3. **Do work once, at pipeline/render-pass creation**, not per draw.
+4. **No extra full-frame copies** beyond the final SBS composite.
+5. **Never duplicate view-independent work**: shadow cascades, and any
+   luminance/exposure passes, render once.
+6. **Measure every phase** against a mono baseline (MangoHud frametimes) and
+   record it; a phase that regresses frametime without a correctness reason
+   does not get tagged.
 
 ## Two runtime modes
 
@@ -128,8 +164,9 @@ distortion. Re-enabled later only where they are VR-safe.
 | 0. Harness | Repo + CMake (C++17) + GPLv3 + linking exception; passthrough Vulkan layer X4 loads; no-op LD_PRELOAD injector; gamescope launcher; logging; this DESIGN.md | `harness_up` |
 | 1. Config + effects (flat, mono) | Injector rewrites the `config.xml` read -> 2816x1408; disables the six+one effects in memory. X4 runs wide-mono, effects off, mouse works, menus reachable | `config_intercept_done` |
 | 2. Frame map | Renderdoc captures (cockpit/walk/map/menu/loading); document the render graph, deferred-vs-forward, camera-matrix location, UI pass, post chain. **Decision point for the stereo mechanism** | `frame_mapped` |
-| 3. Camera control | Layer/injector modifies the mono camera -> the view visibly changes. Proves we can drive the camera | `camera_control_proven` |
-| 4. True SBS on flatscreen (the big one) | Double-render per eye with per-eye camera + viewport, **including lighting**, into 2816x1408 SBS on the swapchain. Cross-eye / SBS-viewer check; mouse still works | `sbs_lighting_done` |
+| 3. Camera control | Prove we can move the rendered view. **Superseded in practice**: measurement showed the camera block does not position geometry; the equivalent proof is now 3b below | `camera_control_proven` |
+| 3b. Clip-space eye transform | SPIR-V-patch the scene vertex shaders to apply a constant `K` in clip space; a non-identity `K` visibly shifts the image. This is the real "we can drive the view" proof, and it is already the Phase-4 mechanism | `clipspace_shift_proven` |
+| 4. True SBS on flatscreen (the big one) | Two eye views with **per-eye lighting**, composited 2816x1408 SBS on the swapchain. Implemented in two steps: **4a** correctness via the simplest working path, **4b** the multiview single-pass path once 4a is a reference to diff against. Cross-eye / SBS-viewer check; mouse still works; frametime recorded vs mono | `sbs_lighting_done` (4a), `sbs_multiview_done` (4b) |
 | 5. VR game mode | Submit the two eyes to OpenXR/WiVRn projection layers; feed headset 6DOF into the per-eye cameras | `vr_gamemode_done` |
 | 6. Menu mode | Game-mode detection -> world-locked mono quad for map/menu/loading | `menu_mode_done` |
 | 7. Cursor | VR-visible cursor for floating dialogs (game mode) and map/menu selection | `cursor_visible_done` |
@@ -154,9 +191,15 @@ Phase 4 is the real project; 0–3 de-risk it; 5–8 are the VR/UX layer on top.
   corner, a save loads.
 - P2: the documented matrix location is reproducible across two captures.
 - P3: a scripted camera offset produces the expected on-screen view shift.
+- P3b: a non-identity clip-space `K` visibly shifts/skews the image, and
+  `K = I` is pixel-identical to an unpatched run.
 - P4: the two halves differ correctly (near objects shift between halves,
   distant stars do not; specular/lighting differs per eye), a real object
   fuses in an SBS viewer, mouse still works, fps >= target.
+- P4 performance gate: record mono vs 4a vs 4b frametimes in
+  `docs/perf.md`. 4b must be materially cheaper than 4a or it is not worth
+  its complexity — and if 4a already meets the frametime budget on this
+  hardware, say so plainly rather than building 4b on principle.
 - P5: in-headset correct eye mapping (left eye sees the left view), stable
   6DOF, no swapped/inverted eyes.
 - P6: entering the map switches to the world-locked quad; leaving returns to
