@@ -63,7 +63,10 @@ blocks every frame.
 | Frame mapped: 47-pass deferred pipeline, constant-buffer layouts | done | `frame_mapped` |
 | Resolution + effects forced in memory (2816×1408 exact) | done | `config_intercept_done` |
 | Clip-space injection proven live (136/140 shaders, `spirv-val` clean) | done | `clipspace_shift_proven` |
-| **Stereo**: per-eye `K`, per-eye lighting, SBS composite | next | `sbs_lighting_done` |
+| Shear is real `1/z` parallax, measured against a mono capture | done | `eye_shear_validated` |
+| Mod runs off its own `config-x4vrmod.xml`; yours is never written | done | `config_profile_done` |
+| SBS container: frame composited into both halves at present time | done | `sbs_container_done` |
+| **Stereo**: per-eye `K`, square eye views, per-eye lighting | next | `sbs_lighting_done` |
 | VR output via OpenXR/WiVRn, menu mode, VR cursor | planned | — |
 
 X4's UI shaders don't merely declare the same descriptor set as world
