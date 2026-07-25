@@ -26,6 +26,12 @@
 #                         frame over the right half. Both halves are the same
 #                         eye for now -- this validates the container, not the
 #                         stereo. Best with X4VR_GAMESCOPE=1.
+#   X4VR_ONE_EYE=1        render a single eye at half the SBS width, in a
+#                         window of exactly that size. No faked surface
+#                         extent, no WSI dependence -- what an OpenXR mirror
+#                         shows. Incompatible with X4VR_SBS.
+#   X4VR_RES=WxH          force X4's render resolution (config res_width /
+#                         res_height); set automatically by X4VR_ONE_EYE
 #   X4VR_SDL_DRIVER=<d>   SDL video driver for the game inside gamescope
 #                         (default x11). The SBS split render REQUIRES x11:
 #                         a Wayland surface reports no preferred extent, and
@@ -112,6 +118,16 @@ if [[ "${X4VR_GAMESCOPE:-0}" == 1 ]]; then
         "$ROOT/common/x4vr_sbs.hpp"; }
     W="${X4VR_W:-$(sbs_dim WIDTH)}"
     H="${X4VR_H:-$(sbs_dim HEIGHT)}"
+    # One-eye mode: size the window to a single eye and let X4 render at
+    # exactly that size. Nothing is faked -- no halved surface capabilities,
+    # no resize feedback on Wayland -- because the render and the window
+    # agree. This is what an OpenXR mirror shows anyway, and it is the mode
+    # to develop the second eye in.
+    if [[ "${X4VR_ONE_EYE:-0}" == 1 ]]; then
+        W=$(( $(sbs_dim WIDTH) / 2 ))
+        H=$(sbs_dim HEIGHT)
+        export X4VR_RES="${W}x${H}"
+    fi
     if [[ -z "$W" || -z "$H" ]]; then
         echo "x4vr-launch: could not read the SBS size from" \
              "common/x4vr_sbs.hpp (set X4VR_W / X4VR_H)" >&2

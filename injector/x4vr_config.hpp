@@ -59,11 +59,38 @@ inline bool sbs_split_render() {
     return on;
 }
 
+// Explicit render resolution, "WxH", overriding everything below. The
+// launcher sets this when it sizes the window itself, which is the
+// no-trickery path: if the window and the render are the same size there is
+// no faked surface extent and nothing for Wayland's resize feedback to undo.
+inline bool res_override(std::string &w, std::string &h) {
+    static std::string ww, hh;
+    static const bool ok = [] {
+        const char *e = getenv("X4VR_RES");
+        if (!e || !*e)
+            return false;
+        const char *x = strchr(e, 'x');
+        if (!x || x == e || !x[1])
+            return false;
+        ww.assign(e, x - e);
+        hh.assign(x + 1);
+        return ww.find_first_not_of("0123456789") == std::string::npos &&
+               hh.find_first_not_of("0123456789") == std::string::npos;
+    }();
+    if (ok) {
+        w = ww;
+        h = hh;
+    }
+    return ok;
+}
+
 inline const std::vector<TagOverride> &default_overrides() {
     // On Wayland the surface reports no preferred extent, so X4 falls back to
     // res_width/res_height -- which makes the config the lever for the split
     // render there. (On X11 currentExtent wins and the layer halves that
     // instead; asking for the eye size here is then simply consistent.)
+    static std::string res_w, res_h;
+    static const bool explicit_res = res_override(res_w, res_h);
     static const std::string eye_w = std::to_string(X4VR_SBS_WIDTH / 2);
     static const bool split = sbs_split_render();
 
@@ -73,8 +100,10 @@ inline const std::vector<TagOverride> &default_overrides() {
         // the height (observed: 1408 -> 1385). With borderless on it ignores
         // them and sizes to the display instead. Hence gamescope at exactly
         // this size -- see common/x4vr_sbs.hpp for the measurements.
-        {"res_width", split ? eye_w.c_str() : X4VR_SBS_WIDTH_STR},
-        {"res_height", X4VR_SBS_HEIGHT_STR},
+        {"res_width", explicit_res ? res_w.c_str()
+                                   : (split ? eye_w.c_str()
+                                            : X4VR_SBS_WIDTH_STR)},
+        {"res_height", explicit_res ? res_h.c_str() : X4VR_SBS_HEIGHT_STR},
         // No decoration to lose, and under a correctly sized gamescope
         // "the display" is already what we asked for.
         {"borderless", "true"},
