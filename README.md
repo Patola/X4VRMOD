@@ -1,29 +1,113 @@
 # X4VRMOD
 
-A VR mod for **X4: Foundations** on native **Linux**, doing true in-engine
-stereoscopic 3D by intercepting the game's own Vulkan rendering — a Vulkan
-layer for stereo/cameras/VR, an `LD_PRELOAD` injector for game state and
-config, and a cursor shim so menus and dialogs are usable in VR.
+A VR mod for **X4: Foundations** on native **Linux**, aiming at true
+in-engine stereoscopic 3D by intercepting the game's own Vulkan rendering —
+rather than reconstructing depth after the fact.
 
-> **Status: early development (v2 rewrite).** The full design and phased
-> roadmap are in **[DESIGN.md](DESIGN.md)**. The earlier proof of concept
-> (OpenTrack + vkShade/SuperDepth3D DIBR) is preserved at tag `v0.1` and was
-> abandoned as a dead end.
+Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
+**`LD_PRELOAD` injector** (config, game state, effects), and a **cursor shim**
+(so menus and dialogs stay usable in VR). Design and phased roadmap in
+**[DESIGN.md](DESIGN.md)**; engine reverse-engineering notes in
+**[docs/frame-analysis.md](docs/frame-analysis.md)**.
 
-## Approach in one paragraph
+> **Status: early development.** The rendering mechanism is proven but stereo
+> itself is not implemented yet — see *Where it stands* below. An earlier
+> proof of concept using OpenTrack head-tracking + vkShade/SuperDepth3D
+> depth-image reconstruction is preserved at tag `v0.1`; it was abandoned as a
+> dead end (wrong pivot, gimbal lock, fragile setup, DIBR artifacts).
 
-Run X4 inside **gamescope** at a 2:1 super-resolution (starting 2816×1408 =
-two 1408×1408 eyes). A Vulkan layer renders the scene **twice per frame**,
-once per eye with its own camera and **per-eye lighting**, into a
-side-by-side image — validated on the flat monitor first, then delivered to
-the headset via **OpenXR / WiVRn** with 6DOF. An injector forces the
-resolution and disables VR-hostile effects **in memory** (no user setting
-changes) and reads X4's game mode so menus/map switch to comfortable
-world-locked quads. See [DESIGN.md](DESIGN.md).
+## How it works
+
+X4 renders one mono view. To make two eye views *with correct per-eye
+lighting*, the mod intercepts the engine rather than post-processing it:
+
+- The **injector** rewrites `config.xml` **in memory** as X4 reads it, forcing
+  a 2:1 side-by-side resolution (2816×1408) and disabling VR-hostile effects.
+  **Your settings file on disk is never modified.**
+- **gamescope** provides a virtual display so the game can render larger than
+  the monitor, with the mouse still confined correctly.
+- The **Vulkan layer** patches X4's vertex shaders (SPIR-V) to apply a
+  constant clip-space matrix per eye, and patches the per-view constants so
+  the deferred lighting matches each eye.
+
+### The key insight
+
+X4 renders **camera-relative** — `M_view` is identity, and geometry is
+positioned by a per-object, CPU-baked `M_worldviewprojection`. That means an
+eye offset `d` is a pure view-space translation, so the whole per-eye
+transform collapses to a single constant matrix applied in clip space:
+
+```
+clip_eye = K_eye · clip        K_eye = P · T(−d) · P⁻¹
+```
+
+`K_eye` only changes when IPD, FOV or resolution change, so it is **baked
+into the patched shaders** — the per-frame cost of stereo geometry is zero.
+This is why the mod does not need to touch the ~1300 per-object constant
+blocks every frame.
+
+## Where it stands
+
+| Phase | State | Tag |
+|---|---|---|
+| Harness: layer + injector + launcher load into X4 | done | `harness_up` |
+| Frame mapped: 47-pass deferred pipeline, constant-buffer layouts | done | `frame_mapped` |
+| Resolution + effects forced in memory (2816×1408 exact) | done | `config_intercept_done` |
+| Clip-space injection proven live (136/140 shaders, `spirv-val` clean) | done | `clipspace_shift_proven` |
+| **Stereo**: per-eye `K`, per-eye lighting, SBS composite | next | `sbs_lighting_done` |
+| VR output via OpenXR/WiVRn, menu mode, VR cursor | planned | — |
+
+Known open problem: X4's UI shaders declare the same descriptor set as world
+geometry, so the current classifier does not isolate the HUD, which therefore
+inherits the world eye offset. Candidate fixes are recorded in
+[docs/frame-analysis.md](docs/frame-analysis.md); it affects HUD *depth*, not
+whether stereo works.
+
+## Requirements
+
+- **X4: Foundations**, native Linux build (developed against 9.00)
+- A **Wayland** session, **gamescope**, and a Vulkan 1.3+ driver
+- For the VR phases: an OpenXR runtime (**WiVRn**/Monado, or SteamVR)
+- Build: CMake ≥ 3.20, a C++17 compiler, Vulkan headers
+
+## Build & run
+
+```sh
+cmake -S . -B build && cmake --build build
+./launch/x4vr-launch.sh                 # launches X4 with layer + injector
+X4VR_GAMESCOPE=1 ./launch/x4vr-launch.sh   # …inside gamescope at 2816×1408
+```
+
+The launcher sets `SteamAppId`, the usual dev flags
+(`-skipintro -nocputhrottle -nosoundthrottle`), core dumps, and the layer /
+preload environment. It also works as a Steam launch-option wrapper:
+`/path/to/launch/x4vr-launch.sh %command%`. Logs go to `/tmp/x4vr.log`
+(`X4VR_LOG=` sends them to stderr instead).
+
+Useful switches: `X4VR_NO_LAYER=1`, `X4VR_NO_INJECT=1`, `X4VR_NO_CONFIG=1`
+(bisect a problem), `X4VR_X11=1` (force the SDL X11 path),
+`X4VR_CLIP_SHIFT=<x>` (clip-space test shift), `X4VR_DUMP_MATRICES=1`.
+
+## Repository layout
+
+```
+layer/      VK_LAYER_X4VR_core — Vulkan layer (stereo, SPIR-V patching)
+injector/   libx4vr_inject.so — LD_PRELOAD (config.xml, game state)
+common/     shared headers: logging, matrices/view block, SPIR-V patcher
+launch/     launcher script (gamescope, env wiring, Steam wrapper)
+tools/      renderdoc capture parser, shader extractor
+docs/       frame analysis and engine notes
+cursor/     VR cursor (planned)
+```
+
+`tools/` is worth knowing about: `parse_capture.py` turns a renderdoc capture
+into a render-pass/buffer report, and `extract_shaders.py` recovers X4's
+constant-buffer layouts from the shipped SPIR-V (X4 ships shaders **with
+debug names**, so the layouts are readable exactly rather than guessed).
 
 ## License
 
-**GPLv3** (see [LICENSE](LICENSE)) with a **Section-7 additional permission**
+**GPLv3** ([LICENSE](LICENSE)) with a **Section-7 additional permission**
 ([LICENSE.exception](LICENSE.exception)) allowing the Program to be linked,
 loaded, injected, interposed or otherwise combined with the **official
 GNU/Linux version of X4: Foundations** published by Egosoft GmbH — including
