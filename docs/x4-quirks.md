@@ -308,6 +308,29 @@ game — nothing to do with the game's own rendering.
 *Do:* run gamescope with `-b` (borderless). The launcher does;
 `X4VR_DECORATED=1` opts out and accepts the bars.
 
+### Leaving the pilot seat pins the view to the floor under gamescope
+
+Leave the seat to walk around the ship and the first-person view locks
+looking down and cannot be raised. Walking still works.
+
+*Cause:* gamescope switches between relative and absolute mouse mode
+**depending on whether the cursor is visible**. X4 hides the cursor and
+switches to mouse-look when you leave the seat; if gamescope is still in
+absolute mode, X4's warp-the-pointer-to-centre has no effect and it reads the
+same offset every frame. Walking is unaffected because it is keyboard.
+
+*Do:* run gamescope with `--force-grab-cursor` (always relative). The
+launcher does; `X4VR_GRAB_CURSOR=0` opts out. Verified live to fix walking
+while leaving mouse steering, direct mouse steering, the map and the menus
+working — the obvious worry, that forcing relative mode breaks the menu
+cursor, does not happen because X4 draws and moves its own cursor.
+
+*The broader point:* this is the cursor shim's problem showing up early. X4
+and the compositor disagreeing about who owns the pointer is the same
+boundary as X4 hit-testing its UI on the CPU in unshifted screen space. Any
+VR pointer design has to own the relative/absolute switch that happens on
+leaving the seat.
+
 ### Relaunching gamescope too quickly fails
 
 ```
