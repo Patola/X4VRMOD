@@ -80,6 +80,22 @@ inline bool set_tag(std::string &xml, const char *tag, const char *value,
     return true;
 }
 
+// Current text of <tag>...</tag>, or false if the tag is absent.
+inline bool get_tag(const std::string &xml, const char *tag,
+                    std::string &out) {
+    const std::string open = std::string("<") + tag + ">";
+    const std::string close = std::string("</") + tag + ">";
+    size_t a = xml.find(open);
+    if (a == std::string::npos)
+        return false;
+    size_t vstart = a + open.size();
+    size_t vend = xml.find(close, vstart);
+    if (vend == std::string::npos)
+        return false;
+    out = xml.substr(vstart, vend - vstart);
+    return true;
+}
+
 // Read a file fully; empty string on failure.
 //
 // IMPORTANT: this runs *inside* our interposed fopen(), so it must not call

@@ -64,10 +64,29 @@ void restore_config() {
     std::string xml = x4vr::read_file(g_config_path.c_str());
     if (xml.empty())
         return;
-    int restored = 0;
-    for (const auto &kv : g_orig_values)
+    // Restore a tag only if X4 wrote back the value we injected. If it wrote
+    // anything else, the player changed that setting in-game this session and
+    // meant it -- reverting would silently undo their choice. (Live runs show
+    // X4 rewrites config.xml repeatedly during a session, not just at exit,
+    // so this distinction matters in practice.)
+    int restored = 0, kept = 0;
+    for (const auto &kv : g_orig_values) {
+        const char *injected = nullptr;
+        for (const auto &ov : x4vr::default_overrides())
+            if (kv.first == ov.tag)
+                injected = ov.value;
+        std::string current;
+        if (injected && x4vr::get_tag(xml, kv.first.c_str(), current) &&
+            current != injected) {
+            kept++;
+            continue; // the player's own change; leave it alone
+        }
         if (x4vr::set_tag(xml, kv.first.c_str(), kv.second.c_str()))
             restored++;
+    }
+    if (kept)
+        X4VR_LOG("config: keeping %d setting(s) the player changed in-game",
+                 kept);
     if (!restored)
         return; // already the player's values — nothing to do
     if (x4vr::write_file(g_config_path.c_str(), xml))
