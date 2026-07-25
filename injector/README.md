@@ -4,66 +4,65 @@
 for its role in the project. This file records the behaviour of the
 `config.xml` interception, which has more sharp edges than it looks.
 
-## How the config interception works
+## The mod runs off its own settings file
 
-X4 reads `config.xml` with `fopen()`. We interpose it, read the real file,
-rewrite the tags we need **in a memory buffer**, and hand X4 a stream over
-that buffer. Anything that fails falls back to the untouched file.
+The first time X4 asks for `config.xml`, the injector copies it verbatim to
+**`config-x4vrmod.xml`** in the same directory. From then on, in a modded
+session:
 
-The stream is backed by `memfd_create()`, **not** `fmemopen()`. An
+- every **read** of `config.xml` is answered from the profile, with the
+  overrides in [`x4vr_config.hpp`](x4vr_config.hpp) applied in memory;
+- every **write** to `config.xml` is redirected into the profile.
+
+So the player's `config.xml` is opened read-only, exactly once, and never
+written. Settings changed in-game while modded persist — in the profile —
+and vanilla launches are completely unaffected.
+
+**Uninstalling:** delete `config-x4vrmod.xml`. Deleting it also re-forks from
+the current `config.xml`, which is how to pull in settings changed in a
+vanilla session (the profile does not track them; it is a fork, not a view).
+
+The read path serves a `memfd_create()` stream, **not** `fmemopen()`. An
 `fmemopen()` stream has no real file descriptor, so `fileno()`/`fstat()` in
 X4's XML reader fail and X4 silently falls back to its defaults — which
 presents as the game launching at desktop resolution for no visible reason.
 A memfd has a real fd and is still purely in memory.
 
-## We do not write config.xml — but X4 does
+Overrides are re-applied on **every** read, not baked into the profile at
+fork time. If the player sets one of our managed tags in the options menu,
+X4 writes their choice to the profile and we override it again next launch —
+we neither lose their value nor obey it.
 
-This is the part that is easy to get wrong. X4 **saves its settings** with the
-values it is currently running, which are ours. Left alone, a single modded
-session permanently rewrites the player's resolution and effect settings.
+Why a profile at all: the earlier design let X4 write `config.xml` and then
+put the player's values back afterwards. That needed an `atexit` hook with
+careful `fflush` ordering, and a heuristic to distinguish *"X4 saved our
+injected value"* from *"the player changed this in the menu"* — and live runs
+showed X4 rewrites the file repeatedly **during** a session, not just at
+exit, so the heuristic ran constantly. The profile makes all of it moot.
 
-So the injector snapshots the pre-run value of every tag it overrides and puts
-those back after X4 has written the file, keeping everything else X4 saved.
-
-Two details that only live testing revealed:
-
-- **X4 rewrites `config.xml` repeatedly during a session**, not just at exit.
-- **A tag is restored only if X4 wrote back exactly the value we injected.**
-  If X4 wrote anything else, the player changed that setting in the options
-  menu this session and meant it, so it is left alone. Without this rule the
-  restore silently undoes the player's own changes.
-
-Writes always pass straight through to the real file and are only fixed up
-afterwards, so a failure in this path can fail to restore but can never lose
-settings. The `atexit` fallback calls `fflush(NULL)` first, because `exit()`
-runs handlers *before* flushing stdio — restoring first would be undone by
-the flush a moment later.
-
-## Knock-on effects: overrides can change settings we do not manage
+### Knock-on effects, and why the profile settles them
 
 **Observed live:** forcing `fullscreen=false` caused X4 to change
-`presentmode` from `immediate` to `mailbox` on its own. We do not override
-`presentmode`, so the restore correctly left it — but the value persisted
-after the session.
+`presentmode` from `immediate` to `mailbox` **on its own**. We never override
+`presentmode`, so a restore-based scheme correctly left it alone — and the
+value persisted into the player's config anyway.
 
-The implication is that "we only touch our own tags" is **not** the same as
-"the player's config is unaffected". Our overrides change the conditions X4
+The lesson generalises: *"we only touch our own tags"* is not the same as
+*"the player's config is unaffected"*. Our overrides change the conditions X4
 evaluates its other settings under, and X4 may legitimately rewrite those.
+Any scheme that lets X4 write the real file has to enumerate derivations it
+cannot know. Redirecting the write is the only fix that does not need to.
 
-This is currently accepted rather than fixed, because the two available fixes
-both have real costs:
+### Fallbacks
 
-- Snapshot the *whole* file and restore any tag X4 changed that we did not
-  ask it to. Bigger hammer, and it would also revert genuine player changes
-  unless we can tell them apart — which is exactly the problem the
-  "did X4 write back our injected value" rule solves for our own tags, and
-  which does not generalise to tags we never touched.
-- Grow the override list to cover every setting X4 might derive from ours.
-  Requires knowing the derivations, which we do not.
+Every step degrades to the pre-profile behaviour rather than to data loss:
+if the profile cannot be read *or* created, reads pass through to the real
+file untouched and writes go where they always would have. If `config.xml`
+itself is missing (fresh install), X4 creates its own default file — running
+unmodded for that one launch — and the next read forks from it.
 
-If a knock-on effect is ever found that actually harms the player (a lost
-keybind, say, rather than a present-mode difference), revisit with evidence
-rather than pre-emptively.
+`X4VR_NO_CONFIG=1` disables the whole path: no profile, no overrides, no
+redirect.
 
 ## Config value gotchas
 
@@ -81,7 +80,9 @@ back to the file happily, and the only symptom is that the options menu shows
 silently does nothing while looking like it worked. Verify a new value by
 setting it in-game once and reading back the file.
 
-## Environment
+## Files and environment
 
+- `config-x4vrmod.xml` — the mod's settings, beside X4's `config.xml` in
+  `~/.config/EgoSoft/X4/<id>/`. Delete to reset or uninstall.
 - `X4VR_NO_CONFIG=1` — disable config interception entirely.
 - `X4VR_NO_INJECT=1` (launcher) — do not preload the injector at all.

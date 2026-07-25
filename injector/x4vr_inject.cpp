@@ -2,14 +2,16 @@
 //
 // libx4vr_inject.so — LD_PRELOAD injector.
 //
-// Phase 1: rewrite X4's config.xml IN MEMORY as the game reads it, so the
-// player's settings file on disk is never modified (non-intrusive by
-// design). We force the 2:1 SBS resolution and disable the effects that
-// interfere with stereo rendering.
+// Phase 1: give X4 its own settings file when running under the mod.
+// config.xml is forked once into config-x4vrmod.xml; from then on every read
+// is answered from the profile (with our overrides applied in memory) and
+// every write is redirected into it, so the player's settings file on disk
+// is never modified. See injector/README.md and x4vr_config.hpp.
 //
-// X4 reads the file with fopen() (confirmed live), so that is the primary
-// hook; the open()/openat() family is still interposed for observation and
-// as a safety net if a future patch changes the access path.
+// X4 both reads and writes the file with fopen() (confirmed live), so that
+// is the primary hook; the open()/openat() family is interposed for
+// observation, and redirects writes as a safety net in case a future patch
+// changes the access path.
 //
 // Later phases add LuaJIT FFI and SDL hooks.
 
@@ -23,11 +25,7 @@
 
 #include <cstdio>
 #include <cstdlib>
-#include <mutex>
-#include <set>
 #include <string>
-#include <utility>
-#include <vector>
 
 #define X4VR_LOG_TAG "inject"
 #include "../common/x4vr_log.hpp"
@@ -47,107 +45,58 @@ bool overrides_disabled() {
     return off;
 }
 
-// The player's pre-run value for every tag we override, captured the first
-// time X4 reads config.xml — before we patch anything. X4 rewrites the file
-// on exit with the values it is running (i.e. ours), so this is what we put
-// back afterwards. See x4vr_config.hpp.
-std::mutex g_orig_mu;
-std::string g_config_path;
-std::vector<std::pair<std::string, std::string>> g_orig_values;
+// The mod's settings file and its contents. `xml` is empty if we could not
+// establish one, in which case the caller leaves X4's own file alone.
+struct Profile {
+    std::string path;
+    std::string xml;
+};
 
-// Put the player's values back for our tags only, keeping everything else
-// X4 saved. Idempotent, so it is safe to call from both fclose() and exit.
-void restore_config() {
-    std::lock_guard<std::mutex> lock(g_orig_mu);
-    if (g_config_path.empty() || g_orig_values.empty())
-        return;
-    std::string xml = x4vr::read_file(g_config_path.c_str());
-    if (xml.empty())
-        return;
-    // Restore a tag only if X4 wrote back the value we injected. If it wrote
-    // anything else, the player changed that setting in-game this session and
-    // meant it -- reverting would silently undo their choice. (Live runs show
-    // X4 rewrites config.xml repeatedly during a session, not just at exit,
-    // so this distinction matters in practice.)
-    int restored = 0, kept = 0;
-    for (const auto &kv : g_orig_values) {
-        const char *injected = nullptr;
-        for (const auto &ov : x4vr::default_overrides())
-            if (kv.first == ov.tag)
-                injected = ov.value;
-        std::string current;
-        if (injected && x4vr::get_tag(xml, kv.first.c_str(), current) &&
-            current != injected) {
-            kept++;
-            continue; // the player's own change; leave it alone
-        }
-        if (x4vr::set_tag(xml, kv.first.c_str(), kv.second.c_str()))
-            restored++;
+// Load config-x4vrmod.xml, forking it verbatim from the player's config.xml
+// the first time. The fork is a plain copy: the overrides are applied in
+// memory on every read (see open_patched_config), so baking them into the
+// file would be redundant — and keeping the copy verbatim means the profile
+// starts out as an honest snapshot of the player's own preferences.
+Profile load_profile(const char *config_path) {
+    Profile p;
+    p.path = x4vr::profile_path(config_path);
+    if (p.path.empty())
+        return p;
+    p.xml = x4vr::read_file(p.path.c_str());
+    if (!p.xml.empty())
+        return p; // already forked (also re-forks if it was left empty)
+
+    p.xml = x4vr::read_file(config_path);
+    if (p.xml.empty()) {
+        X4VR_LOG("config: could not read %s — passing through", config_path);
+        return p;
     }
-    if (kept)
-        X4VR_LOG("config: keeping %d setting(s) the player changed in-game",
-                 kept);
-    if (!restored)
-        return; // already the player's values — nothing to do
-    if (x4vr::write_file(g_config_path.c_str(), xml))
-        X4VR_LOG("config: restored %d player setting(s) in %s after X4 saved",
-                 restored, g_config_path.c_str());
+    if (x4vr::write_file(p.path.c_str(), p.xml))
+        X4VR_LOG("config: created %s from your config.xml — X4's settings go "
+                 "there while modded; delete it to reset",
+                 p.path.c_str());
     else
-        X4VR_LOG("config: WARNING could not restore %s", g_config_path.c_str());
-}
-
-// Streams X4 opened on config.xml for writing, so fclose() knows when the
-// saved file has landed and can be fixed up.
-std::mutex g_wr_mu;
-std::set<FILE *> g_config_writes;
-
-void note_config_write(FILE *f) {
-    std::lock_guard<std::mutex> lock(g_wr_mu);
-    g_config_writes.insert(f);
-}
-
-bool take_config_write(FILE *f) {
-    std::lock_guard<std::mutex> lock(g_wr_mu);
-    return g_config_writes.erase(f) > 0;
-}
-
-// exit() runs atexit handlers *before* it flushes and closes stdio streams.
-// So if X4 ever leaves its config stream unflushed, restoring here without
-// forcing the flush first would be undone a moment later by that flush
-// writing our injected values back out. Flush everything, then restore.
-void restore_config_atexit() {
-    fflush(nullptr);
-    restore_config();
+        X4VR_LOG("config: WARNING could not create %s — settings changed this "
+                 "session will not persist",
+                 p.path.c_str());
+    return p;
 }
 
 // Build the rewritten config and return a stream over it, or nullptr to let
 // the caller fall back to the real file.
 FILE *open_patched_config(const char *path) {
-    std::string xml = x4vr::read_file(path);
-    if (xml.empty()) {
-        X4VR_LOG("config: could not read %s — passing through", path);
+    Profile prof = load_profile(path);
+    if (prof.xml.empty())
         return nullptr;
-    }
+    std::string xml = std::move(prof.xml);
 
+    // Applied on every read, not just the first: if the player changes one of
+    // these in the options menu, X4 writes it to the profile and we override
+    // it again next launch. Every *other* setting they change persists.
     int changed = 0;
-    bool capture = false;
-    {
-        std::lock_guard<std::mutex> lock(g_orig_mu);
-        capture = g_orig_values.empty();
-        if (capture) {
-            g_config_path = path;
-            static std::once_flag once;
-            std::call_once(once, [] { atexit(restore_config_atexit); });
-        }
-    }
     for (const auto &ov : x4vr::default_overrides()) {
         std::string old;
-        const bool did = x4vr::set_tag(xml, ov.tag, ov.value, &old);
-        if (capture && !old.empty()) {
-            std::lock_guard<std::mutex> lock(g_orig_mu);
-            g_orig_values.emplace_back(ov.tag, old);
-        }
-        if (did) {
+        if (x4vr::set_tag(xml, ov.tag, ov.value, &old)) {
             X4VR_LOG("config: %s: '%s' -> '%s'", ov.tag, old.c_str(), ov.value);
             changed++;
         }
@@ -176,10 +125,24 @@ FILE *open_patched_config(const char *path) {
         ::close(fd);
         return nullptr;
     }
-    X4VR_LOG("config: serving patched %s in memory (%zu bytes, %d changes; "
-             "we never write it, and X4's own save is undone on exit)",
-             path, xml.size(), changed);
+    X4VR_LOG("config: serving %s in memory (%zu bytes, %d overrides applied); "
+             "your %s is not touched",
+             prof.path.c_str(), xml.size(), changed, path);
     return f;
+}
+
+// If this is a write-mode open of X4's config.xml, the path to use instead
+// (empty = leave the call alone). X4 saving its settings must never reach the
+// player's file. Absolute paths only: an *at() call with a relative path
+// resolves against dirfd, which our profile lookup cannot see.
+std::string redirect_write(const char *path) {
+    if (overrides_disabled() || !path || path[0] != '/' ||
+        !x4vr::is_x4_config(path))
+        return {};
+    Profile prof = load_profile(path);
+    if (prof.xml.empty())
+        return {};
+    return prof.path;
 }
 
 template <typename T>
@@ -214,6 +177,11 @@ int open(const char *path, int flags, ...) {
     }
     if (is_config_xml(path))
         X4VR_LOG("open(%s, 0x%x)", path, flags);
+    if ((flags & O_ACCMODE) != O_RDONLY) {
+        const std::string to = redirect_write(path);
+        if (!to.empty())
+            return real_open(to.c_str(), flags, mode);
+    }
     return real_open(path, flags, mode);
 }
 
@@ -229,6 +197,11 @@ int open64(const char *path, int flags, ...) {
     }
     if (is_config_xml(path))
         X4VR_LOG("open64(%s, 0x%x)", path, flags);
+    if ((flags & O_ACCMODE) != O_RDONLY) {
+        const std::string to = redirect_write(path);
+        if (!to.empty())
+            return real_open64(to.c_str(), flags, mode);
+    }
     return real_open64(path, flags, mode);
 }
 
@@ -244,6 +217,11 @@ int openat(int dirfd, const char *path, int flags, ...) {
     }
     if (is_config_xml(path))
         X4VR_LOG("openat(%d, %s, 0x%x)", dirfd, path, flags);
+    if ((flags & O_ACCMODE) != O_RDONLY) {
+        const std::string to = redirect_write(path);
+        if (!to.empty())
+            return real_openat(dirfd, to.c_str(), flags, mode);
+    }
     return real_openat(dirfd, path, flags, mode);
 }
 
@@ -259,34 +237,38 @@ int openat64(int dirfd, const char *path, int flags, ...) {
     }
     if (is_config_xml(path))
         X4VR_LOG("openat64(%d, %s, 0x%x)", dirfd, path, flags);
+    if ((flags & O_ACCMODE) != O_RDONLY) {
+        const std::string to = redirect_write(path);
+        if (!to.empty())
+            return real_openat64(dirfd, to.c_str(), flags, mode);
+    }
     return real_openat64(dirfd, path, flags, mode);
 }
 
-// Read-only opens of X4's own config.xml get the patched in-memory copy.
-// Writes (the game saving settings) pass straight through to the real file,
-// so a failure here can never lose the player's settings — we only fix the
-// file up afterwards, in x4vr_note_config_write()'s fclose().
-static bool wants_patch(const char *path, const char *mode) {
-    return !overrides_disabled() && x4vr::is_x4_config(path) && mode &&
-           mode[0] == 'r' && !strchr(mode, '+');
-}
-
-static bool is_write_mode(const char *mode) {
-    return mode && (mode[0] == 'w' || mode[0] == 'a' || strchr(mode, '+'));
+// Read-only opens of X4's own config.xml get the profile, patched in memory.
+// Anything else — the game saving its settings — is redirected to the
+// profile file, so it lands in ours instead of the player's. If either path
+// fails we fall through to the real file untouched, which for a write means
+// the pre-profile behaviour rather than a lost save.
+static bool is_read_only(const char *mode) {
+    return mode && mode[0] == 'r' && !strchr(mode, '+');
 }
 
 FILE *fopen(const char *path, const char *mode) {
     static auto real_fopen = real<FILE *(*)(const char *, const char *)>("fopen");
     if (is_config_xml(path))
         X4VR_LOG("fopen(%s, %s)", path, mode);
-    if (wants_patch(path, mode)) {
-        if (FILE *f = open_patched_config(path))
-            return f;
+    if (!overrides_disabled() && x4vr::is_x4_config(path)) {
+        if (is_read_only(mode)) {
+            if (FILE *f = open_patched_config(path))
+                return f;
+        } else {
+            Profile prof = load_profile(path);
+            if (!prof.xml.empty())
+                return real_fopen(prof.path.c_str(), mode);
+        }
     }
-    FILE *f = real_fopen(path, mode);
-    if (f && x4vr::is_x4_config(path) && is_write_mode(mode))
-        note_config_write(f);
-    return f;
+    return real_fopen(path, mode);
 }
 
 FILE *fopen64(const char *path, const char *mode) {
@@ -294,27 +276,17 @@ FILE *fopen64(const char *path, const char *mode) {
         real<FILE *(*)(const char *, const char *)>("fopen64");
     if (is_config_xml(path))
         X4VR_LOG("fopen64(%s, %s)", path, mode);
-    if (wants_patch(path, mode)) {
-        if (FILE *f = open_patched_config(path))
-            return f;
+    if (!overrides_disabled() && x4vr::is_x4_config(path)) {
+        if (is_read_only(mode)) {
+            if (FILE *f = open_patched_config(path))
+                return f;
+        } else {
+            Profile prof = load_profile(path);
+            if (!prof.xml.empty())
+                return real_fopen64(prof.path.c_str(), mode);
+        }
     }
-    FILE *f = real_fopen64(path, mode);
-    if (f && x4vr::is_x4_config(path) && is_write_mode(mode))
-        note_config_write(f);
-    return f;
-}
-
-// X4 saves settings on exit; as soon as it closes that stream the file on
-// disk holds our injected values, so put the player's back immediately. The
-// atexit() hook registered in open_patched_config() is the safety net for
-// the case where the stream is never explicitly closed.
-int fclose(FILE *f) {
-    static auto real_fclose = real<int (*)(FILE *)>("fclose");
-    const bool was_config = take_config_write(f);
-    int r = real_fclose(f);
-    if (was_config)
-        restore_config();
-    return r;
+    return real_fopen64(path, mode);
 }
 
 } // extern "C"

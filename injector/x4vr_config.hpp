@@ -1,18 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH x4vrmod-linking-exception
 //
-// x4vr_config.hpp — in-memory rewriting of X4's config.xml.
+// x4vr_config.hpp — X4's config.xml, forked into a mod-owned profile.
 //
-// Non-intrusive by design: we read the player's file, rewrite the tags we
-// need in a memory buffer, and hand X4 a stream over that buffer. If
-// anything fails we fall back to the untouched file.
+// Non-intrusive by design, in two parts:
 //
-// We never write the file ourselves — but X4 does. It saves its settings on
-// exit, persisting whatever it is currently running with, which is *our*
-// injected values (observed live: a player's config.xml left at 2816x1408 /
-// borderless / antialiasing=none after a session). So the injector also
-// remembers the pre-run value of every tag it overrides and restores just
-// those tags after X4 has written the file, leaving every other setting X4
-// saved — volumes, keybinds, genuine player changes — exactly as written.
+//   1. The mod runs off its own file, config-x4vrmod.xml, forked verbatim
+//      from the player's config.xml the first time it is needed. Every read
+//      X4 makes of config.xml is answered from the profile, and every write
+//      is redirected into it. The player's file is opened read-only, once,
+//      and never again — which matters because X4 saves its settings while
+//      running, and would otherwise persist *our* values into it (observed
+//      live: a config.xml left at 2816x1408 / antialiasing=none afterwards).
+//
+//   2. The overrides below are applied to the profile **in memory** on each
+//      read, so they hold even if the player changes those settings in the
+//      options menu mid-session. Everything else the player changes is
+//      written to the profile by X4 and simply persists.
+//
+// If anything in this path fails we fall back to serving the untouched file.
 #pragma once
 
 #ifndef _GNU_SOURCE
@@ -104,22 +109,6 @@ inline bool set_tag(std::string &xml, const char *tag, const char *value,
     return true;
 }
 
-// Current text of <tag>...</tag>, or false if the tag is absent.
-inline bool get_tag(const std::string &xml, const char *tag,
-                    std::string &out) {
-    const std::string open = std::string("<") + tag + ">";
-    const std::string close = std::string("</") + tag + ">";
-    size_t a = xml.find(open);
-    if (a == std::string::npos)
-        return false;
-    size_t vstart = a + open.size();
-    size_t vend = xml.find(close, vstart);
-    if (vend == std::string::npos)
-        return false;
-    out = xml.substr(vstart, vend - vstart);
-    return true;
-}
-
 // Read a file fully; empty string on failure.
 //
 // IMPORTANT: this runs *inside* our interposed fopen(), so it must not call
@@ -181,6 +170,17 @@ inline bool is_x4_config(const char *path) {
     const char *slash = strrchr(path, '/');
     const char *base = slash ? slash + 1 : path;
     return strcmp(base, "config.xml") == 0;
+}
+
+// The mod's own settings file, alongside X4's: .../config-x4vrmod.xml.
+// Deliberately does not contain "config.xml" as a substring, so none of the
+// injector's own path tests can ever match it.
+inline std::string profile_path(const char *config_path) {
+    std::string p = config_path ? config_path : "";
+    const size_t slash = p.rfind('/');
+    p.replace(slash == std::string::npos ? 0 : slash + 1, std::string::npos,
+              "config-x4vrmod.xml");
+    return p;
 }
 
 } // namespace x4vr

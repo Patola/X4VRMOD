@@ -21,13 +21,13 @@ Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
 X4 renders one mono view. To make two eye views *with correct per-eye
 lighting*, the mod intercepts the engine rather than post-processing it:
 
-- The **injector** rewrites `config.xml` **in memory** as X4 reads it, forcing
-  a 2:1 side-by-side resolution (2816×1408) and disabling VR-hostile effects.
-  We never write that file — and because X4 itself saves its settings on exit
-  (which would otherwise persist *our* values into your config), the injector
-  restores your original values for exactly the tags it overrode, leaving
-  everything else X4 saved untouched. **Your settings survive a modded
-  session.**
+- The **injector** gives X4 its own settings file. On first run it forks your
+  `config.xml` into `config-x4vrmod.xml`; after that, every read is answered
+  from the profile with the VR overrides applied **in memory** (2:1
+  side-by-side at 2816×1408, VR-hostile effects off), and every write X4 makes
+  is redirected into the profile. **Your `config.xml` is read once and never
+  written**, so vanilla launches are untouched — and settings you change
+  in-game while modded still persist. To uninstall, delete the profile.
 - **gamescope** provides a virtual display so the game can render larger than
   the monitor, with the mouse still confined correctly.
 - The **Vulkan layer** patches X4's vertex shaders (SPIR-V) to apply a
