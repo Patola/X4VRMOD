@@ -12,9 +12,11 @@ endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_compile_options(-Wall -Wextra)
 
-# Components are added as they come online (Phase 0+). Kept commented so a
-# fresh checkout configures cleanly before any component exists.
-# add_subdirectory(common)
-# add_subdirectory(layer)
-# add_subdirectory(injector)
-# add_subdirectory(cursor)
+find_package(Threads REQUIRED)
+find_package(Vulkan REQUIRED) # headers; the layer does not link libvulkan
+
+include_directories(${Vulkan_INCLUDE_DIRS})
+
+add_subdirectory(layer)
+add_subdirectory(injector)
+# add_subdirectory(cursor)   # later phase

@@ -1,0 +1,15 @@
+{
+    "file_format_version": "1.2.0",
+    "layer": {
+        "name": "VK_LAYER_X4VR_core",
+        "type": "GLOBAL",
+        "library_path": "@X4VR_LAYER_LIB@",
+        "api_version": "1.4.350",
+        "implementation_version": "1",
+        "description": "X4VRMOD core layer: stereo/VR rendering for X4 Foundations (GPLv3 + Linux X4 linking exception)",
+        "functions": {
+            "vkGetInstanceProcAddr": "x4vr_GetInstanceProcAddr",
+            "vkGetDeviceProcAddr": "x4vr_GetDeviceProcAddr"
+        }
+    }
+}
