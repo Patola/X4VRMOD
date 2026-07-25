@@ -29,7 +29,12 @@ lighting*, the mod intercepts the engine rather than post-processing it:
   written**, so vanilla launches are untouched — and settings you change
   in-game while modded still persist. To uninstall, delete the profile.
 - **gamescope** provides a virtual display so the game can render larger than
-  the monitor, with the mouse still confined correctly.
+  the monitor, with the mouse still confined correctly. It is **required**,
+  not a convenience: X4 honours `res_width`/`res_height` only when
+  `borderless` is off, and then loses the titlebar height (1408 → 1385);
+  with `borderless` on it ignores them and sizes to the display. Setting the
+  display to exactly 2816×1408 is what makes the two agree, and the layer
+  warns if the swapchain comes up any other size.
 - The **Vulkan layer** patches X4's vertex shaders (SPIR-V) to apply a
   constant clip-space matrix per eye, and patches the per-view constants so
   the deferred lighting matches each eye.

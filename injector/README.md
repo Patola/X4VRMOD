@@ -74,6 +74,20 @@ X4's enum strings do not always match the option label shown in the menu.
 | `pom` | Off | `none` (**not** `off`) |
 | `pom` | Low / Medium / High | `low` / `medium` / `high` |
 
+`res_width` / `res_height` are the sharpest of these, because they are
+silently *conditional*:
+
+| `borderless` | What X4 does with `res_width`/`res_height` |
+|---|---|
+| `false` | Honours them, minus the window decoration (1408 → **1385**) |
+| `true` | **Ignores them** and sizes to the display |
+
+Measured with an identical served config: 2816×1408 under a 2816×1408
+gamescope, 3440×1440 on a 3440×1440 desktop. Neither run logged anything
+unusual — the override was applied to the buffer both times — so this is
+invisible unless you check the swapchain. The layer now warns when it is not
+the expected size. See [`../common/x4vr_sbs.hpp`](../common/x4vr_sbs.hpp).
+
 An **invalid** value does not error and is not rejected on load: X4 writes it
 back to the file happily, and the only symptom is that the options menu shows
 `--` for that setting, meaning it matched no known option. So a wrong guess

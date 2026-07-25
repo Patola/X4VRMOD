@@ -29,6 +29,7 @@
 
 #define X4VR_LOG_TAG "layer"
 #include "../common/x4vr_log.hpp"
+#include "../common/x4vr_sbs.hpp"
 #include "../common/x4vr_spirv.hpp"
 #include "../common/x4vr_view.hpp"
 
@@ -998,6 +999,28 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
              ci->imageExtent.width, ci->imageExtent.height, ci->minImageCount,
              (int)ci->imageFormat, (int)ci->presentMode,
              r == VK_SUCCESS ? "ok" : "FAILED");
+    // The injector forces res_width/res_height, but X4 only honours them when
+    // borderless is off; with borderless on it sizes to the display and
+    // ignores them (observed: identical config gave 2816x1408 under a
+    // 2816x1408 gamescope and 3440x1440 on a 3440x1440 desktop). So the
+    // config alone does not guarantee the size, and the SBS split needs an
+    // exact 2:1 -- an odd size here silently halves into two wrong eyes.
+    // Say so loudly, once.
+    if (r == VK_SUCCESS) {
+        const uint32_t w = ci->imageExtent.width, h = ci->imageExtent.height;
+        static uint32_t warned_w = 0, warned_h = 0;
+        if ((w != X4VR_SBS_WIDTH || h != X4VR_SBS_HEIGHT) &&
+            (w != warned_w || h != warned_h)) {
+            warned_w = w;
+            warned_h = h;
+            X4VR_LOG("WARNING swapchain is %ux%u, expected %dx%d -- X4 sized "
+                     "to the display, not to res_width/res_height (borderless "
+                     "does that). Run under gamescope at %dx%d; the SBS split "
+                     "will be wrong otherwise.",
+                     w, h, X4VR_SBS_WIDTH, X4VR_SBS_HEIGHT, X4VR_SBS_WIDTH,
+                     X4VR_SBS_HEIGHT);
+        }
+    }
     return r;
 }
 

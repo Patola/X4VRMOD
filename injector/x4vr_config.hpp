@@ -33,6 +33,8 @@
 #include <string>
 #include <vector>
 
+#include "../common/x4vr_sbs.hpp"
+
 namespace x4vr {
 
 struct TagOverride {
@@ -46,16 +48,18 @@ struct TagOverride {
 // antialiasing uses the string "none").
 inline const std::vector<TagOverride> &default_overrides() {
     static const std::vector<TagOverride> v = {
-        {"res_width", "2816"},
-        {"res_height", "1408"},
-        // Decorated windows lose the titlebar height from the requested
-        // size (observed: 1408 -> 1385 both on the desktop and inside
-        // gamescope), which would break the exact 2:1 SBS split.
+        // These two are necessary but NOT sufficient: X4 only honours them
+        // when borderless is off, and then loses the window decoration from
+        // the height (observed: 1408 -> 1385). With borderless on it ignores
+        // them and sizes to the display instead. Hence gamescope at exactly
+        // this size -- see common/x4vr_sbs.hpp for the measurements.
+        {"res_width", X4VR_SBS_WIDTH_STR},
+        {"res_height", X4VR_SBS_HEIGHT_STR},
+        // No decoration to lose, and under a correctly sized gamescope
+        // "the display" is already what we asked for.
         {"borderless", "true"},
-        // Borderless *windowed* at an exact size is the configuration the
-        // SBS split is validated against. Leaving fullscreen on would let
-        // X4 pick the output's mode instead, which is only coincidentally
-        // 2816x1408 (and only inside gamescope).
+        // Leaving fullscreen on would let X4 pick the output's mode, which
+        // is a mode-set we neither need nor control.
         {"fullscreen", "false"},
         // Screen-space reflections reproject the frame's own depth buffer,
         // which is computed for one view. Until the camera block is patched
