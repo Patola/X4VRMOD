@@ -36,6 +36,10 @@
 #                         Without it, antialiasing=none paints the frame with
 #                         saturated RGB blocks -- stale DCC metadata. Turning
 #                         it off is only useful for measuring its cost.
+#   X4VR_GRAB_CURSOR=1    gamescope --force-grab-cursor: always relative mouse
+#                         mode. Fixes the first-person view pinning to the
+#                         floor after leaving the pilot seat. May affect menu
+#                         cursor behaviour -- opt-in until confirmed.
 #   X4VR_DECORATED=1      leave gamescope's host window decorated. The
 #                         titlebar shortens it by 23px, so gamescope scales
 #                         its nested display to fit and pads the sides.
@@ -183,6 +187,13 @@ if [[ "${X4VR_GAMESCOPE:-0}" == 1 ]]; then
     # thin black bars left and right of the game.
     GS_DECOR=(-b)
     [[ "${X4VR_DECORATED:-0}" == 1 ]] && GS_DECOR=()
+    # gamescope flips between relative and absolute mouse mode depending on
+    # cursor visibility. X4 hides the cursor and switches to mouse-look when
+    # you leave the pilot seat; if gamescope stays absolute, X4's warp to
+    # centre does not take and it reads a constant offset -- the view pins to
+    # the floor and cannot be raised. Forcing relative mode fixes the cause,
+    # but menus need an absolute cursor, so this stays opt-in until tested.
+    [[ "${X4VR_GRAB_CURSOR:-0}" == 1 ]] && GS_DECOR+=(--force-grab-cursor)
     exec gamescope "${GS_DECOR[@]}" -w "$W" -h "$H" -W "$W" -H "$H" \
         --backend sdl -- \
         env WAYLAND_DISPLAY= "SDL_VIDEODRIVER=${X4VR_SDL_DRIVER:-x11}" \
