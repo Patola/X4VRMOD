@@ -169,10 +169,35 @@ Conclusions:
    cockpit/walking; with the map open there are several big views, which is
    fine because menu mode doesn't patch cameras.
 
-## Still to determine
+## Live validation (harness run, full gameplay session, 17,430 frames)
 
-- Frame-to-frame stability of the main-view block offset *within* a run
-  (ring behavior) — answered definitively by Phase-0 layer logging.
+Ran the harness on X4 directly (menu → load save → cockpit → walking → map →
+menu). Results:
+
+- **Harness is stable**: no crash across 17,430 frames, save load, loading
+  screens, and all scene transitions.
+- **The view arena is double-buffered**: two UBO buffers alternate as the
+  winner every frame (frames-in-flight). Per-eye patching must target the
+  *current frame's* buffer.
+- **The main-view block offset is NOT stable** — it **ring-moves** across the
+  128-block arena over a session (observed blocks #0, #1, #2, #3, #4, #6–#9,
+  #39, #41, #44, #54, #59, …). So the offset **cannot be hardcoded**; the
+  layer must discover it dynamically every frame. Confirmed:
+- **The dynamic "most-drawn range-1792 block wins" heuristic works** — in
+  cockpit gameplay it locks onto the block credited by ~202 draws (matches
+  the cockpit capture's ~211 main-view weight); in menus it correctly falls
+  to a 1-draw block.
+- **config.xml is read via `fopen(".../EgoSoft/X4/<id>/config.xml", "r")`** —
+  the Phase-1 interposition point (note `ventureconfig.xml` shares the
+  substring; match the exact basename).
+
+**Refinement noted for Phase 3/4:** scope draw-crediting to the *main
+G-buffer render pass* (the largest 6-attachment pass) rather than all draws,
+so the winner is unambiguous even mid-transition. The current whole-frame
+heuristic is adequate for detection but we want render-pass precision before
+we start writing eye matrices.
+
+## Still to determine (updated)
 - The remaining ~1088 bytes of the 1792 block (per-view params that may also
   need per-eye patching, e.g. camera world position for specular).
 - Present-time details: swapchain image count, present mode, and how the
