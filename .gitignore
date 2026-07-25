@@ -1,6 +1,19 @@
-bridge/xr2x4
-__pycache__/
-vendor/
-*.og
-viewer/build/
-tools/shmdump
+# build
+build/
+build-*/
+cmake-build-*/
+*.o
+*.so
+*.a
+
+# Claude Code session/worktree dir
+.claude/
+
+# editor / misc
+*.swp
+.cache/
+compile_commands.json
+
+# captures / scratch
+*.rdc
+*.ppm

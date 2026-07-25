@@ -1,0 +1,38 @@
+X4VRMOD — Additional permission under GNU GPL version 3 section 7
+================================================================
+
+Copyright (C) 2026  Cláudio "Patola" Sampaio and the X4VRMOD contributors.
+
+The software in this repository ("the Program") is free software: you can
+redistribute it and/or modify it under the terms of the GNU General Public
+License version 3 as published by the Free Software Foundation, as found in
+the accompanying LICENSE file.
+
+As an ADDITIONAL PERMISSION under section 7 of GNU GPL version 3, the
+copyright holders grant you the following permission:
+
+  You have permission to link, load, dynamically load, preload (including
+  via LD_PRELOAD or a Vulkan/OpenXR API layer), hook, intercept,
+  instrument, patch at runtime, and overlay the Program with, and to
+  combine or link the Program with, the proprietary video game
+  "X4: Foundations" by Egosoft GmbH together with the libraries that game
+  ships with or dynamically loads (collectively, "X4"), and to convey the
+  resulting combined work, PROVIDED THAT such interoperation with X4 takes
+  place solely on the GNU/Linux operating system.
+
+  This permission is granted for GNU/Linux only. No such permission is
+  granted for Apple macOS, Microsoft Windows, or any other operating
+  system; on those systems the ordinary, unmodified terms of the GPLv3
+  apply.
+
+When you convey a covered work, you must keep intact all notices of this
+additional permission. You may extend this permission to your own modified
+versions, but you are not obligated to do so; and you may remove it from
+your copy or any part of it, in which case the ordinary terms of the GPLv3
+apply to that copy or part.
+
+This additional permission concerns ONLY the act of combining, linking,
+loading, hooking, and interoperating the Program with X4. It grants no
+rights whatsoever in X4 itself, which remains the property of and subject to
+the license of Egosoft GmbH and its respective rights holders. Nothing here
+waives any term of the GPLv3 as it applies to the Program itself.
