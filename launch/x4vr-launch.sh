@@ -16,8 +16,16 @@
 #   X4VR_LOG=<file>       log destination; empty/unset in wrapper mode keeps
 #                         the default /tmp/x4vr.log; set X4VR_LOG= (empty) to
 #                         send mod logs to stderr for `2>&1 | tee` capture
-#   X4VR_GAMESCOPE=1      wrap in gamescope at X4VR_W x X4VR_H (default off)
-#   X4VR_W / X4VR_H       gamescope size (default 2816 x 1408)
+#   X4VR_GAMESCOPE=1      wrap in gamescope at X4VR_W x X4VR_H (default off).
+#                         Needed for an exact render size: X4 ignores
+#                         res_width/res_height while borderless and sizes to
+#                         the display instead (see common/x4vr_sbs.hpp).
+#   X4VR_W / X4VR_H       gamescope size (default: the SBS size in
+#                         common/x4vr_sbs.hpp)
+#   X4VR_SBS=1            side-by-side composite: copy the left half of each
+#                         frame over the right half. Both halves are the same
+#                         eye for now -- this validates the container, not the
+#                         stereo. Best with X4VR_GAMESCOPE=1.
 #   X4VR_X11=1            clear WAYLAND_DISPLAY for the game (force X11/SDL-x11;
 #                         X4's Wayland output is new and may misbehave)
 #   X4VR_FOSSILIZE=1      keep Valve's fossilize layer (default: disabled to
@@ -86,11 +94,25 @@ if [[ "${X4VR_X11:-0}" == 1 ]]; then
     export WAYLAND_DISPLAY=""
 fi
 
-echo "x4vr-launch: log=${X4VR_LOG:-stderr} layer=$([[ ${X4VR_NO_LAYER:-0} != 1 ]] && echo on || echo off) inject=$([[ ${X4VR_NO_INJECT:-0} != 1 ]] && echo on || echo off) gamescope=${X4VR_GAMESCOPE:-0} x11=${X4VR_X11:-0}" >&2
+echo "x4vr-launch: log=${X4VR_LOG:-stderr} layer=$([[ ${X4VR_NO_LAYER:-0} != 1 ]] && echo on || echo off) inject=$([[ ${X4VR_NO_INJECT:-0} != 1 ]] && echo on || echo off) gamescope=${X4VR_GAMESCOPE:-0} sbs=${X4VR_SBS:-0} x11=${X4VR_X11:-0}" >&2
+
+if [[ "${X4VR_SBS:-0}" == 1 && "${X4VR_GAMESCOPE:-0}" != 1 ]]; then
+    echo "x4vr-launch: WARNING X4VR_SBS=1 without gamescope — X4 will size to" \
+         "the display, so the halves will not be the SBS size" >&2
+fi
 
 if [[ "${X4VR_GAMESCOPE:-0}" == 1 ]]; then
-    W="${X4VR_W:-2816}"
-    H="${X4VR_H:-1408}"
+    # Single source of truth for the SBS size lives in the C header, so the
+    # launcher reads it from there rather than keeping a third copy.
+    sbs_dim() { sed -n "s/^#define X4VR_SBS_$1[[:space:]]\+\([0-9]\+\).*/\1/p" \
+        "$ROOT/common/x4vr_sbs.hpp"; }
+    W="${X4VR_W:-$(sbs_dim WIDTH)}"
+    H="${X4VR_H:-$(sbs_dim HEIGHT)}"
+    if [[ -z "$W" || -z "$H" ]]; then
+        echo "x4vr-launch: could not read the SBS size from" \
+             "common/x4vr_sbs.hpp (set X4VR_W / X4VR_H)" >&2
+        exit 1
+    fi
     # Inside gamescope the game must NOT see the outer Wayland display; it
     # runs on gamescope's XWayland (empirically required on Plasma Wayland).
     exec gamescope -w "$W" -h "$H" -W "$W" -H "$H" --backend sdl -- \

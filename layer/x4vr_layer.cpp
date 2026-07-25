@@ -32,6 +32,7 @@
 #include "../common/x4vr_sbs.hpp"
 #include "../common/x4vr_spirv.hpp"
 #include "../common/x4vr_view.hpp"
+#include "x4vr_sbs.hpp"
 
 namespace {
 
@@ -64,6 +65,7 @@ struct DeviceData {
     PFN_vkCmdDrawIndexed CmdDrawIndexed = nullptr;
     PFN_vkQueuePresentKHR QueuePresentKHR = nullptr;
     PFN_vkCreateSwapchainKHR CreateSwapchainKHR = nullptr;
+    PFN_vkDestroySwapchainKHR DestroySwapchainKHR = nullptr;
     PFN_vkMapMemory MapMemory = nullptr;
     PFN_vkUnmapMemory UnmapMemory = nullptr;
     PFN_vkBindBufferMemory BindBufferMemory = nullptr;
@@ -79,6 +81,14 @@ struct DeviceData {
 std::mutex g_mu;
 std::unordered_map<void *, InstanceData> g_instances;
 std::unordered_map<void *, DeviceData> g_devices;
+
+// Phase 4a scaffolding, opt-in while both halves are still the same eye.
+// Flip the default once the halves are rendered per eye.
+x4vr::SbsCompositor g_sbs;
+const bool g_sbs_enabled = [] {
+    const char *e = getenv("X4VR_SBS");
+    return e && *e && *e != '0';
+}();
 
 // ---------------------------------------------------------------- tracking
 struct ViewSlot {
@@ -992,7 +1002,25 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
-    VkResult r = d->CreateSwapchainKHR(device, ci, ac, out);
+    // The composite copies one half of the image over the other, so the
+    // images must be usable as both transfer source and destination. Ask for
+    // that, and fall back to X4's own usage if the surface refuses -- a
+    // direct test of what matters, rather than a caps query.
+    VkSwapchainCreateInfoKHR sbs_ci = *ci;
+    bool sbs_usage = false;
+    VkResult r = VK_ERROR_INITIALIZATION_FAILED;
+    if (g_sbs_enabled) {
+        sbs_ci.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                             VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        r = d->CreateSwapchainKHR(device, &sbs_ci, ac, out);
+        sbs_usage = r == VK_SUCCESS;
+        if (!sbs_usage)
+            X4VR_LOG("sbs: swapchain rejected transfer usage (%d) — retrying "
+                     "with X4's own flags; composite off",
+                     (int)r);
+    }
+    if (!sbs_usage)
+        r = d->CreateSwapchainKHR(device, ci, ac, out);
     // The definitive record of what resolution the game is actually running
     // at (Phase 1 verification: should be the SBS size we forced).
     X4VR_LOG("swapchain created: %ux%u images>=%u format=%d presentMode=%d -> %s",
@@ -1020,8 +1048,21 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
                      w, h, X4VR_SBS_WIDTH, X4VR_SBS_HEIGHT, X4VR_SBS_WIDTH,
                      X4VR_SBS_HEIGHT);
         }
+        if (sbs_usage)
+            g_sbs.add_swapchain(*out, sbs_ci);
     }
     return r;
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_DestroySwapchainKHR(
+    VkDevice device, VkSwapchainKHR sc, const VkAllocationCallbacks *ac) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    g_sbs.remove_swapchain(sc); // waits for the device before freeing
+    d->DestroySwapchainKHR(device, sc, ac);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
@@ -1031,7 +1072,26 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(queue));
     }
-    VkResult r = d->QueuePresentKHR(queue, pi);
+    // One swapchain is all X4 presents; anything else is not a case we have
+    // seen, so leave it alone rather than guess which image is the eye pair.
+    VkSemaphore composited = VK_NULL_HANDLE;
+    if (g_sbs_enabled && pi->swapchainCount == 1)
+        composited = g_sbs.composite(queue, pi->pSwapchains[0],
+                                     pi->pImageIndices[0], pi->pWaitSemaphores,
+                                     pi->waitSemaphoreCount);
+
+    VkResult r;
+    if (composited != VK_NULL_HANDLE) {
+        // Our submit already waits on X4's semaphores, so the present now
+        // waits only on ours -- waiting on both would deadlock, since a
+        // binary semaphore can only be consumed once.
+        VkPresentInfoKHR sbs_pi = *pi;
+        sbs_pi.waitSemaphoreCount = 1;
+        sbs_pi.pWaitSemaphores = &composited;
+        r = d->QueuePresentKHR(queue, &sbs_pi);
+    } else {
+        r = d->QueuePresentKHR(queue, pi);
+    }
     frame_flush();
     return r;
 }
@@ -1133,6 +1193,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(CmdDrawIndexed);
     RESOLVE(QueuePresentKHR);
     RESOLVE(CreateSwapchainKHR);
+    RESOLVE(DestroySwapchainKHR);
     RESOLVE(MapMemory);
     RESOLVE(UnmapMemory);
     RESOLVE(BindBufferMemory);
@@ -1149,6 +1210,31 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
         g_devices[dispatch_key(*out)] = d;
     }
     X4VR_LOG("device created");
+
+    if (g_sbs_enabled) {
+        x4vr::SbsFns f;
+        // The X-macro list has no separators, so each expansion terminates
+        // itself.
+#define RESOLVE(name) f.name = (PFN_vk##name)gdpa(*out, "vk" #name);
+        X4VR_SBS_FNS(RESOLVE)
+#undef RESOLVE
+        // The composite submits on the queue X4 presents from, so its pool
+        // must come from that queue's family. X4 presents from the first
+        // family it asked for; if it ever asks for several we would need to
+        // track VkQueue -> family through vkGetDeviceQueue.
+        const uint32_t family = ci->queueCreateInfoCount
+                                    ? ci->pQueueCreateInfos[0].queueFamilyIndex
+                                    : 0;
+        if (ci->queueCreateInfoCount > 1)
+            X4VR_LOG("sbs: %u queue families requested; assuming the present "
+                     "queue is family %u",
+                     ci->queueCreateInfoCount, family);
+        if (f.complete()) {
+            g_sbs.configure(*out, f, family);
+        } else {
+            X4VR_LOG("sbs: could not resolve every entry point — composite off");
+        }
+    }
     if (const char *h = getenv("X4VR_TEST_HAMMER"); h && *h && *h != '0') {
         static std::thread t(hammer_thread);
         t.detach();
@@ -1158,6 +1244,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
 
 VKAPI_ATTR void VKAPI_CALL x4vr_DestroyDevice(
     VkDevice device, const VkAllocationCallbacks *ac) {
+    g_sbs.shutdown(); // idles the device, then frees pools/semaphores/fences
     PFN_vkDestroyDevice next;
     {
         std::lock_guard<std::mutex> lock(g_mu);
@@ -1187,6 +1274,7 @@ const NameFunc kHooks[] = {
     {"vkCmdDrawIndexed", (PFN_vkVoidFunction)x4vr_CmdDrawIndexed},
     {"vkQueuePresentKHR", (PFN_vkVoidFunction)x4vr_QueuePresentKHR},
     {"vkCreateSwapchainKHR", (PFN_vkVoidFunction)x4vr_CreateSwapchainKHR},
+    {"vkDestroySwapchainKHR", (PFN_vkVoidFunction)x4vr_DestroySwapchainKHR},
     {"vkMapMemory", (PFN_vkVoidFunction)x4vr_MapMemory},
     {"vkUnmapMemory", (PFN_vkVoidFunction)x4vr_UnmapMemory},
     {"vkBindBufferMemory", (PFN_vkVoidFunction)x4vr_BindBufferMemory},
