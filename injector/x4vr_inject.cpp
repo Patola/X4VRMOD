@@ -22,7 +22,12 @@
 #include <unistd.h>
 
 #include <cstdio>
+#include <cstdlib>
+#include <mutex>
+#include <set>
 #include <string>
+#include <utility>
+#include <vector>
 
 #define X4VR_LOG_TAG "inject"
 #include "../common/x4vr_log.hpp"
@@ -42,6 +47,60 @@ bool overrides_disabled() {
     return off;
 }
 
+// The player's pre-run value for every tag we override, captured the first
+// time X4 reads config.xml — before we patch anything. X4 rewrites the file
+// on exit with the values it is running (i.e. ours), so this is what we put
+// back afterwards. See x4vr_config.hpp.
+std::mutex g_orig_mu;
+std::string g_config_path;
+std::vector<std::pair<std::string, std::string>> g_orig_values;
+
+// Put the player's values back for our tags only, keeping everything else
+// X4 saved. Idempotent, so it is safe to call from both fclose() and exit.
+void restore_config() {
+    std::lock_guard<std::mutex> lock(g_orig_mu);
+    if (g_config_path.empty() || g_orig_values.empty())
+        return;
+    std::string xml = x4vr::read_file(g_config_path.c_str());
+    if (xml.empty())
+        return;
+    int restored = 0;
+    for (const auto &kv : g_orig_values)
+        if (x4vr::set_tag(xml, kv.first.c_str(), kv.second.c_str()))
+            restored++;
+    if (!restored)
+        return; // already the player's values — nothing to do
+    if (x4vr::write_file(g_config_path.c_str(), xml))
+        X4VR_LOG("config: restored %d player setting(s) in %s after X4 saved",
+                 restored, g_config_path.c_str());
+    else
+        X4VR_LOG("config: WARNING could not restore %s", g_config_path.c_str());
+}
+
+// Streams X4 opened on config.xml for writing, so fclose() knows when the
+// saved file has landed and can be fixed up.
+std::mutex g_wr_mu;
+std::set<FILE *> g_config_writes;
+
+void note_config_write(FILE *f) {
+    std::lock_guard<std::mutex> lock(g_wr_mu);
+    g_config_writes.insert(f);
+}
+
+bool take_config_write(FILE *f) {
+    std::lock_guard<std::mutex> lock(g_wr_mu);
+    return g_config_writes.erase(f) > 0;
+}
+
+// exit() runs atexit handlers *before* it flushes and closes stdio streams.
+// So if X4 ever leaves its config stream unflushed, restoring here without
+// forcing the flush first would be undone a moment later by that flush
+// writing our injected values back out. Flush everything, then restore.
+void restore_config_atexit() {
+    fflush(nullptr);
+    restore_config();
+}
+
 // Build the rewritten config and return a stream over it, or nullptr to let
 // the caller fall back to the real file.
 FILE *open_patched_config(const char *path) {
@@ -52,9 +111,24 @@ FILE *open_patched_config(const char *path) {
     }
 
     int changed = 0;
+    bool capture = false;
+    {
+        std::lock_guard<std::mutex> lock(g_orig_mu);
+        capture = g_orig_values.empty();
+        if (capture) {
+            g_config_path = path;
+            static std::once_flag once;
+            std::call_once(once, [] { atexit(restore_config_atexit); });
+        }
+    }
     for (const auto &ov : x4vr::default_overrides()) {
         std::string old;
-        if (x4vr::set_tag(xml, ov.tag, ov.value, &old)) {
+        const bool did = x4vr::set_tag(xml, ov.tag, ov.value, &old);
+        if (capture && !old.empty()) {
+            std::lock_guard<std::mutex> lock(g_orig_mu);
+            g_orig_values.emplace_back(ov.tag, old);
+        }
+        if (did) {
             X4VR_LOG("config: %s: '%s' -> '%s'", ov.tag, old.c_str(), ov.value);
             changed++;
         }
@@ -84,7 +158,7 @@ FILE *open_patched_config(const char *path) {
         return nullptr;
     }
     X4VR_LOG("config: serving patched %s in memory (%zu bytes, %d changes; "
-             "file on disk untouched)",
+             "we never write it, and X4's own save is undone on exit)",
              path, xml.size(), changed);
     return f;
 }
@@ -170,11 +244,16 @@ int openat64(int dirfd, const char *path, int flags, ...) {
 }
 
 // Read-only opens of X4's own config.xml get the patched in-memory copy.
-// Writes (the game saving settings) pass straight through to the real file
-// so the player's settings keep working normally.
+// Writes (the game saving settings) pass straight through to the real file,
+// so a failure here can never lose the player's settings — we only fix the
+// file up afterwards, in x4vr_note_config_write()'s fclose().
 static bool wants_patch(const char *path, const char *mode) {
     return !overrides_disabled() && x4vr::is_x4_config(path) && mode &&
            mode[0] == 'r' && !strchr(mode, '+');
+}
+
+static bool is_write_mode(const char *mode) {
+    return mode && (mode[0] == 'w' || mode[0] == 'a' || strchr(mode, '+'));
 }
 
 FILE *fopen(const char *path, const char *mode) {
@@ -185,7 +264,10 @@ FILE *fopen(const char *path, const char *mode) {
         if (FILE *f = open_patched_config(path))
             return f;
     }
-    return real_fopen(path, mode);
+    FILE *f = real_fopen(path, mode);
+    if (f && x4vr::is_x4_config(path) && is_write_mode(mode))
+        note_config_write(f);
+    return f;
 }
 
 FILE *fopen64(const char *path, const char *mode) {
@@ -197,7 +279,23 @@ FILE *fopen64(const char *path, const char *mode) {
         if (FILE *f = open_patched_config(path))
             return f;
     }
-    return real_fopen64(path, mode);
+    FILE *f = real_fopen64(path, mode);
+    if (f && x4vr::is_x4_config(path) && is_write_mode(mode))
+        note_config_write(f);
+    return f;
+}
+
+// X4 saves settings on exit; as soon as it closes that stream the file on
+// disk holds our injected values, so put the player's back immediately. The
+// atexit() hook registered in open_patched_config() is the safety net for
+// the case where the stream is never explicitly closed.
+int fclose(FILE *f) {
+    static auto real_fclose = real<int (*)(FILE *)>("fclose");
+    const bool was_config = take_config_write(f);
+    int r = real_fclose(f);
+    if (was_config)
+        restore_config();
+    return r;
 }
 
 } // extern "C"

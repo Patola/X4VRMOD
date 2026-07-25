@@ -68,6 +68,11 @@ struct DeviceData {
     PFN_vkBindBufferMemory BindBufferMemory = nullptr;
     PFN_vkQueueSubmit QueueSubmit = nullptr;
     PFN_vkCreateShaderModule CreateShaderModule = nullptr;
+    PFN_vkDestroyShaderModule DestroyShaderModule = nullptr;
+    PFN_vkCreateRenderPass CreateRenderPass = nullptr;
+    PFN_vkCreateRenderPass2 CreateRenderPass2 = nullptr;
+    PFN_vkDestroyRenderPass DestroyRenderPass = nullptr;
+    PFN_vkCreateGraphicsPipelines CreateGraphicsPipelines = nullptr;
 };
 
 std::mutex g_mu;
@@ -116,6 +121,62 @@ struct Tracking {
     x4vr::Major major = x4vr::Major::Unknown;
     bool logged_matrices = false;
 } g_track;
+
+// ------------------------------------------------------- shadow exclusion
+// The per-eye shear K is derived from the *camera* projection, where clip z
+// is the constant near plane. Shadow passes transform through M_shadowCSM*
+// (light space) instead, so K is meaningless there and would smear the
+// shadow map. X4 reuses the same vertex modules for both, so the choice
+// cannot be made at module creation.
+//
+// It can be made at *pipeline* creation: shadow and main passes share zero
+// pipelines (docs/frame-analysis.md), and shadow passes are the only
+// depth-only ones (2048x2048 D16, no colour attachments). So we keep both
+// module variants and pick the untouched one for depth-only pipelines.
+// This is static — no per-frame cost.
+// The same mechanism also solves the UI problem. X4's UI vertex shaders do
+// not merely declare the set-3 block, they *read* member 0 of it, so no
+// static SPIR-V test can tell them apart from world geometry. But the UI is
+// drawn in its own pass: pass 46 is B8G8R8A8_SRGB and pass 47 is the
+// B8G8R8A8_UNORM blit, whereas every world pass writes multi-attachment
+// float targets. So "all colour attachments are 8-bit UNORM/SRGB" marks a
+// screen-space pass.
+//
+// Keeping the UI unsheared is a *correctness* requirement, not cosmetics:
+// X4 hit-tests the UI on the CPU in unshifted screen space, so a
+// GPU-side-only shift moves what the player sees away from what the player
+// can click (observed live: map items had to be clicked well to the right of
+// where they appeared). See docs/frame-analysis.md.
+struct ShaderVariants {
+    std::mutex mu;
+    // patched module handle -> its unpatched twin
+    std::unordered_map<VkShaderModule, VkShaderModule> original;
+    // render pass -> per-subpass "this subpass must not be sheared"
+    std::unordered_map<VkRenderPass, std::vector<bool>> unsheared;
+    uint32_t swapped = 0;
+} g_variants;
+
+// 8-bit UNORM/SRGB colour targets mean a screen-space (UI/blit) pass.
+inline bool is_ldr_format(VkFormat f) {
+    switch (f) {
+    case VK_FORMAT_R8G8B8A8_UNORM:
+    case VK_FORMAT_R8G8B8A8_SRGB:
+    case VK_FORMAT_B8G8R8A8_UNORM:
+    case VK_FORMAT_B8G8R8A8_SRGB:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Must this (render pass, subpass) use the unpatched modules?
+bool needs_original(VkRenderPass rp, uint32_t subpass) {
+    std::lock_guard<std::mutex> lock(g_variants.mu);
+    auto it = g_variants.unsheared.find(rp);
+    if (it == g_variants.unsheared.end() || subpass >= it->second.size())
+        return false;
+    return it->second[subpass];
+}
 
 // Host pointer for a (buffer, offset) view slot, or nullptr if the backing
 // memory is not currently mapped. Caller holds g_track.mu.
@@ -338,6 +399,84 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDrawIndexed(VkCommandBuffer cb,
     credit_draw(cb);
 }
 
+// Classify each subpass as "must not be sheared":
+//   * no colour attachments        -> shadow cascade (light space)
+//   * all colour attachments LDR   -> UI / final blit (screen space)
+// Everything else is world geometry rendered through the camera projection,
+// which is what K was derived for.
+template <typename CreateInfo>
+void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
+    std::vector<bool> unsheared(ci->subpassCount, false);
+    for (uint32_t i = 0; i < ci->subpassCount; i++) {
+        const auto &sp = ci->pSubpasses[i];
+        if (sp.colorAttachmentCount == 0) {
+            unsheared[i] = true; // depth-only: shadow pass
+            continue;
+        }
+        bool all_ldr = true, any = false;
+        for (uint32_t c = 0; c < sp.colorAttachmentCount; c++) {
+            const uint32_t a = sp.pColorAttachments[c].attachment;
+            if (a == VK_ATTACHMENT_UNUSED || a >= ci->attachmentCount)
+                continue;
+            any = true;
+            if (!is_ldr_format(ci->pAttachments[a].format))
+                all_ldr = false;
+        }
+        unsheared[i] = any && all_ldr;
+    }
+    std::lock_guard<std::mutex> lock(g_variants.mu);
+    g_variants.unsheared[rp] = std::move(unsheared);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass(
+    VkDevice device, const VkRenderPassCreateInfo *ci,
+    const VkAllocationCallbacks *ac, VkRenderPass *out) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    VkResult r = d->CreateRenderPass(device, ci, ac, out);
+    if (r == VK_SUCCESS)
+        record_render_pass(ci, *out);
+    return r;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass2(
+    VkDevice device, const VkRenderPassCreateInfo2 *ci,
+    const VkAllocationCallbacks *ac, VkRenderPass *out) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    // Core only since Vulkan 1.2; fall back to the KHR alias if the device
+    // exposes only that, and refuse cleanly if neither exists.
+    PFN_vkCreateRenderPass2 next = d->CreateRenderPass2;
+    if (!next)
+        next = (PFN_vkCreateRenderPass2)d->gdpa(device, "vkCreateRenderPass2KHR");
+    if (!next)
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
+    VkResult r = next(device, ci, ac, out);
+    if (r == VK_SUCCESS)
+        record_render_pass(ci, *out);
+    return r;
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_DestroyRenderPass(
+    VkDevice device, VkRenderPass rp, const VkAllocationCallbacks *ac) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_variants.mu);
+        g_variants.unsheared.erase(rp);
+    }
+    d->DestroyRenderPass(device, rp, ac);
+}
+
 // Phase 3b: bake a constant clip-space matrix into every scene vertex
 // shader (see common/x4vr_spirv.hpp). Zero per-frame cost — the whole
 // point of the camera-relative clip-space identity.
@@ -433,6 +572,13 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
         mod.pCode = code.data();
         VkResult r = d->CreateShaderModule(device, &mod, ac, out);
         if (r == VK_SUCCESS) {
+            // Keep an unpatched twin so depth-only (shadow) pipelines can
+            // use the original geometry path — see g_variants.
+            VkShaderModule orig = VK_NULL_HANDLE;
+            if (d->CreateShaderModule(device, ci, ac, &orig) == VK_SUCCESS) {
+                std::lock_guard<std::mutex> lock(g_variants.mu);
+                g_variants.original[*out] = orig;
+            }
             if (++patched <= 3 || (patched % 50) == 0)
                 X4VR_LOG("patched vertex shader #%u (%s) [world=%u ui=%u]",
                          patched,
@@ -446,6 +592,77 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
                  (int)r);
     }
     return d->CreateShaderModule(device, ci, ac, out);
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_DestroyShaderModule(
+    VkDevice device, VkShaderModule mod, const VkAllocationCallbacks *ac) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    VkShaderModule twin = VK_NULL_HANDLE;
+    {
+        std::lock_guard<std::mutex> lock(g_variants.mu);
+        auto it = g_variants.original.find(mod);
+        if (it != g_variants.original.end()) {
+            twin = it->second;
+            g_variants.original.erase(it);
+        }
+    }
+    if (twin != VK_NULL_HANDLE)
+        d->DestroyShaderModule(device, twin, ac);
+    d->DestroyShaderModule(device, mod, ac);
+}
+
+// Pick the unpatched module variant for depth-only (shadow) pipelines.
+// This is the whole shadow-exclusion mechanism: one substitution at
+// pipeline-creation time, nothing per frame.
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
+    VkDevice device, VkPipelineCache cache, uint32_t count,
+    const VkGraphicsPipelineCreateInfo *ci, const VkAllocationCallbacks *ac,
+    VkPipeline *out) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+
+    // Copy only if we actually need to substitute something.
+    std::vector<VkGraphicsPipelineCreateInfo> infos;
+    std::vector<std::vector<VkPipelineShaderStageCreateInfo>> stages;
+    bool any = false;
+    for (uint32_t i = 0; i < count; i++) {
+        if (ci[i].renderPass == VK_NULL_HANDLE ||
+            !needs_original(ci[i].renderPass, ci[i].subpass))
+            continue;
+        if (!any) {
+            infos.assign(ci, ci + count);
+            stages.resize(count);
+            any = true;
+        }
+        stages[i].assign(ci[i].pStages, ci[i].pStages + ci[i].stageCount);
+        for (auto &st : stages[i]) {
+            std::lock_guard<std::mutex> lock(g_variants.mu);
+            auto it = g_variants.original.find(st.module);
+            if (it != g_variants.original.end()) {
+                st.module = it->second;
+                g_variants.swapped++;
+            }
+        }
+        infos[i].pStages = stages[i].data();
+    }
+    if (!any)
+        return d->CreateGraphicsPipelines(device, cache, count, ci, ac, out);
+
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        X4VR_LOG("unsheared pipeline: using unpatched modules (shadow + UI "
+                 "exclusion active)");
+    }
+    return d->CreateGraphicsPipelines(device, cache, count, infos.data(), ac,
+                                      out);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_MapMemory(VkDevice device,
@@ -898,6 +1115,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(BindBufferMemory);
     RESOLVE(QueueSubmit);
     RESOLVE(CreateShaderModule);
+    RESOLVE(DestroyShaderModule);
+    RESOLVE(CreateRenderPass);
+    RESOLVE(CreateRenderPass2);
+    RESOLVE(DestroyRenderPass);
+    RESOLVE(CreateGraphicsPipelines);
 #undef RESOLVE
     {
         std::lock_guard<std::mutex> lock(g_mu);
@@ -947,6 +1169,12 @@ const NameFunc kHooks[] = {
     {"vkBindBufferMemory", (PFN_vkVoidFunction)x4vr_BindBufferMemory},
     {"vkQueueSubmit", (PFN_vkVoidFunction)x4vr_QueueSubmit},
     {"vkCreateShaderModule", (PFN_vkVoidFunction)x4vr_CreateShaderModule},
+    {"vkDestroyShaderModule", (PFN_vkVoidFunction)x4vr_DestroyShaderModule},
+    {"vkCreateRenderPass", (PFN_vkVoidFunction)x4vr_CreateRenderPass},
+    {"vkCreateRenderPass2", (PFN_vkVoidFunction)x4vr_CreateRenderPass2},
+    {"vkDestroyRenderPass", (PFN_vkVoidFunction)x4vr_DestroyRenderPass},
+    {"vkCreateGraphicsPipelines",
+     (PFN_vkVoidFunction)x4vr_CreateGraphicsPipelines},
 };
 
 PFN_vkVoidFunction find_hook(const char *name) {

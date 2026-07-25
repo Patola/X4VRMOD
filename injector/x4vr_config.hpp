@@ -2,10 +2,17 @@
 //
 // x4vr_config.hpp — in-memory rewriting of X4's config.xml.
 //
-// Non-intrusive by design: the player's file on disk is never modified. We
-// read it, rewrite the tags we need in a memory buffer, and hand X4 a
-// stream over that buffer (fmemopen). If anything fails we fall back to the
-// untouched file.
+// Non-intrusive by design: we read the player's file, rewrite the tags we
+// need in a memory buffer, and hand X4 a stream over that buffer. If
+// anything fails we fall back to the untouched file.
+//
+// We never write the file ourselves — but X4 does. It saves its settings on
+// exit, persisting whatever it is currently running with, which is *our*
+// injected values (observed live: a player's config.xml left at 2816x1408 /
+// borderless / antialiasing=none after a session). So the injector also
+// remembers the pre-run value of every tag it overrides and restores just
+// those tags after X4 has written the file, leaving every other setting X4
+// saved — volumes, keybinds, genuine player changes — exactly as written.
 #pragma once
 
 #ifndef _GNU_SOURCE
@@ -97,6 +104,34 @@ inline std::string read_file(const char *path) {
         out.append(buf, (size_t)n);
     ::close(fd);
     return out;
+}
+
+// Write a file fully; true on success. Same RTLD_NEXT discipline as
+// read_file() so it can run from inside our own interposers.
+inline bool write_file(const char *path, const std::string &data) {
+    using open_fn = int (*)(const char *, int, ...);
+    static open_fn real_open = [] {
+        void *p = dlsym(RTLD_NEXT, "open");
+        open_fn fn;
+        memcpy(&fn, &p, sizeof(fn));
+        return fn;
+    }();
+    if (!real_open)
+        return false;
+    int fd = real_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0)
+        return false;
+    size_t off = 0;
+    while (off < data.size()) {
+        ssize_t w = ::write(fd, data.data() + off, data.size() - off);
+        if (w <= 0) {
+            ::close(fd);
+            return false;
+        }
+        off += (size_t)w;
+    }
+    ::close(fd);
+    return true;
 }
 
 // True if `path`'s basename is exactly "config.xml" (not ventureconfig.xml).

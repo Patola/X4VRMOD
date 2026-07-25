@@ -472,3 +472,47 @@ So the exclusion belongs at **pipeline creation**, not module creation:
 
 Static, decided once per pipeline, zero per-frame cost — and it generalises
 to the two-eye case (one pipeline variant per eye) that Phase 4b needs.
+
+## UI input is CPU-side and does not follow GPU-side transforms
+
+Live finding (2026-07-25 cockpit session, right-eye shear at IPD 0.3): with
+the UI misclassified as world geometry, every UI surface — main menu, cockpit
+HUD, and the map — rendered shifted left by the same amount. Two conclusions:
+
+1. **The menu, the HUD and the map share one reference frame.** They are all
+   driven by the same per-object block and all inherit `K_world` together, so
+   they can be fixed (or moved) as a single unit.
+2. **Their interaction boxes did NOT move.** To click an item that appeared at
+   position *x*, the mouse had to go to its original, unshifted position —
+   noticeably far to the right of where the element was drawn.
+
+Point 2 is the important one and it is a hard architectural constraint:
+
+> **X4 hit-tests the UI on the CPU, in unshifted screen space.** Anything we
+> do to UI geometry on the GPU desynchronises what the player sees from what
+> the player can click.
+
+Consequences for the design:
+
+- `K_ui` must stay **identity**. Shearing the UI is not merely cosmetically
+  wrong, it breaks input. This is now a correctness requirement, not a
+  preference.
+- The "world-locked menu quad" idea in menu mode **cannot** be implemented by
+  transforming UI vertices in the layer alone. Whatever transform is applied
+  to the UI for VR must be accompanied by the *inverse* transform on pointer
+  coordinates, applied before X4 sees them — i.e. in the `LD_PRELOAD`
+  injector (SDL mouse events), not in the Vulkan layer.
+- This is precisely the job of the planned **cursor shim**, and it is a
+  stronger requirement than "make the cursor visible in VR": the shim owns the
+  mapping between VR pointing and X4's canonical 2816×1408 screen space.
+- Because the map renders in the UI pass, excluding that pass from the eye
+  shear also lands the map in mono — which is what menu mode wants anyway.
+
+### UI-pass exclusion (same mechanism as the shadow exclusion)
+
+Pass 46 is a separate SRGB pass (`B8G8R8A8_SRGB`, 232 draws) after all 3D,
+and pass 47 is the final `B8G8R8A8_UNORM` blit; every world pass writes
+multi-attachment float targets (RGBA16F / RG16F / D32). So a render pass
+whose colour attachments are **all 8-bit UNORM/SRGB** is screen-space, and
+its pipelines take the unpatched module variant — decided once, at pipeline
+creation, exactly like the depth-only case.
