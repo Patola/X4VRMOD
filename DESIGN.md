@@ -96,6 +96,18 @@ UBO holds view/proj, deferred vs forward, where the UI is drawn) is unknown
 until we map the frame in renderdoc. That mapping is an explicit gate — no
 stereo code before it.
 
+**Early Phase-2 win (see [docs/frame-analysis.md](docs/frame-analysis.md)):**
+renderdoc already located a single per-view "frame constants" UBO with 11
+named `mat4`s (`M_view`, `M_projection`, `M_invprojection`, `M_viewprojection`,
+`M_viewinverse`, unjittered + jitter variants, and two shadow-CSM clip
+matrices). It contains the depth→view reconstruction matrices, which both
+**confirms X4 is deferred** and means **patching this one UBO per eye makes
+geometry *and* lighting render for that eye** — the per-eye-lighting
+requirement solved at a single interception point. 7 of the 11 matrices are
+patched per eye; the 2 shadow (light-space) and 2 jitter (AA-off) matrices are
+left. Remaining unknown: *how/where* that UBO is written and bound, which
+decides the patch site.
+
 ## Two runtime modes
 
 - **Game mode** — immersive stereoscopic, face-locked screen, headset 6DOF to
