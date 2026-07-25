@@ -56,6 +56,7 @@ struct DeviceData {
     PFN_vkCmdDraw CmdDraw = nullptr;
     PFN_vkCmdDrawIndexed CmdDrawIndexed = nullptr;
     PFN_vkQueuePresentKHR QueuePresentKHR = nullptr;
+    PFN_vkCreateSwapchainKHR CreateSwapchainKHR = nullptr;
 };
 
 std::mutex g_mu;
@@ -258,6 +259,24 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDrawIndexed(VkCommandBuffer cb,
     credit_draw(cb);
 }
 
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
+    VkDevice device, const VkSwapchainCreateInfoKHR *ci,
+    const VkAllocationCallbacks *ac, VkSwapchainKHR *out) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    VkResult r = d->CreateSwapchainKHR(device, ci, ac, out);
+    // The definitive record of what resolution the game is actually running
+    // at (Phase 1 verification: should be the SBS size we forced).
+    X4VR_LOG("swapchain created: %ux%u images>=%u format=%d presentMode=%d -> %s",
+             ci->imageExtent.width, ci->imageExtent.height, ci->minImageCount,
+             (int)ci->imageFormat, (int)ci->presentMode,
+             r == VK_SUCCESS ? "ok" : "FAILED");
+    return r;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     VkQueue queue, const VkPresentInfoKHR *pi) {
     DeviceData *d;
@@ -366,6 +385,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(CmdDraw);
     RESOLVE(CmdDrawIndexed);
     RESOLVE(QueuePresentKHR);
+    RESOLVE(CreateSwapchainKHR);
 #undef RESOLVE
     {
         std::lock_guard<std::mutex> lock(g_mu);
@@ -405,6 +425,7 @@ const NameFunc kHooks[] = {
     {"vkCmdDraw", (PFN_vkVoidFunction)x4vr_CmdDraw},
     {"vkCmdDrawIndexed", (PFN_vkVoidFunction)x4vr_CmdDrawIndexed},
     {"vkQueuePresentKHR", (PFN_vkVoidFunction)x4vr_QueuePresentKHR},
+    {"vkCreateSwapchainKHR", (PFN_vkVoidFunction)x4vr_CreateSwapchainKHR},
 };
 
 PFN_vkVoidFunction find_hook(const char *name) {
