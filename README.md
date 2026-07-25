@@ -8,7 +8,8 @@ Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
 **`LD_PRELOAD` injector** (config, game state, effects), and a **cursor shim**
 (so menus and dialogs stay usable in VR). Design and phased roadmap in
 **[DESIGN.md](DESIGN.md)**; engine reverse-engineering notes in
-**[docs/frame-analysis.md](docs/frame-analysis.md)**.
+**[docs/frame-analysis.md](docs/frame-analysis.md)**; the traps X4 sets for
+modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 
 > **Status: early development.** The rendering mechanism is proven but stereo
 > itself is not implemented yet — see *Where it stands* below. An earlier
@@ -111,7 +112,7 @@ injector/   libx4vr_inject.so — LD_PRELOAD (config.xml, game state)
 common/     shared headers: logging, matrices/view block, SPIR-V patcher
 launch/     launcher script (gamescope, env wiring, Steam wrapper)
 tools/      renderdoc capture parser, shader extractor
-docs/       frame analysis and engine notes
+docs/       frame analysis, engine notes, and X4's modding quirks/traps
 cursor/     VR cursor (planned)
 ```
 
