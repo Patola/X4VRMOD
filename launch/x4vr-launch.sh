@@ -32,6 +32,10 @@
 #                         shows. Incompatible with X4VR_SBS.
 #   X4VR_RES=WxH          force X4's render resolution (config res_width /
 #                         res_height); set automatically by X4VR_ONE_EYE
+#   X4VR_ZEROVRAM=1       RADV_DEBUG=zerovram — zero VRAM allocations. Works
+#                         around X4 reading uninitialised memory (saturated
+#                         RGB blocks) when antialiasing is off. Costs a little
+#                         allocation time, so it is opt-in.
 #   X4VR_SDL_DRIVER=<d>   SDL video driver for the game inside gamescope
 #                         (default x11). The SBS split render REQUIRES x11:
 #                         a Wayland surface reports no preferred extent, and
@@ -100,6 +104,10 @@ if [[ $# -eq 0 ]]; then
     set -- "$GAME" -skipintro -nocputhrottle -nosoundthrottle
 fi
 
+if [[ "${X4VR_ZEROVRAM:-0}" == 1 ]]; then
+    export RADV_DEBUG="zerovram${RADV_DEBUG:+,$RADV_DEBUG}"
+fi
+
 if [[ "${X4VR_X11:-0}" == 1 ]]; then
     export WAYLAND_DISPLAY=""
 fi
@@ -152,7 +160,11 @@ if [[ "${X4VR_GAMESCOPE:-0}" == 1 ]]; then
     # falls back to res_width/res_height for its size (the surface declines to
     # dictate one), and the injector sets those to the eye size, so the split
     # render works on either backend.
-    exec gamescope -w "$W" -h "$H" -W "$W" -H "$H" --backend sdl -- \
+    # -b: gamescope's own window on the host must be undecorated. A
+    # titlebar costs it 23px of height, and it then scales its square
+    # nested display down to fit and pads the sides -- which shows up as
+    # thin black bars left and right of the game.
+    exec gamescope -b -w "$W" -h "$H" -W "$W" -H "$H" --backend sdl -- \
         env WAYLAND_DISPLAY= "SDL_VIDEODRIVER=${X4VR_SDL_DRIVER:-x11}" \
             "SDL_VIDEO_DRIVER=${X4VR_SDL_DRIVER:-x11}" "$@"
 else

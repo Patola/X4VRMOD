@@ -1124,8 +1124,19 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
     // Say so loudly, once.
     if (r == VK_SUCCESS) {
         const uint32_t w = ci->imageExtent.width, h = ci->imageExtent.height;
+        // X4VR_RES (set by the launcher's one-eye mode) is the authority on
+        // what size we asked for; without it the SBS frame is the target.
+        // Warning against the wrong number is worse than not warning.
+        uint32_t want_w = X4VR_SBS_WIDTH, want_h = X4VR_SBS_HEIGHT;
+        if (const char *res = getenv("X4VR_RES")) {
+            unsigned rw = 0, rh = 0;
+            if (sscanf(res, "%ux%u", &rw, &rh) == 2 && rw && rh) {
+                want_w = rw;
+                want_h = rh;
+            }
+        }
         static uint32_t warned_w = 0, warned_h = 0;
-        if ((w != X4VR_SBS_WIDTH || h != X4VR_SBS_HEIGHT) &&
+        if ((w != want_w || h != want_h) &&
             (w != warned_w || h != warned_h)) {
             warned_w = w;
             warned_h = h;
