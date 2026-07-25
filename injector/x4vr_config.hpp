@@ -47,11 +47,35 @@ inline const std::vector<TagOverride> &default_overrides() {
         // size (observed: 1408 -> 1385 both on the desktop and inside
         // gamescope), which would break the exact 2:1 SBS split.
         {"borderless", "true"},
+        // Borderless *windowed* at an exact size is the configuration the
+        // SBS split is validated against. Leaving fullscreen on would let
+        // X4 pick the output's mode instead, which is only coincidentally
+        // 2816x1408 (and only inside gamescope).
+        {"fullscreen", "false"},
+        // Screen-space reflections reproject the frame's own depth buffer,
+        // which is computed for one view. Until the camera block is patched
+        // per eye, both eyes would reuse the same mono reflection -- a
+        // stereo mismatch exactly on shiny surfaces. Revisit after per-eye
+        // lighting lands.
+        {"ssr", "false"},
         {"antialiasing", "none"},
         {"ssao", "0"},
         {"glow", "0"},
         {"uiglow", "0"},
         {"distortion", "false"},
+        // NOTE: <pom> (parallax occlusion mapping) is deliberately NOT
+        // overridden yet. "off" was tried and is *not* a valid config value:
+        // X4 round-trips it through the file but the options menu then shows
+        // "--" (nothing selected), i.e. it matched no known option. The menu
+        // offers Off/Low/Medium/High but the stored string for Off is not
+        // "off", and guessing again risks silently disabling nothing.
+        //
+        // Worth resolving because POM is only a *temporary* problem: it
+        // displaces texture lookups using the per-fragment view vector, which
+        // comes from the camera constants. Those are not per-eye yet, so both
+        // eyes currently compute identical surface parallax. Once the camera
+        // block is patched per eye, POM becomes correct and should stay on --
+        // unlike ssr, which is awkward in stereo regardless.
         {"chromaticaberration", "false"},
         {"colorcorrection", "0"},
     };
