@@ -46,14 +46,34 @@ struct TagOverride {
 // interfere with stereo/reprojection turned off. Values match X4's own
 // encoding for each tag (bool-ish tags use false, level tags use 0,
 // antialiasing uses the string "none").
+// True when the layer is making X4 render a single eye (half width). Both
+// components read the same two variables so they cannot disagree about it.
+inline bool sbs_split_render() {
+    static const bool on = [] {
+        const char *sbs = getenv("X4VR_SBS");
+        if (!(sbs && *sbs && *sbs != '0'))
+            return false;
+        const char *split = getenv("X4VR_SBS_SPLIT");
+        return !(split && *split && *split == '0');
+    }();
+    return on;
+}
+
 inline const std::vector<TagOverride> &default_overrides() {
+    // On Wayland the surface reports no preferred extent, so X4 falls back to
+    // res_width/res_height -- which makes the config the lever for the split
+    // render there. (On X11 currentExtent wins and the layer halves that
+    // instead; asking for the eye size here is then simply consistent.)
+    static const std::string eye_w = std::to_string(X4VR_SBS_WIDTH / 2);
+    static const bool split = sbs_split_render();
+
     static const std::vector<TagOverride> v = {
         // These two are necessary but NOT sufficient: X4 only honours them
         // when borderless is off, and then loses the window decoration from
         // the height (observed: 1408 -> 1385). With borderless on it ignores
         // them and sizes to the display instead. Hence gamescope at exactly
         // this size -- see common/x4vr_sbs.hpp for the measurements.
-        {"res_width", X4VR_SBS_WIDTH_STR},
+        {"res_width", split ? eye_w.c_str() : X4VR_SBS_WIDTH_STR},
         {"res_height", X4VR_SBS_HEIGHT_STR},
         // No decoration to lose, and under a correctly sized gamescope
         // "the display" is already what we asked for.

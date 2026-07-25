@@ -1082,8 +1082,14 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
     // We halved the width X4 read from the surface, so double it back: the
     // real swapchain has to match the surface, and it is what holds both
     // eyes. X4 never sees these images -- it gets ours.
+    // X4 can be brought to the eye size by either route -- the halved
+    // surface capabilities (X11, where currentExtent wins) or res_width in
+    // the config (Wayland, where the surface declines to dictate a size and
+    // X4 falls back to it). Both end here asking for exactly one eye, so key
+    // off the request itself rather than off which lever moved it.
     const bool split = g_sbs_enabled && g_active && g_sbs_split_render &&
-                       surface_was_halved(ci->surface);
+                       ci->imageExtent.width == X4VR_SBS_WIDTH / 2 &&
+                       ci->imageExtent.height == X4VR_SBS_HEIGHT;
     if (split)
         sbs_ci.imageExtent.width *= 2;
     bool sbs_usage = false;
@@ -1191,10 +1197,13 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetPhysicalDeviceSurfaceCapabilitiesKHR(
         if (!told) {
             told = true;
             X4VR_LOG("sbs: surface reports no preferred extent "
-                     "(currentExtent=0x%X) — this is the Wayland WSI; X11 "
-                     "reports the real window size. Cannot make X4 render one "
-                     "eye, falling back to duplicating the left half. Force "
-                     "the X11 driver (SDL_VIDEODRIVER=x11).",
+                     "(currentExtent=0x%X) — this is the Wayland WSI. The "
+                     "config's res_width still brings X4 to the eye size, but "
+                     "on Wayland the buffer *is* the surface: presenting the "
+                     "full-width image resizes the window, X4 follows, and "
+                     "the split collapses to duplicating the left half. Force "
+                     "the X11 driver — X4 links SDL3, so the variable is "
+                     "SDL_VIDEO_DRIVER=x11 (SDL2 spells it SDL_VIDEODRIVER).",
                      was);
         }
         return r;

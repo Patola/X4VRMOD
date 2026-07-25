@@ -132,6 +132,38 @@ not — earlier runs were correct only because gamescope's display happened to
 *Do:* run under gamescope sized exactly to the target, and check the
 swapchain extent rather than the config. The layer warns on a mismatch.
 
+### The WSI backend changes where X4 gets its resolution from
+
+| Backend | `currentExtent` | X4 sizes itself from |
+|---|---|---|
+| X11 / Xwayland | the real window size | **`currentExtent`** — `res_width`/`res_height` ignored |
+| Wayland | `0xFFFFFFFF` ("no preferred size") | **`res_width`/`res_height`** — the only source left |
+
+So the "`borderless` makes X4 ignore the configured resolution" rule above is
+**X11-specific**. On Wayland the config is authoritative again.
+
+X4 links **SDL3**, which renamed the driver variable: SDL2 reads
+`SDL_VIDEODRIVER`, SDL3 reads **`SDL_VIDEO_DRIVER`**. Clearing
+`WAYLAND_DISPLAY` alone does *not* force X11 — SDL's Wayland driver still
+connects to a default socket.
+
+*Cost us:* two live runs. The launcher had cleared `WAYLAND_DISPLAY` and its
+comment said the game "runs on gamescope's XWayland", which was simply not
+true, and nothing checked.
+
+### On Wayland, the presented buffer size *is* the window size
+
+If the layer presents an image wider than the window, the surface grows to
+match, the application sees a resize, and recreates its swapchain at the new
+size — silently undoing any scheme that has the app render smaller than what
+is presented.
+
+*Symptom:* it works for exactly one swapchain generation, then reverts.
+
+*Do:* anything that decouples render size from presented size needs **X11**,
+where the window size is owned by the window manager and is independent of
+the swapchain buffer.
+
 ### X4 creates several swapchains at startup
 
 Typically three, back to back, before the first frame. Anything you attach to

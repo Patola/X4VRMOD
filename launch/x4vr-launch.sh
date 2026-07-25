@@ -128,9 +128,17 @@ if [[ "${X4VR_GAMESCOPE:-0}" == 1 ]]; then
     # its whole pipeline to one eye. With no extent to halve there is nothing
     # to intercept. X11 reports the real window size, so force the driver.
     # SDL_VIDEODRIVER is set on the child only -- gamescope itself is an SDL
-    # app too and must keep its own backend.
+    # app too and must keep its own backend. X4 links SDL3, which renamed the
+    # variable to SDL_VIDEO_DRIVER; both are set so the value lands whichever
+    # SDL the game ends up using.
+    #
+    # This is now an optimisation rather than a requirement: on Wayland X4
+    # falls back to res_width/res_height for its size (the surface declines to
+    # dictate one), and the injector sets those to the eye size, so the split
+    # render works on either backend.
     exec gamescope -w "$W" -h "$H" -W "$W" -H "$H" --backend sdl -- \
-        env WAYLAND_DISPLAY= "SDL_VIDEODRIVER=${X4VR_SDL_DRIVER:-x11}" "$@"
+        env WAYLAND_DISPLAY= "SDL_VIDEODRIVER=${X4VR_SDL_DRIVER:-x11}" \
+            "SDL_VIDEO_DRIVER=${X4VR_SDL_DRIVER:-x11}" "$@"
 else
     exec "$@"
 fi
