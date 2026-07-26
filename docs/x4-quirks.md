@@ -164,6 +164,31 @@ is presented.
 where the window size is owned by the window manager and is independent of
 the swapchain buffer.
 
+### X4 lays out its UI from the *window* size, not the swapchain extent
+
+The two are normally identical, so nothing reveals this until you deliberately
+decouple them — which is exactly what a half-width split render does.
+
+*Symptom:* the game appears to draw only the left portion of the screen, and
+that portion is then duplicated by the SBS composite. Reported live as "two
+left halves". Crucially the **mouse still behaves as if the full width were
+there**: to click a menu item you must aim at where it would have been on the
+wide screen, and the right half's hitboxes exist but are never drawn.
+
+*Cause:* the swapchain extent was halved (1408 of a 2816-wide window), but X4
+keeps asking SDL for the window size and lays the HUD, menus and hit-testing
+out for 2816. Render target and UI coordinate system disagree.
+
+*Do not* diagnose this as a composite bug. The composite is doing its job; the
+frame it is given is genuinely one eye's worth of a mis-laid-out UI.
+
+*Consequence for stereo:* the render size must stay equal to the window size.
+That rules out "wide window, narrow render" as a way to get side-by-side, and
+is the reason the second eye is pursued through **multiview layers** rather
+than horizontal splitting — an extra layer is invisible to X4's sizing, an
+extra half-width is not. It also compounds with the CPU-side hit-testing in
+§4: X4's input mapping consistently follows the window, never the GPU.
+
 ### X4 creates several swapchains at startup
 
 Typically three, back to back, before the first frame. Anything you attach to

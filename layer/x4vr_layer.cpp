@@ -51,6 +51,11 @@ struct InstanceData {
     // resolved instance-level next-chain entry points
     PFN_vkDestroyInstance DestroyInstance = nullptr;
     PFN_vkEnumerateDeviceExtensionProperties EnumerateDeviceExtensionProperties = nullptr;
+    PFN_vkGetPhysicalDeviceProperties2 GetPhysicalDeviceProperties2 = nullptr;
+    PFN_vkGetPhysicalDeviceFeatures2 GetPhysicalDeviceFeatures2 = nullptr;
+    // The API version X4 itself asked for. Decides whether the 1.1-promoted
+    // entry points exist under their core names or only as KHR aliases.
+    uint32_t app_api_version = 0;
 };
 
 struct DeviceData {
@@ -1374,6 +1379,24 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateInstance(
     data.EnumerateDeviceExtensionProperties =
         (PFN_vkEnumerateDeviceExtensionProperties)gipa(
             *out, "vkEnumerateDeviceExtensionProperties");
+    // Core since 1.1, KHR alias before that. Which name resolves depends on
+    // the instance's apiVersion, so try both rather than assuming.
+    data.GetPhysicalDeviceProperties2 =
+        (PFN_vkGetPhysicalDeviceProperties2)gipa(
+            *out, "vkGetPhysicalDeviceProperties2");
+    if (!data.GetPhysicalDeviceProperties2)
+        data.GetPhysicalDeviceProperties2 =
+            (PFN_vkGetPhysicalDeviceProperties2)gipa(
+                *out, "vkGetPhysicalDeviceProperties2KHR");
+    data.GetPhysicalDeviceFeatures2 =
+        (PFN_vkGetPhysicalDeviceFeatures2)gipa(
+            *out, "vkGetPhysicalDeviceFeatures2");
+    if (!data.GetPhysicalDeviceFeatures2)
+        data.GetPhysicalDeviceFeatures2 =
+            (PFN_vkGetPhysicalDeviceFeatures2)gipa(
+                *out, "vkGetPhysicalDeviceFeatures2KHR");
+    data.app_api_version =
+        ci->pApplicationInfo ? ci->pApplicationInfo->apiVersion : 0;
     {
         std::lock_guard<std::mutex> lock(g_mu);
         g_instances[dispatch_key(*out)] = data;
@@ -1398,6 +1421,87 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyInstance(
     next(instance, ac);
 }
 
+// Phase 4b groundwork: report what multiview this device can do, and whether
+// X4 already switched it on.
+//
+// Multiview is how the second eye is meant to arrive: X4 keeps rendering one
+// eye's worth into what it believes is a normal image, the attachments become
+// 2-layer arrays behind its back, and the vertex shader picks its K from
+// gl_ViewIndex. That keeps the render size equal to the window size, which is
+// the one arrangement observed to work end to end (tag one_eye_baseline) --
+// see docs/x4-quirks.md on X4 laying its UI out from the *window* size.
+//
+// Purely diagnostic for now. It answers, before any SPIR-V work is committed,
+// three questions the plan rests on: is multiview supported at all, are two
+// views within maxMultiviewViewCount, and does X4 enable the feature itself
+// (if not, we must add it to the device's pNext chain, which means editing a
+// const struct X4 owns -- worth knowing early).
+void probe_multiview(VkPhysicalDevice phys, const VkDeviceCreateInfo *ci) {
+    InstanceData inst;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        auto it = g_instances.find(dispatch_key(phys));
+        if (it == g_instances.end())
+            return;
+        inst = it->second;
+    }
+
+    // Did X4 ask for it? Either as a 1.0-era extension...
+    bool ext_requested = false;
+    for (uint32_t i = 0; i < ci->enabledExtensionCount; i++)
+        if (strcmp(ci->ppEnabledExtensionNames[i], "VK_KHR_multiview") == 0)
+            ext_requested = true;
+    // ...or as a feature struct in the chain (either spelling).
+    bool feature_requested = false;
+    for (const VkBaseInStructure *p = (const VkBaseInStructure *)ci->pNext; p;
+         p = p->pNext) {
+        if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES)
+            feature_requested |=
+                ((const VkPhysicalDeviceMultiviewFeatures *)p)->multiview;
+        else if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES)
+            feature_requested |=
+                ((const VkPhysicalDeviceVulkan11Features *)p)->multiview;
+    }
+
+    if (!inst.GetPhysicalDeviceProperties2 || !inst.GetPhysicalDeviceFeatures2) {
+        X4VR_LOG("multiview: cannot probe — no vkGetPhysicalDevice*2 "
+                 "(app apiVersion %u.%u)",
+                 VK_API_VERSION_MAJOR(inst.app_api_version),
+                 VK_API_VERSION_MINOR(inst.app_api_version));
+        return;
+    }
+
+    VkPhysicalDeviceMultiviewProperties mvp{};
+    mvp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES;
+    VkPhysicalDeviceProperties2 props{};
+    props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    props.pNext = &mvp;
+    inst.GetPhysicalDeviceProperties2(phys, &props);
+
+    VkPhysicalDeviceMultiviewFeatures mvf{};
+    mvf.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES;
+    VkPhysicalDeviceFeatures2 feats{};
+    feats.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    feats.pNext = &mvf;
+    inst.GetPhysicalDeviceFeatures2(phys, &feats);
+
+    X4VR_LOG("multiview: supported=%d maxViews=%u maxInstanceIndex=%u "
+             "geomShader=%d tessShader=%d",
+             (int)mvf.multiview, mvp.maxMultiviewViewCount,
+             mvp.maxMultiviewInstanceIndex, (int)mvf.multiviewGeometryShader,
+             (int)mvf.multiviewTessellationShader);
+    X4VR_LOG("multiview: X4 requests it? ext=%d feature=%d — device api %u.%u, "
+             "app api %u.%u",
+             (int)ext_requested, (int)feature_requested,
+             VK_API_VERSION_MAJOR(props.properties.apiVersion),
+             VK_API_VERSION_MINOR(props.properties.apiVersion),
+             VK_API_VERSION_MAJOR(inst.app_api_version),
+             VK_API_VERSION_MINOR(inst.app_api_version));
+    if (mvf.multiview && mvp.maxMultiviewViewCount < 2)
+        X4VR_LOG("multiview: WARNING maxViews < 2 — two eyes cannot share a "
+                 "render pass on this device");
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     VkPhysicalDevice phys, const VkDeviceCreateInfo *ci,
     const VkAllocationCallbacks *ac, VkDevice *out) {
@@ -1415,6 +1519,9 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     VkResult r = next_create(phys, ci, ac, out);
     if (r != VK_SUCCESS)
         return r;
+
+    if (g_active)
+        probe_multiview(phys, ci);
 
     DeviceData d;
     d.device = *out;
