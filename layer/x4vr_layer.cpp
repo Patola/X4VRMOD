@@ -498,6 +498,19 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDrawIndexed(VkCommandBuffer cb,
     credit_draw(cb);
 }
 
+// Phase 4b stage 0: print the render-pass partition so it can be read
+// against docs/frame-analysis.md before anything is doubled.
+//
+// The same classification that decides the shear also seeds which passes
+// become two-view, so this log is the seed made visible: every pass, why it
+// landed where it did, and what it would cost. Opt-in -- X4 creates a lot of
+// passes and this is a startup-time inventory, not a per-frame trace.
+const bool g_mv_inventory = [] {
+    const char *e = getenv("X4VR_MV_INVENTORY");
+    return e && *e && *e != '0';
+}();
+uint32_t g_rp_serial = 0;
+
 // Classify each subpass as "must not be sheared":
 //   * no colour attachments        -> shadow cascade (light space)
 //   * all colour attachments LDR   -> UI / final blit (screen space)
@@ -523,6 +536,43 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
         }
         unsheared[i] = any && all_ldr;
     }
+
+    if (g_mv_inventory) {
+        const uint32_t serial = g_rp_serial++;
+        for (uint32_t i = 0; i < ci->subpassCount; i++) {
+            const auto &sp = ci->pSubpasses[i];
+            // Formats say more than the verdict does: they are how a
+            // misclassification is recognised on sight (an HDR target in the
+            // mono bucket, an LDR one in the stereo bucket).
+            char fmts[192];
+            int n = 0;
+            fmts[0] = 0;
+            for (uint32_t c = 0; c < sp.colorAttachmentCount && n < 160; c++) {
+                const uint32_t a = sp.pColorAttachments[c].attachment;
+                if (a == VK_ATTACHMENT_UNUSED || a >= ci->attachmentCount)
+                    continue;
+                n += snprintf(fmts + n, sizeof(fmts) - n, "%s%u%s",
+                              n ? "," : "", ci->pAttachments[a].format,
+                              is_ldr_format(ci->pAttachments[a].format) ? "L"
+                                                                        : "H");
+            }
+            const uint32_t da =
+                sp.pDepthStencilAttachment
+                    ? sp.pDepthStencilAttachment->attachment
+                    : VK_ATTACHMENT_UNUSED;
+            char dep[32] = " no-depth";
+            if (da != VK_ATTACHMENT_UNUSED && da < ci->attachmentCount)
+                snprintf(dep, sizeof(dep), " depth %u",
+                         ci->pAttachments[da].format);
+            const char *why = sp.colorAttachmentCount == 0 ? "depth-only/shadow"
+                              : unsheared[i]               ? "all-LDR/UI"
+                                                           : "world";
+            X4VR_LOG("rp #%u.%u: %u colour [%s]%s -> %s (%s)", serial, i,
+                     sp.colorAttachmentCount, fmts, dep,
+                     unsheared[i] ? "MONO" : "STEREO", why);
+        }
+    }
+
     std::lock_guard<std::mutex> lock(g_variants.mu);
     g_variants.unsheared[rp] = std::move(unsheared);
 }
