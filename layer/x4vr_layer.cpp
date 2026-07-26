@@ -107,6 +107,17 @@ const bool g_sbs_split_render = [] {
     return !(e && *e && *e == '0');
 }();
 
+// Multiview: how the second eye is meant to arrive. Measured on X4 (app api
+// 1.2): the device supports it, X4 does not enable it, so the layer must.
+// Enabling the feature alone changes nothing observable -- it only matters
+// once a render pass carries a view mask -- but it is gated anyway so the
+// device can be created exactly as X4 asked for it during A/B.
+bool g_multiview_supported = false; // filled in by probe_multiview()
+const bool g_multiview_enable = [] {
+    const char *e = getenv("X4VR_MULTIVIEW");
+    return !(e && *e && *e == '0');
+}();
+
 // The layer is switched on through the environment, and every child process
 // inherits it: under gamescope we are loaded into gamescope and its Xwayland
 // as well as into X4. Compositing *their* swapchains would apply the effect a
@@ -1485,6 +1496,14 @@ void probe_multiview(VkPhysicalDevice phys, const VkDeviceCreateInfo *ci) {
     feats.pNext = &mvf;
     inst.GetPhysicalDeviceFeatures2(phys, &feats);
 
+    // The feature struct we add is core 1.1. An app that declared 1.0 would
+    // need the VK_KHR_multiview *extension* enabled as well -- a second edit,
+    // to ppEnabledExtensionNames -- so refuse rather than build an invalid
+    // chain. X4 declares 1.2, so this is a guard, not a code path we use.
+    const bool api_ok = inst.app_api_version >= VK_API_VERSION_1_1;
+    g_multiview_supported =
+        mvf.multiview && mvp.maxMultiviewViewCount >= 2 && api_ok;
+
     X4VR_LOG("multiview: supported=%d maxViews=%u maxInstanceIndex=%u "
              "geomShader=%d tessShader=%d",
              (int)mvf.multiview, mvp.maxMultiviewViewCount,
@@ -1500,6 +1519,59 @@ void probe_multiview(VkPhysicalDevice phys, const VkDeviceCreateInfo *ci) {
     if (mvf.multiview && mvp.maxMultiviewViewCount < 2)
         X4VR_LOG("multiview: WARNING maxViews < 2 — two eyes cannot share a "
                  "render pass on this device");
+    if (mvf.multiview && !api_ok)
+        X4VR_LOG("multiview: not enabling — app declared api %u.%u, needs 1.1 "
+                 "for the core feature struct",
+                 VK_API_VERSION_MAJOR(inst.app_api_version),
+                 VK_API_VERSION_MINOR(inst.app_api_version));
+}
+
+// Turn multiview on in X4's own VkDeviceCreateInfo.
+//
+// Measured: X4 targets Vulkan 1.2, where multiview is core -- so there is no
+// extension to add and no KHR alias to worry about -- but it leaves the
+// feature disabled, and a disabled feature makes every multiview render pass
+// we would later create invalid.
+//
+// Three cases, because the chain may already speak for multiview:
+//   * VkPhysicalDeviceVulkan11Features present -> flip its bit. Adding a
+//     separate VkPhysicalDeviceMultiviewFeatures alongside it is forbidden.
+//   * VkPhysicalDeviceMultiviewFeatures present -> flip its bit.
+//   * neither -> prepend our own struct to a copy of the create info.
+//
+// The first two write through the application's const chain. That is
+// deliberate: relinking instead would mean copying every struct ahead of the
+// target, and we cannot know the size of extension structs we do not
+// recognise. The write is one VkBool32 in a transient struct the application
+// discards after the call, and it sets it to what we want for any later
+// vkCreateDevice too.
+const VkDeviceCreateInfo *enable_multiview(
+    const VkDeviceCreateInfo *ci, VkDeviceCreateInfo &copy,
+    VkPhysicalDeviceMultiviewFeatures &feat) {
+    if (!g_multiview_supported)
+        return ci;
+    for (auto *p = (VkBaseOutStructure *)ci->pNext; p; p = p->pNext) {
+        VkBool32 *bit = nullptr;
+        if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES)
+            bit = &((VkPhysicalDeviceVulkan11Features *)p)->multiview;
+        else if (p->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES)
+            bit = &((VkPhysicalDeviceMultiviewFeatures *)p)->multiview;
+        if (!bit)
+            continue;
+        if (!*bit) {
+            *bit = VK_TRUE;
+            X4VR_LOG("multiview: enabled in X4's existing feature struct");
+        }
+        return ci;
+    }
+    feat = {};
+    feat.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_FEATURES;
+    feat.multiview = VK_TRUE;
+    feat.pNext = (void *)ci->pNext;
+    copy = *ci;
+    copy.pNext = &feat;
+    X4VR_LOG("multiview: enabled — feature struct added to X4's device");
+    return &copy;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
@@ -1516,12 +1588,21 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
 
     auto next_create =
         (PFN_vkCreateDevice)gipa(VK_NULL_HANDLE, "vkCreateDevice");
+
+    // Probe first: it reads physical-device state only, and it has to report
+    // what X4 asked for rather than what we are about to add to the chain.
+    // These two must outlive next_create() -- the driver reads the chain.
+    VkDeviceCreateInfo mv_ci{};
+    VkPhysicalDeviceMultiviewFeatures mv_feat{};
+    if (g_active) {
+        probe_multiview(phys, ci);
+        if (g_multiview_enable)
+            ci = enable_multiview(ci, mv_ci, mv_feat);
+    }
+
     VkResult r = next_create(phys, ci, ac, out);
     if (r != VK_SUCCESS)
         return r;
-
-    if (g_active)
-        probe_multiview(phys, ci);
 
     DeviceData d;
     d.device = *out;

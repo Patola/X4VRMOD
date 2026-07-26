@@ -54,6 +54,11 @@
 #                         X4's Wayland output is new and may misbehave)
 #   X4VR_FOSSILIZE=1      keep Valve's fossilize layer (default: disabled to
 #                         keep the Vulkan layer chain clean during dev)
+#   X4VR_MULTIVIEW=0      stop the layer enabling the multiview device feature
+#                         (default: enabled). X4 declares Vulkan 1.2, where
+#                         multiview is core, but leaves the feature off; the
+#                         second eye needs it on. Enabling it alone changes
+#                         nothing until a render pass carries a view mask.
 #   X4VR_NO_LAYER=1       skip the Vulkan layer
 #   X4VR_NO_INJECT=1      skip the LD_PRELOAD injector
 #

@@ -19,4 +19,5 @@ include_directories(${Vulkan_INCLUDE_DIRS})
 
 add_subdirectory(layer)
 add_subdirectory(injector)
+add_subdirectory(tests)
 # add_subdirectory(cursor)   # later phase
