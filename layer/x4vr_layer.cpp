@@ -81,6 +81,7 @@ struct DeviceData {
     PFN_vkCreateShaderModule CreateShaderModule = nullptr;
     PFN_vkDestroyShaderModule DestroyShaderModule = nullptr;
     PFN_vkCreateRenderPass CreateRenderPass = nullptr;
+    PFN_vkCreateFramebuffer CreateFramebuffer = nullptr;
     PFN_vkCreateRenderPass2 CreateRenderPass2 = nullptr;
     PFN_vkDestroyRenderPass DestroyRenderPass = nullptr;
     PFN_vkCreateGraphicsPipelines CreateGraphicsPipelines = nullptr;
@@ -254,6 +255,10 @@ struct ShaderVariants {
     std::unordered_map<VkRenderPass, std::vector<bool>> unsheared;
     uint32_t swapped = 0;
 } g_variants;
+
+// render pass -> inventory serial, so the framebuffer log can name the pass
+// it belongs to. Inventory only; shares g_variants.mu.
+std::unordered_map<VkRenderPass, uint32_t> g_rp_serials;
 
 // 8-bit UNORM/SRGB colour targets mean a screen-space (UI/blit) pass.
 inline bool is_ldr_format(VkFormat f) {
@@ -505,6 +510,11 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDrawIndexed(VkCommandBuffer cb,
 // become two-view, so this log is the seed made visible: every pass, why it
 // landed where it did, and what it would cost. Opt-in -- X4 creates a lot of
 // passes and this is a startup-time inventory, not a per-frame trace.
+// Not gated on g_active at init -- g_active is only known once the instance
+// is created -- so every user of this checks both. Without that, gamescope
+// and Xwayland write their passes into the same log and the serials collide.
+// (Today gamescope happens to composite with compute and creates none, which
+// is luck, not a reason to skip the check.)
 const bool g_mv_inventory = [] {
     const char *e = getenv("X4VR_MV_INVENTORY");
     return e && *e && *e != '0';
@@ -537,8 +547,10 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
         unsheared[i] = any && all_ldr;
     }
 
-    if (g_mv_inventory) {
+    std::lock_guard<std::mutex> lock(g_variants.mu);
+    if (g_mv_inventory && g_active) {
         const uint32_t serial = g_rp_serial++;
+        g_rp_serials[rp] = serial;
         for (uint32_t i = 0; i < ci->subpassCount; i++) {
             const auto &sp = ci->pSubpasses[i];
             // Formats say more than the verdict does: they are how a
@@ -573,7 +585,6 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
         }
     }
 
-    std::lock_guard<std::mutex> lock(g_variants.mu);
     g_variants.unsheared[rp] = std::move(unsheared);
 }
 
@@ -612,6 +623,35 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass2(
     return r;
 }
 
+// The render pass says what a pass *is*; only the framebuffer says how big it
+// is, and size is what decides whether doubling it costs 16 MB or 60 KB. It
+// also carries the layer count, which is the thing the doubling has to change
+// and which validation checks against the view mask.
+//
+// Joined to the pass inventory by serial, so the two logs read together.
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
+    VkDevice device, const VkFramebufferCreateInfo *ci,
+    const VkAllocationCallbacks *ac, VkFramebuffer *out) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    VkResult r = d->CreateFramebuffer(device, ci, ac, out);
+    if (r == VK_SUCCESS && g_mv_inventory && g_active) {
+        uint32_t serial = UINT32_MAX;
+        {
+            std::lock_guard<std::mutex> lock(g_variants.mu);
+            auto it = g_rp_serials.find(ci->renderPass);
+            if (it != g_rp_serials.end())
+                serial = it->second;
+        }
+        X4VR_LOG("fb  rp #%u: %ux%u layers=%u attachments=%u", serial,
+                 ci->width, ci->height, ci->layers, ci->attachmentCount);
+    }
+    return r;
+}
+
 VKAPI_ATTR void VKAPI_CALL x4vr_DestroyRenderPass(
     VkDevice device, VkRenderPass rp, const VkAllocationCallbacks *ac) {
     DeviceData *d;
@@ -622,6 +662,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyRenderPass(
     {
         std::lock_guard<std::mutex> lock(g_variants.mu);
         g_variants.unsheared.erase(rp);
+        g_rp_serials.erase(rp);
     }
     d->DestroyRenderPass(device, rp, ac);
 }
@@ -1678,6 +1719,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(CreateShaderModule);
     RESOLVE(DestroyShaderModule);
     RESOLVE(CreateRenderPass);
+    RESOLVE(CreateFramebuffer);
     RESOLVE(CreateRenderPass2);
     RESOLVE(DestroyRenderPass);
     RESOLVE(CreateGraphicsPipelines);
@@ -1767,6 +1809,7 @@ const NameFunc kHooks[] = {
     {"vkCreateShaderModule", (PFN_vkVoidFunction)x4vr_CreateShaderModule},
     {"vkDestroyShaderModule", (PFN_vkVoidFunction)x4vr_DestroyShaderModule},
     {"vkCreateRenderPass", (PFN_vkVoidFunction)x4vr_CreateRenderPass},
+    {"vkCreateFramebuffer", (PFN_vkVoidFunction)x4vr_CreateFramebuffer},
     {"vkCreateRenderPass2", (PFN_vkVoidFunction)x4vr_CreateRenderPass2},
     {"vkDestroyRenderPass", (PFN_vkVoidFunction)x4vr_DestroyRenderPass},
     {"vkCreateGraphicsPipelines",
