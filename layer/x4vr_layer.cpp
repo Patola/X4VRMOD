@@ -82,6 +82,10 @@ struct DeviceData {
     PFN_vkDestroyShaderModule DestroyShaderModule = nullptr;
     PFN_vkCreateRenderPass CreateRenderPass = nullptr;
     PFN_vkCreateFramebuffer CreateFramebuffer = nullptr;
+    PFN_vkCreateImage CreateImage = nullptr;
+    PFN_vkDestroyImage DestroyImage = nullptr;
+    PFN_vkCreateImageView CreateImageView = nullptr;
+    PFN_vkDestroyImageView DestroyImageView = nullptr;
     PFN_vkCreateRenderPass2 CreateRenderPass2 = nullptr;
     PFN_vkDestroyRenderPass DestroyRenderPass = nullptr;
     PFN_vkCreateGraphicsPipelines CreateGraphicsPipelines = nullptr;
@@ -259,6 +263,28 @@ struct ShaderVariants {
 // render pass -> inventory serial, so the framebuffer log can name the pass
 // it belongs to. Inventory only; shares g_variants.mu.
 std::unordered_map<VkRenderPass, uint32_t> g_rp_serials;
+
+// Image tracking, for the Phase 4b question the pass inventory could not
+// answer: how many *images* are behind those passes? The cost of doubling is
+// per image, but a render pass names only its attachments and ten passes
+// sharing one colour target look like ten targets from there.
+//
+// vkCreateImage cannot classify anything on its own -- at creation an image
+// has no render pass and no framebuffer, so "is this a per-eye attachment"
+// is not yet a question the create info can answer. The hooks therefore only
+// record identity, and the join image <- view <- framebuffer -> pass happens
+// where the framebuffer names them all at once.
+struct ImageInfo {
+    uint32_t serial;
+    VkExtent3D extent;
+    VkFormat format;
+    uint32_t layers, mips, samples;
+    VkImageUsageFlags usage;
+};
+std::mutex g_img_mu;
+std::unordered_map<VkImage, ImageInfo> g_images;
+std::unordered_map<VkImageView, VkImage> g_views;
+uint32_t g_img_serial = 0;
 
 // 8-bit UNORM/SRGB colour targets mean a screen-space (UI/blit) pass.
 inline bool is_ldr_format(VkFormat f) {
@@ -623,12 +649,93 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass2(
     return r;
 }
 
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImage(
+    VkDevice device, const VkImageCreateInfo *ci,
+    const VkAllocationCallbacks *ac, VkImage *out) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    VkResult r = d->CreateImage(device, ci, ac, out);
+    if (r != VK_SUCCESS || !g_active)
+        return r;
+    ImageInfo info{};
+    info.extent = ci->extent;
+    info.format = ci->format;
+    info.layers = ci->arrayLayers;
+    info.mips = ci->mipLevels;
+    info.samples = (uint32_t)ci->samples;
+    info.usage = ci->usage;
+    {
+        std::lock_guard<std::mutex> lock(g_img_mu);
+        info.serial = g_img_serial++;
+        g_images[*out] = info;
+    }
+    if (g_mv_inventory)
+        X4VR_LOG("img #%u: %ux%ux%u layers=%u mips=%u samples=%u fmt=%u "
+                 "usage=0x%x",
+                 info.serial, ci->extent.width, ci->extent.height,
+                 ci->extent.depth, ci->arrayLayers, ci->mipLevels,
+                 (uint32_t)ci->samples, ci->format, ci->usage);
+    return r;
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_DestroyImage(VkDevice device, VkImage img,
+                                             const VkAllocationCallbacks *ac) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_img_mu);
+        g_images.erase(img);
+    }
+    d->DestroyImage(device, img, ac);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImageView(
+    VkDevice device, const VkImageViewCreateInfo *ci,
+    const VkAllocationCallbacks *ac, VkImageView *out) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    VkResult r = d->CreateImageView(device, ci, ac, out);
+    if (r == VK_SUCCESS && g_active) {
+        std::lock_guard<std::mutex> lock(g_img_mu);
+        g_views[*out] = ci->image; // the only link a framebuffer gives us
+    }
+    return r;
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_DestroyImageView(
+    VkDevice device, VkImageView view, const VkAllocationCallbacks *ac) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_img_mu);
+        g_views.erase(view);
+    }
+    d->DestroyImageView(device, view, ac);
+}
+
 // The render pass says what a pass *is*; only the framebuffer says how big it
 // is, and size is what decides whether doubling it costs 16 MB or 60 KB. It
 // also carries the layer count, which is the thing the doubling has to change
 // and which validation checks against the view mask.
 //
-// Joined to the pass inventory by serial, so the two logs read together.
+// And it is the one place that names a pass and its images together, so this
+// is where the image serials get attached. An attachment that resolves to no
+// image (printed "?") came from the swapchain, which the driver creates
+// behind vkGetSwapchainImagesKHR rather than through vkCreateImage.
+//
+// Joined to the pass inventory by serial, so the logs read together.
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
     VkDevice device, const VkFramebufferCreateInfo *ci,
     const VkAllocationCallbacks *ac, VkFramebuffer *out) {
@@ -646,8 +753,25 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
             if (it != g_rp_serials.end())
                 serial = it->second;
         }
-        X4VR_LOG("fb  rp #%u: %ux%u layers=%u attachments=%u", serial,
-                 ci->width, ci->height, ci->layers, ci->attachmentCount);
+        char imgs[256];
+        int n = 0;
+        imgs[0] = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_img_mu);
+            for (uint32_t i = 0; i < ci->attachmentCount && n < 230; i++) {
+                auto v = g_views.find(ci->pAttachments[i]);
+                auto im = v == g_views.end() ? g_images.end()
+                                             : g_images.find(v->second);
+                if (im == g_images.end())
+                    n += snprintf(imgs + n, sizeof(imgs) - n, "%s?",
+                                  n ? "," : "");
+                else
+                    n += snprintf(imgs + n, sizeof(imgs) - n, "%s#%u",
+                                  n ? "," : "", im->second.serial);
+            }
+        }
+        X4VR_LOG("fb  rp #%u: %ux%u layers=%u attachments=%u imgs=[%s]", serial,
+                 ci->width, ci->height, ci->layers, ci->attachmentCount, imgs);
     }
     return r;
 }
@@ -1720,6 +1844,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(DestroyShaderModule);
     RESOLVE(CreateRenderPass);
     RESOLVE(CreateFramebuffer);
+    RESOLVE(CreateImage);
+    RESOLVE(DestroyImage);
+    RESOLVE(CreateImageView);
+    RESOLVE(DestroyImageView);
     RESOLVE(CreateRenderPass2);
     RESOLVE(DestroyRenderPass);
     RESOLVE(CreateGraphicsPipelines);
@@ -1810,6 +1938,10 @@ const NameFunc kHooks[] = {
     {"vkDestroyShaderModule", (PFN_vkVoidFunction)x4vr_DestroyShaderModule},
     {"vkCreateRenderPass", (PFN_vkVoidFunction)x4vr_CreateRenderPass},
     {"vkCreateFramebuffer", (PFN_vkVoidFunction)x4vr_CreateFramebuffer},
+    {"vkCreateImage", (PFN_vkVoidFunction)x4vr_CreateImage},
+    {"vkDestroyImage", (PFN_vkVoidFunction)x4vr_DestroyImage},
+    {"vkCreateImageView", (PFN_vkVoidFunction)x4vr_CreateImageView},
+    {"vkDestroyImageView", (PFN_vkVoidFunction)x4vr_DestroyImageView},
     {"vkCreateRenderPass2", (PFN_vkVoidFunction)x4vr_CreateRenderPass2},
     {"vkDestroyRenderPass", (PFN_vkVoidFunction)x4vr_DestroyRenderPass},
     {"vkCreateGraphicsPipelines",
