@@ -665,20 +665,41 @@ pass-level over-claim was absorbed silently and invisibly.
 over-claim would ship.
 
 But the fix is not to move those passes to MONO. A bloom or tonemap pass
-consuming the per-eye lighting result *must* run per eye. The axis is not
-"world geometry vs not" — it is:
+consuming the per-eye lighting result *must* run per eye.
 
-> **per-eye vs shared.**
+### Two orthogonal decisions, not one
+
+The seed conflates two questions that have different answers, and untangling
+them is the whole of the partition:
+
+> **1. How many layers?** — does this pass contribute to the final per-eye
+> image?
 >
-> * **Shared:** light-space (shadow cascades), reductions (exposure), and the
->   UI.
-> * **Per-eye:** the entire camera-view chain — geometry *and* the screen-space
->   passes downstream of it.
+> * **2 layers:** G-buffer, lighting, all screen-space post, tonemap, **and the
+>   UI**.
+> * **1 layer:** shadow cascades (light space, shared by construction) and the
+>   exposure reductions (a shared scalar).
+>
+> **2. Which `K` per view?** — this is what `unsheared` already answers.
+>
+> * **World:** the per-eye shear.
+> * **UI:** identity for *both* views.
 
-So the seed's *verdicts* are largely right while its *reasons* are wrong, which
-matters because the reason is what gets extended when a new case appears. This
-is tracked as a separate `per_eye` classification; `unsheared` is left alone so
-the verified-good shear does not move while something else changes.
+**The UI is the case that proves they are separate.** "The UI must be mono"
+means *it must not be sheared* — not *it must be rendered once*. The UI has to
+appear in **both** eyes, at the same screen position. So its passes are
+two-layer like everything else, drawn twice with an identity `K`, which puts it
+at zero parallax in both eyes.
+
+That is also what keeps input working: identity `K` means the drawn position
+equals the unshifted screen position X4 hit-tests against (see the CPU
+hit-testing section above). Rendering the UI into only one layer would leave
+the other eye without a HUD.
+
+So the seed's *verdicts* are largely right for question 2 while its *reasons*
+are wrong, and it does not answer question 1 at all. Question 1 is tracked as a
+separate `per_eye` classification; `unsheared` is left alone so the
+verified-good shear does not move while something else changes.
 
 ### Reductions are shared, and they announce themselves by shape
 
@@ -725,3 +746,46 @@ downstream of the camera stays doubled and costs what stereo costs.
   two-layer, those samplers must become `sampler2DArray` indexed by
   `gl_ViewIndex`. Bounded to one pass and a handful of modules, but it is real
   SPIR-V work and the one part of Phase 4b that is not plumbing.
+
+### Measured: the real doubling cost, and the sharing that hid it
+
+`vkCreateImage` + `vkCreateImageView`, joined at `vkCreateFramebuffer`
+(session: menu → flight → dock at a station → walk around):
+
+```
+attachment images bound to a framebuffer: 27
+of those, touched by a per-eye pass:       21
+REAL extra VRAM to double them:              135.3 MB
+  (pass-level upper bound was               316.8 MB)
+```
+
+The 2.3× overcount is exactly the aliasing predicted: **one D32 depth image
+(`#93`) is shared by 11 render passes**, and three G-buffer targets
+(`#97/98/99`) by 9 each. Counting passes billed each of them nine or eleven
+times.
+
+1376 `vkCreateImage` calls in the session, of which 27 are framebuffer
+attachments — the rest is streamed station and ship texture.
+
+**No conflicts.** No image is written by both a per-eye and a shared pass, so
+the write-side partition is clean and nothing needs an arbitration rule.
+
+*Caveat on the number:* X4 builds a complete set of targets for the menu
+(`#46/47/51-53`) and another for the game a second later (`#92-99`). Without
+destroy tracking both are counted, so 135.3 MB is an upper bound on an upper
+bound; the true figure is likely nearer 80 MB. `img #N: destroyed` was added
+afterwards so later runs discount them. It changes no decision — every
+candidate figure is far below where memory matters.
+
+### The swapchain is the cut point
+
+Passes 0, 1, 7 and 14 attach a **driver-owned swapchain image** (printed `?` by
+the inventory, because it never passes through `vkCreateImage`). A swapchain
+image cannot be given a second array layer — it is the thing being presented.
+
+So the per-eye chain has to stop one step earlier, and the natural place is
+already built: `SbsCompositor` hands X4 its own images from
+`vkGetSwapchainImagesKHR`. Those become **one two-layer image** rather than
+per-eye images, X4's final pass writes both layers, and the compositor blits
+layer 0 and layer 1 into the real swapchain — side by side for SBS on a flat
+screen, or straight into an OpenXR swapchain later.
