@@ -38,6 +38,7 @@ RP = re.compile(r"rp #(\d+)\.(\d+): (\d+) colour \[([^\]]*)\]"
                 r"(?: depth (\d+)| no-depth) -> (MONO|STEREO) \(([^)]+)\)")
 FB = re.compile(r"fb  rp #(\d+): (\d+)x(\d+) layers=(\d+) attachments=(\d+)"
                 r"(?: imgs=\[([^\]]*)\])?")
+DEAD = re.compile(r"img #(\d+): destroyed")
 IMG = re.compile(r"img #(\d+): (\d+)x(\d+)x(\d+) layers=(\d+) mips=(\d+) "
                  r"samples=(\d+) fmt=(\d+) usage=0x([0-9a-f]+)")
 
@@ -66,6 +67,7 @@ def main(path):
     passes, fbs, images = {}, defaultdict(list), {}
     img_passes = defaultdict(set)   # image serial -> render passes using it
     swapchain_attached = set()      # passes with a driver-owned attachment
+    destroyed = set()               # images torn down before exit
     for ln in lines:
         m = RP.search(ln)
         if m:
@@ -75,6 +77,10 @@ def main(path):
                 dict(sub=int(sub), cols=cols,
                      depth=int(depth) if depth else None,
                      verdict=verdict, why=why))
+            continue
+        m = DEAD.search(ln)
+        if m:
+            destroyed.add(int(m.group(1)))
             continue
         m = IMG.search(ln)
         if m:
@@ -175,6 +181,8 @@ def main(path):
         ps = img_passes.get(s, set())
         if not ps:
             continue  # attachment-capable but never bound to a framebuffer
+        if s in destroyed:
+            continue  # belonged to a scene that has since been torn down
         verdicts = {verdict_of.get(p, "?") for p in ps}
         b = image_bytes(info["w"], info["h"], info["d"], info["layers"],
                         info["mips"], info["samples"], info["fmt"])

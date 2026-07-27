@@ -690,7 +690,15 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyImage(VkDevice device, VkImage img,
     }
     {
         std::lock_guard<std::mutex> lock(g_img_mu);
-        g_images.erase(img);
+        auto it = g_images.find(img);
+        // Logged so the inventory can tell a live image from one belonging to
+        // a scene that has since been torn down. X4 builds a full set of
+        // targets for the menu and another for the game a second later, and
+        // counting both inflates the doubling estimate.
+        if (it != g_images.end() && g_mv_inventory)
+            X4VR_LOG("img #%u: destroyed", it->second.serial);
+        if (it != g_images.end())
+            g_images.erase(it);
     }
     d->DestroyImage(device, img, ac);
 }
