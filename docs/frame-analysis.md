@@ -202,9 +202,15 @@ we start writing eye matrices.
   need per-eye patching, e.g. camera world position for specular).
 - Present-time details: swapchain image count, present mode, and how the
   final pass maps onto the swapchain image (single full-screen draw — easy
-  overlay point).
+  overlay point). *Partly answered live:* `1408x1408 images>=4 format=44
+  presentMode=2`, and the SBS composite already blits at present time.
 - All three captures are 2816×1385 (config height fix hadn't taken effect);
-  re-verify 2816×1408 next session.
+  re-verify 2816×1408 next session. *Superseded:* the target is now 1408×1408
+  per eye (tag `one_eye_baseline`); the live pass inventory in Phase 4b below
+  is at that size and confirms the capture's pass map.
+- Which render targets are distinct **images** rather than distinct passes —
+  needed to turn the Phase 4b doubling estimate into a real number, and the
+  same `vkCreateImage` hook the doubling itself needs.
 
 ## Phase 3 findings: camera-relative rendering (the blocker)
 
@@ -557,3 +563,165 @@ still requires patching the camera block (`M_view`, `M_viewprojection`,
 `M_invprojection(_uj)`, `V_cameraposition` @736, `V_light_direction_view`
 @864), which the deferred passes read; that is the remaining Phase-4a work
 before `sbs_lighting_done`.
+
+## Phase 4b: multiview — the device, and the render-pass partition
+
+The second eye arrives as **array layer 1** rather than as the right half of a
+wider frame. That choice is forced, not stylistic: X4 lays its UI out from the
+*window* size while rendering into the swapchain extent, so a wide window with
+a narrow render desynchronises what is drawn from what can be clicked (the
+"two left halves" symptom — see `docs/x4-quirks.md`). An extra array layer is
+invisible to X4's sizing; an extra half-width is not. Render size stays equal
+to window size, which is the arrangement verified end to end at tag
+`one_eye_baseline`.
+
+### The device supports it; X4 switches it off
+
+Probed at `vkCreateDevice` (`X4VR_MV_INVENTORY` is not needed for this — it
+always logs):
+
+```
+multiview: supported=1 maxViews=8 maxInstanceIndex=2147483647
+           geomShader=1 tessShader=1
+multiview: X4 requests it? ext=0 feature=0 — device api 1.4, app api 1.2
+multiview: enabled in X4's existing feature struct
+```
+
+Three facts worth keeping:
+
+1. **X4 declares Vulkan 1.2**, where multiview is core. No extension to add,
+   no KHR alias to chase, `VkRenderPassMultiviewCreateInfo` under its core
+   name.
+2. **X4 leaves the feature disabled**, and a disabled feature makes every
+   multiview render pass invalid. The layer enables it.
+3. **X4 already supplies a feature struct** with `multiview = VK_FALSE`, so
+   the layer takes the *flip* path, not the prepend path. Adding a second
+   `VkPhysicalDeviceMultiviewFeatures` beside an existing
+   `VkPhysicalDeviceVulkan11Features` is forbidden outright, which is why the
+   code searches the chain before prepending.
+
+Regression-tested by `tests/run-multiview-enable.sh`, which proves the feature
+is *live* (it creates a two-view render pass and lets validation judge) rather
+than merely requested, and includes two cases that must fail.
+
+### Half of X4's render passes never run
+
+`X4VR_MV_INVENTORY=1`, joined with the framebuffer log by
+`tools/mv_inventory.py`, over a full session (cockpit → walking → map → exit):
+
+| Verdict (seed) | Reason | Declared | Instantiated |
+|---|---|---:|---:|
+| MONO | all-LDR/UI | 9 | 6 |
+| MONO | depth-only/shadow | 10 | 5 |
+| STEREO | "world" | 47 | 23 |
+
+**66 render passes are declared; only 34 ever get a framebuffer.** X4 builds
+several variants of each pass and instantiates one — with antialiasing forced
+off, the MSAA twins are dead.
+
+*Trap:* the dead twins must still be classified **identically** to their live
+siblings. Pipelines are created against a render pass, so giving one variant a
+view mask while its twin keeps none splits them into incompatible passes. Do
+not "optimise" by skipping passes that were never seen with a framebuffer.
+
+### The live frame, by role
+
+| Passes | Extent | Attachments | Role |
+|---|---|---|---|
+| 23 | 1408² | `RGBA16F, RGBA16F, RG16F, RG16F` + `D32` | **G-buffer** — exactly one |
+| 13, 28–32, 51, 53, 60, 65 | 1408² | `RGBA16F` + `D32` | forward / transparent geometry |
+| 25 | 1408² | `R8_UINT` + `D32` | ID / selection buffer |
+| 38, 39 | 1408² | `RGBA16F` | fullscreen HDR |
+| 62, 64 | 1408² | `R16_SFLOAT` | single-channel fullscreen |
+| 34, 36 | 352² | `RGBA16F` | bloom, quarter-res |
+| 21 | 256² | `RGBA16F` | small aux target |
+| 27 | 704² | `R8_UINT` | half-res mask |
+| 55, 57, 59 | **4096×1** | `RGBA16F` | **exposure / luminance reduction** |
+| 42, 44, 46, 48, 50 | 2048² | `D16` | 5 shadow cascades |
+| 0, 1, 7, 14, 40, 52 | 1408² | `BGRA8(_SRGB)` | UI / final blit |
+
+The G-buffer's shape (4 MRT + D32, and only one instance) confirms the
+capture's pass map against a live session.
+
+### The seed's axis was wrong — "world" is not the question
+
+Reusing the shear classification (`unsheared`) as the multiview seed exposed a
+flaw that had been latent in it all along.
+
+`is_ldr_format()` recognises only **four-channel** 8-bit formats. Every
+single- and two-channel target — `R8_UNORM`, `R8_UINT`, `R8G8_UNORM`,
+`R16_UNORM`, `R16_SFLOAT`, `R16G16_UNORM` — therefore fails the LDR test, is
+treated as HDR, and lands in the "world geometry" bucket. Their shape gives
+them away: **one colour attachment, no depth attachment**. A pass with no
+depth attachment is a fullscreen quad, not world geometry.
+
+*Why this never broke the shear:* the shear has a **second gate** — a module
+counts as World only if its vertex stage actually reads `M_worldviewprojection`
+(member 0 of the set-3 block). Fullscreen quads do not, so they were excluded
+at the shader level regardless of what the pass classification claimed. The
+pass-level over-claim was absorbed silently and invisibly.
+
+**Multiview has no such second gate.** Doubling is decided per pass, so the
+over-claim would ship.
+
+But the fix is not to move those passes to MONO. A bloom or tonemap pass
+consuming the per-eye lighting result *must* run per eye. The axis is not
+"world geometry vs not" — it is:
+
+> **per-eye vs shared.**
+>
+> * **Shared:** light-space (shadow cascades), reductions (exposure), and the
+>   UI.
+> * **Per-eye:** the entire camera-view chain — geometry *and* the screen-space
+>   passes downstream of it.
+
+So the seed's *verdicts* are largely right while its *reasons* are wrong, which
+matters because the reason is what gets extended when a new case appears. This
+is tracked as a separate `per_eye` classification; `unsheared` is left alone so
+the verified-good shear does not move while something else changes.
+
+### Reductions are shared, and they announce themselves by shape
+
+Passes 55/57/59 are **4096×1**. A one-pixel-tall target is a scan, not a view
+of the world — the luminance/exposure chain.
+
+These must be **MONO**, and for a reason that is not thrift: per-eye exposure
+lets the two eyes auto-expose independently and flicker against each other,
+which is far worse in a headset than on a monitor. The seed had them as
+STEREO, so this is a correctness fix the seed would have shipped.
+
+`tools/mv_inventory.py` flags any STEREO pass with a dimension ≤ 4 for exactly
+this reason — found by shape rather than by guessing which passes are
+reductions.
+
+### VRAM is not the pruning criterion
+
+Costing every instantiated STEREO pass at double gives **330 MB**. That number
+is an upper bound and almost certainly a large overestimate: it bills *passes*,
+not *images*, so the ten `RGBA16F + D32` geometry passes — very likely one
+colour/depth pair reused ten times — are counted ten times over. Resolving it
+needs `vkCreateImage`.
+
+Either way the conclusion holds: on a 24 GB card even the inflated figure is
+noise. **Memory is not a reason to exclude a pass.**
+
+The real cost of stereo is **fragment shading** — every per-eye pass shades
+twice the pixels, and that is inherent to drawing two eyes, not something
+multiview avoids. What multiview saves is CPU submission and vertex work
+versus double-submitting the frame.
+
+*Consequence:* passes are excluded for **correctness** (light-space, shared
+exposure, CPU-hit-tested UI), never for thrift. Everything genuinely
+downstream of the camera stays doubled and costs what stereo costs.
+
+### Known remaining work
+
+* **Multiview does not cover compute.** A compute dispatch reading a doubled
+  image sees layer 0 and silently produces a mono result for both eyes. The
+  overrides already disable most of that chain (`ssao=0`, `ssr=false`,
+  `glow=0`, `antialiasing=none`), so what remains is shadows → G-buffer →
+  lighting → exposure → UI. Re-enabling any of those settings reopens this.
+* **The deferred lighting pass samples the G-buffer.** Once the G-buffer is
+  two-layer, those samplers must become `sampler2DArray` indexed by
+  `gl_ViewIndex`. Bounded to one pass and a handful of modules, but it is real
+  SPIR-V work and the one part of Phase 4b that is not plumbing.
