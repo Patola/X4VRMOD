@@ -433,7 +433,12 @@ void frame_timing(uint64_t frame) {
 void frame_flush() {
     std::lock_guard<std::mutex> lock(g_track.mu);
     g_track.frame++;
-    frame_timing(g_track.frame);
+    // Only the game's. gamescope presents too, into the same log file, and
+    // its series is pinned to the display refresh while X4's is not -- two
+    // interleaved sequences of "perf frame N" that cannot be told apart
+    // afterwards, because both restart at 1.
+    if (g_active)
+        frame_timing(g_track.frame);
     if (g_verify_ptr && (g_track.frame % 120) == 0) {
         const x4vr::Mat4 vp = x4vr::load(g_verify_ptr + x4vr::kViewProjection);
         bool still_zero = true;
