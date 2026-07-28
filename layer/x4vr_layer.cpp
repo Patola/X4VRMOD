@@ -463,6 +463,24 @@ struct FbAtt {
 };
 std::unordered_map<VkFramebuffer, std::vector<FbAtt>> g_fb_atts;
 
+// Which kinds of pass render into each doubled image.
+//
+// An image attached to a *masked* pass gets both layers written; one attached
+// to an unmasked pass gets layer 0 only, because an unmasked pass keeps X4's
+// own single-layer view. An image with both kinds of writer therefore ends the
+// frame with a layer 1 that is missing every unmasked contribution -- which
+// would show up as a partial, content-shaped divergence rather than a blank or
+// unrelated layer.
+//
+// Computed inside one run on purpose: image serials restart per run, so
+// cross-referencing an old inventory log against today's probe output is not
+// sound, and an earlier attempt to do exactly that gave an answer for the
+// wrong run.
+struct PassKinds {
+    std::vector<uint32_t> masked, unmasked;
+};
+std::unordered_map<uint32_t, PassKinds> g_img_writers; // by image serial
+
 // 8-bit UNORM/SRGB colour targets mean a screen-space (UI/blit) pass.
 inline bool is_ldr_format(VkFormat f) {
     switch (f) {
@@ -1057,6 +1075,27 @@ void mv_report(const char *when) {
              "transfers_widened=%u",
              when, g_mv_stats.pipe_masked, g_mv_stats.pipe_unmasked,
              g_mv_stats.pipe_dynamic, g_mv_stats.widened);
+    // Images with writers of both kinds. Layer 1 misses every unmasked
+    // contribution, so this list is the shortlist for any partial divergence.
+    {
+        std::lock_guard<std::mutex> lock(g_img_mu);
+        for (const auto &e : g_img_writers) {
+            if (e.second.masked.empty() || e.second.unmasked.empty())
+                continue;
+            char m[128] = {0}, u[128] = {0};
+            int n = 0;
+            for (uint32_t rp : e.second.masked)
+                if (n < 110) n += snprintf(m + n, sizeof(m) - n, "%s%u",
+                                           n ? "," : "", rp);
+            n = 0;
+            for (uint32_t rp : e.second.unmasked)
+                if (n < 110) n += snprintf(u + n, sizeof(u) - n, "%s%u",
+                                           n ? "," : "", rp);
+            X4VR_LOG("mv %s: img #%u MIXED WRITERS — masked rp [%s], "
+                     "unmasked rp [%s]; layer 1 misses the unmasked ones",
+                     when, e.first, m, u);
+        }
+    }
     // The two candidates, side by side. bind_mismatch > 0 means the draws
     // themselves never reached view 1 and nothing downstream matters yet;
     // barrier_narrow > 0 means they did but layer 1 is read in a layout no
@@ -1461,6 +1500,24 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
 
     VkResult r = d->CreateFramebuffer(device, masked && g_active ? &mod : ci,
                                       ac, out);
+
+    // Who writes each doubled image, masked or not. Every pass, not just the
+    // masked ones -- the whole point is to find images that get both.
+    if (r == VK_SUCCESS && g_mv && g_active) {
+        std::lock_guard<std::mutex> lock(g_img_mu);
+        for (uint32_t i = 0; i < ci->attachmentCount; i++) {
+            auto v = g_views.find(ci->pAttachments[i]);
+            if (v == g_views.end())
+                continue;
+            auto im = g_images.find(v->second.image);
+            if (im == g_images.end() || !im->second.doubled)
+                continue;
+            auto &k = g_img_writers[im->second.serial];
+            auto &side = masked ? k.masked : k.unmasked;
+            if (std::find(side.begin(), side.end(), serial) == side.end())
+                side.push_back(serial);
+        }
+    }
 
     // Everything the readback needs about this pass's attachments, recorded
     // while the framebuffer still names them. Colour only: a depth copy has
@@ -2938,12 +2995,21 @@ void probe_collect(DeviceData *d, VkQueue queue) {
         if (l0[i]) z0 = false;
         if (l1[i]) z1 = false;
     }
-    for (size_t t = 0; t * bpp < n; t++)
+    // How many texels carry anything at all in layer 0. A space scene is
+    // mostly empty, so "27% of texels differ" means one thing if 27% of the
+    // frame has content and something quite different if 90% does.
+    size_t nz0 = 0;
+    static const uint8_t zero[16] = {0};
+    for (size_t t = 0; t * bpp < n; t++) {
+        const bool nonzero = memcmp(l0 + t * bpp, zero, bpp) != 0;
+        if (nonzero)
+            nz0++;
         if (memcmp(l0 + t * bpp, l1 + t * bpp, bpp) != 0) {
             if (first == SIZE_MAX)
                 first = t;
             dtex++;
         }
+    }
     const size_t total = n / bpp;
     if (h0 == h1) {
         X4VR_LOG("mv probe: img #%u %ux%u  layer0=%016llx%s  "
@@ -2953,12 +3019,13 @@ void probe_collect(DeviceData *d, VkQueue queue) {
                  z1 ? " (all zero)" : "");
     } else {
         X4VR_LOG("mv probe: img #%u %ux%u  layer0=%016llx%s  "
-                 "layer1=%016llx%s  DIFFER %zu/%zu texels (%.2f%%) "
-                 "first at (%u,%u)",
+                 "layer1=%016llx%s  DIFFER %zu/%zu texels (%.2f%%), "
+                 "layer0 non-empty %.2f%%, first at (%u,%u)",
                  g_probe.serial, g_probe.w, g_probe.h, (unsigned long long)h0,
                  z0 ? " (all zero)" : "", (unsigned long long)h1,
                  z1 ? " (all zero)" : "", dtex, total,
                  total ? 100.0 * (double)dtex / (double)total : 0.0,
+                 total ? 100.0 * (double)nz0 / (double)total : 0.0,
                  g_probe.w ? (uint32_t)(first % g_probe.w) : 0,
                  g_probe.w ? (uint32_t)(first / g_probe.w) : 0);
     }
