@@ -160,6 +160,9 @@ struct MvStats {
     uint32_t substituted = 0; // attachment views replaced with array views
     uint32_t fallbacks = 0;   // attachments we could NOT upgrade -- must be 0
     uint32_t redirected = 0;  // gate-2 descriptor reads moved to layer 1
+    uint32_t pipe_masked = 0;   // pipelines built against a view-masked pass
+    uint32_t pipe_unmasked = 0; // ... against a pass with no view mask
+    uint32_t pipe_dynamic = 0;  // ... against no render pass (dynamic rendering)
     uint32_t reported = 0;
 } g_mv_stats;
 std::mutex g_mv_mu;
@@ -880,6 +883,9 @@ void mv_report(const char *when) {
              g_mv_stats.substituted, per_eye_imgs, g_mv_stats.redirected,
              g_mv_stats.fallbacks,
              g_mv_stats.fallbacks ? "  <-- NOT CLEAN" : "");
+    X4VR_LOG("mv %s: pipelines masked=%u unmasked=%u dynamic_rendering=%u",
+             when, g_mv_stats.pipe_masked, g_mv_stats.pipe_unmasked,
+             g_mv_stats.pipe_dynamic);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass(
@@ -906,6 +912,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass(
         mv.pCorrelationMasks = &corr;
         mv.pNext = ci->pNext;
         mod.pNext = &mv;
+    }
+    static bool logged_v1 = false;
+    if (g_mv && g_active && !logged_v1) {
+        logged_v1 = true;
+        X4VR_LOG("mv: X4 uses vkCreateRenderPass (v1)");
     }
     VkResult r = d->CreateRenderPass(device, per_eye ? &mod : ci, ac, out);
     if (r == VK_SUCCESS) {
@@ -943,6 +954,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass2(
         mod.pSubpasses = subs.data();
         mod.correlatedViewMaskCount = 1;
         mod.pCorrelatedViewMasks = &corr2;
+    }
+    static bool logged_v2 = false;
+    if (g_mv && g_active && !logged_v2) {
+        logged_v2 = true;
+        X4VR_LOG("mv: X4 uses vkCreateRenderPass2");
     }
     VkResult r = next(device, per_eye ? &mod : ci, ac, out);
     if (r == VK_SUCCESS) {
@@ -1433,6 +1449,32 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
     {
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
+    }
+
+    // Phase 4b diagnosis: a pipeline is compiled for multiview only if the
+    // render pass it is created against already carries the view mask. If X4
+    // builds pipelines against unmasked passes -- or against no render pass
+    // at all, i.e. dynamic rendering, where the mask lives in a pNext struct
+    // we do not touch -- the draws replicate to one view and layer 1 stays
+    // exactly as allocated. Counting them separates that from every other
+    // explanation.
+    if (g_mv && g_active) {
+        uint32_t masked = 0, unmasked = 0, dynamic = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_variants.mu);
+            for (uint32_t i = 0; i < count; i++) {
+                if (ci[i].renderPass == VK_NULL_HANDLE)
+                    dynamic++;
+                else if (g_masked_passes.count(ci[i].renderPass))
+                    masked++;
+                else
+                    unmasked++;
+            }
+        }
+        std::lock_guard<std::mutex> lock(g_mv_mu);
+        g_mv_stats.pipe_masked += masked;
+        g_mv_stats.pipe_unmasked += unmasked;
+        g_mv_stats.pipe_dynamic += dynamic;
     }
 
     // Copy only if we actually need to substitute something.
@@ -2224,6 +2266,12 @@ void probe_multiview(VkPhysicalDevice phys, const VkDeviceCreateInfo *ci) {
              (int)mvf.multiview, mvp.maxMultiviewViewCount,
              mvp.maxMultiviewInstanceIndex, (int)mvf.multiviewGeometryShader,
              (int)mvf.multiviewTessellationShader);
+    for (uint32_t i = 0; i < ci->enabledExtensionCount; i++) {
+        const char *e = ci->ppEnabledExtensionNames[i];
+        if (strstr(e, "dynamic_rendering") || strstr(e, "multiview") ||
+            strstr(e, "shader_draw_parameters"))
+            X4VR_LOG("multiview: X4 enables %s", e);
+    }
     X4VR_LOG("multiview: X4 requests it? ext=%d feature=%d — device api %u.%u, "
              "app api %u.%u",
              (int)ext_requested, (int)feature_requested,
