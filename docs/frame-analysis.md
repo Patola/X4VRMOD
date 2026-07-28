@@ -909,3 +909,120 @@ regression cannot be confused with a stereo bug.
   other. Invisible until `K` differs.
 * Then per-eye `K` via `gl_ViewIndex`, and per-eye camera constants so the
   deferred lighting follows.
+
+## Stage 1, takes three to five: the frame was black for a second reason
+
+Take two produced a black 3D scene with a perfect HUD, and the transfer
+finding above explained it. It was true, and it was not enough: take three
+widened 14554 transfer regions and the scene stayed exactly as black.
+
+What followed is recorded as much for the method as the result, because four
+runs went into a question that turned out to be badly posed.
+
+### Ruled out without a run
+
+The gate-2 redirect points reads at layer 1 only for images a masked pass
+renders into. If X4 recycled a render target between a masked and an unmasked
+pass, the redirect would point at a layer the unmasked pass never wrote, and
+the black would be an artifact of the instrument rather than a finding.
+
+Answered from the framebuffer logs already on disk: **20 images attached to
+masked passes, 7 to unmasked, 0 in both.** No reuse, no confound. A log that
+already exists is cheaper than a run, and this one had been sitting there
+since the inventory pass.
+
+### Take four: two candidates, measured rather than argued
+
+`pipe_masked` / `pipe_unmasked` count where a pipeline was *built*. Nothing
+counted where one was *used* — neither `vkCmdBeginRenderPass` nor
+`vkCmdBindPipeline` was hooked. A pipeline compiled against an unmasked but
+compatible render pass and bound inside a masked one draws to a single view,
+legally and silently, because the driver settled the view count at compile
+time. Engines build pipelines against template passes routinely, so this was
+not exotic.
+
+The second candidate was barriers: the render pass transitions both layers,
+since its attachment is the two-layer view we substitute, but an explicit
+barrier between passes names `layerCount = 1` and moves layer 0 alone.
+
+| Measured | Verdict |
+|---|---|
+| `binds ok=276755 MISMATCHED=0` | Dead. Every pipeline bound in a masked pass was compiled for one. |
+| `barriers narrow=322363 wide=0` | Present at scale — and harmless. Validation raises no layout error on layer 1. |
+| Validation, read live for the first time | No multiview, framebuffer or render-pass VUID anywhere. |
+
+Both hooks were deliberately measurement-only. Widening a barrier changes what
+the driver may do to the image, and a behaviour change does not belong in the
+run whose job is to identify a cause.
+
+Worth recording separately: the 20 `VUID-VkGraphicsPipelineCreateInfo-
+renderPass-06038` errors are **X4's own** — a fragment shader reading input
+attachment 20 where the subpass declares 4 — and predate the layer. Also that
+`VK_KHRONOS_VALIDATION_LOG_FILENAME` finally made the oracle readable; every
+earlier "validation was clean" in this document meant "we never read it".
+
+### Take five: testing layer 1 without the instrument that kept being wrong
+
+Every test of "is layer 1 shaded?" had run through the gate-2 descriptor
+redirect — our own code, wrong twice. `X4VR_MV_MASK=2` removes it: view 0 of a
+masked pass maps to array layer **1**, so the frame renders into layer 1 alone
+and X4 reads layer 0 through its own untouched views. The detector becomes the
+game's own read path.
+
+Pinned down offline first (`drawn=0/1`, the exact inverse of the ordinary
+case) so the live run would have one interpretation instead of two. The render
+suite now asserts `LAYER0_DRAWN` as well — without it the new case would have
+passed by looking identical to the old one.
+
+**Result: black.** So the mask really does steer draws, and layer 1 really is
+being shaded. The write path was never the problem.
+
+### The contradiction that names the real cause
+
+Put the three results side by side:
+
+| Mask | Reads | Screen |
+|---|---|---|
+| `0x3` | layer 0 (normal path) | normal |
+| `0x3` | layer 1 (redirect) | **black** |
+| `0x2` | layer 0 (normal path) | **black** |
+
+Row 3 proves draws reach layer 1. Row 1 proves layer 0 is complete. With one
+eye matrix the two layers should hold the same picture, so row 2 should be
+indistinguishable from row 1 — and it is not.
+
+The resolution is that **not every pixel arrives by a draw.** Multiview
+replicates draws; the transfer fix widened image-to-image copies where both
+images were doubled, and that is a strict subset of the ways an image gets
+written. Everything else still lands in layer 0 alone:
+
+* the Vulkan 1.3 spellings — `vkCmdCopyImage2`, `BlitImage2`, `ResolveImage2`
+  — which were not hooked at all, leaving a hole exactly as wide as the one
+  the v1 fix closed;
+* `vkCmdClearDepthStencilImage`, and depth is what the whole deferred chain
+  reconstructs position from, so missing layer 1 there blacks the scene by
+  itself;
+* `vkCmdCopyBufferToImage`, which **cannot** be widened — the source holds one
+  layer's worth of bytes and asking for two reads past its end. This one has
+  to be repaired by copying layer 0 across afterwards, not by widening.
+
+One such write into a per-eye image leaves layer 1 stale, and the staleness is
+invisible until something reads layer 1 — at which point it cascades through
+every pass downstream and the scene goes black.
+
+`layer0_only` now counts these and names the first dozen by image serial,
+because "something writes only layer 0" is not actionable and "image #37 does,
+via `vkCmdCopyBufferToImage`" is.
+
+### The rule this cost four runs to learn
+
+The transfer finding was *true*. It was promoted to *sufficient* without
+anything checking that it was, and three runs went into the gap. A confirmed
+cause is not a complete one — when a fix fires 14554 times and changes nothing
+visible, the fix worked and the inventory of causes was incomplete.
+
+The corollary is the cheaper one: a result that contradicts a property the
+design guarantees (here, that identical eye matrices make the layers
+identical) locates the bug faster than any number of new hypotheses. Row 2 of
+that table was measured in take two and its significance was not read until
+take five.

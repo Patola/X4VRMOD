@@ -101,6 +101,12 @@ struct DeviceData {
     PFN_vkCmdEndRenderPass CmdEndRenderPass = nullptr;
     PFN_vkCmdBindPipeline CmdBindPipeline = nullptr;
     PFN_vkCmdPipelineBarrier CmdPipelineBarrier = nullptr;
+    PFN_vkCmdCopyImage2 CmdCopyImage2 = nullptr;
+    PFN_vkCmdBlitImage2 CmdBlitImage2 = nullptr;
+    PFN_vkCmdResolveImage2 CmdResolveImage2 = nullptr;
+    PFN_vkCmdCopyBufferToImage CmdCopyBufferToImage = nullptr;
+    PFN_vkCmdCopyBufferToImage2 CmdCopyBufferToImage2 = nullptr;
+    PFN_vkCmdClearDepthStencilImage CmdClearDepthStencilImage = nullptr;
 };
 
 std::mutex g_mu;
@@ -212,6 +218,15 @@ struct MvStats {
     uint32_t bind_mismatch = 0;
     uint32_t barrier_narrow = 0;
     uint32_t barrier_wide = 0;
+    // Take five settled that draws do reach layer 1, which turns the black
+    // frame into a contradiction: with one eye matrix the two layers hold the
+    // same picture, so reading layer 1 instead of layer 0 should change
+    // nothing, and it changes everything. The resolution is that not every
+    // pixel arrives by a draw. Anything that writes an image outside a render
+    // pass writes layer 0 alone unless we widen it, and one such write into a
+    // per-eye image leaves layer 1 holding older content -- invisible until
+    // something reads layer 1.
+    uint32_t layer0_only = 0; // per-eye images written by an unwidened command
     uint32_t reported = 0;
 } g_mv_stats;
 std::mutex g_mv_mu;
@@ -949,9 +964,10 @@ void mv_report(const char *when) {
     // barrier_narrow > 0 means they did but layer 1 is read in a layout no
     // barrier ever moved it to.
     X4VR_LOG("mv %s: binds ok=%u MISMATCHED=%u | image barriers narrow=%u "
-             "wide=%u",
+             "wide=%u | per-eye images written layer-0-only=%u",
              when, g_mv_stats.bind_ok, g_mv_stats.bind_mismatch,
-             g_mv_stats.barrier_narrow, g_mv_stats.barrier_wide);
+             g_mv_stats.barrier_narrow, g_mv_stats.barrier_wide,
+             g_mv_stats.layer0_only);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass(
@@ -2198,6 +2214,32 @@ void count_widened(uint32_t n) {
     g_mv_stats.widened += n;
 }
 
+// A write that lands in layer 0 alone, on an image a view-masked pass also
+// renders into. Named by image serial for the first few, because "something
+// writes only layer 0" is not actionable and "image #37 does, via
+// vkCmdCopyBufferToImage" is.
+//
+// Only per-eye images count. A doubled image nothing reads through layer 1 is
+// free to have a stale second layer -- that is the whole reason doubling is
+// allowed to be permissive at vkCreateImage.
+void note_layer0_only(VkImage im, const char *what) {
+    if (!g_mv || !g_active)
+        return;
+    uint32_t serial;
+    {
+        std::lock_guard<std::mutex> lock(g_img_mu);
+        if (!g_per_eye_images.count(im))
+            return;
+        auto it = g_images.find(im);
+        serial = it != g_images.end() ? it->second.serial : UINT32_MAX;
+    }
+    std::lock_guard<std::mutex> lock(g_mv_mu);
+    if (++g_mv_stats.layer0_only <= 12)
+        X4VR_LOG("mv: img #%u written to layer 0 only by %s — a masked pass "
+                 "also renders it, so layer 1 is now stale",
+                 serial, what);
+}
+
 VKAPI_ATTR void VKAPI_CALL x4vr_CmdCopyImage(
     VkCommandBuffer cb, VkImage src, VkImageLayout sl, VkImage dst,
     VkImageLayout dl, uint32_t n, const VkImageCopy *regions) {
@@ -2215,6 +2257,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdCopyImage(
             w += widen(r.srcSubresource, r.dstSubresource) ? 1 : 0;
     }
     count_widened(w);
+    if (w < n)
+        note_layer0_only(dst, "vkCmdCopyImage");
     d->CmdCopyImage(cb, src, sl, dst, dl, n, w ? mod.data() : regions);
 }
 
@@ -2236,6 +2280,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBlitImage(
             w += widen(r.srcSubresource, r.dstSubresource) ? 1 : 0;
     }
     count_widened(w);
+    if (w < n)
+        note_layer0_only(dst, "vkCmdBlitImage");
     d->CmdBlitImage(cb, src, sl, dst, dl, n, w ? mod.data() : regions, filter);
 }
 
@@ -2256,6 +2302,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdResolveImage(
             w += widen(r.srcSubresource, r.dstSubresource) ? 1 : 0;
     }
     count_widened(w);
+    if (w < n)
+        note_layer0_only(dst, "vkCmdResolveImage");
     d->CmdResolveImage(cb, src, sl, dst, dl, n, w ? mod.data() : regions);
 }
 
@@ -2281,7 +2329,136 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdClearColorImage(
             }
     }
     count_widened(w);
+    if (w < n)
+        note_layer0_only(img, "vkCmdClearColorImage");
     d->CmdClearColorImage(cb, img, l, colour, n, w ? mod.data() : ranges);
+}
+
+// The paths the transfer fix missed. Two kinds, and they need opposite
+// treatment:
+//
+//   image -> image, in the Vulkan 1.3 spelling. Same shape as the v1 forms
+//     above and the same widening applies. If X4 uses these at all, not
+//     hooking them left a hole exactly as wide as the one we closed.
+//
+//   buffer -> image. This one CANNOT be widened: the source holds one
+//     layer's worth of data and asking for two would read past its end.
+//     Counted instead, so the image shows up by name.
+template <class Info, class Region>
+uint32_t widen2(const Info *info, std::vector<Region> &mod) {
+    if (!(g_mv && g_mv_fix_copies && g_active && img_doubled(info->srcImage) &&
+          img_doubled(info->dstImage)))
+        return 0;
+    mod.assign(info->pRegions, info->pRegions + info->regionCount);
+    uint32_t w = 0;
+    for (auto &r : mod)
+        w += widen(r.srcSubresource, r.dstSubresource) ? 1 : 0;
+    return w;
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_CmdCopyImage2(VkCommandBuffer cb,
+                                              const VkCopyImageInfo2 *info) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    std::vector<VkImageCopy2> mod;
+    const uint32_t w = widen2(info, mod);
+    count_widened(w);
+    if (w < info->regionCount)
+        note_layer0_only(info->dstImage, "vkCmdCopyImage2");
+    VkCopyImageInfo2 m = *info;
+    if (w)
+        m.pRegions = mod.data();
+    d->CmdCopyImage2(cb, w ? &m : info);
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_CmdBlitImage2(VkCommandBuffer cb,
+                                              const VkBlitImageInfo2 *info) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    std::vector<VkImageBlit2> mod;
+    const uint32_t w = widen2(info, mod);
+    count_widened(w);
+    if (w < info->regionCount)
+        note_layer0_only(info->dstImage, "vkCmdBlitImage2");
+    VkBlitImageInfo2 m = *info;
+    if (w)
+        m.pRegions = mod.data();
+    d->CmdBlitImage2(cb, w ? &m : info);
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_CmdResolveImage2(
+    VkCommandBuffer cb, const VkResolveImageInfo2 *info) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    std::vector<VkImageResolve2> mod;
+    const uint32_t w = widen2(info, mod);
+    count_widened(w);
+    if (w < info->regionCount)
+        note_layer0_only(info->dstImage, "vkCmdResolveImage2");
+    VkResolveImageInfo2 m = *info;
+    if (w)
+        m.pRegions = mod.data();
+    d->CmdResolveImage2(cb, w ? &m : info);
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_CmdCopyBufferToImage(
+    VkCommandBuffer cb, VkBuffer src, VkImage dst, VkImageLayout l, uint32_t n,
+    const VkBufferImageCopy *regions) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    note_layer0_only(dst, "vkCmdCopyBufferToImage");
+    d->CmdCopyBufferToImage(cb, src, dst, l, n, regions);
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_CmdCopyBufferToImage2(
+    VkCommandBuffer cb, const VkCopyBufferToImageInfo2 *info) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    note_layer0_only(info->dstImage, "vkCmdCopyBufferToImage2");
+    d->CmdCopyBufferToImage2(cb, info);
+}
+
+// Depth is the one attachment the whole deferred chain reconstructs position
+// from, so a depth clear that misses layer 1 blacks the scene by itself.
+VKAPI_ATTR void VKAPI_CALL x4vr_CmdClearDepthStencilImage(
+    VkCommandBuffer cb, VkImage img, VkImageLayout l,
+    const VkClearDepthStencilValue *value, uint32_t n,
+    const VkImageSubresourceRange *ranges) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    std::vector<VkImageSubresourceRange> mod;
+    uint32_t w = 0;
+    if (g_mv && g_mv_fix_copies && g_active && img_doubled(img)) {
+        mod.assign(ranges, ranges + n);
+        for (auto &r : mod)
+            if (r.baseArrayLayer == 0 && r.layerCount == 1) {
+                r.layerCount = 2;
+                w++;
+            }
+    }
+    count_widened(w);
+    if (w < n)
+        note_layer0_only(img, "vkCmdClearDepthStencilImage");
+    d->CmdClearDepthStencilImage(cb, img, l, value, n,
+                                 w ? mod.data() : ranges);
 }
 
 // --- take four: measure the two remaining ways layer 1 can stay dark -------
@@ -2775,6 +2952,20 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(CmdEndRenderPass);
     RESOLVE(CmdBindPipeline);
     RESOLVE(CmdPipelineBarrier);
+    RESOLVE(CmdCopyBufferToImage);
+    RESOLVE(CmdClearDepthStencilImage);
+    // Core in 1.3; the KHR alias is what a 1.2 device exposes. Left null if
+    // neither exists, and the matching hook is then never reachable, because
+    // the application cannot call an entry point its device does not have.
+#define RESOLVE2(name)                                                         \
+    d.name = (PFN_vk##name)gdpa(*out, "vk" #name);                             \
+    if (!d.name)                                                               \
+        d.name = (PFN_vk##name)gdpa(*out, "vk" #name "KHR");
+    RESOLVE2(CmdCopyImage2);
+    RESOLVE2(CmdBlitImage2);
+    RESOLVE2(CmdResolveImage2);
+    RESOLVE2(CmdCopyBufferToImage2);
+#undef RESOLVE2
 #undef RESOLVE
     {
         std::lock_guard<std::mutex> lock(g_mu);
@@ -2873,6 +3064,20 @@ const NameFunc kHooks[] = {
     {"vkCmdBindPipeline", (PFN_vkVoidFunction)x4vr_CmdBindPipeline},
     {"vkCmdPipelineBarrier", (PFN_vkVoidFunction)x4vr_CmdPipelineBarrier},
     {"vkDestroyPipeline", (PFN_vkVoidFunction)x4vr_DestroyPipeline},
+    {"vkCmdCopyImage2", (PFN_vkVoidFunction)x4vr_CmdCopyImage2},
+    {"vkCmdCopyImage2KHR", (PFN_vkVoidFunction)x4vr_CmdCopyImage2},
+    {"vkCmdBlitImage2", (PFN_vkVoidFunction)x4vr_CmdBlitImage2},
+    {"vkCmdBlitImage2KHR", (PFN_vkVoidFunction)x4vr_CmdBlitImage2},
+    {"vkCmdResolveImage2", (PFN_vkVoidFunction)x4vr_CmdResolveImage2},
+    {"vkCmdResolveImage2KHR", (PFN_vkVoidFunction)x4vr_CmdResolveImage2},
+    {"vkCmdCopyBufferToImage",
+     (PFN_vkVoidFunction)x4vr_CmdCopyBufferToImage},
+    {"vkCmdCopyBufferToImage2",
+     (PFN_vkVoidFunction)x4vr_CmdCopyBufferToImage2},
+    {"vkCmdCopyBufferToImage2KHR",
+     (PFN_vkVoidFunction)x4vr_CmdCopyBufferToImage2},
+    {"vkCmdClearDepthStencilImage",
+     (PFN_vkVoidFunction)x4vr_CmdClearDepthStencilImage},
     {"vkCreateImage", (PFN_vkVoidFunction)x4vr_CreateImage},
     {"vkDestroyImage", (PFN_vkVoidFunction)x4vr_DestroyImage},
     {"vkCreateImageView", (PFN_vkVoidFunction)x4vr_CreateImageView},
