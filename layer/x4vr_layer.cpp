@@ -141,10 +141,28 @@ const bool g_multiview_enable = [] {
 //
 // Opt-in, so `mv_partition_measured` behaviour remains the default while this
 // is under test.
-constexpr uint32_t kViewMask = 0x3; // views 0 and 1
 const bool g_mv = [] {
     const char *e = getenv("X4VR_MV");
     return e && *e && *e != '0';
+}();
+
+// Which views a masked pass renders. 0x3 (both) is the real configuration.
+//
+// 0x2 is the decisive diagnostic, and it needs no redirect at all: view 0 of
+// the pass maps to array layer 1, so the frame is rendered *only* into layer 1
+// and layer 0 is left untouched. The game then reads layer 0 through its own
+// unmodified views. A black scene therefore means the view mask really is
+// steering draws into layer 1 -- proving the write path and indicting the
+// read path -- and a normal-looking scene means the mask steers nothing at
+// all, whatever the masked/substituted/bind counters say.
+//
+// It exists because every previous test of "is layer 1 shaded?" went through
+// the gate-2 descriptor redirect, which is our own code and has already been
+// wrong twice. This one uses X4's untouched read path as the detector.
+const uint32_t kViewMask = [] {
+    const char *e = getenv("X4VR_MV_MASK");
+    const uint32_t m = e && *e ? (uint32_t)strtoul(e, nullptr, 0) : 0x3u;
+    return m ? m : 0x3u;
 }();
 
 // Gate 2: which array layer the frame reads from.
@@ -916,9 +934,9 @@ void mv_report(const char *when) {
         std::lock_guard<std::mutex> lock(g_img_mu);
         per_eye_imgs = g_per_eye_images.size();
     }
-    X4VR_LOG("mv %s: doubled=%u masked=%u substituted=%u per_eye_images=%zu "
-             "redirected=%u fallbacks=%u%s",
-             when, g_mv_stats.doubled, g_mv_stats.masked,
+    X4VR_LOG("mv %s: viewMask=0x%x doubled=%u masked=%u substituted=%u "
+             "per_eye_images=%zu redirected=%u fallbacks=%u%s",
+             when, kViewMask, g_mv_stats.doubled, g_mv_stats.masked,
              g_mv_stats.substituted, per_eye_imgs, g_mv_stats.redirected,
              g_mv_stats.fallbacks,
              g_mv_stats.fallbacks ? "  <-- NOT CLEAN" : "");
