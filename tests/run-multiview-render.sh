@@ -15,6 +15,7 @@ BUILD="${X4VR_BUILD:-$ROOT/build}"
 BIN="$BUILD/tests/x4vr_test_multiview_render"
 VS="$BUILD/tests/fullscreen.vert.spv"
 FS="$BUILD/tests/solid.frag.spv"
+SF="$BUILD/tests/sample.frag.spv"
 
 [[ -x "$BIN" ]] || { echo "build first: cmake --build $BUILD" >&2; exit 1; }
 
@@ -23,15 +24,17 @@ fails=0
 run_case() {
     local label="$1" wl="$2" w0="$3" w1="$4"; shift 4
     local out
-    out=$(env "$@" X4VR_LOG= "$BIN" "$VS" "$FS" 2>&1)
+    out=$(env "$@" X4VR_LOG= "$BIN" "$VS" "$FS" "$SF" 2>&1)
     local got_l got_0 got_1 got_id
     got_l=$(sed -n 's/^LAYERS_IMPLIED=//p' <<<"$out")
     got_0=$(sed -n 's/^LAYER0_DRAWN=//p' <<<"$out")
     got_1=$(sed -n 's/^LAYER1_DRAWN=//p' <<<"$out")
     got_id=$(sed -n 's/^LAYERS_IDENTICAL=//p' <<<"$out")
+    local got_s
+    got_s=$(sed -n 's/^SAMPLED_NONZERO=//p' <<<"$out")
     if [[ "$got_l" == "$wl" && "$got_0" == "$w0" && "$got_1" == "$w1" ]]; then
-        printf 'ok   %-38s layers=%s drawn=%s/%s identical=%s\n' \
-            "$label" "$got_l" "$got_0" "$got_1" "$got_id"
+        printf 'ok   %-38s layers=%s drawn=%s/%s identical=%s sampled=%s\n' \
+            "$label" "$got_l" "$got_0" "$got_1" "$got_id" "${got_s:-?}"
     else
         printf 'FAIL %-38s want layers=%s drawn=%s/%s, got layers=%s drawn=%s/%s\n' \
             "$label" "$wl" "$w0" "$w1" "${got_l:-?}" "${got_0:-?}" "${got_1:-?}"
@@ -62,6 +65,20 @@ run_case "X4VR_MV=1 (draw replicates)" 2 1 1 \
 run_case "X4VR_MV_MASK=2 (layer 1 only)" 2 0 1 \
     "VK_ADD_LAYER_PATH=$BUILD/layer" "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
     "X4VR_MV=1" "X4VR_MV_MASK=2"
+
+# The read path, which until now had no instrument except itself.
+#
+# The last case is the one that matters: layer 0 is left undrawn and the only
+# content anywhere is in layer 1, so SAMPLED_NONZERO=1 can only happen if the
+# gate-2 redirect really did point the descriptor at layer 1. Reading layer 0
+# would come back black and the case would fail.
+run_case "redirect to layer 1" 2 1 1 \
+    "VK_ADD_LAYER_PATH=$BUILD/layer" "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    "X4VR_MV=1" "X4VR_MV_PRESENT_LAYER=1"
+
+run_case "redirect to layer 1, only layer 1 drawn" 2 0 1 \
+    "VK_ADD_LAYER_PATH=$BUILD/layer" "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    "X4VR_MV=1" "X4VR_MV_MASK=2" "X4VR_MV_PRESENT_LAYER=1"
 
 echo
 if (( fails )); then echo "$fails case(s) failed"; exit 1; fi

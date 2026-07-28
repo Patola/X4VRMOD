@@ -348,6 +348,231 @@ int main(int argc, char **argv) {
     }
     vkUnmapMemory(dev, bmem);
 
+    // ---- stage 2: read the target back the way X4 does -------------------
+    //
+    // Everything above measures the *write* path, and eight live runs have now
+    // agreed that it works. What none of them could settle is whether the
+    // layer's gate-2 redirect actually delivers layer 1 to a shader, because
+    // the only instrument for that was the redirect itself.
+    //
+    // So sample the doubled image through an ordinary combined image sampler,
+    // which is the descriptor the redirect rewrites, and render the result
+    // into a separate LDR target. The LDR format keeps this second pass
+    // unmasked -- exactly X4's shape, where the per-eye chain is consumed by
+    // passes that are not themselves per-eye. Whatever comes out is a direct
+    // readout of which layer the descriptor ended up naming.
+    const VkFormat OFMT = VK_FORMAT_R8G8B8A8_UNORM;
+    const VkDeviceSize OBYTES = (VkDeviceSize)W * H * 4;
+    VkImageCreateInfo oci = imgci;
+    oci.format = OFMT;
+    oci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    VkImage oimg;
+    CHECK(vkCreateImage(dev, &oci, nullptr, &oimg));
+    VkMemoryRequirements oreq{};
+    vkGetImageMemoryRequirements(dev, oimg, &oreq);
+    VkMemoryAllocateInfo omai{};
+    omai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    omai.allocationSize = oreq.size;
+    omai.memoryTypeIndex =
+        pick(oreq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VkDeviceMemory omem;
+    CHECK(vkAllocateMemory(dev, &omai, nullptr, &omem));
+    CHECK(vkBindImageMemory(dev, oimg, omem, 0));
+
+    VkImageViewCreateInfo ovci{};
+    ovci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    ovci.image = oimg;
+    ovci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    ovci.format = OFMT;
+    ovci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VkImageView oview;
+    CHECK(vkCreateImageView(dev, &ovci, nullptr, &oview));
+
+    VkAttachmentDescription oatt{};
+    oatt.format = OFMT;
+    oatt.samples = VK_SAMPLE_COUNT_1_BIT;
+    oatt.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    oatt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    oatt.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    oatt.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    oatt.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    oatt.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    VkAttachmentReference oref{};
+    oref.attachment = 0;
+    oref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    VkSubpassDescription osub{};
+    osub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    osub.colorAttachmentCount = 1;
+    osub.pColorAttachments = &oref;
+    VkRenderPassCreateInfo orpci{};
+    orpci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    orpci.attachmentCount = 1;
+    orpci.pAttachments = &oatt;
+    orpci.subpassCount = 1;
+    orpci.pSubpasses = &osub;
+    VkRenderPass orp;
+    CHECK(vkCreateRenderPass(dev, &orpci, nullptr, &orp));
+
+    VkFramebufferCreateInfo ofbci{};
+    ofbci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    ofbci.renderPass = orp;
+    ofbci.attachmentCount = 1;
+    ofbci.pAttachments = &oview;
+    ofbci.width = W;
+    ofbci.height = H;
+    ofbci.layers = 1;
+    VkFramebuffer ofb;
+    CHECK(vkCreateFramebuffer(dev, &ofbci, nullptr, &ofb));
+
+    VkSamplerCreateInfo sci{};
+    sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sci.magFilter = VK_FILTER_NEAREST;
+    sci.minFilter = VK_FILTER_NEAREST;
+    VkSampler samp;
+    CHECK(vkCreateSampler(dev, &sci, nullptr, &samp));
+
+    VkDescriptorSetLayoutBinding dslb{};
+    dslb.binding = 0;
+    dslb.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    dslb.descriptorCount = 1;
+    dslb.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo dslci{};
+    dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dslci.bindingCount = 1;
+    dslci.pBindings = &dslb;
+    VkDescriptorSetLayout dsl;
+    CHECK(vkCreateDescriptorSetLayout(dev, &dslci, nullptr, &dsl));
+
+    VkDescriptorPoolSize dps{};
+    dps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    dps.descriptorCount = 1;
+    VkDescriptorPoolCreateInfo dpci{};
+    dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    dpci.maxSets = 1;
+    dpci.poolSizeCount = 1;
+    dpci.pPoolSizes = &dps;
+    VkDescriptorPool dpool;
+    CHECK(vkCreateDescriptorPool(dev, &dpci, nullptr, &dpool));
+    VkDescriptorSetAllocateInfo dsai{};
+    dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsai.descriptorPool = dpool;
+    dsai.descriptorSetCount = 1;
+    dsai.pSetLayouts = &dsl;
+    VkDescriptorSet dset;
+    CHECK(vkAllocateDescriptorSets(dev, &dsai, &dset));
+
+    // The write the redirect intercepts. It names the target's own view --
+    // layer 0 as far as this program is concerned -- and the layer is free to
+    // substitute a view onto layer 1 underneath us. Issued after the first
+    // framebuffer exists, because that is when the layer learns the image is
+    // rendered by a masked pass and becomes willing to redirect it.
+    VkDescriptorImageInfo dii{};
+    dii.sampler = samp;
+    dii.imageView = view;
+    dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet wds{};
+    wds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wds.dstSet = dset;
+    wds.dstBinding = 0;
+    wds.descriptorCount = 1;
+    wds.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    wds.pImageInfo = &dii;
+    vkUpdateDescriptorSets(dev, 1, &wds, 0, nullptr);
+
+    std::vector<uint32_t> fs2_code = load_spv(argc > 3 ? argv[3]
+                                                       : "tests/sample.frag.spv");
+    if (fs2_code.empty()) { printf("FAIL=no_sample_frag:0\n"); return 1; }
+    VkShaderModuleCreateInfo smci2{};
+    smci2.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    smci2.codeSize = fs2_code.size() * 4;
+    smci2.pCode = fs2_code.data();
+    VkShaderModule fsm2;
+    CHECK(vkCreateShaderModule(dev, &smci2, nullptr, &fsm2));
+
+    VkPipelineLayoutCreateInfo plci2{};
+    plci2.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    plci2.setLayoutCount = 1;
+    plci2.pSetLayouts = &dsl;
+    VkPipelineLayout pl2;
+    CHECK(vkCreatePipelineLayout(dev, &plci2, nullptr, &pl2));
+
+    VkPipelineShaderStageCreateInfo st2[2]{};
+    st2[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    st2[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    st2[0].module = vsm;
+    st2[0].pName = "main";
+    st2[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    st2[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    st2[1].module = fsm2;
+    st2[1].pName = "main";
+    VkGraphicsPipelineCreateInfo gpci2 = gp;
+    gpci2.pStages = st2;
+    gpci2.layout = pl2;
+    gpci2.renderPass = orp;
+    VkPipeline pipe2;
+    CHECK(vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &gpci2, nullptr,
+                                    &pipe2));
+
+    CHECK(vkResetCommandBuffer(cmd, 0));
+    CHECK(vkBeginCommandBuffer(cmd, &cbbi));
+    // Both layers to SHADER_READ_ONLY, so this says nothing about whether a
+    // narrow barrier would have been enough. That is a separate question and
+    // this test must not accidentally answer it.
+    VkImageMemoryBarrier imb{};
+    imb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    imb.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    imb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    imb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    imb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    imb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    imb.image = img;
+    imb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
+                         0, nullptr, 1, &imb);
+
+    VkRenderPassBeginInfo orpbi = rpbi;
+    orpbi.renderPass = orp;
+    orpbi.framebuffer = ofb;
+    vkCmdBeginRenderPass(cmd, &orpbi, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe2);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pl2, 0, 1,
+                            &dset, 0, nullptr);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdEndRenderPass(cmd);
+
+    VkBufferImageCopy oc{};
+    oc.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    oc.imageSubresource.layerCount = 1;
+    oc.imageExtent = {W, H, 1};
+    vkCmdCopyImageToBuffer(cmd, oimg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf,
+                           1, &oc);
+    CHECK(vkEndCommandBuffer(cmd));
+    CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
+    CHECK(vkQueueWaitIdle(queue));
+
+    CHECK(vkMapMemory(dev, bmem, 0, OBYTES, 0, &ptr));
+    const uint8_t *o = (const uint8_t *)ptr;
+    bool sampled = false;
+    for (VkDeviceSize i = 0; i < OBYTES; i += 4)
+        if (o[i] != 0) { sampled = true; break; }
+    printf("SAMPLED_NONZERO=%d\n", sampled ? 1 : 0);
+    vkUnmapMemory(dev, bmem);
+
+    vkDestroyPipeline(dev, pipe2, nullptr);
+    vkDestroyPipelineLayout(dev, pl2, nullptr);
+    vkDestroyShaderModule(dev, fsm2, nullptr);
+    vkDestroyDescriptorPool(dev, dpool, nullptr);
+    vkDestroyDescriptorSetLayout(dev, dsl, nullptr);
+    vkDestroySampler(dev, samp, nullptr);
+    vkDestroyFramebuffer(dev, ofb, nullptr);
+    vkDestroyRenderPass(dev, orp, nullptr);
+    vkDestroyImageView(dev, oview, nullptr);
+    vkDestroyImage(dev, oimg, nullptr);
+    vkFreeMemory(dev, omem, nullptr);
+
     vkDestroyPipeline(dev, pipe, nullptr);
     vkDestroyPipelineLayout(dev, pl, nullptr);
     vkDestroyShaderModule(dev, vsm, nullptr);
