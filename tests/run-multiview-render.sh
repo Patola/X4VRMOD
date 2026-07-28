@@ -93,8 +93,19 @@ probe_case() {
         "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
         "$BIN" "$VS" "$FS" "$SF" 2>&1)
     verdict=$(sed -n 's/.*mv probe: .*  \([A-Z]*\)$/\1/p' <<<"$out")
-    local own
+    local own size
     own=$(sed -n 's/^LAYERS_IDENTICAL=//p' <<<"$out")
+    # The probe must hash the whole attachment. It once copied a fixed 64x64
+    # patch, which in X4 is blank most frames, so both sides hashed empty and
+    # every capture agreed with itself. Asserting the reported extent is what
+    # makes that regression visible here instead of in a live run.
+    size=$(sed -n 's/.*mv probe: img #[0-9]* \([0-9]*x[0-9]*\) .*/\1/p' <<<"$out")
+    if [[ "$size" != "128x128" ]]; then
+        printf 'FAIL %-38s probe covered %s, want the full 128x128\n' \
+            "$label" "${size:-?}"
+        fails=$((fails + 1))
+        return
+    fi
     # Cross-check: the probe and the test's own readback must never disagree.
     local expect_own; [[ "$want" == IDENTICAL ]] && expect_own=1 || expect_own=0
     if [[ "$verdict" == "$want" && "$own" == "$expect_own" ]]; then

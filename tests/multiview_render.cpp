@@ -81,7 +81,11 @@ int main(int argc, char **argv) {
     vkGetDeviceQueue(dev, gfx, 0, &queue);
 
     const VkFormat FMT = VK_FORMAT_R16G16B16A16_SFLOAT;
-    const uint32_t W = 64, H = 64;
+    // Deliberately larger than the 64x64 patch the layer's probe used to copy.
+    // While the image was exactly 64x64 the two were indistinguishable, and a
+    // probe that silently sampled a corner passed this suite while reporting
+    // "identical" for two blank regions in the game.
+    const uint32_t W = 128, H = 128;
     const VkDeviceSize LAYER_BYTES = (VkDeviceSize)W * H * 8;
 
     VkPhysicalDeviceMemoryProperties mp{};

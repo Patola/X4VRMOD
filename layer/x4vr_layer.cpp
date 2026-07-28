@@ -2667,15 +2667,31 @@ struct MvProbe {
     VkBuffer buf = VK_NULL_HANDLE;
     VkDeviceMemory mem = VK_NULL_HANDLE;
     void *ptr = nullptr;
+    VkDeviceSize half = 0; // bytes reserved per layer; grows as needed
     bool failed = false;
-    bool pending = false;  // a copy is recorded and not yet read
-    size_t cursor = 0;     // which per-eye image to try next
-    uint32_t serial = 0;   // the one being probed
+    bool pending = false; // a copy is recorded and not yet read
+    bool armed = true;
+    uint64_t presents = 0;
+    uint32_t stalled = 0;
+    std::unordered_set<uint32_t> done; // serials covered this round
+    uint32_t serial = 0;               // the one being probed
     VkDeviceSize bytes = 0;
     uint32_t w = 0, h = 0;
     uint32_t captures = 0;
 } g_probe;
 std::mutex g_probe_mu;
+
+// A full frame is copied, not a corner.
+//
+// The first version hashed a 64x64 patch at the origin and reported
+// IDENTICAL for 4759 of 5994 captures with both sides all zero -- in X4 that
+// corner is blank most frames, so the comparison was between two empty
+// regions and meant nothing. An instrument that agrees with itself on absent
+// data is the same failure as one that only ever says "identical".
+//
+// One capture every this many presents, since a full-extent copy of a
+// 1408x1408 RGBA16F target is ~16 MB per layer.
+constexpr uint64_t kProbeEvery = 30;
 
 // Only the colour formats X4 uses as attachments. Anything absent is skipped
 // rather than guessed at: a wrong size here would hash the wrong bytes and
@@ -2704,20 +2720,29 @@ uint64_t fnv1a(const void *p, size_t n) {
     return h;
 }
 
-// Lazily sized for the largest region we ever copy: 64x64 at 8 bytes/texel,
-// two layers. Small enough to be free, large enough that the comparison is
-// over real image content rather than a handful of texels.
-constexpr uint32_t kProbeSide = 64;
-constexpr VkDeviceSize kProbeHalf = kProbeSide * kProbeSide * 8;
-
-bool probe_buffer_ready(DeviceData *d, VkDevice dev) {
-    if (g_probe.buf != VK_NULL_HANDLE)
+// Grown to fit whatever image is being probed, since the whole of mip 0 is
+// copied. Offsets are 256-aligned so the second layer's bufferOffset stays
+// legal for every format.
+bool probe_buffer_ready(DeviceData *d, VkDevice dev, VkDeviceSize need) {
+    need = (need + 255) & ~(VkDeviceSize)255;
+    if (g_probe.buf != VK_NULL_HANDLE && g_probe.half >= need)
         return true;
     if (g_probe.failed || !d->AllocateMemory || !d->CmdCopyImageToBuffer)
         return false;
+    if (g_probe.buf != VK_NULL_HANDLE) {
+        // Only ever called between captures, so nothing is in flight.
+        if (g_probe.ptr)
+            d->UnmapMemory(dev, g_probe.mem);
+        d->DestroyBuffer(dev, g_probe.buf, nullptr);
+        d->FreeMemory(dev, g_probe.mem, nullptr);
+        g_probe.buf = VK_NULL_HANDLE;
+        g_probe.mem = VK_NULL_HANDLE;
+        g_probe.ptr = nullptr;
+    }
+    g_probe.half = need;
     VkBufferCreateInfo bci{};
     bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bci.size = kProbeHalf * 2;
+    bci.size = need * 2;
     bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     if (d->CreateBuffer(dev, &bci, nullptr, &g_probe.buf) != VK_SUCCESS) {
@@ -2756,10 +2781,10 @@ void probe_emit(DeviceData *d, VkCommandBuffer cb, const FbAtt &a) {
     const uint32_t bpp = format_bpp(a.format);
     if (!bpp)
         return;
-    const uint32_t w = a.extent.width < kProbeSide ? a.extent.width : kProbeSide;
-    const uint32_t h =
-        a.extent.height < kProbeSide ? a.extent.height : kProbeSide;
+    const uint32_t w = a.extent.width, h = a.extent.height;
     if (!w || !h)
+        return;
+    if (!probe_buffer_ready(d, d->device, (VkDeviceSize)w * h * bpp))
         return;
 
     VkImageMemoryBarrier to{};
@@ -2778,7 +2803,7 @@ void probe_emit(DeviceData *d, VkCommandBuffer cb, const FbAtt &a) {
 
     VkBufferImageCopy regions[2]{};
     for (uint32_t i = 0; i < 2; i++) {
-        regions[i].bufferOffset = kProbeHalf * i;
+        regions[i].bufferOffset = g_probe.half * i;
         regions[i].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         regions[i].imageSubresource.mipLevel = 0;
         regions[i].imageSubresource.baseArrayLayer = i;
@@ -2846,8 +2871,23 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
         }
         if (!atts.empty()) {
             std::lock_guard<std::mutex> lock(g_probe_mu);
-            if (!g_probe.pending && probe_buffer_ready(d, d->device))
-                probe_emit(d, cb, atts[g_probe.cursor % atts.size()]);
+            // Take the first attachment this round has not covered yet, and
+            // start a fresh round once every one has been. Indexing into the
+            // framebuffer's own list instead reached only 7 of ~20 per-eye
+            // images, because which framebuffers end a frame is not something
+            // a counter can enumerate.
+            if (!g_probe.pending && g_probe.armed) {
+                for (const FbAtt &a : atts) {
+                    if (g_probe.done.count(a.serial))
+                        continue;
+                    probe_emit(d, cb, a);
+                    if (g_probe.pending) {
+                        g_probe.done.insert(a.serial);
+                        g_probe.armed = false;
+                    }
+                    break;
+                }
+            }
         }
     }
     cb_leave_pass(cb);
@@ -2861,6 +2901,21 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
 // instrument nothing tests is how the last three misreadings happened.
 void probe_collect(DeviceData *d, VkQueue queue) {
     std::lock_guard<std::mutex> lock(g_probe_mu);
+    if (queue != VK_NULL_HANDLE) {
+        g_probe.presents++;
+        if (!g_probe.armed && g_probe.presents % kProbeEvery == 0)
+            g_probe.armed = true;
+        // Armed but never satisfied means the round has covered everything
+        // that actually appears; start the next sweep.
+        if (g_probe.armed && !g_probe.pending) {
+            if (++g_probe.stalled > 4 * kProbeEvery) {
+                g_probe.done.clear();
+                g_probe.stalled = 0;
+            }
+        } else {
+            g_probe.stalled = 0;
+        }
+    }
     if (!g_probe.pending)
         return;
     g_probe.pending = false;
@@ -2868,7 +2923,7 @@ void probe_collect(DeviceData *d, VkQueue queue) {
         (!d->QueueWaitIdle || d->QueueWaitIdle(queue) != VK_SUCCESS))
         return;
     const uint8_t *l0 = (const uint8_t *)g_probe.ptr;
-    const uint8_t *l1 = l0 + kProbeHalf;
+    const uint8_t *l1 = l0 + g_probe.half;
     const size_t n = (size_t)g_probe.bytes;
     const uint64_t h0 = fnv1a(l0, n), h1 = fnv1a(l1, n);
     bool z0 = true, z1 = true;
@@ -2881,7 +2936,6 @@ void probe_collect(DeviceData *d, VkQueue queue) {
              z0 ? " (all zero)" : "", (unsigned long long)h1,
              z1 ? " (all zero)" : "",
              h0 == h1 ? "IDENTICAL" : "DIFFER");
-    g_probe.cursor++;
     g_probe.captures++;
 }
 
