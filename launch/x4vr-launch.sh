@@ -75,6 +75,9 @@
 #                         binds, view/layer mismatches, incompatible passes --
 #                         and it prints them by name instead of leaving an
 #                         artifact to interpret.
+#   X4VR_VALIDATE_LOG=<f> where validation writes (default
+#                         /tmp/x4vr-validation.log). Its messages do not go
+#                         through X4VR_LOG.
 #   X4VR_NO_LAYER=1       skip the Vulkan layer
 #   X4VR_NO_INJECT=1      skip the LD_PRELOAD injector
 #
@@ -112,6 +115,13 @@ fi
 if [[ "${X4VR_VALIDATE:-0}" == 1 ]]; then
     export VK_INSTANCE_LAYERS="VK_LAYER_KHRONOS_validation${VK_INSTANCE_LAYERS:+:$VK_INSTANCE_LAYERS}"
     export VK_LOADER_LAYERS_ENABLE="VK_LAYER_KHRONOS_validation${VK_LOADER_LAYERS_ENABLE:+,$VK_LOADER_LAYERS_ENABLE}"
+    # Validation reports through its own channel, not ours: without this it
+    # goes to stderr and never reaches X4VR_LOG, so "no errors in the log"
+    # means only that we were not looking where they are printed.
+    export VK_KHRONOS_VALIDATION_LOG_FILENAME="${X4VR_VALIDATE_LOG:-/tmp/x4vr-validation.log}"
+    export VK_KHRONOS_VALIDATION_DEBUG_ACTION=VK_DBG_LAYER_ACTION_LOG_MSG
+    : > "$VK_KHRONOS_VALIDATION_LOG_FILENAME" || true
+    echo "x4vr-launch: validation -> $VK_KHRONOS_VALIDATION_LOG_FILENAME" >&2
 fi
 
 if [[ "${X4VR_NO_INJECT:-0}" != 1 ]]; then

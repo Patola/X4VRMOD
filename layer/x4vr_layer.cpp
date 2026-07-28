@@ -137,7 +137,18 @@ const bool g_mv = [] {
     return e && *e && *e != '0';
 }();
 
-// Which layer the debug blit shows (gate 2: with one K, they must match).
+// Gate 2: which array layer the frame reads from.
+//
+// Unset  -> no redirect at all, the ordinary path.
+// =1     -> read layer 1. Black means the second view was never shaded.
+// =0     -> read layer 0, but *through the same substitution path*. This is
+//           the control, and it is what tells a genuine multiview failure
+//           apart from a broken instrument: layer 0 is known-good content, so
+//           if =0 renders correctly the machinery is sound and a black =1 is
+//           a real finding, whereas if =0 is also black the redirect itself
+//           is at fault and =1 proved nothing. Run 2 taught this the
+//           expensive way.
+const bool g_mv_redirect = getenv("X4VR_MV_PRESENT_LAYER") != nullptr;
 const uint32_t g_mv_present_layer = [] {
     const char *e = getenv("X4VR_MV_PRESENT_LAYER");
     return e ? (uint32_t)atoi(e) : 0u;
@@ -595,7 +606,7 @@ void mv_redirect_writes(DeviceData *d, VkDevice device, uint32_t writeCount,
                 ci.format = vi.format;
                 ci.components = vi.components;
                 ci.subresourceRange = vi.range;
-                ci.subresourceRange.baseArrayLayer = 1;
+                ci.subresourceRange.baseArrayLayer = g_mv_present_layer;
                 ci.subresourceRange.layerCount = 1;
                 if (d->CreateImageView(device, &ci, nullptr, &repl) !=
                     VK_SUCCESS)
@@ -628,7 +639,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSets(
     }
     std::vector<VkWriteDescriptorSet> redirected;
     std::vector<std::vector<VkDescriptorImageInfo>> pool;
-    if (g_mv && g_active && g_mv_present_layer) {
+    if (g_mv && g_active && g_mv_redirect) {
         mv_redirect_writes(d, device, writeCount, writes, redirected, pool);
         d->UpdateDescriptorSets(device, writeCount, redirected.data(),
                                 copyCount, copies);
