@@ -17,6 +17,7 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_layer.h>
 
+#include <algorithm>
 #include <cmath>
 #include <ctime>
 #include <cstring>
@@ -387,9 +388,52 @@ void credit_draw(VkCommandBuffer cb) {
 // copy of the data (an indirection we must find).
 float *g_verify_ptr = nullptr;
 
+// Frame pacing, reported as percentiles rather than an average.
+//
+// Gate 3 of docs/phase4b-test-plan.md needs a number that survives being
+// compared across runs, and a mean does not: a single load hitch or a menu
+// stretch moves it more than the change under test does. Percentiles over a
+// fixed window are stable enough to compare, and p99 keeps the hitches
+// visible instead of averaging them away.
+//
+// Built in rather than left to MangoHud so the measurement does not add
+// another layer to the chain during a test whose premise is that nothing
+// should change.
+void frame_timing(uint64_t frame) {
+    static std::vector<float> ms;
+    static timespec prev{};
+    timespec now{};
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (prev.tv_sec) {
+        ms.push_back((float)(now.tv_sec - prev.tv_sec) * 1000.0f +
+                     (float)(now.tv_nsec - prev.tv_nsec) / 1.0e6f);
+    }
+    prev = now;
+    if (ms.size() < 600)
+        return;
+    std::vector<float> s = ms;
+    std::sort(s.begin(), s.end());
+    auto pct = [&s](double p) {
+        return s[(size_t)(p * (double)(s.size() - 1))];
+    };
+    double sum = 0;
+    for (float v : s)
+        sum += v;
+    const float mean = (float)(sum / (double)s.size());
+    // fps from the median frame, which is the one a player perceives as
+    // "the" framerate; the tail is reported in milliseconds where it is
+    // easier to reason about.
+    X4VR_LOG("perf frame %llu: median %.2f ms (%.1f fps)  mean %.2f  "
+             "p90 %.2f  p99 %.2f  worst %.2f  [%zu frames]",
+             (unsigned long long)frame, pct(0.5), 1000.0f / pct(0.5), mean,
+             pct(0.9), pct(0.99), s.back(), s.size());
+    ms.clear();
+}
+
 void frame_flush() {
     std::lock_guard<std::mutex> lock(g_track.mu);
     g_track.frame++;
+    frame_timing(g_track.frame);
     if (g_verify_ptr && (g_track.frame % 120) == 0) {
         const x4vr::Mat4 vp = x4vr::load(g_verify_ptr + x4vr::kViewProjection);
         bool still_zero = true;
