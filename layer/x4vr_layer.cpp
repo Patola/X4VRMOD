@@ -84,6 +84,10 @@ struct DeviceData {
     PFN_vkDestroyShaderModule DestroyShaderModule = nullptr;
     PFN_vkCreateRenderPass CreateRenderPass = nullptr;
     PFN_vkCreateFramebuffer CreateFramebuffer = nullptr;
+    PFN_vkCmdCopyImage CmdCopyImage = nullptr;
+    PFN_vkCmdBlitImage CmdBlitImage = nullptr;
+    PFN_vkCmdResolveImage CmdResolveImage = nullptr;
+    PFN_vkCmdClearColorImage CmdClearColorImage = nullptr;
     PFN_vkCreateImage CreateImage = nullptr;
     PFN_vkDestroyImage DestroyImage = nullptr;
     PFN_vkCreateImageView CreateImageView = nullptr;
@@ -163,6 +167,7 @@ struct MvStats {
     uint32_t pipe_masked = 0;   // pipelines built against a view-masked pass
     uint32_t pipe_unmasked = 0; // ... against a pass with no view mask
     uint32_t pipe_dynamic = 0;  // ... against no render pass (dynamic rendering)
+    uint32_t widened = 0;       // transfer regions grown to cover both layers
     uint32_t reported = 0;
 } g_mv_stats;
 std::mutex g_mv_mu;
@@ -883,9 +888,10 @@ void mv_report(const char *when) {
              g_mv_stats.substituted, per_eye_imgs, g_mv_stats.redirected,
              g_mv_stats.fallbacks,
              g_mv_stats.fallbacks ? "  <-- NOT CLEAN" : "");
-    X4VR_LOG("mv %s: pipelines masked=%u unmasked=%u dynamic_rendering=%u",
+    X4VR_LOG("mv %s: pipelines masked=%u unmasked=%u dynamic_rendering=%u "
+             "transfers_widened=%u",
              when, g_mv_stats.pipe_masked, g_mv_stats.pipe_unmasked,
-             g_mv_stats.pipe_dynamic);
+             g_mv_stats.pipe_dynamic, g_mv_stats.widened);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass(
@@ -2052,6 +2058,133 @@ VKAPI_ATTR void VKAPI_CALL x4vr_GetDeviceQueue2(VkDevice device,
     }
 }
 
+
+// Predicted failure mode 4, and the one that bit: X4 copies between its render
+// targets, and every per-eye image carries TRANSFER_SRC|TRANSFER_DST. A copy
+// region names layerCount=1, so it moves layer 0 and leaves layer 1 holding
+// whatever it held before. One such copy anywhere in the chain drains the
+// second view, and the frame goes black exactly as observed -- with no
+// validation error, because copying one layer of a two-layer image is
+// perfectly legal.
+//
+// Multiview replicates *draws*, never transfers. Anything outside a render
+// pass has to be widened by hand.
+bool img_doubled(VkImage im) {
+    std::lock_guard<std::mutex> lock(g_img_mu);
+    auto it = g_images.find(im);
+    return it != g_images.end() && it->second.doubled;
+}
+
+const bool g_mv_fix_copies = [] {
+    const char *e = getenv("X4VR_MV_FIX_COPIES");
+    return !(e && *e && *e == '0');
+}();
+
+// Widen a one-layer region to both layers. Only when it starts at layer 0 and
+// covers exactly one: anything else is a deliberate per-layer access and must
+// be left alone.
+bool widen(VkImageSubresourceLayers &a, VkImageSubresourceLayers &b) {
+    if (a.baseArrayLayer != 0 || a.layerCount != 1 ||
+        b.baseArrayLayer != 0 || b.layerCount != 1)
+        return false;
+    a.layerCount = 2;
+    b.layerCount = 2;
+    return true;
+}
+
+void count_widened(uint32_t n) {
+    if (!n)
+        return;
+    std::lock_guard<std::mutex> lock(g_mv_mu);
+    g_mv_stats.widened += n;
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_CmdCopyImage(
+    VkCommandBuffer cb, VkImage src, VkImageLayout sl, VkImage dst,
+    VkImageLayout dl, uint32_t n, const VkImageCopy *regions) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    std::vector<VkImageCopy> mod;
+    uint32_t w = 0;
+    if (g_mv && g_mv_fix_copies && g_active && img_doubled(src) &&
+        img_doubled(dst)) {
+        mod.assign(regions, regions + n);
+        for (auto &r : mod)
+            w += widen(r.srcSubresource, r.dstSubresource) ? 1 : 0;
+    }
+    count_widened(w);
+    d->CmdCopyImage(cb, src, sl, dst, dl, n, w ? mod.data() : regions);
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_CmdBlitImage(
+    VkCommandBuffer cb, VkImage src, VkImageLayout sl, VkImage dst,
+    VkImageLayout dl, uint32_t n, const VkImageBlit *regions,
+    VkFilter filter) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    std::vector<VkImageBlit> mod;
+    uint32_t w = 0;
+    if (g_mv && g_mv_fix_copies && g_active && img_doubled(src) &&
+        img_doubled(dst)) {
+        mod.assign(regions, regions + n);
+        for (auto &r : mod)
+            w += widen(r.srcSubresource, r.dstSubresource) ? 1 : 0;
+    }
+    count_widened(w);
+    d->CmdBlitImage(cb, src, sl, dst, dl, n, w ? mod.data() : regions, filter);
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_CmdResolveImage(
+    VkCommandBuffer cb, VkImage src, VkImageLayout sl, VkImage dst,
+    VkImageLayout dl, uint32_t n, const VkImageResolve *regions) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    std::vector<VkImageResolve> mod;
+    uint32_t w = 0;
+    if (g_mv && g_mv_fix_copies && g_active && img_doubled(src) &&
+        img_doubled(dst)) {
+        mod.assign(regions, regions + n);
+        for (auto &r : mod)
+            w += widen(r.srcSubresource, r.dstSubresource) ? 1 : 0;
+    }
+    count_widened(w);
+    d->CmdResolveImage(cb, src, sl, dst, dl, n, w ? mod.data() : regions);
+}
+
+// A clear outside a render pass has the same problem from the other side:
+// clearing only layer 0 leaves layer 1 stale rather than blank.
+VKAPI_ATTR void VKAPI_CALL x4vr_CmdClearColorImage(
+    VkCommandBuffer cb, VkImage img, VkImageLayout l,
+    const VkClearColorValue *colour, uint32_t n,
+    const VkImageSubresourceRange *ranges) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    std::vector<VkImageSubresourceRange> mod;
+    uint32_t w = 0;
+    if (g_mv && g_mv_fix_copies && g_active && img_doubled(img)) {
+        mod.assign(ranges, ranges + n);
+        for (auto &r : mod)
+            if (r.baseArrayLayer == 0 && r.layerCount == 1) {
+                r.layerCount = 2;
+                w++;
+            }
+    }
+    count_widened(w);
+    d->CmdClearColorImage(cb, img, l, colour, n, w ? mod.data() : ranges);
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     VkQueue queue, const VkPresentInfoKHR *pi) {
     if (g_mv && g_active) {
@@ -2392,6 +2525,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(DestroyShaderModule);
     RESOLVE(CreateRenderPass);
     RESOLVE(CreateFramebuffer);
+    RESOLVE(CmdCopyImage);
+    RESOLVE(CmdBlitImage);
+    RESOLVE(CmdResolveImage);
+    RESOLVE(CmdClearColorImage);
     RESOLVE(CreateImage);
     RESOLVE(DestroyImage);
     RESOLVE(CreateImageView);
@@ -2487,6 +2624,10 @@ const NameFunc kHooks[] = {
     {"vkDestroyShaderModule", (PFN_vkVoidFunction)x4vr_DestroyShaderModule},
     {"vkCreateRenderPass", (PFN_vkVoidFunction)x4vr_CreateRenderPass},
     {"vkCreateFramebuffer", (PFN_vkVoidFunction)x4vr_CreateFramebuffer},
+    {"vkCmdCopyImage", (PFN_vkVoidFunction)x4vr_CmdCopyImage},
+    {"vkCmdBlitImage", (PFN_vkVoidFunction)x4vr_CmdBlitImage},
+    {"vkCmdResolveImage", (PFN_vkVoidFunction)x4vr_CmdResolveImage},
+    {"vkCmdClearColorImage", (PFN_vkVoidFunction)x4vr_CmdClearColorImage},
     {"vkCreateImage", (PFN_vkVoidFunction)x4vr_CreateImage},
     {"vkDestroyImage", (PFN_vkVoidFunction)x4vr_DestroyImage},
     {"vkCreateImageView", (PFN_vkVoidFunction)x4vr_CreateImageView},

@@ -11,6 +11,7 @@ They are built by the normal `cmake --build build` and link `libvulkan`
 |---|---|
 | `run-multiview-enable.sh` | Does the layer really enable the multiview feature on a device the application created without it? |
 | `run-multiview-double.sh` | Does the layer turn a single-layer frame into a two-layer one, and is the result valid Vulkan? |
+| `run-multiview-render.sh` | Does a real draw through the layer reach **both** array layers? Written to settle in one second what three live runs could not. |
 
 ## Conventions
 
