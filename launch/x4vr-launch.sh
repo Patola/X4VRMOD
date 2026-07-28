@@ -54,6 +54,16 @@
 #                         X4's Wayland output is new and may misbehave)
 #   X4VR_FOSSILIZE=1      keep Valve's fossilize layer (default: disabled to
 #                         keep the Vulkan layer chain clean during dev)
+#   X4VR_MV=1             Phase 4b stage 1: render the frame into two array
+#                         layers with the SAME eye matrix for both. Nothing on
+#                         screen may change -- that is the test. Off by
+#                         default. See docs/phase4b-test-plan.md.
+#   X4VR_MV_PRESENT_LAYER=1
+#                         make every read of a doubled image come from the
+#                         second view instead of the first, so the whole frame
+#                         becomes a blink comparator. With one K the image
+#                         must look identical; black means the second view is
+#                         never being shaded.
 #   X4VR_MULTIVIEW=0      stop the layer enabling the multiview device feature
 #                         (default: enabled). X4 declares Vulkan 1.2, where
 #                         multiview is core, but leaves the feature off; the

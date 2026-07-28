@@ -23,6 +23,7 @@
 #include <map>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -122,6 +123,33 @@ const bool g_multiview_enable = [] {
     const char *e = getenv("X4VR_MULTIVIEW");
     return !(e && *e && *e == '0');
 }();
+
+// Phase 4b stage 1: render the frame into two array layers, with the SAME
+// eye matrix for both. Nothing on screen may change -- that is the whole
+// point of the stage. See docs/phase4b-test-plan.md.
+//
+// Opt-in, so `mv_partition_measured` behaviour remains the default while this
+// is under test.
+constexpr uint32_t kViewMask = 0x3; // views 0 and 1
+const bool g_mv = [] {
+    const char *e = getenv("X4VR_MV");
+    return e && *e && *e != '0';
+}();
+
+// Which layer the debug blit shows (gate 2: with one K, they must match).
+const uint32_t g_mv_present_layer = [] {
+    const char *e = getenv("X4VR_MV_PRESENT_LAYER");
+    return e ? (uint32_t)atoi(e) : 0u;
+}();
+
+struct MvStats {
+    uint32_t doubled = 0;     // images given a second array layer
+    uint32_t masked = 0;      // render passes given a view mask
+    uint32_t substituted = 0; // attachment views replaced with array views
+    uint32_t fallbacks = 0;   // attachments we could NOT upgrade -- must be 0
+    uint32_t reported = 0;
+} g_mv_stats;
+std::mutex g_mv_mu;
 
 // The layer is switched on through the environment, and every child process
 // inherits it: under gamescope we are loaded into gamescope and its Xwayland
@@ -264,6 +292,10 @@ struct ShaderVariants {
 // it belongs to. Inventory only; shares g_variants.mu.
 std::unordered_map<VkRenderPass, uint32_t> g_rp_serials;
 
+// Passes we gave a view mask; the framebuffer hook needs to know so it can
+// supply array views. Shares g_variants.mu with g_rp_serials.
+std::unordered_set<VkRenderPass> g_masked_passes;
+
 // Image tracking, for the Phase 4b question the pass inventory could not
 // answer: how many *images* are behind those passes? The cost of doubling is
 // per image, but a render pass names only its attachments and ten passes
@@ -280,10 +312,21 @@ struct ImageInfo {
     VkFormat format;
     uint32_t layers, mips, samples;
     VkImageUsageFlags usage;
+    bool doubled = false;
+};
+// Enough of a view's create info to rebuild it as an array view later.
+struct ViewInfo {
+    VkImage image;
+    VkFormat format;
+    VkComponentMapping components;
+    VkImageSubresourceRange range;
+    VkImageViewType type;
 };
 std::mutex g_img_mu;
 std::unordered_map<VkImage, ImageInfo> g_images;
-std::unordered_map<VkImageView, VkImage> g_views;
+std::unordered_map<VkImageView, ViewInfo> g_views;
+// original attachment view -> the 2-layer array view we substitute for it
+std::unordered_map<VkImageView, VkImageView> g_array_views;
 uint32_t g_img_serial = 0;
 
 // 8-bit UNORM/SRGB colour targets mean a screen-space (UI/blit) pass.
@@ -553,7 +596,7 @@ uint32_t g_rp_serial = 0;
 // Everything else is world geometry rendered through the camera projection,
 // which is what K was derived for.
 template <typename CreateInfo>
-void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
+std::vector<bool> classify_unsheared(const CreateInfo *ci) {
     std::vector<bool> unsheared(ci->subpassCount, false);
     for (uint32_t i = 0; i < ci->subpassCount; i++) {
         const auto &sp = ci->pSubpasses[i];
@@ -572,6 +615,41 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
         }
         unsheared[i] = any && all_ldr;
     }
+    return unsheared;
+}
+
+// Does this pass render into both eyes?
+//
+// Stage 1 deliberately reuses the inverse of the shear classification, which
+// excludes two groups for two different reasons:
+//
+//   * depth-only (shadow cascades) -- light space, genuinely shared;
+//   * all-LDR (UI and the final blit) -- deferred, not shared. The UI *does*
+//     belong in both eyes, but the final blit's attachment is the swapchain
+//     image, which cannot take a second array layer because it is the thing
+//     being presented. Handing that off needs SbsCompositor's images to
+//     become one two-layer image, which is stage 2. Leaving the UI mono here
+//     costs nothing under test, because with one K both eyes would draw it
+//     identically anyway.
+//
+// It also over-includes the exposure reductions, which are indistinguishable
+// from legitimate post passes at this point (a render pass names no extents,
+// and 4096x1 is only visible on the framebuffer). Harmless while both eyes
+// match; must be fixed before K differs. Recorded in the test plan under
+// "what these gates cannot catch".
+template <typename CreateInfo>
+bool pass_is_per_eye(const CreateInfo *ci) {
+    if (!g_mv || !g_multiview_supported)
+        return false;
+    for (bool un : classify_unsheared(ci))
+        if (!un)
+            return true;
+    return false;
+}
+
+template <typename CreateInfo>
+void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
+    std::vector<bool> unsheared = classify_unsheared(ci);
 
     std::lock_guard<std::mutex> lock(g_variants.mu);
     if (g_mv_inventory && g_active) {
@@ -614,6 +692,32 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
     g_variants.unsheared[rp] = std::move(unsheared);
 }
 
+void mark_masked(VkRenderPass rp) {
+    std::lock_guard<std::mutex> lock(g_variants.mu);
+    g_masked_passes.insert(rp);
+    std::lock_guard<std::mutex> lock2(g_mv_mu);
+    g_mv_stats.masked++;
+}
+
+static const uint32_t corr2 = kViewMask;
+
+// Gate 1's pass condition, in one line. Reported at the first present (early
+// enough to abort a bad run) and again at device teardown (the final tally,
+// since framebuffers keep being created during play).
+//
+// fallbacks is the load-bearing number and it must be 0. Individual
+// fallbacks are logged by name as they happen, so a non-zero total here is a
+// summary of something already explained above it, never a first mention.
+void mv_report(const char *when) {
+    if (!g_mv)
+        return;
+    std::lock_guard<std::mutex> lock(g_mv_mu);
+    X4VR_LOG("mv %s: doubled=%u masked=%u substituted=%u fallbacks=%u%s", when,
+             g_mv_stats.doubled, g_mv_stats.masked, g_mv_stats.substituted,
+             g_mv_stats.fallbacks,
+             g_mv_stats.fallbacks ? "  <-- NOT CLEAN" : "");
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass(
     VkDevice device, const VkRenderPassCreateInfo *ci,
     const VkAllocationCallbacks *ac, VkRenderPass *out) {
@@ -622,9 +726,29 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
-    VkResult r = d->CreateRenderPass(device, ci, ac, out);
-    if (r == VK_SUCCESS)
+    // Every subpass shares one mask: X4's passes are all single-subpass, and
+    // the spec forbids mixing zero and non-zero masks within a render pass.
+    const bool per_eye = pass_is_per_eye(ci);
+    std::vector<uint32_t> masks;
+    uint32_t corr = kViewMask;
+    VkRenderPassMultiviewCreateInfo mv{};
+    VkRenderPassCreateInfo mod = *ci;
+    if (per_eye) {
+        masks.assign(ci->subpassCount, kViewMask);
+        mv.sType = VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO;
+        mv.subpassCount = ci->subpassCount;
+        mv.pViewMasks = masks.data();
+        mv.correlationMaskCount = 1;
+        mv.pCorrelationMasks = &corr;
+        mv.pNext = ci->pNext;
+        mod.pNext = &mv;
+    }
+    VkResult r = d->CreateRenderPass(device, per_eye ? &mod : ci, ac, out);
+    if (r == VK_SUCCESS) {
         record_render_pass(ci, *out);
+        if (per_eye)
+            mark_masked(*out);
+    }
     return r;
 }
 
@@ -643,10 +767,57 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass2(
         next = (PFN_vkCreateRenderPass2)d->gdpa(device, "vkCreateRenderPass2KHR");
     if (!next)
         return VK_ERROR_EXTENSION_NOT_PRESENT;
-    VkResult r = next(device, ci, ac, out);
-    if (r == VK_SUCCESS)
+    // RenderPass2 carries the mask on each subpass instead of in a pNext
+    // struct, so the subpass array has to be copied to set it.
+    const bool per_eye = pass_is_per_eye(ci);
+    std::vector<VkSubpassDescription2> subs;
+    VkRenderPassCreateInfo2 mod = *ci;
+    if (per_eye) {
+        subs.assign(ci->pSubpasses, ci->pSubpasses + ci->subpassCount);
+        for (auto &sp : subs)
+            sp.viewMask = kViewMask;
+        mod.pSubpasses = subs.data();
+        mod.correlatedViewMaskCount = 1;
+        mod.pCorrelatedViewMasks = &corr2;
+    }
+    VkResult r = next(device, per_eye ? &mod : ci, ac, out);
+    if (r == VK_SUCCESS) {
         record_render_pass(ci, *out);
+        if (per_eye)
+            mark_masked(*out);
+    }
     return r;
+}
+
+// Should this image get a second array layer?
+//
+// The decision has to be made here, where an image has no framebuffer and no
+// render pass, so it cannot be the precise one. It does not need to be: the
+// two errors are not symmetric.
+//
+//   * Doubled but never rendered per-eye -> layer 1 is simply never touched.
+//     Costs memory, nothing else.
+//   * Rendered per-eye but not doubled -> a hard validation error at
+//     vkCreateFramebuffer, naming the framebuffer and the attachment.
+//
+// So be permissive here and precise at the render pass, and let validation
+// catch anything this rule is too narrow for. In particular the shadow atlas
+// is doubled and wasted (~40 MB): a depth image gives no hint at creation
+// whether it will back a shadow cascade or the main depth buffer, and 40 MB
+// is far below where that matters.
+bool mv_double_candidate(const VkImageCreateInfo *ci) {
+    if (!g_mv || !g_multiview_supported)
+        return false;
+    if (ci->imageType != VK_IMAGE_TYPE_2D || ci->arrayLayers != 1 ||
+        ci->samples != VK_SAMPLE_COUNT_1_BIT)
+        return false;
+    if (ci->flags & (VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT |
+                     VK_IMAGE_CREATE_SPARSE_BINDING_BIT |
+                     VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT |
+                     VK_IMAGE_CREATE_SPARSE_ALIASED_BIT))
+        return false;
+    return (ci->usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)) != 0;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImage(
@@ -657,7 +828,24 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImage(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
-    VkResult r = d->CreateImage(device, ci, ac, out);
+    const bool dbl = g_active && mv_double_candidate(ci);
+    VkImageCreateInfo mod = *ci;
+    if (dbl)
+        mod.arrayLayers = 2;
+    VkResult r = d->CreateImage(device, dbl ? &mod : ci, ac, out);
+    // A driver that refuses the doubled image must not take the game down
+    // with it: fall back to exactly what X4 asked for and let the render pass
+    // stage report the resulting fallback.
+    if (r != VK_SUCCESS && dbl) {
+        X4VR_LOG("mv: vkCreateImage refused arrayLayers=2 for %ux%u fmt=%u "
+                 "(%d) — falling back to single layer",
+                 ci->extent.width, ci->extent.height, ci->format, r);
+        r = d->CreateImage(device, ci, ac, out);
+        if (r == VK_SUCCESS) {
+            std::lock_guard<std::mutex> lock(g_mv_mu);
+            g_mv_stats.fallbacks++;
+        }
+    }
     if (r != VK_SUCCESS || !g_active)
         return r;
     ImageInfo info{};
@@ -667,17 +855,23 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImage(
     info.mips = ci->mipLevels;
     info.samples = (uint32_t)ci->samples;
     info.usage = ci->usage;
+    info.doubled = dbl;
     {
         std::lock_guard<std::mutex> lock(g_img_mu);
         info.serial = g_img_serial++;
         g_images[*out] = info;
     }
+    if (dbl) {
+        std::lock_guard<std::mutex> lock(g_mv_mu);
+        g_mv_stats.doubled++;
+    }
     if (g_mv_inventory)
         X4VR_LOG("img #%u: %ux%ux%u layers=%u mips=%u samples=%u fmt=%u "
-                 "usage=0x%x",
+                 "usage=0x%x%s",
                  info.serial, ci->extent.width, ci->extent.height,
                  ci->extent.depth, ci->arrayLayers, ci->mipLevels,
-                 (uint32_t)ci->samples, ci->format, ci->usage);
+                 (uint32_t)ci->samples, ci->format, ci->usage,
+                 dbl ? " DOUBLED" : "");
     return r;
 }
 
@@ -711,10 +905,53 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImageView(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
+    bool doubled = false;
+    if (g_active) {
+        std::lock_guard<std::mutex> lock(g_img_mu);
+        auto it = g_images.find(ci->image);
+        doubled = it != g_images.end() && it->second.doubled;
+    }
+
+    // Non-array views over a doubled image need two things done to them.
+    //
+    // First, the predicted failure mode, headed off rather than waited for:
+    // X4 asks for a plain 2D view with layerCount = VK_REMAINING_ARRAY_LAYERS,
+    // which used to mean "the one layer there is" and now resolves to 2 -- and
+    // a non-array 2D view may only span one. Pin it to 1, so every view X4
+    // makes keeps meaning what X4 meant by it. The array views the framebuffer
+    // needs are built separately, by us.
+    //
+    // Second, gate 2 of docs/phase4b-test-plan.md. Every read of a doubled
+    // image goes through one of these views, so moving baseArrayLayer to 1
+    // makes the entire downstream chain -- tonemap, UI composite, the final
+    // blit -- consume the *second* view instead of the first. That turns the
+    // whole screen into the blink comparator: with one K for both views the
+    // frame must look identical either way, and if the second view is never
+    // shaded it comes back black.
+    //
+    // Writes are unaffected: framebuffer attachments are replaced with array
+    // views covering both layers regardless of what this does.
+    VkImageViewCreateInfo mod = *ci;
+    const bool non_array = ci->viewType != VK_IMAGE_VIEW_TYPE_2D_ARRAY &&
+                           ci->viewType != VK_IMAGE_VIEW_TYPE_CUBE &&
+                           ci->viewType != VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+    if (doubled && non_array) {
+        mod.subresourceRange.layerCount = 1;
+        if (g_mv_present_layer)
+            mod.subresourceRange.baseArrayLayer = 1;
+        ci = &mod;
+    }
+
     VkResult r = d->CreateImageView(device, ci, ac, out);
     if (r == VK_SUCCESS && g_active) {
+        ViewInfo vi{};
+        vi.image = ci->image;
+        vi.format = ci->format;
+        vi.components = ci->components;
+        vi.range = ci->subresourceRange;
+        vi.type = ci->viewType;
         std::lock_guard<std::mutex> lock(g_img_mu);
-        g_views[*out] = ci->image; // the only link a framebuffer gives us
+        g_views[*out] = vi; // the only link a framebuffer gives us
     }
     return r;
 }
@@ -726,10 +963,20 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyImageView(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
+    VkImageView sub = VK_NULL_HANDLE;
     {
         std::lock_guard<std::mutex> lock(g_img_mu);
         g_views.erase(view);
+        auto it = g_array_views.find(view);
+        if (it != g_array_views.end()) {
+            sub = it->second;
+            g_array_views.erase(it);
+        }
     }
+    // Our substitute is owned by us and outlives nothing: it dies with the
+    // view it stood in for.
+    if (sub != VK_NULL_HANDLE)
+        d->DestroyImageView(device, sub, ac);
     d->DestroyImageView(device, view, ac);
 }
 
@@ -752,15 +999,90 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
-    VkResult r = d->CreateFramebuffer(device, ci, ac, out);
-    if (r == VK_SUCCESS && g_mv_inventory && g_active) {
-        uint32_t serial = UINT32_MAX;
-        {
-            std::lock_guard<std::mutex> lock(g_variants.mu);
-            auto it = g_rp_serials.find(ci->renderPass);
-            if (it != g_rp_serials.end())
-                serial = it->second;
+    uint32_t serial = UINT32_MAX;
+    bool masked = false;
+    {
+        std::lock_guard<std::mutex> lock(g_variants.mu);
+        auto it = g_rp_serials.find(ci->renderPass);
+        if (it != g_rp_serials.end())
+            serial = it->second;
+        masked = g_masked_passes.count(ci->renderPass) != 0;
+    }
+
+    // A view-masked pass needs every attachment to be an array view spanning
+    // both layers. X4's own views are single-layer by construction, so we
+    // build array views over the same images and swap them in. X4 never sees
+    // these -- they exist only inside the framebuffer.
+    std::vector<VkImageView> subs;
+    VkFramebufferCreateInfo mod = *ci;
+    if (masked && g_active) {
+        subs.assign(ci->pAttachments, ci->pAttachments + ci->attachmentCount);
+        for (uint32_t i = 0; i < ci->attachmentCount; i++) {
+            VkImageView orig = ci->pAttachments[i];
+            ViewInfo vi{};
+            bool have = false, doubled = false, cached = false;
+            {
+                std::lock_guard<std::mutex> lock(g_img_mu);
+                auto v = g_views.find(orig);
+                if (v != g_views.end()) {
+                    vi = v->second;
+                    have = true;
+                    auto im = g_images.find(vi.image);
+                    doubled = im != g_images.end() && im->second.doubled;
+                }
+                auto c = g_array_views.find(orig);
+                if (c != g_array_views.end()) {
+                    subs[i] = c->second;
+                    cached = true;
+                }
+            }
+            if (cached)
+                continue;
+            if (!have || !doubled) {
+                // Loud, and by name. A silent single-layer attachment here is
+                // the failure that resurfaces later as an unexplained
+                // artifact -- see docs/phase4b-test-plan.md, gate 1.
+                X4VR_LOG("mv: FALLBACK rp #%u attachment %u — %s; pass is "
+                         "view-masked but this attachment cannot be doubled",
+                         serial, i,
+                         !have ? "view not tracked (swapchain image?)"
+                               : "backing image is single-layer");
+                std::lock_guard<std::mutex> lock(g_mv_mu);
+                g_mv_stats.fallbacks++;
+                continue;
+            }
+            VkImageViewCreateInfo avci{};
+            avci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            avci.image = vi.image;
+            avci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+            avci.format = vi.format;
+            avci.components = vi.components;
+            avci.subresourceRange = vi.range;
+            avci.subresourceRange.baseArrayLayer = 0;
+            avci.subresourceRange.layerCount = 2;
+            VkImageView av = VK_NULL_HANDLE;
+            if (d->CreateImageView(device, &avci, nullptr, &av) == VK_SUCCESS) {
+                subs[i] = av;
+                std::lock_guard<std::mutex> lock2(g_img_mu);
+                g_array_views[orig] = av;
+                std::lock_guard<std::mutex> lock3(g_mv_mu);
+                g_mv_stats.substituted++;
+            } else {
+                X4VR_LOG("mv: FALLBACK rp #%u attachment %u — array view "
+                         "creation failed", serial, i);
+                std::lock_guard<std::mutex> lock3(g_mv_mu);
+                g_mv_stats.fallbacks++;
+            }
         }
+        mod.pAttachments = subs.data();
+        // Multiview draws into array layers, so the framebuffer itself is
+        // one layer deep; the view mask supplies the rest.
+        mod.layers = 1;
+    }
+
+    VkResult r = d->CreateFramebuffer(device, masked && g_active ? &mod : ci,
+                                      ac, out);
+    if (r == VK_SUCCESS && g_mv_inventory && g_active) {
         char imgs[256];
         int n = 0;
         imgs[0] = 0;
@@ -769,7 +1091,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
             for (uint32_t i = 0; i < ci->attachmentCount && n < 230; i++) {
                 auto v = g_views.find(ci->pAttachments[i]);
                 auto im = v == g_views.end() ? g_images.end()
-                                             : g_images.find(v->second);
+                                             : g_images.find(v->second.image);
                 if (im == g_images.end())
                     n += snprintf(imgs + n, sizeof(imgs) - n, "%s?",
                                   n ? "," : "");
@@ -778,8 +1100,9 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
                                   n ? "," : "", im->second.serial);
             }
         }
-        X4VR_LOG("fb  rp #%u: %ux%u layers=%u attachments=%u imgs=[%s]", serial,
-                 ci->width, ci->height, ci->layers, ci->attachmentCount, imgs);
+        X4VR_LOG("fb  rp #%u: %ux%u layers=%u attachments=%u imgs=[%s]%s",
+                 serial, ci->width, ci->height, ci->layers,
+                 ci->attachmentCount, imgs, masked ? " MASKED" : "");
     }
     return r;
 }
@@ -795,6 +1118,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyRenderPass(
         std::lock_guard<std::mutex> lock(g_variants.mu);
         g_variants.unsheared.erase(rp);
         g_rp_serials.erase(rp);
+        g_masked_passes.erase(rp);
     }
     d->DestroyRenderPass(device, rp, ac);
 }
@@ -1527,6 +1851,13 @@ VKAPI_ATTR void VKAPI_CALL x4vr_GetDeviceQueue2(VkDevice device,
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     VkQueue queue, const VkPresentInfoKHR *pi) {
+    if (g_mv && g_active) {
+        static bool once = false;
+        if (!once) {
+            once = true;
+            mv_report("first present");
+        }
+    }
     DeviceData *d;
     {
         std::lock_guard<std::mutex> lock(g_mu);
@@ -1901,6 +2232,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
 
 VKAPI_ATTR void VKAPI_CALL x4vr_DestroyDevice(
     VkDevice device, const VkAllocationCallbacks *ac) {
+    mv_report("final");
     g_sbs.shutdown(); // idles the device, then frees pools/semaphores/fences
     PFN_vkDestroyDevice next;
     {

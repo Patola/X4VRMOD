@@ -10,6 +10,7 @@ They are built by the normal `cmake --build build` and link `libvulkan`
 | Test | Question it answers |
 |---|---|
 | `run-multiview-enable.sh` | Does the layer really enable the multiview feature on a device the application created without it? |
+| `run-multiview-double.sh` | Does the layer turn a single-layer frame into a two-layer one, and is the result valid Vulkan? |
 
 ## Conventions
 
