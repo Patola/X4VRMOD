@@ -148,6 +148,7 @@ struct MvStats {
     uint32_t masked = 0;      // render passes given a view mask
     uint32_t substituted = 0; // attachment views replaced with array views
     uint32_t fallbacks = 0;   // attachments we could NOT upgrade -- must be 0
+    uint32_t redirected = 0;  // gate-2 descriptor reads moved to layer 1
     uint32_t reported = 0;
 } g_mv_stats;
 std::mutex g_mv_mu;
@@ -328,6 +329,10 @@ std::unordered_map<VkImage, ImageInfo> g_images;
 std::unordered_map<VkImageView, ViewInfo> g_views;
 // original attachment view -> the 2-layer array view we substitute for it
 std::unordered_map<VkImageView, VkImageView> g_array_views;
+// images actually written by a view-masked pass, learned at framebuffer time
+std::unordered_set<VkImage> g_per_eye_images;
+// sampled view -> the same view onto layer 1, made lazily for gate 2
+std::unordered_map<VkImageView, VkImageView> g_layer1_views;
 uint32_t g_img_serial = 0;
 
 // 8-bit UNORM/SRGB colour targets mean a screen-space (UI/blit) pass.
@@ -528,6 +533,90 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyBuffer(
     d->DestroyBuffer(device, buffer, ac);
 }
 
+// Gate 2 of docs/phase4b-test-plan.md, applied where it is actually correct.
+//
+// The point is to make the frame read the *second* view, so that a view that
+// was never shaded shows up as black. Doing that at image-view creation was
+// wrong: 92 images are doubled but only ~21 are ever written by a view-masked
+// pass, and redirecting the other 71 pointed their reads at a layer nothing
+// had rendered into. That is what produced a mostly-black frame with an
+// intact HUD -- a broken instrument, not a broken frame.
+//
+// A descriptor update is the right moment. By then the framebuffers exist, so
+// g_per_eye_images knows which images really carry two views, and only those
+// are redirected. If a descriptor is written before its framebuffer is built
+// the image is simply not in the set yet and the read stays on layer 0 --
+// correct output, one less sample for the test, which is the safe direction
+// to fail in.
+void mv_redirect_writes(DeviceData *d, VkDevice device, uint32_t writeCount,
+                        const VkWriteDescriptorSet *writes,
+                        std::vector<VkWriteDescriptorSet> &out,
+                        std::vector<std::vector<VkDescriptorImageInfo>> &pool) {
+    out.assign(writes, writes + writeCount);
+    pool.resize(writeCount);
+    for (uint32_t i = 0; i < writeCount; i++) {
+        const VkWriteDescriptorSet &w = writes[i];
+        if (!w.pImageInfo || !w.descriptorCount)
+            continue;
+        if (w.descriptorType != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
+            w.descriptorType != VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE &&
+            w.descriptorType != VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT)
+            continue;
+        bool touched = false;
+        std::vector<VkDescriptorImageInfo> infos(
+            w.pImageInfo, w.pImageInfo + w.descriptorCount);
+        for (uint32_t j = 0; j < w.descriptorCount; j++) {
+            VkImageView v = infos[j].imageView;
+            if (v == VK_NULL_HANDLE)
+                continue;
+            VkImageView repl = VK_NULL_HANDLE;
+            ViewInfo vi{};
+            bool make = false;
+            {
+                std::lock_guard<std::mutex> lock(g_img_mu);
+                auto c = g_layer1_views.find(v);
+                if (c != g_layer1_views.end()) {
+                    repl = c->second;
+                } else {
+                    auto it = g_views.find(v);
+                    if (it != g_views.end() &&
+                        g_per_eye_images.count(it->second.image) &&
+                        it->second.range.baseArrayLayer == 0) {
+                        vi = it->second;
+                        make = true;
+                    }
+                }
+            }
+            if (make) {
+                VkImageViewCreateInfo ci{};
+                ci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+                ci.image = vi.image;
+                ci.viewType = vi.type;
+                ci.format = vi.format;
+                ci.components = vi.components;
+                ci.subresourceRange = vi.range;
+                ci.subresourceRange.baseArrayLayer = 1;
+                ci.subresourceRange.layerCount = 1;
+                if (d->CreateImageView(device, &ci, nullptr, &repl) !=
+                    VK_SUCCESS)
+                    repl = VK_NULL_HANDLE;
+                std::lock_guard<std::mutex> lock(g_img_mu);
+                g_layer1_views[v] = repl; // cache misses too, to stop retrying
+            }
+            if (repl != VK_NULL_HANDLE) {
+                infos[j].imageView = repl;
+                touched = true;
+                std::lock_guard<std::mutex> lock(g_mv_mu);
+                g_mv_stats.redirected++;
+            }
+        }
+        if (touched) {
+            pool[i] = std::move(infos);
+            out[i].pImageInfo = pool[i].data();
+        }
+    }
+}
+
 VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSets(
     VkDevice device, uint32_t writeCount,
     const VkWriteDescriptorSet *writes, uint32_t copyCount,
@@ -537,7 +626,15 @@ VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSets(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
-    d->UpdateDescriptorSets(device, writeCount, writes, copyCount, copies);
+    std::vector<VkWriteDescriptorSet> redirected;
+    std::vector<std::vector<VkDescriptorImageInfo>> pool;
+    if (g_mv && g_active && g_mv_present_layer) {
+        mv_redirect_writes(d, device, writeCount, writes, redirected, pool);
+        d->UpdateDescriptorSets(device, writeCount, redirected.data(),
+                                copyCount, copies);
+    } else {
+        d->UpdateDescriptorSets(device, writeCount, writes, copyCount, copies);
+    }
 
     std::lock_guard<std::mutex> lock(g_track.mu);
     for (uint32_t i = 0; i < writeCount; i++) {
@@ -761,8 +858,15 @@ void mv_report(const char *when) {
     if (!g_mv)
         return;
     std::lock_guard<std::mutex> lock(g_mv_mu);
-    X4VR_LOG("mv %s: doubled=%u masked=%u substituted=%u fallbacks=%u%s", when,
-             g_mv_stats.doubled, g_mv_stats.masked, g_mv_stats.substituted,
+    size_t per_eye_imgs;
+    {
+        std::lock_guard<std::mutex> lock(g_img_mu);
+        per_eye_imgs = g_per_eye_images.size();
+    }
+    X4VR_LOG("mv %s: doubled=%u masked=%u substituted=%u per_eye_images=%zu "
+             "redirected=%u fallbacks=%u%s",
+             when, g_mv_stats.doubled, g_mv_stats.masked,
+             g_mv_stats.substituted, per_eye_imgs, g_mv_stats.redirected,
              g_mv_stats.fallbacks,
              g_mv_stats.fallbacks ? "  <-- NOT CLEAN" : "");
 }
@@ -970,24 +1074,18 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImageView(
     // makes keeps meaning what X4 meant by it. The array views the framebuffer
     // needs are built separately, by us.
     //
-    // Second, gate 2 of docs/phase4b-test-plan.md. Every read of a doubled
-    // image goes through one of these views, so moving baseArrayLayer to 1
-    // makes the entire downstream chain -- tonemap, UI composite, the final
-    // blit -- consume the *second* view instead of the first. That turns the
-    // whole screen into the blink comparator: with one K for both views the
-    // frame must look identical either way, and if the second view is never
-    // shaded it comes back black.
-    //
-    // Writes are unaffected: framebuffer attachments are replaced with array
-    // views covering both layers regardless of what this does.
+    // The layer-1 redirect used to live here and was wrong: it moved
+    // baseArrayLayer on *every* doubled image. 92 images are doubled but only
+    // ~21 are ever written by a view-masked pass, so the other 71 had their
+    // reads pointed at a layer nothing had rendered into. It is applied at
+    // descriptor-update time now, where the set of genuinely per-eye images
+    // is known. See mv_redirect_writes().
     VkImageViewCreateInfo mod = *ci;
     const bool non_array = ci->viewType != VK_IMAGE_VIEW_TYPE_2D_ARRAY &&
                            ci->viewType != VK_IMAGE_VIEW_TYPE_CUBE &&
                            ci->viewType != VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
     if (doubled && non_array) {
         mod.subresourceRange.layerCount = 1;
-        if (g_mv_present_layer)
-            mod.subresourceRange.baseArrayLayer = 1;
         ci = &mod;
     }
 
@@ -1114,6 +1212,9 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
                 subs[i] = av;
                 std::lock_guard<std::mutex> lock2(g_img_mu);
                 g_array_views[orig] = av;
+                // This image really is written into both layers -- the only
+                // set for which reading layer 1 is meaningful.
+                g_per_eye_images.insert(vi.image);
                 std::lock_guard<std::mutex> lock3(g_mv_mu);
                 g_mv_stats.substituted++;
             } else {

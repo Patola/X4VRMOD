@@ -69,6 +69,12 @@
 #                         multiview is core, but leaves the feature off; the
 #                         second eye needs it on. Enabling it alone changes
 #                         nothing until a render pass carries a view mask.
+#   X4VR_VALIDATE=1       add VK_LAYER_KHRONOS_validation. Slower, but it is
+#                         the oracle for most of the predicted failure modes
+#                         in docs/phase4b-test-plan.md -- undersized memory
+#                         binds, view/layer mismatches, incompatible passes --
+#                         and it prints them by name instead of leaving an
+#                         artifact to interpret.
 #   X4VR_NO_LAYER=1       skip the Vulkan layer
 #   X4VR_NO_INJECT=1      skip the LD_PRELOAD injector
 #
@@ -101,6 +107,11 @@ if [[ "${X4VR_NO_LAYER:-0}" != 1 ]]; then
     export VK_ADD_LAYER_PATH="$BUILD/layer${VK_ADD_LAYER_PATH:+:$VK_ADD_LAYER_PATH}"
     export VK_INSTANCE_LAYERS="VK_LAYER_X4VR_core${VK_INSTANCE_LAYERS:+:$VK_INSTANCE_LAYERS}"
     export VK_LOADER_LAYERS_ENABLE="VK_LAYER_X4VR_core${VK_LOADER_LAYERS_ENABLE:+,$VK_LOADER_LAYERS_ENABLE}"
+fi
+
+if [[ "${X4VR_VALIDATE:-0}" == 1 ]]; then
+    export VK_INSTANCE_LAYERS="VK_LAYER_KHRONOS_validation${VK_INSTANCE_LAYERS:+:$VK_INSTANCE_LAYERS}"
+    export VK_LOADER_LAYERS_ENABLE="VK_LAYER_KHRONOS_validation${VK_LOADER_LAYERS_ENABLE:+,$VK_LOADER_LAYERS_ENABLE}"
 fi
 
 if [[ "${X4VR_NO_INJECT:-0}" != 1 ]]; then
