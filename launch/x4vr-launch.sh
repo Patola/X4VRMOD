@@ -64,6 +64,22 @@
 #                         becomes a blink comparator. With one K the image
 #                         must look identical; black means the second view is
 #                         never being shaded.
+#   X4VR_MV_MASK=<m>      which views a masked pass renders (default 0x3).
+#                         0x2 maps view 0 to array layer 1, so the frame is
+#                         rendered into layer 1 alone and X4 reads layer 0
+#                         through its own views -- a test of the write path
+#                         that needs no redirect at all.
+#   X4VR_MV_PROBE=1       hash layer 0 and layer 1 of one per-eye colour
+#                         attachment per frame, cycling through them, and log
+#                         both. The copy rides X4's own command buffer right
+#                         after the masked pass ends, where the layout is
+#                         known rather than guessed. Answers "are the two
+#                         layers the same bytes" as a number instead of as an
+#                         inference from what appeared on screen.
+#   X4VR_MV_REDIRECT_INPUT=1
+#                         also redirect subpass input attachments (default
+#                         off; they are view-indexed and substituting a
+#                         single-layer view contradicts that).
 #   X4VR_MULTIVIEW=0      stop the layer enabling the multiview device feature
 #                         (default: enabled). X4 declares Vulkan 1.2, where
 #                         multiview is core, but leaves the feature off; the

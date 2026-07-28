@@ -107,6 +107,12 @@ struct DeviceData {
     PFN_vkCmdCopyBufferToImage CmdCopyBufferToImage = nullptr;
     PFN_vkCmdCopyBufferToImage2 CmdCopyBufferToImage2 = nullptr;
     PFN_vkCmdClearDepthStencilImage CmdClearDepthStencilImage = nullptr;
+    PFN_vkCmdCopyImageToBuffer CmdCopyImageToBuffer = nullptr;
+    PFN_vkAllocateMemory AllocateMemory = nullptr;
+    PFN_vkFreeMemory FreeMemory = nullptr;
+    PFN_vkGetBufferMemoryRequirements GetBufferMemoryRequirements = nullptr;
+    PFN_vkQueueWaitIdle QueueWaitIdle = nullptr;
+    VkPhysicalDeviceMemoryProperties memprops{};
 };
 
 std::mutex g_mu;
@@ -441,6 +447,21 @@ uint32_t g_img_serial = 0;
 std::mutex g_cb_mu;
 std::unordered_map<VkPipeline, bool> g_pipe_mv;      // built for multiview
 std::unordered_map<VkCommandBuffer, bool> g_cb_mask; // inside a masked pass
+// Which framebuffer a command buffer is currently rendering into, so that
+// vkCmdEndRenderPass can name the images the pass just finished writing.
+std::unordered_map<VkCommandBuffer, VkFramebuffer> g_cb_fb;
+
+// A doubled colour attachment of a masked pass, with the layout that pass
+// leaves it in. Collected at framebuffer creation, where the pass, the views
+// and the images are all named together for the only time.
+struct FbAtt {
+    VkImage image;
+    uint32_t serial;
+    VkFormat format;
+    VkExtent3D extent;
+    VkImageLayout final_layout;
+};
+std::unordered_map<VkFramebuffer, std::vector<FbAtt>> g_fb_atts;
 
 // 8-bit UNORM/SRGB colour targets mean a screen-space (UI/blit) pass.
 inline bool is_ldr_format(VkFormat f) {
@@ -983,6 +1004,24 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
     g_variants.unsheared[rp] = std::move(unsheared);
 }
 
+// What layout each attachment is left in when the pass ends. This is the one
+// piece of information that makes the layer-1 readback sound: a barrier's
+// oldLayout has to match the image's actual layout, and VK_IMAGE_LAYOUT_
+// UNDEFINED -- the only "don't care" -- permits the driver to discard the
+// contents, which is precisely what we are trying to read. Taken from the
+// render pass rather than tracked, because the render pass performs the
+// transition itself and therefore cannot be wrong about it.
+std::unordered_map<VkRenderPass, std::vector<VkImageLayout>> g_rp_final;
+
+template <class CreateInfo>
+void record_final_layouts(const CreateInfo *ci, VkRenderPass rp) {
+    std::vector<VkImageLayout> f(ci->attachmentCount);
+    for (uint32_t i = 0; i < ci->attachmentCount; i++)
+        f[i] = ci->pAttachments[i].finalLayout;
+    std::lock_guard<std::mutex> lock(g_variants.mu);
+    g_rp_final[rp] = std::move(f);
+}
+
 void mark_masked(VkRenderPass rp) {
     std::lock_guard<std::mutex> lock(g_variants.mu);
     g_masked_passes.insert(rp);
@@ -1064,8 +1103,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass(
     VkResult r = d->CreateRenderPass(device, per_eye ? &mod : ci, ac, out);
     if (r == VK_SUCCESS) {
         record_render_pass(ci, *out);
-        if (per_eye)
+        if (per_eye) {
+            record_final_layouts(ci, *out);
             mark_masked(*out);
+        }
     }
     return r;
 }
@@ -1106,8 +1147,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass2(
     VkResult r = next(device, per_eye ? &mod : ci, ac, out);
     if (r == VK_SUCCESS) {
         record_render_pass(ci, *out);
-        if (per_eye)
+        if (per_eye) {
+            record_final_layouts(ci, *out);
             mark_masked(*out);
+        }
     }
     return r;
 }
@@ -1330,12 +1373,16 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
     }
     uint32_t serial = UINT32_MAX;
     bool masked = false;
+    std::vector<VkImageLayout> finals;
     {
         std::lock_guard<std::mutex> lock(g_variants.mu);
         auto it = g_rp_serials.find(ci->renderPass);
         if (it != g_rp_serials.end())
             serial = it->second;
         masked = g_masked_passes.count(ci->renderPass) != 0;
+        auto f = g_rp_final.find(ci->renderPass);
+        if (f != g_rp_final.end())
+            finals = f->second;
     }
 
     // A view-masked pass needs every attachment to be an array view spanning
@@ -1414,6 +1461,41 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
 
     VkResult r = d->CreateFramebuffer(device, masked && g_active ? &mod : ci,
                                       ac, out);
+
+    // Everything the readback needs about this pass's attachments, recorded
+    // while the framebuffer still names them. Colour only: a depth copy has
+    // aspect and format rules of its own, and probing depth is not what the
+    // open question needs.
+    if (r == VK_SUCCESS && masked && g_active && !finals.empty()) {
+        std::vector<FbAtt> atts;
+        {
+            std::lock_guard<std::mutex> lock(g_img_mu);
+            for (uint32_t i = 0; i < ci->attachmentCount && i < finals.size();
+                 i++) {
+                auto v = g_views.find(ci->pAttachments[i]);
+                if (v == g_views.end())
+                    continue;
+                auto im = g_images.find(v->second.image);
+                if (im == g_images.end() || !im->second.doubled)
+                    continue;
+                if (!(v->second.range.aspectMask & VK_IMAGE_ASPECT_COLOR_BIT))
+                    continue;
+                // Reading it back requires it to be a transfer source. Every
+                // per-eye image we have seen is, but assuming so would put an
+                // unchecked precondition inside the instrument.
+                if (!(im->second.usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT))
+                    continue;
+                atts.push_back(FbAtt{v->second.image, im->second.serial,
+                                     im->second.format, im->second.extent,
+                                     finals[i]});
+            }
+        }
+        if (!atts.empty()) {
+            std::lock_guard<std::mutex> lock(g_cb_mu);
+            g_fb_atts[*out] = std::move(atts);
+        }
+    }
+
     if (r == VK_SUCCESS && g_mv_inventory && g_active) {
         char imgs[256];
         int n = 0;
@@ -2560,6 +2642,170 @@ void cb_leave_pass(VkCommandBuffer cb) {
     g_cb_mask.erase(cb);
 }
 
+// ---- the layer-1 readback ------------------------------------------------
+//
+// Everything the diagnosis now rests on is one unmeasured fact: whether layer
+// 0 and layer 1 of a per-eye image hold the same bytes in the *game*. The
+// offline suite says they do in miniature. Eight live runs inferred it from
+// what appeared on screen, which is exactly the kind of inference that has
+// been wrong three times here.
+//
+// So read both layers and hash them. The copy rides X4's own command buffer
+// immediately after a masked pass ends, which is the one instant the layout
+// is known rather than guessed -- the render pass performed the transition to
+// finalLayout itself, so it cannot be wrong about it. Nothing here owns a
+// queue, allocates a command buffer, or reorders the frame.
+//
+// One image per frame, cycling, so a session covers the whole per-eye set
+// rather than whichever image happens to be first.
+const bool g_mv_probe = [] {
+    const char *e = getenv("X4VR_MV_PROBE");
+    return e && *e && *e != '0';
+}();
+
+struct MvProbe {
+    VkBuffer buf = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    void *ptr = nullptr;
+    bool failed = false;
+    bool pending = false;  // a copy is recorded and not yet read
+    size_t cursor = 0;     // which per-eye image to try next
+    uint32_t serial = 0;   // the one being probed
+    VkDeviceSize bytes = 0;
+    uint32_t w = 0, h = 0;
+    uint32_t captures = 0;
+} g_probe;
+std::mutex g_probe_mu;
+
+// Only the colour formats X4 uses as attachments. Anything absent is skipped
+// rather than guessed at: a wrong size here would hash the wrong bytes and
+// produce a confident, meaningless answer.
+uint32_t format_bpp(VkFormat f) {
+    switch (f) {
+    case VK_FORMAT_R8_UNORM: case VK_FORMAT_R8_UINT:            return 1;
+    case VK_FORMAT_R8G8_UNORM: case VK_FORMAT_R16_UNORM:
+    case VK_FORMAT_R16_SFLOAT:                                  return 2;
+    case VK_FORMAT_R8G8B8A8_UNORM: case VK_FORMAT_R8G8B8A8_SRGB:
+    case VK_FORMAT_B8G8R8A8_UNORM: case VK_FORMAT_B8G8R8A8_SRGB:
+    case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+    case VK_FORMAT_R16G16_UNORM: case VK_FORMAT_R16G16_SFLOAT:
+    case VK_FORMAT_R16G16_UINT: case VK_FORMAT_R32_SFLOAT:      return 4;
+    case VK_FORMAT_R16G16B16A16_SFLOAT:                         return 8;
+    default:                                                    return 0;
+    }
+}
+
+uint64_t fnv1a(const void *p, size_t n) {
+    uint64_t h = 1469598103934665603ull;
+    for (size_t i = 0; i < n; i++) {
+        h ^= ((const uint8_t *)p)[i];
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
+// Lazily sized for the largest region we ever copy: 64x64 at 8 bytes/texel,
+// two layers. Small enough to be free, large enough that the comparison is
+// over real image content rather than a handful of texels.
+constexpr uint32_t kProbeSide = 64;
+constexpr VkDeviceSize kProbeHalf = kProbeSide * kProbeSide * 8;
+
+bool probe_buffer_ready(DeviceData *d, VkDevice dev) {
+    if (g_probe.buf != VK_NULL_HANDLE)
+        return true;
+    if (g_probe.failed || !d->AllocateMemory || !d->CmdCopyImageToBuffer)
+        return false;
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = kProbeHalf * 2;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (d->CreateBuffer(dev, &bci, nullptr, &g_probe.buf) != VK_SUCCESS) {
+        g_probe.failed = true;
+        return false;
+    }
+    VkMemoryRequirements req{};
+    d->GetBufferMemoryRequirements(dev, g_probe.buf, &req);
+    uint32_t type = UINT32_MAX;
+    const VkMemoryPropertyFlags want = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (uint32_t i = 0; i < d->memprops.memoryTypeCount; i++)
+        if ((req.memoryTypeBits & (1u << i)) &&
+            (d->memprops.memoryTypes[i].propertyFlags & want) == want) {
+            type = i;
+            break;
+        }
+    VkMemoryAllocateInfo mai{};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex = type;
+    if (type == UINT32_MAX ||
+        d->AllocateMemory(dev, &mai, nullptr, &g_probe.mem) != VK_SUCCESS ||
+        d->BindBufferMemory(dev, g_probe.buf, g_probe.mem, 0) != VK_SUCCESS ||
+        d->MapMemory(dev, g_probe.mem, 0, VK_WHOLE_SIZE, 0, &g_probe.ptr) !=
+            VK_SUCCESS) {
+        X4VR_LOG("mv probe: could not create the readback buffer — probe off");
+        g_probe.failed = true;
+        return false;
+    }
+    return true;
+}
+
+// Emitted straight after vkCmdEndRenderPass, into the same command buffer.
+void probe_emit(DeviceData *d, VkCommandBuffer cb, const FbAtt &a) {
+    const uint32_t bpp = format_bpp(a.format);
+    if (!bpp)
+        return;
+    const uint32_t w = a.extent.width < kProbeSide ? a.extent.width : kProbeSide;
+    const uint32_t h =
+        a.extent.height < kProbeSide ? a.extent.height : kProbeSide;
+    if (!w || !h)
+        return;
+
+    VkImageMemoryBarrier to{};
+    to.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    to.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    to.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    to.oldLayout = a.final_layout;
+    to.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    to.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to.image = a.image;
+    to.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 2};
+    d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                          nullptr, 1, &to);
+
+    VkBufferImageCopy regions[2]{};
+    for (uint32_t i = 0; i < 2; i++) {
+        regions[i].bufferOffset = kProbeHalf * i;
+        regions[i].imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        regions[i].imageSubresource.mipLevel = 0;
+        regions[i].imageSubresource.baseArrayLayer = i;
+        regions[i].imageSubresource.layerCount = 1;
+        regions[i].imageExtent = {w, h, 1};
+    }
+    d->CmdCopyImageToBuffer(cb, a.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            g_probe.buf, 2, regions);
+
+    // Put it back exactly as the pass left it, or the next command X4 records
+    // is operating on an image in a layout it never asked for.
+    VkImageMemoryBarrier back = to;
+    back.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    back.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    back.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    back.newLayout = a.final_layout;
+    d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
+                          nullptr, 1, &back);
+
+    g_probe.serial = a.serial;
+    g_probe.bytes = (VkDeviceSize)w * h * bpp;
+    g_probe.w = w;
+    g_probe.h = h;
+    g_probe.pending = true;
+}
+
 VKAPI_ATTR void VKAPI_CALL x4vr_CmdBeginRenderPass(
     VkCommandBuffer cb, const VkRenderPassBeginInfo *bi,
     VkSubpassContents contents) {
@@ -2569,6 +2815,10 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBeginRenderPass(
         d = &g_devices.at(dispatch_key(cb));
     }
     cb_enter_pass(cb, bi->renderPass);
+    if (g_mv_probe && g_mv && g_active) {
+        std::lock_guard<std::mutex> lock(g_cb_mu);
+        g_cb_fb[cb] = bi->framebuffer;
+    }
     d->CmdBeginRenderPass(cb, bi, contents);
 }
 
@@ -2578,8 +2828,61 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(cb));
     }
-    cb_leave_pass(cb);
     d->CmdEndRenderPass(cb);
+
+    if (g_mv_probe && g_mv && g_active) {
+        std::vector<FbAtt> atts;
+        bool masked = false;
+        {
+            std::lock_guard<std::mutex> lock(g_cb_mu);
+            auto m = g_cb_mask.find(cb);
+            masked = m != g_cb_mask.end() && m->second;
+            auto f = g_cb_fb.find(cb);
+            if (masked && f != g_cb_fb.end()) {
+                auto a = g_fb_atts.find(f->second);
+                if (a != g_fb_atts.end())
+                    atts = a->second;
+            }
+        }
+        if (!atts.empty()) {
+            std::lock_guard<std::mutex> lock(g_probe_mu);
+            if (!g_probe.pending && probe_buffer_ready(d, d->device))
+                probe_emit(d, cb, atts[g_probe.cursor % atts.size()]);
+        }
+    }
+    cb_leave_pass(cb);
+}
+
+// Read what the frame just wrote. Present is the safe moment: the work is
+// submitted, and idling the queue here costs a diagnostic run nothing.
+// queue == VK_NULL_HANDLE means the caller has already guaranteed the work is
+// finished -- vkDestroyDevice requires an idle device. That path exists so the
+// offline suite, which never presents, can still exercise this code: an
+// instrument nothing tests is how the last three misreadings happened.
+void probe_collect(DeviceData *d, VkQueue queue) {
+    std::lock_guard<std::mutex> lock(g_probe_mu);
+    if (!g_probe.pending)
+        return;
+    g_probe.pending = false;
+    if (queue != VK_NULL_HANDLE &&
+        (!d->QueueWaitIdle || d->QueueWaitIdle(queue) != VK_SUCCESS))
+        return;
+    const uint8_t *l0 = (const uint8_t *)g_probe.ptr;
+    const uint8_t *l1 = l0 + kProbeHalf;
+    const size_t n = (size_t)g_probe.bytes;
+    const uint64_t h0 = fnv1a(l0, n), h1 = fnv1a(l1, n);
+    bool z0 = true, z1 = true;
+    for (size_t i = 0; i < n; i++) {
+        if (l0[i]) z0 = false;
+        if (l1[i]) z1 = false;
+    }
+    X4VR_LOG("mv probe: img #%u %ux%u  layer0=%016llx%s  layer1=%016llx%s  %s",
+             g_probe.serial, g_probe.w, g_probe.h, (unsigned long long)h0,
+             z0 ? " (all zero)" : "", (unsigned long long)h1,
+             z1 ? " (all zero)" : "",
+             h0 == h1 ? "IDENTICAL" : "DIFFER");
+    g_probe.cursor++;
+    g_probe.captures++;
 }
 
 // A secondary command buffer is recorded outside any vkCmdBeginRenderPass but
@@ -2682,6 +2985,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(queue));
     }
+    if (g_mv_probe && g_mv && g_active)
+        probe_collect(d, queue);
     // One swapchain is all X4 presents; anything else is not a case we have
     // seen, so leave it alone rather than guess which image is the eye pair.
     VkSemaphore composited = VK_NULL_HANDLE;
@@ -3027,6 +3332,25 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(CmdPipelineBarrier);
     RESOLVE(CmdCopyBufferToImage);
     RESOLVE(CmdClearDepthStencilImage);
+    RESOLVE(CmdCopyImageToBuffer);
+    RESOLVE(AllocateMemory);
+    RESOLVE(FreeMemory);
+    RESOLVE(GetBufferMemoryRequirements);
+    RESOLVE(QueueWaitIdle);
+    // Needed to place the readback buffer in host-visible memory. Resolved
+    // here because the physical device is in scope only during creation.
+    {
+        VkInstance inst = VK_NULL_HANDLE;
+        {
+            std::lock_guard<std::mutex> lock(g_mu);
+            auto it = g_instances.find(dispatch_key(phys));
+            if (it != g_instances.end())
+                inst = it->second.instance;
+        }
+        if (auto gpmp = (PFN_vkGetPhysicalDeviceMemoryProperties)gipa(
+                inst, "vkGetPhysicalDeviceMemoryProperties"))
+            gpmp(phys, &d.memprops);
+    }
     // Core in 1.3; the KHR alias is what a 1.2 device exposes. Left null if
     // neither exists, and the matching hook is then never reachable, because
     // the application cannot call an entry point its device does not have.
@@ -3081,6 +3405,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
 
 VKAPI_ATTR void VKAPI_CALL x4vr_DestroyDevice(
     VkDevice device, const VkAllocationCallbacks *ac) {
+    if (g_mv_probe && g_mv && g_active) {
+        std::lock_guard<std::mutex> lock(g_mu);
+        auto it = g_devices.find(dispatch_key(device));
+        if (it != g_devices.end())
+            probe_collect(&it->second, VK_NULL_HANDLE);
+    }
     mv_report("final");
     g_sbs.shutdown(); // idles the device, then frees pools/semaphores/fences
     PFN_vkDestroyDevice next;

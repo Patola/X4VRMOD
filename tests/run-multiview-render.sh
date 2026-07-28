@@ -80,6 +80,35 @@ run_case "redirect to layer 1, only layer 1 drawn" 2 0 1 \
     "VK_ADD_LAYER_PATH=$BUILD/layer" "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
     "X4VR_MV=1" "X4VR_MV_MASK=2" "X4VR_MV_PRESENT_LAYER=1"
 
+
+# The readback instrument, checked against ground truth the same run already
+# establishes independently. It exists to answer one question in the game --
+# are the two layers the same bytes -- so it must be shown to say "differ"
+# when they demonstrably differ, not merely "identical" when they match.
+probe_case() {
+    local label="$1" want="$2"; shift 2
+    local out verdict
+    out=$(env "$@" X4VR_LOG= X4VR_MV=1 X4VR_MV_PROBE=1 \
+        "VK_ADD_LAYER_PATH=$BUILD/layer" \
+        "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+        "$BIN" "$VS" "$FS" "$SF" 2>&1)
+    verdict=$(sed -n 's/.*mv probe: .*  \([A-Z]*\)$/\1/p' <<<"$out")
+    local own
+    own=$(sed -n 's/^LAYERS_IDENTICAL=//p' <<<"$out")
+    # Cross-check: the probe and the test's own readback must never disagree.
+    local expect_own; [[ "$want" == IDENTICAL ]] && expect_own=1 || expect_own=0
+    if [[ "$verdict" == "$want" && "$own" == "$expect_own" ]]; then
+        printf 'ok   %-38s probe=%s own=%s\n' "$label" "$verdict" "$own"
+    else
+        printf 'FAIL %-38s want probe=%s own=%s, got probe=%s own=%s\n' \
+            "$label" "$want" "$expect_own" "${verdict:-?}" "${own:-?}"
+        fails=$((fails + 1))
+    fi
+}
+
+probe_case "probe: layers match"  IDENTICAL
+probe_case "probe: layers differ" DIFFER "X4VR_MV_MASK=2"
+
 echo
 if (( fails )); then echo "$fails case(s) failed"; exit 1; fi
 echo "all cases passed"
