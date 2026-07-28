@@ -2676,7 +2676,7 @@ struct MvProbe {
     std::unordered_set<uint32_t> done; // serials covered this round
     uint32_t serial = 0;               // the one being probed
     VkDeviceSize bytes = 0;
-    uint32_t w = 0, h = 0;
+    uint32_t w = 0, h = 0, bpp = 0;
     uint32_t captures = 0;
 } g_probe;
 std::mutex g_probe_mu;
@@ -2828,6 +2828,7 @@ void probe_emit(DeviceData *d, VkCommandBuffer cb, const FbAtt &a) {
     g_probe.bytes = (VkDeviceSize)w * h * bpp;
     g_probe.w = w;
     g_probe.h = h;
+    g_probe.bpp = bpp;
     g_probe.pending = true;
 }
 
@@ -2927,15 +2928,40 @@ void probe_collect(DeviceData *d, VkQueue queue) {
     const size_t n = (size_t)g_probe.bytes;
     const uint64_t h0 = fnv1a(l0, n), h1 = fnv1a(l1, n);
     bool z0 = true, z1 = true;
+    // "Differ" alone does not say whether one texel moved or the whole frame
+    // is unrelated, and those need entirely different explanations. Count the
+    // differing texels and locate the first, so the next question is about a
+    // region of the screen rather than about the whole image.
+    size_t dtex = 0, first = SIZE_MAX;
+    const uint32_t bpp = g_probe.bpp ? g_probe.bpp : 1;
     for (size_t i = 0; i < n; i++) {
         if (l0[i]) z0 = false;
         if (l1[i]) z1 = false;
     }
-    X4VR_LOG("mv probe: img #%u %ux%u  layer0=%016llx%s  layer1=%016llx%s  %s",
-             g_probe.serial, g_probe.w, g_probe.h, (unsigned long long)h0,
-             z0 ? " (all zero)" : "", (unsigned long long)h1,
-             z1 ? " (all zero)" : "",
-             h0 == h1 ? "IDENTICAL" : "DIFFER");
+    for (size_t t = 0; t * bpp < n; t++)
+        if (memcmp(l0 + t * bpp, l1 + t * bpp, bpp) != 0) {
+            if (first == SIZE_MAX)
+                first = t;
+            dtex++;
+        }
+    const size_t total = n / bpp;
+    if (h0 == h1) {
+        X4VR_LOG("mv probe: img #%u %ux%u  layer0=%016llx%s  "
+                 "layer1=%016llx%s  IDENTICAL",
+                 g_probe.serial, g_probe.w, g_probe.h, (unsigned long long)h0,
+                 z0 ? " (all zero)" : "", (unsigned long long)h1,
+                 z1 ? " (all zero)" : "");
+    } else {
+        X4VR_LOG("mv probe: img #%u %ux%u  layer0=%016llx%s  "
+                 "layer1=%016llx%s  DIFFER %zu/%zu texels (%.2f%%) "
+                 "first at (%u,%u)",
+                 g_probe.serial, g_probe.w, g_probe.h, (unsigned long long)h0,
+                 z0 ? " (all zero)" : "", (unsigned long long)h1,
+                 z1 ? " (all zero)" : "", dtex, total,
+                 total ? 100.0 * (double)dtex / (double)total : 0.0,
+                 g_probe.w ? (uint32_t)(first % g_probe.w) : 0,
+                 g_probe.w ? (uint32_t)(first / g_probe.w) : 0);
+    }
     g_probe.captures++;
 }
 

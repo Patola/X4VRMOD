@@ -92,7 +92,9 @@ probe_case() {
         "VK_ADD_LAYER_PATH=$BUILD/layer" \
         "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
         "$BIN" "$VS" "$FS" "$SF" 2>&1)
-    verdict=$(sed -n 's/.*mv probe: .*  \([A-Z]*\)$/\1/p' <<<"$out")
+    # Matched by word, not by end-of-line: a DIFFER line now carries the
+    # texel count and location after the verdict.
+    verdict=$(grep -o 'IDENTICAL\|DIFFER' <<<"$out" | head -1)
     local own size
     own=$(sed -n 's/^LAYERS_IDENTICAL=//p' <<<"$out")
     # The probe must hash the whole attachment. It once copied a fixed 64x64
