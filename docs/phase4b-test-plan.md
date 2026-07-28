@@ -156,3 +156,65 @@ Errors that are invisible while both eyes render the same thing:
 These are all deferred to the stereo stage by construction. The point of
 listing them is so that "all gates green" is not mistaken for "the partition
 is right" — it means "the plumbing is right".
+
+---
+
+## What failure looks like on screen
+
+Written before the runs, so "it looked fine" can be checked against something
+rather than felt.
+
+### Gate 1 (doubling on, both views read from layer 0)
+
+Ranked by how likely the change makes them:
+
+| Symptom | What it would mean |
+|---|---|
+| Wrong or black textures on specific materials | The `layerCount = 1` clamp on sampled views is wrong. It touches **every read of every doubled image**, so it is the single riskiest edit in the change. |
+| Saturated colour blocks, banding | Doubling changed the image layout and with it the driver's compression path — the DCC signature we already know, arriving by a new route. |
+| Flat, black, or haloed lighting | The main depth buffer is doubled; deferred lighting reconstructs position from it. A wrong stride or layer would break shading, not geometry. |
+| Shadows missing, or everything shadowed | The shadow atlas is doubled (and wasted). If sampling drifted to the empty layer, shadows vanish. |
+| Scene too bright/dark, or pumping | The exposure reduction is doubled and masked. Invisible while both views match — if it shows here, they do not. |
+| Blurry textures, pop-in, new stutter | 565 MB less VRAM for streaming. Most likely at a station, least likely in open space. |
+
+**What Gate 1 cannot prove.** Everything downstream reads layer 0, so this gate
+shows only that *doubling did not break the layer-0 path*. It says nothing
+about whether layer 1 was ever rendered. A clean Gate 1 is real but narrow —
+which is the entire reason Gate 2 exists.
+
+### Gate 2 (`X4VR_MV_PRESENT_LAYER=1`, everything reads layer 1)
+
+The diagnostic signature is specific, because the UI never passes through a
+doubled image — it is drawn after the per-eye chain, into an LDR target we did
+not touch:
+
+* **Correct:** indistinguishable from Gate 1. Same scene, same HUD.
+* **Second view never shaded:** a **black or garbage 3D scene with a perfectly
+  normal HUD drawn on top of it.** That combination is unmistakable and cannot
+  be produced by anything else in this change.
+* **Second view partially shaded:** geometry present but lighting, shadows or
+  post missing — i.e. some passes carry the view mask and others do not. This
+  is the informative middle case; note *which* effects survive, because that
+  names the passes that took the mask.
+
+## Follow-up: the doubling is 4× wider than it needs to be
+
+Measured live: **92 images doubled, 565.6 MB**, against **21 images and
+135 MB** actually used as per-eye attachments.
+
+That is the permissive rule working as designed — at `vkCreateImage` the
+precise question cannot be asked — but the justification ("memory is not the
+constraint") was argued on a 24 GB card. It is not a safe argument on 8 GB.
+
+**Tightening is low-risk, and for the same reason the rule was loose to begin
+with:** cutting too far is caught by validation, which names the framebuffer
+and attachment it wanted doubled. So the narrowing can be aggressive and
+iterative rather than cautious. Candidate signals available at creation time,
+none of which needed guessing before we had the live inventory:
+
+* `D16` depth is the shadow atlas; the main depth buffer is `D32_SFLOAT`.
+* Extents unrelated to the render size (or a clean downscale of it).
+* `TRANSIENT_ATTACHMENT`-only images, which never survive a pass.
+
+Deferred until stereo works, so that a tightening regression cannot be
+confused with a stereo bug.
