@@ -95,6 +95,12 @@ struct DeviceData {
     PFN_vkCreateRenderPass2 CreateRenderPass2 = nullptr;
     PFN_vkDestroyRenderPass DestroyRenderPass = nullptr;
     PFN_vkCreateGraphicsPipelines CreateGraphicsPipelines = nullptr;
+    PFN_vkDestroyPipeline DestroyPipeline = nullptr;
+    PFN_vkBeginCommandBuffer BeginCommandBuffer = nullptr;
+    PFN_vkCmdBeginRenderPass CmdBeginRenderPass = nullptr;
+    PFN_vkCmdEndRenderPass CmdEndRenderPass = nullptr;
+    PFN_vkCmdBindPipeline CmdBindPipeline = nullptr;
+    PFN_vkCmdPipelineBarrier CmdPipelineBarrier = nullptr;
 };
 
 std::mutex g_mu;
@@ -168,6 +174,26 @@ struct MvStats {
     uint32_t pipe_unmasked = 0; // ... against a pass with no view mask
     uint32_t pipe_dynamic = 0;  // ... against no render pass (dynamic rendering)
     uint32_t widened = 0;       // transfer regions grown to cover both layers
+    // Stage-1 diagnosis, take four. Two candidates for "layer 1 is never
+    // shaded", measured rather than argued:
+    //
+    //   bind_mismatch — a pipeline compiled against an *unmasked* render pass,
+    //     bound inside a masked one. Legal (the passes are compatible; a view
+    //     mask is not part of what vkCmdBindPipeline checks) and fatal: the
+    //     driver decided at compile time how many views the draw replicates
+    //     to, and it decided one. pipe_masked/pipe_unmasked cannot see this —
+    //     they count where a pipeline was *built*, not where it is *used*.
+    //
+    //   barrier_narrow — an image barrier naming layerCount=1 on a doubled
+    //     image. The render pass transitions both layers (its attachment is
+    //     our two-layer view); an explicit barrier between passes transitions
+    //     layer 0 alone, so layer 1 is sampled in the wrong layout and reads
+    //     undefined. Same family as the transfers: multiview replicates
+    //     draws, and nothing else has any idea there are two layers.
+    uint32_t bind_ok = 0;
+    uint32_t bind_mismatch = 0;
+    uint32_t barrier_narrow = 0;
+    uint32_t barrier_wide = 0;
     uint32_t reported = 0;
 } g_mv_stats;
 std::mutex g_mv_mu;
@@ -353,6 +379,14 @@ std::unordered_set<VkImage> g_per_eye_images;
 // sampled view -> the same view onto layer 1, made lazily for gate 2
 std::unordered_map<VkImageView, VkImageView> g_layer1_views;
 uint32_t g_img_serial = 0;
+
+// A draw replicates to two views only if the *pass* carries the mask and the
+// *pipeline bound into it* was compiled knowing that. Those are two different
+// objects and Vulkan does not require them to agree, so the pair has to be
+// watched at the one moment both are known: vkCmdBindPipeline.
+std::mutex g_cb_mu;
+std::unordered_map<VkPipeline, bool> g_pipe_mv;      // built for multiview
+std::unordered_map<VkCommandBuffer, bool> g_cb_mask; // inside a masked pass
 
 // 8-bit UNORM/SRGB colour targets mean a screen-space (UI/blit) pass.
 inline bool is_ldr_format(VkFormat f) {
@@ -892,6 +926,14 @@ void mv_report(const char *when) {
              "transfers_widened=%u",
              when, g_mv_stats.pipe_masked, g_mv_stats.pipe_unmasked,
              g_mv_stats.pipe_dynamic, g_mv_stats.widened);
+    // The two candidates, side by side. bind_mismatch > 0 means the draws
+    // themselves never reached view 1 and nothing downstream matters yet;
+    // barrier_narrow > 0 means they did but layer 1 is read in a layout no
+    // barrier ever moved it to.
+    X4VR_LOG("mv %s: binds ok=%u MISMATCHED=%u | image barriers narrow=%u "
+             "wide=%u",
+             when, g_mv_stats.bind_ok, g_mv_stats.bind_mismatch,
+             g_mv_stats.barrier_narrow, g_mv_stats.barrier_wide);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass(
@@ -1483,6 +1525,25 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
         g_mv_stats.pipe_dynamic += dynamic;
     }
 
+    // Remember which of them were compiled for two views, so binding one into
+    // a masked pass can be checked. Recorded after the call, below, once the
+    // handles exist.
+    auto record_provenance = [&](VkResult r) {
+        if (!g_mv || !g_active || r != VK_SUCCESS)
+            return;
+        std::vector<bool> mv(count);
+        {
+            std::lock_guard<std::mutex> lock(g_variants.mu);
+            for (uint32_t i = 0; i < count; i++)
+                mv[i] = ci[i].renderPass != VK_NULL_HANDLE &&
+                        g_masked_passes.count(ci[i].renderPass) != 0;
+        }
+        std::lock_guard<std::mutex> lock(g_cb_mu);
+        for (uint32_t i = 0; i < count; i++)
+            if (out[i] != VK_NULL_HANDLE)
+                g_pipe_mv[out[i]] = mv[i];
+    };
+
     // Copy only if we actually need to substitute something.
     std::vector<VkGraphicsPipelineCreateInfo> infos;
     std::vector<std::vector<VkPipelineShaderStageCreateInfo>> stages;
@@ -1507,8 +1568,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
         }
         infos[i].pStages = stages[i].data();
     }
-    if (!any)
-        return d->CreateGraphicsPipelines(device, cache, count, ci, ac, out);
+    if (!any) {
+        VkResult r = d->CreateGraphicsPipelines(device, cache, count, ci, ac,
+                                                out);
+        record_provenance(r);
+        return r;
+    }
 
     static bool logged = false;
     if (!logged) {
@@ -1516,8 +1581,24 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
         X4VR_LOG("unsheared pipeline: using unpatched modules (shadow + UI "
                  "exclusion active)");
     }
-    return d->CreateGraphicsPipelines(device, cache, count, infos.data(), ac,
-                                      out);
+    VkResult r =
+        d->CreateGraphicsPipelines(device, cache, count, infos.data(), ac, out);
+    record_provenance(r);
+    return r;
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_DestroyPipeline(
+    VkDevice device, VkPipeline p, const VkAllocationCallbacks *ac) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    if (g_mv) {
+        std::lock_guard<std::mutex> lock(g_cb_mu);
+        g_pipe_mv.erase(p);
+    }
+    d->DestroyPipeline(device, p, ac);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_MapMemory(VkDevice device,
@@ -2185,6 +2266,140 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdClearColorImage(
     d->CmdClearColorImage(cb, img, l, colour, n, w ? mod.data() : ranges);
 }
 
+// --- take four: measure the two remaining ways layer 1 can stay dark -------
+//
+// Neither hook changes anything. They exist because take three spent a live
+// run on a hypothesis that turned out to be true but not sufficient
+// (transfers_widened=14554, still black), and the next guess should cost a
+// counter rather than another run.
+
+void cb_enter_pass(VkCommandBuffer cb, VkRenderPass rp) {
+    if (!g_mv || !g_active)
+        return;
+    bool masked;
+    {
+        std::lock_guard<std::mutex> lock(g_variants.mu);
+        masked = g_masked_passes.count(rp) != 0;
+    }
+    std::lock_guard<std::mutex> lock(g_cb_mu);
+    g_cb_mask[cb] = masked;
+}
+
+void cb_leave_pass(VkCommandBuffer cb) {
+    if (!g_mv || !g_active)
+        return;
+    std::lock_guard<std::mutex> lock(g_cb_mu);
+    g_cb_mask.erase(cb);
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_CmdBeginRenderPass(
+    VkCommandBuffer cb, const VkRenderPassBeginInfo *bi,
+    VkSubpassContents contents) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    cb_enter_pass(cb, bi->renderPass);
+    d->CmdBeginRenderPass(cb, bi, contents);
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    cb_leave_pass(cb);
+    d->CmdEndRenderPass(cb);
+}
+
+// A secondary command buffer is recorded outside any vkCmdBeginRenderPass but
+// still executes inside one, named here. Without this its draws would look
+// like they belong to no pass and the mismatch would go uncounted.
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
+    VkCommandBuffer cb, const VkCommandBufferBeginInfo *bi) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    if (bi->pInheritanceInfo &&
+        (bi->flags & VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT) &&
+        bi->pInheritanceInfo->renderPass != VK_NULL_HANDLE)
+        cb_enter_pass(cb, bi->pInheritanceInfo->renderPass);
+    else
+        cb_leave_pass(cb);
+    return d->BeginCommandBuffer(cb, bi);
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
+                                                VkPipelineBindPoint bp,
+                                                VkPipeline p) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    if (g_mv && g_active && bp == VK_PIPELINE_BIND_POINT_GRAPHICS) {
+        bool in_masked = false, pipe_mv = false, known = false;
+        {
+            std::lock_guard<std::mutex> lock(g_cb_mu);
+            auto c = g_cb_mask.find(cb);
+            in_masked = c != g_cb_mask.end() && c->second;
+            auto q = g_pipe_mv.find(p);
+            known = q != g_pipe_mv.end();
+            pipe_mv = known && q->second;
+        }
+        if (in_masked && known) {
+            std::lock_guard<std::mutex> lock(g_mv_mu);
+            if (pipe_mv)
+                g_mv_stats.bind_ok++;
+            else if (++g_mv_stats.bind_mismatch <= 3)
+                X4VR_LOG("mv: pipeline built against an unmasked pass is bound "
+                         "inside a masked one — its draws replicate to one "
+                         "view");
+        }
+    }
+    d->CmdBindPipeline(cb, bp, p);
+}
+
+// Same family as the transfers. The render pass transitions both layers,
+// because its attachment is the two-layer view we substituted; a barrier
+// between passes names layerCount=1 and transitions layer 0 alone. Counted
+// only -- widening a barrier changes what the driver may do to the image, and
+// that is a behaviour change, not a measurement.
+VKAPI_ATTR void VKAPI_CALL x4vr_CmdPipelineBarrier(
+    VkCommandBuffer cb, VkPipelineStageFlags src, VkPipelineStageFlags dst,
+    VkDependencyFlags flags, uint32_t mbc, const VkMemoryBarrier *mb,
+    uint32_t bbc, const VkBufferMemoryBarrier *bb, uint32_t ibc,
+    const VkImageMemoryBarrier *ib) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    if (g_mv && g_active && ibc) {
+        uint32_t narrow = 0, wide = 0;
+        for (uint32_t i = 0; i < ibc; i++) {
+            if (!img_doubled(ib[i].image))
+                continue;
+            const VkImageSubresourceRange &r = ib[i].subresourceRange;
+            if (r.baseArrayLayer == 0 &&
+                (r.layerCount == VK_REMAINING_ARRAY_LAYERS || r.layerCount >= 2))
+                wide++;
+            else
+                narrow++;
+        }
+        if (narrow || wide) {
+            std::lock_guard<std::mutex> lock(g_mv_mu);
+            g_mv_stats.barrier_narrow += narrow;
+            g_mv_stats.barrier_wide += wide;
+        }
+    }
+    d->CmdPipelineBarrier(cb, src, dst, flags, mbc, mb, bbc, bb, ibc, ib);
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     VkQueue queue, const VkPresentInfoKHR *pi) {
     if (g_mv && g_active) {
@@ -2536,6 +2751,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(CreateRenderPass2);
     RESOLVE(DestroyRenderPass);
     RESOLVE(CreateGraphicsPipelines);
+    RESOLVE(DestroyPipeline);
+    RESOLVE(BeginCommandBuffer);
+    RESOLVE(CmdBeginRenderPass);
+    RESOLVE(CmdEndRenderPass);
+    RESOLVE(CmdBindPipeline);
+    RESOLVE(CmdPipelineBarrier);
 #undef RESOLVE
     {
         std::lock_guard<std::mutex> lock(g_mu);
@@ -2628,6 +2849,12 @@ const NameFunc kHooks[] = {
     {"vkCmdBlitImage", (PFN_vkVoidFunction)x4vr_CmdBlitImage},
     {"vkCmdResolveImage", (PFN_vkVoidFunction)x4vr_CmdResolveImage},
     {"vkCmdClearColorImage", (PFN_vkVoidFunction)x4vr_CmdClearColorImage},
+    {"vkCmdBeginRenderPass", (PFN_vkVoidFunction)x4vr_CmdBeginRenderPass},
+    {"vkCmdEndRenderPass", (PFN_vkVoidFunction)x4vr_CmdEndRenderPass},
+    {"vkBeginCommandBuffer", (PFN_vkVoidFunction)x4vr_BeginCommandBuffer},
+    {"vkCmdBindPipeline", (PFN_vkVoidFunction)x4vr_CmdBindPipeline},
+    {"vkCmdPipelineBarrier", (PFN_vkVoidFunction)x4vr_CmdPipelineBarrier},
+    {"vkDestroyPipeline", (PFN_vkVoidFunction)x4vr_DestroyPipeline},
     {"vkCreateImage", (PFN_vkVoidFunction)x4vr_CreateImage},
     {"vkDestroyImage", (PFN_vkVoidFunction)x4vr_DestroyImage},
     {"vkCreateImageView", (PFN_vkVoidFunction)x4vr_CreateImageView},
