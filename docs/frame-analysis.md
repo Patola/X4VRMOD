@@ -789,3 +789,123 @@ already built: `SbsCompositor` hands X4 its own images from
 per-eye images, X4's final pass writes both layers, and the compositor blits
 layer 0 and layer 1 into the real swapchain — side by side for SBS on a flat
 screen, or straight into an OpenXR swapchain later.
+
+## Phase 4b stage 1: doubling the frame — what it took to get layer 1 rendered
+
+Stage 1 renders the frame into two array layers with the **same** eye matrix for
+both, so a correct result is indistinguishable from before. Enabled with
+`X4VR_MV=1` (off by default). Verified live at gate 1: `fallbacks=0`, and the
+game visually unchanged.
+
+Measured on X4 with `X4VR_MV=1`:
+
+```
+mv final: doubled=90 masked=46 substituted=21 per_eye_images=18
+          redirected=0 fallbacks=0
+mv final: pipelines masked=570 unmasked=595 dynamic_rendering=0
+mv: X4 uses vkCreateRenderPass (v1)
+```
+
+`substituted=21` independently reproduces the 21 per-eye images found offline
+by joining framebuffers to passes — two unrelated methods agreeing.
+
+### THE finding: multiview replicates draws, not transfers
+
+> **X4 copies between its render targets, and every per-eye image carries
+> `TRANSFER_SRC | TRANSFER_DST`. A copy region names `layerCount = 1`, so it
+> moves layer 0 and leaves layer 1 holding whatever was there before. One such
+> copy anywhere in the chain drains the second view.**
+
+*Symptom:* the 3D scene is entirely black while the HUD renders perfectly —
+because the UI never passes through a doubled image.
+
+*Why nothing reported it:* copying one layer of a two-layer image is **legal**.
+Validation has nothing to say. There is no error anywhere; the data simply
+stops propagating.
+
+*Fix:* `vkCmdCopyImage`, `vkCmdBlitImage`, `vkCmdResolveImage` and
+`vkCmdClearColorImage` widen a region to cover both layers — but **only** when
+it starts at layer 0 and covers exactly one. Anything else is a deliberate
+per-layer access. Counted as `transfers_widened`.
+
+*Generalisation worth carrying into every later phase:* **multiview only
+replicates what happens inside a render pass.** Transfers, clears outside a
+pass, and compute dispatches all still act on layer 0 alone and must be widened
+by hand. Compute is not a problem today only because the config overrides
+disable most of that chain (`ssao=0`, `ssr=false`, `glow=0`).
+
+### How it was found — the elimination chain
+
+Each step killed an entire class of cause, and the order mattered because the
+cheap tests came first:
+
+| Evidence | Ruled out |
+|---|---|
+| Layer-0 control renders correctly | The test instrument itself |
+| `dynamic_rendering=0`, v1 render passes | Mask living in a struct we never touch |
+| `pipelines masked=570` | Pipelines not being multiview-aware |
+| 1 of 90 doubled images has `STORAGE` | Compute writes |
+| **Offline: `LAYER1_DRAWN=1`** | The multiview mechanism itself |
+
+The decisive one is the last. `tests/run-multiview-render.sh` draws through the
+layer into a doubled target and reads both layers back, proving in **one
+second** that draw replication works here. That turned the question from "why
+doesn't multiview work" into "what else touches these images", and the usage
+flags answered immediately.
+
+*Lesson:* three live runs were spent on a question a 200-line offline test
+settled instantly. When a live symptom has several candidate causes, reproduce
+the mechanism offline **before** spending runs discriminating between them.
+
+### Two broken instruments, and what they cost
+
+Both were mistaken for real failures. Recorded because the failure modes are
+generic to this kind of work:
+
+1. **The layer-1 redirect was applied at image-view creation**, which moved
+   `baseArrayLayer` on *every* doubled image. 90 images are doubled but only 18
+   are ever written by a masked pass, so the rest had their reads pointed at a
+   layer nothing had rendered into. Produced a black frame with an intact HUD —
+   the exact signature predicted for a genuine failure. Moved to
+   **descriptor-update time**, where the per-eye set is known.
+2. **Validation was never actually running.** It reports through its own
+   channel, so its output went to stderr and never reached `X4VR_LOG`. "Zero
+   validation errors" meant only that we were grepping a file it never writes
+   to. Now `X4VR_VALIDATE=1` sends it to a file.
+
+*Rule adopted:* an instrument gets the same "include a case that must fail"
+discipline as the code under test. `X4VR_MV_PRESENT_LAYER=0` now redirects
+through the **same** substitution path to layer 0, which holds known-good
+content — so a black layer 1 can be told apart from a broken redirect.
+
+### Cost, and where it overshoots
+
+| | Images | VRAM |
+|---|---:|---:|
+| Doubled | 90 | 565.6 MB |
+| Actually per-eye | 18–21 | ~135 MB |
+
+The permissive rule is deliberate — at `vkCreateImage` there is no framebuffer
+and no render pass, so the precise question cannot be asked, and the two errors
+are not symmetric (over-doubling wastes memory; under-doubling is a hard
+validation error naming the attachment). But "memory is not the constraint" was
+argued on a 24 GB card and does not hold on 8 GB.
+
+Tightening is low-risk for the same reason the rule was loose: cutting too far
+is caught by validation, by name. Signals available at creation time, all from
+the live inventory: `D16` is the shadow atlas while main depth is `D32_SFLOAT`;
+extents unrelated to the render size or a clean downscale of it;
+`TRANSIENT_ATTACHMENT`-only images. Deferred until stereo works, so a tightening
+regression cannot be confused with a stereo bug.
+
+### Stage 2 (not yet done)
+
+* The **UI is still mono**. It belongs in both eyes, but the final blit writes
+  the swapchain image, which cannot take a second array layer because it is the
+  thing being presented. The handoff needs `SbsCompositor`'s images to become
+  one two-layer image. Costs nothing while both eyes match.
+* The **exposure reductions are still masked** and should not be — shared
+  exposure, or the eyes auto-expose independently and flicker against each
+  other. Invisible until `K` differs.
+* Then per-eye `K` via `gl_ViewIndex`, and per-eye camera constants so the
+  deferred lighting follows.
