@@ -187,6 +187,12 @@ const uint32_t g_mv_present_layer = [] {
     const char *e = getenv("X4VR_MV_PRESENT_LAYER");
     return e ? (uint32_t)atoi(e) : 0u;
 }();
+// Whether the redirect also rewrites subpass input attachments. Off by
+// default; see the reasoning in mv_redirect_writes().
+const bool g_mv_redirect_input = [] {
+    const char *e = getenv("X4VR_MV_REDIRECT_INPUT");
+    return e && *e && *e != '0';
+}();
 
 struct MvStats {
     uint32_t doubled = 0;     // images given a second array layer
@@ -231,6 +237,7 @@ struct MvStats {
     // redirect had been answering with a view onto a different image, which
     // makes every black frame it reported unreliable rather than informative.
     uint32_t redirect_stale = 0;
+    uint32_t input_skipped = 0; // input-attachment reads left on layer 0
     uint32_t reported = 0;
 } g_mv_stats;
 std::mutex g_mv_mu;
@@ -658,6 +665,31 @@ void mv_redirect_writes(DeviceData *d, VkDevice device, uint32_t writeCount,
         const VkWriteDescriptorSet &w = writes[i];
         if (!w.pImageInfo || !w.descriptorCount)
             continue;
+        // Input attachments are excluded by default, and the reason is a
+        // deduction rather than a hunch.
+        //
+        // Under viewMask 0x3 with one eye matrix, layer 0 and layer 1 hold the
+        // same picture. Every read therefore sees valid content whether it is
+        // redirected or not, so *no* explanation in terms of image content can
+        // produce a black frame. Only the binding can be at fault: some
+        // substituted view must be wrong for the way it is used.
+        //
+        // Of the three types we substitute, input attachments are the one with
+        // extra rules under multiview. A subpass input is view-indexed -- view
+        // N reads layer N of the framebuffer attachment, which is the
+        // two-layer array view we put there -- and swapping the descriptor for
+        // a single-layer 2D view onto layer 1 contradicts that. X4 provably
+        // uses subpass inputs: its own validation errors name
+        // S_subpassInput_AUTOMS.
+        //
+        // X4VR_MV_REDIRECT_INPUT=1 puts them back, so the exclusion is a
+        // measurement and not an assumption.
+        if (w.descriptorType == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT &&
+            !g_mv_redirect_input) {
+            std::lock_guard<std::mutex> lock(g_mv_mu);
+            g_mv_stats.input_skipped += w.descriptorCount;
+            continue;
+        }
         if (w.descriptorType != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
             w.descriptorType != VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE &&
             w.descriptorType != VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT)
@@ -992,10 +1024,11 @@ void mv_report(const char *when) {
     // barrier ever moved it to.
     X4VR_LOG("mv %s: binds ok=%u MISMATCHED=%u | image barriers narrow=%u "
              "wide=%u | per-eye images written layer-0-only=%u | "
-             "stale redirect entries=%u",
+             "stale redirect entries=%u | input attachments left alone=%u",
              when, g_mv_stats.bind_ok, g_mv_stats.bind_mismatch,
              g_mv_stats.barrier_narrow, g_mv_stats.barrier_wide,
-             g_mv_stats.layer0_only, g_mv_stats.redirect_stale);
+             g_mv_stats.layer0_only, g_mv_stats.redirect_stale,
+             g_mv_stats.input_skipped);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass(
