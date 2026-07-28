@@ -227,6 +227,10 @@ struct MvStats {
     // per-eye image leaves layer 1 holding older content -- invisible until
     // something reads layer 1.
     uint32_t layer0_only = 0; // per-eye images written by an unwidened command
+    // Gate-2 cache entries that survived their view. Non-zero means the
+    // redirect had been answering with a view onto a different image, which
+    // makes every black frame it reported unreliable rather than informative.
+    uint32_t redirect_stale = 0;
     uint32_t reported = 0;
 } g_mv_stats;
 std::mutex g_mv_mu;
@@ -409,8 +413,18 @@ std::unordered_map<VkImageView, ViewInfo> g_views;
 std::unordered_map<VkImageView, VkImageView> g_array_views;
 // images actually written by a view-masked pass, learned at framebuffer time
 std::unordered_set<VkImage> g_per_eye_images;
-// sampled view -> the same view onto layer 1, made lazily for gate 2
-std::unordered_map<VkImageView, VkImageView> g_layer1_views;
+// sampled view -> the same view onto layer 1, made lazily for gate 2.
+//
+// The image is carried alongside on purpose. Vulkan recycles handles, and this
+// cache is keyed on one: once X4 destroys a view, the driver is free to hand
+// the identical handle back for a completely different image, and a cache that
+// only remembers the replacement would answer with a view onto the *previous*
+// image's layer 1. Keeping the image makes that detectable instead of silent.
+struct Layer1View {
+    VkImageView view;
+    VkImage image;
+};
+std::unordered_map<VkImageView, Layer1View> g_layer1_views;
 uint32_t g_img_serial = 0;
 
 // A draw replicates to two views only if the *pass* carries the mask and the
@@ -660,11 +674,22 @@ void mv_redirect_writes(DeviceData *d, VkDevice device, uint32_t writeCount,
             bool make = false;
             {
                 std::lock_guard<std::mutex> lock(g_img_mu);
+                auto it = g_views.find(v);
                 auto c = g_layer1_views.find(v);
+                // A hit whose image no longer matches is a recycled handle:
+                // the entry describes a view X4 has since destroyed. Drop it
+                // and rebuild rather than redirecting the read to whatever
+                // that image used to be.
+                if (c != g_layer1_views.end() && it != g_views.end() &&
+                    c->second.image != it->second.image) {
+                    g_layer1_views.erase(c);
+                    c = g_layer1_views.end();
+                    std::lock_guard<std::mutex> lock2(g_mv_mu);
+                    g_mv_stats.redirect_stale++;
+                }
                 if (c != g_layer1_views.end()) {
-                    repl = c->second;
+                    repl = c->second.view;
                 } else {
-                    auto it = g_views.find(v);
                     if (it != g_views.end() &&
                         g_per_eye_images.count(it->second.image) &&
                         it->second.range.baseArrayLayer == 0) {
@@ -687,7 +712,9 @@ void mv_redirect_writes(DeviceData *d, VkDevice device, uint32_t writeCount,
                     VK_SUCCESS)
                     repl = VK_NULL_HANDLE;
                 std::lock_guard<std::mutex> lock(g_img_mu);
-                g_layer1_views[v] = repl; // cache misses too, to stop retrying
+                // Misses cached too, to stop retrying -- keyed with the image
+                // so a recycled handle invalidates the entry above.
+                g_layer1_views[v] = Layer1View{repl, vi.image};
             }
             if (repl != VK_NULL_HANDLE) {
                 infos[j].imageView = repl;
@@ -964,10 +991,11 @@ void mv_report(const char *when) {
     // barrier_narrow > 0 means they did but layer 1 is read in a layout no
     // barrier ever moved it to.
     X4VR_LOG("mv %s: binds ok=%u MISMATCHED=%u | image barriers narrow=%u "
-             "wide=%u | per-eye images written layer-0-only=%u",
+             "wide=%u | per-eye images written layer-0-only=%u | "
+             "stale redirect entries=%u",
              when, g_mv_stats.bind_ok, g_mv_stats.bind_mismatch,
              g_mv_stats.barrier_narrow, g_mv_stats.barrier_wide,
-             g_mv_stats.layer0_only);
+             g_mv_stats.layer0_only, g_mv_stats.redirect_stale);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass(
@@ -1219,7 +1247,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyImageView(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
-    VkImageView sub = VK_NULL_HANDLE;
+    VkImageView sub = VK_NULL_HANDLE, l1 = VK_NULL_HANDLE;
     {
         std::lock_guard<std::mutex> lock(g_img_mu);
         g_views.erase(view);
@@ -1228,11 +1256,23 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyImageView(
             sub = it->second;
             g_array_views.erase(it);
         }
+        // Both caches are keyed on a handle the driver is about to be free to
+        // reuse. Leaving the gate-2 entry behind meant a later view with the
+        // same handle inherited a redirect built for a different image -- and
+        // the replacements were never destroyed either, so they accumulated
+        // for the whole session.
+        auto l = g_layer1_views.find(view);
+        if (l != g_layer1_views.end()) {
+            l1 = l->second.view;
+            g_layer1_views.erase(l);
+        }
     }
-    // Our substitute is owned by us and outlives nothing: it dies with the
-    // view it stood in for.
+    // Our substitutes are owned by us and outlive nothing: they die with the
+    // view they stood in for.
     if (sub != VK_NULL_HANDLE)
         d->DestroyImageView(device, sub, ac);
+    if (l1 != VK_NULL_HANDLE)
+        d->DestroyImageView(device, l1, ac);
     d->DestroyImageView(device, view, ac);
 }
 
