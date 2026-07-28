@@ -2734,6 +2734,7 @@ struct MvProbe {
     uint32_t serial = 0;               // the one being probed
     VkDeviceSize bytes = 0;
     uint32_t w = 0, h = 0, bpp = 0;
+    VkFormat format = VK_FORMAT_UNDEFINED;
     uint32_t captures = 0;
 } g_probe;
 std::mutex g_probe_mu;
@@ -2766,6 +2767,64 @@ uint32_t format_bpp(VkFormat f) {
     case VK_FORMAT_R16G16B16A16_SFLOAT:                         return 8;
     default:                                                    return 0;
     }
+}
+
+// Dump both layers to disk on the first capture that differs.
+//
+// Twelve runs have been spent narrowing what layer 1 contains by counting
+// bytes. Writing the two images out and looking at them answers in one glance
+// what "22% of texels differ" can only circle: whether layer 1 is the same
+// scene lit differently, a subset of the passes, or something unrelated.
+const char *g_mv_dump = getenv("X4VR_MV_DUMP");
+
+float half_to_float(uint16_t h) {
+    const uint32_t s = (h >> 15) & 1;
+    uint32_t e = (h >> 10) & 0x1f, m = h & 0x3ff, f;
+    if (e == 0) {
+        if (!m) {
+            f = s << 31;
+        } else { // subnormal: normalise it by hand
+            e = 127 - 15 + 1;
+            while (!(m & 0x400)) {
+                m <<= 1;
+                e--;
+            }
+            m &= 0x3ff;
+            f = (s << 31) | (e << 23) | (m << 13);
+        }
+    } else if (e == 31) {
+        f = (s << 31) | (0xffu << 23) | (m << 13);
+    } else {
+        f = (s << 31) | ((e - 15 + 127) << 23) | (m << 13);
+    }
+    float out;
+    memcpy(&out, &f, sizeof out);
+    return out;
+}
+
+// Reinhard then gamma, so the whole HDR range shows structure rather than
+// clipping to white wherever the sun is -- which is exactly the region under
+// suspicion.
+void write_ppm(const char *path, const uint16_t *px, uint32_t w, uint32_t h) {
+    FILE *f = fopen(path, "wb");
+    if (!f)
+        return;
+    fprintf(f, "P6\n%u %u\n255\n", w, h);
+    std::vector<uint8_t> row((size_t)w * 3);
+    for (uint32_t y = 0; y < h; y++) {
+        for (uint32_t x = 0; x < w; x++) {
+            for (uint32_t c = 0; c < 3; c++) {
+                float v = half_to_float(px[((size_t)y * w + x) * 4 + c]);
+                if (!(v > 0.0f))
+                    v = 0.0f;
+                v = v / (1.0f + v);
+                row[(size_t)x * 3 + c] =
+                    (uint8_t)(powf(v, 1.0f / 2.2f) * 255.0f + 0.5f);
+            }
+        }
+        fwrite(row.data(), 1, row.size(), f);
+    }
+    fclose(f);
 }
 
 uint64_t fnv1a(const void *p, size_t n) {
@@ -2886,6 +2945,7 @@ void probe_emit(DeviceData *d, VkCommandBuffer cb, const FbAtt &a) {
     g_probe.w = w;
     g_probe.h = h;
     g_probe.bpp = bpp;
+    g_probe.format = a.format;
     g_probe.pending = true;
 }
 
@@ -2998,16 +3058,35 @@ void probe_collect(DeviceData *d, VkQueue queue) {
     // How many texels carry anything at all in layer 0. A space scene is
     // mostly empty, so "27% of texels differ" means one thing if 27% of the
     // frame has content and something quite different if 90% does.
-    size_t nz0 = 0;
+    // The differing set turned out to be exactly the set where layer 0 has
+    // content, which leaves two very different readings still open:
+    //
+    //   missing — layer 1 is empty where layer 0 has something. Draws are not
+    //     reaching view 1, and the question is which passes.
+    //   changed — both layers have content there and the values differ. The
+    //     draws did reach view 1 and something is being applied per view.
+    //
+    // One counter each settles it. Guessing between them is what the last
+    // several runs did.
+    size_t nz0 = 0, nz1 = 0, missing = 0, changed = 0, extra = 0;
     static const uint8_t zero[16] = {0};
     for (size_t t = 0; t * bpp < n; t++) {
-        const bool nonzero = memcmp(l0 + t * bpp, zero, bpp) != 0;
-        if (nonzero)
+        const bool a = memcmp(l0 + t * bpp, zero, bpp) != 0;
+        const bool b = memcmp(l1 + t * bpp, zero, bpp) != 0;
+        if (a)
             nz0++;
+        if (b)
+            nz1++;
         if (memcmp(l0 + t * bpp, l1 + t * bpp, bpp) != 0) {
             if (first == SIZE_MAX)
                 first = t;
             dtex++;
+            if (a && !b)
+                missing++;
+            else if (a && b)
+                changed++;
+            else
+                extra++;
         }
     }
     const size_t total = n / bpp;
@@ -3019,15 +3098,30 @@ void probe_collect(DeviceData *d, VkQueue queue) {
                  z1 ? " (all zero)" : "");
     } else {
         X4VR_LOG("mv probe: img #%u %ux%u  layer0=%016llx%s  "
-                 "layer1=%016llx%s  DIFFER %zu/%zu texels (%.2f%%), "
-                 "layer0 non-empty %.2f%%, first at (%u,%u)",
+                 "layer1=%016llx%s  DIFFER %zu/%zu (%.2f%%)  "
+                 "non-empty %zu/%zu  missing=%zu changed=%zu extra=%zu  "
+                 "first at (%u,%u)",
                  g_probe.serial, g_probe.w, g_probe.h, (unsigned long long)h0,
                  z0 ? " (all zero)" : "", (unsigned long long)h1,
                  z1 ? " (all zero)" : "", dtex, total,
-                 total ? 100.0 * (double)dtex / (double)total : 0.0,
-                 total ? 100.0 * (double)nz0 / (double)total : 0.0,
+                 total ? 100.0 * (double)dtex / (double)total : 0.0, nz0, nz1,
+                 missing, changed, extra,
                  g_probe.w ? (uint32_t)(first % g_probe.w) : 0,
                  g_probe.w ? (uint32_t)(first / g_probe.w) : 0);
+        static bool dumped = false;
+        if (g_mv_dump && !dumped &&
+            g_probe.format == VK_FORMAT_R16G16B16A16_SFLOAT) {
+            dumped = true;
+            char p[512];
+            snprintf(p, sizeof p, "%s-img%u-layer0.ppm", g_mv_dump,
+                     g_probe.serial);
+            write_ppm(p, (const uint16_t *)l0, g_probe.w, g_probe.h);
+            snprintf(p, sizeof p, "%s-img%u-layer1.ppm", g_mv_dump,
+                     g_probe.serial);
+            write_ppm(p, (const uint16_t *)l1, g_probe.w, g_probe.h);
+            X4VR_LOG("mv probe: wrote %s-img%u-layer{0,1}.ppm", g_mv_dump,
+                     g_probe.serial);
+        }
     }
     g_probe.captures++;
 }
