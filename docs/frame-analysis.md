@@ -1301,6 +1301,62 @@ This is the "real SPIR-V work" predicted three phases ago for the lighting
 pass. The prediction was right that the work existed and wrong about where: the
 lighting pass needed none, and the post/UI chain needs it all.
 
+### The mechanism, proven offline before any run
+
+`patch_vertex_clip` now takes an optional second matrix. With it the module
+reads `gl_ViewIndex` and uses `K_left` for view 0 and `K_right` for view 1 —
+one module, one draw, two eyes. Selection is arithmetic rather than a branch:
+
+    col = colL + float(view) * (colR - colL)
+
+`float(view)` is exact for 0 and 1, so this selects rather than blends. A
+branch would mean splitting the basic block these instructions append to, and
+`OpSelect`'s rules for a scalar condition with a vector result only relaxed in
+SPIR-V 1.4; every op used here is core 1.0.
+
+Two offline cases, both validation-clean:
+
+    ok  stereo patch, same K both eyes    layers=2 drawn=1/1 identical=1
+    ok  stereo patch, per-eye K differs   probe=DIFFER own=0
+
+The second is the one that earns its place. This mechanism's most likely
+silent failure is `gl_ViewIndex` always reading 0 — the module would still
+compile, still draw, still fill both layers, and be quietly mono. That case
+fails if it does. The first proves the patch does not corrupt a module that
+has nothing to select between.
+
+The suite's own command pool was fixed in the same commit: it had been
+emitting a validation error while passing, and a suite that is not
+validation-clean cannot be used to clear a patch of validation errors.
+
+### Take eighteen: per-eye K, where DIFFER becomes the pass
+
+Written before the run.
+
+    X4VR_MV=1 X4VR_STEREO=1 X4VR_MV_PROBE=1 X4VR_ONE_EYE=1 X4VR_GAMESCOPE=1
+
+*Prediction:* `#95` reports **`DIFFER`**, and that is the **success**
+condition — inverted from take sixteen, where `IDENTICAL` was the pass. The
+same probe, the same image, the opposite verdict, because the frame is now
+supposed to differ between the eyes.
+
+*The screen should look unchanged.* The presented image still comes from
+layer 0 alone: the whole LDR chain is mono until the tonemap patch lands. A
+changed screen would mean the shear reached something it should not have.
+
+Readings decided in advance:
+
+| Reading | Meaning |
+|---|---|
+| `DIFFER`, screen unchanged | Stage 2's payload works. Proceed to the tonemap patch. |
+| `IDENTICAL` | The per-view matrices are not reaching the shaders. Check `stereo=N` on the "patched vertex shader" lines. |
+| `stereo=0` in the log | Classification put X4's world shaders in the UI bucket, so nothing got a right eye. |
+| Screen changed | The shear leaked into a pass that should not have it — the UI, or a fullscreen post pass given `K_world`. |
+
+Note what makes this readable at all: `#95` has been `IDENTICAL` under exactly
+this instrument for two runs, with non-zero content. There is a measured
+baseline to invert, which is the thing take sixteen's numbers bought.
+
 ### Take seventeen: the redirect run, and why the probe does not replace it
 
 Written before the run.

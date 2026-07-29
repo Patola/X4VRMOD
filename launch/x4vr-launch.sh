@@ -76,6 +76,20 @@
 #                         known rather than guessed. Answers "are the two
 #                         layers the same bytes" as a number instead of as an
 #                         inference from what appeared on screen.
+#   X4VR_STEREO=1         bake BOTH eyes into every world vertex shader and
+#                         let gl_ViewIndex pick, so one multiview draw
+#                         produces two different eyes. Uses the same
+#                         make_eye_shear derivation as the one-eye X4VR_EYE
+#                         path, with X4VR_IPD / X4VR_PROJ_SX / X4VR_PROJ_NEAR.
+#                         Needs X4VR_MV=1: without a view mask there is only
+#                         ever view 0, and the result is the left eye twice.
+#   X4VR_SBS_LAYERS=2     give the image X4 renders into a second array layer.
+#   X4VR_SBS_RIGHT_LAYER=1
+#                         take the right half of the composite from that
+#                         second layer. Separate from the line above on
+#                         purpose: allocating a layer and having something
+#                         render into it are different claims, and copying an
+#                         unwritten layer to screen is garbage, not stereo.
 #   X4VR_PRESENT_MODE=<n> override the swapchain present mode, for measurement
 #                         runs only (0=IMMEDIATE, 1=MAILBOX, 2=FIFO). X4 asks
 #                         for FIFO, so frame times are pinned to the display
