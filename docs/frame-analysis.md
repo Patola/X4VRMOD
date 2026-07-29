@@ -1268,10 +1268,42 @@ exposure chain fed from layer 1 could plausibly settle somewhere dark), and any
 per-eye image the probe never reached. That last one is checkable without a new
 run by comparing the probe's image list against the 21.
 
+**Result: as predicted.** Everything visible, lighting correct, no black and no
+dimming. Exercised well past the cockpit — the map, several menus, landing at a
+station and walking around inside it.
+
+    viewMask=0x3 doubled=91 masked=49 substituted=22 per_eye_images=19
+                 redirected=857470 fallbacks=0
+    binds ok=1824971 MISMATCHED=0 | layer-0-only=0 | input attachments fixed=467878
+
+`redirected=857470` is the line that makes the run mean anything. This test
+passes by *nothing looking different*, which is the same shape as the gate-1
+claim corrected earlier in this document — so the first thing to check is that
+the instrument was actually on. It was: 857,470 descriptor reads were pointed
+at layer 1, against `redirected=0` in take sixteen. The frame on screen was
+built by reading the second view, and this exact configuration produced a black
+scene ten times before the fix.
+
+Coverage is also much wider than the probe's: a station interior and the map
+pull in per-eye images the cockpit never touches (`doubled` 89 → 91,
+`substituted` 21 → 22), and `fallbacks=0` held across all of it.
+
+*Not measured:* performance was reported as good, not instrumented. Stage 1
+doubles fragment shading by construction, so "good" here means "no visible
+regression at one-eye resolution", not a number. Real figures wait for
+`docs/perf.md` and a fixed benchmark path.
+
 ### State
 
-Stage 1 is complete and verified live: rasterisation and lighting both reach
-view 1, and the two layers are identical bytes.
+Stage 1 is complete, verified two independent ways: the two layers hold
+identical bytes (readback, take sixteen), and the frame built entirely from
+layer 1 is correct end to end through post, exposure, the compositor and the
+present blit (take seventeen, `redirected=857470`, `fallbacks=0`).
+
+Tagged `stage1-complete`. This is the last point at which both eyes are
+supposed to match — every stage-2 change makes them differ on purpose, so a
+regression after this can be bisected against a state known good on the screen
+and in the bytes.
 
 Still open from stage 1: the doubling overshoot (90 images, 565.6 MB, against
 ~18–21 and ~135 MB needed). Untouched deliberately, so a tightening regression
