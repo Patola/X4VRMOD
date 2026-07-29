@@ -711,6 +711,35 @@ lets the two eyes auto-expose independently and flicker against each other,
 which is far worse in a headset than on a monitor. The seed had them as
 STEREO, so this is a correctness fix the seed would have shipped.
 
+> **Measured at the start of stage 2, and the fix is not needed.** This was
+> carried for three phases as a correctness item to do before `K` differs. It
+> was never tested, and it is wrong.
+>
+> Divergence requires the read to be **view-indexed**, and nothing in the
+> reduction chain is. All seven 4096×1 targets are `SAMPLED |
+> COLOR_ATTACHMENT` (`usage=0x14`) with no `INPUT_ATTACHMENT` bit anywhere,
+> and the reduction framebuffers carry `attachments=1` — with a single
+> attachment there is no second one to read as a subpass input, so the source
+> can only arrive through a descriptor. A plain `sampler2D` on a single-layer
+> view reads layer 0 whatever `gl_ViewIndex` says, and the shipping path does
+> not substitute sampler descriptors (only input attachments, and only
+> `X4VR_MV_PRESENT_LAYER` touches the sampled ones).
+>
+> So both views read the same texels, compute the same value, and write it to
+> their own layer; whatever samples the result reads layer 0. The chain
+> already produces **one shared exposure, derived from the left eye** — which
+> is the behaviour the "fix" was meant to produce.
+>
+> Leaving it masked costs two 4096×1 passes instead of one and ~224 KB of
+> doubled targets. Not worth a change that would have been made on an
+> untested premise, in the one part of the frame where a mistake shows up as
+> the whole image being the wrong brightness.
+>
+> Note the shape of this: the claim was structural and confident, and the
+> refutation came from data already on disk — the same framebuffer log, from
+> the same run. Cf. the correction at the overlap check: a log from the
+> *right* run is the cheapest instrument there is.
+
 `tools/mv_inventory.py` flags any STEREO pass with a dimension ≤ 4 for exactly
 this reason — found by shape rather than by guessing which passes are
 reductions.
@@ -943,9 +972,10 @@ regression cannot be confused with a stereo bug.
   the swapchain image, which cannot take a second array layer because it is the
   thing being presented. The handoff needs `SbsCompositor`'s images to become
   one two-layer image. Costs nothing while both eyes match.
-* The **exposure reductions are still masked** and should not be — shared
-  exposure, or the eyes auto-expose independently and flicker against each
-  other. Invisible until `K` differs.
+* The **exposure reductions are still masked**, and — measured at the start of
+  stage 2 — that turns out to be fine. See the correction under "Reductions
+  are shared": nothing in the chain is view-indexed, so both views already
+  compute one shared exposure. No change needed.
 * Then per-eye `K` via `gl_ViewIndex`, and per-eye camera constants so the
   deferred lighting follows.
 
@@ -1334,8 +1364,11 @@ Still open from stage 1: the doubling overshoot (90 images, 565.6 MB, against
 cannot be confused with a stereo bug.
 
 Stage 2 is next, and it is the first change that makes the two layers *differ*
-on purpose: per-eye camera constants selected by `gl_ViewIndex`. Before that,
-two pieces of groundwork — the UI has to become a single two-layer image
-(`SbsCompositor`; the swapchain cannot take a second layer), and the exposure
-reductions (4096×1, passes 55/57/59) have to be un-masked so both eyes keep
-sharing one exposure value rather than drifting apart.
+on purpose: per-eye camera constants selected by `gl_ViewIndex`.
+
+One piece of groundwork, not two. The exposure un-masking was checked first and
+is not needed (above). What remains is the UI: `SbsCompositor`'s eye image has
+to become one two-layer image, because it is what X4 renders into believing it
+is the swapchain, and the composite currently copies layer 0 into *both* halves
+of the real swapchain image. Until that changes there is nowhere for a second,
+different eye to land.
