@@ -1121,13 +1121,61 @@ instrument that was trusted before it was tested.
    from aggregate numbers. One dump answered it in a glance, and the dumping
    code was smaller than most of the counters that preceded it.
 
+## Stage 1, take sixteen: both views identical, stage 1 done
+
+The prediction above, unchanged: no `DIFFER` on `#95`, `input attachments
+fixed` non-zero. Run was `X4VR_MV=1 X4VR_MV_PROBE=1 X4VR_ONE_EYE=1
+X4VR_GAMESCOPE=1`, redirect deliberately off — the screen shows layer 0 either
+way, so it is not evidence; the probe is.
+
+    43 probe captures, 0 DIFFER, 43 IDENTICAL
+    24 of the 43 non-empty on both sides
+    input attachments fixed = 43730
+
+`#95` — the image that had reported `DIFFER` in every previous run — came back
+identical six times, twice with genuinely non-zero content
+(`7ffe7b2d2d907af0`, `0a5b0fe54fc6d9f2`).
+
+Two non-zero captures is a small sample, so the reason it settles the question
+is the correlation in the run before it, where the same image was probed under
+the same conditions with the fix absent:
+
+| | non-zero `#95` captures | `DIFFER` | `IDENTICAL` |
+|---|---|---|---|
+| before the fix | 5 | 5 | 0 |
+| after the fix | 2 | 0 | 2 |
+
+Before, *every* capture with content in it diverged and every all-zero one
+agreed — agreement was purely a statement about emptiness. After, the all-zero
+captures still agree and the ones with content agree too. The variable that
+predicted the verdict stopped predicting it.
+
+That closes stage 1: one frame, two array layers, same eye matrix, byte-identical.
+
+### A sentinel that read like data
+
+The same run printed `img #95 writers — masked rp [4294967295]`, where the run
+before it printed `[31,30,32,38,39,64]`. Not a regression: pass serials are
+only assigned when `X4VR_MV_INVENTORY` is on, and this run did not set it, so
+every entry was `UINT32_MAX`.
+
+Fixed anyway, to print `?`. Rule 2 above is about baselines, but the same edge
+applies to a single number: `4294967295` reads like a render pass, `?` reads
+like "not measured", and only one of those can be mistaken for a finding by
+someone reading the log six weeks from now — including me.
+
 ### State
 
-Rasterisation into both views is correct and measured. The lighting fix is
-committed but **not yet verified live** — the run that tests it is a probe run
-with the redirect off, where `#95` must stop reporting `DIFFER` and
-`input attachments fixed` must be non-zero.
+Stage 1 is complete and verified live: rasterisation and lighting both reach
+view 1, and the two layers are identical bytes.
 
 Still open from stage 1: the doubling overshoot (90 images, 565.6 MB, against
 ~18–21 and ~135 MB needed). Untouched deliberately, so a tightening regression
 cannot be confused with a stereo bug.
+
+Stage 2 is next, and it is the first change that makes the two layers *differ*
+on purpose: per-eye camera constants selected by `gl_ViewIndex`. Before that,
+two pieces of groundwork — the UI has to become a single two-layer image
+(`SbsCompositor`; the swapchain cannot take a second layer), and the exposure
+reductions (4096×1, passes 55/57/59) have to be un-masked so both eyes keep
+sharing one exposure value rather than drifting apart.

@@ -1103,15 +1103,31 @@ void mv_report(const char *when) {
             // applies lighting is the one to find, and it can only be found
             // by name here -- image serials restart per run, which makes
             // cross-referencing an older inventory log unsound.
+            //
+            // Pass serials only exist when the inventory is on, so without it
+            // every entry here is unnumbered. That prints as "?" rather than
+            // as UINT32_MAX, which reads like a pass that does not exist.
             char ms[160] = {0}, us[160] = {0};
             int n = 0;
             for (uint32_t rp : e.second.masked)
-                if (n < 140) n += snprintf(ms + n, sizeof(ms) - n, "%s%u",
-                                           n ? "," : "", rp);
+                if (n < 140) {
+                    if (rp == UINT32_MAX)
+                        n += snprintf(ms + n, sizeof(ms) - n, "%s?",
+                                      n ? "," : "");
+                    else
+                        n += snprintf(ms + n, sizeof(ms) - n, "%s%u",
+                                      n ? "," : "", rp);
+                }
             n = 0;
             for (uint32_t rp : e.second.unmasked)
-                if (n < 140) n += snprintf(us + n, sizeof(us) - n, "%s%u",
-                                           n ? "," : "", rp);
+                if (n < 140) {
+                    if (rp == UINT32_MAX)
+                        n += snprintf(us + n, sizeof(us) - n, "%s?",
+                                      n ? "," : "");
+                    else
+                        n += snprintf(us + n, sizeof(us) - n, "%s%u",
+                                      n ? "," : "", rp);
+                }
             X4VR_LOG("mv %s: img #%u writers — masked rp [%s] unmasked rp [%s]",
                      when, e.first, ms, us);
             if (e.second.masked.empty() || e.second.unmasked.empty())
