@@ -747,6 +747,25 @@ downstream of the camera stays doubled and costs what stereo costs.
   `gl_ViewIndex`. Bounded to one pass and a handful of modules, but it is real
   SPIR-V work and the one part of Phase 4b that is not plumbing.
 
+  > **Wrong, and the error was expensive (takes 6–15).** X4's lighting passes
+  > (rp 30/31/32/64) do not *sample* the G-buffer — they read it as **subpass
+  > inputs** (`S_subpassInput_AUTOMS`). Under multiview a subpass input is
+  > already view-indexed by the spec: view N reads layer N, with no shader
+  > change at all. So the predicted "real SPIR-V work" was zero SPIR-V work.
+  >
+  > What it was instead: the *descriptor* has to name the same subresource the
+  > framebuffer does. `vkCreateFramebuffer` was swapping attachments for
+  > two-layer array views while X4's input-attachment descriptors still named
+  > single-layer ones, so view 1 read an image that had no layer 1. Fixed by
+  > substituting the array view at `vkUpdateDescriptorSets`.
+  >
+  > Worth keeping as written, because the wrong prediction is instructive: it
+  > named the right pass and the right resource and still pointed at the wrong
+  > *mechanism*, which is exactly the kind of near-miss that survives review.
+  > The lesson for the sampled case is that it may yet arrive — if a later
+  > phase re-enables a chain that reads the G-buffer through an ordinary
+  > sampler, `sampler2DArray` becomes real again. It just was not this.
+
 ### Measured: the real doubling cost, and the sharing that hid it
 
 `vkCreateImage` + `vkCreateImageView`, joined at `vkCreateFramebuffer`
@@ -794,8 +813,18 @@ screen, or straight into an OpenXR swapchain later.
 
 Stage 1 renders the frame into two array layers with the **same** eye matrix for
 both, so a correct result is indistinguishable from before. Enabled with
-`X4VR_MV=1` (off by default). Verified live at gate 1: `fallbacks=0`, and the
-game visually unchanged.
+`X4VR_MV=1` (off by default). Gate 1: `fallbacks=0`, and the game visually
+unchanged.
+
+> **Correction (take sixteen).** "The game visually unchanged" was recorded
+> here as if it verified something. It did not, and could not: what reaches the
+> screen is layer 0 in every configuration except an explicit redirect, so an
+> unchanged screen says nothing whatever about layer 1. Every run in this
+> document that "looked normal" had a broken second view. Stage 1 was actually
+> verified ten takes later, by reading the two layers back and comparing bytes
+> — see *take sixteen* at the end. A test whose passing condition is "nothing
+> looks different" is only a test if the thing under test can change what you
+> are looking at.
 
 Measured on X4 with `X4VR_MV=1`:
 
@@ -816,8 +845,11 @@ by joining framebuffers to passes — two unrelated methods agreeing.
 > moves layer 0 and leaves layer 1 holding whatever was there before. One such
 > copy anywhere in the chain drains the second view.**
 
-*Symptom:* the 3D scene is entirely black while the HUD renders perfectly —
-because the UI never passes through a doubled image.
+*Symptom it was found through:* the 3D scene entirely black while the HUD
+renders perfectly — the UI never passes through a doubled image. Note the
+wording: this finding was *found via* that symptom, and does not *explain* it.
+Widening the transfers fixed 14554 real copies and left the screen exactly as
+black. See takes three to five below.
 
 *Why nothing reported it:* copying one layer of a two-layer image is **legal**.
 Validation has nothing to say. There is no error anywhere; the data simply
@@ -878,6 +910,13 @@ discipline as the code under test. `X4VR_MV_PRESENT_LAYER=0` now redirects
 through the **same** substitution path to layer 0, which holds known-good
 content — so a black layer 1 can be told apart from a broken redirect.
 
+> **Refined at take fifteen.** This rule is necessary and not sufficient. The
+> readback probe was built with a must-fail case, passed it, and still shipped
+> a blind spot that made 4759 of 5994 comparisons vacuous — because the case
+> could not fail for the reason that mattered. The must-fail case has to be
+> able to fail *the specific way the instrument is likely to be wrong*, not
+> merely to fail at all.
+
 ### Cost, and where it overshoots
 
 | | Images | VRAM |
@@ -931,6 +970,17 @@ masked passes, 7 to unmasked, 0 in both.** No reuse, no confound. A log that
 already exists is cheaper than a run, and this one had been sitting there
 since the inventory pass.
 
+> **Correction (take fifteen): this measurement was invalid and should never
+> have been believed.** The framebuffer lines came from an inventory run
+> recorded *before* masking existed, and image serials restart every run — so
+> the two halves of the join described different images that merely shared
+> numbers. The answer happened to be right (measured properly inside a live run
+> at take fifteen: 26 images tracked, 20 masked, 6 unmasked, 0 mixed), but it
+> was right by luck, and for five runs it was used to close a door that was
+> never actually shown to be shut. The "cheaper than a run" reasoning is the
+> trap: a log that already exists is only cheaper if it is a log *of the thing
+> you are asking about*.
+
 ### Take four: two candidates, measured rather than argued
 
 `pipe_masked` / `pipe_unmasked` count where a pipeline was *built*. Nothing
@@ -977,7 +1027,17 @@ passed by looking identical to the old one.
 **Result: black.** So the mask really does steer draws, and layer 1 really is
 being shaded. The write path was never the problem.
 
-### The contradiction that names the real cause
+### The contradiction, and the cause it wrongly named
+
+> **Correction (takes 6–15).** The contradiction below is real and is still the
+> most useful thing in this section — it is what eventually located the bug.
+> The cause it was resolved *into*, immediately below, is **wrong**. Every
+> candidate in the list that follows was hooked and then measured at zero
+> (`per-eye images written layer-0-only=0`). Pixels were not arriving outside
+> draws. The actual cause was that view 1's *lighting* read a descriptor
+> naming a single-layer view — see the next section. Kept unedited because the
+> reasoning is sound and the conclusion still false, which is the more useful
+> thing to be able to recognise later.
 
 Put the three results side by side:
 
@@ -1013,6 +1073,12 @@ every pass downstream and the scene goes black.
 `layer0_only` now counts these and names the first dozen by image serial,
 because "something writes only layer 0" is not actionable and "image #37 does,
 via `vkCmdCopyBufferToImage`" is.
+
+**And it counted zero, in every run since.** The hooks were worth adding —
+those really are holes, and a later phase that re-enables the compute chain
+will need them — but none of them was the black frame. The instrument built to
+confirm this hypothesis is what refuted it, which is the only reason the
+hypothesis cost one run instead of five.
 
 ### The rule this cost four runs to learn
 
