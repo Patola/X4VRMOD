@@ -1867,3 +1867,77 @@ nothing twice", and until this run there was no way to tell those apart.
 
 **Also check:** `fallbacks=0` in the `mv final` line, and no new validation
 errors. Nothing changes on screen; that is expected, not a failure.
+
+---
+
+## Take nineteen: the tonemap replicates, and the instrument earns its keep
+
+Run: `X4VR_GAMESCOPE=1 X4VR_ONE_EYE=1 X4VR_MV=1 X4VR_STEREO=1 X4VR_MV_PROBE=1
+X4VR_MASK_TONEMAP=1 X4VR_MV_INVENTORY=1`. Cockpit, left the seat, map,
+dialogue with the relief pilot to exercise the HUD. **Screen unchanged**, which
+is the prediction: the chain reading `#103` is still mono, so there is nowhere
+for a second eye to appear yet.
+
+**The join needed no inference this time.** The inventory was on, so the run
+named its own passes:
+
+    rp #40.0: 1 colour [50L] no-depth -> MONO (all-LDR/UI) +MASKED
+    rp #52.0: 1 colour [50L] no-depth -> MONO (all-LDR/UI) +MASKED
+    fb  rp #40: 1408x1408 attachments=1 imgs=[#103] MASKED
+    fb  rp #52: 1408x1408 attachments=1 imgs=[#103] MASKED
+    mv final: img #103 writers — masked rp [40,52] unmasked rp []
+
+Exactly the passes predicted from run 47, and the serials held across runs —
+which was an inference then and is a measurement now. Both passes read MONO
+(no K) and `+MASKED` (replicates): the split doing precisely what it was for.
+
+**Pass condition met.** `#103` appears in the probe table for the first time —
+it could not before, since `probe_emit` only records attachments of masked
+passes — with **7 captures, all IDENTICAL, none uniform and none all-zero**.
+Every capture is real, frame-varying content. So the pass genuinely drew the
+same picture into both layers, rather than drawing nothing into both.
+
+`fallbacks=0`, `MISMATCHED=0`, `per-eye images written layer-0-only=0`,
+`image barriers wide=0`, `stale redirect entries=0`. Shader counters
+`[world=336 ui=64 stereo=336]`, identical to take eighteen.
+
+### The uniformity fix reproduced the hand analysis, live
+
+`#101` came back annotated:
+
+    layer0=db085906001d2323                  IDENTICAL   <- real content, agrees
+    layer0=b1fa160a7e480383 (uniform 0x10)   IDENTICAL   } the clear
+    layer0=b1fa160a7e480383 (uniform 0x10)   IDENTICAL   } trivially
+    layer0=b1fa160a7e480383 (uniform 0x10)   IDENTICAL   } identical
+    DIFFER 128914/1982464 (6.50%)
+    DIFFER 150976/1982464 (7.62%)
+    DIFFER 188901/1982464 (9.53%)
+
+3 uniform, 3 differ, 1 genuine agreement — the *same structure* the FNV
+arithmetic derived by hand from take eighteen, now produced by the instrument
+without anyone recomputing a hash. `0x10` is even printed, matching the
+constant the offline search found. That is independent confirmation the fix is
+right, not merely that it compiles.
+
+Under the old probe every one of those four IDENTICAL lines would have read as
+content that agrees, and `#103`'s seven would have been indistinguishable from
+a pass that never ran.
+
+### The rest of the table, unchanged
+
+| Image | real captures | differ | reading |
+|---|---|---|---|
+| `#92`, `#95`, `#97`, `#98`, `#99` | 4–5 | **all** | the per-eye HDR chain |
+| `#101` | 4 | 3 | per-eye mask (1 agreement, as at take eighteen) |
+| `#102` | 1 | 1 | newly captured; `R8_UNORM` mask, per-eye |
+| **`#103`** | **7** | **0** | **newly captured; replicates, mono content** |
+| `#104`, `#105` | 5 | 0 | bloom, mono — samples a mono source |
+| `#122`, `#123` | 3 | 0 | mono, unchanged from take eighteen |
+
+`#103` has joined the group that renders into both layers and writes the same
+picture into each — the group whose members are all fixed by a fragment patch,
+not by a masking change. That is the whole point of this step: it moved `#103`
+from "not even replicating" to "replicating but mono", which is the state the
+shader patch knows how to finish.
+
+Tagged `stage2-tonemap-masked`.
