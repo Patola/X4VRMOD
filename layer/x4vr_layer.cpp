@@ -1079,21 +1079,32 @@ void mv_report(const char *when) {
     // contribution, so this list is the shortlist for any partial divergence.
     {
         std::lock_guard<std::mutex> lock(g_img_mu);
+        // Printed even when nothing is mixed. An empty result otherwise means
+        // either "no image has both kinds of writer" or "the detector never
+        // ran", and those are not the same answer.
+        X4VR_LOG("mv %s: writers tracked for %zu doubled images",
+                 when, g_img_writers.size());
         for (const auto &e : g_img_writers) {
-            if (e.second.masked.empty() || e.second.unmasked.empty())
-                continue;
-            char m[128] = {0}, u[128] = {0};
+            // Every doubled image's writers, not only the mixed ones. Layer 1
+            // holds correctly rasterised but unlit geometry, so the pass that
+            // applies lighting is the one to find, and it can only be found
+            // by name here -- image serials restart per run, which makes
+            // cross-referencing an older inventory log unsound.
+            char ms[160] = {0}, us[160] = {0};
             int n = 0;
             for (uint32_t rp : e.second.masked)
-                if (n < 110) n += snprintf(m + n, sizeof(m) - n, "%s%u",
+                if (n < 140) n += snprintf(ms + n, sizeof(ms) - n, "%s%u",
                                            n ? "," : "", rp);
             n = 0;
             for (uint32_t rp : e.second.unmasked)
-                if (n < 110) n += snprintf(u + n, sizeof(u) - n, "%s%u",
+                if (n < 140) n += snprintf(us + n, sizeof(us) - n, "%s%u",
                                            n ? "," : "", rp);
-            X4VR_LOG("mv %s: img #%u MIXED WRITERS — masked rp [%s], "
-                     "unmasked rp [%s]; layer 1 misses the unmasked ones",
-                     when, e.first, m, u);
+            X4VR_LOG("mv %s: img #%u writers — masked rp [%s] unmasked rp [%s]",
+                     when, e.first, ms, us);
+            if (e.second.masked.empty() || e.second.unmasked.empty())
+                continue;
+            X4VR_LOG("mv %s: img #%u MIXED WRITERS — layer 1 misses the "
+                     "unmasked ones", when, e.first);
         }
     }
     // The two candidates, side by side. bind_mismatch > 0 means the draws
