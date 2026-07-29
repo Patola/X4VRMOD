@@ -1230,6 +1230,44 @@ applies to a single number: `4294967295` reads like a render pass, `?` reads
 like "not measured", and only one of those can be mistaken for a finding by
 someone reading the log six weeks from now — including me.
 
+### Take seventeen: the redirect run, and why the probe does not replace it
+
+Written before the run.
+
+The probe compares layer 0 against layer 1 for the images it happens to
+capture. That is a strong result and a narrow one. Three things it cannot say:
+
+* **Coverage.** Take sixteen probed 13 distinct images. 21 are per-eye. The
+  probe round-robins, so a short run simply does not reach all of them, and an
+  image it never captured is an image it never checked.
+* **Presentability.** Identical bytes in the attachment is not the same claim
+  as "layer 1 survives the whole downstream chain" — post, exposure,
+  `SbsCompositor`, the final blit. Every one of those runs after the point the
+  probe reads.
+* **The configuration stage 2 actually uses.** Stage 2 makes the layers differ
+  on purpose; it runs with the reads pointed at layer 1. If that path is broken
+  for some reason unrelated to shading, it should be found now, while the two
+  layers are still known to be identical and any difference on screen is
+  therefore a bug in the read path and nothing else.
+
+The redirect run is also the only test here with a **demonstrated failure
+mode**: before the fix it produced a black scene, ten times. A test that has
+actually failed before is worth more than one that has only ever passed.
+
+    X4VR_MV=1 X4VR_MV_PRESENT_LAYER=1 X4VR_ONE_EYE=1 X4VR_GAMESCOPE=1
+
+*Prediction:* the scene renders normally and is indistinguishable from a
+`X4VR_MV=0` run — because both layers hold the same bytes, so reading the
+second one should change nothing visible. Specifically, no black scene, and the
+sun no longer the only visible object.
+
+*If it is instead black or dim:* the shading is right and something downstream
+still only handles layer 0. First suspects, in order: the `SbsCompositor` blit,
+the exposure reductions (which are masked and should not be — a per-eye
+exposure chain fed from layer 1 could plausibly settle somewhere dark), and any
+per-eye image the probe never reached. That last one is checkable without a new
+run by comparing the probe's image list against the 21.
+
 ### State
 
 Stage 1 is complete and verified live: rasterisation and lighting both reach
