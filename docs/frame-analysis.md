@@ -1807,3 +1807,63 @@ Nothing changes on screen at either gate: the eye image is still written by the
 mono format-44 chain, so the right eye has nothing new to show. That is
 expected, and it is why the pass condition is the probe table rather than a
 look at the monitor.
+
+### The split, implemented
+
+`X4VR_MASK_TONEMAP=1`, off by default. `classify_unsheared` is untouched and
+still drives `needs_original`; a new `classify_per_eye` drives the masking, and
+the two are no longer inverses. The carve-out is `subpass_is_srgb_resolve` —
+single colour attachment, `B8G8R8A8_SRGB` or `R8G8B8A8_SRGB`.
+
+The inventory log now distinguishes the two verdicts, because after the split
+"MONO" no longer implies "single layer":
+
+    rp #1.0: 1 colour [50L] no-depth -> MONO (all-LDR/UI) +MASKED
+
+MONO is the shear verdict, `+MASKED` the replication verdict. A pass showing
+both is exactly what the tonemap should look like.
+
+Preconditions checked before writing any of it, not after: `#103` is `DOUBLED`
+(so `CreateFramebuffer` can build the two-layer array view rather than taking
+the `FALLBACK` path) and carries `TRANSFER_SRC` in `usage=0x97` (so the probe
+can read it back at all). Both hold.
+
+Four offline cases, over the test's own LDR second pass — which the file
+already described as "exactly X4's shape, where the per-eye chain is consumed
+by passes that are not themselves per-eye", i.e. the tonemap in miniature.
+`X4VR_TEST_OUT_SRGB=1` switches its format, so a case can flip one thing:
+
+    ok   tonemap masks when SRGB       rp=masked fb=masked
+    ok   ...but not without the knob   rp=mono   fb=mono
+    ok   ...and not for UNORM LDR      rp=mono   fb=mono
+    ok   LDR pass unmasked by default  rp=mono   fb=mono
+
+The third is load-bearing: it proves the carve-out keys on the format and not
+on "LDR" generally, which is the whole difference between masking the tonemap
+and masking the final blit into the presented image.
+
+Each case asserts the classification **and** the framebuffer, because a pass
+classified masked whose framebuffer is not is a fallback in disguise; and each
+fails on any `FALLBACK` line.
+
+> **Verified by mutation, including the wrong fix.** Dropping SRGB from
+> `is_ldr_format` — the tempting one-liner — produces `rp=sheared fb=masked`:
+> the masking looks right while K is silently applied to a fullscreen triangle.
+> That is the failure mode the split exists to prevent, and the suite names it
+> rather than merely going red. Deleting the uniformity flag updates likewise
+> fails only "real content is not called uniform".
+
+### Next: the live gate
+
+Run with `X4VR_MV=1 X4VR_STEREO=1 X4VR_MV_PROBE=1 X4VR_MASK_TONEMAP=1`.
+
+**Pass condition:** `#103` appears in the probe table — it cannot today, since
+`probe_emit` only records attachments of masked passes — and reads
+**IDENTICAL**, with *no* `(uniform …)` or `(all zero)` annotation on the
+captures that matter. Identical is the correct answer here: the fullscreen
+triangle replicates into both layers and samples `#95` layer 0 in each. The
+annotation is what distinguishes "drew the same picture twice" from "drew
+nothing twice", and until this run there was no way to tell those apart.
+
+**Also check:** `fallbacks=0` in the `mv final` line, and no new validation
+errors. Nothing changes on screen; that is expected, not a failure.

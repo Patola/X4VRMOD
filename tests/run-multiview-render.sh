@@ -229,6 +229,54 @@ ann_case "all-zero keeps its own name" zero uniform "X4VR_MV_MASK=2"
 ann_case "real content is not called uniform" uniform content \
     "X4VR_CLIP_K_UI=$ID" "X4VR_CLIP_K_UI_RIGHT=$SHIFTED"
 
+
+# The predicate split: "does K apply?" and "does this replicate?" used to be
+# one question, and are no longer.
+#
+# rp #1 in this test is X4's tonemap in miniature -- a single colour
+# attachment, LDR, consuming the per-eye chain -- which stage 1 left unmasked
+# because the two verdicts were the same. It must now be maskable *without*
+# becoming sheared, so the assertion is the whole line: MONO (no K) and
+# +MASKED (replicates) at once. Either half alone would pass while the other
+# regressed.
+#
+# The third case is the load-bearing one. It proves the carve-out keys on the
+# SRGB format and not on "LDR" in general, which is the difference between
+# masking X4's tonemap (#103, a normal doubled image) and masking the final
+# blit, whose attachment is the presented image and cannot take a second array
+# layer at all.
+mask_case() {
+    local label="$1" want="$2"; shift 2
+    local out cls fb
+    out=$(env "$@" X4VR_LOG= X4VR_MV=1 X4VR_MV_INVENTORY=1 \
+        "VK_ADD_LAYER_PATH=$BUILD/layer" \
+        "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+        "$BIN" "$VS" "$FS" "$SF" 2>&1)
+    if grep -q 'rp #1\.0:.*-> MONO (all-LDR/UI) +MASKED' <<<"$out"; then
+        cls=masked
+    elif grep -q 'rp #1\.0:.*-> MONO (all-LDR/UI)' <<<"$out"; then
+        cls=mono
+    else
+        cls=sheared   # the regression this split exists to prevent
+    fi
+    grep -q 'fb  rp #1:.*MASKED' <<<"$out" && fb=masked || fb=mono
+    # A pass classified masked whose framebuffer is not is a fallback wearing a
+    # disguise, so the two signals are asserted together rather than either
+    # one alone.
+    if [[ "$cls" == "$want" && "$fb" == "$want" ]] && ! grep -q FALLBACK <<<"$out"; then
+        printf 'ok   %-38s rp=%s fb=%s\n' "$label" "$cls" "$fb"
+    else
+        printf 'FAIL %-38s want %s, got rp=%s fb=%s%s\n' "$label" "$want" \
+            "$cls" "$fb" "$(grep -q FALLBACK <<<"$out" && echo ' (FALLBACK!)')"
+        fails=$((fails + 1))
+    fi
+}
+
+mask_case "tonemap masks when SRGB"      masked "X4VR_TEST_OUT_SRGB=1" "X4VR_MASK_TONEMAP=1"
+mask_case "...but not without the knob"  mono   "X4VR_TEST_OUT_SRGB=1"
+mask_case "...and not for UNORM LDR"     mono   "X4VR_MASK_TONEMAP=1"
+mask_case "LDR pass unmasked by default" mono
+
 echo
 if (( fails )); then echo "$fails case(s) failed"; exit 1; fi
 echo "all cases passed"

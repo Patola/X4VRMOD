@@ -370,7 +370,16 @@ int main(int argc, char **argv) {
     // unmasked -- exactly X4's shape, where the per-eye chain is consumed by
     // passes that are not themselves per-eye. Whatever comes out is a direct
     // readout of which layer the descriptor ended up naming.
-    const VkFormat OFMT = VK_FORMAT_R8G8B8A8_UNORM;
+    //
+    // X4VR_TEST_OUT_SRGB switches this target to B8G8R8A8_SRGB, which is how
+    // the layer tells X4's tonemap (#103, written by rp #40/#52) apart from
+    // the UNORM blit chain that follows it. Same pass, same shader, one format
+    // changed -- so a case that flips only this knob isolates the masking
+    // predicate from everything else.
+    const char *srgb_env = getenv("X4VR_TEST_OUT_SRGB");
+    const bool out_srgb = srgb_env && *srgb_env && *srgb_env != '0';
+    const VkFormat OFMT =
+        out_srgb ? VK_FORMAT_B8G8R8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
     const VkDeviceSize OBYTES = (VkDeviceSize)W * H * 4;
     VkImageCreateInfo oci = imgci;
     oci.format = OFMT;

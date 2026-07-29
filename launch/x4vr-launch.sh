@@ -83,6 +83,18 @@
 #                         path, with X4VR_IPD / X4VR_PROJ_SX / X4VR_PROJ_NEAR.
 #                         Needs X4VR_MV=1: without a view mask there is only
 #                         ever view 0, and the result is the left eye twice.
+#   X4VR_MASK_TONEMAP=1   mask the tonemap resolve (rp #40/#52 -> #103) so it
+#                         renders into both array layers. Keyed on the SRGB
+#                         attachment format, which is what separates the
+#                         tonemap from the UNORM blit chain that follows it.
+#                         Masking is now a separate question from shearing:
+#                         this pass draws a fullscreen triangle, so it must
+#                         NOT get K, and it still needs both layers.
+#                         Alone this changes nothing on screen -- the chain
+#                         reading #103 is still mono. What it does change is
+#                         that #103 starts appearing in X4VR_MV_PROBE, where
+#                         it should read IDENTICAL: the same picture drawn
+#                         twice, which is correct until the shader is patched.
 #   X4VR_SBS_LAYERS=2     give the image X4 renders into a second array layer.
 #   X4VR_SBS_RIGHT_LAYER=1
 #                         take the right half of the composite from that

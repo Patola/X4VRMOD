@@ -525,6 +525,25 @@ inline bool is_ldr_format(VkFormat f) {
     }
 }
 
+// The tonemap resolve, told apart from the blit chain by format alone.
+//
+// The LDR domain is not one thing. X4's tonemap writes #103 in
+// B8G8R8A8_SRGB; everything downstream of it -- the UI passes and the final
+// blit into what X4 believes is the swapchain -- is B8G8R8A8_UNORM. In a full
+// inventory the entire MONO set is 10 depth-only shadow cascades, 7 passes at
+// UNORM, and exactly 2 at SRGB: rp #40 and rp #52, both writing #103. SRGB
+// appears nowhere else on the mono side, so keying on it cannot reach the
+// blit chain, whose attachment is the presented image and genuinely cannot
+// take a second array layer.
+//
+// This is a *masking* question, not a shear one -- see split_note in
+// pass_is_per_eye. Do not fold these formats into is_ldr_format to get the
+// same effect: that would also send the tonemap down the sheared path and
+// start applying K to a fullscreen triangle.
+inline bool is_srgb_ldr_format(VkFormat f) {
+    return f == VK_FORMAT_B8G8R8A8_SRGB || f == VK_FORMAT_R8G8B8A8_SRGB;
+}
+
 // Must this (render pass, subpass) use the unpatched modules?
 bool needs_original(VkRenderPass rp, uint32_t subpass) {
     std::lock_guard<std::mutex> lock(g_variants.mu);
@@ -967,6 +986,18 @@ const bool g_mv_inventory = [] {
 }();
 uint32_t g_rp_serial = 0;
 
+// Mask the tonemap resolve so it renders into both layers of #103.
+//
+// Off by default: it is the first change that makes a pass outside the HDR
+// domain replicate, and it costs a second full-resolution fullscreen pass. On
+// its own it changes nothing visible -- the chain that reads #103 is still
+// mono -- so the knob exists to make the step measurable in isolation rather
+// than to be left on.
+const bool g_mask_tonemap = [] {
+    const char *e = getenv("X4VR_MASK_TONEMAP");
+    return e && *e && *e != '0';
+}();
+
 // Classify each subpass as "must not be sheared":
 //   * no colour attachments        -> shadow cascade (light space)
 //   * all colour attachments LDR   -> UI / final blit (screen space)
@@ -1014,12 +1045,46 @@ std::vector<bool> classify_unsheared(const CreateInfo *ci) {
 // and 4096x1 is only visible on the framebuffer). Harmless while both eyes
 // match; must be fixed before K differs. Recorded in the test plan under
 // "what these gates cannot catch".
+//
+// split_note: this used to be exactly the inverse of classify_unsheared, and
+// the comment above said so as if the two questions were one. They are not.
+// classify_unsheared answers "does K apply to this pass's vertex shaders?";
+// this answers "does this pass render into both layers?". Stage 1 could
+// conflate them because no pass needed different answers. The tonemap is the
+// first that does: it is a fullscreen triangle, so K must NOT be applied to
+// it -- shearing a fullscreen triangle is meaningless -- but it must be
+// masked, or there is no second layer of #103 for a per-eye tonemap to write.
+// Hence one predicate for shear, one for masking, no longer inverses.
+template <typename CreateInfo, typename Subpass>
+bool subpass_is_srgb_resolve(const CreateInfo *ci, const Subpass &sp) {
+    if (sp.colorAttachmentCount != 1)
+        return false;
+    const uint32_t a = sp.pColorAttachments[0].attachment;
+    if (a == VK_ATTACHMENT_UNUSED || a >= ci->attachmentCount)
+        return false;
+    return is_srgb_ldr_format(ci->pAttachments[a].format);
+}
+
+// Does this subpass render into both eyes? Kept per-subpass so the inventory
+// log can report the shear and mask verdicts separately -- a pass that reads
+// MONO but is masked anyway is precisely the state that would be misread if
+// only one verdict were printed.
+template <typename CreateInfo>
+std::vector<bool> classify_per_eye(const CreateInfo *ci) {
+    const std::vector<bool> unsheared = classify_unsheared(ci);
+    std::vector<bool> per_eye(ci->subpassCount, false);
+    for (uint32_t i = 0; i < ci->subpassCount; i++)
+        per_eye[i] = !unsheared[i] ||
+                     (g_mask_tonemap && subpass_is_srgb_resolve(ci, ci->pSubpasses[i]));
+    return per_eye;
+}
+
 template <typename CreateInfo>
 bool pass_is_per_eye(const CreateInfo *ci) {
     if (!g_mv || !g_multiview_supported)
         return false;
-    for (bool un : classify_unsheared(ci))
-        if (!un)
+    for (bool pe : classify_per_eye(ci))
+        if (pe)
             return true;
     return false;
 }
@@ -1027,6 +1092,7 @@ bool pass_is_per_eye(const CreateInfo *ci) {
 template <typename CreateInfo>
 void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
     std::vector<bool> unsheared = classify_unsheared(ci);
+    const std::vector<bool> per_eye = classify_per_eye(ci);
 
     std::lock_guard<std::mutex> lock(g_variants.mu);
     if (g_mv_inventory && g_active) {
@@ -1060,9 +1126,16 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
             const char *why = sp.colorAttachmentCount == 0 ? "depth-only/shadow"
                               : unsheared[i]               ? "all-LDR/UI"
                                                            : "world";
-            X4VR_LOG("rp #%u.%u: %u colour [%s]%s -> %s (%s)", serial, i,
+            // The MONO/STEREO verdict is about K. Since the split it no longer
+            // implies the masking decision, so a pass that takes no shear but
+            // does replicate has to say so on its own line -- otherwise the
+            // inventory reports "MONO" for a pass rendering into both layers,
+            // which is the kind of quietly-wrong instrument this file keeps
+            // having to correct.
+            X4VR_LOG("rp #%u.%u: %u colour [%s]%s -> %s (%s)%s", serial, i,
                      sp.colorAttachmentCount, fmts, dep,
-                     unsheared[i] ? "MONO" : "STEREO", why);
+                     unsheared[i] ? "MONO" : "STEREO", why,
+                     (unsheared[i] && per_eye[i]) ? " +MASKED" : "");
         }
     }
 
