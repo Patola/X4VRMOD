@@ -139,6 +139,30 @@ SHIFTED="1,0,0,0, 0,1,0,0, 0,0,1,0, 1.0,0,0,1"
 # hence the _UI knobs. That is also why the UI right-eye override exists at
 # all: in the game the UI stays mono deliberately.
 
+# The MONO patch, which stage 2 restructured and nothing was covering.
+#
+# Phase 3b and 4a both rest on the single-matrix path, and it is tagged and
+# proven -- but proven by live runs, not by anything that runs in a second.
+# When patch_vertex_clip grew the per-view branch, every case in this file
+# still passed while setting no clip matrix at all, so the mono path went
+# through a rewrite untested.
+#
+# A translation of 10 in clip x puts the full-screen triangle entirely
+# outside [-1,1], so a working patch draws NOTHING. That is the point: a
+# patch that silently did nothing would leave the triangle covering the
+# screen and the case would fail. Asserting "still renders" could not tell
+# those apart.
+OFFSCREEN="1,0,0,0, 0,1,0,0, 0,0,1,0, 10.0,0,0,1"
+run_case "mono patch applies (draws nothing)" 2 0 0 \
+    "VK_ADD_LAYER_PATH=$BUILD/layer" "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    "X4VR_MV=1" "X4VR_CLIP_K_UI=$OFFSCREEN"
+
+# And the same matrix left in place must still reach both views identically,
+# so the mono path cannot regress into an accidental per-view one.
+run_case "mono patch is view-independent" 2 1 1 \
+    "VK_ADD_LAYER_PATH=$BUILD/layer" "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    "X4VR_MV=1" "X4VR_CLIP_K_UI=$ID"
+
 # Must-pass: same matrix both eyes. Proves the patched module still renders,
 # that gl_ViewIndex is readable, and that reading it changes nothing when the
 # two matrices agree. A patch that corrupted the module fails here.
