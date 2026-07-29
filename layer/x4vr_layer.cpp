@@ -3245,6 +3245,20 @@ void probe_collect(DeviceData *d, VkQueue queue) {
     // One counter each settles it. Guessing between them is what the last
     // several runs did.
     size_t nz0 = 0, nz1 = 0, missing = 0, changed = 0, extra = 0;
+    // Is the layer one texel repeated? All-zero is the special case that was
+    // already caught; every *other* constant clear was not, and read as
+    // content instead.
+    //
+    // #101 cost an investigation to this. Three of its four agreeing captures
+    // were the whole 1408x1408 R8_UINT image filled with byte 0x10 -- a
+    // cleared mask -- but because the test was "is any byte non-zero", they
+    // counted as real content whose two layers happened to match, and the
+    // image read as mysteriously intermittent. Two layers that were merely
+    // cleared to the same value agree trivially, and taking that as evidence
+    // of mono behaviour is exactly how a mono target passes for a stereo one.
+    // The verdict this instrument exists to give is about to gate the tonemap
+    // change, so it has to be able to say "nothing was in here".
+    bool u0 = true, u1 = true;
     static const uint8_t zero[16] = {0};
     for (size_t t = 0; t * bpp < n; t++) {
         const bool a = memcmp(l0 + t * bpp, zero, bpp) != 0;
@@ -3253,6 +3267,10 @@ void probe_collect(DeviceData *d, VkQueue queue) {
             nz0++;
         if (b)
             nz1++;
+        if (u0 && memcmp(l0 + t * bpp, l0, bpp) != 0)
+            u0 = false;
+        if (u1 && memcmp(l1 + t * bpp, l1, bpp) != 0)
+            u1 = false;
         if (memcmp(l0 + t * bpp, l1 + t * bpp, bpp) != 0) {
             if (first == SIZE_MAX)
                 first = t;
@@ -3266,20 +3284,38 @@ void probe_collect(DeviceData *d, VkQueue queue) {
         }
     }
     const size_t total = n / bpp;
+    // "(all zero)" is kept verbatim for the case it always named, so every
+    // existing log, doc reference and test grep still reads the same.
+    char ann0[64], ann1[64];
+    auto annotate = [&](char *out, size_t cap, const uint8_t *p, bool z,
+                        bool u) {
+        if (z) {
+            snprintf(out, cap, " (all zero)");
+            return;
+        }
+        if (!u || !total) {
+            out[0] = 0;
+            return;
+        }
+        int k = snprintf(out, cap, " (uniform 0x");
+        for (uint32_t b = 0; b < bpp && k > 0 && (size_t)k + 2 < cap; b++)
+            k += snprintf(out + k, cap - k, "%02x", p[b]);
+        snprintf(out + k, cap - k, ")");
+    };
+    annotate(ann0, sizeof ann0, l0, z0, u0);
+    annotate(ann1, sizeof ann1, l1, z1, u1);
     if (h0 == h1) {
         X4VR_LOG("mv probe: img #%u %ux%u  layer0=%016llx%s  "
                  "layer1=%016llx%s  IDENTICAL",
                  g_probe.serial, g_probe.w, g_probe.h, (unsigned long long)h0,
-                 z0 ? " (all zero)" : "", (unsigned long long)h1,
-                 z1 ? " (all zero)" : "");
+                 ann0, (unsigned long long)h1, ann1);
     } else {
         X4VR_LOG("mv probe: img #%u %ux%u  layer0=%016llx%s  "
                  "layer1=%016llx%s  DIFFER %zu/%zu (%.2f%%)  "
                  "non-empty %zu/%zu  missing=%zu changed=%zu extra=%zu  "
                  "first at (%u,%u)",
                  g_probe.serial, g_probe.w, g_probe.h, (unsigned long long)h0,
-                 z0 ? " (all zero)" : "", (unsigned long long)h1,
-                 z1 ? " (all zero)" : "", dtex, total,
+                 ann0, (unsigned long long)h1, ann1, dtex, total,
                  total ? 100.0 * (double)dtex / (double)total : 0.0, nz0, nz1,
                  missing, changed, extra,
                  g_probe.w ? (uint32_t)(first % g_probe.w) : 0,

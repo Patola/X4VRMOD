@@ -177,6 +177,58 @@ run_case "stereo patch, same K both eyes" 2 1 1 \
 probe_case "stereo patch, per-eye K differs" DIFFER \
     "X4VR_CLIP_K_UI=$ID" "X4VR_CLIP_K_UI_RIGHT=$SHIFTED"
 
+
+# The uniformity annotation, which every probe verdict now leans on.
+#
+# "Both layers agree" is evidence of nothing unless the layers held something.
+# #101 cost an investigation to exactly this: three of its four agreeing
+# captures were the image cleared to byte 0x10, and because the only test was
+# "is any byte non-zero", a cleared mask counted as content whose two layers
+# happened to match -- so the image read as mysteriously intermittent while
+# behaving perfectly normally.
+#
+# The third case is the one with teeth. The first two would still pass if the
+# probe annotated *everything* as uniform, which is the failure that would make
+# every real capture look trivial and every mono target look fine.
+ann_of() { # $1 output, $2 layer index -> zero | uniform | content
+    local seg
+    seg=$(grep -o "layer$2=[0-9a-f]*\( ([^)]*)\)\?" <<<"$1" | head -1)
+    case "$seg" in
+        *"(all zero)"*) echo zero ;;
+        *"(uniform "*)  echo uniform ;;
+        *)              echo content ;;
+    esac
+}
+
+ann_case() {
+    local label="$1" want0="$2" want1="$3"; shift 3
+    local out g0 g1
+    out=$(env "$@" X4VR_LOG= X4VR_MV=1 X4VR_MV_PROBE=1 \
+        "VK_ADD_LAYER_PATH=$BUILD/layer" \
+        "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+        "$BIN" "$VS" "$FS" "$SF" 2>&1)
+    g0=$(ann_of "$out" 0); g1=$(ann_of "$out" 1)
+    if [[ "$g0" == "$want0" && "$g1" == "$want1" ]]; then
+        printf 'ok   %-38s layer0=%s layer1=%s\n' "$label" "$g0" "$g1"
+    else
+        printf 'FAIL %-38s want layer0=%s layer1=%s, got layer0=%s layer1=%s\n' \
+            "$label" "$want0" "$want1" "$g0" "$g1"
+        fails=$((fails + 1))
+    fi
+}
+
+# A solid fullscreen triangle covers every texel with one value, so a probe
+# that cannot say "uniform" would call this content that agrees.
+ann_case "uniform layer is named uniform" uniform uniform
+
+# All-zero keeps the name it always had, so existing logs and doc references
+# still read the same.
+ann_case "all-zero keeps its own name" zero uniform "X4VR_MV_MASK=2"
+
+# And the negative: two distinct values in layer 1 must NOT be annotated.
+ann_case "real content is not called uniform" uniform content \
+    "X4VR_CLIP_K_UI=$ID" "X4VR_CLIP_K_UI_RIGHT=$SHIFTED"
+
 echo
 if (( fails )); then echo "$fails case(s) failed"; exit 1; fi
 echo "all cases passed"
