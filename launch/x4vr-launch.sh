@@ -76,10 +76,6 @@
 #                         known rather than guessed. Answers "are the two
 #                         layers the same bytes" as a number instead of as an
 #                         inference from what appeared on screen.
-#   X4VR_MV_REDIRECT_INPUT=1
-#                         also redirect subpass input attachments (default
-#                         off; they are view-indexed and substituting a
-#                         single-layer view contradicts that).
 #   X4VR_MULTIVIEW=0      stop the layer enabling the multiview device feature
 #                         (default: enabled). X4 declares Vulkan 1.2, where
 #                         multiview is core, but leaves the feature off; the

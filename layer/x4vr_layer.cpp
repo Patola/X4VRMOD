@@ -193,12 +193,6 @@ const uint32_t g_mv_present_layer = [] {
     const char *e = getenv("X4VR_MV_PRESENT_LAYER");
     return e ? (uint32_t)atoi(e) : 0u;
 }();
-// Whether the redirect also rewrites subpass input attachments. Off by
-// default; see the reasoning in mv_redirect_writes().
-const bool g_mv_redirect_input = [] {
-    const char *e = getenv("X4VR_MV_REDIRECT_INPUT");
-    return e && *e && *e != '0';
-}();
 
 struct MvStats {
     uint32_t doubled = 0;     // images given a second array layer
@@ -243,7 +237,10 @@ struct MvStats {
     // redirect had been answering with a view onto a different image, which
     // makes every black frame it reported unreliable rather than informative.
     uint32_t redirect_stale = 0;
-    uint32_t input_skipped = 0; // input-attachment reads left on layer 0
+    // Input-attachment descriptors repointed at the two-layer array view
+    // that the framebuffer actually uses. Non-zero is required for a
+    // view-masked deferred pass to light view 1 at all.
+    uint32_t input_fixed = 0;
     uint32_t reported = 0;
 } g_mv_stats;
 std::mutex g_mv_mu;
@@ -704,34 +701,50 @@ void mv_redirect_writes(DeviceData *d, VkDevice device, uint32_t writeCount,
         const VkWriteDescriptorSet &w = writes[i];
         if (!w.pImageInfo || !w.descriptorCount)
             continue;
-        // Input attachments are excluded by default, and the reason is a
-        // deduction rather than a hunch.
+        // A subpass input must name the same subresource as the framebuffer
+        // attachment it reads. We replaced those attachments with two-layer
+        // array views and left X4's descriptors pointing at its own
+        // single-layer views, so in a view-masked pass the two no longer
+        // agree: view 1 is meant to read layer 1 of the attachment, and the
+        // descriptor describes an image that only has layer 0.
         //
-        // Under viewMask 0x3 with one eye matrix, layer 0 and layer 1 hold the
-        // same picture. Every read therefore sees valid content whether it is
-        // redirected or not, so *no* explanation in terms of image content can
-        // produce a black frame. Only the binding can be at fault: some
-        // substituted view must be wrong for the way it is used.
+        // This is what left layer 1 rasterised but unlit. X4's deferred
+        // lighting passes -- rp 30/31/32/64, six attachments, one colour and
+        // one depth -- read the G-buffer through the other four as subpass
+        // inputs, the S_subpassInput_AUTOMS its own validation errors name.
+        // Geometry lands in view 1 because that is ordinary rasterisation;
+        // the light contribution does not, because subpassLoad reads through
+        // a descriptor that cannot see the layer being rendered.
         //
-        // Of the three types we substitute, input attachments are the one with
-        // extra rules under multiview. A subpass input is view-indexed -- view
-        // N reads layer N of the framebuffer attachment, which is the
-        // two-layer array view we put there -- and swapping the descriptor for
-        // a single-layer 2D view onto layer 1 contradicts that. X4 provably
-        // uses subpass inputs: its own validation errors name
-        // S_subpassInput_AUTOMS.
-        //
-        // X4VR_MV_REDIRECT_INPUT=1 puts them back, so the exclusion is a
-        // measurement and not an assumption.
-        if (w.descriptorType == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT &&
-            !g_mv_redirect_input) {
-            std::lock_guard<std::mutex> lock(g_mv_mu);
-            g_mv_stats.input_skipped += w.descriptorCount;
+        // Substituting our array view is the fix, and it is not part of gate
+        // 2: it has to happen whenever multiview is on, redirect or not.
+        if (w.descriptorType == VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT) {
+            std::vector<VkDescriptorImageInfo> infos(
+                w.pImageInfo, w.pImageInfo + w.descriptorCount);
+            bool fixed = false;
+            {
+                std::lock_guard<std::mutex> lock(g_img_mu);
+                for (uint32_t j = 0; j < w.descriptorCount; j++) {
+                    auto it = g_array_views.find(infos[j].imageView);
+                    if (it == g_array_views.end())
+                        continue;
+                    infos[j].imageView = it->second;
+                    fixed = true;
+                }
+            }
+            if (fixed) {
+                pool[i] = std::move(infos);
+                out[i].pImageInfo = pool[i].data();
+                std::lock_guard<std::mutex> lock(g_mv_mu);
+                g_mv_stats.input_fixed += w.descriptorCount;
+            }
             continue;
         }
+        // Everything below is gate 2's instrument rather than a fix.
+        if (!g_mv_redirect)
+            continue;
         if (w.descriptorType != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
-            w.descriptorType != VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE &&
-            w.descriptorType != VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT)
+            w.descriptorType != VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
             continue;
         bool touched = false;
         std::vector<VkDescriptorImageInfo> infos(
@@ -812,7 +825,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSets(
     }
     std::vector<VkWriteDescriptorSet> redirected;
     std::vector<std::vector<VkDescriptorImageInfo>> pool;
-    if (g_mv && g_active && g_mv_redirect) {
+    if (g_mv && g_active) {
         mv_redirect_writes(d, device, writeCount, writes, redirected, pool);
         d->UpdateDescriptorSets(device, writeCount, redirected.data(),
                                 copyCount, copies);
@@ -1113,11 +1126,11 @@ void mv_report(const char *when) {
     // barrier ever moved it to.
     X4VR_LOG("mv %s: binds ok=%u MISMATCHED=%u | image barriers narrow=%u "
              "wide=%u | per-eye images written layer-0-only=%u | "
-             "stale redirect entries=%u | input attachments left alone=%u",
+             "stale redirect entries=%u | input attachments fixed=%u",
              when, g_mv_stats.bind_ok, g_mv_stats.bind_mismatch,
              g_mv_stats.barrier_narrow, g_mv_stats.barrier_wide,
              g_mv_stats.layer0_only, g_mv_stats.redirect_stale,
-             g_mv_stats.input_skipped);
+             g_mv_stats.input_fixed);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass(
