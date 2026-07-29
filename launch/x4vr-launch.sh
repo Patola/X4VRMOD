@@ -95,6 +95,18 @@
 #                         that #103 starts appearing in X4VR_MV_PROBE, where
 #                         it should read IDENTICAL: the same picture drawn
 #                         twice, which is correct until the shader is patched.
+#   X4VR_DUMP_SHADERS=<dir>
+#                         write every module X4 creates as <dir>/mod-NNNN.spv.
+#                         On its own that is ~1300 files and no help; the point
+#                         is the line it goes with, which only X4VR_MV_INVENTORY
+#                         needs to be on for:
+#                           tonemap rp #40: frag module #NNN samples set A
+#                                           binding B, set C binding D
+#                         printed for each pipeline built against the masked
+#                         SRGB pass, i.e. the tonemap and nothing else. That
+#                         names the two serials worth disassembling, and flags
+#                         a texture that is already an array or is a depth
+#                         sampler -- the two shapes the fragment patch refuses.
 #   X4VR_SBS_LAYERS=2     give the image X4 renders into a second array layer.
 #   X4VR_SBS_RIGHT_LAYER=1
 #                         take the right half of the composite from that

@@ -17,6 +17,7 @@ from a single draw, up to the point where sampling takes over.
 | `stage1-complete` | …and a frame built entirely from layer 1 is correct end to end |
 | `stage2-per-eye-k` | Per-eye `K` via `gl_ViewIndex` — one draw, two different eyes |
 | `stage2-tonemap-masked` | The tonemap resolve replicates into both layers of `#103` |
+| `stage2-frag-patch` | A patched sampler reads layer N in view N — proven on the GPU, offline |
 
 **The frame is stereo up to the first sampled read, and mono after it.** That
 is the entire remaining problem, and it is measured rather than assumed — the
@@ -47,19 +48,36 @@ The last row is the remaining frontier. Everything that "replicates but is
 mono" is fixed by a fragment patch; the format-44 chain needs masking first,
 and that is where `SbsCompositor`'s two-layer eye image finally matters.
 
-### Next step: patch the tonemap fragment shader (task #9)
+### Next step: find the tonemap's sampler slot (task #10)
 
-`#103` now renders into both layers and writes the **same picture** into each,
-because multiview view-indexes subpass inputs automatically but **never
-samplers**. The fragment shader bound to rp #40 / rp #52 samples `#95` through
-a descriptor, so both views read layer 0.
+The fragment patch itself is **built and proven offline** —
+`patch_fragment_view_layer` in `common/x4vr_spirv.hpp`, tagged
+`stage2-frag-patch`. What is missing is one fact about X4: *which descriptor
+slot the tonemap reads `#95` through*. The patch has to be told a
+(set, binding), and no one has ever read that shader.
 
-Work, in `common/x4vr_spirv.hpp` beside the proven `patch_vertex_clip`:
-promote the doubled source to an array texture (`OpTypeImage Arrayed 0 → 1`)
-and give the sample coordinate a third component from `gl_ViewIndex`.
+So the next run is a measurement, not a patch. With `X4VR_MV_INVENTORY=1` the
+layer now prints, for each pipeline built against the masked SRGB pass:
 
-**Pass condition:** `#103` flips from all-IDENTICAL to all-DIFFER. Still
-nothing on screen — that waits for the format-44 chain.
+    tonemap rp #40: frag module #NNN samples set A binding B, set C binding D
+
+and `X4VR_DUMP_SHADERS=<dir>` writes the modules so the named one can be
+disassembled. The list also flags the two shapes the patch refuses — a texture
+that is already an array, or a depth sampler — so a shader it cannot take
+shows up as a log line rather than as a live run where nothing changed.
+
+**After that**, the wiring: an arrayed twin of the tonemap's fragment module
+chosen at pipeline creation (the mechanism `g_variants` already uses for the
+shadow exclusion), plus a 2D_ARRAY view substituted into that descriptor. The
+shader and the view are a **pair** — a `sampler2DArray` bound to a 2D view is
+a validation error, and the patch alone changes nothing because a 2D view has
+no layer 1 to reach. Scoping that substitution is the open design question:
+tracking `vkAllocateDescriptorSets` gives set → layout, and the pipeline gives
+layout → "this is the tonemap's", which is precise enough not to hand an array
+view to a shader that declared `sampler2D`.
+
+**Pass condition, when it gets there:** `#103` flips from all-IDENTICAL to
+all-DIFFER. Still nothing on screen — that waits for the format-44 chain.
 
 ### Why patching is the chosen mechanism
 
@@ -127,6 +145,10 @@ which is what every take from sixteen on has used.
                               this one measured the monitor, not the renderer
     X4VR_TEST_OUT_SRGB=1      test binary only: make its LDR second pass SRGB,
                               which is X4's tonemap in miniature
+    X4VR_TEST_ARRAY_SAMPLER=1 test binary only: bind a 2D_ARRAY view instead of
+                              a 2D one — goes with a patched fragment shader
+    X4VR_DUMP_SHADERS=<dir>   write every module X4 creates as <dir>/mod-NNNN.spv;
+                              the tonemap log names which serials matter
 
 ### Deliberately still open
 
@@ -2009,3 +2031,120 @@ from "not even replicating" to "replicating but mono", which is the state the
 shader patch knows how to finish.
 
 Tagged `stage2-tonemap-masked`.
+
+---
+
+## The fragment patch, built and proven offline
+
+`patch_fragment_view_layer` in `common/x4vr_spirv.hpp`, beside
+`patch_vertex_clip`. What it does to one texture:
+
+    uniform sampler2D src       ->  uniform sampler2DArray src
+    texture(src, uv)            ->  texture(src, vec3(uv, gl_ViewIndex))
+    texelFetch(src, xy, 0)      ->  texelFetch(src, ivec3(xy, gl_ViewIndex), 0)
+
+Both read forms are handled, because both appear: `texture` becomes
+`OpImageSampleImplicitLod` with float coordinates, `texelFetch` becomes
+`OpImage` + `OpImageFetch` with integer ones. A patch that handled one and
+walked past the other would have looked correct on half of X4's shaders.
+
+### Two decisions where the cheap version is wrong
+
+**The image type is rebuilt, not edited.** Flipping `Arrayed` on the existing
+`OpTypeImage` is a single word — and glslc gives every `sampler2D` in a module
+the *same type id*, so that word promotes every other texture in the shader to
+an array as well. None of those were doubled. The patch builds a private type
+reachable only from the variable it was asked about.
+
+**The variable is relocated, not retyped in place.** This was found by reading
+the disassembly rather than by reasoning: in `tests/sample.frag.spv`, glslc
+emits
+
+    %src = OpVariable %_ptr_UniformConstant_11 UniformConstant
+    %int = OpTypeInt 32 1
+    %v2int = OpTypeVector %int 2
+
+— the variable comes **before** the integer types the patch needs for an
+`ivec3` coordinate. Declarations parked in front of it would reference types
+that do not exist yet. So the variable moves to the end of the globals section
+with its new type, which is also where `patch_vertex_clip` already puts things.
+
+### What the offline gate measures
+
+`tests/run-multiview-render.sh` grew a GPU pair. Same frame, same source, only
+the shader and the bound view type differ:
+
+| Case | `OUT1_NONZERO` | `OUT_DIFFER` |
+|---|---|---|
+| patched shader + 2D_ARRAY view | **1** | **1** |
+| unpatched + 2D view | 0 | 0 |
+
+The source's two layers are separated with `X4VR_MV_MASK=2` — only layer 1 is
+ever drawn — rather than with the vertex patch. That matters: a sheared vertex
+shader would move the *second* pass's own triangle and make the output layers
+differ for a reason that has nothing to do with sampling, and the control would
+stop controlling anything.
+
+The second row is the asymmetry stated as a measurement instead of a claim. The
+draw replicated (`LAYER1_DRAWN=1`) and the sample did not follow it.
+
+A third case runs the patch with both source layers identical and requires
+`OUT_DIFFER=0`, so a patch that offset the coordinate or returned the view
+index itself cannot pass the first case for the wrong reason.
+
+### The shader and the view are a pair
+
+`sampler2DArray` bound to a 2D view is a validation error, and the patch on its
+own changes nothing because a 2D view has no layer 1 to reach. Neither half is
+useful alone. This is the coupling the live wiring still has to solve, and the
+offline test forced it into the open by needing an explicit `aview`.
+
+### What mutation testing said, which is not what it looked like
+
+Four mutations, each reverted after measuring:
+
+* **Third coordinate is a constant 0** — a perfectly valid module that samples
+  a fixed layer, i.e. `gl_ViewIndex` never reaching the sample, which is the
+  failure this mechanism actually risks. The must-pass case fails with
+  *exactly the unpatched control's answer*. This is the one carrying the
+  weight.
+* **Flip `Arrayed` on the shared type** — caught only by the two-texture
+  shader. Every GPU case still passes, because `sample.frag` has one texture.
+  Without that shader the bug ships.
+* **Accept depth samplers** — caught nothing. The shadow module is refused
+  independently by the type guard, the unknown-use rule *and* the never-read
+  rule; deleting all three still refuses it, because GLSL cannot express a
+  shadow-sampler read that is not a `Dref` op. The case asserts the outcome and
+  justifies no single guard — recorded so it is not mistaken for coverage.
+* **Wave through unknown uses** — caught nothing *until the shader was fixed*.
+  `sample_size.frag` originally only called `textureSize`, so it was refused as
+  "declared but never read" and the case passed with the rule deleted. Giving
+  it a real sample as well is what made it depend on the rule it is named
+  after.
+
+Two of four assertions were weaker than they read. Both were strengthened; the
+third was documented as over-determined rather than dressed up.
+
+### Next: which slot does the tonemap sample?
+
+The patch takes a (set, binding). Nobody has read X4's tonemap shader, and
+inventing that number is how the last two wrong turns started. So the layer now
+measures it: `record_render_pass` remembers the passes masked *because* of the
+SRGB carve-out — rp #40 and #52, and nothing else — and pipelines built against
+them print their fragment module's sampled slots.
+
+Committed prediction, before the run:
+
+* **Two** `tonemap rp #…` lines, one for rp #40 and one for rp #52, naming the
+  **same** module serial. They are the same pass created twice.
+* The module samples **more than one** texture. A tonemap normally wants the
+  HDR colour plus at least a bloom target and often an exposure/lookup buffer,
+  so a single-texture answer would mean the pass is not what it is assumed to
+  be.
+* **None** flagged `(already array)` or `(DEPTH)`.
+* The HDR source is *not* identifiable from the log alone — the slot list gives
+  no image identity, so the dump plus a descriptor-side join will be needed to
+  say which binding is `#95`.
+
+If the third point is wrong the patch will refuse the shader outright, and that
+is worth knowing before any wiring is written rather than after.
