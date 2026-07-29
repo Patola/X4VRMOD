@@ -113,6 +113,10 @@ struct DeviceData {
     PFN_vkGetBufferMemoryRequirements GetBufferMemoryRequirements = nullptr;
     PFN_vkQueueWaitIdle QueueWaitIdle = nullptr;
     VkPhysicalDeviceMemoryProperties memprops{};
+    // Kept for the same reason as memprops: the physical device is in scope
+    // only during creation, and the swapchain path needs to ask it which
+    // present modes the surface supports.
+    VkPhysicalDevice phys = VK_NULL_HANDLE;
 };
 
 std::mutex g_mu;
@@ -134,6 +138,18 @@ const bool g_sbs_enabled = [] {
 const bool g_sbs_split_render = [] {
     const char *e = getenv("X4VR_SBS_SPLIT");
     return !(e && *e && *e == '0');
+}();
+
+// Present mode override, for measurement only. -1 leaves X4's choice alone.
+// 0 = IMMEDIATE, 1 = MAILBOX, 2 = FIFO (X4's own, and the one to play in).
+//
+// Exists because the first attempt to cost stage 1 produced "59.4 fps" on
+// both sides of the comparison: X4 asks for FIFO, so the number measured the
+// monitor. An uncapped mode is the difference between a perf claim and a
+// restatement of the refresh rate.
+const int g_present_mode = [] {
+    const char *e = getenv("X4VR_PRESENT_MODE");
+    return e && *e ? (int)strtol(e, nullptr, 0) : -1;
 }();
 
 // Multiview: how the second eye is meant to arrive. Measured on X4 (app api
@@ -2231,6 +2247,52 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
                        ci->imageExtent.height == X4VR_SBS_HEIGHT;
     if (split)
         sbs_ci.imageExtent.width *= 2;
+    // X4 asks for FIFO, which pins the frame rate to the display and makes
+    // every perf number a statement about the monitor. Nothing can be A/B'd
+    // against a baseline that is also 59.4 fps, so allow the mode to be
+    // overridden for measurement runs -- never by default, because FIFO is
+    // the right mode to actually play in.
+    //
+    // Checked against the surface rather than assumed: IMMEDIATE is optional,
+    // and creating a swapchain with an unsupported mode is undefined rather
+    // than a clean failure we could fall back from.
+    if (g_present_mode >= 0 && g_active) {
+        VkPresentModeKHR want = (VkPresentModeKHR)g_present_mode;
+        bool supported = false;
+        if (d->phys != VK_NULL_HANDLE) {
+            VkInstance inst = VK_NULL_HANDLE;
+            PFN_vkGetInstanceProcAddr gipa = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(g_mu);
+                auto it = g_instances.find(dispatch_key(d->phys));
+                if (it != g_instances.end()) {
+                    inst = it->second.instance;
+                    gipa = it->second.gipa;
+                }
+            }
+            auto q = gipa ? (PFN_vkGetPhysicalDeviceSurfacePresentModesKHR)gipa(
+                                inst, "vkGetPhysicalDeviceSurfacePresentModesKHR")
+                          : nullptr;
+            uint32_t n = 0;
+            if (q && q(d->phys, ci->surface, &n, nullptr) == VK_SUCCESS && n) {
+                std::vector<VkPresentModeKHR> modes(n);
+                if (q(d->phys, ci->surface, &n, modes.data()) == VK_SUCCESS)
+                    supported = std::find(modes.begin(), modes.end(), want) !=
+                                modes.end();
+            }
+        }
+        if (supported) {
+            sbs_ci.presentMode = want;
+            X4VR_LOG("perf: present mode forced %d -> %d (measurement run; "
+                     "frame rate is no longer display-locked)",
+                     (int)ci->presentMode, (int)want);
+        } else {
+            X4VR_LOG("perf: present mode %d not supported by this surface — "
+                     "staying on %d, and any perf number from this run is "
+                     "capped by the display",
+                     (int)want, (int)ci->presentMode);
+        }
+    }
     bool sbs_usage = false;
     VkResult r = VK_ERROR_INITIALIZATION_FAILED;
     if (g_sbs_enabled && g_active) {
@@ -3631,6 +3693,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
         if (auto gpmp = (PFN_vkGetPhysicalDeviceMemoryProperties)gipa(
                 inst, "vkGetPhysicalDeviceMemoryProperties"))
             gpmp(phys, &d.memprops);
+        d.phys = phys;
     }
     // Core in 1.3; the KHR alias is what a 1.2 device exposes. Left null if
     // neither exists, and the matching hook is then never reachable, because

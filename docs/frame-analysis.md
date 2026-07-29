@@ -1290,8 +1290,32 @@ pull in per-eye images the cockpit never touches (`doubled` 89 → 91,
 
 *Not measured:* performance was reported as good, not instrumented. Stage 1
 doubles fragment shading by construction, so "good" here means "no visible
-regression at one-eye resolution", not a number. Real figures wait for
-`docs/perf.md` and a fixed benchmark path.
+regression at one-eye resolution", not a number.
+
+### Why there is still no stage-1 perf number
+
+The layer has had a frame-time histogram all along (`perf frame N: median …`),
+so the first attempt at costing stage 1 was just to read it back. It does not
+work, and the reason is worth recording because it invalidates every perf line
+in the log to date:
+
+    perf frame 2401: median 16.91 ms (59.1 fps) … worst 18.47
+    perf frame 3001: median 16.83 ms (59.4 fps) … worst 17.63
+
+That is the monitor, not the renderer. X4 asks for `FIFO`, so the frame rate is
+pinned to the display refresh and a stage-1 run and an `X4VR_MV=0` run both
+report ~59.4 fps whatever the GPU is actually doing. The histogram was never
+wrong; it was answering a different question than the one being asked of it.
+
+Added `X4VR_PRESENT_MODE=<n>` for measurement runs, checked against the
+surface's supported modes and logged either way — a run that silently stayed
+capped would produce a confident number about the refresh rate.
+
+Correcting an overstatement made when this gap was first raised: the argument
+for measuring *before* stage 2 was that the clean `X4VR_MV=0` baseline was
+about to disappear. It is not — `X4VR_MV=0` stays a supported configuration
+through stage 2 and beyond, so the A/B remains available later. The real
+blocker was never timing, it was the vsync cap, and that is now removable.
 
 ### State
 

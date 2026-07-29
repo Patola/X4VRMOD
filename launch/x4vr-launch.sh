@@ -76,6 +76,14 @@
 #                         known rather than guessed. Answers "are the two
 #                         layers the same bytes" as a number instead of as an
 #                         inference from what appeared on screen.
+#   X4VR_PRESENT_MODE=<n> override the swapchain present mode, for measurement
+#                         runs only (0=IMMEDIATE, 1=MAILBOX, 2=FIFO). X4 asks
+#                         for FIFO, so frame times are pinned to the display
+#                         and both sides of an A/B come back at the refresh
+#                         rate. Ignored if the surface does not support the
+#                         mode, and that is logged -- an uncapped run that
+#                         silently stayed capped would produce a perf claim
+#                         about the monitor.
 #   X4VR_MULTIVIEW=0      stop the layer enabling the multiview device feature
 #                         (default: enabled). X4 declares Vulkan 1.2, where
 #                         multiview is core, but leaves the feature off; the
