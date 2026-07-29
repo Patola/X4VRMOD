@@ -1357,6 +1357,49 @@ Note what makes this readable at all: `#95` has been `IDENTICAL` under exactly
 this instrument for two runs, with non-zero content. There is a measured
 baseline to invert, which is the thing take sixteen's numbers bought.
 
+**Result: the inversion is exact.**
+
+    stereo: ipd=0.0640 sx=0.8890 near=0.100 -> shear m8 L=0.28448 R=-0.28448
+    patched vertex shader #400 (world, per-view) [world=336 ui=64 stereo=336]
+    mv probe: img #95 ... DIFFER 1975540/1982464 (99.65%)
+
+`#95` differed on **every** non-empty capture (4 of 4) and agreed only when
+both layers were empty (3 of 3) — the precise mirror of take sixteen, where
+every non-empty capture agreed. 336 world shaders took the per-view patch; the
+64 UI modules stayed mono, as intended. The screen was unchanged, and the
+session covered cockpit, flight, leaving the seat, walking the ship interior
+and the map.
+
+### The probe also drew the map of where stereo stops
+
+Not something the run was designed to answer, and the more useful half of it.
+Counting only captures with content in them:
+
+| Image | Extent | Differ / non-empty |
+|---|---|---:|
+| #92, #95, #97, #98, #99 | 1408×1408 | **all** |
+| #101 | 1408×1408 | 3 / 7 |
+| #122, #123 | 1408×1408 | 0 |
+| #104, #105 | 352×352 | 0 |
+
+Every one of these is a masked pass's colour attachment — the probe covers
+nothing else. So the bottom four rows are passes that render into **both**
+layers and put the **same picture** in each. That is the sampler boundary,
+observed directly: the lit HDR chain is genuinely per-eye, and everything
+downstream of the first sampled read is masked-but-mono, exactly as the
+single-attachment analysis predicted.
+
+This hands the tonemap patch its target list without a further run. `#122`,
+`#123`, `#104` and `#105` are the passes whose input arrives through a
+`sampler2D` reading layer 0; they are what task 4 has to fix. `#101` differing
+on 3 of 7 is the one genuinely open question — worth understanding before
+patching it, not after.
+
+Recorded because the general point keeps recurring in this document: an
+instrument built to answer one question answered a harder one for free, and
+only because it reports *per image* rather than a single verdict per frame.
+The blank-corner version of this probe could not have produced this table.
+
 ### Take seventeen: the redirect run, and why the probe does not replace it
 
 Written before the run.
@@ -1460,8 +1503,10 @@ Still open from stage 1: the doubling overshoot (90 images, 565.6 MB, against
 ~18–21 and ~135 MB needed). Untouched deliberately, so a tightening regression
 cannot be confused with a stereo bug.
 
-Stage 2 is next, and it is the first change that makes the two layers *differ*
-on purpose: per-eye camera constants selected by `gl_ViewIndex`.
+Stage 2 is under way. Per-eye `K` via `gl_ViewIndex` is **done and verified
+live** (take eighteen): the lit HDR chain renders two genuinely different eyes
+from one draw. What remains is carrying that difference through the sampled
+part of the frame, which is where it currently stops.
 
 One piece of groundwork, not two. The exposure un-masking was checked first and
 is not needed (above). What remains is the UI: `SbsCompositor`'s eye image has
