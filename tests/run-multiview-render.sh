@@ -277,6 +277,135 @@ mask_case "...but not without the knob"  mono   "X4VR_TEST_OUT_SRGB=1"
 mask_case "...and not for UNORM LDR"     mono   "X4VR_MASK_TONEMAP=1"
 mask_case "LDR pass unmasked by default" mono
 
+
+# The fragment patch: the *sample* follows the view index.
+#
+# Everything above is about the write path. This is the read path, and it is a
+# separate mechanism because of one asymmetry: a masked pass view-indexes its
+# subpass inputs by itself, and never its samplers. A descriptor set is bound
+# once for the whole pass and has no per-view form, so both views read array
+# layer 0 and draw the same picture -- which is exactly what X4's tonemap does
+# to #103.
+#
+# The setup makes the source's two layers maximally distinguishable without
+# involving the vertex patch at all: X4VR_MV_MASK=2 draws only into layer 1, so
+# layer 0 is the black clear and layer 1 is the shader's red. Keeping the vertex
+# patch out of it matters -- a sheared vertex shader would move the second pass's
+# own triangle and make the two output layers differ for a reason that has
+# nothing to do with sampling, and the control case would stop controlling
+# anything.
+PATCHDIR="$(mktemp -d)"
+trap 'rm -rf "$PATCHDIR"' EXIT
+PATCHER="$BUILD/tests/x4vr_test_spirv_patch"
+
+frag_case() {
+    local label="$1" want1="$2" wantd="$3" shader="$4" arr="$5"; shift 5
+    local out g1 gd
+    out=$(env "$@" X4VR_LOG= X4VR_MV=1 X4VR_TEST_OUT_SRGB=1 \
+        X4VR_MASK_TONEMAP=1 "X4VR_TEST_ARRAY_SAMPLER=$arr" \
+        "VK_ADD_LAYER_PATH=$BUILD/layer" \
+        "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+        "$BIN" "$VS" "$FS" "$shader" 2>&1)
+    g1=$(sed -n 's/^OUT1_NONZERO=//p' <<<"$out")
+    gd=$(sed -n 's/^OUT_DIFFER=//p' <<<"$out")
+    if [[ "$g1" == "$want1" && "$gd" == "$wantd" ]]; then
+        printf 'ok   %-38s out1=%s differ=%s\n' "$label" "$g1" "$gd"
+    else
+        printf 'FAIL %-38s want out1=%s differ=%s, got out1=%s differ=%s\n' \
+            "$label" "$want1" "$wantd" "${g1:-?}" "${gd:-?}"
+        sed 's/^/       | /' <<<"$out" | grep -E '^\s+\| (OUT|LAYER|SAMPLED|FAIL)' | head -8
+        fails=$((fails + 1))
+    fi
+}
+
+if ! "$PATCHER" frag-view-layer "$SF" "$PATCHDIR/sample_arr.spv" 0 0 |
+        grep -q PATCHED=1; then
+    printf 'FAIL %-38s patcher refused the sample shader\n' "frag patch: setup"
+    fails=$((fails + 1))
+fi
+
+# Must-pass. Only layer 1 of the source was ever drawn, so a view that lands on
+# layer 1 comes back red and a view that lands on layer 0 comes back black.
+frag_case "frag patch: view 1 reads layer 1" 1 1 \
+    "$PATCHDIR/sample_arr.spv" 1 "X4VR_MV_MASK=2"
+
+# The control, and the fact it establishes: without the patch the very same
+# frame reads layer 0 in both views. This is the asymmetry stated as a
+# measurement rather than as a claim -- the draw replicated (LAYER1_DRAWN=1
+# above) and the sample did not follow it.
+frag_case "...unpatched reads layer 0 in both" 0 0 \
+    "$SF" 0 "X4VR_MV_MASK=2"
+
+# Must-not-invent. Both layers drawn, identical content, patch still applied:
+# the output layers have to come back the same. A patch that offset the
+# coordinate, sampled out of range, or returned the view index itself would
+# make them differ here and pass the case above for the wrong reason.
+frag_case "frag patch invents no difference"  1 0 \
+    "$PATCHDIR/sample_arr.spv" 1
+
+
+# The patch as a pure transform, checked without a GPU in the way.
+#
+# The cases above prove the patched shader does the right thing on this driver.
+# These prove the module it produces is well formed and that the refusals are
+# refusals -- a different question, and the one a validator can answer. Both are
+# needed: a module can sample the right layer and still be accepted only by
+# accident, and the next driver is under no obligation to repeat the accident.
+patch_case() {
+    local label="$1" want="$2" shader="$3" set="$4" bind="$5"
+    local out got
+    out=$("$PATCHER" frag-view-layer "$BUILD/tests/$shader" \
+        "$PATCHDIR/out.spv" "$set" "$bind" 2>&1)
+    got=$(sed -n 's/^PATCHED=//p' <<<"$out")
+    local val=skip
+    if [[ "$got" == 1 ]]; then
+        spirv-val "$PATCHDIR/out.spv" >/dev/null 2>&1 && val=OK || val=BAD
+    fi
+    if [[ "$got" == "$want" && "$val" != BAD ]]; then
+        printf 'ok   %-38s patched=%s val=%s\n' "$label" "$got" "$val"
+    else
+        printf 'FAIL %-38s want patched=%s, got patched=%s val=%s\n' \
+            "$label" "$want" "${got:-?}" "$val"
+        fails=$((fails + 1))
+    fi
+}
+
+if ! command -v spirv-val >/dev/null; then
+    echo "note: spirv-val not found, module structure is unchecked"
+fi
+
+# Both read forms in one module -- texture() and texelFetch() -- so a patch that
+# handles one and walks past the other cannot pass.
+patch_case "patch: two textures, one patched" 1 sample_two.frag.spv 0 0
+
+# The refusals. Each is a shader the patch would silently break:
+#   - a shadow sampler is not among the doubled images, so view 1 would read a
+#     layer that does not exist. This is the one with history behind it.
+#   - textureSize() returns ivec2 for a 2D image and ivec3 for an array, so
+#     promoting the type changes the result of an instruction the patch never
+#     looked at.
+#   - a binding that is not there, and a module with no fragment entry point,
+#     must both come back untouched rather than half-edited.
+#
+# What mutation testing said about these two, because it is not what it looks
+# like and re-deriving it costs an afternoon:
+#
+#   The textureSize case pins the unknown-use rule, but only since the shader
+#   was given a real sample as well. With just the query in it the module was
+#   refused as "declared but never read", and the case passed with the rule
+#   deleted.
+#
+#   The shadow case pins nothing in particular -- it is over-determined. The
+#   depth-type guard, the unknown-use rule and the never-read rule each refuse
+#   it on their own, and deleting all three still leaves it refused, because
+#   GLSL cannot express a shadow-sampler read that is not a Dref op in the
+#   first place. So it asserts the outcome, which is the thing that matters
+#   here, and no single guard should be justified by it.
+patch_case "patch refuses shadow samplers"   0 sample_shadow.frag.spv 0 0
+patch_case "patch refuses textureSize"       0 sample_size.frag.spv   0 0
+patch_case "patch refuses a missing binding" 0 sample.frag.spv        0 1
+patch_case "patch refuses a vertex module"   0 fullscreen.vert.spv    0 0
+
 echo
 if (( fails )); then echo "$fails case(s) failed"; exit 1; fi
 echo "all cases passed"

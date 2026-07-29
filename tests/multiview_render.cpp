@@ -380,6 +380,19 @@ int main(int argc, char **argv) {
     const bool out_srgb = srgb_env && *srgb_env && *srgb_env != '0';
     const VkFormat OFMT =
         out_srgb ? VK_FORMAT_B8G8R8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+    // Layer 1 of the output is a *rendered* layer only when this second pass is
+    // masked, and copying from a layer whose layout was never transitioned is a
+    // validation error rather than a wrong number. So the readback below stops
+    // at layer 0 unless the pass replicates.
+    //
+    // The condition restates the layer's own rule -- an SRGB single-attachment
+    // pass, with the knob on -- and that duplication is deliberate. If the two
+    // ever disagree this copy starts touching an untransitioned layer and
+    // validation names it, which beats silently reading undefined memory and
+    // reporting it as a result.
+    const char *mask_env = getenv("X4VR_MASK_TONEMAP");
+    const bool out_masked =
+        out_srgb && mask_env && *mask_env && *mask_env != '0';
     const VkDeviceSize OBYTES = (VkDeviceSize)W * H * 4;
     VkImageCreateInfo oci = imgci;
     oci.format = OFMT;
@@ -389,6 +402,13 @@ int main(int argc, char **argv) {
     CHECK(vkCreateImage(dev, &oci, nullptr, &oimg));
     VkMemoryRequirements oreq{};
     vkGetImageMemoryRequirements(dev, oimg, &oreq);
+    // The output is a colour attachment, so the layer doubles it too. When the
+    // second pass is masked it therefore renders into both layers -- which is
+    // what makes "did the two eyes stay different through the sample?" a
+    // question this test can ask at all.
+    const uint32_t olayers =
+        out_masked ? (uint32_t)(oreq.size / OBYTES) : 1;
+    printf("OUT_LAYERS=%u\n", olayers);
     VkMemoryAllocateInfo omai{};
     omai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     omai.allocationSize = oreq.size;
@@ -443,6 +463,28 @@ int main(int argc, char **argv) {
     VkFramebuffer ofb;
     CHECK(vkCreateFramebuffer(dev, &ofbci, nullptr, &ofb));
 
+    // X4VR_TEST_ARRAY_SAMPLER switches the descriptor from a plain 2D view of
+    // layer 0 to a 2D_ARRAY view spanning both layers. It goes together with a
+    // fragment shader put through patch_fragment_view_layer -- the shader
+    // declares sampler2DArray, so the view bound to it has to be an array view
+    // or the two disagree about what they are looking at, which is a
+    // validation error and undefined behaviour rather than a wrong picture.
+    //
+    // The pair is the whole point of the case: the shader patch alone changes
+    // nothing, because a 2D view has no layer 1 to reach.
+    const char *arr_env = getenv("X4VR_TEST_ARRAY_SAMPLER");
+    const bool array_sampler = arr_env && *arr_env && *arr_env != '0';
+    VkImageView aview = VK_NULL_HANDLE;
+    if (array_sampler) {
+        VkImageViewCreateInfo avci = vci;
+        avci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        // However many layers there turned out to be. Asking for 2 when the
+        // layer is off would just fail here and hide the real result behind a
+        // setup error.
+        avci.subresourceRange.layerCount = layers;
+        CHECK(vkCreateImageView(dev, &avci, nullptr, &aview));
+    }
+
     VkSamplerCreateInfo sci{};
     sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     sci.magFilter = VK_FILTER_NEAREST;
@@ -487,7 +529,7 @@ int main(int argc, char **argv) {
     // rendered by a masked pass and becomes willing to redirect it.
     VkDescriptorImageInfo dii{};
     dii.sampler = samp;
-    dii.imageView = view;
+    dii.imageView = array_sampler ? aview : view;
     dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     VkWriteDescriptorSet wds{};
     wds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -561,22 +603,48 @@ int main(int argc, char **argv) {
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRenderPass(cmd);
 
-    VkBufferImageCopy oc{};
-    oc.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    oc.imageSubresource.layerCount = 1;
-    oc.imageExtent = {W, H, 1};
-    vkCmdCopyImageToBuffer(cmd, oimg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf,
-                           1, &oc);
+    for (uint32_t layer = 0; layer < olayers && layer < 2; layer++) {
+        VkBufferImageCopy oc{};
+        oc.bufferOffset = OBYTES * layer;
+        oc.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        oc.imageSubresource.baseArrayLayer = layer;
+        oc.imageSubresource.layerCount = 1;
+        oc.imageExtent = {W, H, 1};
+        vkCmdCopyImageToBuffer(cmd, oimg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               buf, 1, &oc);
+    }
     CHECK(vkEndCommandBuffer(cmd));
     CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
     CHECK(vkQueueWaitIdle(queue));
 
-    CHECK(vkMapMemory(dev, bmem, 0, OBYTES, 0, &ptr));
+    CHECK(vkMapMemory(dev, bmem, 0, OBYTES * 2, 0, &ptr));
     const uint8_t *o = (const uint8_t *)ptr;
-    bool sampled = false;
-    for (VkDeviceSize i = 0; i < OBYTES; i += 4)
-        if (o[i] != 0) { sampled = true; break; }
-    printf("SAMPLED_NONZERO=%d\n", sampled ? 1 : 0);
+    // Colour bytes only, all three of them.
+    //
+    // This used to read byte 0 of each texel, which is red in R8G8B8A8 and
+    // *blue* in the B8G8R8A8 the SRGB cases use -- so a target holding nothing
+    // but the shader's red was reported empty. Alpha stays out of it because
+    // the clear sets it to 1, and including it would make every untouched
+    // layer look drawn.
+    auto drawn = [&](const uint8_t *p) {
+        for (VkDeviceSize i = 0; i < OBYTES; i += 4)
+            if (p[i] || p[i + 1] || p[i + 2])
+                return true;
+        return false;
+    };
+    printf("SAMPLED_NONZERO=%d\n", drawn(o) ? 1 : 0);
+    // The gate for the fragment patch. Both layers of the output hold the
+    // result of a sample, and what the second one holds says which layer that
+    // sample reached -- which is the one thing multiview does not decide for
+    // us, because it view-indexes subpass inputs and never samplers.
+    if (olayers >= 2) {
+        printf("OUT1_NONZERO=%d\n", drawn(o + OBYTES) ? 1 : 0);
+        printf("OUT_DIFFER=%d\n",
+               memcmp(o, o + OBYTES, (size_t)OBYTES) != 0 ? 1 : 0);
+    } else {
+        printf("OUT1_NONZERO=absent\n");
+        printf("OUT_DIFFER=absent\n");
+    }
     vkUnmapMemory(dev, bmem);
 
     vkDestroyPipeline(dev, pipe2, nullptr);
@@ -585,6 +653,8 @@ int main(int argc, char **argv) {
     vkDestroyDescriptorPool(dev, dpool, nullptr);
     vkDestroyDescriptorSetLayout(dev, dsl, nullptr);
     vkDestroySampler(dev, samp, nullptr);
+    if (aview != VK_NULL_HANDLE)
+        vkDestroyImageView(dev, aview, nullptr);
     vkDestroyFramebuffer(dev, ofb, nullptr);
     vkDestroyRenderPass(dev, orp, nullptr);
     vkDestroyImageView(dev, oview, nullptr);

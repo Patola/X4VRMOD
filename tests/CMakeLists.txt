@@ -7,7 +7,15 @@ target_link_libraries(x4vr_test_multiview_double PRIVATE Vulkan::Vulkan)
 
 add_executable(x4vr_test_multiview_render multiview_render.cpp)
 target_link_libraries(x4vr_test_multiview_render PRIVATE Vulkan::Vulkan)
+
+# The shader patches, exercised without a GPU. Needs no Vulkan library at all --
+# it only ever rewrites words in a buffer, which is the point.
+add_executable(x4vr_test_spirv_patch spirv_patch.cpp)
+
 # Shaders are committed as SPIR-V so the suite does not need glslc to run.
 configure_file(fullscreen.vert.spv fullscreen.vert.spv COPYONLY)
 configure_file(solid.frag.spv solid.frag.spv COPYONLY)
 configure_file(sample.frag.spv sample.frag.spv COPYONLY)
+configure_file(sample_two.frag.spv sample_two.frag.spv COPYONLY)
+configure_file(sample_shadow.frag.spv sample_shadow.frag.spv COPYONLY)
+configure_file(sample_size.frag.spv sample_size.frag.spv COPYONLY)
