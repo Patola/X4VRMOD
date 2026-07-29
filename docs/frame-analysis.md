@@ -1026,3 +1026,108 @@ design guarantees (here, that identical eye matrices make the layers
 identical) locates the bug faster than any number of new hypotheses. Row 2 of
 that table was measured in take two and its significance was not read until
 take five.
+
+## Stage 1, takes 6 to 15: the second view rasterised but was never lit
+
+Take five ended with the write path proven and the frame still black. What
+follows took nine more runs, and the cause turned out to be one line's worth
+of Vulkan: **a subpass input descriptor that no longer named the same
+subresource as the framebuffer attachment it read.**
+
+### The bug
+
+X4's deferred lighting passes — rp 30/31/32/64 — declare six attachments: one
+colour, one depth, and four more read as **subpass inputs**. That is the
+`S_subpassInput_AUTOMS` named in X4's own `VUID-VkGraphicsPipelineCreateInfo-
+renderPass-06038` errors, which we had seen at take four, correctly identified
+as X4's own, and then filed away as irrelevant.
+
+`vkCreateFramebuffer` replaces a masked pass's attachments with two-layer array
+views. Nothing replaced the matching **descriptors**, which still named X4's
+single-layer views. A subpass input is view-indexed — view N reads layer N of
+the attachment — so in a view-masked pass the descriptor and the attachment
+disagree: view 1 is meant to read layer 1, and the descriptor describes an
+image that has only layer 0.
+
+Rasterisation is ordinary and reaches view 1 regardless. Lighting arrives
+through `subpassLoad` and did not. Hence:
+
+![layer 0](x4vr-l0.png) ![layer 1](x4vr-l1.png)
+
+Same station, same silhouettes, pixel-aligned, and no light. Measured rather
+than eyeballed: `missing=0 changed=439272 extra=0`, with the non-empty counts
+of the two layers **exactly equal**. Every texel that had content differed in
+value; not one was absent.
+
+It also explains the star. With the gate-2 redirect on, everything downstream
+read this unlit layer, auto-exposure chased a near-black frame, and the only
+thing bright enough to survive was the sun — which is precisely what was
+visible in all that black.
+
+**The substitution was reachable only when `X4VR_MV_PRESENT_LAYER` was set.**
+So every run without the redirect — all the ones that "looked normal" — had the
+mismatch live. A clean screen was never evidence about layer 1, because the
+screen only ever showed layer 0.
+
+### What was eliminated, and how
+
+| Candidate | Killed by |
+|---|---|
+| Transfers not replicating | Fixed, `transfers_widened=14554`, still black. True but not sufficient. |
+| Pipelines compiled against unmasked passes | `binds ok=276755 MISMATCHED=0` |
+| Narrow image barriers | `narrow=322363` but validation reports no layout error on layer 1 |
+| Draws not reaching layer 1 | `X4VR_MV_MASK=2`: render into layer 1 alone, screen goes black |
+| Unwidened writes to per-eye images | `layer0_only=0` |
+| Compute writes | 42 images carry `STORAGE`; exactly one is doubled, none per-eye |
+| Stale redirect cache | `redirect_stale=0` (the bug was real; it was not this one) |
+| Render-target reuse across masked/unmasked passes | `writers tracked for 26 images`, 20 masked-only, 6 unmasked-only, 0 mixed |
+| The redirect mechanism itself | Offline: `MASK=2 PRESENT_LAYER=1` → `drawn=0/1 sampled=1` |
+
+### Three instruments, and what each got wrong
+
+The diagnosis cost far more than the fix, and every overrun traces to an
+instrument that was trusted before it was tested.
+
+* **The gate-2 redirect** reported black frames for eight runs. It was sound in
+  miniature and irrelevant in practice: it could only ever say "something is
+  wrong downstream", never what.
+* **The readback probe** hashed a fixed 64×64 patch at the origin. In X4 that
+  corner is blank most frames, so **4759 of 5994 captures compared two empty
+  regions** and agreed. It passed its own must-fail case because the offline
+  image was exactly 64×64, making a corner copy and a full copy the same bytes.
+  The suite now renders 128×128 and asserts the probe's reported extent.
+* **The masked/unmasked overlap check** at take four returned "0 overlap" and
+  closed a door for five runs. It read framebuffer lines from an inventory run
+  recorded *before* masking existed, and image serials restart every run — so
+  it answered for the wrong run with the wrong numbering. Recomputed inside a
+  live run, it was still 0, but that was luck, not method.
+
+### Rules taken from this
+
+1. **A confirmed cause is not a complete one.** The transfer finding was true.
+   Promoting it to sufficient, with nothing checking that it was, cost three
+   runs.
+2. **A measurement against the wrong baseline is worse than none**, because it
+   closes a door. Serials restart per run; anything joining two runs by serial
+   is invalid.
+3. **An instrument needs a must-fail case that can actually fail for the reason
+   you care about.** The probe had one and still shipped a blind spot, because
+   the case could not distinguish the failure it was written to catch.
+4. **When a result contradicts a property the design guarantees, the property
+   is the thing to doubt.** "Identical eye matrices mean identical layers" was
+   used to rule out every content-side explanation. It was false, and the run
+   that showed it false was take two.
+5. **Look at the image.** Twelve runs went into inferring what layer 1 held
+   from aggregate numbers. One dump answered it in a glance, and the dumping
+   code was smaller than most of the counters that preceded it.
+
+### State
+
+Rasterisation into both views is correct and measured. The lighting fix is
+committed but **not yet verified live** — the run that tests it is a probe run
+with the redirect off, where `#95` must stop reporting `DIFFER` and
+`input attachments fixed` must be non-zero.
+
+Still open from stage 1: the doubling overshoot (90 images, 565.6 MB, against
+~18–21 and ~135 MB needed). Untouched deliberately, so a tightening regression
+cannot be confused with a stereo bug.
