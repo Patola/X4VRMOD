@@ -424,6 +424,12 @@ std::unordered_map<VkRenderPass, uint32_t> g_rp_serials;
 // supply array views. Shares g_variants.mu with g_rp_serials.
 std::unordered_set<VkRenderPass> g_masked_passes;
 
+// The subset of those that are masked *only* because of the SRGB carve-out --
+// X4's tonemap, rp #40 and #52. This is the pass whose fragment shader has to
+// learn to sample per view, and naming it here is what lets the shader dump
+// pick out two modules instead of the ~1300 X4 creates. Shares g_variants.mu.
+std::unordered_set<VkRenderPass> g_tonemap_passes;
+
 // Image tracking, for the Phase 4b question the pass inventory could not
 // answer: how many *images* are behind those passes? The cost of doubling is
 // per image, but a render pass names only its attachments and ten passes
@@ -1095,6 +1101,9 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
     const std::vector<bool> per_eye = classify_per_eye(ci);
 
     std::lock_guard<std::mutex> lock(g_variants.mu);
+    for (uint32_t i = 0; i < ci->subpassCount; i++)
+        if (unsheared[i] && per_eye[i])
+            g_tonemap_passes.insert(rp);
     if (g_mv_inventory && g_active) {
         const uint32_t serial = g_rp_serial++;
         g_rp_serials[rp] = serial;
@@ -1737,6 +1746,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyRenderPass(
         g_variants.unsheared.erase(rp);
         g_rp_serials.erase(rp);
         g_masked_passes.erase(rp);
+        g_tonemap_passes.erase(rp);
     }
     d->DestroyRenderPass(device, rp, ac);
 }
@@ -1748,7 +1758,59 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyRenderPass(
 // X4VR_CLIP_K = 16 comma-separated floats (column-major). For a quick
 // visible proof, X4VR_CLIP_SHIFT=<x> is shorthand for a clip-space
 // x-translation, which slides the image sideways in NDC.
-VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
+// X4VR_DUMP_SHADERS=<dir>: write every module X4 creates, and remember which
+// serial each handle got.
+//
+// The fragment patch has to be told which (set, binding) carries the doubled
+// image, and X4's tonemap shader has never been read. Dumping all ~1300 modules
+// is useless on its own -- the point is the join below, where the pipelines
+// built against the tonemap pass name the two serials worth disassembling.
+const char *g_dump_shaders = getenv("X4VR_DUMP_SHADERS");
+std::mutex g_mod_mu;
+std::unordered_map<VkShaderModule, uint32_t> g_mod_serial;
+std::unordered_map<VkShaderModule, std::vector<x4vr::spv::SampledTexture>>
+    g_mod_samplers;
+uint32_t g_mod_next = 0;
+
+void record_module(const VkShaderModuleCreateInfo *ci, VkShaderModule mod) {
+    if ((!g_dump_shaders || !*g_dump_shaders) && !g_mv_inventory)
+        return;
+    // The texture list is what the pipeline log prints; the file is for when
+    // that is not enough and the module has to be disassembled.
+    std::vector<uint32_t> code(ci->codeSize / 4);
+    memcpy(code.data(), ci->pCode, ci->codeSize);
+    auto tex = x4vr::spv::list_sampled_textures(code);
+    uint32_t serial;
+    {
+        std::lock_guard<std::mutex> lock(g_mod_mu);
+        serial = g_mod_next++;
+        g_mod_serial[mod] = serial;
+        if (!tex.empty())
+            g_mod_samplers[mod] = std::move(tex);
+    }
+    if (!g_dump_shaders || !*g_dump_shaders)
+        return;
+    char path[512];
+    snprintf(path, sizeof path, "%s/mod-%04u.spv", g_dump_shaders, serial);
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        // Once, not per module: a missing directory would otherwise produce
+        // one line per shader and bury the run.
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            X4VR_LOG("WARNING: X4VR_DUMP_SHADERS=%s is not writable",
+                     g_dump_shaders);
+        }
+        return;
+    }
+    fwrite(ci->pCode, 1, ci->codeSize, f);
+    fclose(f);
+}
+
+// The patching itself. Wrapped below so the dump happens on every path out of
+// it without four copies of the same two lines.
+VkResult create_shader_module_inner(
     VkDevice device, const VkShaderModuleCreateInfo *ci,
     const VkAllocationCallbacks *ac, VkShaderModule *out) {
     DeviceData *d;
@@ -1907,6 +1969,18 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     return d->CreateShaderModule(device, ci, ac, out);
 }
 
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
+    VkDevice device, const VkShaderModuleCreateInfo *ci,
+    const VkAllocationCallbacks *ac, VkShaderModule *out) {
+    VkResult r = create_shader_module_inner(device, ci, ac, out);
+    // X4's bytes, not ours: the handle is whatever the game will bind, but the
+    // code written out is what it supplied. A dump that quietly contained our
+    // own edits would be worse than no dump.
+    if (r == VK_SUCCESS)
+        record_module(ci, *out);
+    return r;
+}
+
 VKAPI_ATTR void VKAPI_CALL x4vr_DestroyShaderModule(
     VkDevice device, VkShaderModule mod, const VkAllocationCallbacks *ac) {
     DeviceData *d;
@@ -1922,6 +1996,14 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyShaderModule(
             twin = it->second;
             g_variants.original.erase(it);
         }
+    }
+    {
+        // Vulkan is free to hand this handle straight back for a different
+        // module, and a stale entry would then make the tonemap log name the
+        // wrong shader. The view caches learned this the expensive way.
+        std::lock_guard<std::mutex> lock(g_mod_mu);
+        g_mod_serial.erase(mod);
+        g_mod_samplers.erase(mod);
     }
     if (twin != VK_NULL_HANDLE)
         d->DestroyShaderModule(device, twin, ac);
@@ -1965,6 +2047,58 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
         g_mv_stats.pipe_masked += masked;
         g_mv_stats.pipe_unmasked += unmasked;
         g_mv_stats.pipe_dynamic += dynamic;
+    }
+
+    // Name the tonemap's own shaders.
+    //
+    // The fragment patch needs one fact nobody has measured yet: which
+    // descriptor slot the tonemap reads #95 through. X4 creates ~1300 modules
+    // and the pass is created twice, so the useful join is here, where the
+    // render pass and the modules are in the same call. Prints the sampled
+    // (set, binding) list directly, and the module serial for when the shader
+    // has to be disassembled.
+    if (g_mv && g_active && (g_mv_inventory || g_dump_shaders)) {
+        for (uint32_t i = 0; i < count; i++) {
+            bool tonemap;
+            uint32_t rp_serial = UINT32_MAX;
+            {
+                std::lock_guard<std::mutex> lock(g_variants.mu);
+                tonemap = ci[i].renderPass != VK_NULL_HANDLE &&
+                          g_tonemap_passes.count(ci[i].renderPass) != 0;
+                auto s = g_rp_serials.find(ci[i].renderPass);
+                if (s != g_rp_serials.end())
+                    rp_serial = s->second;
+            }
+            if (!tonemap)
+                continue;
+            for (uint32_t st = 0; st < ci[i].stageCount; st++) {
+                if (ci[i].pStages[st].stage != VK_SHADER_STAGE_FRAGMENT_BIT)
+                    continue;
+                char list[256];
+                int n = 0;
+                list[0] = 0;
+                uint32_t serial = UINT32_MAX;
+                {
+                    std::lock_guard<std::mutex> lock(g_mod_mu);
+                    auto sit = g_mod_serial.find(ci[i].pStages[st].module);
+                    if (sit != g_mod_serial.end())
+                        serial = sit->second;
+                    auto tit = g_mod_samplers.find(ci[i].pStages[st].module);
+                    if (tit != g_mod_samplers.end())
+                        for (const auto &t : tit->second) {
+                            if (n >= 200)
+                                break;
+                            n += snprintf(list + n, sizeof(list) - n,
+                                          "%sset %u binding %u%s%s", n ? ", " : "",
+                                          t.set, t.binding,
+                                          t.arrayed ? " (already array)" : "",
+                                          t.depth ? " (DEPTH)" : "");
+                        }
+                }
+                X4VR_LOG("tonemap rp #%u: frag module #%u samples %s", rp_serial,
+                         serial, n ? list : "nothing");
+            }
+        }
     }
 
     // Remember which of them were compiled for two views, so binding one into

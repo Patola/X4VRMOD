@@ -560,6 +560,90 @@ inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16],
     return true;
 }
 
+/// One sampled texture a fragment module declares.
+struct SampledTexture {
+    uint32_t set, binding;
+    bool arrayed;  // already a 2D array -- nothing for the patch to do
+    bool depth;    // a shadow sampler, which the patch refuses
+};
+
+/// Lists the 2D textures a fragment module samples, without modifying it.
+///
+/// This exists to be pointed at X4's tonemap before anything is patched. The
+/// patch has to be told which (set, binding) carries the doubled image, and
+/// guessing that from a shader nobody has read is how the last two wrong turns
+/// started. `arrayed` and `depth` are reported because they are the two shapes
+/// the patch will refuse, and it is better to learn that from a log line than
+/// from a live run where nothing changed.
+inline std::vector<SampledTexture>
+list_sampled_textures(const std::vector<uint32_t> &code) {
+    std::vector<SampledTexture> out;
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return out;
+
+    bool fragment = false;
+    std::unordered_map<uint32_t, uint32_t> dec_set, dec_binding;
+    std::unordered_map<uint32_t, std::vector<uint32_t>> img_ops;
+    std::unordered_map<uint32_t, uint32_t> si_img;
+    std::unordered_map<uint32_t, uint32_t> ptr_pointee;
+
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        switch (in.op) {
+        case OpEntryPoint:
+            if (in.len >= 3 && w[1] == ExecutionModelFragment)
+                fragment = true;
+            break;
+        case OpDecorate:
+            if (in.len >= 4 && w[2] == DecorationDescriptorSet)
+                dec_set[w[1]] = w[3];
+            if (in.len >= 4 && w[2] == DecorationBinding)
+                dec_binding[w[1]] = w[3];
+            break;
+        case OpTypeImage:
+            if (in.len >= 9)
+                img_ops[w[1]] = std::vector<uint32_t>(w + 2, w + in.len);
+            break;
+        case OpTypeSampledImage:
+            if (in.len >= 3)
+                si_img[w[1]] = w[2];
+            break;
+        case OpTypePointer:
+            if (in.len >= 4 && w[2] == StorageClassUniformConstant)
+                ptr_pointee[w[1]] = w[3];
+            break;
+        case OpVariable: {
+            if (in.len < 4 || w[3] != StorageClassUniformConstant)
+                break;
+            auto p = ptr_pointee.find(w[1]);
+            if (p == ptr_pointee.end())
+                break;
+            auto s = si_img.find(p->second);
+            const uint32_t img = s != si_img.end() ? s->second : p->second;
+            auto io = img_ops.find(img);
+            if (io == img_ops.end() || io->second.size() < 7)
+                break;
+            // Dim 2D, sampled (not a storage image), not multisampled.
+            if (io->second[1] != Dim2D || io->second[4] != 0 ||
+                io->second[5] != 1)
+                break;
+            auto ds = dec_set.find(w[2]);
+            auto db = dec_binding.find(w[2]);
+            out.push_back({ds != dec_set.end() ? ds->second : UINT32_MAX,
+                           db != dec_binding.end() ? db->second : UINT32_MAX,
+                           io->second[3] != 0, io->second[2] == 1});
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    if (!fragment)
+        out.clear();
+    return out;
+}
+
 /// Rewrites a fragment module so the texture at (`set`, `binding`) is read as a
 /// 2D **array** texture whose layer is `gl_ViewIndex`:
 ///
