@@ -16,35 +16,50 @@ from a single draw, up to the point where sampling takes over.
 | `stage1-multiview-verified` | Both array layers byte-identical (readback) |
 | `stage1-complete` | …and a frame built entirely from layer 1 is correct end to end |
 | `stage2-per-eye-k` | Per-eye `K` via `gl_ViewIndex` — one draw, two different eyes |
+| `stage2-tonemap-masked` | The tonemap resolve replicates into both layers of `#103` |
 
 **The frame is stereo up to the first sampled read, and mono after it.** That
-is the entire remaining problem, and it is measured rather than assumed —
-take eighteen's per-image probe table below.
+is the entire remaining problem, and it is measured rather than assumed — the
+per-image probe table under "Take nineteen" below.
 
-### Next step: mask *and* patch the tonemap pass (rp #40 / rp #52 → `#103`)
+### The frame graph, as far as it is known
 
-> **Both open questions are now answered, and the answer moved the target.**
-> See "The investigation before the tonemap patch" at the end of this document.
-> In short:
->
-> * `#122` ← rp #61 and `#123` ← rp #63, but they are `R16_SFLOAT`
->   **single-channel** — not the tonemap pair. That guess was wrong.
-> * The tonemapped LDR image is **`#103`** (`B8G8R8A8_SRGB`), written by
->   **rp #40** and **rp #52**, and those passes are **unmasked** — excluded by
->   our own all-LDR rule in `classify_subpasses`.
-> * `#101` was never intermittent. Its recurring "identical" hash is the image
->   uniformly cleared to byte `0x10`; the probe only tests for all-*zero*, so a
->   non-zero clear counted as content. It is per-eye like the rest of the
->   G-buffer and needs no special handling.
+Serials are assigned in creation order and **held identical across runs 47 and
+take nineteen**, which was an inference and is now a measurement. Images come
+in a repeating block — the same target set allocated several times (`#8–#23`,
+`#46–#59`, `#92–#107`, …) — and the blocks align on their one unmistakable
+member, the `mips=2 fmt=13` mask at offset **+9**.
 
-Because `#103`'s passes are not masked, there is no second layer being drawn
-into — so unlike `#122`/`#123` this takes **two** changes, not one: mask the
-pass so the draw replicates, *and* patch its fragment shader to sample `#95`
-per eye via `gl_ViewIndex`. A shader patch alone changes nothing visible.
+| Serial | Format | Role | Stereo? |
+|---|---|---|---|
+| `#92`, `#95`, `#96`, `#97` | 97 `RGBA16F` | HDR colour / G-buffer | **per-eye** |
+| `#93` | 126 | depth-stencil | per-eye |
+| `#98`, `#99` | 83 `R16G16_SFLOAT` | G-buffer (normals/motion) | **per-eye** |
+| `#100` | 50 `B8G8R8A8_SRGB` | LDR | not seen written |
+| `#101` | 13 `R8_UINT`, mips=2 | classification mask, rp #25 + rp #27 | **per-eye** |
+| `#102` | 9 `R8_UNORM` | mask | **per-eye** |
+| **`#103`** | **50 `B8G8R8A8_SRGB`** | **tonemap output, rp #40 + rp #52** | replicates, **mono content** |
+| `#104`, `#105` | 97 `RGBA16F` @352² | bloom ping-pong | replicates, mono |
+| `#122`, `#123`, `#124` | 76 `R16_SFLOAT` @1408² | rp #61 / rp #63; unidentified | replicates, mono |
+| — | 44 `B8G8R8A8_UNORM` | rp #0/#1/#4/#7/#10/#14/#17 → eye image | **not even masked** |
 
-Before that lands, fix the probe to report **uniform**, not merely all-zero.
-Without it a constant-cleared target reads as content that agrees — exactly the
-shape of evidence that makes a mono buffer look correctly stereo.
+The last row is the remaining frontier. Everything that "replicates but is
+mono" is fixed by a fragment patch; the format-44 chain needs masking first,
+and that is where `SbsCompositor`'s two-layer eye image finally matters.
+
+### Next step: patch the tonemap fragment shader (task #9)
+
+`#103` now renders into both layers and writes the **same picture** into each,
+because multiview view-indexes subpass inputs automatically but **never
+samplers**. The fragment shader bound to rp #40 / rp #52 samples `#95` through
+a descriptor, so both views read layer 0.
+
+Work, in `common/x4vr_spirv.hpp` beside the proven `patch_vertex_clip`:
+promote the doubled source to an array texture (`OpTypeImage Arrayed 0 → 1`)
+and give the sample coordinate a third component from `gl_ViewIndex`.
+
+**Pass condition:** `#103` flips from all-IDENTICAL to all-DIFFER. Still
+nothing on screen — that waits for the format-44 chain.
 
 ### Why patching is the chosen mechanism
 
@@ -65,41 +80,94 @@ the same module-structure rules — capability with the capabilities, extension
 only below SPIR-V 1.3, decoration in the annotation section, new Input added
 to the entry point's interface list.
 
-### Verification available without looking at the screen
+### Reading the instruments (hard-won; do not re-derive)
 
-The tonemap patch has a *measured* pass condition, not a visual one: **`#103`**
-must appear in the probe table at all (it cannot today — the probe only records
-attachments of masked passes, and rp #40/#52 are unmasked), and then flip to
-all-differ. The UI chain stays mono deliberately, so the right eye should get a
-correct scene with **no HUD** — wrong in a specific predicted way, which is a
-real test rather than a "looks fine" one.
+* **`X4VR_LOG` appends.** A "single run" log usually holds dozens. Segment on
+  `instance created (app=X4)` before aggregating anything. Serials restart per
+  run, so a whole-file summary is confident nonsense — it once produced a table
+  contradicting the run it came from.
+* **Writer lists need `X4VR_MV_INVENTORY=1`.** Without it every pass hashes to
+  the `UINT32_MAX` sentinel and, because the list de-duplicates *by serial*,
+  all of an image's writers collapse into a single `?`. Never read writer
+  counts from a run without the inventory.
+* **`(uniform 0xNN)` is not "content that agrees".** The probe reports a layer
+  that is one repeated texel. Two layers merely *cleared* to the same value
+  agree trivially, and counting that as evidence of mono behaviour is how a
+  mono target passes for a stereo one. `(all zero)` is the special case it
+  always named.
+* **The inventory prints two verdicts now.** `MONO`/`STEREO` is about K;
+  `+MASKED` is about replication. Since the split they are independent.
 
-> Superseded: this previously named `#122`/`#123` as the pass condition, on the
-> assumption they were the tonemap pair. They are `R16_SFLOAT` and are not.
+### The launch command that matches the baselines
+
+    X4VR_GAMESCOPE=1 X4VR_ONE_EYE=1 X4VR_MV=1 X4VR_STEREO=1 \
+    X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1 X4VR_MASK_TONEMAP=1 \
+    ./launch/x4vr-launch.sh
+
+`X4VR_GAMESCOPE=1` is not optional for comparability: X4 ignores
+`res_width`/`res_height` while borderless and sizes to the display, so without
+it every render target changes dimensions and the probe table stops being
+comparable to the tagged runs. `X4VR_ONE_EYE=1` gives 1408×1408 (SBS width/2),
+which is what every take from sixteen on has used.
 
 ### Knobs that matter now
 
     X4VR_MV=1                 doubling + masking (the whole stage-1 mechanism)
     X4VR_STEREO=1             per-eye K, both eyes baked, gl_ViewIndex selects
+    X4VR_MASK_TONEMAP=1       mask rp #40/#52 so #103 replicates (keyed on the
+                              SRGB attachment format; UNORM is left alone)
     X4VR_MV_PROBE=1           the per-image layer0-vs-layer1 verdict table
+    X4VR_MV_INVENTORY=1       pass/framebuffer/image inventory; required for
+                              any join between passes and image serials
     X4VR_MV_DUMP=<prefix>     write the two layers as PPM on a DIFFER
+                              (gated on RGBA16F — cannot dump #122/#123 yet)
     X4VR_SBS_LAYERS=2         allocate the second layer on the eye image
     X4VR_SBS_RIGHT_LAYER=1    …and actually show it in the right half
     X4VR_PRESENT_MODE=0       uncap the frame rate; every perf number before
                               this one measured the monitor, not the renderer
+    X4VR_TEST_OUT_SRGB=1      test binary only: make its LDR second pass SRGB,
+                              which is X4's tonemap in miniature
 
 ### Deliberately still open
 
-* **The doubling overshoot** — 90 images / 565.6 MB against ~18–21 / ~135 MB
+* **What `#122`/`#123`/`#124` are** (task #8). Full-res single-channel
+  `R16_SFLOAT`, a two-pass ping-pong sitting right after the `88×88×128` froxel
+  volumes (`#116`–`#121`). Shape fits AO or a screen-space shadow resolve.
+  Deliberately *not* guessed at: globally-applied shadows wrecked the earlier
+  X4 VR attempt, so this gets identified before it is touched. They already
+  replicate, so they need only the fragment half — a cheap second customer for
+  the same patch once named.
+* **The doubling overshoot** — 91 images / ~566 MB against ~18–21 / ~135 MB
   needed. Untouched on purpose so a tightening regression cannot be confused
   with a stereo bug.
 * **No real perf number yet.** `X4VR_PRESENT_MODE` now makes one obtainable;
-  `X4VR_MV=0` remains a valid baseline, so this is not urgent.
+  `X4VR_MV=0` remains a valid baseline, so this is not urgent. Note the
+  masked tonemap adds a second full-resolution fullscreen pass, so the
+  measurement should happen with the knob in both states.
 * **Lighting constants are still the left eye's.** Per-eye `K` shears clip
   space; `M_invprojection`, `V_cameraposition` @736 and
   `V_light_direction_view` @864 are not yet per-view, so the right eye's
   deferred lighting reconstructs position with the left eye's matrices. Not
   yet visible, and it will be once the LDR chain carries the difference.
+* **`#100`** is the other `B8G8R8A8_SRGB` target in the block and no pass has
+  been seen writing it. If a second SRGB writer ever appears, the
+  `X4VR_MASK_TONEMAP` carve-out would catch it too — worth a check rather than
+  a surprise.
+
+### What the method has been worth
+
+Two guesses have been overturned by measuring before patching, each of which
+would have cost a wrong-looking live run and a false conclusion about the
+mechanism:
+
+* `#122`/`#123` "are the tonemap pair" — they are `R16_SFLOAT`. Patching them
+  would have changed nothing and read as the fragment patch failing.
+* `#101` "is intermittently mono" — it was a constant clear the instrument
+  could not name. Patching near it would have been patching a non-problem.
+
+And one implementation trap caught offline: dropping SRGB from
+`is_ldr_format`, the obvious one-line way to mask the tonemap, also shears it.
+The suite reports that as `rp=sheared fb=masked` rather than merely going red.
 
 ---
 
