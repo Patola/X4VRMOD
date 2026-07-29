@@ -1760,3 +1760,50 @@ Given that globally-applied shadows wrecked the previous attempt at this mod,
 the guess is not worth acting on: read the shaders bound to rp #61/#63, or dump
 the images. The probe's PPM dump is currently gated on
 `VK_FORMAT_R16G16B16A16_SFLOAT` and so cannot dump them today.
+
+### The fix is a predicate split, not a format edit
+
+`classify_unsheared` answers one question and is consumed as if it answered
+two. `needs_original` uses it to decide **"does K apply to this pass's vertex
+shaders?"**; `pass_is_per_eye` uses its inverse to decide **"does this pass
+render into both layers?"**. Stage 1 made them the same predicate on purpose —
+the comment above `pass_is_per_eye` says so — and stage 2 is where that stops
+being true.
+
+The tonemap needs opposite answers to the two questions. It is a fullscreen
+post pass, so K must **not** be applied to it (shearing a fullscreen triangle
+is meaningless). But it must **be masked**, so the draw replicates into both
+layers of `#103`. Dropping `B8G8R8A8_SRGB` from `is_ldr_format` would get the
+masking right and silently start shearing the tonemap's fullscreen triangle.
+
+So: split the predicate. `unsheared` keeps its current definition. `per_eye`
+gains the SRGB single-attachment case.
+
+The discriminator is available at render-pass creation, where no framebuffer
+and no extents exist yet. Run 47's complete MONO set:
+
+| Count | Shape | What |
+|---|---|---|
+| 10 | `0 colour, depth 124` | shadow cascades — stay mono, light space |
+| 7 | `1 colour [44L]` | `B8G8R8A8_UNORM` — blit/UI chain into the eye image |
+| **2** | **`1 colour [50L]`** | **`B8G8R8A8_SRGB` — rp #40, rp #52 → `#103`** |
+
+Format 50 appears nowhere else in the MONO set, so the exception is one format
+wide and structurally cannot catch rp #0/#1/#7/#14.
+
+### Why this splits into two testable halves
+
+Masking and patching are separable, with a measured gate between them:
+
+* **Mask only.** `#103` starts appearing in the probe table at all — today it
+  cannot, because `probe_emit` only records attachments of masked passes — and
+  reports **IDENTICAL**. The fullscreen triangle replicates into both layers
+  and samples `#95` layer 0 in each, so identical is the *correct* result here.
+  This proves the masking works with zero SPIR-V risk.
+* **Then patch.** `#103` flips to **DIFFER**. Only now is the fragment patch
+  under test, and it is under test alone.
+
+Nothing changes on screen at either gate: the eye image is still written by the
+mono format-44 chain, so the right eye has nothing new to show. That is
+expected, and it is why the pass condition is the probe table rather than a
+look at the monitor.
