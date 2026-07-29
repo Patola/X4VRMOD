@@ -21,20 +21,30 @@ from a single draw, up to the point where sampling takes over.
 is the entire remaining problem, and it is measured rather than assumed —
 take eighteen's per-image probe table below.
 
-### Next step: investigate, do not patch yet
+### Next step: mask *and* patch the tonemap pass (rp #40 / rp #52 → `#103`)
 
-Two questions, both answerable from logs already on disk plus small
-instrumentation. No further game runs needed to start.
+> **Both open questions are now answered, and the answer moved the target.**
+> See "The investigation before the tonemap patch" at the end of this document.
+> In short:
+>
+> * `#122` ← rp #61 and `#123` ← rp #63, but they are `R16_SFLOAT`
+>   **single-channel** — not the tonemap pair. That guess was wrong.
+> * The tonemapped LDR image is **`#103`** (`B8G8R8A8_SRGB`), written by
+>   **rp #40** and **rp #52**, and those passes are **unmasked** — excluded by
+>   our own all-LDR rule in `classify_subpasses`.
+> * `#101` was never intermittent. Its recurring "identical" hash is the image
+>   uniformly cleared to byte `0x10`; the probe only tests for all-*zero*, so a
+>   non-zero clear counted as content. It is per-eye like the rest of the
+>   G-buffer and needs no special handling.
 
-1. **Which pass writes `#122` and `#123`?** They are 1408×1408, masked, and
-   differ on *zero* non-empty captures — they render into both layers and put
-   the same picture in each. Almost certainly the tonemap/post pair, and they
-   are the patch target. Find them by joining `fb rp #N` lines to the image
-   serials, in the *same run* (serials restart per run — see the correction
-   under "Ruled out without a run").
-2. **Why does `#101` differ on 3 of 7 non-empty captures?** Everything else is
-   cleanly all-or-nothing. Intermittent is not understood, and patching what
-   is not understood is how take five went wrong. Resolve before touching it.
+Because `#103`'s passes are not masked, there is no second layer being drawn
+into — so unlike `#122`/`#123` this takes **two** changes, not one: mask the
+pass so the draw replicates, *and* patch its fragment shader to sample `#95`
+per eye via `gl_ViewIndex`. A shader patch alone changes nothing visible.
+
+Before that lands, fix the probe to report **uniform**, not merely all-zero.
+Without it a constant-cleared target reads as content that agrees — exactly the
+shape of evidence that makes a mono buffer look correctly stereo.
 
 ### Why patching is the chosen mechanism
 
@@ -57,11 +67,15 @@ to the entry point's interface list.
 
 ### Verification available without looking at the screen
 
-The tonemap patch has a *measured* pass condition, not a visual one: `#122`
-and `#123` must flip from 0-differ to all-differ in the probe table. The UI
-chain stays mono deliberately, so the right eye should get a correct scene
-with **no HUD** — wrong in a specific predicted way, which is a real test
-rather than a "looks fine" one.
+The tonemap patch has a *measured* pass condition, not a visual one: **`#103`**
+must appear in the probe table at all (it cannot today — the probe only records
+attachments of masked passes, and rp #40/#52 are unmasked), and then flip to
+all-differ. The UI chain stays mono deliberately, so the right eye should get a
+correct scene with **no HUD** — wrong in a specific predicted way, which is a
+real test rather than a "looks fine" one.
+
+> Superseded: this previously named `#122`/`#123` as the pass condition, on the
+> assumption they were the tonemap pair. They are `R16_SFLOAT` and are not.
 
 ### Knobs that matter now
 
@@ -1599,3 +1613,150 @@ to become one two-layer image, because it is what X4 renders into believing it
 is the swapchain, and the composite currently copies layer 0 into *both* halves
 of the real swapchain image. Until that changes there is nowhere for a second,
 different eye to land.
+
+---
+
+## The investigation before the tonemap patch — and why the target was wrong
+
+Two questions were left open at take eighteen: which pass writes `#122`/`#123`,
+and why `#101` differs on only 3 of 7 non-empty captures. Both were answerable
+from logs already on disk. Neither needed another run, and it is as well they
+were asked, because the first answer invalidates the patch target the previous
+section committed to.
+
+### The join was already on disk
+
+`X4VR_LOG` appends, so the file kept as "take eighteen" actually holds **51
+runs**. Aggregating it whole produces confident nonsense: serials restart every
+run, so `#101` in one segment and `#101` in another are different images. The
+first pass at this analysis did exactly that and produced a table in which
+`#92`/`#97`/`#98`/`#99` differed on 3–4 of hundreds of captures, contradicting
+take eighteen's own finding. Segmenting by `instance created (app=X4)` and
+recomputing per run reproduces the published table exactly.
+
+**Run 47** (`t=375273`) turned out to carry *both* instruments at once — 40
+probe captures and 53 `fb rp` lines. The join Q1 needed had been sitting in the
+log since before the question was asked.
+
+> **Method note.** The writers report is only meaningful with
+> `X4VR_MV_INVENTORY=1`. Without it every render pass hashes to the
+> `UINT32_MAX` sentinel, and because the writer list de-duplicates *by serial*,
+> all of an image's writers collapse into a single `?` entry. Run 51 reports
+> `img #95 writers — masked rp [?]`; run 47 reports `[31,30,32,38,39,64]` for
+> the same image. The sentinel does not merely print badly, it destroys the
+> multiplicity. Do not read writer counts from a run without the inventory.
+
+### Q1: `#122` ← rp #61, `#123` ← rp #63 — and they are not the tonemap
+
+    fb  rp #61: 1408x1408 layers=1 attachments=1 imgs=[#122] MASKED
+    fb  rp #63: 1408x1408 layers=1 attachments=1 imgs=[#123] MASKED
+
+The pass numbers were the easy half. The formats are the finding:
+
+    img #122: 1408x1408 mips=1 fmt=76 usage=0x97 DOUBLED
+    img #123: 1408x1408 mips=1 fmt=76 usage=0x97 DOUBLED
+
+Format 76 is `VK_FORMAT_R16_SFLOAT` — **single channel, half float**. That is
+not a tonemapped image. The previous section's "`#122`/`#123` are almost
+certainly the tonemap/post pair, and they are the patch target" was a guess
+from size and adjacency, and it is wrong.
+
+> The format decode does not rest on recalling a Vulkan enum. The probe's
+> all-zero hash for `#122` is `15bf3eca82f30383`, which is exactly FNV-1a over
+> `1408×1408×2` zero bytes — confirming 2 bytes per texel independently of what
+> the enum table says.
+
+### Where the tonemap actually is
+
+The image inventory repeats: the same render-target set is allocated several
+times over (`#8–#23`, `#46–#59`, `#92–#107`, …). Aligning the blocks by their
+one unmistakable member — the `mips=2`, `fmt=13` mask at offset +9 — names
+every slot in the probed block:
+
+| Serial | Format | What it is |
+|---|---|---|
+| `#92`, `#95`, `#96`, `#97` | 97 `RGBA16F` | HDR colour / G-buffer |
+| `#93` | 126 (depth) | depth-stencil |
+| `#98`, `#99` | 83 `R16G16_SFLOAT` | two-channel G-buffer (normals/motion) |
+| `#100` | 50 `B8G8R8A8_SRGB` | **LDR** |
+| `#101` | 13 `R8_UINT`, mips=2 | classification mask |
+| `#102` | 9 `R8_UNORM` | single-channel mask |
+| **`#103`** | **50 `B8G8R8A8_SRGB`** | **the tonemapped LDR image** |
+| `#104`, `#105` | 97 `RGBA16F` @352² | bloom ping-pong |
+
+And its writers:
+
+    fb  rp #40: 1408x1408 layers=1 attachments=1 imgs=[#103]      <- no MASKED
+    fb  rp #52: 1408x1408 layers=1 attachments=1 imgs=[#103]      <- no MASKED
+
+**The tonemap output is `#103`, and its passes are unmasked.** Not by accident
+— by our own rule. `classify_subpasses` marks a subpass MONO when every colour
+attachment is an LDR format, and `is_ldr_format` returns true for exactly
+`B8G8R8A8_SRGB`. So rp #40 and rp #52 are deliberately excluded from masking.
+
+This changes the size of the job. `#122`/`#123` are masked: they already
+replicate into both layers, and merely put the same picture in each, so for
+them a fragment patch alone would have been enough. `#103` is **not masked at
+all** — there is no second layer being drawn. Reaching stereo there takes two
+changes, not one:
+
+1. the pass must be masked, so the draw replicates into both layers of `#103`;
+2. its fragment shader must sample `#95` per eye via `gl_ViewIndex`.
+
+Patching only the shader on rp #61/#63, as planned, would have produced no
+visible change whatsoever — and, worse, it would have *looked* like a failure
+of the fragment-patch mechanism rather than a wrong target.
+
+### Q2: `#101` is not intermittent — the instrument is too narrow
+
+`#101` is `R8_UINT`, `mips=2`, written by two masked passes:
+
+    fb  rp #25: 1408x1408 attachments=2 imgs=[#93,#101] MASKED
+    fb  rp #27:   704x704 attachments=1 imgs=[#101]     MASKED
+
+So hypothesis 1, "written by more than one pass", is **true as a fact and
+irrelevant as an explanation**. 704 is half of 1408 and the image has exactly
+two mips, so rp #27 writes mip 1 — and `probe_emit` hardcodes
+`mipLevel = 0`. The second writer's output is never in the comparison.
+
+Hypothesis 2 is the answer. Three of `#101`'s four IDENTICAL captures carry the
+same hash, `b1fa160a7e480383`, which recurs across unrelated runs. Recomputing
+FNV-1a over 1,982,464 bytes of a constant identifies it exactly:
+
+    byte 0x10 -> b1fa160a7e480383   MATCH
+
+`#101` is **cleared to 0x10** in those frames. It is a uniform buffer, not
+content that happens to agree. The probe reports `(all zero)` only when every
+byte is zero, so a buffer cleared to any *non-zero* constant is silently
+promoted to "non-empty" and its trivial agreement is counted as evidence of
+mono behaviour.
+
+Corrected, run 51's seven `#101` captures are: **3 uniform-fill** (trivially
+identical), **3 DIFFER**, and **1** genuinely identical with content — the
+first capture of the run. And where it differs it differs the way a per-eye
+mask should: ~97% of the image is non-empty (1,919,783 of 1,982,464) and ~8.7%
+reclassifies, mostly `changed` rather than `missing`. The first-difference
+column is 78, 80 and 1371 across the three — no consistent edge story, so
+hypothesis 3 (edge-only parallax visibility) is not supported either.
+
+**`#101` is not anomalous. It is per-eye like the rest of the G-buffer, and the
+"3 of 7" was an artifact of the zero test.** It needs no special handling, and
+nothing near it should be patched on the strength of the old reading.
+
+> **Instrument fix this earns.** The probe should report *uniform* — all texels
+> equal — not merely all-zero. Without it, every constant-cleared target reads
+> as content that agrees, which is precisely the shape of evidence that would
+> make a mono buffer look correctly stereo. `#122`/`#123` survive this check
+> (their hashes change frame to frame, so their agreement is real), but that
+> was luck, not design.
+
+### What still is not known
+
+Not what `#122`/`#123` *are*. Full-res single-channel `R16_SFLOAT` written as a
+two-pass ping-pong, immediately after the `88×88×128` froxel volumes
+(`#116`–`#121`) — consistent with an ambient-occlusion or screen-space shadow
+resolve, and there is a third sibling `#124` that never appeared in a probe.
+Given that globally-applied shadows wrecked the previous attempt at this mod,
+the guess is not worth acting on: read the shaders bound to rp #61/#63, or dump
+the images. The probe's PPM dump is currently gated on
+`VK_FORMAT_R16G16B16A16_SFLOAT` and so cannot dump them today.
