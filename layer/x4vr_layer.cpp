@@ -140,6 +140,24 @@ const bool g_sbs_split_render = [] {
     return !(e && *e && *e == '0');
 }();
 
+// Stage 2 groundwork: give the image X4 renders into (believing it is the
+// swapchain) a second array layer, so there is somewhere for the second eye
+// to land. Allocation only -- X4VR_SBS_RIGHT_LAYER is what actually puts it
+// on screen, and it stays 0 until a masked pass is known to write layer 1.
+//
+// Split in two because "the memory exists" and "the display is stereo" are
+// separate claims, and a run that conflates them reports a success it has not
+// earned: copying an unwritten layer into the right half is garbage on screen,
+// not a stereo frame.
+const bool g_sbs_two_layer = [] {
+    const char *e = getenv("X4VR_SBS_LAYERS");
+    return e && *e && *e != '0' && *e != '1';
+}();
+const uint32_t g_sbs_right_layer = [] {
+    const char *e = getenv("X4VR_SBS_RIGHT_LAYER");
+    return e && *e ? (uint32_t)strtoul(e, nullptr, 0) : 0u;
+}();
+
 // Present mode override, for measurement only. -1 leaves X4's choice alone.
 // 0 = IMMEDIATE, 1 = MAILBOX, 2 = FIFO (X4's own, and the one to play in).
 //
@@ -2348,8 +2366,15 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
                      w, h, X4VR_SBS_WIDTH, X4VR_SBS_HEIGHT, X4VR_SBS_WIDTH,
                      X4VR_SBS_HEIGHT);
         }
-            if (sbs_usage)
-            g_sbs.add_swapchain(*out, sbs_ci, split);
+            if (sbs_usage) {
+                // Two layers only when multiview is actually running: without
+                // it nothing renders a second view, so the extra layer would
+                // be memory spent to hold whatever the allocator left there.
+                const uint32_t layers =
+                    (g_sbs_two_layer && g_mv && g_multiview_supported) ? 2u : 1u;
+                g_sbs.add_swapchain(*out, sbs_ci, split, layers,
+                                    layers > 1 ? g_sbs_right_layer : 0u);
+            }
     }
     return r;
 }

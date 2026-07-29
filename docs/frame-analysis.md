@@ -1260,6 +1260,47 @@ applies to a single number: `4294967295` reads like a render pass, `?` reads
 like "not measured", and only one of those can be mistaken for a finding by
 someone reading the log six weeks from now — including me.
 
+## Stage 2: the LDR domain is mono by construction, and that is the real work
+
+Measured before writing any of it, from the pass inventory:
+
+* Every render pass X4 creates is **single-subpass** — `rp #N.0` and never
+  `.1`, across the whole inventory.
+* Every **STEREO** (masked) pass outputs only HDR formats: `[9H] [13H] [16H]
+  [70H] [76H] [77H] [97H]`. Not one masked pass writes an LDR attachment.
+* The passes that write the image X4 presents are `rp #0, #1, #7, #14` — the
+  ones whose framebuffer attachment logs as `?` because it came from
+  `vkGetSwapchainImagesKHR` rather than `vkCreateImage`. All four are
+  `1 colour [44L] no-depth -> MONO (all-LDR/UI)`, and all four carry
+  **`attachments=1`**.
+
+Those three facts together settle the shape of stage 2, and it is not the shape
+the plan assumed.
+
+The chain is per-eye up to the point it stops being HDR. G-buffer and lighting
+are masked and correct — stage 1 proved it. Then tonemap and UI write LDR, and
+by the classification rule an LDR-output pass is MONO, so the entire LDR domain
+is mono *by construction*. The eye image is LDR. There is therefore no way to
+get a per-eye image on screen without changing how LDR passes work.
+
+And they cannot be fixed the way the lighting pass was. A single-attachment
+pass has no second attachment to read as a subpass input, so its source arrives
+through a **descriptor sampler** — and this is the asymmetry that matters:
+
+> **Multiview view-indexes subpass inputs automatically. It does not
+> view-index samplers.** `subpassLoad` in view N reads layer N with no shader
+> change. `texture(sampler2D, uv)` in view N reads layer 0, in every view,
+> forever. A descriptor cannot fix it either, because a descriptor set is
+> bound once for the whole pass and has no per-view form.
+
+So stage 1's fix — point the descriptor at the array view and let multiview do
+the indexing — has no analogue here. Masking the four LDR passes would give
+them two layers and then write *the same left-eye image into both*.
+
+This is the "real SPIR-V work" predicted three phases ago for the lighting
+pass. The prediction was right that the work existed and wrong about where: the
+lighting pass needed none, and the post/UI chain needs it all.
+
 ### Take seventeen: the redirect run, and why the probe does not replace it
 
 Written before the run.

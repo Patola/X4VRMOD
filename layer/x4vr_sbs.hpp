@@ -71,6 +71,18 @@ public:
         // we copy its left half over its right.
         bool virtualized = false;
         VkExtent2D eye{};
+        // How many array layers the eye image carries, and which one feeds the
+        // right half of the composite.
+        //
+        // These are separate on purpose. Two layers can be allocated long
+        // before anything writes the second one, and copying an unwritten
+        // layer into the right half would put garbage on screen. So the
+        // allocation moves first and `right_layer` stays 0 until a masked
+        // pass is actually rendering into layer 1 -- at which point flipping
+        // it to 1 is the whole of the change, and flipping it back is the
+        // whole of the rollback.
+        uint32_t eye_layers = 1;
+        uint32_t right_layer = 0;
         std::vector<VkImage> eye_images;
         std::vector<VkDeviceMemory> eye_memory;
         VkCommandPool pool = VK_NULL_HANDLE;
@@ -109,11 +121,14 @@ public:
     // Called after the real swapchain has been created. Failure here is not
     // fatal: the chain is simply left unusable and frames present untouched.
     void add_swapchain(VkSwapchainKHR sc, const VkSwapchainCreateInfoKHR &ci,
-                       bool want_split) {
+                       bool want_split, uint32_t want_layers = 1,
+                       uint32_t right_layer = 0) {
         std::lock_guard<std::mutex> lock(mu_);
         if (!device_ || !fns_.complete())
             return;
         Chain c;
+        c.eye_layers = want_layers < 1 ? 1 : want_layers;
+        c.right_layer = right_layer < c.eye_layers ? right_layer : 0;
         c.extent = ci.imageExtent;
         if (c.extent.width < 2 || (c.extent.width & 1u)) {
             X4VR_LOG("sbs: swapchain width %u cannot be halved — composite off",
@@ -168,13 +183,19 @@ public:
         c.usable = true;
         const VkExtent2D eye = c.eye;
         const bool virt = c.virtualized;
+        const uint32_t layers = c.eye_layers, rl = c.right_layer;
         chains_[sc] = std::move(c);
         X4VR_LOG("sbs: composite armed for %ux%u (%u images), each eye %ux%u "
-                 "(%s)",
+                 "(%s), eye layers=%u right half from layer %u%s",
                  ci.imageExtent.width, ci.imageExtent.height, n, eye.width,
                  eye.height,
                  virt ? "X4 renders one eye, we own its images"
-                      : "X4 renders full width, left half duplicated");
+                      : "X4 renders full width, left half duplicated",
+                 layers, rl,
+                 // Named explicitly, because "2 layers" and "actually stereo"
+                 // are different claims and the gap between them is where a
+                 // run gets misread as a success.
+                 rl ? "  <-- STEREO composite" : "  (both halves are layer 0)");
     }
 
     void remove_swapchain(VkSwapchainKHR sc) {
@@ -241,6 +262,13 @@ public:
         }
         region[0].dstOffset = {0, 0, 0};
         region[1].dstOffset = {(int32_t)half, 0, 0};
+        // The one line that makes the display stereo. Left half always comes
+        // from layer 0; the right half's source is whatever `right_layer`
+        // says, which is 0 until something is known to be rendering layer 1.
+        // The destination is the real swapchain image and stays single-layer
+        // in both cases -- it is presented, so it has exactly one layer.
+        if (c.virtualized)
+            region[1].srcSubresource.baseArrayLayer = c.right_layer;
 
         if (c.virtualized) {
             // Distinct images, so each gets its optimal layout. X4 left the
@@ -250,6 +278,11 @@ public:
             b[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             b[0].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
             b[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            // Every layer, not just the one being copied: X4 left the whole
+            // image in PRESENT_SRC and a copy reads whichever layer
+            // `right_layer` names, so a barrier covering only layer 0 would
+            // be a layout violation the moment that becomes 1.
+            b[0].subresourceRange.layerCount = c.eye_layers;
             // The real image's previous contents are entirely overwritten by
             // the two copies, so its old layout does not matter.
             b[1].image = c.images[image];
@@ -267,6 +300,7 @@ public:
             b[0].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
             b[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
             b[0].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+            b[0].subresourceRange.layerCount = c.eye_layers;
             b[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
             b[1].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
             b[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -348,7 +382,12 @@ private:
         ii.format = ci.imageFormat;
         ii.extent = {c.eye.width, c.eye.height, 1};
         ii.mipLevels = 1;
-        ii.arrayLayers = ci.imageArrayLayers ? ci.imageArrayLayers : 1;
+        // The swapchain's own imageArrayLayers is 1 and cannot be otherwise --
+        // it is the thing being presented. The eye image is ours, so it can
+        // carry the second eye, which is the whole reason it exists.
+        ii.arrayLayers = c.eye_layers > 1
+                             ? c.eye_layers
+                             : (ci.imageArrayLayers ? ci.imageArrayLayers : 1);
         ii.samples = VK_SAMPLE_COUNT_1_BIT;
         ii.tiling = VK_IMAGE_TILING_OPTIMAL;
         ii.usage = ci.imageUsage | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
