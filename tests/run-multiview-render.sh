@@ -122,6 +122,37 @@ probe_case() {
 probe_case "probe: layers match"  IDENTICAL
 probe_case "probe: layers differ" DIFFER "X4VR_MV_MASK=2"
 
+
+# The stereo vertex patch: one draw, one module, two different eyes.
+#
+# This is the mechanism stage 2 rests on, and it is worth proving here for
+# the same reason the draw-replication case was: in the game it would be one
+# more black-frame candidate among many, and here it is a second.
+#
+# Column-major identity, and identity with a large x translation in column 3
+# (element 12). The shift is half of clip space, so the two layers cannot
+# coincidentally agree.
+ID="1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1"
+SHIFTED="1,0,0,0, 0,1,0,0, 0,0,1,0, 1.0,0,0,1"
+
+# The test's shader declares no descriptor set, so it classifies as UI --
+# hence the _UI knobs. That is also why the UI right-eye override exists at
+# all: in the game the UI stays mono deliberately.
+
+# Must-pass: same matrix both eyes. Proves the patched module still renders,
+# that gl_ViewIndex is readable, and that reading it changes nothing when the
+# two matrices agree. A patch that corrupted the module fails here.
+run_case "stereo patch, same K both eyes" 2 1 1 \
+    "VK_ADD_LAYER_PATH=$BUILD/layer" "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    "X4VR_MV=1" "X4VR_CLIP_K_UI=$ID" "X4VR_CLIP_K_UI_RIGHT=$ID"
+
+# Must-fail-for-the-right-reason: differing matrices must make the layers
+# differ. If gl_ViewIndex always read 0 -- the exact failure this whole
+# mechanism risks -- both layers would still be drawn and identical, and this
+# case is what catches it.
+probe_case "stereo patch, per-eye K differs" DIFFER \
+    "X4VR_CLIP_K_UI=$ID" "X4VR_CLIP_K_UI_RIGHT=$SHIFTED"
+
 echo
 if (( fails )); then echo "$fails case(s) failed"; exit 1; fi
 echo "all cases passed"

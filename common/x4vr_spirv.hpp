@@ -35,7 +35,9 @@ namespace spv {
 enum : uint32_t {
     kMagic = 0x07230203u,
 
+    OpExtension = 10,
     OpEntryPoint = 15,
+    OpCapability = 17,
     OpTypeInt = 21,
     OpTypeFloat = 22,
     OpTypeVector = 23,
@@ -52,13 +54,24 @@ enum : uint32_t {
     OpAccessChain = 65,
     OpDecorate = 71,
     OpMemberDecorate = 72,
+    OpCompositeConstruct = 80,
+    OpConvertSToF = 111,
+    OpFAdd = 129,
+    OpVectorTimesScalar = 142,
     OpMatrixTimesVector = 145,
     OpReturn = 253,
 
     ExecutionModelVertex = 0,
     DecorationBuiltIn = 11,
     BuiltInPosition = 0,
+    StorageClassInput = 1,
     StorageClassOutput = 3,
+
+    // Multiview. The builtin is what makes one draw produce two different
+    // eyes: it is the only thing inside a shader that differs between the
+    // two views of a masked pass.
+    CapabilityMultiView = 4439,
+    BuiltInViewIndex = 4440,
 };
 
 enum : uint32_t { DecorationDescriptorSet = 34 };
@@ -170,7 +183,24 @@ inline Kind classify(const std::vector<uint32_t> &code) {
 /// consecutive floats per column) matching X4's storage order.
 /// Returns false and leaves `code` untouched if the module is not a
 /// patchable vertex shader.
-inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16]) {
+/// Bakes `gl_Position = K * gl_Position` into a vertex module.
+///
+/// With `k_right` non-null the module becomes **stereo**: it reads
+/// `gl_ViewIndex` and uses `k` for view 0 and `k_right` for view 1, so a
+/// single multiview draw produces two different eyes.
+///
+/// The selection is arithmetic rather than a branch —
+/// `col = colL + float(view) * (colR - colL)` — for two reasons. It needs no
+/// basic-block surgery, so the instructions still append cleanly before each
+/// `OpReturn` the way the mono path does; and it avoids `OpSelect`, whose
+/// rules for a scalar condition with a vector result only relaxed in SPIR-V
+/// 1.4. Every op used here is core SPIR-V 1.0.
+///
+/// `float(view)` is exact for 0 and 1, so this is a selection and not a blend:
+/// the difference matrix is added once or not at all, with no rounding in
+/// between.
+inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16],
+                              const float *k_right = nullptr) {
     std::vector<Inst> insts;
     if (!iterate(code, insts))
         return false;
@@ -189,20 +219,65 @@ inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16]) {
     uint32_t ptr_out_v4 = 0;
     size_t first_fn = 0;
     bool have_first_fn = false;
+    // Where a new OpDecorate may legally go. Annotations form their own
+    // section, ahead of every type and constant, so the ViewIndex decoration
+    // cannot ride along with the declarations appended before the first
+    // function -- that lands in the types section and the module stops
+    // validating.
+    size_t last_annotation_end = 0;
+    size_t first_global = 0;
+    bool have_first_global = false;
+    bool has_multiview_cap = false;
+    bool has_multiview_ext = false;
+    size_t caps_end = 0;    // after the last OpCapability
+    size_t exts_end = 0;    // after the last OpExtension
 
     for (const Inst &in : insts) {
         const uint32_t *w = &code[in.start];
+        // Fallback anchor for the annotation insert, for the (unlikely)
+        // module that decorates nothing: the types section starts here.
+        if (!have_first_global)
+            switch (in.op) {
+            case OpTypeInt:
+            case OpTypeFloat:
+            case OpTypeVector:
+            case OpTypeMatrix:
+            case OpTypeStruct:
+            case OpTypePointer:
+            case OpConstant:
+            case OpConstantComposite:
+            case OpVariable:
+                first_global = in.start;
+                have_first_global = true;
+                break;
+            default:
+                break;
+            }
         switch (in.op) {
+        case OpCapability:
+            caps_end = in.start + in.len;
+            if (in.len >= 2 && w[1] == CapabilityMultiView)
+                has_multiview_cap = true;
+            break;
+        case OpExtension:
+            exts_end = in.start + in.len;
+            if (in.len >= 6 && w[1] == 0x5f565053u && w[2] == 0x5f52484bu &&
+                w[3] == 0x746c756du && w[4] == 0x65697669u &&
+                w[5] == 0x00000077u)
+                has_multiview_ext = true;
+            break;
         case OpEntryPoint:
             if (in.len >= 3 && w[1] == ExecutionModelVertex && !entry_fn)
                 entry_fn = w[2];
             break;
         case OpMemberDecorate:
+            last_annotation_end = in.start + in.len;
             if (in.len >= 5 && w[3] == DecorationBuiltIn &&
                 w[4] == BuiltInPosition)
                 struct_pos_member[w[1]] = w[2];
             break;
         case OpDecorate:
+            last_annotation_end = in.start + in.len;
             if (in.len >= 4 && w[2] == DecorationBuiltIn &&
                 w[3] == BuiltInPosition)
                 var_pos_direct.push_back(w[1]);
@@ -298,33 +373,99 @@ inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16]) {
         const_member_idx = new_id();
         emit(decls, OpConstant, {t_int, const_member_idx, pos_member});
     }
+    // A float constant, reusing nothing -- duplicate OpConstants of the same
+    // type and value are legal but a validator may fold them; either way the
+    // module stays correct.
+    auto fconst = [&](float f) {
+        uint32_t bits;
+        memcpy(&bits, &f, 4);
+        const uint32_t id = new_id();
+        emit(decls, OpConstant, {t_float, id, bits});
+        return id;
+    };
+    auto mat_const = [&](const float m[16], uint32_t col_out[4]) {
+        for (int c = 0; c < 4; c++) {
+            uint32_t comp[4];
+            for (int r = 0; r < 4; r++)
+                comp[r] = fconst(m[c * 4 + r]);
+            col_out[c] = new_id();
+            emit(decls, OpConstantComposite,
+                 {t_v4, col_out[c], comp[0], comp[1], comp[2], comp[3]});
+        }
+        const uint32_t id = new_id();
+        emit(decls, OpConstantComposite,
+             {t_mat4, id, col_out[0], col_out[1], col_out[2], col_out[3]});
+        return id;
+    };
+
     // K's 16 scalars -> 4 column vectors -> the matrix constant
     uint32_t col[4];
-    for (int c = 0; c < 4; c++) {
-        uint32_t comp[4];
-        for (int r = 0; r < 4; r++) {
-            uint32_t bits;
-            const float f = k[c * 4 + r];
-            memcpy(&bits, &f, 4);
-            comp[r] = new_id();
-            emit(decls, OpConstant, {t_float, comp[r], bits});
+    const uint32_t const_k = mat_const(k, col);
+
+    // --- stereo: the difference matrix and the ViewIndex input ----------
+    uint32_t diff_col[4] = {0, 0, 0, 0};
+    uint32_t view_var = 0;
+    const bool stereo = k_right != nullptr;
+    if (stereo) {
+        float diff[16];
+        for (int i = 0; i < 16; i++)
+            diff[i] = k_right[i] - k[i];
+        // Only the columns are used -- the assembled matrix constant is a
+        // by-product of reusing mat_const and costs nothing at runtime.
+        (void)mat_const(diff, diff_col);
+
+        if (!t_int) {
+            t_int = new_id();
+            emit(decls, OpTypeInt, {t_int, 32, 1});
         }
-        col[c] = new_id();
-        emit(decls, OpConstantComposite,
-             {t_v4, col[c], comp[0], comp[1], comp[2], comp[3]});
+        const uint32_t ptr_in_int = new_id();
+        emit(decls, OpTypePointer, {ptr_in_int, StorageClassInput, t_int});
+        view_var = new_id();
+        emit(decls, OpVariable, {ptr_in_int, view_var, StorageClassInput});
     }
-    const uint32_t const_k = new_id();
-    emit(decls, OpConstantComposite,
-         {t_mat4, const_k, col[0], col[1], col[2], col[3]});
+
+    // Where the ViewIndex decoration goes: after the last annotation, or --
+    // for a module that decorates nothing -- immediately before the types.
+    const size_t anno_at = last_annotation_end ? last_annotation_end
+                                               : (have_first_global ? first_global
+                                                                    : first_fn);
 
     // --- rebuild the module -------------------------------------------
     std::vector<uint32_t> out;
     out.reserve(code.size() + decls.size() + 64);
     out.insert(out.end(), code.begin(), code.begin() + 5); // header
 
+    // A module with no OpCapability at all is not a thing the loader would
+    // have accepted, but anchor on the header rather than 0 so a malformed
+    // input cannot make us write before the instruction stream.
+    const size_t cap_at = caps_end ? caps_end : 5;
+    const size_t ext_at = exts_end ? exts_end : cap_at;
+
     bool in_entry = false;
     for (const Inst &in : insts) {
         const uint32_t *w = &code[in.start];
+        // Capabilities come first in a module, extensions immediately after,
+        // so both are emitted at the end of their own runs rather than
+        // wherever the declarations happen to land.
+        if (stereo && !has_multiview_cap && in.start == cap_at)
+            emit(out, OpCapability, {CapabilityMultiView});
+        // Multiview is core from SPIR-V 1.3 (Vulkan 1.1), where naming the
+        // extension is redundant. Only older modules get it -- X4 ships a
+        // mix, so this is decided per module rather than once.
+        if (stereo && !has_multiview_ext && code[1] < 0x00010300u &&
+            in.start == ext_at) {
+            // "SPV_KHR_multiview", NUL-terminated and word-padded: 17 chars
+            // + NUL = 18 bytes -> 5 words, little-endian.
+            static const uint32_t kExt[] = {0x5f565053u, 0x5f52484bu,
+                                            0x746c756du, 0x65697669u,
+                                            0x00000077u};
+            out.push_back((uint32_t)((1 + 5) << 16) | OpExtension);
+            for (uint32_t x : kExt)
+                out.push_back(x);
+        }
+        if (stereo && in.start == anno_at)
+            emit(out, OpDecorate,
+                 {view_var, DecorationBuiltIn, BuiltInViewIndex});
         // declarations go immediately before the first function
         if (in.start == first_fn)
             out.insert(out.end(), decls.begin(), decls.end());
@@ -341,9 +482,41 @@ inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16]) {
                      {ptr_out_v4, ptr, pos_var, const_member_idx});
             const uint32_t loaded = new_id();
             emit(out, OpLoad, {t_v4, loaded, ptr});
+            uint32_t use_k = const_k;
+            if (stereo) {
+                // K = K_left + float(gl_ViewIndex) * (K_right - K_left)
+                const uint32_t vi = new_id();
+                emit(out, OpLoad, {t_int, vi, view_var});
+                const uint32_t vf = new_id();
+                emit(out, OpConvertSToF, {t_float, vf, vi});
+                uint32_t mixed[4];
+                for (int c = 0; c < 4; c++) {
+                    const uint32_t scaled = new_id();
+                    emit(out, OpVectorTimesScalar,
+                         {t_v4, scaled, diff_col[c], vf});
+                    mixed[c] = new_id();
+                    emit(out, OpFAdd, {t_v4, mixed[c], col[c], scaled});
+                }
+                use_k = new_id();
+                emit(out, OpCompositeConstruct,
+                     {t_mat4, use_k, mixed[0], mixed[1], mixed[2], mixed[3]});
+            }
             const uint32_t mul = new_id();
-            emit(out, OpMatrixTimesVector, {t_v4, mul, const_k, loaded});
+            emit(out, OpMatrixTimesVector, {t_v4, mul, use_k, loaded});
             emit(out, OpStore, {ptr, mul});
+        }
+
+        // The ViewIndex variable is an Input, so it belongs in the entry
+        // point's interface list. Required from SPIR-V 1.4 on, and harmless
+        // before it; omitting it is the kind of thing that validates on one
+        // driver and not the next.
+        if (stereo && in.op == OpEntryPoint && in.len >= 3 &&
+            w[2] == entry_fn) {
+            out.push_back((uint32_t)((in.len + 1) << 16) | OpEntryPoint);
+            for (uint32_t j = 1; j < in.len; j++)
+                out.push_back(w[j]);
+            out.push_back(view_var);
+            continue;
         }
 
         out.insert(out.end(), code.begin() + in.start,

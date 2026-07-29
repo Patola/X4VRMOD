@@ -270,6 +270,11 @@ int main(int argc, char **argv) {
 
     VkCommandPoolCreateInfo cpci{};
     cpci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    // Stage 2 re-records this buffer for the second submission, which needs
+    // the pool to permit individual resets. Without the flag the suite still
+    // passed while emitting a validation error -- and a suite that is not
+    // validation-clean cannot be used to clear a patch of validation errors.
+    cpci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     cpci.queueFamilyIndex = gfx;
     VkCommandPool pool;
     CHECK(vkCreateCommandPool(dev, &cpci, nullptr, &pool));

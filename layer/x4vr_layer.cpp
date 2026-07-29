@@ -1693,6 +1693,13 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     static bool have_k = false;
     static float K_world[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     static float K_ui[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    // The right eye's counterparts. Present only in stereo: when these are
+    // unset the module is patched with one matrix and behaves exactly as it
+    // did through Phase 4a, so the mono path is not a special case of the
+    // stereo one but the same code with nothing to select between.
+    static bool have_kr = false, have_kr_ui = false;
+    static float K_world_r[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    static float K_ui_r[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     static std::once_flag once;
     std::call_once(once, [] {
         auto parse16 = [](const char *s, float *m) {
@@ -1733,8 +1740,43 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
             X4VR_LOG("eye=%s ipd=%.4f sx=%.4f near=%.3f -> K shear m8=%.5f",
                      right ? "right" : "left", ipd, sx, nz, K_world[8]);
         }
+        // Stage 2: one module, both eyes, selected by gl_ViewIndex.
+        //
+        // X4VR_EYE bakes a single eye into every draw, which is how Phase 4a
+        // validated the shear; X4VR_STEREO instead bakes both and lets the
+        // view index pick. The derivation is identical -- the same
+        // make_eye_shear, the same sx/near -- so a stereo run and the pair of
+        // one-eye runs it replaces should produce the same two images.
+        if (getenv("X4VR_STEREO")) {
+            const float ipd = getenv("X4VR_IPD")
+                                  ? strtof(getenv("X4VR_IPD"), nullptr)
+                                  : 0.064f;
+            const float sx = getenv("X4VR_PROJ_SX")
+                                 ? strtof(getenv("X4VR_PROJ_SX"), nullptr)
+                                 : 0.889f;
+            const float nz = getenv("X4VR_PROJ_NEAR")
+                                 ? strtof(getenv("X4VR_PROJ_NEAR"), nullptr)
+                                 : 0.1f;
+            const x4vr::Mat4 kl = x4vr::make_eye_shear(sx, 0.0f, nz, -0.5f * ipd);
+            const x4vr::Mat4 kr = x4vr::make_eye_shear(sx, 0.0f, nz, +0.5f * ipd);
+            memcpy(K_world, kl.m, sizeof(kl.m));
+            memcpy(K_world_r, kr.m, sizeof(kr.m));
+            have_k = have_kr = true;
+            X4VR_LOG("stereo: ipd=%.4f sx=%.4f near=%.3f -> shear m8 L=%.5f "
+                     "R=%.5f (per-view, gl_ViewIndex selects)",
+                     ipd, sx, nz, K_world[8], K_world_r[8]);
+        }
+        // Direct matrices, which is what the offline suite drives: it needs
+        // two layers that provably differ, without an IPD or a projection.
+        if (const char *s = getenv("X4VR_CLIP_K_RIGHT"))
+            have_kr |= parse16(s, K_world_r);
         if (const char *s = getenv("X4VR_CLIP_K_UI"))
             have_k |= parse16(s, K_ui);
+        // Normally unset: the UI is CPU hit-tested and belongs in both eyes
+        // identically, so it stays mono. Exists because the offline test's
+        // shader declares no set-3 block and therefore classifies as UI.
+        if (const char *s = getenv("X4VR_CLIP_K_UI_RIGHT"))
+            have_kr_ui |= parse16(s, K_ui_r);
         if (const char *sh = getenv("X4VR_CLIP_SHIFT_UI")) {
             K_ui[12] = strtof(sh, nullptr);
             have_k = true;
@@ -1753,11 +1795,18 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     const x4vr::spv::Kind kind = x4vr::spv::classify(code);
     if (kind == x4vr::spv::Kind::NotVertex)
         return d->CreateShaderModule(device, ci, ac, out);
-    const float *K = (kind == x4vr::spv::Kind::World) ? K_world : K_ui;
+    const bool world = kind == x4vr::spv::Kind::World;
+    const float *K = world ? K_world : K_ui;
+    // Null unless a right eye was configured for this kind, and that null is
+    // what keeps the module mono.
+    const float *KR = world ? (have_kr ? K_world_r : nullptr)
+                            : (have_kr_ui ? K_ui_r : nullptr);
 
-    static uint32_t patched = 0, n_world = 0, n_ui = 0;
-    (kind == x4vr::spv::Kind::World ? n_world : n_ui)++;
-    if (x4vr::spv::patch_vertex_clip(code, K)) {
+    static uint32_t patched = 0, n_world = 0, n_ui = 0, n_stereo = 0;
+    (world ? n_world : n_ui)++;
+    if (KR)
+        n_stereo++;
+    if (x4vr::spv::patch_vertex_clip(code, K, KR)) {
         VkShaderModuleCreateInfo mod = *ci;
         mod.codeSize = code.size() * 4;
         mod.pCode = code.data();
@@ -1771,10 +1820,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
                 g_variants.original[*out] = orig;
             }
             if (++patched <= 3 || (patched % 50) == 0)
-                X4VR_LOG("patched vertex shader #%u (%s) [world=%u ui=%u]",
-                         patched,
-                         kind == x4vr::spv::Kind::World ? "world" : "ui",
-                         n_world, n_ui);
+                X4VR_LOG("patched vertex shader #%u (%s%s) "
+                         "[world=%u ui=%u stereo=%u]",
+                         patched, world ? "world" : "ui",
+                         KR ? ", per-view" : "", n_world, n_ui, n_stereo);
             return r;
         }
         // Patched module rejected by the driver: fall back to the original
