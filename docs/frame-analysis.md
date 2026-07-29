@@ -4,6 +4,91 @@ Renderdoc findings on X4 9.0 (RADV, RX 7900 XTX). This is the empirical
 basis for the double-render stereo mechanism; keep it updated as we learn
 more.
 
+---
+
+## Where this stands (read this first)
+
+**Verified live and tagged.** The frame renders two genuinely different eyes
+from a single draw, up to the point where sampling takes over.
+
+| Tag | What it holds |
+|---|---|
+| `stage1-multiview-verified` | Both array layers byte-identical (readback) |
+| `stage1-complete` | …and a frame built entirely from layer 1 is correct end to end |
+| `stage2-per-eye-k` | Per-eye `K` via `gl_ViewIndex` — one draw, two different eyes |
+
+**The frame is stereo up to the first sampled read, and mono after it.** That
+is the entire remaining problem, and it is measured rather than assumed —
+take eighteen's per-image probe table below.
+
+### Next step: investigate, do not patch yet
+
+Two questions, both answerable from logs already on disk plus small
+instrumentation. No further game runs needed to start.
+
+1. **Which pass writes `#122` and `#123`?** They are 1408×1408, masked, and
+   differ on *zero* non-empty captures — they render into both layers and put
+   the same picture in each. Almost certainly the tonemap/post pair, and they
+   are the patch target. Find them by joining `fb rp #N` lines to the image
+   serials, in the *same run* (serials restart per run — see the correction
+   under "Ruled out without a run").
+2. **Why does `#101` differ on 3 of 7 non-empty captures?** Everything else is
+   cleanly all-or-nothing. Intermittent is not understood, and patching what
+   is not understood is how take five went wrong. Resolve before touching it.
+
+### Why patching is the chosen mechanism
+
+Decided with the user after measuring, not by default. The LDR domain is mono
+*by construction*: every pass is single-subpass, no masked pass outputs LDR,
+and the four passes writing the presented image are single-attachment — so
+their input can only arrive by descriptor. **Multiview view-indexes subpass
+inputs automatically but never samplers**, and a descriptor set has no
+per-view form. Alternatives considered and rejected: replaying the LDR pass
+range per eye (no shader knowledge needed, but invasive command-buffer
+interception), and blitting to a double-wide source so a *vertex* patch could
+offset UV (cheapest, but an extra full-res copy per frame).
+
+The mechanism is already proven offline (`d623ee1`): `patch_vertex_clip` takes
+an optional right-eye matrix, selects arithmetically rather than by branch or
+`OpSelect`, and both cases are validation-clean. The fragment version reuses
+the same module-structure rules — capability with the capabilities, extension
+only below SPIR-V 1.3, decoration in the annotation section, new Input added
+to the entry point's interface list.
+
+### Verification available without looking at the screen
+
+The tonemap patch has a *measured* pass condition, not a visual one: `#122`
+and `#123` must flip from 0-differ to all-differ in the probe table. The UI
+chain stays mono deliberately, so the right eye should get a correct scene
+with **no HUD** — wrong in a specific predicted way, which is a real test
+rather than a "looks fine" one.
+
+### Knobs that matter now
+
+    X4VR_MV=1                 doubling + masking (the whole stage-1 mechanism)
+    X4VR_STEREO=1             per-eye K, both eyes baked, gl_ViewIndex selects
+    X4VR_MV_PROBE=1           the per-image layer0-vs-layer1 verdict table
+    X4VR_MV_DUMP=<prefix>     write the two layers as PPM on a DIFFER
+    X4VR_SBS_LAYERS=2         allocate the second layer on the eye image
+    X4VR_SBS_RIGHT_LAYER=1    …and actually show it in the right half
+    X4VR_PRESENT_MODE=0       uncap the frame rate; every perf number before
+                              this one measured the monitor, not the renderer
+
+### Deliberately still open
+
+* **The doubling overshoot** — 90 images / 565.6 MB against ~18–21 / ~135 MB
+  needed. Untouched on purpose so a tightening regression cannot be confused
+  with a stereo bug.
+* **No real perf number yet.** `X4VR_PRESENT_MODE` now makes one obtainable;
+  `X4VR_MV=0` remains a valid baseline, so this is not urgent.
+* **Lighting constants are still the left eye's.** Per-eye `K` shears clip
+  space; `M_invprojection`, `V_cameraposition` @736 and
+  `V_light_direction_view` @864 are not yet per-view, so the right eye's
+  deferred lighting reconstructs position with the left eye's matrices. Not
+  yet visible, and it will be once the LDR chain carries the difference.
+
+---
+
 ## Per-view frame-constants UBO ("camera constants")
 
 Found on a complex scene object's constant buffer. One UBO holds all the
