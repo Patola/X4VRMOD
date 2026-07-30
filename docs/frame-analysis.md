@@ -4769,3 +4769,73 @@ P31 is the one that decides the repair. `wayland-0` means the launcher's own
 `env -u WAYLAND_DISPLAY` is the cause and the fix is in the launcher.
 `gamescope-0` means X4 presents one surface and takes input through another,
 both inside gamescope, and the fix is to stop it having two.
+
+## Take thirty-seven: P31 refuted, P32 confirmed, and the geometry finally closes
+
+Run: `X4VR_TAKE=37-socket X4VR_LOG=/tmp/x4vr-take37.log X4VR_GAMESCOPE=1
+X4VR_SBS=1 ./launch/x4vr-launch.sh`
+
+```
+(pid 3423574, gamescope)  net: connect(/run/user/1000/wayland-0)
+(pid 3423616, X4)         net: connect(@/tmp/.X11-unix/X2)
+(pid 3423616, X4)         net: connect(/run/user/1000/gamescope-0)
+(pid 3423616, X4)         wsi: surface 0x25ca3720 created via vkCreateWaylandSurfaceKHR
+(pid 3423616, X4)         wsi: surface 0x22dccd80 created via vkCreateXcbSurfaceKHR, window 0x40002e
+(pid 3423616, X4)         swapchain created: 1408x1408 … surface 0x25ca3720 wsi=wayland
+```
+
+**P31 refuted, second branch. P32 confirmed.** X4 connects to `gamescope-0`, not
+to `wayland-0`. It is a Wayland client *of gamescope*, and gamescope is the only
+Plasma toplevel — which is why there is one window, exactly as reported.
+
+The mechanism was sitting in the implicit layer directory the whole time:
+
+```
+/usr/share/vulkan/implicit_layer.d/VkLayer_FROG_gamescope_wsi.x86_64.json
+```
+
+gamescope's own WSI layer. It converts a client's X11 presentation into a native
+Wayland swapchain on gamescope's compositor — which is its entire purpose, and
+which is why `WAYLAND_DISPLAY` being unset never mattered: the layer knows the
+socket without being told.
+
+### The picture, all of it measured
+
+| | server | extent | set by |
+|---|---|---|---|
+| **input** | gamescope's XWayland `:2`, window `0x40002e` | 1408×1408, centred → 704 | `res_width`, then gamescope's placement |
+| **output** | gamescope's Wayland compositor, surface `0x25ca3720` | 2816×1408 | our composite buffer |
+| display | gamescope's nested display | 2816×1408 | `-w`/`-W` |
+
+Nothing here is a lie the layer tells, a driver quirk, or a fallback that went
+wrong. **X4 has two surfaces inside gamescope, and only one of them was ever
+sized deliberately.** The 704 is the gap between them, and it is the same 704
+measured off the screen in take thirty-three by an entirely independent route.
+
+Every earlier explanation of that number — gamescope scaling input, X4 falling
+back to Wayland, two toplevels in two display servers — was an attempt to
+account for one measurement without the other. The measurement that closed it
+was `connect(2)`, which is four lines of code and was never taken because the
+question had always been phrased as "which display server is X4 on", and the
+answer is *both, for different purposes*.
+
+### The repair, and why it is one flag
+
+`gamescope --force-windows-fullscreen` makes a client's window the size of the
+nested display. X4's X11 window becomes 2816 wide, input space becomes display
+space, and the 704 disappears at its source rather than being cancelled
+downstream. Added as `X4VR_WINDOWS_FULLSCREEN=1`, opt-in until measured.
+
+- **P33** — X4 still renders one eye: `composite armed … each eye 1408x1408`
+  and no `SPLIT OFF`. It sizes from the surface, which reports `0xFFFFFFFF`, so
+  `res_width` still decides and the X11 window's size is not consulted. If
+  `SPLIT OFF` appears with `X4 asked for 2816x1408`, then X4 does size from the
+  window and this flag costs the split render.
+- **P34** — the pointer is no longer confined to a centred square; it reaches
+  both edges of the display.
+- **P35** — an element in the **left** copy activates when hovered *where it is
+  drawn*, 1:1, and the right copy does not respond. That is the whole point:
+  the left copy and the input space would then be the same 1408 pixels.
+
+If P33–P35 hold, task #17 stops being "map a display coordinate into eye space"
+and becomes `x mod 1408` — one line, to make the right copy work too.

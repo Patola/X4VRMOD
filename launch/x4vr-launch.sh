@@ -205,6 +205,12 @@
 #                         through X4VR_LOG.
 #   X4VR_NO_LAYER=1       skip the Vulkan layer
 #   X4VR_NO_INJECT=1      skip the LD_PRELOAD injector
+#   X4VR_WINDOWS_FULLSCREEN=1
+#                         gamescope --force-windows-fullscreen: make X4's X11
+#                         window the size of the nested display instead of the
+#                         size of res_width. Input and output are two different
+#                         surfaces inside gamescope (see take thirty-seven), and
+#                         this is what makes the input one match the display.
 #   X4VR_TAKE=<label>     a name for this run. Means nothing to the code; the
 #                         injector prints it with every other X4VR_* variable
 #                         as one copy-pasteable "env: run = ..." line, so a
@@ -381,6 +387,22 @@ if [[ "${X4VR_GAMESCOPE:-0}" == 1 ]]; then
     # verified live to leave everything else intact: mouse steering, direct
     # mouse steering, the map and the menus all behave. On by default.
     [[ "${X4VR_GRAB_CURSOR:-1}" == 1 ]] && GS_DECOR+=(--force-grab-cursor)
+    # Make X4's X11 window the size of the nested display.
+    #
+    # Take thirty-seven established that X4 has two surfaces inside gamescope:
+    # an X11 window on its XWayland (DISPLAY=:2, window 0x40002e), which is
+    # where input comes from, and a native Wayland swapchain on gamescope-0
+    # created by VkLayer_FROG_gamescope_wsi, which is where output goes. The
+    # X11 window is 1408 wide because res_width says so, and gamescope centres
+    # it in a 2816-wide nested display -- which is the 704 offset measured in
+    # take thirty-three, from the other end.
+    #
+    # This flag makes that window 2816 too, so input space and display space
+    # are the same space. X4 should keep rendering one eye regardless, because
+    # it sizes from the surface (0xFFFFFFFF -> res_width) and not from the
+    # window; if that is wrong, the split test fails and SPLIT OFF says so.
+    [[ "${X4VR_WINDOWS_FULLSCREEN:-0}" == 1 ]] &&
+        GS_DECOR+=(--force-windows-fullscreen)
     exec gamescope "${GS_DECOR[@]}" -w "$W" -h "$H" -W "$W" -H "$H" \
         --backend sdl -- \
         env -u WAYLAND_DISPLAY "SDL_VIDEODRIVER=${X4VR_SDL_DRIVER:-x11}" \
