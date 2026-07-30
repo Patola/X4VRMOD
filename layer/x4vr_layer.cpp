@@ -425,10 +425,15 @@ std::unordered_map<VkRenderPass, uint32_t> g_rp_serials;
 std::unordered_set<VkRenderPass> g_masked_passes;
 
 // The subset of those that are masked *only* because of the SRGB carve-out --
-// X4's tonemap, rp #40 and #52. This is the pass whose fragment shader has to
-// learn to sample per view, and naming it here is what lets the shader dump
-// pick out two modules instead of the ~1300 X4 creates. Shares g_variants.mu.
-std::unordered_set<VkRenderPass> g_tonemap_passes;
+// rp #40 and #52, both of which render into #103.
+//
+// These were called "the tonemap" until their shaders were read, and they are
+// not one. Six different pipelines draw through rp #40: one fullscreen textured
+// quad and several with full vertex attributes, i.e. UI geometry. #103 is the
+// LDR *composition* target, not a tonemap output. X4VR_MASK_TONEMAP keeps its
+// name because the tagged runs and the doc's launch command use it, but the
+// name is a misnomer -- see docs/frame-analysis.md.
+std::unordered_set<VkRenderPass> g_srgb_resolve_passes;
 
 // Image tracking, for the Phase 4b question the pass inventory could not
 // answer: how many *images* are behind those passes? The cost of doubling is
@@ -1103,7 +1108,7 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
     std::lock_guard<std::mutex> lock(g_variants.mu);
     for (uint32_t i = 0; i < ci->subpassCount; i++)
         if (unsheared[i] && per_eye[i])
-            g_tonemap_passes.insert(rp);
+            g_srgb_resolve_passes.insert(rp);
     if (g_mv_inventory && g_active) {
         const uint32_t serial = g_rp_serial++;
         g_rp_serials[rp] = serial;
@@ -1746,7 +1751,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyRenderPass(
         g_variants.unsheared.erase(rp);
         g_rp_serials.erase(rp);
         g_masked_passes.erase(rp);
-        g_tonemap_passes.erase(rp);
+        g_srgb_resolve_passes.erase(rp);
     }
     d->DestroyRenderPass(device, rp, ac);
 }
@@ -2049,14 +2054,17 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
         g_mv_stats.pipe_dynamic += dynamic;
     }
 
-    // Name the tonemap's own shaders.
+    // Name the shaders that draw into #103.
     //
-    // The fragment patch needs one fact nobody has measured yet: which
-    // descriptor slot the tonemap reads #95 through. X4 creates ~1300 modules
-    // and the pass is created twice, so the useful join is here, where the
-    // render pass and the modules are in the same call. Prints the sampled
-    // (set, binding) list directly, and the module serial for when the shader
-    // has to be disassembled.
+    // This answered the question it was built for and then some: every one of
+    // them samples set 0 binding 7 with a count of 53306. X4 is bindless, one
+    // table for the whole game, indexed by S_diffuse_idx out of a uniform
+    // block. So there is no per-texture descriptor to swap and no type to
+    // promote -- see docs/frame-analysis.md, "X4 is bindless".
+    //
+    // Kept because it is the only join between a pass and the modules drawn
+    // through it, and because the count is what any future approach has to
+    // respect.
     if (g_mv && g_active && (g_mv_inventory || g_dump_shaders)) {
         for (uint32_t i = 0; i < count; i++) {
             bool tonemap;
@@ -2064,7 +2072,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
             {
                 std::lock_guard<std::mutex> lock(g_variants.mu);
                 tonemap = ci[i].renderPass != VK_NULL_HANDLE &&
-                          g_tonemap_passes.count(ci[i].renderPass) != 0;
+                          g_srgb_resolve_passes.count(ci[i].renderPass) != 0;
                 auto s = g_rp_serials.find(ci[i].renderPass);
                 if (s != g_rp_serials.end())
                     rp_serial = s->second;
@@ -2089,14 +2097,21 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
                             if (n >= 200)
                                 break;
                             n += snprintf(list + n, sizeof(list) - n,
-                                          "%sset %u binding %u%s%s", n ? ", " : "",
-                                          t.set, t.binding,
+                                          "%sset %u binding %u", n ? ", " : "",
+                                          t.set, t.binding);
+                            // The count is the load-bearing number: X4 is
+                            // bindless, so this is 53306 and not 1, and that is
+                            // what rules out promoting the type.
+                            if (t.count != 1)
+                                n += snprintf(list + n, sizeof(list) - n,
+                                              "[%u]", t.count);
+                            n += snprintf(list + n, sizeof(list) - n, "%s%s",
                                           t.arrayed ? " (already array)" : "",
                                           t.depth ? " (DEPTH)" : "");
                         }
                 }
-                X4VR_LOG("tonemap rp #%u: frag module #%u samples %s", rp_serial,
-                         serial, n ? list : "nothing");
+                X4VR_LOG("srgb-resolve rp #%u: frag module #%u samples %s",
+                         rp_serial, serial, n ? list : "nothing");
             }
         }
     }

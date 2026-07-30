@@ -37,9 +37,33 @@ static std::vector<uint32_t> load_spv(const char *path) {
 }
 
 int main(int argc, char **argv) {
+    if (argc < 3) {
+        fprintf(stderr,
+                "usage: %s frag-view-layer <in> <out> [set] [binding]\n"
+                "       %s list <in>\n",
+                argv[0], argv[0]);
+        return 2;
+    }
+    // `list` is what read X4's own shaders. It is the same code path the layer
+    // logs through, run against a dumped module, so the instrument can be
+    // checked against real bytes instead of only against shaders we wrote --
+    // which is how it was caught claiming a bindless shader samples nothing.
+    if (strcmp(argv[1], "list") == 0) {
+        std::vector<uint32_t> code = load_spv(argv[2]);
+        if (code.empty()) {
+            printf("FAIL=load\n");
+            return 1;
+        }
+        auto tex = x4vr::spv::list_sampled_textures(code);
+        printf("TEXTURES=%zu\n", tex.size());
+        for (const auto &t : tex)
+            printf("TEX set=%u binding=%u count=%u%s%s\n", t.set, t.binding,
+                   t.count, t.arrayed ? " arrayed" : "",
+                   t.depth ? " depth" : "");
+        return 0;
+    }
     if (argc < 4) {
-        fprintf(stderr, "usage: %s frag-view-layer <in> <out> [set] [binding]\n",
-                argv[0]);
+        fprintf(stderr, "frag-view-layer needs <in> <out>\n");
         return 2;
     }
     if (strcmp(argv[1], "frag-view-layer") != 0) {

@@ -406,6 +406,33 @@ patch_case "patch refuses textureSize"       0 sample_size.frag.spv   0 0
 patch_case "patch refuses a missing binding" 0 sample.frag.spv        0 1
 patch_case "patch refuses a vertex module"   0 fullscreen.vert.spv    0 0
 
+# The bindless table, which is what X4 actually has and what killed the
+# type-promotion approach. Promoting the element type promotes every entry, and
+# only a handful of images are doubled -- so this refusal is not a nicety.
+patch_case "patch refuses a bindless table" 0 sample_bindless.frag.spv 0 7
+
+# And the instrument, checked against the same shape. It reported "samples
+# nothing" about X4's real shaders until it learned to see through OpTypeArray,
+# so the count is asserted and not merely printed: it is the number that decides
+# type-promotion is impossible and an index offset is the way.
+list_case() {
+    local label="$1" want="$2" shader="$3"
+    local got
+    got=$("$PATCHER" list "$BUILD/tests/$shader" 2>&1 |
+        sed -n 's/^TEX set=\([0-9]*\) binding=\([0-9]*\) count=\([0-9]*\).*/\1\/\2 x\3/p' |
+        paste -sd' ' -)
+    if [[ "$got" == "$want" ]]; then
+        printf 'ok   %-38s %s\n' "$label" "$got"
+    else
+        printf 'FAIL %-38s want "%s", got "%s"\n' "$label" "$want" "${got:-?}"
+        fails=$((fails + 1))
+    fi
+}
+
+list_case "lister sees through a bindless array" "0/7 x64" sample_bindless.frag.spv
+list_case "lister reports a plain texture as 1"  "0/0 x1"  sample.frag.spv
+list_case "lister finds both of two textures"    "0/0 x1 0/1 x1" sample_two.frag.spv
+
 echo
 if (( fails )); then echo "$fails case(s) failed"; exit 1; fi
 echo "all cases passed"

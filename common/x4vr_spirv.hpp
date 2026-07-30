@@ -52,6 +52,8 @@ enum : uint32_t {
     OpTypeImage = 25,
     OpTypeSampler = 26,
     OpTypeSampledImage = 27,
+    OpTypeArray = 28,
+    OpTypeRuntimeArray = 29,
     OpTypeStruct = 30,
     OpTypePointer = 32,
     OpConstant = 43,
@@ -563,18 +565,24 @@ inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16],
 /// One sampled texture a fragment module declares.
 struct SampledTexture {
     uint32_t set, binding;
-    bool arrayed;  // already a 2D array -- nothing for the patch to do
-    bool depth;    // a shadow sampler, which the patch refuses
+    uint32_t count; // descriptor-array length; 1 for a plain texture
+    bool arrayed;   // already a 2D array -- nothing for the patch to do
+    bool depth;     // a shadow sampler, which the patch refuses
 };
 
 /// Lists the 2D textures a fragment module samples, without modifying it.
 ///
-/// This exists to be pointed at X4's tonemap before anything is patched. The
-/// patch has to be told which (set, binding) carries the doubled image, and
-/// guessing that from a shader nobody has read is how the last two wrong turns
-/// started. `arrayed` and `depth` are reported because they are the two shapes
-/// the patch will refuse, and it is better to learn that from a log line than
-/// from a live run where nothing changed.
+/// This exists to be pointed at X4's shaders before anything is patched, and
+/// the first time it was, it reported "samples nothing" about a shader that
+/// samples. X4 is **bindless**: the variable's type is not an image but an
+/// `OpTypeArray` of 53306 images, and looking only for the image type walked
+/// straight past it. Seeing through the array is the whole reason `count`
+/// exists — it is the number that decides whether the per-view mechanism can be
+/// an index offset instead of a type change.
+///
+/// `arrayed` and `depth` are reported because they are the two shapes
+/// `patch_fragment_view_layer` refuses, and it is better to learn that from a
+/// log line than from a live run where nothing changed.
 inline std::vector<SampledTexture>
 list_sampled_textures(const std::vector<uint32_t> &code) {
     std::vector<SampledTexture> out;
@@ -587,6 +595,8 @@ list_sampled_textures(const std::vector<uint32_t> &code) {
     std::unordered_map<uint32_t, std::vector<uint32_t>> img_ops;
     std::unordered_map<uint32_t, uint32_t> si_img;
     std::unordered_map<uint32_t, uint32_t> ptr_pointee;
+    std::unordered_map<uint32_t, uint32_t> const_val;  // id -> literal
+    std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> arr_of;
 
     for (const Inst &in : insts) {
         const uint32_t *w = &code[in.start];
@@ -594,6 +604,19 @@ list_sampled_textures(const std::vector<uint32_t> &code) {
         case OpEntryPoint:
             if (in.len >= 3 && w[1] == ExecutionModelFragment)
                 fragment = true;
+            break;
+        case OpConstant:
+            if (in.len >= 4)
+                const_val[w[2]] = w[3];
+            break;
+        case OpTypeArray:
+            // element type and the length's constant id
+            if (in.len >= 4)
+                arr_of[w[1]] = {w[2], w[3]};
+            break;
+        case OpTypeRuntimeArray:
+            if (in.len >= 3)
+                arr_of[w[1]] = {w[2], 0};
             break;
         case OpDecorate:
             if (in.len >= 4 && w[2] == DecorationDescriptorSet)
@@ -619,8 +642,17 @@ list_sampled_textures(const std::vector<uint32_t> &code) {
             auto p = ptr_pointee.find(w[1]);
             if (p == ptr_pointee.end())
                 break;
-            auto s = si_img.find(p->second);
-            const uint32_t img = s != si_img.end() ? s->second : p->second;
+            // Bindless: the pointee is an array of images (or of sampled
+            // images), not an image. X4 declares 53306 of them.
+            uint32_t pointee = p->second, count = 1;
+            auto a = arr_of.find(pointee);
+            if (a != arr_of.end()) {
+                pointee = a->second.first;
+                auto cv = const_val.find(a->second.second);
+                count = cv != const_val.end() ? cv->second : 0; // 0 = runtime
+            }
+            auto s = si_img.find(pointee);
+            const uint32_t img = s != si_img.end() ? s->second : pointee;
             auto io = img_ops.find(img);
             if (io == img_ops.end() || io->second.size() < 7)
                 break;
@@ -632,7 +664,7 @@ list_sampled_textures(const std::vector<uint32_t> &code) {
             auto db = dec_binding.find(w[2]);
             out.push_back({ds != dec_set.end() ? ds->second : UINT32_MAX,
                            db != dec_binding.end() ? db->second : UINT32_MAX,
-                           io->second[3] != 0, io->second[2] == 1});
+                           count, io->second[3] != 0, io->second[2] == 1});
             break;
         }
         default:
