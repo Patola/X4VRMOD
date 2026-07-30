@@ -1487,6 +1487,14 @@ const bool g_mask_tonemap = [] {
 // compositor still blits layer 0 into both halves). Three knobs for three
 // separate claims, deliberately, so a run cannot report a stereo frame it has
 // not earned.
+// Report the eye extent for a surface that declines to state one, so X4's
+// render size stops being its window size. See the long note on
+// x4vr_GetPhysicalDeviceSurfaceCapabilitiesKHR.
+const bool g_fake_extent = [] {
+    const char *e = getenv("X4VR_FAKE_EXTENT");
+    return e && *e && *e != '0';
+}();
+
 const bool g_mask_present = [] {
     const char *e = getenv("X4VR_MASK_PRESENT");
     return e && *e && *e != '0';
@@ -3660,11 +3668,14 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
             told = true;
             X4VR_LOG("sbs: SPLIT OFF — X4 asked for %ux%u but one eye is %ux%u. "
                      "Nothing below this is stereo; the composite will "
-                     "duplicate the left half. Two levers bring X4 to the eye "
-                     "size: the halved surface extent (X11 only — a Wayland "
-                     "surface reports 0xFFFFFFFF and there is nothing to "
-                     "halve), and res_width/res_height in the config, which X4 "
-                     "honours ONLY when borderless is false.",
+                     "duplicate the left half. X4 sizes its render from its "
+                     "WINDOW (measured, take thirty-eight): res_width works "
+                     "only because it is what X4 asks the window to be, and "
+                     "anything else that resizes the window — "
+                     "gamescope --force-windows-fullscreen, a compositor, a "
+                     "titlebar — overrides it. If the window has to stay at "
+                     "display width for input, X4VR_FAKE_EXTENT=1 offers the "
+                     "render size through the surface instead.",
                      ci->imageExtent.width, ci->imageExtent.height,
                      X4VR_SBS_WIDTH / 2, X4VR_SBS_HEIGHT);
         }
@@ -3994,13 +4005,34 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetPhysicalDeviceSurfaceCapabilities2KHR(
     return r;
 }
 
-// X4 sizes its whole pipeline from the surface's currentExtent -- that is
-// exactly why it ignores res_width/res_height while borderless. Reporting
-// half the width therefore makes it render one eye's worth *natively*:
-// G-buffer, luminance pyramid, bloom, the AO compute dispatches and
-// V_viewportpixelsize all come out consistent at 1408x1408, with nothing
-// wasted and no per-pass viewport surgery. The layer keeps the real
-// full-width swapchain and copies the eye into both halves at present.
+// What actually sizes X4's pipeline, corrected by take thirty-eight.
+//
+// This comment used to open "X4 sizes its whole pipeline from the surface's
+// currentExtent". That was never measured on this machine's path, because the
+// surface here always answers 0xFFFFFFFF and the halving branch never ran.
+// Take thirty-eight tested it by accident: gamescope's
+// --force-windows-fullscreen made X4's X11 window 2816 wide, and X4 asked for
+// a 2816-wide swapchain -- with res_width still 1408 and currentExtent still
+// 0xFFFFFFFF. **X4 sizes from its window.** res_width matters only because it
+// is what X4 asks the window to be; when something else resizes the window,
+// X4 follows it.
+//
+// That makes the window a single knob for two things we need to differ: it is
+// the render size *and* the input space. Setting it to the display width
+// fixes the 704 input offset and costs the split render, which is exactly
+// what take thirty-eight showed on screen -- pointer spanning the full width,
+// two left halves.
+//
+// So the render size has to come from somewhere that is not the window. The
+// Vulkan idiom is the obvious candidate and it has never been tried here:
+// almost every engine reads currentExtent and uses its own size only when the
+// answer is 0xFFFFFFFF. X4 has only ever been shown the 0xFFFFFFFF branch. If
+// it honours a real answer, reporting the eye extent sizes the render while
+// leaving the window alone -- and if it does not, then X4 ignores the surface
+// entirely and this whole comment, in both its versions, was fiction.
+//
+// X4VR_FAKE_EXTENT=1 is that experiment. Reporting half of a real extent (the
+// original design, for a surface that states a size) is kept separate below.
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetPhysicalDeviceSurfaceCapabilitiesKHR(
     VkPhysicalDevice phys, VkSurfaceKHR surface,
     VkSurfaceCapabilitiesKHR *caps) {
@@ -4019,10 +4051,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetPhysicalDeviceSurfaceCapabilitiesKHR(
     if (r != VK_SUCCESS || !g_sbs_enabled || !g_active || !g_sbs_split_render)
         return r;
 
-    // 0xFFFFFFFF means "the surface has no preferred size" -- the app picks
-    // its own extent and never consults this, so there is nothing to halve
-    // and, crucially, nothing to double back at swapchain creation. Halving
-    // and doubling must be one decision, recorded per surface.
+    // 0xFFFFFFFF means "the surface has no preferred size": the app is invited
+    // to pick, and there is no real extent to halve.
     const uint32_t was = caps->currentExtent.width;
     // Once per *surface*, not once per process.
     //
@@ -4047,6 +4077,22 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetPhysicalDeviceSurfaceCapabilitiesKHR(
                  caps->minImageExtent.height, caps->maxImageExtent.width,
                  caps->maxImageExtent.height, surface_wsi(surface),
                  (int)getpid());
+    }
+    if (was == 0xFFFFFFFFu && g_fake_extent) {
+        // Invent the answer the surface declined to give. Nothing is being
+        // halved here -- there was no number to halve; we are supplying the
+        // eye extent so that X4 has a source for its render size other than
+        // its window, which we need to keep at display width for input.
+        caps->currentExtent.width = X4VR_SBS_WIDTH / 2;
+        caps->currentExtent.height = X4VR_SBS_HEIGHT;
+        if (note_halved_surface(surface))
+            X4VR_LOG("sbs: surface %p had no preferred extent — reporting "
+                     "%ux%u (the eye) so the render size stops following the "
+                     "window. If X4 still asks for the window width, it does "
+                     "not consult the surface at all.",
+                     (void *)surface, caps->currentExtent.width,
+                     caps->currentExtent.height);
+        return r;
     }
     if (was == 0xFFFFFFFFu || was < 2) {
         forget_halved_surface(surface);

@@ -4839,3 +4839,76 @@ downstream. Added as `X4VR_WINDOWS_FULLSCREEN=1`, opt-in until measured.
 
 If P33–P35 hold, task #17 stops being "map a display coordinate into eye space"
 and becomes `x mod 1408` — one line, to make the right copy work too.
+
+## Take thirty-eight: P34 confirmed, P33 refuted — and the refutation is the finding
+
+Run: `X4VR_TAKE=38-fullscreen X4VR_LOG=/tmp/x4vr-take38.log X4VR_GAMESCOPE=1
+X4VR_SBS=1 X4VR_WINDOWS_FULLSCREEN=1 ./launch/x4vr-launch.sh`
+
+**P34 confirmed.** Reported from the screen: the cursor spans the whole window,
+in the main menu, the cockpit and the map. The centred square is gone. The 704
+offset is fixed at its source.
+
+**P33 refuted.**
+
+```
+sbs: surface 0x1b791a80 caps currentExtent=4294967295x4294967295 wsi=wayland
+sbs: SPLIT OFF — X4 asked for 2816x1408 but one eye is 1408x1408.
+sbs: composite armed … (X4 renders full width, left half duplicated)
+```
+
+Two left halves, as reported. And the reason is the useful part: `res_width` is
+still 1408 and `currentExtent` is still `0xFFFFFFFF`, yet X4 asked for 2816 —
+**the width of the window gamescope had just forced.**
+
+### What actually sizes X4
+
+The claim written at the top of `x4vr_GetPhysicalDeviceSurfaceCapabilitiesKHR`
+since it was first added — *"X4 sizes its whole pipeline from the surface's
+currentExtent"* — has never been true on this path, and could not have been
+tested there, because the surface has always answered `0xFFFFFFFF` and the
+halving branch has never once executed. It survived as a live claim through
+every take because nothing ever contradicted it out loud.
+
+Take thirty-eight contradicted it by accident. **X4 sizes its render from its
+window.** `res_width` matters only because it is what X4 asks the window to be;
+anything else that resizes the window overrides it — gamescope's flag here, and
+by the same mechanism the titlebar that the injector's own note recorded as
+`1408 -> 1385` long ago. That note was evidence for this all along, filed as a
+curiosity.
+
+### The bind
+
+The window is now one knob for two things that must differ:
+
+| wanted | needs the window to be |
+|---|---|
+| input space = display space | 2816 |
+| render = one eye | 1408 |
+
+Take thirty-seven's flag buys the first and take thirty-three's `res_width` buys
+the second, and they are the same setting. So the render size has to come from
+somewhere that is not the window.
+
+The Vulkan idiom is the obvious candidate, and X4 has never been shown it:
+almost every engine reads `currentExtent` and falls back to its own size *only*
+when the answer is `0xFFFFFFFF`. X4 has only ever seen the fallback branch. If
+it honours a real answer, then reporting the eye extent sizes the render while
+leaving the window at display width — and the three extents are settled without
+compensating for anything downstream.
+
+`X4VR_FAKE_EXTENT=1` does that: where the surface declines to state a size, the
+layer states one. Nothing is halved — there is no number to halve — which is why
+it is a separate knob from the original halving path rather than a widening of
+it.
+
+- **P36** — with `X4VR_FAKE_EXTENT=1` and `X4VR_WINDOWS_FULLSCREEN=1`, X4 asks
+  for 1408×1408, `SPLIT OFF` does not appear, and the composite says "X4 renders
+  one eye". If X4 still asks for 2816, it does not consult the surface at all,
+  and the comment quoted above was fiction in both its versions — leaving the
+  window as the only lever on render size, which input needs for itself.
+- **P37** — the cursor still spans the full width, unchanged from take
+  thirty-eight, since the window is untouched by this.
+- **P38** — an element in the **left** copy activates when hovered where it is
+  drawn, 1:1; the right copy does not respond. Both copies responding would mean
+  input is still not in the space the left copy occupies.
