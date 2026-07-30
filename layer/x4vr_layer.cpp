@@ -637,6 +637,9 @@ std::unordered_map<VkCommandBuffer, bool> g_cb_mask; // inside a masked pass
 // Which framebuffer a command buffer is currently rendering into, so that
 // vkCmdEndRenderPass can name the images the pass just finished writing.
 std::unordered_map<VkCommandBuffer, VkFramebuffer> g_cb_fb;
+// Which pass the buffer is inside, so a probe capture can name the pass whose
+// end it followed. #103 has two writers and they need not hold the same thing.
+std::unordered_map<VkCommandBuffer, VkRenderPass> g_cb_rp;
 
 // A doubled colour attachment of a masked pass, with the layout that pass
 // leaves it in. Collected at framebuffer creation, where the pass, the views
@@ -3765,6 +3768,7 @@ void cb_enter_pass(VkCommandBuffer cb, VkRenderPass rp) {
     }
     std::lock_guard<std::mutex> lock(g_cb_mu);
     g_cb_mask[cb] = masked;
+    g_cb_rp[cb] = rp;
 }
 
 void cb_leave_pass(VkCommandBuffer cb) {
@@ -3772,6 +3776,7 @@ void cb_leave_pass(VkCommandBuffer cb) {
         return;
     std::lock_guard<std::mutex> lock(g_cb_mu);
     g_cb_mask.erase(cb);
+    g_cb_rp.erase(cb);
 }
 
 // ---- the layer-1 readback ------------------------------------------------
@@ -3807,6 +3812,7 @@ struct MvProbe {
     uint32_t stalled = 0;
     std::unordered_set<uint32_t> done; // serials covered this round
     uint32_t serial = 0;               // the one being probed
+    uint32_t rp_serial = UINT32_MAX;   // the pass whose end this capture follows
     VkDeviceSize bytes = 0;
     uint32_t w = 0, h = 0, bpp = 0;
     VkFormat format = VK_FORMAT_UNDEFINED;
@@ -4072,10 +4078,18 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
     if (g_mv_probe && g_mv && g_active) {
         std::vector<FbAtt> atts;
         bool masked = false;
+        uint32_t rp_serial = UINT32_MAX;
         {
             std::lock_guard<std::mutex> lock(g_cb_mu);
             auto m = g_cb_mask.find(cb);
             masked = m != g_cb_mask.end() && m->second;
+            auto r = g_cb_rp.find(cb);
+            if (r != g_cb_rp.end()) {
+                std::lock_guard<std::mutex> vl(g_variants.mu);
+                auto s = g_rp_serials.find(r->second);
+                if (s != g_rp_serials.end())
+                    rp_serial = s->second;
+            }
             auto f = g_cb_fb.find(cb);
             if (masked && f != g_cb_fb.end()) {
                 auto a = g_fb_atts.find(f->second);
@@ -4098,6 +4112,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
                     if (g_probe.pending) {
                         g_probe.done.insert(a.serial);
                         g_probe.armed = false;
+                        g_probe.rp_serial = rp_serial;
                     }
                     break;
                 }
@@ -4229,32 +4244,44 @@ void probe_collect(DeviceData *d, VkQueue queue) {
     // the dump on DIFFER meant the instrument could only ever show what was
     // already known. X4VR_MV_DUMP_IMG names the image; without it the old
     // first-differing-image behaviour stands.
-    static bool dumped = false;
+    // Sequence-numbered, not one-shot. Take twenty-five: the first probe of
+    // #103 lands in the start menu, so a single dump could only ever show the
+    // menu -- and in the menu "UI layer" and "final composite" are the same
+    // picture, which is exactly the distinction the dump was for. Capped so a
+    // long run cannot fill /tmp.
+    static uint32_t dumps = 0;
+    const uint32_t kMaxDumps = 6;
     const char *want = getenv("X4VR_MV_DUMP_IMG");
     const bool named = want && *want &&
                        (uint32_t)strtoul(want, nullptr, 10) == g_probe.serial;
-    if (g_mv_dump && !dumped && (named || (!(want && *want) && h0 != h1))) {
+    if (g_mv_dump && dumps < (named ? kMaxDumps : 1u) &&
+        (named || (!(want && *want) && h0 != h1))) {
         const bool hdr = g_probe.format == VK_FORMAT_R16G16B16A16_SFLOAT;
         const bool bgra8 = g_probe.format == VK_FORMAT_B8G8R8A8_SRGB ||
                            g_probe.format == VK_FORMAT_B8G8R8A8_UNORM;
         const bool rgba8 = g_probe.format == VK_FORMAT_R8G8B8A8_SRGB ||
                            g_probe.format == VK_FORMAT_R8G8B8A8_UNORM;
         if (hdr || bgra8 || rgba8) {
-            dumped = true;
+            const uint32_t seq = dumps++;
             char p[512];
             for (int L = 0; L < 2; L++) {
                 const void *src = L ? l1 : l0;
-                snprintf(p, sizeof p, "%s-img%u-layer%d.ppm", g_mv_dump,
-                         g_probe.serial, L);
+                snprintf(p, sizeof p, "%s-img%u-n%u-layer%d.ppm", g_mv_dump,
+                         g_probe.serial, seq, L);
                 if (hdr)
                     write_ppm(p, (const uint16_t *)src, g_probe.w, g_probe.h);
                 else
                     write_ppm8(p, (const uint8_t *)src, g_probe.w, g_probe.h,
                                bgra8);
             }
-            X4VR_LOG("mv probe: wrote %s-img%u-layer{0,1}.ppm (fmt %u, %s)",
-                     g_mv_dump, g_probe.serial, (unsigned)g_probe.format,
-                     h0 != h1 ? "DIFFER" : "IDENTICAL");
+            // The pass is named because #103 has two writers and they need not
+            // hold the same thing: reading "after rp #40" and "after rp #52"
+            // as one measurement is how an intermediate state gets mistaken
+            // for the finished frame.
+            X4VR_LOG("mv probe: wrote %s-img%u-n%u-layer{0,1}.ppm "
+                     "(fmt %u, after rp #%u, %s)",
+                     g_mv_dump, g_probe.serial, seq, (unsigned)g_probe.format,
+                     g_probe.rp_serial, h0 != h1 ? "DIFFER" : "IDENTICAL");
         } else if (named) {
             // Named but unwritable is a fact worth one line: silence here
             // would read as "the probe never reached that image".

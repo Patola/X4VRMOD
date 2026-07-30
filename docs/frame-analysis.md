@@ -3256,3 +3256,65 @@ Predictions, committed before the measurement:
 
 P9 is the load-bearing one. P6–P8 only matter if P9 says `#103` was supposed
 to differ.
+
+### Take twenty-five: P6, P7 and P8 confirmed; P9 could not be asked
+
+| prediction | result |
+| --- | --- |
+| **P6** every `srgb-resolve` module reports `APPLIED` | **held** — modules #16, #263, #265, #267, #279, #440, all APPLIED |
+| **P7** twin-swap count > 0 | **held** — 1309 pipeline stages |
+| **P8** refusals small relative to edits | **held, and stronger** — 420 edited, **0 refused** |
+| **P9** the `#103` dump shows HUD, not the world | **undecidable from this run** |
+
+P6–P8 together close the mechanism question completely. The index-offset patch
+reaches **every** module that declares a mirrorable table — zero refusals in a
+whole run — the twin swap fires 1309 times, and the specific shaders drawing
+`#103` are all patched. There is no longer any version of "the patch did not
+reach `#103`" left standing.
+
+Which forces the conclusion by elimination: **`#103`'s shaders sample nothing
+that is doubled.** With the patch applied, view 1 reads `index + 26653`, and
+that slot holds a verbatim duplicate — so the two views produce the same bytes
+because their *sources* are the same bytes. The mirror behaved exactly as
+specified.
+
+### The dump landed in the start menu
+
+`X4VR_MV_DUMP_IMG=103` wrote its pair on the **first** probe of `#103`, which
+happens before the save is loaded. The picture is the Start Menu: white and
+blue text on black.
+
+That is consistent with `#103` being the UI layer. It is equally consistent
+with `#103` being the final composite — **in the start menu those are the same
+picture.** The dump answered nothing, and the reason is the `static bool
+dumped` one-shot: "first" was standing in for "representative", and for an
+image whose first appearance is a menu, first is the one frame that cannot
+discriminate.
+
+Now sequence-numbered, capped at six pairs, so a run yields menu *and*
+gameplay.
+
+### The possibility the elimination opened
+
+The probe copies immediately after `vkCmdEndRenderPass` of the masked pass. For
+`#103` that is the end of rp #40 or rp #52 — **not** present time. So the probe
+reads `#103` at an intermediate point in the frame, and "`#103` holds no
+per-eye content" is a statement about that instant, not about the finished
+frame.
+
+`#103`'s usage is `0x97`, which includes `TRANSFER_DST` (0x2) and
+`INPUT_ATTACHMENT` (0x80). Both are routes by which per-eye content could
+arrive **without passing through a sampler**, and therefore without the
+index-offset patch being involved at all. Multiview view-indexes input
+attachments automatically; transfers are widened separately
+(`transfers_widened=10020`). So the scene may well reach `#103` — just not at
+the moment the probe looks, and not by the path the patch governs.
+
+`#103` has two writers, rp #40 and rp #52, and the probe has been reporting
+both as one number for four runs. The dump now names the pass it followed.
+
+- **P10** — the gameplay dumps show `#103` containing HUD elements over the
+  rendered world, i.e. `#103` is the final composite. *(If HUD over black, it
+  is the UI layer and the take-23 gate was wrong from the start.)*
+- **P11** — if P10 holds, the world in `#103` is identical between layers,
+  because it arrived by a route the sampler patch does not govern.
