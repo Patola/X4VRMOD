@@ -30,6 +30,19 @@ X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1 \
 ./launch/x4vr-launch.sh
 ```
 
+| 2026-07-31 | `stage2-stereo-first` | `score_run.py` exit 0, layer 1 at 100% fill with 16 of 23 settled samples carrying a real difference; Patola confirms parallax on screen | `X4VR_TAKE=49-P57 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take49.log X4VR_MV_PROBE=1 X4VR_MASK_PRESENT=1 X4VR_BINDLESS_MIRROR=1 X4VR_MV_INVENTORY=1` |
+
+**`stage2-stereo-first` is the first run with real stereo on screen.** It is
+`stage2-duplicate-restored` plus `X4VR_BINDLESS_PATCH=1`, on the build that
+fixes the aliased-variable patch (take forty-eight). The grade reads `MIXED`
+rather than `STEREO` only because the splash-screen frames are legitimately
+bit-identical — X4 draws the same pixels to both layers there.
+
+**Open defect:** near-field cockpit geometry is lit differently between the
+eyes — a strut dark in one eye and bright in the other. Not yet diagnosed;
+task #22. It could be genuine parallax on a specular term or a resource being
+sampled per-view that should not be, and a screenshot cannot tell those apart.
+
 **What `stage2-duplicate-restored` is and is not.** Both eyes have a picture and
 the framerate is acceptable; the right eye is a bit-exact copy of the left, so
 there is no parallax in it. It is the state this project had in take
