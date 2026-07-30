@@ -71,8 +71,11 @@ int main(int argc, char **argv) {
     // the comparison would pass while proving nothing.
     {
         static const char *const kNames[] = {
-            "vkCreateWaylandSurfaceKHR", "vkCreateXcbSurfaceKHR",
-            "vkCreateXlibSurfaceKHR",    "vkDestroySurfaceKHR",
+            "vkCreateWaylandSurfaceKHR",
+            "vkCreateXcbSurfaceKHR",
+            "vkCreateXlibSurfaceKHR",
+            "vkDestroySurfaceKHR",
+            "vkGetPhysicalDeviceSurfaceCapabilities2KHR",
             "vkNoSuchFunctionX4VR",
         };
         for (const char *name : kNames)

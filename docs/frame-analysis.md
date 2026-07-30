@@ -4539,3 +4539,100 @@ that inference is exactly the kind this section is about, so it is written down
 as an inference. A direct reading would mean interposing `SDL_GetWindowSize`,
 which is the SDL2/SDL3 signature hazard again; deferred unless P24–P26 leave the
 question open.
+
+## Take thirty-four: P25 refuted, and the instrument reproduced its own bug
+
+Run: `X4VR_TAKE=34-wsi X4VR_LOG=/tmp/x4vr-take34.log X4VR_GAMESCOPE=1
+X4VR_SBS=1 ./launch/x4vr-launch.sh` — recorded by the run itself, which is the
+point of the `env: run =` line added for it.
+
+| | predicted | measured | |
+|---|---|---|---|
+| P24 | surface built by `vkCreateWaylandSurfaceKHR` | **both**: Wayland *and* xcb | unscoreable as stated |
+| P25 | driver `wayland`, hint `x11,wayland` | driver **`x11`**, hint **`x11`** | **refuted** |
+| P26 | environment arrived intact | `SDL_VIDEO_DRIVER=x11`, `WAYLAND_DISPLAY` unset, `DISPLAY=:2` | **confirmed** |
+
+```
+wsi: instance enables VK_KHR_surface / xlib_surface / xcb_surface /
+     wayland_surface / get_surface_capabilities2   (pid 3411750 = X4)
+wsi: surface created via vkCreateWaylandSurfaceKHR (pid 3411750)
+wsi: SDL_GetCurrentVideoDriver()=x11 hint SDL_VIDEO_DRIVER=x11 (pid 3411750)
+wsi: surface created via vkCreateXcbSurfaceKHR, window 0x40002e (pid 3411750)
+```
+
+**X4 is on X11, through gamescope's XWayland, exactly as the launcher intends.**
+The forcing took. The conclusion built on the previous two takes — that
+`SDL_VIDEO_DRIVER=x11` had failed and X4 had fallen back to Wayland — is wrong,
+and with it the claim that gamescope might be contributing nothing: `DISPLAY=:2`
+is gamescope's nested X server and window `0x40002e` lives on it. gamescope
+centres that 1408-wide window in its 2816-wide nested display, which is the
+`704` of take thirty-three, arrived at from the other end.
+
+The `setenv` trace also shows gamescope scrubbing `SDL_VIDEODRIVER` /
+`SDL_VIDEO_DRIVER` and setting `DISPLAY=:2` for its children, and the launcher's
+`env` re-adding them afterwards. The ordering the launcher depends on is real
+and now visible rather than argued.
+
+### How the instrument built to stop this did it again
+
+The whole task existed because the layer inferred a platform from a sentinel.
+The replacement logged the surface platform properly — and then printed it
+**once per process**, from a `static bool first` that predates this work and was
+carried through unexamined. X4 creates two surfaces a millisecond apart. The
+first is Wayland; the one that presents is xcb. So the new line read
+`wsi=wayland`, which is true of the surface it described and false of the game,
+and I read it as the answer.
+
+Inference from a sentinel, one level down: **a first sample is a sentinel for
+the set whenever the set has more than one member.** The earlier fault was
+trusting `0xFFFFFFFF` to mean Wayland; this one was trusting *surface #1* to
+mean *the surface*. Both are the same move — reporting the part that was easy to
+observe in the voice of the whole.
+
+Fixed: caps are logged once per **surface**, and `swapchain created:` now names
+the WSI of the surface that actually presents, because that is the only surface
+any sizing argument is about.
+
+### The lever that may never have fired
+
+X4 enables `VK_KHR_get_surface_capabilities2`, and
+`vkGetPhysicalDeviceSurfaceCapabilities2KHR` **was not hooked**. The only caps
+query the layer saw in this run was the 1-variant on the Wayland probe surface;
+no query on the xcb surface reached us at all, and `reporting surface width …`
+— which fires whenever halving happens — appears nowhere in the log.
+
+If X4 asks through the 2-variant, then the halving lever has never once fired,
+and the "two levers bring X4 to the eye size" story repeated throughout this
+code and these notes describes something that has never been tested. Every
+split render to date would be the config lever alone.
+
+Hooked now, **observation only**. Halving there would change how X4 sizes itself
+on the very run meant to establish what it currently does, and the split render
+took four takes to stabilise. The line says so in the log rather than leaving
+the restraint implicit.
+
+### What this does to task #19
+
+Option A is back, and looks better than B:
+
+* X4's window is 1408 because `res_width` says so; gamescope centres it in a
+  2816 nested display; the offset is 704. Window and render agree, and the
+  composite does not.
+* `gamescope --force-windows-fullscreen` makes a client the size of the nested
+  display. X4's window would then be 2816 — equal to the composite and to the
+  display, with nothing centred and no offset.
+* X4 would also *render* 2816 unless something halves it. On xcb `currentExtent`
+  is the real window size, so the halving lever applies — if X4 reads it, which
+  is the open question the 2-variant hook was just added to answer.
+
+That is window = composite = display = 2816, render = 1408, and input in display
+space. The remaining unknown is whether X4 lays its UI out from the window size
+or the swapchain extent; if the window, the UI comes out laid for 2816 and
+squashed into 1408, and A dies there instead.
+
+- **P27** — X4 queries the xcb surface through
+  `vkGetPhysicalDeviceSurfaceCapabilities2KHR`, and the reported
+  `currentExtent` is 1408×1408 (the real window). If instead no caps2 line
+  appears for the xcb surface, X4 never asks about the surface it presents on,
+  the halving lever is unreachable by any route, and A is dead on the same
+  evidence that killed the "two levers" story.

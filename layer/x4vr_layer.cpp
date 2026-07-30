@@ -351,10 +351,19 @@ void note_surface_wsi(VkSurfaceKHR s, const char *wsi) {
 // Surfaces are destroyed and their handles reused, exactly as swapchain
 // images were in take thirty. Forget on destroy so a later surface cannot
 // inherit this one's platform.
+// Surfaces whose capabilities have been reported once already.
+std::unordered_set<VkSurfaceKHR> g_surfaces_seen;
+
+bool note_surface_seen(VkSurfaceKHR s) { // true the first time only
+    std::lock_guard<std::mutex> lock(g_surface_mu);
+    return g_surfaces_seen.insert(s).second;
+}
+
 void forget_surface(VkSurfaceKHR s) {
     std::lock_guard<std::mutex> lock(g_surface_mu);
     g_surface_wsi.erase(s);
     g_halved_surfaces.erase(s);
+    g_surfaces_seen.erase(s);
 }
 
 const char *surface_wsi(VkSurfaceKHR s) {
@@ -3725,10 +3734,18 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
     }
     // The definitive record of what resolution the game is actually running
     // at (Phase 1 verification: should be the SBS size we forced).
-    X4VR_LOG("swapchain created: %ux%u images>=%u format=%d presentMode=%d -> %s",
+    //
+    // wsi= says which of X4's surfaces is the one that presents. It creates
+    // more than one -- a Wayland surface and an xcb surface, in take
+    // thirty-four -- and only this one is the game's actual output path.
+    // Everything the sizing argument rests on is a statement about *this*
+    // surface, so it has to be named here rather than assumed to be the
+    // surface some earlier line happened to mention.
+    X4VR_LOG("swapchain created: %ux%u images>=%u format=%d presentMode=%d "
+             "wsi=%s -> %s",
              ci->imageExtent.width, ci->imageExtent.height, ci->minImageCount,
              (int)ci->imageFormat, (int)ci->presentMode,
-             r == VK_SUCCESS ? "ok" : "FAILED");
+             surface_wsi(ci->surface), r == VK_SUCCESS ? "ok" : "FAILED");
     if (r == VK_SUCCESS && *out != VK_NULL_HANDLE) {
         // Recorded from sbs_ci, not ci: that is the swapchain that actually
         // exists, and its extent is what its images have.
@@ -3890,6 +3907,48 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroySurfaceKHR(
         next(instance, surface, ac);
 }
 
+// The *other* way to ask the same question.
+//
+// X4 enables VK_KHR_get_surface_capabilities2, and this entry point was never
+// hooked -- so a caps query made through it has always bypassed the halving
+// lever entirely. That matters beyond the missing log line: the "two levers"
+// story told throughout this code says X11 sizes X4 by halved capabilities,
+// and if X4 asks through the 2-variant then that lever has never once fired
+// and the story was never tested.
+//
+// Deliberately observation-only for now. Halving here would change how X4
+// sizes itself, on the very run meant to establish what it currently does,
+// and the split render took four takes to stabilise. Measure first.
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetPhysicalDeviceSurfaceCapabilities2KHR(
+    VkPhysicalDevice phys, const VkPhysicalDeviceSurfaceInfo2KHR *info,
+    VkSurfaceCapabilities2KHR *caps) {
+    PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR next;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        auto it = g_instances.find(dispatch_key(phys));
+        if (it == g_instances.end())
+            return VK_ERROR_INITIALIZATION_FAILED;
+        next = (PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR)it->second.gipa(
+            it->second.instance, "vkGetPhysicalDeviceSurfaceCapabilities2KHR");
+    }
+    if (!next)
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
+    VkResult r = next(phys, info, caps);
+    if (r != VK_SUCCESS || !info || !caps)
+        return r;
+    if (note_surface_seen(info->surface))
+        X4VR_LOG("sbs: surface caps2 currentExtent=%ux%u min=%ux%u max=%ux%u "
+                 "wsi=%s (pid %d) — NOT halved, this path is observation only",
+                 caps->surfaceCapabilities.currentExtent.width,
+                 caps->surfaceCapabilities.currentExtent.height,
+                 caps->surfaceCapabilities.minImageExtent.width,
+                 caps->surfaceCapabilities.minImageExtent.height,
+                 caps->surfaceCapabilities.maxImageExtent.width,
+                 caps->surfaceCapabilities.maxImageExtent.height,
+                 surface_wsi(info->surface), (int)getpid());
+    return r;
+}
+
 // X4 sizes its whole pipeline from the surface's currentExtent -- that is
 // exactly why it ignores res_width/res_height while borderless. Reporting
 // half the width therefore makes it render one eye's worth *natively*:
@@ -3920,9 +3979,16 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetPhysicalDeviceSurfaceCapabilitiesKHR(
     // and, crucially, nothing to double back at swapchain creation. Halving
     // and doubling must be one decision, recorded per surface.
     const uint32_t was = caps->currentExtent.width;
-    static bool first = true;
-    if (first) {
-        first = false;
+    // Once per *surface*, not once per process.
+    //
+    // Take thirty-four: X4 creates a Wayland surface and an xcb surface
+    // milliseconds apart. A one-shot flag logged the first and hid the second,
+    // so the log said "wsi=wayland" while SDL's driver was x11 -- and I read
+    // that as "X4 is on Wayland" and rebuilt the whole diagnosis on it. The
+    // hole this task was opened to fix was inference from a sentinel; the fix
+    // reproduced it one level down, because a first sample is a sentinel for
+    // the set when the set has more than one member.
+    if (note_surface_seen(surface)) {
         // The pid disambiguates whose surface this is. The layer loads into
         // gamescope as well as into X4, X4VR_LOG is one append-only file shared
         // by both, and take thirty-one could not tell from this line whether
@@ -5722,6 +5788,11 @@ const NameFunc kSurfaceHooks[] = {
     {"vkCreateXcbSurfaceKHR", (PFN_vkVoidFunction)x4vr_CreateXcbSurfaceKHR},
     {"vkCreateXlibSurfaceKHR", (PFN_vkVoidFunction)x4vr_CreateXlibSurfaceKHR},
     {"vkDestroySurfaceKHR", (PFN_vkVoidFunction)x4vr_DestroySurfaceKHR},
+    // Gated for the same reason, and for a second one: this is an extension
+    // entry point, so an app may reasonably read a null as "no
+    // VK_KHR_get_surface_capabilities2 here".
+    {"vkGetPhysicalDeviceSurfaceCapabilities2KHR",
+     (PFN_vkVoidFunction)x4vr_GetPhysicalDeviceSurfaceCapabilities2KHR},
 };
 
 PFN_vkVoidFunction find_surface_hook(const char *name) {
