@@ -3721,10 +3721,18 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetPhysicalDeviceSurfaceCapabilitiesKHR(
     static bool first = true;
     if (first) {
         first = false;
-        X4VR_LOG("sbs: surface caps currentExtent=%ux%u min=%ux%u max=%ux%u",
+        // The pid disambiguates whose surface this is. The layer loads into
+        // gamescope as well as into X4, X4VR_LOG is one append-only file shared
+        // by both, and take thirty-one could not tell from this line whether
+        // the Wayland surface reporting no preferred extent was X4's or
+        // gamescope's own -- which is the difference between "force the driver"
+        // and "nothing is wrong here".
+        X4VR_LOG("sbs: surface caps currentExtent=%ux%u min=%ux%u max=%ux%u "
+                 "(pid %d)",
                  caps->currentExtent.width, caps->currentExtent.height,
                  caps->minImageExtent.width, caps->minImageExtent.height,
-                 caps->maxImageExtent.width, caps->maxImageExtent.height);
+                 caps->maxImageExtent.width, caps->maxImageExtent.height,
+                 (int)getpid());
     }
     if (was == 0xFFFFFFFFu || was < 2) {
         forget_halved_surface(surface);

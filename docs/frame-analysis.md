@@ -4013,3 +4013,51 @@ Neither of these two would have been.
   times, and at least one pass logs `PRESENT composite` with `+MASKED`.
   `fallbacks=0`. The screen still looks normal, because `X4VR_SBS_RIGHT_LAYER`
   is not set.
+
+### The X11 knob broke the thing it was meant to fix
+
+`X4VR_X11=1` fails to launch at all: **"Failed to connect to wayland socket: ."**
+
+Two bugs, and my run command was the third.
+
+1. The knob did `export WAYLAND_DISPLAY=""`. Empty-but-set is worse than unset:
+   a client calls `wl_display_connect("")` and fails, where an unset variable
+   would have fallen back to X11. The trailing `.` in the error is the empty
+   socket name. Now `unset`.
+2. It exported that **before gamescope launches**, and gamescope is itself a
+   Wayland client of the host compositor. So it cleared the display for
+   *gamescope*, not for the game, and gamescope is what died. Under gamescope
+   the knob is now ignored with a message saying why — the child is already put
+   on gamescope's XWayland at the `exec`, which is the right place and the only
+   place.
+
+The same empty-not-unset mistake was in the gamescope `exec` line
+(`env WAYLAND_DISPLAY=`); it was harmless there only because `SDL_VIDEODRIVER=x11`
+stops SDL trying Wayland at all. Changed to `env -u` so it does not depend on
+that.
+
+And the third: **`X4VR_X11=1` was never needed under gamescope.** The launcher
+has forced the child onto XWayland since long before this, with a comment
+saying so. I read the take-thirty-one log line, matched it to the knob list, and
+did not read the twenty lines of the launcher that already handled it.
+
+That is the second time in two runs that I acted on a documented instrument
+without reading its context, and the failure mode is the same both times.
+
+### Which surface reported no preferred extent is still unknown
+
+`sbs: surface caps currentExtent=0xFFFFFFFF` was read as X4's. It may be
+gamescope's: the layer loads into both processes, `X4VR_LOG` is one append-only
+file shared by both, and that line carried nothing to tell them apart. If it was
+gamescope's own host surface then nothing was wrong with the backend at all and
+the split failed for a different reason entirely.
+
+The line now carries a pid. **Not yet resolved, and recorded as unresolved**
+rather than folded into either explanation.
+
+- **P19** — the corrected Run A logs `sbs: surface caps … (pid N)` with N equal
+  to the pid the injector reports for the X4 process. If the extent is
+  `0xFFFFFFFF` for *that* pid, the backend really is Wayland and the SDL forcing
+  is not taking; if it is a real extent for that pid and `0xFFFFFFFF` only for
+  gamescope's, the split failed for some other reason and take thirty-one's
+  first diagnosis was wrong.

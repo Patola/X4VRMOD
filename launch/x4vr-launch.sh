@@ -285,7 +285,21 @@ if [[ "${X4VR_ZEROVRAM:-0}" == 1 ]]; then
 fi
 
 if [[ "${X4VR_X11:-0}" == 1 ]]; then
-    export WAYLAND_DISPLAY=""
+    if [[ "${X4VR_GAMESCOPE:-0}" == 1 ]]; then
+        # gamescope is itself a Wayland client of the host compositor. Clearing
+        # WAYLAND_DISPLAY here clears it for gamescope, not for the game, and
+        # gamescope dies with "Failed to connect to wayland socket". The child
+        # is already put on gamescope's XWayland further down -- that is the
+        # right place and the only place.
+        echo "x4vr-launch: X4VR_X11=1 ignored under gamescope — the child is" \
+             "already forced to XWayland; clearing WAYLAND_DISPLAY here would" \
+             "break gamescope's own connection to the host" >&2
+    else
+        # unset, not empty: an empty-but-set WAYLAND_DISPLAY makes clients call
+        # wl_display_connect("") and fail with "Failed to connect to wayland
+        # socket: ." rather than falling back to X11.
+        unset WAYLAND_DISPLAY
+    fi
 fi
 
 echo "x4vr-launch: log=${X4VR_LOG:-stderr} layer=$([[ ${X4VR_NO_LAYER:-0} != 1 ]] && echo on || echo off) inject=$([[ ${X4VR_NO_INJECT:-0} != 1 ]] && echo on || echo off) gamescope=${X4VR_GAMESCOPE:-0} sbs=${X4VR_SBS:-0} x11=${X4VR_X11:-0}" >&2
@@ -352,7 +366,7 @@ if [[ "${X4VR_GAMESCOPE:-0}" == 1 ]]; then
     [[ "${X4VR_GRAB_CURSOR:-1}" == 1 ]] && GS_DECOR+=(--force-grab-cursor)
     exec gamescope "${GS_DECOR[@]}" -w "$W" -h "$H" -W "$W" -H "$H" \
         --backend sdl -- \
-        env WAYLAND_DISPLAY= "SDL_VIDEODRIVER=${X4VR_SDL_DRIVER:-x11}" \
+        env -u WAYLAND_DISPLAY "SDL_VIDEODRIVER=${X4VR_SDL_DRIVER:-x11}" \
             "SDL_VIDEO_DRIVER=${X4VR_SDL_DRIVER:-x11}" "$@"
 else
     exec "$@"
