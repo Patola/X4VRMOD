@@ -4220,3 +4220,68 @@ both numbers. That is the check.
   `fallbacks=0`, and at least one pass carries `+PRESENT-CAND`. The screen is
   still two identical halves, because `X4VR_SBS_RIGHT_LAYER` is unset — that is
   the run's success condition, not its failure.
+
+## Take thirty-three: true side-by-side, and the input space that did not come with it
+
+```
+composite armed for 2816x1408 (4 images), each eye 1408x1408
+    (X4 renders one eye, we own its images), eye layers=2
+img #1: 1408x1408 fmt=44 layers=2 EYE (image 0 of 4) doubled
+mv final: … substituted=26 per_eye_images=25 fallbacks=0
+```
+
+No `SPLIT OFF`. Every clause of P21 held. **Reported from the screen: true SBS,
+acceptable framerate, lighting good.** The split render is real — X4 is drawing
+one eye natively and the compositor is presenting two halves.
+
+### The three cursor quirks are one bug
+
+Observed:
+
+1. **Cockpit** — the cursor traverses the full 2:1 width instead of living in one
+   half, and yet brackets remain clickable "with a trail".
+2. **Map** — icons are drawn correctly in *both* halves, but light up when the
+   cursor is at the **centre-top of the whole screen**, not over either icon.
+3. **Walking** — correct. The aim highlights the chair, in both halves.
+
+One mapping explains all three. X4's window and input space are 1408×1408,
+because that is what it was finally made to render. The display is 2816×1408 and
+gamescope scales input into X4's window, so a screen point `x` reaches X4 as
+`x/2`. The presented image is two copies of X4's frame side by side.
+
+So an element X4 draws at its `x = 704` (frame centre) appears on screen at 704
+*and* 2112, and activates when the physical cursor is at screen `x = 1408`.
+That is exactly quirk 2, and quirk 1 is the same arithmetic with a
+gamescope-drawn cursor that lives in display space and therefore is not
+duplicated into either eye.
+
+Quirk 3 is not an exception — it is the case with **no cursor at all**. X4 hides
+the pointer on foot and picks through the frame centre with mouse-look, so there
+is no display coordinate to mistranslate. It confirms the diagnosis rather than
+complicating it: everything that picks through the frame centre is right, and
+everything that picks through a screen position is off by the scale factor.
+
+This is the invariant recorded in take thirty as *picking is mono and lives at
+the centre eye*, now with its second half visible: **picking is also in X4's
+eye-sized coordinate space, and nothing maps the display into it.** That is the
+cursor shim's entire job, and it is the third component of this project, so far
+unwritten.
+
+Two things it has to do, and they are separate:
+
+* **Map input.** A display coordinate must reach X4 as the corresponding point
+  in one eye, so hovering an element in *either* half activates it.
+* **Draw the cursor per eye.** A cursor composited in display space cannot be
+  correct in a stereo image — it belongs in the eye image, before the
+  duplication, so it lands in both halves at the matching place.
+
+*(Mechanism inferred from three observations and the known geometry, not
+measured. The prediction it makes is specific and cheap to falsify: the
+activation point for any HUD element should be at exactly half its on-screen x
+in the left copy.)*
+
+- **P22** — an element drawn at screen `x` in the **left** half activates when
+  the cursor is at screen `x/2`, and the same element in the right half (at
+  `x + 1408`) activates at that same `x/2`. If instead the right half activates
+  somewhere else, input is not a simple scale and the shim needs the real
+  mapping measured before it is written.
