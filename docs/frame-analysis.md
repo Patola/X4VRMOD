@@ -4912,3 +4912,62 @@ it.
 - **P38** — an element in the **left** copy activates when hovered where it is
   drawn, 1:1; the right copy does not respond. Both copies responding would mean
   input is still not in the space the left copy occupies.
+
+## Take thirty-nine: P36 refuted — X4 does not consult the surface at all
+
+Run: `X4VR_TAKE=39-fakeextent … X4VR_WINDOWS_FULLSCREEN=1 X4VR_FAKE_EXTENT=1`
+
+```
+sbs: surface 0xc31db70 had no preferred extent — reporting 1408x1408 (the eye)
+     so the render size stops following the window.
+sbs: SPLIT OFF — X4 asked for 2816x1408 but one eye is 1408x1408.
+```
+
+The layer stated the eye extent and X4 asked for the window width regardless.
+**X4 does not read `vkGetPhysicalDeviceSurfaceCapabilitiesKHR` for its size.**
+The comment that hook carried from the day it was written was fiction in both
+its versions, and the surface is not a lever on the render size by any route.
+
+Two takes, two refutations, and together they close the question:
+
+> X4's render size is its window size. Nothing else influences it. And X4's
+> input space is the same window. **One number, serving two purposes that have
+> to differ.**
+
+Every remaining approach follows from that sentence:
+
+| | window | consequence |
+|---|---|---|
+| take 33 | 1408 | render correct, input 1408 wide and centred → the 704 |
+| take 38–39 | 2816 | input correct, render full width → two left halves |
+
+There is no third setting. What is left is to change what X4 **believes** the
+window is while leaving the real one at display width — real window 2816 for
+input, believed window 1408 for the render.
+
+### Why SDL, and why only these two functions
+
+SDL interposition was deliberately avoided in task #18: SDL2 and SDL3 disagree
+about `SDL_CreateWindow`'s signature, gamescope is SDL2, X4 is SDL3, and they
+share a process tree, so defining an SDL symbol risked calling one through the
+other's prototype. That reasoning does not extend to `SDL_GetWindowSize` and
+`SDL_GetWindowSizeInPixels`: both SDL generations declare identical argument
+lists, and the return value is forwarded opaquely instead of being interpreted.
+The hazard was specific, and so is the exemption.
+
+Logging is unconditional and the halving is behind `X4VR_HALVE_WINDOW=1`, so a
+single run answers both questions — whether X4 asks these at all, and whether
+answering differently moves the render.
+
+- **P39** — an `sdl: SDL_GetWindowSize -> 2816x1408` line appears in X4's pid.
+  If neither function is ever called, X4 takes its size from X11 directly or
+  from cached configure events, and this lever does not exist either — leaving
+  only the X11 geometry path, or giving up on the window and having the shim
+  own input outright.
+- **P40** — with `X4VR_HALVE_WINDOW=1`, X4 asks for 1408×1408, `SPLIT OFF` does
+  not appear, and the composite reports "X4 renders one eye" — while the real
+  window stays 2816 and the cursor still spans the display.
+- **P41** — an element in the left copy activates where it is drawn. X4 would
+  then be hit-testing a 1408-wide UI against pointer coordinates that run to
+  2816, so the left copy should be exact and the right copy dead. That is the
+  state in which the shim's remaining job is `x mod 1408`.

@@ -237,6 +237,56 @@ __attribute__((constructor)) static void x4vr_inject_init() {
 //
 // Interposed rather than merely observed for one reason: nothing else can see
 // a write that happens after our constructor ran.
+// Where X4 gets its render size.
+//
+// Take thirty-nine closed the last alternative: the layer reported a real
+// 1408x1408 currentExtent and X4 asked for 2816x1408 anyway, so X4 does not
+// consult the Vulkan surface at all. Take thirty-eight had already shown it
+// follows its window. The window is therefore one number serving two purposes
+// that must differ -- input wants the display width, the render wants one eye
+// -- and the only way to separate them is to change what X4 *believes* the
+// window is while leaving the real one alone.
+//
+// SDL_GetWindowSize and SDL_GetWindowSizeInPixels are the plausible sources.
+// Interposing SDL was avoided until now because SDL2 and SDL3 disagree about
+// SDL_CreateWindow's signature and gamescope (SDL2) shares this process tree
+// with X4 (SDL3). These two are safe where that one was not: both SDL
+// generations declare identical argument lists, and the return value is
+// forwarded opaquely rather than interpreted.
+//
+// Logging is unconditional; the halving is behind X4VR_HALVE_WINDOW, so one
+// run answers both "does X4 ask this" and "does answering differently work".
+bool halve_window() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_HALVE_WINDOW");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
+
+bool this_is_the_game() {
+    static const bool yes = [] {
+        char exe[256] = "?";
+        ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+        if (n > 0)
+            exe[n] = 0;
+        return exe_is_game(exe);
+    }();
+    return yes;
+}
+
+// Reports at most a handful of lines: X4 asks every frame, and the answer is
+// only interesting when it changes.
+void note_window_size(const char *fn, int w, int h, bool halved) {
+    static int last_w = -1, last_h = -1;
+    if (w == last_w && h == last_h)
+        return;
+    last_w = w;
+    last_h = h;
+    X4VR_LOG("sdl: %s -> %dx%d%s (pid %d)", fn, w, h,
+             halved ? " (HALVED from the real window)" : "", getpid());
+}
+
 // Which display server X4 is actually talking to.
 //
 // Take thirty-six: X4 creates a Wayland surface (handle 0x3edd2040) and an xcb
@@ -251,6 +301,31 @@ __attribute__((constructor)) static void x4vr_inject_init() {
 //
 // That is an argument. This is the measurement: the connect() path itself.
 // Only display-server sockets are logged -- X4 opens plenty of others.
+// SDL_Window is opaque here on purpose -- the injector has no SDL headers and
+// needs none; the handle is only ever passed straight through.
+int SDL_GetWindowSize(void *win, int *w, int *h) {
+    static auto real_fn = real<int (*)(void *, int *, int *)>("SDL_GetWindowSize");
+    int r = real_fn(win, w, h);
+    const bool cut = halve_window() && this_is_the_game() && w && *w > 1;
+    if (cut)
+        *w /= 2;
+    if (w && h)
+        note_window_size("SDL_GetWindowSize", *w, *h, cut);
+    return r;
+}
+
+int SDL_GetWindowSizeInPixels(void *win, int *w, int *h) {
+    static auto real_fn =
+        real<int (*)(void *, int *, int *)>("SDL_GetWindowSizeInPixels");
+    int r = real_fn(win, w, h);
+    const bool cut = halve_window() && this_is_the_game() && w && *w > 1;
+    if (cut)
+        *w /= 2;
+    if (w && h)
+        note_window_size("SDL_GetWindowSizeInPixels", *w, *h, cut);
+    return r;
+}
+
 int connect(int fd, const struct sockaddr *addr, socklen_t len) {
     static auto real_connect =
         real<int (*)(int, const struct sockaddr *, socklen_t)>("connect");
