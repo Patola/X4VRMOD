@@ -133,6 +133,20 @@
 #                         Disables itself, loudly, if X4's own writes ever reach
 #                         OFFSET -- that would mean the twins are landing on
 #                         descriptors X4 is still using.
+#   X4VR_BINDLESS_PATCH=1
+#                         step B, the mechanism itself. Rewrites every fragment
+#                         module that samples a bindless table so the element
+#                         index becomes
+#                             element = index + gl_ViewIndex * OFFSET
+#                         which is where the mirror put a view of layer 1. Both
+#                         tables (set 0 bindings 5 and 7) are patched; 228 of
+#                         409 dumped modules declare two, and patching one would
+#                         leave the other sampling view 0's slot in both eyes.
+#                         REQUIRES X4VR_BINDLESS_MIRROR=1 and is ignored, with a
+#                         log line, without it -- otherwise view 1 reads table
+#                         slots nobody ever wrote.
+#                         Gate: #103 flips from IDENTICAL to DIFFER in
+#                         X4VR_MV_PROBE.
 #   X4VR_MIRROR_OFFSET=N  where the twin region starts. Default 26653, half of
 #                         X4's declared 53306, against a measured high-water mark
 #                         of 10980. Only worth changing if the disable above

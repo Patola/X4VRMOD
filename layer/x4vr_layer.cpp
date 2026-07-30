@@ -542,6 +542,17 @@ const uint32_t g_mirror_offset = [] {
 // prints its zero.
 const bool g_desc_track = g_bindless_survey || g_bindless_mirror;
 
+// Step B: rewrite the table index to `idx + gl_ViewIndex * OFFSET`.
+//
+// Requires the mirror. Without it the twin half of the table is never written,
+// and a patched shader in view 1 would read a descriptor that was never filled
+// in -- undefined, not merely wrong. The two knobs are separate because step A
+// has to be measurable on its own, but this one is clamped to the other.
+const bool g_bindless_patch = [] {
+    const char *e = getenv("X4VR_BINDLESS_PATCH");
+    return e && *e && *e != '0';
+}();
+
 std::mutex g_desc_mu;
 // Take twenty-one keyed these by binding alone, which conflates every set that
 // happens to use the same binding number -- the log grew a "binding 0" with one
@@ -2467,9 +2478,49 @@ VkResult create_shader_module_inner(
     std::vector<uint32_t> code(ci->codeSize / 4);
     memcpy(code.data(), ci->pCode, ci->codeSize);
 
+    // Applied before the vertex patch, and before the NotVertex early-out,
+    // because X4 ships one module carrying both entry points: the same bytes
+    // may need the fragment edit and the vertex edit, or only one of them.
+    //
+    // Both tables get patched. 228 of the 409 dumped modules declare two, and
+    // patching one would leave the other sampling view 0's slot in both eyes.
+    // The transform reuses an existing ViewIndex input on the second call --
+    // two variables decorated with the same builtin would be invalid SPIR-V.
+    bool frag_patched = false;
+    if (g_bindless_patch && g_bindless_mirror) {
+        for (uint32_t b : {5u, 7u})
+            if (x4vr::spv::patch_fragment_index_offset(code, 0, b,
+                                                       g_mirror_offset))
+                frag_patched = true;
+        static uint32_t n_frag = 0;
+        if (frag_patched && (++n_frag <= 3 || (n_frag % 100) == 0))
+            X4VR_LOG("patched fragment shader #%u (index + ViewIndex*%u)",
+                     n_frag, g_mirror_offset);
+    } else if (g_bindless_patch) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            X4VR_LOG("X4VR_BINDLESS_PATCH ignored: it needs "
+                     "X4VR_BINDLESS_MIRROR=1, or view 1 would read table slots "
+                     "nobody ever wrote");
+        }
+    }
+
     const x4vr::spv::Kind kind = x4vr::spv::classify(code);
-    if (kind == x4vr::spv::Kind::NotVertex)
+    if (kind == x4vr::spv::Kind::NotVertex) {
+        if (!frag_patched)
+            return d->CreateShaderModule(device, ci, ac, out);
+        VkShaderModuleCreateInfo mod = *ci;
+        mod.codeSize = code.size() * 4;
+        mod.pCode = code.data();
+        VkResult r = d->CreateShaderModule(device, &mod, ac, out);
+        if (r == VK_SUCCESS)
+            return r;
+        X4VR_LOG("WARNING: driver rejected fragment-patched module (%d); "
+                 "using original",
+                 (int)r);
         return d->CreateShaderModule(device, ci, ac, out);
+    }
     const bool world = kind == x4vr::spv::Kind::World;
     const float *K = world ? K_world : K_ui;
     // Null unless a right eye was configured for this kind, and that null is
@@ -2481,7 +2532,9 @@ VkResult create_shader_module_inner(
     (world ? n_world : n_ui)++;
     if (KR)
         n_stereo++;
-    if (x4vr::spv::patch_vertex_clip(code, K, KR)) {
+    // `|| frag_patched` so a module that only needed the fragment edit still
+    // gets created from the edited bytes.
+    if (x4vr::spv::patch_vertex_clip(code, K, KR) || frag_patched) {
         VkShaderModuleCreateInfo mod = *ci;
         mod.codeSize = code.size() * 4;
         mod.pCode = code.data();

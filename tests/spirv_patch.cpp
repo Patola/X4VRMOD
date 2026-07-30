@@ -40,8 +40,10 @@ int main(int argc, char **argv) {
     if (argc < 3) {
         fprintf(stderr,
                 "usage: %s frag-view-layer <in> <out> [set] [binding]\n"
+                "       %s frag-index-offset <in> <out> [set] [binding] "
+                "[offset]\n"
                 "       %s list <in>\n",
-                argv[0], argv[0]);
+                argv[0], argv[0], argv[0]);
         return 2;
     }
     // `list` is what read X4's own shaders. It is the same code path the layer
@@ -63,10 +65,11 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (argc < 4) {
-        fprintf(stderr, "frag-view-layer needs <in> <out>\n");
+        fprintf(stderr, "%s needs <in> <out>\n", argv[1]);
         return 2;
     }
-    if (strcmp(argv[1], "frag-view-layer") != 0) {
+    const bool index_offset = strcmp(argv[1], "frag-index-offset") == 0;
+    if (!index_offset && strcmp(argv[1], "frag-view-layer") != 0) {
         fprintf(stderr, "unknown patch '%s'\n", argv[1]);
         return 2;
     }
@@ -81,7 +84,12 @@ int main(int argc, char **argv) {
     }
     const std::vector<uint32_t> before = code;
 
-    const bool ok = x4vr::spv::patch_fragment_view_layer(code, set, binding);
+    const uint32_t offset =
+        argc > 6 ? (uint32_t)strtoul(argv[6], nullptr, 0) : 26653u;
+    const bool ok =
+        index_offset
+            ? x4vr::spv::patch_fragment_index_offset(code, set, binding, offset)
+            : x4vr::spv::patch_fragment_view_layer(code, set, binding);
     printf("PATCHED=%d\n", ok ? 1 : 0);
 
     // A refusal must leave the module byte-identical. This is the property the

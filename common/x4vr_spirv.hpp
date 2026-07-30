@@ -74,7 +74,10 @@ enum : uint32_t {
     OpImageGather = 96,
     OpImage = 100,
     OpConvertSToF = 111,
+    OpBitcast = 124,
+    OpIAdd = 128,
     OpFAdd = 129,
+    OpIMul = 132,
     OpVectorTimesScalar = 142,
     OpMatrixTimesVector = 145,
     OpReturn = 253,
@@ -82,6 +85,10 @@ enum : uint32_t {
     ExecutionModelVertex = 0,
     ExecutionModelFragment = 4,
     DecorationBuiltIn = 11,
+    // An integer Input in a fragment shader must be Flat -- interpolating one
+    // is meaningless and Vulkan forbids it (VUID-StandaloneSpirv-Flat-04744).
+    // gl_ViewIndex is no exception, builtin or not.
+    DecorationFlat = 14,
     BuiltInPosition = 0,
     StorageClassUniformConstant = 0,
     StorageClassInput = 1,
@@ -1016,9 +1023,11 @@ inline bool patch_fragment_view_layer(std::vector<uint32_t> &code,
             for (uint32_t x : kExt)
                 out.push_back(x);
         }
-        if (in.start == anno_at)
+        if (in.start == anno_at) {
             emit(out, OpDecorate,
                  {view_var, DecorationBuiltIn, BuiltInViewIndex});
+            emit(out, OpDecorate, {view_var, DecorationFlat});
+        }
         if (in.start == first_fn)
             out.insert(out.end(), decls.begin(), decls.end());
 
@@ -1063,6 +1072,357 @@ inline bool patch_fragment_view_layer(std::vector<uint32_t> &code,
             out.push_back(rt->second);
             for (uint32_t j = 2; j < in.len; j++)
                 out.push_back(w[j]);
+            continue;
+        }
+
+        out.insert(out.end(), code.begin() + in.start,
+                   code.begin() + in.start + in.len);
+    }
+
+    out[3] = bound;
+    code.swap(out);
+    return true;
+}
+
+/// Per-view sampling for a bindless table: `element = index + ViewIndex*offset`.
+///
+/// This is the mechanism, where `patch_fragment_view_layer` above was only a
+/// proof that a sample can follow `gl_ViewIndex` at all. X4 keeps every texture
+/// in one 53,306-entry array indexed by an integer in a uniform block, so
+/// per-view sampling is integer arithmetic on that index and **no type
+/// changes**: `sampler2D` stays `sampler2D`, no view has to be rebuilt to match,
+/// and the shader/view pairing problem the array approach died of never arises.
+///
+/// The layer mirrors every descriptor write into `slot + offset`, so the twin
+/// element already holds either a layer-1 view of a doubled image or an
+/// identical copy of an ordinary one. That is what makes this safe to apply
+/// blindly: a texture that is not per-eye reads the same in both views, so the
+/// patch needs no per-shader targeting and never has to know which slot holds
+/// which image -- and a shadow map's twin *is* the same shadow map, which
+/// defuses the hazard that wrecked the earlier attempt instead of dodging it.
+///
+/// Refuses, leaving `code` untouched, if:
+///   - there is no fragment entry point, or no such variable at (set, binding);
+///   - the variable is not an array of images or sampled images (a plain
+///     texture has no index to offset);
+///   - the index's type cannot be established, or is not a 32-bit integer;
+///   - the table is indexed from any function other than the fragment entry
+///     point's own. A helper function would need the same treatment and its
+///     reachability is not analysed here, so the whole module is declined
+///     rather than half-patched.
+inline bool patch_fragment_index_offset(std::vector<uint32_t> &code,
+                                        uint32_t want_set,
+                                        uint32_t want_binding,
+                                        uint32_t offset) {
+    if (!offset)
+        return false;
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return false;
+
+    // --- pass 1: learn the module ---------------------------------------
+    uint32_t entry_fn = 0;
+    size_t caps_end = 0, exts_end = 0, last_annotation_end = 0;
+    size_t first_global = 0, first_fn = 0;
+    bool have_first_global = false, has_multiview_cap = false;
+    bool has_multiview_ext = false;
+    uint32_t bound = code[3], existing_view_var = 0;
+    std::unordered_map<uint32_t, uint32_t> set_of, bind_of; // id -> value
+    std::unordered_map<uint32_t, uint32_t> ptr_to;          // ptr type -> pointee
+    std::unordered_map<uint32_t, uint32_t> arr_elem;        // array -> element
+    std::unordered_map<uint32_t, uint32_t> res_type;        // id -> its type id
+    std::unordered_set<uint32_t> img_types, si_types;
+    // int type id -> width, and separately the signed 32-bit one if present.
+    std::unordered_map<uint32_t, uint32_t> int_width;
+    uint32_t t_int_signed = 0;
+    struct KnownConst {
+        uint32_t type, value;
+    };
+    std::unordered_map<uint32_t, KnownConst> consts;
+    std::vector<size_t> var_starts;
+
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        switch (in.op) {
+        case OpCapability:
+            caps_end = in.start + in.len;
+            if (in.len >= 2 && w[1] == CapabilityMultiView)
+                has_multiview_cap = true;
+            break;
+        case OpExtension:
+            exts_end = in.start + in.len;
+            // All five words, not just "SPV_". X4's bindless modules declare
+            // SPV_EXT_descriptor_indexing, and a first-word-only test read that
+            // as "multiview is already declared", so the capability went in
+            // without the extension that permits it.
+            if (in.len >= 6 && w[1] == 0x5f565053u && w[2] == 0x5f52484bu &&
+                w[3] == 0x746c756du && w[4] == 0x65697669u &&
+                w[5] == 0x00000077u)
+                has_multiview_ext = true;
+            break;
+        case OpEntryPoint:
+            if (in.len >= 3 && w[1] == ExecutionModelFragment)
+                entry_fn = w[2];
+            break;
+        case OpDecorate:
+            last_annotation_end = in.start + in.len;
+            if (in.len >= 4 && w[2] == DecorationDescriptorSet)
+                set_of[w[1]] = w[3];
+            if (in.len >= 4 && w[2] == DecorationBinding)
+                bind_of[w[1]] = w[3];
+            // X4's modules declare two and three tables, so this runs more than
+            // once per module. Two variables decorated BuiltIn ViewIndex in one
+            // entry point is invalid SPIR-V, so a second call reuses the first
+            // call's input instead of declaring another.
+            if (in.len >= 4 && w[2] == DecorationBuiltIn &&
+                w[3] == BuiltInViewIndex)
+                existing_view_var = w[1];
+            break;
+        case OpMemberDecorate:
+            last_annotation_end = in.start + in.len;
+            break;
+        case OpTypeInt:
+            if (in.len >= 4) {
+                int_width[w[1]] = w[2];
+                if (w[2] == 32 && w[3] == 1)
+                    t_int_signed = w[1];
+            }
+            break;
+        case OpTypeImage:
+            if (in.len >= 2)
+                img_types.insert(w[1]);
+            break;
+        case OpTypeSampledImage:
+            if (in.len >= 3)
+                si_types.insert(w[1]);
+            break;
+        case OpTypeArray:
+        case OpTypeRuntimeArray:
+            if (in.len >= 3)
+                arr_elem[w[1]] = w[2];
+            break;
+        case OpTypePointer:
+            if (in.len >= 4)
+                ptr_to[w[1]] = w[3];
+            break;
+        case OpConstant:
+            if (in.len >= 4)
+                consts[w[2]] = {w[1], w[3]};
+            break;
+        case OpVariable:
+            var_starts.push_back(in.start);
+            break;
+        case OpFunction:
+            if (!first_fn)
+                first_fn = in.start;
+            break;
+        default:
+            break;
+        }
+        // The globals section begins at the first type/constant declaration.
+        if (!have_first_global && in.op >= OpTypeInt && in.op <= OpTypePointer) {
+            have_first_global = true;
+            first_global = in.start;
+        }
+        // Result-type map, for the opcodes an index can plausibly come from.
+        // Every one of these puts the result type in word 1 and the result id in
+        // word 2. An index produced by anything else makes the module refuse
+        // rather than guess a type.
+        switch (in.op) {
+        case OpLoad:
+        case OpAccessChain:
+        case OpIAdd:
+        case OpIMul:
+        case OpBitcast:
+        case 66:  // OpInBoundsAccessChain
+        case 81:  // OpCompositeExtract
+        case 113: // OpUConvert
+        case 114: // OpSConvert
+        case 169: // OpSelect
+        case 194: // OpShiftRightLogical
+        case 199: // OpBitwiseAnd
+            if (in.len >= 3)
+                res_type[w[2]] = w[1];
+            break;
+        default:
+            break;
+        }
+    }
+    if (!entry_fn || !first_fn)
+        return false;
+
+    // The table: a variable at (set, binding) whose pointee is an *array* of
+    // images or sampled images. A plain texture is refused because there is no
+    // index to offset -- and because that is the shape the abandoned approach
+    // handled, so silently accepting it here would resurrect it.
+    uint32_t target_var = 0;
+    for (size_t s : var_starts) {
+        const uint32_t *w = &code[s];
+        const uint32_t id = w[2];
+        auto si = set_of.find(id), bi = bind_of.find(id);
+        if (si == set_of.end() || bi == bind_of.end())
+            continue;
+        if (si->second != want_set || bi->second != want_binding)
+            continue;
+        auto p = ptr_to.find(w[1]);
+        if (p == ptr_to.end())
+            continue;
+        auto a = arr_elem.find(p->second);
+        if (a == arr_elem.end())
+            continue; // not an array: nothing to index
+        if (!img_types.count(a->second) && !si_types.count(a->second))
+            continue;
+        target_var = id;
+        break;
+    }
+    if (!target_var)
+        return false;
+
+    // Every access chain into the table, each with the type of its own index.
+    //
+    // The types genuinely differ within one module: X4 indexes the table with a
+    // `uint` loaded from the dynamic block in one place and a literal `%int_21`
+    // in another. Requiring one type across the module refused twelve otherwise
+    // perfectly patchable shaders, which is why this is measured against the
+    // dumped corpus rather than reasoned about.
+    std::vector<std::pair<size_t, uint32_t>> chains;
+    uint32_t cur_fn = 0;
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (in.op == OpFunction && in.len >= 3)
+            cur_fn = w[2];
+        if ((in.op != OpAccessChain && in.op != 66) || in.len < 5)
+            continue;
+        if (w[3] != target_var)
+            continue;
+        if (cur_fn != entry_fn)
+            return false; // indexed from a helper: decline the whole module
+        const uint32_t index = w[4];
+        uint32_t t = 0;
+        auto r = res_type.find(index);
+        if (r != res_type.end())
+            t = r->second;
+        else {
+            auto c = consts.find(index);
+            if (c != consts.end())
+                t = c->second.type;
+        }
+        if (!t || !int_width.count(t) || int_width[t] != 32)
+            return false; // unknown or non-32-bit index type
+        chains.push_back({in.start, t});
+    }
+    if (chains.empty())
+        return false;
+
+    // --- pass 2: the declarations to add ---------------------------------
+    auto new_id = [&]() { return bound++; };
+    std::vector<uint32_t> decls;
+    // ViewIndex must be a 32-bit integer; signed is what glslc emits and what
+    // every validator certainly accepts, so it is declared signed and bitcast to
+    // the index's type when they differ. IAdd/IMul only require equal width, but
+    // a free bitcast costs nothing and removes the argument.
+    uint32_t t_int = t_int_signed;
+    if (!t_int) {
+        t_int = new_id();
+        emit(decls, OpTypeInt, {t_int, 32, 1});
+    }
+    uint32_t ptr_in_int = 0;
+    for (const auto &e : ptr_to)
+        if (e.second == t_int) {
+            // Only an Input pointer will do; re-check the storage class.
+            for (const Inst &in : insts)
+                if (in.op == OpTypePointer && in.len >= 4 &&
+                    code[in.start + 1] == e.first &&
+                    code[in.start + 2] == StorageClassInput)
+                    ptr_in_int = e.first;
+        }
+    if (!ptr_in_int) {
+        ptr_in_int = new_id();
+        emit(decls, OpTypePointer, {ptr_in_int, StorageClassInput, t_int});
+    }
+    const uint32_t view_var = existing_view_var ? existing_view_var : new_id();
+    if (!existing_view_var)
+        emit(decls, OpVariable, {ptr_in_int, view_var, StorageClassInput});
+
+    // One offset constant per index type in play, reusing an existing constant
+    // where the module already has one of that type and value.
+    std::unordered_map<uint32_t, uint32_t> off_of;
+    for (const auto &ch : chains) {
+        if (off_of.count(ch.second))
+            continue;
+        uint32_t k = 0;
+        for (const auto &c : consts)
+            if (c.second.type == ch.second && c.second.value == offset)
+                k = c.first;
+        if (!k) {
+            k = new_id();
+            emit(decls, OpConstant, {ch.second, k, offset});
+        }
+        off_of[ch.second] = k;
+    }
+
+    const size_t anno_at = last_annotation_end
+                               ? last_annotation_end
+                               : (have_first_global ? first_global : first_fn);
+    std::unordered_map<size_t, uint32_t> chain_type(chains.begin(),
+                                                    chains.end());
+
+    // --- pass 3: rebuild --------------------------------------------------
+    std::vector<uint32_t> out;
+    out.reserve(code.size() + decls.size() + chains.size() * 16 + 32);
+    out.insert(out.end(), code.begin(), code.begin() + 5);
+    const size_t cap_at = caps_end ? caps_end : 5;
+    const size_t ext_at = exts_end ? exts_end : cap_at;
+
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (!has_multiview_cap && in.start == cap_at)
+            emit(out, OpCapability, {CapabilityMultiView});
+        if (!has_multiview_ext && code[1] < 0x00010300u && in.start == ext_at) {
+            static const uint32_t kExt[] = {0x5f565053u, 0x5f52484bu,
+                                            0x746c756du, 0x65697669u,
+                                            0x00000077u};
+            out.push_back((uint32_t)((1 + 5) << 16) | OpExtension);
+            for (uint32_t x : kExt)
+                out.push_back(x);
+        }
+        if (in.start == anno_at && !existing_view_var) {
+            emit(out, OpDecorate,
+                 {view_var, DecorationBuiltIn, BuiltInViewIndex});
+            emit(out, OpDecorate, {view_var, DecorationFlat});
+        }
+        if (in.start == first_fn)
+            out.insert(out.end(), decls.begin(), decls.end());
+
+        // ViewIndex joins the *fragment* entry point's interface only. This
+        // module also carries a vertex entry point -- X4 ships both in one --
+        // and giving it an input it never reads would be wrong.
+        if (in.op == OpEntryPoint && in.len >= 3 &&
+            w[1] == ExecutionModelFragment && !existing_view_var) {
+            out.push_back((uint32_t)((in.len + 1) << 16) | OpEntryPoint);
+            for (uint32_t j = 1; j < in.len; j++)
+                out.push_back(w[j]);
+            out.push_back(view_var);
+            continue;
+        }
+
+        auto ct = chain_type.find(in.start);
+        if (ct != chain_type.end()) {
+            const uint32_t idx_type = ct->second;
+            const uint32_t vi = new_id();
+            emit(out, OpLoad, {t_int, vi, view_var});
+            uint32_t v = vi;
+            if (idx_type != t_int) {
+                v = new_id();
+                emit(out, OpBitcast, {idx_type, v, vi});
+            }
+            const uint32_t scaled = new_id();
+            emit(out, OpIMul, {idx_type, scaled, v, off_of[idx_type]});
+            const uint32_t sum = new_id();
+            emit(out, OpIAdd, {idx_type, sum, w[4], scaled});
+            out.push_back(w[0]);
+            for (uint32_t j = 1; j < in.len; j++)
+                out.push_back(j == 4 ? sum : w[j]);
             continue;
         }
 

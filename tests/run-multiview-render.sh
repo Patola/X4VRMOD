@@ -359,7 +359,28 @@ patch_case() {
     got=$(sed -n 's/^PATCHED=//p' <<<"$out")
     local val=skip
     if [[ "$got" == 1 ]]; then
-        spirv-val "$PATCHDIR/out.spv" >/dev/null 2>&1 && val=OK || val=BAD
+        spirv-val --target-env vulkan1.2 "$PATCHDIR/out.spv" >/dev/null 2>&1 && val=OK || val=BAD
+    fi
+    if [[ "$got" == "$want" && "$val" != BAD ]]; then
+        printf 'ok   %-38s patched=%s val=%s\n' "$label" "$got" "$val"
+    else
+        printf 'FAIL %-38s want patched=%s, got patched=%s val=%s\n' \
+            "$label" "$want" "${got:-?}" "$val"
+        fails=$((fails + 1))
+    fi
+}
+
+# The same, for the index-offset transform. Same shape, different subcommand,
+# so a refusal rule can be pinned without a GPU.
+idx_case() {
+    local label="$1" want="$2" shader="$3" set="$4" bind="$5"
+    local out got
+    out=$("$PATCHER" frag-index-offset "$BUILD/tests/$shader" \
+        "$PATCHDIR/out.spv" "$set" "$bind" 26653 2>&1)
+    got=$(sed -n 's/^PATCHED=//p' <<<"$out")
+    local val=skip
+    if [[ "$got" == 1 ]]; then
+        spirv-val --target-env vulkan1.2 "$PATCHDIR/out.spv" >/dev/null 2>&1 && val=OK || val=BAD
     fi
     if [[ "$got" == "$want" && "$val" != BAD ]]; then
         printf 'ok   %-38s patched=%s val=%s\n' "$label" "$got" "$val"
@@ -411,6 +432,16 @@ patch_case "patch refuses a vertex module"   0 fullscreen.vert.spv    0 0
 # only a handful of images are doubled -- so this refusal is not a nicety.
 patch_case "patch refuses a bindless table" 0 sample_bindless.frag.spv 0 7
 
+
+# The index offset, on X4's actual shape -- the one the abandoned transform had
+# to refuse. sample_bindless.frag is hand-written to match: a 64-entry
+# texture2D array at set 0 binding 7, indexed by a uint from a uniform block.
+idx_case "index offset patches a bindless table" 1 sample_bindless.frag.spv 0 7
+# A plain texture has no index to offset, and accepting one here would quietly
+# resurrect the type-promotion approach this replaced.
+idx_case "...refuses a plain texture"            0 sample.frag.spv 0 0
+idx_case "...refuses a vertex-only module"       0 fullscreen.vert.spv 0 7
+idx_case "...refuses a binding that is not there" 0 sample_bindless.frag.spv 0 3
 # And the instrument, checked against the same shape. It reported "samples
 # nothing" about X4's real shaders until it learned to see through OpTypeArray,
 # so the count is asserted and not merely printed: it is the number that decides
@@ -504,28 +535,60 @@ fi
 # (MV_MASK=2), so "the twin holds layer 1" shows up as content and "slot 0 still
 # holds layer 0" shows up as an empty target. Both runs have the mirror on, so
 # neither reads an unwritten descriptor.
+# $1 label, $2 want OUT1_NONZERO, $3 want OUT_DIFFER, $4 mask, $5 shader
 mirror_case() {
-    local label="$1" want1="$2" shader="$3"; shift 3
-    local out g1
-    out=$(env "$@" X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=2 X4VR_TEST_OUT_SRGB=1 \
+    local label="$1" want1="$2" wantd="$3" mask="$4" shader="$5"; shift 5
+    local out g1 gd
+    out=$(env "$@" X4VR_LOG= X4VR_MV=1 "X4VR_MV_MASK=$mask" X4VR_TEST_OUT_SRGB=1 \
         X4VR_MASK_TONEMAP=1 X4VR_BINDLESS_MIRROR=1 X4VR_MIRROR_OFFSET=4 \
         "VK_ADD_LAYER_PATH=$BUILD/layer" \
         "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
-        "$BIN" "$VS" "$FS" "$BUILD/tests/$shader" 2>&1)
+        "$BIN" "$VS" "$FS" "$shader" 2>&1)
     g1=$(sed -n 's/^OUT1_NONZERO=//p' <<<"$out")
-    if [[ "$g1" == "$want1" ]]; then
-        printf 'ok   %-38s out1=%s\n' "$label" "$g1"
+    gd=$(sed -n 's/^OUT_DIFFER=//p' <<<"$out")
+    if [[ "$g1" == "$want1" && "$gd" == "$wantd" ]]; then
+        printf 'ok   %-38s out1=%s differ=%s\n' "$label" "$g1" "$gd"
     else
-        printf 'FAIL %-38s want out1=%s, got out1=%s\n' "$label" "$want1" \
-            "${g1:-?}"
+        printf 'FAIL %-38s want out1=%s differ=%s, got out1=%s differ=%s\n' \
+            "$label" "$want1" "$wantd" "${g1:-?}" "${gd:-?}"
         grep -E "^(OUT|FAIL)|bindless mirror|VUID" <<<"$out" | sed 's/^/       | /' |
             head -8
         fails=$((fails + 1))
     fi
 }
 
-mirror_case "mirror puts layer 1 in the twin"  1 sample_twin.frag.spv
-mirror_case "...and leaves slot 0 on layer 0"  0 sample_twin_base.frag.spv
+# X4VR_MV_MASK is global -- it masks the *second* pass as well, so under mask=2
+# output layer 0 is never rendered and OUT_DIFFER=1 says nothing except that.
+# Read these two by out1 alone: does the read reach source layer 1 or not.
+mirror_case "mirror puts layer 1 in the twin"  1 1 2 "$BUILD/tests/sample_twin.frag.spv"
+mirror_case "...and leaves slot 0 on layer 0"  0 0 2 "$BUILD/tests/sample_twin_base.frag.spv"
+
+# --- step B: the whole mechanism, end to end ---------------------------------
+#
+# One module, one draw, and the two views index *different elements of the same
+# table*: view 0 takes slot 0, view 1 takes slot 0 + OFFSET, which the mirror
+# filled with a view of layer 1.
+if ! "$PATCHER" frag-index-offset "$BUILD/tests/sample_twin_base.frag.spv" \
+        "$PATCHDIR/idxoff.spv" 0 0 4 | grep -q PATCHED=1; then
+    printf 'FAIL %-38s patcher refused the array shader\n' "index offset: setup"
+    fails=$((fails + 1))
+fi
+
+# View 1 reaches the twin, where the unpatched control two cases up reads slot 0
+# and comes back empty.
+mirror_case "index offset: view 1 reads the twin" 1 1 2 "$PATCHDIR/idxoff.spv"
+
+# THE case, and the reason the pair above is not enough on its own. Under mask=2
+# a patch that added OFFSET *unconditionally* -- ignoring ViewIndex, breaking the
+# left eye -- would look exactly like a correct one, because view 0 is not
+# rendered and cannot be seen to be wrong.
+#
+# So run it again with mask=1: now only view 0 renders, and only source layer 0
+# has content. A correct patch leaves view 0 on slot 0 and draws (differ=1,
+# layer 0 lit against a blank layer 1). An unconditional offset sends view 0 to
+# slot 4 -- source layer 1, never drawn under this mask -- and the whole output
+# comes back blank at differ=0.
+mirror_case "...and view 0 still reads its own"   0 1 1 "$PATCHDIR/idxoff.spv"
 
 # The accounting, because the pair above would also pass if the mirror wrote the
 # twin by some accident of aliasing. Four written descriptors, four twins, all
