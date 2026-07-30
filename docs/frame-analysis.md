@@ -122,6 +122,86 @@ Neither is obviously right. Given "performance is king", option 1 gets built
 first because it is correct by construction, and option 2 becomes an
 optimisation with a measured baseline to beat.
 
+### Task #13 is two runs, on purpose
+
+The mirror and the shader patch are independent, and building both before
+measuring either is how a broken frame becomes un-diagnosable — the mistake this
+project has already paid four runs for. So:
+
+**Step A — mirror only, with nothing reading it.** The layer duplicates every
+image-descriptor write into `slot + OFFSET`, substituting a layer-1 view where
+the image is per-eye and copying the descriptor verbatim otherwise. No shader is
+patched, so nothing indexes the twin region and **the frame must not change at
+all**. That makes it a clean isolation: any frame-time delta is the mirror's
+cost and nothing else, and any validation error is the mirror's fault and
+nothing else. It also proves the twin region is writable before a shader depends
+on it, which is currently an inference from `PARTIALLY_BOUND` plus a
+fully-allocated pool, not a measurement.
+
+**Step B — the index offset, on the narrowest useful set of shaders.**
+`element = S_diffuse_idx + gl_ViewIndex * OFFSET`. Gate: `#103` flips from
+all-IDENTICAL to all-DIFFER.
+
+Two notes on step B that step A does not need to wait for:
+
+* **The new patch is much simpler than the abandoned one.** No retyping, no
+  coordinate extension, no following a retyped value through function bodies
+  with a taint set. It declares the `ViewIndex` builtin and rewrites one index
+  operand into an `OpIAdd`/`OpIMul` pair. The hard parts of
+  `patch_fragment_view_layer` do not recur.
+* **Patch few shaders, not all 333.** Every patched shader can index any slot, so
+  the twin must be complete regardless — but the *risk* scales with how many
+  modules are rewritten, and the gate only needs the fragment modules drawing
+  into `#103`. The `srgb-resolve rp #40: frag module #N` join already names them.
+
+### What the next run (step A) is trying to find out
+
+Predictions committed **before** the run, as usual. This one is mostly a cost
+measurement, which means the prediction that matters is a number.
+
+**P1 — Is the twin region actually writable?** Currently an inference: the count
+is fixed, so allocation consumes all 53,306, so the pool backs them, so writing
+above the high-water mark is legal.
+
+> Predicted: **yes**, no validation error and no `VK_ERROR_OUT_OF_POOL_MEMORY`.
+> If this is wrong the whole mechanism dies and options reopen at the
+> replay-the-pass level.
+
+**P2 — Does the frame change?** Nothing reads the twin region, so nothing should.
+
+> Predicted: probe verdicts **identical to take twenty-one** — G-buffer DIFFER,
+> `#103` IDENTICAL. Any change here means the mirror is writing somewhere it
+> should not, and the most likely somewhere is a slot X4 is still using, i.e.
+> `OFFSET` overlapping the live prefix.
+
+**P3 — What does mirroring cost?** ~21,900 extra descriptor writes per frame.
+
+> Predicted: **under 1.5 ms added to the median frame time.** A descriptor write
+> on RADV for an `UPDATE_AFTER_BIND` binding is close to a small memcpy, so
+> 21,900 of them should be well under a millisecond of CPU; the slack is for
+> building the second `VkWriteDescriptorSet` array. If it lands above ~3 ms,
+> option 2 (bulk `VkCopyDescriptorSet`) stops being an optimisation and becomes
+> the design.
+
+**P4 — How many sets come from the bindless layout?** The mirror has to cover
+each of them, and the survey never counted.
+
+> Predicted: **a small number, under 8** — one per frame in flight, or one
+> outright, since the table is global and `UPDATE_AFTER_BIND` exists precisely so
+> a single set can be rewritten while in use.
+
+**P5 — Does the used prefix stay clear of `OFFSET` over a long session?** 10,980
+after thirteen minutes.
+
+> Predicted: **yes, comfortably** — the prefix grew 358 slots in thirteen
+> minutes and `OFFSET` is 26,653 away. A guard logs it if the prefix ever
+> crosses, because silent overlap would corrupt X4's own textures rather than
+> merely break stereo.
+
+P1 and P3 are the load-bearing ones: P1 can kill the mechanism, P3 can change
+it. P2 is the control that says the instrument and the mirror are not lying to
+each other. P4 and P5 are cheap and prevent a class of silent failure.
+
 ### What that run found — Q1–Q4, scored
 
 Ran 2026-07-30, `X4VR_BINDLESS_SURVEY=1`, 9,934 frames of play. **Two of four
