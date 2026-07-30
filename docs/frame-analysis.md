@@ -4285,3 +4285,43 @@ in the left copy.)*
   `x + 1408`) activates at that same `x/2`. If instead the right half activates
   somewhere else, input is not a simple scale and the shim needs the real
   mapping measured before it is written.
+
+### P22 confirmed, and it simplifies the shim
+
+Tested on the map's row of top-centre icons. In SBS they appear at **1/4 and
+3/4** of the screen, with nothing at the top centre — and putting the cursor at
+the top centre lights up **both** copies at once.
+
+That is `x_x4 = x_screen / 2` exactly: X4 draws the row at its own centre
+(x ≈ 704), duplication puts it at 704 and 2112 of 2816, and screen 1408 maps
+back to 704. Vertically nothing is off, so gamescope is scaling the axes
+independently — 2816→1408 in x, 1408→1408 in y — rather than letterboxing.
+
+**Both copies lighting together is the load-bearing detail.** It means the two
+halves are not two UIs to be hit-tested separately; there is exactly **one**
+element in X4's frame, drawn twice by the compositor. So the shim never has to
+decide "which eye was clicked" — it only has to undo a scale, and any answer it
+gives is automatically consistent across both halves.
+
+That turns the mapping from a scale into a fold:
+
+| | today (gamescope) | wanted |
+|---|---|---|
+| x | `x_screen / 2` | `x_screen mod 1408` |
+| y | `y_screen` | unchanged |
+
+With the fold, hovering the icon *where it is drawn* works in either half — 704
+maps to 704, 2112 maps to 704 — and the centre-top dead spot stops being a hot
+spot. The scale is not wrong so much as it is the mapping for a *squeezed* image
+rather than a *duplicated* one.
+
+Two caveats before writing it:
+
+* This is the flatscreen-SBS ergonomic. In an HMD there is no 2D pointer over a
+  side-by-side image, so the fold is a bring-up and mirror-window concern, not
+  the eventual VR input path. Worth building because the whole project is being
+  driven from this view, and worth not over-fitting to.
+* `cursor/` is a three-line README. The shim is unwritten, and the drawing half
+  of the job — compositing the pointer into the eye image *before* duplication,
+  so it lands in both halves — is separate from the mapping half and does not
+  follow from it.
