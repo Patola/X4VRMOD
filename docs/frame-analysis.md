@@ -2884,3 +2884,123 @@ The general form, which is worth keeping: **a counter can only confirm that code
 ran, never that it was right.** Every instrument in this project that was wrong
 for a run was a counter trusted to mean correctness. Where the answer is a
 pixel, the gate has to be a pixel.
+
+## Take twenty-two: the mirror runs, and costs nothing measurable
+
+Ran 2026-07-30 with `X4VR_BINDLESS_MIRROR=1` on the take-twenty-one baseline,
+9,000+ frames, ~12.5 minutes. **All five predictions held** — the first clean
+sweep in this project, and the reason is that the two bugs that would have
+broken it were caught offline the day before.
+
+### P1 — the twin region is writable
+
+209,361,616 twin descriptors written. No validation error, no
+`VK_ERROR_OUT_OF_POOL_MEMORY`, no skip for want of room, and the mirror never
+disabled itself. The inference from `PARTIALLY_BOUND` plus a fully-allocated pool
+is now a measurement.
+
+The accounting closes exactly, which is a stronger check than the absence of
+errors:
+
+    image-descriptor writes seen : 209,361,617
+    twin descriptors written     : 209,361,616
+    difference                   : 1
+
+The one unmirrored write is the set reported as `layout ? binding 0` — a set not
+allocated from a table layout, which is precisely what must *not* be mirrored.
+The mirror covered everything it should and nothing it should not, and the
+off-by-one is the proof rather than a worry. That single stray write is also why
+the `(set, binding)` attribution fix mattered: keyed by binding alone it was
+invisible inside binding 0's bucket.
+
+### P2 — the frame did not change
+
+No image changed category. The G-buffer still differs between the eyes, and
+everything downstream of a sampler is still identical:
+
+| image | take 21 | take 22 |
+| --- | --- | --- |
+| `#95` `#97` | 20/23, 21/23 DIFFER | 19/21, 19/22 DIFFER |
+| `#98` `#99` | 20/23 DIFFER | 20/22 DIFFER |
+| `#101` | 10/23 DIFFER | 14/21 DIFFER |
+| **`#103`** | **0/22** | **0/21** |
+| `#104` `#105` `#122` `#123` | 0 | 0 |
+
+Counts move with what was on screen — `#92` and `#101` were already known to be
+scene-dependent — but nothing crossed the line. `#103` staying at zero is the
+control working: nothing reads the twin region yet, so nothing may become
+stereo, and a mirror writing where it should not would have shown up here first.
+
+### P3 — no measurable cost
+
+Median of the per-window medians, steady state, menu and load windows dropped:
+
+    take 21, no mirror : 11.42 ms
+    take 22, mirror    : 11.32 ms
+
+209 million extra descriptor writes for no measurable frame time. Predicted
+"under 1.5 ms"; measured nothing distinguishable from noise. That settles the
+design: **per-write mirroring stays**, and the bulk `VkCopyDescriptorSet` with
+its staleness problem is not needed.
+
+**The measurement has limited power and the conclusion should be read with
+that.** It compares two play sessions rather than an A/B within one — take
+twenty-two contains two windows at 31 and 39 ms that take twenty-one has no
+counterpart for, which is scene content, not the mirror. And this build is
+GPU-bound at ~12 ms with the probe doing full-image readbacks, so CPU headroom
+could hide CPU cost entirely. The claim that survives is the one the design
+needs: mirroring is not *expensive enough to change the plan*. If frame time
+ever becomes tight, this deserves a within-session A/B without the probe.
+
+### P4, P5, and the blind spot
+
+**P4:** 2 sets allocated from the table layout. Predicted under 8.
+
+**P5:** the used prefix reached 10,984, against `OFFSET` at 26,653 — four slots
+more than take twenty-one's 10,980 after a comparable session. The prefix is
+remarkably stable and the margin is not in danger.
+
+**The template path measures zero.** `0 template updates` — X4 writes image
+descriptors exclusively through `vkUpdateDescriptorSets`. Take twenty-one's
+counts were complete after all, which is now a measurement instead of a hope,
+and the mirror is not missing a road.
+
+### The inference that was wrong, caught by the fix
+
+Take twenty-one showed 26 of 191 per-eye slots, all between 10,863 and 10,955,
+and I wrote that they appear to cluster at the top of the prefix — noting it
+would make a cheap partial mirror possible. The extent line now reports the
+whole set:
+
+    186 in 1..10983, showing 23
+
+They span essentially the entire used prefix. There is no compact high band and
+no partial mirror to be had.
+
+Worse than wrong: it was **already contradicted by data in the same log**. Take
+twenty-one's first-present line read `1=img#46` — a per-eye slot at index 1,
+nowhere near the top. I had the counterexample and inferred the pattern anyway,
+from a sample I knew was truncated.
+
+That is the exact failure the extent fix was written to prevent, and it caught
+its author one run later. The rule stands and gains a sharper edge: **a
+truncated sample cannot support a claim about a distribution**, and the fact
+that the visible entries agree with each other is not evidence — it is what
+truncation looks like.
+
+Incidentally `#95` now appears in the table at slot 10954. The design note said
+the slot holding `#95` never has to be identified; it still does not, but it is
+good to see it flow through the mechanism it was written about.
+
+### Why five for five is not a sign the gates were soft
+
+P3 could have come back at 10 ms and forced a redesign. P2 could have caught an
+off-by-one in the offset corrupting X4's own textures. Those were live risks.
+What made the run clean was that the two genuine bugs — the knob that did
+nothing, and the twin that viewed layer 0 — were caught by the offline gate
+before the game ever started. The layer-0 bug in particular would have passed
+every one of P1 through P5 and surfaced two steps later with nothing in the log
+to explain it.
+
+That is the method paying for itself: the run was boring because the work was
+done first.
