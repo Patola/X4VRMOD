@@ -3564,6 +3564,25 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
                        ci->imageExtent.height == X4VR_SBS_HEIGHT;
     if (split)
         sbs_ci.imageExtent.width *= 2;
+    // The split test is an exact equality, and when it fails everything
+    // downstream degrades quietly into "duplicate the left half". Three runs
+    // went that way before anyone asked what size X4 had actually requested.
+    // Say it, with both numbers and the levers, the first time it happens.
+    if (g_sbs_enabled && g_active && g_sbs_split_render && !split) {
+        static bool told = false;
+        if (!told) {
+            told = true;
+            X4VR_LOG("sbs: SPLIT OFF — X4 asked for %ux%u but one eye is %ux%u. "
+                     "Nothing below this is stereo; the composite will "
+                     "duplicate the left half. Two levers bring X4 to the eye "
+                     "size: the halved surface extent (X11 only — a Wayland "
+                     "surface reports 0xFFFFFFFF and there is nothing to "
+                     "halve), and res_width/res_height in the config, which X4 "
+                     "honours ONLY when borderless is false.",
+                     ci->imageExtent.width, ci->imageExtent.height,
+                     X4VR_SBS_WIDTH / 2, X4VR_SBS_HEIGHT);
+        }
+    }
     // X4 asks for FIFO, which pins the frame rate to the display and makes
     // every perf number a statement about the monitor. Nothing can be A/B'd
     // against a baseline that is also 59.4 fps, so allow the mode to be

@@ -4136,3 +4136,87 @@ masked composite writing layer 1 — is unreachable until that is fixed.
   size X4 than halving the reported extent — the launcher already claims
   `res_width`/`res_height` does this on Wayland, and that claim is now itself
   in doubt.
+
+## The split-render sizing, fixed at the cause
+
+Three runs failed the same way with the same log line, so this was traced end to
+end rather than adjusted and retried.
+
+### The layer was never the problem
+
+`x4vr_CreateSwapchainKHR` decides the split by asking whether X4 requested
+exactly one eye:
+
+```c
+const bool split = … && ci->imageExtent.width == X4VR_SBS_WIDTH / 2 &&
+                        ci->imageExtent.height == X4VR_SBS_HEIGHT;
+```
+
+That is already lever-agnostic, and its comment already says so: X4 can be
+brought to the eye size by the halved surface extent (X11) or by
+`res_width`/`res_height` (Wayland). Nothing here needed changing. X4 simply
+asked for 2816×1408 and the test correctly said no.
+
+### The injector contradicted itself three lines apart
+
+```c
+// X4 only honours them when borderless is off … With borderless on it
+// ignores them and sizes to the display instead.
+{"res_width",  split ? eye_w : full},
+{"res_height", …},
+{"borderless", "true"},          // <- unconditional
+```
+
+The comment states the precondition and the next statement breaks it. So
+`res_width=1408` was written into the config and then ignored, every run.
+
+The `borderless=true` justification — *"under a correctly sized gamescope 'the
+display' is already what we asked for"* — is true in one-eye mode, where
+gamescope **is** the eye size, so "size to the display" and "size to one eye"
+are the same request. It is false for the split render, where gamescope is
+deliberately the *full* SBS width. Both modes were served by one unconditional
+setting, and only one of them was ever tested.
+
+`borderless` is now `split ? "false" : "true"`. On X11 the halved capabilities
+would have carried the split without this; it is the Wayland path — this
+machine's path — that depends on the config lever being honoured.
+
+The launcher now also sets `X4VR_RES` to the eye size in SBS mode instead of
+leaving the injector to infer it, so the window size and the render size are
+chosen in the same place and can be read together.
+
+### The line that stops this recurring
+
+The split test is an exact equality, and failing it degraded silently into
+"duplicate the left half" — `composite armed … (X4 renders full width)` says
+*what* happened but never *why*, and three runs went past it. The layer now says
+it once, with both numbers and both levers:
+
+```
+sbs: SPLIT OFF — X4 asked for 2816x1408 but one eye is 1408x1408. Nothing below
+this is stereo … Two levers bring X4 to the eye size: the halved surface extent
+(X11 only …) and res_width/res_height, which X4 honours ONLY when borderless is
+false.
+```
+
+Any future recurrence is one line instead of a run.
+
+### What this does not fix
+
+`X4VR_ONE_EYE` mode is untouched and still correct — it needs `borderless=true`
+and gets it. But the two modes now differ in a setting that changes how X4 sizes
+itself, and only the split path has been reasoned through here; one-eye mode's
+correctness rests on it being the configuration every prior run used.
+
+**Not measured:** whether `borderless=false` costs height to a titlebar inside
+gamescope. The injector's own note records `1408 -> 1385` from an observation
+made outside gamescope, and gamescope does not decorate its clients — but that
+is an argument, not a measurement. If it does happen, the request becomes
+1408×1385, the equality fails, and the new `SPLIT OFF` line will say so with
+both numbers. That is the check.
+
+- **P21** — X4 requests 1408×1408, `SPLIT OFF` does not appear, the composite
+  arms *without* "X4 renders full width", `EYE … doubled` appears four times,
+  `fallbacks=0`, and at least one pass carries `+PRESENT-CAND`. The screen is
+  still two identical halves, because `X4VR_SBS_RIGHT_LAYER` is unset — that is
+  the run's success condition, not its failure.

@@ -104,9 +104,23 @@ inline const std::vector<TagOverride> &default_overrides() {
                                    : (split ? eye_w.c_str()
                                             : X4VR_SBS_WIDTH_STR)},
         {"res_height", explicit_res ? res_h.c_str() : X4VR_SBS_HEIGHT_STR},
-        // No decoration to lose, and under a correctly sized gamescope
-        // "the display" is already what we asked for.
-        {"borderless", "true"},
+        // Borderless makes X4 ignore res_width/res_height and size to the
+        // display -- which is stated three lines above and was then set
+        // unconditionally anyway.
+        //
+        // That is right for one-eye mode, where gamescope IS the eye size, so
+        // "size to the display" and "size to one eye" are the same request.
+        // It is wrong for the split render, where gamescope is deliberately
+        // the *full* SBS width: X4 sized to 2816 instead of 1408, the layer's
+        // split test (which asks whether X4 requested exactly one eye) failed,
+        // and the composite fell back to duplicating the left half. Takes
+        // thirty-one and thirty-two both died here.
+        //
+        // So the split render needs the config lever honoured, which means
+        // borderless off. On X11 the halved surface capabilities would have
+        // brought X4 to the eye size on their own; this is what makes the
+        // Wayland path work, and it is the path this machine is on.
+        {"borderless", split ? "false" : "true"},
         // Leaving fullscreen on would let X4 pick the output's mode, which
         // is a mode-set we neither need nor control.
         {"fullscreen", "false"},

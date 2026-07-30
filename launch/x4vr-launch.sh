@@ -325,6 +325,12 @@ if [[ "${X4VR_GAMESCOPE:-0}" == 1 ]]; then
         W=$(( $(sbs_dim WIDTH) / 2 ))
         H=$(sbs_dim HEIGHT)
         export X4VR_RES="${W}x${H}"
+    elif [[ "${X4VR_SBS:-0}" == 1 && "${X4VR_SBS_SPLIT:-1}" != 0 ]]; then
+        # gamescope stays at the full SBS width -- that is the window both eyes
+        # are presented into -- but X4 must render one eye. State it here rather
+        # than leaving the injector to infer it, so the window size and the
+        # render size are set in the same place and can be read together.
+        export X4VR_RES="$(( $(sbs_dim WIDTH) / 2 ))x$(sbs_dim HEIGHT)"
     fi
     if [[ -z "$W" || -z "$H" ]]; then
         echo "x4vr-launch: could not read the SBS size from" \
