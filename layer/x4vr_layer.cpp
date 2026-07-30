@@ -18,6 +18,7 @@
 #include <vulkan/vk_layer.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <ctime>
 #include <cstring>
@@ -578,6 +579,9 @@ std::unordered_map<uint32_t, uint32_t> g_dsl_sets;
 // Mirror accounting. `collided` is the one that matters: it means X4 itself wrote
 // into the twin region, so the offset is too small for this session and
 // continuing would corrupt X4's own textures rather than merely break stereo.
+// Declared up here rather than beside g_mod_mu because the summary prints them
+// and is defined first. Atomic so they need no lock ordering against it.
+std::atomic<uint64_t> g_frag_patch_ok{0}, g_frag_patch_refused{0};
 uint64_t g_mirror_writes = 0, g_mirror_descriptors = 0, g_mirror_layer1 = 0;
 uint64_t g_mirror_no_room = 0;
 bool g_mirror_collided = false;
@@ -1601,6 +1605,26 @@ void bindless_report(const char *when) {
         for (const auto &e : g_dsl_sets)
             X4VR_LOG("bindless mirror %s: layout #%u — %u set(s) allocated",
                      when, e.first, e.second);
+        // Refusals, alongside the successes. The count of patched shaders on
+        // its own reads as coverage; it is not, and take twenty-four spent a
+        // whole run unable to ask whether one particular shader was in it.
+        const uint64_t ok = g_frag_patch_ok.load();
+        const uint64_t refused = g_frag_patch_refused.load();
+        uint64_t swapped;
+        {
+            std::lock_guard<std::mutex> lock(g_variants.mu);
+            swapped = g_variants.swapped;
+        }
+        X4VR_LOG("bindless mirror %s: index-offset patch — %llu modules "
+                 "edited, %llu declared a mirrorable table and REFUSED",
+                 when, (unsigned long long)ok,
+                 (unsigned long long)refused);
+        // The unsheared twin is the module the srgb-resolve passes actually
+        // run. If this is 0, no pipeline ever took one and the twin's contents
+        // are irrelevant -- a distinction take twenty-three could not draw.
+        X4VR_LOG("bindless mirror %s: unsheared twin swapped into %llu pipeline "
+                 "stage(s)",
+                 when, (unsigned long long)swapped);
     }
     if (!g_bindless_survey)
         return;
@@ -2322,6 +2346,11 @@ std::unordered_map<VkShaderModule, uint32_t> g_mod_serial;
 std::unordered_map<VkShaderModule, std::vector<x4vr::spv::SampledTexture>>
     g_mod_samplers;
 uint32_t g_mod_next = 0;
+// Which modules took the index-offset edit. Take twenty-four: the log said
+// "patched fragment shader #300" and nothing about the ones that refused, so
+// when #103 stayed mono there was no way to ask whether its own shader was
+// among them. A running count is not an identity.
+std::unordered_set<VkShaderModule> g_mod_frag_patched;
 
 void record_module(const VkShaderModuleCreateInfo *ci, VkShaderModule mod) {
     if ((!g_dump_shaders || !*g_dump_shaders) && !g_mv_inventory)
@@ -2363,7 +2392,8 @@ void record_module(const VkShaderModuleCreateInfo *ci, VkShaderModule mod) {
 // it without four copies of the same two lines.
 VkResult create_shader_module_inner(
     VkDevice device, const VkShaderModuleCreateInfo *ci,
-    const VkAllocationCallbacks *ac, VkShaderModule *out) {
+    const VkAllocationCallbacks *ac, VkShaderModule *out,
+    bool *frag_patched_out) {
     DeviceData *d;
     {
         std::lock_guard<std::mutex> lock(g_mu);
@@ -2498,11 +2528,19 @@ VkResult create_shader_module_inner(
         // view 1 to descriptors nobody wrote, so the two rules have to agree.
         // Runtime arrays are skipped: their length is not known here, so
         // whether a twin fits cannot be established.
+        bool wanted = false;
         for (const auto &t : x4vr::spv::list_sampled_textures(code))
-            if (t.count > g_mirror_offset &&
-                x4vr::spv::patch_fragment_index_offset(code, t.set, t.binding,
-                                                       g_mirror_offset))
-                frag_patched = true;
+            if (t.count > g_mirror_offset) {
+                // Separately from whether the edit took: a module declaring a
+                // mirrorable table is one whose samples we *need* per view, so
+                // a refusal here is a hole in the mechanism, not a no-op.
+                wanted = true;
+                if (x4vr::spv::patch_fragment_index_offset(
+                        code, t.set, t.binding, g_mirror_offset))
+                    frag_patched = true;
+            }
+        if (wanted)
+            (frag_patched ? g_frag_patch_ok : g_frag_patch_refused)++;
         static uint32_t n_frag = 0;
         if (frag_patched && (++n_frag <= 3 || (n_frag % 100) == 0))
             X4VR_LOG("patched fragment shader #%u (index + ViewIndex*%u)",
@@ -2529,6 +2567,10 @@ VkResult create_shader_module_inner(
     std::vector<uint32_t> frag_only;
     if (frag_patched)
         frag_only = code;
+    // Set here and cleared on every driver-rejection fallback below, so the
+    // flag names what the game actually got rather than what we attempted.
+    if (frag_patched_out)
+        *frag_patched_out = frag_patched;
 
     const x4vr::spv::Kind kind = x4vr::spv::classify(code);
     if (kind == x4vr::spv::Kind::NotVertex) {
@@ -2543,6 +2585,8 @@ VkResult create_shader_module_inner(
         X4VR_LOG("WARNING: driver rejected fragment-patched module (%d); "
                  "using original",
                  (int)r);
+        if (frag_patched_out)
+            *frag_patched_out = false;
         return d->CreateShaderModule(device, ci, ac, out);
     }
     const bool world = kind == x4vr::spv::Kind::World;
@@ -2590,6 +2634,8 @@ VkResult create_shader_module_inner(
         // rather than failing the game's shader creation.
         X4VR_LOG("WARNING: driver rejected patched module (%d); using original",
                  (int)r);
+        if (frag_patched_out)
+            *frag_patched_out = false;
     }
     return d->CreateShaderModule(device, ci, ac, out);
 }
@@ -2597,12 +2643,18 @@ VkResult create_shader_module_inner(
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     VkDevice device, const VkShaderModuleCreateInfo *ci,
     const VkAllocationCallbacks *ac, VkShaderModule *out) {
-    VkResult r = create_shader_module_inner(device, ci, ac, out);
+    bool frag_patched = false;
+    VkResult r = create_shader_module_inner(device, ci, ac, out, &frag_patched);
     // X4's bytes, not ours: the handle is whatever the game will bind, but the
     // code written out is what it supplied. A dump that quietly contained our
     // own edits would be worse than no dump.
-    if (r == VK_SUCCESS)
+    if (r == VK_SUCCESS) {
         record_module(ci, *out);
+        if (frag_patched) {
+            std::lock_guard<std::mutex> lock(g_mod_mu);
+            g_mod_frag_patched.insert(*out);
+        }
+    }
     return r;
 }
 
@@ -2706,11 +2758,14 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
                 int n = 0;
                 list[0] = 0;
                 uint32_t serial = UINT32_MAX;
+                bool patched = false;
                 {
                     std::lock_guard<std::mutex> lock(g_mod_mu);
                     auto sit = g_mod_serial.find(ci[i].pStages[st].module);
                     if (sit != g_mod_serial.end())
                         serial = sit->second;
+                    patched =
+                        g_mod_frag_patched.count(ci[i].pStages[st].module) != 0;
                     auto tit = g_mod_samplers.find(ci[i].pStages[st].module);
                     if (tit != g_mod_samplers.end())
                         for (const auto &t : tit->second) {
@@ -2730,8 +2785,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
                                           t.depth ? " (DEPTH)" : "");
                         }
                 }
-                X4VR_LOG("srgb-resolve rp #%u: frag module #%u samples %s",
-                         rp_serial, serial, n ? list : "nothing");
+                X4VR_LOG("srgb-resolve rp #%u: frag module #%u samples %s"
+                         " [index-offset %s]",
+                         rp_serial, serial, n ? list : "nothing",
+                         patched ? "APPLIED" : "NOT APPLIED");
             }
         }
     }
@@ -3845,6 +3902,27 @@ void write_ppm(const char *path, const uint16_t *px, uint32_t w, uint32_t h) {
     fclose(f);
 }
 
+// The 8-bit BGRA targets -- the whole late half of the frame, #103 included.
+// Their absence here is why the one image that most needed looking at was the
+// one the dumper could not write.
+void write_ppm8(const char *path, const uint8_t *px, uint32_t w, uint32_t h,
+                bool bgra) {
+    FILE *f = fopen(path, "wb");
+    if (!f)
+        return;
+    fprintf(f, "P6\n%u %u\n255\n", w, h);
+    std::vector<uint8_t> row((size_t)w * 3);
+    for (uint32_t y = 0; y < h; y++) {
+        for (uint32_t x = 0; x < w; x++) {
+            const uint8_t *p = px + ((size_t)y * w + x) * 4;
+            for (uint32_t c = 0; c < 3; c++)
+                row[(size_t)x * 3 + c] = bgra ? p[2 - c] : p[c];
+        }
+        fwrite(row.data(), 1, row.size(), f);
+    }
+    fclose(f);
+}
+
 uint64_t fnv1a(const void *p, size_t n) {
     uint64_t h = 1469598103934665603ull;
     for (size_t i = 0; i < n; i++) {
@@ -4146,6 +4224,45 @@ void probe_collect(DeviceData *d, VkQueue queue) {
     };
     annotate(ann0, sizeof ann0, l0, z0, u0);
     annotate(ann1, sizeof ann1, l1, z1, u1);
+    // Dumped before the DIFFER/IDENTICAL split, because "why is this one
+    // mono?" is a question about an image that does *not* differ, and gating
+    // the dump on DIFFER meant the instrument could only ever show what was
+    // already known. X4VR_MV_DUMP_IMG names the image; without it the old
+    // first-differing-image behaviour stands.
+    static bool dumped = false;
+    const char *want = getenv("X4VR_MV_DUMP_IMG");
+    const bool named = want && *want &&
+                       (uint32_t)strtoul(want, nullptr, 10) == g_probe.serial;
+    if (g_mv_dump && !dumped && (named || (!(want && *want) && h0 != h1))) {
+        const bool hdr = g_probe.format == VK_FORMAT_R16G16B16A16_SFLOAT;
+        const bool bgra8 = g_probe.format == VK_FORMAT_B8G8R8A8_SRGB ||
+                           g_probe.format == VK_FORMAT_B8G8R8A8_UNORM;
+        const bool rgba8 = g_probe.format == VK_FORMAT_R8G8B8A8_SRGB ||
+                           g_probe.format == VK_FORMAT_R8G8B8A8_UNORM;
+        if (hdr || bgra8 || rgba8) {
+            dumped = true;
+            char p[512];
+            for (int L = 0; L < 2; L++) {
+                const void *src = L ? l1 : l0;
+                snprintf(p, sizeof p, "%s-img%u-layer%d.ppm", g_mv_dump,
+                         g_probe.serial, L);
+                if (hdr)
+                    write_ppm(p, (const uint16_t *)src, g_probe.w, g_probe.h);
+                else
+                    write_ppm8(p, (const uint8_t *)src, g_probe.w, g_probe.h,
+                               bgra8);
+            }
+            X4VR_LOG("mv probe: wrote %s-img%u-layer{0,1}.ppm (fmt %u, %s)",
+                     g_mv_dump, g_probe.serial, (unsigned)g_probe.format,
+                     h0 != h1 ? "DIFFER" : "IDENTICAL");
+        } else if (named) {
+            // Named but unwritable is a fact worth one line: silence here
+            // would read as "the probe never reached that image".
+            X4VR_LOG("mv probe: img #%u requested for dump but format %u is "
+                     "not one this writes",
+                     g_probe.serial, (unsigned)g_probe.format);
+        }
+    }
     if (h0 == h1) {
         X4VR_LOG("mv probe: img #%u %ux%u  layer0=%016llx%s  "
                  "layer1=%016llx%s  IDENTICAL",
@@ -4162,20 +4279,6 @@ void probe_collect(DeviceData *d, VkQueue queue) {
                  missing, changed, extra,
                  g_probe.w ? (uint32_t)(first % g_probe.w) : 0,
                  g_probe.w ? (uint32_t)(first / g_probe.w) : 0);
-        static bool dumped = false;
-        if (g_mv_dump && !dumped &&
-            g_probe.format == VK_FORMAT_R16G16B16A16_SFLOAT) {
-            dumped = true;
-            char p[512];
-            snprintf(p, sizeof p, "%s-img%u-layer0.ppm", g_mv_dump,
-                     g_probe.serial);
-            write_ppm(p, (const uint16_t *)l0, g_probe.w, g_probe.h);
-            snprintf(p, sizeof p, "%s-img%u-layer1.ppm", g_mv_dump,
-                     g_probe.serial);
-            write_ppm(p, (const uint16_t *)l1, g_probe.w, g_probe.h);
-            X4VR_LOG("mv probe: wrote %s-img%u-layer{0,1}.ppm", g_mv_dump,
-                     g_probe.serial);
-        }
     }
     g_probe.captures++;
 }

@@ -3166,3 +3166,93 @@ and 7 by name; it now patches every declared table whose count exceeds the
 mirror offset — the same bound the mirror applies before writing a twin, so the
 two rules cannot drift apart. That is also what let the test use a table at
 binding 0 without the layer needing to know about it.
+
+## Take twenty-four: the fix landed, `#103` did not move, and the diagnosis was wrong
+
+The unsheared twin now keeps the fragment patch. The binary confirms it (`.so`
+built 09:15:54 against a source last touched 09:15:48), 300+ shaders were
+patched, and the four images that flipped in take twenty-three flipped again:
+
+| image | take 22 | take 23 | take 24 |
+| --- | --- | --- | --- |
+| `#104` `#105` | 0/19 | 5/5 DIFFER | **6/6 DIFFER** |
+| `#122` `#123` | 0/18 | 4/4 DIFFER | **4/4 DIFFER** |
+| `#103` | 0/21 | 0/8 | **0/7** |
+
+`#103` did not move at all. So the take-twenty-three diagnosis — "rp #40 takes
+the pristine twin, which discarded the fragment patch" — was **not** what was
+holding `#103` mono, or was not the only thing.
+
+This is worth stating plainly because the diagnosis was persuasive: the log
+line `srgb-resolve rp #40` *is* printed for exactly the masked-and-unsheared
+predicate that `needs_original()` uses, the twin *was* pristine, and the fix
+*was* correct on its own terms — the offline case that reproduces it went from
+`0/0` to `1/1`. All of that was true. It just was not the cause.
+
+A correct fix for a real defect, validated by a test that genuinely reproduces
+the symptom, is still not evidence that the defect explained the observation.
+The offline case reproduced *a* bug with `#103`'s shape; it never established
+that bug was `#103`'s.
+
+### What the log could not be asked
+
+Three questions had no answer anywhere in the run:
+
+1. **Was `#103`'s own fragment shader patched?** The log printed
+   `patched fragment shader #300` — a running count. A count is not an
+   identity. `patch_fragment_index_offset` has five distinct refusal
+   conditions and none of them were ever logged, so "300 patched" was
+   compatible with "and the six that draw `#103` were not".
+2. **Did the twin swap ever fire?** `g_variants.swapped` was incremented and
+   never printed. So "the twin was wrong" and "no pipeline ever took a twin"
+   were indistinguishable — and take twenty-three's whole argument rested on
+   the first.
+3. **What is `#103`?** The probe dumps PPMs only for images that **DIFFER**,
+   and only for `R16G16B16A16_SFLOAT`. `#103` is IDENTICAL and 8-bit. The one
+   image most in need of a look was the one the dumper structurally could not
+   write.
+
+Number 3 is the **tenth instrument-shaped hole**, and the sharpest of them: a
+dumper gated on DIFFER can only ever show you what you already know. Every
+question of the form "why is this one *not* different?" was out of its reach
+by construction. It was built to confirm, not to investigate.
+
+All three are now closed:
+
+- `srgb-resolve` names the module **and** says `[index-offset APPLIED]` or
+  `[NOT APPLIED]`.
+- The summary prints modules edited **and** modules that declared a mirrorable
+  table and refused, plus the twin-swap count.
+- The dumper writes 8-bit BGRA/RGBA as well as half-float, dumps IDENTICAL
+  images too, and takes `X4VR_MV_DUMP_IMG=N` to name one.
+
+### The competing explanation, recorded before the run that tests it
+
+`rp #40` and `rp #52` are the **only** two format-50 (`B8G8R8A8_SRGB`) passes
+in the frame. Both write `#103`, both are `all-LDR/UI`, and six distinct
+fragment modules draw into them over a run. That is the shape of a **UI pass**,
+not a scene composition.
+
+If `#103` is the HUD, then **`#103` being IDENTICAL is correct behaviour, not a
+bug.** The HUD is mono; its shaders sample font atlases and icons, which are
+not doubled images, so their twin slots hold verbatim duplicates and produce
+identical output — exactly what the mirror is specified to do. The gate
+inherited from the plan, "`#103` flips from all-IDENTICAL to all-DIFFER", would
+then have been **wrong from the moment it was written**, and two runs have been
+spent trying to satisfy it.
+
+Predictions, committed before the measurement:
+
+- **P6** — `srgb-resolve rp #40` reports `index-offset APPLIED` for every
+  module it names. *(If NOT APPLIED: the patch is refusing X4's UI shaders and
+  the refusal count says how widely.)*
+- **P7** — the twin-swap count is greater than zero. *(If zero,
+  `needs_original()` never fires for rp #40 and take twenty-three's mechanism
+  was never in play at all.)*
+- **P8** — the refusal count is small relative to the edited count.
+- **P9** — the `#103` dump shows **HUD elements over black or over a
+  non-scene background**, not the rendered world. This is the one that decides
+  whether `#103` is a target at all.
+
+P9 is the load-bearing one. P6–P8 only matter if P9 says `#103` was supposed
+to differ.
