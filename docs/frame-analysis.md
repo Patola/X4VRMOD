@@ -4325,3 +4325,46 @@ Two caveats before writing it:
   of the job — compositing the pointer into the eye image *before* duplication,
   so it lands in both halves — is separate from the mapping half and does not
   follow from it.
+
+### Correction: P22 was not confirmed. The centre is a fixed point of both models.
+
+A retest of the map reports that **the cursor does not traverse the full 2816**
+— it stays inside a centred 1408×1408 region — while the top-centre hover still
+lights both icon copies.
+
+That refutes the scale model, and it exposes the error in accepting it. Two
+mappings fit the original observation:
+
+| model | screen → X4 | cursor reaches |
+|---|---|---|
+| scale | `x / 2` | the full 2816 |
+| translate | `x − 704` (X4's 1408 window centred in the display) | only 704…2112 |
+
+Both send screen 1408 to X4 704. **The only point tested was the centre, which
+is a fixed point of both.** I took a single measurement that could not
+distinguish the candidates and wrote "P22 confirmed" over it — the same move as
+the take-27 census, in a smaller frame: an observation consistent with a
+hypothesis is not an observation that selects it.
+
+The cursor confinement selects. A scaled pointer would reach the display edges;
+this one is bounded by X4's own 1408-wide window, centred by gamescope. So the
+mapping is a **translation**, and the "fold" proposed above is built on the
+wrong model — it is retracted, not amended.
+
+Cockpit differs because it is a different regime, not a different mapping: X4
+hides the pointer and takes mouse-look there, `--force-grab-cursor` puts
+gamescope in relative mode, and what spans the full width is gamescope's own
+cursor rather than X4's.
+
+The geometry this implies is worse than a wrong scale. The input region is the
+centred box `704…2112`; the two drawn copies occupy `0…1408` and `1408…2816`.
+**Neither copy aligns with the input region** — it straddles the middle, covering
+the right half of the left copy and the left half of the right copy. Whatever the
+shim does, it cannot be a coordinate tweak alone; the window, the input box and
+the two copies have to be brought into agreement.
+
+- **P23** — the discriminator, and it must use an element X4 draws **away from
+  its own centre**, because every centred element agrees under both models. For
+  an element at X4 `x = 352` (quarter width), the copies appear at screen 352 and
+  1760. Translation predicts activation at screen **1056**; scale predicts
+  **704**. One measurement, and it decides.
