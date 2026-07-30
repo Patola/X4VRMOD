@@ -473,6 +473,13 @@ struct ImageInfo {
 struct SwapchainInfo {
     VkFormat format = VK_FORMAT_UNDEFINED;
     VkExtent2D extent{};
+    // Kept so the images can be forgotten when the swapchain dies. The driver
+    // recycles VkImage handles across swapchains, and registration skips a
+    // handle it already knows: take twenty-nine's second swapchain got serials
+    // for images 1..3 and silently reused image 0's entry from the swapchain
+    // before it, which shifted every later serial by one against take
+    // twenty-eight and left a dead swapchain's extent attached to a live image.
+    std::vector<VkImage> images;
 };
 std::mutex g_sc_mu;
 std::unordered_map<VkSwapchainKHR, SwapchainInfo> g_swapchains;
@@ -1127,9 +1134,10 @@ void bindless_mirror_writes(
     // pair is refused rather than ranked.
     if (g_mv_redirect) {
         g_mirror_collided = true;
-        X4VR_LOG("bindless mirror: DISABLED — X4VR_MV_REDIRECT is also set. The "
-                 "redirect retargets X4's own descriptor and the mirror adds a "
-                 "twin; running both would corrupt view 0. Pick one.");
+        X4VR_LOG("bindless mirror: DISABLED — X4VR_MV_PRESENT_LAYER is also "
+                 "set. The redirect retargets X4's own descriptor and the "
+                 "mirror adds a twin; running both would corrupt view 0. "
+                 "Pick one.");
         return;
     }
     mpool.reserve(writeCount); // no reallocation, so pImageInfo stays valid
@@ -3602,6 +3610,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
     return r;
 }
 
+void forget_swapchain_images(VkSwapchainKHR sc); // defined with its registrar
+
 VKAPI_ATTR void VKAPI_CALL x4vr_DestroySwapchainKHR(
     VkDevice device, VkSwapchainKHR sc, const VkAllocationCallbacks *ac) {
     DeviceData *d;
@@ -3610,6 +3620,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroySwapchainKHR(
         d = &g_devices.at(dispatch_key(device));
     }
     g_sbs.remove_swapchain(sc); // waits for the device before freeing
+    forget_swapchain_images(sc);
     d->DestroySwapchainKHR(device, sc, ac);
 }
 
@@ -3723,7 +3734,34 @@ void register_swapchain_images(VkSwapchainKHR sc, const VkImage *images,
                      info.serial, extent.width, extent.height, (unsigned)fmt, i,
                      n);
     }
-    (void)sc;
+    {
+        std::lock_guard<std::mutex> lock(g_sc_mu);
+        auto &si = g_swapchains[sc];
+        si.images.assign(images, images + n);
+    }
+}
+
+// Forget a dead swapchain's images so a recycled handle registers afresh
+// instead of inheriting the old swapchain's serial, extent and format.
+void forget_swapchain_images(VkSwapchainKHR sc) {
+    std::vector<VkImage> images;
+    {
+        std::lock_guard<std::mutex> lock(g_sc_mu);
+        auto it = g_swapchains.find(sc);
+        if (it == g_swapchains.end())
+            return;
+        images.swap(it->second.images);
+        g_swapchains.erase(it);
+    }
+    std::lock_guard<std::mutex> lock(g_img_mu);
+    for (VkImage im : images) {
+        auto it = g_images.find(im);
+        // Only ever drop an entry this layer created for a swapchain. If X4
+        // somehow handed us a handle from vkCreateImage, leaving it is the
+        // conservative error.
+        if (it != g_images.end() && it->second.swapchain)
+            g_images.erase(it);
+    }
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetSwapchainImagesKHR(

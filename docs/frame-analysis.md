@@ -3679,3 +3679,103 @@ it is worth saying twice rather than letting a green suite imply otherwise.
   the heap, the index-offset mechanism already built applies and the report
   will say `NOT APPLIED` for these modules, because they draw into a `MONO`
   pass and take the unsheared twin.
+
+## Take twenty-nine: P15 confirmed, my reasoning for it refuted, and a bug in yesterday's fix
+
+Same command as take twenty-eight.
+
+### The four present passes, named
+
+```
+present rp #0  <- frag module #12  samples set 0 binding 5[53306], set 0 binding 5[53306] [index-offset APPLIED]
+present rp #0  <- frag module #190 samples set 0 binding 5[53306], set 0 binding 5[53306] [index-offset APPLIED]
+present rp #1  <- frag module #1..#4 samples set 0 binding 0 [index-offset NOT APPLIED]
+present rp #7  <- frag module #1..#4 samples set 0 binding 0 [index-offset NOT APPLIED]
+present rp #14 <- frag module #1..#4 samples set 0 binding 0 [index-offset NOT APPLIED]
+```
+
+They are two different things wearing the same classification:
+
+* **`rp #0` is the composite.** Two fragment modules, each sampling the
+  53,306-entry bindless heap **twice**, and both carrying the index-offset
+  patch.
+* **`rp #1`, `rp #7`, `rp #14` are plain blits** — one ordinary sampler at
+  binding 0, count 1, not the heap at all. `rp #1` only ever got framebuffers on
+  the pre-load swapchain.
+
+The count also rose from 3 at first present to 4 at exit, which is what a
+lazily-created composite pipeline should look like and is only visible because
+the summary prints at both points.
+
+### P15's prediction was wrong, against a fact I had already tested
+
+> …the report will say `NOT APPLIED` for these modules, because they draw into a
+> `MONO` pass and take the unsheared twin.
+
+It says **APPLIED**, and it is right to. The unsheared twin was built in take
+twenty-three to strip the *vertex* shear and **keep** the fragment edit — the
+source says so at the substitution site, and `tests/run-multiview-render.sh`
+has asserted `unsheared twin keeps the frag patch` ever since.
+
+So I predicted from a half-remembered summary of my own mechanism while a
+committed test asserted the opposite. Not an instrument hole — the instrument
+was right and I argued past it.
+
+### What that actually means, and it is the best possible news for task #5
+
+`rp #0`'s fragment shaders already compute `index + gl_ViewIndex * 26653`.
+`rp #0` is a non-multiview pass, so `gl_ViewIndex` is 0 there, and the
+expression resolves to `index` every time.
+
+**The composite already contains the per-view machinery. It just always
+evaluates view 0.** Nothing needs to be taught to sample per-eye; the term is
+compiled in and pinned to one value. That reframes task #5 from "build a
+per-eye read at the end of the chain" to "give the existing term a second
+value".
+
+### The serial shift was not renumbering — it was a stale-handle bug
+
+Take twenty-eight registered swapchain images `#50..#53`, "image 0..3 of 4".
+Take twenty-nine registered `#50..#52`, "image **1**..3 of 4". Image 0 of the
+second swapchain got no serial, and every later serial shifted by one.
+
+The cause: the driver recycles `VkImage` handles across swapchains,
+registration skips a handle already in `g_images`, and
+`vkDestroySwapchainKHR` never removed the old swapchain's entries. So the new
+swapchain's image 0 silently inherited the *dead* swapchain's serial, extent and
+format. `fb rp #7`/`fb rp #14` naming `#4` — a first-swapchain image — in
+second-swapchain framebuffers is the same bug showing its work.
+
+Fixed: `SwapchainInfo` keeps its image list and `vkDestroySwapchainKHR` forgets
+them, so a recycled handle registers afresh. Only entries this layer created for
+a swapchain are dropped.
+
+**Correction to the take-twenty-eight section above:** the old→new serial table
+there is a one-off, not a rule. Image serials are **not stable across runs** and
+never were. Re-anchor per run — the five images `rp #13` writes are a good
+anchor — and never carry a serial across a run boundary.
+
+### Task #5: the experiment needs no new code, and take seventeen already built it
+
+`X4VR_MV_PRESENT_LAYER=1` points every image-descriptor read of a doubled image
+at layer 1. Take seventeen ran it and the frame on screen was built entirely
+from layer 1 — correct through post, exposure, the compositor and the present
+blit, `redirected=857470`, after that exact configuration had produced a black
+scene ten times before the fix.
+
+That run passed by *nothing looking different*, because stage 1 made both
+layers hold identical bytes. Stage 2 makes them differ on purpose, so the same
+knob now inverts its own gate: the same configuration that had to look
+unchanged must now look **changed**.
+
+- **P16** — with `X4VR_MV=1 X4VR_STEREO=1 X4VR_MV_PRESENT_LAYER=1` and an IPD
+  large enough to be unmistakable, the scene on screen is visibly displaced
+  against the same run without the redirect, and `redirected` is a large
+  non-zero number. If it is *not* displaced while `redirected` is large,
+  the composite's heap read does not resolve to a doubled image and the
+  index-offset term at `rp #0` has nothing per-eye to select.
+
+Note that the mirror and the redirect are mutually exclusive by design and the
+layer refuses the pair, so this run has `X4VR_BINDLESS_MIRROR` and
+`X4VR_BINDLESS_PATCH` off. That is not a regression: it isolates the question
+to the read path, which is exactly what take seventeen's failure mode covers.
