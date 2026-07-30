@@ -1483,7 +1483,6 @@ std::vector<bool> classify_unsheared(const CreateInfo *ci) {
 // image is finally named: a pipeline is only compatible with render passes of
 // the same viewMask, and X4 builds its pipelines long before any framebuffer
 // exists. A pass is masked at creation or not at all.
-std::atomic<uint32_t> g_present_format{VK_FORMAT_UNDEFINED};
 
 template <typename CreateInfo, typename Subpass>
 bool subpass_is_present(const CreateInfo *ci, const Subpass &sp) {
@@ -1494,8 +1493,18 @@ bool subpass_is_present(const CreateInfo *ci, const Subpass &sp) {
         return false;
     if (ci->pAttachments[a].finalLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
         return true;
-    const uint32_t f = g_present_format.load();
-    return f != VK_FORMAT_UNDEFINED && (uint32_t)ci->pAttachments[a].format == f;
+    // Take thirty-two: the swapchain format cannot be used here. X4 creates
+    // `rp #0` *before* it creates the swapchain -- same millisecond, adjacent
+    // log lines, render pass first -- so g_present_format is still UNDEFINED
+    // when the only question that matters is asked, and the fallback was dead
+    // on arrival. Second time this project has bet on a creation order without
+    // checking it; the present-pass *report* was deliberately deferred to the
+    // summary to avoid exactly this, and then the decision made the same bet.
+    //
+    // So: no external state at all. A single LDR colour attachment with no
+    // depth is the shape of every fullscreen composition pass in the frame, the
+    // real composite among them.
+    return is_ldr_format(ci->pAttachments[a].format);
 }
 
 template <typename CreateInfo, typename Subpass>
@@ -1570,9 +1579,12 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
             if (da != VK_ATTACHMENT_UNUSED && da < ci->attachmentCount)
                 snprintf(dep, sizeof(dep), " depth %u",
                          ci->pAttachments[da].format);
-            const bool presents = subpass_is_present(ci, sp);
+            // Candidacy is not identity. This predicate matches every
+            // fullscreen LDR pass, and only one of them is the composite, so
+            // the label says "candidate" and the existing verdict strings are
+            // left alone.
+            const bool cand = g_mask_present && subpass_is_present(ci, sp);
             const char *why = sp.colorAttachmentCount == 0 ? "depth-only/shadow"
-                              : presents                   ? "PRESENT composite"
                               : unsheared[i]               ? "all-LDR/UI"
                                                            : "world";
             // The MONO/STEREO verdict is about K. Since the split it no longer
@@ -1589,10 +1601,11 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
                 sp.pColorAttachments[0].attachment < ci->attachmentCount)
                 fl = (int)ci->pAttachments[sp.pColorAttachments[0].attachment]
                          .finalLayout;
-            X4VR_LOG("rp #%u.%u: %u colour [%s]%s final=%d -> %s (%s)%s", serial,
-                     i, sp.colorAttachmentCount, fmts, dep, fl,
+            X4VR_LOG("rp #%u.%u: %u colour [%s]%s final=%d -> %s (%s)%s%s",
+                     serial, i, sp.colorAttachmentCount, fmts, dep, fl,
                      unsheared[i] ? "MONO" : "STEREO", why,
-                     (unsheared[i] && per_eye[i]) ? " +MASKED" : "");
+                     (unsheared[i] && per_eye[i]) ? " +MASKED" : "",
+                     cand ? " +PRESENT-CAND" : "");
         }
     }
 
@@ -3626,8 +3639,6 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
         std::lock_guard<std::mutex> lock(g_sc_mu);
         g_swapchains[*out].format = sbs_ci.imageFormat;
         g_swapchains[*out].extent = sbs_ci.imageExtent;
-        // What the composite's attachment must be, for subpass_is_present.
-        g_present_format.store((uint32_t)sbs_ci.imageFormat);
     }
     // The injector forces res_width/res_height, but X4 only honours them when
     // borderless is off; with borderless on it sizes to the display and

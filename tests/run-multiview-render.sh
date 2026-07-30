@@ -556,13 +556,20 @@ base=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \
     "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
     X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=3 X4VR_MV_INVENTORY=1 \
     "$BIN" "$VS" "$FS" "$SF" 2>&1)
-got=$(grep -o "masked=[0-9]*" <<<"$out" | tail -1)
-want=$(grep -o "masked=[0-9]*" <<<"$base" | tail -1)
-if ! grep -q "PRESENT composite" <<<"$out" && [[ "$got" == "$want" ]]; then
-    printf 'ok   %-38s %s\n' "MASK_PRESENT fires on nothing here" "$got unchanged"
+if grep -q "+PRESENT-CAND" <<<"$out" && ! grep -q "+PRESENT-CAND" <<<"$base"; then
+    printf 'ok   %-38s %s\n' "MASK_PRESENT flags LDR candidates" "gated on the knob"
 else
-    printf 'FAIL %-38s classified a non-present pass (%s vs %s)\n' \
-        "MASK_PRESENT fires on nothing here" "$got" "$want"
+    printf 'FAIL %-38s knob does not gate the candidate flag\n' \
+        "MASK_PRESENT flags LDR candidates"
+    fails=$((fails + 1))
+fi
+# The half that still guards a backwards predicate: a world (HDR) pass must
+# never be a present candidate, whatever the knob says.
+if ! grep -E "STEREO \(world\).*PRESENT-CAND" <<<"$out" >/dev/null; then
+    printf 'ok   %-38s %s\n' "...and never flags a world pass" "HDR excluded"
+else
+    printf 'FAIL %-38s flagged a world pass as presenting\n' \
+        "...and never flags a world pass"
     fails=$((fails + 1))
 fi
 # And "never measured" must not read as "measured zero". The bindless survey

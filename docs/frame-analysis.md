@@ -4061,3 +4061,78 @@ rather than folded into either explanation.
   is not taking; if it is a real extent for that pid and `0xFFFFFFFF` only for
   gamescope's, the split failed for some other reason and take thirty-one's
   first diagnosis was wrong.
+
+## Take thirty-two: the predicate was dead on arrival, for a reason I had already written down
+
+The launch works. The screen is still two identical left halves. Two findings,
+one of them mine again.
+
+### `final=2`, and the ordering that killed the fallback
+
+```
+rp #0.0: 1 colour [44L] no-depth final=2 -> MONO (all-LDR/UI)   (494853.418)
+swapchain created: 2816x1408 images>=4 format=44 -> ok           (494853.418)
+```
+
+`final=2` is `COLOR_ATTACHMENT_OPTIMAL`. X4 never leaves an attachment in
+`PRESENT_SRC_KHR`, which confirms take thirty-one.
+
+But look at the order. **`rp #0` is created before the swapchain** — same
+millisecond, adjacent lines, render pass first. So the format fallback added in
+take thirty-one read `g_present_format` while it was still `UNDEFINED`. It could
+never have fired. `PRESENT composite` appears zero times not because the
+heuristic was wrong but because it was **structurally unreachable**.
+
+This is the third ordering assumption in this stretch, and the worst of them,
+because the lesson was already recorded: the present-pass *report* was
+deliberately deferred to the end-of-run summary specifically so it would not
+depend on X4's creation order. I wrote that reasoning down, committed it, and
+then had the *decision* depend on a creation order I never checked.
+
+The predicate now uses no external state: single LDR colour attachment, no
+depth. That cannot be beaten by ordering because it reads only the create-info
+in hand.
+
+### Candidacy is not identity, and the test said so immediately
+
+Broadening it to all LDR passes made five offline cases fail on the first run —
+including the negative-side guard written one commit earlier, which caught the
+over-fire exactly as intended. That guard has now paid for itself.
+
+The failure was in the *label*: calling every matching pass `PRESENT composite`
+claims an identity the predicate cannot establish. It matches every fullscreen
+LDR composition pass; one of them is the composite. The verdict strings are
+restored and the flag is now `+PRESENT-CAND`, gated on the knob, with the offline
+suite asserting both that the knob gates it and that a world/HDR pass is never
+flagged — the half that still guards a backwards predicate.
+
+**Unresolved, and recorded as such:** narrowing candidates to the one real
+composite is not solved. Everything that would identify it — the framebuffer's
+image, the swapchain format, the presented handle — is known only after the
+masking decision must be made, because a pipeline is only compatible with render
+passes of its own viewMask.
+
+### The split still does not virtualize, and the pid did not settle it
+
+```
+sbs: surface caps currentExtent=4294967295x4294967295 … (pid 3341031)
+sbs: composite armed … (X4 renders full width, left half duplicated)
+```
+
+One surface-caps line, one pid, and the injector only ever named pid 3341060
+(bash, xkbcomp). So P19 is **still unanswered**: 3341031 is probably X4, since
+arming the SBS composite happens on X4's own swapchain, but "probably" is what
+the pid was added to eliminate.
+
+The mechanism is at least clear: no preferred extent means there is nothing to
+halve, so `surface_was_halved` is false, so `want_split` is false, so
+`make_eye_images` is never called and there are no eye images at all. Everything
+downstream of virtualization — the two-layer eye image, `EYE … doubled`, the
+masked composite writing layer 1 — is unreachable until that is fixed.
+
+- **P20** — the injector's own pid line and the surface-caps pid are compared
+  directly. If they match, the surface X4 renders to genuinely reports no
+  preferred extent under gamescope, and the SBS split needs a different way to
+  size X4 than halving the reported extent — the launcher already claims
+  `res_width`/`res_height` does this on Wayland, and that claim is now itself
+  in doubt.
