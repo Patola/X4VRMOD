@@ -5040,3 +5040,50 @@ solely when the process is X4.
 - **P43** — button events carry the same coordinate space as motion. If they
   differ, the map's click-works-but-hover-does-not behaviour from this take has
   a second cause and the shim needs both paths.
+
+## Take forty-one: the working state did not come back, and the command is the suspect
+
+Run: `X4VR_TAKE=41-input X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_GAMESCOPE=1
+X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MASK_TONEMAP=1 X4VR_MV=1
+X4VR_SBS=1 X4VR_MASK_PRESENT=1 X4VR_BINDLESS_MIRROR=1 ./launch/x4vr-launch.sh`
+
+Reported: splash and loading screens correct; in the menu and in flight the
+**right eye shows HUD and interface but the 3D is black**, and the left eye's X4
+logo is clipped at the top right where it used to be whole. The map works, with
+the centred square back (expected — no `--force-windows-fullscreen` here).
+
+That command was **my reconstruction of take thirty-three, not take
+thirty-three**. Take thirty-three was never recorded: the `env: run =` line
+exists only from take thirty-four onward, and `/tmp/x4vr.log` contains no
+segment with `right half from layer 1` at all, so the run is not in that file
+either. This is the same failure the run-recording line was added to prevent,
+one take too late to prevent it.
+
+What can be said without another run:
+
+* **The layer has not changed in any way that touches rendering.** The whole
+  diff from `stage2-sbs-working` to here is added observation — surface hooks,
+  capability logging, socket and SDL watching — plus two knobs that default off
+  and were off in this run.
+* **The per-view machinery is fully engaged.** `370 modules edited`,
+  `1062 pipeline stage(s)`, `505124 layer-1 twin descriptors`,
+  `fallbacks=0` — the same order as the healthy reference run. Whatever is
+  wrong, the bindless index-offset path is not idle.
+* `substituted=25 per_eye_images=24` against take thirty-three's recorded
+  `substituted=26 per_eye_images=25`. One image short, which is small enough to
+  be scene-dependent and not small enough to ignore.
+
+So the question is exactly: **my code, or my command?** Guessing at it from the
+symptom is what produced the last four takes' worth of retractions.
+
+`stage2-sbs-working` is built in a worktree at `/tmp/x4vr-tag/build`, and the
+launcher already honours `X4VR_BUILD`. Running the *same* command against both
+trees isolates the variable in one step.
+
+- **P44** — the tagged build, given this command, shows the same broken right
+  eye. That means the command is wrong, take thirty-three used a different knob
+  set, and nothing has regressed.
+- **P45** — the tagged build shows correct SBS. That means something in the
+  observation-only changes is not observation-only, and the diff above is wrong
+  about itself; the first suspects are the two SDL interposers, which are live
+  in every run regardless of knobs.
