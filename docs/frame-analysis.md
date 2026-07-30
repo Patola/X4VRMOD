@@ -5131,3 +5131,75 @@ This is deliberately not a knob sweep. If the probe localises the break, the
 knob follows from it; if the probe shows layer 1 healthy all the way to the
 composite, the fault is in the composite or the present path and no knob would
 have found it.
+
+## Take forty-three: the probe localised it, and the fix is a predicate
+
+P46 and P47 both hold, and the numbers name the break.
+
+| image | layer 0 non-empty | layer 1 non-empty |
+|---|---|---|
+| #97, #98 (world) | — | `DIFFER` 6–9% |
+| #50 | 1,982,464 | 457,600 |
+| #51 | 1,982,464 | 64,897 |
+| #52 | 1,982,464 | 11,183 |
+| #53 | 1,982,464 | 594,096 |
+
+The world images carry a real second eye — the scene *is* drawn twice. The
+present targets have a full layer 0 against a layer 1 holding between 0.5% and
+30% of it. That is the black right eye, and the spread across the four images
+matches the report from the screen exactly: *"briefly seems to fade in with the
+left screen, only to become all black"*. Layer 1 receives content in some
+frames and not others.
+
+The inventory says why:
+
+```
+20 MONO (depth-only/shadow)
+ 8 MONO (all-LDR/UI)                        ← masked by no rule
+ 6 MONO (all-LDR/UI) +MASKED +PRESENT-CAND
+```
+
+The HUD reaches the screen through the six. The scene reaches it through some of
+the eight, which render into layer 0 only.
+
+### The real defect is that the rule depends on the scene
+
+Take thirty-three logged **3** `+PRESENT-CAND`; take forty-three logged **6**,
+on the same knobs. `subpass_is_present()` matches on the shape of whatever
+passes the current scene builds — one colour attachment, no depth, LDR format —
+so the set it catches changes with the content. **A configuration that depends
+on the scene is not a configuration**, and that, not a lost environment
+variable, is why the working state could not be restored. Recovering take
+thirty-three's exact command would most likely not have recovered take
+thirty-three.
+
+This was on the record as an open item — *"narrowing `+PRESENT-CAND` from seven
+passes to the one true composite"* — filed as tidying. It was the bug.
+
+### X4VR_MASK_LDR
+
+Masks on the property that actually matters: every colour attachment is LDR, so
+the pass is somewhere on the post/UI path to the screen. It deliberately says
+nothing about attachment count or depth — those are what `subpass_is_present()`
+adds to guess at the composite, and they are exactly what excluded the eight.
+`classify_unsheared` has already decided the pass is not a world pass before
+this rule ever runs.
+
+The inventory now prints **which** rule masked each pass —
+`+MASKED(tonemap|present|ldr|?)`. `+MASKED(?)` means something set `per_eye`
+that no named predicate claims, which is how a fourth rule would otherwise
+arrive unnoticed; a case asserts it never appears.
+
+Three offline cases added (63 total): the knob fires on an LDR pass and only
+with the knob; it never masks an HDR pass, the failure that would silently cost
+the world its second eye; and every masked pass names its rule.
+
+- **P48** — with `X4VR_MASK_LDR=1`, the eight unmasked all-LDR passes become
+  `+MASKED(ldr)`, and the present images' layer 1 fills to roughly layer 0's
+  non-empty count instead of 0.5–30% of it. On screen: a right eye with 3D in
+  it.
+- **P49** — no `+MASKED(?)` and no HDR pass masked, live, on real content. The
+  offline cases build one LDR pass; the game builds thirty-four.
+- **P50** — the masked count stops moving between runs. If the tally still
+  differs run to run, something else in the classification is scene-dependent
+  and the configuration is still not restorable.

@@ -1495,6 +1495,29 @@ const bool g_fake_extent = [] {
     return e && *e && *e != '0';
 }();
 
+// Mask every all-LDR pass, not just the ones a heuristic calls "the present".
+//
+// Take forty-three localised the black right eye: the world images carry a
+// real second eye (#97/#98 DIFFER), and the present targets have a full layer
+// 0 against a layer 1 holding 0.5%-30% of it -- the HUD and little else. The
+// inventory says why: 8 all-LDR/UI passes masked nothing while 6 were masked
+// as present candidates. The scene reaches the screen through some of the
+// eight.
+//
+// Worse than the miss is its instability. subpass_is_present() matches on the
+// shape of whatever passes the current scene builds, so the same command
+// produced 3 candidates in take thirty-three and 6 in take forty-three. A
+// configuration that depends on the scene is not a configuration, and it is
+// why the working state could not be restored from its knobs.
+//
+// This masks on the property that actually matters -- every colour attachment
+// is LDR, so the pass is somewhere on the post/UI path to the screen -- and
+// stops caring which one is the composite.
+const bool g_mask_ldr = [] {
+    const char *e = getenv("X4VR_MASK_LDR");
+    return e && *e && *e != '0';
+}();
+
 const bool g_mask_present = [] {
     const char *e = getenv("X4VR_MASK_PRESENT");
     return e && *e && *e != '0';
@@ -1578,6 +1601,27 @@ std::vector<bool> classify_unsheared(const CreateInfo *ci) {
 // the same viewMask, and X4 builds its pipelines long before any framebuffer
 // exists. A pass is masked at creation or not at all.
 
+// Every colour attachment is LDR, and there is at least one.
+//
+// Deliberately says nothing about attachment count or depth: those are what
+// subpass_is_present() adds to guess at the composite, and they are exactly
+// what excluded the eight passes the scene travels through. A depth buffer on
+// an LDR pass does not make it a world pass -- classify_unsheared already
+// decided that, and this only ever runs on passes it called MONO.
+template <typename CreateInfo, typename Subpass>
+bool subpass_is_all_ldr(const CreateInfo *ci, const Subpass &sp) {
+    uint32_t seen = 0;
+    for (uint32_t c = 0; c < sp.colorAttachmentCount; c++) {
+        const uint32_t a = sp.pColorAttachments[c].attachment;
+        if (a == VK_ATTACHMENT_UNUSED || a >= ci->attachmentCount)
+            continue;
+        if (!is_ldr_format(ci->pAttachments[a].format))
+            return false;
+        seen++;
+    }
+    return seen > 0;
+}
+
 template <typename CreateInfo, typename Subpass>
 bool subpass_is_present(const CreateInfo *ci, const Subpass &sp) {
     if (sp.colorAttachmentCount != 1 || sp.pDepthStencilAttachment)
@@ -1622,7 +1666,8 @@ std::vector<bool> classify_per_eye(const CreateInfo *ci) {
     for (uint32_t i = 0; i < ci->subpassCount; i++)
         per_eye[i] = !unsheared[i] ||
                      (g_mask_tonemap && subpass_is_srgb_resolve(ci, ci->pSubpasses[i])) ||
-                     (g_mask_present && subpass_is_present(ci, ci->pSubpasses[i]));
+                     (g_mask_present && subpass_is_present(ci, ci->pSubpasses[i])) ||
+                     (g_mask_ldr && subpass_is_all_ldr(ci, ci->pSubpasses[i]));
     return per_eye;
 }
 
@@ -1695,11 +1740,26 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
                 sp.pColorAttachments[0].attachment < ci->attachmentCount)
                 fl = (int)ci->pAttachments[sp.pColorAttachments[0].attachment]
                          .finalLayout;
+            // Which rule masked it, not just that something did. Take
+            // forty-three could not tell a pass masked as "the present" from
+            // one masked for being LDR, and the difference between those two
+            // is the difference between a stable configuration and a
+            // scene-dependent one.
+            const char *rule = "";
+            if (unsheared[i] && per_eye[i]) {
+                if (g_mask_tonemap && subpass_is_srgb_resolve(ci, sp))
+                    rule = " +MASKED(tonemap)";
+                else if (g_mask_present && subpass_is_present(ci, sp))
+                    rule = " +MASKED(present)";
+                else if (g_mask_ldr && subpass_is_all_ldr(ci, sp))
+                    rule = " +MASKED(ldr)";
+                else
+                    rule = " +MASKED(?)";
+            }
             X4VR_LOG("rp #%u.%u: %u colour [%s]%s final=%d -> %s (%s)%s%s",
                      serial, i, sp.colorAttachmentCount, fmts, dep, fl,
                      unsheared[i] ? "MONO" : "STEREO", why,
-                     (unsheared[i] && per_eye[i]) ? " +MASKED" : "",
-                     cand ? " +PRESENT-CAND" : "");
+                     rule, cand ? " +PRESENT-CAND" : "");
         }
     }
 

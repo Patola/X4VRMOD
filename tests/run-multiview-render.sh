@@ -831,6 +831,61 @@ fi
 inv_case "instance surface extensions are listed" \
     "wsi: instance enables VK_KHR_surface"
 
+# X4VR_MASK_LDR must mask on "every colour attachment is LDR" and nothing else.
+#
+# Take forty-three: 8 all-LDR/UI passes were masked by no rule while 6 were
+# masked as present candidates, and the scene reached the screen through some
+# of the eight. The two guards that matter are that the knob fires here (this
+# suite builds an LDR pass) and that it never touches an HDR pass -- a
+# backwards predicate would mask the world and cost a stereo frame its second
+# eye without any log line saying so.
+ldr_on=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \
+    "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=3 X4VR_MV_INVENTORY=1 X4VR_MASK_LDR=1 \
+    "$BIN" "$VS" "$FS" "$SF" 2>&1 | grep -c '+MASKED(ldr)')
+ldr_off=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \
+    "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=3 X4VR_MV_INVENTORY=1 \
+    "$BIN" "$VS" "$FS" "$SF" 2>&1 | grep -c '+MASKED(ldr)')
+if [[ "$ldr_on" -ge 1 && "$ldr_off" -eq 0 ]]; then
+    printf 'ok   %-38s %s\n' "MASK_LDR masks all-LDR passes" \
+        "$ldr_on on, $ldr_off off"
+else
+    printf 'FAIL %-38s want >=1 on and 0 off, got %s / %s\n' \
+        "MASK_LDR masks all-LDR passes" "$ldr_on" "$ldr_off"
+    fails=$((fails + 1))
+fi
+
+# The negative side, and the one that would cost a run: an HDR colour target
+# must never be masked by this rule, whatever else is on.
+hdr_masked=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \
+    "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=3 X4VR_MV_INVENTORY=1 X4VR_MASK_LDR=1 \
+    "$BIN" "$VS" "$FS" "$SF" 2>&1 |
+    grep '+MASKED(ldr)' | grep -c 'H\]')
+if [[ "$hdr_masked" -eq 0 ]]; then
+    printf 'ok   %-38s %s\n' "...and never an HDR pass" "0 HDR passes masked"
+else
+    printf 'FAIL %-38s %s HDR pass(es) masked by the LDR rule\n' \
+        "...and never an HDR pass" "$hdr_masked"
+    fails=$((fails + 1))
+fi
+
+# Every masked pass names the rule that masked it. "+MASKED(?)" means some
+# path set per_eye without any of the three predicates claiming it, which is
+# how a fourth rule would arrive unnoticed.
+if ! env "VK_ADD_LAYER_PATH=$BUILD/layer" \
+    "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=3 X4VR_MV_INVENTORY=1 X4VR_MASK_LDR=1 \
+    X4VR_MASK_PRESENT=1 X4VR_MASK_TONEMAP=1 \
+    "$BIN" "$VS" "$FS" "$SF" 2>&1 | grep -q '+MASKED(?)'; then
+    printf 'ok   %-38s %s\n' "every mask names its rule" "no +MASKED(?)"
+else
+    printf 'FAIL %-38s a pass was masked by no named rule\n' \
+        "every mask names its rule"
+    fails=$((fails + 1))
+fi
+
 echo
 if (( fails )); then echo "$fails case(s) failed"; exit 1; fi
 echo "all cases passed"

@@ -205,6 +205,15 @@
 #                         through X4VR_LOG.
 #   X4VR_NO_LAYER=1       skip the Vulkan layer
 #   X4VR_NO_INJECT=1      skip the LD_PRELOAD injector
+#   X4VR_MASK_LDR=1       mask EVERY pass whose colour attachments are all LDR,
+#                         instead of only the ones subpass_is_present() guesses
+#                         are the composite. Take forty-three found 8 all-LDR
+#                         passes masked by no rule at all, and the scene reached
+#                         the screen through them -- right eye HUD-only, 3D
+#                         black. It also found the guess is scene-dependent (3
+#                         candidates in take 33, 6 in take 43), which is why a
+#                         working configuration could not be restored from its
+#                         knobs. This rule does not depend on the scene.
 #   X4VR_WINDOWS_FULLSCREEN=1
 #                         gamescope --force-windows-fullscreen: make X4's X11
 #                         window the size of the nested display instead of the
