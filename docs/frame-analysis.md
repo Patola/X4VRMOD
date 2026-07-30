@@ -3544,3 +3544,138 @@ per-eye — and the last pass throws it away by construction.
 - **P14** — with swapchain images registered, `fb rp #0` and `fb rp #1` name a
   real image, and that image appears in the writer list as written by an
   unmasked pass.
+
+## Take twenty-eight: P14 half-confirmed, half-unsatisfiable, and the census that was a cap
+
+`X4VR_GAMESCOPE=1 X4VR_ONE_EYE=1 X4VR_MV=1 X4VR_STEREO=1 X4VR_MV_PROBE=1
+X4VR_MV_INVENTORY=1 X4VR_MASK_TONEMAP=1 X4VR_BINDLESS_SURVEY=1
+X4VR_BINDLESS_MIRROR=1 X4VR_BINDLESS_PATCH=1`. Cockpit run, ~4.5 minutes.
+
+### P14, first clause: confirmed
+
+```
+img #1: 1408x1408 fmt=44 SWAPCHAIN (image 0 of 4)
+...
+fb  rp #0: 1408x1408 layers=1 attachments=1 imgs=[#50]
+fb  rp #1: 1408x1408 layers=1 attachments=1 imgs=[#51]
+```
+
+Zero `imgs=[?]` lines in the whole run, down from twenty-four. And the count of
+passes drawing into the swapchain is not two but **four**: `rp #0`, `rp #1`,
+`rp #7`, `rp #14` — exactly the four sentinel lines take twenty-seven printed
+and could not read. All four are `1 colour [44L] no-depth -> MONO (all-LDR/UI)`.
+
+Take twenty-seven said "`rp #0`/`rp #1`, the only two format-44 passes". There
+are seven format-44 passes; four of them reach the screen. Stating two was a
+guess phrased as a count.
+
+### P14, second clause: unsatisfiable, and I wrote it that way
+
+> …and that image appears in the writer list as written by an unmasked pass.
+
+It does not, and it never could. The writer list is `writers tracked for N
+**doubled** images`. A swapchain image is single-layer, owned by the
+presentation engine — it is never doubled, so it can never be in that list.
+
+This is the take-19 `#103` gate again, in form if not in subject: **a gate
+whose second clause was impossible from the moment it was written, because I
+named an instrument without checking what it is scoped to.** Take nineteen cost
+three runs to that mistake. This one cost nothing, because the first clause
+carried the finding on its own — but the error was identical and I did not
+catch it while writing.
+
+### The census that was a cap — hole #13
+
+Take twenty-seven's central claim was "exactly one image→image transfer exists
+in the frame." Here is the line it rested on:
+
+```
+mv final: image transfers — 256 distinct edge(s)
+mv final: xfer #95 -> #96 via vkCmdCopyImage — 1344 region(s), 1344 widened
+```
+
+`256` is not a measurement. It is `if (g_xfer_edges.size() >= 256 …) return;`
+— the cap, printed as a total. Every distinct edge after the 256th was dropped
+in silence, and buffer→image uploads were racing to fill those slots first.
+
+With uploads aggregated, take twenty-eight sees **seven** image→image edges:
+
+```
+xfer #100 -> #133  —   12 region(s),    0 widened
+xfer #100 -> #522  — 1106 region(s), 1106 widened
+xfer #100 -> #834  —  295 region(s),  295 widened
+xfer #103 -> #104  — 2118 region(s), 2118 widened   <- take 27's lone survivor
+xfer #103 -> #142  —    6 region(s),    0 widened
+xfer #103 -> #524  —    6 region(s),    0 widened
+xfer #103 -> #987  —    6 region(s),    0 widened
+```
+
+Six of the seven were invisible. **I reported one truncated survivor as a
+census, and used it as the premise of an elimination argument.**
+
+The conclusion survives — none of the seven has a swapchain image as its
+destination, so nothing copies a finished frame to the screen, and the merge is
+still a draw. But it survives on evidence gathered *after* the claim, not on
+the claim's own reasoning.
+
+That is hole #13, and it is the third instance of one meta-pattern: **a bounded
+instrument reporting its bound as if it were a reading.** The bound was printed
+in the log, it was a suspiciously round power of two, it exactly equalled a
+constant in my own source, and I read past it.
+
+The rule this earns: *when a count could be a limit, check whether it is the
+limit before it becomes a premise.*
+
+### Every image serial in this document before this section is stale
+
+Registering swapchain images consumed serials, so everything downstream
+renumbered. Verified by anchor — the five images written by `rp #13` are
+`{46,47,51,52,53}` in take twenty-seven and `{54,55,59,60,61}` in take
+twenty-eight:
+
+| take ≤27 | take ≥28 | what it is |
+|---|---|---|
+| `#95 -> #96` | `#103 -> #104` | the 2118-region copy |
+| `#103` | `#111` | the HUD (correctly mono) |
+| `#104`, `#105` | `#112`, `#113` | per-eye, 352×352 |
+| `#122`, `#123` | `#130`, `#131` | per-eye |
+
+Shift is `+4` between the two swapchains and `+8` after the second. **Do not
+compare a serial across the take-27/28 boundary without applying this.**
+
+### What the probe says now
+
+Per-eye is holding, and broadly: `#103`, `#105`, `#106`, `#107`, `#109` all
+DIFFER during gameplay (12–32%), plus `#112`/`#113` at 13–19%. `#111` — the HUD
+— is IDENTICAL every cycle, which is correct and is what take twenty-six
+established. Compute grew with the longer run (module #362 at 60,448
+dispatches) but the shape is unchanged: 18 pipelines, 6 shaders, 8 refusals, 6
+of them compute.
+
+### Task #5: the question is now answerable, and the instrument exists
+
+Four passes draw into a single-layer, `MONO`-classified, format-44 swapchain
+image. That is where stereo dies. What has never been measured is *what those
+four passes sample* — `srgb-resolve` reports shaders only for the tonemap pass,
+so the four passes that actually reach the screen have never had their
+fragment shaders named.
+
+That join now exists: framebuffer creation records which passes hold a
+swapchain attachment, the summary prints their fragment modules, and a pass
+with no pipeline on record says so rather than printing nothing. The join is
+deliberately read back in the summary rather than at pipeline-creation time, so
+it does not depend on X4 creating framebuffers before pipelines — an ordering
+never verified and not worth betting an instrument on.
+
+**Offline coverage, stated plainly:** the suite (55 cases) tests only that the
+join does *not* misfire — it creates render passes and framebuffers with no
+surface and asserts `0 pass(es)`. The positive side cannot be reached headless.
+This is the second consecutive instrument whose real test is the live run, and
+it is worth saying twice rather than letting a green suite imply otherwise.
+
+- **P15** — the four present passes name at least one fragment module, and what
+  those modules sample identifies the source image: either the bindless heap
+  (set 0 binding 5/7, count 53306) or a small per-pass sampler set. If it is
+  the heap, the index-offset mechanism already built applies and the report
+  will say `NOT APPLIED` for these modules, because they draw into a `MONO`
+  pass and take the unsheared twin.

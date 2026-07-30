@@ -534,6 +534,14 @@ inv_case "...and reports zero as a number" \
     "compute — 0 pipeline(s), 0 shader(s) dispatched" X4VR_TEST_COMPUTE=0
 inv_case "...zero transfer edges likewise" \
     "image transfers — 0 image->image edge(s)" X4VR_TEST_BLIT=0
+# The present-pass join, negative side only. This test creates render passes and
+# framebuffers but has no surface, so no image is ever a swapchain image and the
+# count must be 0 -- which makes this a no-false-positive check, and nothing
+# more. The positive side (a framebuffer over a real swapchain image) cannot be
+# reached headless and is first exercised live; see docs/frame-analysis.md,
+# "Take twenty-eight".
+inv_case "present-pass join does not misfire" \
+    "present passes — 0 pass(es) draw into a swapchain image"
 # And "never measured" must not read as "measured zero". The bindless survey
 # lost a run to exactly that, so the unmeasured case gets its own assertion.
 out=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \

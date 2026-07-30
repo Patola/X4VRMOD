@@ -609,6 +609,29 @@ std::map<std::pair<uint32_t, uint32_t>, std::map<const char *, XferEdge>>
 uint64_t g_xfer_uploads = 0;
 std::unordered_set<uint32_t> g_xfer_upload_targets;
 
+// The passes that draw into a swapchain image -- the last ones in the frame,
+// and the only ones whose output the player ever sees.
+//
+// The join lives at framebuffer creation because a render pass never names an
+// image; only a framebuffer does. It is read back in the end-of-run summary
+// rather than at pipeline creation, so no ordering between the two has to hold:
+// X4 may create either first and this must not depend on which.
+//
+// Take twenty-seven asked "does a draw write the final image?" of the writer
+// list, which tracks only *doubled* images. A swapchain image is single-layer
+// and owned by the presentation engine, so it can never be doubled and could
+// never have appeared there -- the list was structurally incapable of holding
+// the answer, and returned a confident no.
+std::mutex g_present_mu;
+std::unordered_set<uint32_t> g_present_rps; // rp serials
+struct PassFrag {
+    uint32_t module = UINT32_MAX;
+    bool patched = false;
+    char samplers[224] = {0};
+};
+// rp serial -> the fragment shaders drawn through it, deduped by module.
+std::map<uint32_t, std::map<uint32_t, PassFrag>> g_rp_frag;
+
 std::mutex g_comp_mu;
 std::unordered_map<VkPipeline, uint32_t> g_comp_module; // pipeline -> serial
 std::unordered_map<uint32_t, uint64_t> g_comp_dispatches; // serial -> count
@@ -1627,6 +1650,30 @@ void mv_report(const char *when) {
     // the truth is "never measured". Both counters are gated on the inventory
     // flag, so with it off the only honest report is that there is none --
     // exactly the distinction the bindless survey lost a run to.
+    // The passes that reach the screen, and what they sample. This is task #5's
+    // whole question: the difference now exists in the per-eye images, and
+    // something reads them one last time into a single-layer swapchain image.
+    {
+        std::lock_guard<std::mutex> lock(g_present_mu);
+        X4VR_LOG("mv %s: present passes — %zu pass(es) draw into a swapchain "
+                 "image", when, g_present_rps.size());
+        for (uint32_t rp : g_present_rps) {
+            auto f = g_rp_frag.find(rp);
+            // A pass with no pipeline on record is not a pass that draws
+            // nothing -- it is one we never saw a pipeline for. Say which.
+            if (f == g_rp_frag.end() || f->second.empty()) {
+                X4VR_LOG("mv %s: present rp #%u — no fragment pipeline recorded",
+                         when, rp);
+                continue;
+            }
+            for (const auto &m : f->second)
+                X4VR_LOG("mv %s: present rp #%u <- frag module #%u samples %s"
+                         " [index-offset %s]",
+                         when, rp, m.second.module, m.second.samplers,
+                         m.second.patched ? "APPLIED" : "NOT APPLIED");
+        }
+    }
+
     if (!g_mv_inventory) {
         X4VR_LOG("mv %s: image transfers and compute not measured "
                  "(needs X4VR_MV_INVENTORY=1)", when);
@@ -2368,10 +2415,33 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
         }
     }
 
+    // Record which passes reach the screen, whether or not the inventory is on:
+    // this is the join task #5 turns on, and gating it on a debug flag would
+    // make the layer's own behaviour depend on whether we were watching.
+    if (r == VK_SUCCESS) {
+        bool presents = false;
+        {
+            std::lock_guard<std::mutex> lock(g_img_mu);
+            for (uint32_t i = 0; i < ci->attachmentCount && !presents; i++) {
+                auto v = g_views.find(ci->pAttachments[i]);
+                if (v == g_views.end())
+                    continue;
+                auto im = g_images.find(v->second.image);
+                if (im != g_images.end() && im->second.swapchain)
+                    presents = true;
+            }
+        }
+        if (presents) {
+            std::lock_guard<std::mutex> lock(g_present_mu);
+            g_present_rps.insert(serial);
+        }
+    }
+
     if (r == VK_SUCCESS && g_mv_inventory && g_active) {
         char imgs[256];
         int n = 0;
         imgs[0] = 0;
+        bool sc = false;
         {
             std::lock_guard<std::mutex> lock(g_img_mu);
             for (uint32_t i = 0; i < ci->attachmentCount && n < 230; i++) {
@@ -2381,14 +2451,17 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
                 if (im == g_images.end())
                     n += snprintf(imgs + n, sizeof(imgs) - n, "%s?",
                                   n ? "," : "");
-                else
+                else {
                     n += snprintf(imgs + n, sizeof(imgs) - n, "%s#%u",
                                   n ? "," : "", im->second.serial);
+                    sc = sc || im->second.swapchain;
+                }
             }
         }
-        X4VR_LOG("fb  rp #%u: %ux%u layers=%u attachments=%u imgs=[%s]%s",
+        X4VR_LOG("fb  rp #%u: %ux%u layers=%u attachments=%u imgs=[%s]%s%s",
                  serial, ci->width, ci->height, ci->layers,
-                 ci->attachmentCount, imgs, masked ? " MASKED" : "");
+                 ci->attachmentCount, imgs, sc ? " PRESENTS" : "",
+                 masked ? " MASKED" : "");
     }
     return r;
 }
@@ -2928,7 +3001,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
                 if (s != g_rp_serials.end())
                     rp_serial = s->second;
             }
-            if (!tonemap)
+            // Whether this pass reaches the screen is not known yet -- its
+            // framebuffer may not exist. So record every pass's fragment
+            // shaders and let the summary select; only the tonemap pass is
+            // reported inline, where it always has been.
+            if (!tonemap && rp_serial == UINT32_MAX)
                 continue;
             for (uint32_t st = 0; st < ci[i].stageCount; st++) {
                 if (ci[i].pStages[st].stage != VK_SHADER_STAGE_FRAGMENT_BIT)
@@ -2964,10 +3041,19 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
                                           t.depth ? " (DEPTH)" : "");
                         }
                 }
-                X4VR_LOG("srgb-resolve rp #%u: frag module #%u samples %s"
-                         " [index-offset %s]",
-                         rp_serial, serial, n ? list : "nothing",
-                         patched ? "APPLIED" : "NOT APPLIED");
+                if (rp_serial != UINT32_MAX) {
+                    std::lock_guard<std::mutex> lock(g_present_mu);
+                    auto &e = g_rp_frag[rp_serial][serial];
+                    e.module = serial;
+                    e.patched = patched;
+                    snprintf(e.samplers, sizeof e.samplers, "%s",
+                             n ? list : "nothing");
+                }
+                if (tonemap)
+                    X4VR_LOG("srgb-resolve rp #%u: frag module #%u samples %s"
+                             " [index-offset %s]",
+                             rp_serial, serial, n ? list : "nothing",
+                             patched ? "APPLIED" : "NOT APPLIED");
             }
         }
     }
