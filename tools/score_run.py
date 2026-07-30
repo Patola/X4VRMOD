@@ -25,6 +25,24 @@ import sys
 # else (measured: 0.5%-30% across takes 41-44).
 LAYER1_MIN_RATIO = 0.60
 
+# Take forty-five: a sample is only evidence if the scene had stopped changing
+# when it was taken.
+#
+# The first version of this script took the best sample per image, on the
+# stated grounds that "a frame captured mid-fade is not evidence of a broken
+# chain". That is exactly backwards. Taking the best sample means a frame
+# captured mid-load IS read as evidence of a working chain -- and that is what
+# happened: two swapchain images sampled 3.7 s and 7.8 s after X4 created its
+# last world render pass read 24.1% and 80.5%, against 4.4% for the two
+# sampled before it, in a run whose screen was black in the right eye. The rule
+# written to prevent a false negative manufactured a false positive instead.
+#
+# So: a sample counts only if no render pass was created in the QUIET_MIN
+# seconds before it. X4 creates render passes while it loads and stops when the
+# scene is up, which makes "time since the last CreateRenderPass" a usable
+# proxy for "the scene has settled" that costs nothing to compute.
+QUIET_MIN = 10.0
+
 
 def main(path):
     try:
@@ -69,24 +87,68 @@ def main(path):
     print("masked  " + (", ".join(f"{k}={v}" for k, v in sorted(rules.items()))
                         or "nothing"))
 
-    # 3. The one that says whether the right eye has a picture in it. Each
-    #    present target is probed repeatedly; take the best sample per image,
-    #    because a frame captured mid-fade is not evidence of a broken chain.
-    best = {}
+    # 3. Every writer of a swapchain image must be masked. The layer already
+    #    detects the split -- a masked pass writes both layers, an unmasked one
+    #    writes layer 0, so a target with both kinds of writer has a layer 1
+    #    missing whatever the unmasked pass drew. That is the black right eye
+    #    stated structurally, and it does not depend on any sample at all.
+    # Both lists non-empty is what "mixed" means. An image with only unmasked
+    # writers is not this defect -- it is a mono target, and several of X4's
+    # are (#70-#74). Only the images that have it both ways lose half a frame.
+    mixed = sorted(set(
+        (m, u) for m, u in re.findall(
+            r"img #\d+ writers — masked rp \[([\d, ]*)\] unmasked rp \[([\d, ]*)\]",
+            text)
+        if m.strip() and u.strip()))
+    for masked, unmasked in mixed:
+        fails.append(f"MIXED WRITERS — rp [{unmasked}] writes a swapchain "
+                     f"image unmasked, so layer 1 misses whatever it draws "
+                     f"(masked writers of the same image: rp [{masked}])")
+
+    # 4. Whether the right eye has a picture in it. #50-#53 are the four
+    #    swapchain images -- "image 0 of 4" .. "image 3 of 4" in the inventory
+    #    -- so they are ONE target sampled at four moments, not four
+    #    independent checks. Take forty-four's four FAIL lines were one finding
+    #    printed four times, and take forty-five's mixed 4.4/4.6/24.1/80.5 was
+    #    one target crossing a load boundary mid-round.
+    rp_times = sorted(float(t) for t in re.findall(
+        r"\[ *([\d.]+)\] layer +rp #\d+\.\d+:", text))
+
+    def quiet_for(ts):
+        prior = [t for t in rp_times if t <= ts]
+        return ts - prior[-1] if prior else float("inf")
+
+    samples, unsettled = [], 0
     for m in re.finditer(
-            r"probe: img #(\d+) .*?non-empty (\d+)/(\d+)", text):
-        img, l0, l1 = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        if l0:
-            best[img] = max(best.get(img, 0.0), l1 / l0)
-    presents = {i: r for i, r in best.items() if 50 <= i <= 53}
-    if not presents:
-        fails.append("no probe samples for the present targets (#50-#53)")
-    for img, ratio in sorted(presents.items()):
-        ok = ratio >= LAYER1_MIN_RATIO
-        print(f"img #{img}  layer1/layer0 non-empty = {ratio:6.1%}  "
-              f"{'ok' if ok else 'FAIL — right eye is empty'}")
-        if not ok:
-            fails.append(f"img #{img} layer 1 holds {ratio:.1%} of layer 0")
+            r"\[ *([\d.]+)\] layer +mv probe: img #(\d+) .*?non-empty (\d+)/(\d+)",
+            text):
+        ts, img = float(m.group(1)), int(m.group(2))
+        l0, l1 = int(m.group(3)), int(m.group(4))
+        if not (50 <= img <= 53) or not l0:
+            continue
+        q = quiet_for(ts)
+        if q < QUIET_MIN:
+            unsettled += 1
+            print(f"  (skipped img #{img} at {ts:.0f}: {q:.1f}s after a render "
+                  f"pass was created — scene still loading, ratio {l1/l0:.1%})")
+            continue
+        samples.append((ts, img, l1 / l0))
+
+    if unsettled:
+        print(f"swapchain  {unsettled} sample(s) skipped as unsettled "
+              f"(< {QUIET_MIN:.0f}s quiet)")
+    if not samples:
+        fails.append("no settled probe samples for the swapchain (#50-#53) — "
+                     "load a savegame and sit still longer")
+    else:
+        ratios = [r for _, _, r in samples]
+        best, worst = max(ratios), min(ratios)
+        print(f"swapchain  {len(samples)} settled sample(s), layer1/layer0 "
+              f"non-empty {worst:.1%}..{best:.1%}  "
+              f"(imgs {sorted({i for _, i, _ in samples})})")
+        if best < LAYER1_MIN_RATIO:
+            fails.append(f"swapchain layer 1 holds {best:.1%} of layer 0 at "
+                         f"best — the right eye is the HUD and nothing else")
 
     print()
     if fails:

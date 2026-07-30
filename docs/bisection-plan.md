@@ -49,7 +49,7 @@ X4VR_MV=1 X4VR_STEREO=1 X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1
 | # | vary | why |
 |---|---|---|
 | B1 | `MASK_PRESENT=1 BINDLESS_MIRROR=1 BINDLESS_PATCH=1` | drops `MASK_TONEMAP` and `MASK_LDR` — the two knobs added on my own initiative, never evidenced in take thirty-three |
-| B2 | B1 + `MASK_TONEMAP=1` | puts back the one with a documented purpose (task #4) |
+| ~~B2~~ | ~~B1 + `MASK_TONEMAP=1`~~ | **STRUCK.** Take forty-five showed `MASK_PRESENT` already masks the tonemap passes (`present=3` vs `present=1, tonemap=2` — same three passes, different name). B2 is a provable no-op. |
 | B3 | B1 without `BINDLESS_PATCH` | the patch makes view 1 sample the twin; if layer 1 fills without it, the twin region is the suspect, not the masking |
 | B4 | B1 without `MASK_PRESENT` | the composite's own mask; a present pass masked while its source is mono could be writing an empty layer 1 over a good one |
 

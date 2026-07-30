@@ -5302,3 +5302,103 @@ If P51 is confirmed the interesting run is **B3** (drop `BINDLESS_PATCH`), not
 B2: B2 restores a knob whose removal B1 will have just shown to be harmful,
 which is a return to the take-forty-four configuration minus `MASK_LDR` — a
 configuration take forty-three already scored.
+
+## Take forty-five (B1): P51 confirmed, P52 refuted, and the scorer lied
+
+Run: `X4VR_TAKE=45-B1 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408
+X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1
+X4VR_SBS=1 X4VR_MV_PROBE=1 X4VR_MASK_PRESENT=1 X4VR_BINDLESS_MIRROR=1
+X4VR_MV_INVENTORY=1`
+
+Patola: identical to take forty-four in every respect, right eye black.
+
+**P51 confirmed.** Settled samples 4.4% and 4.6%, against take forty-four's
+4.8% and 5.1%. It fell, as the chain model said it would.
+
+### Hole #16: the scorer manufactured a false positive, in the run it was built for
+
+Its first output said `img #51 … 80.5% ok` and `img #53 … 24.1%`. Both were
+false, and the instrument was mine.
+
+`#50`–`#53` are `image 0 of 4` … `image 3 of 4` — **the four swapchain images**,
+one target sampled at four moments. X4 created its last world render pass at
+`521798.721`; `#53` was sampled 3.7 s later and `#51` 7.8 s later, both inside
+the savegame load. The two sampled before it read 4.4% and 4.6%, matching take
+forty-four exactly. The 80.5% is a loading frame.
+
+The rule that produced it was written in this file with the rationale *"take
+the best sample per image, because a frame captured mid-fade is not evidence of
+a broken chain."* That is precisely inverted: taking the best sample means a
+frame captured mid-load **is** read as evidence of a working chain. A rule
+written to prevent a false negative manufactured a false positive, in the
+instrument built to stop exactly this. Two further consequences of the same
+misreading: four swapchain images were being scored as four independent checks,
+so every previous "four FAIL lines" was one finding printed four times.
+
+`score_run.py` now skips any sample taken less than 10 s after a
+`CreateRenderPass` (X4 stops creating them once the scene is up), prints what it
+skipped and why, and reports the swapchain as one target.
+
+### P52 refuted: `MASK_TONEMAP` is subsumed by `MASK_PRESENT`
+
+Take forty-four: `present=1, tonemap=2`. Take forty-five: `present=3`. The same
+three passes — an srgb-resolve pass with one colour attachment and no depth
+also satisfies `subpass_is_present`, and `classify_per_eye` ORs the rules, so
+dropping `MASK_TONEMAP` unmasked nothing. It only changed the name printed.
+
+**B2 is therefore a provable no-op and is struck from the plan**, on the log
+rather than on the argument given above it.
+
+### `rp #0` and `rp #7` print identically and classify differently
+
+```
+rp #0.0: 1 colour [44L] no-depth final=2 -> MONO (all-LDR/UI) +MASKED(present) +PRESENT-CAND
+rp #7.0: 1 colour [44L] no-depth final=2 -> MONO (all-LDR/UI)
+```
+
+Every field the inventory prints is identical, yet `subpass_is_present` matches
+one and not the other. By elimination the differing input is the one the
+inventory does not print faithfully: it resolves `pDepthStencilAttachment` to an
+index and calls `VK_ATTACHMENT_UNUSED` "no-depth", while the predicate rejects
+on the **pointer** being non-null (`x4vr_layer.cpp:1627`). A subpass with a
+non-null pointer naming `UNUSED` reads as "no-depth" and fails the predicate.
+Offline-testable; no run needed.
+
+### What the chain read shows, and it is not what the plan expected
+
+The plan asked which image between `#97` and `#50` is the last to carry a
+second eye. Answer: **all of them**. Settled samples, layer1/layer0 non-empty:
+
+| image | ratio | | image | ratio |
+|---|---|---|---|---|
+| `#57` | 101.9% | | `#66` | 101.9% |
+| `#59` | 101.9% | | `#67` | 101.8% |
+| `#60` | 101.9% | | `#97` | 100.8% |
+| `#61` | 101.9% | | `#98` | 99.9% |
+| `#63` | 100.1% | | **`#50`–`#53`** | **4.4%** |
+
+Nothing upstream loses the second eye. The entire loss is at the write into the
+swapchain image, and it is a cliff, not a decay.
+
+### The fact that reframes the whole search
+
+Take forty-four masked `rp #7` (as `+MASKED(ldr)`) and scored 5.1%. Take
+forty-five left it unmasked and scored 4.6%. **Masking the writer changes
+nothing.** So the defect is not an unmasked pass overwriting layer 1 — a masked
+pass writing layer 1 would put *something* there, and if it sampled a mono
+source it would put the left eye there, which is the "two left halves" state
+this project already had working.
+
+Layer 1 receives the HUD and a black hole where the scene should be. A pass
+that runs, writes, and produces black is one sampling a descriptor that holds
+nothing. The composite reaches its source through X4's bindless array, and
+`X4VR_BINDLESS_PATCH` makes view 1 read `index + 26653`. If that slot is
+populated for the world passes (which is why `#97`/`#98` differ) but empty for
+the composite's source, view 1 samples nothing and writes black — exactly the
+observed 4.4%, exactly the HUD and nothing else.
+
+- **P53** — dropping `X4VR_BINDLESS_PATCH` (B3) lifts the settled swapchain
+  ratio to ≈100% and puts the **left** eye's 3D in the right eye: two left
+  halves, the state that worked before. Refuted if the ratio stays near 4.4%.
+- **P54** — if P53 confirms, the defect is the offset applied to the
+  composite's source index, not the masking, and no masking knob can fix it.
