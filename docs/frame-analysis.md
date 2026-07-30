@@ -5402,3 +5402,79 @@ observed 4.4%, exactly the HUD and nothing else.
   halves, the state that worked before. Refuted if the ratio stays near 4.4%.
 - **P54** — if P53 confirms, the defect is the offset applied to the
   composite's source index, not the masking, and no masking knob can fix it.
+
+## Take forty-six (B3): P53 confirmed — the duplicate state is back
+
+Run: recorded in `docs/known-good-runs.md`, tag `stage2-duplicate-restored`.
+
+Patola: "two complete side-by-side screens again … the 3D scenes appear
+duplicated with no black screen". Scorer: exit 0, **19 of 19 settled swapchain
+samples bit-identical**.
+
+Dropping `X4VR_BINDLESS_PATCH` was the whole difference. P53 said it would put
+the left eye's 3D into the right eye at ≈100%; it did, exactly.
+
+### P54 confirmed with it: the defect is the offset, not the masking
+
+The probe shows where the second eye now dies, and it is a different place:
+
+| image | take 45 (patch on) | take 46 (patch off) |
+|---|---|---|
+| `#61` | 101.9% | **DIFFER 31.8%** |
+| `#63` | 100.1% | **DIFFER 8.7%** |
+| `#97`, `#98` | 100.8%, 99.9% | **IDENTICAL** |
+| `#50`–`#53` | 4.4% (black) | IDENTICAL (duplicate) |
+
+`#61` and `#63` carry a **real per-eye difference** with the patch off — that is
+the per-eye camera constants (task #3) working. The difference is then flattened
+at `#97`/`#98`, which become bit-identical.
+
+So the two states fail in opposite directions at the same step:
+
+* patch **off** — the pass reading `#61`/`#63` samples view 0's source for both
+  views, and writes the left eye twice. Genuine stereo is destroyed here;
+* patch **on** — the same pass reads `index + 26653` for view 1, that slot holds
+  nothing, and it writes black.
+
+Neither is right, and no masking knob can reach it. The remaining question is
+what the correct source is for view 1 at that one step, which is task #13's
+mechanism applied to the wrong descriptor. That is the next piece of real work,
+and it is now a single, named step rather than "somewhere between `#97` and
+`#50`".
+
+### Two more scorer holes, both the same family as #16
+
+* **IDENTICAL parses as no data.** Those lines carry no `non-empty` field, so
+  the best result the probe can report read as an absence of evidence: take
+  forty-six first scored `no settled probe samples … FAIL`. The parser decided
+  what counted as evidence and could not see the good shape.
+* **Best-sample scoring survived in the ratio check.** Takes forty-four and
+  forty-five reach 100% on their *splash* frames — X4 draws the same pixels to
+  both layers there — while their cockpit frames sit at 0.4%. Scored on the
+  best sample they read as partial successes. Now scored on the **worst settled
+  frame**: 44/45 → 0.4% FAIL, 46 → 100% PASS.
+
+`MIXED WRITERS` is demoted to a warning by the same run: it fires on take
+forty-six, whose two layers are bit-identical, so the pass it names cannot be
+contributing anything. It is built from framebuffers *created*, and a
+framebuffer is not a draw.
+
+### The clipped logo is a regression, not the aspect ratio
+
+Ruled out from this log, without a run:
+
+* **Not a sheared UI pass.** Every pass classified `STEREO` has HDR colour
+  attachments (`97H`, `83H`, `13H`); no LDR/UI pass is sheared.
+* **Not a window/render disagreement.** X4 (pid 3454557) reports
+  `SDL_GetWindowSize -> 1408x1408` and creates a 1408×1408 swapchain. Its
+  believed window matches its render exactly. The 2816×1408 in the log belongs
+  to gamescope's own process.
+* **Not the square aspect as such.** Take thirty-three rendered the same
+  1408×1408 and the logo was whole — Patola noticed the clipping appear at take
+  forty-one and it has persisted since.
+
+So something between take thirty-three and take forty-one shifted UI geometry
+and is still in the take-forty-six configuration. The surviving candidates are
+`X4VR_STEREO` (K reaching a pipeline that draws the logo, even though no *pass*
+is misclassified) and `X4VR_BINDLESS_MIRROR` (the unsheared twin not being
+swapped into a pipeline that needs it). Task #20.
