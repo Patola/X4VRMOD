@@ -3779,3 +3779,72 @@ Note that the mirror and the redirect are mutually exclusive by design and the
 layer refuses the pair, so this run has `X4VR_BINDLESS_MIRROR` and
 `X4VR_BINDLESS_PATCH` off. That is not a regression: it isolates the question
 to the read path, which is exactly what take seventeen's failure mode covers.
+
+## Take thirty: P16 confirmed, and the interaction hitbox that came with it
+
+    X4VR_MV=1 X4VR_STEREO=1 X4VR_IPD=1.0 X4VR_MV_PRESENT_LAYER=1
+    X4VR_ONE_EYE=1 X4VR_GAMESCOPE=1 X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1
+
+    stereo: ipd=1.0000 -> shear m8 L=4.44500 R=-4.44500
+    mv final: redirected=125952 fallbacks=0
+    mv final: binds ok=256830 MISMATCHED=0 | stale redirect entries=0
+
+A one-metre IPD makes the two views almost disjoint — the probe reports `#107`
+and `#110` at **DIFFER 100.00%**, `#109` at 96.81%, `#111` at 99.95%.
+
+**Result, from the screen:** in the cockpit the camera is noticeably shifted to
+the right, HUD included. P16 holds. The composite reads a doubled image, and a
+per-eye difference upstream arrives on screen intact.
+
+That closes the last open question in the read path. Every link is now
+individually verified: the views differ (probe), the composite samples the heap
+(`present rp #0`), the heap read resolves to a doubled image (this run), and
+layer 1 survives post, exposure, the compositor and the present blit (take
+seventeen).
+
+### The hitbox is where the mono camera says it is
+
+Unasked-for and more interesting than the gate: with the view displaced,
+**interaction hitboxes stayed put**. Clicking the pilot seat requires clicking
+to the *right* of where the seat is drawn.
+
+So X4's CPU-side picking is computed from its own unsheared camera, which this
+layer never touches — it patches the GPU vertex shader and nothing else. That
+is not a bug to fix and it should self-resolve in real stereo: with a normal
+IPD and both eyes presented, the fused image is centred on exactly the camera
+picking already uses. The offset here is an artifact of showing *one* eye
+displaced half a metre off-centre.
+
+Worth keeping because it names the invariant the cursor shim has to hold:
+**picking is mono and lives at the centre eye.** Any future change that shears
+X4's own camera rather than the per-view copies would break input, silently,
+in a way no probe or inventory would report.
+
+### What is left of task #5 is one pass
+
+The side-by-side path is already built end to end:
+
+* `X4VR_SBS_LAYERS=2` gives the eye image a second array layer.
+* `SbsCompositor` blits layer 0 into the left half and `right_layer` into the
+  right half, and logs `<-- STEREO composite` versus `(both halves are layer 0)`
+  so the two cannot be confused.
+* `X4VR_SBS_RIGHT_LAYER=1` flips the right half to layer 1.
+* `rp #0`'s fragment modules already carry `index + gl_ViewIndex * 26653`.
+
+The gap is that **`rp #0` is `MONO`, so it only ever writes layer 0.** Flipping
+`right_layer` today would blit a layer nothing wrote — which is why those two
+knobs were split in the first place, and the split was right.
+
+The composite cannot be singled out at `vkCreateRenderPass`: seven passes share
+its exact signature (`1 colour [44L] no-depth`), and which one draws to the
+screen is knowable only once a framebuffer names an image. So this has to be a
+substitution at `vkCmdBeginRenderPass`, keyed on the framebuffer — the same
+machinery that already substitutes 22 passes a run — with the attachment
+rebuilt as a two-layer array view.
+
+- **P17** — with the composite substituted for a `viewMask=0x3` variant and its
+  attachment rebuilt as a two-layer view, `rp #0` writes both layers of the eye
+  image, the compositor reports `<-- STEREO composite`, and the two halves of
+  the screen differ. If the halves are identical, the substitution did not take
+  and `substituted` will not have risen; if the right half is black, the pass
+  was substituted but view 1 never rendered.
