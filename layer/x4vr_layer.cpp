@@ -2488,8 +2488,19 @@ VkResult create_shader_module_inner(
     // two variables decorated with the same builtin would be invalid SPIR-V.
     bool frag_patched = false;
     if (g_bindless_patch && g_bindless_mirror) {
-        for (uint32_t b : {5u, 7u})
-            if (x4vr::spv::patch_fragment_index_offset(code, 0, b,
+        // Every table the module declares, found rather than hardcoded. X4's
+        // are set 0 bindings 5 and 7, but naming them here would have been two
+        // magic numbers standing in for the rule, which is: a descriptor array
+        // big enough that the mirror can fit a twin region inside it.
+        //
+        // `count > offset` is the same bound the mirror applies before writing
+        // a twin. Patching a table the mirror declines to mirror would send
+        // view 1 to descriptors nobody wrote, so the two rules have to agree.
+        // Runtime arrays are skipped: their length is not known here, so
+        // whether a twin fits cannot be established.
+        for (const auto &t : x4vr::spv::list_sampled_textures(code))
+            if (t.count > g_mirror_offset &&
+                x4vr::spv::patch_fragment_index_offset(code, t.set, t.binding,
                                                        g_mirror_offset))
                 frag_patched = true;
         static uint32_t n_frag = 0;
@@ -2505,6 +2516,19 @@ VkResult create_shader_module_inner(
                      "nobody ever wrote");
         }
     }
+
+    // The bytes for the unsheared twin below: fragment edit kept, vertex shear
+    // not yet applied.
+    //
+    // Take twenty-three: the twin used to be the pristine module, which threw
+    // away the fragment patch along with the shear. rp #40 -- the composition,
+    // masked and unsheared because it draws a fullscreen triangle -- takes the
+    // twin for every one of its pipelines, so #103 was the one image in the
+    // frame still sampling view 0's slots in both eyes. The twin must lose the
+    // geometry edit and nothing else.
+    std::vector<uint32_t> frag_only;
+    if (frag_patched)
+        frag_only = code;
 
     const x4vr::spv::Kind kind = x4vr::spv::classify(code);
     if (kind == x4vr::spv::Kind::NotVertex) {
@@ -2540,10 +2564,18 @@ VkResult create_shader_module_inner(
         mod.pCode = code.data();
         VkResult r = d->CreateShaderModule(device, &mod, ac, out);
         if (r == VK_SUCCESS) {
-            // Keep an unpatched twin so depth-only (shadow) pipelines can
-            // use the original geometry path — see g_variants.
+            // Keep a twin with the original geometry path so depth-only
+            // (shadow) and other unsheared pipelines can use it — see
+            // g_variants and needs_original(). It carries the fragment edit:
+            // "unsheared" is a statement about vertices, and an unsheared pass
+            // still has to sample per view.
             VkShaderModule orig = VK_NULL_HANDLE;
-            if (d->CreateShaderModule(device, ci, ac, &orig) == VK_SUCCESS) {
+            VkShaderModuleCreateInfo oci = *ci;
+            if (frag_patched) {
+                oci.codeSize = frag_only.size() * 4;
+                oci.pCode = frag_only.data();
+            }
+            if (d->CreateShaderModule(device, &oci, ac, &orig) == VK_SUCCESS) {
                 std::lock_guard<std::mutex> lock(g_variants.mu);
                 g_variants.original[*out] = orig;
             }

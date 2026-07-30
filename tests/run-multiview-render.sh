@@ -305,7 +305,7 @@ frag_case() {
         X4VR_MASK_TONEMAP=1 "X4VR_TEST_ARRAY_SAMPLER=$arr" \
         "VK_ADD_LAYER_PATH=$BUILD/layer" \
         "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
-        "$BIN" "$VS" "$FS" "$shader" 2>&1)
+        "$BIN" "${CASE_VS:-$VS}" "$FS" "$shader" 2>&1)
     g1=$(sed -n 's/^OUT1_NONZERO=//p' <<<"$out")
     gd=$(sed -n 's/^OUT_DIFFER=//p' <<<"$out")
     if [[ "$g1" == "$want1" && "$gd" == "$wantd" ]]; then
@@ -543,7 +543,7 @@ mirror_case() {
         X4VR_MASK_TONEMAP=1 X4VR_BINDLESS_MIRROR=1 X4VR_MIRROR_OFFSET=4 \
         "VK_ADD_LAYER_PATH=$BUILD/layer" \
         "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
-        "$BIN" "$VS" "$FS" "$shader" 2>&1)
+        "$BIN" "${CASE_VS:-$VS}" "$FS" "$shader" 2>&1)
     g1=$(sed -n 's/^OUT1_NONZERO=//p' <<<"$out")
     gd=$(sed -n 's/^OUT_DIFFER=//p' <<<"$out")
     if [[ "$g1" == "$want1" && "$gd" == "$wantd" ]]; then
@@ -589,6 +589,25 @@ mirror_case "index offset: view 1 reads the twin" 1 1 2 "$PATCHDIR/idxoff.spv"
 # slot 4 -- source layer 1, never drawn under this mask -- and the whole output
 # comes back blank at differ=0.
 mirror_case "...and view 0 still reads its own"   0 1 1 "$PATCHDIR/idxoff.spv"
+
+# Take twenty-three, as a case. Everything above passes a *separate* module per
+# stage, and X4 ships one module carrying both entry points -- so nothing above
+# could exercise what happens when that one module is both vertex-patched and
+# fragment-patched. In the game it was, and rp #40 (the composition: masked, and
+# unsheared because it draws a fullscreen triangle) takes the unsheared twin for
+# every one of its pipelines. That twin was the pristine bytes, so the fragment
+# edit went with the shear and #103 was the only image in the frame still
+# sampling view 0's slots in both eyes.
+#
+# sample_combined.spv is fullscreen.vert + sample_twin_base.frag linked into one
+# module, and it is passed as BOTH stages. X4VR_CLIP_K_UI makes the vertex patch
+# apply, which is what registers a twin at all; the layer does the fragment patch
+# itself rather than it being pre-applied, so the twin's provenance is what is
+# under test. With a pristine twin this reads 0/0.
+CASE_VS="$BUILD/tests/sample_combined.spv" \
+mirror_case "unsheared twin keeps the frag patch" 1 1 2 \
+    "$BUILD/tests/sample_combined.spv" \
+    X4VR_BINDLESS_PATCH=1 "X4VR_CLIP_K_UI=$ID"
 
 # The accounting, because the pair above would also pass if the mirror wrote the
 # twin by some accident of aliasing. Four written descriptors, four twins, all

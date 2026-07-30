@@ -3085,3 +3085,84 @@ project has had the same shape: a signal that moves for the reason you want and
 also for a reason you forgot, checked in a configuration where only one of them
 can happen. The cure has been the same every time — **find the second
 configuration where the two explanations disagree**, and run that too.
+
+## Take twenty-three: the mechanism works, and `#103` was the one place it did not
+
+First run with `X4VR_BINDLESS_PATCH=1`. ~3 minutes, cockpit plus the map and
+leaving the seat. No validation errors, no rejected modules, no mirror disable,
+400+ fragment shaders patched. The screen looked completely normal, which is
+what a correct patch should look like from view 0.
+
+### The difference now survives a sampler
+
+Four images that had been identical in every probe of the last two runs flipped,
+and flipped completely:
+
+| image | take 21 | take 22 | take 23 |
+| --- | --- | --- | --- |
+| `#104` `#105` | 0 / 21 DIFFER | 0 / 19 | **5 / 5** |
+| `#122` `#123` | 0 / 18, 0 / 17 | 0 / 18 | **4 / 4** |
+| **`#103`** | 0 / 22 | 0 / 21 | **0 / 8** |
+
+The mechanism works. `#104`/`#105` and `#122`/`#123` are the images that were
+*masked yet identical* — rendered twice with different view state and producing
+the same bytes because everything they read came through a sampler bound to
+layer 0. They now differ in every single probe. This is the first time in the
+project that a **sampled** read has been per-eye, and it is what the whole
+bindless index offset was built for.
+
+It also retires the free constraint those four gave task #8: their content does
+depend on the view after all, once the sampler can see it.
+
+### Why `#103` alone did not move
+
+Not a subtle failure, and the log names it directly.
+
+`#103` is written by rp #40 and rp #52. The layer prints `srgb-resolve rp #40`
+for exactly those subpasses that are **masked and unsheared** — masked because
+they render to both layers, unsheared because they draw a fullscreen triangle
+and must not get the per-eye clip matrix `K`. That is the same predicate
+`needs_original()` uses, and for those pipelines the layer swaps in the twin
+module kept in `g_variants.original`.
+
+That twin was the **pristine bytes**. It existed so an unsheared pass could keep
+the original geometry path — and it threw away the fragment patch along with the
+shear. So every pipeline drawing into `#103` sampled view 0's slots in both
+eyes, while the rest of the frame did not.
+
+"Unsheared" is a statement about vertices. An unsheared pass still has to sample
+per view. The twin now carries the fragment edit and loses only the geometry
+edit.
+
+### The gate could not have caught this, and that is the interesting part
+
+Every offline case passes a **separate module per stage**. X4 ships **one module
+carrying both entry points** — `OpEntryPoint Vertex %main "main"` and
+`OpEntryPoint Fragment %main_0 "main"` — so in the game the same bytes are both
+vertex-patched and fragment-patched, and the twin registered for the vertex edit
+governs the fragment stage too. With separate modules that interaction cannot
+occur: the fragment module is never vertex-patched, so no twin is ever
+registered for it, so nothing is ever swapped.
+
+The harness was not wrong about anything it modelled. It modelled the wrong
+**shape**.
+
+Fixed with `spirv-link`, which produces exactly X4's structure from the two test
+shaders. `sample_combined.spv` is now passed as both stages, with the vertex
+patch enabled so a twin is registered and the layer doing the fragment patch
+itself. With a pristine twin the case reads `0/0` — the precise `#103` symptom —
+and `1/1` with the fix.
+
+Two things worth keeping from this:
+
+**A test harness that reproduces a system's behaviour can still miss its
+packaging.** Nine instrument-shaped holes so far, and this is the first where
+every instrument was correct and the *model* was wrong. The question to ask of a
+harness is not only "does it do what the real thing does" but "is it *built* the
+way the real thing is built".
+
+**The hardcoded bindings went too.** The layer used to patch set 0 bindings 5
+and 7 by name; it now patches every declared table whose count exceeds the
+mirror offset — the same bound the mirror applies before writing a twin, so the
+two rules cannot drift apart. That is also what let the test use a table at
+binding 0 without the layer needing to know about it.
