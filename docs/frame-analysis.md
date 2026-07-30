@@ -5087,3 +5087,47 @@ trees isolates the variable in one step.
   observation-only changes is not observation-only, and the diff above is wrong
   about itself; the first suspects are the two SDL interposers, which are live
   in every run regardless of knobs.
+
+## Take forty-two: P44 confirmed — the code is exonerated, the command is not
+
+Same command, `X4VR_BUILD=/tmp/x4vr-tag/build`, i.e. the `stage2-sbs-working`
+tree. **Identical failure.** So nothing regressed between the tag and here, and
+every "observation-only" claim about the intervening diff holds. What is wrong
+is the knob set.
+
+Take thirty-three's knobs cannot be recovered. The record above quotes its log
+and never its command, `/tmp/x4vr.log` holds no segment with `right half from
+layer 1`, and P21 — the prediction take thirty-three was said to satisfy —
+explicitly describes a run with `X4VR_SBS_RIGHT_LAYER` **unset**, so even the
+doc cannot distinguish "the run that armed the container" from "the run that
+turned the second eye on".
+
+### Stop guessing, use the probe
+
+The symptom is specific: in the right eye the HUD and interface draw but the 3D
+is black; in the left eye the logo is clipped. A knob sweep would take one run
+per hypothesis and each run is a person's time.
+
+`X4VR_MV_PROBE=1` already answers the underlying question directly. It hashes
+layer 0 and layer 1 of one per-eye colour attachment per frame, cycling through
+them, and logs both — so "which image stops carrying a second eye" becomes an
+image number rather than an inference from what appeared on screen. It was built
+in task #7 for this exact class of question and has not been switched on since
+the SBS work began.
+
+`X4VR_MV_INVENTORY=1` comes with it, for the pass table that says which passes
+were masked.
+
+- **P46** — the probe reports `DIFFER` for the early world/G-buffer images and
+  `IDENTICAL` (or an all-zero layer 1) from some specific image onward. The
+  first image where layer 1 stops differing is where the second eye is lost, and
+  the pass that writes it is the thing to look at.
+- **P47** — the HUD images differ, since the HUD reaches the right eye on
+  screen. If the HUD images are *identical* too, then the right eye's HUD is
+  arriving by some route other than layer 1 and the composite is not doing what
+  its log line claims.
+
+This is deliberately not a knob sweep. If the probe localises the break, the
+knob follows from it; if the probe shows layer 1 healthy all the way to the
+composite, the fault is in the composite or the present path and no knob would
+have found it.
