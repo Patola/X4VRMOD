@@ -1463,14 +1463,28 @@ std::vector<bool> classify_unsheared(const CreateInfo *ci) {
 // it -- shearing a fullscreen triangle is meaningless -- but it must be
 // masked, or there is no second layer of #103 for a per-eye tonemap to write.
 // Hence one predicate for shear, one for masking, no longer inverses.
-// The composite, identified by where its attachment ends up rather than by
-// what format it is. Seven passes share `1 colour [44L] no-depth`, so format
-// cannot single one out -- but a pass whose colour attachment is left in
-// PRESENT_SRC_KHR is by definition one whose output is handed to the
-// presentation engine. That is the definition, not a heuristic, and it is
-// available at vkCreateRenderPass, which matters: pipelines are only compatible
-// with render passes of the same viewMask, so this decision cannot be deferred
-// to framebuffer time when the image is finally named.
+// Candidates for the composite.
+//
+// Take thirty-one refuted the first version of this, which required
+// `finalLayout == PRESENT_SRC_KHR` and was described here as "a definition, not
+// a heuristic". It is a definition of *one* way to present. X4 uses the other:
+// it leaves its attachment in some other layout and transitions with an
+// explicit barrier, so the predicate matched nothing and `rp #0` stayed
+// `MONO (all-LDR/UI)`. The finalLayout is now printed in the inventory line so
+// the next such claim can be checked instead of assumed.
+//
+// What is left is honestly a heuristic and is labelled as one: a single LDR
+// colour attachment, no depth, in the swapchain's own format. That is seven
+// passes, not one -- every full-screen LDR pass in the frame, of which the
+// composite is one. Masking all seven costs a handful of extra fullscreen
+// passes and is a bring-up tool, not a shipping configuration.
+//
+// It still has to be decided here rather than at framebuffer time, where the
+// image is finally named: a pipeline is only compatible with render passes of
+// the same viewMask, and X4 builds its pipelines long before any framebuffer
+// exists. A pass is masked at creation or not at all.
+std::atomic<uint32_t> g_present_format{VK_FORMAT_UNDEFINED};
+
 template <typename CreateInfo, typename Subpass>
 bool subpass_is_present(const CreateInfo *ci, const Subpass &sp) {
     if (sp.colorAttachmentCount != 1 || sp.pDepthStencilAttachment)
@@ -1478,7 +1492,10 @@ bool subpass_is_present(const CreateInfo *ci, const Subpass &sp) {
     const uint32_t a = sp.pColorAttachments[0].attachment;
     if (a == VK_ATTACHMENT_UNUSED || a >= ci->attachmentCount)
         return false;
-    return ci->pAttachments[a].finalLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    if (ci->pAttachments[a].finalLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
+        return true;
+    const uint32_t f = g_present_format.load();
+    return f != VK_FORMAT_UNDEFINED && (uint32_t)ci->pAttachments[a].format == f;
 }
 
 template <typename CreateInfo, typename Subpass>
@@ -1564,8 +1581,16 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
             // inventory reports "MONO" for a pass rendering into both layers,
             // which is the kind of quietly-wrong instrument this file keeps
             // having to correct.
-            X4VR_LOG("rp #%u.%u: %u colour [%s]%s -> %s (%s)%s", serial, i,
-                     sp.colorAttachmentCount, fmts, dep,
+            // finalLayout of the first colour attachment. Printed because take
+            // thirty-one spent a run on a predicate that assumed it.
+            int fl = -1;
+            if (sp.colorAttachmentCount &&
+                sp.pColorAttachments[0].attachment != VK_ATTACHMENT_UNUSED &&
+                sp.pColorAttachments[0].attachment < ci->attachmentCount)
+                fl = (int)ci->pAttachments[sp.pColorAttachments[0].attachment]
+                         .finalLayout;
+            X4VR_LOG("rp #%u.%u: %u colour [%s]%s final=%d -> %s (%s)%s", serial,
+                     i, sp.colorAttachmentCount, fmts, dep, fl,
                      unsheared[i] ? "MONO" : "STEREO", why,
                      (unsheared[i] && per_eye[i]) ? " +MASKED" : "");
         }
@@ -3599,7 +3624,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
         // Recorded from sbs_ci, not ci: that is the swapchain that actually
         // exists, and its extent is what its images have.
         std::lock_guard<std::mutex> lock(g_sc_mu);
-        g_swapchains[*out] = {sbs_ci.imageFormat, sbs_ci.imageExtent};
+        g_swapchains[*out].format = sbs_ci.imageFormat;
+        g_swapchains[*out].extent = sbs_ci.imageExtent;
+        // What the composite's attachment must be, for subpass_is_present.
+        g_present_format.store((uint32_t)sbs_ci.imageFormat);
     }
     // The injector forces res_width/res_height, but X4 only honours them when
     // borderless is off; with borderless on it sizes to the display and

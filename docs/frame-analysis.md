@@ -3949,3 +3949,67 @@ has not earned.
   with `RIGHT_LAYER=1`, the first run says whether the cause is upstream (the
   pass never masked, `fallbacks` non-zero) or downstream (masked and written,
   but the blit is wrong). One run cannot distinguish those and two can.
+
+## Take thirty-one: two failures, neither of them the one under test
+
+Run A produced two identical left halves. Two independent causes, and the run
+tested nothing it was designed to test.
+
+### 1. Wayland — and the layer had already said so
+
+    sbs: surface reports no preferred extent (currentExtent=0xFFFFFFFF) — this is
+    the Wayland WSI. … presenting the full-width image resizes the window, X4
+    follows, and the split collapses to duplicating the left half. Force the X11
+    driver — X4 links SDL3, so the variable is SDL_VIDEO_DRIVER=x11
+    sbs: composite armed … (X4 renders full width, left half duplicated)
+
+That message was written before this run, by this project, for exactly this
+situation, and it names the fix. I composed the run command without reading the
+knob list I had documented — `X4VR_X11=1` has been in `x4vr-launch.sh` since
+before any of this. **The instrument was right, present, and unread.**
+
+Nothing about the composite was exercised: without virtualization X4 renders
+full width into the real swapchain and there are no eye images at all
+(`EYE (image` appears zero times).
+
+### 2. The predicate matched nothing, and the reason is the previous section
+
+    rp #0.0: 1 colour [44L] no-depth -> MONO (all-LDR/UI)
+
+Not `PRESENT composite`. Zero occurrences in the run.
+
+The commit before this one said `finalLayout == PRESENT_SRC_KHR` is "a
+definition, not a heuristic". **It is a definition of *one* way to present.**
+The other way — leave the attachment in some working layout and transition it
+with an explicit pipeline barrier — is equally legal and is what X4 does. I
+wrote "definition" to mark the claim as *not* needing a check, which is exactly
+the move that makes a wrong claim expensive.
+
+Worse, the information was one line away: `g_rp_final` has recorded final
+layouts all along, but only for passes already masked — so the passes I needed
+it for were precisely the ones it skipped. The inventory line now prints
+`final=` for every pass, so the next claim of this shape can be checked rather
+than asserted.
+
+The predicate now also accepts a single LDR colour attachment, no depth, in the
+swapchain's own format, and **is labelled a heuristic in the source**. That
+matches seven passes rather than one — every fullscreen LDR pass in the frame,
+the composite among them. Masking all seven is a bring-up tool and is not a
+shipping configuration; `fallbacks` will report any whose attachment cannot be
+doubled.
+
+### The pattern in both failures
+
+The tally has been counting *instrument-shaped holes* — places where something
+was not measured. These are the other kind: **the measurement existed and was
+not read.** The Wayland message was printed and skipped; the finalLayout was
+recorded and filtered out before it could contradict me.
+
+Twelve of the thirteen holes so far were fixed by building a better instrument.
+Neither of these two would have been.
+
+- **P18** — with `X4VR_X11=1` the composite arms *virtualized* (`each eye
+  1408x1408` without "X4 renders full width"), `EYE … doubled` appears four
+  times, and at least one pass logs `PRESENT composite` with `+MASKED`.
+  `fallbacks=0`. The screen still looks normal, because `X4VR_SBS_RIGHT_LAYER`
+  is not set.
