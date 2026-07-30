@@ -456,7 +456,10 @@ survey_case() {
         "VK_ADD_LAYER_PATH=$BUILD/layer" \
         "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
         "$BIN" "$VS" "$FS" "$SF" 2>&1)
-    slots=$(sed -n 's/.*bindless final: binding 0 — \([0-9]*\) distinct slots.*/\1/p' \
+    # The layout label must be a serial, not "?" -- the binding carries a
+    # descriptor array, so a "?" here means the set was never joined to the
+    # layout it came from and the count could belong to any table.
+    slots=$(sed -n 's/.*bindless final: layout #[0-9]* binding 0 — \([0-9]*\) distinct slots.*/\1/p' \
         <<<"$out" | head -1)
     pe=$(sed -n 's/.*distinct slots, range [0-9]*\.\.[0-9]*, \([0-9]*\) holding.*/\1/p' \
         <<<"$out" | head -1)
@@ -469,21 +472,28 @@ survey_case() {
     fi
 }
 
-survey_case "survey finds the per-eye slot"    1 1 "X4VR_MV=1"
-survey_case "...and none when nothing doubles" 1 0 "X4VR_MV=0"
+survey_case "survey finds the per-eye slots"   4 4 "X4VR_MV=1"
+survey_case "...and none when nothing doubles" 4 0 "X4VR_MV=0"
 
-# And the image it names, since a count alone would not catch a join that
-# credited the wrong image.
-survey_named=$(env X4VR_LOG= X4VR_MV=1 X4VR_BINDLESS_SURVEY=1 \
+# The extent of the per-eye set, because take twenty-one printed 26 of 191
+# entries with no marker and the shape of the set had to be guessed from an
+# arbitrary sample. Count and range are order-independent; the list is not.
+survey_pe=$(env X4VR_LOG= X4VR_MV=1 X4VR_BINDLESS_SURVEY=1 \
     "VK_ADD_LAYER_PATH=$BUILD/layer" \
     "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
     "$BIN" "$VS" "$FS" "$SF" 2>&1 |
-    sed -n 's/.*bindless final: binding 0 per-eye slots: //p' | head -1)
-if [[ "$survey_named" == "0=img#0" ]]; then
-    printf 'ok   %-38s %s\n' "survey names slot and image" "$survey_named"
+    sed -n 's/.*bindless final: layout #[0-9]* binding 0 per-eye slots: //p' |
+    head -1)
+# ...and the image each slot names, since a count alone would not catch a join
+# that credited the wrong image. Every slot here holds the one doubled target.
+survey_named=$(grep -o 'img#[0-9]*' <<<"$survey_pe" | sort -u | tr '\n' ' ')
+if [[ "$survey_pe" == "4 in 0..3, showing 4: "* &&
+      "$survey_named" == "img#0 " ]]; then
+    printf 'ok   %-38s %s\n' "survey reports the set's extent" \
+        "${survey_pe%%:*}"
 else
-    printf 'FAIL %-38s want "0=img#0", got "%s"\n' "survey names slot and image" \
-        "$survey_named"
+    printf 'FAIL %-38s want "4 in 0..3, showing 4" naming only img#0, got "%s"\n' \
+        "survey reports the set's extent" "$survey_pe"
     fails=$((fails + 1))
 fi
 

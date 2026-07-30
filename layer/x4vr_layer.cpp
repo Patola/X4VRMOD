@@ -506,12 +506,44 @@ const bool g_bindless_survey = [] {
 }();
 
 std::mutex g_desc_mu;
-// binding -> the distinct array elements X4 has ever written
-std::unordered_map<uint32_t, std::unordered_set<uint32_t>> g_desc_slots;
-// binding -> slot -> image serial, for slots holding a *doubled* image. This is
-// what the twin region is designed around: which table, and which elements,
-// actually have to be mirrored.
-std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>> g_desc_pe;
+// Take twenty-one keyed these by binding alone, which conflates every set that
+// happens to use the same binding number -- the log grew a "binding 0" with one
+// slot in it, and nothing in the bindless tables lives at binding 0. The offset
+// has to be applied to one specific table, so the key is (layout, binding).
+//
+// A VkDescriptorSet has no "set index": which set it becomes is chosen at
+// vkCmdBindDescriptorSets, not at allocation. What *is* a property of the set is
+// the layout it was allocated from, and that is the thing worth distinguishing.
+// Layouts carrying a descriptor array get a serial; everything else reports as
+// layout ?, which is how a stray binding announces itself instead of hiding.
+uint32_t g_dsl_serial = 0;
+std::unordered_map<VkDescriptorSetLayout, uint32_t> g_dsl_id;
+std::unordered_map<VkDescriptorSet, uint32_t> g_ds_layout;
+
+// Handles are recycled after vkFreeDescriptorSets, so a stale entry could
+// misattribute a table. Allocation always precedes any write to a handle, so
+// overwriting on allocate is enough -- do not erase on free.
+inline uint64_t desc_key(uint32_t layout, uint32_t binding) {
+    return ((uint64_t)layout << 32) | binding;
+}
+
+// "#3", or "?" for a set whose layout declared no descriptor array -- which is
+// how writes that do not belong to a table stay visible instead of being
+// silently folded into one.
+inline void desc_layout_label(uint64_t key, char *out, size_t n) {
+    const uint32_t lid = (uint32_t)(key >> 32);
+    if (lid == UINT32_MAX)
+        snprintf(out, n, "?");
+    else
+        snprintf(out, n, "#%u", lid);
+}
+
+// (layout, binding) -> the distinct array elements X4 has ever written
+std::unordered_map<uint64_t, std::unordered_set<uint32_t>> g_desc_slots;
+// (layout, binding) -> slot -> image serial, for slots holding a *doubled*
+// image. This is what the twin region is designed around: which table, and which
+// elements, actually have to be mirrored.
+std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint32_t>> g_desc_pe;
 uint64_t g_desc_writes = 0, g_desc_late_writes = 0;
 bool g_desc_first_frame_done = false;
 
@@ -929,6 +961,9 @@ void bindless_survey_writes(uint32_t writeCount,
             continue;
         if (!w.pImageInfo)
             continue;
+        auto la = g_ds_layout.find(w.dstSet);
+        const uint32_t lid = la != g_ds_layout.end() ? la->second : UINT32_MAX;
+        const uint64_t key = desc_key(lid, w.dstBinding);
         for (uint32_t j = 0; j < w.descriptorCount; j++) {
             const uint32_t slot = w.dstArrayElement + j;
             g_desc_writes++;
@@ -936,7 +971,7 @@ void bindless_survey_writes(uint32_t writeCount,
             // cannot be a one-shot pass at startup.
             if (g_desc_first_frame_done)
                 g_desc_late_writes++;
-            g_desc_slots[w.dstBinding].insert(slot);
+            g_desc_slots[key].insert(slot);
             const VkImageView v = w.pImageInfo[j].imageView;
             if (v == VK_NULL_HANDLE)
                 continue;
@@ -945,7 +980,7 @@ void bindless_survey_writes(uint32_t writeCount,
             if (it == g_views.end() || !g_per_eye_images.count(it->second.image))
                 continue;
             auto im = g_images.find(it->second.image);
-            g_desc_pe[w.dstBinding][slot] =
+            g_desc_pe[key][slot] =
                 im != g_images.end() ? im->second.serial : UINT32_MAX;
         }
     }
@@ -1371,24 +1406,42 @@ void bindless_report(const char *when) {
             hi = s > hi ? s : hi;
         }
         auto pe = g_desc_pe.find(e.first);
-        X4VR_LOG("bindless %s: binding %u — %zu distinct slots, range %u..%u, "
-                 "%zu holding a per-eye image",
-                 when, e.first, e.second.size(), lo, hi,
+        char lid[16];
+        desc_layout_label(e.first, lid, sizeof(lid));
+        X4VR_LOG("bindless %s: layout %s binding %u — %zu distinct slots, "
+                 "range %u..%u, %zu holding a per-eye image",
+                 when, lid, (uint32_t)e.first, e.second.size(), lo, hi,
                  pe == g_desc_pe.end() ? (size_t)0 : pe->second.size());
     }
     // The slots that matter, named with their image serial so the result joins
     // straight onto the frame graph. If this list is empty the doubled images
     // are reaching the shaders by some route other than a sampled descriptor,
     // and the index-offset plan is built on sand.
+    // Take twenty-one printed 26 of 191 entries here and said nothing about
+    // stopping, so the shape of the set -- do the per-eye slots cluster at the
+    // top of the used prefix? -- had to be *inferred* from an arbitrary sample.
+    // A summary of a set must report the set's extent and admit when it
+    // truncates; otherwise a partial list reads exactly like a complete one.
     for (const auto &b : g_desc_pe) {
         char list[400];
         int n = 0;
+        size_t shown = 0;
+        uint32_t lo = UINT32_MAX, hi = 0;
         list[0] = 0;
-        for (const auto &s : b.second)
-            if (n < 360)
+        for (const auto &s : b.second) {
+            lo = s.first < lo ? s.first : lo;
+            hi = s.first > hi ? s.first : hi;
+            if (n < 320) {
                 n += snprintf(list + n, sizeof(list) - n, "%s%u=img#%u",
                               n ? " " : "", s.first, s.second);
-        X4VR_LOG("bindless %s: binding %u per-eye slots: %s", when, b.first,
+                shown++;
+            }
+        }
+        char lid[16];
+        desc_layout_label(b.first, lid, sizeof(lid));
+        X4VR_LOG("bindless %s: layout %s binding %u per-eye slots: %zu in "
+                 "%u..%u, showing %zu: %s",
+                 when, lid, (uint32_t)b.first, b.second.size(), lo, hi, shown,
                  list);
     }
 }
@@ -1598,31 +1651,43 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDescriptorSetLayout(
     // in the shader and bound short here? A short binding means the layer would
     // have to widen this layout and the pool behind it -- object surgery, not
     // write mirroring -- so it is the fact that decides the size of the job.
-    if (g_bindless_survey && ci) {
-        const VkDescriptorSetLayoutBindingFlagsCreateInfo *bf = nullptr;
-        for (const VkBaseInStructure *p = (const VkBaseInStructure *)ci->pNext;
-             p; p = p->pNext)
-            if (p->sType ==
-                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO)
-                bf = (const VkDescriptorSetLayoutBindingFlagsCreateInfo *)p;
-        for (uint32_t i = 0; i < ci->bindingCount; i++) {
-            const VkDescriptorSetLayoutBinding &b = ci->pBindings[i];
-            if (b.descriptorCount <= 1)
-                continue; // only the tables are interesting
-            const VkDescriptorBindingFlags fl =
-                (bf && i < bf->bindingCount) ? bf->pBindingFlags[i] : 0;
-            X4VR_LOG("bindless: layout binding %u type=%u count=%u flags=0x%x%s%s%s",
-                     b.binding, (unsigned)b.descriptorType, b.descriptorCount,
-                     (unsigned)fl,
-                     (fl & VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT)
-                         ? " VARIABLE" : "",
-                     (fl & VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT)
-                         ? " PARTIALLY_BOUND" : "",
-                     (fl & VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT)
-                         ? " UPDATE_AFTER_BIND" : "");
+    const VkResult r = d->CreateDescriptorSetLayout(device, ci, ac, out);
+    if (r != VK_SUCCESS || !g_bindless_survey || !ci)
+        return r;
+
+    const VkDescriptorSetLayoutBindingFlagsCreateInfo *bf = nullptr;
+    for (const VkBaseInStructure *p = (const VkBaseInStructure *)ci->pNext; p;
+         p = p->pNext)
+        if (p->sType ==
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO)
+            bf = (const VkDescriptorSetLayoutBindingFlagsCreateInfo *)p;
+    // Serial first, so every table binding below is logged under the identity
+    // the write survey will report it by.
+    uint32_t lid = UINT32_MAX;
+    for (uint32_t i = 0; i < ci->bindingCount; i++)
+        if (ci->pBindings[i].descriptorCount > 1) {
+            std::lock_guard<std::mutex> dlock(g_desc_mu);
+            lid = g_dsl_id[*out] = g_dsl_serial++;
+            break;
         }
+    for (uint32_t i = 0; i < ci->bindingCount; i++) {
+        const VkDescriptorSetLayoutBinding &b = ci->pBindings[i];
+        if (b.descriptorCount <= 1)
+            continue; // only the tables are interesting
+        const VkDescriptorBindingFlags fl =
+            (bf && i < bf->bindingCount) ? bf->pBindingFlags[i] : 0;
+        X4VR_LOG("bindless: layout #%u binding %u type=%u count=%u "
+                 "flags=0x%x%s%s%s",
+                 lid, b.binding, (unsigned)b.descriptorType, b.descriptorCount,
+                 (unsigned)fl,
+                 (fl & VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT)
+                     ? " VARIABLE" : "",
+                 (fl & VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT)
+                     ? " PARTIALLY_BOUND" : "",
+                 (fl & VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT)
+                     ? " UPDATE_AFTER_BIND" : "");
     }
-    return d->CreateDescriptorSetLayout(device, ci, ac, out);
+    return r;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_AllocateDescriptorSets(
@@ -1647,7 +1712,18 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_AllocateDescriptorSets(
                              v->pDescriptorCounts[i]);
             }
     }
-    return d->AllocateDescriptorSets(device, ai, out);
+    const VkResult r = d->AllocateDescriptorSets(device, ai, out);
+    // Bind each new set to the layout it came from, so a write can be attributed
+    // to a table rather than to a bare binding number.
+    if (r == VK_SUCCESS && g_bindless_survey && ai && out) {
+        std::lock_guard<std::mutex> dlock(g_desc_mu);
+        for (uint32_t i = 0; i < ai->descriptorSetCount; i++) {
+            auto it = g_dsl_id.find(ai->pSetLayouts[i]);
+            if (it != g_dsl_id.end())
+                g_ds_layout[out[i]] = it->second;
+        }
+    }
+    return r;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImageView(

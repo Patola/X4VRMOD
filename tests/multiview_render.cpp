@@ -492,10 +492,19 @@ int main(int argc, char **argv) {
     VkSampler samp;
     CHECK(vkCreateSampler(dev, &sci, nullptr, &samp));
 
+    // A four-element descriptor array, not a single descriptor, for two reasons
+    // that both bit in take twenty-one. It makes the layout carry a descriptor
+    // array, so the survey has to attribute writes to a *layout* rather than to a
+    // bare binding number; and it makes one vkUpdateDescriptorSets carry four
+    // descriptors, exercising the dstArrayElement + j walk that X4 uses for
+    // every write and that a single-descriptor test never touched. The shader
+    // declares a plain sampler2D and so reads element 0; the rest exist to give
+    // the reported extent something to be wrong about.
+    const uint32_t kSlots = 4;
     VkDescriptorSetLayoutBinding dslb{};
     dslb.binding = 0;
     dslb.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    dslb.descriptorCount = 1;
+    dslb.descriptorCount = kSlots;
     dslb.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo dslci{};
     dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -506,7 +515,7 @@ int main(int argc, char **argv) {
 
     VkDescriptorPoolSize dps{};
     dps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    dps.descriptorCount = 1;
+    dps.descriptorCount = kSlots;
     VkDescriptorPoolCreateInfo dpci{};
     dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     dpci.maxSets = 1;
@@ -527,17 +536,20 @@ int main(int argc, char **argv) {
     // substitute a view onto layer 1 underneath us. Issued after the first
     // framebuffer exists, because that is when the layer learns the image is
     // rendered by a masked pass and becomes willing to redirect it.
-    VkDescriptorImageInfo dii{};
-    dii.sampler = samp;
-    dii.imageView = array_sampler ? aview : view;
-    dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkDescriptorImageInfo dii[kSlots];
+    for (uint32_t i = 0; i < kSlots; i++) {
+        dii[i] = {};
+        dii[i].sampler = samp;
+        dii[i].imageView = array_sampler ? aview : view;
+        dii[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
     VkWriteDescriptorSet wds{};
     wds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     wds.dstSet = dset;
     wds.dstBinding = 0;
-    wds.descriptorCount = 1;
+    wds.descriptorCount = kSlots;
     wds.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    wds.pImageInfo = &dii;
+    wds.pImageInfo = dii;
     vkUpdateDescriptorSets(dev, 1, &wds, 0, nullptr);
 
     std::vector<uint32_t> fs2_code = load_spv(argc > 3 ? argv[3]
