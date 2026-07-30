@@ -5203,3 +5203,66 @@ the world its second eye; and every masked pass names its rule.
 - **P50** — the masked count stops moving between runs. If the tally still
   differs run to run, something else in the classification is scene-dependent
   and the configuration is still not restorable.
+
+## Take forty-four: P48 refuted, and a retraction that matters more
+
+Run (recorded, from the log): `X4VR_MASK_LDR=1 X4VR_TAKE=44-maskldr
+X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1
+X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MASK_TONEMAP=1 X4VR_MV=1
+X4VR_SBS=1 X4VR_MV_PROBE=1 X4VR_MASK_PRESENT=1 X4VR_BINDLESS_MIRROR=1
+X4VR_MV_INVENTORY=1`
+
+`+MASKED(ldr)` fired on four passes. The present targets' layer 1 still holds
+**3.9%–5.1%** of layer 0. Masking every all-LDR pass does not fill the right
+eye, so the break is not a missing mask.
+
+### The retraction
+
+The claim that motivated `X4VR_MASK_LDR` — *"3 `+PRESENT-CAND` in take
+thirty-three, 6 in take forty-three, on the same knobs, therefore the predicate
+is scene-dependent"* — was **one log file holding two X4 sessions**. `X4VR_LOG`
+appends; take forty-three's file carries two `mv: X4 uses vkCreateRenderPass`
+lines. Per session the count is 3, identical to take thirty-three. Distinct
+render-pass serials across the two runs: 59 and 58.
+
+The pass population is stable. The predicate was never unstable. **The working
+configuration was always restorable**, and the conclusion drawn from that
+miscount — reported to Patola as "recovering take thirty-three's command
+probably would not have recovered take thirty-three" — was false and
+discouraging in a way the evidence never supported.
+
+This is the fourth counting instrument in this project read without checking
+what it counted over (holes #11–#13 were the others), and the first to change
+the code rather than only a conclusion. The distinguishing feature is not
+subtlety: `grep -c` over an appending log is a sum across runs, and nothing in
+the pipeline said so.
+
+### The gate, and why it comes first
+
+`tools/score_run.py` refuses to score a log containing more than one session
+**before** it evaluates anything else, then reports:
+
+* the split, since nothing below it is stereo;
+* every mask with the rule that set it, and a failure on `+MASKED(?)`;
+* `layer1/layer0` non-empty ratio for the present targets — the black right eye
+  as a number, taking the best sample per image so a frame caught mid-fade is
+  not read as a broken chain.
+
+The point is not convenience. Eleven takes were scored by a person describing a
+screen to someone who then chose which theory the description supported. A
+number from the log removes that step.
+
+### Where the search actually stands
+
+Established and not in doubt:
+
+* the code is exonerated — the `stage2-sbs-working` tree fails identically on
+  the same command (take forty-two);
+* the render-pass population is stable run to run (59/58 serials);
+* the world images carry a real second eye (`#97`/`#98` DIFFER 6–9%);
+* the present targets do not (layer 1 at 4–5% — the HUD);
+* so the loss is between the world images and the present target, and it is not
+  the masking of all-LDR passes.
+
+What is missing is a knob subset, and that is a finite search over a stable
+system, scored mechanically. See `docs/bisection-plan.md`.
