@@ -17,11 +17,19 @@ restored together.
 |---|---|---|---|
 | 2026-07-29 | `stage2-sbs-working` | true SBS on screen, framerate acceptable | **LOST** — predates the run-recording line |
 
-## Why the knobs alone are not enough either
+## Retracted: "the knobs are not enough either"
 
-Take forty-three found the masked set is *content dependent*: the same knobs
-produced **3** `+PRESENT-CAND` passes in take thirty-three and **6** in take
-forty-three. `subpass_is_present()` is a heuristic over whatever render passes
-the current scene happens to build, so "the same command" does not guarantee
-"the same passes masked". Until that predicate is pinned down, a recorded
-command is necessary and not sufficient — record the run's pass tallies with it.
+This file previously said the masked set was content-dependent — 3
+`+PRESENT-CAND` in take thirty-three against 6 in take forty-three, same knobs
+— and concluded that a recorded command could not restore a state.
+
+**That was one log file holding two X4 sessions.** `X4VR_LOG` appends;
+take forty-three's file has two `mv: X4 uses vkCreateRenderPass` lines. Per
+session the count is 3, the same as take thirty-three. The distinct render-pass
+serials are 59 and 58 across those runs — the pass population is *stable*.
+
+So the configuration **is** restorable, and the pessimism above was an artifact
+of a miscount. Score every run with `tools/score_run.py`, which refuses to read
+a log containing more than one session before it looks at anything else.
+
+Use a fresh `X4VR_LOG` per run. Always.
