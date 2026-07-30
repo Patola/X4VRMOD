@@ -71,7 +71,7 @@ Consequences, all of them load-bearing:
   and six pipelines share rp #40. `X4VR_MASK_TONEMAP` is a misnomer kept for
   continuity with the tagged runs.
 
-### Next step: the bindless index offset (task #12)
+### Next step: the bindless index offset (task #13)
 
 Because the index is an integer in a uniform, per-view sampling becomes integer
 arithmetic and nothing else changes type:
@@ -94,14 +94,41 @@ that hazard instead of dodging it.
 Headroom is not a problem: RADV allows 8,388,606 sampled-image descriptors per
 set against X4's 53,306.
 
-### What the next run is trying to find out
+**What the survey settled about this plan** (details under Q1/Q2 above):
 
-Nothing is patched in this one. It is four counters in the descriptor hooks,
-because the design of the twin region depends on facts nobody has measured, and
-the last four things assumed about X4's sampling were all wrong.
+* The twin region **needs no allocation**. X4 declares and allocates all 53,306
+  with `PARTIALLY_BOUND`, uses a dense 10,980-slot prefix, and leaves 42,326
+  descriptors allocated-but-unwritten. `OFFSET = 26,653` splits the array in
+  half with 2.4× headroom over the observed high-water mark.
+* The mirror must be **per-write, not one-shot** — but for a reason the
+  prediction got wrong. Slots do not appear late; their *contents* are rewritten
+  ~2× per frame.
+* The mirror must cover **bindings 5 and 7 both**; they hold identical
+  populations.
 
-Enabled by `X4VR_BINDLESS_SURVEY=1`. Predictions committed **before** the run,
-so the log can contradict them:
+**The open question is now cost, not feasibility.** X4 issues ~21,900
+image-descriptor writes per frame. Mirroring each one doubles that. Two shapes
+to weigh before writing code, and this should be decided by measurement:
+
+1. **Mirror every write** in `vkUpdateDescriptorSets` — simple, always current,
+   and it adds ~21,900 descriptor writes per frame of CPU work.
+2. **Bulk-copy the prefix** with `VkCopyDescriptorSet` (one copy of
+   0..10,979 → 26,653.., `descriptorCount` in one call) — far cheaper per frame,
+   but it is a snapshot, so anything X4 rewrites after the copy is a frame stale
+   in the second view. Since the table is rewritten twice per frame, "stale" is
+   not hypothetical and needs bounding before this is chosen.
+
+Neither is obviously right. Given "performance is king", option 1 gets built
+first because it is correct by construction, and option 2 becomes an
+optimisation with a measured baseline to beat.
+
+### What that run found — Q1–Q4, scored
+
+Ran 2026-07-30, `X4VR_BINDLESS_SURVEY=1`, 9,934 frames of play. **Two of four
+predictions right**, and the two that were wrong were wrong in ways that matter
+more than the two that were right. Predictions are left verbatim with the
+verdict underneath, so the record shows what was believed and not only what
+turned out to be true. Numbers and narrative: *Take twenty-one*.
 
 **Q1 — Does X4 allocate all 53,306 descriptors, or declare the array large and
 bind fewer?** This decides the size of the job. If the layout really carries
@@ -114,12 +141,70 @@ object creation rather than data.
 > exact for a compile-time bound and bindless engines normally declare the
 > maximum and size the set to the level's content.
 
+**WRONG, and wrong in the good direction.** One layout, seven bindings with
+`count > 1`, and `flags = 0x7` on every large one:
+`UPDATE_AFTER_BIND | UPDATE_UNUSED_WHILE_PENDING | PARTIALLY_BOUND`. Bit 0x8,
+`VARIABLE_DESCRIPTOR_COUNT`, is **not set anywhere in the run**, and no
+`VkDescriptorSetVariableDescriptorCountAllocateInfo` was ever passed. X4
+declares the full 53,306 and allocates the full 53,306.
+
+    binding 2  INPUT_ATTACHMENT      58   partially-bound, update-after-bind
+    binding 3  INPUT_ATTACHMENT      58   partially-bound, update-after-bind
+    binding 4  SAMPLER               18   no flags
+    binding 5  SAMPLED_IMAGE     53,306   partially-bound, update-after-bind
+    binding 6  STORAGE_IMAGE     53,306   partially-bound, update-after-bind
+    binding 7  SAMPLED_IMAGE     53,306   partially-bound, update-after-bind
+    binding 8  STORAGE_IMAGE     53,306   partially-bound, update-after-bind
+
+**The consequence deletes the biggest predicted job.** Because the count is
+fixed and no variable count is used, `vkAllocateDescriptorSets` consumes all
+53,306 from the pool — so the pool already backs every one of them, and
+`PARTIALLY_BOUND` makes an unwritten descriptor legal as long as no shader
+reads it. **The twin region already exists.** No widening the layout, no
+resizing the pool, no intercepting object creation. Writing above X4's
+high-water mark is just writing.
+
+Independent cross-check that the layout reader is honest: binding 4 reports
+`SAMPLER × 18`, and the SPIR-V survey independently found an 18-entry `sampler`
+array at set 0 binding 4. Two instruments, different sources, same number.
+
 **Q2 — How many slots does X4 actually write, and how?** Decides where a twin
 region can live and whether an offset can be a compile-time constant.
 
 > Predicted: a few thousand distinct slots, written **incrementally** as content
 > streams in, not as one bulk update at load. Expect writes to keep arriving
 > during play, which means the mirroring cannot be a one-shot pass at startup.
+
+**Right about the conclusion, wrong about the reason — and the real reason is
+worse.** The slot *set* is nearly static: 10,622 slots written before the first
+present, 10,980 by the end, so 96.7% of it existed before a single frame was
+shown and thirteen minutes of play added 358. "Streams in incrementally" is not
+what happens.
+
+What is dynamic is the *contents*:
+
+    217,705,579 image-descriptor writes     (217,684,326 after the first present)
+    /  9,934 frames   =  ~21,900 per frame
+    /     10,980 used slots  ≈  two full rewrites of the table every frame
+
+So mirroring still cannot be a one-shot pass at startup — but not because slots
+appear late. It is because **every slot's contents are rewritten about twice per
+frame**, which kills any plan built on identifying a slot once and mirroring it,
+and sets the mirror's cost by X4's descriptor traffic rather than by table size.
+
+Shape of the used region, which is what the offset needs:
+
+    bindings 5 and 7:  10,980 distinct slots, range 0..10,979  — dense, no holes
+    of 53,306 declared:  20.6% used, 42,326 free
+    191 slots hold a per-eye (doubled) image: #101, #103, #600, #607
+
+Bindings 5 and 7 carry the **same population** — same count, same range, same
+191 per-eye slots, same image serials. X4 maintains two identical sampled-image
+tables, so the mirror has to cover both.
+
+Dense, and one-fifth full, means the offset can be a compile-time constant with
+room to spare. `OFFSET = 26,653` (half of 53,306) leaves 2.4× headroom over the
+observed high-water mark, and the layer can log if the prefix ever crosses it.
 
 **Q3 — Does any shader index the table non-uniformly?** A non-uniform index
 needs `NonUniformEXT` on the access chain, and the patch must preserve it.
@@ -129,6 +214,10 @@ needs `NonUniformEXT` on the access chain, and the patch must preserve it.
 > uniform by construction. If any shader computes an index from an interpolated
 > input this flips, and the patch has to carry the decoration through.
 
+**RIGHT, and settled without the run.** `NonUniform` appears in **0 of 409**
+dumped modules. Indices are draw-uniform; the patch has no decoration to
+preserve.
+
 **Q4 — Is the same table used for storage images or subpass inputs anywhere?**
 Those would need excluding: a storage image has no sampler, and a subpass input
 is already view-indexed.
@@ -137,13 +226,59 @@ is already view-indexed.
 > module read so far, and the input attachments the layer already fixes arrive
 > through `VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT`, a different descriptor type.
 
-The two that would change the plan most are Q1 (turns write-mirroring into
-layout surgery) and Q3 (adds a decoration the patch must not lose). Q2 mainly
-sets the offset. Q4 is a safety check that costs nothing to ask.
+**RIGHT, and settled without the run.** All 333 declarations at set 0 binding 7
+are plain 2D sampled images. The layout confirms it from the other side: the
+storage images live at separate bindings (6 and 8) and the input attachments at
+2 and 3, each its own descriptor type.
 
-**Pass condition for the eventual patch, not for this run:** `#103` flips from
-all-IDENTICAL to all-DIFFER. Still nothing on screen — that waits for the
-format-44 chain.
+The two that would have changed the plan most were Q1 and Q3. Q3 held. Q1 broke
+in the direction that removes work rather than adding it, which is the first
+time in this project that a wrong prediction has been good news.
+
+**Pass condition for the eventual patch:** `#103` flips from all-IDENTICAL to
+all-DIFFER. Still nothing on screen — that waits for the format-44 chain.
+
+**The same run also answered task #5's real question, unasked.** The per-eye
+difference is already large and real in the G-buffer, and dies at exactly the
+boundary the mechanism predicts. See *Where the difference dies*, below.
+
+### Where the difference dies
+
+The survey run had the probe on, and its verdicts across 9,934 frames locate the
+failure boundary exactly. Counts are DIFFER / total probes for that image:
+
+| image | shape | verdict |
+| --- | --- | --- |
+| `#97` | `RGBA16F` 1408² | **21 / 23 DIFFER** |
+| `#95` | `RGBA16F` 1408² | **20 / 23 DIFFER** |
+| `#98` `#99` | `RG16F` 1408² | **20 / 23 DIFFER** |
+| `#102` | `R8_UNORM` 1408² | **6 / 6 DIFFER** |
+| `#101` | `R8_UINT` 1408², 2 mips | **10 / 23 DIFFER** (6–9% of texels) |
+| `#92` | `RGBA16F` 1408² | 6 / 23 DIFFER |
+| `#103` | `BGRA8_SRGB` 1408² — the composition | **0 / 22 — always IDENTICAL** |
+| `#104` `#105` | `RGBA16F` 352² | 0 / 21 IDENTICAL |
+| `#122` `#123` | `R16_SFLOAT` 1408² | 0 / 18, 0 / 17 IDENTICAL |
+
+Two things follow, and both are measurements rather than arguments.
+
+**The stereo half of the mod works.** The shear and the per-view camera
+constants produce genuinely divergent geometry in the lighting inputs — not a
+uniform offset, not noise: `#101` differs in 6–9% of its texels with the first
+differing texel scattered across the frame between probes ((9,0), (82,0),
+(1274,0), (446,244)). Everything upstream of a sampler is already stereo.
+
+**Everything downstream of a sampler is mono, and that is the whole remaining
+problem.** `#103`'s writers are masked passes — the layer *does* run them
+per-view — and their output is identical every single time, because what they
+read arrives through a descriptor bound to layer 0. This is the central
+asymmetry, finally measured end to end instead of reasoned about: multiview
+view-indexes subpass inputs automatically and never view-indexes samplers.
+
+**A free constraint on task #8.** `#122`/`#123` and `#104`/`#105` are *masked
+yet identical* — the layer renders them twice with different view state and gets
+the same answer both times. So their contents cannot depend on rasterized
+geometry; they are derived purely from sampled data. That narrows what they can
+be without guessing at them, which is the standing rule for these three.
 
 ### Why patching is the chosen mechanism
 
@@ -2472,3 +2607,124 @@ required. Before the fix, that mutation passed.
 writer-list `?` sentinel, the sampler lister's blindness to `OpTypeArray`, and
 this. The rule earns another clause: a new instrument needs a **negative** case
 whose zero is provably a measurement, not an absence of output.
+
+## Take twenty-one: the twin region already existed
+
+The run that was supposed to size a job discovered the job was already done by
+X4, and then a second instrument — one that was only along for the ride —
+answered the question three tasks ahead of it.
+
+`X4VR_BINDLESS_SURVEY=1`, 9,934 frames, ~13 minutes of play. Scores against the
+committed predictions are inline under *What that run found*; this section is
+what the numbers mean.
+
+### The prediction that was wrong was the expensive one, and it collapsed
+
+Q1 asked whether X4 declares 53,306 descriptors and binds fewer. Predicted yes,
+which would have meant widening the descriptor set layout **and** the pool —
+intercepting object creation, rewriting `VkDescriptorSetLayoutCreateInfo`,
+tracking pools, and hoping nothing else in X4 depended on the sizes. That was
+the largest single piece of work on the roadmap.
+
+It does not exist. `flags = 0x7`, never `0xF`; `VARIABLE_DESCRIPTOR_COUNT` never
+appears; no variable-count allocation info is ever passed. X4 declares 53,306
+and allocates 53,306, so the pool already backs every descriptor, and
+`PARTIALLY_BOUND` makes the 42,326 it never writes legal-but-unwritten rather
+than absent. The twin region is not something to build. It is free space that
+has been sitting there the whole time.
+
+This is the first wrong prediction in the project that made the work smaller.
+The four before it all made it bigger.
+
+### The prediction that was "right" was right for the wrong reason
+
+Q2 predicted slots streaming in during play, concluding that mirroring cannot be
+a startup pass. The conclusion holds. The reason is wrong, and the true reason is
+harsher.
+
+96.7% of the table is written before the first frame is ever presented — 10,622
+slots — and thirteen minutes of play adds 358. The slot set is essentially
+static. What moves is the contents: **217.7 million image-descriptor writes**,
+~21,900 per frame, about two complete rewrites of the 10,980-slot table every
+frame.
+
+That distinction is not pedantry. A plan built on "slots appear late" would
+mirror on first sight of a slot and cache it. A plan that survives ~21,900
+rewrites per frame has to mirror on **every write**, forever, and its cost scales
+with X4's descriptor traffic rather than with the size of the table. Had the
+prediction been scored on its conclusion alone it would have counted as a hit and
+the wrong design would have been built.
+
+The measured shape, which is what the offset actually needed:
+
+    bindings 5 and 7:  10,980 distinct slots, range 0..10,979 — dense, no holes
+    of 53,306 declared: 20.6% used, 42,326 free
+    191 slots hold a per-eye image: #101, #103, #600, #607
+
+Dense and one-fifth full means `OFFSET` can be a compile-time constant. 26,653
+— half the array — clears the high-water mark by 2.4×.
+
+An unpredicted detail with real consequences: **bindings 5 and 7 hold the same
+population.** Same count, same range, same 191 per-eye slots, same image
+serials. X4 keeps two identical sampled-image tables. Anything that mirrors one
+must mirror the other.
+
+### The finding nobody asked for: where the difference dies
+
+The probe was on only because it is part of the tagged baseline. Its verdicts
+across the run are tabulated under *Where the difference dies*, and they settle
+task #5's question without a single line of new code.
+
+The G-buffer is already stereo. `#95`, `#97`, `#98`, `#99` differ between the
+eyes in 20–21 of 23 probes; `#102` in 6 of 6; `#101` in 6–9% of its texels with
+the first differing texel landing in a different place each time. The shear and
+the per-view camera constants are not merely plumbed — they are producing real,
+spatially-structured parallax in the lighting inputs.
+
+And every image downstream of a sampler is identical, every time. `#103` — the
+composition — is written by *masked* passes, so the layer genuinely runs them
+twice with different view state, and both runs produce the same bytes. The
+difference does not fade or degrade across the chain. It stops dead at the first
+descriptor read.
+
+That is the central asymmetry, measured end to end for the first time rather than
+inferred from the specification. Everything before a sampler is stereo;
+everything after it is mono; the index offset exists precisely to move that
+boundary.
+
+It also hands task #8 a constraint for free. `#122`/`#123` and `#104`/`#105` are
+masked yet identical — rendered twice with different view state, same answer
+both times — so their contents cannot depend on rasterized geometry. They are
+derived purely from sampled data. That is a real narrowing of what they can be,
+obtained without guessing at them, which is the standing rule for those three.
+
+### Two more instruments wrong, and both were in the new one
+
+The rule about verifying a new instrument's first reading paid off in one place
+and was not applied in another. Binding 4 reported `SAMPLER × 18`, and the SPIR-V
+survey had independently found an 18-entry sampler array at set 0 binding 4 —
+two sources, two methods, same number, so the layout numbers are trustworthy.
+
+The slot bookkeeping had no such check, and it has two defects:
+
+* **`g_desc_slots` and `g_desc_pe` are keyed by binding alone, not by
+  `(set, binding)`.** `VkWriteDescriptorSet` carries `dstSet` as a handle, not a
+  set index, and the survey never recorded the mapping — so writes to binding 7
+  of *any* set land in the same bucket. The stray `binding 0 — 1 distinct slots`
+  in the log is the proof: nothing in the bindless tables lives at binding 0.
+  The offset has to be applied to one specific table, so this must be fixed
+  before the mechanism is built on these counts.
+* **The per-eye slot list silently truncates.** It is capped at 360 characters
+  and printed **26 of 191** entries with no minimum, maximum, or indication that
+  it had stopped. All 26 fall in 10,863..10,955, which suggests the per-eye slots
+  cluster at the top of the prefix — and if they do, a cheap partial mirror
+  becomes possible. But 191 distinct slots cannot fit in a 93-wide window, so the
+  real population is wider than anything the log shows. The clustering is
+  **inferred, not measured**, and inferring it is exactly the mistake this
+  project keeps paying for.
+
+Both are cases of a reading that looks like data and is actually a sample of
+unknown provenance. **Six instruments, six times wrong.** The rule gains its
+third clause: an instrument that summarises a set must report the set's
+**extent** — count, min, max — and must say so when it truncates. A truncated
+list with no marker is indistinguishable from a complete one.
