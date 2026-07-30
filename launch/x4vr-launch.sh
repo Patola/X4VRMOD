@@ -95,6 +95,20 @@
 #                         that #103 starts appearing in X4VR_MV_PROBE, where
 #                         it should read IDENTICAL: the same picture drawn
 #                         twice, which is correct until the shader is patched.
+#   X4VR_BINDLESS_SURVEY=1
+#                         measure X4's bindless descriptor table. Changes no
+#                         behaviour; prints, at first present and at exit:
+#                           bindless: layout binding N type=T count=C flags=...
+#                           bindless: allocated variable count N
+#                           bindless: binding N — S distinct slots, range A..B,
+#                                     P holding a per-eye image
+#                           bindless: binding N per-eye slots: <slot>=img#<n>
+#                         The last line is the one the index-offset mechanism is
+#                         designed around: it says which table elements hold a
+#                         doubled image and therefore have to be mirrored.
+#                         Works with X4VR_MV=0 (everything reads 0 per-eye,
+#                         which is the control), but pair it with X4VR_MV=1 to
+#                         get the real answer.
 #   X4VR_DUMP_SHADERS=<dir>
 #                         write every module X4 creates as <dir>/mod-NNNN.spv.
 #                         On its own that is ~1300 files and no help; the point

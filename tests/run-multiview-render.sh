@@ -433,6 +433,60 @@ list_case "lister sees through a bindless array" "0/7 x64" sample_bindless.frag.
 list_case "lister reports a plain texture as 1"  "0/0 x1"  sample.frag.spv
 list_case "lister finds both of two textures"    "0/0 x1 0/1 x1" sample_two.frag.spv
 
+
+# The bindless survey, checked against ground truth this test already knows.
+#
+# Three instruments here have been quietly wrong for at least one run each, so a
+# new one gets its first reading verified rather than believed. This test's
+# sampled image IS a doubled per-eye target -- the same image every case above
+# reads both layers of -- so the survey must name exactly one per-eye slot and
+# say which image it is. With doubling off, the same descriptor is written to the
+# same slot and the image simply is not per-eye, so the count must be zero: that
+# is what separates "the join works" from "the join answers yes to everything".
+#
+# The `slots` field is asserted alongside, and it is not decoration. The first
+# version of this case read the per-eye list only, mapped "no output" to "none",
+# and passed vacuously -- the report was gated on X4VR_MV, so with doubling off
+# the survey printed nothing at all and "found none" and "never ran" were the
+# same string. Requiring the binding line to exist is what makes the zero real.
+survey_case() {
+    local label="$1" want_slots="$2" want_pe="$3"; shift 3
+    local out slots pe
+    out=$(env "$@" X4VR_LOG= X4VR_BINDLESS_SURVEY=1 \
+        "VK_ADD_LAYER_PATH=$BUILD/layer" \
+        "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+        "$BIN" "$VS" "$FS" "$SF" 2>&1)
+    slots=$(sed -n 's/.*bindless final: binding 0 — \([0-9]*\) distinct slots.*/\1/p' \
+        <<<"$out" | head -1)
+    pe=$(sed -n 's/.*distinct slots, range [0-9]*\.\.[0-9]*, \([0-9]*\) holding.*/\1/p' \
+        <<<"$out" | head -1)
+    if [[ "$slots" == "$want_slots" && "$pe" == "$want_pe" ]]; then
+        printf 'ok   %-38s slots=%s per-eye=%s\n' "$label" "$slots" "$pe"
+    else
+        printf 'FAIL %-38s want slots=%s per-eye=%s, got slots=%s per-eye=%s\n' \
+            "$label" "$want_slots" "$want_pe" "${slots:-ABSENT}" "${pe:-ABSENT}"
+        fails=$((fails + 1))
+    fi
+}
+
+survey_case "survey finds the per-eye slot"    1 1 "X4VR_MV=1"
+survey_case "...and none when nothing doubles" 1 0 "X4VR_MV=0"
+
+# And the image it names, since a count alone would not catch a join that
+# credited the wrong image.
+survey_named=$(env X4VR_LOG= X4VR_MV=1 X4VR_BINDLESS_SURVEY=1 \
+    "VK_ADD_LAYER_PATH=$BUILD/layer" \
+    "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    "$BIN" "$VS" "$FS" "$SF" 2>&1 |
+    sed -n 's/.*bindless final: binding 0 per-eye slots: //p' | head -1)
+if [[ "$survey_named" == "0=img#0" ]]; then
+    printf 'ok   %-38s %s\n' "survey names slot and image" "$survey_named"
+else
+    printf 'FAIL %-38s want "0=img#0", got "%s"\n' "survey names slot and image" \
+        "$survey_named"
+    fails=$((fails + 1))
+fi
+
 echo
 if (( fails )); then echo "$fails case(s) failed"; exit 1; fi
 echo "all cases passed"

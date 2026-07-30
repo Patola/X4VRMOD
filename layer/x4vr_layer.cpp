@@ -92,6 +92,8 @@ struct DeviceData {
     PFN_vkDestroyImage DestroyImage = nullptr;
     PFN_vkCreateImageView CreateImageView = nullptr;
     PFN_vkDestroyImageView DestroyImageView = nullptr;
+    PFN_vkCreateDescriptorSetLayout CreateDescriptorSetLayout = nullptr;
+    PFN_vkAllocateDescriptorSets AllocateDescriptorSets = nullptr;
     PFN_vkCreateRenderPass2 CreateRenderPass2 = nullptr;
     PFN_vkDestroyRenderPass DestroyRenderPass = nullptr;
     PFN_vkCreateGraphicsPipelines CreateGraphicsPipelines = nullptr;
@@ -481,6 +483,37 @@ struct Layer1View {
 };
 std::unordered_map<VkImageView, Layer1View> g_layer1_views;
 uint32_t g_img_serial = 0;
+
+// --- the bindless survey (X4VR_BINDLESS_SURVEY=1) -----------------------
+//
+// X4 samples through a bindless table: 53306 descriptors at set 0 binding 7,
+// indexed by S_diffuse_idx out of a uniform block. The replacement for the
+// abandoned type-promotion patch is an index offset -- view 1 reads
+// slot+OFFSET, where the layer has parked a layer-1 view of the same image --
+// and its design depends on facts nobody has measured. This answers them and
+// changes no behaviour.
+//
+// Two of the four questions were settled offline from the shader dumps and are
+// not re-asked here: no module of 409 mentions NonUniform (so the indices are
+// draw-uniform and the patch has no decoration to preserve), and every one of
+// 333 declarations at set 0 binding 7 is a plain 2D sampled image -- never a
+// storage image, never a subpass input. What the dumps could not say is how many
+// descriptors the set actually holds and which slots receive the doubled images.
+// Both are runtime facts.
+const bool g_bindless_survey = [] {
+    const char *e = getenv("X4VR_BINDLESS_SURVEY");
+    return e && *e && *e != '0';
+}();
+
+std::mutex g_desc_mu;
+// binding -> the distinct array elements X4 has ever written
+std::unordered_map<uint32_t, std::unordered_set<uint32_t>> g_desc_slots;
+// binding -> slot -> image serial, for slots holding a *doubled* image. This is
+// what the twin region is designed around: which table, and which elements,
+// actually have to be mirrored.
+std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>> g_desc_pe;
+uint64_t g_desc_writes = 0, g_desc_late_writes = 0;
+bool g_desc_first_frame_done = false;
 
 // A draw replicates to two views only if the *pass* carries the mask and the
 // *pipeline bound into it* was compiled knowing that. Those are two different
@@ -878,6 +911,46 @@ void mv_redirect_writes(DeviceData *d, VkDevice device, uint32_t writeCount,
     }
 }
 
+// Q2, and the question the twin region is actually designed around: which
+// bindings and which array elements receive a view of a *doubled* image?
+//
+// That is what has to be mirrored, and it is knowable only here -- an image is
+// classified per-eye at framebuffer time, long after it was created, and the
+// slot it lands in is X4's choice. Counts distinct slots per binding, and
+// separately the slots holding per-eye images, with the image serial so the
+// result can be joined against the frame graph.
+void bindless_survey_writes(uint32_t writeCount,
+                            const VkWriteDescriptorSet *writes) {
+    std::lock_guard<std::mutex> lock(g_desc_mu);
+    for (uint32_t i = 0; i < writeCount; i++) {
+        const VkWriteDescriptorSet &w = writes[i];
+        if (w.descriptorType != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
+            w.descriptorType != VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
+            continue;
+        if (!w.pImageInfo)
+            continue;
+        for (uint32_t j = 0; j < w.descriptorCount; j++) {
+            const uint32_t slot = w.dstArrayElement + j;
+            g_desc_writes++;
+            // Writes arriving after the first frame are the reason mirroring
+            // cannot be a one-shot pass at startup.
+            if (g_desc_first_frame_done)
+                g_desc_late_writes++;
+            g_desc_slots[w.dstBinding].insert(slot);
+            const VkImageView v = w.pImageInfo[j].imageView;
+            if (v == VK_NULL_HANDLE)
+                continue;
+            std::lock_guard<std::mutex> lock2(g_img_mu);
+            auto it = g_views.find(v);
+            if (it == g_views.end() || !g_per_eye_images.count(it->second.image))
+                continue;
+            auto im = g_images.find(it->second.image);
+            g_desc_pe[w.dstBinding][slot] =
+                im != g_images.end() ? im->second.serial : UINT32_MAX;
+        }
+    }
+}
+
 VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSets(
     VkDevice device, uint32_t writeCount,
     const VkWriteDescriptorSet *writes, uint32_t copyCount,
@@ -887,6 +960,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSets(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
+    if (g_bindless_survey && g_active)
+        bindless_survey_writes(writeCount, writes);
     std::vector<VkWriteDescriptorSet> redirected;
     std::vector<std::vector<VkDescriptorImageInfo>> pool;
     if (g_mv && g_active) {
@@ -1268,6 +1343,54 @@ void mv_report(const char *when) {
              g_mv_stats.barrier_narrow, g_mv_stats.barrier_wide,
              g_mv_stats.layer0_only, g_mv_stats.redirect_stale,
              g_mv_stats.input_fixed);
+
+}
+
+// Reported separately from mv_report, and *not* gated on g_mv.
+//
+// It was, briefly, and that made X4VR_BINDLESS_SURVEY=1 print absolutely
+// nothing unless multiview happened to be on too -- a knob that silently does
+// nothing is a wasted live run. It also made the suite's negative case pass
+// vacuously: with no output at all, "found no per-eye slots" and "never ran"
+// were the same string.
+void bindless_report(const char *when) {
+    if (!g_bindless_survey)
+        return;
+    std::lock_guard<std::mutex> dlock(g_desc_mu);
+    X4VR_LOG("bindless %s: %llu image-descriptor writes, %llu of them after the "
+             "first present",
+             when, (unsigned long long)g_desc_writes,
+             (unsigned long long)g_desc_late_writes);
+    // Per binding: how much of the table X4 uses, and how much of it the twin
+    // region would have to cover. The gap between the two is the whole reason
+    // the offset can be a constant.
+    for (const auto &e : g_desc_slots) {
+        uint32_t lo = UINT32_MAX, hi = 0;
+        for (uint32_t s : e.second) {
+            lo = s < lo ? s : lo;
+            hi = s > hi ? s : hi;
+        }
+        auto pe = g_desc_pe.find(e.first);
+        X4VR_LOG("bindless %s: binding %u — %zu distinct slots, range %u..%u, "
+                 "%zu holding a per-eye image",
+                 when, e.first, e.second.size(), lo, hi,
+                 pe == g_desc_pe.end() ? (size_t)0 : pe->second.size());
+    }
+    // The slots that matter, named with their image serial so the result joins
+    // straight onto the frame graph. If this list is empty the doubled images
+    // are reaching the shaders by some route other than a sampled descriptor,
+    // and the index-offset plan is built on sand.
+    for (const auto &b : g_desc_pe) {
+        char list[400];
+        int n = 0;
+        list[0] = 0;
+        for (const auto &s : b.second)
+            if (n < 360)
+                n += snprintf(list + n, sizeof(list) - n, "%s%u=img#%u",
+                              n ? " " : "", s.first, s.second);
+        X4VR_LOG("bindless %s: binding %u per-eye slots: %s", when, b.first,
+                 list);
+    }
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass(
@@ -1461,6 +1584,70 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyImage(VkDevice device, VkImage img,
             g_images.erase(it);
     }
     d->DestroyImage(device, img, ac);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDescriptorSetLayout(
+    VkDevice device, const VkDescriptorSetLayoutCreateInfo *ci,
+    const VkAllocationCallbacks *ac, VkDescriptorSetLayout *out) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    // Q1: is the array really 53306 descriptors long, or is it declared large
+    // in the shader and bound short here? A short binding means the layer would
+    // have to widen this layout and the pool behind it -- object surgery, not
+    // write mirroring -- so it is the fact that decides the size of the job.
+    if (g_bindless_survey && ci) {
+        const VkDescriptorSetLayoutBindingFlagsCreateInfo *bf = nullptr;
+        for (const VkBaseInStructure *p = (const VkBaseInStructure *)ci->pNext;
+             p; p = p->pNext)
+            if (p->sType ==
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO)
+                bf = (const VkDescriptorSetLayoutBindingFlagsCreateInfo *)p;
+        for (uint32_t i = 0; i < ci->bindingCount; i++) {
+            const VkDescriptorSetLayoutBinding &b = ci->pBindings[i];
+            if (b.descriptorCount <= 1)
+                continue; // only the tables are interesting
+            const VkDescriptorBindingFlags fl =
+                (bf && i < bf->bindingCount) ? bf->pBindingFlags[i] : 0;
+            X4VR_LOG("bindless: layout binding %u type=%u count=%u flags=0x%x%s%s%s",
+                     b.binding, (unsigned)b.descriptorType, b.descriptorCount,
+                     (unsigned)fl,
+                     (fl & VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT)
+                         ? " VARIABLE" : "",
+                     (fl & VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT)
+                         ? " PARTIALLY_BOUND" : "",
+                     (fl & VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT)
+                         ? " UPDATE_AFTER_BIND" : "");
+        }
+    }
+    return d->CreateDescriptorSetLayout(device, ci, ac, out);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_AllocateDescriptorSets(
+    VkDevice device, const VkDescriptorSetAllocateInfo *ai,
+    VkDescriptorSet *out) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    // The other half of Q1. With a VARIABLE binding the layout's count is only
+    // a maximum; the real size is chosen here, per set.
+    if (g_bindless_survey && ai) {
+        for (const VkBaseInStructure *p = (const VkBaseInStructure *)ai->pNext;
+             p; p = p->pNext)
+            if (p->sType ==
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO) {
+                const auto *v =
+                    (const VkDescriptorSetVariableDescriptorCountAllocateInfo *)p;
+                for (uint32_t i = 0; i < v->descriptorSetCount; i++)
+                    X4VR_LOG("bindless: allocated variable count %u",
+                             v->pDescriptorCounts[i]);
+            }
+    }
+    return d->AllocateDescriptorSets(device, ai, out);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImageView(
@@ -3648,11 +3835,19 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdPipelineBarrier(
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     VkQueue queue, const VkPresentInfoKHR *pi) {
-    if (g_mv && g_active) {
+    if (g_active) {
         static bool once = false;
         if (!once) {
             once = true;
             mv_report("first present");
+            bindless_report("first present");
+            // Everything written from here on is a *late* write, which is what
+            // says whether mirroring can be done once at startup or has to
+            // track X4 for the whole session.
+            if (g_bindless_survey) {
+                std::lock_guard<std::mutex> lock(g_desc_mu);
+                g_desc_first_frame_done = true;
+            }
         }
     }
     DeviceData *d;
@@ -3995,6 +4190,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(CreateImage);
     RESOLVE(DestroyImage);
     RESOLVE(CreateImageView);
+    RESOLVE(CreateDescriptorSetLayout);
+    RESOLVE(AllocateDescriptorSets);
     RESOLVE(DestroyImageView);
     RESOLVE(CreateRenderPass2);
     RESOLVE(DestroyRenderPass);
@@ -4088,6 +4285,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyDevice(
             probe_collect(&it->second, VK_NULL_HANDLE);
     }
     mv_report("final");
+    bindless_report("final");
     g_sbs.shutdown(); // idles the device, then frees pools/semaphores/fences
     PFN_vkDestroyDevice next;
     {
@@ -4160,6 +4358,10 @@ const NameFunc kHooks[] = {
     {"vkCreateImage", (PFN_vkVoidFunction)x4vr_CreateImage},
     {"vkDestroyImage", (PFN_vkVoidFunction)x4vr_DestroyImage},
     {"vkCreateImageView", (PFN_vkVoidFunction)x4vr_CreateImageView},
+    {"vkCreateDescriptorSetLayout",
+     (PFN_vkVoidFunction)x4vr_CreateDescriptorSetLayout},
+    {"vkAllocateDescriptorSets",
+     (PFN_vkVoidFunction)x4vr_AllocateDescriptorSets},
     {"vkDestroyImageView", (PFN_vkVoidFunction)x4vr_DestroyImageView},
     {"vkCreateRenderPass2", (PFN_vkVoidFunction)x4vr_CreateRenderPass2},
     {"vkDestroyRenderPass", (PFN_vkVoidFunction)x4vr_DestroyRenderPass},

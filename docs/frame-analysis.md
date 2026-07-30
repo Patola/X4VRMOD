@@ -16,8 +16,8 @@ from a single draw, up to the point where sampling takes over.
 | `stage1-multiview-verified` | Both array layers byte-identical (readback) |
 | `stage1-complete` | …and a frame built entirely from layer 1 is correct end to end |
 | `stage2-per-eye-k` | Per-eye `K` via `gl_ViewIndex` — one draw, two different eyes |
-| `stage2-tonemap-masked` | The tonemap resolve replicates into both layers of `#103` |
-| `stage2-frag-patch` | A patched sampler reads layer N in view N — proven on the GPU, offline |
+| `stage2-tonemap-masked` | The SRGB resolve replicates into both layers of `#103` (knob is misnamed) |
+| `stage2-frag-patch` | A patched sampler reads layer N in view N — proven offline, **not usable on X4** |
 
 **The frame is stereo up to the first sampled read, and mono after it.** That
 is the entire remaining problem, and it is measured rather than assumed — the
@@ -45,8 +45,9 @@ member, the `mips=2 fmt=13` mask at offset **+9**.
 | — | 44 `B8G8R8A8_UNORM` | rp #0/#1/#4/#7/#10/#14/#17 → eye image | **not even masked** |
 
 The last row is the remaining frontier. Everything that "replicates but is
-mono" is fixed by a fragment patch; the format-44 chain needs masking first,
-and that is where `SbsCompositor`'s two-layer eye image finally matters.
+mono" is mono for one reason — it is *sampled* through the bindless table — so
+all of it is fixed by the same index offset. The format-44 chain needs masking
+first, and that is where `SbsCompositor`'s two-layer eye image finally matters.
 
 ### X4 is bindless, and that decides the mechanism
 
@@ -93,14 +94,56 @@ that hazard instead of dodging it.
 Headroom is not a problem: RADV allows 8,388,606 sampled-image descriptors per
 set against X4's 53,306.
 
-**Four questions first, all answerable with counters in the descriptor hooks
-the layer already has** — see the end of "Take twenty". The first one decides
-the size of the job: whether X4 allocates all 53,306 descriptors, or declares
-the array large and binds fewer, in which case the layer has to widen the
-descriptor set layout and pool rather than just mirror writes.
+### What the next run is trying to find out
 
-**Pass condition, when it gets there:** `#103` flips from all-IDENTICAL to
-all-DIFFER. Still nothing on screen — that waits for the format-44 chain.
+Nothing is patched in this one. It is four counters in the descriptor hooks,
+because the design of the twin region depends on facts nobody has measured, and
+the last four things assumed about X4's sampling were all wrong.
+
+Enabled by `X4VR_BINDLESS_SURVEY=1`. Predictions committed **before** the run,
+so the log can contradict them:
+
+**Q1 — Does X4 allocate all 53,306 descriptors, or declare the array large and
+bind fewer?** This decides the size of the job. If the layout really carries
+53,306, the layer only has to *mirror writes* into a twin region. If X4 uses
+`VARIABLE_DESCRIPTOR_COUNT` and binds a few thousand, the layer must widen the
+descriptor set layout **and** the pool — a much bigger intervention, touching
+object creation rather than data.
+
+> Predicted: **variable count**, bound well below 53,306. 53,306 is suspiciously
+> exact for a compile-time bound and bindless engines normally declare the
+> maximum and size the set to the level's content.
+
+**Q2 — How many slots does X4 actually write, and how?** Decides where a twin
+region can live and whether an offset can be a compile-time constant.
+
+> Predicted: a few thousand distinct slots, written **incrementally** as content
+> streams in, not as one bulk update at load. Expect writes to keep arriving
+> during play, which means the mirroring cannot be a one-shot pass at startup.
+
+**Q3 — Does any shader index the table non-uniformly?** A non-uniform index
+needs `NonUniformEXT` on the access chain, and the patch must preserve it.
+`gl_ViewIndex` is draw-uniform, so it adds no non-uniformity of its own.
+
+> Predicted: **no** — the indices seen so far come from uniform blocks, which is
+> uniform by construction. If any shader computes an index from an interpolated
+> input this flips, and the patch has to carry the decoration through.
+
+**Q4 — Is the same table used for storage images or subpass inputs anywhere?**
+Those would need excluding: a storage image has no sampler, and a subpass input
+is already view-indexed.
+
+> Predicted: **no** — binding 7 is declared `sampled` (`Sampled=1`) in every
+> module read so far, and the input attachments the layer already fixes arrive
+> through `VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT`, a different descriptor type.
+
+The two that would change the plan most are Q1 (turns write-mirroring into
+layout surgery) and Q3 (adds a decoration the patch must not lose). Q2 mainly
+sets the offset. Q4 is a safety check that costs nothing to ask.
+
+**Pass condition for the eventual patch, not for this run:** `#103` flips from
+all-IDENTICAL to all-DIFFER. Still nothing on screen — that waits for the
+format-44 chain.
 
 ### Why patching is the chosen mechanism
 
@@ -114,12 +157,21 @@ range per eye (no shader knowledge needed, but invasive command-buffer
 interception), and blitting to a double-wide source so a *vertex* patch could
 offset UV (cheapest, but an extra full-res copy per frame).
 
-The mechanism is already proven offline (`d623ee1`): `patch_vertex_clip` takes
-an optional right-eye matrix, selects arithmetically rather than by branch or
-`OpSelect`, and both cases are validation-clean. The fragment version reuses
-the same module-structure rules — capability with the capabilities, extension
-only below SPIR-V 1.3, decoration in the annotation section, new Input added
-to the entry point's interface list.
+Bindless narrows this further, and in the right direction. Replay would now be
+*worse* than it looked — the source descriptor lives in a table shared by the
+whole game, so pointing it at layer 1 between replays means rewriting a
+descriptor other draws depend on, and descriptor sets cannot be updated while
+in use. The index offset needs no replay, no extra copy, and no descriptor
+rewrite: it adds a slot, and the shader picks which one.
+
+The module-structure rules are shared and already proven (`d623ee1`):
+`patch_vertex_clip` takes an optional right-eye matrix and selects
+arithmetically rather than by branch or `OpSelect`, both cases validation-clean.
+The index patch selects the same way — capability with the capabilities,
+extension only below SPIR-V 1.3, decoration in the annotation section, new Input
+added to the entry point's interface list. One caution specific to X4: a single
+module carries **both** entry points, so a vertex patch and an index patch will
+meet in the same module, each wanting its own `ViewIndex` input.
 
 ### Reading the instruments (hard-won; do not re-derive)
 
@@ -174,7 +226,12 @@ which is what every take from sixteen on has used.
     X4VR_TEST_ARRAY_SAMPLER=1 test binary only: bind a 2D_ARRAY view instead of
                               a 2D one — goes with a patched fragment shader
     X4VR_DUMP_SHADERS=<dir>   write every module X4 creates as <dir>/mod-NNNN.spv;
-                              the tonemap log names which serials matter
+                              the srgb-resolve log names which serials matter
+    X4VR_BINDLESS_SURVEY=1    measure the bindless table: layout counts, variable
+                              descriptor counts, distinct slots written, and
+                              which slots hold a doubled image. No behaviour
+                              change. Independent of X4VR_MV, deliberately —
+                              MV=0 is the control
 
 ### Deliberately still open
 
@@ -2347,3 +2404,71 @@ Open questions before any of this is built, in order:
 
 None of these needs a guess: all four are answerable with counters in the
 descriptor hooks the layer already has.
+
+---
+
+## The survey, and a fourth instrument caught being wrong
+
+Two of the four questions never needed a run. They were answered from the 409
+dumped modules, offline, in a minute:
+
+* **Q3 — non-uniform indexing?** `NonUniform` appears in **0 of 409** modules.
+  Every index comes from a uniform block, so it is draw-uniform by
+  construction and the patch has no decoration to preserve. Prediction correct.
+* **Q4 — storage images or subpass inputs in the same table?** No. All **333**
+  declarations at set 0 binding 7 are plain 2D sampled images. Prediction
+  correct.
+
+The same scan found something not predicted at all: **there is more than one
+table.**
+
+|  n  | set | binding | dim | kind |
+|---:|---|---|---|---|
+| 474 | 0 | 5 | 2D | sampled |
+| **333** | **0** | **7** | **2D** | **sampled** |
+| 148 | 0 | 5 | Cube | sampled |
+| 26 | 0 | 2 | SubpassData | subpass-input |
+| 10 | 0 | 5 | 3D | sampled |
+| 5 | 0 | 6 | 3D | storage |
+| 4 | 0 | 0 | 2D | storage |
+| 2 | 0 | 6 | Cube | storage |
+
+Binding 5 has *more* 2D declarations than binding 7, and appears as 2D, Cube and
+3D across different modules — which means different pipelines use different
+descriptor set layouts for the same set and binding. So "the bindless table" is
+the wrong mental model; there are several, split by dimensionality, and which
+one a given shader uses is per-pipeline.
+
+That makes the live question sharper than Q2 was: not *how many slots does X4
+write* but **which binding, and which slots, receive a view of a doubled
+image**. Those are the only descriptors the twin region has to mirror, and it is
+knowable only at run time — an image is classified per-eye at framebuffer time,
+long after creation, and the slot is X4's choice.
+
+`X4VR_BINDLESS_SURVEY=1` reports exactly that, plus the layout counts for Q1.
+
+### The instrument was verified against known ground truth, and failed
+
+The offline test's sampled image *is* a doubled per-eye target, so the survey's
+first reading has a right answer: one slot, one per-eye image, `img #0`. It said
+so. Then the negative case — doubling off, same descriptor, same slot, image not
+doubled — **passed vacuously**. The report was gated on `g_mv`, so with
+`X4VR_MV=0` nothing printed at all, and the test mapped "no output" to "found
+none".
+
+Two real defects behind one weak assertion:
+
+* `X4VR_BINDLESS_SURVEY=1` printed **nothing** unless `X4VR_MV=1` happened to be
+  set too. A knob that silently does nothing is a wasted live run — and this one
+  would have been wasted on the control.
+* The suite could not tell "ran and found nothing" from "never ran".
+
+Fixed by reporting independently of `X4VR_MV` and by asserting the binding line
+exists before believing its zero. Mutation check: removing the per-eye
+membership test now fails the negative case with `per-eye=1` where 0 is
+required. Before the fix, that mutation passed.
+
+**Four instruments, four times wrong** — the probe's zero-only test, the
+writer-list `?` sentinel, the sampler lister's blindness to `OpTypeArray`, and
+this. The rule earns another clause: a new instrument needs a **negative** case
+whose zero is provably a measurement, not an absence of output.
