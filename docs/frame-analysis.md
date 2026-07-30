@@ -5366,19 +5366,72 @@ Offline-testable; no run needed.
 
 ### What the chain read shows, and it is not what the plan expected
 
-The plan asked which image between `#97` and `#50` is the last to carry a
-second eye. Answer: **all of them**. Settled samples, layer1/layer0 non-empty:
+> **CORRECTED during task #20 — see "Hole #18" below.** The table that stood
+> here reported `non-empty layer1/layer0`, which is a **fill** measure, and read
+> it as "carries a second eye". Fill says whether layer 1 has content; only the
+> probe's `DIFFER` percentage says whether that content is a *different* eye.
+> The images listed at "101.9%" were never shown by this table to be stereo.
+> The corrected reading is below; the conclusion it supported — that the loss
+> is a cliff at the swapchain — survives for take forty-five but is not the
+> whole picture.
 
-| image | ratio | | image | ratio |
-|---|---|---|---|---|
-| `#57` | 101.9% | | `#66` | 101.9% |
-| `#59` | 101.9% | | `#67` | 101.8% |
-| `#60` | 101.9% | | `#97` | 100.8% |
-| `#61` | 101.9% | | `#98` | 99.9% |
-| `#63` | 100.1% | | **`#50`–`#53`** | **4.4%** |
+Reading the same samples by `DIFFER` percentage, which is the measure that
+answers the question:
 
-Nothing upstream loses the second eye. The entire loss is at the write into the
-swapchain image, and it is a cliff, not a decay.
+| image | fmt | take 45 (patch on) | take 46 (patch off) |
+|---|---|---|---|
+| `#57`, `#59` | 97 `RGBA16F` | DIFFER 26.5–30.1% | DIFFER 30.9–31.9% |
+| `#60`, `#61` | 83 `RG16F` | DIFFER 30.1% | DIFFER 31.8–31.9% |
+| `#63` | 13 `R8_UINT` | DIFFER 17.6% | DIFFER 8.7% |
+| `#66`, `#67` | 97, 352² | DIFFER 13.1–19.0% | **IDENTICAL** |
+| `#65` | **50 `BGRA8_SRGB`** | IDENTICAL | **IDENTICAL** |
+| `#97`, `#98` | 76 `R16_SFLOAT` | (unsettled) | **IDENTICAL** |
+| `#50`–`#53` | 44, swapchain | DIFFER, layer 1 **4.4% full** | IDENTICAL |
+
+The HDR chain is **genuinely stereo in both runs** — ~31% of pixels differ
+between the eyes, which is the per-eye camera constants (task #3) working. It
+was equally stereo in take forty-five, so `BINDLESS_PATCH` is not what creates
+the second eye upstream.
+
+Also corrected: `#97`/`#98` are **not** "the world images". In these runs they
+are `R16_SFLOAT` single-channel 1408² buffers (one of three such triples:
+`#42`–`#44`, `#84`–`#86`, `#97`–`#99`). The table at the top of this file
+assigning `#97` = `RGBA16F` is from an earlier session — **the layer's image
+serials are per-run and the older tables must not be read into newer logs.**
+Takes forty-five and forty-six happen to agree with each other.
+
+### Where the stereo actually dies: the sRGB resolve
+
+`#65` is format 50, `BGRA8_SRGB` — the tonemapped LDR image. It is
+**IDENTICAL** in both runs, while its inputs differ by ~31%. Its writers:
+
+```
+img #65 writers — masked rp [33,45] unmasked rp []
+rp #33.0: 1 colour [50L] no-depth final=2 -> MONO (all-LDR/UI) +MASKED(present)
+rp #45.0: 1 colour [50L] no-depth final=2 -> MONO (all-LDR/UI) +MASKED(present)
+```
+
+Both writers are **masked**. So the pass is replicated to both layers, runs
+twice, and writes the same pixels twice — because the draw is per-view but the
+**sampling is not**. View 1 reads view 0's source.
+
+That is the entire remaining defect, and it is one step, not a region:
+
+* patch **off** — no offset, view 1 samples view 0's source, layer 1 gets the
+  left eye. The duplicate state, `stage2-duplicate-restored`;
+* patch **on** — view 1 samples `index + 26653` and gets **black**, so the
+  swapchain's layer 1 keeps only what was drawn by unpatched passes: the HUD,
+  4.4%.
+
+### Hole #18: fill read as stereo
+
+`non-empty l1/l0` answers "does layer 1 have content", which is the right
+question for a black right eye and the wrong one for stereo. Two images that are
+bit-identical score 100% on it. The take-forty-five write-up used it to claim
+the upstream chain "carries a real second eye" and to place the loss at the
+swapchain; by `DIFFER`, `#66`/`#67`/`#97`/`#98` were already flat in take
+forty-six. `score_run.py` reports both, and grades `DUPLICATE` separately from
+`STEREO`, for exactly this reason — but the prose did not follow the tool.
 
 ### The fact that reframes the whole search
 
@@ -5478,3 +5531,63 @@ and is still in the take-forty-six configuration. The surviving candidates are
 `X4VR_STEREO` (K reaching a pipeline that draws the logo, even though no *pass*
 is misclassified) and `X4VR_BINDLESS_MIRROR` (the unsheared twin not being
 swapped into a pipeline that needs it). Task #20.
+
+## Task #20: why view 1 samples black — the template road is not mirrored
+
+The offset mechanism has two halves. `X4VR_BINDLESS_PATCH` edits fragment
+shaders so view 1 computes `index + 26653`; `X4VR_BINDLESS_MIRROR` writes the
+descriptors that live at those twin slots. If the patch fires on a slot the
+mirror never wrote, `PARTIALLY_BOUND` makes the read undefined and the driver
+returns zeros. Black.
+
+Take forty-five confirms the patch fires on exactly the passes that matter:
+
+```
+srgb-resolve rp #33: frag module #16 samples set 0 binding 7[53306] [index-offset APPLIED]
+mv final: present rp #0 <- frag module #12 samples set 0 binding 5[53306] [index-offset APPLIED]
+```
+
+So the question is whether the mirror covered those slots. Eliminating from the
+code, the twin slot can be unwritten for only three reasons:
+
+1. `g_mirror_no_room` — logged, **0**;
+2. the collision guard fired — it logs `bindless mirror: DISABLED`, **absent**;
+3. **the write never reached `bindless_mirror_writes()` at all.**
+
+Binding 5 and binding 7 are both `SAMPLED_IMAGE` with `count=53306`, so the
+type and size filters pass, and a write that arrives before an image is known to
+be doubled is copied *verbatim* — which yields a duplicate, never black. That
+leaves (3), and there is exactly one road into the descriptor table that the
+mirror does not watch:
+
+```cpp
+VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSetWithTemplate(...) {
+    if (g_bindless_survey) { ...count... }
+    d->UpdateDescriptorSetWithTemplate(device, set, tmpl, data);   // straight through
+}
+```
+
+`vkUpdateDescriptorSets` is mirrored. `vkUpdateDescriptorSetWithTemplate` is
+**counted and passed through**. Any image descriptor X4 writes through a
+template has no twin, and view 1 reading its twin slot gets zeros.
+
+The layer predicted this in its own survey output, and no run ever read it:
+
+> `%llu template updates, %llu of them via a template carrying image
+> descriptors — THE COUNTS ABOVE ARE INCOMPLETE, and a mirror hooking
+> vkUpdateDescriptorSets alone would miss these`
+
+That line is gated behind `X4VR_BINDLESS_SURVEY=1`, which was never set in any
+of takes forty-one through forty-six. The instrument that would have named this
+existed the whole time and was switched off.
+
+- **P55** — with `X4VR_BINDLESS_SURVEY=1` on the known-good command, the log
+  reports a non-zero count of template updates carrying image descriptors, and
+  prints the `bindless: update template carries image descriptors at
+  binding(s) …` line naming binding 5 and/or 7. Refuted if both counts are
+  zero, in which case the template road is dead and reason (3) is wrong — the
+  elimination above would then have no surviving candidate and the mirror's
+  coverage would need direct instrumentation instead.
+
+The run is observation-only and rides on `stage2-duplicate-restored`, so the
+screen stays good while it answers.
