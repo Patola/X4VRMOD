@@ -463,7 +463,19 @@ struct ImageInfo {
     uint32_t layers, mips, samples;
     VkImageUsageFlags usage;
     bool doubled = false;
+    // Came from vkGetSwapchainImagesKHR, not vkCreateImage. Worth carrying
+    // because the usage and layer count here are what the swapchain
+    // guarantees, not what a create info said.
+    bool swapchain = false;
 };
+// Format and extent of a swapchain, kept so its images can be registered with
+// a serial when the game asks for them.
+struct SwapchainInfo {
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    VkExtent2D extent{};
+};
+std::mutex g_sc_mu;
+std::unordered_map<VkSwapchainKHR, SwapchainInfo> g_swapchains;
 // Enough of a view's create info to rebuild it as an array view later.
 struct ViewInfo {
     VkImage image;
@@ -594,6 +606,8 @@ struct XferEdge {
 std::mutex g_xfer_mu;
 std::map<std::pair<uint32_t, uint32_t>, std::map<const char *, XferEdge>>
     g_xfer_edges;
+uint64_t g_xfer_uploads = 0;
+std::unordered_set<uint32_t> g_xfer_upload_targets;
 
 std::mutex g_comp_mu;
 std::unordered_map<VkPipeline, uint32_t> g_comp_module; // pipeline -> serial
@@ -1620,8 +1634,11 @@ void mv_report(const char *when) {
     }
     {
         std::lock_guard<std::mutex> lock(g_xfer_mu);
-        X4VR_LOG("mv %s: image transfers — %zu distinct edge(s)", when,
-                 g_xfer_edges.size());
+        X4VR_LOG("mv %s: image transfers — %zu image->image edge(s); "
+                 "%llu buffer->image upload region(s) to %zu image(s)",
+                 when, g_xfer_edges.size(),
+                 (unsigned long long)g_xfer_uploads,
+                 g_xfer_upload_targets.size());
         for (const auto &e : g_xfer_edges) {
             char src[16];
             if (e.first.first == UINT32_MAX)
@@ -3448,6 +3465,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
              ci->imageExtent.width, ci->imageExtent.height, ci->minImageCount,
              (int)ci->imageFormat, (int)ci->presentMode,
              r == VK_SUCCESS ? "ok" : "FAILED");
+    if (r == VK_SUCCESS && *out != VK_NULL_HANDLE) {
+        // Recorded from sbs_ci, not ci: that is the swapchain that actually
+        // exists, and its extent is what its images have.
+        std::lock_guard<std::mutex> lock(g_sc_mu);
+        g_swapchains[*out] = {sbs_ci.imageFormat, sbs_ci.imageExtent};
+    }
     // The injector forces res_width/res_height, but X4 only honours them when
     // borderless is off; with borderless on it sizes to the display and
     // ignores them (observed: identical config gave 2816x1408 under a
@@ -3574,6 +3597,49 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetPhysicalDeviceSurfaceCapabilitiesKHR(
 
 // X4 must see the images it will actually render into, which when the split
 // render is active are ours, not the swapchain's.
+// Give the images X4 will render the frame into a serial like any other.
+//
+// They arrive through vkGetSwapchainImagesKHR, not vkCreateImage, so they never
+// entered g_images -- and every instrument keyed by serial printed `?` for
+// them. The framebuffer log has said `fb rp #0: ... imgs=[?]` since the
+// beginning; it was noted as a gap and left, because nothing then depended on
+// naming those images.
+//
+// Take twenty-seven depended on it. "No render pass writes #100, so the merge
+// is not a draw" was reasoning over a writer list that structurally could not
+// contain the one pass that matters: rp #0 and rp #1 draw the finished frame
+// straight into these. The sentinel did not just omit information, it made a
+// false conclusion look supported.
+void register_swapchain_images(VkSwapchainKHR sc, const VkImage *images,
+                               uint32_t n, VkFormat fmt, VkExtent2D extent) {
+    if (!g_active)
+        return;
+    std::lock_guard<std::mutex> lock(g_img_mu);
+    for (uint32_t i = 0; i < n; i++) {
+        if (images[i] == VK_NULL_HANDLE || g_images.count(images[i]))
+            continue;
+        ImageInfo info{};
+        info.extent = {extent.width, extent.height, 1};
+        info.format = fmt;
+        info.layers = 1;
+        info.mips = 1;
+        info.samples = 1;
+        // Not what vkCreateImage would have reported -- it was never called.
+        // COLOR_ATTACHMENT is what the swapchain guarantees and what makes the
+        // writer list correct; anything more would be invention.
+        info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        info.doubled = false;
+        info.serial = g_img_serial++;
+        info.swapchain = true;
+        g_images[images[i]] = info;
+        if (g_mv_inventory)
+            X4VR_LOG("img #%u: %ux%u fmt=%u SWAPCHAIN (image %u of %u)",
+                     info.serial, extent.width, extent.height, (unsigned)fmt, i,
+                     n);
+    }
+    (void)sc;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetSwapchainImagesKHR(
     VkDevice device, VkSwapchainKHR sc, uint32_t *count, VkImage *images) {
     DeviceData *d;
@@ -3583,8 +3649,21 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetSwapchainImagesKHR(
     }
     const std::vector<VkImage> *eyes =
         (g_sbs_enabled && g_active) ? g_sbs.eye_images(sc) : nullptr;
-    if (!eyes)
-        return d->GetSwapchainImagesKHR(device, sc, count, images);
+    if (!eyes) {
+        const VkResult r = d->GetSwapchainImagesKHR(device, sc, count, images);
+        if (r >= 0 && images && count) {
+            SwapchainInfo si{};
+            {
+                std::lock_guard<std::mutex> lock(g_sc_mu);
+                auto it = g_swapchains.find(sc);
+                if (it != g_swapchains.end())
+                    si = it->second;
+            }
+            register_swapchain_images(sc, images, *count, si.format,
+                                      si.extent);
+        }
+        return r;
+    }
     if (!images) {
         *count = (uint32_t)eyes->size();
         return VK_SUCCESS;
@@ -3695,8 +3774,17 @@ void note_transfer(VkImage src, VkImage dst, const char *what, uint32_t n,
             t = b->second.serial;
     }
     std::lock_guard<std::mutex> lock(g_xfer_mu);
-    // Bounded: a runaway edge set would be a bug of its own, and this must not
-    // become the thing that costs the run it is meant to explain.
+    // Buffer->image is texture streaming: hundreds of distinct destinations,
+    // one per asset, and never a merge. Take twenty-seven let them share one
+    // budget with the image->image edges and they took all 256 of it, so the
+    // single edge that mattered was one line in a wall. They are counted in
+    // aggregate instead; only image->image keeps per-edge detail, and there
+    // are single digits of those.
+    if (src == VK_NULL_HANDLE) {
+        g_xfer_uploads += n;
+        g_xfer_upload_targets.insert(t);
+        return;
+    }
     if (g_xfer_edges.size() >= 256 && !g_xfer_edges.count({s, t}))
         return;
     auto &e = g_xfer_edges[{s, t}][what];

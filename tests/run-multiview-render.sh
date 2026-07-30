@@ -533,14 +533,14 @@ inv_case "compute inventory counts a dispatch" \
 inv_case "...and reports zero as a number" \
     "compute — 0 pipeline(s), 0 shader(s) dispatched" X4VR_TEST_COMPUTE=0
 inv_case "...zero transfer edges likewise" \
-    "image transfers — 0 distinct edge(s)" X4VR_TEST_BLIT=0
+    "image transfers — 0 image->image edge(s)" X4VR_TEST_BLIT=0
 # And "never measured" must not read as "measured zero". The bindless survey
 # lost a run to exactly that, so the unmeasured case gets its own assertion.
 out=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \
     "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
     X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=3 "$BIN" "$VS" "$FS" "$SF" 2>&1)
 if grep -q "not measured (needs X4VR_MV_INVENTORY=1)" <<<"$out" &&
-   ! grep -q "distinct edge(s)" <<<"$out"; then
+   ! grep -q "image->image edge(s)" <<<"$out"; then
     printf 'ok   %-38s %s\n' "...unmeasured says so, not 0" "not measured"
 else
     printf 'FAIL %-38s zero and unmeasured read alike\n' "...unmeasured says so, not 0"

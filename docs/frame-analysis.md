@@ -3470,3 +3470,77 @@ bookkeeping chain (`CreateComputePipelines` → module serial → `CmdBindPipeli
 → `CmdDispatch` → counter), and bindings would only add setup the assertion
 does not rest on. The blit goes into a throwaway image in its own submission,
 after every readback, so it cannot perturb what the suite asserts. 54 cases.
+
+## Take twenty-seven: P13 refuted, and the sentinel that made it plausible
+
+| prediction | result |
+| --- | --- |
+| **P13** the merge is a dispatch or a blit, not a draw | **refuted** |
+
+The transfer inventory found exactly **one** image→image transfer in the entire
+frame: `#95 -> #96 via vkCmdCopyImage — 1344 region(s), 1344 widened`. Nothing
+blits a finished frame anywhere. Everything else was texture streaming.
+
+The merge is a **draw**. `rp #0` and `rp #1` — `1 colour [44L] no-depth ->
+MONO (all-LDR/UI)`, the only two format-44 passes — render straight into the
+**swapchain images**.
+
+### Why elimination pointed the wrong way
+
+Those images have no serial. They arrive through `vkGetSwapchainImagesKHR`, not
+`vkCreateImage`, so they never entered `g_images`, and every instrument keyed
+by serial printed `?` for them: `fb rp #0: 1408x1408 layers=1 attachments=1
+imgs=[?]`, twenty-four times a run, since the beginning.
+
+The writer list is keyed by serial. So "**no render pass writes `#100`,
+therefore the merge is not a draw**" was reasoning over a list that
+**structurally could not contain the pass that matters**. The sentinel did not
+merely omit information — it made a false conclusion look supported, and it
+sent a whole run after compute and blits.
+
+This is the `?` sentinel from the running tally — hole #2. It was found early,
+described accurately, and *left*, because nothing at the time depended on
+naming those images. That is the twelfth hole and the first repeat: **a known
+gap, documented and unfixed, is a loaded gun.** The cost was not the run; the
+run also bought the compute and transfer inventories, which are worth having.
+The cost is that the wrong hypothesis looked confirmed by evidence.
+
+Swapchain images now get a serial at `vkGetSwapchainImagesKHR`, with `usage`
+set to `COLOR_ATTACHMENT` only — what the swapchain guarantees, rather than
+inventing a create-info that was never called.
+
+**This fix is not covered by the offline suite.** The headless tests have no
+surface and therefore no swapchain images to register; the next live run is its
+first test. Recorded rather than glossed, because "54 cases green" would
+otherwise read as though this were among them.
+
+### What compute turned out to be
+
+Not the merge, but not nothing: 18 pipelines, 6 shaders dispatched, and the
+load is real — module #362 alone ran **35,488** dispatches, #363 2,216, #364
+1,107, #187 1,314.
+
+More to the point, the honest refusal counter earned its keep on its first
+outing: **8 modules declared a mirrorable table and refused the patch, 6 of
+them compute.** Under the old fragment-only check that number was 0. Six
+compute shaders sample the 53306-entry heap and cannot be made per-view by this
+mechanism, because `gl_ViewIndex` does not exist in a dispatch. Two
+*non*-compute refusals also showed up, which the old counter would have hidden
+too and which are worth chasing separately.
+
+The upload/edge split has been fixed as well: buffer→image destinations are
+hundreds of distinct assets and they consumed all 256 slots of a budget shared
+with the edges that mattered. They are now aggregated, and only image→image
+keeps per-edge detail — of which there are single digits.
+
+### Task #5 is now a specific question
+
+`rp #0` and `rp #1` draw into single-layer swapchain images and are classified
+`MONO`. That is where stereo dies, and it is exactly what task #5 has always
+been: carry the difference through the format-44 chain to the screen. The
+difference now exists upstream — `#104`, `#105`, `#122`, `#123` are genuinely
+per-eye — and the last pass throws it away by construction.
+
+- **P14** — with swapchain images registered, `fb rp #0` and `fb rp #1` name a
+  real image, and that image appears in the writer list as written by an
+  unmasked pass.
