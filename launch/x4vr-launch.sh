@@ -76,6 +76,12 @@
 #                         known rather than guessed. Answers "are the two
 #                         layers the same bytes" as a number instead of as an
 #                         inference from what appeared on screen.
+#   X4VR_MV_DUMP=PREFIX   write PREFIX-imgN-layer{0,1}.ppm for a probed image.
+#                         Half-float and 8-bit BGRA/RGBA both.
+#   X4VR_MV_DUMP_IMG=N    dump image #N specifically, whether or not its two
+#                         layers differ. Without it the dump goes to the first
+#                         image that DIFFERs, which cannot answer "why is this
+#                         one the same?" -- the question that costs runs.
 #   X4VR_STEREO=1         bake BOTH eyes into every world vertex shader and
 #                         let gl_ViewIndex pick, so one multiview draw
 #                         produces two different eyes. Uses the same
