@@ -17,6 +17,8 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vk_layer.h>
 
+#include <dlfcn.h>
+
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -304,10 +306,14 @@ bool g_active = false;
 std::mutex g_queue_mu;
 std::unordered_map<VkQueue, uint32_t> g_queue_family;
 
-// Surfaces whose capabilities we reported at half width. Doubling the extent
-// back at swapchain creation is only correct for exactly these -- a surface
-// with an undefined currentExtent was never halved, and doubling it would
-// silently make the swapchain twice the size the app asked for.
+// Surfaces whose capabilities we reported at half width.
+//
+// This began as the halve/double pairing: only a surface recorded here could
+// have its extent doubled back at swapchain creation. That reasoning is gone
+// -- the split test now keys off the extent X4 actually requests, so it holds
+// whichever lever moved it -- and what survives is a "have we said this yet"
+// set for the log. Recorded because a set that no longer means what its name
+// says is how a stale invariant gets read as a live one.
 std::mutex g_surface_mu;
 std::unordered_map<VkSurfaceKHR, bool> g_halved_surfaces;
 
@@ -321,9 +327,80 @@ void forget_halved_surface(VkSurfaceKHR s) {
     g_halved_surfaces.erase(s);
 }
 
-bool surface_was_halved(VkSurfaceKHR s) {
+// Which WSI actually built each surface.
+//
+// The layer used to infer the display server from currentExtent ==
+// 0xFFFFFFFF and print "this is the Wayland WSI". That is a sentinel, not a
+// measurement: it says the surface declines to state a size, and the Wayland
+// WSI is merely the one we *know* does that. Take thirty-three then produced
+// the sentinel from X4's own pid while the launcher was forcing
+// SDL_VIDEO_DRIVER=x11 -- so either the forcing did not take or the inference
+// was wrong, and no line in the log could tell those apart. Record the entry
+// point that was called instead of deducing it from a value.
+//
+// "unknown" is a real answer and is printed as such: a surface can also come
+// from a WSI we do not hook (headless, display-plane, a platform added
+// later), and silence there would read as Wayland by elimination.
+std::unordered_map<VkSurfaceKHR, const char *> g_surface_wsi;
+
+void note_surface_wsi(VkSurfaceKHR s, const char *wsi) {
     std::lock_guard<std::mutex> lock(g_surface_mu);
-    return g_halved_surfaces.count(s) > 0;
+    g_surface_wsi[s] = wsi;
+}
+
+// Surfaces are destroyed and their handles reused, exactly as swapchain
+// images were in take thirty. Forget on destroy so a later surface cannot
+// inherit this one's platform.
+void forget_surface(VkSurfaceKHR s) {
+    std::lock_guard<std::mutex> lock(g_surface_mu);
+    g_surface_wsi.erase(s);
+    g_halved_surfaces.erase(s);
+}
+
+const char *surface_wsi(VkSurfaceKHR s) {
+    std::lock_guard<std::mutex> lock(g_surface_mu);
+    auto it = g_surface_wsi.find(s);
+    return it == g_surface_wsi.end() ? "unknown" : it->second;
+}
+
+// Ask SDL which backend it chose, and what it thinks the driver hint says.
+//
+// Read-only, via dlsym on symbols that are already loaded -- deliberately not
+// an LD_PRELOAD interposition. SDL2 and SDL3 disagree about the signature of
+// SDL_CreateWindow, and gamescope (SDL2) shares this process tree with X4
+// (SDL3), so *defining* an SDL symbol here would risk calling one through the
+// other's prototype. Calling an already-resolved symbol cannot do that.
+//
+// SDL_GetCurrentVideoDriver() only answers once video is initialised, so this
+// is called from surface creation -- by which point a window exists -- rather
+// than from vkCreateInstance.
+void log_sdl_backend_once() {
+    static std::atomic<bool> done{false};
+    if (done.exchange(true))
+        return;
+    using driver_fn = const char *(*)();
+    using hint_fn = const char *(*)(const char *);
+    driver_fn cur = nullptr;
+    hint_fn hint = nullptr;
+    void *p = dlsym(RTLD_DEFAULT, "SDL_GetCurrentVideoDriver");
+    memcpy(&cur, &p, sizeof(cur));
+    p = dlsym(RTLD_DEFAULT, "SDL_GetHint");
+    memcpy(&hint, &p, sizeof(hint));
+    if (!cur) {
+        X4VR_LOG("wsi: SDL is not loaded in pid %d — the surface came from "
+                 "somewhere else",
+                 (int)getpid());
+        return;
+    }
+    const char *d = cur();
+    // SDL_HINT_VIDEO_DRIVER is spelled "SDL_VIDEO_DRIVER"; SDL2 read
+    // "SDL_VIDEODRIVER". The effective value is what SDL_GetHint returns,
+    // which already resolves the environment-versus-SDL_SetHint precedence we
+    // would otherwise have to reason about.
+    const char *h = hint ? hint("SDL_VIDEO_DRIVER") : nullptr;
+    X4VR_LOG("wsi: SDL_GetCurrentVideoDriver()=%s hint SDL_VIDEO_DRIVER=%s "
+             "(pid %d)",
+             d ? d : "(null)", h ? h : "(unset)", (int)getpid());
 }
 
 bool queue_family_of(VkQueue q, uint32_t &out) {
@@ -3718,6 +3795,101 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroySwapchainKHR(
     d->DestroySwapchainKHR(device, sc, ac);
 }
 
+// ------------------------------------------------------------- WSI probes
+//
+// The three surface constructors, hooked only to record which one X4 called.
+// The create-info structs are declared here rather than pulled in from
+// wayland-client.h / xcb.h / Xlib.h: the layer would otherwise gain three
+// build dependencies to read one integer. Their layouts are fixed by the
+// Vulkan spec, and only the trailing window handle is ever read.
+struct X4vrXcbSurfaceCreateInfo {
+    VkStructureType sType;
+    const void *pNext;
+    uint32_t flags;
+    void *connection;
+    uint32_t window; // xcb_window_t
+};
+struct X4vrXlibSurfaceCreateInfo {
+    VkStructureType sType;
+    const void *pNext;
+    uint32_t flags;
+    void *dpy;
+    unsigned long window; // Window (XID)
+};
+
+using PFN_x4vrCreateSurface = VkResult(VKAPI_PTR *)(
+    VkInstance, const void *, const VkAllocationCallbacks *, VkSurfaceKHR *);
+
+// `window` is the X11 window id where there is one; kNoWindow means the
+// platform has no such handle (Wayland), which is printed rather than
+// silently omitted so the two cases stay distinguishable in the log.
+constexpr unsigned long kNoWindow = ~0UL;
+
+VkResult create_surface_observed(VkInstance instance, const char *entry,
+                                 const char *wsi, const void *ci,
+                                 const VkAllocationCallbacks *ac,
+                                 VkSurfaceKHR *out, unsigned long window) {
+    PFN_x4vrCreateSurface next = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        auto it = g_instances.find(dispatch_key(instance));
+        if (it == g_instances.end())
+            return VK_ERROR_INITIALIZATION_FAILED;
+        next = (PFN_x4vrCreateSurface)it->second.gipa(instance, entry);
+    }
+    if (!next)
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
+    VkResult r = next(instance, ci, ac, out);
+    if (r != VK_SUCCESS || !out)
+        return r;
+    note_surface_wsi(*out, wsi);
+    if (window == kNoWindow)
+        X4VR_LOG("wsi: surface created via %s (pid %d)", entry, (int)getpid());
+    else
+        X4VR_LOG("wsi: surface created via %s, window 0x%lx (pid %d)", entry,
+                 window, (int)getpid());
+    log_sdl_backend_once();
+    return r;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateWaylandSurfaceKHR(
+    VkInstance instance, const void *ci, const VkAllocationCallbacks *ac,
+    VkSurfaceKHR *out) {
+    return create_surface_observed(instance, "vkCreateWaylandSurfaceKHR",
+                                   "wayland", ci, ac, out, kNoWindow);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateXcbSurfaceKHR(
+    VkInstance instance, const void *ci, const VkAllocationCallbacks *ac,
+    VkSurfaceKHR *out) {
+    const auto *info = (const X4vrXcbSurfaceCreateInfo *)ci;
+    return create_surface_observed(instance, "vkCreateXcbSurfaceKHR", "xcb", ci,
+                                   ac, out, info ? info->window : kNoWindow);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateXlibSurfaceKHR(
+    VkInstance instance, const void *ci, const VkAllocationCallbacks *ac,
+    VkSurfaceKHR *out) {
+    const auto *info = (const X4vrXlibSurfaceCreateInfo *)ci;
+    return create_surface_observed(instance, "vkCreateXlibSurfaceKHR", "xlib",
+                                   ci, ac, out, info ? info->window : kNoWindow);
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_DestroySurfaceKHR(
+    VkInstance instance, VkSurfaceKHR surface, const VkAllocationCallbacks *ac) {
+    PFN_vkDestroySurfaceKHR next = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        auto it = g_instances.find(dispatch_key(instance));
+        if (it != g_instances.end())
+            next = (PFN_vkDestroySurfaceKHR)it->second.gipa(
+                instance, "vkDestroySurfaceKHR");
+    }
+    forget_surface(surface);
+    if (next)
+        next(instance, surface, ac);
+}
+
 // X4 sizes its whole pipeline from the surface's currentExtent -- that is
 // exactly why it ignores res_width/res_height while borderless. Reporting
 // half the width therefore makes it render one eye's worth *natively*:
@@ -3758,11 +3930,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetPhysicalDeviceSurfaceCapabilitiesKHR(
         // gamescope's own -- which is the difference between "force the driver"
         // and "nothing is wrong here".
         X4VR_LOG("sbs: surface caps currentExtent=%ux%u min=%ux%u max=%ux%u "
-                 "(pid %d)",
+                 "wsi=%s (pid %d)",
                  caps->currentExtent.width, caps->currentExtent.height,
                  caps->minImageExtent.width, caps->minImageExtent.height,
                  caps->maxImageExtent.width, caps->maxImageExtent.height,
-                 (int)getpid());
+                 surface_wsi(surface), (int)getpid());
     }
     if (was == 0xFFFFFFFFu || was < 2) {
         forget_halved_surface(surface);
@@ -3770,14 +3942,14 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetPhysicalDeviceSurfaceCapabilitiesKHR(
         if (!told) {
             told = true;
             X4VR_LOG("sbs: surface reports no preferred extent "
-                     "(currentExtent=0x%X) — this is the Wayland WSI. The "
-                     "config's res_width still brings X4 to the eye size, but "
-                     "on Wayland the buffer *is* the surface: presenting the "
-                     "full-width image resizes the window, X4 follows, and "
-                     "the split collapses to duplicating the left half. Force "
-                     "the X11 driver — X4 links SDL3, so the variable is "
-                     "SDL_VIDEO_DRIVER=x11 (SDL2 spells it SDL_VIDEODRIVER).",
-                     was);
+                     "(currentExtent=0x%X), wsi=%s. There is nothing to halve, "
+                     "so the layer's surface lever is inert and only the "
+                     "config's res_width sizes X4. On Wayland the buffer *is* "
+                     "the surface, so presenting a full-width image makes the "
+                     "surface full width while X4 still believes it owns the "
+                     "eye — that gap is the input offset measured in take "
+                     "thirty-three, not a thing to paper over here.",
+                     was, surface_wsi(surface));
         }
         return r;
     }
@@ -5102,6 +5274,14 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateInstance(
     g_active = app_is_target(app);
     X4VR_LOG("instance created (app=%s)%s", app ? app : "?",
              g_active ? "" : " — not the game, layer inert in this process");
+    // Which WSIs this process could possibly use. If a surface later reports
+    // no preferred extent and only one *_surface extension is enabled, the
+    // platform follows without any inference at all.
+    for (uint32_t i = 0; i < ci->enabledExtensionCount; i++) {
+        const char *e = ci->ppEnabledExtensionNames[i];
+        if (strstr(e, "_surface"))
+            X4VR_LOG("wsi: instance enables %s (pid %d)", e, (int)getpid());
+    }
     return VK_SUCCESS;
 }
 
@@ -5528,6 +5708,29 @@ PFN_vkVoidFunction find_hook(const char *name) {
     return nullptr;
 }
 
+// Hooked only when the chain below really has them.
+//
+// An app is entitled to pick its backend by asking for
+// vkCreateWaylandSurfaceKHR and taking the null answer as "no Wayland here".
+// Returning our own pointer unconditionally would hand it a Wayland it cannot
+// use, and would do so *because we were watching* — an instrument that
+// changes the thing it measures. Kept out of kHooks so the lookup can be
+// conditioned on the real one existing; see x4vr_GetInstanceProcAddr.
+const NameFunc kSurfaceHooks[] = {
+    {"vkCreateWaylandSurfaceKHR",
+     (PFN_vkVoidFunction)x4vr_CreateWaylandSurfaceKHR},
+    {"vkCreateXcbSurfaceKHR", (PFN_vkVoidFunction)x4vr_CreateXcbSurfaceKHR},
+    {"vkCreateXlibSurfaceKHR", (PFN_vkVoidFunction)x4vr_CreateXlibSurfaceKHR},
+    {"vkDestroySurfaceKHR", (PFN_vkVoidFunction)x4vr_DestroySurfaceKHR},
+};
+
+PFN_vkVoidFunction find_surface_hook(const char *name) {
+    for (const auto &h : kSurfaceHooks)
+        if (!strcmp(name, h.name))
+            return h.fn;
+    return nullptr;
+}
+
 } // namespace
 
 extern "C" {
@@ -5545,11 +5748,20 @@ x4vr_GetInstanceProcAddr(VkInstance instance, const char *name) {
         return fn;
     if (instance == VK_NULL_HANDLE)
         return nullptr;
-    std::lock_guard<std::mutex> lock(g_mu);
-    auto it = g_instances.find(dispatch_key(instance));
-    if (it == g_instances.end())
-        return nullptr;
-    return it->second.gipa(instance, name);
+    PFN_vkVoidFunction real;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        auto it = g_instances.find(dispatch_key(instance));
+        if (it == g_instances.end())
+            return nullptr;
+        real = it->second.gipa(instance, name);
+    }
+    // Only shadow a surface constructor the chain below actually provides:
+    // a null answer here is load-bearing information for the app.
+    if (real)
+        if (PFN_vkVoidFunction fn = find_surface_hook(name))
+            return fn;
+    return real;
 }
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL

@@ -4423,3 +4423,119 @@ to agree — X4's window, its render, and the composite — and only two of them
 currently chosen together. Deferred to a fresh session rather than designed at
 the end of this one; the measurement is what mattered here and it is now on
 record.
+
+## Task #18: which display server is X4 actually on
+
+The deferral above named three extents and asked which of them to move. Reading
+take thirty-three's log to answer that turned up something that changes the
+question, and it was sitting in a line we had already printed:
+
+```
+[498556.958] inject  injector loaded into pid 3355800 (/usr/bin/env)
+[498556.967] inject  injector loaded into pid 3355800 (…/X4 Foundations/X4)
+[498558.751] layer   sbs: surface caps currentExtent=4294967295x4294967295 … (pid 3355800)
+```
+
+`env` exec'd X4, so pid 3355800 **is** X4, and X4's surface reports no preferred
+extent. The launcher had passed `env -u WAYLAND_DISPLAY SDL_VIDEODRIVER=x11
+SDL_VIDEO_DRIVER=x11`, and the comment explaining why says, in the same file,
+that clearing `WAYLAND_DISPLAY` is not enough because SDL's Wayland backend
+connects to the default socket anyway. That is a failure mode we predicted in
+writing and then assumed away.
+
+Three consequences, each load-bearing:
+
+1. **The layer's halving lever never fires.** `x4vr_GetPhysicalDeviceSurface-
+   CapabilitiesKHR` returns early on `0xFFFFFFFF`. Only `res_width` +
+   `borderless=false` sizes X4. Every comment reading "force the X11 driver"
+   describes a fix that did not take.
+2. **The buffer is the surface.** We present 2816-wide images on a surface X4
+   believes is 1408 wide, so the surface *is* 2816 and X4 was never told. That
+   is the disagreement, stated exactly — not three vague extents but one lie
+   with a known size.
+3. **gamescope may be contributing nothing.** It has no `--expose-wayland`, so
+   it accepts X11 clients only. A Wayland X4 is a client of the host session,
+   outside gamescope entirely, and `--force-grab-cursor` never applied to it.
+   Hypothesis, with a one-run falsifier: drop gamescope and see if anything
+   changes.
+
+### The hole this exposes
+
+`currentExtent == 0xFFFFFFFF` is a **sentinel, not a measurement**. It says the
+surface declines to state a size; the Wayland WSI is merely the one we *know*
+does that. The log printed "this is the Wayland WSI" as a conclusion, and for
+three takes it was read as one. The same line could not distinguish *the
+environment did not arrive*, *X4 overrode it*, and *SDL fell back*.
+
+This is the fourth of its family, and the first where the instrument was not
+bounded but **inferential**: not a cap reported as a census (holes #11–#13), and
+not a measurement that existed and went unread (take thirty-one), but a
+deduction printed in the voice of an observation. The tell is the same each
+time — a line that states a fact the code was never in a position to know.
+
+### What was built
+
+*Layer.* Hooks on `vkCreateWaylandSurfaceKHR` / `vkCreateXcbSurfaceKHR` /
+`vkCreateXlibSurfaceKHR`, recording the entry point that built each surface;
+`vkDestroySurfaceKHR` forgets it, because surface handles are recycled exactly
+as swapchain image handles were in take thirty. The caps line now carries
+`wsi=…`, and `unknown` is a real answer it will print — a surface can come from
+a platform we do not hook, and silence there would read as Wayland by
+elimination. `vkCreateInstance` lists the `*_surface` extensions the process
+enabled.
+
+*The hooks are gated.* An app may choose its backend by asking for
+`vkCreateWaylandSurfaceKHR` and reading the null, and X4 is on exactly that
+path. Returning our own pointer for a WSI the loader does not offer would make
+the game take a different branch **because we were watching**. So these live
+outside `kHooks` and are returned only when the chain below resolves the name.
+The differential test — same binary, layer on and off, same answers — showed the
+hazard is real rather than theoretical: with only `VK_KHR_surface` enabled the
+loader answers null for all three constructors and non-null for
+`vkDestroySurfaceKHR`.
+
+*Layer, read-only.* `SDL_GetCurrentVideoDriver()` and `SDL_GetHint("SDL_VIDEO_-
+DRIVER")` via `dlsym`, called at surface creation (video is initialised by
+then). Deliberately not an `LD_PRELOAD` interposition: gamescope is SDL2 and X4
+is SDL3, they disagree about `SDL_CreateWindow`'s signature, and defining an SDL
+symbol here could call one through the other's prototype. Calling an
+already-resolved symbol cannot.
+
+*Injector.* The watched environment as X4 received it, plus `/proc/self/cmdline`
+for launch options outside the launcher's view; and `setenv`/`putenv`/`unsetenv`
+interposed, because nothing else can see a write that happens after our
+constructor ran. X4's binary contains the string `x11,wayland` next to
+`SDL_VIDEO_DRIVER` and `SDL_GetCurrentVideoDriver`, so it plausibly sets its own
+preference list — and in SDL the environment beats a normal-priority
+`SDL_SetHint` but not an override, which is the difference between "the launcher
+can win by exporting a value" and "it cannot".
+
+### Predictions, before the run
+
+- **P24** — X4's surface is created by `vkCreateWaylandSurfaceKHR`. If it is
+  xcb or xlib instead, then `0xFFFFFFFF` is not the Wayland signature the code
+  has assumed throughout, and the sizing comments are wrong in a second and
+  larger way.
+- **P25** — `SDL_GetCurrentVideoDriver()` returns `wayland` in X4's pid, and
+  the `SDL_VIDEO_DRIVER` hint reads `x11,wayland` rather than the `x11` the
+  launcher exported. If the hint reads `x11` while the driver is `wayland`,
+  then x11 was *tried and failed*, which is a different repair — fix the X
+  display X4 is given, not the preference.
+- **P26** — the startup dump shows `SDL_VIDEO_DRIVER=x11` and
+  `WAYLAND_DISPLAY=(unset)`, i.e. the environment we composed did arrive, and
+  no `setenv` line follows. If instead `WAYLAND_DISPLAY` is set, the launcher's
+  `env -u` is not reaching X4 and the whole diagnosis is a launcher bug.
+
+P24 and P25 are independent: the first says what X4 ended up on, the second says
+why. Confirming one does not license the other — the mistake made with P22,
+where a single measurement sat at the fixed point of two models and was read as
+confirming the one already believed.
+
+### What this does not settle
+
+X4's *believed* window size still has no direct instrument. It is inferable —
+the swapchain extent X4 requests is 1408, the surface we present is 2816 — and
+that inference is exactly the kind this section is about, so it is written down
+as an inference. A direct reading would mean interposing `SDL_GetWindowSize`,
+which is the SDL2/SDL3 signature hazard again; deferred unless P24–P26 leave the
+question open.

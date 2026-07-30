@@ -47,8 +47,38 @@ int main(int argc, char **argv) {
     VkInstanceCreateInfo ici{};
     ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     ici.pApplicationInfo = &app;
+    // VK_KHR_surface, so the layer's "which WSIs could this process use" line
+    // has something to report. It is loader-implemented and needs no display,
+    // so this stays a headless test -- but if a system somehow lacks it, fall
+    // back to no extensions rather than failing every case in the file.
+    const char *surf_ext = "VK_KHR_surface";
+    ici.enabledExtensionCount = 1;
+    ici.ppEnabledExtensionNames = &surf_ext;
     VkInstance inst;
-    CHECK(vkCreateInstance(&ici, nullptr, &inst));
+    if (vkCreateInstance(&ici, nullptr, &inst) != VK_SUCCESS) {
+        ici.enabledExtensionCount = 0;
+        ici.ppEnabledExtensionNames = nullptr;
+        CHECK(vkCreateInstance(&ici, nullptr, &inst));
+    }
+
+    // What vkGetInstanceProcAddr answers for the surface constructors.
+    //
+    // The layer hooks these to record which WSI built a surface, and an app is
+    // entitled to choose its backend by asking for one and reading the null.
+    // So the answer must be byte-for-byte what it would be without us: the
+    // run-multiview-render.sh case compares these lines with the layer on and
+    // off. The bogus name is the control -- if the loader answered everything
+    // the comparison would pass while proving nothing.
+    {
+        static const char *const kNames[] = {
+            "vkCreateWaylandSurfaceKHR", "vkCreateXcbSurfaceKHR",
+            "vkCreateXlibSurfaceKHR",    "vkDestroySurfaceKHR",
+            "vkNoSuchFunctionX4VR",
+        };
+        for (const char *name : kNames)
+            printf("GIPA_%s=%d\n", name,
+                   vkGetInstanceProcAddr(inst, name) ? 1 : 0);
+    }
 
     uint32_t n = 0;
     CHECK(vkEnumeratePhysicalDevices(inst, &n, nullptr));

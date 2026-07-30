@@ -784,6 +784,53 @@ else
     fails=$((fails + 1))
 fi
 
+# The WSI probe must not change what it observes.
+#
+# The layer hooks vkCreateWaylandSurfaceKHR and friends to record which
+# platform built a surface. An app may legitimately pick its backend by asking
+# for one of these and treating a null answer as "not available here" -- X4 is
+# on exactly that path -- so shadowing one the driver does not have would make
+# the game take a different branch *because* we were watching. The guard is a
+# differential: the same binary, with the layer on and off, must give the same
+# answers.
+gipa_off=$(env X4VR_LOG= "$BIN" "$VS" "$FS" "$SF" 2>&1 | grep '^GIPA_')
+gipa_on=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \
+    "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" X4VR_LOG= X4VR_MV=1 \
+    "$BIN" "$VS" "$FS" "$SF" 2>&1 | grep '^GIPA_')
+if [[ -n "$gipa_off" && "$gipa_on" == "$gipa_off" ]]; then
+    printf 'ok   %-38s %s\n' "WSI hooks do not perturb gipa" \
+        "$(tr '\n' ' ' <<<"$gipa_on")"
+else
+    printf 'FAIL %-38s layer changes the answer\n  off: %s\n  on:  %s\n' \
+        "WSI hooks do not perturb gipa" "${gipa_off:-ABSENT}" \
+        "${gipa_on:-ABSENT}"
+    fails=$((fails + 1))
+fi
+
+# ...and the control, without which the case above passes on a loader that
+# answers every name: a function that does not exist must resolve to null.
+if grep -qx 'GIPA_vkNoSuchFunctionX4VR=0' <<<"$gipa_on"; then
+    printf 'ok   %-38s %s\n' "gipa still returns null for absent fns" \
+        "GIPA_vkNoSuchFunctionX4VR=0"
+else
+    printf 'FAIL %-38s want GIPA_vkNoSuchFunctionX4VR=0, got "%s"\n' \
+        "gipa still returns null for absent fns" \
+        "$(grep 'NoSuchFunction' <<<"$gipa_on" || echo ABSENT)"
+    fails=$((fails + 1))
+fi
+
+# The WSIs a process could use are read off the instance, not guessed. This
+# harness enables VK_KHR_surface and nothing else, so exactly that must be
+# reported -- the point being that the list comes from
+# ppEnabledExtensionNames and not from whatever the log's author assumed.
+#
+# The per-surface platform line (wsi=wayland|xcb|xlib|unknown) cannot be
+# exercised here: it needs a real surface, and this test is headless. That
+# gap is deliberate and named rather than papered over -- it is only ever
+# read from a live run.
+inv_case "instance surface extensions are listed" \
+    "wsi: instance enables VK_KHR_surface"
+
 echo
 if (( fails )); then echo "$fails case(s) failed"; exit 1; fi
 echo "all cases passed"

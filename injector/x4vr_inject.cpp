@@ -145,6 +145,47 @@ std::string redirect_write(const char *path) {
     return prof.path;
 }
 
+// ------------------------------------------------------- the environment
+//
+// The launcher composes an environment for X4 and has never checked that X4
+// received it. Take thirty-three came up on a Wayland surface while the
+// launcher was passing `env -u WAYLAND_DISPLAY SDL_VIDEO_DRIVER=x11`, and
+// nothing in the log distinguished "the environment did not arrive" from "X4
+// overrode it" from "SDL fell back". These two hooks separate those: the
+// startup dump is what arrived, the setenv/putenv watch is what changed after.
+const char *const kWatchedEnv[] = {
+    "SDL_VIDEODRIVER", "SDL_VIDEO_DRIVER", "WAYLAND_DISPLAY",
+    "DISPLAY",         "XDG_SESSION_TYPE",
+};
+
+bool is_watched_env(const char *name, size_t len) {
+    for (const char *w : kWatchedEnv)
+        if (strlen(w) == len && !strncmp(name, w, len))
+            return true;
+    return false;
+}
+
+// Only the game, not the dozen shell utilities the launcher runs on the way.
+bool exe_is_game(const char *exe) {
+    const char *slash = strrchr(exe, '/');
+    return slash && !strcmp(slash + 1, "X4");
+}
+
+void log_startup_env() {
+    for (const char *w : kWatchedEnv) {
+        const char *v = getenv(w);
+        X4VR_LOG("env: %s=%s", w, v ? v : "(unset)");
+    }
+    // argv, for the command-line switches that pick a backend
+    // (-prefer-wayland and friends): the launcher does not add them, but the
+    // Steam launch options are outside its view entirely.
+    std::string cmd = x4vr::read_file("/proc/self/cmdline");
+    for (auto &c : cmd)
+        if (c == '\0')
+            c = ' ';
+    X4VR_LOG("env: argv = %s", cmd.c_str());
+}
+
 template <typename T>
 T real(const char *name) {
     static_assert(sizeof(T) == sizeof(void *), "fn ptr size");
@@ -164,6 +205,46 @@ __attribute__((constructor)) static void x4vr_inject_init() {
     if (n > 0)
         exe[n] = 0;
     X4VR_LOG("injector loaded into pid %d (%s)", getpid(), exe);
+    if (exe_is_game(exe))
+        log_startup_env();
+}
+
+// X4 sets SDL_VIDEO_DRIVER itself -- the string "x11,wayland" is in the
+// binary, next to SDL_VIDEO_DRIVER and SDL_GetCurrentVideoDriver. Whether it
+// arrives through the environment or through SDL_SetHint decides whether the
+// launcher can win by exporting a value at all, so watch the environment path
+// here; the SDL path is read from the layer via SDL_GetHint.
+//
+// Interposed rather than merely observed for one reason: nothing else can see
+// a write that happens after our constructor ran.
+// No null guards on the arguments: glibc declares all three nonnull, so a
+// check here is dead code the compiler is entitled to delete, and -Wnonnull
+// -compare says so. A caller passing null is already in undefined behaviour
+// before it reaches us.
+int setenv(const char *name, const char *value, int overwrite) {
+    static auto real_setenv =
+        real<int (*)(const char *, const char *, int)>("setenv");
+    if (is_watched_env(name, strlen(name)))
+        X4VR_LOG("env: setenv(%s=%s, overwrite=%d) by pid %d", name, value,
+                 overwrite, getpid());
+    return real_setenv(name, value, overwrite);
+}
+
+int unsetenv(const char *name) {
+    static auto real_unsetenv = real<int (*)(const char *)>("unsetenv");
+    if (is_watched_env(name, strlen(name)))
+        X4VR_LOG("env: unsetenv(%s) by pid %d", name, getpid());
+    return real_unsetenv(name);
+}
+
+// putenv takes "NAME=VALUE" in one string, so the name has to be split off
+// before it can be matched.
+int putenv(char *s) {
+    static auto real_putenv = real<int (*)(char *)>("putenv");
+    const char *eq = strchr(s, '=');
+    if (eq && is_watched_env(s, (size_t)(eq - s)))
+        X4VR_LOG("env: putenv(%s) by pid %d", s, getpid());
+    return real_putenv(s);
 }
 
 int open(const char *path, int flags, ...) {
