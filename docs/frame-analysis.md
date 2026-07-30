@@ -5266,3 +5266,39 @@ Established and not in doubt:
 
 What is missing is a knob subset, and that is a finite search over a stable
 system, scored mechanically. See `docs/bisection-plan.md`.
+
+## Bisection run B1: the prediction, and the argument against running it
+
+Committed before the run, as the rule requires.
+
+B1 drops `X4VR_MASK_TONEMAP` and `X4VR_MASK_LDR` from the take-forty-four
+command and changes nothing else.
+
+**The code argues B1 will fail.** "Masking" adds a pass to the multiview set —
+`classify_per_eye()` ORs the three mask predicates into `per_eye`, and a pass
+that is not per-eye gets `viewMask` 0 and writes layer 0 only. The comment
+written for task #4 states the consequence directly: the tonemap is a
+fullscreen triangle, so K must not be applied to it, "but it must be masked, or
+there is no second layer of #103 for a per-eye tonemap to write." If that model
+of the chain is right, dropping `MASK_TONEMAP` cannot fill layer 1 of the
+present target — it removes the only thing writing layer 1 upstream of it, and
+the ratio should fall *below* take forty-four's 4–5% rather than rise.
+
+It is run first anyway, for two reasons. The claim above is reasoning, and in
+this project reasoning has lost to measurement four times running, each loss
+costing more than the run would have. And B1 is the only run in the set that
+tests the plan's actual premise — that take thirty-three predates both knobs —
+rather than testing a mechanism.
+
+- **P51** — B1 fails, with layer 1 at or below take forty-four's 4.8% on `#50`.
+  Confirmed only if it also *falls*; a flat 4–5% means the tonemap mask was
+  never contributing to layer 1 either, and the chain model above is wrong in a
+  way that matters more than B1's verdict.
+- **P52** — the masked tally is `present=1` and nothing else. Any `tonemap=` or
+  `ldr=` line means a knob is set that the command did not set, and the run is
+  void rather than informative.
+
+If P51 is confirmed the interesting run is **B3** (drop `BINDLESS_PATCH`), not
+B2: B2 restores a knob whose removal B1 will have just shown to be harmful,
+which is a return to the take-forty-four configuration minus `MASK_LDR` — a
+configuration take forty-three already scored.
