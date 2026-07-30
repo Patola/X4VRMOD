@@ -205,6 +205,12 @@
 #                         through X4VR_LOG.
 #   X4VR_NO_LAYER=1       skip the Vulkan layer
 #   X4VR_NO_INJECT=1      skip the LD_PRELOAD injector
+#   X4VR_TAKE=<label>     a name for this run. Means nothing to the code; the
+#                         injector prints it with every other X4VR_* variable
+#                         as one copy-pasteable "env: run = ..." line, so a
+#                         log segment says which configuration produced it
+#                         instead of having to be reverse-engineered from
+#                         which features left traces.
 #
 # Notes:
 #   * core dumps are enabled (ulimit -c unlimited) in direct mode.

@@ -27,6 +27,8 @@
 #include <cstdlib>
 #include <string>
 
+extern char **environ;
+
 #define X4VR_LOG_TAG "inject"
 #include "../common/x4vr_log.hpp"
 #include "x4vr_config.hpp"
@@ -176,6 +178,22 @@ void log_startup_env() {
         const char *v = getenv(w);
         X4VR_LOG("env: %s=%s", w, v ? v : "(unset)");
     }
+    // Every X4VR_* knob, in one copy-pasteable line.
+    //
+    // Runs have been referred to by take number for thirty-three takes and
+    // the command that produced each one was never written down, so
+    // reproducing an earlier configuration meant reconstructing it from what
+    // the log happened to reveal. Since every knob is an environment
+    // variable, listing them *is* the command. X4VR_TAKE is an ordinary
+    // variable with no meaning to the code -- it exists only to be printed
+    // here, so a run can carry its own name.
+    std::string run;
+    for (char **e = environ; e && *e; e++)
+        if (!strncmp(*e, "X4VR_", 5)) {
+            run += ' ';
+            run += *e;
+        }
+    X4VR_LOG("env: run =%s ./launch/x4vr-launch.sh", run.c_str());
     // argv, for the command-line switches that pick a backend
     // (-prefer-wayland and friends): the launcher does not add them, but the
     // Steam launch options are outside its view entirely.
