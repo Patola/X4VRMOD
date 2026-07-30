@@ -29,6 +29,7 @@
 // the module untouched) on anything it does not fully understand.
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <unordered_map>
@@ -1341,7 +1342,24 @@ inline bool patch_fragment_index_offset(std::vector<uint32_t> &code,
     // images or sampled images. A plain texture is refused because there is no
     // index to offset -- and because that is the shape the abandoned approach
     // handled, so silently accepting it here would resurrect it.
-    uint32_t target_var = 0;
+    // EVERY variable at (set, binding), not the first one.
+    //
+    // Take forty-eight: this used to `break` at the first match, and X4's
+    // present shader (module #12, the pass that composites into the swapchain)
+    // declares *two* variables on set 0 binding 5 -- `S_sampler2D_AUTOMS`,
+    // indexed by a literal, and `S_sampler2D`, indexed from the dynamic block.
+    // Aliasing one binding with two variables is legal and X4 does it in 228 of
+    // 409 dumped modules.
+    //
+    // The caller iterates tables, so it called this twice with the *same*
+    // (set, binding). With the break, both calls targeted the same variable:
+    // the first was offset twice -- index + 53306, past the end of a
+    // 53306-element array, which reads as undefined and comes back black -- and
+    // the second was never patched at all, so its view 1 stayed on view 0's
+    // slot. That is the black right eye, and it is why the passes declaring one
+    // variable per binding (rp #33 on binding 7) were visibly stereo in the
+    // same run while the present pass was not.
+    std::vector<uint32_t> target_vars;
     for (size_t s : var_starts) {
         const uint32_t *w = &code[s];
         const uint32_t id = w[2];
@@ -1358,10 +1376,9 @@ inline bool patch_fragment_index_offset(std::vector<uint32_t> &code,
             continue; // not an array: nothing to index
         if (!img_types.count(a->second) && !si_types.count(a->second))
             continue;
-        target_var = id;
-        break;
+        target_vars.push_back(id);
     }
-    if (!target_var)
+    if (target_vars.empty())
         return false;
 
     // Every access chain into the table, each with the type of its own index.
@@ -1379,7 +1396,8 @@ inline bool patch_fragment_index_offset(std::vector<uint32_t> &code,
             cur_fn = w[2];
         if ((in.op != OpAccessChain && in.op != 66) || in.len < 5)
             continue;
-        if (w[3] != target_var)
+        if (std::find(target_vars.begin(), target_vars.end(), w[3]) ==
+            target_vars.end())
             continue;
         if (cur_fn != entry_fn)
             return false; // indexed from a helper: decline the whole module

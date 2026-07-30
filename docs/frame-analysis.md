@@ -5649,3 +5649,87 @@ Reading the code has run out of candidates. Every remaining path produces a
 
 One image, three outcomes, one run. Take forty-five could not answer it — its
 only `#65` sample landed mid-load and the scorer discarded it.
+
+## Take forty-eight: P56 refuted, and reading the shader found the bug
+
+`#65` came back **IDENTICAL and full** with the patch on — branch two of P56.
+So the patch changes nothing at `rp #33`'s output, and the loss is not there.
+
+What the run did show is that the offset mechanism **works**:
+
+| image | patch off (46/47) | patch on (48) |
+|---|---|---|
+| `#57`, `#59`, `#60`, `#61` | DIFFER 31–32% | DIFFER 31–32% |
+| `#66`, `#67` | IDENTICAL | **DIFFER 13–18%** |
+| `#97`, `#98` | IDENTICAL | **DIFFER 6.0 / 9.3%, full fill** |
+| swapchain | IDENTICAL (duplicate) | **0.4% — empty** |
+
+The patch converts `#66`/`#67`/`#97`/`#98` from flat to genuinely stereo, at
+full fill. Mirror, twin region and offset constant are all correct. The failure
+is isolated to **one pass**: `rp #0`, the composite into the swapchain.
+
+No probed image has content in layer 0 and nothing in layer 1, so `rp #0` is not
+reading an empty source. At that point the code had no candidates left, and the
+answer was in the shader — which task #20 said to read and which I had put off
+for three runs of log archaeology.
+
+### The bug
+
+`rp #0`'s fragment shader is module #12. It declares **two variables on set 0,
+binding 5**:
+
+```
+OpDecorate %S_sampler2D_AUTOMS Binding 5      indexed by the literal %int_1_0
+OpDecorate %S_sampler2D        Binding 5      indexed from the dynamic block
+```
+
+Aliasing one binding with two variables is legal, and X4 does it in 228 of 409
+dumped modules. The layer's caller iterates *tables* and calls the patch once
+per entry, so for module #12 it called `patch_fragment_index_offset(code, 0, 5,
+26653)` **twice with identical arguments** — and the patch stopped at the first
+matching variable:
+
+```cpp
+target_var = id;
+break;              // <- one variable, whichever came first
+```
+
+So both calls hit `S_sampler2D_AUTOMS`, and:
+
+* it was offset **twice** — `1 + 26653 + 26653 = 53307`, in a **53306**-element
+  array. Out of bounds by one. With `PARTIALLY_BOUND` that read is undefined and
+  comes back zeros. **Black.**
+* `S_sampler2D` was **never patched**, so its view 1 stayed on view 0's slot.
+
+Demonstrated offline against the real module, no run needed:
+
+```
+%428 = OpIAdd %int %int_1_0 %427     first patch:  1 + V*26653
+%435 = OpIAdd %int %428     %434     second patch: (1 + V*26653) + V*26653
+```
+
+And it explains the run exactly. `rp #33` samples binding **7**, where module #18
+declares a single variable — patched once, correctly — which is why `#97`/`#98`
+were visibly stereo in the very same frame in which the present pass was black.
+The failing and working passes were never different mechanisms; they were
+different *variable counts on a binding*.
+
+### The fix
+
+`patch_fragment_index_offset` now collects **every** variable at (set, binding)
+and offsets each of its access chains once. The caller dedupes by (set, binding)
+so the transform is invoked once per binding — necessary because the transform
+is deliberately **not** idempotent, and a test now pins that so the guard cannot
+be quietly removed.
+
+`tests/sample_alias_binding.frag` reproduces X4's shape: two aliased variables,
+one literal index and one loaded from a block. Three cases — the patch applies,
+each variable is offset exactly once (`OpIAdd` count 2), and patching twice still
+doubles (count 4), which records why the caller's guard is load-bearing.
+
+- **P57** — with the fix, the swapchain's settled samples `DIFFER` with layer 1
+  at roughly layer 0's fill, and `score_run.py` grades **STEREO** rather than
+  DUPLICATE. On screen: a right eye with 3D in it that is not a copy of the
+  left. Refuted if layer 1 returns to ~4% (something else also reads a twin that
+  was never written) or stays bit-identical (the offset is reaching the wrong
+  variable).

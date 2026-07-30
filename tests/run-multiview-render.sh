@@ -442,6 +442,54 @@ idx_case "index offset patches a bindless table" 1 sample_bindless.frag.spv 0 7
 idx_case "...refuses a plain texture"            0 sample.frag.spv 0 0
 idx_case "...refuses a vertex-only module"       0 fullscreen.vert.spv 0 7
 idx_case "...refuses a binding that is not there" 0 sample_bindless.frag.spv 0 3
+idx_case "...patches aliased vars on one binding" 1 sample_alias_binding.frag.spv 0 5
+
+# Take forty-eight, as an assertion rather than a story. Two variables share
+# (set 0, binding 5) -- X4's shape in 228 of 409 modules. The patch must offset
+# EACH of them EXACTLY ONCE. The old code stopped at the first variable, so the
+# caller's second call to the same binding offset it a second time, to
+# index + 2*26653 = 53307 in a 53306-element array. That read as zeros, and it
+# was the black right eye.
+#
+# Counting OpIAdd is the check: one per variable. Three means something got
+# offset twice; one means a variable was left on view 0's slot.
+alias_case() {
+    local label="$1" want="$2"
+    if ! command -v spirv-dis >/dev/null; then
+        printf 'skip %-38s (spirv-dis not found)\n' "$label"
+        return
+    fi
+    "$PATCHER" frag-index-offset \
+        "$BUILD/tests/sample_alias_binding.frag.spv" "$PATCHDIR/alias.spv" \
+        0 5 26653 >/dev/null 2>&1
+    local got
+    got=$(spirv-dis "$PATCHDIR/alias.spv" 2>/dev/null | grep -c 'OpIAdd')
+    if [[ "$got" == "$want" ]]; then
+        printf 'ok   %-38s OpIAdd=%s\n' "$label" "$got"
+    else
+        printf 'FAIL %-38s want OpIAdd=%s, got %s\n' "$label" "$want" "$got"
+        fails=$((fails + 1))
+    fi
+}
+alias_case "...offsets each aliased var exactly once" 2
+
+# The same module must not be patchable twice: the transform is not idempotent,
+# which is precisely why the layer now dedupes by (set, binding) before calling
+# it. If this ever stops double-offsetting, the caller's guard can be revisited
+# -- until then it is load-bearing and this records why.
+if command -v spirv-dis >/dev/null; then
+    "$PATCHER" frag-index-offset "$PATCHDIR/alias.spv" "$PATCHDIR/alias2.spv" \
+        0 5 26653 >/dev/null 2>&1
+    twice=$(spirv-dis "$PATCHDIR/alias2.spv" 2>/dev/null | grep -c 'OpIAdd')
+    if [[ "$twice" == 4 ]]; then
+        printf 'ok   %-38s OpIAdd=%s (guard is load-bearing)\n' \
+            "...double-patch still doubles" "$twice"
+    else
+        printf 'FAIL %-38s want OpIAdd=4, got %s\n' \
+            "...double-patch still doubles" "$twice"
+        fails=$((fails + 1))
+    fi
+fi
 # And the instrument, checked against the same shape. It reported "samples
 # nothing" about X4's real shaders until it learned to see through OpTypeArray,
 # so the count is asserted and not merely printed: it is the number that decides

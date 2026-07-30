@@ -20,6 +20,7 @@
 #include <dlfcn.h>
 
 #include <algorithm>
+#include <set>
 #include <atomic>
 #include <cmath>
 #include <ctime>
@@ -2921,11 +2922,23 @@ VkResult create_shader_module_inner(
         // view 1 to descriptors nobody wrote, so the two rules have to agree.
         // Runtime arrays are skipped: their length is not known here, so
         // whether a twin fits cannot be established.
-        for (const auto &t : x4vr::spv::list_sampled_textures(code))
-            if (t.count > g_mirror_offset &&
-                x4vr::spv::patch_fragment_index_offset(code, t.set, t.binding,
+        // Once per (set, binding), not once per table. The lister returns one
+        // entry per *variable*, and X4 aliases two variables onto one binding,
+        // so this used to call the patch twice with identical arguments -- and
+        // the second call offset the first variable's index a second time, to
+        // index + 2*OFFSET, off the end of the array. See take forty-eight.
+        // patch_fragment_index_offset now covers every variable at the binding
+        // in one call, which is what makes calling it once correct.
+        std::set<std::pair<uint32_t, uint32_t>> done_tables;
+        for (const auto &t : x4vr::spv::list_sampled_textures(code)) {
+            if (t.count <= g_mirror_offset)
+                continue;
+            if (!done_tables.insert({t.set, t.binding}).second)
+                continue;
+            if (x4vr::spv::patch_fragment_index_offset(code, t.set, t.binding,
                                                        g_mirror_offset))
                 frag_patched = true;
+        }
         // Coverage measured stage-agnostically, NOT from the lister above.
         // The lister is fragment-only and 2D-only; asking it "does this module
         // declare a mirrorable table?" made the answer no for X4's skybox --
