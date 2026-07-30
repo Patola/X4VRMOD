@@ -3792,9 +3792,14 @@ to the read path, which is exactly what take seventeen's failure mode covers.
 A one-metre IPD makes the two views almost disjoint — the probe reports `#107`
 and `#110` at **DIFFER 100.00%**, `#109` at 96.81%, `#111` at 99.95%.
 
-**Result, from the screen:** in the cockpit the camera is noticeably shifted to
-the right, HUD included. P16 holds. The composite reads a doubled image, and a
-per-eye difference upstream arrives on screen intact.
+**Result, from the screen:** in the cockpit the world is noticeably shifted to
+the right. P16 holds. The composite reads a doubled image, and a per-eye
+difference upstream arrives on screen intact.
+
+*(Corrected after a third run. This first said "HUD included", which was wrong:
+the HUD is perfectly centred and only the world moves. The whole-frame shift was
+an illusion from the one-metre IPD. Left visible rather than silently edited,
+because the corrected version is the stronger result — see below.)*
 
 That closes the last open question in the read path. Every link is now
 individually verified: the views differ (probe), the composite samples the heap
@@ -3802,18 +3807,47 @@ individually verified: the views differ (probe), the composite samples the heap
 layer 1 survives post, exposure, the compositor and the present blit (take
 seventeen).
 
-### The hitbox is where the mono camera says it is
+### The UI exclusion is exactly right, and a third run proved it
 
-Unasked-for and more interesting than the gate: with the view displaced,
-**interaction hitboxes stayed put**. Clicking the pilot seat requires clicking
-to the *right* of where the seat is drawn.
+Unasked-for, and it turned out to be a cleaner result than the gate. With the
+world displaced half a metre, the frame splits into two populations that behave
+*differently and correctly*:
 
-So X4's CPU-side picking is computed from its own unsheared camera, which this
-layer never touches — it patches the GPU vertex shader and nothing else. That
-is not a bug to fix and it should self-resolve in real stereo: with a normal
-IPD and both eyes presented, the fused image is centred on exactly the camera
-picking already uses. The offset here is an artifact of showing *one* eye
-displaced half a metre off-centre.
+| | drawn | picks |
+|---|---|---|
+| cockpit HUD, notification window, map icons | centred | **aligned** |
+| cockpit target markers over ships/stations | centred | **aligned** |
+| on-foot aim reticle against world geometry | reticle centred, geometry displaced | offset — must click right of the chair to sit |
+
+The split is not cockpit-versus-walking, and reading it that way would send the
+next run after the wrong thing. It is **HUD-projected versus GPU-rendered**:
+
+* Anything X4 projects on the CPU with its own camera — HUD, markers over
+  ships, map icons, the notification window — is *self-consistent*. It is drawn
+  where it is picked, because both ends use the same unsheared matrix. That is
+  why clicking a distant station in the cockpit works: the bracket, not the
+  station, is what is being clicked.
+* World geometry goes through the sheared per-view matrix, so it lands
+  somewhere else on screen. On foot there is no bracket to click — the reticle
+  targets raw geometry — so the divergence has nothing to hide behind.
+
+*(Mechanism inferred, not measured. What is observed is the table; that markers
+are CPU-projected while geometry is not is the reading that fits it.)*
+
+The UI half is a direct confirmation of the shear/mask predicate from task #4.
+Those vertex shaders are classified `ui` and left unsheared — `patched vertex
+shader #1 (ui) [world=0 ui=1 stereo=0]` — so under a one-metre IPD, the setting
+most likely to expose a misclassification, **every UI element stayed exactly
+where it belonged and every UI hitbox stayed with it.** The map was tested too.
+That is a much stronger statement about the exclusion than any counter in the
+log, and it is only visible under an IPD absurd enough to make a mistake
+obvious.
+
+The world half is X4's CPU-side picking running off its own unsheared camera,
+which this layer never touches — it patches the GPU vertex shader and nothing
+else. Not a bug: with a normal IPD and both eyes presented, the fused image is
+centred on exactly the camera picking already uses. The offset is an artifact
+of showing *one* eye displaced half a metre off-centre.
 
 Worth keeping because it names the invariant the cursor shim has to hold:
 **picking is mono and lives at the centre eye.** Any future change that shears
@@ -3848,3 +3882,70 @@ rebuilt as a two-layer array view.
   the screen differ. If the halves are identical, the substitution did not take
   and `substituted` will not have risen; if the right half is black, the pass
   was substituted but view 1 never rendered.
+
+## Task #16: masking the composite
+
+Two changes, and one of them had to come first.
+
+### The eye images were never tracked
+
+With `X4VR_SBS=1` the layer hands X4 its *own* images from
+`vkGetSwapchainImagesKHR` and X4 renders the entire frame into them. Those
+images were never registered: no serial, no entry in `g_images`, `?` in every
+serial-keyed instrument. **The same sentinel that hid the composite for
+twenty-seven takes, in a second place** — found this time by needing it rather
+than by losing a run to it.
+
+It is also a hard prerequisite. The framebuffer path refuses to build an array
+view over an image it does not know is doubled, so masking the composite was
+impossible while its render target was invisible. Eye images now register with
+their real layer count, `doubled` set from that count rather than assumed, and
+a `usage` taken from the create-info we actually wrote.
+
+### The composite is identified by finalLayout, not by format
+
+Seven passes share `1 colour [44L] no-depth`, so nothing about the format
+singles one out. But a pass whose colour attachment ends in
+`VK_IMAGE_LAYOUT_PRESENT_SRC_KHR` is *by definition* one whose output goes to
+the presentation engine. That is a definition, not a heuristic, and — critically
+— it is available at `vkCreateRenderPass`.
+
+That timing is forced, not chosen. The first design here was to substitute a
+two-view render pass at `vkCmdBeginRenderPass`, keyed on the framebuffer that
+finally names a swapchain image. **It cannot work: a pipeline is only compatible
+with render passes carrying the same viewMask**, and X4's pipelines are built
+against the unmasked pass long before any framebuffer exists. A pass has to be
+masked at creation or not at all. The framebuffer-time join built in take
+twenty-eight remains the right instrument for *reporting*, and is the wrong one
+for *deciding*.
+
+`X4VR_MASK_PRESENT=1`, off by default, and it is the third of three knobs that
+must all be on for a stereo frame:
+
+| knob | claim |
+|---|---|
+| `X4VR_SBS_LAYERS=2` | the second layer exists |
+| `X4VR_MASK_PRESENT=1` | something writes it |
+| `X4VR_SBS_RIGHT_LAYER=1` | it reaches the right half of the screen |
+
+They stay separate for the reason the first two always were: a run that
+conflates them reports a stereo frame it has not earned.
+
+**Offline coverage is the negative side only, and that is the side that matters
+for this predicate.** Getting the `finalLayout` test backwards would mask every
+pass in the game, so the suite asserts that `X4VR_MASK_PRESENT=1` classifies
+*nothing* here and leaves `masked=` unchanged. The positive side needs a real
+swapchain. Third consecutive change whose real test is the live run — said
+plainly each time rather than letting a green suite carry an implication it
+has not earned.
+
+- **P17** — with `X4VR_SBS=1 X4VR_SBS_LAYERS=2 X4VR_MASK_PRESENT=1` the
+  composite logs `-> STEREO (PRESENT composite)`, the eye images log `EYE …
+  doubled`, `fallbacks=0` holds, and the compositor still reports `(both halves
+  are layer 0)` because `X4VR_SBS_RIGHT_LAYER` is not set. Adding
+  `X4VR_SBS_RIGHT_LAYER=1` then flips it to `<-- STEREO composite` and the two
+  halves of the screen differ.
+- **P17 is deliberately split in two.** If the right half is black or garbage
+  with `RIGHT_LAYER=1`, the first run says whether the cause is upstream (the
+  pass never masked, `fallbacks` non-zero) or downstream (masked and written,
+  but the blit is wrong). One run cannot distinguish those and two can.

@@ -1391,6 +1391,21 @@ const bool g_mask_tonemap = [] {
     return e && *e && *e != '0';
 }();
 
+// Mask the composite -- the pass that draws the finished frame into the image
+// that gets presented -- so it renders both eyes into the two layers of the SBS
+// eye image. This is the last mono link in the chain.
+//
+// Off by default. It is the only masking decision that doubles the *final*
+// fullscreen pass, and it is inert without X4VR_SBS_LAYERS=2 (nothing has a
+// second layer to write) and invisible without X4VR_SBS_RIGHT_LAYER=1 (the
+// compositor still blits layer 0 into both halves). Three knobs for three
+// separate claims, deliberately, so a run cannot report a stereo frame it has
+// not earned.
+const bool g_mask_present = [] {
+    const char *e = getenv("X4VR_MASK_PRESENT");
+    return e && *e && *e != '0';
+}();
+
 // Classify each subpass as "must not be sheared":
 //   * no colour attachments        -> shadow cascade (light space)
 //   * all colour attachments LDR   -> UI / final blit (screen space)
@@ -1448,6 +1463,24 @@ std::vector<bool> classify_unsheared(const CreateInfo *ci) {
 // it -- shearing a fullscreen triangle is meaningless -- but it must be
 // masked, or there is no second layer of #103 for a per-eye tonemap to write.
 // Hence one predicate for shear, one for masking, no longer inverses.
+// The composite, identified by where its attachment ends up rather than by
+// what format it is. Seven passes share `1 colour [44L] no-depth`, so format
+// cannot single one out -- but a pass whose colour attachment is left in
+// PRESENT_SRC_KHR is by definition one whose output is handed to the
+// presentation engine. That is the definition, not a heuristic, and it is
+// available at vkCreateRenderPass, which matters: pipelines are only compatible
+// with render passes of the same viewMask, so this decision cannot be deferred
+// to framebuffer time when the image is finally named.
+template <typename CreateInfo, typename Subpass>
+bool subpass_is_present(const CreateInfo *ci, const Subpass &sp) {
+    if (sp.colorAttachmentCount != 1 || sp.pDepthStencilAttachment)
+        return false;
+    const uint32_t a = sp.pColorAttachments[0].attachment;
+    if (a == VK_ATTACHMENT_UNUSED || a >= ci->attachmentCount)
+        return false;
+    return ci->pAttachments[a].finalLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+}
+
 template <typename CreateInfo, typename Subpass>
 bool subpass_is_srgb_resolve(const CreateInfo *ci, const Subpass &sp) {
     if (sp.colorAttachmentCount != 1)
@@ -1468,7 +1501,8 @@ std::vector<bool> classify_per_eye(const CreateInfo *ci) {
     std::vector<bool> per_eye(ci->subpassCount, false);
     for (uint32_t i = 0; i < ci->subpassCount; i++)
         per_eye[i] = !unsheared[i] ||
-                     (g_mask_tonemap && subpass_is_srgb_resolve(ci, ci->pSubpasses[i]));
+                     (g_mask_tonemap && subpass_is_srgb_resolve(ci, ci->pSubpasses[i])) ||
+                     (g_mask_present && subpass_is_present(ci, ci->pSubpasses[i]));
     return per_eye;
 }
 
@@ -1519,7 +1553,9 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
             if (da != VK_ATTACHMENT_UNUSED && da < ci->attachmentCount)
                 snprintf(dep, sizeof(dep), " depth %u",
                          ci->pAttachments[da].format);
+            const bool presents = subpass_is_present(ci, sp);
             const char *why = sp.colorAttachmentCount == 0 ? "depth-only/shadow"
+                              : presents                   ? "PRESENT composite"
                               : unsheared[i]               ? "all-LDR/UI"
                                                            : "world";
             // The MONO/STEREO verdict is about K. Since the split it no longer
@@ -3741,6 +3777,48 @@ void register_swapchain_images(VkSwapchainKHR sc, const VkImage *images,
     }
 }
 
+// The SBS eye images: X4's render target when the layer virtualizes the
+// swapchain. Registered like swapchain images, but they are ours, so we know
+// their real layer count -- and a two-layer one is genuinely `doubled`, which
+// is what lets the framebuffer path build an array view over it and what makes
+// masking the composite possible at all.
+void register_eye_images(VkSwapchainKHR sc, const VkImage *images, uint32_t n,
+                         const x4vr::SbsCompositor::EyeInfo &ei) {
+    if (!g_active)
+        return;
+    {
+        std::lock_guard<std::mutex> lock(g_img_mu);
+        for (uint32_t i = 0; i < n; i++) {
+            if (images[i] == VK_NULL_HANDLE || g_images.count(images[i]))
+                continue;
+            ImageInfo info{};
+            info.extent = {ei.extent.width, ei.extent.height, 1};
+            info.format = ei.format;
+            info.layers = ei.layers;
+            info.mips = 1;
+            info.samples = 1;
+            // What make_eye_images actually asked for. Unlike a real swapchain
+            // image this one has a create-info we wrote, so nothing here is
+            // inferred.
+            info.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                         VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            info.doubled = ei.layers > 1;
+            info.serial = g_img_serial++;
+            info.swapchain = true;
+            g_images[images[i]] = info;
+            if (info.doubled)
+                g_per_eye_images.insert(images[i]);
+            if (g_mv_inventory)
+                X4VR_LOG("img #%u: %ux%u fmt=%u layers=%u EYE (image %u of %u)%s",
+                         info.serial, ei.extent.width, ei.extent.height,
+                         (unsigned)ei.format, ei.layers, i, n,
+                         info.doubled ? " doubled" : " single-layer");
+        }
+    }
+    std::lock_guard<std::mutex> lock(g_sc_mu);
+    g_swapchains[sc].images.assign(images, images + n);
+}
+
 // Forget a dead swapchain's images so a recycled handle registers afresh
 // instead of inheriting the old swapchain's serial, extent and format.
 void forget_swapchain_images(VkSwapchainKHR sc) {
@@ -3796,6 +3874,15 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetSwapchainImagesKHR(
         *count < eyes->size() ? *count : (uint32_t)eyes->size();
     for (uint32_t i = 0; i < n; i++)
         images[i] = (*eyes)[i];
+    // These are the images the whole frame is built in when SBS is on, and
+    // until now they reached X4 untracked -- so every serial-keyed instrument
+    // printed `?` for them. That is the sentinel that hid the composite for
+    // twenty-seven takes, in a second place, and it is also a hard prerequisite
+    // for masking the composite: the framebuffer path refuses to build an array
+    // view over an image it does not know is doubled.
+    x4vr::SbsCompositor::EyeInfo ei{};
+    if (g_sbs.eye_info(sc, &ei))
+        register_eye_images(sc, images, n, ei);
     *count = n;
     return n < eyes->size() ? VK_INCOMPLETE : VK_SUCCESS;
 }

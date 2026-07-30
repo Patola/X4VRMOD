@@ -542,6 +542,29 @@ inv_case "...zero transfer edges likewise" \
 # "Take twenty-eight".
 inv_case "present-pass join does not misfire" \
     "present passes — 0 pass(es) draw into a swapchain image"
+# X4VR_MASK_PRESENT keys on finalLayout == PRESENT_SRC_KHR. Getting that test
+# backwards would mask every pass in the game, so the check that matters
+# offline is that it fires on *nothing* here: this suite presents nothing, so
+# no subpass may be classified "PRESENT composite" and the knob must not change
+# the masked count. The positive side needs a real swapchain and is first
+# exercised live -- see docs/frame-analysis.md, "Take thirty-one".
+out=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \
+    "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=3 X4VR_MV_INVENTORY=1 X4VR_MASK_PRESENT=1 \
+    "$BIN" "$VS" "$FS" "$SF" 2>&1)
+base=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \
+    "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=3 X4VR_MV_INVENTORY=1 \
+    "$BIN" "$VS" "$FS" "$SF" 2>&1)
+got=$(grep -o "masked=[0-9]*" <<<"$out" | tail -1)
+want=$(grep -o "masked=[0-9]*" <<<"$base" | tail -1)
+if ! grep -q "PRESENT composite" <<<"$out" && [[ "$got" == "$want" ]]; then
+    printf 'ok   %-38s %s\n' "MASK_PRESENT fires on nothing here" "$got unchanged"
+else
+    printf 'FAIL %-38s classified a non-present pass (%s vs %s)\n' \
+        "MASK_PRESENT fires on nothing here" "$got" "$want"
+    fails=$((fails + 1))
+fi
 # And "never measured" must not read as "measured zero". The bindless survey
 # lost a run to exactly that, so the unmeasured case gets its own assertion.
 out=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \

@@ -71,6 +71,7 @@ public:
         // we copy its left half over its right.
         bool virtualized = false;
         VkExtent2D eye{};
+        VkFormat format = VK_FORMAT_UNDEFINED; // of both the eye and the real image
         // How many array layers the eye image carries, and which one feeds the
         // right half of the composite.
         //
@@ -116,6 +117,26 @@ public:
         return &it->second.eye_images;
     }
 
+    // What the eye images actually are, for the layer's own image tracking.
+    // Without this they reach X4 untracked and every serial-keyed instrument
+    // prints `?` for the images the frame is built in -- the same sentinel that
+    // hid the composite for twenty-seven takes, in a second place.
+    struct EyeInfo {
+        uint32_t layers = 0;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        VkExtent2D extent{};
+    };
+    bool eye_info(VkSwapchainKHR sc, EyeInfo *out) {
+        std::lock_guard<std::mutex> lock(mu_);
+        auto it = chains_.find(sc);
+        if (it == chains_.end() || !it->second.virtualized)
+            return false;
+        out->layers = it->second.eye_layers;
+        out->format = it->second.format;
+        out->extent = it->second.eye;
+        return true;
+    }
+
     bool ready() const { return device_ && fns_.complete(); }
 
     // Called after the real swapchain has been created. Failure here is not
@@ -130,6 +151,7 @@ public:
         c.eye_layers = want_layers < 1 ? 1 : want_layers;
         c.right_layer = right_layer < c.eye_layers ? right_layer : 0;
         c.extent = ci.imageExtent;
+        c.format = ci.imageFormat;
         if (c.extent.width < 2 || (c.extent.width & 1u)) {
             X4VR_LOG("sbs: swapchain width %u cannot be halved — composite off",
                      c.extent.width);
