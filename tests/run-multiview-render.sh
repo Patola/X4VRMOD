@@ -501,6 +501,53 @@ survey_case "survey ignores a small texture" \
     "LARGE=0 FRAGMENT=1 COMPUTE=0" sample.frag.spv
 
 
+# The two paths the writer list cannot see.
+#
+# Every instrument in the layer is built around render passes, so a frame stage
+# performed by a blit or a dispatch leaves no line anywhere -- and "no pass
+# writes #100" is only evidence of a non-draw merge if the non-draw calls are
+# actually on record. Both of these were entirely unhooked until the HUD
+# question ran out of draws to blame.
+inv_case() {
+    local label="$1" want="$2"; shift 2
+    local out got
+    out=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \
+        "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+        "$@" X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=3 X4VR_MV_INVENTORY=1 \
+        "$BIN" "$VS" "$FS" "$SF" 2>&1)
+    got=$(grep -c -- "$want" <<<"$out")
+    if [[ "$got" -ge 1 ]]; then
+        printf 'ok   %-38s %s\n' "$label" "$want"
+    else
+        printf 'FAIL %-38s no line matching "%s"\n' "$label" "$want"
+        fails=$((fails + 1))
+    fi
+}
+
+inv_case "transfer inventory names the edge" \
+    "xfer #0 -> #2 via vkCmdBlitImage" X4VR_TEST_BLIT=1
+inv_case "compute inventory counts a dispatch" \
+    "compute — 1 pipeline(s), 1 shader(s) dispatched" X4VR_TEST_COMPUTE=1
+# Zero has to be a reading, not an absence: "no dispatches" and "compute is
+# unhooked again" produced identical logs for this project's whole history.
+inv_case "...and reports zero as a number" \
+    "compute — 0 pipeline(s), 0 shader(s) dispatched" X4VR_TEST_COMPUTE=0
+inv_case "...zero transfer edges likewise" \
+    "image transfers — 0 distinct edge(s)" X4VR_TEST_BLIT=0
+# And "never measured" must not read as "measured zero". The bindless survey
+# lost a run to exactly that, so the unmeasured case gets its own assertion.
+out=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \
+    "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=3 "$BIN" "$VS" "$FS" "$SF" 2>&1)
+if grep -q "not measured (needs X4VR_MV_INVENTORY=1)" <<<"$out" &&
+   ! grep -q "distinct edge(s)" <<<"$out"; then
+    printf 'ok   %-38s %s\n' "...unmeasured says so, not 0" "not measured"
+else
+    printf 'FAIL %-38s zero and unmeasured read alike\n' "...unmeasured says so, not 0"
+    fails=$((fails + 1))
+fi
+
+
 # The bindless survey, checked against ground truth this test already knows.
 #
 # Three instruments here have been quietly wrong for at least one run each, so a

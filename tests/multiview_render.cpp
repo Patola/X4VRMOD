@@ -591,6 +591,40 @@ int main(int argc, char **argv) {
     CHECK(vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &gpci2, nullptr,
                                     &pipe2));
 
+    // A compute pipeline, for the layer's compute bookkeeping. X4 performs at
+    // least part of the frame in dispatches, and until now the layer hooked no
+    // compute entry point at all -- so a stage done that way left no line in
+    // any log. The shader has no resources: what is under test is
+    // CreateComputePipelines -> module serial -> CmdBindPipeline -> CmdDispatch
+    // -> the counter, and bindings would only add setup the assertion does not
+    // rest on.
+    VkPipeline cpipe = VK_NULL_HANDLE;
+    VkPipelineLayout cpl = VK_NULL_HANDLE;
+    VkShaderModule csm = VK_NULL_HANDLE;
+    const char *comp_env = getenv("X4VR_TEST_COMPUTE");
+    const bool want_compute = comp_env && *comp_env && *comp_env != '0';
+    if (want_compute) {
+        std::vector<uint32_t> cs_code = load_spv("tests/noop.comp.spv");
+        if (cs_code.empty()) { printf("FAIL=no_noop_comp:0\n"); return 1; }
+        VkShaderModuleCreateInfo csci{};
+        csci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        csci.codeSize = cs_code.size() * 4;
+        csci.pCode = cs_code.data();
+        CHECK(vkCreateShaderModule(dev, &csci, nullptr, &csm));
+        VkPipelineLayoutCreateInfo cplci{};
+        cplci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        CHECK(vkCreatePipelineLayout(dev, &cplci, nullptr, &cpl));
+        VkComputePipelineCreateInfo cpci{};
+        cpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        cpci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        cpci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        cpci.stage.module = csm;
+        cpci.stage.pName = "main";
+        cpci.layout = cpl;
+        CHECK(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &cpci, nullptr,
+                                       &cpipe));
+    }
+
     CHECK(vkResetCommandBuffer(cmd, 0));
     CHECK(vkBeginCommandBuffer(cmd, &cbbi));
     // Both layers to SHADER_READ_ONLY, so this says nothing about whether a
@@ -609,6 +643,11 @@ int main(int argc, char **argv) {
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
                          0, nullptr, 1, &imb);
+
+    if (want_compute) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cpipe);
+        vkCmdDispatch(cmd, 1, 1, 1);
+    }
 
     VkRenderPassBeginInfo orpbi = rpbi;
     orpbi.renderPass = orp;
@@ -633,6 +672,61 @@ int main(int argc, char **argv) {
     CHECK(vkEndCommandBuffer(cmd));
     CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
     CHECK(vkQueueWaitIdle(queue));
+
+    // An image-to-image blit, for the layer's transfer-edge inventory. Placed
+    // last, in its own submission, after every readback: a merge performed by
+    // a blit leaves no entry in the writer list, so the edge has to be recorded
+    // somewhere -- but proving that must not perturb what this test asserts.
+    VkImage bimg = VK_NULL_HANDLE;
+    VkDeviceMemory bimem = VK_NULL_HANDLE;
+    const char *blit_env = getenv("X4VR_TEST_BLIT");
+    if (blit_env && *blit_env && *blit_env != '0') {
+        VkImageCreateInfo bic = oci;
+        bic.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        CHECK(vkCreateImage(dev, &bic, nullptr, &bimg));
+        VkMemoryRequirements br;
+        vkGetImageMemoryRequirements(dev, bimg, &br);
+        VkMemoryAllocateInfo bai{};
+        bai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        bai.allocationSize = br.size;
+        bai.memoryTypeIndex =
+            pick(br.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        CHECK(vkAllocateMemory(dev, &bai, nullptr, &bimem));
+        CHECK(vkBindImageMemory(dev, bimg, bimem, 0));
+
+        CHECK(vkResetCommandBuffer(cmd, 0));
+        CHECK(vkBeginCommandBuffer(cmd, &cbbi));
+        VkImageMemoryBarrier bb[2]{};
+        for (int i = 0; i < 2; i++) {
+            bb[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            bb[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            bb[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            bb[i].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0,
+                                      VK_REMAINING_ARRAY_LAYERS};
+        }
+        bb[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        bb[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        bb[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        bb[0].image = img;
+        bb[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        bb[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        bb[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        bb[1].image = bimg;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 2, bb);
+        VkImageBlit bl{};
+        bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        bl.srcOffsets[1] = {(int32_t)W, (int32_t)H, 1};
+        bl.dstOffsets[1] = {(int32_t)W, (int32_t)H, 1};
+        vkCmdBlitImage(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, bimg,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl,
+                       VK_FILTER_NEAREST);
+        CHECK(vkEndCommandBuffer(cmd));
+        CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
+        CHECK(vkQueueWaitIdle(queue));
+    }
 
     CHECK(vkMapMemory(dev, bmem, 0, OBYTES * 2, 0, &ptr));
     const uint8_t *o = (const uint8_t *)ptr;

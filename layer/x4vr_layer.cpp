@@ -102,6 +102,10 @@ struct DeviceData {
     PFN_vkCreateRenderPass2 CreateRenderPass2 = nullptr;
     PFN_vkDestroyRenderPass DestroyRenderPass = nullptr;
     PFN_vkCreateGraphicsPipelines CreateGraphicsPipelines = nullptr;
+    PFN_vkCreateComputePipelines CreateComputePipelines = nullptr;
+    PFN_vkCmdDispatch CmdDispatch = nullptr;
+    PFN_vkCmdDispatchIndirect CmdDispatchIndirect = nullptr;
+    PFN_vkCmdDispatchBase CmdDispatchBase = nullptr;
     PFN_vkDestroyPipeline DestroyPipeline = nullptr;
     PFN_vkBeginCommandBuffer BeginCommandBuffer = nullptr;
     PFN_vkCmdBeginRenderPass CmdBeginRenderPass = nullptr;
@@ -581,6 +585,22 @@ std::unordered_map<uint32_t, uint32_t> g_dsl_sets;
 // continuing would corrupt X4's own textures rather than merely break stereo.
 // Declared up here rather than beside g_mod_mu because the summary prints them
 // and is defined first. Atomic so they need no lock ordering against it.
+// Declared here, with the other state the end-of-run summary reports, because
+// that summary is defined before any of the hooks that fill these in.
+struct XferEdge {
+    uint64_t n = 0;
+    uint64_t widened = 0;
+};
+std::mutex g_xfer_mu;
+std::map<std::pair<uint32_t, uint32_t>, std::map<const char *, XferEdge>>
+    g_xfer_edges;
+
+std::mutex g_comp_mu;
+std::unordered_map<VkPipeline, uint32_t> g_comp_module; // pipeline -> serial
+std::unordered_map<uint32_t, uint64_t> g_comp_dispatches; // serial -> count
+std::unordered_map<VkCommandBuffer, VkPipeline> g_comp_bound;
+uint64_t g_comp_pipelines = 0;
+
 std::atomic<uint64_t> g_frag_patch_ok{0}, g_frag_patch_refused{0};
 // Of the refusals, the ones that are refusals by construction: compute has no
 // gl_ViewIndex, so a compute shader sampling the heap cannot be made per-view
@@ -1586,6 +1606,45 @@ void mv_report(const char *when) {
              g_mv_stats.layer0_only, g_mv_stats.redirect_stale,
              g_mv_stats.input_fixed);
 
+    // The two paths the writer list above cannot see. A frame stage done by a
+    // blit or a dispatch leaves no entry in it, and "no pass writes #100" is
+    // only evidence of a non-draw merge if the non-draw calls are on record.
+    // "0" here must not be readable as "measured, and nothing happened" when
+    // the truth is "never measured". Both counters are gated on the inventory
+    // flag, so with it off the only honest report is that there is none --
+    // exactly the distinction the bindless survey lost a run to.
+    if (!g_mv_inventory) {
+        X4VR_LOG("mv %s: image transfers and compute not measured "
+                 "(needs X4VR_MV_INVENTORY=1)", when);
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_xfer_mu);
+        X4VR_LOG("mv %s: image transfers — %zu distinct edge(s)", when,
+                 g_xfer_edges.size());
+        for (const auto &e : g_xfer_edges) {
+            char src[16];
+            if (e.first.first == UINT32_MAX)
+                snprintf(src, sizeof src, "buf");
+            else
+                snprintf(src, sizeof src, "#%u", e.first.first);
+            for (const auto &k : e.second)
+                X4VR_LOG("mv %s: xfer %s -> #%u via %s — %llu region(s), "
+                         "%llu widened",
+                         when, src, e.first.second, k.first,
+                         (unsigned long long)k.second.n,
+                         (unsigned long long)k.second.widened);
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_comp_mu);
+        X4VR_LOG("mv %s: compute — %llu pipeline(s), %zu shader(s) dispatched",
+                 when, (unsigned long long)g_comp_pipelines,
+                 g_comp_dispatches.size());
+        for (const auto &e : g_comp_dispatches)
+            X4VR_LOG("mv %s: compute module #%u — %llu dispatch(es)", when,
+                     e.first, (unsigned long long)e.second);
+    }
 }
 
 // Reported separately from mv_report, and *not* gated on g_mv.
@@ -2705,6 +2764,94 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyShaderModule(
 // Pick the unpatched module variant for depth-only (shadow) pipelines.
 // This is the whole shadow-exclusion mechanism: one substitution at
 // pipeline-creation time, nothing per frame.
+// Compute, which this layer has never hooked at all.
+//
+// Every instrument here -- the writer lists, the masked/unmasked split, the
+// pipeline provenance, the probe -- is built around render passes, so a frame
+// stage performed by a dispatch is not merely unhandled but *invisible*: it
+// leaves no line anywhere. Ten of the 409 dumped modules are compute, and two
+// of them sample the same 53306-entry bindless heap the fragment shaders do.
+//
+// Nothing here changes behaviour. It records what runs, because the question
+// "what merges the scene with the HUD" has so far been answered only by
+// elimination, and elimination cannot see into a blind spot.
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
+    VkDevice device, VkPipelineCache cache, uint32_t count,
+    const VkComputePipelineCreateInfo *ci, const VkAllocationCallbacks *ac,
+    VkPipeline *out) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    const VkResult r =
+        d->CreateComputePipelines(device, cache, count, ci, ac, out);
+    if (r != VK_SUCCESS || !g_mv_inventory || !g_active)
+        return r;
+    for (uint32_t i = 0; i < count; i++) {
+        if (out[i] == VK_NULL_HANDLE)
+            continue;
+        uint32_t serial = UINT32_MAX;
+        {
+            std::lock_guard<std::mutex> lock(g_mod_mu);
+            auto it = g_mod_serial.find(ci[i].stage.module);
+            if (it != g_mod_serial.end())
+                serial = it->second;
+        }
+        std::lock_guard<std::mutex> lock(g_comp_mu);
+        g_comp_module[out[i]] = serial;
+        g_comp_pipelines++;
+    }
+    return r;
+}
+
+void note_dispatch(VkCommandBuffer cb) {
+    if (!g_mv_inventory || !g_active)
+        return;
+    std::lock_guard<std::mutex> lock(g_comp_mu);
+    auto b = g_comp_bound.find(cb);
+    if (b == g_comp_bound.end())
+        return;
+    auto m = g_comp_module.find(b->second);
+    g_comp_dispatches[m != g_comp_module.end() ? m->second : UINT32_MAX]++;
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatch(VkCommandBuffer cb, uint32_t x,
+                                            uint32_t y, uint32_t z) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    note_dispatch(cb);
+    d->CmdDispatch(cb, x, y, z);
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatchIndirect(VkCommandBuffer cb,
+                                                    VkBuffer buf,
+                                                    VkDeviceSize off) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    note_dispatch(cb);
+    d->CmdDispatchIndirect(cb, buf, off);
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatchBase(VkCommandBuffer cb, uint32_t bx,
+                                                uint32_t by, uint32_t bz,
+                                                uint32_t x, uint32_t y,
+                                                uint32_t z) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(cb));
+    }
+    note_dispatch(cb);
+    d->CmdDispatchBase(cb, bx, by, bz, x, y, z);
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
     VkDevice device, VkPipelineCache cache, uint32_t count,
     const VkGraphicsPipelineCreateInfo *ci, const VkAllocationCallbacks *ac,
@@ -2880,6 +3027,10 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyPipeline(
     if (g_mv) {
         std::lock_guard<std::mutex> lock(g_cb_mu);
         g_pipe_mv.erase(p);
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_comp_mu);
+        g_comp_module.erase(p);
     }
     d->DestroyPipeline(device, p, ac);
 }
@@ -3524,6 +3675,35 @@ void count_widened(uint32_t n) {
 // Only per-eye images count. A doubled image nothing reads through layer 1 is
 // free to have a stale second layer -- that is the whole reason doubling is
 // allowed to be permissive at vkCreateImage.
+// Which image went into which, by what call. The frame's writer list is built
+// from render passes only, so a merge performed by a blit or a copy leaves no
+// trace in it at all -- and #103 (the HUD) and the scene images are joined by
+// *something* that is not a draw. Counting the widened transfers, which is all
+// this did before, says how many happened but never which images they touched.
+void note_transfer(VkImage src, VkImage dst, const char *what, uint32_t n,
+                   uint32_t widened) {
+    if (!g_mv_inventory || !g_active)
+        return;
+    uint32_t s = UINT32_MAX, t = UINT32_MAX;
+    {
+        std::lock_guard<std::mutex> lock(g_img_mu);
+        auto a = g_images.find(src);
+        if (a != g_images.end())
+            s = a->second.serial;
+        auto b = g_images.find(dst);
+        if (b != g_images.end())
+            t = b->second.serial;
+    }
+    std::lock_guard<std::mutex> lock(g_xfer_mu);
+    // Bounded: a runaway edge set would be a bug of its own, and this must not
+    // become the thing that costs the run it is meant to explain.
+    if (g_xfer_edges.size() >= 256 && !g_xfer_edges.count({s, t}))
+        return;
+    auto &e = g_xfer_edges[{s, t}][what];
+    e.n += n;
+    e.widened += widened;
+}
+
 void note_layer0_only(VkImage im, const char *what) {
     if (!g_mv || !g_active)
         return;
@@ -3561,6 +3741,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdCopyImage(
     count_widened(w);
     if (w < n)
         note_layer0_only(dst, "vkCmdCopyImage");
+    note_transfer(src, dst, "vkCmdCopyImage", n, w);
     d->CmdCopyImage(cb, src, sl, dst, dl, n, w ? mod.data() : regions);
 }
 
@@ -3584,6 +3765,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBlitImage(
     count_widened(w);
     if (w < n)
         note_layer0_only(dst, "vkCmdBlitImage");
+    note_transfer(src, dst, "vkCmdBlitImage", n, w);
     d->CmdBlitImage(cb, src, sl, dst, dl, n, w ? mod.data() : regions, filter);
 }
 
@@ -3606,6 +3788,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdResolveImage(
     count_widened(w);
     if (w < n)
         note_layer0_only(dst, "vkCmdResolveImage");
+    note_transfer(src, dst, "vkCmdResolveImage", n, w);
     d->CmdResolveImage(cb, src, sl, dst, dl, n, w ? mod.data() : regions);
 }
 
@@ -3673,6 +3856,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdCopyImage2(VkCommandBuffer cb,
     VkCopyImageInfo2 m = *info;
     if (w)
         m.pRegions = mod.data();
+    note_transfer(info->srcImage, info->dstImage, "vkCmdCopyImage2",
+                  info->regionCount, w);
     d->CmdCopyImage2(cb, w ? &m : info);
 }
 
@@ -3691,6 +3876,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBlitImage2(VkCommandBuffer cb,
     VkBlitImageInfo2 m = *info;
     if (w)
         m.pRegions = mod.data();
+    note_transfer(info->srcImage, info->dstImage, "vkCmdBlitImage2",
+                  info->regionCount, w);
     d->CmdBlitImage2(cb, w ? &m : info);
 }
 
@@ -3709,6 +3896,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdResolveImage2(
     VkResolveImageInfo2 m = *info;
     if (w)
         m.pRegions = mod.data();
+    note_transfer(info->srcImage, info->dstImage, "vkCmdResolveImage2",
+                  info->regionCount, w);
     d->CmdResolveImage2(cb, w ? &m : info);
 }
 
@@ -3720,6 +3909,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdCopyBufferToImage(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(cb));
     }
+    note_transfer(VK_NULL_HANDLE, dst, "vkCmdCopyBufferToImage", n, 0);
     note_layer0_only(dst, "vkCmdCopyBufferToImage");
     d->CmdCopyBufferToImage(cb, src, dst, l, n, regions);
 }
@@ -3731,6 +3921,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdCopyBufferToImage2(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(cb));
     }
+    note_transfer(VK_NULL_HANDLE, info->dstImage,
+                  "vkCmdCopyBufferToImage2", info->regionCount, 0);
     note_layer0_only(info->dstImage, "vkCmdCopyBufferToImage2");
     d->CmdCopyBufferToImage2(cb, info);
 }
@@ -4349,6 +4541,10 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(cb));
     }
+    if (bp == VK_PIPELINE_BIND_POINT_COMPUTE && g_mv_inventory && g_active) {
+        std::lock_guard<std::mutex> lock(g_comp_mu);
+        g_comp_bound[cb] = p;
+    }
     if (g_mv && g_active && bp == VK_PIPELINE_BIND_POINT_GRAPHICS) {
         bool in_masked = false, pipe_mv = false, known = false;
         {
@@ -4773,6 +4969,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(CreateRenderPass2);
     RESOLVE(DestroyRenderPass);
     RESOLVE(CreateGraphicsPipelines);
+    RESOLVE(CreateComputePipelines);
+    RESOLVE(CmdDispatch);
+    RESOLVE(CmdDispatchIndirect);
+    RESOLVE(CmdDispatchBase);
     RESOLVE(DestroyPipeline);
     RESOLVE(BeginCommandBuffer);
     RESOLVE(CmdBeginRenderPass);
@@ -4920,6 +5120,12 @@ const NameFunc kHooks[] = {
     {"vkCmdEndRenderPass", (PFN_vkVoidFunction)x4vr_CmdEndRenderPass},
     {"vkBeginCommandBuffer", (PFN_vkVoidFunction)x4vr_BeginCommandBuffer},
     {"vkCmdBindPipeline", (PFN_vkVoidFunction)x4vr_CmdBindPipeline},
+    {"vkCreateComputePipelines",
+     (PFN_vkVoidFunction)x4vr_CreateComputePipelines},
+    {"vkCmdDispatch", (PFN_vkVoidFunction)x4vr_CmdDispatch},
+    {"vkCmdDispatchIndirect", (PFN_vkVoidFunction)x4vr_CmdDispatchIndirect},
+    {"vkCmdDispatchBase", (PFN_vkVoidFunction)x4vr_CmdDispatchBase},
+    {"vkCmdDispatchBaseKHR", (PFN_vkVoidFunction)x4vr_CmdDispatchBase},
     {"vkCmdPipelineBarrier", (PFN_vkVoidFunction)x4vr_CmdPipelineBarrier},
     {"vkDestroyPipeline", (PFN_vkVoidFunction)x4vr_DestroyPipeline},
     {"vkCmdCopyImage2", (PFN_vkVoidFunction)x4vr_CmdCopyImage2},

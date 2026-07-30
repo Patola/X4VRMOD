@@ -3422,3 +3422,51 @@ are compute. Whatever merges the frame, if it is a dispatch, is currently
 invisible to every instrument in this project.
 
 - **P13** — the scene/HUD merge is a compute dispatch or a blit, not a draw.
+
+## The two paths nothing was watching
+
+Task #14 begins by admitting a structural gap. Every instrument in this layer
+is built around render passes — the writer lists, the masked/unmasked split,
+the pipeline provenance, the probe. So a frame stage performed some other way
+is not merely unhandled, it is **invisible**: it leaves no line anywhere.
+
+"No render pass writes `#100`, therefore the merge is not a draw" is a sound
+inference only if the non-draw calls are on record. They were not. Two hooks
+now put them there:
+
+**Transfers.** `vkCmdCopyImage` / `BlitImage` / `ResolveImage` (and the `2`
+variants, and buffer→image) were already hooked to widen `layerCount`, and
+already counted — `transfers_widened=10020` — but the count says how many
+happened and never *which images they joined*. The inventory now records the
+edge: `xfer #N -> #M via vkCmdBlitImage — R region(s), W widened`.
+
+**Compute.** The layer hooked **no compute entry point at all**:
+`vkCreateComputePipelines`, `vkCmdDispatch`, `CmdDispatchIndirect`,
+`CmdDispatchBase` all went straight through the loader untouched. Now each
+compute pipeline is joined to its module serial at creation, the bound pipeline
+is tracked per command buffer, and dispatches are counted per shader. Nothing
+about behaviour changes — this records, it does not intervene.
+
+Both are gated on `X4VR_MV_INVENTORY=1`, and **that gate is reported**: with it
+off the summary says `not measured (needs X4VR_MV_INVENTORY=1)` rather than
+printing `0`. A zero that means "never looked" is the exact shape of the fourth
+hole, and repeating it here — in the instruments built to close the eleventh —
+would have been hard to defend.
+
+### The harness caught a harness bug
+
+Adding the two test cases broke eleven existing ones. The cause was in the test
+program, not the layer: the edit that inserted the blit dropped the
+`vkEndCommandBuffer` / `vkQueueSubmit` / `vkQueueWaitIdle` that followed it, so
+the second pass was recorded and never submitted. Every sampling assertion went
+to `out1=0 differ=0` at once.
+
+That is the suite working. A silent version of this — a new instrument that
+perturbs the thing it measures — is precisely what the last five sections have
+been about, and here it announced itself in one run with no game involved.
+
+`tests/noop.comp` has no resources on purpose: what is under test is the
+bookkeeping chain (`CreateComputePipelines` → module serial → `CmdBindPipeline`
+→ `CmdDispatch` → counter), and bindings would only add setup the assertion
+does not rest on. The blit goes into a throwaway image in its own submission,
+after every readback, so it cannot perturb what the suite asserts. 54 cases.

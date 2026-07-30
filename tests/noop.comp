@@ -1,0 +1,7 @@
+#version 450
+// No resources on purpose. What is under test is the layer's compute
+// bookkeeping -- CreateComputePipelines -> module serial -> CmdBindPipeline ->
+// CmdDispatch -> the counter -- not any compute work. A shader with bindings
+// would only add setup that the assertion does not depend on.
+layout(local_size_x = 1) in;
+void main() {}
