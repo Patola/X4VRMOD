@@ -4368,3 +4368,58 @@ the two copies have to be brought into agreement.
   an element at X4 `x = 352` (quarter width), the copies appear at screen 352 and
   1760. Translation predicts activation at screen **1056**; scale predicts
   **704**. One measurement, and it decides.
+
+### P23 resolved: translation, offset 704
+
+Measured from an annotated capture (`2812x1414`, map mode, an off-centre station
+label marked in both copies and the cursor marked in red):
+
+| | screen x |
+|---|---|
+| illuminated element, left copy | ≈ 614 |
+| illuminated element, right copy | ≈ 2023 |
+| cursor | ≈ 1319 |
+
+The copies are `2023 − 614 = 1409` apart — the eye width, 1408, to within the
+error of reading a circle off a JPEG. So the element sits at `x_x4 ≈ 614`.
+
+| model | predicted activation | measured |
+|---|---|---|
+| scale (`2 × 614`) | 1228 | |
+| **translate (`614 + 704`)** | **1318** | **≈ 1319** |
+
+Translation, to a pixel. Scale is out by ninety, far outside any reading error.
+`y` is unscaled (element ≈ 734, cursor ≈ 741, the difference being arrow tip
+versus circle centre).
+
+**The mapping is `x_x4 = x_screen − 704`, `y_x4 = y_screen`** — X4's 1408-wide
+window centred by gamescope in the 2816-wide display, with input in window
+coordinates and no scaling anywhere.
+
+Also corrected: the confinement is **not** mode-specific. A retest finds the
+cursor bounded to the centred box in the start menu and the cockpit as well.
+The "cockpit is a different regime" explanation offered above was wrong — it
+was built to reconcile an observation with the scale model, and once the model
+went, the exception it needed went with it. What spans the full width in the
+cockpit is a separate question about gamescope's own pointer under
+`--force-grab-cursor`, not about this mapping.
+
+### The geometry, now that it is known rather than assumed
+
+```
+display   0 ────────────── 1408 ────────────── 2816
+copy A    |═══════════════|                          X4's frame, drawn
+copy B                    |═══════════════|          X4's frame, drawn again
+input                 |═══════════════|              X4's window: 704 … 2112
+```
+
+The input box straddles the seam: the right half of copy A and the left half of
+copy B. **No drawn copy aligns with it**, which is why the top-centre dead zone
+is the hot spot and why both copies light at once — one element, hit-tested once,
+in a box that overlaps both.
+
+That rules out fixing this in the shim by arithmetic alone. Three extents have
+to agree — X4's window, its render, and the composite — and only two of them are
+currently chosen together. Deferred to a fresh session rather than designed at
+the end of this one; the measurement is what mattered here and it is now on
+record.
