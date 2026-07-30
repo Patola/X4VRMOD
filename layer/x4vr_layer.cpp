@@ -67,6 +67,10 @@ struct DeviceData {
     PFN_vkCreateBuffer CreateBuffer = nullptr;
     PFN_vkDestroyBuffer DestroyBuffer = nullptr;
     PFN_vkUpdateDescriptorSets UpdateDescriptorSets = nullptr;
+    PFN_vkCreateDescriptorUpdateTemplate CreateDescriptorUpdateTemplate =
+        nullptr;
+    PFN_vkUpdateDescriptorSetWithTemplate UpdateDescriptorSetWithTemplate =
+        nullptr;
     PFN_vkCmdBindDescriptorSets CmdBindDescriptorSets = nullptr;
     PFN_vkCmdDraw CmdDraw = nullptr;
     PFN_vkCmdDrawIndexed CmdDrawIndexed = nullptr;
@@ -546,6 +550,20 @@ std::unordered_map<uint64_t, std::unordered_set<uint32_t>> g_desc_slots;
 std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint32_t>> g_desc_pe;
 uint64_t g_desc_writes = 0, g_desc_late_writes = 0;
 bool g_desc_first_frame_done = false;
+
+// The road the survey was not watching. vkUpdateDescriptorSetWithTemplate is
+// core 1.1 and X4 declares API 1.2, so it needs no extension string -- the log's
+// silence about templates proved nothing, and take twenty-one's slot counts are
+// only complete if this path is unused. Worse than incomplete: a mirror that
+// hooks vkUpdateDescriptorSets alone would silently miss template writes, and
+// view 1 would then read a descriptor nobody ever wrote.
+//
+// Counted, not assumed. The template's entries are recorded at creation because
+// the update call carries no type or binding information of its own -- if this
+// path turns out to be live, this is also exactly what mirroring it needs.
+uint64_t g_tmpl_updates = 0, g_tmpl_image_updates = 0;
+std::unordered_map<VkDescriptorUpdateTemplate, std::vector<uint32_t>>
+    g_tmpl_image_bindings;
 
 // A draw replicates to two views only if the *pass* carries the mask and the
 // *pipeline bound into it* was compiled knowing that. Those are two different
@@ -1396,6 +1414,17 @@ void bindless_report(const char *when) {
              "first present",
              when, (unsigned long long)g_desc_writes,
              (unsigned long long)g_desc_late_writes);
+    // Printed unconditionally, including the zero. "No template line" and
+    // "templates never used" have to be different readings, or this becomes the
+    // seventh instrument to be quietly wrong.
+    X4VR_LOG("bindless %s: %llu template updates, %llu of them via a template "
+             "carrying image descriptors%s",
+             when, (unsigned long long)g_tmpl_updates,
+             (unsigned long long)g_tmpl_image_updates,
+             g_tmpl_image_updates
+                 ? " — THE COUNTS ABOVE ARE INCOMPLETE, and a mirror hooking "
+                   "vkUpdateDescriptorSets alone would miss these"
+                 : "");
     // Per binding: how much of the table X4 uses, and how much of it the twin
     // region would have to cover. The gap between the two is the whole reason
     // the offset can be a constant.
@@ -1724,6 +1753,60 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_AllocateDescriptorSets(
         }
     }
     return r;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDescriptorUpdateTemplate(
+    VkDevice device, const VkDescriptorUpdateTemplateCreateInfo *ci,
+    const VkAllocationCallbacks *ac, VkDescriptorUpdateTemplate *out) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    const VkResult r = d->CreateDescriptorUpdateTemplate(device, ci, ac, out);
+    if (r != VK_SUCCESS || !g_bindless_survey || !ci)
+        return r;
+
+    std::vector<uint32_t> img;
+    for (uint32_t i = 0; i < ci->descriptorUpdateEntryCount; i++) {
+        const VkDescriptorUpdateTemplateEntry &e = ci->pDescriptorUpdateEntries[i];
+        if (e.descriptorType == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER ||
+            e.descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
+            img.push_back(e.dstBinding);
+    }
+    if (!img.empty()) {
+        char list[128];
+        int n = 0;
+        list[0] = 0;
+        for (uint32_t b : img)
+            if (n < 100)
+                n += snprintf(list + n, sizeof(list) - n, "%s%u", n ? "," : "",
+                              b);
+        X4VR_LOG("bindless: update template carries image descriptors at "
+                 "binding(s) %s — the survey's slot counts are incomplete if "
+                 "this template is ever used",
+                 list);
+        std::lock_guard<std::mutex> dlock(g_desc_mu);
+        g_tmpl_image_bindings[*out] = std::move(img);
+    }
+    return r;
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSetWithTemplate(
+    VkDevice device, VkDescriptorSet set, VkDescriptorUpdateTemplate tmpl,
+    const void *data) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    if (g_bindless_survey) {
+        std::lock_guard<std::mutex> dlock(g_desc_mu);
+        g_tmpl_updates++;
+        if (g_tmpl_image_bindings.count(tmpl))
+            g_tmpl_image_updates++;
+    }
+    d->UpdateDescriptorSetWithTemplate(device, set, tmpl, data);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImageView(
@@ -4242,6 +4325,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(CreateBuffer);
     RESOLVE(DestroyBuffer);
     RESOLVE(UpdateDescriptorSets);
+    RESOLVE(CreateDescriptorUpdateTemplate);
+    RESOLVE(UpdateDescriptorSetWithTemplate);
     RESOLVE(CmdBindDescriptorSets);
     RESOLVE(CmdDraw);
     RESOLVE(CmdDrawIndexed);
@@ -4387,6 +4472,10 @@ const NameFunc kHooks[] = {
     {"vkCreateBuffer", (PFN_vkVoidFunction)x4vr_CreateBuffer},
     {"vkDestroyBuffer", (PFN_vkVoidFunction)x4vr_DestroyBuffer},
     {"vkUpdateDescriptorSets", (PFN_vkVoidFunction)x4vr_UpdateDescriptorSets},
+    {"vkCreateDescriptorUpdateTemplate",
+     (PFN_vkVoidFunction)x4vr_CreateDescriptorUpdateTemplate},
+    {"vkUpdateDescriptorSetWithTemplate",
+     (PFN_vkVoidFunction)x4vr_UpdateDescriptorSetWithTemplate},
     {"vkCmdBindDescriptorSets", (PFN_vkVoidFunction)x4vr_CmdBindDescriptorSets},
     {"vkCmdDraw", (PFN_vkVoidFunction)x4vr_CmdDraw},
     {"vkCmdDrawIndexed", (PFN_vkVoidFunction)x4vr_CmdDrawIndexed},

@@ -497,6 +497,25 @@ else
     fails=$((fails + 1))
 fi
 
+# The template path is a blind spot the survey did not watch:
+# vkUpdateDescriptorSetWithTemplate is core 1.1, so it needs no extension string
+# and its absence from a log proves nothing. This harness never uses a template,
+# so the count is always zero -- the assertion is that the *line exists*, so a
+# real zero stays distinguishable from a counter that was removed or never ran.
+survey_tmpl=$(env X4VR_LOG= X4VR_MV=1 X4VR_BINDLESS_SURVEY=1 \
+    "VK_ADD_LAYER_PATH=$BUILD/layer" \
+    "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    "$BIN" "$VS" "$FS" "$SF" 2>&1 |
+    sed -n 's/.*bindless final: \([0-9]* template updates, [0-9]* of them\).*/\1/p' |
+    head -1)
+if [[ "$survey_tmpl" == "0 template updates, 0 of them" ]]; then
+    printf 'ok   %-38s %s\n' "survey measures the template path" "$survey_tmpl"
+else
+    printf 'FAIL %-38s want "0 template updates, 0 of them", got "%s"\n' \
+        "survey measures the template path" "${survey_tmpl:-ABSENT}"
+    fails=$((fails + 1))
+fi
+
 echo
 if (( fails )); then echo "$fails case(s) failed"; exit 1; fi
 echo "all cases passed"

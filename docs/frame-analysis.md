@@ -2808,3 +2808,28 @@ unknown provenance. **Six instruments, six times wrong.** The rule gains its
 third clause: an instrument that summarises a set must report the set's
 **extent** — count, min, max — and must say so when it truncates. A truncated
 list with no marker is indistinguishable from a complete one.
+
+### The road the survey was not watching
+
+Take twenty-one's slot counts are complete only if X4 writes image descriptors
+exclusively through `vkUpdateDescriptorSets`. Nothing established that.
+`vkUpdateDescriptorSetWithTemplate` is **core Vulkan 1.1** and X4 declares API
+1.2, so using it requires no extension string — the log contains no mention of
+templates, and that proves precisely nothing. The layer did not hook the call at
+all.
+
+The consequence is worse than an undercount. A mirror that hooks
+`vkUpdateDescriptorSets` alone would silently miss every template write, and
+view 1 would read a twin descriptor **nobody ever wrote** — an invalid
+descriptor read, not a wrong colour.
+
+Now counted rather than assumed, and the zero is printed unconditionally so "no
+template line" and "templates never used" stay different readings. The template's
+entries are recorded at creation because the update call carries no type or
+binding information of its own; if the path turns out to be live, that record is
+also exactly what mirroring it needs.
+
+This is the seventh instrument-shaped hole, and the first one caught **before**
+a run rather than after. The pattern is stable enough to state plainly: every
+count this project makes is a count of what one hook saw, and the question
+"which other road could carry this?" has never once been safe to skip.
