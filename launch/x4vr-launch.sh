@@ -47,9 +47,14 @@
 #                         RGB blocks) when antialiasing is off. Costs a little
 #                         allocation time, so it is opt-in.
 #   X4VR_SDL_DRIVER=<d>   SDL video driver for the game inside gamescope
-#                         (default x11). The SBS split render REQUIRES x11:
-#                         a Wayland surface reports no preferred extent, and
-#                         the split works by halving that extent.
+#                         (default x11). This used to say the SBS split render
+#                         REQUIRES x11. It does not: a Wayland surface reports
+#                         no preferred extent, so X4 falls back to res_width
+#                         and the split works there too -- which is the path
+#                         take thirty-three actually ran on, x11 request
+#                         notwithstanding. Setting this is a preference SDL
+#                         may decline; the layer now reports which WSI was
+#                         really used (wsi= in the surface caps line).
 #   X4VR_X11=1            clear WAYLAND_DISPLAY for the game (force X11/SDL-x11;
 #                         X4's Wayland output is new and may misbehave)
 #   X4VR_FOSSILIZE=1      keep Valve's fossilize layer (default: disabled to
