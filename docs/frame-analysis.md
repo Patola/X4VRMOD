@@ -4971,3 +4971,72 @@ answering differently moves the render.
   then be hit-testing a 1408-wide UI against pointer coordinates that run to
   2816, so the left copy should be exact and the right copy dead. That is the
   state in which the shim's remaining job is `x mod 1408`.
+
+## Take forty: P39 confirmed, P40 refuted — and the two purposes come apart
+
+Run: `X4VR_TAKE=40-halvewindow … X4VR_WINDOWS_FULLSCREEN=1 X4VR_HALVE_WINDOW=1`
+
+```
+517543.465  layer   swapchain created: 2816x1408 … (pid 3429993)
+517543.498  inject  sdl: SDL_GetWindowSize -> 704x1408 (HALVED …) (pid 3429993)
+517543.465  layer   sbs: SPLIT OFF — X4 asked for 2816x1408
+```
+
+**P39 confirmed:** X4 does call `SDL_GetWindowSize`. **P40 refuted:** halving it
+did not move the render. And the timestamps say why — X4's first call lands
+**33 ms after the swapchain already exists**. The render size was decided
+before X4 ever asked.
+
+Reported from the screen, and this is the load-bearing half: menu clicks stopped
+working, and the map's top row would not highlight on hover though it still
+reacted to a click. So halving that number *did* change something, and what it
+changed was **interaction**.
+
+### The finding
+
+| | source | evidence |
+|---|---|---|
+| render size | not the surface (take 39), not `SDL_GetWindowSize` (take 40) — decided before either is consulted | ordering, and two refutations |
+| input / hit-test space | `SDL_GetWindowSize` | halving it broke menus and hover, nothing else |
+
+**They are different channels.** Takes 38 and 39 established that the window
+cannot serve both purposes; take 40 establishes that X4 does not actually read
+them from the same place. That is the difference between a dead end and a plan:
+input can be taken over without touching the render at all.
+
+It also explains take 38 and 39 in retrospect. Forcing the window to 2816 moved
+*both*, because the window is upstream of both channels — but reaching into one
+channel below the window moves only that one.
+
+### Which settles the shim's purpose
+
+The proposal to sidestep the conflict in the input layer is not a workaround for
+a sizing problem that could not be solved; it is the only place the two
+requirements can be separated, and the measurements now say so rather than the
+argument. The plan:
+
+* **Render** — the take-33 configuration, unchanged: window 1408, `res_width`,
+  no `--force-windows-fullscreen`, no `X4VR_HALVE_WINDOW`. This is the
+  configuration tagged `stage2-sbs-working` and it produces true SBS.
+* **Input** — the shim owns the SDL event stream. gamescope runs with
+  `--force-grab-cursor`, so the pointer is in *relative* mode and X4 integrates
+  deltas into a cursor position it maintains itself. There is no OS-level
+  confinement to defeat: the box the cursor "cannot leave" is X4's own clamp
+  against its own window size, and both sides of that are things the shim can
+  reach.
+* **Drawing** — the cursor still has to be drawn into the eye image before
+  duplication, or it cannot be correct in both halves. Unchanged, and
+  independent of the above.
+
+`SDL_PollEvent` is now interposed, observation only, logging the first few
+mouse motion and button events with `x`, `y`, `xrel`, `yrel`. Arguments are
+identical in SDL2 and SDL3; only the event layout differs, and it is read
+solely when the process is X4.
+
+- **P42** — X4 receives mouse motion through `SDL_PollEvent`, and the events
+  carry non-zero `xrel`/`yrel` with `x`/`y` inside 0…1408. If `x`/`y` span
+  0…2816, X4 is being handed display coordinates and clamps them later, which
+  changes where the shim has to act.
+- **P43** — button events carry the same coordinate space as motion. If they
+  differ, the map's click-works-but-hover-does-not behaviour from this take has
+  a second cause and the shim needs both paths.

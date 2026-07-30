@@ -301,6 +301,51 @@ void note_window_size(const char *fn, int w, int h, bool halved) {
 //
 // That is an argument. This is the measurement: the connect() path itself.
 // Only display-server sockets are logged -- X4 opens plenty of others.
+// The input channel, watched before anything writes to it.
+//
+// Take forty separated the two purposes the window was thought to serve. X4's
+// first SDL_GetWindowSize call lands 33ms *after* it has already created the
+// swapchain, so the render size does not come from there -- and halving it
+// broke menu clicks and map hover while leaving the render at 2816. So
+// SDL_GetWindowSize is X4's **input space**, and the render size arrives by
+// some other route entirely. They are different channels, which is what makes
+// a shim that owns input possible without touching the render at all.
+//
+// SDL_PollEvent has identical arguments in SDL2 and SDL3; only the SDL_Event
+// layout differs, and that is read solely when the process is X4 (SDL3). The
+// offsets below are SDL3's: type/reserved/timestamp/windowID/which fill the
+// first 24 bytes of both the motion and button events, putting x and y at 28
+// and 32 in each.
+struct Sdl3MouseEvent {
+    uint32_t type;
+    uint32_t reserved;
+    uint64_t timestamp;
+    uint32_t windowID;
+    uint32_t which;
+    uint32_t state_or_buttons;
+    float x, y;
+    float xrel, yrel;
+};
+enum { SDL_EV_MOUSE_MOTION = 0x400, SDL_EV_MOUSE_DOWN = 0x401,
+       SDL_EV_MOUSE_UP = 0x402 };
+
+// Observation only. Enough samples to establish the coordinate space and
+// whether motion is absolute or relative, and then quiet: the question is what
+// space X4 is told about, not how often.
+void note_mouse_event(const Sdl3MouseEvent *e) {
+    static int motions = 0, buttons = 0;
+    const bool is_motion = e->type == SDL_EV_MOUSE_MOTION;
+    if (is_motion && motions >= 8)
+        return;
+    if (!is_motion && buttons >= 6)
+        return;
+    (is_motion ? motions : buttons)++;
+    X4VR_LOG("sdl: mouse %s x=%.1f y=%.1f xrel=%.1f yrel=%.1f win=%u",
+             is_motion ? "motion" : (e->type == SDL_EV_MOUSE_DOWN ? "down" : "up"),
+             e->x, e->y, is_motion ? e->xrel : 0.f, is_motion ? e->yrel : 0.f,
+             e->windowID);
+}
+
 // SDL_Window is opaque here on purpose -- the injector has no SDL headers and
 // needs none; the handle is only ever passed straight through.
 int SDL_GetWindowSize(void *win, int *w, int *h) {
@@ -323,6 +368,17 @@ int SDL_GetWindowSizeInPixels(void *win, int *w, int *h) {
         *w /= 2;
     if (w && h)
         note_window_size("SDL_GetWindowSizeInPixels", *w, *h, cut);
+    return r;
+}
+
+int SDL_PollEvent(void *event) {
+    static auto real_fn = real<int (*)(void *)>("SDL_PollEvent");
+    int r = real_fn(event);
+    if (r && event && this_is_the_game()) {
+        const auto *e = (const Sdl3MouseEvent *)event;
+        if (e->type >= SDL_EV_MOUSE_MOTION && e->type <= SDL_EV_MOUSE_UP)
+            note_mouse_event(e);
+    }
     return r;
 }
 
