@@ -3004,3 +3004,84 @@ to explain it.
 
 That is the method paying for itself: the run was boring because the work was
 done first.
+
+## Step B built: the corpus found four defects that reasoning had not
+
+The index-offset transform is written, wired, and tagged. Nothing has been run
+against X4 yet — this section is what it took to get there, and it is mostly a
+record of being wrong in ways only 409 real modules could show.
+
+The transform itself is as small as predicted: declare the `ViewIndex` builtin,
+rewrite one index operand into an `OpIAdd`/`OpIMul` pair. No retyping, no
+coordinate extension, no following a retyped value through function bodies. The
+hard parts of `patch_fragment_view_layer` genuinely do not recur, because the
+index is an integer and `sampler2D` stays `sampler2D`.
+
+Measured against the dumps rather than argued about:
+
+    366 of 409 modules patch and validate (--target-env vulkan1.2), 0 invalid
+    228 of those declare two tables and get both patched in sequence
+     43 refused — all of them vertex-only, or fragment with no table to index
+      0 refused that were fragment shaders with a bindless table
+
+### Every patched module was invalid, and so was the old patch
+
+An integer `Input` in a fragment shader must carry `Flat`
+(`VUID-StandaloneSpirv-Flat-04744`). `gl_ViewIndex` is no exception — being a
+builtin does not excuse it. All 352 first-attempt modules failed on this.
+
+`patch_fragment_view_layer` — tagged `stage2-frag-patch`, "proven on the GPU" —
+had the **identical defect**, and the suite had been reporting `val=OK` for it
+the whole time. The reason is that the suite ran `spirv-val` with the *default*
+universal target env, which does not enforce Vulkan's standalone VUIDs. The
+module was invalid Vulkan and passed the check anyway; RADV happened to accept
+it, which is why the GPU case went green.
+
+That is the eighth instrument-shaped hole, and the most quietly dangerous so
+far, because the instrument was a well-known external tool being called with
+the wrong argument. **A validator is only as strict as its target environment**,
+and "spirv-val passed" is not a claim about Vulkan unless it was told which
+Vulkan.
+
+### Three more, each found by the corpus and none by thought
+
+* **One index type per module was too strict.** X4 indexes the same table with
+  a `uint` loaded from the dynamic block in one place and a literal `%int_21` in
+  another. Requiring agreement refused twelve otherwise perfect shaders. Each
+  chain now carries its own type.
+* **The extension check compared only the first word.** `"SPV_"` matched
+  `SPV_EXT_descriptor_indexing`, which X4's bindless modules all declare, so the
+  patch concluded multiview was already enabled and emitted `OpCapability
+  MultiView` without the extension that permits it. The two older patches
+  compare all five words; this one had been written fresh and worse.
+* **Two tables meant two `ViewIndex` builtins.** 228 modules declare both
+  binding 5 and binding 7, and patching them in sequence produced two variables
+  decorated with the same builtin — invalid. The second call now reuses the
+  first call's input.
+
+### The gate could not see the bug that matters most
+
+The end-to-end case — mirror on, patched shader, `OUT_DIFFER=1` — passed
+immediately, and it was wrong to believe it.
+
+`X4VR_MV_MASK` is global. It masks the *second* pass as well as the first, so
+under `mask=2` output layer 0 is never rendered at all. `OUT_DIFFER=1` therefore
+means "layer 0 is blank", not "the two views sampled different slots". A patch
+that added `OFFSET` **unconditionally** — ignoring `gl_ViewIndex` entirely,
+sending view 0 to the wrong texture and breaking the left eye — would have
+produced exactly the same reading.
+
+The fix needs no new machinery, only a second run of the same shader under
+`mask=1`, where only view 0 renders and only source layer 0 has content. A
+correct patch leaves view 0 on its own slot and draws; an unconditional offset
+sends view 0 to a slot that was never drawn, and the frame comes back blank.
+
+Mutation confirms the split cleanly: the unconditional-offset mutation is
+**invisible** to `view 1 reads the twin` and caught **only** by `view 0 still
+reads its own`.
+
+The pattern is now familiar enough to name. Every confounded gate in this
+project has had the same shape: a signal that moves for the reason you want and
+also for a reason you forgot, checked in a configuration where only one of them
+can happen. The cure has been the same every time — **find the second
+configuration where the two explanations disagree**, and run that too.
