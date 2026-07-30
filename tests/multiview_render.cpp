@@ -500,7 +500,12 @@ int main(int argc, char **argv) {
     // every write and that a single-descriptor test never touched. The shader
     // declares a plain sampler2D and so reads element 0; the rest exist to give
     // the reported extent something to be wrong about.
-    const uint32_t kSlots = 4;
+    // Declared eight, written four, so the top half is room for the mirror's
+    // twin region: with X4VR_MIRROR_OFFSET=4 the twins land at 4..7 and element
+    // 4 is the twin of element 0. That is what sample_twin.frag reads. It also
+    // mirrors X4's real shape -- a table far larger than the prefix in use.
+    const uint32_t kSlots = 8;
+    const uint32_t kWritten = 4;
     VkDescriptorSetLayoutBinding dslb{};
     dslb.binding = 0;
     dslb.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -536,8 +541,8 @@ int main(int argc, char **argv) {
     // substitute a view onto layer 1 underneath us. Issued after the first
     // framebuffer exists, because that is when the layer learns the image is
     // rendered by a masked pass and becomes willing to redirect it.
-    VkDescriptorImageInfo dii[kSlots];
-    for (uint32_t i = 0; i < kSlots; i++) {
+    VkDescriptorImageInfo dii[kWritten];
+    for (uint32_t i = 0; i < kWritten; i++) {
         dii[i] = {};
         dii[i].sampler = samp;
         dii[i].imageView = array_sampler ? aview : view;
@@ -547,7 +552,7 @@ int main(int argc, char **argv) {
     wds.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     wds.dstSet = dset;
     wds.dstBinding = 0;
-    wds.descriptorCount = kSlots;
+    wds.descriptorCount = kWritten;
     wds.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     wds.pImageInfo = dii;
     vkUpdateDescriptorSets(dev, 1, &wds, 0, nullptr);

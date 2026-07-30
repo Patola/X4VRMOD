@@ -497,6 +497,71 @@ else
     fails=$((fails + 1))
 fi
 
+# --- step A: the mirror, with nothing but these shaders reading it ------------
+#
+# P1 offline. The twin element is read by a hardcoded index, so this tests the
+# mirror alone and needs none of step B. Only source layer 1 is ever drawn
+# (MV_MASK=2), so "the twin holds layer 1" shows up as content and "slot 0 still
+# holds layer 0" shows up as an empty target. Both runs have the mirror on, so
+# neither reads an unwritten descriptor.
+mirror_case() {
+    local label="$1" want1="$2" shader="$3"; shift 3
+    local out g1
+    out=$(env "$@" X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=2 X4VR_TEST_OUT_SRGB=1 \
+        X4VR_MASK_TONEMAP=1 X4VR_BINDLESS_MIRROR=1 X4VR_MIRROR_OFFSET=4 \
+        "VK_ADD_LAYER_PATH=$BUILD/layer" \
+        "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+        "$BIN" "$VS" "$FS" "$BUILD/tests/$shader" 2>&1)
+    g1=$(sed -n 's/^OUT1_NONZERO=//p' <<<"$out")
+    if [[ "$g1" == "$want1" ]]; then
+        printf 'ok   %-38s out1=%s\n' "$label" "$g1"
+    else
+        printf 'FAIL %-38s want out1=%s, got out1=%s\n' "$label" "$want1" \
+            "${g1:-?}"
+        grep -E "^(OUT|FAIL)|bindless mirror|VUID" <<<"$out" | sed 's/^/       | /' |
+            head -8
+        fails=$((fails + 1))
+    fi
+}
+
+mirror_case "mirror puts layer 1 in the twin"  1 sample_twin.frag.spv
+mirror_case "...and leaves slot 0 on layer 0"  0 sample_twin_base.frag.spv
+
+# The accounting, because the pair above would also pass if the mirror wrote the
+# twin by some accident of aliasing. Four written descriptors, four twins, all
+# four substituted to layer 1, nothing skipped.
+mirror_stat=$(env X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=2 X4VR_TEST_OUT_SRGB=1 \
+    X4VR_MASK_TONEMAP=1 X4VR_BINDLESS_MIRROR=1 X4VR_MIRROR_OFFSET=4 \
+    "VK_ADD_LAYER_PATH=$BUILD/layer" \
+    "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    "$BIN" "$VS" "$FS" "$BUILD/tests/sample_twin.frag.spv" 2>&1 |
+    sed -n 's/.*bindless mirror final: offset 4, \(.*\)$/\1/p' | head -1)
+if [[ "$mirror_stat" == "1 twin writes, 4 twin descriptors, 4 of them layer-1, 0 skipped for no room" ]]; then
+    printf 'ok   %-38s %s\n' "mirror accounts for every twin" "$mirror_stat"
+else
+    printf 'FAIL %-38s got "%s"\n' "mirror accounts for every twin" \
+        "${mirror_stat:-ABSENT}"
+    fails=$((fails + 1))
+fi
+
+# The bounds check. At the default offset the 8-slot table has no room for a
+# twin, so the mirror must decline rather than write off the end -- and must say
+# it declined. Uses the non-array shader, which reads only slot 0, so nothing
+# reads an unwritten descriptor.
+mirror_room=$(env X4VR_LOG= X4VR_MV=1 X4VR_BINDLESS_MIRROR=1 \
+    "VK_ADD_LAYER_PATH=$BUILD/layer" \
+    "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    "$BIN" "$VS" "$FS" "$SF" 2>&1 |
+    sed -n 's/.*bindless mirror final: offset 26653, \(.*\)$/\1/p' | head -1)
+if [[ "$mirror_room" == "0 twin writes, 0 twin descriptors, 0 of them layer-1, 1 skipped for no room" ]]; then
+    printf 'ok   %-38s %s\n' "mirror declines a table with no room" \
+        "${mirror_room##*, }"
+else
+    printf 'FAIL %-38s got "%s"\n' "mirror declines a table with no room" \
+        "${mirror_room:-ABSENT}"
+    fails=$((fails + 1))
+fi
+
 # The template path is a blind spot the survey did not watch:
 # vkUpdateDescriptorSetWithTemplate is core 1.1, so it needs no extension string
 # and its absence from a log proves nothing. This harness never uses a template,

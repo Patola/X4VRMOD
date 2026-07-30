@@ -2833,3 +2833,54 @@ This is the seventh instrument-shaped hole, and the first one caught **before**
 a run rather than after. The pattern is stable enough to state plainly: every
 count this project makes is a count of what one hook saw, and the question
 "which other road could carry this?" has never once been safe to skip.
+
+## Step A built: two bugs the offline gate caught before the run
+
+The mirror is written, and building it found two defects that a live run would
+have reported as success.
+
+### The knob that silently did nothing, again
+
+`X4VR_BINDLESS_MIRROR=1` mirrored nothing at all unless
+`X4VR_BINDLESS_SURVEY=1` happened to be set too, because the layout bookkeeping
+the mirror depends on — attributing a write to a table, which is how it knows a
+twin region exists — was gated on the survey flag. Identical in shape to the
+defect fixed one commit earlier, where the survey printed nothing without
+`X4VR_MV=1`.
+
+It was diagnosed in a single run because the mirror's counter line prints its
+zero unconditionally. `0 twin writes` in a report that exists is a measurement;
+no report at all would have sent me looking at the GPU.
+
+### The twin that read layer 0
+
+Worse, and the reason step A exists as its own run. The layer-1 view helper was
+extracted from the redirect, which builds its view at `g_mv_present_layer` —
+the layer *being presented*, named by the knob that enables the redirect. The
+mirror wants the layer view index 1 renders to, which is 1 by definition. Two
+different concepts, and they coincide only because `g_mv_present_layer` defaults
+to 0 and nothing but the redirect ever sets it.
+
+So the mirror was writing twins that viewed **layer 0**: a perfect no-op that
+would have passed every gate step A has. The frame would not have changed (P2
+green), the cost would have measured correctly (P3 green), the twin region would
+have proven writable (P1 green) — and step B would then have produced a
+stereo-identical frame with nothing in the log to explain it, two steps and one
+shader patch away from the cause.
+
+`view_of_layer(d, device, view, layer)` now takes the layer as an argument
+because the callers genuinely disagree, and the cache records which layer each
+entry views so an entry for the wrong one is rebuilt like a stale one rather
+than quietly handed to the other caller.
+
+**What caught it was the GPU differential, and only that.** The mutation that
+reintroduces it leaves the accounting line reading `4 of them layer-1` —
+correct, and useless, because the counter cannot see *which* layer. The pair of
+shaders reading slot 4 and slot 0 of the same table is what pins it: one must
+come back with content and the other empty, and a mirror that retargets X4's own
+slot instead of adding a twin fails the second while passing the first.
+
+The general form, which is worth keeping: **a counter can only confirm that code
+ran, never that it was right.** Every instrument in this project that was wrong
+for a run was a counter trusted to mean correctness. Where the answer is a
+pixel, the gate has to be a pixel.

@@ -484,6 +484,11 @@ std::unordered_set<VkImage> g_per_eye_images;
 struct Layer1View {
     VkImageView view;
     VkImage image;
+    // Which layer this entry actually views. Cached alongside because the cache
+    // is keyed by X4's view alone while two callers now ask for different
+    // layers; an entry for the wrong layer is treated exactly like a stale one
+    // and rebuilt, so the cache cannot quietly hand back the other caller's view.
+    uint32_t layer;
 };
 std::unordered_map<VkImageView, Layer1View> g_layer1_views;
 uint32_t g_img_serial = 0;
@@ -509,6 +514,34 @@ const bool g_bindless_survey = [] {
     return e && *e && *e != '0';
 }();
 
+// Step A of task #13: duplicate every image-descriptor write into slot + OFFSET,
+// with a layer-1 view where the image is doubled and the descriptor verbatim
+// otherwise, and patch no shader. Nothing indexes the twin region, so the frame
+// must not change -- which makes any frame-time delta the mirror's cost alone and
+// any validation error the mirror's fault alone.
+const bool g_bindless_mirror = [] {
+    const char *e = getenv("X4VR_BINDLESS_MIRROR");
+    return e && *e && *e != '0';
+}();
+
+// Half of X4's declared 53,306, against a measured high-water mark of 10,980.
+// Overridable because the right value is a property of the session, not of the
+// build: if the used prefix ever grows past this the twin would overwrite X4's
+// own textures, so the mirror watches for it rather than trusting the margin.
+const uint32_t g_mirror_offset = [] {
+    const char *e = getenv("X4VR_MIRROR_OFFSET");
+    const long v = e && *e ? strtol(e, nullptr, 10) : 0;
+    return v > 0 ? (uint32_t)v : 26653u;
+}();
+
+// The layout/set bookkeeping below serves both knobs, and the mirror cannot work
+// without it: attributing a write to a table is how it knows a twin region
+// exists at all. Gating that on the survey alone made X4VR_BINDLESS_MIRROR=1
+// silently do nothing -- the same "knob that quietly does nothing" defect the
+// survey itself had one commit earlier, found the same way, by a counter that
+// prints its zero.
+const bool g_desc_track = g_bindless_survey || g_bindless_mirror;
+
 std::mutex g_desc_mu;
 // Take twenty-one keyed these by binding alone, which conflates every set that
 // happens to use the same binding number -- the log grew a "binding 0" with one
@@ -523,6 +556,20 @@ std::mutex g_desc_mu;
 uint32_t g_dsl_serial = 0;
 std::unordered_map<VkDescriptorSetLayout, uint32_t> g_dsl_id;
 std::unordered_map<VkDescriptorSet, uint32_t> g_ds_layout;
+// layout serial -> binding -> declared descriptorCount. The mirror needs it to
+// refuse a twin write that would run off the end of the table X4 declared:
+// writing past the end is a validation error, not a stereo bug.
+std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>> g_dsl_counts;
+// P4: how many sets come from each table layout -- the mirror covers all of them,
+// and the survey never counted.
+std::unordered_map<uint32_t, uint32_t> g_dsl_sets;
+
+// Mirror accounting. `collided` is the one that matters: it means X4 itself wrote
+// into the twin region, so the offset is too small for this session and
+// continuing would corrupt X4's own textures rather than merely break stereo.
+uint64_t g_mirror_writes = 0, g_mirror_descriptors = 0, g_mirror_layer1 = 0;
+uint64_t g_mirror_no_room = 0;
+bool g_mirror_collided = false;
 
 // Handles are recycled after vkFreeDescriptorSets, so a stale entry could
 // misattribute a table. Allocation always precedes any write to a handle, so
@@ -838,6 +885,69 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyBuffer(
 // the image is simply not in the set yet and the read stays on layer 0 --
 // correct output, one less sample for the test, which is the safe direction
 // to fail in.
+// A single-layer view onto `layer` of one of X4's views, created on demand and
+// cached.
+//
+// VK_NULL_HANDLE means "not a per-eye image", which is the right answer for most
+// descriptors and the safe answer for one written before its framebuffer taught
+// us the image was doubled: the read stays on layer 0, which is correct output
+// rather than undefined memory.
+//
+// `layer` is a parameter and not g_mv_present_layer because the two callers want
+// different things and it cost a debugging cycle to notice. The redirect wants
+// "the layer we are presenting", which is what its knob names. The mirror wants
+// the layer view index 1 renders to, which is 1 by definition. Those coincided
+// only because g_mv_present_layer defaults to 0 and the redirect is the only
+// thing that sets it -- so the mirror was silently building layer-0 twins, a
+// no-op that would have passed every step-A gate and surfaced two steps later as
+// an unexplained mono frame.
+VkImageView view_of_layer(DeviceData *d, VkDevice device, VkImageView v,
+                          uint32_t layer) {
+    if (v == VK_NULL_HANDLE)
+        return VK_NULL_HANDLE;
+    ViewInfo vi{};
+    {
+        std::lock_guard<std::mutex> lock(g_img_mu);
+        auto it = g_views.find(v);
+        auto c = g_layer1_views.find(v);
+        // A hit whose image no longer matches is a recycled handle: the entry
+        // describes a view X4 has since destroyed. A hit for a different layer
+        // belongs to the other caller. Either way, drop it and rebuild rather
+        // than pointing the read somewhere it was never meant to go.
+        if (c != g_layer1_views.end() &&
+            (c->second.layer != layer ||
+             (it != g_views.end() && c->second.image != it->second.image))) {
+            g_layer1_views.erase(c);
+            c = g_layer1_views.end();
+            std::lock_guard<std::mutex> lock2(g_mv_mu);
+            g_mv_stats.redirect_stale++;
+        }
+        if (c != g_layer1_views.end())
+            return c->second.view; // misses are cached too, to stop retrying
+        if (it == g_views.end() || !g_per_eye_images.count(it->second.image) ||
+            it->second.range.baseArrayLayer != 0)
+            return VK_NULL_HANDLE;
+        vi = it->second;
+    }
+    VkImageView repl = VK_NULL_HANDLE;
+    VkImageViewCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    ci.image = vi.image;
+    ci.viewType = vi.type;
+    ci.format = vi.format;
+    ci.components = vi.components;
+    ci.subresourceRange = vi.range;
+    ci.subresourceRange.baseArrayLayer = layer;
+    ci.subresourceRange.layerCount = 1;
+    if (d->CreateImageView(device, &ci, nullptr, &repl) != VK_SUCCESS)
+        repl = VK_NULL_HANDLE;
+    std::lock_guard<std::mutex> lock(g_img_mu);
+    // Keyed with the image and the layer so a recycled handle or the other
+    // caller's layer invalidates the entry above.
+    g_layer1_views[v] = Layer1View{repl, vi.image, layer};
+    return repl;
+}
+
 void mv_redirect_writes(DeviceData *d, VkDevice device, uint32_t writeCount,
                         const VkWriteDescriptorSet *writes,
                         std::vector<VkWriteDescriptorSet> &out,
@@ -897,56 +1007,8 @@ void mv_redirect_writes(DeviceData *d, VkDevice device, uint32_t writeCount,
         std::vector<VkDescriptorImageInfo> infos(
             w.pImageInfo, w.pImageInfo + w.descriptorCount);
         for (uint32_t j = 0; j < w.descriptorCount; j++) {
-            VkImageView v = infos[j].imageView;
-            if (v == VK_NULL_HANDLE)
-                continue;
-            VkImageView repl = VK_NULL_HANDLE;
-            ViewInfo vi{};
-            bool make = false;
-            {
-                std::lock_guard<std::mutex> lock(g_img_mu);
-                auto it = g_views.find(v);
-                auto c = g_layer1_views.find(v);
-                // A hit whose image no longer matches is a recycled handle:
-                // the entry describes a view X4 has since destroyed. Drop it
-                // and rebuild rather than redirecting the read to whatever
-                // that image used to be.
-                if (c != g_layer1_views.end() && it != g_views.end() &&
-                    c->second.image != it->second.image) {
-                    g_layer1_views.erase(c);
-                    c = g_layer1_views.end();
-                    std::lock_guard<std::mutex> lock2(g_mv_mu);
-                    g_mv_stats.redirect_stale++;
-                }
-                if (c != g_layer1_views.end()) {
-                    repl = c->second.view;
-                } else {
-                    if (it != g_views.end() &&
-                        g_per_eye_images.count(it->second.image) &&
-                        it->second.range.baseArrayLayer == 0) {
-                        vi = it->second;
-                        make = true;
-                    }
-                }
-            }
-            if (make) {
-                VkImageViewCreateInfo ci{};
-                ci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-                ci.image = vi.image;
-                ci.viewType = vi.type;
-                ci.format = vi.format;
-                ci.components = vi.components;
-                ci.subresourceRange = vi.range;
-                ci.subresourceRange.baseArrayLayer = g_mv_present_layer;
-                ci.subresourceRange.layerCount = 1;
-                if (d->CreateImageView(device, &ci, nullptr, &repl) !=
-                    VK_SUCCESS)
-                    repl = VK_NULL_HANDLE;
-                std::lock_guard<std::mutex> lock(g_img_mu);
-                // Misses cached too, to stop retrying -- keyed with the image
-                // so a recycled handle invalidates the entry above.
-                g_layer1_views[v] = Layer1View{repl, vi.image};
-            }
+            const VkImageView repl = view_of_layer(
+                d, device, infos[j].imageView, g_mv_present_layer);
             if (repl != VK_NULL_HANDLE) {
                 infos[j].imageView = repl;
                 touched = true;
@@ -958,6 +1020,101 @@ void mv_redirect_writes(DeviceData *d, VkDevice device, uint32_t writeCount,
             pool[i] = std::move(infos);
             out[i].pImageInfo = pool[i].data();
         }
+    }
+}
+
+// Step A: the twin region, written but never read.
+//
+// For every image-descriptor write into a table, append a second write at
+// slot + OFFSET. Where the image is doubled the twin gets a view of layer 1;
+// where it is not, the twin gets the identical descriptor, so a shader reading
+// idx + OFFSET sees the same texture either way. That is the property the whole
+// mechanism rests on: undoubled textures read the same in both views, so the
+// eventual patch needs no per-shader targeting and no knowledge of which slot
+// holds which image -- and a shadow map's twin *is* the same shadow map.
+//
+// Mirrored from `writes`, X4's original intent, rather than from the redirect's
+// output: the two are alternative mechanisms and must not compose.
+void bindless_mirror_writes(
+    DeviceData *d, VkDevice device, uint32_t writeCount,
+    const VkWriteDescriptorSet *writes,
+    std::vector<VkWriteDescriptorSet> &out,
+    std::vector<std::vector<VkDescriptorImageInfo>> &mpool) {
+    if (g_mirror_collided)
+        return;
+    // The redirect points X4's *own* slot at layer 1; the mirror leaves it alone
+    // and puts layer 1 in a twin slot. They are alternative answers to the same
+    // question and composing them would make view 0 stereo-wrong as well, so the
+    // pair is refused rather than ranked.
+    if (g_mv_redirect) {
+        g_mirror_collided = true;
+        X4VR_LOG("bindless mirror: DISABLED — X4VR_MV_REDIRECT is also set. The "
+                 "redirect retargets X4's own descriptor and the mirror adds a "
+                 "twin; running both would corrupt view 0. Pick one.");
+        return;
+    }
+    mpool.reserve(writeCount); // no reallocation, so pImageInfo stays valid
+    for (uint32_t i = 0; i < writeCount; i++) {
+        const VkWriteDescriptorSet &w = writes[i];
+        if (w.descriptorType != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
+            w.descriptorType != VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
+            continue;
+        if (!w.pImageInfo || !w.descriptorCount)
+            continue;
+        uint32_t declared = 0;
+        {
+            std::lock_guard<std::mutex> dlock(g_desc_mu);
+            auto la = g_ds_layout.find(w.dstSet);
+            if (la == g_ds_layout.end())
+                continue; // not a set from a table layout
+            auto lc = g_dsl_counts.find(la->second);
+            if (lc == g_dsl_counts.end())
+                continue;
+            auto bc = lc->second.find(w.dstBinding);
+            if (bc == lc->second.end())
+                continue;
+            declared = bc->second;
+            // P5's guard, and the only failure here that is worse than no
+            // stereo: if X4's own prefix reaches OFFSET, our twins are landing
+            // on descriptors X4 is using. Stop, loudly, rather than corrupt
+            // them.
+            if (declared > g_mirror_offset &&
+                w.dstArrayElement + w.descriptorCount > g_mirror_offset) {
+                g_mirror_collided = true;
+                X4VR_LOG("bindless mirror: DISABLED — X4 wrote binding %u slot "
+                         "%u..%u, at or past OFFSET %u. The twin region overlaps "
+                         "live descriptors; raise X4VR_MIRROR_OFFSET or shrink "
+                         "the mirrored range.",
+                         w.dstBinding, w.dstArrayElement,
+                         w.dstArrayElement + w.descriptorCount - 1,
+                         g_mirror_offset);
+                return;
+            }
+        }
+        // A table too short to hold a twin is not one of the big ones -- the
+        // 18-sampler and 58-input-attachment bindings land here.
+        if ((uint64_t)w.dstArrayElement + w.descriptorCount + g_mirror_offset >
+            declared) {
+            g_mirror_no_room++;
+            continue;
+        }
+        std::vector<VkDescriptorImageInfo> infos(
+            w.pImageInfo, w.pImageInfo + w.descriptorCount);
+        for (uint32_t j = 0; j < w.descriptorCount; j++) {
+            const VkImageView l1 =
+                view_of_layer(d, device, infos[j].imageView, 1);
+            if (l1 == VK_NULL_HANDLE)
+                continue; // undoubled: the verbatim copy is the right answer
+            infos[j].imageView = l1;
+            g_mirror_layer1++;
+        }
+        mpool.push_back(std::move(infos));
+        VkWriteDescriptorSet tw = w;
+        tw.dstArrayElement = w.dstArrayElement + g_mirror_offset;
+        tw.pImageInfo = mpool.back().data();
+        out.push_back(tw);
+        g_mirror_writes++;
+        g_mirror_descriptors += w.descriptorCount;
     }
 }
 
@@ -1016,11 +1173,21 @@ VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSets(
     if (g_bindless_survey && g_active)
         bindless_survey_writes(writeCount, writes);
     std::vector<VkWriteDescriptorSet> redirected;
-    std::vector<std::vector<VkDescriptorImageInfo>> pool;
+    std::vector<std::vector<VkDescriptorImageInfo>> pool, mpool;
     if (g_mv && g_active) {
         mv_redirect_writes(d, device, writeCount, writes, redirected, pool);
-        d->UpdateDescriptorSets(device, writeCount, redirected.data(),
-                                copyCount, copies);
+        // The mirror appends twin writes; mv_redirect_writes has already sized
+        // `redirected` to writeCount, so anything past that is ours.
+        if (g_bindless_mirror)
+            bindless_mirror_writes(d, device, writeCount, writes, redirected,
+                                   mpool);
+        d->UpdateDescriptorSets(device, (uint32_t)redirected.size(),
+                                redirected.data(), copyCount, copies);
+    } else if (g_bindless_mirror && g_active) {
+        redirected.assign(writes, writes + writeCount);
+        bindless_mirror_writes(d, device, writeCount, writes, redirected, mpool);
+        d->UpdateDescriptorSets(device, (uint32_t)redirected.size(),
+                                redirected.data(), copyCount, copies);
     } else {
         d->UpdateDescriptorSets(device, writeCount, writes, copyCount, copies);
     }
@@ -1407,9 +1574,25 @@ void mv_report(const char *when) {
 // vacuously: with no output at all, "found no per-eye slots" and "never ran"
 // were the same string.
 void bindless_report(const char *when) {
-    if (!g_bindless_survey)
+    if (!g_bindless_survey && !g_bindless_mirror)
         return;
     std::lock_guard<std::mutex> dlock(g_desc_mu);
+    if (g_bindless_mirror) {
+        // Printed first and unconditionally, zeros included: a mirror that
+        // quietly did nothing must not look like a mirror that cost nothing.
+        X4VR_LOG("bindless mirror %s: offset %u, %llu twin writes, %llu twin "
+                 "descriptors, %llu of them layer-1, %llu skipped for no room%s",
+                 when, g_mirror_offset, (unsigned long long)g_mirror_writes,
+                 (unsigned long long)g_mirror_descriptors,
+                 (unsigned long long)g_mirror_layer1,
+                 (unsigned long long)g_mirror_no_room,
+                 g_mirror_collided ? " — DISABLED, see above" : "");
+        for (const auto &e : g_dsl_sets)
+            X4VR_LOG("bindless mirror %s: layout #%u — %u set(s) allocated",
+                     when, e.first, e.second);
+    }
+    if (!g_bindless_survey)
+        return;
     X4VR_LOG("bindless %s: %llu image-descriptor writes, %llu of them after the "
              "first present",
              when, (unsigned long long)g_desc_writes,
@@ -1681,7 +1864,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDescriptorSetLayout(
     // have to widen this layout and the pool behind it -- object surgery, not
     // write mirroring -- so it is the fact that decides the size of the job.
     const VkResult r = d->CreateDescriptorSetLayout(device, ci, ac, out);
-    if (r != VK_SUCCESS || !g_bindless_survey || !ci)
+    if (r != VK_SUCCESS || !g_desc_track || !ci)
         return r;
 
     const VkDescriptorSetLayoutBindingFlagsCreateInfo *bf = nullptr;
@@ -1697,6 +1880,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDescriptorSetLayout(
         if (ci->pBindings[i].descriptorCount > 1) {
             std::lock_guard<std::mutex> dlock(g_desc_mu);
             lid = g_dsl_id[*out] = g_dsl_serial++;
+            auto &counts = g_dsl_counts[lid];
+            for (uint32_t k = 0; k < ci->bindingCount; k++)
+                counts[ci->pBindings[k].binding] =
+                    ci->pBindings[k].descriptorCount;
             break;
         }
     for (uint32_t i = 0; i < ci->bindingCount; i++) {
@@ -1744,12 +1931,14 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_AllocateDescriptorSets(
     const VkResult r = d->AllocateDescriptorSets(device, ai, out);
     // Bind each new set to the layout it came from, so a write can be attributed
     // to a table rather than to a bare binding number.
-    if (r == VK_SUCCESS && g_bindless_survey && ai && out) {
+    if (r == VK_SUCCESS && g_desc_track && ai && out) {
         std::lock_guard<std::mutex> dlock(g_desc_mu);
         for (uint32_t i = 0; i < ai->descriptorSetCount; i++) {
             auto it = g_dsl_id.find(ai->pSetLayouts[i]);
-            if (it != g_dsl_id.end())
+            if (it != g_dsl_id.end()) {
                 g_ds_layout[out[i]] = it->second;
+                g_dsl_sets[it->second]++;
+            }
         }
     }
     return r;

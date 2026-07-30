@@ -98,17 +98,45 @@
 #   X4VR_BINDLESS_SURVEY=1
 #                         measure X4's bindless descriptor table. Changes no
 #                         behaviour; prints, at first present and at exit:
-#                           bindless: layout binding N type=T count=C flags=...
+#                           bindless: layout #L binding N type=T count=C flags=..
 #                           bindless: allocated variable count N
-#                           bindless: binding N — S distinct slots, range A..B,
-#                                     P holding a per-eye image
-#                           bindless: binding N per-eye slots: <slot>=img#<n>
-#                         The last line is the one the index-offset mechanism is
-#                         designed around: it says which table elements hold a
-#                         doubled image and therefore have to be mirrored.
+#                           bindless: layout #L binding N — S distinct slots,
+#                                     range A..B, P holding a per-eye image
+#                           bindless: ... per-eye slots: P in A..B, showing S: ..
+#                           bindless: N template updates, M via image templates
+#                         Keyed by layout, not by bare binding number, because a
+#                         binding number alone conflates every set that uses it.
+#                         The per-eye line says which table elements hold a
+#                         doubled image and therefore have to be mirrored, and
+#                         reports its own extent because it truncates.
+#                         The template line must read 0: anything else means X4
+#                         also writes image descriptors through
+#                         vkUpdateDescriptorSetWithTemplate and every count above
+#                         is an undercount.
 #                         Works with X4VR_MV=0 (everything reads 0 per-eye,
 #                         which is the control), but pair it with X4VR_MV=1 to
 #                         get the real answer.
+#   X4VR_BINDLESS_MIRROR=1
+#                         step A of the index offset. Duplicates every
+#                         image-descriptor write into slot + OFFSET, using a view
+#                         of layer 1 where the image is doubled and the identical
+#                         descriptor otherwise. Patches no shader, so nothing
+#                         reads the twin region and THE FRAME MUST NOT CHANGE --
+#                         which is what makes any frame-time delta the mirror's
+#                         cost alone. Prints:
+#                           bindless mirror: offset O, W twin writes, D twin
+#                                     descriptors, L of them layer-1, S skipped
+#                           bindless mirror: layout #L — N set(s) allocated
+#                         Refuses to run alongside X4VR_MV_PRESENT_LAYER: the
+#                         redirect retargets X4's own descriptor and the mirror
+#                         adds a twin, so running both would corrupt view 0.
+#                         Disables itself, loudly, if X4's own writes ever reach
+#                         OFFSET -- that would mean the twins are landing on
+#                         descriptors X4 is still using.
+#   X4VR_MIRROR_OFFSET=N  where the twin region starts. Default 26653, half of
+#                         X4's declared 53306, against a measured high-water mark
+#                         of 10980. Only worth changing if the disable above
+#                         fires.
 #   X4VR_DUMP_SHADERS=<dir>
 #                         write every module X4 creates as <dir>/mod-NNNN.spv.
 #                         On its own that is ~1300 files and no help; the point
