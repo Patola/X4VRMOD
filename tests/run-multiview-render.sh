@@ -464,6 +464,42 @@ list_case "lister sees through a bindless array" "0/7 x64" sample_bindless.frag.
 list_case "lister reports a plain texture as 1"  "0/0 x1"  sample.frag.spv
 list_case "lister finds both of two textures"    "0/0 x1 0/1 x1" sample_two.frag.spv
 
+# Coverage, measured stage-agnostically -- the question "does this module
+# declare a table the mirror covers?" is not the question `list` answers.
+#
+# X4's skybox is a COMPUTE shader sampling the same 53306-entry heap as a CUBE
+# array. `list` is fragment-only and 2D-only, so it says TEXTURES=0 about it,
+# and a refusal counter built on `list` reported "0 refused" for a whole run --
+# reassuring precisely because the instrument was blind. skybox_cube.comp
+# reproduces that shape (compute + cube + big array) so the blindness cannot
+# come back unnoticed.
+survey_case() {
+    local label="$1" want="$2" shader="$3" min="${4:-32}"
+    local got
+    got=$("$PATCHER" survey "$BUILD/tests/$shader" "$min" 2>&1 | head -1)
+    if [[ "$got" == "$want" ]]; then
+        printf 'ok   %-38s %s\n' "$label" "$got"
+    else
+        printf 'FAIL %-38s want "%s", got "%s"\n' "$label" "$want" "${got:-?}"
+        fails=$((fails + 1))
+    fi
+}
+
+survey_case "survey sees a compute cube table" \
+    "LARGE=1 FRAGMENT=0 COMPUTE=1" skybox_cube.comp.spv
+# The same shader, through the instrument that cannot see it. Asserted, not
+# assumed: this is the exact gap the counter fell into.
+if [[ "$("$PATCHER" list "$BUILD/tests/skybox_cube.comp.spv" 2>&1 | head -1)" == "TEXTURES=0" ]]; then
+    printf 'ok   %-38s %s\n' "...which the 2D lister cannot" "TEXTURES=0"
+else
+    printf 'FAIL %-38s lister unexpectedly saw it\n' "...which the 2D lister cannot"
+    fails=$((fails + 1))
+fi
+survey_case "survey sees a bindless fragment table" \
+    "LARGE=1 FRAGMENT=1 COMPUTE=0" sample_bindless.frag.spv
+survey_case "survey ignores a small texture" \
+    "LARGE=0 FRAGMENT=1 COMPUTE=0" sample.frag.spv
+
 
 # The bindless survey, checked against ground truth this test already knows.
 #

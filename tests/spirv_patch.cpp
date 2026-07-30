@@ -50,6 +50,22 @@ int main(int argc, char **argv) {
     // logs through, run against a dumped module, so the instrument can be
     // checked against real bytes instead of only against shaders we wrote --
     // which is how it was caught claiming a bindless shader samples nothing.
+    // The stage-agnostic coverage check. Kept separate from "list" because
+    // the two answer different questions, and conflating them is what let a
+    // compute shader sampling the bindless heap read as "declares nothing".
+    if (strcmp(argv[1], "survey") == 0) {
+        std::vector<uint32_t> code = load_spv(argv[2]);
+        if (code.empty()) {
+            printf("FAIL=load\n");
+            return 1;
+        }
+        const uint32_t min_count = argc > 3 ? (uint32_t)atoi(argv[3]) : 32;
+        auto s = x4vr::spv::survey_image_tables(code, min_count);
+        printf("LARGE=%u FRAGMENT=%d COMPUTE=%d\n", s.large, (int)s.fragment,
+               (int)s.compute);
+        return 0;
+    }
+
     if (strcmp(argv[1], "list") == 0) {
         std::vector<uint32_t> code = load_spv(argv[2]);
         if (code.empty()) {

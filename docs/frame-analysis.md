@@ -3318,3 +3318,107 @@ both as one number for four runs. The dump now names the pass it followed.
   is the UI layer and the take-23 gate was wrong from the start.)*
 - **P11** — if P10 holds, the world in `#103` is identical between layers,
   because it arrived by a route the sampler patch does not govern.
+
+## Take twenty-six: `#103` is the HUD, and the gate was never satisfiable
+
+The sequence-numbered dump answered it in one picture. Six pairs, all captured
+after **rp #52** (never rp #40):
+
+| dump | contents |
+| --- | --- |
+| n0 | start menu, text on black |
+| n1 | loading screen — full-bleed art, tip text, spinner |
+| n3, n4 | **in-game HUD on pure black**: reticle, radar, shield arcs, weapon list, "Steering Mode Activated", message boxes |
+
+**P10 refuted. P9 confirmed.** `#103` is the HUD layer, rendered over black and
+composited later. There is no world in it at any point during flight.
+
+So `#103` being IDENTICAL between layers is **correct behaviour**. The HUD is
+mono by construction: its shaders sample font atlases, icon sheets and UI
+textures, none of which are doubled, so their twin slots hold verbatim
+duplicates and both views produce the same bytes. The mirror and the patch both
+did exactly what they are specified to do.
+
+The gate inherited from the take-19 plan — "`#103` flips from all-IDENTICAL to
+all-DIFFER" — was **unsatisfiable from the moment it was written**. Three runs
+(twenty-three, twenty-four, twenty-five) were spent trying to satisfy it, and
+one commit (`35db59f`, the unsheared-twin fix) exists solely because of it. That
+commit is still correct and still wanted — an unsheared pass does have to sample
+per view — it just never had anything to do with `#103`.
+
+The lesson is about the gate, not the runs: **a pass condition asserted before
+anything is known about the target is a guess wearing the costume of a
+measurement.** `#103` was chosen as the gate because it was the image the probe
+kept reporting IDENTICAL — which is exactly what a correctly-mono HUD looks
+like. The evidence that named it was the evidence that should have exonerated
+it.
+
+Task #13 is **done**. The mechanism is proved by `#104`, `#105`, `#122`, `#123`
+flipping to DIFFER and staying there across four runs.
+
+## The eleventh instrument-shaped hole, and it was one commit old
+
+Take twenty-five reported `420 modules edited, 0 declared a mirrorable table and
+REFUSED`, and I read that as "the patch reaches every module that needs it".
+
+It does not. The counter was built on `list_sampled_textures`, which is
+**fragment-only and 2D-only** — by design, and by its own name. X4's skybox is
+a **compute** shader sampling the same 53306-entry heap as a **cube** array:
+
+```
+mod-0267:  OpEntryPoint GLCompute %main "main"
+           %_arr_154_uint_53306 = OpTypeArray %154 %uint_53306
+           OpName %S_samplerCube / %ray_dir / %U_output_rt_decl
+```
+
+`list` reports `TEXTURES=0` for it. So the module was never a candidate, never
+counted, and the zero that looked like complete coverage was the instrument
+failing to see. **This counter was added one commit earlier, specifically to
+close a blind spot, and it inherited the blindness of the helper it was built
+on.** Reusing a function is reusing its filters — and the filters were correct
+for its own purpose, which is what made this invisible.
+
+Fixed with `survey_image_tables`, which is stage-agnostic and dim-agnostic
+because the *mirror* is: the heap holds mixed image types and the twin region
+covers every image descriptor at those bindings regardless. The summary now
+reports compute refusals separately, since those are refusals **by
+construction** — there is no `gl_ViewIndex` in a compute shader.
+
+`tests/skybox_cube.comp` reproduces the shape (compute + cube + large array)
+rather than committing X4's module, and the suite asserts both halves: that
+`survey` sees it *and* that `list` does not. 49 cases.
+
+### What this does not yet mean
+
+The skybox being mono is very likely **correct**. Parallax at infinity is zero:
+both eyes share a rotation and differ only by a translation, so an infinitely
+distant sky is genuinely identical between them. This is a case where the
+missing per-view mechanism costs nothing.
+
+That is a prediction about X4's skybox, not a proof — recorded here as one:
+
+- **P12** — forcing the two eyes to differ everywhere *except* the skybox
+  produces no visible seam or misregistration at the sky.
+
+## Where the frame actually merges — the open question for task #5
+
+`#103` is the HUD. The scene is `#95`/`#97`/`#98`/`#99`/`#101`, all DIFFER. So
+something combines them, and the inventory says it is **not a render pass**:
+
+- `#100` — 1408×1408, `fmt=50` (`B8G8R8A8_SRGB`), `usage=0x97`, DOUBLED — is
+  created, never appears in any writer list, and is destroyed. It is the twin
+  of `#103` in every declared respect and nothing renders into it.
+- The final writers list contains no unmasked pass writing a full-resolution
+  LDR target; the unmasked passes (42–50) are the shadow cascades.
+
+`#103`'s usage `0x97` includes `TRANSFER_DST` (0x2) and `INPUT_ATTACHMENT`
+(0x80). Both deliver content without a sampler, so the index-offset patch has
+no say over either. Multiview view-indexes input attachments automatically;
+transfers are widened separately.
+
+And the layer hooks **no compute entry point at all** — not
+`vkCreateComputePipelines`, not `vkCmdDispatch`. Ten of the 409 dumped modules
+are compute. Whatever merges the frame, if it is a dispatch, is currently
+invisible to every instrument in this project.
+
+- **P13** — the scene/HUD merge is a compute dispatch or a blit, not a draw.

@@ -582,6 +582,10 @@ std::unordered_map<uint32_t, uint32_t> g_dsl_sets;
 // Declared up here rather than beside g_mod_mu because the summary prints them
 // and is defined first. Atomic so they need no lock ordering against it.
 std::atomic<uint64_t> g_frag_patch_ok{0}, g_frag_patch_refused{0};
+// Of the refusals, the ones that are refusals by construction: compute has no
+// gl_ViewIndex, so a compute shader sampling the heap cannot be made per-view
+// by this mechanism at all.
+std::atomic<uint64_t> g_compute_tables{0};
 uint64_t g_mirror_writes = 0, g_mirror_descriptors = 0, g_mirror_layer1 = 0;
 uint64_t g_mirror_no_room = 0;
 bool g_mirror_collided = false;
@@ -1619,9 +1623,10 @@ void bindless_report(const char *when) {
             swapped = g_variants.swapped;
         }
         X4VR_LOG("bindless mirror %s: index-offset patch — %llu modules "
-                 "edited, %llu declared a mirrorable table and REFUSED",
-                 when, (unsigned long long)ok,
-                 (unsigned long long)refused);
+                 "edited, %llu declared a mirrorable table and REFUSED "
+                 "(%llu of those are compute: no gl_ViewIndex exists there)",
+                 when, (unsigned long long)ok, (unsigned long long)refused,
+                 (unsigned long long)g_compute_tables.load());
         // The unsheared twin is the module the srgb-resolve passes actually
         // run. If this is 0, no pipeline ever took one and the twin's contents
         // are irrelevant -- a distinction take twenty-three could not draw.
@@ -2531,19 +2536,26 @@ VkResult create_shader_module_inner(
         // view 1 to descriptors nobody wrote, so the two rules have to agree.
         // Runtime arrays are skipped: their length is not known here, so
         // whether a twin fits cannot be established.
-        bool wanted = false;
         for (const auto &t : x4vr::spv::list_sampled_textures(code))
-            if (t.count > g_mirror_offset) {
-                // Separately from whether the edit took: a module declaring a
-                // mirrorable table is one whose samples we *need* per view, so
-                // a refusal here is a hole in the mechanism, not a no-op.
-                wanted = true;
-                if (x4vr::spv::patch_fragment_index_offset(
-                        code, t.set, t.binding, g_mirror_offset))
-                    frag_patched = true;
+            if (t.count > g_mirror_offset &&
+                x4vr::spv::patch_fragment_index_offset(code, t.set, t.binding,
+                                                       g_mirror_offset))
+                frag_patched = true;
+        // Coverage measured stage-agnostically, NOT from the lister above.
+        // The lister is fragment-only and 2D-only; asking it "does this module
+        // declare a mirrorable table?" made the answer no for X4's skybox --
+        // a compute shader sampling the same 53306 heap as a cube array -- and
+        // the refusal counter built on it reported a reassuring 0.
+        const auto surv = x4vr::spv::survey_image_tables(code, g_mirror_offset);
+        if (surv.large) {
+            if (frag_patched)
+                g_frag_patch_ok++;
+            else {
+                g_frag_patch_refused++;
+                if (surv.compute)
+                    g_compute_tables++;
             }
-        if (wanted)
-            (frag_patched ? g_frag_patch_ok : g_frag_patch_refused)++;
+        }
         static uint32_t n_frag = 0;
         if (frag_patched && (++n_frag <= 3 || (n_frag % 100) == 0))
             X4VR_LOG("patched fragment shader #%u (index + ViewIndex*%u)",

@@ -1,0 +1,14 @@
+#version 450
+// X4's skybox shape, reproduced rather than committed: a COMPUTE shader that
+// samples the same large bindless heap the fragment shaders use, but declared
+// as a cube array. Both facts defeat list_sampled_textures (fragment-only,
+// 2D-only), which is exactly why survey_image_tables exists.
+#extension GL_EXT_nonuniform_qualifier : require
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 5) uniform samplerCube S_samplerCube[64];
+layout(set = 0, binding = 6, rgba16f) uniform image2D U_output_rt_decl;
+layout(set = 4, binding = 0) uniform DYN { uint S_diffuse_idx; vec3 dir; } B;
+void main() {
+    vec4 c = texture(S_samplerCube[nonuniformEXT(B.S_diffuse_idx)], B.dir);
+    imageStore(U_output_rt_decl, ivec2(gl_GlobalInvocationID.xy), c);
+}

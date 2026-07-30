@@ -84,6 +84,7 @@ enum : uint32_t {
 
     ExecutionModelVertex = 0,
     ExecutionModelFragment = 4,
+    ExecutionModelGLCompute = 5,
     DecorationBuiltIn = 11,
     // An integer Input in a fragment shader must be Flat -- interpolating one
     // is meaningless and Vulkan forbids it (VUID-StandaloneSpirv-Flat-04744).
@@ -681,6 +682,91 @@ list_sampled_textures(const std::vector<uint32_t> &code) {
     if (!fragment)
         out.clear();
     return out;
+}
+
+/// What `list_sampled_textures` cannot see, counted honestly.
+///
+/// That function is fragment-only and 2D-only, by design and by its name. The
+/// mistake was using it as the layer's answer to "does this module declare a
+/// table the mirror covers?" -- a question that has nothing to do with either
+/// filter. X4's skybox is a **compute** shader sampling the same 53306-entry
+/// heap as a **cube** array, so it failed both tests, and a refusal counter
+/// built on the lister reported `0 refused` about a module it could not see.
+///
+/// The heap is one bindless region holding mixed image types; the mirror writes
+/// twins for every image descriptor at those bindings regardless of dim or
+/// stage. So coverage has to be measured the same way.
+struct TableSurvey {
+    bool fragment = false; ///< has a fragment entry point
+    bool compute = false;  ///< has a GLCompute entry point
+    uint32_t large = 0;    ///< image arrays declared with count > `min_count`
+};
+
+inline TableSurvey survey_image_tables(const std::vector<uint32_t> &code,
+                                       uint32_t min_count) {
+    TableSurvey s;
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return s;
+
+    std::unordered_map<uint32_t, uint32_t> const_val, si_img, ptr_pointee;
+    std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> arr_of;
+    std::unordered_set<uint32_t> img_types;
+
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        switch (in.op) {
+        case OpEntryPoint:
+            if (in.len >= 3 && w[1] == ExecutionModelFragment)
+                s.fragment = true;
+            if (in.len >= 3 && w[1] == ExecutionModelGLCompute)
+                s.compute = true;
+            break;
+        case OpConstant:
+            if (in.len >= 4)
+                const_val[w[2]] = w[3];
+            break;
+        case OpTypeArray:
+            if (in.len >= 4)
+                arr_of[w[1]] = {w[2], w[3]};
+            break;
+        case OpTypeImage:
+            if (in.len >= 9)
+                img_types.insert(w[1]);
+            break;
+        case OpTypeSampledImage:
+            if (in.len >= 3)
+                si_img[w[1]] = w[2];
+            break;
+        case OpTypePointer:
+            if (in.len >= 4 && w[2] == StorageClassUniformConstant)
+                ptr_pointee[w[1]] = w[3];
+            break;
+        case OpVariable: {
+            if (in.len < 4 || w[3] != StorageClassUniformConstant)
+                break;
+            auto p = ptr_pointee.find(w[1]);
+            if (p == ptr_pointee.end())
+                break;
+            auto a = arr_of.find(p->second);
+            if (a == arr_of.end())
+                break;
+            auto cv = const_val.find(a->second.second);
+            if (cv == const_val.end() || cv->second <= min_count)
+                break;
+            uint32_t el = a->second.first;
+            auto si = si_img.find(el);
+            if (si != si_img.end())
+                el = si->second;
+            if (img_types.count(el))
+                s.large++;
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    return s;
 }
 
 /// Rewrites a fragment module so the texture at (`set`, `binding`) is read as a
