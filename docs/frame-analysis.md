@@ -39,7 +39,7 @@ member, the `mips=2 fmt=13` mask at offset **+9**.
 | `#100` | 50 `B8G8R8A8_SRGB` | LDR | not seen written |
 | `#101` | 13 `R8_UINT`, mips=2 | classification mask, rp #25 + rp #27 | **per-eye** |
 | `#102` | 9 `R8_UNORM` | mask | **per-eye** |
-| **`#103`** | **50 `B8G8R8A8_SRGB`** | **tonemap output, rp #40 + rp #52** | replicates, **mono content** |
+| **`#103`** | **50 `B8G8R8A8_SRGB`** | **LDR composition (scene + UI), rp #40 + rp #52** | replicates, **mono content** |
 | `#104`, `#105` | 97 `RGBA16F` @352² | bloom ping-pong | replicates, mono |
 | `#122`, `#123`, `#124` | 76 `R16_SFLOAT` @1408² | rp #61 / rp #63; unidentified | replicates, mono |
 | — | 44 `B8G8R8A8_UNORM` | rp #0/#1/#4/#7/#10/#14/#17 → eye image | **not even masked** |
@@ -48,33 +48,56 @@ The last row is the remaining frontier. Everything that "replicates but is
 mono" is fixed by a fragment patch; the format-44 chain needs masking first,
 and that is where `SbsCompositor`'s two-layer eye image finally matters.
 
-### Next step: find the tonemap's sampler slot (task #10)
+### X4 is bindless, and that decides the mechanism
 
-The fragment patch itself is **built and proven offline** —
-`patch_fragment_view_layer` in `common/x4vr_spirv.hpp`, tagged
-`stage2-frag-patch`. What is missing is one fact about X4: *which descriptor
-slot the tonemap reads `#95` through*. The patch has to be told a
-(set, binding), and no one has ever read that shader.
+**Read "Take twenty" before planning anything about sampling.** The measured
+fact: every shader that draws into `#103` samples one descriptor —
+`set 0 binding 7, count 53306`. X4 keeps every texture in the game in a single
+bindless table, indexed by `S_diffuse_idx`, a `uint` in
+`BLOCK_BUFFER_BINDING_SLOT_DYNAMIC` (set 4 binding 0).
 
-So the next run is a measurement, not a patch. With `X4VR_MV_INVENTORY=1` the
-layer now prints, for each pipeline built against the masked SRGB pass:
+Consequences, all of them load-bearing:
 
-    tonemap rp #40: frag module #NNN samples set A binding B, set C binding D
+* **Promoting a texture's type is not available.** `Arrayed 0 → 1` on that
+  table promotes all 53,306 entries; ~20 images are doubled. The patch already
+  refuses (the pointee is an `OpTypeArray`), and a test now asserts it.
+* **`patch_fragment_view_layer` is proof-of-mechanism, not the mechanism.** It
+  is tagged `stage2-frag-patch` and its offline gate is real — a sample can
+  follow `gl_ViewIndex` on this driver, measured before and after. Do not wire
+  it into X4.
+* **`#103` is not a tonemap output.** It is the LDR composition target: a
+  generic textured-quad draw brings the scene in, UI geometry is drawn on top,
+  and six pipelines share rp #40. `X4VR_MASK_TONEMAP` is a misnomer kept for
+  continuity with the tagged runs.
 
-and `X4VR_DUMP_SHADERS=<dir>` writes the modules so the named one can be
-disassembled. The list also flags the two shapes the patch refuses — a texture
-that is already an array, or a depth sampler — so a shader it cannot take
-shows up as a log line rather than as a live run where nothing changed.
+### Next step: the bindless index offset (task #12)
 
-**After that**, the wiring: an arrayed twin of the tonemap's fragment module
-chosen at pipeline creation (the mechanism `g_variants` already uses for the
-shadow exclusion), plus a 2D_ARRAY view substituted into that descriptor. The
-shader and the view are a **pair** — a `sampler2DArray` bound to a 2D view is
-a validation error, and the patch alone changes nothing because a 2D view has
-no layer 1 to reach. Scoping that substitution is the open design question:
-tracking `vkAllocateDescriptorSets` gives set → layout, and the pipeline gives
-layout → "this is the tonemap's", which is precise enough not to hand an array
-view to a shader that declared `sampler2D`.
+Because the index is an integer in a uniform, per-view sampling becomes integer
+arithmetic and nothing else changes type:
+
+    element = S_diffuse_idx + gl_ViewIndex * OFFSET
+
+with the layer writing, at `slot + OFFSET`, an ordinary 2D view of **layer 1**
+of whatever image sits in `slot`. `sampler2D` stays `sampler2D`. The
+shader/view pairing problem that the array approach had — a `sampler2DArray`
+requiring a matching `2D_ARRAY` view, validation error if they disagree —
+disappears entirely.
+
+Best property: **the slot holding `#95` never has to be identified.** Mirror
+every descriptor write into the twin region, substituting a layer-1 view for
+per-eye images and duplicating the descriptor otherwise. Undoubled textures
+then read identically in both views, so the patch needs no per-shader
+targeting — and a shadow map's twin *is* the same shadow map, which defuses
+that hazard instead of dodging it.
+
+Headroom is not a problem: RADV allows 8,388,606 sampled-image descriptors per
+set against X4's 53,306.
+
+**Four questions first, all answerable with counters in the descriptor hooks
+the layer already has** — see the end of "Take twenty". The first one decides
+the size of the job: whether X4 allocates all 53,306 descriptors, or declares
+the array large and binds fewer, in which case the layer has to widen the
+descriptor set layout and pool rather than just mirror writes.
 
 **Pass condition, when it gets there:** `#103` flips from all-IDENTICAL to
 all-DIFFER. Still nothing on screen — that waits for the format-44 chain.
@@ -133,7 +156,10 @@ which is what every take from sixteen on has used.
     X4VR_MV=1                 doubling + masking (the whole stage-1 mechanism)
     X4VR_STEREO=1             per-eye K, both eyes baked, gl_ViewIndex selects
     X4VR_MASK_TONEMAP=1       mask rp #40/#52 so #103 replicates (keyed on the
-                              SRGB attachment format; UNORM is left alone)
+                              SRGB attachment format; UNORM is left alone).
+                              MISNOMER: those passes are not a tonemap, they
+                              are LDR composition and are shared with UI
+                              geometry. Kept for continuity with the tags.
     X4VR_MV_PROBE=1           the per-image layer0-vs-layer1 verdict table
     X4VR_MV_INVENTORY=1       pass/framebuffer/image inventory; required for
                               any join between passes and image serials
@@ -178,7 +204,7 @@ which is what every take from sixteen on has used.
 
 ### What the method has been worth
 
-Two guesses have been overturned by measuring before patching, each of which
+Four guesses have been overturned by measuring before patching, each of which
 would have cost a wrong-looking live run and a false conclusion about the
 mechanism:
 
@@ -186,6 +212,17 @@ mechanism:
   would have changed nothing and read as the fragment patch failing.
 * `#101` "is intermittently mono" — it was a constant clear the instrument
   could not name. Patching near it would have been patching a non-problem.
+* **"X4 binds textures per descriptor"** — it is bindless, one 53,306-entry
+  table for the whole game. The type-promotion patch was built, proven offline,
+  and is unusable here. Wiring it first would have promoted every texture X4
+  owns and produced a spectacular, hard-to-attribute mess.
+* **"`#103` is the tonemap output"** — it is the LDR composition target, and
+  the pass it is written by is shared with UI geometry.
+
+Three instruments have also been quietly wrong for at least one run each: the
+probe's zero-only test, the writer-list `?` sentinel, and the sampler lister's
+blindness to `OpTypeArray`. Enough of a pattern to be a rule: **check a new
+instrument's first non-trivial reading against something already known.**
 
 And one implementation trap caught offline: dropping SRGB from
 `is_ldr_format`, the obvious one-line way to mask the tonemap, also shears it.
@@ -2148,3 +2185,165 @@ Committed prediction, before the run:
 
 If the third point is wrong the patch will refuse the shader outright, and that
 is worth knowing before any wiring is written rather than after.
+
+---
+
+## Take twenty: X4 is bindless, and the prediction was wrong on every point
+
+The measurement run (`X4VR_MV_INVENTORY=1` + `X4VR_DUMP_SHADERS`), 409 modules
+dumped. Predicted versus measured:
+
+| Predicted | Measured |
+|---|---|
+| Two lines, rp #40 and rp #52 | **Nine** lines, all rp #40; rp #52 got none |
+| The same module serial in both | **Six different** modules |
+| More than one sampled texture | **One** — and "samples nothing" was printed |
+| None flagged `(already array)`/`(DEPTH)` | Correct, but for the wrong reason |
+
+Four for four wrong, and each wrong answer was worth more than the predicted
+one would have been.
+
+### X4 is bindless
+
+Every shader drawing into `#103` samples exactly one thing:
+
+    TEX set=0 binding=7 count=53306
+
+One array of **53,306** textures at set 0 binding 7, a separate array of 18
+samplers at set 0 binding 4, and the element index arrives as a plain `uint`
+from a uniform block. X4 ships debug names, so it is not a guess:
+
+    %326 = OpAccessChain %_ptr_UniformConstant_193 %SRGB_sampler2D %325
+    %327 = OpLoad %193 %326
+    %330 = OpSampledImage %280 %327 %329
+    %332 = OpImageSampleImplicitLod %v4float %330 %331
+
+where `%325` is **`S_diffuse_idx`** — member 11 of
+`BLOCK_BUFFER_BINDING_SLOT_DYNAMIC`, set 4 binding 0. Every material in the
+game shares that one table.
+
+Also: **one module carries both entry points**, both called `main`:
+
+    OpEntryPoint Vertex %main "main" %IO_uv0 %_ %gl_VertexIndex
+    OpEntryPoint Fragment %main_0 "main" %OUT_RT0 %IO_uv0_0
+
+So `classify()` and `patch_vertex_clip` have been operating on modules that
+also contain a fragment stage all along. Harmless — they key on the Vertex
+entry point — but it means a fragment patch and a vertex patch would land in
+the *same* module, each adding its own `ViewIndex` input.
+
+### This kills the type-promotion patch for X4
+
+`patch_fragment_view_layer` promotes a texture's `OpTypeImage` to `Arrayed 1`.
+Applied here that promotes **all 53,306 entries** to `sampler2DArray`, and only
+about twenty images are doubled. Every other texture in the game would then be
+read at an array layer that does not exist.
+
+It already refuses — the pointee is an `OpTypeArray`, not an image, so it bails.
+That was luck as much as design, so `tests/sample_bindless.frag` now asserts it.
+
+The offline work is not wasted: it proved *that* a sample can follow
+`gl_ViewIndex`, on this driver, with a measured before/after. But the
+type-promotion route is not the mechanism for X4 and should not be wired in.
+
+### `#103` is not a tonemap output
+
+The label came from shape — an SRGB LDR target sitting after the HDR chain —
+and the shaders contradict it. rp #40's framebuffer covers `#103` and *six*
+pipelines draw through it. Three carry full vertex attributes
+(`SPECIAL_VERTEXLOCATION_POSITION`, `IO_uv0`, `IO_uv1`, `IO_color`) — ordinary
+geometry, i.e. UI. The one that is fullscreen-shaped, `mod-0022`, has a vertex
+stage using only `gl_VertexIndex` and a fragment stage doing **one** sample:
+
+    colour = table[S_diffuse_idx] * S_diffusestr * S_diffuse_color
+             * U_useralphascale * F_alphascale
+
+That is X4's generic material shader drawing a textured quad. No exposure
+curve, no bloom combine, one texture. So `#103` is the LDR **composition**
+target — something copies the post-processed scene into it and UI is drawn on
+top — and the actual tonemapping happens elsewhere (`#95`'s writers are rp
+#31/#30/#32/#38/#39/#64).
+
+`X4VR_MASK_TONEMAP` therefore masks more than a tonemap: it masks every
+single-SRGB-attachment pass, UI geometry included. Empirically harmless — the
+screen was unchanged and `MISMATCHED=0`, `layer-0-only=0`, `wide=0` — because
+those UI pipelines take the unpatched modules via the existing unsheared-pass
+exclusion. The knob keeps its name for continuity with the tagged runs; the
+name is wrong.
+
+**One prediction this corrects.** Task #5 expected "no HUD in the right eye if
+the UI chain stays mono". The opposite should happen: the HUD is drawn *into*
+`#103`, which replicates, so it will appear in both eyes at the same screen
+position — which is what is wanted.
+
+### rp #52 got no pipelines, and that is not a bug
+
+Vulkan lets a pipeline be used with any *compatible* render pass, so X4 creates
+pipelines against rp #40 and uses them with rp #52. A join from render pass to
+pipeline is therefore one-way: every pipeline names a pass, but a pass does not
+enumerate its pipelines. Anything built on "the pipelines of pass X" has to
+tolerate that.
+
+### The instrument lied, and the fix is regression-tested
+
+"samples nothing" about a shader that samples, because the lister looked for
+`OpTypeImage` behind the pointer and found `OpTypeArray`. Fixed, with `count`
+reported. Reverting the fix makes `sample_bindless.frag` report nothing again —
+the same failure, reproduced offline in a second.
+
+That is the third instrument to have been quietly wrong here, after the probe's
+zero-only test and the writer-list `?` sentinel. The pattern is consistent
+enough to state as a rule: **a new instrument's first non-trivial reading should
+be checked against something already known**, because all three were believed
+for at least one run.
+
+### What bindless makes possible instead
+
+The index is a plain integer in a uniform. So per-view sampling becomes an
+*integer* selection, with no type change anywhere:
+
+    element = S_diffuse_idx + gl_ViewIndex * OFFSET
+
+with the layer writing, at `slot + OFFSET`, an ordinary 2D view of **layer 1**
+of whatever image sits in `slot`. `sampler2D` stays `sampler2D`; a 2D view of
+layer 1 is an entirely ordinary view. The whole shader/view pairing problem —
+`sampler2DArray` needing a matching `VK_IMAGE_VIEW_TYPE_2D_ARRAY`, and a
+validation error if they disagree — simply disappears.
+
+The property that makes it attractive: **we never need to know which slot holds
+`#95`.** The layer mirrors every descriptor write into the twin region,
+substituting a layer-1 view when the image is per-eye and duplicating the
+descriptor otherwise. A shader reading an undoubled texture in view 1 gets the
+identical texture, so the patch can be applied broadly without per-shader
+targeting — and a shadow map's twin slot is the same shadow map, which defuses
+the hazard that killed the earlier attempt rather than dodging it.
+
+Feasibility, measured on this device (RADV, RX 7900 XTX):
+
+    maxPerStageDescriptorSampledImages       = 8388606
+    maxDescriptorSetSampledImages            = 8388606
+    X4's table                               =   53306
+
+About 150× headroom, so a twin region at a fixed offset fits with room to
+spare. Descriptor memory roughly doubles for that binding — on the order of a
+megabyte or two, against the ~566 MB the doubling already costs. Per-frame cost
+is one integer multiply-add in the fragment shader, and *zero* extra work per
+frame on the CPU.
+
+Open questions before any of this is built, in order:
+
+1. Does X4 **allocate** 53,306 descriptors, or declare the array large and bind
+   fewer via `VARIABLE_DESCRIPTOR_COUNT`? This decides whether the layer must
+   widen the descriptor set layout and pool, which is a far bigger intervention
+   than mirroring writes.
+2. How many slots does X4 actually write, and how — one bulk update or
+   incremental? Determines where the twin region can live.
+3. Do any shaders index the table with something that is *not* uniform across a
+   draw? That would need `NonUniformEXT`, which the patch would have to
+   preserve. `gl_ViewIndex` itself is draw-uniform, so it adds no
+   non-uniformity of its own.
+4. Is the same table used for storage images or subpass inputs anywhere? Those
+   would need excluding.
+
+None of these needs a guess: all four are answerable with counters in the
+descriptor hooks the layer already has.
