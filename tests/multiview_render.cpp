@@ -76,6 +76,7 @@ int main(int argc, char **argv) {
             "vkCreateXlibSurfaceKHR",
             "vkDestroySurfaceKHR",
             "vkGetPhysicalDeviceSurfaceCapabilities2KHR",
+            "vkGetPhysicalDeviceSurfaceSupportKHR",
             "vkNoSuchFunctionX4VR",
         };
         for (const char *name : kNames)

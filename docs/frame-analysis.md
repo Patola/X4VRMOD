@@ -4636,3 +4636,72 @@ squashed into 1408, and A dies there instead.
   appears for the xcb surface, X4 never asks about the surface it presents on,
   the halving lever is unreachable by any route, and A is dead on the same
   evidence that killed the "two levers" story.
+
+## Take thirty-five: P27 refuted, and X4 presents on a surface it should not have
+
+Run: `X4VR_TAKE=35-caps2 X4VR_LOG=/tmp/x4vr-take35.log X4VR_GAMESCOPE=1
+X4VR_SBS=1 ./launch/x4vr-launch.sh`
+
+**P27 refuted, and more completely than predicted.** `surface caps2` appears
+zero times. X4 enables `VK_KHR_get_surface_capabilities2` and never calls it.
+So the halving lever is not being bypassed through the 2-variant — but it still
+never fires, because the only caps query in X4's process is the 1-variant on the
+**Wayland** surface, which returns `0xFFFFFFFF`. The xcb surface is never asked
+about at all.
+
+The line that changes the problem:
+
+```
+swapchain created: 1408x1408 images>=4 format=44 presentMode=1 wsi=wayland
+```
+
+X4's presenting swapchain is on the surface built by
+`vkCreateWaylandSurfaceKHR`, while `SDL_GetCurrentVideoDriver()` is `x11` and an
+xcb surface exists for window `0x40002e` on gamescope's `DISPLAY=:2`.
+
+### The model this suggests
+
+`WAYLAND_DISPLAY` is unset for X4, but `wl_display_connect(NULL)` falls back to
+`wayland-0` in `XDG_RUNTIME_DIR` — the **host Plasma compositor**. gamescope was
+not started with `--expose-wayland`, so its own socket is not that one. A
+Wayland surface inside X4 therefore means a connection that goes around
+gamescope entirely.
+
+If that is what is happening, X4 is split across two display servers:
+
+* **output** — a Plasma toplevel, 2816 wide because our composite made the
+  buffer 2816 wide, borderless, sitting on top of gamescope's own window;
+* **input** — SDL's X11 window on gamescope's nested display, 1408 wide,
+  centred by gamescope in 2816, giving coordinates offset by 704 and a pointer
+  confined to a centred square.
+
+Which is exactly what has been reported from the screen since take thirty-three,
+and exactly the geometry measured from `/tmp/top.jpg`. The 704 is not a
+compositor placing a window inside a larger one for cosmetic reasons; it is two
+different windows, in two different display servers, being mistaken for one.
+
+It also means the split render has been "working" for the wrong reason. X4 sizes
+itself from `res_width` because the surface it asks is Wayland and declines to
+state an extent — and the code has been calling that "the Wayland path" while
+believing X4 was on X11 for everything else.
+
+**This is a model, not a measurement.** It is written down because it makes
+sharp predictions, and the run that tests them costs one minute.
+
+- **P28** — the Wayland and xcb surface handles are different values, and the
+  swapchain's surface equals the Wayland one. If they are the *same* value, the
+  driver recycled a handle, `wsi=` has been labelling the wrong object, and
+  everything above collapses into an instrumentation bug.
+- **P29** — X4 either never calls `vkGetPhysicalDeviceSurfaceSupportKHR` for the
+  xcb surface, or calls it and is told `NO`. A `YES` it then ignored would mean
+  X4 chose Wayland deliberately with a working X11 path available, which is a
+  different repair.
+- **P30** — there are two overlapping windows on the host: gamescope's, drawing
+  nothing, and X4's on top of it. Answerable by looking at the screen, so it
+  will be asked rather than inferred.
+
+If the model holds, the repair is not arithmetic anywhere. It is to stop X4
+having two windows: either deny it the host Wayland socket so the xcb surface is
+the only one it can present on, or give gamescope `--expose-wayland` so its
+Wayland connection lands on gamescope instead of Plasma. Both are one-line
+changes to the launcher and both are testable in a single run.

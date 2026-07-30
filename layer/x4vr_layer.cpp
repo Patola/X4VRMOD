@@ -3742,10 +3742,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
     // surface, so it has to be named here rather than assumed to be the
     // surface some earlier line happened to mention.
     X4VR_LOG("swapchain created: %ux%u images>=%u format=%d presentMode=%d "
-             "wsi=%s -> %s",
+             "surface %p wsi=%s (pid %d) -> %s",
              ci->imageExtent.width, ci->imageExtent.height, ci->minImageCount,
-             (int)ci->imageFormat, (int)ci->presentMode,
-             surface_wsi(ci->surface), r == VK_SUCCESS ? "ok" : "FAILED");
+             (int)ci->imageFormat, (int)ci->presentMode, (void *)ci->surface,
+             surface_wsi(ci->surface), (int)getpid(),
+             r == VK_SUCCESS ? "ok" : "FAILED");
     if (r == VK_SUCCESS && *out != VK_NULL_HANDLE) {
         // Recorded from sbs_ci, not ci: that is the swapchain that actually
         // exists, and its extent is what its images have.
@@ -3860,11 +3861,17 @@ VkResult create_surface_observed(VkInstance instance, const char *entry,
     if (r != VK_SUCCESS || !out)
         return r;
     note_surface_wsi(*out, wsi);
+    // The handle is printed because the label alone cannot be checked. Take
+    // thirty-five has X4 creating a Wayland surface and an xcb surface, then
+    // presenting on the one labelled Wayland while SDL's video driver is x11 --
+    // which is either true and strange, or a handle this map has mixed up.
+    // Without the values there is no way to tell those apart.
     if (window == kNoWindow)
-        X4VR_LOG("wsi: surface created via %s (pid %d)", entry, (int)getpid());
+        X4VR_LOG("wsi: surface %p created via %s (pid %d)", (void *)*out, entry,
+                 (int)getpid());
     else
-        X4VR_LOG("wsi: surface created via %s, window 0x%lx (pid %d)", entry,
-                 window, (int)getpid());
+        X4VR_LOG("wsi: surface %p created via %s, window 0x%lx (pid %d)",
+                 (void *)*out, entry, window, (int)getpid());
     log_sdl_backend_once();
     return r;
 }
@@ -3902,9 +3909,46 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroySurfaceKHR(
             next = (PFN_vkDestroySurfaceKHR)it->second.gipa(
                 instance, "vkDestroySurfaceKHR");
     }
+    X4VR_LOG("wsi: surface %p destroyed (was %s, pid %d)", (void *)surface,
+             surface_wsi(surface), (int)getpid());
     forget_surface(surface);
     if (next)
         next(instance, surface, ac);
+}
+
+// "Can I present on this surface, from this queue family?"
+//
+// X4 creates a Wayland surface and an xcb surface and then, on take
+// thirty-five, appears to present on the Wayland one while SDL's video driver
+// is x11. If it asked this question of the xcb surface and got VK_FALSE, that
+// is the entire explanation and it is one line away; if it never asked, the
+// choice was made some other way and the search moves elsewhere. Either answer
+// is worth more than another round of reasoning about it.
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetPhysicalDeviceSurfaceSupportKHR(
+    VkPhysicalDevice phys, uint32_t family, VkSurfaceKHR surface,
+    VkBool32 *supported) {
+    PFN_vkGetPhysicalDeviceSurfaceSupportKHR next;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        auto it = g_instances.find(dispatch_key(phys));
+        if (it == g_instances.end())
+            return VK_ERROR_INITIALIZATION_FAILED;
+        next = (PFN_vkGetPhysicalDeviceSurfaceSupportKHR)it->second.gipa(
+            it->second.instance, "vkGetPhysicalDeviceSurfaceSupportKHR");
+    }
+    if (!next)
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
+    VkResult r = next(phys, family, surface, supported);
+    // Every call, not the first: the question is asked once per (surface,
+    // family) pair and the interesting answer is whichever one is VK_FALSE.
+    // A once-per-process flag is what hid the second surface last take.
+    X4VR_LOG("wsi: present support? surface %p (%s) family %u -> %s (pid %d)",
+             (void *)surface, surface_wsi(surface), family,
+             r != VK_SUCCESS      ? "query FAILED"
+             : (supported && *supported) ? "YES"
+                                         : "NO",
+             (int)getpid());
+    return r;
 }
 
 // The *other* way to ask the same question.
@@ -3937,8 +3981,9 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetPhysicalDeviceSurfaceCapabilities2KHR(
     if (r != VK_SUCCESS || !info || !caps)
         return r;
     if (note_surface_seen(info->surface))
-        X4VR_LOG("sbs: surface caps2 currentExtent=%ux%u min=%ux%u max=%ux%u "
+        X4VR_LOG("sbs: surface %p caps2 currentExtent=%ux%u min=%ux%u max=%ux%u "
                  "wsi=%s (pid %d) — NOT halved, this path is observation only",
+                 (void *)info->surface,
                  caps->surfaceCapabilities.currentExtent.width,
                  caps->surfaceCapabilities.currentExtent.height,
                  caps->surfaceCapabilities.minImageExtent.width,
@@ -3995,12 +4040,13 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetPhysicalDeviceSurfaceCapabilitiesKHR(
         // the Wayland surface reporting no preferred extent was X4's or
         // gamescope's own -- which is the difference between "force the driver"
         // and "nothing is wrong here".
-        X4VR_LOG("sbs: surface caps currentExtent=%ux%u min=%ux%u max=%ux%u "
+        X4VR_LOG("sbs: surface %p caps currentExtent=%ux%u min=%ux%u max=%ux%u "
                  "wsi=%s (pid %d)",
-                 caps->currentExtent.width, caps->currentExtent.height,
-                 caps->minImageExtent.width, caps->minImageExtent.height,
-                 caps->maxImageExtent.width, caps->maxImageExtent.height,
-                 surface_wsi(surface), (int)getpid());
+                 (void *)surface, caps->currentExtent.width,
+                 caps->currentExtent.height, caps->minImageExtent.width,
+                 caps->minImageExtent.height, caps->maxImageExtent.width,
+                 caps->maxImageExtent.height, surface_wsi(surface),
+                 (int)getpid());
     }
     if (was == 0xFFFFFFFFu || was < 2) {
         forget_halved_surface(surface);
@@ -5793,6 +5839,8 @@ const NameFunc kSurfaceHooks[] = {
     // VK_KHR_get_surface_capabilities2 here".
     {"vkGetPhysicalDeviceSurfaceCapabilities2KHR",
      (PFN_vkVoidFunction)x4vr_GetPhysicalDeviceSurfaceCapabilities2KHR},
+    {"vkGetPhysicalDeviceSurfaceSupportKHR",
+     (PFN_vkVoidFunction)x4vr_GetPhysicalDeviceSurfaceSupportKHR},
 };
 
 PFN_vkVoidFunction find_surface_hook(const char *name) {
