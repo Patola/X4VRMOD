@@ -5591,3 +5591,61 @@ existed the whole time and was switched off.
 
 The run is observation-only and rides on `stage2-duplicate-restored`, so the
 screen stays good while it answers.
+
+## Take forty-seven: P55 refuted — X4 never uses a descriptor update template
+
+```
+bindless final: 0 template updates, 0 of them via a template carrying image descriptors
+```
+
+Zero, both counters, at first present and at exit. The road the mirror does not
+watch is a road X4 never drives. The elimination in the section above therefore
+has **no surviving candidate**, and the mirror's coverage is not the explanation.
+
+Recorded rather than quietly dropped, because the reasoning was sound and the
+conclusion was still wrong: three mechanisms were excluded correctly and the
+fourth was assumed to be live without checking, in a project whose recurring
+failure is exactly that.
+
+### What the survey did establish
+
+```
+layout #0 binding 5 — 10976 distinct slots, range 0..10975, 155 holding a per-eye image
+layout #0 binding 7 — 10976 distinct slots, range 0..10975, 155 holding a per-eye image
+bindless final: 61570259 image-descriptor writes, 61549006 after the first present
+per-eye slots: 10946=img#65 10947=img#65 10945=img#54 10944=img#57 …
+```
+
+* X4 occupies slots **0..10975** of a 53306-element table. The offset 26653
+  lands twins at 26653..37628 — inside the table, clear of X4's range. The
+  constant is sound.
+* **155** of those slots hold a per-eye image, and they include the exact
+  sources in question: `img#65` (the sRGB tonemap output), `img#57` and
+  `img#54` (HDR colour).
+* X4 rewrites descriptors continuously — 61.5 million writes, 99.97% of them
+  after the first present. Nothing here is a one-shot setup that could be
+  missed by arriving late.
+
+### Every mechanism that could produce black, and why each is excluded
+
+| mechanism | verdict |
+|---|---|
+| twin slot out of range | `no_room` counter is 0; 10975 + 26653 < 53306 |
+| twin region overlaps X4's own | collision guard logs `DISABLED`; absent |
+| written via a template, unmirrored | **P55: zero template updates** |
+| patch offsets a *small* array out of bounds | patch uses `count > offset`, the same bound as the mirror; the 58/18/16/2-element bindings are excluded |
+| layer 1 never rendered for that image | `view_of_layer` guards on `g_per_eye_images`; a miss returns NULL and the twin is a **verbatim** copy — which yields a duplicate, not black |
+| descriptor written before its framebuffer | same guard, same verbatim fallback — duplicate, not black |
+
+Reading the code has run out of candidates. Every remaining path produces a
+*duplicate* when it fails, and the observed failure is *empty*.
+
+- **P56** — with the patch on and a settled frame, `#65`'s layer 1 is **empty**
+  (fill near 0), placing the loss at `rp #33`/`rp #45` where the offset is
+  applied. Refuted two distinguishable ways: layer 1 **full but identical**
+  means the patch never took effect on that pass, and layer 1 **full and
+  DIFFER** means the offset works at `#65` and the black is introduced further
+  down, at `rp #0`.
+
+One image, three outcomes, one run. Take forty-five could not answer it — its
+only `#65` sample landed mid-load and the scorer discarded it.
