@@ -18,6 +18,8 @@
 #define _GNU_SOURCE 1
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <stdarg.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -157,7 +159,7 @@ std::string redirect_write(const char *path) {
 // startup dump is what arrived, the setenv/putenv watch is what changed after.
 const char *const kWatchedEnv[] = {
     "SDL_VIDEODRIVER", "SDL_VIDEO_DRIVER", "WAYLAND_DISPLAY",
-    "DISPLAY",         "XDG_SESSION_TYPE",
+    "DISPLAY",         "XDG_SESSION_TYPE", "XDG_RUNTIME_DIR",
 };
 
 bool is_watched_env(const char *name, size_t len) {
@@ -235,6 +237,37 @@ __attribute__((constructor)) static void x4vr_inject_init() {
 //
 // Interposed rather than merely observed for one reason: nothing else can see
 // a write that happens after our constructor ran.
+// Which display server X4 is actually talking to.
+//
+// Take thirty-six: X4 creates a Wayland surface (handle 0x3edd2040) and an xcb
+// surface (0x3befb820), never asks whether it can present on the xcb one, and
+// builds its swapchain on the Wayland one -- while SDL's video driver is x11.
+// Every explanation for that turns on which socket the Wayland connection
+// reached, and the two candidates sit side by side in $XDG_RUNTIME_DIR:
+// `wayland-0` is the host Plasma session, `gamescope-0` is gamescope's own.
+// The launcher's `env -u WAYLAND_DISPLAY` strips the variable that would have
+// named the second, so an unqualified wl_display_connect(NULL) falls back to
+// the first.
+//
+// That is an argument. This is the measurement: the connect() path itself.
+// Only display-server sockets are logged -- X4 opens plenty of others.
+int connect(int fd, const struct sockaddr *addr, socklen_t len) {
+    static auto real_connect =
+        real<int (*)(int, const struct sockaddr *, socklen_t)>("connect");
+    if (addr && addr->sa_family == AF_UNIX && len > sizeof(sa_family_t)) {
+        const char *path = ((const struct sockaddr_un *)addr)->sun_path;
+        // Abstract sockets start with NUL; print the name after it so the X11
+        // ones (@/tmp/.X11-unix/X2) are not silently dropped as empty.
+        const bool abstract = path[0] == '\0';
+        const char *shown = abstract ? path + 1 : path;
+        if (strstr(shown, "wayland") || strstr(shown, "gamescope") ||
+            strstr(shown, "X11-unix"))
+            X4VR_LOG("net: connect(%s%s) by pid %d", abstract ? "@" : "", shown,
+                     getpid());
+    }
+    return real_connect(fd, addr, len);
+}
+
 // No null guards on the arguments: glibc declares all three nonnull, so a
 // check here is dead code the compiler is entitled to delete, and -Wnonnull
 // -compare says so. A caller passing null is already in undefined behaviour

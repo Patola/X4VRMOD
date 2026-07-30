@@ -4705,3 +4705,67 @@ having two windows: either deny it the host Wayland socket so the xcb surface is
 the only one it can present on, or give gamescope `--expose-wayland` so its
 Wayland connection lands on gamescope instead of Plasma. Both are one-line
 changes to the launcher and both are testable in a single run.
+
+## Take thirty-six: P28 and P29 confirmed, P30 refuted
+
+Run: `X4VR_TAKE=36-handles X4VR_LOG=/tmp/x4vr-take36.log X4VR_GAMESCOPE=1
+X4VR_SBS=1 ./launch/x4vr-launch.sh`
+
+```
+wsi: surface 0x3edd2040 created via vkCreateWaylandSurfaceKHR (pid 3418032)
+wsi: SDL_GetCurrentVideoDriver()=x11 hint SDL_VIDEO_DRIVER=x11 (pid 3418032)
+wsi: surface 0x3befb820 created via vkCreateXcbSurfaceKHR, window 0x40002e
+wsi: present support? surface 0x3edd2040 (wayland) family 0..4 -> YES YES NO NO NO
+swapchain created: 1408x1408 … surface 0x3edd2040 wsi=wayland -> ok
+wsi: surface 0x3befb820 destroyed (was xcb)   ← at shutdown, never used
+```
+
+- **P28 confirmed.** The handles are distinct — `0x3edd2040` Wayland,
+  `0x3befb820` xcb — and both are still correctly labelled when destroyed at
+  shutdown. No recycling, no mislabelling. X4 genuinely presents on Wayland.
+- **P29 confirmed, first branch.** X4 asks `vkGetPhysicalDeviceSurfaceSupportKHR`
+  for the Wayland surface across all five queue families and **never asks about
+  the xcb surface at all**. The X11 path was not tested and rejected; it was
+  created and abandoned.
+- **P30 refuted.** Reported from the screen: one window. Alt-tab and exposé show
+  nothing else. So "two toplevels in two display servers" is wrong, and the
+  model built on it in take thirty-five does not survive.
+
+That is three takes in a row where a coherent story was promoted ahead of the
+measurement and did not survive it. The pattern is worth naming: each story was
+built to explain the *previous* measurement, and each one reached past it to
+predict something it had no standing to predict.
+
+### The thing that was never measured
+
+Every remaining explanation turns on **which socket** the Wayland connection
+reached, and the candidates sit side by side in `$XDG_RUNTIME_DIR`:
+
+```
+wayland-0      the host Plasma session
+gamescope-0    gamescope's own compositor
+```
+
+`wl_display_connect(NULL)` uses `$WAYLAND_DISPLAY`, falling back to `wayland-0`.
+The launcher runs the game under `env -u WAYLAND_DISPLAY` — which strips exactly
+the variable that would have named `gamescope-0`. So the fallback is Plasma, by
+construction, and the flag written to force X11 is what routes output away from
+gamescope.
+
+That is an argument, and arguments have lost three takes running. `connect(2)`
+is now interposed and logs the socket path for any Wayland, gamescope or X11
+socket; `XDG_RUNTIME_DIR` joins the watched environment.
+
+- **P31** — X4 connects to `$XDG_RUNTIME_DIR/wayland-0`. If it connects to
+  `gamescope-0` instead, then X4 is a Wayland client *of gamescope*, there is
+  genuinely one window, and the 704 is gamescope compositing two surfaces from
+  the same client — its Wayland output and its X11 input window — at different
+  sizes.
+- **P32** — X4 also connects to an X11 socket (`@/tmp/.X11-unix/X2`), since it
+  has an xcb surface for window `0x40002e` on `DISPLAY=:2`. If it does not, that
+  window came from somewhere else and the xcb surface is stranger than it looks.
+
+P31 is the one that decides the repair. `wayland-0` means the launcher's own
+`env -u WAYLAND_DISPLAY` is the cause and the fix is in the launcher.
+`gamescope-0` means X4 presents one surface and takes input through another,
+both inside gamescope, and the fix is to stop it having two.
