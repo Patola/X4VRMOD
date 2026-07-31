@@ -2782,6 +2782,29 @@ void record_module(const VkShaderModuleCreateInfo *ci, VkShaderModule mod) {
     fclose(f);
 }
 
+// The projection terms the eye shear is baked from.
+//
+// One definition each, because the shear is built in two places (X4VR_EYE and
+// X4VR_STEREO) and checked in a third (the live-projection dump). Three copies
+// of a literal default drift apart precisely when the value turns out to be
+// wrong, which is the case these exist to diagnose.
+//
+// The defaults are the Phase 4a measurements, taken at 2816x1408. They are not
+// guesses -- but sx carries the aspect, and the eye is no longer that shape.
+// See read_proj_terms() and X4VR_DUMP_MATRICES.
+float assumed_proj_sx() {
+    static const float v = getenv("X4VR_PROJ_SX")
+                               ? strtof(getenv("X4VR_PROJ_SX"), nullptr)
+                               : 0.889f;
+    return v;
+}
+float assumed_proj_near() {
+    static const float v = getenv("X4VR_PROJ_NEAR")
+                               ? strtof(getenv("X4VR_PROJ_NEAR"), nullptr)
+                               : 0.1f;
+    return v;
+}
+
 // The patching itself. Wrapped below so the dump happens on every path out of
 // it without four copies of the same two lines.
 VkResult create_shader_module_inner(
@@ -2836,12 +2859,8 @@ VkResult create_shader_module_inner(
             const float ipd = getenv("X4VR_IPD")
                                   ? strtof(getenv("X4VR_IPD"), nullptr)
                                   : 0.064f;
-            const float sx = getenv("X4VR_PROJ_SX")
-                                 ? strtof(getenv("X4VR_PROJ_SX"), nullptr)
-                                 : 0.889f;
-            const float nz = getenv("X4VR_PROJ_NEAR")
-                                 ? strtof(getenv("X4VR_PROJ_NEAR"), nullptr)
-                                 : 0.1f;
+            const float sx = assumed_proj_sx();
+            const float nz = assumed_proj_near();
             const bool right = (eye[0] == 'r' || eye[0] == 'R');
             const float dx = (right ? +0.5f : -0.5f) * ipd;
             const x4vr::Mat4 k = x4vr::make_eye_shear(sx, 0.0f, nz, dx);
@@ -2861,12 +2880,8 @@ VkResult create_shader_module_inner(
             const float ipd = getenv("X4VR_IPD")
                                   ? strtof(getenv("X4VR_IPD"), nullptr)
                                   : 0.064f;
-            const float sx = getenv("X4VR_PROJ_SX")
-                                 ? strtof(getenv("X4VR_PROJ_SX"), nullptr)
-                                 : 0.889f;
-            const float nz = getenv("X4VR_PROJ_NEAR")
-                                 ? strtof(getenv("X4VR_PROJ_NEAR"), nullptr)
-                                 : 0.1f;
+            const float sx = assumed_proj_sx();
+            const float nz = assumed_proj_near();
             const x4vr::Mat4 kl = x4vr::make_eye_shear(sx, 0.0f, nz, -0.5f * ipd);
             const x4vr::Mat4 kr = x4vr::make_eye_shear(sx, 0.0f, nz, +0.5f * ipd);
             memcpy(K_world, kl.m, sizeof(kl.m));
@@ -3504,11 +3519,46 @@ void patch_view_before_submit() {
         X4VR_LOG("M_viewprojection%s", b);
         x4vr::format_mat(b, sizeof(b), x4vr::load(blk + x4vr::kViewInverse));
         X4VR_LOG("M_viewinverse   %s", b);
+        const x4vr::Mat4 proj_uj = x4vr::load(blk + x4vr::kProjectionUJ);
+        x4vr::format_mat(b, sizeof(b), proj_uj);
+        X4VR_LOG("M_projectionUJ  %s", b);
         X4VR_LOG("storage order detected: %s (draws=%u)",
                  major == x4vr::Major::Column ? "column-major"
                  : major == x4vr::Major::Row  ? "row-major"
                                               : "UNKNOWN",
                  best_n);
+
+        // Task #23: the whole point of the dump. Read sx and near out of the
+        // live projection and say, in one line, whether the shear we baked at
+        // module-creation time was built on the right numbers.
+        //
+        // The un-jittered matrix is the one to trust (TAA jitter occupies
+        // m[8]/m[9], the shear's own slots); the jittered one is reported
+        // alongside so a disagreement in sx/near -- which jitter cannot cause
+        // -- is visible rather than assumed away.
+        const x4vr::ProjTerms t = x4vr::read_proj_terms(proj_uj, major);
+        const x4vr::ProjTerms tj = x4vr::read_proj_terms(proj_probe, major);
+        if (!t.ok) {
+            X4VR_LOG("proj: could not read terms from M_projectionUJ "
+                     "(sx=%.5f near=%.5f) -- shear still on assumed values",
+                     t.sx, t.near_z);
+        } else {
+            const float ipd = getenv("X4VR_IPD")
+                                  ? strtof(getenv("X4VR_IPD"), nullptr)
+                                  : 0.064f;
+            const float d = 0.5f * ipd;
+            const float measured = t.sx * d / t.near_z;
+            const float baked = assumed_proj_sx() * d / assumed_proj_near();
+            X4VR_LOG("proj MEASURED: sx=%.5f sy=%.5f near=%.5f "
+                     "(jittered sx=%.5f near=%.5f)",
+                     t.sx, t.sy, t.near_z, tj.sx, tj.near_z);
+            X4VR_LOG("proj ASSUMED : sx=%.5f near=%.5f", assumed_proj_sx(),
+                     assumed_proj_near());
+            X4VR_LOG("proj SHEAR   : measured |m8|=%.5f vs baked |m8|=%.5f "
+                     "-> baked is %.3fx the correct magnitude (ipd=%.4f)",
+                     std::fabs(measured), std::fabs(baked),
+                     measured != 0.0f ? baked / measured : 0.0f, ipd);
+        }
     }
 
     if (ox == 0.0f && oy == 0.0f && oz == 0.0f)
