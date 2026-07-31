@@ -7232,3 +7232,63 @@ finally stops growing.
 Either outcome is informative, which is the property this run was designed for.
 This is a **diagnostic build**: take 63 removes an effect the flatscreen game
 has, so it is not a candidate for `docs/known-good-runs.md` whatever it scores.
+
+## Take 63 — P69 CONFIRMED: the fog carries the difference, it does not make it
+
+Take 61's command plus `X4VR_DISABLE_FOG=1`. All 8 modules were patched
+(`fog final: … in 8 module(s)`), so the test genuinely ran.
+
+    probe     take 61        take 62        take 63 (fog term removed)
+    l1/l0     1.846          1.860          1.846
+    changed   420054         420055         420057
+    level     .004788/.00884 .004764/.008864 .004791/.008844
+
+Three texels out of 420,000 separate take 63 from take 61. **`#57`'s layer
+difference is bit-stable with the fog composite gone.** P69 confirmed: the fog
+pass is a carrier. The source is upstream, among the other five passes that
+write `#57`.
+
+That is the eighth mechanism excluded, and the first excluded by removing a term
+rather than by argument.
+
+### The wrong turn in the same run: the signature was too coarse
+
+The screen went black — every 3D scene, HUD only. Take 63's own pass→shader join
+says why:
+
+    rp #13, #16, #23, #30, #34, #36, #38, #40, #42  <-  frag module #182
+
+`mod-0182` is bound to **nine** passes: the main geometry passes and all five
+depth-only shadow passes. It is not a fog shader. It merely satisfies "declares
+a SubpassData image and samples a 3D one", and zeroing that sample removed
+something the whole scene depends on.
+
+The error was reading "bound to the fog pass" as "bound only to the fog pass".
+The join that revealed the fog pass in the first place contained the refutation
+already — `mod-0182`'s nine bindings were in take 61's log, unread, because
+the four modules on `rp #30` were checked and not the converse.
+
+**The measurement survived the mistake, which is luck and should not be filed as
+method.** `#57` came back bit-stable *even though* `mod-0182` was broken inside
+`rp #23`, one of the passes that writes `#57` — so the contamination had no
+effect on the quantity under test. Had it landed differently, take 63 would have
+produced a confident number from a broken frame.
+
+The transform is left in place, knob-gated and off by default, with the flaw
+recorded in its own docstring and the tightening spelled out: require the 3D
+sample to feed the composite's shape (component 3 into `OpVectorTimesScalar`,
+components 0..2 into the consuming `OpFAdd`) rather than merely to exist.
+
+### Where this leaves task #22
+
+Excluded, in order: correct-stereo/shadows; deferred invprojection (artifact);
+doubled shadow cascades; bindless per-view sampling; the fullscreen shear;
+`classify()`'s scan width; our own `patch_fragment_invproj_eye` (take 62); and
+now the fog composite itself (take 63).
+
+`#57` is written by six passes. The fog is cleared. The next candidates are the
+G-buffer passes that write it as attachment 1 — `rp #23/#24/#25` and `rp #57` in
+take 60's numbering — and the honest next question is no longer "which mechanism"
+but **what `#57` actually holds**, since a buffer that is simultaneously a
+G-buffer attachment, a fog target, and the source of a 1541-region copy is not
+yet identified. The unexplained sign of the difference is still unexplained.

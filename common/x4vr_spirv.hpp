@@ -2274,6 +2274,23 @@ inline bool patch_fragment_index_offset(std::vector<uint32_t> &code,
 
 /// Turns X4's volumetric fog composite into a passthrough. **Diagnostic only.**
 ///
+/// **KNOWN TOO COARSE — take 63. Do not reuse without tightening it first.**
+/// The signature below (declares a SubpassData image *and* samples a 3D one)
+/// matches `mod-0182`, which take 63's own join shows bound to *nine* passes:
+/// the main geometry passes rp #13/#16/#23 and all five depth-only shadow
+/// passes. It is a general-purpose shader whose 3D sample is not the fog
+/// volume, and zeroing it turned every 3D scene black, leaving only the HUD.
+///
+/// The measurement still succeeded — `#57`'s layer difference came back
+/// bit-stable, which was the question — but the run was visually broken and
+/// that was avoidable. Being bound to the fog pass is not the same as being
+/// bound *only* to it, and I read the first as the second.
+///
+/// To tighten: require the 3D sample's result to feed the composite's shape —
+/// component 3 into an OpVectorTimesScalar and components 0..2 into the OpFAdd
+/// that consumes it. That is the fog composite specifically, rather than
+/// "samples a 3D texture and happens to also have a subpass input".
+///
 /// The fog pass computes `OUT = scene * fog.a + fog.rgb`, where `fog` is a
 /// froxel volume built by compute. Forcing that one sample to vec4(0,0,0,1)
 /// leaves `OUT = scene * 1 + 0` -- the pass still runs, still reads its subpass
