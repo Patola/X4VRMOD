@@ -74,11 +74,15 @@ enum : uint32_t {
     OpImageFetch = 95,
     OpImageGather = 96,
     OpImage = 100,
+    OpCompositeExtract = 81,
+    OpCompositeInsert = 82,
     OpConvertSToF = 111,
     OpBitcast = 124,
     OpIAdd = 128,
     OpFAdd = 129,
+    OpFSub = 131,
     OpIMul = 132,
+    OpFMul = 133,
     OpVectorTimesScalar = 142,
     OpMatrixTimesVector = 145,
     OpReturn = 253,
@@ -94,6 +98,7 @@ enum : uint32_t {
     BuiltInPosition = 0,
     StorageClassUniformConstant = 0,
     StorageClassInput = 1,
+    StorageClassUniform = 2,
     StorageClassOutput = 3,
     Dim2D = 1,
 
@@ -567,6 +572,382 @@ inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16],
     }
 
     out[3] = bound; // updated id bound
+    code.swap(out);
+    return true;
+}
+
+/// Rewrites `code` so every Vertex entry point ends with
+///
+///     gl_Position.x -= M_projection[0][0] * d
+///
+/// reading `sx` out of X4's camera uniform block at (`set`, `binding`),
+/// member `member`, instead of baking it in.
+///
+/// **Why this replaces the baked matrix.** Take fifty-three measured X4's
+/// projection through a session of ordinary play: `sx` ranged from 1.15 to
+/// 37.75 as the player zoomed — a 33x spread, and at full zoom a baked
+/// constant is 28x too small. There is no value that can be baked, because
+/// the shear is baked at vkCreateShaderModule and X4 has no camera for
+/// another twenty-six seconds.
+///
+/// **Why it is only one scalar.** X4's projection has `m[10] = 0`, so clip z
+/// is the constant near plane for every vertex and the shear collapses:
+///
+///     x_c' = x_c + (-sx*d/near)*z_c = x_c - sx*d      (z_c == near)
+///
+/// `near` cancels. So this is one load, one multiply and one subtract, where
+/// patch_vertex_clip does a full mat4 multiply — the correct version is
+/// cheaper than the one it replaces. tests/view_math.cpp asserts the two
+/// forms agree, against clip positions that came through P rather than
+/// arbitrary vectors (on an arbitrary vector they legitimately differ).
+///
+/// `d` is the eye offset in metres, our own choice, so it stays a constant.
+/// With `d_right` non-null the module reads `gl_ViewIndex` and selects
+/// arithmetically, exactly as patch_vertex_clip does and for the same reason:
+/// no basic-block surgery, and every op is core SPIR-V 1.0.
+///
+/// Returns false and leaves `code` untouched when the module has no camera
+/// block at (set, binding) — 18 of X4's 341 world modules do not — so the
+/// caller can fall back to the baked matrix rather than losing the shear.
+///
+/// The scan below deliberately repeats patch_vertex_clip's rather than
+/// sharing it. That function is proven in the field and this one is new; a
+/// refactor that broke both at once is the expensive mistake here, and the
+/// duplication is the cheap one.
+inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
+                                    uint32_t binding, uint32_t member,
+                                    float d_left,
+                                    const float *d_right = nullptr) {
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return false;
+
+    uint32_t bound = code[3];
+    auto new_id = [&bound] { return bound++; };
+
+    uint32_t entry_fn = 0;
+    std::unordered_map<uint32_t, uint32_t> struct_pos_member;
+    std::vector<uint32_t> var_pos_direct;
+    struct PtrType { uint32_t storage, pointee; };
+    std::unordered_map<uint32_t, PtrType> ptr_types;
+    std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> vars;
+    std::unordered_map<uint32_t, std::vector<uint32_t>> struct_members;
+    std::unordered_map<uint32_t, uint32_t> var_set, var_binding;
+    uint32_t t_float = 0, t_v4 = 0, t_mat4 = 0, t_int = 0;
+    uint32_t ptr_out_v4 = 0, ptr_uniform_float = 0;
+    size_t first_fn = 0;
+    bool have_first_fn = false;
+    size_t last_annotation_end = 0;
+    size_t first_global = 0;
+    bool have_first_global = false;
+    bool has_multiview_cap = false;
+    bool has_multiview_ext = false;
+    size_t caps_end = 0, exts_end = 0;
+
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (!have_first_global)
+            switch (in.op) {
+            case OpTypeInt:
+            case OpTypeFloat:
+            case OpTypeVector:
+            case OpTypeMatrix:
+            case OpTypeStruct:
+            case OpTypePointer:
+            case OpConstant:
+            case OpConstantComposite:
+            case OpVariable:
+                first_global = in.start;
+                have_first_global = true;
+                break;
+            default:
+                break;
+            }
+        switch (in.op) {
+        case OpCapability:
+            caps_end = in.start + in.len;
+            if (in.len >= 2 && w[1] == CapabilityMultiView)
+                has_multiview_cap = true;
+            break;
+        case OpExtension:
+            exts_end = in.start + in.len;
+            if (in.len >= 6 && w[1] == 0x5f565053u && w[2] == 0x5f52484bu &&
+                w[3] == 0x746c756du && w[4] == 0x65697669u &&
+                w[5] == 0x00000077u)
+                has_multiview_ext = true;
+            break;
+        case OpEntryPoint:
+            if (in.len >= 3 && w[1] == ExecutionModelVertex && !entry_fn)
+                entry_fn = w[2];
+            break;
+        case OpMemberDecorate:
+            last_annotation_end = in.start + in.len;
+            if (in.len >= 5 && w[3] == DecorationBuiltIn &&
+                w[4] == BuiltInPosition)
+                struct_pos_member[w[1]] = w[2];
+            break;
+        case OpDecorate:
+            last_annotation_end = in.start + in.len;
+            if (in.len >= 4 && w[2] == DecorationBuiltIn &&
+                w[3] == BuiltInPosition)
+                var_pos_direct.push_back(w[1]);
+            if (in.len >= 4 && w[2] == DecorationDescriptorSet)
+                var_set[w[1]] = w[3];
+            if (in.len >= 4 && w[2] == DecorationBinding)
+                var_binding[w[1]] = w[3];
+            break;
+        case OpTypeFloat:
+            if (in.len >= 3 && w[2] == 32 && !t_float)
+                t_float = w[1];
+            break;
+        case OpTypeInt:
+            if (in.len >= 4 && w[2] == 32 && w[3] == 1 && !t_int)
+                t_int = w[1];
+            break;
+        case OpTypeVector:
+            if (in.len >= 4 && w[2] == t_float && w[3] == 4 && !t_v4)
+                t_v4 = w[1];
+            break;
+        case OpTypeMatrix:
+            if (in.len >= 4 && w[2] == t_v4 && w[3] == 4 && !t_mat4)
+                t_mat4 = w[1];
+            break;
+        case OpTypeStruct:
+            if (in.len >= 2) {
+                std::vector<uint32_t> m;
+                for (uint32_t j = 2; j < in.len; j++)
+                    m.push_back(w[j]);
+                struct_members[w[1]] = std::move(m);
+            }
+            break;
+        case OpTypePointer:
+            if (in.len >= 4) {
+                ptr_types[w[1]] = {w[2], w[3]};
+                if (w[2] == StorageClassOutput && w[3] == t_v4 && !ptr_out_v4)
+                    ptr_out_v4 = w[1];
+                if (w[2] == StorageClassUniform && w[3] == t_float &&
+                    !ptr_uniform_float)
+                    ptr_uniform_float = w[1];
+            }
+            break;
+        case OpVariable:
+            if (in.len >= 4)
+                vars[w[2]] = {w[1], w[3]};
+            break;
+        case OpFunction:
+            if (!have_first_fn) {
+                first_fn = in.start;
+                have_first_fn = true;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
+    if (!entry_fn || !t_float || !t_v4 || !t_mat4 || !have_first_fn)
+        return false;
+
+    // --- locate the camera block --------------------------------------
+    // Matched by (set, binding) and then *verified* by shape: the variable
+    // must be a Uniform pointing at a struct whose member `member` is a mat4.
+    // Matching on the decoration alone would happily patch whatever else a
+    // future X4 build put at set 1 binding 0, and produce a shader that
+    // validates while reading nonsense.
+    uint32_t cam_var = 0;
+    for (auto &[id, ts] : vars) {
+        if (ts.second != StorageClassUniform)
+            continue;
+        auto s = var_set.find(id), b = var_binding.find(id);
+        if (s == var_set.end() || b == var_binding.end())
+            continue;
+        if (s->second != set || b->second != binding)
+            continue;
+        auto pt = ptr_types.find(ts.first);
+        if (pt == ptr_types.end())
+            continue;
+        auto sm = struct_members.find(pt->second.pointee);
+        if (sm == struct_members.end() || member >= sm->second.size())
+            continue;
+        if (sm->second[member] != t_mat4)
+            continue;
+        cam_var = id;
+        break;
+    }
+    if (!cam_var)
+        return false; // caller falls back to the baked matrix
+
+    // --- locate gl_Position -------------------------------------------
+    uint32_t pos_var = 0, pos_member = 0;
+    bool via_struct = false;
+    for (auto &[id, ts] : vars) {
+        if (ts.second != StorageClassOutput)
+            continue;
+        auto pt = ptr_types.find(ts.first);
+        if (pt == ptr_types.end())
+            continue;
+        auto sm = struct_pos_member.find(pt->second.pointee);
+        if (sm != struct_pos_member.end()) {
+            pos_var = id;
+            pos_member = sm->second;
+            via_struct = true;
+            break;
+        }
+    }
+    if (!pos_var)
+        for (uint32_t v : var_pos_direct)
+            if (vars.count(v) && vars[v].second == StorageClassOutput) {
+                pos_var = v;
+                via_struct = false;
+                break;
+            }
+    if (!pos_var)
+        return false;
+
+    // --- declarations --------------------------------------------------
+    std::vector<uint32_t> decls;
+    if (!ptr_out_v4) {
+        ptr_out_v4 = new_id();
+        emit(decls, OpTypePointer, {ptr_out_v4, StorageClassOutput, t_v4});
+    }
+    if (!ptr_uniform_float) {
+        ptr_uniform_float = new_id();
+        emit(decls, OpTypePointer,
+             {ptr_uniform_float, StorageClassUniform, t_float});
+    }
+    if (!t_int) {
+        t_int = new_id();
+        emit(decls, OpTypeInt, {t_int, 32, 1});
+    }
+    auto iconst = [&](uint32_t v) {
+        const uint32_t id = new_id();
+        emit(decls, OpConstant, {t_int, id, v});
+        return id;
+    };
+    auto fconst = [&](float f) {
+        uint32_t bits;
+        memcpy(&bits, &f, 4);
+        const uint32_t id = new_id();
+        emit(decls, OpConstant, {t_float, id, bits});
+        return id;
+    };
+    const uint32_t c_member = iconst(member);
+    const uint32_t c_zero = iconst(0);
+    const uint32_t const_member_idx = via_struct ? iconst(pos_member) : 0;
+    const uint32_t c_dl = fconst(d_left);
+
+    const bool stereo = d_right != nullptr;
+    uint32_t c_ddiff = 0, view_var = 0;
+    if (stereo) {
+        c_ddiff = fconst(*d_right - d_left);
+        const uint32_t ptr_in_int = new_id();
+        emit(decls, OpTypePointer, {ptr_in_int, StorageClassInput, t_int});
+        view_var = new_id();
+        emit(decls, OpVariable, {ptr_in_int, view_var, StorageClassInput});
+    }
+
+    const size_t anno_at = last_annotation_end
+                               ? last_annotation_end
+                               : (have_first_global ? first_global : first_fn);
+
+    std::vector<uint32_t> out;
+    out.reserve(code.size() + decls.size() + 64);
+    out.insert(out.end(), code.begin(), code.begin() + 5);
+
+    const size_t cap_at = caps_end ? caps_end : 5;
+    const size_t ext_at = exts_end ? exts_end : cap_at;
+
+    bool in_entry = false;
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (stereo && !has_multiview_cap && in.start == cap_at)
+            emit(out, OpCapability, {CapabilityMultiView});
+        if (stereo && !has_multiview_ext && code[1] < 0x00010300u &&
+            in.start == ext_at) {
+            static const uint32_t kExt[] = {0x5f565053u, 0x5f52484bu,
+                                            0x746c756du, 0x65697669u,
+                                            0x00000077u};
+            out.push_back((uint32_t)((1 + 5) << 16) | OpExtension);
+            for (uint32_t x : kExt)
+                out.push_back(x);
+        }
+        if (stereo && in.start == anno_at)
+            emit(out, OpDecorate,
+                 {view_var, DecorationBuiltIn, BuiltInViewIndex});
+        if (in.start == first_fn)
+            out.insert(out.end(), decls.begin(), decls.end());
+
+        if (in.op == OpFunction && in.len >= 3 && w[2] == entry_fn)
+            in_entry = true;
+
+        if (in_entry && in.op == OpReturn) {
+            // sx = M_projection[0][0]
+            //
+            // The access chain indexes the *logical* matrix, so column 0
+            // component 0 is P[0][0] whether the block is ColMajor or
+            // RowMajor -- the decoration describes memory, not indexing. X4
+            // declares ColMajor, which is also what the host-side read in
+            // x4vr_view.hpp detects, so the two agree; this note is here
+            // because that agreement is worth not having to re-derive.
+            const uint32_t p_sx = new_id();
+            emit(out, OpAccessChain,
+                 {ptr_uniform_float, p_sx, cam_var, c_member, c_zero, c_zero});
+            const uint32_t sx = new_id();
+            emit(out, OpLoad, {t_float, sx, p_sx});
+
+            // d = d_left + float(gl_ViewIndex) * (d_right - d_left)
+            uint32_t d = c_dl;
+            if (stereo) {
+                const uint32_t vi = new_id();
+                emit(out, OpLoad, {t_int, vi, view_var});
+                const uint32_t vf = new_id();
+                emit(out, OpConvertSToF, {t_float, vf, vi});
+                const uint32_t scaled = new_id();
+                emit(out, OpFMul, {t_float, scaled, vf, c_ddiff});
+                d = new_id();
+                emit(out, OpFAdd, {t_float, d, c_dl, scaled});
+            }
+
+            const uint32_t delta = new_id();
+            emit(out, OpFMul, {t_float, delta, sx, d});
+
+            const uint32_t ptr = via_struct ? new_id() : pos_var;
+            if (via_struct)
+                emit(out, OpAccessChain,
+                     {ptr_out_v4, ptr, pos_var, const_member_idx});
+            const uint32_t loaded = new_id();
+            emit(out, OpLoad, {t_v4, loaded, ptr});
+            const uint32_t x = new_id();
+            emit(out, OpCompositeExtract, {t_float, x, loaded, 0});
+            const uint32_t nx = new_id();
+            emit(out, OpFSub, {t_float, nx, x, delta});
+            const uint32_t np = new_id();
+            emit(out, OpCompositeInsert, {t_v4, np, nx, loaded, 0});
+            emit(out, OpStore, {ptr, np});
+        }
+
+        // gl_ViewIndex is an Input and belongs in the interface list. The
+        // camera block deliberately does *not*: every X4 module is SPIR-V 1.0
+        // or 1.2, and before 1.4 the interface is limited to Input and Output
+        // storage classes, so listing a Uniform there is the violation rather
+        // than omitting it.
+        if (stereo && in.op == OpEntryPoint && in.len >= 3 &&
+            w[2] == entry_fn) {
+            out.push_back((uint32_t)((in.len + 1) << 16) | OpEntryPoint);
+            for (uint32_t j = 1; j < in.len; j++)
+                out.push_back(w[j]);
+            out.push_back(view_var);
+            continue;
+        }
+
+        out.insert(out.end(), code.begin() + in.start,
+                   code.begin() + in.start + in.len);
+
+        if (in.op == OpFunctionEnd)
+            in_entry = false;
+    }
+
+    out[3] = bound;
     code.swap(out);
     return true;
 }

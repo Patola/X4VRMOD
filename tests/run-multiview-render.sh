@@ -490,6 +490,74 @@ if command -v spirv-dis >/dev/null; then
         fails=$((fails + 1))
     fi
 fi
+# The eye offset read from the camera block instead of baked (task #23).
+#
+# sx moves 33x under zoom, so there is no constant to bake; the shader has to
+# read X4's live projection. These cases pin the two halves of that: the patch
+# must fire on a module shaped like X4's world shaders, and it must *refuse*
+# on anything else rather than patch the wrong buffer -- a wrong (set, binding)
+# still produces a module that validates and renders nonsense, which is the
+# failure mode worth spending cases on.
+eye_case() {
+    local label="$1" want="$2" shader="$3" set="$4" bind="$5" member="${6:-1}"
+    local out got val=skip
+    out=$("$PATCHER" vert-eye-offset "$BUILD/tests/$shader" \
+        "$PATCHDIR/eye.spv" "$set" "$bind" "$member" -0.008 0.008 2>&1)
+    got=$(sed -n 's/^PATCHED=//p' <<<"$out")
+    if [[ "$got" == 1 ]]; then
+        spirv-val --target-env vulkan1.2 "$PATCHDIR/eye.spv" >/dev/null 2>&1 && val=OK || val=BAD
+    fi
+    if [[ "$got" == "$want" && "$val" != BAD ]]; then
+        printf 'ok   %-38s patched=%s val=%s\n' "$label" "$got" "$val"
+    else
+        printf 'FAIL %-38s want patched=%s, got patched=%s val=%s\n' \
+            "$label" "$want" "${got:-?}" "$val"
+        fails=$((fails + 1))
+    fi
+}
+eye_case "eye: reads sx from the camera block" 1 sample_camera_block.vert.spv 1 0
+eye_case "eye: refuses, no camera block"       0 fullscreen.vert.spv 1 0
+eye_case "eye: refuses, wrong set"             0 sample_camera_block.vert.spv 2 0
+eye_case "eye: refuses, wrong binding"         0 sample_camera_block.vert.spv 1 7
+# Member 99 is off the end of the struct. The patch verifies the member is a
+# mat4 before touching anything, so this must refuse -- an unchecked index
+# would emit an access chain into whatever follows and validate happily.
+eye_case "eye: refuses, member out of range"   0 sample_camera_block.vert.spv 1 0 99
+
+# What the patched module actually says, not merely that it validates. One
+# OpCompositeInsert per return, writing component 0 -- the shear moves clip x
+# and nothing else, so a patch that touched y or w would still validate and
+# would still be wrong.
+if command -v spirv-dis >/dev/null; then
+    "$PATCHER" vert-eye-offset "$BUILD/tests/sample_camera_block.vert.spv" \
+        "$PATCHDIR/eye.spv" 1 0 1 -0.008 0.008 >/dev/null 2>&1
+    ins=$(spirv-dis "$PATCHDIR/eye.spv" 2>/dev/null | grep -c 'OpCompositeInsert')
+    vidx=$(spirv-dis "$PATCHDIR/eye.spv" 2>/dev/null | grep -c 'BuiltIn ViewIndex')
+    if [[ "$ins" == 1 && "$vidx" == 1 ]]; then
+        printf 'ok   %-38s insert=%s viewindex=%s\n' \
+            "...one insert, one ViewIndex" "$ins" "$vidx"
+    else
+        printf 'FAIL %-38s want insert=1 viewindex=1, got %s/%s\n' \
+            "...one insert, one ViewIndex" "$ins" "$vidx"
+        fails=$((fails + 1))
+    fi
+    # Mono: no second eye, so no gl_ViewIndex and no MultiView capability. The
+    # layer uses this path for the unsheared twin, where an unused builtin
+    # would be a needless capability on a module that never needs it.
+    "$PATCHER" vert-eye-offset "$BUILD/tests/sample_camera_block.vert.spv" \
+        "$PATCHDIR/eyemono.spv" 1 0 1 -0.008 >/dev/null 2>&1
+    mvidx=$(spirv-dis "$PATCHDIR/eyemono.spv" 2>/dev/null | grep -c 'BuiltIn ViewIndex')
+    mcap=$(spirv-dis "$PATCHDIR/eyemono.spv" 2>/dev/null | grep -c 'OpCapability MultiView')
+    if [[ "$mvidx" == 0 && "$mcap" == 0 ]]; then
+        printf 'ok   %-38s viewindex=%s cap=%s\n' \
+            "...mono form takes no ViewIndex" "$mvidx" "$mcap"
+    else
+        printf 'FAIL %-38s want 0/0, got %s/%s\n' \
+            "...mono form takes no ViewIndex" "$mvidx" "$mcap"
+        fails=$((fails + 1))
+    fi
+fi
+
 # And the instrument, checked against the same shape. It reported "samples
 # nothing" about X4's real shaders until it learned to see through OpTypeArray,
 # so the count is asserted and not merely printed: it is the number that decides
