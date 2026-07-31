@@ -7019,3 +7019,112 @@ a read at all.
 
 **No mechanism is proposed here.** Five have been proposed for this symptom and
 five have failed. The next step is to read the shader, not to guess what it does.
+
+## Take 61 — the shader behind the `#57` lift, read at last
+
+`X4VR_TAKE=61-P67 X4VR_STEREO=1 X4VR_IPD=0.064 X4VR_BINDLESS_PATCH=1
+X4VR_BINDLESS_MIRROR=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS=1
+X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1 X4VR_MV=1 X4VR_MASK_PRESENT=1
+X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1 X4VR_PROJ_SX=1.3333 X4VR_PROJ_LIVE=1
+X4VR_PROJ_INVPROJ=1 X4VR_DUMP_SHADERS=/tmp/x4vr-shaders-take61
+X4VR_LOG=/tmp/x4vr-take61.log ./launch/x4vr-launch.sh` — **PASS**, 397 modules
+dumped, rendering knobs identical to take 60.
+
+### X4 creates render passes in pairs, and pipelines bind to the twin
+
+The new join printed 33 passes and **`rp #31/#32` were not among them**. They have
+framebuffers and no pipeline. Mapping both families across all 58 passes shows
+why: X4 creates render-pass objects in **pairs with identical signatures** —
+one object receives the `vkCreateGraphicsPipelines` calls, its twin receives the
+framebuffer and the `vkCmdBeginRenderPass`. Vulkan allows this; a pipeline only
+needs render-pass *compatibility*, not identity.
+
+    rp  signature                              fb?  pipelines
+    30  1 colour [97H] no-depth final=1        --   4
+    31  1 colour [97H] no-depth final=1        FB   0
+    32  1 colour [97H] no-depth final=1        FB   0
+
+The pairing is visible right across the run (14/15, 16/17, 18/19, 20/21, 26/27,
+28/29, 34/35 … 42/43, 46/47, 48/49, 51/52, 54/55, 56/57). **`final=1` is unique
+in the whole run to 30/31/32**, so the match is unambiguous.
+
+This matters beyond this bug: any future "which shader draws into image X" join
+keyed on the `VkRenderPass` handle will silently return nothing for exactly the
+passes that have framebuffers. The join must be read through the twin.
+
+### P67 — CONFIRMED
+
+All four modules bound to `rp #30` declare exactly one subpass input and exactly
+one colour output `OUT_RT0` at Location 0. Their vertex stages build a fullscreen
+triangle from `gl_VertexIndex` with no vertex buffer. Serials **from take 61's own
+dump**: `#182` (samples nothing), `#368`, `#370`, `#372` (all index-offset APPLIED).
+
+### What the pass is: volumetric fog, composited additively
+
+Decoded from `mod-0368.spv` (take 61 dump), fragment entry `main_0`:
+
+    scene    = subpassLoad(S_subpassInput_AUTOMS[U_index])      // #57, this pixel
+    viewPos  = M_invprojection · vec4(ndc.xy, depth, 1); /= w   // camera member 2
+    depth      via bindless S_sampler2D_AUTOMS[I_maindepth]     // camera member 58
+    phase    = dot(normalize(viewPos), normalize(V_light_direction_view))
+    clip2    = M_projection · vec4(viewPos, 1)                  // camera member 1
+    froxel.xy= clip2.xy/clip2.w · scale + offset
+    froxel.z = sqrt((clip2.z/clip2.w − V_volume_off) / V_volume_scale)
+    fog      = textureLod(S_sampler3D[39], froxel, 0)
+    OUT_RT0.rgb = scene · fog.a + fog.rgb                       // T and in-scatter
+
+**`scene · transmittance + in-scattering`.** The second term is literally an
+addition. That is the measured signature of the residual — `B = A + 4.2` beating
+`B = 1.035·A`, and 1.297 dark against 0.971 bright — arriving from the code
+rather than from a curve fit. Where the scene is dark, `scene·T` is small and the
+added in-scatter dominates the pixel; where it is bright, it barely registers.
+This is also why the residual survived parallax alignment: aligning the geometry
+does not align a term that was never a function of that geometry's position.
+
+### The volume is built by compute, so it cannot be per-view
+
+The fog volume is a **88×88×128** 3D image (`1408/16 = 88`: a 16-pixel froxel
+grid, 128 depth slices) with `usage=0x9f` — bit 3 is `STORAGE`, i.e. written by
+compute. Take 61 dispatched 6 compute shaders, one of them 55,616 times. The
+layer's own log states the consequence:
+
+    bindless mirror final: index-offset patch — 354 modules edited, 8 declared a
+    mirrorable table and REFUSED (6 of those are compute: no gl_ViewIndex exists there)
+
+This is the already-documented rule — *multiview does not cover compute* — landing
+on a pass that matters. There is **one** volume, built once per frame for one
+camera, and both views composite from it.
+
+### Two corrections to this document
+
+1. **The camera block has 72 members, not 14.** Members 0–13 were recorded
+   correctly, but the block continues through `V_ambient1`, three directional
+   lights, `V_light_direction_view` (21), the whole `V_volume_*` group (24–32),
+   `F_exposure` (40), the CSM texture factors (46–50), `I_maindepth` (58),
+   `I_global_envmap` (59), `I_tonemap_clut` (60), `B_shadow` (64) and more. Several
+   are read by this shader. The earlier list was a prefix mistaken for the whole.
+2. **`S_subpassInput_AUTOMS` is an array**, indexed by `U_index` (member 10 of
+   `BLOCK_BUFFER_BINDING_SLOT_DYNAMIC`), not a single input attachment.
+
+### P68 — and what the timeline already excludes
+
+The shader reads **member 2 (`M_invprojection`) and member 1 (`M_projection`) in
+one round trip**. We patch member 2 per eye in the fragment stage; we patch member
+1 per eye only in the *vertex* stage. So half of the round trip is eye-corrected
+and half is not — an asymmetry this project introduced.
+
+**That asymmetry is not the original cause, and the git history proves it.** #22
+was reopened at take 55 (`3033a7b`); `patch_fragment_invproj_eye` landed *after*
+it (`a523194`). The lift was measured before the patch that could have caused it
+existed. It may still be making things worse — that is a separate question.
+
+**P68:** running with `X4VR_PROJ_INVPROJ=0` will leave the `#57` lift materially
+unchanged, because the round-trip asymmetry post-dates the symptom. If the lift
+*does* drop sharply, P68 is refuted and our own patch is contributing.
+
+This is a bisect of the knob space that already exists — no new knob, no new code,
+and it is the cheapest way to separate our contribution from X4's own behaviour.
+Six mechanisms have now been excluded for this symptom. The seventh candidate —
+a single compute-built fog volume shared by two eyes — is **stated here as a
+reading of the code, not as a diagnosis**, and is not to be patched before P68
+has separated it from the asymmetry we introduced.
