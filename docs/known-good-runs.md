@@ -38,17 +38,37 @@ fixes the aliased-variable patch (take forty-eight). The grade reads `MIXED`
 rather than `STEREO` only because the splash-screen frames are legitimately
 bit-identical — X4 draws the same pixels to both layers there.
 
-**Open defect:** near-field cockpit geometry is lit differently between the
-eyes — a strut dark in one eye and bright in the other. Not yet diagnosed;
-task #22. It could be genuine parallax on a specular term or a resource being
-sampled per-view that should not be, and a screenshot cannot tell those apart.
+| 2026-07-31 | `stage2-stereo-verified` | `score_run.py` exit 0; take 50 control proves the per-view sampling bit-exact and take 51 proves the remaining per-eye difference is geometric; Patola: "the shadows are only slightly different, as I would expect from stereo view" | `X4VR_TAKE=51-P58 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take51.log X4VR_MV_PROBE=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.016 X4VR_BINDLESS_MIRROR=1 X4VR_MV_INVENTORY=1` |
+
+**`stage2-stereo-verified` is the state to resume from.** Same code and same
+knobs as `stage2-stereo-first`, plus `X4VR_IPD=0.016`, and it is the tag to
+prefer because two controls stand behind it rather than one screenshot:
+
+* **take 50** — `X4VR_STEREO=0` with the patch on: every probed image
+  `IDENTICAL`, 19 of 19 settled swapchain samples bit-exact. The mirror, the
+  offset and the aliased-variable fix are provably not a variable.
+* **take 51** — quarter IPD: every image's `DIFFER` drops, screen-space buffers
+  hardest (`#97` by 37×). The remaining per-eye difference is geometric.
+
+`X4VR_IPD=0.016` is **not** a calibrated value — it is a quarter of the default,
+chosen to test whether the artifact scaled. It does. The right value is unknown
+until `sx` and the near plane are measured from X4's projection instead of
+assumed (task #23), and that is the next work.
+
+The earlier note here recorded the cockpit lighting difference as an open
+defect. It was not a defect: takes 50 and 51 closed task #22 with no code
+change. Keeping the correction visible, because "we saw something odd and it
+turned out to be correct" is as worth recording as a bug.
+
+Known defects that do ride along: the cursor is confined to a centred square
+(tasks #17, #19) and X4's logo is clipped at its right edge (task #21).
 
 **What `stage2-duplicate-restored` is and is not.** Both eyes have a picture and
 the framerate is acceptable; the right eye is a bit-exact copy of the left, so
 there is no parallax in it. It is the state this project had in take
 thirty-three and lost for twelve takes. It is a floor to return to, not the
 goal. Two known defects ride along with it: the cursor is confined to a centred
-square (task #19), and X4's logo is clipped at its right edge (task #20).
+square (task #19), and X4's logo is clipped at its right edge (task #21).
 
 ## Retracted: "the knobs are not enough either"
 
