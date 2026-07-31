@@ -6381,6 +6381,13 @@ Counting access chains into the camera block across all 409 dumped modules:
 the deferred lighting-and-shadow passes, and they are exactly the passes the
 mechanism predicts.
 
+> **These counts are wrong — corrected in take fifty-six below.** The scan that
+> produced them examined only the *first* camera-block variable per module, and
+> X4's combined modules declare that block once per stage. The real figure for
+> `M_invprojection` is **247 modules (244 fragment, 3 compute)**, not 19. The
+> diagnosis is unaffected — if anything the mechanism is far more pervasive
+> than this table claimed — but the numbers are not to be quoted.
+
 ### The discriminator was already in the data
 
 | take | sx | d | shear = sx·d | artifact |
@@ -6439,3 +6446,97 @@ instrument and not a result about the mod. Patola said so plainly — *"as I am
 not in VR, I couldn't feel any depth"*. The honest position is that **no run so
 far has been able to confirm the depth is right**, and none will until either
 an HMD or a proper A/B of the same frame at two separations exists.
+
+## The invprojection patch — and the aliased-binding bug, for the second time
+
+`patch_fragment_invproj_eye` rewrites every load of `M_invprojection` in a
+fragment stage to `T(d)·M_invprojection`, per view. SSA is preserved by giving
+the load a fresh id and letting the final `OpCompositeInsert` take over the
+original result id, so every existing use downstream picks up the corrected
+matrix and not one use site is rewritten.
+
+### The bug I wrote, which I had already fixed once
+
+The first version matched the camera block by (set, binding) and **took the
+first match**. It patched 106 modules. The correct number is 244.
+
+X4's combined vertex+fragment modules declare the camera block **once per
+stage**, as two variables aliased onto the same (set, binding) — `mod-0100` has
+`%__1` and `%__3`, both `BLOCK_BUFFER_BINDING_SLOT_CAMERA`, both set 1 binding
+0. They address the same buffer, so a patch that only *reads* the block can use
+either handle. This patch rewrites existing **loads**, and those name whichever
+variable their own stage declared. First-match silently skipped every module
+whose fragment stage happened to use the other one.
+
+**This is take forty-eight's bug, in code I wrote after documenting take
+forty-eight's bug.** Same shape: first-match on an aliased binding, legal,
+which X4 does, and which reads as correct until something downstream comes back
+wrong. It is now recorded in the function's own comment, because a comment in
+another function two hundred lines away did not stop me writing it again.
+
+### The counts in the take-55 section are wrong
+
+The scan behind "19 modules use `M_invprojection`" had the same defect — it
+took the first camera variable per module — plus it matched index constants by
+*name*, and X4 emits duplicates (`%int_2` and `%int_2_0` both hold 2).
+Recounted across every camera variable, resolving constants by id:
+
+| member | name | modules | by stage |
+|---|---|---|---|
+| 0 | `M_view` | 306 | 262 vertex, 160 fragment |
+| 1 | `M_projection` | 32 | 22 vertex, 8 fragment, 2 compute |
+| 2 | **`M_invprojection`** | **247** | **244 fragment**, 3 compute |
+| 8 | `M_viewinverse` | 16 | 16 fragment |
+| 11 | `V_viewportpixelsize` | 254 | 244 fragment, 10 vertex |
+| 13 | `V_cameraposition` | 296 | 296 vertex, 86 fragment |
+
+**247, not 19.** The diagnosis is unchanged and the mechanism is far more
+pervasive than the first count suggested: nearly two-thirds of X4's modules
+reconstruct position from depth in a fragment stage.
+
+A cross-check worth having: the corrected Python analysis says 244 fragment
+users, and the C++ patch — written independently, matching by shape rather than
+by debug name — fires on exactly 244. Two different methods, same number.
+
+### Offline evidence
+
+* **244 patched, 165 refused, 0 invalid** under `spirv-val --target-env
+  vulkan1.2` against X4's real modules.
+* The 3 compute modules refuse, correctly: a dispatch has no `gl_ViewIndex`, so
+  there is no `d` to select and picking one eye would be wrong in the other.
+  They fall under the project's existing compute gap.
+* **All three patches stacked** — bindless index offset, then invprojection,
+  then the vertex eye offset — applied to all 409 modules: **0 invalid**.
+* Emitted code checked by hand on `mod-0151`: fresh load id, `d = −0.032 +
+  view·0.064`, four extract/multiply/add/insert chains, final insert taking the
+  original result id.
+* 7 new suite cases, including refusals on wrong set, wrong binding,
+  out-of-range member, a member that exists but is never loaded, and a compute
+  module.
+
+### P63 — take fifty-six
+
+Take fifty-five's command plus `X4VR_PROJ_INVPROJ=1`, nothing else changed.
+
+1. The log reports `invproj … modules corrected` in the low hundreds. Far below
+   that means the deferred passes are still lighting the wrong frame wherever
+   the run did not reach.
+2. No `driver rejected patched module` lines.
+3. The run still scores PASS, and geometry parallax is **unchanged** — the
+   shear is untouched, so anything that moves in the geometry would mean this
+   patch reached something it should not have.
+4. **The observable: the cockpit shadows agree between the two eyes.** Same
+   corners Patola called out — "in some corners of the cockpit, the shadows are
+   very different". Those should now match, while the geometry stays offset.
+
+**What would refute it.** Shadows still differing says one of: the mechanism is
+wrong; the 3 compute modules carry the visible part; or light positions need
+the same treatment as the reconstruction and correcting one of the two is not
+enough. Those are distinguishable, and the first thing to check would be
+whether the *residual* is smaller — a partial fix and a wrong theory look
+different.
+
+This is the one prediction in the project so far that a flatscreen can settle
+cleanly: it is not a question about depth, which take fifty-five showed cannot
+be judged without an HMD, but about whether two images agree — and shadows that
+disagree are visible precisely because they should not be.

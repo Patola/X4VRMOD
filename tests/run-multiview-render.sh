@@ -558,6 +558,57 @@ if command -v spirv-dis >/dev/null; then
     fi
 fi
 
+# The per-eye M_invprojection correction (task #22). The deferred passes
+# reconstruct position from depth in the *eye's* frame and then light it with
+# centre-frame shadow matrices, which puts the two eyes' shadows on different
+# surface points. Shadows are view-independent, so that is a defect.
+inv_case() {
+    local label="$1" want="$2" shader="$3" set="$4" bind="$5" member="${6:-2}"
+    local out got val=skip
+    out=$("$PATCHER" frag-invproj "$BUILD/tests/$shader" \
+        "$PATCHDIR/inv.spv" "$set" "$bind" "$member" -0.032 0.032 2>&1)
+    got=$(sed -n 's/^PATCHED=//p' <<<"$out")
+    if [[ "$got" == 1 ]]; then
+        spirv-val --target-env vulkan1.2 "$PATCHDIR/inv.spv" >/dev/null 2>&1 && val=OK || val=BAD
+    fi
+    if [[ "$got" == "$want" && "$val" != BAD ]]; then
+        printf 'ok   %-38s patched=%s val=%s\n' "$label" "$got" "$val"
+    else
+        printf 'FAIL %-38s want patched=%s, got patched=%s val=%s\n' \
+            "$label" "$want" "${got:-?}" "$val"
+        fails=$((fails + 1))
+    fi
+}
+inv_case "invproj: corrects the reconstruction" 1 sample_invproj.frag.spv 1 0
+inv_case "invproj: refuses, wrong set"          0 sample_invproj.frag.spv 2 0
+inv_case "invproj: refuses, wrong binding"      0 sample_invproj.frag.spv 1 9
+inv_case "invproj: refuses, member out of range" 0 sample_invproj.frag.spv 1 0 99
+# Member 1 is M_projection, a mat4 the shader never loads. The patch must find
+# no load to rewrite and refuse, rather than "succeeding" by doing nothing.
+inv_case "invproj: refuses, member never loaded" 0 sample_invproj.frag.spv 1 0 1
+# Compute has no gl_ViewIndex at all, so there is no d to select. Refusing is
+# the honest outcome; picking one eye would be wrong in the other.
+inv_case "invproj: refuses a compute module"    0 noop.comp.spv 1 0
+
+if command -v spirv-dis >/dev/null; then
+    "$PATCHER" frag-invproj "$BUILD/tests/sample_invproj.frag.spv" \
+        "$PATCHDIR/inv.spv" 1 0 2 -0.032 0.032 >/dev/null 2>&1
+    ins=$(spirv-dis "$PATCHDIR/inv.spv" 2>/dev/null | grep -c 'OpCompositeInsert')
+    flat=$(spirv-dis "$PATCHDIR/inv.spv" 2>/dev/null | grep -c 'Flat')
+    vidx=$(spirv-dis "$PATCHDIR/inv.spv" 2>/dev/null | grep -c 'BuiltIn ViewIndex')
+    # Four inserts: row 0 of each of the four columns. One ViewIndex, and it
+    # must be Flat -- an integer fragment input that is interpolated is invalid
+    # and some drivers accept it anyway, which is the worst combination.
+    if [[ "$ins" == 4 && "$vidx" == 1 && "$flat" -ge 1 ]]; then
+        printf 'ok   %-38s inserts=%s viewindex=%s flat=%s\n' \
+            "...four inserts, ViewIndex is Flat" "$ins" "$vidx" "$flat"
+    else
+        printf 'FAIL %-38s want inserts=4 viewindex=1 flat>=1, got %s/%s/%s\n' \
+            "...four inserts, ViewIndex is Flat" "$ins" "$vidx" "$flat"
+        fails=$((fails + 1))
+    fi
+fi
+
 # And the instrument, checked against the same shape. It reported "samples
 # nothing" about X4's real shaders until it learned to see through OpTypeArray,
 # so the count is asserted and not merely printed: it is the number that decides

@@ -734,6 +734,8 @@ std::unordered_map<VkCommandBuffer, VkPipeline> g_comp_bound;
 uint64_t g_comp_pipelines = 0;
 
 std::atomic<uint64_t> g_frag_patch_ok{0}, g_frag_patch_refused{0};
+// Task #22: deferred modules whose M_invprojection was corrected per eye.
+std::atomic<uint64_t> g_invproj_patched{0};
 // Of the refusals, the ones that are refusals by construction: compute has no
 // gl_ViewIndex, so a compute shader sampling the heap cannot be made per-view
 // by this mechanism at all.
@@ -1988,6 +1990,13 @@ void bindless_report(const char *when) {
                  "(%llu of those are compute: no gl_ViewIndex exists there)",
                  when, (unsigned long long)ok, (unsigned long long)refused,
                  (unsigned long long)g_compute_tables.load());
+        // Task #22. Offline, 244 of X4's 409 dumped modules take this and 3
+        // refuse because they are compute -- so a count far below 244 means
+        // the deferred passes are still lighting the wrong frame in whatever
+        // this run did not reach.
+        X4VR_LOG("invproj %s: per-eye M_invprojection — %llu modules corrected "
+                 "(offline: 244 of 409 eligible, 3 compute cannot be)",
+                 when, (unsigned long long)g_invproj_patched.load());
         // The unsheared twin is the module the srgb-resolve passes actually
         // run. If this is 0, no pipeline ever took one and the twin's contents
         // are irrelevant -- a distinction take twenty-three could not draw.
@@ -2838,6 +2847,18 @@ bool proj_live() {
 constexpr uint32_t kCameraSet = 1;
 constexpr uint32_t kCameraBinding = 0;
 constexpr uint32_t kCameraProjMember = 1;
+constexpr uint32_t kCameraInvProjMember = 2; // M_invprojection
+
+// X4VR_PROJ_INVPROJ: correct M_invprojection per eye in the deferred passes
+// (task #22). Separate from X4VR_PROJ_LIVE so the two can be bisected apart --
+// they touch different stages and different failure modes.
+bool proj_invproj() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_PROJ_INVPROJ");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
 
 // The patching itself. Wrapped below so the dump happens on every path out of
 // it without four copies of the same two lines.
@@ -2991,6 +3012,29 @@ VkResult create_shader_module_inner(
             if (x4vr::spv::patch_fragment_index_offset(code, t.set, t.binding,
                                                        g_mirror_offset))
                 frag_patched = true;
+        }
+        // Task #22: correct M_invprojection per eye.
+        //
+        // The deferred passes reconstruct view position from the depth buffer,
+        // which was rendered through the sheared clip position, so they get the
+        // position in *that eye's* frame -- and then light it with shadow
+        // matrices and light positions that are still centre-frame. The two
+        // eyes end up disagreeing about where a shadow falls on a surface by
+        // the full IPD. Shadows are view-independent, so that is a defect, and
+        // it is what Patola saw in the cockpit in takes pre-51 and 55.
+        //
+        // Gated on the shear being active: with no shear there is no eye frame
+        // to correct back from, and applying this alone would introduce the
+        // very error it exists to remove.
+        if (proj_invproj() && have_k) {
+            const float dl = -0.5f * configured_ipd();
+            const float dr = +0.5f * configured_ipd();
+            if (x4vr::spv::patch_fragment_invproj_eye(
+                    code, kCameraSet, kCameraBinding, kCameraInvProjMember, dl,
+                    dr)) {
+                frag_patched = true;
+                g_invproj_patched++;
+            }
         }
         // Coverage measured stage-agnostically, NOT from the lister above.
         // The lister is fragment-only and 2D-only; asking it "does this module

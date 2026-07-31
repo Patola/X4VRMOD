@@ -952,6 +952,358 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
     return true;
 }
 
+/// Corrects `M_invprojection` per eye, so deferred passes reconstruct position
+/// in the **centre** frame rather than the eye's.
+///
+/// **The bug this fixes.** The eye shear moves `gl_Position` only, so geometry
+/// rasterizes where the offset eye would see it — correct. But the deferred
+/// passes then read the depth buffer at a screen pixel and reconstruct view
+/// position with the centre-frame `M_invprojection`, which recovers the
+/// position *in that eye's frame*, and light it with shadow matrices and light
+/// positions that are still centre-frame. Surface and shadow disagree by the
+/// eye offset: 64 mm between the two eyes at a 64 mm IPD, which on cockpit
+/// geometry is a plainly visible shadow displacement.
+///
+/// Shadows are view-independent — a shadow edge stays on the same surface
+/// point in both eyes — so this is a defect and not parallax. Task #22 was
+/// closed once on the grounds that the difference scaled with the IPD; so does
+/// this, which is why that evidence never discriminated.
+///
+/// **The correction.** `clip_sheared = K·clip_centre` with `K = P·T(−d)·P⁻¹`,
+/// so recovering the centre frame needs `T(d)·M_invprojection`. For a
+/// column-major matrix that is one row-combine:
+///
+///     result[0][c] = M[0][c] + d · M[3][c]        c = 0..3
+///
+/// applied where the matrix is *loaded*. Locating "the reconstructed position"
+/// in arbitrary shader code is not tractable; locating a load of member
+/// `member` is.
+///
+/// SSA is preserved by giving the load a fresh id and letting the final
+/// `OpCompositeInsert` take over the original result id, so every existing use
+/// downstream sees the corrected matrix with no rewriting of uses.
+///
+/// **Fragment only.** 16 of the 19 modules that reconstruct this way are
+/// fragment; the other 3 are compute, where `gl_ViewIndex` does not exist at
+/// all. That is the project's already-recorded compute gap, not something this
+/// patch can close, and it refuses those modules rather than pretending.
+inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set,
+                                       uint32_t binding, uint32_t member,
+                                       float d_left, float d_right) {
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return false;
+
+    uint32_t bound = code[3];
+    auto new_id = [&bound] { return bound++; };
+
+    uint32_t frag_fn = 0, compute_fn = 0, existing_view_var = 0;
+    struct PtrType { uint32_t storage, pointee; };
+    std::unordered_map<uint32_t, PtrType> ptr_types;
+    std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> vars;
+    std::unordered_map<uint32_t, std::vector<uint32_t>> struct_members;
+    std::unordered_map<uint32_t, uint32_t> var_set, var_binding;
+    std::unordered_map<uint32_t, uint32_t> int_consts; // id -> value
+    uint32_t t_float = 0, t_v4 = 0, t_mat4 = 0, t_int = 0;
+    size_t first_fn = 0, last_annotation_end = 0, first_global = 0;
+    size_t caps_end = 0, exts_end = 0;
+    bool have_first_fn = false, have_first_global = false;
+    bool has_multiview_cap = false, has_multiview_ext = false;
+
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (!have_first_global)
+            switch (in.op) {
+            case OpTypeInt:
+            case OpTypeFloat:
+            case OpTypeVector:
+            case OpTypeMatrix:
+            case OpTypeStruct:
+            case OpTypePointer:
+            case OpConstant:
+            case OpConstantComposite:
+            case OpVariable:
+                first_global = in.start;
+                have_first_global = true;
+                break;
+            default:
+                break;
+            }
+        switch (in.op) {
+        case OpCapability:
+            caps_end = in.start + in.len;
+            if (in.len >= 2 && w[1] == CapabilityMultiView)
+                has_multiview_cap = true;
+            break;
+        case OpExtension:
+            exts_end = in.start + in.len;
+            if (in.len >= 6 && w[1] == 0x5f565053u && w[2] == 0x5f52484bu &&
+                w[3] == 0x746c756du && w[4] == 0x65697669u &&
+                w[5] == 0x00000077u)
+                has_multiview_ext = true;
+            break;
+        case OpEntryPoint:
+            if (in.len >= 3 && w[1] == ExecutionModelFragment && !frag_fn)
+                frag_fn = w[2];
+            if (in.len >= 3 && w[1] == ExecutionModelGLCompute && !compute_fn)
+                compute_fn = w[2];
+            break;
+        case OpMemberDecorate:
+            last_annotation_end = in.start + in.len;
+            break;
+        case OpDecorate:
+            last_annotation_end = in.start + in.len;
+            if (in.len >= 4 && w[2] == DecorationBuiltIn &&
+                w[3] == BuiltInViewIndex)
+                existing_view_var = w[1];
+            if (in.len >= 4 && w[2] == DecorationDescriptorSet)
+                var_set[w[1]] = w[3];
+            if (in.len >= 4 && w[2] == DecorationBinding)
+                var_binding[w[1]] = w[3];
+            break;
+        case OpTypeFloat:
+            if (in.len >= 3 && w[2] == 32 && !t_float)
+                t_float = w[1];
+            break;
+        case OpTypeInt:
+            if (in.len >= 4 && w[2] == 32 && w[3] == 1 && !t_int)
+                t_int = w[1];
+            break;
+        case OpTypeVector:
+            if (in.len >= 4 && w[2] == t_float && w[3] == 4 && !t_v4)
+                t_v4 = w[1];
+            break;
+        case OpTypeMatrix:
+            if (in.len >= 4 && w[2] == t_v4 && w[3] == 4 && !t_mat4)
+                t_mat4 = w[1];
+            break;
+        case OpConstant:
+            if (in.len >= 4 && w[1] == t_int)
+                int_consts[w[2]] = w[3];
+            break;
+        case OpTypeStruct:
+            if (in.len >= 2) {
+                std::vector<uint32_t> m;
+                for (uint32_t j = 2; j < in.len; j++)
+                    m.push_back(w[j]);
+                struct_members[w[1]] = std::move(m);
+            }
+            break;
+        case OpTypePointer:
+            if (in.len >= 4)
+                ptr_types[w[1]] = {w[2], w[3]};
+            break;
+        case OpVariable:
+            if (in.len >= 4)
+                vars[w[2]] = {w[1], w[3]};
+            break;
+        case OpFunction:
+            if (!have_first_fn) {
+                first_fn = in.start;
+                have_first_fn = true;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
+    // No fragment stage, or a compute module: nothing this patch can do. A
+    // compute dispatch has no view index to select `d` with, so "correcting"
+    // it would mean picking one eye and being wrong in the other.
+    if (!frag_fn || !t_float || !t_v4 || !t_mat4 || !have_first_fn)
+        return false;
+
+    // --- the camera block(s), verified by shape ---------------------------
+    //
+    // EVERY variable at (set, binding), not the first one. X4's modules are
+    // combined vertex+fragment and declare the camera block *once per stage*:
+    // mod-0100 has %__1 and %__3, both pointing at
+    // BLOCK_BUFFER_BINDING_SLOT_CAMERA, both decorated set 1 binding 0. They
+    // address the same buffer, so for a patch that only *reads* the block
+    // either handle does; but this patch rewrites existing **loads**, and
+    // those name whichever variable their own stage declared. Taking the first
+    // and breaking silently skipped every module whose fragment stage used the
+    // other one.
+    //
+    // This is take forty-eight's bug in a new place: first-match on an aliased
+    // binding, which is legal, which X4 does, and which reads as correct until
+    // something downstream comes back wrong. Recorded here because it is now
+    // the second time.
+    std::vector<uint32_t> cam_vars;
+    for (auto &[id, ts] : vars) {
+        if (ts.second != StorageClassUniform)
+            continue;
+        auto s = var_set.find(id), b = var_binding.find(id);
+        if (s == var_set.end() || b == var_binding.end())
+            continue;
+        if (s->second != set || b->second != binding)
+            continue;
+        auto pt = ptr_types.find(ts.first);
+        if (pt == ptr_types.end())
+            continue;
+        auto sm = struct_members.find(pt->second.pointee);
+        if (sm == struct_members.end() || member >= sm->second.size())
+            continue;
+        if (sm->second[member] != t_mat4)
+            continue;
+        cam_vars.push_back(id);
+    }
+    if (cam_vars.empty())
+        return false;
+
+    // --- access chains that name exactly (cam_var, member) --------------
+    // Exactly: `OpAccessChain %ptr %r %cam %idx` and nothing further. A chain
+    // that indexes deeper yields a column or a scalar rather than the matrix,
+    // and correcting those would need a different edit. None of X4's do, and a
+    // wrong assumption here would silently mangle one.
+    std::unordered_map<uint32_t, bool> chain_ids;
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (in.op != OpAccessChain || in.len != 5)
+            continue;
+        if (std::find(cam_vars.begin(), cam_vars.end(), w[3]) == cam_vars.end())
+            continue;
+        auto c = int_consts.find(w[4]);
+        if (c == int_consts.end() || c->second != member)
+            continue;
+        chain_ids[w[2]] = true;
+    }
+    if (chain_ids.empty())
+        return false;
+
+    // --- loads of those pointers inside the fragment entry function ------
+    std::unordered_map<size_t, uint32_t> patch_loads; // inst start -> result id
+    {
+        uint32_t cur_fn = 0;
+        for (const Inst &in : insts) {
+            const uint32_t *w = &code[in.start];
+            if (in.op == OpFunction && in.len >= 3)
+                cur_fn = w[2];
+            if (in.op == OpFunctionEnd)
+                cur_fn = 0;
+            if (in.op != OpLoad || in.len < 4 || cur_fn != frag_fn)
+                continue;
+            if (w[1] != t_mat4 || !chain_ids.count(w[3]))
+                continue;
+            patch_loads[in.start] = w[2];
+        }
+    }
+    if (patch_loads.empty())
+        return false;
+
+    // --- declarations ----------------------------------------------------
+    std::vector<uint32_t> decls;
+    if (!t_int) {
+        t_int = new_id();
+        emit(decls, OpTypeInt, {t_int, 32, 1});
+    }
+    auto fconst = [&](float f) {
+        uint32_t bits;
+        memcpy(&bits, &f, 4);
+        const uint32_t id = new_id();
+        emit(decls, OpConstant, {t_float, id, bits});
+        return id;
+    };
+    const uint32_t c_dl = fconst(d_left);
+    const uint32_t c_ddiff = fconst(d_right - d_left);
+    const uint32_t view_var = existing_view_var ? existing_view_var : new_id();
+    if (!existing_view_var) {
+        const uint32_t ptr_in_int = new_id();
+        emit(decls, OpTypePointer, {ptr_in_int, StorageClassInput, t_int});
+        emit(decls, OpVariable, {ptr_in_int, view_var, StorageClassInput});
+    }
+
+    const size_t anno_at = last_annotation_end
+                               ? last_annotation_end
+                               : (have_first_global ? first_global : first_fn);
+
+    std::vector<uint32_t> out;
+    out.reserve(code.size() + decls.size() + patch_loads.size() * 32);
+    out.insert(out.end(), code.begin(), code.begin() + 5);
+
+    const size_t cap_at = caps_end ? caps_end : 5;
+    const size_t ext_at = exts_end ? exts_end : cap_at;
+
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (!has_multiview_cap && in.start == cap_at)
+            emit(out, OpCapability, {CapabilityMultiView});
+        if (!has_multiview_ext && code[1] < 0x00010300u && in.start == ext_at) {
+            static const uint32_t kExt[] = {0x5f565053u, 0x5f52484bu,
+                                            0x746c756du, 0x65697669u,
+                                            0x00000077u};
+            out.push_back((uint32_t)((1 + 5) << 16) | OpExtension);
+            for (uint32_t x : kExt)
+                out.push_back(x);
+        }
+        if (in.start == anno_at && !existing_view_var) {
+            emit(out, OpDecorate,
+                 {view_var, DecorationBuiltIn, BuiltInViewIndex});
+            // An integer Input in a fragment shader must be Flat --
+            // interpolating one is meaningless and Vulkan forbids it.
+            emit(out, OpDecorate, {view_var, DecorationFlat});
+        }
+        if (in.start == first_fn)
+            out.insert(out.end(), decls.begin(), decls.end());
+
+        auto pl = patch_loads.find(in.start);
+        if (pl != patch_loads.end()) {
+            const uint32_t orig = pl->second;
+            // Fresh id for the raw load; the original id is redefined below by
+            // the last OpCompositeInsert, so every downstream use picks up the
+            // corrected matrix without touching a single use site.
+            const uint32_t raw = new_id();
+            emit(out, OpLoad, {t_mat4, raw, w[3]});
+
+            // d = d_left + float(gl_ViewIndex) * (d_right - d_left)
+            const uint32_t vi = new_id();
+            emit(out, OpLoad, {t_int, vi, view_var});
+            const uint32_t vf = new_id();
+            emit(out, OpConvertSToF, {t_float, vf, vi});
+            const uint32_t scaled = new_id();
+            emit(out, OpFMul, {t_float, scaled, vf, c_ddiff});
+            const uint32_t d = new_id();
+            emit(out, OpFAdd, {t_float, d, c_dl, scaled});
+
+            // row 0 += d * row 3, one column at a time
+            uint32_t acc = raw;
+            for (uint32_t c = 0; c < 4; c++) {
+                const uint32_t x = new_id();
+                emit(out, OpCompositeExtract, {t_float, x, raw, c, 0});
+                const uint32_t wv = new_id();
+                emit(out, OpCompositeExtract, {t_float, wv, raw, c, 3});
+                const uint32_t dw = new_id();
+                emit(out, OpFMul, {t_float, dw, d, wv});
+                const uint32_t nx = new_id();
+                emit(out, OpFAdd, {t_float, nx, x, dw});
+                const uint32_t next = (c == 3) ? orig : new_id();
+                emit(out, OpCompositeInsert, {t_mat4, next, nx, acc, c, 0});
+                acc = next;
+            }
+            continue; // the original OpLoad is replaced, not kept
+        }
+
+        // gl_ViewIndex is an Input and must be in the fragment entry point's
+        // interface list.
+        if (in.op == OpEntryPoint && in.len >= 3 &&
+            w[1] == ExecutionModelFragment && !existing_view_var) {
+            out.push_back((uint32_t)((in.len + 1) << 16) | OpEntryPoint);
+            for (uint32_t j = 1; j < in.len; j++)
+                out.push_back(w[j]);
+            out.push_back(view_var);
+            continue;
+        }
+
+        out.insert(out.end(), code.begin() + in.start,
+                   code.begin() + in.start + in.len);
+    }
+
+    out[3] = bound;
+    code.swap(out);
+    return true;
+}
+
 /// One sampled texture a fragment module declares.
 struct SampledTexture {
     uint32_t set, binding;

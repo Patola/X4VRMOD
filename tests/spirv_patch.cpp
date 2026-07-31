@@ -102,6 +102,38 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    // The per-eye M_invprojection correction (task #22).
+    if (strcmp(argv[1], "frag-invproj") == 0) {
+        std::vector<uint32_t> code = load_spv(argv[2]);
+        if (code.empty()) {
+            printf("FAIL=load\n");
+            return 1;
+        }
+        const std::vector<uint32_t> before = code;
+        const uint32_t set = argc > 4 ? (uint32_t)strtoul(argv[4], nullptr, 0) : 1;
+        const uint32_t binding =
+            argc > 5 ? (uint32_t)strtoul(argv[5], nullptr, 0) : 0;
+        const uint32_t member =
+            argc > 6 ? (uint32_t)strtoul(argv[6], nullptr, 0) : 2;
+        const float dl = argc > 7 ? strtof(argv[7], nullptr) : -0.032f;
+        const float dr = argc > 8 ? strtof(argv[8], nullptr) : 0.032f;
+        const bool ok = x4vr::spv::patch_fragment_invproj_eye(code, set, binding,
+                                                              member, dl, dr);
+        printf("PATCHED=%d\n", ok ? 1 : 0);
+        if (!ok && code != before) {
+            printf("FAIL=refusal_modified_code\n");
+            return 1;
+        }
+        FILE *f = fopen(argv[3], "wb");
+        if (!f) {
+            printf("FAIL=open_out\n");
+            return 1;
+        }
+        fwrite(code.data(), 4, code.size(), f);
+        fclose(f);
+        return 0;
+    }
+
     if (strcmp(argv[1], "list") == 0) {
         std::vector<uint32_t> code = load_spv(argv[2]);
         if (code.empty()) {
