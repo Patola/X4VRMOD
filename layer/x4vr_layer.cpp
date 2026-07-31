@@ -5366,8 +5366,47 @@ void probe_collect(DeviceData *d, VkQueue queue) {
     // The verdict this instrument exists to give is about to gate the tonemap
     // change, so it has to be able to say "nothing was in here".
     bool u0 = true, u1 = true;
+    // Mean level per layer.
+    //
+    // DIFFER counts texels that differ; it cannot say *how* they differ, and
+    // takes 55 and 56 turned on exactly that distinction. The screenshots show
+    // the right eye's cockpit panels at 1.7-1.9x the left eye's brightness
+    // while the background matches to 0.2% -- so one layer is systematically
+    // brighter, which a pixel count cannot express and which sent two
+    // diagnoses down the wrong road.
+    //
+    // Summing the first component is deliberately crude: for the HDR and
+    // 8-bit colour formats in this chain it is the red channel, which is
+    // enough to say "layer 1 is brighter here and not there" and so to name
+    // the first buffer in the chain where the two eyes diverge in level rather
+    // than merely in content. That name is the thing worth having; a
+    // photometrically correct luminance would not make it any more of a name.
+    double sum0 = 0.0, sum1 = 0.0;
+    const bool f16 = g_probe.format == VK_FORMAT_R16G16B16A16_SFLOAT ||
+                     g_probe.format == VK_FORMAT_R16_SFLOAT ||
+                     g_probe.format == VK_FORMAT_R16G16_SFLOAT;
+    auto level = [&](const uint8_t *p) -> double {
+        if (f16) {
+            uint16_t h;
+            memcpy(&h, p, 2);
+            // half -> float, enough for a mean: sign/exp/mantissa by hand so
+            // this needs no <cmath> conversion helper or compiler extension.
+            const int sgn = (h >> 15) & 1, exp = (h >> 10) & 0x1f, man = h & 0x3ff;
+            double v;
+            if (exp == 0)
+                v = man * 5.9604645e-8;
+            else if (exp == 31)
+                v = 65504.0; // inf/nan clamped: a mean is not the place to care
+            else
+                v = (1.0 + man / 1024.0) * std::pow(2.0, exp - 15);
+            return sgn ? -v : v;
+        }
+        return (double)p[0];
+    };
     static const uint8_t zero[16] = {0};
     for (size_t t = 0; t * bpp < n; t++) {
+        sum0 += level(l0 + t * bpp);
+        sum1 += level(l1 + t * bpp);
         const bool a = memcmp(l0 + t * bpp, zero, bpp) != 0;
         const bool b = memcmp(l1 + t * bpp, zero, bpp) != 0;
         if (a)
@@ -5462,22 +5501,30 @@ void probe_collect(DeviceData *d, VkQueue queue) {
                      g_probe.serial, (unsigned)g_probe.format);
         }
     }
+    const double mean0 = total ? sum0 / (double)total : 0.0;
+    const double mean1 = total ? sum1 / (double)total : 0.0;
+    // Printed on both branches: an IDENTICAL image has equal means by
+    // construction, and seeing that stated is what makes the ratio on the
+    // differing ones mean something.
+    char lvl[96];
+    snprintf(lvl, sizeof lvl, "  level %.4g/%.4g (l1/l0 %.3f)", mean0, mean1,
+             mean0 != 0.0 ? mean1 / mean0 : 0.0);
     if (h0 == h1) {
         X4VR_LOG("mv probe: img #%u %ux%u  layer0=%016llx%s  "
-                 "layer1=%016llx%s  IDENTICAL",
+                 "layer1=%016llx%s  IDENTICAL%s",
                  g_probe.serial, g_probe.w, g_probe.h, (unsigned long long)h0,
-                 ann0, (unsigned long long)h1, ann1);
+                 ann0, (unsigned long long)h1, ann1, lvl);
     } else {
         X4VR_LOG("mv probe: img #%u %ux%u  layer0=%016llx%s  "
                  "layer1=%016llx%s  DIFFER %zu/%zu (%.2f%%)  "
                  "non-empty %zu/%zu  missing=%zu changed=%zu extra=%zu  "
-                 "first at (%u,%u)",
+                 "first at (%u,%u)%s",
                  g_probe.serial, g_probe.w, g_probe.h, (unsigned long long)h0,
                  ann0, (unsigned long long)h1, ann1, dtex, total,
                  total ? 100.0 * (double)dtex / (double)total : 0.0, nz0, nz1,
                  missing, changed, extra,
                  g_probe.w ? (uint32_t)(first % g_probe.w) : 0,
-                 g_probe.w ? (uint32_t)(first / g_probe.w) : 0);
+                 g_probe.w ? (uint32_t)(first / g_probe.w) : 0, lvl);
     }
     g_probe.captures++;
 }

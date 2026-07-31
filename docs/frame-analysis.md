@@ -6600,3 +6600,84 @@ archaeology without once looking at the artifact. Take forty-eight cost eleven
 takes to the same habit: log archaeology in place of reading the thing itself.
 The next step is a screenshot, which is the only instrument that has not been
 tried and the one that settled the take-50 question in a single message.
+
+## The screenshots: it is not a shadow, and both diagnoses are dead
+
+Patola supplied two SBS captures. Measured per region, luminance mean, right
+eye over left:
+
+| region | shadow1 | shadow2 |
+|---|---|---|
+| sky / nebula background | **1.002** | **1.001** |
+| near hull panel / wing | **1.889** | **1.688** |
+| strut | 1.351 | — |
+| cockpit floor | 0.956 | 0.851 |
+| whole eye | 1.099 | 1.036 |
+
+Cropping the *same* box from both eyes and stacking them settles what kind of
+difference it is: the wing's flat panels are dark grey in the left eye and near
+white in the right. Same geometry, near enough the same position, radically
+different shading. It is **not a shadow edge and not a shift** — it is the
+surface's own brightness.
+
+**The background matches to 0.2%.** So this is not exposure, not tonemapping and
+not the composite: those move everything, and the sky does not move at all. What
+differs is confined to surfaces that shade, and it is not a constant offset
+either — the panels are brighter in the right eye while the floor is *darker*.
+
+### Both mechanisms proposed for this are now excluded
+
+* *"Correct stereo behaviour"* (takes 50/51): shadows are view-independent, and
+  a 1.9× brightness difference on a flat panel is not parallax.
+* *"The deferred passes reconstruct in the eye's frame"* (takes 55/56): the
+  evidence for it was `shadowCSM` appearing in `OpMemberName` debug names, and
+  nothing in 409 modules reads camera members 9 or 10.
+
+A third guess died before it was proposed: the 2048×2048 D16 shadow cascades
+(`#28`–`#32`, `#70`–`#74`) *are* doubled by the layer, which looked promising —
+a depth-only pass is unsheared and unmasked, so layer 1 would never be written.
+But they are not in the per-eye set. The masked passes' attachments are `#1`–`#4`,
+`#50`–`#53`, `#11`, `#54`, `#55`, `#59`, `#60`, `#61`, `#63` — no shadow map
+among them, so both views sample the same one and the lookup coordinates come
+from the vertex stage identically. Recorded because it was checked, not because
+it led anywhere.
+
+### The instrument, instead of a fourth guess
+
+`DIFFER` counts texels that differ. It cannot say *how* they differ, and every
+wrong turn on this symptom came from asking it a question it does not answer.
+The probe now also reports the mean level of each layer:
+
+```
+mv probe: img #61 ... DIFFER 247671/1982464 (12.49%) ... level 0.1832/0.1841 (l1/l0 1.005)
+```
+
+Printed on `IDENTICAL` lines too, because an identical image has equal means by
+construction and seeing that stated is what makes a ratio elsewhere mean
+something. Half floats are decoded inline; the first component is summed, which
+for this chain is red — crude on purpose, since the output wanted is *the name
+of the first buffer where the eyes diverge in level*, and a photometrically
+correct luminance would not make it more of a name.
+
+### P64 — take fifty-seven
+
+Same command as take fifty-six, fresh log, same cockpit view as the
+screenshots. The question is only: **at which image does `l1/l0` first depart
+from 1.000?**
+
+* The whole-eye ratios were 1.099 and 1.036, so a mean over a full image will
+  show a few percent, not 1.9× — the strong difference is local to panels. A
+  departure of 2% or more is well clear of noise between two renders of one
+  frame.
+* If the ratio is 1.000 through the G-buffer and departs at a later composite,
+  the cause is downstream of shading.
+* If it departs at the G-buffer itself (`#54`/`#57`/`#59`/`#60`/`#61`), the two
+  eyes are shading the same surfaces differently and the cause is in the
+  geometry pass.
+* If **no** image shows a departure, then the level difference is local enough
+  to vanish in a full-image mean, and the next step is `X4VR_MV_DUMP_IMG` on the
+  G-buffer to look at the two layers directly.
+
+I am deliberately not naming a culprit this time. Three have been proposed for
+this symptom and three have been wrong, all from indirect evidence; the point of
+this run is to make the next statement about it a measurement.
