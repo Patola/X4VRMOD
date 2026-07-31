@@ -6853,3 +6853,72 @@ What each outcome would mean:
 
 Three outcomes, three different next steps, and no need to guess between them
 in advance.
+
+## Take sixty: `#57` dumped — an additive lift in the dark, not a shadow
+
+`X4VR_MV_DUMP=/tmp/x4dump X4VR_MV_DUMP_IMG=57`. (Take fifty-nine set only
+`X4VR_MV_DUMP_IMG` and wrote nothing: `X4VR_MV_DUMP` is what enables the dump
+and gives it a path. The launcher documents both; the command was written from
+memory instead of from the interface, which is the same error as reading
+`shadowCSM` out of a debug name.)
+
+Four capture pairs, `n0`/`n1` empty, `n2` and `n3` on the artifact
+(probe ratios 1.576 and 1.846).
+
+### What `#57` contains
+
+**Ship geometry only — the background is pure black in both layers.** That
+settles why the nebula matched to 0.2% in the screenshots: it never passes
+through this buffer, so "the background is identical" was never evidence about
+exposure or tonemapping. It was evidence that the artifact lives in a
+geometry-only buffer, and it was misread as the opposite.
+
+### After removing parallax, the difference survives
+
+Aligning the layers by best horizontal shift and comparing only texels lit in
+both:
+
+| capture | shift | raw ratio | **aligned, lit** | coverage l0 / l1 |
+|---|---|---|---|---|
+| n2 | −40 px | 1.184 | **1.120** | 34.56% / 35.12% |
+| n3 | −27 px | 1.223 | **1.145** | 23.87% / 23.81% |
+
+Coverage is equal to a fraction of a percent, so no geometry is missing from
+either eye. The residual 12–15% is a real shading difference.
+
+### It is additive, and it lives in the dark
+
+| layer-0 band | n | ratio |
+|---|---|---|
+| 8–25 (dark) | 89426 | **1.297** |
+| 25–50 | 38568 | 1.141 |
+| 50–80 | 19112 | 1.023 |
+| 80–120 | 3058 | 1.050 |
+| 120–180 (bright) | 9139 | **0.971** |
+
+`B = A + 4.20` fits better (residual 405) than `B = 1.035·A` (residual 420).
+
+**Layer 1 carries a low-level additive term that layer 0 does not**, strongest
+in shadow, gone in the highlights, marginally negative in the brightest band.
+That is why it reads as "the shadows disagree": the dark regions are lifted in
+one eye, so shadow interiors differ while lit surfaces and the background do
+not. Patola's "the black albedo changes its area" is the same observation from
+the other side — a lifted floor makes a dark region look smaller.
+
+### Where this leaves it
+
+Established by measurement, not inference:
+
+* the shear is depth-correct (far background aligns at 0 px, take 57);
+* near geometry parallaxes cleanly and keeps its appearance (strut, residual 17.6);
+* `#57` is a geometry-only accumulation buffer, read and written by `rp #31/#32`;
+* per-view sampling is load-bearing — removing it drives `#57` to 90× (take 58);
+* the residual is an **additive lift in dark regions of layer 1**, ~4 units on
+  an 8-bit tone-mapped view, uniform coverage.
+
+**Next step is to read the shader for `rp #31/#32`**, not to propose a fifth
+mechanism. Four have been offered for this symptom and four were wrong, every
+one of them reasoned from something other than the code that does the work.
+Take forty-eight was the same story and cost eleven runs; the fix arrived in one
+message once the shader was read. The pass is now identified, which is the part
+that was missing then.
