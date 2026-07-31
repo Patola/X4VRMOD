@@ -211,6 +211,40 @@ inline Mat4 offset_camera(const Mat4 &view, Major major, float dx, float dy,
 // geometry separates strongly, distant stars not at all. (A plain clip-space
 // translation, by contrast, would slide the whole image uniformly and
 // produce no depth cue at all.)
+// The three numbers make_eye_shear needs, read out of X4's own projection
+// rather than assumed. The layer has defaulted to sx=0.889 / near=0.1 since
+// Phase 4a; those were *measured*, but at 2816x1408, and sx carries the
+// aspect (sx = sy/aspect -- 1.778/0.889 = 2.000 there). The eye now renders
+// 1408x1408, so a value that tracks the aspect cannot still be right.
+//
+// Which slot holds `near` depends on storage order: column-major keeps
+// w_c = z in m[11] and the near term in m[14], row-major the transpose. That
+// is the same asymmetry detect_major_proj keys on, so pass its verdict in
+// rather than re-deriving it here.
+//
+// Read this from the *un-jittered* projection (kProjectionUJ) when you have
+// the choice: X4 does TAA, and the jitter lands in m[8]/m[9] -- the very
+// slots the eye shear writes. sx and near are jitter-independent, so either
+// matrix answers this question, but reading the clean one keeps the two
+// concerns from being confused later.
+struct ProjTerms {
+    float sx = 0.0f;
+    float sy = 0.0f;
+    float near_z = 0.0f;
+    bool ok = false;
+};
+
+inline ProjTerms read_proj_terms(const Mat4 &p, Major major) {
+    ProjTerms t{};
+    if (major == Major::Unknown)
+        return t; // refuse to guess -- a transposed read is silently plausible
+    t.sx = p.m[0];
+    t.sy = p.m[5];
+    t.near_z = (major == Major::Column) ? p.m[14] : p.m[11];
+    t.ok = std::fabs(t.sx) > 1e-6f && std::fabs(t.near_z) > 1e-6f;
+    return t;
+}
+
 inline Mat4 make_eye_shear(float sx, float sy, float near_z, float dx,
                            float dy = 0.0f) {
     Mat4 k{};
