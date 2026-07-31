@@ -5921,3 +5921,121 @@ is claimed about X4:
 If the measurement confirms P59, the confirmation run needs **no code change**:
 `X4VR_PROJ_SX=1.778` is an existing override. Only once the number is proven on
 screen does the layer start reading it live.
+
+## Take fifty-two: P59 refuted — sx is 1.333, and sy is not a constant
+
+```
+M_projection    [   1.333   -0.000    0.000    0.000 | ... |    0.000   -0.000    0.100    0.000]
+M_projectionUJ  [   1.333   -0.000    0.000    0.000 | ... |    0.000   -0.000    0.100    0.000]
+storage order detected: column-major (draws=216)
+proj MEASURED: sx=1.33333 sy=-1.33333 near=0.10000 (jittered sx=1.33333 near=0.10000)
+proj ASSUMED : sx=0.88900 near=0.10000
+proj SHEAR   : measured |m8|=0.10667 vs baked |m8|=0.07112 -> baked is 0.667x
+```
+
+Scored honestly:
+
+| P59 claim | verdict |
+|---|---|
+| `sx ≈ 1.778` | **REFUTED** — 1.33333 |
+| baked is `0.500x` | **REFUTED** — 0.667x |
+| `near` unchanged at 0.1 | confirmed |
+| `M_projection` == `M_projectionUJ` (no TAA jitter) | confirmed, bit-for-bit |
+| aspect 1.0, so `sx == abs(sy)` | confirmed — 1.33333 both |
+| baked shear too *small*, not too large | confirmed; the retraction stands |
+
+The run itself scores PASS/MIXED and tracks take fifty-one image for image, so
+the read-only dump disturbed nothing.
+
+**What I got wrong.** The reasoning — `sx = sy/aspect`, aspect is now 1.0 — was
+right, and the measurement confirms it. The error was one step behind: I treated
+`sy = 1.778` as a constant of the engine. It is not. Three data points now
+exist, and only the first two share an `sy`:
+
+| aspect | sx | sy |
+|---|---|---|
+| 2.000 (2816×1408) | 0.889 | 1.778 |
+| 2.389 (3440×1440) | 0.744 | 1.778 |
+| 1.000 (1408×1408) | **1.333** | **1.333** |
+
+Had I "confirmed" P59 by setting `X4VR_PROJ_SX=1.778` — which is exactly what
+the previous section proposed as the cheap next step — the parallax would have
+been 33% too *large*, having started 33% too small. The wrong fix was one
+command away and would have looked like progress.
+
+### A model for X4's FOV rule, fitted after the fact
+
+All three rows fit `aspect_eff = max(aspect, 4/3)`, `sx = 1.778/aspect_eff`,
+`sy = sx·aspect`:
+
+* 2.000 → sx = 1.778/2.000 = 0.889, sy = 0.889·2.000 = 1.778 ✓
+* 2.389 → sx = 1.778/2.389 = 0.744, sy = 0.744·2.389 = 1.778 ✓
+* 1.000 → sx = 1.778/1.333 = 1.333, sy = 1.333·1.000 = 1.333 ✓
+
+In words: **X4 never computes a horizontal FOV narrower than a 4:3 monitor
+would give** (73.74°), and derives the vertical from the true aspect. `1.778`
+is 16/9, so the underlying setting is a 90° horizontal FOV at 16:9.
+
+This is three points and one free parameter, fitted *after* seeing the answer.
+It is a hypothesis, not a finding, and it is recorded as one. The test that
+would settle it: render at an aspect between 1.0 and 1.333 — 1408×1200 gives
+1.173 — where the model says sx stays clamped at 1.333 while an unclamped
+`sy/aspect` says 1.516. Those are far enough apart that one dump decides it.
+
+**Why it matters beyond curiosity.** An HMD's per-eye aspect is near 1:1, which
+is inside the clamp. If the model holds, X4 will hand us 73.7° horizontal no
+matter what eye size we ask for, and a headset wants half again as much. That
+is a Stage-3 problem, filed as task #24, not something to solve here.
+
+### The real conclusion: the constant cannot be baked from a guess
+
+The shear is baked into shader modules at `vkCreateShaderModule`. In take
+fifty-two that happened at t=564227.5; the projection first became readable at
+t=564253.7. **Twenty-six seconds earlier, and X4 had no camera yet.** So there
+is no startup-time read that could feed the bake, and the layer cannot compute
+`sx` itself without a model of X4's FOV rule — a model that, on this evidence,
+is exactly the kind of thing I get wrong.
+
+Two options remain, and the second depends on a fact not yet in evidence:
+
+1. **Read `sx` in the shader.** The camera block is `BLOCK_BUFFER_BINDING_SLOT_CAMERA`
+   at **set 1, binding 0**, member 1 = `M_projection` (member 3 =
+   `M_projection_uj`), declared with debug names in **366 of 409** dumped
+   modules. X4 ships combined vertex+fragment modules — 394 of 409 carry a
+   Vertex entry point — so the block a fragment stage uses is in the same
+   module the vertex patch edits. Uniforms need no entry-point interface
+   change, so the patch would add one load and a multiply. Self-calibrating,
+   and correct even if the FOV moves.
+2. **Keep baking, from the measured number.** Cheaper and already possible via
+   `X4VR_PROJ_SX`, but only correct if `sx` never changes during a session.
+
+X4 has a zoom. Whether that zoom moves the projection is the question that
+picks the option, and it is a measurement, not an argument.
+
+### P60 — take fifty-three
+
+Same command as take fifty-two plus `X4VR_PROJ_SX=1.3333`, and a dump that now
+reports the terms **on every change** rather than once. IPD stays at 0.016: the
+number under test is `sx`, and changing the separation at the same time would
+confound the only two things this run can show.
+
+1. `proj SHEAR` reports `baked is 1.000x` — the baked and measured shears agree.
+   This is arithmetic, not a discovery; if it fails, the override does not reach
+   the bake and nothing else in the run means anything.
+2. Every image's `DIFFER` rises against take fifty-two, none falls. The shear
+   goes up 1.5×, and take fifty-one established the relationship is monotonic
+   but far from linear, so a rise well under 1.5× is expected. The screen-space
+   buffers (`#66`/`#67`, `#97`/`#98`) should rise proportionally hardest, the
+   mirror of how they fell hardest when the IPD was quartered.
+3. The `X4VR_STEREO=0` control is not re-run here; take fifty proved the
+   sampling path, and this run changes only a scalar the shear is built from.
+4. **The open one: does `sx` move?** I expect at least one `proj CHANGED` line
+   during a session that includes zooming, opening the map, and entering an
+   external view — X4 exposes a zoom, and a zoom that does not touch the
+   projection would be unusual. If forty changes appear, option 2 is dead and
+   the in-shader read is the only correct answer. If `sx` holds at 1.33333 for a
+   whole session including zoom, baking the measured value is legitimate and far
+   cheaper, and the in-shader patch can be deferred behind more valuable work.
+
+I am deliberately not predicting which. The previous prediction failed on an
+assumption I had no measurement for, and this is the same shape of assumption.
