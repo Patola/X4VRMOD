@@ -5736,7 +5736,7 @@ doubles (count 4), which records why the caller's guard is load-bearing.
 
 ## Take fifty (control): the per-view sampling is exact
 
-`X4VR_STEREO=0` with `X4VR_BINDLESS_PATCH=1` — the shear set to identity while
+`X4VR_STEREO` omitted with `X4VR_BINDLESS_PATCH=1` — the shear absent while
 view 1 still samples twin slots. Any difference between the eyes here cannot be
 parallax; it can only be the sampling.
 
@@ -6027,7 +6027,7 @@ confound the only two things this run can show.
    but far from linear, so a rise well under 1.5× is expected. The screen-space
    buffers (`#66`/`#67`, `#97`/`#98`) should rise proportionally hardest, the
    mirror of how they fell hardest when the IPD was quartered.
-3. The `X4VR_STEREO=0` control is not re-run here; take fifty proved the
+3. The shear-off control is not re-run here; take fifty proved the
    sampling path, and this run changes only a scalar the shear is built from.
 4. **The open one: does `sx` move?** I expect at least one `proj CHANGED` line
    during a session that includes zooming, opening the map, and entering an
@@ -6138,3 +6138,43 @@ offsets exactly (member 0 `M_view`, 2 `M_invprojection`, 3 `M_projection_uj`,
 7 `M_viewprojection`, 8 `M_viewinverse`, 9/10 the shadow cascades). Of the 341
 modules that declare `M_worldviewprojection`, **323 also declare the camera
 block**; the remaining 18 keep the baked constant as a fallback.
+
+### P61 — take fifty-four, the live sx on screen
+
+`X4VR_PROJ_LIVE=1` added to take fifty-three's command and nothing else
+changed. `X4VR_PROJ_SX=1.3333` stays: it no longer reaches world geometry, but
+it is still the best constant for the handful of modules that have no camera
+block, so leaving it in changes one variable rather than two.
+
+1. The log reports `live-sx=N baked-sx=M` with **M a small minority** — 18 of
+   341 world modules in the dump lack a camera block, so roughly 5%. `N = 0`
+   would mean the patch never fired and everything silently fell back to the
+   bake; the counters exist so that cannot pass as success.
+2. **No `driver rejected patched module` lines.** 366 of X4's real modules were
+   patched and validated offline under `--target-env vulkan1.2`, 290 of them
+   with the bindless fragment patch applied first, so a rejection here means
+   the driver disagrees with spirv-val and the offline evidence was worth less
+   than it looked.
+3. **At rest, take fifty-four should look like take fifty-three.** This is the
+   strong oracle and the reason take fifty-three was worth running: it baked
+   `sx = 1.3333`, which *is* the live value at the default FOV. So in the
+   cockpit, not zooming, the two runs should produce closely matching `DIFFER`
+   figures. A large difference at rest means the shader is reading the wrong
+   scalar — right magnitude, wrong provenance is exactly the failure this step
+   could introduce.
+4. **Under zoom they must diverge.** Take fifty-three's parallax is frozen at
+   the unzoomed value; take fifty-four's scales with `sx`. Zooming in should
+   keep the stereo depth looking right where before it went flat.
+5. The shear-off control (omit `X4VR_STEREO`) stays bit-identical. `have_k` is
+   false there, so the live path is skipped entirely — it is gated on the same
+   flag.
+
+**A warning that is not a bug.** At full zoom `sx = 37.75` and the correct
+shear is 3.02 against 0.107 unzoomed — roughly 28× the separation. That is
+geometrically right: magnify the image 12× and you magnify its parallax too,
+which is exactly what binoculars do and why they are uncomfortable. If deep
+zoom looks or feels excessive in this run, the correct reading is "correctness
+achieved, comfort is a separate question", and clamping the offset under zoom
+is a decision to take deliberately later rather than a number to quietly tune
+now. Recording that *before* the run so a strong effect does not get mistaken
+for a regression.

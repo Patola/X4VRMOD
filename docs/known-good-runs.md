@@ -44,11 +44,21 @@ bit-identical — X4 draws the same pixels to both layers there.
 knobs as `stage2-stereo-first`, plus `X4VR_IPD=0.016`, and it is the tag to
 prefer because two controls stand behind it rather than one screenshot:
 
-* **take 50** — `X4VR_STEREO=0` with the patch on: every probed image
+* **take 50** — the shear off (`X4VR_STEREO` **omitted**, not set to 0 —
+  see below) with the patch on: every probed image
   `IDENTICAL`, 19 of 19 settled swapchain samples bit-exact. The mirror, the
   offset and the aliased-variable fix are provably not a variable.
 * **take 51** — quarter IPD: every image's `DIFFER` drops, screen-space buffers
   hardest (`#97` by 37×). The remaining per-eye difference is geometric.
+
+**Correction, found while writing task #23's shader patch.** This file used to
+describe take 50's control as `X4VR_STEREO=0`. It was not: that run **omitted**
+the variable, and the layer tested `getenv("X4VR_STEREO")` for *presence*, so
+`X4VR_STEREO=0` would have baked the shear and made the control look broken.
+Fifteen other knobs in the layer test the value; this one did not. The check is
+now value-sensitive, so both spellings do what they read as — but the recorded
+command is the authority, which is the reason this file demands the verbatim
+`env: run =` line rather than a description of it.
 
 `X4VR_IPD=0.016` is **not** a calibrated value — it is a quarter of the default,
 chosen to test whether the artifact scaled. It does. The right value is unknown
