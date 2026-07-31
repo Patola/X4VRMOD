@@ -6325,3 +6325,117 @@ looking at near geometry is the instrument. The question to answer is not "is
 there parallax" but "does the cockpit sit at a plausible distance" — and if it
 looks too strong, that is the calibration signal the project has been missing
 since the IPD was first set, not a fault.
+
+## Take fifty-five: P62 half-confirmed, and task #22 was closed wrongly
+
+`X4VR_IPD=0.064` with the live `sx`. Run ran as configured — one session,
+`live-sx=284 baked-sx=12`, no driver rejections, gameplay `sx = 3.78085`, so
+the clip shift was 0.121 as predicted.
+
+Patola, looking inside the cockpit with the numpad views: *"I couldn't feel any
+depth, only tried to gauge by eyes the subtle differences in angle of the
+elements. Saw a couple of differences. But then I have noticed one issue —
+recall that I complained about the cockpit lighting that was very different
+between the two frames? We have that again. In some corners of the cockpit, the
+shadows are very different… Most of the shadows match, but there are some very
+clear ones that don't."*
+
+### The argument that should have closed #22, pointing the other way
+
+**Shadows are view-independent.** A shadow edge lies on a surface. In correct
+stereo it stays on the same *surface point* in both eyes and appears at a
+different screen position along with the geometry it sits on. Two eyes
+disagreeing about where a shadow falls on a wall is not parallax. It is a
+defect, and it always was.
+
+Task #22 was closed after takes fifty and fifty-one on the grounds that the
+difference "scales with the IPD, therefore geometric". That inference does not
+hold: the bug below scales with the IPD too. The evidence never discriminated
+between the two explanations, and it was treated as though it had.
+
+### The mechanism, from X4's own shaders
+
+The eye shear moves `gl_Position` and nothing else, so geometry rasterizes
+where the offset eye would see it — correct. The deferred pass then:
+
+1. reads the depth buffer at a screen pixel;
+2. reconstructs view position with camera-block member 2, `M_invprojection`,
+   which is **centre-frame**. Reconstructing a *sheared* pixel with the centre
+   inverse recovers the position in **that eye's** frame;
+3. looks up the shadow cascades with `M_shadowCSM*Clip` — **centre-frame**.
+
+Surface position and shadow transform therefore disagree by the eye offset:
+±32 mm at IPD 0.064, **64 mm between the two eyes**. On cockpit geometry a
+metre away that is a large, obvious shadow displacement, which is exactly what
+is on screen.
+
+Counting access chains into the camera block across all 409 dumped modules:
+
+| member | name | modules using |
+|---|---|---|
+| 2 | `M_invprojection` | **19** |
+| 13 | `V_cameraposition` | 296 |
+| 0 | `M_view` | 268 |
+
+**All 19 of the `M_invprojection` users also reference `shadowCSM`.** They are
+the deferred lighting-and-shadow passes, and they are exactly the passes the
+mechanism predicts.
+
+### The discriminator was already in the data
+
+| take | sx | d | shear = sx·d | artifact |
+|---|---|---|---|---|
+| pre-51 (ipd .064, sx .889) | 0.889 | 0.032 | 0.0284 | **yes** |
+| 51 (ipd .016, sx .889) | 0.889 | 0.008 | 0.0071 | no |
+| 54 (ipd .016, sx 3.78) | 3.78 | 0.008 | 0.0302 | not seen |
+| 55 (ipd .064, sx 3.78) | 3.78 | 0.032 | 0.1210 | **yes** |
+
+Take fifty-four's shear is within 6% of pre-fifty-one's, yet one shows the
+artifact and the other does not. What differs between them is `d`, by 4×.
+
+**Correct stereo geometry scales with the shear `sx·d`. A reconstruction offset
+scales with `d` alone.** The artifact tracks `d`. That is the signature of the
+bug and not of parallax.
+
+Weak point, stated rather than buried: take fifty-four's "no artifact" is
+Patola not mentioning one while looking at distant objects through a zoom, not
+a deliberate inspection of cockpit shadows. It is suggestive, not conclusive.
+The shader evidence is what carries this.
+
+### What the fix has to do
+
+`clip_sheared = K·clip_centre` with `K = P·T(−d)·P⁻¹`, so recovering the centre
+frame from a sheared pixel needs `T(d)·M_invprojection` in place of
+`M_invprojection`. In column-major terms that is one row-combine:
+
+```
+result[0][c] = M[0][c] + d · M[3][c]        for c = 0..3
+```
+
+selected per view by `gl_ViewIndex`, the same way the vertex patch already
+selects `d`. Nineteen modules, all fragment or fullscreen, and the correction
+is applied at the point the matrix is loaded rather than at the point the
+position is used — locating "the reconstructed position" in arbitrary shader
+code is not tractable, but locating a load of member 2 is.
+
+**Not to be conflated with it:** `V_cameraposition` (member 13, 296 modules) is
+also centre-frame, so per-eye specular is currently missing. That makes the two
+eyes *more* alike, not less, so it cannot be what Patola is seeing. It is an
+inaccuracy to fix later, and mixing it into this diagnosis would be the same
+mistake as before — reaching for a nearby explanation because it is nearby.
+
+### P62 scored
+
+| claim | verdict |
+|---|---|
+| `live-sx` a large majority, no rejections | confirmed — 284 vs 12, zero |
+| run scores PASS | confirmed |
+| parallax clearly visible on near geometry | **no** — "couldn't feel any depth… a couple of differences" |
+| `proj STEADY` present, cap does not fire | confirmed |
+
+The third is unresolved rather than refuted: judging stereo depth on a
+flatscreen SBS pair by eye is close to impossible, which is a limitation of the
+instrument and not a result about the mod. Patola said so plainly — *"as I am
+not in VR, I couldn't feel any depth"*. The honest position is that **no run so
+far has been able to confirm the depth is right**, and none will until either
+an HMD or a proper A/B of the same frame at two separations exists.
