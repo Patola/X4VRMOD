@@ -6540,3 +6540,63 @@ This is the one prediction in the project so far that a flatscreen can settle
 cleanly: it is not a question about depth, which take fifty-five showed cannot
 be judged without an HMD, but about whether two images agree — and shadows that
 disagree are visible precisely because they should not be.
+
+## Take fifty-six: P63 refuted — the mechanism was wrong, on evidence that was an artifact
+
+`X4VR_PROJ_INVPROJ=1`. The patch fired (`invproj final: 238 modules
+corrected`), no driver rejections, run scores PASS. Patola: *"Unfortunately the
+shadows still clearly disagree."*
+
+The plumbing worked. The diagnosis was wrong.
+
+### The evidence that carried it does not exist
+
+Take fifty-five claimed: *"All 19 of the `M_invprojection` users also reference
+`shadowCSM`. They are the deferred lighting-and-shadow passes."* That was the
+sentence the whole mechanism rested on, and it is false.
+
+The only occurrence of `shadowCSM` in `mod-0151` is:
+
+```
+OpMemberName %BLOCK_BUFFER_BINDING_SLOT_CAMERA  9 "M_shadowCSM0Clip"
+OpMemberName %BLOCK_BUFFER_BINDING_SLOT_CAMERA 10 "M_shadowCSM1Clip"
+```
+
+Those are **debug names for struct members**, emitted in every module that
+declares the camera block, whether or not anything reads them. Across all 409
+modules, **no module accesses camera member 9 or 10 at all**. I grepped for a
+string and reported it as a reference.
+
+`mod-0151` also has zero `IO_texshadow*` inputs, so it receives no shadow data
+by any route.
+
+### Where shadows actually come from
+
+The geometry vertex stage computes `IO_texshadowCSM0..4` and passes them as
+interpolated outputs. They are derived from unsheared inputs — the shear
+touches `gl_Position` only, at the end of main — so for any given surface point
+they are **identical in both eyes**, and they travel with the geometry.
+
+By that reasoning shadows should already agree, and they do not. So the cause
+is somewhere I have not looked, and the last two explanations were both
+constructed from indirect evidence rather than from the artifact itself.
+
+### What this run does and does not settle
+
+* The invprojection correction is **unvalidated**, not disproven. 244 fragment
+  modules really do reconstruct position from depth, and reconstructing a
+  sheared pixel with the centre inverse really does yield the eye's frame. That
+  error is real; it is simply not what is on screen. The knob stays off by
+  default and the patch stays in, labelled as what it is.
+* `DIFFER` cannot arbitrate: takes 55 and 56 were different play sessions with
+  different content, so the per-image figures are not comparable, and take 54
+  already established `DIFFER` measures pixels changed rather than magnitude.
+
+### Method note
+
+Two consecutive wrong diagnoses of one symptom — "it is correct stereo
+behaviour", then "it is the invprojection" — both reasoned from shader
+archaeology without once looking at the artifact. Take forty-eight cost eleven
+takes to the same habit: log archaeology in place of reading the thing itself.
+The next step is a screenshot, which is the only instrument that has not been
+tried and the one that settled the take-50 question in a single message.
