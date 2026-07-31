@@ -6039,3 +6039,98 @@ confound the only two things this run can show.
 
 I am deliberately not predicting which. The previous prediction failed on an
 assumption I had no measurement for, and this is the same shape of assumption.
+
+## Take fifty-three: P60 confirmed — sx moves by 33×, so it cannot be baked
+
+Patola flew a full session: cockpit, zoom in and out, map, external view on a
+passing ship with zoom and rotation, then external view on his own ship.
+
+**The log holds two X4 sessions** (`env: run =` at lines 52 and 2374 — the game
+was launched twice into the same file). `X4VR_LOG` appends, so it was split
+before anything was read from it. Both halves score PASS/MIXED independently.
+The numbers below are session 1 only.
+
+| P60 claim | verdict |
+|---|---|
+| `proj SHEAR` reports `baked is 1.000x` | confirmed — measured 0.10667 vs baked 0.10666 |
+| every image's `DIFFER` rises, none falls | confirmed |
+| screen-space buffers rise proportionally hardest | confirmed |
+| does `sx` move? | **it moves by a factor of 33** |
+
+DIFFER, take fifty-two → take fifty-three, worst settled sample per image:
+
+| image | t52 | t53 | change |
+|---|---|---|---|
+| `#57`, `#59`, `#60`, `#61` (G-buffer) | 26.1–28.5% | 27.1–29.1% | +2% |
+| `#63` | 9.70% | 11.73% | +21% |
+| `#66` / `#67` | 3.65 / 8.23% | 5.41 / 10.61% | +48 / +29% |
+| `#97` | 1.59% | 2.37% | +49% |
+
+The 1.5× shear produced a rise well under 1.5×, screen-space hardest, exactly
+the mirror of take fifty-one. Caveat worth stating: the scene content differed
+between the two runs (this one was full of zooming), so this is weaker evidence
+than take fifty-one's, which held content roughly fixed. It agrees with the
+prediction; it does not carry it alone.
+
+### The answer: sx is not a constant
+
+```
+proj CHANGED  #5: sx 1.33333 ->  1.15174   (correct |m8| 0.09214, baked 0.10666)
+proj CHANGED  #9: sx 1.33333 ->  3.78085   (correct |m8| 0.30247, baked 0.10666)
+proj CHANGED #10: sx 3.78085 -> 37.75372   (correct |m8| 3.02030, baked 0.10666)
+```
+
+Observed values: 1.15174, 1.33333, 3.78085, and a cluster from 31.98 to 37.75.
+That is a **33× range in ordinary play** — 73.7° of horizontal FOV down to
+about 3°. `near` held at 0.1 throughout for every one of them.
+
+At full zoom the correct shear is 3.02 against a baked 0.10666: **the baked
+constant is 28× too small**. Option 2 from take fifty-two — bake the measured
+value — is dead. Not marginal, not a tuning question. Dead.
+
+Both sessions hit the 40-change cap, so 33× is a floor on the range, not a
+measured maximum.
+
+### A second reason, which is the stronger one
+
+Two changes in session 1 report `near` of 0.622 with `sx` near zero
+(0.00019, 0.00123). Those are not the main perspective camera — 37 of the 39
+samples read `near = 0.1`, these two do not.
+
+So the layer's "most-drawn range-1792 block wins" heuristic sometimes credits a
+block that is not the camera the geometry is drawing through. For a *diagnostic*
+that is a curiosity. For a mechanism that feeds the shear it would be a bug, and
+one that fires intermittently and looks like a rendering glitch.
+
+**A shader does not have this problem.** Each draw reads the camera block that
+is actually bound to it, which is by construction the right one. The in-shader
+read is not merely self-calibrating — it removes a guess the layer cannot make
+reliably from the outside.
+
+### The patch is smaller and cheaper than the one it replaces
+
+The measured matrix has `m[10] = 0`, so clip z is the constant near plane for
+every vertex, and the shear's single term collapses:
+
+```
+x_c' = x_c + (-sx·d/near)·z_c = x_c - sx·d          (z_c ≡ near)
+```
+
+**`near` cancels.** The shader needs one scalar — `M_projection[0][0]` — and
+the eye offset `d`, which is our own choice and stays baked. So the appended
+code is one load, one multiply, one subtract, replacing today's full `mat4`
+multiply of 16 muls and 12 adds. The correct version is *cheaper* than the
+wrong one, which for once makes "performance is king" and correctness the same
+choice.
+
+Asserted offline in `tests/view_math.cpp`, against `K·p` for points that came
+through P — an arbitrary vector is not a clip position and the two forms
+legitimately disagree on one, so testing arbitrary vectors would assert the
+wrong property.
+
+The camera block is `BLOCK_BUFFER_BINDING_SLOT_CAMERA`, **set 1, binding 0**,
+member 1 = `M_projection`, and its member order matches `x4vr_view.hpp`'s
+offsets exactly (member 0 `M_view`, 2 `M_invprojection`, 3 `M_projection_uj`,
+7 `M_viewprojection`, 8 `M_viewinverse`, 9/10 the shadow cascades). Of the 341
+modules that declare `M_worldviewprojection`, **323 also declare the camera
+block**; the remaining 18 keep the baked constant as a fallback.

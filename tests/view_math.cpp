@@ -169,6 +169,53 @@ int main() {
                    "square-eye shear is exactly 2x the wide-eye shear");
     }
 
+    // --- the in-shader form needs only sx ---------------------------------
+    // Take 53 measured m[10] = 0, so clip z is the constant near plane for
+    // every vertex. K's single term then collapses:
+    //     x_c' = x_c + (-sx*d/near)*z_c = x_c - sx*d
+    // near cancels. That is what lets the shader patch load one scalar and
+    // skip the matrix multiply -- 1 mul + 1 sub per vertex instead of a full
+    // mat4, so the correct version is cheaper than the wrong one.
+    //
+    // Checked against K*p for *real* clip positions -- points that came
+    // through P. For an arbitrary vector the two do not agree, and asserting
+    // on arbitrary vectors would be asserting the wrong property.
+    {
+        const float sx = 1.33333f, near_z = 0.1f;
+        const float d = 0.5f * 0.064f;
+        const x4vr::Mat4 p = x4_projection(sx, -sx, near_z);
+        const x4vr::Mat4 k = x4vr::make_eye_shear(sx, 0.0f, near_z, d);
+
+        // column-major: out[row] = sum_col m[col*4+row] * v[col]
+        auto apply = [](const x4vr::Mat4 &m, const float v[4], float out[4]) {
+            for (int r = 0; r < 4; r++) {
+                out[r] = 0.0f;
+                for (int c = 0; c < 4; c++)
+                    out[r] += m.m[c * 4 + r] * v[c];
+            }
+        };
+
+        const float pts[5][4] = {{0, 0, 1, 1},      {1, 2, 10, 1},
+                                 {-3, 0.5f, 0.5f, 1}, {100, -50, 5000, 1},
+                                 {0.01f, 0.01f, 0.11f, 1}};
+        bool all_ok = true, z_const = true;
+        for (const auto &v : pts) {
+            float clip[4], sheared[4];
+            apply(p, v, clip);
+            apply(k, clip, sheared);
+            if (std::fabs(clip[2] - near_z) > 1e-5f)
+                z_const = false;
+            // the one-scalar form: only x moves, by exactly sx*d
+            if (std::fabs(sheared[0] - (clip[0] - sx * d)) > 1e-5f ||
+                std::fabs(sheared[1] - clip[1]) > 1e-6f ||
+                std::fabs(sheared[2] - clip[2]) > 1e-6f ||
+                std::fabs(sheared[3] - clip[3]) > 1e-6f)
+                all_ok = false;
+        }
+        check(z_const, "clip z is the constant near plane for every vertex");
+        check(all_ok, "K*p equals p with x -= sx*d (one scalar, no matrix)");
+    }
+
     printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n", g_fail);
     return g_fail ? 1 : 0;
 }
