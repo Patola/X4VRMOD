@@ -2806,6 +2806,39 @@ float assumed_proj_near() {
     return v;
 }
 
+// The interpupillary distance in metres. Ours, not X4's -- this is the one
+// number in the shear that is a choice rather than a measurement, which is
+// exactly why it stays a baked constant when sx no longer can.
+float configured_ipd() {
+    static const float v =
+        getenv("X4VR_IPD") ? strtof(getenv("X4VR_IPD"), nullptr) : 0.064f;
+    return v;
+}
+
+// X4VR_PROJ_LIVE: read sx from X4's camera block in the shader instead of
+// baking it. Off by default until a run proves it, so the tagged state is one
+// unset variable away.
+bool proj_live() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_PROJ_LIVE");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
+
+// Where X4 keeps its camera constants. Read off the dumped modules:
+// BLOCK_BUFFER_BINDING_SLOT_CAMERA, member 1 = M_projection (member 0 is
+// M_view, 3 is M_projection_uj), matching x4vr_view.hpp's float offsets.
+//
+// Not env-configurable on purpose. patch_vertex_eye_offset verifies the shape
+// before it emits anything -- a Uniform block whose member really is a mat4 --
+// so a build of X4 that moved these would refuse and fall back to the baked
+// matrix rather than read the wrong buffer. A knob here would let someone
+// force a wrong answer past that check.
+constexpr uint32_t kCameraSet = 1;
+constexpr uint32_t kCameraBinding = 0;
+constexpr uint32_t kCameraProjMember = 1;
+
 // The patching itself. Wrapped below so the dump happens on every path out of
 // it without four copies of the same two lines.
 VkResult create_shader_module_inner(
@@ -2857,9 +2890,7 @@ VkResult create_shader_module_inner(
         // docs/frame-analysis.md); they are overridable until the layer
         // derives them from the live camera block automatically.
         if (const char *eye = getenv("X4VR_EYE")) {
-            const float ipd = getenv("X4VR_IPD")
-                                  ? strtof(getenv("X4VR_IPD"), nullptr)
-                                  : 0.064f;
+            const float ipd = configured_ipd();
             const float sx = assumed_proj_sx();
             const float nz = assumed_proj_near();
             const bool right = (eye[0] == 'r' || eye[0] == 'R');
@@ -2877,10 +2908,16 @@ VkResult create_shader_module_inner(
         // view index pick. The derivation is identical -- the same
         // make_eye_shear, the same sx/near -- so a stereo run and the pair of
         // one-eye runs it replaces should produce the same two images.
-        if (getenv("X4VR_STEREO")) {
-            const float ipd = getenv("X4VR_IPD")
-                                  ? strtof(getenv("X4VR_IPD"), nullptr)
-                                  : 0.064f;
+        // Value-sensitive, like every other knob in the layer. It used to test
+        // presence alone, which made `X4VR_STEREO=0` bake the shear -- the
+        // exact opposite of what it reads as. The take-50 control worked only
+        // because it *omitted* the variable rather than setting it to zero,
+        // and docs/known-good-runs.md described that control as
+        // "X4VR_STEREO=0". Anyone reproducing it from the docs would have got
+        // a stereo run, seen the control fail, and gone looking for a
+        // regression that was not there.
+        if (const char *st = getenv("X4VR_STEREO"); st && *st && *st != '0') {
+            const float ipd = configured_ipd();
             const float sx = assumed_proj_sx();
             const float nz = assumed_proj_near();
             const x4vr::Mat4 kl = x4vr::make_eye_shear(sx, 0.0f, nz, -0.5f * ipd);
@@ -3026,12 +3063,38 @@ VkResult create_shader_module_inner(
                             : (have_kr_ui ? K_ui_r : nullptr);
 
     static uint32_t patched = 0, n_world = 0, n_ui = 0, n_stereo = 0;
+    static uint32_t n_live = 0, n_baked = 0;
     (world ? n_world : n_ui)++;
     if (KR)
         n_stereo++;
+
+    // Task #23: world geometry reads sx out of X4's live camera block; the
+    // eye offset stays baked because it is our choice, not X4's.
+    //
+    // World only. The derivation assumes clip z is the camera's near plane,
+    // which is true for draws through M_worldviewprojection and false for the
+    // UI -- so UI keeps its own baked matrix, exactly as before. (Shadow
+    // passes are excluded a step later, at pipeline creation.)
+    //
+    // A module without the camera block falls through to patch_vertex_clip
+    // and the baked sx: 18 of X4's 341 world modules have no camera block, and
+    // a stale shear on those is a far better outcome than no shear at all,
+    // which would leave that geometry identical in both eyes.
+    bool vert_patched = false;
+    if (proj_live() && world && have_k) {
+        const float dl = -0.5f * configured_ipd();
+        const float dr = +0.5f * configured_ipd();
+        vert_patched = x4vr::spv::patch_vertex_eye_offset(
+            code, kCameraSet, kCameraBinding, kCameraProjMember, dl,
+            KR ? &dr : nullptr);
+        (vert_patched ? n_live : n_baked)++;
+    }
+    if (!vert_patched)
+        vert_patched = x4vr::spv::patch_vertex_clip(code, K, KR);
+
     // `|| frag_patched` so a module that only needed the fragment edit still
     // gets created from the edited bytes.
-    if (x4vr::spv::patch_vertex_clip(code, K, KR) || frag_patched) {
+    if (vert_patched || frag_patched) {
         VkShaderModuleCreateInfo mod = *ci;
         mod.codeSize = code.size() * 4;
         mod.pCode = code.data();
@@ -3054,9 +3117,10 @@ VkResult create_shader_module_inner(
             }
             if (++patched <= 3 || (patched % 50) == 0)
                 X4VR_LOG("patched vertex shader #%u (%s%s) "
-                         "[world=%u ui=%u stereo=%u]",
+                         "[world=%u ui=%u stereo=%u live-sx=%u baked-sx=%u]",
                          patched, world ? "world" : "ui",
-                         KR ? ", per-view" : "", n_world, n_ui, n_stereo);
+                         KR ? ", per-view" : "", n_world, n_ui, n_stereo,
+                         n_live, n_baked);
             return r;
         }
         // Patched module rejected by the driver: fall back to the original
@@ -3559,9 +3623,7 @@ void patch_view_before_submit() {
                      "(sx=%.5f near=%.5f) -- shear still on assumed values",
                      t.sx, t.near_z);
         } else if (t.ok && moved && changes < 40) {
-            const float ipd = getenv("X4VR_IPD")
-                                  ? strtof(getenv("X4VR_IPD"), nullptr)
-                                  : 0.064f;
+            const float ipd = configured_ipd();
             const float d = 0.5f * ipd;
             const float measured = t.sx * d / t.near_z;
             const float baked = assumed_proj_sx() * d / assumed_proj_near();
