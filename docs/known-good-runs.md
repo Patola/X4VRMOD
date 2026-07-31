@@ -76,9 +76,16 @@ Known defects that do ride along: the cursor is confined to a centred square
 | 2026-07-31 | `stage2-sx-measured` | `score_run.py` exit 0 on both sessions; `proj SHEAR` reports `baked is 1.000x` against X4's live projection | `X4VR_TAKE=53-P60 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_PROJ_SX=1.3333 X4VR_MV=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take53.log X4VR_MV_PROBE=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.016 X4VR_BINDLESS_MIRROR=1 X4VR_MV_INVENTORY=1` |
 
 **`stage2-sx-measured` supersedes `stage2-stereo-verified` as the resume
-point.** Same code path, plus `X4VR_PROJ_SX=1.3333` — the value read out of
-X4's own projection matrix rather than inherited from a 2816×1408 measurement.
-The shear now matches X4's camera exactly **at the default FOV**.
+point.** Same code path, plus `X4VR_PROJ_SX=1.3333` — read out of X4's own
+projection matrix rather than inherited from a 2816×1408 measurement.
+
+**Correction from take 54: 1.3333 is the *menu's* projection.** Reconstructing
+that session shows `sx = 1.33333` holds only for the first ninety-six seconds,
+before the savegame loads; gameplay reads 3.78085. Takes 52 and 53 both sampled
+that early window, so this tag is calibrated against the menu and is roughly
+2.8× too small in flight. It is still a real, scoring, reproducible state and
+still better than `stage2-stereo-verified` — but the sentence this replaces
+claimed it matched X4's camera, and it matched the wrong one.
 
 It is tagged because the next change is the riskiest in a while (a new SPIR-V
 transform), and the rule is that a good state gets tagged before the risk, not

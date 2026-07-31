@@ -6289,3 +6289,39 @@ a conclusion. Recorded so the next comparison does not reach for it by reflex.
   is the menu's projection, the model may describe the menu and not the game.
   The task is amended rather than deleted: the clamp test it proposes is still
   the right experiment, it just has to be run against a gameplay camera.
+
+### P62 — take fifty-five, the first run that can actually be seen
+
+Take fifty-four could not show parallax because the live `sx` and the quartered
+IPD nearly cancelled. So the next run restores the IPD to a human one and
+changes nothing else:
+
+```
+X4VR_IPD=0.064   (was 0.016)
+```
+
+Expected clip-x shift at the gameplay `sx` of 3.78: **0.121**, against take
+fifty-four's 0.030 and take fifty-one's 0.028. Four times more separation than
+anything rendered so far.
+
+1. Parallax is **clearly visible on near geometry** — cockpit frame, console,
+   a station or ship at close range. Not on distant objects: the shift is
+   `sx·d/z`, and at 10 km there is nothing to see at any IPD.
+2. `live-sx` stays a large majority with no driver rejections, as in take 54.
+3. The run still scores PASS.
+4. `proj STEADY` lines now appear during quiet stretches, and the 400-change
+   cap does not fire, so every probe sample has an `sx` to attribute it to.
+
+**What would refute it:** no visible parallax on near geometry at 64 mm. At
+that separation the shift is 12% of clip x at one metre, which is not subtle.
+If it is still invisible, the shear is not reaching the geometry that matters
+and the `live-sx=372` counter is measuring modules patched rather than modules
+*used* — a distinction this run would expose and the counters currently cannot.
+
+**Judgement, not measurement, is what this run is for.** `DIFFER` will not
+settle it (take 54 established it measures pixels changed, not magnitude), and
+there is no offline oracle for "does this look like the right depth". Patola
+looking at near geometry is the instrument. The question to answer is not "is
+there parallax" but "does the cockpit sit at a plausible distance" — and if it
+looks too strong, that is the calibration signal the project has been missing
+since the IPD was first set, not a fault.
