@@ -478,6 +478,7 @@ struct Tracking {
 
     x4vr::Major major = x4vr::Major::Unknown;
     bool logged_matrices = false;
+    bool logged_proj_fail = false;
 } g_track;
 
 // ------------------------------------------------------- shadow exclusion
@@ -3519,45 +3520,73 @@ void patch_view_before_submit() {
         X4VR_LOG("M_viewprojection%s", b);
         x4vr::format_mat(b, sizeof(b), x4vr::load(blk + x4vr::kViewInverse));
         X4VR_LOG("M_viewinverse   %s", b);
-        const x4vr::Mat4 proj_uj = x4vr::load(blk + x4vr::kProjectionUJ);
-        x4vr::format_mat(b, sizeof(b), proj_uj);
+        x4vr::format_mat(b, sizeof(b), x4vr::load(blk + x4vr::kProjectionUJ));
         X4VR_LOG("M_projectionUJ  %s", b);
         X4VR_LOG("storage order detected: %s (draws=%u)",
                  major == x4vr::Major::Column ? "column-major"
                  : major == x4vr::Major::Row  ? "row-major"
                                               : "UNKNOWN",
                  best_n);
+    }
 
-        // Task #23: the whole point of the dump. Read sx and near out of the
-        // live projection and say, in one line, whether the shear we baked at
-        // module-creation time was built on the right numbers.
-        //
-        // The un-jittered matrix is the one to trust (TAA jitter occupies
-        // m[8]/m[9], the shear's own slots); the jittered one is reported
-        // alongside so a disagreement in sx/near -- which jitter cannot cause
-        // -- is visible rather than assumed away.
+    // Task #23: the terms themselves, reported on the first read and on every
+    // *change* thereafter.
+    //
+    // Deliberately outside the one-shot latch above. A single sample answers
+    // "what is sx right now", which is not the question that decides the
+    // design: the shear is baked into shader modules 26 seconds before X4 has
+    // a camera to read, so a baked constant is only viable if sx never moves.
+    // X4 has zoom. One play session with this line tells us whether a constant
+    // can be right at all, and no amount of reasoning substitutes for it.
+    //
+    // The un-jittered matrix is the one to trust (TAA jitter occupies
+    // m[8]/m[9], the shear's own slots); the jittered one is reported
+    // alongside so a disagreement in sx/near -- which jitter cannot cause --
+    // is visible rather than assumed away.
+    if (dump) {
+        const x4vr::Mat4 proj_uj = x4vr::load(blk + x4vr::kProjectionUJ);
         const x4vr::ProjTerms t = x4vr::read_proj_terms(proj_uj, major);
         const x4vr::ProjTerms tj = x4vr::read_proj_terms(proj_probe, major);
-        if (!t.ok) {
+        static float last_sx = 0.0f, last_near = 0.0f;
+        static uint32_t changes = 0;
+        const bool moved = std::fabs(t.sx - last_sx) > 1e-4f ||
+                           std::fabs(t.near_z - last_near) > 1e-6f;
+        // Capped: a per-frame sx would otherwise bury the run in its own
+        // diagnostics, and forty samples is already enough to say "it moves".
+        if (!t.ok && !g_track.logged_proj_fail) {
+            g_track.logged_proj_fail = true;
             X4VR_LOG("proj: could not read terms from M_projectionUJ "
                      "(sx=%.5f near=%.5f) -- shear still on assumed values",
                      t.sx, t.near_z);
-        } else {
+        } else if (t.ok && moved && changes < 40) {
             const float ipd = getenv("X4VR_IPD")
                                   ? strtof(getenv("X4VR_IPD"), nullptr)
                                   : 0.064f;
             const float d = 0.5f * ipd;
             const float measured = t.sx * d / t.near_z;
             const float baked = assumed_proj_sx() * d / assumed_proj_near();
-            X4VR_LOG("proj MEASURED: sx=%.5f sy=%.5f near=%.5f "
-                     "(jittered sx=%.5f near=%.5f)",
-                     t.sx, t.sy, t.near_z, tj.sx, tj.near_z);
-            X4VR_LOG("proj ASSUMED : sx=%.5f near=%.5f", assumed_proj_sx(),
-                     assumed_proj_near());
-            X4VR_LOG("proj SHEAR   : measured |m8|=%.5f vs baked |m8|=%.5f "
-                     "-> baked is %.3fx the correct magnitude (ipd=%.4f)",
-                     std::fabs(measured), std::fabs(baked),
-                     measured != 0.0f ? baked / measured : 0.0f, ipd);
+            if (changes == 0) {
+                X4VR_LOG("proj MEASURED: sx=%.5f sy=%.5f near=%.5f "
+                         "(jittered sx=%.5f near=%.5f)",
+                         t.sx, t.sy, t.near_z, tj.sx, tj.near_z);
+                X4VR_LOG("proj ASSUMED : sx=%.5f near=%.5f", assumed_proj_sx(),
+                         assumed_proj_near());
+                X4VR_LOG("proj SHEAR   : measured |m8|=%.5f vs baked |m8|=%.5f "
+                         "-> baked is %.3fx the correct magnitude (ipd=%.4f)",
+                         std::fabs(measured), std::fabs(baked),
+                         measured != 0.0f ? baked / measured : 0.0f, ipd);
+            } else {
+                X4VR_LOG("proj CHANGED #%u: sx %.5f -> %.5f  near %.5f -> "
+                         "%.5f  (correct |m8| now %.5f, baked %.5f)",
+                         changes, last_sx, t.sx, last_near, t.near_z,
+                         std::fabs(measured), std::fabs(baked));
+            }
+            last_sx = t.sx;
+            last_near = t.near_z;
+            changes++;
+            if (changes == 40)
+                X4VR_LOG("proj: 40 changes logged, further changes suppressed "
+                         "-- sx is not a constant, which is the answer");
         }
     }
 
