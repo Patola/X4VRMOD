@@ -7180,3 +7180,55 @@ Not established: why the difference is *systematically* one-directional
 A symmetric ±d shear producing an asymmetric result is not yet explained, and
 saying "the volume is mono" does not by itself predict a sign. **That gap is the
 reason nothing is patched yet.**
+
+## The fog passthrough — built offline, validated before it costs a run
+
+Patola proposed elimination: disable the candidates one at a time and see whether
+the eyes still disagree. The `patch_fragment_invproj_eye` arm was already done —
+that is exactly what take 62 was, and it came back negative. The fog arm is new,
+and it is a better instrument than the "probe `#57` before the fog pass" plan it
+replaces: it needs no new probe plumbing, only the removal of one term.
+
+`patch_fragment_disable_fog` forces the froxel-volume sample to `vec4(0,0,0,1)`,
+which leaves `OUT = scene·1 + 0`. The pass still runs, still reads its subpass
+input, still writes its attachment; the frame graph is untouched and only the
+term under test disappears.
+
+**Identified by structure, never by serial.** The transform refuses unless the
+module declares a `SubpassData` image *and* samples a 3D one. Module serials are
+per-run, so a hardcoded list would have rotted the first time X4 reordered its
+shader creation.
+
+**Chased down the sampler chain rather than matched by opcode.** `OpTypeImage(3D)`
+→ `OpLoad` → `OpSampledImage` → `OpImageSample*`. `mod-0368` contains *two*
+`OpImageSampleExplicitLod` and only one is the fog lookup; rewriting both would
+have disabled something unrelated and made the measurement unreadable. Verified
+on the patched output: `%1369` became the constant, and the other sample survived.
+
+Offline result over all 397 modules of take 61's own dump:
+
+    patched=8  refused=389  invalid=0
+
+The 8 are exactly the fog family (`mod-0181/0182/0367/0368/0369/0370/0371/0372`),
+which includes every module bound to the fog pass. Every patched module passes
+`spirv-val --target-env vulkan1.2`, and the 389 refusals were each checked to
+leave the module byte-identical — a property asserted 389 times against real
+bytes, which is worth more than the synthetic test case this transform does not
+yet have. **That test gap is real and recorded rather than skipped.**
+
+### P69 — committed before the run
+
+Take 63 = take 61's command plus `X4VR_DISABLE_FOG=1`. **P69: the `#57` lift
+survives with the fog term gone** — `l1/l0` stays materially above 1.0 rather
+than collapsing toward it — because take 62 showed the froxel coordinate is not
+the differentiator, which points at the fog carrying a difference rather than
+making one.
+
+If P69 holds, the fog is exonerated as a *source* and the search moves upstream
+to the other five passes that write `#57`. If P69 is refuted and the lift
+collapses, the fog composite is the source and the excluded-mechanism count
+finally stops growing.
+
+Either outcome is informative, which is the property this run was designed for.
+This is a **diagnostic build**: take 63 removes an effect the flatscreen game
+has, so it is not a candidate for `docs/known-good-runs.md` whatever it scores.

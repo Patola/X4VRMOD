@@ -134,6 +134,30 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    // The fog passthrough (task #22 measurement).
+    if (strcmp(argv[1], "frag-disable-fog") == 0) {
+        std::vector<uint32_t> code = load_spv(argv[2]);
+        if (code.empty()) {
+            printf("FAIL=load\n");
+            return 1;
+        }
+        const std::vector<uint32_t> before = code;
+        const bool ok = x4vr::spv::patch_fragment_disable_fog(code);
+        printf("PATCHED=%d\n", ok ? 1 : 0);
+        if (!ok && code != before) {
+            printf("FAIL=refusal_modified_code\n");
+            return 1;
+        }
+        FILE *f = fopen(argv[3], "wb");
+        if (!f) {
+            printf("FAIL=open_out\n");
+            return 1;
+        }
+        fwrite(code.data(), 4, code.size(), f);
+        fclose(f);
+        return 0;
+    }
+
     if (strcmp(argv[1], "list") == 0) {
         std::vector<uint32_t> code = load_spv(argv[2]);
         if (code.empty()) {

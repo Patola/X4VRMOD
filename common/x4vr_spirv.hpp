@@ -2272,5 +2272,131 @@ inline bool patch_fragment_index_offset(std::vector<uint32_t> &code,
     return true;
 }
 
+/// Turns X4's volumetric fog composite into a passthrough. **Diagnostic only.**
+///
+/// The fog pass computes `OUT = scene * fog.a + fog.rgb`, where `fog` is a
+/// froxel volume built by compute. Forcing that one sample to vec4(0,0,0,1)
+/// leaves `OUT = scene * 1 + 0` -- the pass still runs, still reads its subpass
+/// input, still writes its attachment, and the frame graph is untouched. Only
+/// the term under test disappears.
+///
+/// It answers one question and no others: is the difference between the two
+/// eyes in the HDR buffer *produced* by the fog composite, or merely *carried*
+/// through it? Take 62 established that the froxel coordinate is not the
+/// differentiator -- toggling the matrix that feeds it moved the lift by under
+/// 1% -- which is what makes "carrier" a live possibility and this test worth
+/// a run. If the eyes still differ with the fog term gone, the source is
+/// upstream, among the other five passes that write the same image.
+///
+/// Refuses unless the module both declares a SubpassData image and samples a
+/// 3D one. That pair is the structural signature of X4's fog family: 8 of the
+/// 409 dumped modules match, and every module bound to the fog pass is among
+/// them. Identifying by structure rather than by serial is deliberate --
+/// module serials are per-run, so a hardcoded list would silently rot.
+///
+/// A refusal leaves the module byte-identical, which the offline suite asserts.
+inline bool patch_fragment_disable_fog(std::vector<uint32_t> &code) {
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return false;
+
+    // Dim: 2 = 3D, 6 = SubpassData. Both are read from OpTypeImage word 3.
+    std::unordered_set<uint32_t> img3d;
+    bool has_subpass = false;
+    uint32_t t_float = 0, t_v4float = 0;
+    for (const auto &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (in.op == OpTypeImage && in.len >= 4) {
+            if (w[3] == 2u)
+                img3d.insert(w[1]);
+            else if (w[3] == 6u)
+                has_subpass = true;
+        } else if (in.op == OpTypeFloat && in.len >= 3 && w[2] == 32u &&
+                   !t_float) {
+            t_float = w[1];
+        }
+    }
+    if (!has_subpass || img3d.empty() || !t_float)
+        return false;
+    for (const auto &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (in.op == OpTypeVector && in.len >= 4 && w[2] == t_float &&
+            w[3] == 4u) {
+            t_v4float = w[1];
+            break;
+        }
+    }
+    if (!t_v4float)
+        return false;
+
+    // Follow the chain from the 3D image type to the sample that uses it:
+    // OpTypeImage -> OpLoad (result type is the image) -> OpSampledImage ->
+    // OpImageSample*. Walking it is what keeps this off the module's *other*
+    // samples -- mod-0368 has two OpImageSampleExplicitLod and only one of
+    // them is the fog lookup. Rewriting both would have disabled something
+    // unrelated and made the measurement unreadable.
+    std::unordered_set<uint32_t> load3d, si3d;
+    for (const auto &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (in.op == OpLoad && in.len >= 4 && img3d.count(w[1]))
+            load3d.insert(w[2]);
+    }
+    for (const auto &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (in.op == OpSampledImage && in.len >= 4 && load3d.count(w[3]))
+            si3d.insert(w[2]);
+    }
+    std::unordered_set<size_t> targets;
+    for (size_t i = 0; i < insts.size(); i++) {
+        const auto &in = insts[i];
+        const uint32_t *w = &code[in.start];
+        if ((in.op == OpImageSampleExplicitLod ||
+             in.op == OpImageSampleImplicitLod) &&
+            in.len >= 5 && si3d.count(w[3]) && w[1] == t_v4float)
+            targets.insert(i);
+    }
+    if (targets.empty())
+        return false;
+
+    // Two float constants, appended to the declarations rather than reused.
+    // Duplicate OpConstants of the same value are legal, and searching for an
+    // existing one would have to match the bit pattern rather than the name --
+    // the same trap that made the "19 modules" count wrong.
+    uint32_t bound = code[3];
+    const uint32_t c_zero = bound++, c_one = bound++;
+    std::vector<uint32_t> consts;
+    const float f0 = 0.0f, f1 = 1.0f;
+    uint32_t b0, b1;
+    memcpy(&b0, &f0, 4);
+    memcpy(&b1, &f1, 4);
+    emit(consts, OpConstant, {t_float, c_zero, b0});
+    emit(consts, OpConstant, {t_float, c_one, b1});
+
+    // Rebuild: constants go in before the first function, each fog sample
+    // becomes an OpCompositeConstruct keeping its original result id, so every
+    // downstream use stays valid without touching a single other instruction.
+    std::vector<uint32_t> out(code.begin(), code.begin() + 5);
+    bool placed = false;
+    for (size_t i = 0; i < insts.size(); i++) {
+        const auto &in = insts[i];
+        const uint32_t *w = &code[in.start];
+        if (!placed && in.op == OpFunction) {
+            out.insert(out.end(), consts.begin(), consts.end());
+            placed = true;
+        }
+        if (targets.count(i))
+            emit(out, OpCompositeConstruct,
+                 {t_v4float, w[2], c_zero, c_zero, c_zero, c_one});
+        else
+            out.insert(out.end(), code.begin() + in.start,
+                       code.begin() + in.start + in.len);
+    }
+    if (!placed)
+        return false; // no function body: nothing to disable, change nothing
+    out[3] = bound;
+    code.swap(out);
+    return true;
+}
+
 } // namespace spv
 } // namespace x4vr

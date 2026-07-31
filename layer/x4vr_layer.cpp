@@ -736,6 +736,10 @@ uint64_t g_comp_pipelines = 0;
 std::atomic<uint64_t> g_frag_patch_ok{0}, g_frag_patch_refused{0};
 // Task #22: deferred modules whose M_invprojection was corrected per eye.
 std::atomic<uint64_t> g_invproj_patched{0};
+// Task #22 measurement only. Counts modules whose volumetric fog composite was
+// forced to a passthrough, to separate "the fog produces the difference between
+// the eyes" from "the fog carries a difference made upstream".
+std::atomic<uint64_t> g_fog_disabled{0};
 // Of the refusals, the ones that are refusals by construction: compute has no
 // gl_ViewIndex, so a compute shader sampling the heap cannot be made per-view
 // by this mechanism at all.
@@ -2024,6 +2028,13 @@ void bindless_report(const char *when) {
         X4VR_LOG("invproj %s: per-eye M_invprojection — %llu modules corrected "
                  "(offline: 244 of 409 eligible, 3 compute cannot be)",
                  when, (unsigned long long)g_invproj_patched.load());
+        // Reported unconditionally, including the 0. "Fog still on" and "fog
+        // disabled and it changed nothing" are opposite conclusions from the
+        // same probe numbers, and a line that only appears when the knob fired
+        // cannot tell them apart after the fact.
+        X4VR_LOG("fog %s: volumetric composite forced to passthrough in %llu "
+                 "module(s) (offline: 8 of 409 match the fog signature)",
+                 when, (unsigned long long)g_fog_disabled.load());
         // The unsheared twin is the module the srgb-resolve passes actually
         // run. If this is 0, no pipeline ever took one and the twin's contents
         // are irrelevant -- a distinction take twenty-three could not draw.
@@ -3089,6 +3100,30 @@ VkResult create_shader_module_inner(
             X4VR_LOG("X4VR_BINDLESS_PATCH ignored: it needs "
                      "X4VR_BINDLESS_MIRROR=1, or view 1 would read table slots "
                      "nobody ever wrote");
+        }
+    }
+
+    // Task #22 measurement: make X4's volumetric fog a passthrough.
+    //
+    // Deliberately outside the bindless gate above -- this is an experiment
+    // about X4's own rendering, not about our per-view sampling, and silently
+    // doing nothing because an unrelated knob was off is how a control run
+    // ends up measuring something other than what it claims.
+    //
+    // Value-based, like every other knob here. X4VR_STEREO was presence-based
+    // once, so X4VR_STEREO=0 *enabled* the shear and take 50's control worked
+    // only because the variable was omitted entirely. Never again by accident.
+    //
+    // Placed before the twin snapshot below on purpose: the unsheared twin must
+    // carry the same fog treatment, or the passes that take the twin would keep
+    // the fog while the rest lost it, and the measurement would be unreadable.
+    if (const char *fg = getenv("X4VR_DISABLE_FOG"); fg && *fg && *fg != '0') {
+        if (x4vr::spv::patch_fragment_disable_fog(code)) {
+            const uint64_t n = ++g_fog_disabled;
+            if (n <= 8)
+                X4VR_LOG("fog passthrough #%llu: volumetric composite forced to "
+                         "scene*1+0 — DIAGNOSTIC, not a fix",
+                         (unsigned long long)n);
         }
     }
 
