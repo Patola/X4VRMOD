@@ -1141,13 +1141,19 @@ void mv_redirect_writes(DeviceData *d, VkDevice device, uint32_t writeCount,
         // agree: view 1 is meant to read layer 1 of the attachment, and the
         // descriptor describes an image that only has layer 0.
         //
-        // This is what left layer 1 rasterised but unlit. X4's deferred
-        // lighting passes -- rp 30/31/32/64, six attachments, one colour and
-        // one depth -- read the G-buffer through the other four as subpass
-        // inputs, the S_subpassInput_AUTOMS its own validation errors name.
-        // Geometry lands in view 1 because that is ordinary rasterisation;
-        // the light contribution does not, because subpassLoad reads through
-        // a descriptor that cannot see the layer being rendered.
+        // This is what left layer 1 rasterised but unlit. Geometry lands in
+        // view 1 because that is ordinary rasterisation; the light
+        // contribution does not, because subpassLoad reads through a
+        // descriptor that cannot see the layer being rendered.
+        //
+        // Corrected against the 409 dumped modules: exactly 26 of them declare
+        // a subpass input, every one of them declares *one*, and every one is
+        // InputAttachmentIndex 0 -- the S_subpassInput_AUTOMS X4's own
+        // validation errors name. An earlier version of this comment said the
+        // deferred passes read the G-buffer through "the other four" subpass
+        // inputs and named the passes by serial (rp 30/31/32/64). Both were
+        // wrong: X4 reads one input attachment, and pass serials are per-run,
+        // so naming them here dates the comment to a log nobody still has.
         //
         // Substituting our array view is the fix, and it is not part of gate
         // 2: it has to happen whenever multiview is on, redirect or not.
@@ -1912,6 +1918,27 @@ void mv_report(const char *when) {
                          when, rp, m.second.module, m.second.samplers,
                          m.second.patched ? "APPLIED" : "NOT APPLIED");
         }
+
+        // The same join, for every pass rather than only the ones that reach
+        // the screen. The map was already being filled for all of them -- only
+        // the present subset was ever printed, so "which shader writes this
+        // image" stayed a search through 409 dumps when the layer had the
+        // answer in hand.
+        //
+        // Read this together with the `fb rp #N` lines: those give the pass its
+        // attachment images, this gives it its shaders, and the pair is what
+        // turns an image serial into a module to disassemble. The module number
+        // is the dump's `mod-%04u.spv` from the *same run*; serials are per-run,
+        // so a number from one log must never be looked up in another's dumps.
+        X4VR_LOG("mv %s: pass -> shader join — %zu pass(es) with a fragment "
+                 "pipeline on record", when, g_rp_frag.size());
+        for (const auto &p : g_rp_frag)
+            for (const auto &m : p.second)
+                X4VR_LOG("mv %s: rp #%u <- frag module #%u (mod-%04u.spv) "
+                         "samples %s [index-offset %s]",
+                         when, p.first, m.second.module, m.second.module,
+                         m.second.samplers,
+                         m.second.patched ? "APPLIED" : "NOT APPLIED");
     }
 
     if (!g_mv_inventory) {
