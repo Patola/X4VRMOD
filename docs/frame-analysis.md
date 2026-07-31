@@ -5836,3 +5836,88 @@ other purposes. Measuring `sx` and the near plane from it, rather than assuming
 them, converts the eye offset from a tuned number into a derived one. That is
 task #23, and it should land before any HMD work — an HMD run calibrated against
 assumed constants would produce comfort complaints that look like mod bugs.
+
+## Task #23, before the measurement: what `sx` should be
+
+The sentence above — "weak evidence that the current constant is too large" —
+is the first thing to go. It was reasoning from a screen artifact to a
+constant, and reading the record instead points the other way.
+
+**`sx` and `near` were never assumed.** They were *measured*, in Phase 3:
+
+> Read the view block | **Works.** Values are live and correct: the
+> projection's aspect tracked the swapchain exactly (1.778/0.889 = 2.000 at
+> 2816×1408; 1.778/0.744 = 2.39 at 3440×1440).
+
+That is the whole answer sitting in the table. `sy` is fixed by the vertical
+FOV and `sx = sy/aspect` — 1.778/2.000 = 0.889 at 2816×1408, 1.778/2.389 =
+0.744 at 3440×1440. The number tracks the aspect, and it was measured when X4
+rendered a **2:1** frame.
+
+X4 no longer renders a 2:1 frame. It renders one eye:
+
+```
+take51:100  layer  swapchain created: 1408x1408 ... (pid 3492131)
+take51:173  inject sdl: SDL_GetWindowSize -> 1408x1408 (pid 3492131)
+```
+
+Both numbers X4 could derive an aspect from say **1408×1408**. (The
+2816×1408 at pid 3492088 is gamescope's window, not X4's.) The injector
+overrides `res_width`/`res_height` and sets no FOV or aspect key, so nothing
+else is in play.
+
+### P59 — the prediction
+
+Run the tagged `stage2-stereo-verified` command with `X4VR_DUMP_MATRICES=1`
+added and nothing else changed. The dump is read-only: `patch_view_before_submit`
+returns before every write when the test offsets are zero.
+
+1. `M_projectionUJ` reads **sx ≈ 1.778**, sy ≈ −1.778, near ≈ 0.1,
+   m[11] = ±1, m[15] = 0, column-major. Aspect 1.0, so `sx = sy`.
+2. Therefore the shear we bake is **half** the correct magnitude: `proj SHEAR`
+   reports `baked is 0.500x`. Every stereo run so far, including
+   `stage2-stereo-verified`, has been rendering an effective IPD of half its
+   configured value — take 51's `X4VR_IPD=0.016` was geometrically 8 mm.
+3. `near` is unchanged at 0.1. It does not track the aspect and nothing in the
+   config touches it.
+4. `M_projection` and `M_projectionUJ` are **equal**, because the injector sets
+   `antialiasing: none` and TAA jitter is what distinguishes them. If they
+   differ, jitter is live in m[8]/m[9] — the shear's own slots — and that is a
+   separate problem worth knowing about before it becomes a mystery.
+
+**What would refute it.** `sx ≈ 0.889` in the live block means X4 computes its
+projection aspect from something that is still 2:1 — most likely the surface
+rather than the swapchain — and the current constant is right for the wrong
+reason. That is a *better* outcome to discover now than after an HMD run, and
+it would immediately implicate the same window/render disagreement that task
+#21's clipped logo is suspected of.
+
+### Why this is not "the artifact means the shear is too strong"
+
+Patola's cockpit-lighting report was screen-space effects disagreeing between
+eyes, which take 50 and take 51 established is the *correct* behaviour of true
+stereo in a deferred renderer, not an over-strong offset. A geometrically exact
+64 mm separation produces exactly that. Reasoning from "it looked like a lot"
+to "the constant is too big" skipped the step where the constant is checked
+against the matrix it was derived from, and the check is cheap.
+
+### Offline first
+
+`tests/view_math.cpp` (new, 22 cases) asserts the arithmetic before any of it
+is claimed about X4:
+
+* `read_proj_terms` extracts sx/sy/near in **both** storage orders — a
+  transposed read returns 1.0 for `near`, which is plausible enough to pass
+  unnoticed, so it is tested rather than trusted;
+* it refuses on `Major::Unknown` and on a zeroed block instead of guessing;
+* `make_eye_shear`'s single-term shortcut equals `P·T(−d)·P⁻¹` computed through
+  the general `mul`/`invert` helpers, at both aspects and both IPDs. The
+  shortcut is only valid for X4's projection shape, so it is checked against
+  the long way rather than assumed;
+* the wide-eye shear reproduces the logged `0.28448` exactly, and the
+  square-eye shear is exactly 2× it. That last case is the arithmetic behind
+  P59, asserted so the claim cannot quietly stop being true.
+
+If the measurement confirms P59, the confirmation run needs **no code change**:
+`X4VR_PROJ_SX=1.778` is an existing override. Only once the number is proven on
+screen does the layer start reading it live.
