@@ -6967,3 +6967,55 @@ Five mechanisms have now been proposed or tested for this symptom and five have
 failed. The two in this section failed *cheaply*, offline, before costing a run
 — which is the first time that has happened, and is the pattern the remaining
 work should follow.
+
+## The join was already being collected — only the present subset was printed
+
+The previous section said the missing link was a pipeline→module line at
+`vkCreateGraphicsPipelines`. That was half right. The hook already records
+`g_rp_frag[rp_serial][module_serial]` for **every** pass carrying a render-pass
+serial, gated on `X4VR_MV_INVENTORY` or `X4VR_DUMP_SHADERS`. What it never did
+was *print* it for anything but the passes that draw into a swapchain image.
+
+So the data existed in take 60 and died with the process. The change is one
+loop over the map, not a new hook. Read alongside the existing `fb rp #N: …
+imgs=[…]` lines — framebuffer line gives a pass its images, join line gives it
+its shaders — an image serial becomes a module to disassemble by lookup.
+
+### What the dumps already settle, offline
+
+`#57` has `usage=0x97`, and bit 7 (`0x80`) is `INPUT_ATTACHMENT`. Together with
+`fb rp #31: … attachments=2 imgs=[#57,#57]` and `rp #31.0: 1 colour [97H]
+no-depth`, that fixes the pass's shape without a run: **`rp #31/#32` read `#57`
+as a subpass input and write `#57`** — an in-place, self-referencing pass.
+
+Measured across all 409 modules, not assumed:
+
+- **26 modules declare a subpass input.** Every one declares exactly **one**,
+  named `S_subpassInput_AUTOMS`, at set 0, binding 2, `InputAttachmentIndex 0`.
+- There is no module anywhere in the dump that reads two or more.
+
+This **corrects a comment** in `apply_input_attachment_fix`, which claimed X4's
+deferred passes read the G-buffer through "the other four" subpass inputs and
+named the passes by serial (`rp 30/31/32/64`). X4 reads one. And pass serials
+are per-run, so they should never have been written into a comment at all.
+
+### P67 — committed before the run that tests it
+
+The fragment module bound to `rp #31/#32` will be one of the 26, and will
+declare **exactly one colour output at Location 0** alongside its single subpass
+input — i.e. one of the twelve minimal-I/O members of that set, not one of the
+fourteen that carry 9–18 interpolated locations from a geometry vertex stage.
+
+Stated structurally on purpose. Module serials are assigned in creation order
+and are **per-run**, so naming a `mod-NNNN.spv` from the July-30 dump would be
+a prediction about a file that a new run renumbers. The `/tmp/x4vr-shaders`
+dump is from July 30; take 60's log is from July 31. Those two must not be
+joined, and P67 is written so that it cannot be.
+
+P67 is falsified if the bound module carries interpolated inputs, declares more
+than one colour output, or declares no subpass input at all — the last of which
+would mean the second attachment is preserve-only and the self-reference is not
+a read at all.
+
+**No mechanism is proposed here.** Five have been proposed for this symptom and
+five have failed. The next step is to read the shader, not to guess what it does.
