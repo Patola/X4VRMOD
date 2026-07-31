@@ -6681,3 +6681,89 @@ from 1.000?**
 I am deliberately not naming a culprit this time. Three have been proposed for
 this symptom and three have been wrong, all from indirect evidence; the point of
 this run is to make the next statement about it a measurement.
+
+## Take fifty-seven: the level probe names #57, and the parallax is measurably correct
+
+Per-image `l1/l0` level ratio, cockpit views:
+
+| image | what it is | ratio |
+|---|---|---|
+| `#59` | albedo, RGBA16F | 1.006 – 1.022 |
+| `#61` | normals, RG16F | **1.005** |
+| `#60` | normals, RG16F | signed, noisy |
+| **`#57`** | **RGBA16F, G-buffer attachment 1** | **1.682, 1.649, 1.848** |
+| `#63`, `#65`, `#66`, `#67`, `#97`, `#98` | downstream | 1.000 – 1.015 |
+| `#50`–`#53` | swapchain | 1.02 |
+
+`#61` differs in 33–46% of texels — real parallax — while its *level* holds at
+1.005. `#57` differs in the same proportion of texels but its level runs up to
+**1.848**, matching the 1.889 measured on the hull panel in the screenshot.
+
+**So the G-buffer inputs agree and the lighting term does not.** Same surfaces,
+different lighting.
+
+`#57` is `1408×1408 RGBA16F`, attachment 1 of the six-attachment G-buffer pass
+(`[#55 depth, #57, #59, #59, #60, #61]`) and the sole target of `rp #31/#32`.
+
+### Nothing is failing to write
+
+```
+img #57 writers — masked rp [24,23,25,31,32,53] unmasked rp []
+non-empty 541455/538833   missing=120075 changed=419816 extra=117453
+```
+
+Every writer is masked, so both layers are rendered. Coverage is near-equal and
+`missing` ≈ `extra`, which is what parallax looks like — content leaving one
+side and entering the other. The bulk is `changed`: texels present in both and
+different. This is not a missing-write bug.
+
+### The parallax itself is measurably correct
+
+Cross-correlating the two halves of the screenshot, best horizontal shift and
+how well it matches:
+
+| region | shift | residual |
+|---|---|---|
+| starfield / nebula (far) | **0 px** | 100 |
+| distant ship | −34 px | 213 |
+| cockpit strut | −66 px | **17.6** |
+| wing panel | −243 px | 1442 (5384 at zero) |
+| holo dial | −80 px | 7047 (7680 at zero) |
+
+Two things fall out. The far background sits at **exactly zero** — the shear
+falls off with depth correctly, which is the property the whole derivation
+exists to produce. And the cockpit strut shifts 66 px with a residual of 17.6,
+an almost perfect match: **near geometry parallaxes cleanly and keeps its
+appearance.**
+
+The wing panel and the holo dial cannot be aligned by *any* shift. That rules
+out "it is just large parallax and I misread it": a shifted copy would align at
+some offset, and these do not.
+
+The pattern across both: **bright, emissive or specular surfaces change
+appearance; dark matte ones parallax cleanly.**
+
+### P65 — take fifty-eight, a bisection rather than a fourth theory
+
+Three theories have been proposed for this symptom and three were wrong, each
+built from indirect evidence. The remaining space splits on one variable, so it
+gets split instead of theorised about.
+
+`X4VR_BINDLESS_PATCH=0`, everything else exactly as take fifty-seven. That
+removes the per-view texture index offset, so both views sample identical
+descriptors, while multiview and the vertex shear still render two different
+layers.
+
+* **`#57`'s ratio → 1.000** means the per-view *sampling* is what makes the
+  lighting differ, and the cause is in the bindless mirror — a twin descriptor
+  resolving to something other than what view 0 reads.
+* **`#57`'s ratio stays ≈ 1.7** means the per-view *geometry* is responsible and
+  the sampling is innocent.
+
+Either way the answer is one bit, obtained without a theory about which
+descriptor or which pass.
+
+Expect the screen to look **mono** — take forty-six established that without the
+index offset the composite reads layer 0 for both eyes. That is not a
+regression; the probe reads `#57` directly and is unaffected by what the
+composite does with it.
