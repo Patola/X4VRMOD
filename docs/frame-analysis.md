@@ -6097,6 +6097,10 @@ Two changes in session 1 report `near` of 0.622 with `sx` near zero
 (0.00019, 0.00123). Those are not the main perspective camera — 37 of the 39
 samples read `near = 0.1`, these two do not.
 
+Session 1 was cockpit and zoom with an F2 external view and **no map**;
+session 2 was the full sequence including the map. So the map view is not the
+source of these blocks — they appear in the run that never opened it.
+
 So the layer's "most-drawn range-1792 block wins" heuristic sometimes credits a
 block that is not the camera the geometry is drawing through. For a *diagnostic*
 that is a curiosity. For a mechanism that feeds the shear it would be a bug, and

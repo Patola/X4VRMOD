@@ -63,6 +63,27 @@ turned out to be correct" is as worth recording as a bug.
 Known defects that do ride along: the cursor is confined to a centred square
 (tasks #17, #19) and X4's logo is clipped at its right edge (task #21).
 
+| 2026-07-31 | `stage2-sx-measured` | `score_run.py` exit 0 on both sessions; `proj SHEAR` reports `baked is 1.000x` against X4's live projection | `X4VR_TAKE=53-P60 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_PROJ_SX=1.3333 X4VR_MV=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take53.log X4VR_MV_PROBE=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.016 X4VR_BINDLESS_MIRROR=1 X4VR_MV_INVENTORY=1` |
+
+**`stage2-sx-measured` supersedes `stage2-stereo-verified` as the resume
+point.** Same code path, plus `X4VR_PROJ_SX=1.3333` — the value read out of
+X4's own projection matrix rather than inherited from a 2816×1408 measurement.
+The shear now matches X4's camera exactly **at the default FOV**.
+
+It is tagged because the next change is the riskiest in a while (a new SPIR-V
+transform), and the rule is that a good state gets tagged before the risk, not
+after. It is emphatically *not* the finished article:
+
+* `sx` moves by 33× when the player zooms, and this tag does not track it. At
+  full zoom the baked shear is 28× too small. It is correct at rest and wrong
+  in motion, where `stage2-stereo-verified` was wrong by 1.5× everywhere.
+* `X4VR_IPD=0.016` is still not a calibrated value, for the same reason as
+  before: it was a quarter of the default, chosen to test scaling.
+
+Both sessions in that log score PASS/MIXED independently — the file holds two
+X4 runs and must be split before scoring, which `score_run.py` will insist on
+anyway.
+
 **What `stage2-duplicate-restored` is and is not.** Both eyes have a picture and
 the framerate is acceptable; the right eye is a bit-exact copy of the left, so
 there is no parallax in it. It is the state this project had in take
