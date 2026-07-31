@@ -6922,3 +6922,48 @@ one of them reasoned from something other than the code that does the work.
 Take forty-eight was the same story and cost eleven runs; the fix arrived in one
 message once the shader was read. The pass is now identified, which is the part
 that was missing then.
+
+### Offline: two structural suspicions, both excluded
+
+`rp #31.0: 1 colour [97H] no-depth final=1 -> STEREO (world)` looked damning:
+a self-referencing HDR post pass classified as world geometry. `classify_unsheared`
+marks a subpass unsheared only when **all** its colour attachments are LDR, and
+`#57` is RGBA16F, so these passes are not marked unsheared.
+
+Two ways that could have produced the lift, both tested against the 409 dumps
+and both **excluded**:
+
+1. **A fullscreen triangle taking the eye shear.** If the post pass's vertex
+   stage were sheared, its fullscreen quad would be displaced in view 1 and the
+   in-place accumulation would smear — which is exactly the shape of a
+   low-level additive lift. But the shear is gated per *module* by `classify()`,
+   not by the pass, and **all 40 fullscreen-vertex modules classify UI**, so
+   they receive identity. Ruled out.
+
+2. **`classify()` scanning the whole module instead of the vertex stage.** Its
+   documentation says a module is World only if its *vertex stage* reads member
+   0 of the set-3 block, while the loop walks every instruction — and X4 ships
+   combined vertex+fragment modules, so a fullscreen vertex stage paired with a
+   fragment stage that reads set-3 would be misclassified. Measured: **0 of 409
+   modules** are World by the whole-module scan but not by the vertex stage.
+   The discrepancy is real in the code and inert in this game's shaders.
+
+Worth writing down because both were checked rather than assumed, and because
+the second is a latent trap: it costs nothing today and would misclassify the
+first X4 build that pairs a fullscreen vertex stage with a set-3 fragment read.
+
+### Where the next session should start
+
+The pass is identified and its inputs are characterised. What is missing is the
+**module bound to `rp #31/#32`** — the log records framebuffers and passes but
+does not link a pipeline to the shader modules it was built from, so the shader
+that produces the lift has not been read.
+
+That link is the next thing to add: one line at `vkCreateGraphicsPipelines`
+naming the render pass and the module serials. It is read-only, it is small,
+and it converts "read the shader for `rp #31/#32`" from a search into a lookup.
+
+Five mechanisms have now been proposed or tested for this symptom and five have
+failed. The two in this section failed *cheaply*, offline, before costing a run
+— which is the first time that has happened, and is the pattern the remaining
+work should follow.
