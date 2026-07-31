@@ -5791,3 +5791,48 @@ never been checked against X4's actual projection matrix.
   calibration, not correctness. Refuted if the strut still flips dark-to-bright
   at a quarter of the separation, which would mean something view-dependent that
   is not the offset.
+
+## Take fifty-one: P58 confirmed — the difference is geometric
+
+`X4VR_IPD=0.016`, a quarter of the default. Patola: "the shadows are only
+slightly different, as I would expect from stereo view."
+
+| image | ipd 0.064 | ipd 0.016 |
+|---|---|---|
+| `#57`, `#60`, `#61` | 31.8–31.9% | 22.7–26.9% |
+| `#63` (tile/light classification) | 18.0% | 9.6% |
+| `#66`, `#67` (screen-space, 352²) | 13.1 / 18.3% | 3.6 / 7.1% |
+| `#97`, `#98` | 6.0 / 9.3% | 0.16 / 1.2% |
+
+Every image drops, and the screen-space buffers drop hardest — `#97` by a factor
+of 37. `DIFFER` counts how many pixels differ, not by how much, so it should not
+scale linearly with separation; monotonic is the prediction and monotonic is
+what happened.
+
+Together with take fifty this closes task #22. The per-view sampling is
+bit-exact; the eye offset is the only source of difference; and the magnitude
+tracks the separation. Nothing here is a defect. **What is left is calibration.**
+
+### The calibration gap, stated plainly
+
+```
+stereo: ipd=0.0640 sx=0.8890 near=0.100 -> shear m8 = d*sx/near = ±0.28448
+```
+
+`ipd` is a chosen physical quantity. `sx` and `near` are **defaults nobody has
+checked against X4's projection matrix**, and they are not cosmetic:
+
+* the shear is `d·sx/near`, so an error in either scales the parallax at *every*
+  depth by a constant factor;
+* on a flat screen that reads as "the stereo is a bit strong or a bit weak". In
+  an HMD it is the difference between a cockpit that feels the right size and
+  one that feels like a doll's house or a cathedral, and wrong convergence is a
+  direct cause of discomfort rather than a matter of taste;
+* the artifact Patola noticed at 0.064 was strong enough to be worth reporting,
+  which is weak evidence that the current constant is too large.
+
+X4 uploads its projection matrix in a constant block the layer already reads for
+other purposes. Measuring `sx` and the near plane from it, rather than assuming
+them, converts the eye offset from a tuned number into a derived one. That is
+task #23, and it should land before any HMD work — an HMD run calibrated against
+assumed constants would produce comfort complaints that look like mod bugs.
