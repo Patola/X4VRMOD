@@ -7128,3 +7128,55 @@ Six mechanisms have now been excluded for this symptom. The seventh candidate �
 a single compute-built fog volume shared by two eyes — is **stated here as a
 reading of the code, not as a diagnosis**, and is not to be patched before P68
 has separated it from the asymmetry we introduced.
+
+## Take 62 — P68 CONFIRMED: our invprojection patch is not the cause
+
+Take 61's command with `X4VR_PROJ_INVPROJ=0` and a fresh log. **PASS.**
+
+    invproj final: per-eye M_invprojection — 0 modules corrected
+
+    probe             take 61 (INVPROJ=1)      take 62 (INVPROJ=0)
+    l1/l0             1.846, 1.846, 1.848      1.860, 1.861
+    changed           420054                   420055
+    missing / extra   120049 / 117437          120049 / 117437
+
+The patch is fully off and the lift is unchanged — `missing` and `extra` are
+*identical*, `changed` differs by one texel. The scene reproduced that closely
+across two runs, which makes this a clean control rather than a lucky match.
+
+**P68 confirmed. The round-trip asymmetry we introduced is not the cause**, as
+the git timeline already implied. Excluded mechanism number seven, and the first
+one that was ours.
+
+It also raises a question about a knob we are carrying. `patch_fragment_invproj_eye`
+corrects 236 modules per run and has **no measurable effect on `#57`**. It was
+added at take 55/56 for "the deferred passes light the wrong frame". Either it
+fixes something these probes do not watch, or it is dead weight. A known-good
+state is code *and* knobs, so this should be resolved before it is tagged into one.
+
+### The descriptor is not the asymmetry either
+
+`S_sampler3D[39]` is reached through the bindless heap, so view 1 reads the
+twin at `39 + 26653`. If that twin were unwritten, view 1 would sample undefined
+data and the two eyes would diverge for a trivial reason. It is written:
+
+    bindless mirror final: offset 26653, 380290 twin writes, 49253400 twin
+    descriptors, 111306 of them layer-1, 0 skipped for no room
+
+`0 skipped for no room`, and a 3D volume has no array layers for the mirror to
+redirect, so descriptor 39 and its twin resolve to the *same* image. **Both eyes
+sample the same volume data.** The asymmetry is in *where each eye looks up*, not
+in what it finds there.
+
+### What this leaves, and what it does not license
+
+Established: both views run the same fog shader, sample the same single volume,
+and composite `scene·T + inscatter`; the volume is compute-built and cannot be
+per-view. The froxel coordinate is derived from each view's own depth buffer, so
+the two eyes land on different froxels of a volume built for neither of them.
+
+Not established: why the difference is *systematically* one-directional
+(layer 1 brighter by 1.86×) rather than a symmetric error about the mono camera.
+A symmetric ±d shear producing an asymmetric result is not yet explained, and
+saying "the volume is mono" does not by itself predict a sign. **That gap is the
+reason nothing is patched yet.**
