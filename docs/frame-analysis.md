@@ -6178,3 +6178,114 @@ achieved, comfort is a separate question", and clamping the offset under zoom
 is a decision to take deliberately later rather than a number to quietly tune
 now. Recording that *before* the run so a strong effect does not get mistaken
 for a regression.
+
+## Take fifty-four: the live sx runs — and the diagnostic that justified it is unreliable
+
+```
+patched vertex shader #350 (world, per-view) [... live-sx=372 baked-sx=16]
+driver rejected patched module: 0
+score: PASS, grade MIXED, 152 settled samples, 8 bit-identical
+```
+
+| P61 claim | verdict |
+|---|---|
+| `baked-sx` a small minority (~5%) | confirmed — 16 of 388, 4.1% |
+| no driver rejections | confirmed — the offline validation held on real hardware |
+| at rest, take 54 matches take 53 | **untestable as set up** (below) |
+| under zoom the two diverge | **not demonstrated** (below) |
+| shear-off control stays bit-identical | not re-run |
+
+Patola: *"I did the zoom twice. I was unable to notice any parallax. If there
+was, it was subtle. Probably because the objects were very distant."*
+
+That reading is correct, and the arithmetic agrees with it — see below. But
+reconstructing the session to check it turned up something more important.
+
+### `sx = 1.33333` was the menu, not the camera
+
+The session timeline, from the change log:
+
+```
+   +0s   1.33333          <- first credited frame, 21s after first present
+  +96s   1.15174 -> 3.78085   <- savegame loaded
+ +96..+1578s   3.78085     <- the whole of gameplay, ~25 minutes
++1583s   17.7 -> 25.2 ramp <- the zoom, about one second
++1587s   37.75372
++1590s   CAP HIT
+```
+
+**`1.33333` holds only for the first ninety-six seconds** — the menu. Every
+value measured in takes fifty-two and fifty-three was taken from that same
+early window (take 52's single sample, take 53's first). So `X4VR_PROJ_SX=1.3333`,
+tagged as `stage2-sx-measured` and described as "the value read out of X4's own
+projection", is **the menu's projection**. During gameplay the credited block
+reads 3.78085 — 2.8× larger.
+
+This also undercuts P61's third claim: take 53 baked the menu's `sx`, so "at
+rest they should match" was comparing take 54's gameplay against a constant
+that was only ever right for the menu. There were two at-rest samples to test
+it with, which is not enough to conclude anything either way.
+
+### And the credited block is not reliably one camera
+
+Interleaved with those values: 0.00123, 0.00841, 0.06984, and 1.00000 exactly.
+Those are not one camera zooming. X4 renders more than one view per frame — the
+cockpit target monitor is the obvious candidate — and the layer's "most-drawn
+range-1792 block wins" heuristic credits whichever won that frame.
+
+So the 33× range recorded for take fifty-three is real, but **"sx moves 33×
+under zoom" overstates what was measured**. What was measured is that the
+credited block's `sx` moves 33×, and some of that is the heuristic changing its
+mind about which camera to report rather than any camera changing.
+
+**The conclusion survives, and gets stronger.** A single baked constant cannot
+serve several cameras that differ *at the same instant* — the main view, the
+target monitor and the shadow cascades have different projections in the same
+frame. No constant is right for all of them, and no smarter heuristic fixes
+that, because the problem is that there is more than one right answer at once.
+Only a per-draw read can be correct, which is what the shader now does. The
+weak argument (zoom) has been replaced by a stronger one, and the fix was right
+for a reason better than the one it was built on.
+
+### Why no parallax was visible, in numbers
+
+The shear is a clip-x shift of `sx·d`, and the NDC shift at view depth z is
+`sx·d/z`. With `X4VR_IPD=0.016`, d = 0.008:
+
+| configuration | sx | clip shift `sx·d` |
+|---|---|---|
+| take 51 (baked 0.889, ipd 0.064) | 0.889 | 0.0284 |
+| take 54 (live, gameplay, ipd 0.016) | 3.78 | 0.0302 |
+
+**Take fifty-four produced almost exactly take fifty-one's separation.** The
+live `sx` is 4.25× larger and the IPD is 4× smaller, and the two nearly
+cancelled. Nothing was going to look different, and the run cannot distinguish
+"the live path works" from "the live path does nothing" by eye.
+
+Distance compounds it: parallax falls as 1/z, and zoom is used to look at
+things that are far away, so the deep-zoom moment had both a large coefficient
+and a large z. Patola's own explanation was right.
+
+### `DIFFER` cannot measure this, and should stop being asked to
+
+`DIFFER` counts pixels that differ, not by how much. In a detailed scene a tiny
+offset changes nearly every pixel; against distant stars a large one changes
+few. At deep zoom several images went *down* (`#61` 28.70% → 7.69%, `#59`
+26.71% → 9.17%) while `#63`, `#66`, `#67`, `#97` and `#98` did not move at all.
+That is content, not parallax.
+
+It was the right instrument for take fifty-one, which held the scene roughly
+fixed and changed only the IPD. It is the wrong one for comparing across
+sessions and across zoom levels, and reading it that way would have manufactured
+a conclusion. Recorded so the next comparison does not reach for it by reflex.
+
+### Fixed here
+
+* The change cap was 40 and fired ten seconds into the only deep zoom of the
+  session, so every probe sample during that zoom had no `sx` to attribute it
+  to. Raised to 400, plus a `proj STEADY` heartbeat every 30 s — without one,
+  "unchanged since t" and "logging stopped at t" look identical in a log.
+* Task #24's 4:3 clamp model was fitted to `sx = 1.333` at aspect 1.0. If that
+  is the menu's projection, the model may describe the menu and not the game.
+  The task is amended rather than deleted: the clamp test it proposes is still
+  the right experiment, it just has to be run against a gameplay camera.

@@ -3615,14 +3615,29 @@ void patch_view_before_submit() {
         static uint32_t changes = 0;
         const bool moved = std::fabs(t.sx - last_sx) > 1e-4f ||
                            std::fabs(t.near_z - last_near) > 1e-6f;
-        // Capped: a per-frame sx would otherwise bury the run in its own
-        // diagnostics, and forty samples is already enough to say "it moves".
+        // Take 54: the cap was 40, and it fired ten seconds into the only deep
+        // zoom of the session -- so every probe sample taken during that zoom
+        // had no sx to attribute it to, which is exactly the correlation the
+        // line exists to support. Raised, and a periodic heartbeat added so a
+        // *quiet* stretch is also attributable: without it, "no change since
+        // t" and "logging stopped at t" look identical in the log.
+        static double last_beat = 0.0;
+        timespec bts{};
+        clock_gettime(CLOCK_MONOTONIC, &bts);
+        const double now = bts.tv_sec + bts.tv_nsec * 1e-9;
+        if (t.ok && !moved && changes && now - last_beat > 30.0) {
+            last_beat = now;
+            X4VR_LOG("proj STEADY: sx=%.5f near=%.5f (unchanged)", t.sx,
+                     t.near_z);
+        }
+        if (moved)
+            last_beat = now;
         if (!t.ok && !g_track.logged_proj_fail) {
             g_track.logged_proj_fail = true;
             X4VR_LOG("proj: could not read terms from M_projectionUJ "
                      "(sx=%.5f near=%.5f) -- shear still on assumed values",
                      t.sx, t.near_z);
-        } else if (t.ok && moved && changes < 40) {
+        } else if (t.ok && moved && changes < 400) {
             const float ipd = configured_ipd();
             const float d = 0.5f * ipd;
             const float measured = t.sx * d / t.near_z;
@@ -3646,9 +3661,9 @@ void patch_view_before_submit() {
             last_sx = t.sx;
             last_near = t.near_z;
             changes++;
-            if (changes == 40)
-                X4VR_LOG("proj: 40 changes logged, further changes suppressed "
-                         "-- sx is not a constant, which is the answer");
+            if (changes == 400)
+                X4VR_LOG("proj: 400 changes logged, further changes suppressed "
+                          "-- sx is not a constant, which is the answer");
         }
     }
 
