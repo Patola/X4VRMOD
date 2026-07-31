@@ -6767,3 +6767,89 @@ Expect the screen to look **mono** — take forty-six established that without t
 index offset the composite reads layer 0 for both eyes. That is not a
 regression; the probe reads `#57` directly and is unaffected by what the
 composite does with it.
+
+## Take fifty-eight: the bisection answers, with a third outcome
+
+`X4VR_BINDLESS_PATCH` removed. P65 offered two outcomes; neither happened.
+
+| image | take 57 (patch on) | take 58 (patch off) |
+|---|---|---|
+| `#57` | 1.68 – 1.85 | **58.7, 89.7** |
+| `#59` albedo | 1.006 – 1.022 | 1.017 |
+| `#61` normals | 1.005 | 1.003 |
+| `#63`, `#65`–`#67`, `#97`, `#98`, `#50`–`#53` | 1.00 – 1.02 | **exactly 1.0000** |
+
+```
+level 0.006706/0.3937 (l1/l0 58.712)
+level 0.00585 /0.5245 (l1/l0 89.663)
+```
+
+**Removing the per-view sampling made it fifty times worse.** So the bindless
+index offset is not the cause of the lighting divergence — it is load-bearing,
+and taking it away breaks something badly. The prediction that it would either
+fix `#57` or leave it unchanged was too narrow: a knob can be neither the
+culprit nor irrelevant, and this one is neither.
+
+The downstream images reading **exactly** 1.0000 is the mono composite, as
+expected — take forty-six's behaviour, confirmed here by measurement rather
+than by looking at the screen.
+
+### What that plus the framebuffer list says
+
+```
+fb  rp #31: 1408x1408 attachments=2 imgs=[#57,#57] MASKED
+fb  rp #32: 1408x1408 attachments=2 imgs=[#57,#57] MASKED
+```
+
+Both attachments of `rp #31/#32` are `#57`: a pass that **reads `#57` and writes
+`#57`**, i.e. an accumulation buffer with a feedback loop.
+
+That explains the 50× explosion mechanically. With the offset on, view 1
+accumulates from its own layer and settles 1.7× high. With it off, view 1
+accumulates from **view 0's** layer while writing its own — a feedback loop
+fed by the wrong input, which diverges rather than settling.
+
+And it reframes the 1.7× residual: an accumulation buffer turns a small
+per-frame error into a large steady-state one, so 1.7× need not have a
+1.7×-sized cause in any single frame.
+
+### Patola's observation, which is the best clue so far
+
+> "There were some bright surfaces where the black albedo would change its area
+> according to the angle I was looking at them. It would be bigger when I was
+> looking from the left of the structure and smaller when I looked from centre
+> or more to the right."
+
+A dark region on a bright surface whose **area** varies with view angle. That is
+a view-dependent shading term — parallax/relief mapping, a reflection, or a
+specular lobe — and it is the kind of thing an accumulation buffer would
+integrate. It is also strongly nonlinear in view angle, which is what a
+steady-state factor of 1.7 between two viewpoints 64 mm apart would need.
+
+Worth stating precisely because it cuts against an earlier claim: the shear
+moves `gl_Position` only, so shading inputs are identical between eyes and a
+view-dependent term computed from `IO_VertexToEye` should be identical too.
+Either the term is *screen-space* (and the shear moves it), or something else
+feeds it. That distinction is the next thing to establish, and it is a question
+about one pass rather than about the whole frame.
+
+### P66 — look at `#57` instead of reasoning about it
+
+`X4VR_MV_DUMP_IMG=57` writes both layers of `#57` to disk. It is the instrument
+that has existed since take twenty-five and has not been pointed at this.
+
+Take fifty-seven's configuration (`X4VR_BINDLESS_PATCH` back on — take
+fifty-eight established it is load-bearing), plus the dump.
+
+What each outcome would mean:
+
+* Layer 1 showing the *same* content brighter → a gain or accumulation
+  difference, and the pass's own arithmetic is the place to look.
+* Layer 1 showing *different content* — a reflection or dark region in a
+  different place — → the view-dependent term really is resolving differently
+  per eye, and the question becomes what feeds it.
+* Layer 1 showing smearing or ghosting → temporal accumulation reprojected with
+  the wrong matrices, which would make it a per-eye history problem.
+
+Three outcomes, three different next steps, and no need to guess between them
+in advance.
