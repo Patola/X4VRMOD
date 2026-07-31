@@ -5733,3 +5733,61 @@ doubles (count 4), which records why the caller's guard is load-bearing.
   left. Refuted if layer 1 returns to ~4% (something else also reads a twin that
   was never written) or stays bit-identical (the offset is reaching the wrong
   variable).
+
+## Take fifty (control): the per-view sampling is exact
+
+`X4VR_STEREO=0` with `X4VR_BINDLESS_PATCH=1` — the shear set to identity while
+view 1 still samples twin slots. Any difference between the eyes here cannot be
+parallax; it can only be the sampling.
+
+Result: **every probed image IDENTICAL.** `#57`, `#60`, `#61`, `#63`, `#65`,
+`#66`, `#67`, `#97`, `#98`, and 19 of 19 settled swapchain samples bit-exact.
+
+So every twin descriptor resolves to content identical to what view 0 reads.
+The mirror, the offset, and the aliased-variable fix are correct — not
+"apparently working", but bit-exact over a full scene. This is the control that
+take forty-nine's parallax could not provide, and it is worth having spent a run
+on: it converts "the stereo looks right" into "the sampling is provably not the
+variable".
+
+### What that leaves for the cockpit lighting
+
+The difference in take forty-nine is therefore caused by the eye offset. The
+mechanism is worth stating precisely, because it bounds what can and cannot
+differ:
+
+`K` is applied to `gl_Position` at the **end of the vertex shader**. Nothing
+else moves — world positions, normals and view vectors reaching the fragment
+shader are still the ones X4 computed for its single camera. So **direct
+lighting cannot differ between the eyes.** What can:
+
+* **visibility** — a strut occludes different geometry in each eye, which is
+  what stereo is;
+* **screen-space effects** — anything sampling a screen-space buffer lands
+  somewhere else once the geometry has shifted. X4 has several: `#63`
+  (`R8_UINT` full-res, 2 mips — a tile/cluster light classification buffer,
+  `DIFFER` 18% in take forty-nine) and `#66`/`#67` (352², `DIFFER` 13–18%).
+
+Near-field cockpit geometry is where both are largest, and it is exactly where
+Patola saw it. A screen-space term evaluated per eye is *legitimately* per-eye
+and can still look wrong, which is the usual reason stereo screen-space effects
+are a known problem rather than a solved one.
+
+### The parameters that scale it, and are currently assumed
+
+```
+stereo: ipd=0.0640 sx=0.8890 near=0.100 -> shear m8 L=0.28448 R=-0.28448
+```
+
+`ipd` is a human 64 mm. `sx` and `near` are **defaults**, and the shear is
+`d·sx/near` — so if X4's real near plane is not 0.1, the parallax is wrong
+everywhere, in proportion, and most visibly on the closest geometry. That has
+never been checked against X4's actual projection matrix.
+
+- **P58** — the cockpit lighting difference scales with `X4VR_IPD`. At
+  `X4VR_IPD=0.016` (a quarter) it is roughly a quarter as pronounced and the
+  rest of the scene keeps its depth. Confirms the difference is geometric —
+  visibility plus screen-space reprojection — and that the remaining question is
+  calibration, not correctness. Refuted if the strut still flips dark-to-bright
+  at a quarter of the separation, which would mean something view-dependent that
+  is not the offset.
