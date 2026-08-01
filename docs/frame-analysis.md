@@ -9253,3 +9253,43 @@ which resolves it directly. **P85: `rp #24.0`'s colour attachment is index 1,
 `#57`.** If it is index 2 or 3 then `rp #24` writes `#59`, the clear on
 attachment 1 is a clear of an image the pass does not draw into, and the
 localisation has to start from the probe's sampling point instead.
+
+### P85 confirmed — and the pass is a lighting pass, not the G-buffer
+
+    rp #23.0 writes — colour [1] depth 0 input [2,3,4,5]
+    rp #24.0 writes — colour [1] depth 0 input [2,3,4,5]
+    rp #25.0 writes — colour [1] depth 0 input [2,3,4,5]
+    rp #31.0 writes — colour [0] depth none input [1]
+
+With `imgs=[#55,#57,#59,#59,#60,#61]`: attachment 1 is `#57`, so `rp #24`
+**writes `#57`** while reading depth (`#55`) and the G-buffer (`#59`, `#59`,
+`#60`, `#61`) as input attachments. These are lighting/composite passes. `#57`
+is the lit result, and `#59`/`#60`/`#61` measuring clean is exactly what a
+correct G-buffer looks like — the defect is introduced when that G-buffer is
+*lit*, not when it is filled.
+
+Module serials are per-run and the joins confirm it: take 74 lists 138 fragment
+modules for `rp #23`, take 78 lists 132, and the serials differ. Take 74's dump
+cannot be read against take 78's log.
+
+### P86 — does the defect follow the layer, or the eye offset?
+
+Two families are left, and one existing knob separates them. `configured_ipd()`
+is a bare `strtof` with no clamp, so **`X4VR_IPD=-0.064`** flips the shear sign:
+layer 0 gets the right eye's viewpoint and layer 1 gets the left's, while every
+index, descriptor and code path stays exactly where it was.
+
+* **Follows the eye offset** — something in the lighting is correct for only one
+  sign of the shear. The dark patches move to the **right** SBS frame and the
+  wing ratio inverts from 1.69 to about 0.59.
+* **Follows the layer index** — the defect is in the multiview machinery for
+  layer 0 specifically. The patches **stay on the left** and the ratio stays
+  near 1.69.
+
+**P86: it follows the layer index — the patches stay on the left frame.** The
+reasoning is that layer 0 runs on X4's own unmodified descriptors and the
+defect survived every symmetric knob, but the prediction is the weaker half of
+this: either answer halves the search, which is the point of running it.
+
+Scored from the dumps, not from the screen: `#57` and `#52` at the wing crop,
+with NCC against take 76 to confirm the view before reading the ratio.
