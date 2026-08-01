@@ -8666,3 +8666,110 @@ inferred from a ratio. It answers, offline and permanently:
 
 The shader dump must not be committed — X4's modules are copyright, and they
 live in `/tmp` for that reason.
+
+## Take 73 — the right eye has been sampling an empty shadow map
+
+`X4VR_DUMP_SHADERS` wrote nothing: the layer does not create the directory and
+warns instead — `WARNING: X4VR_DUMP_SHADERS=/tmp/x4vr-shaders-take73 is not
+writable`. My error for passing a path that did not exist. The directory is
+created now.
+
+The `#57` dump paid for the run anyway, and it moved the defect two stages
+upstream.
+
+    mv probe: wrote /tmp/x4vr-t73-img57-n2-layer{0,1}.ppm (fmt 97, after rp #24, DIFFER)
+
+    wing         left 27.99   right 47.18   1.69x
+    upper strut  left  6.35   right  7.88   1.24x
+    whole frame  left  7.99   right  9.79   1.23x
+
+**After `rp #24`** — a forward geometry pass, with depth, before the deferred
+lighting of `rp #31/#32`. So the difference is not made in deferred lighting at
+all; it is already there when the geometry pass writes. And the two eyes' wings
+keep the same panel lines, seams and vents — only the brightness differs, so it
+is not a wrong albedo either. It is a shading *input*, sampled during a forward
+pass.
+
+### The mechanism
+
+    img #70: 2048x2048x1 layers=1 mips=1 samples=1 fmt=124 usage=0xa6 DOUBLED
+    img #71..#74: identical
+    mv final: img #70 writers — masked rp [] unmasked rp [35]
+    mv final: img #71..#74 writers — masked rp [] unmasked rp [37/39/41/43]
+
+The five 2048x2048 shadow cascades are **doubled** — they go through the same
+allocation path as everything else — but every one is written **only by
+unmasked passes**. That is correct: a shadow map is light space and genuinely
+shared between the eyes, and `classify_unsheared()` has always said so.
+
+**So layer 1 of every shadow map is allocated and never written.**
+
+And the bindless mirror substitutes layer 1 for *any* doubled image, without
+ever asking whether anything wrote it:
+
+    const VkImageView l1 = view_of_layer(d, device, infos[j].imageView, 1);
+    if (l1 == VK_NULL_HANDLE)
+        continue; // undoubled: the verbatim copy is the right answer
+    infos[j].imageView = l1;
+
+So view 1 — the right eye, reached through `index + 26653` — did every shadow
+lookup against an unwritten depth image. Under reverse-Z an empty depth reads as
+the **far plane**: nothing occludes anything, and every surface comes out fully
+lit.
+
+This accounts for the whole history:
+
+* the right eye blown white and unshadowed, the left correct — Patola from take
+  64 onward, and "the shadows which didn't appear in the right side";
+* worst on the ship's own hull (nearest, self-shadowing) and absent on nebula
+  and stars, which receive no shadows — the "distance dependence" measured at
+  take 72 is really *which geometry receives shadows*;
+* present already in `#57` after a forward pass, since that is where materials
+  do their shadow lookup;
+* untouched by invproj, by `rp #7`, by the fullscreen shear — none of them go
+  near a descriptor;
+* **and take 71 curing it by accident.** `X4VR_BINDLESS_PATCH=0` stopped view 1
+  consulting the mirror at all, so it read the real shadow map. That run lost
+  its stereo for the same reason, which is exactly why it looked like a cure and
+  had to be discarded as degenerate. It was half a result, and the half that was
+  real is this.
+
+### The fix
+
+`layer1_is_written()` asks `g_img_writers` — already tracked, already printed in
+the inventory — whether any *masked* pass writes the image. An image with an
+unmasked writer and no masked one is shared by construction, so leaving view 1
+pointed at layer 0 is not a fallback for it, it is the correct answer. Unknown
+writers keep the old behaviour rather than silently making a genuinely per-eye
+image mono on missing information.
+
+`X4VR_MIRROR_ALL_LAYER1=1` restores the old mirror. The log now separates the
+two cases: `%llu of them layer-1, %llu kept at layer 0 as shared (unmasked
+writers only)`.
+
+### P81 — take 74
+
+    X4VR_TAKE=74-MIRROR-SHARED X4VR_STEREO=1 X4VR_IPD=0.064
+    X4VR_BINDLESS_PATCH=1 X4VR_BINDLESS_MIRROR=1 X4VR_RES=1408x1408
+    X4VR_GAMESCOPE=1 X4VR_SBS=1 X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1
+    X4VR_MV=1 X4VR_MASK_PRESENT=1 X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1
+    X4VR_PROJ_SX=1.3333 X4VR_PROJ_LIVE=1
+    X4VR_DUMP_SHADERS=/tmp/x4vr-shaders-take74 X4VR_MV_DUMP=/tmp/x4vr-t74
+    X4VR_MV_DUMP_IMG=52 X4VR_LOG=/tmp/x4vr-take74.log ./launch/x4vr-launch.sh
+
+Score from the log first:
+
+1. `bindless mirror final: ... kept at layer 0 as shared` is **non-zero**;
+2. `#52` still **DIFFERs** — IDENTICAL means the stereo is gone and the run is
+   degenerate like take 71;
+3. the wing at `x=845..1408 y=845..1130` in `/tmp/x4vr-t74-img52-n*`: left and
+   right should converge from take 72's 46.22 / 70.73;
+4. then Patola's eyes.
+
+**If the shadows match but the stereo is gone**, the predicate is too broad and
+is sharing genuinely per-eye images. **If nothing changes**, the shadow maps are
+not reached through this descriptor path and the shader dump — which will
+finally exist — says what modules #368/#370/#372 actually sample.
+
+The shader dump must never be committed; X4's modules are copyright, which is
+why they live in `/tmp`.

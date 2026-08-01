@@ -745,6 +745,11 @@ std::atomic<uint64_t> g_fog_disabled{0};
 // by this mechanism at all.
 std::atomic<uint64_t> g_compute_tables{0};
 uint64_t g_mirror_writes = 0, g_mirror_descriptors = 0, g_mirror_layer1 = 0;
+// Descriptors left pointing at layer 0 because only unmasked passes write the
+// image -- shadow cascades above all. Counted separately from the undoubled
+// case so the log can show the difference between "there is no layer 1" and
+// "there is one and nothing has ever written it".
+uint64_t g_mirror_shared = 0;
 uint64_t g_mirror_no_room = 0;
 bool g_mirror_collided = false;
 
@@ -1081,6 +1086,51 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyBuffer(
 // thing that sets it -- so the mirror was silently building layer-0 twins, a
 // no-op that would have passed every step-A gate and surfaced two steps later as
 // an unexplained mono frame.
+// Restore the pre-take-73 mirror, which substituted layer 1 for any doubled
+// image whether or not anything had written it.
+const bool g_mirror_all_layer1 = [] {
+    const char *e = getenv("X4VR_MIRROR_ALL_LAYER1");
+    return e && *e && *e != '0';
+}();
+
+// Does layer 1 of this view's image ever get written?
+//
+// Being doubled is not the question. X4's five 2048x2048 shadow cascades are
+// doubled -- they go through the same allocation path as everything else -- but
+// they are written only by *unmasked* passes, because a shadow map is light
+// space and genuinely shared between the eyes, which classify_unsheared() has
+// always got right. Nothing ever writes their layer 1.
+//
+// The mirror then pointed view 1 at that empty layer, so every material shader
+// in the right eye did its shadow lookup against an unwritten depth image.
+// Under reverse-Z an empty depth reads as the far plane: nothing occludes
+// anything, and the surface comes out fully lit. That is the blown-white hull
+// Patola reported from take 64 onward, and it is why take 71 fixed it by
+// accident -- with X4VR_BINDLESS_PATCH=0 view 1 stopped consulting the mirror
+// at all and read the real shadow map, which is also why that run lost its
+// stereo and looked like a cure.
+//
+// An image with an unmasked writer and no masked one is shared by construction,
+// so the verbatim copy is not a fallback for it -- it is the correct answer.
+bool layer1_is_written(VkImageView v) {
+    if (g_mirror_all_layer1)
+        return true;
+    std::lock_guard<std::mutex> lock(g_img_mu);
+    auto it = g_views.find(v);
+    if (it == g_views.end())
+        return true;
+    auto im = g_images.find(it->second.image);
+    if (im == g_images.end())
+        return true;
+    auto w = g_img_writers.find(im->second.serial);
+    // Unknown writers means the framebuffers naming this image have not been
+    // seen yet. Keep the old behaviour there rather than silently making a
+    // genuinely per-eye image mono on the strength of missing information.
+    if (w == g_img_writers.end())
+        return true;
+    return !(w->second.masked.empty() && !w->second.unmasked.empty());
+}
+
 VkImageView view_of_layer(DeviceData *d, VkDevice device, VkImageView v,
                           uint32_t layer) {
     if (v == VK_NULL_HANDLE)
@@ -1288,6 +1338,13 @@ void bindless_mirror_writes(
         std::vector<VkDescriptorImageInfo> infos(
             w.pImageInfo, w.pImageInfo + w.descriptorCount);
         for (uint32_t j = 0; j < w.descriptorCount; j++) {
+            // Shared by construction -- only unmasked passes write it, so its
+            // layer 1 is empty and substituting it is how the right eye lost
+            // its shadows. See layer1_is_written().
+            if (!layer1_is_written(infos[j].imageView)) {
+                g_mirror_shared++;
+                continue;
+            }
             const VkImageView l1 =
                 view_of_layer(d, device, infos[j].imageView, 1);
             if (l1 == VK_NULL_HANDLE)
@@ -2070,10 +2127,12 @@ void bindless_report(const char *when) {
         // Printed first and unconditionally, zeros included: a mirror that
         // quietly did nothing must not look like a mirror that cost nothing.
         X4VR_LOG("bindless mirror %s: offset %u, %llu twin writes, %llu twin "
-                 "descriptors, %llu of them layer-1, %llu skipped for no room%s",
+                 "descriptors, %llu of them layer-1, %llu kept at layer 0 as "
+                 "shared (unmasked writers only), %llu skipped for no room%s",
                  when, g_mirror_offset, (unsigned long long)g_mirror_writes,
                  (unsigned long long)g_mirror_descriptors,
                  (unsigned long long)g_mirror_layer1,
+                 (unsigned long long)g_mirror_shared,
                  (unsigned long long)g_mirror_no_room,
                  g_mirror_collided ? " — DISABLED, see above" : "");
         for (const auto &e : g_dsl_sets)
