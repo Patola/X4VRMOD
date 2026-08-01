@@ -8553,3 +8553,116 @@ per-eye render target. Do not add a knob to fix a failed run.
 Because the view now repeats, take 70's dumps are a true before-image:
 `~/x4vr-baselines/x4vr-t70-img52-n2-layer{0,1}.ppm`, wing at
 `x=845..1408 y=845..1130`, left mean 46.25 against right 70.75.
+
+## Take 72 — P79 refuted, and the error is a function of distance
+
+The classification changed as intended (36 no-depth passes now read
+`MONO (fullscreen post) +MASKED(fullscreen)`), `#52` still DIFFERs so the stereo
+survived, and `#57` held at **1.863** against take 70's 1.846. The view repeated
+(NCC +0.9892 against take 70 n2), so the wing is directly comparable:
+
+                                    left    right   ratio    p90
+    take 70 (fullscreen sheared)    46.25   70.75   1.53x    77.0 / 189.0
+    take 72 (fix)                   46.22   70.73   1.53x    77.3 / 189.0
+
+Identical to two decimals. **P79 is refuted.** In hindsight the mechanism was
+never sound: a fullscreen triangle is oversized and its shaders take UVs from
+`gl_FragCoord`, so sliding its clip position changes no fragment's input. The
+change is kept — K has no business on those passes and it provably costs
+nothing — but labelled as a no-op, not a fix.
+
+Take 72 also ran without `X4VR_PROJ_INVPROJ` while take 70 ran with it. Two
+different patches, both bit-exact no-ops on the same pixels.
+
+### A fifth aggregate, this one written while fixing the fourth
+
+    disparity  p5/p50/p95 = 0/0/0 px      shifts +0..+0px
+
+`plausible_window()` took the sign of the disparity from the **median** of
+confidently-matched tiles. This is a space game: most of the frame is stars and
+nebula at infinity where the disparity genuinely is zero, so the median is zero,
+the window collapses to {0}, and the search switches itself off. Take 70 read
+the same way, so the flagged percentages quoted from it were meaningless.
+
+Fixed to read the 2nd/98th percentile — the information is in the tail, where
+the near geometry is. Control still 0.0%; take 72 now reports a window of
+`-320..0` and p5 = -64px.
+
+### The measurement that matters
+
+With a working disparity field, binned by depth (disparity is 30.04/z_v px):
+
+    |disparity|      depth        n    median    p90     p99    %tiles >1.25x
+       0-   2 px  15.02- 999.0 m  310   1.000   1.020   1.314        1.3%
+      16-  32 px   0.94-   1.9 m  110   1.009   1.109   3.929        2.7%
+      32-  64 px   0.47-   0.9 m  187   1.010   1.253   2.300       10.2%
+      64- 320 px   0.09-   0.5 m   47   1.014   2.708   4.799       31.9%
+
+**The error scales with nearness.** Beyond 15m the eyes agree at baseline;
+inside half a metre a third of tiles differ by more than 1.25x and the tail
+reaches 2.7x. Note the medians: 1.000 to 1.014 across every bin. A median would
+have reported this frame as clean, again.
+
+A constant world-space position error produces exactly this curve — 32mm is
+nothing at 15m and everything at 0.3m.
+
+### A correction to the record
+
+An earlier reading here claimed take 71's `#52` layer 0 was a mono ground truth
+proving the **left** eye correct. It is not. Take 71 ran with the offset off, so
+its layer 0 *is* the view-0 path, the same path as take 72's layer 0; agreement
+to 0.06% shows that path is stable across runs and nothing more. Both eyes are
+sheared (`L=+0.42666 R=-0.42666`), so neither is a neutral reference. What is
+established: the eyes differ, and the difference concentrates on near geometry.
+
+### P80 — refuted offline, no run spent
+
+`patch_fragment_invproj_eye` corrects `kCameraInvProjMember = 2` and only
+member 2. X4 uses TAA, and the block carries `3 M_projection_uj,
+4 M_invprojection_uj`, so a pass reconstructing world position had every reason
+to read the un-jittered inverse and be missed entirely. Scanning all 409 dumped
+modules for fragment-stage loads of the camera block at set 1 binding 0:
+
+    member  name                  modules loading it
+        2   M_invprojection       244
+        4   M_invprojection_uj      2   (both of which also load 2)
+
+Zero modules load member 4 alone, and the 244 matches the log's "244 of 409
+eligible" exactly — which also confirms the stale dump is representative of this
+run's shader set even though its serials are not. The patch's eligibility is
+correct and it does reach the position-reconstructing shaders. P80 refuted.
+
+### The blocker, and what take 73 is for
+
+Every remaining hypothesis needs to know what modules **#364/#366/#368** — the
+deferred lighting bound to `rp #30`, executing inside `rp #31/#32` — actually
+do. That cannot be read from `/tmp/x4vr-shaders/`: module serials are per-run,
+and take 69 logged `#364` as a *compute* module while take 72 logs it as a
+fragment module. Joining the two would be the same class of error as joining
+pipeline render passes to framebuffer render passes, which is how `rp #31/#32`
+appeared to have no shaders at all — pipelines are created against one
+`VkRenderPass` and executed inside a compatible one, so the two sets are nearly
+disjoint:
+
+    passes with fragment modules:  #0 #1 #2 ... #26 #28 #30 #33 #34 ...
+    passes that own framebuffers:  #0 #1 #7 ... #27 #29 #31 #32 #33 #35 ...
+
+Take 73 is pure observation — no behaviour change, nothing to report by eye:
+
+    X4VR_TAKE=73-DUMPSHADERS X4VR_STEREO=1 X4VR_IPD=0.064
+    X4VR_BINDLESS_PATCH=1 X4VR_BINDLESS_MIRROR=1 X4VR_RES=1408x1408
+    X4VR_GAMESCOPE=1 X4VR_SBS=1 X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1
+    X4VR_MV=1 X4VR_MASK_PRESENT=1 X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1
+    X4VR_PROJ_SX=1.3333 X4VR_PROJ_LIVE=1 X4VR_DUMP_SHADERS=/tmp/x4vr-shaders-take73
+    X4VR_MV_DUMP=/tmp/x4vr-t73 X4VR_MV_DUMP_IMG=57
+    X4VR_LOG=/tmp/x4vr-take73.log ./launch/x4vr-launch.sh
+
+Take 72's configuration plus `X4VR_DUMP_SHADERS`, and the dump retargeted from
+`#52` to `#57` so the lighting output itself can be seen per eye rather than
+inferred from a ratio. It answers, offline and permanently:
+
+* what #364/#366/#368 read, and whether the invproj correction lands in them;
+* where in the frame `#57`'s 1.86x actually lives.
+
+The shader dump must not be committed — X4's modules are copyright, and they
+live in `/tmp` for that reason.

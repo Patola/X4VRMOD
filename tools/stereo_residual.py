@@ -131,17 +131,26 @@ def plausible_window(sh, cc, dmax, good=0.7):
     only one of the two.
 
     Which one depends on which array layer is the left eye, so rather than
-    assume it, take the sign from the confidently-matched tiles: a majority of
-    the frame does match correctly even before constraining. At IPD=0 the
-    median is 0, the window collapses to {0}, and the negative control still
-    reads 0.0% -- which is the check that this is a geometric constraint and
-    not a thumb on the scale.
+    assume it, take the sign from the confidently-matched tiles.
+
+    NOT from their median. This is a space game: most of the frame is stars and
+    nebula at infinity, where the disparity genuinely IS zero, so the median is
+    zero, the window collapses to {0}, and the search switches itself off --
+    which is exactly what it did on takes 70 and 72, reporting p5/p50/p95 =
+    0/0/0 on frames whose cockpit visibly shifts between the eyes. The
+    information is in the tail, where the near geometry is, so read the tail:
+    whichever end reaches further from zero is the direction the eyes are
+    offset. At IPD=0 both ends are zero, the window is {0}, and the negative
+    control still reads 0.0%.
     """
-    m = float(np.median(sh[cc >= good])) if (cc >= good).any() else 0.0
-    if m > 1:
-        return 0, dmax
-    if m < -1:
+    s = sh[cc >= good]
+    if not s.size:
+        return 0, 0
+    lo, hi = np.percentile(s, 2), np.percentile(s, 98)
+    if abs(lo) > abs(hi) + 1:
         return -dmax, 0
+    if abs(hi) > abs(lo) + 1:
+        return 0, dmax
     return 0, 0
 
 
