@@ -7947,3 +7947,115 @@ doubled intermediates are another matter) and then `X4VR_PROJ_LIVE`.
 
 Take 67 with `X4VR_PROJ_INVPROJ=1` dropped, nothing else changed. Scored with
 `tools/stereo_residual.py` on the `#52` dumps, against 9.9% and 2.4x.
+
+## State entering take 68 — read this first after a context reset
+
+### The one thing not to get wrong again
+
+There are **two separate questions** about the eye images, and this document
+answered the first one correctly and then wrongly generalised it:
+
+1. **Is the whole-frame brightness ratio `l1/l0` a defect?** No. Retired. Two
+   correctly offset views of an asymmetric scene have different whole-frame
+   means. Takes 56–66 were scored on it for nothing.
+2. **Do the two eyes light the same surface the same way?** **No — and this is
+   a real defect.** Confirmed on take 67's presented eye image.
+
+Do not let (1) talk you out of (2). It already happened once: I concluded "this
+is correct stereo, nothing to fix", and Patola rejected it — *"in real life, if
+you close one eye at a time, you don't see a completely lit surface vs an almost
+completely dark surface, it's absurd"* — and he was right. He has also seen this
+artifact in earlier VR attempts and reports it is uncanny and destroys the depth
+sense, which is why the headset trial is blocked behind fixing it.
+
+### The defect, measured
+
+Lock the wing's true disparity on a distinctive feature (the vent on its top:
+**−43 px, NCC 0.756**), then compare surfaces at that disparity:
+
+| surface | L0 | L1 | ratio |
+|---------|-----|-----|-------|
+| window slots (side-facing, diffuse) | 46.5 | 47.3 | **1.016** |
+| wing top (upward-facing), y=520 | 45.2 | 109.1 | **2.41** |
+| wing top (upward-facing), y=545 | 45.4 | 113.0 | **2.49** |
+
+Whole frame: **9.9% of judged tiles differ by more than 1.25x while matching
+confidently in structure** (NCC ≥ 0.7). Occlusion cannot correlate at 0.7 with
+something that is not there, so that set is same-surface by construction.
+Overall flagged including possible occlusion: 24.6%. Whole-frame `l1/l0` for the
+same frame: 1.0762 — which is why the old metric saw nothing.
+
+**Negative control: the take 65 `IPD=0` dumps read 0.0% on the identical test.**
+Any future instrument that cannot reproduce 9.9% / 0.0% on these two pairs is
+not measuring the defect.
+
+### How to score a run
+
+    python3 tools/stereo_residual.py <layer0.ppm> <layer1.ppm> [--png out]
+
+Dumps come from `X4VR_MV_DUMP=<prefix> X4VR_MV_DUMP_IMG=52` — `#52` is one of
+the four **presented** eye images (`fmt 44`, dumped `after rp #0`). Dump `#57`
+only when the mid-pipeline HDR buffer is specifically wanted: the probe samples
+it after `rp #24`, in the middle of light accumulation, so it cannot speak for
+anything fog or tonemapping does.
+
+Baseline pairs are preserved outside the repo at **`~/x4vr-baselines/`** —
+`x4vr-t67-img52-n2-layer{0,1}.ppm` (the defect, 9.9%) and
+`x4vr-t65-img57-n2-layer{0,1}.ppm` (the control, 0.0%). They are X4's rendered
+output and must never be committed.
+
+Read the numbers, and also **crop the two eyes side by side at the same
+coordinates and look.** That found this in one glance, twice, after two tools
+said there was nothing there.
+
+### P74 and the run it is waiting on
+
+Diffuse side-facing surfaces match; upward-facing reflective ones do not. That
+is a wrong **view-dependent** term — specular and environment reflection — with
+albedo and diffuse intact. Those terms use a position reconstructed from depth,
+and `patch_fragment_invproj_eye` rewrites that reconstruction per eye in
+**230–238 modules**. It was built to fix the `#57` lift, and the lift was never
+a defect, so the first suspect is a correction written for a phantom problem.
+
+    X4VR_TAKE=68-NOINVPROJ X4VR_STEREO=1 X4VR_IPD=0.064 X4VR_BINDLESS_PATCH=1
+    X4VR_BINDLESS_MIRROR=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS=1
+    X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1 X4VR_MV=1 X4VR_MASK_PRESENT=1
+    X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1 X4VR_PROJ_SX=1.3333 X4VR_PROJ_LIVE=1
+    X4VR_MV_DUMP=/tmp/x4vr-t68 X4VR_MV_DUMP_IMG=52
+    X4VR_LOG=/tmp/x4vr-take68.log ./launch/x4vr-launch.sh
+
+Take 67's command with `X4VR_PROJ_INVPROJ=1` **dropped**, nothing else changed.
+Confirm from the log that it did not fire — `invproj final: ... 0 modules
+corrected` — before reading anything into the result.
+
+P74 predicts the flagged fraction falls materially from 9.9% and the wing-top
+ratio moves off 2.4x. **If it does not, the patch is exonerated**; the next
+knobs are `X4VR_BINDLESS_PATCH` / `X4VR_BINDLESS_MIRROR`, then `X4VR_PROJ_LIVE`.
+Do not add a knob to fix a failed run — bisect the existing space.
+
+### Established, so it is not re-derived
+
+- `#57` is X4's main-view HDR scene colour, sampled by the probe **after
+  `rp #24`**. `#50–#53` are the presented eye images. `#65` reads IDENTICAL
+  between layers on every sample.
+- `near` is exactly 0.100 (measured, take 66) — the Phase 4a assumption was
+  right. But `sx` moves over a **3.3x range** with zoom (1.15 / 1.33 / 3.78),
+  and 12 baked-sx modules are up to 2.8x wrong when it does. That is task #23.
+- The bindless mirror handles undoubled images correctly:
+  `l1 == VK_NULL_HANDLE -> continue`, the verbatim copy. Only 83,396 of
+  38.7M twin descriptors are layer-1 substitutions.
+- `rp #7` writes a presented eye image **unmasked** (`frag modules #1..#4`,
+  `set 0 binding 0`), so layer 1 misses it. Real, unexplained, ruled out for
+  *this* symptom by the signed-difference image. Task #26.
+- Refuted and off: `X4VR_SHEAR_LIGHTS` (take 64). Too coarse and knob-gated off:
+  `patch_fragment_disable_fog` (matches `mod-0182`, bound to nine passes
+  including all five shadow passes; blacks out every 3D scene).
+
+### The error class to check before trusting new analysis
+
+Three metrics on this project have now failed by **aggregating a localized
+effect**: `l1/l0` (whole-frame mean), and two versions of `stereo_residual.py`
+(a median, plus a tile selection that dropped differently-lit tiles from the
+average meant to find them, plus an edge exclusion that examined only the middle
+39% of the width). Report **tail and affected area**, never a bare median, and
+keep a negative control.
