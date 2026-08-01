@@ -9780,3 +9780,114 @@ What has *not* been done: nobody has read the lighting fragment shader. 100 of
 `rp #23`'s 138 fragment modules reference `gl_FragCoord`. Task #10 read the
 shaders drawing into `#103` and that is what identified the composite; the same
 move on `rp #23` is the obvious next one, and it costs no run.
+
+## Reading the lighting shader: `M_invprojection_uj` is the matrix that mattered
+
+Nobody had read the deferred lighting shader. `rp #23` carries 138 fragment
+modules, but most write `OUT_RT0..RT3` — they are G-buffer shaders whose
+pipelines were merely *created* against `rp #23`. The lighting shaders are the
+**8 that declare `SubpassData`**, matching `rp #24.0 writes — colour [1] depth 0
+input [2,3,4,5]`:
+
+    mod 199/201/205/219/223/229/257   639-1084 lines   IO_lightcolor, IO_SpecIntensity
+    mod 180                           3797 lines       S_sampler2DShadow, S_samplerShadow
+
+The seven small ones are instanced light volumes carrying a per-instance colour.
+`mod-0180` is the sun with cascaded shadows, and its fragment stage has **no
+varyings at all** — its inputs are `gl_FragCoord` and nothing else, and its
+vertex stage indexes `gl_VertexIndex`, so it is a procedurally generated
+fullscreen triangle. Everything it knows about a surface it reconstructs.
+
+And it reconstructs position **twice, from the same input**:
+
+    %3607 = gl_FragCoord.xy / camera[11].xy          ; screen UV
+    %3621 = OpImageFetch  <depth at camera[58]>      ; I_maindepth
+    ...ndc = uv * scale - bias
+
+    %3642 = camera[2]   ; M_invprojection
+    %3649 = %3643 * vec4(ndc.xy, depth, 1.0)
+    %3655 = %3649.xyz / %3649.w                      ; reconstruction A
+
+    %3727 = camera[4]   ; M_invprojection_uj
+    %3734 = %3728 * vec4(ndc.xy, depth, 1.0)
+    %3740 = %3734.xyz / %3734.w                      ; reconstruction B
+
+Their consumers are completely different:
+
+    A (%3655) -> %3815 = -A, Normalize, VectorTimesMatrix, Reflect
+                 the view vector. Specular and reflection.
+
+    B (%3740) -> %3909 = Length(B)                   cascade selection by range
+                 %3926 = vec4(B, 1.0)
+                 %3927 = shadow[3] * %3926           cascade 0
+                 %3936 = shadow[4] * %3926           cascade 1
+                 %3945 = shadow[5] * %3926           cascade 2
+                 %3954 = shadow[6] * %3926           cascade 3
+                 %3963 = shadow[7] * %3926           cascade 4
+                 -> array -> loop -> S_sampler2DShadow
+
+Five matrices, five cascades, and five 2048^2 `D16_UNORM` shadow maps
+(`#70`-`#74`) in the inventory. **B is the shadow lookup position.**
+
+`patch_fragment_invproj_eye` is called with `kCameraInvProjMember = 2` and
+nothing else. So the patch has been correcting **A**, the view vector, and
+leaving **B**, the shadow lookup, reading the centre camera's frame while
+`gl_FragCoord` and the depth buffer belong to the sheared eye.
+
+Scanned across all 385 dumped fragment modules on the real camera block
+(`set 1, binding 0` — a first attempt queried set 2 and returned a meaningless
+240):
+
+    load camera member 2 (M_invprojection)     : 236
+    load camera member 4 (M_invprojection_uj)  :   2   -> mod-0179, mod-0180
+
+236 against 2, which is why this never showed up in a coverage count. It also
+reproduces the member table already recorded in this document, which is what
+gave the corrected scan its credibility.
+
+### This reconciles every surviving fact
+
+* **Additive.** A misplaced shadow *removes* a light contribution from a
+  surface. That is a subtraction of a light, i.e. an additive difference — which
+  is what the fair equal-degrees-of-freedom fit measured on two separate
+  regions at two scales.
+* **Soft-edged.** The cascade loop applies a filter kernel; a shadow boundary is
+  not a hard geometric edge.
+* **Localised.** Only surfaces near a shadow boundary can change. Ordinary lit
+  geometry agrees to 1.5%.
+* **Follows the shear sign, not the layer.** The reconstruction error is `d`,
+  the eye offset, with opposite sign per eye and no reference to which array
+  layer the eye is stored in. Take 79's exact result.
+* **Immune to `X4VR_PROJ_INVPROJ`.** The knob corrects member 2. It moved the
+  wing from 46.25 to 46.27 — it fixed the view vector, which is nearly
+  invisible, and never touched the shadow.
+* **The magnitude is right.** 3.2 cm at 0.83 m is 36 px, one full disparity —
+  the number this document corrected itself on two sections ago.
+
+It also lands exactly where this project was warned it would: globally-applied
+shadows are what wrecked the earlier attempt at an X4 VR mod.
+
+## P90 — correcting `M_invprojection_uj` per eye removes the defect
+
+The fix is the correction already derived and already verified, applied to the
+member that feeds the shadows. `T(d)·M` is right for member 4 for the same
+reason it is right for member 2: both consume the identical
+`vec4(ndc.xy, depth, 1.0)`, both divide by `w`, and `Length(B)` being used as a
+camera range shows B is camera-relative like A.
+
+The two members are counted and logged **separately**, never as a total: 236 and
+0 sums to a healthy-looking 236, and that sum is precisely the broken state this
+whole chapter has been chasing.
+
+**P90: with member 4 corrected, `#57`'s per-eye difference collapses.**
+
+* Scored symmetrically as always — the blob ratio and `stereo_residual.py`'s
+  tail and area, both of which survive a polarity flip.
+* Take 82 baseline to beat: tile ratio `p1/p50/p99 = 0.662/1.016/4.078`,
+  14-15% of judged tiles flagged, blob `L1/L0 p10/p50/p90 = 0.82/1.33/28.91`.
+* **Confirmation looks like** the p99 falling toward ~1.1 and the flagged
+  fraction collapsing toward the IPD=0 negative control's 0.0%.
+* **If it does not move**, the log must be read before anything else: a
+  `M_invprojection_uj — 0 modules corrected` line means the patch never
+  matched, which is a different failure from the mechanism being wrong, and the
+  two must not be confused. That is the whole reason the counter is separate.

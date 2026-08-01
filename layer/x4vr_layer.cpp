@@ -736,6 +736,8 @@ uint64_t g_comp_pipelines = 0;
 std::atomic<uint64_t> g_frag_patch_ok{0}, g_frag_patch_refused{0};
 // Task #22: deferred modules whose M_invprojection was corrected per eye.
 std::atomic<uint64_t> g_invproj_patched{0};
+// ...and M_invprojection_uj, the one the shadow cascades actually read.
+std::atomic<uint64_t> g_invproj_uj_patched{0};
 // Task #22 measurement only. Counts modules whose volumetric fog composite was
 // forced to a passthrough, to separate "the fog produces the difference between
 // the eyes" from "the fog carries a difference made upstream".
@@ -2375,6 +2377,15 @@ void bindless_report(const char *when) {
         X4VR_LOG("invproj %s: per-eye M_invprojection — %llu modules corrected "
                  "(offline: 244 of 409 eligible, 3 compute cannot be)",
                  when, (unsigned long long)g_invproj_patched.load());
+        // Printed on its own line, never folded into the total above. Offline,
+        // exactly 2 of 385 fragment modules load member 4 -- #179 and #180, the
+        // two shadowed deferred lights -- and that tiny number is the point:
+        // member 2 feeds the view vector, member 4 feeds the CSM lookup, so a
+        // run correcting 236 and 0 is the broken one and looks fine in a total.
+        X4VR_LOG("invproj %s: per-eye M_invprojection_uj — %llu modules "
+                 "corrected (offline: 2 of 385 fragment modules take it; these "
+                 "are the shadow cascades)",
+                 when, (unsigned long long)g_invproj_uj_patched.load());
         // Reported unconditionally, including the 0. "Fog still on" and "fog
         // disabled and it changed nothing" are opposite conclusions from the
         // same probe numbers, and a line that only appears when the knob fired
@@ -3256,6 +3267,21 @@ constexpr uint32_t kCameraSet = 1;
 constexpr uint32_t kCameraBinding = 0;
 constexpr uint32_t kCameraProjMember = 1;
 constexpr uint32_t kCameraInvProjMember = 2; // M_invprojection
+// M_invprojection_uj -- the *other* inverse projection, and the one that
+// mattered. Reading mod-0180 (the sun light with cascaded shadows) shows the
+// shader reconstructs position twice from the same vec4(ndc.xy, depth, 1):
+//
+//   A = member 2 * that, /w   -> used only for the view vector (specular)
+//   B = member 4 * that, /w   -> multiplied by the five CSM matrices and fed
+//                                to S_sampler2DShadow
+//
+// Correcting member 2 alone therefore fixed the term nobody can see and left
+// the shadow lookup reading the centre camera's frame while gl_FragCoord and
+// the depth buffer are the sheared eye's. That is a 3.2cm position error at
+// the shadow lookup -- 36px at 0.83m, one full disparity -- so a surface is
+// shadowed in one eye and lit in the other. Exactly two fragment modules load
+// this member, #179 and #180, and both also load member 2.
+constexpr uint32_t kCameraInvProjUjMember = 4; // M_invprojection_uj
 
 // X4VR_PROJ_INVPROJ: correct M_invprojection per eye in the deferred passes
 // (task #22). Separate from X4VR_PROJ_LIVE so the two can be bisected apart --
@@ -3442,6 +3468,16 @@ VkResult create_shader_module_inner(
                     dr)) {
                 frag_patched = true;
                 g_invproj_patched++;
+            }
+            // The same correction on member 4. Counted separately because the
+            // two are wildly different populations -- 236 modules take member 2
+            // and exactly 2 take member 4 -- so a single total would let a
+            // healthy-looking 236 hide a 0 here, which is the whole defect.
+            if (x4vr::spv::patch_fragment_invproj_eye(
+                    code, kCameraSet, kCameraBinding, kCameraInvProjUjMember,
+                    dl, dr)) {
+                frag_patched = true;
+                g_invproj_uj_patched++;
             }
         }
         // Coverage measured stage-agnostically, NOT from the lister above.
