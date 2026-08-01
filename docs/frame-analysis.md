@@ -9142,3 +9142,53 @@ answers it without any behavioural change.
 **P84: `rp #23`'s `#57` attachment is `CLEAR` or `DONT_CARE`, which puts the
 defect inside the MRT pass and rules `rp #31/#32` out.** If it is `LOAD`, the
 next step is `#31/#32` and not the G-buffer shader.
+
+## The polarity was backwards for thirteen takes
+
+Patola ran the **vanilla game**, unmodified, and loaded the same save at the
+same view. The frame that matches vanilla is the **bright** one — the right SBS
+frame, which is **layer 1**.
+
+So every reading in this document from take 64 onward has the sign wrong:
+
+* **Layer 1 (right eye) is correct.** It is not too bright; it is right.
+* **Layer 0 (left eye) is the defect.** It is too dark, and the "dark patches"
+  are spurious occlusion that vanilla does not have.
+
+The bisection numbers stand, only their interpretation flips. `#57` is still
+where the two layers part company; what happens there is that layer 0 *loses*
+brightness, by 1/1.686 = 0.59, not that layer 1 gains it.
+
+This also kills the shadow-map story a second time and more cleanly than the
+structural argument did. That account required the right eye to be sampling an
+empty shadow map and coming out wrongly lit. Vanilla says the right eye is the
+one that is correct, so there was never anything to explain on that side.
+
+### What it costs, and what it does not
+
+The eliminations survive. Every one of them was a symmetric test — a knob on
+against a knob off, scored on a ratio between the layers — and a ratio does not
+care which layer is named the defect. `patch_fragment_invproj_eye`, the present
+masking, the fullscreen shear, `X4VR_SHEAR_LIGHTS`, the mirror's shared-image
+handling: all still eliminated.
+
+What it costs is direction. The suspect list has been built around the mirror
+and the `index + 26653` path for thirteen takes, because that is the machinery
+unique to the right eye. **Layer 0 uses X4's own descriptors, unmodified —
+index + 0 — so the broken eye is the one running closest to stock.** Anything
+that explains the defect has to explain it on the path with the least
+interference, which rules out the entire family of "the mirror substituted the
+wrong thing" hypotheses by construction rather than one at a time.
+
+### The lesson, recorded rather than edited away
+
+Thirteen takes established *that* the layers differ and spent all of that effort
+deciding *why the brighter one was wrong*, without ever asking which one was
+right. The control that settled it costs one launch of an unmodified game and
+was available from the first day. `IPD=0` was kept as a negative control
+throughout and it was the wrong control: it proves the two layers can be made
+identical, not which of them matches the game.
+
+P84 is unaffected — `loadOp` decides between the MRT pass and `rp #31/#32`
+regardless of which layer is named the defect. But it is now a question about
+what layer 0 loses, not about what layer 1 gains.
