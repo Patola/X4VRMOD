@@ -1112,24 +1112,66 @@ const bool g_mirror_all_layer1 = [] {
 //
 // An image with an unmasked writer and no masked one is shared by construction,
 // so the verbatim copy is not a fallback for it -- it is the correct answer.
-bool layer1_is_written(VkImageView v) {
+//
+// Take 74 shipped this as a bool and the artifact did not move, because the
+// question is asked ~19.5 s before it can be answered. From that run's log:
+//
+//     646088.047  img #70..#74  2048x2048 fmt=124 usage=0xa6 DOUBLED
+//     646088.204  bindless mirror first present: ... 0 kept at layer 0
+//     646107.581  rp #35.0: 0 colour [] depth 124 -> MONO (depth-only/shadow)
+//     646107.581  fb  rp #35: 2048x2048 attachments=1 imgs=[#70]
+//
+// X4 creates the cascades and puts them in the heap long before it builds a
+// framebuffer naming them, and g_img_writers only learns anything at
+// framebuffer time. Every shadow slot written in that window took the
+// unknown-writers branch, got layer 1, and was never revisited -- the mirror
+// is written once and left. So the predicate was right and simply never ran on
+// the descriptors it was written for.
+//
+// Hence a tri-state: Unknown is recorded, not guessed at. The provisional
+// slots are repaired when the framebuffer finally says what the image is.
+enum class Layer1State { Written, Shared, Unknown };
+
+Layer1State layer1_state(VkImageView v, uint32_t *serial_out) {
     if (g_mirror_all_layer1)
-        return true;
+        return Layer1State::Written;
     std::lock_guard<std::mutex> lock(g_img_mu);
     auto it = g_views.find(v);
     if (it == g_views.end())
-        return true;
+        return Layer1State::Written;
     auto im = g_images.find(it->second.image);
     if (im == g_images.end())
-        return true;
+        return Layer1State::Written;
+    if (serial_out)
+        *serial_out = im->second.serial;
     auto w = g_img_writers.find(im->second.serial);
-    // Unknown writers means the framebuffers naming this image have not been
-    // seen yet. Keep the old behaviour there rather than silently making a
-    // genuinely per-eye image mono on the strength of missing information.
-    if (w == g_img_writers.end())
-        return true;
-    return !(w->second.masked.empty() && !w->second.unmasked.empty());
+    if (w == g_img_writers.end()) {
+        // An undoubled image has no layer 1 to get wrong: view_of_layer()
+        // returns null and the verbatim copy stands. Only a doubled image with
+        // no writers yet is genuinely undecided.
+        return im->second.doubled ? Layer1State::Unknown : Layer1State::Written;
+    }
+    return (w->second.masked.empty() && !w->second.unmasked.empty())
+               ? Layer1State::Shared
+               : Layer1State::Written;
 }
+
+// A mirror slot filled while the image's writers were still unknown, kept so
+// it can be rewritten verbatim once they are known.
+struct ProvisionalSlot {
+    VkDescriptorSet set;
+    uint32_t binding, element;
+    VkDescriptorType type;
+    VkDescriptorImageInfo info; // the original, pre-substitution
+};
+std::mutex g_prov_mu;
+std::unordered_map<uint32_t, std::vector<ProvisionalSlot>> g_mirror_provisional;
+uint64_t g_mirror_provisional_taken = 0, g_mirror_repaired = 0;
+
+const bool g_mirror_repair = [] {
+    const char *e = getenv("X4VR_MIRROR_REPAIR");
+    return !e || !*e || *e != '0'; // on unless explicitly disabled
+}();
 
 VkImageView view_of_layer(DeviceData *d, VkDevice device, VkImageView v,
                           uint32_t layer) {
@@ -1176,6 +1218,57 @@ VkImageView view_of_layer(DeviceData *d, VkDevice device, VkImageView v,
     // caller's layer invalidates the entry above.
     g_layer1_views[v] = Layer1View{repl, vi.image, layer};
     return repl;
+}
+
+// Put the verbatim view back into every mirror slot that was filled for this
+// image while its writers were still unknown.
+//
+// Called once, from framebuffer creation, at the moment the image is first
+// shown to be written by unmasked passes only. The mirror region is ours --
+// X4 never reads or writes past OFFSET -- so rewriting it needs no
+// synchronisation with the game's own descriptor traffic beyond the
+// update-after-bind guarantee the table is already created with.
+void repair_mirror_for_image(DeviceData *d, VkDevice device, uint32_t serial) {
+    std::vector<ProvisionalSlot> slots;
+    {
+        std::lock_guard<std::mutex> lock(g_prov_mu);
+        auto it = g_mirror_provisional.find(serial);
+        if (it == g_mirror_provisional.end())
+            return;
+        slots.swap(it->second);
+        g_mirror_provisional.erase(it);
+    }
+    if (slots.empty())
+        return;
+    std::vector<VkWriteDescriptorSet> writes;
+    writes.reserve(slots.size());
+    {
+        // A set whose layout we no longer know has been freed under us; its
+        // slots are not ours to write.
+        std::lock_guard<std::mutex> dlock(g_desc_mu);
+        for (const auto &s : slots) {
+            if (!g_ds_layout.count(s.set))
+                continue;
+            VkWriteDescriptorSet w{};
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet = s.set;
+            w.dstBinding = s.binding;
+            w.dstArrayElement = s.element;
+            w.descriptorCount = 1;
+            w.descriptorType = s.type;
+            w.pImageInfo = &s.info; // slots outlives the call
+            writes.push_back(w);
+        }
+    }
+    if (writes.empty())
+        return;
+    d->UpdateDescriptorSets(device, (uint32_t)writes.size(), writes.data(), 0,
+                            nullptr);
+    g_mirror_repaired += writes.size();
+    X4VR_LOG("bindless mirror: repaired %zu provisional slot(s) for img #%u — "
+             "its writers turned out to be unmasked-only, so view 1 must read "
+             "layer 0",
+             writes.size(), serial);
 }
 
 void mv_redirect_writes(DeviceData *d, VkDevice device, uint32_t writeCount,
@@ -1340,8 +1433,10 @@ void bindless_mirror_writes(
         for (uint32_t j = 0; j < w.descriptorCount; j++) {
             // Shared by construction -- only unmasked passes write it, so its
             // layer 1 is empty and substituting it is how the right eye lost
-            // its shadows. See layer1_is_written().
-            if (!layer1_is_written(infos[j].imageView)) {
+            // its shadows. See layer1_state().
+            uint32_t serial = 0;
+            const Layer1State st = layer1_state(infos[j].imageView, &serial);
+            if (st == Layer1State::Shared) {
                 g_mirror_shared++;
                 continue;
             }
@@ -1349,6 +1444,16 @@ void bindless_mirror_writes(
                 view_of_layer(d, device, infos[j].imageView, 1);
             if (l1 == VK_NULL_HANDLE)
                 continue; // undoubled: the verbatim copy is the right answer
+            if (st == Layer1State::Unknown && g_mirror_repair) {
+                // Recorded *before* the substitution, so the repair has the
+                // original view to put back.
+                std::lock_guard<std::mutex> plock(g_prov_mu);
+                g_mirror_provisional[serial].push_back(
+                    ProvisionalSlot{w.dstSet, w.dstBinding,
+                                    w.dstArrayElement + g_mirror_offset + j,
+                                    w.descriptorType, infos[j]});
+                g_mirror_provisional_taken++;
+            }
             infos[j].imageView = l1;
             g_mirror_layer1++;
         }
@@ -2135,6 +2240,24 @@ void bindless_report(const char *when) {
                  (unsigned long long)g_mirror_shared,
                  (unsigned long long)g_mirror_no_room,
                  g_mirror_collided ? " — DISABLED, see above" : "");
+        // The take-74 blind spot, now measurable. "taken" counts slots filled
+        // before the image's writers were knowable; "repaired" counts the ones
+        // later put back to layer 0. A large taken with a zero repaired means
+        // the race exists and the repair never fired -- a different failure
+        // from the race not existing at all, and the two must not read alike.
+        {
+            std::lock_guard<std::mutex> plock(g_prov_mu);
+            size_t pending = 0;
+            for (const auto &e : g_mirror_provisional)
+                pending += e.second.size();
+            X4VR_LOG("bindless mirror %s: %llu slot(s) filled on unknown "
+                     "writers, %llu repaired to layer 0, %zu still provisional "
+                     "across %zu image(s)%s",
+                     when, (unsigned long long)g_mirror_provisional_taken,
+                     (unsigned long long)g_mirror_repaired, pending,
+                     g_mirror_provisional.size(),
+                     g_mirror_repair ? "" : " — REPAIR DISABLED");
+        }
         for (const auto &e : g_dsl_sets)
             X4VR_LOG("bindless mirror %s: layout #%u — %u set(s) allocated",
                      when, e.first, e.second);
@@ -2783,18 +2906,41 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
     // Who writes each doubled image, masked or not. Every pass, not just the
     // masked ones -- the whole point is to find images that get both.
     if (r == VK_SUCCESS && g_mv && g_active) {
-        std::lock_guard<std::mutex> lock(g_img_mu);
-        for (uint32_t i = 0; i < ci->attachmentCount; i++) {
-            auto v = g_views.find(ci->pAttachments[i]);
-            if (v == g_views.end())
-                continue;
-            auto im = g_images.find(v->second.image);
-            if (im == g_images.end() || !im->second.doubled)
-                continue;
-            auto &k = g_img_writers[im->second.serial];
-            auto &side = masked ? k.masked : k.unmasked;
-            if (std::find(side.begin(), side.end(), serial) == side.end())
-                side.push_back(serial);
+        // This is also the first moment the mirror can be told the truth about
+        // an image. Collect the newly-shared ones under the lock and repair
+        // them outside it: repair takes g_prov_mu and g_desc_mu, and taking
+        // those under g_img_mu would invert the order the mirror path uses.
+        std::vector<uint32_t> now_shared, now_per_eye;
+        {
+            std::lock_guard<std::mutex> lock(g_img_mu);
+            for (uint32_t i = 0; i < ci->attachmentCount; i++) {
+                auto v = g_views.find(ci->pAttachments[i]);
+                if (v == g_views.end())
+                    continue;
+                auto im = g_images.find(v->second.image);
+                if (im == g_images.end() || !im->second.doubled)
+                    continue;
+                auto &k = g_img_writers[im->second.serial];
+                auto &side = masked ? k.masked : k.unmasked;
+                if (std::find(side.begin(), side.end(), serial) == side.end())
+                    side.push_back(serial);
+                if (k.masked.empty() && !k.unmasked.empty())
+                    now_shared.push_back(im->second.serial);
+                else if (!k.masked.empty())
+                    now_per_eye.push_back(im->second.serial);
+            }
+        }
+        if (g_mirror_repair) {
+            for (uint32_t s : now_shared)
+                repair_mirror_for_image(d, device, s);
+            // A masked writer confirms the guess the mirror already made, so
+            // the record is just dead weight from here on. Dropping it also
+            // keeps the map from growing for the lifetime of the process.
+            if (!now_per_eye.empty()) {
+                std::lock_guard<std::mutex> plock(g_prov_mu);
+                for (uint32_t s : now_per_eye)
+                    g_mirror_provisional.erase(s);
+            }
         }
     }
 

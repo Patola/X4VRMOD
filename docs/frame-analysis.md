@@ -8835,3 +8835,89 @@ how they index the heap — in particular whether any index reaches the mirror a
 a slot X4 never wrote. That is now answerable offline against
 `/tmp/x4vr-shaders-take74`, and it should be answered before another run is
 spent.
+
+## The shaders answered it: the predicate was right and never ran
+
+Read offline against `/tmp/x4vr-shaders-take74` and its matching
+`/tmp/x4vr-take74.log`. No run was spent.
+
+### Shadow maps are sampled through binding 5
+
+`tools/shadow_scan.py` resolves the **Fragment** entry point of each dumped
+module, follows `OpFunctionCall` transitively, and walks each sample
+instruction back through `OpSampledImage` / `OpLoad` / `OpAccessChain` to the
+descriptor it came from. Scanning the fragment stage only matters: X4 ships
+combined vertex+fragment modules, and a whole-module scan answers a different
+question — the trap recorded for `classify()` at take 60.
+
+    385 fragment modules scanned, 56 sample a depth image
+    every one of them: set 0 binding 5, OpImageSampleDrefImplicitLod
+
+Binding 5 is exactly where the mirror applies `index + 26653` for view 1. So
+the right eye's shadow lookups do go through the mirror, and the question P81
+asked was the right question.
+
+### The five images, and the 19.5-second window
+
+The cascades are unmistakable in take 74's log:
+
+    646088.047  img #70..#74: 2048x2048x1 layers=1 mips=1 samples=1
+                              fmt=124 usage=0xa6 DOUBLED
+
+`fmt=124` is `D32_SFLOAT`; `usage=0xa6` is
+`INPUT_ATTACHMENT|DEPTH_STENCIL_ATTACHMENT|SAMPLED|TRANSFER_DST`. Five of them,
+all doubled, and the writer inventory says they are written by mono passes
+only:
+
+    mv final: img #74 writers — masked rp [] unmasked rp [43]
+    mv final: img #73 writers — masked rp [] unmasked rp [41]
+    mv final: img #72 writers — masked rp [] unmasked rp [39]
+    mv final: img #71 writers — masked rp [] unmasked rp [37]
+    mv final: img #70 writers — masked rp [] unmasked rp [35]
+
+(Read that with the anchor `writers — masked rp []`. Grepping `masked rp \[\]`
+matches `unmasked rp []` as a substring and reports all 42 images — the aliased
+first-match error, for the fifth time.)
+
+`layer1_is_written()` returns false for exactly this shape, which is why take 74
+shipped it. The timestamps say why it did not help:
+
+    646088.047  images created, DOUBLED
+    646088.204  bindless mirror first present: ... 0 kept at layer 0 as shared
+    646107.581  rp #35.0: 0 colour [] depth 124 final=-1 -> MONO (depth-only/shadow)
+    646107.581  fb  rp #35: 2048x2048 layers=1 attachments=1 imgs=[#70]
+
+X4 creates the cascades and puts them in the bindless heap **19.5 seconds
+before** it builds a framebuffer naming them, and `g_img_writers` learns
+nothing until framebuffer time. Every shadow slot written in that window took
+the unknown-writers branch, got layer 1, and was never revisited — the heap is
+written once and left. The predicate was correct and simply never ran on the
+descriptors it was written for. This is the same class as take 68's
+`subpass_is_present`: not a wrong rule, a rule consulted against information
+that was not there yet.
+
+It also explains the sign. Under reverse-Z an unwritten depth image reads as the
+far plane, so nothing occludes anything and the surface comes out fully lit —
+and the right eye is the *brighter* one, 70.7 against 46.2.
+
+### P82 — the repair
+
+Committed before the run that tests it.
+
+`layer1_is_written()` becomes a tri-state `layer1_state()`; a slot filled while
+the writers are unknown is **recorded**, and `repair_mirror_for_image()` puts
+the verbatim view back the moment a framebuffer shows the image to be
+unmasked-only. `X4VR_MIRROR_REPAIR=0` disables the repair for an A/B in one
+build.
+
+**P82: the wing's right/left ratio falls from 1.53x to about 1.0, and the log
+reports a non-zero repaired count for images #70-#74.**
+
+What refutes it, and how each reads differently in the log:
+
+* `slot(s) filled on unknown writers` is **0** — the race does not exist and
+  this whole account is wrong.
+* filled is large but `repaired` is **0** — the race exists, the repair never
+  fired; look at the framebuffer path, not the predicate.
+* both non-zero and the wing still reads 1.53x — the empty shadow map is real
+  but is not what Patola is seeing, and the shadow story is finally spent.
