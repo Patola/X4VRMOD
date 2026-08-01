@@ -1638,7 +1638,24 @@ bool subpass_is_all_ldr(const CreateInfo *ci, const Subpass &sp) {
 
 template <typename CreateInfo, typename Subpass>
 bool subpass_is_present(const CreateInfo *ci, const Subpass &sp) {
-    if (sp.colorAttachmentCount != 1 || sp.pDepthStencilAttachment)
+    if (sp.colorAttachmentCount != 1)
+        return false;
+    // "Has no depth" is a statement about the attachment index, not about the
+    // pointer. A subpass may carry a perfectly valid pDepthStencilAttachment
+    // whose attachment is VK_ATTACHMENT_UNUSED, and X4's rp #7 does exactly
+    // that: the inventory printed it as `1 colour [44L] no-depth` -- because
+    // the inventory reads the index -- while this predicate read the pointer
+    // and threw it out. Same field, two readings, opposite answers, on the one
+    // pass that decides whether the second eye gets the UI.
+    //
+    // The cost of the disagreement was take 68: the presented eye images
+    // #50-#53 and #1-#4 came back `MIXED WRITERS -- layer 1 misses the
+    // unmasked ones`, so everything rp #7 draws landed in the left eye and
+    // nowhere else. The probe samples after rp #0 and so never saw it, which
+    // is why two tools in a row measured this frame and reported clean stereo
+    // while the screen showed dark patches in one eye.
+    if (sp.pDepthStencilAttachment &&
+        sp.pDepthStencilAttachment->attachment != VK_ATTACHMENT_UNUSED)
         return false;
     const uint32_t a = sp.pColorAttachments[0].attachment;
     if (a == VK_ATTACHMENT_UNUSED || a >= ci->attachmentCount)

@@ -82,17 +82,23 @@ def ncc(u, v):
     return float((u * v).sum() / d) if d > 1e-6 else 0.0
 
 
-def disparity_field(a, b, tile, maxshift):
-    """Best horizontal shift per tile, by normalized cross-correlation.
+def disparity_field(a, b, tile, lo, hi):
+    """Best horizontal shift per tile, by normalized cross-correlation,
+    searched over `lo..hi` only.
 
     NCC rather than absolute difference: NCC is invariant to an affine
     intensity change, so a surface one eye lights twice as brightly still
     correlates with itself and gets a correct shift, instead of being thrown
     out -- which is precisely the tile this tool exists to find.
 
-    Tiles are searched over the whole frame. The previous version skipped
-    everything within `maxshift` of either edge, which on a 1408-wide image
-    with a 400px search left only the middle 39% under examination.
+    Tiles are searched over the whole frame. An earlier version skipped
+    everything within the search radius of either edge, which on a 1408-wide
+    image with a 400px search left only the middle 39% under examination.
+
+    The `lo..hi` window is what keeps NCC honest. A starship hull is a
+    repeating texture, so a tile will happily correlate at 0.8 against a
+    *different* panel 200px away. `main` derives the window from the geometry
+    (see `plausible_window`) and every match outside it is a false one.
     """
     h, w = a.shape
     ny, nx = h // tile, w // tile
@@ -104,7 +110,7 @@ def disparity_field(a, b, tile, maxshift):
             ref = b[y : y + tile, x : x + tile]
             if ref.std() < 3:
                 continue  # flat: NCC is noise here, let a neighbour decide
-            for s in range(-maxshift, maxshift + 1, 2):
+            for s in range(lo, hi + 1, 2):
                 xs = x - s
                 if xs < 0 or xs + tile > w:
                     continue
@@ -112,6 +118,31 @@ def disparity_field(a, b, tile, maxshift):
                 if c > cc[iy, ix]:
                     cc[iy, ix], sh[iy, ix] = c, s
     return sh, cc
+
+
+def plausible_window(sh, cc, dmax, good=0.7):
+    """The range of horizontal shifts the stereo geometry can actually produce.
+
+    X4's projection is reverse-Z infinite-far, so screen disparity is
+    `W/2 * sx * d / z_v` px -- monotonic in depth, bounded by the near plane,
+    and **the same sign for every tile in the frame**. With the layer's logged
+    `ipd=0.064 sx=1.3333 near=0.1` at 1408px that is 30.04/z_v px, so 0 at
+    infinity and 300px at the near plane, never negative and never positive,
+    only one of the two.
+
+    Which one depends on which array layer is the left eye, so rather than
+    assume it, take the sign from the confidently-matched tiles: a majority of
+    the frame does match correctly even before constraining. At IPD=0 the
+    median is 0, the window collapses to {0}, and the negative control still
+    reads 0.0% -- which is the check that this is a geometric constraint and
+    not a thumb on the scale.
+    """
+    m = float(np.median(sh[cc >= good])) if (cc >= good).any() else 0.0
+    if m > 1:
+        return 0, dmax
+    if m < -1:
+        return -dmax, 0
+    return 0, 0
 
 
 def propagate(sh, cc, good=0.7):
@@ -139,12 +170,37 @@ def propagate(sh, cc, good=0.7):
     return out, rel
 
 
+def brightness_ratio(a, b, shp, tile, min_level):
+    """Per-tile right/left brightness, each tile compared at its own shift."""
+    h, w = a.shape
+    ratio = np.full(shp.shape, np.nan, np.float32)
+    for iy in range(shp.shape[0]):
+        for ix in range(shp.shape[1]):
+            y, x = iy * tile, ix * tile
+            xs = min(max(x - int(shp[iy, ix]), 0), w - tile)
+            m0 = a[y : y + tile, xs : xs + tile].mean()
+            m1 = b[y : y + tile, x : x + tile].mean()
+            if max(m0, m1) >= min_level:
+                ratio[iy, ix] = m1 / max(m0, 1e-6)
+    return ratio
+
+
+def defect_fraction(ratio, rel):
+    """Fraction of judged tiles that are both differently lit and confidently
+    matched -- the number the verdict rests on."""
+    ok = ~np.isnan(ratio)
+    off = (ratio > RATIO_FLAG) | (ratio < 1.0 / RATIO_FLAG)
+    return 100.0 * (ok & off & rel).sum() / max(ok.sum(), 1)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("layer0")
     ap.add_argument("layer1")
     ap.add_argument("--tile", type=int, default=64)
-    ap.add_argument("--max", type=int, default=400, dest="maxshift")
+    # 320px is just past the 300px the near plane allows at the logged
+    # ipd/sx/near. Raising it only admits more false matches.
+    ap.add_argument("--max", type=int, default=320, dest="maxshift")
     ap.add_argument("--min-level", type=float, default=8.0,
                     help="ignore tiles darker than this in both eyes")
     ap.add_argument("--png", metavar="PREFIX", help="write a ratio map")
@@ -157,30 +213,27 @@ def main():
     h, w = a.shape
     T = args.tile
 
-    sh, cc = disparity_field(a, b, T, args.maxshift)
+    # Pass 1 only establishes which way the eyes are offset. Pass 2 is the
+    # measurement, searched over shifts the geometry can actually produce.
+    sh0, cc0 = disparity_field(a, b, T, -args.maxshift, args.maxshift)
+    lo, hi = plausible_window(sh0, cc0, args.maxshift)
+    sh, cc = disparity_field(a, b, T, lo, hi)
     shp, rel = propagate(sh, cc)
 
-    ratio = np.full(sh.shape, np.nan, np.float32)
-    lvl = np.zeros(sh.shape, np.float32)
-    for iy in range(sh.shape[0]):
-        for ix in range(sh.shape[1]):
-            y, x = iy * T, ix * T
-            s = int(shp[iy, ix])
-            xs = min(max(x - s, 0), w - T)
-            m0 = a[y : y + T, xs : xs + T].mean()
-            m1 = b[y : y + T, x : x + T].mean()
-            lvl[iy, ix] = max(m0, m1)
-            if max(m0, m1) >= args.min_level:
-                ratio[iy, ix] = m1 / max(m0, 1e-6)
+    ratio = brightness_ratio(a, b, shp, T, args.min_level)
+    shp0, rel0 = propagate(sh0, cc0)
+    loose = defect_fraction(brightness_ratio(a, b, shp0, T, args.min_level), rel0)
 
     ok = ~np.isnan(ratio)
     if not ok.any():
         sys.exit("no tile bright enough to judge -- lower --min-level")
     r = ratio[ok]
     print(f"tiles          {int(ok.sum())} judged of {sh.size} "
-          f"({T}px, search +-{args.maxshift}px, whole frame)")
+          f"({T}px, whole frame, shifts {lo:+d}..{hi:+d}px)")
     print(f"               {int(rel.sum())} matched confidently (NCC>=0.7), "
           f"the rest took a neighbour's disparity")
+    print(f"               unconstrained +-{args.maxshift}px search would say "
+          f"{loose:.1f}% -- the excess is repeating hull matching itself")
     print(f"whole-frame    l1/l0 = {b.mean() / max(a.mean(), 1e-9):.4f}   "
           "<- the probe's number; not a verdict")
     print(f"disparity      p5/p50/p95 = {np.percentile(shp, 5):.0f}/"

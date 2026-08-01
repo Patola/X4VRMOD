@@ -8059,3 +8059,160 @@ effect**: `l1/l0` (whole-frame mean), and two versions of `stereo_residual.py`
 average meant to find them, plus an edge exclusion that examined only the middle
 39% of the width). Report **tail and affected area**, never a bare median, and
 keep a negative control.
+
+## Take 68 — P74 refuted, and the defect was never in the buffer I was measuring
+
+The run: take 67's command with `X4VR_PROJ_INVPROJ` dropped. The knob is
+confirmed off from the log — `invproj final: ... 0 modules corrected`, against
+take 67's `236 modules corrected`.
+
+| | take 67 (patch on) | take 68 (patch off) |
+|---|---|---|
+| lit differently **and** confidently matched | 9.9% | 9.4% |
+| flagged >1.25x | 24.6% | 24.5% |
+| whole-frame `l1/l0` | 1.0762 | 1.0925 |
+
+Removing `patch_fragment_invproj_eye` did nothing. **P74 is refuted and the
+patch is exonerated**, per the falsification condition committed before the run.
+
+### The detector was matching surfaces that cannot correspond
+
+The offender lists carried shifts of `+188px`, `+250px`, `+294px`. Those are
+geometrically impossible. X4's projection is reverse-Z infinite-far, so screen
+disparity is `W/2 * sx * d / z_v` — monotonic in depth, bounded by the near
+plane, and **the same sign for every tile in the frame**. At the logged
+`ipd=0.064 sx=1.3333 near=0.1` and 1408px that is `30.04/z_v` px: zero at
+infinity, 300px at the near plane, never both signs. The empirical median is
+−44px, so every real match lies in `[−300, 0]`.
+
+A starship hull is a repeating texture and will correlate at 0.8 against a
+different panel 200px away. `stereo_residual.py` now derives the search window
+from the geometry (`plausible_window`) instead of searching ±400px, and prints
+what the unconstrained search would have said. The negative control still reads
+**0.0%**, which is the check that this is a geometric constraint and not a thumb
+on the scale. Constrained: take 67 **7.8%**, take 68 **8.5%** — P74 refuted
+either way.
+
+This is the fourth time a number here came from ranking a list and reading the
+top of it without checking what the entries meant.
+
+### P75 — a per-eye exposure difference — refuted offline, no run spent
+
+`l1/l0 = 1.0925` says the left eye is 9% darker, and Patola's report was
+"darker on the left frame". If one eye were tonemapped at a different exposure,
+then `right = f(left)` for a single curve across the whole frame. Measured over
+1009 confidently-matched tiles, binned by level:
+
+    left level    n     ratio          left level     n     ratio
+       0-  2    112     1.017            32- 64     216     1.037
+       2-  4     80     1.001            64- 96     119     1.011
+       4-  8    103     0.999            96-128      58     0.969
+       8- 16    137     0.990           128-160      45     1.000
+      16- 32    123     1.065           160-200      16     1.016
+
+Flat. Best single global gain **1.0025**. There is no exposure difference; the
+9% whole-frame lift is content moving in at the frame edge — the retired `l1/l0`
+story, confirmed quantitatively on the presented image this time.
+
+### On image #52 the stereo is clean, and that is the clue
+
+Residual after alignment, against how fast disparity varies inside the tile:
+
+    disparity spread     n     median eye disagreement
+        0- 4 px        220              0.3%
+        4- 8 px        147              1.0%
+        8-16 px         68              1.5%
+       16-32 px         77              1.5%
+       32+  px        497              4.8%
+
+The disagreement is a pure function of the disparity, not of the surface. Where
+the two eyes see the same surface at the same depth they agree to **0.3–0.4%**.
+That is correct stereo plus tile misalignment, and it is the same "no defect"
+answer two tools gave before — but this time it is a clue, because the screen
+disagrees with it. Something happens to this image after the probe reads it.
+
+### The log had been saying it since take 43
+
+    mv final: img #52 writers — masked rp [0] unmasked rp [7]
+    mv final: img #52 MIXED WRITERS — layer 1 misses the unmasked ones
+
+All eight presented eye images (`#1–#4`, `#50–#53`) have mixed writers, and they
+are the only images that do. `rp #0` is masked and writes both layers — that is
+the clean stereo measured above. `rp #7` is unmasked with `layers=1`, so it
+writes layer 0 and nothing else. **Everything it draws lands in the left eye and
+is absent from the right.** Left eye, extra content, view-dependent, patchy:
+Patola's description, exactly.
+
+And the probe line says where it was read: `wrote ...-layer{0,1}.ppm (fmt 44,
+**after rp #0**, DIFFER)`. The dumps have never contained rp #7's output.
+
+**The wrong turn:** this file already said `rp #7` was "ruled out for *this*
+symptom by the signed-difference image". That ruling-out was invalid — it looked
+for rp #7's footprint in a buffer sampled before rp #7 runs. Recorded rather
+than edited away.
+
+### Root cause: one field, two readings
+
+Sorting the inventory for the passes that write these images gives five
+byte-for-byte identical lines, one masked and four not:
+
+    rp #0.0:  1 colour [44L] no-depth final=2 -> MONO (all-LDR/UI) +MASKED(present) +PRESENT-CAND
+    rp #1.0:  1 colour [44L] no-depth final=2 -> MONO (all-LDR/UI)
+    rp #4.0:  1 colour [44L] no-depth final=2 -> MONO (all-LDR/UI)
+    rp #7.0:  1 colour [44L] no-depth final=2 -> MONO (all-LDR/UI)
+    rp #10.0: 1 colour [44L] no-depth final=2 -> MONO (all-LDR/UI)
+
+Identical inputs cannot produce different verdicts, so the predicate reads a
+field the inventory does not print. It does:
+
+* the inventory decides "no-depth" from `pDepthStencilAttachment->attachment`;
+* `subpass_is_present()` decided it from `pDepthStencilAttachment != nullptr`.
+
+A subpass may carry a valid depth pointer whose attachment is
+`VK_ATTACHMENT_UNUSED`. X4's `rp #1/#4/#7/#10` do; `rp #0` does not. Given
+`colorAttachmentCount == 1` and format 44 LDR, that is the only remaining way
+for the log to say "no-depth" while the predicate returns false — proven from
+the log with no run.
+
+This also explains the instability recorded at take 43: "the same command
+produced 3 candidates in take 33 and 6 in take 43". Candidacy depended on
+whether X4 happened to hand a null or an UNUSED depth pointer.
+
+The fix tests the index, like the inventory does.
+
+### P76 — the exclusive dark patches are rp #7, and masking it removes them
+
+Falsifiable, and scoreable from the log before Patola judges anything:
+
+1. `rp #1.0/#4.0/#7.0/#10.0` gain `+MASKED(present) +PRESENT-CAND`;
+2. `mv final: img #52 writers — masked rp [0,7] unmasked rp []`;
+3. **no `MIXED WRITERS` line anywhere in the log**;
+4. then, and only then, Patola's eye: the dark areas that appear in one frame
+   only are gone.
+
+    X4VR_TAKE=69-MASKPRESENT-FIX X4VR_STEREO=1 X4VR_IPD=0.064
+    X4VR_BINDLESS_PATCH=1 X4VR_BINDLESS_MIRROR=1 X4VR_RES=1408x1408
+    X4VR_GAMESCOPE=1 X4VR_SBS=1 X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1
+    X4VR_MV=1 X4VR_MASK_PRESENT=1 X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1
+    X4VR_PROJ_SX=1.3333 X4VR_PROJ_LIVE=1 X4VR_MV_DUMP=/tmp/x4vr-t69
+    X4VR_MV_DUMP_IMG=52 X4VR_LOG=/tmp/x4vr-take69.log ./launch/x4vr-launch.sh
+
+Take 68's command unchanged — the only difference is the rebuilt layer. No new
+knob; `X4VR_MASK_PRESENT=1` was already on and was already meant to do this.
+
+**If checks 1–3 pass and Patola still sees the patches**, rp #7 is genuinely
+exonerated this time and the next suspect is the SbsCompositor's own copy path,
+not another knob. **If 1–3 fail**, the depth pointer was not the discriminator
+and the predicate needs the actual differing field printed before anything else
+is tried.
+
+Watch for two side effects: four extra masked fullscreen passes cost frame time
+(performance is king), and these are the UI passes, so the clipped logo of
+task #21 may move.
+
+### What the probe still cannot see
+
+The dump point is "after rp #0", which is not the end of the frame. Any pass
+writing a presented eye image after that is invisible to every number in this
+file. That is a property of the instrument, not of the frame, and it is why the
+verdict on take 69 leans on the log's writer lines rather than on a PPM.
