@@ -171,21 +171,49 @@ inline void emit_n(std::vector<uint32_t> &dst, uint32_t op,
 /// `M_worldviewprojection`; applying it to a light-space shadow pass would be
 /// simply wrong (there, clip z is not the constant near plane the derivation
 /// assumes).
-inline Kind classify(const std::vector<uint32_t> &code) {
+/// `wide_camera` additionally counts geometry positioned by the **camera**
+/// rather than by a per-object matrix: a module with no set-3 block at all,
+/// whose *vertex stage* reads `M_view`, `M_projection`, `M_viewprojection` or
+/// `M_viewinverse` from the camera block at set 1, binding 0.
+///
+/// That is what X4's instanced deferred light volumes are (`mod-0207`:
+/// `IO_center`, `IO_radius`, `IO_lightcolor`, six instance locations, no set 3).
+/// Without it they draw unsheared while the geometry they light is sheared, and
+/// the light lands on the wrong pixels in view 1 — see task #22 and P70.
+///
+/// **The camera check is restricted to the vertex entry point's function, and
+/// that restriction is load-bearing.** 247 of X4's 409 modules read
+/// `M_invprojection` in their *fragment* stage, and X4 ships combined modules,
+/// so a whole-module scan would classify almost everything World. The set-3
+/// check below is deliberately left scanning the whole module: it has always
+/// done so, and 0 of 409 modules differ between the two readings, so narrowing
+/// it now would be an unmeasured change riding along with a measured one.
+///
+/// Measured over take 61's 397 dumps: +18 modules, of which 6 are in the
+/// lighting passes, 0 are fullscreen, and 0 are bound to a present pass. Two
+/// (203, 225) are bound to shadow passes and are safe only because the
+/// pass-level MONO gate substitutes the unsheared twin for depth-only passes.
+inline Kind classify(const std::vector<uint32_t> &code,
+                     bool wide_camera = false) {
     std::vector<Inst> insts;
     if (!iterate(code, insts))
         return Kind::NotVertex;
 
+    constexpr uint32_t kDecorationBinding = 33u;
     bool vertex = false;
+    uint32_t vert_fn = 0;
     std::unordered_map<uint32_t, uint32_t> const_val; // id -> literal value
     std::vector<uint32_t> set3_vars;
+    std::unordered_set<uint32_t> set1_vars, bind0_vars;
     // Pass 1: entry stage, integer constants, and set-3 variables.
     for (const Inst &in : insts) {
         const uint32_t *w = &code[in.start];
         switch (in.op) {
         case OpEntryPoint:
-            if (in.len >= 3 && w[1] == ExecutionModelVertex)
+            if (in.len >= 3 && w[1] == ExecutionModelVertex) {
                 vertex = true;
+                vert_fn = w[2];
+            }
             break;
         case OpConstant:
             if (in.len >= 4)
@@ -194,6 +222,10 @@ inline Kind classify(const std::vector<uint32_t> &code) {
         case OpDecorate:
             if (in.len >= 4 && w[2] == DecorationDescriptorSet && w[3] == 3)
                 set3_vars.push_back(w[1]);
+            if (in.len >= 4 && w[2] == DecorationDescriptorSet && w[3] == 1)
+                set1_vars.insert(w[1]);
+            if (in.len >= 4 && w[2] == kDecorationBinding && w[3] == 0)
+                bind0_vars.insert(w[1]);
             break;
         default:
             break;
@@ -201,8 +233,38 @@ inline Kind classify(const std::vector<uint32_t> &code) {
     }
     if (!vertex)
         return Kind::NotVertex;
-    if (set3_vars.empty())
+    if (set3_vars.empty()) {
+        if (!wide_camera)
+            return Kind::UI;
+        // Every variable at (set 1, binding 0), not the first: X4 declares the
+        // camera block once per stage and aliases two variables onto the one
+        // binding. First-match here would read the fragment stage's variable
+        // and miss the vertex stage's entirely -- take forty-eight's bug, which
+        // has now cost this project three separate times.
+        std::unordered_set<uint32_t> cam_vars;
+        for (uint32_t v : set1_vars)
+            if (bind0_vars.count(v))
+                cam_vars.insert(v);
+        if (cam_vars.empty())
+            return Kind::UI;
+        bool in_vert = false;
+        for (const Inst &in : insts) {
+            const uint32_t *w = &code[in.start];
+            if (in.op == OpFunction && in.len >= 3)
+                in_vert = (w[2] == vert_fn);
+            else if (in.op == OpFunctionEnd)
+                in_vert = false;
+            else if (in_vert && in.op == OpAccessChain && in.len >= 5 &&
+                     cam_vars.count(w[3])) {
+                auto it = const_val.find(w[4]); // first index = struct member
+                if (it != const_val.end() &&
+                    (it->second == 0 || it->second == 1 || it->second == 7 ||
+                     it->second == 8))
+                    return Kind::World;
+            }
+        }
         return Kind::UI;
+    }
 
     // Pass 2: does anything index member 0 of a set-3 block?
     for (const Inst &in : insts) {

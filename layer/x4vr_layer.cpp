@@ -3144,7 +3144,15 @@ VkResult create_shader_module_inner(
     if (frag_patched_out)
         *frag_patched_out = frag_patched;
 
-    const x4vr::spv::Kind kind = x4vr::spv::classify(code);
+    // Task #22 / P70: also shear geometry positioned by the camera rather than
+    // by a per-object matrix -- X4's instanced deferred light volumes. Default
+    // off so the current known-good behaviour is what runs unless a measurement
+    // asks for the other one; a state is code *and* knobs.
+    static const bool wide_camera = [] {
+        const char *s = getenv("X4VR_SHEAR_LIGHTS");
+        return s && *s && *s != '0';
+    }();
+    const x4vr::spv::Kind kind = x4vr::spv::classify(code, wide_camera);
     if (kind == x4vr::spv::Kind::NotVertex) {
         if (!frag_patched)
             return d->CreateShaderModule(device, ci, ac, out);

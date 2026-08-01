@@ -158,6 +158,25 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    // Reports both readings of the World predicate for one module, so a test
+    // can pin which modules the widened rule newly catches -- and, just as
+    // importantly, which it must not.
+    if (strcmp(argv[1], "classify") == 0) {
+        std::vector<uint32_t> code = load_spv(argv[2]);
+        if (code.empty()) {
+            printf("FAIL=load\n");
+            return 1;
+        }
+        auto name = [](x4vr::spv::Kind k) {
+            return k == x4vr::spv::Kind::World  ? "World"
+                   : k == x4vr::spv::Kind::UI   ? "UI"
+                                                : "NotVertex";
+        };
+        printf("NARROW=%s WIDE=%s\n", name(x4vr::spv::classify(code, false)),
+               name(x4vr::spv::classify(code, true)));
+        return 0;
+    }
+
     if (strcmp(argv[1], "list") == 0) {
         std::vector<uint32_t> code = load_spv(argv[2]);
         if (code.empty()) {

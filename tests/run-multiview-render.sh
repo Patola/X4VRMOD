@@ -1055,4 +1055,33 @@ fi
 
 echo
 if (( fails )); then echo "$fails case(s) failed"; exit 1; fi
+# --- the widened World predicate (task #22 / P70) ---------------------------
+# Pins both readings against committed bytes. The narrow rule must be unchanged
+# by the widening -- a module that was World stays World -- and the widening
+# must catch camera-positioned geometry without catching a fullscreen triangle,
+# which is what the UI is and what the take 33 logo regression was.
+cls_case() {
+    local label="$1" want_n="$2" want_w="$3" shader="$4"
+    local out gn gw
+    out=$("$PATCHER" classify "$BUILD/tests/$shader" 2>&1)
+    gn=$(sed -n 's/.*NARROW=\([A-Za-z]*\).*/\1/p' <<<"$out")
+    gw=$(sed -n 's/.*WIDE=\([A-Za-z]*\).*/\1/p' <<<"$out")
+    if [[ "$gn" == "$want_n" && "$gw" == "$want_w" ]]; then
+        printf 'ok   %-38s narrow=%s wide=%s\n' "$label" "$gn" "$gw"
+    else
+        printf 'FAIL %-38s want narrow=%s wide=%s, got narrow=%s wide=%s\n' \
+            "$label" "$want_n" "$want_w" "${gn:-?}" "${gw:-?}"
+        fails=$((fails + 1))
+    fi
+}
+# Reads M_projection (member 1) from the camera block at set 1 binding 0 and has
+# no set-3 block: the shape of an instanced light volume. Narrow calls it UI --
+# which is the defect -- and the widening must call it World.
+cls_case "classify: camera-positioned is World"  UI    World sample_light_volume.vert.spv
+# A fullscreen triangle takes no camera matrix. It must stay UI under BOTH
+# readings, or the widening moves the HUD.
+cls_case "classify: fullscreen stays UI"         UI    UI    fullscreen.vert.spv
+# The widening must not disturb a fragment-only module's answer either.
+cls_case "classify: fragment-only unaffected"    NotVertex NotVertex sample_invproj.frag.spv
+
 echo "all cases passed"

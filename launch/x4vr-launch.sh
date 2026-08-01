@@ -180,6 +180,20 @@
 #                         shapes the fragment patch refuses.
 #                         Serials are per-run: a module number from one log may
 #                         only be opened in the dump directory of that same run.
+#   X4VR_SHEAR_LIGHTS=1   widen the World predicate to include geometry the
+#                         *camera* positions rather than a per-object matrix:
+#                         no set-3 block, and the vertex stage reads camera
+#                         member 0, 1, 7 or 8. That is what X4's instanced
+#                         deferred light volumes are (mod-0207: IO_center,
+#                         IO_radius, IO_lightcolor, six instance locations).
+#                         Without it they draw UNSHEARED while the geometry
+#                         they light is sheared, so the light lands on the
+#                         wrong pixels in view 1 -- task #22, P70.
+#                         Measured offline over 397 modules: +18 World, six of
+#                         them in the lighting passes, ZERO fullscreen and ZERO
+#                         present-pass modules, so it cannot move the HUD.
+#                         Default off: with it unset the predicate is
+#                         bit-identical to the known-good behaviour (320 World).
 #   X4VR_SBS_LAYERS=2     give the image X4 renders into a second array layer.
 #   X4VR_SBS_RIGHT_LAYER=1
 #                         take the right half of the composite from that
