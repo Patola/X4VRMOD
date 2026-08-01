@@ -9460,3 +9460,60 @@ light volumes, reclassified and therefore sheared.
 Confirm `world=312 ui=38` in the log before reading the wing, and score the
 crop and its p90 — never `l1/l0`, which is what voided this question the first
 time.
+
+## Take 81 — P88 refuted, and a look at the actual pixels
+
+    X4VR_TAKE=81-SHEARLIGHTS ... X4VR_SHEAR_LIGHTS=1 ...
+
+The knob fired — `[world=312 ui=38 stereo=312 live-sx=300 baked-sx=12]`, the
+sixteen camera-positioned light-volume modules reclassified and sheared — and
+the view matches take 80 at NCC +0.9978. The wing is **bit-identical**:
+
+    take 80 (off)  #57  L 27.99  R 47.18  1.686   p90 64.7/148.3
+    take 81 (on)   #57  L 27.99  R 47.18  1.686   p90 64.7/148.3
+
+**P88 refuted.** Take 64's conclusion was right after all, even though the
+measurement it rested on could not have justified it. Both readings are now on
+the record: the exclusion was void as an argument and correct as a result.
+
+### invproj has no coverage hole either
+
+Of `rp #23`'s 138 modules, the 38 outside the patch break down as 24 that
+declare the camera block and never chain it, 10 that use it but never member 2,
+and 4 with no camera block. **None** reaches member 2 through a shape the patch
+misses. The patch covers every module that could benefit, so take 70's null is
+a real null.
+
+### Correcting the magnitude argument
+
+Take 75's section dismissed the reconstruction error as "3.2 cm, below one
+shadow texel". That is true of the shadow *map* and irrelevant to screen-space
+alignment:
+
+    at z= 0.83 m: a 3.2 cm lateral error =  36.2 px
+    at z= 2.00 m:                           15.0 px
+    at z= 5.00 m:                            6.0 px
+
+36 px at 0.83 m is exactly the disparity the residual tool measures for this
+scene — an uncorrected `M_invprojection` displaces the lighting by one full
+disparity, not by a negligible amount. The dismissal was wrong; invproj is
+nonetheless refuted, on the empirical null and now on coverage as well.
+
+### What the pixels show
+
+`tools/stereo_residual.py` on `#57`: 14.4% of judged tiles differ by more than
+1.25x *while matching confidently* — same surface, same place, different
+brightness. The tail is two-sided, `p1/p50/p99 = 0.661/1.017/4.077`.
+
+Cropping the wing from both layers and stacking them is the first time this
+defect has been looked at rather than measured. The structure is identical in
+both eyes — every panel line, vent and seam in the same place — and the broad
+flat top face of the beam is uniformly darker in layer 0. It is a shading term
+missing from a large surface, not a displaced edge.
+
+An attempt to decide multiplicative-versus-additive on that face is **not**
+reported here: the patch aligned at NCC +0.3775, which means it was comparing
+different surfaces, and the ratio and difference statistics it produced are
+worthless. Locking disparity on a distinctive feature before comparing
+brightness is a rule this document already records, and it was broken one
+paragraph after being relied on. Redo it on a patch that aligns above 0.9.
