@@ -9021,3 +9021,49 @@ already; `#55`, `#59`, `#60`, `#61` are written by the same forward passes and
 are earlier. Dump those per layer and bisect. That names a pass instead of
 proposing a tenth mechanism, and takes 68 through 75 are what proposing
 mechanisms has been worth.
+
+### P83 — bisect the frame instead of proposing a tenth mechanism
+
+Committed before the run that tests it.
+
+`X4VR_MV_DUMP_IMG` now takes a **comma-separated list** and the six-dump cap is
+**per image**. This matters more than it sounds: serials are per-run, so `#57`
+from one take and `#59` from the next cannot be compared at all, and one image
+per run would need five runs of a moving scene to collect what one run collects
+at a single view.
+
+`write_ppm_rg()` adds `R16G16_SFLOAT`, which is what `#60` and `#61` are. The
+probe could always read them — `format_bpp()` has covered the format all along —
+so the only reason the G-buffer normals had never been looked at was the
+dumper, the same gap that once hid `#103`. They carry negative values, so they
+are written through the signed analogue of the existing tone map,
+`0.5 + 0.5*v/(1+|v|)`: monotonic over the whole real line, zero at mid-grey,
+nothing clipped.
+
+The chain to dump, earliest to latest, with each image's masked writers:
+
+    #61  fmt 83  rg16f   rp [13,17,22,24,23,25,44,50,53]   G-buffer
+    #60  fmt 83  rg16f   rp [13,17,22,24,23,25,44,50,53]   G-buffer
+    #59  fmt 97  hdr     rp [13,17,22,24,23,25,44,50,53]
+    #57  fmt 97  hdr     rp [24,23,25,31,32,53]            known to carry it
+    #65  fmt 50  bgra8   rp [33,45]
+    #52  fmt 44  bgra8   rp [7,0]                          the presented eye
+
+`#55` is the scene depth (fmt 126) and cannot be dumped as a PPM; that is a
+known hole, not an oversight.
+
+**P83: the defect is absent from `#61`/`#60` and present in `#57`, and `#59` is
+the discriminator.** The earlier reading of `#61` at `l1/l0` 1.005 against
+`#57` at 1.846 says the divergence is made *after* the G-buffer, so:
+
+* If `#59` is clean and `#57` is not, the culprit is a pass that writes `#57`
+  and not `#59` — that is **`rp #31` or `rp #32`**, and nothing else.
+* If `#59` is already dirty, it is one of `rp #13/17/22/44/50`, and the
+  G-buffer normals being clean says it is a lighting pass rather than geometry.
+* If `#61`/`#60` are dirty, everything above is wrong and the defect is in the
+  G-buffer itself, which would make it a geometry or normal problem and would
+  contradict "the wing keeps its panel lines".
+
+Measure the wing crop `x=845..1408 y=845..1130` and report the tail and the
+affected area, never a bare median — the failure recorded twice already. The
+`IPD=0` negative control belongs on any reading that looks like a finding.

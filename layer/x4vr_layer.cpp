@@ -5448,6 +5448,36 @@ void write_ppm(const char *path, const uint16_t *px, uint32_t w, uint32_t h) {
     fclose(f);
 }
 
+// Two-channel half-float: X4's #60 and #61, which are the G-buffer's packed
+// normals and are therefore a prime suspect for a *shading input* that differs
+// per eye. The probe has always been able to read them -- format_bpp() covers
+// R16G16_SFLOAT -- so the only reason they could not be looked at was this
+// function, exactly as with the 8-bit targets below.
+//
+// These carry negative values, so the unsigned tone map above would clip half
+// the range to black. Use its signed analogue, v/(1+|v|) remapped to [0,1]:
+// monotonic over the whole real line, 0 maps to mid-grey, and no value is
+// clipped. Blue is left at zero so the encoding cannot be mistaken for colour.
+void write_ppm_rg(const char *path, const uint16_t *px, uint32_t w, uint32_t h) {
+    FILE *f = fopen(path, "wb");
+    if (!f)
+        return;
+    fprintf(f, "P6\n%u %u\n255\n", w, h);
+    std::vector<uint8_t> row((size_t)w * 3);
+    for (uint32_t y = 0; y < h; y++) {
+        for (uint32_t x = 0; x < w; x++) {
+            for (uint32_t c = 0; c < 2; c++) {
+                const float v = half_to_float(px[((size_t)y * w + x) * 2 + c]);
+                const float s = 0.5f + 0.5f * (v / (1.0f + fabsf(v)));
+                row[(size_t)x * 3 + c] = (uint8_t)(s * 255.0f + 0.5f);
+            }
+            row[(size_t)x * 3 + 2] = 0;
+        }
+        fwrite(row.data(), 1, row.size(), f);
+    }
+    fclose(f);
+}
+
 // The 8-bit BGRA targets -- the whole late half of the frame, #103 included.
 // Their absence here is why the one image that most needed looking at was the
 // one the dumper could not write.
@@ -5828,20 +5858,49 @@ void probe_collect(DeviceData *d, VkQueue queue) {
     // menu -- and in the menu "UI layer" and "final composite" are the same
     // picture, which is exactly the distinction the dump was for. Capped so a
     // long run cannot fill /tmp.
-    static uint32_t dumps = 0;
-    const uint32_t kMaxDumps = 6;
+    // A comma-separated list, and the cap is *per image*. Bisecting the frame
+    // means holding several images from the same run side by side: serials are
+    // per-run, so #55 from one take and #57 from the next cannot be compared,
+    // and one image per run would need five runs of a moving scene to collect
+    // what one run collects at a single view.
     const char *want = getenv("X4VR_MV_DUMP_IMG");
-    const bool named = want && *want &&
-                       (uint32_t)strtoul(want, nullptr, 10) == g_probe.serial;
+    const bool have_want = want && *want;
+    bool named = false;
+    for (const char *s = want; have_want && s && *s;) {
+        char *end = nullptr;
+        const unsigned long v = strtoul(s, &end, 10);
+        if (end == s)
+            break;
+        if ((uint32_t)v == g_probe.serial) {
+            named = true;
+            break;
+        }
+        s = (*end == ',') ? end + 1 : end;
+        while (*s == ' ')
+            s++;
+    }
+    const uint32_t kMaxDumps = 6;
+    static std::mutex dump_mu;
+    static std::unordered_map<uint32_t, uint32_t> dumps_by_img;
+    uint32_t dumps = 0;
+    {
+        std::lock_guard<std::mutex> lock(dump_mu);
+        dumps = dumps_by_img[g_probe.serial];
+    }
     if (g_mv_dump && dumps < (named ? kMaxDumps : 1u) &&
-        (named || (!(want && *want) && h0 != h1))) {
+        (named || (!have_want && h0 != h1))) {
         const bool hdr = g_probe.format == VK_FORMAT_R16G16B16A16_SFLOAT;
+        const bool rg16f = g_probe.format == VK_FORMAT_R16G16_SFLOAT;
         const bool bgra8 = g_probe.format == VK_FORMAT_B8G8R8A8_SRGB ||
                            g_probe.format == VK_FORMAT_B8G8R8A8_UNORM;
         const bool rgba8 = g_probe.format == VK_FORMAT_R8G8B8A8_SRGB ||
                            g_probe.format == VK_FORMAT_R8G8B8A8_UNORM;
-        if (hdr || bgra8 || rgba8) {
-            const uint32_t seq = dumps++;
+        if (hdr || rg16f || bgra8 || rgba8) {
+            uint32_t seq;
+            {
+                std::lock_guard<std::mutex> lock(dump_mu);
+                seq = dumps_by_img[g_probe.serial]++;
+            }
             char p[512];
             for (int L = 0; L < 2; L++) {
                 const void *src = L ? l1 : l0;
@@ -5849,6 +5908,9 @@ void probe_collect(DeviceData *d, VkQueue queue) {
                          g_probe.serial, seq, L);
                 if (hdr)
                     write_ppm(p, (const uint16_t *)src, g_probe.w, g_probe.h);
+                else if (rg16f)
+                    write_ppm_rg(p, (const uint16_t *)src, g_probe.w,
+                                 g_probe.h);
                 else
                     write_ppm8(p, (const uint8_t *)src, g_probe.w, g_probe.h,
                                bgra8);
