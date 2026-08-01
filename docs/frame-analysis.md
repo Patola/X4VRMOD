@@ -9192,3 +9192,64 @@ identical, not which of them matches the game.
 P84 is unaffected — `loadOp` decides between the MRT pass and `rp #31/#32`
 regardless of which layer is named the defect. But it is now a question about
 what layer 0 loses, not about what layer 1 gains.
+
+## Take 77 — P84 confirmed, and a misreading of the framebuffer corrected
+
+Launched, save loaded, quit after the fade-in. The inventory prints at pass
+creation, so the run needed nothing else.
+
+    rp #23 attachments — loadOp 0:LOAD  1:LOAD  2:LOAD 3:LOAD 4:LOAD 5:LOAD
+    rp #24 attachments — loadOp 0:LOAD  1:CLEAR 2:LOAD 3:LOAD 4:LOAD 5:LOAD
+    rp #25 attachments — loadOp 0:LOAD  1:LOAD  2:LOAD 3:LOAD 4:LOAD 5:LOAD
+    rp #31 attachments — loadOp 0:LOAD  1:LOAD
+    rp #32 attachments — loadOp 0:LOAD  1:LOAD
+
+The pass serials, framebuffer shapes and classifications are identical to take
+76, so the identification carries across the two runs — checked, because
+serials are per-run and assuming otherwise is a mistake this project has
+already made.
+
+Attachment 1 is `#57` (`imgs=[#55,#57,#59,#59,#60,#61]`, and the framebuffer
+list *is* positional). `rp #24` **clears** it. The probe samples `#57` after
+`rp #24`, so everything it sees was written by `rp #24` itself: nothing
+survives from `rp #31`/`#32` of the previous frame, and nothing from `rp #23`.
+
+**P84 confirmed. `rp #31` and `rp #32` are ruled out**, and on a fact rather
+than on the "later in the frame" argument that would not have been sound.
+
+### The MRT reading was wrong
+
+Take 76 said "`rp #23/#24/#25` write `#57` alongside `#59`, `#60` and `#61`, so
+the same draws produce one wrong image and three clean ones, and the defect must
+be one output of one shader". That is not what the log says. The subpass line
+has always said:
+
+    rp #24.0: 1 colour [97H] depth 126 final=2 -> STEREO (world)
+
+**One** colour attachment. The other five entries are attached to the
+framebuffer and untouched by the subpass. The framebuffer line lists
+attachments; it does not list outputs, and reading it as outputs is the same
+class of error as reading a list positionally — recorded twice before in this
+document.
+
+`g_img_writers` has the same flaw and it is worth naming because its output has
+been quoted repeatedly here: it iterates `ci->attachmentCount` at framebuffer
+creation, so its "writers" means **attached to a framebuffer of that pass**, not
+**written by that pass**. Every "written by rp [...]" list in this document is
+really "attached in rp [...]".
+
+So the constraint from take 76 is weaker than claimed. What survives is the
+measurement, which is untouched: `#61`, `#60` and `#59` are clean, `#57` is not,
+and `#57` is cleared and rewritten by `rp #24`. The defect is created by
+`rp #24`'s draws.
+
+What is not yet known is which image `rp #24` actually writes. Two of the six
+attachments share format 97, so the format in the subpass line cannot identify
+it, and the index was never printed. The inventory now prints
+
+    rp #N.M writes — colour [1] depth 0 input []
+
+which resolves it directly. **P85: `rp #24.0`'s colour attachment is index 1,
+`#57`.** If it is index 2 or 3 then `rp #24` writes `#59`, the clear on
+attachment 1 is a clear of an image the pass does not draw into, and the
+localisation has to start from the probe's sampling point instead.

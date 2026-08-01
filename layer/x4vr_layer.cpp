@@ -2056,6 +2056,51 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
                           lo < 4 ? kLoad[lo] : "?");
         }
         X4VR_LOG("rp #%u attachments — loadOp %s", serial, ops);
+        // Which attachment *indices* each subpass actually writes.
+        //
+        // The framebuffer line lists every attachment, and take 76 read that
+        // list as the pass's outputs: "rp #23/#24/#25 write #57 alongside
+        // #59/#60/#61, so the same draws produce one wrong image and three
+        // clean ones". They do not. Those passes declare **1 colour**
+        // attachment; the other five are attached and untouched, and
+        // g_img_writers records attachment rather than authorship, so its
+        // "writers" over-claims in exactly the same way.
+        //
+        // Attachment membership is not authorship. Printing the indices costs
+        // one line and removes the guess -- two images here share format 97,
+        // so the format alone cannot say which one a subpass writes.
+        for (uint32_t i = 0; i < ci->subpassCount; i++) {
+            const auto &sp = ci->pSubpasses[i];
+            char w[224];
+            int m = 0;
+            w[0] = 0;
+            for (uint32_t c = 0; c < sp.colorAttachmentCount && m < 150; c++) {
+                const uint32_t a = sp.pColorAttachments[c].attachment;
+                m += snprintf(w + m, sizeof(w) - m, "%s%s", m ? "," : "",
+                              a == VK_ATTACHMENT_UNUSED ? "-" : "");
+                if (a != VK_ATTACHMENT_UNUSED)
+                    m += snprintf(w + m, sizeof(w) - m, "%u", a);
+            }
+            char in[96];
+            int k = 0;
+            in[0] = 0;
+            for (uint32_t c = 0; c < sp.inputAttachmentCount && k < 60; c++) {
+                const uint32_t a = sp.pInputAttachments[c].attachment;
+                if (a != VK_ATTACHMENT_UNUSED)
+                    k += snprintf(in + k, sizeof(in) - k, "%s%u", k ? "," : "",
+                                  a);
+            }
+            const uint32_t da =
+                sp.pDepthStencilAttachment ? sp.pDepthStencilAttachment->attachment
+                                           : VK_ATTACHMENT_UNUSED;
+            char ds[16];
+            if (da == VK_ATTACHMENT_UNUSED)
+                snprintf(ds, sizeof ds, "none");
+            else
+                snprintf(ds, sizeof ds, "%u", da);
+            X4VR_LOG("rp #%u.%u writes — colour [%s] depth %s input [%s]",
+                     serial, i, w, ds, in);
+        }
     }
 
     g_variants.unsheared[rp] = std::move(unsheared);
