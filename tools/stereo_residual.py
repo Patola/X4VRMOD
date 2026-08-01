@@ -193,6 +193,41 @@ def defect_fraction(ratio, rel):
     return 100.0 * (ok & off & rel).sum() / max(ok.sum(), 1)
 
 
+# Lit in one eye, dark in the other. Absolute levels, because a ratio is
+# meaningless against near-black and this is the one case where "how dark" is
+# the whole question.
+DARK, LIT = 12.0, 40.0
+
+
+def unmatched_dark(a, b, shp, tile):
+    """Pixels that are dark in one eye and lit in the other, after alignment.
+
+    This exists because the ratio verdict above CANNOT see this defect. That
+    verdict is `bad & rel`, and `rel` means NCC >= 0.7 -- but a surface whose
+    shadowed half is flat black has nothing to correlate with, so it fails the
+    gate and is dropped before its brightness is ever compared. Take 69's
+    cockpit rim was lit in the right eye and dark in the left across 280px, and
+    the tile verdict counted exactly none of it.
+
+    So: no confidence gate. Warp by the propagated disparity -- the shadowed
+    patch has lit, textured neighbours that did match, and it lies on their
+    surface -- then compare absolute levels.
+
+    A shadow lies ON a surface, so it must move by that surface's disparity.
+    Anything left over after warping is the two eyes disagreeing about where
+    the shadow falls, which is the defect this file spent takes 56-69 failing
+    to measure.
+    """
+    h, w = a.shape
+    warp = np.zeros_like(a)
+    for iy in range(shp.shape[0]):
+        for ix in range(shp.shape[1]):
+            y, x = iy * tile, ix * tile
+            xs = min(max(x - int(shp[iy, ix]), 0), w - tile)
+            warp[y : y + tile, x : x + tile] = a[y : y + tile, xs : xs + tile]
+    return (warp < DARK) & (b >= LIT), (b < DARK) & (warp >= LIT)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("layer0")
@@ -265,6 +300,20 @@ def main():
             print(f"   x={ix * T:4d}-{ix * T + T - 1:4d} y={iy * T:4d}-"
                   f"{iy * T + T - 1:4d}   shift={int(shp[iy, ix]):+4d}px  "
                   f"NCC={cc[iy, ix]:+.2f}  L1/L0={ratio[iy, ix]:.2f}")
+
+    # Second, independent verdict: content present in one eye and absent from
+    # the other. Reported separately because the tile verdict above is
+    # structurally blind to it -- see unmatched_dark().
+    dl, dr = unmatched_dark(a, b, shp, T)
+    pl, pr = 100.0 * dl.mean(), 100.0 * dr.mean()
+    print(f"one-eye-dark   {pl:.2f}% of pixels lit in the right eye and dark "
+          f"in the left,\n               {pr:.2f}% the other way "
+          f"(asymmetry {pl / max(pr, 1e-9):.1f}x)")
+    if max(pl, pr) >= 0.5 and max(pl, pr) / max(min(pl, pr), 1e-9) >= 1.5:
+        print("               a shadow lies ON a surface and must move by that "
+              "surface's\n               disparity -- a one-sided excess means "
+              "the two eyes disagree\n               about where it falls. "
+              "Crop the worst blobs and look.")
 
     # The verdict is area-based on purpose. A median cannot see an effect that
     # covers a few percent of the frame, and a few percent of the frame is

@@ -8216,3 +8216,123 @@ The dump point is "after rp #0", which is not the end of the frame. Any pass
 writing a presented eye image after that is invisible to every number in this
 file. That is a property of the instrument, not of the frame, and it is why the
 verdict on take 69 leans on the log's writer lines rather than on a PPM.
+
+## Take 69 — P76 refuted, the artifact identified, and the instrument was blind to it
+
+Checks 1–3, scored from the log before anything else, all pass:
+
+    rp #0.0/#1.0/#4.0/#7.0/#10.0: ... +MASKED(present) +PRESENT-CAND   (all five)
+    mv final: img #52 writers — masked rp [7,0] unmasked rp []
+    MIXED WRITERS: 0 occurrences
+
+Check 4 fails: Patola still sees the dark patches. **P76 is refuted and `rp #7`
+is exonerated**, per the condition committed before the run. The mixed-writers
+bug was real and the fix is kept — layer 1 was genuinely missing every UI pass —
+but it was not causing the artifact.
+
+### What the artifact actually is
+
+Patola circled it (`/tmp/x4-patch.jpg`): the cockpit dashboard rim, upper left.
+Cropping the same region out of the take 69 dumps at native resolution shows it
+without ambiguity. The rim is one flat panel, and on it:
+
+* **left eye** — dark from x≈0 to a hard boundary at **x≈290**, then lit;
+* **right eye** — the same panel lit from **x≈110** onward.
+
+The panel's own bolts and seams give its disparity as a few tens of px. The
+boundary between lit and dark moves by far more than that. **A shadow lies on a
+surface and must move by that surface's disparity**; this one does not, so the
+two eyes disagree about where the shadow falls. This is not a reflective-surface
+or specular effect, which is what P74 assumed. It is a shadow/lighting
+terminator placed from a reconstruction that is wrong for at least one eye —
+and it is the failure class Patola's earlier X4 VR attempt died on.
+
+### The instrument could not see it, by construction
+
+`stereo_residual.py`'s verdict is `sure = bad & rel`, and `rel` means NCC ≥ 0.7.
+The shadowed half of the panel is flat and textureless, so it correlates with
+nothing, fails the gate, and is dropped **before** its brightness is compared.
+The tool was built to find a surface lit 2.4x too brightly. This is a surface
+half *missing*, and the gate that made the first measurable made the second
+invisible.
+
+That is the fourth aggregate in this project to hide this defect: `l1/l0`, then
+two versions of the tile verdict, now the confidence gate.
+
+**Therefore P74's refutation is void.** Take 68 read 9.9% → 9.4% with
+`patch_fragment_invproj_eye` off and the patch was declared exonerated. That
+number is structurally incapable of counting this defect, so the experiment was
+**uninformative, not exonerating**. P74 is reopened.
+
+`unmatched_dark()` is the repair: warp by the propagated disparity — the
+shadowed patch has lit, textured neighbours that did match, and it lies on their
+surface — then compare absolute levels with no confidence gate. Validated: it
+reads **0.00%** on the IPD=0 control and fires on the live frame.
+
+    take 67 (invproj ON, 236 modules)     1.71% left-dark / 1.08% right-dark   asym 1.6x
+    take 68 (invproj OFF)                 2.15% / 0.89%                        asym 2.4x
+    take 69 (invproj OFF + mask fix)      1.65% / 0.96%                        asym 1.7x
+
+### Why this table settles nothing, and what does
+
+Take 67 was a **different view** — asteroids and nebula, not the cockpit. Its
+1.6x cannot be compared with take 69's 1.7x, and reading it as "invproj does not
+help" would repeat the error of comparing takes 67 and 68 tile-by-tile when the
+camera had moved. The A/B has to be run on one scene.
+
+### P77 — the terminator mismatch is the shared depth→world reconstruction
+
+The layer's own comment at the `patch_fragment_invproj_eye` call site already
+describes this defect and names the takes it was seen in:
+
+    // The deferred passes reconstruct view position from the depth buffer,
+    // which was rendered through the sheared clip position, so they get the
+    // position in *that eye's* frame -- and then light it with shadow
+    // matrices and light positions that are still centre-frame. The two
+    // eyes end up disagreeing about where a shadow falls on a surface by
+    // the full IPD.
+
+That patch has been **off** since take 68, because I turned it off to test P74
+and then kept it off on a refutation that was not valid.
+
+    X4VR_TAKE=70-INVPROJ-ON X4VR_STEREO=1 X4VR_IPD=0.064 X4VR_PROJ_INVPROJ=1
+    X4VR_BINDLESS_PATCH=1 X4VR_BINDLESS_MIRROR=1 X4VR_RES=1408x1408
+    X4VR_GAMESCOPE=1 X4VR_SBS=1 X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1
+    X4VR_MV=1 X4VR_MASK_PRESENT=1 X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1
+    X4VR_PROJ_SX=1.3333 X4VR_PROJ_LIVE=1 X4VR_MV_DUMP=/tmp/x4vr-t70
+    X4VR_MV_DUMP_IMG=52 X4VR_LOG=/tmp/x4vr-take70.log ./launch/x4vr-launch.sh
+
+Take 69's command plus `X4VR_PROJ_INVPROJ=1`. **Same save, same view, camera
+still** — the comparison is a crop at fixed coordinates, so a moved camera
+voids it exactly as it voided the take 67 comparison. Confirm the knob fired
+(`invproj final: ... ~236 modules corrected`) before reading anything.
+
+P77 predicts the left-dark excess falls materially below 1.65% and the asymmetry
+moves toward 1.0, **and** that the rim crop at `x=0..620, y=440..720` shows the
+two boundaries at the same place. If the numbers move but the crop does not, the
+numbers are measuring something else again — the crop is the verdict.
+
+**If it does not improve**, invproj is genuinely refuted, this time on a
+measurement that can see the defect, and the next suspect is named below. Do not
+add a knob.
+
+### The next suspect, and another degenerate control
+
+Six compute modules refuse per-eye patching outright:
+
+    bindless mirror final: index-offset patch — 354 modules edited, 8 declared a
+    mirrorable table and REFUSED (6 of those are compute: no gl_ViewIndex exists
+    there)
+    mv final: compute — 14 pipeline(s), 6 shader(s) dispatched
+      #362: 27752 dispatches   #363: 1736   #191: 1044   #364: 867
+
+Multiview does not cover compute, so anything those shaders compute is computed
+once and used by both eyes. Clustered/froxel lighting lives there.
+
+P71 excluded compute from causing the `#57` lift by running at **IPD=0** and
+observing bit-identical layers. That control is degenerate for *this* question:
+at IPD=0 both eyes are the same, so a shared compute result is trivially correct
+and cannot show a difference. The exclusion is true for what it tested and says
+nothing about compute-computed lighting at IPD≠0. Recorded rather than relied
+on — this is the second time an IPD=0 control has been mistaken for a general
+one.
