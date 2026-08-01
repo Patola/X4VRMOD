@@ -9293,3 +9293,65 @@ this: either answer halves the search, which is the point of running it.
 
 Scored from the dumps, not from the screen: `#57` and `#52` at the wing crop,
 with NCC against take 76 to confirm the view before reading the ratio.
+
+## Take 79 — P86 refuted: the defect follows the eye offset, not the layer
+
+    X4VR_TAKE=79-NEGIPD X4VR_STEREO=1 X4VR_IPD=-0.064 [rest as take 76]
+    stereo: ipd=-0.0640 sx=1.3333 near=0.100 -> shear m8 L=-0.42666 R=0.42666
+
+    img #57, wing crop, settled frames
+      take 76  ipd +0.064   L 27.99  R 47.18   ratio 1.686   p90  64.7/148.3
+      take 79  ipd -0.064   L 47.18  R 27.99   ratio 0.593   p90 148.3/ 64.7
+
+    img #52 (presented)
+      take 76  L 46.22  R 70.72
+      take 79  L 70.77  R 46.28
+
+Not merely reversed — the same numbers, swapped, to the printed digit. And the
+correspondence is structural, not just statistical:
+
+    NCC img#57: t79.layer0 vs t76.layer0  +0.4973
+                t79.layer0 vs t76.layer1  +0.9988
+
+Negating the IPD made layer 0 render what layer 1 had rendered, defect and all.
+**P86 is refuted. The defect follows the eye offset, and has no dependence on
+the layer index whatsoever.**
+
+That is worth stating precisely, because the whole investigation has been aimed
+the other way: the rendered result is a pure function of the shear sign. Layer
+0 and layer 1 are not different code paths as far as this defect is concerned.
+
+### Which eye is the bad one, in terms that survive a sign flip
+
+In both runs the eye with shear **m8 = -0.42666** is the bright, correct one and
+the eye with **m8 = +0.42666** is dark. By `K[0][2] = -m0*d/n`, m8 = +0.42666
+means `d = -0.032`: the camera displaced toward **-x**. Both displacements are
+conventionally correct for their eye — this is not a sign error in the shear.
+
+**The eye whose camera moves to -x comes out under-lit, whichever layer it
+lands in.**
+
+### What this kills
+
+Everything that is specific to layer 1 or to the mirror. The `index + 26653`
+path, `view_of_layer`, the array-view substitution, the input-attachment fix,
+`layer1_is_written` and its repair: none of them can produce a defect that
+tracks the shear sign and ignores the layer. Thirteen takes of suspects, closed
+by one knob and no new code.
+
+It also closes the polarity question properly. Patola's vanilla control said
+"the bright one is correct"; take 79 says brightness follows the offset
+direction, so the statement to carry forward is not "layer 0 is broken" but
+**"the -x eye is broken"**, which is the form that survives.
+
+### What is left
+
+Something in the lighting is correct for only one sign of the eye displacement.
+`rp #24` writes `#57` from depth `#55` and the G-buffer `#59/#60/#61`, so the
+candidates are the reconstruction from depth, whatever screen-space term the
+lighting applies, and any module in that pass whose shear is baked rather than
+per-view. The last of those is already an open task (#23, the 12 baked-sx
+modules) and is the only one of the three that is asymmetric by construction:
+a baked shear is a single constant, so it is right for one eye and wrong for
+the other. That is the next thing to check, and it needs a shader dump taken in
+the same run as the log, since serials are per-run.
