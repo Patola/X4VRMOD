@@ -7552,3 +7552,88 @@ visibly shifts in either eye, that is information the probe cannot supply.
   to shadow passes. They are safe only because the pass-level MONO gate
   substitutes the unsheared twin. If that gate ever changes, they shear in a
   light-space pass where clip z is not the constant near plane.
+
+## Take 64 — P70 refuted, and a reading of the probe I had been skipping
+
+    X4VR_TAKE=64-P70 X4VR_STEREO=1 X4VR_IPD=0.064 X4VR_BINDLESS_PATCH=1
+    X4VR_BINDLESS_MIRROR=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS=1
+    X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1 X4VR_MV=1 X4VR_MASK_PRESENT=1
+    X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1 X4VR_PROJ_SX=1.3333 X4VR_PROJ_LIVE=1
+    X4VR_PROJ_INVPROJ=1 X4VR_SHEAR_LIGHTS=1 X4VR_LOG=/tmp/x4vr-take64.log
+    ./launch/x4vr-launch.sh
+
+The knob fired: `world=312 ui=38` against `world=296 ui=54` in takes 61 and 63,
+so sixteen more modules were sheared, and the fog knob was off (`fog final: ...
+0 module(s)`). The result:
+
+    level 0.004787/0.008839 (l1/l0 1.847)
+    level 0.004786/0.008838 (l1/l0 1.846)
+
+Against 1.846 / 1.860 / 1.846. **P70 is refuted.** Shearing the instanced
+deferred light volumes does not touch the lift, so light-volume coverage joins
+the exclusion list. Patola's picture agreed: same darkness on the left frame.
+
+### The reading I had been skipping
+
+`l1/l0` is not a constant. Laid out with the disparity — `missing` and `extra`
+count texels that are lit in one layer and empty in the other, which is what a
+horizontal shift produces:
+
+| take | non-empty (l0/l1) | missing | extra | `l1/l0` |
+|------|-------------------|---------|-------|---------|
+| 64   | 433028 / 433212   | 2215    | 2399  | **0.997** |
+| 62   | 1054548 / 1068086 | 43689   | 57227 | **1.288** |
+| 64   | 541729 / 539117   | 120049  | 117437| **1.846** |
+
+**The brightness gap tracks the disparity.** Near-zero shift reads 1.0; a
+partial shift reads 1.29; the full shift reads 1.85. I had been quoting only the
+third row for four takes because it is the one that repeats, and reporting its
+stability as the instrument's strength — when the other rows were in the same
+logs saying the number is scene-dependent.
+
+Why the third row repeats exactly (`541729/539117`, `missing=120049`,
+`extra=117437` in takes 61, 62 and 64 alike): it is the frame just after the
+save loads, before the camera moves. Deterministic, which makes it a good
+fixture — but it is one scene, not the measurement.
+
+Two points from two different scenes do not establish proportionality, and this
+is not claimed. What they do is split the hypothesis space, which is the next
+run's job.
+
+### P71 — committed before the run
+
+At `X4VR_IPD=0` the shear is the identity: `d = 0`, so `K` is the identity
+matrix and **every pass writes identical content to both layers**. Nothing else
+changes — the bindless mirror still redirects view 1's descriptors, the invproj
+correction still runs (with a zero offset), the passes still classify the same
+way.
+
+So `#57` layer 0 and layer 1 should come back `IDENTICAL`, `l1/l0 = 1.000`, and
+Patola should see no left/right difference at all.
+
+**If it does not** — if `l1/l0` stays anywhere near 1.85 with zero disparity —
+then the difference was never caused by the shear, and every mechanism tried so
+far has been looking at the wrong half of the layer. What is left is per-view
+*plumbing*: a resource written for one view and applied to both, a mirrored
+descriptor pointing somewhere wrong, or a pass writing a single layer. The six
+compute modules that declare a mirrorable table and are refused (`no
+gl_ViewIndex exists there`, 20960 dispatches for module #362 alone) are the
+first place to look, and the 3D volumes at `88x88x128` they write are the first
+suspects.
+
+Either answer is worth the run, which is why this one is `IPD=0` and not a
+tenth guess at a mechanism.
+
+### The run
+
+    X4VR_TAKE=65-IPD0 X4VR_STEREO=1 X4VR_IPD=0 X4VR_BINDLESS_PATCH=1
+    X4VR_BINDLESS_MIRROR=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS=1
+    X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1 X4VR_MV=1 X4VR_MASK_PRESENT=1
+    X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1 X4VR_PROJ_SX=1.3333 X4VR_PROJ_LIVE=1
+    X4VR_PROJ_INVPROJ=1 X4VR_MV_DUMP=/tmp/x4vr-t65 X4VR_MV_DUMP_IMG=57
+    X4VR_LOG=/tmp/x4vr-take65.log ./launch/x4vr-launch.sh
+
+`X4VR_SHEAR_LIGHTS` is dropped — refuted, so the known-good default stands.
+`X4VR_MV_DUMP_IMG=57` writes up to six pairs of PPMs of the HDR scene colour,
+which is the instrument that answers "what is dark" rather than "how much".
+It costs nothing extra to arm and it already exists.
