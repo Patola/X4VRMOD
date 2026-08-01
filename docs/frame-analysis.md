@@ -7292,3 +7292,69 @@ take 60's numbering — and the honest next question is no longer "which mechani
 but **what `#57` actually holds**, since a buffer that is simultaneously a
 G-buffer attachment, a fog target, and the source of a 1541-region copy is not
 yet identified. The unexplained sign of the difference is still unexplained.
+
+## What `#57` actually is — and a correction to this document
+
+Answered offline from take 63's log, no run needed. **`#57` is X4's main-view HDR
+scene-colour buffer**: the target the scene is lit into, fogged in, and then
+tonemapped from.
+
+    rp #17  4 colour [97H,97H,83H,83H] + depth 126, imgs=[#55,#54,#59,#60,#61]
+            -> the G-buffer FILL. #55 depth, #54/#59/#60/#61 the four targets.
+
+    rp #23/#24/#25   imgs=[#55,#57,#59,#59,#60,#61]   colour target #57
+    rp #13/#22       imgs=[#55,#54,#59,#59,#60,#61]   colour target #54
+            -> both read the G-buffer as subpass inputs and write one HDR colour.
+
+    rp #31/#32       imgs=[#57,#57]                   fog, in place on #57
+
+Downstream, from the transfer graph:
+
+    #57 -> #58   806 region(s), 806 widened     1408x1408 RGBA16F  (full res, both eyes)
+    #54 -> #100   12 region(s),   0 widened      512x512 layers=6 mips=9  (CUBEMAP)
+    #54 -> #486  211 region(s), 211 widened      768x512
+    #65                                          1408x1408 fmt=50 B8G8R8A8_SRGB
+
+`#54` feeds a six-layer mipped cubemap — the environment probe X4 samples through
+`I_global_envmap` (camera member 59) — and a 768×512 view. `#57` is copied at
+full render resolution, every frame, widened to both eyes, into a chain that ends
+in an SRGB image. Full-res, per-frame, doubled: that is the main view.
+
+### The correction
+
+This document has repeatedly called `#57` "G-buffer attachment 1". **It is not
+part of the G-buffer at all.** The G-buffer is `#54/#59/#60/#61`, written by the
+fill pass `rp #17`. `#57` is the *output* of lighting, not an input to it. The
+claim came from reading a six-attachment framebuffer list positionally and never
+checking which index the subpass actually used as its colour attachment.
+
+That mattered: "the difference is in a G-buffer channel" and "the difference is
+in the lit scene colour" are different problems, and every mechanism proposed for
+this symptom was reasoned against the wrong one.
+
+### X4 renders the scene many times per frame
+
+`rp #13` (→`#54`) and `rp #23` (→`#57`) share **128 of their 133/140 fragment
+modules**. The same materials, the same geometry, two targets. The layer's own
+frame log has been saying so all along:
+
+    frame 33 NEW: main view slot buffer=0x3ada51e0 offset=1792 (block #1) draws=175 slots=4
+
+`slots` reaches **54–61 per frame**. X4 maintains dozens of camera blocks and
+renders from many of them: six cubemap faces for the environment probe, smaller
+views, and the main view. This is the same fact that surfaced at take 53 as
+"several cameras differ in one frame" and made `X4VR_PROJ_SX` unfittable by any
+one constant — recorded then as a nuisance, now as structure.
+
+**One consequence is worth flagging and not yet tested:** `#54 -> #100` copies
+**0 widened**, i.e. layer 0 only. The environment cubemap both eyes sample for
+image-based lighting is built from the left eye alone. That does not by itself
+produce a difference *between* the eyes — a shared cubemap is shared — so it is
+noted here as structure, **not proposed as mechanism nine**.
+
+### Still open
+
+The `#58 -> #65` step has not been traced module-by-module; the chain is asserted
+from formats and sizes, which is strong but is not the same as reading the
+shader. And the sign of the difference — a symmetric ±d shear yielding a
+one-directional 1.86× — remains unexplained by everything established so far.
