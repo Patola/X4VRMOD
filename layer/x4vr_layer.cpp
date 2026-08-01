@@ -2029,6 +2029,33 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
                      unsheared[i] ? "MONO" : "STEREO", why,
                      rule, cand ? " +PRESENT-CAND" : "");
         }
+        // Whether each attachment is cleared, loaded or discarded on entry.
+        //
+        // Not tracked until take 76, and its absence is what left the bisection
+        // one fact short. The probe reads #57 "after rp #24" and finds it
+        // already wrong, while its co-attachments #59/#60/#61 -- written by the
+        // *same* draws into the *same* framebuffer -- come out clean. Two
+        // readings fit, and load-op decides between them:
+        //
+        //   CLEAR/DONT_CARE -> the pass starts from nothing, so the divergence
+        //     is made inside rp #23/#24/#25, by one output of one shader.
+        //   LOAD            -> the pass inherits last frame's #57, so what the
+        //     probe sees includes rp #31/#32 from the previous frame and those
+        //     two are still suspects.
+        //
+        // Ruling a suspect in or out with an instrument that cannot see the
+        // difference is the mistake recorded for rp #7 at take 68; this line
+        // exists so the same call is not made blind twice.
+        char ops[224];
+        int n = 0;
+        ops[0] = 0;
+        static const char *kLoad[] = {"LOAD", "CLEAR", "DONT_CARE", "NONE"};
+        for (uint32_t a = 0; a < ci->attachmentCount && n < 190; a++) {
+            const uint32_t lo = (uint32_t)ci->pAttachments[a].loadOp;
+            n += snprintf(ops + n, sizeof(ops) - n, "%s%u:%s", a ? " " : "", a,
+                          lo < 4 ? kLoad[lo] : "?");
+        }
+        X4VR_LOG("rp #%u attachments — loadOp %s", serial, ops);
     }
 
     g_variants.unsheared[rp] = std::move(unsheared);

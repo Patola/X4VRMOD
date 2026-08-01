@@ -9067,3 +9067,78 @@ the discriminator.** The earlier reading of `#61` at `l1/l0` 1.005 against
 Measure the wing crop `x=845..1408 y=845..1130` and report the tail and the
 affected area, never a bare median — the failure recorded twice already. The
 `IPD=0` negative control belongs on any reading that looks like a finding.
+
+## Take 76 — P83 confirmed, and the defect is born in `#57`
+
+    X4VR_TAKE=76-BISECT X4VR_STEREO=1 X4VR_IPD=0.064
+    X4VR_BINDLESS_PATCH=1 X4VR_BINDLESS_MIRROR=1 X4VR_RES=1408x1408
+    X4VR_GAMESCOPE=1 X4VR_SBS=1 X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1
+    X4VR_MV=1 X4VR_MASK_PRESENT=1 X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1
+    X4VR_PROJ_SX=1.3333 X4VR_PROJ_LIVE=1
+    X4VR_MV_DUMP=/tmp/x4vr-t76 X4VR_MV_DUMP_IMG=61,60,59,57,65,52
+    X4VR_LOG=/tmp/x4vr-take76.log ./launch/x4vr-launch.sh
+
+The wing crop `x=845..1408 y=845..1130`, settled frames (n2-n4, all three
+sequences agreeing to the printed digit):
+
+    img  what          ratio R/L   p90 L / R
+    #61  G-buffer        1.010     118.3 / 118.7
+    #60  G-buffer        0.990      85.3 /  85.3
+    #59  HDR             1.056      87.3 /  87.3
+    #57  HDR             1.686      64.7 / 148.3
+    #52  presented       1.530      77.3 / 189.0
+
+`#52` reproduces takes 72, 74 and 75 exactly, so the chain is anchored at the
+end that was already measured. **P83 confirmed**: clean through `#61`, `#60`
+and `#59`, wrong at `#57`.
+
+### The constraint this puts on the answer
+
+The framebuffer inventory kills the obvious reading:
+
+    fb rp #23: 1408x1408 attachments=6 imgs=[#55,#57,#59,#59,#60,#61] MASKED
+    fb rp #24: 1408x1408 attachments=6 imgs=[#55,#57,#59,#59,#60,#61] MASKED
+    fb rp #25: 1408x1408 attachments=6 imgs=[#55,#57,#59,#59,#60,#61] MASKED
+
+`#57`, `#59`, `#60` and `#61` are written by the **same draws in the same MRT
+pass**. It is therefore not "a pass is wrong": one shader, one invocation,
+writes all four, and three come out clean while the fourth does not. Whatever
+is wrong is specific to *that one output*, not to the geometry, not to the
+pass, and not to the eye's sampling of the heap in general.
+
+The only structural difference between `#57` and its co-attachments is that two
+further passes write `#57` and nothing else:
+
+    rp #31.0: 1 colour [97H] no-depth final=1 -> MONO (fullscreen post) +MASKED(fullscreen)
+    rp #32.0: 1 colour [97H] no-depth final=1 -> MONO (fullscreen post) +MASKED(fullscreen)
+    fb rp #31: attachments=2 imgs=[#57,#57]
+    fb rp #32: attachments=2 imgs=[#57,#57]
+
+### "masked" means three different things, and it mattered here
+
+`mark_masked()` is called from exactly one place, `if (per_eye)`. So
+`g_masked_passes` is the set of passes that **do** render per-eye, into both
+layers, and the framebuffer log's `MASKED` means the same. The inventory's
+`+MASKED(fullscreen)` means something else entirely: masked out of the *shear*.
+Two opposite senses of one word, both printed in the same log, and the
+resolution decides whether `rp #31/#32` write layer 1 at all. They do.
+
+### One fact short, and it was never recorded
+
+The probe reads `#57` after `rp #24` and finds it already wrong, which looks
+like it exonerates `rp #31/#32` — they run later. It does not, because images
+persist between frames. Two readings fit, and `loadOp` decides:
+
+* `CLEAR`/`DONT_CARE` — the pass starts from nothing, so the divergence is made
+  inside `rp #23/#24/#25`, by one output of one shader, and `#31/#32` are out.
+* `LOAD` — the pass inherits the previous frame's `#57`, so what the probe sees
+  includes `rp #31/#32` from frame N-1 and they remain suspects.
+
+`loadOp` was not tracked anywhere in the layer. Ruling a suspect out with an
+instrument that cannot see it is the take-68 `rp #7` mistake, so the inventory
+now prints `rp #N attachments — loadOp 0:CLEAR 1:LOAD ...` and the next run
+answers it without any behavioural change.
+
+**P84: `rp #23`'s `#57` attachment is `CLEAR` or `DONT_CARE`, which puts the
+defect inside the MRT pass and rules `rp #31/#32` out.** If it is `LOAD`, the
+next step is `#31/#32` and not the G-buffer shader.
