@@ -162,6 +162,17 @@ the doubling overshoot is untightened, and `run-multiview-render.sh` has 10
 pre-existing failures. The residual 1.8% is above the `IPD=0` control's 0.0%,
 part of which is genuine one-eye occlusion.
 
-**Reproducing anything older than this tag needs `X4VR_PROJ_INVPROJ=0`.** The
-default changed here, and every earlier take ran with the correction off by
-omitting the variable.
+**Reproducing an older X4 take needs `X4VR_PROJ_INVPROJ=0`.** The default
+changed here, and every earlier take ran with the correction off by omitting the
+variable.
+
+**That caveat does not extend to the offline test suite.** `run-multiview-render.sh`
+was run both ways and the pass/fail set is byte-identical (`md5 634f9b7c…`),
+including its 10 pre-existing failures. The suite drives `have_k` through
+`X4VR_CLIP_K`/`X4VR_CLIP_K_RIGHT`, so the invproj code does execute — but its
+synthetic shaders declare no camera block at `set 1, binding 0`, so the patch
+matches nothing and returns false. The knob is inert there.
+
+This holds only while that is true. **If a render-test case is ever given a
+shader with a camera block at `set 1, binding 0`, the default starts mattering
+and that case must pin `X4VR_PROJ_INVPROJ` explicitly** rather than inherit it.
