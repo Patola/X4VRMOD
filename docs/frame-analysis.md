@@ -8361,3 +8361,90 @@ three tools reported nothing.
 P77's verdict is therefore Patola's report — gone / unchanged / better but
 visible — with the numbers as cross-check. The run command is unchanged; the
 instruction to hold the view is withdrawn as unachievable.
+
+## Take 70 — P77 refuted, and the artifact is a per-eye shadow test
+
+`invproj final: ... 236 modules corrected` — the knob fired. Patola: the patches
+are still there, with a screenshot circling the same wing in both frames.
+
+**P77 is refuted.** Together with takes 68/69 (patch off, artifact present),
+`patch_fragment_invproj_eye` is now eliminated from **both** directions: it
+neither causes nor cures this. Two-sided exclusions are worth more than one, and
+this one closes P74 properly as well — the earlier "refutation" was scored on a
+blind metric, but the conclusion happens to hold.
+
+### It is not a moved shadow edge, it is a whole face
+
+Measured on the wing in the take 70 n2 dump, at the region Patola circled:
+
+    wing panel  x=845..1408 y=845..1130
+      left eye mean 46.25    right eye mean 70.75    -> 1.53x
+      p90:  left 77.0        right 189.0             -> 2.45x at the bright end
+      NCC +0.033 -- the two eyes barely correlate structurally at all
+
+A whole flat face going from dark grey to blown-out white is not a specular
+lobe and not a 64mm parallax effect: at a few metres, a 32mm eye offset moves
+the reflection vector by under a degree, which cannot flip an entire surface.
+What flips a whole surface is a **binary test** — in shadow, or not.
+
+And the pipeline agrees. At the cockpit frame:
+
+    #57  non-empty 541543/538916   changed=419991   level 0.004788/0.008838  (l1/l0 1.846)
+    #52  non-empty 1982464/1982464 changed=1062954  level 47.76/50.4         (l1/l0 1.055)
+
+`#57` is the lighting output and layer 1 is **1.85x brighter at equal coverage**.
+A horizontal shift moves content; it cannot make the same number of lit texels
+1.85x brighter. The right eye is missing shadowing.
+
+**This reopens the `#57` lift.** Task #22 closed it as "correct stereo, not a
+defect", on the strength of the IPD=0 control plus a tile comparison made with
+the first version of `stereo_residual.py` — the version that selected tiles by
+absolute residual and so dropped differently-lit tiles from the average meant to
+find them. The exclusions P71 produced remain true; the verdict does not.
+
+### What the IPD=0 control can and cannot exclude
+
+At IPD=0 the two layers of every doubled image hold identical content, so
+sampling either one gives the same answer. That control therefore cannot detect
+a mirror descriptor that points at the wrong *layer* of the right image — only
+one that points at nothing. Its clean result at take 65 is consistent with both
+a correct mirror and a mirror whose error is invisible when the layers agree.
+Third time an IPD=0 result has been read as more general than it is.
+
+### P78 — the bindless index offset is what makes view 1 shade differently
+
+Two mechanisms now remain that can make view 1 differ from view 0:
+
+1. the shear K on `gl_Position` — geometry, and required for stereo at all;
+2. `X4VR_BINDLESS_PATCH` — `element = index + gl_ViewIndex * 26653`, which
+   sends view 1 to a different descriptor for **every sampled texture**,
+   including whatever the lighting pass reads to decide "in shadow".
+
+Turning (2) off isolates (1). Existing knob, no new code.
+
+    X4VR_TAKE=71-NOBINDLESSPATCH X4VR_STEREO=1 X4VR_IPD=0.064
+    X4VR_BINDLESS_PATCH=0 X4VR_BINDLESS_MIRROR=1 X4VR_RES=1408x1408
+    X4VR_GAMESCOPE=1 X4VR_SBS=1 X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1
+    X4VR_MV=1 X4VR_MASK_PRESENT=1 X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1
+    X4VR_PROJ_SX=1.3333 X4VR_PROJ_LIVE=1 X4VR_MV_DUMP=/tmp/x4vr-t71
+    X4VR_MV_DUMP_IMG=52 X4VR_LOG=/tmp/x4vr-take71.log ./launch/x4vr-launch.sh
+
+Take 70's command with `X4VR_BINDLESS_PATCH=0` and `X4VR_PROJ_INVPROJ` dropped
+(eliminated, so it stays out). Confirm from the log that the index-offset patch
+edited **0 modules** before reading anything.
+
+**Expect other things to get worse.** With no offset, view 1 samples view 0's
+copy of every per-eye render target — SSAO, reflections, anything deferred. That
+is fine; this run asks one question only: **does the wing still flip between
+lit and dark?**
+
+* still flips -> the bindless path is exonerated, and what remains is the shear
+  itself: the geometry is displaced per eye while something the lighting reads
+  is not. `#57`'s 1.846 becomes the thing to dump and measure directly
+  (`X4VR_MV_DUMP_IMG=57`).
+* does not flip -> the offset is sending view 1 to a wrong descriptor, and the
+  next question is which table: the mirror is only a correct twin for images
+  that were actually doubled, and the shadow maps are MONO depth-only passes
+  that never were.
+
+Do not add a knob to fix a failed run.
