@@ -1101,14 +1101,22 @@ const bool g_mirror_all_layer1 = [] {
 // space and genuinely shared between the eyes, which classify_unsheared() has
 // always got right. Nothing ever writes their layer 1.
 //
-// The mirror then pointed view 1 at that empty layer, so every material shader
-// in the right eye did its shadow lookup against an unwritten depth image.
-// Under reverse-Z an empty depth reads as the far plane: nothing occludes
-// anything, and the surface comes out fully lit. That is the blown-white hull
-// Patola reported from take 64 onward, and it is why take 71 fixed it by
-// accident -- with X4VR_BINDLESS_PATCH=0 view 1 stopped consulting the mirror
-// at all and read the real shadow map, which is also why that run lost its
-// stereo and looked like a cure.
+// It was believed through takes 74 and 75 that the mirror pointed view 1 at
+// that empty layer, blowing out the right eye's shading. THAT WAS WRONG, and
+// the refutation is structural rather than empirical: view_of_layer() returns
+// null unless the image is in g_per_eye_images, and an image only enters that
+// set in CreateFramebuffer's `masked && g_active` branch. A shadow map is
+// never attached to a view-masked pass, so it is never in the set, so
+// view_of_layer() has always returned null for it and the mirror has always
+// written the verbatim view. The right eye has been reading the real, correct
+// shadow map in every take.
+//
+// This predicate is therefore a guard that cannot currently fire for the case
+// it was written for -- the gate below reaches the same answer one line later.
+// It is kept because it states the intent where the intent belongs, and
+// because the gate is about "is there a layer 1 to point at" while this is
+// about "should we point at it", which are different questions that happen to
+// coincide today.
 //
 // An image with an unmasked writer and no masked one is shared by construction,
 // so the verbatim copy is not a fallback for it -- it is the correct answer.
@@ -1167,6 +1175,9 @@ struct ProvisionalSlot {
 std::mutex g_prov_mu;
 std::unordered_map<uint32_t, std::vector<ProvisionalSlot>> g_mirror_provisional;
 uint64_t g_mirror_provisional_taken = 0, g_mirror_repaired = 0;
+// Undecided slots seen at all, counted before the per-eye gate rather than
+// after it. The two differ by every image that has no layer 1 to point at.
+uint64_t g_mirror_unknown_seen = 0;
 
 const bool g_mirror_repair = [] {
     const char *e = getenv("X4VR_MIRROR_REPAIR");
@@ -1440,6 +1451,14 @@ void bindless_mirror_writes(
                 g_mirror_shared++;
                 continue;
             }
+            // Counted here, before the gate below, because that gate removes
+            // exactly the population this number is about. Take 75 reported
+            // "0 slot(s) filled on unknown writers" from a counter placed
+            // after it and I read that as "the race does not exist"; it meant
+            // "this cannot see the race". Third instrument in this project
+            // blind to its own target -- see docs/frame-analysis.md.
+            if (st == Layer1State::Unknown)
+                g_mirror_unknown_seen++;
             const VkImageView l1 =
                 view_of_layer(d, device, infos[j].imageView, 1);
             if (l1 == VK_NULL_HANDLE)
@@ -2250,10 +2269,11 @@ void bindless_report(const char *when) {
             size_t pending = 0;
             for (const auto &e : g_mirror_provisional)
                 pending += e.second.size();
-            X4VR_LOG("bindless mirror %s: %llu slot(s) filled on unknown "
-                     "writers, %llu repaired to layer 0, %zu still provisional "
-                     "across %zu image(s)%s",
-                     when, (unsigned long long)g_mirror_provisional_taken,
+            X4VR_LOG("bindless mirror %s: %llu slot(s) undecided, %llu of them "
+                     "substituted and recorded, %llu repaired to layer 0, %zu "
+                     "still provisional across %zu image(s)%s",
+                     when, (unsigned long long)g_mirror_unknown_seen,
+                     (unsigned long long)g_mirror_provisional_taken,
                      (unsigned long long)g_mirror_repaired, pending,
                      g_mirror_provisional.size(),
                      g_mirror_repair ? "" : " — REPAIR DISABLED");

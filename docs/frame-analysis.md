@@ -8921,3 +8921,103 @@ What refutes it, and how each reads differently in the log:
   fired; look at the framebuffer path, not the predicate.
 * both non-zero and the wing still reads 1.53x — the empty shadow map is real
   but is not what Patola is seeing, and the shadow story is finally spent.
+
+## Take 75 — P82 refuted, and the shadow-map account was false from the start
+
+    X4VR_TAKE=75-MIRROR-REPAIR X4VR_STEREO=1 X4VR_IPD=0.064
+    X4VR_BINDLESS_PATCH=1 X4VR_BINDLESS_MIRROR=1 X4VR_RES=1408x1408
+    X4VR_GAMESCOPE=1 X4VR_SBS=1 X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1
+    X4VR_MV=1 X4VR_MASK_PRESENT=1 X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1
+    X4VR_PROJ_SX=1.3333 X4VR_PROJ_LIVE=1 X4VR_MV_DUMP=/tmp/x4vr-t75
+    X4VR_MV_DUMP_IMG=52 X4VR_LOG=/tmp/x4vr-take75.log ./launch/x4vr-launch.sh
+
+The wing at the same view, `x=845..1408 y=845..1130`:
+
+    take 72  left 46.22  right 70.73  1.530x   p90 77.3/189.0
+    take 74  left 46.27  right 70.77  1.530x   p90 77.3/189.0
+    take 75  left 46.27  right 70.77  1.530x   p90 77.3/189.0
+
+Take 75 is take 74 to the last printed digit. P82 refuted.
+
+### The instrument was blind, again
+
+The log said `0 slot(s) filled on unknown writers`, which is the branch P82
+named as "the race does not exist and this whole account is wrong". The
+conclusion was right; the reasoning was not, and the number proved nothing.
+
+The counter was placed *after* this:
+
+    const VkImageView l1 = view_of_layer(d, device, infos[j].imageView, 1);
+    if (l1 == VK_NULL_HANDLE)
+        continue;                      // <-- counter is below this line
+
+and `view_of_layer()` returns null unless the image is in `g_per_eye_images`.
+So the gate removed exactly the population the counter existed to count. This
+is the third instrument in this project blind to its own target, after
+`sure = bad & rel` and the `rp #7` signed-difference image. The counter now
+sits above the gate and the log line distinguishes "undecided" from
+"substituted and recorded".
+
+### The premise, not just the prediction
+
+`g_per_eye_images` gains an image in exactly one place: `CreateFramebuffer`'s
+`masked && g_active` branch. A shadow map is never attached to a view-masked
+pass — the inventory says so, `masked rp [] unmasked rp [35]` — so it is never
+in the set, so `view_of_layer()` has **always** returned null for it, so the
+mirror has **always** written the verbatim view.
+
+**The right eye has been sampling the real, correct shadow map in every take.**
+P81 and P82 were both built on a mechanism that cannot occur. Take 74's
+`layer1_is_written()` and take 75's repair are no-ops by construction: the
+34,250 descriptors that take the early exit would reach the identical verbatim
+path one line later. Both are kept as guards, with the comments corrected to
+say so, because a wrong comment is worse than the dead branch it describes.
+
+Only **24 images** in the whole frame can ever receive a layer-1 substitution —
+the ones with a masked writer. They are all scene targets. No texture, no
+shadow map, no lookup table is ever mirrored to layer 1.
+
+### invproj, settled properly this time
+
+`tools/shadow_scan.py` and a member-2 scan over the take-74 dump:
+
+    fragment modules sampling Dref (shadow):                    56
+    fragment modules loading camera member 2 (M_invprojection): 236
+    BOTH -- shadow lookup on a reconstructed position:          56
+    of those 56, member-2 chain in the fragment entry function: 56
+
+So every shadow lookup in the game does run on a position reconstructed through
+`M_invprojection`, and the patch reaches all of them — no helper-function gap.
+The patch's arithmetic is correct, verified offline against the logged shear:
+
+    P = [[sx,0,0,0],[0,sx,0,0],[0,0,0,n],[0,0,-1,0]],  sx=1.3333 n=0.1
+    K = P.T(-d).P^-1  ->  K[0][2] = +0.42666 / -0.42666   (matches the log)
+    row0 += d*row3    ==  inv(P.T(-d))                    exactly, both eyes
+
+And it still changes nothing. Take 70 ran with the patch firing
+(`invproj final: 236 modules corrected`); take 75 ran with it off
+(`0 modules corrected`). Same view, NCC +0.9991:
+
+    take 70  invproj ON   wing L 46.25  R 70.75  = 1.530x
+    take 75  invproj off  wing L 46.27  R 70.77  = 1.530x
+
+That is not a null result to shrug at — it is explained. The error the patch
+removes is a world-space offset of `ipd/2` = **3.2 cm**, and the cascades are
+2048x2048 over a spaceship exterior. The correction is far below one shadow
+texel, so it cannot move a shadow boundary. invproj is refuted for this
+artifact, and refuted for a reason.
+
+It also rules out the shape of the defect: 3.2 cm of positional error cannot
+produce `p90 77 vs 189`. Whatever the right eye is doing, it is not a slightly
+displaced version of the left eye's shading.
+
+### What is left
+
+Every mechanism proposed so far has been eliminated, and the eliminations are
+sound. What has never been done is the direct one: **find the first image in
+the frame where the two layers disagree by more than disparity explains.** The
+mirror's layer-1 path touches 24 images; `#57` is known to carry the defect
+already; `#55`, `#59`, `#60`, `#61` are written by the same forward passes and
+are earlier. Dump those per layer and bisect. That names a pass instead of
+proposing a tenth mechanism, and takes 68 through 75 are what proposing
+mechanisms has been worth.
