@@ -396,3 +396,63 @@ workarounds.
   `X4VR_NO_INJECT=1`, `X4VR_NO_CONFIG=1`. Under gamescope, `X4VR_NO_CONFIG=1`
   still gives the right resolution (the display provides it), so it stays a
   valid test of everything else.
+
+## 7. Measuring the frame
+
+### The probe's PPM dumps are tone-mapped, not raw
+
+`write_ppm` applies **Reinhard then gamma** before the byte reaches the file:
+
+    v = v / (1 + v);
+    byte = powf(v, 1.0f / 2.2f) * 255.0f;
+
+*Symptom:* brightness ratios that look plausible and are wrong by a large
+factor — a defect measured at "1.7x" that is really 3.2x. Worse, a
+multiplicative-versus-additive test run on these bytes measures the tone curve:
+Reinhard is not affine, so a constant gain in the render produces a *varying*
+ratio in the file.
+
+*Do:* invert it before comparing brightness — `t = (byte/255)**2.2`,
+`linear = t/(1-t)` — and only over a middle band. At byte 250 one code step is
+15% of the reconstructed value and 255 means infinity; at the bottom, byte 1 to
+2 is a factor of 4.5. `tools/shading_model.py` does this and fits only 10..235.
+
+Alignment is unaffected: NCC is affine-invariant, so every disparity found on
+the encoded bytes is still right. Only the ratios were wrong.
+
+### A knob that returns a null may be patching the wrong thing
+
+*Symptom:* a knob fires (the log confirms the count), coverage looks complete,
+and the measurement barely moves — so the hypothesis is recorded as refuted.
+
+`X4VR_PROJ_INVPROJ` did this for thirteen takes. It corrected camera member 2
+while X4's shadow cascades read member 4. 236 fragment modules load member 2
+and **2** load member 4, so every coverage metric — "100 of 138 eligible", "no
+coverage hole" — was healthy while the two modules that mattered went untouched.
+
+*Do:* before believing a shader-level null, `spirv-dis` the shader and name the
+instruction that consumes the patched value. Coverage counts measure how many
+modules were *touched*, never whether the right *data path* was.
+
+*The tell:* the knob moved the measurement by **0.04%**. Exactly zero means
+"never ran". Large means "ran and mattered". A **tiny non-zero means ran on the
+wrong thing**, and it is the most misleading of the three.
+
+*Do:* when one knob covers two populations of very different size, log them as
+**separate counters**. A combined "236 corrected" reads healthy in exactly the
+broken state; a separate line showing `0` does not.
+
+### Compare brightness only after locking disparity, on a patch that varies
+
+*Symptom:* ratio and difference statistics that are pure noise, from a patch
+that was quietly comparing two different surfaces.
+
+*Do:* two guards, both of which cost us a wasted measurement when skipped.
+Require the patch to align above **NCC 0.9** — one attempt here aligned at 0.38
+and its numbers were discarded. And require the patch to **span** a brightness
+range: on a flat surface gain and offset are algebraically indistinguishable,
+so any `(a, b)` fits and the answer is meaningless.
+
+*Do:* report *why* tiles were rejected, never a bare count. "0 tiles matched"
+has been misread as a verdict three times in this project and was never once
+one.

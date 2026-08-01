@@ -8,8 +8,9 @@ more.
 
 ## Where this stands (read this first)
 
-**Verified live and tagged.** The frame renders two genuinely different eyes
-from a single draw, up to the point where sampling takes over.
+**Current state: `stage2-stereo-shading-correct` (take 83).** Both eyes render
+from a single draw, both are correctly lit, and the parallax is real. This is
+the first state in the project where the stereo image is not visibly defective.
 
 | Tag | What it holds |
 |---|---|
@@ -18,10 +19,74 @@ from a single draw, up to the point where sampling takes over.
 | `stage2-per-eye-k` | Per-eye `K` via `gl_ViewIndex` — one draw, two different eyes |
 | `stage2-tonemap-masked` | The SRGB resolve replicates into both layers of `#103` (knob is misnamed) |
 | `stage2-frag-patch` | A patched sampler reads layer N in view N — proven offline, **not usable on X4** |
+| `stage2-duplicate-restored` | Both eyes have a picture at an acceptable framerate; right eye a bit-exact copy |
+| **`stage2-stereo-shading-correct`** | **Both eyes correctly lit, parallax real — take 83** |
 
-**The frame is stereo up to the first sampled read, and mono after it.** That
-is the entire remaining problem, and it is measured rather than assumed — the
-per-image probe table under "Take nineteen" below.
+Sections below are **chronological and include the wrong turns on purpose**.
+Several of them state conclusions that later sections refute. Where a claim was
+overturned the refutation is written next to it rather than replacing it, so
+read to the end of a thread before acting on its middle.
+
+### The per-eye shading defect, and how it was actually fixed
+
+Takes 56–83 chased one symptom: **one eye visibly darker than the other on
+large surfaces**, structure identical, which killed the sense of depth. It is
+worth stating the resolution up front because thirteen takes of this document
+argue toward the wrong answer first.
+
+**The bug.** X4's deferred lighting reconstructs surface position from
+`gl_FragCoord` and the depth buffer. `mod-0180`, the sun light with cascaded
+shadows, reconstructs it **twice from the same input**:
+
+    A = camera member 2 (M_invprojection)     -> the view vector. Specular.
+    B = camera member 4 (M_invprojection_uj)  -> x5 CSM matrices -> S_sampler2DShadow
+
+The eye shear moves `gl_Position` only, so the depth buffer belongs to the
+sheared eye while both matrices are the centre camera's. `patch_fragment_invproj_eye`
+corrected **member 2 only** — the view vector, which is nearly invisible — and
+left the shadow lookup reading the centre frame. A 3.2 cm position error at the
+shadow lookup is 36 px at 0.83 m, one full disparity, so a surface was
+**shadowed in one eye and lit in the other**.
+
+**The fix** (`cd0df98`): apply the same `T(d)·M` correction to member 4.
+`X4VR_PROJ_INVPROJ` defaults **on** from take 83 and covers both members.
+
+**Why it took thirteen takes.** The knob existed from take 67 and always
+returned a null, and that null was read as refuting the *mechanism*. Across 385
+fragment modules, 236 load member 2 and **2** load member 4 — so every coverage
+metric ("100 of 138 eligible", "no coverage hole") looked healthy while the two
+modules that mattered went untouched. The tell was there: the knob moved the
+measurement by **0.04%**. Exactly zero means "never ran"; large means "ran and
+mattered"; a *tiny non-zero* means **ran on the wrong thing**, and that is the
+most misleading of the three. The two members are now logged as separate
+counters for exactly this reason — a combined total reads a healthy 236 in
+precisely the broken state.
+
+    invproj final: per-eye M_invprojection — 224 modules corrected
+    invproj final: per-eye M_invprojection_uj — 2 modules corrected   <- this one
+
+**Measured, not described** (`#57`, tile ratio and the worst blob):
+
+| | tile p99 | flagged, confidently matched | blob median | blob p90 | crop NCC |
+|---|---|---|---|---|---|
+| take 82 (before) | 4.078 | 14.4% | 1.33 | 28.91 | 0.7653 |
+| take 83 (after)  | **1.536** | **1.8%** | **1.00** | **1.85** | **0.9055** |
+
+The last column is the independent check: the crop's own alignment improved with
+nothing about the measurement changed, which a fix that merely rescaled one eye
+could not do. Residual is 1.8% against the `IPD=0` control's 0.0%; some of that
+is genuine one-eye occlusion, which is correct stereo.
+
+**Two measurement corrections that came out of this**, both of which invalidate
+earlier numbers in this document:
+
+1. `write_ppm` applies Reinhard **and** gamma before writing, so every
+   brightness ratio read off a dump — 1.686, 1.530, the tile maps — is in
+   compressed units. `tools/shading_model.py` inverts it. In linear terms the
+   defect was ~3.2x, not 1.7x.
+2. Alignment must be locked before brightness is compared, and the tile must
+   span a brightness range or gain and offset are not separable. Both rules were
+   stated in this document and then broken.
 
 ### The frame graph, as far as it is known
 
