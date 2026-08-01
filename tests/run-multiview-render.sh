@@ -233,18 +233,20 @@ ann_case "real content is not called uniform" uniform content \
 # The predicate split: "does K apply?" and "does this replicate?" used to be
 # one question, and are no longer.
 #
-# rp #1 in this test is X4's tonemap in miniature -- a single colour
-# attachment, LDR, consuming the per-eye chain -- which stage 1 left unmasked
-# because the two verdicts were the same. It must now be maskable *without*
-# becoming sheared, so the assertion is the whole line: MONO (no K) and
-# +MASKED (replicates) at once. Either half alone would pass while the other
+# rp #1 in this test is a single colour attachment, LDR, consuming the per-eye
+# chain. The assertion is the whole line -- MONO (no K) and +MASKED
+# (replicates) at once -- because either half alone would pass while the other
 # regressed.
 #
-# The third case is the load-bearing one. It proves the carve-out keys on the
-# SRGB format and not on "LDR" in general, which is the difference between
-# masking X4's tonemap (#103, a normal doubled image) and masking the final
-# blit, whose attachment is the presented image and cannot take a second array
-# layer at all.
+# What this pass demonstrates changed at take 71. It was written as "X4's
+# tonemap in miniature", testing that masking keys on the SRGB format rather
+# than on LDR in general. That carve-out still exists but no longer decides
+# anything here: take 71 made every colour-with-no-depth subpass per-eye
+# unconditionally, which subsumes it. On real X4 the SRGB resolve is
+# `rp #55.0: 1 colour [76H] no-depth -> MONO (fullscreen post)
+# +MASKED(fullscreen)` -- so X4VR_MASK_TONEMAP does not decide that pass in the
+# game either. The carve-out is tested where it is still the deciding rule, in
+# the probe cases below, which have depth.
 mask_case() {
     local label="$1" want="$2"; shift 2
     local out cls fb
@@ -252,9 +254,15 @@ mask_case() {
         "VK_ADD_LAYER_PATH=$BUILD/layer" \
         "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
         "$BIN" "$VS" "$FS" "$SF" 2>&1)
-    if grep -q 'rp #1\.0:.*-> MONO (all-LDR/UI) +MASKED' <<<"$out"; then
+    # Read the verdict, not one reason string. This used to match the literal
+    # "MONO (all-LDR/UI)", so when take 71 started reporting the same pass as
+    # "MONO (fullscreen post)" every case fell through to `sheared` and the
+    # failure looked like a shear regression -- which is the one thing that had
+    # not happened. The reason text is the classifier's business; what this
+    # assertion is about is MONO-vs-STEREO and masked-vs-not.
+    if grep -qE 'rp #1\.0:.*-> MONO \(.*\) \+MASKED' <<<"$out"; then
         cls=masked
-    elif grep -q 'rp #1\.0:.*-> MONO (all-LDR/UI)' <<<"$out"; then
+    elif grep -qE 'rp #1\.0:.*-> MONO \(' <<<"$out"; then
         cls=mono
     else
         cls=sheared   # the regression this split exists to prevent
@@ -272,10 +280,71 @@ mask_case() {
     fi
 }
 
-mask_case "tonemap masks when SRGB"      masked "X4VR_TEST_OUT_SRGB=1" "X4VR_MASK_TONEMAP=1"
-mask_case "...but not without the knob"  mono   "X4VR_TEST_OUT_SRGB=1"
-mask_case "...and not for UNORM LDR"     mono   "X4VR_MASK_TONEMAP=1"
-mask_case "LDR pass unmasked by default" mono
+# These four used to read:
+#
+#   mask_case "tonemap masks when SRGB"      masked SRGB=1 MASK_TONEMAP=1
+#   mask_case "...but not without the knob"  mono   SRGB=1
+#   mask_case "...and not for UNORM LDR"     mono   MASK_TONEMAP=1
+#   mask_case "LDR pass unmasked by default" mono
+#
+# and had been failing since take 71, which added an unconditional clause to
+# classify_per_eye(): a subpass with colour attachments and **no depth** is
+# always per-eye, with no knob to turn it off, because unmasking those would
+# leave layer 1 with no lighting at all.
+#
+# rp #1 -- every pass this harness renders, in fact -- is exactly that shape.
+# So `mono` became unreachable, and the three cases asserting it were demanding
+# an outcome no input this file can construct will produce. They were not
+# detecting a regression; they were describing a layer that no longer exists.
+#
+# What is actually worth asserting about rp #1 is the take-71 rule itself, and
+# that it is *unconditional* -- the knobs must not move it.
+mask_case "fullscreen pass masks, SRGB+knob"  masked "X4VR_TEST_OUT_SRGB=1" "X4VR_MASK_TONEMAP=1"
+mask_case "...and without the knob"           masked "X4VR_TEST_OUT_SRGB=1"
+mask_case "...and for UNORM LDR"              masked "X4VR_MASK_TONEMAP=1"
+mask_case "...and by default: no knob undoes it" masked
+
+
+# The rest of the predicate matrix, which the rendered passes cannot reach.
+#
+# classify_unsheared()/classify_per_eye() are pure functions of the create-info,
+# so a render pass that is never executed still exercises them completely. The
+# harness creates four such probes as rp #2..#5 (see multiview_render.cpp) to
+# cover the shapes it cannot render. There is no framebuffer to cross-check
+# against here, which is why the executed pass above keeps its paired rp+fb
+# assertion -- this is the weaker check, used only where the stronger one
+# cannot exist.
+probe_case() {
+    local label="$1" serial="$2" want="$3"
+    local out got
+    out=$(env X4VR_LOG= X4VR_MV=1 X4VR_MV_INVENTORY=1 \
+        "VK_ADD_LAYER_PATH=$BUILD/layer" \
+        "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+        "$BIN" "$VS" "$FS" "$SF" 2>&1)
+    got=$(grep -oE "rp #$serial\.0:.*" <<<"$out" | head -1)
+    got="${got#*-> }"
+    if [[ "$got" == "$want" ]]; then
+        printf 'ok   %-38s %s\n' "$label" "$got"
+    else
+        printf 'FAIL %-38s want "%s", got "%s"\n' "$label" "$want" "$got"
+        fails=$((fails + 1))
+    fi
+}
+
+probe_case "colour, no depth: always masked" 2 \
+    "MONO (fullscreen post) +MASKED(fullscreen)"
+# The carve-out the four cases above were written to test. It is reachable --
+# it just needs depth, which is what stops the take-71 clause from firing.
+probe_case "LDR+depth is UI: unsheared, unmasked" 3 "MONO (all-LDR/UI)"
+probe_case "HDR+depth is world: sheared" 4 "STEREO (world)"
+# The load-bearing one. A depth-only pass must stay MONO *and* unmasked: X4's
+# five cascaded shadow maps are rendered by passes of this shape, and both eyes
+# have to sample the same light-space map. classify_per_eye() guards its
+# fullscreen clause on `colorAttachmentCount > 0` for exactly this reason.
+#
+# If this case ever reports +MASKED, the shadow maps have gone per-eye and the
+# per-eye shading defect that took takes 56-83 to find is back.
+probe_case "depth-only stays mono and unmasked" 5 "MONO (depth-only/shadow)"
 
 
 # The fragment patch: the *sample* follows the view index.

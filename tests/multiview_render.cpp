@@ -486,6 +486,93 @@ int main(int argc, char **argv) {
     VkRenderPass orp;
     CHECK(vkCreateRenderPass(dev, &orpci, nullptr, &orp));
 
+    // ---- classification probes (rp #2..#5) ------------------------------
+    //
+    // The layer decides shear and masking from the create-info alone, in
+    // classify_unsheared()/classify_per_eye(), so a render pass that is never
+    // executed still exercises the whole predicate. That is worth doing here
+    // because every pass this harness *renders* is a single colour attachment
+    // with no depth, and since take 71 that one shape is unconditionally
+    // per-eye. Four mask cases were written against the pre-71 model and had
+    // been failing ever since, asserting an outcome no input this file could
+    // construct would produce.
+    //
+    // These four cover the whole matrix instead. No framebuffer and no draws:
+    // the assertion is the inventory line, which is all a pure predicate can
+    // be asked for.
+    {
+        const VkFormat DFMT = VK_FORMAT_D32_SFLOAT;
+        const VkFormat LDR = VK_FORMAT_R8G8B8A8_UNORM;
+        const VkFormat HDR = VK_FORMAT_R16G16B16A16_SFLOAT;
+        struct Probe {
+            const char *name;
+            bool colour;
+            VkFormat cfmt;
+            bool depth;
+        } probes[] = {
+            // colour, no depth -> the take-71 rule: always masked, no knob.
+            {"fullscreen", true, LDR, false},
+            // colour + depth, all-LDR -> the UI/HUD shape. Unsheared, and NOT
+            // masked unless a knob asks, which is the carve-out the four stale
+            // cases were trying to reach and never could without depth.
+            {"ldr-depth", true, LDR, true},
+            // colour + depth, HDR -> world geometry. Sheared and per-eye.
+            {"world", true, HDR, true},
+            // depth only -> a shadow pass. Must stay MONO and *unmasked*: this
+            // is the guard that keeps X4's five cascaded shadow maps shared
+            // between the eyes. Both eyes must sample the same light-space map,
+            // and take 83's fix depends on it -- if this ever starts reporting
+            // +MASKED, the shadow maps have gone per-eye and the per-eye
+            // shading defect is back.
+            {"shadow", false, LDR, true},
+        };
+        for (const Probe &p : probes) {
+            VkAttachmentDescription att[2]{};
+            VkAttachmentReference cref{}, dref{};
+            uint32_t n = 0;
+            VkSubpassDescription sub{};
+            sub.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+            if (p.colour) {
+                att[n].format = p.cfmt;
+                att[n].samples = VK_SAMPLE_COUNT_1_BIT;
+                att[n].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                att[n].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                att[n].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                att[n].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                cref.attachment = n;
+                cref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                sub.colorAttachmentCount = 1;
+                sub.pColorAttachments = &cref;
+                n++;
+            }
+            if (p.depth) {
+                att[n].format = DFMT;
+                att[n].samples = VK_SAMPLE_COUNT_1_BIT;
+                att[n].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                att[n].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                att[n].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                att[n].finalLayout =
+                    VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+                dref.attachment = n;
+                dref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+                sub.pDepthStencilAttachment = &dref;
+                n++;
+            }
+            VkRenderPassCreateInfo rpci2{};
+            rpci2.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+            rpci2.attachmentCount = n;
+            rpci2.pAttachments = att;
+            rpci2.subpassCount = 1;
+            rpci2.pSubpasses = &sub;
+            VkRenderPass probe_rp;
+            CHECK(vkCreateRenderPass(dev, &rpci2, nullptr, &probe_rp));
+            // The serial the layer assigned is positional, so name it here
+            // rather than making the test script count render passes.
+            printf("PROBE_PASS=%s\n", p.name);
+            vkDestroyRenderPass(dev, probe_rp, nullptr);
+        }
+    }
+
     VkFramebufferCreateInfo ofbci{};
     ofbci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     ofbci.renderPass = orp;
