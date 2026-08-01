@@ -9517,3 +9517,165 @@ different surfaces, and the ratio and difference statistics it produced are
 worthless. Locking disparity on a distinctive feature before comparing
 brightness is a rule this document already records, and it was broken one
 paragraph after being relied on. Redo it on a patch that aligns above 0.9.
+
+## Every brightness number on `#57` and `#52` was measured through a tone map
+
+Before any of the above can be re-read, a correction that invalidates the
+*units* of most of this chapter. `write_ppm` does not dump the render:
+
+    v = v / (1 + v);                       // Reinhard
+    byte = powf(v, 1.0f / 2.2f) * 255.0f;  // gamma
+
+so the 1.686, the 1.530, the p90s, the tile map in `stereo_residual.py` — every
+one of them is a ratio of *compressed* values. `tools/stereo_residual.py` reads
+the encoded bytes and never inverts this.
+
+For alignment that is harmless: NCC is affine-invariant, so the disparities it
+found are still right. For brightness it is not, and for the
+multiplicative-versus-additive question it is fatal. Reinhard is not affine. A
+constant multiplicative term in the render produces a ratio in the file that
+*varies* with brightness, and a constant offset produces one that varies the
+other way. Asking "is the ratio constant?" of these bytes measures the tone
+curve, not the defect.
+
+Both steps invert wherever nothing clipped:
+
+    t = (byte / 255) ** 2.2        # == v/(1+v)
+    linear = t / (1 - t)
+
+but only over a middle band. At byte 250 one code step is 15% of the
+reconstructed value and 255 means infinity; at the bottom, byte 1 to 2 is a
+factor of 4.5. `tools/shading_model.py` therefore fits only bytes 10..235 and
+drops the rest instead of reconstructing noise.
+
+Converting the wing means through the inverse: the eye is not 1.7x dark, it is
+roughly **3.2x** dark. Every magnitude claim in this document that was read off
+a PPM is compressed by that curve.
+
+### `#57` is mostly black, which is why the guards kept firing
+
+76% of `#57` is byte 0 in both layers, and the median is 0. It is a light
+accumulation buffer in a space scene, so that is correct — but it means a
+whole-frame statistic is dominated by pixels carrying no information, and it
+means the worst blob (`x=1024-1151, y=1088-1151`, ratio 3.5-4.1) has only 27%
+of its pixels inside the trustworthy band.
+
+`shading_model.py` reports *why* each tile was rejected rather than a bare
+count, because "0 tiles" has been read as a verdict three times in this project
+and has never once been one.
+
+### The defect is localised, which kills two families at once
+
+On tiles that align above NCC 0.90 **and** span a factor of 3 in their own
+brightness, median `L1/L0` is **1.015**, and the outliers go both ways (0.77 and
+1.20). The two eyes agree to about 1.5% on ordinary textured surfaces.
+
+That is a negative result with teeth:
+
+* **A global per-eye exposure difference is dead.** An exposure multiplier
+  applies to the whole frame; it cannot leave 57 well-aligned tiles agreeing to
+  1.5% while moving others by 4x.
+* **A mono screen-space resource is dead**, and separately so on an inventory:
+  every storage-usage image in take 80 is a 3D volume (the 88x88x128 froxel
+  volumes, 64/128-cube noise) or a cubemap probe. There is **no compute-written
+  screen-space 2D image at all**, so the "compute cannot be per-view" gap has
+  nothing screen-space to leak through here.
+
+The five images written only by unmasked passes are `#70`-`#74`, all 2048^2
+`D16_UNORM` depth-stencil — the cascaded shadow maps. Those are *supposed* to be
+mono: both eyes must sample the same light-space map. The 28600 slots "kept at
+layer 0 as shared" are exactly those, and are correct.
+
+`#55`, the depth attachment the lighting passes test against, has writers
+`masked rp [13,17,19,22,24,23,25,44,50,57] unmasked rp []` — fully per-eye.
+
+### The multiplicative-versus-additive test, redone properly: **additive**
+
+The patch that aligned at NCC 0.3775 is replaced by the worst blob at its own
+measured disparity (`dx=-33`, NCC 0.765 including background; the surfaces
+themselves align far better). Stacking those crops shows the answer before any
+statistic: structure identical to the pixel — strut, grille, panel — and a
+broad, soft-edged bright region lying across the strut and tube in layer 1 that
+is simply **absent** in layer 0. A soft falloff, not a hard geometric edge.
+
+A smoothness comparison between the ratio and difference fields is **not**
+reported: the ratio field is clipped and its spread runs 0.82 to 29, so
+normalising each field by its own spread compares incomparable scales. It cannot
+answer the question and is discarded, not quoted.
+
+The fair test gives each model **one smooth spatial parameter** — a box-filtered
+gain field against a box-filtered offset field, same degrees of freedom — and
+compares residuals against `rms(L1)`:
+
+    tube+strut  w=9    multiplicative 32.7%   additive 26.1%   -> ADDITIVE
+    tube+strut  w=21   multiplicative 44.2%   additive 38.5%   -> ADDITIVE
+    panel       w=9    multiplicative 39.2%   additive 25.3%   -> ADDITIVE
+    panel       w=21   multiplicative 57.4%   additive 42.9%   -> ADDITIVE
+
+Consistent on both regions and both scales. **The missing term is additive** — a
+light or reflection contribution present in one eye and absent in the other —
+not an occlusion or ambient-occlusion factor scaling what is already there.
+
+This overturns the earlier "pure-gain fits better on 42 of 57 tiles". Those 57
+tiles are the ones that *pass* the guards, i.e. the ones with median ratio
+1.015 — the tiles with no defect in them. That comparison was modelling noise.
+Neither model is good (26-43% residual), so the term is not a purely smooth
+additive field either; the direction is what is established, not the magnitude.
+
+### invproj, checked a third time — the null is real
+
+Because an additive missing light points straight back at position
+reconstruction, `patch_fragment_invproj_eye` was read rather than re-run:
+
+* the derivation is right: `view_centre = P^-1 K^-1 clip = T(d) P^-1 clip`, so
+  `T(d)·M_invprojection` is the correct correction;
+* the implementation is right. The doc comment writes it as
+  `result[0][c] = M[0][c] + d·M[3][c]`, which in SPIR-V's column-major indexing
+  would be a *column* combine and wrong — but the emitted code does
+  `result[c][0] = M[c][0] + d·M[c][3]` for every column `c`, which is the row
+  operation `T(d)·M`. Only the comment's index order is inverted;
+* it is genuinely per-view: `d = d_left + float(gl_ViewIndex)·(d_right - d_left)`.
+
+So the 0.04% it moved the wing (46.25 -> 46.27) is a real null and not an
+artifact of a patch applied identically to both eyes. invproj stays dead.
+
+## P89 — is a module that lights `#57` being drawn unsheared?
+
+Everything that survives is on the geometry side. The vertex classifier splits
+modules into `world` (gets the eye shear) and `ui` (gets `K_ui`, identity by
+default), and take 80 reports `world=296 ui=54`. `X4VR_SHEAR_LIGHTS` moves 16 of
+those 54 and take 81 was bit-identical — which shows those 16 did not draw in
+this frame, **not** that the remaining 38 are innocent.
+
+A module drawing into the light-accumulation passes while classified `ui` is
+rasterised at the centre-camera position while the G-buffer it lights is sheared
+per eye. Where its geometry then fails to cover a surface, that surface loses
+that contribution entirely — an **additive** term, missing on one side, with the
+light's own soft falloff at the boundary. That is what the crops show.
+
+**P89: forcing `K_ui = K_world` will materially change `#57`'s per-eye
+difference.**
+
+The test needs no new knob. `X4VR_STEREO` writes only `K_world`/`K_world_r`, and
+`X4VR_CLIP_K_UI`/`X4VR_CLIP_K_UI_RIGHT` are parsed afterwards, so the UI
+matrices are independently settable to the same shear (`m8` is flat index 8):
+
+    X4VR_CLIP_K_UI="1,0,0,0,0,1,0,0,0.42666,0,1,0,0,0,0,1"
+    X4VR_CLIP_K_UI_RIGHT="1,0,0,0,0,1,0,0,-0.42666,0,1,0,0,0,0,1"
+
+Scored symmetrically — the ratio between the two layers on the same crops, plus
+`stereo_residual.py`'s tail and area — so the verdict survives a polarity flip,
+which is the one discipline that saved the earlier eliminations.
+
+**Expect the presented screen to look wrong.** Every UI/HUD module now carries a
+world shear. `#57` is written long before any of that, so the measurement is
+unaffected, but the frame Patola sees is not the thing being scored.
+
+* **If the blob ratio moves materially** — unsheared geometry in the lighting
+  passes is the source, and the next job is to find which modules and fix their
+  classification rather than shear everything.
+* **If `#57` is bit-identical again** — every module drawing into the lighting
+  passes is already sheared, and the whole "unsheared geometry" family dies at
+  once: the 38 remaining `ui` modules and the light volumes with them. That
+  would leave the additive term with no geometric explanation, and the next
+  place to look is the shader source of the modules bound to `rp #23`.
