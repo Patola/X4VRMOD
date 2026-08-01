@@ -9355,3 +9355,45 @@ modules) and is the only one of the three that is asymmetric by construction:
 a baked shear is a single constant, so it is right for one eye and wrong for
 the other. That is the next thing to check, and it needs a shader dump taken in
 the same run as the log, since serials are per-run.
+
+### Correction: baked sx is not asymmetric
+
+The section above named task #23 — the 12 modules with a baked `sx` — as the
+next suspect, on the grounds that a baked shear is one constant and therefore
+"right for one eye and wrong for the other". That is wrong, and take 79's own
+log refutes it without a run:
+
+    patched vertex shader #350 (ui) [world=296 ui=54 stereo=296 live-sx=284 baked-sx=12]
+
+`world == stereo == 296`: every world module is per-view. The baked path is
+`patch_vertex_clip(code, K, KR)` and it takes the right eye's `KR` alongside
+`K`, exactly as the live path takes `dl` and `dr`. A baked `sx` makes the shear
+wrong in *magnitude*, equally in both eyes. It cannot produce a defect that
+depends on the sign of `d`.
+
+Recorded rather than edited away, because the reasoning that produced it is the
+recurring one: "this is the only candidate with the right shape" is a claim
+about code that was never read.
+
+### What asymmetry actually requires
+
+Both eyes get correct, symmetric vertex shears. So the asymmetry cannot come
+from the shear itself — it has to come from something **fixed** interacting
+with something **signed**. The fixed thing combines with `+d` one way and `-d`
+the other, and any threshold in between turns an antisymmetric error into a
+one-sided defect.
+
+The candidate that fits is the one already on the list: the fragment stage
+reconstructs position through `M_invprojection`, which is *not* patched per eye
+by default, while the vertex stage's projection *is*. That mismatch is
+antisymmetric in `d` by construction. It was called refuted because take 70 ran
+with `X4VR_PROJ_INVPROJ=1` (236 modules corrected) and the wing did not move —
+but nobody has ever checked whether the modules `rp #24` actually executes are
+among the 236. Two of the six attachments share a format and the join was never
+read for this pass; the same gap that hid `rp #24`'s output image until take 78.
+
+That is what the dump is for. **P87: the fragment modules executing in
+`rp #23/#24/#25` are among the ones `patch_fragment_invproj_eye` corrects.** If
+they are, invproj is genuinely refuted for this defect and the reconstruction
+story dies with it. If they are not, take 70 tested a patch that never touched
+the pass where the defect is made, and the refutation was never valid.
