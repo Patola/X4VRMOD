@@ -85,6 +85,16 @@ def analyse(a, b, tile, maxshift):
                 if r < best_r:
                     best_s, best_r = s, r
             moved = a[y : y + tile, x - best_s : x - best_s + tile]
+            # The non-circular test. Selecting tiles by low residual and then
+            # reporting that they match in brightness is close to a tautology:
+            # a tile that differs photometrically keeps a high residual and is
+            # dropped from the very average meant to detect it. So fit a gain
+            # too, and ask whether it *buys* anything. If one eye were darker,
+            # scaling would collapse the residual. If the residual is
+            # structural -- parallax, occlusion -- a gain cannot help and
+            # usually hurts, because it distorts the parts that already agree.
+            gain = float(np.sum(moved * ref) / max(np.sum(moved * moved), 1e-9))
+            r_gain = np.abs(moved * gain - ref).mean()
             out.append(
                 (
                     best_s,
@@ -92,6 +102,8 @@ def analyse(a, b, tile, maxshift):
                     ref.mean(),
                     best_r,
                     np.abs(a[y : y + tile, x : x + tile] - ref).mean(),
+                    gain,
+                    r_gain,
                 )
             )
     return out
@@ -156,16 +168,28 @@ def main():
         print(f"  residual<{thr:<4g} {int(keep.sum()):4d} tiles   "
               f"aligned l1/l0 = {ratio:.4f}")
 
-    keep = res < 2.0
-    verdict = np.sum(m1[keep]) / max(np.sum(m0[keep]), 1e-9) if keep.sum() else 0
-    if keep.sum() and abs(verdict - 1.0) < 0.03:
-        print("\nVERDICT  the eyes shade the same surface the same way; the "
-              "whole-frame\n         ratio is displacement. This is what "
-              "correct stereo looks like.")
+    gain = np.array([r[5] for r in rows], np.float32)
+    rgain = np.array([r[6] for r in rows], np.float32)
+    bought = 1.0 - rgain / np.maximum(res, 1e-9)
+    print(f"gain test      per-tile gain p10/p50/p90 = "
+          f"{np.percentile(gain, 10):.3f}/{np.percentile(gain, 50):.3f}/"
+          f"{np.percentile(gain, 90):.3f}")
+    print(f"               fitting a gain changes the residual by "
+          f"{100 * np.median(bought):+.1f}% (median)")
+
+    # The verdict rests on the gain test, not on the aligned-brightness average
+    # above: that average is computed over tiles chosen for agreeing, and would
+    # report agreement almost regardless.
+    photometric = np.median(bought) > 0.15 and abs(np.median(gain) - 1.0) > 0.05
+    if photometric:
+        print("\nVERDICT  a per-tile gain absorbs much of the residual -- the "
+              "eyes shade\n         the same surface differently. Look at the "
+              "lighting.")
     else:
-        print("\nVERDICT  aligned tiles still differ in brightness -- a "
-              "shading difference\n         the disparity does not account "
-              "for. Look at the lighting.")
+        print("\nVERDICT  a per-tile gain buys nothing, so the residual is "
+              "structural, not\n         photometric: the eyes shade the same "
+              "surface the same way and the\n         whole-frame ratio is "
+              "displacement. This is correct stereo.")
 
     if args.png:
         from PIL import Image

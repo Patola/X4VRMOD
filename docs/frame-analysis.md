@@ -7805,3 +7805,68 @@ cockpit belongs that close to the viewer is a tuning question (IPD scale, or
 pushing the cockpit back), not a bug, and it should be judged **in stereo** —
 cross-eyed or in the headset. Every judgement so far, mine and Patola's, has
 been made on two flat frames or on a scalar, and neither can answer it.
+
+## Take 67 — the same answer at the surface Patola actually sees
+
+    X4VR_TAKE=67-EYE ... X4VR_MV_DUMP=/tmp/x4vr-t67 X4VR_MV_DUMP_IMG=52
+    X4VR_LOG=/tmp/x4vr-take67.log ./launch/x4vr-launch.sh
+
+Take 66 measured `#57`, which the probe samples **after `rp #24`** — the middle
+of light accumulation, before fog, before the copies, before tonemapping. So
+"the eyes light the same surface identically" was established for an
+intermediate buffer, not for the image on screen. Patola asked to isolate the
+dark patches from the depth question and fix them first, which is the right
+instinct and exposed that gap. This take dumps `#52`, one of the four presented
+eye images (`fmt 44`, `after rp #0`).
+
+    tiles          195, search +-400px
+    whole-frame    l1/l0 = 1.0762
+    disparity      p5/p50/p95 = -133/-26/164 px, 0 at the search bound
+    residual       24.15 unaligned -> 8.98 aligned (62.8% explained)
+    gain test      per-tile gain p10/p50/p90 = 0.734/0.990/1.124
+                   fitting a gain changes the residual by -2.1%
+
+Three independent readings, and the third is the one that carries the verdict:
+
+1. **Aligned brightness** — 0.9968 / 0.9988 / 1.0031 over the well-aligned
+   tiles. But see the correction below: on its own this is nearly circular.
+2. **The signed difference image** is textbook parallax. Every feature appears
+   as an *adjacent red/green pair* — green where it arrived in the right eye,
+   red where it left in the left — struts, console edges, holo display alike.
+   The distant starfield shows almost nothing, which is what zero disparity at
+   infinity looks like. There is no large single-colour region anywhere, which
+   is what a one-eye-only overlay would have produced.
+3. **The gain test.** Fit a per-tile gain on top of the alignment and ask what
+   it buys. If one eye were genuinely darker, scaling would collapse the
+   residual. It changes it by **−2.1%** — it makes the fit *worse* — and the
+   median gain is 0.990. The residual is structural, not photometric.
+
+**So the dark patches are parallax on near cockpit geometry, and there is
+nothing to fix before the headset.** The left eye shows dark background where
+the right shows lit cockpit, because the cockpit is close enough to occlude
+differently in each eye. That is also why they "shift in size with the angle of
+vision": different near geometry enters the frame as the camera turns.
+
+### A correction to the tool, one commit old
+
+`stereo_residual.py` shipped with a verdict that averaged brightness over tiles
+*selected for low residual*. That is close to a tautology — a tile that differs
+photometrically keeps a high residual and is dropped from the very average meant
+to detect it, so the tool would have reported agreement almost regardless. The
+gain test replaces it as the basis for the verdict, and the aligned-brightness
+rows are kept as description rather than evidence.
+
+Worth noting the shape of the mistake: it is the same one that produced the
+`l1/l0` error a day earlier. Build a number, do not ask what it reads when the
+answer is "healthy", and it will agree with you.
+
+### `rp #7` — the candidate that was not it
+
+The score output has warned in every run that `rp #7` writes a presented eye
+image unmasked while `rp #0` writes it masked, so "layer 1 misses whatever
+`rp #7` draws". It does draw: `rp #7 <- frag modules #1..#4`, sampling
+`set 0 binding 0`, a plain texture rather than the bindless heap. That is a real
+per-view asymmetry on the left eye, unexplained, and it was the first suspect
+here. The signed-difference image rules it out for *this* symptom — no
+unpaired region exists — but the warning is still true and still unexplained,
+and it is now the only known per-view asymmetry in the presented image. Task #26.
