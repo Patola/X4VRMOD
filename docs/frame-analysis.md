@@ -7870,3 +7870,80 @@ per-view asymmetry on the left eye, unexplained, and it was the first suspect
 here. The signed-difference image rules it out for *this* symptom — no
 unpaired region exists — but the warning is still true and still unexplained,
 and it is now the only known per-view asymmetry in the presented image. Task #26.
+
+## Take 67, second reading — there IS a shading defect, and both metrics hid it
+
+Patola rejected the "this is correct stereo" conclusion: *"in real life, if you
+close one eye at a time, you don't see a completely lit surface vs an almost
+completely dark surface, it's absurd."* He was right, and the record needs to
+say so plainly.
+
+### The measurement that finds it
+
+Lock onto a distinctive high-contrast feature to get the wing's *true*
+disparity — the vent on its top, matching at **−43 px, NCC 0.756** — then
+compare surfaces at that disparity:
+
+| surface | L0 | L1 | ratio |
+|---------|-----|-----|-------|
+| window slots (side-facing, diffuse) | 46.5 | 47.3 | **1.016** |
+| wing top (upward-facing), y=520 | 45.2 | 109.1 | **2.41** |
+| wing top (upward-facing), y=545 | 45.4 | 113.0 | **2.49** |
+
+Same object, correctly registered, one surface 2.4x brighter in the right eye
+and the surface next to it matching to 1.6%. The band crop shows it directly:
+the wing sits in the same place in both eyes and its top face is dark blue-grey
+in the left, near-white in the right.
+
+Across the frame, **9.9% of judged tiles differ by more than 1.25x while
+matching confidently in structure** — and occlusion cannot correlate at 0.7
+with something that is not there, so that set is same-surface by construction.
+The take 65 `IPD=0` dumps read **0.0%** on the same test, which is the negative
+control this needed all along.
+
+### Why two metrics in a row missed it
+
+- `l1/l0` is a whole-frame mean, already retired.
+- The first version of `stereo_residual.py` aligned tiles and reported a
+  **median**. The effect covers a few percent of the frame; a median is exactly
+  the statistic that discards it. It also selected tiles by *absolute residual*
+  — dropping a differently-lit tile from the average meant to detect it — and
+  it excluded everything within `maxshift` of either edge, leaving only the
+  middle 39% of the width examined.
+
+Both failures share a shape: **an aggregate chosen without asking what it does
+to a localized effect.** That now has its own entry in the recurring-error list.
+The human eye found this in one look at a side-by-side crop, twice, after two
+tools said there was nothing there.
+
+### P74 — committed before the run
+
+The pattern is specific: **diffuse, side-facing surfaces match; upward-facing,
+reflective ones do not.** That is the signature of a wrong *view-dependent*
+shading term — specular and environment reflection — while albedo and diffuse
+stay correct. Those terms are computed from a position reconstructed out of
+depth, and the layer patches that reconstruction per eye:
+`patch_fragment_invproj_eye`, applied to **230–238 modules**.
+
+That patch was built to fix the `#57` lift. The lift was not a defect. So the
+first hypothesis is that a correction written for a phantom problem is the
+source of a real one.
+
+Predict: with `X4VR_PROJ_INVPROJ` dropped, the flagged fraction falls
+materially from 9.9% and the wing-top ratio moves off 2.4x. If it does not, the
+patch is exonerated and the next knobs are `X4VR_BINDLESS_PATCH` /
+`X4VR_BINDLESS_MIRROR` (view 1 samples slot `index + 26653`; the mirror is
+sound for undoubled images, `l1 == VK_NULL_HANDLE -> verbatim copy`, but
+doubled intermediates are another matter) and then `X4VR_PROJ_LIVE`.
+
+### The run
+
+    X4VR_TAKE=68-NOINVPROJ X4VR_STEREO=1 X4VR_IPD=0.064 X4VR_BINDLESS_PATCH=1
+    X4VR_BINDLESS_MIRROR=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS=1
+    X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1 X4VR_MV=1 X4VR_MASK_PRESENT=1
+    X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1 X4VR_PROJ_SX=1.3333 X4VR_PROJ_LIVE=1
+    X4VR_MV_DUMP=/tmp/x4vr-t68 X4VR_MV_DUMP_IMG=52
+    X4VR_LOG=/tmp/x4vr-take68.log ./launch/x4vr-launch.sh
+
+Take 67 with `X4VR_PROJ_INVPROJ=1` dropped, nothing else changed. Scored with
+`tools/stereo_residual.py` on the `#52` dumps, against 9.9% and 2.4x.
