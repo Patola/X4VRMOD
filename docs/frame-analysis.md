@@ -7637,3 +7637,89 @@ tenth guess at a mechanism.
 `X4VR_MV_DUMP_IMG=57` writes up to six pairs of PPMs of the HDR scene colour,
 which is the instrument that answers "what is dark" rather than "how much".
 It costs nothing extra to arm and it already exists.
+
+## Take 65 — P71 confirmed: the shear causes it
+
+    X4VR_TAKE=65-IPD0 ... X4VR_IPD=0 ... X4VR_MV_DUMP=/tmp/x4vr-t65
+    X4VR_MV_DUMP_IMG=57 X4VR_LOG=/tmp/x4vr-take65.log ./launch/x4vr-launch.sh
+
+Every `#57` sample came back bit-identical:
+
+    layer0=35ae9ccff2a0f481  layer1=35ae9ccff2a0f481  IDENTICAL  level 0.02306/0.02306 (l1/l0 1.000)
+    layer0=fe32af4bafd88e24  layer1=fe32af4bafd88e24  IDENTICAL  level 0.009923/0.009923 (l1/l0 1.000)
+    layer0=ff23eba0a973b8d8  layer1=ff23eba0a973b8d8  IDENTICAL  level 0.01029/0.01029 (l1/l0 1.000)
+
+`score_run.py` graded the swapchain `DUPLICATE — layer 1 is a bit-exact copy of
+layer 0`, and Patola saw the two frames lit the same with no shift. **P71 holds.**
+
+Three things follow, and the third is the one that matters:
+
+- **The lift is caused by the shear.** Set `d = 0` and it is gone, to the bit.
+- **Per-view plumbing is excluded.** The six refused compute modules, the
+  `88x88x128` volumes, the mirrored descriptors — none of them can produce a
+  difference that vanishes when only the geometry changes. That whole branch,
+  which P71 named as the alternative, is dead without a run of its own.
+- **The probe is validated.** It reads both layers correctly and symmetrically;
+  a 1.000 on content this varied is not something a broken readback produces.
+  Four takes of scalar output rested on that assumption and it had never been
+  tested.
+
+The PPM dump also works — `fmt 97, after rp #24`, four pairs written, up to
+845152 non-zero texels. Worth noting **where** it samples: after `rp #24`, which
+is the middle of the three deferred light-accumulation passes. So the probe has
+never seen `#57` finished; it sees it between light passes, before fog.
+
+Arming the dump on the elimination run was a small planning error — the run that
+proves the layers identical is the run whose pictures show nothing. It cost
+nothing here because the run was needed anyway, but the instrument and the
+elimination wanted different takes.
+
+### What the shear actually is, worked through
+
+The layer logs `stereo: ipd=0.0640 sx=1.3333 near=0.100 -> shear m8 L=0.42666`,
+and `1.3333 * 0.032 / 0.1 = 0.42666`, so `m8 = sx*d/near`. Column-major index 8
+is row 0, column 2 — the term that feeds clip z into clip x.
+
+X4's projection is reverse-Z infinite-far: `m[10] = 0`, so `z_c = near_real*w_v`
+and `w_c = -z_v`. Then
+
+    x_c' = x_c + m8*z_c = sx*x_v - (sx*d/near_assumed)*near_real
+
+against the correct `sx*(x_v - d)`. **`near` does not cancel.** The applied
+shear is the intended one scaled by `near_real / near_assumed`, so a wrong
+`near` is a direct multiplier on the effective IPD. `X4VR_PROJ_LIVE` reads `sx`
+from X4's camera block at runtime; nothing reads `near`.
+
+If the form is right, screen disparity is `704 * sx*d / z_v` pixels — about
+30/z_v, so a metre away is 30 px and distant stars are 0. Measured disparity was
+~84 px on the loaded-save frame, which is the right order for a cockpit.
+
+### P72 and P73 — committed before the run
+
+**P72.** In the dumps at normal IPD, the difference between the layers is a
+*displacement*, not an attenuation: layer 0 will match layer 1 shifted
+horizontally, and the residual after a best-fit per-region horizontal alignment
+will be far smaller than the raw 33% `DIFFER`. P71 showed the difference is
+purely geometric, and geometry cannot remove light from a surface — only move
+where it lands. **If the residual stays large after alignment**, the eyes differ
+in *shading* rather than position, and the mechanism is inside the lighting.
+
+**P73.** `X4VR_DUMP_MATRICES=1` arms `read_proj_terms()`, which reports
+`proj MEASURED` / `proj ASSUMED` / `proj SHEAR : baked is N.NNNx the correct
+magnitude` from X4's own un-jittered `M_projectionUJ`. This has never been run
+alongside the probe. Predict it reports a ratio materially different from
+1.000 — the `near = 0.1` default is a Phase 4a assumption and enters as a
+divisor. If it reports 1.000, the shear magnitude is right and task #23's worry
+about `near` is closed.
+
+### The run
+
+    X4VR_TAKE=66-PIC X4VR_STEREO=1 X4VR_IPD=0.064 X4VR_BINDLESS_PATCH=1
+    X4VR_BINDLESS_MIRROR=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS=1
+    X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1 X4VR_MV=1 X4VR_MASK_PRESENT=1
+    X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1 X4VR_PROJ_SX=1.3333 X4VR_PROJ_LIVE=1
+    X4VR_PROJ_INVPROJ=1 X4VR_DUMP_MATRICES=1 X4VR_MV_DUMP=/tmp/x4vr-t66
+    X4VR_MV_DUMP_IMG=57 X4VR_LOG=/tmp/x4vr-take66.log ./launch/x4vr-launch.sh
+
+Take 64's command with `X4VR_SHEAR_LIGHTS` dropped (refuted), `X4VR_IPD` back to
+0.064, and the two instruments added. No code changes; both are read-only.
