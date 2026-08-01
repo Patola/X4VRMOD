@@ -7723,3 +7723,85 @@ about `near` is closed.
 
 Take 64's command with `X4VR_SHEAR_LIGHTS` dropped (refuted), `X4VR_IPD` back to
 0.064, and the two instruments added. No code changes; both are read-only.
+
+## Take 66 — P72 confirmed, P73 refuted, and `l1/l0` was never a defect
+
+    X4VR_TAKE=66-PIC ... X4VR_IPD=0.064 ... X4VR_DUMP_MATRICES=1
+    X4VR_MV_DUMP=/tmp/x4vr-t66 X4VR_MV_DUMP_IMG=57
+    X4VR_LOG=/tmp/x4vr-take66.log ./launch/x4vr-launch.sh
+
+### P73 refuted — the shear magnitude is right
+
+    proj MEASURED: sx=1.33333 sy=-1.33333 near=0.10000 (jittered sx=1.33333 near=0.10000)
+    proj ASSUMED : sx=1.33330 near=0.10000
+    proj SHEAR   : measured |m8|=0.42667 vs baked |m8|=0.42666 -> baked is 1.000x the correct magnitude
+
+`near` is exactly 0.1. The Phase 4a assumption was right and the algebra above,
+which made `near` a multiplier on the effective IPD, is correct but harmless.
+**Task #23's `near` worry is closed.**
+
+The same instrument answered the *other* half of task #23, which was the real
+one: `sx` is **not** constant. Over one session it moved
+
+    #3: sx 1.33333 -> 3.78085   (correct |m8| 1.20987, baked 0.42666)
+    #4: sx 3.78085 -> 1.15174   (correct |m8| 0.36856, baked 0.42666)
+
+a 3.3x range — X4's zoom, sustained for 75 seconds at 3.78. `X4VR_PROJ_LIVE`
+handles this for 284 of 296 world modules; the remaining **12 baked-sx modules
+carry a shear up to 2.8x wrong whenever the player zooms**. Small, real, and now
+the only live part of task #23.
+
+### P72 confirmed — and it dismantles the metric
+
+Per-tile horizontal disparity search on the dumped layer pairs, then brightness
+compared *after* compensating for the disparity:
+
+| frame | whole-frame `l1/l0` | disparity p5/p50/p95 | residual explained | **aligned `l1/l0`** |
+|-------|--------------------|----------------------|--------------------|--------------------|
+| n0    | 1.001              | 0 / 0 / 0 px         | —                  | **1.0002** |
+| n2    | 1.219              | −247 / −28 / +19 px  | 75.8%              | **1.0101** |
+| n3    | 1.215              | −379 / −28 / 0 px    | 74.6%              | **1.0064** |
+
+(Whole-frame ratios are on the tonemapped 8-bit dumps; the probe's HDR figure
+for n2 is 1.846. Same frames, same conclusion.)
+
+**Where both eyes see the same surface, they light it identically — to within
+0.1%.** The leftover residual traces occlusion edges and nothing else: run
+`tools/stereo_residual.py --png out` and the map is thin outlines along the
+strut and wing silhouettes, with black interiors. That is parallax. One eye sees
+behind a silhouette the other does not, and no shift can align that.
+
+So `#57`'s lift is **displacement, not attenuation**, and the sign that "no
+candidate has predicted" for six takes has a dull explanation: this cockpit is
+bright on the right and dark on the left, the shift moves bright structure in at
+one edge and dark space out at the other, and the whole-frame mean follows. Take
+62's 1.288 and n0's 1.000 were the same statistic on scenes with less to move.
+
+### The correction
+
+**`l1/l0` cannot tell correct stereo from broken stereo, and I scored takes 56
+through 66 on it.** Two correctly offset views of an asymmetric scene have
+different whole-frame means; that is what the ratio measures. Every "mechanism"
+excluded for the lift — the invprojection correction, the fog composite, the
+light volumes, the descriptor path, and the rest — was excluded for a symptom
+that was never a defect. Those exclusions are still *true*; they were just
+answers to the wrong question.
+
+The tell was there from take 61: `missing=120049 extra=117437`, a near-symmetric
+pair of edge bands, is the signature of a shift. I read those fields for four
+takes as scene bookkeeping next to the number I cared about.
+
+`tools/stereo_residual.py` is the instrument that does discriminate. It takes a
+probe dump pair and reports aligned brightness with a verdict line, so this
+question is one command from now on instead of a session of reasoning.
+
+### What is actually left on `#57`
+
+Nothing, as a rendering defect. What remains is **comfort**: the p5 disparity is
+−247 px, which at 1408 px across a 73.7° frame is about 13° — geometry roughly
+12 cm from the eye. That is the correct disparity for a 64 mm IPD at that
+distance, and it is also far beyond what eyes fuse comfortably. Whether X4's
+cockpit belongs that close to the viewer is a tuning question (IPD scale, or
+pushing the cockpit back), not a bug, and it should be judged **in stereo** —
+cross-eyed or in the headset. Every judgement so far, mine and Patola's, has
+been made on two flat frames or on a scalar, and neither can answer it.
