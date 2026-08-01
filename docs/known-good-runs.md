@@ -124,3 +124,44 @@ of a miscount. Score every run with `tools/score_run.py`, which refuses to read
 a log containing more than one session before it looks at anything else.
 
 Use a fresh `X4VR_LOG` per run. Always.
+
+## `stage2-stereo-shading-correct` — take 83
+
+The first state in this project where both eyes are **correctly lit** and the
+parallax is real. Patola, on the screen: both frames bright, and the IPD shift
+visible.
+
+    X4VR_TAKE=83-UJ X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408
+    X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2
+    X4VR_PROJ_SX=1.3333 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1
+    X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1
+    X4VR_LOG=/tmp/x4vr-take83.log
+    ./launch/x4vr-launch.sh
+
+`X4VR_PROJ_INVPROJ=1` was passed explicitly on the run itself; it is **on by
+default from this commit**, so the line above omits it. `X4VR_MV_DUMP`,
+`X4VR_MV_DUMP_IMG`, `X4VR_MV_PROBE` and `X4VR_MV_INVENTORY` were measurement
+only and are dropped here.
+
+**What to check in the log:**
+
+    invproj final: per-eye M_invprojection — 224 modules corrected
+    invproj final: per-eye M_invprojection_uj — 2 modules corrected
+
+The second line is the one that matters. A `0` there is the pre-83 defect, and
+it will not show up in the first line, which stays healthy at ~224 either way.
+
+**Scored, not described:** `#57` whole-frame tile ratio `p1/p50/p99 =
+0.573/0.993/1.536` against take 82's `0.662/1.016/4.078`; confidently-matched
+flagged area 1.8% against 14.4%; worst blob median `1.00` against `1.33` and p90
+`1.85` against `28.91`.
+
+**Known defects riding along**, none of them new: the cursor is confined to a
+centred square (task #19), X4's logo is clipped at its right edge (task #21),
+the doubling overshoot is untightened, and `run-multiview-render.sh` has 10
+pre-existing failures. The residual 1.8% is above the `IPD=0` control's 0.0%,
+part of which is genuine one-eye occlusion.
+
+**Reproducing anything older than this tag needs `X4VR_PROJ_INVPROJ=0`.** The
+default changed here, and every earlier take ran with the correction off by
+omitting the variable.
