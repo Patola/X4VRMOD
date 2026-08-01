@@ -8448,3 +8448,108 @@ lit and dark?**
   that never were.
 
 Do not add a knob to fix a failed run.
+
+## Take 71 — the run was degenerate, but it handed over two decisive facts
+
+`X4VR_BINDLESS_PATCH=0`, log-confirmed (`index-offset patch — 0 modules
+edited`). Patola: the missing shadows came back in the right eye, **and the two
+frames no longer differ by any IPD at all**.
+
+He is right, and it makes the run uninformative for the question it was asked.
+`#52` reads `IDENTICAL` on every one of six samples, `l1/l0 1.000`. The
+composite samples the scene through the same bindless heap, so with no offset it
+reads view 0's copy for both eyes. **The artifact vanished because the stereo
+vanished** — the same degeneracy as IPD=0, and the same shape of mistake as take
+68. P78 is unanswered, not confirmed. Recorded rather than salvaged.
+
+### Fact 1 — the scene IS reproducible, so cross-run comparison is back
+
+    take 71 n2 vs take 70 n2 (different runs)   NCC = +0.9986
+                 n3 / n4 / n5                   +0.9892 / +0.9950 / +0.9871
+
+Load the save, touch nothing for three minutes, and the frame repeats to three
+decimals. The earlier +0.2834 between takes 68 and 69 was runs where the view
+had been moved, not an inherent property. The section above withdrawing
+fixed-coordinate verdicts is itself withdrawn: it is valid whenever the controls
+are untouched, and that is now the protocol.
+
+### Fact 2 — the difference is born in the fullscreen passes
+
+|  image                | offset ON (take 70) | offset OFF (take 71) |
+|---|---|---|
+| `#61` G-buffer        | l1/l0 **1.005**     | 1.005, still DIFFERs |
+| `#57` lighting output | l1/l0 **1.846**     | 31.1 / 67.4 (garbage, never sampled) |
+
+The G-buffer's two eyes agree to 0.5%; the lighting output's disagree by 85%.
+`#57` is written by six passes, of which **`rp #31` and `rp #32` write nothing
+else**:
+
+    rp #31.0: 1 colour [97H] no-depth final=1 -> STEREO (world)
+    rp #32.0: 1 colour [97H] no-depth final=1 -> STEREO (world)
+    rp #23.0/#24.0/#25.0/#53.0: 1 colour [97H] depth 126 final=2 -> STEREO (world)   <- the G-buffer
+
+**No depth attachment.** Depth-tested world geometry cannot be rasterised
+without one, so these are fullscreen triangles — deferred lighting — and they
+were classified `STEREO`, meaning K was being applied to them.
+
+Counting the whole frame:
+
+    no-depth final=1 -> STEREO      3
+    no-depth final=2 -> STEREO     26      <- 29 fullscreen passes, all sheared
+    depth 126 final=2 -> STEREO    12      <- the actual world geometry
+
+`rp #52` is in that list. It is the 4096x1 exposure reduction, which is as
+clearly not world geometry as a pass can be, and it was being sheared.
+
+### P79 — shearing a fullscreen triangle is the defect
+
+This file already contained the argument, written for the tonemap: *"it is a
+fullscreen triangle, so K must NOT be applied to it -- shearing a fullscreen
+triangle is meaningless."* `classify_unsheared()` exempted depth-only passes and
+all-LDR passes. **An HDR fullscreen pass falls through both**, and 29 of them
+did.
+
+Shearing one displaces the quad sideways per eye while the buffers it samples
+stay put, so every fragment reads the wrong texel. On the hull that decides
+lit-or-shadowed, which is why a whole face flips, and why the ratio explodes
+between a pass that carries depth and one that does not.
+
+The fix adds one clause to `classify_unsheared()` — no depth attachment and at
+least one colour attachment means fullscreen, do not shear — using the *index*
+and not the pointer, which is the lesson `subpass_is_present()` cost 37 takes.
+`classify_per_eye()` gains the same clause so these passes stay masked; they
+were masked before by falling through `!unsheared`, and unmasking them would
+leave layer 1 with no lighting at all. **The set of doubled passes is therefore
+unchanged, and so is the frame cost.** Only K's reach shrinks, from 41 passes
+to 12.
+
+`X4VR_SHEAR_NODEPTH=1` restores the old behaviour, so the previous state is
+reachable from a knob and not only from git.
+
+    X4VR_TAKE=72-NOSHEAR-FULLSCREEN X4VR_STEREO=1 X4VR_IPD=0.064
+    X4VR_BINDLESS_PATCH=1 X4VR_BINDLESS_MIRROR=1 X4VR_RES=1408x1408
+    X4VR_GAMESCOPE=1 X4VR_SBS=1 X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1
+    X4VR_MV=1 X4VR_MASK_PRESENT=1 X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1
+    X4VR_PROJ_SX=1.3333 X4VR_PROJ_LIVE=1 X4VR_MV_DUMP=/tmp/x4vr-t72
+    X4VR_MV_DUMP_IMG=52 X4VR_LOG=/tmp/x4vr-take72.log ./launch/x4vr-launch.sh
+
+Take 70's configuration exactly, with the rebuilt layer. Load, touch nothing for
+three minutes.
+
+Score from the log first:
+
+1. the 29 no-depth passes now read `MONO (fullscreen post) +MASKED(fullscreen)`;
+2. `#52` still **DIFFERs** — if it reads IDENTICAL the stereo has been destroyed
+   again and the run is degenerate like take 71;
+3. `#57`'s `l1/l0` falls from **1.846** toward `#61`'s 1.005;
+4. then the eyes: is the hull shaded the same in both?
+
+P79 predicts all four. **If `#52` goes IDENTICAL**, masking was lost somewhere
+and the per_eye clause is wrong. **If `#57` stays at 1.846**, the fullscreen
+shear was not the mechanism and the next question is what else rp #31/#32 read
+differently per eye — the bindless offset applied to a table that is not a
+per-eye render target. Do not add a knob to fix a failed run.
+
+Because the view now repeats, take 70's dumps are a true before-image:
+`~/x4vr-baselines/x4vr-t70-img52-n2-layer{0,1}.ppm`, wing at
+`x=845..1408 y=845..1130`, left mean 46.25 against right 70.75.

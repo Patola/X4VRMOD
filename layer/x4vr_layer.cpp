@@ -1537,8 +1537,29 @@ const bool g_mask_present = [] {
     return e && *e && *e != '0';
 }();
 
+// Does this subpass actually have a depth attachment?
+//
+// The index, never the pointer -- a subpass may carry a valid
+// pDepthStencilAttachment aimed at VK_ATTACHMENT_UNUSED, which is exactly the
+// distinction that cost takes 31 through 68 in subpass_is_present().
+template <typename CreateInfo, typename Subpass>
+bool subpass_has_depth(const CreateInfo *ci, const Subpass &sp) {
+    if (!sp.pDepthStencilAttachment)
+        return false;
+    const uint32_t a = sp.pDepthStencilAttachment->attachment;
+    return a != VK_ATTACHMENT_UNUSED && a < ci->attachmentCount;
+}
+
+// Restore the pre-take-71 behaviour of shearing fullscreen passes, so the
+// previous state stays reachable from a knob rather than from git.
+const bool g_shear_nodepth = [] {
+    const char *e = getenv("X4VR_SHEAR_NODEPTH");
+    return e && *e && *e != '0';
+}();
+
 // Classify each subpass as "must not be sheared":
 //   * no colour attachments        -> shadow cascade (light space)
+//   * no depth attachment          -> fullscreen post pass (screen space)
 //   * all colour attachments LDR   -> UI / final blit (screen space)
 // Everything else is world geometry rendered through the camera projection,
 // which is what K was derived for.
@@ -1549,6 +1570,30 @@ std::vector<bool> classify_unsheared(const CreateInfo *ci) {
         const auto &sp = ci->pSubpasses[i];
         if (sp.colorAttachmentCount == 0) {
             unsheared[i] = true; // depth-only: shadow pass
+            continue;
+        }
+        // A pass with no depth attachment cannot be rasterising depth-tested
+        // world geometry -- there is nothing to test against. It is a
+        // fullscreen triangle: deferred lighting, SSAO, a bloom mip, an
+        // exposure reduction. K must not touch those, for the reason already
+        // written above about the tonemap: shearing a fullscreen triangle is
+        // meaningless. It displaces the quad sideways per eye while the
+        // buffers it samples stay put, so every fragment reads the wrong
+        // texel and the result is lighting that disagrees between the eyes.
+        //
+        // Take 70 measured the consequence. The G-buffer (rp #23/24/25/53,
+        // which do carry depth) agrees between eyes to 0.5%; #57, the lighting
+        // output written by the no-depth rp #31/#32, disagrees by 85% -- and
+        // on screen the ship's hull is shadowed in one eye and blown white in
+        // the other. 29 of X4's passes were being sheared this way against 12
+        // genuine world-geometry passes, including the 4096x1 exposure
+        // reduction, which is as clearly not world geometry as a pass can be.
+        //
+        // This changes only the shear. classify_per_eye() below keeps every
+        // one of these masked, so the set of doubled passes -- and the frame
+        // cost -- is exactly what it was.
+        if (!g_shear_nodepth && !subpass_has_depth(ci, sp)) {
+            unsheared[i] = true;
             continue;
         }
         bool all_ldr = true, any = false;
@@ -1696,6 +1741,14 @@ std::vector<bool> classify_per_eye(const CreateInfo *ci) {
     std::vector<bool> per_eye(ci->subpassCount, false);
     for (uint32_t i = 0; i < ci->subpassCount; i++)
         per_eye[i] = !unsheared[i] ||
+                     // Fullscreen post passes reached this predicate through
+                     // !unsheared until take 71 made them unsheared. They must
+                     // stay masked -- unmasking them would leave layer 1 with
+                     // no lighting at all -- so say it explicitly, and the set
+                     // of doubled passes is exactly what it was. Guarded on
+                     // having colour so depth-only shadow passes stay shared.
+                     (ci->pSubpasses[i].colorAttachmentCount > 0 &&
+                      !subpass_has_depth(ci, ci->pSubpasses[i])) ||
                      (g_mask_tonemap && subpass_is_srgb_resolve(ci, ci->pSubpasses[i])) ||
                      (g_mask_present && subpass_is_present(ci, ci->pSubpasses[i])) ||
                      (g_mask_ldr && subpass_is_all_ldr(ci, ci->pSubpasses[i]));
@@ -1755,6 +1808,7 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
             // left alone.
             const bool cand = g_mask_present && subpass_is_present(ci, sp);
             const char *why = sp.colorAttachmentCount == 0 ? "depth-only/shadow"
+                              : !subpass_has_depth(ci, sp) ? "fullscreen post"
                               : unsheared[i]               ? "all-LDR/UI"
                                                            : "world";
             // The MONO/STEREO verdict is about K. Since the split it no longer
@@ -1778,7 +1832,9 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
             // scene-dependent one.
             const char *rule = "";
             if (unsheared[i] && per_eye[i]) {
-                if (g_mask_tonemap && subpass_is_srgb_resolve(ci, sp))
+                if (sp.colorAttachmentCount > 0 && !subpass_has_depth(ci, sp))
+                    rule = " +MASKED(fullscreen)";
+                else if (g_mask_tonemap && subpass_is_srgb_resolve(ci, sp))
                     rule = " +MASKED(tonemap)";
                 else if (g_mask_present && subpass_is_present(ci, sp))
                     rule = " +MASKED(present)";
