@@ -8773,3 +8773,65 @@ finally exist — says what modules #368/#370/#372 actually sample.
 
 The shader dump must never be committed; X4's modules are copyright, which is
 why they live in `/tmp`.
+
+## Take 74 — P81 refuted, and the shader dump finally exists
+
+The fix fired and the stereo survived:
+
+    bindless mirror final: ... 167958 of them layer-1, 24350 kept at layer 0 as
+    shared (unmasked writers only), 0 skipped for no room
+    mv probe: img #52 ... DIFFER ... level 47.75/50.45 (l1/l0 1.057)
+
+and the artifact did not move. Same view as take 72 (NCC +0.9929):
+
+    take 72 wing   left 46.22  right 70.73   1.53x
+    take 74 wing   left 46.14  right 70.65   1.53x
+
+**P81 is refuted.** Either the shadow cascades are not reached through that
+descriptor path, or an empty layer 1 is not what the right eye reads. The change
+is kept — an image written only by unmasked passes is shared by construction and
+pointing view 1 at its layer 0 is correct regardless — but it is not the fix.
+
+Worth noting what "unknown writers keep the old behaviour" implies: if X4 writes
+a shadow map's descriptor once at startup, before any framebuffer names it, the
+predicate returns true and the substitution happens anyway. That is a live
+possibility this run cannot distinguish from "shadow maps are not sampled
+through binding 5 at all", and the shader dump can now settle it.
+
+### The durable asset
+
+`/tmp/x4vr-shaders-take74` holds **397 modules**, and `/tmp/x4vr-take74.log` is
+its matching join. Module, image and render-pass serials are per-run, so these
+two files are only meaningful together — and together they are the first time in
+this project that a named module can actually be read. Every earlier attempt
+joined a dump to a different run's log, which is how `#364` appeared as a
+compute module in take 69 and a fragment module in take 72.
+
+Never commit the dump: X4's modules are copyright, which is why they live in
+`/tmp`.
+
+### What is established about the defect
+
+* It is in the **right eye** (layer 1, the `index + 26653` mirror path); the
+  left eye's path is stable across every run.
+* It is present already in `#57` **after `rp #24`**, a forward geometry pass, so
+  it is not made in deferred lighting.
+* The wing keeps its panel lines, seams and vents in both eyes and only its
+  brightness changes, so it is not a wrong albedo — it is a shading input.
+* It is proportional to nothing about the *screen* and everything about the
+  geometry: shadow-receiving hull is hit hard, nebula and stars not at all.
+* Eliminated with runs: `patch_fragment_invproj_eye` (both directions),
+  `rp #7`/present masking, the fullscreen shear, `X4VR_SHEAR_LIGHTS`, the
+  empty-shadow-map mirror. Eliminated offline: a per-eye exposure difference,
+  `M_invprojection_uj`, and any descriptor write path the mirror could miss
+  (both `vkUpdateDescriptorSets` and `vkUpdateDescriptorSetWithTemplate` are
+  intercepted, and there are no push descriptors).
+
+### The next step is reading, not running
+
+The remaining question is what the forward-geometry fragment modules
+(`rp #23/#24/#25` <- modules #100, #102, #104, #106, ...) actually sample and
+how they index the heap — in particular whether any index reaches the mirror at
+a slot X4 never wrote. That is now answerable offline against
+`/tmp/x4vr-shaders-take74`, and it should be answered before another run is
+spent.
