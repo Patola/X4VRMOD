@@ -8336,3 +8336,28 @@ and cannot show a difference. The exclusion is true for what it tested and says
 nothing about compute-computed lighting at IPD≠0. Recorded rather than relied
 on — this is the second time an IPD=0 control has been mistaken for a general
 one.
+
+### The view is not repeatable, so a fixed-coordinate crop cannot be a verdict
+
+Take 70 was to be scored by cropping the rim at fixed coordinates, on the
+assumption that loading the same save the same way gives the same view. It does
+not. Takes 68 and 69 were loaded identically:
+
+    take 68 vs take 69 (left eye, whole frame)  NCC = +0.2834
+    the rim crop specifically, t68 vs t69       NCC = -0.1186
+
+The ship drifts and the probe fires several seconds after load, so no two runs
+share a frame. That invalidates more than the plan: the take 68 -> 69 comparison
+(2.15% -> 1.65% left-dark) was also across different scenes, which is the exact
+flaw called out one paragraph earlier for takes 67 vs 68 and then repeated.
+
+**Anything compared at fixed image coordinates across runs is void.** What
+survives is (a) within-frame, view-independent measurements — a shadow's
+disparity against the disparity of the surface it lies on; (b) frame-wide
+statistics read across the three dumps of a run, as a trend and not a value;
+and (c) Patola's eye, which has located this defect twice in one glance after
+three tools reported nothing.
+
+P77's verdict is therefore Patola's report — gone / unchanged / better but
+visible — with the numbers as cross-check. The run command is unchanged; the
+instruction to hold the view is withdrawn as unachievable.
