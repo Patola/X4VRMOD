@@ -9397,3 +9397,66 @@ That is what the dump is for. **P87: the fragment modules executing in
 they are, invproj is genuinely refuted for this defect and the reconstruction
 story dies with it. If they are not, take 70 tested a patch that never touched
 the pass where the defect is made, and the refutation was never valid.
+
+## Take 80 — P87 confirmed, invproj properly dead, and an elimination that was void
+
+The dump and its log are a matched pair, and the run reproduced the defect
+before anything was read from it: `#57` L 27.99 / R 47.18 = 1.686, `#52` 1.529.
+
+### P87 confirmed
+
+`rp #23` carries 138 fragment modules; `rp #24` and `#25` carry none, because
+pipelines are created against `#23` and executed in the compatible passes. Of
+those 138, checked against the patch's own eligibility rule — a fragment entry
+point, camera vars at (set 1, binding 0) taking *all* aliases, an
+`OpAccessChain` naming member 2 with exactly one index, loaded in the entry
+function:
+
+    modules executing in rp #23/#24/#25 : 138
+      eligible for the invproj patch    : 100
+      NOT eligible                      : 38
+
+Take 70 corrected 236 of 244 eligible modules overall, so the patch did reach
+this pass — about 100 of its modules — and the wing did not move by 0.02.
+**invproj is refuted, and this time the refutation is valid**: the instrument
+reached the target and reported nothing.
+
+### The light-volume elimination was scored on the discredited metric
+
+`X4VR_SHEAR_LIGHTS` shears "geometry positioned by the camera rather than by a
+per-object matrix — X4's instanced deferred light volumes", and it is **off by
+default**. So by default the light volumes are *not* sheared while the geometry
+*is*.
+
+That is the shape the defect now demands. Geometry moves by ±disparity between
+the eyes; the light volumes stay where the centre camera puts them; so a volume
+sits offset one way in the `-x` eye and the other way in the `+x` eye. Where a
+volume stops covering a surface, that surface loses that light's contribution
+and goes dark. Antisymmetric in `d`, made in the lit output and not in the
+G-buffer, and tracking which geometry is lit — every established fact.
+
+It was excluded at take 64, and the exclusion does not hold:
+
+    Against 1.846 / 1.860 / 1.846. **P70 is refuted.**
+    level 0.004787/0.008839 (l1/l0 1.847)
+
+`l1/l0` is the whole-frame mean — the metric this document later recorded as
+unable to tell correct stereo from broken, and the one the "aggregates hide
+local defects" finding was written about. The wing crop that reads 1.686 did
+not exist until take 72. A localized change over a few percent of the frame is
+invisible to that number by construction, so take 64 measured nothing about
+this defect either way.
+
+The knob itself worked, which is worth stating so the re-test is not re-running
+a no-op:
+
+    take 80 (off) patched vertex shader #350 [world=296 ui=54 stereo=296 ...]
+    take 64 (on)  patched vertex shader #350 [world=312 ui=38 stereo=312 ...]
+
+Sixteen modules move from UI to World when it is set — the camera-positioned
+light volumes, reclassified and therefore sheared.
+
+**P88: `X4VR_SHEAR_LIGHTS=1` materially reduces the wing ratio from 1.686.**
+Confirm `world=312 ui=38` in the log before reading the wing, and score the
+crop and its p90 — never `l1/l0`, which is what voided this question the first
+time.
