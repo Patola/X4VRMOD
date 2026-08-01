@@ -7420,3 +7420,66 @@ P70 is **not yet tested**, and no fix is implemented here. The measurement above
 establishes that the light volumes are unsheared; it does not establish that this
 is what produces the difference. Eight mechanisms have died from that exact step
 being skipped.
+
+## Designing the widened predicate offline (`tools/predicate_design.py`)
+
+Run against all 397 modules of take 61's dump, with **runtime ground truth** for
+which modules X4 actually bound to which passes — not guesses about what a
+shader "looks like". The analyser reads the **vertex entry point's function
+only**, since X4 ships combined modules and a whole-module scan answers a
+different question.
+
+### The stated fear was wrong: widening cannot break shadows
+
+    current rule: 320 World of 397
+        shadow    48/56 World
+
+**48 of 56 shadow-pass modules are already World under today's rule.** If module
+classification were the only gate, shadows would already be broken — and they are
+not. The protection is at the **pass** level:
+
+    rp #34.0: 0 colour [] depth 124 final=-1 -> MONO (depth-only/shadow)
+    bindless mirror final: unsheared twin swapped into 1042 pipeline stage(s)
+
+A depth-only pass has zero colour attachments, so `classify_unsheared`'s "all
+colour attachments are LDR" is vacuously true and the pass is marked MONO; the
+layer then substitutes the unsheared twin into every pipeline built for it.
+
+So the previous section's warning — *"a careless widening breaks shadows, which
+is the exact failure that killed the earlier VR attempt"* — was **wrong about
+this codebase**. The two gates are independent and the pass gate is the one that
+protects shadows. Recorded because it was stated confidently and in the docs.
+
+### The candidate
+
+World if today's rule holds, **or** the module has no set-3 block at all and its
+vertex stage reads a camera-block view/projection matrix — members 0 `M_view`,
+1 `M_projection`, 7 `M_viewprojection`, 8 `M_viewinverse`. That is geometry
+positioned by the camera rather than by a per-object matrix, which is exactly
+what an instanced light volume is.
+
+    widened rule: 338 World of 397   (+18)
+
+    newly World: 202 203 206 207 208 209 216 217 222
+                 223 224 225 226 227 254 255 365 366
+
+    fullscreen / no vertex attributes (UI risk) :  0
+    bound to present passes                     :  0
+    bound to lighting passes                    :  6  (207 209 223 225 227 255)
+    bound to shadow passes                      :  2  (203 225)
+
+**Zero fullscreen modules and zero present-pass modules** are caught, so the
+take-33 logo regression is not reachable this way. The six light-volume modules
+are.
+
+### The one dependency worth naming
+
+Modules 203 and 225 are bound to shadow passes. They are safe **only because the
+pass-level MONO gate neutralises them**, not because the predicate excludes them.
+That is a real coupling: if `classify_unsheared` ever stops marking depth-only
+passes MONO, these two begin shearing in a light-space pass where clip z is not
+the constant near plane the derivation assumes. Written down rather than left as
+a property someone rediscovers by breaking it.
+
+P70 stands as recorded. Nothing is implemented yet; this section is the design
+and its safety argument, done before any code.
