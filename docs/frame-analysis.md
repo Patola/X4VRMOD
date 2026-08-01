@@ -7358,3 +7358,65 @@ The `#58 -> #65` step has not been traced module-by-module; the chain is asserte
 from formats and sizes, which is strong but is not the same as reading the
 shader. And the sign of the difference — a symmetric ±d shear yielding a
 one-directional 1.86× — remains unexplained by everything established so far.
+
+## The lighting passes, read with `#57` correctly identified
+
+`rp #23/#24/#25` are **deferred light accumulation**. `mod-0207`'s own names say
+so: `IO_center`, `IO_radius`, `IO_lightcolor`, `IO_Intensity`,
+`IO_SpecularIntensity`, `SPECIAL_VERTEXLOCATION_INSTANCE0..5`, a single
+`OUT_RT0`, and a subpass input. These are **instanced light volumes** — a sphere
+drawn per light, reading the G-buffer through the subpass input and accumulating
+its contribution into `#57`.
+
+For contrast, `mod-0172` has `OUT_RT0..RT3`, the material and world blocks, and
+tangent/binormal/UV sets: that is a G-buffer fill shader. The two are different
+jobs, and until `#57` was correctly identified they were being read as one.
+
+### The defect: the lights are not sheared, the geometry they light is
+
+`classify()` calls a module World only if its **vertex stage reads member 0 of
+the set-3 block** (`M_worldviewprojection`). `mod-0207` and `mod-0209` declare
+**only sets 0 and 1 — no set 3 at all**. They classify UI and receive the
+identity shear.
+
+Measured over every module bound to `rp #23/#24/#25`:
+
+    140 modules bound (2 absent from the dump)
+      125  set-3 WORLD  -> sheared per eye
+       13  no set-3     -> UI, UNSHEARED
+           [18, 154, 156, 170, 176, 182, 207, 209, 223, 225, 227, 255, 267]
+
+**So in view 1 the scene geometry is displaced by the eye shear and the light
+volumes are not.** A light sphere positioned by instance data covers a set of
+pixels; the G-buffer under those pixels has moved; the light is applied to the
+wrong ones. Where a volume fails to cover a pixel it should have lit, that pixel
+loses that light's contribution *entirely*.
+
+This is the first candidate that is a genuine defect rather than a
+reinterpretation of correct behaviour, and it predicts the measured shape without
+being fitted to it: differences that are **additive**, **concentrated in dark
+regions** (a missing light contribution is proportionally largest where little
+other light arrives), and **survive parallax alignment** (aligning geometry
+cannot align a term applied in the unsheared frame). Coverage gained on one side
+and lost on the other is also the first thing that offers a route to the
+**one-directional sign**, which nothing else has.
+
+`classify()`'s rule is not wrong so much as too narrow, and its docstring explains
+why it is narrow: shearing a light-space shadow pass would be actively incorrect,
+because there clip z is not the constant near plane the derivation assumes.
+Geometry positioned by *instance data* rather than by a set-3 matrix simply falls
+through the gap. Whatever fix follows must widen the rule without catching the
+shadow passes or the UI — the 13 modules above are not all light volumes, and
+`mod-0182` is in the list, which take 63 showed is bound to nine passes including
+all five shadow passes.
+
+### P70 — committed before any code is written
+
+Shearing the light volumes per eye will **materially reduce** the `#57` lift from
+its stable `l1/l0 = 1.846`. If it does not move, light-volume coverage is not the
+source either and the count of excluded mechanisms reaches nine.
+
+P70 is **not yet tested**, and no fix is implemented here. The measurement above
+establishes that the light volumes are unsheared; it does not establish that this
+is what produces the difference. Eight mechanisms have died from that exact step
+being skipped.
