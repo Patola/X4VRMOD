@@ -1,35 +1,41 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later WITH x4vrmod-linking-exception
-"""Tell correct stereo apart from broken stereo, on a pair of probe dumps.
+"""Find surfaces the two eyes light differently, on a pair of probe dumps.
 
-The layer's probe reports `l1/l0`, the ratio of whole-frame means. Takes 56
-through 66 were scored on that number, and take 66 showed it cannot do the job:
-two *correctly* offset views of the same scene have different whole-frame means
-whenever the scene is left-right asymmetric, because the shift moves bright
-content in at one edge and dark content out at the other. `l1/l0 = 1.846` on
-X4's cockpit is what correct stereo looks like there, not a defect.
+Two metrics have already failed at this question, and both failed the same way.
 
-What separates the two cases is whether the eyes *shade* the same surface the
-same way. So: find each tile's horizontal disparity by search, then compare
-brightness after compensating for it.
+The layer's probe reports `l1/l0`, the ratio of whole-frame means. Takes 56-66
+were scored on it. It cannot work: two *correctly* offset views of an
+asymmetric scene have different whole-frame means, because the shift moves
+bright content in at one edge and dark out at the other.
 
-  - Correct stereo -> aligned tiles match to within ~1%, and the leftover
-    residual sits on occlusion edges, where one eye sees behind a silhouette
-    the other does not. Nothing can align that; it is the parallax itself.
-  - A shading defect -> aligned tiles still differ, and the residual fills
-    interiors rather than tracing outlines.
+The first version of this tool then aligned each tile and compared brightness
+-- and reported a median. Take 67's frame has a wing whose top surface is
+**2.4x brighter in the right eye**, and the median said 1.000, because the
+effect covers a few percent of the frame and a median is exactly the statistic
+that discards it. Worse, it selected tiles by absolute residual, which drops a
+differently-lit tile from the average meant to detect it.
+
+So this version:
+
+  - matches by **normalized cross-correlation**, which is invariant to an
+    affine intensity change, so a surface lit twice as brightly still finds its
+    own disparity instead of being discarded;
+  - **propagates** disparity from confident neighbours into tiles that lost
+    correlation, because a washed-out surface loses texture as well as
+    brightness, and it sits next to tiles that did match;
+  - reports the **tail and the total area**, never a bare median, and names the
+    worst offenders with coordinates so they can be cropped and looked at.
 
 Usage:
 
     tools/stereo_residual.py <layer0.ppm> <layer1.ppm> [--tile 64] [--max 400]
-    tools/stereo_residual.py --png out-prefix <layer0.ppm> <layer1.ppm>
+    tools/stereo_residual.py <layer0.ppm> <layer1.ppm> --png out-prefix
 
-The inputs are what `X4VR_MV_DUMP=<prefix> X4VR_MV_DUMP_IMG=<serial>` writes:
+Inputs are what `X4VR_MV_DUMP=<prefix> X4VR_MV_DUMP_IMG=<serial>` writes:
 `<prefix>-img<serial>-n<seq>-layer{0,1}.ppm`, 8-bit binary P6.
 
-Only numpy is required. `--png` additionally needs Pillow, and writes the
-residual map -- worth looking at, because "edges" and "interiors" is a
-distinction the eye makes instantly and a scalar makes badly.
+numpy only; `--png` also needs Pillow and writes a ratio map.
 """
 
 import argparse
@@ -37,11 +43,15 @@ import sys
 
 import numpy as np
 
+# A tile counts as differently lit past this ratio. 1.25 is well clear of the
+# few-percent spread that correct stereo shows at occlusion boundaries, and far
+# under the 2.4x that take 67 found, so it is not tuned to catch one frame.
+RATIO_FLAG = 1.25
+
 
 def load_ppm(path):
-    """Read a binary P6 PPM. The header is whitespace-delimited, three fields
-    before the maxval, and the dumps carry no comments -- but a comment would
-    silently shift the pixel offset, so reject anything that is not P6."""
+    """Read a binary P6 PPM. Comments would shift the pixel offset, so they are
+    parsed rather than assumed absent."""
     with open(path, "rb") as f:
         data = f.read()
     if not data.startswith(b"P6"):
@@ -65,65 +75,68 @@ def load_ppm(path):
     return px.reshape(h, w, 3).astype(np.float32)
 
 
-def analyse(a, b, tile, maxshift):
-    """Per-tile horizontal disparity search, and brightness after compensation.
+def ncc(u, v):
+    u = u - u.mean()
+    v = v - v.mean()
+    d = np.sqrt((u * u).sum() * (v * v).sum())
+    return float((u * v).sum() / d) if d > 1e-6 else 0.0
 
-    Tiles within `maxshift` of either edge are skipped rather than clamped: a
-    tile whose true match lies outside the frame would otherwise report the
-    best *available* shift, which is a number with no meaning attached to it.
+
+def disparity_field(a, b, tile, maxshift):
+    """Best horizontal shift per tile, by normalized cross-correlation.
+
+    NCC rather than absolute difference: NCC is invariant to an affine
+    intensity change, so a surface one eye lights twice as brightly still
+    correlates with itself and gets a correct shift, instead of being thrown
+    out -- which is precisely the tile this tool exists to find.
+
+    Tiles are searched over the whole frame. The previous version skipped
+    everything within `maxshift` of either edge, which on a 1408-wide image
+    with a 400px search left only the middle 39% under examination.
     """
     h, w = a.shape
-    out = []
-    for y in range(0, h - tile + 1, tile):
-        for x in range(maxshift, w - tile - maxshift + 1, tile):
+    ny, nx = h // tile, w // tile
+    sh = np.zeros((ny, nx), np.float32)
+    cc = np.full((ny, nx), -2.0, np.float32)
+    for iy in range(ny):
+        for ix in range(nx):
+            y, x = iy * tile, ix * tile
             ref = b[y : y + tile, x : x + tile]
-            if ref.max() < 2 and a[y : y + tile, x : x + tile].max() < 2:
-                continue  # both empty: any shift matches, so it votes on nothing
-            best_s, best_r = 0, float("inf")
+            if ref.std() < 3:
+                continue  # flat: NCC is noise here, let a neighbour decide
             for s in range(-maxshift, maxshift + 1, 2):
-                r = np.abs(a[y : y + tile, x - s : x - s + tile] - ref).mean()
-                if r < best_r:
-                    best_s, best_r = s, r
-            moved = a[y : y + tile, x - best_s : x - best_s + tile]
-            # The non-circular test. Selecting tiles by low residual and then
-            # reporting that they match in brightness is close to a tautology:
-            # a tile that differs photometrically keeps a high residual and is
-            # dropped from the very average meant to detect it. So fit a gain
-            # too, and ask whether it *buys* anything. If one eye were darker,
-            # scaling would collapse the residual. If the residual is
-            # structural -- parallax, occlusion -- a gain cannot help and
-            # usually hurts, because it distorts the parts that already agree.
-            gain = float(np.sum(moved * ref) / max(np.sum(moved * moved), 1e-9))
-            r_gain = np.abs(moved * gain - ref).mean()
-            out.append(
-                (
-                    best_s,
-                    moved.mean(),
-                    ref.mean(),
-                    best_r,
-                    np.abs(a[y : y + tile, x : x + tile] - ref).mean(),
-                    gain,
-                    r_gain,
-                )
-            )
-    return out
-
-
-def residual_map(a, b, tile, maxshift, step=3):
-    h, w = a.shape
-    res = np.zeros((h, w), np.float32)
-    for y in range(0, h - tile + 1, tile):
-        for x in range(0, w - tile + 1, tile):
-            ref = b[y : y + tile, x : x + tile]
-            best = float("inf")
-            for s in range(-maxshift, maxshift + 1, step):
                 xs = x - s
                 if xs < 0 or xs + tile > w:
                     continue
-                r = np.abs(a[y : y + tile, xs : xs + tile] - ref).mean()
-                best = min(best, r)
-            res[y : y + tile, x : x + tile] = best
-    return res
+                c = ncc(a[y : y + tile, xs : xs + tile], ref)
+                if c > cc[iy, ix]:
+                    cc[iy, ix], sh[iy, ix] = c, s
+    return sh, cc
+
+
+def propagate(sh, cc, good=0.7):
+    """Fill unconfident tiles from confident neighbours.
+
+    A surface that is blown out in one eye loses texture as well as gaining
+    brightness, so it can lose correlation too. Its disparity is still that of
+    the surface around it. Dropping such tiles is how the first version of this
+    tool reported "no difference" on a frame containing a 2.4x one.
+    """
+    ny, nx = sh.shape
+    out = sh.copy()
+    rel = cc >= good
+    if not rel.any():
+        return out, rel
+    gmed = float(np.median(sh[rel]))
+    for iy in range(ny):
+        for ix in range(nx):
+            if rel[iy, ix]:
+                continue
+            ys = slice(max(0, iy - 1), iy + 2)
+            xs = slice(max(0, ix - 1), ix + 2)
+            near = sh[ys, xs][rel[ys, xs]]
+            out[iy, ix] = float(np.median(near)) if near.size else gmed
+    return out, rel
 
 
 def main():
@@ -132,74 +145,96 @@ def main():
     ap.add_argument("layer1")
     ap.add_argument("--tile", type=int, default=64)
     ap.add_argument("--max", type=int, default=400, dest="maxshift")
-    ap.add_argument("--png", metavar="PREFIX", help="also write a residual map")
+    ap.add_argument("--min-level", type=float, default=8.0,
+                    help="ignore tiles darker than this in both eyes")
+    ap.add_argument("--png", metavar="PREFIX", help="write a ratio map")
     args = ap.parse_args()
 
     a = load_ppm(args.layer0).mean(axis=2)
     b = load_ppm(args.layer1).mean(axis=2)
     if a.shape != b.shape:
         sys.exit(f"size mismatch: {a.shape} vs {b.shape}")
+    h, w = a.shape
+    T = args.tile
 
-    rows = analyse(a, b, args.tile, args.maxshift)
-    if not rows:
-        sys.exit("no tiles with content -- both layers look empty")
-    sh = np.array([r[0] for r in rows], np.float32)
-    m0 = np.array([r[1] for r in rows], np.float32)
-    m1 = np.array([r[2] for r in rows], np.float32)
-    res = np.array([r[3] for r in rows], np.float32)
-    raw = np.array([r[4] for r in rows], np.float32)
+    sh, cc = disparity_field(a, b, T, args.maxshift)
+    shp, rel = propagate(sh, cc)
 
-    print(f"tiles          {len(rows)} of {a.shape[0]}x{a.shape[1]}, "
-          f"{args.tile}px, search +-{args.maxshift}px")
+    ratio = np.full(sh.shape, np.nan, np.float32)
+    lvl = np.zeros(sh.shape, np.float32)
+    for iy in range(sh.shape[0]):
+        for ix in range(sh.shape[1]):
+            y, x = iy * T, ix * T
+            s = int(shp[iy, ix])
+            xs = min(max(x - s, 0), w - T)
+            m0 = a[y : y + T, xs : xs + T].mean()
+            m1 = b[y : y + T, x : x + T].mean()
+            lvl[iy, ix] = max(m0, m1)
+            if max(m0, m1) >= args.min_level:
+                ratio[iy, ix] = m1 / max(m0, 1e-6)
+
+    ok = ~np.isnan(ratio)
+    if not ok.any():
+        sys.exit("no tile bright enough to judge -- lower --min-level")
+    r = ratio[ok]
+    print(f"tiles          {int(ok.sum())} judged of {sh.size} "
+          f"({T}px, search +-{args.maxshift}px, whole frame)")
+    print(f"               {int(rel.sum())} matched confidently (NCC>=0.7), "
+          f"the rest took a neighbour's disparity")
     print(f"whole-frame    l1/l0 = {b.mean() / max(a.mean(), 1e-9):.4f}   "
           "<- the probe's number; not a verdict")
-    print(f"disparity      p5/p50/p95 = "
-          f"{np.percentile(sh, 5):.0f}/{np.percentile(sh, 50):.0f}/"
-          f"{np.percentile(sh, 95):.0f} px, "
-          f"{int(np.sum(np.abs(sh) >= args.maxshift - 2))} at the search bound")
-    print(f"residual       {raw.mean():.2f} unaligned -> {res.mean():.2f} "
-          f"aligned  ({100 * (1 - res.mean() / max(raw.mean(), 1e-9)):.1f}% "
-          "explained by displacement)")
-    for thr in (1.0, 2.0, 4.0):
-        keep = res < thr
-        if keep.sum() == 0:
-            continue
-        ratio = np.sum(m1[keep]) / max(np.sum(m0[keep]), 1e-9)
-        print(f"  residual<{thr:<4g} {int(keep.sum()):4d} tiles   "
-              f"aligned l1/l0 = {ratio:.4f}")
+    print(f"disparity      p5/p50/p95 = {np.percentile(shp, 5):.0f}/"
+          f"{np.percentile(shp, 50):.0f}/{np.percentile(shp, 95):.0f} px")
+    print(f"tile ratio     p1/p50/p99 = {np.percentile(r, 1):.3f}/"
+          f"{np.percentile(r, 50):.3f}/{np.percentile(r, 99):.3f}")
 
-    gain = np.array([r[5] for r in rows], np.float32)
-    rgain = np.array([r[6] for r in rows], np.float32)
-    bought = 1.0 - rgain / np.maximum(res, 1e-9)
-    print(f"gain test      per-tile gain p10/p50/p90 = "
-          f"{np.percentile(gain, 10):.3f}/{np.percentile(gain, 50):.3f}/"
-          f"{np.percentile(gain, 90):.3f}")
-    print(f"               fitting a gain changes the residual by "
-          f"{100 * np.median(bought):+.1f}% (median)")
+    off = (ratio > RATIO_FLAG) | (ratio < 1.0 / RATIO_FLAG)
+    bad = ok & off
+    # The verdict rests on this narrower set: tiles whose *structure* matched
+    # confidently at the chosen shift. A tile can be bright in one eye and dark
+    # in the other because the other eye sees past a silhouette -- that is
+    # occlusion, and it is correct. It cannot also correlate at 0.7, because
+    # there would be nothing there to correlate with. So a confident match plus
+    # a brightness mismatch is the same surface lit two ways, and nothing else.
+    sure = bad & rel
+    frac = 100.0 * bad.sum() / max(ok.sum(), 1)
+    fsure = 100.0 * sure.sum() / max(ok.sum(), 1)
+    print(f"flagged        {int(bad.sum())} tiles ({frac:.1f}% of judged) "
+          f"differ by more than {RATIO_FLAG:g}x")
+    print(f"  of those     {int(sure.sum())} ({fsure:.1f}% of judged) also "
+          "matched confidently -- same surface, cannot be occlusion")
 
-    # The verdict rests on the gain test, not on the aligned-brightness average
-    # above: that average is computed over tiles chosen for agreeing, and would
-    # report agreement almost regardless.
-    photometric = np.median(bought) > 0.15 and abs(np.median(gain) - 1.0) > 0.05
-    if photometric:
-        print("\nVERDICT  a per-tile gain absorbs much of the residual -- the "
-              "eyes shade\n         the same surface differently. Look at the "
-              "lighting.")
+    if bad.any():
+        idx = np.argsort(np.where(sure, -np.abs(np.nan_to_num(ratio) - 1), 0).ravel())
+        print("worst offenders (crop these and look):")
+        for k in idx[: min(8, int(bad.sum()))]:
+            iy, ix = divmod(int(k), sh.shape[1])
+            print(f"   x={ix * T:4d}-{ix * T + T - 1:4d} y={iy * T:4d}-"
+                  f"{iy * T + T - 1:4d}   shift={int(shp[iy, ix]):+4d}px  "
+                  f"NCC={cc[iy, ix]:+.2f}  L1/L0={ratio[iy, ix]:.2f}")
+
+    # The verdict is area-based on purpose. A median cannot see an effect that
+    # covers a few percent of the frame, and a few percent of the frame is
+    # exactly what a wrongly-lit surface looks like.
+    if fsure >= 2.0:
+        print(f"\nVERDICT  {fsure:.1f}% of judged tiles are lit differently in "
+              "the two eyes.\n         Same surface, same place, different "
+              "brightness -- this is a shading\n         defect, not parallax.")
     else:
-        print("\nVERDICT  a per-tile gain buys nothing, so the residual is "
-              "structural, not\n         photometric: the eyes shade the same "
-              "surface the same way and the\n         whole-frame ratio is "
-              "displacement. This is correct stereo.")
+        print("\nVERDICT  no meaningful area is lit differently; what differs "
+              "between the\n         eyes is where things are, not how they "
+              "are lit.")
 
     if args.png:
         from PIL import Image
 
-        rm = residual_map(a, b, 32, min(args.maxshift, 300))
-        Image.fromarray(np.clip(rm * 8, 0, 255).astype(np.uint8)).save(
-            f"{args.png}-residual.png"
-        )
-        print(f"\nwrote {args.png}-residual.png -- outlines mean parallax, "
-              "filled areas mean shading")
+        big = np.repeat(np.repeat(np.nan_to_num(ratio, nan=1.0), T, 0), T, 1)
+        rgb = np.zeros((h, w, 3), np.uint8)
+        rgb[..., 1] = np.clip((big - 1.0) * 255, 0, 255)  # green: right brighter
+        rgb[..., 0] = np.clip((1.0 / np.maximum(big, 1e-6) - 1.0) * 255, 0, 255)
+        Image.fromarray(rgb).save(f"{args.png}-ratio.png")
+        print(f"\nwrote {args.png}-ratio.png  "
+              "(green = right eye brighter, red = left eye brighter)")
 
 
 if __name__ == "__main__":
