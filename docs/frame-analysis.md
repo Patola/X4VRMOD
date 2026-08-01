@@ -7483,3 +7483,72 @@ a property someone rediscovers by breaking it.
 
 P70 stands as recorded. Nothing is implemented yet; this section is the design
 and its safety argument, done before any code.
+
+## State entering take 64 — read this first after a context reset
+
+### The run to make
+
+    X4VR_TAKE=64-P70 X4VR_STEREO=1 X4VR_IPD=0.064 X4VR_BINDLESS_PATCH=1
+    X4VR_BINDLESS_MIRROR=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS=1
+    X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1 X4VR_MV=1 X4VR_MASK_PRESENT=1
+    X4VR_MV_PROBE=1 X4VR_MV_INVENTORY=1 X4VR_PROJ_SX=1.3333 X4VR_PROJ_LIVE=1
+    X4VR_PROJ_INVPROJ=1 X4VR_SHEAR_LIGHTS=1 X4VR_LOG=/tmp/x4vr-take64.log
+    ./launch/x4vr-launch.sh
+
+Take 61's command plus `X4VR_SHEAR_LIGHTS=1`, nothing else. Cockpit scene.
+
+### How to score it
+
+`python3 tools/score_run.py /tmp/x4vr-take64.log`, then the probe line:
+
+    grep "mv probe: img #57" /tmp/x4vr-take64.log
+
+**The number that matters is `l1/l0`.** It has been `1.846` in take 61,
+`1.860` in take 62 and `1.846` in take 63, with `changed` inside three texels of
+420,054 every time. That stability is the instrument's strongest property: a
+real move is unmistakable against it.
+
+Confirm the knob actually fired before reading anything into the result — the
+count of newly-sheared modules should be non-zero, and 6 of the 18 are in the
+lighting passes.
+
+### P70, as committed
+
+Shearing the light volumes **materially reduces** the lift from 1.846. If
+`l1/l0` does not move, light-volume coverage is excluded too — that would be the
+ninth mechanism — and the next step is **not** a tenth guess.
+
+Also worth having Patola watch the picture, not only the number: if the lighting
+visibly shifts in either eye, that is information the probe cannot supply.
+
+### What is established, so it is not re-derived
+
+- **`#57` is X4's main-view HDR scene colour.** Not a G-buffer attachment; the
+  G-buffer is `#54/#59/#60/#61` filled by `rp #17`. This document said otherwise
+  for many sessions and every early mechanism was reasoned against the wrong
+  kind of buffer.
+- **`rp #23/#24/#25` are deferred light accumulation** — instanced light volumes
+  reading the G-buffer through a subpass input. `rp #31/#32` is volumetric fog
+  composited in place, and it **carries** the difference rather than making it.
+- **X4 creates render passes in pairs.** One twin takes the pipelines, the other
+  takes the framebuffer. A pass→shader join keyed on the `VkRenderPass` handle
+  returns nothing for exactly the passes that draw.
+- **Shadows are protected at the pass level, not the module level.** Depth-only
+  passes classify `MONO` and get the unsheared twin. 48 of 56 shadow modules are
+  already World under the narrow rule and shadows are fine.
+- **X4 renders the scene from many cameras per frame** (`slots=54..61`): six
+  cubemap faces into `#54`, smaller views, and the main view into `#57`. This is
+  why no single `X4VR_PROJ_SX` fits.
+- Nine things excluded for the `#57` lift, listed in task #22.
+- **Unexplained throughout:** a symmetric ±d shear producing a one-directional
+  1.86× difference. No candidate has predicted the sign, including this one.
+
+### Two traps left armed
+
+- `patch_fragment_disable_fog` is **too coarse** — its signature matches
+  `mod-0182`, bound to nine passes including all five shadow passes, and zeroing
+  its 3D sample turns every 3D scene black. Knob-gated and off by default.
+- Modules 203 and 225 are newly World under the widened predicate **and** bound
+  to shadow passes. They are safe only because the pass-level MONO gate
+  substitutes the unsheared twin. If that gate ever changes, they shear in a
+  light-space pass where clip z is not the constant near plane.
