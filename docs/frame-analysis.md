@@ -9679,3 +9679,104 @@ unaffected, but the frame Patola sees is not the thing being scored.
   once: the 38 remaining `ui` modules and the light volumes with them. That
   would leave the additive term with no geometric explanation, and the next
   place to look is the shader source of the modules bound to `rp #23`.
+
+## Take 82 — P89 refuted; unsheared geometry is dead as a family
+
+    X4VR_TAKE=82-KUI X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408
+    X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2
+    X4VR_MV_DUMP=/tmp/x4vr-t82 X4VR_PROJ_SX=1.3333 X4VR_MV=1 X4VR_PROJ_LIVE=1
+    X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take82.log X4VR_MV_PROBE=1
+    X4VR_MASK_PRESENT=1 X4VR_DUMP_SHADERS=/tmp/x4vr-shaders-take82
+    X4VR_MV_DUMP_IMG=57,52 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1
+    X4VR_MV_INVENTORY=1
+    X4VR_CLIP_K_UI="1,0,0,0,0,1,0,0,0.42666,0,1,0,0,0,0,1"
+    X4VR_CLIP_K_UI_RIGHT="1,0,0,0,0,1,0,0,-0.42666,0,1,0,0,0,0,1"
+    ./launch/x4vr-launch.sh
+
+The knob fired, and the log says so without ambiguity: take 80 reported
+`world=296 ui=54 stereo=296`, take 82 reports `world=296 ui=54 stereo=350`.
+296+54 — every UI-classified module now carries a per-view matrix pair.
+
+    take 80 n3   tile ratio p1/p50/p99 = 0.661/1.017/4.077   blob 0.82/1.33/28.99
+    take 82 n2   tile ratio p1/p50/p99 = 0.662/1.016/4.078   blob 0.82/1.33/28.91
+
+Different frames (the PPMs differ by hash), same defect to three significant
+figures, same disparity (`dx=-33`), same alignment (`NCC 0.7653`).
+
+**P89 refuted.** Every module that draws into the light-accumulation passes was
+already sheared. The whole "unsheared geometry" family dies here — the 38
+remaining `ui` modules and the light volumes with them — and it dies on a
+symmetric measurement, so the verdict survives a polarity flip.
+
+Note for reproduction: `X4VR_DUMP_SHADERS=/tmp/x4vr-shaders-take82` logged
+`WARNING: ... is not writable` and wrote nothing, because the layer does not
+create the directory. The offline scans below therefore run on take 80's 397
+modules, which are the same shaders — neither the game nor the layer changed.
+
+## The leaked-varying hypothesis, raised and killed in one sitting
+
+`patch_vertex_clip` appends `gl_Position = K * gl_Position` before every return.
+It shears the value that reaches the rasterizer **and nothing else**. So any
+varying the shader computed from the clip position earlier would keep the
+centre-camera value while the fragment rasterizes at the sheared position — a
+full-disparity disagreement, opposite per eye, with no dependence on the array
+layer. That is exactly take 79's signature, so it was worth a scan.
+
+`tools/clip_varying_scan.py` reported **280 of 382 vertex modules leaking**,
+into `IO_texshadowCSM0..4`, `IO_world_pos`, `IO_viewz_nr` and `IO_VertexToEye`.
+Shadow coordinates leaking the eye offset would have explained everything.
+
+It was wrong, and disassembling one module rather than believing the tool is
+what caught it. `mod-0350`:
+
+    %365 = OpCompositeConstruct %v4float ...        ; vec4(object_pos, 1)
+           OpStore %366 %365                        ; gl_Position = that
+    %370 = OpLoad %v4float %366
+    %371 = OpMatrixTimesVector %v4float %736 %370   ; transform
+           OpStore %366 %371                        ; the value the raster sees
+
+**X4 uses `gl_Position` as a scratch variable.** Object, world and view position
+all pass through it on their way to the varyings, so "depends on a value stored
+to gl_Position" means "depends on the vertex position" and flags almost
+everything. Pointed at the *final* store — the only value the patch shears — the
+same scan reports **0 of 382**. In `mod-0350` the final clip value `%371` is
+consumed by exactly one instruction: the store to `gl_Position`.
+
+The 280 is retained in the tool's comments as the positive control: the
+dependence walk and the output detection both work, which is why the 0 can be
+trusted. And the varyings it named should *not* be sheared anyway — world
+position, view z and light-space shadow coordinates are all view-independent by
+construction. Only `IO_VertexToEye` is genuinely wrong under the shear approach,
+and it is wrong *identically in both eyes*, so it cannot produce an asymmetry.
+
+## Where the search actually stands
+
+Confirmed about the defect itself:
+
+* it is **additive** — a light or reflection present in one eye, absent in the
+  other, with a soft falloff at its boundary;
+* it is **localised** to particular surfaces; ordinary textured geometry agrees
+  between the eyes to 1.5%;
+* it is a pure function of the **shear sign**, with no layer dependence;
+* it is born in the light-accumulation passes. `#57` is attached in `rp #23`,
+  `#24`, `#25`, `#57` (lighting) and `rp #31`/`#32` (fog, excluded at take 63),
+  so "born in #57" does narrow to the lighting passes — checked, not assumed.
+
+Eliminated, each on a fact rather than a plausibility argument:
+
+| mechanism | how it died |
+|---|---|
+| `M_invprojection` reconstruction | empirical null; derivation, column indexing and per-view `d` all re-read and correct |
+| light-volume coverage / unsheared geometry | take 82, `K_ui = K_world`, no change |
+| mono screen-space compute resource | no compute-written screen-space 2D image exists in the inventory |
+| froxel volume sampled by the lighting pass | 0 of `rp #23`'s 138 fragment modules sample a 3D image |
+| fog composite | take 63, bit-stable with the term removed |
+| global per-eye exposure | the defect is localised; 57 tiles agree to 1.5% |
+| bindless mirror / layer-1 descriptors | take 79, negative IPD swapped the result exactly |
+| shadow maps as a mono resource | mono by design and correct; both eyes must share a light-space map |
+| unsheared clip position leaked into a varying | 0 of 382 modules, with a working positive control |
+
+What has *not* been done: nobody has read the lighting fragment shader. 100 of
+`rp #23`'s 138 fragment modules reference `gl_FragCoord`. Task #10 read the
+shaders drawing into `#103` and that is what identified the composite; the same
+move on `rp #23` is the obvious next one, and it costs no run.
