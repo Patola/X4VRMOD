@@ -3283,13 +3283,29 @@ constexpr uint32_t kCameraInvProjMember = 2; // M_invprojection
 // this member, #179 and #180, and both also load member 2.
 constexpr uint32_t kCameraInvProjUjMember = 4; // M_invprojection_uj
 
-// X4VR_PROJ_INVPROJ: correct M_invprojection per eye in the deferred passes
-// (task #22). Separate from X4VR_PROJ_LIVE so the two can be bisected apart --
-// they touch different stages and different failure modes.
+// X4VR_PROJ_INVPROJ: correct M_invprojection *and* M_invprojection_uj per eye
+// in the deferred passes (task #22). Separate from X4VR_PROJ_LIVE so the two
+// can be bisected apart -- they touch different stages and different failure
+// modes.
+//
+// **ON by default since take 83.** This stopped being an experiment when
+// member 4 was added to it: without this the deferred shadow lookup reads the
+// centre camera's frame while the depth buffer is the sheared eye's, and one
+// eye is visibly under-lit. Leaving it off by default would mean the default
+// build is the broken one. It is still gated on `have_k`, so a run with no
+// shear is unaffected either way.
+//
+// Reproduction warning for every take before 83 in docs/frame-analysis.md:
+// those ran with this OFF because they *omitted* the variable. Re-running one
+// of those command lines against this build now gets the correction, so it
+// will not reproduce. Add X4VR_PROJ_INVPROJ=0 to reproduce a pre-83 take.
+// This is the same trap the take-50 control fell into with X4VR_STEREO, which
+// this file already records -- omitting a variable and setting it to 0 stopped
+// being the same thing the moment the default changed.
 bool proj_invproj() {
     static const bool on = [] {
         const char *e = getenv("X4VR_PROJ_INVPROJ");
-        return e && *e && *e != '0';
+        return !e || !*e || *e != '0';
     }();
     return on;
 }

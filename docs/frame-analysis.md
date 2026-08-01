@@ -9891,3 +9891,66 @@ whole chapter has been chasing.
   `M_invprojection_uj — 0 modules corrected` line means the patch never
   matched, which is a different failure from the mechanism being wrong, and the
   two must not be confused. That is the whole reason the counter is separate.
+
+## Take 83 — P90 CONFIRMED. The defect is fixed.
+
+    X4VR_TAKE=83-UJ X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408
+    X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2
+    X4VR_MV_DUMP=/tmp/x4vr-t83 X4VR_PROJ_SX=1.3333 X4VR_MV=1 X4VR_PROJ_LIVE=1
+    X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take83.log X4VR_MV_PROBE=1
+    X4VR_MASK_PRESENT=1 X4VR_MV_DUMP_IMG=57,52 X4VR_IPD=0.064
+    X4VR_BINDLESS_MIRROR=1 X4VR_MV_INVENTORY=1 X4VR_PROJ_INVPROJ=1
+    ./launch/x4vr-launch.sh
+
+The separate counter earned its keep on the first line of the log:
+
+    invproj final: per-eye M_invprojection — 224 modules corrected
+    invproj final: per-eye M_invprojection_uj — 2 modules corrected
+
+Two, which is exactly the offline count for `mod-0179` and `mod-0180`.
+
+|          | tile ratio p1/p50/p99 | flagged, confidently matched | blob p10/p50/p90 | crop NCC |
+|----------|----------------------|------------------------------|------------------|----------|
+| take 80  | 0.661/1.017/**4.077** | 14.4%                       | 0.82/1.33/**28.99** | 0.7653 |
+| take 82  | 0.662/1.016/**4.078** | 14.4%                       | 0.82/1.33/**28.91** | 0.7653 |
+| take 83  | 0.573/0.993/**1.536** | **1.8%**                    | 0.27/**1.00**/**1.85** | **0.9055** |
+
+The blob's median ratio is **1.00** — the surface that was 1.33 with a p90 of 29
+now agrees between the eyes. The whole-frame p99 fell from 4.08 to 1.54, the
+confidently-matched flagged area by a factor of 8, and `stereo_residual.py`
+flipped to *no meaningful area is lit differently*.
+
+The alignment number is worth its own line: the crop's own NCC rose from
+**0.7653 to 0.9055** without anything about the measurement changing. That is
+not a brightness statistic — the two eyes now contain the same thing to
+correlate, which is the independent check that the fix is real and not a
+rescaling.
+
+Patola, on the screen: both frames bright, and the IPD shift visible — stereo.
+
+**Residual.** 1.8% of judged tiles still differ, against the `IPD=0` negative
+control's 0.0%. Some of that is genuine: a surface visible to one eye and
+occluded from the other is correct stereo, not a defect. It is small enough to
+stop here and it is not zero, so it is recorded rather than rounded away.
+
+### Thirteen takes of context, in one line
+
+The knob that was supposed to test this hypothesis existed from take 67. It
+corrected member 2 — the view vector — and every run that used it measured a
+term nobody can see, then reported a null that was read as "position
+reconstruction is not the cause". The mechanism was right the whole time; the
+patch reached the wrong matrix. What finally distinguished them was reading the
+shader instead of measuring around it.
+
+### `X4VR_PROJ_INVPROJ` now defaults ON
+
+It stopped being an experiment when member 4 joined it. Leaving it off would
+make the default build the broken one. It remains gated on `have_k`, so a run
+without the shear is unaffected.
+
+**This breaks reproduction of every take before 83 in this document.** Those ran
+with the correction off because they *omitted* the variable, and omitting it now
+gets the correction. Add `X4VR_PROJ_INVPROJ=0` to reproduce a pre-83 take. This
+is the identical trap the take-50 control fell into with `X4VR_STEREO`, already
+recorded in this file: omitting a variable and setting it to `0` stopped being
+the same thing the moment the default changed.
