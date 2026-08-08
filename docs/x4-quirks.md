@@ -456,3 +456,38 @@ so any `(a, b)` fits and the answer is meaningless.
 *Do:* report *why* tiles were rejected, never a bare count. "0 tiles matched"
 has been misread as a verdict three times in this project and was never once
 one.
+
+### `X4VR_CLIP_K_NONWORLD` is set and nothing moves
+
+*Symptom:* the knob is accepted, the log confirms modules were patched
+(`patched vertex shader #1 (nonworld)`), and the geometry does not budge. It
+looks like the vertex patch is broken.
+
+Two independent gates decide whether `K` reaches a draw, and both must pass:
+
+* `classify()` reads the **module** -- `World` (per-object matrix, or the camera
+  block under `wide_camera`) or `NonWorld` -- and picks `K_world` or
+  `K_nonworld`;
+* `needs_original()` reads the **pass** -- and an unsheared pass binds the
+  **unpatched** module, whatever the patched one contains. Unsheared means
+  depth-only shadow, all-LDR/UI, and since take 71 *any* colour pass with no
+  depth.
+
+*Do:* look for this line, which is the whole answer when it appears:
+
+    unsheared pipeline: using unpatched modules (shadow + UI exclusion active)
+
+*Do:* in the offline harness, every rendered pass is colour-with-no-depth, so
+the exclusion always fires and the knob is inert. `X4VR_SHEAR_NODEPTH=1`
+disables exactly that exclusion and is the only way to reach
+`patch_vertex_clip` there. Three cases in `run-multiview-render.sh` failed for
+years on this and read as a shear regression.
+
+*The wrong turn:* take 82 set this knob across all 54 `NonWorld` modules, saw no
+change, and recorded "unsheared geometry is dead as a family". It is only dead
+for passes that are *sheared* -- which the lighting passes are, so that part
+stands. Modules drawn in unsheared passes were never tested by it.
+
+*Note:* the knob was called `X4VR_CLIP_K_UI` until the set was measured -- 54 of
+350 modules, mostly fullscreen and procedural shaders, not HUD. The old
+spellings still work and log a line saying so.

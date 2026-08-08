@@ -168,9 +168,9 @@ int main(int argc, char **argv) {
             return 1;
         }
         auto name = [](x4vr::spv::Kind k) {
-            return k == x4vr::spv::Kind::World  ? "World"
-                   : k == x4vr::spv::Kind::UI   ? "UI"
-                                                : "NotVertex";
+            return k == x4vr::spv::Kind::World      ? "World"
+                   : k == x4vr::spv::Kind::NonWorld ? "NonWorld"
+                                                    : "NotVertex";
         };
         printf("NARROW=%s WIDE=%s\n", name(x4vr::spv::classify(code, false)),
                name(x4vr::spv::classify(code, true)));

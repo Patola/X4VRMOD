@@ -3323,21 +3323,36 @@ VkResult create_shader_module_inner(
     }
 
     // Two matrices, chosen per module by static classification:
-    //   K_world — world geometry (set-3 per-object block): gets the eye offset
-    //   K_ui    — screen-space modules (UI/HUD *and* fullscreen post passes):
-    //             identity by default. Giving these the world eye offset would
-    //             not just misplace the HUD, it would corrupt every fullscreen
-    //             post pass, so they must never share K_world.
+    //   K_world    — world geometry (set-3 per-object block, or the camera
+    //                block under wide_camera): gets the eye offset
+    //   K_nonworld — every module that is not that: UI and HUD shaders, but
+    //                also every fullscreen triangle and every procedural vertex
+    //                shader. Identity by default. Giving these the world eye
+    //                offset would not just misplace the HUD, it would corrupt
+    //                every fullscreen post pass, so they must never share
+    //                K_world.
+    //
+    // Renamed from K_ui. "UI" named the set after its most visible member and
+    // read as "the matrix for the HUD", which sent one investigation (take 82)
+    // to a conclusion broader than the knob could support.
+    //
+    // **Setting K_nonworld often does nothing, and that is by design.** Two
+    // independent gates gate the shear: this one picks *which matrix* a module
+    // is patched with, and needs_original() decides whether the patched module
+    // is bound at all. An unsheared pass -- depth-only shadow, all-LDR/UI, and
+    // since take 71 any colour pass with no depth -- binds the *unpatched*
+    // module whatever it was patched with. So K_nonworld only reaches a draw
+    // whose module is NonWorld *and* whose pass is sheared.
     static bool have_k = false;
     static float K_world[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-    static float K_ui[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    static float K_nonworld[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     // The right eye's counterparts. Present only in stereo: when these are
     // unset the module is patched with one matrix and behaves exactly as it
     // did through Phase 4a, so the mono path is not a special case of the
     // stereo one but the same code with nothing to select between.
-    static bool have_kr = false, have_kr_ui = false;
+    static bool have_kr = false, have_kr_nonworld = false;
     static float K_world_r[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-    static float K_ui_r[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    static float K_nonworld_r[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     static std::once_flag once;
     std::call_once(once, [] {
         auto parse16 = [](const char *s, float *m) {
@@ -3404,20 +3419,38 @@ VkResult create_shader_module_inner(
         // two layers that provably differ, without an IPD or a projection.
         if (const char *s = getenv("X4VR_CLIP_K_RIGHT"))
             have_kr |= parse16(s, K_world_r);
-        if (const char *s = getenv("X4VR_CLIP_K_UI"))
-            have_k |= parse16(s, K_ui);
+        // X4VR_CLIP_K_UI / _UI_RIGHT / X4VR_CLIP_SHIFT_UI are the old spellings.
+        // They still work, because docs/frame-analysis.md records take 82 and
+        // others by their exact command lines and a silently-ignored variable
+        // would make those reproduce as something else while looking valid.
+        // Which name was used is logged, so a log never leaves it ambiguous.
+        auto clip_env = [](const char *primary, const char *legacy) {
+            if (const char *v = getenv(primary))
+                return v;
+            if (const char *v = getenv(legacy)) {
+                X4VR_LOG("clip-space: %s is the old name for %s — still "
+                         "honoured, prefer the new one",
+                         legacy, primary);
+                return v;
+            }
+            return (const char *)nullptr;
+        };
+        if (const char *s = clip_env("X4VR_CLIP_K_NONWORLD", "X4VR_CLIP_K_UI"))
+            have_k |= parse16(s, K_nonworld);
         // Normally unset: the UI is CPU hit-tested and belongs in both eyes
         // identically, so it stays mono. Exists because the offline test's
-        // shader declares no set-3 block and therefore classifies as UI.
-        if (const char *s = getenv("X4VR_CLIP_K_UI_RIGHT"))
-            have_kr_ui |= parse16(s, K_ui_r);
-        if (const char *sh = getenv("X4VR_CLIP_SHIFT_UI")) {
-            K_ui[12] = strtof(sh, nullptr);
+        // shader declares no set-3 block and therefore classifies NonWorld.
+        if (const char *s = clip_env("X4VR_CLIP_K_NONWORLD_RIGHT",
+                                     "X4VR_CLIP_K_UI_RIGHT"))
+            have_kr_nonworld |= parse16(s, K_nonworld_r);
+        if (const char *sh = clip_env("X4VR_CLIP_SHIFT_NONWORLD",
+                                      "X4VR_CLIP_SHIFT_UI")) {
+            K_nonworld[12] = strtof(sh, nullptr);
             have_k = true;
         }
         if (have_k)
-            X4VR_LOG("clip-space enabled: K_world.x=%.3f K_ui.x=%.3f",
-                     K_world[12], K_ui[12]);
+            X4VR_LOG("clip-space enabled: K_world.x=%.3f K_nonworld.x=%.3f",
+                     K_world[12], K_nonworld[12]);
     });
 
     if (!have_k || !ci->pCode || ci->codeSize < 20)
@@ -3592,15 +3625,15 @@ VkResult create_shader_module_inner(
         return d->CreateShaderModule(device, ci, ac, out);
     }
     const bool world = kind == x4vr::spv::Kind::World;
-    const float *K = world ? K_world : K_ui;
+    const float *K = world ? K_world : K_nonworld;
     // Null unless a right eye was configured for this kind, and that null is
     // what keeps the module mono.
     const float *KR = world ? (have_kr ? K_world_r : nullptr)
-                            : (have_kr_ui ? K_ui_r : nullptr);
+                            : (have_kr_nonworld ? K_nonworld_r : nullptr);
 
-    static uint32_t patched = 0, n_world = 0, n_ui = 0, n_stereo = 0;
+    static uint32_t patched = 0, n_world = 0, n_nonworld = 0, n_stereo = 0;
     static uint32_t n_live = 0, n_baked = 0;
-    (world ? n_world : n_ui)++;
+    (world ? n_world : n_nonworld)++;
     if (KR)
         n_stereo++;
 
@@ -3653,9 +3686,9 @@ VkResult create_shader_module_inner(
             }
             if (++patched <= 3 || (patched % 50) == 0)
                 X4VR_LOG("patched vertex shader #%u (%s%s) "
-                         "[world=%u ui=%u stereo=%u live-sx=%u baked-sx=%u]",
-                         patched, world ? "world" : "ui",
-                         KR ? ", per-view" : "", n_world, n_ui, n_stereo,
+                         "[world=%u nonworld=%u stereo=%u live-sx=%u baked-sx=%u]",
+                         patched, world ? "world" : "nonworld",
+                         KR ? ", per-view" : "", n_world, n_nonworld, n_stereo,
                          n_live, n_baked);
             return r;
         }

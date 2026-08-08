@@ -88,6 +88,42 @@ earlier numbers in this document:
    span a brightness range or gain and offset are not separable. Both rules were
    stated in this document and then broken.
 
+### Renamed: `X4VR_CLIP_K_UI` -> `X4VR_CLIP_K_NONWORLD`
+
+`classify()` splits vertex modules into `World` -- geometry positioned by a
+per-object matrix (set 3), or by the camera block under `wide_camera` -- and
+everything else. "Everything else" was called `UI`, and the matrix applied to it
+`K_ui`. On X4 that set is 54 modules of 350 and includes every fullscreen
+triangle and every procedural vertex shader; almost none of it is UI. The name
+described its most visible member, and reading it as "the matrix for the HUD"
+is what let take 82 draw a conclusion broader than the knob could support.
+
+    K_ui                  -> K_nonworld              (and Kind::UI -> Kind::NonWorld)
+    X4VR_CLIP_K_UI        -> X4VR_CLIP_K_NONWORLD
+    X4VR_CLIP_K_UI_RIGHT  -> X4VR_CLIP_K_NONWORLD_RIGHT
+    X4VR_CLIP_SHIFT_UI    -> X4VR_CLIP_SHIFT_NONWORLD
+
+**The old spellings still work**, and deliberately so: this document records
+takes by their exact command lines, and a silently ignored variable would make
+take 82 reproduce as something else while still looking valid. Using one logs
+
+    clip-space: X4VR_CLIP_K_UI is the old name for X4VR_CLIP_K_NONWORLD —
+    still honoured, prefer the new one
+
+so no log is ever ambiguous about which was set. Historical command lines below
+are left as they were run.
+
+The per-module summary line changed with it, so a **new** log reads
+`[world=296 nonworld=54 ...]` where the takes below quote `world=296 ui=54`.
+
+**Setting it still often does nothing, and that is by design.** Two independent
+gates decide whether `K` reaches a draw: `classify()` picks *which matrix* a
+module is patched with, and `needs_original()` decides whether the patched
+module is bound at all. An unsheared pass binds the *unpatched* module whatever
+it was patched with. So `K_nonworld` reaches only a draw whose module is
+`NonWorld` **and** whose pass is sheared. See the take-82 correction near the
+end of this document.
+
 ### The frame graph, as far as it is known
 
 Serials are assigned in creation order and **held identical across runs 47 and

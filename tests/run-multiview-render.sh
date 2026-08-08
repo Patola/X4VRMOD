@@ -157,9 +157,9 @@ SHIFTED="1,0,0,0, 0,1,0,0, 0,0,1,0, 1.0,0,0,1"
 #
 # Two independent classifications decide whether K reaches a draw:
 #
-#   the *module*  -> classify() says "world" or "ui", picking K_world or K_ui.
-#                    This harness's fullscreen.vert has no camera block, so it
-#                    is always "ui" and always takes K_ui.
+#   the *module*  -> classify() says World or NonWorld, picking K_world or
+#                    K_nonworld. This harness's fullscreen.vert has no camera
+#                    block, so it is always NonWorld and takes K_nonworld.
 #   the *pass*    -> needs_original() returns classify_unsheared()[subpass], and
 #                    an unsheared pass binds the UNPATCHED module, whatever the
 #                    module was patched with.
@@ -167,7 +167,7 @@ SHIFTED="1,0,0,0, 0,1,0,0, 0,0,1,0, 1.0,0,0,1"
 # Since take 71 a colour pass with no depth is unsheared, and every pass this
 # harness renders is that shape. So the patched module was built, logged
 # ("patched vertex shader #1 (ui)"), and then thrown away at pipeline creation
-# ("unsheared pipeline: using unpatched modules"). X4VR_CLIP_K_UI was inert, the
+# ("unsheared pipeline: using unpatched modules"). K_nonworld was inert, the
 # triangle never moved, and three of these cases had been failing ever since --
 # not because the patch broke, but because nothing was binding it.
 #
@@ -177,27 +177,27 @@ SHIFTED="1,0,0,0, 0,1,0,0, 0,0,1,0, 1.0,0,0,1"
 OFFSCREEN="1,0,0,0, 0,1,0,0, 0,0,1,0, 10.0,0,0,1"
 run_case "mono patch applies (draws nothing)" 2 0 0 \
     "VK_ADD_LAYER_PATH=$BUILD/layer" "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
-    "X4VR_MV=1" "X4VR_SHEAR_NODEPTH=1" "X4VR_CLIP_K_UI=$OFFSCREEN"
+    "X4VR_MV=1" "X4VR_SHEAR_NODEPTH=1" "X4VR_CLIP_K_NONWORLD=$OFFSCREEN"
 
 # And the same matrix left in place must still reach both views identically,
 # so the mono path cannot regress into an accidental per-view one.
 run_case "mono patch is view-independent" 2 1 1 \
     "VK_ADD_LAYER_PATH=$BUILD/layer" "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
-    "X4VR_MV=1" "X4VR_SHEAR_NODEPTH=1" "X4VR_CLIP_K_UI=$ID"
+    "X4VR_MV=1" "X4VR_SHEAR_NODEPTH=1" "X4VR_CLIP_K_NONWORLD=$ID"
 
 # Must-pass: same matrix both eyes. Proves the patched module still renders,
 # that gl_ViewIndex is readable, and that reading it changes nothing when the
 # two matrices agree. A patch that corrupted the module fails here.
 run_case "stereo patch, same K both eyes" 2 1 1 \
     "VK_ADD_LAYER_PATH=$BUILD/layer" "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
-    "X4VR_MV=1" "X4VR_SHEAR_NODEPTH=1" "X4VR_CLIP_K_UI=$ID" "X4VR_CLIP_K_UI_RIGHT=$ID"
+    "X4VR_MV=1" "X4VR_SHEAR_NODEPTH=1" "X4VR_CLIP_K_NONWORLD=$ID" "X4VR_CLIP_K_NONWORLD_RIGHT=$ID"
 
 # Must-fail-for-the-right-reason: differing matrices must make the layers
 # differ. If gl_ViewIndex always read 0 -- the exact failure this whole
 # mechanism risks -- both layers would still be drawn and identical, and this
 # case is what catches it.
 probe_case "stereo patch, per-eye K differs" DIFFER \
-    "X4VR_SHEAR_NODEPTH=1" "X4VR_CLIP_K_UI=$ID" "X4VR_CLIP_K_UI_RIGHT=$SHIFTED"
+    "X4VR_SHEAR_NODEPTH=1" "X4VR_CLIP_K_NONWORLD=$ID" "X4VR_CLIP_K_NONWORLD_RIGHT=$SHIFTED"
 
 
 # The uniformity annotation, which every probe verdict now leans on.
@@ -249,7 +249,7 @@ ann_case "all-zero keeps its own name" zero uniform "X4VR_MV_MASK=2"
 
 # And the negative: two distinct values in layer 1 must NOT be annotated.
 ann_case "real content is not called uniform" uniform content \
-    "X4VR_SHEAR_NODEPTH=1" "X4VR_CLIP_K_UI=$ID" "X4VR_CLIP_K_UI_RIGHT=$SHIFTED"
+    "X4VR_SHEAR_NODEPTH=1" "X4VR_CLIP_K_NONWORLD=$ID" "X4VR_CLIP_K_NONWORLD_RIGHT=$SHIFTED"
 
 
 # The predicate split: "does K apply?" and "does this replicate?" used to be
@@ -979,14 +979,14 @@ mirror_case "...and view 0 still reads its own"   0 1 1 "$PATCHDIR/idxoff.spv"
 # sampling view 0's slots in both eyes.
 #
 # sample_combined.spv is fullscreen.vert + sample_twin_base.frag linked into one
-# module, and it is passed as BOTH stages. X4VR_CLIP_K_UI makes the vertex patch
+# module, and it is passed as BOTH stages. X4VR_CLIP_K_NONWORLD makes the vertex patch
 # apply, which is what registers a twin at all; the layer does the fragment patch
 # itself rather than it being pre-applied, so the twin's provenance is what is
 # under test. With a pristine twin this reads 0/0.
 CASE_VS="$BUILD/tests/sample_combined.spv" \
 mirror_case "unsheared twin keeps the frag patch" 1 1 2 \
     "$BUILD/tests/sample_combined.spv" \
-    X4VR_BINDLESS_PATCH=1 "X4VR_CLIP_K_UI=$ID"
+    X4VR_BINDLESS_PATCH=1 "X4VR_CLIP_K_NONWORLD=$ID"
 
 # The accounting, because the pair above would also pass if the mirror wrote the
 # twin by some accident of aliasing. Four written descriptors, four twins, all
@@ -1195,10 +1195,10 @@ cls_case() {
 # Reads M_projection (member 1) from the camera block at set 1 binding 0 and has
 # no set-3 block: the shape of an instanced light volume. Narrow calls it UI --
 # which is the defect -- and the widening must call it World.
-cls_case "classify: camera-positioned is World"  UI    World sample_light_volume.vert.spv
+cls_case "classify: camera-positioned is World"  NonWorld World sample_light_volume.vert.spv
 # A fullscreen triangle takes no camera matrix. It must stay UI under BOTH
 # readings, or the widening moves the HUD.
-cls_case "classify: fullscreen stays UI"         UI    UI    fullscreen.vert.spv
+cls_case "classify: fullscreen stays NonWorld"   NonWorld NonWorld fullscreen.vert.spv
 # The widening must not disturb a fragment-only module's answer either.
 cls_case "classify: fragment-only unaffected"    NotVertex NotVertex sample_invproj.frag.spv
 

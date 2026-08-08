@@ -124,7 +124,15 @@ struct Inst {
 // This lets each class get its own baked clip-space matrix: the world gets
 // the eye offset, the UI gets its own (identity = screen depth, or a chosen
 // depth plane).
-enum class Kind { NotVertex, World, UI };
+// World = geometry positioned by a per-object matrix (set 3), or -- under
+// `wide_camera` -- by the camera block. NonWorld = everything else.
+//
+// This was `UI` until the name was measured against what it selects. The set is
+// UI and HUD shaders, but also every fullscreen triangle and every procedural
+// vertex shader in the frame; on X4 it is 54 modules of 350, most of which no
+// player would call UI. Naming it for its most visible member made
+// X4VR_CLIP_K_UI read as "the matrix for the HUD", which it is not.
+enum class Kind { NotVertex, World, NonWorld };
 
 inline bool iterate(const std::vector<uint32_t> &code,
                     std::vector<Inst> &out) {
@@ -235,7 +243,7 @@ inline Kind classify(const std::vector<uint32_t> &code,
         return Kind::NotVertex;
     if (set3_vars.empty()) {
         if (!wide_camera)
-            return Kind::UI;
+            return Kind::NonWorld;
         // Every variable at (set 1, binding 0), not the first: X4 declares the
         // camera block once per stage and aliases two variables onto the one
         // binding. First-match here would read the fragment stage's variable
@@ -246,7 +254,7 @@ inline Kind classify(const std::vector<uint32_t> &code,
             if (bind0_vars.count(v))
                 cam_vars.insert(v);
         if (cam_vars.empty())
-            return Kind::UI;
+            return Kind::NonWorld;
         bool in_vert = false;
         for (const Inst &in : insts) {
             const uint32_t *w = &code[in.start];
@@ -263,7 +271,7 @@ inline Kind classify(const std::vector<uint32_t> &code,
                     return Kind::World;
             }
         }
-        return Kind::UI;
+        return Kind::NonWorld;
     }
 
     // Pass 2: does anything index member 0 of a set-3 block?
@@ -282,7 +290,7 @@ inline Kind classify(const std::vector<uint32_t> &code,
         if (it != const_val.end() && it->second == 0)
             return Kind::World;
     }
-    return Kind::UI;
+    return Kind::NonWorld;
 }
 
 /// Rewrites `code` so every Vertex entry point ends with
