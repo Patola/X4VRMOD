@@ -743,6 +743,14 @@ std::atomic<uint64_t> g_frag_patch_ok{0}, g_frag_patch_refused{0};
 // for. A refusal leaves that module's UI mono, which looks exactly like a
 // correct frame, so the count is reported whether or not it is zero.
 std::atomic<uint64_t> g_canvas_built{0}, g_canvas_refused{0};
+// The canvas's per-view NDC x offset, published once the variants are actually
+// built and left at zero otherwise. It is the *one* definition of where the
+// canvas sits: the shader patch bakes it into the UI's vertices and the cursor
+// overlay offsets the pointer by it, and if those two ever read different
+// numbers the pointer drifts off the button by the difference -- with both
+// mechanisms working exactly as written. Published from the same branch that
+// sets have_canvas so a refused canvas cannot move the cursor on its own.
+std::atomic<float> g_canvas_shift{0.0f};
 // Task #22: deferred modules whose M_invprojection was corrected per eye.
 std::atomic<uint64_t> g_invproj_patched{0};
 // ...and M_invprojection_uj, the one the shadow cascades actually read.
@@ -3567,6 +3575,7 @@ VkResult create_shader_module_inner(
                 K_canvas[12] = +s;
                 K_canvas_r[12] = -s;
                 have_canvas = true;
+                g_canvas_shift.store(s, std::memory_order_relaxed);
                 // The pixel figure is what a run is scored on, so print it
                 // when the eye width is known and say nothing when it is not,
                 // rather than quoting a hardcoded 1408 that could go stale.
@@ -6510,7 +6519,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
             composited = g_sbs.composite(
                 queue, family, pi->pSwapchains[0], pi->pImageIndices[0],
                 pi->pWaitSemaphores, pi->waitSemaphoreCount,
-                g_cursor_enabled ? shared_state() : nullptr);
+                g_cursor_enabled ? shared_state() : nullptr,
+                g_canvas_shift.load(std::memory_order_relaxed));
         } else {
             static bool warned = false;
             if (!warned) {

@@ -308,8 +308,21 @@ int main() {
                          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
                          nullptr, 1, &b);
 
+    // Task #30: with X4VR_TEST_CANVAS_PX=n the pointer must follow the canvas
+    // -- layer 0 (view 0, left eye) by +n px and layer 1 by -n px. Driven as a
+    // second run of the same harness rather than a second code path, so the
+    // shifted case is checked against exactly the assertions the unshifted one
+    // passes. n=0 is the default and must reproduce the old behaviour byte for
+    // byte, which is what makes "both layers are pixel-identical" below still
+    // a real claim rather than one the knob quietly retired.
+    int32_t canvas_px = 0;
+    if (const char *e = getenv("X4VR_TEST_CANVAS_PX"))
+        canvas_px = (int32_t)strtol(e, nullptr, 10);
+    // cursor_rect maps a pixel x to 2x/w - 1, so n pixels is 2n/w in NDC.
+    const float canvas_ndc = 2.f * (float)canvas_px / (float)kW;
+
     const bool drew = overlay.record(
-        cb, {eye, 0, 1, fmt, {kW, kH}, kLayers}, &shared);
+        cb, {eye, 0, 1, fmt, {kW, kH}, kLayers}, &shared, canvas_ndc);
     ok("record() reports that it drew", drew);
 
     // The compositor's own barrier, verbatim: from COLOR_ATTACHMENT because the
@@ -351,34 +364,59 @@ int main() {
 
     for (uint32_t l = 0; l < kLayers; l++) {
         char what[128];
+        // Where this layer's quad has to be. The sign is the claim: view 0 is
+        // the left eye and takes +s, matching gl_ViewIndex in the patched UI
+        // module. Backwards here and the pointer would sit on the wrong side
+        // of the button in both eyes -- symmetrically, so it would still look
+        // deliberate.
+        const int32_t qx = kQuadX + (l == 0 ? canvas_px : -canvas_px);
         // Blue in a B8G8R8A8 readback is byte 0, which is also the byte SDL's
         // ARGB8888 puts blue in -- the mapping under test, end to end.
         snprintf(what, sizeof(what), "layer %u: opaque texel is fully blue", l);
-        eq(what, px(l, kQuadX, kQuadY)[0], 255);
+        eq(what, px(l, qx, kQuadY)[0], 255);
         snprintf(what, sizeof(what), "layer %u: opaque texel has no green", l);
-        eq(what, px(l, kQuadX, kQuadY)[1], 0);
+        eq(what, px(l, qx, kQuadY)[1], 0);
         // 255 * (128/255) = 128. If blending were off this would be 255, and if
         // the alpha were applied twice it would be 64.
         snprintf(what, sizeof(what), "layer %u: half-alpha texel is blended", l);
-        eq(what, px(l, kQuadX + 1, kQuadY)[0], 128, 2);
+        eq(what, px(l, qx + 1, kQuadY)[0], 128, 2);
         snprintf(what, sizeof(what), "layer %u: transparent texel leaves the frame", l);
-        eq(what, px(l, kQuadX + 2, kQuadY)[0], 0);
+        eq(what, px(l, qx + 2, kQuadY)[0], 0);
         snprintf(what, sizeof(what), "layer %u: the far corner of the quad is green", l);
-        eq(what, px(l, kQuadX + 3, kQuadY)[1], 255);
+        eq(what, px(l, qx + 3, kQuadY)[1], 255);
         // One pixel outside the quad on every side: the draw must not bleed.
         snprintf(what, sizeof(what), "layer %u: one pixel left of the quad is untouched", l);
-        eq(what, px(l, kQuadX - 1, kQuadY)[0], 0);
+        eq(what, px(l, qx - 1, kQuadY)[0], 0);
         snprintf(what, sizeof(what), "layer %u: one pixel above the quad is untouched", l);
-        eq(what, px(l, kQuadX, kQuadY - 1)[0], 0);
+        eq(what, px(l, qx, kQuadY - 1)[0], 0);
         snprintf(what, sizeof(what), "layer %u: one row below the quad is untouched", l);
-        eq(what, px(l, kQuadX, kQuadY + (int32_t)kCH)[0], 0);
+        eq(what, px(l, qx, kQuadY + (int32_t)kCH)[0], 0);
         snprintf(what, sizeof(what), "layer %u: the far corner of the eye is untouched", l);
         eq(what, px(l, (int32_t)kW - 1, (int32_t)kH - 1)[0], 0);
     }
-    // The claim that matters most: both eyes got it, and identically. A cursor
-    // in one half only is the failure this whole project is shaped around.
-    ok("both layers are pixel-identical",
-       memcmp(px(0, 0, 0), px(1, 0, 0), (size_t)layer_bytes) == 0);
+    // The claim that matters most: both eyes got it, and -- with no canvas --
+    // identically. A cursor in one half only is the failure this whole project
+    // is shaped around.
+    //
+    // With a canvas the layers must NOT match, and that is the assertion doing
+    // the work: every per-layer check above would still pass if the shift were
+    // silently dropped, because it would place both quads at kQuadX and both
+    // would be found where the unshifted case looks. Only the comparison
+    // between the layers can tell "shifted by n" from "not shifted at all".
+    if (canvas_px == 0) {
+        ok("both layers are pixel-identical",
+           memcmp(px(0, 0, 0), px(1, 0, 0), (size_t)layer_bytes) == 0);
+    } else {
+        ok("the canvas makes the layers differ",
+           memcmp(px(0, 0, 0), px(1, 0, 0), (size_t)layer_bytes) != 0);
+        // ...and differ by a translation, not by anything else: the pixel the
+        // left eye now covers must be clear in the right eye, and the two
+        // quads must be exactly 2n apart.
+        ok("the left eye's quad is clear in the right eye",
+           px(1, kQuadX + canvas_px, kQuadY)[0] == 0);
+        ok("the right eye's quad is clear in the left eye",
+           px(0, kQuadX - canvas_px, kQuadY)[0] == 0);
+    }
 
     vkUnmapMemory(dev, back_mem);
     overlay.shutdown();

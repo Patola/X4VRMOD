@@ -272,7 +272,8 @@ public:
     // present must wait on, or VK_NULL_HANDLE to present as X4 asked.
     VkSemaphore composite(VkQueue queue, uint32_t family, VkSwapchainKHR sc,
                           uint32_t image, const VkSemaphore *wait,
-                          uint32_t wait_count, const Shared *cursor_channel) {
+                          uint32_t wait_count, const Shared *cursor_channel,
+                          float canvas_shift = 0.f) {
         std::lock_guard<std::mutex> lock(mu_);
         auto it = chains_.find(sc);
         if (it == chains_.end() || !it->second.usable)
@@ -343,7 +344,7 @@ public:
             const bool drew =
                 cursor_.record(cb, {src, image, (uint32_t)c.images.size(),
                                     c.format, c.eye, c.eye_layers},
-                               cursor_channel);
+                               cursor_channel, canvas_shift);
 
             // Distinct images, so each gets its optimal layout. X4 left the
             // eye image ready to present, believing it was the swapchain.
