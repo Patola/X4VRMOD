@@ -10174,3 +10174,65 @@ coordinates (tasks #19, #21), so a canvas at a virtual depth needs the cursor
 projected onto it — which is what task #19 exists to make possible. A
 *non-interactive* floating HUD could be demonstrated much sooner than an
 interactive one, and that is the honest split to plan around.
+
+## Take 86 — the distant cameras are stereo, and zoom is clean
+
+`X4VR_IPD=5.0`, everything else as take 85. Patola: parallax is visible in both
+the external and the cinematic camera, and zoom behaves normally.
+
+**The mono appearance at default IPD was distance, as predicted.** ~30/z px per
+eye puts a 60 m third-person view at about half a pixel, which is
+indistinguishable from mono and physically correct — human stereopsis is gone by
+about 30 m. Nothing to fix; if a third-person view ever needs to *feel* deep,
+that is hyperstereo as a comfort choice (task #25), not a defect.
+
+Zoom exercised without visible error. Task #23's twelve baked-`sx` modules stay
+open on the structural argument — they are still only correct at the default
+FOV — but nothing conspicuous draws through them at the FOVs tried.
+
+## Starting the cursor shim (#17): two findings that reorder it
+
+### `SDL_PollEvent` is interposed and never fires
+
+The injector has interposed `SDL_PollEvent` since take 40 to answer P42/P43 —
+what coordinate space X4 is handed, and whether motion is absolute or relative.
+Across takes 84, 85 and 86, including take 85's map, menu and station use:
+
+    $ grep 'sdl: mouse' /tmp/x4vr-take8{4,5,6}.log
+    (nothing)
+
+Not a sampling cap — the counters allow 8 motions and 6 buttons and logged
+zero. And interposition itself works in that same file: `SDL_GetWindowSize` is
+intercepted and logged twice in the same run.
+
+So **X4 does not read mouse input through `SDL_PollEvent`**, or the
+`this_is_the_game()` gate is false in whichever process polls. Either way
+**P42 and P43 are unanswered**, and they are the foundation of task #19: a shim
+cannot own an event stream it has not found. The candidates are
+`SDL_PumpEvents`/`SDL_PeepEvents`, `SDL_WaitEvent(Timeout)`, a statically linked
+SDL whose internal calls no `LD_PRELOAD` can reach, or X4 reading evdev or the
+Wayland protocol directly. That is a measurement, not a guess to be made now.
+
+### #17's premise may already be satisfied by X4
+
+Task #17 is "draw the cursor into the eye image before duplication, so it lands
+in both halves at the matching place". But `x4-quirks.md` already records, from
+the `--force-grab-cursor` work, that **X4 draws and moves its own cursor** in the
+menus and the map — which is why forcing relative mode did not break them.
+
+Anything X4 draws into its own frame is duplicated into both halves by the
+compositor, correctly, for free. If that is what happens today, the drawing half
+of #17 is already done and what remains is only the modes where the visible
+pointer is *gamescope's*, which lives in display space and is not duplicated.
+
+### Why this cannot be settled from here: task #29
+
+The probe emits after `vkCmdEndRenderPass` for masked passes, so the eye image
+is captured after the **first** present pass — and P76 established there are
+several (`rp #0/#1/#4/#7/#10`). The UI, and therefore any cursor, is drawn
+after that. `X4VR_MV_DUMP_IMG` cannot show the finished frame at all, which is
+exactly what task #29 says.
+
+So the order is: **#29 first** (dump the eye image at present, when the frame is
+final), because it is the instrument #17, #21 and #30 all need, and without it
+any cursor work is written blind against a premise that may not hold.
