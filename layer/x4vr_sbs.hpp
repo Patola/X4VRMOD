@@ -27,6 +27,7 @@
 #include <vulkan/vulkan.h>
 
 #include "../common/x4vr_log.hpp"
+#include "x4vr_cursor_draw.hpp"
 
 namespace x4vr {
 
@@ -106,6 +107,19 @@ public:
         device_ = device;
         fns_ = fns;
         mem_ = mem;
+    }
+
+    // Task #17. Arming the overlay is what turns the cursor on: unconfigured it
+    // is never ready, so the knob is a decision made once at device creation
+    // rather than a branch in the present path.
+    //
+    // Owned here rather than by the layer so its lifetime is the compositor's.
+    // Its resources hang off the eye images, and destroying those first would
+    // leave framebuffers pointing at nothing.
+    void configure_cursor(const CursorFns &fns,
+                          const VkPhysicalDeviceMemoryProperties &mem) {
+        std::lock_guard<std::mutex> lock(mu_);
+        cursor_.configure(device_, fns, mem);
     }
 
     // Images X4 should be handed instead of the real swapchain's, or nullptr
@@ -258,7 +272,7 @@ public:
     // present must wait on, or VK_NULL_HANDLE to present as X4 asked.
     VkSemaphore composite(VkQueue queue, uint32_t family, VkSwapchainKHR sc,
                           uint32_t image, const VkSemaphore *wait,
-                          uint32_t wait_count) {
+                          uint32_t wait_count, const Shared *cursor_channel) {
         std::lock_guard<std::mutex> lock(mu_);
         auto it = chains_.find(sc);
         if (it == chains_.end() || !it->second.usable)
@@ -316,12 +330,29 @@ public:
             region[1].srcSubresource.baseArrayLayer = c.right_layer;
 
         if (c.virtualized) {
+            // Task #17: the pointer goes into the eye image *before* the
+            // duplication, so one draw reaches both halves and lands at the
+            // same place in each. Drawing it after the copy would mean two
+            // draws at two offsets in display space -- which is precisely the
+            // coordinate system the cursor is being moved out of.
+            //
+            // It leaves the image in COLOR_ATTACHMENT_OPTIMAL, so the barrier
+            // below starts from there instead of PRESENT_SRC. That is one
+            // transition rather than two, and it is why record() reports
+            // whether it drew rather than being fired and forgotten.
+            const bool drew =
+                cursor_.record(cb, {src, image, (uint32_t)c.images.size(),
+                                    c.format, c.eye, c.eye_layers},
+                               cursor_channel);
+
             // Distinct images, so each gets its optimal layout. X4 left the
             // eye image ready to present, believing it was the swapchain.
             b[0].image = src;
-            b[0].oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            b[0].oldLayout = drew ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                                  : VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
             b[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            b[0].srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+            b[0].srcAccessMask = drew ? VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+                                      : VK_ACCESS_MEMORY_READ_BIT;
             b[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
             // Every layer, not just the one being copied: X4 left the whole
             // image in PRESENT_SRC and a copy reads whichever layer
@@ -426,6 +457,9 @@ public:
         std::lock_guard<std::mutex> lock(mu_);
         if (device_ && fns_.DeviceWaitIdle)
             fns_.DeviceWaitIdle(device_);
+        // Before the chains: the overlay's framebuffers and views are built on
+        // the eye images, and a view must not outlive the image it views.
+        cursor_.shutdown();
         for (auto &kv : chains_)
             destroy_chain(kv.second);
         chains_.clear();
@@ -500,6 +534,12 @@ private:
     }
 
     void free_eye_images(Chain &c) {
+        // Same ordering rule as shutdown(), for the swapchain-recreate path:
+        // a resize destroys these images while the overlay still holds views
+        // and framebuffers on them.
+        for (VkImage im : c.eye_images)
+            if (im)
+                cursor_.forget(im);
         for (VkImage im : c.eye_images)
             if (im)
                 fns_.DestroyImage(device_, im, nullptr);
@@ -578,6 +618,7 @@ private:
     SbsFns fns_;
     VkPhysicalDeviceMemoryProperties mem_{};
     std::unordered_map<VkSwapchainKHR, Chain> chains_;
+    CursorOverlay cursor_;
 };
 
 } // namespace x4vr

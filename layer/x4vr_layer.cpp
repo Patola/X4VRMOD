@@ -5562,6 +5562,18 @@ const x4vr::Shared *shared_state() {
     return s;
 }
 
+// X4VR_CURSOR=1 — blend X4's own pointer into the eye image (task #17).
+//
+// Off by default because it needs the injector in the same process, and a
+// pointer that appears where the old one used to be is the kind of change that
+// should be asked for rather than inherited. The knob gates *configuration*,
+// not a per-frame branch: unconfigured, the overlay is never ready and the
+// present path costs nothing.
+const bool g_cursor_enabled = [] {
+    const char *e = getenv("X4VR_CURSOR");
+    return e && *e && *e != '0';
+}();
+
 const char *g_mv_dump = getenv("X4VR_MV_DUMP");
 // X4VR_MV_DUMP_PRESENT=N — write the finished eye image every N presents.
 // Distinct from X4VR_MV_DUMP_IMG, which names images to catch at end-of-pass
@@ -6295,10 +6307,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     uint32_t family = 0;
     if (g_sbs_enabled && g_active && pi->swapchainCount == 1) {
         if (queue_family_of(queue, family)) {
-            composited = g_sbs.composite(queue, family, pi->pSwapchains[0],
-                                         pi->pImageIndices[0],
-                                         pi->pWaitSemaphores,
-                                         pi->waitSemaphoreCount);
+            composited = g_sbs.composite(
+                queue, family, pi->pSwapchains[0], pi->pImageIndices[0],
+                pi->pWaitSemaphores, pi->waitSemaphoreCount,
+                g_cursor_enabled ? shared_state() : nullptr);
         } else {
             static bool warned = false;
             if (!warned) {
@@ -6780,6 +6792,20 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
                     inst, "vkGetPhysicalDeviceMemoryProperties"))
                 gpmp(phys, &mem);
             g_sbs.configure(*out, f, mem);
+            if (g_cursor_enabled) {
+                x4vr::CursorFns cf;
+#define RESOLVE(name) cf.name = (PFN_vk##name)gdpa(*out, "vk" #name);
+                X4VR_CURSOR_FNS(RESOLVE)
+#undef RESOLVE
+                if (cf.complete()) {
+                    g_sbs.configure_cursor(cf, mem);
+                    X4VR_LOG("cursor: overlay armed (X4VR_CURSOR=1) — X4's own "
+                             "pointer will be blended into the eye image");
+                } else {
+                    X4VR_LOG("cursor: could not resolve every entry point — "
+                             "overlay off");
+                }
+            }
         } else {
             X4VR_LOG("sbs: could not resolve every entry point — composite off");
         }

@@ -23,6 +23,18 @@ add_executable(x4vr_test_share share.cpp)
 find_package(Threads REQUIRED)
 target_link_libraries(x4vr_test_share PRIVATE Threads::Threads)
 
+# Where the cursor lands and what its bytes mean (task #17). Needs no Vulkan
+# library -- it only uses the header's enums and two pure functions -- and no
+# GPU, which is the whole point of pulling them out of the overlay class.
+add_executable(x4vr_test_cursor_place cursor_place.cpp)
+target_include_directories(x4vr_test_cursor_place PRIVATE ${Vulkan_INCLUDE_DIRS})
+
+# The same overlay driven on a real GPU, under the validation layer. This is
+# the one that would have caught a bad barrier or a cursor in one eye only,
+# and it needs no X4.
+add_executable(x4vr_test_cursor_render cursor_render.cpp)
+target_link_libraries(x4vr_test_cursor_render PRIVATE Vulkan::Vulkan)
+
 # Shaders are committed as SPIR-V so the suite does not need glslc to run.
 configure_file(fullscreen.vert.spv fullscreen.vert.spv COPYONLY)
 configure_file(solid.frag.spv solid.frag.spv COPYONLY)

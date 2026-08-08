@@ -10952,3 +10952,141 @@ had not moved.
   layout is wrong and step 2 cannot proceed on it; silence from both means X4
   sets its cursor by some route that is not `SDL_SetCursor`, and the shim needs
   that route found before it can match the game's cursor.
+
+## Take 94 — P97 confirmed. The capture works, and the format is ARGB8888.
+
+```
+inject  sdl: captured cursor 0x14a51970 — 32x32 fmt=0x16362004 pitch=128 hot=(7,8)
+inject  sdl: captured cursor 0x1810a860 — 32x32 fmt=0x16362004 pitch=128 hot=(0,0)
+inject  sdl: captured cursor 0x1824e080 — 32x32 fmt=0x16362004 pitch=128 hot=(12,19)
+inject  sdl: captured cursor 0x18100660 — 32x32 fmt=0x16362004 pitch=128 hot=(11,6)
+layer   share: injector channel v1 connected
+layer   share: cursor image 32x32 fmt=0x16362004 hot=(15,15) — 396/1024 px non-zero, 60 with byte3=0xff
+layer   share: first row bytes 00 00 00 00 | 00 00 00 00
+=== cursor positions logged: 16
+```
+
+Every part of the chain reported: the injector captured, the layer resolved the
+symbol, and the image came back intact on the other side.
+
+**`0x16362004` is `SDL_PIXELFORMAT_ARGB8888`** — printed from SDL3's own headers
+rather than recalled, and it also reconstructs from `SDL_DEFINE_PIXELFORMAT`
+(PACKED32, order ARGB, layout 8888, 32 bits, 4 bytes). SDL names packed formats
+most-significant-byte-first, so the word is `0xAARRGGBB` and its **memory** order
+on this machine is B, G, R, A — which is exactly what `VK_FORMAT_B8G8R8A8_*`
+reads. The mapping is a re-labelling, not a conversion; no bytes move.
+
+The logged `first row bytes 00 00 00 00` is a transparent corner and on its own
+disambiguates nothing, which is why the unpacking was written against the format
+id and then checked on a non-transparent pixel instead.
+
+**396 of 1024 pixels non-zero, 60 fully opaque.** A sparse glyph with a small
+solid core — Patola's hollow blue cross. That settles the compositing method:
+`vkCmdCopyBufferToImage` and `vkCmdBlitImage` cannot blend, so either would
+stamp a 32x32 opaque block onto the frame. It has to be a draw with alpha
+blending, and step 2 is therefore a graphics pipeline rather than a copy.
+
+**Four cursors, four different hot spots** — (7,8), (0,0), (12,19), (11,6), and
+the selected one at (15,15). So the hot spot genuinely varies by context and
+must be honoured: ignore it and a 32x32 glyph points at something up to 31 px
+from what X4 hit-tests, which is close enough to look approximately right and
+far enough to click the wrong thing.
+
+## Task #17 steps 2 and 3: the pointer, drawn and de-duplicated
+
+Step 2 draws it; step 3 removes the one gamescope draws. Both are off by
+default, behind separate knobs, because seeing them one at a time is more
+informative than seeing the end state.
+
+### Where the draw goes, and why it is a draw
+
+Into the **eye image, before the duplication**, in `SbsCompositor::composite()`.
+One draw per layer then reaches both halves at the same in-eye position, and the
+existing copy carries it to the screen. Drawing after the copy would mean two
+draws at two offsets in *display* space — which is precisely the coordinate
+system this whole task exists to get the cursor out of.
+
+`layer/x4vr_cursor_draw.hpp` is a four-vertex textured quad with
+`SRC_ALPHA / ONE_MINUS_SRC_ALPHA` blending: push constants place it, no vertex
+buffer, no index buffer. None of it is throwaway — a textured quad alpha-blended
+into the eye image at an arbitrary rectangle is exactly what task #30's floating
+UI canvas needs.
+
+Shaders are compiled ahead of time and linked in (`tools/spv2hpp.py` embeds
+them). A layer is loaded into someone else's process from a path the loader
+chose, so "where are my shaders" has no good answer at run time.
+
+**Everything is per swapchain image** — staging buffer, cursor texture,
+descriptor set, framebuffers. That is not caution: `composite()` has already
+waited on this image's fence before calling in, so this image's previous
+submission has retired and its resources are free to rewrite. One shared texture
+would need a stall or a ring to say the same thing.
+
+### The channel now publishes the position X4 receives
+
+Step 1 published the *unfolded* SDL position, reasoning that the fold (#19) is a
+flatscreen ergonomic the channel should not carry. That was backwards. The field
+means "where in X4's frame does X4 believe the pointer is", and with the fold on
+that **is** the folded value — X4 never sees the other one. Publishing the raw
+position would have put the drawn cursor 704 px from the button it activates,
+with both features working exactly as designed. It now publishes after the fold,
+so the invariant is structural: whatever number leaves for X4 is the number the
+layer draws at.
+
+### It always draws
+
+`cursor_visible` is not consulted. X4 imports neither `SDL_ShowCursor` nor
+`SDL_HideCursor` — checked with `nm -D`, not assumed — so that flag is the
+injector's *inference* from relative-mouse mode, not something X4 said. Acting
+on an inference would make the pointer vanish for reasons no measurement has
+pinned down. If a stray cursor turns out to sit in the cockpit during mouse-look,
+gating on it is a one-line change, and it should follow a take that shows it.
+
+### Step 3 has exactly one lever
+
+`nm -D` on X4 lists six mouse entry points:
+
+```
+SDL_CreateColorCursor  SDL_GetMouseState  SDL_SetCursor
+SDL_SetWindowMouseGrab SDL_SetWindowRelativeMouseMode SDL_WarpMouseInWindow
+```
+
+No `SDL_ShowCursor`, no `SDL_HideCursor`. So hooking either would have been the
+fifth instrument in this project bound to a symbol X4 never calls — the check
+cost one command and would have cost a run. Instead the injector resolves
+`SDL_HideCursor` itself (exported by the libSDL3 X4 ships, 3.2.28, whether or
+not X4 references it) and calls it once. Nothing can undo it, because X4 cannot
+re-show a cursor through a function it never calls.
+
+This also explains Patola's "it stops being drawn if I hold still": that is
+gamescope's own `--hide-cursor-delay`, more evidence that the pointer on screen
+belongs to gamescope and not to X4's frame.
+
+### Verified offline, before spending a run
+
+`tests/cursor_render.cpp` drives the overlay on a real GPU under the validation
+layer, with no X4 and no layer: a two-layer image left in `PRESENT_SRC_KHR`
+exactly as X4 leaves it, a synthetic channel, and a readback. It checks position
+in eye coordinates, that **both** layers receive it, that a half-alpha texel
+comes back at 128 rather than 255 (blending happened) or 64 (alpha not applied
+twice), that a fully transparent texel leaves the frame alone, that the draw
+does not bleed one pixel past the quad, and that the two layers are
+byte-identical. `tests/cursor_place.cpp` locks the format mapping and the
+hot-spot arithmetic, and checks the generated shader header still matches the
+`.spv` it came from.
+
+All of it passed on the first run. The only failures were two validation errors
+belonging to the test's own stand-in — `PRESENT_SRC_KHR` is only a legal layout
+when `VK_KHR_swapchain` is enabled, which X4 does and the harness had not.
+
+- **P98** — with `X4VR_CURSOR=1` and the injector present, the layer logs
+  `cursor: overlay pipeline built` and one `cursor: drawing 32x32 hot=(h,v) into
+  2 layer(s)` line, and **two** pointers are visible: X4's, drawn identically in
+  both halves and landing on whatever it selects, and gamescope's, in one place
+  on the composited screen. The two agreeing about *which object* is under them
+  is the measurement; a drawn cursor that selects something 704 px away would
+  mean the published position is still the wrong one of the two.
+- **P99** — adding `X4VR_HIDE_CURSOR=1` leaves exactly one pointer, the drawn
+  one, and `sdl: SDL_HideCursor() -> 1` in the log. If two remain, gamescope
+  draws a pointer of its own independent of the client's, and the next lever is
+  `X4VR_GRAB_CURSOR=0` or a gamescope flag rather than anything in SDL.

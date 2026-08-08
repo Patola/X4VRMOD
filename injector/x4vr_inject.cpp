@@ -409,10 +409,17 @@ extern "C" x4vr::Shared *x4vr_shared_state() {
 // what the layer draws and what X4 hit-tests are the same number by
 // construction rather than by two paths agreeing.
 //
-// Writes the *unfolded* position on purpose. The fold is an ergonomic for a
-// side-by-side flatscreen, and a cursor drawn into the eye image makes it
-// unnecessary -- so publishing the folded value would bake a workaround into the
-// channel that replaces it.
+// **Publishes the value X4 receives, fold included.** The first version here
+// published the raw SDL position instead, reasoning that the fold is a
+// flatscreen ergonomic and the channel should not carry a workaround it
+// replaces. That had it backwards. The field means "where in X4's frame does X4
+// believe the pointer is", and when the fold is on, that *is* the folded value
+// -- X4 never sees the other one. Publishing the raw position would put the
+// drawn cursor 704 px from the button it activates, with both features working
+// exactly as designed.
+//
+// So the two compose instead of conflicting, and the invariant is structural:
+// whatever number leaves this function for X4 is the number the layer draws at.
 void publish_cursor(float x, float y, bool visible) {
     x4vr::Shared *s = x4vr_shared_state();
     const uint32_t start = s->seq.load(std::memory_order_relaxed);
@@ -492,6 +499,49 @@ void publish_cursor_image(const CapturedCursor &c) {
         s->cursor_pixels[i] = c.px[i];
     std::atomic_thread_fence(std::memory_order_release);
     s->cursor_img_seq.store(start + 2, std::memory_order_release);
+}
+
+// Task #17, step 3. Once the layer draws the pointer into the eye image, the
+// one the compositor draws is a second cursor -- in a different coordinate
+// system, at a different place, in only one of the two halves.
+//
+// **`SDL_SetCursor` is the only lever X4 gives us.** `nm -D` on X4 says it
+// imports exactly six mouse entry points -- CreateColorCursor, GetMouseState,
+// SetCursor, SetWindowMouseGrab, SetWindowRelativeMouseMode, WarpMouseInWindow
+// -- and neither SDL_ShowCursor nor SDL_HideCursor is among them. That was
+// checked before this was written, because four instruments in this project
+// have been hooked to symbols X4 never calls and each cost a run to discover.
+//
+// It also means nothing will undo this: X4 cannot re-show a cursor through a
+// function it never calls. We resolve SDL_HideCursor ourselves -- it is exported
+// by the libSDL3 X4 ships (3.2.28), whether or not X4 references it -- and SDL
+// then tells the compositor there is no cursor to draw.
+//
+// Patola's "it stops being drawn if I hold still" is gamescope's own
+// --hide-cursor-delay, which is more evidence that the pointer on screen is
+// gamescope's and not something in X4's frame.
+void hide_sdl_cursor() {
+    static const bool want = [] {
+        const char *e = getenv("X4VR_HIDE_CURSOR");
+        return e && *e && *e != '0';
+    }();
+    if (!want)
+        return;
+    static bool done = false;
+    if (done)
+        return;
+    auto fn = real<bool (*)(void)>("SDL_HideCursor");
+    if (!fn) {
+        done = true; // asking again every frame would not make it appear
+        X4VR_LOG("sdl: SDL_HideCursor not found — cannot suppress the "
+                 "compositor's pointer, expect two cursors");
+        return;
+    }
+    done = true;
+    const bool ok = fn();
+    X4VR_LOG("sdl: SDL_HideCursor() -> %d — the compositor's pointer is "
+             "suppressed; the one you see is drawn by the layer",
+             (int)ok);
 }
 
 // The origin term is the display x at which X4's surface starts, because the
@@ -798,11 +848,12 @@ uint32_t SDL_GetMouseState(float *x, float *y) {
     const uint32_t buttons = real_fn(x, y);
     if (this_is_the_game()) {
         note_extent("GetMouseState", x ? *x : 0.f, y ? *y : 0.f);
-        // Published before the fold, and before X4 sees it.
-        publish_cursor(x ? *x : 0.f, y ? *y : 0.f,
-                       !g_relative_mouse.load(std::memory_order_relaxed));
         if (x)
             *x = fold_x(*x);
+        // After the fold, so what is published is what X4 is about to read.
+        publish_cursor(x ? *x : 0.f, y ? *y : 0.f,
+                       !g_relative_mouse.load(std::memory_order_relaxed));
+        hide_sdl_cursor();
     }
     return buttons;
 }
