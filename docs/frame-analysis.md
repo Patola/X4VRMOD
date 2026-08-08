@@ -10473,3 +10473,68 @@ of 17. That bug was written and then caught before the run, not after it.
   `GetMouseState extent` reports `x=0..1408`. If it reports `x=0..2816`, X4 is
   handed display coordinates and clamps them itself, and the widened right-hand
   box follows from that rather than from a changed window extent.
+
+## Take 89 — P92 confirmed. X4's input space is its own window, and the fold is back.
+
+Pointer swept hard into all four edges:
+
+    sdl: GetMouseState extent x=0..1407 y=0..1406
+    sdl: motion        extent x=0..1407 y=0..1368
+
+`0…1407` is X4's 1408×1408 window space exactly, on both channels. **X4 is handed
+window coordinates, not display coordinates**, and hit-tests in them.
+
+### That refutes the second half of model B, and reassigns the widened box
+
+P91's model B was two claims: a translation of 704 (**confirmed**, twice, at P23
+and P91) *and* an input extent that had grown to 2816 (**refuted here**). X4's
+pointer cannot leave `0…1407`, so its input box in display space is `704…2111` —
+the same box P23 measured, unchanged.
+
+So the pointer Patola sees running past the right edge and vanishing is **not
+X4's pointer**. It is gamescope's, drawn in display space, and its range says
+nothing about what X4 can be made to hit. The two had been conflated because
+only one of them is visible.
+
+That also closes the loop on the earlier observations: one pointer, not
+duplicated, because the compositor draws it; shape changing over a station,
+because X4 calls `SDL_SetCursor`; left stop at 1/4, because gamescope confines
+the pointer to X4's 1408-wide surface, which starts at display 704.
+
+### The fold, retracted at take 30, is now correct — for a different reason
+
+The old "fold" (`x_x4 = x_screen mod 1408`) was retracted because it rested on
+the scale model, which P23 killed. It returns on solid ground, because P92
+establishes the two facts it actually needs: X4's frame **is** exactly one copy,
+and the pointer is confined to `704…2111`, i.e. `x_sdl ∈ 0…1407`.
+
+The transform the shim needs is therefore one line:
+
+    x_x4 = (x_sdl + 704) mod 1408
+
+Check it against the P91 capture. The station is drawn at `x_x4 = 251`, so its
+copies are at display 251 and 1659.
+
+| pointer | `x_sdl` | folded `x_x4` | hits |
+|---|---|---|---|
+| 1659 (over the station in copy B) | 955 | `1659 mod 1408` = **251** | the station ✓ |
+| 955 (where it must point *today*) | 251 | 955 | the wrong element |
+
+And the coverage is complete rather than merely better. The reachable pointer
+range `704…2111` gives `x_sdl ∈ 0…1407`, and folding that yields
+`704…1407 ∪ 0…703` — **X4's whole frame**. Every element is reachable, each by
+pointing at wherever one of its two copies is drawn: copy A's right half and
+copy B's left half between them cover the frame exactly once.
+
+That is the entire ergonomic fix, and it needs no window resize, no render
+change and no event-stream ownership — only a rewrite of the position X4 reads,
+in the one place both channels agree on.
+
+- **P94** — rewriting the pointer position with the fold makes hovering an
+  element activate it *where it is drawn*, in whichever copy the pointer is
+  over, with no change to rendering. Failure modes to watch, each of which
+  would show up as a different symptom: `SDL_WarpMouseInWindow` (X4 recentres
+  for mouse-look, and a warp the shim did not issue must not be folded twice);
+  relative mode in the cockpit, where there is no pointer to fold at all; and
+  drag operations, which must fold consistently across press, move and release
+  or a drag will jump at the seam.
