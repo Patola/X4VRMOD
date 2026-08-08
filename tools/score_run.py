@@ -199,6 +199,60 @@ def main(path):
             print("grade  STEREO — every settled sample carries a real "
                   "per-eye difference.")
 
+    # Task #30: the canvas, scored from the log rather than from the screen.
+    #
+    # Silent when no canvas was asked for. When one was, every way it can fail
+    # produces a frame that looks correct or nearly so -- a mono UI, or a UI
+    # that moved while the pointer did not -- so each is named here rather than
+    # left to the eye.
+    canvas_cfg = next((ln for ln in lines if "canvas: " in ln
+                       and " m -> s=" in ln), None)
+    canvas_refused_cfg = [ln for ln in lines if "canvas: REFUSED" in ln]
+    canvas_tally = [ln for ln in lines if "canvas final: " in ln
+                    or "canvas first present: " in ln]
+    if not canvas_cfg and not canvas_refused_cfg and not canvas_tally:
+        pass  # no canvas in this run; nothing to say
+    else:
+        for ln in canvas_refused_cfg:
+            fails.append("canvas REFUSED — " + ln.split("REFUSED", 1)[1]
+                         .lstrip("— -"))
+        if canvas_cfg:
+            print("canvas " + canvas_cfg.split("canvas: ", 1)[1])
+        for ln in canvas_tally:
+            print("canvas " + ln.split("canvas ", 1)[1])
+        # Built but never bound is the failure mode that reproduces the old
+        # frame exactly: the variants exist, no pipeline took one, and there is
+        # nothing on screen to notice.
+        final = next((ln for ln in canvas_tally if "canvas final: " in ln), None)
+        if final:
+            m = re.search(r"swapped into (\d+) pipeline stage", final)
+            if m and int(m.group(1)) == 0:
+                fails.append("canvas variants were built but no pipeline ever "
+                             "bound one — the UI is still mono and the frame "
+                             "is byte-for-byte the pre-canvas one")
+            m = re.search(r"(\d+) REFUSED", final)
+            if m and int(m.group(1)):
+                fails.append(f"{m.group(1)} module(s) could not get a canvas "
+                             "variant — their UI stays mono while the rest of "
+                             "it moves")
+        # The pointer and the UI must be given the SAME shift. They are set
+        # from one variable, so a disagreement here means the cursor read it
+        # before it was published -- which would put the pointer a fixed
+        # distance from every button it activates, in a frame where both
+        # features report success.
+        cur = next((ln for ln in lines if "canvas shift" in ln), None)
+        if canvas_cfg and cur:
+            want = re.search(r" s=([\d.eE+-]+) NDC", canvas_cfg)
+            got = re.search(r"canvas shift ([\d.eE+-]+) NDC", cur)
+            if want and got and abs(float(want.group(1)) -
+                                    float(got.group(1))) > 1e-6:
+                fails.append(f"the UI was shifted by {want.group(1)} but the "
+                             f"cursor by {got.group(1)} — the pointer sits off "
+                             "every button it activates")
+        elif canvas_cfg and not cur:
+            print("canvas  (the cursor overlay never drew, so its shift is "
+                  "unchecked)")
+
     print()
     if fails:
         for f in fails:
