@@ -10894,3 +10894,25 @@ image needs that same position on that same side.
 
 So the channel is not a detour to answer this question; it is #17's first step,
 and answering this question is a free consequence of taking it.
+
+### Settled: the cursor is not in the eye image
+
+Patola inspected all six map frames from take 93 at full resolution and found no
+cursor in any of them. That is the direct form of the question I had been trying
+to reach with statistics, and it agrees with the independent evidence already on
+record.
+
+**The stronger argument needed no dump at all.** The display shows X4's frame
+duplicated side by side, so anything in the eye image appears *twice*. The P91
+capture shows **one** cursor. That alone establishes it, and it was already
+established when that capture was taken — the take-93 analysis above was
+re-litigating a settled point, which is why it kept failing to find a cleaner
+way to prove it.
+
+So **#17's premise is confirmed**: the cursor is composited in display space,
+outside X4's frame, and drawing it into the eye image is real work rather than a
+duplicate of something X4 already does.
+
+The idle-hide caveat is recorded and does *not* weaken this: a dump taken while
+the cursor was hidden would contain no cursor for an uninteresting reason, but
+the duplication argument does not rest on the dumps.
