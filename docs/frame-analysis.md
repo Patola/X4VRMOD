@@ -10285,3 +10285,80 @@ Recorded before the measurement, and before any shim design rests on it. Note
 that neither model is yet known to be *the* mechanism; they are the two the
 current evidence admits, and a third may survive the capture that these two do
 not.
+
+### P91 resolved: model B. The mapping never changed — the confinement did.
+
+Annotated capture, map mode: a station marked with a red circle in **both**
+copies, the cursor marked purple, cursor placed where it highlights that
+station. The two red circles fix the scale, being one eye-width apart by
+construction.
+
+| feature | image x | display x |
+|---|---|---|
+| station, left copy | 178 | 251 |
+| station, right copy | 1177 | 1657 |
+| separation | 999 | **1407** (= 1408 to reading error) |
+| cursor, arrow tip | 683 | **962** |
+
+The station is drawn at `x_x4 = 251`. Predictions:
+
+| model | pointer | error |
+|---|---|---|
+| **B — translation `x_x4 + 704`** | 955 | **7 px** |
+| C — scale `2·x_x4 + 704` | 1205 | 243 px |
+
+**Model B.** `x_x4 = x_screen - 704`, exactly P23's mapping, re-measured on a
+different element four takes later.
+
+So the earlier framing was wrong in an instructive way: **the mapping did not
+change.** What changed is the **right-hand confinement**. P23's box was
+`704…2112`, bounded by X4's 1408-wide window; the pointer now runs past 2112,
+off the display, consistent with an input extent of 2816 (`704…3520`) while
+`SDL_GetWindowSize` still reports 1408. The offset is untouched; only the clamp
+moved.
+
+### Correction: X4 does not draw its own cursor
+
+`x4-quirks.md` records, from the `--force-grab-cursor` work, that "X4 draws and
+moves its own cursor". The capture refutes it. Patola sees **one** pointer, not
+duplicated — and anything X4 drew into its own frame would appear in both copies,
+because the compositor duplicates that frame.
+
+What is true is narrower: **X4 owns the cursor's shape and position; the
+compositor draws it, once, in display space.** The shape changed from reticle to
+arrow on hovering the station, so X4 is setting it; the single instance shows it
+is not in X4's frame.
+
+That was load-bearing in the wrong direction. It was the reason to suspect
+task #17's drawing half might already be done. It is not: a display-space
+pointer cannot be correct in a side-by-side stereo image, so **#17 has real
+work**, and its original statement — draw the cursor into the eye image *before*
+duplication — was right all along.
+
+### The ergonomic defect, stated precisely
+
+X4's whole frame is reachable: `x_x4 ∈ 0…1408` maps to pointer `704…2112`,
+which is on screen. Nothing is unclickable. The defect is that **you must point
+where the element is not**:
+
+```
+display   0 ────────────── 1408 ────────────── 2816
+copy A    |═══════════════|                          station drawn at 251
+copy B                    |═══════════════|          and again at 1659
+pointer               |═══════════════|              must sit at 955
+```
+
+The pointer box straddles the seam, so hovering the station you can see at 251
+means putting the pointer at 955 — over the middle of copy A, nowhere near it.
+Past 2112 the pointer is at `x_x4 > 1408`, outside X4's frame entirely: dead
+space that the widened clamp now lets it wander into, and off the display.
+
+Both halves of the shim follow from this and remain separate:
+
+* **Draw** (#17) — composite the pointer into the eye image before duplication,
+  so it lands at the matching place in both copies. Needs a cursor position,
+  which X4 has and we currently do not.
+* **Map** (#19) — make a display coordinate reach X4 as the point in one eye
+  that is *drawn* there, so hovering an element where it appears activates it.
+  Still blocked on locating the event stream: `SDL_PollEvent` is interposed and
+  never fires.
