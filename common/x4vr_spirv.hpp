@@ -127,11 +127,11 @@ struct Inst {
 // World = geometry positioned by a per-object matrix (set 3), or -- under
 // `wide_camera` -- by the camera block. NonWorld = everything else.
 //
-// This was `UI` until the name was measured against what it selects. The set is
-// UI and HUD shaders, but also every fullscreen triangle and every procedural
-// vertex shader in the frame; on X4 it is 54 modules of 350, most of which no
-// player would call UI. Naming it for its most visible member made
-// X4VR_CLIP_K_UI read as "the matrix for the HUD", which it is not.
+// NonWorld is named for what it is rather than for its most visible member. It
+// does contain the UI and HUD shaders, but also every fullscreen triangle and
+// every procedural vertex shader in the frame -- on X4, 54 modules of 350, most
+// of which no player would call UI. Naming the set after the HUD invites the
+// reading that its matrix moves the HUD, which is not what it does.
 enum class Kind { NotVertex, World, NonWorld };
 
 inline bool iterate(const std::vector<uint32_t> &code,

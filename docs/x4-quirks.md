@@ -488,8 +488,15 @@ change, and recorded "unsheared geometry is dead as a family". It is only dead
 for passes that are *sheared* -- which the lighting passes are, so that part
 stands. Modules drawn in unsheared passes were never tested by it.
 
-*Note:* the knob was called `X4VR_CLIP_K_UI` until the set was measured -- 54 of
-350 modules, mostly fullscreen and procedural shaders, not HUD. The old spelling
-is **not** read any more; the layer logs "was renamed to ... and is NOT read"
-if it sees one, so an old command line fails loudly instead of silently doing
-nothing. Reproduce a pre-rename take by checking out that commit.
+*Symptom, related:* a command line copied out of `frame-analysis.md` sets
+`X4VR_CLIP_K_UI`, `X4VR_CLIP_K_UI_RIGHT` or `X4VR_CLIP_SHIFT_UI` and the run
+behaves as though no matrix were set.
+
+Those were the names before the set was measured -- 54 of 350 modules, mostly
+fullscreen and procedural shaders, not HUD. They are gone, with no alias and no
+warning, so setting one now does nothing at all and says nothing about it. Every
+take recorded before the rename uses them.
+
+*Do:* translate `_UI` to `_NONWORLD` when reusing an old command line, or check
+out the commit the take was run against -- which is the correct move anyway,
+since a known-good state is code *and* knobs.

@@ -3332,9 +3332,10 @@ VkResult create_shader_module_inner(
     //                every fullscreen post pass, so they must never share
     //                K_world.
     //
-    // Renamed from K_ui. "UI" named the set after its most visible member and
-    // read as "the matrix for the HUD", which sent one investigation (take 82)
-    // to a conclusion broader than the knob could support.
+    // The name is deliberate: this set is *not* the HUD. On X4 it is 54 modules
+    // of 350, and most of them are fullscreen triangles and procedural vertex
+    // shaders. Reading it as "the matrix for the HUD" sent one investigation
+    // (take 82) to a conclusion broader than the knob could support.
     //
     // **Setting K_nonworld often does nothing, and that is by design.** Two
     // independent gates gate the shear: this one picks *which matrix* a module
@@ -3419,29 +3420,6 @@ VkResult create_shader_module_inner(
         // two layers that provably differ, without an IPD or a projection.
         if (const char *s = getenv("X4VR_CLIP_K_RIGHT"))
             have_kr |= parse16(s, K_world_r);
-        // The `_UI` spellings are gone, not aliased. Nothing outside this repo
-        // consumes these names, so carrying a compatibility path for a name we
-        // got wrong would be pure weight.
-        //
-        // They are still *named* here, once, because the failure mode of simply
-        // deleting them is silence: docs/frame-analysis.md records takes by
-        // their exact command lines, and pasting take 82's into this build would
-        // set a variable nothing reads and produce a run that looks valid and
-        // is not. This project has been burned by that shape three times -- the
-        // take-50 X4VR_STEREO control, the PROJ_INVPROJ default flip, and the
-        // invproj knob that patched the wrong member. A tombstone costs three
-        // lines. To reproduce a pre-rename take, check out that commit, where
-        // the old name works natively.
-        static const char *const kRetired[][2] = {
-            {"X4VR_CLIP_K_UI", "X4VR_CLIP_K_NONWORLD"},
-            {"X4VR_CLIP_K_UI_RIGHT", "X4VR_CLIP_K_NONWORLD_RIGHT"},
-            {"X4VR_CLIP_SHIFT_UI", "X4VR_CLIP_SHIFT_NONWORLD"},
-        };
-        for (const auto &r : kRetired)
-            if (getenv(r[0]))
-                X4VR_LOG("clip-space: %s was renamed to %s and is NOT read — "
-                         "this run is not doing what that command line says",
-                         r[0], r[1]);
         if (const char *s = getenv("X4VR_CLIP_K_NONWORLD"))
             have_k |= parse16(s, K_nonworld);
         // Normally unset: the UI is CPU hit-tested and belongs in both eyes

@@ -103,21 +103,19 @@ is what let take 82 draw a conclusion broader than the knob could support.
     X4VR_CLIP_K_UI_RIGHT  -> X4VR_CLIP_K_NONWORLD_RIGHT
     X4VR_CLIP_SHIFT_UI    -> X4VR_CLIP_SHIFT_NONWORLD
 
-**The old spellings are gone, not aliased.** Nothing outside this repo consumes
-these names, so a compatibility path for a name we got wrong would be pure
-weight. They are still *named* in the layer, once, as a tombstone -- because the
-failure mode of simply deleting them is silence. This document records takes by
-their exact command lines, and pasting take 82's into a current build would set
-a variable nothing reads and produce a run that looks valid and is not. So the
-layer logs, and the run is not otherwise affected:
+**The old spellings are gone**, with no alias and no warning: nothing outside
+this repo consumes them, and the code carries no trace of a name we got wrong.
 
-    clip-space: X4VR_CLIP_K_UI was renamed to X4VR_CLIP_K_NONWORLD and is NOT
-    read — this run is not doing what that command line says
+**So a pre-rename command line pasted into a current build is silently
+ignored** -- the variable is set, nothing reads it, and the run looks valid
+while doing something else. That is a real edge and this is where it is
+recorded, because the code no longer says it anywhere.
 
-**To reproduce a pre-rename take, check out that commit**, where the old name
-works natively. That is the project's own rule anyway: a known-good state is
-code *and* knobs, so a historical command line is only meaningful against the
-build it was run on. Historical command lines below are left as they were run.
+**To reproduce a take from before this rename, check out that commit**, where
+the old name works natively. That is the project's own rule regardless: a
+known-good state is code *and* knobs, so a historical command line is only
+meaningful against the build it was run on. Every command line recorded below
+predates the rename and is left exactly as it was run.
 
 The per-module summary line changed with it, so a **new** log reads
 `[world=296 nonworld=54 ...]` where the takes below quote `world=296 ui=54`.
