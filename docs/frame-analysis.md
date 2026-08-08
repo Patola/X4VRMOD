@@ -10425,3 +10425,51 @@ the counter that sat below the gate it was measuring.
 - **P93** — motion events arrive through `SDL_WaitEvent` or `SDL_PeepEvents`
   and carry non-zero `xrel`/`yrel`. If neither fires either, X4 is not reading
   the mouse through SDL at all and the search moves to evdev or Wayland.
+
+## Take 88 — P93 confirmed, P92 supported but not proven, and the sampler was wrong
+
+The hooks fire. Motion arrives through `SDL_WaitEvent`/`SDL_PeepEvents`:
+
+    sdl: mouse motion x=704.0 y=704.0 xrel=0.0    yrel=0.0     win=4
+    sdl: mouse motion x=0.0   y=0.0   xrel=-704.0 yrel=-704.0  win=4
+    sdl: mouse motion x=3.0   y=4.0   xrel=3.0    yrel=4.0     win=4
+    sdl: mouse motion x=13.0  y=12.0  xrel=9.0    yrel=8.0     win=4
+
+**P93 confirmed.** And the shape of the numbers says more than the fact that
+they exist:
+
+* `x` is an **absolute window coordinate** — it accumulates while `xrel` carries
+  the delta, so this is not a relative-only stream;
+* it starts at **704**, which is the centre of a 1408-wide window;
+* the second event is a warp to the origin (`xrel=-704`), consistent with
+  `SDL_WarpMouseInWindow`, which X4 imports;
+* `SDL_GetMouseState` returns the same values at the same timestamps, so the
+  polled channel and the event channel agree. That matters: the shim only has to
+  be consistent with one position, not reconcile two.
+
+**P92 is supported and not proven.** Window space is what these look like, but
+the largest value observed is 17. Nothing here reaches an edge, so 0…1408 and
+0…2816 are both still consistent with the data — the same "two models, one
+untested region" shape as P91, and it must not be written up as confirmed.
+
+### The sampler measured the wrong thing
+
+Every sample lands in a 0.2-second burst 97 seconds into a 123-second run. Both
+budgets — twelve changed positions, eight motion events — were spent on the
+first mouse twitch, long before the deliberate sweep to the screen edge.
+
+The question was "what is the **range**", and the instrument sampled a
+*beginning*. Replaced with `note_extent()`, which logs only on a **new
+extreme**: self-limiting, because a range only ever widens, and it captures the
+edges, which are the only part that discriminates 0…1408 from 0…2816.
+
+It is called **above** the sample caps in `note_mouse_event`, deliberately.
+Below them, the eight-motion budget would switch off the instrument measuring
+the range — the same shape as the bindless counter that sat under the gate
+removing its own population, and the direct cause of take 88 reporting a maximum
+of 17. That bug was written and then caught before the run, not after it.
+
+- **P92 (restated for take 89)** — with the pointer swept to both extremes,
+  `GetMouseState extent` reports `x=0..1408`. If it reports `x=0..2816`, X4 is
+  handed display coordinates and clamps them itself, and the widened right-hand
+  box follows from that rather than from a changed window extent.

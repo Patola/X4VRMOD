@@ -344,9 +344,40 @@ enum { SDL_EV_MOUSE_MOTION = 0x400, SDL_EV_MOUSE_DOWN = 0x401,
 // One command, available from the first day, would have shown that the
 // instrument could not work. Check the symbol is imported before drawing any
 // conclusion from a silent hook.
+// The question is the *range* X4 is handed, so measure the range.
+//
+// Take 88 sampled the first twelve changed positions instead, and every one of
+// them landed in a 0.2s burst on the first mouse twitch, 97 seconds into a
+// 123-second run: largest value 17, with the deliberate sweep to the screen
+// edge happening long after the budget was gone. An instrument for "how far
+// does it go" must not spend itself on "where did it start".
+//
+// Logging on a *new extreme* is self-limiting -- the range only ever widens, so
+// this settles to silence on its own -- and it captures the edges, which is the
+// only part of the range that discriminates 0..1408 from 0..2816.
+void note_extent(const char *what, float x, float y) {
+    static float lo_x = 1e9f, hi_x = -1e9f, lo_y = 1e9f, hi_y = -1e9f;
+    static int logged = 0;
+    const bool wider = x < lo_x || x > hi_x || y < lo_y || y > hi_y;
+    if (!wider || logged >= 64)
+        return;
+    lo_x = x < lo_x ? x : lo_x;
+    hi_x = x > hi_x ? x : hi_x;
+    lo_y = y < lo_y ? y : lo_y;
+    hi_y = y > hi_y ? y : hi_y;
+    logged++;
+    X4VR_LOG("sdl: %s extent x=%.0f..%.0f y=%.0f..%.0f (now %.0f,%.0f)", what,
+             lo_x, hi_x, lo_y, hi_y, x, y);
+}
+
 void note_mouse_event(const Sdl3MouseEvent *e) {
     static int motions = 0, buttons = 0;
     const bool is_motion = e->type == SDL_EV_MOUSE_MOTION;
+    // ABOVE the sample caps, deliberately. Putting it below would let the
+    // eight-motion budget switch off the instrument that measures the range --
+    // the same shape as the bindless counter that sat under the gate removing
+    // its own population, and the reason take 88 measured a maximum of 17.
+    note_extent(is_motion ? "motion" : "button", e->x, e->y);
     if (is_motion && motions >= 8)
         return;
     if (!is_motion && buttons >= 6)
@@ -421,21 +452,8 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
 uint32_t SDL_GetMouseState(float *x, float *y) {
     static auto real_fn = real<uint32_t (*)(float *, float *)>("SDL_GetMouseState");
     const uint32_t buttons = real_fn(x, y);
-    if (this_is_the_game()) {
-        static int seen = 0;
-        static float last_x = -1e9f, last_y = -1e9f;
-        // Sample on *change*, not on call count: X4 polls this every frame and
-        // a plain counter would spend its whole budget on one stationary
-        // position and report a range of zero.
-        const float cx = x ? *x : 0.f, cy = y ? *y : 0.f;
-        if (seen < 12 && (cx != last_x || cy != last_y)) {
-            last_x = cx;
-            last_y = cy;
-            seen++;
-            X4VR_LOG("sdl: GetMouseState x=%.1f y=%.1f buttons=0x%x", cx, cy,
-                     buttons);
-        }
-    }
+    if (this_is_the_game())
+        note_extent("GetMouseState", x ? *x : 0.f, y ? *y : 0.f);
     return buttons;
 }
 
