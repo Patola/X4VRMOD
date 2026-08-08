@@ -10236,3 +10236,52 @@ exactly what task #29 says.
 So the order is: **#29 first** (dump the eye image at present, when the frame is
 final), because it is the instrument #17, #21 and #30 all need, and without it
 any cursor work is written blind against a premise that may not hold.
+
+## The cursor moved, and P23's model no longer predicts it
+
+Patola, reviewing the cursor deliberately in a repeat of take 85: it is still
+bounded on the left at **1/4** of the display, but now runs **past the right
+edge** — his estimate, 5/4. Previously it was bounded 1/4 to 3/4, which is
+P23's measured box `704…2112`.
+
+What the log settles:
+
+    instance created (app=gamescope) — not the game, layer inert   pid 2877919
+      swapchain created: 2816x1408 ... (pid 2877919)
+    instance created (app=X4)                                      pid 2877964
+      swapchain created: 1408x1408 ... (pid 2877964)
+      sdl: SDL_GetWindowSize -> 1408x1408 (pid 2877964)
+
+**X4 still believes its window is 1408x1408**, exactly as when P23 was measured.
+So P23's model — `x_x4 = x_screen - 704`, the box being X4's window width
+positioned by gamescope — predicts `704…2112` and is contradicted by the
+observation. The model is incomplete, not merely mis-parameterised.
+
+*(Process note: that log holds two sessions, because the run was repeated into
+the same `X4VR_LOG`. Both agree, so nothing here rests on it, but
+`tools/score_run.py` refuses multi-session logs and the fresh-log-per-run rule
+exists for exactly this.)*
+
+### P91 — two models fit both bounds, and only an off-centre element separates them
+
+| model | mechanism | box | element at `x_x4` activates at pointer |
+|---|---|---|---|
+| **B** | translation, X4's *input* extent is now 2816 while its window reports 1408 | 704…3520 | `x_x4 + 704` |
+| **C** | a scale of 2 has been reintroduced somewhere | 704…3520 | `2·x_x4 + 704` |
+
+Both put the left stop at 704 and the right stop at 3520. **Both fit every
+number observed so far**, which is the same shape as the take-30 census and the
+false "P22 confirmed": an observation consistent with a hypothesis is not an
+observation that selects it. The endpoints cannot decide this; only the middle
+can.
+
+**P91: for a UI element X4 draws at its own `x_x4 = 352`, the pointer must be at
+screen 1056 under model B and at screen 1408 under model C.** One annotated
+capture decides it, which is exactly how P23 was resolved — an off-centre
+element marked in both copies, with the cursor placed where it actually
+highlights that element.
+
+Recorded before the measurement, and before any shim design rests on it. Note
+that neither model is yet known to be *the* mechanism; they are the two the
+current evidence admits, and a third may survive the capture that these two do
+not.
