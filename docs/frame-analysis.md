@@ -11657,3 +11657,59 @@ Re-run of P103, unchanged except that the launcher now propagates the size:
 Check the log before judging anything on screen: `env: run =` must now show
 `X4VR_RES=1408x792`, and there must be **no** swapchain-size warning. If either
 is wrong the run is another take 101 and the picture means nothing.
+
+## Take 102 — the render followed, the layer did not. The third extent
+
+`X4VR_RES=1408x792` this time, so the launcher fix worked and X4 rendered 16:9.
+X4's own swapchain confirms it: `1408x792 format=44 (pid 3105232)`. And then:
+
+    sbs: SPLIT OFF — X4 asked for 1408x792 but one eye is 1408x1408
+    sbs: composite armed for 1408x792, each eye 704x792
+         (X4 renders full width, left half duplicated)
+
+**The layer's idea of an eye was still the compiled constant.** So the split
+refused, the frame degraded to duplicating the left half, and the screen showed
+two copies of one eye 704 apart — which is what Patola saw and described for
+take 101, arrived at by a different route.
+
+That is the whole of task #31 in one line: X4's window, X4's render and the
+layer's expectation are three numbers, and two of them moved. Every component
+behaved exactly as written.
+
+Fixed with one function, `expected_eye()`, reading `X4VR_RES` — the same value
+the launcher derives from the `W`/`H` it gives gamescope — so all three follow
+one number. The default is unchanged by construction: `X4VR_RES=1408x1408` is
+what the launcher already sets, and it equals the old constant.
+
+### I told Patola to check the wrong things, twice
+
+For take 102 I named two log lines: `X4VR_RES` (which was right) and the absence
+of a swapchain warning (which the run could not pass — the layer is loaded in
+gamescope's process too, and gamescope's swapchain is legitimately the composite
+size, not an eye). The warning is now gated on `g_active`.
+
+Neither line was the one that mattered. **`SPLIT OFF` was, and `score_run.py`
+prints it first**, as `split OFF (FAIL)`, before anything else is worth reading.
+The instruction should have been *run the scorer* — which is the project's own
+rule, restated in this file more than once, and set aside in favour of hand-
+picked greps on the two occasions it would have paid off immediately.
+
+P103 remains untested after two attempts, neither of which reached the question.
+The re-run is take 103, identical to 102:
+
+    X4VR_TAKE=103-ASPECT X4VR_W=2816 X4VR_H=792 X4VR_STEREO=1
+    X4VR_BINDLESS_PATCH=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1
+    X4VR_SBS_LAYERS=2 X4VR_PROJ_SX=1.3333 X4VR_MV=1 X4VR_PROJ_LIVE=1
+    X4VR_SBS=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1
+    X4VR_MV_INVENTORY=1 X4VR_MV_DUMP=/tmp/x4vr-t103
+    X4VR_MV_DUMP_PRESENT=60 X4VR_LOG=/tmp/x4vr-take103.log
+    ./launch/x4vr-launch.sh
+
+Judged by `python3 tools/score_run.py /tmp/x4vr-take103.log`, and by nothing
+else until that line says `split on`.
+
+Note for #24: `X4VR_PROJ_SX=1.3333` was measured at a 1:1 eye and is passed
+unchanged here, so at 16:9 the *shear* will be derived from a stale `sx`. That
+does not affect P103 — the question is where the logo's right edge falls, which
+is X4's projection and not ours — but it means take 103 is not a candidate for a
+known-good state, and any per-eye offset measured in it is the wrong size.

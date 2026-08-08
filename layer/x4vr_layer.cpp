@@ -4597,6 +4597,31 @@ void patch_view_before_submit() {
 // GPU ever reads these blocks, hammering them at ~10 kHz is guaranteed to
 // corrupt the image. If the image stays pristine, the blocks we identified
 // are not what the visible geometry consumes, and no amount of careful
+// The eye size this run expects, in one place.
+//
+// It used to be the compiled `X4VR_SBS_WIDTH/2 x X4VR_SBS_HEIGHT` at every use,
+// and take 102 showed the cost: the launcher told X4 to render 1408x792 for a
+// 16:9 aspect test, X4 did exactly that, and the split refused because the
+// constant still said 1408x1408. The frame degraded to "duplicate the left
+// half" -- two copies of one eye, 704 apart -- and the run measured nothing
+// about aspect. That is the third extent in task #31, and it disagreed with the
+// other two while every individual component was behaving as written.
+//
+// X4VR_RES is what the launcher tells X4 to render, derived from the same W/H
+// it gives gamescope, so reading it here makes all three follow one number.
+VkExtent2D expected_eye() {
+    static const VkExtent2D e = [] {
+        VkExtent2D v{X4VR_SBS_WIDTH / 2, X4VR_SBS_HEIGHT};
+        if (const char *res = getenv("X4VR_RES")) {
+            unsigned w = 0, h = 0;
+            if (sscanf(res, "%ux%u", &w, &h) == 2 && w && h)
+                v = {w, h};
+        }
+        return v;
+    }();
+    return e;
+}
+
 // timing on our side would have helped.
 void hammer_thread() {
     X4VR_LOG("TEST: hammer thread started");
@@ -4650,9 +4675,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
     // the config (Wayland, where the surface declines to dictate a size and
     // X4 falls back to it). Both end here asking for exactly one eye, so key
     // off the request itself rather than off which lever moved it.
+    const VkExtent2D eye = expected_eye();
     const bool split = g_sbs_enabled && g_active && g_sbs_split_render &&
-                       ci->imageExtent.width == X4VR_SBS_WIDTH / 2 &&
-                       ci->imageExtent.height == X4VR_SBS_HEIGHT;
+                       ci->imageExtent.width == eye.width &&
+                       ci->imageExtent.height == eye.height;
     if (split)
         sbs_ci.imageExtent.width *= 2;
     // The split test is an exact equality, and when it fails everything
@@ -4769,19 +4795,19 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
     // config alone does not guarantee the size, and the SBS split needs an
     // exact 2:1 -- an odd size here silently halves into two wrong eyes.
     // Say so loudly, once.
-    if (r == VK_SUCCESS) {
+    // g_active only: the layer is loaded in gamescope's process too, and
+    // gamescope's own swapchain is the *composite* size, which is legitimately
+    // not the eye size. Take 102 warned there before X4 had even started, and
+    // that stray line is what made me tell Patola to check for the absence of
+    // a warning -- a check the run could not pass for a reason that had nothing
+    // to do with it.
+    if (r == VK_SUCCESS && g_active) {
         const uint32_t w = ci->imageExtent.width, h = ci->imageExtent.height;
-        // X4VR_RES (set by the launcher's one-eye mode) is the authority on
-        // what size we asked for; without it the SBS frame is the target.
-        // Warning against the wrong number is worse than not warning.
-        uint32_t want_w = X4VR_SBS_WIDTH, want_h = X4VR_SBS_HEIGHT;
-        if (const char *res = getenv("X4VR_RES")) {
-            unsigned rw = 0, rh = 0;
-            if (sscanf(res, "%ux%u", &rw, &rh) == 2 && rw && rh) {
-                want_w = rw;
-                want_h = rh;
-            }
-        }
+        // X4VR_RES is the authority on what size we asked X4 to render;
+        // without it the SBS frame is the target. Warning against the wrong
+        // number is worse than not warning.
+        const VkExtent2D want = expected_eye();
+        const uint32_t want_w = want.width, want_h = want.height;
         static uint32_t warned_w = 0, warned_h = 0;
         if ((w != want_w || h != want_h) &&
             (w != warned_w || h != warned_h)) {
