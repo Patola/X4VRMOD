@@ -10684,3 +10684,49 @@ does, the pointer is free and simply unheard off-surface, and #31 is purely a
 question of where X4's surface sits — which is a considerably easier fix, and
 would also explain why gamescope's own pointer sails off to the right while X4's
 freezes.
+
+## Take 91 — the left wall confines; the right wall was never measured
+
+    sdl: motion away from the walls (x=704) — the probe is live
+    sdl: wall push #1 — x=0 pinned, xrel=-704.0        <- the startup warp, not a push
+    sdl: wall push #2..#8 — x=0 pinned, xrel=-6, -4, -16, -7, -6, -2
+    sdl: GetMouseState extent x=0..1407 y=0..1406 (now 1407,654)
+
+**The left wall confines.** Seven genuine pushes at `x=0` with motion still
+arriving and non-zero `xrel` while the position stays pinned. Events do not
+cease, so something clamps rather than delivery stopping.
+
+**The right wall is unmeasured, and the silence is my instrument's fault.** The
+eight-push budget was spent at `588783.8`; the extent line showing the pointer
+at 1407 is stamped `588785.7`. The right wall was reached *after* the counter was
+full, so its zero is a budget artifact.
+
+That is the same fixed-budget failure as take 88's sampler — written into the
+probe built two messages after diagnosing it, and shipped despite the docs for
+that very probe arguing that an absence had to be made meaningful. The guard was
+against the probe being **dead**; the failure was the probe being **spent**. A
+budget shared between two things being compared cannot compare them.
+
+Fixed: per-wall counters, six each, so neither wall can consume the other's
+evidence.
+
+### What the left wall already tells us
+
+Continued relative motion with a clamped position is the signature of
+`--force-grab-cursor` putting the pointer in **relative mode**: the compositor
+sends deltas unconditionally and SDL accumulates them into a position it clamps
+to the window. That mechanism is symmetric by construction — it knows nothing
+about which edge — and it involves no surface-boundary confinement at all.
+
+If that is what is happening, it also resolves the asymmetry Patola sees on
+screen without needing an asymmetric mechanism: X4's position is clamped at both
+ends, while **gamescope's own pointer is a separate, unclamped thing** that
+sails off to the right. Two pointers, one bounded and one not, conflated because
+only one of them is visible.
+
+- **P96** — the right wall produces `wall push RIGHT` lines just as the left
+  does. Symmetric confinement means the bound is SDL clamping an accumulated
+  relative position, not a surface boundary, and task #31 is then purely about
+  where X4's surface sits — nothing to defeat. Asymmetry would mean a genuine
+  surface-boundary effect on one side and would need explaining before #31 is
+  designed.

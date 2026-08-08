@@ -459,14 +459,22 @@ void note_mouse_event(const Sdl3MouseEvent *e) {
     if (is_motion) {
         const int w = g_x4_win_w.load(std::memory_order_relaxed);
         if (w > 1) {
-            const bool at_wall = e->x <= 0.5f || e->x >= (float)(w - 1) - 0.5f;
-            static int pins = 0, frees = 0;
-            if (at_wall && fabsf(e->xrel) > 0.5f && pins < 8) {
+            // Per-wall budgets. Take 91 used one counter for both and spent it
+            // entirely on the left wall before the right wall was ever reached,
+            // so the right wall's silence was a budget artifact and not a
+            // measurement -- the same mistake as take 88's sampler, made again
+            // in the probe written to explain it. A shared budget between two
+            // things being compared cannot compare them.
+            const bool left = e->x <= 0.5f;
+            const bool right = e->x >= (float)(w - 1) - 0.5f;
+            static int pins_l = 0, pins_r = 0, frees = 0;
+            int &pins = left ? pins_l : pins_r;
+            if ((left || right) && fabsf(e->xrel) > 0.5f && pins < 6) {
                 pins++;
-                X4VR_LOG("sdl: wall push #%d — x=%.0f pinned, xrel=%.1f still "
-                         "arriving: the pointer is CONFINED",
-                         pins, e->x, e->xrel);
-            } else if (!at_wall && frees < 1) {
+                X4VR_LOG("sdl: wall push %s#%d — x=%.0f pinned, xrel=%.1f still "
+                         "arriving: this wall CONFINES",
+                         left ? "LEFT " : "RIGHT ", pins, e->x, e->xrel);
+            } else if (!left && !right && frees < 1) {
                 frees++;
                 X4VR_LOG("sdl: motion away from the walls (x=%.0f) — the probe "
                          "is live, so a later absence of wall pushes is real",
