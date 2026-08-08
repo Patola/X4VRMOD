@@ -11163,3 +11163,126 @@ target are now the same kind of object in the same coordinate system.
 
 The fold stays in the tree, off, as the record of a measurement. It has no
 remaining job.
+
+## Task #30 groundwork — the UI is `World`, and the module is the wrong granularity
+
+Measured offline with `tools/canvas_predicate_design.py` over three independent
+dump/log pairs (takes 61, 74 and 80; 397 dumped modules each, 382 with a vertex
+stage). Log and dump must come from the *same* take — module and pass serials
+are per-run — and the tool takes both as arguments so that pairing is explicit
+rather than assumed.
+
+### What the UI pass actually is
+
+In all three takes the UI is `rp #33`: `1 colour [50L] no-depth`, i.e.
+`B8G8R8A8_SRGB` with no depth attachment, which `classify_unsheared()` calls
+unsheared (a colour pass with no depth is a fullscreen post pass) and
+`classify_per_eye()` masks anyway. It binds exactly five modules, and they split
+two ways, identically in every take:
+
+| | vertex stage | positions through |
+|---|---|---|
+| one module | `gl_VertexIndex`, no vertex attributes | nothing — procedural fullscreen |
+| four modules | `SPECIAL_VERTEXLOCATION_POSITION`, `IO_uv0`, `IO_uv1`, `IO_color`, one render target | `M_worldviewprojection` (set 3, member 0) |
+
+Every other LDR pass — `rp #0`, `#1`, `#4`, `#7`, `#10`, `#45` — binds only
+procedural or fragment-only modules. They are blits, as take 32 onward has said.
+
+### Three corrections to the note written above under "Immersive UI mode as a goal"
+
+**1. `X4VR_CLIP_SHIFT_NONWORLD` is the wrong knob.** That note said it "is the
+right shape for that knob". It is not: the four UI modules read
+`M_worldviewprojection`, so `classify()` returns `Kind::World` for them and they
+are patched with `K_world`. `K_nonworld` can never reach a menu quad. The note
+reasoned from the *pass* verdict (`MONO (all-LDR/UI)`) to a *module* class, and
+those are different questions — the same conflation `split_note` in
+`pass_is_per_eye()` was written to prevent.
+
+**2. The module is the wrong granularity, so a third category cannot fix this.**
+Every one of the four UI modules is *also* bound to `rp #13` and/or `rp #23`, the
+main world passes:
+
+    take 61   mod-0261 -> rp [13, 23, 33]   mod-0263 -> [13, 23, 33]
+              mod-0265 -> rp [23, 33]       mod-0351 -> [13, 23, 33]
+    take 74   mod-0263 -> rp [13, 23, 33]   mod-0265 -> [23, 33]
+              mod-0267 -> rp [13, 23, 33]   mod-0293 -> [13, 23, 33]
+    take 80   mod-0261 -> rp [13, 23, 33]   mod-0263 -> [13, 23, 33]
+              mod-0265 -> rp [23, 33]       mod-0277 -> [13, 23, 33]
+
+Only the procedural module is exclusive to the UI pass. **The same shader draws
+a ship hull in `rp #13` and a menu quad in `rp #33`**, so no per-module
+predicate — however many categories it has — can give those two draws different
+transforms. `vkCreateShaderModule` sees one module and patches it once.
+
+What is needed is a third **variant**, selected at `vkCreateGraphicsPipelines`
+where the render pass is known, exactly as `needs_original()` already selects
+the unpatched twin. The two-way `World`/`NonWorld` split stays as it is; what
+gains a third member is the variant table, not the classification.
+
+**3. The input blocker named in that note is gone.** It said "a canvas at a
+virtual depth needs the cursor projected onto it — which is what task #19 exists
+to make possible." #17 did it instead: the cursor is now drawn into the eye
+image, per array layer, at an arbitrary rectangle. Giving it the same offset the
+canvas gets is a per-layer term in `cursor_rect()`, not a projection problem.
+
+### The canvas transform is the world shear with `z` pinned
+
+`patch_vertex_clip` applies `gl_Position = K · gl_Position`. For `K` = identity
+with `K[12] = s`, that is `(x + s·w, y, z, w)`, whose NDC x is `x/w + s` — a
+constant NDC shift **for any `w`**. It does not matter whether X4's UI matrix is
+an orthographic screen transform (`w = 1`) or the map's perspective one; the
+shift is the same. That is what makes it a canvas rather than geometry.
+
+Equating that to the world offset already derived above,
+`704·sx·(ipd/2)/z` px on a 1408-wide eye, and using NDC 1 = 704 px:
+
+    s = sx · (ipd/2) / z          z = sx · (ipd/2) / s
+
+At `sx=1.3333`, `ipd=0.064` that is `s = 0.042666/z`, i.e. **30/z px per eye** —
+numerically identical to the world formula, because *putting the UI at z metres*
+and *world geometry at z metres* are the same statement. So the knob is a
+distance in metres, not an NDC number, and it stays correct when IPD or `sx`
+change:
+
+    z = 1 m -> 30 px    2 m -> 15 px    5 m -> 6 px    10 m -> 3 px    inf -> 0
+
+`s_left = +s`, `s_right = −s`: the left eye sees a near object displaced toward
+the right, which is the sign the world shear already uses (`m8 L=+0.42666
+R=-0.42666`). `s = 0` is infinity and is exactly today's behaviour, which is the
+useful negative control — the knob unset must reproduce the current frame.
+
+### The design
+
+* At `vkCreateShaderModule`, when the canvas is asked for, build a **third**
+  module from the same bytes patched with the constant-shift `K` instead of the
+  world `K`, and remember whether the module classified `World`.
+* At `vkCreateGraphicsPipelines`, bind that third module when the pass is a
+  **canvas pass** — unsheared because all-LDR/no-depth, and masked — *and* the
+  module classified `World`. Both halves of the join do real work: the pass half
+  keeps the world passes out, the module half keeps the procedural fullscreen
+  module in `rp #33` out.
+* The cursor overlay draws at `x ± s` per array layer, so pointer and canvas
+  move together.
+
+Gated on intent: with `X4VR_CANVAS_M` unset nothing is built and nothing
+changes. If a canvas variant fails to build, the module falls back to the
+unpatched twin — today's behaviour — but the refusal is logged by name and
+counted, because a torn UI is not escapable (you cannot read the menu to quit)
+while a silently mono UI at least still plays. Scoring is from the log, as
+always, not from the screen.
+
+### Predictions, before any of it is written
+
+* **P100** — with `X4VR_CANVAS_M=2`, the UI moves as a rigid whole by 15 px per
+  eye in opposite directions, and nothing outside `rp #33` moves. The log will
+  name a canvas-variant count and the resolved `s`; the eye-image dumps will show
+  the HUD displaced and the starfield unchanged.
+* **P101** — hit-testing stays exact. X4's CPU-side test is untouched, and the
+  drawn cursor takes the same `±s`, so pointer and target keep their
+  relationship in both eyes. This is the claim take 96 makes checkable.
+* **P102** — `X4VR_CANVAS_M` unset reproduces take 96's frame exactly. If it does
+  not, the variant is being bound when it was not asked for, and nothing measured
+  after that point is trustworthy.
+
+Predicted here, before the code, so the run that tests them cannot be reasoned
+about backwards.
