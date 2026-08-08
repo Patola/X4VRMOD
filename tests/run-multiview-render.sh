@@ -152,30 +152,52 @@ SHIFTED="1,0,0,0, 0,1,0,0, 0,0,1,0, 1.0,0,0,1"
 # patch that silently did nothing would leave the triangle covering the
 # screen and the case would fail. Asserting "still renders" could not tell
 # those apart.
+# All five vertex-patch cases below carry X4VR_SHEAR_NODEPTH=1, and without it
+# they test nothing.
+#
+# Two independent classifications decide whether K reaches a draw:
+#
+#   the *module*  -> classify() says "world" or "ui", picking K_world or K_ui.
+#                    This harness's fullscreen.vert has no camera block, so it
+#                    is always "ui" and always takes K_ui.
+#   the *pass*    -> needs_original() returns classify_unsheared()[subpass], and
+#                    an unsheared pass binds the UNPATCHED module, whatever the
+#                    module was patched with.
+#
+# Since take 71 a colour pass with no depth is unsheared, and every pass this
+# harness renders is that shape. So the patched module was built, logged
+# ("patched vertex shader #1 (ui)"), and then thrown away at pipeline creation
+# ("unsheared pipeline: using unpatched modules"). X4VR_CLIP_K_UI was inert, the
+# triangle never moved, and three of these cases had been failing ever since --
+# not because the patch broke, but because nothing was binding it.
+#
+# X4VR_SHEAR_NODEPTH=1 is the knob that disables exactly that exclusion, so the
+# pass becomes STEREO and the patched module is bound. It is the only way to
+# reach patch_vertex_clip from this harness, since it renders no pass with depth.
 OFFSCREEN="1,0,0,0, 0,1,0,0, 0,0,1,0, 10.0,0,0,1"
 run_case "mono patch applies (draws nothing)" 2 0 0 \
     "VK_ADD_LAYER_PATH=$BUILD/layer" "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
-    "X4VR_MV=1" "X4VR_CLIP_K_UI=$OFFSCREEN"
+    "X4VR_MV=1" "X4VR_SHEAR_NODEPTH=1" "X4VR_CLIP_K_UI=$OFFSCREEN"
 
 # And the same matrix left in place must still reach both views identically,
 # so the mono path cannot regress into an accidental per-view one.
 run_case "mono patch is view-independent" 2 1 1 \
     "VK_ADD_LAYER_PATH=$BUILD/layer" "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
-    "X4VR_MV=1" "X4VR_CLIP_K_UI=$ID"
+    "X4VR_MV=1" "X4VR_SHEAR_NODEPTH=1" "X4VR_CLIP_K_UI=$ID"
 
 # Must-pass: same matrix both eyes. Proves the patched module still renders,
 # that gl_ViewIndex is readable, and that reading it changes nothing when the
 # two matrices agree. A patch that corrupted the module fails here.
 run_case "stereo patch, same K both eyes" 2 1 1 \
     "VK_ADD_LAYER_PATH=$BUILD/layer" "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
-    "X4VR_MV=1" "X4VR_CLIP_K_UI=$ID" "X4VR_CLIP_K_UI_RIGHT=$ID"
+    "X4VR_MV=1" "X4VR_SHEAR_NODEPTH=1" "X4VR_CLIP_K_UI=$ID" "X4VR_CLIP_K_UI_RIGHT=$ID"
 
 # Must-fail-for-the-right-reason: differing matrices must make the layers
 # differ. If gl_ViewIndex always read 0 -- the exact failure this whole
 # mechanism risks -- both layers would still be drawn and identical, and this
 # case is what catches it.
 probe_case "stereo patch, per-eye K differs" DIFFER \
-    "X4VR_CLIP_K_UI=$ID" "X4VR_CLIP_K_UI_RIGHT=$SHIFTED"
+    "X4VR_SHEAR_NODEPTH=1" "X4VR_CLIP_K_UI=$ID" "X4VR_CLIP_K_UI_RIGHT=$SHIFTED"
 
 
 # The uniformity annotation, which every probe verdict now leans on.
@@ -227,7 +249,7 @@ ann_case "all-zero keeps its own name" zero uniform "X4VR_MV_MASK=2"
 
 # And the negative: two distinct values in layer 1 must NOT be annotated.
 ann_case "real content is not called uniform" uniform content \
-    "X4VR_CLIP_K_UI=$ID" "X4VR_CLIP_K_UI_RIGHT=$SHIFTED"
+    "X4VR_SHEAR_NODEPTH=1" "X4VR_CLIP_K_UI=$ID" "X4VR_CLIP_K_UI_RIGHT=$SHIFTED"
 
 
 # The predicate split: "does K apply?" and "does this replicate?" used to be
@@ -314,7 +336,7 @@ mask_case "...and by default: no knob undoes it" masked
 # against here, which is why the executed pass above keeps its paired rp+fb
 # assertion -- this is the weaker check, used only where the stronger one
 # cannot exist.
-probe_case() {
+classify_case() {
     local label="$1" serial="$2" want="$3"
     local out got
     out=$(env X4VR_LOG= X4VR_MV=1 X4VR_MV_INVENTORY=1 \
@@ -331,12 +353,12 @@ probe_case() {
     fi
 }
 
-probe_case "colour, no depth: always masked" 2 \
+classify_case "colour, no depth: always masked" 2 \
     "MONO (fullscreen post) +MASKED(fullscreen)"
 # The carve-out the four cases above were written to test. It is reachable --
 # it just needs depth, which is what stops the take-71 clause from firing.
-probe_case "LDR+depth is UI: unsheared, unmasked" 3 "MONO (all-LDR/UI)"
-probe_case "HDR+depth is world: sheared" 4 "STEREO (world)"
+classify_case "LDR+depth is UI: unsheared, unmasked" 3 "MONO (all-LDR/UI)"
+classify_case "HDR+depth is world: sheared" 4 "STEREO (world)"
 # The load-bearing one. A depth-only pass must stay MONO *and* unmasked: X4's
 # five cascaded shadow maps are rendered by passes of this shape, and both eyes
 # have to sample the same light-space map. classify_per_eye() guards its
@@ -344,7 +366,7 @@ probe_case "HDR+depth is world: sheared" 4 "STEREO (world)"
 #
 # If this case ever reports +MASKED, the shadow maps have gone per-eye and the
 # per-eye shading defect that took takes 56-83 to find is back.
-probe_case "depth-only stays mono and unmasked" 5 "MONO (depth-only/shadow)"
+classify_case "depth-only stays mono and unmasked" 5 "MONO (depth-only/shadow)"
 
 
 # The fragment patch: the *sample* follows the view index.

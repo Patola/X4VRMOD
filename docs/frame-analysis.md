@@ -10019,3 +10019,47 @@ gets the correction. Add `X4VR_PROJ_INVPROJ=0` to reproduce a pre-83 take. This
 is the identical trap the take-50 control fell into with `X4VR_STEREO`, already
 recorded in this file: omitting a variable and setting it to `0` stopped being
 the same thing the moment the default changed.
+
+## Correction to take 82: what `X4VR_CLIP_K_UI` can and cannot reach
+
+Fixing the render-test failures turned up a fact that scopes take 82's
+conclusion, and it is the same trap as the invproj knob.
+
+Two independent classifications decide whether `K` reaches a draw:
+
+* the **module** — `classify()` says `world` or `ui`, choosing `K_world` or
+  `K_ui`;
+* the **pass** — `needs_original()` returns `classify_unsheared()[subpass]`, and
+  an unsheared pass binds the **unpatched** module regardless of what the
+  patched one contains.
+
+So setting `X4VR_CLIP_K_UI` patches modules that a pass may then decline to use.
+In the offline harness this is total: every pass it renders is colour-with-no-
+depth, unsheared since take 71, so the log reads
+
+    patched vertex shader #1 (ui)
+    unsheared pipeline: using unpatched modules (shadow + UI exclusion active)
+
+and the knob moves nothing at all.
+
+**What this does to take 82.** The lighting passes are
+`rp #23/#24/#25.0: 1 colour [97H] depth 126 -> STEREO (world)` — *not*
+unsheared, so `needs_original()` is false and the patched modules were bound.
+P89's refutation therefore **stands for the passes it was about**: a `ui`
+classified module drawing into the light accumulation did receive the world
+shear, and `#57` did not move.
+
+**What does not stand** is the sentence "the whole unsheared-geometry family
+dies here — the 38 remaining `ui` modules and the light volumes with them."
+Modules drawn in passes that are *themselves* unsheared — fullscreen post, UI,
+depth-only shadow — use unpatched modules whatever `K_ui` says, so take 82 never
+tested them. They are untested, not eliminated.
+
+This does not affect the fix. Take 83 found and corrected the real cause and the
+defect is gone. But if a residual per-eye difference is ever chased again,
+**unsheared passes are not on the eliminated list**, and this paragraph is why.
+
+The general form is already recorded above and in `x4-quirks.md`: a knob's null
+refutes the knob. Here the knob fired, logged a count, and was discarded one
+layer further down than the counter could see — a *third* instrument in this
+project blind to its own target.
