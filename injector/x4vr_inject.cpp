@@ -35,6 +35,7 @@ extern char **environ;
 
 #define X4VR_LOG_TAG "inject"
 #include "../common/x4vr_log.hpp"
+#include "../common/x4vr_share.hpp"
 #include "x4vr_config.hpp"
 
 namespace {
@@ -394,6 +395,49 @@ std::atomic<int> g_x4_win_w{0};
 // hook X4 already calls.
 std::atomic<bool> g_relative_mouse{false};
 
+// The channel itself. One instance per process; the layer resolves the accessor
+// by name. Function-local static so it is constructed on first use rather than
+// racing other translation units' initialisers.
+extern "C" x4vr::Shared *x4vr_shared_state() {
+    static x4vr::Shared state;
+    return &state;
+}
+
+// Publish the pointer. Called from the position channel X4 actually reads, so
+// what the layer draws and what X4 hit-tests are the same number by
+// construction rather than by two paths agreeing.
+//
+// Writes the *unfolded* position on purpose. The fold is an ergonomic for a
+// side-by-side flatscreen, and a cursor drawn into the eye image makes it
+// unnecessary -- so publishing the folded value would bake a workaround into the
+// channel that replaces it.
+void publish_cursor(float x, float y, bool visible) {
+    x4vr::Shared *s = x4vr_shared_state();
+    const uint32_t start = s->seq.load(std::memory_order_relaxed);
+    s->seq.store(start + 1, std::memory_order_relaxed); // odd: writing
+    // The fence is the whole correctness of this. A *release store* on seq
+    // would only stop earlier writes sinking below it -- the payload writes
+    // come after, and nothing would stop them being hoisted above the odd
+    // store, which lets a reader see an even seq either side of a half-written
+    // pair. The first version here did exactly that.
+    //
+    // **Not observed, and not observable on this machine.** x86 is
+    // store-ordered, so the wrong version does not actually tear here; a
+    // negative control that reintroduced it still passed. The fix is for
+    // correctness on weakly-ordered hardware, not for a bug that was measured.
+    // Said plainly because a run of this project's mistakes have come from
+    // recording a fix as "caught by a test" when the test could not have caught
+    // it -- a tear that did show up in testing turned out to be the test's own
+    // seeding, not the writer.
+    std::atomic_thread_fence(std::memory_order_release);
+    s->cursor_x.store(x, std::memory_order_relaxed);
+    s->cursor_y.store(y, std::memory_order_relaxed);
+    s->cursor_visible.store(visible ? 1u : 0u, std::memory_order_relaxed);
+    s->window_w = (uint32_t)g_x4_win_w.load(std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
+    s->seq.store(start + 2, std::memory_order_release); // even: settled
+}
+
 // The origin term is the display x at which X4's surface starts, because the
 // fold is really `x_x4 = (x_sdl + origin) mod W` -- undoing "where on the
 // display is this pointer" back to "where in X4's frame".
@@ -627,6 +671,9 @@ uint32_t SDL_GetMouseState(float *x, float *y) {
     const uint32_t buttons = real_fn(x, y);
     if (this_is_the_game()) {
         note_extent("GetMouseState", x ? *x : 0.f, y ? *y : 0.f);
+        // Published before the fold, and before X4 sees it.
+        publish_cursor(x ? *x : 0.f, y ? *y : 0.f,
+                       !g_relative_mouse.load(std::memory_order_relaxed));
         if (x)
             *x = fold_x(*x);
     }

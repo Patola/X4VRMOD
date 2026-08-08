@@ -16,6 +16,13 @@ add_executable(x4vr_test_spirv_patch spirv_patch.cpp)
 # non-zero on the first bad case, so it needs no runner script.
 add_executable(x4vr_test_view_math view_math.cpp)
 
+# The injector-to-layer channel. Header-only and process-local, so this needs
+# neither Vulkan nor either component -- it links only a thread library, for the
+# concurrent-writer case. Self-checking like view_math: no runner script.
+add_executable(x4vr_test_share share.cpp)
+find_package(Threads REQUIRED)
+target_link_libraries(x4vr_test_share PRIVATE Threads::Threads)
+
 # Shaders are committed as SPIR-V so the suite does not need glslc to run.
 configure_file(fullscreen.vert.spv fullscreen.vert.spv COPYONLY)
 configure_file(solid.frag.spv solid.frag.spv COPYONLY)

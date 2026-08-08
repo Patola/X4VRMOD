@@ -39,6 +39,7 @@
 #include "../common/x4vr_spirv.hpp"
 #include "../common/x4vr_view.hpp"
 #include "x4vr_sbs.hpp"
+#include "../common/x4vr_share.hpp"
 
 namespace {
 
@@ -5536,6 +5537,31 @@ uint32_t format_bpp(VkFormat f) {
 // bytes. Writing the two images out and looking at them answers in one glance
 // what "22% of texels differ" can only circle: whether layer 1 is the same
 // scene lit differently, a subset of the passes, or something unrelated.
+// The injector's channel, resolved by name from the process's global symbols.
+// Absent whenever the injector is not preloaded -- gamescope's process being
+// the normal case -- and that is not an error, it just means there is no
+// pointer to draw. Resolved once and remembered, including the failure, so a
+// missing injector costs one dlsym rather than one per frame.
+const x4vr::Shared *shared_state() {
+    static const x4vr::Shared *s = [] () -> const x4vr::Shared * {
+        auto fn = (x4vr::Shared * (*)())dlsym(RTLD_DEFAULT, "x4vr_shared_state");
+        if (!fn) {
+            X4VR_LOG("share: no injector in this process — no cursor channel");
+            return nullptr;
+        }
+        x4vr::Shared *p = fn();
+        if (!p || p->magic != x4vr::kShareMagic ||
+            p->version != x4vr::kShareVersion) {
+            X4VR_LOG("share: symbol found but magic/version mismatch — "
+                     "injector and layer are from different builds");
+            return nullptr;
+        }
+        X4VR_LOG("share: injector channel v%u connected", x4vr::kShareVersion);
+        return p;
+    }();
+    return s;
+}
+
 const char *g_mv_dump = getenv("X4VR_MV_DUMP");
 // X4VR_MV_DUMP_PRESENT=N — write the finished eye image every N presents.
 // Distinct from X4VR_MV_DUMP_IMG, which names images to catch at end-of-pass
@@ -6317,9 +6343,22 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                            (const uint8_t *)g_probe.ptr + dump_layer_bytes * l,
                            dump_w, dump_h, dump_bgra);
             }
-            X4VR_LOG("mv dump: present frame %llu — %ux%u, %u layer(s), bgra=%d",
+            // The pointer, paired with the frame. Without this the dump says
+            // what the frame held but not where the cursor was, which is
+            // exactly why take 93 could not answer whether one was in it --
+            // a search through a busy picture instead of a lookup.
+            float cx = 0.f, cy = 0.f;
+            bool vis = false;
+            const bool have = x4vr::share_read(shared_state(), &cx, &cy, &vis);
+            X4VR_LOG("mv dump: present frame %llu — %ux%u, %u layer(s), bgra=%d,"
+                     " cursor %s",
                      (unsigned long long)n, dump_w, dump_h, dump_layers,
-                     (int)dump_bgra);
+                     (int)dump_bgra,
+                     have ? (vis ? "" : "hidden ") : "unknown (no channel)");
+            if (have)
+                X4VR_LOG("mv dump: frame %llu cursor at x=%.1f y=%.1f%s",
+                         (unsigned long long)n, cx, cy,
+                         vis ? "" : " (not visible)");
         }
     }
     frame_flush();
