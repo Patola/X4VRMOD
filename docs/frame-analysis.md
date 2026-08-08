@@ -12010,3 +12010,114 @@ re-scoring logs already on disk:
   take 54 had already shown is not the main camera. Take 54 read as a 30694×
   range; it is 37.8× over the real camera, and the excluded samples are now
   counted and their `near` values printed rather than dropped.
+
+## Take 104 — X4's `<fov>` scales the horizontal field linearly. P104 mostly confirmed
+
+`split on`, `config: fov: '1.1111' -> '1.5'`, `config: effective fov=1.5
+res=1408x1408 (fov from X4VR_FOV)`. The knob reached X4.
+
+### Scoring P104 as written
+
+| prediction | outcome |
+|---|---|
+| `sx` falls below 1.33333 | **confirmed** — 0.69231 |
+| specifically in 0.70…1.05 | **missed**, by 1% — 0.69231 is just under the floor I set |
+| `near` stays 0.10000 | confirmed — every fov-responsive sample reads 0.10000 |
+| `\|sy\| = \|sx\|` at a 1:1 eye | confirmed **only for the camera that ignores fov**; see below |
+| which law | **law C, the angle** — but anchored differently than the table assumed |
+
+### The law, exact on two independent pairs
+
+Take 104's `sx` values, compared against takes 57–60 at `fov=1.1111`:
+
+| fov=1.1111 | fov=1.5 | angle at 1:1 | ratio of angles |
+|---|---|---|---|
+| 1.15174 | 0.69231 | 81.9324° → 110.6095° | **1.35001** |
+| 37.75372 | 27.96006 | 3.0345° → 4.0967° | **1.35001** |
+
+`1.5 / 1.1111 = 1.35001`. **X4's `<fov>` multiplies the horizontal field of
+view as an angle**, and it does so identically at the wide end and at 33× zoom.
+Solving each pair for the fov=1.0 base gives 73.7399° and 73.7397° — the same
+number twice, from measurements an order of magnitude apart, and it is exactly
+`2·atan(0.75)`, i.e. `sx = 1.33333`.
+
+So, at a 1:1 eye:
+
+    horizontal FOV = fov × 73.7399°        =>    fov = target° / 73.7399
+
+Law C was the right family. The table's arithmetic for it was wrong because it
+anchored on "81° horizontal at 16:9" and propagated through the clamp; the
+actual anchor is the fov=1.0 base at the aspect being rendered.
+
+### The finding nobody predicted: the 4:3 clamp was fitted to the wrong camera
+
+Three `sx` values appear **bit-identical in both runs**, unmoved by a 35% FOV
+change: `1.33333`, `1.00000` (exactly 90°) and `3.78085`. Three others exist
+only at their own fov. So X4 runs several cameras at once, and **only some of
+them honour the player's field-of-view setting**.
+
+`1.33333` is one of the ones that does not. It is the fov=1.0 base — which means
+the clamp model recorded earlier in this file, `sx = 1.7778/max(aspect, 4/3)`,
+was fitted to a camera that ignores the FOV setting entirely. The doubt raised
+after take 54 — "if that is the menu's projection, the model may describe the
+menu and not the game" — was right, and this is the evidence.
+
+It follows that **`X4VR_PROJ_SX=1.3333`, carried on every take since 52, is not
+the scene camera's `sx`.** At the player's own `fov=1.1111` the scene camera is
+`1.15174`, 16% narrower than the baked constant. This has been harmless only
+because `X4VR_PROJ_LIVE=1` makes the shader read `M_projection[0][0]` per draw;
+the baked value is a fallback for modules that cannot, and it is wrong for all
+of them. Note also `proj SHEAR: baked is 1.000x` in this very log — that check
+compares the baked value against the *first* reading, which is the fov=1.0
+camera, so it agrees with itself and says nothing about the scene.
+
+The alternation in the log is not a zoom sweep. `1.33333 ↔ 0.69231` flips within
+one or two milliseconds, repeatedly:
+
+    623421.318 #25 sx=0.69231   623421.318 #26 sx=1.33333
+    623421.338 #27 sx=0.69231   623421.339 #28 sx=1.33333
+
+That is the layer's "most-drawn block wins" heuristic choosing a different
+winner between submits of the same frame — the same mis-credit take 54 recorded,
+now visible as a steady oscillation because two cameras are busy at once. It is
+another argument for the in-shader read, and it means **the number of `proj
+CHANGED` lines is not a count of zoom steps.**
+
+### What this settles for #24
+
+The task title says "wider FOV than X4's 4:3 clamp allows". The clamp is real but
+it is not the obstacle: it sets the fov=1.0 base, and the setting multiplies it.
+A wider field costs one config value and no projection patch.
+
+    fov = 1.356  ->  99.99°  sx=0.83923     fov = 1.437  ->  105.96°  sx=0.75404
+    fov = 1.492  ->  110.02°  sx=0.69995     fov = 1.500  ->  110.61°  sx=0.69231  (measured)
+
+1.5 is accepted and produces a real 110.6°, so there is no clamp on the setting
+below that. Where the ceiling is, if any, is unmeasured.
+
+### The gap this run could not close, and the fix
+
+Every `proj CHANGED` line reported `sx` alone, so **whether `sy` scales with it
+is unmeasurable from take 104's log.** That is not a detail: if the vertical does
+not track the horizontal, a widened field is *stretched* rather than wider, and
+that is a distortion the eye tolerates for a while and then does not. The
+`|sy| = |sx|` confirmation above is from the `proj MEASURED` line, which is the
+fov=1.0 camera — the one that did not move.
+
+Fixed in the layer rather than reasoned about: `proj CHANGED` now carries
+`sy from -> to`, and `sy` joins the change test, so a run in which only the
+vertical moves is no longer invisible. `score_run.py` reports `|sy/sx|` across
+every sample and warns when it leaves the eye aspect. Consequence to remember
+when comparing takes: change counts from take 105 onward are not comparable with
+earlier ones, because the test is now more sensitive.
+
+### P105 — committed before the next run
+
+1. `|sy/sx|` equals the eye aspect (1.000 at a 1:1 eye) on **every** sample,
+   including the fov-responsive camera — the field scales without stretching.
+2. At `X4VR_FOV=1.437`, the fov-responsive camera reads `sx = 0.75404`
+   (105.96°), and the fov-independent values `1.33333`, `1.00000` and `3.78085`
+   are unchanged.
+3. Prediction 2 is the one that would falsify the linear law: it is an
+   interpolation between the two measured points, not an extrapolation, so a
+   miss means the law is not linear in between.

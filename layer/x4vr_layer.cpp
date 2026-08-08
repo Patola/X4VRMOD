@@ -4379,9 +4379,16 @@ void patch_view_before_submit() {
         const x4vr::Mat4 proj_uj = x4vr::load(blk + x4vr::kProjectionUJ);
         const x4vr::ProjTerms t = x4vr::read_proj_terms(proj_uj, major);
         const x4vr::ProjTerms tj = x4vr::read_proj_terms(proj_probe, major);
-        static float last_sx = 0.0f, last_near = 0.0f;
+        static float last_sx = 0.0f, last_sy = 0.0f, last_near = 0.0f;
         static uint32_t changes = 0;
+        // sy joined this test after take 104. That run proved X4's <fov> tag
+        // scales the horizontal field linearly, but every CHANGED line reported
+        // sx alone, so whether the *vertical* scales with it was unmeasurable
+        // from the log -- and "sy tracks sx" is exactly the assumption that
+        // decides whether a widened field is undistorted or stretched. A term
+        // the run cannot report is a term the run cannot test.
         const bool moved = std::fabs(t.sx - last_sx) > 1e-4f ||
+                           std::fabs(t.sy - last_sy) > 1e-4f ||
                            std::fabs(t.near_z - last_near) > 1e-6f;
         // Take 54: the cap was 40, and it fired ten seconds into the only deep
         // zoom of the session -- so every probe sample taken during that zoom
@@ -4421,12 +4428,14 @@ void patch_view_before_submit() {
                          std::fabs(measured), std::fabs(baked),
                          measured != 0.0f ? baked / measured : 0.0f, ipd);
             } else {
-                X4VR_LOG("proj CHANGED #%u: sx %.5f -> %.5f  near %.5f -> "
-                         "%.5f  (correct |m8| now %.5f, baked %.5f)",
-                         changes, last_sx, t.sx, last_near, t.near_z,
-                         std::fabs(measured), std::fabs(baked));
+                X4VR_LOG("proj CHANGED #%u: sx %.5f -> %.5f  sy %.5f -> %.5f  "
+                         "near %.5f -> %.5f  (correct |m8| now %.5f, baked "
+                         "%.5f)",
+                         changes, last_sx, t.sx, last_sy, t.sy, last_near,
+                         t.near_z, std::fabs(measured), std::fabs(baked));
             }
             last_sx = t.sx;
+            last_sy = t.sy;
             last_near = t.near_z;
             changes++;
             if (changes == 400)

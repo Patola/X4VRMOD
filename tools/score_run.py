@@ -295,9 +295,16 @@ def main(path):
     meas = re.search(r"proj MEASURED: sx=([\d.eE+-]+) sy=([\d.eE+-]+) "
                      r"near=([\d.eE+-]+)", text)
     unreadable = "proj: could not read terms" in text
-    changes = re.findall(r"proj CHANGED\s+#(\d+): sx ([\d.eE+-]+) -> "
-                         r"([\d.eE+-]+)(?:\s+near ([\d.eE+-]+) -> "
-                         r"([\d.eE+-]+))?", text)
+    # sy is present only in logs from take 105 onward; near only from take 54.
+    # findall yields '' for a group that did not participate, never None.
+    changes = [
+        {"sx": float(m.group(3)),
+         "sy": float(m.group(5)) if m.group(5) else None,
+         "near": float(m.group(7)) if m.group(7) else None}
+        for m in re.finditer(
+            r"proj CHANGED\s+#(\d+): sx ([\d.eE+-]+) -> ([\d.eE+-]+)"
+            r"(?:\s+sy ([\d.eE+-]+) -> ([\d.eE+-]+))?"
+            r"(?:\s+near ([\d.eE+-]+) -> ([\d.eE+-]+))?", text)]
 
     if dump_asked or meas or unreadable:
         if unreadable:
@@ -354,17 +361,38 @@ def main(path):
                 # 30000x one. They are separated, not dropped -- a silent filter
                 # here would hide exactly the mis-credit that motivated moving
                 # the shear into the shader.
-                main = [float(to) for _, _, to, _, nto in changes
-                        if nto is None or abs(float(nto) - near) < 1e-3]
-                other = [(float(to), float(nto)) for _, _, to, _, nto in changes
-                         if nto is not None and abs(float(nto) - near) >= 1e-3]
-                vals = main + [sx]
+                main = [c for c in changes
+                        if c["near"] is None or abs(c["near"] - near) < 1e-3]
+                other = [c for c in changes
+                         if c["near"] is not None
+                         and abs(c["near"] - near) >= 1e-3]
+                vals = [c["sx"] for c in main] + [sx]
                 print(f"proj  {len(changes)} change(s), sx range "
                       f"{min(vals):.5f}..{max(vals):.5f} "
                       f"({max(vals) / min(vals):.1f}x) over the near={near:.3f} "
                       f"camera")
+
+                # Take 104: X4's <fov> scales the horizontal field, and every
+                # CHANGED line reported sx alone -- so whether the vertical
+                # scaled with it was unmeasurable. If sy/sx ever leaves the eye
+                # aspect, a widened field is stretched rather than wider, and
+                # that is a distortion no screenshot reads reliably.
+                ratios = [abs(c["sy"] / c["sx"]) for c in main
+                          if c["sy"] is not None and c["sx"]]
+                if ratios:
+                    lo, hi = min(ratios), max(ratios)
+                    tgt = abs(sy / sx) if sx else 0.0
+                    if abs(hi - lo) < 0.01 and abs(lo - tgt) < 0.01:
+                        print(f"proj  sy tracks sx — |sy/sx| stays {lo:.3f} "
+                              f"across every sample, so the field scales "
+                              f"without stretching")
+                    else:
+                        print(f"warn  |sy/sx| ranges {lo:.3f}..{hi:.3f} against "
+                              f"{tgt:.3f} at first read — the vertical does not "
+                              f"track the horizontal, so the field is being "
+                              f"stretched, not widened")
                 if other:
-                    nears = sorted({f"{n:.3f}" for _, n in other})
+                    nears = sorted({f"{c['near']:.3f}" for c in other})
                     print(f"note  {len(other)} change(s) came from a block with "
                           f"a different near ({', '.join(nears)}) and are "
                           f"excluded above — not the main camera (see take 54)")
