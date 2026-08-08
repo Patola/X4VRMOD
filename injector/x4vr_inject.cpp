@@ -332,6 +332,18 @@ enum { SDL_EV_MOUSE_MOTION = 0x400, SDL_EV_MOUSE_DOWN = 0x401,
 // Observation only. Enough samples to establish the coordinate space and
 // whether motion is absolute or relative, and then quiet: the question is what
 // space X4 is told about, not how often.
+//
+// These hook SDL_WaitEvent and SDL_PeepEvents because that is what X4 actually
+// calls. SDL_PollEvent was interposed here from take 40 until take 87 and fired
+// exactly zero times across every run, including one with heavy map and menu
+// use -- because X4 never imported it:
+//
+//     $ nm -D --undefined-only X4 | grep -c SDL_PollEvent
+//     0
+//
+// One command, available from the first day, would have shown that the
+// instrument could not work. Check the symbol is imported before drawing any
+// conclusion from a silent hook.
 void note_mouse_event(const Sdl3MouseEvent *e) {
     static int motions = 0, buttons = 0;
     const bool is_motion = e->type == SDL_EV_MOUSE_MOTION;
@@ -371,15 +383,60 @@ int SDL_GetWindowSizeInPixels(void *win, int *w, int *h) {
     return r;
 }
 
-int SDL_PollEvent(void *event) {
-    static auto real_fn = real<int (*)(void *)>("SDL_PollEvent");
-    int r = real_fn(event);
+// SDL3 returns `bool` from these, not int. The low byte is what matters either
+// way, but declaring it correctly costs nothing.
+bool SDL_WaitEvent(void *event) {
+    static auto real_fn = real<bool (*)(void *)>("SDL_WaitEvent");
+    const bool r = real_fn(event);
     if (r && event && this_is_the_game()) {
         const auto *e = (const Sdl3MouseEvent *)event;
         if (e->type >= SDL_EV_MOUSE_MOTION && e->type <= SDL_EV_MOUSE_UP)
             note_mouse_event(e);
     }
     return r;
+}
+
+// SDL_Event is a fixed 128 bytes in SDL3 -- it is a union with an explicit
+// padding[128] member -- so the array can be walked without the headers.
+int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
+                   uint32_t maxType) {
+    static auto real_fn =
+        real<int (*)(void *, int, int, uint32_t, uint32_t)>("SDL_PeepEvents");
+    const int n = real_fn(events, numevents, action, minType, maxType);
+    if (n > 0 && events && this_is_the_game()) {
+        for (int i = 0; i < n; i++) {
+            const auto *e =
+                (const Sdl3MouseEvent *)((const unsigned char *)events + 128 * i);
+            if (e->type >= SDL_EV_MOUSE_MOTION && e->type <= SDL_EV_MOUSE_UP)
+                note_mouse_event(e);
+        }
+    }
+    return n;
+}
+
+// The other half of the input channel, and the more interesting one: X4 *polls*
+// the pointer rather than only reading motion events. Whatever space this
+// returns is the space X4 hit-tests in, which is exactly what the shim has to
+// rewrite -- so this is where task #19 will act, not on the event stream.
+uint32_t SDL_GetMouseState(float *x, float *y) {
+    static auto real_fn = real<uint32_t (*)(float *, float *)>("SDL_GetMouseState");
+    const uint32_t buttons = real_fn(x, y);
+    if (this_is_the_game()) {
+        static int seen = 0;
+        static float last_x = -1e9f, last_y = -1e9f;
+        // Sample on *change*, not on call count: X4 polls this every frame and
+        // a plain counter would spend its whole budget on one stationary
+        // position and report a range of zero.
+        const float cx = x ? *x : 0.f, cy = y ? *y : 0.f;
+        if (seen < 12 && (cx != last_x || cy != last_y)) {
+            last_x = cx;
+            last_y = cy;
+            seen++;
+            X4VR_LOG("sdl: GetMouseState x=%.1f y=%.1f buttons=0x%x", cx, cy,
+                     buttons);
+        }
+    }
+    return buttons;
 }
 
 int connect(int fd, const struct sockaddr *addr, socklen_t len) {

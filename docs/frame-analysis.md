@@ -10362,3 +10362,66 @@ Both halves of the shim follow from this and remain separate:
   that is *drawn* there, so hovering an element where it appears activates it.
   Still blocked on locating the event stream: `SDL_PollEvent` is interposed and
   never fires.
+
+## The input hook was on a symbol X4 never imports
+
+`ldd` and `nm` settle in one command what three takes of silence did not:
+
+    $ ldd "X4 Foundations/X4" | grep SDL
+        libSDL3_ttf.so.0 => /usr/lib/libSDL3_ttf.so.0
+        libSDL3.so.0     => /usr/lib/libSDL3.so.0
+    $ nm -D --undefined-only X4 | grep -c SDL_        # imported
+    82
+    $ nm -D --defined-only  X4 | grep -c SDL_         # statically linked in
+    0
+    $ nm -D --undefined-only X4 | grep -c SDL_PollEvent
+    0
+
+SDL3 is linked **dynamically**, so `LD_PRELOAD` interposition works — and always
+did, which `SDL_GetWindowSize` proved every run. **`SDL_PollEvent` is simply not
+one of the 82 symbols X4 imports.** The hook could never fire. P42 and P43 were
+unanswerable from take 40 onward, and the silence was read as "no events seen"
+rather than "no such call".
+
+That is the **fourth** instrument in this project blind to its own target, and
+the cheapest to have caught: one `nm` on a binary that has been sitting on disk
+the whole time.
+
+### What X4 actually imports, and what each one means for the shim
+
+    event loop      SDL_WaitEvent  SDL_PeepEvents  SDL_PumpEvents  SDL_PushEvent
+    pointer state   SDL_GetMouseState  SDL_WarpMouseInWindow
+    pointer mode    SDL_SetWindowRelativeMouseMode  SDL_SetWindowMouseGrab
+    pointer image   SDL_CreateColorCursor  SDL_SetCursor
+    window          SDL_GetWindowSize  SDL_SetWindowSize  SDL_CreateWindow
+
+Three of these change the design:
+
+* **`SDL_GetMouseState`** — X4 *polls* the pointer, it does not only read motion
+  events. Whatever space this returns is the space X4 hit-tests in, so this is
+  where task #19 acts. Rewriting one return value is a far smaller change than
+  owning an event stream, and it cannot desynchronise from the events because it
+  *is* the position X4 uses.
+* **`SDL_CreateColorCursor` + `SDL_SetCursor`** — X4 builds a cursor **bitmap**
+  and hands it to SDL, which is why the compositor draws one pointer in display
+  space and why it changes shape over a station. It also means task #17 can
+  composite **X4's own cursor image**, captured from that call, rather than
+  inventing one that would not match the game's.
+* **`SDL_WarpMouseInWindow`** — X4 recentres the pointer for mouse-look, so any
+  shim that rewrites coordinates has to stay consistent with warps it did not
+  issue.
+
+The dead `SDL_PollEvent` hook is removed and replaced by `SDL_WaitEvent`,
+`SDL_PeepEvents` and `SDL_GetMouseState`, still observation only.
+`SDL_GetMouseState` samples on **change** rather than call count, because X4
+polls it every frame and a plain counter would spend its whole budget on one
+stationary position and report a range of zero — the same shape of mistake as
+the counter that sat below the gate it was measuring.
+
+- **P92** — `SDL_GetMouseState` returns coordinates in X4's 1408-wide window
+  space (`0…1408`), matching `x_x4 = x_screen - 704`. If instead it returns
+  `0…2816`, X4 is being handed display coordinates and clamping later, and the
+  widened right-hand box is explained by that rather than by a changed extent.
+- **P93** — motion events arrive through `SDL_WaitEvent` or `SDL_PeepEvents`
+  and carry non-zero `xrel`/`yrel`. If neither fires either, X4 is not reading
+  the mouse through SDL at all and the search moves to evdev or Wayland.
