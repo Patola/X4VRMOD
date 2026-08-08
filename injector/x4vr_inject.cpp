@@ -25,6 +25,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -344,6 +346,69 @@ enum { SDL_EV_MOUSE_MOTION = 0x400, SDL_EV_MOUSE_DOWN = 0x401,
 // One command, available from the first day, would have shown that the
 // instrument could not work. Check the symbol is imported before drawing any
 // conclusion from a silent hook.
+// ---------------------------------------------------------------------------
+// The input fold (task #19).
+//
+// X4 renders one eye; the compositor draws that frame twice, side by side, and
+// gamescope centres X4's W-wide surface in the 2W-wide display. So an element
+// X4 draws at `x_x4` appears on screen at `x_x4` and `x_x4 + W`, while the
+// pointer -- confined to the surface -- reaches X4 as `x_sdl = x_screen - W/2`,
+// measured at take 89 as exactly `0…1407` for W = 1408.
+//
+// The consequence is that pointing *at* an element never selects it: the input
+// box straddles the seam, covering the right half of one copy and the left half
+// of the other. To hover the station drawn at 251 you must put the pointer at
+// 955.
+//
+//     x_x4 = (x_sdl + W/2) mod W
+//
+// undoes it. Coverage is complete rather than merely better: folding the full
+// `0…W-1` yields `W/2…W-1` together with `0…W/2-1`, which is X4's whole frame,
+// each element reachable by pointing at whichever of its two copies is nearer.
+//
+// **The fold is its own inverse**, since applying it twice adds W and W ≡ 0.
+// That is what makes `SDL_WarpMouseInWindow` safe to route through the same
+// function: X4 warps to a logical position, the shim folds it to the real one,
+// and the position X4 reads back folds to what it asked for. A separate inverse
+// would be a second thing to keep in step with this one.
+//
+// Off by default. This changes where every click lands, so it gets proven
+// against a run with it off before it becomes the default.
+bool input_fold() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_INPUT_FOLD");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
+
+// X4's own window width, captured from the calls it makes rather than assumed.
+// gamescope asks for the same information about its own 2816-wide surface, so
+// this is recorded only when the caller is the game.
+std::atomic<int> g_x4_win_w{0};
+
+// Mouse-look. X4 switches the pointer to relative mode when it takes the
+// camera, and in that mode positions are not what it steers by -- it integrates
+// xrel/yrel, which the fold must never touch. Folding a position X4 is ignoring
+// would be harmless; folding one it is not would not be, and the flag costs a
+// hook X4 already calls.
+std::atomic<bool> g_relative_mouse{false};
+
+float fold_x(float x) {
+    const int w = g_x4_win_w.load(std::memory_order_relaxed);
+    if (!input_fold() || w <= 1 || g_relative_mouse.load(std::memory_order_relaxed))
+        return x;
+    float f = fmodf(x + (float)w * 0.5f, (float)w);
+    if (f < 0.f)
+        f += (float)w;
+    static bool said = false;
+    if (!said) {
+        said = true;
+        X4VR_LOG("sdl: input fold ON — x_x4 = (x_sdl + %d) mod %d", w / 2, w);
+    }
+    return f;
+}
+
 // The question is the *range* X4 is handed, so measure the range.
 //
 // Take 88 sampled the first twelve changed positions instead, and every one of
@@ -399,6 +464,8 @@ int SDL_GetWindowSize(void *win, int *w, int *h) {
         *w /= 2;
     if (w && h)
         note_window_size("SDL_GetWindowSize", *w, *h, cut);
+    if (w && *w > 1 && this_is_the_game())
+        g_x4_win_w.store(*w, std::memory_order_relaxed);
     return r;
 }
 
@@ -420,9 +487,13 @@ bool SDL_WaitEvent(void *event) {
     static auto real_fn = real<bool (*)(void *)>("SDL_WaitEvent");
     const bool r = real_fn(event);
     if (r && event && this_is_the_game()) {
-        const auto *e = (const Sdl3MouseEvent *)event;
-        if (e->type >= SDL_EV_MOUSE_MOTION && e->type <= SDL_EV_MOUSE_UP)
+        auto *e = (Sdl3MouseEvent *)event;
+        if (e->type >= SDL_EV_MOUSE_MOTION && e->type <= SDL_EV_MOUSE_UP) {
             note_mouse_event(e);
+            // Position only. xrel/yrel are deltas and a fold of a delta is
+            // meaningless -- it is also what X4 steers the camera by.
+            e->x = fold_x(e->x);
+        }
     }
     return r;
 }
@@ -434,12 +505,21 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
     static auto real_fn =
         real<int (*)(void *, int, int, uint32_t, uint32_t)>("SDL_PeepEvents");
     const int n = real_fn(events, numevents, action, minType, maxType);
+    // SDL_ADDEVENT=0, SDL_PEEKEVENT=1, SDL_GETEVENT=2. Fold only on GET.
+    //
+    // A peek leaves the event in the queue, so folding there and again when it
+    // is finally fetched would apply the transform twice -- and because the
+    // fold is its own inverse, that lands exactly back on the unfolded value.
+    // The fix would silently do nothing, which is the worst way for it to fail.
+    const bool consuming = action == 2;
     if (n > 0 && events && this_is_the_game()) {
         for (int i = 0; i < n; i++) {
-            const auto *e =
-                (const Sdl3MouseEvent *)((const unsigned char *)events + 128 * i);
-            if (e->type >= SDL_EV_MOUSE_MOTION && e->type <= SDL_EV_MOUSE_UP)
+            auto *e = (Sdl3MouseEvent *)((unsigned char *)events + 128 * i);
+            if (e->type >= SDL_EV_MOUSE_MOTION && e->type <= SDL_EV_MOUSE_UP) {
                 note_mouse_event(e);
+                if (consuming)
+                    e->x = fold_x(e->x);
+            }
         }
     }
     return n;
@@ -449,11 +529,40 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
 // the pointer rather than only reading motion events. Whatever space this
 // returns is the space X4 hit-tests in, which is exactly what the shim has to
 // rewrite -- so this is where task #19 will act, not on the event stream.
+// X4 recentres the pointer for mouse-look. Routed through the same fold, which
+// works because the fold is an involution: X4 asks for a logical position, the
+// real pointer goes to the place that folds back to it, and the value X4 reads
+// next is the one it asked for. Using a separately-derived inverse here would
+// be a second expression to keep in step with fold_x, and they would drift.
+void SDL_WarpMouseInWindow(void *win, float x, float y) {
+    static auto real_fn =
+        real<void (*)(void *, float, float)>("SDL_WarpMouseInWindow");
+    real_fn(win, this_is_the_game() ? fold_x(x) : x, y);
+}
+
+// Tracked so fold_x can stand down during mouse-look. Passed through untouched:
+// the shim has no business changing whether X4 grabs the pointer, only where it
+// believes the pointer is.
+bool SDL_SetWindowRelativeMouseMode(void *win, bool enabled) {
+    static auto real_fn =
+        real<bool (*)(void *, bool)>("SDL_SetWindowRelativeMouseMode");
+    if (this_is_the_game()) {
+        g_relative_mouse.store(enabled, std::memory_order_relaxed);
+        X4VR_LOG("sdl: relative mouse mode %s (fold %s)",
+                 enabled ? "ON" : "off",
+                 enabled ? "stands down" : "applies");
+    }
+    return real_fn(win, enabled);
+}
+
 uint32_t SDL_GetMouseState(float *x, float *y) {
     static auto real_fn = real<uint32_t (*)(float *, float *)>("SDL_GetMouseState");
     const uint32_t buttons = real_fn(x, y);
-    if (this_is_the_game())
+    if (this_is_the_game()) {
         note_extent("GetMouseState", x ? *x : 0.f, y ? *y : 0.f);
+        if (x)
+            *x = fold_x(*x);
+    }
     return buttons;
 }
 

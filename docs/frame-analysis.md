@@ -10538,3 +10538,49 @@ in the one place both channels agree on.
   relative mode in the cockpit, where there is no pointer to fold at all; and
   drag operations, which must fold consistently across press, move and release
   or a drag will jump at the seam.
+
+## Task #19 implemented: the input fold
+
+`X4VR_INPUT_FOLD=1`, **off by default** — it changes where every click lands, so
+it gets proven against a run with it off before it becomes the default.
+
+    x_x4 = (x_sdl + W/2) mod W          W = X4's own window width
+
+`W` is read from the `SDL_GetWindowSize` calls X4 makes, gated on the caller
+being the game, rather than hardcoded — gamescope asks the same question about
+its own 2816-wide surface.
+
+Applied in three places, which is the whole of it:
+
+* `SDL_GetMouseState` — the polled position, which take 88 showed X4 reads every
+  frame and which agrees with the event stream;
+* the motion and button events returned by `SDL_WaitEvent` and `SDL_PeepEvents`
+  — position only, never `xrel`/`yrel`, which are deltas and are what X4 steers
+  the camera by;
+* `SDL_WarpMouseInWindow`, routed through the *same* function.
+
+Three traps, each of which would have made it fail quietly:
+
+1. **`SDL_PeepEvents` peeks as well as gets.** A peek leaves the event in the
+   queue, so folding on peek and again on the eventual fetch applies the
+   transform twice — and because the fold is its own inverse, that lands exactly
+   back on the unfolded value. The fix would have silently done nothing. Folding
+   is restricted to `SDL_GETEVENT`.
+2. **The warp needs no separate inverse.** The fold is an involution, so X4 asks
+   for a logical position, the real pointer goes where it folds back from, and
+   the value X4 reads next is what it asked for. A separately-derived inverse
+   would be a second expression to keep in step with this one.
+3. **Relative mode.** X4 switches the pointer to relative for mouse-look and
+   steers by `xrel`, so `SDL_SetWindowRelativeMouseMode` is tracked and the fold
+   stands down while it is on.
+
+Arithmetic checked offline before spending a run, against the P91 capture:
+
+    involution over 0..1407  : OK
+    coverage of 0..1407      : COMPLETE (1408 distinct)
+    pointer at display 1659 -> x_sdl 955 -> folds to 251   <- the station
+    pointer at display  955 -> x_sdl 251 -> folds to 955   <- today's wrong spot
+
+Complete coverage is the part worth stating: the fold is a bijection on
+`0…1407`, so every element in X4's frame stays reachable. It moves *where* you
+point, it does not trade one unreachable region for another.
