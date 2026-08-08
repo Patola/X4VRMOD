@@ -997,13 +997,47 @@ mirror_stat=$(env X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=2 X4VR_TEST_OUT_SRGB=1 \
     "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
     "$BIN" "$VS" "$FS" "$BUILD/tests/sample_twin.frag.spv" 2>&1 |
     sed -n 's/.*bindless mirror final: offset 4, \(.*\)$/\1/p' | head -1)
-if [[ "$mirror_stat" == "1 twin writes, 4 twin descriptors, 4 of them layer-1, 0 skipped for no room" ]]; then
-    printf 'ok   %-38s %s\n' "mirror accounts for every twin" "$mirror_stat"
-else
-    printf 'FAIL %-38s got "%s"\n' "mirror accounts for every twin" \
-        "${mirror_stat:-ABSENT}"
-    fails=$((fails + 1))
-fi
+# Asserted field by field, not as one verbatim string.
+#
+# The verbatim form broke the moment a counter was added: "0 kept at layer 0 as
+# shared (unmasked writers only)" landed between two fields it was checking, and
+# both cases reported an accounting failure while every number was correct. A
+# test that fails on a *new* counter is reporting the wrong thing.
+#
+# Field-wise is not the weaker check here. Every field is named and asserted,
+# and a field that cannot be found fails rather than defaulting to a pass -- so
+# a counter that is removed, renamed, or never runs is still caught, which is
+# the property the exact match was there for. The difference is only that adding
+# a counter no longer breaks the cases that were not about it.
+mirror_acct() { # label line writes descriptors layer1 shared noroom
+    local label="$1" line="$2" bad="" f got
+    if [[ -z "$line" ]]; then
+        printf 'FAIL %-38s got "ABSENT" (no mirror summary line)\n' "$label"
+        fails=$((fails + 1)); return
+    fi
+    set -- "twin writes:$3" "twin descriptors:$4" "of them layer-1:$5" \
+           "kept at layer 0 as shared:$6" "skipped for no room:$7"
+    for f; do
+        got=$(grep -oE "[0-9]+ ${f%:*}" <<<"$line" | head -1 | grep -oE '^[0-9]+')
+        if [[ -z "$got" ]]; then
+            bad="$bad ${f%:*}=MISSING"
+        elif [[ "$got" != "${f##*:}" ]]; then
+            bad="$bad ${f%:*}=$got(want ${f##*:})"
+        fi
+    done
+    if [[ -z "$bad" ]]; then
+        printf 'ok   %-38s %s\n' "$label" "$line"
+    else
+        printf 'FAIL %-38s%s\n' "$label" "$bad"
+        fails=$((fails + 1))
+    fi
+}
+
+# One write, four twins, all four substituted to layer 1. Nothing is shared
+# here: "shared" means an image whose only writers are unmasked passes, and this
+# case has none, so a non-zero would mean the Shared classification is firing
+# where it should not.
+mirror_acct "mirror accounts for every twin" "$mirror_stat" 1 4 4 0 0
 
 # The bounds check. At the default offset the 8-slot table has no room for a
 # twin, so the mirror must decline rather than write off the end -- and must say
@@ -1014,14 +1048,7 @@ mirror_room=$(env X4VR_LOG= X4VR_MV=1 X4VR_BINDLESS_MIRROR=1 \
     "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
     "$BIN" "$VS" "$FS" "$SF" 2>&1 |
     sed -n 's/.*bindless mirror final: offset 26653, \(.*\)$/\1/p' | head -1)
-if [[ "$mirror_room" == "0 twin writes, 0 twin descriptors, 0 of them layer-1, 1 skipped for no room" ]]; then
-    printf 'ok   %-38s %s\n' "mirror declines a table with no room" \
-        "${mirror_room##*, }"
-else
-    printf 'FAIL %-38s got "%s"\n' "mirror declines a table with no room" \
-        "${mirror_room:-ABSENT}"
-    fails=$((fails + 1))
-fi
+mirror_acct "mirror declines a table with no room" "$mirror_room" 0 0 0 0 1
 
 # The template path is a blind spot the survey did not watch:
 # vkUpdateDescriptorSetWithTemplate is core 1.1, so it needs no extension string
