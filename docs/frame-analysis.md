@@ -10103,3 +10103,74 @@ The general form is already recorded above and in `x4-quirks.md`: a knob's null
 refutes the knob. Here the knob fired, logged a count, and was discarded one
 layer further down than the counter could see — a *third* instrument in this
 project blind to its own target.
+
+## Take 84 — the rename and the default flip are behaviour-neutral
+
+Take 83's command line with `X4VR_PROJ_INVPROJ` **omitted**, since it now
+defaults on, and no `CLIP_K` of any spelling — pure defaults on a build that
+had since had a knob default flipped and three knobs renamed.
+
+    invproj final: per-eye M_invprojection — 224 modules corrected
+    invproj final: per-eye M_invprojection_uj — 2 modules corrected
+
+    take 83   dx=-35  ncc=0.9055  blob 0.27/1.00/1.85  frame 0.573/0.993/1.536  1.8%
+    take 84   dx=-35  ncc=0.9055  blob 0.27/1.00/1.85  frame 0.573/0.993/1.536  1.8%
+
+Identical on every figure. The refactors are measured neutral, not assumed
+neutral, and `stage2-stereo-shading-correct` reproduces from defaults alone.
+
+### Take 85 — the first time the mod was played rather than screenshotted
+
+Patola flew, walked a station, used the map, and changed cameras. No new
+defects. Everything the fix was supposed to hold held under motion and scene
+changes, which nothing before take 85 had tested — every prior take was one
+static camera on one savegame.
+
+One observation to resolve: **the external and cinematic cameras look mono.**
+Almost certainly distance rather than a defect. Per-eye offset from centre is
+`704 · sx · (ipd/2) / z` px, which at `ipd=0.064 sx=1.3333` on 1408px is
+
+    ~30/z px      1 m -> 30 px    5 m -> 6 px    10 m -> 3 px
+                 30 m ->  1 px   100 m -> 0.3 px
+
+X4's external camera sits tens of metres out and the cinematic camera further,
+so the shift is sub-pixel to about one pixel — indistinguishable from mono by
+eye, and physically correct: human stereopsis is useful to roughly 10 m and
+gone by 30 m.
+
+That is arithmetic, not a measurement. The test is one run at an absurd IPD —
+`X4VR_IPD=5.0` turns a 0.5 px shift at 60 m into ~39 px. Parallax appearing
+means the path is stereo and this is pure scale, and the question moves to
+comfort tuning (task #25). Parallax still absent means those cameras bypass the
+shear, which is a real gap and a new task.
+
+## Immersive UI mode as a goal (task #30)
+
+Recorded here because it constrains work that is otherwise tempting to do
+casually. Menu-heavy modes may stay a mono projection in front of the viewer
+for now; the aim is that some of them eventually render the menu/HUD onto a
+**separate transparent floating canvas** at a chosen virtual distance, with the
+3D scene behind it in true stereo, so the player can move their head.
+
+The part worth writing down now, because it is counter-intuitive:
+
+**The UI is mono by construction, and that is exactly why it currently looks
+right.** UI/HUD passes classify as unsheared, so `needs_original()` binds the
+*unpatched* module and both array layers receive identical pixels. Nothing
+offsets them, and nothing is meant to.
+
+Putting the canvas at a finite distance means giving the UI a **constant**
+per-eye horizontal offset — unlike world geometry, whose offset scales as
+`30/z`. A constant screen shift *is* a fixed virtual depth.
+`X4VR_CLIP_SHIFT_NONWORLD` is the right shape for that knob and is inert today
+for the same reason `K_nonworld` is: an unsheared pass binds the unpatched
+module. So this needs a **third category** — not "world" (offset scales with
+depth) and not "excluded" (no offset) but "constant offset". That is a change to
+the predicate, not to a matrix value, and the predicate is the thing this
+document has had to correct most often.
+
+The blocker is input, not rendering. X4 hit-tests the cursor CPU-side in window
+coordinates (tasks #19, #21), so a canvas at a virtual depth needs the cursor
+projected onto it — which is what task #19 exists to make possible. A
+*non-interactive* floating HUD could be demonstrated much sooner than an
+interactive one, and that is the honest split to plan around.
