@@ -21,8 +21,17 @@ Only 1/z parallax makes near geometry move while the stars stay put.
 import numpy as np
 from PIL import Image
 
-SX, DX, HALF = 0.889, 0.15, 2816 / 2.0
-PRED = SX * DX * HALF  # = shift_px * z
+# 1408x1408 per eye is what this project happens to run at; it is not a
+# property of the mod. The headset decides the eye size, it need not be square,
+# and it will differ per user -- so the half-width comes from the image being
+# measured, never from a constant.
+SX, DX = 0.889, 0.15
+
+
+def predicted_shift_times_z(width_px):
+    """`shift_px * z` for an eye `width_px` wide. Half-width, because the
+    projection's x scale is relative to the half-extent of the frame."""
+    return SX * DX * (width_px / 2.0)
 
 
 def gray(p):
@@ -67,13 +76,15 @@ def main():
     a = sys.argv[1] if len(sys.argv) > 1 else "mono_game.png"
     b = sys.argv[2] if len(sys.argv) > 2 else "v2_game.png"
     mono, sheared = gray(a), gray(b)
+    # From the image, not a constant: the eye size is the headset's to decide.
+    pred = predicted_shift_times_z(mono.shape[1])
 
     print(f"{'region':30s} {'shift':>7s} {'corr':>6s} {'implied z':>11s}")
     print("-" * 60)
     out = {}
     for name, x0, y0, x1, y1, kind in REGIONS:
         dx, c = shift_of(mono, sheared, (x0, y0, x1, y1))
-        z = PRED / abs(dx) if dx else float("inf")
+        z = pred / abs(dx) if dx else float("inf")
         zs = f"{z:8.2f} m" if dx else "       inf"
         flag = "" if c > 0.5 else "   (low conf)"
         print(f"{name:30s} {dx:>7d} {c:>6.3f} {zs}{flag}")

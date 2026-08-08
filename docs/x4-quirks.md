@@ -500,3 +500,38 @@ take recorded before the rename uses them.
 *Do:* translate `_UI` to `_NONWORLD` when reusing an old command line, or check
 out the commit the take was run against -- which is the correct move anyway,
 since a known-good state is code *and* knobs.
+
+### 1408x1408 is this machine's convenience, not the mod's
+
+*Symptom (waiting to happen):* something works perfectly here and is wrong for
+anyone else, because a constant measured on one screen was written down as if it
+were a property of the renderer.
+
+The eye size is whatever the headset asks for. **It will differ per user and it
+need not be square** — most HMDs are not 1:1 — and the SBS composite this
+project is driven from is a bring-up view, not the target.
+
+*Do:* derive every extent from what the runtime reports.
+
+* **W, X4's window width** — read from the `SDL_GetWindowSize` calls X4 itself
+  makes, gated on the caller being the game. gamescope asks the same question
+  about its own surface and must not be mistaken for it.
+* **The eye extent for a dump** — from `SbsCompositor::EyeInfo`, never a
+  literal.
+* **The composite half-width** — from the real swapchain extent.
+* **Offline tools** — from the image being measured. `measure_parallax.py` had
+  `HALF = 2816 / 2.0` baked in; it now takes the width from the frame.
+
+*The subtle one:* a constant can be derived and still encode a layout. The input
+fold's origin term defaults to `W/2`, which is correct only for a **2W-wide
+side-by-side composite with X4's surface centred**. That is a geometry, not a
+law, so it is overridable with `X4VR_INPUT_FOLD_ORIGIN` and the log says whether
+it was assumed or forced. Only `x` is folded, because side-by-side duplicates
+horizontally; an over-under layout would need the same treatment on `y`.
+
+*Also:* `X4VR_PROJ_SX` is the projection's x scale and must match the eye's
+aspect. It is a knob rather than a derivation today, which is fine while the
+eye is square and is a thing to revisit when it is not.
+
+*Audited at take 93:* no `1408`, `704`, `2816` or `1407` appears in the layer or
+the injector. The two that existed were in the offline tools, and are gone.

@@ -394,17 +394,45 @@ std::atomic<int> g_x4_win_w{0};
 // hook X4 already calls.
 std::atomic<bool> g_relative_mouse{false};
 
+// The origin term is the display x at which X4's surface starts, because the
+// fold is really `x_x4 = (x_sdl + origin) mod W` -- undoing "where on the
+// display is this pointer" back to "where in X4's frame".
+//
+// It defaults to W/2, and that default encodes a geometry rather than a law:
+// a 2W-wide side-by-side composite with X4's W-wide surface centred in it,
+// which is what this project runs. **1408x1408 is this machine's convenience,
+// not the mod's.** An eye is whatever size the headset asks for, it need not
+// be square, and it will differ per user -- so W is read from the
+// SDL_GetWindowSize calls X4 makes, and the origin is overridable rather than
+// computed from an assumed layout.
+//
+// X4VR_INPUT_FOLD_ORIGIN sets it explicitly for any composite that is not
+// centred-2W. Only x is folded: a side-by-side layout duplicates horizontally,
+// so y is 1:1. An over-under layout would need the same treatment on y, and
+// would be a change here rather than a different value.
+int fold_origin(int w) {
+    static const int forced = [] {
+        const char *e = getenv("X4VR_INPUT_FOLD_ORIGIN");
+        return e && *e ? atoi(e) : -1;
+    }();
+    return forced >= 0 ? forced : w / 2;
+}
+
 float fold_x(float x) {
     const int w = g_x4_win_w.load(std::memory_order_relaxed);
     if (!input_fold() || w <= 1 || g_relative_mouse.load(std::memory_order_relaxed))
         return x;
-    float f = fmodf(x + (float)w * 0.5f, (float)w);
+    const int origin = fold_origin(w);
+    float f = fmodf(x + (float)origin, (float)w);
     if (f < 0.f)
         f += (float)w;
     static bool said = false;
     if (!said) {
         said = true;
-        X4VR_LOG("sdl: input fold ON — x_x4 = (x_sdl + %d) mod %d", w / 2, w);
+        X4VR_LOG("sdl: input fold ON — x_x4 = (x_sdl + %d) mod %d "
+                 "(W from X4's own window; origin %s)",
+                 origin, w,
+                 getenv("X4VR_INPUT_FOLD_ORIGIN") ? "forced" : "assumed W/2");
     }
     return f;
 }
