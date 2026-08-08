@@ -3419,32 +3419,37 @@ VkResult create_shader_module_inner(
         // two layers that provably differ, without an IPD or a projection.
         if (const char *s = getenv("X4VR_CLIP_K_RIGHT"))
             have_kr |= parse16(s, K_world_r);
-        // X4VR_CLIP_K_UI / _UI_RIGHT / X4VR_CLIP_SHIFT_UI are the old spellings.
-        // They still work, because docs/frame-analysis.md records take 82 and
-        // others by their exact command lines and a silently-ignored variable
-        // would make those reproduce as something else while looking valid.
-        // Which name was used is logged, so a log never leaves it ambiguous.
-        auto clip_env = [](const char *primary, const char *legacy) {
-            if (const char *v = getenv(primary))
-                return v;
-            if (const char *v = getenv(legacy)) {
-                X4VR_LOG("clip-space: %s is the old name for %s — still "
-                         "honoured, prefer the new one",
-                         legacy, primary);
-                return v;
-            }
-            return (const char *)nullptr;
+        // The `_UI` spellings are gone, not aliased. Nothing outside this repo
+        // consumes these names, so carrying a compatibility path for a name we
+        // got wrong would be pure weight.
+        //
+        // They are still *named* here, once, because the failure mode of simply
+        // deleting them is silence: docs/frame-analysis.md records takes by
+        // their exact command lines, and pasting take 82's into this build would
+        // set a variable nothing reads and produce a run that looks valid and
+        // is not. This project has been burned by that shape three times -- the
+        // take-50 X4VR_STEREO control, the PROJ_INVPROJ default flip, and the
+        // invproj knob that patched the wrong member. A tombstone costs three
+        // lines. To reproduce a pre-rename take, check out that commit, where
+        // the old name works natively.
+        static const char *const kRetired[][2] = {
+            {"X4VR_CLIP_K_UI", "X4VR_CLIP_K_NONWORLD"},
+            {"X4VR_CLIP_K_UI_RIGHT", "X4VR_CLIP_K_NONWORLD_RIGHT"},
+            {"X4VR_CLIP_SHIFT_UI", "X4VR_CLIP_SHIFT_NONWORLD"},
         };
-        if (const char *s = clip_env("X4VR_CLIP_K_NONWORLD", "X4VR_CLIP_K_UI"))
+        for (const auto &r : kRetired)
+            if (getenv(r[0]))
+                X4VR_LOG("clip-space: %s was renamed to %s and is NOT read — "
+                         "this run is not doing what that command line says",
+                         r[0], r[1]);
+        if (const char *s = getenv("X4VR_CLIP_K_NONWORLD"))
             have_k |= parse16(s, K_nonworld);
         // Normally unset: the UI is CPU hit-tested and belongs in both eyes
         // identically, so it stays mono. Exists because the offline test's
         // shader declares no set-3 block and therefore classifies NonWorld.
-        if (const char *s = clip_env("X4VR_CLIP_K_NONWORLD_RIGHT",
-                                     "X4VR_CLIP_K_UI_RIGHT"))
+        if (const char *s = getenv("X4VR_CLIP_K_NONWORLD_RIGHT"))
             have_kr_nonworld |= parse16(s, K_nonworld_r);
-        if (const char *sh = clip_env("X4VR_CLIP_SHIFT_NONWORLD",
-                                      "X4VR_CLIP_SHIFT_UI")) {
+        if (const char *sh = getenv("X4VR_CLIP_SHIFT_NONWORLD")) {
             K_nonworld[12] = strtof(sh, nullptr);
             have_k = true;
         }

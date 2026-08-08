@@ -489,5 +489,7 @@ for passes that are *sheared* -- which the lighting passes are, so that part
 stands. Modules drawn in unsheared passes were never tested by it.
 
 *Note:* the knob was called `X4VR_CLIP_K_UI` until the set was measured -- 54 of
-350 modules, mostly fullscreen and procedural shaders, not HUD. The old
-spellings still work and log a line saying so.
+350 modules, mostly fullscreen and procedural shaders, not HUD. The old spelling
+is **not** read any more; the layer logs "was renamed to ... and is NOT read"
+if it sees one, so an old command line fails loudly instead of silently doing
+nothing. Reproduce a pre-rename take by checking out that commit.
