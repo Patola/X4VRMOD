@@ -385,16 +385,22 @@ if [[ "${X4VR_GAMESCOPE:-0}" == 1 ]]; then
     # no resize feedback on Wayland -- because the render and the window
     # agree. This is what an OpenXR mirror shows anyway, and it is the mode
     # to develop the second eye in.
+    # Everything below derives from $W/$H, which already carry any X4VR_W /
+    # X4VR_H override. Take 101 read sbs_dim() again here instead, so
+    # `X4VR_W=2816 X4VR_H=792` moved gamescope's window and left X4 rendering
+    # 1408x1408: the window, the render and the composite came out at three
+    # different sizes, which is task #31 arriving through the launcher rather
+    # than the layer. The aspect test that run was supposed to be measured
+    # nothing, because the aspect never changed.
     if [[ "${X4VR_ONE_EYE:-0}" == 1 ]]; then
-        W=$(( $(sbs_dim WIDTH) / 2 ))
-        H=$(sbs_dim HEIGHT)
+        W=$(( W / 2 ))
         export X4VR_RES="${W}x${H}"
     elif [[ "${X4VR_SBS:-0}" == 1 && "${X4VR_SBS_SPLIT:-1}" != 0 ]]; then
         # gamescope stays at the full SBS width -- that is the window both eyes
         # are presented into -- but X4 must render one eye. State it here rather
         # than leaving the injector to infer it, so the window size and the
         # render size are set in the same place and can be read together.
-        export X4VR_RES="$(( $(sbs_dim WIDTH) / 2 ))x$(sbs_dim HEIGHT)"
+        export X4VR_RES="$(( W / 2 ))x${H}"
     fi
     if [[ -z "$W" || -z "$H" ]]; then
         echo "x4vr-launch: could not read the SBS size from" \

@@ -4787,12 +4787,18 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
             (w != warned_w || h != warned_h)) {
             warned_w = w;
             warned_h = h;
-            X4VR_LOG("WARNING swapchain is %ux%u, expected %dx%d -- X4 sized "
-                     "to the display, not to res_width/res_height (borderless "
-                     "does that). Run under gamescope at %dx%d; the SBS split "
-                     "will be wrong otherwise.",
-                     w, h, X4VR_SBS_WIDTH, X4VR_SBS_HEIGHT, X4VR_SBS_WIDTH,
-                     X4VR_SBS_HEIGHT);
+            // Print the size actually compared against, not the compiled-in
+            // constant. Take 101 tested `want` = 1408x1408 (from X4VR_RES) and
+            // printed "expected 2816x1408" (the constant), which named two
+            // numbers that had nothing to do with the comparison and sent the
+            // diagnosis looking at the wrong pair of extents.
+            X4VR_LOG("WARNING swapchain is %ux%u, expected %ux%u (from %s) -- "
+                     "X4 sized to the display, not to res_width/res_height "
+                     "(borderless does that). Run under gamescope at %ux%u; "
+                     "the SBS split will be wrong otherwise.",
+                     w, h, want_w, want_h,
+                     getenv("X4VR_RES") ? "X4VR_RES" : "the compiled SBS size",
+                     want_w, want_h);
         }
             if (sbs_usage) {
                 // Two layers only when multiview is actually running: without

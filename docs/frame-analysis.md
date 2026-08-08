@@ -11606,3 +11606,54 @@ infinity, and one object at ~20 m. That makes it a calibration scene for the
 questions Patola raised — how to pick distance, perspective and IPD across
 modes — without needing a savegame or a steady hand. `disparity_px · z = 60.07`
 at the current settings is the whole conversion.
+
+## Take 101 — the aspect never changed. Task #31 arriving through the launcher
+
+Patola, on the result: not 16:9 — the square scene pushed right in the left eye
+and left in the right, in an outstretched horizontal window. Exactly right, and
+the log says why:
+
+    env: run = ... X4VR_H=792 X4VR_W=2816 X4VR_RES=1408x1408 ...
+    sdl: SDL_GetWindowSize -> 2816x792
+    swapchain created: 2816x792
+    WARNING swapchain is 2816x792, expected 2816x1408
+
+`X4VR_RES=1408x1408` — **the launcher set it**, from the compiled-in SBS
+constants, ignoring the `X4VR_W`/`X4VR_H` it had just honoured for gamescope.
+Three extents, three values: the window 2816×792, X4's render 1408×1408, the
+composite's idea of the frame 2816×1408. That is task #31 word for word,
+reached through the launcher instead of the layer.
+
+So take 101 measured nothing about aspect. X4 rendered a square, as it always
+had; only the window it was poured into changed shape. P103 is **untested**, not
+refuted.
+
+**The bug is real and predates the take.** `W` and `H` correctly pick up the
+overrides on the line above, and then both branches call `sbs_dim` again rather
+than using them, so `X4VR_W`/`X4VR_H` — documented as "force the SBS size" —
+could only ever move gamescope. Fixed by deriving `X4VR_RES` from `$W`/`$H`.
+The default path is unchanged by construction: with neither variable set, `W`
+and `H` *are* the constants, and `2816×1408 -> 1408x1408` as before.
+
+    X4VR_W=2816 X4VR_H=792   -> X4VR_RES=1408x792   eye aspect 1.778
+    X4VR_W=2816 X4VR_H=1408  -> X4VR_RES=1408x1408  eye aspect 1.000  (default)
+
+The layer's warning was misleading too, and in the way that matters: it tested
+`want` (1408×1408, from `X4VR_RES`) and printed `expected 2816x1408` (the
+compiled constant). Two numbers with nothing to do with the comparison, on the
+one line that was trying to report a size disagreement. It now prints what it
+compared against and where that came from.
+
+Re-run of P103, unchanged except that the launcher now propagates the size:
+
+    X4VR_TAKE=102-ASPECT X4VR_W=2816 X4VR_H=792 X4VR_STEREO=1
+    X4VR_BINDLESS_PATCH=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1
+    X4VR_SBS_LAYERS=2 X4VR_PROJ_SX=1.3333 X4VR_MV=1 X4VR_PROJ_LIVE=1
+    X4VR_SBS=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1
+    X4VR_MV_INVENTORY=1 X4VR_MV_DUMP=/tmp/x4vr-t102
+    X4VR_MV_DUMP_PRESENT=60 X4VR_LOG=/tmp/x4vr-take102.log
+    ./launch/x4vr-launch.sh
+
+Check the log before judging anything on screen: `env: run =` must now show
+`X4VR_RES=1408x792`, and there must be **no** swapchain-size warning. If either
+is wrong the run is another take 101 and the picture means nothing.
