@@ -177,6 +177,41 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    // Task #30. The canvas variant is patch_vertex_clip with a constant-shift
+    // matrix instead of the shear, so this exists to sweep it over every
+    // dumped module offline: a refusal or an invalid module found here costs
+    // nothing, and found in a take costs a load screen.
+    //
+    //     vert-clip <in.spv> <out.spv> [s]
+    //
+    // Writes the left eye's matrix (identity with m[12] = +s) and the right
+    // eye's (-s), which is exactly what the layer builds.
+    if (strcmp(argv[1], "vert-clip") == 0 && argc >= 4) {
+        std::vector<uint32_t> code = load_spv(argv[2]);
+        if (code.empty()) {
+            printf("FAIL=load\n");
+            return 1;
+        }
+        const float s = argc > 4 ? strtof(argv[4], nullptr) : 0.02133f;
+        float kl[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        float kr[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        kl[12] = +s;
+        kr[12] = -s;
+        const bool ok = x4vr::spv::patch_vertex_clip(code, kl, kr);
+        printf("PATCHED=%d KIND=%s\n", ok ? 1 : 0,
+               x4vr::spv::classify(code, false) == x4vr::spv::Kind::World
+                   ? "World"
+                   : "other");
+        if (ok) {
+            FILE *f = fopen(argv[3], "wb");
+            if (!f)
+                return 1;
+            fwrite(code.data(), 4, code.size(), f);
+            fclose(f);
+        }
+        return ok ? 0 : 1;
+    }
+
     if (strcmp(argv[1], "list") == 0) {
         std::vector<uint32_t> code = load_spv(argv[2]);
         if (code.empty()) {

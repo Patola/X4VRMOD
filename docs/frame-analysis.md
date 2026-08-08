@@ -11286,3 +11286,72 @@ always, not from the screen.
 
 Predicted here, before the code, so the run that tests them cannot be reasoned
 about backwards.
+
+### Validated offline before asking for a take
+
+**The patch.** `tests/spirv_patch vert-clip` applies the canvas matrix, and
+sweeping it over all 397 of take 80's dumps:
+
+    modules: World=320 other=77 | patched=382 refused=15 | spirv-val invalid=0
+
+Every World module accepts it and every patched module is valid SPIR-V. The 15
+refusals are exactly the 15 modules with no vertex stage — the fragment-only
+blit shaders — so nothing that could carry the UI was turned away. That also
+fixes the number to look for in the log: **`canvas final:` must report on the
+order of 320 variants built, and never 0.**
+
+**The arithmetic.** `tests/view_math` proves `canvas_shift(z)` equals the world
+shear's displacement at depth z across three near planes an order of magnitude
+apart, so `near` provably cancels rather than approximately cancelling.
+
+**The selection.** `tests/run-multiview-render.sh` creates the discriminating
+pair on a real device: `rp #2` (LDR, no depth) reports `+CANVAS` and `rp #6`
+(HDR, no depth) must not. Those two are indistinguishable to every other
+predicate in the layer.
+
+**The pointer.** `tests/run-cursor.sh` runs the overlay on a GPU under
+validation twice — canvas off, where both layers must stay byte-identical, and
+canvas on at 8 px, where they must differ *by a translation*: each eye's quad
+clear in the other. Zero validation errors either way.
+
+**The measurement.** `tools/canvas_shift_map.py` was written before the take
+and validated on synthetic pairs built from take 94's eye dump: a translated
+band reads CANVAS, an unmodified copy reads NO CANVAS rather than passing
+vacuously.
+
+### The two takes
+
+A control first, because the last four commits touched the present path and a
+canvas defect must not be confused with a regression. Both dump the eye image
+so the control doubles as a negative control for the shift map on real pixels.
+
+    X4VR_TAKE=97-CONTROL X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408
+    X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2
+    X4VR_PROJ_SX=1.3333 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1
+    X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1
+    X4VR_MV_INVENTORY=1 X4VR_MV_PROBE=1
+    X4VR_MV_DUMP=/tmp/x4vr-t97 X4VR_MV_DUMP_PRESENT=1
+    X4VR_LOG=/tmp/x4vr-take97.log
+    ./launch/x4vr-launch.sh
+
+    X4VR_TAKE=98-CANVAS ...everything above, with...
+    X4VR_CANVAS_M=2
+    X4VR_MV_DUMP=/tmp/x4vr-t98 X4VR_MV_DUMP_PRESENT=1
+    X4VR_LOG=/tmp/x4vr-take98.log
+
+`X4VR_MV_INVENTORY=1 X4VR_MV_PROBE=1` are new against take 96, which is why
+that run scored `masked nothing` and `no settled probe samples` — the scorer had
+no material, not a defect.
+
+Scored with:
+
+    python3 tools/score_run.py /tmp/x4vr-take97.log
+    python3 tools/score_run.py /tmp/x4vr-take98.log
+    python3 tools/canvas_shift_map.py /tmp/x4vr-t97-present-nN-layer0.ppm \
+                                      /tmp/x4vr-t97-present-nN-layer1.ppm -30
+    python3 tools/canvas_shift_map.py /tmp/x4vr-t98-present-nN-layer0.ppm \
+                                      /tmp/x4vr-t98-present-nN-layer1.ppm -30
+
+`-30` is twice the per-eye 15 px, because layer 0 was given `+s` and layer 1
+`-s`. Take 97 must read **NO CANVAS** and take 98 **CANVAS**; the pair is the
+measurement, and either one alone is not.
