@@ -10730,3 +10730,78 @@ only one of them is visible.
   where X4's surface sits — nothing to defeat. Asymmetry would mean a genuine
   surface-boundary effect on one side and would need explaining before #31 is
   designed.
+
+## Take 92 — P96 confirmed. There is no surface confinement, and #17 subsumes #31.
+
+Per-wall budgets, right edge pushed first:
+
+    wall push RIGHT #1 — x=1407 pinned, xrel=+6   still arriving
+    wall push RIGHT #2 — x=1407 pinned, xrel=+47
+    wall push RIGHT #3 — x=1407 pinned, xrel=+23
+    wall push LEFT  #2 — x=0    pinned, xrel=-58
+    wall push LEFT  #3..#6 — x=0 pinned, xrel=-1, -33, -15, -10
+
+**Symmetric.** Take 91's one-sided result was entirely the shared budget, as
+suspected, and the asymmetry needed no explanation because it never existed.
+
+### The mechanism, and what it is not
+
+Motion continues at both walls while the position stays pinned. That is
+`--force-grab-cursor` putting the pointer in **relative mode**: the compositor
+sends deltas unconditionally, and SDL accumulates them into a position it clamps
+to X4's window. There is **no surface-boundary confinement anywhere**, and
+nothing for a shim to defeat.
+
+Three things follow, and the third is the useful one:
+
+1. The `0…1407` bound is SDL's clamp against X4's window, not a compositor
+   boundary. It is also exactly one copy's worth of X4's frame.
+2. X4's pointer position is therefore a **fiction SDL maintains from deltas** —
+   there is no privileged desktop location it corresponds to. gamescope's
+   visible pointer is a *second, independent* fiction, which is why it sails off
+   to the right while X4's freezes. Two pointers, one clamped, conflated
+   throughout because only one of them is drawn.
+3. **Task #31 is not needed to fix pointing. Task #17 already does it.**
+
+### Why drawing the cursor removes the problem instead of working around it
+
+X4's pointer lives in `0…1407`, exactly one copy. Draw a cursor into the **eye
+image** at `x_x4`, and the compositor duplicates it to display `x_x4` and
+`x_x4 + 1408` — the same two places it duplicates everything else.
+
+Now the cursor and the element are the *same kind of object*: both drawn by the
+frame, both duplicated identically. The cursor sprite overlaps the element
+sprite exactly when `x_x4 == x_element`, which is exactly when X4 hit-tests it.
+
+    point at what you see   -> automatic, because both are in X4's frame
+    continuity              -> total, no modulus anywhere
+    steering                -> unbroken, the frame centre is one place again
+    the fold                -> unnecessary; stays off
+    extent alignment (#31)  -> not required for this
+
+The seam stops mattering because nothing is being mapped across it. The two
+visible cursors are not a defect: in stereo that is what one cursor looks like,
+the same as every other object in the frame.
+
+This is a better outcome than #31's surface-moving, and it was reachable only
+after P92 (X4's space is one copy), P94/take 90 (the fold's discontinuity), and
+P96 (no confinement to defeat). Each measurement narrowed it.
+
+**#31 is not closed** — the three extents still disagree, and that is still the
+reason a display-space pointer cannot be right. It is demoted: no longer the
+prerequisite for pointing, and worth revisiting only if #17 turns out not to
+cover a case.
+
+### What #17 now needs, concretely
+
+* **Position** — the injector has it (`SDL_GetMouseState`, which take 88 showed
+  agrees with the event stream). The layer needs it. DESIGN.md's shared-memory
+  struct between injector and layer is the intended channel and is unwritten.
+* **The bitmap** — X4 builds its own cursor via `SDL_CreateColorCursor` and
+  hands it over with `SDL_SetCursor`, so the shim can composite **X4's own
+  cursor image**, including the reticle-versus-arrow change, rather than
+  inventing one that would not match.
+* **Suppressing gamescope's pointer**, or there will be two.
+* **Seeing the result** — task #29. The probe captures the eye image after the
+  first present pass, and the cursor is drawn after that, so today a correct
+  implementation and a broken one would look identical from here.
