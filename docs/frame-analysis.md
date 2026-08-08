@@ -11090,3 +11090,76 @@ when `VK_KHR_swapchain` is enabled, which X4 does and the harness had not.
   one, and `sdl: SDL_HideCursor() -> 1` in the log. If two remain, gamescope
   draws a pointer of its own independent of the client's, and the next lever is
   `X4VR_GRAB_CURSOR=0` or a gamescope flag rather than anything in SDL.
+
+## Takes 95 and 96 — P98 and P99 confirmed. The pointer is in the frame.
+
+    X4VR_TAKE=95-CURSOR ... X4VR_CURSOR=1 X4VR_LOG=/tmp/x4vr-take95.log
+    X4VR_TAKE=96-CURSOR ... X4VR_CURSOR=1 X4VR_HIDE_CURSOR=1 X4VR_LOG=/tmp/x4vr-take96.log
+
+Take 95:
+
+    layer   cursor: overlay armed (X4VR_CURSOR=1)
+    layer   cursor: overlay pipeline built for a B8G8R8A8_UNORM eye
+    layer   cursor: drawing 32x32 hot=(15,15) into 2 layer(s) of the 1408x1408 eye
+            — first at x=719.0 y=703.0 (channel says visible),
+              texture B8G8R8A8_UNORM into an eye of B8G8R8A8_UNORM
+
+Take 96 adds the one line that separates it:
+
+    inject  sdl: SDL_HideCursor() -> 1 — the compositor's pointer is suppressed
+
+No `cursor surface refused`, no `not one this knows how to consume`, no
+`creation failed`. The stereo state is unchanged and still correct:
+`STEREO composite`, `right half from layer 1`, `shear m8 L=0.42666 R=-0.42666`.
+
+**Both runs used the known-good knob set with nothing added but the cursor.**
+`score_run.py` reports `no settled probe samples` and `masked nothing` for both,
+and neither is a defect: `X4VR_MV_PROBE` and `X4VR_MV_INVENTORY` were not passed,
+so the scorer had no material. These two takes are scored on the cursor lines.
+
+### Three cursors, and why that is the right number
+
+Patola, on take 95: *three* cursors — the two the mod draws, and the original
+between them.
+
+**Two drawn cursors is correct, not a defect.** The composite duplicates the eye
+image side by side, so one cursor drawn into the eye image appears once in each
+half — one per eye. In a headset each eye sees exactly one.
+
+The third one's *position* is a free re-confirmation of P23/P91. Our cursor sits
+at eye-x in the left half and eye-x+1408 in the right; gamescope draws its own
+at screen x+704, because X4's 1408-wide surface is centred in the 2816-wide
+composite. Exactly midway between the two. The 704 translation has now been
+measured three times, and the third time it was visible on screen.
+
+**And the idle-hide belonged to gamescope.** Patola: the drawn cursors do not
+disappear, the central one does. That closes the question take 93 opened, and
+retroactively explains why that take's dumps contained no cursor — the thing
+that was vanishing was never in X4's frame.
+
+### The hot spot was the part that could have looked right and been wrong
+
+X4 built more than twenty distinct cursors in these runs, all 32x32 ARGB8888,
+with hot spots ranging from (0,0) to (15,26). Take 96 was an exhaustive
+exercise — icons, pull-downs, text, collapsible sections, and the map rotated in
+3D — and every hitbox landed. That is the check that matters: a shim that
+ignored the hot spot would still have drawn a pointer that *looked* placed, and
+would have missed by up to 31 px depending on which cursor X4 had selected.
+
+- **P98 CONFIRMED.** Two drawn pointers, identical in both halves, over the same
+  object as gamescope's, changing shape with context, selecting on their exact
+  location.
+- **P99 CONFIRMED.** `SDL_HideCursor()` returned 1 and the compositor's pointer
+  is gone. Two remain, which is one per eye.
+
+### This supersedes #19 rather than completing it
+
+Neither run passed `X4VR_INPUT_FOLD`. The fold was the take-90 compromise that
+fixed picking by rewriting the position X4 reads, at the cost of breaking cockpit
+steering — two requirements no formula reconciled. Drawing the pointer into the
+frame dissolves the conflict instead of trading between them: nothing is
+rewritten, so steering is untouched, and picking is exact because cursor and
+target are now the same kind of object in the same coordinate system.
+
+The fold stays in the tree, off, as the record of a measurement. It has no
+remaining job.

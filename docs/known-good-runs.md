@@ -176,3 +176,39 @@ matches nothing and returns false. The knob is inert there.
 This holds only while that is true. **If a render-test case is ever given a
 shader with a camera block at `set 1, binding 0`, the default starts mattering
 and that case must pin `X4VR_PROJ_INVPROJ` explicitly** rather than inherit it.
+
+## `stage3-cursor-in-eye` — takes 95 and 96
+
+Correct stereo, plus a pointer that is part of the frame. Everything
+`stage2-stereo-shading-correct` had, and the mouse now works in side-by-side:
+one cursor per eye, X4's own bitmap, changing shape with context, selecting on
+its exact location. Patola exercised the map exhaustively — icons, pull-downs,
+text, collapsible sections, and the 3D map rotated — with every hitbox landing.
+
+    X4VR_TAKE=96-CURSOR X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408
+    X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2
+    X4VR_PROJ_SX=1.3333 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1
+    X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1
+    X4VR_CURSOR=1 X4VR_HIDE_CURSOR=1
+    X4VR_LOG=/tmp/x4vr-take96.log
+    ./launch/x4vr-launch.sh
+
+**What to check in the log:**
+
+    cursor: overlay pipeline built for a B8G8R8A8_UNORM eye
+    cursor: drawing 32x32 hot=(h,v) into 2 layer(s) of the 1408x1408 eye
+    sdl: SDL_HideCursor() -> 1
+
+`into 2 layer(s)` is the one to read. A `1` there means the pointer reaches one
+eye only — the same class of defect as a black right eye, in a new place. The
+`hot=` pair must also vary as X4 switches cursor; a hot spot stuck at one value
+would mean `SDL_SetCursor` stopped publishing and the shim is drawing a stale
+bitmap.
+
+**Both cursor knobs are opt-in, and `X4VR_HIDE_CURSOR` must not be passed
+alone.** Hiding lives in the injector and drawing lives in the layer, and the
+injector cannot see whether the layer is drawing. `X4VR_HIDE_CURSOR=1` with
+`X4VR_NO_LAYER=1`, or with a layer whose overlay failed to build, leaves no
+pointer at all.
+
+The invproj check from `stage2-stereo-shading-correct` still applies unchanged.
