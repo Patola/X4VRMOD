@@ -6359,6 +6359,36 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                 X4VR_LOG("mv dump: frame %llu cursor at x=%.1f y=%.1f%s",
                          (unsigned long long)n, cx, cy,
                          vis ? "" : " (not visible)");
+            // Once, when an image first arrives. The format is passed through
+            // from SDL unconverted on purpose, so this line is the measurement
+            // that decides how to unpack it -- a guessed conversion table would
+            // mangle the colours quietly instead.
+            static bool img_said = false;
+            if (!img_said) {
+                static uint8_t px[x4vr::Shared::kCursorMax *
+                                  x4vr::Shared::kCursorMax * 4];
+                uint32_t cw = 0, ch = 0, fmt = 0, pitch = 0;
+                int32_t hx = 0, hy = 0;
+                if (x4vr::share_read_cursor(shared_state(), px, &cw, &ch, &hx,
+                                            &hy, &fmt, &pitch)) {
+                    img_said = true;
+                    uint32_t opaque = 0, nonzero = 0;
+                    for (uint32_t i = 0; i < cw * ch; i++) {
+                        const uint8_t *p = px + i * 4;
+                        if (p[0] | p[1] | p[2] | p[3])
+                            nonzero++;
+                        if (p[3] == 0xff)
+                            opaque++;
+                    }
+                    X4VR_LOG("share: cursor image %ux%u fmt=0x%08x hot=(%d,%d) "
+                             "— %u/%u px non-zero, %u with byte3=0xff",
+                             cw, ch, fmt, hx, hy, nonzero, cw * ch, opaque);
+                    X4VR_LOG("share: first row bytes %02x %02x %02x %02x | "
+                             "%02x %02x %02x %02x",
+                             px[0], px[1], px[2], px[3], px[4], px[5], px[6],
+                             px[7]);
+                }
+            }
         }
     }
     frame_flush();

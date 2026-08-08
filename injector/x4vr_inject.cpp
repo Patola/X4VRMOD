@@ -27,6 +27,8 @@
 
 #include <atomic>
 #include <cmath>
+#include <mutex>
+#include <vector>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -438,6 +440,60 @@ void publish_cursor(float x, float y, bool visible) {
     s->seq.store(start + 2, std::memory_order_release); // even: settled
 }
 
+// SDL3's SDL_Surface, read positionally for the same reason SDL_Event is: the
+// injector has no SDL headers and wants none. Layout, from SDL 3's public
+// struct, on LP64:
+//
+//     0  SDL_SurfaceFlags flags   (Uint32)
+//     4  SDL_PixelFormat  format  (enum, 4 bytes)
+//     8  int w
+//    12  int h
+//    16  int pitch
+//    20  (4 bytes of padding, so the pointer is 8-aligned)
+//    24  void *pixels
+//
+// Every field read from it is validated below rather than trusted. If SDL ever
+// moves one, the numbers stop being plausible and the capture refuses -- which
+// is a great deal better than compositing whatever happened to be at offset 24.
+struct Sdl3Surface {
+    uint32_t flags;
+    uint32_t format;
+    int32_t w, h, pitch;
+    uint32_t pad;
+    const void *pixels;
+};
+
+// Cursors X4 has built, so SDL_SetCursor can publish the one it selects. X4
+// swaps between a handful (the reticle and the arrow at least), and the handle
+// is the only thing SDL_SetCursor gives us.
+struct CapturedCursor {
+    const void *handle = nullptr;
+    uint32_t w = 0, h = 0, format = 0, pitch = 0;
+    int32_t hot_x = 0, hot_y = 0;
+    std::vector<uint8_t> px;
+};
+std::mutex g_cursor_mu;
+std::vector<CapturedCursor> g_cursors;
+
+void publish_cursor_image(const CapturedCursor &c) {
+    x4vr::Shared *s = x4vr_shared_state();
+    const uint32_t start = s->cursor_img_seq.load(std::memory_order_relaxed);
+    s->cursor_img_seq.store(start + 1, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
+    s->cursor_w = c.w;
+    s->cursor_h = c.h;
+    s->cursor_hot_x = c.hot_x;
+    s->cursor_hot_y = c.hot_y;
+    s->cursor_format = c.format;
+    s->cursor_pitch = c.w * 4u; // repacked tightly by the capture below
+    const size_t n = c.px.size() < sizeof(s->cursor_pixels) ? c.px.size()
+                                                            : sizeof(s->cursor_pixels);
+    for (size_t i = 0; i < n; i++)
+        s->cursor_pixels[i] = c.px[i];
+    std::atomic_thread_fence(std::memory_order_release);
+    s->cursor_img_seq.store(start + 2, std::memory_order_release);
+}
+
 // The origin term is the display x at which X4's surface starts, because the
 // fold is really `x_x4 = (x_sdl + origin) mod W` -- undoing "where on the
 // display is this pointer" back to "where in X4's frame".
@@ -645,6 +701,77 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
 // real pointer goes to the place that folds back to it, and the value X4 reads
 // next is the one it asked for. Using a separately-derived inverse here would
 // be a second expression to keep in step with fold_x, and they would drift.
+// X4 builds its cursors here. Captured rather than merely counted, because the
+// shim has to draw *this* image -- a cursor of our own would not match, and X4
+// varies it by context (Patola: a small blue hollow cross on the map, an arrow
+// over a station).
+//
+// The surface is repacked tightly to w*4 so the consumer never has to carry
+// SDL's pitch, and the pixel format is passed through unconverted: one run will
+// say what it actually is, which beats a guessed conversion that silently
+// mangles the colours.
+void *SDL_CreateColorCursor(void *surface, int hot_x, int hot_y) {
+    static auto real_fn =
+        real<void *(*)(void *, int, int)>("SDL_CreateColorCursor");
+    void *cur = real_fn(surface, hot_x, hot_y);
+    if (!cur || !surface || !this_is_the_game())
+        return cur;
+    const auto *sf = (const Sdl3Surface *)surface;
+    // Every one of these has to hold for the positional read to be believable.
+    const bool sane = sf->w > 0 && sf->h > 0 &&
+                      sf->w <= (int32_t)x4vr::Shared::kCursorMax &&
+                      sf->h <= (int32_t)x4vr::Shared::kCursorMax &&
+                      sf->pitch >= sf->w * 4 && sf->pitch < 1 << 20 && sf->pixels;
+    if (!sane) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            X4VR_LOG("sdl: cursor surface refused — w=%d h=%d pitch=%d pixels=%p "
+                     "(max %u); either it is larger than the channel or the "
+                     "SDL_Surface layout has moved",
+                     sf->w, sf->h, sf->pitch, sf->pixels,
+                     x4vr::Shared::kCursorMax);
+        }
+        return cur;
+    }
+    CapturedCursor c;
+    c.handle = cur;
+    c.w = (uint32_t)sf->w;
+    c.h = (uint32_t)sf->h;
+    c.format = sf->format;
+    c.pitch = (uint32_t)sf->pitch;
+    c.hot_x = hot_x;
+    c.hot_y = hot_y;
+    c.px.resize((size_t)c.w * c.h * 4u);
+    for (uint32_t y = 0; y < c.h; y++)
+        for (uint32_t b = 0; b < c.w * 4u; b++)
+            c.px[(size_t)y * c.w * 4u + b] =
+                ((const uint8_t *)sf->pixels)[(size_t)y * c.pitch + b];
+    {
+        std::lock_guard<std::mutex> lock(g_cursor_mu);
+        g_cursors.push_back(c);
+    }
+    X4VR_LOG("sdl: captured cursor %p — %ux%u fmt=0x%08x pitch=%u hot=(%d,%d)",
+             cur, c.w, c.h, c.format, c.pitch, hot_x, hot_y);
+    return cur;
+}
+
+// Which of them is current. This is also the *shape* signal: X4 swapping cursor
+// is how the reticle becomes an arrow, so a shim that draws a fixed image would
+// be wrong exactly when the game is telling the player something.
+bool SDL_SetCursor(void *cursor) {
+    static auto real_fn = real<bool (*)(void *)>("SDL_SetCursor");
+    if (this_is_the_game()) {
+        std::lock_guard<std::mutex> lock(g_cursor_mu);
+        for (const CapturedCursor &c : g_cursors)
+            if (c.handle == cursor) {
+                publish_cursor_image(c);
+                break;
+            }
+    }
+    return real_fn(cursor);
+}
+
 void SDL_WarpMouseInWindow(void *win, float x, float y) {
     static auto real_fn =
         real<void (*)(void *, float, float)>("SDL_WarpMouseInWindow");

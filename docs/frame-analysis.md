@@ -10916,3 +10916,39 @@ duplicate of something X4 already does.
 The idle-hide caveat is recorded and does *not* weaken this: a dump taken while
 the cursor was hidden would contain no cursor for an uninteresting reason, but
 the duplication argument does not rest on the dumps.
+
+## Task #17 step 1: capturing X4's own cursor
+
+The channel now carries the cursor **image**, not just its position.
+
+`SDL_CreateColorCursor` is where X4 builds it. The injector captures the surface
+there and `SDL_SetCursor` publishes whichever one X4 selects — which is also the
+*shape* signal, since X4 swapping cursor is how the reticle becomes an arrow
+over a station. A shim drawing a fixed image would be wrong in exactly the
+moments the game is trying to tell the player something.
+
+**Read positionally, and validated rather than trusted.** The injector has no
+SDL headers and wants none, so `SDL_Surface` is read at fixed offsets the same
+way `SDL_Event` already is. Every field is then checked — `w`/`h` in range,
+`pitch >= w*4`, `pixels` non-null — and a capture that fails any of them is
+refused with a log line naming the values. If SDL moves a field, the numbers
+stop being plausible and nothing is captured, which beats compositing whatever
+happened to be at offset 24.
+
+**The pixel format is passed through unconverted.** A conversion table written
+from memory would mangle the colours silently; instead the format id travels
+with the pixels and the layer logs it once, along with a non-zero count, an
+alpha-byte count and the first two pixels. One run says what the format actually
+is, and *then* the unpacking gets written.
+
+The image has its own seqlock, separate from the position's: the image changes
+only when X4 switches cursor, while the position changes every frame, so one
+counter would make every reader of the image retry constantly for a payload that
+had not moved.
+
+- **P97** — X4 calls `SDL_CreateColorCursor` at least once, and the captured
+  surface passes the sanity checks. The log then names the size, the format id
+  and the hot spot. A `cursor surface refused` line instead means the positional
+  layout is wrong and step 2 cannot proceed on it; silence from both means X4
+  sets its cursor by some route that is not `SDL_SetCursor`, and the shim needs
+  that route found before it can match the game's cursor.

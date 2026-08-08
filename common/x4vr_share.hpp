@@ -66,6 +66,33 @@ struct Shared {
     // questions and are kept as different fields.
     std::atomic<uint32_t> cursor_visible{0};
 
+    // ---- the cursor image -------------------------------------------------
+    //
+    // X4 builds its own cursor with SDL_CreateColorCursor and hands it to SDL,
+    // which is why the compositor draws one and why it changes shape over a
+    // station. Compositing *that* image is the point: a cursor we invent would
+    // not match the game's, and X4 already varies it by context.
+    //
+    // Its own seqlock, separate from the position's. The image changes rarely
+    // -- only when X4 switches cursor -- while the position changes every
+    // frame, so sharing one counter would make every reader of the image retry
+    // constantly for a payload that had not moved.
+    std::atomic<uint32_t> cursor_img_seq{0};
+    uint32_t cursor_w = 0;
+    uint32_t cursor_h = 0;
+    int32_t cursor_hot_x = 0;
+    int32_t cursor_hot_y = 0;
+    // SDL's pixel-format id, **unconverted**. Publishing the raw bytes and the
+    // format, rather than converting here, means one run tells us exactly what
+    // X4 passes instead of a guessed conversion table silently mangling it.
+    uint32_t cursor_format = 0;
+    uint32_t cursor_pitch = 0;
+    // Capped, because this struct is a fixed allocation and a cursor is small.
+    // A larger one is refused and logged rather than truncated into something
+    // that would draw as garbage.
+    static constexpr uint32_t kCursorMax = 64;
+    uint8_t cursor_pixels[kCursorMax * kCursorMax * 4] = {};
+
     // X4's own window extent, as it reported it. The layer has the eye extent
     // already; this is here so a mismatch between the two can be *seen* rather
     // than assumed away -- they are equal today and nothing guarantees it.
@@ -90,6 +117,39 @@ inline bool share_read(const Shared *s, float *x, float *y, bool *visible) {
         *x = cx;
         *y = cy;
         *visible = vis;
+        return true;
+    }
+    return false;
+}
+
+// The cursor image, if one has been captured. `dst` must hold at least
+// kCursorMax*kCursorMax*4 bytes. Same seqlock discipline as share_read.
+inline bool share_read_cursor(const Shared *s, uint8_t *dst, uint32_t *w,
+                              uint32_t *h, int32_t *hot_x, int32_t *hot_y,
+                              uint32_t *format, uint32_t *pitch) {
+    if (!s || s->magic != kShareMagic || s->version != kShareVersion)
+        return false;
+    for (int tries = 0; tries < 8; tries++) {
+        const uint32_t a = s->cursor_img_seq.load(std::memory_order_acquire);
+        if (a == 0 || (a & 1u))
+            continue; // 0 = nothing captured yet, odd = being written
+        const uint32_t cw = s->cursor_w, ch = s->cursor_h;
+        if (!cw || !ch || cw > Shared::kCursorMax || ch > Shared::kCursorMax)
+            return false;
+        const uint32_t bytes = cw * ch * 4u;
+        for (uint32_t i = 0; i < bytes; i++)
+            dst[i] = s->cursor_pixels[i];
+        const uint32_t fmt = s->cursor_format, pit = s->cursor_pitch;
+        const int32_t hx = s->cursor_hot_x, hy = s->cursor_hot_y;
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (s->cursor_img_seq.load(std::memory_order_relaxed) != a)
+            continue;
+        *w = cw;
+        *h = ch;
+        *hot_x = hx;
+        *hot_y = hy;
+        *format = fmt;
+        *pitch = pit;
         return true;
     }
     return false;
