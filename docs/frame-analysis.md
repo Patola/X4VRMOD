@@ -10805,3 +10805,46 @@ cover a case.
 * **Seeing the result** — task #29. The probe captures the eye image after the
   first present pass, and the cursor is drawn after that, so today a correct
   implementation and a broken one would look identical from here.
+
+## Task #29 implemented: the finished eye image
+
+`X4VR_MV_DUMP_PRESENT=N` writes the eye image every N presents, to
+`<X4VR_MV_DUMP>-present-n<seq>-layer{0,1}.ppm`.
+
+**Why the existing probe could not do this.** `X4VR_MV_DUMP_IMG` fires from
+`vkCmdEndRenderPass`, after the *first* pass that writes a named image. The eye
+image is written by several present passes — P76 named `rp #0/#1/#4/#7/#10` —
+so what it captured was the frame *before* the UI. The cursor, the HUD and the
+clipped logo are all drawn after that, which is why every question about them
+has been unanswerable from a dump and had to be asked of Patola's screen.
+
+At `vkQueuePresentKHR` the frame is complete: X4 has submitted everything and is
+asking for it to be shown.
+
+**Where the copy is recorded, and why not somewhere simpler.** In
+`SbsCompositor::composite()`, immediately after its `CmdCopyImage`. The eye image
+sits in `PRESENT_SRC_KHR` because X4 believes it is the swapchain, and composite
+is the one place that already transitions it to `TRANSFER_SRC_OPTIMAL` with a
+range covering every layer. A private command buffer would have had to reproduce
+that transition and would be a second thing to keep correct as these layouts
+change — and this file has a record of exactly that kind of duplicate drifting
+out of step.
+
+The request is one-shot: `request_dump()` sets a buffer, `composite()` consumes
+and clears it under the same mutex, so asking costs one frame and not asking
+costs nothing. The readback happens after the present is chained down, so the
+`QueueWaitIdle` stalls a frame that was already going to the screen.
+
+Both array layers are written, so the dump shows the two eyes as the compositor
+will duplicate them — which is what makes it the right instrument for #17, where
+the question is whether a cursor drawn into the eye image lands correctly in
+both copies.
+
+This unblocks:
+
+* **#17** — whether a composited cursor appears at the matching place in both
+  halves. Today a correct implementation and a broken one look identical from
+  here.
+* **#21** — the clipped logo, drawn by the UI passes and therefore invisible to
+  the old probe.
+* **#30** — anything about where the UI sits once it is on its own canvas.

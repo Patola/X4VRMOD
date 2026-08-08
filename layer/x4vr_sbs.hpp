@@ -34,7 +34,8 @@ namespace x4vr {
 #define X4VR_SBS_FNS(X)                                                        \
     X(CreateCommandPool) X(DestroyCommandPool) X(AllocateCommandBuffers)       \
     X(BeginCommandBuffer) X(EndCommandBuffer) X(ResetCommandBuffer)            \
-    X(CmdPipelineBarrier) X(CmdCopyImage) X(CreateSemaphore)                   \
+    X(CmdPipelineBarrier) X(CmdCopyImage) X(CmdCopyImageToBuffer)               \
+    X(CreateSemaphore)                                                         \
     X(DestroySemaphore) X(CreateFence) X(DestroyFence) X(WaitForFences)        \
     X(ResetFences) X(GetSwapchainImagesKHR) X(QueueSubmit) X(DeviceWaitIdle)   \
     X(CreateImage) X(DestroyImage) X(GetImageMemoryRequirements)               \
@@ -126,6 +127,10 @@ public:
         VkFormat format = VK_FORMAT_UNDEFINED;
         VkExtent2D extent{};
     };
+    // Set by request_dump(), consumed and cleared by the next composite().
+    VkBuffer dump_buf_ = VK_NULL_HANDLE;
+    VkDeviceSize dump_layer_bytes_ = 0;
+
     bool eye_info(VkSwapchainKHR sc, EyeInfo *out) {
         std::lock_guard<std::mutex> lock(mu_);
         auto it = chains_.find(sc);
@@ -135,6 +140,24 @@ public:
         out->format = it->second.format;
         out->extent = it->second.eye;
         return true;
+    }
+
+    // Task #29. A one-shot request to copy the eye image into `buf` during the
+    // next composite.
+    //
+    // It has to happen *there* and not in a command buffer of its own: the eye
+    // image sits in PRESENT_SRC_KHR because X4 believes it is the swapchain,
+    // and composite() is the one place that already barriers it to
+    // TRANSFER_SRC with a range covering every layer. A separate submit would
+    // have to reproduce that transition and would be a second thing to keep
+    // correct as the layouts here change.
+    //
+    // Cleared as soon as it is recorded, so a request costs exactly one frame
+    // and a caller that stops asking stops paying.
+    void request_dump(VkBuffer buf, VkDeviceSize layer_bytes) {
+        std::lock_guard<std::mutex> lock(mu_);
+        dump_buf_ = buf;
+        dump_layer_bytes_ = layer_bytes;
     }
 
     bool ready() const { return device_ && fns_.complete(); }
@@ -318,6 +341,23 @@ public:
             fns_.CmdCopyImage(cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                               c.images[image],
                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2, region);
+            // Task #29: the finished eye image, every layer, while it is still
+            // in TRANSFER_SRC. This is the frame as X4 left it -- after every
+            // present pass, so after the UI and anything drawn over it, which
+            // is exactly what the end-of-render-pass probe cannot see.
+            if (dump_buf_ != VK_NULL_HANDLE) {
+                const uint32_t n = c.eye_layers > 2 ? 2 : c.eye_layers;
+                VkBufferImageCopy r[2]{};
+                for (uint32_t l = 0; l < n; l++) {
+                    r[l].bufferOffset = dump_layer_bytes_ * l;
+                    r[l].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, l, 1};
+                    r[l].imageExtent = {c.eye.width, c.eye.height, 1};
+                }
+                fns_.CmdCopyImageToBuffer(
+                    cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dump_buf_, n,
+                    r);
+                dump_buf_ = VK_NULL_HANDLE;
+            }
             b[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             b[0].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
             b[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;

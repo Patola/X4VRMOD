@@ -5537,6 +5537,16 @@ uint32_t format_bpp(VkFormat f) {
 // what "22% of texels differ" can only circle: whether layer 1 is the same
 // scene lit differently, a subset of the passes, or something unrelated.
 const char *g_mv_dump = getenv("X4VR_MV_DUMP");
+// X4VR_MV_DUMP_PRESENT=N — write the finished eye image every N presents.
+// Distinct from X4VR_MV_DUMP_IMG, which names images to catch at end-of-pass
+// and therefore cannot see anything drawn by a later pass into the same image.
+const uint64_t g_dump_present_every = [] {
+    const char *e = getenv("X4VR_MV_DUMP_PRESENT");
+    if (!e || !*e)
+        return (uint64_t)0;
+    const long long n = atoll(e);
+    return n > 0 ? (uint64_t)n : (uint64_t)0;
+}();
 
 float half_to_float(uint16_t h) {
     const uint32_t s = (h >> 15) & 1;
@@ -6213,6 +6223,46 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     }
     if (g_mv_probe && g_mv && g_active)
         probe_collect(d, queue);
+
+    // Task #29: the finished eye image.
+    //
+    // The end-of-render-pass probe cannot produce this. It fires after the
+    // *first* pass that writes a given image, and the eye image is written by
+    // several present passes (P76: rp #0/#1/#4/#7/#10), so what it captures is
+    // the frame before the UI -- and the cursor, the HUD and the logo are all
+    // drawn after that. Every question about them was unanswerable from a dump.
+    //
+    // Here the frame is complete: X4 has submitted everything and is asking for
+    // it to be shown. The copy is recorded by the compositor, which already
+    // owns the only correct transition of this image.
+    VkDeviceSize dump_layer_bytes = 0;
+    uint32_t dump_layers = 0, dump_w = 0, dump_h = 0;
+    bool dump_bgra = false;
+    if (g_dump_present_every && g_active && pi->swapchainCount == 1) {
+        static uint64_t presents = 0;
+        if (presents++ % g_dump_present_every == 0) {
+            x4vr::SbsCompositor::EyeInfo ei;
+            if (g_sbs.eye_info(pi->pSwapchains[0], &ei)) {
+                const uint32_t bpp = format_bpp(ei.format);
+                if (bpp) {
+                    const VkDeviceSize per =
+                        (VkDeviceSize)ei.extent.width * ei.extent.height * bpp;
+                    const uint32_t n = ei.layers > 2 ? 2 : ei.layers;
+                    std::lock_guard<std::mutex> lock(g_probe_mu);
+                    if (probe_buffer_ready(d, d->device, per * n)) {
+                        g_sbs.request_dump(g_probe.buf, per);
+                        dump_layer_bytes = per;
+                        dump_layers = n;
+                        dump_w = ei.extent.width;
+                        dump_h = ei.extent.height;
+                        dump_bgra = ei.format == VK_FORMAT_B8G8R8A8_UNORM ||
+                                    ei.format == VK_FORMAT_B8G8R8A8_SRGB;
+                    }
+                }
+            }
+        }
+    }
+
     // One swapchain is all X4 presents; anything else is not a case we have
     // seen, so leave it alone rather than guess which image is the eye pair.
     VkSemaphore composited = VK_NULL_HANDLE;
@@ -6245,6 +6295,32 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
         r = d->QueuePresentKHR(queue, &sbs_pi);
     } else {
         r = d->QueuePresentKHR(queue, pi);
+    }
+
+    // Read it back after the present has been chained down, so the wait costs
+    // the frame that was going to be shown anyway rather than one the game is
+    // still building. Idling is acceptable here for the same reason it is in
+    // probe_collect: this runs only when asked for, and a diagnostic run is not
+    // a performance measurement.
+    if (dump_layers && d->QueueWaitIdle) {
+        d->QueueWaitIdle(queue);
+        std::lock_guard<std::mutex> lock(g_probe_mu);
+        if (g_probe.ptr) {
+            static uint64_t seq = 0;
+            const uint64_t n = seq++;
+            for (uint32_t l = 0; l < dump_layers; l++) {
+                char path[512];
+                snprintf(path, sizeof(path), "%s-present-n%llu-layer%u.ppm",
+                         g_mv_dump ? g_mv_dump : "/tmp/x4vr",
+                         (unsigned long long)n, l);
+                write_ppm8(path,
+                           (const uint8_t *)g_probe.ptr + dump_layer_bytes * l,
+                           dump_w, dump_h, dump_bgra);
+            }
+            X4VR_LOG("mv dump: present frame %llu — %ux%u, %u layer(s), bgra=%d",
+                     (unsigned long long)n, dump_w, dump_h, dump_layers,
+                     (int)dump_bgra);
+        }
     }
     frame_flush();
     return r;
