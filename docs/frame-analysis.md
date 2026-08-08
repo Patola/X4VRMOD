@@ -11713,3 +11713,58 @@ unchanged here, so at 16:9 the *shear* will be derived from a stale `sx`. That
 does not affect P103 — the question is where the logo's right edge falls, which
 is X4's projection and not ours — but it means take 103 is not a candidate for a
 known-good state, and any per-eye offset measured in it is the wrong size.
+
+## Take 103 — P103 CONFIRMED. The clipped logo was the aspect ratio
+
+`split on`, `X4VR_RES=1408x792`, and the eye dumps are 1408×792. Measured on
+`n10`, not taken from a description:
+
+    take 97  (1:1)   bright logo content reaches column 1407 of 1407
+                     28 lit rows in the final column        -> cut by the frame
+    take 103 (16:9)  bright logo content reaches column 1265 of 1407
+                     0 lit rows in the final column         -> whole, with margin
+
+**Task #21 is resolved, and it was never a regression.** No code change was
+involved in fixing it — only the aspect X4 was asked to render. The take-33
+baseline it was framed against was never recorded, so "the same resolution with
+a whole logo" had no evidence behind it; what changed between those takes was
+the arrival of the SBS split, which asks X4 for a square eye. A square frame has
+a much narrower horizontal field than the 16:9 the menu was laid out for, and the
+logo sits at the right of that scene.
+
+So **#21 was #24 wearing a different hat**, exactly as predicted. It closes as a
+consequence of the eye aspect, and anything that widens the field — which is
+#24's job — removes it. What was ruled out along the way is worth keeping: the
+shear does reach the logo, at **1.5 px per eye**, correctly signed, and roughly
+fifty times too small to be the cause.
+
+### What I could not measure, and the instrument that will
+
+I tried to extract X4's FOV policy — whether it holds the vertical field and
+narrows the horizontal (`vert-`), or the reverse — by matching the logo between
+the two takes. It did not converge. Three estimates that must all be the same
+number if the difference is a scale about the centre:
+
+    glyph ndc width ratio    0.869
+    centroid ndc_x ratio     0.753
+    segmented area ratio     0.520   (should be the product of the two scales)
+
+They disagree, so the segmentation is not isolating the same object in both
+frames — the planet shares the logo's hue, and a brightness threshold that
+separates them at one exposure does not at the other. **No number from this is
+quoted anywhere**, because a wrong `sx` would propagate straight into the shear.
+
+The right instrument already exists and needs no photogrammetry:
+`X4VR_DUMP_MATRICES=1` makes the layer read X4's own camera block and log
+
+    proj MEASURED: sx=... sy=... near=... (jittered sx=... near=...)
+
+which is X4's projection exactly, not an inference from pixels. Two short runs
+with it — one at `X4VR_H=1408`, one at `X4VR_H=792`, nothing else changed —
+answer the FOV-policy question outright and give #24 its starting numbers.
+Neither take 97 nor take 103 set it, which is why the four `proj` lines in those
+logs are all about invproj.
+
+That is #24's opening move, and it should be taken before any code: the current
+`X4VR_PROJ_SX=1.3333` is a value measured at a 1:1 eye and passed as a constant,
+so at any other aspect the shear is derived from a stale number.
