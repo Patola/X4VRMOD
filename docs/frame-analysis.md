@@ -10848,3 +10848,49 @@ This unblocks:
 * **#21** — the clipped logo, drawn by the UI passes and therefore invisible to
   the old probe.
 * **#30** — anything about where the UI sits once it is on its own canvas.
+
+## Take 93 — #29 works, and it is not yet enough to answer #17
+
+`X4VR_MV_DUMP_PRESENT=600` produced 19 frame pairs at `1408x1408, 2 layer(s),
+bgra=1`. The frames contain the **whole UI** — the map, the top bar, the side
+icon columns, station labels, the bottom bar. That is the thing the
+end-of-render-pass probe could never show, and #29 is done: this is genuinely
+the frame X4 asked to have presented.
+
+Layer statistics behave as they should: the layers differ by ~8.5% of pixels in
+map frames, which is the 3D content moving between the eyes while the mono UI
+stays identical.
+
+**It does not answer whether the cursor is in the eye image**, and the reason is
+worth recording rather than retrying:
+
+* a **temporal diff** cannot isolate it — 12.1% of pixels change between
+  consecutive frames of the map, from ships, trade lines and animation, so a
+  jiggled cursor is far inside the noise;
+* a **colour search** cannot isolate it — Patola describes the cursor as a small
+  blue hollow cross, and the map is blue everywhere;
+* a **layer diff** cannot isolate it — if X4 drew it, it would be mono UI and
+  therefore identical in both layers, which is indistinguishable from absent.
+
+All three failures share one cause: **the dump records what the frame contained
+but not where the pointer was when it was taken.** With a position, this is a
+lookup at one coordinate and settled forever; without one, it is a search for a
+small shape in a busy blue picture, which is the kind of measurement this project
+has repeatedly got wrong.
+
+Also observed, and relevant to #17: **the cursor stops being drawn after a few
+seconds without movement.** Whatever draws it has an idle-hide policy, so a shim
+that composites its own cursor has to reproduce or deliberately override that,
+and a dump taken during an idle period contains no cursor *by design* — a second
+way to read a real absence as evidence.
+
+### What this makes next
+
+The pointer position lives in the injector (`SDL_GetMouseState`) and the dump
+lives in the layer. Pairing them is the **injector-to-layer shared-memory
+channel** that DESIGN.md has specified since the start and that has never been
+written — and it is required by #17 anyway, since drawing a cursor into the eye
+image needs that same position on that same side.
+
+So the channel is not a detour to answer this question; it is #17's first step,
+and answering this question is a free consequence of taking it.
