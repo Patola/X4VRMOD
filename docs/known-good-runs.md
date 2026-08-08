@@ -212,6 +212,45 @@ signal, not an oversight.
 
 The invproj check from `stage2-stereo-shading-correct` still applies unchanged.
 
+## `stage4-ui-canvas` — takes 98, 99 and 100
+
+Everything `stage3-cursor-in-eye` had, plus the UI on a floating canvas at a
+chosen distance instead of pinned at infinity. The knob is **off by default**;
+this state is the one it produces when asked for.
+
+    X4VR_TAKE=100-AIM X4VR_CANVAS_M=2 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1
+    X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1
+    X4VR_SBS_LAYERS=2 X4VR_PROJ_SX=1.3333 X4VR_MV=1 X4VR_PROJ_LIVE=1
+    X4VR_SBS=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1
+    X4VR_MV_INVENTORY=1 X4VR_LOG=/tmp/x4vr-take100.log
+    ./launch/x4vr-launch.sh
+
+**What to check in the log:**
+
+    canvas: 2.000 m -> s=0.02133 NDC (L=+s R=-s), 15.0 px per eye
+    canvas final: N variant(s) built, 0 REFUSED, swapped into 18 pipeline stage(s)
+    cursor: ... canvas shift 0.02133 NDC (15.0 px per eye)
+
+**The swap count is the line to read, and 0 is the failure that looks like
+success.** Variants built with nothing bound reproduces the pre-canvas frame
+exactly, so a run that "looks like take 96" is either a working canvas or an
+absent one and only this number tells them apart. `N` is the number of World
+modules X4 happened to compile — 340, 346 and 348 across the three takes, all
+near the 320 the offline sweep over the dumps predicted.
+
+The cursor's shift must equal the canvas's. They are set from one variable, so a
+mismatch means the overlay read it before it was published — and the symptom
+would be a pointer a fixed distance from every button it activates, in a run
+where both features report success.
+
+**This is an interaction-safe configuration.** No `X4VR_MV_PROBE`, no
+`X4VR_MV_DUMP`, no `X4VR_MV_DUMP_PRESENT`: each of those drains the GPU queue,
+and take 99 stuttered on the probe's 4.87 s period badly enough that aiming at a
+target was impractical. Add them only to a take whose evidence is a dump.
+
+The invproj and `into 2 layer(s)` checks from the two stages below still apply
+unchanged.
+
 ## Decision, 2026-08-08 — the cursor knobs default on, and hiding gates on intent
 
 `X4VR_CURSOR` and `X4VR_HIDE_CURSOR` are **both on by default** as of this date,
