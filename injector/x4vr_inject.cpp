@@ -443,6 +443,37 @@ void note_mouse_event(const Sdl3MouseEvent *e) {
     // the same shape as the bindless counter that sat under the gate removing
     // its own population, and the reason take 88 measured a maximum of 17.
     note_extent(is_motion ? "motion" : "button", e->x, e->y);
+
+    // Is the pointer *confined* to X4's surface, or does it simply leave and
+    // stop being reported? Task #31 assumed the former and never tested it, and
+    // the answer decides what that task is: defeating a confinement, or moving
+    // a surface.
+    //
+    // The two differ observably. If something pins the pointer to the surface,
+    // pushing past the edge keeps delivering motion with non-zero xrel while x
+    // stays at the wall -- you are pushing against something. If instead the
+    // pointer is free and Wayland just stops sending events once it is off the
+    // surface, motion ceases entirely and x freezes because nothing updates it.
+    //
+    // Raw SDL values: the fold is applied by the callers *after* this runs.
+    if (is_motion) {
+        const int w = g_x4_win_w.load(std::memory_order_relaxed);
+        if (w > 1) {
+            const bool at_wall = e->x <= 0.5f || e->x >= (float)(w - 1) - 0.5f;
+            static int pins = 0, frees = 0;
+            if (at_wall && fabsf(e->xrel) > 0.5f && pins < 8) {
+                pins++;
+                X4VR_LOG("sdl: wall push #%d — x=%.0f pinned, xrel=%.1f still "
+                         "arriving: the pointer is CONFINED",
+                         pins, e->x, e->xrel);
+            } else if (!at_wall && frees < 1) {
+                frees++;
+                X4VR_LOG("sdl: motion away from the walls (x=%.0f) — the probe "
+                         "is live, so a later absence of wall pushes is real",
+                         e->x);
+            }
+        }
+    }
     if (is_motion && motions >= 8)
         return;
     if (!is_motion && buttons >= 6)

@@ -10650,3 +10650,37 @@ flatscreen bring-up ergonomic.** In an HMD there is no 2D pointer over a
 side-by-side image at all, so none of this is the eventual VR input path. It is
 worth having because the whole project is driven from this view, and worth not
 over-fitting to — a warning this document issued at take 30 and should keep.
+
+## P95 — is the pointer confined to X4's surface, or merely unheard outside it?
+
+Task #31 rests on a claim this document has asserted twice and never tested:
+that gamescope confines the pointer to X4's 1408-wide surface, and that the
+`704…2112` box is that confinement. It is consistent with the left stop at 1/4,
+but so is a completely different mechanism, and the two lead to different fixes.
+
+| | what happens at the edge | what #31 becomes |
+|---|---|---|
+| **confined** | something pins the pointer to the surface | defeat or relocate a confinement |
+| **unheard** | the pointer leaves freely; Wayland stops delivering events to a client the pointer is no longer over, so `x` freezes because nothing updates it | move the surface; there is nothing to defeat |
+
+They are distinguishable at the wall:
+
+* **confined** — pushing past the edge keeps delivering motion events with
+  non-zero `xrel` while `x` sits at 0 or 1407. You are pushing against something.
+* **unheard** — motion events stop entirely for as long as the pointer is
+  outside, and resume when it returns.
+
+`note_mouse_event` now logs the first eight *wall pushes* — a motion event whose
+`x` is at either wall while `xrel` is non-zero — on raw SDL values, before the
+fold is applied. It also logs once when motion arrives away from the walls, so
+that an absence of wall pushes is evidence rather than an untested probe: this
+project has read four silent instruments as measurements and will not read a
+fifth.
+
+**P95: pushing the pointer hard into the left and right edges produces `wall
+push` lines.** If they appear, the pointer is confined and #31 must relocate or
+defeat that confinement. If none appear while the "away from the walls" line
+does, the pointer is free and simply unheard off-surface, and #31 is purely a
+question of where X4's surface sits — which is a considerably easier fix, and
+would also explain why gamescope's own pointer sails off to the right while X4's
+freezes.
