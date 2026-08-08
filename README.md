@@ -102,7 +102,9 @@ preload environment. It also works as a Steam launch-option wrapper:
 
 Useful switches: `X4VR_NO_LAYER=1`, `X4VR_NO_INJECT=1`, `X4VR_NO_CONFIG=1`
 (bisect a problem), `X4VR_X11=1` (force the SDL X11 path),
-`X4VR_CLIP_SHIFT=<x>` (clip-space test shift), `X4VR_DUMP_MATRICES=1`.
+`X4VR_CLIP_SHIFT=<x>` (clip-space test shift), `X4VR_DUMP_MATRICES=1`,
+`X4VR_FOV=<decimal>` (serve X4's `<fov>` from the profile — the field of view is
+a config setting, so widening it needs no projection patch).
 
 ## Repository layout
 

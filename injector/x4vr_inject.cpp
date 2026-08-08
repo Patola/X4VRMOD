@@ -135,6 +135,15 @@ FILE *open_patched_config(const char *path) {
         ::close(fd);
         return nullptr;
     }
+    // Stated on every run, overridden or not: this is what X4 will build its
+    // projection from, and a log that omits it cannot reproduce its own run.
+    // See get_tag() for why the un-overridden case is the dangerous one.
+    X4VR_LOG("config: effective fov=%s res=%sx%s (%s)",
+             x4vr::get_tag(xml, "fov").c_str(),
+             x4vr::get_tag(xml, "res_width").c_str(),
+             x4vr::get_tag(xml, "res_height").c_str(),
+             getenv("X4VR_FOV") ? "fov from X4VR_FOV"
+                                : "fov from the profile, not this run");
     X4VR_LOG("config: serving %s in memory (%zu bytes, %d overrides applied); "
              "your %s is not touched",
              prof.path.c_str(), xml.size(), changed, path);

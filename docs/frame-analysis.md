@@ -11846,3 +11846,167 @@ to 1.778:
 Whichever it is, `sy` from the same line gives the vertical field for free, and
 `near` is the third term `make_eye_shear` needs. Predict which before reading the
 logs, and write the prediction down first.
+
+## Task #24 — the handoff above was wrong twice, and X4 has a `<fov>` tag
+
+Written before take 104, which is the run this section specifies.
+
+### Retracting run A
+
+The section above asks for a run at a 1:1 eye with `X4VR_DUMP_MATRICES=1`,
+"load a save then zoom through the full range", to establish `sx₁` and to answer
+#23. **Both halves of that were already on disk when it was written.** Ten logs
+in `/tmp` carry `proj MEASURED`, and every one of them reads
+
+    proj MEASURED: sx=1.33333 sy=-1.33333 near=0.10000
+
+at `X4VR_RES=1408x1408` — takes 52, 53, 54, 55, 56, 57, 58, 59, 60 and 66. And
+take 54 already swept the zoom: `score_run.py` now reports its range as
+`1.00000..37.75372 (37.8x)`. Asking for run A would have spent a take
+re-measuring a number ten takes agree on.
+
+This is the failure mode the project keeps hitting from the other side. The rule
+has been "do not spend a run on what a dump can answer offline"; the same rule
+says do not spend a run on what a **previous run already answered**, and the
+check costs one `grep` across `/tmp`. It is now the first step of every run
+recipe here.
+
+### Retracting the reading key
+
+The three outcomes listed above have their consequences inverted. With
+`aspect = W/H` and the standard perspective matrix, `sy = sx·aspect`, so at a
+*wider* frame:
+
+* `sx₂ ≈ sx₁` means the horizontal field is **held** and the vertical is
+  **cropped** — the ordinary `Vert-`. The section above calls this "grows the
+  vertical", which is the opposite.
+* `sx₂ ≈ sx₁/1.778` means the vertical is held and the horizontal **widens** —
+  `Hor+`. The section above calls this "narrows the horizontal", also the
+  opposite, and then labels it `vert-`.
+
+Recorded rather than edited away, because the error is instructive: it was
+written while reasoning about fields of view in degrees, where "wider frame,
+same vertical" feels like it must narrow something.
+
+### What #24 actually turns on, which is neither of those runs
+
+X4's `config.xml` has a **`<fov>` tag**. Patola's holds `1.1111`. The injector
+already owns every read of that file, so the field of view is a config
+override — the non-intrusive lever the project's design mandates — and not a
+projection patch. That matters beyond convenience: the shear reads
+`M_projection[0][0]` live under `X4VR_PROJ_LIVE`, so a wider field X4 computes
+*itself* flows into the stereo for free, while a projection patched behind X4's
+back would desynchronise its culling, HUD placement and depth range from what
+is drawn.
+
+Added this session, unset by default so every take from 52 to 103 stays
+reproducible:
+
+    X4VR_FOV=<decimal>      serve this as <fov> in the profile
+
+Driven end-to-end against the real `libx4vr_inject.so` before any run: valid
+decimals pass through verbatim, and `0`, `-1`, `abc`, `1.5x`, `1e0`, `1.2.3`,
+`.` and ` 1.5` all fall back to the player's own value. `1e0` is refused on
+purpose — `strtod` accepts it and X4's XML reader may not, and a value X4
+rejects silently leaves the engine on its default while looking like a
+measurement. That is the POM trap, already recorded in `default_overrides()`.
+
+Every log now also carries, override or no override:
+
+    config: effective fov=1.1111 res=1408x1408 (fov from the profile, not this run)
+
+because X4 writes its own settings into the profile as it plays, so a value one
+run sets can be served to the next run that does not set it. A run whose log
+does not state its own field of view cannot be reproduced from its log — the
+same trap `X4VR_PROJ_INVPROJ` sprang on every take before 83.
+
+### The model being tested
+
+From takes 52–66, fitted and recorded earlier in this file as a hypothesis:
+
+    sx = C / max(aspect, 4/3),  sy = sx·aspect,  C = 1.7778 at fov = 1.1111
+
+At a 1:1 eye the clamp binds, so `sx = 0.75·C = 1.3333` — which is what the nine
+takes read. The open question is what `C` does when `<fov>` moves, and the
+candidates differ in *what* the tag scales:
+
+| law | what `<fov>` scales | `C` at fov=1.5 | `sx` at a 1:1 eye | horizontal field |
+|---|---|---|---|---|
+| A | the tangent (`C ∝ 1/fov`) | 1.317 | **0.988** | 90.7° |
+| B | the tangent, inverted | 2.400 | **1.800** | 58.1° |
+| C | the angle (81°·fov at 16:9) | 0.996 | **0.747** | 106.5° |
+| — | a floor on horizontal FOV | 1.778 | **1.333** | 73.7° (unchanged) |
+
+### P104 — committed before take 104
+
+1. **`sx` falls below 1.33333.** Raising `<fov>` from 1.1111 to 1.5 at a 1:1 eye
+   widens X4's horizontal field. Anything in **0.70…1.05** confirms; that spans
+   laws A and C, and distinguishing which is secondary to the direction.
+2. **`|sy| = |sx|` still holds** at a 1:1 eye, to within 0.001. This is the
+   `sy = sx·aspect` leg of the model tested independently of `C`, and it is the
+   check that says the model is the right shape even if the law is wrong.
+3. **`near` stays 0.10000.** `<fov>` is a field of view, not a frustum depth.
+
+**If instead `sx` reads 1.33333 unchanged**, the 4:3 clamp is a floor on the
+horizontal field itself rather than on the aspect, and #24 cannot be solved from
+config alone — the next move is a projection override, and the task gets much
+larger. **If `sx` reads above 1.33333**, the tag runs the other way and no
+further fov run should be launched until the sign is re-derived from that value.
+
+One ambiguity is known in advance and is not a get-out: X4 may clamp the config
+value itself. An `sx` of exactly 1.33333 is consistent both with "the horizontal
+field is floored" and with "X4 refused 1.5". They are separated by a second run
+at `X4VR_FOV=1.2` — a change small enough to be inside any plausible slider
+range. If `sx` moves at 1.2 but not at 1.5, the setting was clamped, not the
+field. Patola can also read the FOV slider in X4's own options menu, and the
+profile after the run records what X4 kept.
+
+### Take 104 — the run
+
+    X4VR_TAKE=104-FOV X4VR_FOV=1.5 X4VR_DUMP_MATRICES=1 X4VR_STEREO=1
+    X4VR_BINDLESS_PATCH=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1
+    X4VR_SBS_LAYERS=2 X4VR_PROJ_SX=1.3333 X4VR_MV=1 X4VR_PROJ_LIVE=1
+    X4VR_SBS=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1
+    X4VR_MV_INVENTORY=1 X4VR_LOG=/tmp/x4vr-take104.log
+    ./launch/x4vr-launch.sh
+
+No `X4VR_W`/`X4VR_H`, so the eye is 1408×1408 and the clamp is in force — the
+aspect an HMD actually has, and the one the ten control takes were measured at.
+
+**No stalling instruments.** `X4VR_MV_PROBE`, `X4VR_MV_DUMP` and
+`X4VR_MV_DUMP_PRESENT` are all unset: `X4VR_DUMP_MATRICES` neither waits on the
+queue nor reads anything back, so this run should be as smooth as take 100.
+
+Sequence, chosen to match take 57's so the two are comparable line for line:
+reach the main menu, load a save, **sit still in the cockpit without touching
+zoom** for a few seconds, then one slow zoom all the way in and back out.
+
+The ten takes above are the control; no control run is needed. What X4 computes
+from a given `(fov, aspect)` is a property of X4, and nothing in this build
+touches its matrices — `X4VR_PROJ_LIVE` only reads them.
+
+**This take is not a known-good candidate.** `X4VR_PROJ_SX=1.3333` is stale by
+construction here, so any per-eye offset in it is the wrong size. It is a
+measurement, and the stereo in it is expected to be wrong.
+
+### Reading it
+
+    python3 tools/score_run.py /tmp/x4vr-take104.log
+
+and nothing else until that says `split on`. The scorer now reports the proj
+block itself, so no hand-picked grep is needed:
+
+    proj  sx=... sy=... near=...
+    proj  aspect |sy/sx| = ...  (candidates: X4VR_RES render extent 1.000)
+    proj  N change(s), sx range ...  over the near=0.100 camera
+
+Two scorer defects were fixed to make that line trustworthy, both found by
+re-scoring logs already on disk:
+
+* It **failed take 103 for not sampling the probe in a run that never enabled
+  the probe** — gating on outcome instead of intent, in the one tool whose job
+  is to be believed. It now says `swapchain unjudged` and names why.
+* The `sx` range blended in samples from a block with a different `near`, which
+  take 54 had already shown is not the main camera. Take 54 read as a 30694×
+  range; it is 37.8× over the real camera, and the excluded samples are now
+  counted and their `near` values printed rather than dropped.

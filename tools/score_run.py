@@ -163,7 +163,22 @@ def main(path):
     if unsettled:
         print(f"swapchain  {unsettled} sample(s) skipped as unsettled "
               f"(< {QUIET_MIN:.0f}s quiet)")
-    if not samples:
+    # Did this run *ask* for the probe? Take 103 scored FAIL on "the probe never
+    # sampled a swapchain image" in a run that never enabled the probe -- so the
+    # acceptance check reported a defect for a question the run did not pose,
+    # which is the fastest way to teach someone to stop reading the scorer.
+    # Gate on intent, never on outcome: the env line records what was asked for.
+    m_probe = re.search(r"X4VR_MV_PROBE=(\S*)", run or "")
+    probe_asked = bool(m_probe and m_probe.group(1) not in ("", "0"))
+    if run is None:  # pre-take-34 build: no env line, so intent is unknowable
+        probe_asked = any("mv probe:" in ln for ln in lines)
+
+    if not samples and not probe_asked:
+        # Explicitly *not* silence, and explicitly not a pass. The right eye is
+        # simply unjudged in this run, and saying so is the whole point.
+        print("swapchain  unjudged — this run did not enable X4VR_MV_PROBE, so "
+              "nothing here speaks to the right eye's contents.")
+    elif not samples:
         # Takes 97 and 98 both failed here while being perfectly healthy, and
         # the advice above ("sit still longer") sent the diagnosis the wrong
         # way. The probe walks the frame's images one at a time, roughly one
@@ -266,6 +281,96 @@ def main(path):
         elif canvas_cfg and not cur:
             print("canvas  (the cursor overlay never drew, so its shift is "
                   "unchecked)")
+
+    # Task #24/#23: X4's own projection, when the run asked to read it.
+    #
+    # The one number this whole task turns on is sx, and it has been quoted from
+    # a screenshot exactly once -- three mutually inconsistent estimates, because
+    # the planet shares the X4 logo's hue. So it is read from X4's matrices or
+    # not at all, and if a run asks for the read and does not get it, that is a
+    # failure rather than a quiet blank.
+    m_dump = re.search(r"X4VR_DUMP_MATRICES=(\S*)", run or "")
+    dump_asked = bool(m_dump and m_dump.group(1) not in ("", "0"))
+
+    meas = re.search(r"proj MEASURED: sx=([\d.eE+-]+) sy=([\d.eE+-]+) "
+                     r"near=([\d.eE+-]+)", text)
+    unreadable = "proj: could not read terms" in text
+    changes = re.findall(r"proj CHANGED\s+#(\d+): sx ([\d.eE+-]+) -> "
+                         r"([\d.eE+-]+)(?:\s+near ([\d.eE+-]+) -> "
+                         r"([\d.eE+-]+))?", text)
+
+    if dump_asked or meas or unreadable:
+        if unreadable:
+            fails.append("X4's projection could not be read from "
+                         "M_projectionUJ — the storage order was undetermined "
+                         "or the block was unpopulated, and every sx below "
+                         "would be a guess")
+        elif not meas:
+            fails.append("X4VR_DUMP_MATRICES was set but no 'proj MEASURED' "
+                         "line appeared — the camera block was never credited "
+                         "(needs 50+ draws through one block), so this run "
+                         "measured nothing. Reach an actual scene, not the "
+                         "splash")
+        else:
+            sx, sy, near = (float(g) for g in meas.groups())
+            print(f"proj  sx={sx:.5f} sy={sy:.5f} near={near:.5f}")
+
+            # Which extent did X4 build its projection from? |sy/sx| is the
+            # aspect X4 used, and the run states the two candidates it could
+            # have come from. This is task #31's question answered for free:
+            # the render extent and the window are different rectangles here.
+            if sx:
+                got = abs(sy / sx)
+                cands = []
+                mr = re.search(r"X4VR_RES=(\d+)x(\d+)", run or "")
+                if mr:
+                    cands.append(("X4VR_RES render extent",
+                                  int(mr.group(1)) / int(mr.group(2))))
+                mw = re.search(r"X4VR_W=(\d+)", run or "")
+                mh = re.search(r"X4VR_H=(\d+)", run or "")
+                if mw and mh:
+                    cands.append(("X4VR_W/H window",
+                                  int(mw.group(1)) / int(mh.group(1))))
+                hit = [n for n, a in cands if abs(a - got) < 0.01]
+                desc = ", ".join(f"{n} {a:.3f}" for n, a in cands) or "none"
+                print(f"proj  aspect |sy/sx| = {got:.3f}  (candidates: {desc})")
+                if cands and not hit:
+                    print("warn  X4's aspect matches neither extent this run "
+                          "asked for — it sized its projection from something "
+                          "else, and the shear derives from that number.")
+                elif hit:
+                    print(f"proj  X4 sized its projection from the "
+                          f"{hit[0]}.")
+
+            # A constant sx is only viable if sx never moves. Take 54 already
+            # showed a 33x range under zoom; this reports the range actually
+            # seen, so a run that never moved the camera cannot be mistaken for
+            # evidence that sx is stable.
+            if changes:
+                # Take 54 recorded two samples with near=0.621 and sx≈0.001:
+                # the layer's "most-drawn block wins" heuristic sometimes
+                # credits a block that is not the camera the geometry drew
+                # through. Blending those into the range turns a 3x zoom into a
+                # 30000x one. They are separated, not dropped -- a silent filter
+                # here would hide exactly the mis-credit that motivated moving
+                # the shear into the shader.
+                main = [float(to) for _, _, to, _, nto in changes
+                        if nto is None or abs(float(nto) - near) < 1e-3]
+                other = [(float(to), float(nto)) for _, _, to, _, nto in changes
+                         if nto is not None and abs(float(nto) - near) >= 1e-3]
+                vals = main + [sx]
+                print(f"proj  {len(changes)} change(s), sx range "
+                      f"{min(vals):.5f}..{max(vals):.5f} "
+                      f"({max(vals) / min(vals):.1f}x) over the near={near:.3f} "
+                      f"camera")
+                if other:
+                    nears = sorted({f"{n:.3f}" for _, n in other})
+                    print(f"note  {len(other)} change(s) came from a block with "
+                          f"a different near ({', '.join(nears)}) and are "
+                          f"excluded above — not the main camera (see take 54)")
+            else:
+                print("proj  sx never changed during this run (no zoom, or the "
+                      "camera never moved through one)")
 
     print()
     if fails:
