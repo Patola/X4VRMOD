@@ -11768,3 +11768,81 @@ logs are all about invproj.
 That is #24's opening move, and it should be taken before any code: the current
 `X4VR_PROJ_SX=1.3333` is a value measured at a 1:1 eye and passed as a constant,
 so at any other aspect the shear is derived from a stale number.
+
+## Next: task #24, from a clean slate
+
+Everything below is the whole handoff. It needs no context from the session that
+wrote it.
+
+**Where things stand.** `stage4-ui-canvas` is the current known-good state: correct
+stereo, a pointer in the frame, and the UI on a canvas at `X4VR_CANVAS_M` metres
+(off by default). #21 closed as a consequence of the eye aspect and #30's first
+stage is done. Open: #23, #24, #25, #31, #32, #33.
+
+**The one thing that must be measured before any code is written for #24.**
+`X4VR_PROJ_SX=1.3333` is a constant, measured once at a 1:1 eye and passed on
+every run since. It is the `sx` the eye shear is derived from. At any other
+aspect, and at any zoom, it is stale — which is #24 and #23 respectively, and
+they are the same defect seen through two different knobs.
+
+`X4VR_DUMP_MATRICES=1` already makes the layer read X4's own camera block and log
+
+    proj MEASURED: sx=... sy=... near=... (jittered sx=... near=...)
+
+with a fresh line whenever `sx` or `near` moves, and `proj STEADY` when they do
+not. That is X4's projection exactly. **Do not infer it from screenshots** — the
+attempt recorded above gave three mutually inconsistent estimates because the
+planet shares the logo's hue.
+
+### Run A — the 1:1 eye, and the zoom range for #23
+
+No `X4VR_W`/`X4VR_H`, so the launcher's defaults give a 1408×1408 eye.
+
+    X4VR_TAKE=104-PROJ-1x1 X4VR_DUMP_MATRICES=1 X4VR_STEREO=1
+    X4VR_BINDLESS_PATCH=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1
+    X4VR_SBS_LAYERS=2 X4VR_PROJ_SX=1.3333 X4VR_MV=1 X4VR_PROJ_LIVE=1
+    X4VR_SBS=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1
+    X4VR_MV_INVENTORY=1 X4VR_LOG=/tmp/x4vr-take104.log
+    ./launch/x4vr-launch.sh
+
+Load a save, then **zoom through the full range in the cockpit** and back out.
+Each distinct `sx` prints its own line, so this run answers #23 as well: it says
+whether a constant `sx` can ever be right, and if not, over what range it moves.
+
+### Run B — the 16:9 eye, everything else identical
+
+    X4VR_TAKE=105-PROJ-16x9 X4VR_W=2816 X4VR_H=792 X4VR_DUMP_MATRICES=1
+    ...exactly as run A...  X4VR_LOG=/tmp/x4vr-take105.log
+
+Only the eye aspect differs. Reaching the start menu is enough; no zoom needed.
+
+### Reading them
+
+    python3 tools/score_run.py /tmp/x4vr-take104.log
+    python3 tools/score_run.py /tmp/x4vr-take105.log
+    grep -E "proj (MEASURED|STEADY|ASSUMED)" /tmp/x4vr-take104.log
+    grep -E "proj (MEASURED|STEADY|ASSUMED)" /tmp/x4vr-take105.log
+
+**`score_run.py` first, and if its first line is not `split on` nothing else in
+that run means anything.** Takes 101 and 102 were both spent because the runs
+were handed over with hand-picked greps to check instead of the scorer, and both
+times the line that mattered was one the greps did not include. The scorer prints
+it first, by design.
+
+### The question the two runs answer
+
+With `sx₁` from run A and `sx₂` from run B, and the eye aspect going from 1.000
+to 1.778:
+
+* `sx₂ ≈ sx₁` — X4 holds the horizontal field and grows the vertical. Then a
+  wider HMD field means asking X4 for a *wider frame*, and #21's clipping was
+  the vertical field being cropped rather than the horizontal narrowed.
+* `sx₂ ≈ sx₁/1.778` — X4 holds the vertical field and narrows the horizontal,
+  the ordinary `vert-` policy. Then a wider field is a matter of overriding the
+  projection, not the window.
+* Neither — X4 clamps somewhere, which is what task #24's title has always
+  assumed and what nothing has yet verified.
+
+Whichever it is, `sy` from the same line gives the vertical field for free, and
+`near` is the third term `make_eye_shear` needs. Predict which before reading the
+logs, and write the prediction down first.
