@@ -17,3 +17,6 @@ compile_commands.json
 # captures / scratch
 *.rdc
 *.ppm
+
+# Python leaves these behind whenever a tool is imported rather than run.
+__pycache__/
