@@ -11486,3 +11486,41 @@ that it is a cadence rather than a flag.
 
 This is the third time in three takes that an instrument, not the mod, was what
 made a run hard to read.
+
+## Take 100 — P101 confirmed. The canvas is on, and nothing about aiming changed
+
+    canvas 2.000 m -> s=0.02133 NDC, 15.0 px per eye on a 1408-wide eye
+    canvas final: 340 variant(s) built, 0 REFUSED, swapped into 18 pipeline stage(s)
+    cursor: ... canvas shift 0.02133 NDC (15.0 px per eye)
+
+No `X4VR_MV_PROBE`, no dumps: zero stalling-instrument announcements in the log,
+and Patola reports the framerate was finally smooth. He waited in the cockpit,
+opened the map, clicked elements, changed the 3D perspective, and everything was
+clickable — the cursor highlighting elements *exactly* in the right spot, with no
+offset and no leeway.
+
+**P101 CONFIRMED.**
+
+### Why "it looked exactly like take 96" is the result and not a null
+
+Take 96 had no canvas at all, so a run that quietly failed to engage one would
+have looked *identical* — and this file has been caught by that shape before.
+The log is what separates them: **18 pipeline stages took a canvas variant.**
+The UI in this take was displaced 15 px per eye in opposite directions, and the
+reason it was indistinguishable from take 96 in use is that the pointer was
+displaced with it. That is the entire design working, not the absence of one.
+
+The check that could have failed silently was already answered in the log —
+`canvas shift 0.02133` on the cursor line against `s=0.02133` on the canvas line
+— and take 100 is the human confirmation that the two agreeing on paper means a
+hitbox lands in practice.
+
+### A clarification, because the question was badly asked
+
+"Whether the pointer sits on the button" was unclear phrasing and Patola said so.
+What it meant: the drawn cursor is a bitmap **we** composite at a position **we**
+choose, while X4 decides what is highlighted with its own CPU-side hit test at a
+position we do not control. If the two disagreed, the highlight would land on a
+neighbouring element while the arrow pointed somewhere else — both mechanisms
+working exactly as written, and the result unusable. "Highlights elements exactly
+in the right spot" is precisely the observation that rules it out.
