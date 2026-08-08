@@ -2398,13 +2398,20 @@ void canvas_report(const char *when) {
         std::lock_guard<std::mutex> lock(g_variants.mu);
         swapped = g_variants.canvas_swapped;
     }
+    // The "nothing drew" clause is a *final* verdict only. At first present X4
+    // has typically compiled no UI shaders yet -- take 98 reported 0 built and
+    // 0 swapped there and 348/18 at teardown -- so raising the alarm that
+    // early cries wolf on every healthy run, which is how a real alarm stops
+    // being read.
+    const bool final = strstr(when, "final") != nullptr;
     X4VR_LOG("canvas %s: %llu variant(s) built, %llu REFUSED, swapped into "
              "%llu pipeline stage(s)%s",
              when, (unsigned long long)g_canvas_built.load(),
              (unsigned long long)g_canvas_refused.load(),
              (unsigned long long)swapped,
-             swapped ? ""
-                     : " — NOTHING DREW ON THE CANVAS; the UI is still mono");
+             (final && !swapped)
+                 ? " — NOTHING DREW ON THE CANVAS; the UI is still mono"
+                 : "");
 }
 
 // Reported separately from mv_report, and *not* gated on g_mv.
@@ -6486,6 +6493,20 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     uint32_t dump_layers = 0, dump_w = 0, dump_h = 0;
     bool dump_bgra = false;
     if (g_dump_present_every && g_active && pi->swapchainCount == 1) {
+        // Said once, loudly, because this knob reads like a boolean and is a
+        // cadence. Take 98 was run with =1 and dumped every frame: a ~12 MB
+        // readback plus a full pipeline stall per present took the game to
+        // about 1 fps, which made the run almost impossible to interact with
+        // and cost the interaction half of what it was measuring. The number
+        // is the cost, so the log states it in the units that hurt.
+        static bool said = false;
+        if (!said) {
+            said = true;
+            X4VR_LOG("mv dump: writing the eye image every %llu present(s) — "
+                     "at 1 this is a full readback and stall on EVERY frame "
+                     "(~1 fps). Use a few hundred unless you need every frame.",
+                     (unsigned long long)g_dump_present_every);
+        }
         static uint64_t presents = 0;
         if (presents++ % g_dump_present_every == 0) {
             x4vr::SbsCompositor::EyeInfo ei;

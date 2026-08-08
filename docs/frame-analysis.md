@@ -11355,3 +11355,84 @@ Scored with:
 `-30` is twice the per-eye 15 px, because layer 0 was given `+s` and layer 1
 `-s`. Take 97 must read **NO CANVAS** and take 98 **CANVAS**; the pair is the
 measurement, and either one alone is not.
+
+## Takes 97 and 98 — P100 and P102 confirmed; P101 untested, and two wrong turns
+
+The canvas works. `tools/canvas_shift_map.py` over the eye dumps, take 98
+against take 97 as the control, at the predicted `-30` px:
+
+    CANVAS run  (t98)          CONTROL run  (t97)
+      frame  blocks at 0 at -30      frame  blocks at 0 at -30
+        150     249    0    248        150     111   89      1
+        180     250    0    248        180     284  280      0
+        210      67    8     26        210     286  282      0
+        220      56    7     18        240      64   31      2
+
+    peak at -30 px: canvas 99.6%, control 3.1%   -> VERDICT: CANVAS
+
+- **P100 CONFIRMED.** The UI translated as a rigid whole by exactly the
+  predicted 30 px. Frames 150 and 180 are the map, and there **248 of 249
+  blocks moved together** — which is not a whole-frame shift but confirmation
+  of something this file recorded long ago and had not connected to #30: *the
+  map is drawn by the UI pass*. When the map is up, almost every pixel is
+  canvas, so almost every pixel moves. Frames 210 and 220 are the mixed view,
+  where a third of the blocks sit at exactly `-30` and the rest carry the
+  world's own depth-dependent parallax. That mixture is the real check: a
+  sharp spike at the canvas distance, and the world unchanged beside it.
+- **P102 CONFIRMED.** The control put 280 of 284 blocks at zero and none at
+  `-30`. With `X4VR_CANVAS_M` unset, the frame is the pre-canvas frame.
+- **P101 NOT TESTED.** See below — the run was unusable at ~1 fps, so
+  hit-testing was never exercised. It is not confirmed and is not being
+  claimed.
+
+The log agrees: `canvas: 2.000 m -> s=0.02133 NDC`, `348 variant(s) built,
+0 REFUSED, swapped into 18 pipeline stage(s)`. 348 against the 320 the offline
+sweep predicted, and 18 stages is about 9 pipelines — X4 ships combined modules,
+so a swapped module counts twice per pipeline.
+
+### Wrong turn 1: `X4VR_MV_DUMP_PRESENT=1` means every frame, not "on"
+
+It is a **cadence**, not a boolean, and the recipe in this file asked for `=1`.
+That is a ~12 MB readback and a full pipeline stall on every present: the dump
+timestamps are 1.00, 1.03 and 1.01 s apart, so the game ran at about **1 fps**.
+Patola could barely reach the map, and anything more involved — docking,
+talking to an NPC — would not have been possible at all.
+
+Nothing about the canvas caused it and no measurement above is affected; the
+dumps are real frames. What it did cost is P101, which needed interaction.
+
+The knob now says so on the first dump, in the units that hurt. Copying `=1`
+out of take 94's env line without asking what the number meant is the same
+mistake as reading a list positionally: the value looked like a flag.
+
+### Wrong turn 2: the shift map's verdict rule, refuted by its own control
+
+`canvas_shift_map.py` shipped with the rule "more blocks at intermediate shifts
+than at the expected one means the UI was sheared rather than translated", and
+the prediction that a healthy frame shows "nothing in between". Run on take 97
+it returned **SHEARED — the UI took K_world** for a run that had no canvas at
+all and therefore nothing that could have been sheared.
+
+The intermediate population is the world's own parallax. Near geometry
+legitimately occupies every shift between 0 and the canvas distance, and in a
+cockpit frame it outnumbers the UI — 29 of 64 blocks in the control. The rule
+was written from a picture of the frame nobody had measured, and it would have
+reported a defect in a working canvas run just as readily.
+
+The control caught it, which is the entire reason the pair was run rather than
+take 98 alone. The tool now **refuses to give a verdict without a control** and
+judges on the contrast between the two runs. Both directions are self-checked:
+scoring the control against itself reads NO CANVAS, and scoring the two the
+wrong way round reads NOT ATTRIBUTABLE.
+
+### The scorer's FAIL was a missing instrument, not a defect
+
+Both takes failed on `no settled probe samples for the swapchain`, and the
+advice attached to it — *sit still longer* — was wrong. The probe walks the
+frame's images one at a time, about one every 30 s; in a 277 s run it reached
+eight, none of them the swapchain. Sitting still cannot help. The message now
+says which it is and points at the present dumps, which answer the same
+question directly and better. It is still a FAIL: no evidence is no evidence.
+
+Stereo was healthy where the probe did land — `img #63 DIFFER 20.36%`,
+`img #57 DIFFER 33.16%`, both with `l1/l0 ~ 1.00`.

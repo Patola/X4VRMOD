@@ -1,36 +1,40 @@
 #!/usr/bin/env python3
-"""Did the UI move by the canvas disparity, and did nothing else move?
+"""Did the UI move by the canvas disparity, and did the run without one not?
 
-Usage:  tools/canvas_shift_map.py <layer0.ppm> <layer1.ppm> [expected_px]
+Usage:
+    tools/canvas_shift_map.py <canvas-prefix> <expected_px> [control-prefix] [frames...]
 
-Written BEFORE the take that produces its input, so nothing here can be tuned
-to the answer. It tests P100: with X4VR_CANVAS_M set, the UI moves as a rigid
-whole and the rest of the frame does not.
+    tools/canvas_shift_map.py /tmp/x4vr-t98-present -30 /tmp/x4vr-t97-present
+
+A prefix is everything before `-nN-layerL.ppm`. `expected_px` is TWICE the
+per-eye shift the log reports, because layer 0 was given +s and layer 1 -s.
+
+Tests P100: with X4VR_CANVAS_M set, the UI moves as a rigid whole and the run
+without a canvas does not.
 
 The measurement is blockwise and reports the whole distribution, never a mean.
 Two of this project's metrics have already reported "no defect" on frames that
 were visibly wrong -- a 2.4x per-eye shading error survived two aggregates --
-and a mean over this frame would be the same mistake a third time: the UI is a
-small fraction of the pixels, so the correct answer (a large shift on a few
-blocks, zero on most) and total failure (zero everywhere) have nearly the same
-average.
+and a mean over this frame would be the same mistake a third time: outside the
+map the UI is a small fraction of the pixels, so the correct answer and total
+failure have nearly the same average.
 
-What a healthy run reads, stated before any run has been scored:
+**The prediction this file first carried was wrong, and take 97 refuted it.**
+It said a healthy frame shows a population at 0 (the world at space distances),
+a population at the expected shift (the UI), and "nothing in between", on the
+grounds that intermediate shifts would mean the UI had been sheared with depth
+instead of translated. Take 97 -- the control, with no canvas at all and
+therefore nothing that could have been sheared -- shows 29 of 64 blocks at
+intermediate shifts. That population is the *world's own parallax*: near
+geometry legitimately occupies every shift between 0 and the canvas distance,
+and in a cockpit frame it outnumbers the UI. The first verdict rule read it as
+a defect and returned SHEARED for a run that was working perfectly.
 
-    a peak at 0 px          the world. In space at default IPD the per-eye
-                            offset is 30/z px, so anything past ~30 m is
-                            sub-pixel and lands in the 0 bin.
-    a peak at 2s px         the UI, where s is the per-eye NDC shift the log
-                            reports. Between the two layers the UI moves by
-                            TWICE the per-eye figure: layer 0 got +s and
-                            layer 1 got -s.
-    nothing in between      a spread of intermediate shifts would mean the UI
-                            is being sheared with depth rather than
-                            translated, i.e. it took K_world and not the
-                            canvas.
-
-The failure this is built to catch is the quiet one: every block reads 0,
-which is a frame identical to the pre-canvas one and looks entirely correct.
+So the control is not optional and not merely good practice here -- it is the
+only thing that makes any of these numbers mean anything, and the tool now
+refuses to give a verdict without it. Wrong turn kept rather than edited away,
+because it is the same shape as the aggregates that hid a real defect twice:
+a rule that looks principled, applied to a distribution nobody had measured.
 """
 import sys
 
@@ -96,80 +100,109 @@ def best_shift(ref, tgt, x0, y0, lo, hi):
     return best, best_c
 
 
-def main(argv):
-    if len(argv) < 3:
-        print(__doc__)
-        return 2
-    a, b = gray(load_ppm(argv[1])), gray(load_ppm(argv[2]))
+def frame_shifts(prefix, n, span):
+    """Per-block x displacements between the two layers of one dumped frame,
+    or None if that frame was not dumped."""
+    try:
+        a = gray(load_ppm(f"{prefix}-n{n}-layer0.ppm"))
+        b = gray(load_ppm(f"{prefix}-n{n}-layer1.ppm"))
+    except (OSError, ValueError):
+        return None
     if a.shape != b.shape:
-        print(f"the two layers differ in size: {a.shape} vs {b.shape}")
-        return 2
-    expected = float(argv[3]) if len(argv) > 3 else None
-
+        return None
     h, w = a.shape
-    # Search wide enough to see a wrong answer, not just the right one. If the
-    # UI took K_world instead of the canvas it could land anywhere, and a
-    # search clamped to the expected value would report "not found" for both
-    # "did not move" and "moved to the wrong place".
-    span = max(64, int(abs(expected) * 3) if expected else 64)
-    shifts, weak, flat = [], 0, 0
+    out = []
     for y0 in range(0, h - BLOCK + 1, BLOCK):
         for x0 in range(span, w - BLOCK - span + 1, BLOCK):
             if a[y0:y0 + BLOCK, x0:x0 + BLOCK].std() < MIN_STD:
-                flat += 1
                 continue
             dx, c = best_shift(a, b, x0, y0, -span, span)
-            if c < MIN_NCC:
-                weak += 1
-                continue
-            shifts.append((dx, c, x0, y0))
+            if c >= MIN_NCC:
+                out.append(dx)
+    return np.array(out)
 
-    print(f"{w}x{h}, {BLOCK}px blocks: {len(shifts)} matched, "
-          f"{weak} below ncc {MIN_NCC}, {flat} too flat to match")
-    if not shifts:
-        print("VERDICT: nothing to measure -- was the frame still loading?")
-        return 1
 
-    dxs = np.array([d for d, _, _, _ in shifts])
-    print("\nshift histogram (px, layer0 -> layer1):")
-    for dx in sorted(set(dxs.tolist())):
-        n = int((dxs == dx).sum())
-        print(f"  {dx:+5d} px  {n:4d} block(s)  {'#' * min(n, 60)}")
+def survey(prefix, frames, expected, span, label):
+    """The at-expected population of each frame of one run."""
+    print(f"\n{label}  ({prefix})")
+    print(f"  {'frame':>7s} {'blocks':>7s} {'at 0':>6s} "
+          f"{'at ' + format(expected, '+.0f'):>8s} {'other':>6s} {'peak':>7s}")
+    peak = 0.0
+    for n in frames:
+        d = frame_shifts(prefix, n, span)
+        if d is None or not len(d):
+            print(f"  {n:>7d}  (not dumped, or nothing matched)")
+            continue
+        z = int((np.abs(d) <= 1).sum())
+        e = int((np.abs(d - expected) <= 1).sum())
+        frac = e / len(d)
+        peak = max(peak, frac)
+        print(f"  {n:>7d} {len(d):7d} {z:6d} {e:8d} {len(d) - z - e:6d} "
+              f"{frac:6.1%}")
+    return peak
 
-    at_zero = int((np.abs(dxs) <= 1).sum())
-    print(f"\n{at_zero}/{len(dxs)} blocks are within 1 px of zero "
-          f"(the world at space distances)")
 
-    if expected is None:
-        print("\nNo expected shift given, so this is a description, not a "
-              "verdict. Pass 2*s in pixels -- twice the per-eye figure the "
-              "log reports, because layer 0 got +s and layer 1 got -s.")
+# How large the at-expected population has to get, in the best frame, before
+# it is a population rather than a few blocks of near geometry that happen to
+# sit at the canvas distance. And how small it must stay in the control.
+#
+# Both are read off the takes that motivated them and are an order of magnitude
+# apart, so neither is a threshold the data was squeezed through: take 98 peaks
+# at 99.6% (the map, which is drawn almost entirely by the UI pass) and take 97
+# at 3.7%.
+CANVAS_MIN = 0.15
+CONTROL_MAX = 0.05
+
+
+def main(argv):
+    # The first version of this tool judged a single frame pair, on the rule
+    # "more blocks at intermediate shifts than at the expected one means the UI
+    # was sheared rather than translated". It reported SHEARED for take 97 --
+    # the control, which had no canvas at all and could not have sheared
+    # anything. The intermediate population is the world's own parallax: near
+    # geometry legitimately occupies every shift between 0 and the canvas
+    # distance, and in a cockpit frame it outnumbers the UI.
+    #
+    # So a verdict needs the control, not a cleverer threshold. The tool now
+    # surveys frames from both runs and judges on the contrast, which is the
+    # comparison the experiment was designed around and which the tool
+    # previously threw away.
+    if len(argv) < 3:
+        print(__doc__)
+        return 2
+    canvas_prefix = argv[1]
+    expected = float(argv[2])
+    control_prefix = argv[3] if len(argv) > 3 else None
+    frames = [int(x) for x in argv[4:]] or [150, 180, 210, 240]
+    # Wider than the expected shift, so "did not move" and "moved somewhere
+    # else" cannot both come back as "not found".
+    span = max(64, int(abs(expected) * 3))
+
+    peak = survey(canvas_prefix, frames, expected, span, "CANVAS run")
+    if control_prefix is None:
+        print("\nNo control given, so this is a description and not a verdict. "
+              "Pass the control run's prefix as the third argument -- a "
+              "population at the expected shift means nothing until the same "
+              "measurement on a run without a canvas is shown not to have one.")
         return 0
+    cpeak = survey(control_prefix, frames, expected, span, "CONTROL run")
 
-    # Tolerance is a pixel, not a percentage: the canvas is a constant offset,
-    # so it either lands where the arithmetic says or the arithmetic is wrong.
-    moved = np.abs(dxs - expected) <= 1.0
-    n_moved = int(moved.sum())
-    between = int(((np.abs(dxs) > 1) & (np.abs(dxs - expected) > 1)).sum())
-    print(f"{n_moved}/{len(dxs)} blocks are within 1 px of the expected "
-          f"{expected:+.1f} px (the canvas)")
-    print(f"{between}/{len(dxs)} blocks are at neither -- these are the ones "
-          f"to look at")
-
+    print(f"\npeak at {expected:+.0f} px: canvas {peak:.1%}, "
+          f"control {cpeak:.1%}")
     print()
-    if n_moved == 0:
+    if cpeak > CONTROL_MAX:
+        print("VERDICT: NOT ATTRIBUTABLE. The control also has a population at "
+              "the canvas distance, so this shift is something the frame does "
+              "on its own and the canvas cannot be credited with it.")
+        return 1
+    if peak < CANVAS_MIN:
         print("VERDICT: NO CANVAS. Nothing moved by the expected amount. If "
               "the log also says variants were built and swapped, the shift "
               "reached the modules but not the pixels.")
         return 1
-    if between > n_moved:
-        print("VERDICT: SHEARED, NOT TRANSLATED. More blocks sit at "
-              "intermediate shifts than at the canvas distance, which is what "
-              "a depth-scaled K looks like -- the UI took K_world.")
-        return 1
-    print("VERDICT: CANVAS. A population at the expected shift and a "
-          "population at zero, with little between: the UI translated as a "
-          "rigid whole and the world did not follow it.")
+    print("VERDICT: CANVAS. A population at the expected shift that the "
+          "control does not have: the UI translated as a rigid whole, by the "
+          "distance asked for, and the run without a canvas did not.")
     return 0
 
 

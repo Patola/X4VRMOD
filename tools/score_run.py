@@ -164,8 +164,22 @@ def main(path):
         print(f"swapchain  {unsettled} sample(s) skipped as unsettled "
               f"(< {QUIET_MIN:.0f}s quiet)")
     if not samples:
-        fails.append("no settled probe samples for the swapchain (#50-#53) — "
-                     "load a savegame and sit still longer")
+        # Takes 97 and 98 both failed here while being perfectly healthy, and
+        # the advice above ("sit still longer") sent the diagnosis the wrong
+        # way. The probe walks the frame's images one at a time, roughly one
+        # every 30 s, and in a 277 s run it reached eight of them -- none of
+        # which were the swapchain. Sitting still does not help; the probe has
+        # to get there, and in a short run it does not.
+        #
+        # Not softened into a pass: no evidence is no evidence. But it now says
+        # which it is, and points at the instrument that answers the same
+        # question directly, since X4VR_MV_DUMP_PRESENT writes the finished eye
+        # image with both layers in it.
+        fails.append("the probe never sampled a swapchain image (#50-#53) — "
+                     "it walks the frame one image at a time and a short run "
+                     "does not reach them. This is no evidence, not a bad "
+                     "eye: read the X4VR_MV_DUMP_PRESENT dumps instead, or "
+                     "run for longer")
     else:
         ratios = [r for _, _, r, _ in samples]
         dupes = sum(1 for *_, ident in samples if ident)
