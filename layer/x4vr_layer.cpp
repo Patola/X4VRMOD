@@ -39,6 +39,7 @@
 #include "../common/x4vr_spirv.hpp"
 #include "../common/x4vr_view.hpp"
 #include "x4vr_sbs.hpp"
+#include "../common/x4vr_env.hpp"
 #include "../common/x4vr_share.hpp"
 
 namespace {
@@ -141,19 +142,16 @@ std::unordered_map<void *, DeviceData> g_devices;
 // Phase 4a scaffolding, opt-in while both halves are still the same eye.
 // Flip the default once the halves are rendered per eye.
 x4vr::SbsCompositor g_sbs;
-const bool g_sbs_enabled = [] {
-    const char *e = getenv("X4VR_SBS");
-    return e && *e && *e != '0';
-}();
+// Read through env_on because the injector mirrors this exact decision to
+// choose whether to hide the compositor's pointer. Two spellings of the same
+// rule is how they come to disagree.
+const bool g_sbs_enabled = x4vr::env_on("X4VR_SBS", false);
 
 // Whether X4 is made to render one eye's worth (half width) rather than the
 // full frame. On by default with X4VR_SBS=1; X4VR_SBS_SPLIT=0 falls back to
 // duplicating the left half of a full-width frame, which is the older and
 // less invasive behaviour.
-const bool g_sbs_split_render = [] {
-    const char *e = getenv("X4VR_SBS_SPLIT");
-    return !(e && *e && *e == '0');
-}();
+const bool g_sbs_split_render = x4vr::env_on("X4VR_SBS_SPLIT", true);
 
 // Stage 2 groundwork: give the image X4 renders into (believing it is the
 // swapchain) a second array layer, so there is somewhere for the second eye
@@ -5562,17 +5560,17 @@ const x4vr::Shared *shared_state() {
     return s;
 }
 
-// X4VR_CURSOR=1 — blend X4's own pointer into the eye image (task #17).
+// X4VR_CURSOR — blend X4's own pointer into the eye image (task #17).
 //
-// Off by default because it needs the injector in the same process, and a
-// pointer that appears where the old one used to be is the kind of change that
-// should be asked for rather than inherited. The knob gates *configuration*,
-// not a per-frame branch: unconfigured, the overlay is never ready and the
-// present path costs nothing.
-const bool g_cursor_enabled = [] {
-    const char *e = getenv("X4VR_CURSOR");
-    return e && *e && *e != '0';
-}();
+// **On by default since takes 95/96**, which confirmed it against an exhaustive
+// exercise of X4's map. Same precedent as X4VR_PROJ_INVPROJ after take 83: a
+// confirmed correction becomes the behaviour, and reproducing a take from before
+// it has to say so explicitly.
+//
+// The knob gates *configuration*, not a per-frame branch: with X4VR_CURSOR=0 the
+// overlay is never configured, so it is never ready and the present path costs
+// nothing.
+const bool g_cursor_enabled = x4vr::env_on("X4VR_CURSOR", true);
 
 const char *g_mv_dump = getenv("X4VR_MV_DUMP");
 // X4VR_MV_DUMP_PRESENT=N — write the finished eye image every N presents.

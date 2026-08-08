@@ -37,6 +37,7 @@ extern char **environ;
 
 #define X4VR_LOG_TAG "inject"
 #include "../common/x4vr_log.hpp"
+#include "../common/x4vr_env.hpp"
 #include "../common/x4vr_share.hpp"
 #include "x4vr_config.hpp"
 
@@ -520,11 +521,57 @@ void publish_cursor_image(const CapturedCursor &c) {
 // Patola's "it stops being drawn if I hold still" is gamescope's own
 // --hide-cursor-delay, which is more evidence that the pointer on screen is
 // gamescope's and not something in X4's frame.
+// **On by default, and it stands down only on declared intent.**
+//
+// The tempting design was to have the layer report "I am drawing" and hide only
+// then. That is a *fallback*, and it is the wrong thing while the mod is still
+// being debugged: if the overlay fails to build, gamescope's pointer quietly
+// returns, the game looks fine, and the defect is invisible. This project's
+// expensive mistakes are all that shape -- an aggregate that reported no defect
+// on a 2.4x shading error, a predicate that masked its own suspect, a metric
+// that could not tell correct stereo from broken.
+//
+// So the rule is: **gate on intent, never on outcome.**
+//
+//   * intent -- did this run ask for a drawn cursor? -- is configuration, and
+//     standing down for it conceals nothing, because a run that never asked for
+//     one has no defect to conceal;
+//   * outcome -- did the draw succeed? -- is a fallback, and it converts a
+//     defect into a working-looking system.
+//
+// The case that stays loud is exactly the one worth being loud: layer on, SBS
+// on, cursor on, overlay failed to build -> no pointer at all, with the reason
+// on the line above it in the log. That is escapable (the keyboard still works)
+// and diagnosable (every failure path names itself), which is what makes
+// failing early a fair trade here rather than a trap.
+//
+// **Decided 2026-08-08, for the development phase.** It should flip to the
+// outcome-gate once anyone other than Patola runs this: then a silent fallback
+// to the compositor's pointer protects a user instead of hiding a bug. See
+// docs/known-good-runs.md.
+bool hide_cursor_wanted() {
+    const char *why = nullptr;
+    if (!x4vr::env_on("X4VR_HIDE_CURSOR", true))
+        why = "X4VR_HIDE_CURSOR=0";
+    else if (x4vr::env_on("X4VR_NO_LAYER", false))
+        why = "X4VR_NO_LAYER=1 — nothing is loaded that could draw one";
+    else if (!x4vr::env_on("X4VR_SBS", false))
+        why = "no side-by-side composite (X4VR_SBS is off)";
+    else if (!x4vr::env_on("X4VR_SBS_SPLIT", true))
+        why = "X4VR_SBS_SPLIT=0 — X4 renders full width, so there is no eye "
+              "image to draw into";
+    else if (!x4vr::env_on("X4VR_CURSOR", true))
+        why = "X4VR_CURSOR=0 — the overlay is off";
+    if (!why)
+        return true;
+    // Every one of these reads a variable the *layer* reads too, through the
+    // same env_on so the two cannot disagree about what "on" means.
+    X4VR_LOG("sdl: leaving the compositor's pointer alone — %s", why);
+    return false;
+}
+
 void hide_sdl_cursor() {
-    static const bool want = [] {
-        const char *e = getenv("X4VR_HIDE_CURSOR");
-        return e && *e && *e != '0';
-    }();
+    static const bool want = hide_cursor_wanted();
     if (!want)
         return;
     static bool done = false;

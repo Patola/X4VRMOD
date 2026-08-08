@@ -19,6 +19,7 @@
 // The overlay header logs, so it needs a tag like its two real consumers do.
 // Nothing under test here logs, but the macro has to resolve to compile.
 #define X4VR_LOG_TAG "test"
+#include "../common/x4vr_env.hpp"
 #include "../layer/x4vr_cursor_draw.hpp"
 
 using namespace x4vr;
@@ -139,6 +140,30 @@ int main(int argc, char **argv) {
         ok("a zero-sized cursor is refused",
            !cursor_rect(700.f, 700.f, 0, 0, 0, 0, 1408, 1408).onscreen);
     }
+
+    // ---- knob semantics ---------------------------------------------------
+    // The injector decides whether to hide the compositor's pointer by reading
+    // the same variables the layer reads. If the two ever disagree about what
+    // "on" means, a run configured one way behaves the other way in one of the
+    // components -- so the rule is pinned here rather than trusted to two
+    // matching hand-written expressions.
+    unsetenv("X4VR_TEST_KNOB");
+    ok("unset takes the caller's default (on)",
+       env_on("X4VR_TEST_KNOB", true));
+    ok("unset takes the caller's default (off)",
+       !env_on("X4VR_TEST_KNOB", false));
+    setenv("X4VR_TEST_KNOB", "", 1);
+    ok("empty is treated as unset", env_on("X4VR_TEST_KNOB", true) &&
+                                        !env_on("X4VR_TEST_KNOB", false));
+    setenv("X4VR_TEST_KNOB", "0", 1);
+    ok("\"0\" is off whatever the default",
+       !env_on("X4VR_TEST_KNOB", true) && !env_on("X4VR_TEST_KNOB", false));
+    setenv("X4VR_TEST_KNOB", "1", 1);
+    ok("\"1\" is on whatever the default",
+       env_on("X4VR_TEST_KNOB", true) && env_on("X4VR_TEST_KNOB", false));
+    setenv("X4VR_TEST_KNOB", "yes", 1);
+    ok("anything not starting with 0 is on", env_on("X4VR_TEST_KNOB", false));
+    unsetenv("X4VR_TEST_KNOB");
 
     // ---- the embedded shaders --------------------------------------------
     ok("the vertex module carries the SPIR-V magic",

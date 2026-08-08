@@ -162,19 +162,24 @@
 #                         X4's declared 53306, against a measured high-water mark
 #                         of 10980. Only worth changing if the disable above
 #                         fires.
-#   X4VR_CURSOR=1         blend X4's own pointer into the eye image before the
-#                         side-by-side duplication (task #17), so it lands in
-#                         both halves at the same in-eye position and picks what
-#                         X4 hit-tests. Needs the injector in the same process
-#                         -- it is where the cursor bitmap and the pointer
-#                         position come from -- and does nothing without it,
-#                         saying so once in the log.
-#   X4VR_HIDE_CURSOR=1    suppress the pointer gamescope draws, by calling
-#                         SDL_HideCursor once. Pair it with X4VR_CURSOR=1 or
-#                         there will be no pointer at all. Run them separately
-#                         the first time: with only X4VR_CURSOR=1 both pointers
-#                         are visible at once, which is the clearest possible
-#                         check that the drawn one lands where the old one does.
+#   X4VR_CURSOR=0         stop blending X4's own pointer into the eye image
+#                         (task #17). ON BY DEFAULT since takes 95/96. The
+#                         pointer is drawn before the side-by-side duplication,
+#                         so it lands in both halves at the same in-eye position
+#                         and picks exactly what X4 hit-tests. Needs the injector
+#                         in the same process -- that is where the cursor bitmap
+#                         and the position come from -- and says so once in the
+#                         log if it is missing.
+#   X4VR_HIDE_CURSOR=0    stop suppressing the pointer gamescope draws. ON BY
+#                         DEFAULT: without it you get two pointers, X4's drawn
+#                         one and the compositor's.
+#                         It stands down on its own when the run has not asked
+#                         for a drawn cursor -- X4VR_NO_LAYER=1, X4VR_SBS off,
+#                         X4VR_SBS_SPLIT=0, X4VR_CURSOR=0 -- logging which.
+#                         It does NOT stand down when the overlay merely fails,
+#                         and that is deliberate: no pointer at all is the
+#                         signal. See the dated decision in
+#                         docs/known-good-runs.md.
 #   X4VR_DUMP_SHADERS=<dir>
 #                         write every module X4 creates as <dir>/mod-NNNN.spv.
 #                         On its own that is ~1300 files and no help; the point

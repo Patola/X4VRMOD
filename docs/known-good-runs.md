@@ -189,7 +189,6 @@ text, collapsible sections, and the 3D map rotated — with every hitbox landing
     X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2
     X4VR_PROJ_SX=1.3333 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1
     X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1
-    X4VR_CURSOR=1 X4VR_HIDE_CURSOR=1
     X4VR_LOG=/tmp/x4vr-take96.log
     ./launch/x4vr-launch.sh
 
@@ -205,10 +204,65 @@ eye only — the same class of defect as a black right eye, in a new place. The
 would mean `SDL_SetCursor` stopped publishing and the shim is drawing a stale
 bitmap.
 
-**Both cursor knobs are opt-in, and `X4VR_HIDE_CURSOR` must not be passed
-alone.** Hiding lives in the injector and drawing lives in the layer, and the
-injector cannot see whether the layer is drawing. `X4VR_HIDE_CURSOR=1` with
-`X4VR_NO_LAYER=1`, or with a layer whose overlay failed to build, leaves no
-pointer at all.
+`X4VR_CURSOR=1 X4VR_HIDE_CURSOR=1` were passed explicitly on the run itself;
+both are **on by default from the commit that follows**, so the line above omits
+them. See the dated decision at the end of this file for why hiding defaults on
+despite leaving no pointer at all when the overlay fails — that is the intended
+signal, not an oversight.
 
 The invproj check from `stage2-stereo-shading-correct` still applies unchanged.
+
+## Decision, 2026-08-08 — the cursor knobs default on, and hiding gates on intent
+
+`X4VR_CURSOR` and `X4VR_HIDE_CURSOR` are **both on by default** as of this date,
+following takes 95/96. Same precedent as `X4VR_PROJ_INVPROJ` after take 83: a
+confirmed correction becomes the behaviour, and a run reproducing anything
+earlier has to say so explicitly.
+
+The second one deserves its reasoning written down, because the obvious design
+is wrong.
+
+**The rejected design.** Have the layer report "I am drawing a cursor" through
+the channel, and let the injector hide the compositor's pointer only then. It
+reads as robustness. It is a **fallback**: when the overlay fails to build — bad
+driver, unknown pixel format, injector not preloaded — gamescope's pointer
+quietly comes back, the game looks fine, and the defect is invisible. Every
+expensive mistake recorded in `frame-analysis.md` has that shape. An aggregate
+reported "no defect" on a 2.4x per-eye shading error. A predicate excluded its
+own suspect. A metric could not tell correct stereo from broken. Adding another
+one and calling it safety would have been the fourth.
+
+**The rule instead: gate on intent, never on outcome.**
+
+| gate | question | effect |
+|---|---|---|
+| intent | did this run *ask* for a drawn cursor? | configuration — conceals nothing, because a run that never asked has no defect to conceal |
+| outcome | did the draw *succeed*? | fallback — converts a defect into a working-looking system |
+
+So the injector stands down only for declared configuration, each with a log
+line naming which:
+
+    X4VR_HIDE_CURSOR=0
+    X4VR_NO_LAYER=1     nothing is loaded that could draw one
+    X4VR_SBS off        no composite
+    X4VR_SBS_SPLIT=0    X4 renders full width, so there is no eye image
+    X4VR_CURSOR=0       the overlay is off
+
+Each of those is a variable **the layer reads too**, through the same
+`x4vr::env_on` in `common/x4vr_env.hpp`, so the two components cannot come to
+disagree about what "on" means. Two hand-written spellings of one rule is how
+they drift, and `tests/cursor_place.cpp` pins the semantics.
+
+The case that stays loud is the one worth being loud about: layer on, SBS on,
+cursor on, overlay failed → **no pointer at all**, with the reason on the line
+above it. That is a fair trade only because the failure is escapable (the
+keyboard, Esc and the menus still work) and diagnosable (every failure path names
+itself). If either stopped being true, the trade would stop being fair.
+
+**When to revisit.** This is a development-phase default, chosen because we are
+chasing defects and want them to announce themselves. It should flip to the
+outcome-gate the moment anyone other than Patola runs this mod: at that point a
+silent fallback to the compositor's pointer protects a user instead of hiding a
+bug, and the same design that is wrong today becomes right. The channel already
+anticipates the reversed direction — `common/x4vr_share.hpp` says to add a second
+struct rather than make that one bidirectional.
