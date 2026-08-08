@@ -10584,3 +10584,69 @@ Arithmetic checked offline before spending a run, against the P91 capture:
 Complete coverage is the part worth stating: the fold is a bijection on
 `0…1407`, so every element in X4's frame stays reachable. It moves *where* you
 point, it does not trade one unreachable region for another.
+
+## Take 90 — P94 confirmed for picking, and the fold breaks steering
+
+`X4VR_INPUT_FOLD=1`, confirmed engaged: `sdl: input fold ON — x_x4 = (x_sdl +
+704) mod 1408`. One session. Extent `x=0..1407`, unchanged.
+
+Since gamescope hands X4 window coordinates, `x_sdl = d - 704`, and the fold
+collapses to
+
+    x_x4 = d mod 1408          d = display x
+
+Every observation follows from that one line.
+
+**Picking works — P94 confirmed.** Patola: clicks between 1/4 and 3/4 select the
+correct element in both copies, even across the seam. Pointing at display `d`
+selects what X4 drew at `d mod 1408`, which is exactly the element visible
+there, in whichever copy the pointer is over.
+
+**The line to the cursor is correctly placed**, for the same reason: X4 draws it
+to `x_x4 = d mod 1408`, duplicated at that x and at `x + 1408`, so one of the two
+lands precisely under the pointer.
+
+**Steering inverts at the seam.** X4 steers from the cursor's offset relative to
+its *frame centre*, `x_x4 = 704`. Under the fold that centre is reached at
+`d = 704` and `d = 2112` — the two **edges** of the reachable range — while the
+seam `d = 1408` maps to `x_x4 = 0`/`1408`, the frame **edges**. So sweeping left
+to right takes `x_x4` from centre → right edge → *wrap* → left edge → centre.
+Hence a few pixels left of the seam steers hard right and a few pixels right of
+it rotates left, exactly as reported.
+
+**Past 3/4 the steering stops following** while the pointer keeps moving: beyond
+`d = 2112` the pointer leaves X4's surface, SDL clamps `x_sdl` at 1407, and
+`x_x4` freezes. What continues moving is gamescope's own pointer, which is not
+X4's and never was.
+
+### These two requirements are incompatible, and no formula reconciles them
+
+* **Picking** wants *which element is under the pointer* — `d mod 1408`, which
+  must jump at the seam, because what is visible there jumps.
+* **Steering** wants a *continuous signed offset from the frame centre*, which
+  requires no jump anywhere in the reachable range.
+
+The pointer's box, `704…2112`, straddles the seam: half of copy A and half of
+copy B. Any mapping satisfying "point at what you see" is discontinuous there,
+so this is structural and not a matter of a better transform.
+
+Which is the conclusion this document already reached at take 30 and then lost:
+*"three extents have to agree — X4's window, its render and the composite — and
+only two of them are currently chosen together."* The fold is the best available
+answer while they disagree, not a substitute for making them agree.
+
+**The real fix is to align the pointer's box with one copy.** With the box at
+`0…1408` instead of `704…2112`, `x_x4 = d` is *both* continuous and
+point-at-what-you-see, and the seam stops being a special place. That is a
+window/composite change, recorded as its own task rather than bolted onto this
+one.
+
+`X4VR_INPUT_FOLD` **stays off by default**: a genuine improvement for map and
+menu work, a genuine regression for cockpit steering, and the A/B is exactly why
+it was not defaulted on before being run.
+
+Worth restating, because it bounds how much this deserves: **this is a
+flatscreen bring-up ergonomic.** In an HMD there is no 2D pointer over a
+side-by-side image at all, so none of this is the eventual VR input path. It is
+worth having because the whole project is driven from this view, and worth not
+over-fitting to — a warning this document issued at take 30 and should keep.
