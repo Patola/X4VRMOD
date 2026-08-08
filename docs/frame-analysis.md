@@ -11436,3 +11436,53 @@ question directly and better. It is still a FAIL: no evidence is no evidence.
 
 Stereo was healthy where the probe did land — `img #63 DIFFER 20.36%`,
 `img #57 DIFFER 33.16%`, both with `l1/l0 ~ 1.00`.
+
+## Take 99 — PASS, and the stutter is the instruments draining the queue
+
+    swapchain  20 settled sample(s), layer1/layer0 99.7%..101.7%, 0 bit-identical
+    grade  STEREO — every settled sample carries a real per-eye difference
+    canvas 2.000 m -> s=0.02133 NDC, 15.0 px per eye on a 1408-wide eye
+    canvas final: 346 variant(s) built, 0 REFUSED, swapped into 18 pipeline stage(s)
+    PASS
+
+**The probe reached the swapchain this time**, sampling `#50`–`#53` twenty
+times — which settles the takes 97/98 FAIL as diagnosed: the probe walks the
+frame one image at a time and a 277 s run did not get there. 326 s did. Nothing
+was wrong with those runs.
+
+**The cursor and the canvas provably took the same shift.** The overlay logged
+`canvas shift 0.02133 NDC (15.0 px per eye)` against the canvas's own
+`s=0.02133`. That is the half of P101 a log can answer, and it is the half that
+could have been silently wrong: the two are set from one variable, so a
+disagreement would have meant the cursor read it before it was published. It
+did not. What is still untested is only whether a click lands where it looks
+like it should, which is a human check.
+
+### The instruments stall the frame, and the numbers say by how much
+
+Patola, on take 99: smooth for about half a second, then unresponsive for three
+to five, repeatedly — and that this interference makes precisely-aimed tests
+impractical. He is right, and the log names the culprit:
+
+    67 mv probe samples over 326 s  ->  one every 4.87 s
+
+which is exactly the period he described. `probe_collect()` calls
+`vkQueueWaitIdle` — a full GPU drain — and then walks both layers on the CPU,
+about 16 MB of hashing and per-texel comparison, per sample. The present dump
+does the same drain. At `X4VR_MV_DUMP_PRESENT=300` the dumps were 33 s apart
+and are *not* the cause; the probe is.
+
+The overall rate was about 9 fps (10 dumps × 300 presents over 326 s), against
+take 96's playable rate with none of these three knobs set.
+
+**So the split is now explicit.** A *measurement* take may stall freely — it is
+being read from dumps and logs, and nobody has to aim at anything. An
+*interaction* take must leave `X4VR_MV_PROBE`, `X4VR_MV_DUMP` and
+`X4VR_MV_DUMP_PRESENT` unset; everything the canvas needs to be judged
+(`canvas final:`, the cursor's shift) is logged once and costs nothing per
+frame. Both stalling instruments now say so in the log the first time they run,
+in the terms that matter — `expect visible stalls`, and for the dump the fact
+that it is a cadence rather than a flag.
+
+This is the third time in three takes that an instrument, not the mod, was what
+made a run hard to read.

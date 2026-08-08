@@ -6121,6 +6121,20 @@ void probe_collect(DeviceData *d, VkQueue queue) {
     if (!g_probe.pending)
         return;
     g_probe.pending = false;
+    // Said once: this instrument is not free and it is not cheap. Every sample
+    // drains the GPU and then walks both layers on the CPU -- about 16 MB of
+    // hashing and per-texel comparison. Take 99 sampled every 4.87 s and the
+    // game stuttered on exactly that period: half a second of motion, then
+    // seconds of nothing. That is fine for a measurement take and fatal for one
+    // that has to hit a target with the mouse, so the log says so rather than
+    // leaving it to be rediscovered.
+    static bool said = false;
+    if (!said) {
+        said = true;
+        X4VR_LOG("mv probe: each sample drains the queue and reads both layers "
+                 "on the CPU — expect visible stalls. Leave X4VR_MV_PROBE unset "
+                 "for any run that has to be interacted with.");
+    }
     if (queue != VK_NULL_HANDLE &&
         (!d->QueueWaitIdle || d->QueueWaitIdle(queue) != VK_SUCCESS))
         return;
