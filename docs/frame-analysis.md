@@ -11524,3 +11524,85 @@ position we do not control. If the two disagreed, the highlight would land on a
 neighbouring element while the arrow pointed somewhere else — both mechanisms
 working exactly as written, and the result unusable. "Highlights elements exactly
 in the right spot" is precisely the observation that rules it out.
+
+## Task #21 — the logo measured from take 97's dumps, and the shear is not it
+
+No run needed: takes 97–99 dumped the eye image from frame 0, so the start menu
+is already on disk. Frame `n20` of take 97 (control, no canvas) has the Start
+Menu over the planet, with the X4 logo top right and cut off at the frame edge.
+
+Measured on the two array layers of the same frame, stable across `n20`, `n22`
+and `n26`:
+
+| region | eye-to-eye shift | ncc | implied z |
+|---|---|---|---|
+| the logo's X glyph | **−3 px** | 0.992 | **~20 m** |
+| the Start Menu text | 0 px | 1.000 | inf |
+| the station ring | 0 px | 0.997 | inf |
+| the planet's limb | 0 px | 0.998 | inf |
+
+using `disparity_px · z = 704 · sx · ipd = 60.07` at `sx=1.3333, ipd=0.064`.
+
+**The logo is 3D geometry in the menu's background scene, at about 20 m.** It is
+not a UI element: the menu text beside it is flat at 0 px, exactly as an
+unsheared UI pass should be, while the logo carries real parallax.
+
+### This refutes the leading hypothesis in this file
+
+The surviving candidates recorded at take 46 were `X4VR_STEREO` — "K reaching a
+pipeline that draws the logo" — and `X4VR_BINDLESS_MIRROR`. The first is real
+and is **1.5 px per eye**. The clipped part of the "4" is of order a hundred
+pixels: the bright ring runs to column 1407 in both eyes, with 28 lit rows in
+the final column of the left eye and 26 in the right. The shear is present,
+correctly signed (the left eye is displaced outward and is clipped ~3 px more
+than the right), and about fifty times too small to be the cause.
+
+So **both eyes are clipped, and the shear only modulates it.** Whatever removes
+the right side of the logo does so before either eye is considered.
+
+### What is left, and why #21 is probably #24 wearing a different hat
+
+X4 believes its window is 1408×1408 and renders 1408×1408 — the SBS split asks
+it for one eye's worth, and `SDL_GetWindowSize` confirms it agrees. A square
+frame has a much narrower *horizontal* field than the 16:9 the menu was laid
+out for: `sx = sy/aspect`, so dropping the aspect from 1.778 to 1.0 magnifies x
+by 1.778 and pushes scene content on the right out of frame. The logo sits on
+the right of that scene.
+
+If that is the mechanism, #21 is not an independent bug and not a regression
+from any commit. It is the same constraint as **task #24** — the frame is
+narrower than the content assumes — and fixing #24 fixes this for free. It also
+explains why nobody could find the take-33-to-41 code change: take 33 was never
+recorded (the `env: run =` line starts at take 34), so "the same resolution with
+a whole logo" was never actually established.
+
+* **P103** — rendering each eye at 16:9 instead of 1:1 brings the logo back
+  whole, with no code change at all. If it does not, the aspect is exonerated
+  and the cause is something the layer does to that geometry, which the 1.5 px
+  measurement says is not the shear.
+
+The test changes one thing. `X4VR_W`/`X4VR_H` override the composite size, so a
+2816×792 composite is 1408×792 per eye — 16:9 — with everything else exactly as
+take 97 and the dumps still working:
+
+    X4VR_TAKE=101-ASPECT X4VR_W=2816 X4VR_H=792 X4VR_STEREO=1
+    X4VR_BINDLESS_PATCH=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1
+    X4VR_SBS_LAYERS=2 X4VR_PROJ_SX=1.3333 X4VR_MV=1 X4VR_PROJ_LIVE=1
+    X4VR_SBS=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1
+    X4VR_MV_INVENTORY=1 X4VR_MV_DUMP=/tmp/x4vr-t101
+    X4VR_MV_DUMP_PRESENT=60 X4VR_LOG=/tmp/x4vr-take101.log
+    ./launch/x4vr-launch.sh
+
+`X4VR_RES` is deliberately *not* set: the launcher derives it from the composite
+size, and setting both is how the two would come to disagree. A measurement
+take, so the dump cadence is affordable — but 60, not 1, and it only has to
+reach the menu.
+
+### The menu is a free ruler for #24 and #25
+
+Worth keeping whatever the answer is. The start menu is reproducible, identical
+every launch, and contains objects at two known-ish depths: everything at
+infinity, and one object at ~20 m. That makes it a calibration scene for the
+questions Patola raised — how to pick distance, perspective and IPD across
+modes — without needing a savegame or a steady hand. `disparity_px · z = 60.07`
+at the current settings is the whole conversion.
