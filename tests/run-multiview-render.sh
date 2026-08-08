@@ -354,7 +354,7 @@ classify_case() {
 }
 
 classify_case "colour, no depth: always masked" 2 \
-    "MONO (fullscreen post) +MASKED(fullscreen)"
+    "MONO (fullscreen post) +MASKED(fullscreen) +CANVAS"
 # The carve-out the four cases above were written to test. It is reachable --
 # it just needs depth, which is what stops the take-71 clause from firing.
 classify_case "LDR+depth is UI: unsheared, unmasked" 3 "MONO (all-LDR/UI)"
@@ -367,6 +367,19 @@ classify_case "HDR+depth is world: sheared" 4 "STEREO (world)"
 # If this case ever reports +MASKED, the shadow maps have gone per-eye and the
 # per-eye shading defect that took takes 56-83 to find is back.
 classify_case "depth-only stays mono and unmasked" 5 "MONO (depth-only/shadow)"
+
+# Task #30's discriminating pair. These two passes are the same shape to every
+# other predicate in the layer -- one colour attachment, no depth, masked as a
+# fullscreen post pass -- and differ only in format. rp #2 is LDR and is the
+# canvas; rp #6 is HDR and must not be, or X4's 29 deferred/post passes would
+# take the UI's constant shift the moment their modules classify World (which
+# under X4VR_SHEAR_LIGHTS the light volumes do).
+#
+# The assertion is the *whole* verdict string, so "+CANVAS appeared on the HDR
+# pass" fails here rather than turning into a lighting bug nobody attributes to
+# this commit.
+classify_case "HDR without depth is not a canvas" 6 \
+    "MONO (fullscreen post) +MASKED(fullscreen)"
 
 
 # The fragment patch: the *sample* follows the view index.

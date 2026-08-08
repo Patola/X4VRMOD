@@ -509,9 +509,15 @@ struct ShaderVariants {
     std::mutex mu;
     // patched module handle -> its unpatched twin
     std::unordered_map<VkShaderModule, VkShaderModule> original;
+    // patched module handle -> its constant-shift twin (task #30). Present
+    // only for World modules, and only when a canvas was asked for: a module
+    // that has no entry here is one the canvas must not touch.
+    std::unordered_map<VkShaderModule, VkShaderModule> canvas;
     // render pass -> per-subpass "this subpass must not be sheared"
     std::unordered_map<VkRenderPass, std::vector<bool>> unsheared;
-    uint32_t swapped = 0;
+    // render pass -> per-subpass "this subpass draws the UI"
+    std::unordered_map<VkRenderPass, std::vector<bool>> canvas_pass;
+    uint32_t swapped = 0, canvas_swapped = 0;
 } g_variants;
 
 // render pass -> inventory serial, so the framebuffer log can name the pass
@@ -733,6 +739,10 @@ std::unordered_map<VkCommandBuffer, VkPipeline> g_comp_bound;
 uint64_t g_comp_pipelines = 0;
 
 std::atomic<uint64_t> g_frag_patch_ok{0}, g_frag_patch_refused{0};
+// Task #30: canvas variants built, and modules the canvas could not be built
+// for. A refusal leaves that module's UI mono, which looks exactly like a
+// correct frame, so the count is reported whether or not it is zero.
+std::atomic<uint64_t> g_canvas_built{0}, g_canvas_refused{0};
 // Task #22: deferred modules whose M_invprojection was corrected per eye.
 std::atomic<uint64_t> g_invproj_patched{0};
 // ...and M_invprojection_uj, the one the shadow cascades actually read.
@@ -878,6 +888,26 @@ bool needs_original(VkRenderPass rp, uint32_t subpass) {
     if (it == g_variants.unsheared.end() || subpass >= it->second.size())
         return false;
     return it->second[subpass];
+}
+
+// Does this (render pass, subpass) draw the UI? Task #30.
+bool is_canvas_pass(VkRenderPass rp, uint32_t subpass) {
+    std::lock_guard<std::mutex> lock(g_variants.mu);
+    auto it = g_variants.canvas_pass.find(rp);
+    if (it == g_variants.canvas_pass.end() || subpass >= it->second.size())
+        return false;
+    return it->second[subpass];
+}
+
+// A canvas variant that could not be built leaves that module's UI mono, which
+// on screen is indistinguishable from a correct frame -- so every refusal names
+// itself and is counted. Rate-limited because this runs once per module; the
+// total is reported at teardown whether it is zero or not.
+void canvas_refuse(const char *why) {
+    if (++g_canvas_refused <= 3)
+        X4VR_LOG("canvas: REFUSED for a module — %s; that module's UI stays "
+                 "mono",
+                 why);
 }
 
 // Host pointer for a (buffer, offset) view slot, or nullptr if the backing
@@ -1863,6 +1893,24 @@ bool subpass_is_all_ldr(const CreateInfo *ci, const Subpass &sp) {
     return seen > 0;
 }
 
+// Task #30: is this the pass the UI is drawn into?
+//
+// All colour LDR and no depth. In takes 61, 74 and 80 that is `rp #33`
+// (`1 colour [50L] no-depth`) plus the five blit passes at format 44, and
+// nothing else: world passes carry depth, the HDR fullscreen post passes are
+// not LDR, and the shadow cascades have no colour at all.
+//
+// It is deliberately *not* narrowed to sRGB to single out `rp #33`. That would
+// key on a coincidence of X4's format choice; the blits are excluded instead by
+// the other half of the join, at pipeline creation, because every module they
+// bind is procedural or fragment-only and so never classifies World. Both
+// halves do real work and each is checkable on its own.
+template <typename CreateInfo, typename Subpass>
+bool subpass_is_canvas(const CreateInfo *ci, const Subpass &sp) {
+    return sp.colorAttachmentCount > 0 && !subpass_has_depth(ci, sp) &&
+           subpass_is_all_ldr(ci, sp);
+}
+
 template <typename CreateInfo, typename Subpass>
 bool subpass_is_present(const CreateInfo *ci, const Subpass &sp) {
     if (sp.colorAttachmentCount != 1)
@@ -1951,6 +1999,9 @@ template <typename CreateInfo>
 void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
     std::vector<bool> unsheared = classify_unsheared(ci);
     const std::vector<bool> per_eye = classify_per_eye(ci);
+    std::vector<bool> canvas(ci->subpassCount, false);
+    for (uint32_t i = 0; i < ci->subpassCount; i++)
+        canvas[i] = subpass_is_canvas(ci, ci->pSubpasses[i]);
 
     std::lock_guard<std::mutex> lock(g_variants.mu);
     for (uint32_t i = 0; i < ci->subpassCount; i++)
@@ -2025,10 +2076,15 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
                 else
                     rule = " +MASKED(?)";
             }
-            X4VR_LOG("rp #%u.%u: %u colour [%s]%s final=%d -> %s (%s)%s%s",
+            // Task #30. Printed whether or not a canvas was asked for, because
+            // "this pass would take the canvas" is a property of X4's frame,
+            // not of the run's knobs -- and it is what makes the inventory of
+            // an ordinary take enough to check the predicate against.
+            X4VR_LOG("rp #%u.%u: %u colour [%s]%s final=%d -> %s (%s)%s%s%s",
                      serial, i, sp.colorAttachmentCount, fmts, dep, fl,
                      unsheared[i] ? "MONO" : "STEREO", why,
-                     rule, cand ? " +PRESENT-CAND" : "");
+                     rule, cand ? " +PRESENT-CAND" : "",
+                     canvas[i] ? " +CANVAS" : "");
         }
         // Whether each attachment is cleared, loaded or discarded on entry.
         //
@@ -2105,6 +2161,7 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
     }
 
     g_variants.unsheared[rp] = std::move(unsheared);
+    g_variants.canvas_pass[rp] = std::move(canvas);
 }
 
 // What layout each attachment is left in when the pass ends. This is the one
@@ -2307,6 +2364,39 @@ void mv_report(const char *when) {
             X4VR_LOG("mv %s: compute module #%u — %llu dispatch(es)", when,
                      e.first, (unsigned long long)e.second);
     }
+}
+
+// Was a canvas asked for? Read from the environment, not from whether one was
+// built, so the report can tell "asked for and not built" from "never asked
+// for" -- the same distinction bindless_report exists to preserve.
+bool canvas_wanted() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_CANVAS_M");
+        return e && *e;
+    }();
+    return on;
+}
+
+// Task #30. Silent when no canvas was asked for; otherwise printed whatever
+// the numbers are, zeros included. The failure this is built to catch is
+// "variants built, nothing swapped": the modules exist, no pipeline ever took
+// one, and the frame is byte-for-byte the old mono UI -- which is exactly what
+// a correct frame looks like from the outside.
+void canvas_report(const char *when) {
+    if (!canvas_wanted())
+        return;
+    uint64_t swapped;
+    {
+        std::lock_guard<std::mutex> lock(g_variants.mu);
+        swapped = g_variants.canvas_swapped;
+    }
+    X4VR_LOG("canvas %s: %llu variant(s) built, %llu REFUSED, swapped into "
+             "%llu pipeline stage(s)%s",
+             when, (unsigned long long)g_canvas_built.load(),
+             (unsigned long long)g_canvas_refused.load(),
+             (unsigned long long)swapped,
+             swapped ? ""
+                     : " — NOTHING DREW ON THE CANVAS; the UI is still mono");
 }
 
 // Reported separately from mv_report, and *not* gated on g_mv.
@@ -3141,6 +3231,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyRenderPass(
     {
         std::lock_guard<std::mutex> lock(g_variants.mu);
         g_variants.unsheared.erase(rp);
+        g_variants.canvas_pass.erase(rp);
         g_rp_serials.erase(rp);
         g_masked_passes.erase(rp);
         g_srgb_resolve_passes.erase(rp);
@@ -3353,6 +3444,21 @@ VkResult create_shader_module_inner(
     static bool have_kr = false, have_kr_nonworld = false;
     static float K_world_r[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     static float K_nonworld_r[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    // Task #30, the third transform. A constant clip-space x offset, opposite
+    // per eye: `K·(x,y,z,w) = (x + s·w, y, z, w)`, whose NDC x is `x/w + s` for
+    // *any* w. That is what makes it a canvas rather than geometry -- it does
+    // not matter whether X4's UI matrix is an orthographic screen transform or
+    // the map's perspective one, the shift is the same.
+    //
+    // It is a third *variant*, not a third Kind, and that distinction is the
+    // whole finding behind #30: X4 draws a ship hull in rp #13 and a menu quad
+    // in rp #33 with the *same module*, measured in takes 61, 74 and 80. No
+    // per-module predicate can separate those two draws, because
+    // vkCreateShaderModule sees one module and patches it once. Only the
+    // render pass tells them apart, so only pipeline creation can choose.
+    static bool have_canvas = false;
+    static float K_canvas[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    static float K_canvas_r[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     static std::once_flag once;
     std::call_once(once, [] {
         auto parse16 = [](const char *s, float *m) {
@@ -3429,6 +3535,53 @@ VkResult create_shader_module_inner(
         if (const char *sh = getenv("X4VR_CLIP_SHIFT_NONWORLD")) {
             K_nonworld[12] = strtof(sh, nullptr);
             have_k = true;
+        }
+        // X4VR_CANVAS_M: where the UI sits, in metres. Converted here rather
+        // than exposed as a raw NDC number so it stays right when the IPD or
+        // the projection scale change:
+        //
+        //     s = sx · (ipd/2) / z
+        //
+        // which is the world offset formula with z pinned to a constant --
+        // "the UI at z metres" and "world geometry at z metres" are the same
+        // statement, so they must produce the same disparity. Left eye +s,
+        // right eye −s: a near object appears displaced toward the right in
+        // the left eye, which is the sign the world shear already carries
+        // (m8 L=+0.42666 R=−0.42666).
+        if (const char *cm = getenv("X4VR_CANVAS_M"); cm && *cm) {
+            const float z = strtof(cm, nullptr);
+            if (!(z > 0.0f)) {
+                X4VR_LOG("canvas: REFUSED — X4VR_CANVAS_M=\"%s\" is not a "
+                         "positive distance; no canvas built",
+                         cm);
+            } else if (!have_kr) {
+                // Gate on intent: this run asked for a canvas. Say why it
+                // cannot have one instead of quietly drawing a mono UI that
+                // looks exactly like a correct one.
+                X4VR_LOG("canvas: REFUSED — X4VR_CANVAS_M=%g needs a right eye "
+                         "and none is configured (X4VR_STEREO unset?)",
+                         z);
+            } else {
+                const float s = x4vr::canvas_shift(assumed_proj_sx(),
+                                                   configured_ipd(), z);
+                K_canvas[12] = +s;
+                K_canvas_r[12] = -s;
+                have_canvas = true;
+                // The pixel figure is what a run is scored on, so print it
+                // when the eye width is known and say nothing when it is not,
+                // rather than quoting a hardcoded 1408 that could go stale.
+                unsigned rw = 0, rh = 0;
+                if (const char *res = getenv("X4VR_RES"))
+                    sscanf(res, "%ux%u", &rw, &rh);
+                if (rw)
+                    X4VR_LOG("canvas: %.3f m -> s=%.5f NDC (L=+s R=-s), "
+                             "%.1f px per eye on a %u-wide eye",
+                             z, s, s * 0.5f * rw, rw);
+                else
+                    X4VR_LOG("canvas: %.3f m -> s=%.5f NDC (L=+s R=-s), "
+                             "eye width unknown (X4VR_RES unset)",
+                             z, s);
+            }
         }
         if (have_k)
             X4VR_LOG("clip-space enabled: K_world.x=%.3f K_nonworld.x=%.3f",
@@ -3665,6 +3818,37 @@ VkResult create_shader_module_inner(
             if (d->CreateShaderModule(device, &oci, ac, &orig) == VK_SUCCESS) {
                 std::lock_guard<std::mutex> lock(g_variants.mu);
                 g_variants.original[*out] = orig;
+            }
+            // Task #30: a third twin. Built from the same base as the
+            // unpatched one -- the fragment edit and nothing else -- then
+            // given the constant shift where that one is given no geometry
+            // edit at all. World only: the procedural fullscreen module that
+            // shares rp #33 with the UI has to keep drawing where it is, and
+            // absence from this map is how pipeline creation knows that.
+            if (have_canvas && world) {
+                std::vector<uint32_t> cv;
+                if (frag_patched) {
+                    cv = frag_only;
+                } else {
+                    cv.resize(ci->codeSize / 4);
+                    memcpy(cv.data(), ci->pCode, ci->codeSize);
+                }
+                VkShaderModule cm = VK_NULL_HANDLE;
+                if (!x4vr::spv::patch_vertex_clip(cv, K_canvas, K_canvas_r)) {
+                    canvas_refuse("patch_vertex_clip declined the module");
+                } else {
+                    VkShaderModuleCreateInfo cci = *ci;
+                    cci.codeSize = cv.size() * 4;
+                    cci.pCode = cv.data();
+                    if (d->CreateShaderModule(device, &cci, ac, &cm) ==
+                        VK_SUCCESS) {
+                        std::lock_guard<std::mutex> lock(g_variants.mu);
+                        g_variants.canvas[*out] = cm;
+                        g_canvas_built++;
+                    } else {
+                        canvas_refuse("the driver rejected the canvas variant");
+                    }
+                }
             }
             if (++patched <= 3 || (patched % 50) == 0)
                 X4VR_LOG("patched vertex shader #%u (%s%s) "
@@ -3971,8 +4155,25 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
             any = true;
         }
         stages[i].assign(ci[i].pStages, ci[i].pStages + ci[i].stageCount);
+        // Task #30: on a canvas pass a World module takes the constant-shift
+        // twin instead of the unpatched one. This is the second half of the
+        // join and the reason it has to be decided here: the same module is
+        // bound to rp #13 (a ship hull, which wants the shear) and to rp #33
+        // (a menu quad, which wants the shift), so the module cannot decide
+        // for itself. Modules with no canvas entry -- NonWorld, and every
+        // module in the blit passes -- fall through to the existing swap and
+        // behave exactly as before.
+        const bool canvas = is_canvas_pass(ci[i].renderPass, ci[i].subpass);
         for (auto &st : stages[i]) {
             std::lock_guard<std::mutex> lock(g_variants.mu);
+            if (canvas) {
+                auto cv = g_variants.canvas.find(st.module);
+                if (cv != g_variants.canvas.end()) {
+                    st.module = cv->second;
+                    g_variants.canvas_swapped++;
+                    continue;
+                }
+            }
             auto it = g_variants.original.find(st.module);
             if (it != g_variants.original.end()) {
                 st.module = it->second;
@@ -6243,6 +6444,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
             once = true;
             mv_report("first present");
             bindless_report("first present");
+            canvas_report("first present");
             // Everything written from here on is a *late* write, which is what
             // says whether mirroring can be done once at startup or has to
             // track X4 for the whole session.
@@ -6825,6 +7027,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyDevice(
     }
     mv_report("final");
     bindless_report("final");
+    canvas_report("final");
     g_sbs.shutdown(); // idles the device, then frees pools/semaphores/fences
     PFN_vkDestroyDevice next;
     {

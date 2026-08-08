@@ -216,6 +216,56 @@ int main() {
         check(all_ok, "K*p equals p with x -= sx*d (one scalar, no matrix)");
     }
 
+    // ---- the canvas shift agrees with the shear it is derived from -------
+    //
+    // Task #30 claims canvas_shift(z) is the world shear evaluated at a fixed
+    // depth. If that is only approximately true the UI sits at a distance
+    // nobody chose, and nothing on screen says so -- a canvas 30 cm from where
+    // it was asked for still looks like a canvas.
+    //
+    // The shear displaces a point at view depth z by m8·(clip z)/w = m8·near/z,
+    // because the derivation holds clip z at the near plane (asserted above).
+    // So `near` must cancel: the same z through three different near planes has
+    // to give the same shift, and all three have to equal canvas_shift.
+    {
+        const float sx = 1.3333f, ipd = 0.064f;
+        for (float z : {0.5f, 1.0f, 2.0f, 5.0f, 10.0f, 60.0f}) {
+            const float s = x4vr::canvas_shift(sx, ipd, z);
+            for (float near_z : {0.01f, 0.1f, 1.0f}) {
+                const x4vr::Mat4 kl =
+                    x4vr::make_eye_shear(sx, 0.0f, near_z, -0.5f * ipd);
+                char what[96];
+                snprintf(what, sizeof what,
+                         "canvas z=%.2g equals the left shear at near=%.2g", z,
+                         near_z);
+                check_near(kl.m[8] * near_z / z, s, 1e-6f, what);
+            }
+        }
+        // The numbers the design was written against, so a change of units or
+        // a dropped factor of two is caught by name rather than by ratio.
+        check_near(x4vr::canvas_shift(1.3333f, 0.064f, 1.0f), 0.0426656f, 1e-6f,
+                   "1 m -> s = 0.04267 (30 px on a 1408-wide eye)");
+        check_near(x4vr::canvas_shift(1.3333f, 0.064f, 2.0f) * 704.0f, 15.0f,
+                   0.02f, "2 m -> 15 px per eye on a 1408-wide eye");
+        check_near(x4vr::canvas_shift(1.3333f, 0.064f, 10.0f) * 704.0f, 3.0f,
+                   0.01f, "10 m -> 3 px per eye");
+        // Infinity, and the two ways of asking for something that is not a
+        // distance. All three must be the *same* answer as today's frame,
+        // because P102 is that an unset canvas reproduces take 96 exactly.
+        check(x4vr::canvas_shift(1.3333f, 0.064f, 0.0f) == 0.0f,
+              "z = 0 is refused as a shift of zero, not a division");
+        check(x4vr::canvas_shift(1.3333f, 0.064f, -3.0f) == 0.0f,
+              "a negative distance is refused, not mirrored");
+        check_near(x4vr::canvas_shift(1.3333f, 0.064f, 1e9f), 0.0f, 1e-9f,
+                   "an effectively infinite canvas is mono, as it is today");
+        // The left eye's shift is positive. The sign is the one thing here
+        // that cannot be caught by a magnitude check, and getting it backwards
+        // puts the UI behind the starfield instead of in front of it.
+        check(x4vr::canvas_shift(1.3333f, 0.064f, 2.0f) > 0.0f &&
+                  x4vr::make_eye_shear(1.3333f, 0.0f, 0.1f, -0.032f).m[8] > 0.0f,
+              "left eye is +s, matching the sign of the left eye's shear");
+    }
+
     printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n", g_fail);
     return g_fail ? 1 : 0;
 }

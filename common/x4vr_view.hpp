@@ -257,6 +257,30 @@ inline Mat4 make_eye_shear(float sx, float sy, float near_z, float dx,
     return k;
 }
 
+// Task #30: the constant clip-space x offset that puts a canvas at `z` metres.
+//
+// Applied as K[12], it makes `gl_Position = (x + s·w, y, z, w)`, whose NDC x is
+// `x/w + s` for *any* w -- which is what separates a canvas from geometry. The
+// UI's own matrix may be an orthographic screen transform or the map's
+// perspective one; the shift is the same either way.
+//
+// The value is the world shear evaluated at a fixed depth, and that is not a
+// coincidence but the definition: "the UI at z metres" and "world geometry at z
+// metres" have to produce the same disparity or the canvas would not sit where
+// it is asked to. make_eye_shear puts `m8 = sx·(ipd/2)/near` for the left eye,
+// and the derivation holds clip z at the near plane, so the NDC displacement of
+// a point at view depth z is `m8·near/z` -- near cancels, leaving this. Locked
+// against make_eye_shear in tests/view_math.cpp so the two cannot drift.
+//
+// Positive for the left eye, negative for the right: a near object appears
+// displaced toward the right in the left eye. Zero for a non-positive distance,
+// which is the same as infinity -- identical in both eyes, today's behaviour.
+inline float canvas_shift(float sx, float ipd, float z) {
+    if (!(z > 0.0f))
+        return 0.0f;
+    return sx * 0.5f * ipd / z;
+}
+
 inline void format_mat(char *buf, size_t n, const Mat4 &a) {
     snprintf(buf, n,
              "[%8.3f %8.3f %8.3f %8.3f | %8.3f %8.3f %8.3f %8.3f | "

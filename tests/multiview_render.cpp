@@ -525,6 +525,16 @@ int main(int argc, char **argv) {
             // +MASKED, the shadow maps have gone per-eye and the per-eye
             // shading defect is back.
             {"shadow", false, LDR, true},
+            // Appended, never inserted: the serials are positional and the
+            // shadow case above is the one that must not be renumbered by
+            // accident. HDR with no depth -- a fullscreen post pass, and the
+            // case that separates task #30's canvas from everything sharing
+            // its shape. X4 has 29 passes like this against one UI pass, and
+            // the only thing telling them apart is the LDR test. If
+            // subpass_is_canvas() ever loses it, every deferred lighting pass
+            // becomes a canvas, and under X4VR_SHEAR_LIGHTS the light volumes
+            // are World modules, so they would really take the shift.
+            {"hdr-nodepth", true, HDR, false},
         };
         for (const Probe &p : probes) {
             VkAttachmentDescription att[2]{};
