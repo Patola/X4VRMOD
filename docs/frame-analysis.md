@@ -12706,3 +12706,103 @@ That is a new task, not a step of #25, and it is the largest remaining piece.
 Head tracking (#33) sits on top of it; a first cut can submit with the runtime's
 view FOVs while ignoring head pose, which is enough to sense depth and scale
 standing still and not enough to move around in.
+
+## Task #32 — the right eye, judged from the dumps. Answered from data already on disk
+
+585 present-dump frames were already in `/tmp`, across seven takes — 253 from
+take 97 alone. I nearly specified a run to produce them: the `ls` that would have
+shown them was truncated by a `head -30`, and the six frames I did see were
+`img103` end-of-pass dumps, a different instrument. The sweep rule this file
+already carries covers this exactly, and it was applied and then abandoned
+halfway.
+
+    /tmp/x4vr-t93   19   /tmp/x4vr-t97  253   /tmp/x4vr-t101  40
+    /tmp/x4vr-t94   16   /tmp/x4vr-t98  227   /tmp/x4vr-t103  20
+    /tmp/x4vr-t99   10
+
+### The metric, and why not the old one
+
+The check being replaced asked whether layer 1 held roughly as much light as
+layer 0. Takes 41–44 showed that shape of metric cannot tell correct stereo from
+broken — a bit-exact copy of layer 0 scores a perfect 1.00, and so does a correct
+right eye. It was never measuring stereo.
+
+What separates them is not *how much* the images differ but **how the difference
+is distributed**:
+
+| | per-region alignment |
+|---|---|
+| bit-exact copy | every region at shift 0, r = 1.000 |
+| uniform translation | every region at the same nonzero shift |
+| true stereo | regions at **different** shifts, because the shear displaces by `sx·(ipd/2)/z` and `z` varies across a frame |
+
+So the number is the **spread** of per-tile shifts, not their mean. A single
+global shift, however large, is a slid image — the failure `make_eye_shear`'s own
+comment warns about: *a plain clip-space translation would slide the whole image
+uniformly and produce no depth cue at all*.
+
+### Two things the controls caught before any conclusion did
+
+`tests/eye_stereo_selftest.py` slides a real X4 frame by known amounts and checks
+the recovered value, not its magnitude. Both findings below came from that, not
+from reading the output and being surprised.
+
+**The sign was inverted.** The first window was `b[m-s : w-m-s]`, which returns
+every displacement negated. Magnitudes were exact, so a magnitude-only test would
+have passed — and the tool would have reported the eyes swapped, forever, in a
+project that has already spent takes on which eye is which.
+
+**Saturation reads as depth.** Take 97's first pass reported 31 frames at
+`shift -40..+40, spread 80` — 0.75 m of parallax, in deep space, on frames of
+mean luma 9. Tiles pinned at *both* ends of the search window are the correlator
+finding nothing and returning its boundary. A number meaning "I failed" was being
+printed in the same units as the answer. Tiles at ±`MAX_SHIFT`, and tiles
+matching below `r = 0.90`, now do not vote, and both counts are printed rather
+than filtered away. A fourth control was added: two unrelated images must yield
+**no** confident tile, which the first version would have failed.
+
+### What the dumps say
+
+**Take 103 recovers a number this file derived a different way.** The start menu
+holds one object at about 20 m and everything else at infinity, and the note
+recorded for it was `disparity_px · z = 60.07`. The tool, built from the shear
+equation and validated on synthetic slides, reads the real pixels as:
+
+    eye  frame 7: 58 matched tile(s), shift -3..+0 px (spread 3), r=0.9999,
+         luma 73.8, nearest ~20.0 m
+
+Two derivations, one number, no shared arithmetic.
+
+**Takes 97 and 98 hold real near-field stereo.** 87 and 75 frames with
+depth-varying parallax, down to `-39 px` — about 1.5 m, which is cockpit
+distance:
+
+    eye  253 present dump(s): 86 bit-identical, 80 measured with no parallax,
+         87 with parallax, 0 with nothing alignable
+
+**The eye order is right, over 1800 tiles.** A nearer object must sit *left* in
+the right eye. Take 97: all 443 displaced tiles move left. Take 101: all 130.
+Take 103: all 88. Take 98: 1171 left and 2 right — those two are +3 px in frames
+whose other tiles read −30, which is correlation noise on a repeating texture,
+and it is reported as the 0.2% it is rather than as a sign error. The threshold
+for calling it a real inversion is 5% of displaced tiles, set because an extremum
+must not decide a verdict about the whole pipeline.
+
+### Two takes change verdict
+
+**Takes 97 and 98 go FAIL → PASS.** They were failing on *"the probe never
+sampled a swapchain image"* — the probe walks the frame one image at a time,
+roughly one every 30 s, and in those runs it never got as far as #50–#53. The
+dumps answer the same question directly and say the eye image is correct stereo.
+
+Not waved away, though: the two instruments watch **different links**. The dumps
+prove the *eye image* is stereo; the probe would have proved the copy from it
+into the swapchain kept both layers. So the run now prints
+
+    warn  the probe never reached a swapchain image (#50-#53), so the
+          eye-image → swapchain copy is unverified in this run.
+
+which is what is actually true, rather than either a pass or a failure.
+
+Every other verdict across the 74 logs is unchanged. Scoring a dump-heavy log is
+now slow — 25 s for take 97's 253 frames — and that is per take, not per run.

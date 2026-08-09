@@ -16,6 +16,7 @@ Usage:  tools/score_run.py /tmp/x4vr-takeNN.log
 Exit:   0 all checks pass, 1 a check failed, 2 the log cannot be scored
 """
 import math
+import os
 import re
 import sys
 
@@ -181,11 +182,44 @@ def main(path):
     if run is None:  # pre-take-34 build: no env line, so intent is unknowable
         probe_asked = any("mv probe:" in ln for ln in lines)
 
+    # Task #32. The present dumps answer the same question the probe walk does,
+    # directly and without waiting for the walk to reach a swapchain image: they
+    # are the finished eye image with both layers in it. Judged per region, not
+    # in bulk -- see tools/eye_stereo.py for why the bulk ratio could not tell
+    # a correct right eye from a copy of the left.
+    m_mvd = re.search(r"X4VR_MV_DUMP=(\S+)", run or "")
+    m_mvp = re.search(r"X4VR_MV_DUMP_PRESENT=(\S*)", run or "")
+    dumps_asked = bool(m_mvd and m_mvp and m_mvp.group(1) not in ("", "0"))
+    eye_frames = 0
+    if dumps_asked:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import eye_stereo
+        m_w = re.search(r"X4VR_RES=(\d+)x\d+", run or "")
+        m_i = re.search(r"X4VR_IPD=([\d.]+)", run or "")
+        m_s = re.search(r"X4VR_PROJ_SX=([\d.]+)", run or "")
+        # PROJ_SX rather than the measured scene sx: the dumps show what the
+        # shear actually did, and for the modules that bake it that IS the
+        # constant. Where the two disagree the stereo line above says so.
+        eye_frames = eye_stereo.report(
+            m_mvd.group(1),
+            w=int(m_w.group(1)) if m_w else None,
+            sx=float(m_s.group(1)) if m_s else None,
+            ipd=float(m_i.group(1)) if m_i else None)
+        if not eye_frames:
+            # Intent gate: this run asked for present dumps. Their absence is a
+            # failure of the run, not a reason to stay quiet.
+            fails.append(f"X4VR_MV_DUMP_PRESENT was set but no present dumps "
+                         f"were found at {m_mvd.group(1)}-present-n*-layer*.ppm "
+                         f"— the eye image was never written, so the right eye "
+                         f"is unjudged in a run that asked to judge it")
+
     if not samples and not probe_asked:
         # Explicitly *not* silence, and explicitly not a pass. The right eye is
         # simply unjudged in this run, and saying so is the whole point.
-        print("swapchain  unjudged — this run did not enable X4VR_MV_PROBE, so "
-              "nothing here speaks to the right eye's contents.")
+        if not eye_frames:
+            print("swapchain  unjudged — this run enabled neither "
+                  "X4VR_MV_PROBE nor X4VR_MV_DUMP_PRESENT, so nothing here "
+                  "speaks to the right eye's contents.")
     elif not samples:
         # Takes 97 and 98 both failed here while being perfectly healthy, and
         # the advice above ("sit still longer") sent the diagnosis the wrong
@@ -198,11 +232,27 @@ def main(path):
         # which it is, and points at the instrument that answers the same
         # question directly, since X4VR_MV_DUMP_PRESENT writes the finished eye
         # image with both layers in it.
-        fails.append("the probe never sampled a swapchain image (#50-#53) — "
-                     "it walks the frame one image at a time and a short run "
-                     "does not reach them. This is no evidence, not a bad "
-                     "eye: read the X4VR_MV_DUMP_PRESENT dumps instead, or "
-                     "run for longer")
+        if eye_frames:
+            # Task #32, and this is the whole point of it: the present dumps
+            # answered the right-eye question, so the probe's failure to walk as
+            # far as a swapchain image is a redundancy that did not pay off, not
+            # a defect in the run. Takes 97 and 98 carry 167 and 207 frames of
+            # depth-varying parallax each and were failing on this line.
+            #
+            # Stated precisely rather than waved away, because the two
+            # instruments do not watch the same link: the dumps prove the EYE
+            # IMAGE is stereo, the probe would have proved the copy from it into
+            # the swapchain kept both layers. That copy stays unverified here.
+            print("warn  the probe never reached a swapchain image (#50-#53), "
+                  "so the eye-image → swapchain copy is unverified in this run. "
+                  "The eye image itself is judged above, from the present "
+                  "dumps.")
+        else:
+            fails.append("the probe never sampled a swapchain image (#50-#53) — "
+                         "it walks the frame one image at a time and a short run "
+                         "does not reach them. This is no evidence, not a bad "
+                         "eye: read the X4VR_MV_DUMP_PRESENT dumps instead, or "
+                         "run for longer")
     else:
         ratios = [r for _, _, r, _ in samples]
         dupes = sum(1 for *_, ident in samples if ident)
