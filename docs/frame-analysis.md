@@ -12806,3 +12806,106 @@ which is what is actually true, rather than either a pass or a failure.
 
 Every other verdict across the 74 logs is unchanged. Scoring a dump-heavy log is
 now slow — 25 s for take 97's 253 frames — and that is per take, not per run.
+
+## Task #31 — the three extents, and the check that nearly failed every good run
+
+### The launcher half was already fixed
+
+Take 101 ran gamescope at 2816×792 while X4 rendered 1408×1408, because the
+launcher re-read `sbs_dim()` instead of the `W`/`H` it had just honoured. That is
+fixed: `X4VR_RES` now derives from `$W`/`$H`, and take 103 shows it working —
+`X4VR_W=2816 X4VR_H=792` produced `X4VR_RES=1408x792`, and the warning that had
+appeared in every log since take 41 stops at exactly that run.
+
+    logs carrying "WARNING swapchain": 69 of 74, and none after take 102.
+
+### Two copies of the eye size were still live
+
+`expected_eye()` was added after take 102 to make `X4VR_RES` the single source.
+Two places never got converted:
+
+* **The `SPLIT OFF` message** printed `X4VR_SBS_WIDTH/2, X4VR_SBS_HEIGHT` while
+  the test three lines above it used `expected_eye()`. With `X4VR_RES` set to
+  anything else the line can read *"X4 asked for 1408x792 but one eye is
+  1408x1408"* when the compared values were equal, or declare `SPLIT OFF` while
+  printing two identical numbers. An error message that contradicts itself sends
+  the diagnosis somewhere else entirely, which is what this task is a list of.
+* **`X4VR_FAKE_EXTENT=1`** offered the compiled constant as the surface's
+  `currentExtent`, ignoring `X4VR_RES`. Latent, because the knob is off by
+  default — but the `SPLIT OFF` message above **recommends that exact knob** as
+  the remedy, so anyone following the advice with a non-default `X4VR_RES` would
+  have been handed the wrong extent by the fix.
+
+Both now read `expected_eye()`.
+
+### One line instead of three to compare
+
+    extents: X4 renders 1408x1408, this run's eye is 1408x1408 (from X4VR_RES),
+             the composite presents 2816x1408 -- they agree
+
+Take 101's three numbers were 1408×1408, 1408×1408 and 2816×1408 against a
+2816×792 window, and **every component was behaving exactly as written**. That is
+why nothing reported it: there was no single place where the disagreement
+existed. Now there is.
+
+### The check I nearly shipped would have failed 60 of the 74 logs
+
+The first version scored the old `WARNING swapchain is AxB, expected CxD` line as
+a defect. Re-running the scorer over every log — which is the only reason this
+was caught — failed **60 runs, including every tagged known-good state**.
+
+Take 60's line reads:
+
+    WARNING swapchain is 2816x1408, expected 2816x1408
+
+A warning whose two numbers are equal. In those builds the check compared against
+one value and printed another (the compiled constant), which the layer's own
+comment already records. What it actually compared cannot be recovered from the
+log, so it cannot be scored on — and treating it as evidence was reading an
+instrument without checking what it measured, for the third time in this file.
+
+It is now a `note` that says the line predates the fix and is not being judged.
+
+### What is judged instead, and it works on every build
+
+The eye the run asked for (`X4VR_RES`, or `common/x4vr_sbs.hpp` when unset)
+against the window X4 was actually given (`SDL_GetWindowSize`). Both are in the
+log regardless of which layer build wrote it, and neither is a message whose
+meaning has changed. Validated offline across all 74 logs **before** being
+enabled: it fires on take 101 and on nothing else.
+
+    FAIL  the eye is 1408x1408 (from X4VR_RES) but X4's window is 2816x792 — a
+          side-by-side frame of 2816x1408 does not fit it, so the two are
+          different rectangles and anything measured about aspect is about
+          neither (take 101)
+
+The scorer reads the default from `common/x4vr_sbs.hpp` rather than copying it,
+for the same reason the launcher does: a fourth copy of the SBS size is how three
+extents became four.
+
+### Take 101 changes verdict: PASS → FAIL
+
+It was passing. Its aspect measurement was already recorded in this file as
+having measured nothing, and now the scorer says so too. With takes 97 and 98
+going the other way for #32, this session moves three verdicts, all deliberate,
+all recorded here.
+
+### Deferred by decision, not blocked: #25
+
+Patola's call, and it is the right sequencing: the IPD and the sense of depth and
+scale get judged when **true SBS** (done), **head tracking** (#33) and **a VR
+projection path** are all in place. Until then it stays adjustable and is not a
+blocker on anything. `active_runtime.json` is absent from this machine at rest
+because SteamVR (Steam Link) and WiVRn each install it when they start — both
+paths are live, neither claims the runtime idle.
+
+So the earlier note that "#25 is blocked" was the wrong frame. It is scheduled.
+
+### What take 109 has to show
+
+Nothing needs a run to *fix*, so this rides along with whatever runs next:
+
+1. `extents: … -- they agree`, with X4's render, the eye and the composite all
+   from one number.
+2. **No** `WARNING swapchain` line. Takes 103–108 already have none, so its
+   return would mean this change broke something rather than that X4 did.

@@ -53,6 +53,28 @@ LAYER1_MIN_RATIO = 0.60
 QUIET_MIN = 10.0
 
 
+def sbs_default_eye():
+    """The eye size a run gets when it sets no X4VR_RES.
+
+    Read from common/x4vr_sbs.hpp rather than copied, for the same reason the
+    launcher reads it there: a fourth copy of the SBS size is how the three
+    extents became four. Falls back to the values that header has carried since
+    the beginning if it cannot be found, and says which it used.
+    """
+    hdr = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       "..", "common", "x4vr_sbs.hpp")
+    dims = {}
+    try:
+        for m in re.finditer(r"#define X4VR_SBS_(WIDTH|HEIGHT)\s+(\d+)",
+                             open(hdr, encoding="utf-8").read()):
+            dims[m.group(1)] = int(m.group(2))
+    except OSError:
+        pass
+    if "WIDTH" in dims and "HEIGHT" in dims:
+        return dims["WIDTH"] // 2, dims["HEIGHT"], "common/x4vr_sbs.hpp"
+    return 1408, 1408, "the built-in fallback, x4vr_sbs.hpp unreadable"
+
+
 def main(path):
     try:
         text = open(path, encoding="utf-8", errors="replace").read()
@@ -181,6 +203,72 @@ def main(path):
     probe_asked = bool(m_probe and m_probe.group(1) not in ("", "0"))
     if run is None:  # pre-take-34 build: no env line, so intent is unknowable
         probe_asked = any("mv probe:" in ln for ln in lines)
+
+    # Task #31: the three extents, checked rather than left to be compared by
+    # eye across three lines in three components. Take 101 ran with X4's render
+    # at 1408x1408, the composite at 2816x1408 and the window at 2816x792, and
+    # every component was behaving exactly as written -- which is why nothing
+    # reported it and the aspect test that run existed for measured nothing.
+    m_ext = re.search(
+        r"extents: X4 renders (\d+)x(\d+), this run's eye is (\d+)x(\d+) "
+        r"\(from ([^)]+)\), the composite presents (\d+)x(\d+) -- (.+)", text)
+    m_win = re.search(r"sdl: SDL_GetWindowSize -> (\d+)x(\d+)", text)
+    m_swap = re.search(r"WARNING swapchain is (\d+)x(\d+), expected (\d+)x(\d+)",
+                       text)
+
+    # Works on every log that has an env line and a window line, whatever build
+    # wrote it -- it uses the run's own declared knobs and the window X4 was
+    # actually given, not a layer message whose meaning changed between builds.
+    # Checked offline over all 74 logs before being enabled: it fires on take
+    # 101 and on nothing else, which is exactly the run this file records as
+    # task #31.
+    if run and "X4VR_SBS=1" in run and m_win:
+        m_res = re.search(r"X4VR_RES=(\d+)x(\d+)", run)
+        if m_res:
+            ew, eh, src = int(m_res.group(1)), int(m_res.group(2)), "X4VR_RES"
+        else:
+            ew, eh, src = sbs_default_eye()
+        ww, wh = int(m_win.group(1)), int(m_win.group(2))
+        if ww != 2 * ew or wh != eh:
+            fails.append(f"the eye is {ew}x{eh} (from {src}) but X4's window is "
+                         f"{ww}x{wh} — a side-by-side frame of {2 * ew}x{eh} "
+                         f"does not fit it, so the two are different rectangles "
+                         f"and anything measured about aspect is about neither "
+                         f"(take 101)")
+
+    if m_ext:
+        rw, rh, ew, eh, src, cw, ch, verdict = m_ext.groups()
+        win = f", window {m_win.group(1)}x{m_win.group(2)}" if m_win else ""
+        print(f"extents  X4 renders {rw}x{rh}, eye {ew}x{eh} (from {src}), "
+              f"composite {cw}x{ch}{win}")
+        if "DISAGREE" in verdict:
+            fails.append(f"the extents disagree — X4 rendered {rw}x{rh} for an "
+                         f"eye of {ew}x{eh}, so the composite duplicates the "
+                         f"left half and nothing in this run is stereo")
+        # The window is the one extent the layer's own line cannot see: it
+        # belongs to gamescope and the WSI, and take 101's whole defect was the
+        # composite being twice as tall as the window it was presented into.
+        if m_win and (int(m_win.group(1)) != int(cw)
+                      or int(m_win.group(2)) != int(ch)):
+            fails.append(f"the composite is {cw}x{ch} but X4's window is "
+                         f"{m_win.group(1)}x{m_win.group(2)} — the frame does "
+                         f"not fit the surface it is presented into (take 101)")
+    elif m_swap:
+        # NOT a failure, and the first version of this made it one -- which
+        # failed 60 of the 74 logs on disk, including every tagged known-good
+        # state. 69 logs carry this warning and it stops at take 103, where the
+        # launcher fix landed. In those builds the line compared against one
+        # number and PRINTED another (the compiled constant), which is recorded
+        # in the layer's own comment: take 60's reads "swapchain is 2816x1408,
+        # expected 2816x1408" -- a warning whose two numbers are equal. What it
+        # actually compared cannot be recovered from the log, so it cannot be
+        # scored on, and treating it as evidence was reading an instrument
+        # without checking what it measured.
+        print(f"note  this log carries the pre-take-103 'WARNING swapchain "
+              f"{m_swap.group(1)}x{m_swap.group(2)}, expected "
+              f"{m_swap.group(3)}x{m_swap.group(4)}' line, whose 'expected' is "
+              f"a constant rather than the value compared. Extents unjudged "
+              f"here — the 'extents:' line is what judges them, from take 109 on")
 
     # Task #32. The present dumps answer the same question the probe walk does,
     # directly and without waiting for the walk to reach a swapchain image: they

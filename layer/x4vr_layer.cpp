@@ -4745,6 +4745,27 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
                        ci->imageExtent.height == eye.height;
     if (split)
         sbs_ci.imageExtent.width *= 2;
+    // Task #31, stated as one line rather than as three that have to be found
+    // and compared. The three extents are X4's render, the eye this run expects
+    // and the composite actually presented; take 101 had them at 1408x1408,
+    // 1408x1408 and 2816x1408 against a 2816x792 window, and every individual
+    // component was behaving as written. Nothing here can go wrong quietly
+    // afterwards, because the line says whether they agree in the same breath
+    // as it says what they are.
+    {
+        static bool said = false;
+        if (!said && g_sbs_enabled && g_active) {
+            said = true;
+            const bool ok = !g_sbs_split_render || split;
+            X4VR_LOG("extents: X4 renders %ux%u, this run's eye is %ux%u "
+                     "(from %s), the composite presents %ux%u -- %s",
+                     ci->imageExtent.width, ci->imageExtent.height, eye.width,
+                     eye.height, getenv("X4VR_RES") ? "X4VR_RES" : "the "
+                     "compiled SBS size", sbs_ci.imageExtent.width,
+                     sbs_ci.imageExtent.height,
+                     ok ? "they agree" : "THEY DISAGREE, see SPLIT OFF above");
+        }
+    }
     // The split test is an exact equality, and when it fails everything
     // downstream degrades quietly into "duplicate the left half". Three runs
     // went that way before anyone asked what size X4 had actually requested.
@@ -4764,7 +4785,15 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
                      "display width for input, X4VR_FAKE_EXTENT=1 offers the "
                      "render size through the surface instead.",
                      ci->imageExtent.width, ci->imageExtent.height,
-                     X4VR_SBS_WIDTH / 2, X4VR_SBS_HEIGHT);
+                     // expected_eye(), not the compiled constant. The test
+                     // three lines above uses expected_eye(); this message used
+                     // X4VR_SBS_WIDTH/2 -- so with X4VR_RES set to anything
+                     // else the two disagree, and the line can report "X4 asked
+                     // for AxB but one eye is AxB" while declaring SPLIT OFF.
+                     // An error message that contradicts itself sends the
+                     // diagnosis somewhere else entirely, which is what task
+                     // #31 is a list of.
+                     eye.width, eye.height);
         }
     }
     // X4 asks for FIFO, which pins the frame rate to the display and makes
@@ -5176,8 +5205,17 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_GetPhysicalDeviceSurfaceCapabilitiesKHR(
         // halved here -- there was no number to halve; we are supplying the
         // eye extent so that X4 has a source for its render size other than
         // its window, which we need to keep at display width for input.
-        caps->currentExtent.width = X4VR_SBS_WIDTH / 2;
-        caps->currentExtent.height = X4VR_SBS_HEIGHT;
+        // expected_eye(), not the compiled constant: X4VR_RES is what the
+        // launcher tells X4 to render, and offering a different number here
+        // would make the surface lever and the config lever disagree about the
+        // eye in the same run. Latent until now only because this path needs
+        // X4VR_FAKE_EXTENT=1, which is off by default -- and the SPLIT OFF
+        // message above recommends exactly that knob, so a person following
+        // the advice with a non-default X4VR_RES would have been handed the
+        // wrong extent by the fix.
+        const VkExtent2D fe = expected_eye();
+        caps->currentExtent.width = fe.width;
+        caps->currentExtent.height = fe.height;
         if (note_halved_surface(surface))
             X4VR_LOG("sbs: surface %p had no preferred extent — reporting "
                      "%ux%u (the eye) so the render size stops following the "
