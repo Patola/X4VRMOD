@@ -14225,6 +14225,9 @@ mutex is still unmeasured. That is the submission take's business.
 
 ## Take 114 — first light. The submission, and what it should and should not do
 
+**This command line was wrong twice and cost take 114. The corrected one is
+below; this block is what was actually specified:**
+
     X4VR_TAKE=114-FIRST-LIGHT X4VR_VR=1 X4VR_FOV=1.4917 X4VR_STEREO=1
     X4VR_BINDLESS_PATCH=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1
     X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1
@@ -14262,6 +14265,61 @@ until now nothing submitted — so this is its first measurement.
 
 **What would make this take unscoreable rather than failed:** X4 not reaching a
 playable state at all. Everything else the scorer has words for.
+
+## Take 114 — lost to its own command line. Nothing about the code was tested
+
+X4 started, flat, no SBS, no VR, in a 3440x1440 window. The reason is line 9 of
+the log:
+
+    inject  env: run = X4VR_LOG=/tmp/x4vr-take114.log ./launch/x4vr-launch.sh
+
+**Only `X4VR_LOG` reached the process.** The command above was written as an
+indented multi-line block with no `\` continuations, so a shell given it
+verbatim treats each line as a separate command: the first lines are bare
+variable assignments that set and discard shell variables, and the last line
+runs the launcher with exactly one variable in its environment. Everything
+observed follows from that and nothing else:
+
+    config: effective fov=1.1111 res=2816x1408 (fov from the profile, not this run)
+    WARNING swapchain is 3440x1440, expected 1408x1408
+    sdl: leaving the compositor's pointer alone — no side-by-side composite
+         (X4VR_SBS is off)
+
+and zero `vr` lines, because `X4VR_VR` was never set — the layer never opened
+the runtime at all. **The submission code was not exercised. This take says
+nothing about whether it works.**
+
+**A second, independent error in the same line.** Diffing it against take 113's
+logged `env: run =` by variable name:
+
+    in 113, missing from the 114 line: X4VR_DUMP_MATRICES X4VR_MV_INVENTORY X4VR_RES
+
+The first two were dropped deliberately — instruments, and this is an
+interaction take. **`X4VR_RES=1408x1408` was not.** It sets the eye render
+extent, and without it X4 renders 2816x1408 and the SBS split is wrong. So even
+a correct paste would have produced a bad run.
+
+**Both errors have the same root:** the command line was composed from prose in
+this file rather than derived from the previous known-good run's logged
+`env: run =` line. That line is the only complete, verified record of what a
+working take actually sets. Deriving from it — and changing only what the new
+take deliberately changes — is what caught the missing `X4VR_RES`, after the
+take was already lost.
+
+### The corrected command, on ONE line so it survives a paste
+
+    X4VR_TAKE=114b-FIRST-LIGHT X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take114b.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 ./launch/x4vr-launch.sh
+
+That is take 113's line with exactly three changes: `X4VR_TAKE` and `X4VR_LOG`
+renamed, `X4VR_FOV` 1.437 → 1.4917, and the two instruments removed. P116.1
+through P116.5 stand unchanged — they have not been tested yet.
+
+**Check before playing:** the log should show `vr:` lines within the first
+seconds. If `grep -c vr: /tmp/x4vr-take114b.log` is 0, the environment did not
+arrive and the run can be abandoned immediately rather than played out.
+
+**Every command line in this file from here on is one line.** A wrapped block is
+a trap that looks like formatting.
 
 # State at `stage8-xr-session-in-x4` — resume here
 
