@@ -14466,6 +14466,44 @@ per-draw shear applies to, so #30's canvas work is getting a free preview. It
 also means the menu's depth is currently whatever the shear happens to give it,
 not a chosen distance.
 
+## #33 — the geometry rules out the cheap answer, before any code
+
+X4 renders one symmetric ±55° frustum. Both eyes together need ±54°
+horizontally and 55° down. So the margin available for head rotation is:
+
+    horizontal   55 - 54 =  1 deg
+    vertical     55 - 55 =  0 deg
+
+**Essentially zero**, which is exactly what take 114d felt like from inside:
+*"a quad put at my front."* The quad's edge is the display's edge.
+
+The obvious cheap fix — render wider and rotate in the vertex shader — dies on
+arithmetic. A rectilinear frustum's area grows as tan², so buying R degrees of
+free head rotation at constant angular density costs:
+
+    +-5 deg   ->  1.36x the pixels
+    +-10 deg  ->  2.06x
+    +-20 deg  ->  5.96x
+    +-30 deg  -> 44.38x
+    +-45 deg  -> impossible (tan -> infinity)
+
+Ten degrees is not head tracking and already doubles the fill. This closes the
+option rather than leaving it to be re-proposed.
+
+**The in-shader rotation is exact, and still does not help.** X4's clip values
+invert cleanly — `x_v = x_c/sx`, `y_v = y_c/sy`, `z_v = w_c` — so a head
+rotation can be applied per vertex with no approximation, reusing #35's live
+sx/sy. It fails for a different reason: **X4 culls before we ever see a
+vertex.** Geometry outside its frustum was never submitted, so rotating what
+remains just moves the black edge. Rendering-side transforms cannot invent
+what the game decided not to draw.
+
+**Therefore X4's own camera must follow the head.** That is the only mechanism
+that changes what X4 culls, and it is the whole of #33. The in-shader rotation
+then returns as a *refinement*, not a solution: late-latching the small residual
+between the pose X4 rendered with and the pose at display time, which is the
+standard architecture and is where the low latency comes from.
+
 ### What stage9 does not do
 
 The image is world-locked to a fixed forward axis, because X4 does not know
