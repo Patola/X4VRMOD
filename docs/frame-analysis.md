@@ -12523,3 +12523,109 @@ two fields. Played: a full session at 106° — station interior, elevator, NPC,
 combat — smooth and in correct SBS.
 
 Open: a default, which waits on a cost number that survives its own protocol.
+
+## Task #25 — what comfort is a function of, and what #24 just did to it
+
+`make_eye_shear` puts `x_ndc' = x_ndc - sx·(ipd/2)/z` per eye. Two consequences,
+and the second is the one that matters:
+
+1. The **pixel** offset is `(W/2)·sx·(ipd/2)/z`. It depends on the field.
+2. The **angle** between the two eyes' images of a point is `ipd/z` — `sx`
+   cancels. It does not depend on the field.
+
+So a wider field does not change what the stereo asks the eyes to do. It changes
+only how many pixels that request occupies. The `~30/z px` recorded earlier in
+this file was computed at `sx = 1.3333`, which is neither the scene camera nor
+the current setting:
+
+| | sx | per-eye px at 1 m | at 10 m |
+|---|---|---|---|
+| the baked constant (fov 1.0) | 1.33333 | 30.0 | 3.0 |
+| profile, fov 1.1111 | 1.15174 | 25.9 | 2.6 |
+| fov 1.437 | 0.75405 | 17.0 | 1.7 |
+
+Vergence, from `ipd/z` at `ipd = 0.064`: total disparity passes **1° at 3.67 m**
+and **2° at 1.83 m**, whatever the field or the resolution. Those are the angles
+a real object at those distances subtends, which is why they are comfortable in
+the world — vergence and accommodation agree there. On a fixed-focus display
+they do not, and that disagreement is the whole of task #25.
+
+### What #24 did to #23, and therefore to #25
+
+The world modules with no camera block cannot read `sx` per draw and fall back to
+the baked `X4VR_PROJ_SX`. Against the scene camera:
+
+    fov 1.1111    1.3333 / 1.15174 = 1.16x too much separation
+    fov 1.437     1.3333 / 0.75405 = 1.77x too much separation
+
+**Widening the field multiplied #23's defect by 1.53.** Disparity 1.77× too large
+places that geometry at `1/1.77 = 0.57×` its true distance — conspicuously too
+close, in a subset of world geometry while everything around it is correct. That
+is not a cosmetic staleness; it is a depth conflict inside one frame, which is
+the exact class of thing #25 exists to remove.
+
+A mitigation is available today with no code change: `X4VR_PROJ_SX` is a knob and
+the correct value for `fov 1.437` is **0.75405**, measured three times now. That
+takes those modules from 1.77× to 1.00× at the scene camera. It leaves them wrong
+under zoom, which is #23 proper and unaffected.
+
+### The scorer prices the stereo now
+
+Every run reports the scale it actually produced, from its own numbers, against
+the camera that honours the setting — not against `cam#0`, which is whichever
+camera drew first and is how `1.3333` survived fifty takes:
+
+    stereo  ipd=0.064 m on the fov camera (sx=0.75405, 1408px eye): per-eye
+            offset 17.0px at 1m, 3.4px at 5m, 1.7px at 10m, 0.6px at 30m
+    stereo  total disparity passes 1° at 3.67 m and 2° at 1.83 m — closer than
+            that is a vergence load, and it is FOV-independent
+    stereo  X4VR_PROJ_SX=1.3333 against a scene sx of 0.75405: the 12 module(s)
+            that cannot read sx live separate 1.77x too much (task #23)
+
+It refuses to report when no camera honoured the setting, rather than pricing the
+stereo off whichever camera happened to draw first.
+
+### What a log cannot settle
+
+Whether it *looks* right, and at what IPD it stops being tiring. That needs the
+frames viewed as stereo, and the answer depends on how they are viewed — an HMD,
+a cross-eyed pair, or an SBS-capable display all magnify differently, and the
+angular argument above only holds when the displayed field matches the rendered
+one. That is #31's question arriving inside #25, and it is recorded here as open
+rather than assumed away.
+
+### P108 — committed before the next run
+
+Take 108 is take 106 with the baked constant corrected to the value take 106
+itself measured.
+
+1. `stereo  X4VR_PROJ_SX=0.75405 against a scene sx of 0.75405: … matches the
+   scene camera`.
+2. The `baked-sx=` count is unchanged for a comparable point in the session. The
+   knob changes the value those modules bake, not how many of them there are.
+3. **Nothing else in the score moves**: same `split`, same `masked
+   fullscreen=36`, same `|sy/sx|`, same fov camera at `0.75405`, same distinct-sx
+   set modulo where the session went. This is the real prediction — the constant
+   is consumed by 12–20 of ~430 world modules, so anything else moving means it
+   reaches further than the code says it does.
+4. To Patola's eye: geometry that sat conspicuously nearer than its
+   surroundings should now sit with them. If nothing looked wrong before, that is
+   information too — it would mean the affected modules draw nothing prominent,
+   which is what takes 85 and 86 suggested and never confirmed.
+
+### Take 108 — the run
+
+    X4VR_TAKE=108-BAKED-SX X4VR_FOV=1.437 X4VR_PROJ_SX=0.75405 \
+    X4VR_DUMP_MATRICES=1 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_GAMESCOPE=1 \
+    X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1 \
+    X4VR_SBS=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1 \
+    X4VR_MV_INVENTORY=1 X4VR_LOG=/tmp/x4vr-take108.log \
+    ./launch/x4vr-launch.sh
+
+An interaction take — no probe, no dumps. Fly somewhere with close geometry: a
+station exterior, a docking approach, or a cockpit view, where 1 m to 10 m is
+actually on screen. Deep space cannot show this: at 30 m the whole disagreement
+is under a pixel.
+
+Judged by `python3 tools/score_run.py /tmp/x4vr-take108.log`, on the three
+`stereo` lines and on everything above them being unchanged from take 106.

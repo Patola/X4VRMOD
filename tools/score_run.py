@@ -494,6 +494,49 @@ def main(path):
                     print("proj  aspect per camera unjudged — no camera in this "
                           "run honoured X4VR_FOV, so there is no eye camera to "
                           "check")
+
+                # Task #25. The stereo scale this run actually produced, from
+                # its own numbers rather than from the arithmetic in the docs,
+                # which was written at sx=1.3333 and is 1.8x off at fov 1.437.
+                #
+                # make_eye_shear puts NDC x' = x - sx*(ipd/2)/z per eye, so the
+                # per-eye pixel offset is (W/2)*sx*(ipd/2)/z and the ANGLE
+                # between the two eyes' images of a point is ipd/z, with sx
+                # cancelling. That cancellation is the reassuring part: a wider
+                # field changes how many pixels a given depth separation
+                # occupies, not the vergence it asks the eyes for. It only stops
+                # holding if the rendered field and the displayed field differ,
+                # which is #31's question, not this one.
+                #
+                # Reported against the camera that honours the setting, or not
+                # at all: cam#0 is whichever camera drew first, and pricing
+                # stereo off the wrong camera is what put 1.3333 in the launcher
+                # for fifty takes.
+                m_ipd = re.search(r"X4VR_IPD=([\d.]+)", run or "")
+                mr = re.search(r"X4VR_RES=(\d+)x(\d+)", run or "")
+                if eye and m_ipd and mr:
+                    ipd, w = float(m_ipd.group(1)), int(mr.group(1))
+                    ssx = eye[0]
+                    px = [(z, (w / 2) * ssx * (ipd / 2) / z)
+                          for z in (1.0, 5.0, 10.0, 30.0)]
+                    print(f"stereo  ipd={ipd:.3f} m on the fov camera "
+                          f"(sx={ssx:.5f}, {w}px eye): per-eye offset "
+                          + ", ".join(f"{v:.1f}px at {z:g}m" for z, v in px))
+                    print(f"stereo  total disparity passes 1° at "
+                          f"{ipd / math.radians(1.0):.2f} m and 2° at "
+                          f"{ipd / math.radians(2.0):.2f} m — closer than that "
+                          f"is a vergence load, and it is FOV-independent")
+                    m_baked = re.search(r"X4VR_PROJ_SX=([\d.]+)", run or "")
+                    m_cnt = re.findall(r"baked-sx=(\d+)", text)
+                    if m_baked:
+                        r = float(m_baked.group(1)) / ssx
+                        n = f"{m_cnt[-1]} module(s)" if m_cnt else "the modules"
+                        verdict = ("matches the scene camera" if abs(r - 1) < 0.02
+                                   else f"separate {r:.2f}x too "
+                                        f"{'much' if r > 1 else 'little'}")
+                        print(f"stereo  X4VR_PROJ_SX={m_baked.group(1)} against "
+                              f"a scene sx of {ssx:.5f}: the {n} that cannot "
+                              f"read sx live {verdict} (task #23)")
                 if other:
                     nears = sorted({f"{c['near']:.3f}" for c in other})
                     shown_n = nears[:6]
