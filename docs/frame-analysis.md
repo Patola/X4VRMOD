@@ -13597,6 +13597,119 @@ set — `run-multiview-render.sh`, `run-cursor.sh`, `run-multiview-enable.sh`,
 (six that must fail, two that must pass) and re-run over all 77 logs in `/tmp`:
 the verdict set is unchanged at FAIL = {44, 45, 48, 101, 102}.
 
+## Take 111 — aborted in `xrCreateSession`. A layer's handles are not the application's
+
+**P112.1 is refuted.** X4 did not survive. It reached `vkCreateDevice`, created
+the device through the runtime, logged its queue families, and aborted inside
+`xrCreateSession`:
+
+    [Vulkan Loader] ERROR: vkGetPhysicalDeviceMemoryProperties:
+                           Invalid physicalDevice
+
+    #3  vkGetPhysicalDeviceMemoryProperties ()   from libvulkan.so.1   -> abort
+    #4  vk_init_from_given (physical_device=0x23071c50,
+                            vkGetInstanceProcAddr=<from libvulkan.so.1>)
+    #5  client_vk_compositor_create (getProc=<from libvulkan.so.1>)
+    #7  oxr_session_populate_vk
+    #10 oxr_xrCreateSession
+    #11 x4vr::xr::session_create (phys=0x23071c50)
+    #13 x4vr_CreateDevice (phys=0x23071c50)      <- the handle a LAYER is given
+    #16 vkCreateDevice ()  from steamoverlayvulkanlayer.so
+    #19 vkCreateDevice ()  from libvulkan.so.1
+
+The rest of the predictions: **P112.5 answered** — X4 creates queue family 0
+with one queue (graphics) and family 1 with one queue, so there is no spare
+graphics queue and the runtime will have to share X4's when submission starts.
+**P112.3 and P112.4 unanswered**; the run never got that far.
+
+**P112.2 needs its verdict written carefully**, because it "passed" and the
+passing was misleading. The check compared the runtime's required
+`VkPhysicalDevice` against X4's and found them equal — and they were equal
+because *both* were chain-level handles, not because the comparison was
+meaningful.
+
+### Why, and why it is not a bug in either program
+
+* The Vulkan loader hands the **application** a wrapped `VkPhysicalDevice` and
+  passes the **unwrapped** one down the layer chain. The `phys` a layer is
+  given in `vkCreateDevice` is not the handle X4 itself holds.
+* `XrGraphicsBindingVulkan2KHR` carries handles and **no
+  `pfnGetInstanceProcAddr`**. A runtime therefore has no choice but to use the
+  loader's public entry points on whatever handles it is given.
+
+Monado hid the seam by being inconsistent: it cached the
+`pfnGetInstanceProcAddr` we passed to `xrCreateVulkanInstanceKHR` and used it
+for `vkEnumeratePhysicalDevices` — which is why `xrGetVulkanGraphicsDevice2KHR`
+returned a chain-level handle and the comparison agreed — and then used the
+public loader for the session's Vulkan bundle. Frame #4 shows both facts in one
+line: our handle, its `vkGetInstanceProcAddr`.
+
+**Measured, not inferred.** The layer now prints both handles, and on this
+machine with no runtime at all:
+
+    vr: physical device "AMD Radeon RX 7900 XTX (RADV NAVI31)" — this layer was
+        handed 0x623edccb0ba0, the loader's public handle is 0x623edccb1040 —
+        not the same handle, which is what aborted take 111
+
+### The fix, in two parts
+
+1. **Give the session the application-level handle**, found by matching
+   `VkPhysicalDeviceIDProperties::deviceUUID` rather than by comparing
+   pointers. The loader's own `vkEnumeratePhysicalDevices` is reached by
+   `dlopen`ing `libvulkan.so.1` and taking its `vkGetInstanceProcAddr` — the
+   public trampoline, which is the space the runtime works in.
+2. **Create the session off the loader's chain.** The lookup calls back into
+   the loader on the instance side, and doing that from inside the loader's own
+   `vkCreateDevice` is a hazard worth not taking. The session is now built on
+   its own thread, started from the first `vkGetDeviceQueue` (either spelling,
+   with `vkQueuePresentKHR` as a backstop) — after `vkCreateDevice` has
+   returned to X4, which is also when the loader has finished installing its
+   dispatch on the new device.
+
+The physical-device comparison is gated on **intent** — `X4VR_VR=1` — not on a
+runtime being present, which is the only reason it could be checked here at all
+with no headset attached.
+
+### A second defect, found by the first one's fix
+
+Adding that log line broke `run-multiview-render.sh`'s "probe: layers match"
+case, reproducibly. The case read its verdict with
+
+    grep -o 'IDENTICAL\|DIFFER' <<<"$out" | head -1
+
+— the **first** such word anywhere in the output — and the new line contained
+`DIFFERENT`. The layer was fine; the matcher was. It now reads the verdict off
+the instrument that produces it:
+
+    grep 'mv probe:' <<<"$out" | grep -ow 'IDENTICAL\|DIFFER' | head -1
+
+anchored to the probe's own lines and word-matched. The log line was reworded
+as well: a diagnostic that trips a test's grep will trip a person's. The other
+matchers in the suite were swept for the same shape — the rest are anchored to
+`rp #`, `mv probe:`, or `spirv-dis` output, and none collide.
+
+### Take 112 — the same run again
+
+    X4VR_TAKE=112-VR-BRINGUP X4VR_VR=1 X4VR_FOV=1.437 X4VR_DUMP_MATRICES=1
+    X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_GAMESCOPE=1
+    X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1
+    X4VR_SBS=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1
+    X4VR_MV_INVENTORY=1 X4VR_LOG=/tmp/x4vr-take112.log
+    ./launch/x4vr-launch.sh
+
+**P113.1: X4 starts, loads a save and plays normally** — P112.1 again, against
+the handle fix.
+
+**P113.2: the log prints two different physical-device handles**, as it does
+here with no runtime. If they come out equal under gamescope, the wrapping
+depends on the layer stack and the whole diagnosis needs re-reading.
+
+**P113.3: the session reaches `FOCUSED`, and frames accumulate at the headset's
+rate rather than X4's.** Carried over from P112.3, still unanswered.
+
+**P113.4: X4's frame time is unchanged against take 110.** Carried over from
+P112.4, still unanswered.
+
 # State at `stage6-sx-per-draw` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the

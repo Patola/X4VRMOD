@@ -94,8 +94,20 @@ def main(path):
               "was really 3-versus-3. Use a fresh X4VR_LOG per run.")
         return 2
     if sessions == 0:
-        print("UNSCORABLE  no X4 render-pass inventory in this file "
-              "(X4VR_MV_INVENTORY=1 not set, or the game never started).")
+        # "Never started" and "started, then died" are different problems with
+        # the same missing line, and take 111 was the second while the message
+        # said the first. What separates them is already in the file.
+        if starts:
+            last = next((ln for ln in reversed(lines) if ln.strip()), "")
+            print("UNSCORABLE  X4's instance was created but no render-pass "
+                  "inventory was ever printed — the game started and then "
+                  "stopped early.")
+            print(f"  last line: {last.strip()[:160]}")
+            print("  If it crashed, the backtrace is the measurement: "
+                  "coredumpctl list, then coredumpctl debug <PID>.")
+        else:
+            print("UNSCORABLE  no X4 render-pass inventory in this file "
+                  "(X4VR_MV_INVENTORY=1 not set, or the game never started).")
         return 2
 
     fails = []

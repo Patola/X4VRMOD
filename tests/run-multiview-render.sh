@@ -94,7 +94,13 @@ probe_case() {
         "$BIN" "$VS" "$FS" "$SF" 2>&1)
     # Matched by word, not by end-of-line: a DIFFER line now carries the
     # texel count and location after the verdict.
-    verdict=$(grep -o 'IDENTICAL\|DIFFER' <<<"$out" | head -1)
+    #
+    # Anchored to the probe's own lines, and -w so a longer word cannot match.
+    # Both are repairs, not tidying: this took the first IDENTICAL-or-DIFFER
+    # anywhere in the output, and a new layer log line containing the word
+    # "DIFFERENT" made every match land on it instead of on the probe. The
+    # verdict of a specific instrument has to be read off that instrument.
+    verdict=$(grep 'mv probe:' <<<"$out" | grep -ow 'IDENTICAL\|DIFFER' | head -1)
     local own size
     own=$(sed -n 's/^LAYERS_IDENTICAL=//p' <<<"$out")
     # The probe must hash the whole attachment. It once copied a fixed 64x64

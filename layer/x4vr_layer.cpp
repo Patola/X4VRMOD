@@ -4988,6 +4988,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateSwapchainKHR(
 }
 
 void forget_swapchain_images(VkSwapchainKHR sc); // defined with its registrar
+void vr_start_session_deferred();               // defined in the VR section
 
 VKAPI_ATTR void VKAPI_CALL x4vr_DestroySwapchainKHR(
     VkDevice device, VkSwapchainKHR sc, const VkAllocationCallbacks *ac) {
@@ -5481,6 +5482,10 @@ VKAPI_ATTR void VKAPI_CALL x4vr_GetDeviceQueue(VkDevice device, uint32_t family,
         std::lock_guard<std::mutex> lock(g_queue_mu);
         g_queue_family[*out] = family;
     }
+    // The first thing X4 does after vkCreateDevice returns, and the earliest
+    // point at which the loader is not inside its own device-creation chain.
+    // See vr_app_level_physical_device for why that matters.
+    vr_start_session_deferred();
 }
 
 VKAPI_ATTR void VKAPI_CALL x4vr_GetDeviceQueue2(VkDevice device,
@@ -5492,6 +5497,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_GetDeviceQueue2(VkDevice device,
         d = &g_devices.at(dispatch_key(device));
     }
     d->GetDeviceQueue2(device, qi, out);
+    vr_start_session_deferred(); // X4 may use either spelling; it is idempotent
     if (out && *out && qi) {
         std::lock_guard<std::mutex> lock(g_queue_mu);
         g_queue_family[*out] = qi->queueFamilyIndex;
@@ -6657,6 +6663,11 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdPipelineBarrier(
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     VkQueue queue, const VkPresentInfoKHR *pi) {
+    // Backstop. The session normally starts at the first vkGetDeviceQueue, but
+    // an application that reached a present without calling either spelling of
+    // it would otherwise never get one, and "no session" would be reported for
+    // a reason that has nothing to do with the runtime.
+    vr_start_session_deferred();
     if (g_active) {
         static bool once = false;
         if (!once) {
@@ -6867,7 +6878,12 @@ struct VrState {
     x4vr::xr::Session session;
     std::thread thread;
     std::atomic<bool> stop{false};
+    // Two flags, not one. `started` means the thread was spawned; `session_ok`
+    // means xrCreateSession returned a session. Conflating them made a run
+    // with no runtime at all report session=1, which is the sort of thing the
+    // scorer would then have to disbelieve.
     std::atomic<bool> started{false};
+    std::atomic<bool> session_ok{false};
 
     std::mutex mu;
     uint64_t frames = 0, located = 0, begun = 0;
@@ -6876,6 +6892,17 @@ struct VrState {
     float pmin[3] = {0, 0, 0}, pmax[3] = {0, 0, 0};
     uint32_t queue_family = 0;
     bool device_is_the_runtime_s = false;
+
+    // Noted at vkCreateDevice, used once X4 has come back out of it. The
+    // session is NOT created inside the loader's device-creation chain: the
+    // handle lookup it needs calls back into the loader on the instance side,
+    // and re-entering the loader from inside one of its own chain calls is a
+    // hazard worth not taking for the sake of a few milliseconds.
+    VkInstance vk = VK_NULL_HANDLE;
+    VkPhysicalDevice chain_phys = VK_NULL_HANDLE;
+    VkDevice dev = VK_NULL_HANDLE;
+    InstanceData inst;
+    bool pending = false;
 };
 VrState g_vrs;
 
@@ -6970,6 +6997,91 @@ void vr_thread() {
     }
 }
 
+// The handle a layer sees is not the handle a runtime can use.
+//
+// Take 111 aborted inside xrCreateSession, in Monado's vk_init_from_given ->
+// vkGetPhysicalDeviceMemoryProperties, with the loader reporting "Invalid
+// physicalDevice". The cause is structural rather than a bug in either
+// program:
+//
+//   * the Vulkan loader hands the APPLICATION a wrapped VkPhysicalDevice and
+//     passes the unwrapped one down the layer chain, so the `phys` we are
+//     given in vkCreateDevice is not the handle X4 itself holds;
+//   * XrGraphicsBindingVulkan2KHR carries handles and no
+//     pfnGetInstanceProcAddr, so a runtime has no choice but to use the
+//     loader's public entry points on whatever it is given.
+//
+// Monado made the mismatch hard to see by being inconsistent: it cached the
+// pfnGetInstanceProcAddr we passed to xrCreateVulkanInstanceKHR and used it
+// for vkEnumeratePhysicalDevices -- which is why the "does the runtime want a
+// different device" check passed, both sides being chain-level handles -- and
+// then used the public loader for the session's Vulkan bundle.
+//
+// So the session is given the application-level handle, found by matching
+// device UUIDs rather than pointers. The log prints both handles: the claim
+// that they differ is the diagnosis, and a diagnosis that cannot be read back
+// out of the log is a guess.
+VkPhysicalDevice vr_app_level_physical_device(VkInstance vk,
+                                              VkPhysicalDevice chain_phys,
+                                              const InstanceData &inst) {
+    if (!inst.GetPhysicalDeviceProperties2)
+        return VK_NULL_HANDLE;
+    VkPhysicalDeviceIDProperties mine_id{};
+    mine_id.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+    VkPhysicalDeviceProperties2 mine{};
+    mine.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    mine.pNext = &mine_id;
+    inst.GetPhysicalDeviceProperties2(chain_phys, &mine);
+
+    void *dl = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
+    if (!dl) {
+        X4VR_LOG("vr: cannot dlopen libvulkan.so.1 to reach the loader's own "
+                 "entry points");
+        return VK_NULL_HANDLE;
+    }
+    auto pub =
+        (PFN_vkGetInstanceProcAddr)dlsym(dl, "vkGetInstanceProcAddr");
+    if (!pub)
+        return VK_NULL_HANDLE;
+    auto enumerate =
+        (PFN_vkEnumeratePhysicalDevices)pub(vk, "vkEnumeratePhysicalDevices");
+    auto props2 = (PFN_vkGetPhysicalDeviceProperties2)pub(
+        vk, "vkGetPhysicalDeviceProperties2");
+    if (!props2)
+        props2 = (PFN_vkGetPhysicalDeviceProperties2)pub(
+            vk, "vkGetPhysicalDeviceProperties2KHR");
+    if (!enumerate || !props2)
+        return VK_NULL_HANDLE;
+
+    uint32_t n = 0;
+    if (enumerate(vk, &n, nullptr) != VK_SUCCESS || !n)
+        return VK_NULL_HANDLE;
+    std::vector<VkPhysicalDevice> all(n);
+    if (enumerate(vk, &n, all.data()) != VK_SUCCESS)
+        return VK_NULL_HANDLE;
+    for (VkPhysicalDevice p : all) {
+        VkPhysicalDeviceIDProperties id{};
+        id.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+        VkPhysicalDeviceProperties2 pr{};
+        pr.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        pr.pNext = &id;
+        props2(p, &pr);
+        if (memcmp(id.deviceUUID, mine_id.deviceUUID, VK_UUID_SIZE) == 0) {
+            X4VR_LOG("vr: physical device \"%s\" — this layer was handed %p, "
+                     "the loader's public handle is %p — %s",
+                     mine.properties.deviceName, (void *)chain_phys, (void *)p,
+                     p == chain_phys
+                         ? "the same, so this loader does not wrap them"
+                         : "not the same handle, which is what aborted take "
+                           "111; the session gets the public one");
+            return p;
+        }
+    }
+    X4VR_LOG("vr: no public physical device matches the UUID of the one X4 "
+             "chose — cannot bind a session to it");
+    return VK_NULL_HANDLE;
+}
+
 // The queue the session is bound to. XrGraphicsBindingVulkan2KHR wants family
 // and index, not a VkQueue, so nothing is fetched here -- but which family X4
 // created, and how many queues it left spare, is worth writing down now: the
@@ -7006,15 +7118,42 @@ uint32_t vr_pick_queue_family(VkPhysicalDevice phys, const InstanceData &inst,
     return chosen;
 }
 
-void vr_start_session(VkInstance vk, VkPhysicalDevice phys, VkDevice dev,
-                      const InstanceData &inst, const VkDeviceCreateInfo *ci) {
-    if (!g_vrs.rt.ok() || g_vrs.started.load())
+// Recorded inside vkCreateDevice; acted on afterwards.
+// Gated on intent: the run asked for VR, so the handle comparison happens and
+// is logged whether or not a runtime turned up. That is not tidiness -- it is
+// the only way this measurement can be taken on a machine with no headset
+// attached, which is where it needed taking after take 111.
+void vr_note_device(VkInstance vk, VkPhysicalDevice phys, VkDevice dev,
+                    const InstanceData &inst, const VkDeviceCreateInfo *ci) {
+    if (!g_vr || g_vrs.pending || g_vrs.started.load())
         return;
+    g_vrs.vk = vk;
+    g_vrs.chain_phys = phys;
+    g_vrs.dev = dev;
+    g_vrs.inst = inst;
     g_vrs.queue_family = vr_pick_queue_family(phys, inst, ci);
-    const XrResult r = x4vr::xr::session_create(g_vrs.session, g_vrs.rt, vk,
-                                                phys, dev, g_vrs.queue_family, 0);
+    g_vrs.pending = true;
+}
+
+// The thread does the whole of it -- resolve the handle, create the session,
+// then run the frame loop -- so that none of it happens on a thread the loader
+// is currently inside.
+void vr_session_thread() {
+    VkPhysicalDevice app_phys = vr_app_level_physical_device(
+        g_vrs.vk, g_vrs.chain_phys, g_vrs.inst);
+    if (!g_vrs.rt.ok())
+        return; // the comparison above was the point; there is no runtime
+    if (app_phys == VK_NULL_HANDLE) {
+        X4VR_LOG("vr: NO SESSION THIS RUN — could not resolve the "
+                 "application-level VkPhysicalDevice");
+        return;
+    }
+    const XrResult r =
+        x4vr::xr::session_create(g_vrs.session, g_vrs.rt, g_vrs.vk, app_phys,
+                                 g_vrs.dev, g_vrs.queue_family, 0);
     if (r != XR_SUCCESS) {
-        X4VR_LOG("vr: NO SESSION THIS RUN — %s", g_vrs.session.last_error.c_str());
+        X4VR_LOG("vr: NO SESSION THIS RUN — %s",
+                 g_vrs.session.last_error.c_str());
         return;
     }
     X4VR_LOG("vr: session created on X4's own device — queue family %u index 0,"
@@ -7024,8 +7163,17 @@ void vr_start_session(VkInstance vk, VkPhysicalDevice phys, VkDevice dev,
                  ? "STAGE" : "LOCAL");
     X4VR_LOG("vr: submitting NO layers this run by design — the headset will "
              "show the runtime's own idle scene, not X4");
-    g_vrs.started.store(true);
-    g_vrs.thread = std::thread(vr_thread);
+    g_vrs.session_ok.store(true);
+    vr_thread();
+}
+
+// Called once X4 is back out of vkCreateDevice. vkGetDeviceQueue is the first
+// thing it does there, and it is a call the application makes rather than one
+// the loader makes into us.
+void vr_start_session_deferred() {
+    if (!g_vrs.pending || g_vrs.started.exchange(true))
+        return;
+    g_vrs.thread = std::thread(vr_session_thread);
 }
 
 // One line the scorer can key on, whatever else the run did.
@@ -7036,7 +7184,7 @@ void vr_report(const char *when) {
     X4VR_LOG("vr summary (%s): runtime=%s session=%d focused=%d frames=%llu "
              "located=%llu submitted=0 span=%.4f,%.4f,%.4f",
              when, g_vrs.rt.ok() ? g_vrs.rt.runtime_name : "none",
-             (int)g_vrs.started.load(), (int)g_vrs.focused,
+             (int)g_vrs.session_ok.load(), (int)g_vrs.focused,
              (unsigned long long)g_vrs.frames, (unsigned long long)g_vrs.located,
              g_vrs.pmax[0] - g_vrs.pmin[0], g_vrs.pmax[1] - g_vrs.pmin[1],
              g_vrs.pmax[2] - g_vrs.pmin[2]);
@@ -7052,7 +7200,8 @@ void vr_shutdown() {
     if (g_vrs.thread.joinable())
         g_vrs.thread.join(); // must finish before the device goes away
     vr_report("final");
-    x4vr::xr::session_destroy(g_vrs.session);
+    if (g_vrs.session_ok.load())
+        x4vr::xr::session_destroy(g_vrs.session);
     x4vr::xr::runtime_close(g_vrs.rt);
     g_vrs.started.store(false);
 }
@@ -7063,6 +7212,7 @@ const bool g_vr = false;
 bool vr_open_runtime() { return false; }
 void vr_report(const char *) {}
 void vr_shutdown() {}
+void vr_start_session_deferred() {}
 
 #endif // X4VR_HAVE_OPENXR
 
@@ -7571,7 +7721,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
         t.detach();
     }
 #ifdef X4VR_HAVE_OPENXR
-    if (g_active && g_vrs.rt.ok()) {
+    // g_vr, not rt.ok(): the physical-device comparison is worth logging even
+    // when no runtime turned up, because that is exactly the machine on which
+    // it can be checked without a headset.
+    if (g_active && g_vr) {
         InstanceData inst{};
         {
             std::lock_guard<std::mutex> lock(g_mu);
@@ -7579,7 +7732,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
             if (it != g_instances.end())
                 inst = it->second;
         }
-        vr_start_session(inst.instance, phys, *out, inst, ci);
+        vr_note_device(inst.instance, phys, *out, inst, ci);
     }
 #endif
     return VK_SUCCESS;
