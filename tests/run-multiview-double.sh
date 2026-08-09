@@ -12,7 +12,7 @@
 # Needs VK_LAYER_KHRONOS_validation installed.
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="${X4VR_BUILD:-$ROOT/build}"
 BIN="$BUILD/tests/x4vr_test_multiview_double"
 

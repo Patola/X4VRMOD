@@ -14160,8 +14160,9 @@ depends on the answer.
 
 ## Facts measured, not to be re-derived
 
-**The runtime** (WiVRn 26.6, Quest 3), from `/tmp/x4vr-xrprobe-run1.txt` and
-take 113:
+**The runtime** (WiVRn 26.6, Quest 3), from the first headset probe run and
+take 113 (the probe file no longer exists — see "A measurement I destroyed"
+below; these values are also quoted in the take-111 section above):
 
     2 views, PRIMARY_STEREO       recommended 3096x3243 per eye (max 6192x6486)
     view 0 fov  -54 / +40 h       view 1 fov  -40 / +54 h      both +44 / -55 v
@@ -14264,10 +14265,34 @@ are parallel, first light needs no new vertex math whatsoever.
     585 present-dump frames         /tmp/x4vr-t{93,94,97,98,99,101,103}-present-*
     3 shader dumps WITH a log       /tmp/x4vr-shaders-take{61,74,80} (397 each)
     1 shader dump WITHOUT a log     /tmp/x4vr-shaders (409) — unusable
-    the first headset probe run     /tmp/x4vr-xrprobe-run1.txt
+    NO headset probe run            all three /tmp/x4vr-xrprobe*.txt are
+                                    956-byte "no active runtime" failures
 
 **Module serials are per-run.** A number from one log may only be opened in the
 dump directory of that same run. Sweep `/tmp` before specifying any run.
+
+### A measurement I destroyed, and the two labelling errors it exposed
+
+`tests/run-xr-probe.sh` wrote to a fixed `/tmp/x4vr-xrprobe.txt`. Running it
+twice on a machine with no runtime attached — to verify an unrelated shell fix —
+replaced the 6583-byte headset measurement with 956 bytes of
+`XR_ERROR_RUNTIME_UNAVAILABLE`. There was no second copy. The clobbered file is
+kept as `/tmp/x4vr-xrprobe-clobbered-noruntime.txt` so it cannot be mistaken for
+data.
+
+**What survived:** every number that mattered was already transcribed into this
+file (the take-111 section and "Facts measured, not to be re-derived"), and the
+run is repeatable. Nothing in the analysis rests on the lost bytes.
+
+**The line above it in this file was already wrong.** It named
+`/tmp/x4vr-xrprobe-run1.txt` as "the first headset probe run"; that file is
+956 bytes and has always been a no-runtime failure. So the file's own inventory
+pointed at the wrong artifact before anything was overwritten — the kind of
+error that only surfaces when someone tries to open the file it names.
+
+**The fix is in the harness, not in a habit.** The probe now defaults to
+`/tmp/x4vr-xrprobe-<timestamp>.txt`, per run, for the same reason `X4VR_LOG` is
+per run: a failed run must not be able to overwrite a good one.
 
 ## The Monado source is on disk, and reading it settled two takes
 

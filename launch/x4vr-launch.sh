@@ -331,7 +331,7 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="${X4VR_BUILD:-$ROOT/build}"
 
 DEFAULT_GAME="/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4"
@@ -388,7 +388,7 @@ if [[ $# -eq 0 ]]; then
     export SteamAppId=392160
     export SteamGameId=392160
     ulimit -c unlimited || true
-    cd "$(dirname "$GAME")"
+    CDPATH= cd -- "$(dirname "$GAME")"
     set -- "$GAME" -skipintro -nocputhrottle -nosoundthrottle
 fi
 

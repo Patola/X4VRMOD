@@ -17,13 +17,17 @@
 #        the live half runs the v1 path, which is the one the LAYER uses;
 #        pass "enable2" as the first argument to run stage7's path instead
 set -u
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 BUILD="${BUILD:-$ROOT/build}"
 PROBE="$BUILD/tests/x4vr_test_xr_probe"
 PATHARG=""
 if [[ "${1:-}" == "enable2" || "${1:-}" == "v1" ]]; then PATHARG="$1"; shift; fi
 SECONDS_ARG="${1:-20}"
-OUT="${X4VR_XR_OUT:-/tmp/x4vr-xrprobe.txt}"
+# Per run, for the same reason X4VR_LOG is per run: a probe that fails early
+# writes a 1 KB "no runtime" file, and against a fixed path that silently
+# destroys the measured output of a run that had a headset attached. It has
+# happened once -- see docs/frame-analysis.md.
+OUT="${X4VR_XR_OUT:-/tmp/x4vr-xrprobe-$(date +%Y%m%d-%H%M%S).txt}"
 
 if [[ ! -x "$PROBE" ]]; then
     echo "FAIL  $PROBE not built — cmake --build build"

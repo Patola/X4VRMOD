@@ -8,7 +8,7 @@
 # picture. A case that is never run is not a check, so it runs here rather than
 # living in a comment as an invocation someone might type.
 set -u
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 BUILD="${BUILD:-$ROOT/build}"
 fails=0
 
