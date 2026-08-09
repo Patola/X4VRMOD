@@ -13116,3 +13116,74 @@ P109 restated against that pair:
 The comparison only works if both runs draw the same things — the module set X4
 compiles depends on what has been on screen, and `baked-sx=` counts modules. So
 the scenario below is one routine, run twice.
+
+## Takes 109 and 110 — every module moved, and the flatscreen cannot say more
+
+### P109 scored
+
+**1. Control confirmed.** Take 109 reproduces take 108's judgements — `split on`,
+`masked fullscreen=36`, `|sy/sx|=1.0000` on the fov camera, `stereo … matches the
+scene camera` — and adds `extents: X4 renders 1408x1408, eye 1408x1408 (from
+X4VR_RES), composite 2816x1408, window 2816x1408`, all four agreeing. `mvp-sx=0`.
+The distinct-`sx` set is 306 rather than take 108's 4 because this pair zoomed
+twice; that is the ramp, and it is the same reason take 106 differed from 108.
+
+**2. Confirmed exactly, and better than the prediction asked.** At every
+checkpoint the two runs are identical except for the one split:
+
+    take 109  #400 [world=338 nonworld=62 stereo=338 live-sx=326 mvp-sx=0  baked-sx=12]
+    take 110  #400 [world=338 nonworld=62 stereo=338 live-sx=326 mvp-sx=12 baked-sx=0]
+
+`live-sx=326` unchanged is the part worth reading twice: the new patch never ran
+on a module that could already see the camera. All 12 moved, none was left
+behind, and nothing else was touched. The scorer now says the consequence
+plainly:
+
+    stereo  X4VR_PROJ_SX=0.75405 is unused — no module fell back to it, every
+            one reads sx per draw (task #23)
+
+**3. Confirmed.** Zero `driver rejected patched module` lines in either run. The
+driver compiled all twelve. `spirv-val` accepting 328 of 397 offline predicted
+this but could not establish it.
+
+**4. Confirmed.** Aligned gameplay phases: 6.95 vs 7.02 ms, 12.29 vs 12.22 ms;
+session medians 9.99 vs 9.68 ms. The signs disagree and the magnitudes are about
+1%, which is noise. The added work — six loads, six multiplies, four adds, a
+divide and a square root on twelve modules — is unmeasurable, as predicted before
+the numbers existed.
+
+**5. Unjudgeable on this display, and the arithmetic says why.** Patola could not
+tell the two runs apart, and noted that IPD differences are very hard to
+distinguish on a flatscreen.
+
+That is not a null result, and it must not be recorded as one. What the patch
+changes is **disparity**, at the zoom stop:
+
+    per-eye offset      50 m      200 m     1000 m
+    baked 0.75405       0.34 px   0.08 px   0.02 px
+    true  29.18689     13.15 px   3.29 px   0.66 px
+
+A 13-pixel disparity change at 50 m is a large depth cue and **no monoscopic
+difference at all** — a side-by-side pair on a flat monitor carries no depth, so
+the one thing that changed is the one thing the display cannot show. The
+observation is consistent with the fix working and equally consistent with those
+modules drawing nothing prominent; this run cannot separate those, and neither
+could any run on this screen.
+
+It is weak evidence in one direction: a *wrong* recovered `sx` would have shifted
+that geometry by up to 13 px per eye horizontally, visible as objects sliding out
+of place inside each half. Nothing of the sort was seen, so the patch is at least
+not grossly wrong.
+
+Settling it properly costs a measurement pair — takes with
+`X4VR_MV_DUMP_PRESENT` at high zoom, read through `tools/eye_stereo.py`, whose
+per-tile shift is exactly this quantity. Worth doing when something else needs a
+dump run; not worth a dedicated pair now, since the mechanism is confirmed and
+the appearance belongs to #25, which is deferred until VR by decision.
+
+### What this settles
+
+`X4VR_PROJ_SX` is now consulted by **nothing** when `X4VR_PROJ_MVP=1`. The
+`stage5-wide-field` entry warns that the constant and `X4VR_FOV` have to be kept
+in step by hand, and that requirement disappears: every World module derives `sx`
+per draw, from the camera block or from the object's own matrix.

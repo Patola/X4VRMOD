@@ -669,12 +669,24 @@ def main(path):
                     if m_baked:
                         r = float(m_baked.group(1)) / ssx
                         n = f"{m_cnt[-1]} module(s)" if m_cnt else "the modules"
-                        verdict = ("matches the scene camera" if abs(r - 1) < 0.02
-                                   else f"separate {r:.2f}x too "
-                                        f"{'much' if r > 1 else 'little'}")
-                        print(f"stereo  X4VR_PROJ_SX={m_baked.group(1)} against "
-                              f"a scene sx of {ssx:.5f}: the {n} that cannot "
-                              f"read sx live {verdict} (task #23)")
+                        # Take 110 drove this count to zero, and the
+                        # sentence then read "the 0 module(s) ... matches the
+                        # scene camera", which is true and unreadable. A count
+                        # of zero is a different statement: the constant is not
+                        # consulted by anything at all.
+                        if m_cnt and m_cnt[-1] == "0":
+                            print(f"stereo  X4VR_PROJ_SX={m_baked.group(1)} is "
+                                  f"unused — no module fell back to it, every "
+                                  f"one reads sx per draw (task #23)")
+                        else:
+                            verdict = ("matches the scene camera"
+                                       if abs(r - 1) < 0.02
+                                       else f"separate {r:.2f}x too "
+                                            f"{'much' if r > 1 else 'little'}")
+                            print(f"stereo  X4VR_PROJ_SX={m_baked.group(1)} "
+                                  f"against a scene sx of {ssx:.5f}: the {n} "
+                                  f"that cannot read sx live {verdict} "
+                                  f"(task #23)")
                 if other:
                     nears = sorted({f"{c['near']:.3f}" for c in other})
                     shown_n = nears[:6]
