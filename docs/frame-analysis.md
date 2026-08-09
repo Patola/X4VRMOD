@@ -13073,3 +13073,46 @@ rather than an inference.
 
 Take 109 is take 108's command line with `X4VR_PROJ_MVP=1` added, and take 108
 itself is the control that has already been run.
+
+### P109 corrected before the run: take 108 is not a control for this build
+
+P109.1 said "with `X4VR_PROJ_MVP` unset, every line of the score is identical to
+take 108's". That cannot hold, and noticing it now rather than after the run is
+the point of writing predictions down. The layer has changed since take 108 in
+ways that alter the log whatever this knob does:
+
+* the `extents:` line is new (task #31) — take 108's log has no such line;
+* the `patched vertex shader` line gained a third count, so its format differs
+  from the one take 108 wrote.
+
+So the control has to be **run on this build**, not read off an older log. Two
+takes, same scenario, differing in one variable:
+
+    take 109   X4VR_PROJ_MVP unset   the control
+    take 110   X4VR_PROJ_MVP=1       the change
+
+P109 restated against that pair:
+
+1. Take 109 reproduces take 108's *judgements* — `split on`, `masked
+   fullscreen=36`, the same four-projection `sx` set, `|sy/sx|=1.0000` on the
+   fov camera, `stereo … matches the scene camera` — plus an `extents: … they
+   agree` line, and `mvp-sx=0`. Not a byte comparison; the two builds do not
+   write the same lines.
+2. Take 110 reads `mvp-sx=` equal to what take 109's `baked-sx=` read at the
+   same module index, and `baked-sx=0`. Every World module then gets a per-draw
+   `sx` from one source or the other.
+3. Neither run logs `WARNING: driver rejected patched module`. 328 of 397
+   modules passed `spirv-val` offline; the driver is what actually compiles
+   them, and this is the first time it sees this transform.
+4. Take 110's `perf` phases are within noise of take 109's. The added work is
+   six loads, six multiplies, four adds, a divide and a square root, on the
+   handful of modules that take the fallback — it should be unmeasurable, and
+   "performance is king" means saying so in advance rather than after.
+5. To Patola's eye, under zoom: nothing separates from its surroundings in take
+   110 that did not in 109. At the zoom stop the baked constant is wrong by
+   29.18689/0.75405 = **38.7x**, which places geometry these modules draw at
+   1/38.7 of its true distance. Recorded as his observation, not as the score.
+
+The comparison only works if both runs draw the same things — the module set X4
+compiles depends on what has been on screen, and `baked-sx=` counts modules. So
+the scenario below is one routine, run twice.
