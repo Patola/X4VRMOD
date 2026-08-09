@@ -276,6 +276,12 @@ being asked for -- `cot(fov x 73.7399 / 2)` at a 1:1 eye:
     fov 1.1111  ->  sx 1.15174        fov 1.437  ->  sx 0.75405
     fov 1.356   ->  sx 0.83923        fov 1.500  ->  sx 0.69231
 
+The 1.437 entry is the value X4 was *measured* at in takes 105, 106 and 108; the
+formula gives 0.75404. They agree to the five decimals the log prints, and the
+measured one is written here because that is what the comparison in the score is
+against. The other three are computed and the two that were measured -- 1.15174
+and 0.69231 -- came back exact.
+
 Leaving `X4VR_PROJ_SX=1.3333` while widening the field is not a stale constant
 but a depth conflict: at fov 1.437 those modules separate 1.77x too much, which
 places their geometry at 0.57x its true distance while everything around it is
