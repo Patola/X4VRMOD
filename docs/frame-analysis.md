@@ -13505,6 +13505,98 @@ single "it looked right" would have conflated them:
 Tagged `stage7-xr-session-proven`, with the run and its checks in
 `docs/known-good-runs.md`. **#34 is closed.**
 
+## Take 111 — the session inside X4, submitting nothing
+
+`stage7-xr-session-proven` proved the bring-up in a standalone program. This
+puts the same code on **X4's own** instance, device and queue, and deliberately
+stops there.
+
+**Why stop there.** Two risks are being separated. One is that the runtime adds
+extensions to structs X4 owns — ten of them, measured in the last run — and X4
+has to keep working with them. The other is that X4's frames reach a swapchain
+and a compositor with its own pacing. Landing both at once means any failure has
+two candidate causes, and this project has lost more runs to that than to
+anything else. So this take changes X4's *object creation* and nothing about its
+rendering. The headset shows WiVRn's idle scene; X4 renders to the monitor as
+usual.
+
+**What the layer now does when `X4VR_VR=1`:**
+
+* `vkCreateInstance` — opens the runtime *before* the down-chain create, then
+  lets `xrCreateVulkanInstanceKHR` create X4's instance from X4's own
+  create-info, calling back through our chain.
+* `vkCreateDevice` — asks the runtime which `VkPhysicalDevice` it requires and
+  compares it with X4's choice. **If they differ, X4's choice stands and the
+  session is refused.** A mod that moves the game onto another GPU to suit a
+  headset has stopped being non-intrusive; the log says so in those words.
+  Otherwise `xrCreateVulkanDeviceKHR` creates the device, with the multiview
+  edit already applied.
+* then creates the session on that device and starts a frame loop **on its own
+  thread**, submitting zero layers.
+
+The thread is not in `vkQueuePresentKHR`, and that is a design decision rather
+than convenience: `xrWaitFrame` blocks until the runtime's next frame boundary,
+so driving it from the present hook would peg X4's frame rate to the headset's
+refresh and couple two cadences with no reason to agree. When submission
+arrives, the pacing stays on this thread and only the recording moves.
+
+### Predictions, before the run
+
+**P112.1: X4 starts, loads a save and plays normally.** This is the whole point
+of the take. The failure it is looking for is X4 refusing to create a device, or
+crashing later, because of extensions it never asked for.
+
+**P112.2: the runtime's `VkPhysicalDevice` is the one X4 chose**, so the session
+is created. P111.4 established this for the probe's own instance; it is not the
+same claim, because X4 enumerates and selects for itself.
+
+**P112.3: the session reaches `FOCUSED`, and the frame count accumulates at the
+headset's rate rather than X4's** — order 72–90 Hz, so several thousand frames
+in a few minutes, whatever frame rate X4 is running at. If `frames` instead
+tracks X4's fps, the thread is being throttled by something and the eventual
+submission design is wrong.
+
+**P112.4: X4's frame time is unchanged against take 110** within the noise the
+`perf` section already shows. The XR thread submits nothing and touches no queue.
+A *large* regression would more likely be WiVRn's compositor contending for the
+GPU than anything the layer does — worth separating before blaming this code.
+
+**P112.5: X4 creates more than one queue family, and the graphics family has a
+queue to spare.** Informational for this take and load-bearing for the next: a
+`VkQueue` is externally synchronised, so if X4 uses every queue of its graphics
+family, the runtime and X4 will be submitting to the same one and that needs
+handling before any layer is submitted.
+
+### The run
+
+Exactly `stage6-sx-per-draw`'s line plus `X4VR_VR=1` — one change, so a
+regression has one candidate:
+
+    X4VR_TAKE=111-VR-BRINGUP X4VR_VR=1 X4VR_FOV=1.437 X4VR_DUMP_MATRICES=1
+    X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_GAMESCOPE=1
+    X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1
+    X4VR_SBS=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1
+    X4VR_MV_INVENTORY=1 X4VR_LOG=/tmp/x4vr-take111.log
+    ./launch/x4vr-launch.sh
+
+**Interaction take**, not a measurement: no probe, no dumps. WiVRn must be
+running and the headset connected *before* X4 starts, because the runtime is
+opened during `vkCreateInstance`.
+
+Acceptance is `python3 tools/score_run.py /tmp/x4vr-take111.log`, which now has
+a `vr` section. It is gated on **intent** — `X4VR_VR=1` on the command line, not
+on whether a session happened to come up — so a run that asked for VR and got
+none fails rather than reading as "not a VR run". It fails on: no session (and
+quotes the reason), never `FOCUSED`, no XR frame, or a pose for under 90% of
+frames. Head span is informational: sitting still is a legitimate run.
+
+Validated before the take, on this GPU with no runtime present: the layer says
+`NO SESSION THIS RUN` and every existing suite still passes with `X4VR_VR=1`
+set — `run-multiview-render.sh`, `run-cursor.sh`, `run-multiview-enable.sh`,
+`view_math`. The scorer's new section was exercised against eight crafted logs
+(six that must fail, two that must pass) and re-run over all 77 logs in `/tmp`:
+the verdict set is unchanged at FAIL = {44, 45, 48, 101, 102}.
+
 # State at `stage6-sx-per-draw` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the
@@ -13514,8 +13606,11 @@ repository or from `/tmp`; nothing here depends on remembering a conversation.
 
 Closed this stretch: **#23** (per-draw `sx` everywhere), **#24** (a chosen field
 of view), **#31** (the three extents), **#32** (the right eye judged from present
-dumps). Open: **#25**, **#33**, and the piece both need — **#34**, the OpenXR
-bring-up, which is now in progress and has its own section above.
+dumps), and **#34** (an `XrSession` on a device the runtime created, proven in a
+headset, tag `stage7-xr-session-proven`). Open: **#25**, **#33**, and **#35**
+— the per-eye off-axis map that WiVRn's 14°-canted views made mandatory.
+Take 111 puts #34's bring-up inside X4, submitting nothing; its section above
+says why that is a step of its own.
 
 **#25 is deferred by decision, not blocked.** IPD and the sense of depth and
 scale get judged when true SBS (done), head tracking (#33) and a VR projection

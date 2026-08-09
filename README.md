@@ -110,7 +110,10 @@ Useful switches: `X4VR_NO_LAYER=1`, `X4VR_NO_INJECT=1`, `X4VR_NO_CONFIG=1`
 a config setting, so widening it needs no projection patch),
 `X4VR_PROJ_MVP=0` (turn *off* the per-draw `sx` recovery for the World shaders
 that declare no camera block — on by default since takes 109/110; with it off
-they shear by a constant that is only right at one zoom level).
+they shear by a constant that is only right at one zoom level),
+`X4VR_VR=1` (bring an OpenXR session up on X4's own device — off by default,
+needs a runtime *running*; submits nothing yet, so the headset shows the
+runtime's idle scene while X4 renders to the monitor as usual).
 
 ## Repository layout
 

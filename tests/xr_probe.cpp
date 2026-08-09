@@ -800,7 +800,12 @@ int main(int argc, char **argv) {
             nanosleep(&nap, nullptr);
             continue;
         }
-        const bool render = xr::frame_begin(s);
+        bool render = false;
+        if (!xr::frame_begin(s, &render)) {
+            struct timespec nap = {0, 2 * 1000 * 1000};
+            nanosleep(&nap, nullptr);
+            continue;
+        }
 
         XrView views[2] = {};
         XrViewStateFlags vflags = 0;

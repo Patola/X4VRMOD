@@ -41,6 +41,9 @@
 #include "x4vr_sbs.hpp"
 #include "../common/x4vr_env.hpp"
 #include "../common/x4vr_share.hpp"
+#ifdef X4VR_HAVE_OPENXR
+#include "../common/x4vr_xr.hpp"
+#endif
 
 namespace {
 
@@ -61,6 +64,9 @@ struct InstanceData {
     PFN_vkEnumerateDeviceExtensionProperties EnumerateDeviceExtensionProperties = nullptr;
     PFN_vkGetPhysicalDeviceProperties2 GetPhysicalDeviceProperties2 = nullptr;
     PFN_vkGetPhysicalDeviceFeatures2 GetPhysicalDeviceFeatures2 = nullptr;
+    PFN_vkGetPhysicalDeviceQueueFamilyProperties
+        GetPhysicalDeviceQueueFamilyProperties = nullptr;
+    PFN_vkGetPhysicalDeviceProperties GetPhysicalDeviceProperties = nullptr;
     // The API version X4 itself asked for. Decides whether the 1.1-promoted
     // entry points exist under their core names or only as KHR aliases.
     uint32_t app_api_version = 0;
@@ -6835,6 +6841,231 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     return r;
 }
 
+// ------------------------------------------------------------------ VR
+//
+// Task #34, second half: the bring-up `tests/xr_probe.cpp` proved in a headset,
+// now on X4's own instance, device and queue.
+//
+// This step deliberately submits NOTHING. Its whole job is to isolate the risky
+// part -- the runtime adds instance and device extensions to structs X4 owns,
+// and X4 has to keep running with them -- from the part that changes pixels.
+// The headset shows whatever the runtime shows an application that submits no
+// layers; X4 keeps rendering to the monitor exactly as before.
+//
+// The frame loop runs on its own thread rather than out of vkQueuePresentKHR,
+// for a reason that outlives this step: xrWaitFrame blocks until the runtime's
+// next frame boundary, so driving it from the present hook would peg X4's frame
+// rate to the headset's refresh and couple two cadences that have no reason to
+// agree. When submission arrives, the pacing stays here and only the recording
+// moves into the present path.
+#ifdef X4VR_HAVE_OPENXR
+
+const bool g_vr = x4vr::env_on("X4VR_VR", false);
+
+struct VrState {
+    x4vr::xr::Runtime rt;
+    x4vr::xr::Session session;
+    std::thread thread;
+    std::atomic<bool> stop{false};
+    std::atomic<bool> started{false};
+
+    std::mutex mu;
+    uint64_t frames = 0, located = 0, begun = 0;
+    bool focused = false;
+    bool have_span = false;
+    float pmin[3] = {0, 0, 0}, pmax[3] = {0, 0, 0};
+    uint32_t queue_family = 0;
+    bool device_is_the_runtime_s = false;
+};
+VrState g_vrs;
+
+void vr_say(void *, const char *s) { X4VR_LOG("%s", s); }
+
+void vr_on_state(void *, XrSessionState s) {
+    X4VR_LOG("vr: session -> %s", x4vr::xr::session_state_name(s));
+    if (s == XR_SESSION_STATE_FOCUSED) {
+        std::lock_guard<std::mutex> lock(g_vrs.mu);
+        g_vrs.focused = true;
+    }
+}
+
+// Called from vkCreateInstance, before the down-chain create. That ordering is
+// the whole reason this lives here: the runtime decides X4's instance
+// extensions, and it has to decide them before the instance exists.
+bool vr_open_runtime() {
+    if (!g_vr)
+        return false;
+    if (g_vrs.rt.ok())
+        return true;
+    X4VR_LOG("vr: X4VR_VR=1 — bringing the runtime up ahead of X4's instance");
+    if (!x4vr::xr::runtime_open(g_vrs.rt, vr_say, nullptr)) {
+        // Loud, and then out of the way. A missing runtime must not stop the
+        // game starting; the scorer is what fails the run, not X4.
+        X4VR_LOG("vr: NO SESSION THIS RUN — %s. X4 continues flat.",
+                 g_vrs.rt.last_error.c_str());
+        return false;
+    }
+    return true;
+}
+
+void vr_report(const char *when); // defined below; the loop ticks through it
+
+void vr_thread() {
+    double last = 0.0;
+    auto now = [] {
+        timespec ts{};
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return (double)ts.tv_sec + ts.tv_nsec * 1e-9;
+    };
+    while (!g_vrs.stop.load(std::memory_order_relaxed)) {
+        if (!x4vr::xr::session_poll(g_vrs.session, vr_on_state, nullptr))
+            break;
+        if (!g_vrs.session.running) {
+            struct timespec nap = {0, 20 * 1000 * 1000};
+            nanosleep(&nap, nullptr);
+            continue;
+        }
+        bool should_render = false;
+        if (!x4vr::xr::frame_begin(g_vrs.session, &should_render)) {
+            struct timespec nap = {0, 2 * 1000 * 1000};
+            nanosleep(&nap, nullptr);
+            continue;
+        }
+        XrView views[2] = {};
+        XrViewStateFlags flags = 0;
+        const bool have = x4vr::xr::locate_views(g_vrs.session, views, 2, &flags);
+        // Zero layers, by design. Everything else about the frame is real.
+        x4vr::xr::frame_end(g_vrs.session, nullptr, 0);
+
+        bool tick = false;
+        {
+            std::lock_guard<std::mutex> lock(g_vrs.mu);
+            g_vrs.begun++;
+            g_vrs.frames++;
+            if (have) {
+                g_vrs.located++;
+                const float p[3] = {views[0].pose.position.x,
+                                    views[0].pose.position.y,
+                                    views[0].pose.position.z};
+                for (int i = 0; i < 3; i++) {
+                    if (!g_vrs.have_span || p[i] < g_vrs.pmin[i])
+                        g_vrs.pmin[i] = p[i];
+                    if (!g_vrs.have_span || p[i] > g_vrs.pmax[i])
+                        g_vrs.pmax[i] = p[i];
+                }
+                g_vrs.have_span = true;
+            }
+            const double t = now();
+            tick = t - last > 5.0;
+            if (tick)
+                last = t;
+        }
+        // Outside that scope on purpose: vr_report takes the same mutex, and
+        // std::mutex is not recursive. Reported in the same shape as the final
+        // line rather than in a second format saying the same things, so a run
+        // that is killed rather than quit still leaves the scorer something it
+        // can parse.
+        if (tick)
+            vr_report("periodic");
+    }
+}
+
+// The queue the session is bound to. XrGraphicsBindingVulkan2KHR wants family
+// and index, not a VkQueue, so nothing is fetched here -- but which family X4
+// created, and how many queues it left spare, is worth writing down now: the
+// runtime will submit on that queue once we start giving it layers, and a
+// VkQueue is externally synchronised. Sharing X4's is a hazard this run does
+// not trip only because it submits nothing.
+uint32_t vr_pick_queue_family(VkPhysicalDevice phys, const InstanceData &inst,
+                              const VkDeviceCreateInfo *ci) {
+    std::vector<VkQueueFamilyProperties> props;
+    if (inst.GetPhysicalDeviceQueueFamilyProperties) {
+        uint32_t n = 0;
+        inst.GetPhysicalDeviceQueueFamilyProperties(phys, &n, nullptr);
+        props.resize(n);
+        inst.GetPhysicalDeviceQueueFamilyProperties(phys, &n, props.data());
+    }
+    uint32_t chosen = ci->queueCreateInfoCount ? ci->pQueueCreateInfos[0].queueFamilyIndex : 0;
+    bool found = false;
+    for (uint32_t i = 0; i < ci->queueCreateInfoCount; i++) {
+        const auto &q = ci->pQueueCreateInfos[i];
+        const bool gfx = q.queueFamilyIndex < props.size() &&
+                         (props[q.queueFamilyIndex].queueFlags &
+                          VK_QUEUE_GRAPHICS_BIT);
+        X4VR_LOG("vr: X4 created queue family %u x%u%s%s", q.queueFamilyIndex,
+                 q.queueCount, gfx ? " (graphics)" : "",
+                 !found && gfx ? "  <-- the session binds here" : "");
+        if (!found && gfx) {
+            chosen = q.queueFamilyIndex;
+            found = true;
+        }
+    }
+    if (!found)
+        X4VR_LOG("vr: WARNING no graphics queue among X4's — binding family %u "
+                 "anyway", chosen);
+    return chosen;
+}
+
+void vr_start_session(VkInstance vk, VkPhysicalDevice phys, VkDevice dev,
+                      const InstanceData &inst, const VkDeviceCreateInfo *ci) {
+    if (!g_vrs.rt.ok() || g_vrs.started.load())
+        return;
+    g_vrs.queue_family = vr_pick_queue_family(phys, inst, ci);
+    const XrResult r = x4vr::xr::session_create(g_vrs.session, g_vrs.rt, vk,
+                                                phys, dev, g_vrs.queue_family, 0);
+    if (r != XR_SUCCESS) {
+        X4VR_LOG("vr: NO SESSION THIS RUN — %s", g_vrs.session.last_error.c_str());
+        return;
+    }
+    X4VR_LOG("vr: session created on X4's own device — queue family %u index 0,"
+             " reference space %s",
+             g_vrs.queue_family,
+             g_vrs.session.space_type == XR_REFERENCE_SPACE_TYPE_STAGE
+                 ? "STAGE" : "LOCAL");
+    X4VR_LOG("vr: submitting NO layers this run by design — the headset will "
+             "show the runtime's own idle scene, not X4");
+    g_vrs.started.store(true);
+    g_vrs.thread = std::thread(vr_thread);
+}
+
+// One line the scorer can key on, whatever else the run did.
+void vr_report(const char *when) {
+    if (!g_vr)
+        return;
+    std::lock_guard<std::mutex> lock(g_vrs.mu);
+    X4VR_LOG("vr summary (%s): runtime=%s session=%d focused=%d frames=%llu "
+             "located=%llu submitted=0 span=%.4f,%.4f,%.4f",
+             when, g_vrs.rt.ok() ? g_vrs.rt.runtime_name : "none",
+             (int)g_vrs.started.load(), (int)g_vrs.focused,
+             (unsigned long long)g_vrs.frames, (unsigned long long)g_vrs.located,
+             g_vrs.pmax[0] - g_vrs.pmin[0], g_vrs.pmax[1] - g_vrs.pmin[1],
+             g_vrs.pmax[2] - g_vrs.pmin[2]);
+}
+
+void vr_shutdown() {
+    if (!g_vrs.started.load()) {
+        vr_report("final");
+        x4vr::xr::runtime_close(g_vrs.rt);
+        return;
+    }
+    g_vrs.stop.store(true);
+    if (g_vrs.thread.joinable())
+        g_vrs.thread.join(); // must finish before the device goes away
+    vr_report("final");
+    x4vr::xr::session_destroy(g_vrs.session);
+    x4vr::xr::runtime_close(g_vrs.rt);
+    g_vrs.started.store(false);
+}
+
+#else  // X4VR_HAVE_OPENXR
+
+const bool g_vr = false;
+bool vr_open_runtime() { return false; }
+void vr_report(const char *) {}
+void vr_shutdown() {}
+
+#endif // X4VR_HAVE_OPENXR
+
 // -------------------------------------------------- instance/device bring-up
 
 VkLayerInstanceCreateInfo *find_instance_link(const VkInstanceCreateInfo *ci) {
@@ -6867,7 +7098,41 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateInstance(
 
     auto next_create =
         (PFN_vkCreateInstance)gipa(VK_NULL_HANDLE, "vkCreateInstance");
-    VkResult r = next_create(ci, ac, out);
+
+    const char *app_name =
+        ci->pApplicationInfo && ci->pApplicationInfo->pApplicationName
+            ? ci->pApplicationInfo->pApplicationName
+            : nullptr;
+    const bool target = app_is_target(app_name);
+
+    // The runtime creates X4's instance when VR is asked for, so that its own
+    // extensions are merged into the create-info X4 wrote. It calls back
+    // through `gipa`, which is the next layer down -- so X4 still gets an
+    // instance built from its own struct, and never learns anything happened.
+    VkResult r;
+    bool via_runtime = false;
+    if (target && vr_open_runtime()) {
+#ifdef X4VR_HAVE_OPENXR
+        VkResult vkr = VK_ERROR_INITIALIZATION_FAILED;
+        const XrResult xrr =
+            x4vr::xr::create_vk_instance(g_vrs.rt, gipa, ci, ac, out, &vkr);
+        if (xrr == XR_SUCCESS && vkr == VK_SUCCESS) {
+            via_runtime = true;
+            r = VK_SUCCESS;
+        } else {
+            X4VR_LOG("vr: NO SESSION THIS RUN — xrCreateVulkanInstanceKHR -> "
+                     "%s, inner VkResult %d. Creating X4's instance the "
+                     "ordinary way.",
+                     x4vr::xr::result_name(xrr), (int)vkr);
+            x4vr::xr::runtime_close(g_vrs.rt);
+            r = next_create(ci, ac, out);
+        }
+#else
+        r = next_create(ci, ac, out);
+#endif
+    } else {
+        r = next_create(ci, ac, out);
+    }
     if (r != VK_SUCCESS)
         return r;
 
@@ -6895,18 +7160,21 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateInstance(
         data.GetPhysicalDeviceFeatures2 =
             (PFN_vkGetPhysicalDeviceFeatures2)gipa(
                 *out, "vkGetPhysicalDeviceFeatures2KHR");
+    data.GetPhysicalDeviceQueueFamilyProperties =
+        (PFN_vkGetPhysicalDeviceQueueFamilyProperties)gipa(
+            *out, "vkGetPhysicalDeviceQueueFamilyProperties");
+    data.GetPhysicalDeviceProperties = (PFN_vkGetPhysicalDeviceProperties)gipa(
+        *out, "vkGetPhysicalDeviceProperties");
     data.app_api_version =
         ci->pApplicationInfo ? ci->pApplicationInfo->apiVersion : 0;
     {
         std::lock_guard<std::mutex> lock(g_mu);
         g_instances[dispatch_key(*out)] = data;
     }
-    const char *app = ci->pApplicationInfo && ci->pApplicationInfo->pApplicationName
-                          ? ci->pApplicationInfo->pApplicationName
-                          : nullptr;
-    g_active = app_is_target(app);
-    X4VR_LOG("instance created (app=%s)%s", app ? app : "?",
-             g_active ? "" : " — not the game, layer inert in this process");
+    g_active = target;
+    X4VR_LOG("instance created (app=%s)%s%s", app_name ? app_name : "?",
+             g_active ? "" : " — not the game, layer inert in this process",
+             via_runtime ? " — created by the OpenXR runtime" : "");
     // Which WSIs this process could possibly use. If a surface later reports
     // no preferred extent and only one *_surface extension is enabled, the
     // platform follows without any inference at all.
@@ -7103,7 +7371,67 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
             ci = enable_multiview(ci, mv_ci, mv_feat);
     }
 
-    VkResult r = next_create(phys, ci, ac, out);
+    // The runtime creates X4's device too, for the same reason it created the
+    // instance -- external_memory_fd, timeline_semaphore and the rest are its
+    // requirements, not X4's, and they have to be in the create-info before
+    // the device exists. It only gets to do that if it agrees with X4 about
+    // which physical device, and if it does not, X4's choice wins: a mod that
+    // moves the game onto a different GPU to suit a headset has stopped being
+    // non-intrusive.
+    VkResult r;
+    bool dev_via_runtime = false;
+#ifdef X4VR_HAVE_OPENXR
+    if (g_active && g_vrs.rt.ok()) {
+        InstanceData inst{};
+        {
+            std::lock_guard<std::mutex> lock(g_mu);
+            auto it = g_instances.find(dispatch_key(phys));
+            if (it != g_instances.end())
+                inst = it->second;
+        }
+        VkPhysicalDevice want = VK_NULL_HANDLE;
+        const XrResult xrr =
+            x4vr::xr::graphics_device(g_vrs.rt, inst.instance, &want);
+        auto name_of = [&](VkPhysicalDevice p) {
+            static char buf[2][256];
+            static int slot = 0;
+            char *b = buf[slot++ & 1];
+            b[0] = 0;
+            if (p != VK_NULL_HANDLE && inst.GetPhysicalDeviceProperties) {
+                VkPhysicalDeviceProperties pr{};
+                inst.GetPhysicalDeviceProperties(p, &pr);
+                snprintf(b, 256, "%s", pr.deviceName);
+            }
+            return b;
+        };
+        if (xrr != XR_SUCCESS) {
+            X4VR_LOG("vr: NO SESSION THIS RUN — xrGetVulkanGraphicsDevice2KHR "
+                     "-> %s", x4vr::xr::result_name(xrr));
+            x4vr::xr::runtime_close(g_vrs.rt);
+        } else if (want != phys) {
+            X4VR_LOG("vr: NO SESSION THIS RUN — the runtime requires \"%s\" but "
+                     "X4 chose \"%s\". X4's choice stands; the session cannot "
+                     "be created on a device the runtime will not accept.",
+                     name_of(want), name_of(phys));
+            x4vr::xr::runtime_close(g_vrs.rt);
+        } else {
+            VkResult vkr = VK_ERROR_INITIALIZATION_FAILED;
+            const XrResult dr = x4vr::xr::create_vk_device(
+                g_vrs.rt, gipa, phys, ci, ac, out, &vkr);
+            if (dr == XR_SUCCESS && vkr == VK_SUCCESS) {
+                dev_via_runtime = true;
+                X4VR_LOG("vr: X4's VkDevice created by the runtime on \"%s\"",
+                         name_of(phys));
+            } else {
+                X4VR_LOG("vr: NO SESSION THIS RUN — xrCreateVulkanDeviceKHR -> "
+                         "%s, inner VkResult %d",
+                         x4vr::xr::result_name(dr), (int)vkr);
+                x4vr::xr::runtime_close(g_vrs.rt);
+            }
+        }
+    }
+#endif
+    r = dev_via_runtime ? VK_SUCCESS : next_create(phys, ci, ac, out);
     if (r != VK_SUCCESS)
         return r;
 
@@ -7242,6 +7570,18 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
         static std::thread t(hammer_thread);
         t.detach();
     }
+#ifdef X4VR_HAVE_OPENXR
+    if (g_active && g_vrs.rt.ok()) {
+        InstanceData inst{};
+        {
+            std::lock_guard<std::mutex> lock(g_mu);
+            auto it = g_instances.find(dispatch_key(phys));
+            if (it != g_instances.end())
+                inst = it->second;
+        }
+        vr_start_session(inst.instance, phys, *out, inst, ci);
+    }
+#endif
     return VK_SUCCESS;
 }
 
@@ -7256,6 +7596,10 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyDevice(
     mv_report("final");
     bindless_report("final");
     canvas_report("final");
+    // Before anything device-owned goes away: the frame loop holds a session
+    // bound to this device, and a thread still calling xrEndFrame while the
+    // device is destroyed is the one crash this step could plausibly cause.
+    vr_shutdown();
     g_sbs.shutdown(); // idles the device, then frees pools/semaphores/fences
     PFN_vkDestroyDevice next;
     {

@@ -664,10 +664,19 @@ inline bool session_poll(Session &s, void (*on_state)(void *, XrSessionState),
     return !s.exit_requested;
 }
 
-// True when the runtime wants pixels this frame. A false return still means a
-// frame happened — xrWaitFrame/xrBeginFrame/xrEndFrame must all be called even
-// when shouldRender is false, or the runtime's pacing stalls.
-inline bool frame_begin(Session &s) {
+// Returns true if the frame was actually begun, in which case frame_end() MUST
+// be called for it. *should_render says whether the runtime wants pixels —
+// which is a different question, and one that is false for plenty of frames
+// that still have to be begun and ended.
+//
+// Those two were one boolean here until the layer needed them apart. Calling
+// xrEndFrame after a failed xrBeginFrame is an error, and skipping xrEndFrame
+// after a successful one leaves the runtime's pacing waiting for a frame that
+// never arrives — so a single "did anything happen" return could only ever be
+// wrong in one direction or the other.
+inline bool frame_begin(Session &s, bool *should_render) {
+    if (should_render)
+        *should_render = false;
     if (!s.running)
         return false;
     XrFrameWaitInfo fwi{};
@@ -678,9 +687,13 @@ inline bool frame_begin(Session &s) {
         return false;
     XrFrameBeginInfo fbi{};
     fbi.type = XR_TYPE_FRAME_BEGIN_INFO;
-    if (s.rt->api.BeginFrame(s.session, &fbi) != XR_SUCCESS)
+    const XrResult r = s.rt->api.BeginFrame(s.session, &fbi);
+    // XR_FRAME_DISCARDED is a success code: the frame was begun.
+    if (r != XR_SUCCESS && r != XR_FRAME_DISCARDED)
         return false;
-    return s.frame.shouldRender == XR_TRUE;
+    if (should_render)
+        *should_render = s.frame.shouldRender == XR_TRUE;
+    return true;
 }
 
 // Where the eyes are, at the display time of the frame begun above. Both the

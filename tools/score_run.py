@@ -737,6 +737,81 @@ def main(path):
                 print("proj  sx never changed during this run (no zoom, or the "
                       "camera never moved through one)")
 
+    # VR, and only when the run asked for it (task #34).
+    #
+    # Gated on intent, not on outcome: what makes this section apply is
+    # X4VR_VR=1 on the command line, never whether a session happened to come
+    # up. A run that asked for VR and got none is exactly the run this has to
+    # fail, so "no session" must not be allowed to read as "not a VR run".
+    asked_vr = bool(run and re.search(r"\bX4VR_VR=[^0\s]", run)) or \
+        any("vr: X4VR_VR=1" in ln for ln in lines)
+    if asked_vr:
+        summary = None
+        for ln in lines:
+            m = re.search(r"vr summary \((\w+)\): runtime=(.*?) session=(\d+) "
+                          r"focused=(\d+) frames=(\d+) located=(\d+) "
+                          r"submitted=(\d+) span=([\d.]+),([\d.]+),([\d.]+)", ln)
+            if m:
+                summary = m
+        if not summary:
+            # Distinguish the two ways nothing can be here, because they need
+            # different fixes and the same silence.
+            if any("vr:" in ln for ln in lines):
+                fails.append("X4VR_VR=1 but the layer printed no vr summary — "
+                             "the run died before vkDestroyDevice")
+            else:
+                fails.append("X4VR_VR=1 but the layer said nothing about VR at "
+                             "all — built without OpenXR headers? cmake -S . "
+                             "-B build should print 'OpenXR headers found'")
+            print("vr  asked for, and absent")
+        else:
+            (_when, rt_name, session, focused, frames, located, submitted,
+             sx_, sy_, sz_) = summary.groups()
+            session, focused = int(session), int(focused)
+            frames, located = int(frames), int(located)
+            submitted = int(submitted)
+            span = (float(sx_), float(sy_), float(sz_))
+            print(f"vr  runtime \"{rt_name}\" session={session} "
+                  f"focused={focused} frames={frames} located={located} "
+                  f"submitted={submitted}")
+            if not session:
+                why = next((ln.split("NO SESSION THIS RUN — ", 1)[1]
+                            for ln in lines if "NO SESSION THIS RUN" in ln),
+                           "no reason logged")
+                fails.append(f"X4VR_VR=1 but no session: {why}")
+            else:
+                if not focused:
+                    fails.append(
+                        "the session never reached FOCUSED — the runtime never "
+                        "gave X4 the foreground. Headset asleep, or another "
+                        "application holds the session")
+                if frames == 0:
+                    fails.append("the session was created but no XR frame ever "
+                                 "completed — the frame loop is not running")
+                elif located / frames < 0.9:
+                    fails.append(
+                        f"xrLocateViews returned a pose for only {located} of "
+                        f"{frames} frames ({100 * located / frames:.0f}%) — "
+                        f"tracking was dropping out")
+                # Informational, deliberately. A run where Patola sat still is
+                # a legitimate run, and failing it would teach the wrong habit
+                # -- but a span of exactly zero across a long run means the
+                # pose is a constant, which is the failure #33 exists to avoid.
+                if located and max(span) < 1e-4:
+                    print("    span is zero on every axis — either nobody "
+                          "moved, or the pose is a constant. Worth a second "
+                          "run with deliberate head movement before trusting "
+                          "it.")
+                else:
+                    print(f"    head span {span[0]:.3f} x {span[1]:.3f} y "
+                          f"{span[2]:.3f} z m — the pose moves")
+            # This step submits nothing on purpose. If that ever changes, the
+            # expectation here has to change with it rather than quietly pass.
+            if submitted:
+                print(f"    {submitted} layer(s) submitted — this is past the "
+                      f"'submit nothing' step, so check the headset actually "
+                      f"showed X4")
+
     # Frame time, for A/B runs that park the camera.
     #
     # Reported as one comparable number rather than a median over the session,

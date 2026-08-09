@@ -117,6 +117,33 @@
 #                         mvp-sx= carries what baked-sx= used to.
 #                         Needs X4VR_MV=1: without a view mask there is only
 #                         ever view 0, and the result is the left eye twice.
+#   X4VR_VR=1             task #34: bring an OpenXR session up on X4's own
+#                         instance, device and queue. OFF by default.
+#                         The runtime creates both -- xrCreateVulkanInstanceKHR
+#                         and xrCreateVulkanDeviceKHR take X4's own create-info
+#                         and call back down our layer chain -- because the
+#                         extensions it needs (external_memory_fd,
+#                         timeline_semaphore, and eight more) have to be in
+#                         those structs before the objects exist. If the runtime
+#                         wants a different VkPhysicalDevice than X4 chose, X4's
+#                         choice stands and the session is refused: moving the
+#                         game to another GPU to suit a headset is not a
+#                         non-intrusive mod.
+#                         THIS STEP SUBMITS NOTHING. The headset shows the
+#                         runtime's own idle scene; X4 renders to the monitor
+#                         exactly as before. It exists to separate "the game
+#                         survives the runtime's extensions" from "the game
+#                         appears in the headset", which are different risks.
+#                         The frame loop runs on its own thread, not out of
+#                         vkQueuePresentKHR: xrWaitFrame blocks until the
+#                         runtime's next frame boundary, and driving it from
+#                         the present hook would peg X4's frame rate to the
+#                         headset's refresh.
+#                         Needs a runtime RUNNING (WiVRn or SteamVR) --
+#                         active_runtime.json exists only while one is up. With
+#                         none, the layer says NO SESSION THIS RUN and X4
+#                         continues flat; score_run.py fails the run, X4 does
+#                         not. Read it in the "vr summary (final):" line.
 #   X4VR_MASK_TONEMAP=1   mask the tonemap resolve (rp #40/#52 -> #103) so it
 #                         renders into both array layers. Keyed on the SRGB
 #                         attachment format, which is what separates the
