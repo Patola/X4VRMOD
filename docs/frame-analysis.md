@@ -13887,6 +13887,62 @@ the headset, and both are now measured rather than suspected:
    is in reach: the layer already edits `VkDeviceCreateInfo`, so it can ask for
    a second queue on that family and give the runtime its own. Filed as **#36**.
 
+## Task #36 — the plan was impossible, and the hardware said so in one line
+
+#36 was filed as "ask for one more queue on X4's graphics family and bind the
+session to it". The first offline run of that code answered it:
+
+    vr: X4 created queue family 0 x1 graphics (the device offers 1)
+    vr: NO SESSION THIS RUN — no graphics queue can be reserved …
+
+`vulkaninfo` confirms it is the device, not the run:
+
+    family 0   queueCount 1   GRAPHICS | COMPUTE | TRANSFER | SPARSE_BINDING
+    family 1   queueCount 4   COMPUTE | TRANSFER | SPARSE_BINDING
+    family 2   queueCount 1   VIDEO_DECODE
+    family 3   queueCount 1   VIDEO_ENCODE
+    family 4   queueCount 1   SPARSE_BINDING
+
+**RADV Navi31 has exactly one graphics queue on the whole device**, and that is
+AMD's shape in general, not a quirk of this card. So the runtime cannot be given
+one of its own here, and refusing the session — which is what the first version
+of the code did, deliberately, to avoid a data race — would have meant "no VR on
+AMD".
+
+### Sharing, serialised by the layer
+
+External synchronisation is a requirement *on the application*, not a
+prohibition, and a Vulkan layer is exactly where it can be met. Every submission
+to that queue passes through code this project owns:
+
+* **X4's** — `x4vr_QueueSubmit`, and `x4vr_QueuePresentKHR`, which also covers
+  the SBS composite, the cursor overlay and the dump path's `vkQueueWaitIdle`,
+  because all three submit from inside the present hook.
+* **the runtime's** — inside `xrEndFrame`, called from the layer's own XR
+  thread.
+
+One mutex across both sides. `xrWaitFrame` is deliberately outside it: it blocks
+until the runtime's next frame boundary, and holding a queue lock across it
+would stall X4 for a whole headset frame, every frame.
+
+The dedicated-queue path is kept and tried first — a GPU that has spare graphics
+queues (NVIDIA typically exposes 16) gets one, and the log says which mode is in
+effect. On this machine it reads:
+
+    vr: this device has no spare graphics queue — the runtime shares X4's
+        (family 0 index 0), serialised by the layer.
+
+On the sharing path X4's `VkDeviceCreateInfo` queue array comes out byte-for-byte
+what X4 asked for, so this costs the game nothing at device creation. What it
+does cost is one uncontended lock per submit and per present, and a possible
+brief stall when `xrEndFrame` holds it. Both are inert until the layer actually
+submits layers, and neither has been measured yet — that goes with the
+submission take, not before it.
+
+**Still unhooked, and worth checking before submission:** `vkQueueBindSparse`.
+Family 0 advertises `SPARSE_BINDING`, the layer does not intercept it, and it is
+a queue operation with the same external-synchronisation rule.
+
 # State at `stage6-sx-per-draw` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the

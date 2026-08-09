@@ -312,6 +312,18 @@ bool g_active = false;
 std::mutex g_queue_mu;
 std::unordered_map<VkQueue, uint32_t> g_queue_family;
 
+// Task #36. On a device with one graphics queue -- which is every AMD one --
+// X4 and the OpenXR runtime submit to the same VkQueue from two threads, and
+// external synchronisation is the application's job. These serialise the two
+// sides: X4's submits and presents take it here, the runtime's take it around
+// xrEndFrame on the layer's XR thread.
+//
+// xrWaitFrame is deliberately NOT covered: it blocks until the runtime's next
+// frame boundary, and holding a queue lock across it would stall X4 for a whole
+// headset frame every frame.
+std::mutex g_vr_queue_mu;
+bool g_vr_share_queue = false; // set when the reservation had to fall back
+
 // Surfaces whose capabilities we reported at half width.
 //
 // This began as the halve/double pairing: only a surface recorded here could
@@ -4770,6 +4782,13 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueueSubmit(VkQueue queue,
         d = &g_devices.at(dispatch_key(queue));
     }
     patch_view_before_submit();
+    // #36: the runtime shares this queue on any device with one graphics
+    // queue. Uncontended when it does not, and inert until the XR thread
+    // starts submitting.
+    if (g_vr_share_queue) {
+        std::lock_guard<std::mutex> qlock(g_vr_queue_mu);
+        return d->QueueSubmit(queue, submitCount, submits, fence);
+    }
     return d->QueueSubmit(queue, submitCount, submits, fence);
 }
 
@@ -6668,6 +6687,14 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     // it would otherwise never get one, and "no session" would be reported for
     // a reason that has nothing to do with the runtime.
     vr_start_session_deferred();
+    // #36: everything below that touches the queue -- the SBS composite, the
+    // cursor overlay, the readback's QueueWaitIdle, and the present itself --
+    // is inside this scope, so one lock covers X4's whole side of the shared
+    // queue. A std::unique_lock rather than a guard because it must be taken
+    // conditionally.
+    std::unique_lock<std::mutex> qlock(g_vr_queue_mu, std::defer_lock);
+    if (g_vr_share_queue)
+        qlock.lock();
     if (g_active) {
         static bool once = false;
         if (!once) {
@@ -6891,6 +6918,7 @@ struct VrState {
     bool have_span = false;
     float pmin[3] = {0, 0, 0}, pmax[3] = {0, 0, 0};
     uint32_t queue_family = 0;
+    uint32_t queue_index = 0;
     bool device_is_the_runtime_s = false;
 
     // Noted at vkCreateDevice, used once X4 has come back out of it. The
@@ -6962,7 +6990,15 @@ void vr_thread() {
         XrViewStateFlags flags = 0;
         const bool have = x4vr::xr::locate_views(g_vrs.session, views, 2, &flags);
         // Zero layers, by design. Everything else about the frame is real.
-        x4vr::xr::frame_end(g_vrs.session, nullptr, 0);
+        //
+        // The lock covers xrEndFrame because that is where the runtime's
+        // client compositor submits, and on a one-graphics-queue device that
+        // is X4's queue (#36). It is not held across xrWaitFrame above, which
+        // blocks for a whole headset frame.
+        {
+            std::lock_guard<std::mutex> qlock(g_vr_queue_mu);
+            x4vr::xr::frame_end(g_vrs.session, nullptr, 0);
+        }
 
         bool tick = false;
         {
@@ -7124,14 +7160,30 @@ VkPhysicalDevice vr_app_level_physical_device(VkInstance vk,
     return VK_NULL_HANDLE;
 }
 
-// The queue the session is bound to. XrGraphicsBindingVulkan2KHR wants family
-// and index, not a VkQueue, so nothing is fetched here -- but which family X4
-// created, and how many queues it left spare, is worth writing down now: the
-// runtime will submit on that queue once we start giving it layers, and a
-// VkQueue is externally synchronised. Sharing X4's is a hazard this run does
-// not trip only because it submits nothing.
-uint32_t vr_pick_queue_family(VkPhysicalDevice phys, const InstanceData &inst,
-                              const VkDeviceCreateInfo *ci) {
+// Task #36: give the runtime a queue of its own.
+//
+// Measured in takes 111 and 113 -- X4 creates queue family 0 with exactly ONE
+// graphics queue and family 1 with one. The runtime's client compositor
+// submits on the queue the graphics binding names, and a VkQueue is externally
+// synchronised, so sharing X4's would put two threads on one queue the moment
+// we hand over a composition layer. That is undefined behaviour of the worst
+// kind to debug: it shows up as a hang or a torn frame, intermittently, a long
+// way from the change that caused it.
+//
+// The layer already rewrites VkDeviceCreateInfo for multiview and for the
+// runtime's extensions, so it asks for one more queue on X4's graphics family
+// and binds the session to that index, leaving X4's own index 0 untouched. If
+// the family has no room, a graphics family X4 did not use is taken instead.
+// If there is neither, the session is REFUSED rather than shared: a wrong
+// picture is recoverable and a data race is not.
+//
+// `queues` and `prio` must outlive the vkCreateDevice call -- the driver reads
+// them -- so they are the caller's.
+bool vr_reserve_queue(VkPhysicalDevice phys, const InstanceData &inst,
+                      const VkDeviceCreateInfo *ci,
+                      std::vector<VkDeviceQueueCreateInfo> &queues,
+                      std::vector<float> &prio, uint32_t *out_family,
+                      uint32_t *out_index) {
     std::vector<VkQueueFamilyProperties> props;
     if (inst.GetPhysicalDeviceQueueFamilyProperties) {
         uint32_t n = 0;
@@ -7139,25 +7191,99 @@ uint32_t vr_pick_queue_family(VkPhysicalDevice phys, const InstanceData &inst,
         props.resize(n);
         inst.GetPhysicalDeviceQueueFamilyProperties(phys, &n, props.data());
     }
-    uint32_t chosen = ci->queueCreateInfoCount ? ci->pQueueCreateInfos[0].queueFamilyIndex : 0;
-    bool found = false;
-    for (uint32_t i = 0; i < ci->queueCreateInfoCount; i++) {
-        const auto &q = ci->pQueueCreateInfos[i];
+    queues.assign(ci->pQueueCreateInfos,
+                  ci->pQueueCreateInfos + ci->queueCreateInfoCount);
+    for (const auto &q : queues) {
         const bool gfx = q.queueFamilyIndex < props.size() &&
                          (props[q.queueFamilyIndex].queueFlags &
                           VK_QUEUE_GRAPHICS_BIT);
-        X4VR_LOG("vr: X4 created queue family %u x%u%s%s", q.queueFamilyIndex,
-                 q.queueCount, gfx ? " (graphics)" : "",
-                 !found && gfx ? "  <-- the session binds here" : "");
-        if (!found && gfx) {
-            chosen = q.queueFamilyIndex;
-            found = true;
+        X4VR_LOG("vr: X4 created queue family %u x%u%s (the device offers %u)",
+                 q.queueFamilyIndex, q.queueCount, gfx ? " graphics" : "",
+                 q.queueFamilyIndex < props.size()
+                     ? props[q.queueFamilyIndex].queueCount
+                     : 0);
+    }
+
+    // 1. One more on a graphics family X4 already uses.
+    for (size_t i = 0; i < queues.size(); i++) {
+        const uint32_t fam = queues[i].queueFamilyIndex;
+        if (fam >= props.size() ||
+            !(props[fam].queueFlags & VK_QUEUE_GRAPHICS_BIT))
+            continue;
+        if (queues[i].queueCount >= props[fam].queueCount)
+            continue;
+        prio.assign(queues[i].queueCount + 1, 1.0f);
+        for (uint32_t q = 0; q < queues[i].queueCount; q++)
+            prio[q] = queues[i].pQueuePriorities ? queues[i].pQueuePriorities[q]
+                                                 : 1.0f;
+        *out_family = fam;
+        *out_index = queues[i].queueCount;
+        queues[i].queueCount++;
+        queues[i].pQueuePriorities = prio.data();
+        X4VR_LOG("vr: reserved queue family %u index %u for the runtime — X4 "
+                 "keeps index 0..%u",
+                 *out_family, *out_index, *out_index - 1);
+        return true;
+    }
+
+    // 2. A graphics family X4 did not ask for at all.
+    for (uint32_t fam = 0; fam < props.size(); fam++) {
+        if (!(props[fam].queueFlags & VK_QUEUE_GRAPHICS_BIT) ||
+            !props[fam].queueCount)
+            continue;
+        bool used = false;
+        for (const auto &q : queues)
+            if (q.queueFamilyIndex == fam)
+                used = true;
+        if (used)
+            continue;
+        prio.assign(1, 1.0f);
+        VkDeviceQueueCreateInfo add{};
+        add.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        add.queueFamilyIndex = fam;
+        add.queueCount = 1;
+        add.pQueuePriorities = prio.data();
+        queues.push_back(add);
+        *out_family = fam;
+        *out_index = 0;
+        X4VR_LOG("vr: X4's graphics families are full — added family %u index 0"
+                 " for the runtime, which X4 does not use",
+                 fam);
+        return true;
+    }
+
+    // 3. Share X4's, serialised by us.
+    //
+    // Measured on this machine, and it is not a quirk: RADV Navi31 exposes
+    // family 0 as GRAPHICS|COMPUTE|TRANSFER with queueCount **1**, family 1 as
+    // 4x COMPUTE only, and the rest video/sparse. There is exactly one graphics
+    // queue on the device, so on AMD the runtime cannot have its own and
+    // refusing would mean "no VR on AMD".
+    //
+    // Sharing is legal -- a VkQueue is externally synchronised, which is a
+    // requirement on the application, not a prohibition -- and the layer is in
+    // the right place to meet it. X4's submissions come through
+    // x4vr_QueueSubmit and x4vr_QueuePresentKHR (which also covers the SBS
+    // composite and the cursor overlay, since both submit from inside the
+    // present hook), and the runtime's happen inside xrEndFrame on our own
+    // thread. One mutex across both sides is the whole of it.
+    for (const auto &q : queues) {
+        const uint32_t fam = q.queueFamilyIndex;
+        if (fam < props.size() && (props[fam].queueFlags & VK_QUEUE_GRAPHICS_BIT)) {
+            *out_family = fam;
+            *out_index = 0;
+            g_vr_share_queue = true;
+            X4VR_LOG("vr: this device has no spare graphics queue — the "
+                     "runtime shares X4's (family %u index 0), serialised by "
+                     "the layer. Submissions from both sides take one lock.",
+                     fam);
+            return true;
         }
     }
-    if (!found)
-        X4VR_LOG("vr: WARNING no graphics queue among X4's — binding family %u "
-                 "anyway", chosen);
-    return chosen;
+
+    X4VR_LOG("vr: NO SESSION THIS RUN — X4 created no graphics queue at all, "
+             "so there is nothing to bind a session to.");
+    return false;
 }
 
 // Recorded inside vkCreateDevice; acted on afterwards.
@@ -7166,14 +7292,13 @@ uint32_t vr_pick_queue_family(VkPhysicalDevice phys, const InstanceData &inst,
 // the only way this measurement can be taken on a machine with no headset
 // attached, which is where it needed taking after take 111.
 void vr_note_device(VkInstance vk, VkPhysicalDevice phys, VkDevice dev,
-                    const InstanceData &inst, const VkDeviceCreateInfo *ci) {
+                    const InstanceData &inst) {
     if (!g_vr || g_vrs.pending || g_vrs.started.load())
         return;
     g_vrs.vk = vk;
     g_vrs.chain_phys = phys;
     g_vrs.dev = dev;
     g_vrs.inst = inst;
-    g_vrs.queue_family = vr_pick_queue_family(phys, inst, ci);
     g_vrs.pending = true;
 }
 
@@ -7214,15 +7339,16 @@ void vr_session_thread() {
     }
     const XrResult r =
         x4vr::xr::session_create(g_vrs.session, g_vrs.rt, g_vrs.vk, want,
-                                 g_vrs.dev, g_vrs.queue_family, 0);
+                                 g_vrs.dev, g_vrs.queue_family,
+                                 g_vrs.queue_index);
     if (r != XR_SUCCESS) {
         X4VR_LOG("vr: NO SESSION THIS RUN — %s",
                  g_vrs.session.last_error.c_str());
         return;
     }
-    X4VR_LOG("vr: session created on X4's own device — queue family %u index 0,"
-             " reference space %s",
-             g_vrs.queue_family,
+    X4VR_LOG("vr: session created on X4's own device — queue family %u index %u"
+             " (reserved for the runtime), reference space %s",
+             g_vrs.queue_family, g_vrs.queue_index,
              g_vrs.session.space_type == XR_REFERENCE_SPACE_TYPE_STAGE
                  ? "STAGE" : "LOCAL");
     X4VR_LOG("vr: submitting NO layers this run by design — the headset will "
@@ -7598,6 +7724,32 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     VkDeviceCreateInfo vr_ci{};
     std::vector<std::string> vr_ext_store;
     std::vector<const char *> vr_ext_names;
+    std::vector<VkDeviceQueueCreateInfo> vr_queues;
+    std::vector<float> vr_prio;
+    // Gated on intent for the queue, on the runtime for the extensions. The
+    // extension list can only come from a runtime; the queue reservation
+    // cannot, and gating it on rt.ok() would mean the one code path that
+    // rewrites X4's queues is never exercised on a machine with no headset --
+    // which is every machine this gets developed on. A spare queue X4 does not
+    // use costs nothing.
+    if (g_active && g_vr) {
+        InstanceData inst{};
+        {
+            std::lock_guard<std::mutex> lock(g_mu);
+            auto it = g_instances.find(dispatch_key(phys));
+            if (it != g_instances.end())
+                inst = it->second;
+        }
+        vr_ci = *ci;
+        if (vr_reserve_queue(phys, inst, ci, vr_queues, vr_prio,
+                             &g_vrs.queue_family, &g_vrs.queue_index)) {
+            vr_ci.queueCreateInfoCount = (uint32_t)vr_queues.size();
+            vr_ci.pQueueCreateInfos = vr_queues.data();
+            ci = &vr_ci;
+        } else if (g_vrs.rt.ok()) {
+            x4vr::xr::runtime_close(g_vrs.rt);
+        }
+    }
     if (g_active && g_vrs.rt.ok()) {
         InstanceData inst{};
         {
@@ -7644,7 +7796,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
                 X4VR_LOG("vr: the driver does not advertise%s — not adding "
                          "them; the session may fail for want of them",
                          dropped.c_str());
-            vr_ci = *ci;
+            // vr_ci already carries the queue edit above; add to it rather
+            // than re-copying ci, which by now may BE vr_ci.
             vr_ci.ppEnabledExtensionNames =
                 vr_merge_extensions(ci->ppEnabledExtensionNames,
                                     ci->enabledExtensionCount, ok,
@@ -7805,7 +7958,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
             if (it != g_instances.end())
                 inst = it->second;
         }
-        vr_note_device(inst.instance, phys, *out, inst, ci);
+        vr_note_device(inst.instance, phys, *out, inst);
     }
 #endif
     return VK_SUCCESS;
