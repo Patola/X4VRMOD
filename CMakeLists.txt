@@ -15,6 +15,18 @@ add_compile_options(-Wall -Wextra)
 find_package(Threads REQUIRED)
 find_package(Vulkan REQUIRED) # headers; the layer does not link libvulkan
 
+# OpenXR headers only. The loader is dlopen'd at runtime (see common/x4vr_xr.hpp),
+# so a machine without an OpenXR runtime still builds and still runs flatscreen.
+find_package(OpenXR CONFIG QUIET)
+if(NOT TARGET OpenXR::headers)
+    find_path(OPENXR_HEADER_DIR openxr/openxr.h)
+endif()
+if(TARGET OpenXR::headers OR OPENXR_HEADER_DIR)
+    message(STATUS "OpenXR headers found — VR paths will be built")
+else()
+    message(STATUS "OpenXR headers NOT found — VR paths will be skipped")
+endif()
+
 include_directories(${Vulkan_INCLUDE_DIRS})
 
 add_subdirectory(layer)

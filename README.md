@@ -84,7 +84,10 @@ shim, not the layer — see [docs/frame-analysis.md](docs/frame-analysis.md).
 - **X4: Foundations**, native Linux build (developed against 9.00)
 - A **Wayland** session, **gamescope**, and a Vulkan 1.3+ driver
 - For the VR phases: an OpenXR runtime (**WiVRn**/Monado, or SteamVR)
-- Build: CMake ≥ 3.20, a C++17 compiler, Vulkan headers
+- Build: CMake ≥ 3.20, a C++17 compiler, Vulkan headers, OpenXR headers
+  (optional — without them the VR paths are skipped, and the OpenXR *loader* is
+  never linked in any case: it is `dlopen`'d, so a machine with no runtime
+  installed still runs the mod flatscreen)
 
 ## Build & run
 

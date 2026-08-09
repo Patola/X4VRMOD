@@ -13188,6 +13188,170 @@ the appearance belongs to #25, which is deferred until VR by decision.
 in step by hand, and that requirement disappears: every World module derives `sx`
 per draw, from the camera block or from the object's own matrix.
 
+## Task #34 — head tracking starts with the session, and the shear cannot carry a head
+
+"Next is head tracking" is right about the goal and wrong about the first
+step. There is no pose without an `XrSession`, and a session cannot be created
+after the fact: the runtime decides which Vulkan **instance** extensions, which
+**device** extensions and which **`VkPhysicalDevice`** the session may use, and
+it decides them before the device exists. So the `XrInstance` has to be created
+inside our `vkCreateInstance` hook, ahead of the down-chain create.
+
+`XR_KHR_vulkan_enable2` is built for exactly this shape.
+`xrCreateVulkanInstanceKHR` takes the *application's own* `VkInstanceCreateInfo`
+plus a `pfnGetInstanceProcAddr`, merges in what the runtime needs, and calls
+through. In a layer, "the application's create info" is X4's and "call through"
+is the next layer down — so X4 still creates its own instance, with the
+runtime's additions folded in, and never learns that anything happened. That is
+the non-intrusive shape this project asks for, and it is why the v1 extension
+(`XR_KHR_vulkan_enable`) is not an acceptable fallback: it hands back a list of
+names and then creates the device *itself*, which from inside a layer chain
+means reproducing the runtime's device setup by hand.
+
+### What a head rotation does to the clip transform
+
+Worth doing the algebra rather than assuming, because the answer is not the one
+the eye offset trained us to expect. X4's projection, column-major, from take
+108's dump:
+
+    row0(P) = [sx  0  0    0 ]
+    row1(P) = [0   sy 0    0 ]
+    row2(P) = [0   0  0    near]
+    row3(P) = [0   0  1    0 ]
+
+so `P·(x,y,z,1) = (sx·x, sy·y, near, z)`, and inverting it,
+
+    P⁻¹·(a,b,c,d) = (a/sx, b/sy, d, c/near)
+
+**Eye offset** `d_x`, a pure view-space translation, through `K = P·T(−d)·P⁻¹`:
+
+    x_c' = a − sx·d_x·(c/near)        y_c' = b
+    z_c' = c                          w_c' = d          ← unchanged
+
+`w` survives untouched, and X4's `c` is always exactly `near`, so `c/near = 1`
+and the whole 4×4 collapses to `x_c' = x_c − sx·d_x`. That collapse is the
+reason stereo costs nothing per vertex, and it is the thing the patched shaders
+implement.
+
+**Head yaw** θ about the up axis, `K = P·R_y·P⁻¹`:
+
+    x_c' = a·cosθ + sx·d·sinθ         y_c' = b
+    z_c' = c                          w_c' = −(a/sx)·sinθ + d·cosθ   ← changes
+
+`w_c` moves. The perspective divide is no longer the one X4 computed, so
+nothing collapses: yaw is a genuine clip-space 4×4, per vertex, and `K` must
+stop being a baked constant. Pitch is the same story about the other axis.
+
+**Head roll** φ about the view axis is the exception:
+
+    x_c' = a·cosφ − (sx/sy)·b·sinφ    w_c' = d          ← unchanged
+    y_c' = (sy/sx)·a·sinφ + b·cosφ    z_c' = c
+
+Roll leaves `w` alone, so it stays a 2×2 on `(x, y)` with the aspect factors —
+as cheap as the shear already is.
+
+### Why that is not merely an extra multiply: X4 culls
+
+Rotating in clip space can only move geometry X4 already submitted. X4 culls on
+the CPU against its own frustum, so a clip-space yaw reveals nothing beyond the
+edge of the rendered field — it drags the black border into view.
+
+The headroom is quantifiable, and it is not enough. With X4 rendering `h`
+degrees horizontally and the headset displaying `v`, a clip-space yaw has
+`(h − v)/2` degrees of margin per side. #24 got `h` to 106°; a headset showing
+~100° leaves about **3°**. Buying ±30° would need `h ≈ 160°`, where
+`sx = cot 80° = 0.176` and a rectilinear projection spends almost all of its
+pixels on the periphery — a resolution cost that fails "performance is king"
+before it is built.
+
+So the shape of #33 is now visible, and it is not mainly a layer job:
+
+* **yaw and pitch** have to reach X4's *own* camera, so the engine culls and
+  renders for the direction the head is actually facing. That is the injector's
+  side of the house, and it is the piece `v0.1` got wrong for reasons
+  (OpenTrack Euler angles, wrong pivot, gimbal lock) that a quaternion taken
+  straight from `xrLocateViews` does not have.
+* **roll**, and the last few milliseconds of yaw/pitch as a late correction,
+  can stay in clip space where they are nearly free.
+
+That claim needs its own verification — whether the injector can drive X4's
+free-look orientation at all is unproven — so it is written here as the reading
+of the algebra, not as a decision. It is recorded now because it changes what
+"head tracking" means for this project, and re-deriving it later would be worse
+than being wrong in public.
+
+### The probe, and what each answer changes
+
+`tests/xr_probe.cpp` drives `common/x4vr_xr.hpp` on a real GPU before a line of
+it runs inside the game — the same rule that made the cursor overlay work on
+its first take. `tests/run-xr-probe.sh` runs it in two halves: the test card
+against a plain 2-layer image (no runtime needed, includes the case that must
+fail), then the live session.
+
+| What it reports | What it decides |
+|---|---|
+| `KEY_PHYSICAL_CHOSEN` | whether the runtime's device is the one X4 would have picked. If not, the layer has a real problem, and finding out here costs nothing |
+| `xr: runtime adds … extensions` | how much of X4's `VkDeviceCreateInfo` we have to edit — the multiview edit gets company |
+| `KEY_EYE_RECOMMENDED` | whether 1408×1408 per eye is anywhere near right, i.e. whether `X4VR_SBS_WIDTH/HEIGHT` and the gamescope size have to move |
+| `KEY_FOV_ASYMMETRIC` | whether X4's symmetric projection can be submitted as-is. X4 has no off-axis term; if the headset's frusta are asymmetric, one has to be added or the image is submitted into the wrong frustum |
+| `KEY_FOV0`/`KEY_FOV1` | the `h` in the headroom arithmetic above, and hence what `X4VR_FOV` should be |
+| `KEY_IPD_M` | the runtime's own eye separation, against the 0.064 m the shear assumes — #25's number, arriving from the runtime rather than from a guess |
+| `KEY_HEAD_SPAN_M` | that the pose is *moving*. A pose that never changes is the failure this whole task exists to avoid, and an average would hide it |
+
+### Predictions, before the run
+
+Committed here before the measurement, as usual. This is a **tool run**, not an
+X4 take — it costs a minute and no load screen — so the bar for what it must
+settle is higher than for a take, not lower.
+
+**P111.1: the runtime reports exactly 2 views for `PRIMARY_STEREO`.** Anything
+else and the two-layer eye image is the wrong container.
+
+**P111.2: the per-view FOV is asymmetric** — `|angleLeft| ≠ |angleRight|` on at
+least one view, by more than a degree. Nearly every HMD cants its displays. If
+this is confirmed, X4's symmetric `sx` cannot be submitted as the view's own
+frustum and the eye transform needs an off-axis term it does not have today.
+
+**P111.3: the recommended per-eye extent is not 1408×1408**, and is likely
+taller than wide. 2816×1408 was chosen for a flat monitor, not for a headset,
+so `X4VR_SBS_*` becomes a knob rather than a constant.
+
+**P111.4: `xrGetVulkanGraphicsDevice2KHR` returns index 0** — the one discrete
+GPU on this machine — so the "the runtime wants a different device" risk does
+not bite here. Confirming it does not retire the risk for other people's
+machines; it only says it is not this machine's problem.
+
+**P111.5: the runtime adds at least one Vulkan device extension X4 does not
+enable** (external memory/semaphore, most likely as fds). If so, editing X4's
+device create-info is mandatory rather than a possibility, and the multiview
+edit already proved that path works.
+
+**P111.6: `KEY_IPD_M` lands between 0.058 and 0.072 m**, and the sign check
+holds — view 1 is to the **+x** side of view 0, i.e. view 1 is the right eye. A
+negative `dx` would mean the array-layer convention (layer N = view N = left,
+right) is backwards, which would silently swap the eyes.
+
+And one that the card answers rather than the log: **in the headset, the blue
+tint and the outer white bar must agree** — blue background with a bar hard
+against the *left* edge is the left eye. If the tint says left and the bar says
+right, the views are crossed somewhere between `imageArrayIndex` and the
+display.
+
+### How to run it
+
+    cd /home/patola/workspace/claude/X4VRMOD && cmake --build build -j8
+    ./tests/run-xr-probe.sh 20
+
+with WiVRn started and the headset connected and awake. The card half runs
+either way; the live half prints `FAIL=` and says what to start if no runtime
+is up. Output is teed to `/tmp/x4vr-xrprobe.txt`.
+
+Already verified here, with no runtime present: the card is correct on this GPU
+under validation, the negative control (view 1 painted as a copy of view 0) is
+caught, and the no-runtime path reports
+`XR_ERROR_RUNTIME_UNAVAILABLE` with the sentence that names the cause rather
+than the enumerant.
+
 # State at `stage6-sx-per-draw` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the
@@ -13197,7 +13361,8 @@ repository or from `/tmp`; nothing here depends on remembering a conversation.
 
 Closed this stretch: **#23** (per-draw `sx` everywhere), **#24** (a chosen field
 of view), **#31** (the three extents), **#32** (the right eye judged from present
-dumps). Open: **#25**, **#33**, and the piece both need.
+dumps). Open: **#25**, **#33**, and the piece both need — **#34**, the OpenXR
+bring-up, which is now in progress and has its own section above.
 
 **#25 is deferred by decision, not blocked.** IPD and the sense of depth and
 scale get judged when true SBS (done), head tracking (#33) and a VR projection
@@ -13215,6 +13380,16 @@ depth and scale standing still, not enough to move around in. Main known risk:
 the runtime may want a different `VkPhysicalDevice` than X4 already chose.
 `wlx-overlay-s` is **not** a shortcut: it has no SBS or stereo mode, so it would
 put a flat squashed pair in front of both eyes.
+
+Started as **#34**. `common/x4vr_xr.hpp` holds the bring-up (loader `dlopen`'d,
+never linked, so a machine without OpenXR still runs flat), and
+`tests/run-xr-probe.sh` drives it on a real GPU. The ordering constraint that
+shapes the layer side: the `XrInstance` must exist *before* X4's
+`vkCreateInstance`, because the runtime dictates the instance extensions, the
+device extensions and the physical device. See "Task #34" above for the
+algebra showing that a head *rotation* does not collapse to an x-shift the way
+the eye offset does, and for what that implies about where yaw and pitch have
+to be applied.
 
 ## The state itself
 

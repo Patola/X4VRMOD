@@ -14,6 +14,7 @@ They are built by the normal `cmake --build build` and link `libvulkan`
 | `run-multiview-render.sh` | Does a real draw through the layer reach **both** array layers? Written to settle in one second what three live runs could not. |
 | `run-cursor.sh` | Does the cursor land where X4 hit-tests, in both eyes, in the right colours — and does it follow task #30's canvas when there is one? |
 | `x4vr_test_view_math` | Does the analytic eye shear agree with `P·T(−d)·P⁻¹` computed the long way, and does the canvas shift agree with the shear it claims to be? |
+| `run-xr-probe.sh` | Does an `XrSession` come up on a Vulkan device the runtime created, and what does it then say about the eyes — physical device, added extensions, per-eye extent, per-view FOV, IPD, head pose? Its first half checks the eye test card with no runtime at all. |
 
 ## Conventions
 

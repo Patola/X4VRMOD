@@ -35,6 +35,23 @@ target_include_directories(x4vr_test_cursor_place PRIVATE ${Vulkan_INCLUDE_DIRS}
 add_executable(x4vr_test_cursor_render cursor_render.cpp)
 target_link_libraries(x4vr_test_cursor_render PRIVATE Vulkan::Vulkan)
 
+# The OpenXR bring-up, on a real GPU and a real runtime. Links libvulkan but
+# NOT libopenxr_loader: common/x4vr_xr.hpp dlopen()s the loader, because the
+# layer is injected into someone else's process and a missing DT_NEEDED there
+# is X4 refusing to start rather than a graceful fall back to flatscreen. The
+# headers are a build dependency; the loader is not.
+if(TARGET OpenXR::headers OR OPENXR_HEADER_DIR)
+    add_executable(x4vr_test_xr_probe xr_probe.cpp)
+    target_link_libraries(x4vr_test_xr_probe PRIVATE Vulkan::Vulkan ${CMAKE_DL_LIBS})
+    if(TARGET OpenXR::headers)
+        target_link_libraries(x4vr_test_xr_probe PRIVATE OpenXR::headers)
+    else()
+        target_include_directories(x4vr_test_xr_probe PRIVATE ${OPENXR_HEADER_DIR})
+    endif()
+else()
+    message(STATUS "OpenXR headers not found — skipping x4vr_test_xr_probe")
+endif()
+
 # Shaders are committed as SPIR-V so the suite does not need glslc to run.
 configure_file(fullscreen.vert.spv fullscreen.vert.spv COPYONLY)
 configure_file(solid.frag.spv solid.frag.spv COPYONLY)
