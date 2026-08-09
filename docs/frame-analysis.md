@@ -12629,3 +12629,80 @@ is under a pixel.
 
 Judged by `python3 tools/score_run.py /tmp/x4vr-take108.log`, on the three
 `stereo` lines and on everything above them being unchanged from take 106.
+
+## Take 108 — the constant is correct, and the budget proved itself under load
+
+Flown close to a station and circled it for a couple of minutes: the one scene
+where 1 m to 10 m is actually on screen, which is what this run needed.
+
+### P108 scored
+
+**1. Confirmed, exact text.**
+
+    stereo  X4VR_PROJ_SX=0.75405 against a scene sx of 0.75405: the 12 module(s)
+            that cannot read sx live matches the scene camera (task #23)
+
+**2. Confirmed.** `baked-sx=12` at module #350, the same count take 106 reached.
+The knob changed the value those modules bake, not how many of them there are.
+
+**3. Confirmed.** `split on`, `masked fullscreen=36`, `sx=1.33333 sy=-1.33333
+near=0.10000` at first read, `|sy/sx| = 1.000`, the extent attribution, the fov
+camera at `0.75405` with `|sy/sx|=1.0000`, and 6 distinct projections across the
+slots — every one identical to take 106. The distinct-`sx` *set* is 4 rather than
+24 because this session did not zoom, which the prediction allowed for
+explicitly. The four that remain are the four persistent projections:
+`0.75405` (scene), `1.33333` (fov-independent base), `3.78085` (the 3:2 camera)
+and `1.00000` (the 90° one, absent in take 105 and back here).
+
+**4. Not evidence, by Patola's own account.** It looked right in the SBS pair,
+and he is right that this cannot be judged from a side-by-side pair on a flat
+screen — depth and scale are the whole question and they are not visible that
+way. Recorded as unjudged rather than as a pass.
+
+### The per-camera budget did the thing it was built for
+
+Take 108 produced **314 changes to take 106's 61**, 247 of them from blocks with
+a different `near` — 74 distinct values including a monotone negative ramp
+(`-1.212, -1.213, -1.214, -1.215, -1.216`). That is the same drifting-block
+pattern that exhausted take 105's single global budget 182 s into a 382 s
+session.
+
+This time two slots hit their own 120-change caps and **every other camera kept
+logging**:
+
+    proj: cam#44 reached 120 changes -- further changes from THIS camera
+          suppressed, the others continue
+    proj: cam#43 reached 120 changes -- ...
+
+Under the old global budget those two slots alone would have consumed 60% of it.
+The score now says so rather than staying quiet about it:
+
+    note  2 slot(s) hit the per-camera change cap (cam#44, cam#43) — contained
+          to those slots, the rest kept logging
+
+### #25 is blocked, and the blocker is not in this repository
+
+The machine already has a full Linux VR stack: **WiVRn** (`wivrn-server`,
+`wivrn-dashboard`, a Monado-based runtime at
+`/usr/share/openxr/1/openxr_wivrn.json`), **envision**, **wlx-overlay-s**, and
+SteamVR. No `active_runtime.json` is selected in either the user or the system
+path, so nothing claims the runtime at rest.
+
+`wlx-overlay-s` shows Wayland/X11 windows inside VR, but it has no side-by-side
+or stereo mode — its `--help` and its strings carry nothing of the sort. So
+mirroring X4's SBS window into the headset would put **a flat panel** in front of
+the eyes: both eyes see the same squashed pair, which is worse than the monitor,
+not better. It cannot answer #25.
+
+What #25 needs is the two array layers the layer already produces, handed to
+OpenXR as a projection layer with one view each. Everything upstream of that
+exists — the 2-layer eye image, per-eye constants via `gl_ViewIndex`, the shear,
+and now a correct `sx` at a chosen field. What does not exist is the submission:
+an `XrSession` bound to *X4's* `VkDevice` and queue rather than one of our own,
+an `XrSwapchain` to blit the eye image into, and a frame loop driven from
+`vkQueuePresentKHR` instead of from our own main loop.
+
+That is a new task, not a step of #25, and it is the largest remaining piece.
+Head tracking (#33) sits on top of it; a first cut can submit with the runtime's
+view FOVs while ignoring head pose, which is enough to sense depth and scale
+standing still and not enough to move around in.

@@ -556,6 +556,19 @@ def main(path):
                 # not appeared yet was written up as untested when in truth the
                 # instrument had gone dark. A cap that does not report itself is
                 # indistinguishable from "nothing more happened".
+                # Per-camera caps are the budget working, not failing: take 108
+                # circled a station and two drifting slots hit 120 each while
+                # every other camera kept logging. That is exactly the condition
+                # that blinded take 105 under a single global budget. Reported
+                # anyway -- a cap nobody mentions is how take 105 read as "the
+                # camera did not appear".
+                percam = re.findall(r"proj: cam#(\d+) reached \d+ changes", text)
+                if percam:
+                    print(f"note  {len(percam)} slot(s) hit the per-camera "
+                          f"change cap (cam#{', cam#'.join(percam[:4])}"
+                          f"{', …' if len(percam) > 4 else ''}) — contained to "
+                          f"those slots, the rest kept logging")
+
                 cap = re.search(
                     r"\[\s*([\d.]+)\]\s+layer\s+proj: (?:\d+ changes logged"
                     r"(?:,| across))", text)
