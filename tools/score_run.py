@@ -303,16 +303,32 @@ def main(path):
     meas = re.search(r"proj MEASURED: sx=([\d.eE+-]+) sy=([\d.eE+-]+) "
                      r"near=([\d.eE+-]+)", text)
     unreadable = "proj: could not read terms" in text
-    # sy is present only in logs from take 105 onward; near only from take 54.
-    # findall yields '' for a group that did not participate, never None.
-    changes = [
-        {"sx": float(m.group(3)),
-         "sy": float(m.group(5)) if m.group(5) else None,
-         "near": float(m.group(7)) if m.group(7) else None}
-        for m in re.finditer(
-            r"proj CHANGED\s+#(\d+): sx ([\d.eE+-]+) -> ([\d.eE+-]+)"
-            r"(?:\s+sy ([\d.eE+-]+) -> ([\d.eE+-]+))?"
-            r"(?:\s+near ([\d.eE+-]+) -> ([\d.eE+-]+))?", text)]
+    # sy is present only in logs from take 105 onward, near only from take 54,
+    # and the cam# tag only from take 106. Named groups, because the numbered
+    # ones already produced one silent bug here: findall yields '' for a group
+    # that did not participate, never None, and adding an optional group at the
+    # front renumbers every group after it.
+    CHANGED_RE = re.compile(
+        r"proj CHANGED\s+(?:cam#(?P<cam>\d+)\s+)?#(?P<i>\d+): "
+        r"sx (?P<sx0>[\d.eE+-]+) -> (?P<sx>[\d.eE+-]+)"
+        r"(?:\s+sy (?P<sy0>[\d.eE+-]+) -> (?P<sy>[\d.eE+-]+))?"
+        r"(?:\s+near (?P<near0>[\d.eE+-]+) -> (?P<near>[\d.eE+-]+))?")
+
+    def _sample(cam, sx, sy, near):
+        return {"cam": int(cam) if cam else None,
+                "sx": float(sx),
+                "sy": float(sy) if sy else None,
+                "near": float(near) if near else None}
+
+    changes = [_sample(m.group("cam"), m.group("sx"), m.group("sy"),
+                       m.group("near")) for m in CHANGED_RE.finditer(text)]
+    # A camera's first sighting is a sample like any other, and from take 106 it
+    # is the only line some cameras ever produce -- the steady ones, which are
+    # exactly the ones that tell you which cameras ignore <fov>.
+    changes += [_sample(m.group(1), m.group(2), m.group(3), m.group(4))
+                for m in re.finditer(
+                    r"proj CAMERA cam#(\d+): sx=([\d.eE+-]+) sy=([\d.eE+-]+) "
+                    r"near=([\d.eE+-]+)", text)]
 
     if dump_asked or meas or unreadable:
         if unreadable:
@@ -390,62 +406,152 @@ def main(path):
                 # the field angle each value implies and the <fov> tag that angle
                 # corresponds to: a camera that honours the setting lands on the
                 # tag this run asked for, and one that ignores it does not.
-                tally = {}
-                for v in vals:
-                    tally[round(v, 5)] = tally.get(round(v, 5), 0) + 1
+                # sy travels with sx in the same row, because the aspect is a
+                # property of a camera and not of the run. Take 105 reported
+                # "|sy/sx| ranges 1.000..1.500 — the field is being stretched"
+                # and that was an artefact of aggregating: 0.75405 and 1.33333
+                # were square to five decimals and a third camera, 3.78085, is
+                # simply a 3:2 camera. The aggregate defect I had just fixed for
+                # sx, still live for sy, one commit later.
+                # Keyed on sx, with the sy values seen for it carried alongside
+                # rather than folded into the key: pre-105 logs have no sy on
+                # their CHANGED lines, and keying on the pair split one camera
+                # into a with-sy row and a without-sy row. Two sy for one sx is
+                # real information, so it is printed rather than collapsed.
+                tally, sys_for = {}, {}
+                for c in main + [{"sx": sx, "sy": sy, "near": near}]:
+                    k = round(c["sx"], 5)
+                    tally[k] = tally.get(k, 0) + 1
+                    if c["sy"] is not None:
+                        sys_for.setdefault(k, set()).add(round(c["sy"], 5))
                 order = sorted(tally.items(), key=lambda kv: (-kv[1], kv[0]))
                 m_fov = re.search(r"X4VR_FOV=([\d.]+)", run or "")
                 asked = float(m_fov.group(1)) if m_fov else None
                 shown = order[:8]
-                print(f"proj  {len(order)} distinct sx (compare this SET against "
-                      f"the previous take's, not the range):")
+                print(f"proj  {len(order)} distinct sx — compare this SET "
+                      f"against the previous take's, not the range:")
+                eye = None
                 for v, n in shown:
                     deg = 2 * math.degrees(math.atan(1.0 / v)) if v else 0.0
                     tag = deg / FOV_BASE_DEG
-                    mark = ("  <- honours X4VR_FOV"
-                            if asked is not None and abs(tag - asked) < 0.01
-                            else "")
-                    print(f"      sx={v:<9.5f} {deg:7.3f}° = fov {tag:.3f}"
-                          f"   x{n}{mark}")
+                    honours = asked is not None and abs(tag - asked) < 0.01
+                    asps = sorted(abs(w / v) for w in sys_for.get(v, ())) if v \
+                        else []
+                    if honours and eye is None:
+                        eye = (v, asps, n)
+                    a = (" |sy/sx|=" + ",".join(f"{r:.4f}" for r in asps)
+                         if asps else "")
+                    print(f"      sx={v:<9.5f}{a} {deg:7.3f}° = fov {tag:.3f}"
+                          f"   x{n}{'  <- honours X4VR_FOV' if honours else ''}")
                 if len(order) > len(shown):
                     rest = sum(n for _, n in order[len(shown):])
                     print(f"      ... {len(order) - len(shown)} rarer value(s), "
                           f"{rest} sample(s), not shown")
-                if asked is not None and not any(
-                        abs((2 * math.degrees(math.atan(1.0 / v)) if v else 0.0)
-                            / FOV_BASE_DEG - asked) < 0.01 for v, _ in order):
+                if asked is not None and eye is None:
                     print(f"warn  no camera in this run reads the field "
                           f"X4VR_FOV={asked:g} asks for "
                           f"({asked * FOV_BASE_DEG:.2f}°) — either X4 rejected "
                           f"the tag or the law is not linear here")
 
-                # Take 104: X4's <fov> scales the horizontal field, and every
-                # CHANGED line reported sx alone -- so whether the vertical
-                # scaled with it was unmeasurable. If sy/sx ever leaves the eye
-                # aspect, a widened field is stretched rather than wider, and
-                # that is a distortion no screenshot reads reliably.
-                ratios = [abs(c["sy"] / c["sx"]) for c in main
-                          if c["sy"] is not None and c["sx"]]
-                if ratios:
-                    lo, hi = min(ratios), max(ratios)
+                # The aspect check, applied to ONE camera: the one that honours
+                # the setting, since that is the one whose field the player is
+                # looking through. If its sy does not track its sx, a widened
+                # field is stretched rather than wider — a distortion no
+                # screenshot reads reliably. Other cameras having other aspects
+                # is X4's business, not a defect.
+                if eye and eye[1]:
                     tgt = abs(sy / sx) if sx else 0.0
-                    if abs(hi - lo) < 0.01 and abs(lo - tgt) < 0.01:
-                        print(f"proj  sy tracks sx — |sy/sx| stays {lo:.3f} "
-                              f"across every sample, so the field scales "
-                              f"without stretching")
+                    mr = re.search(r"X4VR_RES=(\d+)x(\d+)", run or "")
+                    if mr:
+                        tgt = int(mr.group(1)) / int(mr.group(2))
+                    off = [r for r in eye[1] if abs(r - tgt) >= 0.01]
+                    if not off:
+                        print(f"proj  sy tracks sx on the fov camera — "
+                              f"|sy/sx|={eye[1][0]:.4f} against an eye aspect "
+                              f"of {tgt:.4f}, so the field is widened, not "
+                              f"stretched")
                     else:
-                        print(f"warn  |sy/sx| ranges {lo:.3f}..{hi:.3f} against "
-                              f"{tgt:.3f} at first read — the vertical does not "
+                        print(f"warn  the fov camera reads |sy/sx|="
+                              f"{','.join(f'{r:.4f}' for r in off)} against an "
+                              f"eye aspect of {tgt:.4f} — the vertical does not "
                               f"track the horizontal, so the field is being "
-                              f"stretched, not widened")
+                              f"stretched")
+                elif any(c["sy"] is not None for c in main):
+                    print("proj  aspect per camera unjudged — no camera in this "
+                          "run honoured X4VR_FOV, so there is no eye camera to "
+                          "check")
                 if other:
                     nears = sorted({f"{c['near']:.3f}" for c in other})
-                    print(f"note  {len(other)} change(s) came from a block with "
-                          f"a different near ({', '.join(nears)}) and are "
-                          f"excluded above — not the main camera (see take 54)")
+                    shown_n = nears[:6]
+                    tail = (f", +{len(nears) - len(shown_n)} more"
+                            if len(nears) > len(shown_n) else "")
+                    # len(nears) counts distinct near *values*, not blocks: one
+                    # block whose near drifts contributes a hundred of them.
+                    print(f"note  {len(other)} change(s) carried a different "
+                          f"near, {len(nears)} distinct value(s) "
+                          f"({', '.join(shown_n)}{tail}), and are excluded "
+                          f"above — not the main camera (see take 54)")
+
+                # The layer stops logging changes once its budget is spent, and
+                # take 105 spent all 400 slots 181 s into a 382 s session on a
+                # degenerate block whose near drifted by 1e-3 a sample. Nothing
+                # in the score said so, and a prediction about a camera that had
+                # not appeared yet was written up as untested when in truth the
+                # instrument had gone dark. A cap that does not report itself is
+                # indistinguishable from "nothing more happened".
+                cap = re.search(
+                    r"\[\s*([\d.]+)\]\s+layer\s+proj: (?:\d+ changes logged"
+                    r"(?:,| across))", text)
+                if cap:
+                    stamps = re.findall(r"^\[\s*([\d.]+)\]", text, re.M)
+                    if stamps:
+                        t0, t1 = float(stamps[0]), float(stamps[-1])
+                        blind = t1 - float(cap.group(1))
+                        print(f"warn  the layer's change budget ran out "
+                              f"{float(cap.group(1)) - t0:.0f} s into a "
+                              f"{t1 - t0:.0f} s session — the last {blind:.0f} s "
+                              f"produced no proj samples at all, so anything "
+                              f"absent from the set above may simply not have "
+                              f"been looked at")
             else:
                 print("proj  sx never changed during this run (no zoom, or the "
                       "camera never moved through one)")
+
+    # Frame time, for A/B runs that park the camera.
+    #
+    # Reported as one comparable number rather than a median over the session,
+    # because a median over the session compares two different scenes: takes
+    # 100, 104 and 105 read 6.91, 8.01 and 12.12 ms at fov 1.111, 1.5 and 1.437
+    # -- not monotone in fov, because 105 was mostly a station interior. So the
+    # number printed is the quietest stretch of at least 55 s, which is what the
+    # parked half of an A/B produces, and the spread is printed with it so a
+    # stretch that was not actually quiet is visible as such.
+    perf = [(float(m.group(1)), float(m.group(2)))
+            for m in re.finditer(
+                r"^\[\s*([\d.]+)\]\s+layer\s+perf frame \d+: median "
+                r"([\d.]+) ms", text, re.M)]
+    if perf:
+        meds = sorted(p[1] for p in perf)
+        print(f"perf  {meds[len(meds) // 2]:.2f} ms median over {len(perf)} "
+              f"window(s) — session-wide, so it compares scenes, not settings")
+        best = None
+        for i in range(len(perf)):
+            for j in range(i + 1, len(perf)):
+                span = perf[j][0] - perf[i][0]
+                if span < 55.0:
+                    continue
+                w = sorted(p[1] for p in perf[i:j + 1])
+                spread = (w[-1] - w[0]) / w[0] if w[0] else float("inf")
+                if best is None or spread < best[0]:
+                    best = (spread, span, w[len(w) // 2], len(w))
+                break
+        if best:
+            print(f"perf  quietest {best[1]:.0f} s stretch: {best[2]:.2f} ms "
+                  f"median, spread {best[0] * 100:.0f}% over {best[3]} window(s)"
+                  f" — this is the number to compare across a parked A/B")
+        else:
+            print("perf  no stretch of 55 s or more to compare — a parked A/B "
+                  "needs the camera left alone for a full minute")
 
     print()
     if fails:

@@ -4379,31 +4379,67 @@ void patch_view_before_submit() {
         const x4vr::Mat4 proj_uj = x4vr::load(blk + x4vr::kProjectionUJ);
         const x4vr::ProjTerms t = x4vr::read_proj_terms(proj_uj, major);
         const x4vr::ProjTerms tj = x4vr::read_proj_terms(proj_probe, major);
-        static float last_sx = 0.0f, last_sy = 0.0f, last_near = 0.0f;
-        static uint32_t changes = 0;
         // sy joined this test after take 104. That run proved X4's <fov> tag
         // scales the horizontal field linearly, but every CHANGED line reported
         // sx alone, so whether the *vertical* scales with it was unmeasurable
         // from the log -- and "sy tracks sx" is exactly the assumption that
         // decides whether a widened field is undistorted or stretched. A term
         // the run cannot report is a term the run cannot test.
-        const bool moved = std::fabs(t.sx - last_sx) > 1e-4f ||
-                           std::fabs(t.sy - last_sy) > 1e-4f ||
-                           std::fabs(t.near_z - last_near) > 1e-6f;
+        //
+        // The state below is per *camera block*, and was global until take 105.
+        // X4 runs several cameras at once and the most-drawn block changes
+        // between submits of one frame, so a global "did sx move?" reports every
+        // flip between two motionless cameras as a change. Take 104 spent 42 of
+        // its 400-change budget on the 1.33333 <-> 0.69231 flip alone; take 105
+        // exhausted the budget 181 s into a 382 s session -- mostly on a
+        // degenerate block whose near drifted by 1e-3 a sample -- and was blind
+        // for the whole second half, which is where the camera that run's
+        // fourth prediction was about would have appeared. Keyed per slot, an
+        // alternation between two steady cameras emits nothing, and a camera
+        // that really moves cannot be starved by a chatty neighbour.
+        struct ProjState {
+            float sx = 0.0f, sy = 0.0f, near_z = 0.0f;
+            uint32_t changes = 0;
+            uint32_t id = 0;
+        };
+        static std::map<ViewSlot, ProjState> cams;
+        static uint32_t next_id = 0, total = 0;
+        // Per-camera budget so one noisy block cannot blind the rest, plus a
+        // global backstop. Both announce themselves when they bite: a silent
+        // cap reads exactly like "nothing more happened", which is the failure
+        // this whole block was rewritten to stop.
+        constexpr uint32_t kPerCam = 120, kTotal = 2000;
+        auto it = cams.find(*best);
+        if (it == cams.end() && cams.size() < 256) {
+            it = cams.emplace(*best, ProjState{}).first;
+            // Numbered on sight, not on first log line: a camera first seen
+            // after a budget bit would otherwise keep id 0 and the STEADY line
+            // would attribute it to cam#0.
+            it->second.id = next_id++;
+        }
+        if (it != cams.end()) {
+        ProjState &c = it->second;
+        const bool first = c.changes == 0;
+        const bool moved = std::fabs(t.sx - c.sx) > 1e-4f ||
+                           std::fabs(t.sy - c.sy) > 1e-4f ||
+                           std::fabs(t.near_z - c.near_z) > 1e-6f;
         // Take 54: the cap was 40, and it fired ten seconds into the only deep
         // zoom of the session -- so every probe sample taken during that zoom
         // had no sx to attribute it to, which is exactly the correlation the
         // line exists to support. Raised, and a periodic heartbeat added so a
         // *quiet* stretch is also attributable: without it, "no change since
-        // t" and "logging stopped at t" look identical in the log.
+        // t" and "logging stopped at t" look identical in the log. The
+        // heartbeat stays global -- one line per 30 s, naming whichever camera
+        // is current -- because per-camera it would be its own firehose.
         static double last_beat = 0.0;
         timespec bts{};
         clock_gettime(CLOCK_MONOTONIC, &bts);
         const double now = bts.tv_sec + bts.tv_nsec * 1e-9;
-        if (t.ok && !moved && changes && now - last_beat > 30.0) {
+        if (t.ok && !moved && total && now - last_beat > 30.0) {
             last_beat = now;
-            X4VR_LOG("proj STEADY: sx=%.5f near=%.5f (unchanged)", t.sx,
-                     t.near_z);
+            X4VR_LOG("proj STEADY: cam#%u sx=%.5f near=%.5f (unchanged; %u "
+                     "camera(s) seen, %u change(s) logged)",
+                     c.id, t.sx, t.near_z, next_id, total);
         }
         if (moved)
             last_beat = now;
@@ -4412,35 +4448,54 @@ void patch_view_before_submit() {
             X4VR_LOG("proj: could not read terms from M_projectionUJ "
                      "(sx=%.5f near=%.5f) -- shear still on assumed values",
                      t.sx, t.near_z);
-        } else if (t.ok && moved && changes < 400) {
+        } else if (t.ok && (first || moved) && c.changes < kPerCam &&
+                   total < kTotal) {
             const float ipd = configured_ipd();
             const float d = 0.5f * ipd;
             const float measured = t.sx * d / t.near_z;
             const float baked = assumed_proj_sx() * d / assumed_proj_near();
-            if (changes == 0) {
-                X4VR_LOG("proj MEASURED: sx=%.5f sy=%.5f near=%.5f "
-                         "(jittered sx=%.5f near=%.5f)",
-                         t.sx, t.sy, t.near_z, tj.sx, tj.near_z);
-                X4VR_LOG("proj ASSUMED : sx=%.5f near=%.5f", assumed_proj_sx(),
-                         assumed_proj_near());
-                X4VR_LOG("proj SHEAR   : measured |m8|=%.5f vs baked |m8|=%.5f "
-                         "-> baked is %.3fx the correct magnitude (ipd=%.4f)",
-                         std::fabs(measured), std::fabs(baked),
-                         measured != 0.0f ? baked / measured : 0.0f, ipd);
+            if (first) {
+                // The very first camera keeps the original three lines: 71
+                // logs on disk are the regression suite for score_run.py, and
+                // it requires a "proj MEASURED" before it will report anything.
+                if (c.id == 0) {
+                    X4VR_LOG("proj MEASURED: sx=%.5f sy=%.5f near=%.5f "
+                             "(jittered sx=%.5f near=%.5f)",
+                             t.sx, t.sy, t.near_z, tj.sx, tj.near_z);
+                    X4VR_LOG("proj ASSUMED : sx=%.5f near=%.5f",
+                             assumed_proj_sx(), assumed_proj_near());
+                    X4VR_LOG("proj SHEAR   : measured |m8|=%.5f vs baked "
+                             "|m8|=%.5f -> baked is %.3fx the correct magnitude "
+                             "(ipd=%.4f) -- against cam#0, which is whichever "
+                             "camera drew first, not necessarily the scene's",
+                             std::fabs(measured), std::fabs(baked),
+                             measured != 0.0f ? baked / measured : 0.0f, ipd);
+                }
+                X4VR_LOG("proj CAMERA cam#%u: sx=%.5f sy=%.5f near=%.5f "
+                         "(draws=%u, |sy/sx|=%.4f)",
+                         c.id, t.sx, t.sy, t.near_z, best_n,
+                         t.sx != 0.0f ? std::fabs(t.sy / t.sx) : 0.0f);
             } else {
-                X4VR_LOG("proj CHANGED #%u: sx %.5f -> %.5f  sy %.5f -> %.5f  "
-                         "near %.5f -> %.5f  (correct |m8| now %.5f, baked "
-                         "%.5f)",
-                         changes, last_sx, t.sx, last_sy, t.sy, last_near,
+                X4VR_LOG("proj CHANGED cam#%u #%u: sx %.5f -> %.5f  sy %.5f -> "
+                         "%.5f  near %.5f -> %.5f  (correct |m8| now %.5f, "
+                         "baked %.5f)",
+                         c.id, c.changes, c.sx, t.sx, c.sy, t.sy, c.near_z,
                          t.near_z, std::fabs(measured), std::fabs(baked));
             }
-            last_sx = t.sx;
-            last_sy = t.sy;
-            last_near = t.near_z;
-            changes++;
-            if (changes == 400)
-                X4VR_LOG("proj: 400 changes logged, further changes suppressed "
-                          "-- sx is not a constant, which is the answer");
+            c.sx = t.sx;
+            c.sy = t.sy;
+            c.near_z = t.near_z;
+            c.changes++;
+            total++;
+            if (c.changes == kPerCam)
+                X4VR_LOG("proj: cam#%u reached %u changes -- further changes "
+                         "from THIS camera suppressed, the others continue",
+                         c.id, kPerCam);
+            if (total == kTotal)
+                X4VR_LOG("proj: %u changes logged across %u cameras -- all "
+                         "further changes suppressed from here on",
+                         kTotal, next_id);
+        }
         }
     }
 

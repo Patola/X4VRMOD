@@ -12246,3 +12246,169 @@ nothing special is required for it. Take 104 was enough play for all of this.
 Judged by `python3 tools/score_run.py /tmp/x4vr-take105.log`. The two lines that
 carry the result are the `sy tracks sx` / `warn |sy/sx| ranges …` line and the
 distinct-`sx` set.
+
+## Take 105 — the law holds at an interpolated point, and the instrument had two defects
+
+Played across a full session: boost, zoom, the map, landing on a station,
+walking around inside it, an NPC conversation, a station elevator, and shooting
+a small ship. All of it smooth and in correct SBS at a 106° field. That is the
+qualitative result and it is worth stating, but the score comes from the log.
+
+### P105 scored
+
+**1. `|sy/sx|` is the eye aspect on every sample — refuted as written, confirmed
+as meant.** The camera that honours the setting reads `|sy/sx| = 1.0000` against
+an eye aspect of 1.0000. The field is widened, not stretched. But the run also
+credited a camera at `sx = 3.78085` whose `sy` is `-5.67128`, i.e. `|sy/sx|`
+exactly 1.5000 — a 3:2 camera, not a stretched eye.
+
+The prediction said "every sample" about a set of samples that spans several
+cameras, four paragraphs after establishing that samples span several cameras.
+The scorer said what the prediction asked it to say:
+
+    warn  |sy/sx| ranges 1.000..1.500 against 1.000 at first read — the vertical
+          does not track the horizontal, so the field is being stretched
+
+That is a false alarm produced by aggregating across cameras — the exact defect
+fixed for `sx` in the commit immediately before, still live for `sy`, in a line
+added *for this run*. Recorded rather than quietly repaired: knowing the failure
+mode is not the same as having removed it, and the gap between the two was one
+commit.
+
+**2. Confirmed, to the resolution the log prints.** Predicted `sx = 0.75404` at
+`X4VR_FOV=1.437`; measured **0.75405**, 105.964°, and the scorer recovers
+`fov 1.437` from it. Of the three fov-independent values, `1.33333` and
+`3.78085` came back bit-identical; `1.00000` never appeared — untested, not
+refuted.
+
+**3. The linear law survives its interpolation.** Two measured endpoints at
+1.1111 and 1.5 and now a confirmed interior point. `fov = target° / 73.7399` can
+be used to pick a field.
+
+**4. Untested, and the reason is worse than the miss.** The zoom-stop camera
+never appeared. But it could not have: the layer's 400-change budget was
+exhausted **182 s into a 382 s session**, so the last 201 s produced no `proj`
+samples at all. 199 of those 400 changes came from blocks the scorer then
+excludes — one of them a degenerate block whose `near` drifted by 1e-3 a sample,
+burning a slot each time. Nothing in the score said the instrument had gone
+dark; "the camera did not appear" and "nothing was looked at" read identically.
+
+### Both defects have the same shape as the finding they were measuring
+
+Take 104's finding was *X4 runs several cameras and one number cannot describe
+them*. The instrument that found it still kept **one** `last_sx/last_sy/near`
+for all cameras. So:
+
+* every flip between two motionless cameras counted as a change — take 104 spent
+  42 of its budget on `1.33333 ↔ 0.69231` alone;
+* one chatty block could, and did, starve every other camera of budget;
+* the aspect check averaged a 1:1 camera and a 3:2 camera and called the result
+  a distortion.
+
+Fixed in the layer, keyed on the block the draws actually went through
+(`ViewSlot{buffer, offset}`):
+
+* per-camera `sx/sy/near` and change counter, so an alternation between two
+  steady cameras emits **nothing**;
+* per-camera budget of 120 plus a global backstop of 2000, and both announce
+  themselves when they bite;
+* cameras are numbered on sight and every line carries `cam#N`; a camera's first
+  sighting logs `proj CAMERA cam#N: sx= sy= near= (draws=, |sy/sx|=)`, which for
+  a steady camera is the only line it will ever produce — and steady cameras are
+  precisely the ones that reveal which cameras ignore `<fov>`;
+* `cam#0` keeps the original `proj MEASURED`/`ASSUMED`/`SHEAR` trio, because 71
+  logs on disk are `score_run.py`'s regression suite. The `SHEAR` line now says
+  in the line itself that it compares against whichever camera drew first.
+
+And in the scorer: the aspect is judged on **one** camera, the one that honours
+the setting; `sy` is carried per `sx` rather than folded into the key (pre-105
+logs have no `sy`, and keying on the pair split one camera into two rows); and
+the layer's cap is reported with the blind window it created.
+
+Consequence, for the second take running: change counts from 106 onward are not
+comparable with earlier takes, and this time the reason is large — the
+mis-credit oscillation, which was most of the count, no longer appears at all.
+
+### What the log cannot say about the cost
+
+Median frame time at 1408×1408, from `perf frame`:
+
+| take | fov | median of medians |
+|---|---|---|
+| 100 | 1.1111 | 6.91 ms |
+| 104 | 1.5 | 8.01 ms |
+| 105 | 1.437 | **12.12 ms** |
+
+Take 105 is the slowest at the *narrower* of the two widened fields. The
+ordering is not monotone in `fov`, which is direct evidence that scene content
+dominates these numbers — 105 was mostly a station interior, 100 and 104 were
+mostly space. **These logs cannot attribute frame time to the field of view.**
+Since "performance is king" decides whether a wider field can be the default,
+that needs a controlled measurement, not a re-read of what is on disk.
+
+### P106 — committed before the next run
+
+Takes 106 and 107 are one measurement in two halves: the same save, the same
+parked viewpoint, no input for 60 s, differing only in `X4VR_FOV`.
+
+1. `proj CHANGED` no longer contains any pair of lines that swap two values back
+   and forth within a few milliseconds — the mis-credit oscillation is gone from
+   the log, not merely reduced.
+2. The budget survives the whole session: no `further changes suppressed` line,
+   and therefore no blind window in the score.
+3. With the budget intact, the zoom-stop camera appears and reads
+   `sx = 29.18689` at `fov = 1.437` (this is P105.4, retried).
+4. The parked frame time at `fov = 1.437` is **no more than 1.35× ** the parked
+   frame time at `fov = 1.1111`. The field is 1.29× wider in angle and the eye
+   extent is unchanged, so anything near 1.0 means the cost is culling-bound
+   rather than fill-bound, and anything above 1.35 means widening costs more
+   than the geometry it adds.
+5. Prediction 4 is the one that decides whether `X4VR_FOV` can ever be defaulted
+   on, so it is stated as a threshold before the numbers exist rather than
+   described afterwards.
+
+### Takes 106 and 107 — the runs
+
+    X4VR_TAKE=106-FOV-PERF-WIDE X4VR_FOV=1.437 X4VR_DUMP_MATRICES=1 \
+    X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_GAMESCOPE=1 \
+    X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_PROJ_SX=1.3333 X4VR_MV=1 \
+    X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 \
+    X4VR_BINDLESS_MIRROR=1 X4VR_MV_INVENTORY=1 \
+    X4VR_LOG=/tmp/x4vr-take106.log ./launch/x4vr-launch.sh
+
+    X4VR_TAKE=107-FOV-PERF-BASE X4VR_FOV=1.1111 X4VR_DUMP_MATRICES=1 \
+    X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_GAMESCOPE=1 \
+    X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_PROJ_SX=1.3333 X4VR_MV=1 \
+    X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 \
+    X4VR_BINDLESS_MIRROR=1 X4VR_MV_INVENTORY=1 \
+    X4VR_LOG=/tmp/x4vr-take107.log ./launch/x4vr-launch.sh
+
+`X4VR_FOV=1.1111` is stated explicitly in take 107 rather than left unset. The
+profile holds the same value, so the config X4 reads is identical either way,
+but the log line then records what the run intended instead of leaving it to be
+inferred from a file that can change between takes.
+
+Both are **interaction** takes: `X4VR_MV_PROBE`, `X4VR_MV_DUMP` and
+`X4VR_MV_DUMP_PRESENT` stay unset. The probe's `vkQueueWaitIdle` would dominate
+exactly the number being measured.
+
+Protocol, and the protocol is the measurement:
+
+1. Load the **same save** in both, fly to the **same spot**, point the camera at
+   the **same view** — a busy one, station or traffic, not empty space.
+2. Let go of the controls and **do not touch anything for 60 s**. The frame-time
+   comparison is only valid if the two runs are drawing the same thing.
+3. Then, in take 106 only, zoom all the way in and back out once, for
+   prediction 3.
+4. Quit.
+
+Judged by `python3 tools/score_run.py` on each log. Predictions 1–3 read off take
+106's score. Prediction 4 compares the new `perf quietest … stretch` line
+between the two scores: the scorer finds the calmest run of at least 55 s and
+prints its median with its spread.
+
+The spread is the check on the protocol, not decoration. Takes 100, 104 and 105
+score 22%, 21% and 15% — none of them was parked, and that is what an unparked
+minute looks like. **If either run's quietest stretch spreads more than about
+10%, the camera was not actually still and prediction 4 is untested rather than
+answered.** Read the spread before reading the milliseconds.
