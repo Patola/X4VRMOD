@@ -14373,6 +14373,55 @@ different deadlock and the measurement is the backtrace: `coredumpctl` will not
 have one for a hang, so `gdb -p $(pgrep -f "X4 Foundations/X4")` then
 `thread apply all bt` is what to capture before killing it.
 
+## Take 114c — hung again. The lock's own guarded calls re-entered it
+
+It hung, and the backtrace named the defect exactly. Getting one needs two
+things this file did not say: `pgrep -f "X4 Foundations/X4"` matches **three**
+processes (gamescope, the reaper, X4 — pass the single PID), and
+`/proc/sys/kernel/yama/ptrace_scope` is 1 here, so it needs `sudo`:
+
+    sudo gdb -p <X4 PID> -batch -ex "thread apply all bt" > /tmp/hang.txt 2>&1
+
+Thread 1, X4's present thread:
+
+    x4vr_QueuePresentKHR       x4vr_layer.cpp:6832
+     -> vr_finish_blit         x4vr_layer.cpp:7157
+       -> swapchain_release    x4vr_xr.hpp:990
+         -> oxr_xrReleaseSwapchainImage   oxr_api_swapchain.c:282
+           -> x4vr_QueueSubmit x4vr_layer.cpp:4789     <- takes g_vr_queue_mu
+
+**`xrReleaseSwapchainImage` submits to the queue**, and that submit re-enters
+the layer's own `vkQueueSubmit` hook, which takes `g_vr_queue_mu` — already held
+by this same thread. `std::mutex` is not recursive, so the thread waited for
+itself. Threads 15 and 19 were merely queued behind it, which is why the VR
+thread's periodic summary stopped too and both screens went black.
+
+I had written *"the release does not touch the queue"* in the comment that put
+it inside the lock. That was an assumption stated as a fact, and it was wrong —
+the same failure as 114b one layer down: an assertion about what a call does,
+never checked against what it does.
+
+**The same bug was armed on the VR thread.** `xrEndFrame` is also called inside
+this lock and also submits; it had never fired because zero-layer frames submit
+nothing. Moving the release out would have fixed the instance that hung and
+left the other waiting.
+
+**The fix is a per-thread re-entrant guard**, `VrQueueLock`: a thread that
+already owns the queue does not take it again, and two different threads still
+serialise, which is all #36 ever needed. A `std::recursive_mutex` would also
+work and is the wrong fix — it makes every future re-entrant path silently
+legal instead of saying the one true thing.
+
+**Known and unmeasured:** `xrAcquireSwapchainImage`/`xrWaitSwapchainImage` run
+*outside* the lock, and must, because 114b proved that waiting inside it
+deadlocks against `xrEndFrame`. If either of those submits, that submission is
+unserialised. The 114c backtrace shows only release submitting, so this is a
+risk on record rather than a known defect.
+
+### Take 114d, on one line
+
+    X4VR_TAKE=114d-FIRST-LIGHT X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take114d.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 ./launch/x4vr-launch.sh
+
 # State at `stage8-xr-session-in-x4` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the

@@ -324,6 +324,43 @@ std::unordered_map<VkQueue, uint32_t> g_queue_family;
 std::mutex g_vr_queue_mu;
 bool g_vr_share_queue = false; // set when the reservation had to fall back
 
+// #36's lock, made re-entrant per thread — because the calls it guards submit
+// through our OWN vkQueueSubmit hook, which takes it again.
+//
+// take 114c hung exactly there:
+//
+//     x4vr_QueuePresentKHR -> vr_finish_blit -> swapchain_release
+//       -> oxr_xrReleaseSwapchainImage -> x4vr_QueueSubmit -> lock (held)
+//
+// xrReleaseSwapchainImage submits, and so does xrEndFrame; both are called
+// inside this lock, and both re-enter the hook on the same thread. std::mutex
+// is not recursive, so the thread waited for itself.
+//
+// A recursive_mutex would also fix it, and is the wrong fix: it would make
+// every future re-entrant path silently legal, including ones that should be
+// questioned. This says the specific true thing — a thread that already owns
+// the queue does not need to take it again — and still serialises the two
+// threads against each other, which is the whole point of #36.
+thread_local int g_vr_queue_depth = 0;
+
+struct VrQueueLock {
+    bool locked_ = false;
+    VrQueueLock() {
+        if (g_vr_share_queue && g_vr_queue_depth == 0) {
+            g_vr_queue_mu.lock();
+            locked_ = true;
+        }
+        g_vr_queue_depth++;
+    }
+    ~VrQueueLock() {
+        g_vr_queue_depth--;
+        if (locked_)
+            g_vr_queue_mu.unlock();
+    }
+    VrQueueLock(const VrQueueLock &) = delete;
+    VrQueueLock &operator=(const VrQueueLock &) = delete;
+};
+
 // Surfaces whose capabilities we reported at half width.
 //
 // This began as the halve/double pairing: only a surface recorded here could
@@ -4786,7 +4823,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueueSubmit(VkQueue queue,
     // queue. Uncontended when it does not, and inert until the XR thread
     // starts submitting.
     if (g_vr_share_queue) {
-        std::lock_guard<std::mutex> qlock(g_vr_queue_mu);
+        VrQueueLock qlock;
         return d->QueueSubmit(queue, submitCount, submits, fence);
     }
     return d->QueueSubmit(queue, submitCount, submits, fence);
@@ -6721,9 +6758,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     if (g_sbs_enabled && g_active && pi->swapchainCount == 1)
         vr_blit = vr_begin_blit(pi->pSwapchains[0]);
 
-    std::unique_lock<std::mutex> qlock(g_vr_queue_mu, std::defer_lock);
-    if (g_vr_share_queue)
-        qlock.lock();
+    VrQueueLock qlock;
     if (g_active) {
         static bool once = false;
         if (!once) {
@@ -7227,7 +7262,7 @@ void vr_thread() {
         // is X4's queue (#36). It is not held across xrWaitFrame above, which
         // blocks for a whole headset frame.
         {
-            std::lock_guard<std::mutex> qlock(g_vr_queue_mu);
+            VrQueueLock qlock;
             x4vr::xr::frame_end(g_vrs.session, layers, layer_count);
         }
         if (layer_count)
