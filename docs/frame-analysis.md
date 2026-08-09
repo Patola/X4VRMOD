@@ -13943,93 +13943,160 @@ submission take, not before it.
 Family 0 advertises `SPARSE_BINDING`, the layer does not intercept it, and it is
 a queue operation with the same external-synchronisation rule.
 
-# State at `stage6-sx-per-draw` — resume here
+# State at `stage8-xr-session-in-x4` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the
-repository or from `/tmp`; nothing here depends on remembering a conversation.
+repository or from `/tmp`; nothing depends on remembering a conversation.
 
 ## Where the work stands
 
-Closed this stretch: **#23** (per-draw `sx` everywhere), **#24** (a chosen field
-of view), **#31** (the three extents), **#32** (the right eye judged from present
-dumps), and **#34** — an `XrSession` on X4's own instance, device and queue,
-running at 90 Hz inside the game while it plays flat (`stage8-xr-session-in-x4`,
-take 113). Open: **#25**, **#33**, **#35** (the per-eye off-axis map that
-WiVRn's 14°-canted views made mandatory) and **#36** (the runtime needs its own
-`VkQueue`; X4 leaves no spare). #35 and #36 both block submission.
+Closed: **#23** (per-draw `sx`), **#24** (a chosen field of view), **#31** (the
+three extents), **#32** (the right eye from present dumps), **#34** (an
+`XrSession` on X4's own instance, device and queue, running a 90 Hz pose loop
+inside the game while it plays flat), **#36** (the shared graphics queue,
+serialised — built, and *unmeasured* because nothing submits yet).
 
-**#25 is deferred by decision, not blocked.** IPD and the sense of depth and
-scale get judged when true SBS (done), head tracking (#33) and a VR projection
-path are all in place. Until then the knobs only have to stay adjustable.
-`active_runtime.json` is absent at rest because SteamVR (Steam Link) and WiVRn
-each install it when they start — both paths are live on this machine, and its
-absence is not evidence that no runtime is configured.
+Open: **#25** (deferred by decision), **#33** (head tracking), and **#35**, which
+is the next task and is where work stopped.
 
-**The next large piece is OpenXR submission**: an `XrSession` bound to *X4's*
-`VkDevice` and queue rather than one of our own, an `XrSwapchain` to blit the
-two-layer eye image into, and a frame loop driven from `vkQueuePresentKHR`
-instead of from our own main loop. Everything upstream of it exists. A first cut
-can submit with the runtime's view FOVs and ignore head pose — enough to sense
-depth and scale standing still, not enough to move around in. Main known risk:
-the runtime may want a different `VkPhysicalDevice` than X4 already chose.
-`wlx-overlay-s` is **not** a shortcut: it has no SBS or stereo mode, so it would
-put a flat squashed pair in front of both eyes.
+Tag **`stage8-xr-session-in-x4`**, take 113, `score_run.py` exit 0. The command
+line and what to check are in `docs/known-good-runs.md`. The one change from
+`stage6-sx-per-draw` is `X4VR_VR=1`.
 
-Started as **#34**. `common/x4vr_xr.hpp` holds the bring-up (loader `dlopen`'d,
-never linked, so a machine without OpenXR still runs flat), and
-`tests/run-xr-probe.sh` drives it on a real GPU. The ordering constraint that
-shapes the layer side: the `XrInstance` must exist *before* X4's
-`vkCreateInstance`, because the runtime dictates the instance extensions, the
-device extensions and the physical device. See "Task #34" above for the
-algebra showing that a head *rotation* does not collapse to an x-shift the way
-the eye offset does, and for what that implies about where yaw and pitch have
-to be applied.
+## The expensive lesson, so it is never re-learned
 
-## The state itself
+Takes 111, 112 and 113 were all one question: **`XR_KHR_vulkan_enable2` is the
+wrong extension for a Vulkan layer.** It takes a `pfnGetInstanceProcAddr`; a
+layer only has a *down-chain* one; handing that over is the only way the layer's
+internal handle space ever reaches the runtime. Take 111 aborted X4 in
+`vkGetPhysicalDeviceMemoryProperties` ("Invalid physicalDevice"); take 112 was
+rejected by `oxr_session.c:1151`, which requires the graphics binding to carry
+exactly the handle `xrGetVulkanGraphicsDevice(2)KHR` returned.
 
-Tag `stage6-sx-per-draw`, and `docs/known-good-runs.md` carries the command line
-and what to check in the log. The two knobs that used to have to agree by hand no
-longer do: nothing bakes `sx`, so `X4VR_PROJ_SX` may be left unset.
+The layer uses **`XR_KHR_vulkan_enable` (v1)**, which returns *lists of
+extension names* and has no such channel. Do not "simplify" it back to enable2.
+
+Three handle spaces exist and take 113 printed all three in one line:
+
+    vr: physical device handles — layer 0x123ab150, loader public 0x123ae500,
+                                  runtime asks for 0x123ae500
+
+The runtime's handle is the **loader's public** one; the layer's is different.
+Left unexplained on purpose: why take 111's `want == phys` check agreed at all,
+given Monado uses the public `vkGetInstanceProcAddr` for that query
+(`oxr_api_system.c:314`/`:333`). The enable2 path is abandoned and nothing
+depends on the answer.
+
+## Facts measured, not to be re-derived
+
+**The runtime** (WiVRn 26.6, Quest 3), from `/tmp/x4vr-xrprobe-run1.txt` and
+take 113:
+
+    2 views, PRIMARY_STEREO       recommended 3096x3243 per eye (max 6192x6486)
+    view 0 fov  -54 / +40 h       view 1 fov  -40 / +54 h      both +44 / -55 v
+    IPD 0.0630 m, view 1 at +x    reference space STAGE        format 43 (SRGB)
+    3 swapchain images            frame loop pinned at 90.01 Hz
+
+3096×3243 is **10.04 Mpx per eye, 5.1×** the current 1408×1408.
+
+**The instance/device extensions the runtime adds** (take 113 log, and X4 needed
+all of them): instance — `external_fence_capabilities`,
+`external_memory_capabilities`, `external_semaphore_capabilities`; device —
+`dedicated_allocation`, `external_fence`/`_memory`/`_semaphore` plus all three
+`_fd` forms, `get_memory_requirements2`, `image_format_list`. None dropped by
+the driver-support filter.
+
+**The queue**, from `vulkaninfo` and confirmed in-game: RADV Navi31 has
+**exactly one graphics queue** (family 0, `queueCount 1`; family 1 is 4× compute;
+the rest video/sparse). The runtime shares X4's, serialised by one layer-owned
+mutex taken in `x4vr_QueueSubmit` and across the whole of `x4vr_QueuePresentKHR`
+(which covers the SBS composite, the cursor overlay and the dump `QueueWaitIdle`),
+and around `xrEndFrame` on the XR thread. `xrWaitFrame` is deliberately outside
+it. Still unhooked and carrying the same rule: **`vkQueueBindSparse`**.
+
+## #35 — the next task, with its arithmetic already done
+
+X4's projection is symmetric (`row0(P) = [sx 0 0 0]`, no off-axis term); the
+runtime's views are canted 14° outward. Submitting as-is puts every object ~15°
+off, in opposite directions per eye. The test card demonstrated it at **30.07°
+of divergence** and it is reproduced as a negative control in
+`x4vr_test_xr_probe selftest`.
+
+The fix is one multiply-add on a value `gl_Position` already carries. For a
+symmetric render at half-angle `t` and a target frustum `[tanL, tanR]`:
+
+    x_c' = A·x_c + B·w_c      A = (2/(tanR−tanL)) / cot(t)
+                              B = −(tanR+tanL)/(tanR−tanL)
+
+    at t = 55°:  view 0  A = 1.2892  B = +0.2425
+                 view 1  A = 1.2892  B = −0.2425
+
+X4 must render the union so nothing is culled: **±55°, i.e. `X4VR_FOV = 1.4917`**
+(today 1.437 = 106°). The clip map then crops each eye to its real frustum at
+full density. Rejected alternative: submitting a symmetric FOV of our own, which
+costs **1.48×** the frustum area in pixels the headset never shows.
+
+**Not yet settled, and the reason this is a task rather than a patch:** the
+vertical follows the same form but X4's `sy` is negative (Y-flipped), so the
+sign has to be worked out in `tests/view_math.cpp` rather than asserted; and the
+transform has to compose with the existing per-draw shear in
+`patch_vertex_eye_offset` / `..._mvp` rather than replace it.
 
 ## Decisions taken, so they are not re-litigated
 
-* `X4VR_PROJ_MVP` defaults **on** (takes 109/110). `=0` restores stage5.
-* `X4VR_PROJ_LIVE` still defaults **off**, which means "on by default" for
-  `PROJ_MVP` really means "on wherever the per-draw shear path is on". Every take
-  since 52 sets `X4VR_PROJ_LIVE=1` explicitly. **Open question, deliberately not
-  folded in:** defaulting it on is a claim about 326 modules rather than 12 and
+* `X4VR_PROJ_MVP` defaults **on** (takes 109/110); `=0` restores stage5.
+* `X4VR_PROJ_LIVE` still defaults **off**; every take since 52 sets it
+  explicitly. Defaulting it on is a claim about 326 modules rather than 12 and
   deserves its own control run.
-* `X4VR_FOV=1.437` is 106°. The law is `fov = target° / 73.7399`, measured on
-  three points and two cameras.
-* Takes 97 and 98 read FAIL until #32 and now PASS; take 101 read PASS until #31
-  and now FAILs. All three are deliberate and argued in the sections above.
+* `X4VR_VR` defaults **off**. It needs a runtime *running* — `active_runtime.json`
+  exists only while WiVRn or SteamVR is up, so its absence is "not started",
+  not "not installed".
+* `X4VR_FOV=1.437` is 106°; the law is `fov = target° / 73.7399`.
+* The layer **never links** `libopenxr_loader` — it is `dlopen`'d, because a
+  missing `DT_NEEDED` in an injected layer is X4 refusing to start. Verify with
+  `ldd build/layer/libVkLayer_X4VR_core.so | grep -i openxr` (must be empty).
+* Verdict changes: takes 97/98 FAIL→PASS (#32); take 101 PASS→FAIL (#31).
+* Current verdicts over all 80 logs: **60 pass, 6 fail
+  {44, 45, 48, 101, 102, 112}, 13 unscoreable**.
 
 ## Tooling — what exists and what each answers
 
 * `tools/score_run.py <log>` — the acceptance check for every run. Sections:
-  `split`, `masked`, `extents`, `swapchain`/`eye`, `proj`, `stereo`, `perf`.
-  Exit 0 pass, 1 fail, 2 unscoreable. **Re-run it over every log in `/tmp` after
-  any change to it**: that is what caught a version which failed 60 of 74 runs.
+  `split`, `masked`, `extents`, `swapchain`/`eye`, `proj`, `stereo`, `vr`,
+  `perf`. Exit 0 pass, 1 fail, 2 unscoreable. The `vr` section is gated on
+  **intent** (`X4VR_VR=1` on the command line), never on a session having
+  appeared. **Re-run it over every log in `/tmp` after any change to it.**
+* `tests/run-xr-probe.sh [v1|enable2] [seconds]` — the OpenXR bring-up on a real
+  GPU. First half is the eye test card with **no runtime needed** and three
+  cases, two of which must fail. Second half needs WiVRn running. Defaults to
+  the **v1** path, which is the one the layer uses; `enable2` runs the path
+  `stage7-xr-session-proven` was taken with.
 * `tools/eye_stereo.py <dump-prefix>` — per-region horizontal disparity from
-  present dumps. Reports the **spread** of per-tile shifts, because a bulk ratio
-  cannot tell a correct right eye from a copy of the left. Called automatically
-  by `score_run.py` when the run asked for dumps.
-* `tests/eye_stereo_selftest.py [frame.ppm]` — its controls: identical pair,
-  known uniform slide, depth-varying pair, unrelated images, black frame.
-* `build/tests/x4vr_test_spirv_patch` — the layer's own SPIR-V code as a CLI:
-  `classify`, `vert-eye-offset`, `vert-eye-offset-mvp`, `frag-*`, `list`,
-  `survey`. Use this rather than reimplementing the predicates.
-* `build/tests/x4vr_test_view_math` — the shear algebra, including #23's
-  `sx = |row0(MVP)|/|row3(MVP)|` recovery against every measured `sx`.
+  present dumps; called automatically by `score_run.py`.
+* `tests/eye_stereo_selftest.py`, `build/tests/x4vr_test_spirv_patch`,
+  `build/tests/x4vr_test_view_math`, `build/tests/x4vr_test_share`.
+* `tests/run-multiview-render.sh`, `run-cursor.sh`, `run-multiview-enable.sh` —
+  run all three **with and without `X4VR_VR=1`**; the VR path changes device
+  creation, and a matcher there already broke once on a new log line.
 
 ## Data on disk, and the rule that goes with it
 
-    77 run logs                     /tmp/x4vr-takeNN.log
+    80 run logs                     /tmp/x4vr-takeNN.log
     585 present-dump frames         /tmp/x4vr-t{93,94,97,98,99,101,103}-present-*
     3 shader dumps WITH a log       /tmp/x4vr-shaders-take{61,74,80} (397 each)
     1 shader dump WITHOUT a log     /tmp/x4vr-shaders (409) — unusable
+    the first headset probe run     /tmp/x4vr-xrprobe-run1.txt
 
 **Module serials are per-run.** A number from one log may only be opened in the
-dump directory of that same run, which is why the 409-module directory can answer
-nothing: it has no log. Sweep `/tmp` before specifying any run — several
-questions asked here were already answered on disk.
+dump directory of that same run. Sweep `/tmp` before specifying any run.
+
+## The Monado source is on disk, and reading it settled two takes
+
+    ~/.local/share/envision/wivrn/build/_deps/monado-src/src/xrt/state_trackers/oxr/
+
+`oxr_session.c`, `oxr_session_gfx_vk.c`, `oxr_vulkan.c`, `oxr_api_system.c`.
+Two takes were spent guessing at behaviour that is fifteen lines of C. Read it
+first. (The Monado *builds* under `envision/` are stale — 11 unresolved
+`DT_NEEDED` each — so there is no local runtime to test against without the
+headset; rebuilding with `-DXRT_BUILD_DRIVER_REALSENSE=OFF -DXRT_HAVE_OPENCV=OFF`
+is the cheap way to get one if offline iteration ever becomes the bottleneck.)
