@@ -13002,3 +13002,74 @@ unpopulated block reads as — recovers `0`, not a NaN and not a plausible numbe
 `stage5-wide-field` entry says so in as many words. Every module that recovers
 `sx` per draw stops consulting the baked constant at all, so the pair that must
 be kept in sync shrinks toward nothing.
+
+### The transform, and what it was checked against
+
+`patch_vertex_eye_offset_mvp` in `common/x4vr_spirv.hpp`, a sibling of
+`patch_vertex_eye_offset` rather than a refactor of it — the same reason that
+one duplicates `patch_vertex_clip`'s scan: those two are proven in the field,
+this one is new, and a refactor breaking all three at once is the expensive
+mistake. It emits, before every `OpReturn` of the **vertex** entry point (keyed
+on the function id, because these are combined vertex+fragment modules and
+"inside any function" would patch the fragment stage too):
+
+    n0 = sum of squares of (M[0][0], M[1][0], M[2][0])     row 0
+    n3 = sum of squares of (M[0][3], M[1][3], M[2][3])     row 3
+    ok = n3 > 0
+    sx = ok ? sqrt(n0 / (ok ? n3 : 1.0)) : 0.0
+    d  = d_left + float(gl_ViewIndex) * (d_right - d_left)
+    gl_Position.x -= sx * d
+
+The guarded denominator is not decoration: X4's blocks read as all zeroes before
+the first real frame, and an unguarded divide would put a NaN into
+`gl_Position.x` and take the whole vertex with it. The expression is written to
+match `tests/view_math.cpp`'s host-side `recover()` exactly, including the
+zero case, so the two cannot drift.
+
+`OpSelect` here is scalar-condition, scalar-result, which is core SPIR-V 1.0 —
+`patch_vertex_clip`'s note about avoiding it concerns the *vector*-result form
+that only relaxed in 1.4. `GLSL.std.450` is matched by name rather than assumed,
+and the transform **refuses** when it is absent: emitting an `OpExtInst` against
+the wrong set produces a module that validates and computes something else.
+
+Checked over take 74's whole corpus, not just the four modules that motivated it:
+
+    patched=328  refused=69  spirv-val failures=0  refusals that modified code=0
+
+Plus the paths a corpus sweep does not reach: the mono form (no `d_right`)
+validates; a wrong set refuses and leaves the module **byte-identical**; a member
+that is not a mat4 refuses. Disassembly of the patched `mod-0026` confirms the
+access chains index (member 0, column c, row r) as intended.
+
+### Wired in behind a knob that defaults off
+
+`X4VR_PROJ_MVP=1`, and only as the fallback where `patch_vertex_eye_offset` has
+already refused — it never runs on a module that can see the camera. The gate
+short-circuits, so **unset, the patch is not called at all** and every module
+takes exactly the path `stage5-wide-field` was tagged on. That is the same
+introduction `X4VR_PROJ_LIVE` and `X4VR_SHEAR_LIGHTS` got, and the reason is the
+project's own history: a known-good state has to stay one unset variable away.
+
+The `patched vertex shader` line now carries three counts instead of two —
+`live-sx=`, `mvp-sx=`, `baked-sx=` — so which path each module took is a number
+rather than an inference.
+
+### P109 — committed before the next run
+
+1. With `X4VR_PROJ_MVP` **unset**, every line of the score is identical to take
+   108's, and `mvp-sx=0`. This is the control, and it is the prediction that
+   matters most: a knob that changes something while off is the failure this
+   project has spent the most takes on.
+2. With `X4VR_PROJ_MVP=1`, `mvp-sx=` reads what `baked-sx=` read in take 108 at
+   the same point in the session (12 at module #350), and `baked-sx=` falls to
+   **0** — every World module now gets a per-draw `sx` from one source or the
+   other.
+3. No new `WARNING: driver rejected patched module` line. 328 of 397 passed
+   `spirv-val` offline, but the driver is the one that has to compile them.
+4. Under zoom, nothing separates from its surroundings. This is the defect the
+   task exists to remove and the only part of it Patola can see: at the zoom
+   stop the baked constant is wrong by 29.18689/0.75405 = 38.7x, so geometry
+   drawn by these modules sat at 1/38.7 of its true distance.
+
+Take 109 is take 108's command line with `X4VR_PROJ_MVP=1` added, and take 108
+itself is the control that has already been run.

@@ -3359,6 +3359,22 @@ bool proj_live() {
     return on;
 }
 
+// X4VR_PROJ_MVP: for the World modules that declare no camera block, recover
+// sx from the per-object M_worldviewprojection rather than shearing them by a
+// baked constant that is only right at one zoom level. Requires
+// X4VR_PROJ_LIVE, because it is the same fallback chain -- it only ever runs
+// where patch_vertex_eye_offset has already refused.
+//
+// Off by default for the same reason X4VR_PROJ_LIVE was: with it unset, every
+// module takes exactly the path stage5-wide-field was tagged on.
+bool proj_mvp() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_PROJ_MVP");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
+
 // Where X4 keeps its camera constants. Read off the dumped modules:
 // BLOCK_BUFFER_BINDING_SLOT_CAMERA, member 1 = M_projection (member 0 is
 // M_view, 3 is M_projection_uj), matching x4vr_view.hpp's float offsets.
@@ -3371,6 +3387,14 @@ bool proj_live() {
 constexpr uint32_t kCameraSet = 1;
 constexpr uint32_t kCameraBinding = 0;
 constexpr uint32_t kCameraProjMember = 1;
+// The per-object block, for the modules that have no camera block at all
+// (task #23). Member 0 is M_worldviewprojection -- verified by name in the
+// dumps and by shape in patch_vertex_eye_offset_mvp, which refuses unless the
+// member really is a mat4. Not env-configurable, for the reason above: a knob
+// here would let someone force a wrong buffer past that check.
+constexpr uint32_t kObjectSet = 3;
+constexpr uint32_t kObjectBinding = 0;
+constexpr uint32_t kObjectMvpMember = 0;
 constexpr uint32_t kCameraInvProjMember = 2; // M_invprojection
 // M_invprojection_uj -- the *other* inverse projection, and the one that
 // mattered. Reading mod-0180 (the sun light with cascaded shadows) shows the
@@ -3783,7 +3807,7 @@ VkResult create_shader_module_inner(
                             : (have_kr_nonworld ? K_nonworld_r : nullptr);
 
     static uint32_t patched = 0, n_world = 0, n_nonworld = 0, n_stereo = 0;
-    static uint32_t n_live = 0, n_baked = 0;
+    static uint32_t n_live = 0, n_baked = 0, n_mvp = 0;
     (world ? n_world : n_nonworld)++;
     if (KR)
         n_stereo++;
@@ -3807,7 +3831,23 @@ VkResult create_shader_module_inner(
         vert_patched = x4vr::spv::patch_vertex_eye_offset(
             code, kCameraSet, kCameraBinding, kCameraProjMember, dl,
             KR ? &dr : nullptr);
-        (vert_patched ? n_live : n_baked)++;
+        if (vert_patched) {
+            n_live++;
+        } else {
+            // Task #23. Only ever as a fallback, and only for the modules the
+            // camera-block patch just refused: those declare the set-3
+            // per-object block and nothing else, so sx is recovered from
+            // M_worldviewprojection rather than read from a camera they cannot
+            // see. Off by default -- with X4VR_PROJ_MVP unset every module
+            // takes exactly the path stage5-wide-field was tagged on, which is
+            // the only way a known-good state stays restorable.
+            const bool mvp = proj_mvp() &&
+                             x4vr::spv::patch_vertex_eye_offset_mvp(
+                                 code, kObjectSet, kObjectBinding,
+                                 kObjectMvpMember, dl, KR ? &dr : nullptr);
+            (mvp ? n_mvp : n_baked)++;
+            vert_patched = mvp;
+        }
     }
     if (!vert_patched)
         vert_patched = x4vr::spv::patch_vertex_clip(code, K, KR);
@@ -3868,10 +3908,11 @@ VkResult create_shader_module_inner(
             }
             if (++patched <= 3 || (patched % 50) == 0)
                 X4VR_LOG("patched vertex shader #%u (%s%s) "
-                         "[world=%u nonworld=%u stereo=%u live-sx=%u baked-sx=%u]",
+                         "[world=%u nonworld=%u stereo=%u live-sx=%u "
+                         "mvp-sx=%u baked-sx=%u]",
                          patched, world ? "world" : "nonworld",
                          KR ? ", per-view" : "", n_world, n_nonworld, n_stereo,
-                         n_live, n_baked);
+                         n_live, n_mvp, n_baked);
             return r;
         }
         // Patched module rejected by the driver: fall back to the original

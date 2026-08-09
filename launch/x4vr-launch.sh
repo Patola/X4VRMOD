@@ -92,6 +92,26 @@
 #                         produces two different eyes. Uses the same
 #                         make_eye_shear derivation as the one-eye X4VR_EYE
 #                         path, with X4VR_IPD / X4VR_PROJ_SX / X4VR_PROJ_NEAR.
+#   X4VR_PROJ_MVP=1       task #23: the World modules that declare no camera
+#                         block cannot read sx per draw and fall back to the
+#                         baked X4VR_PROJ_SX, which is right at one zoom level
+#                         and wrong across the rest of the 0.75405..29.18689
+#                         range the scene camera covers. With this on they
+#                         recover sx from the per-object M_worldviewprojection
+#                         instead:
+#                           sx = |row0(MVP).xyz| / |row3(MVP).xyz|
+#                         which is exact for a rigid view and a uniformly
+#                         scaled object, the object's own scale cancelling.
+#                         Validated in tests/view_math.cpp over every measured
+#                         sx and scales from 0.01 to 3000 (worst relative error
+#                         2.4e-07), and spirv-val passes all 328 modules it
+#                         accepts out of take 74's 397.
+#                         Needs X4VR_PROJ_LIVE=1 -- it is the same fallback
+#                         chain and only runs where the camera-block patch has
+#                         already refused. Default off: unset, every module
+#                         takes the path stage5-wide-field was tagged on.
+#                         Gate: mvp-sx= in the "patched vertex shader" line
+#                         goes from 0 to the count baked-sx= used to carry.
 #                         Needs X4VR_MV=1: without a view mask there is only
 #                         ever view 0, and the result is the left eye twice.
 #   X4VR_MASK_TONEMAP=1   mask the tonemap resolve (rp #40/#52 -> #103) so it

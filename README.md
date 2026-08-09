@@ -104,7 +104,11 @@ Useful switches: `X4VR_NO_LAYER=1`, `X4VR_NO_INJECT=1`, `X4VR_NO_CONFIG=1`
 (bisect a problem), `X4VR_X11=1` (force the SDL X11 path),
 `X4VR_CLIP_SHIFT=<x>` (clip-space test shift), `X4VR_DUMP_MATRICES=1`,
 `X4VR_FOV=<decimal>` (serve X4's `<fov>` from the profile — the field of view is
-a config setting, so widening it needs no projection patch).
+a config setting, so widening it needs no projection patch),
+`X4VR_PROJ_MVP=1` (for the World shaders that declare no camera block, recover
+`sx` from the per-object `M_worldviewprojection` instead of shearing them by a
+constant that is only right at one zoom level; needs `X4VR_PROJ_LIVE=1`, off by
+default).
 
 ## Repository layout
 
