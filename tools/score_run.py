@@ -797,6 +797,50 @@ def main(path):
                         "the session never reached FOCUSED — the runtime never "
                         "gave X4 the foreground. Headset asleep, or another "
                         "application holds the session")
+                # Task #38. Only judged once the layer is capable of it, which
+                # the "vr copy" line is the evidence for: takes 112/113 ran a
+                # deliberately zero-layer session and must keep their verdicts.
+                copy = None
+                for ln in lines:
+                    m2 = re.search(r"vr copy \(\w+\): swapchain=(\d+) "
+                                   r"blits=(\d+) released=(\d+) "
+                                   r"acquire_failed=(\d+) refused=(\d+)", ln)
+                    if m2:
+                        copy = m2
+                if copy:
+                    sc_ok, blits, released, afail, refused = (
+                        int(g) for g in copy.groups())
+                    print(f"    copy swapchain={sc_ok} blits={blits} "
+                          f"released={released} acquire_failed={afail} "
+                          f"refused={refused}")
+                    if not sc_ok:
+                        why = next((ln.split("NO SUBMISSION THIS RUN — ", 1)[1]
+                                    for ln in lines
+                                    if "NO SUBMISSION THIS RUN" in ln),
+                                   "no reason logged")
+                        fails.append(f"no XR swapchain: {why}")
+                    elif blits == 0:
+                        fails.append(
+                            "the swapchain exists but X4's eye image was never "
+                            "copied into it — the headset saw nothing X4 drew")
+                    elif submitted == 0:
+                        fails.append(
+                            f"{blits} eye frame(s) were copied but no XR frame "
+                            f"ever carried a layer — the copy and the submit "
+                            f"are not meeting")
+                    if refused:
+                        fails.append(
+                            f"{refused} blit(s) refused on a shape mismatch — "
+                            f"the swapchain and the eye image disagree, see "
+                            f"the 'vr: NOT blitting' line")
+                    # Not a failure: X4 presents slower than the headset runs,
+                    # so blits < submitted is the normal steady state and the
+                    # runtime reprojects the rest. Only worth saying when it is
+                    # extreme enough to mean stutter rather than reprojection.
+                    if blits and submitted and submitted / blits > 6:
+                        print(f"    the headset ran {submitted / blits:.1f}x "
+                              f"faster than X4 presented — every X4 frame was "
+                              f"shown ~{submitted / blits:.0f} times")
                 if frames == 0:
                     fails.append("the session was created but no XR frame ever "
                                  "completed — the frame loop is not running")

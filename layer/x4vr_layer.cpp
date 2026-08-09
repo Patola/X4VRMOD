@@ -6680,6 +6680,17 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdPipelineBarrier(
     d->CmdPipelineBarrier(cb, src, dst, flags, mbc, mb, bbc, bb, ibc, ib);
 }
 
+// Task #38, defined with the rest of the VR section further down. Declared
+// here because the present hook is what drives them and it comes first in the
+// file; both compile to no-ops when the layer is built without OpenXR headers.
+#ifdef X4VR_HAVE_OPENXR
+bool vr_begin_blit(VkSwapchainKHR x4sc);
+void vr_finish_blit();
+#else
+inline bool vr_begin_blit(VkSwapchainKHR) { return false; }
+inline void vr_finish_blit() {}
+#endif
+
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     VkQueue queue, const VkPresentInfoKHR *pi) {
     // Backstop. The session normally starts at the first vkGetDeviceQueue, but
@@ -6776,6 +6787,13 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     // seen, so leave it alone rather than guess which image is the eye pair.
     VkSemaphore composited = VK_NULL_HANDLE;
     uint32_t family = 0;
+    // Task #38: ask for the copy into the runtime's swapchain before composite
+    // records, and release after it has submitted. Gated on intent only — if
+    // the acquire fails this frame simply does not reach the headset, and X4's
+    // own frame is untouched either way.
+    bool vr_blit = false;
+    if (g_sbs_enabled && g_active && pi->swapchainCount == 1)
+        vr_blit = vr_begin_blit(pi->pSwapchains[0]);
     if (g_sbs_enabled && g_active && pi->swapchainCount == 1) {
         if (queue_family_of(queue, family)) {
             composited = g_sbs.composite(
@@ -6793,6 +6811,14 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
             }
         }
     }
+    // Released here, after composite() has submitted. OpenXR requires the
+    // writes to have been SUBMITTED before release, not completed, and
+    // composite() submits before returning. Released even when composite did
+    // not run, because an acquired image that is never released deadlocks the
+    // swapchain after three frames — the image the runtime gets is then simply
+    // whatever the copy left in it, which is a stale frame rather than a hang.
+    if (vr_blit)
+        vr_finish_blit();
 
     VkResult r;
     if (composited != VK_NULL_HANDLE) {
@@ -6931,7 +6957,42 @@ struct VrState {
     VkDevice dev = VK_NULL_HANDLE;
     InstanceData inst;
     bool pending = false;
+
+    // Task #38. The swapchain is created lazily on X4's present thread,
+    // because its shape comes from the eye image and that does not exist until
+    // X4 has created its own swapchain — which happens long after the session.
+    x4vr::xr::Swapchain sc;
+    std::mutex sc_mu;               // XrSwapchain wants external synchronisation
+    std::atomic<bool> sc_ready{false};
+    std::atomic<bool> sc_failed{false}; // tried once and could not; do not retry
+    std::atomic<uint64_t> released{0};  // images handed to the runtime
+    std::atomic<uint64_t> acquire_fail{0};
+    std::atomic<uint64_t> submitted{0}; // frames that carried a projection layer
 };
+
+// The field we DECLARE to the compositor, which must be the field X4 actually
+// rendered or the world comes out the wrong size. X4's half-angle follows
+// X4VR_FOV by the measured law `full degrees = X4VR_FOV * 73.7399`, so this is
+// derived from the same knob rather than from a second constant that could
+// drift away from it.
+//
+// Deliberately NOT read back from X4's projection: the layer sees several
+// cameras per frame with sx from 0.75 to 3.78, and picking one of those is the
+// mistake that fifty takes were built on. The knob is what we set, so the knob
+// is what we declare.
+inline XrFovf vr_declared_fov() {
+    const char *e = getenv("X4VR_FOV");
+    const float knob = e ? (float)atof(e) : 0.0f;
+    const float full_deg = (knob > 0.0f ? knob : 1.0f) * 73.7399f;
+    const float half = full_deg * 0.5f * 0.01745329251994330f;
+    XrFovf f{};
+    f.angleLeft = -half;
+    f.angleRight = half;
+    f.angleUp = half;
+    f.angleDown = -half;
+    return f;
+}
+const XrFovf g_vr_fov = vr_declared_fov();
 VrState g_vrs;
 
 void vr_say(void *, const char *s) { X4VR_LOG("%s", s); }
@@ -6965,6 +7026,102 @@ bool vr_open_runtime() {
 
 void vr_report(const char *when); // defined below; the loop ticks through it
 
+// Task #38, on X4's present thread.
+//
+// Acquires an image of the runtime's swapchain and asks SbsCompositor to copy
+// the finished eye image into it during the composite that is about to be
+// recorded. The release happens in vr_finish_blit(), AFTER composite() has
+// submitted -- OpenXR requires the writes to have been submitted, not
+// completed, before an image is released, and composite() submits before it
+// returns.
+//
+// Everything here is on X4's thread and none of it holds a lock across a call
+// that can block: xrAcquireSwapchainImage can wait, but only for one of three
+// images to come free, never for a headset frame the way xrWaitFrame does.
+//
+// Returns true when a blit was requested, so the caller knows whether it owes a
+// release. On any failure it returns false and X4's frame proceeds untouched --
+// this path must never be able to stop the flatscreen game.
+bool vr_begin_blit(VkSwapchainKHR x4sc) {
+    if (!g_vr || !g_vrs.session_ok.load(std::memory_order_relaxed) ||
+        g_vrs.sc_failed.load(std::memory_order_relaxed))
+        return false;
+
+    VkExtent2D eye{};
+    uint32_t layers = 0;
+    VkFormat fmt = VK_FORMAT_UNDEFINED;
+    if (!g_sbs.eye_shape(x4sc, &eye, &layers, &fmt))
+        return false;
+    if (layers < 2)
+        return false; // mono: nothing stereo to send, and #2 owns that gap
+
+    std::lock_guard<std::mutex> lock(g_vrs.sc_mu);
+    if (!g_vrs.sc_ready.load(std::memory_order_relaxed)) {
+        // B8G8R8A8_SRGB first: it is X4's channel order, so the copy is a raw
+        // byte copy. Probe run 3 measured the runtime offering it (format 50).
+        // UNORM second, which needs no sRGB reinterpretation if that ever
+        // proves to be the wrong reading of X4's output.
+        const VkFormat want[] = {VK_FORMAT_B8G8R8A8_SRGB,
+                                 VK_FORMAT_B8G8R8A8_UNORM};
+        const VkFormat pick = x4vr::xr::choose_format(g_vrs.session, want, 2,
+                                                      vr_say, nullptr);
+        if (pick == VK_FORMAT_UNDEFINED) {
+            X4VR_LOG("vr: NO SUBMISSION THIS RUN — the runtime offers no "
+                     "B8G8R8A8 format, so a copy from X4's %d eye image "
+                     "cannot be byte-preserving. This needs a swizzle pass, "
+                     "which is not written.",
+                     (int)fmt);
+            g_vrs.sc_failed.store(true, std::memory_order_relaxed);
+            return false;
+        }
+        const XrResult r = x4vr::xr::swapchain_create(
+            g_vrs.sc, g_vrs.session, pick, eye.width, eye.height, 2, 1);
+        if (r != XR_SUCCESS) {
+            X4VR_LOG("vr: NO SUBMISSION THIS RUN — xrCreateSwapchain "
+                     "(%ux%u, 2 layers, format %d) -> %s",
+                     eye.width, eye.height, (int)pick,
+                     x4vr::xr::result_name(r));
+            g_vrs.sc_failed.store(true, std::memory_order_relaxed);
+            return false;
+        }
+        X4VR_LOG("vr: swapchain %ux%u x2 layers, %zu image(s), format %d — "
+                 "X4's eye image is %ux%u x%u format %d, so the copy is "
+                 "byte-preserving",
+                 eye.width, eye.height, g_vrs.sc.images.size(), (int)pick,
+                 eye.width, eye.height, layers, (int)fmt);
+        // Said once, with the arithmetic, because a mismatch between what X4
+        // renders and what we declare shows up as a world that is subtly the
+        // wrong size rather than as an error.
+        const char *knob = getenv("X4VR_FOV");
+        X4VR_LOG("vr: declaring a symmetric field of +-%.2f deg per eye, from "
+                 "X4VR_FOV=%s%s. The runtime's own views are canted (the FOV "
+                 "centre is 15.04 deg out), and it honours ours instead — "
+                 "probe run 3 confirmed that on hardware.",
+                 g_vr_fov.angleRight * 57.2957795130823f,
+                 knob ? knob : "1.0",
+                 knob ? "" : " (UNSET — X4 is at its default 73.74 deg field, "
+                             "which is narrower than the headset's; set "
+                             "X4VR_FOV=1.4917 to cover it)");
+        g_vrs.sc_ready.store(true, std::memory_order_relaxed);
+    }
+
+    uint32_t idx = 0;
+    if (!x4vr::xr::swapchain_acquire(g_vrs.sc, &idx)) {
+        g_vrs.acquire_fail.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    g_sbs.request_vr_blit(g_vrs.sc.images[idx], eye, 2);
+    return true;
+}
+
+// The other half. Separate from vr_begin_blit because the release must not
+// happen until composite() has submitted the copy.
+void vr_finish_blit() {
+    std::lock_guard<std::mutex> lock(g_vrs.sc_mu);
+    x4vr::xr::swapchain_release(g_vrs.sc);
+    g_vrs.released.fetch_add(1, std::memory_order_relaxed);
+}
+
 void vr_thread() {
     double last = 0.0;
     auto now = [] {
@@ -6989,16 +7146,55 @@ void vr_thread() {
         XrView views[2] = {};
         XrViewStateFlags flags = 0;
         const bool have = x4vr::xr::locate_views(g_vrs.session, views, 2, &flags);
-        // Zero layers, by design. Everything else about the frame is real.
-        //
+        // Task #38: submit the eye image, once X4's present thread has put one
+        // in the swapchain. Until then this is still a zero-layer frame, which
+        // is what takes 112/113 ran.
+        XrCompositionLayerProjectionView pv[2] = {};
+        XrCompositionLayerProjection proj = {};
+        const XrCompositionLayerBaseHeader *layers[1] = {nullptr};
+        uint32_t layer_count = 0;
+        if (have && should_render && g_vrs.sc_ready.load() &&
+            g_vrs.released.load() > 0) {
+            for (uint32_t e = 0; e < 2; e++) {
+                pv[e].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
+                // The pose we RENDERED from, which is not the pose the head is
+                // in. X4 has no head tracking yet (#33): it renders along its
+                // own forward axis, so declaring the live orientation would
+                // glue the world to the face — the whole scene would rotate
+                // with the head, which is both wrong and sickening. Identity
+                // orientation makes the image world-locked, so looking around
+                // moves the eye WITHIN the rendered field and past its edge is
+                // black. That is the honest description of what we drew, and
+                // the black edge is #33's job to remove.
+                pv[e].pose.orientation.w = 1.0f;
+                pv[e].pose.position = views[e].pose.position;
+                // Our own symmetric field, not the runtime's canted one.
+                // Monado reads this field to build its UV-to-tangent map, and
+                // probe run 3 confirmed on hardware that it honours it.
+                pv[e].fov = g_vr_fov;
+                pv[e].subImage.swapchain = g_vrs.sc.handle;
+                pv[e].subImage.imageRect = {
+                    {0, 0},
+                    {(int32_t)g_vrs.sc.width, (int32_t)g_vrs.sc.height}};
+                pv[e].subImage.imageArrayIndex = e;
+            }
+            proj.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION;
+            proj.space = g_vrs.session.space;
+            proj.viewCount = 2;
+            proj.views = pv;
+            layers[0] = (const XrCompositionLayerBaseHeader *)&proj;
+            layer_count = 1;
+        }
         // The lock covers xrEndFrame because that is where the runtime's
         // client compositor submits, and on a one-graphics-queue device that
         // is X4's queue (#36). It is not held across xrWaitFrame above, which
         // blocks for a whole headset frame.
         {
             std::lock_guard<std::mutex> qlock(g_vr_queue_mu);
-            x4vr::xr::frame_end(g_vrs.session, nullptr, 0);
+            x4vr::xr::frame_end(g_vrs.session, layers, layer_count);
         }
+        if (layer_count)
+            g_vrs.submitted.fetch_add(1, std::memory_order_relaxed);
 
         bool tick = false;
         {
@@ -7370,14 +7566,27 @@ void vr_start_session_deferred() {
 void vr_report(const char *when) {
     if (!g_vr)
         return;
+    uint64_t blits = 0, refused = 0;
+    g_sbs.vr_counts(&blits, &refused);
     std::lock_guard<std::mutex> lock(g_vrs.mu);
     X4VR_LOG("vr summary (%s): runtime=%s session=%d focused=%d frames=%llu "
-             "located=%llu submitted=0 span=%.4f,%.4f,%.4f",
+             "located=%llu submitted=%llu span=%.4f,%.4f,%.4f",
              when, g_vrs.rt.ok() ? g_vrs.rt.runtime_name : "none",
              (int)g_vrs.session_ok.load(), (int)g_vrs.focused,
              (unsigned long long)g_vrs.frames, (unsigned long long)g_vrs.located,
+             (unsigned long long)g_vrs.submitted.load(),
              g_vrs.pmax[0] - g_vrs.pmin[0], g_vrs.pmax[1] - g_vrs.pmin[1],
              g_vrs.pmax[2] - g_vrs.pmin[2]);
+    // The other half of the path, on X4's thread and at X4's rate. Reported
+    // separately because "the runtime got 5400 frames" and "X4 produced 900
+    // of them" are different facts, and a single number cannot say both --
+    // submitted counts headset frames, blits counts X4 frames that reached it.
+    X4VR_LOG("vr copy (%s): swapchain=%d blits=%llu released=%llu "
+             "acquire_failed=%llu refused=%llu",
+             when, (int)g_vrs.sc_ready.load(), (unsigned long long)blits,
+             (unsigned long long)g_vrs.released.load(),
+             (unsigned long long)g_vrs.acquire_fail.load(),
+             (unsigned long long)refused);
 }
 
 void vr_shutdown() {
@@ -7390,6 +7599,13 @@ void vr_shutdown() {
     if (g_vrs.thread.joinable())
         g_vrs.thread.join(); // must finish before the device goes away
     vr_report("final");
+    // Before the session, which owns it. The present thread is gone by now:
+    // this runs from vkDestroyDevice, after X4 has stopped presenting.
+    if (g_vrs.sc_ready.load()) {
+        std::lock_guard<std::mutex> lock(g_vrs.sc_mu);
+        x4vr::xr::swapchain_destroy(g_vrs.sc);
+        g_vrs.sc_ready.store(false);
+    }
     if (g_vrs.session_ok.load())
         x4vr::xr::session_destroy(g_vrs.session);
     x4vr::xr::runtime_close(g_vrs.rt);

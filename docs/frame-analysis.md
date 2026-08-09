@@ -14223,6 +14223,46 @@ about the *cost*. The source here is painted once and copied; X4's eye image is
 the output of a full frame, the copy shares X4's one graphics queue, and #36's
 mutex is still unmeasured. That is the submission take's business.
 
+## Take 114 — first light. The submission, and what it should and should not do
+
+    X4VR_TAKE=114-FIRST-LIGHT X4VR_VR=1 X4VR_FOV=1.4917 X4VR_STEREO=1
+    X4VR_BINDLESS_PATCH=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1
+    X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1
+    X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1
+    X4VR_LOG=/tmp/x4vr-take114.log ./launch/x4vr-launch.sh
+
+Acceptance is `tools/score_run.py /tmp/x4vr-take114.log`, which now judges the
+copy path. Two knobs differ from take 113 and both are deliberate:
+`X4VR_FOV=1.4917` (110°, the union — 1.437 would leave the headset's edges
+unrendered) and no `X4VR_MV_INVENTORY`/`X4VR_DUMP_MATRICES`, because this is an
+**interaction** take and those are measurement instruments.
+
+**P116.1: X4 still plays on the flatscreen.** The copy is one more
+`vkCmdCopyImage` in a command buffer `composite()` already records and submits.
+
+**P116.2: the scene appears in the headset, in stereo.** `blits` > 0 and
+`submitted` > 0 in the `vr copy` and `vr summary` lines.
+
+**P116.3: `submitted` exceeds `blits` by roughly the ratio of 90 Hz to X4's
+frame rate.** The headset frame loop and X4's present run at different rates,
+and the runtime reprojects the difference — so this is the healthy reading, not
+a fault. `score_run.py` prints the ratio and only comments above 6×.
+
+**P116.4: the image is WORLD-LOCKED and the field runs out.** X4 has no head
+tracking (#33), so the layer declares an identity orientation — an honest
+description of what it drew. Turning your head should move your view *within*
+the rendered 110°, and past that edge it should be **black**, because Monado's
+`do_projection_layer` binds `clamp_to_border_black`. Head-locked motion, where
+the whole world rotates with the head, would mean the layer is submitting the
+live orientation and is the defect to look for.
+
+**P116.5: X4's frame time is unchanged against take 113** on a comparable
+parked phase. This is the first take where #36's mutex is actually contended —
+until now nothing submitted — so this is its first measurement.
+
+**What would make this take unscoreable rather than failed:** X4 not reaching a
+playable state at all. Everything else the scorer has words for.
+
 # State at `stage8-xr-session-in-x4` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the
@@ -14349,8 +14389,11 @@ which is milestone A and needs nothing from #35.
   missing `DT_NEEDED` in an injected layer is X4 refusing to start. Verify with
   `ldd build/layer/libVkLayer_X4VR_core.so | grep -i openxr` (must be empty).
 * Verdict changes: takes 97/98 FAIL→PASS (#32); take 101 PASS→FAIL (#31).
-* Current verdicts over all 80 logs: **60 pass, 6 fail
-  {44, 45, 48, 101, 102, 112}, 13 unscoreable**.
+* Current verdicts over all 80 logs: **61 pass, 6 fail
+  {44, 45, 48, 101, 102, 112}, 13 unscoreable**. (This read "60 pass" until
+  #38's scorer change forced a re-run over every log: 60 + 6 + 13 is 79, not
+  80. I had verified the failing *set* and asserted the totals, which is how an
+  off-by-one survives — the interesting number looked right.)
 
 ## Tooling — what exists and what each answers
 
