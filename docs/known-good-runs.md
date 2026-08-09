@@ -514,3 +514,50 @@ silent fallback to the compositor's pointer protects a user instead of hiding a
 bug, and the same design that is wrong today becomes right. The channel already
 anticipates the reversed direction — `common/x4vr_share.hpp` says to add a second
 struct rather than make that one bidirectional.
+
+## `stage9-first-light` — take 114d
+
+**X4 renders into the headset, in stereo, at 90 Hz, while playing normally.**
+The eye image is copied into an OpenXR swapchain inside the composite that
+already exists, and submitted as a projection layer with a symmetric field of
+our own. No shader change: the per-eye difference is the lateral shear the
+layer has applied since stage6, because probe run 2 proved the runtime's view
+poses are parallel.
+
+    env: run = X4VR_TAKE=114d-FIRST-LIGHT X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take114d.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 ./launch/x4vr-launch.sh
+
+**One line, deliberately.** Take 114 was lost to a wrapped command block: only
+`X4VR_LOG` reached the process. Copy this as it stands.
+
+Take 113's line with three changes: the instruments dropped (this is an
+interaction take), and **`X4VR_FOV=1.437` → `1.4917`**. That last one is not
+cosmetic — 1.4917 is 110°, the union of both eyes' fields, and at 1.437 the
+headset's edges are outside what X4 renders and come back black.
+
+**What to check** — `python3 tools/score_run.py`, which now judges the copy:
+
+    vr  ... session=1 focused=1 frames=117327 located=117327 submitted=117255
+        copy swapchain=1 blits=146787 released=146787 acquire_failed=0 refused=0
+
+`refused` and `acquire_failed` must both be **0**. `refused` non-zero means the
+swapchain and the eye image disagree on shape; `acquire_failed` non-zero means
+the 2 ms acquire timeout is firing and VR frames are being dropped.
+
+**The rates are the interesting part, and they refuted a prediction.** Over
+1286 s: X4 presented **114.1 fps**, the headset ran **91.2 Hz**. P116.3 said
+`submitted` would greatly exceed `blits` because X4 would be the slower one. It
+is the other way round — `blits/submitted = 1.25`, so about one X4 frame in five
+is never shown. That is not a defect at this stage, but it means the headset is
+the bottleneck on *latency*, not X4, and any future frame-pacing work starts
+from that.
+
+**Performance.** 2.56 ms median over the 5–93 s phase, which is exactly take
+113's session-wide median on the comparable early phase — so #36's mutex, now
+genuinely contended for the first time, costs nothing measurable there. The
+session-wide 9.89 ms is a longer run over heavier scenes, not a regression;
+compare phases, never session medians.
+
+**What this state does NOT do.** The image is world-locked to a fixed forward
+axis and the rendered field runs out: turn your head and you look off the edge
+of a 110° window into black. Patola: *"it is a quad put at my front, so I can't
+look behind."* That is #33, and it is the next task — not a fault in this one.
