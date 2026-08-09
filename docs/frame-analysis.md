@@ -14184,6 +14184,45 @@ Both parallelism readouts are *relative* (view-to-view, and view-to-head), so
 they are unaffected by this; the eye offset itself must be applied along the
 head's own x axis, which is #33's business.
 
+## Probe run 3 — the copy path works, and the compositor honours our own FOV
+
+    /tmp/x4vr-xrprobe-20260809-180959.txt        tests/run-xr-probe.sh copy 20
+
+    xr: runtime offers 11 swapchain format(s), best first:
+        91 97 43 50 37 44 4 100 126 124 130
+    xr: chose format 50 (candidate 1 of 2)
+    xr: copy mode — source 1408x1408 B8G8R8A8_UNORM x2 layers
+    xr: swapchain 1408x1408 x2 layers, 3 image(s)
+    FRAMES=1799  LOCATED=1799  SUBMITTED=1798  KEY_FORMAT=50
+
+Patola: *"The bar still looks ok, 2m from me."*
+
+**The format question is answered.** `50` is `VK_FORMAT_B8G8R8A8_SRGB` — same
+channel order as X4's format-44 eye image, so `vkCmdCopyImage` is a raw
+byte-preserving copy with no swizzle and no colour conversion, and declaring
+sRGB tells the compositor those bytes are display-encoded, which they are.
+`44` (`B8G8R8A8_UNORM`) is offered too, so there is a fallback if the sRGB
+interpretation ever proves wrong. The list is now logged every run rather than
+inferred.
+
+**The milestone-A mechanism is proven on hardware, not just in Monado's
+source.** The card was built from the ±55° symmetric FOV we *declared*, which
+puts the fusible bar at `u ≈ 0.5054` of the image width. Had the compositor
+interpreted the image with its own canted FOV instead, that pixel would sit at
+`atan(tan(−54°) + 0.5054·(tan 40° − tan(−54°))) ≈ −14.4°` in view 0 and +14.4°
+in view 1 — about 29° of divergence, which is the original unfusible defect and
+would have shown as two bars. One bar at 2 m means `XrCompositionLayerProjection
+View::fov` was honoured exactly as `do_projection_layer` reads it.
+
+So X4 may render one symmetric ±55° frustum per eye and say so, and the
+compositor does the rest. No shader change, no off-axis affine, no per-eye
+rotation.
+
+**What this run does not establish**, and should not be read as: it says nothing
+about the *cost*. The source here is painted once and copied; X4's eye image is
+the output of a full frame, the copy shares X4's one graphics queue, and #36's
+mutex is still unmeasured. That is the submission take's business.
+
 # State at `stage8-xr-session-in-x4` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the
