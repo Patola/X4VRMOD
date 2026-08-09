@@ -410,6 +410,56 @@ session, X4's frames do not reach a swapchain, and the per-eye frustum
 correction (#35) is not written — the card sidesteps it by placing itself in
 the runtime's own angular space, which X4's renderer cannot do.
 
+## `stage8-xr-session-in-x4` — take 113
+
+An `XrSession` on **X4's own** `VkInstance`, `VkDevice` and queue, running a
+90 Hz frame loop and reading the head pose, while X4 plays normally in SBS on
+the flatscreen. It **submits nothing**: the headset shows the runtime's idle
+scene. That is the state, not a shortfall — it is what separates "X4 survives
+the runtime's extensions" from "X4 reaches the compositor".
+
+    env: run = X4VR_TAKE=113-VR-BRINGUP X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1
+    X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1
+    X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1
+    X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take113.log X4VR_MASK_PRESENT=1
+    X4VR_IPD=0.064 X4VR_FOV=1.437 X4VR_BINDLESS_MIRROR=1 X4VR_MV_INVENTORY=1
+    ./launch/x4vr-launch.sh
+
+`stage6-sx-per-draw`'s line plus **`X4VR_VR=1`** and nothing else. WiVRn must be
+running and the headset connected *before* X4 starts: the runtime is opened
+during `vkCreateInstance`, because it decides X4's instance extensions.
+
+**What to check** — `python3 tools/score_run.py` prints all of it, and its `vr`
+section is gated on `X4VR_VR=1` being on the command line rather than on a
+session having appeared:
+
+    vr  runtime "WiVRn ..." session=1 focused=1 frames=12840 located=12840 submitted=0
+        head span 0.132 x 0.143 y 0.243 m — the pose moves
+
+`located` must be within 10% of `frames`; below that the tracking was dropping
+out. `submitted=0` is correct for this state. The head span is informational —
+sitting still is a legitimate run — but zero on every axis across a long run
+means the pose is a constant, which is the failure #33 exists to avoid.
+
+Two lines worth reading directly, because they are the measurements two takes
+died for:
+
+    vr: physical device handles — layer 0x123ab150, loader public 0x123ae500,
+                                  runtime asks for 0x123ae500
+    vr: device extensions — X4 asked for 8, the runtime needs 9, added 9: ...
+
+The first must show the runtime agreeing with the **loader's public** handle,
+not the layer's. The second must add its extensions with none dropped for want
+of driver support.
+
+**Also verified without X4**, and worth running first because it costs a minute:
+
+    ./tests/run-xr-probe.sh 20      # KEY_PATH=v1, PASS=1
+
+**Not in this state:** anything of X4 in the headset. Blocked on **#35** (the
+frustum is canted 14° per eye and X4's is symmetric) and **#36** (X4 leaves no
+spare graphics queue, and the runtime would submit on the same one).
+
 ## Decision, 2026-08-08 — the cursor knobs default on, and hiding gates on intent
 
 `X4VR_CURSOR` and `X4VR_HIDE_CURSOR` are **both on by default** as of this date,

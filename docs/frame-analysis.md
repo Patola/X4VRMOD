@@ -13817,6 +13817,76 @@ unanswered.
 **P114.4: X4's frame time is unchanged against take 110** on a comparable
 parked phase.
 
+## Take 113 — the session lives inside X4. All four predictions confirmed
+
+`score_run.py` exit 0. Run from inside WayVR's virtual screen; the VR view went
+black when X4 started and returned to normal when it quit, which is exactly what
+a focused session that submits no layers looks like.
+
+    vr  runtime "WiVRn" session=1 focused=1 frames=12840 located=12840 submitted=0
+        head span 0.132 x 0.143 y 0.243 m — the pose moves
+
+**P114.1 confirmed.** X4 started and played normally with the extensions merged
+by us rather than by the runtime, and with the driver-support filter in the
+path. It needed 3 instance extensions added (`external_fence_capabilities`,
+`external_memory_capabilities`, `external_semaphore_capabilities` — X4 already
+had the other one) and **all 9** device extensions (`dedicated_allocation`,
+`external_fence`/`_memory`/`_semaphore` and their three `_fd` forms,
+`get_memory_requirements2`, `image_format_list`). Nothing was dropped by the
+filter.
+
+**P114.2 confirmed, exactly.**
+
+    vr: physical device handles — layer 0x123ab150, loader public 0x123ae500,
+                                  runtime asks for 0x123ae500
+
+The runtime's handle *is* the loader's public one, and both differ from the
+layer's. That is the shape the v1 path predicted, and it is why take 111 — which
+bound the layer's handle — aborted inside the compositor.
+
+**Left open, and immaterial:** why take 111's `want == phys` comparison agreed
+at all, given Monado uses the public `vkGetInstanceProcAddr` for that query. The
+enable2 path is abandoned, so nothing depends on the answer. It is recorded as
+unexplained rather than given a story that fits.
+
+**P114.3 confirmed, with a clean number.** `FOCUSED` reached, 12840 frames,
+**12840 located — 100%**. And the rate:
+
+    29 samples between summaries: min 90.0 Hz, median 90.0, max 90.2
+    overall 12839 frames / 142.6 s = 90.01 Hz
+
+Dead flat at the Quest 3's refresh while X4 ran at 17.28 ms (58 fps) loading and
+7.54 ms (133 fps) in flight. The XR loop is on the headset's clock and X4 is on
+its own — which is the property the separate thread exists to provide, and the
+reason `xrWaitFrame` must never move into `vkQueuePresentKHR`.
+
+**P114.4 confirmed as far as it can be.** Flight phases: take 110 **7.02 ms**,
+take 112 **8.23 ms**, take 113 **7.54 ms**. Take 113 sits between the two runs
+without VR frames and inside their spread. This is not a controlled comparison —
+the three parked on different scenes — and it is recorded as "no sign of a
+regression", not as a measurement. A real A/B needs a parked camera.
+
+Tagged **`stage8-xr-session-in-x4`**, with the run in
+`docs/known-good-runs.md`.
+
+### What this state does not do, and the two things in the way of it doing more
+
+It submits nothing. Two known obstacles stand between here and X4 appearing in
+the headset, and both are now measured rather than suspected:
+
+1. **The frustum.** #35. X4's projection is symmetric; the runtime's views are
+   canted 14° outward. Submitting as-is puts every object 15° off, in opposite
+   directions per eye — the defect the test card demonstrated at 30° of
+   divergence.
+2. **The queue.** Take 111 measured it and take 113 confirms it: X4 creates
+   **queue family 0 with exactly one queue** (graphics) and family 1 with one.
+   The runtime's client compositor submits on the queue the graphics binding
+   names, and a `VkQueue` is externally synchronised — so as soon as we hand it
+   layers, the runtime and X4 are submitting to the same queue from two
+   threads. This run does not trip it only because it submits nothing. The fix
+   is in reach: the layer already edits `VkDeviceCreateInfo`, so it can ask for
+   a second queue on that family and give the runtime its own. Filed as **#36**.
+
 # State at `stage6-sx-per-draw` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the
@@ -13826,11 +13896,11 @@ repository or from `/tmp`; nothing here depends on remembering a conversation.
 
 Closed this stretch: **#23** (per-draw `sx` everywhere), **#24** (a chosen field
 of view), **#31** (the three extents), **#32** (the right eye judged from present
-dumps), and **#34** (an `XrSession` on a device the runtime created, proven in a
-headset, tag `stage7-xr-session-proven`). Open: **#25**, **#33**, and **#35**
-— the per-eye off-axis map that WiVRn's 14°-canted views made mandatory.
-Take 111 puts #34's bring-up inside X4, submitting nothing; its section above
-says why that is a step of its own.
+dumps), and **#34** — an `XrSession` on X4's own instance, device and queue,
+running at 90 Hz inside the game while it plays flat (`stage8-xr-session-in-x4`,
+take 113). Open: **#25**, **#33**, **#35** (the per-eye off-axis map that
+WiVRn's 14°-canted views made mandatory) and **#36** (the runtime needs its own
+`VkQueue`; X4 leaves no spare). #35 and #36 both block submission.
 
 **#25 is deferred by decision, not blocked.** IPD and the sense of depth and
 scale get judged when true SBS (done), head tracking (#33) and a VR projection
