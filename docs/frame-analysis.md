@@ -14422,6 +14422,58 @@ risk on record rather than a known defect.
 
     X4VR_TAKE=114d-FIRST-LIGHT X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take114d.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 ./launch/x4vr-launch.sh
 
+## Take 114d — FIRST LIGHT. X4 renders into the headset
+
+`score_run.py` exit 0. Tagged **`stage9-first-light`**; the run is in
+`docs/known-good-runs.md`.
+
+    vr  session=1 focused=1 frames=117327 located=117327 submitted=117255
+        copy swapchain=1 blits=146787 released=146787 acquire_failed=0 refused=0
+
+Patola: *"I am mesmerized. Even the main menu had depth, I wasn't expecting
+that. ... Performance was great too."*
+
+**P116.1 confirmed.** X4 played normally throughout.
+
+**P116.2 confirmed.** 146787 eye frames copied, 117255 layers submitted, zero
+refusals and zero acquire timeouts. The scene is in the headset in stereo.
+
+**P116.3 REFUTED, and the direction matters.** I predicted `submitted` would
+greatly exceed `blits` because the headset runs at 90 Hz and X4 would be
+slower. Over 1286 s X4 presented at **114.1 fps** against the headset's
+**91.2 Hz** — `blits/submitted = 1.25`, so roughly one X4 frame in five is
+never shown. The prediction had the bottleneck backwards. Nothing is broken by
+it, but any future frame-pacing work starts from *the headset is the limit, not
+X4*, which is the opposite of what was assumed.
+
+**P116.4 confirmed, exactly as described.** *"It is a quad put at my front, so I
+can't look behind. Inside the cockpit, walking inside the ship, and walking
+inside the stations is the same."* That is the identity orientation and the
+110° field running out to `clamp_to_border_black`, which is what the layer
+honestly declares it drew. It is #33's to fix, and it is now the single largest
+gap between this and a VR mod.
+
+**P116.5 confirmed, at the comparable phase.** 2.56 ms median over the 5–93 s
+phase — identical to take 113's session-wide 2.56 ms on the same early phase.
+So #36's mutex, contended for the first time in this take, costs nothing
+measurable. The session-wide 9.89 ms is a 21-minute run over far heavier scenes
+than 113's; **compare phases, never session medians**, which is what the phase
+breakdown exists for.
+
+**An unexpected result worth recording:** the main menu has depth. Nobody
+designed that — it falls out of the UI being drawn into the same eye image the
+per-draw shear applies to, so #30's canvas work is getting a free preview. It
+also means the menu's depth is currently whatever the shear happens to give it,
+not a chosen distance.
+
+### What stage9 does not do
+
+The image is world-locked to a fixed forward axis, because X4 does not know
+where the head is. **#33 is now the whole game**: head tracking, and a canvas
+that stays put when the head moves. #35's affine stays an optimisation — it
+removes the 1.54x fill, and probe run 3 plus this take show it is not needed for
+correctness.
+
 # State at `stage8-xr-session-in-x4` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the
