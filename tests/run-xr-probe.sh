@@ -14,10 +14,14 @@
 #             "not installed".
 #
 # Usage:  tests/run-xr-probe.sh [seconds]     (default 20)
+#        the live half runs the v1 path, which is the one the LAYER uses;
+#        pass "enable2" as the first argument to run stage7's path instead
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="${BUILD:-$ROOT/build}"
 PROBE="$BUILD/tests/x4vr_test_xr_probe"
+PATHARG=""
+if [[ "${1:-}" == "enable2" || "${1:-}" == "v1" ]]; then PATHARG="$1"; shift; fi
 SECONDS_ARG="${1:-20}"
 OUT="${X4VR_XR_OUT:-/tmp/x4vr-xrprobe.txt}"
 
@@ -54,7 +58,7 @@ if [[ -n "${XR_RUNTIME_JSON:-}" ]]; then
     echo "XR_RUNTIME_JSON overrides the above: $XR_RUNTIME_JSON"
 fi
 
-"$PROBE" "$SECONDS_ARG" 2>&1 | tee "$OUT"
+"$PROBE" $PATHARG "$SECONDS_ARG" 2>&1 | tee "$OUT"
 live_rc=${PIPESTATUS[0]}
 
 echo

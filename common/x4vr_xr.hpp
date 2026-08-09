@@ -134,6 +134,15 @@ struct Api {
     PFN_xrCreateVulkanInstanceKHR CreateVulkanInstanceKHR = nullptr;
     PFN_xrCreateVulkanDeviceKHR CreateVulkanDeviceKHR = nullptr;
     PFN_xrGetVulkanGraphicsDevice2KHR GetVulkanGraphicsDevice2KHR = nullptr;
+
+    // XR_KHR_vulkan_enable — the v1 extension, and the one a Vulkan LAYER has
+    // to use. See the note above create_vk_instance.
+    PFN_xrGetVulkanGraphicsRequirementsKHR GetVulkanGraphicsRequirementsKHR =
+        nullptr;
+    PFN_xrGetVulkanInstanceExtensionsKHR GetVulkanInstanceExtensionsKHR =
+        nullptr;
+    PFN_xrGetVulkanDeviceExtensionsKHR GetVulkanDeviceExtensionsKHR = nullptr;
+    PFN_xrGetVulkanGraphicsDeviceKHR GetVulkanGraphicsDeviceKHR = nullptr;
 };
 
 // The soname, not the linker name: a machine that has the runtime but not the
@@ -210,6 +219,10 @@ inline void api_resolve_instance(Api &api, XrInstance inst) {
     X4VR_XR_RESOLVE(CreateVulkanInstanceKHR);
     X4VR_XR_RESOLVE(CreateVulkanDeviceKHR);
     X4VR_XR_RESOLVE(GetVulkanGraphicsDevice2KHR);
+    X4VR_XR_RESOLVE(GetVulkanGraphicsRequirementsKHR);
+    X4VR_XR_RESOLVE(GetVulkanInstanceExtensionsKHR);
+    X4VR_XR_RESOLVE(GetVulkanDeviceExtensionsKHR);
+    X4VR_XR_RESOLVE(GetVulkanGraphicsDeviceKHR);
 #undef X4VR_XR_RESOLVE
 }
 
@@ -322,30 +335,22 @@ inline bool runtime_open(Runtime &rt, Sink sink, void *user) {
     say("xr: runtime offers %u instance extension(s):%s", (unsigned)exts.size(),
         names.empty() ? " (none)" : names.c_str());
 
-    if (!have_extension(exts, XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME)) {
-        rt.last_error = "runtime lacks " XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME;
-        // Worth naming the alternative explicitly: XR_KHR_vulkan_enable (the
-        // v1 extension) cannot serve this design. It hands back a list of
-        // extension *names* to add, which is fine, but its device creation is
-        // the application's own — and we would then have to reproduce the
-        // runtime's device setup by hand instead of letting it call through
-        // our chain. enable2 exists because that was a bad contract.
-        say("xr: %s — enable2 is required; the v1 extension cannot create the "
-            "device through a layer chain",
+    // v1 is the one a layer needs (see the note above vk_instance_extensions);
+    // enable2 is asked for as well when offered, because the standalone probe
+    // uses it and because it makes the merged lists observable. v1 is the hard
+    // requirement now, not enable2.
+    if (!have_extension(exts, XR_KHR_VULKAN_ENABLE_EXTENSION_NAME)) {
+        rt.last_error = "runtime lacks " XR_KHR_VULKAN_ENABLE_EXTENSION_NAME;
+        say("xr: %s — the v1 extension is what a Vulkan layer can use; enable2 "
+            "hands the runtime a down-chain vkGetInstanceProcAddr and puts its "
+            "handles in the wrong space (take 111)",
             rt.last_error.c_str());
         return false;
     }
-
-    // enable2 does the work; the v1 extension is asked for only when the
-    // runtime offers it, and only so that xrGetVulkanInstance/DeviceExtensionsKHR
-    // resolve. enable2 merges its extensions silently -- which is the right
-    // contract and a bad log. With v1 enabled alongside, the merge becomes
-    // observable, and "the runtime added external_memory_fd" stops being
-    // something to infer from a crash.
-    const char *want[2] = {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME, nullptr};
+    const char *want[2] = {XR_KHR_VULKAN_ENABLE_EXTENSION_NAME, nullptr};
     uint32_t want_n = 1;
-    if (have_extension(exts, XR_KHR_VULKAN_ENABLE_EXTENSION_NAME))
-        want[want_n++] = XR_KHR_VULKAN_ENABLE_EXTENSION_NAME;
+    if (have_extension(exts, XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME))
+        want[want_n++] = XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME;
     XrInstanceCreateInfo ici{};
     ici.type = XR_TYPE_INSTANCE_CREATE_INFO;
     snprintf(ici.applicationInfo.applicationName,
@@ -460,14 +465,31 @@ inline bool runtime_open(Runtime &rt, Sink sink, void *user) {
         bn)
         rt.blend = modes[0];
 
+    // Both spellings, when both are enabled. The runtime records "has the
+    // application asked?" per extension and refuses xrCreateSession with
+    // XR_ERROR_GRAPHICS_REQUIREMENTS_CALL_MISSING against whichever it decides
+    // to check -- so calling only one is a coin flip settled inside the
+    // runtime.
     rt.vk_req.type = XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN2_KHR;
-    r = rt.api.GetVulkanGraphicsRequirements2KHR(rt.instance, rt.system,
-                                                 &rt.vk_req);
-    if (r != XR_SUCCESS) {
-        rt.last_error =
-            std::string("xrGetVulkanGraphicsRequirements2KHR: ") + result_name(r);
+    XrGraphicsRequirementsVulkanKHR req1{};
+    req1.type = XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN_KHR;
+    const XrResult r1 = rt.api.GetVulkanGraphicsRequirementsKHR
+                            ? rt.api.GetVulkanGraphicsRequirementsKHR(
+                                  rt.instance, rt.system, &req1)
+                            : XR_ERROR_FUNCTION_UNSUPPORTED;
+    const XrResult r2 = rt.api.GetVulkanGraphicsRequirements2KHR
+                            ? rt.api.GetVulkanGraphicsRequirements2KHR(
+                                  rt.instance, rt.system, &rt.vk_req)
+                            : XR_ERROR_FUNCTION_UNSUPPORTED;
+    if (r1 != XR_SUCCESS && r2 != XR_SUCCESS) {
+        rt.last_error = std::string("xrGetVulkanGraphicsRequirements: v1 ") +
+                        result_name(r1) + ", v2 " + result_name(r2);
         say("xr: %s", rt.last_error.c_str());
         return false;
+    }
+    if (r2 != XR_SUCCESS) { // carry v1's answer into the field we report
+        rt.vk_req.minApiVersionSupported = req1.minApiVersionSupported;
+        rt.vk_req.maxApiVersionSupported = req1.maxApiVersionSupported;
     }
     say("xr: wants Vulkan %d.%d.%d .. %d.%d.%d",
         (int)XR_VERSION_MAJOR(rt.vk_req.minApiVersionSupported),
@@ -519,6 +541,100 @@ inline XrResult graphics_device(Runtime &rt, VkInstance vk,
     info.systemId = rt.system;
     info.vulkanInstance = vk;
     return rt.api.GetVulkanGraphicsDevice2KHR(rt.instance, &info, out);
+}
+
+// ---------------------------------------------- Vulkan, the v1 way (a layer)
+//
+// enable2 is the better contract for an APPLICATION and the wrong one for a
+// LAYER, and take 111 is the proof.
+//
+// xrCreateVulkanInstanceKHR takes a pfnGetInstanceProcAddr. From inside a layer
+// the only one available is the down-chain one, and handing that to the runtime
+// puts the runtime's Vulkan calls in a different space from the loader's public
+// entry points -- which is what the graphics binding, and Monado's own client
+// compositor, are obliged to use. X4 aborted in vkGetPhysicalDeviceMemoryProperties
+// with "Invalid physicalDevice", and the follow-up attempt hit
+// XR_ERROR_VALIDATION_FAILURE from oxr_session.c:1151, which requires the
+// binding's device to be exactly the one xrGetVulkanGraphicsDeviceKHR returned.
+//
+// The v1 extension has no such channel. It returns *lists of extension names*
+// and lets the application add them to its own create-infos -- which is an edit
+// this layer already knows how to make, for multiview -- and its
+// xrGetVulkanGraphicsDeviceKHR uses the runtime's own linked
+// vkGetInstanceProcAddr, i.e. the loader's public one. Everything stays in the
+// space the runtime will actually use.
+//
+// The extension names come back space-separated in a single buffer.
+inline bool split_names(const char *s, std::vector<std::string> &out) {
+    out.clear();
+    if (!s)
+        return false;
+    std::string cur;
+    for (; *s; s++) {
+        if (*s == ' ') {
+            if (!cur.empty())
+                out.push_back(cur);
+            cur.clear();
+        } else {
+            cur += *s;
+        }
+    }
+    if (!cur.empty())
+        out.push_back(cur);
+    return true;
+}
+
+inline bool vk_instance_extensions(Runtime &rt, std::vector<std::string> &out) {
+    out.clear();
+    if (!rt.api.GetVulkanInstanceExtensionsKHR)
+        return false;
+    uint32_t n = 0;
+    if (rt.api.GetVulkanInstanceExtensionsKHR(rt.instance, rt.system, 0, &n,
+                                              nullptr) != XR_SUCCESS)
+        return false;
+    if (!n)
+        return true; // legitimately none
+    std::vector<char> buf(n);
+    if (rt.api.GetVulkanInstanceExtensionsKHR(rt.instance, rt.system, n, &n,
+                                              buf.data()) != XR_SUCCESS)
+        return false;
+    return split_names(buf.data(), out);
+}
+
+inline bool vk_device_extensions(Runtime &rt, std::vector<std::string> &out) {
+    out.clear();
+    if (!rt.api.GetVulkanDeviceExtensionsKHR)
+        return false;
+    uint32_t n = 0;
+    if (rt.api.GetVulkanDeviceExtensionsKHR(rt.instance, rt.system, 0, &n,
+                                            nullptr) != XR_SUCCESS)
+        return false;
+    if (!n)
+        return true;
+    std::vector<char> buf(n);
+    if (rt.api.GetVulkanDeviceExtensionsKHR(rt.instance, rt.system, n, &n,
+                                            buf.data()) != XR_SUCCESS)
+        return false;
+    return split_names(buf.data(), out);
+}
+
+// The handle the graphics binding MUST carry: Monado compares the binding's
+// physicalDevice against this one and fails the session if they differ.
+inline XrResult graphics_device_v1(Runtime &rt, VkInstance vk,
+                                   VkPhysicalDevice *out) {
+    if (!rt.api.GetVulkanGraphicsDeviceKHR)
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    return rt.api.GetVulkanGraphicsDeviceKHR(rt.instance, rt.system, vk, out);
+}
+
+// Must be called before xrCreateSession or the runtime refuses with
+// XR_ERROR_GRAPHICS_REQUIREMENTS_CALL_MISSING. The v1 spelling, to match.
+inline XrResult graphics_requirements_v1(Runtime &rt) {
+    if (!rt.api.GetVulkanGraphicsRequirementsKHR)
+        return XR_ERROR_FUNCTION_UNSUPPORTED;
+    XrGraphicsRequirementsVulkanKHR req{};
+    req.type = XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN_KHR;
+    return rt.api.GetVulkanGraphicsRequirementsKHR(rt.instance, rt.system, &req);
 }
 
 inline XrResult create_vk_device(Runtime &rt, PFN_vkGetInstanceProcAddr gipa,

@@ -13710,6 +13710,113 @@ rate rather than X4's.** Carried over from P112.3, still unanswered.
 **P113.4: X4's frame time is unchanged against take 110.** Carried over from
 P112.4, still unanswered.
 
+## Take 112 — X4 survives, the session does not, and my take-111 explanation was wrong
+
+**P113.1 confirmed.** X4 started, loaded, flew, opened and closed the map,
+landed on a station, all in SBS on the flatscreen. The runtime's ten extra
+extensions in X4's instance and device cost it nothing visible. `perf` reads
+7.75 ms median with a 7.75–9.52 ms flight phase, in the same country as take
+110 — **P113.4 is not yet properly answered**, because the two runs did not
+park on the same scene, but nothing here looks like a regression.
+
+**P113.2 confirmed**, and under gamescope with three other layers in the stack:
+
+    vr: physical device "AMD Radeon RX 7900 XTX (RADV NAVI31)" — this layer was
+        handed 0x464352e0, the loader's public handle is 0x461e2810
+
+**P113.3 unanswered.** No session:
+
+    vr: NO SESSION THIS RUN — xrCreateSession: XR_ERROR_VALIDATION_FAILURE
+
+### Reading the runtime instead of guessing again
+
+Monado's source is on disk under `~/.local/share/envision/wivrn/build/_deps/`,
+and `oxr_session.c:1151` is exact:
+
+```c
+if (sys->suggested_vulkan_physical_device != vulkan->physicalDevice) {
+    return oxr_error(log, XR_ERROR_VALIDATION_FAILURE,
+        "XrGraphicsBindingVulkanKHR::physicalDevice %p must match device %p "
+        "specified by %s", ...);
+}
+```
+
+So the binding must carry **exactly** the handle
+`xrGetVulkanGraphicsDevice(2)KHR` returned. Take 111 passed the chain-level
+handle and aborted in the compositor; take 112 passed the loader's public one
+and was rejected here.
+
+**And the explanation I wrote for take 111 was wrong.** I claimed Monado had
+cached the `pfnGetInstanceProcAddr` we passed to `xrCreateVulkanInstanceKHR`
+and used it for `vkEnumeratePhysicalDevices`. It does not:
+`oxr_api_system.c:314` and `:333` both pass the runtime's own linked
+`vkGetInstanceProcAddr` — the loader's public one — into
+`oxr_vk_get_physical_device`. That leaves take 111's `want == phys` comparison
+unexplained by anything I have read, and it is left unexplained here rather
+than given a second story. The new log prints all three handles in one line, so
+take 113 settles it as data.
+
+What *is* established, and is enough to act on: **`XR_KHR_vulkan_enable2` is the
+wrong extension for a Vulkan layer.** It takes a `pfnGetInstanceProcAddr`, a
+layer only has a down-chain one, and handing that over is the only way our
+internal handle space ever reaches the runtime. Two takes died on it.
+
+### The fix — the v1 extension, which has no such channel
+
+`XR_KHR_vulkan_enable` returns **lists of extension names** and lets the
+application put them in its own create-infos. That is an edit this layer
+already makes, for multiview. Nothing of ours crosses into the runtime.
+
+* `vkCreateInstance` / `vkCreateDevice` — merge
+  `xrGetVulkanInstanceExtensionsKHR` / `xrGetVulkanDeviceExtensionsKHR` into
+  X4's lists, dedup, and for the device **filter against what the driver
+  advertises**: an unsupported name fails `vkCreateDevice` outright, which
+  would take X4 down over a VR knob. Anything dropped is logged.
+* the session binds the handle `xrGetVulkanGraphicsDeviceKHR` returns,
+  **verbatim**, because that is what the runtime compares against.
+* and that handle is checked against the loader's own public enumeration,
+  matched by `VkPhysicalDeviceIDProperties::deviceUUID` to the GPU X4 chose.
+  **This is a guard with two independent sources**, which the one it replaces
+  was not — the old one compared two values that could both come from the same
+  enumeration, so "equal" was a property of the plumbing. If they disagree now,
+  the session is refused and logged; X4 keeps running.
+
+`tests/xr_probe.cpp` now runs the **v1 path by default**, so the standalone
+program exercises the layer's code rather than a parallel one.
+`run-xr-probe.sh enable2` still runs the path `stage7-xr-session-proven` was
+taken with, which is what makes the two comparable.
+
+### Before take 113 — one minute, no X4
+
+    ./tests/run-xr-probe.sh 20
+
+with WiVRn up. This is the same v1 bring-up the layer now does, minus the layer
+chain, and it costs a load screen less than a take. `KEY_PATH=v1` confirms which
+path ran.
+
+### Take 113
+
+    X4VR_TAKE=113-VR-BRINGUP X4VR_VR=1 X4VR_FOV=1.437 X4VR_DUMP_MATRICES=1
+    X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_GAMESCOPE=1
+    X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1
+    X4VR_SBS=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1
+    X4VR_MV_INVENTORY=1 X4VR_LOG=/tmp/x4vr-take113.log
+    ./launch/x4vr-launch.sh
+
+**P114.1: X4 still starts and plays**, now with the extensions merged by us
+rather than by the runtime. The filter against the driver's advertised list is
+the new thing that could break it.
+
+**P114.2: the three-handle line shows the runtime's handle equal to the
+loader's public one**, and both different from the layer's. That is the shape
+the v1 path predicts, and it is what would explain both earlier takes.
+
+**P114.3: the session reaches `FOCUSED`** — P112.3 and P113.3 again, twice
+unanswered.
+
+**P114.4: X4's frame time is unchanged against take 110** on a comparable
+parked phase.
+
 # State at `stage6-sx-per-draw` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the

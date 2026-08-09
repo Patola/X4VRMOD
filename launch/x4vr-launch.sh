@@ -119,16 +119,24 @@
 #                         ever view 0, and the result is the left eye twice.
 #   X4VR_VR=1             task #34: bring an OpenXR session up on X4's own
 #                         instance, device and queue. OFF by default.
-#                         The runtime creates both -- xrCreateVulkanInstanceKHR
-#                         and xrCreateVulkanDeviceKHR take X4's own create-info
-#                         and call back down our layer chain -- because the
-#                         extensions it needs (external_memory_fd,
-#                         timeline_semaphore, and eight more) have to be in
-#                         those structs before the objects exist. If the runtime
-#                         wants a different VkPhysicalDevice than X4 chose, X4's
-#                         choice stands and the session is refused: moving the
-#                         game to another GPU to suit a headset is not a
-#                         non-intrusive mod.
+#                         The extensions the runtime needs (external_memory_fd,
+#                         timeline_semaphore, and eight more) are merged into
+#                         X4's own VkInstanceCreateInfo and VkDeviceCreateInfo
+#                         before those objects exist -- the same edit already
+#                         made for multiview. That is the XR_KHR_vulkan_enable
+#                         (v1) contract, and it is used in preference to
+#                         enable2 for a specific reason: enable2 wants a
+#                         pfnGetInstanceProcAddr, a Vulkan layer only has a
+#                         DOWN-CHAIN one, and handing that to the runtime puts
+#                         its handles in a space the loader's public entry
+#                         points reject. Take 111 aborted X4 that way; take 112
+#                         then hit XR_ERROR_VALIDATION_FAILURE.
+#                         The session binds the VkPhysicalDevice that
+#                         xrGetVulkanGraphicsDeviceKHR returns, checked against
+#                         the loader's own enumeration for the GPU X4 chose. If
+#                         those disagree the session is refused and logged, not
+#                         forced: X4 is running, and a VR knob must not take it
+#                         down.
 #                         THIS STEP SUBMITS NOTHING. The headset shows the
 #                         runtime's own idle scene; X4 renders to the monitor
 #                         exactly as before. It exists to separate "the game

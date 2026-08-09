@@ -578,10 +578,21 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "selftest") == 0)
         return selftest();
 
+    // "enable2" selects the path tag stage7-xr-session-proven used; the
+    // default is v1, which is what the layer uses.
+    bool use_v1 = true;
+    int arg = 1;
+    if (argc > arg && strcmp(argv[arg], "enable2") == 0) {
+        use_v1 = false;
+        arg++;
+    } else if (argc > arg && strcmp(argv[arg], "v1") == 0) {
+        arg++;
+    }
     const double seconds =
-        argc > 1 ? atof(argv[1])
-                 : (getenv("X4VR_XR_SECONDS") ? atof(getenv("X4VR_XR_SECONDS"))
-                                              : 20.0);
+        argc > arg ? atof(argv[arg])
+                   : (getenv("X4VR_XR_SECONDS")
+                          ? atof(getenv("X4VR_XR_SECONDS"))
+                          : 20.0);
 
     // ------------------------------------------------------------ runtime
     xr::Runtime rt;
@@ -615,20 +626,55 @@ int main(int argc, char **argv) {
     ici.enabledExtensionCount = 1;
     ici.ppEnabledExtensionNames = inst_ext;
 
+    // v1 by default, because that is what the LAYER uses and this program's
+    // job is to exercise the layer's code rather than a parallel one. enable2
+    // stays reachable for comparison: it is what tag stage7-xr-session-proven
+    // was taken with, and the difference between the two is the whole of
+    // takes 111 and 112.
+    std::vector<std::string> need_inst, need_dev;
+    if (use_v1) {
+        if (!xr::vk_instance_extensions(rt, need_inst) ||
+            !xr::vk_device_extensions(rt, need_dev))
+            FAIL("the runtime would not list its required Vulkan extensions");
+        std::string s;
+        for (const auto &e : need_inst) { s += ' '; s += e; }
+        printf("xr: runtime needs instance extensions:%s\n",
+               s.empty() ? " (none)" : s.c_str());
+        s.clear();
+        for (const auto &e : need_dev) { s += ' '; s += e; }
+        printf("xr: runtime needs device extensions:%s\n",
+               s.empty() ? " (none)" : s.c_str());
+    }
+
     VkInstance vk = VK_NULL_HANDLE;
     VkResult vkr = VK_ERROR_INITIALIZATION_FAILED;
-    XrResult xrr = xr::create_vk_instance(rt, vkGetInstanceProcAddr, &ici,
-                                          nullptr, &vk, &vkr);
-    if (xrr != XR_SUCCESS)
-        FAIL("xrCreateVulkanInstanceKHR -> %s", xr::result_name(xrr));
-    if (vkr != VK_SUCCESS)
-        FAIL("the runtime's vkCreateInstance -> VkResult %d", (int)vkr);
-    printf("xr: VkInstance created through the runtime\n");
+    XrResult xrr = XR_SUCCESS;
+    if (use_v1) {
+        std::vector<const char *> names;
+        names.push_back(inst_ext[0]);
+        for (const auto &e : need_inst)
+            names.push_back(e.c_str());
+        ici.enabledExtensionCount = (uint32_t)names.size();
+        ici.ppEnabledExtensionNames = names.data();
+        VK_OK(vkCreateInstance(&ici, nullptr, &vk));
+        printf("xr: VkInstance created by us, with the runtime's %u extension(s)"
+               " merged in\n", (unsigned)need_inst.size());
+    } else {
+        xrr = xr::create_vk_instance(rt, vkGetInstanceProcAddr, &ici, nullptr,
+                                     &vk, &vkr);
+        if (xrr != XR_SUCCESS)
+            FAIL("xrCreateVulkanInstanceKHR -> %s", xr::result_name(xrr));
+        if (vkr != VK_SUCCESS)
+            FAIL("the runtime's vkCreateInstance -> VkResult %d", (int)vkr);
+        printf("xr: VkInstance created through the runtime\n");
+    }
 
     VkPhysicalDevice phys = VK_NULL_HANDLE;
-    xrr = xr::graphics_device(rt, vk, &phys);
+    xrr = use_v1 ? xr::graphics_device_v1(rt, vk, &phys)
+                 : xr::graphics_device(rt, vk, &phys);
     if (xrr != XR_SUCCESS)
-        FAIL("xrGetVulkanGraphicsDevice2KHR -> %s", xr::result_name(xrr));
+        FAIL("xrGetVulkanGraphicsDevice%s -> %s", use_v1 ? "KHR" : "2KHR",
+             xr::result_name(xrr));
 
     // Which one is it, of the ones on offer? The known risk for the layer is
     // that X4 has already chosen a different device by the time we are asked,
@@ -684,13 +730,27 @@ int main(int argc, char **argv) {
     dci.pQueueCreateInfos = &qci;
 
     VkDevice dev = VK_NULL_HANDLE;
-    xrr = xr::create_vk_device(rt, vkGetInstanceProcAddr, phys, &dci, nullptr,
-                               &dev, &vkr);
-    if (xrr != XR_SUCCESS)
-        FAIL("xrCreateVulkanDeviceKHR -> %s", xr::result_name(xrr));
-    if (vkr != VK_SUCCESS)
-        FAIL("the runtime's vkCreateDevice -> VkResult %d", (int)vkr);
-    printf("xr: VkDevice created through the runtime (queue family %u)\n", gfx);
+    if (use_v1) {
+        std::vector<const char *> names;
+        for (const auto &e : need_dev)
+            names.push_back(e.c_str());
+        dci.enabledExtensionCount = (uint32_t)names.size();
+        dci.ppEnabledExtensionNames = names.data();
+        VK_OK(vkCreateDevice(phys, &dci, nullptr, &dev));
+        printf("xr: VkDevice created by us with the runtime's %u extension(s) "
+               "merged in (queue family %u)\n",
+               (unsigned)need_dev.size(), gfx);
+    } else {
+        xrr = xr::create_vk_device(rt, vkGetInstanceProcAddr, phys, &dci,
+                                   nullptr, &dev, &vkr);
+        if (xrr != XR_SUCCESS)
+            FAIL("xrCreateVulkanDeviceKHR -> %s", xr::result_name(xrr));
+        if (vkr != VK_SUCCESS)
+            FAIL("the runtime's vkCreateDevice -> VkResult %d", (int)vkr);
+        printf("xr: VkDevice created through the runtime (queue family %u)\n",
+               gfx);
+    }
+    printf("KEY_PATH=%s\n", use_v1 ? "v1" : "enable2");
 
     VkQueue queue = VK_NULL_HANDLE;
     vkGetDeviceQueue(dev, gfx, 0, &queue);

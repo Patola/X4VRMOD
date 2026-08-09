@@ -6997,6 +6997,48 @@ void vr_thread() {
     }
 }
 
+// Add the runtime's required extensions to a create-info X4 owns.
+//
+// This is the v1 contract, and the reason the layer uses it rather than
+// enable2 is in the note above x4vr::xr::vk_instance_extensions: enable2 wants
+// a pfnGetInstanceProcAddr, a layer only has a down-chain one, and handing
+// that over puts the runtime's handles in a space the loader's public entry
+// points reject. Merging name lists is the same edit already made for
+// multiview, and it keeps every Vulkan object in exactly one space.
+//
+// `storage` and `names` must outlive the create call: the driver reads them.
+const char **vr_merge_extensions(const char *const *have, uint32_t have_n,
+                                 const std::vector<std::string> &add,
+                                 std::vector<std::string> &storage,
+                                 std::vector<const char *> &names,
+                                 const char *what) {
+    storage.clear();
+    names.clear();
+    for (uint32_t i = 0; i < have_n; i++)
+        storage.push_back(have[i]);
+    uint32_t added = 0;
+    std::string added_names;
+    for (const auto &e : add) {
+        bool dup = false;
+        for (const auto &s : storage)
+            if (s == e)
+                dup = true;
+        if (dup)
+            continue;
+        storage.push_back(e);
+        added_names += ' ';
+        added_names += e;
+        added++;
+    }
+    for (const auto &s : storage)
+        names.push_back(s.c_str());
+    X4VR_LOG("vr: %s extensions — X4 asked for %u, the runtime needs %u, "
+             "added %u:%s",
+             what, have_n, (unsigned)add.size(), added,
+             added ? added_names.c_str() : " (none)");
+    return names.data();
+}
+
 // The handle a layer sees is not the handle a runtime can use.
 //
 // Take 111 aborted inside xrCreateSession, in Monado's vk_init_from_given ->
@@ -7143,13 +7185,35 @@ void vr_session_thread() {
         g_vrs.vk, g_vrs.chain_phys, g_vrs.inst);
     if (!g_vrs.rt.ok())
         return; // the comparison above was the point; there is no runtime
-    if (app_phys == VK_NULL_HANDLE) {
-        X4VR_LOG("vr: NO SESSION THIS RUN — could not resolve the "
-                 "application-level VkPhysicalDevice");
+
+    // The handle the binding MUST carry. Monado compares it against exactly
+    // this and fails the session with XR_ERROR_VALIDATION_FAILURE otherwise
+    // (oxr_session.c:1151) -- which is how take 112 ended.
+    VkPhysicalDevice want = VK_NULL_HANDLE;
+    const XrResult gr = x4vr::xr::graphics_device_v1(g_vrs.rt, g_vrs.vk, &want);
+    if (gr != XR_SUCCESS) {
+        X4VR_LOG("vr: NO SESSION THIS RUN — xrGetVulkanGraphicsDeviceKHR -> %s",
+                 x4vr::xr::result_name(gr));
+        return;
+    }
+
+    // A guard with two independent sources, which the one it replaces was not:
+    // `want` comes from the runtime, `app_phys` from the loader's own public
+    // enumeration matched by device UUID. If they disagree, the runtime is
+    // working in a handle space we cannot reach, and the session is refused --
+    // logged, not aborted, because X4 is running and a VR knob must not take
+    // it down.
+    X4VR_LOG("vr: physical device handles — layer %p, loader public %p, "
+             "runtime asks for %p",
+             (void *)g_vrs.chain_phys, (void *)app_phys, (void *)want);
+    if (app_phys != VK_NULL_HANDLE && want != app_phys) {
+        X4VR_LOG("vr: NO SESSION THIS RUN — the runtime's device is not the "
+                 "one the loader publishes for the GPU X4 chose. Binding it "
+                 "would abort inside the runtime, as it did in take 111.");
         return;
     }
     const XrResult r =
-        x4vr::xr::session_create(g_vrs.session, g_vrs.rt, g_vrs.vk, app_phys,
+        x4vr::xr::session_create(g_vrs.session, g_vrs.rt, g_vrs.vk, want,
                                  g_vrs.dev, g_vrs.queue_family, 0);
     if (r != XR_SUCCESS) {
         X4VR_LOG("vr: NO SESSION THIS RUN — %s",
@@ -7259,30 +7323,31 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateInstance(
     // extensions are merged into the create-info X4 wrote. It calls back
     // through `gipa`, which is the next layer down -- so X4 still gets an
     // instance built from its own struct, and never learns anything happened.
-    VkResult r;
+    const VkInstanceCreateInfo *use = ci;
     bool via_runtime = false;
-    if (target && vr_open_runtime()) {
 #ifdef X4VR_HAVE_OPENXR
-        VkResult vkr = VK_ERROR_INITIALIZATION_FAILED;
-        const XrResult xrr =
-            x4vr::xr::create_vk_instance(g_vrs.rt, gipa, ci, ac, out, &vkr);
-        if (xrr == XR_SUCCESS && vkr == VK_SUCCESS) {
+    VkInstanceCreateInfo vr_ci{};
+    std::vector<std::string> vr_ext_store;
+    std::vector<const char *> vr_ext_names;
+    if (target && vr_open_runtime()) {
+        std::vector<std::string> need;
+        if (x4vr::xr::vk_instance_extensions(g_vrs.rt, need)) {
+            vr_ci = *ci;
+            vr_ci.ppEnabledExtensionNames =
+                vr_merge_extensions(ci->ppEnabledExtensionNames,
+                                    ci->enabledExtensionCount, need,
+                                    vr_ext_store, vr_ext_names, "instance");
+            vr_ci.enabledExtensionCount = (uint32_t)vr_ext_names.size();
+            use = &vr_ci;
             via_runtime = true;
-            r = VK_SUCCESS;
         } else {
-            X4VR_LOG("vr: NO SESSION THIS RUN — xrCreateVulkanInstanceKHR -> "
-                     "%s, inner VkResult %d. Creating X4's instance the "
-                     "ordinary way.",
-                     x4vr::xr::result_name(xrr), (int)vkr);
+            X4VR_LOG("vr: NO SESSION THIS RUN — the runtime would not list its "
+                     "required Vulkan instance extensions");
             x4vr::xr::runtime_close(g_vrs.rt);
-            r = next_create(ci, ac, out);
         }
-#else
-        r = next_create(ci, ac, out);
-#endif
-    } else {
-        r = next_create(ci, ac, out);
     }
+#endif
+    VkResult r = next_create(use, ac, out);
     if (r != VK_SUCCESS)
         return r;
 
@@ -7324,7 +7389,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateInstance(
     g_active = target;
     X4VR_LOG("instance created (app=%s)%s%s", app_name ? app_name : "?",
              g_active ? "" : " — not the game, layer inert in this process",
-             via_runtime ? " — created by the OpenXR runtime" : "");
+             via_runtime ? " — with the OpenXR runtime's extensions merged in"
+                         : "");
     // Which WSIs this process could possibly use. If a surface later reports
     // no preferred extent and only one *_surface extension is enabled, the
     // platform follows without any inference at all.
@@ -7528,9 +7594,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     // which physical device, and if it does not, X4's choice wins: a mod that
     // moves the game onto a different GPU to suit a headset has stopped being
     // non-intrusive.
-    VkResult r;
-    bool dev_via_runtime = false;
 #ifdef X4VR_HAVE_OPENXR
+    VkDeviceCreateInfo vr_ci{};
+    std::vector<std::string> vr_ext_store;
+    std::vector<const char *> vr_ext_names;
     if (g_active && g_vrs.rt.ok()) {
         InstanceData inst{};
         {
@@ -7539,49 +7606,55 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
             if (it != g_instances.end())
                 inst = it->second;
         }
-        VkPhysicalDevice want = VK_NULL_HANDLE;
-        const XrResult xrr =
-            x4vr::xr::graphics_device(g_vrs.rt, inst.instance, &want);
-        auto name_of = [&](VkPhysicalDevice p) {
-            static char buf[2][256];
-            static int slot = 0;
-            char *b = buf[slot++ & 1];
-            b[0] = 0;
-            if (p != VK_NULL_HANDLE && inst.GetPhysicalDeviceProperties) {
-                VkPhysicalDeviceProperties pr{};
-                inst.GetPhysicalDeviceProperties(p, &pr);
-                snprintf(b, 256, "%s", pr.deviceName);
-            }
-            return b;
-        };
-        if (xrr != XR_SUCCESS) {
-            X4VR_LOG("vr: NO SESSION THIS RUN — xrGetVulkanGraphicsDevice2KHR "
-                     "-> %s", x4vr::xr::result_name(xrr));
-            x4vr::xr::runtime_close(g_vrs.rt);
-        } else if (want != phys) {
-            X4VR_LOG("vr: NO SESSION THIS RUN — the runtime requires \"%s\" but "
-                     "X4 chose \"%s\". X4's choice stands; the session cannot "
-                     "be created on a device the runtime will not accept.",
-                     name_of(want), name_of(phys));
+        std::vector<std::string> need;
+        if (!x4vr::xr::vk_device_extensions(g_vrs.rt, need)) {
+            X4VR_LOG("vr: NO SESSION THIS RUN — the runtime would not list its "
+                     "required Vulkan device extensions");
             x4vr::xr::runtime_close(g_vrs.rt);
         } else {
-            VkResult vkr = VK_ERROR_INITIALIZATION_FAILED;
-            const XrResult dr = x4vr::xr::create_vk_device(
-                g_vrs.rt, gipa, phys, ci, ac, out, &vkr);
-            if (dr == XR_SUCCESS && vkr == VK_SUCCESS) {
-                dev_via_runtime = true;
-                X4VR_LOG("vr: X4's VkDevice created by the runtime on \"%s\"",
-                         name_of(phys));
+            // Only what the driver actually advertises. An unsupported name in
+            // ppEnabledExtensionNames fails vkCreateDevice outright, which
+            // would take X4 down over a VR knob -- and several of these are
+            // core in 1.2, where a driver is free to stop listing them.
+            std::vector<std::string> ok;
+            std::string dropped;
+            if (inst.EnumerateDeviceExtensionProperties) {
+                uint32_t n = 0;
+                inst.EnumerateDeviceExtensionProperties(phys, nullptr, &n,
+                                                        nullptr);
+                std::vector<VkExtensionProperties> have(n);
+                inst.EnumerateDeviceExtensionProperties(phys, nullptr, &n,
+                                                        have.data());
+                for (const auto &e : need) {
+                    bool found = false;
+                    for (uint32_t i = 0; i < n; i++)
+                        if (e == have[i].extensionName)
+                            found = true;
+                    if (found) {
+                        ok.push_back(e);
+                    } else {
+                        dropped += ' ';
+                        dropped += e;
+                    }
+                }
             } else {
-                X4VR_LOG("vr: NO SESSION THIS RUN — xrCreateVulkanDeviceKHR -> "
-                         "%s, inner VkResult %d",
-                         x4vr::xr::result_name(dr), (int)vkr);
-                x4vr::xr::runtime_close(g_vrs.rt);
+                ok = need;
             }
+            if (!dropped.empty())
+                X4VR_LOG("vr: the driver does not advertise%s — not adding "
+                         "them; the session may fail for want of them",
+                         dropped.c_str());
+            vr_ci = *ci;
+            vr_ci.ppEnabledExtensionNames =
+                vr_merge_extensions(ci->ppEnabledExtensionNames,
+                                    ci->enabledExtensionCount, ok,
+                                    vr_ext_store, vr_ext_names, "device");
+            vr_ci.enabledExtensionCount = (uint32_t)vr_ext_names.size();
+            ci = &vr_ci;
         }
     }
 #endif
-    r = dev_via_runtime ? VK_SUCCESS : next_create(phys, ci, ac, out);
+    VkResult r = next_create(phys, ci, ac, out);
     if (r != VK_SUCCESS)
         return r;
 
