@@ -12412,3 +12412,114 @@ score 22%, 21% and 15% — none of them was parked, and that is what an unparked
 minute looks like. **If either run's quietest stretch spreads more than about
 10%, the camera was not actually still and prediction 4 is untested rather than
 answered.** Read the spread before reading the milliseconds.
+
+## Takes 106 and 107 — three predictions confirmed, and the fourth was unmeasurable by construction
+
+### P106 scored
+
+**1. The mis-credit oscillation is gone. Confirmed.** Not reduced — absent. Every
+`proj CHANGED` line in both runs belongs to a monotone ramp on its own slot:
+
+    cam#27 #1: sx 0.75405  -> 29.18689     cam#37 #1: sx 34.08758 -> 34.84346
+    cam#27 #2: sx 29.18689 -> 29.17002     cam#38 #1: sx 34.48065 -> 35.16979
+    cam#33 #1: sx 29.18689 -> 29.11610     cam#37 #2: sx 34.84346 -> 35.50332
+
+Two slots interleave, but neither flips back and forth. Change counts fell from
+399 (take 105, capped) to 61 and 101.
+
+**2. The budget survived. Confirmed.** No suppression line in either log, no
+blind window in either score. 61 and 101 changes against a per-slot cap of 120
+and a global 2000.
+
+**3. The stop reads `sx = 29.18689`. Confirmed to five decimals**, which is every
+decimal the log prints — and better than the prediction asked for, because the
+two runs reach it from opposite directions. Take 106 (`fov 1.437`) *starts* at
+`29.18689` and eases down; take 107 (`fov 1.1111`) eases *up* and arrives at
+`37.75372`, the value takes 53 and 54 recorded before any of this was understood.
+One stop, two fields, four sessions, and the ratio of their angles is the ratio
+of the settings.
+
+**4. Untested — and for three independent reasons, one of which I built in.**
+
+### The frame-time metric did not discriminate
+
+The quietest-55 s selector returned ~17.3 ms for take 100, take 104, take 106
+*and* take 107 — four unrelated sessions agreeing to a tenth of a millisecond,
+across a 35% change in the setting under test. That is the tell. A metric that
+returns the same number whatever the knob does is not measuring the knob.
+
+Segmenting the same data by phase shows what it had been finding:
+
+    take 106                              take 107
+      0–4   s   1.13 ms                     0–2   s   0.93 ms
+      4–23  s   2.31 ms                     4–19  s   2.32 ms
+     23–93  s  17.31 ms   <- selected      19–91  s  17.38 ms   <- selected
+     93–121 s   7.66 ms                    91–111 s   6.92 ms
+
+The calmest long stretch of an X4 session is the **loading and menu phase**, not
+the parked camera. The selector found it every time. `score_run.py` now prints
+the phases and selects nothing; the last phase is labelled, and only when it is
+long enough to be a parked minute at all — takes 100 and 105 end on a single
+window, and calling that "the number to compare" is how a 5.65 ms sample of
+nothing becomes a result.
+
+### The other two reasons, including the one I designed in
+
+The pre-committed rule was that a spread above ~10% means the camera was not
+still. Both last phases spread ~20% — `7.86 → 6.59` and `7.34 → 6.08`, the same
+settling curve half a millisecond apart. That is probably not camera motion, but
+"probably not" is not something the log can show, so the rule stands.
+
+Worse, the protocol said *"then, in take 106 only, zoom all the way in and back
+out"*. The `proj CHANGED` timestamps say that zoom happened at **111 s** — inside
+take 106's measured phase (93–121 s). Take 107's zoom came at 115 s, **after** its
+last perf window at 111 s. So the one asymmetry deliberately introduced landed
+inside the compared window of one run and outside the other's. A perturbation
+was written into the protocol and then the phase containing it was compared.
+
+### The provisional number, labelled as provisional
+
+| | last phase | median | windows |
+|---|---|---|---|
+| take 106, `fov 1.437` | 93–121 s | 7.66 ms | 7 (6.59–7.86) |
+| take 107, `fov 1.1111` | 91–111 s | 6.92 ms | 6 (6.08–7.34) |
+
+**1.107×**, against a threshold of 1.35× committed before the runs, for a field
+1.29× wider in angle. Excluding the windows the zoom could have touched gives
+7.76 vs 7.01 — **1.107×** again, so the confound does not explain it. (After the
+zoom take 106 reads 6.59 and 6.61, *lower* than before it, so if anything the
+zoom depressed the number rather than inflating it.)
+
+This is the current best estimate and it is **not** a confirmed prediction: the
+extractor that produced it was written after the numbers were on screen, and two
+of the three objections above are unfixed. It is recorded because it is the only
+estimate there is, and because it is nowhere near the threshold that would rule
+a wider default out.
+
+To settle it properly: park, **wait 30 s for the frame time to settle, then hold
+60 s untouched**, and put any zoom *before* the parked window, in both runs
+equally.
+
+### cam#N is a slot, not a camera
+
+Take 106 logged 36 `proj CAMERA` lines, 25 of them reading `sx=1.33333`; take 107
+logged 41 with 29. X4 multi-buffers one projection across many descriptor slots,
+so:
+
+* the per-slot fix was still the right one — it is what removed the oscillation;
+* but a projection that moves logs its change **once per slot it occupies**, so
+  a change count carries a buffering factor of roughly 25;
+* the per-slot budget of 120 is therefore ~3000 for a multi-buffered projection,
+  which is why nothing came near the cap this time;
+* `cam#N` must not be read as a camera identity. The distinct-`sx` set is the
+  object to reason about. The scorer now says so on its own line: *"36 slot(s)
+  carried 6 distinct projection(s) — cam#N is a UBO slot, not a camera"*.
+
+### Where #24 stands
+
+Measured and confirmed: the law (`fov = target° / 73.7399`), the value at three
+points, `|sy/sx|` on the camera the player looks through, and the zoom stop at
+two fields. Played: a full session at 106° — station interior, elevator, NPC,
+combat — smooth and in correct SBS.
+
+Open: a default, which waits on a cost number that survives its own protocol.

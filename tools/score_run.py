@@ -447,6 +447,20 @@ def main(path):
                     rest = sum(n for _, n in order[len(shown):])
                     print(f"      ... {len(order) - len(shown)} rarer value(s), "
                           f"{rest} sample(s), not shown")
+                # Take 106: 36 CAMERA lines, 25 of them reading sx=1.33333.
+                # cam#N is a UBO slot, and X4 multi-buffers one projection
+                # across many of them -- so the slot count is a buffering
+                # factor, not a camera count, and a projection that moves logs
+                # its change once per slot it lives in. The distinct-sx set
+                # above is the object to reason about; cam#N is not.
+                slots = re.findall(
+                    r"proj CAMERA cam#\d+: sx=([\d.eE+-]+) sy=([\d.eE+-]+) "
+                    r"near=([\d.eE+-]+)", text)
+                if slots:
+                    print(f"proj  {len(slots)} slot(s) carried "
+                          f"{len({s for s in slots})} distinct projection(s) — "
+                          f"cam#N is a UBO slot, not a camera")
+
                 if asked is not None and eye is None:
                     print(f"warn  no camera in this run reads the field "
                           f"X4VR_FOV={asked:g} asks for "
@@ -533,25 +547,41 @@ def main(path):
     if perf:
         meds = sorted(p[1] for p in perf)
         print(f"perf  {meds[len(meds) // 2]:.2f} ms median over {len(perf)} "
-              f"window(s) — session-wide, so it compares scenes, not settings")
-        best = None
-        for i in range(len(perf)):
-            for j in range(i + 1, len(perf)):
-                span = perf[j][0] - perf[i][0]
-                if span < 55.0:
-                    continue
-                w = sorted(p[1] for p in perf[i:j + 1])
-                spread = (w[-1] - w[0]) / w[0] if w[0] else float("inf")
-                if best is None or spread < best[0]:
-                    best = (spread, span, w[len(w) // 2], len(w))
-                break
-        if best:
-            print(f"perf  quietest {best[1]:.0f} s stretch: {best[2]:.2f} ms "
-                  f"median, spread {best[0] * 100:.0f}% over {best[3]} window(s)"
-                  f" — this is the number to compare across a parked A/B")
-        else:
-            print("perf  no stretch of 55 s or more to compare — a parked A/B "
-                  "needs the camera left alone for a full minute")
+              f"window(s) — session-wide, so it compares scenes, not settings. "
+              f"By phase:")
+        # Phases, not a "quietest stretch". The quietest-stretch selector was
+        # written for take 106 and it picked the same window in every run --
+        # takes 100, 104, 105, 106 and 107 all reported ~17.3 ms, because the
+        # calmest minute of an X4 session is the loading and menu phase before
+        # gameplay starts, not the parked camera at the end. Five unrelated runs
+        # agreeing to 0.1 ms is not a stable measurement, it is a metric that
+        # does not discriminate. Segmenting instead makes the shape visible --
+        # X4 runs ~2 ms at the splash, ~17-20 ms loading, ~7 ms in flight -- and
+        # a parked A/B compares the LAST phase of each run, which is the one the
+        # protocol actually parks in.
+        phases, cur = [], [perf[0]]
+        for p in perf[1:]:
+            med = sorted(x[1] for x in cur)[len(cur) // 2]
+            if med and abs(p[1] - med) / med > 0.25:
+                phases.append(cur)
+                cur = [p]
+            else:
+                cur.append(p)
+        phases.append(cur)
+        t0 = perf[0][0]
+        for k, ph in enumerate(phases):
+            w = sorted(x[1] for x in ph)
+            end = (phases[k + 1][0][0] if k + 1 < len(phases) else ph[-1][0])
+            # Only worth pointing at if it could plausibly BE a parked minute:
+            # takes 100 and 105 end on a single window, and labelling that "the
+            # number to compare" is how a 5.65 ms sample of nothing becomes a
+            # result.
+            tag = ("  <- last phase, the one a parked A/B compares"
+                   if k == len(phases) - 1 and len(ph) >= 3
+                   and ph[-1][0] - ph[0][0] >= 20.0 else "")
+            print(f"      {ph[0][0] - t0:5.0f}–{end - t0:<5.0f}s "
+                  f"{w[len(w) // 2]:6.2f} ms  ({len(ph)} window(s), "
+                  f"{w[0]:.2f}–{w[-1]:.2f}){tag}")
 
     print()
     if fails:
