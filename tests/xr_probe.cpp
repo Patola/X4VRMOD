@@ -630,11 +630,22 @@ int main(int argc, char **argv) {
     // "enable2" selects the path tag stage7-xr-session-proven used; the
     // default is v1, which is what the layer uses.
     bool use_v1 = true;
+    // "copy" is the harness for task #38: instead of painting straight into the
+    // swapchain, it builds a source image shaped exactly like X4's eye image
+    // (B8G8R8A8_UNORM, 2 array layers, 1408x1408) and vkCmdCopyImage's it in,
+    // then submits with a SYMMETRIC FOV of our own rather than the runtime's.
+    // That is milestone A end to end, on a real GPU under validation, before
+    // any of it is written into the layer.
+    bool copy_mode = false;
     int arg = 1;
     if (argc > arg && strcmp(argv[arg], "enable2") == 0) {
         use_v1 = false;
         arg++;
     } else if (argc > arg && strcmp(argv[arg], "v1") == 0) {
+        arg++;
+    }
+    if (argc > arg && strcmp(argv[arg], "copy") == 0) {
+        copy_mode = true;
         arg++;
     }
     const double seconds =
@@ -814,16 +825,40 @@ int main(int argc, char **argv) {
     printf("KEY_SPACE=%s\n",
            s.space_type == XR_REFERENCE_SPACE_TYPE_STAGE ? "STAGE" : "LOCAL");
 
-    const VkFormat want[] = {VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB,
-                             VK_FORMAT_R8G8B8A8_UNORM,
-                             VK_FORMAT_B8G8R8A8_UNORM};
-    const VkFormat fmt = xr::choose_format(s, want, 4);
+    // In copy mode the channel order is load-bearing, not cosmetic. X4's eye
+    // image is B8G8R8A8_UNORM (format 44, measured in every take log), and a
+    // vkCmdCopyImage is a raw byte copy: into an R8G8B8A8 target it would swap
+    // red and blue. So BGRA leads. sRGB over UNORM because X4's bytes are
+    // already display-encoded, and telling the compositor they are sRGB is what
+    // makes it decode-composite-reencode instead of treating them as linear.
+    const VkFormat want_copy[] = {VK_FORMAT_B8G8R8A8_SRGB,
+                                  VK_FORMAT_B8G8R8A8_UNORM};
+    const VkFormat want_paint[] = {VK_FORMAT_R8G8B8A8_SRGB,
+                                   VK_FORMAT_B8G8R8A8_SRGB,
+                                   VK_FORMAT_R8G8B8A8_UNORM,
+                                   VK_FORMAT_B8G8R8A8_UNORM};
+    auto say_stdout = [](void *, const char *line) { printf("%s\n", line); };
+    const VkFormat fmt =
+        copy_mode ? xr::choose_format(s, want_copy, 2, say_stdout, nullptr)
+                  : xr::choose_format(s, want_paint, 4, say_stdout, nullptr);
+    if (fmt == VK_FORMAT_UNDEFINED && copy_mode)
+        FAIL("the runtime offers no B8G8R8A8 format — a copy from X4's "
+             "B8G8R8A8_UNORM eye image cannot be byte-preserving, so this "
+             "needs a swizzle rather than a copy");
     if (fmt == VK_FORMAT_UNDEFINED)
         FAIL("the runtime offers none of the four 8-bit RGBA/BGRA formats");
     printf("KEY_FORMAT=%d\n", (int)fmt);
 
-    const uint32_t W = rt.views[0].recommendedImageRectWidth;
-    const uint32_t H = rt.views[0].recommendedImageRectHeight;
+    // Copy mode renders at X4's eye size, not the runtime's recommendation:
+    // vkCmdCopyImage needs matching extents, and the whole point is to show the
+    // compositor upscaling our smaller image the way it will for X4.
+    const uint32_t W = copy_mode ? 1408 : rt.views[0].recommendedImageRectWidth;
+    const uint32_t H = copy_mode ? 1408 : rt.views[0].recommendedImageRectHeight;
+    if (copy_mode)
+        printf("xr: copy mode — source %ux%u B8G8R8A8_UNORM x2 layers, like "
+               "X4's eye image; runtime recommended %ux%u\n",
+               W, H, rt.views[0].recommendedImageRectWidth,
+               rt.views[0].recommendedImageRectHeight);
     xr::Swapchain sc;
     // One 2-layer swapchain, one layer per eye -- the same shape as the eye
     // image the compositor already builds, so the eventual submission is a
@@ -890,6 +925,48 @@ int main(int argc, char **argv) {
     VkCommandBuffer cb = VK_NULL_HANDLE;
     VK_OK(vkAllocateCommandBuffers(dev, &cbi, &cb));
 
+    // Copy mode's stand-in for X4's eye image: same format, same layer count,
+    // same size. Painted every frame and copied into the swapchain, so the
+    // command stream is the one the layer will record inside composite().
+    VkImage srcimg = VK_NULL_HANDLE;
+    VkDeviceMemory srcmem = VK_NULL_HANDLE;
+    if (copy_mode) {
+        VkImageCreateInfo ii{};
+        ii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ii.imageType = VK_IMAGE_TYPE_2D;
+        ii.format = VK_FORMAT_B8G8R8A8_UNORM; // X4's, measured: format 44
+        ii.extent = {W, H, 1};
+        ii.mipLevels = 1;
+        ii.arrayLayers = 2;
+        ii.samples = VK_SAMPLE_COUNT_1_BIT;
+        ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ii.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VK_OK(vkCreateImage(dev, &ii, nullptr, &srcimg));
+        VkMemoryRequirements imr{};
+        vkGetImageMemoryRequirements(dev, srcimg, &imr);
+        VkPhysicalDeviceMemoryProperties imp{};
+        vkGetPhysicalDeviceMemoryProperties(phys, &imp);
+        uint32_t itype = UINT32_MAX;
+        for (uint32_t i = 0; i < imp.memoryTypeCount; i++)
+            if ((imr.memoryTypeBits & (1u << i)) &&
+                (imp.memoryTypes[i].propertyFlags &
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+                itype = i;
+                break;
+            }
+        if (itype == UINT32_MAX)
+            FAIL("no device-local memory type for the copy-mode source image");
+        VkMemoryAllocateInfo imai{};
+        imai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        imai.allocationSize = imr.size;
+        imai.memoryTypeIndex = itype;
+        VK_OK(vkAllocateMemory(dev, &imai, nullptr, &srcmem));
+        VK_OK(vkBindImageMemory(dev, srcimg, srcmem, 0));
+    }
+
     // ------------------------------------------------------------ the loop
     uint32_t frames = 0, located = 0, submitted = 0;
     double last_report = 0.0;
@@ -937,7 +1014,16 @@ int main(int argc, char **argv) {
                 // Built from the FOV this frame reported, not from a constant:
                 // the runtime is allowed to change it, and the whole point of
                 // the card is that where a bar belongs depends on it.
-                const XrFovf frame_fov[2] = {views[0].fov, views[1].fov};
+                // In copy mode the card is built from the fov we are about to
+                // DECLARE, not the one the runtime recommended -- that is the
+                // claim under test: the compositor honours the layer's own fov.
+                // If it silently used its own instead, the ±45° markers would
+                // land visibly wrong and the bar would not fuse.
+                XrFovf frame_fov[2] = {views[0].fov, views[1].fov};
+                if (copy_mode)
+                    for (uint32_t e = 0; e < 2; e++)
+                        frame_fov[e] = {rad(-55.0f), rad(55.0f), rad(55.0f),
+                                        rad(-55.0f)};
                 const Card card = Card::of(W, H, frame_fov);
 
                 VkCommandBufferBeginInfo bi{};
@@ -945,11 +1031,59 @@ int main(int argc, char **argv) {
                 bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
                 vkResetCommandBuffer(cb, 0);
                 vkBeginCommandBuffer(cb, &bi);
-                paint_card(cb, sc.images[idx], stage, card,
-                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                           kCardGood);
+                if (!copy_mode) {
+                    paint_card(cb, sc.images[idx], stage, card,
+                               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                               VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                               VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                               kCardGood);
+                } else {
+                    // Paint the stand-in eye image, leaving it in TRANSFER_SRC
+                    // exactly as composite() leaves X4's.
+                    paint_card(cb, srcimg, stage, card,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               VK_ACCESS_TRANSFER_READ_BIT,
+                               VK_PIPELINE_STAGE_TRANSFER_BIT, kCardGood);
+                    // The swapchain image is entirely overwritten, so its old
+                    // contents do not matter and UNDEFINED is the cheap and
+                    // correct source layout.
+                    VkImageMemoryBarrier db{};
+                    db.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                    db.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    db.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    db.image = sc.images[idx];
+                    db.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    db.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    db.srcAccessMask = 0;
+                    db.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    db.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0,
+                                           2};
+                    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                                         nullptr, 0, nullptr, 1, &db);
+                    // Both layers in one region: same extent, same layer count,
+                    // so this is the raw byte copy the format choice was made
+                    // for. No blit, hence no colour conversion of any kind.
+                    VkImageCopy rg{};
+                    rg.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 2};
+                    rg.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 2};
+                    rg.extent = {W, H, 1};
+                    vkCmdCopyImage(cb, srcimg,
+                                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   sc.images[idx],
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                                   &rg);
+                    // The runtime expects to sample it; leave it in the layout
+                    // OpenXR requires the app to hand back.
+                    db.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    db.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    db.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    db.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                    vkCmdPipelineBarrier(
+                        cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
+                        nullptr, 0, nullptr, 1, &db);
+                }
                 vkEndCommandBuffer(cb);
 
                 VkSubmitInfo si{};
@@ -964,7 +1098,12 @@ int main(int argc, char **argv) {
                     pv[eye] = {};
                     pv[eye].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
                     pv[eye].pose = views[eye].pose;
-                    pv[eye].fov = views[eye].fov;
+                    // The fov the image was RENDERED with, which in copy mode
+                    // is ours and not the runtime's. Monado reads exactly this
+                    // field (do_projection_layer -> vd->fov) to build its
+                    // UV-to-tangent map, so declaring our own is the whole
+                    // milestone-A mechanism.
+                    pv[eye].fov = frame_fov[eye];
                     pv[eye].subImage.swapchain = sc.handle;
                     pv[eye].subImage.imageRect = {{0, 0},
                                                   {(int32_t)W, (int32_t)H}};
@@ -1111,6 +1250,10 @@ int main(int argc, char **argv) {
                view_cant_deg[1]);
 
     vkDeviceWaitIdle(dev);
+    if (srcimg != VK_NULL_HANDLE)
+        vkDestroyImage(dev, srcimg, nullptr);
+    if (srcmem != VK_NULL_HANDLE)
+        vkFreeMemory(dev, srcmem, nullptr);
     xr::swapchain_destroy(sc);
     xr::session_destroy(s);
     vkDestroyCommandPool(dev, pool, nullptr);

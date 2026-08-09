@@ -13,15 +13,27 @@
 #             removed when it stops, so its absence here is "not started", not
 #             "not installed".
 #
-# Usage:  tests/run-xr-probe.sh [seconds]     (default 20)
+# Usage:  tests/run-xr-probe.sh [v1|enable2] [copy] [seconds]   (default 20)
 #        the live half runs the v1 path, which is the one the LAYER uses;
-#        pass "enable2" as the first argument to run stage7's path instead
+#        pass "enable2" as the first argument to run stage7's path instead.
+#
+#        "copy" is task #38's harness. Instead of painting straight into the
+#        swapchain it builds a stand-in for X4's eye image -- B8G8R8A8_UNORM,
+#        two array layers, 1408x1408 -- paints the card into that, copies it
+#        into the swapchain with vkCmdCopyImage, and submits with a SYMMETRIC
+#        +-55 deg FOV of its own rather than the runtime's canted one. That is
+#        milestone A end to end. The card is built from the fov we DECLARE, so
+#        if the compositor ignored it the markers would land visibly wrong.
 set -u
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 BUILD="${BUILD:-$ROOT/build}"
 PROBE="$BUILD/tests/x4vr_test_xr_probe"
 PATHARG=""
 if [[ "${1:-}" == "enable2" || "${1:-}" == "v1" ]]; then PATHARG="$1"; shift; fi
+# "copy" is task #38's harness: a stand-in for X4's eye image, copied into the
+# swapchain and submitted with a symmetric FOV of our own.
+COPYARG=""
+if [[ "${1:-}" == "copy" ]]; then COPYARG="copy"; shift; fi
 SECONDS_ARG="${1:-20}"
 # Per run, for the same reason X4VR_LOG is per run: a probe that fails early
 # writes a 1 KB "no runtime" file, and against a fixed path that silently
@@ -62,7 +74,7 @@ if [[ -n "${XR_RUNTIME_JSON:-}" ]]; then
     echo "XR_RUNTIME_JSON overrides the above: $XR_RUNTIME_JSON"
 fi
 
-"$PROBE" $PATHARG "$SECONDS_ARG" 2>&1 | tee "$OUT"
+"$PROBE" $PATHARG $COPYARG "$SECONDS_ARG" 2>&1 | tee "$OUT"
 live_rc=${PIPESTATUS[0]}
 
 echo

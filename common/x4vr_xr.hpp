@@ -861,21 +861,48 @@ struct Swapchain {
 // that appears in *its* order-of-preference list rather than ours: the runtime
 // lists them best-first, and overriding that is how a mod ends up doing an
 // sRGB conversion the compositor was going to do for free.
-inline VkFormat choose_format(Session &s, const VkFormat *want, uint32_t nwant) {
+inline VkFormat choose_format(Session &s, const VkFormat *want, uint32_t nwant,
+                              Sink sink = nullptr, void *user = nullptr) {
+#define say(...) say_to(sink, user, __VA_ARGS__)
     uint32_t n = 0;
     if (s.rt->api.EnumerateSwapchainFormats(s.session, 0, &n, nullptr) !=
             XR_SUCCESS ||
-        n == 0)
+        n == 0) {
+        say("xr: the runtime offers NO swapchain formats");
         return VK_FORMAT_UNDEFINED;
+    }
     std::vector<int64_t> have(n);
     if (s.rt->api.EnumerateSwapchainFormats(s.session, n, &n, have.data()) !=
         XR_SUCCESS)
         return VK_FORMAT_UNDEFINED;
+
+    // Printed in the runtime's own order, which is its preference order. The
+    // layer's copy from X4's B8G8R8A8_UNORM eye image is only byte-preserving
+    // for a format with the same channel order, so which of these exists is a
+    // load-bearing fact and not a detail -- and a silent VK_FORMAT_UNDEFINED
+    // is how it would otherwise be discovered, one X4 take later.
+    {
+        char buf[512];
+        int at = snprintf(buf, sizeof(buf), "xr: runtime offers %u swapchain "
+                                            "format(s), best first:", n);
+        for (uint32_t i = 0; i < n && at > 0 && at < (int)sizeof(buf); i++)
+            at += snprintf(buf + at, sizeof(buf) - at, " %d", (int)have[i]);
+        say("%s", buf);
+    }
+
     for (int64_t f : have)
         for (uint32_t i = 0; i < nwant; i++)
-            if ((VkFormat)f == want[i])
+            if ((VkFormat)f == want[i]) {
+                say("xr: chose format %d (candidate %u of %u)", (int)f, i + 1,
+                    nwant);
                 return (VkFormat)f;
+            }
+    say("xr: NONE of our %u candidate format(s) is offered — a copy from X4's "
+        "eye image cannot be byte-preserving, so this needs deciding rather "
+        "than defaulting",
+        nwant);
     return VK_FORMAT_UNDEFINED;
+#undef say
 }
 
 inline XrResult swapchain_create(Swapchain &sc, Session &s, VkFormat fmt,
