@@ -13479,6 +13479,32 @@ rather than asserted here. Filed as **#35**.
 Note what (b) does *not* fix: it is a static per-eye frustum correction, not
 head tracking. The yaw/pitch argument in the #34 section above is unchanged.
 
+### The second run — P5's gate, passed
+
+With the card placed by angle, in the headset: **blue on the left, green on the
+right, and the centre bar fused into a single bar floating about 2 m away.**
+
+Three separate things settle at once, and it is worth separating them because a
+single "it looked right" would have conflated them:
+
+* **Eye order.** `imageArrayIndex` N = the runtime's view N, and view 0 is the
+  left eye. This matches the pose evidence (`dx = +0.0628`, view 1 to the +x
+  side) and the FOV evidence (view 0 reaches further left, −54° against +40°),
+  so three independent signals agree. The two-layer eye image the compositor
+  already builds can be submitted layer-for-view with no reordering.
+* **Disparity sign.** Converged reads as *nearer*. The bar was painted at
+  +0.9° in the left eye and −0.9° in the right; had the sign been inverted it
+  would have fused *behind* the background, which is the defect that would
+  otherwise have been discovered much later and blamed on the shear.
+* **Scale.** ±0.9° at the measured 0.063 m IPD is `ipd/angle = 2.0 m`, and it
+  was seen at about 2 m. That is the first time anything in this project has
+  put a predicted distance in front of a person and had the distance come back.
+  It is not #25 — nothing of X4 is in that image — but it does say the
+  arithmetic #25 will be judged against is sound.
+
+Tagged `stage7-xr-session-proven`, with the run and its checks in
+`docs/known-good-runs.md`. **#34 is closed.**
+
 # State at `stage6-sx-per-draw` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the

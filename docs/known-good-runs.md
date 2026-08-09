@@ -359,6 +359,57 @@ and Patola could not tell them apart, which is what a flat side-by-side pair can
 be expected to show. Settling it needs `X4VR_MV_DUMP_PRESENT` at high zoom read
 through `tools/eye_stereo.py`, or VR.
 
+## `stage7-xr-session-proven` — 2026-08-09, in a headset
+
+**Not an X4 take.** X4 does not run in this state and there is no `env: run =`
+line, because nothing of this has reached the layer yet. It is recorded here
+anyway, under the same rule as the rest: it is a state that worked, it is code
+plus knobs, and the way back to it must not depend on remembering.
+
+What is proven: an `XrSession` on a `VkDevice` the *runtime* created from an
+X4-shaped `VkInstanceCreateInfo`, a 2-layer swapchain at the runtime's own
+recommended extent, and a projection layer with per-view pose and FOV accepted
+by the compositor and displayed correctly in a Quest 3 over WiVRn.
+
+    cd /home/patola/workspace/claude/X4VRMOD && cmake --build build -j8
+    ./tests/run-xr-probe.sh 20
+
+with WiVRn running and the headset connected. Output tees to
+`/tmp/x4vr-xrprobe.txt`; run 1 is kept as `/tmp/x4vr-xrprobe-run1.txt`.
+
+**What to check in the output** — the card half runs with no runtime at all and
+must print `KEY_SELFTEST_FAILURES=0` with all three cases going the right way
+(one correct, two caught). The live half:
+
+    KEY_VIEWS=2                 KEY_PHYSICAL_CHOSEN=0      KEY_SPACE=STAGE
+    KEY_FOV_ASYMMETRIC=1        KEY_IPD_M=0.0630
+    KEY_FOV0=-54.0000,40.0000,44.0000,-55.0000
+    KEY_FOV1=-40.0000,54.0000,44.0000,-55.0000
+    KEY_FRAMES / KEY_LOCATED / KEY_SUBMITTED   all within one of each other
+    KEY_HEAD_SPAN_M                            non-zero on every axis
+
+`KEY_LOCATED` far below `KEY_FRAMES` means the tracking dropped out;
+`KEY_SUBMITTED` far below `KEY_LOCATED` means the compositor was rejecting
+layers. A `KEY_HEAD_SPAN_M` of zeros means the pose never moved, which is the
+failure this whole task exists to avoid and which an average would hide.
+
+**And the part only a person can check** — P5's gate, confirmed 2026-08-09:
+
+* left eye: **blue** background, wide marker bar off to the **left**
+* right eye: **green** background, wide marker bar off to the **right**
+* both eyes: the thin centre bar fuses into **one** bar, floating **about 2 m
+  away** — nearer than the background, not further
+
+Patola confirmed all three. That settles eye order (`imageArrayIndex` N = view
+N = the runtime's own view N), the disparity **sign** (converged reads as
+nearer), and the scale: the bar was painted at ±0.9°, which for the measured
+0.0630 m IPD is 2.0 m, and it was seen at about 2 m.
+
+**Not proven by this state:** anything inside X4. The layer does not create a
+session, X4's frames do not reach a swapchain, and the per-eye frustum
+correction (#35) is not written — the card sidesteps it by placing itself in
+the runtime's own angular space, which X4's renderer cannot do.
+
 ## Decision, 2026-08-08 — the cursor knobs default on, and hiding gates on intent
 
 `X4VR_CURSOR` and `X4VR_HIDE_CURSOR` are **both on by default** as of this date,
