@@ -12121,3 +12121,128 @@ earlier ones, because the test is now more sensitive.
 3. Prediction 2 is the one that would falsify the linear law: it is an
    interpolation between the two measured points, not an extrapolation, so a
    miss means the law is not linear in between.
+
+## Before take 105 — the scorer reports the `sx` set, and take 104 re-read
+
+Take 104's finding survived by luck. The scorer's line for it was
+
+    proj  83 change(s), sx range 0.69231..27.96006 (40.4x) over the near=0.100 camera
+
+which is a min/max — and the finding was that three values were **bit-identical**
+across a 35% FOV change while others moved by exactly the knob's ratio. A range
+reads that as "the range shifted" and loses it entirely. I nearly stopped there.
+
+So, before the run rather than after it, `score_run.py` now prints the distinct
+`sx` values as a set, each with the field angle it implies and the `<fov>` tag
+that angle corresponds to under the law above. On take 104's log, unchanged:
+
+    proj  30 distinct sx (compare this SET against the previous take's, not the range):
+          sx=1.33333    73.740° = fov 1.000   x27
+          sx=0.69231   110.610° = fov 1.500   x15  <- honours X4VR_FOV
+          sx=3.78085    29.630° = fov 0.402   x2
+          sx=1.00000    90.000° = fov 1.221   x1
+          sx=25.17394    4.550° = fov 0.062   x1
+          sx=25.57296    4.479° = fov 0.061   x1
+          sx=25.96385    4.411° = fov 0.060   x1
+          sx=26.28173    4.358° = fov 0.059   x1
+          ... 22 rarer value(s), 22 sample(s), not shown
+
+The `<- honours X4VR_FOV` marker is the acceptance check for #24 in one line: a
+camera that obeys the setting lands on the tag the run asked for.
+
+`FOV_BASE_DEG = 73.7399` in the scorer is measured, not assumed, and the "fov"
+column is only a label — it is not used to judge anything else.
+
+It does check itself once, though, on a run that never set the knob. Take 54:
+
+    sx=1.15174    81.932° = fov 1.111   x1
+
+`config.xml` reads `<fov>1.1111</fov>`. The column recovers the player's own
+setting from a matrix, in a log written 50 takes before anyone knew the tag
+existed.
+
+### Two corrections to the take 104 write-up above
+
+**Provenance.** The table cites "takes 57–60" for both rows. That is right for
+`1.15174` (it is in takes 53–60 and 66) but wrong for `37.75372`, which appears
+in **takes 53 and 54 only** — no other session ever reached the zoom camera.
+
+That value is better than a sample: it is a **stop**, and both runs show it as
+one in different ways.
+
+In take 53 it does not ramp at all — it alternates, `37.75372 ↔ 3.78085`,
+sixteen times, changes #10 through #24. That is the mis-credit oscillation
+again, in a second value pair: the camera **held** `37.75372` exactly while
+another interleaved with it. Only from #25 does it drift (`37.72107`). Take 54
+does the same from #10.
+
+In take 104 the same camera *eases onto* its stop. The steps shrink
+monotonically — 0.209, 0.226, 0.207, 0.183, 0.150, 0.132, 0.115, 0.092, 0.076,
+0.049, 0.026, **0.004** — arrive at `27.96006`, and then retreat symmetrically:
+
+    #54 3.78085 -> 26.49146   ...   #66 27.95579 -> 27.96006
+    #67 27.96006 -> 27.94545  ...   #79 25.57296 -> 25.17394
+
+An easing curve converging on a limit, not a peak somebody happened to sample.
+So pairing `37.75372` with `27.96006` compares two stops, and `27.96006` is
+within 7e-5 of the `27.96013` the low-family law predicts for it.
+
+(An earlier draft of this section called take 53's sixteen samples a plateau of
+consecutive changes. They are sixteen *returns* to the value, alternating with
+`3.78085`. The conclusion is the same and the mechanism is not: reading a count
+without looking at what it counted over is the mistake this file exists to stop
+repeating.)
+
+**"The number of `proj CHANGED` lines is not a count of zoom steps"** — half
+right, and the set above says which half. The 83 changes are two distinct
+families:
+
+* `1.33333 ↔ 0.69231`, 27 and 15 samples, alternating within a millisecond.
+  Mis-credit, exactly as recorded. Not zoom.
+* `25.17394 … 27.96006`, 26 samples, nearly all distinct, easing up to a stop
+  and back down. That **is** a real field sweep, on a camera that honours
+  `<fov>`.
+
+So X4 does zoom during these runs, the log does track it, and the mis-credit
+oscillation is layered on top of it. The claim as written would have had someone
+later discard genuine zoom evidence.
+
+### P105, sharpened
+
+`config.xml` still reads `<fov>1.1111</fov>`, so the takes-53/54 baseline is
+intact and both predictions below are interpolations from measured endpoints.
+Adding to P105 as already committed:
+
+4. The high-family camera's stop reads `sx = 29.18689` (3.9246°). If the run's
+   ramp turns around below that, the stop was never reached — untested, not
+   refuted. Stated because it is a second interpolation on a **different
+   camera**, so it can fail independently of prediction 2. It does not need
+   deliberate zooming: in takes 53 and 54 the value was there by change #10.
+
+Both predicted values are reproducible to the five decimals the log prints;
+`37.75372` came back bit-identical in two separate sessions, so "close" is not
+the standard here.
+
+### Take 105 — the run
+
+    X4VR_TAKE=105-FOV-SY X4VR_FOV=1.437 X4VR_DUMP_MATRICES=1 X4VR_STEREO=1 \
+    X4VR_BINDLESS_PATCH=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 \
+    X4VR_SBS_LAYERS=2 X4VR_PROJ_SX=1.3333 X4VR_MV=1 X4VR_PROJ_LIVE=1 \
+    X4VR_SBS=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1 \
+    X4VR_MV_INVENTORY=1 X4VR_LOG=/tmp/x4vr-take105.log \
+    ./launch/x4vr-launch.sh
+
+Identical to take 104 except `X4VR_FOV`, so the two logs' `sx` sets are directly
+comparable. An **interaction** take: `X4VR_MV_PROBE`, `X4VR_MV_DUMP` and
+`X4VR_MV_DUMP_PRESENT` are all unset, because the probe's `vkQueueWaitIdle`
+would make flying and zooming miserable and nothing here needs it.
+
+Reach a real scene — the block needs 50+ draws before anything is measured, so
+the splash screen produces nothing — and fly for a few minutes. Predictions 1–3
+need the fov-responsive camera to be credited at all, which only happens in
+flight; prediction 4's camera showed up on its own in every prior run, so
+nothing special is required for it. Take 104 was enough play for all of this.
+
+Judged by `python3 tools/score_run.py /tmp/x4vr-take105.log`. The two lines that
+carry the result are the `sy tracks sx` / `warn |sy/sx| ranges …` line and the
+distinct-`sx` set.

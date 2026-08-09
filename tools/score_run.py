@@ -15,8 +15,16 @@ log with more than one session in it, before looking at anything else.
 Usage:  tools/score_run.py /tmp/x4vr-takeNN.log
 Exit:   0 all checks pass, 1 a check failed, 2 the log cannot be scored
 """
+import math
 import re
 import sys
+
+# X4's <fov> config tag multiplies the horizontal field as an ANGLE, linearly:
+# horizontal FOV = fov * BASE_DEG at a 1:1 eye. Measured in take 104, not
+# assumed -- two pairs an order of magnitude apart (1.15174/0.69231 and
+# 37.75372/27.96006) both solve to 73.7399 and 73.7397, which is 2*atan(0.75),
+# i.e. sx 4/3 exactly. Used only to label the sx inventory below.
+FOV_BASE_DEG = 73.7399
 
 # A present target's layer 1 should hold roughly what layer 0 holds. It is not
 # an equality: the two eyes see slightly different amounts of geometry, and
@@ -371,6 +379,45 @@ def main(path):
                       f"{min(vals):.5f}..{max(vals):.5f} "
                       f"({max(vals) / min(vals):.1f}x) over the near={near:.3f} "
                       f"camera")
+
+                # The range line above is the one that nearly cost take 104 its
+                # finding. X4 runs several cameras concurrently and the layer's
+                # "most-drawn block wins" heuristic flips winners between submits
+                # of one frame, so these samples interleave cameras. Three sx
+                # values came back bit-identical across a 35% <fov> change while
+                # others moved by exactly the knob's ratio -- min/max reads that
+                # as "the range shifted" and loses it. So report the SET, with
+                # the field angle each value implies and the <fov> tag that angle
+                # corresponds to: a camera that honours the setting lands on the
+                # tag this run asked for, and one that ignores it does not.
+                tally = {}
+                for v in vals:
+                    tally[round(v, 5)] = tally.get(round(v, 5), 0) + 1
+                order = sorted(tally.items(), key=lambda kv: (-kv[1], kv[0]))
+                m_fov = re.search(r"X4VR_FOV=([\d.]+)", run or "")
+                asked = float(m_fov.group(1)) if m_fov else None
+                shown = order[:8]
+                print(f"proj  {len(order)} distinct sx (compare this SET against "
+                      f"the previous take's, not the range):")
+                for v, n in shown:
+                    deg = 2 * math.degrees(math.atan(1.0 / v)) if v else 0.0
+                    tag = deg / FOV_BASE_DEG
+                    mark = ("  <- honours X4VR_FOV"
+                            if asked is not None and abs(tag - asked) < 0.01
+                            else "")
+                    print(f"      sx={v:<9.5f} {deg:7.3f}° = fov {tag:.3f}"
+                          f"   x{n}{mark}")
+                if len(order) > len(shown):
+                    rest = sum(n for _, n in order[len(shown):])
+                    print(f"      ... {len(order) - len(shown)} rarer value(s), "
+                          f"{rest} sample(s), not shown")
+                if asked is not None and not any(
+                        abs((2 * math.degrees(math.atan(1.0 / v)) if v else 0.0)
+                            / FOV_BASE_DEG - asked) < 0.01 for v, _ in order):
+                    print(f"warn  no camera in this run reads the field "
+                          f"X4VR_FOV={asked:g} asks for "
+                          f"({asked * FOV_BASE_DEG:.2f}°) — either X4 rejected "
+                          f"the tag or the law is not linear here")
 
                 # Take 104: X4's <fov> scales the horizontal field, and every
                 # CHANGED line reported sx alone -- so whether the vertical
