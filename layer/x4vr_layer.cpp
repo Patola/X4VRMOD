@@ -6703,6 +6703,24 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     // is inside this scope, so one lock covers X4's whole side of the shared
     // queue. A std::unique_lock rather than a guard because it must be taken
     // conditionally.
+    // Task #38: acquire the runtime's swapchain image BEFORE taking the queue
+    // lock, and never inside it.
+    //
+    // The runtime frees swapchain images in xrEndFrame, and xrEndFrame needs
+    // this same mutex — so a thread that waits for an image while holding it
+    // is waiting for something that cannot happen until it lets go. With
+    // XR_INFINITE_DURATION that is a hard deadlock and it took X4's present
+    // thread down with it: take 114b, black in both the headset and the
+    // window. A bounded wait turns it into "no VR frame ever arrives, 2 ms
+    // wasted per present", which is quieter and just as wrong.
+    //
+    // The acquire touches no Vulkan queue, so it does not belong under this
+    // lock at all. The release does not either, but it must follow the
+    // composite's submit, so it stays below.
+    bool vr_blit = false;
+    if (g_sbs_enabled && g_active && pi->swapchainCount == 1)
+        vr_blit = vr_begin_blit(pi->pSwapchains[0]);
+
     std::unique_lock<std::mutex> qlock(g_vr_queue_mu, std::defer_lock);
     if (g_vr_share_queue)
         qlock.lock();
@@ -6787,13 +6805,6 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     // seen, so leave it alone rather than guess which image is the eye pair.
     VkSemaphore composited = VK_NULL_HANDLE;
     uint32_t family = 0;
-    // Task #38: ask for the copy into the runtime's swapchain before composite
-    // records, and release after it has submitted. Gated on intent only — if
-    // the acquire fails this frame simply does not reach the headset, and X4's
-    // own frame is untouched either way.
-    bool vr_blit = false;
-    if (g_sbs_enabled && g_active && pi->swapchainCount == 1)
-        vr_blit = vr_begin_blit(pi->pSwapchains[0]);
     if (g_sbs_enabled && g_active && pi->swapchainCount == 1) {
         if (queue_family_of(queue, family)) {
             composited = g_sbs.composite(
@@ -6968,6 +6979,11 @@ struct VrState {
     std::atomic<uint64_t> released{0};  // images handed to the runtime
     std::atomic<uint64_t> acquire_fail{0};
     std::atomic<uint64_t> submitted{0}; // frames that carried a projection layer
+    // Set once the VR thread has completed a frame, cleared when the session
+    // stops running. The present thread reads ONLY this before touching the
+    // swapchain: it is the difference between "a session object exists" and
+    // "the runtime is asking for pixels", and take 114b hung on the gap.
+    std::atomic<bool> loop_live{false};
 };
 
 // The field we DECLARE to the compositor, which must be the field X4 actually
@@ -7043,8 +7059,15 @@ void vr_report(const char *when); // defined below; the loop ticks through it
 // release. On any failure it returns false and X4's frame proceeds untouched --
 // this path must never be able to stop the flatscreen game.
 bool vr_begin_blit(VkSwapchainKHR x4sc) {
-    if (!g_vr || !g_vrs.session_ok.load(std::memory_order_relaxed) ||
-        g_vrs.sc_failed.load(std::memory_order_relaxed))
+    if (!g_vr || g_vrs.sc_failed.load(std::memory_order_relaxed))
+        return false;
+    // Not `session_ok`. That only says xrCreateSession returned, and X4
+    // presents its first frame long before the runtime is ready to take
+    // pixels — acquiring then blocks, on X4's present thread, and takes the
+    // flatscreen down with it. `loop_live` says the VR thread has actually
+    // completed a frame, which is the only evidence that the runtime wants
+    // images at all. Take 114b hung exactly here.
+    if (!g_vrs.loop_live.load(std::memory_order_acquire))
         return false;
 
     VkExtent2D eye{};
@@ -7105,9 +7128,22 @@ bool vr_begin_blit(VkSwapchainKHR x4sc) {
         g_vrs.sc_ready.store(true, std::memory_order_relaxed);
     }
 
+    // Two milliseconds, not forever. We hold an image only for the length of
+    // one composite and there are three, so the common case returns at once;
+    // if the runtime cannot produce one in that time, X4 presents this frame
+    // without it and the headset reprojects the previous one. A dropped VR
+    // frame is a far smaller defect than a stalled game.
     uint32_t idx = 0;
-    if (!x4vr::xr::swapchain_acquire(g_vrs.sc, &idx)) {
+    bool owed = false;
+    const bool ready = x4vr::xr::swapchain_acquire_timeout(
+        g_vrs.sc, &idx, (XrDuration)2000000, &owed);
+    if (!ready) {
         g_vrs.acquire_fail.fetch_add(1, std::memory_order_relaxed);
+        // Acquired but not ready: hand it straight back. Keeping it would leak
+        // one image per frame and the pool would drain into the hang this
+        // timeout exists to prevent.
+        if (owed)
+            x4vr::xr::swapchain_release(g_vrs.sc);
         return false;
     }
     g_sbs.request_vr_blit(g_vrs.sc.images[idx], eye, 2);
@@ -7133,6 +7169,7 @@ void vr_thread() {
         if (!x4vr::xr::session_poll(g_vrs.session, vr_on_state, nullptr))
             break;
         if (!g_vrs.session.running) {
+            g_vrs.loop_live.store(false, std::memory_order_release);
             struct timespec nap = {0, 20 * 1000 * 1000};
             nanosleep(&nap, nullptr);
             continue;
@@ -7195,6 +7232,9 @@ void vr_thread() {
         }
         if (layer_count)
             g_vrs.submitted.fetch_add(1, std::memory_order_relaxed);
+        // Only now: a frame has been begun, located and ended, so the runtime
+        // is demonstrably taking frames and the present thread may acquire.
+        g_vrs.loop_live.store(true, std::memory_order_release);
 
         bool tick = false;
         {

@@ -14321,6 +14321,58 @@ arrive and the run can be abandoned immediately rather than played out.
 **Every command line in this file from here on is one line.** A wrapped block is
 a trap that looks like formatting.
 
+## Take 114b — hung at startup. A wait held the lock the waiter depended on
+
+Black in the headset and black in the window, stuck before the game came up.
+The environment arrived correctly this time; the defect was mine, in the code.
+
+**The deadlock.** `x4vr_QueuePresentKHR` takes `g_vr_queue_mu` — #36's lock,
+which on this one-graphics-queue GPU covers X4's whole side of the shared queue
+— and I called `vr_begin_blit()` *inside* that scope. It waits for the runtime
+to hand over a swapchain image. The runtime frees swapchain images in
+`xrEndFrame`, and `vr_thread()` takes **that same mutex** to call it. So the
+present thread was waiting for something that could not happen until it let go,
+and it was waiting with:
+
+    wi.timeout = XR_INFINITE_DURATION;      // common/x4vr_xr.hpp
+
+X4's present thread never returned, which is why the flatscreen went black too.
+
+**Two fixes, because the timeout alone would only have made it quiet.** The
+acquire now happens *before* the queue lock is taken — it touches no Vulkan
+queue and never belonged under it — and the wait is bounded at 2 ms via
+`swapchain_acquire_timeout()`. With only the timeout, the symptom becomes "no
+VR frame ever arrives and every present costs 2 ms", which is harder to see and
+just as wrong.
+
+`swapchain_acquire_timeout` distinguishes three outcomes rather than two,
+because the middle one leaks: acquired-and-ready, acquired-but-not-ready (the
+caller **must** release without writing, or the pool drains to a hang), and
+nothing-acquired.
+
+**A second, independent bug in the same path.** The gate was
+`g_vrs.session_ok`, which only says `xrCreateSession` returned. X4 presents its
+first frame long before the runtime is ready to take pixels, so the present
+thread was touching the swapchain during bring-up regardless of the lock. The
+gate is now `loop_live`, set only after the VR thread has begun, located and
+ended a frame — the difference between "a session object exists" and "the
+runtime is asking for pixels".
+
+**The lesson, in one line:** I wrote *"this path must never be able to stop the
+flatscreen game"* in the comment directly above an infinite wait, inside a lock
+the waiter's own unblocker needed. The comment was the intent; nothing checked
+it. A blocking call on X4's thread is a defect on sight, whatever it is waiting
+for.
+
+### Take 114c, on one line
+
+    X4VR_TAKE=114c-FIRST-LIGHT X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take114c.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 ./launch/x4vr-launch.sh
+
+P116.1–P116.5 still stand, still untested. If it hangs again, that is a
+different deadlock and the measurement is the backtrace: `coredumpctl` will not
+have one for a hang, so `gdb -p $(pgrep -f "X4 Foundations/X4")` then
+`thread apply all bt` is what to capture before killing it.
+
 # State at `stage8-xr-session-in-x4` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the

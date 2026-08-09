@@ -943,6 +943,36 @@ inline XrResult swapchain_create(Swapchain &sc, Session &s, VkFormat fmt,
     return XR_SUCCESS;
 }
 
+// Acquire with a bounded wait, for callers on a thread that must not stall.
+//
+// xrWaitSwapchainImage with XR_INFINITE_DURATION is correct in a dedicated
+// frame loop and catastrophic anywhere else: on X4's present thread it freezes
+// the game, and the flatscreen goes black along with the headset. That is take
+// 114b.
+//
+// `*owed` says whether a release is still required. The three outcomes are
+// distinct and all of them matter:
+//   returns true,  *owed true   — acquired and ready; write it, then release.
+//   returns false, *owed true   — acquired but the runtime is not ready; the
+//                                 caller must release WITHOUT writing, or the
+//                                 image leaks and the pool drains to a hang.
+//   returns false, *owed false  — nothing acquired, nothing owed.
+inline bool swapchain_acquire_timeout(Swapchain &sc, uint32_t *index,
+                                      XrDuration timeout, bool *owed) {
+    if (owed)
+        *owed = false;
+    XrSwapchainImageAcquireInfo ai{};
+    ai.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO;
+    if (sc.s->rt->api.AcquireSwapchainImage(sc.handle, &ai, index) != XR_SUCCESS)
+        return false;
+    if (owed)
+        *owed = true;
+    XrSwapchainImageWaitInfo wi{};
+    wi.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO;
+    wi.timeout = timeout;
+    return sc.s->rt->api.WaitSwapchainImage(sc.handle, &wi) == XR_SUCCESS;
+}
+
 inline bool swapchain_acquire(Swapchain &sc, uint32_t *index) {
     XrSwapchainImageAcquireInfo ai{};
     ai.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO;
