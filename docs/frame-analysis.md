@@ -14114,6 +14114,76 @@ symmetric fov of our own is consumed as written — the milestone-A route is
 sound. Note `calc_mvp_rot_only`: timewarp compensates **rotation only**, so the
 pose we submit must carry the position we actually rendered from.
 
+## Probe run 2 — P115.1 confirmed. The poses are parallel; the cant is all FOV
+
+    /tmp/x4vr-xrprobe-20260809-175326.txt     as the runtime comes
+    /tmp/x4vr-xrprobe-20260809-175358.txt     OXR_PARALLEL_VIEWS=1
+
+Both halves, 1801 frames each, 1800 layers submitted:
+
+    VIEW_REL_DEG=0.0000    POSES_PARALLEL=1    VIEW_CANT_DEG=-0.0000,-0.0000
+    FOV0=-54.0000,40.0000,44.0000,-55.0000
+    FOV1=-40.0000,54.0000,44.0000,-55.0000
+
+    xr: view 1 is rotated 0.000 deg relative to view 0 (yaw -0.000 deg)
+    xr: view 0 vs head — 0.000 deg total, yaw -0.000 deg
+    xr: view 1 vs head — 0.000 deg total, yaw -0.000 deg
+    xr: VERDICT poses are PARALLEL — the 15.04 deg sits in the FOV alone.
+
+**The control was real, and it was checked rather than assumed.** The two logs
+differ at line 14 — `quirks.parallel_views: false` against `true` — so the
+environment variable took effect. Forcing the quirk on then changed *nothing*:
+the FOV is byte-identical across the pair.
+
+**That is a second, independent proof, through code I did not write.**
+`adjust_fov` adds the pose rotation's Euler angles to all four FOV angles. An
+unchanged FOV to four decimal places means those angles were zero, so the poses
+carried no rotation — established without trusting my own quaternion math at
+all. Two readouts, two code paths, same answer.
+
+This is the shape a control is supposed to have. A no-op control is only
+informative because the *mechanism* was verified to have engaged; had I only
+compared the FOVs and not line 14, "nothing changed" would have been consistent
+with the variable being ignored — a guard that cannot fail.
+
+### My doubt was the thing that was wrong
+
+The note above ("P115.1 is probably WRONG, and Monado's source says why")
+overcorrected. Reading `oxr_session.c` established something true — the runtime
+is not flattening anything — and I turned it into a claim about the *device*,
+which it never addressed. WiVRn's driver reports parallel poses natively; the
+runtime's non-intervention leaves them that way. The correct conclusion from
+that source read was "so it depends on the driver, which is unmeasured", and
+that is exactly the run I then specified. The prediction was right and the
+paragraph doubting it was wrong; both stay in the file.
+
+### What this buys: first light needs no new vertex math
+
+The per-eye difference is a **lateral offset and nothing else** — which is
+precisely what the layer's existing shear already applies. So:
+
+* **Milestone A (symmetric submission)** is unblocked and needs no shader work:
+  render ±55° symmetric, submit the located pose with a symmetric FOV of our
+  own, let the compositor crop. 1.54× fill.
+* **Milestone B (the affine)** removes that 1.54× and is derived, implemented
+  and tested (2.4e-07). It is an optimisation, not a prerequisite.
+
+Neither needs per-eye rotation, so the head-rotation algebra
+(`w_c' = −(a/sx)·sinθ + d·cosθ`, which does not collapse) stays unwritten. That
+was the expensive branch and it is now closed off by measurement.
+
+### Two details worth keeping
+
+**IPD moved, 0.0630 → 0.0633 m.** The runtime re-reports it per frame, as
+`locate_views`' comment already says nothing may cache it. The code doesn't.
+
+**Separation in x was 0.0593 m against a total of 0.0633 m.** The views are
+located in STAGE space and the head was being moved, so the eye vector is not
+aligned with stage x — the difference is head orientation, not an asymmetry.
+Both parallelism readouts are *relative* (view-to-view, and view-to-head), so
+they are unaffected by this; the eye offset itself must be applied along the
+head's own x axis, which is #33's business.
+
 # State at `stage8-xr-session-in-x4` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the
@@ -14215,12 +14285,16 @@ with `sy` negative), the composition is shear-then-affine, and both live in
 in `tests/view_math.cpp`. The vertical needs no separate FOV: the eye is square,
 so `X4VR_FOV = 1.4917` covers both axes.
 
-**What is left of #35 is the SPIR-V, not the maths** — and it may not be the
-next thing to build. A symmetric submitted FOV reaches the headset with no
-shader change at all, at 1.54× the fill; the affine removes that 1.54× but
-touches every world vertex module *and* the `M_invprojection` correction. The
-table above compares them. Blocked on probe run 2 (P115.1): if the view poses
-are parallel, first light needs no new vertex math whatsoever.
+**What is left of #35 is the SPIR-V, not the maths** — and it is an
+optimisation, not the next thing to build. Probe run 2 confirmed P115.1: the
+view poses are **parallel**, so the per-eye difference is the lateral offset the
+layer already applies and first light needs no new vertex math at all. A
+symmetric submitted FOV reaches the headset with no shader change, at 1.54× the
+fill; the affine removes that 1.54× but touches every world vertex module *and*
+the `M_invprojection` correction. The table above compares them.
+
+**The next thing to build is the submission itself** — swapchain, copy, layer —
+which is milestone A and needs nothing from #35.
 
 ## Decisions taken, so they are not re-litigated
 
@@ -14265,8 +14339,10 @@ are parallel, first light needs no new vertex math whatsoever.
     585 present-dump frames         /tmp/x4vr-t{93,94,97,98,99,101,103}-present-*
     3 shader dumps WITH a log       /tmp/x4vr-shaders-take{61,74,80} (397 each)
     1 shader dump WITHOUT a log     /tmp/x4vr-shaders (409) — unusable
-    NO headset probe run            all three /tmp/x4vr-xrprobe*.txt are
-                                    956-byte "no active runtime" failures
+    2 headset probe runs            /tmp/x4vr-xrprobe-20260809-1753{26,58}.txt
+                                    (the second is OXR_PARALLEL_VIEWS=1)
+    3 no-runtime probe failures     the other /tmp/x4vr-xrprobe*.txt, 956 bytes
+                                    each — none of them is data
 
 **Module serials are per-run.** A number from one log may only be opened in the
 dump directory of that same run. Sweep `/tmp` before specifying any run.
