@@ -144,6 +144,13 @@ public:
     // Set by request_dump(), consumed and cleared by the next composite().
     VkBuffer dump_buf_ = VK_NULL_HANDLE;
     VkDeviceSize dump_layer_bytes_ = 0;
+    // Set by request_vr_blit(), likewise one-shot.
+    VkImage vr_dst_ = VK_NULL_HANDLE;
+    VkExtent2D vr_extent_{};
+    uint32_t vr_layers_ = 0;
+    // Counted so the log can say "the blit ran N times" rather than the caller
+    // inferring it from the absence of a complaint.
+    uint64_t vr_blits_ = 0, vr_refused_ = 0;
 
     bool eye_info(VkSwapchainKHR sc, EyeInfo *out) {
         std::lock_guard<std::mutex> lock(mu_);
@@ -172,6 +179,59 @@ public:
         std::lock_guard<std::mutex> lock(mu_);
         dump_buf_ = buf;
         dump_layer_bytes_ = layer_bytes;
+    }
+
+    // Task #38: a one-shot request to copy the eye image into an OpenXR
+    // swapchain image during the next composite.
+    //
+    // Same reasoning as request_dump, and it shares its barrier: the eye image
+    // is in PRESENT_SRC because X4 believes it is the swapchain, and this is
+    // the one place that already transitions it to TRANSFER_SRC across every
+    // layer. A separate submit would have to reproduce that, on X4's single
+    // graphics queue, as a second thing to keep correct.
+    //
+    // `dst` must be an image of the runtime's swapchain with at least as many
+    // array layers as the eye image, at the SAME extent: this is
+    // vkCmdCopyImage, not a blit, because probe run 3 established that the
+    // runtime offers B8G8R8A8_SRGB (50) — the same channel order as X4's
+    // format 44 — so the copy is byte-preserving and needs no conversion.
+    // Mismatched extents are refused rather than silently scaled.
+    //
+    // Cleared as soon as it is recorded, so a caller that stops asking stops
+    // paying, and a frame where the runtime had no image ready simply does not
+    // ask.
+    void request_vr_blit(VkImage dst, VkExtent2D extent, uint32_t layers) {
+        std::lock_guard<std::mutex> lock(mu_);
+        vr_dst_ = dst;
+        vr_extent_ = extent;
+        vr_layers_ = layers;
+    }
+
+    // What the eye image actually is, for the caller that has to create a
+    // swapchain matching it before it can ask for a blit.
+    bool eye_shape(VkSwapchainKHR sc, VkExtent2D *extent, uint32_t *layers,
+                   VkFormat *format) {
+        std::lock_guard<std::mutex> lock(mu_);
+        auto it = chains_.find(sc);
+        if (it == chains_.end() || !it->second.virtualized)
+            return false;
+        if (extent)
+            *extent = it->second.eye;
+        if (layers)
+            *layers = it->second.eye_layers;
+        if (format)
+            *format = it->second.format;
+        return true;
+    }
+
+    // For the final report: how many frames actually reached the headset, and
+    // how many were refused. Reported rather than inferred from silence.
+    void vr_counts(uint64_t *blits, uint64_t *refused) {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (blits)
+            *blits = vr_blits_;
+        if (refused)
+            *refused = vr_refused_;
     }
 
     bool ready() const { return device_ && fns_.complete(); }
@@ -389,6 +449,63 @@ public:
                     cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dump_buf_, n,
                     r);
                 dump_buf_ = VK_NULL_HANDLE;
+            }
+            // Task #38: the same finished frame, into the runtime's swapchain.
+            // Also while it is still in TRANSFER_SRC, and for the same reason.
+            if (vr_dst_ != VK_NULL_HANDLE) {
+                if (vr_extent_.width != c.eye.width ||
+                    vr_extent_.height != c.eye.height || vr_layers_ == 0) {
+                    // Refused, loudly and once: a copy with mismatched extents
+                    // is invalid, and scaling here would silently disagree with
+                    // the FOV the layer declares to the compositor.
+                    if (!vr_refused_++)
+                        X4VR_LOG("vr: NOT blitting — swapchain is %ux%u x%u "
+                                 "but the eye image is %ux%u x%u. The copy "
+                                 "needs them equal; a scale here would "
+                                 "disagree with the FOV we declare.",
+                                 vr_extent_.width, vr_extent_.height,
+                                 vr_layers_, c.eye.width, c.eye.height,
+                                 c.eye_layers);
+                } else {
+                    const uint32_t n =
+                        vr_layers_ < c.eye_layers ? vr_layers_ : c.eye_layers;
+                    VkImageMemoryBarrier vb{};
+                    vb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                    vb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    vb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    vb.image = vr_dst_;
+                    vb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0,
+                                           n};
+                    // Entirely overwritten, so its previous contents and layout
+                    // do not matter.
+                    vb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    vb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    vb.srcAccessMask = 0;
+                    vb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    fns_.CmdPipelineBarrier(
+                        cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                        nullptr, 1, &vb);
+                    VkImageCopy vr{};
+                    vr.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, n};
+                    vr.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, n};
+                    vr.extent = {c.eye.width, c.eye.height, 1};
+                    fns_.CmdCopyImage(cb, src,
+                                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                      vr_dst_,
+                                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                                      &vr);
+                    vb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    vb.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    vb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    vb.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                    fns_.CmdPipelineBarrier(
+                        cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
+                        nullptr, 0, nullptr, 1, &vb);
+                    vr_blits_++;
+                }
+                vr_dst_ = VK_NULL_HANDLE;
             }
             b[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             b[0].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
