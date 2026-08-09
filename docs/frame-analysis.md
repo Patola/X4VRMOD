@@ -14047,6 +14047,73 @@ knowing which one to write is worth twenty seconds.
 The probe prints its own verdict in words (`xr: VERDICT poses are …`) so the
 answer does not have to be re-derived from two angles later.
 
+### P115.1 is probably WRONG, and Monado's source says why — recorded before the run
+
+Written after P115.1 and before the measurement, because the rule is that
+predictions are committed before the run that tests them and wrong turns stay in
+the file. Reading `oxr_session.c` after making the prediction turned up this:
+
+    // oxr_session.c:680, inside the per-view loop of xrLocateViews
+    if (sess->sys->inst->quirks.parallel_views) {
+            view_pose.orientation = (struct xrt_quat)XRT_QUAT_IDENTITY;
+    }
+    ...
+    if (sess->sys->inst->quirks.parallel_views) {          // :699
+            adjust_fov(&fovs[i], &poses[i].orientation, &fov);
+    }
+
+`parallel_views` does **both** halves: it flattens the pose to identity *and*
+adds the pose's Euler angles into the four fov angles. It is precisely the
+"where does the cant live" switch, sitting in the runtime.
+
+And our own probe log already recorded its state, fifteen lines from the top:
+
+    quirks.parallel_views: false
+
+So the runtime is **not** flattening anything — it passes the device's poses
+through as they come. P115.1 argued the poses would be parallel because 15° of
+fov offset plus 15° of pose would be an implausible 30° of cant. That argument
+is about the *device*, and this code is about the *runtime*; it does not say
+what WiVRn's driver reports. The prediction now leans the other way, and it is
+left standing as written so the file records the reasoning that was wrong rather
+than the reasoning that survived.
+
+**Probe run 2 therefore has two halves**, so the mechanism is demonstrated and
+not merely inferred:
+
+    tests/run-xr-probe.sh 20                          # as the runtime comes
+    OXR_PARALLEL_VIEWS=1 tests/run-xr-probe.sh 20     # the quirk forced on
+
+`OXR_PARALLEL_VIEWS` is a Monado debug tristate (`oxr_instance.c:53`), so the
+second half is a real control: `KEY_VIEW_REL_DEG` must go to ~0 and `KEY_FOV0/1`
+must widen by the angle the poses were carrying. If the first half already reads
+0, both halves agree and the poses were parallel all along.
+
+**Either answer is now survivable, which the affine is the reason for.** The
+quirk converts pose cant into fov asymmetry — and fov asymmetry is exactly what
+`make_off_axis` already handles, to 2.4e-07. So the general solution does not
+change; only whether this runtime hands us the easy form of the problem or the
+hard one. Depending on a Monado-specific environment variable is a fallback and
+not the design.
+
+### Two more things the compositor source settles
+
+**Uncovered field goes black, visibly.** `do_projection_layer` binds
+`clamp_to_border_black` as the layer sampler (`comp_render_gfx.c:397`), so if
+our submitted fov does not cover the display's field the border is black rather
+than smeared. The union requirement is real and its failure mode is obvious on
+sight — a good property for a first light.
+
+**The submitted fov and pose really are the app's.** The same function does
+
+    render_calc_uv_to_tangent_lengths_rect(&vd->fov, &data.to_tanget);
+    calc_mvp_rot_only(state, layer_data, &vd->pose, &scale, &data.mvp);
+
+on `vd`, the submitted `XrCompositionLayerProjectionView`. So declaring a
+symmetric fov of our own is consumed as written — the milestone-A route is
+sound. Note `calc_mvp_rot_only`: timewarp compensates **rotation only**, so the
+pose we submit must carry the position we actually rendered from.
+
 # State at `stage8-xr-session-in-x4` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the
