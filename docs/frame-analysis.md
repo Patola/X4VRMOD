@@ -13369,6 +13369,116 @@ iteration on the session path ever becomes the bottleneck, rebuilding Monado
 with `-DXRT_BUILD_DRIVER_REALSENSE=OFF -DXRT_HAVE_OPENCV=OFF` is the cheap way
 back, not chasing the old prefixes.
 
+## The first live session — all six predictions confirmed, and the card found the real defect
+
+WiVRn 26.6, Meta Quest 3, seated, 20 s, head moved throughout.
+`/tmp/x4vr-xrprobe.txt`. The bring-up worked end to end on the first attempt:
+1799 frames, 1799 located, 1798 projection layers accepted, session reached
+`FOCUSED`.
+
+    KEY_RUNTIME=WiVRn 'v26.6-151-gca59f467'   KEY_SYSTEM=Meta Quest 3 on WiVRn
+    KEY_VIEWS=2            KEY_EYE_RECOMMENDED=3096x3243   KEY_EYE_MAX=6192x6486
+    KEY_PHYSICAL_DEVICES=1 KEY_PHYSICAL_CHOSEN=0           KEY_SPACE=STAGE
+    KEY_FORMAT=43 (R8G8B8A8_SRGB)             KEY_SWAPCHAIN_IMAGES=3
+    KEY_IPD_M=0.0630       KEY_FOV_ASYMMETRIC=1
+    KEY_FOV0=-54.0000,40.0000,44.0000,-55.0000
+    KEY_FOV1=-40.0000,54.0000,44.0000,-55.0000
+    KEY_HEAD_SPAN_M=0.2642,0.1731,0.2755
+
+**P111.1 confirmed.** 2 views.
+
+**P111.2 confirmed, and by far more than the "more than a degree" the
+prediction hedged with.** Each view is canted 14° outward horizontally
+(−54/+40 and −40/+54) and 11° down vertically (+44/−55, the same in both).
+This is now the single most consequential number in the file — see below.
+
+**P111.3 confirmed.** 3096×3243 per eye, taller than wide as predicted. That is
+**10.04 Mpx per eye against 1408×1408 = 1.98 Mpx — 5.1×**. `X4VR_SBS_*` is
+definitively a knob now, and what to set it to is a performance question, not a
+correctness one.
+
+**P111.4 confirmed.** One device, index 0. The "runtime wants a different
+`VkPhysicalDevice`" risk does not bite on this machine. It is not retired for
+anyone else's.
+
+**P111.5 confirmed**, and observable after all — WiVRn logs the merged lists
+itself. Instance: `external_fence/memory/semaphore_capabilities`,
+`get_physical_device_properties2`, `debug_utils`. Device:
+`dedicated_allocation`, `external_fence/memory/semaphore` and all three `_fd`
+variants, `get_memory_requirements2`, `image_format_list`,
+`timeline_semaphore`. So editing X4's `VkDeviceCreateInfo` is mandatory, and
+the multiview edit already proved that path. (The probe's own query said "not
+observable": `xrGetVulkanInstance/DeviceExtensionsKHR` only resolve if
+`XR_KHR_vulkan_enable` is *enabled* on the instance, not merely offered. Fixed
+— the v1 extension is now requested alongside enable2 purely so the merge can
+be narrated.)
+
+**P111.6 confirmed.** 0.0630 m, and `dx = +0.0628` — view 1 is the right eye,
+so layer N = view N is the correct convention and the eyes are not crossed.
+
+### The card was wrong, in exactly the way the real submission would be
+
+Reported from the headset: the bars for each eye did not agree, and the fusible
+bar appeared as **two bars**. That is not a runtime problem and not an eye-order
+problem. It is arithmetic.
+
+A rectilinear projection is linear in **tangent**, not in angle, so the angle at
+image column *x* is `atan(tanL + (x/W)·(tanR − tanL))`. With WiVRn's canted
+views, column `W/2` is:
+
+    view 0:  -15.04 deg        view 1:  +15.04 deg        divergence 30.07 deg
+
+The card painted its fusible bar at `x = W/2` in both eyes, so it asked the eyes
+to **diverge by 30°**. Human eyes converge freely and essentially cannot diverge
+at all, so it could only ever appear as two separate bars. The wide markers,
+being at opposite image edges, are ±54° apart and monocular — "the bars don't
+agree" is what that looks like with both eyes open.
+
+The card is now placed **by angle**: the marker at ∓45°, and the fusible bar at
+±0.9°, which for a 0.063 m IPD is an object at 2.0 m. Verified offline against
+the FOV WiVRn actually reported, with the defect added as a third negative
+control that reproduces `−30.074 deg` — the measured value, from the same
+arithmetic that produced the symptom.
+
+### What this forces on the eye transform
+
+X4's projection is symmetric by construction: `row0(P) = [sx 0 0 0]`, no
+off-axis term. The runtime's frusta are not. Submitting X4's image as the
+runtime's view is the same mistake the card made, applied to the whole scene —
+every object 15° off where it belongs, in opposite directions per eye.
+
+Two ways out, and the numbers pick one.
+
+**(a) Submit a symmetric FOV of our own.** `XrCompositionLayerProjectionView`
+carries the FOV of the image we submit; it does not have to be the one
+`xrLocateViews` recommended. A symmetric frustum covering both eyes needs
+±54° h and ±55° v, i.e. **110°**, so `X4VR_FOV = 110/73.7399 = 1.4917` (today
+1.437 = 106° — already most of the way there, courtesy of #24). Costs
+**1.48× the frustum area** in rendered pixels that the headset will never show,
+on top of the 5.1× the eye extent already wants.
+
+**(b) Map the symmetric render onto the asymmetric frustum in clip space.**
+For a render at ±55° and a target frustum `[tanL, tanR]`:
+
+    x_c' = A·x_c + B·w_c        A = (2/(tanR−tanL)) / cot(55°)
+                                B = −(tanR+tanL)/(tanR−tanL)
+
+    view 0:  A = 1.2892   B = +0.2425
+    view 1:  A = 1.2892   B = −0.2425
+
+Two constants per eye and **one multiply-add on a value `gl_Position` already
+carries**. No wasted pixels: the visible field fills the whole eye image. X4
+still has to render wide enough that nothing is culled — the union is ±55° — but
+the clip-space map then crops to each eye's real frustum at full density.
+
+(b) is the one to build. It is the same shape as the existing shear, it composes
+with it, and it costs about what the shear costs. The vertical follows the same
+form with X4's Y-flip (`sy` is negative) to be settled in the implementation
+rather than asserted here. Filed as **#35**.
+
+Note what (b) does *not* fix: it is a static per-eye frustum correction, not
+head tracking. The yaw/pitch argument in the #34 section above is unchanged.
+
 # State at `stage6-sx-per-draw` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the

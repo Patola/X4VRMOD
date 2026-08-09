@@ -336,7 +336,16 @@ inline bool runtime_open(Runtime &rt, Sink sink, void *user) {
         return false;
     }
 
-    const char *want[] = {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
+    // enable2 does the work; the v1 extension is asked for only when the
+    // runtime offers it, and only so that xrGetVulkanInstance/DeviceExtensionsKHR
+    // resolve. enable2 merges its extensions silently -- which is the right
+    // contract and a bad log. With v1 enabled alongside, the merge becomes
+    // observable, and "the runtime added external_memory_fd" stops being
+    // something to infer from a crash.
+    const char *want[2] = {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME, nullptr};
+    uint32_t want_n = 1;
+    if (have_extension(exts, XR_KHR_VULKAN_ENABLE_EXTENSION_NAME))
+        want[want_n++] = XR_KHR_VULKAN_ENABLE_EXTENSION_NAME;
     XrInstanceCreateInfo ici{};
     ici.type = XR_TYPE_INSTANCE_CREATE_INFO;
     snprintf(ici.applicationInfo.applicationName,
@@ -345,7 +354,7 @@ inline bool runtime_open(Runtime &rt, Sink sink, void *user) {
     snprintf(ici.applicationInfo.engineName,
              sizeof(ici.applicationInfo.engineName), "X4VRMOD");
     ici.applicationInfo.engineVersion = 1;
-    ici.enabledExtensionCount = 1;
+    ici.enabledExtensionCount = want_n;
     ici.enabledExtensionNames = want;
 
     // Ask for 1.0 first. A 1.0 instance is the widest contract that satisfies

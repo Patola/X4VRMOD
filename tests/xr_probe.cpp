@@ -6,38 +6,33 @@
 // This is the bring-up in common/x4vr_xr.hpp driven on a real GPU, before a
 // line of it runs inside the game. Everything it prints is a number the next
 // design step depends on and that nothing in the repository can currently
-// answer:
+// answer: which VkPhysicalDevice the runtime insists on, which Vulkan
+// extensions it adds behind the application's back, the recommended per-eye
+// image size, the per-view field of view, the runtime's own IPD, and whether
+// the head pose actually moves.
 //
-//   * which VkPhysicalDevice the runtime insists on, and whether that is the
-//     one a Vulkan application would have picked on its own;
-//   * which Vulkan instance/device extensions the runtime adds behind the
-//     application's back (reported via the v1 extension when the runtime also
-//     offers it -- enable2 merges them silently by design);
-//   * the recommended per-eye image size, against this mod's 1408x1408;
-//   * the per-view field of view, and above all whether it is SYMMETRIC.
-//     X4's projection is symmetric by construction (row0 = [sx 0 0 0], no
-//     off-axis term). If the headset's frusta are not, then rendering X4's
-//     frustum and submitting it as the runtime's is wrong, and the eye
-//     transform needs an off-axis term it does not have today.
+// It also paints an eye test card. The card is placed BY ANGLE, not by pixel,
+// and that is the whole lesson of the first run: WiVRn's views are asymmetric
+// (view 0 spans -54..+40 degrees, view 1 spans -40..+54), so the centre of the
+// image is 15 degrees off-axis in each eye, in OPPOSITE directions. A bar
+// painted at x = W/2 in both eyes asks them to diverge by 30 degrees; it
+// cannot fuse, and it shows up as two separate bars. Which is exactly what a
+// naive submission of X4's symmetric frustum would do to the whole scene.
 //
-// It also paints a test card, because the same session that answers those
-// questions can settle P5's gate ("left eye sees the left view") for free:
+//   both eyes : one white bar straight ahead, converged by 1.8 degrees, so it
+//               fuses and sits about 2 m away
+//   view 0    : dark BLUE  background, wide marker bar at -45 degrees
+//   view 1    : dark GREEN background, wide marker bar at +45 degrees
 //
-//   left view : dark BLUE  background, white bar hard against the LEFT edge
-//   right view: dark GREEN background, white bar hard against the RIGHT edge
-//   both      : a centre bar with equal and opposite disparity, so it fuses
-//               and floats IN FRONT of the background if the sign is right
-//
-// Close one eye: blue with a bar on the outside is the left eye. If the tint
-// and the outer bar disagree, the eyes are swapped.
+// The markers are monocular on purpose -- they answer "which eye am I?", which
+// is a one-eye-at-a-time question. Close one eye: blue with the wide bar off
+// to your LEFT is the left eye.
 //
 // Two modes:
 //   (no args) | <seconds>   the real thing; needs a runtime and a headset
 //   selftest                the card only, on a plain 2-layer image with no
-//                           OpenXR at all -- so the thing being read in a
-//                           headset has already been read here, by a program
-//                           that knows what it painted. Includes a case that
-//                           must fail.
+//                           OpenXR at all, using the FOV WiVRn actually
+//                           reported. Includes the two cases that must fail.
 //
 // Prints KEY=VALUE lines for a runner; exits non-zero with FAIL= on any
 // bring-up failure.
@@ -76,29 +71,68 @@ static void on_state(void *, XrSessionState s) {
     printf("xr: session -> %s\n", xr::session_state_name(s));
 }
 
+static float rad(float d) { return d * 0.01745329251994330f; }
+
 // ------------------------------------------------------------- the card
 
 // One description of the card, so the painter and the checker cannot drift
-// apart. Everything downstream derives from these.
+// apart -- and one place where "where does this angle land" is written down.
+//
+// A rectilinear projection is linear in TANGENT, not in angle, so a bar at
+// theta lands at (tan theta - tan L) / (tan R - tan L) across the image. With
+// a symmetric FOV that puts theta = 0 at x = W/2 and the distinction never
+// comes up. With WiVRn's canted views it puts theta = 0 at 62% of the width in
+// one eye and 38% in the other, and getting it wrong asks the eyes to diverge.
 struct Card {
     uint32_t w = 0, h = 0;
-    uint32_t bar_w = 0, bar_h = 0;
-    int32_t disp = 12; // centre bar: +disp in the LEFT eye, -disp in the right
+    XrFovf fov[2] = {};
 
-    static Card of(uint32_t w, uint32_t h) {
+    uint32_t marker_w = 0, marker_h = 0, fuse_w = 0;
+    float marker_deg = 45.0f; // |angle| of the per-eye identity marker
+    // Half the convergence of the fusible bar. 0.9 deg each way is 1.8 deg
+    // total, which for a 0.063 m IPD is an object at ipd/angle = 2.0 m.
+    float fuse_deg = 0.9f;
+
+    static Card of(uint32_t w, uint32_t h, const XrFovf *fov) {
         Card c;
         c.w = w;
         c.h = h;
-        c.bar_w = w / 12;
-        c.bar_h = h / 3;
+        c.fov[0] = fov[0];
+        c.fov[1] = fov[1];
+        c.marker_w = w / 12;
+        c.marker_h = h / 3;
+        c.fuse_w = w / 48;
         return c;
     }
-    int32_t bar_y() const { return (int32_t)(h / 2 - bar_h / 2); }
-    int32_t outer_x(uint32_t eye) const {
-        return eye == 0 ? 0 : (int32_t)(w - bar_w);
+
+    float u_of_angle(uint32_t eye, float radians) const {
+        const float tl = tanf(fov[eye].angleLeft);
+        const float tr = tanf(fov[eye].angleRight);
+        return (tanf(radians) - tl) / (tr - tl);
     }
-    int32_t centre_x(uint32_t eye) const {
-        return (int32_t)(w / 2 - bar_w / 2) + (eye == 0 ? disp : -disp);
+    float angle_of_x(uint32_t eye, float x) const {
+        const float tl = tanf(fov[eye].angleLeft);
+        const float tr = tanf(fov[eye].angleRight);
+        return atanf(tl + (x / (float)w) * (tr - tl));
+    }
+    int32_t x_centre_of_angle(uint32_t eye, float radians) const {
+        return (int32_t)(u_of_angle(eye, radians) * (float)w + 0.5f);
+    }
+    // Vertical: OpenXR's angleUp is positive and row 0 is the top.
+    int32_t y_centre() const {
+        const float tu = tanf(fov[0].angleUp), td = tanf(fov[0].angleDown);
+        return (int32_t)(((tu - 0.0f) / (tu - td)) * (float)h + 0.5f);
+    }
+
+    float marker_angle(uint32_t eye) const {
+        return rad(eye == 0 ? -marker_deg : marker_deg);
+    }
+    float fuse_angle(uint32_t eye) const {
+        // The left eye sees a near object slightly to the RIGHT of its own
+        // forward direction, and vice versa. That is convergence: get the sign
+        // backwards and the bar fuses BEHIND the background instead of in
+        // front, which is the defect worth catching.
+        return rad(eye == 0 ? fuse_deg : -fuse_deg);
     }
 };
 
@@ -106,14 +140,16 @@ struct Card {
 // pipeline, no shaders. The card has to be trustworthy, and the fewer moving
 // parts between "what I meant" and "what the headset shows", the fewer ways it
 // can lie about which eye is which.
-//
-// swap_bug paints view 1 as if it were view 0. It exists so the checker can be
-// shown failing: a card verifier whose only case is the good one cannot tell
-// "the eyes are correct" from "the check does nothing".
-static void paint_card(VkCommandBuffer cb, VkImage img, VkBuffer white_bar,
+enum CardBug {
+    kCardGood = 0,
+    kCardSwapped,     // view 1 painted as a copy of view 0
+    kCardPixelCentre, // the fusible bar at x = W/2 -- the bug the first run found
+};
+
+static void paint_card(VkCommandBuffer cb, VkImage img, VkBuffer white,
                        const Card &c, VkImageLayout final_layout,
                        VkAccessFlags final_access,
-                       VkPipelineStageFlags final_stage, bool swap_bug) {
+                       VkPipelineStageFlags final_stage, CardBug bug) {
     VkImageMemoryBarrier b{};
     b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -128,27 +164,38 @@ static void paint_card(VkCommandBuffer cb, VkImage img, VkBuffer white_bar,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
                          nullptr, 1, &b);
 
-    // Backgrounds: blue is left, green is right.
     const VkClearColorValue bg[2] = {
         {{0.05f, 0.07f, 0.35f, 1.0f}},
         {{0.05f, 0.35f, 0.07f, 1.0f}},
     };
     for (uint32_t eye = 0; eye < 2; eye++) {
-        const uint32_t src = swap_bug ? 0 : eye;
+        const uint32_t src = bug == kCardSwapped ? 0 : eye;
         VkImageSubresourceRange rr{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, eye, 1};
         vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                              &bg[src], 1, &rr);
     }
 
+    const int32_t y = c.y_centre() - (int32_t)(c.marker_h / 2);
     for (uint32_t eye = 0; eye < 2; eye++) {
-        const uint32_t src = swap_bug ? 0 : eye;
-        const int32_t xs[2] = {c.outer_x(src), c.centre_x(src)};
-        for (int32_t x : xs) {
+        const uint32_t src = bug == kCardSwapped ? 0 : eye;
+        const int32_t mx =
+            c.x_centre_of_angle(src, c.marker_angle(src)) -
+            (int32_t)(c.marker_w / 2);
+        int32_t fx;
+        if (bug == kCardPixelCentre)
+            fx = (int32_t)(c.w / 2) - (int32_t)(c.fuse_w / 2);
+        else
+            fx = c.x_centre_of_angle(src, c.fuse_angle(src)) -
+                 (int32_t)(c.fuse_w / 2);
+
+        const int32_t xs[2] = {mx, fx};
+        const uint32_t ws[2] = {c.marker_w, c.fuse_w};
+        for (int i = 0; i < 2; i++) {
             VkBufferImageCopy cp{};
             cp.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, eye, 1};
-            cp.imageOffset = {x, c.bar_y(), 0};
-            cp.imageExtent = {c.bar_w, c.bar_h, 1};
-            vkCmdCopyBufferToImage(cb, white_bar, img,
+            cp.imageOffset = {xs[i], y, 0};
+            cp.imageExtent = {ws[i], c.marker_h, 1};
+            vkCmdCopyBufferToImage(cb, white, img,
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
                                    &cp);
         }
@@ -162,17 +209,10 @@ static void paint_card(VkCommandBuffer cb, VkImage img, VkBuffer white_bar,
                          nullptr, 0, nullptr, 1, &b);
 }
 
-// Read the card back out of the pixels, with no knowledge of what was
-// intended beyond the Card geometry. Returns the number of complaints and
-// prints each one.
+// Read the card back out of the pixels and check it in ANGLES, which is the
+// only space in which the two views are comparable at all. Returns the number
+// of complaints and prints each one.
 static int verify_card(const uint8_t *px, size_t layer_bytes, const Card &c) {
-    auto at = [&](uint32_t eye, int32_t x, int32_t y) {
-        return px + layer_bytes * eye + ((size_t)y * c.w + x) * 4;
-    };
-    auto is_white = [&](const uint8_t *p) {
-        return p[0] > 200 && p[1] > 200 && p[2] > 200;
-    };
-    const int32_t y = (int32_t)(c.h / 2);
     int bad = 0;
     auto complain = [&](const char *fmt, ...) {
         char buf[512];
@@ -183,10 +223,16 @@ static int verify_card(const uint8_t *px, size_t layer_bytes, const Card &c) {
         printf("card: %s\n", buf);
         bad++;
     };
+    auto at = [&](uint32_t eye, int32_t x, int32_t y) {
+        return px + layer_bytes * eye + ((size_t)y * c.w + x) * 4;
+    };
+    auto is_white = [](const uint8_t *p) {
+        return p[0] > 200 && p[1] > 200 && p[2] > 200;
+    };
 
-    // Tint. Sampled well away from every bar.
-    const uint8_t *b0 = at(0, (int32_t)(c.w / 2), (int32_t)(c.h / 12));
-    const uint8_t *b1 = at(1, (int32_t)(c.w / 2), (int32_t)(c.h / 12));
+    // Tint, sampled well above every bar.
+    const uint8_t *b0 = at(0, (int32_t)(c.w / 2), (int32_t)(c.h / 24));
+    const uint8_t *b1 = at(1, (int32_t)(c.w / 2), (int32_t)(c.h / 24));
     if (!(b0[2] > b0[1] && b0[2] > b0[0]))
         complain("view 0 background is not blue (rgb %u %u %u)", b0[0], b0[1],
                  b0[2]);
@@ -194,51 +240,96 @@ static int verify_card(const uint8_t *px, size_t layer_bytes, const Card &c) {
         complain("view 1 background is not green (rgb %u %u %u)", b1[0], b1[1],
                  b1[2]);
 
-    // Outer bars: present in one view, absent in the other, at both edges.
-    const int32_t left_x = (int32_t)(c.bar_w / 2);
-    const int32_t right_x = (int32_t)(c.w - c.bar_w / 2);
-    if (!is_white(at(0, left_x, y)))
-        complain("view 0 has no bar at the LEFT edge");
-    if (is_white(at(1, left_x, y)))
-        complain("view 1 has a bar at the LEFT edge — that is view 0's marker");
-    if (!is_white(at(1, right_x, y)))
-        complain("view 1 has no bar at the RIGHT edge");
-    if (is_white(at(0, right_x, y)))
-        complain("view 0 has a bar at the RIGHT edge — that is view 1's marker");
-
-    // Centre bar disparity, measured rather than assumed: scan the middle
-    // third of the row (which the outer bars cannot reach) for the first white
-    // pixel in each view.
-    int32_t edge[2] = {-1, -1};
-    for (uint32_t eye = 0; eye < 2; eye++)
-        for (int32_t x = (int32_t)(c.w / 3); x < (int32_t)(2 * c.w / 3); x++)
-            if (is_white(at(eye, x, y))) {
-                edge[eye] = x;
-                break;
+    // Find the white runs along the bar row, and name them by width rather
+    // than by where they were expected -- a checker that looks only where it
+    // expects cannot report "the bar is somewhere else".
+    const int32_t y = c.y_centre();
+    float marker_ang[2] = {0, 0}, fuse_ang[2] = {0, 0};
+    bool have_marker[2] = {false, false}, have_fuse[2] = {false, false};
+    for (uint32_t eye = 0; eye < 2; eye++) {
+        int runs = 0;
+        int32_t x = 0;
+        while (x < (int32_t)c.w) {
+            if (!is_white(at(eye, x, y))) {
+                x++;
+                continue;
             }
-    if (edge[0] < 0 || edge[1] < 0) {
-        complain("centre bar missing in view %d", edge[0] < 0 ? 0 : 1);
-    } else {
-        const int32_t got = edge[0] - edge[1];
-        printf("card: centre bar at x=%d (view 0) and x=%d (view 1) — "
-               "disparity %+d px, expected %+d\n",
-               edge[0], edge[1], got, 2 * c.disp);
-        if (got != 2 * c.disp)
-            complain("centre disparity is %+d px, expected %+d", got,
-                     2 * c.disp);
+            int32_t start = x;
+            while (x < (int32_t)c.w && is_white(at(eye, x, y)))
+                x++;
+            const int32_t width = x - start;
+            const float centre = (float)(start + x) * 0.5f;
+            const float ang = xr::deg(c.angle_of_x(eye, centre));
+            runs++;
+            // The marker is four times the fusible bar's width, so the split
+            // is unambiguous even after a pixel or two of rounding.
+            if (width > (int32_t)(c.marker_w + c.fuse_w) / 2) {
+                marker_ang[eye] = ang;
+                have_marker[eye] = true;
+            } else {
+                fuse_ang[eye] = ang;
+                have_fuse[eye] = true;
+            }
+        }
+        if (runs != 2)
+            complain("view %u has %d white bar(s) on the centre row, expected 2",
+                     eye, runs);
+    }
+
+    for (uint32_t eye = 0; eye < 2; eye++) {
+        if (!have_marker[eye]) {
+            complain("view %u has no identity marker", eye);
+            continue;
+        }
+        const float want = xr::deg(c.marker_angle(eye));
+        printf("card: view %u marker at %+.2f deg (want %+.2f)\n", eye,
+               marker_ang[eye], want);
+        if (fabsf(marker_ang[eye] - want) > 1.5f)
+            complain("view %u marker is at %+.2f deg, expected %+.2f — this is "
+                     "the eye-order check",
+                     eye, marker_ang[eye], want);
+    }
+
+    if (!have_fuse[0] || !have_fuse[1]) {
+        complain("the fusible bar is missing from view %d",
+                 have_fuse[0] ? 1 : 0);
+        return bad;
+    }
+    const float disparity = fuse_ang[0] - fuse_ang[1];
+    const float want = 2.0f * c.fuse_deg;
+    printf("card: fusible bar at %+.3f deg (view 0) and %+.3f deg (view 1) — "
+           "convergence %+.3f deg, expected %+.3f\n",
+           fuse_ang[0], fuse_ang[1], disparity, want);
+    if (fabsf(disparity - want) > 0.15f) {
+        complain("convergence is %+.3f deg, expected %+.3f%s", disparity, want,
+                 disparity < -1.0f ? " — the eyes are being asked to DIVERGE, "
+                                     "which no one can fuse"
+                                   : "");
     }
     return bad;
 }
 
 // --------------------------------------------------------------- selftest
 
-// The card on a plain 2-layer image: no runtime, no headset, no compositor.
-// This is the part that can be wrong in a way a person wearing a headset would
-// misread as "the eyes are swapped", so it gets checked by a program that
-// knows exactly what it asked for.
+// What WiVRn reported on this machine. Using the real asymmetry rather than a
+// tidy symmetric stand-in is the point: a symmetric FOV makes the angle-vs-
+// pixel distinction invisible, which is how the first card shipped wrong.
+static void wivrn_fov(XrFovf *fov) {
+    fov[0].angleLeft = rad(-54.0f);
+    fov[0].angleRight = rad(40.0f);
+    fov[0].angleUp = rad(44.0f);
+    fov[0].angleDown = rad(-55.0f);
+    fov[1].angleLeft = rad(-40.0f);
+    fov[1].angleRight = rad(54.0f);
+    fov[1].angleUp = rad(44.0f);
+    fov[1].angleDown = rad(-55.0f);
+}
+
 static int selftest() {
-    const uint32_t W = 1408, H = 1408;
-    const Card c = Card::of(W, H);
+    const uint32_t W = 3096, H = 3243; // WiVRn's recommended per-eye extent
+    XrFovf fov[2];
+    wivrn_fov(fov);
+    const Card c = Card::of(W, H, fov);
 
     VkApplicationInfo app{};
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -307,7 +398,8 @@ static int selftest() {
     ii.arrayLayers = 2;
     ii.samples = VK_SAMPLE_COUNT_1_BIT;
     ii.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ii.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+    ii.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+               VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     VkImage img = VK_NULL_HANDLE;
@@ -317,16 +409,15 @@ static int selftest() {
     VkMemoryAllocateInfo imai{};
     imai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     imai.allocationSize = imr.size;
-    imai.memoryTypeIndex = find_mem(imr.memoryTypeBits,
-                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    imai.memoryTypeIndex =
+        find_mem(imr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     if (imai.memoryTypeIndex == UINT32_MAX)
         FAIL("no device-local memory type for the image");
     VkDeviceMemory imem = VK_NULL_HANDLE;
     VK_OK(vkAllocateMemory(dev, &imai, nullptr, &imem));
     VK_OK(vkBindImageMemory(dev, img, imem, 0));
 
-    // The white bar source, and the readback destination.
-    const VkDeviceSize bar_bytes = (VkDeviceSize)c.bar_w * c.bar_h * 4;
+    const VkDeviceSize bar_bytes = (VkDeviceSize)c.marker_w * c.marker_h * 4;
     const VkDeviceSize layer_bytes = (VkDeviceSize)W * H * 4;
     auto make_buffer = [&](VkDeviceSize size, VkBufferUsageFlags usage,
                            VkBuffer *buf, VkDeviceMemory *mem) {
@@ -341,9 +432,9 @@ static int selftest() {
         VkMemoryAllocateInfo mai{};
         mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         mai.allocationSize = mr.size;
-        mai.memoryTypeIndex =
-            find_mem(mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        mai.memoryTypeIndex = find_mem(
+            mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                   VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         if (mai.memoryTypeIndex == UINT32_MAX)
             return false;
         return vkAllocateMemory(dev, &mai, nullptr, mem) == VK_SUCCESS &&
@@ -377,15 +468,23 @@ static int selftest() {
     VkCommandBuffer cb = VK_NULL_HANDLE;
     VK_OK(vkAllocateCommandBuffers(dev, &cbi, &cb));
 
+    struct Case {
+        CardBug bug;
+        const char *what;
+        bool must_fail;
+    };
+    const Case cases[] = {
+        {kCardGood, "the card as submitted", false},
+        {kCardSwapped, "negative control: view 1 painted as view 0", true},
+        {kCardPixelCentre,
+         "negative control: fusible bar at x = W/2 in both views (the defect "
+         "the first headset run found)",
+         true},
+    };
+
     int failures = 0;
-    // Case 1 is the card as it will be submitted. Case 2 paints view 1 as a
-    // copy of view 0 -- the exact defect a person in a headset would report as
-    // "no stereo" -- and MUST be caught, or the checker proves nothing.
-    for (int pass = 0; pass < 2; pass++) {
-        const bool swap_bug = pass == 1;
-        printf("card: %s\n", swap_bug ? "negative control (view 1 painted as "
-                                        "view 0) — this one must fail"
-                                      : "the card as submitted");
+    for (const Case &k : cases) {
+        printf("card: %s\n", k.what);
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -393,7 +492,7 @@ static int selftest() {
         vkBeginCommandBuffer(cb, &bi);
         paint_card(cb, img, bar, c, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                    VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                   swap_bug);
+                   k.bug);
         VkBufferImageCopy rc{};
         rc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 2};
         rc.imageExtent = {W, H, 1};
@@ -412,15 +511,15 @@ static int selftest() {
         const int bad = verify_card((const uint8_t *)rp, layer_bytes, c);
         vkUnmapMemory(dev, back_mem);
 
-        if (!swap_bug && bad) {
+        if (!k.must_fail && bad) {
             printf("card: the card is wrong — %d complaint(s)\n", bad);
             failures++;
-        } else if (swap_bug && !bad) {
-            printf("card: the checker passed a card with both views the same "
-                   "— it is not checking anything\n");
+        } else if (k.must_fail && !bad) {
+            printf("card: the checker passed a card it should have rejected — "
+                   "it is not checking anything\n");
             failures++;
         } else {
-            printf("card: %s\n", swap_bug ? "caught, as required" : "correct");
+            printf("card: %s\n", k.must_fail ? "caught, as required" : "correct");
         }
     }
 
@@ -441,9 +540,9 @@ static int selftest() {
     return 0;
 }
 
-// The v1 extension, used only to *report* what enable2 merges silently. Absent
-// on a runtime that only implements enable2, which is not an error -- the
-// session works either way, we just cannot narrate it.
+// The v1 extension queries, used only to *report* what enable2 merges
+// silently. They resolve only if XR_KHR_vulkan_enable is enabled on the
+// instance as well, which runtime_open does when the runtime offers it.
 static void report_merged_extensions(xr::Runtime &rt) {
     PFN_xrGetVulkanInstanceExtensionsKHR gi = nullptr;
     PFN_xrGetVulkanDeviceExtensionsKHR gd = nullptr;
@@ -452,8 +551,8 @@ static void report_merged_extensions(xr::Runtime &rt) {
     rt.api.GetInstanceProcAddr(rt.instance, "xrGetVulkanDeviceExtensionsKHR",
                                (PFN_xrVoidFunction *)&gd);
     if (!gi && !gd) {
-        printf("xr: runtime does not expose the v1 extension queries — the "
-               "merged extension lists are not observable from here\n");
+        printf("xr: the v1 extension queries did not resolve — the merged "
+               "extension lists are not observable from here\n");
         return;
     }
     auto dump = [&](const char *what,
@@ -616,7 +715,6 @@ int main(int argc, char **argv) {
 
     const uint32_t W = rt.views[0].recommendedImageRectWidth;
     const uint32_t H = rt.views[0].recommendedImageRectHeight;
-    const Card card = Card::of(W, H);
     xr::Swapchain sc;
     // One 2-layer swapchain, one layer per eye -- the same shape as the eye
     // image the compositor already builds, so the eventual submission is a
@@ -629,8 +727,12 @@ int main(int argc, char **argv) {
            (unsigned)sc.images.size());
     printf("KEY_SWAPCHAIN_IMAGES=%u\n", (unsigned)sc.images.size());
 
-    // The white bar the card is painted with.
-    const VkDeviceSize bar_bytes = (VkDeviceSize)card.bar_w * card.bar_h * 4;
+    // The white bar the card is painted with, sized for the widest bar.
+    XrFovf guess[2];
+    wivrn_fov(guess);
+    const Card sizing = Card::of(W, H, guess);
+    const VkDeviceSize bar_bytes =
+        (VkDeviceSize)sizing.marker_w * sizing.marker_h * 4;
     VkBufferCreateInfo bci{};
     bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bci.size = bar_bytes;
@@ -687,8 +789,6 @@ int main(int argc, char **argv) {
           fov_d[2] = {0, 0};
     float ipd_m = 0.0f;
     bool asymmetric = false;
-    // A head that never moves is the interesting failure, so the span of the
-    // reported position is reported at the end rather than only sampled.
     float pmin[3] = {1e9f, 1e9f, 1e9f}, pmax[3] = {-1e9f, -1e9f, -1e9f};
     const double t0 = now_s();
 
@@ -717,6 +817,12 @@ int main(int argc, char **argv) {
         if (render && have) {
             uint32_t idx = 0;
             if (xr::swapchain_acquire(sc, &idx)) {
+                // Built from the FOV this frame reported, not from a constant:
+                // the runtime is allowed to change it, and the whole point of
+                // the card is that where a bar belongs depends on it.
+                const XrFovf frame_fov[2] = {views[0].fov, views[1].fov};
+                const Card card = Card::of(W, H, frame_fov);
+
                 VkCommandBufferBeginInfo bi{};
                 bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
                 bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -726,7 +832,7 @@ int main(int argc, char **argv) {
                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                           false);
+                           kCardGood);
                 vkEndCommandBuffer(cb);
 
                 VkSubmitInfo si{};
@@ -781,6 +887,18 @@ int main(int argc, char **argv) {
                        xr::deg(fov_r[e] - fov_l[e]),
                        xr::deg(fov_u[e] - fov_d[e]));
             }
+            // Where straight ahead lands in each image. This is the number
+            // that made the first card unfusible, so it is printed rather than
+            // left to be rediscovered.
+            const XrFovf kf[2] = {views[0].fov, views[1].fov};
+            const Card k = Card::of(W, H, kf);
+            printf("xr: the image CENTRE is %+.2f deg in view 0 and %+.2f deg "
+                   "in view 1 — a bar painted at x=W/2 in both would ask the "
+                   "eyes to diverge by %.2f deg\n",
+                   xr::deg(k.angle_of_x(0, (float)W * 0.5f)),
+                   xr::deg(k.angle_of_x(1, (float)W * 0.5f)),
+                   fabsf(xr::deg(k.angle_of_x(0, (float)W * 0.5f) -
+                                 k.angle_of_x(1, (float)W * 0.5f))));
             const float dx = views[1].pose.position.x - views[0].pose.position.x;
             const float dy = views[1].pose.position.y - views[0].pose.position.y;
             const float dz = views[1].pose.position.z - views[0].pose.position.z;
