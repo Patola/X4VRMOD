@@ -266,6 +266,136 @@ int main() {
               "left eye is +s, matching the sign of the left eye's shear");
     }
 
+    // ---- Task #23: recovering sx from M_worldviewprojection alone ----
+    //
+    // Twelve of X4's World vertex modules declare ONE descriptor -- the set-3
+    // per-object block -- and no camera block, so patch_vertex_eye_offset
+    // refuses them and they fall back to a baked sx. At rest that is now
+    // correct; under zoom the scene camera runs 0.75405 to 29.18689, a factor
+    // of 38, and those modules keep shearing by the resting value.
+    //
+    // sx is not stored anywhere they can see. It is however *recoverable*, and
+    // that is what this block checks before any shader is patched on the
+    // strength of it. With X4's projection,
+    //
+    //     row0(P) = [sx 0 0 0]        so  row0(MVP) = sx * row0(VW)
+    //     row3(P) = [0 0 1 0]         so  row3(MVP) =      row2(VW)
+    //
+    // and for a view matrix that is rigid and an object matrix that is rigid
+    // times a uniform scale s, the linear parts of row0(VW) and row2(VW) both
+    // have magnitude s. So
+    //
+    //     |row0(MVP).xyz| / |row3(MVP).xyz| = (sx*s)/s = sx
+    //
+    // exactly, with the object's scale cancelling. One divide and one sqrt per
+    // vertex, no new descriptor, no push constant, no pipeline layout change.
+    {
+        printf("\n-- #23: sx recovered from MVP --\n");
+        auto mul = [](const x4vr::Mat4 &a, const x4vr::Mat4 &b) {
+            x4vr::Mat4 o{}; // column-major: element (row r, col c) is m[c*4+r]
+            for (int c = 0; c < 4; c++)
+                for (int r = 0; r < 4; r++) {
+                    float s = 0.0f;
+                    for (int k = 0; k < 4; k++)
+                        s += a.m[k * 4 + r] * b.m[c * 4 + k];
+                    o.m[c * 4 + r] = s;
+                }
+            return o;
+        };
+        // The recovery, written exactly as the shader will compute it.
+        auto recover = [](const x4vr::Mat4 &mvp) {
+            const float r0[3] = {mvp.m[0], mvp.m[4], mvp.m[8]};
+            const float r3[3] = {mvp.m[3], mvp.m[7], mvp.m[11]};
+            const float n0 = r0[0] * r0[0] + r0[1] * r0[1] + r0[2] * r0[2];
+            const float n3 = r3[0] * r3[0] + r3[1] * r3[1] + r3[2] * r3[2];
+            return n3 > 0.0f ? std::sqrt(n0 / n3) : 0.0f;
+        };
+        // Rigid transform: rotation about a normalised axis, then translation,
+        // then a uniform scale.
+        auto rigid = [](float ax, float ay, float az, float ang, float tx,
+                        float ty, float tz, float s) {
+            const float l = std::sqrt(ax * ax + ay * ay + az * az);
+            ax /= l; ay /= l; az /= l;
+            const float c = std::cos(ang), si = std::sin(ang), t = 1.0f - c;
+            x4vr::Mat4 m{};
+            // column 0
+            m.m[0] = (t * ax * ax + c) * s;
+            m.m[1] = (t * ax * ay + si * az) * s;
+            m.m[2] = (t * ax * az - si * ay) * s;
+            // column 1
+            m.m[4] = (t * ax * ay - si * az) * s;
+            m.m[5] = (t * ay * ay + c) * s;
+            m.m[6] = (t * ay * az + si * ax) * s;
+            // column 2
+            m.m[8] = (t * ax * az + si * ay) * s;
+            m.m[9] = (t * ay * az - si * ax) * s;
+            m.m[10] = (t * az * az + c) * s;
+            // column 3
+            m.m[12] = tx; m.m[13] = ty; m.m[14] = tz; m.m[15] = 1.0f;
+            return m;
+        };
+
+        // Every sx this project has actually measured, not a round number:
+        // the fov=1.0 base, the profile, the two widened fields, and the zoom
+        // stop that take 106 landed on.
+        const float sxs[] = {1.33333f, 1.15174f, 0.83923f, 0.75405f,
+                             0.69231f, 3.78085f, 29.18689f, 37.75372f};
+        int worst_case = 0;
+        float worst = 0.0f;
+        for (float sx : sxs) {
+            const x4vr::Mat4 p = x4_projection(sx, -sx, 0.1f);
+            // X4 renders camera-relative, so its M_view is identity in every
+            // dump -- but the derivation does not depend on that, and a test
+            // that only ever passes V = I would not notice if it did.
+            const x4vr::Mat4 views[] = {
+                identity(),
+                rigid(0.3f, 1.0f, -0.2f, 0.7f, 12.0f, -3.0f, 40.0f, 1.0f)};
+            for (const x4vr::Mat4 &v : views)
+                for (int i = 0; i < 6; i++) {
+                    // Uniform scales spanning what X4 draws: a cockpit prop to
+                    // a station module.
+                    const float s = (float[]){1.0f,   0.01f, 0.25f,
+                                              7.5f,   120.0f, 3000.0f}[i];
+                    const x4vr::Mat4 w =
+                        rigid(1.0f, 0.4f * i - 1.0f, 0.9f, 0.4f * i,
+                              -20.0f * i, 5.0f * i, 300.0f * i, s);
+                    const float got = recover(mul(p, mul(v, w)));
+                    const float rel = std::fabs(got - sx) / sx;
+                    if (rel > worst) { worst = rel; worst_case = i; }
+                }
+        }
+        check(worst < 1e-4f, "sx recovered from MVP for every measured sx, "
+                             "both views and scales from 0.01 to 3000");
+        printf("     worst relative error %.2e (scale case %d)\n", worst,
+               worst_case);
+
+        // The assumption, stated as a failing case rather than as a sentence.
+        // A NON-uniform object scale breaks the cancellation, and the error is
+        // the ratio of the two axes' scales -- so this pins how wrong it gets
+        // rather than leaving "rare in practice" as the only argument.
+        {
+            const float sx = 0.75405f;
+            x4vr::Mat4 w = identity();
+            w.m[0] = 2.0f;  // x scaled 2x
+            w.m[10] = 1.0f; // z left alone
+            const float got =
+                recover(mul(x4_projection(sx, -sx, 0.1f), mul(identity(), w)));
+            check_near(got, sx * 2.0f, 1e-4f,
+                       "a 2x non-uniform x scale reports 2x sx — the "
+                       "cancellation needs uniform scale, and this is how far "
+                       "it misses");
+        }
+
+        // Degenerate input must not produce a plausible number. A zero matrix
+        // is what an unpopulated block reads as, and take 104's proj instrument
+        // already refuses those; the shader gets the same treatment.
+        {
+            x4vr::Mat4 zero{};
+            check(recover(zero) == 0.0f,
+                  "an unpopulated block recovers 0, not a NaN or a guess");
+        }
+    }
+
     printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n", g_fail);
     return g_fail ? 1 : 0;
 }

@@ -12909,3 +12909,96 @@ Nothing needs a run to *fix*, so this rides along with whatever runs next:
    from one number.
 2. **No** `WARNING swapchain` line. Takes 103–108 already have none, so its
    return would mean this change broke something rather than that X4 did.
+
+## Task #23 — the twelve modules, what they are, and where sx was hiding
+
+### Identified with the layer's own code, not a reimplementation
+
+`x4vr_test_spirv_patch classify` and `vert-eye-offset` over a dumped module set
+give the exact list the layer would produce, because they *are* the layer's
+`classify()` and `patch_vertex_eye_offset()`. Over take 74's 397 modules:
+
+    348 World vertex modules, 12 refused for having no camera block:
+    25 26 133 134 145 146 157 158 222 223 226 227
+
+First attempt used `/tmp/x4vr-shaders` (409 modules), which has **no matching
+log** — and module serials are per-run, so nothing in it can be correlated to a
+render pass. Redone against take 74, which has both.
+
+### They are combined vertex+fragment modules with exactly one descriptor
+
+    OpEntryPoint Vertex   %main "main" ... %SPECIAL_VERTEXLOCATION_POSITION
+    OpEntryPoint Fragment %main_0 "main" %OUT_RT0
+    OpDecorate %_ DescriptorSet 3
+    OpDecorate %_ Binding 0
+    OpMemberName %BLOCK_BUFFER_BINDING_SLOT_WORLD 0 "M_worldviewprojection"
+
+One Uniform block, set 3 binding 0, the per-object block. **No camera block in
+either stage** — so this is not the combined-module aliasing trap that
+`classify(wide_camera)` exists for. They genuinely cannot see the camera.
+
+### Only four of them draw anywhere that is sheared
+
+Correlating each against take 74's `mv final: (present )?rp #N <- frag module #M`
+lines, and the pass classification:
+
+| modules | passes | classified |
+|---|---|---|
+| 26, 134, 146, 158 | rp #13, #16, #23 | **STEREO (world)** — these matter |
+| 223, 227 | rp #34, #36, #38, #40, #42 | MONO (depth-only/shadow) — never sheared |
+| 25, 133, 145, 157, 222, 226 | none | never bound in this session |
+
+The pairs are consistent: X4 compiles two variants of each and binds the second.
+That is the same late-selected-variant shape recorded for the hull/menu-quad
+module. Six of the twelve are the variant that never runs, two run only in the
+shadow cascades the layer already excludes, and **four draw real geometry into
+the G-buffer and the lighting passes with a baked `sx`**.
+
+### sx is not stored where they can see it — but it is recoverable
+
+The block carries `M_worldviewprojection`, `M_world`, `M_prevworldviewprojection`,
+five shadow matrices and some scalars. No projection, no view, no `sx`.
+
+X4's projection, read from take 108's dump and already modelled in
+`tests/view_math.cpp`:
+
+    row0(P) = [sx  0  0  0]      x_c = sx*x_v
+    row3(P) = [ 0  0  1  0]      w_c = z_v
+    row2(P) = [ 0  0  0  near]   z_c = near, constant -- m[10] is 0
+
+Therefore, for `MVP = P·V·W`:
+
+    row0(MVP) = sx * row0(VW)
+    row3(MVP) =      row2(VW)
+
+and if the view is rigid and the object matrix is rigid times a **uniform** scale
+`s`, both those rows have linear part of magnitude `s`:
+
+    |row0(MVP).xyz| / |row3(MVP).xyz| = (sx*s)/s = sx        exactly
+
+The object's own scale cancels. One divide and one square root per vertex, from a
+block the module already reads — **no new descriptor, no push constant, no
+pipeline-layout change**, which is what makes this viable at all: adding a push
+constant range would alter layout compatibility for pipelines the layer does not
+own.
+
+### Validated before any shader was touched
+
+`tests/view_math.cpp` now checks the recovery against every `sx` this project has
+measured — 1.33333, 1.15174, 0.83923, 0.75405, 0.69231, 3.78085, 29.18689,
+37.75372 — with an identity view *and* a rigid non-identity one, at object scales
+of 0.01, 0.25, 1, 7.5, 120 and 3000:
+
+    worst relative error 2.37e-07
+
+Two more cases pin the edges rather than leaving them as prose. A **2× non-uniform
+x scale** reports `2·sx`, so the assumption is recorded as the exact factor it
+costs when it fails, not as "rare in practice". A **zero matrix** — what an
+unpopulated block reads as — recovers `0`, not a NaN and not a plausible number.
+
+### What this buys beyond #23
+
+`X4VR_PROJ_SX` and `X4VR_FOV` currently have to be kept in step by hand; the
+`stage5-wide-field` entry says so in as many words. Every module that recovers
+`sx` per draw stops consulting the baked constant at all, so the pair that must
+be kept in sync shrinks toward nothing.
