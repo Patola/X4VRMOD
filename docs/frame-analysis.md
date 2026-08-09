@@ -13943,6 +13943,110 @@ submission take, not before it.
 Family 0 advertises `SPARSE_BINDING`, the layer does not intercept it, and it is
 a queue operation with the same external-synchronisation rule.
 
+## Task #35 — the affine, derived and locked offline. No take spent
+
+`tests/view_math.cpp` grew 22 cases; all pass, and the whole thing still runs
+without a GPU or a running X4.
+
+### The map
+
+X4 gives `x_c = sx·x`, `w_c = z`, so the true ray is `x/z = x_c/(sx·w_c)`. A
+rectilinear image is linear in TANGENT, so the target's NDC for that ray is
+`(2·(x/z) − (tan_r+tan_l))/(tan_r − tan_l)`. Multiplying by `w_c`:
+
+    x_c' = [2/((tan_r − tan_l)·sx)]·x_c − [(tan_r + tan_l)/(tan_r − tan_l)]·w_c
+    y_c' = [−2/((tan_u − tan_d)·sy)]·y_c + [(tan_u + tan_d)/(tan_u − tan_d)]·w_c
+
+At the union half-angle of 55°, against WiVRn's measured angles:
+
+    view 0   A_x = 1.2892   B_x = +0.2425   A_y = 1.1932   B_y = −0.1932
+    view 1   A_x = 1.2892   B_x = −0.2425   A_y = 1.1932   B_y = −0.1932
+
+### The two things the previous section left open are now settled
+
+**The vertical sign.** `A_y` is negative over `sy`, and `sy` is negative, so
+`A_y` comes out **positive** — the affine preserves X4's Y-flip rather than
+adding a second one. Asserted as a *direction* ("a point above the camera lands
+at negative NDC y"), because a magnitude check cannot catch a flip and a flipped
+image is invisible in every aggregate this project computes.
+
+**Composition with the existing shear.** The shear leaves `x_c = sx·(x − d)`, so
+dividing by `sx` recovers the eye's own ray and the affine needs no eye-offset
+term at all. Apply the shear, then the affine — proven against the *definition*
+of the target frustum (not against a second copy of the implementation) at a
+worst NDC error of 2.4e-07, over both eyes, six points, and five cameras
+including the 1.5:1 non-square map camera. The folded single-multiply form is
+proven equivalent and left unused: the shear it would replace is what 60 passing
+takes ran.
+
+### A prerequisite that turned out not to exist
+
+The vertical needs no separate `X4VR_FOV`. `score_run.py` already reads it out
+of every log: on the fov camera `|sy/sx| = 1.0000` against an eye aspect of
+1.0000 — X4 **widens** the field rather than stretching it, so the eye is a
+square symmetric frustum and one setting covers both axes. The union is
+therefore `max(54, 40, 44, 55) = 55°`, giving **`X4VR_FOV = 1.4917`** — which is
+the number the previous section had already derived horizontally, now known to
+be sufficient vertically too.
+
+### A number in this file was wrong: the views are not "canted 14°"
+
+`14°` is `54 − 40` — a subtraction in ANGLE space, in a file whose central
+lesson is that rectilinear projection is linear in tangent. The correct figure
+is `atan((tan_l + tan_r)/2) = 15.04°`, which the probe has been printing all
+along. Both occurrences are left in place above; this is the correction.
+
+More importantly, **neither number is a pose cant.** Both describe the FOV. A
+runtime may put the same optics in the poses or in the FOV, and this file has
+never measured which — see the prediction below.
+
+### Two routes to first light, and why the cheap one should go first
+
+|                        | symmetric submission | the affine |
+|------------------------|----------------------|------------|
+| shader changes         | none                 | every world vertex module |
+| also needs             | nothing              | the inverse folded into `patch_fragment_invproj_eye` |
+| rasterised / displayed | **1.54×**            | 1.0× |
+| X4-side culling        | `X4VR_FOV = 1.4917`  | `X4VR_FOV = 1.4917` |
+
+Submitting a symmetric FOV of our own is legal and normal: the `fov` field of
+`XrCompositionLayerProjectionView` states what the image *was rendered with*,
+not what the runtime recommended, and the compositor crops. The earlier section
+rejected it — correctly, for the steady state, on the 1.5× fill cost. As a
+**first milestone** that reasoning does not apply: it needs no shader work at
+all, and it is the negative control the affine must be judged against. The
+affine's saving is real (it maps the target frustum onto the full NDC box, so
+nothing wasted is ever rasterised) and it stays the destination.
+
+The coupling that makes the affine the larger job is already documented above:
+the deferred passes reconstruct view position from NDC through
+`M_invprojection`, and `patch_fragment_invproj_eye` corrects that for the eye
+offset today. Change what NDC means and that correction changes with it.
+
+### Probe run 2 — does the cant live in the pose or in the FOV?
+
+Cheap, decisive, and not an X4 take: 20 s, no X4, no take number. `xr_probe`
+now locates `VIEW` space and reports each view's rotation against the head, and
+the two views against each other.
+
+    tests/run-xr-probe.sh 20        # WiVRn running, headset on
+
+**P115.1: the poses are PARALLEL** — `KEY_VIEW_REL_DEG` under 0.5°,
+`KEY_POSES_PARALLEL=1`. The 15.04° is expected to sit entirely in the FOV,
+because a runtime that rotated the poses *as well* would be describing 30° of
+outward cant, which is not what a Quest 3's optics do.
+
+**Why it is worth a run rather than an assumption.** If P115.1 holds, one camera
+orientation serves both eyes and the per-eye difference is the lateral offset
+the layer already applies — first light needs no new vertex math whatsoever. If
+it fails, each eye needs its own rotation, and rotation is the case where the
+algebra stops collapsing: a translation leaves `w_c` untouched, a yaw gives
+`w_c' = −(a/sx)·sinθ + d·cosθ` and does not. That is a different patch, and
+knowing which one to write is worth twenty seconds.
+
+The probe prints its own verdict in words (`xr: VERDICT poses are …`) so the
+answer does not have to be re-derived from two angles later.
+
 # State at `stage8-xr-session-in-x4` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the
@@ -14036,11 +14140,19 @@ X4 must render the union so nothing is culled: **±55°, i.e. `X4VR_FOV = 1.4917
 full density. Rejected alternative: submitting a symmetric FOV of our own, which
 costs **1.48×** the frustum area in pixels the headset never shows.
 
-**Not yet settled, and the reason this is a task rather than a patch:** the
-vertical follows the same form but X4's `sy` is negative (Y-flipped), so the
-sign has to be worked out in `tests/view_math.cpp` rather than asserted; and the
-transform has to compose with the existing per-draw shear in
-`patch_vertex_eye_offset` / `..._mvp` rather than replace it.
+**Both open items are now settled** — see "Task #35 — the affine, derived and
+locked offline" above. The vertical sign comes out positive (`A_y = −2/(span·sy)`
+with `sy` negative), the composition is shear-then-affine, and both live in
+`common/x4vr_view.hpp` (`make_off_axis`, `apply_off_axis`) under 22 passing cases
+in `tests/view_math.cpp`. The vertical needs no separate FOV: the eye is square,
+so `X4VR_FOV = 1.4917` covers both axes.
+
+**What is left of #35 is the SPIR-V, not the maths** — and it may not be the
+next thing to build. A symmetric submitted FOV reaches the headset with no
+shader change at all, at 1.54× the fill; the affine removes that 1.54× but
+touches every world vertex module *and* the `M_invprojection` correction. The
+table above compares them. Blocked on probe run 2 (P115.1): if the view poses
+are parallel, first light needs no new vertex math whatsoever.
 
 ## Decisions taken, so they are not re-litigated
 

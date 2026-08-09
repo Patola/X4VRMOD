@@ -16,6 +16,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <algorithm>
 #include <initializer_list>
 
 static int g_fail = 0;
@@ -51,6 +52,25 @@ static x4vr::Mat4 x4_projection(float sx, float sy, float near_z) {
     p.m[11] = 1.0f;   // P[3][2]: w_c = z
     p.m[14] = near_z; // P[2][3]: z_c = near
     return p;
+}
+
+static float deg(float d) { return d * 0.01745329251994330f; }
+static float deg_of(float r) { return r * 57.2957795130823f; }
+
+// Where a view-space ray belongs in a target frustum, written from the
+// DEFINITION rather than from a matrix -- so the round-trip test below is not
+// checking the implementation against a second copy of itself.
+static void target_ndc(const x4vr::EyeFrustum &f, float x, float y, float z,
+                       float out[2]) {
+    out[0] = (2.0f * (x / z) - (f.tan_r + f.tan_l)) / (f.tan_r - f.tan_l);
+    out[1] = -(2.0f * (y / z) - (f.tan_u + f.tan_d)) / (f.tan_u - f.tan_d);
+}
+
+// The inverse reading: what angle does a given NDC x sit at? This is how the
+// probe reports the defect, so the test can quote its numbers back.
+static float angle_of_ndc(const x4vr::EyeFrustum &f, float n) {
+    const float u = 0.5f * (n + 1.0f);
+    return std::atan(f.tan_l + u * (f.tan_r - f.tan_l));
 }
 
 static x4vr::Mat4 transpose(const x4vr::Mat4 &a) {
@@ -393,6 +413,210 @@ int main() {
             x4vr::Mat4 zero{};
             check(recover(zero) == 0.0f,
                   "an unpopulated block recovers 0, not a NaN or a guess");
+        }
+    }
+
+    // ---- Task #35: the per-eye off-axis map -----------------------------
+    //
+    // Checked against the DEFINITION of the target frustum rather than against
+    // a matrix built the same way the code under test builds it. The failure
+    // this guards is the one that already happened once: the first eye test
+    // card was written as if the frusta were symmetric, against a prediction
+    // that said they would not be, and it took a headset run to find out.
+    {
+        printf("\n-- #35: off-axis map onto the runtime's canted frusta --\n");
+
+        // WiVRn on a Quest 3, as measured by tests/run-xr-probe.sh. View 0 is
+        // the left eye (the probe confirmed view 1 is +0.063 m in x).
+        const x4vr::EyeFrustum eye[2] = {
+            x4vr::frustum_of_angles(deg(-54.0f), deg(40.0f), deg(44.0f),
+                                    deg(-55.0f)),
+            x4vr::frustum_of_angles(deg(-40.0f), deg(54.0f), deg(44.0f),
+                                    deg(-55.0f))};
+        const float kIpd = 0.0630f;
+        const float d_eye[2] = {-0.5f * kIpd, +0.5f * kIpd};
+        // view-space points as {x, y, z, 1}, same shape as the block above
+        const float pts[5][4] = {{0, 0, 1, 1},        {1, 2, 10, 1},
+                                 {-3, 0.5f, 0.5f, 1}, {100, -50, 5000, 1},
+                                 {0.01f, 0.01f, 0.11f, 1}};
+
+        // What X4 must render so nothing visible is culled: one symmetric
+        // frustum covering both eyes' worst edge.
+        const float half = x4vr::union_half_angle(eye, 2);
+        check_near(half * 57.2957795130823f, 55.0f, 1e-3f,
+                   "union half-angle is 55 deg (the D-55 edge, not the L-54)");
+        check_near(x4vr::x4_fov_for_half(half), 1.4917f, 1e-3f,
+                   "X4VR_FOV = 1.4917 covers the union");
+        const float sx_union = 1.0f / std::tan(half);
+        check_near(sx_union, 0.70021f, 1e-4f, "union sx = cot(55 deg)");
+
+        // The constants the docs quote, so a change of convention has to
+        // change the doc too.
+        const x4vr::OffAxis oa0 = x4vr::make_off_axis(eye[0], d_eye[0]);
+        const x4vr::OffAxis oa1 = x4vr::make_off_axis(eye[1], d_eye[1]);
+        check(oa0.ok && oa1.ok, "both frusta accepted");
+        check_near(oa0.ax_num / sx_union, 1.2892f, 1e-3f, "view 0 A_x = 1.2892");
+        check_near(oa0.bx, +0.2425f, 1e-3f, "view 0 B_x = +0.2425");
+        check_near(oa1.bx, -0.2425f, 1e-3f, "view 1 B_x = -0.2425 (mirrored)");
+        check_near(oa0.ay_num / -sx_union, 1.1932f, 1e-3f,
+                   "view 0 A_y = 1.1932 (sy is negative, A_y is not)");
+        check_near(oa0.by, -0.1932f, 1e-3f, "view 0 B_y = -0.1932");
+        check(oa0.by == oa1.by,
+              "both eyes share the vertical — measured, not assumed");
+
+        // ---- the identity case ----
+        // A symmetric target at the angle X4 is already rendering must leave
+        // every clip position untouched. A map that is not the identity here
+        // is wrong everywhere, and this is the cheapest place to see it.
+        {
+            bool all_id = true;
+            for (float t_deg : {20.0f, 36.87f, 55.0f, 70.0f}) {
+                const float t = deg(t_deg), tt = std::tan(t);
+                const x4vr::EyeFrustum sym =
+                    x4vr::frustum_of_angles(-t, t, t, -t);
+                const x4vr::OffAxis o = x4vr::make_off_axis(sym, 0.0f);
+                const float sx = 1.0f / tt, sy = -1.0f / tt;
+                for (const float *v : {pts[0], pts[1], pts[2], pts[3], pts[4]}) {
+                    float clip[4] = {sx * v[0], sy * v[1], 0.1f, v[2]};
+                    const float before[4] = {clip[0], clip[1], clip[2], clip[3]};
+                    x4vr::apply_off_axis(o, sx, sy, clip);
+                    for (int i = 0; i < 4; i++)
+                        if (std::fabs(clip[i] - before[i]) > 1e-5f)
+                            all_id = false;
+                }
+            }
+            check(all_id,
+                  "a symmetric target at X4's own half-angle is the identity");
+        }
+
+        // ---- the round trip, against the definition ----
+        // X4's projection, then the shear the layer already applies, then the
+        // affine -- versus the target NDC computed straight from the ray. Run
+        // over both eyes, several sx (including the 1.5:1 non-square map
+        // camera, where reading sy independently is what saves it), and points
+        // spread across the field including well outside it.
+        {
+            const float cam[][2] = {// {sx, |sy/sx|}
+                                    {0.70021f, 1.0f},  // the union scene camera
+                                    {0.75405f, 1.0f},  // X4VR_FOV=1.437
+                                    {1.33333f, 1.0f},  // fov 1.0
+                                    {3.78085f, 1.5f},  // the map camera
+                                    {29.18689f, 1.0f}}; // full zoom
+            const float world[][3] = {{0, 0, 1},      {0.5f, 0.3f, 2},
+                                      {-1.2f, 0.9f, 3}, {4.0f, -2.5f, 1.5f},
+                                      {-0.05f, 0.02f, 0.4f}, {60.0f, 40.0f, 250.0f}};
+            float worst = 0.0f;
+            for (int e = 0; e < 2; e++) {
+                const x4vr::OffAxis o = x4vr::make_off_axis(eye[e], d_eye[e]);
+                for (const auto &c : cam) {
+                    const float sx = c[0], sy = -c[0] * c[1];
+                    for (const auto &p : world) {
+                        // X4 -> clip, then the shear, then the affine.
+                        float clip[4] = {sx * p[0], sy * p[1], 0.1f, p[2]};
+                        clip[0] -= sx * d_eye[e];
+                        x4vr::apply_off_axis(o, sx, sy, clip);
+                        const float got[2] = {clip[0] / clip[3],
+                                              clip[1] / clip[3]};
+                        // The definition: where that ray belongs in this eye.
+                        float want[2];
+                        target_ndc(eye[e], p[0] - d_eye[e], p[1], p[2], want);
+                        for (int i = 0; i < 2; i++) {
+                            const float err = std::fabs(got[i] - want[i]);
+                            if (err > worst)
+                                worst = err;
+                        }
+                    }
+                }
+            }
+            check(worst < 1e-4f,
+                  "clip -> shear -> affine equals the target frustum's own NDC, "
+                  "both eyes, 5 cameras incl. a 1.5:1 one, 6 points");
+            printf("     worst NDC error %.2e\n", worst);
+        }
+
+        // ---- the defect, and its repair, in the units the probe reports ----
+        // Straight ahead from each eye. Without the affine it lands at the
+        // image centre in both, which the probe measured as 30.07 deg of
+        // divergence; with it, at 0 deg in both.
+        {
+            const float before[2] = {angle_of_ndc(eye[0], 0.0f),
+                                     angle_of_ndc(eye[1], 0.0f)};
+            check_near(deg_of(before[0]), -15.037f, 1e-2f,
+                       "uncorrected: straight ahead reads -15.04 deg in view 0");
+            check_near(deg_of(before[0] - before[1]) , -30.074f, 2e-2f,
+                       "uncorrected divergence is the 30.07 deg the probe found");
+
+            float worst = 0.0f;
+            for (int e = 0; e < 2; e++) {
+                const x4vr::OffAxis o = x4vr::make_off_axis(eye[e], d_eye[e]);
+                const float sx = 0.70021f, sy = -0.70021f;
+                // a point directly in front of THIS eye, 5 m out
+                float clip[4] = {sx * d_eye[e], 0.0f, 0.1f, 5.0f};
+                clip[0] -= sx * d_eye[e];
+                x4vr::apply_off_axis(o, sx, sy, clip);
+                const float a = angle_of_ndc(eye[e], clip[0] / clip[3]);
+                if (std::fabs(deg_of(a)) > worst)
+                    worst = std::fabs(deg_of(a));
+            }
+            check(worst < 1e-2f,
+                  "corrected: straight ahead reads 0 deg in BOTH views");
+            printf("     residual %.4f deg\n", worst);
+        }
+
+        // ---- the vertical sign, stated as a direction ----
+        // A magnitude check cannot catch a flip, and a flip is invisible in
+        // any aggregate: the image simply looks upside down in the headset.
+        {
+            const x4vr::OffAxis o = x4vr::make_off_axis(eye[0], d_eye[0]);
+            const float sx = 0.70021f, sy = -0.70021f;
+            float up[4] = {0.0f, sy * 1.0f, 0.1f, 2.0f}; // 1 m ABOVE, 2 m out
+            x4vr::apply_off_axis(o, sx, sy, up);
+            check(up[1] / up[3] < 0.0f,
+                  "a point above the camera lands at negative NDC y "
+                  "(Vulkan's y points down, and X4's sy already flipped it)");
+            check(o.ay_num / sy > 0.0f,
+                  "A_y is positive, so the affine preserves the flip rather "
+                  "than adding a second one");
+        }
+
+        // ---- folded equals composed ----
+        // The eye offset can be folded into the constant term, which drops one
+        // multiply. Proven here so the optimisation is available with a test
+        // already written, rather than adopted on the strength of an argument.
+        {
+            float worst = 0.0f;
+            for (int e = 0; e < 2; e++) {
+                const x4vr::OffAxis o = x4vr::make_off_axis(eye[e], d_eye[e]);
+                for (float sx : {0.70021f, 1.33333f, 3.78085f}) {
+                    const float sy = -sx;
+                    for (const float *v : {pts[0], pts[1], pts[3]}) {
+                        float a[4] = {sx * v[0], sy * v[1], 0.1f, v[2]};
+                        float b[4] = {a[0], a[1], a[2], a[3]};
+                        a[0] -= sx * d_eye[e];
+                        x4vr::apply_off_axis(o, sx, sy, a);
+                        x4vr::apply_off_axis_folded(o, sx, sy, b);
+                        for (int i = 0; i < 4; i++)
+                            worst = std::fmax(worst, std::fabs(a[i] - b[i]));
+                    }
+                }
+            }
+            check(worst < 1e-5f, "folded form equals shear-then-affine");
+        }
+
+        // ---- refusals ----
+        {
+            check(!x4vr::make_off_axis(x4vr::EyeFrustum{}, 0.0f).ok,
+                  "an all-zero frustum refuses rather than dividing by zero");
+            x4vr::EyeFrustum back = eye[0];
+            std::swap(back.tan_l, back.tan_r);
+            check(!x4vr::make_off_axis(back, 0.0f).ok,
+                  "a left/right swapped frustum refuses -- negative span");
+            const x4vr::OffAxis o = x4vr::make_off_axis(eye[0], d_eye[0]);
+            float clip[4] = {1.0f, 2.0f, 0.1f, 3.0f};
+            const float keep[4] = {clip[0], clip[1], clip[2], clip[3]};
+            x4vr::apply_off_axis(o, 0.0f, -1.0f, clip);
+            check(clip[0] == keep[0] && clip[1] == keep[1],
+                  "sx = 0 (an unpopulated camera block) leaves clip untouched");
         }
     }
 

@@ -281,6 +281,131 @@ inline float canvas_shift(float sx, float ipd, float z) {
     return sx * 0.5f * ipd / z;
 }
 
+// ---------------------------------------------------------------- task #35
+//
+// X4 renders one symmetric frustum per eye. A headset does not have one: WiVRn
+// on a Quest 3 reports L-54 R+40 U+44 D-55 for the left eye and the mirror for
+// the right, so "straight ahead" is 15.04 deg off centre in each image, in
+// opposite directions. Submitting X4's frame as if it were centred asks the
+// eyes to diverge by 30.07 deg, which nobody can fuse; the probe reproduces
+// exactly that as a negative control.
+//
+// The map from one to the other is an affine on values gl_Position already
+// carries. Writing it out: X4 gives x_c = sx*x and w_c = z, so the true ray is
+// x/z = x_c/(sx*w_c). The target's NDC x for that ray is
+//
+//     x_ndc = (2*(x/z) - (tan_r + tan_l)) / (tan_r - tan_l)
+//
+// -- linear in TANGENT, which is the whole reason a rectilinear image can be
+// remapped by an affine at all. Multiplying by w_c to get back to clip space:
+//
+//     x_c' = [2/((tan_r - tan_l)*sx)] * x_c  -  [(tan_r + tan_l)/(tan_r - tan_l)] * w_c
+//
+// The vertical is the same derivation with one extra sign: OpenXR's angleUp is
+// positive and Vulkan's NDC y points DOWN, so the numerator negates -- and X4's
+// sy is already negative for exactly that reason, which is why ay_num is
+// negative and the product comes out positive. Getting this pair wrong flips
+// the image vertically in the headset, so it is asserted rather than argued.
+//
+//     y_c' = [-2/((tan_u - tan_d)*sy)] * y_c  +  [(tan_u + tan_d)/(tan_u - tan_d)] * w_c
+//
+// Both collapse to the identity when the target is symmetric and sx = cot(t),
+// which is the property tests/view_math.cpp keys on: a map that is not the
+// identity in the case where it must be is wrong everywhere else too.
+//
+// `sx` and `sy` are read LIVE, per draw, for the reason task #23 established:
+// X4's cameras run sx from 0.754 to 3.781 within one session and not all of
+// them are square (the map camera reports |sy/sx| = 1.5). A baked A is the
+// bug #23 already fixed once.
+struct EyeFrustum {
+    float tan_l = 0.0f, tan_r = 0.0f, tan_u = 0.0f, tan_d = 0.0f;
+};
+
+// OpenXR hands back angles; everything downstream wants tangents. Converting
+// once, here, is what stops a `tan` from being forgotten at a call site --
+// the mistake that made the first test card unfusible.
+inline EyeFrustum frustum_of_angles(float l, float r, float u, float d) {
+    EyeFrustum f;
+    f.tan_l = std::tan(l);
+    f.tan_r = std::tan(r);
+    f.tan_u = std::tan(u);
+    f.tan_d = std::tan(d);
+    return f;
+}
+
+// The coefficients, with sx/sy factored out so the shader can divide by the
+// live values. `ex` folds in the eye offset the shear already applies, and is
+// only used by the folded form -- see apply_off_axis_folded.
+struct OffAxis {
+    float ax_num = 0.0f; // A_x = ax_num / sx
+    float bx = 0.0f;
+    float ay_num = 0.0f; // A_y = ay_num / sy
+    float by = 0.0f;
+    float ex = 0.0f; // = ax_num * d_eye
+    bool ok = false;
+};
+
+inline OffAxis make_off_axis(const EyeFrustum &f, float d_eye = 0.0f) {
+    OffAxis o{};
+    const float hspan = f.tan_r - f.tan_l;
+    const float vspan = f.tan_u - f.tan_d;
+    if (!(hspan > 1e-6f) || !(vspan > 1e-6f))
+        return o; // a degenerate frustum refuses rather than dividing
+    o.ax_num = 2.0f / hspan;
+    o.bx = -(f.tan_r + f.tan_l) / hspan;
+    o.ay_num = -2.0f / vspan;
+    o.by = (f.tan_u + f.tan_d) / vspan;
+    o.ex = o.ax_num * d_eye;
+    o.ok = true;
+    return o;
+}
+
+// Applied AFTER the eye shear, which is how the SPIR-V patch composes it: the
+// shear leaves x_c = sx*(x - d), so dividing by sx recovers the eye's own ray
+// and no eye-offset term is needed here.
+inline void apply_off_axis(const OffAxis &o, float sx, float sy,
+                           float clip[4]) {
+    if (!o.ok || std::fabs(sx) < 1e-9f || std::fabs(sy) < 1e-9f)
+        return;
+    clip[0] = (o.ax_num / sx) * clip[0] + o.bx * clip[3];
+    clip[1] = (o.ay_num / sy) * clip[1] + o.by * clip[3];
+}
+
+// The same map applied to an UNSHEARED clip position, with the eye offset
+// folded into the constant term. Saves one multiply and needs no separate
+// shear step; kept as the proven-equivalent alternative rather than the
+// default, because the shear it would replace is what 60 passing takes ran.
+inline void apply_off_axis_folded(const OffAxis &o, float sx, float sy,
+                                  float clip[4]) {
+    if (!o.ok || std::fabs(sx) < 1e-9f || std::fabs(sy) < 1e-9f)
+        return;
+    clip[0] = (o.ax_num / sx) * clip[0] + o.bx * clip[3] - o.ex;
+    clip[1] = (o.ay_num / sy) * clip[1] + o.by * clip[3];
+}
+
+// The half-angle a single symmetric render must cover so that nothing visible
+// in any target frustum is culled by X4 before the affine can place it.
+// Returns radians; the caller turns it into X4's <fov> with x4_fov_for_half().
+inline float union_half_angle(const EyeFrustum *f, uint32_t n) {
+    float t = 0.0f;
+    for (uint32_t i = 0; i < n; i++) {
+        const float c[4] = {std::fabs(f[i].tan_l), std::fabs(f[i].tan_r),
+                            std::fabs(f[i].tan_u), std::fabs(f[i].tan_d)};
+        for (float v : c)
+            if (v > t)
+                t = v;
+    }
+    return std::atan(t);
+}
+
+// X4's <fov> config value for a given half-angle. The law is linear in
+// DEGREES of the full field -- fov 1.0 is 73.7399 deg -- which is measured,
+// not assumed: score_run.py reads it back out of every log as
+// "105.964 deg = fov 1.437".
+inline float x4_fov_for_half(float half_rad) {
+    return (2.0f * half_rad * 57.2957795130823f) / 73.7399f;
+}
+
 inline void format_mat(char *buf, size_t n, const Mat4 &a) {
     snprintf(buf, n,
              "[%8.3f %8.3f %8.3f %8.3f | %8.3f %8.3f %8.3f %8.3f | "

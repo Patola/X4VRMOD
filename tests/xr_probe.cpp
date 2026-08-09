@@ -73,6 +73,55 @@ static void on_state(void *, XrSessionState s) {
 
 static float rad(float d) { return d * 0.01745329251994330f; }
 
+// ------------------------------------------------- where the cant lives
+//
+// A stereo runtime can describe the same optics two ways: rotate the view
+// POSES outward and hand back a symmetric FOV, or keep the poses parallel and
+// hand back an FOV whose centre is off-axis. WiVRn reports an FOV centred
+// 15.04 deg out in each eye -- but that alone does not say whether the poses
+// are *also* rotated, and the two cases need different amounts of work from
+// this project:
+//
+//   poses parallel   one camera orientation serves both eyes; the per-eye
+//                    difference is the lateral offset the layer already
+//                    applies, and X4 needs no rotation at all.
+//   poses canted     each eye needs its own rotation. The eye-offset algebra
+//                    collapses because a translation leaves w_c alone; a
+//                    rotation does not, so that is a different patch.
+//
+// Reported rather than assumed, because assuming it is how the first test card
+// got built symmetric against a prediction that said it would not be.
+struct Quat {
+    float x = 0, y = 0, z = 0, w = 1;
+};
+
+static Quat q_of(const XrQuaternionf &q) { return {q.x, q.y, q.z, q.w}; }
+
+static Quat q_conj(const Quat &a) { return {-a.x, -a.y, -a.z, a.w}; }
+
+static Quat q_mul(const Quat &a, const Quat &b) {
+    return {a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+            a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+            a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+            a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
+}
+
+// Rotation angle in degrees, sign-free. |w| because q and -q are the same
+// rotation and a runtime may hand back either.
+static float q_angle_deg(const Quat &a) {
+    float w = fabsf(a.w);
+    if (w > 1.0f)
+        w = 1.0f;
+    return 2.0f * acosf(w) * 57.2957795130823f;
+}
+
+// Yaw about Y, the axis the cant would be on. Signed, so "outward" is legible.
+static float q_yaw_deg(const Quat &a) {
+    return atan2f(2.0f * (a.w * a.y + a.x * a.z),
+                  1.0f - 2.0f * (a.y * a.y + a.z * a.z)) *
+           57.2957795130823f;
+}
+
 // ------------------------------------------------------------- the card
 
 // One description of the card, so the painter and the checker cannot drift
@@ -849,6 +898,9 @@ int main(int argc, char **argv) {
           fov_d[2] = {0, 0};
     float ipd_m = 0.0f;
     bool asymmetric = false;
+    float view_rel_deg = -1.0f;      // view 1's rotation relative to view 0
+    float view_cant_deg[2] = {0, 0}; // each view's yaw relative to the head
+    bool have_cant = false;
     float pmin[3] = {1e9f, 1e9f, 1e9f}, pmax[3] = {-1e9f, -1e9f, -1e9f};
     const double t0 = now_s();
 
@@ -971,6 +1023,52 @@ int main(int argc, char **argv) {
             printf("xr: eye separation %.4f m (view 1 is %+.4f m in x from view "
                    "0 — positive means view 1 is the RIGHT eye)\n",
                    ipd_m, dx);
+
+            // Does the cant live in the POSE or only in the FOV? See the note
+            // above Quat. Measured against the head (VIEW space) so each eye's
+            // own rotation is reported, not just their difference -- a runtime
+            // could rotate BOTH eyes together and the difference would be zero.
+            const Quat q0 = q_of(views[0].pose.orientation);
+            const Quat q1 = q_of(views[1].pose.orientation);
+            view_rel_deg = q_angle_deg(q_mul(q_conj(q0), q1));
+            printf("xr: view 1 is rotated %.3f deg relative to view 0 "
+                   "(yaw %+.3f deg)\n",
+                   view_rel_deg, q_yaw_deg(q_mul(q_conj(q0), q1)));
+
+            XrSpaceLocation hl{};
+            hl.type = XR_TYPE_SPACE_LOCATION;
+            if (s.view_space != XR_NULL_HANDLE && s.rt->api.LocateSpace &&
+                s.rt->api.LocateSpace(s.view_space, s.space,
+                                      s.frame.predictedDisplayTime,
+                                      &hl) == XR_SUCCESS &&
+                (hl.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) {
+                const Quat qh = q_of(hl.pose.orientation);
+                for (uint32_t e = 0; e < 2; e++) {
+                    const Quat rel =
+                        q_mul(q_conj(qh), q_of(views[e].pose.orientation));
+                    view_cant_deg[e] = q_yaw_deg(rel);
+                    printf("xr: view %u vs head — %.3f deg total, yaw %+.3f "
+                           "deg\n",
+                           e, q_angle_deg(rel), view_cant_deg[e]);
+                }
+                have_cant = true;
+            } else {
+                printf("xr: could not locate VIEW space — the per-eye cant "
+                       "below is the view-to-view difference only\n");
+            }
+
+            // The verdict this run exists to deliver, said in words so it is
+            // not re-derived from two angles six weeks from now.
+            if (view_rel_deg < 0.5f)
+                printf("xr: VERDICT poses are PARALLEL — the 15.04 deg sits in "
+                       "the FOV alone. One camera orientation serves both "
+                       "eyes; the per-eye difference is the lateral offset the "
+                       "layer already applies.\n");
+            else
+                printf("xr: VERDICT poses are CANTED by %.2f deg — each eye "
+                       "needs its own rotation, and the eye-offset algebra "
+                       "does not collapse for a rotation.\n",
+                       view_rel_deg);
         }
 
         if (have) {
@@ -1005,6 +1103,12 @@ int main(int argc, char **argv) {
     if (located)
         printf("KEY_HEAD_SPAN_M=%.4f,%.4f,%.4f\n", pmax[0] - pmin[0],
                pmax[1] - pmin[1], pmax[2] - pmin[2]);
+    printf("KEY_VIEW_REL_DEG=%.4f\n", view_rel_deg);
+    printf("KEY_POSES_PARALLEL=%d\n",
+           view_rel_deg >= 0.0f && view_rel_deg < 0.5f ? 1 : 0);
+    if (have_cant)
+        printf("KEY_VIEW_CANT_DEG=%.4f,%.4f\n", view_cant_deg[0],
+               view_cant_deg[1]);
 
     vkDeviceWaitIdle(dev);
     xr::swapchain_destroy(sc);
