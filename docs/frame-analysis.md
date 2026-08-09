@@ -13187,3 +13187,80 @@ the appearance belongs to #25, which is deferred until VR by decision.
 `stage5-wide-field` entry warns that the constant and `X4VR_FOV` have to be kept
 in step by hand, and that requirement disappears: every World module derives `sx`
 per draw, from the camera block or from the object's own matrix.
+
+# State at `stage6-sx-per-draw` — resume here
+
+Written to survive a context compaction. Everything below is checkable from the
+repository or from `/tmp`; nothing here depends on remembering a conversation.
+
+## Where the work stands
+
+Closed this stretch: **#23** (per-draw `sx` everywhere), **#24** (a chosen field
+of view), **#31** (the three extents), **#32** (the right eye judged from present
+dumps). Open: **#25**, **#33**, and the piece both need.
+
+**#25 is deferred by decision, not blocked.** IPD and the sense of depth and
+scale get judged when true SBS (done), head tracking (#33) and a VR projection
+path are all in place. Until then the knobs only have to stay adjustable.
+`active_runtime.json` is absent at rest because SteamVR (Steam Link) and WiVRn
+each install it when they start — both paths are live on this machine, and its
+absence is not evidence that no runtime is configured.
+
+**The next large piece is OpenXR submission**: an `XrSession` bound to *X4's*
+`VkDevice` and queue rather than one of our own, an `XrSwapchain` to blit the
+two-layer eye image into, and a frame loop driven from `vkQueuePresentKHR`
+instead of from our own main loop. Everything upstream of it exists. A first cut
+can submit with the runtime's view FOVs and ignore head pose — enough to sense
+depth and scale standing still, not enough to move around in. Main known risk:
+the runtime may want a different `VkPhysicalDevice` than X4 already chose.
+`wlx-overlay-s` is **not** a shortcut: it has no SBS or stereo mode, so it would
+put a flat squashed pair in front of both eyes.
+
+## The state itself
+
+Tag `stage6-sx-per-draw`, and `docs/known-good-runs.md` carries the command line
+and what to check in the log. The two knobs that used to have to agree by hand no
+longer do: nothing bakes `sx`, so `X4VR_PROJ_SX` may be left unset.
+
+## Decisions taken, so they are not re-litigated
+
+* `X4VR_PROJ_MVP` defaults **on** (takes 109/110). `=0` restores stage5.
+* `X4VR_PROJ_LIVE` still defaults **off**, which means "on by default" for
+  `PROJ_MVP` really means "on wherever the per-draw shear path is on". Every take
+  since 52 sets `X4VR_PROJ_LIVE=1` explicitly. **Open question, deliberately not
+  folded in:** defaulting it on is a claim about 326 modules rather than 12 and
+  deserves its own control run.
+* `X4VR_FOV=1.437` is 106°. The law is `fov = target° / 73.7399`, measured on
+  three points and two cameras.
+* Takes 97 and 98 read FAIL until #32 and now PASS; take 101 read PASS until #31
+  and now FAILs. All three are deliberate and argued in the sections above.
+
+## Tooling — what exists and what each answers
+
+* `tools/score_run.py <log>` — the acceptance check for every run. Sections:
+  `split`, `masked`, `extents`, `swapchain`/`eye`, `proj`, `stereo`, `perf`.
+  Exit 0 pass, 1 fail, 2 unscoreable. **Re-run it over every log in `/tmp` after
+  any change to it**: that is what caught a version which failed 60 of 74 runs.
+* `tools/eye_stereo.py <dump-prefix>` — per-region horizontal disparity from
+  present dumps. Reports the **spread** of per-tile shifts, because a bulk ratio
+  cannot tell a correct right eye from a copy of the left. Called automatically
+  by `score_run.py` when the run asked for dumps.
+* `tests/eye_stereo_selftest.py [frame.ppm]` — its controls: identical pair,
+  known uniform slide, depth-varying pair, unrelated images, black frame.
+* `build/tests/x4vr_test_spirv_patch` — the layer's own SPIR-V code as a CLI:
+  `classify`, `vert-eye-offset`, `vert-eye-offset-mvp`, `frag-*`, `list`,
+  `survey`. Use this rather than reimplementing the predicates.
+* `build/tests/x4vr_test_view_math` — the shear algebra, including #23's
+  `sx = |row0(MVP)|/|row3(MVP)|` recovery against every measured `sx`.
+
+## Data on disk, and the rule that goes with it
+
+    77 run logs                     /tmp/x4vr-takeNN.log
+    585 present-dump frames         /tmp/x4vr-t{93,94,97,98,99,101,103}-present-*
+    3 shader dumps WITH a log       /tmp/x4vr-shaders-take{61,74,80} (397 each)
+    1 shader dump WITHOUT a log     /tmp/x4vr-shaders (409) — unusable
+
+**Module serials are per-run.** A number from one log may only be opened in the
+dump directory of that same run, which is why the 409-module directory can answer
+nothing: it has no log. Sweep `/tmp` before specifying any run — several
+questions asked here were already answered on disk.
