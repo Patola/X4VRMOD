@@ -251,6 +251,56 @@ target was impractical. Add them only to a take whose evidence is a dump.
 The invproj and `into 2 layer(s)` checks from the two stages below still apply
 unchanged.
 
+## `stage5-wide-field` — takes 106, 107 and 108
+
+Everything `stage4-ui-canvas` had, plus a **chosen field of view** and a baked
+`sx` that matches the camera the player looks through. X4's `<fov>` config tag
+multiplies the horizontal field as an angle, linearly:
+
+    horizontal FOV = fov x 73.7399 deg   =>   fov = target / 73.7399
+
+so 1.437 is 106 degrees. The injector already owns every read of `config.xml`,
+so this is an override rather than a request that the player change a setting.
+
+    X4VR_TAKE=108-BAKED-SX X4VR_FOV=1.437 X4VR_PROJ_SX=0.75405
+    X4VR_DUMP_MATRICES=1 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_GAMESCOPE=1
+    X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1
+    X4VR_SBS=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1
+    X4VR_MV_INVENTORY=1 X4VR_LOG=/tmp/x4vr-take108.log
+    ./launch/x4vr-launch.sh
+
+**The two knobs move together.** `X4VR_PROJ_SX` is the value the world modules
+with no camera block bake, and it must be the scene camera's `sx` at the field
+being asked for -- `cot(fov x 73.7399 / 2)` at a 1:1 eye:
+
+    fov 1.1111  ->  sx 1.15174        fov 1.437  ->  sx 0.75405
+    fov 1.356   ->  sx 0.83923        fov 1.500  ->  sx 0.69231
+
+Leaving `X4VR_PROJ_SX=1.3333` while widening the field is not a stale constant
+but a depth conflict: at fov 1.437 those modules separate 1.77x too much, which
+places their geometry at 0.57x its true distance while everything around it is
+correct.
+
+**What to check in the log** -- `python3 tools/score_run.py` prints all of it:
+
+    proj  sx=... = fov 1.437   <- honours X4VR_FOV
+    proj  sy tracks sx on the fov camera -- |sy/sx|=1.0000 against an eye aspect
+          of 1.0000, so the field is widened, not stretched
+    stereo  X4VR_PROJ_SX=0.75405 against a scene sx of 0.75405: ... matches the
+            scene camera
+
+The `<- honours X4VR_FOV` marker is the one that says the tag was accepted at
+all. A value X4's XML reader rejects leaves the options menu on "--" and the
+engine on its default, and the run then looks exactly like a measurement.
+
+**Interaction-safe**, on the same grounds as `stage4-ui-canvas`: no probe, no
+dumps. `X4VR_DUMP_MATRICES=1` is the exception and stays -- it costs no queue
+wait and no readback, and it is what produces every line above.
+
+**Not verified in this state:** whether the depth and scale feel right. That
+needs the two array layers submitted to an OpenXR projection layer, which does
+not exist yet. A side-by-side pair on a flat monitor cannot answer it.
+
 ## Decision, 2026-08-08 — the cursor knobs default on, and hiding gates on intent
 
 `X4VR_CURSOR` and `X4VR_HIDE_CURSOR` are **both on by default** as of this date,
