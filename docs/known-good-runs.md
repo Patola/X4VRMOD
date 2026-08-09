@@ -307,6 +307,58 @@ wait and no readback, and it is what produces every line above.
 needs the two array layers submitted to an OpenXR projection layer, which does
 not exist yet. A side-by-side pair on a flat monitor cannot answer it.
 
+## `stage6-sx-per-draw` — takes 109 and 110
+
+Everything `stage5-wide-field` had, and **no module shears by a constant any
+more**. The twelve World modules that declare no camera block recover `sx` from
+their own `M_worldviewprojection`:
+
+    sx = |row0(MVP).xyz| / |row3(MVP).xyz|
+
+`X4VR_PROJ_MVP` is on by default from this state; `=0` restores stage5 exactly.
+
+    X4VR_TAKE=110-MVP-ON X4VR_FOV=1.437 X4VR_DUMP_MATRICES=1 X4VR_STEREO=1
+    X4VR_BINDLESS_PATCH=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1
+    X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1
+    X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_BINDLESS_MIRROR=1
+    X4VR_MV_INVENTORY=1 X4VR_LOG=/tmp/x4vr-take110.log
+    ./launch/x4vr-launch.sh
+
+**`X4VR_PROJ_SX` is gone from that line, and that is the point.** stage5 required
+it to be kept in step with `X4VR_FOV` by hand -- 0.75405 for fov 1.437, 1.15174
+for 1.1111 -- because twelve modules baked it. Nothing bakes it now, so the pair
+that had to agree no longer exists. It remains readable as insurance: if a future
+X4 build ships a World module that refuses *both* patches, `baked-sx=` stops
+being 0 and the scorer says so.
+
+**What to check in the log** -- `python3 tools/score_run.py` prints all of it:
+
+    patched vertex shader #400 (world, per-view)
+      [world=338 nonworld=62 stereo=338 live-sx=326 mvp-sx=12 baked-sx=0]
+    stereo  X4VR_PROJ_SX=... is unused — no module fell back to it, every one
+            reads sx per draw (task #23)
+    extents X4 renders 1408x1408, eye 1408x1408 (from X4VR_RES),
+            composite 2816x1408, window 2816x1408
+
+`baked-sx=0` is the state. `mvp-sx=` should carry what stage5's `baked-sx=`
+carried at the same module index, and **`live-sx=` must be unchanged** -- if it
+moved, the fallback patch ran on a module that could already see the camera,
+which is not what it is for.
+
+Also required: **no `WARNING: driver rejected patched module`**. `spirv-val`
+accepts 328 of take 74's 397 modules offline, but the driver is what compiles
+them, and this transform is newer than every other one in the layer.
+
+**Interaction-safe**, same as the two stages below: no probe, no dumps.
+
+**Not verified in this state, and not verifiable on a flatscreen:** whether the
+correction is visible. What it changes is disparity -- 0.34 px to 13.15 px per
+eye at 50 m at the zoom stop -- which is a depth cue and no monoscopic
+difference at all. Takes 109 and 110 were run back to back on the same scenario
+and Patola could not tell them apart, which is what a flat side-by-side pair can
+be expected to show. Settling it needs `X4VR_MV_DUMP_PRESENT` at high zoom read
+through `tools/eye_stereo.py`, or VR.
+
 ## Decision, 2026-08-08 — the cursor knobs default on, and hiding gates on intent
 
 `X4VR_CURSOR` and `X4VR_HIDE_CURSOR` are **both on by default** as of this date,

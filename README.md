@@ -105,10 +105,9 @@ Useful switches: `X4VR_NO_LAYER=1`, `X4VR_NO_INJECT=1`, `X4VR_NO_CONFIG=1`
 `X4VR_CLIP_SHIFT=<x>` (clip-space test shift), `X4VR_DUMP_MATRICES=1`,
 `X4VR_FOV=<decimal>` (serve X4's `<fov>` from the profile — the field of view is
 a config setting, so widening it needs no projection patch),
-`X4VR_PROJ_MVP=1` (for the World shaders that declare no camera block, recover
-`sx` from the per-object `M_worldviewprojection` instead of shearing them by a
-constant that is only right at one zoom level; needs `X4VR_PROJ_LIVE=1`, off by
-default).
+`X4VR_PROJ_MVP=0` (turn *off* the per-draw `sx` recovery for the World shaders
+that declare no camera block — on by default since takes 109/110; with it off
+they shear by a constant that is only right at one zoom level).
 
 ## Repository layout
 

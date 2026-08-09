@@ -3365,13 +3365,21 @@ bool proj_live() {
 // X4VR_PROJ_LIVE, because it is the same fallback chain -- it only ever runs
 // where patch_vertex_eye_offset has already refused.
 //
-// Off by default for the same reason X4VR_PROJ_LIVE was: with it unset, every
-// module takes exactly the path stage5-wide-field was tagged on.
+// ON by default since takes 109/110, which were the same scenario one variable
+// apart. Every checkpoint of the two runs was identical except the split it
+// controls -- live-sx=326 in both, mvp-sx 0 -> 12, baked-sx 12 -> 0 -- so all
+// twelve modules moved, none was left behind, and no module that could already
+// read the camera was touched. Zero driver rejections, and frame time differed
+// by about 1% with the sign disagreeing between phases.
+//
+// X4VR_PROJ_MVP=0 turns it off, which restores the stage5-wide-field behaviour
+// exactly: those twelve go back to the baked constant.
+//
+// Note this is gated on proj_live() at the call site, which is still off by
+// default -- so "on" here means "on wherever the per-draw shear path is on",
+// not "on in every run".
 bool proj_mvp() {
-    static const bool on = [] {
-        const char *e = getenv("X4VR_PROJ_MVP");
-        return e && *e && *e != '0';
-    }();
+    static const bool on = x4vr::env_on("X4VR_PROJ_MVP", true);
     return on;
 }
 
@@ -3838,9 +3846,9 @@ VkResult create_shader_module_inner(
             // camera-block patch just refused: those declare the set-3
             // per-object block and nothing else, so sx is recovered from
             // M_worldviewprojection rather than read from a camera they cannot
-            // see. Off by default -- with X4VR_PROJ_MVP unset every module
-            // takes exactly the path stage5-wide-field was tagged on, which is
-            // the only way a known-good state stays restorable.
+            // see. On by default since takes 109/110; X4VR_PROJ_MVP=0 puts
+            // these twelve back on the baked constant, which is the
+            // stage5-wide-field behaviour exactly.
             const bool mvp = proj_mvp() &&
                              x4vr::spv::patch_vertex_eye_offset_mvp(
                                  code, kObjectSet, kObjectBinding,

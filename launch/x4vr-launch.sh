@@ -92,7 +92,7 @@
 #                         produces two different eyes. Uses the same
 #                         make_eye_shear derivation as the one-eye X4VR_EYE
 #                         path, with X4VR_IPD / X4VR_PROJ_SX / X4VR_PROJ_NEAR.
-#   X4VR_PROJ_MVP=1       task #23: the World modules that declare no camera
+#   X4VR_PROJ_MVP=0       task #23: the World modules that declare no camera
 #                         block cannot read sx per draw and fall back to the
 #                         baked X4VR_PROJ_SX, which is right at one zoom level
 #                         and wrong across the rest of the 0.75405..29.18689
@@ -108,10 +108,13 @@
 #                         accepts out of take 74's 397.
 #                         Needs X4VR_PROJ_LIVE=1 -- it is the same fallback
 #                         chain and only runs where the camera-block patch has
-#                         already refused. Default off: unset, every module
-#                         takes the path stage5-wide-field was tagged on.
-#                         Gate: mvp-sx= in the "patched vertex shader" line
-#                         goes from 0 to the count baked-sx= used to carry.
+#                         already refused. ON BY DEFAULT since takes 109/110,
+#                         which moved all twelve modules with zero driver
+#                         rejections and no measurable frame-time change; set it
+#                         to 0 to put them back on the baked constant, which is
+#                         stage5-wide-field's behaviour exactly.
+#                         Read it in the "patched vertex shader" line:
+#                         mvp-sx= carries what baked-sx= used to.
 #                         Needs X4VR_MV=1: without a view mask there is only
 #                         ever view 0, and the result is the left eye twice.
 #   X4VR_MASK_TONEMAP=1   mask the tonemap resolve (rp #40/#52 -> #103) so it
