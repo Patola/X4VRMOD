@@ -13352,6 +13352,23 @@ caught, and the no-runtime path reports
 `XR_ERROR_RUNTIME_UNAVAILABLE` with the sentence that names the cause rather
 than the enumerant.
 
+**The live half cannot be run here, and it is worth writing down why so nobody
+looks again.** Monado's simulated-HMD driver plus `XRT_COMPOSITOR_NULL` would
+give a full session with no headset at all — the ideal offline harness for this
+task. There are two Monado builds on this machine:
+
+    ~/.local/share/envision/prefixes/a2f5a706-…/bin/monado-service
+    /dados/wivrn-test/build-monado/src/xrt/targets/openxr/libopenxr_monado.so
+
+and **both are stale**: they were built against `librealsense2.so.2.55`/`.2.56`
+and `libopencv_*.so.412`, none of which are installed now (11 unresolved
+`DT_NEEDED` each). Reviving them means rebuilding Monado, which is a project of
+its own and not on this critical path. WiVRn is the installed, working runtime
+and has no simulated driver, so the live half needs the headset. If offline
+iteration on the session path ever becomes the bottleneck, rebuilding Monado
+with `-DXRT_BUILD_DRIVER_REALSENSE=OFF -DXRT_HAVE_OPENCV=OFF` is the cheap way
+back, not chasing the old prefixes.
+
 # State at `stage6-sx-per-draw` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the
