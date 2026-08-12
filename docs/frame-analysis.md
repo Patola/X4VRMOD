@@ -14773,6 +14773,88 @@ Some of that spread was incoherent matching, so the honest version is: the
 above, not measured. Left here rather than edited away, because it is the exact
 error the same paragraph warned about.
 
+### RETRACTION — take 115 is not a null. The instrument was blind.
+
+Everything above about take 115 being a null is **wrong**, and the section is
+kept because the way it went wrong is the most useful thing in it.
+
+Patola read the moves straight off the PPMs by eye and named the phases:
+n45-47 centred, n48-56 mouse a third of the way left, n57-60 centred, n61-67
+numpad 4 hard left, n68-70 centred. He had used a chronometer to hit the
+requested timings.
+
+**Phase correlation over a block of N pixels is unambiguous only to +-N/2.**
+With `BLOCK = 256` the per-block pass tops out at +-128 px, which at 1408 px
+and +-55 deg is **+-10 deg**:
+
+     5 deg =  43 px  ok        15 deg = 132 px  ALIASES
+    10 deg =  87 px  ok        24 deg = 220 px  ALIASES
+
+Free-look moves are 20-50 deg. Every block aliased to a different piece of
+nonsense, coherence collapsed to 0.04-0.21, and the tool confidently reported
+NO COHERENT MOTION. **The estimator was structurally blind to the only thing it
+was built to measure**, and nothing in its output said so.
+
+Measured over the whole frame instead — range +-w/2, which is +-the half-FOV by
+construction, so +-55 deg — against n46 as the centred reference:
+
+    n45-47    +0.00 deg              snr 1347   centred
+    n48      +20.26                  snr   52   in transit
+    n49-56   +24.05, dy +0.23        snr   25   HELD, eight frames, ~13 s
+    n57       +1.63                  snr  165   springing back
+    n58-60    +0.00                  snr 1354   centred
+    n61-66   held constant           snr   14   numpad 4
+    n68-70    +0.00                  snr 1353   centred
+
+**P117.1 CONFIRMED.** Free-look rotates X4's own camera, +24.05 deg for a
+one-third mouse push, coherence 0.99.
+
+**P117.4 CONFIRMED, twice.** The held angle repeats *to the pixel* across eight
+consecutive dumps spanning ~13 s, and again across five in the numpad hold.
+There is no drift and no decay while held. **Free-look is a position channel,
+and the branch lives.**
+
+**P117.3 CONFIRMED.** Release returns to +0.00 deg at snr ~1354 — the same
+reading as the centred reference against itself, so the return is exact and not
+merely close.
+
+The numpad magnitude is *not* established: snr 13-15 against 25-26 for the
+mouse hold, and a vertical component a pure-left key should not produce. It may
+be aliasing again past +-55 deg. Only "it held constant" is claimed there.
+
+Three lessons, in order of how much they cost:
+
+1. **State an instrument's measurable range before believing a null from it.**
+   A silent aliasing limit turns a large real signal into confident noise. The
+   tool now prints its range on every report, next to the number.
+2. **Patola's eye was right and the metric was wrong** — again. This project
+   has a standing note to trust it, written after two aggregates called a 2.4x
+   shading error clean. It applied here and I did not apply it: the run was
+   written up as a null *and committed* before asking him what he saw.
+3. A large rotation is **not** a translation of a rectilinear image — linear in
+   tangent, not angle — so centre and edges shift differently and the residual
+   spread is legitimately wide (41 px at 24 deg). The `ROTATED`/`TRANSLATED`
+   split only means anything for small motions.
+
+### What #33 now knows, and what it still does not
+
+Settled: free-look is reachable, holds without drift, and recentres exactly on
+release. The injector must therefore **hold the input continuously** for as long
+as the head is off-centre, which spends Shift+middle-mouse for the session —
+but it does *not* need a closed loop to fight drift, which was the expensive
+worry and is now refuted.
+
+Still open, and each needs its own measurement:
+
+* **The gain.** +24.05 deg came from an uncalibrated hand push, so it anchors
+  nothing. P117.2 — linearity and slope against a known synthetic delta —
+  is untouched and now needs the injector.
+* **The range.** Patola's 120-160 deg horizontal was an educated guess and the
+  numpad reading could not confirm it. Needs a run that walks to the clamp.
+* **The other views.** All of this is the cockpit. Walking is ordinary
+  first-person mouse-look with no spring-back, and the map and menus are
+  different again.
+
 # State at `stage8-xr-session-in-x4` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the

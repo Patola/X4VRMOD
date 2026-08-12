@@ -166,9 +166,54 @@ def block_shift(a, b):
     return refine(1), refine(0)
 
 
-def measure(a_img, b_img):
-    """Per-block shifts over the whole frame. Returns (shifts, coords)."""
+def coarse_shift(a, b):
+    """Whole-frame phase correlation. Returns (dx, dy, snr).
+
+    **This stage exists because the tool was blind to exactly what it was
+    built to measure.** Phase correlation on a block of N pixels is
+    unambiguous only to +-N/2, so with BLOCK=256 the per-block pass tops out
+    at +-128 px, which at 1408 px and +-55 deg is **+-10 deg**. Take 115's
+    free-look moves were +24 deg. They aliased, every block returned a
+    different piece of nonsense, and the run was scored NO COHERENT MOTION and
+    written up as a null. Patola had already read the moves straight off the
+    PPMs by eye.
+
+    A full frame reaches +-w/2, which is +-the half-FOV by construction --
+    +-55 deg here -- and covers free-look. The lesson is the general one:
+    **state an instrument's measurable range before believing a null from
+    it.** A silent aliasing limit turns a large real signal into confident
+    noise.
+
+    One caveat on the per-block pass once the coarse shift is large: a big
+    camera rotation is *not* a translation of a rectilinear image. Linear in
+    tangent, not angle -- so the centre and the edges shift by different
+    amounts and the residual spread is genuinely wide (41 px at 24 deg). The
+    `ROTATED` / `TRANSLATED` split is only meaningful for SMALL motions; for
+    large ones read the coarse shift and the coherence, which was 0.99 across
+    take 115's +24 deg free-look.
+    """
+    n = a.shape[0]
+    win = np.outer(np.hanning(n), np.hanning(n)).astype(np.float32)
+    fa = np.fft.rfft2((a - a.mean()) * win)
+    fb = np.fft.rfft2((b - b.mean()) * win)
+    cross = fb * np.conj(fa)
+    mag = np.abs(cross)
+    mag[mag < 1e-9] = 1e-9
+    surf = np.fft.irfft2(cross / mag, s=a.shape)
+    p = np.unravel_index(np.argmax(surf), surf.shape)
+    dy = p[0] - n if p[0] > n / 2 else p[0]
+    dx = p[1] - n if p[1] > n / 2 else p[1]
+    return int(dx), int(dy), float(surf[p] / (surf.std() + 1e-9))
+
+
+def measure(a_img, b_img, coarse=(0, 0)):
+    """Per-block shifts over the whole frame. Returns (shifts, coords).
+
+    `coarse` pre-aligns b so the per-block pass only ever sees the small
+    residual, keeping it inside its own +-BLOCK/2 range."""
     a, b = gray(a_img), gray(b_img)
+    if coarse != (0, 0):
+        b = np.roll(b, (-coarse[1], -coarse[0]), axis=(0, 1))
     h, w = a.shape
     shifts, coords = [], []
     for y in range(0, h - BLOCK + 1, STRIDE):
@@ -238,10 +283,19 @@ def report(a_path, b_path, fov_half_deg):
     a_img, b_img = load_ppm(a_path), load_ppm(b_path)
     if a_img.shape != b_img.shape:
         raise ValueError(f"shape mismatch: {a_img.shape} vs {b_img.shape}")
-    shifts, coords = measure(a_img, b_img)
-    what, how = verdict(shifts, a_img.shape[1], fov_half_deg)
+    w = a_img.shape[1]
+    cdx, cdy, csnr = coarse_shift(gray(a_img), gray(b_img))
+    shifts, coords = measure(a_img, b_img, coarse=(cdx, cdy))
+    if len(shifts):
+        shifts = shifts + np.array([cdx, cdy], dtype=np.float64)
+    what, how = verdict(shifts, w, fov_half_deg)
     print(f"{a_path}")
     print(f"  -> {b_path}")
+    print(f"  whole-frame {cdx:+d},{cdy:+d} px = "
+          f"({float(deg_of_px(cdx, w, fov_half_deg)):+.2f}, "
+          f"{float(deg_of_px(cdy, w, fov_half_deg)):+.2f}) deg  snr {csnr:.0f}"
+          f"   [range +-{w // 2} px = "
+          f"+-{float(deg_of_px(w // 2, w, fov_half_deg)):.1f} deg]")
     print(f"  {what}: {how}")
     if len(shifts):
         mag = np.hypot(shifts[:, 0], shifts[:, 1])
