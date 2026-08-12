@@ -68,6 +68,9 @@ MIN_SNR = 4.0
 # How tight a population has to be, in pixels, to count as one rigid motion
 # rather than a parallax spread.
 TIGHT_PX = 2.0
+# Central window for --integrate. Small enough that tangent is near-linear
+# across it (the 42% bias above), large enough to resolve a step of +-26 deg.
+INTEGRATE_WINDOW = 640
 # A handful of stray blocks is not a motion. Take 115 produced three "ROTATED"
 # verdicts off 1, 2 and 3 moved blocks, where the spread is ~0 *by
 # construction* -- the scatter of two points about their own median is zero
@@ -166,7 +169,7 @@ def block_shift(a, b):
     return refine(1), refine(0)
 
 
-def coarse_shift(a, b):
+def coarse_shift(a, b, window=0):
     """Whole-frame phase correlation. Returns (dx, dy, snr).
 
     **This stage exists because the tool was blind to exactly what it was
@@ -184,6 +187,15 @@ def coarse_shift(a, b):
     it.** A silent aliasing limit turns a large real signal into confident
     noise.
 
+    `window` crops to a central square first. Full-frame is right for a
+    single before/after pair, where the answer is one number about the centre.
+    It is WRONG for accumulating small steps: pixel position is linear in
+    TANGENT, so a step measured after the content has drifted off-centre
+    converts to too large an angle. Integrating take 115's known +24.05 deg
+    span full-frame gave +34.17 -- **42% high** -- and a central 640 px window
+    gives +24.92, an error of 0.87 deg. Caught only because that span had a
+    directly-measured answer to check against.
+
     One caveat on the per-block pass once the coarse shift is large: a big
     camera rotation is *not* a translation of a rectilinear image. Linear in
     tangent, not angle -- so the centre and the edges shift by different
@@ -192,6 +204,11 @@ def coarse_shift(a, b):
     large ones read the coarse shift and the coherence, which was 0.99 across
     take 115's +24 deg free-look.
     """
+    if window:
+        c = a.shape[0] // 2
+        h = window // 2
+        a = a[c - h:c + h, c - h:c + h]
+        b = b[c - h:c + h, c - h:c + h]
     n = a.shape[0]
     win = np.outer(np.hanning(n), np.hanning(n)).astype(np.float32)
     fa = np.fft.rfft2((a - a.mean()) * win)
@@ -380,6 +397,50 @@ def main(argv):
 
     if args and args[0] == "--selftest":
         return 0 if selftest(args[1], fov_half_deg) else 1
+
+    if args and args[0] == "--integrate":
+        # Total rotation past the instrument's own range, by summing small
+        # steps. One whole-frame correlation is unambiguous only to +-w/2,
+        # which IS +-the half-FOV -- so a free-look clamp beyond 55 deg cannot
+        # be read as a single jump, and take 115's numpad hold is exactly the
+        # unreliable reading that caused. Consecutive frames of a slow turn
+        # each stay well inside the range, and their sum does not.
+        #
+        # APPROXIMATE, and the reason is the same tangent non-linearity that
+        # runs through this whole file: deg_of_px converts a shift measured
+        # about the CENTRE, so each step is only exact while the moving content
+        # is near the centre. Good enough to answer "roughly where does it
+        # stop"; not a calibration.
+        import glob
+        import re
+        prefix = args[1]
+        paths = glob.glob(f"{prefix}-n*-layer{layer}.ppm")
+        if not paths:
+            print(f"no dumps match {prefix}-n*-layer{layer}.ppm")
+            return 1
+        paths.sort(key=lambda p: int(re.search(r"-n(\d+)-", p).group(1)))
+        yaw = pitch = 0.0
+        print("  n     step deg        cumulative deg     snr")
+        prev = load_ppm(paths[0])
+        for p in paths[1:]:
+            cur = load_ppm(p)
+            dx, dy, snr = coarse_shift(gray(prev), gray(cur),
+                                       window=INTEGRATE_WINDOW)
+            w = cur.shape[1]
+            if max(abs(dx), abs(dy)) > 0.4 * INTEGRATE_WINDOW:
+                print(f"     WARNING step near the {INTEGRATE_WINDOW // 2} px "
+                      f"window limit — turn slower or dump more often")
+            sx = float(deg_of_px(dx, w, fov_half_deg))
+            sy = float(deg_of_px(dy, w, fov_half_deg))
+            yaw += sx
+            pitch += sy
+            n = int(re.search(r"-n(\d+)-", p).group(1))
+            print(f"{n:3d}  {sx:+7.2f},{sy:+7.2f}    {yaw:+8.2f},{pitch:+8.2f}"
+                  f"   {snr:5.0f}")
+            prev = cur
+        print(f"\ntotal yaw {yaw:+.1f} deg, pitch {pitch:+.1f} deg "
+              f"(approximate — see --integrate in the source)")
+        return 0
 
     if args and args[0] == "--series":
         import glob
