@@ -14555,6 +14555,160 @@ that stays put when the head moves. #35's affine stays an optimisation — it
 removes the 1.54x fill, and probe run 3 plus this take show it is not needed for
 correctness.
 
+### The instrument question, answered offline — both matrix candidates are dead
+
+Settled from the dumps on disk, no take spent, as the section above required.
+
+`grep`ping **every** log in `/tmp` for the matrix dump returns fourteen takes
+(52-58, 104-110, 112, 113). All fourteen are **byte-identical**:
+
+    M_view          [1 0 0 0 | 0 1 0 0 | 0 0 1 0 | 0 0 0 1]
+    M_viewinverse   [1 0 0 0 | 0 1 0 0 | 0 0 1 0 | 0 0 0 1]
+    M_viewprojection[1.333 0 0 0 | 0 -1.333 0 0 | 0 0 0 1 | 0 0 0.1 0]
+
+So `kViewInverse` is the identity and `M_viewprojection` is a pure projection
+with no rotation in it. **Both candidates refuted.** Two independent reasons,
+either of which alone is fatal:
+
+1. X4 renders camera-relative. `docs/x4-quirks.md` records `M_view` identity in
+   **all 128 blocks** of the arena, with the camera baked into the per-object
+   `M_worldviewprojection` on the CPU. The orientation was never in this block.
+2. The dump is gated on `g_track.logged_matrices` — it fires **once**, at the
+   first frame with 50+ credited draws, which is the menu. *A one-shot sample
+   cannot show a change by construction.* It could not have answered this
+   question even if the matrix did rotate.
+
+Fourteen takes agreeing byte-for-byte across an enormous range of knobs is the
+**"same number every run"** alarm, and reason 2 is what was behind it. Worth
+recording that the alarm fired correctly and cheaply this time: the agreement
+was noticed before the number was used, not after a take was spent on it.
+
+Note what reason 2 costs the refutation: every sample is from the same early
+menu frame, so the honest claim is *"identity at the menu, and an instrument
+that cannot vary"* — not *"identity in the cockpit"*. The candidates are dead
+either way, because a one-shot probe is useless for a change-detection job.
+
+### The instrument that works: rotation is depth-independent
+
+`tools/camera_rotation.py`. A rotation moves every pixel, and the presented eye
+image is already dumped, so this needs **no new layer code at all**.
+
+What makes it a *discriminating* metric rather than another aggregate: under a
+pure camera rotation every pixel moves by the same amount **regardless of its
+distance** — that is exactly why rotation-only timewarp is exact. Under ship
+translation, near geometry moves further than far. So the *shape* of the
+per-block shift distribution is the verdict, and a mean over it would destroy
+the only structure being measured:
+
+    all blocks at 0            -> NOTHING HAPPENED
+    tight peak away from 0     -> ROTATED, by that shift
+    broad spread of shifts     -> TRANSLATED (parallax), not a rotation
+    peak at 0 AND peak away    -> ROTATED, with screen-fixed pixels held at 0
+
+**Validated offline against known ground truth before being believed.** The
+pair is cut as two overlapping windows of one real X4 frame, so the shift is
+exact with no wrap-around edge to explain away:
+
+    want (  +0,  +0)  got ( -0.000, +0.000)  err 0.0000 px  spread 0.0000 px
+    want ( -17,  +9)  got (-16.999, +9.000)  err 0.0011 px  spread 0.0007 px
+    want ( -96, -96)  got (-95.992,-95.995)  err 0.0091 px  spread 0.0089 px
+
+Worst error **0.0091 px = 0.0011°**, and the identity case reads **exactly 0** —
+an estimator that cannot return zero cannot report "nothing happened", which is
+half of what #33 asks for.
+
+The rigid-motion cases also calibrate the rotation/parallax threshold instead of
+leaving it a guess — the mistake this project has already made once, by
+predicting asymmetric frusta and then building the test card as if they were
+symmetric. A **known rigid** motion reads a spread of **0.0089 px**, while real
+gameplay parallax in take 101 reads **6-48 px**. `TIGHT_PX = 2.0` sits 224x
+above the one and 3x below the other.
+
+Run over take 101's 40 present dumps it reads, with no tuning:
+
+* pairs 1-2 **UNSCOREABLE** (0 blocks — the black loading frames),
+* pairs 3-6 **NOTHING HAPPENED**, all 100 blocks at exactly 0 (a static phase —
+  a real negative control, from real dumps, that nobody had to construct),
+* pairs 7-39 **TRANSLATED**, a very steady `-29 px` median with **~45 blocks
+  held at exactly 0**. Those pinned blocks are the cockpit frame and HUD, which
+  are rigidly attached to the camera and *must* read 0. That is the metric
+  carrying its own control: if they ever drift with the world, the tool is
+  reporting a global offset rather than a measurement.
+
+One caveat recorded before it can bite: a 256 px block straddling the cockpit
+edge contains both screen-fixed and world pixels and will return something
+*between* 0 and the world shift. Some of take 101's 6-48 px spread is that, not
+parallax. It does not affect the verdicts above — mixed blocks can only inflate
+the spread, and inflating it can never turn a translation into a rotation — but
+it means the spread is an upper bound on parallax, not a measurement of it.
+This is the take-97 shape again: a rule that looks principled, applied to a
+distribution nobody had measured.
+
+### What X4's free-look actually is (Patola, in the cockpit, 2026-08-12)
+
+The open question from the section above, answered — and it is worse than the
+optimistic reading:
+
+* **Two input paths.** Numpad `2/4/6/8` for down/left/right/up and `1/3/7/9`
+  for the diagonals; *or* hold **Shift + middle mouse** and steer with the
+  mouse.
+* **It springs back.** Release the keys or the modifier and *the view returns
+  to centre*. It is a held gesture, not a camera state.
+* **Range is limited**, and by eye: under 180° horizontally, guessed 120-160°
+  total, and less vertically, guessed 100-140°. Explicitly educated guesses,
+  recorded as such and not to be used as numbers.
+* **Cockpit only.** X4 has many views and this describes one of them.
+
+**The spring-back is the dominant fact and it disqualifies free-look as the
+primary channel.** A head *holds* a rotation; free-look does not. To hold a
+head-tracked view we would have to hold Shift+middle-mouse for the entire
+session, which spends the modifier and the button permanently and takes the
+mouse away from steering and the cursor while held.
+
+Stacked on that, and each independently nasty:
+
+* **The channel is relative, and there is no absolute readback.** We send
+  deltas and cannot ask X4 what angle it ended up at, so error accumulates with
+  nothing to correct it.
+* **The clamp makes it accumulate for certain.** Past the range limit further
+  deltas do nothing while our estimate keeps integrating — classic windup — and
+  the view then lags coming back by the whole accumulated error.
+* **It is modal on game state we cannot see.** Cockpit, external, map, menus
+  and walking are different, and the Vulkan side cannot tell them apart.
+
+**The regimes split, and one of them is easy.** Walking inside a ship or station
+is ordinary first-person mouse-look: no modifier, no spring-back, unlimited
+yaw. That is a clean channel. The cockpit is the hard one. Any design that
+assumes a single uniform mapping is wrong on one of the two.
+
+### Predictions for #33, before the take that tests them
+
+**P117.1.** `tools/camera_rotation.py` reads **NOTHING HAPPENED** on a pair of
+present dumps taken while free-look input is *not* being synthesised, and
+**ROTATED** on a pair taken while it is — with the cockpit blocks pinned at 0
+in both. If the cockpit blocks move, the run is unscoreable and the tool is
+wrong, not X4.
+
+**P117.2.** With Shift+middle-mouse held and a synthetic mouse delta of `d`
+counts, the measured rotation is **linear in `d`** through the origin, over the
+range where the view is not clamped. The slope is X4's mouse sensitivity and is
+*not* known to us — it must be measured, not assumed, and it is a config value
+we already intercept.
+
+**P117.3.** Releasing the modifier returns the measured angle to **0 ± the
+tool's own 0.01°**, within one or two frames. This is the spring-back, stated
+as a number so it can be refuted.
+
+**P117.4 — the one that decides the design.** Held at a constant synthetic
+offset, the measured angle is **constant**. If instead it drifts, or decays
+toward centre while still held, free-look is not a position channel at all and
+the whole free-look approach dies here rather than after the input code is
+written.
+
+P117.4 is deliberately the cheapest possible run — hold one offset, dump two
+frames seconds apart, compare — and it is worth running **before** P117.2,
+because a refutation kills the branch and a confirmation costs one take.
+
 # State at `stage8-xr-session-in-x4` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the
