@@ -15039,6 +15039,55 @@ install already carries third-party extensions (`autotrader skill tweak`,
 `dfunskillsincreasing`), so nothing is lost that has not already been spent.
 Route 1 remains the least invasive and is where to start.
 
+> **The paragraph above is wrong and the correction matters.** Those extensions
+> are *disabled*. I read a directory listing and concluded the extensions were
+> in use — inferring active state from the existence of a folder, which is the
+> same shape as reading a list positionally or first-matching an aliased
+> binding. Patola's saves are all `modified="0"` and he intends to keep them
+> that way. Kept rather than edited away, because "the evidence was on disk and
+> I did not check what it meant" is the recurring failure here, not a one-off.
+
+### Staying unmodified — which Lua route survives it
+
+All fourteen saves read `modified="0"`, and every date is 2024-2025, so **no
+save has ever been written under this mod**. No evidence either way yet, and
+no risk taken yet either.
+
+X4 enumerates its own reasons, and they are all about state *on disk*:
+
+    MODIFIED: ... loaded from a save with unverified signature
+    MODIFIED: ... running in a Modding executable
+    MODIFIED: ... running in modified-emulation mode
+    MODIFIED: ... running with modified game files
+    MODIFIED: The game was started via a custom gamestart ...
+    MODIFIED: ... the game modified state has changed unexpectedly
+    GetModifiedBasegameUIFilesExtensions
+
+`LD_PRELOAD` changes none of them, and the config interception already
+substitutes content purely in memory through a `memfd`, never writing a game
+file. That decides the routes:
+
+* **Route 2 is out.** `ui/core/lualibs/` holds `utf8.so` *and* `utf8.so.sig` —
+  those are signed, so our own `.so` there is "modified game files" by
+  definition.
+* **Route 3 is out.** It registers an extension, which is exactly what
+  `GetModifiedBasegameUIFilesExtensions` tracks. Note `content.xml` does carry
+  one extension at `enabled="true"` (`ws_1666869624`) while the saves stay
+  clean, so *signed* Workshop content is tolerated. Ours would not be.
+* **Route 1 is the only one compatible with unmodified saves**, which makes it
+  not merely the least invasive but the only viable one.
+
+**Not promised, and the two reasons why.** "the game modified state has changed
+unexpectedly" is a catch-all that suggests X4 watches its own flag; and if X4
+verifies a Lua chunk's signature before loading it, that swapping the buffer
+afterwards goes unnoticed is an inference, not a measurement.
+
+So, until it is proven: **do not save the real game during a modded session.**
+The flag reads "at some point" — it is sticky for the session, so loading and
+saving a real game under a flagged session would mark it permanently. Test on a
+throwaway new-game slot, read `modified=` out of the save file, delete the slot.
+Back up `save/` first regardless; it is tiny.
+
 **Why this is also the 360-degree investigation.** Looking behind does not need
 a new rendering path — this file already records that X4 culls before we see a
 vertex, so no rendering-side transform can invent what was never drawn. What it
