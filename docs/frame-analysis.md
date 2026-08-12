@@ -14709,6 +14709,70 @@ P117.4 is deliberately the cheapest possible run — hold one offset, dump two
 frames seconds apart, compare — and it is worth running **before** P117.2,
 because a refutation kills the branch and a confirmation costs one take.
 
+### Take 115 — a null, and two defects it exposed in the instrument
+
+`score_run.py` **PASS**, exit 0, env line complete. 76 present dumps, 863 MB.
+**None of P117.1-117.4 is answered**, and the reason is not the measurement.
+
+Mapping the dumps by mtime, brightness and texture makes the session legible:
+
+    n0        black, startup
+    n1-4      luma 66, 100 blocks    main menu
+    n6-10     luma 0.1, 8 blocks     loading
+    n11-42    luma 3-21, 52-56 blk   SEVEN static screens, ~10 s each
+    n43-44    black                  loading
+    n45-70    luma 29-33, 100 blk    the cockpit, ~39 s
+    n71-75    dark                   quit
+
+The n11-42 stretch looked at first like the scripted hold/release cycle — seven
+plateaus of about ten seconds, with luma *returning to identical values* (7.9,
+3.1, 7.9, 3.1), which is exactly what a spring-back would produce. It is not.
+Measured against a fixed reference the numbers inside each plateau repeat **to
+the second decimal across five different frames**, which only happens when the
+frames are bit-identical. `score_run` says 42 of 76 dumps are. Those are static
+menu screens, not a held camera.
+
+In the cockpit phase, with the fixed instrument: **51 NOTHING HAPPENED, 18 NO
+COHERENT MOTION, 1 TRANSLATED**. The single real camera movement in the whole
+run is one pair at **-2.085° horizontal** (spread 5.86 px). The camera did not
+perform a free-look rotation.
+
+So the null is about the input, not the tool — which returned "nothing
+happened" 51 times *and* still found the one genuine 2.1° move. That is the
+pre-registered confound firing: either the input never reached X4, or it was
+not given in the cockpit. **The shim owns the input channel (#19)**, so
+Shift+middle-mouse may never arrive in the form X4 expects. Not asserted here;
+it is the live hypothesis and the next thing to establish.
+
+**Defect 1 — a rule that could not fail.** Three pairs reported `ROTATED` off
+1, 2 and 3 moved blocks. The scatter of two points about their own median is
+zero *by construction*, so any handful of stray blocks scored as a perfect
+rigid rotation. Fixed with `MIN_MOVED = 8` and a 10% floor. This is the
+"metric must discriminate" class: the verdict was structurally incapable of
+returning anything else.
+
+**Defect 2 — a physical cause asserted, not established.** Cockpit pairs
+reported `TRANSLATED (parallax): 100 blocks moved, spread 50 px` with a median
+of 3 px. Frames differing only by exposure drift and animation give the
+correlator a peak in every block and none of them mean anything. Calling that
+*parallax* named a cause that had not been shown — the take-97 mistake
+verbatim, in a tool written in the same session that cites take 97.
+
+Magnitude spread cannot separate the two, because real parallax is legitimately
+spread out. **Direction can:** real motion, rotation or parallax, moves the
+frame one way with varying magnitude, so `|sum(v)| / sum(|v|)` is near 1, while
+noise points everywhere and it collapses. Take 115's cockpit pairs score
+**0.04-0.21**; take 101's genuine ship motion scores high enough that 32 of its
+33 moving pairs still read TRANSLATED. New verdicts `NO COHERENT MOTION` and
+`AMBIGUOUS` carry the cases that used to be silently misfiled.
+
+**The calibration claim in the previous commit is now weaker than stated.** It
+said take 101's 6-48 px spread was parallax, calibrating `TIGHT_PX` against it.
+Some of that spread was incoherent matching, so the honest version is: the
+*rigid* end is measured (0.0089 px, ground truth), the parallax end is bounded
+above, not measured. Left here rather than edited away, because it is the exact
+error the same paragraph warned about.
+
 # State at `stage8-xr-session-in-x4` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the

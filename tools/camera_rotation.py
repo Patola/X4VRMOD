@@ -68,6 +68,26 @@ MIN_SNR = 4.0
 # How tight a population has to be, in pixels, to count as one rigid motion
 # rather than a parallax spread.
 TIGHT_PX = 2.0
+# A handful of stray blocks is not a motion. Take 115 produced three "ROTATED"
+# verdicts off 1, 2 and 3 moved blocks, where the spread is ~0 *by
+# construction* -- the scatter of two points about their own median is zero
+# however they lie. A rule that cannot fail is not a measurement.
+MIN_MOVED = 8
+MIN_MOVED_FRAC = 0.10
+# Directional coherence: the resultant length of the moved blocks' unit
+# direction vectors. Real motion -- rotation OR parallax -- moves the frame one
+# way with varying magnitude, so the directions agree and R is near 1. Blocks
+# matching noise point everywhere and R falls to ~0.
+#
+# This exists because take 115's cockpit frames reported "100 blocks moved,
+# spread 50 px" with a median of 3 px: frames that differ only by exposure
+# drift and animation, where the correlator finds a peak somewhere in every
+# block and none of them mean anything. Reporting that as "TRANSLATED
+# (parallax)" asserted a physical cause that had not been established, which is
+# the take-97 mistake verbatim. Magnitude spread alone cannot separate the two
+# -- real parallax is legitimately spread out -- but direction can.
+MIN_COHERENCE = 0.70
+MAX_INCOHERENCE = 0.40
 
 
 def load_ppm(path):
@@ -181,6 +201,10 @@ def verdict(shifts, width, fov_half_deg):
 
     if n_moved == 0:
         return "NOTHING HAPPENED", f"all {n_still} blocks at 0"
+    if n_moved < MIN_MOVED or n_moved < MIN_MOVED_FRAC * len(shifts):
+        return "NOTHING HAPPENED", (
+            f"{n_still} blocks at 0, {n_moved} stray — below the "
+            f"{MIN_MOVED}-block floor, so no verdict is claimed")
 
     mv = shifts[moved]
     # Spread of the moving population about its own median, which is what
@@ -189,11 +213,25 @@ def verdict(shifts, width, fov_half_deg):
     spread = float(np.median(np.hypot(mv[:, 0] - med[0], mv[:, 1] - med[1])))
     dx_deg, dy_deg = deg_of_px(med, width, fov_half_deg)
 
-    what = "ROTATED" if spread <= TIGHT_PX else "TRANSLATED (parallax)"
-    how = (f"{n_moved} blocks moved by ({med[0]:+.2f}, {med[1]:+.2f}) px "
-           f"= ({dx_deg:+.3f}, {dy_deg:+.3f}) deg, spread {spread:.2f} px; "
-           f"{n_still} blocks held at 0")
-    return what, how
+    # Magnitude-weighted, so a 0.6 px block does not get the same vote as a
+    # 79 px one: |sum(v)| / sum(|v|). Unweighted, genuine take-101 ship motion
+    # scored 0.5-0.87 purely because near-still blocks diluted the direction.
+    coh = float(np.hypot(*mv.sum(axis=0)) /
+                max(np.hypot(mv[:, 0], mv[:, 1]).sum(), 1e-9))
+
+    tail = (f"{n_moved} blocks moved by ({med[0]:+.2f}, {med[1]:+.2f}) px "
+            f"= ({dx_deg:+.3f}, {dy_deg:+.3f}) deg, spread {spread:.2f} px, "
+            f"coherence {coh:.2f}; {n_still} blocks held at 0")
+
+    if coh < MAX_INCOHERENCE:
+        return "NO COHERENT MOTION", (
+            f"directions disagree (coherence {coh:.2f}); the frames differ but "
+            f"not by any rigid transform — exposure drift, animation or noise. "
+            f"{n_moved} blocks, median ({med[0]:+.2f}, {med[1]:+.2f}) px, "
+            f"{n_still} at 0")
+    if coh < MIN_COHERENCE:
+        return "AMBIGUOUS", tail
+    return ("ROTATED" if spread <= TIGHT_PX else "TRANSLATED (parallax)"), tail
 
 
 def report(a_path, b_path, fov_half_deg):
