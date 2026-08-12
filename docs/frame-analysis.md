@@ -14949,6 +14949,54 @@ vocabulary and unused in the shipped map), which settles four things at once:
 So the config half of #33 is finished and measured. What remains is
 synthesising the key and the mouse deltas from the head pose.
 
+### Take 117 — the clamp, measured: +56.5 deg yaw, and it is a hard stop
+
+`score_run.py` **PASS**, 128 dumps. Walking the mouse slowly to the limit and
+integrating the steps:
+
+    n 98   +2.09      cum +53.48   snr 257
+    n100   +2.56      cum +56.16   snr 219
+    n101   +0.35      cum +56.50   snr 347
+    n102   +0.00      cum +56.50   snr 450   <- stops
+    ...    +0.00      cum +56.50   snr ~625     thirteen dumps
+    n114   +0.00      cum +56.50   snr 625
+    n115  -23.66      cum +32.84   snr  11   <- release; snr 11 = aliased, ignore
+
+**Yaw clamps at +56.5 deg**, +-2 deg for the method's validated 3.6% error. The
+stop is hard, not elastic: thirteen consecutive steps of *exactly* zero at
+snr ~625, which is the reading for frames that are essentially identical.
+
+So the free-look range is about **113 deg total horizontally**, against Patola's
+eyeball estimate of 120-160. Close, and now a number.
+
+**Pitch is NOT measured.** It sat at +19 deg for the whole run and was never
+walked to its limit, so the vertical clamp remains an estimate. Saying "the
+clamp is 56.5 deg" without that qualifier would be claiming a measurement we
+did not make.
+
+**What the number changes.** Patola's objection was that a head can turn 180 deg
+while a keybinding stops at some angle, and that the wall would be jarring. The
+measurement makes that much less alarming and, more usefully, makes it
+*designable*:
+
+* **Total head yaw before black is about 57.5 deg** — X4's 56.5 plus the 1 deg
+  of margin between our rendered +-55 and the +-54 the headset needs. That is
+  past comfortable neck rotation; a player who exceeds it is turning their
+  torso, and in VR that is a deliberate act rather than a glance.
+* **Windup is now solvable without any readback.** The expensive worry was our
+  integrator running away past the clamp while X4 stopped listening, so the
+  view lags coming back by the accumulated error. With the limit measured we
+  simply **clamp our own integrator to it** and never command past. No
+  detection, no closed loop, no reverse engineering.
+* **The wall can be pushed back by rendering wider**, at tan squared, and #35's
+  affine buys 1.54x of that back. So the clamp sets where our margin has to
+  start, not a hard ceiling on the design.
+
+Going after the clamp itself -- in X4's data archives, where `camera_cockpithead`
+suggests the cockpit camera may be data-driven, or in the binary -- stays
+available and stays *unnecessary at this range*. Recorded as an option, not a
+plan: it would be the first thing in this project that a game patch could break.
+
 ### An unlooked-for result for #30
 
 With mouselook latched, Patola reports the map and the ESC menu render **as
