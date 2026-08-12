@@ -14504,6 +14504,49 @@ then returns as a *refinement*, not a solution: late-latching the small residual
 between the pose X4 rendered with and the pose at display time, which is the
 standard architecture and is where the low latency comes from.
 
+### #33's shape, decided
+
+**Head drives X4's free-look only.** The ship keeps flying where it was
+pointed; steering stays on the stick. It does not fight an existing control,
+and it is what cockpit VR mods do.
+
+**Injector only, no settings changes.** The project's non-intrusive rule holds:
+input is synthesised through the channel the shim already owns (#19), and X4's
+config is intercepted as it already is for FOV. Patola changes nothing in-game.
+
+So the chain is: head pose -> free-look input -> X4's own camera -> what X4
+culls and renders -> our existing submission. Plus, later, the in-shader
+residual rotation for latency.
+
+### The obstacle to settle first, and why the usual instrument is blind to it
+
+**We cannot see X4's camera rotate in the matrix dumps.** This file already
+records that X4 renders camera-relative, so `M_view` is identity in every dump
+— which is exactly the quantity that would show a rotation. Take 114d's own
+inventory is no help either: `sx`/`sy`/`near` are rotation-invariant.
+
+So before any input synthesis is written, #33 needs an instrument that can tell
+"the camera rotated" from "nothing happened". Candidates, cheapest first:
+
+* `kViewInverse` (view -> world, member 128) — if X4 populates it, its 3x3 is
+  the camera orientation directly, and it is already in the block layout at the
+  top of `common/x4vr_view.hpp`. **Check the existing take-113 dump for whether
+  it is non-identity before building anything.**
+* `M_viewprojection` (member 112) — world -> clip; its rows rotate even when
+  `M_view` does not.
+* Failing both, the present dumps: a rotation moves every pixel, and
+  `tools/eye_stereo.py` already reads those frames.
+
+**Do this from the dumps on disk before spending a take.** Three shader/matrix
+dumps exist (`/tmp/x4vr-shaders-take{61,74,80}`) and take 113 ran with
+`X4VR_DUMP_MATRICES=1`, so the question of which member carries the orientation
+is answerable offline, today, for free.
+
+**Then** the open question the instrument serves: what X4's free-look actually
+does — its angular range, whether it auto-recentres, and whether it is modal
+(held key vs toggle). Each of those changes what the injector has to synthesise,
+and none of them is knowable from the Vulkan side.
+
 ### What stage9 does not do
 
 The image is world-locked to a fixed forward axis, because X4 does not know
