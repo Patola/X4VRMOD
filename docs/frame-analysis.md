@@ -14855,6 +14855,81 @@ Still open, and each needs its own measurement:
   first-person mouse-look with no spring-back, and the map and menus are
   different again.
 
+### The latch experiments — and why HOLD beats TOGGLE
+
+Two no-code experiments, run by Patola in-game. `inputmap.xml` binds free-look
+by name, so the modifier is config, not a hardcoded gesture:
+
+    <state id="INPUT_STATE_CAMERA_MOUSELOOK" source="INPUT_SOURCE_MOUSEBUTTONS"
+           code="INPUT_MOUSEBUTTON_MIDDLE_SHIFT"/>
+    <range id="INPUT_RANGE_MOUSELOOK_YAW"    source="INPUT_SOURCE_MOUSEAXES"
+           code="INPUT_MOUSEAXIS_X"/>
+
+`toggle="1"` is honoured on bindings the UI does not offer it for — Patola had
+already added it to `INPUT_STATE_LOOTMAGNET` by hand, and it works. There is
+**no joystick look axis anywhere in the map**: `INPUT_RANGE_MOUSELOOK_YAW`/
+`PITCH` on mouse axes are the only analog look inputs, so "drive it from a
+virtual joystick and leave the mouse alone" has nothing to bind to. Dead.
+
+**Experiment 1, loot magnet.** The latch survives opening the map, changing
+cameras including the cinematic camera, and leaving the cockpit entirely — the
+sound continues throughout. After reloading a save the sound was gone, but
+pressing the key reported *"loot magnet deactivated"*. **The input latch still
+read ON while the game-side effect had been reset.** They desynchronise.
+
+**Experiment 2, mouselook with `toggle="1"`.** Latched in the cockpit it works
+exactly as wanted: the view no longer returns to centre, so **the spring-back
+is purely the state being released** and P117.3 stops being a problem the
+moment we stop releasing. Then the same desync, and two resets we did not know
+about:
+
+* **Save load** — reappeared looking forward and the mouse would not move the
+  view; shift+MMB reported *"freelook off"*, and a second press restored it.
+  Identical to the loot magnet: latch persists, effect does not.
+* **Seat transitions recentre.** Leaving the chair centres the view to walk;
+  returning to the chair centres it again, *even if the head was up or down at
+  the moment of clicking the chair*.
+
+**This inverts the design.** Toggle looked better because it avoids holding a
+modifier forever. But a latch that silently desynchronises is the worst
+possible failure: free-look stops responding while our integrator keeps
+counting, so the view jumps by the whole accumulated error whenever it
+re-syncs, and nothing in the game says it happened.
+
+**Hold is self-healing by construction.** Bind `CAMERA_MOUSELOOK` to a
+dedicated otherwise-unused key with no `toggle`, and re-assert the held state
+every frame. There is no latch to lose: after a save load X4 simply sees the
+key held again and free-look resumes on its own. The original objection —
+holding spends Shift and middle-mouse, which collide with real bindings — is
+answered by the rebind, not by the toggle. Note the two are **mutually
+exclusive**: re-asserting a `toggle="1"` binding every frame would flip it on
+and off forever.
+
+Why the held channel is sound at all is take 115's P117.4: X4 integrates our
+deltas *exactly* and never drifts, so `angle = k · sum(deltas)` holds
+open-loop and indefinitely with no readback. Position control out of a relative
+channel, which only works because that result came back clean.
+
+And the mouse is not stolen: **#19 already put the shim between the physical
+mouse and what X4 sees**, built for another reason. X4 receives synthetic
+motion from the head while the shim keeps the real mouse for the cursor.
+
+**Still open: the recentre events.** The latch is self-healing but the
+*integrator* is not — a seat transition or a save load sets X4's angle to zero
+while our commanded total is non-zero, leaving a permanent offset. So they must
+be detected and the integrator zeroed. The injector already interposes
+`fopen()`, so a save load is plausibly visible there; seat transitions are not
+yet, and that is the next thing to find.
+
+### An unlooked-for result for #30
+
+With mouselook latched, Patola reports the map and the ESC menu render **as
+flat projections floating in front of the cockpit, which he can look around by
+moving the mouse** — they no longer own the screen. That is very close to what
+#30 wants from its floating canvas, arriving natively rather than from anything
+we built. Recorded here because #30 was scoped assuming the UI had to be moved
+by us; this suggests measuring what X4 already does in this mode first.
+
 # State at `stage8-xr-session-in-x4` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the
