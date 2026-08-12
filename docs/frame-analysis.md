@@ -14921,6 +14921,34 @@ be detected and the integrator zeroed. The injector already interposes
 `fopen()`, so a save load is plausibly visible there; seat transitions are not
 yet, and that is the next thing to find.
 
+### Take 116 — the rebind works end to end
+
+`score_run.py` **PASS**. The rebind was testable with no synthesis code at all
+by pointing it at a key a human can press (`INPUT_KEYCODE_APOSTROPHE`, in X4's
+vocabulary and unused in the shipped map), which settles four things at once:
+
+    inject  fopen(/…/inputmap.xml, r)
+    inject  inputmap: /…/inputmap.xml: 1 binding(s) -> INPUT_KEYCODE_APOSTROPHE
+            (was <state id="INPUT_STATE_CAMERA_MOUSELOOK"
+             source="INPUT_SOURCE_MOUSEBUTTONS"
+             code="INPUT_MOUSEBUTTON_MIDDLE_SHIFT"/>)
+    inject  inputmap: serving /…/inputmap-x4vrmod.xml in memory (48167 bytes);
+            your /…/inputmap.xml is not touched
+
+1. **X4 reads its inputmap through `fopen`**, not `open`/`openat` — the reason
+   those were widened to log any inputmap path was to catch the opposite, and
+   they stayed silent.
+2. X4's parser accepts the rewritten file: the game ran normally.
+3. The rebind takes. `camera_rotation.py` over the 75 present dumps measures
+   real rotations while the key is held, to **±36° yaw and ±35° pitch** — well
+   past the ±10° the old per-block estimator could see, which is why the
+   whole-frame stage had to exist first.
+4. The old path is gone rather than shadowed: shift+middle-mouse no longer
+   moves the view, and the log shows exactly one binding replaced.
+
+So the config half of #33 is finished and measured. What remains is
+synthesising the key and the mouse deltas from the head pose.
+
 ### An unlooked-for result for #30
 
 With mouselook latched, Patola reports the map and the ESC menu render **as
