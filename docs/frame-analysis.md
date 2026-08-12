@@ -14997,6 +14997,68 @@ suggests the cockpit camera may be data-driven, or in the binary -- stays
 available and stays *unnecessary at this range*. Recorded as an option, not a
 plan: it would be the first thing in this project that a game patch could break.
 
+### Lua is available, by three routes — and #40 is the same investigation
+
+Patola asked whether Lua is being avoided. It is not, and the record says so:
+`injector/x4vr_inject.cpp`'s own header has said *"Later phases add LuaJIT FFI
+and SDL hooks"* since it was written. It simply had not been needed yet. His
+point that it should come early if it is coming at all is taken.
+
+**Feasibility, established offline from the binary — no run, no guessing.**
+
+    ldd X4  ->  libluajit-5.1.so.2 => /usr/lib/libluajit-5.1.so.2
+
+X4 links LuaJIT **dynamically, against the system library**, and imports 80 Lua
+symbols. Among them every entry point that loads code:
+
+    luaL_loadbuffer  luaL_loadfile  luaL_loadstring  lua_load
+    lua_pcall  lua_call  luaL_newstate  luaL_openlibs
+
+`nm -D` first, per this project's own standing rule about hooking symbols the
+target never imports. These are all imported, so LD_PRELOAD interposition
+reaches them with the injector we already have.
+
+`luaopen_ffi` is imported too, so injected Lua gets the FFI library — it can
+call into C, including into our own `.so`. That is the escape hatch if X4's own
+Lua API turns out not to expose what we need.
+
+Three delivery routes, increasing in officialness:
+
+1. **Interpose `luaL_loadbuffer` / `lua_pcall`.** Touches no game file, works
+   with the existing injector, and gives us both halves: we see the name of
+   every chunk X4 loads, *and* we can inject our own against a live
+   `lua_State`. Same shape as the `fopen` interception already proven twice.
+2. **`ui/core/lualibs/`** — a real on-disk path (it holds `utf8.so`), which is
+   a `package.cpath` pattern X4 loads native Lua libraries from.
+3. **A proper `extensions/` UI addon.** `AddonManager::BindAddons()` and
+   `ui/addons` are in the binary, so this is X4's own supported mechanism.
+
+Route 3 was the one I expected to have to argue against, on the grounds that
+extensions flag a save as modified. **That objection is void here:** Patola's
+install already carries third-party extensions (`autotrader skill tweak`,
+`dfunskillsincreasing`), so nothing is lost that has not already been spent.
+Route 1 remains the least invasive and is where to start.
+
+**Why this is also the 360-degree investigation.** Looking behind does not need
+a new rendering path — this file already records that X4 culls before we see a
+vertex, so no rendering-side transform can invent what was never drawn. What it
+needs is for **X4's own camera to turn further**, at which point X4 renders
+behind and our existing pipeline works unchanged at any angle. So "reach the
+clamp" and "run Lua" are one question, not two.
+
+Where the clamp might live, cheapest first: a value in the game data (18 `.cat`
+archives, and `camera_cockpithead` in the binary suggests the cockpit camera is
+a named, data-driven thing); something X4's Lua API exposes; or, last and
+worst, a constant in the binary. **Unknown which, and not to be guessed at** —
+the honest state is that only the *number* is measured (+56.5 deg, take 117),
+not where it comes from.
+
+**Nothing in the current design forecloses this.** The synthesis converts head
+pose to deltas and clamps its integrator at a measured limit. If the limit later
+moves, that is a different constant in the same module. The rebind approach and
+a future 360-degree path compose rather than compete — which is the whole reason
+to state it here before the synthesis is written, not after.
+
 ### An unlooked-for result for #30
 
 With mouselook latched, Patola reports the map and the ESC menu render **as
