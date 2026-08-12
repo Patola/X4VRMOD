@@ -40,11 +40,20 @@ extern char **environ;
 #include "../common/x4vr_env.hpp"
 #include "../common/x4vr_share.hpp"
 #include "x4vr_config.hpp"
+#include "x4vr_inputmap.hpp"
 
 namespace {
 
 bool is_config_xml(const char *path) {
     return path && strstr(path, "config.xml");
+}
+
+// Logging only, and deliberately broader than x4vr::is_x4_inputmap: reads are
+// served from fopen() alone, so if X4 opens its inputmap through open() or
+// openat() instead the rebind would silently never happen. The log has to be
+// able to distinguish that from "we rebound it and it did not take".
+bool is_inputmap_path(const char *path) {
+    return path && strstr(path, "inputmap");
 }
 
 bool overrides_disabled() {
@@ -150,18 +159,103 @@ FILE *open_patched_config(const char *path) {
     return f;
 }
 
+// ------------------------------------------------------------- inputmap
+//
+// #33 gives head-look its own binding rather than synthesising shift+middle
+// mouse, which would go through X4's binding interpreter and corrupt every
+// combo built on those. See x4vr_inputmap.hpp for why it is a held key and not
+// a toggle. Same fork-and-serve shape as config.xml above: the player's file is
+// read once and never written.
+bool headlook_enabled() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_HEADLOOK");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
+
+Profile load_inputmap_profile(const char *path) {
+    Profile p;
+    p.path = x4vr::inputmap_profile_path(path);
+    if (p.path.empty())
+        return p;
+    p.xml = x4vr::read_file(p.path.c_str());
+    if (!p.xml.empty())
+        return p;
+    p.xml = x4vr::read_file(path);
+    if (p.xml.empty()) {
+        X4VR_LOG("inputmap: could not read %s — passing through", path);
+        return p;
+    }
+    if (!x4vr::write_file(p.path.c_str(), p.xml))
+        X4VR_LOG("inputmap: WARNING could not create %s", p.path.c_str());
+    return p;
+}
+
+// Build the rebound inputmap and return a stream over it, or nullptr to fall
+// back to the real file.
+FILE *open_patched_inputmap(const char *path) {
+    Profile prof = load_inputmap_profile(path);
+    if (prof.xml.empty())
+        return nullptr;
+    std::string xml = std::move(prof.xml);
+
+    std::string old;
+    const int n = x4vr::bind_headlook(xml, &old);
+    if (n == 0) {
+        // Stated rather than passed over: an inputmap X4 reads that has no
+        // free-look binding means head-look will not work in that profile, and
+        // silence here would look exactly like success.
+        X4VR_LOG("inputmap: %s has no INPUT_STATE_CAMERA_MOUSELOOK — head-look "
+                 "will not be bound from this file",
+                 path);
+        return nullptr;
+    }
+    X4VR_LOG("inputmap: %s: %d binding(s) -> %s (was %s)", path, n,
+             x4vr::headlook_code(), old.c_str());
+
+    // memfd, not fmemopen: an fmemopen stream has no real descriptor, and a
+    // reader that calls fileno()/fstat()/mmap() silently falls back to its
+    // defaults. Learned on config.xml; the same reader is likely behind this.
+    int fd = memfd_create("x4vr-inputmap", MFD_CLOEXEC);
+    if (fd < 0)
+        return nullptr;
+    size_t off = 0;
+    while (off < xml.size()) {
+        ssize_t w = ::write(fd, xml.data() + off, xml.size() - off);
+        if (w <= 0) {
+            ::close(fd);
+            return nullptr;
+        }
+        off += (size_t)w;
+    }
+    ::lseek(fd, 0, SEEK_SET);
+    FILE *f = fdopen(fd, "rb");
+    if (!f) {
+        ::close(fd);
+        return nullptr;
+    }
+    X4VR_LOG("inputmap: serving %s in memory (%zu bytes); your %s is not touched",
+             prof.path.c_str(), xml.size(), path);
+    return f;
+}
+
 // If this is a write-mode open of X4's config.xml, the path to use instead
 // (empty = leave the call alone). X4 saving its settings must never reach the
 // player's file. Absolute paths only: an *at() call with a relative path
 // resolves against dirfd, which our profile lookup cannot see.
 std::string redirect_write(const char *path) {
-    if (overrides_disabled() || !path || path[0] != '/' ||
-        !x4vr::is_x4_config(path))
+    if (overrides_disabled() || !path || path[0] != '/')
         return {};
-    Profile prof = load_profile(path);
-    if (prof.xml.empty())
-        return {};
-    return prof.path;
+    if (x4vr::is_x4_config(path)) {
+        Profile prof = load_profile(path);
+        return prof.xml.empty() ? std::string{} : prof.path;
+    }
+    if (headlook_enabled() && x4vr::is_x4_inputmap(path)) {
+        Profile prof = load_inputmap_profile(path);
+        return prof.xml.empty() ? std::string{} : prof.path;
+    }
+    return {};
 }
 
 // ------------------------------------------------------- the environment
@@ -970,7 +1064,7 @@ int open(const char *path, int flags, ...) {
         mode = va_arg(ap, mode_t);
         va_end(ap);
     }
-    if (is_config_xml(path))
+    if (is_config_xml(path) || is_inputmap_path(path))
         X4VR_LOG("open(%s, 0x%x)", path, flags);
     if ((flags & O_ACCMODE) != O_RDONLY) {
         const std::string to = redirect_write(path);
@@ -990,7 +1084,7 @@ int open64(const char *path, int flags, ...) {
         mode = va_arg(ap, mode_t);
         va_end(ap);
     }
-    if (is_config_xml(path))
+    if (is_config_xml(path) || is_inputmap_path(path))
         X4VR_LOG("open64(%s, 0x%x)", path, flags);
     if ((flags & O_ACCMODE) != O_RDONLY) {
         const std::string to = redirect_write(path);
@@ -1010,7 +1104,7 @@ int openat(int dirfd, const char *path, int flags, ...) {
         mode = va_arg(ap, mode_t);
         va_end(ap);
     }
-    if (is_config_xml(path))
+    if (is_config_xml(path) || is_inputmap_path(path))
         X4VR_LOG("openat(%d, %s, 0x%x)", dirfd, path, flags);
     if ((flags & O_ACCMODE) != O_RDONLY) {
         const std::string to = redirect_write(path);
@@ -1030,7 +1124,7 @@ int openat64(int dirfd, const char *path, int flags, ...) {
         mode = va_arg(ap, mode_t);
         va_end(ap);
     }
-    if (is_config_xml(path))
+    if (is_config_xml(path) || is_inputmap_path(path))
         X4VR_LOG("openat64(%d, %s, 0x%x)", dirfd, path, flags);
     if ((flags & O_ACCMODE) != O_RDONLY) {
         const std::string to = redirect_write(path);
@@ -1051,7 +1145,7 @@ static bool is_read_only(const char *mode) {
 
 FILE *fopen(const char *path, const char *mode) {
     static auto real_fopen = real<FILE *(*)(const char *, const char *)>("fopen");
-    if (is_config_xml(path))
+    if (is_config_xml(path) || is_inputmap_path(path))
         X4VR_LOG("fopen(%s, %s)", path, mode);
     if (!overrides_disabled() && x4vr::is_x4_config(path)) {
         if (is_read_only(mode)) {
@@ -1063,13 +1157,23 @@ FILE *fopen(const char *path, const char *mode) {
                 return real_fopen(prof.path.c_str(), mode);
         }
     }
+    if (headlook_enabled() && x4vr::is_x4_inputmap(path)) {
+        if (is_read_only(mode)) {
+            if (FILE *f = open_patched_inputmap(path))
+                return f;
+        } else {
+            Profile prof = load_inputmap_profile(path);
+            if (!prof.xml.empty())
+                return real_fopen(prof.path.c_str(), mode);
+        }
+    }
     return real_fopen(path, mode);
 }
 
 FILE *fopen64(const char *path, const char *mode) {
     static auto real_fopen64 =
         real<FILE *(*)(const char *, const char *)>("fopen64");
-    if (is_config_xml(path))
+    if (is_config_xml(path) || is_inputmap_path(path))
         X4VR_LOG("fopen64(%s, %s)", path, mode);
     if (!overrides_disabled() && x4vr::is_x4_config(path)) {
         if (is_read_only(mode)) {
@@ -1077,6 +1181,16 @@ FILE *fopen64(const char *path, const char *mode) {
                 return f;
         } else {
             Profile prof = load_profile(path);
+            if (!prof.xml.empty())
+                return real_fopen64(prof.path.c_str(), mode);
+        }
+    }
+    if (headlook_enabled() && x4vr::is_x4_inputmap(path)) {
+        if (is_read_only(mode)) {
+            if (FILE *f = open_patched_inputmap(path))
+                return f;
+        } else {
+            Profile prof = load_inputmap_profile(path);
             if (!prof.xml.empty())
                 return real_fopen64(prof.path.c_str(), mode);
         }

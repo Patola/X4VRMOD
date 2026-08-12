@@ -69,3 +69,8 @@ configure_file(sample_invproj.frag.spv sample_invproj.frag.spv COPYONLY)
 configure_file(sample_combined.spv sample_combined.spv COPYONLY)
 configure_file(skybox_cube.comp.spv skybox_cube.comp.spv COPYONLY)
 configure_file(noop.comp.spv noop.comp.spv COPYONLY)
+
+# The inputmap rewrite that gives head-look a binding of its own. Pure string
+# work on a fixture shaped like the real file, so it needs neither X4 nor a
+# GPU. Self-checking like view_math: no runner script.
+add_executable(x4vr_test_inputmap inputmap.cpp)

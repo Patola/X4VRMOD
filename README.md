@@ -108,6 +108,10 @@ Useful switches: `X4VR_NO_LAYER=1`, `X4VR_NO_INJECT=1`, `X4VR_NO_CONFIG=1`
 `X4VR_CLIP_SHIFT=<x>` (clip-space test shift), `X4VR_DUMP_MATRICES=1`,
 `X4VR_FOV=<decimal>` (serve X4's `<fov>` from the profile — the field of view is
 a config setting, so widening it needs no projection patch),
+`X4VR_HEADLOOK=1` (serve X4's `inputmap.xml` from a fork with free-look rebound
+onto a key of our own, so the head can drive it without spending shift and the
+middle mouse button; `X4VR_HEADLOOK_KEY=<INPUT_KEYCODE_…>` picks the key,
+default `INPUT_KEYCODE_F13` — X4 knows F13-F15 and no keyboard can emit them),
 `X4VR_PROJ_MVP=0` (turn *off* the per-draw `sx` recovery for the World shaders
 that declare no camera block — on by default since takes 109/110; with it off
 they shear by a constant that is only right at one zoom level),
