@@ -155,8 +155,88 @@ inline bool share_read_cursor(const Shared *s, uint8_t *dst, uint32_t *w,
     return false;
 }
 
+// ---- the other direction: the head pose, layer -> injector ----------------
+//
+// A *second* struct rather than fields added to `Shared`, exactly as the note
+// at the top of this file requires: every field of `Shared` is written by the
+// injector, every field of this one is written by the layer, and a struct with
+// a single writer needs no protocol where a shared one would.
+//
+// The storage still lives in the **injector**, and the layer still finds it by
+// `dlsym`. That is not symmetry for its own sake: the injector arrives by
+// `LD_PRELOAD` so its symbols are in the global namespace, while the layer is
+// `dlopen`ed by the Vulkan loader and its are not reliably visible to anyone.
+// Only one of the two can be found by name, so it has to be the one that owns
+// both allocations.
+//
+// #33 needs this because the two halves of head-look sit on opposite sides of
+// the process: OpenXR (and therefore the head pose) is in the layer, and the
+// SDL input X4 reads is in the injector.
+struct HeadShared {
+    uint32_t magic = kShareMagic;
+    uint32_t version = kShareVersion;
+
+    // Same seqlock discipline as above, for the same reason: yaw and pitch
+    // must come from one sample of one pose, never one of each from two.
+    std::atomic<uint32_t> seq{0};
+
+    std::atomic<float> yaw_deg{0.f};
+    std::atomic<float> pitch_deg{0.f};
+
+    // A located pose, not merely a session. The runtime returns poses without
+    // XR_VIEW_STATE_ORIENTATION_VALID_BIT while tracking is establishing, and
+    // driving X4's camera from those would swing the view to wherever an
+    // uninitialised pose points. The injector must gate on this, not on the
+    // struct existing.
+    std::atomic<uint32_t> valid{0};
+
+    // Monotonic, so the injector can tell "the head is being held still" from
+    // "the layer stopped publishing". Those look identical in the angles and
+    // want opposite responses.
+    std::atomic<uint64_t> updates{0};
+};
+
+inline void head_share_write(HeadShared *s, float yaw, float pitch, bool valid) {
+    if (!s)
+        return;
+    s->seq.fetch_add(1, std::memory_order_release);
+    s->yaw_deg.store(yaw, std::memory_order_relaxed);
+    s->pitch_deg.store(pitch, std::memory_order_relaxed);
+    s->valid.store(valid ? 1u : 0u, std::memory_order_relaxed);
+    s->updates.fetch_add(1, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
+    s->seq.fetch_add(1, std::memory_order_release);
+}
+
+inline bool head_share_read(const HeadShared *s, float *yaw, float *pitch,
+                            uint64_t *updates) {
+    if (!s || s->magic != kShareMagic || s->version != kShareVersion)
+        return false;
+    for (int tries = 0; tries < 8; tries++) {
+        const uint32_t a = s->seq.load(std::memory_order_acquire);
+        if (a & 1u)
+            continue;
+        const float y = s->yaw_deg.load(std::memory_order_relaxed);
+        const float p = s->pitch_deg.load(std::memory_order_relaxed);
+        const bool ok = s->valid.load(std::memory_order_relaxed) != 0;
+        const uint64_t u = s->updates.load(std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (s->seq.load(std::memory_order_relaxed) != a)
+            continue;
+        if (!ok)
+            return false;
+        *yaw = y;
+        *pitch = p;
+        if (updates)
+            *updates = u;
+        return true;
+    }
+    return false;
+}
+
 } // namespace x4vr
 
-// The one exported symbol. `extern "C"` so the name is not mangled and the
-// layer can name it as a string.
+// The exported symbols. `extern "C"` so the names are not mangled and the
+// layer can name them as strings.
 extern "C" x4vr::Shared *x4vr_shared_state();
+extern "C" x4vr::HeadShared *x4vr_head_state();

@@ -41,6 +41,7 @@
 #include "x4vr_sbs.hpp"
 #include "../common/x4vr_env.hpp"
 #include "../common/x4vr_share.hpp"
+#include "../common/x4vr_headlook.hpp"
 #ifdef X4VR_HAVE_OPENXR
 #include "../common/x4vr_xr.hpp"
 #endif
@@ -7270,6 +7271,34 @@ void vr_thread() {
         // Only now: a frame has been begun, located and ended, so the runtime
         // is demonstrably taking frames and the present thread may acquire.
         g_vrs.loop_live.store(true, std::memory_order_release);
+
+        // #33: publish the head orientation for the injector's SDL hooks.
+        //
+        // views[0] carries it directly rather than needing a separate VIEW-space
+        // locate: probe run 2 measured this runtime's eye poses as PARALLEL
+        // (VIEW_REL_DEG 0.0000, and Monado's quirks.parallel_views folds the
+        // 15.04 deg cant into the fov instead), so either eye's orientation IS
+        // the head's. If that ever stops holding, this is where it breaks and
+        // the probe is what would say so.
+        //
+        // Gated on `have` -- a located pose, not merely a session. Driving X4's
+        // camera from a pose without ORIENTATION_VALID would swing the view to
+        // wherever an uninitialised quaternion points.
+        {
+            static auto head_fn =
+                (x4vr::HeadShared * (*)())dlsym(RTLD_DEFAULT, "x4vr_head_state");
+            static bool said = false;
+            if (head_fn) {
+                const auto &o = views[0].pose.orientation;
+                const x4vr::HeadAngles a =
+                    x4vr::head_angles(o.x, o.y, o.z, o.w);
+                x4vr::head_share_write(head_fn(), a.yaw_deg, a.pitch_deg, have);
+            } else if (!said) {
+                said = true;
+                X4VR_LOG("vr: no x4vr_head_state — injector not preloaded, so "
+                         "head-look has nothing to drive");
+            }
+        }
 
         bool tick = false;
         {

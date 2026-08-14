@@ -41,6 +41,7 @@ extern char **environ;
 #include "../common/x4vr_share.hpp"
 #include "x4vr_config.hpp"
 #include "x4vr_inputmap.hpp"
+#include "../common/x4vr_headlook.hpp"
 
 namespace {
 
@@ -509,6 +510,43 @@ extern "C" x4vr::Shared *x4vr_shared_state() {
     return &state;
 }
 
+// The other direction, #33: the layer writes the head pose here and the SDL
+// hooks below read it. Owned by the injector for the reason x4vr_share.hpp
+// gives -- only the LD_PRELOADed side has globally visible symbols.
+extern "C" x4vr::HeadShared *x4vr_head_state() {
+    static x4vr::HeadShared state;
+    return &state;
+}
+
+namespace {
+
+// True only while a located head pose is arriving and head-look is armed.
+std::atomic<bool> g_headlook_active{false};
+// The integrator. Single-threaded by construction: only the SDL hooks touch
+// it, and X4 polls input from one thread.
+x4vr::HeadLook g_headlook;
+
+bool headlook_key_held() {
+    // Only while the head is actually driving. Holding X4's free-look modifier
+    // when nothing is publishing a pose would leave the game in mouselook with
+    // no one steering it.
+    return g_headlook_active.load(std::memory_order_relaxed);
+}
+
+// The scancode our rebound free-look key sits on. Must agree with
+// x4vr::headlook_code(); SDL_SCANCODE_F13 is 104 and X4's INPUT_KEYCODE_F13 is
+// the same physical key. Declared here rather than included, because this file
+// deliberately has no SDL headers -- SDL2 and SDL3 share this process tree.
+int headlook_scancode() {
+    static const int sc = [] {
+        const char *e = getenv("X4VR_HEADLOOK_SCANCODE");
+        return e && *e ? atoi(e) : 104; // SDL_SCANCODE_F13
+    }();
+    return sc;
+}
+
+} // namespace
+
 // Publish the pointer. Called from the position channel X4 actually reads, so
 // what the layer draws and what X4 hit-tests are the same number by
 // construction rather than by two paths agreeing.
@@ -823,6 +861,105 @@ void note_mouse_event(const Sdl3MouseEvent *e) {
 
 // SDL_Window is opaque here on purpose -- the injector has no SDL headers and
 // needs none; the handle is only ever passed straight through.
+// ------------------------------------------------------- #33 head-look
+//
+// X4 is SDL3 and imports SDL_GetKeyboardState, so the held free-look key is a
+// *polled state array with one bit forced* -- no event synthesis, no key-up to
+// lose, and self-healing by construction, which is exactly what the
+// hold-not-toggle decision needs. `nm -D` first, per this project's rule about
+// hooking symbols the target never imports; X4 does not import SDL_PollEvent,
+// which is what the dead hook described near the top of this file was.
+//
+// **The mouse path is measured before it is built.** X4 imports BOTH
+// SDL_GetMouseState + SDL_WarpMouseInWindow (the warp-to-centre idiom, where a
+// delta is the absolute position minus the centre) and
+// SDL_SetWindowRelativeMouseMode (where motion arrives as events instead).
+// Those need opposite implementations, and the XML gives no way to tell which
+// X4 uses for free-look. So this run logs, and the next one implements the one
+// that fires. Guessing here would mean writing an SDL_Event by offset against
+// a header this file deliberately does not include.
+void headlook_tick() {
+    static const bool armed = [] {
+        const char *e = getenv("X4VR_HEADLOOK");
+        return e && *e && *e != '0';
+    }();
+    if (!armed || !this_is_the_game())
+        return;
+
+    static x4vr::HeadShared *hs = x4vr_head_state();
+    static const float gain = [] {
+        const char *e = getenv("X4VR_HEADLOOK_GAIN");
+        return e && *e ? (float)atof(e) : 0.0f;
+    }();
+    static const bool once = [] {
+        X4VR_LOG("headlook: armed, scancode %d, gain %s", headlook_scancode(),
+                 getenv("X4VR_HEADLOOK_GAIN")
+                     ? getenv("X4VR_HEADLOOK_GAIN")
+                     : "UNSET — commands nothing until calibrated");
+        return true;
+    }();
+    (void)once;
+    g_headlook.gain_deg_per_count = gain;
+
+    float yaw = 0.0f, pitch = 0.0f;
+    uint64_t updates = 0;
+    if (!x4vr::head_share_read(hs, &yaw, &pitch, &updates)) {
+        g_headlook_active.store(false, std::memory_order_relaxed);
+        return;
+    }
+    // "Held still" and "the layer stopped publishing" look identical in the
+    // angles and want opposite responses, which is what `updates` is for.
+    static uint64_t last_updates = 0;
+    static int stale = 0;
+    stale = (updates == last_updates) ? stale + 1 : 0;
+    last_updates = updates;
+    if (stale > 120) {
+        g_headlook_active.store(false, std::memory_order_relaxed);
+        return;
+    }
+    g_headlook_active.store(true, std::memory_order_relaxed);
+
+    const x4vr::Delta d = x4vr::head_look_step(g_headlook, {yaw, pitch});
+
+    // Reported whether or not anything is sent yet, because this line is how
+    // the calibration run recovers the gain: a known command against the angle
+    // camera_rotation.py --integrate measures.
+    static uint64_t n = 0;
+    if ((n++ % 240) == 0 || d.clamped)
+        X4VR_LOG("headlook: head %.2f,%.2f -> cmd %.2f,%.2f delta %d,%d%s",
+                 yaw, pitch, g_headlook.cmd_yaw_deg, g_headlook.cmd_pitch_deg,
+                 d.dx, d.dy, d.clamped ? " CLAMPED" : "");
+}
+
+// X4 polls the keyboard every frame; this is where the free-look key is held.
+// The real array is copied rather than written through: SDL owns that memory
+// and other consumers in this process tree read it.
+const bool *SDL_GetKeyboardState(int *numkeys) {
+    static auto real_fn = real<const bool *(*)(int *)>("SDL_GetKeyboardState");
+    int n = 0;
+    const bool *src = real_fn(&n);
+    if (numkeys)
+        *numkeys = n;
+    headlook_tick();
+    if (!src || !headlook_key_held())
+        return src;
+    const int sc = headlook_scancode();
+    if (sc < 0 || sc >= n)
+        return src;
+    static std::vector<bool> dummy; // never used; keeps the intent obvious
+    (void)dummy;
+    static bool *copy = nullptr;
+    static int copy_n = 0;
+    if (copy_n != n) {
+        delete[] copy;
+        copy = new bool[n];
+        copy_n = n;
+    }
+    memcpy(copy, src, (size_t)n * sizeof(bool));
+    copy[sc] = true;
+    return copy;
+}
+
 int SDL_GetWindowSize(void *win, int *w, int *h) {
     static auto real_fn = real<int (*)(void *, int *, int *)>("SDL_GetWindowSize");
     int r = real_fn(win, w, h);
