@@ -79,3 +79,14 @@ add_executable(x4vr_test_inputmap inputmap.cpp)
 # clamp and its recentre. Pure and dependency-free, so no X4 and no GPU.
 # Self-checking like view_math: no runner script.
 add_executable(x4vr_test_headlook headlook.cpp)
+
+# The injector's hand-written SDL_MouseMotionEvent, asserted against the real
+# SDL3 headers. The injector cannot include them (SDL2 and SDL3 share X4's
+# process tree); this standalone binary can, so a future SDL that moves a field
+# fails the build instead of steering the camera with a garbage float.
+find_package(SDL3 QUIET)
+if(SDL3_FOUND OR EXISTS /usr/include/SDL3/SDL_events.h)
+  add_executable(x4vr_test_sdl_event_layout sdl_event_layout.cpp)
+else()
+  message(STATUS "SDL3 headers not found — skipping x4vr_test_sdl_event_layout")
+endif()

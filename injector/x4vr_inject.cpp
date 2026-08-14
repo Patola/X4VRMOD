@@ -439,6 +439,14 @@ struct Sdl3MouseEvent {
 enum { SDL_EV_MOUSE_MOTION = 0x400, SDL_EV_MOUSE_DOWN = 0x401,
        SDL_EV_MOUSE_UP = 0x402 };
 
+// A genuine motion event's windowID/which, copied so ours are indistinguishable
+// from X4's own. Guessing zero would be a plausible-looking value X4 may filter
+// on, and the failure would present as "head-look does nothing".
+std::atomic<uint32_t> g_motion_window{0};
+std::atomic<uint32_t> g_motion_which{0};
+std::atomic<uint32_t> g_motion_seen{0};
+
+
 // Observation only. Enough samples to establish the coordinate space and
 // whether motion is absolute or relative, and then quiet: the question is what
 // space X4 is told about, not how often.
@@ -802,6 +810,18 @@ void note_extent(const char *what, float x, float y) {
 }
 
 void note_mouse_event(const Sdl3MouseEvent *e) {
+    // #33: the first real motion event donates the two fields our synthetic
+    // ones must carry. Done here because every mouse event already flows
+    // through this function.
+    if (e->type == SDL_EV_MOUSE_MOTION &&
+        !g_motion_seen.load(std::memory_order_relaxed)) {
+        g_motion_window.store(e->windowID, std::memory_order_relaxed);
+        g_motion_which.store(e->which, std::memory_order_relaxed);
+        g_motion_seen.store(1, std::memory_order_relaxed);
+        X4VR_LOG("headlook: sampled a real motion event — window %u, mouse %u; "
+                 "synthetic events will carry the same",
+                 e->windowID, e->which);
+    }
     static int motions = 0, buttons = 0;
     const bool is_motion = e->type == SDL_EV_MOUSE_MOTION;
     // ABOVE the sample caps, deliberately. Putting it below would let the
@@ -878,6 +898,10 @@ void note_mouse_event(const Sdl3MouseEvent *e) {
 // X4 uses for free-look. So this run logs, and the next one implements the one
 // that fires. Guessing here would mean writing an SDL_Event by offset against
 // a header this file deliberately does not include.
+// Defined below with the rest of the mouse half; declared here because the
+// tick is what drives it and reads better next to the arithmetic.
+void send_mouse_delta(int dx, int dy);
+
 void headlook_tick() {
     static const bool armed = [] {
         const char *e = getenv("X4VR_HEADLOOK");
@@ -924,11 +948,47 @@ void headlook_tick() {
     // Reported whether or not anything is sent yet, because this line is how
     // the calibration run recovers the gain: a known command against the angle
     // camera_rotation.py --integrate measures.
+    send_mouse_delta(d.dx, d.dy);
+
     static uint64_t n = 0;
     if ((n++ % 240) == 0 || d.clamped)
         X4VR_LOG("headlook: head %.2f,%.2f -> cmd %.2f,%.2f delta %d,%d%s",
                  yaw, pitch, g_headlook.cmd_yaw_deg, g_headlook.cmd_pitch_deg,
                  d.dx, d.dy, d.clamped ? " CLAMPED" : "");
+}
+
+// ---- the mouse half -------------------------------------------------------
+//
+// Take 117's log already answered which of X4's two mouse idioms free-look
+// uses, without a run being spent on it: `relative mouse mode ON` at 962738 and
+// off at 962804, a 66-second window that is exactly the clamp walk. In relative
+// mode SDL delivers motion as events, and X4 does not import
+// SDL_GetRelativeMouseState, so `xrel`/`yrel` on a motion event is the channel.
+//
+// Sdl3MouseEvent and the SDL_PeepEvents interposer already exist above, from
+// the cursor shim -- the layout was established there and is reused rather than
+// declared a second time. tests/sdl_event_layout.cpp asserts it against the
+// real SDL3 headers, which this file cannot include because SDL2 (gamescope)
+// and SDL3 (X4) share this process tree and the hand declarations here would
+// collide with the real prototypes.
+
+// Push one synthetic relative motion. Deliberately silent until a real event
+// has been seen: sending before then would mean inventing the two fields this
+// exists to copy.
+void send_mouse_delta(int dx, int dy) {
+    if ((dx == 0 && dy == 0) || !g_motion_seen.load(std::memory_order_relaxed))
+        return;
+    static auto push = real<int (*)(void *)>("SDL_PushEvent");
+    if (!push)
+        return;
+    unsigned char ev[128] = {};
+    auto *m = (Sdl3MouseEvent *)ev;
+    m->type = SDL_EV_MOUSE_MOTION;
+    m->windowID = g_motion_window.load(std::memory_order_relaxed);
+    m->which = g_motion_which.load(std::memory_order_relaxed);
+    m->xrel = (float)dx;
+    m->yrel = (float)dy;
+    push(ev);
 }
 
 // X4 polls the keyboard every frame; this is where the free-look key is held.
