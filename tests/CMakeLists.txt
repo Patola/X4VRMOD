@@ -74,3 +74,8 @@ configure_file(noop.comp.spv noop.comp.spv COPYONLY)
 # work on a fixture shaped like the real file, so it needs neither X4 nor a
 # GPU. Self-checking like view_math: no runner script.
 add_executable(x4vr_test_inputmap inputmap.cpp)
+
+# The head-look arithmetic: pose decomposition, the open-loop integrator, its
+# clamp and its recentre. Pure and dependency-free, so no X4 and no GPU.
+# Self-checking like view_math: no runner script.
+add_executable(x4vr_test_headlook headlook.cpp)
