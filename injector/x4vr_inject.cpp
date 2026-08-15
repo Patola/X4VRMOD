@@ -1001,6 +1001,37 @@ static bool lua_enabled() {
 // instrument must not flood its own log, which cost takes 119 and 122: chunk
 // names are capped, and the keyword scan reports the chunk rather than the
 // match.
+// Where to write chunks that hit a probe, or empty for none.
+//
+// **/tmp only, and never committed.** X4's Lua is Egosoft's copyrighted source,
+// exactly like the shader modules this project already dumps and has always
+// kept out of the tree. The knob takes a directory so the path is the caller's
+// choice and nothing defaults into the repo.
+static const char *lua_dump_dir() {
+    static const char *d = [] {
+        const char *e = getenv("X4VR_LUA_DUMP");
+        return (e && *e) ? e : "";
+    }();
+    return d;
+}
+
+// Chunk names are paths; flatten them so one directory holds the lot.
+static void lua_dump_chunk(const char *name, const char *buff, size_t sz) {
+    const char *dir = lua_dump_dir();
+    if (!*dir || !buff || !sz)
+        return;
+    std::string flat(name ? name : "anon");
+    for (char &c : flat)
+        if (c == '/' || c == '\\' || c == '@' || c == '=')
+            c = '_';
+    const std::string path = std::string(dir) + "/" + flat;
+    // write_file() goes through open()/write() rather than fopen(), which
+    // matters here for the same reason it does for the config profile: fopen is
+    // interposed by this very file.
+    if (x4vr::write_file(path.c_str(), std::string(buff, sz)))
+        X4VR_LOG("lua: dumped %s (%zu bytes)", path.c_str(), sz);
+}
+
 static void note_lua_chunk(const char *buff, size_t sz, const char *name,
                            const char *via) {
     static int chunks = 0, hits = 0;
@@ -1022,6 +1053,11 @@ static void note_lua_chunk(const char *buff, size_t sz, const char *name,
             continue;
         hits++;
         X4VR_LOG("lua HIT %-14s in %s  (%s)", probes[i].needle, n, probes[i].why);
+        static std::string last_dumped;
+        if (last_dumped != n) { // one dump per chunk, not one per probe
+            last_dumped = n;
+            lua_dump_chunk(n, buff, sz);
+        }
     }
 }
 
