@@ -631,3 +631,52 @@ one fails the second. Read both before calling anything.
 (`IsFullscreenMenuDisplayed` is exported but has **no FFI declaration** anywhere
 in the Lua bytecode. It was called on the strength of its name with an invented
 `bool()` signature and crashed X4 twice. Do not reach for it again.)
+
+## The numpad free-look is a spring, and the clamp is not in the input path
+
+Head-look holds `INPUT_STATE_CAMERA_MOUSELOOK`, and holding that is what X4 uses
+to suspend ship control — so it costs the player mouse steering and the aiming
+cursor. The eight `INPUT_STATE_CAMERA_*` directional states never touch
+MOUSELOOK, which made them the obvious candidate for a rotation channel that
+leaves the mouse alone. **They cannot carry it.** Measured in take 154, driven
+by real keypresses on X4's factory numpad bindings so that no synthesis question
+could confound the answer:
+
+| hold | limit | rise | limit reached | recentre 50% / 90% |
+|---|---|---|---|---|
+| LEFT 4.02 s  | 65.00° | 92.0 °/s | 1.86 s | 0.38 s / 0.62 s |
+| UP 5.03 s    | 35.00° | 62.6 °/s | 1.76 s | 0.29 s / 0.61 s |
+| LEFT 13.21 s | 65.00° | 89.3 °/s | 1.85 s | 0.39 s / 0.63 s |
+
+**It springs home on release** — every hold, back to 90% of centre in 0.62 s,
+the three agreeing to within 0.02 s. A spring cannot hold an absolute head pose
+however it is driven: the moment the servo stops commanding, the view returns.
+Pulsing does not rescue it either, because the pull starts immediately on
+release. This retires the directional states as a channel, and it retires them
+*before* any work went into whether we can synthesise the keys — which was the
+point of measuring with real fingers first.
+
+**The far more useful finding is the limit.** Yaw stops at 65.00° and pitch at
+35.00°, which are *the same numbers* already measured on the MOUSELOOK path
+(±65.00° yaw confirmed live in take 150, ±35.00° pitch). Two unrelated input
+paths, one pair of constants: **the clamp lives in X4's free-look camera, not in
+the input channel.** So no change of input can widen it, and the standing hope
+that some other entry point might reach past ±65° is closed. Widening it, if it
+is ever wanted, is a different kind of problem than picking a better channel.
+
+The recentre figure is worth keeping for its own sake: it is the transient the
+map gate produces every time it hands the mouse back and takes it again. X4
+pulls the view home in about six tenths of a second, and the servo then drives
+it back on re-acquire — which is what take 148 looked like when it worked.
+
+**What survives.** One option is left for decoupling the mouse, and it does not
+touch the head's channel at all: give *ship steering* a different physical
+source. X4's inputmap already binds 22 things to `INPUT_SOURCE_JOYAXES`, we
+already fork and serve that file, and we already intercept the player's mouse
+deltas — and currently throw them away to stop them fighting the head. Feeding
+them instead to a virtual joystick bound to the steering ranges would put the
+head and the hand on different sources, so they stop competing. Unverified, and
+the open questions are real: whether `/dev/uinput` is writable here, whether X4
+hot-detects a device that appears after launch, whether the steering ranges are
+relative or absolute, and whether the aiming cursor is a separate problem from
+steering. Those are worth answering before any of it is built.
