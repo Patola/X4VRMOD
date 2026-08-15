@@ -244,6 +244,45 @@ int main() {
         printf("      worst single-frame command: %.2f deg\n", commanded);
     }
 
+    // ---- the stall watch must not mistake success for failure
+    //
+    // This is the test the shipped version needed and did not have. A converged
+    // servo commands little and moves little, which the first implementation
+    // read as a stall: it stood down after 0.66 s of perfect tracking and
+    // thrashed 23 times in one run, so the cockpit never tracked at all.
+    {
+        x4vr::StallWatch w;
+        // A converged servo: tiny commands, tiny motion, for a long time.
+        int events = 0;
+        for (int i = 0; i < 2000; i++)
+            events += (stall_watch_step(w, 0.03f, 0.02f) != 0);
+        check(events == 0 && !w.stalled,
+              "a converged servo never stalls, however long it runs");
+
+        // A real stall: commanding hard into something that does not move.
+        x4vr::StallWatch v;
+        int in = 0;
+        for (int i = 0; i < 300; i++)
+            if (stall_watch_step(v, 1.0f, 0.0f) == 1)
+                in++;
+        check(v.stalled && in == 1,
+              "commanding into a dead camera stalls, once, not repeatedly");
+
+        // And it comes back when the camera moves on its own.
+        int out = 0;
+        for (int i = 0; i < 300; i++)
+            if (stall_watch_step(v, 0.0f, 0.5f) == -1)
+                out++;
+        check(!v.stalled && out == 1, "and resumes once when it answers again");
+
+        // A slow window with almost no command must not decide anything: the
+        // ambiguous case has to stay ambiguous rather than guess.
+        x4vr::StallWatch q;
+        for (int i = 0; i < 600; i++)
+            stall_watch_step(q, 0.01f, 0.0f);
+        check(!q.stalled, "a window with too little command decides nothing");
+    }
+
     // ---- the dead zone holds still
     {
         x4vr::HeadLook s;

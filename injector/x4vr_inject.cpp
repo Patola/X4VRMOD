@@ -1285,27 +1285,32 @@ void headlook_tick() {
         x4vr::head_look_observe(g_headlook, kRad2Deg * -r.yaw, kRad2Deg * r.pitch);
     }
 
-    // **Never keep pushing a camera that does not answer.**
+    // **Never keep pushing a camera that does not answer -- but know the
+    // difference between "not answering" and "already there".**
     //
-    // Opening the map made the view rotate, slowly at first and then faster and
-    // faster. GetCameraRotation reports 0.00,0.00 outside the cockpit -- the
-    // menus in take 137 show it -- so the servo saw a constant error, commanded
-    // a correction every frame forever, and whatever DOES consume mouse deltas
-    // in the map accelerated away. A servo with no feedback on the thing it is
-    // actually moving is an accelerator, and it is not enough that the number we
-    // read is a camera; it has to be the camera we are driving.
+    // Opening the map made the view accelerate away: GetCameraRotation reports
+    // 0.00,0.00 outside the cockpit, so the servo saw a constant error and
+    // commanded forever into whatever the map DOES steer with. A servo with no
+    // feedback on the thing it is actually moving is an accelerator.
     //
-    // So: if we command real deltas and the observation does not move, stop
-    // commanding. Resume when the observation changes on its own, which is the
-    // signal that a live context has come back -- probing for it by sending
-    // deltas would be the same mistake in miniature.
+    // The first attempt at detecting that was worthless: "commanded something
+    // and the camera did not move" is exactly what a CONVERGED servo looks like
+    // when the head is still. It stood down after 0.66 s of perfect tracking and
+    // then thrashed -- 23 stand-downs and 22 resumes in one run -- so the
+    // cockpit never worked at all. A predicate that cannot separate success from
+    // failure is not a detector.
+    //
+    // What separates them is the RATIO, accumulated over a window: a stall is
+    // having asked for a lot of rotation and received almost none. A converged
+    // servo asks for almost nothing, so it never qualifies however long it runs.
+    static x4vr::StallWatch g_stall;
     static float last_obs_yaw = 0.0f, last_obs_pitch = 0.0f;
-    static int stall = 0;
-    static bool stalled = false;
-    const float obs_moved = std::fabs(kRad2Deg * -r.yaw - last_obs_yaw) +
-                            std::fabs(kRad2Deg * r.pitch - last_obs_pitch);
-    last_obs_yaw = kRad2Deg * -r.yaw;
-    last_obs_pitch = kRad2Deg * r.pitch;
+    const float obs_now_yaw = kRad2Deg * -r.yaw;
+    const float obs_now_pitch = kRad2Deg * r.pitch;
+    const float obs_moved = std::fabs(obs_now_yaw - last_obs_yaw) +
+                            std::fabs(obs_now_pitch - last_obs_pitch);
+    last_obs_yaw = obs_now_yaw;
+    last_obs_pitch = obs_now_pitch;
 
     const x4vr::Delta d = x4vr::head_look_step(g_headlook, {yaw, pitch});
 
@@ -1350,23 +1355,26 @@ void headlook_tick() {
     // g_relative_mouse is the signal, and it costs nothing: X4 turns relative
     // mode on for mouselook and off for anything with a pointer, and the cursor
     // shim has tracked it since #19.
-    const bool commanding = (d.dx != 0 || d.dy != 0);
-    if (stalled) {
-        if (obs_moved > 0.05f) { // it answered on its own: a live context
-            stalled = false;
-            stall = 0;
-            X4VR_LOG("headlook: camera responding again — steering resumed");
-        }
-    } else if (commanding && obs_moved < 0.01f) {
-        if (++stall > 60) {
-            stalled = true;
-            X4VR_LOG("headlook: commanded %d frames with no camera response — "
-                     "steering stood down (map or menu?)",
-                     stall);
-        }
-    } else {
-        stall = 0;
+    // Degrees we actually asked X4 for this frame, against what it did.
+    const float gpc = g_headlook.gain_pitch_deg_per_count > 0.0f
+                          ? g_headlook.gain_pitch_deg_per_count
+                          : g_headlook.gain_deg_per_count;
+    const float commanded_deg =
+        std::fabs((float)d.dx * g_headlook.gain_deg_per_count) +
+        std::fabs((float)d.dy * gpc);
+    const int stall_event =
+        x4vr::stall_watch_step(g_stall, commanded_deg, obs_moved);
+    if (stall_event == 1) {
+        // Release the key as well as standing down. Left held, X4 stays in
+        // mouselook and the map steers with the pointer instead of moving a
+        // cursor, which is what Patola hit. Releasing hands the mouse back.
+        send_key(headlook_scancode(), false);
+        X4VR_LOG("headlook: commanded with no camera response — stood down and "
+                 "released the key (map or menu?)");
+    } else if (stall_event == -1) {
+        X4VR_LOG("headlook: camera answering again — steering resumed");
     }
+    const bool stalled = g_stall.stalled;
 
     const bool steering =
         g_relative_mouse.load(std::memory_order_relaxed) && !stalled;

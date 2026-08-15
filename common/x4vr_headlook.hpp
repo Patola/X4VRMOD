@@ -210,6 +210,51 @@ inline Delta head_look_step(HeadLook &s, const HeadAngles &head) {
     return d;
 }
 
+// Is the camera we command the camera we are reading?
+//
+// Outside the cockpit X4 reports 0.00,0.00 from GetCameraRotation while
+// something else consumes the mouse deltas, so the servo pushes into a void and
+// accelerates -- opening the map made the view spin.
+//
+// **The obvious test is worthless and was shipped once.** "We commanded
+// something and the camera did not move" is precisely what a CONVERGED servo
+// looks like with the head held still: it stood down after 0.66 s of perfect
+// tracking, then thrashed 23 times in one run. What separates the two cases is
+// the RATIO over a window -- a stall is having asked for a lot and received
+// almost none, and a converged servo never asks for a lot.
+struct StallWatch {
+    int window_frames = 60;   // ~0.7 s at headset rate
+    float min_cmd_deg = 15.0f;  // below this the window says nothing either way
+    float max_obs_frac = 0.15f; // received less than this share of what we asked
+    float resume_obs_deg = 2.0f; // moved on its own: a live context is back
+
+    float cmd_sum = 0.0f, obs_sum = 0.0f;
+    int win = 0;
+    bool stalled = false;
+};
+
+// Feed one frame. Returns +1 on the transition into a stall, -1 on the
+// transition out, 0 otherwise.
+inline int stall_watch_step(StallWatch &w, float commanded_deg,
+                            float observed_deg) {
+    w.cmd_sum += std::fabs(commanded_deg);
+    w.obs_sum += std::fabs(observed_deg);
+    if (++w.win < w.window_frames)
+        return 0;
+    int event = 0;
+    if (!w.stalled && w.cmd_sum > w.min_cmd_deg &&
+        w.obs_sum < w.max_obs_frac * w.cmd_sum) {
+        w.stalled = true;
+        event = 1;
+    } else if (w.stalled && w.obs_sum > w.resume_obs_deg) {
+        w.stalled = false;
+        event = -1;
+    }
+    w.cmd_sum = w.obs_sum = 0.0f;
+    w.win = 0;
+    return event;
+}
+
 // X4's camera, as X4 reports it. This is the whole point of the readback: the
 // estimate stops being a belief and becomes an observation, so the gain only has
 // to be roughly right, the clamp is seen rather than modelled, and a recentre
