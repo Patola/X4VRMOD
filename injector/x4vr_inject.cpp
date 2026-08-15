@@ -1395,17 +1395,25 @@ void headlook_tick() {
         std::fabs((float)d.dy * gpc);
     const int stall_event =
         x4vr::stall_watch_step(g_stall, commanded_deg, obs_moved);
-    if (stall_event == 1) {
-        // Release the key as well as standing down. Left held, X4 stays in
-        // mouselook and the map steers with the pointer instead of moving a
-        // cursor, which is what Patola hit. Releasing hands the mouse back.
-        send_key(headlook_scancode(), false);
-        X4VR_LOG("headlook: commanded with no camera response — stood down and "
-                 "released the key (map or menu?)");
-    } else if (stall_event == -1) {
-        X4VR_LOG("headlook: camera answering again — steering resumed");
-    }
-    const bool stalled = g_stall.stalled;
+    // **Reported, never acted on.** This watch has now broken head tracking in
+    // three consecutive runs and has never once done its job, so it is out of
+    // the control path.
+    //
+    // The last failure is the one that settles it. Before free-look engages --
+    // during loading, and for the first moments in the cockpit -- our commands
+    // legitimately do nothing, because there is no free-look yet to move
+    // anything. The watch reads that as a dead camera and releases the key, so
+    // free-look can NEVER engage: take 141 stood down 32 times and X4 read
+    // exactly 0.0000 for the whole session. A guard that prevents the thing it
+    // guards from starting is worse than the hazard it was added for.
+    //
+    // The hazard was real -- the map accelerated away -- but x4_cockpit_view()
+    // asks X4 directly, which is the right shape of answer. If that turns out
+    // not to cover the map, the fix is to find the query that does, not to
+    // re-arm an inference that has failed in three different ways.
+    if (stall_event == 1)
+        X4VR_LOG("headlook: NOTE commanded with little camera response — "
+                 "reported only, not acted on");
 
     // The direct question first, the heuristic only as a backstop.
     const bool cockpit = x4_cockpit_view();
@@ -1418,7 +1426,7 @@ void headlook_tick() {
             send_key(headlook_scancode(), false); // hand the mouse back
     }
     const bool steering =
-        g_relative_mouse.load(std::memory_order_relaxed) && cockpit && !stalled;
+        g_relative_mouse.load(std::memory_order_relaxed) && cockpit;
     g_headlook_steering.store(steering, std::memory_order_relaxed);
     if (steering)
         send_mouse_delta(d.dx, d.dy);
