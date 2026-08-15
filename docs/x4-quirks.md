@@ -811,3 +811,67 @@ flight, which is the thing the input-channel work could never achieve.
 Not yet measured: how much of the budget the head-look servo's own residual would
 consume if X4's camera were coarse-tracking underneath. That number decides
 whether the split above is one mechanism or two.
+
+## The head-look servo lags by ~50 ms, and that is what the guard band must cover
+
+The guard-band budget above (±10° of yaw with #35) raised the question of whether
+X4's camera coarse-tracking underneath would eat it. Answered from takes 148 and
+150, which already logged `camread:` — X4's **actual** angle from
+`GetCameraRotation` beside the head pose, so the residual is measured, not
+inferred from the servo's own belief.
+
+Two contaminants had to come out first, and both matter:
+
+* **Camera not engaged.** Most samples have X4's camera at 0 while the head is
+  well away from centre — the servo is not steering. That is a disengaged servo,
+  not a tracking error, and it dominates the raw distribution (take 148 p95 rises
+  from 4.7° to 33.1° if these are left in).
+* **Clamp saturation.** In take 150 the head reached **93.32°** of yaw while X4
+  capped at exactly **65.00°**; 61 samples sit on a 65/35 limit. That residual is
+  the clamp, not lag. Take 148 stayed inside the limits in yaw and is the usable
+  one there.
+
+With both removed, the residual is linear in head angular speed:
+
+    take 148, engaged and off-clamp, 116 points
+      head yaw speed      median  p90    max
+        0.0 -   0.3 deg/s   0.05   0.09   0.12
+        1.2 -   5.7         0.24   1.35  14.97   <- see note
+        5.8 -  17.3         0.25   1.59   2.73
+       18.0 -  41.6         1.63   3.01   7.67
+       43.6 - 103.2         1.96   5.21   5.92
+
+    implied lag = residual / speed, points above 20 deg/s
+      take 148:  median  50 ms,  p90 101 ms   (37 points)
+      take 150:  median  52 ms,  p90  57 ms   ( 3 points)
+
+**Residual ≈ head angular speed × 50 ms**, from two takes that agree and match
+the servo's own constants independently: `Kp=0.25` at the ~86 Hz tick rate these
+logs imply gives 1/(86 × 0.25) = 47 ms. Measurement and mechanism agree, which is
+the only reason to trust a number this convenient.
+
+**State the instrument's range.** `camread:` samples 1 tick in 30, which in these
+logs is **2–3 Hz**. The observed speeds top out near 103 deg/s and are averages
+over ~0.4 s windows, so they understate the peak of a fast head snap. The 50 ms
+figure should hold — it is a property of the loop, not of the sample rate — but
+the *peak residual* during a 300–500 deg/s snap has not been observed and must
+not be quoted from this data. Measuring it needs the camread cadence raised
+during motion, the way the pan probe does it; that is a code change, not a take.
+(The 14.97° outlier at 1.2–5.7 deg/s is a transient at engage, where the camera
+had not yet caught up. Left in the table rather than filtered out.)
+
+**So: one mechanism, not two.** The layer applies *true head pose minus X4's
+camera pose*, always, and whether X4's camera is moving underneath is only a
+question of whether `MOUSELOOK` is engaged:
+
+* **disengaged** (normal flight, mouse free) — X4's camera is still, so the
+  residual *is* the whole head rotation, bounded by the ±10° guard band.
+* **engaged** (deliberate look) — X4 coarse-tracks to its ±65° clamp and the
+  residual is the 50 ms lag, ~5° at 100 deg/s and ~10° at 200 deg/s: inside the
+  same budget, at the same cost, through the same code path.
+
+The second reading is the one worth keeping: layer correction is not only a way
+to extend range, it **removes the 50 ms servo lag outright** during an engaged
+look. 50 ms is far above the motion-to-photon budget VR comfort needs, so this is
+likely the largest comfort win available and it does not depend on the range
+argument at all.
