@@ -561,3 +561,47 @@ compare phases, never session medians.
 axis and the rendered field runs out: turn your head and you look off the edge
 of a 110° window into black. Patola: *"it is a quad put at my front, so I can't
 look behind."* That is #33, and it is the next task — not a fault in this one.
+
+## `stage13-map-gate` — take 148
+
+Head tracking that **hands the mouse back**. The cockpit steers from the head;
+the map, the menus and the external views release it, and take it back when you
+return. Patola: *"It worked perfectly now. Brought the map a couple times,
+interacted with it in many ways, everything working, went back to the cockpit
+view, headtracking working."*
+
+    X4VR_TAKE=148-MAYSTEER X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take148.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+**What made it work.** X4's map is a **live** view — not external, not floating,
+and it does **not** pause the game — so the three queries this gate started with
+could not see it by construction. `bool IsHUDActive();`, declared in X4's own
+FFI cdefs, can. It is asked through a latch because it dereferences its global
+with no null check, unlike its neighbours, and calling it before X4 builds that
+object segfaults the game.
+
+The other half is that `may_steer = cockpit && hud` is computed **once**. Take
+147 had the same query and was still unusable, because the re-assert kept its
+own copy of the test and pressed the key back on 485 ms after the release.
+
+**What to check** — `python3 tools/score_run.py`:
+
+    map   3 M press(es), 4 HUD-down interval(s), 4 of them free of mouselook (3 re-acquire(s) after)
+
+The number that matters is the third: intervals **free of mouselook**. X4 must
+enter relative mouse mode zero times while the HUD is down, because mouselook is
+what makes the mouse rotate the view instead of driving the cursor. `NOT
+EXERCISED` means no M press — the run says nothing either way, which is not a
+pass.
+
+**Two instrument failures are recorded here on purpose**, because both graded a
+run wrongly before anyone looked at a headset. `grep -c "view is now" >= 2`
+counted two ESC-menu transitions and would have called take 146 a pass. Then the
+scorer asked "did we release inside the episode", which take 147 satisfied on
+all three episodes while the map could not be dragged at all. Say what a healthy
+run reads *before* trusting the number.
+
+**What this state does NOT do.** Translation and roll: move your head sideways
+or up and the cockpit travels with you, and at larger roll angles the binocular
+image is wrong. Free-look is yaw and pitch only, so those three degrees cannot
+come from this channel at all — they need the layer's clip-space transform. The
+±65°/±35° clamp still stands, with black beyond it.
