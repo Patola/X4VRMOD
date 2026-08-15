@@ -958,17 +958,33 @@ void headlook_tick() {
         g_headlook_active.store(false, std::memory_order_relaxed);
         return;
     }
+    // **Once per published pose, not once per call.** Take 119 flooded SDL's
+    // event queue: SDL_PeepEvents runs far more often than once a frame -- ~18
+    // thousand times a second measured -- and send_key_down had no gate, so
+    // roughly 3.2 million key events went into the queue over three minutes.
+    // X4 toggled relative mouse mode on and off forty times and the camera
+    // moved 3.6 degrees in total. The arithmetic was never the problem; the
+    // rate was.
+    //
+    // Gating on the layer's `updates` counter rather than on a timer ties the
+    // tick to the thing that actually changed -- one command per new head pose,
+    // which is the headset's frame rate and nothing faster.
+    //
     // "Held still" and "the layer stopped publishing" look identical in the
-    // angles and want opposite responses, which is what `updates` is for.
+    // angles and want opposite responses, which is the second thing `updates`
+    // is for.
     static uint64_t last_updates = 0;
     static int stale = 0;
-    stale = (updates == last_updates) ? stale + 1 : 0;
+    const bool fresh = updates != last_updates;
+    stale = fresh ? 0 : stale + 1;
     last_updates = updates;
-    if (stale > 120) {
+    if (stale > 5000) {
         g_headlook_active.store(false, std::memory_order_relaxed);
         return;
     }
     g_headlook_active.store(true, std::memory_order_relaxed);
+    if (!fresh)
+        return; // nothing new to act on; acting anyway is what take 119 did
 
     const x4vr::Delta d = x4vr::head_look_step(g_headlook, {yaw, pitch});
 
@@ -978,7 +994,13 @@ void headlook_tick() {
     // Re-asserted every tick. X4 never called SDL_GetKeyboardState in take
     // 118, so the hold is an event, and an event has to be repeated to
     // survive anything that resets X4's own key state.
-    send_key_down(headlook_scancode());
+    // The key only has to keep X4's held state alive, so it is re-asserted on a
+    // slow cadence rather than every frame: one every 32 poses is ~3 Hz at
+    // headset rate, enough to recover from a save-load reset within a blink and
+    // far too slow to be a flood.
+    static uint64_t poses = 0;
+    if ((poses++ % 32) == 0)
+        send_key_down(headlook_scancode());
     send_mouse_delta(d.dx, d.dy);
 
     static uint64_t n = 0;
