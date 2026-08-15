@@ -1114,6 +1114,62 @@ extern "C" int luaL_loadfile(void *L, const char *filename) {
     return real_fn(L, filename);
 }
 
+// ---- X4's own camera, read back -------------------------------------------
+//
+// `Rotation GetCameraRotation();` is EXPORTED from the X4 binary (nm -D, a T
+// symbol at 0xa41610), and the Lua bytecode carries its FFI declaration:
+//
+//     typedef struct { float yaw; float pitch; float roll; } Rotation;
+//
+// Field order taken from the declaration itself, not from a sorted listing --
+// getting that backwards is exactly the positional error this project keeps
+// making.
+//
+// **This is what #33 has been missing.** Every remaining head-look defect is one
+// defect: we drive open-loop and cannot ask X4 where its camera points. The
+// unmeasured gain, the real windup at X4's own clamp, and the undetected
+// recentre on a seat change or save load are all that same blindness, and a
+// readback makes all three self-correcting at once.
+//
+// The Lua reconnaissance found this and is not needed to use it: the function is
+// a plain exported symbol, so no chunk is injected and no game file is touched.
+// There is no SetCameraRotation -- the exported setters switch view MODE
+// (cockpit, external, target), not orientation -- so this is a readback and not
+// direct control.
+//
+// **Logged before it is trusted.** Which frame it reports in, degrees or
+// radians, and whether it follows free-look at all are unknown; nothing here
+// assumes an answer. Gated behind X4VR_CAMREAD so calling an unknown game
+// function every frame is opt-in and reversible.
+struct X4Rotation {
+    float yaw, pitch, roll;
+};
+
+static bool camread_enabled() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_CAMREAD");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
+
+// False if the symbol is absent, which is not an error: a future X4 could stop
+// exporting it and the open-loop integrator still works without it.
+static bool x4_camera_rotation(X4Rotation *out) {
+    using Fn = X4Rotation (*)();
+    static Fn fn = [] () -> Fn {
+        Fn f = (Fn)dlsym(RTLD_DEFAULT, "GetCameraRotation");
+        X4VR_LOG("camread: GetCameraRotation %s",
+                 f ? "resolved — X4's camera can be read back"
+                   : "NOT FOUND — staying open-loop");
+        return f;
+    }();
+    if (!fn)
+        return false;
+    *out = fn();
+    return true;
+}
+
 // ------------------------------------------------------- #33 head-look
 //
 // X4 is SDL3 and imports SDL_GetKeyboardState, so the held free-look key is a
@@ -1267,6 +1323,18 @@ void headlook_tick() {
     // log missed the plateau entirely: cmd appeared to peak at 12.6 deg while
     // the dumps showed 36. A calibration run whose instrument samples slower
     // than the thing it measures is not a calibration run.
+    // X4's own camera, next to our estimate. Reporting only: one run says what
+    // the units and the frame are, and until then nothing is built on it.
+    if (camread_enabled()) {
+        X4Rotation r{};
+        static uint64_t rn = 0;
+        if (x4_camera_rotation(&r) && (rn++ % 30) == 0)
+            X4VR_LOG("camread: X4 yaw %.3f pitch %.3f roll %.3f | believed "
+                     "%.2f,%.2f | head %.2f,%.2f",
+                     r.yaw, r.pitch, r.roll, g_headlook.cmd_yaw_deg,
+                     g_headlook.cmd_pitch_deg, yaw, pitch);
+    }
+
     if ((n++ % 30) == 0 || d.clamped)
         X4VR_LOG("headlook: head %.2f,%.2f -> cmd %.2f,%.2f delta %d,%d%s",
                  yaw, pitch, g_headlook.cmd_yaw_deg, g_headlook.cmd_pitch_deg,
