@@ -559,11 +559,42 @@ name, and the only achievable effect is to confuse code that asks. Patola
 recalled this from an earlier attempt at this mod and the disassembly confirms
 it — recorded here so the thread is not reopened a third time.
 
-Worth knowing *why* the names exist: Egosoft shipped VR for X Rebirth and
-announced it for X4, so this is the residue of a feature that is not in this
-build. The camera API that IS live and useful — `GetCameraRotation`,
+Worth knowing *why* the names exist: Egosoft shipped VR for **X Rebirth**, not
+for X4 — X4: Foundations never had a VR edition — so this is residue carried
+forward from the previous game, not a feature that was removed from this one.
+The camera API that IS live and useful — `GetCameraRotation`,
 `IsExternalViewActive`, `IsFloatingViewActive`, `IsGamePaused`, `IsHUDActive`,
 `IsInPanelMode` — has nothing to do with it.
+
+**The residue is much wider than `IsVRMode`, and that is how this thread keeps
+getting reopened.** It was reopened a *fourth* time from a direction the
+paragraph above did not name, so the whole surface is listed here. A symbol
+sweep of the binary turns up all of this, and none of it is a way in:
+
+* `INPUT_SOURCE_OCULUS_REMOTE_*`, `INPUT_SOURCE_OCULUS_TOUCH_*`,
+  `INPUT_SOURCE_VIVE_LEFT_*`, `INPUT_SOURCE_VIVE_RIGHT_*`, `INPUT_SOURCE_VRBUTTONS`
+  in the input-source vocabulary. **No `INPUT_STATE_*` or `INPUT_RANGE_*` id
+  uses any of them** — grep returns nothing — so there is no binding to make.
+* The twenty-two `*ActiveHeadTracker*` accessors, plus `IsHeadTrackingActive`,
+  `GetOpenTrackConnectionStatus`, `GetTobii*`, `GetMouseVRSensitivity*`.
+* The `enableopentrack`, `opentrackfilterstrength`, `opentrackanglefactor` and
+  `opentrackpositionfactor` config tags, which are present in the player's own
+  `config.xml` with `enableopentrack` set to `false`.
+
+That last one is the most seductive, because we already intercept X4's config
+load non-intrusively, so flipping it looks free. **OpenTrack is a forbidden path
+for this mod and has been since the start** — it is the `v0.1` proof-of-concept
+approach this project exists to replace (see `DESIGN.md`, and the comfort
+failures listed at `DESIGN.md:210`: wrong pivot, gimbal lock, roll). An Euler
+angle channel with X4's own filtering and deadzone in front of it cannot carry
+the pose we need, whatever the tag does.
+
+**The general rule this keeps teaching:** an exported symbol, a vocabulary
+string and a config tag are each evidence that a feature *was named*, never that
+it is *implemented here*. `nm -D` was already established as necessary and not
+sufficient; so is a string, so is a settings tag, and so is a tag sitting in the
+player's live config file. Before spending anything on a VR-shaped name in this
+binary, re-read this section.
 
 ## The map does not pause the game, and only the HUD sees it
 

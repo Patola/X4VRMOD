@@ -24,6 +24,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <errno.h>
 #include <unistd.h>
 
@@ -577,6 +578,23 @@ namespace {
 
 // True only while a located head pose is arriving and head-look is armed.
 std::atomic<bool> g_headlook_active{false};
+
+// Which of X4's eight numpad free-look keys are held right now, as a bitmask
+// over kPanKeys below. Set from the event drain, read by the pan probe.
+std::atomic<unsigned> g_pan_keys{0};
+struct PanKey {
+    int scancode;
+    const char *name;
+};
+// SDL scancodes for the keypad. These are the shipped bindings of
+// INPUT_STATE_CAMERA_LEFT/RIGHT/UP/DOWN and the four diagonals -- see the
+// probe's comment for why the measurement uses X4's factory bindings and real
+// fingers rather than a rebind and a synthetic press.
+constexpr PanKey kPanKeys[] = {
+    {92, "LEFT"},      {94, "RIGHT"},      {96, "UP"},        {90, "DOWN"},
+    {95, "UP_LEFT"},   {97, "UP_RIGHT"},   {89, "DOWN_LEFT"}, {91, "DOWN_RIGHT"},
+};
+constexpr unsigned kNumPanKeys = sizeof(kPanKeys) / sizeof(kPanKeys[0]);
 // The integrator. Single-threaded by construction: only the SDL hooks touch
 // it, and X4 polls input from one thread.
 x4vr::HeadLook g_headlook;
@@ -884,6 +902,28 @@ void note_key_event(const Sdl3KeyEvent *k, const char *via, int action) {
                  "synthetic keys will carry it",
                  (unsigned)k->raw, headlook_scancode());
     }
+    // Track the free-look keypad BEFORE the budget below, and log every
+    // transition uncapped. The budget exists to stop one repeating key from
+    // crowding out the comparison; these are the subject of the measurement and
+    // there are only a handful of them, so they must not be rationed. Take
+    // 148's scorer took its window from the keys instead of from X4's own
+    // reported state and got the verdict wrong, so these stamps segment the
+    // sample stream and nothing more -- the angles are the measurement.
+    for (unsigned i = 0; i < kNumPanKeys; i++) {
+        if ((int)k->scancode != kPanKeys[i].scancode)
+            continue;
+        const unsigned bit = 1u << i;
+        const unsigned was = g_pan_keys.load(std::memory_order_relaxed);
+        const unsigned now = k->down ? (was | bit) : (was & ~bit);
+        if (now != was) {
+            g_pan_keys.store(now, std::memory_order_relaxed);
+            X4VR_LOG("panprobe: key %s %s (scancode %u, %s)", kPanKeys[i].name,
+                     k->down ? "DOWN" : "UP", k->scancode,
+                     ours ? "ours" : "real");
+        }
+        break;
+    }
+
     static int seen_ours = 0, seen_other = 0;
     if (ours) {
         if (seen_ours >= 3)
@@ -1290,6 +1330,88 @@ static bool x4_camera_rotation(X4Rotation *out) {
         return false;
     *out = fn();
     return true;
+}
+
+// -------------------------------------------- #33 pan-channel probe
+//
+// Characterise X4's numpad free-look -- INPUT_STATE_CAMERA_LEFT/RIGHT/UP/DOWN
+// -- as a candidate rotation channel. Head-look currently holds
+// INPUT_STATE_CAMERA_MOUSELOOK, and holding that is precisely what X4 uses to
+// suspend ship control, so it costs the player mouse steering and the aiming
+// cursor. The eight directional states never touch MOUSELOOK. If they can carry
+// the head, the conflict disappears rather than being tuned around.
+//
+// **Driven by real fingers, not by us.** The question here is about X4's
+// behaviour -- pan rate, whether a held key runs into a clamp, and above all
+// what happens on release -- and a recentre on release kills the idea outright,
+// at which point our ability to synthesise the key does not matter. Testing the
+// thing that can falsify the plan first costs one run instead of two. It also
+// removes the synthesis path as a confound: a flat log here means X4 did
+// nothing, not that our event was wrong, because the keypad is on its factory
+// binding and Patola pressed it himself. Only if the channel survives this does
+// it become worth asking whether we can drive it -- and X4's keycode vocabulary
+// holds just F13/F14/F15 above the printable keys, of which head-look already
+// owns one, so that question has its own cost and belongs after this one.
+//
+// **What this instrument can and cannot resolve.** It samples at 50 Hz while a
+// key is held and for six seconds after the last release, so: a pan rate
+// between roughly 0.5 and 500 deg/s is measurable; a clamp is visible if it is
+// inside the reachable range and the hold is long enough to reach it; and a
+// recentre is resolved as a curve if it takes longer than ~40 ms, or seen only
+// as a single-sample step if it is faster than that. A step and an instant snap
+// are NOT distinguishable here, and the difference does not matter -- either
+// one is fatal to the idea.
+static bool panprobe_enabled() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_PANPROBE");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
+
+static double mono_seconds() {
+    struct timespec ts {};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+
+static void panprobe_tick() {
+    if (!panprobe_enabled() || !this_is_the_game())
+        return;
+    X4Rotation r{};
+    if (!x4_camera_rotation(&r))
+        return; // already logged NOT FOUND once
+
+    const double now = mono_seconds();
+    static const double t0 = now;
+    const unsigned keys = g_pan_keys.load(std::memory_order_relaxed);
+
+    // Active while a key is held and for six seconds after the last release --
+    // the release transient is the measurement that decides this, so it gets
+    // the same cadence as the hold rather than a slower tail.
+    static double last_down = -1e9;
+    if (keys)
+        last_down = now;
+    const bool active = keys || (now - last_down) < 6.0;
+    const double period = active ? 0.02 : 1.0;
+
+    static double last_sample = -1e9;
+    if (now - last_sample < period)
+        return;
+    last_sample = now;
+
+    char held[80];
+    size_t off = 0;
+    for (unsigned i = 0; i < kNumPanKeys && off + 12 < sizeof(held); i++)
+        if (keys & (1u << i))
+            off += (size_t)snprintf(held + off, sizeof(held) - off, "%s%s",
+                                    off ? "+" : "", kPanKeys[i].name);
+    if (!off)
+        snprintf(held, sizeof(held), "-");
+
+    X4VR_LOG("panprobe: t=%.3f yaw=%.3f pitch=%.3f deg held=%s%s", now - t0,
+             kRad2Deg * -r.yaw, kRad2Deg * r.pitch, held,
+             active ? "" : " idle");
 }
 
 // ------------------------------------------------------- #33 head-look
@@ -1817,6 +1939,7 @@ void SDL_PumpEvents(void) {
             X4VR_LOG("sdl: SDL_PumpEvents is called — head-look drives from "
                      "here, not from inside the drain");
         headlook_tick();
+        panprobe_tick();
     }
     real_fn();
 }
@@ -1861,8 +1984,10 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
     // more work, so the queue never empties and input arrives minutes late --
     // which is exactly what "it took some time to activate and kept applying
     // after I released" describes.
-    if (this_is_the_game() && !g_pump_seen.load(std::memory_order_relaxed))
+    if (this_is_the_game() && !g_pump_seen.load(std::memory_order_relaxed)) {
         headlook_tick();
+        panprobe_tick();
+    }
     const bool consuming = action == 2;
     if (n > 0 && events && this_is_the_game()) {
         for (int i = 0; i < n; i++) {

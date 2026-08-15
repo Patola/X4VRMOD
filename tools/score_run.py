@@ -1076,6 +1076,114 @@ def main(path):
                 "bug it fixes")
 
     print()
+
+    # ------------------------------------------------ pan channel (#33)
+    #
+    # Characterisation, not a pass/fail on X4's behaviour. The run is gated on
+    # INTENT -- did we ask for the measurement and did the instrument run --
+    # never on whether the channel turned out to be usable. A channel that
+    # springs back on release is a perfectly good measurement and a dead end
+    # for the feature; those are different verdicts and only the first belongs
+    # here.
+    if "X4VR_PANPROBE=1" in (run or ""):
+        # Everything is keyed on the LOG timestamp, not on the probe's own t=,
+        # so samples and key edges share one clock and an episode can be cut
+        # out by time. Selecting samples by matching the held= field instead
+        # would merge repeat presses of the same key into one episode, and
+        # "UP" is a substring of "UP_LEFT" and "UP_RIGHT" -- a first-match on
+        # an aliased name is a mistake this project keeps making.
+        samp, eps = [], []
+        for ln in lines:
+            t = ts(ln)
+            if t is None:
+                continue
+            m = re.search(r"panprobe: t=[0-9.]+ yaw=(-?[0-9.]+) "
+                          r"pitch=(-?[0-9.]+) deg", ln)
+            if m:
+                samp.append((t, float(m.group(1)), float(m.group(2))))
+                continue
+            m = re.search(r"panprobe: key (\w+) (DOWN|UP)", ln)
+            if m:
+                eps.append((m.group(1), m.group(2), t))
+
+        if not samp:
+            fails.append(
+                "X4VR_PANPROBE=1 but the probe logged no samples — either "
+                "GetCameraRotation did not resolve (grep 'camread: "
+                "GetCameraRotation') or panprobe_tick never ran. Nothing in "
+                "this log says anything about the pan channel")
+        elif not eps:
+            print(f"pan   NOT EXERCISED — {len(samp)} camera sample(s) but no "
+                  f"free-look keypad press in this log. The probe was "
+                  f"listening and nothing was pressed")
+        else:
+            # Pair each DOWN with the next UP of the SAME key. An unmatched
+            # DOWN is reported as an anomaly rather than run to end-of-log:
+            # padding the open half with a sentinel is exactly how take 148's
+            # scorer swallowed a correct result.
+            holds, open_downs = [], []
+            for name, edge, t in eps:
+                if edge == "DOWN":
+                    open_downs.append((name, t))
+                else:
+                    hit = next((i for i in range(len(open_downs) - 1, -1, -1)
+                                if open_downs[i][0] == name), None)
+                    if hit is not None:
+                        holds.append((name, open_downs.pop(hit)[1], t))
+
+            print(f"pan   {len(holds)} complete hold(s), {len(open_downs)} "
+                  f"unclosed, {len(samp)} camera sample(s)")
+            if open_downs:
+                print(f"      unclosed: {', '.join(n for n, _ in open_downs)} "
+                      f"— key(s) whose release never reached us; those holds "
+                      f"are not measured rather than guessed at")
+
+            for name, td, tu in holds:
+                during = [s for s in samp if td <= s[0] <= tu]
+                if len(during) < 3:
+                    print(f"      {name:10s} held {tu - td:.2f}s — only "
+                          f"{len(during)} sample(s), too few to read a rate")
+                    continue
+                y0, p0 = during[0][1], during[0][2]
+                y1, p1 = during[-1][1], during[-1][2]
+                dur = during[-1][0] - during[0][0]
+                half = len(during) // 2
+                r1 = ((during[half][1] - y0) /
+                      max(during[half][0] - during[0][0], 1e-3))
+                r2 = ((y1 - during[half][1]) /
+                      max(during[-1][0] - during[half][0], 1e-3))
+                # After release: the six-second tail the probe keeps at full
+                # cadence. This is the number that decides the feature.
+                after = [s for s in samp if tu < s[0] <= tu + 6.0]
+                tail = ""
+                if after:
+                    ye, pe = after[-1][1], after[-1][2]
+                    dt = after[-1][0] - during[-1][0]
+                    back = (abs(ye) < abs(y1) * 0.5) or (abs(pe) < abs(p1) * 0.5)
+                    tail = (f" | +{dt:.1f}s after release yaw={ye:.2f} "
+                            f"pitch={pe:.2f} {'RECENTRED' if back else 'held'}")
+                print(f"      {name:10s} {dur:.2f}s  yaw {y0:+.2f}->{y1:+.2f} "
+                      f"({(y1 - y0) / max(dur, 1e-3):+.1f} deg/s)  pitch "
+                      f"{p0:+.2f}->{p1:+.2f} "
+                      f"({(p1 - p0) / max(dur, 1e-3):+.1f} deg/s)"
+                      f"{'  PLATEAU' if abs(r2) < abs(r1) * 0.25 else ''}{tail}")
+
+            # **What a usable channel reads, stated before reading it:** yaw or
+            # pitch moves while the key is held at a rate a servo can command,
+            # and STAYS PUT after release. Flat under a real press means X4
+            # ignores the state and no synthesis work would have helped.
+            # RECENTRED means the channel is a spring, and a spring cannot
+            # carry an absolute head pose however it is driven.
+            moved = [h for h in holds
+                     if any(abs(s[1]) > 1.0 or abs(s[2]) > 1.0
+                            for s in samp if h[1] <= s[0] <= h[2])]
+            if holds and not moved:
+                print("      every hold left the camera within 1 deg of centre "
+                      "— under a REAL keypress on X4's factory binding, so "
+                      "the directional states do not move this camera and the "
+                      "channel is dead without any synthesis question arising")
+
+        print()
     if fails:
         for f in fails:
             print(f"FAIL  {f}")
