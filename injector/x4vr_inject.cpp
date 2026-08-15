@@ -1183,9 +1183,28 @@ static bool x4_cockpit_view() {
                  f ? "resolved" : "NOT FOUND");
         return f;
     }();
+    // The map and the menus. IsExternalViewActive/IsFloatingViewActive did not
+    // cover them -- the map kept accelerating away because our held key forces
+    // mouselook, which forces relative mouse mode, so the map steered with the
+    // pointer. This asks the question that actually matches the symptom.
+    static Fn menu = [] {
+        Fn f = (Fn)dlsym(RTLD_DEFAULT, "IsFullscreenMenuDisplayed");
+        X4VR_LOG("camread: IsFullscreenMenuDisplayed %s",
+                 f ? "resolved" : "NOT FOUND");
+        return f;
+    }();
+    static Fn paused = [] {
+        Fn f = (Fn)dlsym(RTLD_DEFAULT, "IsGamePaused");
+        X4VR_LOG("camread: IsGamePaused %s", f ? "resolved" : "NOT FOUND");
+        return f;
+    }();
     if (ext && ext())
         return false;
     if (flt && flt())
+        return false;
+    if (menu && menu())
+        return false;
+    if (paused && paused())
         return false;
     return true;
 }
