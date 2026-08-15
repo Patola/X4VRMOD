@@ -1236,6 +1236,7 @@ static bool x4_camera_rotation(X4Rotation *out) {
 // tick is what drives it and reads better next to the arithmetic.
 void send_mouse_delta(int dx, int dy);
 void send_key_down(int scancode);
+static void push_our_event(void *ev);
 void send_key(int scancode, bool down);
 
 void headlook_tick() {
@@ -1532,9 +1533,6 @@ uint32_t keycode_of(int scancode) {
 void send_key(int scancode, bool down) {
     if (!g_motion_seen.load(std::memory_order_relaxed))
         return;
-    static auto push = real<int (*)(void *)>("SDL_PushEvent");
-    if (!push)
-        return;
     unsigned char ev[128] = {};
     auto *k = (Sdl3KeyEvent *)ev;
     k->type = down ? SDL_EV_KEY_DOWN : SDL_EV_KEY_UP;
@@ -1546,28 +1544,44 @@ void send_key(int scancode, bool down) {
     // showed the alternatives do not work: scancode is shared with a real press
     // of the same key, and SDL fills in a zero timestamp on push, so both
     // discriminators the log has used so far were wrong.
-    k->reserved = kOurEventMagic;
     k->raw = (uint16_t)g_key_raw.load(std::memory_order_relaxed);
-    const int r = push(ev);
+    push_our_event(ev);
     static bool said = false;
     if (!said) {
         said = true;
         // SDL_PushEvent returns 1 on success, 0 if an event filter dropped it,
         // negative on error. Ignoring it is how take 121 could not tell "X4
         // received our key and did nothing with it" from "SDL never queued it".
-        X4VR_LOG("headlook: pushed scancode %d as keycode 0x%x, window %u -> "
-                 "SDL_PushEvent returned %d",
-                 scancode, k->key, k->windowID, r);
+        X4VR_LOG("headlook: pushing scancode %d as keycode 0x%x, window %u, "
+                 "raw %u",
+                 scancode, k->key, k->windowID, (unsigned)k->raw);
     }
 }
 
 void send_key_down(int scancode) { send_key(scancode, true); }
 
+// The ONE way a synthetic event leaves this file.
+//
+// **Take 139 through 142 were lost to a marker set in one path and not the
+// other.** send_key stamped `reserved` with our magic; send_mouse_delta did
+// not. The event drain then zeroes xrel/yrel on any motion event that is "not
+// ours" -- so it ate our own commands, every one, for four runs. X4's camera
+// never moved, and the stall watch dutifully reported exactly that while I
+// rewrote the watch three times instead of believing it.
+//
+// The marker now lives here, where a caller cannot forget it, because the fix
+// for "I set the field in one place and not the other" is to have one place.
+static void push_our_event(void *ev) {
+    // reserved is at a fixed offset in every SDL_Event; both of our event types
+    // share the layout, which tests/sdl_event_layout.cpp asserts.
+    ((Sdl3MouseEvent *)ev)->reserved = kOurEventMagic;
+    static auto push = real<int (*)(void *)>("SDL_PushEvent");
+    if (push)
+        push(ev);
+}
+
 void send_mouse_delta(int dx, int dy) {
     if ((dx == 0 && dy == 0) || !g_motion_seen.load(std::memory_order_relaxed))
-        return;
-    static auto push = real<int (*)(void *)>("SDL_PushEvent");
-    if (!push)
         return;
     unsigned char ev[128] = {};
     auto *m = (Sdl3MouseEvent *)ev;
@@ -1576,7 +1590,7 @@ void send_mouse_delta(int dx, int dy) {
     m->which = g_motion_which.load(std::memory_order_relaxed);
     m->xrel = (float)dx;
     m->yrel = (float)dy;
-    push(ev);
+    push_our_event(ev);
 }
 
 // X4 polls the keyboard every frame; this is where the free-look key is held.
