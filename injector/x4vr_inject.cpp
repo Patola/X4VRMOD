@@ -1183,16 +1183,22 @@ static bool x4_cockpit_view() {
                  f ? "resolved" : "NOT FOUND");
         return f;
     }();
-    // The map and the menus. IsExternalViewActive/IsFloatingViewActive did not
-    // cover them -- the map kept accelerating away because our held key forces
-    // mouselook, which forces relative mouse mode, so the map steered with the
-    // pointer. This asks the question that actually matches the symptom.
-    static Fn menu = [] {
-        Fn f = (Fn)dlsym(RTLD_DEFAULT, "IsFullscreenMenuDisplayed");
-        X4VR_LOG("camread: IsFullscreenMenuDisplayed %s",
-                 f ? "resolved" : "NOT FOUND");
-        return f;
-    }();
+    // **Only functions whose FFI declaration we have actually read.**
+    //
+    // IsFullscreenMenuDisplayed was called here on the strength of its name in
+    // `nm -D` alone, with a bool() signature I invented, and it segfaulted X4 --
+    // the core dump lands on it, one frame inside x4_cockpit_view. The other
+    // three are declared verbatim in X4's own Lua bytecode:
+    //
+    //     bool IsExternalViewActive();
+    //     bool IsFloatingViewActive(void);
+    //     bool IsGamePaused(void);
+    //
+    // A symbol table gives a name and an address. It does not give arity,
+    // argument types, or whether the thing is safe to call with no context, and
+    // calling into a game with a guessed prototype corrupts the stack. The rule
+    // is now explicit: if the cdef has not been read, the function is not
+    // called.
     static Fn paused = [] {
         Fn f = (Fn)dlsym(RTLD_DEFAULT, "IsGamePaused");
         X4VR_LOG("camread: IsGamePaused %s", f ? "resolved" : "NOT FOUND");
@@ -1201,8 +1207,6 @@ static bool x4_cockpit_view() {
     if (ext && ext())
         return false;
     if (flt && flt())
-        return false;
-    if (menu && menu())
         return false;
     if (paused && paused())
         return false;
