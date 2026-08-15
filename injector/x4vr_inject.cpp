@@ -476,8 +476,16 @@ std::atomic<uint32_t> g_motion_which{0};
 std::atomic<uint32_t> g_motion_seen{0};
 // Set on the first SDL_PumpEvents from X4; see the interposer.
 std::atomic<bool> g_pump_seen{false};
-std::atomic<uint32_t> g_key_raw{0};
-std::atomic<bool> g_key_raw_seen{false};
+// Take 126 measured raw=48 for the apostrophe: on Linux this is the X11
+// keycode, which is the evdev code plus 8. Settable so a run can test whether
+// our key activates free-look with no real press to seed it -- the one thing
+// take 126 could not separate, because the same press both activated mouselook
+// and donated the field.
+std::atomic<uint32_t> g_key_raw{[] {
+    const char *e = getenv("X4VR_HEADLOOK_RAW");
+    return e && *e ? (uint32_t)atoi(e) : 0u;
+}()};
+std::atomic<bool> g_key_raw_seen{getenv("X4VR_HEADLOOK_RAW") != nullptr};
 
 
 // Observation only. Enough samples to establish the coordinate space and
@@ -1063,16 +1071,37 @@ void headlook_tick() {
     static uint64_t poses = 0;
     if ((poses++ % 32) == 0)
         send_key_down(headlook_scancode());
-    send_mouse_delta(d.dx, d.dy);
+    // Only while X4 is actually in mouselook. Take 126 ran the immersive
+    // treatment over load screens and menus too, where it does not belong:
+    // there is no camera to follow, so the flat panel tilts with the head and
+    // Patola asked for the quad back. Worse, mouse deltas sent outside
+    // mouselook are cursor movement -- we would be dragging the pointer around
+    // a menu we cannot see.
+    //
+    // g_relative_mouse is the signal, and it costs nothing: X4 turns relative
+    // mode on for mouselook and off for anything with a pointer, and the cursor
+    // shim has tracked it since #19.
+    const bool steering = g_relative_mouse.load(std::memory_order_relaxed);
+    if (steering)
+        send_mouse_delta(d.dx, d.dy);
 
     // Tell the layer where X4 is now looking, so the frame is submitted with
-    // the pose it was rendered from rather than with identity.
+    // the pose it was rendered from rather than with identity. Cleared when not
+    // steering, which puts the layer back to the world-locked quad.
     if (x4vr::Shared *sh = x4vr_shared_state()) {
         sh->cam_yaw_deg.store(g_headlook.cmd_yaw_deg, std::memory_order_relaxed);
         sh->cam_pitch_deg.store(g_headlook.cmd_pitch_deg,
                                 std::memory_order_relaxed);
-        sh->cam_valid.store(1, std::memory_order_relaxed);
+        sh->cam_valid.store(steering ? 1u : 0u, std::memory_order_relaxed);
     }
+
+    // The camera stops being ours when X4 stops listening, so the estimate has
+    // to go back to where X4 will have left it rather than keeping a belief it
+    // can no longer act on. This is the same reset a seat change needs.
+    static bool was_steering = false;
+    if (was_steering && !steering)
+        x4vr::head_look_recentre(g_headlook);
+    was_steering = steering;
 
     static uint64_t n = 0;
     if ((n++ % 240) == 0 || d.clamped)

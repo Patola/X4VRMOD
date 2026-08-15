@@ -160,10 +160,30 @@ int main() {
               "sub-dead-zone head motion commands nothing");
     }
 
+    // ---- the sign CONVENTION, not just its invertibility
+    //
+    // The previous test only checked that flipping the knob flips the command,
+    // which was true while the default was wrong. This pins the direction:
+    // head_angles() calls +yaw "left" and mouse +xrel turns right, so a
+    // positive head yaw must command a NEGATIVE dx. Take 126 shipped the
+    // opposite and the world rotated with the head instead of standing still.
+    {
+        x4vr::HeadLook s;
+        const x4vr::Delta yaw = x4vr::head_look_step(s, {10.0f, 0.0f});
+        check(yaw.dx < 0, "+yaw (head left) commands -dx (mouse left)");
+        x4vr::HeadLook t;
+        const x4vr::Delta pitch = x4vr::head_look_step(t, {0.0f, 10.0f});
+        check(pitch.dy < 0, "+pitch (head up) commands -dy (mouse up)");
+        check(s.cmd_yaw_deg > 0.0f && t.cmd_pitch_deg > 0.0f,
+              "and the estimate still follows the head, not the mouse");
+    }
+
     // ---- sign inversion is a knob, not a rewrite
     {
         x4vr::HeadLook a, b;
-        b.sign_yaw = -1.0f;
+        b.sign_yaw = -a.sign_yaw; // relative to the default, whatever it is --
+                                  // hardcoding -1 made this pass trivially once
+                                  // -1 became the default, testing nothing.
         const x4vr::Delta da = x4vr::head_look_step(a, {15.0f, 0.0f});
         const x4vr::Delta db = x4vr::head_look_step(b, {15.0f, 0.0f});
         check(da.dx == -db.dx && da.dx != 0,

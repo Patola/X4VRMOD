@@ -102,8 +102,20 @@ struct HeadLook {
     // inject tracker noise into the camera.
     float dead_zone_deg = 0.15f;
 
-    float sign_yaw = 1.0f;   // set from the calibration run, not guessed
-    float sign_pitch = 1.0f;
+    // **Both negative, and take 126 is why.** head_angles() reports +yaw as
+    // turning LEFT and +pitch as looking UP, which is right for a right-handed
+    // Y-up frame. Mouse axes disagree with both: positive xrel turns the view
+    // RIGHT, and positive yrel is DOWN because screen y grows downward. So a
+    // left head-turn was commanding a right camera-turn, and Patola saw the
+    // cabin rotate a further 30 degrees the same way he had turned instead of
+    // holding still.
+    //
+    // Neither test in this file could catch it. They check that the estimate
+    // converges and that inverting the sign inverts the command -- both true
+    // under either convention. Only the headset knew, which is why the
+    // convention is now written down here rather than implied by a default.
+    float sign_yaw = -1.0f;
+    float sign_pitch = -1.0f;
 
     // Where we believe X4 is pointing. Advanced only by what we actually sent.
     float cmd_yaw_deg = 0.0f;
