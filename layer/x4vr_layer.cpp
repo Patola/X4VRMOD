@@ -3649,6 +3649,29 @@ VkResult create_shader_module_inner(
             X4VR_LOG("stereo: ipd=%.4f sx=%.4f near=%.3f -> shear m8 L=%.5f "
                      "R=%.5f (per-view, gl_ViewIndex selects)",
                      ipd, sx, nz, K_world[8], K_world_r[8]);
+            // **The second gate.** Take 152 flipped the UI passes to sheared
+            // and changed NOTHING -- 33% of the frame at infinity before, 30%
+            // after, median -30 px both times. Reclassifying the pass only
+            // decides whether the *patched* module is bound; the matrix that
+            // module carries is a separate gate, and K_nonworld is identity
+            // unless someone sets it. So the probe bound a patched module that
+            // applied an identity transform, and the null refuted the knob
+            // rather than the hypothesis -- the same trap as the invproj knob
+            // that patched member 2 while the shadows read member 4.
+            //
+            // Treating the HUD as world geometry means giving it the world's
+            // matrices, so X4VR_SHEAR_UI now does both halves. Still a probe:
+            // the message box and the menus are genuinely screen space and get
+            // this wrongly too.
+            if (g_shear_ui) {
+                memcpy(K_nonworld, kl.m, sizeof(kl.m));
+                memcpy(K_nonworld_r, kr.m, sizeof(kr.m));
+                have_kr_nonworld = true;
+                X4VR_LOG("shear-ui probe: nonworld modules now carry the WORLD "
+                         "shear (m8 L=%.5f R=%.5f) — without this the pass "
+                         "reclassification alone is a no-op",
+                         K_nonworld[8], K_nonworld_r[8]);
+            }
         }
         // Direct matrices, which is what the offline suite drives: it needs
         // two layers that provably differ, without an IPD or a projection.

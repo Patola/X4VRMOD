@@ -920,6 +920,36 @@ def main(path):
                   f"{w[len(w) // 2]:6.2f} ms  ({len(ph)} window(s), "
                   f"{w[0]:.2f}–{w[-1]:.2f}){tag}")
 
+    # --- did the shear-ui probe actually run on anything? -------------------
+    #
+    # Take 152 set X4VR_SHEAR_UI=1, looked identical, and would have been read
+    # as "shearing the UI does not fix the HUD". It was a no-op: the pass was
+    # reclassified but the nonworld modules still carried an identity matrix,
+    # so the patch counts came out byte-identical to the run without it
+    # (nonworld=56 stereo=294 in both, stereo == the world count exactly).
+    #
+    # A probe that cannot be shown to have run cannot refute anything, so this
+    # refuses to let the next one be graded by eye.
+    if "X4VR_SHEAR_UI=1" in (run or ""):
+        patched = [ln for ln in lines if "patched vertex shader #" in ln]
+        m = re.search(r"world=(\d+) nonworld=(\d+) stereo=(\d+)",
+                      patched[-1]) if patched else None
+        carried = any("shear-ui probe:" in ln for ln in lines)
+        if not m:
+            print("shear-ui  no patch counts in this log")
+        else:
+            w, nw, st = (int(g) for g in m.groups())
+            print(f"shear-ui  world={w} nonworld={nw} stereo={st}, nonworld "
+                  f"matrices {'set' if carried else 'NOT set'}")
+            if not carried or st <= w:
+                fails.append(
+                    f"X4VR_SHEAR_UI was on but the probe did not reach the "
+                    f"draws: stereo={st} against world={w}, so the {nw} "
+                    f"nonworld modules got no per-eye variant"
+                    f"{'' if carried else ' and the matrices were never copied'}"
+                    f". This run cannot say anything about the HUD — it is a "
+                    f"repeat of take 152, not a result")
+
     # --- the pose we declare to the runtime ---------------------------------
     #
     # A silent fallback to identity is indistinguishable from working: X4 keeps
