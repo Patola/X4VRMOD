@@ -23,6 +23,8 @@
 #include <stdarg.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <errno.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -1024,12 +1026,30 @@ static void lua_dump_chunk(const char *name, const char *buff, size_t sz) {
     for (char &c : flat)
         if (c == '/' || c == '\\' || c == '@' || c == '=')
             c = '_';
+    // Make the directory ourselves. Take 133 asked Patola to mkdir it first and
+    // he had no reason to remember, so 24 chunks hit and nothing was written --
+    // the same shape as gating head-look arming on a mouse nudge. A tool should
+    // not put a precondition on the person running it when it can satisfy it.
+    static bool made = false;
+    if (!made) {
+        made = true;
+        if (::mkdir(dir, 0755) != 0 && errno != EEXIST)
+            X4VR_LOG("lua: WARNING cannot create %s (%s) — nothing will be "
+                     "dumped",
+                     dir, strerror(errno));
+    }
+
     const std::string path = std::string(dir) + "/" + flat;
     // write_file() goes through open()/write() rather than fopen(), which
     // matters here for the same reason it does for the config profile: fopen is
     // interposed by this very file.
     if (x4vr::write_file(path.c_str(), std::string(buff, sz)))
         X4VR_LOG("lua: dumped %s (%zu bytes)", path.c_str(), sz);
+    else
+        // Reported, because take 133 failed here in total silence: 24 hits, 0
+        // dumps, and a log that read as if nothing had gone wrong.
+        X4VR_LOG("lua: WARNING could not write %s (%s)", path.c_str(),
+                 strerror(errno));
 }
 
 static void note_lua_chunk(const char *buff, size_t sz, const char *name,
