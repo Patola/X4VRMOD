@@ -15117,6 +15117,107 @@ moving the mouse** — they no longer own the screen. That is very close to what
 we built. Recorded here because #30 was scoped assuming the UI had to be moved
 by us; this suggests measuring what X4 already does in this mode first.
 
+# State of #33 — head tracking works; written to survive a compaction
+
+**It works.** Head tracking drives X4's own camera from the headset, arms with
+no input of any kind, and holds without drift while the head is still. Takes
+118-130 got it there, and every one of those numbers below is measured unless
+it says otherwise.
+
+## The command line that works
+
+    X4VR_TAKE=130-GAIN145 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_HEADLOOK_KEY=INPUT_KEYCODE_APOSTROPHE X4VR_HEADLOOK_SCANCODE=52 X4VR_HEADLOOK_RAW=48 X4VR_HEADLOOK_GAIN=0.145 X4VR_SBS_LAYERS=2 X4VR_MV_DUMP=/tmp/x4vr-t130 X4VR_MV_DUMP_PRESENT=20 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take130.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 ./launch/x4vr-launch.sh
+
+`INPUT_KEYCODE_F13` is the *default* head-look key and does **not** work: the
+apostrophe knobs above are required. Whether F13 is unreachable in X4's
+SDL-to-internal keycode table was never settled -- the apostrophe was adopted as
+a known-good control and kept.
+
+## The architecture, in four pieces
+
+* `injector/x4vr_inputmap.hpp` — serves a forked `inputmap.xml` with
+  `INPUT_STATE_CAMERA_MOUSELOOK` rebound to a key of ours. Player's file is read
+  once, never written. 21 tests.
+* `common/x4vr_headlook.hpp` — the arithmetic: pose to yaw/pitch, the open-loop
+  integrator, its clamp, its recentre. Pure, no X4 and no GPU. Tested.
+* `common/x4vr_share.hpp` — two structs, one per direction. `HeadShared` (layer
+  writes the head pose) and the `cam_*` fields of `Shared` (injector writes where
+  it believes X4's camera is). Storage lives in the injector both ways, because
+  only the `LD_PRELOAD`ed side has globally visible symbols.
+* The SDL hooks in `injector/x4vr_inject.cpp`, and the submission site in
+  `layer/x4vr_layer.cpp` that declares the rendered-from orientation.
+
+## Measured constants
+
+| what | value | how |
+|---|---|---|
+| yaw clamp | **+56.5 deg**, hard stop | take 117, 13 dumps of exactly 0 at snr ~625 |
+| pitch clamp | **unmeasured**; 40 deg is a placeholder | take 117 never walked pitch to its stop |
+| free-look spring-back | exact return to 0.00 deg on release | take 115, snr ~1354 |
+| held offset drift | **zero** over 13 s, to the pixel | take 115, P117.4 |
+| gain | **UNMEASURED, bracket 0.15-0.25 deg/count** | 129 said ~0.145, 130 overshot at 0.145 |
+| head-look key `raw` | 48 (X11 keycode = evdev + 8) | take 126 |
+| X4 reads inputmap via | `fopen` | take 116 |
+| X4 reads input via | SDL3 event queue, `action=2` | takes 122-124 |
+
+## What X4's input actually does, and the six things that were wrong
+
+Each of these cost a run, and each was a plausible story a single log line would
+have refuted. Recorded together because the *pattern* is the lesson:
+
+1. **`SDL_GetKeyboardState` is imported and never called** (take 118). `nm -D`
+   proves imports, not calls. The keyboard must be driven by events.
+2. **Flooding**: the tick ran ~18 kHz from inside `SDL_PeepEvents` and pushed a
+   key event every time -- 3.2M events (take 119). Gated on the pose counter.
+3. **Keycode zero** (take 120). X4 works in keycodes, not scancodes; it imports
+   `SDL_GetKeyFromScancode`, which was the tell, already visible in `nm -D`.
+4. **Pushing from inside the drain** (take 124). X4 loops on `SDL_PeepEvents`
+   until empty, so an event pushed mid-loop keeps handing it work: input arrived
+   *minutes* late. Moved to `SDL_PumpEvents`.
+5. **`raw` was zero** (take 126). The platform scancode; sampled from a real
+   press, now settable.
+6. **Activation needs an EDGE, sustaining needs a level** (takes 126-128). Our
+   downs held mouselook for 32.7 s after a 3-microsecond tap, but 100 s of them
+   never switched it on: the first down lands during loading, X4 records the key
+   held, discards it, and never sees a fresh edge. Re-assert as up-then-down
+   while not steering.
+
+Two more were mine rather than X4's: **signs inverted on both axes** (+yaw is
+left, +xrel is right), and **arming gated on a mouse nudge**, which would have
+excluded every HOTAS player.
+
+## What is still wrong, and why Lua is next
+
+* **The gain is unmeasured**, and it is the dominant error. `cmd` is not X4's
+  angle, so the submitted rendered-from pose is wrong by the same factor, and
+  the error discharges as a jolt when the head returns from the clamp. Patola
+  felt exactly that in takes 129 and 130.
+* **The clamp is real windup.** Our integrator clamps at *our* number; X4 stops
+  at its own. Between the two we command into a wall and cannot see it.
+* **Recentre events are undetected.** Seat changes and save loads zero X4's
+  camera while our estimate does not follow.
+
+Every one of those is the same defect wearing different clothes: **we drive
+open-loop and cannot ask X4 where its camera is pointing.** With a readback all
+three become self-correcting and the gain stops mattering at all.
+
+So the next work is not another patch on this channel. It is
+`luaL_loadbuffer` — route 1 from the Lua investigation — which could deliver
+either half of the answer:
+
+* **a readback**, which closes the loop and makes this channel reliable; or
+* **a direct camera write**, which skips the channel entirely, and is what
+  Patola has been asking for since the clamp question.
+
+Note what it does *not* fix: X4 culls to its own frustum, so the range limit
+survives a direct camera write. That geometry is recorded above and has not
+changed.
+
+**Constraints carried into that work.** Route 1 only: `ui/core/lualibs/` is
+signed and `extensions/` registers a mod, and both would flag saves as modified,
+which Patola's fourteen saves are not and must stay. Do not save the real game
+during a modded session until that is tested on a throwaway slot.
+
 # State at `stage8-xr-session-in-x4` — resume here
 
 Written to survive a context compaction. Everything below is checkable from the
