@@ -955,9 +955,43 @@ def main(path):
             episodes.append((m_down[i], end))
         missed = [(a, b) for a, b in episodes
                   if not any(a <= t <= b for t in hud_down)]
+        # **Releasing once is not the property.** Take 147 released on all three
+        # episodes, re-acquired on all three, and PASSED this check while the
+        # map was unusable: we pressed the key straight back on 485 ms later and
+        # X4 spent 23 s in mouselook with the map up. "Did we let go" was the
+        # wrong question -- take 146's mistake one level up.
+        #
+        # What a healthy run reads, stated before trusting the number: for every
+        # map episode, X4 enters relative mouse mode ZERO times between the
+        # release and the map closing. Mouselook is not a proxy for the defect,
+        # it IS the defect -- it is what makes the mouse rotate the view instead
+        # of driving the cursor, which is why the map cannot be dragged.
+        rel_on = [ts(ln) for ln in lines if "relative mouse mode ON" in ln]
+        rel_on = [t for t in rel_on if t is not None]
+        relapsed = []
+        for a, b in episodes:
+            rel = next((t for t in hud_down if a <= t <= b), None)
+            if rel is None:
+                continue
+            back = [t for t in rel_on if rel < t < b]
+            if back:
+                relapsed.append((a, back[0], len(back)))
         print(f"map   {len(episodes)} episode(s), "
               f"{len(episodes) - len(missed)} with the HUD gate releasing "
-              f"({len(hud_up)} re-acquire(s) after)")
+              f"({len(hud_up)} re-acquire(s) after), "
+              f"{len(episodes) - len(missed) - len(relapsed)} that stayed out "
+              f"of mouselook for the whole episode")
+        if relapsed:
+            a, t, n = relapsed[0]
+            fails.append(
+                f"the map re-entered mouselook on {len(relapsed)} episode(s) "
+                f"after we had released — first map opened t={a:.3f}, back in "
+                f"mouselook t={t:.3f} ({t - a:.3f}s later, {n} time(s) that "
+                f"episode). The mouse rotates the view instead of driving the "
+                f"cursor, so the map cannot be dragged. Either something still "
+                f"presses the free-look key while may_steer is false, or X4 "
+                f"itself uses relative mode for map dragging — the key[peep] "
+                f"lines say which")
         if missed:
             fails.append(
                 f"the map was open {len(missed)} time(s) with no 'HUD is now "

@@ -1448,29 +1448,71 @@ void headlook_tick() {
     // edge each cycle; once steering, send only downs, because an up would
     // release the very state we are holding.
     // The direct question first, the heuristic only as a backstop.
+    // **One predicate, computed once and used at every site.** Take 147 is why
+    // this is a variable rather than a condition spelled out wherever it is
+    // needed. The HUD gate went into `steering`, and the re-assert below kept
+    // its own copy of the test -- `cockpit` alone, the one query that provably
+    // cannot see the map. So we released the key when the map opened and put it
+    // straight back on:
+    //
+    //     map opens 26026.247, released 26026.376, RE-PRESSED 26026.861
+    //
+    // and X4 spent the next 23 seconds in mouselook with the map up. Patola
+    // felt it as the mouse rotating the view instead of moving the cursor, so
+    // the map could not be dragged at all. Two sites, one meaning, one of them
+    // updated: that is the entire defect, and it was introduced by the commit
+    // that fixed the other half.
     const bool cockpit = x4_cockpit_view();
+    const bool armed_now = g_relative_mouse.load(std::memory_order_relaxed);
+
+    // IsHUDActive dereferences its global with no null check, so it must not be
+    // called before X4 has built that object (see x4_hud_active). Relative
+    // mouse mode proves the object exists -- but the moment we most need the
+    // answer is exactly when we are NOT in relative mouse mode and are deciding
+    // whether to press the key again, and that is the hole take 147 fell
+    // through.
+    //
+    // So latch it rather than requiring it to be true right now. X4 calls
+    // IsHUDActive itself while the HUD is inactive -- every path in its
+    // disassembly, the false ones included, dereferences the same pointer -- so
+    // the object is not torn down when the HUD goes away. Once seen alive it
+    // stays alive, and the query is safe from then on whatever the mouse mode.
+    static bool hud_object_exists = false;
+    if (armed_now)
+        hud_object_exists = true;
+    const bool hud = hud_object_exists ? x4_hud_active() : true;
+
+    // What every site below actually means by "the cockpit".
+    const bool may_steer = cockpit && hud;
+
     static bool was_cockpit = true;
     if (cockpit != was_cockpit) {
         was_cockpit = cockpit;
         X4VR_LOG("headlook: view is now %s",
                  cockpit ? "the cockpit — steering" : "external/floating — idle");
-        if (!cockpit)
-            send_key(headlook_scancode(), false); // hand the mouse back
+    }
+    static bool was_hud = true;
+    if (hud != was_hud) {
+        was_hud = hud;
+        X4VR_LOG("headlook: HUD is now %s (IsInPanelMode=%d) — %s",
+                 hud ? "up" : "down", (int)x4_panel_mode(),
+                 hud ? "steering" : "idle, mouse handed back");
     }
 
-    const bool armed_now = g_relative_mouse.load(std::memory_order_relaxed);
-    //
-    // **Only in the cockpit.** Re-asserting while the map is up made the view
-    // state flap: ~300 ms idle, then ~10 ms of "cockpit" as our key briefly put
-    // X4 back into mouselook, and one steered frame per cycle, which Patola felt
-    // as the map jolting every couple of seconds while dragging. The period was
-    // exactly this re-assert. Pressing a free-look key when we know free-look is
-    // not what is on screen was never right.
+    // **Level, not edge.** Pressing a free-look key when we know free-look is
+    // not what is on screen was never right, and releasing it once was not
+    // enough: an edge-triggered release cannot correct a re-entry it did not
+    // observe, and take 147 re-entered on the very next re-assert with
+    // `was_hud` already false, so the edge never came again. Hold the key while
+    // we may steer, and keep letting go for as long as we may not.
     static uint64_t poses = 0;
-    if (cockpit && (poses++ % 32) == 0) {
+    const bool cycle = (poses++ % 32) == 0;
+    if (may_steer && cycle) {
         if (!armed_now)
             send_key(headlook_scancode(), false);
         send_key_down(headlook_scancode());
+    } else if (!may_steer && armed_now && cycle) {
+        send_key(headlook_scancode(), false); // hand the mouse back, and again
     }
     // Only while X4 is actually in mouselook. Take 126 ran the immersive
     // treatment over load screens and menus too, where it does not belong:
@@ -1515,22 +1557,9 @@ void headlook_tick() {
         X4VR_LOG("headlook: NOTE commanded with little camera response — "
                  "reported only, not acted on");
 
-    // X4's map is live, unpaused, not external and not floating, so the HUD is
-    // the only thing that separates it from the cockpit. Asked only while X4 is
-    // in relative mouse mode: that is what makes the call safe (see
-    // x4_hud_active) and also the only time the answer could change what we do.
-    const bool hud = armed_now ? x4_hud_active() : true;
-    static bool was_hud = true;
-    if (armed_now && hud != was_hud) {
-        was_hud = hud;
-        X4VR_LOG("headlook: HUD is now %s (IsInPanelMode=%d) — %s",
-                 hud ? "up" : "down", (int)x4_panel_mode(),
-                 hud ? "steering" : "idle, mouse handed back");
-        if (!hud)
-            send_key(headlook_scancode(), false); // let go of free-look
-    }
-
-    const bool steering = armed_now && cockpit && hud;
+    // may_steer, not a second spelling of it. This site having its own copy of
+    // the test is what take 147 cost.
+    const bool steering = armed_now && may_steer;
     g_headlook_steering.store(steering, std::memory_order_relaxed);
     if (steering)
         send_mouse_delta(d.dx, d.dy);
