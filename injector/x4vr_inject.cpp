@@ -1122,7 +1122,12 @@ void headlook_tick() {
     was_steering = steering;
 
     static uint64_t n = 0;
-    if ((n++ % 240) == 0 || d.clamped)
+    // Every 30 poses, not 240. Take 129 was a clean controlled excursion and
+    // the gain still could not be read off it, because at one sample in 240 the
+    // log missed the plateau entirely: cmd appeared to peak at 12.6 deg while
+    // the dumps showed 36. A calibration run whose instrument samples slower
+    // than the thing it measures is not a calibration run.
+    if ((n++ % 30) == 0 || d.clamped)
         X4VR_LOG("headlook: head %.2f,%.2f -> cmd %.2f,%.2f delta %d,%d%s",
                  yaw, pitch, g_headlook.cmd_yaw_deg, g_headlook.cmd_pitch_deg,
                  d.dx, d.dy, d.clamped ? " CLAMPED" : "");
