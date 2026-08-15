@@ -835,6 +835,23 @@ void note_extent(const char *what, float x, float y) {
              lo_x, hi_x, lo_y, hi_y, x, y);
 }
 
+// Every key event X4 drains, capped so the log stays readable. Take 121 left
+// two possibilities standing that no amount of reasoning could separate: our
+// synthetic event never reaching X4's queue, or reaching it and not matching a
+// binding. A real press logged in the same format next to ours settles it by
+// comparison rather than by argument -- which is what should have happened
+// before the keycode was guessed at, and again before the scancode was.
+void note_key_event(const Sdl3KeyEvent *k, const char *via) {
+    static int seen = 0;
+    if (seen >= 40)
+        return;
+    seen++;
+    X4VR_LOG("key[%s] type=0x%x scancode=%u keycode=0x%x mod=0x%x which=%u "
+             "window=%u down=%d repeat=%d",
+             via, k->type, k->scancode, k->key, k->mod, k->which, k->windowID,
+             (int)k->down, (int)k->repeat);
+}
+
 void note_mouse_event(const Sdl3MouseEvent *e) {
     // #33: the first real motion event donates the two fields our synthetic
     // ones must carry. Done here because every mouse event already flows
@@ -1074,13 +1091,17 @@ void send_key(int scancode, bool down) {
     k->scancode = (uint32_t)scancode;
     k->key = keycode_of(scancode);
     k->down = down;
+    const int r = push(ev);
     static bool said = false;
     if (!said) {
         said = true;
-        X4VR_LOG("headlook: holding scancode %d as keycode 0x%x", scancode,
-                 k->key);
+        // SDL_PushEvent returns 1 on success, 0 if an event filter dropped it,
+        // negative on error. Ignoring it is how take 121 could not tell "X4
+        // received our key and did nothing with it" from "SDL never queued it".
+        X4VR_LOG("headlook: pushed scancode %d as keycode 0x%x, window %u -> "
+                 "SDL_PushEvent returned %d",
+                 scancode, k->key, k->windowID, r);
     }
-    push(ev);
 }
 
 void send_key_down(int scancode) { send_key(scancode, true); }
@@ -1161,6 +1182,8 @@ bool SDL_WaitEvent(void *event) {
     const bool r = real_fn(event);
     if (r && event && this_is_the_game()) {
         auto *e = (Sdl3MouseEvent *)event;
+        if (e->type == SDL_EV_KEY_DOWN || e->type == SDL_EV_KEY_UP)
+            note_key_event((const Sdl3KeyEvent *)e, "wait");
         if (e->type >= SDL_EV_MOUSE_MOTION && e->type <= SDL_EV_MOUSE_UP) {
             note_mouse_event(e);
             // Position only. xrel/yrel are deltas and a fold of a delta is
@@ -1194,6 +1217,8 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
     if (n > 0 && events && this_is_the_game()) {
         for (int i = 0; i < n; i++) {
             auto *e = (Sdl3MouseEvent *)((unsigned char *)events + 128 * i);
+            if (e->type == SDL_EV_KEY_DOWN || e->type == SDL_EV_KEY_UP)
+                note_key_event((const Sdl3KeyEvent *)e, "peep");
             if (e->type >= SDL_EV_MOUSE_MOTION && e->type <= SDL_EV_MOUSE_UP) {
                 note_mouse_event(e);
                 if (consuming)
