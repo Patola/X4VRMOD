@@ -90,3 +90,7 @@ if(SDL3_FOUND OR EXISTS /usr/include/SDL3/SDL_events.h)
 else()
   message(STATUS "SDL3 headers not found — skipping x4vr_test_sdl_event_layout")
 endif()
+
+# The Lua chunk scan. Pure string work on buffers that are NOT NUL-terminated,
+# which is the hazard it exists to pin. Self-checking: no runner script.
+add_executable(x4vr_test_lua_scan lua_scan.cpp)

@@ -108,6 +108,8 @@ Useful switches: `X4VR_NO_LAYER=1`, `X4VR_NO_INJECT=1`, `X4VR_NO_CONFIG=1`
 `X4VR_CLIP_SHIFT=<x>` (clip-space test shift), `X4VR_DUMP_MATRICES=1`,
 `X4VR_FOV=<decimal>` (serve X4's `<fov>` from the profile — the field of view is
 a config setting, so widening it needs no projection patch),
+`X4VR_LUA=1` (log every Lua chunk X4 loads, and which of them mention a camera
+API — reconnaissance for reading X4's camera back instead of driving it blind),
 `X4VR_HEADLOOK=1` (serve X4's `inputmap.xml` from a fork with free-look rebound
 onto a key of our own, so the head can drive it without spending shift and the
 middle mouse button; `X4VR_HEADLOOK_KEY=<INPUT_KEYCODE_…>` picks the key,
