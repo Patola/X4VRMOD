@@ -920,6 +920,36 @@ def main(path):
                   f"{w[len(w) // 2]:6.2f} ms  ({len(ph)} window(s), "
                   f"{w[0]:.2f}–{w[-1]:.2f}){tag}")
 
+    # --- the pose we declare to the runtime ---------------------------------
+    #
+    # A silent fallback to identity is indistinguishable from working: X4 keeps
+    # re-rendering from the driven camera, so the world still changes as the
+    # head turns, and only a screen-locked element -- the HUD -- reveals that
+    # the image is pinned in space. That is the shape Patola reported after take
+    # 149, and it took two hypotheses and no instrument to notice.
+    pose = [ln for ln in lines if "vr pose:" in ln]
+    if not pose:
+        print("pose  not reported — this build predates the instrument")
+    else:
+        ident = [ln for ln in pose if "cam_valid=0" in ln]
+        unlinked = [ln for ln in pose if "shared=0" in ln]
+        print(f"pose  {len(pose)} sample(s), {len(pose) - len(ident)} with a "
+              f"driven orientation, {len(ident)} identity")
+        if unlinked:
+            fails.append(
+                f"the layer could not reach the injector's shared state on "
+                f"{len(unlinked)} of {len(pose)} samples — every VR frame in "
+                f"those is submitted world-locked no matter what head-look "
+                f"does. Check x4vr_shared_state is exported and the injector "
+                f"actually loaded")
+        elif ident and any("HUD is now" in ln for ln in lines):
+            fails.append(
+                f"{len(ident)} of {len(pose)} pose samples declared identity "
+                f"while head-look was running — the image is world-locked, so "
+                f"the HUD holds still in space and leaves the view as the head "
+                f"turns. cam_valid is 0: check that `steering` is reaching the "
+                f"layer, not just that X4's camera is moving")
+
     # --- the map gate ------------------------------------------------------
     #
     # Take 146 is why this lives in the scorer instead of in a grep. The check
