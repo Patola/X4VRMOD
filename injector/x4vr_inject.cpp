@@ -975,19 +975,19 @@ void note_mouse_event(const Sdl3MouseEvent *e) {
 
 // SDL_Window is opaque here on purpose -- the injector has no SDL headers and
 // needs none; the handle is only ever passed straight through.
-
 // ------------------------------------------------------------------ Lua
 //
-// Reconnaissance for the open-loop problem: see injector/x4vr_lua.hpp for why
-// this is the route and why it is the only one that keeps saves unmodified.
+// Reconnaissance for #33's open loop: see injector/x4vr_lua.hpp for why this is
+// the route and why it is the only one that keeps saves unmodified.
 //
-// Two lessons from #33 are built in rather than learned again. **An import is
-// not a call** -- X4 imports SDL_GetKeyboardState and never calls it -- so the
-// first firing of each hook is logged before anything is built on it. And an
-// instrument must not flood its own log: X4 loads a great many chunks, so names
-// are reported once each up to a cap, and the keyword scan reports the chunk
-// rather than the match.
-bool lua_enabled() {
+// **`static`, not an anonymous namespace.** The first version of this block
+// opened one and closed it in the wrong place, which silently moved every real
+// interposer -- fopen, open, the whole SDL family -- inside it, where internal
+// linkage meant they interposed nothing at all. The injector then did nothing
+// but log Lua for a whole run. Nothing in this file needs a namespace it does
+// not already have; `static` gives internal linkage without a brace to get
+// wrong.
+static bool lua_enabled() {
     static const bool on = [] {
         const char *e = getenv("X4VR_LUA");
         return e && *e && *e != '0';
@@ -995,8 +995,14 @@ bool lua_enabled() {
     return on;
 }
 
-void note_lua_chunk(const char *buff, size_t sz, const char *name,
-                    const char *via) {
+// Two lessons from #33 are built in rather than learned again. **An import is
+// not a call** -- X4 imports SDL_GetKeyboardState and never calls it -- so the
+// first firing of each hook is logged before anything is built on it. And an
+// instrument must not flood its own log, which cost takes 119 and 122: chunk
+// names are capped, and the keyword scan reports the chunk rather than the
+// match.
+static void note_lua_chunk(const char *buff, size_t sz, const char *name,
+                           const char *via) {
     static int chunks = 0, hits = 0;
     const char *n = x4vr::lua_chunk_name(name);
     if (chunks < 400) {
@@ -1015,12 +1021,9 @@ void note_lua_chunk(const char *buff, size_t sz, const char *name,
         if (!x4vr::lua_chunk_mentions(buff, sz, probes[i].needle))
             continue;
         hits++;
-        X4VR_LOG("lua HIT %-14s in %s  (%s)", probes[i].needle, n,
-                 probes[i].why);
+        X4VR_LOG("lua HIT %-14s in %s  (%s)", probes[i].needle, n, probes[i].why);
     }
 }
-
-} // namespace
 
 // LuaJIT is Lua 5.1: int luaL_loadbuffer(lua_State*, const char*, size_t,
 // const char*). lua_State is opaque here, as SDL_Window is elsewhere in this
@@ -1054,8 +1057,6 @@ extern "C" int luaL_loadfile(void *L, const char *filename) {
     }
     return real_fn(L, filename);
 }
-
-namespace {
 
 // ------------------------------------------------------- #33 head-look
 //
