@@ -260,13 +260,17 @@ int main() {
               "a converged servo never stalls, however long it runs");
 
         // A real stall: commanding hard into something that does not move.
+        // It re-stalls after each retry probe, which is intended -- but the
+        // backoff must keep that RARE. Over 300 frames of a dead camera a
+        // fixed-interval retry would stall ~4 times; the doubling keeps it to 2.
         x4vr::StallWatch v;
         int in = 0;
         for (int i = 0; i < 300; i++)
             if (stall_watch_step(v, 1.0f, 0.0f) == 1)
                 in++;
-        check(v.stalled && in == 1,
-              "commanding into a dead camera stalls, once, not repeatedly");
+        check(v.stalled && in >= 1, "commanding into a dead camera stalls");
+        check(in <= 3, "and the backoff keeps re-stalling rare");
+        printf("      stalls in 300 frames of a dead camera: %d\n", in);
 
         // And it comes back when the camera moves on its own.
         int out = 0;
@@ -281,6 +285,26 @@ int main() {
         for (int i = 0; i < 600; i++)
             stall_watch_step(q, 0.01f, 0.0f);
         check(!q.stalled, "a window with too little command decides nothing");
+
+        // **A stall must expire.** Standing down releases the key and stops
+        // commanding, so the camera cannot move on its own -- take 140 stalled
+        // in the menu and was still stalled in the cockpit, tracking dead. A
+        // recovery condition the recovery itself prevents is a trap door.
+        x4vr::StallWatch t;
+        for (int i = 0; i < 300; i++)
+            stall_watch_step(t, 1.0f, 0.0f);
+        check(t.stalled, "stalled against a dead camera");
+        // The servo keeps WANTING to move while stood down -- steering is off,
+        // but the error is still there -- so the watch keeps seeing commands.
+        // What it must never do is stay stalled forever when the camera cannot
+        // move on its own, which is precisely take 140.
+        int retried = 0;
+        for (int i = 0; i < 8000 && retried < 3; i++)
+            if (stall_watch_step(t, 1.0f, 0.0f) == -1)
+                retried++;
+        check(retried >= 3, "and retries, so a dead context is never permanent");
+        printf("      retries observed while nothing ever answers: %d\n",
+               retried);
     }
 
     // ---- the dead zone holds still

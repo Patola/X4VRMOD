@@ -34,6 +34,7 @@
 //      arithmetic cannot see it happen.
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 
 namespace x4vr {
@@ -228,6 +229,21 @@ struct StallWatch {
     float max_obs_frac = 0.15f; // received less than this share of what we asked
     float resume_obs_deg = 2.0f; // moved on its own: a live context is back
 
+    // **A stall must expire.** The first version resumed only when the camera
+    // moved by itself -- but standing down releases the key and stops
+    // commanding, so nothing CAN move it. Take 140 stalled during the menu at
+    // startup and was still stalled in the cockpit minutes later, with head
+    // tracking simply dead. A recovery condition that the recovery itself makes
+    // impossible is a trap door.
+    //
+    // So a stall times out and we try again. The interval doubles up to a cap,
+    // so a genuinely dead context settles into a rare, brief probe rather than a
+    // constant one, and a live context is picked up within a second.
+    int retry_frames = 90;
+    int retry_cap_frames = 600;
+    int stalled_for = 0;
+    int retry_at = 0;
+
     float cmd_sum = 0.0f, obs_sum = 0.0f;
     int win = 0;
     bool stalled = false;
@@ -237,6 +253,13 @@ struct StallWatch {
 // transition out, 0 otherwise.
 inline int stall_watch_step(StallWatch &w, float commanded_deg,
                             float observed_deg) {
+    if (w.stalled && ++w.stalled_for >= w.retry_at) {
+        w.stalled = false;
+        w.stalled_for = 0;
+        w.cmd_sum = w.obs_sum = 0.0f;
+        w.win = 0;
+        return -1; // probe again; if it is still dead this costs one window
+    }
     w.cmd_sum += std::fabs(commanded_deg);
     w.obs_sum += std::fabs(observed_deg);
     if (++w.win < w.window_frames)
@@ -245,10 +268,16 @@ inline int stall_watch_step(StallWatch &w, float commanded_deg,
     if (!w.stalled && w.cmd_sum > w.min_cmd_deg &&
         w.obs_sum < w.max_obs_frac * w.cmd_sum) {
         w.stalled = true;
+        w.stalled_for = 0;
+        w.retry_at = w.retry_at ? std::min(w.retry_at * 2, w.retry_cap_frames)
+                                : w.retry_frames;
         event = 1;
     } else if (w.stalled && w.obs_sum > w.resume_obs_deg) {
         w.stalled = false;
+        w.retry_at = 0; // it answered: forget the backoff
         event = -1;
+    } else if (!w.stalled) {
+        w.retry_at = 0;
     }
     w.cmd_sum = w.obs_sum = 0.0f;
     w.win = 0;

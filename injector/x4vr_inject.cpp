@@ -1159,6 +1159,37 @@ static const bool g_camloop = [] {
     return e && *e && *e != '0';
 }();
 
+// **Ask X4 which view it is in, instead of inferring it from motion.**
+//
+// Both of these are exported (nm -D) and declared in the Lua cdefs as returning
+// bool. Inferring context from "did the camera respond" cost takes 139 and 140:
+// first it could not tell a converged servo from a dead one, then it became a
+// trap door. A direct question does not have either failure mode.
+//
+// Absent symbols mean "assume cockpit", which is the pre-existing behaviour --
+// the stall watch is still there as a backstop for anything these two do not
+// cover, the map being the open question.
+static bool x4_cockpit_view() {
+    using Fn = bool (*)();
+    static Fn ext = [] {
+        Fn f = (Fn)dlsym(RTLD_DEFAULT, "IsExternalViewActive");
+        X4VR_LOG("camread: IsExternalViewActive %s",
+                 f ? "resolved" : "NOT FOUND");
+        return f;
+    }();
+    static Fn flt = [] {
+        Fn f = (Fn)dlsym(RTLD_DEFAULT, "IsFloatingViewActive");
+        X4VR_LOG("camread: IsFloatingViewActive %s",
+                 f ? "resolved" : "NOT FOUND");
+        return f;
+    }();
+    if (ext && ext())
+        return false;
+    if (flt && flt())
+        return false;
+    return true;
+}
+
 static bool camread_enabled() {
     static const bool on = [] {
         const char *e = getenv("X4VR_CAMREAD");
@@ -1376,8 +1407,18 @@ void headlook_tick() {
     }
     const bool stalled = g_stall.stalled;
 
+    // The direct question first, the heuristic only as a backstop.
+    const bool cockpit = x4_cockpit_view();
+    static bool was_cockpit = true;
+    if (cockpit != was_cockpit) {
+        was_cockpit = cockpit;
+        X4VR_LOG("headlook: view is now %s",
+                 cockpit ? "the cockpit — steering" : "external/floating — idle");
+        if (!cockpit)
+            send_key(headlook_scancode(), false); // hand the mouse back
+    }
     const bool steering =
-        g_relative_mouse.load(std::memory_order_relaxed) && !stalled;
+        g_relative_mouse.load(std::memory_order_relaxed) && cockpit && !stalled;
     g_headlook_steering.store(steering, std::memory_order_relaxed);
     if (steering)
         send_mouse_delta(d.dx, d.dy);
