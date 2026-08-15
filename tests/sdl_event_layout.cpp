@@ -81,6 +81,46 @@ static_assert((uint32_t)SDL_EVENT_MOUSE_MOTION == 0x400u,
 static_assert((int)SDL_SCANCODE_F13 == 104,
               "SDL_SCANCODE_F13 moved — headlook_scancode()'s default is stale");
 
+
+// The keyboard event, same discipline. Take 118 forced this into existence: X4
+// imports SDL_GetKeyboardState and never calls it, so the held free-look key is
+// pushed as an event and its layout matters exactly as much as the mouse one's.
+struct Sdl3KeyEvent {
+    uint32_t type;
+    uint32_t reserved;
+    uint64_t timestamp;
+    uint32_t windowID;
+    uint32_t which;
+    uint32_t scancode;
+    uint32_t key;
+    uint16_t mod;
+    uint16_t raw;
+    bool down;
+    bool repeat;
+};
+
+#define SAME_KEY_OFFSET(field)                                                 \
+    static_assert(offsetof(Sdl3KeyEvent, field) ==                             \
+                      offsetof(SDL_KeyboardEvent, field),                      \
+                  "SDL3 moved SDL_KeyboardEvent::" #field                      \
+                  " — the injector's positional layout is now wrong")
+
+SAME_KEY_OFFSET(type);
+SAME_KEY_OFFSET(reserved);
+SAME_KEY_OFFSET(timestamp);
+SAME_KEY_OFFSET(windowID);
+SAME_KEY_OFFSET(which);
+SAME_KEY_OFFSET(scancode);
+SAME_KEY_OFFSET(key);
+SAME_KEY_OFFSET(mod);
+SAME_KEY_OFFSET(raw);
+SAME_KEY_OFFSET(down);
+SAME_KEY_OFFSET(repeat);
+static_assert(sizeof(Sdl3KeyEvent) == sizeof(SDL_KeyboardEvent),
+              "SDL3 changed the size of SDL_KeyboardEvent");
+static_assert((uint32_t)SDL_EVENT_KEY_DOWN == 0x300u,
+              "SDL_EVENT_KEY_DOWN renumbered — SDL_EV_KEY_DOWN is stale");
+
 int main() {
     printf("ok    SDL_MouseMotionEvent layout matches the injector's "
            "(%zu bytes, %zu fields checked)\n",
@@ -89,6 +129,9 @@ int main() {
            "SDL_SCANCODE_F13 %d\n",
            sizeof(SDL_Event), (unsigned)SDL_EVENT_MOUSE_MOTION,
            (int)SDL_SCANCODE_F13);
+    printf("ok    SDL_KeyboardEvent layout matches (%zu bytes), "
+           "SDL_EVENT_KEY_DOWN 0x%x\n",
+           sizeof(SDL_KeyboardEvent), (unsigned)SDL_EVENT_KEY_DOWN);
     printf("\nall cases passed\n");
     return 0;
 }

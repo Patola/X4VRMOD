@@ -439,6 +439,32 @@ struct Sdl3MouseEvent {
 enum { SDL_EV_MOUSE_MOTION = 0x400, SDL_EV_MOUSE_DOWN = 0x401,
        SDL_EV_MOUSE_UP = 0x402 };
 
+// SDL3 SDL_KeyboardEvent, laid out positionally for the same reason as
+// Sdl3MouseEvent above; tests/sdl_event_layout.cpp asserts both against the
+// real headers.
+//
+// **Take 118 is why this exists.** X4 *imports* SDL_GetKeyboardState -- `nm -D`
+// says so -- and never calls it: the run produced zero `headlook: armed` lines
+// from a one-shot log inside the hook, while every other SDL interposer in this
+// file fired normally. Imports are necessary, not sufficient, and the recorded
+// error class this project already carries ("hooking a symbol X4 never
+// imports") has a subtler sibling: hooking one it imports but does not call.
+// X4 reads the keyboard the same way it reads the mouse, from the event queue.
+struct Sdl3KeyEvent {
+    uint32_t type;      //  0
+    uint32_t reserved;  //  4
+    uint64_t timestamp; //  8
+    uint32_t windowID;  // 16
+    uint32_t which;     // 20
+    uint32_t scancode;  // 24
+    uint32_t key;       // 28
+    uint16_t mod;       // 32
+    uint16_t raw;       // 34
+    bool down;          // 36
+    bool repeat;        // 37
+};
+enum { SDL_EV_KEY_DOWN = 0x300, SDL_EV_KEY_UP = 0x301 };
+
 // A genuine motion event's windowID/which, copied so ours are indistinguishable
 // from X4's own. Guessing zero would be a plausible-looking value X4 may filter
 // on, and the failure would present as "head-look does nothing".
@@ -901,6 +927,7 @@ void note_mouse_event(const Sdl3MouseEvent *e) {
 // Defined below with the rest of the mouse half; declared here because the
 // tick is what drives it and reads better next to the arithmetic.
 void send_mouse_delta(int dx, int dy);
+void send_key_down(int scancode);
 
 void headlook_tick() {
     static const bool armed = [] {
@@ -948,6 +975,10 @@ void headlook_tick() {
     // Reported whether or not anything is sent yet, because this line is how
     // the calibration run recovers the gain: a known command against the angle
     // camera_rotation.py --integrate measures.
+    // Re-asserted every tick. X4 never called SDL_GetKeyboardState in take
+    // 118, so the hold is an event, and an event has to be repeated to
+    // survive anything that resets X4's own key state.
+    send_key_down(headlook_scancode());
     send_mouse_delta(d.dx, d.dy);
 
     static uint64_t n = 0;
@@ -975,6 +1006,25 @@ void headlook_tick() {
 // Push one synthetic relative motion. Deliberately silent until a real event
 // has been seen: sending before then would mean inventing the two fields this
 // exists to copy.
+// Hold the free-look key by pushing a key-down and never a key-up. X4 tracks
+// held state from the event stream, so one down latches it; re-sending is
+// harmless (it looks like key repeat) and is what makes the hold self-healing
+// across the save-load desync that ruled out toggle="1".
+void send_key_down(int scancode) {
+    if (!g_motion_seen.load(std::memory_order_relaxed))
+        return;
+    static auto push = real<int (*)(void *)>("SDL_PushEvent");
+    if (!push)
+        return;
+    unsigned char ev[128] = {};
+    auto *k = (Sdl3KeyEvent *)ev;
+    k->type = SDL_EV_KEY_DOWN;
+    k->windowID = g_motion_window.load(std::memory_order_relaxed);
+    k->scancode = (uint32_t)scancode;
+    k->down = true;
+    push(ev);
+}
+
 void send_mouse_delta(int dx, int dy) {
     if ((dx == 0 && dy == 0) || !g_motion_seen.load(std::memory_order_relaxed))
         return;
@@ -1000,7 +1050,6 @@ const bool *SDL_GetKeyboardState(int *numkeys) {
     const bool *src = real_fn(&n);
     if (numkeys)
         *numkeys = n;
-    headlook_tick();
     if (!src || !headlook_key_held())
         return src;
     const int sc = headlook_scancode();
@@ -1075,6 +1124,12 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
     // is finally fetched would apply the transform twice -- and because the
     // fold is its own inverse, that lands exactly back on the unfolded value.
     // The fix would silently do nothing, which is the worst way for it to fail.
+    // #33 is driven from here rather than from SDL_GetKeyboardState: take 118
+    // showed X4 imports that and never calls it, while this drain runs every
+    // input poll. Outside the `n > 0` test on purpose -- head-look must keep
+    // running through frames where the queue happens to be empty.
+    if (this_is_the_game())
+        headlook_tick();
     const bool consuming = action == 2;
     if (n > 0 && events && this_is_the_game()) {
         for (int i = 0; i < n; i++) {
