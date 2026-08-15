@@ -15117,6 +15117,75 @@ moving the mouse** — they no longer own the screen. That is very close to what
 we built. Recorded here because #30 was scoped assuming the UI had to be moved
 by us; this suggests measuring what X4 already does in this mode first.
 
+# #33 CLOSED-LOOP — X4's own camera drives the submission
+
+Take 137: X4's camera tracks the head to **under a degree**, with no spinning,
+no jolt and no drift.
+
+    X4 -3.90,13.00 | head -3.89,13.00    error 0.01
+    X4  5.04,28.35 | head  4.82,28.47    error 0.22 / 0.12
+    X4  1.49,24.46 | head  1.43,24.20    error 0.06 / 0.26
+
+## What made it work
+
+`Rotation GetCameraRotation();` is **exported from the X4 binary** (`nm -D`, T
+at 0xa41610), declared in the Lua bytecode as
+`typedef struct { float yaw; float pitch; float roll; } Rotation;`. It reports
+**radians**, with yaw of the **opposite sign** to ours, linear to within 0.8%.
+
+The Lua investigation found it and is not needed to use it: no chunk is
+injected and no game file is touched, so saves stay unmodified (verified — a
+save written under the mod reads `modified="0"`).
+
+**Every remaining defect was one defect.** The unmeasured gain, the windup at
+X4's clamp, and the undetected recentre on a seat change or save load were all
+"we drive open-loop and cannot ask where the camera points". With the readback:
+
+* the gain only has to be roughly right, because a servo corrects what it gets
+  wrong — pitch tracks as well as yaw despite the two axes differing by **7x**,
+  which retired the separate pitch gain before it was ever needed;
+* the clamp is seen, not modelled, so there is nothing to wind up;
+* a recentre corrects itself on the next frame.
+
+## Measured constants, all from the readback
+
+| what | value |
+|---|---|
+| yaw clamp | **±65.00°** |
+| pitch clamp | **±35.00°** |
+| units | radians, yaw sign inverted |
+| gain | 0.115 deg/count (yaw); pitch differs ~7x but the servo absorbs it |
+| servo | `Kp = 0.25`, `max_step = 12°` |
+
+Both clamps were previously **wrong in opposite directions**: yaw was 56.5,
+inferred by integrating image correlation in take 117, under-reading by 8.5 deg;
+pitch was an admitted 40 placeholder, over-reading by 5.
+
+## The two lessons this cost
+
+**Take 136 span the camera fast enough to be unreadable**, because I closed the
+loop with an implicit `Kp = 1.0` and no rate limit — the whole error applied
+every frame, re-applied before the camera had responded, bouncing off the clamp.
+Foreseeable from the shape of the code, not only in hindsight.
+
+**Take 135 nearly killed the route from its own first twenty lines**, which
+covered the still phase and read `0.000` — indistinguishable from a dead probe.
+The signal was in the excursion later in the run. Reading the head of a log is
+not reading the log.
+
+## Still open
+
+* **The HUD rotates with the world.** It is drawn into the eye image before we
+  touch the pose, so it inherits the rotation. Separate from #33 and unaddressed.
+* **Past the clamp the view goes black**, because we submit the pose X4 actually
+  rendered from and the head is then looking outside the picture. That is the
+  honest behaviour and the alternative — declaring a pose X4 did not render from
+  — makes the world swim. Extending the range means bypassing X4's clamp, and
+  there is no `SetCameraRotation`: the exported setters switch view *mode*
+  (cockpit/external/target/floating/cinematic), not orientation.
+* `X4VR_HEADLOOK_KEY` still needs the apostrophe knobs; the `INPUT_KEYCODE_F13`
+  default does not work and why was never settled.
+
 # State of #33 — head tracking works; written to survive a compaction
 
 **It works.** Head tracking drives X4's own camera from the headset, arms with

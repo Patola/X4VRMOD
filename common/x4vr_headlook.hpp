@@ -115,12 +115,19 @@ struct HeadLook {
     // every existing caller behaving as before.
     float gain_pitch_deg_per_count = 0.0f;
 
-    // Measured, take 117: yaw stops dead at +56.5 deg.
-    float yaw_limit_deg = 56.5f;
-    // NOT measured. Pitch sat at +19 deg for the whole of take 117 and was
-    // never walked to its limit, so this is deliberately conservative rather
-    // than a number pretending to be a measurement.
-    float pitch_limit_deg = 40.0f;
+    // **Both measured directly, from X4's own readback.** Take 136 drove the
+    // camera into its stops on both axes and GetCameraRotation reported exactly
+    // +-65.00 and +-35.00 -- round numbers, so these are X4's configured limits
+    // rather than an artefact.
+    //
+    // Both previous values were wrong, and in opposite directions. Yaw was
+    // 56.5, inferred in take 117 by integrating image correlation, which
+    // under-read it by 8.5 deg and cost that much range for nothing. Pitch was
+    // 40, an admitted placeholder, which over-read it by 5 and let the servo
+    // push against a wall. Direct measurement beat both, which is the argument
+    // for the readback in miniature.
+    float yaw_limit_deg = 65.0f;
+    float pitch_limit_deg = 35.0f;
 
     // Below this the head is holding still and commanding anything would just
     // inject tracker noise into the camera.
