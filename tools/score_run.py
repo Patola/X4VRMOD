@@ -931,10 +931,25 @@ def main(path):
     if not pose:
         print("pose  not reported — this build predates the instrument")
     else:
-        ident = [ln for ln in pose if "cam_valid=0" in ln]
+        # **Identity before head-look arms is correct, not a defect.** Take 150
+        # reported FAIL on a run whose pose was right the whole time it mattered:
+        # 15 identity samples, every one of them during loading and the menu,
+        # then 9 driven ones tracking Patola's chair exactly (42-45 deg on the
+        # first hold, 65.00 clamped on the second, -1.58 back at centre). The
+        # predicate asked whether a HUD line existed ANYWHERE in the log rather
+        # than whether THIS sample was during steering -- the third check in
+        # this file to grade by a condition it did not actually test.
+        #
+        # What matters is identity AFTER the pose has been driven once: that is
+        # the gate dropping out mid-run, which is the failure a player feels.
+        driven = [ln for ln in pose if "cam_valid=1" in ln]
+        first_driven = pose.index(driven[0]) if driven else len(pose)
+        ident = [ln for ln in pose[first_driven:] if "cam_valid=0" in ln]
+        pre = first_driven
         unlinked = [ln for ln in pose if "shared=0" in ln]
-        print(f"pose  {len(pose)} sample(s), {len(pose) - len(ident)} with a "
-              f"driven orientation, {len(ident)} identity")
+        print(f"pose  {len(pose)} sample(s), {len(driven)} driven, {pre} "
+              f"identity before head-look armed (expected), {len(ident)} "
+              f"identity after (not expected)")
         if unlinked:
             fails.append(
                 f"the layer could not reach the injector's shared state on "
@@ -942,13 +957,17 @@ def main(path):
                 f"those is submitted world-locked no matter what head-look "
                 f"does. Check x4vr_shared_state is exported and the injector "
                 f"actually loaded")
-        elif ident and any("HUD is now" in ln for ln in lines):
+        elif ident:
             fails.append(
-                f"{len(ident)} of {len(pose)} pose samples declared identity "
-                f"while head-look was running — the image is world-locked, so "
-                f"the HUD holds still in space and leaves the view as the head "
-                f"turns. cam_valid is 0: check that `steering` is reaching the "
-                f"layer, not just that X4's camera is moving")
+                f"the pose fell back to identity {len(ident)} time(s) AFTER it "
+                f"had been driven — the gate dropped out mid-run, so those "
+                f"frames were submitted world-locked while head-look was live. "
+                f"cam_valid went back to 0: check `steering`, not X4's camera")
+        elif not driven:
+            fails.append(
+                "the pose was never driven — every frame went to the runtime "
+                "world-locked. Either head-look never armed or `steering` never "
+                "reached the layer")
 
     # --- the map gate ------------------------------------------------------
     #
