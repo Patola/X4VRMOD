@@ -842,10 +842,23 @@ void note_extent(const char *what, float x, float y) {
 // comparison rather than by argument -- which is what should have happened
 // before the keycode was guessed at, and again before the scancode was.
 void note_key_event(const Sdl3KeyEvent *k, const char *via) {
-    static int seen = 0;
-    if (seen >= 40)
-        return;
-    seen++;
+    // Separate budgets. Take 122's cap was spent entirely on our own key
+    // repeating at ~2 Hz, so not one of Patola's real presses was logged and
+    // the comparison this exists for could not be made. An instrument that
+    // crowds out its own subject is the take-115 range ceiling again: a few of
+    // ours is proof it arrives, and the rest of the budget belongs to the keys
+    // being compared against.
+    const bool ours = (int)k->scancode == headlook_scancode();
+    static int seen_ours = 0, seen_other = 0;
+    if (ours) {
+        if (seen_ours >= 3)
+            return;
+        seen_ours++;
+    } else {
+        if (seen_other >= 40)
+            return;
+        seen_other++;
+    }
     X4VR_LOG("key[%s] type=0x%x scancode=%u keycode=0x%x mod=0x%x which=%u "
              "window=%u down=%d repeat=%d",
              via, k->type, k->scancode, k->key, k->mod, k->which, k->windowID,
