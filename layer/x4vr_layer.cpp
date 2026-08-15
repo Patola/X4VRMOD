@@ -7258,13 +7258,44 @@ void vr_thread() {
                 // Falls back to identity when nothing is driving, which is the
                 // stage9 behaviour and stays correct for a run without
                 // head-look.
+                // **This line had no instrument, and it is the most load-
+                // bearing one in the VR path.** Nothing in any log said whether
+                // shared_state() resolved, whether cam_valid was ever 1, or
+                // what orientation was declared -- so "the HUD swims against
+                // the head and leaves through the far side" had two mechanisms
+                // that fit it equally well and no way to choose:
+                //
+                //   identity   the image is world-locked, HUD offset == the
+                //              head angle, growing from zero
+                //   correct    HUD offset == (head - X4 camera), which take 149
+                //              measured as sub-degree below the clamp, so it
+                //              would only appear past +-65 deg
+                //
+                // Opposite fixes. Report the declared angles next to X4's own,
+                // at the same cadence as the rest of the periodic block, so the
+                // next run picks one from data instead of from a description.
                 float q[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-                if (const x4vr::Shared *sh = shared_state())
-                    if (sh->cam_valid.load(std::memory_order_relaxed))
-                        x4vr::quat_of_angles(
-                            sh->cam_yaw_deg.load(std::memory_order_relaxed),
-                            sh->cam_pitch_deg.load(std::memory_order_relaxed),
-                            q);
+                float decl_yaw = 0.0f, decl_pitch = 0.0f;
+                unsigned valid = 0, linked = 0;
+                if (const x4vr::Shared *sh = shared_state()) {
+                    linked = 1;
+                    valid = sh->cam_valid.load(std::memory_order_relaxed);
+                    if (valid) {
+                        decl_yaw = sh->cam_yaw_deg.load(std::memory_order_relaxed);
+                        decl_pitch =
+                            sh->cam_pitch_deg.load(std::memory_order_relaxed);
+                        x4vr::quat_of_angles(decl_yaw, decl_pitch, q);
+                    }
+                }
+                if (e == 0) {
+                    static uint64_t n = 0;
+                    if ((n++ % 600) == 0)
+                        X4VR_LOG("vr pose: shared=%u cam_valid=%u declared "
+                                 "yaw=%.2f pitch=%.2f deg%s",
+                                 linked, valid, decl_yaw, decl_pitch,
+                                 valid ? "" : "  <- IDENTITY, the image is "
+                                              "world-locked");
+                }
                 pv[e].pose.orientation.x = q[0];
                 pv[e].pose.orientation.y = q[1];
                 pv[e].pose.orientation.z = q[2];
