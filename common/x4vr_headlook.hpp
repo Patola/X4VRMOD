@@ -44,6 +44,10 @@ namespace x4vr {
 struct HeadAngles {
     float yaw_deg = 0.0f;   // + = turning left (right-handed, Y up)
     float pitch_deg = 0.0f; // + = looking up
+    // False when the head is looking near-vertically and yaw is a singularity.
+    // See head_angles(); the caller must hold its previous yaw rather than
+    // follow this one.
+    bool yaw_reliable = true;
 };
 
 // OpenXR poses are right-handed, Y up, -Z forward. Decompose the forward axis
@@ -59,6 +63,19 @@ inline HeadAngles head_angles(float qx, float qy, float qz, float qw) {
     a.yaw_deg = std::atan2(-fx, -fz) * 57.2957795130823f;
     const float s = fy < -1.0f ? -1.0f : (fy > 1.0f ? 1.0f : fy);
     a.pitch_deg = std::asin(s) * 57.2957795130823f;
+
+    // **Yaw is a singularity when the nose points at the ceiling.** Both fx and
+    // fz collapse to zero there, so atan2 returns whatever the noise in the
+    // tracker happens to be, swinging through the whole circle for a head that
+    // is barely moving.
+    //
+    // Take 128 found it the expensive way: Patola looked up at the roof, the
+    // garbage yaw drove the estimate somewhere arbitrary, and it STAYED there --
+    // he came back to level and the world was leaned down and to the left.
+    // Clamping the commanded angle does not help, because the corrupt value is
+    // inside the clamp.
+    const float horiz = std::sqrt(fx * fx + fz * fz);
+    a.yaw_reliable = horiz > 0.09f; // ~85 deg of pitch
     return a;
 }
 
@@ -132,7 +149,9 @@ inline Delta head_look_step(HeadLook &s, const HeadAngles &head) {
     if (!(s.gain_deg_per_count > 0.0f))
         return d; // uncalibrated: send nothing rather than something arbitrary
 
-    const float want_yaw = clampf(head.yaw_deg, -s.yaw_limit_deg, s.yaw_limit_deg);
+    const float want_yaw =
+        head.yaw_reliable ? clampf(head.yaw_deg, -s.yaw_limit_deg, s.yaw_limit_deg)
+                          : s.cmd_yaw_deg;
     const float want_pitch =
         clampf(head.pitch_deg, -s.pitch_limit_deg, s.pitch_limit_deg);
     d.clamped = want_yaw != head.yaw_deg || want_pitch != head.pitch_deg;
@@ -140,7 +159,9 @@ inline Delta head_look_step(HeadLook &s, const HeadAngles &head) {
     const float err_yaw = want_yaw - s.cmd_yaw_deg;
     const float err_pitch = want_pitch - s.cmd_pitch_deg;
 
-    if (std::fabs(err_yaw) >= s.dead_zone_deg)
+    // A head looking straight up has no meaningful yaw, so hold the last one
+    // rather than chase a number that is pure noise.
+    if (head.yaw_reliable && std::fabs(err_yaw) >= s.dead_zone_deg)
         d.dx = (int)std::lround(s.sign_yaw * err_yaw / s.gain_deg_per_count);
     if (std::fabs(err_pitch) >= s.dead_zone_deg)
         d.dy = (int)std::lround(s.sign_pitch * err_pitch / s.gain_deg_per_count);

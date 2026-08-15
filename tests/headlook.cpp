@@ -86,6 +86,37 @@ int main() {
         printf("      worst round-trip error %.2e deg\n", worst);
     }
 
+    // ---- the ceiling singularity
+    //
+    // Take 128: looking at the roof made yaw garbage, the estimate followed it,
+    // and it stayed wrong after the head came back level -- the world leaned.
+    {
+        // Straight up: forward is (0, 1, 0), so yaw is undefined.
+        float q[4];
+        x4vr::quat_of_angles(0.0f, 89.9f, q);
+        const x4vr::HeadAngles up = x4vr::head_angles(q[0], q[1], q[2], q[3]);
+        check(!up.yaw_reliable, "yaw is flagged unreliable near the ceiling");
+
+        x4vr::HeadLook s;
+        for (int i = 0; i < 20; i++)
+            x4vr::head_look_step(s, {40.0f, 0.0f});
+        const float parked = s.cmd_yaw_deg;
+        check(near(parked, 40.0f, 0.05f), "parked at 40 deg of yaw");
+
+        // Now look up, with a yaw that swings wildly as the tracker noises.
+        for (int i = 0; i < 50; i++) {
+            x4vr::HeadAngles bad{(i % 2) ? 170.0f : -170.0f, 89.9f, false};
+            x4vr::head_look_step(s, bad);
+        }
+        check(near(s.cmd_yaw_deg, parked, 0.05f),
+              "a wildly swinging unreliable yaw does not move the estimate");
+        check(s.cmd_pitch_deg > 0.0f, "but pitch still follows the head up");
+
+        // And a level head is trusted again.
+        const x4vr::Delta d = x4vr::head_look_step(s, {0.0f, 0.0f});
+        check(d.dx != 0, "yaw is commanded again once the head is level");
+    }
+
     // ---- an uncalibrated gain sends nothing, rather than something arbitrary
     {
         x4vr::HeadLook s;
