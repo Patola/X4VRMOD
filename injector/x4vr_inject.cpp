@@ -464,6 +464,9 @@ struct Sdl3KeyEvent {
     bool repeat;        // 37
 };
 enum { SDL_EV_KEY_DOWN = 0x300, SDL_EV_KEY_UP = 0x301 };
+// "X4VR" little-endian, stamped into the unused `reserved` field of every event
+// we synthesise so the log can separate ours from the player's.
+constexpr uint32_t kOurEventMagic = 0x52565834u;
 
 // A genuine motion event's windowID/which, copied so ours are indistinguishable
 // from X4's own. Guessing zero would be a plausible-looking value X4 may filter
@@ -471,6 +474,8 @@ enum { SDL_EV_KEY_DOWN = 0x300, SDL_EV_KEY_UP = 0x301 };
 std::atomic<uint32_t> g_motion_window{0};
 std::atomic<uint32_t> g_motion_which{0};
 std::atomic<uint32_t> g_motion_seen{0};
+// Set on the first SDL_PumpEvents from X4; see the interposer.
+std::atomic<bool> g_pump_seen{false};
 
 
 // Observation only. Enough samples to establish the coordinate space and
@@ -851,8 +856,7 @@ void note_key_event(const Sdl3KeyEvent *k, const char *via, int action) {
     // Ours and a REAL press of the same key are indistinguishable by
     // scancode, so the budget is split by timestamp instead: SDL stamps a
     // genuine event, and ours goes in as zero unless SDL fills it.
-    const bool ours = (int)k->scancode == headlook_scancode() &&
-                      k->timestamp == 0;
+    const bool ours = k->reserved == kOurEventMagic;
     static int seen_ours = 0, seen_other = 0;
     if (ours) {
         if (seen_ours >= 3)
@@ -868,11 +872,12 @@ void note_key_event(const Sdl3KeyEvent *k, const char *via, int action) {
     // one even when every other field matches, and X4 may treat it as stale;
     // action distinguishes a peek (1) from a consuming get (2), and a binding
     // that only fires on the latter would look exactly like this.
-    X4VR_LOG("key[%s] type=0x%x scancode=%u keycode=0x%x mod=0x%x which=%u "
+    X4VR_LOG("key[%s%s] type=0x%x scancode=%u keycode=0x%x mod=0x%x which=%u "
              "window=%u down=%d repeat=%d ts=%llu action=%d",
-             via, k->type, k->scancode, k->key, k->mod, k->which, k->windowID,
+             via, ours ? ":OURS" : "", k->type, k->scancode, k->key, k->mod, k->which, k->windowID,
              (int)k->down, (int)k->repeat, (unsigned long long)k->timestamp,
              action);
+    (void)ours;
 }
 
 void note_mouse_event(const Sdl3MouseEvent *e) {
@@ -1114,6 +1119,11 @@ void send_key(int scancode, bool down) {
     k->scancode = (uint32_t)scancode;
     k->key = keycode_of(scancode);
     k->down = down;
+    // Our own marker. `reserved` is untouched by SDL and by X4, and take 124
+    // showed the alternatives do not work: scancode is shared with a real press
+    // of the same key, and SDL fills in a zero timestamp on push, so both
+    // discriminators the log has used so far were wrong.
+    k->reserved = kOurEventMagic;
     const int r = push(ev);
     static bool said = false;
     if (!said) {
@@ -1200,6 +1210,22 @@ int SDL_GetWindowSizeInPixels(void *win, int *w, int *h) {
 
 // SDL3 returns `bool` from these, not int. The low byte is what matters either
 // way, but declaring it correctly costs nothing.
+// X4 imports this; whether it CALLS it is the question take 118 taught me not
+// to assume, so the first call is logged and the SDL_PeepEvents path stays as a
+// fallback until one arrives. Pumping happens before the drain, so events
+// pushed here are already queued when X4 starts reading and the drain
+// terminates normally.
+void SDL_PumpEvents(void) {
+    static auto real_fn = real<void (*)()>("SDL_PumpEvents");
+    if (this_is_the_game()) {
+        if (!g_pump_seen.exchange(true, std::memory_order_relaxed))
+            X4VR_LOG("sdl: SDL_PumpEvents is called — head-look drives from "
+                     "here, not from inside the drain");
+        headlook_tick();
+    }
+    real_fn();
+}
+
 bool SDL_WaitEvent(void *event) {
     static auto real_fn = real<bool (*)(void *)>("SDL_WaitEvent");
     const bool r = real_fn(event);
@@ -1234,7 +1260,13 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
     // showed X4 imports that and never calls it, while this drain runs every
     // input poll. Outside the `n > 0` test on purpose -- head-look must keep
     // running through frames where the queue happens to be empty.
-    if (this_is_the_game())
+    // Only if X4 never calls SDL_PumpEvents. Pushing an event from inside the
+    // drain is what made take 124 lag: X4 loops on SDL_PeepEvents until it
+    // returns nothing, and an event pushed during that loop keeps handing it
+    // more work, so the queue never empties and input arrives minutes late --
+    // which is exactly what "it took some time to activate and kept applying
+    // after I released" describes.
+    if (this_is_the_game() && !g_pump_seen.load(std::memory_order_relaxed))
         headlook_tick();
     const bool consuming = action == 2;
     if (n > 0 && events && this_is_the_game()) {
