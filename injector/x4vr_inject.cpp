@@ -928,6 +928,7 @@ void note_mouse_event(const Sdl3MouseEvent *e) {
 // tick is what drives it and reads better next to the arithmetic.
 void send_mouse_delta(int dx, int dy);
 void send_key_down(int scancode);
+void send_key(int scancode, bool down);
 
 void headlook_tick() {
     static const bool armed = [] {
@@ -955,7 +956,8 @@ void headlook_tick() {
     float yaw = 0.0f, pitch = 0.0f;
     uint64_t updates = 0;
     if (!x4vr::head_share_read(hs, &yaw, &pitch, &updates)) {
-        g_headlook_active.store(false, std::memory_order_relaxed);
+        if (g_headlook_active.exchange(false, std::memory_order_relaxed))
+            send_key(headlook_scancode(), false);
         return;
     }
     // **Once per published pose, not once per call.** Take 119 flooded SDL's
@@ -979,7 +981,8 @@ void headlook_tick() {
     stale = fresh ? 0 : stale + 1;
     last_updates = updates;
     if (stale > 5000) {
-        g_headlook_active.store(false, std::memory_order_relaxed);
+        if (g_headlook_active.exchange(false, std::memory_order_relaxed))
+            send_key(headlook_scancode(), false);
         return;
     }
     g_headlook_active.store(true, std::memory_order_relaxed);
@@ -1032,7 +1035,33 @@ void headlook_tick() {
 // held state from the event stream, so one down latches it; re-sending is
 // harmless (it looks like key repeat) and is what makes the hold self-healing
 // across the save-load desync that ruled out toggle="1".
-void send_key_down(int scancode) {
+//
+// **The `key` field is why take 120 did nothing.** It was left zero, and X4
+// works in *keycodes*, not scancodes -- it imports SDL_GetKeyFromScancode and
+// SDL_GetKeyName, which is the tell. A zero keycode is a lookup for a binding
+// that does not exist, so the event arrived, was well-formed, and meant
+// nothing. Relative mouse mode never turned on in take 120 and, on a second
+// reading, probably never did in 119 either: forty short on/off pairs look like
+// menu activity, not the single 66-second window a real key press produced in
+// take 117.
+//
+// Resolved through SDL rather than hardcoded. SDLK_F13 is 0x40000068 and the
+// rule is plainly SDLK_SCANCODE_MASK | scancode, but X4 imports
+// SDL_GetKeyFromScancode so it is there to be called, it respects the keyboard
+// layout, and a constant here would be a fourth positional assumption to
+// maintain.
+uint32_t keycode_of(int scancode) {
+    static auto from_sc =
+        real<uint32_t (*)(uint32_t, uint16_t, bool)>("SDL_GetKeyFromScancode");
+    if (from_sc) {
+        const uint32_t k = from_sc((uint32_t)scancode, 0, false);
+        if (k)
+            return k;
+    }
+    return 0x40000000u | (uint32_t)scancode; // SDLK_SCANCODE_MASK
+}
+
+void send_key(int scancode, bool down) {
     if (!g_motion_seen.load(std::memory_order_relaxed))
         return;
     static auto push = real<int (*)(void *)>("SDL_PushEvent");
@@ -1040,12 +1069,21 @@ void send_key_down(int scancode) {
         return;
     unsigned char ev[128] = {};
     auto *k = (Sdl3KeyEvent *)ev;
-    k->type = SDL_EV_KEY_DOWN;
+    k->type = down ? SDL_EV_KEY_DOWN : SDL_EV_KEY_UP;
     k->windowID = g_motion_window.load(std::memory_order_relaxed);
     k->scancode = (uint32_t)scancode;
-    k->down = true;
+    k->key = keycode_of(scancode);
+    k->down = down;
+    static bool said = false;
+    if (!said) {
+        said = true;
+        X4VR_LOG("headlook: holding scancode %d as keycode 0x%x", scancode,
+                 k->key);
+    }
     push(ev);
 }
+
+void send_key_down(int scancode) { send_key(scancode, true); }
 
 void send_mouse_delta(int dx, int dy) {
     if ((dx == 0 && dy == 0) || !g_motion_seen.load(std::memory_order_relaxed))
