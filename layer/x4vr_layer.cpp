@@ -1833,6 +1833,12 @@ const bool g_shear_nodepth = [] {
     return e && *e && *e != '0';
 }();
 
+// Shear the all-LDR/UI passes too. A probe -- see where it is read below.
+const bool g_shear_ui = [] {
+    const char *e = getenv("X4VR_SHEAR_UI");
+    return e && *e && *e != '0';
+}();
+
 // Classify each subpass as "must not be sheared":
 //   * no colour attachments        -> shadow cascade (light space)
 //   * no depth attachment          -> fullscreen post pass (screen space)
@@ -1880,6 +1886,26 @@ std::vector<bool> classify_unsheared(const CreateInfo *ci) {
             any = true;
             if (!is_ldr_format(ci->pAttachments[a].format))
                 all_ldr = false;
+        }
+        // **Elimination probe for the cockpit HUD, not a shipping mode.**
+        // Every HUD element measures ZERO disparity against -20 to -36 px on
+        // the world beside it (takes 151A/151B), so X4's cockpit panels are
+        // being drawn at infinity when they sit about a metre away. They reach
+        // this rule the same way the message box does -- one all-LDR pass draws
+        // both -- so no pass-level predicate can separate them, which is the
+        // hull-versus-menu-quad shape again.
+        //
+        // This knob shears that pass anyway. It is expected to be WRONG for
+        // half of what it touches: the menus and the message box are screen
+        // space and will shear when they should not, and because X4 hit-tests
+        // its UI on the CPU in unshifted screen space, clicking will not line
+        // up while it is on. That is acceptable for one look and unacceptable
+        // to ship. What it answers is which elements snap back onto the
+        // cockpit -- the set that wants the world treatment, and therefore what
+        // a late-selected variant has to key on.
+        if (g_shear_ui && any && all_ldr) {
+            unsheared[i] = false;
+            continue;
         }
         unsheared[i] = any && all_ldr;
     }
