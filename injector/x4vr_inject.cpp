@@ -1389,9 +1389,27 @@ void headlook_tick() {
     // So while not steering, re-assert as up-then-down to manufacture a fresh
     // edge each cycle; once steering, send only downs, because an up would
     // release the very state we are holding.
+    // The direct question first, the heuristic only as a backstop.
+    const bool cockpit = x4_cockpit_view();
+    static bool was_cockpit = true;
+    if (cockpit != was_cockpit) {
+        was_cockpit = cockpit;
+        X4VR_LOG("headlook: view is now %s",
+                 cockpit ? "the cockpit — steering" : "external/floating — idle");
+        if (!cockpit)
+            send_key(headlook_scancode(), false); // hand the mouse back
+    }
+
     const bool armed_now = g_relative_mouse.load(std::memory_order_relaxed);
+    //
+    // **Only in the cockpit.** Re-asserting while the map is up made the view
+    // state flap: ~300 ms idle, then ~10 ms of "cockpit" as our key briefly put
+    // X4 back into mouselook, and one steered frame per cycle, which Patola felt
+    // as the map jolting every couple of seconds while dragging. The period was
+    // exactly this re-assert. Pressing a free-look key when we know free-look is
+    // not what is on screen was never right.
     static uint64_t poses = 0;
-    if ((poses++ % 32) == 0) {
+    if (cockpit && (poses++ % 32) == 0) {
         if (!armed_now)
             send_key(headlook_scancode(), false);
         send_key_down(headlook_scancode());
@@ -1435,16 +1453,6 @@ void headlook_tick() {
         X4VR_LOG("headlook: NOTE commanded with little camera response — "
                  "reported only, not acted on");
 
-    // The direct question first, the heuristic only as a backstop.
-    const bool cockpit = x4_cockpit_view();
-    static bool was_cockpit = true;
-    if (cockpit != was_cockpit) {
-        was_cockpit = cockpit;
-        X4VR_LOG("headlook: view is now %s",
-                 cockpit ? "the cockpit — steering" : "external/floating — idle");
-        if (!cockpit)
-            send_key(headlook_scancode(), false); // hand the mouse back
-    }
     const bool steering =
         g_relative_mouse.load(std::memory_order_relaxed) && cockpit;
     g_headlook_steering.store(steering, std::memory_order_relaxed);
