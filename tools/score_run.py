@@ -928,82 +928,73 @@ def main(path):
     # which pauses; the map produced neither, and we drove mouse deltas into it
     # for 9.2 seconds. A count cannot tell you which event it counted.
     #
-    # So this locates the map episodes by X4's own M key and asks whether we let
-    # go inside each one. And when there is no M press at all it says so rather
-    # than staying silent, because a check nobody exercised reporting nothing is
-    # exactly how the last one passed.
+    # **The M key says the map was exercised. It does not say when it closed.**
+    # Take 148 worked perfectly in the headset and this check failed it. The
+    # episodes were built by pairing M presses, on the assumption that M toggles
+    # the map -- but the log holds THREE M presses, an odd number, because that
+    # map was closed with ESC or a click. So the last episode ran to infinity
+    # and swallowed the perfectly correct resume 220 ms after the map closed.
+    #
+    # X4's own state was in the log the whole time. The HUD down->up interval is
+    # when X4 says the HUD was gone; that is the period we must not be steering,
+    # measured by the game rather than inferred from what the player pressed.
+    # The M key keeps exactly one job it is good at -- proving the map was
+    # opened at all, independently of our own code, so a build whose gate never
+    # fires cannot pass by staying silent.
     def ts(ln):
         m = re.match(r"\[\s*([0-9.]+)\]", ln)
         return float(m.group(1)) if m else None
 
-    m_down = [ts(ln) for ln in lines
-              if "key[peep]" in ln and "type=0x300" in ln and "scancode=16 " in ln]
-    m_down = [t for t in m_down if t is not None]
+    def stamps(pred):
+        return [t for t in (ts(ln) for ln in lines if pred(ln)) if t is not None]
+
+    m_down = stamps(lambda ln: "key[peep]" in ln and "type=0x300" in ln
+                    and "scancode=16 " in ln)
+    hud_down = stamps(lambda ln: "HUD is now down" in ln)
+    hud_up = stamps(lambda ln: "HUD is now up" in ln)
+    rel_on = stamps(lambda ln: "relative mouse mode ON" in ln)
+    end_of_log = max(stamps(lambda ln: True) or [float("inf")])
+
     if not m_down:
         print("map   NOT EXERCISED — no M press in this log, so this run says "
               "nothing about whether the map gate holds")
+    elif not hud_down:
+        print(f"map   {len(m_down)} M press(es), 0 HUD gate releases")
+        fails.append(
+            f"the map was opened {len(m_down)} time(s) and the HUD gate never "
+            f"released (first M at t={m_down[0]:.3f}) — we kept steering into "
+            f"it. Check that 'camread: IsHUDActive' resolved, and read the "
+            f"IsInPanelMode value logged beside it")
     else:
-        hud_down = [ts(ln) for ln in lines if "HUD is now down" in ln]
-        hud_up = [ts(ln) for ln in lines if "HUD is now up" in ln]
-        hud_down = [t for t in hud_down if t is not None]
-        hud_up = [t for t in hud_up if t is not None]
-        # Taps toggle: 1st opens, 2nd closes. An odd count means it was still
-        # open when the log ended, which is a legitimate episode too.
-        episodes = []
-        for i in range(0, len(m_down), 2):
-            end = m_down[i + 1] if i + 1 < len(m_down) else float("inf")
-            episodes.append((m_down[i], end))
-        missed = [(a, b) for a, b in episodes
-                  if not any(a <= t <= b for t in hud_down)]
-        # **Releasing once is not the property.** Take 147 released on all three
-        # episodes, re-acquired on all three, and PASSED this check while the
-        # map was unusable: we pressed the key straight back on 485 ms later and
-        # X4 spent 23 s in mouselook with the map up. "Did we let go" was the
-        # wrong question -- take 146's mistake one level up.
-        #
-        # What a healthy run reads, stated before trusting the number: for every
-        # map episode, X4 enters relative mouse mode ZERO times between the
-        # release and the map closing. Mouselook is not a proxy for the defect,
-        # it IS the defect -- it is what makes the mouse rotate the view instead
-        # of driving the cursor, which is why the map cannot be dragged.
-        rel_on = [ts(ln) for ln in lines if "relative mouse mode ON" in ln]
-        rel_on = [t for t in rel_on if t is not None]
-        relapsed = []
-        for a, b in episodes:
-            rel = next((t for t in hud_down if a <= t <= b), None)
-            if rel is None:
-                continue
-            back = [t for t in rel_on if rel < t < b]
-            if back:
-                relapsed.append((a, back[0], len(back)))
-        print(f"map   {len(episodes)} episode(s), "
-              f"{len(episodes) - len(missed)} with the HUD gate releasing "
-              f"({len(hud_up)} re-acquire(s) after), "
-              f"{len(episodes) - len(missed) - len(relapsed)} that stayed out "
-              f"of mouselook for the whole episode")
+        # Each HUD-down opens an interval that its next HUD-up closes; one still
+        # open at the end of the log is a real interval too (X4 was quitting).
+        intervals = [(d, next((u for u in hud_up if u > d), end_of_log))
+                     for d in hud_down]
+        # **What a healthy run reads, stated before trusting the number:** X4
+        # enters relative mouse mode ZERO times strictly inside a HUD-down
+        # interval. Mouselook is not a proxy for the defect, it IS the defect --
+        # it is what makes the mouse rotate the view instead of driving the
+        # cursor, which is why the map could not be dragged in take 147.
+        relapsed = [(a, [t for t in rel_on if a < t < b]) for a, b in intervals]
+        relapsed = [(a, hits) for a, hits in relapsed if hits]
+        print(f"map   {len(m_down)} M press(es), {len(intervals)} HUD-down "
+              f"interval(s), {len(intervals) - len(relapsed)} of them free of "
+              f"mouselook ({len(hud_up)} re-acquire(s) after)")
         if relapsed:
-            a, t, n = relapsed[0]
+            a, hits = relapsed[0]
             fails.append(
-                f"the map re-entered mouselook on {len(relapsed)} episode(s) "
-                f"after we had released — first map opened t={a:.3f}, back in "
-                f"mouselook t={t:.3f} ({t - a:.3f}s later, {n} time(s) that "
-                f"episode). The mouse rotates the view instead of driving the "
-                f"cursor, so the map cannot be dragged. Either something still "
-                f"presses the free-look key while may_steer is false, or X4 "
-                f"itself uses relative mode for map dragging — the key[peep] "
-                f"lines say which")
-        if missed:
-            fails.append(
-                f"the map was open {len(missed)} time(s) with no 'HUD is now "
-                f"down' inside it — we kept steering into it "
-                f"(first at t={missed[0][0]:.3f}). IsHUDActive did not see the "
-                f"map; check the 'camread: IsHUDActive' line resolved, and the "
-                f"IsInPanelMode value logged beside it")
+                f"X4 re-entered mouselook inside {len(relapsed)} HUD-down "
+                f"interval(s) — first HUD down t={a:.3f}, back in mouselook "
+                f"t={hits[0]:.3f} ({hits[0] - a:.3f}s later, {len(hits)} "
+                f"time(s) in that interval). The mouse rotates the view instead "
+                f"of driving the cursor, so the map cannot be dragged. Either "
+                f"something presses the free-look key while may_steer is false, "
+                f"or X4 itself uses relative mode for map dragging")
         elif not hud_up:
             fails.append(
-                "the HUD gate released on every map episode but never "
-                "re-acquired — head tracking would stay dead after the first "
-                "map, which is worse than the bug it fixes")
+                "the HUD gate released and never re-acquired — head tracking "
+                "would stay dead after the first map, which is worse than the "
+                "bug it fixes")
 
     print()
     if fails:
