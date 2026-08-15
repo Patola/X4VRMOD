@@ -680,3 +680,67 @@ the open questions are real: whether `/dev/uinput` is writable here, whether X4
 hot-detects a device that appears after launch, whether the steering ranges are
 relative or absolute, and whether the aiming cursor is a separate problem from
 steering. Those are worth answering before any of it is built.
+
+## The Lua route is closed for the camera, and it was never needed
+
+X4's UI Lua was the last unexplored channel, so it was checked before any of the
+virtual-device work above. It cannot rotate the camera, and the reason is worth
+stating precisely because "Lua modding" sounds like a wider surface than it is.
+
+X4's UI Lua does not talk to the engine through some private scripting bridge.
+It declares a LuaJIT FFI block and calls **exported C functions of the `X4`
+binary** — the same symbols the injector already reaches with `dlsym`. The cdef
+block is therefore a *prototype table for functions we can already call*, not a
+capability we lack. That is the whole reason for this project's rule that a cdef
+must be read before a call: the cdef supplies the signature, the disassembly
+supplies the preconditions, and the call itself has never needed Lua.
+
+The declarations are recoverable without running the game — they sit as plain
+text in `08.dat`:
+
+```
+strings -n 4 08.dat |
+  grep -E "^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]*]+[A-Za-z_][A-Za-z0-9_]*\(.*\);[[:space:]]*$"
+```
+
+That yields **1931 declarations**. Exactly one of them names camera rotation:
+
+```
+Rotation GetCameraRotation();
+```
+
+A getter. There is no setter — not in the cdefs, and not in the export table
+either, where a sweep for `Set*Rotation` / `Rotate*` returns only `SetAutoRoll`
+and the `SetMouseVRSensitivity{Pitch,Yaw}` residue. The camera setters that do
+exist change the view *mode* or a base position, never an angle:
+`SetPlayerCameraCockpitView(bool)`, `SetPlayerCameraTargetView`,
+`SetPlayerCameraCinematicView`, `SetFollowCameraBasePos(Coord3D)`,
+`SetCockpitCameraScaleOption(float)`, `SetSceneCameraActive(bool)`.
+
+**Conclusion: X4 exposes its camera orientation read-only, at every level.**
+Exports and FFI agree. No script, in any language, can set the free-look angle;
+the input system is the only way to move that camera, which is why every route so
+far has run through it and hit `MOUSELOOK`.
+
+Two corollaries worth keeping:
+
+* The savegame question is **moot, not answered**. Whether Lua can be injected
+  without setting `modified="1"` never has to be resolved, because there is
+  nothing in Lua worth injecting — anything Lua could call, the injector already
+  calls directly, touching no game file and loading no script. Do not spend a
+  take establishing the flag's behaviour for a route with no payload.
+* `SetMouseSteeringPersistent`, `SetMouseSteeringAdapative`,
+  `SetMouseSteeringLine` and `SetForceShootingAtCursorOption` look like runtime
+  overrides that might dissolve the mouselook/steering exclusivity. They are
+  not: X4's own Lua calls each of them from a `callbackInputMouseSteering*`
+  handler in the Controls menu, and the state surfaces to MD as
+  `player.input.mousesteering.permanent`. They are the settings toggles the
+  player already has, reachable from code. They do not change what holding
+  `MOUSELOOK` does.
+
+(Wrong turn, recorded: the first extraction pass filtered declarations by a fixed
+list of primitive return types and reported "no camera rotation entry at all" —
+it had dropped `Rotation GetCameraRotation();` because `Rotation` was not in the
+list. The filter's own output contained the tell, since a function known to be
+callable was missing from it. Same class as the off-axis test card: the
+instrument assumed the shape of what it was measuring.)
