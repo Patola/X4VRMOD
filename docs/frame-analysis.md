@@ -15486,3 +15486,55 @@ first. (The Monado *builds* under `envision/` are stale — 11 unresolved
 `DT_NEEDED` each — so there is no local runtime to test against without the
 headset; rebuilding with `-DXRT_BUILD_DRIVER_REALSENSE=OFF -DXRT_HAVE_OPENCV=OFF`
 is the cheap way to get one if offline iteration ever becomes the bottleneck.)
+
+## The cockpit HUD is drawn at infinity — measured, takes 151A/151B
+
+Patola, after 2000+ h in the game and a vanilla run to compare against: the HUD
+panels *"started moving to the sides more than the cockpit view, they shift even
+in comparison to their position relating to the cockpit. It is not an expected
+behavior by any standard."* Vanilla keeps them fixed in their cockpit reference.
+
+Measured from two SBS captures (his screenshots, `/tmp` only — X4's rendered
+output is never committed), by cross-correlating each feature between the two
+eye halves:
+
+    reticle / radar / speed arc / icon panel / message box    +1 px   (corr 0.85-1.00)
+    white hull                                               -20 px   (corr 0.954)
+    canopy strut                                             -31 px   (corr 0.959)
+    console hologram                                         -36 px
+
+The +1 is a uniform offset across every feature, so the HUD's disparity is
+**zero** while the world around it carries -20 to -36 px. Zero disparity is
+infinity. The cockpit HUD panels are about a metre from the eye and we draw them
+infinitely far away.
+
+That is exactly what the layer says it is doing. Every UI module is classified
+`nonworld` and gets no per-eye transform at all:
+
+    patched vertex shader #350 (world, per-view) [world=300 nonworld=50 stereo=300 live-sx=288 mvp-sx=12 baked-sx=0]
+
+The exclusion is *correct* for screen-space UI -- the message box and the menus
+must not shear, both for appearance and because X4 hit-tests on the CPU in
+unshifted screen space. It is wrong for the cockpit panels, and X4 draws both
+through the same modules. Same shape as the hull-versus-menu-quad case: the
+classification is too coarse, so the answer is a late-selected variant rather
+than a third category.
+
+**Why the error grows with view angle**, which is what made this hard to place:
+rotation is depth-independent, so a depth error cannot produce an angle-dependent
+offset on its own. But X4's cockpit free-look rotates about a **neck pivot, not
+the eye point**, and that pivot contributes translation -- which *is* depth
+dependent. A panel wrongly placed at infinity therefore separates from its
+cockpit anchor progressively as the view swings off-axis. Constant depth error,
+growing positional error.
+
+**Two wrong turns this cost, both recorded rather than removed.** First I read
+the symptom as the +-65 deg clamp or an identity pose, and built an instrument
+for the submission site to tell them apart; the instrument was worth having --
+that line had none -- but neither hypothesis was the cause. Then I proposed that
+we were faithfully reproducing X4 and the HUD was a VR feature request; Patola's
+vanilla run refuted it in two minutes. The measurement that settled it needed no
+run at all, only the two screenshots already taken.
+
+**X4VR_FOV is eliminated.** 151A (fov 1.4917) and 151B (X4's own) both overshoot,
+so the field override is not involved.
