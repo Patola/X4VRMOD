@@ -113,7 +113,12 @@ API — reconnaissance for reading X4's camera back instead of driving it blind)
 `X4VR_HEADLOOK=1` (serve X4's `inputmap.xml` from a fork with free-look rebound
 onto a key of our own, so the head can drive it without spending shift and the
 middle mouse button; `X4VR_HEADLOOK_KEY=<INPUT_KEYCODE_…>` picks the key,
-default `INPUT_KEYCODE_F13` — X4 knows F13-F15 and no keyboard can emit them),
+default `INPUT_KEYCODE_F13`, which works — X4 knows F13-F15 and no keyboard can
+emit them, so the mod steals no usable key; `X4VR_HEADLOOK_RAW=191` supplies its
+X11 keycode, which is the evdev code plus 8),
+`X4VR_CAMREAD=1` (read X4's own camera back through its exported
+`GetCameraRotation`) and `X4VR_CAMLOOP=1` (let that reading *drive* the servo
+rather than only be reported — this is what makes head tracking track),
 `X4VR_PROJ_MVP=0` (turn *off* the per-draw `sx` recovery for the World shaders
 that declare no camera block — on by default since takes 109/110; with it off
 they shear by a constant that is only right at one zoom level),

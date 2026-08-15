@@ -479,6 +479,9 @@ std::atomic<uint32_t> g_motion_which{0};
 std::atomic<uint32_t> g_motion_seen{0};
 // Set on the first SDL_PumpEvents from X4; see the interposer.
 std::atomic<bool> g_pump_seen{false};
+// True while head-look is actually driving X4's camera; read by the event
+// drain to decide whether the player's own mouse motion should reach the view.
+std::atomic<bool> g_headlook_steering{false};
 // Take 126 measured raw=48 for the apostrophe: on Linux this is the X11
 // keycode, which is the evdev code plus 8. Settable so a run can test whether
 // our key activates free-look with no real press to seed it -- the one thing
@@ -1274,6 +1277,36 @@ void headlook_tick() {
     if (!fresh)
         return; // nothing new to act on; acting anyway is what take 119 did
 
+    // Observed BEFORE the step, so the servo acts on this frame's reading.
+    // It used to run after, which cost a frame of lag for no reason.
+    X4Rotation r{};
+    const bool have_cam = camread_enabled() && x4_camera_rotation(&r);
+    if (have_cam && g_camloop) {
+        x4vr::head_look_observe(g_headlook, kRad2Deg * -r.yaw, kRad2Deg * r.pitch);
+    }
+
+    // **Never keep pushing a camera that does not answer.**
+    //
+    // Opening the map made the view rotate, slowly at first and then faster and
+    // faster. GetCameraRotation reports 0.00,0.00 outside the cockpit -- the
+    // menus in take 137 show it -- so the servo saw a constant error, commanded
+    // a correction every frame forever, and whatever DOES consume mouse deltas
+    // in the map accelerated away. A servo with no feedback on the thing it is
+    // actually moving is an accelerator, and it is not enough that the number we
+    // read is a camera; it has to be the camera we are driving.
+    //
+    // So: if we command real deltas and the observation does not move, stop
+    // commanding. Resume when the observation changes on its own, which is the
+    // signal that a live context has come back -- probing for it by sending
+    // deltas would be the same mistake in miniature.
+    static float last_obs_yaw = 0.0f, last_obs_pitch = 0.0f;
+    static int stall = 0;
+    static bool stalled = false;
+    const float obs_moved = std::fabs(kRad2Deg * -r.yaw - last_obs_yaw) +
+                            std::fabs(kRad2Deg * r.pitch - last_obs_pitch);
+    last_obs_yaw = kRad2Deg * -r.yaw;
+    last_obs_pitch = kRad2Deg * r.pitch;
+
     const x4vr::Delta d = x4vr::head_look_step(g_headlook, {yaw, pitch});
 
     // Reported whether or not anything is sent yet, because this line is how
@@ -1317,7 +1350,27 @@ void headlook_tick() {
     // g_relative_mouse is the signal, and it costs nothing: X4 turns relative
     // mode on for mouselook and off for anything with a pointer, and the cursor
     // shim has tracked it since #19.
-    const bool steering = g_relative_mouse.load(std::memory_order_relaxed);
+    const bool commanding = (d.dx != 0 || d.dy != 0);
+    if (stalled) {
+        if (obs_moved > 0.05f) { // it answered on its own: a live context
+            stalled = false;
+            stall = 0;
+            X4VR_LOG("headlook: camera responding again — steering resumed");
+        }
+    } else if (commanding && obs_moved < 0.01f) {
+        if (++stall > 60) {
+            stalled = true;
+            X4VR_LOG("headlook: commanded %d frames with no camera response — "
+                     "steering stood down (map or menu?)",
+                     stall);
+        }
+    } else {
+        stall = 0;
+    }
+
+    const bool steering =
+        g_relative_mouse.load(std::memory_order_relaxed) && !stalled;
+    g_headlook_steering.store(steering, std::memory_order_relaxed);
     if (steering)
         send_mouse_delta(d.dx, d.dy);
 
@@ -1355,11 +1408,6 @@ void headlook_tick() {
     // there is no windup to discharge as a jolt. And a recentre on a seat change
     // or save load fixes itself on the next frame instead of leaving a permanent
     // offset nothing could detect.
-    X4Rotation r{};
-    const bool have_cam = camread_enabled() && x4_camera_rotation(&r);
-    if (have_cam && g_camloop) {
-        x4vr::head_look_observe(g_headlook, kRad2Deg * -r.yaw, kRad2Deg * r.pitch);
-    }
     if (have_cam) {
         static uint64_t rn = 0;
         if ((rn++ % 30) == 0)
@@ -1622,6 +1670,22 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
                 note_mouse_event(e);
                 if (consuming)
                     e->x = fold_x(e->x);
+                // While head-look is steering, X4 is in mouselook and reads
+                // every motion event as LOOK. So the player's own mouse fought
+                // the head: Patola saw the view jitter toward the mouse and get
+                // dragged back by the servo. The pointer must drive the cursor
+                // and nothing else.
+                //
+                // Only the RELATIVE fields are dropped. x/y still carry the
+                // pointer position the cursor shim composites, so targeting and
+                // menus are untouched -- and our own synthetic motion is spared
+                // by its marker, which is what that marker was for.
+                if (consuming && e->type == SDL_EV_MOUSE_MOTION &&
+                    e->reserved != kOurEventMagic &&
+                    g_headlook_steering.load(std::memory_order_relaxed)) {
+                    e->xrel = 0.0f;
+                    e->yrel = 0.0f;
+                }
             }
         }
     }
