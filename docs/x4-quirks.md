@@ -535,3 +535,32 @@ eye is square and is a thing to revisit when it is not.
 
 *Audited at take 93:* no `1408`, `704`, `2816` or `1407` appears in the layer or
 the injector. The two that existed were in the offline tools, and are gone.
+
+### X4's VR API is a stubbed surface — names only, no implementation
+
+X4 exports a full VR-shaped API: `IsVRMode`, `IsVRPointerActive`,
+`IsVROculusTouchActive`, `IsVRViveControllerActive`, `SetVRWindowMode`,
+`SetMouseVRSensitivityYaw`/`Pitch`, `SetVRVivePointerHand`,
+`GetVRViveTouchpadLockTime` and more. They are all stubs, which `nm -S` shows
+before anything is disassembled — the setters are **1 byte** and the getters
+**3**:
+
+    IsVRPointerActive     xor %eax,%eax ; ret      always false
+    IsVRMode              xor %eax,%eax ; ret      always false
+    SetVRWindowMode       ret                      does nothing
+    GetVRVivePointerHand  mov $0x1,%eax ; ret      a constant
+
+None of them appears in the FFI declarations carried in X4's UI Lua bytecode
+either, so nothing in the game calls them.
+
+**Do not try to switch VR mode on.** Interposing `IsVRMode` to return true wakes
+nothing up: the implementations are stripped, so there is no VR path behind the
+name, and the only achievable effect is to confuse code that asks. Patola
+recalled this from an earlier attempt at this mod and the disassembly confirms
+it — recorded here so the thread is not reopened a third time.
+
+Worth knowing *why* the names exist: Egosoft shipped VR for X Rebirth and
+announced it for X4, so this is the residue of a feature that is not in this
+build. The camera API that IS live and useful — `GetCameraRotation`,
+`IsExternalViewActive`, `IsFloatingViewActive`, `IsFullscreenMenuDisplayed`,
+`IsGamePaused` — has nothing to do with it.
