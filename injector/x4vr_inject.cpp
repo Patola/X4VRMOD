@@ -1068,9 +1068,27 @@ void headlook_tick() {
     // slow cadence rather than every frame: one every 32 poses is ~3 Hz at
     // headset rate, enough to recover from a save-load reset within a blink and
     // far too slow to be a flood.
+    // **Activation needs an edge; sustaining needs a level.** Take 126 measured
+    // both halves. Patola's tap was a down and an up three MICROseconds apart,
+    // and mouselook then stayed on for 32.7 seconds -- our repeated downs held
+    // it. But our downs had been arriving for 100 seconds before that tap
+    // without ever switching it on.
+    //
+    // The reading that fits: our first down lands during loading or a menu,
+    // when free-look is not allowed. X4 records the key as held, discards it,
+    // and because we never send an up it never sees a fresh down-edge once the
+    // cockpit is ready. A level cannot re-arm what a level already set.
+    //
+    // So while not steering, re-assert as up-then-down to manufacture a fresh
+    // edge each cycle; once steering, send only downs, because an up would
+    // release the very state we are holding.
+    const bool armed_now = g_relative_mouse.load(std::memory_order_relaxed);
     static uint64_t poses = 0;
-    if ((poses++ % 32) == 0)
+    if ((poses++ % 32) == 0) {
+        if (!armed_now)
+            send_key(headlook_scancode(), false);
         send_key_down(headlook_scancode());
+    }
     // Only while X4 is actually in mouselook. Take 126 ran the immersive
     // treatment over load screens and menus too, where it does not belong:
     // there is no camera to follow, so the flat panel tilts with the head and
@@ -1236,7 +1254,32 @@ const bool *SDL_GetKeyboardState(int *numkeys) {
     return copy;
 }
 
+// #33: the window id, without needing the player to move a mouse.
+//
+// Take 127 exposed this as a design flaw rather than an inconvenience: every
+// synthetic event was gated on having sampled a REAL motion event to donate
+// windowID, so a player on a HOTAS or a stick -- which is most of X4's cockpit
+// audience -- would never arm head-look at all. X4 hands us its window pointer
+// on every SDL_GetWindowSize call, and SDL will convert that to an id for free.
+void note_window(void *win) {
+    if (!win || !this_is_the_game() ||
+        g_motion_seen.load(std::memory_order_relaxed))
+        return;
+    static auto get_id = real<uint32_t (*)(void *)>("SDL_GetWindowID");
+    if (!get_id)
+        return;
+    const uint32_t id = get_id(win);
+    if (!id)
+        return;
+    g_motion_window.store(id, std::memory_order_relaxed);
+    g_motion_seen.store(1, std::memory_order_relaxed);
+    X4VR_LOG("headlook: window id %u from SDL_GetWindowID — no mouse nudge "
+             "needed to arm",
+             id);
+}
+
 int SDL_GetWindowSize(void *win, int *w, int *h) {
+    note_window(win);
     static auto real_fn = real<int (*)(void *, int *, int *)>("SDL_GetWindowSize");
     int r = real_fn(win, w, h);
     const bool cut = halve_window() && this_is_the_game() && w && *w > 1;
