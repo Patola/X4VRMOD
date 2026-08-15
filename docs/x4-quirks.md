@@ -562,5 +562,41 @@ it — recorded here so the thread is not reopened a third time.
 Worth knowing *why* the names exist: Egosoft shipped VR for X Rebirth and
 announced it for X4, so this is the residue of a feature that is not in this
 build. The camera API that IS live and useful — `GetCameraRotation`,
-`IsExternalViewActive`, `IsFloatingViewActive`, `IsFullscreenMenuDisplayed`,
-`IsGamePaused` — has nothing to do with it.
+`IsExternalViewActive`, `IsFloatingViewActive`, `IsGamePaused`, `IsHUDActive`,
+`IsInPanelMode` — has nothing to do with it.
+
+## The map does not pause the game, and only the HUD sees it
+
+Four view queries look interchangeable by name. They are not, and picking the
+wrong ones cost takes 145 and 146.
+
+X4's **map is a live view**: it is not an external view, it is not floating, and
+it does **not** pause the game. So `IsExternalViewActive`, `IsFloatingViewActive`
+and `IsGamePaused` all report "cockpit" for the entire time the map is up —
+measured in take 146, where the map was open 9.2 s and not one of the three
+changed. The ESC menu *does* pause, which makes this easy to misread: a run that
+counts view transitions sees two of them and concludes the map is covered, when
+both belong to the ESC menu.
+
+`bool IsHUDActive();` is the query that separates them, and it is declared in
+X4's own FFI cdefs. `bool IsInPanelMode(void);` is also declared and is the next
+candidate if the HUD ever proves insufficient.
+
+**`IsHUDActive` does not null-check its global.** This matters more than the
+semantics:
+
+```
+a431d0:  mov    0x3373c71(%rip),%rdx
+a431d7:  movzbl 0x418(%rdx),%eax        <- dereferenced with no test/je
+```
+
+`IsExternalViewActive` and `IsInPanelMode` both test their pointer before using
+it; `IsHUDActive` does not, so calling it before X4 has built that object
+segfaults the game. Being declared in the cdefs is *necessary and not
+sufficient* — the declaration gives the prototype, the disassembly gives the
+preconditions, and `IsFullscreenMenuDisplayed` failed the first test while this
+one fails the second. Read both before calling anything.
+
+(`IsFullscreenMenuDisplayed` is exported but has **no FFI declaration** anywhere
+in the Lua bytecode. It was called on the strength of its name with an invented
+`bool()` signature and crashed X4 twice. Do not reach for it again.)

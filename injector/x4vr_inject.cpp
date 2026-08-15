@@ -1166,9 +1166,10 @@ static const bool g_camloop = [] {
 // first it could not tell a converged servo from a dead one, then it became a
 // trap door. A direct question does not have either failure mode.
 //
-// Absent symbols mean "assume cockpit", which is the pre-existing behaviour --
-// the stall watch is still there as a backstop for anything these two do not
-// cover, the map being the open question.
+// Absent symbols mean "assume cockpit", which is the pre-existing behaviour.
+// These three do **not** cover the map -- take 146 measured that directly -- so
+// x4_hud_active() below carries that case, and the reasoning for splitting it
+// out rather than adding it here is written there.
 static bool x4_cockpit_view() {
     using Fn = bool (*)();
     static Fn ext = [] {
@@ -1211,6 +1212,59 @@ static bool x4_cockpit_view() {
     if (paused && paused())
         return false;
     return true;
+}
+
+// **Is the cockpit HUD up?** The question the other three cannot answer.
+//
+// Take 146 settled it as a measurement rather than an assumption. The map was
+// open for 9.2 seconds -- M down at 25223.677, up at 25232.843 -- and
+// x4_cockpit_view() never once said anything but "the cockpit", so we kept
+// steering and the map flew away. X4's map is not an external view, is not
+// floating, and -- the part that makes those three useless here -- does **not**
+// pause the game; it runs live. The two "view is now" transitions in that log
+// are the ESC pause menu, which IsGamePaused does catch. Counting transitions
+// reported "covered" about an event that was not the map at all.
+//
+// `bool IsHUDActive();` is declared verbatim in X4's own Lua cdefs and exported
+// at 0xa431d0, 192 bytes from IsExternalViewActive -- the same view-state
+// module. It reads three live bytes off a global, so it is a real query and not
+// one of the VR stubs.
+//
+// **It must not be called early.** Its disassembly loads that global and
+// dereferences it with no null check at all:
+//
+//     mov    0x3373c71(%rip),%rdx
+//     movzbl 0x418(%rdx),%eax        <- no test/je, unlike its neighbours
+//
+// IsExternalViewActive and IsInPanelMode both test their pointer before using
+// it; this one does not. Calling it before X4 has built the object is precisely
+// the crash we just removed, arriving by a different door. So the caller asks
+// only once X4 is in relative mouse mode -- a state X4 enters for mouselook and
+// cannot reach before the HUD exists. Being declared is necessary and it is not
+// sufficient; the disassembly is the other half.
+static bool x4_hud_active() {
+    using Fn = bool (*)();
+    static Fn hud = [] {
+        Fn f = (Fn)dlsym(RTLD_DEFAULT, "IsHUDActive");
+        X4VR_LOG("camread: IsHUDActive %s", f ? "resolved" : "NOT FOUND");
+        return f;
+    }();
+    return hud ? hud() : true;
+}
+
+// Reported, never acted on. `bool IsInPanelMode(void);` is declared and null-
+// safe, and sits beside IsFloatingViewActive, but what X4 counts as "panel
+// mode" is a guess until a log says. If IsHUDActive turns out not to cover the
+// map, this is the next candidate and the run that shows it will already have
+// the evidence -- rather than costing another take to go and look.
+static bool x4_panel_mode() {
+    using Fn = bool (*)();
+    static Fn panel = [] {
+        Fn f = (Fn)dlsym(RTLD_DEFAULT, "IsInPanelMode");
+        X4VR_LOG("camread: IsInPanelMode %s", f ? "resolved" : "NOT FOUND");
+        return f;
+    }();
+    return panel ? panel() : false;
 }
 
 static bool camread_enabled() {
@@ -1453,12 +1507,30 @@ void headlook_tick() {
     // asks X4 directly, which is the right shape of answer. If that turns out
     // not to cover the map, the fix is to find the query that does, not to
     // re-arm an inference that has failed in three different ways.
+    //
+    // Take 146 tested that. It did not cover the map, the map accelerated away
+    // again, and the fix was the one written above rather than this watch:
+    // IsHUDActive, declared in X4's cdefs. The prediction stands as it was.
     if (stall_event == 1)
         X4VR_LOG("headlook: NOTE commanded with little camera response — "
                  "reported only, not acted on");
 
-    const bool steering =
-        g_relative_mouse.load(std::memory_order_relaxed) && cockpit;
+    // X4's map is live, unpaused, not external and not floating, so the HUD is
+    // the only thing that separates it from the cockpit. Asked only while X4 is
+    // in relative mouse mode: that is what makes the call safe (see
+    // x4_hud_active) and also the only time the answer could change what we do.
+    const bool hud = armed_now ? x4_hud_active() : true;
+    static bool was_hud = true;
+    if (armed_now && hud != was_hud) {
+        was_hud = hud;
+        X4VR_LOG("headlook: HUD is now %s (IsInPanelMode=%d) — %s",
+                 hud ? "up" : "down", (int)x4_panel_mode(),
+                 hud ? "steering" : "idle, mouse handed back");
+        if (!hud)
+            send_key(headlook_scancode(), false); // let go of free-look
+    }
+
+    const bool steering = armed_now && cockpit && hud;
     g_headlook_steering.store(steering, std::memory_order_relaxed);
     if (steering)
         send_mouse_delta(d.dx, d.dy);
