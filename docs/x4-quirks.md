@@ -744,3 +744,70 @@ it had dropped `Rotation GetCameraRotation();` because `Rotation` was not in the
 list. The filter's own output contained the tell, since a function known to be
 callable was missing from it. Same class as the off-axis test card: the
 instrument assumed the shape of what it was measuring.)
+
+## The guard band prices head rotation, and #35 is what makes it affordable
+
+Rotating the head in the layer is a homography, `x' = K·R·K⁻¹·x`, which is
+*exact* for a pure rotation about the projection centre at every depth — no
+parallax term, no depth buffer, no disocclusion. Head **translation** has none of
+those properties, which is why the rotation half of #33 is the tractable half.
+
+What limits rotation is coverage, not correctness: a ray the runtime's eye
+frustum wants must have been rendered, and X4 renders its frustum with no idea
+the head moved. So range is bought with render area. `tools/guard_band.py`
+prices it from measured inputs only — the take-112 per-eye frusta
+(`-54,40,44,-55` / `-40,54,44,-55`, Quest 3 over WiVRn), X4's
+`horizontal FOV = X4VR_FOV × 73.7399`, and the shipped `X4VR_FOV=1.4917` at
+1408×1408 per eye. Its self-check is that a zero-degree budget must reproduce
+1.4917, and it does, so the model agrees with the state takes 114d–154 ran.
+
+Pixel counts hold tangent-space sample density constant: on-axis angular
+resolution is preserved and only the covered angle grows.
+
+**Yaw and pitch budgeted together** (`--max-deg 20`):
+
+    yaw/pitch   X4VR_FOV   sym px/eye   sym area   asym px/eye   asym area
+        0.0      1.4917     1408 sq       1.00x     1092x1180      0.65x
+        5.0      1.7214     1975 sq       1.97x     1533x1636      1.27x
+       10.0      1.9644     3113 sq       4.89x     2402x2496      3.02x
+       15.0      2.2278     7141 sq      25.72x     5061x5042     12.87x
+       20.0      -- a ray reaches 90 deg: no planar render covers this --
+
+**Yaw only** (`--pitch-deg 0`):
+
+    yaw        X4VR_FOV   sym px/eye   sym area   asym px/eye   asym area
+        5.0      1.6002     1641 sq       1.36x     1313x1347      0.89x
+        7.5      1.6680     1816 sq       1.66x     1446x1454      1.06x
+       10.0      1.7358     2021 sq       2.06x     1598x1582      1.28x
+       15.0      1.8714     2568 sq       3.33x     1988x1936      1.94x
+       20.0      2.0071     3438 sq       5.96x     2573x2516      3.27x
+
+Three things fall out of this.
+
+**There is a hard wall just under 20° when both axes are budgeted.** It is not a
+performance cliff, it is geometry: the corner ray already sits at (54°, 55°), and
+stacking yaw and pitch onto it drives it to 90°, where a planar render has no
+finite extent. No pixel budget buys past it. Anything wanting a real
+over-the-shoulder look needs a different rendering strategy, not a bigger number.
+
+**#35 is on #33's critical path.** The per-eye off-axis projection is filed as a
+stereo-correctness fix, but the `asym` column says it is worth **0.65×** the
+pixels *at zero head budget* — a 35% saving standing still, because X4's
+symmetric frustum currently renders a large wedge that neither canted eye can
+see. With #35 done, ±7.5° of yaw costs 1.06× and ±10° costs 1.28×. Without it the
+same budgets cost 1.66× and 2.06×. On a project where performance is king that is
+the difference between shippable and not, so #35 should land before any head
+rotation is wired.
+
+**The affordable envelope is a glance, not a look** — roughly ±10° of yaw with
+#35, less with pitch spent too. That is enough for the small continuous head
+motion that makes VR read as VR, and nowhere near enough to look around the
+cockpit. The reading is therefore not "layer rotation instead of `MOUSELOOK`" but
+a split: the layer covers the small, always-on, latency-critical motion where its
+homography is exact and cheap, and any deliberate large look stays a
+player-triggered `MOUSELOOK` action. That leaves the mouse free during normal
+flight, which is the thing the input-channel work could never achieve.
+
+Not yet measured: how much of the budget the head-look servo's own residual would
+consume if X4's camera were coarse-tracking underneath. That number decides
+whether the split above is one mechanism or two.
