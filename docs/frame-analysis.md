@@ -15538,3 +15538,40 @@ run at all, only the two screenshots already taken.
 
 **X4VR_FOV is eliminated.** 151A (fov 1.4917) and 151B (X4's own) both overshoot,
 so the field override is not involved.
+
+### Take 153: the HUD cannot be sheared, because it has no depth
+
+Take 152 was a no-op (two gates, one set). Take 153 fired for real --
+`shear-ui world=300 nonworld=50 stereo=350, nonworld matrices set` -- and the
+HUD did not move:
+
+    speed arc / radar fan / icon panel / reticle    +1 px   (corr 0.89-0.99)
+    white hull (world)                             -27 px   (corr 0.917)
+
+Giving the nonworld modules the world's own per-eye matrices changed the HUD's
+disparity by exactly nothing.
+
+That refutes "the HUD is excluded from the shear" and explains itself:
+`K = P.T(-d).P^-1` displaces a vertex in proportion to **inverse depth**. A
+screen-space draw at `w = 1`, `z ~ 0` is immune to it by construction. There is
+nothing to shear.
+
+So X4's cockpit HUD is a **2D overlay whose screen positions the CPU computes
+each frame** by projecting the cockpit anchors through X4's own camera. Every
+observation follows from that one fact: zero disparity in both eyes; correctly
+cockpit-locked in vanilla, because the CPU re-projects every frame; and drifting
+off its anchor under the mod, because the layer moves the rendered world while
+those CPU-computed positions do not follow.
+
+**This kills the late-selected-variant plan.** There is no shader-level fix for
+geometry that has no depth, and no classification of modules or passes can
+create one. It is the same wall already documented for hit-testing: X4 computes
+UI positions on the CPU in unshifted screen space, and the GPU cannot correct
+what the CPU decided.
+
+What remains open is a design question rather than a defect: a 2D overlay is
+exactly what a VR compositor layer wants, so the HUD's natural VR treatment is
+its own quad at a chosen depth -- the #30 canvas mechanism -- rather than an
+attempt to weld it back onto the cockpit. Whether it should track the cockpit
+(vanilla's look) or sit head-locked is Patola's call, and it is now a choice
+instead of a bug.
