@@ -841,14 +841,18 @@ void note_extent(const char *what, float x, float y) {
 // binding. A real press logged in the same format next to ours settles it by
 // comparison rather than by argument -- which is what should have happened
 // before the keycode was guessed at, and again before the scancode was.
-void note_key_event(const Sdl3KeyEvent *k, const char *via) {
+void note_key_event(const Sdl3KeyEvent *k, const char *via, int action) {
     // Separate budgets. Take 122's cap was spent entirely on our own key
     // repeating at ~2 Hz, so not one of Patola's real presses was logged and
     // the comparison this exists for could not be made. An instrument that
     // crowds out its own subject is the take-115 range ceiling again: a few of
     // ours is proof it arrives, and the rest of the budget belongs to the keys
     // being compared against.
-    const bool ours = (int)k->scancode == headlook_scancode();
+    // Ours and a REAL press of the same key are indistinguishable by
+    // scancode, so the budget is split by timestamp instead: SDL stamps a
+    // genuine event, and ours goes in as zero unless SDL fills it.
+    const bool ours = (int)k->scancode == headlook_scancode() &&
+                      k->timestamp == 0;
     static int seen_ours = 0, seen_other = 0;
     if (ours) {
         if (seen_ours >= 3)
@@ -859,10 +863,16 @@ void note_key_event(const Sdl3KeyEvent *k, const char *via) {
             return;
         seen_other++;
     }
+    // timestamp and action are the two fields take 123 could not rule out.
+    // A zero timestamp is the obvious way a synthetic event differs from a real
+    // one even when every other field matches, and X4 may treat it as stale;
+    // action distinguishes a peek (1) from a consuming get (2), and a binding
+    // that only fires on the latter would look exactly like this.
     X4VR_LOG("key[%s] type=0x%x scancode=%u keycode=0x%x mod=0x%x which=%u "
-             "window=%u down=%d repeat=%d",
+             "window=%u down=%d repeat=%d ts=%llu action=%d",
              via, k->type, k->scancode, k->key, k->mod, k->which, k->windowID,
-             (int)k->down, (int)k->repeat);
+             (int)k->down, (int)k->repeat, (unsigned long long)k->timestamp,
+             action);
 }
 
 void note_mouse_event(const Sdl3MouseEvent *e) {
@@ -1196,7 +1206,7 @@ bool SDL_WaitEvent(void *event) {
     if (r && event && this_is_the_game()) {
         auto *e = (Sdl3MouseEvent *)event;
         if (e->type == SDL_EV_KEY_DOWN || e->type == SDL_EV_KEY_UP)
-            note_key_event((const Sdl3KeyEvent *)e, "wait");
+            note_key_event((const Sdl3KeyEvent *)e, "wait", -1);
         if (e->type >= SDL_EV_MOUSE_MOTION && e->type <= SDL_EV_MOUSE_UP) {
             note_mouse_event(e);
             // Position only. xrel/yrel are deltas and a fold of a delta is
@@ -1231,7 +1241,7 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
         for (int i = 0; i < n; i++) {
             auto *e = (Sdl3MouseEvent *)((unsigned char *)events + 128 * i);
             if (e->type == SDL_EV_KEY_DOWN || e->type == SDL_EV_KEY_UP)
-                note_key_event((const Sdl3KeyEvent *)e, "peep");
+                note_key_event((const Sdl3KeyEvent *)e, "peep", action);
             if (e->type >= SDL_EV_MOUSE_MOTION && e->type <= SDL_EV_MOUSE_UP) {
                 note_mouse_event(e);
                 if (consuming)
