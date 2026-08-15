@@ -98,10 +98,10 @@ int main() {
         check(!up.yaw_reliable, "yaw is flagged unreliable near the ceiling");
 
         x4vr::HeadLook s;
-        for (int i = 0; i < 20; i++)
+        for (int i = 0; i < 100; i++)
             x4vr::head_look_step(s, {40.0f, 0.0f});
         const float parked = s.cmd_yaw_deg;
-        check(near(parked, 40.0f, 0.05f), "parked at 40 deg of yaw");
+        check(near(parked, 40.0f, 0.2f), "parked at 40 deg of yaw");
 
         // Now look up, with a yaw that swings wildly as the tracker noises.
         for (int i = 0; i < 50; i++) {
@@ -129,10 +129,15 @@ int main() {
     // ---- it converges, and to the right place
     {
         x4vr::HeadLook s;
-        for (int i = 0; i < 10; i++)
+        // 100 steps, not 10: with servo_kp at 0.25 a step closes a quarter of
+        // the error, so settling takes longer by design. The tolerance is the
+        // dead zone -- the servo deliberately stops inside it rather than
+        // hunting on tracker noise -- and asserting tighter than that would be
+        // asserting a bug.
+        for (int i = 0; i < 100; i++)
             x4vr::head_look_step(s, {20.0f, -10.0f});
-        check(near(s.cmd_yaw_deg, 20.0f, 0.05f) &&
-                  near(s.cmd_pitch_deg, -10.0f, 0.05f),
+        check(near(s.cmd_yaw_deg, 20.0f, 0.2f) &&
+                  near(s.cmd_pitch_deg, -10.0f, 0.2f),
               "the estimate converges on the head angle");
     }
 
@@ -165,21 +170,78 @@ int main() {
         for (int i = 0; i < 500; i++)
             d = x4vr::head_look_step(s, {170.0f, 0.0f});
         check(d.clamped, "the step reports that the head outran X4");
-        check(near(s.cmd_yaw_deg, s.yaw_limit_deg, 0.05f),
+        check(near(s.cmd_yaw_deg, s.yaw_limit_deg, 0.2f),
               "the estimate stops at the clamp instead of winding up");
+        check(s.cmd_yaw_deg <= s.yaw_limit_deg + 1e-3f,
+              "and never goes past it, which is the whole of the windup fix");
 
         // Now the head comes back to centre. If the estimate had wound up to
         // 170 deg, this would spend ~113 deg of commands going nowhere and the
         // view would lag the head by that much the whole way back.
+        // The bound is now set by servo_kp, not by windup: a quarter of the
+        // error per step needs ~20 steps to cover 56 deg. What matters is that
+        // it is a function of Kp and NOT of how far past the clamp the head
+        // went -- 170 deg of excursion must cost no more than 57 does.
         int steps_to_return = 0;
-        while (std::fabs(s.cmd_yaw_deg) > 0.2f && steps_to_return < 100) {
+        while (std::fabs(s.cmd_yaw_deg) > 0.25f && steps_to_return < 200) {
             x4vr::head_look_step(s, {0.0f, 0.0f});
             steps_to_return++;
         }
-        check(steps_to_return <= 2,
-              "and returns immediately, with no windup to unwind");
+        x4vr::HeadLook mild;
+        for (int i = 0; i < 500; i++)
+            x4vr::head_look_step(mild, {56.5f, 0.0f}); // exactly at the clamp
+        int mild_steps = 0;
+        while (std::fabs(mild.cmd_yaw_deg) > 0.25f && mild_steps < 200) {
+            x4vr::head_look_step(mild, {0.0f, 0.0f});
+            mild_steps++;
+        }
+        check(steps_to_return <= mild_steps + 1,
+              "a 170 deg excursion returns no slower than a 56.5 deg one");
+        printf("      return from 170 deg: %d steps; from the clamp: %d\n",
+               steps_to_return, mild_steps);
         printf("      steps to return from a 170 deg excursion: %d\n",
                steps_to_return);
+    }
+
+    // ---- the servo must not oscillate, which is what take 136 did
+    //
+    // Closed-loop, the estimate is REPLACED by an observation each frame. If the
+    // step applies the whole error, the correction is re-sent before the camera
+    // has finished responding and it rings -- X4 span fast enough that Patola
+    // could not read the screen. This drives it against a plant that only ever
+    // delivers HALF of what is commanded, which is the worst case for a
+    // proportional loop, and requires it to settle rather than diverge.
+    {
+        x4vr::HeadLook s;
+        s.gain_deg_per_count = 0.115f;
+        float actual = -65.0f; // start pinned at the clamp, as take 136 did
+        float worst = 0.0f;
+        for (int i = 0; i < 200; i++) {
+            x4vr::head_look_observe(s, actual, 0.0f);
+            const x4vr::Delta d = x4vr::head_look_step(s, {5.0f, 0.0f});
+            const float commanded =
+                s.sign_yaw * (float)d.dx * s.gain_deg_per_count;
+            actual += 0.5f * commanded;            // sluggish plant
+            actual = x4vr::clampf(actual, -65.0f, 65.0f); // X4's own clamp
+            if (i > 100)
+                worst = std::fmax(worst, std::fabs(actual - 5.0f));
+        }
+        check(worst < 1.0f, "the servo settles on the head instead of ringing");
+        printf("      steady-state error against a half-strength plant: "
+               "%.3f deg\n", worst);
+    }
+
+    // ---- one frame cannot cross the range
+    {
+        x4vr::HeadLook s;
+        s.gain_deg_per_count = 0.115f;
+        x4vr::head_look_observe(s, -65.0f, 0.0f);
+        const x4vr::Delta d = x4vr::head_look_step(s, {65.0f, 0.0f});
+        const float commanded =
+            std::fabs((float)d.dx * s.gain_deg_per_count);
+        check(commanded <= s.max_step_deg + 0.5f,
+              "a 130 deg error still commands at most max_step_deg");
+        printf("      worst single-frame command: %.2f deg\n", commanded);
     }
 
     // ---- the dead zone holds still
@@ -226,9 +288,9 @@ int main() {
     // ---- recentre: X4 went to zero without telling us
     {
         x4vr::HeadLook s;
-        for (int i = 0; i < 10; i++)
+        for (int i = 0; i < 100; i++)
             x4vr::head_look_step(s, {30.0f, 0.0f});
-        check(near(s.cmd_yaw_deg, 30.0f, 0.05f), "parked at 30 deg");
+        check(near(s.cmd_yaw_deg, 30.0f, 0.2f), "parked at 30 deg");
         x4vr::head_look_recentre(s);
         check(s.cmd_yaw_deg == 0.0f && s.cmd_pitch_deg == 0.0f,
               "a recentre event zeroes the estimate");
@@ -243,7 +305,7 @@ int main() {
         x4vr::HeadLook s;
         for (int i = 0; i < 200; i++)
             x4vr::head_look_step(s, {0.0f, 89.0f});
-        check(near(s.cmd_pitch_deg, s.pitch_limit_deg, 0.05f),
+        check(near(s.cmd_pitch_deg, s.pitch_limit_deg, 0.2f),
               "pitch stops at its own limit, not yaw's");
     }
 

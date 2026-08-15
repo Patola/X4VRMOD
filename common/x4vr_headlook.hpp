@@ -126,6 +126,22 @@ struct HeadLook {
     // inject tracker noise into the camera.
     float dead_zone_deg = 0.15f;
 
+    // **Proportional gain of the servo, and it must be well under 1.**
+    //
+    // Take 136 closed the loop with an implicit Kp of 1.0 -- the whole error
+    // corrected in a single frame -- and X4 span so fast Patola could not read
+    // the screen. The log shows why: at head +3.22 with the camera at -65, the
+    // step commanded -593 counts, slammed into X4's clamp at +65, and reversed.
+    // A controller cannot apply a full correction every frame when the thing it
+    // corrects takes more than a frame to respond; it just re-sends the
+    // correction before the last one has landed.
+    float servo_kp = 0.25f;
+
+    // Hard ceiling on how far one frame may command, whatever the error. The
+    // clamp turns overshoot into a bounce, so this is what keeps a single bad
+    // observation from crossing the entire range before the next one arrives.
+    float max_step_deg = 12.0f;
+
     // **Both negative, and take 126 is why.** head_angles() reports +yaw as
     // turning LEFT and +pitch as looking UP, which is right for a right-handed
     // Y-up frame. Mouse axes disagree with both: positive xrel turns the view
@@ -171,10 +187,14 @@ inline Delta head_look_step(HeadLook &s, const HeadAngles &head) {
     const float gp = s.gain_pitch_deg_per_count > 0.0f
                          ? s.gain_pitch_deg_per_count
                          : s.gain_deg_per_count;
+    const float step_yaw =
+        clampf(s.servo_kp * err_yaw, -s.max_step_deg, s.max_step_deg);
+    const float step_pitch =
+        clampf(s.servo_kp * err_pitch, -s.max_step_deg, s.max_step_deg);
     if (head.yaw_reliable && std::fabs(err_yaw) >= s.dead_zone_deg)
-        d.dx = (int)std::lround(s.sign_yaw * err_yaw / s.gain_deg_per_count);
+        d.dx = (int)std::lround(s.sign_yaw * step_yaw / s.gain_deg_per_count);
     if (std::fabs(err_pitch) >= s.dead_zone_deg)
-        d.dy = (int)std::lround(s.sign_pitch * err_pitch / gp);
+        d.dy = (int)std::lround(s.sign_pitch * step_pitch / gp);
 
     // Integrate what was SENT. Rounding to whole counts leaves a residue, and
     // folding the *wanted* angle in here instead would accumulate it forever.

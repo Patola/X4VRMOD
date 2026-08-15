@@ -1226,6 +1226,17 @@ void headlook_tick() {
     }();
     (void)once;
     g_headlook.gain_deg_per_count = gain;
+    static const float kp = [] {
+        const char *e = getenv("X4VR_HEADLOOK_KP");
+        return e && *e ? (float)atof(e) : 0.0f;
+    }();
+    if (kp > 0.0f)
+        g_headlook.servo_kp = kp;
+    static const float gpitch = [] {
+        const char *e = getenv("X4VR_HEADLOOK_GAIN_PITCH");
+        return e && *e ? (float)atof(e) : 0.0f;
+    }();
+    g_headlook.gain_pitch_deg_per_count = gpitch;
 
     float yaw = 0.0f, pitch = 0.0f;
     uint64_t updates = 0;
