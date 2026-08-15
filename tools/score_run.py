@@ -920,6 +920,57 @@ def main(path):
                   f"{w[len(w) // 2]:6.2f} ms  ({len(ph)} window(s), "
                   f"{w[0]:.2f}–{w[-1]:.2f}){tag}")
 
+    # --- the map gate ------------------------------------------------------
+    #
+    # Take 146 is why this lives in the scorer instead of in a grep. The check
+    # I handed over was `grep -c "view is now" >= 2`; it returned exactly 2 and
+    # would have been read as a pass. Both transitions belonged to the ESC menu,
+    # which pauses; the map produced neither, and we drove mouse deltas into it
+    # for 9.2 seconds. A count cannot tell you which event it counted.
+    #
+    # So this locates the map episodes by X4's own M key and asks whether we let
+    # go inside each one. And when there is no M press at all it says so rather
+    # than staying silent, because a check nobody exercised reporting nothing is
+    # exactly how the last one passed.
+    def ts(ln):
+        m = re.match(r"\[\s*([0-9.]+)\]", ln)
+        return float(m.group(1)) if m else None
+
+    m_down = [ts(ln) for ln in lines
+              if "key[peep]" in ln and "type=0x300" in ln and "scancode=16 " in ln]
+    m_down = [t for t in m_down if t is not None]
+    if not m_down:
+        print("map   NOT EXERCISED — no M press in this log, so this run says "
+              "nothing about whether the map gate holds")
+    else:
+        hud_down = [ts(ln) for ln in lines if "HUD is now down" in ln]
+        hud_up = [ts(ln) for ln in lines if "HUD is now up" in ln]
+        hud_down = [t for t in hud_down if t is not None]
+        hud_up = [t for t in hud_up if t is not None]
+        # Taps toggle: 1st opens, 2nd closes. An odd count means it was still
+        # open when the log ended, which is a legitimate episode too.
+        episodes = []
+        for i in range(0, len(m_down), 2):
+            end = m_down[i + 1] if i + 1 < len(m_down) else float("inf")
+            episodes.append((m_down[i], end))
+        missed = [(a, b) for a, b in episodes
+                  if not any(a <= t <= b for t in hud_down)]
+        print(f"map   {len(episodes)} episode(s), "
+              f"{len(episodes) - len(missed)} with the HUD gate releasing "
+              f"({len(hud_up)} re-acquire(s) after)")
+        if missed:
+            fails.append(
+                f"the map was open {len(missed)} time(s) with no 'HUD is now "
+                f"down' inside it — we kept steering into it "
+                f"(first at t={missed[0][0]:.3f}). IsHUDActive did not see the "
+                f"map; check the 'camread: IsHUDActive' line resolved, and the "
+                f"IsInPanelMode value logged beside it")
+        elif not hud_up:
+            fails.append(
+                "the HUD gate released on every map episode but never "
+                "re-acquired — head tracking would stay dead after the first "
+                "map, which is worse than the bug it fixes")
+
     print()
     if fails:
         for f in fails:
