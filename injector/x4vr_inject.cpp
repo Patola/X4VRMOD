@@ -1145,6 +1145,17 @@ struct X4Rotation {
     float yaw, pitch, roll;
 };
 
+// X4 reports radians; every angle on our side is degrees.
+static constexpr float kRad2Deg = 57.2957795130823f;
+
+// Whether the readback DRIVES the loop or is merely reported. Separate from
+// X4VR_CAMREAD so a run can observe without changing behaviour, which is how
+// take 135 established the units without risking anything.
+static const bool g_camloop = [] {
+    const char *e = getenv("X4VR_CAMLOOP");
+    return e && *e && *e != '0';
+}();
+
 static bool camread_enabled() {
     static const bool on = [] {
         const char *e = getenv("X4VR_CAMREAD");
@@ -1323,16 +1334,29 @@ void headlook_tick() {
     // log missed the plateau entirely: cmd appeared to peak at 12.6 deg while
     // the dumps showed 36. A calibration run whose instrument samples slower
     // than the thing it measures is not a calibration run.
-    // X4's own camera, next to our estimate. Reporting only: one run says what
-    // the units and the frame are, and until then nothing is built on it.
-    if (camread_enabled()) {
-        X4Rotation r{};
+    // **Close the loop.** Take 135 established what GetCameraRotation reports:
+    // RADIANS, with yaw of the opposite sign to ours, linear to within 0.8% over
+    // a 30 degree excursion. So the estimate stops being a belief.
+    //
+    // With an observation in hand the three defects that outlasted every patch
+    // all go at once. The gain only has to be roughly right, because a servo
+    // corrects what it gets wrong. The clamp is SEEN rather than modelled, so
+    // there is no windup to discharge as a jolt. And a recentre on a seat change
+    // or save load fixes itself on the next frame instead of leaving a permanent
+    // offset nothing could detect.
+    X4Rotation r{};
+    const bool have_cam = camread_enabled() && x4_camera_rotation(&r);
+    if (have_cam && g_camloop) {
+        x4vr::head_look_observe(g_headlook, kRad2Deg * -r.yaw, kRad2Deg * r.pitch);
+    }
+    if (have_cam) {
         static uint64_t rn = 0;
-        if (x4_camera_rotation(&r) && (rn++ % 30) == 0)
-            X4VR_LOG("camread: X4 yaw %.3f pitch %.3f roll %.3f | believed "
-                     "%.2f,%.2f | head %.2f,%.2f",
-                     r.yaw, r.pitch, r.roll, g_headlook.cmd_yaw_deg,
-                     g_headlook.cmd_pitch_deg, yaw, pitch);
+        if ((rn++ % 30) == 0)
+            X4VR_LOG("camread: X4 %.2f,%.2f deg (raw %.4f,%.4f) | cmd %.2f,%.2f "
+                     "| head %.2f,%.2f%s",
+                     kRad2Deg * -r.yaw, kRad2Deg * r.pitch, r.yaw, r.pitch,
+                     g_headlook.cmd_yaw_deg, g_headlook.cmd_pitch_deg, yaw,
+                     pitch, g_camloop ? " CLOSED" : " open-loop");
     }
 
     if ((n++ % 30) == 0 || d.clamped)

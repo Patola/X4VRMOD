@@ -107,6 +107,13 @@ struct HeadLook {
     // angle back with camera_rotation.py --integrate -- and until then this is
     // a placeholder the log must state as such.
     float gain_deg_per_count = 0.05f;
+    // Pitch has its OWN gain. Take 135 read X4's camera back directly and the
+    // two axes disagree by 7x: at the same moment we believed 40.46 deg of yaw
+    // and 9.43 of pitch, X4 reported 0.796 of the yaw and 0.109 of the pitch.
+    // X4 scales its mouse axes separately, so a single number was always going
+    // to be wrong on one of them. Zero means "use the yaw gain", which keeps
+    // every existing caller behaving as before.
+    float gain_pitch_deg_per_count = 0.0f;
 
     // Measured, take 117: yaw stops dead at +56.5 deg.
     float yaw_limit_deg = 56.5f;
@@ -161,16 +168,29 @@ inline Delta head_look_step(HeadLook &s, const HeadAngles &head) {
 
     // A head looking straight up has no meaningful yaw, so hold the last one
     // rather than chase a number that is pure noise.
+    const float gp = s.gain_pitch_deg_per_count > 0.0f
+                         ? s.gain_pitch_deg_per_count
+                         : s.gain_deg_per_count;
     if (head.yaw_reliable && std::fabs(err_yaw) >= s.dead_zone_deg)
         d.dx = (int)std::lround(s.sign_yaw * err_yaw / s.gain_deg_per_count);
     if (std::fabs(err_pitch) >= s.dead_zone_deg)
-        d.dy = (int)std::lround(s.sign_pitch * err_pitch / s.gain_deg_per_count);
+        d.dy = (int)std::lround(s.sign_pitch * err_pitch / gp);
 
     // Integrate what was SENT. Rounding to whole counts leaves a residue, and
     // folding the *wanted* angle in here instead would accumulate it forever.
     s.cmd_yaw_deg += s.sign_yaw * (float)d.dx * s.gain_deg_per_count;
-    s.cmd_pitch_deg += s.sign_pitch * (float)d.dy * s.gain_deg_per_count;
+    s.cmd_pitch_deg += s.sign_pitch * (float)d.dy * gp;
     return d;
+}
+
+// X4's camera, as X4 reports it. This is the whole point of the readback: the
+// estimate stops being a belief and becomes an observation, so the gain only has
+// to be roughly right, the clamp is seen rather than modelled, and a recentre
+// on a seat change or save load corrects itself on the next frame instead of
+// leaving a permanent offset.
+inline void head_look_observe(HeadLook &s, float yaw_deg, float pitch_deg) {
+    s.cmd_yaw_deg = yaw_deg;
+    s.cmd_pitch_deg = pitch_deg;
 }
 
 // X4 has put its own camera back to centre -- a seat change or a save load,
