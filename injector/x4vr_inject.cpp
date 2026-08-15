@@ -476,6 +476,8 @@ std::atomic<uint32_t> g_motion_which{0};
 std::atomic<uint32_t> g_motion_seen{0};
 // Set on the first SDL_PumpEvents from X4; see the interposer.
 std::atomic<bool> g_pump_seen{false};
+std::atomic<uint32_t> g_key_raw{0};
+std::atomic<bool> g_key_raw_seen{false};
 
 
 // Observation only. Enough samples to establish the coordinate space and
@@ -857,6 +859,17 @@ void note_key_event(const Sdl3KeyEvent *k, const char *via, int action) {
     // scancode, so the budget is split by timestamp instead: SDL stamps a
     // genuine event, and ours goes in as zero unless SDL fills it.
     const bool ours = k->reserved == kOurEventMagic;
+    // `raw` is the platform scancode -- the evdev code on Linux -- and ours is
+    // zero because we have no way to derive it. It is the last field that still
+    // differs from a real press, so a real one of OUR key donates it, exactly
+    // as a real motion event donates windowID.
+    if (!ours && (int)k->scancode == headlook_scancode() && k->raw &&
+        !g_key_raw_seen.exchange(true, std::memory_order_relaxed)) {
+        g_key_raw.store(k->raw, std::memory_order_relaxed);
+        X4VR_LOG("headlook: sampled raw=%u from a real press of scancode %d; "
+                 "synthetic keys will carry it",
+                 (unsigned)k->raw, headlook_scancode());
+    }
     static int seen_ours = 0, seen_other = 0;
     if (ours) {
         if (seen_ours >= 3)
@@ -873,9 +886,10 @@ void note_key_event(const Sdl3KeyEvent *k, const char *via, int action) {
     // action distinguishes a peek (1) from a consuming get (2), and a binding
     // that only fires on the latter would look exactly like this.
     X4VR_LOG("key[%s%s] type=0x%x scancode=%u keycode=0x%x mod=0x%x which=%u "
-             "window=%u down=%d repeat=%d ts=%llu action=%d",
+             "window=%u down=%d repeat=%d raw=%u ts=%llu action=%d",
              via, ours ? ":OURS" : "", k->type, k->scancode, k->key, k->mod, k->which, k->windowID,
-             (int)k->down, (int)k->repeat, (unsigned long long)k->timestamp,
+             (int)k->down, (int)k->repeat, (unsigned)k->raw,
+             (unsigned long long)k->timestamp,
              action);
     (void)ours;
 }
@@ -1051,6 +1065,15 @@ void headlook_tick() {
         send_key_down(headlook_scancode());
     send_mouse_delta(d.dx, d.dy);
 
+    // Tell the layer where X4 is now looking, so the frame is submitted with
+    // the pose it was rendered from rather than with identity.
+    if (x4vr::Shared *sh = x4vr_shared_state()) {
+        sh->cam_yaw_deg.store(g_headlook.cmd_yaw_deg, std::memory_order_relaxed);
+        sh->cam_pitch_deg.store(g_headlook.cmd_pitch_deg,
+                                std::memory_order_relaxed);
+        sh->cam_valid.store(1, std::memory_order_relaxed);
+    }
+
     static uint64_t n = 0;
     if ((n++ % 240) == 0 || d.clamped)
         X4VR_LOG("headlook: head %.2f,%.2f -> cmd %.2f,%.2f delta %d,%d%s",
@@ -1124,6 +1147,7 @@ void send_key(int scancode, bool down) {
     // of the same key, and SDL fills in a zero timestamp on push, so both
     // discriminators the log has used so far were wrong.
     k->reserved = kOurEventMagic;
+    k->raw = (uint16_t)g_key_raw.load(std::memory_order_relaxed);
     const int r = push(ev);
     static bool said = false;
     if (!said) {

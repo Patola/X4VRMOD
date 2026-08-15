@@ -62,6 +62,21 @@ inline HeadAngles head_angles(float qx, float qy, float qz, float qw) {
     return a;
 }
 
+// The inverse of head_angles(): the orientation X4's camera is at, given the
+// yaw and pitch we drove it to. The layer needs this because the composition
+// layer must declare the pose the image was RENDERED from -- see the submission
+// site for why identity was right until head-look existed and is wrong now.
+inline void quat_of_angles(float yaw_deg, float pitch_deg, float q[4]) {
+    const float cy = std::cos(yaw_deg * 0.008726646f);   // half angle, degrees
+    const float sy = std::sin(yaw_deg * 0.008726646f);
+    const float cp = std::cos(pitch_deg * 0.008726646f);
+    const float sp = std::sin(pitch_deg * 0.008726646f);
+    q[0] = cy * sp;  // x
+    q[1] = sy * cp;  // y
+    q[2] = -sy * sp; // z
+    q[3] = cy * cp;  // w
+}
+
 struct Delta {
     int dx = 0;
     int dy = 0;

@@ -7239,7 +7239,36 @@ void vr_thread() {
                 // moves the eye WITHIN the rendered field and past its edge is
                 // black. That is the honest description of what we drew, and
                 // the black edge is #33's job to remove.
-                pv[e].pose.orientation.w = 1.0f;
+                // #33: the pose X4 RENDERED from, which is now a real
+                // orientation rather than identity. The injector drives X4's
+                // free-look and publishes where it believes the camera ended
+                // up; that belief is what this frame was drawn with, so it is
+                // what has to be declared.
+                //
+                // Deliberately the injector's *command*, not the live head
+                // pose. X4's camera lags the head by a frame and stops dead at
+                // 56.5 deg, so declaring the head pose would claim the image
+                // was rendered from somewhere it was not, and the compositor
+                // would reproject a frame that does not match -- the world
+                // would swim exactly when the head moves fastest or reaches
+                // the clamp. Declaring what we actually drove keeps the
+                // reprojection honest, and past the clamp the image simply
+                // stops following, which is the truth.
+                //
+                // Falls back to identity when nothing is driving, which is the
+                // stage9 behaviour and stays correct for a run without
+                // head-look.
+                float q[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+                if (const x4vr::Shared *sh = shared_state())
+                    if (sh->cam_valid.load(std::memory_order_relaxed))
+                        x4vr::quat_of_angles(
+                            sh->cam_yaw_deg.load(std::memory_order_relaxed),
+                            sh->cam_pitch_deg.load(std::memory_order_relaxed),
+                            q);
+                pv[e].pose.orientation.x = q[0];
+                pv[e].pose.orientation.y = q[1];
+                pv[e].pose.orientation.z = q[2];
+                pv[e].pose.orientation.w = q[3];
                 pv[e].pose.position = views[e].pose.position;
                 // Our own symmetric field, not the runtime's canted one.
                 // Monado reads this field to build its UV-to-tangent map, and

@@ -98,6 +98,15 @@ struct Shared {
     // than assumed away -- they are equal today and nothing guarantees it.
     uint32_t window_w = 0;
     uint32_t window_h = 0;
+
+    // #33: where the injector believes it has driven X4's camera. The layer
+    // submits this as the composition layer's orientation, because that is the
+    // pose the frame was RENDERED from. Not the head pose: X4's camera lags it
+    // and clamps at 56.5 deg, and declaring a pose X4 did not render from is
+    // what makes the world swim.
+    std::atomic<float> cam_yaw_deg{0.f};
+    std::atomic<float> cam_pitch_deg{0.f};
+    std::atomic<uint32_t> cam_valid{0};
 };
 
 // A snapshot torn-free read of the fields the layer cares about.

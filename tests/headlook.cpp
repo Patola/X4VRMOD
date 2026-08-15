@@ -62,6 +62,30 @@ int main() {
         printf("      worst decomposition error %.2e deg\n", worst);
     }
 
+    // ---- quat_of_angles must invert head_angles exactly
+    //
+    // The layer submits the composition layer's orientation from this, so a
+    // sign error would be invisible in every test and obvious only in the
+    // headset, as a world that tilts the wrong way when the head turns.
+    {
+        const float cases[][2] = {{0, 0},    {30, 0},  {-45, 0},  {0, 20},
+                                  {0, -35},  {56.5f, 0}, {25, -15}, {-56, 39}};
+        float worst = 0.0f;
+        for (const auto &c : cases) {
+            float q[4];
+            x4vr::quat_of_angles(c[0], c[1], q);
+            const x4vr::HeadAngles a = x4vr::head_angles(q[0], q[1], q[2], q[3]);
+            worst = std::fmax(worst, std::fabs(a.yaw_deg - c[0]));
+            worst = std::fmax(worst, std::fabs(a.pitch_deg - c[1]));
+            // A quaternion the runtime will accept must be unit length.
+            const float n = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] +
+                                      q[3] * q[3]);
+            check(std::fabs(n - 1.0f) < 1e-5f, "quat_of_angles returns a unit quaternion");
+        }
+        check(worst < 1e-3f, "quat_of_angles round-trips through head_angles");
+        printf("      worst round-trip error %.2e deg\n", worst);
+    }
+
     // ---- an uncalibrated gain sends nothing, rather than something arbitrary
     {
         x4vr::HeadLook s;
