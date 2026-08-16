@@ -1908,3 +1908,90 @@ declares a symmetric ±55° field (piece 2) and still renders 1408² per eye (pi
 3), so in VR the declaration and the render disagree with the affine on purpose.
 B is a flatscreen measurement of a shader transform, and reading it as "off-axis
 works in VR" would be reading three pieces from one.
+
+## #35 piece 1 — RESULT: confirmed, and the instrument was wrong twice first
+
+Takes 164a (baseline), 164b (identity control) and 164c (canted target), all
+three scorer PASS, measured by registering the screenshots with
+`tools/register_affine.py`.
+
+### 164b, the identity control — exact
+
+    view 0:  A_x=1.0010  B_x=-0.0014   A_y=0.9990  B_y=-0.0014
+    view 1:  A_x=0.9990  B_x=+0.0014   A_y=0.9990  B_y=-0.0014
+
+Every deviation is one step of the estimator's own resolution (scale step
+0.002, shift step 1 px = 0.0014 NDC). The 2D check agrees more sharply still:
+correlation at the identity 0.9464, correlation at the "predicted" identity
+0.9464, and a coordinate descent free to move any coefficient by ±0.10 moved
+none of them. **A symmetric target at X4's own half-angle is a no-op through the
+whole emission**, which is the arithmetic the prediction claimed and not an
+approximation to it.
+
+### 164c, the canted target — all eight coefficients
+
+Two independent methods: 1D gradient-profile registration, and a 2D
+hypothesis test that scores the predicted warp against the identity and then
+descends from it.
+
+    coefficient   predicted     1D view0 / view1     2D best-fit view0 / view1
+    A_x            1.2892       1.2850 / 1.2490      1.2809 / 1.2892
+    B_x           +0.2425      +0.2385 / -0.2512    +0.2425 / -0.2425
+    A_y            1.1931       1.1950 / 1.1870      1.1931 / 1.2014
+    B_y           -0.1932      -0.1950 / -0.1936    -0.1932 / -0.1932
+
+The 2D test is the decisive one: the predicted warp lifts correlation from
+**0.219 to 0.647** in view 0 and **0.233 to 0.595** in view 1, and the local
+optimum sits on the prediction — of the eight coefficients it was free to move,
+six did not move at all and two moved by under 0.7%.
+
+**`B_x` reverses sign between the views and nothing else does**, which was the
+second prediction and the one that separates "the affine ran" from "the affine
+ran per view". The eye-1 constant is emitted as a difference of −0.485025, and
+the picture carries it.
+
+The 1D method flags a low margin on 164c and that flag is correct: a 1.29×
+magnification leaves competing global alignments, and the cockpit's evenly
+spaced struts are exactly the structure that aliases. It is resolved by the 2D
+test rather than by ignoring it — agreement with eight coefficients predicted
+before the run is not something an alias produces.
+
+The HUD did not take the affine, as the classification requires: the bottom-left
+HUD arc moved ≤ 25 px between 164a and 164c while world geometry at that corner
+moved 171 px and magnified 1.29×. The correlation peak there is weak (0.041
+against the control's 0.220), so this is corroboration and not a measurement —
+some cockpit console bleeds into the crop, and it did move.
+
+### The two instrument defects, which are the part worth remembering
+
+**1. The self-check fixture was periodic.** Bars on a 38 px pitch; the third
+case came back +0.1016 against a wanted −0.1500, which is 64.4 px out — exactly
+two pitches after the 0.85 scale. The fixture was ambiguous, not the estimator.
+Fixed by making the bar spacing random, and by making `fit_1d` return a
+**margin**: the best score minus the best score at least one lobe away. A search
+that reports only its winner will hand back an alias with full confidence.
+
+**2. Cropping to a band re-referenced the transform, and I nearly reported it as
+a shader defect.** The affine's fixed point is NDC 0 — the centre of the *frame*
+— and `B_y` is a fraction of the frame's half-height. Cropping rows to the
+0–0.72 band and then taking the band's own centre biases the vertical shift by
+
+    (A_y - 1) x (frame centre - band centre) = 0.1931 x 196.9 px = 38 px
+                                            = 0.0539 in NDC
+
+against a `B_y` of 0.1932. The first measurement read −0.248 against −0.193
+predicted, in both views, consistently — which is exactly what a real
+disagreement looks like. **A residual that is proportional to the effect being
+measured is a sign the instrument shares the effect's parameters, not a finding
+about the subject.** The self-check had passed because it only ever ran on the
+full frame, the one configuration in which the bug cannot appear; it now runs
+every case through both the full frame and the 0–0.72 band.
+
+### What this does and does not close
+
+Piece (1) is done: the emission is correct, per-view, and reaches every world
+module (`baked-sx=0` in all three runs, so nothing was left in X4's frustum).
+
+It still says nothing about the headset. The layer declares a symmetric ±55°
+field (piece 2) and renders 1408² per eye (piece 3). Those remain the next two
+steps, in that order.
