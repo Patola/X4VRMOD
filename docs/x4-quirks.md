@@ -1494,3 +1494,63 @@ fixes it — 4224² is exactly as washed out as 1408².
 It is also a second, independent argument for the cockpit-monitor route: a panel
 drawn **on** the console has its contrast designed against the console, and
 cannot have its backdrop swapped by a field-of-view change.
+
+### X4's HUD already lives on cockpit monitors, and one is a config tag away
+
+Read out of X4's UI Lua in `08.dat`. No run.
+
+**X4 has three named monitors**, and it treats their positions as geometry:
+
+    targetmonitor    uianchorindex 0
+    radar            uianchorindex 2   noright
+    messageticker    uianchorindex 3   noright
+
+`MonitorExtents GetMonitorExtents(const char* monitorid)` returns them, and X4's
+own comment on that call says the extents are **"in worldspace coordinates"** —
+the UI then projects them to screen positions to build exclusion zones so menus
+do not overlap them. `void SetMonitorExtents(const char*, float, float, float,
+float)` writes them, and X4 disables a monitor by zeroing it
+(`SetMonitorExtents("radar", 0, 0, 0, 0)`).
+
+**Notifications are routed by type, not by layout.** `queueNotification()` keeps
+two queues — `messageTickerNotifications` and `targetMonitorNotifications` — and
+picks between them with `C.IsTargetMonitorNotification(notificationID)`. So the
+panel Patola circled is the **target monitor**, a distinct destination that X4
+maintains on purpose, not a misplaced message ticker.
+
+**The radar has three destinations**, chosen in `updateRadarExtents()`: the
+target monitor, a separate radar element, or folded into the message ticker
+(external view only). The switch is a config setting read straight into a local:
+
+    private.enableSeparateRadar = C.GetConfigSetting("separateRadar") ~= 0
+
+and `<separateRadar>true</separateRadar>` is a **shipped config tag**. Patola's
+live `config.xml` carries `<separateRadar>1`.
+
+**Why this matters for #30.** The injector already owns every read of
+`config.xml` — that is how `X4VR_FOV` is served, non-intrusively, with no mod
+registered and no savegame flag. `separateRadar` is the same kind of tag. If
+turning it off routes the radar to the target monitor, then the radar becomes a
+**world-space panel on the cockpit**: correct stereo for free, follows the #33
+vertex-stage rotation for free, no canvas, and — directly answering the washout
+Patola spotted — its contrast is designed against the console rather than
+against whatever the widened field swings in behind it.
+
+`GetMonitorExtents` returning world-space extents is the larger prize. It means
+X4 will *tell us where its HUD is in the cockpit*, which is exactly the input
+#30's canvas was going to have to guess.
+
+**What is NOT established, kept separate from the above:**
+
+* That `separateRadar=0` puts the radar on the target monitor. The three-way
+  branch is read, but `isTargetMonitorRadarEnabled()` and the state machine it
+  drives are not, so this is the plausible reading and not a fact.
+* **Why the notification moved with render resolution — still open.** The one
+  resolution-flavoured path found (`rendertargetheight` scaled by
+  `private.uiScale` feeding `SetMonitorExtents("messageticker", ...)`) sits
+  inside a `C.IsExternalViewActive()` branch, and Patola was in cockpit view. So
+  that is **not** the explanation, and the earlier guess that UI scale drives it
+  is withdrawn pending evidence.
+* No disassembly read for any of these. `IsHUDActive` remains the precedent for
+  a declared, exported function that segfaults when called at the wrong moment,
+  and the standing rule applies before a single call.
