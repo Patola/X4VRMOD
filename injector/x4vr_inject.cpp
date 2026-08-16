@@ -158,6 +158,16 @@ FILE *open_patched_config(const char *path) {
              x4vr::get_tag(xml, "res_height").c_str(),
              getenv("X4VR_FOV") ? "fov from X4VR_FOV"
                                 : "fov from the profile, not this run");
+    // Same reasoning as fov: state the effective value every run, overridden or
+    // not. This one decides whether X4 draws the radar as a flat screen-space
+    // element or on the cockpit's target monitor, and a run that changed the
+    // routing without recording it could not be told from one that did not.
+    X4VR_LOG("config: effective separateRadar=%s (%s) — 0 routes the radar to "
+             "the cockpit target monitor, 1 to the flat element",
+             x4vr::get_tag(xml, "separateRadar").c_str(),
+             getenv("X4VR_SEPARATE_RADAR")
+                 ? "from X4VR_SEPARATE_RADAR"
+                 : "from the profile, not this run");
     X4VR_LOG("config: serving %s in memory (%zu bytes, %d overrides applied); "
              "your %s is not touched",
              prof.path.c_str(), xml.size(), changed, path);

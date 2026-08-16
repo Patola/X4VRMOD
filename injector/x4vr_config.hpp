@@ -131,6 +131,49 @@ inline bool fov_override(std::string &v) {
     return ok;
 }
 
+// X4VR_SEPARATE_RADAR: X4's own <separateRadar> config tag.
+//
+// Read straight out of X4's UI Lua, which routes the radar with two predicates
+// that are exact complements on this one setting:
+//
+//   isSeparateRadarEnabled()     = allowRadar and not tickerOnly and radarEnabled and     enableSeparateRadar
+//   isTargetMonitorRadarEnabled() = allowRadar and not tickerOnly and radarEnabled and not enableSeparateRadar
+//   private.enableSeparateRadar = C.GetConfigSetting("separateRadar") ~= 0
+//
+// and X4's own comment above the second one says the integrated target monitor
+// radar is enabled when "we are not using the separate radar". checkRadarActivation()
+// then deactivates one and activates the other, and activateMonitor() keeps the
+// target monitor alive even in its inactive state when the radar lives there.
+//
+// Serving 0 should therefore move the radar off the flat screen-space element
+// and onto the cockpit's target monitor -- world-space geometry, at the
+// cockpit's depth. That is worth a great deal here: it gets correct stereo for
+// free, it would follow #33's vertex-stage rotation for free, it needs none of
+// #30's canvas, and its contrast is designed against the console instead of
+// against whatever the widened field happens to swing in behind it (take 161's
+// washed-out radar, which no amount of render resolution fixed).
+//
+// Unset by default and deliberately so, exactly as X4VR_FOV: setting this is
+// the experiment, omitting it is the control. Only "0" and "1" are accepted --
+// a malformed value would make X4 fall back silently, which is the trap
+// recorded above and reads exactly like a measurement.
+inline bool separate_radar_override(std::string &v) {
+    static std::string vv;
+    static const bool ok = [] {
+        const char *e = getenv("X4VR_SEPARATE_RADAR");
+        if (!e || !*e)
+            return false;
+        const std::string s(e);
+        if (s != "0" && s != "1")
+            return false;
+        vv = s;
+        return true;
+    }();
+    if (ok)
+        v = vv;
+    return ok;
+}
+
 inline const std::vector<TagOverride> &default_overrides() {
     // On Wayland the surface reports no preferred extent, so X4 falls back to
     // res_width/res_height -- which makes the config the lever for the split
@@ -212,10 +255,15 @@ inline const std::vector<TagOverride> &default_overrides() {
 
     // Appended rather than listed above, so that a run without X4VR_FOV serves
     // byte-for-byte the config every take before 104 served.
+    static std::string radar_v;
+    static const bool have_radar = separate_radar_override(radar_v);
+
     static const std::vector<TagOverride> v = [] {
         std::vector<TagOverride> t = base;
         if (have_fov)
             t.push_back({"fov", fov_v.c_str()});
+        if (have_radar)
+            t.push_back({"separateRadar", radar_v.c_str()});
         return t;
     }();
     return v;

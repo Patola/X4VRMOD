@@ -1554,3 +1554,37 @@ X4 will *tell us where its HUD is in the cockpit*, which is exactly the input
 * No disassembly read for any of these. `IsHUDActive` remains the precedent for
   a declared, exported function that segfaults when called at the wrong moment,
   and the standing rule applies before a single call.
+
+### CONFIRMED: `separateRadar` is the switch, read from X4's own predicates
+
+The previous section left this as "a plausible reading, not a fact". It is now a
+fact, from X4's Lua. The two routing predicates are **exact complements on one
+term**:
+
+    isSeparateRadarEnabled()      = allowRadar and (not tickerOnlyMode) and radarEnabled and     enableSeparateRadar
+    isTargetMonitorRadarEnabled() = allowRadar and (not tickerOnlyMode) and radarEnabled and not enableSeparateRadar
+
+with X4's own comment above the second stating the integrated target monitor
+radar is enabled when "we are not using the separate radar". The state machine
+is an either/or:
+
+    checkRadarActivation(force):
+        isSeparateRadarEnabled()      -> activateSeparateRadar(force)  else deactivateSeparateRadar()
+        isTargetMonitorRadarEnabled() -> updateActiveState(force)
+
+and `activateMonitor()` keeps the target monitor alive **even in its inactive
+state** when the radar lives there — so it is a persistent panel, not one that
+blinks in and out with target selection.
+
+Identical preconditions, one differing term, and that term is
+`C.GetConfigSetting("separateRadar") ~= 0`. `<separateRadar>` is a shipped tag
+and Patola's live config carries `1`.
+
+**Wired as `X4VR_SEPARATE_RADAR`**, env-gated exactly like `X4VR_FOV`: unset
+serves the profile byte-for-byte (the control), `0` or `1` overrides, anything
+else is rejected rather than served malformed. The effective value is logged
+every run whether overridden or not, for the same reason `fov` is — a run that
+changed the routing without recording it could not be told from one that did not.
+
+This is the project's existing non-intrusive lever: no mod registered, no
+savegame flag, the player's `config.xml` read and never written.
