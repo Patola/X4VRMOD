@@ -1013,3 +1013,39 @@ check must be run against a log that flips:
 The 2.2100 control is the important one: **before** this change it scored PASS
 with a warning, which is the exact way the ceiling run could have been thrown
 away — answering "no" in the voice of "yes".
+
+### Take 155 — the `<fov>` ceiling, predicted before the run
+
+Aimed straight at **`X4VR_FOV=2.21`** rather than climbing a ladder: it is the
+value the plan needs, so a pass ends the question in one run and a refusal tells
+us to bisect. Testing the falsifier first is what made take 154 cost one run.
+
+Derived from take 154's own `env: run =` line. Four differences, each with a
+reason:
+
+* `X4VR_FOV` 1.4917 → **2.21**, the subject.
+* **`X4VR_DUMP_MATRICES=1` added.** Take 154 produced *zero* `proj` lines; the
+  dump is a plain flag (`e && *e && *e != '0'`) and without it there is nothing
+  to score. Not a knob added to fix a failed run — the instrument the
+  measurement is made of.
+* **`X4VR_PANPROBE=1` removed.** This is a measurement take, not an interaction
+  take, and the pan probe drains the event queue on a cadence.
+* Fresh `X4VR_LOG`, fresh `X4VR_TAKE`.
+
+The dump requires ≥50 draws credited to one camera block, so the run must reach
+an actual scene. A menu-only run scores "no `proj MEASURED`" and measures nothing.
+
+**Predictions:**
+
+1. **X4 accepts it** — maybe 60/40. The slider's `max = 120` /
+   `exceedMaxValue = false` is a *UI* construct, we already run 12% past it at
+   1.4917, and the injector validates only the shape of the string. The falsifier
+   is an engine-side clamp we have never reached because we never went far enough.
+2. **If accepted, expect visible degradation that is not a refusal.** At 163°
+   horizontal, objects subtend far fewer pixels, and X4's LOD selection is
+   normally screen-coverage driven — so a blurrier, simpler-looking scene is the
+   predicted *success* case, not evidence the tag was ignored. Recorded now so it
+   is not misread on the day.
+3. **A near-miss is our arithmetic, not X4's answer.** The `sx → degree` law was
+   fitted over 1.111..1.500 and 2.21 is 47% beyond it. If the scorer reports "law
+   bending", recalibrate the law; do not conclude a refusal.
