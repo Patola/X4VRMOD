@@ -1414,3 +1414,48 @@ field. Unexplained, and it matters beyond curiosity: **#30 puts the HUD on a
 canvas, and a HUD whose element positions move with resolution is a harder target
 than one that does not.** Recorded before it is explained, and not yet chased —
 the next step is a screenshot at 4224² to see where it lands and what else moved.
+
+### The relocated notification is a **cockpit monitor**, and X4 has an API for it
+
+Chased with two crops and a symbol sweep; no run needed.
+
+**What the screenshot shows.** Zoomed, the box on the right is **skewed in
+perspective, lying along the cockpit console surface** — world-space geometry,
+not a flat overlay. And the bottom-left of the same frame is **empty**: the flat
+notification did not duplicate, it *moved*. The identical console region in the
+take-155 screenshot (same ship, same seat, same `X4VR_FOV=2.21`, but a **1408²**
+render) is **bare**. So the trigger is render resolution, not field of view, and
+the panel is genuinely new rather than something previously overlooked.
+
+**What it is.** X4's own FFI names the feature outright:
+
+    bool IsTargetMonitorNotification(const int notificationid);
+    MonitorExtents GetMonitorExtents(const char* monitorid);
+    void SetMonitorExtents(const char* monitorid, float x, float y, float w, float h);
+    void SetMonitorRenderState(bool state);
+    float GetHUDUIScale(const bool scalewithresolution);
+    float GetUIScale(const bool scalewithresolution);
+    ResolutionInfo GetGameResolution(void);
+    ResolutionInfo GetRenderResolutionOption(void);
+
+**All eight are exported**, so the injector can reach them the way it already
+reaches `GetCameraRotation`. X4 routes some notifications to a *cockpit monitor*
+instead of the flat HUD, and the UI scale has an explicit
+`scalewithresolution` flag — which is the obvious candidate for why 4224²
+flips the routing and 1408² does not.
+
+**Why this matters more than the oddity did.** Patola's ruling was that the HUD
+should track the cockpit, "as it's the vanilla look". A monitor notification
+*already is* that: world-space, at the cockpit's depth, so it gets correct stereo
+for free, it would follow the vertex-stage rotation of #33 for free, and it needs
+no canvas at all. **#30's canvas may be the wrong mechanism for any UI X4 can
+route to a monitor** — the right move would be to ask X4 to put it there rather
+than to catch a screen-space quad and place it ourselves.
+
+**Not yet established, and the standing rule applies before any call:** none of
+these eight has had its disassembly read for preconditions, and `IsHUDActive` is
+the precedent for a declared-and-exported function that segfaults if called at
+the wrong time. What decides the routing is also still a guess — resolution is
+correlated, not shown to be causal, and `GetHUDUIScale(scalewithresolution)` is
+a hypothesis about the mechanism, not a reading of it. The next step is the
+disassembly and the Lua that calls `IsTargetMonitorNotification`, not a run.
