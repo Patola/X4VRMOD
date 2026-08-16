@@ -1049,3 +1049,59 @@ an actual scene. A menu-only run scores "no `proj MEASURED`" and measures nothin
 3. **A near-miss is our arithmetic, not X4's answer.** The `sx → degree` law was
    fitted over 1.111..1.500 and 2.21 is 47% beyond it. If the scorer reports "law
    bending", recalibrate the law; do not conclude a refusal.
+
+### Take 155/156 — X4 honoured 2.21. The scorer said otherwise and was wrong.
+
+**Result: X4 accepts `X4VR_FOV=2.21` and renders the full 163°.** Prediction 1
+holds. The ceiling is at or above 2.21, so **±27.5° of yaw** is available to the
+vertex-stage rotation and the plan in the decision section is viable.
+
+Measured without the layer's instrument at all. A `<fov>` change at a fixed pose
+is an exact uniform scale about the principal point (`x_ndc = sx·tan θ`), so two
+cockpit screenshots register by a single factor `k = sx_a/sx_b`. Registration of
+Patola's pair put the peak at **k = 0.215** — expected 0.214 for fov 2.21 —
+giving a rendered **fov 2.209 against 2.21 asked, 0.05% off.** A genuine peak
+(ncc 0.632, falling away on both sides), and the method recovered three
+synthetic scales (0.30/0.50/0.75) exactly before being believed.
+
+Two side results worth keeping:
+
+* **The `sx → degree` law does not bend at 2.21.** Prediction 3 feared it would,
+  47% outside its 1.111..1.500 calibration. It is linear to 0.05% there.
+* **The HUD did not scale between the two shots** — same screen position, same
+  size, at both fields. Prediction 3's other half confirmed: it is drawn at
+  `w = 1`, it will not follow a clip-space rotation for free, and #30's canvas
+  is required.
+
+**Why the scorer got it wrong, exactly.** The layer credits only the
+most-drawn block per frame, and take 156 measures the consequence directly:
+
+    156b, fov 1.4917:  sx 1.33333 x35   sx 0.70024 x5   sx 3.78085 x2
+    156a, fov 2.21  :  sx 1.33333 x36                   sx 3.78085 x2
+
+`0.70024` is the expected `sx` for 1.4917 to five digits — the scene camera, and
+it won only **5 of 42** samples even there. At 2.21 it won **none**, because a
+wider field spreads draws across more blocks. The camera rendering the picture
+was never sampled, and everything the log did contain was the two cameras that
+ignore `<fov>` — the same pair that appears in takes 104 and 105 *alongside* the
+honouring one. "One number, several cameras", again.
+
+**The scorer's message asserted a cause it could not observe.** It read "X4 fell
+back to a different field, so it rejected the tag" from an absence in a
+credit list. Reworded to state what was credited and to say explicitly that this
+is not evidence about X4's config parsing. The run still FAILs — it genuinely
+failed to *measure* the field it asked for — but a FAIL now means "this run did
+not measure what it set out to", which is true, instead of a verdict on X4.
+
+**And the process failure, which is the one worth remembering.** Take 155's
+prediction block ended: "the picture should look dramatically wider; if it looks
+identical to 1.4917, X4 refused, and your eye will tell us faster than the log
+will." That was written, committed, and then not acted on: the log was read, the
+FAIL was believed, and the person watching the screen was never asked. Patola
+stopped it. **An independent channel named in advance as decisive has to be
+consulted before the instrument's verdict is accepted, not after it is
+challenged.**
+
+Still owed: the layer must log every camera block it sees rather than the
+most-drawn winner. Until then no run can be trusted to sample the scene camera,
+and this one was marginal (5 of 42) even at the field we ship.

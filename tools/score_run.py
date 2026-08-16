@@ -633,21 +633,34 @@ def main(path):
                         ((2 * math.degrees(math.atan(1.0 / v)) / FOV_BASE_DEG, v)
                          for v, _ in order if v),
                         key=lambda p: abs(p[0] - asked), default=(None, None))
-                    if near_tag is None:
-                        detail = "and no usable sx was read at all"
-                    elif abs(near_tag - asked) < 0.15:
-                        detail = (f"nearest is fov {near_tag:.3f} "
-                                  f"(sx={near_sx:.5f}), {abs(near_tag - asked):.3f} "
-                                  f"off — near enough that the linear sx→degree "
-                                  f"law bending past its 1.111..1.500 calibration "
-                                  f"is likelier than a rejection")
-                    else:
-                        detail = (f"nearest is fov {near_tag:.3f} "
-                                  f"(sx={near_sx:.5f}) — X4 fell back to a "
-                                  f"different field, so it rejected the tag")
+                    # Say what was OBSERVED. The first version of this message
+                    # ended "X4 fell back to a different field, so it rejected
+                    # the tag" -- a cause the scorer cannot see -- and take 155
+                    # is what that cost. It reported a rejection; Patola had
+                    # watched a 163 degree field fill the cockpit, and
+                    # registering his two screenshots put the rendered fov at
+                    # 2.209 against 2.21 asked. X4 had honoured it exactly.
+                    #
+                    # What actually happened is in the layer, not in X4: it
+                    # credits only the most-drawn block per frame, so a camera
+                    # can render the whole scene and never be sampled. Take 156
+                    # measured that directly -- at fov 1.4917 the honouring
+                    # camera won 5 of 42 samples, at 2.21 it won 0 -- while
+                    # both runs rendered the field asked for. Absence from the
+                    # credit list is therefore evidence about the instrument
+                    # and says nothing about X4's config parsing.
+                    seen = ", ".join(
+                        f"fov {2 * math.degrees(math.atan(1.0 / v)) / FOV_BASE_DEG:.3f}"
+                        f" (sx={v:.5f}, x{n})" for v, n in order[:4] if v)
                     fails.append(
                         f"X4VR_FOV={asked:g} ({asked * FOV_BASE_DEG:.2f}°) was "
-                        f"asked for and no camera reads that field: {detail}")
+                        f"asked for and no CREDITED camera reads that field. "
+                        f"Credited: {seen or 'nothing usable'}. This does NOT "
+                        f"say X4 rejected the tag — the layer samples only the "
+                        f"most-drawn block per frame and a wide field spreads "
+                        f"draws across more blocks, which is exactly how take "
+                        f"155 mis-read an honoured 2.21. Confirm against the "
+                        f"rendered image before concluding anything about X4")
 
                 # The aspect check, applied to ONE camera: the one that honours
                 # the setting, since that is the one whose field the player is
