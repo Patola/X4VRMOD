@@ -1880,10 +1880,20 @@ it is the emission that is on trial here, not the frusta.
 **B — the canted target.** `X4VR_OFFAXIS="-54,40,44,-55"`, the measured Quest 3
 eye 0. Against the fov camera the scorer will report `A_x=1.2892 B_x=+0.2425,
 A_y=1.1931 B_y=-0.1932`, and the picture should be **magnified 1.289×
-horizontally and 1.193× vertically, and shifted 12.1% of the image width to the
-right and 9.7% of its height downward**. An unchanged picture means the affine
-reached no draw — which is a different failure from a wrong picture, and the
-scorer's `baked-sx` line separates them.
+horizontally and 1.193× vertically, and shifted 12.1% of the image width and
+9.7% of its height**. An unchanged picture means the affine reached no draw —
+which is a different failure from a wrong picture, and the scorer's `baked-sx`
+line separates them.
+
+The horizontal shift goes **opposite ways in the two SBS halves** and that is a
+second, independent prediction rather than a detail: `B_x` is +0.2425 for view 0
+and −0.2425 for view 1 (the layer logs both), so the left half moves right and
+the right half moves left, by the same 12.1%. The vertical shift is the *same*
+in both, because a headset cants its eyes horizontally and the mirrored frusta
+share `u` and `d`. If both halves move the same way horizontally, the per-view
+selection is not selecting — the affine ran with one eye's coefficients in both
+views, which is a distinct defect from it not running at all and would otherwise
+be invisible in a run that only checked "did the picture change".
 
 I expect A to be clean and B to look exactly as stated. The risk I cannot price
 from here is the **other cameras**: `A_x = ax_num/sx_live` divides by whichever
