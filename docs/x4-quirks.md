@@ -1702,3 +1702,65 @@ X4 would silently ignore. It *overrides* the base `none` entry rather than being
 appended after it, so one tag has one source. The effective value is logged every
 run either way — a run that changed it must say so, or broken stereo reads as a
 regression in the shear rather than as the knob that caused it.
+
+### RETRACTED: FSR3 works. The prediction above was wrong, and here is why.
+
+Take 163, in VR at 4224² per eye, with a paired `X4VR_AA=none` control in the
+same log:
+
+    config: effective antialiasing=fsr_quality (from X4VR_AA)
+    config: effective antialiasing=none (our default, not the profile)
+
+Patola's verdict: FSR3 works well. No ghosting, no smearing, no misplaced eyes,
+**depth still perceived correctly**, on both the flatscreen test (which had
+`X4VR_STEREO`/`X4VR_SBS` active, so it did exercise the shear) and in VR. The
+prediction two sections up is **withdrawn**, and it is left standing there rather
+than edited, because the reasoning failure is more useful than the conclusion.
+
+**Why reason 1 was wrong — a misread comment.** `x4vr_layer.cpp:4528` says TAA
+jitter occupies `m[8]/m[9]`, "the shear's own slots". I read that as a live
+collision. It is not: that comment explains why the layer *reads* `M_projectionUJ`
+rather than the jittered `M_projection`. **The shear is never written into X4's
+matrix at all** — `patch_vertex_eye_offset()` applies it as a vertex transform in
+the patched shader, downstream of whatever X4 put in its projection. Jitter and
+shear occupy the same *named slots* in two different matrices that never meet.
+Reading a comment about which matrix to trust and inferring a collision the
+architecture does not have is the same error as the guard that could only agree.
+
+**Why reasons 2 and 3 were wrong — Patola's hypothesis, with numbers.** He
+proposed that the two eyes are near-identical apart from a small IPD offset, so
+motion vectors and the temporal history still apply cleanly. The scorer's own
+stereo line quantifies exactly that, and it is stronger than it first looks:
+
+    per-eye offset  10.1 px at 1 m,  2.0 at 5 m,  1.0 at 10 m,  0.3 at 30 m  (4224 px eye)
+
+The between-eye error in any shared motion vector is bounded by that disparity —
+which is largest exactly where motion vectors are smallest. **The cockpit is rigid
+with the camera, so its motion vectors are ~zero however large its disparity is;
+distant geometry has real motion vectors but ~0.3 px of disparity.** The bad case
+needs an object both close *and* moving fast relative to the camera, which a
+cockpit view rarely produces. His reasoning was right and mine was a list of
+mechanisms that never met their preconditions.
+
+**Kept as a live option, not a default.** `X4VR_AA` stays unset by default. Deeper
+testing is deferred to release-time on Patola's call.
+
+### The map and steering failures in take 163 were head-look, not FSR
+
+Both runs carried `X4VR_HEADLOOK=1`, and the log says what happened:
+
+    1118  headlook: head ... (steering)
+      34  headlook: NOTE commanded with little camera response — reported only
+       3  headlook: view is now the cockpit — steering
+       3  headlook: view is now external/floating — idle
+
+Head-look holds `INPUT_STATE_CAMERA_MOUSELOOK`, and holding it is what X4 uses to
+suspend ship control. "I could not turn" is therefore the **known, measured cost
+of head-look** — the exact conflict that led to free-look being excluded from the
+design — and the 34 stall notes plus the map misbehaviour are takes 146–148's
+map-gate territory, not new. Neither has anything to do with the upscaler.
+
+**Consequence for future FSR testing: drop `X4VR_HEADLOOK`.** It is not in the
+design, it suspends steering, and it disturbs the map — three confounds on a test
+that does not need it. Ship motion supplies all the motion a temporal upscaler
+needs to be stressed.
