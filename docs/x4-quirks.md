@@ -1374,3 +1374,43 @@ drew enough geometry to blur the comparison. Asserting a split the numbers do no
 show is the same over-claim this file already had removed once today.
 
 All 53 stored `X4VR_FOV` logs keep their verdicts.
+
+### Take 161 — the 9× point confirmed, and ±22.5° at 90 fps is the operating point
+
+Parked 60 s in the world by stopwatch, and the draws-segmented number now has the
+samples to stand on: **20.77 ms over 5 windows spanning 56 s**, range 19.77–20.82,
+`29 before vs 117 after — a clean step`, no short-stretch warning. Take 160's
+two-sample 20.75 ms was right.
+
+    1x px (1408²)   6.80 ms   147 fps
+    4x px (2816²)   9.82 ms   102 fps
+    9x px (4224²)  20.77 ms    48 fps
+
+    marginal 1x->4x : 1.01 ms per pixel-unit
+    marginal 4x->9x : 2.19 ms per pixel-unit
+
+**Superlinear, confirmed.** A 90 fps budget of 11.1 ms interpolates to 4.6×
+baseline pixels, so with #35's per-eye off-axis projection:
+
+    +-22.5 deg   4.50x px   10.9 ms   ~92 fps   <- the operating point
+    +-25.0 deg   6.59x px   15.5 ms   ~65 fps
+    +-27.5 deg  10.63x px      --     not affordable
+
+### A HUD element changes side with render resolution, not with FOV
+
+**Patola's observation, take 161:** the notification window that normally sits on
+the **left** appeared on the **right** — not corrupted, but "well-formatted and in
+the right perspective/positioning", i.e. deliberately laid out there. He checked
+vanilla X4 to confirm it belongs on the left, and every prior SBS run put it on
+the left.
+
+**FOV is not the cause.** The take-155 screenshot pair is at `X4VR_FOV=2.21` with
+a 1408² render, and cropping the bottom of its left eye shows the box plainly on
+the **left**. The 163° field alone leaves it where vanilla puts it.
+
+What differs in takes 159/160/161 is the **render resolution and window size** —
+1408²/2816×1408 against 4224²/8448×4224. So the element tracks a size, not a
+field. Unexplained, and it matters beyond curiosity: **#30 puts the HUD on a
+canvas, and a HUD whose element positions move with resolution is a harder target
+than one that does not.** Recorded before it is explained, and not yet chased —
+the next step is a screenshot at 4224² to see where it lands and what else moved.
