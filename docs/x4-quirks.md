@@ -875,3 +875,56 @@ to extend range, it **removes the 50 ms servo lag outright** during an engaged
 look. 50 ms is far above the motion-to-photon budget VR comfort needs, so this is
 likely the largest comfort win available and it does not depend on the range
 argument at all.
+
+## Decision: head rotation is a vertex-stage clip-space rotation, and free-look is out
+
+**Patola's ruling, 2026-08-16:** mouse free-look is excluded from the design
+entirely. As long as holding `MOUSELOOK` suspends mouse aiming and pointer
+steering, it cannot be used in practice, so it is not available as a complement
+to head tracking and must not appear in any cost assessment. Everything the
+previous sections priced against a coarse-tracking servo underneath is therefore
+withdrawn as a *plan* — the measurements stand, the architecture they served does
+not.
+
+What survives is the vertex-stage rotation. The layer already applies per-eye
+clip-space transforms; the rotation goes in at the same site:
+
+    M = P_narrow · R · P_wide⁻¹     applied to c = P_wide · V · x
+    M·c = P_narrow · R · V · x
+
+which is exactly a render with view `R·V` and projection `P_narrow` — exact,
+per-vertex, perspective-correct, with clipping happening afterwards against
+`P_narrow`. `X4VR_FOV` widens what X4 **culls**, and the narrow output projection
+keeps the pixel count at the display's. So the guard band is paid in draw-call and
+vertex work, not in fragment shading, and the reprojection cost table two sections
+up prices only the fallback.
+
+Consequences of dropping free-look, stated so they are not rediscovered:
+
+* The ±65.00°/±35.00° camera clamp is **irrelevant** — we never drive X4's camera.
+* The 50 ms servo residual is **irrelevant** — there is no servo. The measurement
+  keeps its value only as the characterisation of a mechanism now abandoned.
+* Range is whatever the culling frustum buys, roughly ±27° of yaw at
+  `X4VR_FOV=2.21` and ~±34° near the 180° asymptote. There is no ±65° to compose
+  with, so **that is the whole range.** Over-the-shoulder is a ship turn.
+* The mouse is free at all times, which was the point.
+
+**Predictions, before the checks that test them:**
+
+1. **X4's CPU culling follows the intercepted `<fov>`.** Takes 114d–154 ran at
+   `X4VR_FOV=1.4917`, widened from 1.437, and no take reported an empty annulus or
+   edge popping. An engine culling against a frustum narrower than it projects
+   would have shown one. Expected to hold; the falsifier is a black or
+   geometry-free ring at the edge of a widened render.
+2. **There is no single clip-space site.** The general MVP path plus the 12
+   baked-sx modules will both need the rotation term, exactly as the shear did.
+   This is the prediction I expect to cost work, and it is a solved-once problem
+   rather than a new one.
+3. **The rotation WILL move the HUD, unlike the shear.** `K_eye = P·T(−d)·P⁻¹`
+   displaces in proportion to inverse depth, so a screen-space draw at `w = 1` was
+   immune by construction. A rotation is depth-*independent* — that is the same
+   property that makes the homography exact — so the identical transform that left
+   the HUD alone will drag it. The HUD therefore cannot be left to fall out for
+   free; it needs #30's canvas explicitly, and a screen-space element carried
+   through `R` would behave as if infinitely distant rather than sitting at the
+   cockpit.
