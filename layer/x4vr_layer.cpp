@@ -4590,8 +4590,19 @@ void patch_view_before_submit() {
             cams.emplace(*best, ProjState{}).first->second.id = next_id++;
 
         for (auto &[slot, slot_n] : g_track.credit) {
-        if (slot_n < 50)
-            continue; // same "is this a real scene" bar the winner must clear
+        // No draw-count bar here, deliberately. The first version of this loop
+        // kept the winner's >=50 test and take 157 still missed the 2.21
+        // camera -- because take 156b shows the scene camera drawing exactly
+        // **51**, one above the bar. A threshold that the subject of the
+        // measurement clears by one is not a filter, it is a coin toss, and it
+        // had already excluded the camera outright at the wider field.
+        //
+        // 50 draws was only ever a proxy for "has X4 populated this block",
+        // and the loop now runs the direct test instead: an unpopulated block
+        // reads back zeros, so the affine check below rejects it, and
+        // read_proj_terms() refuses anything it cannot decode. Replacing a
+        // proxy with the thing it stood for costs nothing and stops the
+        // instrument from choosing which cameras exist.
         float *cblk = slot_host_ptr(slot);
         if (!cblk)
             continue;

@@ -1144,3 +1144,33 @@ Verified: builds clean, and 11 of 13 test binaries pass. The two that do not —
 `x4vr_test_multiview_render` (`shaders_missing`) and `x4vr_test_spirv_patch`
 (a CLI that printed its usage) — fail *identically on the unmodified layer*,
 checked by stashing the change and rebuilding rather than by assuming.
+
+### Take 157 — the loop was right, the threshold was still wrong
+
+The all-blocks loop widened coverage exactly as intended: 85 changes against 38,
+57 slots against 28, and a third projection appeared. **And the 2.21 camera was
+still missing.** Reported as a FAIL, correctly, by the reworded message that no
+longer claims X4 rejected anything.
+
+The remaining filter was the draw-count bar the loop had inherited from the
+winner. Take 156b names the number:
+
+    fov 1.4917, the honouring camera:  draws=51,  five samples, every one at 51
+
+**One draw above a threshold of 50.** At the wider field it fell below and
+vanished entirely. A bar the subject of the measurement clears by one is not a
+filter, it is a coin toss — and the same class of defect as the winner-take-all
+it was meant to fix: a rule adopted for one purpose quietly deciding which
+cameras exist.
+
+`50` was only ever a proxy for "has X4 populated this block". The loop already
+runs the direct test — an unpopulated block reads back zeros, the affine check
+`|m[15] − 1| > 1e-3` rejects it, and `read_proj_terms()` refuses whatever it
+cannot decode — so the proxy is removed and every credited block is examined on
+its own merits.
+
+**Two fixes, one bug, and both had to land before anything could be measured.**
+Worth recording as a pattern rather than two incidents: the first fix widened
+*which* blocks were considered, the second removed the bar that then excluded
+the one that mattered. Neither alone would have shown the 2.21 camera, and the
+first one passing its build and tests proved nothing about whether it worked.
