@@ -1809,3 +1809,92 @@ sixty passing takes depend on, and `x4vr_spirv.hpp:1078` says why the three
 patches deliberately repeat each other's scans instead of sharing them — "a
 refactor that broke all three at once is the expensive mistake here". That is
 work for a fresh session, not the tail of a long one.
+
+## #35 piece 1 — the off-axis affine is emitted; the take that tests it
+
+Piece (1) of the three above. The map from X4's symmetric frustum to the
+runtime's canted one now exists in the shaders instead of only in
+`tests/view_math.cpp`, in **both** vertex patches, and the layer can ask for it.
+
+### What changed
+
+`emit_off_axis()` in `common/x4vr_spirv.hpp` emits `apply_off_axis` verbatim:
+
+    x' = (ax_num/sx)·x + bx·w        y' = (ay_num/sy)·y + by·w
+
+after the eye shear, on clip x and clip y, with `sx` and `sy` read live per
+draw. `patch_vertex_eye_offset` reads `sy` from `M_projection[1][1]` beside the
+`[0][0]` it already read; `patch_vertex_eye_offset_mvp` recovers `|sy|` from
+`row1(MVP)` by the same argument that gives it `|sx|` from `row0`.
+
+The emitter is **shared** by the two patches, where their scans are deliberately
+duplicated. That duplication protects field-proven code from a refactor; this is
+new in both callers at once, and the failure it guards is the opposite one — a
+sign fixed in one copy and left wrong in the other, which is a defect this
+project has already shipped once.
+
+### The one assumption, named
+
+The mvp form recovers a *magnitude*. The sign of `sy` is not in the block and is
+supplied: **negative**, from 35,783 sampled camera blocks across every log kept,
+none positive. It is the Y-flip Vulkan's downward NDC y requires, and it is the
+same convention `make_off_axis`'s negative `ay_num` is derived from — so this
+adds no failure mode of its own, and if X4 ever flipped it every module would
+flip together rather than these twelve alone. The layer now warns once, by name,
+if any camera ever reports a non-negative `sy`.
+
+### What is verified before the run
+
+* **Byte-identical when not requested.** The pre-#35 build was compiled from
+  `git show HEAD:` and run against the same inputs: 2188 bytes for the camera
+  block form and 3240 for the mvp form, mono and stereo, all four identical. So
+  every state tagged before #35 reproduces by leaving `X4VR_OFFAXIS` unset.
+  Reproduce with:
+
+      g++ -std=c++17 -O1 -o /tmp/ref tests/spirv_patch.cpp   # from an old tree
+      cmp <(ref ...) <(new ...)
+
+  The suite cannot hold this check permanently — there is no "before" once it is
+  committed — so it asserts the structural form instead: zero `OpLogicalAnd` and
+  zero `OpFDiv` added when the affine is absent.
+* **The emitted constants are `make_off_axis`'s**, checked against the numbers
+  `tests/view_math.cpp` already pins for the take-112 frusta: `ax_num` 0.902738,
+  `bx` +0.242513, `ay_num` −0.835479, `by` −0.193187, and the eye-1 mirror as a
+  difference of −0.485025.
+* `spirv-val` passes on every form; the affine writes exactly two components.
+* A backwards frustum, a malformed string and a right-eye map with no left are
+  all **refused**, leaving the module untouched.
+
+### PREDICTION, before the take
+
+Two runs, identical but for one value.
+
+**A — the negative control.** `X4VR_OFFAXIS="-55,55,55,-55"` at
+`X4VR_FOV=1.4917`. This is the identity, and not empirically: the take-112 pair's
+`union_half_angle` is 55.00°, `X4VR_FOV` 1.4917 puts X4's own half-angle at the
+same 55.00°, so `ax_num = cot 55° = sx` and `A_x = 1` exactly with `B_x = 0`.
+**The picture must be indistinguishable from the same command line with
+`X4VR_OFFAXIS` unset.** Any visible difference is a defect in the emission, and
+it is the emission that is on trial here, not the frusta.
+
+**B — the canted target.** `X4VR_OFFAXIS="-54,40,44,-55"`, the measured Quest 3
+eye 0. Against the fov camera the scorer will report `A_x=1.2892 B_x=+0.2425,
+A_y=1.1931 B_y=-0.1932`, and the picture should be **magnified 1.289×
+horizontally and 1.193× vertically, and shifted 12.1% of the image width to the
+right and 9.7% of its height downward**. An unchanged picture means the affine
+reached no draw — which is a different failure from a wrong picture, and the
+scorer's `baked-sx` line separates them.
+
+I expect A to be clean and B to look exactly as stated. The risk I cannot price
+from here is the **other cameras**: `A_x = ax_num/sx_live` divides by whichever
+camera is drawing, so a camera at a different `sx` is remapped from its own field
+into the target — correct by construction for the eye, and a behaviour change for
+the cockpit monitors and the map, which run at `|sy/sx|` 1.0 and 1.5. That is
+inherited from the live-sx shear rather than introduced here, and B is the run
+that will show it.
+
+**What this take does NOT establish.** Nothing about the headset. The layer still
+declares a symmetric ±55° field (piece 2) and still renders 1408² per eye (piece
+3), so in VR the declaration and the render disagree with the affine on purpose.
+B is a flatscreen measurement of a shader transform, and reading it as "off-axis
+works in VR" would be reading three pieces from one.

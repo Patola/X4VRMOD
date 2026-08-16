@@ -36,6 +36,32 @@ static std::vector<uint32_t> load_spv(const char *path) {
     return v;
 }
 
+// Task #35: "l,r,u,d" in DEGREES -> the OffAxis the patch takes. Degrees
+// because that is the unit OpenXR reports and the unit a run's command line is
+// legible in; the tan() lives in frustum_of_angles, which is where it lives for
+// the layer too, so a forgotten conversion cannot differ between them.
+//
+// Returns a non-ok OffAxis on a malformed string, and the patch refuses that
+// rather than rendering symmetric while the caller believes otherwise.
+static x4vr::OffAxis parse_off_axis(const char *s) {
+    float a[4] = {0, 0, 0, 0};
+    int n = 0;
+    for (const char *p = s; *p && n < 4; n++) {
+        char *end = nullptr;
+        a[n] = strtof(p, &end);
+        if (end == p)
+            return {};
+        p = end;
+        if (*p == ',')
+            p++;
+    }
+    if (n != 4)
+        return {};
+    const float r = 3.14159265358979f / 180.0f;
+    return x4vr::make_off_axis(
+        x4vr::frustum_of_angles(a[0] * r, a[1] * r, a[2] * r, a[3] * r));
+}
+
 int main(int argc, char **argv) {
     if (argc < 3) {
         fprintf(stderr,
@@ -85,8 +111,13 @@ int main(int argc, char **argv) {
         const float dl = argc > 7 ? strtof(argv[7], nullptr) : -0.032f;
         const bool have_dr = argc > 8;
         const float dr = have_dr ? strtof(argv[8], nullptr) : 0.0f;
+        const x4vr::OffAxis oal = argc > 9 ? parse_off_axis(argv[9])
+                                           : x4vr::OffAxis{};
+        const x4vr::OffAxis oar = argc > 10 ? parse_off_axis(argv[10])
+                                            : x4vr::OffAxis{};
         const bool ok = x4vr::spv::patch_vertex_eye_offset(
-            code, set, binding, member, dl, have_dr ? &dr : nullptr);
+            code, set, binding, member, dl, have_dr ? &dr : nullptr,
+            argc > 9 ? &oal : nullptr, argc > 10 ? &oar : nullptr);
         printf("PATCHED=%d\n", ok ? 1 : 0);
         if (!ok && code != before) {
             printf("FAIL=refusal_modified_code\n");
@@ -120,8 +151,13 @@ int main(int argc, char **argv) {
         const float dl = argc > 7 ? strtof(argv[7], nullptr) : -0.032f;
         const bool have_dr = argc > 8;
         const float dr = have_dr ? strtof(argv[8], nullptr) : 0.0f;
+        const x4vr::OffAxis oal = argc > 9 ? parse_off_axis(argv[9])
+                                           : x4vr::OffAxis{};
+        const x4vr::OffAxis oar = argc > 10 ? parse_off_axis(argv[10])
+                                            : x4vr::OffAxis{};
         const bool ok = x4vr::spv::patch_vertex_eye_offset_mvp(
-            code, set, binding, member, dl, have_dr ? &dr : nullptr);
+            code, set, binding, member, dl, have_dr ? &dr : nullptr,
+            argc > 9 ? &oal : nullptr, argc > 10 ? &oar : nullptr);
         printf("PATCHED=%d\n", ok ? 1 : 0);
         // A refusal that has already edited the module is worse than a wrong
         // patch: the caller falls back believing the code is untouched.

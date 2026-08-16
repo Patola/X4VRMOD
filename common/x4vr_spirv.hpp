@@ -29,6 +29,13 @@
 // the module untouched) on anything it does not fully understand.
 #pragma once
 
+// For x4vr::OffAxis. The two vertex patches emit `apply_off_axis` verbatim, so
+// they take the struct that function takes rather than four loose floats --
+// reading a list of coefficients positionally is a mistake this project has
+// made before, and a named field cannot be swapped by accident. x4vr_view.hpp
+// includes nothing from here, so the dependency is one-way.
+#include "x4vr_view.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -78,6 +85,7 @@ enum : uint32_t {
     OpCompositeInsert = 82,
     OpConvertSToF = 111,
     OpBitcast = 124,
+    OpFNegate = 127,
     OpIAdd = 128,
     OpFAdd = 129,
     OpFSub = 131,
@@ -97,6 +105,10 @@ enum : uint32_t {
     OpFDiv = 136,
     OpFOrdGreaterThan = 186,
     GLSLstd450Sqrt = 31,
+
+    // For the off-axis affine (task #35). Core SPIR-V 1.0, like everything
+    // else emitted here.
+    OpLogicalAnd = 167,
 
     ExecutionModelVertex = 0,
     ExecutionModelFragment = 4,
@@ -657,6 +669,123 @@ inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16],
     return true;
 }
 
+// ---------------------------------------------------------------- task #35
+//
+// The ids `emit_off_axis` needs. Everything here is either a type or a value
+// already materialised by the caller: the four coefficients arrive as ids
+// rather than floats because in stereo each one is a per-view expression, not
+// a constant.
+struct OffAxisIds {
+    uint32_t ax_num = 0, bx = 0, ay_num = 0, by = 0;
+    uint32_t zero_f = 0, one_f = 0;
+    uint32_t t_float = 0, t_v4 = 0, t_bool = 0;
+};
+
+/// `base + float(gl_ViewIndex)·diff`, or `base` alone when `diff` is 0 — the id
+/// 0, meaning "the caller made no right-eye constant", not the value zero.
+///
+/// The same arithmetic selection patch_vertex_clip uses, for the same reasons:
+/// it appends cleanly before each OpReturn with no basic-block surgery, it
+/// avoids OpSelect's SPIR-V-1.4 rules for a vector result, and `float(view)` is
+/// exact for 0 and 1 so this is a selection and not a blend.
+///
+/// `vf` is required to be a real id whenever `diff` is one; that holds by
+/// construction in both callers, where a per-view constant is only ever built
+/// under the same condition that builds `vf`.
+inline uint32_t select_view(std::vector<uint32_t> &out, uint32_t &bound,
+                           uint32_t t_float, uint32_t vf, uint32_t base,
+                           uint32_t diff) {
+    if (!diff)
+        return base;
+    const uint32_t scaled = bound++;
+    emit(out, OpFMul, {t_float, scaled, vf, diff});
+    const uint32_t sum = bound++;
+    emit(out, OpFAdd, {t_float, sum, base, scaled});
+    return sum;
+}
+
+/// Emits `apply_off_axis` (common/x4vr_view.hpp) into `out`, mapping X4's
+/// symmetric frustum onto the runtime's canted one.
+///
+///     x' = (ax_num/sx)·x + bx·w        y' = (ay_num/sy)·y + by·w
+///
+/// `x_in` is clip x **after** the eye shear and `loaded` the position as X4
+/// wrote it — the shear touches component 0 only, so y and w come from
+/// `loaded` directly. That composition order is not a choice: the shear leaves
+/// `x_c = sx·(x − d)`, so dividing by `sx` recovers the offset eye's own ray
+/// and no eye-offset term belongs in the affine. See x4vr_view.hpp:363.
+///
+/// Returns the id of the corrected vec4.
+///
+/// **Shared, where the three scans below are deliberately duplicated.** That
+/// duplication protects code already proven in the field from a refactor; this
+/// is new in both callers at once, and the failure it guards against is the
+/// opposite one — a sign fixed in one copy and left wrong in the other. This
+/// project has already shipped exactly that defect once, fixing an
+/// aggregate-across-cameras bug for sx and adding it for sy in the same commit.
+///
+/// The degenerate case follows the host function rather than improving on it:
+/// a zero sx or sy leaves the position untouched instead of dividing by it.
+/// X4's constant blocks read back all zeroes before the first real frame — the
+/// layer's own camera dump skips them for that reason — and an inf in
+/// gl_Position takes the whole primitive with it.
+inline uint32_t emit_off_axis(std::vector<uint32_t> &out, uint32_t &bound,
+                              const OffAxisIds &t, uint32_t sx, uint32_t sy,
+                              uint32_t loaded, uint32_t x_in) {
+    auto nid = [&bound] { return bound++; };
+    const uint32_t y_in = nid();
+    emit(out, OpCompositeExtract, {t.t_float, y_in, loaded, 1});
+    const uint32_t w = nid();
+    emit(out, OpCompositeExtract, {t.t_float, w, loaded, 3});
+
+    // v·v > 0 rather than |v| > 0: OpFAbs is an OpExtInst, and requiring the
+    // GLSL.std.450 import here would make this refuse modules that do not
+    // import it. The squared form is also exactly how
+    // patch_vertex_eye_offset_mvp already guards its own divide.
+    auto nonzero = [&](uint32_t v) {
+        const uint32_t sq = nid();
+        emit(out, OpFMul, {t.t_float, sq, v, v});
+        const uint32_t ok = nid();
+        emit(out, OpFOrdGreaterThan, {t.t_bool, ok, sq, t.zero_f});
+        return ok;
+    };
+    const uint32_t okx = nonzero(sx);
+    const uint32_t oky = nonzero(sy);
+    const uint32_t ok = nid();
+    emit(out, OpLogicalAnd, {t.t_bool, ok, okx, oky});
+    // Guarded denominators as well as a guarded result: the OpSelect below
+    // discards the quotient, but computing inf and throwing it away relies on
+    // the divide being well behaved, and this costs two instructions.
+    const uint32_t denx = nid();
+    emit(out, OpSelect, {t.t_float, denx, okx, sx, t.one_f});
+    const uint32_t deny = nid();
+    emit(out, OpSelect, {t.t_float, deny, oky, sy, t.one_f});
+
+    auto axis = [&](uint32_t num, uint32_t den, uint32_t v, uint32_t b) {
+        const uint32_t a = nid();
+        emit(out, OpFDiv, {t.t_float, a, num, den});
+        const uint32_t scaled = nid();
+        emit(out, OpFMul, {t.t_float, scaled, a, v});
+        const uint32_t shift = nid();
+        emit(out, OpFMul, {t.t_float, shift, b, w});
+        const uint32_t sum = nid();
+        emit(out, OpFAdd, {t.t_float, sum, scaled, shift});
+        return sum;
+    };
+    const uint32_t cx = axis(t.ax_num, denx, x_in, t.bx);
+    const uint32_t cy = axis(t.ay_num, deny, y_in, t.by);
+    const uint32_t nx = nid();
+    emit(out, OpSelect, {t.t_float, nx, ok, cx, x_in});
+    const uint32_t ny = nid();
+    emit(out, OpSelect, {t.t_float, ny, ok, cy, y_in});
+
+    const uint32_t p1 = nid();
+    emit(out, OpCompositeInsert, {t.t_v4, p1, nx, loaded, 0});
+    const uint32_t p2 = nid();
+    emit(out, OpCompositeInsert, {t.t_v4, p2, ny, p1, 1});
+    return p2;
+}
+
 /// Rewrites `code` so every Vertex entry point ends with
 ///
 ///     gl_Position.x -= M_projection[0][0] * d
@@ -695,10 +824,29 @@ inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16],
 /// sharing it. That function is proven in the field and this one is new; a
 /// refactor that broke both at once is the expensive mistake here, and the
 /// duplication is the cheap one.
+///
+/// **Task #35.** With `oa_left` non-null the shear is followed by the off-axis
+/// affine, which needs `sy` as well and so reads `M_projection[1][1]` beside
+/// the `[0][0]` it already reads. `oa_right` makes those coefficients per-view
+/// exactly as `d_right` makes the offset per-view, and the two are independent:
+/// the runtime's frusta can differ between eyes for reasons that have nothing
+/// to do with the IPD.
+///
+/// With both null the emitted words are **byte-identical** to what this
+/// function produced before #35 existed, which is what lets every tagged state
+/// before it be reproduced by leaving the knob unset. tests/run-multiview-
+/// render.sh asserts that identity rather than trusting it.
+///
+/// Refuses a non-`ok` OffAxis rather than quietly skipping the affine. A
+/// degenerate frustum reaching here is a caller bug, and a module that renders
+/// symmetric while the layer believes it is canted is the kind of failure that
+/// looks like a headset problem for a week.
 inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
                                     uint32_t binding, uint32_t member,
                                     float d_left,
-                                    const float *d_right = nullptr) {
+                                    const float *d_right = nullptr,
+                                    const OffAxis *oa_left = nullptr,
+                                    const OffAxis *oa_right = nullptr) {
     std::vector<Inst> insts;
     if (!iterate(code, insts))
         return false;
@@ -714,7 +862,7 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
     std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> vars;
     std::unordered_map<uint32_t, std::vector<uint32_t>> struct_members;
     std::unordered_map<uint32_t, uint32_t> var_set, var_binding;
-    uint32_t t_float = 0, t_v4 = 0, t_mat4 = 0, t_int = 0;
+    uint32_t t_float = 0, t_v4 = 0, t_mat4 = 0, t_int = 0, t_bool = 0;
     uint32_t ptr_out_v4 = 0, ptr_uniform_float = 0;
     size_t first_fn = 0;
     bool have_first_fn = false;
@@ -785,6 +933,10 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
             if (in.len >= 4 && w[2] == 32 && w[3] == 1 && !t_int)
                 t_int = w[1];
             break;
+        case OpTypeBool:
+            if (in.len >= 2 && !t_bool)
+                t_bool = w[1];
+            break;
         case OpTypeVector:
             if (in.len >= 4 && w[2] == t_float && w[3] == 4 && !t_v4)
                 t_v4 = w[1];
@@ -828,6 +980,12 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
 
     if (!entry_fn || !t_float || !t_v4 || !t_mat4 || !have_first_fn)
         return false;
+    // Task #35. Checked before anything is emitted, so a refusal leaves the
+    // module untouched the way every other refusal here does.
+    if ((oa_left && !oa_left->ok) || (oa_right && !oa_right->ok))
+        return false;
+    if (oa_right && !oa_left)
+        return false; // a right-eye map with no left is a caller error
 
     // --- locate the camera block --------------------------------------
     // Matched by (set, binding) and then *verified* by shape: the variable
@@ -918,13 +1076,46 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
     const uint32_t c_dl = fconst(d_left);
 
     const bool stereo = d_right != nullptr;
+    // gl_ViewIndex is needed by whichever of the two is per-view, and the two
+    // are independent: a runtime can hand back canted frusta with the eye
+    // offset unchanged, or the reverse.
+    const bool oa_on = oa_left != nullptr;
+    const bool oa_stereo = oa_right != nullptr;
+    const bool need_view = stereo || oa_stereo;
     uint32_t c_ddiff = 0, view_var = 0;
-    if (stereo) {
+    if (stereo)
         c_ddiff = fconst(*d_right - d_left);
+    if (need_view) {
         const uint32_t ptr_in_int = new_id();
         emit(decls, OpTypePointer, {ptr_in_int, StorageClassInput, t_int});
         view_var = new_id();
         emit(decls, OpVariable, {ptr_in_int, view_var, StorageClassInput});
+    }
+    // Nothing below runs unless #35 is asked for, which is what keeps the
+    // emitted words identical to the pre-#35 ones when it is not.
+    OffAxisIds oa{};
+    uint32_t c_one = 0, c_oa[4] = {}, c_oad[4] = {};
+    if (oa_on) {
+        if (!t_bool) {
+            t_bool = new_id();
+            emit(decls, OpTypeBool, {t_bool});
+        }
+        oa.t_float = t_float;
+        oa.t_v4 = t_v4;
+        oa.t_bool = t_bool;
+        oa.zero_f = fconst(0.0f);
+        oa.one_f = fconst(1.0f);
+        c_one = iconst(1);
+        const float l[4] = {oa_left->ax_num, oa_left->bx, oa_left->ay_num,
+                            oa_left->by};
+        for (int i = 0; i < 4; i++)
+            c_oa[i] = fconst(l[i]);
+        if (oa_stereo) {
+            const float r[4] = {oa_right->ax_num, oa_right->bx,
+                                oa_right->ay_num, oa_right->by};
+            for (int i = 0; i < 4; i++)
+                c_oad[i] = fconst(r[i] - l[i]);
+        }
     }
 
     const size_t anno_at = last_annotation_end
@@ -941,9 +1132,9 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
     bool in_entry = false;
     for (const Inst &in : insts) {
         const uint32_t *w = &code[in.start];
-        if (stereo && !has_multiview_cap && in.start == cap_at)
+        if (need_view && !has_multiview_cap && in.start == cap_at)
             emit(out, OpCapability, {CapabilityMultiView});
-        if (stereo && !has_multiview_ext && code[1] < 0x00010300u &&
+        if (need_view && !has_multiview_ext && code[1] < 0x00010300u &&
             in.start == ext_at) {
             static const uint32_t kExt[] = {0x5f565053u, 0x5f52484bu,
                                             0x746c756du, 0x65697669u,
@@ -952,7 +1143,7 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
             for (uint32_t x : kExt)
                 out.push_back(x);
         }
-        if (stereo && in.start == anno_at)
+        if (need_view && in.start == anno_at)
             emit(out, OpDecorate,
                  {view_var, DecorationBuiltIn, BuiltInViewIndex});
         if (in.start == first_fn)
@@ -976,13 +1167,20 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
             const uint32_t sx = new_id();
             emit(out, OpLoad, {t_float, sx, p_sx});
 
+            // float(gl_ViewIndex), loaded once: the eye offset and the #35
+            // coefficients both select on it, and emitting it twice would
+            // leave two selections free to disagree.
+            uint32_t vf = 0;
+            if (need_view) {
+                const uint32_t vi = new_id();
+                emit(out, OpLoad, {t_int, vi, view_var});
+                vf = new_id();
+                emit(out, OpConvertSToF, {t_float, vf, vi});
+            }
+
             // d = d_left + float(gl_ViewIndex) * (d_right - d_left)
             uint32_t d = c_dl;
             if (stereo) {
-                const uint32_t vi = new_id();
-                emit(out, OpLoad, {t_int, vi, view_var});
-                const uint32_t vf = new_id();
-                emit(out, OpConvertSToF, {t_float, vf, vi});
                 const uint32_t scaled = new_id();
                 emit(out, OpFMul, {t_float, scaled, vf, c_ddiff});
                 d = new_id();
@@ -1002,8 +1200,26 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
             emit(out, OpCompositeExtract, {t_float, x, loaded, 0});
             const uint32_t nx = new_id();
             emit(out, OpFSub, {t_float, nx, x, delta});
-            const uint32_t np = new_id();
-            emit(out, OpCompositeInsert, {t_v4, np, nx, loaded, 0});
+
+            uint32_t np;
+            if (oa_on) {
+                OffAxisIds t = oa;
+                uint32_t *dst[4] = {&t.ax_num, &t.bx, &t.ay_num, &t.by};
+                for (int i = 0; i < 4; i++)
+                    *dst[i] = select_view(out, bound, t_float, vf, c_oa[i],
+                                          c_oad[i]);
+                // sy = M_projection[1][1], the vertical counterpart of the
+                // read above and indexed the same logical way.
+                const uint32_t p_sy = new_id();
+                emit(out, OpAccessChain, {ptr_uniform_float, p_sy, cam_var,
+                                          c_member, c_one, c_one});
+                const uint32_t sy = new_id();
+                emit(out, OpLoad, {t_float, sy, p_sy});
+                np = emit_off_axis(out, bound, t, sx, sy, loaded, nx);
+            } else {
+                np = new_id();
+                emit(out, OpCompositeInsert, {t_v4, np, nx, loaded, 0});
+            }
             emit(out, OpStore, {ptr, np});
         }
 
@@ -1012,7 +1228,7 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
         // or 1.2, and before 1.4 the interface is limited to Input and Output
         // storage classes, so listing a Uniform there is the violation rather
         // than omitting it.
-        if (stereo && in.op == OpEntryPoint && in.len >= 3 &&
+        if (need_view && in.op == OpEntryPoint && in.len >= 3 &&
             w[2] == entry_fn) {
             out.push_back((uint32_t)((in.len + 1) << 16) | OpEntryPoint);
             for (uint32_t j = 1; j < in.len; j++)
@@ -1081,10 +1297,32 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
 /// same reason that one repeats `patch_vertex_clip`'s: those two are proven in
 /// the field, this one is new, and a refactor that broke all three at once is
 /// the expensive mistake here.
+///
+/// **Task #35, and the one place it is not simply the same edit.** The affine
+/// needs `sy`, and the recovery above yields a *magnitude*: `row1(MVP) =
+/// sy·row1(VW)` gives `|sy| = |row1(MVP).xyz| / |row3(MVP).xyz|`, and no
+/// quantity in the block carries the sign. It is supplied, as `sy = −|sy|`,
+/// from measurement: across every log this project has kept, 35,783 sampled
+/// camera blocks report a negative `sy` and not one reports a positive — the
+/// Y-flip that Vulkan's downward NDC y requires.
+///
+/// That is the *same* convention `make_off_axis`'s negative `ay_num` is derived
+/// from (x4vr_view.hpp:305). So this does not add a failure mode of its own: if
+/// X4 ever flipped the convention, the camera-block path would be wrong in
+/// exactly the same way, and every module would flip together rather than these
+/// twelve alone. It is named here because an assumption only one path spells
+/// out is the one that gets forgotten. The layer logs a signed `sy` on every
+/// `proj CAMERA` line and warns once if it ever sees a non-negative one, which
+/// is what makes this checkable rather than merely stated.
+///
+/// Without #35 requested, the emitted words are byte-identical to the pre-#35
+/// ones, as in `patch_vertex_eye_offset`.
 inline bool patch_vertex_eye_offset_mvp(std::vector<uint32_t> &code,
                                         uint32_t set, uint32_t binding,
                                         uint32_t member, float d_left,
-                                        const float *d_right = nullptr) {
+                                        const float *d_right = nullptr,
+                                        const OffAxis *oa_left = nullptr,
+                                        const OffAxis *oa_right = nullptr) {
     std::vector<Inst> insts;
     if (!iterate(code, insts))
         return false;
@@ -1229,6 +1467,11 @@ inline bool patch_vertex_eye_offset_mvp(std::vector<uint32_t> &code,
         return false;
     if (!glsl_ext)
         return false; // no sqrt available without adding an import; refuse
+    // Task #35, checked before anything is emitted -- see the twin above.
+    if ((oa_left && !oa_left->ok) || (oa_right && !oa_right->ok))
+        return false;
+    if (oa_right && !oa_left)
+        return false; // a right-eye map with no left is a caller error
 
     // --- locate the per-object block, verified by shape ------------------
     uint32_t obj_var = 0;
@@ -1322,13 +1565,39 @@ inline bool patch_vertex_eye_offset_mvp(std::vector<uint32_t> &code,
     const uint32_t c_dl = fconst(d_left);
 
     const bool stereo = d_right != nullptr;
+    const bool oa_on = oa_left != nullptr;
+    const bool oa_stereo = oa_right != nullptr;
+    const bool need_view = stereo || oa_stereo;
     uint32_t c_ddiff = 0, view_var = 0;
-    if (stereo) {
+    if (stereo)
         c_ddiff = fconst(*d_right - d_left);
+    if (need_view) {
         const uint32_t ptr_in_int = new_id();
         emit(decls, OpTypePointer, {ptr_in_int, StorageClassInput, t_int});
         view_var = new_id();
         emit(decls, OpVariable, {ptr_in_int, view_var, StorageClassInput});
+    }
+    // As in the twin: nothing here runs unless #35 is asked for. c_zero_f and
+    // c_one_f already exist above -- the sqrt guard needs the same two -- so
+    // the affine reuses them rather than declaring a second pair.
+    OffAxisIds oa{};
+    uint32_t c_oa[4] = {}, c_oad[4] = {};
+    if (oa_on) {
+        oa.t_float = t_float;
+        oa.t_v4 = t_v4;
+        oa.t_bool = t_bool;
+        oa.zero_f = c_zero_f;
+        oa.one_f = c_one_f;
+        const float l[4] = {oa_left->ax_num, oa_left->bx, oa_left->ay_num,
+                            oa_left->by};
+        for (int i = 0; i < 4; i++)
+            c_oa[i] = fconst(l[i]);
+        if (oa_stereo) {
+            const float r[4] = {oa_right->ax_num, oa_right->bx,
+                                oa_right->ay_num, oa_right->by};
+            for (int i = 0; i < 4; i++)
+                c_oad[i] = fconst(r[i] - l[i]);
+        }
     }
 
     const size_t anno_at = last_annotation_end
@@ -1345,9 +1614,9 @@ inline bool patch_vertex_eye_offset_mvp(std::vector<uint32_t> &code,
     bool in_entry = false;
     for (const Inst &in : insts) {
         const uint32_t *w = &code[in.start];
-        if (stereo && !has_multiview_cap && in.start == cap_at)
+        if (need_view && !has_multiview_cap && in.start == cap_at)
             emit(out, OpCapability, {CapabilityMultiView});
-        if (stereo && !has_multiview_ext && code[1] < 0x00010300u &&
+        if (need_view && !has_multiview_ext && code[1] < 0x00010300u &&
             in.start == ext_at) {
             static const uint32_t kExt[] = {0x5f565053u, 0x5f52484bu,
                                             0x746c756du, 0x65697669u,
@@ -1356,7 +1625,7 @@ inline bool patch_vertex_eye_offset_mvp(std::vector<uint32_t> &code,
             for (uint32_t x : kExt)
                 out.push_back(x);
         }
-        if (stereo && in.start == anno_at)
+        if (need_view && in.start == anno_at)
             emit(out, OpDecorate,
                  {view_var, DecorationBuiltIn, BuiltInViewIndex});
         if (in.start == first_fn)
@@ -1402,6 +1671,10 @@ inline bool patch_vertex_eye_offset_mvp(std::vector<uint32_t> &code,
             };
             const uint32_t n0 = sq_len3(c_row0);
             const uint32_t n3 = sq_len3(c_row3);
+            // row 1 for |sy|, by the same argument that gives |sx| from row 0.
+            // Emitted after n3 so that with #35 unrequested the instruction
+            // stream is exactly what it was before.
+            const uint32_t n1 = oa_on ? sq_len3(c_col[1]) : 0;
 
             // sx = n3 > 0 ? sqrt(n0/n3) : 0, written exactly as the host-side
             // `recover` in tests/view_math.cpp so the two cannot drift. The
@@ -1421,13 +1694,35 @@ inline bool patch_vertex_eye_offset_mvp(std::vector<uint32_t> &code,
             const uint32_t sx = new_id();
             emit(out, OpSelect, {t_float, sx, ok, root, c_zero_f});
 
+            // sy = -sqrt(n1/n3), guarded by the same `ok`. The magnitude comes
+            // out of the block; the sign does not exist there and is X4's
+            // measured Y-flip -- see this function's doc comment, which is
+            // where the 35,783 samples behind that minus are recorded.
+            uint32_t sy = 0;
+            if (oa_on) {
+                const uint32_t qy = new_id();
+                emit(out, OpFDiv, {t_float, qy, n1, den});
+                const uint32_t rooty = new_id();
+                emit(out, OpExtInst,
+                     {t_float, rooty, glsl_ext, GLSLstd450Sqrt, qy});
+                const uint32_t negy = new_id();
+                emit(out, OpFNegate, {t_float, negy, rooty});
+                sy = new_id();
+                emit(out, OpSelect, {t_float, sy, ok, negy, c_zero_f});
+            }
+
+            // float(gl_ViewIndex), loaded once and shared -- see the twin.
+            uint32_t vf = 0;
+            if (need_view) {
+                const uint32_t vi = new_id();
+                emit(out, OpLoad, {t_int, vi, view_var});
+                vf = new_id();
+                emit(out, OpConvertSToF, {t_float, vf, vi});
+            }
+
             // d = d_left + float(gl_ViewIndex) * (d_right - d_left)
             uint32_t d = c_dl;
             if (stereo) {
-                const uint32_t vi = new_id();
-                emit(out, OpLoad, {t_int, vi, view_var});
-                const uint32_t vf = new_id();
-                emit(out, OpConvertSToF, {t_float, vf, vi});
                 const uint32_t scaled = new_id();
                 emit(out, OpFMul, {t_float, scaled, vf, c_ddiff});
                 d = new_id();
@@ -1447,12 +1742,23 @@ inline bool patch_vertex_eye_offset_mvp(std::vector<uint32_t> &code,
             emit(out, OpCompositeExtract, {t_float, x, loaded, 0});
             const uint32_t nx = new_id();
             emit(out, OpFSub, {t_float, nx, x, delta});
-            const uint32_t np = new_id();
-            emit(out, OpCompositeInsert, {t_v4, np, nx, loaded, 0});
+
+            uint32_t np;
+            if (oa_on) {
+                OffAxisIds t = oa;
+                uint32_t *dst[4] = {&t.ax_num, &t.bx, &t.ay_num, &t.by};
+                for (int i = 0; i < 4; i++)
+                    *dst[i] = select_view(out, bound, t_float, vf, c_oa[i],
+                                          c_oad[i]);
+                np = emit_off_axis(out, bound, t, sx, sy, loaded, nx);
+            } else {
+                np = new_id();
+                emit(out, OpCompositeInsert, {t_v4, np, nx, loaded, 0});
+            }
             emit(out, OpStore, {ptr, np});
         }
 
-        if (stereo && in.op == OpEntryPoint && in.len >= 3 &&
+        if (need_view && in.op == OpEntryPoint && in.len >= 3 &&
             w[2] == entry_fn) {
             out.push_back((uint32_t)((in.len + 1) << 16) | OpEntryPoint);
             for (uint32_t j = 1; j < in.len; j++)

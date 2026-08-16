@@ -668,6 +668,137 @@ if command -v spirv-dis >/dev/null; then
     fi
 fi
 
+# The off-axis affine, task #35: X4 renders one symmetric frustum per eye and a
+# headset has none, so clip x and y are remapped onto the runtime's canted one.
+#
+# The angles below are the measured Quest 3 / WiVRn frusta from take 112 --
+# L-54 R+40 U+44 D-55 for eye 0 and the mirror for eye 1 -- and they are used
+# here rather than round numbers so the constants this emits can be checked
+# against the ones tests/view_math.cpp already pins for the same input.
+OA_L="-54,40,44,-55"
+OA_R="-40,54,44,-55"
+# atan(1)*4/180 * 55 -> a symmetric target at the union half-angle. Its map is
+# the IDENTITY when X4 is rendering at that field, which is the negative
+# control the run itself will use.
+OA_SYM="-55,55,55,-55"
+
+oa_case() {
+    local label="$1" want="$2" mode="$3" shader="$4" set="$5" bind="$6" \
+          member="$7"; shift 7
+    local out got val=skip
+    out=$("$PATCHER" "$mode" "$BUILD/tests/$shader" "$PATCHDIR/oa.spv" \
+        "$set" "$bind" "$member" -0.032 0.032 "$@" 2>&1)
+    got=$(sed -n 's/^PATCHED=//p' <<<"$out")
+    # A refusal that already edited the module is the dangerous kind: the
+    # caller falls back believing the bytes are untouched. The patcher checks
+    # that itself and prints FAIL=refusal_modified_code, so catch it here.
+    if grep -q '^FAIL=' <<<"$out"; then
+        printf 'FAIL %-38s %s\n' "$label" "$(grep '^FAIL=' <<<"$out")"
+        fails=$((fails + 1))
+        return
+    fi
+    if [[ "$got" == 1 ]] && command -v spirv-val >/dev/null; then
+        spirv-val --target-env vulkan1.2 "$PATCHDIR/oa.spv" >/dev/null 2>&1 \
+            && val=OK || val=BAD
+    fi
+    if [[ "$got" == "$want" && "$val" != BAD ]]; then
+        printf 'ok   %-38s patched=%s val=%s\n' "$label" "$got" "$val"
+    else
+        printf 'FAIL %-38s want patched=%s, got patched=%s val=%s\n' \
+            "$label" "$want" "${got:-?}" "$val"
+        fails=$((fails + 1))
+    fi
+}
+oa_case "offaxis: camera block, per-eye"   1 vert-eye-offset \
+    sample_camera_block.vert.spv 1 0 1 "$OA_L" "$OA_R"
+oa_case "offaxis: camera block, one map"   1 vert-eye-offset \
+    sample_camera_block.vert.spv 1 0 1 "$OA_SYM"
+oa_case "offaxis: mvp form, per-eye"       1 vert-eye-offset-mvp \
+    sample_light_volume.vert.spv 1 0 7 "$OA_L" "$OA_R"
+# tan_r <= tan_l is a frustum with no width. make_off_axis returns !ok and the
+# patch must decline the module rather than render it symmetric -- a shader
+# that quietly ignores the cant looks exactly like a headset problem.
+oa_case "offaxis: refuses a backwards frustum" 0 vert-eye-offset \
+    sample_camera_block.vert.spv 1 0 1 "40,-54,44,-55"
+oa_case "offaxis: refuses garbage angles"      0 vert-eye-offset \
+    sample_camera_block.vert.spv 1 0 1 "not,a,frustum,x"
+
+if command -v spirv-dis >/dev/null; then
+    # What the affine actually says. Two inserts, because it writes clip x AND
+    # clip y -- the shear alone writes only x, and the single-insert case above
+    # is what pins that. One OpLogicalAnd, which is the degenerate-scale guard
+    # and therefore a marker for "the affine is present at all".
+    "$PATCHER" vert-eye-offset "$BUILD/tests/sample_camera_block.vert.spv" \
+        "$PATCHDIR/oa.spv" 1 0 1 -0.032 0.032 "$OA_L" "$OA_R" >/dev/null 2>&1
+    ins=$(spirv-dis "$PATCHDIR/oa.spv" 2>/dev/null | grep -c 'OpCompositeInsert')
+    andc=$(spirv-dis "$PATCHDIR/oa.spv" 2>/dev/null | grep -c 'OpLogicalAnd')
+    if [[ "$ins" == 2 && "$andc" == 1 ]]; then
+        printf 'ok   %-38s insert=%s guard=%s\n' \
+            "...writes x and y, guarded once" "$ins" "$andc"
+    else
+        printf 'FAIL %-38s want insert=2 guard=1, got %s/%s\n' \
+            "...writes x and y, guarded once" "$ins" "$andc"
+        fails=$((fails + 1))
+    fi
+
+    # The affine must be ABSENT when it is not asked for. This is the property
+    # that lets every state tagged before #35 be reproduced by leaving the knob
+    # unset, and it is asserted rather than assumed: the emission is threaded
+    # through the same OpReturn handler as the shear, so a stray unconditional
+    # line there would be invisible in any other case in this file.
+    "$PATCHER" vert-eye-offset "$BUILD/tests/sample_camera_block.vert.spv" \
+        "$PATCHDIR/noaa.spv" 1 0 1 -0.032 0.032 >/dev/null 2>&1
+    nand=$(spirv-dis "$PATCHDIR/noaa.spv" 2>/dev/null | grep -c 'OpLogicalAnd')
+    ndiv=$(spirv-dis "$PATCHDIR/noaa.spv" 2>/dev/null | grep -c 'OpFDiv')
+    if [[ "$nand" == 0 && "$ndiv" == 0 ]]; then
+        printf 'ok   %-38s and=%s div=%s\n' \
+            "...absent when not requested" "$nand" "$ndiv"
+    else
+        printf 'FAIL %-38s want and=0 div=0, got %s/%s\n' \
+            "...absent when not requested" "$nand" "$ndiv"
+        fails=$((fails + 1))
+    fi
+
+    # The coefficients themselves, against the numbers tests/view_math.cpp
+    # pins for these same frusta. This is what catches a swapped x/y, a
+    # dropped tan(), or a sign read off the wrong end of the frustum -- all of
+    # which produce a module that validates perfectly and renders wrong.
+    #
+    # ax_num = 2/(tan40 - tan(-54)) = 0.902738, bx = +0.242513 for eye 0, and
+    # the eye-1 constant is emitted as a DIFFERENCE, so bx's mirror shows up as
+    # -0.485025 rather than -0.242513.
+    miss=""
+    for c in 0.902738 0.242512 -0.835478 -0.193187 -0.485025; do
+        spirv-dis "$PATCHDIR/oa.spv" 2>/dev/null |
+            grep -q "OpConstant %float $c" || miss="$miss $c"
+    done
+    if [[ -z "$miss" ]]; then
+        printf 'ok   %-38s all five match view_math\n' \
+            "...coefficients are make_off_axis's"
+    else
+        printf 'FAIL %-38s missing:%s\n' \
+            "...coefficients are make_off_axis's" "$miss"
+        fails=$((fails + 1))
+    fi
+
+    # The mvp form recovers |sy| from row 1 and negates it, because the sign is
+    # not in the block. One OpFNegate is that decision; its absence would flip
+    # the image vertically in exactly the twelve modules nobody would think to
+    # check, and only in those.
+    "$PATCHER" vert-eye-offset-mvp "$BUILD/tests/sample_light_volume.vert.spv" \
+        "$PATCHDIR/oamvp.spv" 1 0 7 -0.032 0.032 "$OA_L" "$OA_R" >/dev/null 2>&1
+    neg=$(spirv-dis "$PATCHDIR/oamvp.spv" 2>/dev/null | grep -c 'OpFNegate')
+    sqrt=$(spirv-dis "$PATCHDIR/oamvp.spv" 2>/dev/null | grep -c ' Sqrt ')
+    if [[ "$neg" == 1 && "$sqrt" == 2 ]]; then
+        printf 'ok   %-38s negate=%s sqrt=%s\n' \
+            "...mvp recovers sy as -|sy|" "$neg" "$sqrt"
+    else
+        printf 'FAIL %-38s want negate=1 sqrt=2, got %s/%s\n' \
+            "...mvp recovers sy as -|sy|" "$neg" "$sqrt"
+        fails=$((fails + 1))
+    fi
+fi
+
 # The per-eye M_invprojection correction (task #22). The deferred passes
 # reconstruct position from depth in the *eye's* frame and then light it with
 # centre-frame shadow matrices, which puts the two eyes' shadows on different

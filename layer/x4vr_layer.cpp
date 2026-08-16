@@ -3465,6 +3465,99 @@ bool proj_mvp() {
     return on;
 }
 
+// Task #35, piece 1. X4VR_OFFAXIS="l,r,u,d" — the runtime's frustum for eye 0
+// in DEGREES, in OpenXR's convention (left and down negative). Eye 1 is the
+// horizontal mirror, which is what WiVRn reports on a Quest 3 and what take 112
+// measured: eye 0 = (-54, +40, +44, -55), eye 1 = (-40, +54, +44, -55).
+//
+// **A measurement knob, not the deployment path.** Piece 2 of #35 replaces this
+// with the frusta the runtime hands back at xrLocateViews time, and then the
+// mirroring assumption goes away with it. It exists because the emission has to
+// be provable in a flatscreen run before the headset is asked to depend on it,
+// and because that run needs a negative control this knob can express:
+//
+//     X4VR_OFFAXIS="-55,55,55,-55" at X4VR_FOV=1.4917 is the IDENTITY.
+//
+// That is not a coincidence to be checked empirically, it is arithmetic:
+// union_half_angle of the take-112 pair is 55.00 deg, X4VR_FOV 1.4917 puts X4's
+// own half-angle at the same 55.00 deg, so ax_num = 2/(2*tan55) = cot55 = sx
+// and A_x = ax_num/sx = 1 exactly, with B_x = 0 because the target is
+// symmetric. A run with this value that does NOT look untouched has found a
+// defect in the emission, and a run with the canted value that looks untouched
+// has found the emission never ran.
+struct OffAxisPair {
+    x4vr::OffAxis eye[2];
+    bool on = false;
+};
+
+const OffAxisPair &offaxis_target() {
+    static const OffAxisPair p = [] {
+        OffAxisPair r{};
+        const char *s = getenv("X4VR_OFFAXIS");
+        if (!s || !*s)
+            return r;
+        float a[4] = {0, 0, 0, 0};
+        int n = 0;
+        for (const char *q = s; *q && n < 4; n++) {
+            char *end = nullptr;
+            a[n] = strtof(q, &end);
+            if (end == q)
+                break;
+            q = end;
+            if (*q == ',')
+                q++;
+        }
+        if (n != 4) {
+            X4VR_LOG("offaxis: REFUSED — X4VR_OFFAXIS=\"%s\" is not four "
+                     "comma-separated degree values (l,r,u,d); no affine "
+                     "applied",
+                     s);
+            return r;
+        }
+        const float k = 3.14159265358979f / 180.0f;
+        // The mirror, spelled out rather than assumed: eye 1's left edge is
+        // the negation of eye 0's right edge, and vice versa. The vertical is
+        // shared -- a headset cants its eyes horizontally, not vertically.
+        const x4vr::EyeFrustum f[2] = {
+            x4vr::frustum_of_angles(a[0] * k, a[1] * k, a[2] * k, a[3] * k),
+            x4vr::frustum_of_angles(-a[1] * k, -a[0] * k, a[2] * k, a[3] * k),
+        };
+        r.eye[0] = x4vr::make_off_axis(f[0]);
+        r.eye[1] = x4vr::make_off_axis(f[1]);
+        if (!r.eye[0].ok || !r.eye[1].ok) {
+            X4VR_LOG("offaxis: REFUSED — X4VR_OFFAXIS=\"%s\" describes a "
+                     "frustum with no width or no height; no affine applied",
+                     s);
+            return r;
+        }
+        // The precondition, checked here rather than discovered from a null.
+        // The affine divides by the LIVE sx and sy, so it can only ride on the
+        // patches that read them; with X4VR_PROJ_LIVE unset every world module
+        // takes the baked matrix instead and this knob would do nothing at all
+        // while looking like it had been tested.
+        if (!proj_live()) {
+            X4VR_LOG("offaxis: REFUSED — X4VR_OFFAXIS=\"%s\" is set but "
+                     "X4VR_PROJ_LIVE is not. The affine divides by the live "
+                     "sx/sy and only exists inside the patches that read them, "
+                     "so nothing was applied. Re-run with X4VR_PROJ_LIVE=1",
+                     s);
+            return r;
+        }
+        r.on = true;
+        X4VR_LOG("offaxis: eye0 l=%.2f r=%.2f u=%.2f d=%.2f deg -> "
+                 "ax_num=%.5f bx=%+.5f ay_num=%.5f by=%+.5f; eye1 mirrored -> "
+                 "bx=%+.5f. A_x is ax_num/sx per draw, so at sx=%.5f "
+                 "(fov %.4f) this reads A_x=%.4f",
+                 a[0], a[1], a[2], a[3], r.eye[0].ax_num, r.eye[0].bx,
+                 r.eye[0].ay_num, r.eye[0].by, r.eye[1].bx, assumed_proj_sx(),
+                 2.0f * std::atan(1.0f / assumed_proj_sx()) *
+                     57.2957795130823f / 73.7399f,
+                 r.eye[0].ax_num / assumed_proj_sx());
+        return r;
+    }();
+    return p;
+}
+
 // Where X4 keeps its camera constants. Read off the dumped modules:
 // BLOCK_BUFFER_BINDING_SLOT_CAMERA, member 1 = M_projection (member 0 is
 // M_view, 3 is M_projection_uj), matching x4vr_view.hpp's float offsets.
@@ -3941,9 +4034,17 @@ VkResult create_shader_module_inner(
     if (proj_live() && world && have_k) {
         const float dl = -0.5f * configured_ipd();
         const float dr = +0.5f * configured_ipd();
+        // Task #35. Rides on the same two patches as the live shear because it
+        // needs the same live sx/sy; a module that falls all the way through to
+        // the baked matrix gets the shear and NOT the affine, and is therefore
+        // in the wrong frustum. That is the n_baked count below, and it is
+        // logged rather than left to be discovered.
+        const OffAxisPair &oa = offaxis_target();
+        const x4vr::OffAxis *oal = oa.on ? &oa.eye[0] : nullptr;
+        const x4vr::OffAxis *oar = (oa.on && KR) ? &oa.eye[1] : nullptr;
         vert_patched = x4vr::spv::patch_vertex_eye_offset(
             code, kCameraSet, kCameraBinding, kCameraProjMember, dl,
-            KR ? &dr : nullptr);
+            KR ? &dr : nullptr, oal, oar);
         if (vert_patched) {
             n_live++;
         } else {
@@ -3957,7 +4058,8 @@ VkResult create_shader_module_inner(
             const bool mvp = proj_mvp() &&
                              x4vr::spv::patch_vertex_eye_offset_mvp(
                                  code, kObjectSet, kObjectBinding,
-                                 kObjectMvpMember, dl, KR ? &dr : nullptr);
+                                 kObjectMvpMember, dl, KR ? &dr : nullptr,
+                                 oal, oar);
             (mvp ? n_mvp : n_baked)++;
             vert_patched = mvp;
         }
@@ -4022,10 +4124,18 @@ VkResult create_shader_module_inner(
             if (++patched <= 3 || (patched % 50) == 0)
                 X4VR_LOG("patched vertex shader #%u (%s%s) "
                          "[world=%u nonworld=%u stereo=%u live-sx=%u "
-                         "mvp-sx=%u baked-sx=%u]",
+                         "mvp-sx=%u baked-sx=%u]%s",
                          patched, world ? "world" : "nonworld",
                          KR ? ", per-view" : "", n_world, n_nonworld, n_stereo,
-                         n_live, n_mvp, n_baked);
+                         n_live, n_mvp, n_baked,
+                         // The affine reaches live-sx + mvp-sx and nothing
+                         // else, so baked-sx is exactly the set of world
+                         // modules left in X4's frustum while the rest move to
+                         // the runtime's. Named on the line that counts them.
+                         offaxis_target().on
+                             ? " +offaxis (live-sx and mvp-sx only; baked-sx "
+                               "keeps X4's frustum)"
+                             : "");
             return r;
         }
         // Patched module rejected by the driver: fall back to the original
@@ -4625,6 +4735,23 @@ void patch_view_before_submit() {
         if (it == cams.end())
             continue;
         ProjState &c = it->second;
+        // Task #35 depends on this sign, so the run has to be able to refute
+        // it. patch_vertex_eye_offset_mvp recovers |sy| from a squared length
+        // and supplies the minus from measurement -- 35,783 sampled blocks
+        // across every log this project has kept, all negative, which is the
+        // Y-flip Vulkan's downward NDC y requires. A positive sy here would
+        // make those twelve modules render upside down and nothing else would
+        // say why, so it is announced rather than left in a comment.
+        static bool warned_sy_sign = false;
+        if (t.ok && t.sy >= 0.0f && !warned_sy_sign) {
+            warned_sy_sign = true;
+            X4VR_LOG("proj WARNING: cam#%u reports sy=%+.5f, which is NOT "
+                     "negative. Every prior measurement was. The off-axis "
+                     "affine's mvp form recovers |sy| and negates it, so this "
+                     "camera's world draws through the twelve camera-blind "
+                     "modules are vertically inverted",
+                     c.id, t.sy);
+        }
         const bool first = c.changes == 0;
         const bool moved = std::fabs(t.sx - c.sx) > 1e-4f ||
                            std::fabs(t.sy - c.sy) > 1e-4f ||

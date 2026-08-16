@@ -690,6 +690,90 @@ def main(path):
                           "run honoured X4VR_FOV, so there is no eye camera to "
                           "check")
 
+                # Task #35 piece 1: the off-axis affine. Gated on the run
+                # having asked for it, never on the outcome.
+                #
+                # The affine cannot be read off a screenshot as a number, so
+                # what this section does is establish that it RAN and say what
+                # it should have done, in the units the picture can be checked
+                # against. A_x is the horizontal magnification and B_x the NDC
+                # shift; A_x = 1 with B_x = 0 is the identity, which is the
+                # negative control and must be indistinguishable from the same
+                # run with the knob unset.
+                m_oa = re.search(r"X4VR_OFFAXIS=\"?([-\d.,]+)\"?", run or "")
+                if m_oa:
+                    ref = re.search(
+                        r"offaxis: eye0 [^\n]*ax_num=([-\d.]+) bx=([-+\d.]+) "
+                        r"ay_num=([-\d.]+) by=([-+\d.]+)", text)
+                    refused = re.search(r"offaxis: REFUSED[^\n]*", text)
+                    if not ref:
+                        # A knob that never ran cannot refute anything, and a
+                        # run graded as if it had is how thirteen takes of
+                        # nulls happened once already. The layer prints the
+                        # precondition it was missing; carry it verbatim.
+                        fails.append(
+                            f"X4VR_OFFAXIS={m_oa.group(1)} was asked for and "
+                            f"the affine never ran. "
+                            + (refused.group(0).split("layer")[-1].strip()
+                               if refused else
+                               "No 'offaxis:' line at all — the layer never "
+                               "reached shader-module creation with it set"))
+                    else:
+                        axn, bx, ayn, by = (float(g) for g in ref.groups())
+                        # Against the camera that honours X4VR_FOV, because
+                        # that is the one whose frustum the affine is remapping
+                        # and the one the player looks through. A_x built from
+                        # any other camera's sx is the take-50 mistake.
+                        if eye:
+                            # sy, not sx. The vertical coefficient divides by
+                            # the camera's own sy, and X4's cameras are not all
+                            # square -- the map camera reads |sy/sx| = 1.5, and
+                            # dividing A_y by sx there would report a vertical
+                            # magnification 50% off. sy is negative in every
+                            # sample this project has taken, which is what makes
+                            # A_y come out positive.
+                            asp = eye[1][0] if eye[1] else 1.0
+                            ax, ay = axn / eye[0], ayn / -(asp * eye[0])
+                            ident = (abs(ax - 1) < 5e-3 and abs(bx) < 5e-3 and
+                                     abs(ay - 1) < 5e-3 and abs(by) < 5e-3)
+                            print(f"offaxis  eye0 A_x={ax:.4f} B_x={bx:+.4f}, "
+                                  f"A_y={ay:.4f} B_y={by:+.4f} against the fov "
+                                  f"camera (sx={eye[0]:.5f}, |sy/sx|={asp:.4f})")
+                            if ident:
+                                print("offaxis  this run is the IDENTITY "
+                                      "control — the picture must be "
+                                      "indistinguishable from the same run "
+                                      "with X4VR_OFFAXIS unset; any visible "
+                                      "difference is a defect in the emission")
+                            else:
+                                print(f"offaxis  the world should be "
+                                      f"magnified {ax:.3f}x horizontally and "
+                                      f"{ay:.3f}x vertically, and shifted "
+                                      f"{bx * 50:+.1f}% / {by * 50:+.1f}% of "
+                                      f"the image width and height; an "
+                                      f"unchanged picture means the affine "
+                                      f"reached no draw")
+                        else:
+                            print(f"offaxis  ran (ax_num={axn:.5f} "
+                                  f"bx={bx:+.5f}) but A_x is unjudged — no "
+                                  f"camera in this run honoured X4VR_FOV, so "
+                                  f"there is no sx to divide by")
+                        # The modules left behind. The affine rides on the two
+                        # patches that read sx live; a world module that fell
+                        # through to the baked matrix got the shear and NOT the
+                        # affine, so it is still drawing X4's frustum while
+                        # everything around it draws the runtime's.
+                        nb = re.findall(r"baked-sx=(\d+)", text)
+                        if nb and nb[-1] != "0":
+                            print(f"warn  {nb[-1]} world module(s) took the "
+                                  f"baked matrix, so they carry the shear "
+                                  f"without the affine and render in X4's "
+                                  f"frustum — expect misplaced geometry from "
+                                  f"exactly those draws")
+                        elif nb:
+                            print("offaxis  every world module reads sx live, "
+                                  "so every one of them got the affine")
+
                 # Task #25. The stereo scale this run actually produced, from
                 # its own numbers rather than from the arithmetic in the docs,
                 # which was written at sx=1.3333 and is 1.8x off at fov 1.437.
