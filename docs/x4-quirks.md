@@ -1641,3 +1641,64 @@ means the canvas work still has to happen**, because a player who keeps the flat
 radar needs it placed. `separateRadar=0` does not delete that work unless we
 force the setting, which we will not. What it earns is a mode where the radar
 costs nothing, and a good reason to *recommend* it in VR.
+
+## X4 ships FSR3, and the odds it survives our layer — predicted before the test
+
+Patola asked what the chances are that X4's FSR helps with VR's resolution
+demands. Answered from the binary and the Lua, with the prediction recorded
+before any run.
+
+**What X4 has.** `ffxFsr3UpscalerContextCreate`, `ffxFsr3ContextCreate`,
+`ffxFrameInterpolationContextCreate`, `ffxOpticalflowContextCreate`,
+`ffxCasContextCreate`, and DLSS alongside. So this is **FSR3** — a temporal
+upscaler — not the spatial FSR1 that would have composed harmlessly.
+
+**How it is selected.** Through `<antialiasing>`, whose accepted values are
+`none temporal dlaa msaa_2x/4x/8x/16x fsr fsr_ultra_quality fsr_quality
+fsr_balanced fsr_performance`. `SetMultipleGfxModes3(aamode, upmode, ...)` sets
+AA and upscaling together and `IsFSROnWithoutAA()` exists, so X4 treats the two
+as one control. We have served `antialiasing=none` since the beginning.
+
+**Prediction: the FSR3 upscaler will not work with the layer as it stands.**
+Three concrete reasons, in order of confidence:
+
+1. **Jitter lands in the shear's own slots.** `layer/x4vr_layer.cpp:4528` already
+   records that TAA jitter occupies `m[8]/m[9]` — the elements the per-eye offset
+   writes. A temporal upscaler *requires* sub-pixel jitter, every frame. This is a
+   documented collision, not a guess, and it is why every temporal mode in that
+   list is suspect, not just FSR.
+2. **The history is single-view and we render two.** FSR3 accumulates across
+   frames for one camera; we render both eyes as array layers under multiview.
+   The reactive masks X4 carries (`fbo_fsr_mask_reactivity`,
+   `fbo_fsr_mask_transparency`) are single-view resources with the same problem.
+3. **Motion vectors are computed for X4's projection, not the patched one**, which
+   is the standard recipe for ghosting.
+
+**CAS alone should survive** — spatial, no history, no jitter — but it sharpens
+rather than upscales, so it does not buy the resolution saving that motivated the
+question.
+
+**Frame generation stays out of reach on purpose.** X4 keeps it in its own tags
+(`dlssg`, `fsrframegen`) and `X4VR_AA` deliberately cannot select it: an
+interpolated frame carries no valid head pose and adds latency, so it is harmful
+in VR whether or not upscaling works.
+
+**Falsifiable outcomes**, so the run reports rather than puzzles:
+
+* ghosting or smearing on motion → reason 2 or 3
+* one eye right and one wrong → reason 2
+* stereo collapses or depth goes flat → **reason 1**, and that also settles
+  whether TAA could ever be enabled
+
+**Worth stating: the goal may not need FSR at all.** The measured cost curve is
+superlinear, so plain resolution reduction is already a strong lever — 9× → 4×
+pixels took 20.77 ms → 9.82 ms, less than half, with no upscaler. And the render
+size and the eye/swapchain size are independent knobs we own, so rendering small
+and upscaling in our own composite is available without entangling anything.
+
+**Wired as `X4VR_AA`**, unset by default (the control), validated against the
+twelve accepted strings and rejecting anything else rather than serving a value
+X4 would silently ignore. It *overrides* the base `none` entry rather than being
+appended after it, so one tag has one source. The effective value is logged every
+run either way — a run that changed it must say so, or broken stereo reads as a
+regression in the shear rather than as the knob that caused it.

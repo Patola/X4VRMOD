@@ -174,6 +174,48 @@ inline bool separate_radar_override(std::string &v) {
     return ok;
 }
 
+// X4VR_AA: X4's own <antialiasing> config tag, which is also how X4 selects its
+// upscaler. The accepted strings, read out of X4's Lua:
+//
+//   none  temporal  dlaa  msaa_2x  msaa_4x  msaa_8x  msaa_16x
+//   fsr   fsr_ultra_quality  fsr_quality  fsr_balanced  fsr_performance
+//
+// We serve "none" by default and have since the beginning. This exists so the
+// FSR3 question can be tested without editing that default, and it is unset by
+// default like X4VR_FOV: setting it is the experiment, omitting it is the
+// control.
+//
+// Frame generation is deliberately NOT reachable from here. X4 keeps it in its
+// own tags (dlssg, fsrframegen), and an interpolated frame carries no valid head
+// pose while adding latency, so it is harmful in VR regardless of whether
+// upscaling works. If it is ever wired it needs its own knob and its own
+// argument, not a value smuggled through this one.
+inline bool aa_override(std::string &v) {
+    static std::string vv;
+    static const bool ok = [] {
+        const char *e = getenv("X4VR_AA");
+        if (!e || !*e)
+            return false;
+        static const char *const modes[] = {
+            "none", "temporal", "dlaa", "msaa_2x", "msaa_4x", "msaa_8x",
+            "msaa_16x", "fsr", "fsr_ultra_quality", "fsr_quality",
+            "fsr_balanced", "fsr_performance",
+        };
+        const std::string s(e);
+        for (const char *m : modes)
+            if (s == m) {
+                vv = s;
+                return true;
+            }
+        // Rejected rather than served: X4 falls back silently on a value it does
+        // not know, which reads exactly like a measurement.
+        return false;
+    }();
+    if (ok)
+        v = vv;
+    return ok;
+}
+
 inline const std::vector<TagOverride> &default_overrides() {
     // On Wayland the surface reports no preferred extent, so X4 falls back to
     // res_width/res_height -- which makes the config the lever for the split
@@ -185,6 +227,11 @@ inline const std::vector<TagOverride> &default_overrides() {
     static const bool split = sbs_split_render();
     static std::string fov_v;
     static const bool have_fov = fov_override(fov_v);
+    // Overrides the base entry rather than being appended after it: two entries
+    // for one tag would leave which one wins to the order set_tag() is called
+    // in, and "none" is load-bearing enough to be stated in exactly one place.
+    static std::string aa_v;
+    static const bool have_aa = aa_override(aa_v);
 
     static const std::vector<TagOverride> base = {
         // These two are necessary but NOT sufficient: X4 only honours them
@@ -222,7 +269,11 @@ inline const std::vector<TagOverride> &default_overrides() {
         // stereo mismatch exactly on shiny surfaces. Revisit after per-eye
         // lighting lands.
         {"ssr", "false"},
-        {"antialiasing", "none"},
+        // "none" unless X4VR_AA says otherwise. Not an arbitrary default: this
+        // tag also selects X4's upscaler, and every temporal mode here (temporal,
+        // dlaa, the fsr_* family) jitters the projection -- into m[8]/m[9],
+        // which are the eye shear's own slots. See the X4VR_AA comment.
+        {"antialiasing", have_aa ? aa_v.c_str() : "none"},
         {"ssao", "0"},
         {"glow", "0"},
         {"uiglow", "0"},

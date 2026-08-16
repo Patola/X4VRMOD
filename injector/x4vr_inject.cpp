@@ -168,6 +168,15 @@ FILE *open_patched_config(const char *path) {
              getenv("X4VR_SEPARATE_RADAR")
                  ? "from X4VR_SEPARATE_RADAR"
                  : "from the profile, not this run");
+    // This tag also selects X4's upscaler, so it is not a cosmetic setting: the
+    // temporal modes jitter the projection into the eye shear's own slots. A run
+    // that changed it must say so, or a broken stereo pair looks like a
+    // regression in the shear rather than the knob that caused it.
+    X4VR_LOG("config: effective antialiasing=%s (%s) — this tag also selects "
+             "the upscaler; temporal/dlaa/fsr_* all jitter m[8]/m[9]",
+             x4vr::get_tag(xml, "antialiasing").c_str(),
+             getenv("X4VR_AA") ? "from X4VR_AA"
+                               : "our default, not the profile");
     X4VR_LOG("config: serving %s in memory (%zu bytes, %d overrides applied); "
              "your %s is not touched",
              prof.path.c_str(), xml.size(), changed, path);
