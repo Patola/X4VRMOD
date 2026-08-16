@@ -605,3 +605,43 @@ or up and the cockpit travels with you, and at larger roll angles the binocular
 image is wrong. Free-look is yaw and pitch only, so those three degrees cannot
 come from this channel at all — they need the layer's clip-space transform. The
 ±65°/±35° clamp still stands, with black beyond it.
+
+## `stage14-fov-ceiling` — take 158
+
+The camera dump reads every credited block, and X4's `<fov>` ceiling is known to
+reach at least 2.21. Scorer PASS.
+
+    X4VR_TAKE=158-NOBAR X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_DUMP_MATRICES=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take158.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=2.21 X4VR_BINDLESS_MIRROR=1 ./launch/x4vr-launch.sh
+
+**What it establishes:**
+
+    sx=0.14976  |sy/sx|=1.0000  162.965° = fov 2.210  x202  <- honours X4VR_FOV
+    sx=1.33333  |sy/sx|=1.0000   73.740° = fov 1.000  x148
+    sx=1.00000  |sy/sx|=1.0000   90.000° = fov 1.221  x74
+    sx=3.78085  |sy/sx|=1.5000   29.630° = fov 0.402  x34
+
+* **X4 honours `<fov>` 2.21**, giving 163° and therefore **±27.5° of yaw** for
+  the vertex-stage rotation of #33.
+* **Three independent methods agree**: screenshot registration 2.209, this log
+  2.210, asked 2.21. The registration was done with no layer instrument at all,
+  which is what makes the agreement worth something.
+* **`|sy/sx| = 1.0000` against a 1.0000 eye aspect** — the field is widened, not
+  stretched. That was an assumption until this run.
+* The fov camera is now the **most** sampled block (x202, against 148 for the
+  camera that ignores `<fov>`). It was always dominant; two filters were hiding
+  it. 656 changes across 123 slots, against 38 and 28 before the fixes.
+
+**What it does NOT establish — and this is the load-bearing caveat.** It says
+nothing about the cost of a wide field. Compare the last-phase medians:
+
+    fov 1.4917 (156b):  17.23 ms  ->  6.92 ms
+    fov 2.21   (155) :  17.26 ms  ->  6.94 ms
+    fov 2.21   (158) :  17.21 ms  ->  6.80 ms
+
+A 2.4× increase in rendered solid angle, and the frame time matches to 0.3% with
+the wide runs marginally *faster*. That is not a finding that widening is free;
+it is the same alarm as the earlier ~17.3 ms plateau — **agreement where there
+must be a difference means the instrument is not measuring the knob.** 17.2 ms is
+58 fps, which is the shape of a vsync or frame-rate cap. **Performance at wide
+fields is UNMEASURED**, and on a project whose first constraint is "performance
+is king" that is the next thing worth a run, with the cap ruled out first.
