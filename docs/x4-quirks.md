@@ -1254,3 +1254,36 @@ measured on one scene at one moment. A third point — 3× linear, 9× pixels �
 test the model where it is actually being used rather than where it was fitted,
 and should be taken before any resolution is chosen. The headline that does not
 depend on the fit is the measured one: **4× pixels, 1.44× time.**
+
+### Take 160 — the third scaling point, predicted before the run
+
+3× linear, **9× the baseline pixels**: `X4VR_W=8448 X4VR_H=4224`, which the
+launcher must turn into `X4VR_RES=4224x4224` per eye. `<fov>` stays at 2.21 so
+resolution remains the only variable, exactly as in 158 → 159.
+
+**Prediction from the two-point fit: 14.8 ms** (5.80 fixed + 1.00 × 9). Baseline
+repeatability across three runs was ±0.1 ms, so anything beyond about ±1 ms is a
+real departure and the linear model is wrong where we would actually use it.
+
+**A confound that could make it superlinear, stated now rather than discovered
+later.** X4's LOD selection is screen-coverage driven. At 1408² with a 163° field
+every object subtends very few pixels and the renderer picks low LODs; at 4224²
+each object is 3× larger in pixels and the LODs come back up, adding vertex and
+draw work that has nothing to do with fill rate. So this A/B was never a pure
+pixel-count experiment — **the 1.44× measured at 159 already contains an LOD
+increase**, and 9× may overshoot 14.8 ms for that reason.
+
+That does not spoil the measurement, because a real deployment at that resolution
+would pay the same LOD cost. It does mean "5.80 ms fixed + 1.00 ms per unit" is
+two mechanisms wearing one coat, and the third point is what says whether the
+coat still fits at the size we would order.
+
+**Falsifier:** a result near 14.8 ms confirms the table and ±22° at 90 fps stands.
+Materially above it (say >16 ms) means the cost curve steepens with resolution
+and every extrapolated row above ±20° is optimistic. Materially below would be
+more surprising than welcome and would want explaining before being used.
+
+**Risk noted:** 4224×4224 per eye is ~143 MB per full-rate target before the
+frame graph multiplies it. If X4 or the driver refuses the size, the scorer's
+`extents` line will say so — and a run whose extents still read 1408x1408
+measured nothing, which is the take-101 failure and the first thing to check.
