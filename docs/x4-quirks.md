@@ -1588,3 +1588,56 @@ changed the routing without recording it could not be told from one that did not
 
 This is the project's existing non-intrusive lever: no mod registered, no
 savegame flag, the player's `config.xml` read and never written.
+
+### Take 162 — `separateRadar=0` makes the radar WORLD geometry. Measured, not eyeballed.
+
+The override landed (`config: effective separateRadar=0 (from X4VR_SEPARATE_RADAR)`)
+and the radar moved from the flat bottom-centre dome to the right of the cockpit.
+Zoomed, its axes looked screen-aligned and I was ready to call it "repositioned
+but still flat". **That read was wrong.**
+
+The screenshot contains its own test. Our stereo shear displaces by *inverse
+depth*, so a screen-space draw at `w = 1` is immune by construction — that is why
+the HUD could never be sheared. So per-eye disparity separates the two cases
+without any new instrument. Cross-correlating each element between the eyes of
+the SBS frame:
+
+    radar (right side)          disparity -30 px   ncc 0.744   <- WORLD geometry
+    message ticker (left)       disparity  +0 px   ncc 0.893   <- screen-space
+    left console panel          disparity -40 px   ncc 0.864   <- world, near
+    cockpit centre (distant)    disparity  +0 px   ncc 0.722   <- world, far
+
+The radar sits at a disparity comparable to the nearby console and nothing like
+the ticker's zero. **It is world geometry at the cockpit's depth.**
+
+So the routing does what the Lua said it would, and the consequences are real:
+
+* the radar **already has correct stereo** — not "will get", has, in this frame
+* it would follow #33's vertex-stage rotation for free, being world geometry
+* it needs **none** of #30's canvas
+* and its backdrop is the console, so the wide-FOV washout cannot recur on it
+
+The message ticker's `+0 px` is the other half of the finding: it is still
+screen-space, so **the canvas is still required for it.** The two HUD elements
+are now known to be in different classes, measured rather than assumed.
+
+### Decision: do not force `separateRadar`
+
+Patola: "I thought it could be whatever the user chooses and we would adapt."
+Agreed, and the override list needed a distinction drawn that had been implicit:
+
+* `ssr`, `antialiasing`, `chromaticaberration` are forced because they are
+  **incompatible with stereo** — SSR reprojects one view's depth buffer and would
+  mismatch between the eyes.
+* `separateRadar` is a **preference**. Both modes render correctly; only their
+  VR *cost* differs.
+
+Only the first category justifies overriding a player's choice.
+`X4VR_SEPARATE_RADAR` therefore stays unset by default, serving the profile
+byte-for-byte, and is an experiment lever rather than a shipped default.
+
+The asymmetry is worth stating plainly for planning: **supporting both modes
+means the canvas work still has to happen**, because a player who keeps the flat
+radar needs it placed. `separateRadar=0` does not delete that work unless we
+force the setting, which we will not. What it earns is a mode where the radar
+costs nothing, and a good reason to *recommend* it in VR.
