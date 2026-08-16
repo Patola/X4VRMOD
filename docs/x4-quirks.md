@@ -981,3 +981,35 @@ that surface for camera setters returns the same family as before plus
 `Set/GetMouseLookToggleOption` and `SetRequireFinalRotationOrder`. **No
 `SetCameraRotation`.** The conclusion survives; the reasoning that reached it did
 not, and a symbol sweep from now on must cover both bridges.
+
+### The scorer now fails a run whose `<fov>` X4 refused
+
+`score_run.py` already computed the field each camera implies and marked the one
+that honours `X4VR_FOV` — the "compare the SET, not the range" machinery from
+take 104. What it did **not** do was gate on it: the no-camera-honours case was a
+`print("warn ...")`, so a run whose tag X4 silently rejected still scored **PASS
+and was recommended for `known-good-runs.md`**.
+
+That is fine while the field is incidental and fatal for #33's ceiling
+experiment, whose entire question is whether X4 accepts a wider tag. Promoted to
+a `fails.append`, with the nearest observed tag in the message — because a bare
+"not honoured" cannot separate the two causes the old warning named, and they
+need different responses:
+
+* **far from the ask** → X4 fell back to its own default or the player's profile
+  value: it rejected the tag, and the ceiling is below what was asked.
+* **near the ask** → the linear `sx → degree` law bending outside the
+  1.111..1.500 range it was calibrated over. X4 may well have accepted the field;
+  what failed is our arithmetic for naming it.
+
+Validated on four controls, four distinct outcomes, per the rule that a changed
+check must be run against a log that flips:
+
+    take 105, tag rewritten to 2.2100   FAIL "X4 fell back ... rejected the tag"
+    take 105, tag rewritten to 1.5000   FAIL "0.063 off ... law bending"
+    take 105, untouched                 PASS, sx=0.75405 <- honours X4VR_FOV
+    all 53 stored logs setting X4VR_FOV verdicts unchanged (24 FAIL / 27 PASS / 2 UNSCORABLE)
+
+The 2.2100 control is the important one: **before** this change it scored PASS
+with a warning, which is the exact way the ceiling run could have been thrown
+away — answering "no" in the voice of "yes".

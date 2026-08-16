@@ -612,10 +612,42 @@ def main(path):
                           f"cam#N is a UBO slot, not a camera")
 
                 if asked is not None and eye is None:
-                    print(f"warn  no camera in this run reads the field "
-                          f"X4VR_FOV={asked:g} asks for "
-                          f"({asked * FOV_BASE_DEG:.2f}°) — either X4 rejected "
-                          f"the tag or the law is not linear here")
+                    # A FAIL, not a warn. #33's ceiling experiment asks exactly
+                    # one question -- will X4 accept a <fov> wider than anything
+                    # we have run -- and a scorer that prints a warning and then
+                    # says PASS answers "no" in the voice of "yes". Worse, this
+                    # block goes on to recommend the log to known-good-runs.md.
+                    # Verified against a spliced control (take 105 with its tag
+                    # rewritten to 2.2100, a field none of its cameras read):
+                    # before this change it scored PASS with the warning above.
+                    #
+                    # The message carries the nearest tag actually seen, because
+                    # a bare "not honoured" cannot separate the two causes the
+                    # old text named. X4 rejecting the tag leaves its own default
+                    # or the player's profile value, which is far away; the
+                    # sx->degree law bending outside the 1.111..1.500 range it
+                    # was calibrated over leaves something near the ask but off
+                    # it. Those need different responses, so the scorer must not
+                    # make the reader guess which happened.
+                    near_tag, near_sx = min(
+                        ((2 * math.degrees(math.atan(1.0 / v)) / FOV_BASE_DEG, v)
+                         for v, _ in order if v),
+                        key=lambda p: abs(p[0] - asked), default=(None, None))
+                    if near_tag is None:
+                        detail = "and no usable sx was read at all"
+                    elif abs(near_tag - asked) < 0.15:
+                        detail = (f"nearest is fov {near_tag:.3f} "
+                                  f"(sx={near_sx:.5f}), {abs(near_tag - asked):.3f} "
+                                  f"off — near enough that the linear sx→degree "
+                                  f"law bending past its 1.111..1.500 calibration "
+                                  f"is likelier than a rejection")
+                    else:
+                        detail = (f"nearest is fov {near_tag:.3f} "
+                                  f"(sx={near_sx:.5f}) — X4 fell back to a "
+                                  f"different field, so it rejected the tag")
+                    fails.append(
+                        f"X4VR_FOV={asked:g} ({asked * FOV_BASE_DEG:.2f}°) was "
+                        f"asked for and no camera reads that field: {detail}")
 
                 # The aspect check, applied to ONE camera: the one that honours
                 # the setting, since that is the one whose field the player is
