@@ -1105,3 +1105,42 @@ challenged.**
 Still owed: the layer must log every camera block it sees rather than the
 most-drawn winner. Until then no run can be trusted to sample the scene camera,
 and this one was marginal (5 of 42) even at the field we ship.
+
+### The camera dump now reads every credited block
+
+`layer/x4vr_layer.cpp` sampled the projection of the **most-drawn** descriptor
+block per frame. That is the defect behind take 155, and take 156 measured it:
+
+    fov 1.4917 -> the scene camera won  5 of 42 credited samples
+    fov 2.21   -> the scene camera won  0 of 38
+
+A wide field spreads draws across more blocks, so the block actually rendering
+the picture loses the per-frame vote *precisely when the field is unusual* —
+which is exactly when a run is asking about it. A camera never sampled cannot be
+told apart from a camera that does not exist, so an instrument gap read as a
+fact about X4.
+
+The `X4VR_DUMP_MATRICES` block now loops over every block credited that frame
+that clears the same ≥50-draw bar the winner had to clear, with the same affine
+sanity test (an unpopulated block reads back zeros and would otherwise enter the
+tally as a camera at an absurd field). The per-camera and global change budgets
+are unchanged and still announce themselves.
+
+Two things deliberately left alone:
+
+* **The winner is registered before the loop**, so `cam#0` still means "the
+  camera that drew most". Every stored log and the scorer's `proj MEASURED`
+  line assume that; renumbering would silently invalidate 71 logs of regression
+  material.
+* **The eye-offset path still acts on the winner only.** Widening the
+  *observation* is the fix; widening what the layer *mutates* is a different
+  change with different risk, and this one is meant to make measurement
+  trustworthy, not to alter behaviour.
+
+Cost is confined to `X4VR_DUMP_MATRICES` runs — the loop is inside the `dump`
+guard, so a normal run does the same single-block work it always did.
+
+Verified: builds clean, and 11 of 13 test binaries pass. The two that do not —
+`x4vr_test_multiview_render` (`shaders_missing`) and `x4vr_test_spirv_patch`
+(a CLI that printed its usage) — fail *identically on the unmodified layer*,
+checked by stashing the change and rebuilding rather than by assuming.

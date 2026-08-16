@@ -4530,9 +4530,9 @@ void patch_view_before_submit() {
     // alongside so a disagreement in sx/near -- which jitter cannot cause --
     // is visible rather than assumed away.
     if (dump) {
-        const x4vr::Mat4 proj_uj = x4vr::load(blk + x4vr::kProjectionUJ);
-        const x4vr::ProjTerms t = x4vr::read_proj_terms(proj_uj, major);
-        const x4vr::ProjTerms tj = x4vr::read_proj_terms(proj_probe, major);
+        // The terms are read per block, inside the loop below, rather than
+        // once from the winner. See the comment at the loop for what reading
+        // only the winner cost.
         // sy joined this test after take 104. That run proved X4's <fov> tag
         // scales the horizontal field linearly, but every CHANGED line reported
         // sx alone, so whether the *vertical* scales with it was unmeasurable
@@ -4563,15 +4563,56 @@ void patch_view_before_submit() {
         // cap reads exactly like "nothing more happened", which is the failure
         // this whole block was rewritten to stop.
         constexpr uint32_t kPerCam = 120, kTotal = 2000;
-        auto it = cams.find(*best);
+        // EVERY credited block this frame, not just the most-drawn one.
+        //
+        // Reading only the winner is what made take 155 unreadable. The run
+        // asked whether X4 would accept <fov> 2.21; X4 accepted it and drew a
+        // 163 degree field, and the log contained no camera at that field at
+        // all, so the scorer reported a rejection. Take 156 measured the
+        // mechanism directly by running both fields back to back:
+        //
+        //     fov 1.4917 -> the scene camera won  5 of 42 credited samples
+        //     fov 2.21   -> the scene camera won  0 of 38
+        //
+        // A wide field spreads draws across more blocks, so the block actually
+        // rendering the picture loses the per-frame vote precisely when the
+        // field is unusual -- which is exactly when a run is asking about it.
+        // Everything logged was the two cameras that ignore <fov>. A camera
+        // never sampled cannot be distinguished from a camera that does not
+        // exist, and that is a defect in the instrument that reads as a fact
+        // about the game.
+        //
+        // The winner is registered before the loop so that cam#0 still means
+        // "the camera that drew most". Every stored log and the scorer's
+        // "proj MEASURED" line assume that, and renumbering them would be a
+        // silent change to 71 logs' worth of regression material.
+        if (cams.find(*best) == cams.end() && cams.size() < 256)
+            cams.emplace(*best, ProjState{}).first->second.id = next_id++;
+
+        for (auto &[slot, slot_n] : g_track.credit) {
+        if (slot_n < 50)
+            continue; // same "is this a real scene" bar the winner must clear
+        float *cblk = slot_host_ptr(slot);
+        if (!cblk)
+            continue;
+        // A block X4 has not populated reads back zeros, and a zero matrix
+        // would otherwise enter the tally as a camera at an absurd field.
+        if (std::fabs(x4vr::load(cblk + x4vr::kView).m[15] - 1.0f) > 1e-3f)
+            continue;
+        const x4vr::ProjTerms t = x4vr::read_proj_terms(
+            x4vr::load(cblk + x4vr::kProjectionUJ), major);
+        const x4vr::ProjTerms tj = x4vr::read_proj_terms(
+            x4vr::load(cblk + x4vr::kProjection), major);
+        auto it = cams.find(slot);
         if (it == cams.end() && cams.size() < 256) {
-            it = cams.emplace(*best, ProjState{}).first;
+            it = cams.emplace(slot, ProjState{}).first;
             // Numbered on sight, not on first log line: a camera first seen
             // after a budget bit would otherwise keep id 0 and the STEADY line
             // would attribute it to cam#0.
             it->second.id = next_id++;
         }
-        if (it != cams.end()) {
+        if (it == cams.end())
+            continue;
         ProjState &c = it->second;
         const bool first = c.changes == 0;
         const bool moved = std::fabs(t.sx - c.sx) > 1e-4f ||
@@ -4627,7 +4668,7 @@ void patch_view_before_submit() {
                 }
                 X4VR_LOG("proj CAMERA cam#%u: sx=%.5f sy=%.5f near=%.5f "
                          "(draws=%u, |sy/sx|=%.4f)",
-                         c.id, t.sx, t.sy, t.near_z, best_n,
+                         c.id, t.sx, t.sy, t.near_z, slot_n,
                          t.sx != 0.0f ? std::fabs(t.sy / t.sx) : 0.0f);
             } else {
                 X4VR_LOG("proj CHANGED cam#%u #%u: sx %.5f -> %.5f  sy %.5f -> "
