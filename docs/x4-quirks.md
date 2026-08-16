@@ -1214,3 +1214,43 @@ whatever was set. Resolution is changed through `X4VR_W`/`X4VR_H`, which the
 per-eye size is derived from. (Take 101 lost a run to the older version of this,
 which re-read the header instead of the override and left the window, the render
 and the composite at three different sizes.)
+
+### Take 159 — the renderer is not fragment bound, and the guard band is affordable
+
+Single variable, resolution, with `<fov>` held at 2.21 and confirmed by the
+scorer (`extents X4 renders 2816x2816`, `sx=0.14976 = fov 2.210`):
+
+    take 158   1408x1408/eye   last phase  6.80 ms
+    take 159   2816x2816/eye   last phase  9.81 ms
+
+**4× the pixels for 1.44× the time.** A fragment-bound renderer would have given
+4.00×. Corroboration that the scenes were comparable: the 14–94 s phase reads
+17.19 ms against 158's 17.21 ms — that phase does not move with resolution at
+all, which is what a CPU/streaming-bound stretch looks like, and its agreement
+across two sessions is what makes the last-phase comparison worth reading.
+
+A two-point fit gives **5.80 ms fixed + 1.00 ms per baseline-pixel-unit**, where
+one unit is 1408² per eye. Extrapolated against `tools/guard_band.py`'s
+per-eye-asymmetric column, which is what #35 delivers:
+
+    +- 7.5 deg    1.06x px     6.9 ms   146 fps
+    +-15.0 deg    1.94x px     7.7 ms   129 fps
+    +-20.0 deg    3.27x px     9.1 ms   110 fps
+    +-22.5 deg    4.50x px    10.3 ms    97 fps
+    +-25.0 deg    6.59x px    12.4 ms    81 fps
+    +-27.5 deg   10.63x px    16.5 ms    61 fps
+
+    without #35:  +-20 deg  5.96x  11.8 ms  85 fps ; +-27.5 deg  21.95x  27.8 ms  36 fps
+
+**So roughly ±22° of yaw at 90 fps, with #35 done** — a 90 fps budget of 11.1 ms
+buys 5.3× baseline pixels. #35 is worth about 5° of head rotation at constant
+frame rate, which is a far better argument for it than the 0.65× pixel saving
+alone.
+
+**Treat the extrapolation as weak.** It is two points fitted to a straight line
+and then run out to 10×. Nothing here tests whether the per-pixel term stays
+linear once bandwidth or memory pressure enters, and the 5.80 ms fixed term was
+measured on one scene at one moment. A third point — 3× linear, 9× pixels — would
+test the model where it is actually being used rather than where it was fitted,
+and should be taken before any resolution is chosen. The headline that does not
+depend on the fit is the measured one: **4× pixels, 1.44× time.**
