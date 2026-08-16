@@ -1764,3 +1764,48 @@ map-gate territory, not new. Neither has anything to do with the upscaler.
 design, it suspends steering, and it disturbs the map — three confounds on a test
 that does not need it. Ship motion supplies all the motion a temporal upscaler
 needs to be stressed.
+
+## #35 audit — the math is done and tested; three wiring pieces remain, in order
+
+**Done, and better than the task description suggests.** `common/x4vr_view.hpp`
+carries the whole derivation with `EyeFrustum`, `frustum_of_angles()`,
+`make_off_axis()`, `apply_off_axis()`, `apply_off_axis_folded()` and
+`union_half_angle()`. `tests/view_math.cpp` is 625 lines and ~51 assertions, and
+it tests the **deployment case**, not a toy one: the take-112 frusta, from which
+it re-derives `union_half_angle = 55.0°` and `X4VR_FOV = 1.4917`, and pins the
+concrete coefficients `A_x = 1.2892`, `B_x = +0.2425` / `−0.2425` mirrored. It
+also keys on the property that the map **collapses to the identity** when the
+target is symmetric — a map that is not the identity where it must be is wrong
+everywhere.
+
+**Not done: `make_off_axis`/`apply_off_axis` are called from nowhere but the
+tests.** That is the entire remaining task, and it is three pieces with a
+correctness constraint on their order.
+
+1. **The SPIR-V emission.** The affine has the same shape the eye-offset patch
+   already emits — a scale of `clip.x` plus a `w`-proportional term, with `sx`
+   read live from the camera block. `x4vr_view.hpp:363` states the intended
+   composition: applied *after* the shear, so no eye-offset term is needed in the
+   off-axis step. `patch_vertex_eye_offset()` is ~385 lines
+   (`common/x4vr_spirv.hpp:698`), and the twelve camera-blind modules fall back to
+   `patch_vertex_eye_offset_mvp()` — so **both** need the term, exactly as the
+   shear did, or those twelve get the right shear and the wrong frustum.
+2. **The runtime declaration.** The layer currently declares a symmetric ±55°
+   field and the runtime honours it (`x4vr_layer.cpp:7142`, and take 161's log:
+   "declaring a symmetric field of +-55.00 deg per eye"). It must declare the
+   runtime's own canted frusta instead.
+3. **The render extent.** Only then does the pixel saving arrive: 1092×1180 per
+   eye instead of 1408², the 0.65× the guard-band table prices.
+
+**The ordering is load-bearing, not stylistic.** (2) before (1) declares an
+asymmetric field while still rendering a symmetric one — the image would be
+wrong in the headset with every piece individually "correct". (3) before (1)
+crops away geometry that nothing has yet remapped. **(1) must land first, and
+alone, with its own take.** Each of the three is separately observable, which is
+what makes them separate takes rather than one.
+
+Recorded rather than begun: (1) is a careful edit inside a 385-line function that
+sixty passing takes depend on, and `x4vr_spirv.hpp:1078` says why the three
+patches deliberately repeat each other's scans instead of sharing them — "a
+refactor that broke all three at once is the expensive mistake here". That is
+work for a fresh session, not the tail of a long one.
