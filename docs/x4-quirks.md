@@ -928,3 +928,56 @@ Consequences of dropping free-look, stated so they are not rediscovered:
    free; it needs #30's canvas explicitly, and a screen-space element carried
    through `R` would behave as if infinitely distant rather than sitting at the
    cockpit.
+
+### Checking the three predictions — and finding the gate
+
+**Prediction 1 (culling follows `<fov>`): confirmed, and already written down.**
+`injector/x4vr_config.hpp:95` gives that as the *reason* for the config route:
+"patching the projection behind X4's back would instead desynchronise its
+culling, its HUD placement and its depth range from what is drawn." The question
+was answered before it was asked.
+
+**Prediction 2 (no single clip-space site): confirmed, and better than feared.**
+There are three, and the third is universal — `layer/x4vr_layer.cpp:3966`:
+
+    patch_vertex_eye_offset      world modules with a live camera block  (n_live)
+    patch_vertex_eye_offset_mvp  the 12 that only have M_worldviewprojection
+    patch_vertex_clip(code,K,KR) everything else -- an arbitrary clip-space 4x4
+
+`patch_vertex_clip` takes exactly the kind of matrix the rotation is, and the
+call site already carries a `world` flag that separates world geometry from UI.
+So prediction 3's consequence is handled by machinery that exists: apply the
+rotation where `world` is true and the HUD stays screen-locked for #30 to place.
+
+**The gate, which neither prediction anticipated.** X4's own FOV slider is
+`min = 60, max = 120, exceedMaxValue = false`, over `GetFOVOption() * 90` — so
+the UI tops out near a tag value of 1.333. We already run at **1.4917**, above
+it, so the engine is not hard-clamped there, and **1.5 is the largest value ever
+run** across all 125 stored logs. The plan wants ≈**2.21**, which is 47% beyond
+anything tested.
+
+This is load-bearing in a way worth stating plainly: `X4VR_FOV=1.4917` was chosen
+to cover the eye frusta with *zero* headroom, so if X4 refuses much past 1.5 the
+head-rotation range is about **±1°** — and that kills the image-reprojection
+fallback too, because it needs X4 to render wider by the same amount. **One
+number gates both architectures.** Find it before building either.
+
+**Trap, recorded so the sign is not "corrected" later.** A doc string in `08.dat`
+reads: values above 1.0 "zoom in", below 1.0 "zoom out" — the opposite of what
+this project measured. That text describes a *different* `fov`: the cutscene
+`<camera fov="20">` zoom factor. The config tag goes the other way, and two
+independent sources agree — the slider (higher units = more degrees) and four
+measured projection matrices (`sx = cot(fov × 73.7399 / 2)`, so higher fov =
+smaller sx = wider). Same-name-different-thing is the aliasing mistake this
+project keeps making; it was caught only because the measured direction
+contradicted the prose.
+
+**Correction to the Lua section above.** `GetFOVOption`/`SetFOVOption` are called
+from X4's Lua *without* the `C.` prefix, and appear in neither the FFI cdefs nor
+`nm -D`. X4 has a **second C→Lua bridge** — classic registered globals — so
+"anything Lua could call, the injector already calls directly" was wrong as
+stated. The registered names do live in the binary's string table, and sweeping
+that surface for camera setters returns the same family as before plus
+`Set/GetMouseLookToggleOption` and `SetRequireFinalRotationOrder`. **No
+`SetCameraRotation`.** The conclusion survives; the reasoning that reached it did
+not, and a symbol sweep from now on must cover both bridges.
