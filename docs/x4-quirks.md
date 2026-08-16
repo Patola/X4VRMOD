@@ -1287,3 +1287,58 @@ more surprising than welcome and would want explaining before being used.
 frame graph multiplies it. If X4 or the driver refuses the size, the scorer's
 `extents` line will say so — and a run whose extents still read 1408x1408
 measured nothing, which is the take-101 failure and the first thing to check.
+
+### Take 160 — the falsifier fired, and the 17.2 ms plateau was the loading screen
+
+**Predicted 14.8 ms at 9× pixels. Measured 20.75 ms.** The stated falsifier —
+"materially above, say >16 ms, means the cost curve steepens with resolution and
+every extrapolated row above ±20° is optimistic" — is what happened. The
+resolution confound predicted alongside it (LOD rising with pixel coverage) is
+the likeliest cause and was recorded before the run.
+
+Getting there required throwing out how the previous two takes were compared.
+
+**The 17.2 ms phase present in all three runs is X4's loading screen.** X4's own
+reported state says so: `draws` sits at **~12 with ~3 slots** from load+10 s to
+load+70 s, then jumps to **~97 draws across ~40 slots** as the world appears.
+Frame time *drops* from 17–19 ms to 7 ms at that moment — more geometry, faster
+frames — which only makes sense if the earlier stretch was not rendering the
+world at all. The save takes about 70 s to load.
+
+So the scorer's phase clustering, which groups by frame time and then reports
+frame time, merged take 160's loading and gameplay into one 17.74 ms phase and
+buried the measurement. Circular by construction. Re-cut on `draws > 50` —
+X4's own state, not a frame-time cluster:
+
+    take 158   1x px   n=13   median  6.80 ms   147 fps
+    take 159   4x px   n= 6   median  9.82 ms   102 fps
+    take 160   9x px   n= 2   median 20.75 ms    48 fps
+
+    marginal 1x->4x : 1.01 ms per pixel-unit
+    marginal 4x->9x : 2.19 ms per pixel-unit
+
+**The scaling is superlinear** — marginal cost more than doubles — so last
+section's "5.80 ms fixed + 1.00 ms per unit" fit is **withdrawn**, along with
+every row it produced above ±20°.
+
+What survives is stronger than what it replaces, because the operating point is
+now *bracketed* rather than extrapolated. A 90 fps budget of 11.1 ms lands at
+**4.59× baseline pixels**, inside the measured 4×..9× segment:
+
+    +-22.5 deg   4.50x px   10.9 ms   92 fps   (interpolated)
+    +-25.0 deg   6.59x px   15.5 ms   65 fps   (interpolated)
+    +-27.5 deg  10.63x px   24.3 ms   41 fps   (extrapolated past 9x -- unsafe)
+
+**±22.5° of yaw at ~90 fps, with #35** — the same figure the linear fit gave, but
+now by interpolation between two real measurements instead of extrapolation from
+two. Everything past ±25° is worse than previously stated and ±27.5° is not
+affordable.
+
+**Also settled: X4 is not capping.** `<frameratelimit>false</frameratelimit>` and
+`<frameratetarget>197</frameratetarget>` in the live config, and gameplay reaches
+147 fps. The plateau was never a cap; it was a screen with nothing on it.
+
+**Weakness to keep in view:** the 9× point rests on **two** samples, because that
+run ended shortly after the world appeared. The 90 fps conclusion depends on the
+4×→9× slope, so that slope deserves a longer run before a resolution is fixed —
+park in the world for 60 s, not 10.
