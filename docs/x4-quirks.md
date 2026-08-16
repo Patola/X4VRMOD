@@ -1174,3 +1174,43 @@ Worth recording as a pattern rather than two incidents: the first fix widened
 *which* blocks were considered, the second removed the bar that then excluded
 the one that mattered. Neither alone would have shown the 2.21 camera, and the
 first one passing its build and tests proved nothing about whether it worked.
+
+### The frame cap is ruled out, and the perf A/B was never testing the guard band
+
+**No cap.** Take 158's per-batch medians run from **0.87 ms** (1148 fps) to
+19.69 ms with no floor at 16.67 or 8.33 ms; take 156b spans 1.05..19.54. A vsync
+or frame-rate limiter would show as a floor and there is none.
+
+So the alarm fired correctly — identical timings across a 2.4× change in
+rendered solid angle *is* suspicious — but the diagnosis was wrong, and the real
+explanation is one I should have reached before proposing a cap:
+
+**`X4VR_RES` was `1408x1408` in every run.** Widening `<fov>` at a fixed render
+size adds no pixels. It spreads the same pixels over more solid angle, trading
+angular resolution for coverage. Fragment cost is unchanged *by construction*,
+so 6.92 ms at fov 1.4917 and 6.80 ms at 2.21 are not a surprising result, they
+are the only possible one. All 136 stored logs are `1408x1408`; two are
+`1408x792`. **Resolution has never been varied, so the guard band's cost has
+never been measured.**
+
+That splits the plan into two products that had been conflated:
+
+* **fov 2.21 at 1408²** — genuinely free in frame time, and 2.4× blurrier. This
+  is what take 158 rendered and what the screenshot shows; it is also what
+  take 155's prediction 2 anticipated as the success case.
+* **fov 2.21 at the resolution that preserves sharpness** — ~4489×4693 per eye
+  with #35, which the guard-band table prices at ~10.6× the baseline pixels.
+  *That* is the cost the head-rotation plan actually incurs, and it is unmeasured.
+
+A second reading worth keeping: widening the field put far more geometry in the
+frustum for no measurable time, so the renderer is **not** draw-call or vertex
+bound at this setting. If it is not fragment bound either, the guard band may be
+far cheaper than the pixel ratio implies — which is exactly what a resolution
+A/B decides and reasoning cannot.
+
+**How to vary it.** `X4VR_RES` cannot be passed on the command line in SBS mode:
+`launch/x4vr-launch.sh` *exports* `X4VR_RES="$((W/2))x$H"` and overwrites
+whatever was set. Resolution is changed through `X4VR_W`/`X4VR_H`, which the
+per-eye size is derived from. (Take 101 lost a run to the older version of this,
+which re-read the header instead of the override and left the window, the render
+and the composite at three different sizes.)
