@@ -1459,3 +1459,38 @@ the wrong time. What decides the routing is also still a guess — resolution is
 correlated, not shown to be causal, and `GetHUDUIScale(scalewithresolution)` is
 a hypothesis about the mechanism, not a reading of it. The next step is the
 disassembly and the Lua that calls `IsTargetMonitorNotification`, not a run.
+
+### The radar is not missing — it loses its background. That is an FOV cost.
+
+Patola's second observation, and his wording was exact: "seems missing, or at
+least I am not seeing it clearly". Cropping the same bottom-centre region from
+all three shots settles it — the radar is **present in every one**:
+
+    fov 1.4917, 1408²   dome + green arc against DARK SPACE      -- crisp
+    fov 2.21,   1408²   dome + green arc against the CABIN FLOOR -- washed out
+    fov 2.21,   4224²   dome + green arc against the CABIN FLOOR -- washed out
+
+So the two oddities have **different causes, and neither is what the other looks
+like**:
+
+* **Notification relocation → render resolution.** Bare console at 2.21/1408²,
+  monitor panel at 2.21/4224².
+* **Radar legibility → field of view.** Identical washout at 2.21 on *both*
+  resolutions, absent at 1.4917.
+
+The mechanism is simple once seen. The radar is screen-space at a fixed screen
+position; widening the field changes **what world geometry sits behind that
+position**. At 110° it is dark space, at 163° the cockpit's bright floor and
+consoles have swung into that part of the frame. Nothing moved and nothing broke;
+the backdrop changed underneath it.
+
+**This is an unpriced cost of the guard band.** Every section above costs the
+wide field in pixels and milliseconds. It also costs *HUD legibility*, because
+X4's screen-space elements were positioned and coloured against the backdrops a
+~90° cockpit view produces. Any element we leave screen-space will get whatever
+geometry the widened field puts behind it, and no amount of render resolution
+fixes it — 4224² is exactly as washed out as 1408².
+
+It is also a second, independent argument for the cockpit-monitor route: a panel
+drawn **on** the console has its contrast designed against the console, and
+cannot have its backdrop swapped by a field-of-view change.
