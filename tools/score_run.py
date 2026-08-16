@@ -958,12 +958,78 @@ def main(path):
             # takes 100 and 105 end on a single window, and labelling that "the
             # number to compare" is how a 5.65 ms sample of nothing becomes a
             # result.
-            tag = ("  <- last phase, the one a parked A/B compares"
-                   if k == len(phases) - 1 and len(ph) >= 3
-                   and ph[-1][0] - ph[0][0] >= 20.0 else "")
+            # No "compare this one" tag any more. It used to mark the last
+            # phase, and that label is what made the circularity actionable:
+            # see the draws-segmented block below for why the last phase is
+            # not reliably the parked one.
             print(f"      {ph[0][0] - t0:5.0f}–{end - t0:<5.0f}s "
                   f"{w[len(w) // 2]:6.2f} ms  ({len(ph)} window(s), "
-                  f"{w[0]:.2f}–{w[-1]:.2f}){tag}")
+                  f"{w[0]:.2f}–{w[-1]:.2f})")
+
+        # --- the comparable number, cut on X4's own draw count -------------
+        #
+        # The phases above are shape. They are not the measurement, because
+        # grouping samples BY frame time and then reporting frame time is
+        # circular -- and that cost two misreadings in one session.
+        #
+        # Takes 158/159/160 all contain a 17-19 ms stretch that is X4's
+        # LOADING SCREEN: ~12 draws across ~3 slots, for about 70 s. Frame
+        # time *drops* to 7 ms at the instant the world appears (~97 draws,
+        # ~40 slots) -- more geometry, faster frames. A frame-time cluster
+        # cannot find that boundary, because the boundary is not where the
+        # frame time is calm, it is where the draw count steps. Take 160's
+        # loading and gameplay landed in one 17.74 ms phase and buried a
+        # 20.75 ms result; the 1x/4x pair before it was compared on a window
+        # nobody had checked was the same state in both runs.
+        #
+        # So: segment on what X4 reports it is drawing, never on the
+        # quantity being measured.
+        draws = [(float(m.group(1)), int(m.group(2)))
+                 for m in re.finditer(
+                     r"^\[\s*([\d.]+)\]\s+layer\s+frame \d+ (?:NEW|hb):[^\n]*"
+                     r"draws=(\d+)", text, re.M)]
+        WORLD = 50  # measured: ~12 while loading, ~97-117 in flight
+        busy = [t for t, d in draws if d > WORLD]
+        if busy:
+            # The LAST contiguous stretch, so a flicker of geometry during
+            # loading cannot open the window early.
+            start = busy[0]
+            for a, b in zip(busy, busy[1:]):
+                if b - a > 20.0:
+                    start = b
+            g = sorted(v for t, v in perf if t >= start)
+            lo = [d for t, d in draws if t < start]
+            hi = [d for t, d in draws if t >= start]
+            if g:
+                span = max(t for t, _ in perf if t >= start) - start
+                print(f"perf  GAMEPLAY {g[len(g) // 2]:.2f} ms "
+                      f"({1000 / g[len(g) // 2]:.0f} fps) — {len(g)} window(s) "
+                      f"over {span:.0f}s from t0+{start - t0:.0f}s, range "
+                      f"{g[0]:.2f}–{g[-1]:.2f}. This is the A/B number.")
+                if lo and hi:
+                    lo.sort(); hi.sort()
+                    a, b = lo[len(lo) // 2], hi[len(hi) // 2]
+                    # Only claim a clean split when there is one. "before" is
+                    # the whole pre-gameplay session including the splash,
+                    # which itself draws geometry, so the two medians are not
+                    # always far apart -- and asserting a split that the
+                    # numbers do not show is the same over-claim this file
+                    # already had to have removed once.
+                    print(f"      segmented on draws: {a} before vs {b} after"
+                          + (" — a clean step" if b > 2 * a else
+                             " — NOT a clean step, check the window by hand"))
+                if len(g) < 5 or span < 30.0:
+                    print("warn  the parked stretch is too short to compare. "
+                          "X4 needs ~70 s to load this save; park in the world "
+                          "for 60 s AFTER it appears, or this number is a "
+                          "sample of whatever happened to be on screen.")
+            else:
+                print("perf  no frame-time window fell inside the gameplay "
+                      "stretch — the run ended too soon after the world "
+                      "appeared to measure anything")
+        elif draws:
+            print(f"perf  GAMEPLAY not reached — draws never exceeded {WORLD}, "
+                  f"so this run never left the loading screen or the menu")
 
     # --- did the shear-ui probe actually run on anything? -------------------
     #

@@ -1342,3 +1342,35 @@ affordable.
 run ended shortly after the world appeared. The 90 fps conclusion depends on the
 4×→9× slope, so that slope deserves a longer run before a resolution is fixed —
 park in the world for 60 s, not 10.
+
+### The scorer segments frame time on draws, not on frame time
+
+The phase display grouped perf samples **by frame time** and then reported frame
+time in the winning group. Circular, and it misled twice in one session: it
+buried take 160's 20.75 ms inside a 17.74 ms "phase" by merging gameplay with
+the loading screen, and the 1×/4× pair before it was compared on a window nobody
+had checked was the same state in both runs.
+
+The comparable number is now cut on **X4's own draw count** — `draws > 50`,
+measured as ~12 while loading and ~97–117 in flight — taking the *last*
+contiguous busy stretch so a flicker of geometry during the splash cannot open
+the window early. The `<- the one a parked A/B compares` tag is gone from the
+phase list, since the last phase is not reliably the parked one.
+
+Validated against the three runs it was written for, and it reproduces the
+by-hand analysis exactly:
+
+    take 158  1x px  GAMEPLAY  6.80 ms (147 fps)  13 windows over 51s  12 -> 117 draws
+    take 159  4x px  GAMEPLAY  9.82 ms (102 fps)   6 windows over 32s  21 -> 117 draws
+    take 160  9x px  GAMEPLAY 20.75 ms ( 48 fps)   2 windows over 21s  65 -> 117 draws
+                                                   ^ warns: too short to compare
+
+Two things it refuses to do quietly. A run whose gameplay stretch is under 30 s
+or under 5 windows says so and names the cause — this save needs ~70 s to load,
+so a "sit 20 s" protocol lands almost entirely in the loading screen. And the
+draw-step line only claims "a clean step" when the after-median is more than
+twice the before-median; take 160 reports **NOT a clean step** because its splash
+drew enough geometry to blur the comparison. Asserting a split the numbers do not
+show is the same over-claim this file already had removed once today.
+
+All 53 stored `X4VR_FOV` logs keep their verdicts.
