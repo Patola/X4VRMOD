@@ -645,3 +645,48 @@ must be a difference means the instrument is not measuring the knob.** 17.2 ms i
 58 fps, which is the shape of a vsync or frame-rate cap. **Performance at wide
 fields is UNMEASURED**, and on a project whose first constraint is "performance
 is king" that is the next thing worth a run, with the cap ruled out first.
+
+## `stage15-offaxis-emission` — takes 164a / 164b / 164c
+
+The off-axis affine of #35 is emitted by both vertex patches and measured
+correct, per view, on real frames. Scorer PASS on all three. **A state is code
+and knobs**: the affine is OFF unless `X4VR_OFFAXIS` is set, and with it unset
+the emitted shader words are byte-identical to the pre-#35 build, so every
+earlier tag in this file still reproduces from this commit.
+
+    X4VR_TAKE=164a-OABASE X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take164a.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 ./launch/x4vr-launch.sh
+
+    X4VR_TAKE=164b-OAIDENT X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take164b.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_OFFAXIS="-55,55,55,-55" X4VR_BINDLESS_MIRROR=1 ./launch/x4vr-launch.sh
+
+    X4VR_TAKE=164c-OACANT X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take164c.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_OFFAXIS="-54,40,44,-55" X4VR_BINDLESS_MIRROR=1 ./launch/x4vr-launch.sh
+
+**What it establishes:**
+
+* **The identity control is exact.** 164b asks for a symmetric target at X4's
+  own half-angle, which is arithmetically a no-op, and the picture is
+  indistinguishable from 164a: `A_x` and `A_y` within 0.001 of 1, `B_x` and
+  `B_y` within 0.0014 of 0, every one of those a single step of the estimator's
+  resolution.
+* **The canted target lands on all eight predicted coefficients.** Predicted
+  `A_x=1.2892 B_x=±0.2425 A_y=1.1931 B_y=−0.1932`; the 2D fit returns exactly
+  those in view 1 and moves only `A_x` by 0.6% in view 0. The predicted warp
+  lifts correlation 0.219→0.647 and 0.233→0.595.
+* **`B_x` reverses sign between the views and nothing else does** — the per-view
+  selection works, not merely the affine.
+* **`baked-sx=0`** in all three: every world module reads sx live, so none was
+  left rendering X4's frustum while its neighbours rendered the target's.
+* Frame time is unchanged: 6.70 / 6.74 / 6.80 ms gameplay median. The affine is
+  ~30 vertex-shader instructions and does not show against a 1408² eye.
+
+**What it does NOT establish.** Nothing about the headset. The layer still
+declares a symmetric ±55° field (piece 2) and still renders 1408² per eye
+(piece 3), so in VR the declaration and the render disagree with the affine on
+purpose. 164c is a flatscreen measurement of a shader transform. Reading it as
+"off-axis works in VR" would be reading three pieces from one.
+
+**Reproducing the measurement** (the screenshots are X4's rendered output and
+are not committed):
+
+    python3 tools/register_affine.py --self-check
+    python3 tools/register_affine.py /tmp/x4-164a.jpg /tmp/x4-164b.jpg 0.0 0.72
+    python3 tools/register_affine.py --verify /tmp/x4-164a.jpg /tmp/x4-164c.jpg 1.2892 0.2425 1.1931 -0.1932 0.0 0.55
