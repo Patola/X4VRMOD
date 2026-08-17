@@ -2393,17 +2393,70 @@ settled position as of take 165b.
    canvas problem; #30's machinery is the right shape because it selects per
    *pass*, and the fullscreen post passes must keep identity while the UI pass
    must not.
-2. **The deferred reconstruction ignores the affine.** 234 fragment modules are
-   corrected per eye for the *shear* by `patch_fragment_invproj_eye`
-   (`T(d)·M_invprojection`, task #22). The affine is a further transform on
-   `gl_Position`, so `gl_FragCoord` no longer corresponds to the NDC that matrix
-   expects, and the error differs in sign between the eyes because `B_x` does.
-   The fix is one more constant composition — `A⁻¹` applied to the NDC before
-   the inverse projection — and `A` is latched, so it is known at patch time.
-   The menu's per-eye shadows are this defect.
+2. ~~**The deferred reconstruction ignores the affine.**~~ **DONE — task #39.**
+   See below.
 
-**Neither alone is worth a take: the run fails either way.** Do both, then one
-VR take.
+**The remaining item alone is not worth a take: the run still fails on it.** Do
+#40, then one VR take.
+
+### #39 — the deferred reconstruction, done
+
+`patch_fragment_invproj_eye` now composes `T(d)·M_invprojection·A⁻¹`: the affine
+undone first because it was applied last, the shear undone last. 244 fragment
+modules, plus the 2 that take `M_invprojection_uj` — the shadow cascades, which
+are the ones the menu's per-eye shadows came from.
+
+`A`'s linear part is `ax_num/sx` and `sx` is per-draw, so the scales are read
+back out of **the matrix being corrected**: X4's projection has a diagonal
+top-left 2×2 in every dumped take, so `minv[0][0] = 1/sx` and `minv[1][1] =
+1/sy`. That spares a second access chain and makes it impossible for the scale
+used to disagree with the matrix it is applied to. Everything in the chain is
+uniform over the draw, so it hoists into scalar registers.
+
+**Scope, established by reading the shaders rather than reasoning about "screen
+space".** Ten fragment and two compute modules also read `M_projection`, and the
+first instinct — compose `A` onto that too — is **wrong**:
+
+* Eight of them (`mod-0167`, `0168`, `0365`–`0370`) unproject with member 2,
+  reproject with member 1, and sample a `sampler3D`: a **froxel volume**. That
+  volume is filled by compute (`mod-0177`, `mod-0364`), which has no
+  `gl_ViewIndex` and is therefore parametrised by X4's *symmetric* frustum for
+  ever. The lookup must use the symmetric projection with a **correct** view
+  position — which is exactly what #39 now produces. Composing the affine onto
+  member 1 as well would send every froxel sample off by the full map.
+* The other two (`mod-0111`, `mod-0112`) read `M_projection[1][1]` as a scalar,
+  clamp `|sy|` between two configured half-FOV cotangents and smoothstep it —
+  a zoom-keyed intensity fade, not a transform. The whole-matrix load the patch
+  keys on does not match a deep access chain, so they are excluded by shape.
+  (The affine does change the effective vertical FOV by `A_y ≈ 1.19`, so the
+  fade point shifts slightly. Cosmetic; recorded, not fixed.)
+* The two compute modules stay wholly uncorrected on both members, so they
+  remain internally consistent. The compute gap is unchanged, not widened.
+
+**How it was verified, with no run.**
+
+| check | result |
+|---|---|
+| host round trip, 2 eyes × 5 cameras × 6 points | worst view-space error **1.5e-5 m** |
+| ...against its negative control (affine ignored) | **104 m** |
+| symmetric target at X4's own half-angle | `M_invprojection` unchanged, exactly |
+| all 409 dumped modules, affine unrequested | **byte-identical** to the pre-#39 patcher |
+| all 244 patched modules, affine requested | `spirv-val` clean |
+| emitted arithmetic vs `common/x4vr_view.hpp` | **0.000e+00** over 10 configurations |
+
+That last row is `spirv_patch frag-invproj-check`, which interprets the emitted
+graph instead of trusting that a valid module is a correct one. It was proved to
+have range before being believed: extracting `minv[1][0]` instead of `minv[1][1]`
+scores 1.163, and swapping the operands of the col-3 subtraction scores 2.000.
+Both of those validate perfectly under `spirv-val`, which is the whole point.
+
+**A latent flake found on the way.** `tests/run-multiview-render.sh` asserted the
+emitted coefficients with `spirv-dis … | grep -q`. `grep -q` exits at the first
+match, `spirv-dis` takes SIGPIPE, and under `set -o pipefail` the pipeline then
+reports failure *even though the constant was found* — so the verdict depended on
+whether the module was small enough for `spirv-dis` to have finished writing.
+Piece 1's assertion passed for that reason alone; the #39 one, on a larger
+module, failed all five. Both now disassemble once into a variable.
 
 ### Current default, deliberately
 
@@ -2419,6 +2472,14 @@ affine reaches World modules only — it reads the latched frusta from the log,
 computes both frustum centres and fails on their separation. That check would
 have failed 165b before the headset went on. `tools/register_affine.py --verify`
 measures the affine from screenshots; run `--self-check` first.
+
+It also FAILs the **half-applied** state #39 introduces the possibility of: the
+affine on `gl_Position` with `M_invprojection` left alone. That is reachable
+through `X4VR_PROJ_INVPROJ=0` and through the bindless mirror being off, and it
+is strictly worse than either end state, so the layer names it in one line —
+`invproj …: off-axis affine NOT undone` — and the scorer fails on that string.
+The latch itself cannot split the difference: one static object serves both call
+sites, so a session is affine everywhere or affine nowhere.
 
 ### Method note for whoever picks this up
 
