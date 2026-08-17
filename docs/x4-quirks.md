@@ -2364,3 +2364,71 @@ What remains, both real and both seen:
    expects. Undoing it is one more constant composition — `A⁻¹` on the NDC before
    the inverse projection — and `A` is latched, so it is known at patch time.
    The menu's per-eye shadows are this.
+
+## #35 — STATE OF PLAY (read this first)
+
+The sections above are the working trail, including two retractions. This is the
+settled position as of take 165b.
+
+### Done and proven
+
+* **Piece 1 — the off-axis affine is emitted** by both live-sx vertex patches,
+  per view, `sx`/`sy` read live. Takes 164a/b/c: the identity control is exact,
+  the canted target lands on all eight predicted coefficients, `B_x` reverses
+  sign between views. Tagged `stage15-offaxis-emission`.
+* **Piece 2 — one latched frustum pair** feeds both the shader coefficients and
+  `XrCompositionLayerProjectionView::fov`. Take 165b: the runtime reports take
+  112's frusta to the centidegree, the latch takes them, `baked-sx=0`.
+* **The world, the cockpit and the SKY all carry the affine correctly.** The sky
+  was measured wrong twice before this was established; see the retraction
+  above.
+
+### Not done — exactly two things, both understood
+
+1. **Screen-space UI is left in X4's symmetric frame.** ~52 modules classify
+   NonWorld and get `K_nonworld` = identity. With a canted declaration, anything
+   screen-locked sits at the frustum centre in each eye — −15.04° and +15.04° —
+   so the eyes are asked to diverge by **30.07°**, which is the unfusable
+   negative control `common/x4vr_view.hpp:291` already documents. This is #30's
+   canvas problem; #30's machinery is the right shape because it selects per
+   *pass*, and the fullscreen post passes must keep identity while the UI pass
+   must not.
+2. **The deferred reconstruction ignores the affine.** 234 fragment modules are
+   corrected per eye for the *shear* by `patch_fragment_invproj_eye`
+   (`T(d)·M_invprojection`, task #22). The affine is a further transform on
+   `gl_Position`, so `gl_FragCoord` no longer corresponds to the NDC that matrix
+   expects, and the error differs in sign between the eyes because `B_x` does.
+   The fix is one more constant composition — `A⁻¹` applied to the NDC before
+   the inverse projection — and `A` is latched, so it is known at patch time.
+   The menu's per-eye shadows are this defect.
+
+**Neither alone is worth a take: the run fails either way.** Do both, then one
+VR take.
+
+### Current default, deliberately
+
+`X4VR_OFFAXIS` unset = affine OFF = take 163's behaviour. The runtime source is
+opt-in (`X4VR_OFFAXIS=runtime`); explicit angles (`"l,r,u,d"`) reproduce
+164a/b/c; `off`/`0` force it off. This is not tidiness — piece 2 briefly made the
+affine default-on in VR, which ships the 30.07° divergence.
+
+### Acceptance
+
+`tools/score_run.py` now FAILs a run whose declared frusta are canted while the
+affine reaches World modules only — it reads the latched frusta from the log,
+computes both frustum centres and fails on their separation. That check would
+have failed 165b before the headset went on. `tools/register_affine.py --verify`
+measures the affine from screenshots; run `--self-check` first.
+
+### Method note for whoever picks this up
+
+Three of my screenshot measurements of "does X carry the affine" disagreed with
+each other, and I published the wrong one. For "which module drew this", add a
+layer-side instrument that logs its own classification against what it binds —
+do not do image forensics. See docs above and the retraction for the details.
+
+### Piece 3 is NOT next
+
+The 1092×1180 render extent (0.65× area) stays parked until the two items above
+land. Take 165a is already geometrically correct and merely wastes 22% of every
+row, so there is no correctness pressure — only the performance prize.
