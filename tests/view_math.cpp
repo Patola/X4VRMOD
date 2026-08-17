@@ -16,6 +16,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <algorithm>
 #include <initializer_list>
 
@@ -617,6 +618,173 @@ int main() {
             x4vr::apply_off_axis(o, 0.0f, -1.0f, clip);
             check(clip[0] == keep[0] && clip[1] == keep[1],
                   "sx = 0 (an unpopulated camera block) leaves clip untouched");
+        }
+
+        // ---- task #39: the deferred reconstruction, round trip ----
+        //
+        // A deferred pass reads gl_FragCoord, rebuilds NDC, and reconstructs
+        // view position with M_invprojection. Once the affine exists that
+        // matrix is wrong by it, and by opposite amounts in the two eyes. The
+        // repair is T(d)·M_invprojection·A⁻¹, and the only honest test of a
+        // composition is to run the whole path: project, shear, affine,
+        // divide -- then reconstruct and demand the ORIGINAL view position
+        // back.
+        {
+            // X4's projection in its own storage, read off a dumped matrix:
+            // col0 = (sx,0,0,0), col1 = (0,sy,0,0), col2 = (0,0,0,1),
+            // col3 = (0,0,near,0). Reverse-Z with an infinite far plane, so
+            // clip = (sx·x, sy·y, near, z).
+            auto x4_proj = [](float sx, float sy, float near_z) {
+                x4vr::Mat4 p{};
+                p.m[0] = sx;
+                p.m[5] = sy;
+                p.m[11] = 1.0f;
+                p.m[14] = near_z;
+                return p;
+            };
+            // column-major m[c*4+r], the convention the patch emits
+            auto mv = [](const float *m, const float *v, float *out) {
+                for (int r = 0; r < 4; r++)
+                    out[r] = m[0 * 4 + r] * v[0] + m[1 * 4 + r] * v[1] +
+                             m[2 * 4 + r] * v[2] + m[3 * 4 + r] * v[3];
+            };
+
+            // The inverse is the one X4 itself uploads, so take it from the
+            // project's own routine rather than hand-deriving it.
+            {
+                const x4vr::Mat4 p = x4_proj(0.70021f, -0.70021f, 0.1f);
+                x4vr::Mat4 pi{};
+                check(x4vr::invert(p, pi), "X4's projection is invertible");
+                const x4vr::Mat4 id =
+                    x4vr::mul(p, pi, x4vr::Major::Column);
+                float worst = 0.0f;
+                for (int i = 0; i < 16; i++)
+                    worst = std::fmax(worst,
+                                      std::fabs(id.m[i] - (i % 5 ? 0.0f : 1.0f)));
+                check(worst < 1e-5f,
+                      "P·P⁻¹ = I under column-major, which pins the convention "
+                      "the composition is written in");
+                check_near(pi.m[0], 1.0f / 0.70021f, 1e-4f,
+                           "M_invprojection[0][0] is 1/sx — where the patch "
+                           "reads the live scale from");
+                check_near(pi.m[5], 1.0f / -0.70021f, 1e-4f,
+                           "M_invprojection[1][1] is 1/sy");
+            }
+
+            // The identity case again, one level down: a symmetric target at
+            // X4's own half-angle must leave M_invprojection untouched.
+            {
+                const float t = deg(55.0f), tt = std::tan(t);
+                const x4vr::EyeFrustum sym =
+                    x4vr::frustum_of_angles(-t, t, t, -t);
+                const x4vr::OffAxis o = x4vr::make_off_axis(sym, 0.0f);
+                const x4vr::Mat4 p = x4_proj(1.0f / tt, -1.0f / tt, 0.1f);
+                x4vr::Mat4 pi{};
+                x4vr::invert(p, pi);
+                float m[16];
+                memcpy(m, pi.m, sizeof(m));
+                check(x4vr::compose_inv_off_axis(o, m), "identity case accepted");
+                float worst = 0.0f;
+                for (int i = 0; i < 16; i++)
+                    worst = std::fmax(worst, std::fabs(m[i] - pi.m[i]));
+                check(worst < 1e-5f,
+                      "a symmetric target at X4's own half-angle leaves "
+                      "M_invprojection unchanged");
+            }
+
+            // The round trip, over both eyes, five cameras and six points --
+            // the same grid the forward direction is tested on, so a failure
+            // here is a failure of the composition and not of the coverage.
+            const float cam[][2] = {{0.70021f, 1.0f},
+                                    {0.75405f, 1.0f},
+                                    {1.33333f, 1.0f},
+                                    {3.78085f, 1.5f},
+                                    {29.18689f, 1.0f}};
+            const float world[][3] = {{0, 0, 1},
+                                      {0.5f, 0.3f, 2},
+                                      {-1.2f, 0.9f, 3},
+                                      {4.0f, -2.5f, 1.5f},
+                                      {-0.05f, 0.02f, 0.4f},
+                                      {60.0f, 40.0f, 250.0f}};
+            float worst = 0.0f, worst_uncorrected = 0.0f;
+            bool all_accepted = true;
+            for (int e = 0; e < 2; e++) {
+                const x4vr::OffAxis o = x4vr::make_off_axis(eye[e], d_eye[e]);
+                for (const auto &c : cam) {
+                    const float sx = c[0], sy = -c[0] * c[1];
+                    const x4vr::Mat4 p = x4_proj(sx, sy, 0.1f);
+                    x4vr::Mat4 pi{};
+                    if (!x4vr::invert(p, pi))
+                        continue;
+                    for (const auto &pt : world) {
+                        // forward: X4's projection, the eye shear, the affine
+                        const float v[4] = {pt[0], pt[1], pt[2], 1.0f};
+                        float clip[4];
+                        mv(p.m, v, clip);
+                        clip[0] -= sx * d_eye[e];
+                        x4vr::apply_off_axis(o, sx, sy, clip);
+                        // what the rasterizer leaves behind for the deferred
+                        // pass: NDC and a depth value, w divided out
+                        const float frag[4] = {clip[0] / clip[3],
+                                               clip[1] / clip[3],
+                                               clip[2] / clip[3], 1.0f};
+
+                        // backward, corrected: T(d)·M_invprojection·A⁻¹
+                        float m[16];
+                        memcpy(m, pi.m, sizeof(m));
+                        if (!x4vr::compose_inv_off_axis(o, m))
+                            all_accepted = false;
+                        x4vr::compose_eye_untranslate(d_eye[e], m);
+                        float r[4];
+                        mv(m, frag, r);
+                        for (int i = 0; i < 3; i++)
+                            worst = std::fmax(
+                                worst, std::fabs(r[i] / r[3] - v[i]));
+
+                        // the negative control: the same reconstruction the
+                        // 244 patched modules do TODAY, with the shear undone
+                        // and the affine ignored. If this is not large the
+                        // test above is not proving anything.
+                        float m0[16];
+                        memcpy(m0, pi.m, sizeof(m0));
+                        x4vr::compose_eye_untranslate(d_eye[e], m0);
+                        float r0[4];
+                        mv(m0, frag, r0);
+                        for (int i = 0; i < 3; i++)
+                            worst_uncorrected = std::fmax(
+                                worst_uncorrected,
+                                std::fabs(r0[i] / r0[3] - v[i]));
+                    }
+                }
+            }
+            check(all_accepted,
+                  "every live camera in the grid was accepted, so no case "
+                  "passed by being silently skipped");
+            check(worst < 2e-3f,
+                  "T(d)·M_invprojection·A⁻¹ recovers the centre-frame view "
+                  "position, both eyes, 5 cameras, 6 points");
+            check(worst_uncorrected > 1.0f,
+                  "and the uncorrected matrix does not — the negative control "
+                  "the round trip is only meaningful against");
+            printf("     worst view-space error %.2e m (uncorrected %.2f m)\n",
+                   worst, worst_uncorrected);
+
+            // ---- refusals ----
+            {
+                const x4vr::OffAxis o = x4vr::make_off_axis(eye[0], d_eye[0]);
+                float zero[16] = {};
+                float keep[16] = {};
+                check(!x4vr::compose_inv_off_axis(o, zero),
+                      "an all-zero camera block refuses rather than dividing");
+                check(memcmp(zero, keep, sizeof(zero)) == 0,
+                      "and leaves the matrix exactly as it found it");
+                float m[16] = {};
+                m[0] = 1.0f;
+                m[5] = 1.0f;
+                const x4vr::OffAxis bad{};
+                check(!x4vr::compose_inv_off_axis(bad, m),
+                      "a refused frustum composes nothing");
+            }
         }
     }
 

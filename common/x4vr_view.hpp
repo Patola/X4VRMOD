@@ -383,6 +383,87 @@ inline void apply_off_axis_folded(const OffAxis &o, float sx, float sy,
     clip[1] = (o.ay_num / sy) * clip[1] + o.by * clip[3];
 }
 
+// ---------------------------------------------------------------- task #39
+//
+// What a DEFERRED pass has to do once the affine exists.
+//
+// The affine moves `gl_Position`, so the depth buffer and every G-buffer are
+// rasterized in the target frustum's NDC. A deferred pass then reads
+// `gl_FragCoord`, turns it back into NDC, and reconstructs view position with
+// `M_invprojection` -- which is the inverse of X4's SYMMETRIC projection and
+// knows nothing about the affine. It therefore recovers a position that is
+// wrong by the whole map, in opposite directions in the two eyes, because `bx`
+// reverses sign between them. Take 165b's per-eye menu shadows are this.
+//
+// The repair is one more constant composition. With
+//
+//     clip_final = A · K · clip_centre       (K = the eye shear, task #22)
+//
+// recovering the centre frame from a final clip coordinate needs
+//
+//     T(d) · M_invprojection · A⁻¹
+//
+// -- A⁻¹ on the RIGHT because it is undone first, T(d) on the left because it
+// is undone last. Both compositions are safe under the perspective divide: A
+// leaves w alone, and T is a view-space translation, so a shader that hands in
+// `(ndc.xy, depth, 1)` and one that hands in a homogeneous clip position get
+// the same answer.
+//
+// A's linear part is `A_x = ax_num/sx`, and `sx` is per-draw. The scales are
+// therefore read back OUT of the matrix being corrected: X4's projection has a
+// diagonal top-left 2x2 (dumped in every take -- `M_projection [1.333 -0.000
+// ... | 0.000 -1.333 ...]`), so its inverse does too, and
+//
+//     minv[0][0] = 1/sx        minv[1][1] = 1/sy
+//
+// The same load that is being corrected supplies them, which is both cheaper
+// than a second access chain and impossible to get out of step with. It also
+// costs nothing per fragment in practice: every input is uniform over the
+// draw, so the whole chain hoists into scalar registers.
+//
+// Indexing is [col][row] -- `m[c*4 + r]` -- which is SPIR-V's own convention
+// for OpCompositeExtract on a matrix, and is deliberately the same arithmetic
+// the patch emits. These two must not be allowed to drift.
+
+// M -> T(d)·M : row 0 += d · row 3.
+//
+// What patch_fragment_invproj_eye has emitted since task #22, written out here
+// only so the composition above can be proven offline against the vertex path.
+inline void compose_eye_untranslate(float d, float m[16]) {
+    for (int c = 0; c < 4; c++)
+        m[c * 4 + 0] += d * m[c * 4 + 3];
+}
+
+// M -> M·A⁻¹, undoing the off-axis affine on the clip coordinate a deferred
+// pass feeds in.
+//
+//     A⁻¹ = [ 1/A_x   0     0   -B_x/A_x ]
+//           [   0   1/A_y   0   -B_y/A_y ]
+//           [   0     0     1       0    ]
+//           [   0     0     0       1    ]
+//
+// so col0 and col1 scale, and col3 picks up a multiple of each. Refuses as a
+// unit, exactly like apply_off_axis: a camera block that reads back all zeroes
+// before the first real frame must leave the matrix alone rather than put an
+// inf in it.
+inline bool compose_inv_off_axis(const OffAxis &o, float m[16]) {
+    if (!o.ok)
+        return false;
+    const float ax = o.ax_num * m[0]; // ax_num · (1/sx) = A_x
+    const float ay = o.ay_num * m[5]; // ay_num · (1/sy) = A_y
+    if (!(ax * ax > 0.0f) || !(ay * ay > 0.0f))
+        return false;
+    const float iax = 1.0f / ax, iay = 1.0f / ay;
+    for (int r = 0; r < 4; r++) {
+        const float c0 = m[0 * 4 + r] * iax;
+        const float c1 = m[1 * 4 + r] * iay;
+        m[3 * 4 + r] -= o.bx * c0 + o.by * c1;
+        m[0 * 4 + r] = c0;
+        m[1 * 4 + r] = c1;
+    }
+    return true;
+}
+
 // The half-angle a single symmetric render must cover so that nothing visible
 // in any target frustum is culled by X4 before the affine can place it.
 // Returns radians; the caller turns it into X4's <fov> with x4_fov_for_half().

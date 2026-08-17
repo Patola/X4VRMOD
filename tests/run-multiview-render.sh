@@ -767,10 +767,18 @@ if command -v spirv-dis >/dev/null; then
     # ax_num = 2/(tan40 - tan(-54)) = 0.902738, bx = +0.242513 for eye 0, and
     # the eye-1 constant is emitted as a DIFFERENCE, so bx's mirror shows up as
     # -0.485025 rather than -0.242513.
+    #
+    # Disassembled ONCE into a variable, not piped into five greps. `grep -q`
+    # exits at the first match and closes the pipe, spirv-dis takes SIGPIPE,
+    # and under `set -o pipefail` the pipeline then reports failure even though
+    # the constant was found -- so the verdict depended on whether the module
+    # was small enough for spirv-dis to have finished writing. This case passed
+    # for that reason alone; the #39 one below, on a larger module, failed all
+    # five. An assertion whose answer turns on process timing is not one.
+    dis=$(spirv-dis "$PATCHDIR/oa.spv" 2>/dev/null)
     miss=""
     for c in 0.902738 0.242512 -0.835478 -0.193187 -0.485025; do
-        spirv-dis "$PATCHDIR/oa.spv" 2>/dev/null |
-            grep -q "OpConstant %float $c" || miss="$miss $c"
+        [[ "$dis" == *"OpConstant %float $c"* ]] || miss="$miss $c"
     done
     if [[ -z "$miss" ]]; then
         printf 'ok   %-38s all five match view_math\n' \
@@ -805,9 +813,12 @@ fi
 # surface points. Shadows are view-independent, so that is a defect.
 inv_case() {
     local label="$1" want="$2" shader="$3" set="$4" bind="$5" member="${6:-2}"
+    # Anything past the member is the task #39 off-axis pair; callers that stop
+    # at five arguments (member defaulted) must not have shift fail on them.
+    shift $(( $# < 6 ? $# : 6 ))
     local out got val=skip
     out=$("$PATCHER" frag-invproj "$BUILD/tests/$shader" \
-        "$PATCHDIR/inv.spv" "$set" "$bind" "$member" -0.032 0.032 2>&1)
+        "$PATCHDIR/inv.spv" "$set" "$bind" "$member" -0.032 0.032 "$@" 2>&1)
     got=$(sed -n 's/^PATCHED=//p' <<<"$out")
     if [[ "$got" == 1 ]]; then
         spirv-val --target-env vulkan1.2 "$PATCHDIR/inv.spv" >/dev/null 2>&1 && val=OK || val=BAD
@@ -831,6 +842,20 @@ inv_case "invproj: refuses, member never loaded" 0 sample_invproj.frag.spv 1 0 1
 # the honest outcome; picking one eye would be wrong in the other.
 inv_case "invproj: refuses a compute module"    0 noop.comp.spv 1 0
 
+# Task #39: the same correction, with the off-axis affine composed onto it.
+# The refusals have to match the vertex side's exactly -- a frustum accepted
+# here and declined there would leave the map applied nowhere and undone
+# everywhere, which is a worse state than not attempting it.
+inv_case "invproj: affine, per-eye"     1 sample_invproj.frag.spv 1 0 2 \
+    "$OA_L" "$OA_R"
+inv_case "invproj: affine, one map"     1 sample_invproj.frag.spv 1 0 2 "$OA_L"
+inv_case "invproj: affine, symmetric"   1 sample_invproj.frag.spv 1 0 2 \
+    "$OA_SYM"
+inv_case "invproj: affine refuses a backwards frustum" 0 \
+    sample_invproj.frag.spv 1 0 2 "40,-54,44,-55"
+inv_case "invproj: affine refuses garbage angles"      0 \
+    sample_invproj.frag.spv 1 0 2 "not,a,frustum,x"
+
 if command -v spirv-dis >/dev/null; then
     "$PATCHER" frag-invproj "$BUILD/tests/sample_invproj.frag.spv" \
         "$PATCHDIR/inv.spv" 1 0 2 -0.032 0.032 >/dev/null 2>&1
@@ -848,7 +873,98 @@ if command -v spirv-dis >/dev/null; then
             "...four inserts, ViewIndex is Flat" "$ins" "$vidx" "$flat"
         fails=$((fails + 1))
     fi
+
+    # Task #39's shape, stated as what the affine ADDS. Counting absolutely
+    # would bake in the sample shader's own arithmetic -- it already divides
+    # once, for its perspective divide -- and would then fail the day that
+    # shader changes for an unrelated reason.
+    #
+    # Twelve more inserts: columns 0, 1 and 3 of each of the four rows, on top
+    # of task #22's four. One guard. Exactly two divides, the reciprocals of
+    # A_x and A_y; a third would mean a scale is being recomputed where it
+    # should have been reused.
+    "$PATCHER" frag-invproj "$BUILD/tests/sample_invproj.frag.spv" \
+        "$PATCHDIR/invoa.spv" 1 0 2 -0.032 0.032 "$OA_L" "$OA_R" >/dev/null 2>&1
+    disoa=$(spirv-dis "$PATCHDIR/invoa.spv" 2>/dev/null)
+    disno=$(spirv-dis "$PATCHDIR/inv.spv" 2>/dev/null)
+    cnt() { grep -c "$1" <<<"$2"; }
+    dins=$(( $(cnt OpCompositeInsert "$disoa") - $(cnt OpCompositeInsert "$disno") ))
+    dand=$(( $(cnt OpLogicalAnd "$disoa") - $(cnt OpLogicalAnd "$disno") ))
+    ddiv=$(( $(cnt OpFDiv "$disoa") - $(cnt OpFDiv "$disno") ))
+    if [[ "$dins" == 12 && "$dand" == 1 && "$ddiv" == 2 ]]; then
+        printf 'ok   %-38s +inserts=%s +guard=%s +div=%s\n' \
+            "...affine composes onto the inverse" "$dins" "$dand" "$ddiv"
+    else
+        printf 'FAIL %-38s want +12/+1/+2, got %s/%s/%s\n' \
+            "...affine composes onto the inverse" "$dins" "$dand" "$ddiv"
+        fails=$((fails + 1))
+    fi
+
+    # Absent when not asked for. Same property, same reason, as the vertex
+    # side: every state tagged before #39 has to remain reachable by leaving
+    # the knob unset, and the emission threads through the same load handler
+    # the #22 correction uses, where a stray unconditional line would show up
+    # in no other case in this file. Compared against the UNPATCHED module, so
+    # "absent" means what it says rather than "no more than the sample's own".
+    disbase=$(spirv-dis "$BUILD/tests/sample_invproj.frag.spv" 2>/dev/null)
+    nand=$(( $(cnt OpLogicalAnd "$disno") - $(cnt OpLogicalAnd "$disbase") ))
+    ndiv=$(( $(cnt OpFDiv "$disno") - $(cnt OpFDiv "$disbase") ))
+    if [[ "$nand" == 0 && "$ndiv" == 0 ]]; then
+        printf 'ok   %-38s +and=%s +div=%s\n' \
+            "...affine absent when not requested" "$nand" "$ndiv"
+    else
+        printf 'FAIL %-38s want +and=0 +div=0, got %s/%s\n' \
+            "...affine absent when not requested" "$nand" "$ndiv"
+        fails=$((fails + 1))
+    fi
+
+    # The coefficients, against the same five numbers view_math pins for these
+    # frusta -- the eye-1 bx is emitted as a difference, hence -0.485025.
+    miss=""
+    for c in 0.902738 0.242512 -0.835478 -0.193187 -0.485025; do
+        [[ "$disoa" == *"OpConstant %float $c"* ]] || miss="$miss $c"
+    done
+    if [[ -z "$miss" ]]; then
+        printf 'ok   %-38s all five match view_math\n' \
+            "...invproj coefficients are the same"
+    else
+        printf 'FAIL %-38s missing:%s\n' \
+            "...invproj coefficients are the same" "$miss"
+        fails=$((fails + 1))
+    fi
 fi
+
+# What the emitted module actually COMPUTES, which is a different question from
+# whether it validates. spirv-val accepts an extract of (1,0) where (1,1) was
+# meant, and accepts a subtraction with its operands the wrong way round; both
+# render wrong and both have cost this project takes. The checker interprets
+# the emitted arithmetic against a known M_invprojection and demands the same
+# 16 floats common/x4vr_view.hpp produces.
+#
+# Seeded faults confirm it has range rather than merely agreeing with itself:
+# extracting minv[1][0] instead of minv[1][1] scores 1.163, and swapping the
+# operands of the col-3 subtraction scores 2.000, against 0.000 here.
+eval_case() {
+    local label="$1"; shift
+    local out worst checked
+    out=$("$PATCHER" frag-invproj-check \
+        "$BUILD/tests/sample_invproj.frag.spv" 1 0 2 -0.032 0.032 "$@" 2>&1)
+    worst=$(sed -n 's/.*WORST=//p' <<<"$out")
+    checked=$(sed -n 's/^CHECKED=\([0-9]*\).*/\1/p' <<<"$out")
+    # 10 = five cameras x two views. A checker that silently evaluated nothing
+    # would report a perfect zero, so the count is asserted too.
+    if [[ "$checked" == 10 ]] && awk "BEGIN{exit !($worst < 1e-6)}" 2>/dev/null
+    then
+        printf 'ok   %-38s checked=%s worst=%s\n' "$label" "$checked" "$worst"
+    else
+        printf 'FAIL %-38s want checked=10 worst<1e-6, got %s / %s\n' \
+            "$label" "${checked:-?}" "${worst:-?}"
+        fails=$((fails + 1))
+    fi
+}
+eval_case "invproj: emits T(d)·M (no affine)"
+eval_case "invproj: emits T(d)·M·A⁻¹ per eye" "$OA_L" "$OA_R"
+eval_case "invproj: emits the identity map"   "$OA_SYM"
 
 # And the instrument, checked against the same shape. It reported "samples
 # nothing" about X4's real shaders until it learned to see through OpTypeArray,

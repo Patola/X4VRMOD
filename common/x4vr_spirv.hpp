@@ -786,6 +786,100 @@ inline uint32_t emit_off_axis(std::vector<uint32_t> &out, uint32_t &bound,
     return p2;
 }
 
+/// Emits `compose_inv_off_axis` (common/x4vr_view.hpp): `M -> M·A⁻¹` on a
+/// clip→view matrix, so a deferred pass reconstructing from `gl_FragCoord`
+/// lands back in the frame X4 rendered rather than the one the affine moved
+/// it to. Task #39.
+///
+/// `raw` is the matrix as X4 uploaded it. The live scales come out of that
+/// same matrix — X4's projection has a diagonal top-left 2x2 in every dumped
+/// take, so `minv[0][0] = 1/sx` and `minv[1][1] = 1/sy` — which spares a
+/// second access chain and, more to the point, makes it impossible for the
+/// scale used here to disagree with the matrix being corrected.
+///
+/// Every input is uniform over the draw, so the whole chain hoists into scalar
+/// registers; the cost is a handful of SGPR ops per invocation, not per pixel.
+///
+/// Indices are `(column, component)`, SPIR-V's own matrix indexing and the
+/// same convention `compose_inv_off_axis` is written in. Returns the id of the
+/// corrected matrix; on a degenerate camera block the reciprocals come out as
+/// 1 and the shifts as 0, so the result is `raw` unchanged — the host
+/// function's all-or-nothing refusal, expressed without a branch.
+inline uint32_t emit_inv_off_axis(std::vector<uint32_t> &out, uint32_t &bound,
+                                  const OffAxisIds &t, uint32_t t_mat4,
+                                  uint32_t raw) {
+    auto nid = [&bound] { return bound++; };
+    const uint32_t minv00 = nid();
+    emit(out, OpCompositeExtract, {t.t_float, minv00, raw, 0, 0});
+    const uint32_t minv11 = nid();
+    emit(out, OpCompositeExtract, {t.t_float, minv11, raw, 1, 1});
+    const uint32_t ax = nid();
+    emit(out, OpFMul, {t.t_float, ax, t.ax_num, minv00});
+    const uint32_t ay = nid();
+    emit(out, OpFMul, {t.t_float, ay, t.ay_num, minv11});
+
+    // v·v > 0, for the reason emit_off_axis gives: OpFAbs is an OpExtInst and
+    // requiring GLSL.std.450 here would make the patch refuse modules that do
+    // not import it.
+    auto nonzero = [&](uint32_t v) {
+        const uint32_t sq = nid();
+        emit(out, OpFMul, {t.t_float, sq, v, v});
+        const uint32_t okv = nid();
+        emit(out, OpFOrdGreaterThan, {t.t_bool, okv, sq, t.zero_f});
+        return okv;
+    };
+    const uint32_t ok = nid();
+    emit(out, OpLogicalAnd, {t.t_bool, ok, nonzero(ax), nonzero(ay)});
+
+    const uint32_t denx = nid();
+    emit(out, OpSelect, {t.t_float, denx, ok, ax, t.one_f});
+    const uint32_t deny = nid();
+    emit(out, OpSelect, {t.t_float, deny, ok, ay, t.one_f});
+    const uint32_t iax = nid();
+    emit(out, OpFDiv, {t.t_float, iax, t.one_f, denx});
+    const uint32_t iay = nid();
+    emit(out, OpFDiv, {t.t_float, iay, t.one_f, deny});
+    // The shifts have to vanish with the scales or a refusal would leave a
+    // half-applied map, which is worse than either state.
+    const uint32_t gbx = nid();
+    emit(out, OpSelect, {t.t_float, gbx, ok, t.bx, t.zero_f});
+    const uint32_t gby = nid();
+    emit(out, OpSelect, {t.t_float, gby, ok, t.by, t.zero_f});
+
+    // col0 /= A_x, col1 /= A_y, col3 -= B_x·col0' + B_y·col1'. The scaled
+    // columns are what col3 takes its multiple of -- B/A, written as B times
+    // the already-divided column.
+    uint32_t acc = raw;
+    for (uint32_t r = 0; r < 4; r++) {
+        const uint32_t c0 = nid();
+        emit(out, OpCompositeExtract, {t.t_float, c0, raw, 0, r});
+        const uint32_t c1 = nid();
+        emit(out, OpCompositeExtract, {t.t_float, c1, raw, 1, r});
+        const uint32_t c3 = nid();
+        emit(out, OpCompositeExtract, {t.t_float, c3, raw, 3, r});
+        const uint32_t n0 = nid();
+        emit(out, OpFMul, {t.t_float, n0, c0, iax});
+        const uint32_t n1 = nid();
+        emit(out, OpFMul, {t.t_float, n1, c1, iay});
+        const uint32_t shx = nid();
+        emit(out, OpFMul, {t.t_float, shx, gbx, n0});
+        const uint32_t shy = nid();
+        emit(out, OpFMul, {t.t_float, shy, gby, n1});
+        const uint32_t sum = nid();
+        emit(out, OpFAdd, {t.t_float, sum, shx, shy});
+        const uint32_t n3 = nid();
+        emit(out, OpFSub, {t.t_float, n3, c3, sum});
+        const uint32_t a1 = nid();
+        emit(out, OpCompositeInsert, {t_mat4, a1, n0, acc, 0, r});
+        const uint32_t a2 = nid();
+        emit(out, OpCompositeInsert, {t_mat4, a2, n1, a1, 1, r});
+        const uint32_t a3 = nid();
+        emit(out, OpCompositeInsert, {t_mat4, a3, n3, a2, 3, r});
+        acc = a3;
+    }
+    return acc;
+}
+
 /// Rewrites `code` so every Vertex entry point ends with
 ///
 ///     gl_Position.x -= M_projection[0][0] * d
@@ -1814,9 +1908,36 @@ inline bool patch_vertex_eye_offset_mvp(std::vector<uint32_t> &code,
 /// fragment; the other 3 are compute, where `gl_ViewIndex` does not exist at
 /// all. That is the project's already-recorded compute gap, not something this
 /// patch can close, and it refuses those modules rather than pretending.
+///
+/// **Task #39 — the off-axis affine, undone.** Once #35 maps X4's symmetric
+/// frustum onto the runtime's canted ones, `gl_Position` no longer lands where
+/// `M_invprojection` expects, and the error reverses sign between the eyes
+/// because `bx` does. Passing `oa_left`/`oa_right` composes `A⁻¹` onto the
+/// right of the matrix, giving `T(d)·M_invprojection·A⁻¹` — the shear undone
+/// last, the affine undone first. Both are constant compositions on a matrix
+/// that is already being rewritten, so this adds no load and no descriptor.
+///
+/// Left null, not one word changes: the emitted module is byte-identical to
+/// the pre-#39 one, which is what keeps take 163's behaviour available.
+///
+/// **The forward direction deliberately stays unpatched.** Ten fragment and
+/// two compute modules also read `M_projection`. Eight of them project a
+/// reconstructed view position back to NDC to index a **froxel volume**
+/// (`mod-0365`..`0370`, `0167`, `0168` — unproject with member 2, reproject
+/// with member 1, sample a `sampler3D`). That volume is filled by compute
+/// (`mod-0177`, `mod-0364`), which has no `gl_ViewIndex` and so is
+/// parametrised by X4's SYMMETRIC frustum for ever. The lookup must therefore
+/// use the symmetric projection with a *correct* view position — exactly what
+/// this patch now produces. Composing the affine onto member 1 as well would
+/// send those samples off by the full map. The remaining two (`mod-0111`,
+/// `mod-0112`) read `M_projection[1][1]` as a scalar, to fade an effect by
+/// zoom; the whole-matrix load this patch keys on does not match them, which
+/// is the right answer for a value that is not a transform.
 inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set,
                                        uint32_t binding, uint32_t member,
-                                       float d_left, float d_right) {
+                                       float d_left, float d_right,
+                                       const OffAxis *oa_left = nullptr,
+                                       const OffAxis *oa_right = nullptr) {
     std::vector<Inst> insts;
     if (!iterate(code, insts))
         return false;
@@ -1831,7 +1952,7 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
     std::unordered_map<uint32_t, std::vector<uint32_t>> struct_members;
     std::unordered_map<uint32_t, uint32_t> var_set, var_binding;
     std::unordered_map<uint32_t, uint32_t> int_consts; // id -> value
-    uint32_t t_float = 0, t_v4 = 0, t_mat4 = 0, t_int = 0;
+    uint32_t t_float = 0, t_v4 = 0, t_mat4 = 0, t_int = 0, t_bool = 0;
     size_t first_fn = 0, last_annotation_end = 0, first_global = 0;
     size_t caps_end = 0, exts_end = 0;
     bool have_first_fn = false, have_first_global = false;
@@ -1896,6 +2017,10 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
             if (in.len >= 4 && w[2] == 32 && w[3] == 1 && !t_int)
                 t_int = w[1];
             break;
+        case OpTypeBool:
+            if (in.len >= 2 && !t_bool)
+                t_bool = w[1];
+            break;
         case OpTypeVector:
             if (in.len >= 4 && w[2] == t_float && w[3] == 4 && !t_v4)
                 t_v4 = w[1];
@@ -1940,6 +2065,14 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
     // it would mean picking one eye and being wrong in the other.
     if (!frag_fn || !t_float || !t_v4 || !t_mat4 || !have_first_fn)
         return false;
+    // Task #39, refused on exactly the terms the vertex patches use. The two
+    // refusals HAVE to agree: a frustum the vertex side declines while this
+    // side accepts would leave the affine applied nowhere and undone
+    // everywhere, which is worse than either state alone.
+    if ((oa_left && !oa_left->ok) || (oa_right && !oa_right->ok))
+        return false;
+    if (oa_right && !oa_left)
+        return false; // a right-eye map with no left is a caller error
 
     // --- the camera block(s), verified by shape ---------------------------
     //
@@ -2034,6 +2167,33 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
     };
     const uint32_t c_dl = fconst(d_left);
     const uint32_t c_ddiff = fconst(d_right - d_left);
+    // Nothing below runs unless #39 is asked for, which is what keeps the
+    // emitted words identical to the pre-#39 ones when it is not.
+    const bool oa_on = oa_left != nullptr;
+    const bool oa_stereo = oa_right != nullptr;
+    OffAxisIds oa{};
+    uint32_t c_oa[4] = {}, c_oad[4] = {};
+    if (oa_on) {
+        if (!t_bool) {
+            t_bool = new_id();
+            emit(decls, OpTypeBool, {t_bool});
+        }
+        oa.t_float = t_float;
+        oa.t_v4 = t_v4;
+        oa.t_bool = t_bool;
+        oa.zero_f = fconst(0.0f);
+        oa.one_f = fconst(1.0f);
+        const float l[4] = {oa_left->ax_num, oa_left->bx, oa_left->ay_num,
+                            oa_left->by};
+        for (int i = 0; i < 4; i++)
+            c_oa[i] = fconst(l[i]);
+        if (oa_stereo) {
+            const float r[4] = {oa_right->ax_num, oa_right->bx,
+                                oa_right->ay_num, oa_right->by};
+            for (int i = 0; i < 4; i++)
+                c_oad[i] = fconst(r[i] - l[i]);
+        }
+    }
     const uint32_t view_var = existing_view_var ? existing_view_var : new_id();
     if (!existing_view_var) {
         const uint32_t ptr_in_int = new_id();
@@ -2093,13 +2253,28 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
             const uint32_t d = new_id();
             emit(out, OpFAdd, {t_float, d, c_dl, scaled});
 
+            // Task #39: M·A⁻¹ first, then T(d) on the result, which is the
+            // order the composition is written in -- A is undone first
+            // because it was applied last.
+            uint32_t src = raw;
+            if (oa_on) {
+                OffAxisIds t = oa;
+                t.ax_num = select_view(out, bound, t_float, vf, c_oa[0],
+                                       c_oad[0]);
+                t.bx = select_view(out, bound, t_float, vf, c_oa[1], c_oad[1]);
+                t.ay_num = select_view(out, bound, t_float, vf, c_oa[2],
+                                       c_oad[2]);
+                t.by = select_view(out, bound, t_float, vf, c_oa[3], c_oad[3]);
+                src = emit_inv_off_axis(out, bound, t, t_mat4, raw);
+            }
+
             // row 0 += d * row 3, one column at a time
-            uint32_t acc = raw;
+            uint32_t acc = src;
             for (uint32_t c = 0; c < 4; c++) {
                 const uint32_t x = new_id();
-                emit(out, OpCompositeExtract, {t_float, x, raw, c, 0});
+                emit(out, OpCompositeExtract, {t_float, x, src, c, 0});
                 const uint32_t wv = new_id();
-                emit(out, OpCompositeExtract, {t_float, wv, raw, c, 3});
+                emit(out, OpCompositeExtract, {t_float, wv, src, c, 3});
                 const uint32_t dw = new_id();
                 emit(out, OpFMul, {t_float, dw, d, wv});
                 const uint32_t nx = new_id();
