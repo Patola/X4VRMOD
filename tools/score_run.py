@@ -715,12 +715,34 @@ def main(path):
                 if "offaxis: OFF — X4VR_VR=1 but no view had been located" in text:
                     fails.append(
                         "X4VR_VR=1 and no view had been located when the first "
-                        "world shader was patched, so the off-axis target fell "
-                        "back to X4's symmetric field. The picture is "
-                        "self-consistent — render and declaration agree — but "
-                        "this run says nothing about the runtime's frusta. "
-                        "Take 163 timed the margin at 0.8 s, so losing it "
-                        "means the runtime came up slower than that here")
+                        "shader that needed a target was patched, so the "
+                        "off-axis target fell back to X4's symmetric field. "
+                        "The picture is self-consistent — render and "
+                        "declaration agree — but this run says nothing about "
+                        "the runtime's frusta. Take 163 timed the margin at "
+                        "0.8 s, so losing it means the runtime came up slower "
+                        "than that here")
+                # Task #39. The affine on gl_Position and its undoing in the
+                # deferred reconstruction are ONE change in two places. With
+                # the first done and the second not, 244 fragment modules
+                # reconstruct a frame nothing is in, by opposite amounts in
+                # the two eyes — which is what take 165b's per-eye menu
+                # shadows were. Reachable through X4VR_PROJ_INVPROJ=0 and
+                # through the bindless mirror being off, so it is checked
+                # rather than assumed.
+                if "off-axis affine NOT undone" in text:
+                    fails.append(
+                        "the off-axis affine is applied to gl_Position but "
+                        "NOT undone in the deferred reconstruction — every "
+                        "deferred pass reads M_invprojection for a frame the "
+                        "affine has already moved, in opposite directions per "
+                        "eye. Set X4VR_PROJ_INVPROJ=1 (and leave the bindless "
+                        "mirror on), or turn the affine off entirely with "
+                        "X4VR_OFFAXIS=off. Half-applied is worse than either")
+                elif "off-axis affine UNDONE" in text:
+                    print("offaxis  deferred reconstruction corrected too — "
+                          "T(d)·M_invprojection·A⁻¹, same latched target as "
+                          "the vertex patches (task #39)")
                 if src:
                     print(f"offaxis  target from {src.group(1).strip()}; the "
                           f"compositor is told the same frusta the shader "
@@ -728,8 +750,11 @@ def main(path):
                 # **The check that would have failed take 165b before anyone
                 # put the headset on.** The affine reaches World modules only.
                 # Everything else -- every NonWorld module, the unsheared twin,
-                # the skybox's fullscreen shader, the loading screen -- stays in
-                # X4's symmetric frame, so it sits at image centre in both eyes.
+                # the loading screen -- stays in X4's symmetric frame, so it
+                # sits at image centre in both eyes. (NOT the skybox: that was
+                # measured after 165b and it carries the affine correctly. The
+                # deferred reconstruction was on this list too until task #39
+                # took it off; the check above is what proves it.)
                 # Declared canted, image centre IS the frustum centre, and the
                 # two centres are mirrored: the eyes are asked to diverge by
                 # their separation. x4vr_view.hpp:291 records 30.07 deg for this
@@ -754,10 +779,10 @@ def main(path):
                         fails.append(
                             f"the declared frusta are canted {c0:+.2f}° and "
                             f"{c1:+.2f}°, and the affine reaches World modules "
-                            f"only — so the HUD, the skybox's fullscreen "
-                            f"shader, the unsheared twin and the loading "
-                            f"screen all sit at image centre in both eyes and "
-                            f"are asked to DIVERGE by {div:.2f}°. Nobody fuses "
+                            f"only — so the HUD, the radar, the weapon gauges, "
+                            f"the unsheared twin and the loading screen all "
+                            f"sit at image centre in both eyes and are asked "
+                            f"to DIVERGE by {div:.2f}°. Nobody fuses "
                             f"that; x4vr_view.hpp:291 already records it as "
                             f"the negative control. The world is correct and "
                             f"everything else is not")

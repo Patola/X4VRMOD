@@ -809,6 +809,11 @@ std::atomic<uint64_t> g_canvas_built{0}, g_canvas_refused{0};
 std::atomic<float> g_canvas_shift{0.0f};
 // Task #22: deferred modules whose M_invprojection was corrected per eye.
 std::atomic<uint64_t> g_invproj_patched{0};
+// Task #35 piece 2, defined with offaxis_target() far below. Declared here
+// because the summary block reports the affine's state alongside these
+// counters, and reads it without latching -- see the note at the definition.
+extern std::atomic<bool> g_offaxis_on;
+extern std::atomic<bool> g_offaxis_latched;
 // ...and M_invprojection_uj, the one the shadow cascades actually read.
 std::atomic<uint64_t> g_invproj_uj_patched{0};
 // Task #22 measurement only. Counts modules whose volumetric fog composite was
@@ -2572,6 +2577,36 @@ void bindless_report(const char *when) {
                  "corrected (offline: 2 of 385 fragment modules take it; these "
                  "are the shadow cascades)",
                  when, (unsigned long long)g_invproj_uj_patched.load());
+        // Task #39. The affine on gl_Position and its undoing in the deferred
+        // reconstruction are one change in two places, and the state where the
+        // first happened and the second did not is a DEFECT, not a partial
+        // improvement: 244 modules then light a frame nothing is in, by
+        // opposite amounts in the two eyes.
+        //
+        // That state is reachable — X4VR_PROJ_INVPROJ=0 is a documented knob,
+        // and the bindless mirror gates this patch — so it is named here
+        // rather than left to be inferred from two numbers on different lines.
+        // The latch itself cannot split the difference: one static object
+        // serves both call sites, so a run is either affine everywhere or
+        // affine nowhere.
+        //
+        // `latched` is the acquire side of the release store that publishes
+        // the target, so reading it first is what makes `on` meaningful here;
+        // reading `on` alone would be a relaxed load of a relaxed store.
+        if (g_offaxis_latched.load(std::memory_order_acquire) &&
+            g_offaxis_on.load(std::memory_order_relaxed)) {
+            const bool undone = g_invproj_patched.load() > 0;
+            X4VR_LOG("invproj %s: off-axis affine %s in the deferred "
+                     "reconstruction%s",
+                     when, undone ? "UNDONE" : "NOT undone",
+                     undone ? " — the same latched target the vertex patches "
+                              "baked, composed as T(d)·M_invprojection·A⁻¹"
+                            : " — HALF APPLIED: gl_Position carries the affine "
+                              "and M_invprojection does not, so every deferred "
+                              "pass reconstructs the wrong frame. Set "
+                              "X4VR_PROJ_INVPROJ=1, or turn the affine off "
+                              "with X4VR_OFFAXIS=off.");
+        }
         // Reported unconditionally, including the 0. "Fog still on" and "fog
         // disabled and it changed nothing" are opposite conclusions from the
         // same probe numbers, and a line that only appears when the knob fired
@@ -3561,9 +3596,16 @@ const OffAxisPair &offaxis_target() {
             memcpy(a, rt, sizeof(a));
             r.source = "the runtime's located views";
         } else if (want_rt) {
+            // "the first shader that needed a target", not "the first world
+            // shader": since task #39 the deferred-reconstruction patch asks
+            // for it too, and on X4's combined modules that one can run first.
+            // Which call site wins does not change the outcome -- one static
+            // serves both, so the whole session is on or off together -- but
+            // a message naming the wrong caller would send the next reader
+            // looking in the wrong place.
             X4VR_LOG("offaxis: OFF — X4VR_VR=1 but no view had been located "
-                     "when the first world shader was patched, and "
-                     "X4VR_OFFAXIS=%s asked for the runtime's frusta. X4's "
+                     "when the first shader that needed a target was patched, "
+                     "and X4VR_OFFAXIS=%s asked for the runtime's frusta. X4's "
                      "symmetric field is rendered and declared, which is "
                      "self-consistent, not half-applied.",
                      s);
@@ -4034,9 +4076,23 @@ VkResult create_shader_module_inner(
         if (proj_invproj() && have_k) {
             const float dl = -0.5f * configured_ipd();
             const float dr = +0.5f * configured_ipd();
+            // Task #39. The same latched target the vertex side gets, from the
+            // same object, because these two are a matched pair: the affine
+            // applied to gl_Position and the affine undone before the deferred
+            // reconstruction have to be the same map or the reconstruction is
+            // wrong by the difference. Reading the target twice from two
+            // places is exactly how that would happen, so it is read once.
+            //
+            // Both eyes unconditionally. Unlike the shear -- where the right
+            // eye's `d` only exists if K_right does -- the affine is per-eye by
+            // construction, and a single map applied to both eyes would put
+            // them in the same canted frustum, which is the take 165b failure.
+            const OffAxisPair &oa = offaxis_target();
+            const x4vr::OffAxis *oal = oa.on ? &oa.eye[0] : nullptr;
+            const x4vr::OffAxis *oar = oa.on ? &oa.eye[1] : nullptr;
             if (x4vr::spv::patch_fragment_invproj_eye(
                     code, kCameraSet, kCameraBinding, kCameraInvProjMember, dl,
-                    dr)) {
+                    dr, oal, oar)) {
                 frag_patched = true;
                 g_invproj_patched++;
             }
@@ -4046,7 +4102,7 @@ VkResult create_shader_module_inner(
             // healthy-looking 236 hide a 0 here, which is the whole defect.
             if (x4vr::spv::patch_fragment_invproj_eye(
                     code, kCameraSet, kCameraBinding, kCameraInvProjUjMember,
-                    dl, dr)) {
+                    dl, dr, oal, oar)) {
                 frag_patched = true;
                 g_invproj_uj_patched++;
             }
