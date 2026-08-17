@@ -2186,3 +2186,74 @@ Nothing about piece 3 has changed, but it is no longer next. Two things are:
 Until both, the off-axis map is a flatscreen-verified transform and not a VR
 feature, and the honest state of #35 is: piece 1 correct, piece 2 correct and
 insufficient.
+
+## Take 165b's stars — the affine cannot reach the skybox, and P12 no longer holds
+
+Patola's follow-up: the radar, the speed gauge and **some** stars moved by large
+amounts while other stars did not, which reads like a classification error.
+Measured per feature, by scoring each region against two hypotheses — that it
+carries the affine, or that it is unchanged — with the global warp as the
+affine hypothesis:
+
+    cockpit strut          affine +0.464  static +0.293   AFFINE   (world control)
+    dashboard              affine +0.568  static +0.020   AFFINE   (world control)
+    open sky, no geometry  affine -0.019  static +0.460   STATIC
+    speed gauge "0 m/s"    affine +0.216  static +0.558   STATIC
+    radar disc (dashboard) affine +0.430  static +0.001   AFFINE
+    the circled star       affine +0.203  static +0.152   undecided
+
+**It is not a misclassification.** Every one of those is the current rule
+working exactly as written:
+
+* The **skybox is a compute shader** — `docs/frame-analysis.md:3490` and take
+  165b's own log ("6 of those are compute: no gl_ViewIndex exists there"). It
+  has no vertex stage, so there is nothing for either vertex patch to edit, and
+  no `gl_ViewIndex` to select on. The affine cannot reach it **by any mechanism
+  this project currently has.**
+* Things in the sky that are *world geometry* — distant ships, asteroids,
+  station lights — go through World modules and do carry it. That is the split
+  behind "some stars but not others". The specific circled star is undecided at
+  this crop size and I will not claim it either way.
+* The **HUD is two things, not one**, which #30 already measured: the radar disc
+  is projected onto the cockpit dashboard and is world geometry (AFFINE), the
+  speed gauge is a screen-space overlay (STATIC). Both are classified right.
+
+### P12 is retracted
+
+`docs/frame-analysis.md:3505` records:
+
+> **P12** — forcing the two eyes to differ everywhere *except* the skybox
+> produces no visible seam or misregistration at the sky.
+
+with the justification "parallax at infinity is zero: both eyes share a rotation
+and differ only by a translation, so an infinitely distant sky is genuinely
+identical between them."
+
+**That reasoning is sound for the shear and void for the affine.** The shear is
+a translation, and a translation has no effect at infinity — so a mono skybox
+cost nothing, and P12 was right for every take up to 164. The affine is a
+re-centring in TANGENT space: it changes where a given *direction* lands on
+screen, and a direction is the only thing an infinitely distant sky has. It
+applies at infinity exactly as strongly as at one metre.
+
+So the affine does not merely leave the skybox unimproved. It moves the world
+out from under a sky that stays put, in opposite directions per eye. That is
+what Patola saw, and it is a consequence of piece 1 rather than of piece 2 —
+visible in 164c too, had anyone compared the two halves' sky against their
+cockpit.
+
+### The complete list of what the affine does not reach
+
+1. **The compute skybox.** No vertex stage, no `gl_ViewIndex`. No mechanism.
+2. **Screen-space UI** — the speed gauge, the message panel, the loading screen.
+   Needs #30's decision, not a classification change: giving every NonWorld
+   module the affine would corrupt every fullscreen post pass, which is the
+   reason `K_nonworld` is a separate matrix at all.
+3. **The deferred reconstruction.** 234 fragment modules are corrected per eye
+   for the *shear* (#22); none of them knows about the affine, so every
+   reconstructed position is wrong by it, and by opposite amounts per eye.
+
+Piece 3's entire prize is 0.65x the pixel area. Take 165a is already correct.
+The trade is therefore explicit: that saving costs all three of the above, one
+of which has no known mechanism, against a symmetric declaration that works
+today and only wastes pixels.
