@@ -3505,6 +3505,24 @@ That is a prediction about X4's skybox, not a proof — recorded here as one:
 - **P12** — forcing the two eyes to differ everywhere *except* the skybox
   produces no visible seam or misregistration at the sky.
 
+> **P12 HELD through take 164 and is RETRACTED from take 165b.** Left standing
+> above because it was right for the mechanism it was written about. Its
+> justification is that the two eyes "differ only by a translation", and a
+> translation has no effect at infinity — true of the eye shear, and the shear
+> was the only per-eye transform when P12 was written.
+>
+> Task #35's off-axis affine is not a translation. It re-centres in **tangent**
+> space, so it changes where a given *direction* lands on screen, and a
+> direction is the only thing an infinitely distant sky has. It acts at infinity
+> exactly as strongly as at one metre. With the affine on, the world moves out
+> from under a sky that stays put, in opposite directions per eye — which take
+> 165b showed and take 164c already carried unobserved.
+>
+> The skybox cannot be fixed the way everything else was: it is a **compute**
+> shader (see above), so there is no vertex stage for either vertex patch to
+> edit and no `gl_ViewIndex` to select on. See docs/x4-quirks.md, "Take 165b's
+> stars", for the per-feature measurement.
+
 ## Where the frame actually merges — the open question for task #5
 
 `#103` is the HUD. The scene is `#95`/`#97`/`#98`/`#99`/`#101`, all DIFFER. So
