@@ -316,6 +316,82 @@ inline Kind classify(const std::vector<uint32_t> &code,
     return Kind::NonWorld;
 }
 
+/// Does this module's vertex stage generate its own positions, with no vertex
+/// data at all? Task #40.
+///
+/// A fullscreen post pass has no vertex attributes: it emits a triangle or
+/// quad straight from `gl_VertexIndex` and covers the screen exactly. Any
+/// transform on that quad leaves unrendered borders and samples texels that do
+/// not correspond to the pixels it is writing, so it must be left alone even
+/// when it is drawn in the same pass as the UI. `mod-0180` — the sun light
+/// with cascaded shadows — is the canonical one.
+///
+/// **This is the discriminator #30 was reaching for and did not have.** Its
+/// canvas keys on `World`, and got the right answer because every World module
+/// has attributes, but "World" is a statement about a per-object matrix and
+/// has nothing to do with whether a quad is procedural. The two disagree on
+/// exactly five modules — `mod-0000`, `0228`, `0229`, `0397`, `0398`, all
+/// NonWorld with real attributes — and those five are UI that #30 could not
+/// move. Measured over all 409 dumps: 348 World-with-attributes, 41
+/// NonWorld-procedural, 5 NonWorld-with-attributes, 0 World-procedural.
+///
+/// Attribution is by the **vertex entry point's interface list**, not by
+/// storage class alone: X4 ships combined vertex+fragment modules, and a
+/// fragment stage's inputs are Input-storage too. Reading those would call
+/// every combined module attribute-driven.
+inline bool is_procedural_fullscreen(const std::vector<uint32_t> &code) {
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return false;
+
+    uint32_t vert_fn = 0;
+    std::unordered_set<uint32_t> iface, builtins, input_vars;
+    bool vertex = false;
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        switch (in.op) {
+        case OpEntryPoint:
+            if (in.len >= 3 && w[1] == ExecutionModelVertex && !vertex) {
+                vertex = true;
+                vert_fn = w[2];
+                // words 3.. are the name (packed), then the interface ids.
+                // The name's end is the word containing a zero byte; ids
+                // follow. Rather than parse the string, collect every id-sized
+                // word after it -- an over-collection here can only make the
+                // module look MORE attribute-driven, which is the safe way to
+                // be wrong: it leaves a procedural pass out of the canvas.
+                uint32_t j = 3;
+                while (j < in.len) {
+                    const uint32_t v = w[j++];
+                    if (((v >> 24) & 0xff) == 0 || ((v >> 16) & 0xff) == 0 ||
+                        ((v >> 8) & 0xff) == 0 || (v & 0xff) == 0) {
+                        break; // the word that terminates the name
+                    }
+                }
+                for (; j < in.len; j++)
+                    iface.insert(w[j]);
+            }
+            break;
+        case OpDecorate:
+            if (in.len >= 4 && w[2] == DecorationBuiltIn)
+                builtins.insert(w[1]);
+            break;
+        case OpVariable:
+            if (in.len >= 4 && w[3] == StorageClassInput)
+                input_vars.insert(w[2]);
+            break;
+        default:
+            break;
+        }
+    }
+    if (!vertex || !vert_fn)
+        return false;
+    for (uint32_t v : input_vars)
+        if (iface.count(v) && !builtins.count(v))
+            return false; // real vertex data positions this draw
+    return true;
+}
+
 /// Rewrites `code` so every Vertex entry point ends with
 /// `gl_Position = K * gl_Position`. `k` is 16 floats, column-major (4
 /// consecutive floats per column) matching X4's storage order.

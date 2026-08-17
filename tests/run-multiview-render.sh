@@ -1468,4 +1468,37 @@ cls_case "classify: fullscreen stays NonWorld"   NonWorld NonWorld fullscreen.ve
 # The widening must not disturb a fragment-only module's answer either.
 cls_case "classify: fragment-only unaffected"    NotVertex NotVertex sample_invproj.frag.spv
 
+# --- task #40: procedural-fullscreen, the canvas's real exclusion -----------
+#
+# #30's canvas keyed on World and got the right answer, because every World
+# module has vertex attributes. But "World" is a statement about a per-object
+# matrix and says nothing about whether a quad is procedural, and the two
+# readings differ on five of X4's modules -- NonWorld UI with real attributes,
+# which #30 could not move and #40 must. This is the predicate that replaces
+# it, so it is pinned against committed bytes rather than left to the sweep
+# over /tmp dumps that nobody else can re-run.
+proc_case() {
+    local label="$1" want="$2" shader="$3"
+    local got
+    got=$("$PATCHER" classify "$BUILD/tests/$shader" 2>&1 |
+        sed -n 's/.*PROCEDURAL=\([01]\).*/\1/p')
+    if [[ "$got" == "$want" ]]; then
+        printf 'ok   %-38s procedural=%s\n' "$label" "$got"
+    else
+        printf 'FAIL %-38s want procedural=%s, got %s\n' \
+            "$label" "$want" "${got:-?}"
+        fails=$((fails + 1))
+    fi
+}
+# gl_VertexIndex and no attributes: the shape of every fullscreen post pass,
+# and the one thing the canvas must never touch.
+proc_case "procedural: fullscreen triangle"      1 fullscreen.vert.spv
+# Real vertex data positions these, so they are draws that can be placed.
+proc_case "procedural: camera block is not"      0 sample_camera_block.vert.spv
+proc_case "procedural: light volume is not"      0 sample_light_volume.vert.spv
+# A fragment-only module has no vertex stage to judge; false, so it is never
+# excluded on these grounds and the vertex-side rules stay the only ones that
+# speak. Returning true here would silently drop it from the canvas.
+proc_case "procedural: fragment-only is false"   0 sample_invproj.frag.spv
+
 echo "all cases passed"

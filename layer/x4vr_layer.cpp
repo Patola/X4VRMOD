@@ -807,6 +807,24 @@ std::atomic<uint64_t> g_canvas_built{0}, g_canvas_refused{0};
 // mechanisms working exactly as written. Published from the same branch that
 // sets have_canvas so a refused canvas cannot move the cursor on its own.
 std::atomic<float> g_canvas_shift{0.0f};
+// Task #40. #30's canvas was a translation, so one float published all of it.
+// With the affine on it is a per-eye affine, and the cursor overlay has to
+// apply the SAME one -- a pointer that takes only the translation lands a
+// fixed distance from every button, in a run where both features report
+// success. Written once, inside the call_once that builds K_canvas, and read
+// per present; `ready` is the release/acquire pair that publishes it.
+struct CanvasMap {
+    std::atomic<bool> ready{false};
+    x4vr::CanvasNdc eye[2];
+    void publish(const float kl[16], const float kr[16]) {
+        eye[0] = x4vr::canvas_ndc_of(kl);
+        eye[1] = x4vr::canvas_ndc_of(kr);
+        ready.store(true, std::memory_order_release);
+    }
+    const x4vr::CanvasNdc *get() const {
+        return ready.load(std::memory_order_acquire) ? eye : nullptr;
+    }
+} g_canvas_map;
 // Task #22: deferred modules whose M_invprojection was corrected per eye.
 std::atomic<uint64_t> g_invproj_patched{0};
 // Task #35 piece 2, defined with offaxis_target() far below. Declared here
@@ -2469,7 +2487,13 @@ bool canvas_wanted() {
         const char *e = getenv("X4VR_CANVAS_M");
         return e && *e;
     }();
-    return on;
+    // Task #40: the off-axis affine asks for a canvas whether or not a
+    // distance was named. Reading only X4VR_CANVAS_M would leave the report
+    // silent in exactly the run that most needs it -- a canted run whose UI is
+    // either being mapped or diverging by 30 degrees, with nothing in the log
+    // to say which. Non-latching: this is a report, and latching the target
+    // here would fix it at whichever module happened to be compiled first.
+    return on || g_offaxis_on.load(std::memory_order_relaxed);
 }
 
 // Task #30. Silent when no canvas was asked for; otherwise printed whatever
@@ -2499,6 +2523,22 @@ void canvas_report(const char *when) {
              (final && !swapped)
                  ? " — NOTHING DREW ON THE CANVAS; the UI is still mono"
                  : "");
+    // Task #40's half-applied state, named the way #39's is. With the affine
+    // on and nothing drawn on the canvas, screen-locked content is still in
+    // X4's symmetric frame while the declaration is canted, which asks the
+    // eyes to diverge by the frusta's separation. Unlike #39's case this one
+    // is about coverage rather than a knob, so it is keyed on the swap count
+    // -- the number stage4 already identified as "the failure that looks like
+    // success".
+    if (final && g_offaxis_latched.load(std::memory_order_acquire) &&
+        g_offaxis_on.load(std::memory_order_relaxed) && !swapped)
+        X4VR_LOG("canvas %s: off-axis affine NOT applied to screen-locked "
+                 "draws — the declaration is canted and the UI is still in "
+                 "X4's symmetric frame, so it sits at the frustum centre in "
+                 "each eye and the two centres are mirrored. Nobody fuses "
+                 "that. Needs X4VR_STEREO=1 and a pass that classifies as a "
+                 "canvas.",
+                 when);
 }
 
 // Reported separately from mv_report, and *not* gated on g_mv.
@@ -3976,40 +4016,79 @@ VkResult create_shader_module_inner(
         // right eye −s: a near object appears displaced toward the right in
         // the left eye, which is the sign the world shear already carries
         // (m8 L=+0.42666 R=−0.42666).
-        if (const char *cm = getenv("X4VR_CANVAS_M"); cm && *cm) {
-            const float z = strtof(cm, nullptr);
-            if (!(z > 0.0f)) {
+        //
+        // Task #40 makes this run in one more case: with the off-axis affine
+        // on, screen-locked content NEEDS the map even with no distance
+        // chosen, because leaving it in X4's symmetric frame under a canted
+        // declaration is the 30.07 deg divergence, and "pinned at infinity"
+        // is a fusable state while "not mapped at all" is not. z = 0 is that
+        // infinity, and make_canvas_k takes it as such.
+        {
+            const char *cm = getenv("X4VR_CANVAS_M");
+            const bool asked_z = cm && *cm;
+            const float z = asked_z ? strtof(cm, nullptr) : 0.0f;
+            const OffAxisPair &oa = offaxis_target();
+            if (asked_z && !(z > 0.0f)) {
                 X4VR_LOG("canvas: REFUSED — X4VR_CANVAS_M=\"%s\" is not a "
                          "positive distance; no canvas built",
                          cm);
-            } else if (!have_kr) {
-                // Gate on intent: this run asked for a canvas. Say why it
-                // cannot have one instead of quietly drawing a mono UI that
-                // looks exactly like a correct one.
-                X4VR_LOG("canvas: REFUSED — X4VR_CANVAS_M=%g needs a right eye "
-                         "and none is configured (X4VR_STEREO unset?)",
-                         z);
-            } else {
-                const float s = x4vr::canvas_shift(assumed_proj_sx(),
-                                                   configured_ipd(), z);
-                K_canvas[12] = +s;
-                K_canvas_r[12] = -s;
+            } else if ((asked_z || oa.on) && !have_kr) {
+                // Gate on intent: this run asked for a canvas, or asked for
+                // the affine, which implies one. Say why it cannot have one
+                // instead of quietly drawing a mono UI that looks exactly
+                // like a correct one.
+                X4VR_LOG("canvas: REFUSED — a canvas needs a right eye and "
+                         "none is configured (X4VR_STEREO unset?); asked by "
+                         "%s",
+                         asked_z ? "X4VR_CANVAS_M" : "the off-axis affine");
+            } else if (asked_z || oa.on) {
+                // The screen's own half-angle, from the knob that set it --
+                // never from a camera block. vr_declared_fov() gives the
+                // reason: several cameras run per frame with sx from 0.75 to
+                // 3.78, and picking one of those is the mistake fifty takes
+                // were built on. Both callers go through x4_half_for_fov so
+                // the field the UI is placed against and the field the
+                // compositor is told about are one number.
+                const char *fe = getenv("X4VR_FOV");
+                const float half =
+                    x4vr::x4_half_for_fov(fe ? strtof(fe, nullptr) : 0.0f);
+                const float sx_s = 1.0f / std::tan(half);
+                const float sy_s = -sx_s;
+                const float dl = -0.5f * configured_ipd();
+                const float dr = +0.5f * configured_ipd();
+                x4vr::make_canvas_k(oa.on ? oa.eye[0] : x4vr::OffAxis{}, sx_s,
+                                    sy_s, dl, z, K_canvas);
+                x4vr::make_canvas_k(oa.on ? oa.eye[1] : x4vr::OffAxis{}, sx_s,
+                                    sy_s, dr, z, K_canvas_r);
                 have_canvas = true;
-                g_canvas_shift.store(s, std::memory_order_relaxed);
+                // Published for the cursor overlay, which has to move the
+                // pointer by the same map or it lands a fixed distance from
+                // every button it activates -- in a run where both features
+                // report success. See docs/known-good-runs.md, stage4.
+                g_canvas_map.publish(K_canvas, K_canvas_r);
+                g_canvas_shift.store(K_canvas[12], std::memory_order_relaxed);
                 // The pixel figure is what a run is scored on, so print it
                 // when the eye width is known and say nothing when it is not,
                 // rather than quoting a hardcoded 1408 that could go stale.
                 unsigned rw = 0, rh = 0;
                 if (const char *res = getenv("X4VR_RES"))
                     sscanf(res, "%ux%u", &rw, &rh);
+                char px[64] = "";
                 if (rw)
-                    X4VR_LOG("canvas: %.3f m -> s=%.5f NDC (L=+s R=-s), "
-                             "%.1f px per eye on a %u-wide eye",
-                             z, s, s * 0.5f * rw, rw);
+                    snprintf(px, sizeof(px), ", %.1f px on a %u-wide eye",
+                             K_canvas[12] * 0.5f * rw, rw);
+                if (oa.on)
+                    X4VR_LOG("canvas: %s, CANTED — screen half-angle %.2f deg "
+                             "(sx=%.5f) -> A_x=%.4f A_y=%.4f, eye0 x offset "
+                             "%+.5f eye1 %+.5f NDC%s. Screen-locked draws are "
+                             "placed in the DECLARED frame, so both eyes see "
+                             "them at the angle X4 drew them at.",
+                             z > 0.0f ? "at a chosen distance" : "at infinity",
+                             half * 57.2957795130823f, sx_s, K_canvas[0],
+                             K_canvas[5], K_canvas[12], K_canvas_r[12], px);
                 else
-                    X4VR_LOG("canvas: %.3f m -> s=%.5f NDC (L=+s R=-s), "
-                             "eye width unknown (X4VR_RES unset)",
-                             z, s);
+                    X4VR_LOG("canvas: %.3f m -> s=%.5f NDC (L=+s R=-s)%s",
+                             z, K_canvas[12], px);
             }
         }
         if (have_k)
@@ -4289,11 +4368,21 @@ VkResult create_shader_module_inner(
             }
             // Task #30: a third twin. Built from the same base as the
             // unpatched one -- the fragment edit and nothing else -- then
-            // given the constant shift where that one is given no geometry
-            // edit at all. World only: the procedural fullscreen module that
-            // shares rp #33 with the UI has to keep drawing where it is, and
-            // absence from this map is how pipeline creation knows that.
-            if (have_canvas && world) {
+            // given the constant map where that one is given no geometry edit
+            // at all. The procedural fullscreen module that shares rp #33 with
+            // the UI has to keep drawing where it is, and absence from this
+            // map is how pipeline creation knows that.
+            //
+            // Task #40 states that exclusion directly instead of through
+            // `world`. #30 keyed on World and got the right answer, because
+            // every World module has vertex attributes -- but "World" is a
+            // statement about a per-object matrix and has nothing to do with
+            // whether a quad is procedural. Measured over all 409 dumps the
+            // two readings differ on exactly five modules: mod-0000, 0228,
+            // 0229, 0397 and 0398, NonWorld with real attributes, which is UI
+            // that #30 could not move. 0 modules are World-and-procedural, so
+            // nothing that used to get a canvas loses one.
+            if (have_canvas && !x4vr::spv::is_procedural_fullscreen(code)) {
                 std::vector<uint32_t> cv;
                 if (frag_patched) {
                     cv = frag_only;
@@ -7276,7 +7365,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                 queue, family, pi->pSwapchains[0], pi->pImageIndices[0],
                 pi->pWaitSemaphores, pi->waitSemaphoreCount,
                 g_cursor_enabled ? shared_state() : nullptr,
-                g_canvas_shift.load(std::memory_order_relaxed));
+                g_canvas_map.get());
         } else {
             static bool warned = false;
             if (!warned) {

@@ -46,6 +46,27 @@ run "overlay on a GPU, no canvas" \
 run "overlay follows an 8 px canvas" \
     env X4VR_TEST_CANVAS_PX=8 "$BUILD/tests/x4vr_test_cursor_render"
 
+# Task #40: the canvas is no longer only a translation. Under the off-axis
+# affine it scales too -- 1.2892 in x and 1.1931 in y for the measured Quest 3
+# frusta, the numbers tests/view_math.cpp pins -- and the pointer has to move
+# by the map applied to the HOTSPOT while keeping its own pixel size. A quad
+# that stretched with the map would blur, and one that ignored the scale would
+# sit further from the button the further the pointer is from centre, which is
+# the failure that looks like "the canvas is nearly right".
+#
+# The hotspot is at x=40 of 96 and y=20 of 64, both off centre on purpose: a
+# scale applied about the centre moves nothing at the centre, so a case posed
+# there would pass with the scale silently dropped.
+run "overlay follows a canted canvas" \
+    env X4VR_TEST_CANVAS_PX=8 X4VR_TEST_CANVAS_AX=1.2892 \
+    X4VR_TEST_CANVAS_AY=1.1931 "$BUILD/tests/x4vr_test_cursor_render"
+
+# The scale alone, with no translation: separates "the map is applied" from
+# "the translation is applied", which the case above cannot on its own.
+run "overlay follows a scale-only canvas" \
+    env X4VR_TEST_CANVAS_PX=0 X4VR_TEST_CANVAS_AX=1.2892 \
+    X4VR_TEST_CANVAS_AY=1.1931 "$BUILD/tests/x4vr_test_cursor_render"
+
 if [[ $fails -eq 0 ]]; then
     echo; echo "all cases passed"
 else

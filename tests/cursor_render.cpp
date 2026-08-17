@@ -320,9 +320,36 @@ int main() {
         canvas_px = (int32_t)strtol(e, nullptr, 10);
     // cursor_rect maps a pixel x to 2x/w - 1, so n pixels is 2n/w in NDC.
     const float canvas_ndc = 2.f * (float)canvas_px / (float)kW;
+    // Task #40: the canvas is no longer only a translation. With the off-axis
+    // affine on it scales as well -- about 1.29 in x and 1.19 in y for this
+    // headset -- and the overlay must move the pointer by the map applied to
+    // the HOTSPOT while leaving the bitmap its own size. X4VR_TEST_CANVAS_AX
+    // and _AY drive that scale; unset they are 1, which is #30's case exactly
+    // and is what keeps the assertions below the same ones that already pass.
+    x4vr::CanvasNdc canvas[2];
+    canvas[0].bx = +canvas_ndc;
+    canvas[1].bx = -canvas_ndc;
+    if (const char *e = getenv("X4VR_TEST_CANVAS_AX"))
+        canvas[0].ax = canvas[1].ax = strtof(e, nullptr);
+    if (const char *e = getenv("X4VR_TEST_CANVAS_AY"))
+        canvas[0].ay = canvas[1].ay = strtof(e, nullptr);
+
+    // Where the map says this layer's quad goes, in pixels, derived the same
+    // way the overlay derives it: map the hotspot, translate by the delta.
+    // Written out here rather than reusing the overlay's own arithmetic --
+    // a test that computes the expectation with the code under test cannot
+    // fail.
+    const float hx = 2.f * kPosX / (float)kW - 1.f;
+    const float hy = 2.f * kPosY / (float)kH - 1.f;
+    auto quad_dx = [&](uint32_t l) {
+        return (int32_t)lrintf((canvas[l].x(hx) - hx) * 0.5f * (float)kW);
+    };
+    auto quad_dy = [&](uint32_t l) {
+        return (int32_t)lrintf((canvas[l].y(hy) - hy) * 0.5f * (float)kH);
+    };
 
     const bool drew = overlay.record(
-        cb, {eye, 0, 1, fmt, {kW, kH}, kLayers}, &shared, canvas_ndc);
+        cb, {eye, 0, 1, fmt, {kW, kH}, kLayers}, &shared, canvas);
     ok("record() reports that it drew", drew);
 
     // The compositor's own barrier, verbatim: from COLOR_ATTACHMENT because the
@@ -369,28 +396,29 @@ int main() {
         // module. Backwards here and the pointer would sit on the wrong side
         // of the button in both eyes -- symmetrically, so it would still look
         // deliberate.
-        const int32_t qx = kQuadX + (l == 0 ? canvas_px : -canvas_px);
+        const int32_t qx = kQuadX + quad_dx(l);
+        const int32_t qy = kQuadY + quad_dy(l);
         // Blue in a B8G8R8A8 readback is byte 0, which is also the byte SDL's
         // ARGB8888 puts blue in -- the mapping under test, end to end.
         snprintf(what, sizeof(what), "layer %u: opaque texel is fully blue", l);
-        eq(what, px(l, qx, kQuadY)[0], 255);
+        eq(what, px(l, qx, qy)[0], 255);
         snprintf(what, sizeof(what), "layer %u: opaque texel has no green", l);
-        eq(what, px(l, qx, kQuadY)[1], 0);
+        eq(what, px(l, qx, qy)[1], 0);
         // 255 * (128/255) = 128. If blending were off this would be 255, and if
         // the alpha were applied twice it would be 64.
         snprintf(what, sizeof(what), "layer %u: half-alpha texel is blended", l);
-        eq(what, px(l, qx + 1, kQuadY)[0], 128, 2);
+        eq(what, px(l, qx + 1, qy)[0], 128, 2);
         snprintf(what, sizeof(what), "layer %u: transparent texel leaves the frame", l);
-        eq(what, px(l, qx + 2, kQuadY)[0], 0);
+        eq(what, px(l, qx + 2, qy)[0], 0);
         snprintf(what, sizeof(what), "layer %u: the far corner of the quad is green", l);
-        eq(what, px(l, qx + 3, kQuadY)[1], 255);
+        eq(what, px(l, qx + 3, qy)[1], 255);
         // One pixel outside the quad on every side: the draw must not bleed.
         snprintf(what, sizeof(what), "layer %u: one pixel left of the quad is untouched", l);
-        eq(what, px(l, qx - 1, kQuadY)[0], 0);
+        eq(what, px(l, qx - 1, qy)[0], 0);
         snprintf(what, sizeof(what), "layer %u: one pixel above the quad is untouched", l);
-        eq(what, px(l, qx, kQuadY - 1)[0], 0);
+        eq(what, px(l, qx, qy - 1)[0], 0);
         snprintf(what, sizeof(what), "layer %u: one row below the quad is untouched", l);
-        eq(what, px(l, qx, kQuadY + (int32_t)kCH)[0], 0);
+        eq(what, px(l, qx, qy + (int32_t)kCH)[0], 0);
         snprintf(what, sizeof(what), "layer %u: the far corner of the eye is untouched", l);
         eq(what, px(l, (int32_t)kW - 1, (int32_t)kH - 1)[0], 0);
     }
@@ -403,7 +431,8 @@ int main() {
     // silently dropped, because it would place both quads at kQuadX and both
     // would be found where the unshifted case looks. Only the comparison
     // between the layers can tell "shifted by n" from "not shifted at all".
-    if (canvas_px == 0) {
+    const bool eyes_differ = quad_dx(0) != quad_dx(1) || quad_dy(0) != quad_dy(1);
+    if (!eyes_differ) {
         ok("both layers are pixel-identical",
            memcmp(px(0, 0, 0), px(1, 0, 0), (size_t)layer_bytes) == 0);
     } else {
@@ -413,9 +442,9 @@ int main() {
         // left eye now covers must be clear in the right eye, and the two
         // quads must be exactly 2n apart.
         ok("the left eye's quad is clear in the right eye",
-           px(1, kQuadX + canvas_px, kQuadY)[0] == 0);
+           px(1, kQuadX + quad_dx(0), kQuadY + quad_dy(0))[0] == 0);
         ok("the right eye's quad is clear in the left eye",
-           px(0, kQuadX - canvas_px, kQuadY)[0] == 0);
+           px(0, kQuadX + quad_dx(1), kQuadY + quad_dy(1))[0] == 0);
     }
 
     vkUnmapMemory(dev, back_mem);

@@ -41,6 +41,7 @@
 
 #include "../common/x4vr_log.hpp"
 #include "../common/x4vr_share.hpp"
+#include "../common/x4vr_view.hpp"
 #include "cursor_shaders.hpp"
 
 namespace x4vr {
@@ -177,23 +178,31 @@ public:
 
     // Blend the cursor into every layer of `t.image`.
     //
-    // `canvas_shift` is task #30's per-view NDC x offset, or 0 for no canvas.
-    // The pointer has to take the same shift the UI takes or it separates from
-    // the thing it activates: X4 hit-tests CPU-side at an unshifted window
-    // coordinate, so if the menu moves and the cursor does not, every button
-    // still *works* while the pointer sits `s` away from it -- both halves
-    // behaving exactly as designed and the result visibly wrong. Layer 0 is
-    // view 0 is the left eye and takes +s, matching the sign gl_ViewIndex
-    // selects in the patched module. Keyed on the view index rather than on
+    // `canvas` is the per-view map task #30 built and task #40 generalised, or
+    // null for no canvas. The pointer has to take the same map the UI takes or
+    // it separates from the thing it activates: X4 hit-tests CPU-side at an
+    // unshifted window coordinate, so if the menu moves and the cursor does
+    // not, every button still *works* while the pointer sits away from it --
+    // both halves behaving exactly as designed and the result visibly wrong.
+    // Layer 0 is view 0 is the left eye, matching the sign gl_ViewIndex selects
+    // in the patched module. Keyed on the view index rather than on
     // X4VR_SBS_RIGHT_LAYER, because that knob swaps which half of the
     // composite a layer lands in, not which eye the layer *is*.
+    //
+    // The map is applied to the HOTSPOT and the quad translated by the
+    // difference, rather than run over the quad's corners. Under #30 those
+    // were the same thing -- a translation moves every corner equally -- but
+    // #40's map has a scale of about 1.29 in x and 1.19 in y, and transforming
+    // the corners would stretch a 1:1 bitmap into a blurred pointer while the
+    // hotspot, the only part that has to be anywhere in particular, would land
+    // in the same place either way.
     //
     // Returns true if it drew, in which case the image is left in
     // COLOR_ATTACHMENT_OPTIMAL and the caller's own barrier must say so. On
     // false it has recorded nothing and the image is untouched -- so a failure
     // here costs the cursor, never the frame.
     bool record(VkCommandBuffer cb, const Target &t, const Shared *shared,
-                float canvas_shift = 0.f) {
+                const x4vr::CanvasNdc *canvas = nullptr) {
         if (!ready() || !shared || t.image == VK_NULL_HANDLE || !t.extent.width ||
             !t.extent.height)
             return false;
@@ -299,14 +308,23 @@ public:
 
         VkViewport vp{0.f, 0.f, w, h, 0.f, 1.f};
         VkRect2D sc{{0, 0}, t.extent};
+        // Where the hotspot sits in NDC before any canvas -- the point X4
+        // hit-tests at, and the only point the map has to agree about.
+        const float hx = 2.f * px / w - 1.f, hy = 2.f * py / h - 1.f;
+        const x4vr::CanvasNdc none[2];
+        const x4vr::CanvasNdc *map = canvas ? canvas : none;
         for (uint32_t l = 0; l < s->fbs.size(); l++) {
-            // +s for view 0, -s for view 1. Both x components, so the quad
-            // translates rather than stretching -- the cursor is a 1:1 bitmap
-            // and any scale would show as a blurred pointer.
+            // A pure translation of the quad, per view: the hotspot goes where
+            // the UI went and the bitmap keeps its pixel size. With #30's
+            // translation-only map this reduces to +s for view 0 and -s for
+            // view 1, exactly as before.
             Push p = push;
-            const float dx = l == 0 ? canvas_shift : -canvas_shift;
+            const x4vr::CanvasNdc &m = map[l < 2 ? l : 1];
+            const float dx = m.x(hx) - hx, dy = m.y(hy) - hy;
             p.rect[0] += dx;
             p.rect[2] += dx;
+            p.rect[1] += dy;
+            p.rect[3] += dy;
             VkRenderPassBeginInfo rp{};
             rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
             rp.renderPass = pass_;
@@ -328,13 +346,16 @@ public:
             drew_ = true;
             X4VR_LOG("cursor: drawing %ux%u hot=(%d,%d) into %u layer(s) of the "
                      "%ux%u eye — first at x=%.1f y=%.1f (channel says %s), "
-                     "texture %s into an eye of %s, canvas shift %.5f NDC "
-                     "(%.1f px per eye)",
+                     "texture %s into an eye of %s, canvas eye0 "
+                     "A=(%.4f,%.4f) B=(%+.5f,%+.5f) -> hotspot moves "
+                     "%+.1f,%+.1f px",
                      cw, ch, hot_x, hot_y, (unsigned)s->fbs.size(),
                      t.extent.width, t.extent.height, px, py,
                      visible ? "visible" : "hidden",
-                     format_name(tex_fmt), format_name(t.format), canvas_shift,
-                     canvas_shift * 0.5f * (float)t.extent.width);
+                     format_name(tex_fmt), format_name(t.format), map[0].ax,
+                     map[0].ay, map[0].bx, map[0].by,
+                     (map[0].x(hx) - hx) * 0.5f * (float)t.extent.width,
+                     (map[0].y(hy) - hy) * 0.5f * (float)t.extent.height);
         }
         return true;
     }

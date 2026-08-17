@@ -743,6 +743,46 @@ def main(path):
                     print("offaxis  deferred reconstruction corrected too — "
                           "T(d)·M_invprojection·A⁻¹, same latched target as "
                           "the vertex patches (task #39)")
+                # Task #40, the other half of the same idea. Screen-locked
+                # draws have to be placed in the DECLARED frame or they sit at
+                # the frustum centre in each eye, and the two centres are
+                # mirrored. The layer names the state; this fails on it.
+                if "off-axis affine NOT applied to screen-locked" in text:
+                    fails.append(
+                        "the declaration is canted and the UI is still in "
+                        "X4's symmetric frame — nothing was drawn on the "
+                        "canvas, so the HUD, the radar and the gauges sit at "
+                        "the frustum centre in each eye and are asked to "
+                        "diverge. Needs X4VR_STEREO=1 and a canvas pass; "
+                        "X4VR_CANVAS_M=<metres> chooses a distance, and "
+                        "without it the canvas is at infinity, which is "
+                        "fusable")
+                cvs = re.search(r"canvas: ([^,]+), CANTED — screen half-angle "
+                                r"([\d.]+) deg \(sx=([\d.]+)\) -> A_x=([\d.]+) "
+                                r"A_y=([\d.]+), eye0 x offset ([-+\d.]+) "
+                                r"eye1 ([-+\d.]+)", text)
+                if cvs:
+                    where, halfd, sxs, cax, cay, e0, e1 = cvs.groups()
+                    print(f"canvas   {where}, canted: screen half-angle "
+                          f"{halfd}° (sx={sxs}) → A_x={cax} A_y={cay}, "
+                          f"eye offsets {e0}/{e1} NDC")
+                    # The identity property, checked rather than trusted: the
+                    # screen's own field and the target's must give A_x = 1
+                    # when they are the same field. A_x far from the log's own
+                    # ax_num/sx would mean the canvas is being placed against
+                    # a different field from the one the shader coefficients
+                    # were built for -- which reads as "the UI is the wrong
+                    # size" and not as a bug.
+                    oaq = re.search(r"offaxis: eye0 ax_num=([-\d.]+)", text)
+                    if oaq:
+                        want = float(oaq.group(1)) / float(sxs)
+                        if abs(want - float(cax)) > 5e-3:
+                            fails.append(
+                                f"the canvas's A_x is {cax} but the latched "
+                                f"ax_num {oaq.group(1)} over the screen sx "
+                                f"{sxs} is {want:.4f}. The UI is being placed "
+                                f"against a different field from the one the "
+                                f"shader coefficients were baked for")
                 if src:
                     print(f"offaxis  target from {src.group(1).strip()}; the "
                           f"compositor is told the same frusta the shader "
@@ -775,17 +815,33 @@ def main(path):
                              math.tan(math.radians(b))) / 2.0))
                     c0, c1 = centre(l0, r0), centre(l1, r1)
                     div = abs(c1 - c0)
-                    if div > 1.0:
+                    # Task #40 is what decides whether a canted declaration is
+                    # a defect or a feature, so the check reads the canvas's
+                    # own swap count rather than assuming. POSITIVE evidence is
+                    # required: a build predating #40 prints no such line, and
+                    # "no line" must read as "not covered", not as "fine".
+                    swp = re.search(r"canvas final: \d+ variant\(s\) built, "
+                                    r"\d+ REFUSED, swapped into (\d+) pipeline",
+                                    text)
+                    covered = bool(swp) and int(swp.group(1)) > 0
+                    if div > 1.0 and not covered:
                         fails.append(
                             f"the declared frusta are canted {c0:+.2f}° and "
-                            f"{c1:+.2f}°, and the affine reaches World modules "
-                            f"only — so the HUD, the radar, the weapon gauges, "
-                            f"the unsheared twin and the loading screen all "
-                            f"sit at image centre in both eyes and are asked "
-                            f"to DIVERGE by {div:.2f}°. Nobody fuses "
-                            f"that; x4vr_view.hpp:291 already records it as "
-                            f"the negative control. The world is correct and "
-                            f"everything else is not")
+                            f"{c1:+.2f}°, and screen-locked content was NOT "
+                            f"put on the canvas ({'0 swaps' if swp else 'no '
+                            'canvas line at all'}) — so the HUD, the radar, "
+                            f"the weapon gauges, the unsheared twin and the "
+                            f"loading screen all sit at image centre in both "
+                            f"eyes and are asked to DIVERGE by {div:.2f}°. "
+                            f"Nobody fuses that; x4vr_view.hpp:291 already "
+                            f"records it as the negative control. The world "
+                            f"is correct and everything else is not")
+                    elif div > 1.0:
+                        print(f"offaxis  declared frusta centre {c0:+.2f}° / "
+                              f"{c1:+.2f}° — canted by {div:.2f}°, and "
+                              f"screen-locked draws are on the canvas "
+                              f"({swp.group(1)} pipeline stage(s)), so they "
+                              f"are placed in the declared frame too")
                     else:
                         print(f"offaxis  declared frusta centre {c0:+.2f}° / "
                               f"{c1:+.2f}° — screen-locked content diverges by "

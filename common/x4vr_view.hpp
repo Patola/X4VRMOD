@@ -464,6 +464,92 @@ inline bool compose_inv_off_axis(const OffAxis &o, float m[16]) {
     return true;
 }
 
+// ---------------------------------------------------------------- task #40
+//
+// Screen-locked content, put in the DECLARED frame.
+//
+// The affine reaches world geometry, and everything screen-locked is left in
+// X4's symmetric frame — where, once the declaration is canted, image centre
+// IS the frustum centre, −15.04° in one eye and +15.04° in the other. The eyes
+// are asked to diverge by their separation and nobody fuses it. That is take
+// 165b's HUD.
+//
+// The repair is the same map, evaluated for a canvas rather than for geometry.
+// Take a draw at screen NDC `x`. The screen spans X4's own field, so that is
+// the ray `tanθ = x·tan(half)`. Put it on a canvas `z` metres away and look at
+// it from an eye offset `d`: `tanθ_e = tanθ − d/z`. Where that belongs in the
+// target frustum is the definition A already encodes, so
+//
+//     x' = A_x·x + B_x − ax_num·d/z          A_x = ax_num/sx_screen
+//     y' = A_y·y + B_y                       A_y = ay_num/sy_screen
+//
+// Every term is a constant — no live sx, because `sx_screen` is a property of
+// the SCREEN, not of a draw's camera. So this needs no new shader machinery at
+// all: it is a 4x4, and patch_vertex_clip has been applying constant 4x4s to
+// UI draws since task #30.
+//
+// **It is the same statement #30 already made**, which is the check that
+// matters: with a symmetric target at X4's own half-angle, `ax_num = sx_screen`
+// and `bx = 0`, so the whole thing collapses to `x' = x − sx·d/z`, and that is
+// `canvas_shift` exactly. #30 said "the UI at z metres and world geometry at z
+// metres must produce the same disparity"; this says the same thing in a frame
+// that is no longer X4's.
+//
+// `z <= 0` means infinity — the pre-#30 behaviour, "pinned at infinity", and
+// the right default when the affine is on and no distance was chosen: zero
+// disparity is fusable, whereas leaving the map off is not.
+//
+// **sx_screen comes from X4VR_FOV, never from a camera block.** vr_declared_fov()
+// gives the reason at length: the layer sees several cameras per frame with sx
+// from 0.75 to 3.78, and picking one of those is the mistake fifty takes were
+// built on. The knob is what we set, so the knob is what we measure against.
+// The same map as a plain NDC function, for consumers that are not shaders.
+//
+// The cursor overlay is the one that matters: X4 hit-tests the UI CPU-side at
+// an unshifted window coordinate, so if the menu moves and the pointer does
+// not, every button still WORKS while the pointer sits away from it — both
+// halves behaving exactly as designed and the result visibly wrong. #30 got
+// away with publishing a single float because its map was a translation; this
+// one is not, so the whole thing is published.
+struct CanvasNdc {
+    float ax = 1.0f, bx = 0.0f, ay = 1.0f, by = 0.0f;
+    float x(float v) const { return ax * v + bx; }
+    float y(float v) const { return ay * v + by; }
+    bool identity() const {
+        return ax == 1.0f && bx == 0.0f && ay == 1.0f && by == 0.0f;
+    }
+};
+
+inline CanvasNdc canvas_ndc_of(const float k[16]) {
+    CanvasNdc c;
+    c.ax = k[0];
+    c.bx = k[12];
+    c.ay = k[5];
+    c.by = k[13];
+    return c;
+}
+
+inline void make_canvas_k(const OffAxis &o, float sx_screen, float sy_screen,
+                          float d_eye, float z, float k[16]) {
+    for (int i = 0; i < 16; i++)
+        k[i] = 0.0f;
+    k[0] = k[5] = k[10] = k[15] = 1.0f;
+    const bool have = o.ok && std::fabs(sx_screen) > 1e-9f &&
+                      std::fabs(sy_screen) > 1e-9f;
+    // The numerator of the disparity term. With no map it is `sx_screen`,
+    // which is what makes the fallback below literally canvas_shift rather
+    // than something that agrees with it to a few digits.
+    const float ax_num = have ? o.ax_num : sx_screen;
+    if (have) {
+        k[0] = o.ax_num / sx_screen;
+        k[5] = o.ay_num / sy_screen;
+        k[12] = o.bx;
+        k[13] = o.by;
+    }
+    if (z > 0.0f)
+        k[12] -= ax_num * d_eye / z;
+}
+
 // The half-angle a single symmetric render must cover so that nothing visible
 // in any target frustum is culled by X4 before the affine can place it.
 // Returns radians; the caller turns it into X4's <fov> with x4_fov_for_half().
@@ -485,6 +571,20 @@ inline float union_half_angle(const EyeFrustum *f, uint32_t n) {
 // "105.964 deg = fov 1.437".
 inline float x4_fov_for_half(float half_rad) {
     return (2.0f * half_rad * 57.2957795130823f) / 73.7399f;
+}
+
+// The same law read the other way: what half-angle is X4 actually rendering?
+//
+// Written once, because two places now need it and they must not disagree.
+// vr_declared_fov() uses it to tell the compositor what field the eye image
+// spans; make_canvas_k needs the same number to know what angle a screen NDC
+// corresponds to. If those two ever drifted apart, the UI would be placed
+// against one field and displayed against another, and the error would look
+// like a canvas at the wrong distance rather than like a bug.
+//
+// A missing or non-positive knob means X4's default fov of 1.0.
+inline float x4_half_for_fov(float fov) {
+    return (fov > 0.0f ? fov : 1.0f) * 73.7399f * 0.5f * 0.01745329251994330f;
 }
 
 inline void format_mat(char *buf, size_t n, const Mat4 &a) {

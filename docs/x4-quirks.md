@@ -2385,19 +2385,12 @@ settled position as of take 165b.
 
 ### Not done — exactly two things, both understood
 
-1. **Screen-space UI is left in X4's symmetric frame.** ~52 modules classify
-   NonWorld and get `K_nonworld` = identity. With a canted declaration, anything
-   screen-locked sits at the frustum centre in each eye — −15.04° and +15.04° —
-   so the eyes are asked to diverge by **30.07°**, which is the unfusable
-   negative control `common/x4vr_view.hpp:291` already documents. This is #30's
-   canvas problem; #30's machinery is the right shape because it selects per
-   *pass*, and the fullscreen post passes must keep identity while the UI pass
-   must not.
+1. ~~**Screen-space UI is left in X4's symmetric frame.**~~ **DONE — task #40.**
+   See below.
 2. ~~**The deferred reconstruction ignores the affine.**~~ **DONE — task #39.**
    See below.
 
-**The remaining item alone is not worth a take: the run still fails on it.** Do
-#40, then one VR take.
+**Both are done. The next thing #35 needs is a VR take (#41).**
 
 ### #39 — the deferred reconstruction, done
 
@@ -2450,6 +2443,81 @@ have range before being believed: extracting `minv[1][0]` instead of `minv[1][1]
 scores 1.163, and swapping the operands of the col-3 subtraction scores 2.000.
 Both of those validate perfectly under `spirv-val`, which is the whole point.
 
+### #40 — screen-locked content, in the declared frame
+
+**The framing in the section above was wrong, and measuring it is what fixed
+it.** "~52 NonWorld modules, and that set contains every fullscreen post pass"
+made the problem look like one with no clean predicate. It has one. Splitting
+X4's 394 vertex modules by *how they produce a position*:
+
+| | attributes | procedural (`gl_VertexIndex`, no attributes) |
+|---|---|---|
+| **World** | 348 | **0** |
+| **NonWorld** | **5** | 41 |
+
+The 41 procedural ones are the fullscreen post passes — they must keep drawing
+exactly where they are, and any transform on them leaves unrendered borders.
+The other 353 are draws that were *placed* by data and can therefore be
+re-placed. So the canvas's exclusion is **`is_procedural_fullscreen`**, not
+`World`: #30 keyed on World and got the right answer only because every World
+module has attributes. The two readings differ on exactly five modules —
+`mod-0000`, `0228`, `0229`, `0397`, `0398` — NonWorld UI that #30 could not
+move, and 0 modules go the other way, so nothing that used to get a canvas
+loses one.
+
+**The transform is #30's, evaluated in the canted frame.** A draw at screen NDC
+`x` is the ray `tanθ = x·tan(half)`; put it `z` metres away and view it from an
+eye offset `d`, and where it belongs is what `A` already defines:
+
+    x' = A_x·x + B_x − ax_num·d/z        A_x = ax_num / sx_screen
+    y' = A_y·y + B_y
+
+Every term is constant — `sx_screen` is a property of the SCREEN, not of a
+draw's camera — so this needed **no new shader machinery at all**.
+`patch_vertex_clip` has been applying constant 4×4s to UI draws since #30; only
+the matrix changed.
+
+`sx_screen` comes from `X4VR_FOV` through the new `x4_half_for_fov`, never from
+a camera block, for the reason `vr_declared_fov()` already gives at length: the
+layer sees several cameras per frame with sx from 0.75 to 3.78 and picking one
+is the mistake fifty takes were built on. Both the declaration and the canvas
+now go through that one function so they cannot disagree about what field the
+eye image spans. (`assumed_proj_sx()`, which #30 used, defaults to 0.889 — the
+2816×1408 measurement — and would have placed the UI against a field 27% off
+the union render's. The scorer now fails on that specific disagreement.)
+
+**`z ≤ 0` means infinity**, which is the pre-#30 behaviour and the right
+default when the affine is on and no distance was chosen: zero disparity is
+fusable, and leaving the map off is not. `X4VR_CANVAS_M` still chooses a
+finite distance.
+
+**The cursor is a coupled consumer and was handled with it.** X4 hit-tests the
+UI CPU-side at an unshifted window coordinate, so a pointer that does not take
+the same map lands away from every button it activates — both halves behaving
+as designed and the result visibly wrong (`docs/known-good-runs.md`, stage4
+says this in as many words). #30 published a single float because its map was a
+translation; this one is not, so `CanvasNdc` is published whole. The map is
+applied to the **hotspot** and the quad translated by the difference: running
+it over the quad's corners would stretch a 1:1 bitmap by 1.29×/1.19× into a
+blurred pointer, while the hotspot — the only part that has to be anywhere in
+particular — lands identically either way.
+
+**How it was verified, with no run.**
+
+| check | result |
+|---|---|
+| no cant: `make_canvas_k` vs #30's `canvas_shift`, 3 distances, both eyes | **exactly 0.00e+00** |
+| canted at infinity: do both eyes place the UI at the same angle? | 6.8e-6° |
+| ...and at the angle X4 drew it at? | 6.8e-6° |
+| the negative control, untransformed | **30.07°**, the number from take 165b |
+| canted at 0.5/2/10 m: is each eye's ray the real one? | 6.8e-6° |
+| `is_procedural_fullscreen` over all 409 dumps | 41/5/348/0, as tabled |
+| cursor overlay on a real GPU, canted and scale-only | passes, and **fails** when the overlay is seeded to drop the scale |
+
+The GPU cases are posed at a hotspot off centre in both axes on purpose: a
+scale applied about the centre moves nothing at the centre, so a case posed
+there would pass with the scale silently dropped.
+
 **A latent flake found on the way.** `tests/run-multiview-render.sh` asserted the
 emitted coefficients with `spirv-dis … | grep -q`. `grep -q` exits at the first
 match, `spirv-dis` takes SIGPIPE, and under `set -o pipefail` the pipeline then
@@ -2472,6 +2540,13 @@ affine reaches World modules only — it reads the latched frusta from the log,
 computes both frustum centres and fails on their separation. That check would
 have failed 165b before the headset went on. `tools/register_affine.py --verify`
 measures the affine from screenshots; run `--self-check` first.
+
+Since #40 the divergence FAIL is conditional on the canvas's own swap count,
+and it needs **positive** evidence: a build predating #40 prints no canvas
+line, and "no line" reads as "not covered" rather than as "fine". Both branches
+were exercised against a synthesised log before either was believed — covered
+passes, `swapped into 0` fails twice over, and a canvas placed against the
+wrong field fails on the A_x identity.
 
 It also FAILs the **half-applied** state #39 introduces the possibility of: the
 affine on `gl_Position` with `M_invprojection` left alone. That is reachable

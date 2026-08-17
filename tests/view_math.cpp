@@ -448,6 +448,21 @@ int main() {
                    "union half-angle is 55 deg (the D-55 edge, not the L-54)");
         check_near(x4vr::x4_fov_for_half(half), 1.4917f, 1e-3f,
                    "X4VR_FOV = 1.4917 covers the union");
+        // The two readings of the same law, which two callers now depend on
+        // agreeing: the declared field and the canvas's screen field.
+        {
+            float worst = 0.0f;
+            for (float f : {0.5f, 1.0f, 1.437f, 1.4917f, 2.0f})
+                worst = std::fmax(
+                    worst,
+                    std::fabs(x4vr::x4_fov_for_half(x4vr::x4_half_for_fov(f)) -
+                              f));
+            check(worst < 1e-5f,
+                  "x4_half_for_fov inverts x4_fov_for_half over five fovs");
+            check_near(x4vr::x4_half_for_fov(0.0f),
+                       x4vr::x4_half_for_fov(1.0f), 1e-9f,
+                       "an unset fov reads as X4's default of 1.0");
+        }
         const float sx_union = 1.0f / std::tan(half);
         check_near(sx_union, 0.70021f, 1e-4f, "union sx = cot(55 deg)");
 
@@ -768,6 +783,150 @@ int main() {
                   "the round trip is only meaningful against");
             printf("     worst view-space error %.2e m (uncorrected %.2f m)\n",
                    worst, worst_uncorrected);
+
+            // ---- task #40: screen-locked content, in the declared frame ----
+            //
+            // Asserted in ANGLES, not in NDC. NDC is what the shader writes,
+            // but "the two eyes can fuse this" is a statement about where the
+            // content ends up in the world, and only the angle says that. The
+            // 30.07 deg failure is invisible in NDC — both eyes write the same
+            // number, which is exactly the bug.
+            {
+                const float half = deg(55.0f); // X4VR_FOV 1.4917
+                const float sx_s = 1.0f / std::tan(half);
+                const float sy_s = -sx_s;
+                // The vertical reading of a target NDC, the inverse of the
+                // derivation in x4vr_view.hpp: NDC y points down, so this
+                // returns a real elevation with up positive.
+                auto elev_of_ndc = [](const x4vr::EyeFrustum &f, float n) {
+                    return std::atan(0.5f * ((f.tan_u + f.tan_d) -
+                                             n * (f.tan_u - f.tan_d)));
+                };
+
+                // Compatibility with #30, which is the check that matters
+                // most: with a symmetric target at X4's own half-angle this
+                // must be canvas_shift and nothing else, or the change is a
+                // regression to a proven feature dressed as a generalisation.
+                {
+                    const x4vr::EyeFrustum sym =
+                        x4vr::frustum_of_angles(-half, half, half, -half);
+                    const x4vr::OffAxis id = x4vr::make_off_axis(sym, 0.0f);
+                    const x4vr::OffAxis none{}; // never latched at all
+                    float worst = 0.0f;
+                    for (float z : {0.5f, 2.0f, 10.0f}) {
+                        const float s = x4vr::canvas_shift(sx_s, kIpd, z);
+                        for (int e = 0; e < 2; e++) {
+                            const float want12 = e ? -s : +s;
+                            for (const x4vr::OffAxis *o : {&id, &none}) {
+                                float k[16];
+                                x4vr::make_canvas_k(*o, sx_s, sy_s, d_eye[e], z,
+                                                    k);
+                                worst = std::fmax(worst, std::fabs(k[0] - 1.0f));
+                                worst = std::fmax(worst, std::fabs(k[5] - 1.0f));
+                                worst = std::fmax(worst, std::fabs(k[13]));
+                                worst = std::fmax(worst,
+                                                  std::fabs(k[12] - want12));
+                            }
+                        }
+                    }
+                    check(worst < 1e-6f,
+                          "with no cant, make_canvas_k IS #30's canvas_shift — "
+                          "identity target and never-latched agree, 3 distances");
+                    printf("     worst deviation from canvas_shift %.2e\n",
+                           worst);
+                }
+
+                // Canted, at infinity: the UI must land at the angle X4 drew
+                // it at, in BOTH eyes. Same angle in both eyes is zero
+                // disparity, which is what "pinned at infinity" means.
+                {
+                    float worst_same = 0.0f, worst_place = 0.0f;
+                    for (float x : {-0.9f, -0.4f, 0.0f, 0.35f, 0.8f}) {
+                        float a[2], b[2];
+                        for (int e = 0; e < 2; e++) {
+                            const x4vr::OffAxis o =
+                                x4vr::make_off_axis(eye[e], d_eye[e]);
+                            float k[16];
+                            x4vr::make_canvas_k(o, sx_s, sy_s, d_eye[e], 0.0f, k);
+                            a[e] = angle_of_ndc(eye[e], k[0] * x + k[12]);
+                            b[e] = elev_of_ndc(eye[e], k[5] * x + k[13]);
+                        }
+                        worst_same = std::fmax(worst_same,
+                                               std::fabs(deg_of(a[0] - a[1])));
+                        worst_same = std::fmax(worst_same,
+                                               std::fabs(deg_of(b[0] - b[1])));
+                        // ...and at the angle it was drawn at, not merely at
+                        // some angle both eyes agree on. A map that collapsed
+                        // everything to straight ahead would pass the check
+                        // above perfectly.
+                        const float want_h = std::atan(x * std::tan(half));
+                        const float want_v = std::atan(-x * std::tan(half));
+                        worst_place = std::fmax(worst_place,
+                                                std::fabs(deg_of(a[0] - want_h)));
+                        worst_place = std::fmax(worst_place,
+                                                std::fabs(deg_of(b[0] - want_v)));
+                    }
+                    check(worst_same < 1e-3f,
+                          "canvas at infinity: both eyes place screen-locked "
+                          "content at the SAME angle, horizontally and "
+                          "vertically");
+                    check(worst_place < 1e-3f,
+                          "...and at the angle X4 drew it at, so the UI keeps "
+                          "the size and position it has on a flat screen");
+                    printf("     agreement %.2e deg, placement %.2e deg\n",
+                           worst_same, worst_place);
+                }
+
+                // The negative control, in the units the failure was reported
+                // in. Without the map the two eyes write the same NDC, which
+                // in a canted declaration is 30.07 deg apart in the world.
+                {
+                    float worst = 0.0f;
+                    for (float x : {-0.9f, 0.0f, 0.8f}) {
+                        const float a0 = angle_of_ndc(eye[0], x);
+                        const float a1 = angle_of_ndc(eye[1], x);
+                        worst = std::fmax(worst, std::fabs(deg_of(a0 - a1)));
+                    }
+                    check(worst > 25.0f,
+                          "untransformed, the same NDC in both eyes is tens of "
+                          "degrees apart — take 165b's HUD, and the control "
+                          "the two checks above are only meaningful against");
+                    printf("     untransformed divergence up to %.2f deg\n",
+                           worst);
+                }
+
+                // Finite z: the disparity must be the one a point at z metres
+                // actually subtends. This is #30's claim — "the UI at z metres
+                // and world geometry at z metres produce the same disparity" —
+                // re-stated in the canted frame, where it is no longer a
+                // constant NDC offset.
+                {
+                    float worst = 0.0f;
+                    for (float z : {0.5f, 2.0f, 10.0f}) {
+                        for (float x : {-0.7f, 0.0f, 0.6f}) {
+                            for (int e = 0; e < 2; e++) {
+                                const x4vr::OffAxis o =
+                                    x4vr::make_off_axis(eye[e], d_eye[e]);
+                                float k[16];
+                                x4vr::make_canvas_k(o, sx_s, sy_s, d_eye[e], z,
+                                                    k);
+                                const float got =
+                                    angle_of_ndc(eye[e], k[0] * x + k[12]);
+                                // the ray from THIS eye to the canvas point
+                                const float want = std::atan(
+                                    x * std::tan(half) - d_eye[e] / z);
+                                worst = std::fmax(worst,
+                                                  std::fabs(deg_of(got - want)));
+                            }
+                        }
+                    }
+                    check(worst < 1e-3f,
+                          "canvas at z metres: each eye sees it along the ray "
+                          "that eye would really have to it, 3 distances");
+                    printf("     worst canvas placement error %.2e deg\n",
+                           worst);
+                }
+            }
 
             // ---- refusals ----
             {

@@ -518,8 +518,10 @@ int main(int argc, char **argv) {
                    : k == x4vr::spv::Kind::NonWorld ? "NonWorld"
                                                     : "NotVertex";
         };
-        printf("NARROW=%s WIDE=%s\n", name(x4vr::spv::classify(code, false)),
-               name(x4vr::spv::classify(code, true)));
+        printf("NARROW=%s WIDE=%s PROCEDURAL=%d\n",
+               name(x4vr::spv::classify(code, false)),
+               name(x4vr::spv::classify(code, true)),
+               x4vr::spv::is_procedural_fullscreen(code) ? 1 : 0);
         return 0;
     }
 
