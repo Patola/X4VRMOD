@@ -2091,3 +2091,98 @@ B, which now has no margin at all where A had about 1° horizontally.
 
 **What this take does NOT establish.** Performance. B renders the same 1408²
 per eye as A; the pixel saving is piece 3 and nothing here measures it.
+
+## #35 piece 2 — RESULT: the world is right and everything else is now unfusable
+
+Takes 165a (`X4VR_OFFAXIS=off`) and 165b (runtime frusta). **Every mechanism
+piece 2 was built to provide worked, and the run is still a failure.**
+
+### What worked
+
+    vr fov: runtime reports eye0 l=-54.00 r=40.00 u=44.00 d=-55.00,
+                             eye1 l=-40.00 r=54.00 u=44.00 d=-55.00
+    offaxis: target from the runtime's located views
+    offaxis: X4VR_FOV 1.4917 covers the target's union half-angle of 55.00 deg
+    vr: declaring the CANTED field the affine was baked for
+    ... baked-sx=0
+
+The runtime reports take 112's frusta to the centidegree, the latch took them,
+the declaration is built from the same object, and no world module was left
+behind. Registering 165a→165b puts the world at `A_x=1.2975 B_x=±0.2425
+A_y=1.1848/1.1931 B_y=−0.1932` — the prediction, with `B_x` reversing per view.
+165a is crisp and correct.
+
+### What broke, and it is not a wiring bug
+
+165b in the headset: the cockpit's 3D is correct, the **HUD has its eyes
+switched**, so does part of the stars plane and the whole loading screen, and
+the menu's shadows are completely different between the two eyes.
+
+**Cause 1 — everything the affine does not touch is now in the wrong frame.**
+The affine rides on the two live-sx World patches. NonWorld modules, the
+unsheared twin, the skybox's procedural fullscreen shader and the loading screen
+get none of it, so they stay in X4's symmetric frame while the declaration says
+canted. A screen-locked element sits at image centre in both eyes; declared
+canted, image centre *is* the frustum centre, which is −15.04° in eye 0 and
++15.04° in eye 1:
+
+    the eyes are asked to diverge by 30.07 deg
+
+That is not a new number. `common/x4vr_view.hpp:291` already carries it, as the
+**negative control**: "Submitting X4's frame as if it were centred asks the eyes
+to diverge by 30.07 deg, which nobody can fuse; the probe reproduces exactly
+that as a negative control." Piece 2 reproduced the project's own documented
+unfusable case for every draw the affine misses, and I did not notice while
+writing the code that cites it.
+
+Measured, to be sure it is divergence and not a swap: in 165b's eye image the
+HUD panel sits at the same place in both eyes (dx = +1 px of a 1412 px half),
+exactly as in 165a (+2 px). The pixels are fine. The frame they are declared in
+is not.
+
+**Cause 2 — the deferred passes reconstruct through an affine they cannot see.**
+`patch_fragment_invproj_eye` corrects `M_invprojection` for the eye *shear*
+(task #22). The affine is a second transform on `gl_Position` downstream of
+that, so every deferred reconstruction now recovers the wrong view position —
+by an amount that differs in sign between the eyes, because `B_x` does. Hence
+per-eye lighting and shadows in the menu. This one is a **piece-1** defect, not
+piece 2: it was present in take 164c and went unobserved because that scene was
+a starfield with almost nothing shadowed.
+
+It is also the same defect class #22 already fixed once. `x4vr_spirv.hpp`'s own
+note — "the deferred passes then read the depth buffer and reconstruct with the
+centre-frame `M_invprojection`" — describes the affine's failure exactly, one
+transform later.
+
+### Why piece 1's verification could not have caught either
+
+Worth stating plainly rather than filed as bad luck. Takes 164a/b/c were
+**flatscreen SBS**: no declaration exists there, so cause 1 is structurally
+invisible. And I measured **world geometry only** — I registered the cockpit and
+checked that the HUD had not moved *between* takes, never that the two eyes
+agreed *within* one. A per-eye check inside a single frame would have shown
+cause 1's precondition, and a scene with a lit surface would have shown cause 2.
+
+### What changed as a result
+
+The runtime source is now **opt-in** (`X4VR_OFFAXIS=runtime`). It was the default
+for exactly one take, and that default ships the 30.07° divergence to anyone
+running the VR command line. Unset is off and silent, which restores take 163's
+behaviour as the VR default. `X4VR_OFFAXIS="l,r,u,d"` still reproduces takes
+164a/b/c.
+
+### What piece 3 now depends on
+
+Nothing about piece 3 has changed, but it is no longer next. Two things are:
+
+1. **The non-affine set has to reach the declared frame.** Not by giving every
+   NonWorld module the affine — that would corrupt every fullscreen post pass,
+   which is why `K_nonworld` exists separately at all. The canvas variant (#30)
+   is the machinery that already chooses a transform per *pass* rather than per
+   module, and this is the same question it was built for.
+2. **The deferred reconstruction has to undo the affine**, the way it already
+   undoes the shear. Same file, same shape, one transform further on.
+
+Until both, the off-axis map is a flatscreen-verified transform and not a VR
+feature, and the honest state of #35 is: piece 1 correct, piece 2 correct and
+insufficient.

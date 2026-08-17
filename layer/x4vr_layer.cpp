@@ -3546,9 +3546,29 @@ const OffAxisPair &offaxis_target() {
             g_offaxis_latched.store(true, std::memory_order_release);
             return r;
         }
-        if (!(s && *s) && have_rt) {
+        // **The runtime source is OPT-IN, and take 165b is why.**
+        //
+        // It was the default for exactly one take. The affine is correct for
+        // the geometry it touches and there is a large set it does not touch --
+        // every NonWorld module, every unsheared twin, and the deferred
+        // reconstruction -- and declaring the canted frusta puts that set in a
+        // different frame from the declaration. For anything screen-locked
+        // that is a 30.07 deg divergence between the eyes, which is the
+        // unfusable negative control x4vr_view.hpp:291 already describes.
+        // Shipping it on by default means shipping that.
+        const bool want_rt = s && (!strcmp(s, "runtime") || !strcmp(s, "auto"));
+        if (want_rt && have_rt) {
             memcpy(a, rt, sizeof(a));
             r.source = "the runtime's located views";
+        } else if (want_rt) {
+            X4VR_LOG("offaxis: OFF — X4VR_VR=1 but no view had been located "
+                     "when the first world shader was patched, and "
+                     "X4VR_OFFAXIS=%s asked for the runtime's frusta. X4's "
+                     "symmetric field is rendered and declared, which is "
+                     "self-consistent, not half-applied.",
+                     s);
+            g_offaxis_latched.store(true, std::memory_order_release);
+            return r;
         } else if (s && *s) {
             float v[4] = {0, 0, 0, 0};
             int n = 0;
@@ -3597,16 +3617,9 @@ const OffAxisPair &offaxis_target() {
                          v[0], v[1], v[2], v[3]);
             }
         } else {
-            // env_on rather than g_vr: that global is defined with the VR
-            // block 3700 lines below, and reading the variable here would be
-            // an ordering dependency for a question the environment already
-            // answers.
-            if (x4vr::env_on("X4VR_VR", false))
-                X4VR_LOG("offaxis: OFF — X4VR_VR=1 but no view had been "
-                         "located when the first world shader was patched, and "
-                         "X4VR_OFFAXIS is unset. X4's symmetric field is "
-                         "rendered and declared, which is the pre-#35 "
-                         "behaviour and is self-consistent, not half-applied.");
+            // Unset is OFF and silent. Not a complaint: after take 165b that
+            // is the correct default for a VR run too, so there is nothing
+            // here to warn about.
             g_offaxis_latched.store(true, std::memory_order_release);
             return r;
         }
