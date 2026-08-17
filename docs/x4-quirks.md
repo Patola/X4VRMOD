@@ -2257,3 +2257,54 @@ Piece 3's entire prize is 0.65x the pixel area. Take 165a is already correct.
 The trade is therefore explicit: that saving costs all three of the above, one
 of which has no known mechanism, against a symmetric declaration that works
 today and only wastes pixels.
+
+## Reading the skybox module — a correction, and what is actually established
+
+I told Patola the skybox is a compute shader and therefore unreachable, citing
+`docs/frame-analysis.md:3490`. **I had not verified that, and the part I could
+check does not support it.**
+
+**What the dumps say.** Exactly two of X4's 409 modules are compute *and* sample
+a cube: `mod-0266` and `mod-0267`. Both build a `ray_dir` array of **six**
+`vec3`s — `(1,-y,-x)`, `(-1,-y,x)`, `(x,1,y)`, `(x,-1,-y)`, `(x,-y,1)`,
+`(-x,-y,-1)` — the six faces of a cube. They are cubemap **bakers**, not the
+screen draw. Of the other 140-odd cube-sampling modules, every one is
+Vertex+Fragment and every one declares a set-3 block, so all classify World and
+would carry the affine.
+
+Of the ten compute modules in the frame: three are the cursor, one a composite,
+one deferred lighting with shadow samplers, two the cubemap bakers, one
+volumetric fog (`vol`, `sampler3D`), one samples an SRGB 2D, and `mod-0361`
+writes a module-scope constant — a clear. **None is identifiably the screen sky,
+and I did not find the module that draws it.**
+
+**What IS established, by measurement rather than by reading.** Star positions
+in take 165b, left eye against right eye, matched as a point set:
+
+    sky (canopy opening)   dx=0: 54.5%   dx=+342: 10.6%   dx=-342: 10.9%
+    lower frame (cockpit)  dx=0: 19.6%   best 30.8% at dx=-388
+
+If the sky carried the per-eye affine the two eyes would differ by
+`2·B_x = 0.485` NDC = 342 px. They differ by **4 px**. The cockpit in the same
+frame differs by hundreds. So:
+
+* **the sky does not carry the per-eye affine** — measured, not inferred;
+* **the cockpit does**;
+* and that is "some stars moved, others did not": bright points that are world
+  geometry move, the sky behind them does not.
+
+An earlier region test of mine reported "open sky STATIC" and an A→B star count
+reported 62% moving with the affine. Those disagree because the star detector
+also picks up distant ships, station lights and cockpit edges. The
+left-eye/right-eye test above is the one to trust: it needs no cross-run
+alignment and carries its null (±342) inside the same frame.
+
+**The lead I did not chase.** `mod-0361` writes with `OpImageWrite` whose
+coordinate is a **3-component** bitcast of `gl_GlobalInvocationID` — an array or
+3D target, with `z` from the dispatch. If X4's compute passes address layers
+through `z`, then `gl_GlobalInvocationID.z` *is* a view index and compute is not
+the dead end the compute-gap note assumes. Decidable with
+`X4VR_MV_INVENTORY=1`, which take 165b's log says was not enabled.
+
+So the honest state is: **the affine does not reach the sky, and whether it
+*can* is unknown** — not "cannot", which is what I said.
