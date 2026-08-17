@@ -1995,3 +1995,99 @@ module (`baked-sx=0` in all three runs, so nothing was left in X4's frustum).
 It still says nothing about the headset. The layer declares a symmetric ±55°
 field (piece 2) and renders 1408² per eye (piece 3). Those remain the next two
 steps, in that order.
+
+## #35 piece 2 — declare the runtime's frusta, and what it is actually worth
+
+Piece (2). The layer now latches ONE frustum pair and uses it for both the
+affine's baked coefficients and `XrCompositionLayerProjectionView::fov`. Sources
+in order: `X4VR_OFFAXIS` (an override, and `=off` disables everything), the
+runtime's located views, off.
+
+### Correctness needed them equal to each other, not equal to the runtime's
+
+Worth stating plainly, because it changes what this take can claim. If the
+affine remaps X4's field into frustum F and we declare F, the compositor is
+right *whatever F is* — it resamples. Matching the runtime's own F is a quality
+choice. **Take 163 was therefore already geometrically correct**: it declared a
+symmetric ±55° field, the eye's real frustum (−54..+40 × +44..−55) sits entirely
+inside that, and Monado cropped to it. Nothing was wrong with the picture.
+
+**What was wrong was the pixel budget.** The eye's tangent span is
+`tan40 − tan(−54) = 2.2155` against the declared `2·tan55 = 2.8563`, so 22.4% of
+every row was rendered and then discarded, and the same again vertically. The
+affine maps the smaller span onto the whole texture, so the *same* 1408 pixels
+now cover only what the display shows.
+
+That ratio is not a new number to measure. It is `A_x` and `A_y`:
+
+    horizontal pixel density  x1.2892      vertical  x1.1931
+
+The magnification the affine applies IS the angular-resolution gain, because it
+is the same tangent-span ratio read the other way round. Piece 3 will spend that
+back as performance instead (1092×1180 per eye at the original density); until
+then it arrives as sharpness at unchanged cost.
+
+The texture stays square while the declared frustum's aspect is
+`2.2155/2.3938 = 0.9255`. The affine reconciles them — that is exactly why
+`A_x ≠ A_y` — and piece 3 is what stops paying for the mismatch.
+
+### Latched once, and the race that decides the source
+
+The coefficients are baked at `vkCreateShaderModule`; the runtime's frusta only
+exist after `xrLocateViews`. Take 163's timestamps settle whether that works:
+
+    122569.463   first shader module patched     (NONWORLD — no affine on it)
+    122569.475   first located frame
+    122570.269   ...still nonworld
+    ~122570.3    first WORLD module              (+0.8 s after the locate)
+    122647.125   world modules STILL arriving    (+78 s)
+
+So the frusta are in hand 0.8 s before the affine needs them, and world modules
+keep coming for 77 s after — which is why the target is latched once rather than
+read per module. A target that could change between two of those calls would put
+half the world in one frustum and half in another, and no single frame would
+look wrong enough to explain it.
+
+The 12 ms gap at the top is why the per-module log line uses a non-latching
+peek: latching there would fix the target at the first *nonworld* module, before
+any locate, and the runtime would lose the race every run with nothing saying so.
+
+### PREDICTION, before the take
+
+Two runs, identical but for `X4VR_OFFAXIS`.
+
+**A — `X4VR_OFFAXIS=off`.** Reproduces take 163's geometry exactly. This switch
+exists because piece 2 turns the affine on by itself in any VR run, which
+changes what every VR command line written before this commit does;
+`X4VR_PROJ_INVPROJ` already cost this project a documented control that silently
+stopped being one.
+
+**B — `X4VR_OFFAXIS` unset.** The runtime supplies the target. The log must show:
+
+    vr fov: runtime reports eye0 l=-54.00 r=40.00 u=44.00 d=-55.00, eye1 ...
+    offaxis: target from the runtime's located views
+    offaxis: X4VR_FOV 1.4917 covers the target's union half-angle of 55.00 deg
+    vr: declaring the CANTED field the affine was baked for
+
+If the first line disagrees with take 112's measurement, that is news about the
+runtime and the rest of this section is about the wrong numbers.
+
+**In the headset, B should look SHARPER than A and otherwise identical** — 1.29×
+horizontally, 1.19× vertically. Cockpit monitor text and distant ship outlines
+are where that shows. Geometry must be unchanged: straight lines straight, the
+two eyes fusible with no vertical disparity, the world the same size.
+
+**A wrong-size or shifted world in B refutes the assumption that Monado honours
+an asymmetric declared fov the way probe run 3 showed it honours a symmetric
+one.** That is the one thing here resting on an untested extrapolation —
+asymmetric is OpenXR's ordinary case, but this runtime has only been observed
+with our symmetric declaration.
+
+Both runs drop `X4VR_HEADLOOK` and the `X4VR_CAMREAD`/`X4VR_CAMLOOP` readback:
+take 163's map and steering failures came from head-look holding `MOUSELOOK`,
+and this take asks nothing about head tracking. The image is world-locked, so
+looking around walks off the rendered edge into black in both runs — sooner in
+B, which now has no margin at all where A had about 1° horizontally.
+
+**What this take does NOT establish.** Performance. B renders the same 1408²
+per eye as A; the pixel saving is piece 3 and nothing here measures it.

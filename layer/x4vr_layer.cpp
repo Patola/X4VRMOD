@@ -3465,94 +3465,222 @@ bool proj_mvp() {
     return on;
 }
 
-// Task #35, piece 1. X4VR_OFFAXIS="l,r,u,d" — the runtime's frustum for eye 0
-// in DEGREES, in OpenXR's convention (left and down negative). Eye 1 is the
-// horizontal mirror, which is what WiVRn reports on a Quest 3 and what take 112
-// measured: eye 0 = (-54, +40, +44, -55), eye 1 = (-40, +54, +44, -55).
+// Task #35. THE frustum pair — the one the affine is baked for and the one the
+// compositor is told about. Those two must be the same object, and that is the
+// whole content of piece 2.
 //
-// **A measurement knob, not the deployment path.** Piece 2 of #35 replaces this
-// with the frusta the runtime hands back at xrLocateViews time, and then the
-// mirroring assumption goes away with it. It exists because the emission has to
-// be provable in a flatscreen run before the headset is asked to depend on it,
-// and because that run needs a negative control this knob can express:
+// **Correctness needs them equal to each other, not equal to the runtime's.**
+// If the affine remaps X4's field into frustum F and we declare F, the picture
+// is right whatever F is; the compositor resamples. Matching the runtime's own
+// F is a quality choice — it makes the resample the identity — not a
+// correctness one. Saying that plainly matters because it is what makes the
+// fallback below safe rather than a silent half-measure.
 //
-//     X4VR_OFFAXIS="-55,55,55,-55" at X4VR_FOV=1.4917 is the IDENTITY.
+// **Latched once, on first use, and never revisited.** The coefficients are
+// baked into shader modules at vkCreateShaderModule, and X4 creates world
+// modules over a 77-second stretch (take 163: first at t+0.8 s, still arriving
+// at t+78 s). A target that could change between two of those calls would put
+// half the world in one frustum and half in another — a defect that no single
+// frame would look wrong enough to explain.
 //
-// That is not a coincidence to be checked empirically, it is arithmetic:
-// union_half_angle of the take-112 pair is 55.00 deg, X4VR_FOV 1.4917 puts X4's
-// own half-angle at the same 55.00 deg, so ax_num = 2/(2*tan55) = cot55 = sx
-// and A_x = ax_num/sx = 1 exactly, with B_x = 0 because the target is
-// symmetric. A run with this value that does NOT look untouched has found a
-// defect in the emission, and a run with the canted value that looks untouched
-// has found the emission never ran.
+// Sources, in order:
+//   1. X4VR_OFFAXIS="l,r,u,d" in degrees, eye 0, mirrored for eye 1 — an
+//      OVERRIDE, which is what every other env knob in this layer is, and the
+//      flatscreen measurement path that proved the emission in takes 164a/b/c.
+//      X4VR_OFFAXIS="-55,55,55,-55" at X4VR_FOV=1.4917 is arithmetically the
+//      identity, which is that measurement's negative control.
+//   2. the runtime's located views (deployment)
+//   3. off
+//
+// **The knob outranks the runtime deliberately.** The other order reads better
+// -- prefer the real hardware -- but it makes X4VR_OFFAXIS silently dead in
+// every VR run, so a run set up to force a target would measure the runtime's
+// instead and nothing in the picture would say which. A knob whose null
+// refutes only itself has cost this project takes before. When both are
+// present the override is announced next to the value it displaced.
+//
+// Whichever wins is logged by name, because "the affine ran" and "the affine
+// ran on the runtime's real frusta" are different claims and a run has to be
+// able to tell them apart.
 struct OffAxisPair {
     x4vr::OffAxis eye[2];
+    XrFovf fov[2] = {};        // what we declare; same source as the affine
+    float half_needed = 0.0f;  // union half-angle of the pair, radians
+    const char *source = "off";
     bool on = false;
 };
+
+// Defined with the VR state further down. Fills `out[eye] = {l, r, u, d}` in
+// radians from the first located frame and returns false until there is one.
+bool vr_located_fov(float out[2][4]);
+
+// Non-latching. The per-module log line wants to *describe* the target, and
+// calling the latching accessor there would fix it at the first NONWORLD
+// module — which take 163 timestamps 12 ms BEFORE the first located frame, so
+// the runtime would lose the race every single run without anything saying so.
+std::atomic<bool> g_offaxis_latched{false};
+std::atomic<bool> g_offaxis_on{false};
 
 const OffAxisPair &offaxis_target() {
     static const OffAxisPair p = [] {
         OffAxisPair r{};
+        float a[2][4] = {};
+        float rt[2][4] = {};
         const char *s = getenv("X4VR_OFFAXIS");
-        if (!s || !*s)
-            return r;
-        float a[4] = {0, 0, 0, 0};
-        int n = 0;
-        for (const char *q = s; *q && n < 4; n++) {
-            char *end = nullptr;
-            a[n] = strtof(q, &end);
-            if (end == q)
-                break;
-            q = end;
-            if (*q == ',')
-                q++;
-        }
-        if (n != 4) {
-            X4VR_LOG("offaxis: REFUSED — X4VR_OFFAXIS=\"%s\" is not four "
-                     "comma-separated degree values (l,r,u,d); no affine "
-                     "applied",
+        const bool have_rt = vr_located_fov(rt);
+        // **X4VR_OFFAXIS=off, and why it has to exist.** Source 2 turns the
+        // affine on by itself in any VR run, which changes what every command
+        // line written before this commit does. This project's rule is that a
+        // known-good state is code AND knobs, and X4VR_PROJ_INVPROJ already
+        // cost it once: omitting a variable and setting it to 0 stopped being
+        // the same thing the moment the default changed, and a documented
+        // control silently became a non-control. So there is an explicit off,
+        // it outranks the runtime, and it is what reproduces take 163 and
+        // every VR take before it.
+        if (s && (!strcmp(s, "off") || !strcmp(s, "0"))) {
+            X4VR_LOG("offaxis: OFF by request (X4VR_OFFAXIS=%s) — X4's "
+                     "symmetric field is rendered and declared, which is the "
+                     "behaviour of every VR take up to 163. Any located "
+                     "runtime frusta are ignored.",
                      s);
+            g_offaxis_latched.store(true, std::memory_order_release);
             return r;
         }
-        const float k = 3.14159265358979f / 180.0f;
-        // The mirror, spelled out rather than assumed: eye 1's left edge is
-        // the negation of eye 0's right edge, and vice versa. The vertical is
-        // shared -- a headset cants its eyes horizontally, not vertically.
-        const x4vr::EyeFrustum f[2] = {
-            x4vr::frustum_of_angles(a[0] * k, a[1] * k, a[2] * k, a[3] * k),
-            x4vr::frustum_of_angles(-a[1] * k, -a[0] * k, a[2] * k, a[3] * k),
-        };
-        r.eye[0] = x4vr::make_off_axis(f[0]);
-        r.eye[1] = x4vr::make_off_axis(f[1]);
+        if (!(s && *s) && have_rt) {
+            memcpy(a, rt, sizeof(a));
+            r.source = "the runtime's located views";
+        } else if (s && *s) {
+            float v[4] = {0, 0, 0, 0};
+            int n = 0;
+            for (const char *q = s; *q && n < 4; n++) {
+                char *end = nullptr;
+                v[n] = strtof(q, &end);
+                if (end == q)
+                    break;
+                q = end;
+                if (*q == ',')
+                    q++;
+            }
+            if (n != 4) {
+                X4VR_LOG("offaxis: REFUSED — X4VR_OFFAXIS=\"%s\" is not four "
+                         "comma-separated degree values (l,r,u,d); no affine "
+                         "applied",
+                         s);
+                g_offaxis_latched.store(true, std::memory_order_release);
+                return r;
+            }
+            const float k = 3.14159265358979f / 180.0f;
+            // The mirror, spelled out rather than assumed: eye 1's left edge
+            // is the negation of eye 0's right edge, and vice versa. The
+            // vertical is shared -- a headset cants its eyes horizontally.
+            // This assumption belongs to the KNOB only; source 1 reads all
+            // eight angles from the runtime and assumes nothing.
+            for (int i = 0; i < 4; i++)
+                a[0][i] = v[i] * k;
+            a[1][0] = -v[1] * k;
+            a[1][1] = -v[0] * k;
+            a[1][2] = v[2] * k;
+            a[1][3] = v[3] * k;
+            r.source = "X4VR_OFFAXIS";
+            // Say what was displaced, in the same units, so a run cannot
+            // quietly measure the knob while the reader believes it measured
+            // the headset -- or the reverse.
+            if (have_rt) {
+                const float d = 57.2957795130823f;
+                X4VR_LOG("offaxis: X4VR_OFFAXIS OVERRIDES the runtime. The "
+                         "runtime reported eye0 l=%.2f r=%.2f u=%.2f d=%.2f "
+                         "deg and this run forces l=%.2f r=%.2f u=%.2f d=%.2f. "
+                         "The compositor is told the forced values, so the "
+                         "picture is self-consistent but will not match the "
+                         "optics.",
+                         rt[0][0] * d, rt[0][1] * d, rt[0][2] * d, rt[0][3] * d,
+                         v[0], v[1], v[2], v[3]);
+            }
+        } else {
+            // env_on rather than g_vr: that global is defined with the VR
+            // block 3700 lines below, and reading the variable here would be
+            // an ordering dependency for a question the environment already
+            // answers.
+            if (x4vr::env_on("X4VR_VR", false))
+                X4VR_LOG("offaxis: OFF — X4VR_VR=1 but no view had been "
+                         "located when the first world shader was patched, and "
+                         "X4VR_OFFAXIS is unset. X4's symmetric field is "
+                         "rendered and declared, which is the pre-#35 "
+                         "behaviour and is self-consistent, not half-applied.");
+            g_offaxis_latched.store(true, std::memory_order_release);
+            return r;
+        }
+
+        x4vr::EyeFrustum f[2];
+        for (int e = 0; e < 2; e++) {
+            f[e] = x4vr::frustum_of_angles(a[e][0], a[e][1], a[e][2], a[e][3]);
+            r.eye[e] = x4vr::make_off_axis(f[e]);
+            r.fov[e].angleLeft = a[e][0];
+            r.fov[e].angleRight = a[e][1];
+            r.fov[e].angleUp = a[e][2];
+            r.fov[e].angleDown = a[e][3];
+        }
         if (!r.eye[0].ok || !r.eye[1].ok) {
-            X4VR_LOG("offaxis: REFUSED — X4VR_OFFAXIS=\"%s\" describes a "
-                     "frustum with no width or no height; no affine applied",
-                     s);
+            X4VR_LOG("offaxis: REFUSED — %s describes a frustum with no width "
+                     "or no height; no affine applied",
+                     r.source);
+            r.source = "off";
+            g_offaxis_latched.store(true, std::memory_order_release);
             return r;
         }
         // The precondition, checked here rather than discovered from a null.
         // The affine divides by the LIVE sx and sy, so it can only ride on the
         // patches that read them; with X4VR_PROJ_LIVE unset every world module
-        // takes the baked matrix instead and this knob would do nothing at all
+        // takes the baked matrix instead and this would do nothing at all
         // while looking like it had been tested.
         if (!proj_live()) {
-            X4VR_LOG("offaxis: REFUSED — X4VR_OFFAXIS=\"%s\" is set but "
+            X4VR_LOG("offaxis: REFUSED — the target is set (%s) but "
                      "X4VR_PROJ_LIVE is not. The affine divides by the live "
                      "sx/sy and only exists inside the patches that read them, "
                      "so nothing was applied. Re-run with X4VR_PROJ_LIVE=1",
-                     s);
+                     r.source);
+            r.source = "off";
+            g_offaxis_latched.store(true, std::memory_order_release);
             return r;
         }
         r.on = true;
-        X4VR_LOG("offaxis: eye0 l=%.2f r=%.2f u=%.2f d=%.2f deg -> "
-                 "ax_num=%.5f bx=%+.5f ay_num=%.5f by=%+.5f; eye1 mirrored -> "
-                 "bx=%+.5f. A_x is ax_num/sx per draw, so at sx=%.5f "
-                 "(fov %.4f) this reads A_x=%.4f",
-                 a[0], a[1], a[2], a[3], r.eye[0].ax_num, r.eye[0].bx,
-                 r.eye[0].ay_num, r.eye[0].by, r.eye[1].bx, assumed_proj_sx(),
-                 2.0f * std::atan(1.0f / assumed_proj_sx()) *
-                     57.2957795130823f / 73.7399f,
+        r.half_needed = x4vr::union_half_angle(f, 2);
+        const float k = 57.2957795130823f;
+        X4VR_LOG("offaxis: target from %s — eye0 l=%.2f r=%.2f u=%.2f d=%.2f, "
+                 "eye1 l=%.2f r=%.2f u=%.2f d=%.2f deg",
+                 r.source, a[0][0] * k, a[0][1] * k, a[0][2] * k, a[0][3] * k,
+                 a[1][0] * k, a[1][1] * k, a[1][2] * k, a[1][3] * k);
+        X4VR_LOG("offaxis: eye0 ax_num=%.5f bx=%+.5f ay_num=%.5f by=%+.5f, "
+                 "eye1 bx=%+.5f. A_x is ax_num/sx per draw, so at sx=%.5f this "
+                 "reads A_x=%.4f",
+                 r.eye[0].ax_num, r.eye[0].bx, r.eye[0].ay_num, r.eye[0].by,
+                 r.eye[1].bx, assumed_proj_sx(),
                  r.eye[0].ax_num / assumed_proj_sx());
+        // **The guard that can actually fail.** The affine re-projects what X4
+        // drew; it cannot invent geometry X4 culled. If X4's own half-angle is
+        // narrower than the union of the target frusta, the corners of the
+        // headset's field are fed by nothing and go black — and that reads as
+        // a compositor problem rather than as a field that was too small.
+        // Derived from the latched frusta, so it is a real comparison and not
+        // a restatement of the knob.
+        const float need = x4vr::x4_fov_for_half(r.half_needed);
+        const char *fe = getenv("X4VR_FOV");
+        const float have_fov = fe ? strtof(fe, nullptr) : 1.0f;
+        if (have_fov < need - 1e-3f)
+            X4VR_LOG("offaxis: WARNING — the target needs a union half-angle "
+                     "of %.2f deg, which is X4VR_FOV %.4f, but this run asks "
+                     "for %.4f. X4 draws a field %.2f deg narrower than the "
+                     "headset's, so the edges of each eye are fed by geometry "
+                     "X4 never rendered and will be black",
+                     r.half_needed * k, need, have_fov,
+                     (need - have_fov) * 73.7399f * 0.5f);
+        else
+            X4VR_LOG("offaxis: X4VR_FOV %.4f covers the target's union "
+                     "half-angle of %.2f deg (needs %.4f) — nothing the "
+                     "headset can see is outside what X4 drew",
+                     have_fov, r.half_needed * k, need);
+        g_offaxis_on.store(true, std::memory_order_relaxed);
+        g_offaxis_latched.store(true, std::memory_order_release);
         return r;
     }();
     return p;
@@ -4132,7 +4260,11 @@ VkResult create_shader_module_inner(
                          // else, so baked-sx is exactly the set of world
                          // modules left in X4's frustum while the rest move to
                          // the runtime's. Named on the line that counts them.
-                         offaxis_target().on
+                         // Peek, never latch. Latching here would fix the
+                         // target at the first NONWORLD module, which take 163
+                         // timestamps 12 ms before the first located frame --
+                         // the runtime would lose the race every run.
+                         g_offaxis_on.load(std::memory_order_relaxed)
                              ? " +offaxis (live-sx and mvp-sx only; baked-sx "
                                "keeps X4's frustum)"
                              : "");
@@ -7248,13 +7380,31 @@ struct VrState {
     // swapchain: it is the difference between "a session object exists" and
     // "the runtime is asking for pixels", and take 114b hung on the gap.
     std::atomic<bool> loop_live{false};
+
+    // Task #35 piece 2. The runtime's own per-eye frusta, captured from the
+    // first located frame and then immutable: the affine's coefficients are
+    // baked into shader modules and cannot follow a value that moves. Written
+    // once by the VR thread, published with a release store, read by
+    // offaxis_target() on whichever thread patches the first world module.
+    //
+    // A later frame that disagrees is logged rather than applied -- see the
+    // capture site for why that is the honest response and not laziness.
+    std::atomic<bool> fov_seen{false};
+    float fov_rad[2][4] = {};   // [eye] = {left, right, up, down}
+    std::atomic<uint32_t> fov_drift{0};
 };
 
-// The field we DECLARE to the compositor, which must be the field X4 actually
-// rendered or the world comes out the wrong size. X4's half-angle follows
-// X4VR_FOV by the measured law `full degrees = X4VR_FOV * 73.7399`, so this is
-// derived from the same knob rather than from a second constant that could
-// drift away from it.
+// The field we declare WHEN THE OFF-AXIS AFFINE IS OFF, which must then be the
+// field X4 actually rendered or the world comes out the wrong size. X4's
+// half-angle follows X4VR_FOV by the measured law
+// `full degrees = X4VR_FOV * 73.7399`, so this is derived from the same knob
+// rather than from a second constant that could drift away from it.
+//
+// With the affine on (task #35 piece 2) this is not what is declared: the
+// affine has re-projected X4's symmetric field into the target frusta, so the
+// target is what the compositor must be told about. See offaxis_target() —
+// the declaration and the shader coefficients come from one latched object
+// precisely so that they cannot be sourced differently.
 //
 // Deliberately NOT read back from X4's projection: the layer sees several
 // cameras per frame with sx from 0.75 to 3.78, and picking one of those is the
@@ -7274,6 +7424,16 @@ inline XrFovf vr_declared_fov() {
 }
 const XrFovf g_vr_fov = vr_declared_fov();
 VrState g_vrs;
+
+// Task #35 piece 2. Forward-declared up with offaxis_target(), which is the
+// only caller: it needs the runtime's frusta at shader-patch time and must not
+// block waiting for them.
+bool vr_located_fov(float out[2][4]) {
+    if (!g_vr || !g_vrs.fov_seen.load(std::memory_order_acquire))
+        return false;
+    memcpy(out, g_vrs.fov_rad, sizeof(g_vrs.fov_rad));
+    return true;
+}
 
 void vr_say(void *, const char *s) { X4VR_LOG("%s", s); }
 
@@ -7380,15 +7540,31 @@ bool vr_begin_blit(VkSwapchainKHR x4sc) {
         // renders and what we declare shows up as a world that is subtly the
         // wrong size rather than as an error.
         const char *knob = getenv("X4VR_FOV");
-        X4VR_LOG("vr: declaring a symmetric field of +-%.2f deg per eye, from "
-                 "X4VR_FOV=%s%s. The runtime's own views are canted (the FOV "
-                 "centre is 15.04 deg out), and it honours ours instead — "
-                 "probe run 3 confirmed that on hardware.",
-                 g_vr_fov.angleRight * 57.2957795130823f,
-                 knob ? knob : "1.0",
-                 knob ? "" : " (UNSET — X4 is at its default 73.74 deg field, "
-                             "which is narrower than the headset's; set "
-                             "X4VR_FOV=1.4917 to cover it)");
+        const OffAxisPair &oat = offaxis_target();
+        const float k = 57.2957795130823f;
+        if (oat.on)
+            X4VR_LOG("vr: declaring the CANTED field the affine was baked for "
+                     "(%s) — eye0 l=%.2f r=%.2f u=%.2f d=%.2f, eye1 l=%.2f "
+                     "r=%.2f u=%.2f d=%.2f deg. Same source as the shader "
+                     "coefficients, which is the only thing that makes the "
+                     "pair correct; X4 still renders a symmetric %.2f deg "
+                     "half-field and the affine re-projects it.",
+                     oat.source, oat.fov[0].angleLeft * k,
+                     oat.fov[0].angleRight * k, oat.fov[0].angleUp * k,
+                     oat.fov[0].angleDown * k, oat.fov[1].angleLeft * k,
+                     oat.fov[1].angleRight * k, oat.fov[1].angleUp * k,
+                     oat.fov[1].angleDown * k, g_vr_fov.angleRight * k);
+        else
+            X4VR_LOG("vr: declaring a symmetric field of +-%.2f deg per eye, "
+                     "from X4VR_FOV=%s%s. No off-axis affine this run, so "
+                     "render and declaration are both symmetric and agree. "
+                     "The runtime's own views are canted (the FOV centre is "
+                     "15.04 deg out) and it honours ours instead — probe run 3 "
+                     "confirmed that on hardware.",
+                     g_vr_fov.angleRight * k, knob ? knob : "1.0",
+                     knob ? "" : " (UNSET — X4 is at its default 73.74 deg "
+                                 "field, which is narrower than the headset's; "
+                                 "set X4VR_FOV=1.4917 to cover it)");
         g_vrs.sc_ready.store(true, std::memory_order_relaxed);
     }
 
@@ -7447,6 +7623,54 @@ void vr_thread() {
         XrView views[2] = {};
         XrViewStateFlags flags = 0;
         const bool have = x4vr::xr::locate_views(g_vrs.session, views, 2, &flags);
+        // Task #35 piece 2: capture the runtime's frusta on the FIRST located
+        // frame, so the affine has them before X4 creates its first world
+        // shader module. Take 163's timing says that is comfortable -- first
+        // located frame at t+0.007 s, first world module at t+0.8 s -- but the
+        // margin is not a guarantee, which is why offaxis_target() has a
+        // named fallback rather than assuming it wins.
+        if (have && !g_vrs.fov_seen.load(std::memory_order_acquire)) {
+            for (uint32_t e = 0; e < 2; e++) {
+                g_vrs.fov_rad[e][0] = views[e].fov.angleLeft;
+                g_vrs.fov_rad[e][1] = views[e].fov.angleRight;
+                g_vrs.fov_rad[e][2] = views[e].fov.angleUp;
+                g_vrs.fov_rad[e][3] = views[e].fov.angleDown;
+            }
+            g_vrs.fov_seen.store(true, std::memory_order_release);
+            const float k = 57.2957795130823f;
+            X4VR_LOG("vr fov: runtime reports eye0 l=%.2f r=%.2f u=%.2f "
+                     "d=%.2f, eye1 l=%.2f r=%.2f u=%.2f d=%.2f deg — latched "
+                     "as the off-axis target for this run",
+                     g_vrs.fov_rad[0][0] * k, g_vrs.fov_rad[0][1] * k,
+                     g_vrs.fov_rad[0][2] * k, g_vrs.fov_rad[0][3] * k,
+                     g_vrs.fov_rad[1][0] * k, g_vrs.fov_rad[1][1] * k,
+                     g_vrs.fov_rad[1][2] * k, g_vrs.fov_rad[1][3] * k);
+        } else if (have) {
+            // Drift. NOT applied: the coefficients are already baked into
+            // however many shader modules X4 has compiled, and re-latching
+            // would leave the modules patched before the change in one frustum
+            // and those after it in another. Counted and reported, because a
+            // runtime whose frusta move is a fact about this hardware that the
+            // design would have to answer, and silence here would hide it.
+            const float *f0 = g_vrs.fov_rad[0];
+            if (std::fabs(views[0].fov.angleLeft - f0[0]) > 1e-3f ||
+                std::fabs(views[0].fov.angleRight - f0[1]) > 1e-3f ||
+                std::fabs(views[0].fov.angleUp - f0[2]) > 1e-3f ||
+                std::fabs(views[0].fov.angleDown - f0[3]) > 1e-3f) {
+                const uint32_t n =
+                    g_vrs.fov_drift.fetch_add(1, std::memory_order_relaxed);
+                if (n == 0)
+                    X4VR_LOG("vr fov: WARNING — eye0's frustum MOVED to "
+                             "l=%.2f r=%.2f u=%.2f d=%.2f deg. The affine is "
+                             "baked and still uses the latched values, so the "
+                             "declaration and the pixels now disagree by that "
+                             "difference.",
+                             views[0].fov.angleLeft * 57.2957795130823f,
+                             views[0].fov.angleRight * 57.2957795130823f,
+                             views[0].fov.angleUp * 57.2957795130823f,
+                             views[0].fov.angleDown * 57.2957795130823f);
+            }
+        }
         // Task #38: submit the eye image, once X4's present thread has put one
         // in the swapchain. Until then this is still a zero-layer frame, which
         // is what takes 112/113 ran.
@@ -7529,10 +7753,20 @@ void vr_thread() {
                 pv[e].pose.orientation.z = q[2];
                 pv[e].pose.orientation.w = q[3];
                 pv[e].pose.position = views[e].pose.position;
-                // Our own symmetric field, not the runtime's canted one.
-                // Monado reads this field to build its UV-to-tangent map, and
-                // probe run 3 confirmed on hardware that it honours it.
-                pv[e].fov = g_vr_fov;
+                // Task #35 piece 2: the frustum the AFFINE was baked for, from
+                // whichever source offaxis_target() latched. The two must name
+                // the same rectangle or the compositor maps our pixels onto a
+                // field they were not computed for -- and every piece would
+                // still look individually correct.
+                //
+                // With the affine off this falls back to our own symmetric
+                // field, which is what takes 112-163 declared: X4 renders
+                // symmetric, we declare symmetric, self-consistent. Monado
+                // reads this to build its UV-to-tangent map and probe run 3
+                // confirmed on hardware that it honours what we give it rather
+                // than substituting its own.
+                const OffAxisPair &oat = offaxis_target();
+                pv[e].fov = oat.on ? oat.fov[e] : g_vr_fov;
                 pv[e].subImage.swapchain = g_vrs.sc.handle;
                 pv[e].subImage.imageRect = {
                     {0, 0},
@@ -8007,6 +8241,7 @@ void vr_shutdown() {
 #else  // X4VR_HAVE_OPENXR
 
 const bool g_vr = false;
+bool vr_located_fov(float[2][4]) { return false; }
 bool vr_open_runtime() { return false; }
 void vr_report(const char *) {}
 void vr_shutdown() {}

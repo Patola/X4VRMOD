@@ -701,12 +701,51 @@ def main(path):
                 # negative control and must be indistinguishable from the same
                 # run with the knob unset.
                 m_oa = re.search(r"X4VR_OFFAXIS=\"?([-\d.,]+)\"?", run or "")
-                if m_oa:
+                # Piece 2: the target can also come from the runtime, with no
+                # knob in the run line at all. Either way the layer names the
+                # source it latched, and the declaration is built from the same
+                # object -- so the scorer reports the source rather than
+                # re-deriving what the picture should show from the env.
+                src = re.search(r"offaxis: target from ([^—]+) —", text)
+                # The piece-2 failure mode, and the ONLY line that marks it: a
+                # VR run whose target should have come from the runtime and did
+                # not. Keyed on the layer's own sentence rather than on
+                # "X4VR_VR=1 and no offaxis line", which would fail every run
+                # from a build that predates the feature.
+                if "offaxis: OFF — X4VR_VR=1 but no view had been located" in text:
+                    fails.append(
+                        "X4VR_VR=1 and no view had been located when the first "
+                        "world shader was patched, so the off-axis target fell "
+                        "back to X4's symmetric field. The picture is "
+                        "self-consistent — render and declaration agree — but "
+                        "this run says nothing about the runtime's frusta. "
+                        "Take 163 timed the margin at 0.8 s, so losing it "
+                        "means the runtime came up slower than that here")
+                if src:
+                    print(f"offaxis  target from {src.group(1).strip()}; the "
+                          f"compositor is told the same frusta the shader "
+                          f"coefficients were baked from")
+                # The layer's own three verdicts, carried through verbatim
+                # rather than re-derived. Each is computed from the LATCHED
+                # frusta, which the scorer does not have; restating them from
+                # the env would be a different calculation wearing the same
+                # words.
+                for pat, label in (
+                        (r"offaxis: WARNING — ([^\n]*)", "warn  "),
+                        (r"offaxis: (X4VR_FOV [\d.]+ covers[^\n]*)",
+                         "offaxis  "),
+                        (r"vr fov: WARNING — ([^\n]*)", "warn  ")):
+                    m = re.search(pat, text)
+                    if m:
+                        print(label + m.group(1).strip()[:240])
+                if m_oa or src:
                     ref = re.search(
                         r"offaxis: eye0 [^\n]*ax_num=([-\d.]+) bx=([-+\d.]+) "
                         r"ay_num=([-\d.]+) by=([-+\d.]+)", text)
                     refused = re.search(r"offaxis: REFUSED[^\n]*", text)
-                    if not ref:
+                    if not ref and not m_oa:
+                        pass  # the runtime path already reported above
+                    elif not ref:
                         # A knob that never ran cannot refute anything, and a
                         # run graded as if it had is how thirteen takes of
                         # nulls happened once already. The layer prints the
