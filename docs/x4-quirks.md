@@ -2308,3 +2308,59 @@ the dead end the compute-gap note assumes. Decidable with
 
 So the honest state is: **the affine does not reach the sky, and whether it
 *can* is unknown** — not "cannot", which is what I said.
+
+## The sky DOES carry the affine — retracting the previous two sections
+
+Patola asked about the nebula: the star he circled sits on blue nebula in one
+eye and on black in the other, "which makes it appear like very different
+images". Measuring that properly overturns what I wrote above.
+
+**Template-matching a patch of the right eye inside the left eye**, four
+independent pure-sky patches, no HUD and no cockpit in any of them:
+
+    run A (affine off)   dx = -2, -2, -2, +51     (peaks 0.94, 0.95, 0.98, 0.80)
+    run B (affine on)    dx = +251, +383, +369, +385  (peaks 0.65, 0.78, 0.71, 0.66)
+
+Run A: the sky is identical in both eyes, which is right — the shear is a
+translation and parallax at infinity is zero. Run B: the sky is displaced by
+~342 px plus the `A_x` stretch, varying with position exactly as the affine
+does. **The sky carries the per-eye affine.**
+
+**Why I got this wrong.** The point-set test that said otherwise searched `dx`
+with **`dy` pinned at 0**, and the affine also displaces vertically. The correct
+alignment was never evaluated, so a chance peak at `dx=+4` won. Two other
+region-based tests were confounded by mixed content — the star detector picks up
+distant ships and station lights, and any crop containing cockpit edges is
+dominated by them. **Image forensics was the wrong instrument for a question the
+layer can answer directly**, and I should have reached for the layer's own
+classification instead of measuring pixels three times.
+
+**What Patola actually saw is correct behaviour.** In run B the two eye images
+*should* look very different side by side, because each is drawn for a
+differently canted frustum. The bright star at a given screen position in the
+right eye is **not the same star** as the one at that position in the left; the
+whole sky has moved ~370 px between them, so its background differs. Judging the
+flat SBS mirror by comparing halves is misleading for a canted render — that is
+precisely the work the compositor undoes with the declared frusta.
+
+### The list is TWO items, not three
+
+`mod-0266`/`mod-0267` bake a cubemap and are irrelevant; whatever draws the sky
+to the screen goes through a World module and is already handled. **The compute
+skybox is off the list, and it should never have been on it** — I put it there
+from a doc line I had not verified, and then measured badly enough to confirm my
+own error.
+
+What remains, both real and both seen:
+
+1. **Screen-space UI.** ~52 modules classify NonWorld in take 165b and are given
+   `K_nonworld` = identity, so they stay in X4's symmetric frame while the
+   declaration says canted: 30.07° of divergence. This is #30's canvas problem,
+   and #30's machinery is the right shape because it chooses per *pass* — the
+   fullscreen post passes must keep their identity while the UI pass does not.
+2. **The deferred reconstruction.** `patch_fragment_invproj_eye` composes
+   `T(d)·M_invprojection` for the shear; the affine is a further transform on
+   `gl_Position`, so `gl_FragCoord` no longer corresponds to the NDC that matrix
+   expects. Undoing it is one more constant composition — `A⁻¹` on the NDC before
+   the inverse projection — and `A` is latched, so it is known at patch time.
+   The menu's per-eye shadows are this.
