@@ -725,6 +725,46 @@ def main(path):
                     print(f"offaxis  target from {src.group(1).strip()}; the "
                           f"compositor is told the same frusta the shader "
                           f"coefficients were baked from")
+                # **The check that would have failed take 165b before anyone
+                # put the headset on.** The affine reaches World modules only.
+                # Everything else -- every NonWorld module, the unsheared twin,
+                # the skybox's fullscreen shader, the loading screen -- stays in
+                # X4's symmetric frame, so it sits at image centre in both eyes.
+                # Declared canted, image centre IS the frustum centre, and the
+                # two centres are mirrored: the eyes are asked to diverge by
+                # their separation. x4vr_view.hpp:291 records 30.07 deg for this
+                # runtime's frusta as the unfusable negative control, and piece
+                # 2 reproduced it for every draw the affine misses.
+                #
+                # Derived from the frusta the LOG carries, so it costs no run
+                # and cannot be fooled by the env disagreeing with what latched.
+                ang = re.search(
+                    r"offaxis: target from [^\n]*eye0 l=([-\d.]+) r=([-\d.]+) "
+                    r"u=([-\d.]+) d=([-\d.]+), eye1 l=([-\d.]+) r=([-\d.]+) ",
+                    text)
+                if ang and "X4VR_VR=1" in (run or ""):
+                    l0, r0, _u, _d, l1, r1 = (float(g) for g in ang.groups())
+                    def centre(a, b):
+                        return math.degrees(math.atan(
+                            (math.tan(math.radians(a)) +
+                             math.tan(math.radians(b))) / 2.0))
+                    c0, c1 = centre(l0, r0), centre(l1, r1)
+                    div = abs(c1 - c0)
+                    if div > 1.0:
+                        fails.append(
+                            f"the declared frusta are canted {c0:+.2f}° and "
+                            f"{c1:+.2f}°, and the affine reaches World modules "
+                            f"only — so the HUD, the skybox's fullscreen "
+                            f"shader, the unsheared twin and the loading "
+                            f"screen all sit at image centre in both eyes and "
+                            f"are asked to DIVERGE by {div:.2f}°. Nobody fuses "
+                            f"that; x4vr_view.hpp:291 already records it as "
+                            f"the negative control. The world is correct and "
+                            f"everything else is not")
+                    else:
+                        print(f"offaxis  declared frusta centre {c0:+.2f}° / "
+                              f"{c1:+.2f}° — screen-locked content diverges by "
+                              f"{div:.2f}°, which is fusible")
                 # The layer's own three verdicts, carried through verbatim
                 # rather than re-derived. Each is computed from the LATCHED
                 # frusta, which the scorer does not have; restating them from
@@ -1227,11 +1267,21 @@ def main(path):
                 f"had been driven — the gate dropped out mid-run, so those "
                 f"frames were submitted world-locked while head-look was live. "
                 f"cam_valid went back to 0: check `steering`, not X4's camera")
-        elif not driven:
+        elif not driven and "X4VR_HEADLOOK=1" in (run or ""):
             fails.append(
                 "the pose was never driven — every frame went to the runtime "
                 "world-locked. Either head-look never armed or `steering` never "
                 "reached the layer")
+        elif not driven:
+            # Gate on intent. Takes 165a/b deliberately dropped X4VR_HEADLOOK
+            # so the off-axis question would not be confounded by head-look
+            # holding MOUSELOOK, and this check failed both of them for not
+            # answering a question they did not ask. That is the take-103
+            # mistake — the fourth time in this file — and a scorer that FAILs
+            # a correctly-designed run is one people stop reading.
+            print("pose  world-locked all run, and X4VR_HEADLOOK was not set — "
+                  "this run says nothing about head tracking, which is not a "
+                  "defect in it")
 
     # --- the map gate ------------------------------------------------------
     #
