@@ -2832,6 +2832,82 @@ produce SPIR-V that passes `spirv-val`**, so with the knob on they move to
 If P83 fails while P82 holds, `p1_star` is not what Patola is seeing and the sky
 question reopens with the starfield already excluded.
 
+### Take 172 — P82–P85 all held, and #48 is done
+
+`X4VR_SHEAR_LIGHTS=1`, everything else identical to 171. From the log:
+`live-sx` 284 → **296**, `clip` 22 → **1**, `cam-pos=0`, and the new check prints
+*"no camera-positioned module draws uncanted in a stereo pass"*. Patola, on the
+headset: *"lighting perfect, stars and sun and planets — the entire backdrop now
+fuses almost perfectly"*, and **the shadows did not move** (P85, the one that
+would have sent the knob back off). P84 held too: the light volumes are the same
+set as take 60's unexplained additive lift in the dark, and the lighting is now
+described as perfect rather than merely unchanged.
+
+**P82 was mis-phrased and is recorded wrong rather than corrected away.** It
+predicted `cam-pos=18`. `cam-pos` counts the *disagreement* between the narrow
+and wide readings, so turning the knob on drives it to 0 **by construction** — a
+prediction about an instrument whose definition I had written an hour earlier.
+The substantive half (clip collapses, live-sx rises, nothing uncanted in a stereo
+pass) is what carried the claim, and it held.
+
+`X4VR_SHEAR_LIGHTS=1` is now part of the known-good state. **A state is code AND
+knobs** — any run from here that omits it is not comparable to 172.
+
+### The Sun is brighter in the right eye — task #49
+
+The one exception Patola reports: *"the only exception is the Sun; the right eye
+is consistently brighter than the left eye. Not much, but very perceivable, and
+changing angles and directions doesn't change this."*
+
+Angle-independent and eye-fixed, which rules out anything positional. What the
+shader source allows:
+
+    OUT_RT0.rgb = IO_lightcolor.rgb * texture(S_diffuse_map, newUV, U_mipbias).rgb
+    OUT_RT0.rgb = mul(vec4(OUT_RT0.rgb,1), make_ColorMatrix(...)).rgb
+
+`star.frag.glsl` has **no view-dependent term at all**. `IO_lightcolor` comes
+from instance data, the colour matrix is uniforms, and `newUV` is a varying into
+an 8-tile atlas. The only input that can differ between eyes is the **texture
+fetch itself** — and `mod-0227` samples `SRGB_sampler2D` at **set 0, binding 7**,
+one of exactly the two bindless tables the per-eye index offset rewrites
+(`element = index + gl_ViewIndex * OFFSET`, 657 modules APPLIED in this run).
+
+That makes the bindless redirect the leading candidate, but **it is not yet
+evidence, and the mechanism does not obviously produce "brighter"**: the mirror
+installs *"a view of layer 1 where the image is doubled and the identical
+descriptor otherwise"*, so a static atlas should mirror to an identical
+descriptor and a doubled image's unwritten layer 1 would read black, not bright.
+Two ways to get brightness out of it that have NOT been checked — an sRGB decode
+skipped on the twin view (`SRGB_sampler2D` is the name, and sRGB→linear on a
+near-white texel is ~14%, which matches "not much but very perceivable"), and
+the 159 460 284 slots the mirror reports as *undecided*.
+
+**Why it only shows now:** before take 172, `p1_star` drew MONO — the same
+pixels in both eyes — so a per-eye difference in its texture fetch could not
+appear. The fragment patch was always applied to it. This is very likely an
+old defect newly *visible*, not a new one, which also means it is not a
+regression from #48.
+
+Two prior wrong identifications this session (`mod-0267` as the skybox,
+`p1_star` as a light volume from a 4-of-6 property match) both came from
+believing a plausible mechanism before eliminating it. So: **eliminate, do not
+instrument.**
+
+- **P86** — with `X4VR_BINDLESS_PATCH=0` the Sun reads the same brightness in
+  both eyes. Confirms the per-eye texture redirect is the cause and nothing
+  else in the pipeline is; the follow-up is then *which descriptor*, not
+  *whether*.
+- **P87 (the one that would hurt)** — if the Sun stays brighter in the right eye
+  with the redirect off, the bindless path is excluded outright and the cause is
+  downstream of the draw: the sRGB resolve, the tonemap mask, or FSR. That
+  reopens the per-eye brightness question last measured at take 60, where the
+  sky matched to **0.2%** and only shading surfaces differed.
+
+Expect the rest of the frame to regress in that run — `X4VR_BINDLESS_PATCH=0`
+puts the HUD composite back to sampling view 0 in both eyes (take 58). That is
+the knob doing its job and is not the thing being judged. **The only question is
+the Sun.**
+
 ### Piece 3 is NOT next
 
 The 1092×1180 render extent (0.65× area) stays parked until the two items above
