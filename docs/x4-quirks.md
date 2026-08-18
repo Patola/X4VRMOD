@@ -2660,6 +2660,74 @@ each other, and I published the wrong one. For "which module drew this", add a
 layer-side instrument that logs its own classification against what it binds —
 do not do image forensics. See docs above and the retraction for the details.
 
+### Where this stands after takes 166–171 (READ THIS BEFORE PLANNING ANYTHING)
+
+**#39 and #40 are proven in the headset, not just offline.** Take 169b, with
+`X4VR_OFFAXIS="-54,40,44,-55"`: the cockpit, the radar and the speed meter all
+fuse. Those are exactly what take 165b broke. World geometry through the affine
+and screen-locked UI through the canvas both land correctly.
+
+**The cant itself is confirmed working, from inside.** Patola, closing one eye
+at a time in 169b, described the left eye extending much further left and
+stopping nearer the middle on the right, and the right eye doing the mirror.
+That *is* the canted frustum pair (−54/+40 and −40/+54), with binocular overlap
+across the central ±40° where he reports correct depth. It is not a defect and
+must not be filed as one. It also explains the weapon brackets appearing in one
+eye only: they are anchored out in the monocular wing, which is #45's problem,
+not a stereo one.
+
+**Four takes were lost to one race, and it is not winnable.** `X4VR_OFFAXIS=runtime`
+must latch at the first shader module (coefficients are baked at
+`vkCreateShaderModule`), X4 compiles that module ~1 ms after creating its
+device, and the runtime needs ~8 ms from a standing start. 166b latched before
+the session existed; 167b's bounded wait blocked the call that spawns the
+session thread; 168b started the thread from the latch and it still executed
+nothing for 5 s, because `vr_session_thread` re-enters the Vulkan loader while
+X4's thread is parked inside `vkCreateShaderModule`. `VrState` already warned
+that re-entering the loader from inside its own chain calls is a hazard; I
+quoted that warning in the commit that added the wait. **Use explicit angles.**
+Task #47 (cache the frusta between runs) is the real fix.
+
+**What is eliminated for the backdrop**, so nobody re-tests it: it is not the
+eye shear (169c at IPD 0.016 showed the same disconnect at a quarter of the
+disparity), not a module missing the affine at the aggregate level
+(`baked-sx=0`), and not wrong coefficients (they are `view_math`'s, logged).
+Take 170 also showed the unsheared `original` twin going only to rp #40/42/44/
+46/48 — five passes, the five shadow cascades, by design.
+
+**Take 170's instrument lied and its `path`/`affine` fields must not be read.**
+A missing pair of braces stamped `clip` over every module's real path; 1007
+lines agreed with each other and contradicted the counter four lines above.
+Fixed, and `score_run.py` now FAILs any run whose pipe inventory omits a path
+the patch-site counters say was used. Its other fields are sound, and they
+established that #40 reaches real draws (16 World + 8 NonWorld stages took the
+CANVAS variant) and that 48 procedural stages correctly did not.
+
+### Take 171 — exactly what to extract
+
+Same line as 170 with the name and log bumped. Measurement only; nothing to
+judge by eye. **Check `score_run.py` first** — if it reports the pipe inventory
+disagreeing with the patch-site counters, the instrument is lying again and
+nothing below is readable.
+
+Then, in order:
+
+1. `python3 tools/module_map.py /tmp/x4vr-take171.log` — per pass, which dumped
+   `mod-NNNN` drew it, how it classified, which path took it, whether it
+   carries the affine, and which variant the pipeline got.
+2. **Find the backdrop's pass.** Cross-reference `docs/frame-analysis.md`'s
+   frame inventory. Remember Patola's domain fact: X4's backdrop is **not one
+   layer** — its planets are reachable geometry ~2 h of flight away, so expect
+   several passes with different depth behaviour, and an argument that assumes
+   infinity holds only for the part actually at infinity. It also broke all
+   three previous attempts at this mod.
+3. **The two floating disks in the cockpit are the sharper probe.** They sit
+   inside geometry that fuses, so anything global is already excluded; the
+   difference is entirely which draw path they take. Look for a pass whose
+   modules differ from the cockpit's in path, affine or variant.
+4. The question to answer is one sentence: *which passes draw content that
+   reaches the screen without the affine, while the declaration is canted?*
+
 ### Piece 3 is NOT next
 
 The 1092×1180 render extent (0.65× area) stays parked until the two items above
