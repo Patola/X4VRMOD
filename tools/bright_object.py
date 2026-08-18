@@ -28,10 +28,24 @@ import sys
 
 
 def read_ppm(path):
+    """Binary PPM or PNG -- the layer writes PNG by default since take 176.
+
+    PNG because these dumps are photometry and PNG is lossless; a JPEG artefact
+    around a saturated Sun would sit exactly where the ratio is taken. It is
+    also ~5-10x smaller, which is what stopped the dumps freezing the game.
+    """
     with open(path, 'rb') as f:
         data = f.read()
+    if data.startswith(b'\x89PNG'):
+        try:
+            from PIL import Image
+        except ImportError:
+            raise SystemExit(f"{path}: PNG needs Pillow (pip install pillow), "
+                             f"or re-run the take with X4VR_DUMP_PPM=1")
+        im = Image.open(path).convert('RGB')
+        return im.width, im.height, im.tobytes()
     if not data.startswith(b'P6'):
-        raise SystemExit(f"{path}: not a binary PPM (P6)")
+        raise SystemExit(f"{path}: not a binary PPM (P6) or PNG")
     # header: P6 <w> <h> <maxval>, with # comments allowed between tokens
     tok, i = [], 2
     while len(tok) < 3:

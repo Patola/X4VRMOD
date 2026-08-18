@@ -5,7 +5,9 @@ set_target_properties(x4vr_layer PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/layer")
 # dl: the WSI probe reads SDL_GetCurrentVideoDriver through dlsym rather than
 # interposing it -- see log_sdl_backend_once().
-target_link_libraries(x4vr_layer PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+find_package(ZLIB REQUIRED)   # lossless PNG for the image dumps (task #49)
+target_link_libraries(x4vr_layer PRIVATE Threads::Threads ${CMAKE_DL_LIBS}
+                      ZLIB::ZLIB)
 
 # OpenXR: headers at build time, loader dlopen'd at run time. The layer is
 # injected into X4's process, so a DT_NEEDED on libopenxr_loader would be X4

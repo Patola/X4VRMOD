@@ -15,6 +15,7 @@
 // intra-run offset-stability question before Phase 3 starts writing to it.
 
 #include <vulkan/vulkan.h>
+#include <zlib.h>
 #include <vulkan/vk_layer.h>
 
 #include <dlfcn.h>
@@ -6928,26 +6929,109 @@ float half_to_float(uint16_t h) {
 // Reinhard then gamma, so the whole HDR range shows structure rather than
 // clipping to white wherever the sun is -- which is exactly the region under
 // suspicion.
-void write_ppm(const char *path, const uint16_t *px, uint32_t w, uint32_t h) {
+// Lossless PNG, because these dumps are PHOTOMETRY. tools/bright_object.py
+// computes luminance ratios off them and a JPEG artefact around a saturated Sun
+// would land exactly where the measurement is taken -- Patola asked for jpg or
+// png and png is the half of that question that keeps the data.
+//
+// Take 176 wrote ~3 GB of uncompressed PPM in bursts and froze the game for
+// 30 s at a time, with 10 usable frames in between; he got the Sun in shot by
+// luck. A 4224x4224 frame is 53 MB raw and 4-8 MB as PNG, and level 1 costs
+// far less time than writing the difference.
+//
+// Emits one IDAT from a single compress2 call: simple, and the sizes here are
+// nowhere near the point where streaming would matter.
+void write_png_rgb(const char *path, const uint8_t *rgb, uint32_t w,
+                   uint32_t h) {
+    std::vector<uint8_t> raw((size_t)h * (1 + (size_t)w * 3));
+    for (uint32_t y = 0; y < h; y++) {
+        raw[(size_t)y * (1 + (size_t)w * 3)] = 0; // filter: none
+        memcpy(&raw[(size_t)y * (1 + (size_t)w * 3) + 1],
+               rgb + (size_t)y * w * 3, (size_t)w * 3);
+    }
+    uLongf cap = compressBound((uLong)raw.size());
+    std::vector<uint8_t> z(cap);
+    if (compress2(z.data(), &cap, raw.data(), (uLong)raw.size(), 1) != Z_OK)
+        return;
     FILE *f = fopen(path, "wb");
     if (!f)
         return;
+    auto be32 = [](uint8_t *o, uint32_t v) {
+        o[0] = v >> 24; o[1] = v >> 16; o[2] = v >> 8; o[3] = (uint8_t)v;
+    };
+    auto chunk = [&](const char *tag, const uint8_t *d, uint32_t n) {
+        uint8_t hdr[4];
+        be32(hdr, n);
+        fwrite(hdr, 1, 4, f);
+        fwrite(tag, 1, 4, f);
+        if (n)
+            fwrite(d, 1, n, f);
+        uLong c = crc32(0, (const Bytef *)tag, 4);
+        if (n)
+            c = crc32(c, (const Bytef *)d, n);
+        uint8_t cb[4];
+        be32(cb, (uint32_t)c);
+        fwrite(cb, 1, 4, f);
+    };
+    static const uint8_t sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+    fwrite(sig, 1, 8, f);
+    uint8_t ihdr[13];
+    be32(ihdr, w);
+    be32(ihdr + 4, h);
+    ihdr[8] = 8;   // bit depth
+    ihdr[9] = 2;   // colour type: truecolour RGB
+    ihdr[10] = ihdr[11] = ihdr[12] = 0;
+    chunk("IHDR", ihdr, 13);
+    chunk("IDAT", z.data(), (uint32_t)cap);
+    chunk("IEND", nullptr, 0);
+    fclose(f);
+}
+
+// PPM stays reachable for anything that wants a header it can parse in four
+// lines of awk: X4VR_DUMP_PPM=1.
+// Opt-in, because it is the expensive one: without it, X4VR_MV_DUMP is only a
+// prefix and dumps happen where they were explicitly asked for.
+const bool g_mv_dump_auto = [] {
+    const char *e = getenv("X4VR_MV_DUMP_AUTO");
+    return e && *e && *e != '0';
+}();
+
+const bool g_dump_ppm = [] {
+    const char *e = getenv("X4VR_DUMP_PPM");
+    return e && *e && *e != '0';
+}();
+
+/// `path` has NO extension: this appends .png or .ppm to match what it wrote,
+/// so a file never claims a format it does not hold.
+void emit_rgb(const char *path, const std::vector<uint8_t> &rgb, uint32_t w,
+              uint32_t h) {
+    char full[544];
+    snprintf(full, sizeof full, "%s.%s", path, g_dump_ppm ? "ppm" : "png");
+    if (!g_dump_ppm) {
+        write_png_rgb(full, rgb.data(), w, h);
+        return;
+    }
+    FILE *f = fopen(full, "wb");
+    if (!f)
+        return;
     fprintf(f, "P6\n%u %u\n255\n", w, h);
-    std::vector<uint8_t> row((size_t)w * 3);
-    for (uint32_t y = 0; y < h; y++) {
-        for (uint32_t x = 0; x < w; x++) {
+    fwrite(rgb.data(), 1, rgb.size(), f);
+    fclose(f);
+}
+
+void write_ppm(const char *path, const uint16_t *px, uint32_t w, uint32_t h) {
+    std::vector<uint8_t> rgb((size_t)w * h * 3);
+    for (uint32_t y = 0; y < h; y++)
+        for (uint32_t x = 0; x < w; x++)
             for (uint32_t c = 0; c < 3; c++) {
                 float v = half_to_float(px[((size_t)y * w + x) * 4 + c]);
                 if (!(v > 0.0f))
                     v = 0.0f;
                 v = v / (1.0f + v);
-                row[(size_t)x * 3 + c] =
+                rgb[((size_t)y * w + x) * 3 + c] =
                     (uint8_t)(powf(v, 1.0f / 2.2f) * 255.0f + 0.5f);
             }
-        }
-        fwrite(row.data(), 1, row.size(), f);
-    }
-    fclose(f);
+    emit_rgb(path, rgb, w, h);
 }
 
 // Two-channel half-float: X4's #60 and #61, which are the G-buffer's packed
@@ -6961,23 +7045,15 @@ void write_ppm(const char *path, const uint16_t *px, uint32_t w, uint32_t h) {
 // monotonic over the whole real line, 0 maps to mid-grey, and no value is
 // clipped. Blue is left at zero so the encoding cannot be mistaken for colour.
 void write_ppm_rg(const char *path, const uint16_t *px, uint32_t w, uint32_t h) {
-    FILE *f = fopen(path, "wb");
-    if (!f)
-        return;
-    fprintf(f, "P6\n%u %u\n255\n", w, h);
-    std::vector<uint8_t> row((size_t)w * 3);
-    for (uint32_t y = 0; y < h; y++) {
-        for (uint32_t x = 0; x < w; x++) {
+    std::vector<uint8_t> rgb((size_t)w * h * 3, 0);
+    for (uint32_t y = 0; y < h; y++)
+        for (uint32_t x = 0; x < w; x++)
             for (uint32_t c = 0; c < 2; c++) {
                 const float v = half_to_float(px[((size_t)y * w + x) * 2 + c]);
-                const float s = 0.5f + 0.5f * (v / (1.0f + fabsf(v)));
-                row[(size_t)x * 3 + c] = (uint8_t)(s * 255.0f + 0.5f);
+                const float t = 0.5f + 0.5f * (v / (1.0f + fabsf(v)));
+                rgb[((size_t)y * w + x) * 3 + c] = (uint8_t)(t * 255.0f + 0.5f);
             }
-            row[(size_t)x * 3 + 2] = 0;
-        }
-        fwrite(row.data(), 1, row.size(), f);
-    }
-    fclose(f);
+    emit_rgb(path, rgb, w, h);
 }
 
 // The 8-bit BGRA targets -- the whole late half of the frame, #103 included.
@@ -6985,20 +7061,14 @@ void write_ppm_rg(const char *path, const uint16_t *px, uint32_t w, uint32_t h) 
 // one the dumper could not write.
 void write_ppm8(const char *path, const uint8_t *px, uint32_t w, uint32_t h,
                 bool bgra) {
-    FILE *f = fopen(path, "wb");
-    if (!f)
-        return;
-    fprintf(f, "P6\n%u %u\n255\n", w, h);
-    std::vector<uint8_t> row((size_t)w * 3);
-    for (uint32_t y = 0; y < h; y++) {
+    std::vector<uint8_t> rgb((size_t)w * h * 3);
+    for (uint32_t y = 0; y < h; y++)
         for (uint32_t x = 0; x < w; x++) {
             const uint8_t *p = px + ((size_t)y * w + x) * 4;
             for (uint32_t c = 0; c < 3; c++)
-                row[(size_t)x * 3 + c] = bgra ? p[2 - c] : p[c];
+                rgb[((size_t)y * w + x) * 3 + c] = bgra ? p[2 - c] : p[c];
         }
-        fwrite(row.data(), 1, row.size(), f);
-    }
-    fclose(f);
+    emit_rgb(path, rgb, w, h);
 }
 
 uint64_t fnv1a(const void *p, size_t n) {
@@ -7403,8 +7473,19 @@ void probe_collect(DeviceData *d, VkQueue queue) {
         std::lock_guard<std::mutex> lock(dump_mu);
         dumps = dumps_by_img[g_probe.serial];
     }
+    // **A path is not a trigger.** X4VR_MV_DUMP names where dumps go; it used
+    // to also SWITCH ON an opportunistic dump of every image whose layers
+    // differ. Take 176 set it to give the present dumps a per-run prefix and
+    // got ~20 extra image pairs -- gigabytes of uncompressed writes in bursts
+    // -- on top of the probe's own stalls. The game froze for 30 s at a time
+    // with about 10 usable frames in between, and Patola got the Sun in shot
+    // by luck.
+    //
+    // Exactly the coupling fixed one commit earlier, where X4VR_BINDLESS_PATCH
+    // silently disabled X4VR_PROJ_INVPROJ. Same shape, same session: one knob
+    // doing two jobs, the second undocumented.
     if (g_mv_dump && dumps < (named ? kMaxDumps : 1u) &&
-        (named || (!have_want && h0 != h1))) {
+        (named || (g_mv_dump_auto && !have_want && h0 != h1))) {
         const bool hdr = g_probe.format == VK_FORMAT_R16G16B16A16_SFLOAT;
         const bool rg16f = g_probe.format == VK_FORMAT_R16G16_SFLOAT;
         const bool bgra8 = g_probe.format == VK_FORMAT_B8G8R8A8_SRGB ||
@@ -7420,7 +7501,7 @@ void probe_collect(DeviceData *d, VkQueue queue) {
             char p[512];
             for (int L = 0; L < 2; L++) {
                 const void *src = L ? l1 : l0;
-                snprintf(p, sizeof p, "%s-img%u-n%u-layer%d.ppm", g_mv_dump,
+                snprintf(p, sizeof p, "%s-img%u-n%u-layer%d", g_mv_dump,
                          g_probe.serial, seq, L);
                 if (hdr)
                     write_ppm(p, (const uint16_t *)src, g_probe.w, g_probe.h);
@@ -7435,9 +7516,10 @@ void probe_collect(DeviceData *d, VkQueue queue) {
             // hold the same thing: reading "after rp #40" and "after rp #52"
             // as one measurement is how an intermediate state gets mistaken
             // for the finished frame.
-            X4VR_LOG("mv probe: wrote %s-img%u-n%u-layer{0,1}.ppm "
+            X4VR_LOG("mv probe: wrote %s-img%u-n%u-layer{0,1}.%s "
                      "(fmt %u, after rp #%u, %s)",
-                     g_mv_dump, g_probe.serial, seq, (unsigned)g_probe.format,
+                     g_mv_dump, g_probe.serial, seq,
+                     g_dump_ppm ? "ppm" : "png", (unsigned)g_probe.format,
                      g_probe.rp_serial, h0 != h1 ? "DIFFER" : "IDENTICAL");
         } else if (named) {
             // Named but unwritable is a fact worth one line: silence here
@@ -7740,7 +7822,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
             const uint64_t n = seq++;
             for (uint32_t l = 0; l < dump_layers; l++) {
                 char path[512];
-                snprintf(path, sizeof(path), "%s-present-n%llu-layer%u.ppm",
+                snprintf(path, sizeof(path), "%s-present-n%llu-layer%u",
                          g_mv_dump ? g_mv_dump : "/tmp/x4vr",
                          (unsigned long long)n, l);
                 write_ppm8(path,

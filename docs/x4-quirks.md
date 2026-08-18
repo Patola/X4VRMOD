@@ -3122,6 +3122,64 @@ instrument that does not care.
   somewhere that is not an attachment: the `p1_star` quad's own texture fetch,
   or its mip selection.
 
+### Take 176 — P94, and an instrument that cost more than it measured
+
+**P94 held: no image is wrongly mono.** Not from the probe, which only managed
+15 samples in a run that barely ran, but from the layer's own **complete** writer
+inventory, which does not depend on sampling at all:
+
+    mv final: img #70..#74 writers — masked rp [] unmasked rp [39,41,43,45,47]
+
+Those five are the shadow cascades, which are depth-only and view-independent by
+design. **Every other colour image has masked, per-eye writers**, and
+`per-eye images written layer-0-only=0`. Every probed image with real content
+read DIFFER; the only IDENTICAL readings were on buffers that were all-zero or
+uniform-`0x10`, i.e. cleared. So the kinobloom pyramid IS computed per eye, and
+the Sun's halo difference is **not** a missing per-eye level. #49 moves to
+`p1_star`'s own fetch or its mip selection.
+
+#### The take was nearly unusable, and that is a defect in me
+
+Patola: *"the game would freeze for 30 seconds then go for 10 frames where I
+could still do some input. It was only by chance that I was able to focus on the
+Sun. Even quitting the game was painful."*
+
+Two causes, and the second is worse than the first:
+
+1. The probe drains the queue and reads back both layers on the CPU **every
+   frame**. It says so in its own first log line. That cost was known.
+2. **`X4VR_MV_DUMP` was a path that also acted as a trigger.** It was set only to
+   give the present dumps a per-run prefix — and that switched on an
+   opportunistic dump of *every* probed image whose layers differ: ~20 extra
+   4224x4224 pairs, gigabytes of uncompressed PPM written in bursts. Nothing in
+   the command line says "dump twenty images"; the knob's own documentation
+   describes it as a prefix.
+
+**That is the same defect shape as the one fixed one commit earlier**, where
+`X4VR_BINDLESS_PATCH` silently disabled `X4VR_PROJ_INVPROJ`. One knob doing two
+jobs, the second undocumented, found the same day in the same file. Finding a
+defect class and fixing one instance is not fixing the class —
+[[x4vr-fixed-here-broken-next-door]] again, and this time between two commits
+rather than within one.
+
+Fixed:
+
+* **`X4VR_MV_DUMP` is now a path and nothing else.** The opportunistic dump is
+  `X4VR_MV_DUMP_AUTO=1`, opt-in.
+* **Dumps are lossless PNG.** Patola asked for png or jpg; png is the half that
+  keeps the data. These files are *photometry* — `tools/bright_object.py` takes
+  luminance ratios off them — and jpeg's artefacts would land exactly on a
+  saturated Sun where the ratio is measured. 5-10x smaller, so far less of the
+  I/O burst. `X4VR_DUMP_PPM=1` restores the old format.
+* Verified by writing the same dump twice, once per format, and asserting the
+  decoded pixels are **identical**; `bright_object.py` reads both and reproduces
+  the t69 baseline numbers unchanged.
+
+**Rule for every future take: price the instrument before asking for the run.**
+A measurement that makes the game unplayable does not just cost the take, it
+biases it — Patola got the Sun in frame by luck, and a run where the operator
+cannot aim is a run whose content is not the content that was asked for.
+
 ### Piece 3 is NOT next
 
 The 1092×1180 render extent (0.65× area) stays parked until the two items above

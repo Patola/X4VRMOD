@@ -81,7 +81,24 @@
 #                         known rather than guessed. Answers "are the two
 #                         layers the same bytes" as a number instead of as an
 #                         inference from what appeared on screen.
-#   X4VR_MV_DUMP=PREFIX   write PREFIX-imgN-layer{0,1}.ppm for a probed image.
+#   X4VR_MV_DUMP=PREFIX   PREFIX for every image this layer writes. A PATH, NOT
+#                         A TRIGGER: setting it alone dumps nothing. It used to
+#                         also switch on an opportunistic dump of every image
+#                         whose layers differ, so take 176 -- which set it only
+#                         to give the present dumps a per-run name -- wrote
+#                         ~20 extra image pairs in bursts, froze the game for
+#                         30 s at a time and left about 10 usable frames in
+#                         between. Files are PREFIX-imgN-layer{0,1}.png.
+#   X4VR_MV_DUMP_AUTO=1   the opportunistic dump, now opt-in: one pair for each
+#                         probed image whose two layers DIFFER. Expensive; pair
+#                         it with a short session.
+#   X4VR_DUMP_PPM=1       write uncompressed .ppm instead of .png. PNG is the
+#                         default and is LOSSLESS -- these dumps are photometry
+#                         (tools/bright_object.py takes luminance ratios off
+#                         them), so jpeg is not an option: its artefacts would
+#                         land exactly on a saturated Sun where the ratio is
+#                         measured. PNG is also 5-10x smaller, which is most of
+#                         why the stalls got survivable.
 #                         Half-float and 8-bit BGRA/RGBA both.
 #   X4VR_MV_DUMP_IMG=N    dump image #N specifically, whether or not its two
 #                         layers differ. Without it the dump goes to the first
