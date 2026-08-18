@@ -3597,6 +3597,9 @@ bool vr_awaiting_first_view();
 // yet. Idempotent. Normally reached from vkGetDeviceQueue; the latch below has
 // to be able to reach it too — see the note there.
 void vr_start_session_deferred();
+// Has the session thread been spawned? Needed here only so the log line below
+// can report what it actually did rather than what it was about to try.
+bool vr_session_thread_started();
 
 // Non-latching. The per-module log line wants to *describe* the target, and
 // calling the latching accessor there would fix it at the first NONWORLD
@@ -3673,14 +3676,25 @@ const OffAxisPair &offaxis_target() {
             // Logged as a pair with the wait below, so the next log shows the
             // causality instead of leaving it to be re-derived from
             // timestamps -- which is how the last two attempts went wrong.
-            const bool spawned_here = vr_awaiting_first_view();
+            // What actually happened, not what was about to be attempted.
+            // The first version of this line asked vr_awaiting_first_view()
+            // BEFORE the call and reported that — which is true whenever a
+            // session is pending, including when the thread was already
+            // running. The bring-up suite then grepped for the line and
+            // passed with the spawn deleted. A log line that cannot say "no"
+            // is not evidence, and it made a test that could not fail.
+            const bool was_started = vr_session_thread_started();
             vr_start_session_deferred();
+            const bool spawned_here = !was_started && vr_session_thread_started();
             X4VR_LOG("offaxis: the first shader needed a target and no view "
                      "was located yet; %s",
                      spawned_here
-                         ? "starting the VR session from here, because X4 has "
+                         ? "STARTED THE VR SESSION FROM HERE, because X4 had "
                            "not called vkGetDeviceQueue yet and the wait would "
                            "otherwise block the call that starts it"
+                     : vr_session_thread_started()
+                         ? "the session thread was already running, so just "
+                           "waiting for it"
                          : "no session is pending, so waiting cannot help");
             // Not a knob. A run's behaviour must not depend on a timeout
             // someone tuned, and 10 ms is the number this exists to cover;
@@ -7611,6 +7625,15 @@ struct VrState {
     // scorer would then have to disbelieve.
     std::atomic<bool> started{false};
     std::atomic<bool> session_ok{false};
+    // A third, and it is not a refinement of the other two. `started` says the
+    // thread was spawned and `session_ok` says a session exists; neither says
+    // "this thread has finished trying". vr_session_thread returns silently
+    // from four different failure paths -- no runtime, a refused graphics
+    // device, mismatched physical-device handles, a failed xrCreateSession --
+    // and the task #41 waiter needs to know that, or a machine with no headset
+    // pays the full five-second cap on every run. Measured headlessly at
+    // 5.014 s with XR_RUNTIME_JSON pointed at nothing, before this existed.
+    std::atomic<bool> session_settled{false};
 
     std::mutex mu;
     uint64_t frames = 0, located = 0, begun = 0;
@@ -7695,6 +7718,10 @@ VrState g_vrs;
 // Task #35 piece 2. Forward-declared up with offaxis_target(), which is the
 // only caller: it needs the runtime's frusta at shader-patch time and must not
 // block waiting for them.
+bool vr_session_thread_started() {
+    return g_vrs.started.load(std::memory_order_acquire);
+}
+
 bool vr_awaiting_first_view() {
     // `g_active`, and it is load-bearing. gamescope loads this layer too and
     // creates its own VkDevice, and vr_note_device is gated on g_vr alone, so
@@ -7710,6 +7737,7 @@ bool vr_awaiting_first_view() {
     return g_vr && g_active &&
            (g_vrs.pending || g_vrs.started.load(std::memory_order_acquire)) &&
            !g_vrs.stop.load(std::memory_order_acquire) &&
+           !g_vrs.session_settled.load(std::memory_order_acquire) &&
            !g_vrs.fov_seen.load(std::memory_order_acquire);
 }
 
@@ -8413,6 +8441,15 @@ void vr_note_device(VkInstance vk, VkPhysicalDevice phys, VkDevice dev,
 // then run the frame loop -- so that none of it happens on a thread the loader
 // is currently inside.
 void vr_session_thread() {
+    // Set on EVERY exit from this function, including the four silent early
+    // returns below and normal shutdown after vr_thread(). A waiter that can
+    // only see `started` and `fov_seen` cannot tell "still coming up" from
+    // "gave up two seconds ago", and would spend its whole cap on the second.
+    struct Settle {
+        ~Settle() {
+            g_vrs.session_settled.store(true, std::memory_order_release);
+        }
+    } settle;
     VkPhysicalDevice app_phys = vr_app_level_physical_device(
         g_vrs.vk, g_vrs.chain_phys, g_vrs.inst);
     if (!g_vrs.rt.ok())

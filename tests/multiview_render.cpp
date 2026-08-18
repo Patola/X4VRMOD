@@ -111,6 +111,33 @@ int main(int argc, char **argv) {
     dci.pQueueCreateInfos = &q;
     VkDevice dev;
     CHECK(vkCreateDevice(phys[0], &dci, nullptr, &dev));
+
+    // X4VR_TEST_EARLY_SHADER: compile a throwaway module BEFORE
+    // vkGetDeviceQueue, which is X4's real order and the one that broke takes
+    // 166b and 167b.
+    //
+    // This harness naturally calls vkGetDeviceQueue first, so the layer's VR
+    // session thread is already running by the time any shader arrives — and
+    // that is precisely the case the off-axis latch does NOT have to cope
+    // with. Without this, tests/run-offaxis-bringup.sh passed with the fix
+    // deleted: it was measuring a code path X4 never takes.
+    //
+    // Off by default, so every other case in this file keeps the ordering it
+    // has always had.
+    if (getenv("X4VR_TEST_EARLY_SHADER")) {
+        auto early = load_spv(vs_path);
+        if (!early.empty()) {
+            VkShaderModuleCreateInfo smci{};
+            smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            smci.codeSize = early.size() * 4;
+            smci.pCode = early.data();
+            VkShaderModule early_mod = VK_NULL_HANDLE;
+            if (vkCreateShaderModule(dev, &smci, nullptr, &early_mod) ==
+                VK_SUCCESS)
+                vkDestroyShaderModule(dev, early_mod, nullptr);
+        }
+    }
+
     VkQueue queue;
     vkGetDeviceQueue(dev, gfx, 0, &queue);
 
