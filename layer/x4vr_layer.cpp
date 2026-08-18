@@ -3588,6 +3588,11 @@ struct OffAxisPair {
 // Defined with the VR state further down. Fills `out[eye] = {l, r, u, d}` in
 // radians from the first located frame and returns false until there is one.
 bool vr_located_fov(float out[2][4]);
+// True while waiting for that first located view could still succeed: this run
+// wants VR, a session is intended or already running, nothing has told it to
+// stop, and no view has been located yet. Without it the wait below would burn
+// its whole cap on a machine with no runtime at all.
+bool vr_awaiting_first_view();
 
 // Non-latching. The per-module log line wants to *describe* the target, and
 // calling the latching accessor there would fix it at the first NONWORLD
@@ -3602,6 +3607,64 @@ const OffAxisPair &offaxis_target() {
         float a[2][4] = {};
         float rt[2][4] = {};
         const char *s = getenv("X4VR_OFFAXIS");
+        const bool want_off = s && (!strcmp(s, "off") || !strcmp(s, "0"));
+        const bool want_rt = !want_off && s &&
+                             (!strcmp(s, "runtime") || !strcmp(s, "auto"));
+
+        // **Take 166b lost this race by ten milliseconds, and it was my
+        // change that lost it.**
+        //
+        // The target is latched once, at the first shader module that needs
+        // one, because a module's coefficients are baked at
+        // vkCreateShaderModule and cannot be revised afterwards. Task #39 gave
+        // the deferred-reconstruction patch the same latched target — which is
+        // right, the two ends of one map must not be sourced separately — but
+        // that call site runs EARLIER than the vertex one. Early enough, it
+        // turned out, that X4 was compiling shaders before the XrSession
+        // existed at all:
+        //
+        //     230978.330  first shader needing a target -> latched OFF
+        //     230978.335  xrCreateSession returns
+        //     230978.340  first located view
+        //
+        // Take 165b latched at the first WORLD vertex module and had 0.8 s of
+        // margin. #39 spent it, and I checked the wrong pair of timestamps
+        // before shipping: "first fragment patch" is the index-offset one, not
+        // this.
+        //
+        // Waiting is the honest repair. The alternative — let early modules go
+        // unmapped and map the later ones — puts some of the world in one
+        // frustum and the rest in another, which is take 165b's failure with
+        // extra steps. The decision has to be the same for every module in the
+        // process, so the only question is whether it is made too early.
+        //
+        // Deadlock-safe by construction: the session runs on its own thread,
+        // spawned from vkGetDeviceQueue long before any shader module, so a
+        // loading thread blocking here cannot be what the session is waiting
+        // for. The wait is skipped entirely unless this run asked for the
+        // runtime's frusta, so no other configuration pays for it.
+        if (want_rt && !vr_located_fov(rt)) {
+            // Not a knob. A run's behaviour must not depend on a timeout
+            // someone tuned, and 10 ms is the number this exists to cover;
+            // five seconds is slack for a headset still waking up.
+            constexpr int kCapMs = 5000;
+            const auto t0 = std::chrono::steady_clock::now();
+            int waited = 0;
+            while (waited < kCapMs && vr_awaiting_first_view()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                waited = (int)std::chrono::duration_cast<
+                             std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - t0)
+                             .count();
+            }
+            X4VR_LOG("offaxis: waited %d ms at the first shader that needed a "
+                     "target — %s",
+                     waited,
+                     vr_located_fov(rt)
+                         ? "the runtime located a view, so the affine is built "
+                           "from real frusta"
+                         : "no view was located; see the verdict below");
+        }
         const bool have_rt = vr_located_fov(rt);
         // **X4VR_OFFAXIS=off, and why it has to exist.** Source 2 turns the
         // affine on by itself in any VR run, which changes what every command
@@ -3612,7 +3675,7 @@ const OffAxisPair &offaxis_target() {
         // control silently became a non-control. So there is an explicit off,
         // it outranks the runtime, and it is what reproduces take 163 and
         // every VR take before it.
-        if (s && (!strcmp(s, "off") || !strcmp(s, "0"))) {
+        if (want_off) {
             X4VR_LOG("offaxis: OFF by request (X4VR_OFFAXIS=%s) — X4's "
                      "symmetric field is rendered and declared, which is the "
                      "behaviour of every VR take up to 163. Any located "
@@ -3631,7 +3694,6 @@ const OffAxisPair &offaxis_target() {
         // that is a 30.07 deg divergence between the eyes, which is the
         // unfusable negative control x4vr_view.hpp:291 already describes.
         // Shipping it on by default means shipping that.
-        const bool want_rt = s && (!strcmp(s, "runtime") || !strcmp(s, "auto"));
         if (want_rt && have_rt) {
             memcpy(a, rt, sizeof(a));
             r.source = "the runtime's located views";
@@ -7595,6 +7657,24 @@ VrState g_vrs;
 // Task #35 piece 2. Forward-declared up with offaxis_target(), which is the
 // only caller: it needs the runtime's frusta at shader-patch time and must not
 // block waiting for them.
+bool vr_awaiting_first_view() {
+    // `g_active`, and it is load-bearing. gamescope loads this layer too and
+    // creates its own VkDevice, and vr_note_device is gated on g_vr alone, so
+    // `pending` is set in that process as well. Without this the wait would
+    // stall gamescope's startup for its whole cap, every run — a five-second
+    // regression bought by a fix for a ten-millisecond race, in a process the
+    // layer already announces it is inert in.
+    //
+    // `pending` as well as `started`: the session is created outside the
+    // loader's device-creation chain, so there is a window where the intent
+    // exists and the thread does not. Treating that window as "give up" would
+    // reintroduce exactly the race this exists to close.
+    return g_vr && g_active &&
+           (g_vrs.pending || g_vrs.started.load(std::memory_order_acquire)) &&
+           !g_vrs.stop.load(std::memory_order_acquire) &&
+           !g_vrs.fov_seen.load(std::memory_order_acquire);
+}
+
 bool vr_located_fov(float out[2][4]) {
     if (!g_vr || !g_vrs.fov_seen.load(std::memory_order_acquire))
         return false;
