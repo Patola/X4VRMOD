@@ -124,8 +124,13 @@ int main(int argc, char **argv) {
     //
     // Off by default, so every other case in this file keeps the ordering it
     // has always had.
-    if (getenv("X4VR_TEST_EARLY_SHADER")) {
-        auto early = load_spv(vs_path);
+    // The value may name a module of its own. The pipeline below still uses
+    // vs_path, so an arbitrary X4 module can be pushed through
+    // vkCreateShaderModule -- which is where classification and every patch
+    // happen -- without having to pair it with a compatible fragment stage.
+    // "1" (or empty) keeps the original behaviour of reusing vs_path.
+    if (const char *es = getenv("X4VR_TEST_EARLY_SHADER"); es && *es) {
+        auto early = load_spv((es[0] == '1' && es[1] == '\0') ? vs_path : es);
         if (!early.empty()) {
             VkShaderModuleCreateInfo smci{};
             smci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;

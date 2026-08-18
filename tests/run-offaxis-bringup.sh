@@ -123,6 +123,35 @@ else
         "no active_runtime.json — start WiVRn/SteamVR to run these"
 fi
 
+# --- knob independence: #22/#39 must not ride on the bindless gate ----------
+#
+# The invproj block sat INSIDE `if (g_bindless_patch && g_bindless_mirror)`, so
+# X4VR_BINDLESS_PATCH=0 silently switched off X4VR_PROJ_INVPROJ too. Take 173
+# turned the bindless patch off to eliminate one suspect behind the Sun's per-eye
+# brightness and removed the deferred-reconstruction affine undo along with it:
+# 236 modules corrected in take 172, 0 in 173, and the run came back with the
+# half-applied-affine failure on top of the thing being measured. A whole take,
+# and the answer to the question it was asked is still unknown.
+#
+# Driven with a module that actually TAKES the patch -- fullscreen.vert has no
+# camera block, so it would pass this with the coupling back in place.
+INVMOD=/tmp/x4vr-shaders/mod-0152.spv
+if [[ -r "$INVMOD" ]]; then
+    for bp in 1 0; do
+        drive "invproj bp=$bp" "inv$bp.log" X4VR_PROJ_INVPROJ=1 \
+            X4VR_BINDLESS_MIRROR=1 X4VR_BINDLESS_PATCH=$bp \
+            X4VR_TEST_EARLY_SHADER="$INVMOD" >/dev/null
+        n=$(grep -o 'invproj final: per-eye M_invprojection — [0-9]* modules' \
+            "$LOGDIR/inv$bp.log" | tail -1 | grep -o '[0-9]*' | tail -1)
+        [[ -n "$n" && "$n" -gt 0 ]] && ok=1 || ok=0
+        say "invproj runs with X4VR_BINDLESS_PATCH=$bp" "$ok" \
+            "${n:-0} module(s) corrected"
+    done
+else
+    printf 'skip %-42s %s\n' "invproj knob independence" \
+        "no $INVMOD — re-dump X4's shaders to run this"
+fi
+
 echo
 if (( fails )); then echo "$fails case(s) failed"; exit 1; fi
 echo "all cases passed"

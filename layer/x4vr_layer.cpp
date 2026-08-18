@@ -4238,7 +4238,10 @@ VkResult create_shader_module_inner(
     // The transform reuses an existing ViewIndex input on the second call --
     // two variables decorated with the same builtin would be invalid SPIR-V.
     bool frag_patched = false;
-    if (g_bindless_patch && g_bindless_mirror) {
+    // Named, because it gates TWO unrelated things below and used to gate
+    // them as one. See the hoist under "Task #22".
+    const bool bindless_ok = g_bindless_patch && g_bindless_mirror;
+    if (bindless_ok) {
         // Every table the module declares, found rather than hardcoded. X4's
         // are set 0 bindings 5 and 7, but naming them here would have been two
         // magic numbers standing in for the rule, which is: a descriptor array
@@ -4266,53 +4269,70 @@ VkResult create_shader_module_inner(
                                                        g_mirror_offset))
                 frag_patched = true;
         }
-        // Task #22: correct M_invprojection per eye.
+    }
+    // Task #22: correct M_invprojection per eye.
+    //
+    // **Outside the bindless gate, and take 173 is why.** This block used to sit
+    // inside `if (g_bindless_patch && g_bindless_mirror)`, so X4VR_BINDLESS_PATCH=0
+    // silently disabled X4VR_PROJ_INVPROJ as well -- two unrelated features on one
+    // gate, with no log line saying so. Take 173 set BINDLESS_PATCH=0 to eliminate
+    // one suspect and removed the deferred-reconstruction affine undo with it:
+    // 236 modules corrected in take 172, 0 in 173, and the run came back with the
+    // documented half-applied-affine failure ("the separation was so big that
+    // nothing fused") on top of the thing being measured. An A/B whose arms differ
+    // in two things measures neither.
+    //
+    // Order is preserved exactly -- index-offset, then invproj, then the survey --
+    // so the bindless-on path is unchanged down to the coverage counters.
+    //
+    // The deferred passes reconstruct view position from the depth buffer,
+    // which was rendered through the sheared clip position, so they get the
+    // position in *that eye's* frame -- and then light it with shadow
+    // matrices and light positions that are still centre-frame. The two
+    // eyes end up disagreeing about where a shadow falls on a surface by
+    // the full IPD. Shadows are view-independent, so that is a defect, and
+    // it is what Patola saw in the cockpit in takes pre-51 and 55.
+    //
+    // Gated on the shear being active: with no shear there is no eye frame
+    // to correct back from, and applying this alone would introduce the
+    // very error it exists to remove.
+    if (proj_invproj() && have_k) {
+        const float dl = -0.5f * configured_ipd();
+        const float dr = +0.5f * configured_ipd();
+        // Task #39. The same latched target the vertex side gets, from the
+        // same object, because these two are a matched pair: the affine
+        // applied to gl_Position and the affine undone before the deferred
+        // reconstruction have to be the same map or the reconstruction is
+        // wrong by the difference. Reading the target twice from two
+        // places is exactly how that would happen, so it is read once.
         //
-        // The deferred passes reconstruct view position from the depth buffer,
-        // which was rendered through the sheared clip position, so they get the
-        // position in *that eye's* frame -- and then light it with shadow
-        // matrices and light positions that are still centre-frame. The two
-        // eyes end up disagreeing about where a shadow falls on a surface by
-        // the full IPD. Shadows are view-independent, so that is a defect, and
-        // it is what Patola saw in the cockpit in takes pre-51 and 55.
-        //
-        // Gated on the shear being active: with no shear there is no eye frame
-        // to correct back from, and applying this alone would introduce the
-        // very error it exists to remove.
-        if (proj_invproj() && have_k) {
-            const float dl = -0.5f * configured_ipd();
-            const float dr = +0.5f * configured_ipd();
-            // Task #39. The same latched target the vertex side gets, from the
-            // same object, because these two are a matched pair: the affine
-            // applied to gl_Position and the affine undone before the deferred
-            // reconstruction have to be the same map or the reconstruction is
-            // wrong by the difference. Reading the target twice from two
-            // places is exactly how that would happen, so it is read once.
-            //
-            // Both eyes unconditionally. Unlike the shear -- where the right
-            // eye's `d` only exists if K_right does -- the affine is per-eye by
-            // construction, and a single map applied to both eyes would put
-            // them in the same canted frustum, which is the take 165b failure.
-            const OffAxisPair &oa = offaxis_target();
-            const x4vr::OffAxis *oal = oa.on ? &oa.eye[0] : nullptr;
-            const x4vr::OffAxis *oar = oa.on ? &oa.eye[1] : nullptr;
-            if (x4vr::spv::patch_fragment_invproj_eye(
-                    code, kCameraSet, kCameraBinding, kCameraInvProjMember, dl,
-                    dr, oal, oar)) {
-                frag_patched = true;
-                g_invproj_patched++;
-            }
-            // The same correction on member 4. Counted separately because the
-            // two are wildly different populations -- 236 modules take member 2
-            // and exactly 2 take member 4 -- so a single total would let a
-            // healthy-looking 236 hide a 0 here, which is the whole defect.
-            if (x4vr::spv::patch_fragment_invproj_eye(
-                    code, kCameraSet, kCameraBinding, kCameraInvProjUjMember,
-                    dl, dr, oal, oar)) {
-                frag_patched = true;
-                g_invproj_uj_patched++;
-            }
+        // Both eyes unconditionally. Unlike the shear -- where the right
+        // eye's `d` only exists if K_right does -- the affine is per-eye by
+        // construction, and a single map applied to both eyes would put
+        // them in the same canted frustum, which is the take 165b failure.
+        const OffAxisPair &oa = offaxis_target();
+        const x4vr::OffAxis *oal = oa.on ? &oa.eye[0] : nullptr;
+        const x4vr::OffAxis *oar = oa.on ? &oa.eye[1] : nullptr;
+        if (x4vr::spv::patch_fragment_invproj_eye(
+                code, kCameraSet, kCameraBinding, kCameraInvProjMember, dl,
+                dr, oal, oar)) {
+            frag_patched = true;
+            g_invproj_patched++;
         }
+        // The same correction on member 4. Counted separately because the
+        // two are wildly different populations -- 236 modules take member 2
+        // and exactly 2 take member 4 -- so a single total would let a
+        // healthy-looking 236 hide a 0 here, which is the whole defect.
+        if (x4vr::spv::patch_fragment_invproj_eye(
+                code, kCameraSet, kCameraBinding, kCameraInvProjUjMember,
+                dl, dr, oal, oar)) {
+            frag_patched = true;
+            g_invproj_uj_patched++;
+        }
+    }
+    // Back inside the bindless gate: the coverage counters below are about
+    // the index-offset patch alone, and must not start counting when it is off.
+    if (bindless_ok) {
         // Coverage measured stage-agnostically, NOT from the lister above.
         // The lister is fragment-only and 2D-only; asking it "does this module
         // declare a mirrorable table?" made the answer no for X4's skybox --

@@ -2908,6 +2908,67 @@ puts the HUD composite back to sampling view 0 in both eyes (take 58). That is
 the knob doing its job and is not the thing being judged. **The only question is
 the Sun.**
 
+### Take 173 is VOID as evidence — one knob silently switched off two features
+
+The run came back *"very difficult to see, because the separation was so big that
+nothing fused"*, with the Sun looking equal-brightness and a new **bright orange
+halo about 20° from the Sun**. `score_run.py` FAILed it, and not for the thing
+being tested:
+
+    invproj final: off-axis affine NOT undone in the deferred reconstruction —
+    HALF APPLIED: gl_Position carries the affine and M_invprojection does not
+
+`X4VR_PROJ_INVPROJ=1` was in the command line — the run's own `env` line confirms
+it, and confirms `X4VR_BINDLESS_PATCH` is the **only** variable that differs from
+172. The layer corrected **236 modules in take 172 and 0 in take 173.**
+
+**The cause is a shared gate.** `#22`/`#39`'s invproj block sat *inside*
+`if (g_bindless_patch && g_bindless_mirror)` (lines 4241–4343), so turning the
+bindless patch off silently turned the deferred-reconstruction affine undo off
+with it. Two unrelated features, one gate, no log line saying so. The knob
+documentation says `X4VR_BINDLESS_PATCH` "rewrites every fragment module that
+samples a bindless table" and says nothing about `M_invprojection`, because
+nobody intended this.
+
+So take 173 removed **two** things, and the second is the documented
+half-applied-affine failure. That failure *is* "the separation was so big that
+nothing fused", and it is very likely also the orange halo — deferred passes
+reconstructing a frame the affine already moved will place a glare term away
+from the object that caused it. **P86 is neither confirmed nor refuted. #49 is
+exactly where it was**, and the take bought a different bug instead.
+
+This is the same lesson as the take-100/104/106/107 zoom asymmetry: **an A/B's
+arms must differ in exactly one thing, and the asymmetry to check for first is
+the one you introduced yourself.** Here it was introduced by the *layer*, not the
+protocol, which is why reading the command line could not have caught it and the
+scorer could.
+
+Fixed by hoisting the invproj block out of the bindless gate, preserving the
+transform order exactly (index-offset → invproj → survey) so the bindless-on path
+is unchanged down to the coverage counters. Locked with a case in
+`tests/run-offaxis-bringup.sh` that drives a module which actually takes the
+patch — `fullscreen.vert` has no camera block and would pass with the coupling
+still in place — and **the case was shown to FAIL with the coupling restored and
+pass with the fix**, which is the standard that file sets for itself.
+
+`X4VR_TEST_EARLY_SHADER` now optionally names a module, so any of X4's dumps can
+be pushed through `vkCreateShaderModule` without pairing it with a compatible
+fragment stage.
+
+#### Take 174 — P86/P87 again, on a layer where the knob means what it says
+
+Same line as 173, unchanged, on the rebuilt layer. It is only now a
+one-variable control against 172.
+
+- **P88** — the log reads `invproj final: ... UNDONE` and ~236 modules corrected
+  *with* `X4VR_BINDLESS_PATCH=0`. If this fails the fix is wrong and nothing
+  about the Sun is readable. Check it before reading anything else.
+- **P89** — the frame fuses about as well as 172 did, because the only thing
+  still removed is the per-eye texture redirect. If the separation is still
+  large, something *else* rides on that knob too.
+- The orange halo is expected to be **gone**. If it survives into 174 it is a
+  real defect of its own and gets its own task rather than being folded into #49.
+
 ### Piece 3 is NOT next
 
 The 1092×1180 render extent (0.65× area) stays parked until the two items above
