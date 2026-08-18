@@ -15,6 +15,20 @@
 #         the thread that calls vkGetDeviceQueue, which is what spawns the
 #         session, so the session started 1 ms AFTER the wait gave up.
 #
+#   168b  starting the session FROM the latch did not help either: the thread
+#         was spawned and then executed nothing for five seconds, because
+#         vr_session_thread re-enters the Vulkan loader and X4's thread was
+#         parked inside vkCreateShaderModule. The race cannot be won from
+#         inside a loader chain call, only avoided -- so the runtime source is
+#         now expected to lose it, and says so with a way out.
+#
+# THIS SUITE GAVE A FALSE GREEN ONCE, which is worth more than any case below:
+# with the fix deleted it passed all eight, because it grepped a log line that
+# printed either way, and because the harness called vkGetDeviceQueue before
+# any shader module -- not X4's order, and the whole substance of the bug.
+# X4VR_TEST_EARLY_SHADER is what makes the ordering real. A suite for a race
+# has to be shown to fail.
+#
 # Neither needed a headset to find. Both needed a run, because nothing in the
 # suite drove the layer's bring-up path at all -- so this drives it, against
 # the real runtime when one is up, in about a tenth of a second.
@@ -68,7 +82,7 @@ say() { # label ok? detail
 ms=$(drive "no runtime" nort.log XR_RUNTIME_JSON=/nonexistent/runtime.json)
 say "no runtime: does not spend the cap" \
     "$([[ $ms -lt 2000 ]] && echo 1 || echo 0)" "${ms} ms"
-grep -q "no view was located" "$LOGDIR/nort.log" && ok=1 || ok=0
+grep -q "no view had been located" "$LOGDIR/nort.log" && ok=1 || ok=0
 say "no runtime: says so, and refuses" "$ok" "logged"
 
 # --- a live runtime --------------------------------------------------------
@@ -80,32 +94,30 @@ say "no runtime: says so, and refuses" "$ok" "logged"
 if [[ -e "$HOME/.config/openxr/1/active_runtime.json" ]] ||
    [[ -n "${XR_RUNTIME_JSON:-}" && -e "${XR_RUNTIME_JSON:-}" ]]; then
     ms=$(drive "live runtime" rt.log)
-    say "live runtime: latches promptly" \
+    say "runtime source: does not stall" \
         "$([[ $ms -lt 2000 ]] && echo 1 || echo 0)" "${ms} ms"
 
-    # It has to start the session ITSELF. X4 has not called vkGetDeviceQueue by
-    # the time the first shader module arrives, so waiting without spawning is
-    # what take 167b did.
-    grep -q "STARTED THE VR SESSION FROM HERE" "$LOGDIR/rt.log" && ok=1 || ok=0
-    say "live runtime: starts the session itself" "$ok" "logged"
-
-    grep -q "the runtime located a view" "$LOGDIR/rt.log" && ok=1 || ok=0
-    say "live runtime: a view is located" "$ok" "logged"
-
-    grep -q "offaxis: target from the runtime's located views" "$LOGDIR/rt.log" \
-        && ok=1 || ok=0
-    say "live runtime: the affine is ON" "$ok" "not the symmetric fallback"
+    # The runtime source is EXPECTED to lose the race, so that is what is
+    # asserted -- and that its refusal names the way out, because a refusal
+    # nobody can act on is how three takes were spent.
+    grep -q 'Use X4VR_OFFAXIS=' "$LOGDIR/rt.log" && ok=1 || ok=0
+    say "runtime source: refusal names the way out" "$ok" "explicit angles"
 
     # Task #40's canvas comes up with it, and on the numbers view_math pins for
     # these frusta. Asserting the VALUES and not merely the line is what
     # separates "a canvas was built" from "a canvas was built correctly" --
     # A_x is the one that would silently be 1.0155 if the screen field were
     # taken from assumed_proj_sx() instead of X4VR_FOV.
-    dis=$(cat "$LOGDIR/rt.log")
+    ms=$(drive "explicit angles" oa.log X4VR_OFFAXIS="-54,40,44,-55")
+    say "explicit angles: latch is immediate" \
+        "$([[ $ms -lt 2000 ]] && echo 1 || echo 0)" "${ms} ms"
+    grep -q "offaxis: target from X4VR_OFFAXIS" "$LOGDIR/oa.log" && ok=1 || ok=0
+    say "explicit angles: the affine is ON" "$ok" "no runtime needed"
+    dis=$(cat "$LOGDIR/oa.log")
     [[ "$dis" == *"A_x=1.2892 A_y=1.1931"* ]] && ok=1 || ok=0
-    say "live runtime: canvas A_x/A_y are view_math's" "$ok" "1.2892 / 1.1931"
+    say "explicit angles: canvas A_x/A_y are view_math's" "$ok" "1.2892 / 1.1931"
     [[ "$dis" == *"eye0 x offset +0.24251 eye1 -0.24251"* ]] && ok=1 || ok=0
-    say "live runtime: canvas B_x mirrors per eye" "$ok" "+/-0.24251"
+    say "explicit angles: canvas B_x mirrors per eye" "$ok" "+/-0.24251"
 else
     printf 'skip %-42s %s\n' "live runtime cases" \
         "no active_runtime.json — start WiVRn/SteamVR to run these"

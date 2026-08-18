@@ -3618,105 +3618,37 @@ const OffAxisPair &offaxis_target() {
         const bool want_rt = !want_off && s &&
                              (!strcmp(s, "runtime") || !strcmp(s, "auto"));
 
-        // **Take 166b lost this race by ten milliseconds, and it was my
-        // change that lost it.**
+        // **The runtime source cannot be latched at the first shader module,
+        // and three takes were spent proving it.**
         //
-        // The target is latched once, at the first shader module that needs
-        // one, because a module's coefficients are baked at
-        // vkCreateShaderModule and cannot be revised afterwards. Task #39 gave
-        // the deferred-reconstruction patch the same latched target — which is
-        // right, the two ends of one map must not be sourced separately — but
-        // that call site runs EARLIER than the vertex one. Early enough, it
-        // turned out, that X4 was compiling shaders before the XrSession
-        // existed at all:
+        // 166b: task #39 moved the first call to the target EARLIER than the
+        // vertex patch — early enough that X4 was compiling shaders before the
+        // XrSession existed. Latched OFF, silently.
         //
-        //     230978.330  first shader needing a target -> latched OFF
-        //     230978.335  xrCreateSession returns
-        //     230978.340  first located view
+        // 167b: a bounded wait added to fix that blocked the thread which
+        // calls vkGetDeviceQueue, and vkGetDeviceQueue is what spawns the
+        // session. The session started 1 ms after the wait gave up.
         //
-        // Take 165b latched at the first WORLD vertex module and had 0.8 s of
-        // margin. #39 spent it, and I checked the wrong pair of timestamps
-        // before shipping: "first fragment patch" is the index-offset one, not
-        // this.
+        // 168b: with the session started from the latch instead, the thread
+        // was `started` and had still executed NOTHING after five seconds —
+        // then ran 1 ms after the wait released. vr_session_thread opens with
+        // vr_app_level_physical_device(), which re-enters the Vulkan loader on
+        // the instance side, and X4's thread was parked inside
+        // vkCreateShaderModule, one of the loader's own device-chain calls.
+        // VrState says this in as many words: "re-entering the loader from
+        // inside one of its own chain calls is a hazard worth not taking".
+        // I read that comment, quoted it while writing the wait, and blocked
+        // there anyway.
         //
-        // Waiting is the honest repair. The alternative — let early modules go
-        // unmapped and map the later ones — puts some of the world in one
-        // frustum and the rest in another, which is take 165b's failure with
-        // extra steps. The decision has to be the same for every module in the
-        // process, so the only question is whether it is made too early.
-        //
-        // **Take 167b: the wait deadlocked on itself, and the log said so to
-        // the millisecond.**
-        //
-        //     233213.887  offaxis: waited 5000 ms — no view was located
-        //     233213.888  vr: physical device …      <- the session thread's
-        //     233213.889  vr: session created           FIRST line, 1 ms later
-        //     233213.893  located=1
-        //
-        // I had written here that this was "deadlock-safe by construction: the
-        // session runs on its own thread, spawned from vkGetDeviceQueue long
-        // before any shader module". That premise is false, and take 166b's
-        // log already showed it false — the thread's first line lands AFTER
-        // the first shader module, because X4 has not called vkGetDeviceQueue
-        // yet. So the wait sat in front of the very call that would have
-        // started the session, and burned its whole cap. Second time on this
-        // one question that I asserted an ordering I had the data to check.
-        //
-        // Hence: start the session here, then wait. vr_start_session_deferred
-        // is idempotent and does nothing but spawn the thread, and this is not
-        // inside the loader's device-creation chain — which is the one place
-        // VrState says it must not be called from.
-        //
-        // The cap stays, and it is the honest part of this: two premises about
-        // what the session thread needs have now been wrong, so a third that
-        // costs five seconds once and logs itself is better than one that
-        // could hang. The wait is skipped entirely unless this run asked for
-        // the runtime's frusta.
-        if (want_rt && !vr_located_fov(rt)) {
-            // Logged as a pair with the wait below, so the next log shows the
-            // causality instead of leaving it to be re-derived from
-            // timestamps -- which is how the last two attempts went wrong.
-            // What actually happened, not what was about to be attempted.
-            // The first version of this line asked vr_awaiting_first_view()
-            // BEFORE the call and reported that — which is true whenever a
-            // session is pending, including when the thread was already
-            // running. The bring-up suite then grepped for the line and
-            // passed with the spawn deleted. A log line that cannot say "no"
-            // is not evidence, and it made a test that could not fail.
-            const bool was_started = vr_session_thread_started();
-            vr_start_session_deferred();
-            const bool spawned_here = !was_started && vr_session_thread_started();
-            X4VR_LOG("offaxis: the first shader needed a target and no view "
-                     "was located yet; %s",
-                     spawned_here
-                         ? "STARTED THE VR SESSION FROM HERE, because X4 had "
-                           "not called vkGetDeviceQueue yet and the wait would "
-                           "otherwise block the call that starts it"
-                     : vr_session_thread_started()
-                         ? "the session thread was already running, so just "
-                           "waiting for it"
-                         : "no session is pending, so waiting cannot help");
-            // Not a knob. A run's behaviour must not depend on a timeout
-            // someone tuned, and 10 ms is the number this exists to cover;
-            // five seconds is slack for a headset still waking up.
-            constexpr int kCapMs = 5000;
-            const auto t0 = std::chrono::steady_clock::now();
-            int waited = 0;
-            while (waited < kCapMs && vr_awaiting_first_view()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
-                waited = (int)std::chrono::duration_cast<
-                             std::chrono::milliseconds>(
-                             std::chrono::steady_clock::now() - t0)
-                             .count();
-            }
-            X4VR_LOG("offaxis: waited %d ms at the first shader that needed a "
-                     "target — %s",
-                     waited,
-                     vr_located_fov(rt)
-                         ? "the runtime located a view, so the affine is built "
-                           "from real frusta"
-                         : "no view was located; see the verdict below");
-        }
+        // So: no wait, and no session started from here. X4 creates its first
+        // shader module about a millisecond after its device (250082.999 ->
+        // 250083.000 in 168b) and the runtime needs ~8 ms from a standing
+        // start, so this race cannot be won from inside the loader — only
+        // avoided. X4VR_OFFAXIS="l,r,u,d" needs no runtime at latch time and
+        // is what takes 164b/164c ran; the frusta are a property of the
+        // headset, not of the session, so naming them is a real answer rather
+        // than a workaround. Caching them from a previous run would make the
+        // runtime source work without any of this, and that is its own task.
         const bool have_rt = vr_located_fov(rt);
         // **X4VR_OFFAXIS=off, and why it has to exist.** Source 2 turns the
         // affine on by itself in any VR run, which changes what every command
@@ -3757,11 +3689,23 @@ const OffAxisPair &offaxis_target() {
             // serves both, so the whole session is on or off together -- but
             // a message naming the wrong caller would send the next reader
             // looking in the wrong place.
-            X4VR_LOG("offaxis: OFF — X4VR_VR=1 but no view had been located "
-                     "when the first shader that needed a target was patched, "
-                     "and X4VR_OFFAXIS=%s asked for the runtime's frusta. X4's "
-                     "symmetric field is rendered and declared, which is "
-                     "self-consistent, not half-applied.",
+            // Actionable, because this is now the EXPECTED outcome of asking
+            // for the runtime source rather than a rare loss: X4 compiles its
+            // first shader about a millisecond after creating its device, and
+            // the runtime needs about eight from a standing start. Takes 166b,
+            // 167b and 168b all landed here. The explicit-angle form has no
+            // race at all and is what 164b/164c ran.
+            X4VR_LOG("offaxis: OFF — X4VR_VR=1 and X4VR_OFFAXIS=%s asked for "
+                     "the runtime's frusta, but no view had been located when "
+                     "the first shader that needed a target was patched. X4 "
+                     "compiles shaders ~1 ms after creating its device and the "
+                     "runtime needs ~8 ms, so this is the expected outcome, "
+                     "not bad luck — and it cannot be waited out from inside a "
+                     "loader chain call (takes 167b, 168b). Use "
+                     "X4VR_OFFAXIS=\"-54,40,44,-55\" — the frusta this "
+                     "headset reports, measured in take 112 and confirmed "
+                     "since. X4's symmetric field is rendered and declared "
+                     "meanwhile, which is self-consistent, not half-applied.",
                      s);
             g_offaxis_latched.store(true, std::memory_order_release);
             return r;
