@@ -144,9 +144,18 @@ def main():
                     k = int(_np.argmax(sums)) + 1
                     m = lab == k
                     ys, xs = _np.nonzero(m)
+                    # Touching the border means the object is CUT OFF here.
+                    # The eyes are 1024 px apart on a backdrop object -- that
+                    # is the cant -- so one eye can hold a whole Sun while the
+                    # other holds part of one, and then integrated luminance
+                    # compares different amounts of Sun. Without this flag the
+                    # ratio silently becomes a coverage measurement.
+                    clipped = bool(xs.min() == 0 or ys.min() == 0 or
+                                   xs.max() == w - 1 or ys.max() == h - 1)
                     blob = {'peak': float(lm[m].max()),
                             'sum': float(sums[k - 1]), 'area': int(m.sum()),
-                            'cx': float(xs.mean()), 'cy': float(ys.mean())}
+                            'cx': float(xs.mean()), 'cy': float(ys.mean()),
+                            'clipped': clipped}
             res.append((p, w, h, lm, blob))
         else:
             lum = luma(px, w * h)

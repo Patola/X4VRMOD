@@ -3032,6 +3032,96 @@ is what made "not exposure, not tonemapping" a conclusion rather than a guess. I
   produced after it: the compositor, the runtime's own submission, or the
   headset's per-panel response. The task then changes completely.
 
+### Take 175 measured it, and the answer is not "brighter"
+
+**The cant is confirmed from pixels, for the first time.** Predicted eye-to-eye
+offset for a backdrop object: `B_x = 0.24251 NDC x 4224/2 x 2 = 1024.36 px`.
+Measured, every frame in 175a: **-1024.0, -1024.4, -1024.5, -1024.7, -1022.0**.
+The affine does exactly what the arithmetic said it would.
+
+**P91 is unanswerable, and 175b was vacuous BY CONSTRUCTION.** Every frame of
+175b reports the Sun at ratio exactly 1.0000 with dx exactly 0.0: with the
+redirect off, the right eye's *scene* is view 0's pixels, so the Sun in the
+right eye **is** the Sun in the left eye. A per-eye difference cannot survive
+that, whatever its cause. The arm could only ever return "symmetric".
+
+That is three takes -- 173, 174 and 175b -- spent on an elimination that cannot
+eliminate, and it was derivable in advance from take 58's own note that the knob
+is load-bearing for exactly this path. **Before running an elimination arm, state
+what the arm would show if the suspect were innocent**; if that is the same
+picture it shows when the suspect is guilty, the arm is a
+[[x4vr-guard-that-cannot-fail]] and the take is already spent.
+
+**P90 held in existence and failed in shape.** There is a real, repeatable
+per-eye difference at the Sun, and it is **not a brightness scale**:
+
+    region              frame 9   frame 10   frame 11
+    peak                 1.0000     1.0000     1.0000
+    core   0-25 px        0.919      0.920      0.929
+    halo  25-50 px        0.692      0.716      0.761   <- the whole effect
+    100-200 px            0.888      0.953      0.957
+
+Core and peak match; the **inner halo is 24-31% weaker in the right eye**. The
+saturated-area difference that looked so large at first (3220 px vs 1549 px) is
+a consequence of it, not a second finding: with a stronger halo, more of layer
+0 clears the 80%-of-peak threshold. One defect, not two.
+
+Looking at the crops directly: the left eye's Sun is a broad, soft, warm bloom;
+the right eye's is a tight white core with sharp rays. **A tight white core reads
+as brighter than a soft orange haze**, which is why Patola's "the right side's
+Sun was visibly brighter" and a measurement showing the right eye's halo *weaker*
+are the same observation. Neither is wrong.
+
+#### Two readings I produced and then killed
+
+Recorded because they were wrong, not despite it.
+
+1. **"The right eye is ~15% dimmer overall."** The whole-frame ratio reads
+   0.82-0.87 on the cockpit frames. It is comparing **different content**: the
+   two eyes see different fields by construction -- that is the cant -- so their
+   full-frame means are not comparable quantities. Killed by the absolute
+   distribution: **median (R-L) = 0.00000**, 89% of pixels within 0.02, and
+   symmetric tails (p99.9 +0.49, p0.1 -0.51). That is structure at slightly
+   different positions, not gain.
+2. **"There is a horizontal gradient, 0.735 at the left of frame to 1.564 at the
+   right."** Every one of those bands is near-black (means 0.011-0.024), where a
+   ratio of means is unstable and meaningless; the absolute differences are
+   0.0006-0.0063. I then hypothesised a screen-centred vignette to explain it and
+   **checked before believing it**: X4 has no vignette shader anywhere in its 587
+   GLSL files. Hypothesis dead in one grep.
+
+Both mistakes are the same one: **a ratio computed where the denominator is
+noise.** Report the absolute level next to every ratio, or the ratio will invent
+a defect.
+
+#### The instrument's range, stated
+
+`tools/bright_object.py` and the aligned comparison are only valid for content
+**at infinity**, because 1024 px is the offset for infinite distance alone. The
+cockpit and the HUD sit at finite distance with their own disparity, so
+comparing them at that offset produces garbage -- ratios of 0.048 and 1.241 on
+what are simply mismatched pixels. Only the Sun and the far starfield can be
+compared this way, and the tool does not know that; the operator must.
+
+#### Where #49 stands
+
+Open, better specified, and no longer about brightness. X4's bloom is
+**kinobloom** -- `kinobloom_prefilter`, `_downsample`, `_upsample`,
+`_upsample_high`: a pyramid. A halo band that is 30% weaker in one eye while the
+core matches to 1% is the signature of one level of that pyramid resolving
+differently per eye. That is a claim about which *image* differs, and
+`X4VR_MV_PROBE=1` answers it directly -- it hashes both layers of one per-eye
+attachment per frame and reports DIFFER or IDENTICAL, in the run's own serials,
+so no cross-run join is needed. Serials restart every run; the probe is the
+instrument that does not care.
+
+- **P93** -- some image in the bloom chain reads IDENTICAL where the passes
+  around it read DIFFER. That names the level.
+- **P94 (the refutation)** -- if every per-eye attachment reads DIFFER, the bloom
+  is being computed per-eye correctly and the halo difference is produced
+  somewhere that is not an attachment: the `p1_star` quad's own texture fetch,
+  or its mip selection.
+
 ### Piece 3 is NOT next
 
 The 1092×1180 render extent (0.65× area) stays parked until the two items above
