@@ -2969,6 +2969,69 @@ one-variable control against 172.
 - The orange halo is expected to be **gone**. If it survives into 174 it is a
   real defect of its own and gets its own task rather than being folded into #49.
 
+### Take 174: the fix works, P89 was my error, and the eye has run out of range
+
+`invproj final: off-axis affine UNDONE`, **228 modules corrected with
+`X4VR_BINDLESS_PATCH=0`** — P88 held, the hoist works in the game, and 174
+PASSes with `live-sx=296 mvp-sx=12`, matching 172 exactly. It is finally a
+one-variable control.
+
+**P89 was wrong, and wrong from something already established.** I predicted the
+frame would fuse about as well as 172. It cannot: the redirect is precisely what
+makes the right eye's composite sample view 1, and take 58 already recorded that
+this knob is load-bearing. Not a new defect — a prediction I had no business
+making.
+
+The orange halo did NOT return, which supports it having been the half-applied
+affine placing a glare term away from the object that caused it.
+
+On the Sun, Patola: *"the left and right eye sun's brightness seemed to match. I
+say 'seemed' because without the fusion it gets much more difficult to compare"*
+— using a nearby star as a reference. That is the **second** "seemed" in a row.
+
+**The eye is out of range, and saying so is the point.** It is the right and
+only instrument for "does this fuse", "is this the wrong way round", "is the
+panel on the wrong side" — questions this project has repeatedly got right from
+it. A ~10% luminance ratio on a small disc in an unfused image is not one of
+those questions. Asking a third time would be spending a take on an instrument
+already known to be at its limit.
+
+#### Take 175 — measured, not judged
+
+`X4VR_MV_DUMP_PRESENT=N` writes the finished eye image, both layers, every N
+presents. Two arms, one variable, and **no eye judgement at all**:
+
+    175a  the known-good config  (X4VR_BINDLESS_PATCH=1)
+    175b  the redirect removed   (X4VR_BINDLESS_PATCH=0)
+
+`tools/bright_object.py` finds the bright object **independently in each layer**
+and compares it. A fixed pixel box cannot be used: the Sun is at a different
+screen position in each eye by construction — that is the parallax plus a 30.07°
+cant — so a box would measure the disparity, not the brightness. Luminance is
+computed in **linear light**; a ratio taken on 8-bit sRGB code values understates
+by roughly 2× near white.
+
+Validated before use, three ways, against data already on disk:
+byte-identical layers (t65) give exactly 1.0000; genuinely differing layers (t69)
+are detected, with the −47 px parallax reported and the object ratio (0.9711)
+separated from the whole-frame control (**1.1532**); and the numpy and pure-Python
+implementations agree to every digit printed.
+
+**The whole-frame control is not decoration.** Take 60's table is the precedent:
+the background matched to 0.2% while lit surfaces ran 1.7–1.9, and that contrast
+is what made "not exposure, not tonemapping" a conclusion rather than a guess. If
+175a's frame ratio moves as much as its Sun ratio, the Sun is not the finding.
+
+- **P90** — 175a shows a Sun integrated ratio clearly away from 1.0 in the
+  direction Patola reports (layer 1 brighter), with a whole-frame control
+  nearer 1.0. This is the first *number* for #49.
+- **P91** — 175b's Sun ratio is nearer 1.0 than 175a's. That is the causal
+  claim, and it replaces two "seemed" readings with a measurement.
+- **P92 (the one that would reset #49)** — if 175a's Sun ratio is already ~1.0,
+  the defect is not in the presented image at all, and what Patola sees is
+  produced after it: the compositor, the runtime's own submission, or the
+  headset's per-panel response. The task then changes completely.
+
 ### Piece 3 is NOT next
 
 The 1092×1180 render extent (0.65× area) stays parked until the two items above
