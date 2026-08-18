@@ -574,6 +574,28 @@ struct ShaderVariants {
     // render pass -> per-subpass "this subpass draws the UI"
     std::unordered_map<VkRenderPass, std::vector<bool>> canvas_pass;
     uint32_t swapped = 0, canvas_swapped = 0;
+
+    // Task #42. What each module IS, so pipeline creation can say what each
+    // draw GOT. Everything here is decided at vkCreateShaderModule and never
+    // changes, which is exactly why it has to be recorded there: by the time a
+    // pipeline is built, the bytes that decided it are gone.
+    //
+    // `hash` is the join that makes this useful outside a run. X4's modules
+    // have no names; the frame analysis identifies them as mod-NNNN from the
+    // /tmp dumps, and hashing the unpatched SPIR-V is what lets a line in the
+    // log be matched back to one of those files. Without it this instrument
+    // would answer "which module" with a number that means nothing anywhere
+    // else.
+    struct ModuleInfo {
+        uint32_t serial = 0;
+        uint32_t hash = 0;      // FNV-1a of the ORIGINAL code words
+        const char *kind = "?";  // World / NonWorld / NotVertex (wide reading)
+        bool procedural = false;
+        const char *path = "none"; // live-sx / mvp-sx / baked-sx / clip / none
+        bool affine = false;
+        bool has_canvas = false;
+    };
+    std::unordered_map<VkShaderModule, ModuleInfo> info;
 } g_variants;
 
 // render pass -> inventory serial, so the framebuffer log can name the pass
@@ -1772,6 +1794,16 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDrawIndexed(VkCommandBuffer cb,
 // and Xwayland write their passes into the same log and the serials collide.
 // (Today gamescope happens to composite with compute and creates none, which
 // is luck, not a reason to skip the check.)
+// Task #42. One line per pipeline joining module -> pass -> variant, plus a
+// hash that names the module against the /tmp dumps. Its own knob rather than
+// riding on X4VR_MV_INVENTORY: that one describes render passes and this one
+// describes draws, and a run wanting the second does not necessarily want the
+// hundreds of lines of the first.
+const bool g_pipe_inventory = [] {
+    const char *e = getenv("X4VR_PIPE_INVENTORY");
+    return e && *e && strcmp(e, "0") != 0;
+}();
+
 const bool g_mv_inventory = [] {
     const char *e = getenv("X4VR_MV_INVENTORY");
     return e && *e && *e != '0';
@@ -4373,6 +4405,11 @@ VkResult create_shader_module_inner(
     // a stale shear on those is a far better outcome than no shear at all,
     // which would leave that geometry identical in both eyes.
     bool vert_patched = false;
+    // Task #42: which of the four vertex paths this module ended on. Recorded
+    // as it happens rather than inferred later -- "world and not live-sx"
+    // would be a guess, and the whole point of the instrument is to stop
+    // guessing which draw got what.
+    const char *patch_path = "none";
     if (proj_live() && world && have_k) {
         const float dl = -0.5f * configured_ipd();
         const float dr = +0.5f * configured_ipd();
@@ -4389,6 +4426,7 @@ VkResult create_shader_module_inner(
             KR ? &dr : nullptr, oal, oar);
         if (vert_patched) {
             n_live++;
+            patch_path = "live-sx";
         } else {
             // Task #23. Only ever as a fallback, and only for the modules the
             // camera-block patch just refused: those declare the set-3
@@ -4403,11 +4441,14 @@ VkResult create_shader_module_inner(
                                  kObjectMvpMember, dl, KR ? &dr : nullptr,
                                  oal, oar);
             (mvp ? n_mvp : n_baked)++;
+            patch_path = mvp ? "mvp-sx" : "baked-sx";
             vert_patched = mvp;
         }
     }
     if (!vert_patched)
         vert_patched = x4vr::spv::patch_vertex_clip(code, K, KR);
+        if (vert_patched)
+            patch_path = "clip";
 
     // `|| frag_patched` so a module that only needed the fragment edit still
     // gets created from the edited bytes.
@@ -4472,6 +4513,42 @@ VkResult create_shader_module_inner(
                         canvas_refuse("the driver rejected the canvas variant");
                     }
                 }
+            }
+            // Task #42. Recorded for EVERY module, not only the ones the line
+            // below happens to print: the question this exists to answer is
+            // "what drew that thing", and the module that drew it is exactly
+            // the one no summary chose to name.
+            if (g_pipe_inventory) {
+                const std::vector<uint32_t> orig_words(
+                    ci->pCode, ci->pCode + ci->codeSize / 4);
+                // FNV-1a over the ORIGINAL words, so the value matches a
+                // dumped mod-NNNN.spv rather than whatever this run patched
+                // it into. tools/module_map.py hashes the dumps the same way.
+                uint32_t h = 2166136261u;
+                const uint32_t *w = ci->pCode;
+                for (size_t i = 0; i < ci->codeSize / 4; i++) {
+                    h ^= w[i];
+                    h *= 16777619u;
+                }
+                ShaderVariants::ModuleInfo mi;
+                mi.serial = patched + 1;
+                mi.hash = h;
+                const auto k = x4vr::spv::classify(orig_words, true);
+                mi.kind = k == x4vr::spv::Kind::World      ? "World"
+                          : k == x4vr::spv::Kind::NonWorld ? "NonWorld"
+                                                           : "NotVertex";
+                mi.procedural =
+                    x4vr::spv::is_procedural_fullscreen(orig_words);
+                mi.path = patch_path;
+                // live-sx and mvp-sx carry the affine; baked-sx and clip do
+                // not. Same rule the summary line states, recorded per module
+                // so it can be read against a specific draw.
+                mi.affine = g_offaxis_on.load(std::memory_order_relaxed) &&
+                            (!strcmp(patch_path, "live-sx") ||
+                             !strcmp(patch_path, "mvp-sx"));
+                std::lock_guard<std::mutex> lock(g_variants.mu);
+                mi.has_canvas = g_variants.canvas.count(*out) != 0;
+                g_variants.info[*out] = mi;
             }
             if (++patched <= 3 || (patched % 50) == 0)
                 X4VR_LOG("patched vertex shader #%u (%s%s) "
@@ -4827,6 +4904,80 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
         }
         infos[i].pStages = stages[i].data();
     }
+
+    // Task #42: the join. One line per pipeline naming the pass, its verdicts,
+    // and for each stage which module X4 asked for and which variant it
+    // actually got.
+    //
+    // Placed here, before the !any early-out, so it covers pipelines the swap
+    // loop never touched -- those are the majority, and "the pass that draws
+    // the thing that looks wrong" has no reason to be one of the few that get
+    // substituted. An instrument that only reports the draws we already act on
+    // could not have answered the question that prompted it.
+    //
+    // `ci[i].pStages[j].module` is always the handle we returned from
+    // vkCreateShaderModule, so it is the key into `info`; the final module is
+    // whatever the swap left behind, and comparing the two is what names the
+    // variant.
+    if (g_pipe_inventory) {
+        std::lock_guard<std::mutex> lock(g_variants.mu);
+        // Read directly rather than through is_canvas_pass()/needs_original():
+        // those take g_variants.mu themselves and it is already held here.
+        auto pass_flag =
+            [](const std::unordered_map<VkRenderPass, std::vector<bool>> &m,
+               VkRenderPass rp, uint32_t sp) {
+                auto it = m.find(rp);
+                return it != m.end() && sp < it->second.size() &&
+                       it->second[sp];
+            };
+        for (uint32_t i = 0; i < count; i++) {
+            uint32_t rp_serial = UINT32_MAX;
+            auto rs = g_rp_serials.find(ci[i].renderPass);
+            if (rs != g_rp_serials.end())
+                rp_serial = rs->second;
+            char stagebuf[512];
+            int n = 0;
+            stagebuf[0] = '\0';
+            for (uint32_t j = 0; j < ci[i].stageCount; j++) {
+                const VkShaderModule asked = ci[i].pStages[j].module;
+                const VkShaderModule got =
+                    any && !stages[i].empty() ? stages[i][j].module : asked;
+                auto it = g_variants.info.find(asked);
+                const char *variant = "patched";
+                if (got != asked) {
+                    auto cv = g_variants.canvas.find(asked);
+                    variant = (cv != g_variants.canvas.end() &&
+                               cv->second == got)
+                                  ? "CANVAS"
+                                  : "original";
+                }
+                if (it == g_variants.info.end()) {
+                    n += snprintf(stagebuf + n, sizeof(stagebuf) - n,
+                                  " s%u=unpatched", j);
+                    continue;
+                }
+                const auto &m = it->second;
+                n += snprintf(stagebuf + n, sizeof(stagebuf) - n,
+                              " s%u=mod#%u/%08x(%s%s,%s%s)->%s", j, m.serial,
+                              m.hash, m.kind, m.procedural ? ",procedural" : "",
+                              m.path, m.affine ? ",+affine" : "", variant);
+                if (n < 0 || (size_t)n >= sizeof(stagebuf))
+                    break;
+            }
+            X4VR_LOG("pipe: rp #%u.%u [%s%s]%s",
+                     rp_serial, ci[i].subpass,
+                     pass_flag(g_variants.canvas_pass, ci[i].renderPass,
+                               ci[i].subpass)
+                         ? "canvas"
+                         : "-",
+                     pass_flag(g_variants.unsheared, ci[i].renderPass,
+                               ci[i].subpass)
+                         ? " unsheared"
+                         : "",
+                     stagebuf);
+        }
+    }
+
     if (!any) {
         VkResult r = d->CreateGraphicsPipelines(device, cache, count, ci, ac,
                                                 out);
