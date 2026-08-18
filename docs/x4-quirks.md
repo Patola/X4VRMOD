@@ -3180,6 +3180,78 @@ A measurement that makes the game unplayable does not just cost the take, it
 biases it — Patola got the Sun in frame by luck, and a run where the operator
 cannot aim is a run whose content is not the content that was asked for.
 
+### #49 localised: the volumetric in-scatter, which is mono by construction
+
+Measured with an **identity check** on the object, which the first pass lacked:
+
+    frames 2-7   menu / loading / 3D scene   SAME OBJECT   core 0.985-1.016  halo 0.985-1.001
+    frames 9-11  cockpit                     SAME OBJECT   core 0.919-0.929  halo 0.692-0.761
+
+The first attempt reported "consistent" halo ratios across frames 9-11 without
+checking that the blob found in each eye was the *same* blob. It was not always:
+one frame paired a planet limb with an asteroid at a 1024 px offset that only
+applies at infinity, and produced a confident 2.597. **`dx` near 1024 is not
+proof of identity** — the check is a correlation of the two neighbourhoods, and
+with it the unusable frames (8, and the all-frame ones) name themselves.
+
+So: **the difference exists only once the cockpit scene is drawn.** In the menus
+and the loading screens the brightest object is identical between eyes to within
+1.5%.
+
+Excluded, each on its own evidence:
+
+* **The `p1_star` sprite.** Its quad size comes from `M_projection[1][1]`,
+  `V_cameraposition` and `M_view`. The per-eye patch touches `[2][0]` (shear)
+  and `[3][0]` (`B_x`) and **not** `[1][1]`, so `boost`, `fovy` and `worldScale`
+  are identical in both eyes and the sprite is the same size in each. Read off
+  the shader source, not inferred.
+* **The kinobloom pyramid.** Level `img #66` measures `dx = -256.0` exactly
+  (1024/4 at quarter resolution) with core and halo ratios of **1.000**.
+* **A global gain difference.** Ruled out earlier: median `(R-L) = 0.00000`.
+* **Occlusion.** The side-by-side at frame 9 shows the star cluster, HUD arc,
+  reticle, canopy edge and speed meter all matching; nothing crosses the glow.
+
+What is left is exactly one thing, and it was documented at
+`docs/frame-analysis.md:7209` long before this task existed:
+
+    OUT_RT0.rgb = scene · fog.a + fog.rgb        // transmittance and in-scatter
+
+> "The volume is built by compute, so it cannot be per-view. The fog volume is a
+> 88x88x128 3D image ... written by compute. There is **one** volume, built once
+> per frame for one camera, and both views composite from it."
+
+Take 176 confirms the mechanism is still live: `7 of those are compute: no
+gl_ViewIndex exists there`. The in-scatter term is **additive**, **warm**,
+**spatially broad** and **only present in the world scene** — every property of
+the difference. It is the same shape as task #48's finding: not a computation
+that is wrong, but one that is *mono* while the frame around it is per-eye.
+
+#### Take 177 — one knob, and it is NOT vacuous
+
+`X4VR_DISABLE_FOG=1` already exists: *"volumetric composite forced to scene*1+0
+— DIAGNOSTIC, not a fix"*.
+
+**Checked against take 173's mistake first**, because that is the rule now:
+what does this arm show if the suspect is INNOCENT? With fog off, both eyes
+still draw the Sun through `p1_star` and still bloom it, per-eye, so a halo
+difference *can* still appear. It removes one additive term rather than
+collapsing the two eyes into one image. That is a real elimination, unlike
+`X4VR_BINDLESS_PATCH=0`, which made the right eye a copy of the left and could
+only ever answer "symmetric".
+
+- **P95** — with fog disabled the cockpit frames read core and halo ratios near
+  1.0, matching what the menu frames already read. The in-scatter is confirmed
+  and #49 becomes "make the froxel volume per-eye, or accept it".
+- **P96 (refutation)** — the halo stays ~0.7. Then the in-scatter is innocent
+  and the only remaining candidate in the frame is the eye image itself, i.e.
+  our own compositor, which would be the first defect of this task located in
+  our code rather than X4's.
+
+**Cost, stated before the run**, because take 176 was not:
+`X4VR_DISABLE_FOG=1` changes a shader constant and costs nothing per frame. The
+only telemetry is `X4VR_MV_DUMP_PRESENT=600` — one readback every ~20 s, and
+dumps are PNG now. **No probe.** The game should be as playable as take 175a.
+
 ### Piece 3 is NOT next
 
 The 1092×1180 render extent (0.65× area) stays parked until the two items above
