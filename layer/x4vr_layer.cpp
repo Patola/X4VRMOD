@@ -589,7 +589,25 @@ struct ShaderVariants {
     struct ModuleInfo {
         uint32_t serial = 0;
         uint32_t hash = 0;      // FNV-1a of the ORIGINAL code words
-        const char *kind = "?";  // World / NonWorld / NotVertex (wide reading)
+        // **The classification the dispatch actually used**, not a second
+        // reading of the same module. Take 171 printed the WIDE reading here
+        // while the patch ran on the narrow one, so eighteen modules logged
+        // "World" after being handled as UI -- an instrument reporting a
+        // different predicate than the code it describes. The header said
+        // "(wide reading)" and was right; the field sits next to `path`, where
+        // it reads as "this is how the patch saw it", and that is what was
+        // read off it.
+        const char *kind = "?";  // World / NonWorld / NotVertex (as dispatched)
+        // classify(code, true) == World while `kind` is NonWorld: geometry
+        // positioned by the camera rather than a per-object matrix. These get
+        // K_nonworld -- identity -- inside a STEREO pass, so they are the set
+        // that draws in X4's frustum while everything around them is canted.
+        bool camera_positioned = false;
+        // No right-eye matrix was configured for this kind, so the module is
+        // identical in both eyes. Silent until now, and it is half the defect:
+        // a mono draw inside a stereo pass cannot fuse no matter what the
+        // vertex path did.
+        bool mono = false;
         bool procedural = false;
         const char *path = "none"; // live-sx / mvp-sx / baked-sx / clip / none
         bool affine = false;
@@ -4374,6 +4392,19 @@ VkResult create_shader_module_inner(
         return s && *s && *s != '0';
     }();
     const x4vr::spv::Kind kind = x4vr::spv::classify(code, wide_camera);
+    // Task #48. The 18 modules the two readings disagree about: world geometry
+    // positioned by the CAMERA rather than by a per-object matrix -- X4's
+    // instanced light volumes, and `p1_star`, which draws the suns and the
+    // bright named stars. With X4VR_SHEAR_LIGHTS off they classify NonWorld,
+    // take K_nonworld (identity) and get no right-eye matrix at all, so they
+    // draw mono and in X4's own frustum inside a STEREO pass while the 152
+    // world modules around them are canted by +/-15.04 deg.
+    //
+    // Computed from the same `code` the dispatch branched on, so it cannot
+    // disagree with `kind` the way take 171's second classify() call did.
+    const bool camera_positioned =
+        kind != x4vr::spv::Kind::World &&
+        x4vr::spv::classify(code, true) == x4vr::spv::Kind::World;
     if (kind == x4vr::spv::Kind::NotVertex) {
         if (!frag_patched)
             return d->CreateShaderModule(device, ci, ac, out);
@@ -4399,7 +4430,14 @@ VkResult create_shader_module_inner(
 
     static uint32_t patched = 0, n_world = 0, n_nonworld = 0, n_stereo = 0;
     static uint32_t n_live = 0, n_baked = 0, n_mvp = 0;
+    // Counted at the dispatch, not derived later from the per-module lines --
+    // the same "count the fact twice at one site" the pipe-inventory
+    // cross-check rests on, so score_run.py can contradict the inventory
+    // instead of agreeing with it by construction.
+    static uint32_t n_clip = 0, n_cam_pos = 0;
     (world ? n_world : n_nonworld)++;
+    if (camera_positioned)
+        n_cam_pos++;
     if (KR)
         n_stereo++;
 
@@ -4472,6 +4510,7 @@ VkResult create_shader_module_inner(
         if (vert_patched) {
             patch_path = "clip";
             g_path_clip++;
+            n_clip++;
         }
     }
 
@@ -4558,10 +4597,20 @@ VkResult create_shader_module_inner(
                 ShaderVariants::ModuleInfo mi;
                 mi.serial = patched + 1;
                 mi.hash = h;
-                const auto k = x4vr::spv::classify(orig_words, true);
-                mi.kind = k == x4vr::spv::Kind::World      ? "World"
-                          : k == x4vr::spv::Kind::NonWorld ? "NonWorld"
-                                                           : "NotVertex";
+                // `kind`, not a fresh classify() -- this is the value the
+                // dispatch branched on a few lines above. Re-deriving it here
+                // is what produced take 171's wrong report: the second call
+                // passed wide_camera=true unconditionally while the dispatch
+                // used the X4VR_SHEAR_LIGHTS knob, which is off by default.
+                mi.kind = kind == x4vr::spv::Kind::World      ? "World"
+                          : kind == x4vr::spv::Kind::NonWorld ? "NonWorld"
+                                                              : "NotVertex";
+                // The disagreement itself, reported rather than collapsed:
+                // 18 of X4's 409 modules are camera-positioned world geometry
+                // (instanced light volumes, and p1_star -- the suns and bright
+                // stars). Narrow classify() calls them UI.
+                mi.camera_positioned = camera_positioned;
+                mi.mono = KR == nullptr;
                 mi.procedural =
                     x4vr::spv::is_procedural_fullscreen(orig_words);
                 mi.path = patch_path;
@@ -4578,21 +4627,27 @@ VkResult create_shader_module_inner(
             if (++patched <= 3 || (patched % 50) == 0)
                 X4VR_LOG("patched vertex shader #%u (%s%s) "
                          "[world=%u nonworld=%u stereo=%u live-sx=%u "
-                         "mvp-sx=%u baked-sx=%u]%s",
+                         "mvp-sx=%u baked-sx=%u clip=%u cam-pos=%u]%s",
                          patched, world ? "world" : "nonworld",
                          KR ? ", per-view" : "", n_world, n_nonworld, n_stereo,
-                         n_live, n_mvp, n_baked,
-                         // The affine reaches live-sx + mvp-sx and nothing
-                         // else, so baked-sx is exactly the set of world
-                         // modules left in X4's frustum while the rest move to
-                         // the runtime's. Named on the line that counts them.
+                         n_live, n_mvp, n_baked, n_clip, n_cam_pos,
+                         // This line used to name baked-sx as "exactly the set
+                         // of world modules left in X4's frustum", and that was
+                         // wrong in the way that matters: `clip` is a SECOND
+                         // door to the same place, it was not on the line at
+                         // all, and baked-sx reads 0 in every run while clip
+                         // does not. Take 171 was read as "nobody is in the
+                         // wrong frustum" off a counter that cannot rise.
+                         // cam-pos is the subset that hurts: world geometry
+                         // dispatched as UI, drawn mono and uncanted inside a
+                         // stereo pass.
                          // Peek, never latch. Latching here would fix the
                          // target at the first NONWORLD module, which take 163
                          // timestamps 12 ms before the first located frame --
                          // the runtime would lose the race every run.
                          g_offaxis_on.load(std::memory_order_relaxed)
                              ? " +offaxis (live-sx and mvp-sx only; baked-sx "
-                               "keeps X4's frustum)"
+                               "AND clip keep X4's frustum)"
                              : "");
             return r;
         }
@@ -4983,9 +5038,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
                 }
                 const auto &m = it->second;
                 n += snprintf(stagebuf + n, sizeof(stagebuf) - n,
-                              " s%u=mod#%u/%08x(%s%s,%s%s)->%s", j, m.serial,
-                              m.hash, m.kind, m.procedural ? ",procedural" : "",
-                              m.path, m.affine ? ",+affine" : "", variant);
+                              " s%u=mod#%u/%08x(%s%s%s%s,%s%s)->%s", j,
+                              m.serial, m.hash, m.kind,
+                              m.camera_positioned ? ",camera-positioned" : "",
+                              m.mono ? ",MONO" : "",
+                              m.procedural ? ",procedural" : "", m.path,
+                              m.affine ? ",+affine" : "", variant);
                 if (n < 0 || (size_t)n >= sizeof(stagebuf))
                     break;
             }

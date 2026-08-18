@@ -2728,6 +2728,110 @@ Then, in order:
 4. The question to answer is one sentence: *which passes draw content that
    reaches the screen without the affine, while the declaration is canted?*
 
+### Take 171 answered it — task #48, and two documented claims were wrong
+
+The sentence in step 4 has an answer: **the modules X4 positions with the
+camera instead of a per-object matrix.** Eighteen of X4's 409, and the two that
+matter here are `p1_star` — the suns and the bright named stars — and the
+instanced deferred light volumes.
+
+`classify()` calls a module World only if its vertex stage reads member 0 of the
+set-3 block. These declare no set 3 at all: `p1_star`'s vertex shader ends
+
+    gl_Position = M_projection * M_view * vec4(quadPos, 1.0);
+
+so it is positioned straight off the camera. `wide_camera` exists precisely for
+them (task #22 / P70) and is **off by default**, so they classify NonWorld, take
+`K_nonworld` — identity — and get `KR == nullptr`, which the layer's own comment
+says "is what keeps the module mono". They therefore draw **mono and in X4's
+uncanted frustum inside `rp #23`, a STEREO pass**, while the 152 world modules
+around them are canted by ±15.04°. That is the 30.07° divergence from
+`common/x4vr_view.hpp:291` — the negative control — applied to a few objects
+instead of the whole frame. Patola: *"the cockpit feels ok except for part of
+the sky (stars / nebulas)"*.
+
+**Two things this project had written down were false, and both were load-bearing.**
+
+1. **"The skybox is a compute shader, so the affine cannot reach it by any
+   mechanism this project currently has"** — `docs/frame-analysis.md:3490` and
+   the P12 retraction above. `mod-0267` is not the skybox. Reading it end to end
+   shows six cube-face direction bases, a 2048-sample Hammersley loop and an
+   `ImageWrite` into a cube RT: it is **environment-map prefiltering for
+   reflections**, it never reads the camera projection, and it is eye-independent
+   and correct as it stands. The identification came from an instrument that
+   searched for `samplerCube` and found one in a compute module; the leap to
+   "that is the skybox" was never checked. **X4's procedural starfield is
+   `mod-0111/0112` (`p1_starfield`), it is `World,live-sx`, and it carries the
+   affine today.** The affine reaches the sky fine. What it does not reach is
+   `p1_star`.
+2. **"Every one of those is the current rule working exactly as written"** —
+   take 165b's per-feature measurement found *"some stars moved by large amounts
+   while other stars did not"* and concluded it was not a misclassification. It
+   is exactly a misclassification, of exactly 18 modules. The starfield stars
+   move because they are World; the `p1_star` suns do not because they are not.
+   The measurement was right and the reading of it was wrong.
+
+Both errors have the same shape: **an identification made by an instrument that
+could not tell the two cases apart, then quoted downstream as established.**
+
+X4 ships its GLSL. `shadergl/glsl/**` and `shadergl/ogl/*.xml` extract straight
+out of the `.cat`/`.dat` archives in plain text — 587 files — and joining a
+shader's rarest property name against the dumps names a module outright
+(`layer1_boostmin` → `mod-0111/0112`, `base_hue_shift` → `mod-0226/0227`).
+Four months of reverse-engineering SPIR-V had a source tree sitting next to it.
+Egosoft's copyright: extract to `/tmp`, never commit, same standing as the dumps.
+
+#### The instrument was lying again, and differently
+
+Take 170's instrument lied through a missing pair of braces. Take 171's lied
+through a **different predicate**:
+
+    const auto k = x4vr::spv::classify(orig_words, true);   // instrument
+    const x4vr::spv::Kind kind = classify(code, wide_camera); // dispatch
+
+The inventory printed the *wide* reading beside `path`, where it reads as "this
+is how the patch saw it". So all 18 logged `World` after being handled as UI.
+The braces bug made every line agree with every other; this one made every line
+agree with *reality as it could have been*, which is harder to spot because the
+number is not suspicious. The struct comment said `(wide reading)` and was
+right — the field was read at its point of use, not at its declaration.
+
+The summary line was worse, because it stated the false claim in words:
+
+    baked-sx=0] +offaxis (live-sx and mvp-sx only; baked-sx keeps X4's frustum)
+
+`baked-sx` is **0 in every run** — when the mvp patch declines, `vert_patched`
+stays false and the module falls into the clip branch, which overwrites the path.
+`clip` is a second door to the same wrong frustum, it was never on that line, and
+it is the door that is actually open. A guard whose counter cannot rise is not a
+guard. Fixed: the line now carries `clip=` and `cam-pos=`, the per-module entry
+carries `,camera-positioned` and `,MONO`, `kind` is the dispatch's own value, and
+`score_run.py` FAILs on a camera-positioned module drawing uncanted in a stereo
+pass — **tested by rewriting take 171's log into what the fixed layer would have
+emitted, and confirming it FAILs there and stays silent on the original.**
+
+#### Committed BEFORE take 172
+
+`X4VR_SHEAR_LIGHTS=1` is an existing knob, default off since task #22. All 18
+modules were run through `patch_vertex_eye_offset` offline: **18/18 accept it and
+produce SPIR-V that passes `spirv-val`**, so with the knob on they move to
+`live-sx` and gain the shear and the affine, reading `sx` live rather than baked.
+
+- **P82** — with `X4VR_SHEAR_LIGHTS=1`, `score_run.py` reports `cam-pos=18`
+  with no camera-positioned module drawing uncanted in a stereo pass, and
+  `live-sx` rises by ~18 while `clip` falls by the same.
+- **P83** — the suns and bright stars fuse with the rest of the world. This is
+  the eye check, and it is the *only* one Patola is asked for.
+- **P84** — dark regions get *less* wrong, not more: this is the same set of
+  light volumes as take 60's "additive lift in the dark", which was never fixed.
+- **P85 (the refutation to watch)** — shadows are unaffected, because the
+  pass-level MONO gate substitutes the unsheared twin for depth-only passes.
+  Shadows broke Patola's *previous* attempt at this mod and are a first-class
+  hazard; if they move, P85 is refuted and the knob goes straight back off.
+
+If P83 fails while P82 holds, `p1_star` is not what Patola is seeing and the sky
+question reopens with the starfield already excluded.
+
 ### Piece 3 is NOT next
 
 The 1092×1180 render extent (0.65× area) stays parked until the two items above

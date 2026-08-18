@@ -781,6 +781,61 @@ def main(path):
                               f"with the patch-site counters (live-sx={live} "
                               f"mvp-sx={mvp} baked-sx={baked})")
 
+                # Task #48. The defect take 171 was read past: world geometry
+                # positioned by the CAMERA (X4's instanced light volumes, and
+                # p1_star -- the suns and bright stars) classifies NonWorld
+                # under the narrow rule, so it takes K_nonworld (identity) and
+                # no right-eye matrix. It then draws MONO and in X4's own
+                # frustum inside a STEREO pass, while everything around it is
+                # canted by the affine. That is the 30.07 deg divergence,
+                # applied to a handful of objects instead of the whole frame,
+                # and it is invisible to every counter that existed: baked-sx
+                # is 0 in every run, and `clip` was not on the summary line.
+                #
+                # Two sources again, on purpose. cam-pos counts at the patch
+                # site; the inventory names the passes. Either one alone can be
+                # wrong -- together they have to agree.
+                campos_cnt = re.search(r"clip=(\d+) cam-pos=(\d+)", text)
+                stereo_hits, campos_passes = set(), set()
+                for rp, sp, flags, rest in re.findall(
+                        r"pipe: rp #(\d+|4294967295)\.(\d+) \[([^\]]*)\](.*)",
+                        text):
+                    for mm in re.finditer(
+                            r"s\d+=mod#(\d+)/([0-9a-f]{8})\(([^)]*)\)->(\w+)",
+                            rest):
+                        if "camera-positioned" not in mm.group(3):
+                            continue
+                        campos_passes.add("rp #" + rp)
+                        # "unsheared" passes substitute the original twin by
+                        # design (shadow, fullscreen post) -- being uncanted
+                        # there is correct, not a defect. Only a stereo pass
+                        # makes it visible.
+                        if "unsheared" not in flags and "+affine" not in \
+                                mm.group(3):
+                            stereo_hits.add((mm.group(2), "rp #" + rp))
+                if stereo_hits:
+                    where = sorted({p for _, p in stereo_hits})
+                    fails.append(
+                        f"{len(set(h for h, _ in stereo_hits))} camera-"
+                        f"positioned module(s) draw in STEREO pass(es) "
+                        f"{', '.join(where)} without the affine — that is "
+                        f"world geometry left in X4's frustum, mono, while the "
+                        f"rest of the pass is canted by 30.07°. p1_star (the "
+                        f"suns and bright stars) is in this set. Re-run with "
+                        f"X4VR_SHEAR_LIGHTS=1 to move them onto live-sx")
+                elif campos_cnt and int(campos_cnt.group(2)) > 0 and \
+                        not campos_passes:
+                    fails.append(
+                        f"the patch site counted cam-pos="
+                        f"{campos_cnt.group(2)} camera-positioned module(s) "
+                        f"but the pipe inventory tags none — the two readings "
+                        f"disagree, so the inventory is not describing this "
+                        f"run's dispatch. Do not read the kind field")
+                elif campos_cnt:
+                    print(f"pipe     clip={campos_cnt.group(1)} "
+                          f"cam-pos={campos_cnt.group(2)}; no camera-positioned "
+                          f"module draws uncanted in a stereo pass")
+
                 # Task #40, the other half of the same idea. Screen-locked
                 # draws have to be placed in the DECLARED frame or they sit at
                 # the frustum centre in each eye, and the two centres are
