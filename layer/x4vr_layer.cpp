@@ -4730,9 +4730,18 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
         // join and the reason it has to be decided here: the same module is
         // bound to rp #13 (a ship hull, which wants the shear) and to rp #33
         // (a menu quad, which wants the shift), so the module cannot decide
-        // for itself. Modules with no canvas entry -- NonWorld, and every
-        // module in the blit passes -- fall through to the existing swap and
-        // behave exactly as before.
+        // for itself. Modules with no canvas entry -- since task #40 that is
+        // the procedural fullscreen ones, which have to keep covering the
+        // screen exactly, plus every module in the blit passes -- fall through
+        // to the existing swap and behave exactly as before.
+        //
+        // Reached only for subpasses that need the original, which is what
+        // `continue` above filters on. That is not an oversight: a canvas pass
+        // is one with colour, no depth and all-LDR attachments, and take 71
+        // made exactly that shape unsheared. The two predicates agree by
+        // construction rather than by luck, and the swap count stays small --
+        // takes 98-100 built 348 variants and swapped 18 -- because only a
+        // handful of pipelines are built against a UI pass.
         const bool canvas = is_canvas_pass(ci[i].renderPass, ci[i].subpass);
         for (auto &st : stages[i]) {
             std::lock_guard<std::mutex> lock(g_variants.mu);

@@ -2390,7 +2390,104 @@ settled position as of take 165b.
 2. ~~**The deferred reconstruction ignores the affine.**~~ **DONE — task #39.**
    See below.
 
-**Both are done. The next thing #35 needs is a VR take (#41).**
+**Both are done. The next thing #35 needs is a VR take (#41), specified below
+with its predictions — written before the run, as this project requires.**
+
+### #41 — the take, and what it should show
+
+Two runs, control first, the same structure that localised 165a/165b in one
+sitting. Both lines are complete; neither is "the last one plus X".
+
+**A — control, affine off. Reproduces take 163 and proves #39/#40 changed
+nothing when the map is not asked for.**
+
+    X4VR_AA=fsr_quality X4VR_TAKE=166a-CTRL X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_H=4224 X4VR_W=8448 X4VR_DUMP_MATRICES=1 X4VR_RES=4224x4224 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_PROJ_INVPROJ=1 X4VR_SBS=1 X4VR_MV_INVENTORY=1 X4VR_LOG=/tmp/x4vr-take166a.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_OFFAXIS=off X4VR_BINDLESS_MIRROR=1 ./launch/x4vr-launch.sh
+
+**B — the test, affine on from the runtime's frusta, canvas at infinity.**
+
+    X4VR_AA=fsr_quality X4VR_TAKE=166b-OAUI X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_H=4224 X4VR_W=8448 X4VR_DUMP_MATRICES=1 X4VR_RES=4224x4224 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_PROJ_INVPROJ=1 X4VR_SBS=1 X4VR_MV_INVENTORY=1 X4VR_LOG=/tmp/x4vr-take166b.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_OFFAXIS=runtime X4VR_BINDLESS_MIRROR=1 ./launch/x4vr-launch.sh
+
+Diffed against take 165b's own `env: run =` line, the changes are: the take
+name and log path; `X4VR_OFFAXIS` stated explicitly (it was the default in
+165b and is opt-in since); `X4VR_PROJ_INVPROJ=1` stated rather than left to the
+default, because this project has already been bitten by "omitted" and "=0"
+ceasing to mean the same thing; and `X4VR_MV_INVENTORY=1`, which is a one-shot
+line per render pass at creation and is the only thing that would say *which*
+passes classify as a canvas if none of them take one.
+
+No `X4VR_CANVAS_M`. **Infinity is the state that ships** when the affine is on
+and no distance is named, so it is the one that has to be right. If the UI
+turns out to be fusable but uncomfortably far, that is a comfort question for
+a follow-up with `X4VR_CANVAS_M=2` — stage4's proven value — and not a defect
+in this take.
+
+#### Predicted, before the run
+
+Run B's log should carry:
+
+    offaxis: target from the runtime's located views — eye0 l=-54.00 r=40.00 u=44.00 d=-55.00, eye1 l=-40.00 r=54.00 …
+    canvas: at infinity, CANTED — screen half-angle 55.00 deg (sx=0.70021) -> A_x=1.2892 A_y=1.1931, eye0 x offset +0.24251 eye1 -0.24251 NDC …
+    canvas final: ~350 variant(s) built, 0 REFUSED, swapped into >0 pipeline stage(s)
+    invproj final: per-eye M_invprojection — ~226 modules corrected
+    invproj final: off-axis affine UNDONE in the deferred reconstruction
+
+The swap count will be **small — takes 98–100 saw 18** — because only a handful
+of pipelines are built against a UI pass. Small is expected; **zero is the
+failure**, and it is the one that looks like success.
+
+Run A's log should carry `offaxis: OFF by request`, no `canvas:` line, and the
+same `invproj final: … ~226 modules corrected` **without** the affine line.
+
+#### What the SBS screenshot will look like, and why it is not alarming
+
+**The HUD will sit noticeably right-of-centre in the left half and left-of-centre
+in the right half — about 0.2425 NDC each way, ~512 px on a 4224-wide half.**
+That is `B_x`, and it is the correction, not a defect. Straight ahead really is
++15.04° off image centre in one eye and −15.04° in the other; putting the HUD
+at the same *pixel* in both halves is precisely what made 165b unfusable.
+
+**The HUD will also look bigger and slightly stretched** — magnified 1.289×
+horizontally and 1.193× vertically. The 8% anisotropy is correct: the target
+frustum spans 94° horizontally and 99° vertically, so equal angles are not
+equal NDC. The headset undoes exactly this.
+
+Both halves are therefore *supposed* to differ, side by side, and the flat
+screenshot is the wrong instrument for judging it. The question the headset
+answers is only: **does it fuse into one image, in one place?**
+
+#### What to do in the run
+
+This is an **interaction** take, not a measurement one — the questions are
+about content that only appears when it is used.
+
+1. Let it reach the main menu. Look at the menu's 3D animation: the shadows
+   should now match between the two halves (that is #39; in 165b they were
+   completely different).
+2. Load a save. The loading screen should be fusable, and its eyes not swapped.
+3. In the cockpit, look at the **HUD panel, the radar, and the weapon gauges**
+   — the three things that moved wrongly in 165b. Each should fuse into a
+   single object at a single place.
+4. Move the mouse over a menu button. **The pointer must land on the button it
+   activates.** If it sits a constant distance away, the canvas moved and the
+   cursor did not.
+5. Open the map (M). It is drawn by a different camera (|sy/sx| = 1.5) and is
+   the case most likely to expose a wrong screen field.
+6. Park in the world for ~60 s after the save has loaded, so the perf window
+   has something to measure — #39 added arithmetic to 244 fragment modules and
+   this is the first run that can price it.
+7. Exit cleanly.
+
+#### Acceptance
+
+    python3 tools/score_run.py /tmp/x4vr-take166a.log
+    python3 tools/score_run.py /tmp/x4vr-take166b.log
+
+Both must come back with no `FAIL`. Run B specifically must **not** produce
+`the declared frusta are canted … and screen-locked content was NOT put on the
+canvas`, which is the check that would have failed 165b before the headset went
+on, and must not produce the half-applied `#39` or wrong-field `A_x` failures.
+Patola's eye is the authority on *characterisation* — "does it fuse", "does the
+pointer land" — and the scorer is the authority on whether the run happened.
 
 ### #39 — the deferred reconstruction, done
 
