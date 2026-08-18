@@ -3593,6 +3593,10 @@ bool vr_located_fov(float out[2][4]);
 // stop, and no view has been located yet. Without it the wait below would burn
 // its whole cap on a machine with no runtime at all.
 bool vr_awaiting_first_view();
+// Spawns the session thread if a device was noted and it has not been spawned
+// yet. Idempotent. Normally reached from vkGetDeviceQueue; the latch below has
+// to be able to reach it too — see the note there.
+void vr_start_session_deferred();
 
 // Non-latching. The per-module log line wants to *describe* the target, and
 // calling the latching accessor there would fix it at the first NONWORLD
@@ -3638,12 +3642,46 @@ const OffAxisPair &offaxis_target() {
         // extra steps. The decision has to be the same for every module in the
         // process, so the only question is whether it is made too early.
         //
-        // Deadlock-safe by construction: the session runs on its own thread,
-        // spawned from vkGetDeviceQueue long before any shader module, so a
-        // loading thread blocking here cannot be what the session is waiting
-        // for. The wait is skipped entirely unless this run asked for the
-        // runtime's frusta, so no other configuration pays for it.
+        // **Take 167b: the wait deadlocked on itself, and the log said so to
+        // the millisecond.**
+        //
+        //     233213.887  offaxis: waited 5000 ms — no view was located
+        //     233213.888  vr: physical device …      <- the session thread's
+        //     233213.889  vr: session created           FIRST line, 1 ms later
+        //     233213.893  located=1
+        //
+        // I had written here that this was "deadlock-safe by construction: the
+        // session runs on its own thread, spawned from vkGetDeviceQueue long
+        // before any shader module". That premise is false, and take 166b's
+        // log already showed it false — the thread's first line lands AFTER
+        // the first shader module, because X4 has not called vkGetDeviceQueue
+        // yet. So the wait sat in front of the very call that would have
+        // started the session, and burned its whole cap. Second time on this
+        // one question that I asserted an ordering I had the data to check.
+        //
+        // Hence: start the session here, then wait. vr_start_session_deferred
+        // is idempotent and does nothing but spawn the thread, and this is not
+        // inside the loader's device-creation chain — which is the one place
+        // VrState says it must not be called from.
+        //
+        // The cap stays, and it is the honest part of this: two premises about
+        // what the session thread needs have now been wrong, so a third that
+        // costs five seconds once and logs itself is better than one that
+        // could hang. The wait is skipped entirely unless this run asked for
+        // the runtime's frusta.
         if (want_rt && !vr_located_fov(rt)) {
+            // Logged as a pair with the wait below, so the next log shows the
+            // causality instead of leaving it to be re-derived from
+            // timestamps -- which is how the last two attempts went wrong.
+            const bool spawned_here = vr_awaiting_first_view();
+            vr_start_session_deferred();
+            X4VR_LOG("offaxis: the first shader needed a target and no view "
+                     "was located yet; %s",
+                     spawned_here
+                         ? "starting the VR session from here, because X4 has "
+                           "not called vkGetDeviceQueue yet and the wait would "
+                           "otherwise block the call that starts it"
+                         : "no session is pending, so waiting cannot help");
             // Not a knob. A run's behaviour must not depend on a timeout
             // someone tuned, and 10 ms is the number this exists to cover;
             // five seconds is slack for a headset still waking up.
