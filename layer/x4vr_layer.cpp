@@ -2633,7 +2633,15 @@ void bindless_report(const char *when) {
         // `latched` is the acquire side of the release store that publishes
         // the target, so reading it first is what makes `on` meaningful here;
         // reading `on` alone would be a relaxed load of a relaxed store.
-        if (g_offaxis_latched.load(std::memory_order_acquire) &&
+        // A *final* verdict only, for the reason the canvas report already
+        // gives two blocks up and this one forgot: at first present X4 has
+        // typically patched no deferred module yet, so `undone` is false and
+        // this cried HALF APPLIED on a perfectly healthy run. Take 169b was
+        // failed by score_run.py on that line while its final line said
+        // UNDONE — a scorer failing a good run is worse than one that misses,
+        // because it teaches the reader to skip the verdict.
+        if (strstr(when, "final") != nullptr &&
+            g_offaxis_latched.load(std::memory_order_acquire) &&
             g_offaxis_on.load(std::memory_order_relaxed)) {
             const bool undone = g_invproj_patched.load() > 0;
             X4VR_LOG("invproj %s: off-axis affine %s in the deferred "

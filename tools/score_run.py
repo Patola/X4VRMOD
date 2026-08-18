@@ -730,7 +730,11 @@ def main(path):
                 # shadows were. Reachable through X4VR_PROJ_INVPROJ=0 and
                 # through the bindless mirror being off, so it is checked
                 # rather than assumed.
-                if "off-axis affine NOT undone" in text:
+                # Keyed on the FINAL line. The first-present report legitimately
+                # says "NOT undone" before any deferred module has been patched,
+                # and matching anywhere in the log failed take 169b for a state
+                # its own final line contradicted four thousand lines later.
+                if "invproj final: off-axis affine NOT undone" in text:
                     fails.append(
                         "the off-axis affine is applied to gl_Position but "
                         "NOT undone in the deferred reconstruction — every "
@@ -739,7 +743,7 @@ def main(path):
                         "eye. Set X4VR_PROJ_INVPROJ=1 (and leave the bindless "
                         "mirror on), or turn the affine off entirely with "
                         "X4VR_OFFAXIS=off. Half-applied is worse than either")
-                elif "off-axis affine UNDONE" in text:
+                elif "invproj final: off-axis affine UNDONE" in text:
                     print("offaxis  deferred reconstruction corrected too — "
                           "T(d)·M_invprojection·A⁻¹, same latched target as "
                           "the vertex patches (task #39)")
