@@ -1794,6 +1794,17 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDrawIndexed(VkCommandBuffer cb,
 // and Xwayland write their passes into the same log and the serials collide.
 // (Today gamescope happens to composite with compute and creates none, which
 // is luck, not a reason to skip the check.)
+// Task #42's self-check. The per-module `path` field is derived at the patch
+// site; these three are counted independently at the same site and printed in
+// the existing summary line. If the instrument is right they agree exactly.
+//
+// Take 170 is why this exists: a missing pair of braces stamped "clip" over
+// every module's real path, 1007 pipeline lines all said the same thing, and
+// nothing in the run objected -- while the summary line four lines away was
+// reporting live-sx=288. Two numbers for one fact, and no code comparing them.
+std::atomic<uint32_t> g_path_live{0}, g_path_mvp{0}, g_path_baked{0},
+    g_path_clip{0};
+
 // Task #42. One line per pipeline joining module -> pass -> variant, plus a
 // hash that names the module against the /tmp dumps. Its own knob rather than
 // riding on X4VR_MV_INVENTORY: that one describes render passes and this one
@@ -4427,6 +4438,7 @@ VkResult create_shader_module_inner(
         if (vert_patched) {
             n_live++;
             patch_path = "live-sx";
+            g_path_live++;
         } else {
             // Task #23. Only ever as a fallback, and only for the modules the
             // camera-block patch just refused: those declare the set-3
@@ -4442,13 +4454,26 @@ VkResult create_shader_module_inner(
                                  oal, oar);
             (mvp ? n_mvp : n_baked)++;
             patch_path = mvp ? "mvp-sx" : "baked-sx";
+            (mvp ? g_path_mvp : g_path_baked)++;
             vert_patched = mvp;
         }
     }
-    if (!vert_patched)
+    // Braces, and they are the whole point. Written without them this read
+    //     if (!vert_patched)
+    //         vert_patched = patch_vertex_clip(...);
+    //         if (vert_patched) patch_path = "clip";
+    // so the second statement ran unconditionally and stamped "clip" over
+    // live-sx and mvp-sx on every module. Take 170 came back with 1007
+    // pipelines all reporting the same path and no +affine anywhere -- an
+    // instrument built to stop guessing, lying uniformly, in the commit that
+    // introduced it. The behaviour was untouched; only the report was wrong.
+    if (!vert_patched) {
         vert_patched = x4vr::spv::patch_vertex_clip(code, K, KR);
-        if (vert_patched)
+        if (vert_patched) {
             patch_path = "clip";
+            g_path_clip++;
+        }
+    }
 
     // `|| frag_patched` so a module that only needed the fragment edit still
     // gets created from the edited bytes.

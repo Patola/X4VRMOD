@@ -747,6 +747,40 @@ def main(path):
                     print("offaxis  deferred reconstruction corrected too — "
                           "T(d)·M_invprojection·A⁻¹, same latched target as "
                           "the vertex patches (task #39)")
+                # Task #42's instrument, checked against the run's own
+                # independent counters. The pipe inventory reports a per-module
+                # patch path; the "patched vertex shader" summary counts the
+                # same four paths at the same site. Two numbers for one fact,
+                # and take 170 shipped with nothing comparing them: a missing
+                # pair of braces stamped "clip" over every module and all 1007
+                # pipeline lines agreed with each other while contradicting the
+                # counter four lines away. An instrument that cannot be caught
+                # lying is not evidence.
+                pipes = re.findall(r"s\d+=mod#\d+/[0-9a-f]{8}\([^)]*?,"
+                                   r"(live-sx|mvp-sx|baked-sx|clip)[,)]", text)
+                cnt = re.findall(r"live-sx=(\d+) mvp-sx=(\d+) baked-sx=(\d+)",
+                                 text)
+                if pipes and cnt:
+                    live, mvp, baked = (int(x) for x in cnt[-1])
+                    seen = set(pipes)
+                    # The counters say which paths the run actually used; the
+                    # inventory must mention each of them at least once.
+                    missing = [n for n, v in (("live-sx", live), ("mvp-sx", mvp),
+                                              ("baked-sx", baked))
+                               if v > 0 and n not in seen]
+                    if missing:
+                        fails.append(
+                            f"the pipe inventory never reports "
+                            f"{', '.join(missing)}, but the patch-site counters "
+                            f"say live-sx={live} mvp-sx={mvp} baked-sx={baked}. "
+                            f"The per-module path in every 'pipe:' line is "
+                            f"WRONG — do not read it, and do not conclude "
+                            f"anything about which draw got the affine from it")
+                    else:
+                        print(f"pipe     inventory paths {sorted(seen)} agree "
+                              f"with the patch-site counters (live-sx={live} "
+                              f"mvp-sx={mvp} baked-sx={baked})")
+
                 # Task #40, the other half of the same idea. Screen-locked
                 # draws have to be placed in the DECLARED frame or they sit at
                 # the frustum centre in each eye, and the two centres are
