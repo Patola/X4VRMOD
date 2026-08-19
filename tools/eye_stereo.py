@@ -65,6 +65,22 @@ TILES = 8
 
 
 def read_ppm(path):
+    """Binary PPM or PNG. The layer writes PNG since take 176.
+
+    This function and the glob below both said `.ppm`, so the format change
+    silently turned every present dump invisible: take 177 FAILED with "no
+    present dumps were found" while 20 of them sat on disk. An intent gate that
+    fires on the analyser's own staleness accuses the run of a fault it does not
+    have -- exactly the failure mode the gate exists to prevent.
+    """
+    if path.lower().endswith(".png"):
+        from PIL import Image
+        # Same contract as the PPM branch below: float32 HxWx3, NOT a tuple.
+        # Returning the wrong shape here would have been caught by the first
+        # frame, which is why this is asserted against a real dump in
+        # tests/run-eye-stereo-format.sh rather than reasoned about.
+        return np.asarray(Image.open(path).convert("RGB"),
+                          dtype=np.float32)
     with open(path, "rb") as f:
         data = f.read()
     if data[:2] != b"P6":
@@ -182,9 +198,12 @@ def judge_pair(p0, p1):
 def find_pairs(prefix):
     """(layer0, layer1) paths for each present dump, in frame order."""
     pairs = []
-    for p0 in sorted(glob.glob(f"{prefix}-present-n*-layer0.ppm"),
+    # Both formats: PNG since take 176, PPM for every dump taken before it.
+    layer0 = (glob.glob(f"{prefix}-present-n*-layer0.png") +
+              glob.glob(f"{prefix}-present-n*-layer0.ppm"))
+    for p0 in sorted(layer0,
                      key=lambda s: int(re.search(r"-n(\d+)-", s).group(1))):
-        p1 = p0.replace("-layer0.ppm", "-layer1.ppm")
+        p1 = p0.replace("-layer0.", "-layer1.")
         if glob.os.path.exists(p1):
             pairs.append((p0, p1))
     return pairs

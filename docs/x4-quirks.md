@@ -3252,6 +3252,85 @@ only ever answer "symmetric".
 only telemetry is `X4VR_MV_DUMP_PRESENT=600` — one readback every ~20 s, and
 dumps are PNG now. **No probe.** The game should be as playable as take 175a.
 
+### Take 177: P96 — the fog is innocent, and the culprit is X4's LENS FLARE
+
+`X4VR_DISABLE_FOG=1`, 8 passthrough patches applied. The numbers did not move:
+
+    175a frame 9  (fog ON )   core 0.919   halo 0.692   area 3220 -> 1549
+    177  frame 6  (fog OFF)   core 0.918   halo 0.692   area 3200 -> 1553
+
+Identical to three decimals. **The volumetric in-scatter is not the cause**, and
+the previous section's localisation was wrong. Recorded, not edited away: the
+in-scatter matched every *qualitative* property — additive, warm, world-scene
+only — and that was not enough. "Fits every property I listed" is a statement
+about my list.
+
+Also excluded on this run's data:
+
+* **Exposure.** The star cluster, a second object at infinity, reads p99
+  **0.3631 vs 0.3638** between eyes — the same features at the same peak
+  luminance. Nebula bands likewise. There is no per-eye exposure difference.
+* **The sprite.** At 4x zoom the octagonal `p1_star` core is the same size in
+  both eyes and the flare star beside it matches. Only the surrounding glow
+  differs.
+
+#### What it is
+
+The difference is **chromatic**, which a luminance-only analysis could not see:
+
+    annulus     R      G      B
+      0-20    1.00   0.99   0.97      <- core: identical
+     20-35    0.68   0.69   0.88
+     35-50    0.60   0.75   0.93      <- red down 40%, blue down 7%
+     50-80    0.78   0.88   0.95
+
+A warm ring, 20-50 px, present in the left eye and largely missing in the right.
+`shadergl/glsl/kinobloom/prefilter.frag.glsl`:
+
+    if (U_lens_pass) {
+        vec2 texcoord = -IO_uv0 + vec2(1.0);                    // mirror about CENTRE
+        vec2 ghostVec = (vec2(0.5) - texcoord) * uGhostDispersal;
+        float weight = length(vec2(0.5) - offset) / length(vec2(0.5));
+        weight = pow(1.0 - weight, 10.0);                       // 10th power
+        result.rgb *= max(0.01, ColorBaseDiffuse.r);            // scaled by RED
+        ...
+        float uHaloWidth = 0.56f;                               // a ring, in UV
+        weight = pow(1.0 - weight, 4.0);
+        pix += result.xyz * 0.5;                                // ADDITIVE
+    }
+
+Every term is anchored to `vec2(0.5)` — **the image centre** — and the result is
+weighted by the **red** channel. This is a screen-space lens flare: ghosts
+mirrored through the centre, plus a halo ring at a fixed UV radius.
+
+In VR the two eyes' image centres are **different world directions**, -15.04°
+and +15.04°. The Sun sits 489 px from centre in the left eye and 719 px in the
+right, and `pow(1 - d/dmax, 10)` turns that into a large intensity difference.
+Hence: same core, warm ring present in one eye and not the other, red-dominant,
+world-scene only, indifferent to fog and to exposure. Every measured property,
+from the code rather than from a list of adjectives.
+
+**This is task #40's class, not a new one.** Screen-locked content has to be
+placed in the DECLARED frame; #40 did it for the HUD canvas. The lens flare is
+the same defect one layer deeper, inside a shader X4 owns, and the fix is the
+same idea: the `vec2(0.5)` the pass mirrors about must become the per-eye
+declared centre, offset by `B_x`.
+
+#### The format change broke the analyser, and the intent gate then lied
+
+Take 177 first scored **FAIL — "no present dumps were found ... -present-n*-layer*.ppm"**
+with twenty PNGs on disk. `tools/eye_stereo.py` globbed `.ppm`, `score_run.py`
+trusted it, and the gate that exists to catch a run that failed to write instead
+accused a good run. **An intent gate reading a stale analyser is worse than no
+gate**: it produces a confident failure about the wrong subject.
+
+Fixed in both analysers, and locked with `tests/run-dump-format.sh`, which
+drives the layer twice, asserts the PNG and PPM decode to **identical pixels**,
+and asserts the two analysers agree with each other on the same file. The
+assertion is **captured and judged**, not printed — the first version printed
+`PIXELS-IDENTICAL` and returned 0 regardless, a test that could not fail, in
+the file written to catch tests that cannot fail.
+
 ### Piece 3 is NOT next
 
 The 1092×1180 render extent (0.65× area) stays parked until the two items above

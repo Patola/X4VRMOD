@@ -309,7 +309,7 @@ def main(path):
             # Intent gate: this run asked for present dumps. Their absence is a
             # failure of the run, not a reason to stay quiet.
             fails.append(f"X4VR_MV_DUMP_PRESENT was set but no present dumps "
-                         f"were found at {m_mvd.group(1)}-present-n*-layer*.ppm "
+                         f"were found at {m_mvd.group(1)}-present-n*-layer*.{{png,ppm}} "
                          f"— the eye image was never written, so the right eye "
                          f"is unjudged in a run that asked to judge it")
 
