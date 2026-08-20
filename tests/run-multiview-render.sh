@@ -1556,6 +1556,36 @@ print(Image.open(f[0]).size[0] if f else 0)" 2>/dev/null)
         fails=$((fails + 1))
     fi
 }
+# X4VR_MV_DUMP_AFTER_RP: capture the eye image at the end of a NAMED pass.
+# Neither existing dump can see between two present passes -- the probe fires at
+# the end of the first pass that ends with that attachment (rp #0 for the eye
+# image), the present dump after the last -- and #49 needs exactly that gap.
+# A LIST is round-robined, so bisecting five passes is one run, not five.
+after_rp_case() { # label value want_files want_named
+    local log; log="$(mktemp)"; local pre; pre="$(mktemp -u)"
+    env VK_ADD_LAYER_PATH="$BUILD/layer" \
+        VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+        X4VR_VR=0 X4VR_STEREO=1 X4VR_MV=1 \
+        X4VR_MV_DUMP_AFTER_RP="$2" X4VR_MV_DUMP="$pre" X4VR_LOG="$log" \
+        timeout 120 "$BIN" >/dev/null 2>&1
+    local n; n=$(ls "$pre"-* 2>/dev/null | wc -l)
+    local nm; nm=$(ls "$pre"-* 2>/dev/null | head -1 | sed 's|.*/||')
+    # A capture that produces nothing must SAY so: silence is indistinguishable
+    # from "there was nothing to capture", and that ambiguity costs runs.
+    local said; said=$(grep -c "produced NOTHING" "$log")
+    rm -f "$log" "$pre"-*
+    if [[ "$n" == "$3" && ( "$3" != 0 || "$said" -ge 1 ) && "$nm" == *"$4"* ]]; then
+        printf 'ok   %-38s files=%s %s\n' "$1" "$n" "${nm:-said-nothing}"
+    else
+        printf 'FAIL %-38s want %s files matching "%s" (said=%s), got %s %s\n' \
+            "$1" "$3" "$4" "$said" "$n" "${nm:-none}"
+        fails=$((fails + 1))
+    fi
+}
+after_rp_case "after-rp: existing pass captured"  0      2 "afterrp0"
+after_rp_case "after-rp: absent pass says so"     5      0 ""
+after_rp_case "after-rp: list round-robins"       0,5,9  2 "afterrp0"
+
 probe_win_case "probe window: unset = full image"  ""   128
 probe_win_case "probe window: 0 = unlimited"       0    128
 probe_win_case "probe window: 64 KB halves it"     64   64

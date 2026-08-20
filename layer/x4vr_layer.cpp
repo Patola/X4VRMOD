@@ -2170,6 +2170,45 @@ bool pass_is_per_eye(const CreateInfo *ci) {
     return false;
 }
 
+// Read here rather than defined with the other probe knobs further down:
+// record_render_pass() needs it, and that runs long before them. A `const`
+// initialised below its first use compiles as "not declared in this scope",
+// which is the good outcome -- the bad one is a zero-initialised global that
+// silently reads -1 for the first few passes.
+inline const std::vector<int64_t> &dump_after_rp_list() {
+    // A LIST, round-robined one per cadence tick. #49 has to bisect five
+    // present passes, and one target per run would be five runs of Patola's
+    // time for a question one run can answer.
+    static const std::vector<int64_t> v = [] {
+        std::vector<int64_t> out;
+        const char *e = getenv("X4VR_MV_DUMP_AFTER_RP");
+        for (const char *c = e; c && *c;) {
+            char *end = nullptr;
+            const long long n = strtoll(c, &end, 10);
+            if (end == c)
+                break;
+            out.push_back((int64_t)n);
+            c = (*end == ',') ? end + 1 : end;
+        }
+        return out;
+    }();
+    return v;
+}
+inline int64_t dump_after_rp() {
+    return dump_after_rp_list().empty() ? -1 : dump_after_rp_list()[0];
+}
+// Which target the next capture is for; advances after each one lands, so a
+// list of five passes yields one dump of each in turn rather than five of the
+// first.
+inline std::atomic<size_t> &dump_after_rp_idx() {
+    static std::atomic<size_t> i{0};
+    return i;
+}
+inline int64_t dump_after_rp_current() {
+    const auto &v = dump_after_rp_list();
+    return v.empty() ? -1 : v[dump_after_rp_idx().load() % v.size()];
+}
+
 template <typename CreateInfo>
 void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
     std::vector<bool> unsheared = classify_unsheared(ci);
@@ -2182,7 +2221,12 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
     for (uint32_t i = 0; i < ci->subpassCount; i++)
         if (unsheared[i] && per_eye[i])
             g_srgb_resolve_passes.insert(rp);
-    if (g_mv_inventory && g_active) {
+    // Serials are also needed by X4VR_MV_DUMP_AFTER_RP, which matches on one.
+    // Gating their assignment on the inventory knob alone made that capture a
+    // silent no-op without it: every rp_serial stayed UINT32_MAX and the match
+    // could never fire. Assignment order is creation order either way, so the
+    // numbers a run prints with the inventory on are the numbers to pass here.
+    if ((g_mv_inventory || dump_after_rp() >= 0) && g_active) {
         const uint32_t serial = g_rp_serial++;
         g_rp_serials[rp] = serial;
         for (uint32_t i = 0; i < ci->subpassCount; i++) {
@@ -6807,6 +6851,14 @@ struct MvProbe {
     uint64_t presents = 0;
     uint32_t stalled = 0;
     std::unordered_set<uint32_t> done; // serials covered this round
+    // Armed from the start: the first capture should land as soon as the
+    // named pass runs, not one cadence period later. It is also what makes
+    // this testable -- the harness renders a pass and never presents, so a
+    // flag that only the present path can raise could not be exercised.
+    bool after_armed = true;           // X4VR_MV_DUMP_AFTER_RP cadence fired
+    bool force_dump = false;           // this sample must be written out
+    bool full_res = false;             // ... and at full resolution
+    uint32_t after_target = 0;         // which rp this capture is of
 
     uint32_t serial = 0;               // the one being probed
     uint32_t rp_serial = UINT32_MAX;   // the pass whose end this capture follows
@@ -6854,6 +6906,32 @@ const uint32_t g_probe_kb = [] {
     const char *e = getenv("X4VR_MV_PROBE_KB");
     return (e && *e) ? (uint32_t)strtoul(e, nullptr, 10) : 8192u;
 }();
+
+// **Capture the eye image at the end of a NAMED render pass.** -1 = off.
+//
+// #49 needed a measurement neither existing dump can make. The probe fires at
+// the end of the FIRST pass that ends with a given attachment -- for the eye
+// image that is rp #0 -- and the present dump fires after the LAST. X4 runs
+// seven present passes, and take 178 showed the eye image clean after rp #0 and
+// defective after all seven, so the culprit is one of the five in between and
+// nothing could see between them.
+//
+// Runs on a CADENCE like the present dump, not per frame like the probe: that
+// distinction is the whole difference between take 177 (playable) and take 178
+// (30 s freezes, and the run failed to measure what it was for).
+const uint64_t g_dump_after_every = [] {
+    const char *e = getenv("X4VR_MV_DUMP_AFTER_RP_EVERY");
+    const long long n = (e && *e) ? atoll(e) : 600;
+    return n > 0 ? (uint64_t)n : (uint64_t)600;
+}();
+
+// The end-of-pass hook, the present drain and the final report are shared by
+// the sweep probe and the named-pass capture. Gating them on g_mv_probe alone
+// would have forced anyone wanting one full-resolution dump to also switch on
+// the per-frame sweep -- which is the expensive half, and the half that made
+// take 178 unmeasurable.
+std::atomic<bool> g_after_rp_written{false};
+inline bool probe_hooks_wanted() { return g_mv_probe || dump_after_rp() >= 0; }
 
 const uint32_t g_probe_max = [] {
     const char *e = getenv("X4VR_MV_PROBE_MAX");
@@ -7194,7 +7272,11 @@ void probe_emit(DeviceData *d, VkCommandBuffer cb, const FbAtt &a) {
     // compatibility check and no blit support, and the verdict this instrument
     // exists to give -- do the two layers differ -- survives cropping.
     uint32_t ox = 0, oy = 0;
-    const VkDeviceSize budget = (VkDeviceSize)g_probe_kb * 1024u;
+    // The after-rp capture is the pixels themselves, not a verdict, so it
+    // opts out of the window: a crop cannot be compared against the
+    // present dump, which is always the whole frame.
+    const VkDeviceSize budget =
+        g_probe.full_res ? 0 : (VkDeviceSize)g_probe_kb * 1024u;
     if (budget) {
         while ((VkDeviceSize)w * h * bpp > budget && w > 64 && h > 64) {
             w = (w + 1) / 2;
@@ -7274,7 +7356,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBeginRenderPass(
         d = &g_devices.at(dispatch_key(cb));
     }
     cb_enter_pass(cb, bi->renderPass);
-    if (g_mv_probe && g_mv && g_active) {
+    if (probe_hooks_wanted() && g_mv && g_active) {
         std::lock_guard<std::mutex> lock(g_cb_mu);
         g_cb_fb[cb] = bi->framebuffer;
     }
@@ -7289,7 +7371,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
     }
     d->CmdEndRenderPass(cb);
 
-    if (g_mv_probe && g_mv && g_active) {
+    if (probe_hooks_wanted() && g_mv && g_active) {
         std::vector<FbAtt> atts;
         bool masked = false;
         uint32_t rp_serial = UINT32_MAX;
@@ -7318,7 +7400,40 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
             // framebuffer's own list instead reached only 7 of ~20 per-eye
             // images, because which framebuffers end a frame is not something
             // a counter can enumerate.
-            if (g_probe_max && g_probe_taken.load() >= g_probe_max) {
+            // Named-pass capture first: it targets ONE pass and ignores
+            // `done`, because the point is to sample the same image again and
+            // again at that point in the frame. The ordinary probe sweep is
+            // skipped entirely while it is armed, so the two never contend for
+            // the single staging buffer.
+            if (dump_after_rp() >= 0) {
+                // Say why nothing came out. An instrument that produces no
+                // file and no reason is indistinguishable from one that found
+                // nothing to say, and this project has lost runs to exactly
+                // that ambiguity.
+                if ((int64_t)rp_serial == dump_after_rp_current()) {
+                    static uint32_t seen = 0;
+                    if (++seen <= 3 && (g_probe.pending || !g_probe.after_armed))
+                        X4VR_LOG("mv dump: rp #%u reached but not captured — "
+                                 "%s. Next cadence tick will retry.",
+                                 rp_serial,
+                                 g_probe.pending
+                                     ? "a previous sample is still unread"
+                                     : "not armed yet (cadence)");
+                }
+                if (!g_probe.pending && g_probe.after_armed &&
+                    (int64_t)rp_serial == dump_after_rp_current()) {
+                    g_probe.full_res = true;
+                    probe_emit(d, cb, atts[0]);
+                    g_probe.full_res = false;
+                    if (g_probe.pending) {
+                        g_probe.force_dump = true;
+                        g_probe.after_armed = false;
+                        g_probe.rp_serial = rp_serial;
+                        g_probe.after_target = rp_serial;
+                        dump_after_rp_idx()++;
+                    }
+                }
+            } else if (g_probe_max && g_probe_taken.load() >= g_probe_max) {
                 static bool said = false;
                 if (!said) {
                     said = true;
@@ -7358,6 +7473,9 @@ void probe_collect(DeviceData *d, VkQueue queue) {
         g_probe.presents++;
         if (!g_probe.armed && g_probe.presents % kProbeEvery == 0)
             g_probe.armed = true;
+        if (dump_after_rp() >= 0 && !g_probe.after_armed &&
+            g_probe.presents % g_dump_after_every == 0)
+            g_probe.after_armed = true;
         // Armed but never satisfied means the round has covered everything
         // that actually appears; start the next sweep.
         if (g_probe.armed && !g_probe.pending) {
@@ -7566,8 +7684,14 @@ void probe_collect(DeviceData *d, VkQueue queue) {
     // Exactly the coupling fixed one commit earlier, where X4VR_BINDLESS_PATCH
     // silently disabled X4VR_PROJ_INVPROJ. Same shape, same session: one knob
     // doing two jobs, the second undocumented.
-    if (g_mv_dump && dumps < (named ? kMaxDumps : 1u) &&
-        (named || (g_mv_dump_auto && !have_want && h0 != h1))) {
+    // A forced capture is written every time it fires and is NOT subject to
+    // the per-image cap: the whole point is a series of the same image at the
+    // same point in the frame, and a cap would silently end the series.
+    const bool forced = g_probe.force_dump;
+    g_probe.force_dump = false;
+    if (g_mv_dump &&
+        (forced || (dumps < (named ? kMaxDumps : 1u) &&
+                    (named || (g_mv_dump_auto && !have_want && h0 != h1))))) {
         const bool hdr = g_probe.format == VK_FORMAT_R16G16B16A16_SFLOAT;
         const bool rg16f = g_probe.format == VK_FORMAT_R16G16_SFLOAT;
         const bool bgra8 = g_probe.format == VK_FORMAT_B8G8R8A8_SRGB ||
@@ -7583,8 +7707,16 @@ void probe_collect(DeviceData *d, VkQueue queue) {
             char p[512];
             for (int L = 0; L < 2; L++) {
                 const void *src = L ? l1 : l0;
-                snprintf(p, sizeof p, "%s-img%u-n%u-layer%d", g_mv_dump,
-                         g_probe.serial, seq, L);
+                if (forced)
+                    g_after_rp_written = true;
+                if (forced)
+                    // Named by the PASS, because that is the variable being
+                    // bisected; the image serial is incidental here.
+                    snprintf(p, sizeof p, "%s-afterrp%u-n%u-layer%d",
+                             g_mv_dump, g_probe.after_target, seq, L);
+                else
+                    snprintf(p, sizeof p, "%s-img%u-n%u-layer%d", g_mv_dump,
+                             g_probe.serial, seq, L);
                 if (hdr)
                     write_ppm(p, (const uint16_t *)src, g_probe.w, g_probe.h);
                 else if (rg16f)
@@ -7792,7 +7924,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(queue));
     }
-    if (g_mv_probe && g_mv && g_active)
+    if (probe_hooks_wanted() && g_mv && g_active)
         probe_collect(d, queue);
 
     // Task #29: the finished eye image.
@@ -9501,12 +9633,17 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
 
 VKAPI_ATTR void VKAPI_CALL x4vr_DestroyDevice(
     VkDevice device, const VkAllocationCallbacks *ac) {
-    if (g_mv_probe && g_mv && g_active) {
+    if (probe_hooks_wanted() && g_mv && g_active) {
         std::lock_guard<std::mutex> lock(g_mu);
         auto it = g_devices.find(dispatch_key(device));
         if (it != g_devices.end())
             probe_collect(&it->second, VK_NULL_HANDLE);
     }
+    if (dump_after_rp() >= 0 && !g_after_rp_written)
+        X4VR_LOG("mv dump: X4VR_MV_DUMP_AFTER_RP=%lld produced NOTHING — the "
+                 "pass was never reached with a masked two-layer attachment. "
+                 "Check the serial against the 'rp #N:' inventory lines.",
+                 (long long)dump_after_rp());
     mv_report("final");
     bindless_report("final");
     canvas_report("final");

@@ -81,6 +81,25 @@
 #                         known rather than guessed. Answers "are the two
 #                         layers the same bytes" as a number instead of as an
 #                         inference from what appeared on screen.
+#   X4VR_MV_DUMP_AFTER_RP=N[,N...]
+#                         capture the eye image (both layers, FULL resolution)
+#                         at the end of the named render pass(es). Neither other
+#                         dump can see between two present passes: the probe
+#                         fires at the end of the FIRST pass that ends with a
+#                         given attachment -- rp #0 for the eye image -- and
+#                         X4VR_MV_DUMP_PRESENT after the LAST. X4 runs seven
+#                         present passes and task #49 lives between two of them.
+#                         A LIST is round-robined one per cadence tick, so
+#                         bisecting five passes costs one run, not five. Files
+#                         are PREFIX-afterrpN-nM-layer{0,1}.png.
+#                         Cost is one readback per dump, on a cadence -- the
+#                         present dump's cost, NOT the per-frame probe's. It
+#                         needs neither X4VR_MV_PROBE nor X4VR_MV_INVENTORY, and
+#                         says "produced NOTHING" with a reason if the pass is
+#                         never reached, because a silent instrument and an
+#                         instrument with nothing to say look identical.
+#   X4VR_MV_DUMP_AFTER_RP_EVERY=N
+#                         presents between captures (default 600).
 #   X4VR_MV_PROBE_KB=N    kilobytes per layer the probe may read back
 #                         (default 8192; 0 = unlimited, the pre-179 behaviour).
 #                         Each sample copies both layers to host memory and
