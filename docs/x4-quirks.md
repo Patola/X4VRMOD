@@ -3410,6 +3410,61 @@ run, which is why they could not be compared to each other at all.
   is named by `mv final: img #N writers`, and the shader to read is the one that
   pass binds — which is the order that worked for #48.
 
+### Take 178 — the chain walk lands: X4's targets are CLEAN, our eye image is not
+
+Patola looked at the dumps and corrected two readings of mine, both of which had
+the same shape: **I measured whatever the blob finder returned instead of the
+object in question.**
+
+1. `img #65` is the **savegame loadscreen**, not the cockpit. Its "no per-eye
+   difference" is worthless — take 175a already established that menu and
+   loading frames are identical between eyes (0.985–1.016). I had cleared a
+   suspect with an instrument sampled in a scene where the defect does not
+   exist.
+2. In `present-n1` the finder locked onto a **HUD element** (area 10415), and
+   reported 1.00/1.00/1.00 on it. Patola: *"the asymmetry is very clear on those
+   images."* It is; the finder simply was not looking at the Sun.
+
+Replacing "brightest blob" with "the warm peak in the upper band" — the Sun is
+not the brightest thing in a cockpit frame, the cyan HUD arc is — gives the
+chain walk, and every row now finds the Sun at the cant offset in both layers:
+
+    image        dx      halo R/L    halo R/G/B
+    img50      -1024       1.009     1.01/1.01/1.00
+    img52      -1024       1.030     1.02/1.03/1.06
+    img53      -1024       1.016     1.02/1.02/1.00
+    present-n1 -1019       0.790     0.73/0.80/0.92
+
+**Three of X4's own colour targets show no per-eye difference; the presented eye
+image shows a 21% red-weighted deficit.** The dumper's tone map cannot be hiding
+it: `v/(1+v)` then gamma turns a true 0.79 into ~0.93, not 1.01.
+
+`img50/52/53` are written by `masked rp [7,0]` — X4's present passes. So the
+difference appears **after X4's last colour target**, which means it is ours: the
+SbsCompositor, the copy into the two-layer eye image, or the path to the XR
+swapchain. **First defect in this task located in our own code**, and unlike
+every previous candidate it can be investigated without spending a take.
+
+P97 holds; P98 is refuted.
+
+#### On the visual and the numbers disagreeing
+
+At 3x zoom the left eye's Sun sits in a broad **warm orange** glow and the right
+eye's core is **white** with the warm halo largely gone and sharper rays. That is
+why it reads as *brighter* on the right while measuring *dimmer*: the core is
+saturated in both (peak 1.0000) and what differs is the warm surround. Patola's
+original report and the measurement are the same observation, and the same
+direction holds in take 175a — the effect is reproducible across runs, not a
+sign that flips.
+
+**The lesson is about the finder, not the eye.** Three separate times now a
+conclusion has rested on a heuristic that picked the wrong object: a planet limb
+against an asteroid, a loadscreen against a cockpit, a HUD arc against the Sun.
+`dx ≈ 1024` and a high correlation are necessary and *not sufficient* —
+`present-n1` passed correlation 0.854 on the wrong object. **Look at the crop
+before believing the number**, every time; it costs one Read and it has caught
+every one of these.
+
 ### Piece 3 is NOT next
 
 The 1092×1180 render extent (0.65× area) stays parked until the two items above
