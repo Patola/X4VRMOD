@@ -3521,6 +3521,69 @@ fires every N presents; the probe was not, and cost take 178 its own
 measurement. Give the new one a cadence, not a per-frame trigger, and price it
 in the run spec before asking for the run.
 
+### Take 179 — exactly what to extract (READ THIS FIRST, IT IS THE WHOLE STATE)
+
+One command does the analysis:
+
+    python3 tools/sun_halo.py --prefix=/tmp/x4vr-t179 --crop=/tmp/c
+
+Files land as `/tmp/x4vr-t179-afterrpN-nM-layer{0,1}.png`, one pair per capture,
+plus `-present-nM-` pairs. The tool prints one block per pair, in PASS ORDER.
+
+**The question is one line:** which of rp #1, #4, #7, #10, #33, #51 is the first
+whose `halo 35-50` ratio drops from ~1.0 to ~0.75. Everything before it is clean;
+that pass introduces the defect; read the shader that pass binds.
+
+Reference values, measured, so a new run can be judged against them:
+
+    clean   (X4's eye image after rp #0)   peak ~0.73/0.73   halo 1.00-1.05
+    defect  (the presented eye image)      peak 1.0000/1.0000 halo 0.751
+                                           halo R/G/B 0.70/0.76/0.91
+
+#### Three rules, each of which was learned by getting it wrong
+
+1. **`same_object` must be true or the row means nothing.** The tool prints
+   `<- NOT THE SAME OBJECT` when `dx` is not within 40 px of −1024 (the
+   eye-to-eye offset at infinity) or the y positions differ. On take 178 that
+   flag correctly rejects img51, img59, img61 and img67 — every row that
+   produced a wrong conclusion — while passing img50/52/53 and present-n1.
+2. **Look at the crop before believing the number.** `--crop=` writes the two
+   crops side by side at 2x. A HUD arc passed a correlation of 0.854 against the
+   Sun; only the picture showed it. This costs one Read and has caught every
+   mis-identification in this task.
+3. **`peak` tells you where in the chain you are.** X4's own targets are not
+   saturated at the Sun (~0.73); the presented image is (1.0000). A row whose
+   peak is 1.0 in both eyes and whose halo is ~1.0 is genuinely clean, not
+   clipped into looking clean.
+
+#### What is already settled — do NOT re-litigate
+
+* The defect is a **warm halo** difference, not brightness. Core and peak match;
+  the 20–50 px ring is 20–30% weaker in the RIGHT eye and red-dominant
+  (R 0.70 / B 0.91). It reads as "the right Sun is brighter" because a white
+  core unmuted by orange haze looks brighter. Patola's report and the numbers
+  are one observation.
+* **Eliminated**, each on its own evidence: the volumetric in-scatter (take 177,
+  `X4VR_DISABLE_FOG=1`, numbers unchanged to three decimals); per-eye exposure
+  (a second object at infinity reads p99 0.3631 vs 0.3638); the `p1_star`
+  sprite (its quad size comes from `M_projection[1][1]`, which the per-eye patch
+  does not touch); kinobloom's pyramid (level `img #66`, dx exactly −256 at
+  quarter res, ratios 1.000); a global gain difference (median R−L = 0.00000);
+  X4's lens flare (`U_lens_pass` is in **0 of 409** modules and defaults false).
+* **`X4VR_BINDLESS_PATCH=0` is a vacuous control here** — it makes the right
+  eye's scene view 0's pixels, so the Sun is trivially identical. Three takes
+  went into that. Do not spend a fourth.
+* rp #33 is cleared: its World-on-canvas modules are `xu_ui_unlit`/`_sdf`, UI
+  shaders correctly canvassed by #40.
+
+#### If the bisect comes back all-clean
+
+Then the defect is after the last present pass, and the only thing left is the
+`SbsCompositor` copy or the cursor overlay — both ours, both inspectable without
+a run. Note that `cursor_.record()` draws into the eye image **before** the
+present dump is taken, so the cursor is *in* the dumped image and is a live
+suspect for anything drawn near the frame centre.
+
 ### Piece 3 is NOT next
 
 The 1092×1180 render extent (0.65× area) stays parked until the two items above
