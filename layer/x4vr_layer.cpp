@@ -6843,6 +6843,18 @@ constexpr uint64_t kProbeEvery = 30;
 // cannot be exercised is a bound that gets shipped broken. This one is checked
 // where the sample is taken, so tests/run-multiview-render.sh can set it to 0
 // and 1 and see the difference.
+// KILOBYTES per layer the probe may read back. 0 = unlimited (the old
+// behaviour). The default is deliberately small: at 4224x4224 the unbounded
+// cost is 30-50 s per sample and it made take 178 unmeasurable.
+//
+// KB rather than MB so the shrink path can be EXERCISED: the test harness
+// renders a 128x128 image, which is 128 KB and under any megabyte budget, so a
+// megabyte knob could only ever be tested by reasoning about it.
+const uint32_t g_probe_kb = [] {
+    const char *e = getenv("X4VR_MV_PROBE_KB");
+    return (e && *e) ? (uint32_t)strtoul(e, nullptr, 10) : 8192u;
+}();
+
 const uint32_t g_probe_max = [] {
     const char *e = getenv("X4VR_MV_PROBE_MAX");
     return (e && *e) ? (uint32_t)strtoul(e, nullptr, 10) : 0u;
@@ -7162,9 +7174,47 @@ void probe_emit(DeviceData *d, VkCommandBuffer cb, const FbAtt &a) {
     const uint32_t bpp = format_bpp(a.format);
     if (!bpp)
         return;
-    const uint32_t w = a.extent.width, h = a.extent.height;
+    uint32_t w = a.extent.width, h = a.extent.height;
     if (!w || !h)
         return;
+    // **Bound the readback.** Each sample drags both layers across PCIe and
+    // then hashes and compares them byte-wise on the CPU, so its cost is
+    // proportional to the image. The comment below this function still said
+    // "about 16 MB of hashing" -- true at X4's 1408x1408, and wrong by 18x at
+    // the 4224x4224 this project now renders, where one sample is 285 MB.
+    //
+    // Take 178 measured it: 30-50 s between samples, and 4.4 s for the
+    // 1056x1056 images in the same run -- cost tracking pixel count exactly.
+    // Patola could not hold the Sun in frame through the stall cycles, so the
+    // run did not merely feel bad, it FAILED TO MEASURE: two present dumps, the
+    // identity check marginal on both. An instrument that prevents the protocol
+    // has a cost that is part of its accuracy, not separate from it.
+    //
+    // A centred window, not a downsample: it needs no new image, no format
+    // compatibility check and no blit support, and the verdict this instrument
+    // exists to give -- do the two layers differ -- survives cropping.
+    uint32_t ox = 0, oy = 0;
+    const VkDeviceSize budget = (VkDeviceSize)g_probe_kb * 1024u;
+    if (budget) {
+        while ((VkDeviceSize)w * h * bpp > budget && w > 64 && h > 64) {
+            w = (w + 1) / 2;
+            h = (h + 1) / 2;
+        }
+        ox = (a.extent.width - w) / 2;
+        oy = (a.extent.height - h) / 2;
+        if (w != a.extent.width) {
+            static uint32_t said = 0;
+            if (++said <= 3)
+                X4VR_LOG("mv probe: reading a centred %ux%u window of %ux%u "
+                         "(X4VR_MV_PROBE_KB=%u) — %llu KB per sample instead "
+                         "of %llu. Dumps from the probe are THIS WINDOW, not "
+                         "the whole image",
+                         w, h, a.extent.width, a.extent.height, g_probe_kb,
+                         (unsigned long long)((VkDeviceSize)w * h * bpp * 2 >> 10),
+                         (unsigned long long)((VkDeviceSize)a.extent.width *
+                                              a.extent.height * bpp * 2 >> 10));
+        }
+    }
     if (!probe_buffer_ready(d, d->device, (VkDeviceSize)w * h * bpp))
         return;
 
@@ -7189,6 +7239,7 @@ void probe_emit(DeviceData *d, VkCommandBuffer cb, const FbAtt &a) {
         regions[i].imageSubresource.mipLevel = 0;
         regions[i].imageSubresource.baseArrayLayer = i;
         regions[i].imageSubresource.layerCount = 1;
+        regions[i].imageOffset = {(int32_t)ox, (int32_t)oy, 0};
         regions[i].imageExtent = {w, h, 1};
     }
     d->CmdCopyImageToBuffer(cb, a.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,

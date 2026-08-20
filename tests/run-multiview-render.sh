@@ -1529,6 +1529,37 @@ probe_cap_case() { # label max want_cap
         fails=$((fails + 1))
     fi
 }
+# The readback budget. At 4224x4224 an unbounded sample is 285 MB across PCIe
+# and then hashed byte-wise on the CPU: take 178 measured 30-50 s per sample and
+# 4.4 s for the 1056x1056 images in the same run, cost tracking pixel count. The
+# budget is in KB, not MB, precisely so this harness can exercise it -- its image
+# is 128 KB and would sit under any megabyte budget, making the shrink path
+# testable only by reasoning about it.
+probe_win_case() { # label kb want_w
+    local log; log="$(mktemp)"; local pre; pre="$(mktemp -u)"
+    env VK_ADD_LAYER_PATH="$BUILD/layer" \
+        VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+        X4VR_VR=0 X4VR_STEREO=1 X4VR_MV=1 X4VR_MV_PROBE=1 \
+        X4VR_MV_DUMP_IMG=0 X4VR_MV_DUMP="$pre" \
+        ${2:+X4VR_MV_PROBE_KB=$2} X4VR_LOG="$log" \
+        timeout 120 "$BIN" >/dev/null 2>&1
+    local got
+    got=$(python3 -c "
+from PIL import Image; import glob, sys
+f=glob.glob('$pre-img0-n0-layer0.png')
+print(Image.open(f[0]).size[0] if f else 0)" 2>/dev/null)
+    rm -f "$log" "$pre"-*
+    if [[ "$got" == "$3" ]]; then
+        printf 'ok   %-38s window=%sx%s\n' "$1" "$got" "$got"
+    else
+        printf 'FAIL %-38s want %s, got %s\n' "$1" "$3" "${got:-?}"
+        fails=$((fails + 1))
+    fi
+}
+probe_win_case "probe window: unset = full image"  ""   128
+probe_win_case "probe window: 0 = unlimited"       0    128
+probe_win_case "probe window: 64 KB halves it"     64   64
+
 probe_cap_case "probe cap: unset means unlimited"  ""  0
 probe_cap_case "probe cap: 0 means unlimited"      0   0
 probe_cap_case "probe cap: 1 stops the probe"      1   1

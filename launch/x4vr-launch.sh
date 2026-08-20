@@ -81,6 +81,20 @@
 #                         known rather than guessed. Answers "are the two
 #                         layers the same bytes" as a number instead of as an
 #                         inference from what appeared on screen.
+#   X4VR_MV_PROBE_KB=N    kilobytes per layer the probe may read back
+#                         (default 8192; 0 = unlimited, the pre-179 behaviour).
+#                         Each sample copies both layers to host memory and
+#                         hashes them byte-wise, so the cost tracks the image:
+#                         at 4224x4224 an unbounded sample is 285 MB and took
+#                         30-50 s in take 178, which did not merely feel bad --
+#                         Patola could not hold the target in frame through the
+#                         stall cycles, so the run failed to measure. The layer
+#                         reads a CENTRED WINDOW instead, and says so; at the
+#                         default that is 528x528 of a 4224x4224 image, 4.4 MB
+#                         per sample. **Dumps written by the probe are that
+#                         window, not the whole image** -- centre what you want
+#                         measured. Present dumps are unaffected and stay full
+#                         frame.
 #   X4VR_MV_PROBE_MAX=N   stop probing after N samples (0/unset = unlimited).
 #                         The probe carries BOUNDED information -- one hash, and
 #                         with X4VR_MV_DUMP_AUTO one dump, per per-eye image --
