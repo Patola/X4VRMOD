@@ -3465,6 +3465,62 @@ against an asteroid, a loadscreen against a cockpit, a HUD arc against the Sun.
 before believing the number**, every time; it costs one Read and it has caught
 every one of these.
 
+### #49 narrowed to five passes — the probe dumps are after rp #0, not after the frame
+
+The compositor read settles where the two measurements sit in the frame.
+`SbsCompositor` copies FROM the eye image (X4's own render target, which X4
+believes is the swapchain) INTO the real swapchain image, and the present dump is
+taken from that same source — its comment says so:
+
+    // Task #29: the finished eye image, every layer, while it is still in
+    // TRANSFER_SRC. This is the frame as X4 left it -- after every present
+    // pass, so after the UI and anything drawn over it, which is exactly what
+    // the end-of-render-pass probe cannot see.
+
+And the probe's own log line says when it sampled:
+
+    img50/51/52/53 ... (fmt 44, after rp #0, DIFFER)
+
+**All four are the same thing at different times: the eye image (fmt 44, one per
+swapchain slot), sampled after rp #0 — the FIRST of seven present passes.** The
+present dump is after all of them. So:
+
+    after rp #0        halo R/L 1.009 / 1.030 / 1.016   clean
+    after everything   halo R/L 0.790                   the defect
+
+**The defect is introduced by one of rp #1, #4, #7, #10, #33, #51.** That is a
+five-pass suspect list out of a frame of ~60 passes, and it corrects the previous
+section: this is not "after X4's last colour target", it is *between the first
+present pass and the last*.
+
+Cleared already:
+
+* **rp #33** binds `mod-0261/0263/0265/0345`, which the source join names
+  `xu_ui_unlit` and `xu_ui_unlit_sdf` — UI shaders, correctly on the canvas.
+  That is #40 working, not a defect.
+
+Standing, with what each binds:
+
+* **rp #1, #7** bind `mod-0000`: real vertex attributes (`pos`, `uv_in`,
+  `color_in` at locations 0/1/2), so `is_procedural_fullscreen` is FALSE and it
+  **receives the canvas variant** — a per-eye shift of ±0.2425 NDC.
+* **rp #4, #10** bind `mod-0006`: `gl_VertexIndex` only, `PROCEDURAL=1`, so it is
+  excluded from the canvas and takes `original`.
+* **rp #51** writes `img #65` (fmt 50), the format the runtime also uses.
+
+#### What the next instrument has to be
+
+Neither existing dump can see between two present passes: the probe fires at the
+end of the FIRST pass that ends with that attachment, and the present dump fires
+after the last. `X4VR_MV_DUMP_AFTER_RP=N` — capture the eye image at the end of
+a NAMED render pass — bisects the five in one run, at the cost of one readback
+per dump, which is the present dump's cost and not the probe's.
+
+**Note for whoever writes it:** the present dump is bounded and cheap because it
+fires every N presents; the probe was not, and cost take 178 its own
+measurement. Give the new one a cadence, not a per-frame trigger, and price it
+in the run spec before asking for the run.
+
 ### Piece 3 is NOT next
 
 The 1092×1180 render extent (0.65× area) stays parked until the two items above
