@@ -81,6 +81,15 @@
 #                         known rather than guessed. Answers "are the two
 #                         layers the same bytes" as a number instead of as an
 #                         inference from what appeared on screen.
+#   X4VR_MV_PROBE_MAX=N   stop probing after N samples (0/unset = unlimited).
+#                         The probe carries BOUNDED information -- one hash, and
+#                         with X4VR_MV_DUMP_AUTO one dump, per per-eye image --
+#                         but unbounded cost: take 176 probed every frame for a
+#                         whole session, froze the game for 30 s at a time and
+#                         left ~10 usable frames between. Set it a little above
+#                         the number of per-eye images (40 is comfortable) and
+#                         the game is playable once the sweep is done. The layer
+#                         logs the line where it stops.
 #   X4VR_MV_DUMP=PREFIX   PREFIX for every image this layer writes. A PATH, NOT
 #                         A TRIGGER: setting it alone dumps nothing. It used to
 #                         also switch on an opportunistic dump of every image

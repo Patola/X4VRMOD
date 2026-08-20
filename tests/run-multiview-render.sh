@@ -1501,4 +1501,41 @@ proc_case "procedural: light volume is not"      0 sample_light_volume.vert.spv
 # speak. Returning true here would silently drop it from the canvas.
 proc_case "procedural: fragment-only is false"   0 sample_invproj.frag.spv
 
+# --- X4VR_MV_PROBE_MAX: the probe must be boundable ------------------------
+#
+# Take 176 probed every frame for a whole session: 30 s freezes with about ten
+# usable frames between them, and Patola hit the target he was asked to look at
+# by luck. The information the probe carries is bounded -- one hash per per-eye
+# image -- so the cost must be too.
+#
+# Asserted where the sample is TAKEN rather than on sweep completion, because
+# sweep completion is only observable from the present path and nothing here
+# presents. A bound that cannot be exercised is a bound that ships broken.
+# NOTE the limit of this harness: it renders one pass, so this shows the cap
+# BRANCH is taken instead of the sampling branch, not a long-run count.
+probe_cap_case() { # label max want_cap
+    local log; log="$(mktemp)"
+    env VK_ADD_LAYER_PATH="$BUILD/layer" \
+        VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+        X4VR_VR=0 X4VR_STEREO=1 X4VR_MV=1 X4VR_MV_PROBE=1 \
+        ${2:+X4VR_MV_PROBE_MAX=$2} X4VR_LOG="$log" \
+        timeout 120 "$BIN" >/dev/null 2>&1
+    local got; got=$(grep -c "sample cap reached" "$log")
+    rm -f "$log"
+    if [[ "$got" == "$3" ]]; then
+        printf 'ok   %-38s cap-fired=%s\n' "$1" "$got"
+    else
+        printf 'FAIL %-38s want cap-fired=%s, got %s\n' "$1" "$3" "$got"
+        fails=$((fails + 1))
+    fi
+}
+probe_cap_case "probe cap: unset means unlimited"  ""  0
+probe_cap_case "probe cap: 0 means unlimited"      0   0
+probe_cap_case "probe cap: 1 stops the probe"      1   1
+
+# **The guard was at line 1441 and three case groups ran after it**, counting
+# failures into a variable nothing looked at again before the unconditional
+# "all cases passed" below. Those cases could not fail. Checked here, at the
+# end, which is the only place a suite-wide verdict means anything.
+if (( fails )); then echo "$fails case(s) failed"; exit 1; fi
 echo "all cases passed"

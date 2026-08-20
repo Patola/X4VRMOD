@@ -6807,6 +6807,7 @@ struct MvProbe {
     uint64_t presents = 0;
     uint32_t stalled = 0;
     std::unordered_set<uint32_t> done; // serials covered this round
+
     uint32_t serial = 0;               // the one being probed
     uint32_t rp_serial = UINT32_MAX;   // the pass whose end this capture follows
     VkDeviceSize bytes = 0;
@@ -6827,6 +6828,26 @@ std::mutex g_probe_mu;
 // One capture every this many presents, since a full-extent copy of a
 // 1408x1408 RGBA16F target is ~16 MB per layer.
 constexpr uint64_t kProbeEvery = 30;
+
+// **A hard cap on how many samples the probe will ever take.** 0 = unlimited,
+// which is the old behaviour.
+//
+// Take 176 probed for the whole session: 30 s freezes with ~10 usable frames
+// between them, and Patola hit the target by luck. The information was bounded
+// long before the cost was -- one hash per per-eye image, and with
+// X4VR_MV_DUMP_AUTO one dump each, after which every further sample re-answers
+// an answered question.
+//
+// A COUNT rather than "stop after one sweep": sweep completion is only
+// observable from the present path, which no test here drives, and a bound that
+// cannot be exercised is a bound that gets shipped broken. This one is checked
+// where the sample is taken, so tests/run-multiview-render.sh can set it to 0
+// and 1 and see the difference.
+const uint32_t g_probe_max = [] {
+    const char *e = getenv("X4VR_MV_PROBE_MAX");
+    return (e && *e) ? (uint32_t)strtoul(e, nullptr, 10) : 0u;
+}();
+std::atomic<uint32_t> g_probe_taken{0};
 
 // Only the colour formats X4 uses as attachments. Anything absent is skipped
 // rather than guessed at: a wrong size here would hash the wrong bytes and
@@ -7246,13 +7267,23 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
             // framebuffer's own list instead reached only 7 of ~20 per-eye
             // images, because which framebuffers end a frame is not something
             // a counter can enumerate.
-            if (!g_probe.pending && g_probe.armed) {
+            if (g_probe_max && g_probe_taken.load() >= g_probe_max) {
+                static bool said = false;
+                if (!said) {
+                    said = true;
+                    X4VR_LOG("mv probe: sample cap reached (X4VR_MV_PROBE_MAX="
+                             "%u, %zu distinct image(s) covered) — probing "
+                             "STOPS here and the game is playable from now on",
+                             g_probe_max, g_probe.done.size());
+                }
+            } else if (!g_probe.pending && g_probe.armed) {
                 for (const FbAtt &a : atts) {
                     if (g_probe.done.count(a.serial))
                         continue;
                     probe_emit(d, cb, a);
                     if (g_probe.pending) {
                         g_probe.done.insert(a.serial);
+                        g_probe_taken++;
                         g_probe.armed = false;
                         g_probe.rp_serial = rp_serial;
                     }

@@ -3316,6 +3316,34 @@ the same defect one layer deeper, inside a shader X4 owns, and the fix is the
 same idea: the `vec2(0.5)` the pass mirrors about must become the per-eye
 declared centre, offset by `B_x`.
 
+> **RETRACTED before it was implemented.** Going to write the patch, the first
+> step was to find the module — and it is not there:
+>
+>     U_lens_pass   0 of 409 dumped modules
+>     U_threshold AND S_input_rt together (the prefilter)   0 modules
+>     ogl/kinobloom_prefilter.xml:  <bool name="lens_pass" ... value="false"/>
+>
+> `U_lens_pass` is a uniform bool, not a `#define`, so the branch and its
+> constants (`0.56`, `0.0005`, `0.40`) would be compiled into the module even
+> with the flag false — and none of them appear anywhere. The kinobloom
+> prefilter is not in the dump set at all.
+>
+> **So the lens pass is not shown to run, and the identification is worthless.**
+> It was made by reading X4's GLSL and matching it against adjectives —
+> additive, warm, screen-centred, red-weighted — without checking that the code
+> executes. That is [[x4vr-imports-are-not-calls]]: source proves a path exists,
+> not that it is taken. Finding X4's shader sources made this error *easier*,
+> not harder, because a plausible mechanism is now always one grep away.
+>
+> **Third wrong localisation in a row for #49** — the bindless redirect, the
+> volumetric in-scatter, and now the lens flare. Each fitted every property I
+> had listed. Three in a row is not three unlucky guesses: it is a method
+> failure. The method was "find a mechanism whose description matches the
+> measurement", and the space of such mechanisms is large. What has actually
+> held up in this project is the opposite order — localise **in the frame**
+> first (which pass, which image), then read the shader that pass binds. That
+> is how #48 was found.
+
 #### The format change broke the analyser, and the intent gate then lied
 
 Take 177 first scored **FAIL — "no present dumps were found ... -present-n*-layer*.ppm"**
@@ -3330,6 +3358,57 @@ and asserts the two analysers agree with each other on the same file. The
 assertion is **captured and judged**, not printed — the first version printed
 `PIXELS-IDENTICAL` and returned 0 regardless, a test that could not fail, in
 the file written to catch tests that cannot fail.
+
+### The method changes: localise in the FRAME, then read the shader
+
+Three wrong localisations in a row for #49 — bindless redirect, volumetric
+in-scatter, lens flare — each arrived the same way: read a shader, find a
+mechanism whose *description* matches the measurement, believe it. The space of
+mechanisms that match a description is large, and having X4's GLSL made that
+error easier rather than harder, because a plausible candidate is now one grep
+away.
+
+What has actually worked in this project is the other order. #48 was found by
+asking *which pass, which module, which variant* and only then reading the
+shader that pass binds. So #49 goes back to that, and the instrument needed one
+change first.
+
+#### `X4VR_MV_PROBE_MAX` — the probe is now boundable
+
+The probe's information is bounded: one hash, and with `X4VR_MV_DUMP_AUTO` one
+dump, per per-eye image. Its cost was not — take 176 probed every frame for a
+whole session. `X4VR_MV_PROBE_MAX=N` stops it after N samples, and it says so.
+
+Asserted at the site where a sample is **taken**, not on sweep completion:
+sweep completion is only observable from the present path, and nothing in the
+test tree presents. **A bound that cannot be exercised is a bound that ships
+broken** — this session has already shipped two. The suite drives it at unset,
+0 and 1. Stated limitation: the harness renders one pass, so the cases show the
+cap *branch* is taken instead of the sampling branch, not a long-run count.
+
+While adding them: `tests/run-multiview-render.sh` had its
+`if (( fails )); then exit 1; fi` at line 1441 with **three case groups running
+after it**, counting failures into a variable nothing read again before an
+unconditional `echo "all cases passed"`. Those cases could not fail. The guard
+is now at the end, and that was verified by forcing a tail case to fail and
+checking the suite exits 1.
+
+#### Take 178 — walk the chain, in a parked scene
+
+    X4VR_MV_PROBE=1 X4VR_MV_PROBE_MAX=40 X4VR_MV_DUMP_AUTO=1
+    X4VR_MV_DUMP_PRESENT=600
+
+40 samples, then the probe stops. One dump pair per per-eye image, PNG, ~8 MB
+each instead of 106 MB. **The scene must be PARKED** — take 176's intermediates
+and present dumps came from moments ~30 s apart in a session that could barely
+run, which is why they could not be compared to each other at all.
+
+- **P97** — the warm ring is absent from every intermediate and present only in
+  the final eye image. Then it is introduced after X4's last colour target, and
+  the suspect is our own compositor.
+- **P98** — some intermediate already carries it. Then that image's writing pass
+  is named by `mv final: img #N writers`, and the shader to read is the one that
+  pass binds — which is the order that worked for #48.
 
 ### Piece 3 is NOT next
 
