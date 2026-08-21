@@ -3630,11 +3630,19 @@ Five dumps of a nearly-static cockpit scene with the Sun in frame (n6–n10):
   share only 76 % of their pixels. Do not quote the whole-frame number.
 * The halo is **concentric** with the core in both eyes (best annulus alignment
   +2,0; residual identical to 0,0). Not a displaced screen-space effect.
-* The left eye's Sun **animates** and the right eye's **does not**. Patch
-  residual between consecutive frames: left 0.011–0.024, right 0.00006–0.0001 —
-  100–200× less, at comparable patch brightness (0.408 vs 0.382). The right
-  eye's saturated core is **exactly 1111 px in all five frames** and its centroid
-  is identical to 0.1 px, while the left's swings 1199→1684 and tracks the drift.
+* The left eye's Sun **changes between frames and the right eye's barely does**.
+  Patch residual between consecutive frames: left 0.011–0.024, right
+  0.00006–0.0001 — 100–200× less, at comparable patch brightness (0.408 vs
+  0.382). The right eye's saturated core is **exactly 1111 px in all five
+  frames**; the left's swings 1199→1684.
+
+  **Do not read that as "the right eye is frozen".** The plume saturates, so it
+  inflates the left eye's saturated area and drags its centroid; a left centroid
+  that moves 5 px while the right's does not is what an animated component
+  present in one eye alone produces, and is *not* evidence of a stale buffer.
+  The two readings call for completely different investigations, and only the
+  first is supported. What is established is that the varying part of the Sun
+  exists in the left eye only.
 
 **Looking at it settles what no ratio could.** Left eye at n6: a round orange
 glow. Left eye at n10: a large diagonal orange plume up-and-right. Right eye at
@@ -3691,3 +3699,64 @@ lookup read layer 0 restores the warm component to the right eye and leaves the
 left eye unchanged. If the plume is unchanged in both eyes, shadows are not the
 carrier and the next place to look is any masked module that samples a
 doubled-but-layer-0-only image.
+
+#### Why each take-179 target failed, exactly
+
+`atts` requires an attachment that is doubled **and** carries
+`VK_IMAGE_USAGE_TRANSFER_SRC_BIT` — you cannot read back an image that is not a
+transfer source. Cross-referencing this run's own `img #N:` records against its
+writers list:
+
+| target | verdict | why |
+|--------|---------|-----|
+| rp #1  | uncapturable | writes doubled #1–#4, **usage has no TRANSFER_SRC** |
+| rp #4  | not a writer | never appears in the writers list |
+| rp #7  | uncapturable | writes doubled #50–#53, no TRANSFER_SRC |
+| rp #10 | not a writer | never appears in the writers list |
+| rp #33 | **would have worked** — writes #65 (0x97, TRANSFER_SRC) |
+| rp #51 | **would have worked** — writes #100 (0x97, TRANSFER_SRC) |
+
+So two of the six were capturable and produced nothing purely because rp #1 sat
+at index 0 and the round-robin only advanced after a capture landed. That is the
+starvation bug, and this table is what it cost.
+
+**Rule for choosing a target:** it must appear in an
+`img #N writers — masked rp [...]` line whose image's `usage` has bit 0 set.
+The capturable serials in take 179 were 13, 17, 19, 21, 22, 23, 24, 25, 27, 29,
+31, 32, 33, 51, 53, 54, 55, 58, 61. Present passes are never capturable — they
+draw into the swapchain.
+
+#### Take 180 — where does the warm component first go missing?
+
+Targets `13,25,51,61`, all capturable, spread across the frame: #13 early scene
+(img #59/#60/#61, 4224² fmt 97 HDR), #25 mid scene (adds #57), #51 post
+(img #100), #61 late scene. Read with:
+
+```
+python3 tools/sun_halo.py --prefix=/tmp/x4vr-t180 --crop=/tmp/c
+```
+
+**The question is one line:** in each `afterrpN` row, is `WARM EXCESS` present in
+both eyes or in the left only? The first pass whose output has it in the left eye
+and not the right is where it is introduced — or, if every capturable pass has it
+in both, it survives the scene chain and is lost in the present chain
+(rp #0/#1/#7), which no readback can reach and which is then a code question, not
+a run question.
+
+Reference values from take 179's presented image: left warm excess at 35–50 px
+**0.247–0.415**, right **0.1294 in every frame**, ratio 0.31–0.52.
+
+Three rules for reading a row, each learned by getting it wrong:
+1. **A row that says "no solar disc" or "neutral in BOTH eyes" means nothing** —
+   there was no Sun in that frame. Four wrong conclusions in this task came from
+   measuring an object that was not the Sun.
+2. **Look at the crop before believing the number.**
+3. **`same_object` must be true**, and the core centroids must differ by ≈ −1024.
+
+#### Still open, and NOT to be re-litigated as settled
+
+`X4VR_SHEAR_LIGHTS=0` is a **vacuous control** here, exactly like
+`X4VR_BINDLESS_PATCH=0`: it puts the suns back on the mono path, so both eyes get
+identical pixels by construction and the Sun is trivially symmetric. It proves
+nothing about the mechanism. Three takes went into learning that lesson on the
+bindless knob; do not spend a fourth here.
