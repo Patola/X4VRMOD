@@ -1572,7 +1572,7 @@ after_rp_case() { # label value want_files want_named
     local nm; nm=$(ls "$pre"-* 2>/dev/null | head -1 | sed 's|.*/||')
     # A capture that produces nothing must SAY so: silence is indistinguishable
     # from "there was nothing to capture", and that ambiguity costs runs.
-    local said; said=$(grep -c "produced NOTHING" "$log")
+    local said; said=$(grep -c "no after-rp file was written" "$log")
     rm -f "$log" "$pre"-*
     if [[ "$n" == "$3" && ( "$3" != 0 || "$said" -ge 1 ) && "$nm" == *"$4"* ]]; then
         printf 'ok   %-38s files=%s %s\n' "$1" "$n" "${nm:-said-nothing}"
@@ -1585,6 +1585,38 @@ after_rp_case() { # label value want_files want_named
 after_rp_case "after-rp: existing pass captured"  0      2 "afterrp0"
 after_rp_case "after-rp: absent pass says so"     5      0 ""
 after_rp_case "after-rp: list round-robins"       0,5,9  2 "afterrp0"
+
+# Take 179 asked for six targets, got no files, and the report named only
+# element [0] -- "X4VR_MV_DUMP_AFTER_RP=1 produced NOTHING" for a six-target
+# run, saying nothing at all about 4, 7, 10, 33 and 51. Worse, the first
+# version of the fix reported a pass that HAD been reached (and logged as
+# reached) as "NEVER REACHED", because reached and captured were one flag.
+# Every target must get its own verdict, and the verdicts must be distinct.
+verdict_case() { # label target want_verdict_substring
+    local log; log="$(mktemp)"; local pre; pre="$(mktemp -u)"
+    env VK_ADD_LAYER_PATH="$BUILD/layer" \
+        VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+        X4VR_VR=0 X4VR_STEREO=1 X4VR_MV=1 \
+        X4VR_MV_DUMP_AFTER_RP=0,1,5 X4VR_MV_DUMP="$pre" X4VR_LOG="$log" \
+        timeout 120 "$BIN" >/dev/null 2>&1
+    local line; line=$(grep -a "target rp #$2:" "$log" | head -1 | sed 's/.*target rp/target rp/')
+    rm -f "$log" "$pre"-*
+    if [[ "$line" == *"$3"* ]]; then
+        printf 'ok   %-38s %s\n' "$1" "$(echo "$line" | cut -c1-48)"
+    else
+        printf 'FAIL %-38s want "%s", got: %s\n' "$1" "$3" "${line:-no verdict line}"
+        fails=$((fails + 1))
+    fi
+}
+verdict_case "verdict: captured"        0 "captured"
+verdict_case "verdict: reached, no file" 1 "REACHED but never captured"
+verdict_case "verdict: never reached"   5 "NEVER REACHED"
+# NOT COVERED HERE: the fourth verdict, "SKIPPED -- no doubled colour
+# attachment", and the give-up that advances the round-robin past such a
+# target. Reaching it needs a pass that this harness EXECUTES whose framebuffer
+# has no doubled attachment, and the harness executes exactly two passes, both
+# with one. rp #3 and #5 are created for classification and destroyed unused.
+# Say so plainly: an un-run path listed among passing cases reads as verified.
 
 probe_win_case "probe window: unset = full image"  ""   128
 probe_win_case "probe window: 0 = unlimited"       0    128

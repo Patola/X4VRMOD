@@ -3589,3 +3589,105 @@ suspect for anything drawn near the frame centre.
 The 1092×1180 render extent (0.65× area) stays parked until the two items above
 land. Take 165a is already geometrically correct and merely wastes 22% of every
 row, so there is no correctness pressure — only the performance prize.
+
+### Take 179 — the bisect never ran, and the present dumps answered anyway
+
+**The run did not do what it was asked to do.** `X4VR_MV_DUMP_AFTER_RP=1,4,7,10,33,51`
+produced zero files, and the layer said so:
+
+```
+mv dump: X4VR_MV_DUMP_AFTER_RP=1 produced NOTHING — the pass was never reached
+         with a masked two-layer attachment.
+```
+
+Two instrument defects, both mine, both of the class this project keeps hitting:
+
+1. **The round-robin cannot step over an unreachable target.** `dump_after_rp_idx()`
+   advances only *after* a capture lands, so target #1 being unreachable starved
+   #4, #7, #10, #33 and #51 as well. One bad entry in the list voided the list.
+   The end-of-run report names only `[0]`, which is why it said "=1" for a
+   six-target run.
+2. **The end-of-run report was the only thing that fired.** The per-pass
+   diagnostic ("reached but not captured") sits *inside* `if (!atts.empty())`,
+   so the one case that actually happened — `atts` empty — is the one case it
+   cannot report. Same shape as P-nothing-and-no-reason it was written to prevent.
+
+The premise was also wrong. I called rp #0/#1/#4/#7/#10/#33/#51 "the seven present
+passes"; `+PRESENT-CAND` is a *candidate* predicate. This run's own summary says
+`present passes — 3 pass(es) draw into a swapchain image`, and they do not form a
+chain on one image — they write #1–#4, #50–#53, #65 and #100. A serial bisect
+assumed a chain that does not exist.
+
+#### What the present dumps establish (all offline, all reproducible)
+
+Five dumps of a nearly-static cockpit scene with the Sun in frame (n6–n10):
+
+* The two eyes are **precisely registered**: core centroid dx = **−1025.0**,
+  dy = −0.3, against the −1024.36 the cant predicts. Same object, to the pixel.
+* On **aligned smooth sky** away from the Sun the eyes agree to 1 %
+  (R/L = 0.990, 0.991, 0.990, 0.988, 0.989). This is Sun-specific. A whole-frame
+  mean says 0.894 — that is **framing**, not brightness: at dx = −1025 the eyes
+  share only 76 % of their pixels. Do not quote the whole-frame number.
+* The halo is **concentric** with the core in both eyes (best annulus alignment
+  +2,0; residual identical to 0,0). Not a displaced screen-space effect.
+* The left eye's Sun **animates** and the right eye's **does not**. Patch
+  residual between consecutive frames: left 0.011–0.024, right 0.00006–0.0001 —
+  100–200× less, at comparable patch brightness (0.408 vs 0.382). The right
+  eye's saturated core is **exactly 1111 px in all five frames** and its centroid
+  is identical to 0.1 px, while the left's swings 1199→1684 and tracks the drift.
+
+**Looking at it settles what no ratio could.** Left eye at n6: a round orange
+glow. Left eye at n10: a large diagonal orange plume up-and-right. Right eye at
+n6 and n10: a smaller white core with radial spikes and **no warm component at
+all**, essentially the same picture twice.
+
+#### RETRACTED: "the halo is 20–30 % weaker in the right eye"
+
+It is not weaker. **A warm, red-dominant, animated glow component is ABSENT in
+the right eye**, and the band ratio could not tell "attenuated" from "missing"
+because it only ever compared two numbers at one radius. The right eye's spikes
+look *sharper* for the same reason — nothing is washing them out. The earlier
+per-channel reading (R 0.70 / B 0.91) was a real measurement of the wrong model.
+
+This also explains why no single transform fitted: best radial scale s = 0.855
+(residual 0.0213) and best uniform gain g = 0.875 (residual 0.0235) both sit far
+above a no-op 0.0382 because neither "smaller" nor "dimmer" is what happened.
+
+#### The new suspect: doubled images that only an unmasked pass ever writes
+
+```
+mv final: img #70 writers — masked rp [] unmasked rp [41]      2048x2048 fmt=124 DOUBLED
+                     #71                        [43]           (fmt 124 = D16_UNORM)
+                     #72                        [45]
+                     #73                        [47]
+                     #74                        [49]
+rp #41.0: 0 colour [] depth 124 final=-1 -> MONO (depth-only/shadow)
+```
+
+Five shadow cascades, doubled, written by mono passes — so **layer 1 is cleared
+and never rendered**. `mv_double_candidate()` says so on purpose:
+
+> *Doubled but never rendered per-eye → layer 1 is simply never touched. Costs
+> memory, nothing else. … In particular the shadow atlas is doubled and wasted*
+
+**"Costs memory, nothing else" is only true if nothing samples layer 1**, and the
+bindless index-offset patch exists precisely to make view 1 sample elsewhere.
+A warm directional plume that moves with the camera is what ray-marched
+in-scatter through a shadow cascade looks like. This is NOT the in-scatter
+hypothesis take 177 refuted: that one asked whether in-scatter existed, this one
+asks what view 1's shadow lookup returns.
+
+**And the counter that should have caught it cannot.** `per-eye images written
+layer-0-only=0` is computed by `note_layer0_only()`, which is called **only from
+transfer and clear commands** — `vkCmdCopyImage`, `BlitImage`, `ResolveImage`,
+`Clear*`, `CopyBufferToImage`. It is never called for a *render pass* that writes
+a doubled image without a viewMask. The name promises coverage the check does not
+have, so it read 0 with five such images on screen.
+
+#### Prediction, before the next measurement
+
+If the plume is in-scatter sampling shadow layer 1, then making view 1's shadow
+lookup read layer 0 restores the warm component to the right eye and leaves the
+left eye unchanged. If the plume is unchanged in both eyes, shadows are not the
+carrier and the next place to look is any masked module that samples a
+doubled-but-layer-0-only image.

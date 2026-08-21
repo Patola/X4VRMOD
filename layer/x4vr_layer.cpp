@@ -2208,6 +2208,31 @@ inline int64_t dump_after_rp_current() {
     const auto &v = dump_after_rp_list();
     return v.empty() ? -1 : v[dump_after_rp_idx().load() % v.size()];
 }
+// Targets abandoned because the pass has no doubled attachment to read, and
+// the targets that did yield a file. The end-of-run report has to name every
+// entry: take 179's said "X4VR_MV_DUMP_AFTER_RP=1 produced NOTHING" for a
+// six-target run, because it printed dump_after_rp() -- element [0] -- and
+// called it the whole list.
+inline std::set<int64_t> &after_rp_skipped() {
+    static std::set<int64_t> s;
+    return s;
+}
+inline std::set<int64_t> &after_rp_captured() {
+    static std::set<int64_t> s;
+    return s;
+}
+// Reached is NOT captured. A pass can end with the capture unarmed, or with
+// the single staging buffer still holding an unread sample, and reporting that
+// as "never reached" sends the reader to check serials that were correct all
+// along.
+inline std::set<int64_t> &after_rp_reached() {
+    static std::set<int64_t> s;
+    return s;
+}
+// How many times a target may be reached with nothing to read before the
+// round-robin steps over it. Small: if the first two reaches find no doubled
+// attachment, the pass does not draw into one.
+constexpr uint32_t kAfterRpGiveUp = 2;
 
 template <typename CreateInfo>
 void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
@@ -2440,6 +2465,7 @@ void mv_report(const char *when) {
     // contribution, so this list is the shortlist for any partial divergence.
     {
         std::lock_guard<std::mutex> lock(g_img_mu);
+        uint32_t unmasked_only = 0;
         // Printed even when nothing is mixed. An empty result otherwise means
         // either "no image has both kinds of writer" or "the detector never
         // ran", and those are not the same answer.
@@ -2478,18 +2504,39 @@ void mv_report(const char *when) {
                 }
             X4VR_LOG("mv %s: img #%u writers — masked rp [%s] unmasked rp [%s]",
                      when, e.first, ms, us);
-            if (e.second.masked.empty() || e.second.unmasked.empty())
-                continue;
-            X4VR_LOG("mv %s: img #%u MIXED WRITERS — layer 1 misses the "
-                     "unmasked ones", when, e.first);
+            // Three cases, not two. The mixed one was the only one flagged,
+            // so take 179 printed five doubled shadow cascades whose ONLY
+            // writer is a mono pass and said nothing about them -- layer 1 of
+            // each is cleared and then never rendered. That is harmless right
+            // up until something samples it, and the bindless index offset
+            // exists to make view 1 sample exactly such a layer.
+            if (!e.second.masked.empty() && !e.second.unmasked.empty())
+                X4VR_LOG("mv %s: img #%u MIXED WRITERS — layer 1 misses the "
+                         "unmasked ones", when, e.first);
+            else if (e.second.masked.empty() && !e.second.unmasked.empty()) {
+                unmasked_only++;
+                X4VR_LOG("mv %s: img #%u LAYER 1 NEVER RENDERED — every writer "
+                         "is a mono pass, so layer 1 holds only the clear "
+                         "value. Safe only while nothing samples it.",
+                         when, e.first);
+            }
         }
+        X4VR_LOG("mv %s: doubled images whose layer 1 is never rendered: %u of "
+                 "%zu tracked", when, unmasked_only, g_img_writers.size());
     }
     // The two candidates, side by side. bind_mismatch > 0 means the draws
     // themselves never reached view 1 and nothing downstream matters yet;
     // barrier_narrow > 0 means they did but layer 1 is read in a layout no
     // barrier ever moved it to.
+    // "layer-0-only" counts TRANSFERS AND CLEARS only -- note_layer0_only() is
+    // called from vkCmdCopy/Blit/Resolve/Clear/CopyBufferToImage and from
+    // nowhere else. It has never been able to see a render pass that writes a
+    // doubled image with no viewMask, which is why it read 0 through take 179
+    // with five such images live. The render-pass case is the
+    // "layer 1 is never rendered" line above; keep both, and do not read
+    // either as covering the other.
     X4VR_LOG("mv %s: binds ok=%u MISMATCHED=%u | image barriers narrow=%u "
-             "wide=%u | per-eye images written layer-0-only=%u | "
+             "wide=%u | doubled images a TRANSFER wrote layer-0-only=%u | "
              "stale redirect entries=%u | input attachments fixed=%u",
              when, g_mv_stats.bind_ok, g_mv_stats.bind_mismatch,
              g_mv_stats.barrier_narrow, g_mv_stats.barrier_wide,
@@ -6855,6 +6902,8 @@ struct MvProbe {
     // named pass runs, not one cadence period later. It is also what makes
     // this testable -- the harness renders a pass and never presents, so a
     // flag that only the present path can raise could not be exercised.
+    uint32_t after_no_att = 0;         // reaches of the current target with
+                                       // no doubled attachment to read
     bool after_armed = true;           // X4VR_MV_DUMP_AFTER_RP cadence fired
     bool force_dump = false;           // this sample must be written out
     bool full_res = false;             // ... and at full resolution
@@ -7393,6 +7442,38 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
                     atts = a->second;
             }
         }
+        // Reported OUTSIDE the `atts` guard on purpose. Take 179 asked for six
+        // targets, produced nothing, and the one case its diagnostic could not
+        // describe was the case that happened: the pass has no doubled colour
+        // attachment, so `atts` is empty and every report below is skipped.
+        // A target that can never be captured must also not starve the rest of
+        // the list -- the round-robin only advanced after a capture landed, so
+        // one unreachable entry voided the other five.
+        if (dump_after_rp() >= 0 &&
+            (int64_t)rp_serial == dump_after_rp_current()) {
+            std::lock_guard<std::mutex> lock(g_probe_mu);
+            after_rp_reached().insert((int64_t)rp_serial);
+        }
+        if (dump_after_rp() >= 0 &&
+            (int64_t)rp_serial == dump_after_rp_current() && atts.empty()) {
+            std::lock_guard<std::mutex> lock(g_probe_mu);
+            const uint32_t n = ++g_probe.after_no_att;
+            if (n == 1)
+                X4VR_LOG("mv dump: rp #%u reached but has NO doubled colour "
+                         "attachment to read. A pass that draws into a "
+                         "single-layer image (the swapchain, or a mono "
+                         "target) can never be captured this way — pick a "
+                         "pass from the 'img #N writers — masked rp [...]' "
+                         "lines instead.", rp_serial);
+            if (n >= kAfterRpGiveUp) {
+                X4VR_LOG("mv dump: giving up on rp #%u after %u reaches with "
+                         "nothing to read — advancing to the next target so "
+                         "it does not starve the list.", rp_serial, n);
+                g_probe.after_no_att = 0;
+                after_rp_skipped().insert(rp_serial);
+                dump_after_rp_idx()++;
+            }
+        }
         if (!atts.empty()) {
             std::lock_guard<std::mutex> lock(g_probe_mu);
             // Take the first attachment this round has not covered yet, and
@@ -7430,6 +7511,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
                         g_probe.after_armed = false;
                         g_probe.rp_serial = rp_serial;
                         g_probe.after_target = rp_serial;
+                        g_probe.after_no_att = 0;
+                        after_rp_captured().insert((int64_t)rp_serial);
                         dump_after_rp_idx()++;
                     }
                 }
@@ -9639,11 +9722,37 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyDevice(
         if (it != g_devices.end())
             probe_collect(&it->second, VK_NULL_HANDLE);
     }
-    if (dump_after_rp() >= 0 && !g_after_rp_written)
-        X4VR_LOG("mv dump: X4VR_MV_DUMP_AFTER_RP=%lld produced NOTHING — the "
-                 "pass was never reached with a masked two-layer attachment. "
-                 "Check the serial against the 'rp #N:' inventory lines.",
-                 (long long)dump_after_rp());
+    // Every target gets its own verdict. The old report printed
+    // dump_after_rp() -- element [0] -- and described the whole list by it, so
+    // take 179's six-target run reported "X4VR_MV_DUMP_AFTER_RP=1 produced
+    // NOTHING" and said nothing at all about 4, 7, 10, 33 and 51.
+    if (dump_after_rp() >= 0) {
+        for (int64_t t : dump_after_rp_list()) {
+            const char *verdict =
+                after_rp_captured().count(t)  ? "captured"
+                : after_rp_skipped().count(t) ? "SKIPPED — no doubled colour "
+                                                "attachment; this pass does "
+                                                "not draw into a per-eye image"
+                : after_rp_reached().count(t) ? "REACHED but never captured — "
+                                                "the pass ran while the single "
+                                                "staging buffer held an unread "
+                                                "sample, or the cadence had "
+                                                "not re-armed. The serial is "
+                                                "correct; raise "
+                                                "X4VR_MV_DUMP_AFTER_RP_EVERY "
+                                                "or shorten the target list"
+                                              : "NEVER REACHED — no pass with "
+                                                "this serial ended during the "
+                                                "run";
+            X4VR_LOG("mv dump: X4VR_MV_DUMP_AFTER_RP target rp #%lld: %s",
+                     (long long)t, verdict);
+        }
+        if (!g_after_rp_written)
+            X4VR_LOG("mv dump: no after-rp file was written. Targets must be "
+                     "passes that appear in the 'img #N writers — masked rp "
+                     "[...]' lines; a present pass draws into the swapchain, "
+                     "which is single-layer and cannot be captured this way.");
+    }
     mv_report("final");
     bindless_report("final");
     canvas_report("final");
