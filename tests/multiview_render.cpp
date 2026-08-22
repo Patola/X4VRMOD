@@ -889,9 +889,23 @@ int main(int argc, char **argv) {
     CHECK(vkCreatePipelineLayout(dev, &plci2, nullptr, &pl2));
 
     VkPipelineShaderStageCreateInfo st2[2]{};
+    // Task #60: with the arena on, the OUTPUT pass gets a vertex shader that
+    // declares the camera block, so #33's conjugation has something to attach
+    // to. The first pass keeps the plain fullscreen shader -- it binds no set
+    // 1, so a shader reading one there would be reading an unbound descriptor.
+    VkShaderModule vsm2 = vsm;
+    if (view_arena) {
+        std::vector<uint32_t> vc2 = load_spv("tests/fullscreen_camera.vert.spv");
+        if (vc2.empty()) { printf("FAIL=no_fullscreen_camera_vert\n"); return 1; }
+        VkShaderModuleCreateInfo s2{};
+        s2.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        s2.codeSize = vc2.size() * 4;
+        s2.pCode = vc2.data();
+        CHECK(vkCreateShaderModule(dev, &s2, nullptr, &vsm2));
+    }
     st2[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     st2[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    st2[0].module = vsm;
+    st2[0].module = vsm2;
     st2[0].pName = "main";
     st2[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     st2[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -970,6 +984,12 @@ int main(int argc, char **argv) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe2);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pl2, 0, 1,
                             &dset, 0, nullptr);
+    // Before the FIRST draw, not just before the credit loop: the output pass's
+    // vertex shader reads set 1 now, and a draw with it unbound is undefined
+    // behaviour rather than a wrong picture.
+    if (view_arena)
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pl2, 1, 1,
+                                &vset[0], 0, nullptr);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     if (view_arena) {
         // patch_view_before_submit() refuses unless the winning block carries
@@ -1101,6 +1121,8 @@ int main(int argc, char **argv) {
     // and leaving these three objects alive added a fifth -- and a suite that
     // is not validation-clean cannot be used to clear a patch of validation
     // errors, which is what the note at the top of this file is about.
+    if (vsm2 != vsm)
+        vkDestroyShaderModule(dev, vsm2, nullptr);
     if (vdsl != VK_NULL_HANDLE)
         vkDestroyDescriptorSetLayout(dev, vdsl, nullptr);
     if (vbuf != VK_NULL_HANDLE)

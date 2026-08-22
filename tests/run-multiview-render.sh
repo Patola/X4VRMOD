@@ -1857,6 +1857,42 @@ pose_rotate_patch_case "rotate: camera block is patched" \
 pose_rotate_patch_case "rotate: no camera block refuses" \
     tests/fullscreen.vert.spv REFUSED=1
 
+# Task #60: the conjugation EXECUTING, on a real GPU. Everything above says the
+# emitted module is well-formed; none of it says the arithmetic is the
+# conjugation. This does, and it does it with a discriminator that the OTHER
+# implementation fails:
+#
+#   180 deg of yaw, conjugation -> v'z = -vz, so w' = -1 for every vertex at
+#                                  w = 1. Everything is behind the eye and
+#                                  clips. Nothing draws.
+#   180 deg of yaw, #59 transport form -> mirrors x and z, w untouched, the
+#                                  triangle still covers the screen.
+#
+# So drawn=0 is evidence for the conjugation specifically, not for "a transform
+# happened". A test that only asserted "the picture changed" would pass on the
+# wrong implementation.
+pose_exec_case() {
+    local label="$1" want="$2"; shift 2
+    local out got
+    out=$(env VK_ADD_LAYER_PATH="$BUILD/layer" \
+        VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+        X4VR_MV=1 X4VR_TEST_VIEW_ARENA=1 X4VR_POSE=1 "$@" \
+        X4VR_LOG=/dev/null timeout 120 "$BIN" "$VS" "$FS" "$SF" 2>&1)
+    got=$(sed -n 's/^SAMPLED_NONZERO=//p' <<<"$out")
+    if [[ "$got" == "$want" ]]; then
+        printf 'ok   %-38s output drawn=%s\n' "$label" "$got"
+    else
+        printf 'FAIL %-38s want drawn=%s, got %s\n' "$label" "$want" "${got:-?}"
+        fails=$((fails + 1))
+    fi
+}
+pose_exec_case "exec: yaw 0 is the control"    1 X4VR_POSE_ROTATE=1 X4VR_POSE_YAW=0
+pose_exec_case "exec: yaw 30 still covers"     1 X4VR_POSE_ROTATE=1 X4VR_POSE_YAW=30
+pose_exec_case "exec: yaw 180 clips every vertex" 0 X4VR_POSE_ROTATE=1 X4VR_POSE_YAW=180
+# The same angle through #59's transport form must NOT clip. This is the case
+# that makes the one above mean something.
+pose_exec_case "exec: transport form does not"  1 X4VR_POSE_YAW=180
+
 verdict_case "verdict: captured"        0 "captured"
 verdict_case "verdict: reached, no file" 1 "REACHED but never captured"
 verdict_case "verdict: never reached"   5 "NEVER REACHED"

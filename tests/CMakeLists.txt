@@ -54,6 +54,7 @@ endif()
 
 # Shaders are committed as SPIR-V so the suite does not need glslc to run.
 configure_file(fullscreen.vert.spv fullscreen.vert.spv COPYONLY)
+configure_file(fullscreen_camera.vert.spv fullscreen_camera.vert.spv COPYONLY)
 configure_file(solid.frag.spv solid.frag.spv COPYONLY)
 configure_file(sample.frag.spv sample.frag.spv COPYONLY)
 configure_file(sample_two.frag.spv sample_two.frag.spv COPYONLY)
