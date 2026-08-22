@@ -3760,3 +3760,87 @@ Three rules for reading a row, each learned by getting it wrong:
 identical pixels by construction and the Sun is trivially symmetric. It proves
 nothing about the mechanism. Three takes went into learning that lesson on the
 bindless knob; do not spend a fourth here.
+
+### Take 180 — and the knob that was never in a known-good run
+
+Take 180's captures all landed in the first seconds: two were entirely black
+(max luma 0.0000, layers identical) and the third, which Patola identified on
+sight, is **the X4 logo on the menu screen** — not a planet, as I first read it.
+Fifth wrong object in this task, fifth time looking settled it.
+
+The present dumps reproduce take 179 exactly, at a different screen position:
+left warm excess 0.210–0.396, right **0.1270–0.1284**, ratio 0.32–0.61. Across
+two takes, many frames and two different Sun positions, the right eye's warm
+excess is a constant ≈0.128 — consistent with the right eye contributing *no*
+glow at all, so that the annulus reads the background nebula and nothing else.
+
+#### The after-rp bisect is unsound by construction — do not use it again as-is
+
+Two independent reasons, both proven by this run:
+
+1. **Pass serials are not stable between runs.** Creation order past roughly #33
+   depends on what content got loaded. rp #51 wrote `[100]` in take 179 and
+   `[54,55,59,60,61]` in take 180; rp #61 wrote five images in 179 and **does not
+   exist** in 180. Serials 0/1/7/13/25/33 were stable, everything above was not.
+   So a target list copied from the previous run's log can silently mean
+   something else.
+2. **The round-robin still stalls.** The give-up added after take 179 covers
+   "reached with nothing to read". rp #61 was *never reached*, which it does not
+   cover, so after three captures the instrument parked on #61 and was dead for
+   the remaining five minutes — exactly the stretch with the Sun in frame.
+
+**Redesign before reuse: target by IMAGE serial, not pass serial.** Image
+serials for the early buffers (#50–#53, #59–#61, #65) were identical across both
+runs. "Dump img #59 whenever a masked pass writes it" is stable in a way that
+"dump after rp #61" is not.
+
+#### REFUTED before implementing: the mirrored-plume prediction
+
+I predicted that if the plume came from mixing the per-eye-patched
+`M_projection` with an unpatched `M_projection_uj`, the mismatch would be `+B`
+in one eye and `−B` in the other, so the right eye should carry a plume pointing
+the opposite way (down-left, since `(B_x,B_y) = (+0.2425,−0.1932)` points
+up-right at ~38°). A 1040 px gamma-lifted crop of both eyes shows **no mirrored
+plume**: the scene matches nearly everywhere and the right Sun is simply whiter
+and smaller. Recorded because it was committed before the check, not because it
+worked.
+
+#### THE CONTROL WAS NEVER RUN
+
+`X4VR_AA=fsr_quality` has been on the command line of **every take since ~158**,
+including all of 170–180. It appears **zero times in docs/known-good-runs.md**.
+Its own definition says what that means:
+
+> *"We serve `none` by default and have since the beginning. … it is unset by
+> default like `X4VR_FOV`: setting it is the experiment, omitting it is the
+> control."*
+
+And the default is not arbitrary:
+
+> *"this tag also selects X4's upscaler, and every temporal mode here
+> (`temporal`, `dlaa`, the `fsr_*` family) jitters the projection — **into
+> m[8]/m[9], which are the eye shear's own slots**."*
+
+`m[8]`/`m[9]` are `M[2][0]`/`M[2][1]` — where an off-axis shear lives.
+Independently, `docs/frame-analysis.md` line 621 lists `M_projection_uj` as
+**PATCH — eye projection without TAA jitter (== #2 with AA off)**, and the layer
+patches members 1, 2 and 4 but **not member 3**. That omission is inert with AA
+off and live with any temporal mode.
+
+So every measurement in #49 was taken with a temporal upscaler writing the eye
+shear's own matrix slots, under an experimental knob, while a matrix the design
+says to patch went unpatched — and I called the result a defect in X4's glow.
+
+**Take 181 is the control: take 180's command with `X4VR_AA` REMOVED, nothing
+else changed.** Predictions, committed before the run:
+
+* If the Sun's warm asymmetry **disappears**, the cause is the temporal path —
+  the jitter in m[8]/m[9] and/or the unpatched `M_projection_uj`. #49 becomes
+  "patch member 3 and decide what FSR is allowed to do", and `X4VR_AA` comes off
+  the standard command line until it is settled.
+* If it **persists unchanged**, AA is exonerated on its own evidence and the
+  next suspect is the shadow cascades #70–#74, the only doubled images whose
+  layer 1 is never rendered (5 of 29, confirmed by this run's own report).
+* Expect it to be **slower**: with `none`, X4 renders 4224² natively instead of
+  upscaling, so the 33 ms gameplay figure will rise. That is not a regression,
+  it is the control's cost.
