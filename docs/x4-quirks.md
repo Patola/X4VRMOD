@@ -4020,3 +4020,77 @@ cite it again.
    in-scatter mono. Mono is slightly wrong in depth but **symmetric**, and a
    symmetric diffuse glow is what comfort requires: the disparity is the harm,
    not the offset. A knob (`X4VR_INSCATTER_MONO`) would test it in one take.
+
+### #49 localised: ten FRAGMENT shaders mix a per-eye frame with the centre frame
+
+#### First, the instrument error that had to be cleared out of the way
+
+X4's dumped modules carry **two OpEntryPoints — `(0,'main')` vertex and
+`(4,'main')` fragment — in one SPIR-V module.** A whole-module scan attributes
+every access to whichever entry point it happens to read. My first scan took the
+first and reported "mod-0365 is Vertex"; my second kept the last and reported
+"Fragment". **Two of my own instruments disagreed about the same fact**, which is
+the tell that neither was measuring it.
+
+This is recurring error class 3 verbatim: *whole-module scans on combined
+modules* ([[x4vr-recurring-error-classes]]). The conclusion it produced —
+"no fragment shader reads `M_projection`" — was **unfounded, not disproven**.
+
+`stage_scan.py` now walks the call graph from each entry point and attributes an
+access only if a function reachable from that entry contains it.
+
+#### What that shows
+
+| entry point | reads `M_projection` (member 1) | patched? |
+|---|---|---|
+| Vertex   | 22 modules | **yes** — `patch_vertex_eye_offset` |
+| Fragment | **10 modules** | **NO — nothing patches it** |
+| Compute  | 2 modules | cannot be (no `gl_ViewIndex`) |
+
+All ten fragment readers of member 1 **also read `M_invprojection` (member 2)**,
+which `X4VR_PROJ_INVPROJ` *does* patch per-eye. Six of the ten also sample a 3D
+image:
+
+```
+mod-0111, 0112, 0167, 0168   member 1 + member 2, no 3D
+mod-0365 .. 0370             member 1 + member 2 + 3D sample + I_maindepth
+                             + V_light_direction_view + the V_volume_* set
+mod-0364 (Compute)           member 1 + member 2 + V_light_direction_view
+                             + V_volume_size, WRITES the 3D volume
+```
+
+**So inside one fragment shader, `M_invprojection` is in the per-eye frame and
+`M_projection` is in X4's centre frame.** A position reconstructed with the
+per-eye inverse and then re-projected with the centre-frame forward differs by
+exactly the affine — `+B` in one eye, `−B` in the other. That is the opposite-sign,
+scene-dependent, binary behaviour take 182 measured, on precisely the six modules
+that do volumetric in-scatter.
+
+This is [[changing-the-frame-changes-everything-in-it]]: `X4VR_PROJ_INVPROJ`
+re-declared the frame for member 2 and did not enumerate what else was in it.
+
+#### TWO CANDIDATE FIXES, AND THEY ARE OPPOSITES — do not guess
+
+* **(a) Patch member 1 per-eye too**, matching member 2. Correct **if** the
+  shader uses member 1 to project into the *current eye's* screen space (e.g. to
+  fetch `I_maindepth` at a reprojected location).
+* **(b) Stop patching member 2 in these modules**, so both stay in the centre
+  frame. Correct **if** member 1 projects into the *volume's* space — the volume
+  is written by `mod-0364`, a compute shader that cannot be per-eye, so the
+  volume is necessarily in the centre frame and a centre-frame lookup is the
+  consistent one.
+
+They predict opposite edits, and no measurement so far distinguishes them.
+**Settle it by reading X4's own GLSL** rather than by reasoning about SPIR-V:
+`shadergl/` ships in the .cat/.dat ([[x4-ships-its-shader-sources]]); grep it for
+the rarest property in the set — `V_volume_sigma_extinction` or
+`I_volume_bind_index` — and read what the source does with `M_projection`.
+That is a local, zero-run step and it is the next one.
+
+#### Numbering caveat, now proven twice
+
+The dump's `mod-NNNN` is creation order from the run that produced it and does
+**not** line up with a later log's `module #N`: take 182 lists compute modules
+#101/#130/#153, and `mod-0101`/`mod-0130`/`mod-0153` all have vertex entry
+points. Pass serials drift the same way (take 179 vs 180). **Join dumps to logs
+by content, never by number.**
