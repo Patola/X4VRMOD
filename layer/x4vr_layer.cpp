@@ -3043,6 +3043,25 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass2(
 // is doubled and wasted (~40 MB): a depth image gives no hint at creation
 // whether it will back a shadow cascade or the main depth buffer, and 40 MB
 // is far below where that matters.
+//
+// **Why the waste is only waste — read layer1_state() before touching this.**
+// The five cascades come out of here doubled, are written by mono passes only,
+// and their layer 1 stays at the clear value. That is safe because TWO
+// independent things make view 1 read layer 0 for them: layer1_state() returns
+// Shared on exactly that writer pattern so the mirror skips substitution, and
+// view_of_layer() returns null for any image never attached to a view-masked
+// pass, so the verbatim copy stands even if the first were bypassed. Takes 74
+// and 75 believed the opposite and the refutation is written out in full at
+// layer1_state().
+//
+// Saying it here because the distance between the two cost a bad
+// recommendation: reading the `LAYER 1 NEVER RENDERED` report, or this
+// function, without knowing about that guard makes the cascades look like a
+// live per-eye defect, and the obvious fix -- refusing to double depth targets
+// -- trades the hard vkCreateFramebuffer error this permissiveness exists to
+// avoid for no gain at all. If you are about to narrow this rule, the question
+// to answer first is not "is layer 1 empty" but "does anything sample it", and
+// that answer lives at layer1_state(), not here.
 bool mv_double_candidate(const VkImageCreateInfo *ci) {
     if (!g_mv || !g_multiview_supported)
         return false;
