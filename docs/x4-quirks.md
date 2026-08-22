@@ -4609,3 +4609,327 @@ Both directions are locked in `tests/run-multiview-render.sh`: `cant: canted
 target warns` and `cant: identity stays silent`. The second matters as much as
 the first — the identity control is an everyday configuration and an instrument
 that cries wolf on it would be turned off.
+
+---
+
+## X4's renderer, read from its own sources — and five corrections to this file
+
+Brainstorming pass, 2026-08-22, before #33 starts. No take. Everything below
+comes from three sources already on disk: X4's own GLSL (`/tmp/x4-shadersrc`,
+587 files, Egosoft's copyright, **never committed**), the 409 dumped SPIR-V
+modules with their `OpMemberName` debug info intact, and the 190 stored run
+logs. The point of doing it now is that #33 is the first task whose design
+depends on what X4's renderer *is* rather than on what one pass does.
+
+Two new tools carry the measurements so they can be re-run rather than quoted:
+`tools/uniform_block_scan.py` and `tools/headlook_clip.py --self-check`.
+
+### What X4's renderer is, in seven decisions
+
+1. **One GLSL source tree, `#include`-composed, specialised by `#define`.**
+   `shadergl/glsl/*.glsl` plus 290 `shadergl/ogl/*.xml` pass descriptions that
+   name a vertex and a fragment file and declare material properties, with
+   `dynamic="true"` marking the ones the engine writes. There are OSX comments,
+   an `nvidia` pragma block, `#define mul(a,b) ((b)*(a))` and a
+   `simple_dx9offset.vert.glsl`: this is a long-lived multi-backend engine, and
+   Vulkan is one of its outputs. **Consequence: the module population is a
+   property of the configuration, not of X4.** "409 modules" is what our
+   overrides compile.
+
+2. **Camera-relative world space.** Object transforms are baked against the
+   camera on the CPU, `M_view` is (mostly — see correction 2) identity, and so
+   "world" space *is* view space. There is no world frame in the shaders to
+   rotate. This is the precision decision a space sim has to make, and it is
+   why every space that matters to us is the camera's.
+
+3. **Reversed-Z with an infinite far plane.** Measured every run:
+   `x_c = sx·x_v, y_c = sy·y_v, z_c = near, w_c = z_v`, i.e. `m[10] == 0`.
+   X4 says it itself in `hiddenareamask.vert.glsl`: *"since we have an inverse
+   z-buffer, 1.0 is closest and 0.0 is furthest"*. `BGDIST` is 2 000 000 and
+   `BGZ` is its reciprocal. This one fact is why the eye shear collapses to a
+   single scalar — and why the head rotation does not.
+
+4. **Bindless everything.** One descriptor set of `GFX_BINDLESS_COUNT` texture
+   arrays, indexed by `uint` out of the uniform blocks. Already known from
+   take 20; the source confirms it is the design and not an artifact.
+
+5. **Blocks are organised by lifetime**, and X4 says so in the names:
+   `SLOT_CAMERA` (per view), `SLOT_WORLD` (per object), `SLOT_DYNAMIC` (per
+   draw), `SLOT_MATERIAL`, `SLOT_GENERIC_STORAGE`. Per-eye is per-**view**, so
+   the camera block is the correct home for our corrections, and it is the one
+   X4 keeps 128 of per frame.
+
+6. **A jittered/unjittered matrix pair for everything temporal**, plus
+   `M_prevworldviewprojection`, `M_prevboneworld`, `mv_fill` motion vectors,
+   `taa_mva`, FSR3 and a `dlssg_ui_verify` pass. The renderer is *built* for
+   temporal upscaling. Our config switches all of it off, which is why the
+   dumps read zero on those members.
+
+7. **Screen space is a first-class space, with exactly two doors.**
+   `GetFragUV() = gl_FragCoord.xy / V_viewportpixelsize.xy`, then
+   `GetViewPos()` through `M_invprojection` and `GetViewPosUJShad()` through
+   `M_invprojection_uj`. Every reconstruction in the engine goes through one of
+   those two members. **The layer already owns both** (#22, #39). That is the
+   single most reassuring fact for #33.
+
+And one that is not a decision but a discovery: **`hiddenareamask.xml` exists,
+with a real vertex and fragment shader** that draws a mesh at the near plane so
+everything behind it is rejected. That is the VR lens-mask optimisation by name
+and by implementation. It does **not** reopen the OpenTrack question or make X4
+a VR title — no module in the dumps is it, and
+[the VR-residue rule](#x4s-vr-api-is-a-stubbed-surface--names-only-no-implementation)
+stands — but it is a working shader rather than a dangling symbol, and that is
+a different category from the stubs. Worth knowing it is there before someone
+rediscovers it and over-reads it.
+
+### Correction 1 — the camera block has 72 members; this file listed five
+
+`tools/uniform_block_scan.py`, over the 409 dumps, attributed per entry point.
+The full table is in the tool's output; the part that matters:
+
+    mem  name                    Compute  Fragment   Vertex
+      0  M_view                        0       160      262
+      1  M_projection                  2        10       22
+      2  M_invprojection               3       244        0
+      3  M_projection_uj               0         0        0
+      4  M_invprojection_uj            0         2        0
+      5  M_jitter                      0         0        0
+      6  M_prevjitter                  0         0        0
+      7  M_viewprojection              0         0        2
+      8  M_viewinverse                 0        16        0
+     11  V_viewportpixelsize           0       252       18
+     12  V_screenresolution            0         0        0
+     13  V_cameraposition              0        86      296
+
+Three things in there were not known:
+
+* **`M_viewprojection` (7) is a real path.** `GetInstanceData()` in
+  `common_vert.glsl` builds `wvp = M_viewprojection * inst.world` in the
+  *shader* for instanced draws, rather than taking the per-object
+  `M_worldviewprojection`. Two vertex entry points do it. This is the family
+  #48 was about; it is now named rather than inferred.
+* **`V_viewportpixelsize` (11) is read by 18 VERTEX entry points.** `ui.vert`
+  is one of them (a half-texel offset). Anything that changes the render extent
+  — #43 — moves vertex output, not just fragment sampling. That is a lead for
+  #45 as well.
+* **`M_view` (0) is the most-read matrix in the block.** 262 vertex + 160
+  fragment entry points. It is identity, so they are no-ops — which is exactly
+  what makes the next correction matter.
+
+### Correction 2 — `M_view` is NOT always identity
+
+This file has said since section 4: *"Surveyed all 128 blocks of the view
+arena: `M_view` is identity in every one"*, and drew from it that writing it has
+"no visual effect at all". The survey was one instant of one run. Of the 64
+runs that logged the matrix dump, **53 print exact identity, 2 differ only in
+the fourth decimal, and 9 print a real view transform**:
+
+    M_view  [ 0.966  0  0.258  0 | 0  1  0  0 | -0.258  0  0.966  0 | 8.48  0  2.26  1 ]
+
+A 15.0° yaw about +y and an 8.70 m offset, in takes 155, 161, 165a, 166b,
+167a, 171, 172, 175b and 178 — nine independent runs spanning five weeks,
+agreeing to three decimals. That is not a transient. Take 178's dump shows the
+consequence directly: its `M_viewprojection` is genuinely `P·M_view`, with the
+w row reading `0.256·x + 0.967·z + 2.225` instead of plain `z`.
+
+**What survives.** The shear and the rotation are derived from
+`z_c == near` and `w_c == z_view`, and *both still hold* for such a camera —
+`P·M_view` still puts that camera's own view z into w. The math is safe.
+
+**What does not.** "Writing `M_view` has no visual effect" is false for
+whatever this camera draws, and 422 entry-point reads are waiting for it.
+`world2view()` and `view2world()` are not no-ops there. Anyone tempted to
+commandeer member 0 as a per-frame channel — it is the widest one in the block
+and it currently carries nothing — must know that this camera exists first.
+
+**Why the instrument could not have said so.** `x4vr_layer.cpp:5395` picks the
+block with the *most draws* and prints its matrices **once per run**, and the
+comment right above it states the belief as a reason:
+
+    // Prefer the projection matrix: X4 renders camera-relative, so its
+    // M_view is identity and cannot disambiguate the storage order.
+
+The same file already fixed exactly this defect for `sx` — `proj CAMERA cam#N`
+reports **every** credited block, added after the "one number, several cameras"
+mistake — and the matrix dump beside it was left on one block. Same defect
+class, same file, one field over. **Before #33: report `M_view` per credited
+camera and flag any non-identity one.** It costs nothing at runtime; the block
+is already being read.
+
+Not established, and deliberately not guessed at: *which* camera this is. The
+value is fixed across menu-phase and gameplay-phase samples alike, which rules
+out a scene camera following the player. A cockpit monitor, an environment
+probe and a second viewport all fit. The instrument above answers it as a side
+effect, so it does not need answering now.
+
+### Correction 3 — "`M_projection_uj` is read by zero modules" is about our config
+
+True of the dumps, and this file has used it as a fact about X4. It is not.
+`ProjectUJ()` has exactly two callers in X4's GLSL — `ssao_v2.frag.glsl` and
+`ssr.frag.glsl` — and the injector forces `ssao=0` and `ssr=false`. Member 3 is
+empty **because we emptied it**. Same for `M_jitter`/`M_prevjitter` (5, 6),
+empty because `antialiasing=none`, and for `M_prevworldviewprojection`
+(set 3 member 2), which has zero readers because nothing temporal is compiled.
+
+Every zero in correction 1's table carries that caveat. A run that enables FSR3
+— and take 163 proved FSR3 works — repopulates three of them at once.
+
+### Correction 4 — "uj" is un-jittered, and today members 2 and 4 hold the *same* matrix
+
+`M_jitter`/`M_prevjitter` sit next to them in the block and
+`TAA_GetJitterClip()` reads `M_jitter[3].xy`; `GetViewPosUJShad()` subtracts
+the jitter before unprojecting. So `_uj` is *un-jittered*, and its purpose is
+to keep TAA's sub-pixel offset out of shadow lookups, SSR and SSAO.
+
+With `antialiasing=none` the jitter is identity, and take 184's own dump shows
+`M_projection` and `M_projectionUJ` printed identically. **So take 83's finding
+was never about jitter.** Members 2 and 4 hold the same numbers in X4; they
+differ only *after our patch*, and the defect was that we corrected one copy of
+a matrix and left the other. Stating it that way matters, because the current
+phrasing invites "we do not use TAA, so member 4 cannot matter" — which is the
+opposite of true.
+
+It also names a coupling worth having in writing: **enabling FSR3 and enabling
+head rotation are the same risk taken twice.** Jitter lands in `m[8]/m[9]`,
+which the injector's own comment already flags as "the eye shear's own slots",
+and it wakes the temporal reprojection that a per-frame head rotation
+desynchronises. Do not turn both on in one take.
+
+### Correction 5 — set 2's member indices are not comparable between modules
+
+`MACRO_BUFFER_MATERIAL` expands per shader family, so set 2 binding 0 has a
+different layout in each module. The scan shows `S_diffuse_detail_idx` at
+members 31, 37 and 55 in different modules. Any cross-module reasoning about a
+set-2 index is invalid by construction. Sets 1, 3 and 4 are shared and safe.
+
+### What this says about #33, worst-to-learn-late first
+
+**1. The head rotation is exact, and it is NOT a constant matrix.**
+`tools/headlook_clip.py --self-check` proves both offline, in a second:
+
+    M = P·R·P⁻¹ agrees with rendering at view R·V to 5e-11 NDC, at every
+    depth, over six measured cameras — that is the whole case for this route
+
+    M[0][3] = sx·sin(yaw)     M[3][0] = −sin(yaw)/sx     M[0][0] = cos(yaw)
+
+Six of sixteen entries carry `sx` or `sy`, and they are precisely the ones that
+couple the rotation through w — the ones that do the rotating. The free entries
+hold only `cos`. Baking `M` at the menu camera's `sx = 1.33333` and running it
+at the shipped `X4VR_FOV=1.437` camera (`sx = 0.75405`) is **72 px wrong on a
+1408 px eye at 10° of yaw**; at the zoom stop it is 2845 px; at the `fov 2.21`
+camera the guard band wants, it drives `w` through zero and geometry inverts
+through the eye point.
+
+The decision section above predicted "the general MVP path plus the 12
+baked-sx modules will both need the rotation term, exactly as the shear did".
+That was right about *coverage* and understates the problem: **the third site,
+`patch_vertex_clip`, cannot carry a correct rotation at all**, because its
+`float k[16]` is frozen at `vkCreateShaderModule`, twenty-six seconds before X4
+has a camera. For the shear a stale `sx` was a wrong magnitude. For the
+rotation it is wrong geometry.
+
+This is not an obstacle, it is a routing rule, and it happens to be the routing
+we want anyway:
+
+    patch_vertex_eye_offset      loads M_projection[0][0]/[1][1] live  -> rotate
+    patch_vertex_eye_offset_mvp  recovers them from M_worldviewprojection -> rotate
+    patch_vertex_clip            baked k[16], carries the non-World modules
+                                 -> do NOT rotate; this is #30's canvas
+
+**2. The per-frame delivery problem, which nothing in the layer solves yet.**
+Every correction the layer applies today is a *constant*: the eye offset is our
+choice, the off-axis affine is latched once, and `patch_fragment_invproj_eye`'s
+own comment says the quiet part — *"Both are constant compositions on a matrix
+that is already being rewritten, so this adds no load and no descriptor."* A
+head pose is none of those things. Options, none of them costed yet:
+
+* extend the pipeline layout at `vkCreatePipelineLayout` with a layer-owned set
+  and bind it alongside X4's;
+* `vkCmdUpdateBuffer` into X4's camera block before the pass, using a member
+  nothing reads — member 3 is empty, but correction 3 says that is a property
+  of our config, not a guarantee;
+* push constants, which X4's layouts do not declare.
+
+Deciding this is the first real design step of #33, and it should be decided
+before any shader work, because it determines what the shader can read.
+
+**3. `R` is eye-independent, and that buys something per-eye work cannot.**
+The IPD and the cant differ between the eyes; the head *orientation* does not.
+So the head rotation can reach places `gl_ViewIndex` cannot — notably the three
+compute modules that read `M_invprojection`, and the froxel volume fill, which
+`patch_fragment_invproj_eye` records as "parametrised by X4's SYMMETRIC frustum
+for ever". Mono-forever and rotation-wrong are separate problems, and only one
+of them is structural.
+
+**4. The fragment correction generalises unchanged, and that is the good news.**
+The invariant that makes #39 work — *reconstruct back into X4's own view space,
+then everything X4 computed in its own frame stays consistent* — is exactly the
+invariant a rotation needs. Compose `R⁻¹` onto members 2 and 4 beside the
+affine and the shear, and the froxel lookup, the CSM lookup and the deferred
+reconstruction all keep working, with member 1 correctly left alone for the
+same reason it is left alone now. What changes is only *when* the value arrives,
+which is point 2.
+
+**5. The declared pose must be the pose we rotated by.** The layer already gets
+this right for the servo, and the reason is written at `x4vr_layer.cpp:8700`:
+declare the injector's *command*, not the live head pose, so the compositor
+reprojects a frame that matches. Under a vertex rotation the same rule reads
+**declared = X4's camera pose ⊕ our `R`**. Getting it wrong has two symmetric
+failure modes that look nothing alike — omitting `R` leaves the compositor
+correcting motion we already applied (the world swims at double rate), and
+double-counting it locks the world to the head. Both are one line.
+
+**6. The HUD splits into two classes and X4 draws them in one pass.** This is
+the hardest open problem in #33 and it is not the canvas. A screen-locked panel
+that follows the head is a legitimate helmet-mounted display; a screen-locked
+*aiming reticle* is a functional break, because it would mark wherever you look
+instead of where the guns point. X4 puts menus, cockpit HUD and map in one
+reference frame (section 4), so no pass-level predicate separates them.
+
+Take 162 already measured the split for two elements and the method is free:
+our shear displaces by inverse depth, so per-eye disparity in any SBS frame
+separates screen-space (0 px) from world geometry. Re-running that grid over
+`/tmp/x4-162b.jpg` reproduces it — a broad 0 px band through the middle of the
+frame against −20 to −60 px of cockpit around it — and the centre tile reads
+−8 px at a correlation too low to call, which is what a reticle overlaid on
+world geometry would look like and also what a badly chosen tile would look
+like. **So: undecided, method known, cost zero.** Settle it from a frame we
+already have before designing around either answer.
+
+The structural answer may be better than a per-element transform anyway.
+`GetMonitorExtents` returns HUD panel positions *in worldspace* (section
+above), and take 162 proved `separateRadar=0` moves the radar into world
+geometry, where it follows the rotation for free. The more of the HUD that
+lives in the cockpit, the less of this problem exists.
+
+**7. A cost of the guard band nobody has priced: shadow resolution.**
+Prediction, before any measurement. X4's cascades are selected by view-space
+distance (`V_csmthresholds`, `F_shadowmaxdistance` "set according to
+videoparameters") and rendered into fixed 2048×2048 D16 maps — ten of them in
+take 184's inventory. The map size comes from the video settings; the *volume*
+each cascade must cover comes from the frustum. Widening `<fov>` from 1.4917
+(110°) to 2.21 (163°) for head-rotation range therefore multiplies each
+cascade's footprint by roughly the tangent-area ratio and divides its texel
+density by the same, **across the whole frame, including the part the player is
+actually looking at.**
+
+The falsifier is a 2048 that is not 2048: if X4 sizes its cascades from the
+field rather than from the video setting, the map dimensions move with
+`X4VR_FOV` and this prediction is dead. Take 158 ran at `fov 2.21` but without
+`X4VR_MV_INVENTORY`, so its image list is absent and the comparison cannot be
+made from stored logs — the cheapest test is one flatscreen take at 2.21 with
+the inventory on, read against take 184's ten 2048×2048 D16 entries.
+
+This matters more than a pixel count. The memory of the previous X4 VR attempt
+is that globally-applied shadows were its recurring problem, and this is the
+mechanism by which a VR-only setting degrades shadows globally. It also puts a
+second term in the guard-band table, which currently prices range in render
+area alone.
+
+### What did NOT change
+
+The froxel volume is still mono forever, and this pass found nothing that
+changes it. The `M_view` correction does not touch the shear or the affine.
+`X4VR_OFFAXIS` stays at identity and #43 stays the blocker for the cant. No
+finding here contradicts `stage16-binocular-clean`; the tag reproduces exactly
+as recorded.
