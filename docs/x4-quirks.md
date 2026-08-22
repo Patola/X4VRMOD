@@ -4233,3 +4233,32 @@ render pass wrote, then re-read the report. "No tracked writer" currently
 conflates *never written* with *written by something the tracker does not
 watch* — and those are opposite diagnoses. Until that is separated, do not
 conclude which.
+
+### Writer tracking now covers every doubled image
+
+`g_img_writers` only gained an entry when a **framebuffer named the image as an
+attachment**, so take 182 tracked 30 of 67 doubled images and the report said
+"5 of 29" while being silent about the other 37. Entries are now seeded at
+`vkCreateImage` for every doubled image, and the report separates three cases
+instead of two:
+
+* `MIXED WRITERS` — masked and unmasked passes both write it.
+* `LAYER 1 NEVER RENDERED` — every writer is a mono pass; layer 1 holds the
+  clear value.
+* `NO RENDER PASS WROTE IT` — **new.** Reports `usage`, and says explicitly
+  whether `STORAGE` (a compute dispatch could write it) or `TRANSFER_DST` (a
+  copy or clear could) is set.
+
+The summary line now reads `N total, U written only by mono pass(es), P never
+named by any framebuffer`, and states in the log itself that **P is a question,
+not a defect** — compute and transfer writes are still not attributed per image,
+so "no render pass wrote it" is proof that no framebuffer named it and nothing
+more. Conflating that with "layer 1 is empty" is what made the old number
+unreadable.
+
+Exercised headlessly: `tests/multiview_render.cpp` now creates a doubled colour
+image that no framebuffer ever names (`ORPHAN_DOUBLED`), and `orphan_case` in
+`run-multiview-render.sh` asserts it is both reported and counted in the total.
+It is created **last**, because creating it early consumed an image serial and
+shifted the ones the transfer-inventory case asserts on — the probe must not
+perturb the numbering it shares a run with.

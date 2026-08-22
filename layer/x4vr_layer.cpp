@@ -974,6 +974,14 @@ std::unordered_map<VkFramebuffer, std::vector<FbAtt>> g_fb_atts;
 // wrong run.
 struct PassKinds {
     std::vector<uint32_t> masked, unmasked;
+    // Seeded for EVERY doubled image at creation, so the report enumerates all
+    // of them. Before this, an entry only appeared when a framebuffer named the
+    // image as an attachment, so take 182 tracked 30 of 67 doubled images and
+    // the "layer 1 never rendered" report said "5 of 29" while saying nothing
+    // at all about the other 37. "No tracked writer" then conflated *never
+    // written* with *written by something the tracker does not watch* -- and
+    // those are opposite diagnoses.
+    uint32_t usage = 0;   // so the report can say whether compute COULD write it
 };
 std::unordered_map<uint32_t, PassKinds> g_img_writers; // by image serial
 
@@ -2465,7 +2473,7 @@ void mv_report(const char *when) {
     // contribution, so this list is the shortlist for any partial divergence.
     {
         std::lock_guard<std::mutex> lock(g_img_mu);
-        uint32_t unmasked_only = 0;
+        uint32_t unmasked_only = 0, no_pass = 0;
         // Printed even when nothing is mixed. An empty result otherwise means
         // either "no image has both kinds of writer" or "the detector never
         // ran", and those are not the same answer.
@@ -2519,10 +2527,31 @@ void mv_report(const char *when) {
                          "is a mono pass, so layer 1 holds only the clear "
                          "value. Safe only while nothing samples it.",
                          when, e.first);
+            } else if (e.second.masked.empty() && e.second.unmasked.empty()) {
+                // NOT the same claim as the line above, and the difference is
+                // the whole point of seeding: no render pass wrote this image.
+                // Whether that means "never written" or "written by something
+                // this tracker does not watch" depends on how it CAN be
+                // written, so say that rather than guess.
+                no_pass++;
+                const bool storage = (e.second.usage &
+                                      VK_IMAGE_USAGE_STORAGE_BIT) != 0;
+                const bool xferdst = (e.second.usage &
+                                      VK_IMAGE_USAGE_TRANSFER_DST_BIT) != 0;
+                X4VR_LOG("mv %s: img #%u NO RENDER PASS WROTE IT — usage=0x%x%s%s"
+                         ". This is not proof layer 1 is empty: it is proof no "
+                         "framebuffer named it.",
+                         when, e.first, e.second.usage,
+                         storage ? ", STORAGE so a compute dispatch can write it"
+                                 : "",
+                         xferdst ? ", TRANSFER_DST so a copy/clear can" : "");
             }
         }
-        X4VR_LOG("mv %s: doubled images whose layer 1 is never rendered: %u of "
-                 "%zu tracked", when, unmasked_only, g_img_writers.size());
+        X4VR_LOG("mv %s: doubled images — %zu total, %u written only by mono "
+                 "pass(es) (layer 1 never rendered), %u never named by any "
+                 "framebuffer. The second number is a QUESTION, not a defect: "
+                 "compute and transfer writes are not attributed per image here.",
+                 when, g_img_writers.size(), unmasked_only, no_pass);
     }
     // The two candidates, side by side. bind_mismatch > 0 means the draws
     // themselves never reached view 1 and nothing downstream matters yet;
@@ -3045,6 +3074,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImage(
         std::lock_guard<std::mutex> lock(g_img_mu);
         info.serial = g_img_serial++;
         g_images[*out] = info;
+        // Seed here, not at framebuffer creation: an image that no framebuffer
+        // ever names must still appear in the report, as "no render pass wrote
+        // this" rather than as absent.
+        if (dbl)
+            g_img_writers[info.serial].usage = ci->usage;
     }
     if (dbl) {
         std::lock_guard<std::mutex> lock(g_mv_mu);

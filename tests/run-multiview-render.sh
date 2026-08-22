@@ -1608,6 +1608,34 @@ verdict_case() { # label target want_verdict_substring
         fails=$((fails + 1))
     fi
 }
+# A doubled image that no framebuffer names must be REPORTED, not omitted.
+# Take 182 had 45 of them and the report said "5 of 29" -- silent about the
+# rest -- because the writer map only gained an entry at framebuffer creation.
+# The harness now creates one deliberately (ORPHAN_DOUBLED).
+orphan_case() {
+    local log; log="$(mktemp)"
+    env VK_ADD_LAYER_PATH="$BUILD/layer" \
+        VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+        X4VR_VR=0 X4VR_STEREO=1 X4VR_MV=1 X4VR_MV_INVENTORY=1 \
+        X4VR_LOG="$log" timeout 120 "$BIN" >/dev/null 2>&1
+    local named; named=$(grep -ac "NO RENDER PASS WROTE IT" "$log")
+    local storage; storage=$(grep -ac "NO RENDER PASS WROTE IT.*STORAGE" "$log")
+    local tot; tot=$(grep -ao "doubled images — [0-9]* total" "$log" | head -1 |
+                     grep -o "[0-9]*" | head -1)
+    rm -f "$log"
+    # The count must include the orphan: a report that enumerates only the
+    # images it happened to see attached is the defect this case exists for.
+    if [[ "$named" -ge 1 && "$storage" -ge 1 && "${tot:-0}" -ge 3 ]]; then
+        printf 'ok   %-38s %s reported, %s total\n' \
+            "orphan doubled image is reported" "$named" "$tot"
+    else
+        printf 'FAIL %-38s named=%s storage=%s total=%s\n' \
+            "orphan doubled image is reported" "$named" "$storage" "${tot:-none}"
+        fails=$((fails + 1))
+    fi
+}
+orphan_case
+
 verdict_case "verdict: captured"        0 "captured"
 verdict_case "verdict: reached, no file" 1 "REACHED but never captured"
 verdict_case "verdict: never reached"   5 "NEVER REACHED"

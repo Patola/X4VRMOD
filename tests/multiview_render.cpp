@@ -947,6 +947,36 @@ int main(int argc, char **argv) {
     vkDestroyImageView(dev, view, nullptr);
     vkDestroyImage(dev, img, nullptr);
     vkFreeMemory(dev, mem, nullptr);
+    // A doubled image that NO framebuffer ever names. The layer doubles any
+    // 2D single-layer colour target, so this one is doubled and then never
+    // attached -- which is the case take 182 had 45 of and could not report,
+    // because the writer map only gained an entry at framebuffer creation.
+    // Without this the "NO RENDER PASS WROTE IT" line has no way to fire here
+    // and would ship unexercised, which is how three earlier reports in this
+    // project turned out to be untestable. No memory is bound: the layer records at
+    // vkCreateImage, and Vulkan allows create/destroy unbound. Created LAST
+    // on purpose -- doing it early consumed an image serial and shifted the
+    // ones the transfer-inventory case asserts on.
+    {
+        VkImageCreateInfo oci{};
+        oci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        oci.imageType = VK_IMAGE_TYPE_2D;
+        oci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        oci.extent = {64, 64, 1};
+        oci.mipLevels = 1;
+        oci.arrayLayers = 1;
+        oci.samples = VK_SAMPLE_COUNT_1_BIT;
+        oci.tiling = VK_IMAGE_TILING_OPTIMAL;
+        oci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                    VK_IMAGE_USAGE_STORAGE_BIT;
+        oci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        oci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkImage orphan;
+        CHECK(vkCreateImage(dev, &oci, nullptr, &orphan));
+        printf("ORPHAN_DOUBLED=1\n");
+        vkDestroyImage(dev, orphan, nullptr);
+    }
+
     vkDestroyDevice(dev, nullptr);
     vkDestroyInstance(inst, nullptr);
     return 0;
