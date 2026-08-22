@@ -2001,6 +2001,93 @@ probe_cap_case "probe cap: unset means unlimited"  ""  0
 probe_cap_case "probe cap: 0 means unlimited"      0   0
 probe_cap_case "probe cap: 1 stops the probe"      1   1
 
+# --- validation cleanliness, asserted rather than assumed --------------------
+#
+# **This suite is cited as proof that a patch is validation-clean, and until
+# now it never enabled the validation layer.** The only mention of VUID in this
+# file was a grep inside a failure branch, which reports VUIDs for a case that
+# already failed for another reason and says nothing about a passing one. The
+# accepted method — compare the VUID set with a feature on against off — was
+# being run by hand, and by hand it missed that the harness had a PERMANENT
+# VUID-vkCmdDraw-None-08114: the bindless table at set 0 binding 0 declares
+# eight descriptors and writes four, and an ordinary array binding promises all
+# eight are valid. Fixed at the source with PARTIALLY_BOUND (which is what X4
+# must declare for its 53306-entry table anyway), and pinned here so it cannot
+# come back.
+#
+# A standing baseline error is worse than a noisy one: "unchanged" then reads as
+# clean, anything new sharing the ID is hidden, and readers learn to skip VUID
+# lines. So the assertion is an EMPTY set, not a matching set.
+#
+# Cost is ~1 ms per case, measured, so the configuration list is chosen for
+# coverage rather than for speed.
+#
+# SCOPE, stated so nobody reads more into a green block than it earns: these
+# cases draw with the stock `$SF`. The other shaders the suite DRAWS -- the twin
+# pair, the patched variants, sample_combined -- were checked clean by hand.
+# sample_two, sample_bindless, sample_invproj and sample_alias_binding are NOT
+# clean if drawn (VkGraphicsPipelineCreateInfo-layout-07988: they declare
+# bindings this harness's pipeline layout does not), and that is fine only
+# because they never are: they go to patch_case / idx_case / inv_case, which
+# run the SPIR-V CLI and spirv-val and never create a device. Hand one of them
+# to frag_case or mirror_case and it needs a matching layout first.
+validation_manifest() {
+    local d f
+    local -a dirs=()
+    IFS=':' read -r -a dirs <<<"${VK_LAYER_PATH:-}"
+    dirs+=("${XDG_DATA_HOME:-$HOME/.local/share}/vulkan/explicit_layer.d"
+           /usr/local/share/vulkan/explicit_layer.d
+           /usr/share/vulkan/explicit_layer.d
+           /etc/vulkan/explicit_layer.d)
+    for d in "${dirs[@]}"; do
+        [[ -n "$d" ]] || continue
+        for f in "$d"/VkLayer_khronos_validation.json; do
+            [[ -e "$f" ]] && return 0
+        done
+    done
+    return 1
+}
+
+# The presence check is NOT optional politeness. VK_LOADER_LAYERS_ENABLE is a
+# glob-enable: naming a layer that is not installed is silently ignored, the run
+# succeeds, and the VUID set comes back empty. That is a pass produced by the
+# absence of the instrument -- so without a positive control this whole block
+# would be a check that cannot fail.
+if ! validation_manifest; then
+    printf 'skip %-38s validation layer not installed — these cases assert\n' \
+        "validation: (all)"
+    printf '     %-38s nothing, they did not pass\n' ""
+else
+    vuid_case() {
+        local label="$1"; shift
+        local out vuids
+        out=$(env VK_ADD_LAYER_PATH="$BUILD/layer" \
+            VK_LOADER_LAYERS_ENABLE=VK_LAYER_KHRONOS_validation,VK_LAYER_X4VR_core \
+            "$@" X4VR_LOG=/dev/null timeout 180 "$BIN" "$VS" "$FS" "$SF" 2>&1)
+        vuids=$(grep -oE 'VUID-[A-Za-z0-9-]+' <<<"$out" | sort -u | tr '\n' ' ')
+        if [[ -z "$vuids" ]]; then
+            printf 'ok   %-38s no VUIDs\n' "$label"
+        else
+            printf 'FAIL %-38s %s\n' "$label" "$vuids"
+            grep -m2 -A1 'Validation Error' <<<"$out" | sed 's/^/       | /'
+            fails=$((fails + 1))
+        fi
+    }
+    vuid_case "validation: plain"          X4VR_MV=1
+    vuid_case "validation: view arena"     X4VR_MV=1 X4VR_TEST_VIEW_ARENA=1
+    vuid_case "validation: bindless mirror" X4VR_MV=1 X4VR_BINDLESS_MIRROR=1 \
+        X4VR_MIRROR_OFFSET=4
+    vuid_case "validation: stereo shear"   X4VR_MV=1 X4VR_STEREO=1 X4VR_IPD=0.064
+    vuid_case "validation: pose rotate"    X4VR_MV=1 X4VR_TEST_VIEW_ARENA=1 \
+        X4VR_POSE=1 X4VR_POSE_ROTATE=1 X4VR_POSE_YAW=10
+    # X4's real layout width, and the collision path -- the two configurations
+    # take 186b proved the harness had never run.
+    vuid_case "validation: X4's 6-set width" X4VR_MV=1 X4VR_TEST_VIEW_ARENA=1 \
+        X4VR_POSE=1 X4VR_POSE_ROTATE=1 X4VR_TEST_PAD_SETS=6
+    vuid_case "validation: pose collision"  X4VR_MV=1 X4VR_TEST_VIEW_ARENA=1 \
+        X4VR_POSE=1 X4VR_POSE_ROTATE=1 X4VR_TEST_PAD_SETS=6 X4VR_POSE_SET=5
+fi
+
 # **The guard was at line 1441 and three case groups ran after it**, counting
 # failures into a variable nothing looked at again before the unconditional
 # "all cases passed" below. Those cases could not fail. Checked here, at the

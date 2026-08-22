@@ -105,8 +105,34 @@ int main(int argc, char **argv) {
     q.queueFamilyIndex = gfx;
     q.queueCount = 1;
     q.pQueuePriorities = &prio;
+    // descriptorBindingPartiallyBound, for the bindless table at set 0
+    // binding 0. That table declares eight slots and writes four, which is
+    // X4's shape in miniature -- X4's real table is 53306 textures and cannot
+    // possibly have every element written. Without this feature the harness
+    // was making a promise it does not keep: an ordinary array binding says
+    // every descriptor in it is valid, and validation duly reported
+    // VUID-vkCmdDraw-None-08114 on element 4 in every run where nothing
+    // mirrored into the top half.
+    //
+    // The error was real as a statement about the binding's declared contract
+    // and false as a statement about behaviour -- `src` is a plain sampler2D,
+    // so it reaches element 0 and nothing else. Enabling the feature makes the
+    // declaration match both the shader and X4.
+    // The INDIVIDUAL promoted struct, not VkPhysicalDeviceVulkan12Features.
+    // The layer under test appends VkPhysicalDeviceMultiviewFeatures and
+    // VkPhysicalDeviceTimelineSemaphoreFeatures to this very chain, and the
+    // aggregate 1.2 struct may not coexist with either -- both carry the
+    // timeline-semaphore feature, so the spec forbids the pair outright
+    // (VUID-VkDeviceCreateInfo-pNext-02830). Using the aggregate here traded
+    // one validation error for another. Matching the layer's own convention is
+    // the only choice that is clean whether or not the layer is loaded.
+    VkPhysicalDeviceDescriptorIndexingFeatures fdi{};
+    fdi.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+    fdi.descriptorBindingPartiallyBound = VK_TRUE;
     VkDeviceCreateInfo dci{};
     dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    dci.pNext = &fdi;
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &q;
     VkDevice dev;
@@ -674,8 +700,20 @@ int main(int argc, char **argv) {
     dslb.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     dslb.descriptorCount = kSlots;
     dslb.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // PARTIALLY_BOUND: elements kWritten..kSlots-1 are legitimately unwritten
+    // unless the mirror fills them, and no shader here reaches them. This is
+    // the declaration X4 must also make for its 53306-entry table, so the
+    // harness is closer to X4's shape with it than without.
+    const VkDescriptorBindingFlags dbf =
+        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+    VkDescriptorSetLayoutBindingFlagsCreateInfo dbfci{};
+    dbfci.sType =
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+    dbfci.bindingCount = 1;
+    dbfci.pBindingFlags = &dbf;
     VkDescriptorSetLayoutCreateInfo dslci{};
     dslci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dslci.pNext = &dbfci;
     dslci.bindingCount = 1;
     dslci.pBindings = &dslb;
     VkDescriptorSetLayout dsl;

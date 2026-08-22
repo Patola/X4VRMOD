@@ -5016,7 +5016,23 @@ identity with 60 draws, block 1 carrying take 178's logged matrix with 10 — an
 the suite asserts both paths report. The asymmetry is the test: 10 draws never
 wins the frame, and reading only the winner is precisely how this sat unseen in
 9 stored runs. Validation-clean, checked by running the harness with and
-without the flag and diffing the VUID set (four pre-existing, none added).
+without the flag and diffing the VUID set.
+
+> That check originally read "four pre-existing, none added", and the phrase is
+> the problem rather than the count. Diffing against a non-empty baseline passes
+> whenever a new error shares an ID with an old one, and it normalises leaving
+> errors in place.
+>
+> **Scoped precisely, because the first rewrite of this note overclaimed.** The
+> configurations the suite *draws* are empty, and `run-multiview-render.sh` now
+> asserts that across seven of them. What is **not** clean is drawing
+> `sample_two`, `sample_bindless`, `sample_invproj` or `sample_alias_binding` —
+> each still raises `VkGraphicsPipelineCreateInfo-layout-07988`, because they
+> declare bindings the harness's pipeline layout does not. That is harmless
+> today for one reason worth writing down: those four are **never drawn**. They
+> reach `patch_case` / `idx_case` / `inv_case`, which run the SPIR-V CLI and
+> `spirv-val` and never create a device. If one of them is ever handed to
+> `frag_case` or `mirror_case`, it will need a matching layout first.
 
 `tests/view_math.cpp` pins the decoder against take 178's sixteen floats **as
 logged**, including that reading them with the wrong storage order silently
@@ -5438,8 +5454,20 @@ Fragment and compute are reachable — the set declares all three stages and the
 compute pipelines are substituted too — but nothing reads it there yet. The
 member-2/4 correction is #33's.
 
-Validation-clean: the VUID set is identical with the channel on and off, in
-both the default and stereo configurations.
+Validation-clean: the VUID set is **empty** with the channel on and off, in both
+the default and stereo configurations.
+
+> Strengthened from "identical" after the fact, and the weaker word was hiding
+> something. The harness carried a permanent `VUID-vkCmdDraw-None-08114` in
+> every configuration where nothing mirrored into the top half of the bindless
+> table: set 0 binding 0 declares eight descriptors and writes four, and an
+> ordinary array binding promises all eight are valid. Against a non-empty
+> baseline, "identical" is satisfied by a genuinely new error that happens to
+> share an ID, and it teaches readers to skip VUID lines. The table now declares
+> `PARTIALLY_BOUND` — which is what X4 must declare for its 53306-entry table
+> anyway, so the harness is closer to X4's shape than it was — and
+> `run-multiview-render.sh` asserts an **empty** set across seven
+> configurations, having never enabled the validation layer at all before.
 
 ### #33 step 1 — the conjugation is written and validated; it has NOT executed
 
