@@ -1600,6 +1600,13 @@ savegame flag, the player's `config.xml` read and never written.
 
 ### Take 162 — `separateRadar=0` makes the radar WORLD geometry. Measured, not eyeballed.
 
+> **RETRACTED by #55 — see the end of this file.** It was measured, and the
+> measurement was of the wrong thing: the −30 px belongs to the cockpit panel
+> the radar is drawn on. Splitting the same window by chroma gives the radar
+> overlay **+0 px**. The section is left exactly as written, including the
+> "measured, not eyeballed" boast, because the way it went wrong is worth more
+> than the conclusion was.
+
 The override landed (`config: effective separateRadar=0 (from X4VR_SEPARATE_RADAR)`)
 and the radar moved from the flat bottom-centre dome to the right of the cockpit.
 Zoomed, its axes looked screen-aligned and I was ready to call it "repositioned
@@ -5025,3 +5032,82 @@ one, and every other run pays a branch on a static.
 environment probe and a second viewport all fit, the value is identical in
 menu-phase and gameplay-phase samples alike, and the next dump run answers it
 as a side effect. Not worth guessing at now.
+
+### #55 — the reticle is flat, and take 162's radar finding was the panel behind it
+
+No run. `tools/hud_frame.py` over `/tmp/x4-162b.jpg`, the SBS frame take 162
+already produced. Our shear displaces by inverse depth, so disparity within one
+frame says which frame an element was drawn in.
+
+    region      channel    dx     ncc  margin
+    reticle     hud        +0   0.944   0.551     flat
+    radar       hud        +0   0.910   0.590     flat
+    radar       grey      -29   0.593   0.269     world geometry
+    ticker      hud        +0   0.995   0.558     flat
+    console     luma      -43   0.772   0.052     world geometry
+    stars       luma       +0   0.980   0.227     flat (infinity)
+
+**The aiming reticle carries zero per-eye disparity** — the four green corner
+brackets, the green triangle and the cyan aim circle all land at +0 while the
+cockpit around them lands at −42/−43. It is not cockpit-depth geometry. An
+anaglyph of the same window shows it directly: the brackets come out sharp and
+single, every strut behind them is doubled red/cyan.
+
+**What that does NOT settle, and it is the half #33 needs.** 0 px is what
+screen-locked content reads *and* what world geometry at infinity reads — the
+starfield in the same window reads +0 too. Under a head rotation those diverge:
+screen-locked follows the head (a reticle that marks wherever you look instead
+of where the guns point), world-at-infinity rotates correctly. **This method
+cannot separate them**, and neither can a canted take, because #40 deliberately
+makes the canvas agree with infinity. What separates them is a canvas at a
+*finite* distance — `X4VR_CANVAS_M=2`, which moves screen-space content and
+leaves world alone. Filed rather than guessed.
+
+#### RETRACTED: "take 162 — `separateRadar=0` makes the radar WORLD geometry"
+
+That section says "Measured, not eyeballed", and the measurement was
+`radar (right side) disparity -30 px`. Splitting the same window by chroma
+gives **hud +0, grey −29**: the −30 is the **cockpit panel the radar is drawn
+on**, not the radar. Four overlay-free control windows around it read −32, −40,
+−65 and the overlay core reads +0 with the sharpest margin in the whole frame
+(0.876). The anaglyph is unambiguous — the blue radar arcs and crosshair are
+single, the panel behind them is split in two.
+
+So the four consequences that section drew do not follow:
+
+* ~~the radar **already has correct stereo**~~ — it has none; it is flat
+* ~~it would follow #33's vertex-stage rotation for free~~ — it will not
+* ~~it needs **none** of #30's canvas~~ — it needs the canvas like the ticker
+* its backdrop is the console, so the wide-FOV washout cannot recur on it —
+  **this one survives**, and it was always the argument that did not depend on
+  the disparity number
+
+The decision that section fed into is unaffected: `separateRadar` stays unset
+by default because it is a preference, not a stereo-correctness fix. What
+changes is the planning claim underneath it — routing the radar to the target
+monitor does **not** remove canvas work, so "supporting both modes means the
+canvas work still has to happen" is now true for a second reason.
+
+**How the error happened, because it is a class and not an accident.** A thin
+cyan overlay lying on textured geometry puts two things at two depths in one
+window, and a single correlation returns whichever carries more contrast —
+wearing the other one's name. The window I first tried had the same problem in
+reverse (luma followed the overlay, at +0). `hud_frame.py` therefore reports
+**three channels always**: luma, an overlay-only chroma channel, and an
+overlay-suppressed background channel. Where they disagree, the disagreement is
+the finding. A tool that printed one number could not have caught this and
+would have reproduced the mistake.
+
+**Two instrument failures of my own, recorded because both produced a number.**
+The first search capped at −40 px and returned exactly −40 for every
+near-cockpit window — the bound, not a measurement; `PEGGED` now says so. The
+second was a whole-frame registration whose argmax read −39 px: printing the
+curve showed a flat plateau from −60 to −20 varying by 0.006, aperture
+ambiguity on the cockpit's repeated ribs, and no evidence at all. Both were
+caught by looking at the shape rather than the extremum.
+
+**Not converted to metres, deliberately.** px→depth needs the sx of the camera
+that drew the element, and this frame ran `X4VR_FOV=2.21` whose scene camera
+reads 0.14976 while 89 of its 124 credited slots read 1.33333 — the two give
+0.08 m and 1.4 m for the same −43 px. Which camera draws the cockpit is not
+established, so the frame is reported in pixels against its own extremes.

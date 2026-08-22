@@ -75,3 +75,33 @@ yaw, and at the wide-field camera the guard band wants it drives `w` through
 zero. So the rotation rides the live-sx patches, and `patch_vertex_clip` —
 which carries the modules that must stay screen-locked anyway — does not get
 it. Emits `k[16]` column-major, matching `make_canvas_k`.
+
+## hud_frame.py
+
+Is a HUD element screen-space or world geometry? Read it off an SBS frame —
+no run, no layer instrument. The per-eye shear displaces by inverse depth, so
+a draw at `w = 1` is immune to it and disparity within one frame says which
+frame an element was drawn in.
+
+    tools/hud_frame.py /tmp/x4-162b.jpg --region reticle=672,660,64
+    tools/hud_frame.py /tmp/x4-162b.jpg --anaglyph radar=1080,960,220 --out /tmp/a
+
+**Three channels, always.** A thin cyan overlay lying on textured geometry puts
+two things at two depths in one window, and a single correlation returns
+whichever has more contrast, wearing the other one's name. `luma` is both,
+`hud` is `(G+B)/2 − R` (X4's green/cyan HUD, minus its warm cockpit and white
+stars), `grey` is the background with the overlay taken out. Where they
+disagree, the disagreement is the finding — that is how #55 found take 162's
+radar measurement had read the panel behind the radar.
+
+**The range: 0 px has two causes.** Screen-space reads 0, and so does world
+geometry far enough away — the starfield reads 0 in every frame. So this
+separates *screen-space or infinity* from *near geometry*, and does **not**
+separate screen-locked from world-at-infinity. A canted take cannot either,
+because #40 makes the canvas agree with infinity at that distance; only a
+finite `X4VR_CANVAS_M` can.
+
+`PEGGED` means the peak sat on the search bound — the first version capped at
+−40 px and returned −40 for every near-cockpit window. `--anaglyph` writes the
+check a person can make: left eye into red, right into green+blue, so flat
+content is sharp and parallax is fringed.
