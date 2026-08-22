@@ -2515,18 +2515,38 @@ void mv_report(const char *when) {
             // Three cases, not two. The mixed one was the only one flagged,
             // so take 179 printed five doubled shadow cascades whose ONLY
             // writer is a mono pass and said nothing about them -- layer 1 of
-            // each is cleared and then never rendered. That is harmless right
-            // up until something samples it, and the bindless index offset
-            // exists to make view 1 sample exactly such a layer.
+            // each is cleared and then never rendered.
             if (!e.second.masked.empty() && !e.second.unmasked.empty())
                 X4VR_LOG("mv %s: img #%u MIXED WRITERS — layer 1 misses the "
                          "unmasked ones", when, e.first);
             else if (e.second.masked.empty() && !e.second.unmasked.empty()) {
                 unmasked_only++;
+                // This used to end "safe only while nothing samples it", which
+                // reads as an open risk. It is not one: layer1_state() tests
+                // THIS PREDICATE, on this same g_img_writers entry, and returns
+                // Shared -- so the mirror keeps the twin descriptor at layer 0
+                // and view 1 samples the mono content. That guard exists
+                // because substituting layer 1 here is how the right eye lost
+                // its shadows before take 73.
+                //
+                // Saying it out loud because the old wording cost a wrong
+                // recommendation: reading this line without knowing about
+                // layer1_state() makes five doubled shadow cascades look like
+                // a live per-eye defect, and the proposed fix -- refusing to
+                // double depth targets -- would have risked the validation
+                // error mv_double_candidate() is deliberately permissive to
+                // avoid, in exchange for nothing.
                 X4VR_LOG("mv %s: img #%u LAYER 1 NEVER RENDERED — every writer "
                          "is a mono pass, so layer 1 holds only the clear "
-                         "value. Safe only while nothing samples it.",
-                         when, e.first);
+                         "value. NOT a defect: layer1_state() reads it as "
+                         "Shared and the mirror keeps view 1 on layer 0. Costs "
+                         "memory only%s.",
+                         when, e.first,
+                         g_mirror_all_layer1
+                             ? " — BUT X4VR_MIRROR_ALL_LAYER1 is set, which "
+                               "defeats that guard and WILL sample the cleared "
+                               "layer"
+                             : "");
             } else if (e.second.masked.empty() && e.second.unmasked.empty()) {
                 // NOT the same claim as the line above, and the difference is
                 // the whole point of seeding: no render pass wrote this image.
@@ -2547,10 +2567,14 @@ void mv_report(const char *when) {
                          xferdst ? ", TRANSFER_DST so a copy/clear can" : "");
             }
         }
-        X4VR_LOG("mv %s: doubled images — %zu total, %u written only by mono "
-                 "pass(es) (layer 1 never rendered), %u never named by any "
-                 "framebuffer. The second number is a QUESTION, not a defect: "
-                 "compute and transfer writes are not attributed per image here.",
+        // Name the counts rather than numbering them. "The second number is a
+        // QUESTION" was ambiguous between the two that follow "total", and the
+        // sentence explaining it fitted the other one.
+        X4VR_LOG("mv %s: doubled images — %zu total; mono-written=%u "
+                 "(layer 1 never rendered — NOT a defect, the mirror keeps "
+                 "view 1 on layer 0, memory cost only); unattached=%u (never "
+                 "named by any framebuffer — a QUESTION, not a defect: compute "
+                 "and transfer writes are not attributed per image here).",
                  when, g_img_writers.size(), unmasked_only, no_pass);
     }
     // The two candidates, side by side. bind_mismatch > 0 means the draws
@@ -4027,6 +4051,32 @@ const OffAxisPair &offaxis_target() {
                      "half-angle of %.2f deg (needs %.4f) — nothing the "
                      "headset can see is outside what X4 drew",
                      have_fov, r.half_needed * k, need);
+        // A canted target moves where a given world direction lands INSIDE
+        // each eye image, in opposite directions. X4 keys screen-space effects
+        // to that position -- the Sun's flare geometry demonstrably (#49), the
+        // 2D load screen's placement demonstrably (#52) -- so each eye computes
+        // them for a point the other eye has a quarter of a frame away.
+        //
+        // Takes 183 and 184 are the controlled pair: canted, the eyes disagreed
+        // about the Sun's saturated radius by 1.5x and either eye could lose a
+        // whole warm plume; at identity the difference does not shrink, it
+        // vanishes to 0-1%.
+        //
+        // The class is NOT enumerable from outside X4 -- anything keyed to the
+        // image centre is in it. So this warns rather than refuses: the cant is
+        // worth 1.24x linear resolution and may well be wanted again once the
+        // render extent shrinks to match it (#43). It must not be switched on
+        // silently.
+        const float bx = r.eye[0].bx < 0 ? -r.eye[0].bx : r.eye[0].bx;
+        if (bx > 1e-3f)
+            X4VR_LOG("offaxis: WARNING — this target is CANTED (|B_x|=%.4f, so "
+                     "the eyes place the same world direction %.1f%% of the "
+                     "image width apart). X4 keys screen-space effects to that "
+                     "position: the Sun's flare (#49) and the 2D load screen "
+                     "(#52) are both known to diverge per eye under it, and the "
+                     "class is not enumerable from outside X4. Takes 183/184 are "
+                     "the controlled pair. Expect per-eye rivalry defects.",
+                     bx, bx * 100.0f);
         g_offaxis_on.store(true, std::memory_order_relaxed);
         g_offaxis_latched.store(true, std::memory_order_release);
         return r;

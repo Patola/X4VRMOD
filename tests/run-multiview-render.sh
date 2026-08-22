@@ -1636,6 +1636,33 @@ orphan_case() {
 }
 orphan_case
 
+# A canted off-axis target displaces where a world direction lands inside each
+# eye image, in opposite directions, and X4 keys screen-space effects to that
+# position -- takes 183/184 are the controlled pair (#49, #52). The cant may
+# well be wanted again once the render extent shrinks to match it, so the layer
+# warns rather than refusing. What must not happen is switching it on silently,
+# and what must ALSO not happen is crying wolf on the identity control, which is
+# a legitimate everyday configuration.
+cant_case() {
+    local label="$1" oa="$2" want="$3" log got
+    log="$(mktemp)"
+    env VK_ADD_LAYER_PATH="$BUILD/layer" \
+        VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+        X4VR_VR=0 X4VR_STEREO=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 \
+        X4VR_FOV=1.4917 X4VR_OFFAXIS="$oa" \
+        X4VR_LOG="$log" timeout 120 "$BIN" >/dev/null 2>&1
+    got=$(grep -ac "target is CANTED" "$log")
+    rm -f "$log"
+    if [[ "$got" == "$want" ]]; then
+        printf 'ok   %-38s warned=%s\n' "$label" "$got"
+    else
+        printf 'FAIL %-38s want warned=%s, got %s\n' "$label" "$want" "$got"
+        fails=$((fails + 1))
+    fi
+}
+cant_case "cant: canted target warns"     "-54,40,44,-55"  1
+cant_case "cant: identity stays silent"   "-55,55,55,-55"  0
+
 verdict_case "verdict: captured"        0 "captured"
 verdict_case "verdict: reached, no file" 1 "REACHED but never captured"
 verdict_case "verdict: never reached"   5 "NEVER REACHED"

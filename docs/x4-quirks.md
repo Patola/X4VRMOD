@@ -4563,3 +4563,49 @@ enumerable from outside X4 and every member is a per-eye rivalry defect.
 Option C: reduce the cant — trades the two continuously, and is only attractive
 if the flare gate turns out to be threshold-like rather than continuous, which
 is not yet known.
+
+### #51 was not a defect, and the report is why I thought it was
+
+I recommended refusing to double depth-only shadow targets, on the grounds that
+`LAYER 1 NEVER RENDERED` plus 636 applications of the bindless index offset made
+"nothing samples layer 1" an assumption we were not entitled to. **That was
+wrong, and the change would have risked a validation error to fix nothing.**
+
+`layer1_state()` tests the *same predicate* on the *same* `g_img_writers` entry
+the report prints — `masked.empty() && !unmasked.empty()` — and returns
+`Shared`, on which the mirror **keeps the twin descriptor at layer 0** so view 1
+samples the mono content. Take 184's own accounting says so out loud: `44928
+kept at layer 0 as shared (unmasked writers only)`. The guard's comment records
+why it exists:
+
+> only unmasked passes write it, so its layer 1 is empty and substituting it is
+> how the right eye lost its shadows
+
+So this was found and fixed before take 73. The five cascades cost ~40 MB and
+nothing else — exactly what `mv_double_candidate()`'s comment already said, and
+that comment was right to be permissive: doubled-and-unused costs memory, while
+per-eye-rendered-and-not-doubled is a hard validation error at
+`vkCreateFramebuffer`.
+
+**The lesson is about the report, not the shadows.** A line that names a risk
+without naming the guard that already covers it will generate work. Fixed:
+
+* `LAYER 1 NEVER RENDERED` now ends "NOT a defect: `layer1_state()` reads it as
+  Shared and the mirror keeps view 1 on layer 0. Costs memory only" — and if
+  `X4VR_MIRROR_ALL_LAYER1` is set, which defeats that guard, it says so instead.
+* The summary line named its counts rather than numbering them. "The second
+  number is a QUESTION" was ambiguous between the two counts after `total`, and
+  the sentence explaining it fitted the other one.
+
+### The cant warning
+
+A canted target now warns at latch, naming `|B_x|` and the divergence as a
+percentage of image width — 24.3% for the take-183 target, against a measured
+1024/4224 = 24.24%. It warns rather than refuses: the cant is worth 1.24x
+linear resolution and may be wanted again once the render extent shrinks to
+match it (#43). What it must not do is switch on silently.
+
+Both directions are locked in `tests/run-multiview-render.sh`: `cant: canted
+target warns` and `cant: identity stays silent`. The second matters as much as
+the first — the identity control is an everyday configuration and an instrument
+that cries wolf on it would be turned off.
