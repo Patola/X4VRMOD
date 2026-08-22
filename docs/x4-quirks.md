@@ -4317,3 +4317,103 @@ number** — image serials drift between runs exactly like pass serials.
 healthy one at 0.24–0.48, and *either* eye can be the deficient one. Rows saying
 "no solar disc", "neutral in BOTH eyes" or "FLAT FRAME" mean there was no Sun —
 they are not clean results. Look at the crop before believing any number.
+
+---
+
+## Take 183 — the godray hypothesis is dead, and I never checked which eye is right
+
+**Knobs.** Same line as take 182 with `X4VR_TAKE=183-WRITERS`, plus one that is
+*not* an environment variable: Patola set `<autoroll>false</autoroll>` in
+`~/.config/EgoSoft/X4/96679891/config-x4vrmod.xml` (line 35) so X4 would stop
+correcting his orientation. That is the mod's own forked config, so the
+non-intrusive rule is intact — but it is part of this take's state, and a
+re-run without it will roll differently. He rolled clockwise only, at a steady
+rate, giving roughly even angular increments across the 19 present dumps.
+
+### What the writer report answered
+
+Not the question I asked it. There is no godray buffer in the list, because
+**#49 is not godrays** (below). What it did find is a separate, real defect:
+
+    img #70..#74   2048x2048x1  fmt=124 (D16_UNORM)  usage=0xa6  DOUBLED
+    written by rp  #39, #41, #43, #45, #47 — each "MONO (depth-only/shadow)"
+    -> LAYER 1 NEVER RENDERED
+
+**Five cascaded shadow maps are doubled but written mono**; layer 1 holds only
+the clear value. This is the shadow class Patola flagged from the third
+attempt, where globally-applied shadows were the recurring killer. It is filed
+as its own task. It is **not** #49's mechanism — a constant right-eye defect
+cannot produce a flip — but it is live the moment anything samples layer 1.
+
+The other 44 `NO RENDER PASS WROTE IT` lines remain a question, not a defect.
+
+### Three retractions, measured from the take-183 dumps
+
+**1. It is not godrays, and `PLS_GODRAYS`/`GetDepthGodRay()` is off the table.**
+Within one frame the two eyes are the same instant, and at the Sun's distance
+parallax is zero, so after centroid alignment the eye difference *is* the
+component. Take 183 supplies two positives of opposite sign (n10 left carries
+it, n16 right carries it) and two negatives (n12 both, n17 neither):
+
+| frame | Δ peak, 20–40 px | warm excess of Δ |
+|---|---|---|
+| n10 (L carries) | **+0.176** | +0.058 |
+| n16 (R carries) | **−0.265** | −0.071 |
+| n12 (both)      | +0.007 | +0.001 |
+| n17 (neither)   | −0.005 | −0.002 |
+
+Controls sit ~35× below the positives and the sign flips. Screen-space light
+shafts are radial streaks; this is not that.
+
+**2. "Isotropic" was my instrument, not the data.** The first pass reported the
+angular profile at the radius of peak *amplitude* — 20–40 px, hard against the
+disc edge, the least anisotropic place in the field — and called it isotropic.
+The crop plainly shows a diagonal plume. Measured across radii, at 40–84 px the
+anisotropy is 0.10–0.49 with a consistent within-frame axis that **changes
+between frames**: n09 −44°/−50°, n10 +59°/+60°, n16 +48°/+47°. The both-healthy
+control is 50–100× lower with random directions. *Do not measure angular
+structure at the radius of maximum amplitude.*
+
+**3. The component is ABSENT, never displaced.** If a mono screen-space buffer
+were being sampled at each eye's own UV, the component would still exist,
+drawn ~1027 px away. It does not. Searching the whole deficient eye for warm
+annuli: both predicted displacement sites read ≈0 or negative, and the
+strongest warm annulus anywhere else is +0.06 at 130 px from the Sun — the
+Sun's own tail — against +0.31 in the healthy eye. So the mechanism is a
+**gate**, not a misread UV.
+
+### What #49 actually is, as of take 183
+
+A **warm directional plume**, amplitude ~0.10–0.14 linear luma at 40–56 px,
+decaying to ~2% by 130 px, whose axis rotates frame to frame. Its gate is
+**binary and independent per eye** — all four states occur (n09/n10/n11/n18 left
+only, n15/n16 right only, n12/n13/n14 both, n17 neither). When both eyes have
+it they agree to **1–2%**, so the rendering is correct and only the gate
+misfires. Each eye's gate is a slow square wave over the roll, the two eyes
+phase-shifted; period ≈ 10 dumps ≈ 100 s, consistent with one full roll.
+
+**Also refuted:** distance from the eye's image centre does not predict the
+gate. Deficient right-eye frames include both the closest Sun (714 px) and the
+farthest (915 px); healthy ones sit inside that range. Any "the flare fades with
+distance from screen centre" story is dead on the existing dumps.
+
+**A constraint worth keeping.** The two eyes differ *only* by a 64 mm
+translation and the frustum cant. At the Sun's distance the translation is
+nothing. So whatever gates the plume must read **the projection**, or something
+derived from it — the Sun's screen position, an NDC test, a clip-space compare.
+
+### The gap: I never established which side is correct
+
+Every line above calls the eye with the plume "healthy" and the other
+"deficient", on no evidence beyond *more looked like better*. That is the exact
+mistake that cost 13 takes when the vanilla run showed the brighter eye had
+been the correct one all along. There is **no vanilla Sun baseline** anywhere —
+`~/x4vr-baselines/` holds only take 65–70 frames.
+
+**Prediction, committed before the check.** I expect vanilla X4 to show the warm
+plume **continuously** while the Sun is in view, with its axis rotating as the
+ship rolls — i.e. the plume is correct, the eye that loses it is the defective
+one, and the gate is something our projection patch breaks. If instead the
+plume comes and goes in vanilla on the same slow cadence, then neither eye is
+defective, X4's own effect is orientation-gated, and #49 becomes "the two eyes
+disagree about an orientation the ship holds only once" — a different fix.
