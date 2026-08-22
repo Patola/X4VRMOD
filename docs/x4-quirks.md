@@ -4262,3 +4262,58 @@ image that no framebuffer ever names (`ORPHAN_DOUBLED`), and `orphan_case` in
 It is created **last**, because creating it early consumed an image serial and
 shifted the ones the transfer-inventory case asserts on — the probe must not
 perturb the numbering it shares a run with.
+
+### Take 183 — exactly what to extract (READ THIS FIRST, IT IS THE WHOLE STATE)
+
+Run:
+
+```
+python3 tools/score_run.py /tmp/x4vr-take183.log
+python3 tools/sun_halo.py --prefix=/tmp/x4vr-t183 --crop=/tmp/c
+grep -a "NO RENDER PASS WROTE IT\|LAYER 1 NEVER RENDERED\|doubled images —" /tmp/x4vr-take183.log
+```
+
+**The question is one line: which image is X4's godray (FOM) buffer, and is it
+rendered per-eye?** `GetDepthGodRay()` samples it at `GetFragUV()` —
+`gl_FragCoord.xy / V_viewportpixelsize.xy`, the *current eye's* screen UV. That
+is correct only if the buffer is rendered per-eye. If it is mono, the two eyes
+read it at UVs differing by the full affine in opposite directions, `exp(-ret)`
+collapses `shad` to 0 for whichever eye lands on an occluder, and the whole
+in-scatter term vanishes for that eye — absent, not attenuated, and it flips.
+
+**How to read the new report.** Take 182 had 67 doubled images and only 30 with
+tracked writers; every doubled image now gets a line. Three verdicts:
+
+* `MIXED WRITERS` — fine, both kinds write it.
+* `LAYER 1 NEVER RENDERED` — every writer is a mono pass. **If the godray buffer
+  is here, that is #49's root cause.**
+* `NO RENDER PASS WROTE IT` — prints `usage`. `STORAGE` means a compute dispatch
+  could have written it (compute has no `gl_ViewIndex`, so it is necessarily
+  mono); `TRANSFER_DST` means a copy/clear could. **This is a QUESTION, not a
+  defect** — it proves no framebuffer named the image and nothing more. Do not
+  report it as "layer 1 is empty".
+
+**Identifying the godray buffer.** A Fourier-opacity buffer is typically half or
+quarter resolution and HDR. Take 182's unattached candidates were
+`img #24/#25 1056x1056 fmt=97` (quarter res, a pair — first suspects),
+`#26/#27` and `#68/#69` at `3168x3168 fmt=97`. **Confirm by content, not by
+number** — image serials drift between runs exactly like pass serials.
+
+**Already settled — do NOT re-litigate:**
+
+* The glow term is `shad * V_lightcolor1 * Integrate_SimpleDirectional(vol,
+  vdotl)` in `volume_apply.frag.glsl`; `vdotl` is why it hugs the Sun.
+* **AA is exonerated** (take 181, identical with the upscaler off). `X4VR_AA`
+  stays off the command line.
+* `M_projection_uj` is read by **zero** modules.
+* The mixed-frame idea is **refuted by arithmetic**: `Project ∘ UnProject_patched
+  = A⁻¹`, which is the correct mapping into a centre-frame volume.
+* `X4VR_BINDLESS_PATCH=0` and `X4VR_SHEAR_LIGHTS=0` are both **vacuous
+  controls** — each makes both eyes view 0 or mono, so the Sun matches by
+  construction. Four takes have already gone into learning this.
+* Take 177's "in-scatter refuted" **does not stand** (discredited instrument).
+
+**Reading `sun_halo.py`:** the deficient eye sits at warm excess ≈0.128, the
+healthy one at 0.24–0.48, and *either* eye can be the deficient one. Rows saying
+"no solar disc", "neutral in BOTH eyes" or "FLAT FRAME" mean there was no Sun —
+they are not clean results. Look at the crop before believing any number.
