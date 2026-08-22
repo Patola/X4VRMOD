@@ -4182,3 +4182,54 @@ descriptor — `shad` collapses for that eye alone.
    sampler.
 3. Only then choose the fix. `X4VR_BINDLESS_PATCH=0` remains a vacuous control —
    it makes both eyes view 0 — so it cannot be the test.
+
+### The two checks — the godray gate reads a screen-space buffer at per-eye UV
+
+**Check 2 (the sampler).** `FOM_GETF_2DARRAY` resolves to a plain `sampler2D`
+lookup, and the coordinate is
+
+```glsl
+vec2 GetFragUV() { return gl_FragCoord.xy / V_viewportpixelsize.xy; }
+```
+
+i.e. **the current eye's own screen UV**. So `GetDepthGodRay()` reads a
+screen-space godray buffer at per-eye coordinates. That is correct **only if
+that buffer is itself rendered per-eye**. If it is mono — rendered once in X4's
+centre frame — then each eye reads it at its own UV, and the same world
+direction sits at UVs differing by the affine: opposite directions, up to
+±512 px. Whichever eye's lookup lands inside an occluder's godray footprint gets
+`ret` large, `exp(-ret)` → 0, and **the entire in-scatter term vanishes for that
+eye**. Absent, not attenuated; occlusion-driven, so rotation-dependent; and able
+to flip. Every property take 182 measured.
+
+Note this is a *different* failure from the volume lookup, and it does not
+cancel the way that one did: there is no reconstruction here to undo the affine,
+just a raw screen-space UV.
+
+**Check 1 (the buffers), and a gap that has never been looked at.** Take 182:
+
+```
+67 doubled images, 30 with tracked writers, 45 with NONE
+```
+
+Forty-five doubled images have **no writer the layer ever observed**. The
+`LAYER 1 NEVER RENDERED` report added after take 180 only ranges over the 30
+tracked ones — so it reported "5 of 29" while saying nothing at all about these
+45. Among them, at quarter and three-quarter resolution:
+
+```
+img #24/#25   1056x1056  fmt=97      <- quarter res HDR pair
+img #26/#27   3168x3168  fmt=97
+img #68/#69   3168x3168  fmt=97
+img #42/#43/#44, #84/#85/#86, #102   4224x4224 fmt=76
+```
+
+A Fourier-opacity godray buffer is normally half or quarter resolution, which
+makes #24/#25 the first candidates.
+
+**This is the next concrete step**, and it is still not a run: extend the writer
+tracking so it covers every doubled image rather than only those a recorded
+render pass wrote, then re-read the report. "No tracked writer" currently
+conflates *never written* with *written by something the tracker does not
+watch* — and those are opposite diagnoses. Until that is separated, do not
+conclude which.
