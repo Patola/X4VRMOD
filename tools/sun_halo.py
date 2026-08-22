@@ -91,6 +91,19 @@ def measure(p0, p1, crop=None, expect_dx=EXPECT_DX, profile=False):
         big = max(area0, area1)
         return {'error': f'no solar disc (largest saturated blob {big} px, '
                          f'needs {MIN_CORE_PX}) — this frame has no Sun in it'}
+    # Is there a 3D scene here at all? X4's loading screen is flat artwork
+    # placed on the canvas, so the whole frame aligns at the infinity offset --
+    # and it contains a PICTURE of a sun, symmetric in both eyes by
+    # construction. Take 181's present-n3 scored a perfect 1.000/1.000 and I
+    # read it as the negative control this task had been missing. A rendered
+    # scene has near geometry that does NOT align at that offset.
+    h_, w_ = m0.shape
+    sh = int(round(abs(expect_dx)))
+    if 0 < sh < w_:
+        d = np.abs(m0[:, sh:] - m1[:, :w_ - sh])
+        out_flat = float((d < 0.02).mean())
+    else:
+        out_flat = 0.0
     (lx, ly), (rx, ry) = s0, s1
     dx = rx - lx
     h, w = m0.shape
@@ -100,7 +113,7 @@ def measure(p0, p1, crop=None, expect_dx=EXPECT_DX, profile=False):
     out = {'sunL': (round(lx, 1), round(ly, 1)), 'sunR': (round(rx, 1), round(ry, 1)),
            'dx': round(dx, 1), 'coreL': area0, 'coreR': area1,
            'same_object': abs(dx - expect_dx) < TOL and abs(ry - ly) < 25,
-           'bands': [], 'warm': []}
+           'flat': out_flat, 'bands': [], 'warm': []}
     for a, b in ((0, 20), (20, 35), (35, 50), (50, 80)):
         i0 = (dl >= a) & (dl < b)
         i1 = (dr >= a) & (dr < b)
@@ -141,6 +154,12 @@ def report(tag, r):
         print(f"{tag:<16} {r['error']}")
         return
     flag = '' if r['same_object'] else '   <- NOT THE SAME OBJECT, ratios meaningless'
+    if r.get('flat', 0) > 0.95:
+        print(f"{tag:<16} FLAT FRAME — {100 * r['flat']:.1f}% of it aligns at the "
+              f"infinity offset, so there is no 3D scene here. This is the "
+              f"loading screen/canvas artwork and its 'Sun' is a picture, "
+              f"symmetric by construction. Not a control.")
+        return
     print(f"{tag:<16} sunL={str(r['sunL']):<18} sunR={str(r['sunR']):<18} "
           f"dx={r['dx']:>8}{flag}")
     print(f"{'':<16} core {r['coreL']}/{r['coreR']} px  "

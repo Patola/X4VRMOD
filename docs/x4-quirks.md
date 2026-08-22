@@ -3844,3 +3844,71 @@ else changed.** Predictions, committed before the run:
 * Expect it to be **slower**: with `none`, X4 renders 4224² natively instead of
   upscaling, so the 33 ms gameplay figure will rise. That is not a regression,
   it is the control's cost.
+
+### Take 181 — AA exonerated, and the "negative control" that wasn't
+
+**The asymmetry is unchanged with the temporal upscaler off.** Left warm excess
+0.259–0.450, right pinned at **0.1298–0.1300** — the same numbers as takes 179
+and 180 with `fsr_quality`. AA is eliminated on its own evidence.
+
+That does not undo the finding that it was never the control. `X4VR_AA` stays
+**off the standard command line** from here: it is unset by default, the default
+is `none`, and no known-good run has ever set it. What take 181 buys is that the
+20 takes measured under it were not measuring the upscaler.
+
+`M_projection_uj` (camera member 3) is still unpatched while
+`docs/frame-analysis.md` line 621 says **PATCH**. Take 181 shows it is not
+causing #49, because with AA off member 3 equals member 1 and the defect is
+identical. It remains a real gap for any future run that enables a temporal
+mode — logged as its own task, not as part of #49.
+
+#### present-n3 looked like the control this task never had. It is the loading screen.
+
+```
+core 1916/1909 px  (R/L 0.996)   luma 0-20:1.000 ... 50-80:1.000
+at 35-50 px: left 0.1851, right 0.1852   <- both eyes carry it
+```
+
+A large warm saturated disc, symmetric to four decimals, with matching spikes,
+streaks and ghost ring. It is **flat artwork on X4's savegame loading screen** —
+letterboxed, with a "Loading" spinner and a tip line underneath. Its Sun is a
+*picture* of a sun, placed identically in both eyes. Sixth wrong object in this
+task.
+
+`sun_halo.py` now rejects it generally rather than by name: **99.8 % of that
+frame aligns at the infinity offset**, because there is no near geometry in it at
+all. A rendered 3D scene does not do that. Any row whose overlap matches above
+95 % is canvas artwork and cannot be a control for anything.
+
+#### What is left standing
+
+* Absent, not attenuated; concentric; precisely registered (dx ≈ −1025).
+* Everything else in the frame agrees to 1 % on aligned smooth sky.
+* Not AA, not exposure, not a global gain, not a displaced screen-space effect,
+  not the `p1_star` quad size, not kinobloom, not X4's lens flare.
+* The deficient eye has been **layer 1 in every gameplay frame of takes 179, 180
+  and 181** — but layer 1 and the negative shear sign are confounded, and
+  nothing so far separates them. Task #27 was the same shape and turned out to
+  follow the *shear sign*, not the layer.
+* The only doubled images whose layer 1 is never rendered are the five 2048²
+  shadow cascades #70–#74 (5 of 29 tracked). Note 68 images were doubled and
+  only 29 have tracked writers — the other 39 are unaccounted for and that gap
+  has never been checked.
+
+#### Take 182 — does it need the cockpit?
+
+One run, three phases, no new instrument: cockpit with the Sun in view, then
+X4's **external camera** with the Sun in view, then back to the cockpit.
+
+* If the Sun is **symmetric in external view**, near geometry is required to
+  provoke it, which points at a depth-dependent test (occlusion/soft-shadowing
+  of the glare) reading a position that is not per-eye.
+* If it is **asymmetric in both**, geometry is exonerated and the cause is in how
+  the Sun's glow is drawn, independent of what is in front of it.
+
+Second question in the same run, for Patola's eye: pointing the ship in several
+directions, is it **always the right eye** that lacks the orange haze? An
+orientation where the LEFT eye is the deficient one would separate "follows the
+layer" from "follows the geometry" — and take 172 already reported that changing
+angles does not change it, which is worth reconfirming now that the measurement
+is trustworthy.
