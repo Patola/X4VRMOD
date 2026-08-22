@@ -117,3 +117,36 @@ a frustum-fitted cascade spans `2·z·tan(half)`. The difference is that render
 pixels can be bought back and the atlas cannot, so **#35's off-axis saving does
 not apply to it**. Whether the fit is frustum-based is unmeasured; the layer's
 `proj SHADOW` line reports the cascade extent and #56 needs it at two fields.
+
+## headlook_verify.py
+
+Did X4 actually apply #33's head rotation? Measured from two screenshots — one
+with the rotation off, one with it on.
+
+    tools/headlook_verify.py --self-check
+    tools/headlook_verify.py --verify /tmp/x4-186a.jpg /tmp/x4-186b.jpg \
+        --sx 0.70024 --yaw 10
+
+**`register_affine.py` cannot score this and says so itself**: "they would NOT
+be sufficient for a rotation or a keystone, and this tool would report a
+confident wrong answer for either". #35's map is separable; a rotation is a
+homography. This is its sibling for that shape.
+
+The useful property is that **the NDC map is depth-independent** — every pixel
+moves by a rule that depends only on where it is on screen and on `sx`. So two
+screenshots are sufficient, with no depth map, and the same warp must fit near
+and far geometry alike. A fit that works on the cockpit and fails on the
+background is evidence *against* the rotation.
+
+`--self-check` pins the map against the closed form (2e-16), pins the NDC round
+trip (4e-16), and requires the right angle to separate from a wrong one by a
+wide margin. That last criterion is relative on purpose: with pitch, content
+leaves the frame and cannot come back, so the image round trip is 0.77 where
+pure yaw is 0.999 — and lowering a floor until both pass would be fitting the
+test to the result.
+
+It also found a real bug in itself: `warp` first built the inverse rotation by
+negating the angles, which is right for one axis and wrong for a composition,
+because `Ry(−y)·Rx(−p)` is not the inverse of `Ry(y)·Rx(p)`. The inverse is the
+transpose, and `ndc_map` now takes a matrix so it cannot be expressed any other
+way.
