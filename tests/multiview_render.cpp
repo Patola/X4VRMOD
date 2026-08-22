@@ -681,14 +681,40 @@ int main(int argc, char **argv) {
     VkDescriptorSetLayout dsl;
     CHECK(vkCreateDescriptorSetLayout(dev, &dslci, nullptr, &dsl));
 
-    VkDescriptorPoolSize dps{};
-    dps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    dps.descriptorCount = kSlots;
+    // X4VR_TEST_VIEW_ARENA -- task #53's view arena, off by default.
+    //
+    // The layer's per-camera M_view report had no way to run headless: nothing
+    // in this harness ever created a range-1792 uniform buffer at set 1, so
+    // patch_view_before_submit() returned at its first line and the whole
+    // report was unexercised code. Everything below is behind the flag and the
+    // default path is byte-identical to before, because this file pins about a
+    // hundred assertions that have nothing to do with #53.
+    const bool view_arena = getenv("X4VR_TEST_VIEW_ARENA") != nullptr;
+    VkDescriptorSetLayout vdsl = VK_NULL_HANDLE;
+    if (view_arena) {
+        VkDescriptorSetLayoutBinding vb{};
+        vb.binding = 0;
+        vb.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        vb.descriptorCount = 1;
+        vb.stageFlags = VK_SHADER_STAGE_VERTEX_BIT |
+                        VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutCreateInfo vci{};
+        vci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        vci.bindingCount = 1;
+        vci.pBindings = &vb;
+        CHECK(vkCreateDescriptorSetLayout(dev, &vci, nullptr, &vdsl));
+    }
+
+    VkDescriptorPoolSize dps[2]{};
+    dps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    dps[0].descriptorCount = kSlots;
+    dps[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    dps[1].descriptorCount = 2;
     VkDescriptorPoolCreateInfo dpci{};
     dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    dpci.maxSets = 1;
-    dpci.poolSizeCount = 1;
-    dpci.pPoolSizes = &dps;
+    dpci.maxSets = view_arena ? 3 : 1;
+    dpci.poolSizeCount = view_arena ? 2 : 1;
+    dpci.pPoolSizes = dps;
     VkDescriptorPool dpool;
     CHECK(vkCreateDescriptorPool(dev, &dpci, nullptr, &dpool));
     VkDescriptorSetAllocateInfo dsai{};
@@ -730,10 +756,107 @@ int main(int argc, char **argv) {
     VkShaderModule fsm2;
     CHECK(vkCreateShaderModule(dev, &smci2, nullptr, &fsm2));
 
+    // Two blocks in one buffer, at set 1, range 1792 -- the shape the layer
+    // keys on (x4vr_layer.cpp: `if (bi.range != kViewBlockRange) continue`).
+    // Block 0 gets an identity M_view, block 1 gets take 178's, so the run
+    // exercises BOTH report paths and a pass/fail cannot come from the
+    // instrument only ever seeing one kind of camera.
+    VkBuffer vbuf = VK_NULL_HANDLE;
+    VkDeviceMemory vmem = VK_NULL_HANDLE;
+    VkDescriptorSet vset[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkDeviceSize vstride = 1792;
+    if (view_arena) {
+        VkPhysicalDeviceProperties pp{};
+        vkGetPhysicalDeviceProperties(phys[0], &pp);
+        const VkDeviceSize align = pp.limits.minUniformBufferOffsetAlignment;
+        if (align > 1)
+            vstride = (1792 + align - 1) / align * align;
+        VkBufferCreateInfo bci{};
+        bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bci.size = vstride + 1792;
+        bci.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        CHECK(vkCreateBuffer(dev, &bci, nullptr, &vbuf));
+        VkMemoryRequirements mr{};
+        vkGetBufferMemoryRequirements(dev, vbuf, &mr);
+        VkPhysicalDeviceMemoryProperties mp{};
+        vkGetPhysicalDeviceMemoryProperties(phys[0], &mp);
+        uint32_t mt = UINT32_MAX;
+        for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
+            const VkMemoryPropertyFlags want =
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+            if ((mr.memoryTypeBits & (1u << i)) &&
+                (mp.memoryTypes[i].propertyFlags & want) == want) {
+                mt = i;
+                break;
+            }
+        }
+        if (mt == UINT32_MAX) { printf("FAIL=no_host_visible:0\n"); return 1; }
+        VkMemoryAllocateInfo mai{};
+        mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        mai.allocationSize = mr.size;
+        mai.memoryTypeIndex = mt;
+        CHECK(vkAllocateMemory(dev, &mai, nullptr, &vmem));
+        CHECK(vkBindBufferMemory(dev, vbuf, vmem, 0));
+        void *vp = nullptr;
+        CHECK(vkMapMemory(dev, vmem, 0, VK_WHOLE_SIZE, 0, &vp));
+        // The layer reads the mapped pointer directly, so the contents have to
+        // be a plausible X4 block: a reversed-Z projection (so the storage
+        // order is detectable and read_proj_terms succeeds) plus the M_view
+        // under test. Anything less and the report refuses before it decides.
+        float *arena = (float *)vp;
+        memset(arena, 0, (size_t)(vstride + 1792));
+        for (int b = 0; b < 2; b++) {
+            float *blk = arena + (b * vstride) / 4;
+            // M_view at float 0
+            for (int i = 0; i < 4; i++)
+                blk[i * 4 + i] = 1.0f;
+            if (b == 1) {
+                // take 178's M_view, as logged. Same sixteen floats
+                // tests/view_math.cpp pins the decoder against.
+                const float v[16] = {0.967f, -0.0f,  0.256f, 0.0f,
+                                     -0.0f,  1.0f,   0.0f,   0.0f,
+                                     -0.256f, -0.0f, 0.967f, 0.0f,
+                                     8.415f, -0.0f,  2.225f, 1.0f};
+                memcpy(blk, v, sizeof(v));
+            }
+            // M_projection / M_projectionUJ: x4_projection(0.889, -1.778, 0.1)
+            for (uint32_t off : {16u, 48u}) {
+                blk[off + 0] = 0.889f;
+                blk[off + 5] = -1.778f;
+                blk[off + 11] = 1.0f;
+                blk[off + 14] = 0.1f;
+            }
+        }
+        VkDescriptorSetLayout vl[2] = {vdsl, vdsl};
+        VkDescriptorSetAllocateInfo vai{};
+        vai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        vai.descriptorPool = dpool;
+        vai.descriptorSetCount = 2;
+        vai.pSetLayouts = vl;
+        CHECK(vkAllocateDescriptorSets(dev, &vai, vset));
+        VkDescriptorBufferInfo vbi[2]{};
+        VkWriteDescriptorSet vw[2]{};
+        for (int b = 0; b < 2; b++) {
+            vbi[b].buffer = vbuf;
+            vbi[b].offset = b * vstride;
+            vbi[b].range = 1792;          // the layer's whole recognition test
+            vw[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            vw[b].dstSet = vset[b];
+            vw[b].dstBinding = 0;
+            vw[b].descriptorCount = 1;
+            vw[b].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            vw[b].pBufferInfo = &vbi[b];
+        }
+        vkUpdateDescriptorSets(dev, 2, vw, 0, nullptr);
+    }
+
+    VkDescriptorSetLayout sl2[2] = {dsl, vdsl};
     VkPipelineLayoutCreateInfo plci2{};
     plci2.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    plci2.setLayoutCount = 1;
-    plci2.pSetLayouts = &dsl;
+    plci2.setLayoutCount = view_arena ? 2 : 1;
+    plci2.pSetLayouts = sl2;
     VkPipelineLayout pl2;
     CHECK(vkCreatePipelineLayout(dev, &plci2, nullptr, &pl2));
 
@@ -820,6 +943,25 @@ int main(int argc, char **argv) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pl2, 0, 1,
                             &dset, 0, nullptr);
     vkCmdDraw(cmd, 3, 1, 0, 0);
+    if (view_arena) {
+        // patch_view_before_submit() refuses unless the winning block carries
+        // 50+ draws -- "has X4 populated this yet", in draw counts. So block 0
+        // gets 60 and block 1 gets 10: one clears the bar and one does not,
+        // which also checks that the per-camera loop reports the loser. The
+        // whole point of #53 is that reading only the winner is what hid a
+        // non-identity camera for five weeks, so a harness where both blocks
+        // are winners would test nothing.
+        for (int i = 0; i < 60; i++) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pl2,
+                                    1, 1, &vset[0], 0, nullptr);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+        }
+        for (int i = 0; i < 10; i++) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pl2,
+                                    1, 1, &vset[1], 0, nullptr);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+        }
+    }
     vkCmdEndRenderPass(cmd);
 
     for (uint32_t layer = 0; layer < olayers && layer < 2; layer++) {
@@ -926,6 +1068,19 @@ int main(int argc, char **argv) {
     vkDestroyShaderModule(dev, fsm2, nullptr);
     vkDestroyDescriptorPool(dev, dpool, nullptr);
     vkDestroyDescriptorSetLayout(dev, dsl, nullptr);
+    // The view arena, released here so a validation sweep of this harness
+    // stays exactly as clean as it was. It carries four pre-existing VUIDs
+    // and leaving these three objects alive added a fifth -- and a suite that
+    // is not validation-clean cannot be used to clear a patch of validation
+    // errors, which is what the note at the top of this file is about.
+    if (vdsl != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(dev, vdsl, nullptr);
+    if (vbuf != VK_NULL_HANDLE)
+        vkDestroyBuffer(dev, vbuf, nullptr);
+    if (vmem != VK_NULL_HANDLE) {
+        vkUnmapMemory(dev, vmem);
+        vkFreeMemory(dev, vmem, nullptr);
+    }
     vkDestroySampler(dev, samp, nullptr);
     if (aview != VK_NULL_HANDLE)
         vkDestroyImageView(dev, aview, nullptr);

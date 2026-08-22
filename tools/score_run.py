@@ -611,6 +611,63 @@ def main(path):
                           f"{len({s for s in slots})} distinct projection(s) — "
                           f"cam#N is a UBO slot, not a camera")
 
+                # ---- task #53: what M_view holds, per credited slot ----
+                #
+                # This project believed M_view was always identity, from a
+                # survey of the whole arena at ONE instant, and the layer
+                # printed the matrix once from the most-drawn slot. 9 of 64
+                # stored runs disagree. Same "cam#N is a slot" caveat as
+                # above: report the distinct transforms, not the slot count.
+                vid = re.findall(
+                    r"proj VIEW cam#(\d+): M_view IDENTITY", text)
+                vnon = re.findall(
+                    r"proj VIEW cam#(\d+): M_view is NOT IDENTITY -- "
+                    r"([\d.]+) deg about \(([-+\d.]+),([-+\d.]+),([-+\d.]+)\), "
+                    r"offset ([\d.]+) m \(draws=(\d+), (\d+) in view-masked",
+                    text)
+                if not vid and not vnon:
+                    # A note, NOT a fail. Every log this project has kept
+                    # predates #53 and none of them can carry this line, and
+                    # they are the scorer's own regression corpus -- a fail
+                    # here would condemn 190 runs retroactively for a check
+                    # that did not exist when they ran.
+                    #
+                    # What it must still not do is read as a clean result.
+                    # "No non-identity cameras reported" and "nothing looked"
+                    # are the same silence, and only one of them is evidence.
+                    print("view  no 'proj VIEW' line — M_view was NOT decoded "
+                          "this run (log predates #53, or the decode never "
+                          "ran). This says NOTHING about whether X4 is "
+                          "camera-relative; it is not 'all identity'")
+                else:
+                    print(f"view  {len(vid) + len(vnon)} slot(s) decoded, "
+                          f"{len(vnon)} with a non-identity M_view")
+                    distinct = {}
+                    for _cam, ang, ax, ay, az, off, draws, mask in vnon:
+                        key = (round(float(ang), 1), round(float(off), 2))
+                        d, m, n = distinct.get(key, (0, 0, 0))
+                        distinct[key] = (d + int(draws), m + int(mask), n + 1)
+                    for (ang, off), (draws, mask, n) in sorted(
+                            distinct.items(), key=lambda kv: -kv[1][0]):
+                        print(f"      {ang:.1f}° / {off:.2f} m offset — "
+                              f"{n} slot(s), {draws} draw(s), {mask} of them "
+                              f"in view-masked passes")
+                    if any(m for _d, m, _n in distinct.values()):
+                        # A QUESTION, not a defect, and it is worded that way
+                        # on purpose. The shear and the affine are derived
+                        # from z_c==near and w_c==(that camera's) view z, and
+                        # BOTH still hold for a camera with a non-identity
+                        # M_view -- P*M_view still puts its own view z in w.
+                        # What is not established is whether transforming such
+                        # a camera per eye is what we want, since it is not
+                        # the player's eye. Do not "fix" this before reading
+                        # patch_vertex_eye_offset's derivation.
+                        print("      ^ our per-eye transforms reach that "
+                              "camera. NOT known to be a defect — the shear's "
+                              "derivation holds in that camera's own frame — "
+                              "but it is not the player's eye, so what it "
+                              "draws is worth identifying (#53)")
+
                 if asked is not None and eye is None:
                     # A FAIL, not a warn. #33's ceiling experiment asks exactly
                     # one question -- will X4 accept a <fov> wider than anything

@@ -129,6 +129,90 @@ int main() {
               "zero near refuses");
     }
 
+    // --- read_view_terms (task #53) --------------------------------------
+    // The input is not invented: these are the sixteen floats take 178 logged
+    // for M_view, copied from /tmp/x4vr-take178.log, and eight other runs
+    // agree with them to three decimals. Testing the decoder against a matrix
+    // *this project has actually seen* is the point -- a synthetic rotation
+    // would pass a decoder that cannot read X4's.
+    {
+        x4vr::Mat4 v{};
+        const float src[16] = {0.967f, -0.000f, 0.256f, 0.000f,
+                               -0.000f, 1.000f, 0.000f, 0.000f,
+                               -0.256f, -0.000f, 0.967f, 0.000f,
+                               8.415f, -0.000f, 2.225f, 1.000f};
+        memcpy(v.m, src, sizeof(src));
+        const x4vr::ViewTerms t = x4vr::read_view_terms(v, x4vr::Major::Column);
+        check(t.ok, "take 178's M_view decodes");
+        check(!t.identity, "and it is NOT identity -- the whole finding");
+        check_near(t.angle_deg, 14.83f, 0.2f, "rotation magnitude, degrees");
+        check_near(t.offset_m, 8.704f, 1e-2f, "camera offset, metres");
+        // The axis is a y rotation: the ship yawed, it did not roll or pitch.
+        check(std::fabs(t.axis[1]) > 0.99f && std::fabs(t.axis[0]) < 0.05f &&
+                  std::fabs(t.axis[2]) < 0.05f,
+              "the axis is +-y, so this camera is yawed, not rolled");
+        // A logged matrix is rounded to three decimals and so is not exactly
+        // orthonormal. Dividing the skew part by 2*sin(theta) -- the textbook
+        // form -- returned 1.005 for this one, and a unit vector printing
+        // 1.005 reads as a decoder bug rather than as input rounding.
+        check_near(std::sqrt(t.axis[0] * t.axis[0] + t.axis[1] * t.axis[1] +
+                             t.axis[2] * t.axis[2]),
+                   1.0f, 1e-5f, "the axis comes back unit length");
+
+        // Transposed, the ANGLE survives (it comes from the trace) but the
+        // translation does not -- it moves to m[3], m[7], m[11], which in the
+        // column-major reading are the zeros of the affine bottom row. A
+        // decoder that ignored storage order would report this camera as
+        // sitting at the origin: rotated, but not displaced. That is a wrong
+        // answer that looks like a finding, which is why it is pinned.
+        const x4vr::Mat4 vt = transpose(v);
+        const x4vr::ViewTerms r = x4vr::read_view_terms(vt, x4vr::Major::Row);
+        check_near(r.angle_deg, t.angle_deg, 1e-3f,
+                   "angle is transpose-invariant, as the trace makes it");
+        check_near(r.offset_m, t.offset_m, 1e-3f,
+                   "and the row-major reading recovers the same offset");
+        const x4vr::ViewTerms wrong =
+            x4vr::read_view_terms(vt, x4vr::Major::Column);
+        check(wrong.offset_m < 1e-3f,
+              "read with the WRONG order the offset vanishes -- the failure "
+              "this signature exists to prevent");
+    }
+    {
+        x4vr::Mat4 id{};
+        for (int i = 0; i < 4; i++)
+            id.m[i * 4 + i] = 1.0f;
+        const x4vr::ViewTerms t =
+            x4vr::read_view_terms(id, x4vr::Major::Column);
+        check(t.ok && t.identity, "identity M_view reads as identity");
+        check_near(t.angle_deg, 0.0f, 1e-3f, "no rotation");
+        check_near(t.offset_m, 0.0f, 1e-6f, "no offset");
+        // Take 169b and 156a logged M_view with a 0.001 off-diagonal. That is
+        // float noise in a matrix X4 rebuilds every frame, not a camera, and
+        // it must not fire the loud path once per frame for a whole session.
+        x4vr::Mat4 noisy = id;
+        noisy.m[2] = 0.001f;
+        noisy.m[8] = -0.001f;
+        check(x4vr::read_view_terms(noisy, x4vr::Major::Column).identity,
+              "take 169b's 0.001 off-diagonal still reads as identity");
+        // A pure translation is NOT identity: the camera is somewhere else,
+        // even though nothing rotated.
+        x4vr::Mat4 moved = id;
+        moved.m[12] = 0.5f;
+        const x4vr::ViewTerms m = x4vr::read_view_terms(moved, x4vr::Major::Column);
+        check(!m.identity, "a pure translation is not identity");
+        check_near(m.angle_deg, 0.0f, 1e-3f, "and reports no rotation");
+    }
+    {
+        const x4vr::Mat4 z{};
+        check(!x4vr::read_view_terms(z, x4vr::Major::Column).ok,
+              "an unpopulated (all-zero) block refuses");
+        x4vr::Mat4 id{};
+        for (int i = 0; i < 4; i++)
+            id.m[i * 4 + i] = 1.0f;
+        check(!x4vr::read_view_terms(id, x4vr::Major::Unknown).ok,
+              "unknown storage order refuses rather than guessing");
+    }
+
     // --- the shortcut equals the long way --------------------------------
     // K = P * T(-d) * P^-1, built through the general helpers, against
     // make_eye_shear's single term. Run at both aspects so the check is not

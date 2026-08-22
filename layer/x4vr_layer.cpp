@@ -512,6 +512,13 @@ struct Tracking {
     std::unordered_map<VkCommandBuffer, std::vector<ViewSlot>> bound;
     // per-frame draw credit
     std::map<ViewSlot, uint32_t> credit;
+    // ...and the subset of those draws that happened inside a VIEW-MASKED
+    // pass, i.e. one the layer renders per eye. Task #53: a camera whose
+    // M_view is not identity is only our problem if our per-eye transforms
+    // reach it, and this is that question as a number. Kept beside `credit`
+    // rather than derived later, because "which passes did that camera draw
+    // into" is not recoverable from a draw count after the fact.
+    std::map<ViewSlot, uint32_t> credit_masked;
     uint64_t frame = 0;
     // X4 double-buffers the view arena (two buffers alternate per frame),
     // so "did the winner change" must ignore expected alternation: keep the
@@ -535,6 +542,7 @@ struct Tracking {
     x4vr::Major major = x4vr::Major::Unknown;
     bool logged_matrices = false;
     bool logged_proj_fail = false;
+    bool logged_view_fail = false;
 } g_track;
 
 // ------------------------------------------------------- shadow exclusion
@@ -1067,12 +1075,40 @@ float *slot_host_ptr(const ViewSlot &s) {
 }
 
 void credit_draw(VkCommandBuffer cb) {
+    // Task #53's masked-draw column, and it is **gated on the same variable
+    // its only consumer is gated on**. credit_draw runs on every draw call X4
+    // makes -- thousands per frame -- and it already pays one mutex there.
+    // Taking a second unconditionally would double that on a project whose
+    // first constraint is performance, to feed a report that
+    // patch_view_before_submit does not even produce unless X4VR_DUMP_MATRICES
+    // is set. So a run that asked for matrices pays for matrices, and every
+    // other run pays a branch on a static.
+    static const bool want = [] {
+        const char *e = getenv("X4VR_DUMP_MATRICES");
+        return e && *e && *e != '0';
+    }();
+    // Read the pass state FIRST, under its own lock, and release it before
+    // taking g_track.mu. The two mutexes have no ordering between them
+    // anywhere else in this file and this is not the place to introduce one.
+    //
+    // g_cb_mask is only populated while `g_mv && g_active` (cb_enter_pass
+    // returns early otherwise), so on a run with no multiview this stays 0 and
+    // the masked column reads as "no masked passes existed", which is true.
+    bool masked = false;
+    if (want) {
+        std::lock_guard<std::mutex> lock(g_cb_mu);
+        auto m = g_cb_mask.find(cb);
+        masked = m != g_cb_mask.end() && m->second;
+    }
     std::lock_guard<std::mutex> lock(g_track.mu);
     auto it = g_track.bound.find(cb);
     if (it == g_track.bound.end())
         return;
-    for (const ViewSlot &s : it->second)
+    for (const ViewSlot &s : it->second) {
         g_track.credit[s]++;
+        if (masked)
+            g_track.credit_masked[s]++;
+    }
 }
 
 // Set by the submit-time patch when X4VR_TEST_VERIFY=1: the block we wrote
@@ -1188,6 +1224,10 @@ void frame_flush() {
                  g_track.credit.size(), (unsigned long long)bufsize);
     }
     g_track.credit.clear();
+    // Cleared together, always. These two are read as a pair -- "N draws, M of
+    // them per-eye" -- and a masked count that outlived its own frame's total
+    // would report more masked draws than draws.
+    g_track.credit_masked.clear();
 }
 
 // ------------------------------------------------------------------ hooks
@@ -5411,8 +5451,16 @@ void patch_view_before_submit() {
 
     const x4vr::Mat4 proj_probe = x4vr::load(blk + x4vr::kProjection);
     if (g_track.major == x4vr::Major::Unknown) {
-        // Prefer the projection matrix: X4 renders camera-relative, so its
-        // M_view is identity and cannot disambiguate the storage order.
+        // Prefer the projection matrix: X4 renders camera-relative, so for
+        // nearly every camera M_view is identity and cannot disambiguate the
+        // storage order.
+        //
+        // "Nearly" is task #53's correction, and this comment used to say
+        // "always". It is still the right preference -- the projection answers
+        // for every camera, and the view answers only for the ones that turn
+        // out not to be at the origin -- but the reason is a tendency, not a
+        // law, and the `proj VIEW` lines below now measure it every run
+        // instead of asserting it once.
         g_track.major = x4vr::detect_major_proj(proj_probe);
         if (g_track.major == x4vr::Major::Unknown)
             g_track.major = x4vr::detect_major(view);
@@ -5479,6 +5527,15 @@ void patch_view_before_submit() {
             float sx = 0.0f, sy = 0.0f, near_z = 0.0f;
             uint32_t changes = 0;
             uint32_t id = 0;
+            // Task #53. Same map, same `id`, deliberately: the whole point is
+            // that a `proj VIEW cam#3` line and a `proj CAMERA cam#3` line
+            // name the same camera. Keeping this in a second map keyed the
+            // same way would work until one of them dropped a camera the other
+            // kept, and then the join would be silently wrong.
+            bool view_seen = false;
+            bool view_identity = true;
+            float view_angle = 0.0f, view_offset = 0.0f;
+            uint32_t view_changes = 0;
         };
         static std::map<ViewSlot, ProjState> cams;
         static uint32_t next_id = 0, total = 0;
@@ -5642,6 +5699,92 @@ void patch_view_before_submit() {
                 X4VR_LOG("proj: %u changes logged across %u cameras -- all "
                          "further changes suppressed from here on",
                          kTotal, next_id);
+        }
+
+        // ---- task #53: what M_view holds, per camera -------------------
+        //
+        // This file's Phase-3 finding was "surveyed all 128 blocks of the view
+        // arena, M_view is identity in every one", and the matrix dump above
+        // prints it ONCE, from whichever block drew most. That is the same
+        // shape of defect the sx loop around this one was rewritten to fix --
+        // a camera never sampled cannot be told from a camera that does not
+        // exist -- and it was left standing one field over. 9 of 64 stored
+        // runs log a 15.0 deg rotation with an 8.70 m offset here.
+        //
+        // Every camera gets a line, including the identity ones. A silent
+        // "nothing to report" is indistinguishable from the check not running,
+        // and the identity lines are what make the non-identity one countable
+        // against the `proj CAMERA` lines rather than merely present.
+        const x4vr::ViewTerms vt =
+            x4vr::read_view_terms(x4vr::load(cblk + x4vr::kView), major);
+        uint32_t masked_n = 0;
+        {
+            auto mi = g_track.credit_masked.find(slot);
+            if (mi != g_track.credit_masked.end())
+                masked_n = mi->second;
+        }
+        if (!vt.ok) {
+            if (!g_track.logged_view_fail) {
+                g_track.logged_view_fail = true;
+                X4VR_LOG("proj VIEW: cannot decode M_view (storage order %s) "
+                         "-- the camera-relative assumption is UNTESTED this "
+                         "run, not confirmed",
+                         major == x4vr::Major::Unknown ? "unknown" : "known");
+            }
+        } else {
+            // 0.02 deg / 0.5 mm to re-report: below read_view_terms's own
+            // identity tolerance, so a camera cannot cross that threshold
+            // without this firing first.
+            const bool vfirst = !c.view_seen;
+            const bool vmoved = std::fabs(vt.angle_deg - c.view_angle) > 0.02f ||
+                                std::fabs(vt.offset_m - c.view_offset) > 5e-4f;
+            // 600, not 200. Take 184 credited 126 slots, so a 200 budget
+            // would spend most of itself on first sightings and leave almost
+            // nothing for the case worth catching -- a camera whose M_view
+            // actually MOVES. The per-camera cap of 8 is what stops one such
+            // camera drowning the rest, and both announce themselves when they
+            // bite, because a silent cap reads exactly like "nothing more
+            // happened".
+            constexpr uint32_t kViewPerCam = 8, kViewTotal = 600;
+            static uint32_t view_total = 0;
+            if ((vfirst || vmoved) && c.view_changes < kViewPerCam &&
+                view_total < kViewTotal) {
+                if (vt.identity) {
+                    X4VR_LOG("proj VIEW cam#%u: M_view IDENTITY -- "
+                             "camera-relative, world space IS view space "
+                             "(draws=%u, %u in view-masked passes)",
+                             c.id, slot_n, masked_n);
+                } else {
+                    X4VR_LOG("proj VIEW cam#%u: M_view is NOT IDENTITY -- "
+                             "%.2f deg about (%+.3f,%+.3f,%+.3f), offset "
+                             "%.3f m (draws=%u, %u in view-masked passes). "
+                             "For THIS camera world space is not view space: "
+                             "world2view()/view2world() are real transforms, "
+                             "and its w_clip is ITS OWN view z%s",
+                             c.id, vt.angle_deg, vt.axis[0], vt.axis[1],
+                             vt.axis[2], vt.offset_m, slot_n, masked_n,
+                             masked_n
+                                 ? " -- and it DRAWS INTO VIEW-MASKED PASSES, "
+                                   "so our per-eye transforms reach it"
+                                 : " -- no view-masked draws, so nothing we "
+                                   "transform per eye rides on it");
+                }
+                c.view_seen = true;
+                c.view_identity = vt.identity;
+                c.view_angle = vt.angle_deg;
+                c.view_offset = vt.offset_m;
+                c.view_changes++;
+                view_total++;
+                if (c.view_changes == kViewPerCam)
+                    X4VR_LOG("proj VIEW: cam#%u reached %u reports -- further "
+                             "M_view changes from THIS camera suppressed, the "
+                             "others continue",
+                             c.id, kViewPerCam);
+                if (view_total == kViewTotal)
+                    X4VR_LOG("proj VIEW: %u reports logged -- all further "
+                             "M_view reports suppressed from here on",
+                             kViewTotal);
+            }
         }
         }
     }

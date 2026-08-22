@@ -1663,6 +1663,52 @@ cant_case() {
 cant_case "cant: canted target warns"     "-54,40,44,-55"  1
 cant_case "cant: identity stays silent"   "-55,55,55,-55"  0
 
+# Task #53: the per-camera M_view report, driven on a real GPU under
+# validation. X4VR_TEST_VIEW_ARENA=1 makes the harness build two range-1792
+# camera blocks at set 1 -- block 0 with an identity M_view and 60 draws,
+# block 1 with take 178's logged M_view and 10 -- so the loser is the one that
+# is not identity. That asymmetry IS the test: the report this replaces read
+# only the winner, and that is how a camera with a 15 deg yaw sat in 9 stored
+# runs for five weeks without anyone seeing it.
+#
+# Three assertions, because two of them can pass while the instrument is
+# useless: that it reports the identity camera (so silence cannot be mistaken
+# for a clean result), that it reports the non-identity one AT ALL, and that
+# it names the angle and offset rather than merely flagging it.
+view_arena_case() {
+    local log out
+    log="$(mktemp)"
+    env VK_ADD_LAYER_PATH="$BUILD/layer" \
+        VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+        X4VR_MV=1 X4VR_TEST_VIEW_ARENA=1 X4VR_DUMP_MATRICES=1 \
+        X4VR_LOG="$log" timeout 120 "$BIN" "$VS" "$FS" "$SF" >/dev/null 2>&1
+    out=$(cat "$log"); rm -f "$log"
+    local id non ang
+    id=$(grep -ac 'proj VIEW cam#[0-9]*: M_view IDENTITY' <<<"$out")
+    non=$(grep -ac 'proj VIEW cam#[0-9]*: M_view is NOT IDENTITY' <<<"$out")
+    ang=$(grep -ao 'NOT IDENTITY -- 14\.[0-9]* deg' <<<"$out" | head -1)
+    if [[ "$id" == 1 && "$non" == 1 && -n "$ang" ]]; then
+        printf 'ok   %-38s identity=%s non-identity=%s (%s)\n' \
+            "view: both M_view paths reported" "$id" "$non" "$ang"
+    else
+        printf 'FAIL %-38s want identity=1 non-identity=1 with an angle, got %s/%s "%s"\n' \
+            "view: both M_view paths reported" "$id" "$non" "$ang"
+        grep -a 'proj VIEW\|proj CAMERA' <<<"$out" | sed 's/^/       | /' | head -6
+        fails=$((fails + 1))
+    fi
+    # The offset must survive too. Reading the arena with the wrong storage
+    # order still returns a rotated camera and loses the translation entirely
+    # -- a wrong answer that looks like a finding -- so the metres are checked,
+    # not just the degrees.
+    if grep -aq 'offset 8\.70[0-9] m' <<<"$out"; then
+        printf 'ok   %-38s offset 8.704 m recovered\n' "view: translation survives"
+    else
+        printf 'FAIL %-38s offset 8.704 m not reported\n' "view: translation survives"
+        fails=$((fails + 1))
+    fi
+}
+view_arena_case
+
 verdict_case "verdict: captured"        0 "captured"
 verdict_case "verdict: reached, no file" 1 "REACHED but never captured"
 verdict_case "verdict: never reached"   5 "NEVER REACHED"

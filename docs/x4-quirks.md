@@ -209,6 +209,15 @@ and build pools for the family that actually presents. Do not assume family 0.
 
 ### X4 renders camera-relative — `M_view` is always identity
 
+> **"Always" is wrong, and the heading is left as it was written.** See
+> "Correction 2" near the end of this file: 9 of 64 stored runs log a camera
+> carrying a 15° yaw and an 8.70 m offset. Everything below is right about the
+> camera that draws the picture and about why the eye offset went into the
+> vertex stage instead; what it cannot support is the quantifier. The layer now
+> decodes `M_view` **per credited camera** every run (`proj VIEW cam#N`) rather
+> than printing one block once, so this is measured from here on instead of
+> asserted.
+
 Surveyed all 128 blocks of the view arena: `M_view` is identity in every one.
 Object transforms are baked against the camera on the CPU (normal for a space
 sim, to avoid float precision loss at astronomical distances).
@@ -4746,9 +4755,13 @@ the fourth decimal, and 9 print a real view transform**:
 
     M_view  [ 0.966  0  0.258  0 | 0  1  0  0 | -0.258  0  0.966  0 | 8.48  0  2.26  1 ]
 
-A 15.0° yaw about +y and an 8.70 m offset, in takes 155, 161, 165a, 166b,
-167a, 171, 172, 175b and 178 — nine independent runs spanning five weeks,
-agreeing to three decimals. That is not a transient. Take 178's dump shows the
+A yaw of about 15° and an 8.70 m offset, in takes 155, 161, 165a, 166b, 167a,
+171, 172, 175b and 178 — nine independent runs spanning five weeks, agreeing to
+three decimals. That is not a transient. (The log prints three decimals, so
+decoding the printed matrix recovers 14.76° from take 178's row and 14.98° from
+the other eight; the underlying angle is 15°, and `tests/view_math.cpp` pins
+the decoder against take 178's sixteen floats as logged rather than against a
+synthetic rotation.) Take 178's dump shows the
 consequence directly: its `M_viewprojection` is genuinely `P·M_view`, with the
 w row reading `0.256·x + 0.967·z + 2.225` instead of plain `z`.
 
@@ -4953,3 +4966,62 @@ changes it. The `M_view` correction does not touch the shear or the affine.
 `X4VR_OFFAXIS` stays at identity and #43 stays the blocker for the cant. No
 finding here contradicts `stage16-binocular-clean`; the tag reproduces exactly
 as recorded.
+
+### #53 done — `M_view` is decoded per camera, and what a healthy run reads
+
+The instrument, not a run. `X4VR_DUMP_MATRICES=1` now emits one line per
+credited camera block beside the existing `proj CAMERA cam#N`, with the same
+`cam#N` numbering so the two join:
+
+    proj VIEW cam#0: M_view IDENTITY -- camera-relative, world space IS view
+                     space (draws=60, 60 in view-masked passes)
+    proj VIEW cam#1: M_view is NOT IDENTITY -- 14.76 deg about
+                     (+0.000,-1.000,+0.000), offset 8.704 m (draws=10, 10 in
+                     view-masked passes). ... -- and it DRAWS INTO VIEW-MASKED
+                     PASSES, so our per-eye transforms reach it
+
+**What a healthy run reads**, stated before any run is scored against it: one
+`proj VIEW` line per `proj CAMERA` line, all of them `IDENTITY`, and
+`score_run.py` printing `view  N slot(s) decoded, 0 with a non-identity
+M_view`. Same caveat the sx report already carries — **`cam#N` is a UBO slot,
+not a camera**; take 184 credited 126 slots carrying 3 distinct projections, so
+the scorer collapses the non-identity ones to distinct (angle, offset) pairs.
+
+**The identity lines are not noise, they are the control.** A report that only
+spoke up on the interesting case would make "nothing found" and "nothing
+looked" the same silence, which is the failure this whole task is about. For
+the same reason the scorer prints a loud note rather than a clean line when a
+log has no `proj VIEW` at all — every log this project has kept predates this
+and cannot carry one.
+
+**The masked column is the question the report exists to answer.** A camera
+whose `M_view` is not identity only concerns us if our per-eye transforms ride
+on it, and that is `draws in view-masked passes`. Wording it carefully matters:
+this is **not** a known defect. The shear and the affine are derived from
+`z_c == near` and `w_c == view z`, and *both still hold* for such a camera,
+because `P·M_view` puts that camera's own view z into w. Take 178's dump shows
+exactly that. What is not established is whether transforming a camera that is
+not the player's eye is what we want.
+
+**Driven headless before it can cost a take.** `X4VR_TEST_VIEW_ARENA=1` makes
+`tests/multiview_render.cpp` build two range-1792 blocks at set 1 — block 0
+identity with 60 draws, block 1 carrying take 178's logged matrix with 10 — and
+the suite asserts both paths report. The asymmetry is the test: 10 draws never
+wins the frame, and reading only the winner is precisely how this sat unseen in
+9 stored runs. Validation-clean, checked by running the harness with and
+without the flag and diffing the VUID set (four pre-existing, none added).
+
+`tests/view_math.cpp` pins the decoder against take 178's sixteen floats **as
+logged**, including that reading them with the wrong storage order silently
+loses the translation — a camera that is rotated but not displaced, which is a
+wrong answer shaped like a finding.
+
+**Cost.** The masked-draw tally is gated on `X4VR_DUMP_MATRICES`, the same
+variable its only consumer is gated on. `credit_draw()` runs on every draw call
+X4 makes and already pays one mutex; a run that asks for matrices pays a second
+one, and every other run pays a branch on a static.
+
+**Still open, deliberately:** which camera the 15° one is. A cockpit monitor, an
+environment probe and a second viewport all fit, the value is identical in
+menu-phase and gameplay-phase samples alike, and the next dump run answers it
+as a side effect. Not worth guessing at now.

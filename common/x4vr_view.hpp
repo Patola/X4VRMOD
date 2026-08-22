@@ -67,8 +67,13 @@ enum class Major { Unknown, Column, Row };
 // diagonal slot:
 //   column-major: m[11] = ±1, m[15] = 0   (m[14] holds the near term)
 //   row-major:    m[14] = ±1, m[15] = 0   (m[11] holds the near term)
-// This is unambiguous even when the view matrix is identity (X4 renders
-// camera-relative, so its M_view is identity and tells us nothing).
+// This is unambiguous even when the view matrix is identity — which it is for
+// nearly every X4 camera, because X4 renders camera-relative and bakes the
+// camera into M_worldviewprojection on the CPU. "Nearly" is the correction of
+// task #53: 9 of 64 stored runs log a camera with a real view transform, and
+// detect_major() would answer for those. Preferring the projection is still
+// right, because it answers for *all* of them and does not depend on which
+// camera happened to win the frame.
 inline Major detect_major_proj(const Mat4 &proj) {
     auto isone = [](float f) { return std::fabs(std::fabs(f) - 1.0f) < 1e-4f; };
     if (std::fabs(proj.m[15]) > 1e-4f)
@@ -243,6 +248,79 @@ inline ProjTerms read_proj_terms(const Mat4 &p, Major major) {
     t.near_z = (major == Major::Column) ? p.m[14] : p.m[11];
     t.ok = std::fabs(t.sx) > 1e-6f && std::fabs(t.near_z) > 1e-6f;
     return t;
+}
+
+// What `M_view` actually contains, decoded — task #53.
+//
+// This project believed since Phase 3 that X4's `M_view` is *always* identity,
+// on the strength of a survey of all 128 blocks of the view arena at one
+// instant. The survey was real and complete along the axis it covered, and the
+// quantifier it licensed was "at this moment", not "always". Grepping the same
+// line out of 64 stored run logs finds **9 that carry a 15.0 deg rotation and
+// an 8.70 m offset**, agreeing to three decimals across five weeks — so there
+// is at least one camera per frame for which world space is NOT view space,
+// and `world2view()` / `view2world()` are real transforms in the 422 entry
+// points that read member 0.
+//
+// The angle is transpose-invariant (it comes from the trace), so it survives a
+// wrong `major`. The **axis and the translation do not**: transposing inverts
+// the rotation and moves the translation between the last row and the last
+// column, and both still return plausible-looking numbers. So this refuses an
+// Unknown order for the same reason read_proj_terms does.
+//
+// `identity` is the thing callers should branch on, not `angle_deg == 0`: a
+// pure translation is identity in rotation and still means the camera is not
+// at the origin of the space its geometry is expressed in.
+struct ViewTerms {
+    bool ok = false;         // decoded: affine, m[15] == 1, order known
+    bool identity = false;   // rotation AND translation within tolerance
+    float angle_deg = 0.0f;  // rotation magnitude, axis-angle
+    float axis[3] = {0.0f, 0.0f, 0.0f}; // unit, or zeros below the threshold
+    float offset_m = 0.0f;   // |translation|
+    float t[3] = {0.0f, 0.0f, 0.0f};
+};
+
+inline ViewTerms read_view_terms(const Mat4 &v, Major major) {
+    ViewTerms r{};
+    if (major == Major::Unknown)
+        return r;
+    if (std::fabs(v.m[15] - 1.0f) > 1e-3f)
+        return r; // unpopulated block, or not an affine view matrix
+    auto at = [&](int row, int col) {
+        return major == Major::Row ? v.m[row * 4 + col] : v.m[col * 4 + row];
+    };
+    for (int i = 0; i < 3; i++)
+        r.t[i] = major == Major::Column ? v.m[12 + i] : v.m[i * 4 + 3];
+    r.offset_m = std::sqrt(r.t[0] * r.t[0] + r.t[1] * r.t[1] + r.t[2] * r.t[2]);
+
+    const float tr = at(0, 0) + at(1, 1) + at(2, 2);
+    // acos is ill-conditioned near +-1 and the trace can land a hair outside
+    // [-1, 1] through float error, which would make it NaN -- and a NaN angle
+    // would read as "not identity" and fire the loud path on every camera.
+    const float c = std::fmax(-1.0f, std::fmin(1.0f, (tr - 1.0f) * 0.5f));
+    r.angle_deg = std::acos(c) * 57.2957795130823f;
+    const float s = std::sqrt(std::fmax(0.0f, 1.0f - c * c));
+    if (s > 1e-4f) {
+        const float a[3] = {at(2, 1) - at(1, 2), at(0, 2) - at(2, 0),
+                            at(1, 0) - at(0, 1)};
+        // Normalise the skew vector by ITS OWN length, not by 2*sin(theta).
+        // The textbook divisor is exact only for a perfectly orthonormal R,
+        // and the matrices this reads are not: take 178's is a log line
+        // rounded to three decimals, and dividing by 2*sin(theta) returned an
+        // axis of length 1.005 for it. A "unit" vector printing 1.005 reads as
+        // a bug in the decoder rather than as rounding in its input, and an
+        // instrument nobody trusts is one nobody runs.
+        const float n = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+        if (n > 1e-6f)
+            for (int i = 0; i < 3; i++)
+                r.axis[i] = a[i] / n;
+    }
+    r.ok = true;
+    // 0.05 deg and 1 mm. Loose enough that float noise in a matrix X4 rebuilds
+    // every frame does not flap the verdict, tight enough that the 15 deg /
+    // 8.70 m camera cannot hide in it by three orders of magnitude.
+    r.identity = r.angle_deg < 0.05f && r.offset_m < 1e-3f;
+    return r;
 }
 
 inline Mat4 make_eye_shear(float sx, float sy, float near_z, float dx,
