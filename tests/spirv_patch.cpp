@@ -546,7 +546,9 @@ int main(int argc, char **argv) {
         const uint32_t cs = argc > 5 ? (uint32_t)atoi(argv[5]) : 1;
         const uint32_t cb = argc > 6 ? (uint32_t)atoi(argv[6]) : 0;
         const uint32_t cm = argc > 7 ? (uint32_t)atoi(argv[7]) : 1;
-        if (!x4vr::spv::patch_vertex_pose_rotate(code, ps, 0, cs, cb, cm)) {
+        // set 3 member 0 is M_worldviewprojection -- the #62 fallback.
+        if (!x4vr::spv::patch_vertex_pose_rotate(code, ps, 0, cs, cb, cm, 3, 0,
+                                                 0)) {
             printf("REFUSED=1\n");
             return 0;
         }

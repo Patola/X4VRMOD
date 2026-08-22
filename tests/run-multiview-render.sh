@@ -1856,6 +1856,11 @@ pose_rotate_patch_case "rotate: camera block is patched" \
     tests/sample_camera_block.vert.spv REFUSED=0
 pose_rotate_patch_case "rotate: no camera block refuses" \
     tests/fullscreen.vert.spv REFUSED=1
+# Task #62: the object-block fallback. sample_light_volume.vert declares the
+# set-3 per-object block and no camera block -- the shape of the 14 World
+# modules that would otherwise sit still while everything around them turned.
+pose_rotate_patch_case "rotate: object block is the fallback" \
+    tests/sample_light_volume.vert.spv REFUSED=0
 
 # Task #60: the conjugation EXECUTING, on a real GPU. Everything above says the
 # emitted module is well-formed; none of it says the arithmetic is the

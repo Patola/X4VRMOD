@@ -5534,3 +5534,67 @@ and the suns.
 This is the shape of #48, found before a take rather than after one, and it is
 the reason the module counter in the layer names its refusals rather than
 counting them silently.
+
+### #60 and #62 — the conjugation executes, and every World module now gets it
+
+**#60: it runs, and the test rules out the other implementation.**
+`tests/fullscreen_camera.vert` is procedural geometry the harness can already
+draw carrying the camera block shaped the way the patch verifies, and the
+output pass binds set 1 before its *first* draw rather than only before the
+credit loop — the shader reads it now, and an unbound descriptor is undefined
+behaviour rather than a wrong picture.
+
+The test is a **discriminator**, not a "the picture changed" check:
+
+    180° yaw, conjugation   v'z = −vz, so w' = −1 for every vertex at w = 1.
+                            Everything is behind the eye. Nothing draws.
+    180° yaw, #59 transport mirrors x and z, w untouched, still covers.
+
+Measured: 0° / 30° / 180° give drawn = 1 / 1 / **0** through the conjugation,
+and 180° gives drawn = **1** through the transport form. A test that only
+asserted "something moved" would have passed on the wrong implementation.
+
+**#62: the 14 camera-blind World modules are reached, via the object block.**
+Naming them against X4's sources failed — they declare no material properties
+at all, and two look like depth-only shaders (one vertex input, a fragment
+entry point with no interface). But `tools/module_map.py` against take 184
+answered it from real data instead: all 14 are classified
+`World,mvp-sx,+affine`, i.e. exactly task #23's family, drawn `-> patched` in
+some passes and `-> original` in others. Real scene geometry.
+
+So the rotation takes the same fallback the shear does, recovering the scales
+from `M_worldviewprojection`:
+
+    sx  = |row0(MVP).xyz| / |row3(MVP).xyz|
+    |sy| = |row1(MVP).xyz| / |row3(MVP).xyz|,  sign supplied as negative
+
+**That sign is load-bearing here in a way it is not for the shear.** `sy`
+appears twice in the conjugation, once dividing and once multiplying. The
+`R11` term's two sign errors cancel; the `R10`, `R12` and `R21` terms' do not.
+Get it wrong and yaw survives while pitch and roll come out mirrored — which is
+worse than not rotating, and would read as a tracking-axis bug.
+
+Over the dumps, before and after:
+
+    366 patched / 43 refused   camera block only
+    384 patched / 25 refused   with the object-block fallback
+      0 invalid, both times
+
+and **all 25 remaining refusals are non-World** — fullscreen passes and UI,
+which must not rotate. Every World module in the dumps is now reached.
+
+#### A transcription bug that refused 18 modules with a plausible reason
+
+The fallback found nothing at first. The cause was one word: the check for
+X4's `GLSL.std.450` import used `0x30353475` for `".450"` where it is
+`0x3035342e` — `'u'` for `'.'`, retyped instead of copied from the proven twin
+40 lines away. The sqrt the recovery needs is an `OpExtInst`, so with no import
+found the fallback declined, and the module then refused with **"no camera
+block"** — which is *true*, and is exactly the kind of correct-but-not-the-cause
+message that ends an investigation early. The fixed check is now copied rather
+than retyped, and says so.
+
+One real gap it exposed: a depth-only shader declares no `OpTypeBool` at all,
+which the guarded divide needs. That one is synthesised; `OpExtInstImport` is
+not, because it has its own section anchor, and a module without one is
+refused rather than half-built.

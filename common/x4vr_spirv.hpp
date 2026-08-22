@@ -1027,7 +1027,10 @@ inline bool patch_vertex_pose_clip(std::vector<uint32_t> &code, uint32_t set,
 inline bool patch_vertex_pose_rotate(std::vector<uint32_t> &code,
                                      uint32_t pose_set, uint32_t pose_binding,
                                      uint32_t cam_set, uint32_t cam_binding,
-                                     uint32_t cam_member) {
+                                     uint32_t cam_member,
+                                     uint32_t obj_set = 0xffffffffu,
+                                     uint32_t obj_binding = 0,
+                                     uint32_t obj_member = 0) {
     std::vector<Inst> insts;
     if (!iterate(code, insts))
         return false;
@@ -1045,8 +1048,8 @@ inline bool patch_vertex_pose_rotate(std::vector<uint32_t> &code,
     std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> vars;
     std::unordered_map<uint32_t, std::vector<uint32_t>> struct_members;
     std::unordered_map<uint32_t, uint32_t> var_set, var_binding;
-    uint32_t t_float = 0, t_v4 = 0, t_mat4 = 0, t_int = 0;
-    uint32_t ptr_out_v4 = 0, ptr_uni_float = 0;
+    uint32_t t_float = 0, t_v4 = 0, t_mat4 = 0, t_int = 0, t_bool = 0;
+    uint32_t ptr_out_v4 = 0, ptr_uni_float = 0, glsl_ext = 0;
     size_t first_fn = 0, last_annotation_end = 0, first_global = 0;
     bool have_first_fn = false, have_first_global = false;
 
@@ -1063,6 +1066,22 @@ inline bool patch_vertex_pose_rotate(std::vector<uint32_t> &code,
             default: break;
             }
         switch (in.op) {
+        case OpExtInstImport:
+            // "GLSL.std.450" in words. Matched by content, because an OpExtInst
+            // against the wrong set is a module that validates and computes
+            // something else.
+            // ".450" is 0x3035342e. Transcribed as 0x30353475 first time --
+            // 'u' for '.' -- and the only symptom was 14 modules refusing with
+            // "no camera block", which is a plausible-looking reason for a
+            // module that genuinely has none. Copied from the twin below
+            // rather than retyped.
+            if (in.len >= 6 && w[2] == 0x4c534c47u && w[3] == 0x6474732eu &&
+                w[4] == 0x3035342eu && w[5] == 0x00000000u)
+                glsl_ext = w[1];
+            break;
+        case OpTypeBool:
+            if (in.len >= 2 && !t_bool) t_bool = w[1];
+            break;
         case OpEntryPoint:
             if (in.len >= 3 && w[1] == ExecutionModelVertex && !entry_fn)
                 entry_fn = w[2];
@@ -1137,7 +1156,55 @@ inline bool patch_vertex_pose_rotate(std::vector<uint32_t> &code,
         cam_var = id;
         break;
     }
-    if (!cam_var)
+    // Task #62. 14 of X4's World modules declare no camera block at all -- the
+    // same family task #23 met for the shear, which `patch_vertex_eye_offset_mvp`
+    // handles by recovering the scales from the per-object MVP instead. Take
+    // 184's inventory shows all 14 on that path (`World,mvp-sx,+affine`), so
+    // they are real scene geometry that would otherwise sit still while
+    // everything around them turned with the head.
+    //
+    // The relations hold there exactly as they do through the camera block,
+    // because `clip = MVP * pos` and X4's P has `row0(P) = [sx 0 0 0]`,
+    // `row3(P) = [0 0 1 0]`, `m[10] = 0`:
+    //
+    //     sx  =  |row0(MVP).xyz| / |row3(MVP).xyz|
+    //     |sy| = |row1(MVP).xyz| / |row3(MVP).xyz|
+    //
+    // and the SIGN of sy is not in the block. It is supplied as negative, the
+    // same convention and the same 35,783 measured samples behind
+    // patch_vertex_eye_offset_mvp's minus. That sign is load-bearing here in a
+    // way it is not for the shear: sy appears TWICE in the conjugation, once
+    // dividing and once multiplying, and while the R11 term's two sign errors
+    // cancel, the R10/R12/R21 terms' do not. Get it wrong and yaw survives
+    // while pitch and roll come out mirrored.
+    uint32_t obj_var = 0;
+    if (!cam_var && obj_set != 0xffffffffu) {
+        for (auto &[id, ts] : vars) {
+            if (ts.second != StorageClassUniform) continue;
+            auto st = var_set.find(id), b = var_binding.find(id);
+            if (st == var_set.end() || b == var_binding.end()) continue;
+            if (st->second != obj_set || b->second != obj_binding) continue;
+            auto pt = ptr_types.find(ts.first);
+            if (pt == ptr_types.end()) continue;
+            auto sm = struct_members.find(pt->second.pointee);
+            if (sm == struct_members.end() || obj_member >= sm->second.size())
+                continue;
+            if (sm->second[obj_member] != t_mat4) continue;
+            obj_var = id;
+            break;
+        }
+        // The recovery needs sqrt, which is an OpExtInst. A module that never
+        // imported GLSL.std.450 is refused rather than given an import of its
+        // own: emitting one means another anchor to get right, and these are
+        // 14 modules, not 366.
+        // t_bool is emitted below if the module has none -- a depth-only
+        // shader like mod-0025 declares no bool at all. glsl_ext cannot be
+        // synthesised as cheaply (OpExtInstImport has its own section anchor),
+        // so a module without one is refused.
+        if (obj_var && !glsl_ext)
+            obj_var = 0;
+    }
+    if (!cam_var && !obj_var)
         return false;
 
     uint32_t pos_var = 0, pos_member = 0;
@@ -1187,6 +1254,21 @@ inline bool patch_vertex_pose_rotate(std::vector<uint32_t> &code,
     { const float f = 1.0f; memcpy(&one_bits, &f, 4); }
     const uint32_t one_f = new_id();
     emit(decls, OpConstant, {t_float, one_f, one_bits});
+    uint32_t zero_f = 0, c2 = 0, c3 = 0, c_obj = 0;
+    if (obj_var && !t_bool) {
+        t_bool = new_id();
+        emit(decls, OpTypeBool, {t_bool});
+    }
+    if (obj_var) {
+        zero_f = new_id();
+        emit(decls, OpConstant, {t_float, zero_f, 0u});
+        c2 = new_id();
+        emit(decls, OpConstant, {t_int, c2, 2});
+        c3 = new_id();
+        emit(decls, OpConstant, {t_int, c3, 3});
+        c_obj = new_id();
+        emit(decls, OpConstant, {t_int, c_obj, obj_member});
+    }
     uint32_t c_pos = 0;
     if (via_struct) {
         c_pos = new_id();
@@ -1221,14 +1303,75 @@ inline bool patch_vertex_pose_rotate(std::vector<uint32_t> &code,
             // so [c][r] is AccessChain(member, c, r) -- and for these two the
             // column and the row happen to be equal, which is why they read
             // (0,0) and (1,1) rather than a transposed pair.
-            const uint32_t p_sx = new_id();
-            emit(out, OpAccessChain, {ptr_uni_float, p_sx, cam_var, c_cam, c0, c0});
-            const uint32_t sx = new_id();
-            emit(out, OpLoad, {t_float, sx, p_sx});
-            const uint32_t p_sy = new_id();
-            emit(out, OpAccessChain, {ptr_uni_float, p_sy, cam_var, c_cam, c1, c1});
-            const uint32_t sy = new_id();
-            emit(out, OpLoad, {t_float, sy, p_sy});
+            uint32_t sx = 0, sy = 0;
+            if (cam_var) {
+                const uint32_t p_sx = new_id();
+                emit(out, OpAccessChain,
+                     {ptr_uni_float, p_sx, cam_var, c_cam, c0, c0});
+                sx = new_id();
+                emit(out, OpLoad, {t_float, sx, p_sx});
+                const uint32_t p_sy = new_id();
+                emit(out, OpAccessChain,
+                     {ptr_uni_float, p_sy, cam_var, c_cam, c1, c1});
+                sy = new_id();
+                emit(out, OpLoad, {t_float, sy, p_sy});
+            } else {
+                // |row_r(MVP).xyz|^2, column-major: element [c][r] is
+                // AccessChain(member, c, r), so a ROW is three columns at one r.
+                auto sq_row = [&](uint32_t r) {
+                    uint32_t acc = 0;
+                    for (uint32_t c = 0; c < 3; c++) {
+                        const uint32_t cid = c == 0 ? c0 : (c == 1 ? c1 : c2);
+                        const uint32_t rid = r == 0 ? c0 : (r == 1 ? c1 : c3);
+                        const uint32_t pp = new_id();
+                        emit(out, OpAccessChain,
+                             {ptr_uni_float, pp, obj_var, c_obj, cid, rid});
+                        const uint32_t v = new_id();
+                        emit(out, OpLoad, {t_float, v, pp});
+                        const uint32_t sq = new_id();
+                        emit(out, OpFMul, {t_float, sq, v, v});
+                        if (!acc) {
+                            acc = sq;
+                        } else {
+                            const uint32_t a2 = new_id();
+                            emit(out, OpFAdd, {t_float, a2, acc, sq});
+                            acc = a2;
+                        }
+                    }
+                    return acc;
+                };
+                const uint32_t n0 = sq_row(0);
+                const uint32_t n1 = sq_row(1);
+                const uint32_t n3 = sq_row(3);
+                // Guarded denominator, for the reason the twin gives: X4's
+                // blocks read as all zeroes before the first real frame, and an
+                // unguarded divide puts a NaN into gl_Position and takes the
+                // whole vertex with it.
+                const uint32_t ok = new_id();
+                emit(out, OpFOrdGreaterThan, {t_bool, ok, n3, zero_f});
+                const uint32_t den = new_id();
+                emit(out, OpSelect, {t_float, den, ok, n3, one_f});
+                const uint32_t qx = new_id();
+                emit(out, OpFDiv, {t_float, qx, n0, den});
+                const uint32_t rx = new_id();
+                emit(out, OpExtInst, {t_float, rx, glsl_ext, GLSLstd450Sqrt, qx});
+                sx = new_id();
+                emit(out, OpSelect, {t_float, sx, ok, rx, one_f});
+                const uint32_t qy = new_id();
+                emit(out, OpFDiv, {t_float, qy, n1, den});
+                const uint32_t ry = new_id();
+                emit(out, OpExtInst, {t_float, ry, glsl_ext, GLSLstd450Sqrt, qy});
+                const uint32_t ny = new_id();
+                emit(out, OpFNegate, {t_float, ny, ry});
+                sy = new_id();
+                // The fallback is 1/-1, not 0: sx and sy are DIVISORS here,
+                // where the shear only ever multiplied by them. A zero would
+                // make the very case the guard exists for -- an unpopulated
+                // block -- produce the NaN it was added to prevent.
+                const uint32_t neg_one = new_id();
+                emit(out, OpFNegate, {t_float, neg_one, one_f});
+                emit(out, OpSelect, {t_float, sy, ok, ny, neg_one});
+            }
             const uint32_t p_r = new_id();
             emit(out, OpAccessChain, {ptr_uni_mat, p_r, pose_var, c0});
             const uint32_t rmat = new_id();

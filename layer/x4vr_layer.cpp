@@ -4498,16 +4498,25 @@ VkResult create_shader_module_inner(
         // sx is not a degraded rotation but the wrong geometry.
         bool did = false;
         if (pose_rotate()) {
+            // Task #62: the object block is the fallback, exactly as it is
+            // for the shear. 14 of X4's World modules declare no camera block
+            // and take 184's inventory shows all of them on the mvp-sx path;
+            // without this they would be scene geometry that sits still while
+            // everything around it turns. With it, every World module in the
+            // dumps is reached and only non-World ones refuse.
             did = x4vr::spv::patch_vertex_pose_rotate(
                 pc, pose_set_index(), 0, kCameraSet, kCameraBinding,
-                kCameraProjMember);
+                kCameraProjMember, kObjectSet, kObjectBinding,
+                kObjectMvpMember);
             static uint32_t refused = 0;
             if (!did && ++refused <= 3)
-                X4VR_LOG("pose: a vertex module has no camera block at set %u "
-                         "binding %u — NOT rotated. It keeps X4's frame while "
-                         "its neighbours move, which is visible as geometry "
+                X4VR_LOG("pose: a vertex module has neither a camera block at "
+                         "set %u binding %u nor an object block at set %u — "
+                         "NOT rotated. Over X4's dumps every module in that "
+                         "state is non-World (fullscreen and UI), which must "
+                         "not rotate; a WORLD module here would be geometry "
                          "that does not follow the head",
-                         kCameraSet, kCameraBinding);
+                         kCameraSet, kCameraBinding, kObjectSet);
         } else {
             did = x4vr::spv::patch_vertex_pose_clip(pc, pose_set_index(), 0);
         }
