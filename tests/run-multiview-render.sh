@@ -1862,6 +1862,32 @@ pose_rotate_patch_case "rotate: no camera block refuses" \
 pose_rotate_patch_case "rotate: object block is the fallback" \
     tests/sample_light_volume.vert.spv REFUSED=0
 
+# Task #61: R^-1 into the deferred reconstruction. sample_invproj.frag is the
+# committed stand-in for X4's reconstructing modules; over the real dumps this
+# patches 244 and refuses 165, and 244 is exactly the count of fragment entry
+# points that load member 2 (tools/uniform_block_scan.py).
+frag_pose_case() {
+    local label="$1" src="$2" want="$3" out spv valid=skipped
+    spv="$(mktemp).spv"
+    out=$("$BUILD/tests/x4vr_test_spirv_patch" frag-invproj-pose "$src" "$spv" 2>&1)
+    local got="${out%% *}"
+    if [[ "$got" == "REFUSED=0" ]]; then
+        spirv-val "$spv" >/dev/null 2>&1 && valid=ok || valid=INVALID
+    fi
+    rm -f "$spv"
+    if [[ "$got" == "$want" && "$valid" != INVALID ]]; then
+        printf 'ok   %-38s %s spirv-val=%s\n' "$label" "$got" "$valid"
+    else
+        printf 'FAIL %-38s want %s, got "%s" spirv-val=%s\n' \
+            "$label" "$want" "$out" "$valid"
+        fails=$((fails + 1))
+    fi
+}
+frag_pose_case "rinv: reconstruction takes R-inverse" \
+    tests/sample_invproj.frag.spv REFUSED=0
+frag_pose_case "rinv: a non-reconstructor refuses" \
+    tests/sample.frag.spv REFUSED=1
+
 # Task #60: the conjugation EXECUTING, on a real GPU. Everything above says the
 # emitted module is well-formed; none of it says the arithmetic is the
 # conjugation. This does, and it does it with a discriminator that the OTHER

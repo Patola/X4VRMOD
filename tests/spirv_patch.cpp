@@ -444,6 +444,28 @@ int main(int argc, char **argv) {
     }
 
     // The per-eye M_invprojection correction (task #22).
+    // frag-invproj-pose <in> <out> [set] [binding] [member] [dl] [dr]
+    // -- task #61: the same patch with R^-1 composed from the pose block.
+    if (strcmp(argv[1], "frag-invproj-pose") == 0 && argc >= 4) {
+        std::vector<uint32_t> code = load_spv(argv[2]);
+        if (code.empty()) { printf("FAIL=load\n"); return 1; }
+        const uint32_t st = argc > 4 ? (uint32_t)atoi(argv[4]) : 1;
+        const uint32_t bi = argc > 5 ? (uint32_t)atoi(argv[5]) : 0;
+        const uint32_t me = argc > 6 ? (uint32_t)atoi(argv[6]) : 2;
+        const float dl = argc > 7 ? strtof(argv[7], nullptr) : -0.032f;
+        const float dr = argc > 8 ? strtof(argv[8], nullptr) : 0.032f;
+        if (!x4vr::spv::patch_fragment_invproj_eye(code, st, bi, me, dl, dr,
+                                                   nullptr, nullptr, 5, 0)) {
+            printf("REFUSED=1\n");
+            return 0;
+        }
+        printf("REFUSED=0 WORDS=%zu\n", code.size());
+        FILE *f = fopen(argv[3], "wb");
+        if (!f) { printf("FAIL=open\n"); return 1; }
+        fwrite(code.data(), 4, code.size(), f);
+        fclose(f);
+        return 0;
+    }
     if (strcmp(argv[1], "frag-invproj") == 0) {
         std::vector<uint32_t> code = load_spv(argv[2]);
         if (code.empty()) {

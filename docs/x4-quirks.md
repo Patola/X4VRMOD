@@ -5598,3 +5598,56 @@ One real gap it exposed: a depth-only shader declares no `OpTypeBool` at all,
 which the guarded divide needs. That one is synthesised; `OpExtInstImport` is
 not, because it has its own section anchor, and a module without one is
 refused rather than half-built.
+
+### #61 — `R⁻¹` into the deferred reconstruction, and the third first-match slip
+
+The vertex stage rotates; without this the reconstruction does not, and
+`gl_FragCoord` is then the rotated camera's while `M_invprojection` is X4's. A
+point at 50 m lands 8.7 m out at 10° of yaw, and the CSM lookup goes through
+exactly that position — so shadows break outright, and the froxel lookup and
+specular with them. That is the `#57` class, which cost thirteen takes.
+
+**The fix is one runtime multiply, and that is the finding from #33 step 1.**
+`M_invprojection` *is* `P⁻¹`, so the P's cancel in `M_invprojection · Rclip⁻¹`
+and the whole correction collapses to a **left-multiply by `R⁻¹`** — no `sx`
+anywhere, which is what lets it ride the rewrite
+`patch_fragment_invproj_eye` already performs instead of needing the live
+camera in 244 separate fragment modules. Pinned at 8.9e-16.
+
+Applied to **members 2 and 4 both**, for take 83's reason: they hold the same
+numbers in X4 and differ only after our patch, so correcting one and leaving
+the other is precisely the defect that took thirteen takes to find.
+
+Over the dumps: **244 patched and spirv-val clean, 165 refused, 0 invalid** —
+and 244 is exactly the count of fragment entry points that load member 2 in
+`tools/uniform_block_scan.py`. Every module that reconstructs is reached.
+
+With the rotation off the patch is passed `0xffffffff` and not one emitted word
+changes, so every tagged state still reproduces.
+
+#### The same first-match mistake, for the third time
+
+This file already records it twice — take 48's aliased binding, and again in
+`patch_fragment_invproj_eye`'s own comment ("Recorded here because it is now the
+second time"). The third: the annotation block for the pose descriptor was
+inserted by matching
+
+    if (in.start == anno_at && !existing_view_var) { ... }
+    if (in.start == first_fn) out.insert(...decls...);
+
+on its **first** occurrence in the file — which is in
+`patch_fragment_index_offset`, 700 lines past the function being edited. Four
+identical-looking emission tails, and the edit landed in the wrong one. The
+compiler caught it, because the ids were out of scope; had the two functions
+shared a variable name it would have compiled and patched the wrong shaders.
+
+The lesson that generalises is not "be careful": it is that a repeated code
+shape in one file makes textual anchors unsafe, and an edit to one of N
+identical tails has to be bounded by the enclosing function, not by the first
+match. The move that fixed it asserts the insertion point lies between this
+function and the next.
+
+Also fixed on the way: the decoration was first written under the
+`!existing_view_var` guard, which is about `gl_ViewIndex`, not about the pose
+block. Hanging a new decoration off an unrelated condition is how it goes
+missing on exactly the modules that already did something else.

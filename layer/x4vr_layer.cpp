@@ -4651,9 +4651,20 @@ VkResult create_shader_module_inner(
         const OffAxisPair &oa = offaxis_target();
         const x4vr::OffAxis *oal = oa.on ? &oa.eye[0] : nullptr;
         const x4vr::OffAxis *oar = oa.on ? &oa.eye[1] : nullptr;
+        // Task #61: R^-1 composed at runtime, so the deferred reconstruction
+        // lands back in X4's own frame after the vertex stage rotated. Passed
+        // to BOTH members below, for take 83's reason: they hold the same
+        // numbers in X4 and differ only after our patch, so correcting one and
+        // leaving the other is the defect that took thirteen takes to find.
+        //
+        // 0xffffffff when the rotation is off, and then not one word of the
+        // emitted module changes -- the same property that lets every pre-#35
+        // tag reproduce with X4VR_OFFAXIS unset.
+        const uint32_t pset =
+            pose_rotate() ? pose_set_index() : 0xffffffffu;
         if (x4vr::spv::patch_fragment_invproj_eye(
                 code, kCameraSet, kCameraBinding, kCameraInvProjMember, dl,
-                dr, oal, oar)) {
+                dr, oal, oar, pset, 0)) {
             frag_patched = true;
             g_invproj_patched++;
         }
@@ -4663,7 +4674,7 @@ VkResult create_shader_module_inner(
         // healthy-looking 236 hide a 0 here, which is the whole defect.
         if (x4vr::spv::patch_fragment_invproj_eye(
                 code, kCameraSet, kCameraBinding, kCameraInvProjUjMember,
-                dl, dr, oal, oar)) {
+                dl, dr, oal, oar, pset, 0)) {
             frag_patched = true;
             g_invproj_uj_patched++;
         }

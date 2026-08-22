@@ -93,6 +93,7 @@ enum : uint32_t {
     OpFMul = 133,
     OpVectorTimesScalar = 142,
     OpMatrixTimesVector = 145,
+    OpMatrixTimesMatrix = 146,
     OpReturn = 253,
 
     // For patch_vertex_eye_offset_mvp. OpSelect with a *scalar* condition and
@@ -2688,7 +2689,9 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
                                        uint32_t binding, uint32_t member,
                                        float d_left, float d_right,
                                        const OffAxis *oa_left = nullptr,
-                                       const OffAxis *oa_right = nullptr) {
+                                       const OffAxis *oa_right = nullptr,
+                                       uint32_t pose_set = 0xffffffffu,
+                                       uint32_t pose_binding = 0) {
     std::vector<Inst> insts;
     if (!iterate(code, insts))
         return false;
@@ -2952,6 +2955,28 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
         emit(decls, OpVariable, {ptr_in_int, view_var, StorageClassInput});
     }
 
+    // Task #61: the pose block, so R^-1 can be composed at RUNTIME. Everything
+    // else this function composes is a constant folded into a matrix it is
+    // already rewriting; the head rotation is not, and this is the one term
+    // that has to be loaded.
+    uint32_t pose_var = 0, ptr_pose_mat = 0, c_one_i = 0, t_pose_block = 0;
+    if (pose_set != 0xffffffffu) {
+        if (!t_int) {
+            t_int = new_id();
+            emit(decls, OpTypeInt, {t_int, 32, 1});
+        }
+        const uint32_t t_block = t_pose_block = new_id();
+        emit(decls, OpTypeStruct, {t_block, t_mat4, t_mat4});
+        const uint32_t ptr_block = new_id();
+        emit(decls, OpTypePointer, {ptr_block, StorageClassUniform, t_block});
+        ptr_pose_mat = new_id();
+        emit(decls, OpTypePointer, {ptr_pose_mat, StorageClassUniform, t_mat4});
+        pose_var = new_id();
+        emit(decls, OpVariable, {ptr_block, pose_var, StorageClassUniform});
+        c_one_i = new_id();
+        emit(decls, OpConstant, {t_int, c_one_i, 1});  // member 1 = r_inv
+    }
+
     const size_t anno_at = last_annotation_end
                                ? last_annotation_end
                                : (have_first_global ? first_global : first_fn);
@@ -2981,6 +3006,30 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
             // An integer Input in a fragment shader must be Flat --
             // interpolating one is meaningless and Vulkan forbids it.
             emit(out, OpDecorate, {view_var, DecorationFlat});
+        }
+        // Task #61's block is declared from nothing, so its std140 layout is
+        // ours to state and must match x4vr::PoseBlock exactly: two
+        // column-major mat4 at 0 and 64, matrix stride 16. A mismatch here
+        // reads back as a plausible wrong matrix, not as an error.
+        //
+        // Emitted at anno_at unconditionally -- NOT under the
+        // `!existing_view_var` guard above. That guard is about ViewIndex,
+        // which a module may already have; the pose block is new every time,
+        // and hanging it off an unrelated condition is how a decoration goes
+        // missing on exactly the modules that already did something else.
+        if (in.start == anno_at && pose_var) {
+            emit(out, OpDecorate, {t_pose_block, DecorationBlock});
+            for (uint32_t m = 0; m < 2; m++) {
+                emit(out, OpMemberDecorate,
+                     {t_pose_block, m, DecorationOffset, m * 64});
+                emit(out, OpMemberDecorate,
+                     {t_pose_block, m, DecorationColMajor});
+                emit(out, OpMemberDecorate,
+                     {t_pose_block, m, DecorationMatrixStride, 16});
+            }
+            emit(out, OpDecorate,
+                 {pose_var, DecorationDescriptorSet, pose_set});
+            emit(out, OpDecorate, {pose_var, DecorationBinding, pose_binding});
         }
         if (in.start == first_fn)
             out.insert(out.end(), decls.begin(), decls.end());
@@ -3030,9 +3079,28 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
                 emit(out, OpFMul, {t_float, dw, d, wv});
                 const uint32_t nx = new_id();
                 emit(out, OpFAdd, {t_float, nx, x, dw});
-                const uint32_t next = (c == 3) ? orig : new_id();
+                // With the pose composed the last insert can no longer take
+                // over `orig`: R^-1 has to be applied AFTER it, and whatever
+                // runs last is what downstream uses must see.
+                const uint32_t next = (c == 3 && !pose_var) ? orig : new_id();
                 emit(out, OpCompositeInsert, {t_mat4, next, nx, acc, c, 0});
                 acc = next;
+            }
+            // Task #61. `M_invprojection` IS `P^-1`, so the P's cancel in
+            // `M_invprojection · Rclip^-1` and the whole correction collapses
+            // to a left-multiply by R^-1 -- no sx anywhere, which is what lets
+            // it ride this rewrite instead of needing the live camera in 244
+            // fragment modules. Pinned at 8.9e-16 by
+            // tools/headlook_clip.py --self-check.
+            if (pose_var) {
+                const uint32_t pp = new_id();
+                emit(out, OpAccessChain,
+                     {ptr_pose_mat, pp, pose_var, c_one_i});
+                const uint32_t rinv = new_id();
+                emit(out, OpLoad, {t_mat4, rinv, pp});
+                // Left, not right: the reconstruction has to land in X4's own
+                // frame, and the rotation was applied last in the vertex stage.
+                emit(out, OpMatrixTimesMatrix, {t_mat4, orig, rinv, acc});
             }
             continue; // the original OpLoad is replaced, not kept
         }
