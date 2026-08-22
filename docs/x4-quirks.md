@@ -5220,3 +5220,139 @@ the cascades are fitted to different worlds and nothing is comparable.
 Cost: two short flatscreen runs. Acceptance: `python3 tools/score_run.py` on
 each, then compare their `shadow` lines. Interaction-safe (no probe, no dumps);
 `X4VR_DUMP_MATRICES` is what produces every line above.
+
+### #54 — DECISION: the head pose arrives on a layer-owned descriptor set
+
+No run. Written comparison, as the task asked, and every fact below was checked
+today rather than recalled.
+
+**The requirement.** Every correction the layer applies is a constant today —
+the eye offset is our choice, the off-axis affine is latched once, and
+`patch_fragment_invproj_eye`'s comment says the quiet part: *"Both are constant
+compositions on a matrix that is already being rewritten, so this adds no load
+and no descriptor."* A head pose is none of those. It has to reach
+
+    vertex     ~330 World modules   the rotation itself
+    fragment   244 (member 2) + 2 (member 4)   R⁻¹ into the reconstruction
+    compute    3 (member 2)         desirable, and REACHABLE: R is the same for
+                                    both eyes, so unlike every per-eye
+                                    correction it is not blocked by compute
+                                    having no gl_ViewIndex
+
+changing every frame, written as late as possible. And it carries **only R** —
+`sx`/`sy` stay live from X4's own block, because `headlook_clip.py` shows six of
+the sixteen entries of `P·R·P⁻¹` scale with them. That keeps the per-frame
+payload at two mat4s and makes it **camera-independent**, which matters below.
+
+#### What is already in place, measured
+
+* `vkCreateGraphicsPipelines`, `vkCreateComputePipelines` and
+  `vkCmdBindPipeline` are **all hooked**. `vkCreatePipelineLayout` is **not**.
+* X4 declares descriptor sets **0–4 and nothing higher**, across the dumps.
+  This device reports `maxBoundDescriptorSets = 32` and
+  `maxPushConstantsSize = 256`.
+* The dumps are SPIR-V **1.2** (398 of 409; the other 11 are 1.0). The rule
+  that `OpEntryPoint` must list *every* global variable starts at 1.4, so a new
+  Uniform variable does not have to be threaded into the interface list.
+* The patcher **already synthesises a global**: `OpTypePointer` + `OpVariable` +
+  `OpDecorate`, with anchor logic for where declarations and annotations may
+  legally go (`x4vr_spirv.hpp:638` and `:1262`, for `gl_ViewIndex`). Adding a
+  uniform block is that pattern with different decorations.
+
+#### A — a layer-owned descriptor set  ← CHOSEN
+
+Hook `vkCreatePipelineLayout`, append our set at the first free index (5), keep
+X4's layout → extended layout map, substitute at pipeline creation, and bind our
+set at `vkCmdBindPipeline` so it can never be missing when a pipeline that
+declares it runs.
+
+* **Layout compatibility survives, and that is the load-bearing point.** Vulkan
+  compatibility for set K requires sets 0..K to match; appending *above* every
+  set X4 uses leaves 0–4 identical, so X4's bind-once-use-many keeps working.
+  Appending anywhere else would break it silently.
+* **We own the memory.** No race with X4's CPU, no member to squat on, no
+  dependence on config we may want to change.
+* **One write per frame, not 126.** Our buffer is not X4's arena, so the value
+  is written once and every draw sees it. (Option B has to write every credited
+  slot — take 184 credited 126 — and a slot first seen late is stale for a
+  frame.)
+* **It fails loudly.** A pipeline whose layout declares set 5 with nothing bound
+  is a validation error at bind, not a wrong matrix that looks like bad
+  tracking.
+* Cost: a new hook, a layout map, a small host-visible ring, and a SPIR-V block
+  synthesiser. The most code of the three, all of it conventional.
+
+#### B — write into X4's camera block
+
+Reuse `patch_view_before_submit`, which already reads the mapped block, and put
+R in a member no shader reads. Tiny: the shader side is an access chain, the
+same shape as the existing member-1 read.
+
+**Rejected on two facts, not on taste.**
+
+1. **The free member is free only because of our own overrides, and two of
+   them are marked provisional.** Member 3 (`M_projection_uj`) reads zero
+   because the injector forces `ssao=0` and `ssr=false` — X4's own
+   `ssao_v2.frag` and `ssr.frag` both call `ProjectUJ()`. Members 5/6
+   (`M_jitter`, `M_prevjitter`) read zero because `antialiasing=none`, and take
+   163 proved FSR3 works, which would repopulate them. The `ssr` override says
+   in its own comment *"Revisit after per-eye lighting lands"*. Building #33's
+   foundation on three switches we expect to flip is a dependency in the wrong
+   direction.
+2. **The write timing is UNMEASURED, and the evidence people cite is about a
+   different question.** "Zeroing the whole arena turns the screen black" comes
+   from `X4VR_TEST_HAMMER`, whose own comment calls it *"a race-based oracle"*
+   that zeroes the blocks from a background thread at ~10 kHz. That proves the
+   GPU reads the blocks we identified — the *address* is right. It says nothing
+   about whether a single well-timed write at submit survives to the GPU.
+   `X4VR_TEST_VERIFY` exists precisely to answer that and has produced **no
+   line in any of the 190 stored logs**; `X4VR_TEST_EYE_*` and
+   `X4VR_TEST_HAMMER` appear in no recorded `env: run =` either.
+
+   That does not make B wrong. It makes B's central assumption untested, while
+   A has no timing question at all because nothing else writes our buffer.
+
+#### C — push constants
+
+`maxPushConstantsSize = 256` leaves room for two mat4s. But X4's layouts declare
+no push range, so C needs **all of A's pipeline-layout surgery** and then adds
+per-bind bookkeeping (push constants are invalidated by layout-incompatible
+binds) and a shader-side pattern the layer has never emitted. Strictly dominated
+by A.
+
+#### D — the 236 spare bytes at the end of the camera block
+
+X4's block ends at byte 1556 (`F_camerarotationspeed` at 1552) and the
+descriptor range is 1792, so there is room for three mat4s the struct never
+declares. Dominated: reading them needs the block's `OpTypeStruct` rewritten —
+*more* SPIR-V surgery than declaring a fresh variable — while still inheriting
+B's write-timing question, because it is still X4's buffer.
+
+#### E — no per-frame channel at all: let the compositor rotate
+
+Render wide, submit the projection layer with the pose we rendered at, let the
+runtime reproject. Zero shader work, zero delivery problem, and **lower
+motion-to-photon**, because the correction is late-latched at display time
+rather than frozen when the command buffer is recorded.
+
+Not an alternative — a **complement**, and one we get anyway. Both routes widen
+`<fov>` by the same amount, so both pay #56's shadow cost identically; what E
+adds is that X4 must actually *shade* the guard band (±10° yaw-only is 2.06×
+area, 1.28× with #35) where the vertex route shades only what is displayed. The
+right architecture is A **plus** E's residual reprojection, with the declared
+pose being the pose we rotated by — the rule already written at
+`x4vr_layer.cpp:8700`, generalised to `declared = X4's camera pose ⊕ our R`.
+
+#### What would overturn this
+
+If the `vkCreatePipelineLayout` hook turns out to break X4 — it caches layout
+handles, or compares them somewhere we cannot see — fall back to B. In that
+case **run `X4VR_TEST_VERIFY=1` first**: B's whole case rests on a write-timing
+assumption nobody has measured, and discovering that at the same time as a
+head-tracking bug is how a week disappears.
+
+Acceptance for A, before any of it is believed: validation clean with extended
+layouts, a headless harness case where a shader reads the block and the value
+arrives on a real GPU, and a counter in the log pairing pipelines created
+against pipelines that got the extended layout — an unequal pair being a fail,
+not a warning.
