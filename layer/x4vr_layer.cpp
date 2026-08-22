@@ -4230,6 +4230,11 @@ bool proj_invproj() {
 bool pose_wanted();
 bool pose_rotate();
 uint32_t pose_set_index();
+// Latches when one of X4's pipeline layouts turns out to declare our index.
+// The comment above is why this has to be a hard stop rather than a correction:
+// the index is already baked into every module patched so far, and no later
+// discovery can reach back and change it.
+bool pose_collided();
 
 VkResult create_shader_module_inner(
     VkDevice device, const VkShaderModuleCreateInfo *ci,
@@ -4489,7 +4494,11 @@ VkResult create_shader_module_inner(
     // nothing at all, the channel came up, every counter read OK, and the
     // transport probe moved nothing. Every report said success.
     std::vector<uint32_t> pose_code;
-    if (pose_wanted() && ci->pCode && ci->codeSize >= 20) {
+    // `!pose_collided()` is the fail-closed half of the layout guard. Once one
+    // of X4's layouts has claimed our index, every further patch would produce
+    // a module reading a descriptor nothing binds, so the honest thing is to
+    // stop making them rather than to keep counting successes.
+    if (pose_wanted() && !pose_collided() && ci->pCode && ci->codeSize >= 20) {
         std::vector<uint32_t> pc(ci->codeSize / 4);
         memcpy(pc.data(), ci->pCode, ci->codeSize);
         // The conjugation needs X4's camera block for the live sx/sy and
@@ -5110,10 +5119,23 @@ constexpr uint32_t kPoseBinding = 0;
 // command-buffer reuse, and needs no fence of ours.
 constexpr uint32_t kPoseRegions = 4;
 
+// maxBoundDescriptorSets, captured at device creation. A global and not a
+// DeviceData field because pose_set_index() must answer with no device in hand:
+// the index is baked into SPIR-V by helpers that take none, and it has to be
+// the same number for every module in the process.
+std::atomic<uint32_t> g_max_bound_sets{0};
+
 struct PoseChannel {
     bool on = false;          // X4VR_POSE asked for it
     bool ready = false;       // ...and every object was created
     bool failed = false;
+    // Set when a pipeline layout declares our index. Latching, never cleared:
+    // once one layout has refused, patched modules are already loose in the
+    // process and nothing downstream can be trusted for the rest of the run.
+    std::atomic<bool> collided{false};
+    // The widest setLayoutCount X4 has ever declared. Reported so the index is
+    // chosen from evidence next time instead of from a claim about the dumps.
+    uint32_t max_sets_seen = 0;
     VkDevice device = VK_NULL_HANDLE;
     VkDescriptorSetLayout dsl = VK_NULL_HANDLE;
     VkDescriptorSetLayout empty = VK_NULL_HANDLE;
@@ -5148,7 +5170,11 @@ bool pose_wanted() {
 // Asked for, built, and the layer is running against the target. Every site
 // that touches the channel goes through this one predicate, so "on" cannot
 // come to mean different things in different places.
-bool pose_active() { return pose_wanted() && g_pose.ready && g_active; }
+bool pose_collided() { return g_pose.collided.load(); }
+
+bool pose_active() {
+    return pose_wanted() && g_pose.ready && g_active && !pose_collided();
+}
 
 // X4VR_POSE_ROTATE selects the CONJUGATION form of the vertex patch --
 // `P.R.P^-1` emitted with the live sx/sy -- instead of #59's transport form,
@@ -5163,17 +5189,52 @@ bool pose_rotate() {
     return on;
 }
 
-// Read once, before anything can bake it. X4 declares sets 0-4 across all 409
-// dumps, so 5 is the first free index; the override exists for a build of X4
-// that grows one.
+// The index our set is appended at. It is BAKED INTO EVERY PATCHED MODULE at
+// vkCreateShaderModule, so it is decided once, before the first patch, and can
+// never change afterwards.
+//
+// **It used to default to 5, and that cost take 186b.** The reasoning written
+// here was "X4 declares sets 0-4 across all 409 dumps, so 5 is the first free
+// index". The inference is invalid because it reads the wrong object: the 409
+// dumps are SHADER MODULES, and a module declares the sets it READS. A
+// PIPELINE LAYOUT declares the sets X4 BINDS, and a layout routinely declares
+// sets that no module in that pipeline reads. X4's main layout -- the one
+// carrying 1109 of its 1135 pipelines -- declares SIX sets, so index 5 was
+// X4's own, and the collision did two separate things:
+//
+//   1. our patched modules read X4's set 5 as if it were a pose block, and
+//   2. our 2,310,217 binds at index 5 DISTURBED X4's own binding there, for
+//      X4's own draws, because our extended layout is compatible with X4's
+//      only for sets 0..4. Modules we never touched were corrupted too.
+//
+// So the index is no longer inferred from anything X4 does. It sits at the top
+// of the device's range, where colliding would require X4 to use every set the
+// device allows. That is not a tuning choice -- it removes a guess from the
+// critical path, and the guess is what failed.
 uint32_t pose_set_index() {
     static const uint32_t idx = [] {
         const char *e = getenv("X4VR_POSE_SET");
-        const int v = e ? atoi(e) : 5;
-        return (uint32_t)(v < 0 ? 5 : v);
+        if (e && *e) {
+            const int v = atoi(e);
+            if (v >= 0)
+                return (uint32_t)v;
+        }
+        // Zero means CreateDevice has not run, which cannot happen: every
+        // caller is downstream of a VkDevice. Fall back to a value that is
+        // legal on the guaranteed minimum (maxBoundDescriptorSets >= 4) rather
+        // than to the number that just failed.
+        const uint32_t lim = g_max_bound_sets.load();
+        return lim >= 2 ? lim - 1 : 3u;
     }();
     return idx;
 }
+
+// True once a pipeline layout has refused our set. Everything downstream must
+// stop: the previous build only WARNED here -- the warning even said "so their
+// modules must not be patched" -- and then went on patching modules and binding
+// at an index X4 owned for another two million draws. A report that names a
+// risk without the code that prevents it is not a guard.
+bool pose_collided();
 
 // Create the block, the pool, the sets and the two layouts. Lazy, on the first
 // pipeline layout X4 creates, because that is the first moment the channel is
@@ -5186,6 +5247,12 @@ bool pose_init(DeviceData *d, VkDevice dev) {
         return g_pose.ready;
     g_pose.failed = true; // cleared on success; every early return stays failed
     g_pose.device = dev;
+    // This can only fire for an explicit X4VR_POSE_SET. The derived index is
+    // maxBoundDescriptorSets-1 and so is legal by construction, which means on
+    // the default path this check compares a number against the number it was
+    // computed from and can only agree. Said out loud because a guard that
+    // cannot fail reads like coverage it does not provide -- what it still
+    // covers is an override typed too high, which is a real way to lose a take.
     if (d->limits.maxBoundDescriptorSets &&
         pose_set_index() >= d->limits.maxBoundDescriptorSets) {
         X4VR_LOG("pose: set %u is beyond maxBoundDescriptorSets=%u — channel "
@@ -5384,13 +5451,29 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreatePipelineLayout(
         return r;
     std::lock_guard<std::mutex> lock(g_pose.mu);
     g_pose.layouts_seen++;
-    if (VkPipelineLayout ext = pose_extend_layout(d, device, *out, ci)) {
+    if (ci->setLayoutCount > g_pose.max_sets_seen)
+        g_pose.max_sets_seen = ci->setLayoutCount;
+    // The two ways to miss are kept apart on purpose. A COLLISION means X4
+    // owns our index and the run is unsalvageable; a creation failure means the
+    // driver refused a layout we built, which is our bug and a different one.
+    // The old code reported both as the same warning.
+    if (ci->setLayoutCount > pose_set_index()) {
+        if (!g_pose.collided.exchange(true))
+            X4VR_LOG("pose: COLLISION — a pipeline layout declares %u set(s) "
+                     "and our index is %u, so X4 owns it. CHANNEL OFF for the "
+                     "rest of the run: nothing further is patched and nothing "
+                     "further is bound there. Modules patched BEFORE this line "
+                     "cannot be un-patched and read an unbound descriptor, so "
+                     "this run is dead as evidence — re-run, do not interpret "
+                     "it. This is take 186b's defect",
+                     ci->setLayoutCount, pose_set_index());
+    } else if (VkPipelineLayout ext = pose_extend_layout(d, device, *out, ci)) {
         g_pose.extended[*out] = ext;
         g_pose.layouts_extended++;
     } else if (g_pose.layouts_seen - g_pose.layouts_extended <= 3) {
-        X4VR_LOG("pose: WARNING — could not extend a pipeline layout "
-                 "(declares %u set(s), ours is index %u). Pipelines built on "
-                 "it get NO pose set, so their modules must not be patched",
+        X4VR_LOG("pose: WARNING — the driver refused an extended layout we "
+                 "built from one declaring %u set(s) at index %u. Not a "
+                 "collision: our own construction failed",
                  ci->setLayoutCount, pose_set_index());
     }
     return r;
@@ -10481,6 +10564,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
             VkPhysicalDeviceProperties pp{};
             gpp(phys, &pp);
             d.limits = pp.limits;
+            // Published before any shader module can be created, because
+            // pose_set_index() freezes on its first call and that call is
+            // downstream of this one. 32 on the RX 7900 XTX (RADV NAVI31).
+            if (pp.limits.maxBoundDescriptorSets)
+                g_max_bound_sets.store(pp.limits.maxBoundDescriptorSets);
         }
         d.phys = phys;
     }
@@ -10574,19 +10662,31 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyDevice(
     // the mismatch prints as a FAIL and not as a note.
     if (pose_wanted() && g_pose.ready) {
         std::lock_guard<std::mutex> lock(g_pose.mu);
-        const bool ok = g_pose.pipes_seen == g_pose.pipes_extended;
-        X4VR_LOG("pose final: set %u, %llu/%llu pipeline layout(s) extended, "
-                 "%llu/%llu pipeline(s) got it, %llu bind(s) — %s",
-                 pose_set_index(),
+        const bool collided = g_pose.collided.load();
+        const bool ok = g_pose.pipes_seen == g_pose.pipes_extended && !collided;
+        // `max_sets_seen` is the number whose ABSENCE cost take 186b: the old
+        // build reported coverage but never what X4 actually declares, so the
+        // index looked fine right up to the frame. It is free -- the counter is
+        // already in hand -- and it is what the next index choice must read.
+        X4VR_LOG("pose final: set %u of maxBoundDescriptorSets=%u, X4's widest "
+                 "pipeline layout declares %u set(s), %llu/%llu pipeline "
+                 "layout(s) extended, %llu/%llu pipeline(s) got it, %llu "
+                 "bind(s) — %s",
+                 pose_set_index(), g_max_bound_sets.load(),
+                 g_pose.max_sets_seen,
                  (unsigned long long)g_pose.layouts_extended,
                  (unsigned long long)g_pose.layouts_seen,
                  (unsigned long long)g_pose.pipes_extended,
                  (unsigned long long)g_pose.pipes_seen,
                  (unsigned long long)g_pose.binds,
-                 ok ? "OK"
-                    : "FAIL: a pipeline was created against a layout without "
-                      "our set. Any patched module bound through it read an "
-                      "unbound descriptor");
+                 collided
+                     ? "FAIL: X4 owns our set index — the channel shut itself "
+                       "off mid-run and modules patched before that read an "
+                       "unbound descriptor. Dead as evidence"
+                 : ok ? "OK"
+                      : "FAIL: a pipeline was created against a layout without "
+                        "our set. Any patched module bound through it read an "
+                        "unbound descriptor");
         DeviceData *dd = nullptr;
         {
             std::lock_guard<std::mutex> l2(g_mu);

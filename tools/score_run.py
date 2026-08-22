@@ -1509,7 +1509,13 @@ def main(path):
     # 149, and it took two hypotheses and no instrument to notice.
     pose = [ln for ln in lines if "vr pose:" in ln]
     if not pose:
-        print("pose  not reported — this build predates the instrument")
+        # Name the SUBJECT. This said "not reported — this build predates the
+        # instrument", which reads as "the pose channel is absent" and is how
+        # take 186b's FAIL got past a reader. A flatscreen take has no runtime
+        # to declare a pose to, so silence here is expected, not a gap.
+        print("pose  no pose DECLARED TO THE RUNTIME in this log — expected "
+              "for a flatscreen take. Says nothing about #59's channel, "
+              "which reports separately as `pose-channel`")
     else:
         # **Identity before head-look arms is correct, not a defect.** Take 150
         # reported FAIL on a run whose pose was right the whole time it mattered:
@@ -1558,6 +1564,55 @@ def main(path):
             print("pose  world-locked all run, and X4VR_HEADLOOK was not set — "
                   "this run says nothing about head tracking, which is not a "
                   "defect in it")
+
+    # --- #59's per-frame pose channel, which is a DIFFERENT pose ------------
+    #
+    # Take 186b is why this section exists. The layer diagnosed itself
+    # correctly and printed `pose final: ... FAIL — a pipeline was created
+    # against a layout without our set`, and this file printed PASS over it,
+    # then went on to say "pose not reported — this build predates the
+    # instrument". Both statements came from the block above, which greps
+    # "vr pose:" -- the pose we DECLARE TO THE RUNTIME. A flatscreen take
+    # legitimately never logs that, so its message was true about its own
+    # subject and irrelevant to the run being scored.
+    #
+    # Two different objects share the word "pose", the scorer only knew one of
+    # them, and the run that was handed over with this file as its acceptance
+    # check came back green with a wrecked frame. An acceptance check that
+    # cannot see a FAIL the layer already printed is worse than no check: it
+    # converts the layer's correct diagnosis into a confirmation.
+    chan = [ln for ln in lines if "pose final:" in ln]
+    want_chan = "X4VR_POSE=1" in (run or "")
+    collide = [ln for ln in lines if "could not extend a pipeline layout" in ln]
+    if chan:
+        ln = chan[-1]
+        tail = ln.split("pose final:", 1)[1].strip()
+        print(f"pose-channel  {tail}")
+        if "FAIL" in ln:
+            fails.append(
+                "the #59 pose channel FAILED — pipelines were built on a "
+                "layout that does not declare our set while their modules "
+                "read it. That is an unbound descriptor, so the geometry "
+                "those modules drew is undefined, and every OTHER number in "
+                "this run was measured through it. Nothing here is evidence "
+                "about the transform")
+        elif collide:
+            fails.append(
+                "the pose channel reported OK but a pipeline layout still "
+                "refused our set — the counters and the warning disagree, so "
+                "one of the two instruments is wrong")
+    elif want_chan:
+        fails.append(
+            "the run asked for the pose channel (X4VR_POSE=1) and the layer "
+            "never printed `pose final:` — the channel did not come up, so no "
+            "module was driven. Gate on intent: this run asked the question "
+            "and did not answer it")
+    if collide:
+        # Printed even when the counters pass, because this is the line that
+        # names the ROOT cause; `pose final` only reports the consequence.
+        print(f"pose-channel  {len(collide)} layout collision warning(s) — "
+              f"X4 declares more descriptor sets than our index assumed. "
+              f"{collide[0].split('pose:', 1)[-1].strip()[:120]}")
 
     # --- the map gate ------------------------------------------------------
     #

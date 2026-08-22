@@ -1924,6 +1924,65 @@ pose_exec_case "exec: yaw 180 clips every vertex" 0 X4VR_POSE_ROTATE=1 X4VR_POSE
 # that makes the one above mean something.
 pose_exec_case "exec: transport form does not"  1 X4VR_POSE_YAW=180
 
+# --- the width of X4's own pipeline layout -----------------------------------
+#
+# **Every case above passed while take 186b rendered garbage.** They were all
+# run against a pipeline layout declaring one or two descriptor sets, so the
+# pose channel's set index always fit. X4's main layout -- carrying 1109 of its
+# 1135 pipelines -- declares SIX, the index was 5, and X4 owned it. Our patched
+# modules read X4's set 5 as a matrix, and our 2.3M binds at index 5 disturbed
+# X4's own binding there for X4's own draws.
+#
+# The index was chosen by reading the 409 dumped SHADER MODULES and observing
+# they only ever declare sets 0-4. A module declares the sets it READS; a
+# pipeline layout declares the sets X4 BINDS. Wrong object, and no case here
+# could tell, because no case here was as wide as the real thing.
+#
+# X4VR_TEST_PAD_SETS makes the harness build at X4's width. The pair below is a
+# discriminator: identical in every respect except the set index, and the
+# observable flips. That is what distinguishes "the fix works" from "the
+# configuration was never hard enough to fail".
+pose_width_case() {
+    local label="$1" want_drawn="$2" want_collide="$3"; shift 3
+    local log out drawn final collide verdict
+    log="$(mktemp)"
+    out=$(env VK_ADD_LAYER_PATH="$BUILD/layer" \
+        VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+        X4VR_MV=1 X4VR_TEST_VIEW_ARENA=1 X4VR_POSE=1 X4VR_TEST_PAD_SETS=6 \
+        "$@" X4VR_LOG="$log" timeout 120 "$BIN" "$VS" "$FS" "$SF" 2>&1)
+    drawn=$(sed -n 's/^SAMPLED_NONZERO=//p' <<<"$out")
+    final=$(grep -ao 'pose final: .*' "$log" | tail -1)
+    collide=$(grep -c 'pose: COLLISION' "$log")
+    rm -f "$log"
+    # A collision must read FAIL and a clean run must read OK -- the counters
+    # and the collision flag have to agree, because 186b's scorer passed a run
+    # whose layer had already printed FAIL.
+    if [[ "$want_collide" == 1 ]]; then
+        verdict=$([[ "$final" == *FAIL* ]] && echo y || echo n)
+    else
+        verdict=$([[ "$final" == *OK ]] && echo y || echo n)
+    fi
+    if [[ "$drawn" == "$want_drawn" && "$collide" == "$want_collide" &&
+          "$verdict" == y ]]; then
+        printf 'ok   %-38s drawn=%s collisions=%s\n' "$label" "$drawn" "$collide"
+    else
+        printf 'FAIL %-38s want drawn=%s collisions=%s; got drawn=%s collisions=%s final="%s"\n' \
+            "$label" "$want_drawn" "$want_collide" "${drawn:-?}" "$collide" "$final"
+        fails=$((fails + 1))
+    fi
+}
+# The derived index sits at maxBoundDescriptorSets-1, so a 6-set layout is no
+# obstacle and the conjugation still clips at 180 deg exactly as it does at
+# width 2. This is the case that fails if the index ever goes back to a guess.
+pose_width_case "width: 6-set layout, derived index" 0 0 \
+    X4VR_POSE_ROTATE=1 X4VR_POSE_YAW=180
+# Take 186b, reproduced. Forcing the old index against X4's real width must
+# collide -- and the collision must UN-ROTATE the geometry, not corrupt it:
+# fail-closed stops the patch, so the output pass draws normally. drawn=1 here
+# against drawn=0 above is the whole discriminator.
+pose_width_case "width: index 5 collides, fails closed" 1 1 \
+    X4VR_POSE_ROTATE=1 X4VR_POSE_YAW=180 X4VR_POSE_SET=5
+
 verdict_case "verdict: captured"        0 "captured"
 verdict_case "verdict: reached, no file" 1 "REACHED but never captured"
 verdict_case "verdict: never reached"   5 "NEVER REACHED"

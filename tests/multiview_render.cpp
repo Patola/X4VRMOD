@@ -880,10 +880,34 @@ int main(int argc, char **argv) {
         vkUpdateDescriptorSets(dev, 2, vw, 0, nullptr);
     }
 
-    VkDescriptorSetLayout sl2[2] = {dsl, vdsl};
+    // X4VR_TEST_PAD_SETS reproduces the SHAPE of X4's real pipeline layout,
+    // which is the thing this harness did not have when it certified #59 and
+    // #60 as working. Every layout here declared one or two sets, so the pose
+    // channel's index always fit, and take 186b then met X4's main layout --
+    // 1109 of its 1135 pipelines -- which declares SIX. The channel collided,
+    // the frame was undefined, and every case below had passed.
+    //
+    // A test that only runs in its simplest configuration certifies the
+    // configuration, not the code. This knob exists so the harness can be run
+    // at X4's width, and the cases at the bottom of run-multiview-render.sh
+    // drive it at 6 with the real index and at 6 against a forced-low one.
+    const char *pad_env = getenv("X4VR_TEST_PAD_SETS");
+    const uint32_t pad = pad_env ? (uint32_t)atoi(pad_env) : 0;
+    VkDescriptorSetLayout pad_dsl = VK_NULL_HANDLE;
+    VkDescriptorSetLayout sl2[16] = {dsl, vdsl};
+    const uint32_t base2 = view_arena ? 2u : 1u;
+    uint32_t count2 = base2;
+    if (pad > base2) {
+        VkDescriptorSetLayoutCreateInfo eci{};
+        eci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        CHECK(vkCreateDescriptorSetLayout(dev, &eci, nullptr, &pad_dsl));
+        count2 = pad < 16 ? pad : 16;
+        for (uint32_t i = base2; i < count2; i++)
+            sl2[i] = pad_dsl;
+    }
     VkPipelineLayoutCreateInfo plci2{};
     plci2.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    plci2.setLayoutCount = view_arena ? 2 : 1;
+    plci2.setLayoutCount = count2;
     plci2.pSetLayouts = sl2;
     VkPipelineLayout pl2;
     CHECK(vkCreatePipelineLayout(dev, &plci2, nullptr, &pl2));
@@ -1125,6 +1149,8 @@ int main(int argc, char **argv) {
         vkDestroyShaderModule(dev, vsm2, nullptr);
     if (vdsl != VK_NULL_HANDLE)
         vkDestroyDescriptorSetLayout(dev, vdsl, nullptr);
+    if (pad_dsl != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(dev, pad_dsl, nullptr);
     if (vbuf != VK_NULL_HANDLE)
         vkDestroyBuffer(dev, vbuf, nullptr);
     if (vmem != VK_NULL_HANDLE) {
