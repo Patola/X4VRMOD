@@ -1825,6 +1825,38 @@ pose_off_case() {
 }
 pose_off_case
 
+# Task #33's conjugation, on committed bytes. sample_camera_block.vert has the
+# camera block at set 1 binding 0 with M_projection as member 1, which is the
+# shape the patch verifies before it emits anything; fullscreen.vert has no
+# camera block at all and must REFUSE.
+#
+# The refusal is half the test. A module with no camera block cannot be given a
+# rotation at all -- a baked one would be the wrong geometry, not a degraded
+# rotation -- so "refused" is the correct answer for the 43 of X4's 409 modules
+# that are in that class, and it must not read as a failure.
+pose_rotate_patch_case() {
+    local label="$1" src="$2" want="$3" out spv
+    spv="$(mktemp).spv"
+    out=$("$BUILD/tests/x4vr_test_spirv_patch" vert-pose-rotate "$src" "$spv" 2>&1)
+    local got="${out%% *}"
+    local valid=skipped
+    if [[ "$got" == "REFUSED=0" ]]; then
+        spirv-val "$spv" >/dev/null 2>&1 && valid=ok || valid=INVALID
+    fi
+    rm -f "$spv"
+    if [[ "$got" == "$want" && "$valid" != INVALID ]]; then
+        printf 'ok   %-38s %s spirv-val=%s\n' "$label" "$got" "$valid"
+    else
+        printf 'FAIL %-38s want %s, got "%s" spirv-val=%s\n' \
+            "$label" "$want" "$out" "$valid"
+        fails=$((fails + 1))
+    fi
+}
+pose_rotate_patch_case "rotate: camera block is patched" \
+    tests/sample_camera_block.vert.spv REFUSED=0
+pose_rotate_patch_case "rotate: no camera block refuses" \
+    tests/fullscreen.vert.spv REFUSED=1
+
 verdict_case "verdict: captured"        0 "captured"
 verdict_case "verdict: reached, no file" 1 "REACHED but never captured"
 verdict_case "verdict: never reached"   5 "NEVER REACHED"

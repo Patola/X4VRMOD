@@ -4228,6 +4228,7 @@ bool proj_invproj() {
 // trap: a value fixed at module creation cannot come from state established
 // later.
 bool pose_wanted();
+bool pose_rotate();
 uint32_t pose_set_index();
 
 VkResult create_shader_module_inner(
@@ -4491,7 +4492,26 @@ VkResult create_shader_module_inner(
     if (pose_wanted() && ci->pCode && ci->codeSize >= 20) {
         std::vector<uint32_t> pc(ci->codeSize / 4);
         memcpy(pc.data(), ci->pCode, ci->codeSize);
-        if (x4vr::spv::patch_vertex_pose_clip(pc, pose_set_index(), 0)) {
+        // The conjugation needs X4's camera block for the live sx/sy and
+        // REFUSES without it -- a refusal must leave the module unrotated,
+        // never fall back to a baked rotation, because a rotation at the wrong
+        // sx is not a degraded rotation but the wrong geometry.
+        bool did = false;
+        if (pose_rotate()) {
+            did = x4vr::spv::patch_vertex_pose_rotate(
+                pc, pose_set_index(), 0, kCameraSet, kCameraBinding,
+                kCameraProjMember);
+            static uint32_t refused = 0;
+            if (!did && ++refused <= 3)
+                X4VR_LOG("pose: a vertex module has no camera block at set %u "
+                         "binding %u — NOT rotated. It keeps X4's frame while "
+                         "its neighbours move, which is visible as geometry "
+                         "that does not follow the head",
+                         kCameraSet, kCameraBinding);
+        } else {
+            did = x4vr::spv::patch_vertex_pose_clip(pc, pose_set_index(), 0);
+        }
+        if (did) {
             static uint32_t n = 0;
             n++;
             if (n <= 3 || (n % 100) == 0)
@@ -5110,6 +5130,19 @@ bool pose_wanted() {
 // come to mean different things in different places.
 bool pose_active() { return pose_wanted() && g_pose.ready && g_active; }
 
+// X4VR_POSE_ROTATE selects the CONJUGATION form of the vertex patch --
+// `P.R.P^-1` emitted with the live sx/sy -- instead of #59's transport form,
+// which multiplies clip space by the block's matrix directly. The transport
+// form is only correct for a matrix that is a clip-space transform in its own
+// right; a head rotation is not, which is what this knob is for.
+bool pose_rotate() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_POSE_ROTATE");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
+
 // Read once, before anything can bake it. X4 declares sets 0-4 across all 409
 // dumps, so 5 is the first free index; the override exists for a build of X4
 // that grows one.
@@ -5238,6 +5271,27 @@ bool pose_init(DeviceData *d, VkDevice dev) {
     // triangle entirely off screen, which is a binary signal the harness reads
     // as coverage going to zero. Not a knob for a real run: it is a transport
     // probe, and #33 replaces what fills this block.
+    // X4VR_POSE_YAW / _PITCH / _ROLL, degrees. A STATIC stand-in for head
+    // tracking: it makes the transform measurable on a flatscreen take,
+    // exactly as take 164 measured the off-axis affine before any headset was
+    // involved. Wiring the runtime's pose in at the same time would put two
+    // unverified things in one take, and a wrong picture would have two
+    // causes.
+    {
+        const float yaw = getenv("X4VR_POSE_YAW")
+                              ? (float)atof(getenv("X4VR_POSE_YAW")) : 0.0f;
+        const float pitch = getenv("X4VR_POSE_PITCH")
+                                ? (float)atof(getenv("X4VR_POSE_PITCH")) : 0.0f;
+        const float roll = getenv("X4VR_POSE_ROLL")
+                               ? (float)atof(getenv("X4VR_POSE_ROLL")) : 0.0f;
+        if (yaw != 0.0f || pitch != 0.0f || roll != 0.0f) {
+            x4vr::pose_set_euler(g_pose.value, yaw, pitch, roll);
+            X4VR_LOG("pose: static rotation yaw=%.2f pitch=%.2f roll=%.2f deg "
+                     "— a stand-in for head tracking, so the transform can be "
+                     "measured on a flatscreen take",
+                     yaw, pitch, roll);
+        }
+    }
     if (const char *e = getenv("X4VR_POSE_TEST_DX")) {
         g_pose.value.r[12] = (float)atof(e);
         X4VR_LOG("pose: TEST value r[12]=%.3f — this is a transport probe, "

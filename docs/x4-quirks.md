@@ -5440,3 +5440,71 @@ member-2/4 correction is #33's.
 
 Validation-clean: the VUID set is identical with the channel on and off, in
 both the default and stereo configurations.
+
+### #33 step 1 — the conjugation is written and validated; it has NOT executed
+
+`X4VR_POSE_ROTATE=1`, with `X4VR_POSE_YAW/_PITCH/_ROLL` as a **static** stand-in
+for head tracking. Read the last paragraph of this section before reading the
+rest as progress.
+
+**The two identities everything rests on**, both pinned in
+`tools/headlook_clip.py --self-check` over the six measured cameras:
+
+    decompose by sx/sy, rotate, recompose  ==  P·R·P⁻¹      2.6e-09 NDC
+    M_invprojection · Rclip⁻¹              ==  R⁻¹ · M_invprojection   8.9e-16
+
+The first says the shader may do the conjugation *the long way* — divide clip
+x/y by the live `sx`/`sy`, rotate the resulting view vector, multiply back —
+instead of building a matrix it cannot bake. `z_c` passes through untouched,
+because X4's `m[10] == 0` makes clip z the constant near plane.
+
+The second is the one that saves the fragment stage: because `M_invprojection`
+*is* `P⁻¹`, the P's cancel and the deferred correction is a **plain
+left-multiply by `R⁻¹` with no `sx` anywhere**. Had it been false, all 244
+fragment modules that reconstruct would each have had to find the live `sx`
+too. It rides the same rewrite as the affine.
+
+**Validated offline over X4's own shaders**, which is the check this stage
+earns:
+
+    366 of 409 dumped modules patch and spirv-val clean
+     43 refuse — no camera block at set 1 binding 0
+      0 invalid
+
+The 43 refusals are correct and load-bearing. A module without the camera block
+cannot be given a rotation *at all*: a baked one would be the wrong geometry,
+not a degraded rotation, so the patch refuses and the layer says so rather than
+falling back. `tests/run-multiview-render.sh` pins both directions against
+committed bytes.
+
+**Scoped deliberately to a static angle.** Wiring the runtime's head pose in at
+the same time would put two unverified things in one take, and a wrong picture
+would have two causes. This is take 164's shape exactly: measure the transform
+on a flatscreen before any headset is involved.
+
+#### WHAT HAS NOT HAPPENED: the emitted code has never run
+
+`spirv-val` says the module is well-formed. It does not say the arithmetic
+computes the conjugation. The harness cannot answer it either — its only vertex
+shader with a camera block is not one it can render, and the fullscreen shader
+it *does* render has no camera block, so the patch correctly refuses and the
+GPU sees nothing. The 180°-yaw discriminator (which would clip every vertex to
+`w = −1` under the conjugation while merely mirroring under #59's transport
+form) was written and could not be exercised for the same reason.
+
+So the state is: **math proven, emission validated at scale, execution
+unverified.** No claim beyond that is supported, and the fragment `R⁻¹`
+composition, the runtime pose source and the declared-pose update are not
+written at all.
+
+Next, in order, and the first is a prerequisite for trusting any take:
+
+1. A harness pass that renders a vertex shader declaring the camera block, so
+   the conjugation executes and can be checked against the reference — the
+   180° discriminator is the cheapest form.
+2. The fragment `R⁻¹` composition. Not optional: with the vertex rotated and
+   the reconstruction unrotated, a point at 50 m lands 8.7 m out at 10° of yaw,
+   which breaks the CSM lookup outright. That is the #57 class, and it cost 13
+   takes the last time.
+3. Only then a flatscreen take at a static angle, read with
+   `tools/register_affine.py` against the predicted warp.

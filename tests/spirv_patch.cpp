@@ -534,6 +534,29 @@ int main(int argc, char **argv) {
     //
     // Writes the left eye's matrix (identity with m[12] = +s) and the right
     // eye's (-s), which is exactly what the layer builds.
+    // vert-pose-rotate <in.spv> [pose_set] [cam_set] [cam_binding] [member]
+    //
+    // #33's conjugation. Emits to <out> so spirv-val can judge it, and prints
+    // REFUSED for a module with no camera block -- which is the correct answer
+    // for the 54 non-World modules and must not read as a failure.
+    if (strcmp(argv[1], "vert-pose-rotate") == 0 && argc >= 4) {
+        std::vector<uint32_t> code = load_spv(argv[2]);
+        if (code.empty()) { printf("FAIL=load\n"); return 1; }
+        const uint32_t ps = argc > 4 ? (uint32_t)atoi(argv[4]) : 5;
+        const uint32_t cs = argc > 5 ? (uint32_t)atoi(argv[5]) : 1;
+        const uint32_t cb = argc > 6 ? (uint32_t)atoi(argv[6]) : 0;
+        const uint32_t cm = argc > 7 ? (uint32_t)atoi(argv[7]) : 1;
+        if (!x4vr::spv::patch_vertex_pose_rotate(code, ps, 0, cs, cb, cm)) {
+            printf("REFUSED=1\n");
+            return 0;
+        }
+        printf("REFUSED=0 WORDS=%zu\n", code.size());
+        FILE *f = fopen(argv[3], "wb");
+        if (!f) { printf("FAIL=open\n"); return 1; }
+        fwrite(code.data(), 4, code.size(), f);
+        fclose(f);
+        return 0;
+    }
     if (strcmp(argv[1], "vert-clip") == 0 && argc >= 4) {
         std::vector<uint32_t> code = load_spv(argv[2]);
         if (code.empty()) {

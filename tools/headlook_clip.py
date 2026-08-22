@@ -158,6 +158,45 @@ def check_baked(rng, bake_at, yaw, pitch, half_width_px):
     return out
 
 
+def check_shader_form(rng):
+    """The two identities #33 is built on, both checked over measured cameras.
+
+    1. The vertex patch cannot multiply by `P.R.P^-1`: six of its sixteen
+       entries carry sx or sy, which vary per draw. What it emits instead is
+       the decomposition -- `v = (x/sx, y/sy, w)`, rotate, `(sx.v'x, sy.v'y,
+       z, v'z)` -- and this asserts that form IS the conjugation.
+
+    2. `M_invprojection . Rclip^-1 == R^-1 . M_invprojection`, because
+       `M_invprojection` is `P^-1` and the P's cancel. So the fragment
+       correction is a LEFT-MULTIPLY BY R^-1 with no sx anywhere -- the same
+       shape as the affine's `A^-1`, on a matrix already being rewritten.
+       If this were false the fragment stage would need the live sx too, and
+       244 modules would each have to find it.
+    """
+    worst_shader = worst_frag = 0.0
+    for sx in CAMERAS.values():
+        sy = -sx
+        p = projection(sx, sy)
+        pinv = np.linalg.inv(p)
+        r = rotation(11.0, 4.0)
+        rclip = p @ r @ pinv
+        v = _sample(rng, 3000)
+        c = v @ p.T
+        vx, vy, vz = c[:, 0] / sx, c[:, 1] / sy, c[:, 3]
+        rv = np.stack([vx, vy, vz, np.ones_like(vx)], axis=1) @ r.T
+        shader = np.stack([sx * rv[:, 0], sy * rv[:, 1], c[:, 2], rv[:, 2]],
+                          axis=1)
+        ref = c @ rclip.T
+        keep = (np.abs(shader[:, 3]) > 1e-9) & (np.abs(ref[:, 3]) > 1e-9)
+        a = shader[keep] / shader[keep, 3:4]
+        b = ref[keep] / ref[keep, 3:4]
+        worst_shader = max(worst_shader, float(np.abs(a[:, :3] - b[:, :3]).max()))
+        worst_frag = max(worst_frag,
+                         float(np.abs(pinv @ np.linalg.inv(rclip) -
+                                      np.linalg.inv(r) @ pinv).max()))
+    return worst_shader, worst_frag
+
+
 def print_k(m):
     """Column-major, the layout `make_canvas_k` fills and the layer bakes."""
     k = m.T.reshape(-1)
@@ -216,7 +255,20 @@ def main():
             print(f'     sx={sx:>9.5f}  worst on-screen x error '
                   f'{err:>9.1f} px  {name}{mark}{note}')
 
-    print('\n4. the same rotation as a matrix, for the shipped camera')
+    print('\n4. the shader form, and the fragment identity it rests on')
+    w1, w2 = check_shader_form(rng)
+    print(f'   decompose by sx/sy, rotate, recompose vs P.R.P^-1: {w1:.2e} NDC')
+    print(f'   M_invproj . Rclip^-1  ==  R^-1 . M_invproj       : {w2:.2e}')
+    print('   -> the vertex patch never builds P.R.P^-1; it divides by the '
+          'live sx/sy,')
+    print('      rotates, and multiplies back. And the FRAGMENT correction is '
+          'a plain')
+    print('      left-multiply by R^-1 with no sx in it at all, which is what '
+          'lets it')
+    print('      ride the same rewrite as the affine.')
+    assert w1 < 1e-6 and w2 < 1e-9, 'the shader form is not the transform'
+
+    print('\n5. the same rotation as a matrix, for the shipped camera')
     print_k(clip_matrix(0.75405, -0.75405, 10.0, 0.0))
     print('\nSELF-CHECK PASS')
 

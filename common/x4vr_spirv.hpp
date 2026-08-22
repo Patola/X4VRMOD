@@ -993,6 +993,290 @@ inline bool patch_vertex_pose_clip(std::vector<uint32_t> &code, uint32_t set,
     return true;
 }
 
+/// Task #33 — the head rotation, as the conjugation `P·R·P⁻¹`, emitted with
+/// the LIVE `sx`/`sy` instead of a baked matrix.
+///
+/// **Why it is not a matrix multiply.** `tools/headlook_clip.py --self-check`
+/// shows six of the sixteen entries of `P·R·P⁻¹` carry `sx` or `sy`, and they
+/// are exactly the entries that couple the rotation through `w` — the ones
+/// that do the rotating. `sx` moves 33x with zoom and differs per camera, so
+/// there is no matrix to bake: a matrix built at the menu camera is 72 px
+/// wrong on a 1408 px eye at 10° of yaw, and at the wide field the guard band
+/// wants it drives `w` through zero and geometry inverts through the eye.
+///
+/// So the shader does the conjugation the long way, which is cheaper anyway:
+///
+///     v  = (x_c/sx, y_c/sy, w_c, 1)      undo P, using the live scales
+///     v' = R · v                          one OpMatrixTimesVector
+///     c' = (sx·v'x, sy·v'y, z_c, v'z)     redo P
+///
+/// `z_c` passes through untouched, because X4's projection has `m[10] == 0`
+/// and clip z is the constant near plane for every vertex. The same self-check
+/// asserts this form IS `P·R·P⁻¹` over six measured cameras, so the identity
+/// is pinned rather than argued.
+///
+/// **R comes from the layer's own uniform block (#54/#59), not from X4.** It
+/// changes every frame and nothing else writes it.
+///
+/// Refuses without a camera block at (`cam_set`, `cam_binding`) whose member
+/// `cam_member` really is a mat4 — the same shape check
+/// `patch_vertex_eye_offset` makes, for the same reason: matching a decoration
+/// alone would patch whatever a future X4 put there and produce a shader that
+/// validates while reading nonsense. A refusal here must NOT fall back to a
+/// baked rotation; it must fall back to no rotation at all.
+inline bool patch_vertex_pose_rotate(std::vector<uint32_t> &code,
+                                     uint32_t pose_set, uint32_t pose_binding,
+                                     uint32_t cam_set, uint32_t cam_binding,
+                                     uint32_t cam_member) {
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return false;
+    if (code[1] >= 0x00010400u)
+        return false; // see patch_vertex_pose_clip: no interface-list entry
+
+    uint32_t bound = code[3];
+    auto new_id = [&bound] { return bound++; };
+
+    uint32_t entry_fn = 0;
+    std::unordered_map<uint32_t, uint32_t> struct_pos_member;
+    std::vector<uint32_t> var_pos_direct;
+    struct PtrType { uint32_t storage, pointee; };
+    std::unordered_map<uint32_t, PtrType> ptr_types;
+    std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> vars;
+    std::unordered_map<uint32_t, std::vector<uint32_t>> struct_members;
+    std::unordered_map<uint32_t, uint32_t> var_set, var_binding;
+    uint32_t t_float = 0, t_v4 = 0, t_mat4 = 0, t_int = 0;
+    uint32_t ptr_out_v4 = 0, ptr_uni_float = 0;
+    size_t first_fn = 0, last_annotation_end = 0, first_global = 0;
+    bool have_first_fn = false, have_first_global = false;
+
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (!have_first_global)
+            switch (in.op) {
+            case OpTypeInt: case OpTypeFloat: case OpTypeVector:
+            case OpTypeMatrix: case OpTypeStruct: case OpTypePointer:
+            case OpConstant: case OpConstantComposite: case OpVariable:
+                first_global = in.start;
+                have_first_global = true;
+                break;
+            default: break;
+            }
+        switch (in.op) {
+        case OpEntryPoint:
+            if (in.len >= 3 && w[1] == ExecutionModelVertex && !entry_fn)
+                entry_fn = w[2];
+            break;
+        case OpDecorate:
+            last_annotation_end = in.start + in.len;
+            if (in.len >= 4 && w[2] == DecorationBuiltIn &&
+                w[3] == BuiltInPosition)
+                var_pos_direct.push_back(w[1]);
+            if (in.len >= 4 && w[2] == DecorationDescriptorSet)
+                var_set[w[1]] = w[3];
+            if (in.len >= 4 && w[2] == DecorationBinding)
+                var_binding[w[1]] = w[3];
+            break;
+        case OpMemberDecorate:
+            last_annotation_end = in.start + in.len;
+            if (in.len >= 5 && w[3] == DecorationBuiltIn &&
+                w[4] == BuiltInPosition)
+                struct_pos_member[w[1]] = w[2];
+            break;
+        case OpTypeFloat:
+            if (in.len >= 3 && w[2] == 32 && !t_float) t_float = w[1];
+            break;
+        case OpTypeInt:
+            if (in.len >= 4 && w[2] == 32 && w[3] == 1 && !t_int) t_int = w[1];
+            break;
+        case OpTypeVector:
+            if (in.len >= 4 && w[2] == t_float && w[3] == 4 && !t_v4)
+                t_v4 = w[1];
+            break;
+        case OpTypeMatrix:
+            if (in.len >= 4 && w[2] == t_v4 && w[3] == 4 && !t_mat4)
+                t_mat4 = w[1];
+            break;
+        case OpTypeStruct:
+            if (in.len >= 2)
+                struct_members[w[1]].assign(&w[2], &w[2] + (in.len - 2));
+            break;
+        case OpTypePointer:
+            if (in.len >= 4) {
+                ptr_types[w[1]] = {w[2], w[3]};
+                if (w[2] == StorageClassOutput && w[3] == t_v4)
+                    ptr_out_v4 = w[1];
+                if (w[2] == StorageClassUniform && w[3] == t_float)
+                    ptr_uni_float = w[1];
+            }
+            break;
+        case OpVariable:
+            if (in.len >= 4) vars[w[2]] = {w[1], w[3]};
+            break;
+        case OpFunction:
+            if (!have_first_fn) { first_fn = in.start; have_first_fn = true; }
+            break;
+        default: break;
+        }
+    }
+    if (!entry_fn || !t_float || !t_v4 || !t_mat4 || !have_first_fn)
+        return false;
+
+    uint32_t cam_var = 0;
+    for (auto &[id, ts] : vars) {
+        if (ts.second != StorageClassUniform) continue;
+        auto s = var_set.find(id), b = var_binding.find(id);
+        if (s == var_set.end() || b == var_binding.end()) continue;
+        if (s->second != cam_set || b->second != cam_binding) continue;
+        auto pt = ptr_types.find(ts.first);
+        if (pt == ptr_types.end()) continue;
+        auto sm = struct_members.find(pt->second.pointee);
+        if (sm == struct_members.end() || cam_member >= sm->second.size())
+            continue;
+        if (sm->second[cam_member] != t_mat4) continue;
+        cam_var = id;
+        break;
+    }
+    if (!cam_var)
+        return false;
+
+    uint32_t pos_var = 0, pos_member = 0;
+    bool via_struct = false;
+    for (auto &[id, ts] : vars) {
+        if (ts.second != StorageClassOutput) continue;
+        auto pt = ptr_types.find(ts.first);
+        if (pt == ptr_types.end()) continue;
+        auto sm = struct_pos_member.find(pt->second.pointee);
+        if (sm != struct_pos_member.end()) {
+            pos_var = id; pos_member = sm->second; via_struct = true; break;
+        }
+    }
+    if (!pos_var)
+        for (uint32_t v : var_pos_direct)
+            if (vars.count(v) && vars[v].second == StorageClassOutput) {
+                pos_var = v; via_struct = false; break;
+            }
+    if (!pos_var)
+        return false;
+
+    std::vector<uint32_t> decls, annos;
+    if (!t_int) { t_int = new_id(); emit(decls, OpTypeInt, {t_int, 32, 1}); }
+    if (!ptr_out_v4) {
+        ptr_out_v4 = new_id();
+        emit(decls, OpTypePointer, {ptr_out_v4, StorageClassOutput, t_v4});
+    }
+    if (!ptr_uni_float) {
+        ptr_uni_float = new_id();
+        emit(decls, OpTypePointer, {ptr_uni_float, StorageClassUniform, t_float});
+    }
+    const uint32_t t_block = new_id();
+    emit(decls, OpTypeStruct, {t_block, t_mat4, t_mat4});
+    const uint32_t ptr_block = new_id();
+    emit(decls, OpTypePointer, {ptr_block, StorageClassUniform, t_block});
+    const uint32_t ptr_uni_mat = new_id();
+    emit(decls, OpTypePointer, {ptr_uni_mat, StorageClassUniform, t_mat4});
+    const uint32_t pose_var = new_id();
+    emit(decls, OpVariable, {ptr_block, pose_var, StorageClassUniform});
+    const uint32_t c0 = new_id();
+    emit(decls, OpConstant, {t_int, c0, 0});
+    const uint32_t c1 = new_id();
+    emit(decls, OpConstant, {t_int, c1, 1});
+    const uint32_t c_cam = new_id();
+    emit(decls, OpConstant, {t_int, c_cam, cam_member});
+    uint32_t one_bits;
+    { const float f = 1.0f; memcpy(&one_bits, &f, 4); }
+    const uint32_t one_f = new_id();
+    emit(decls, OpConstant, {t_float, one_f, one_bits});
+    uint32_t c_pos = 0;
+    if (via_struct) {
+        c_pos = new_id();
+        emit(decls, OpConstant, {t_int, c_pos, pos_member});
+    }
+    emit(annos, OpDecorate, {t_block, DecorationBlock});
+    for (uint32_t m = 0; m < 2; m++) {
+        emit(annos, OpMemberDecorate, {t_block, m, DecorationOffset, m * 64});
+        emit(annos, OpMemberDecorate, {t_block, m, DecorationColMajor});
+        emit(annos, OpMemberDecorate, {t_block, m, DecorationMatrixStride, 16});
+    }
+    emit(annos, OpDecorate, {pose_var, DecorationDescriptorSet, pose_set});
+    emit(annos, OpDecorate, {pose_var, DecorationBinding, pose_binding});
+
+    const size_t anno_at = last_annotation_end
+                               ? last_annotation_end
+                               : (have_first_global ? first_global : first_fn);
+    std::vector<uint32_t> out;
+    out.reserve(code.size() + decls.size() + annos.size() + 64);
+    out.insert(out.end(), code.begin(), code.begin() + 5);
+    bool in_entry = false;
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (in.start == anno_at)
+            out.insert(out.end(), annos.begin(), annos.end());
+        if (in.start == first_fn)
+            out.insert(out.end(), decls.begin(), decls.end());
+        if (in.op == OpFunction && in.len >= 3 && w[2] == entry_fn)
+            in_entry = true;
+        if (in_entry && in.op == OpReturn) {
+            // sx = M_projection[0][0], sy = M_projection[1][1]. Column-major,
+            // so [c][r] is AccessChain(member, c, r) -- and for these two the
+            // column and the row happen to be equal, which is why they read
+            // (0,0) and (1,1) rather than a transposed pair.
+            const uint32_t p_sx = new_id();
+            emit(out, OpAccessChain, {ptr_uni_float, p_sx, cam_var, c_cam, c0, c0});
+            const uint32_t sx = new_id();
+            emit(out, OpLoad, {t_float, sx, p_sx});
+            const uint32_t p_sy = new_id();
+            emit(out, OpAccessChain, {ptr_uni_float, p_sy, cam_var, c_cam, c1, c1});
+            const uint32_t sy = new_id();
+            emit(out, OpLoad, {t_float, sy, p_sy});
+            const uint32_t p_r = new_id();
+            emit(out, OpAccessChain, {ptr_uni_mat, p_r, pose_var, c0});
+            const uint32_t rmat = new_id();
+            emit(out, OpLoad, {t_mat4, rmat, p_r});
+
+            const uint32_t ptr = via_struct ? new_id() : pos_var;
+            if (via_struct)
+                emit(out, OpAccessChain, {ptr_out_v4, ptr, pos_var, c_pos});
+            const uint32_t pos = new_id();
+            emit(out, OpLoad, {t_v4, pos, ptr});
+            uint32_t comp[4];
+            for (uint32_t i = 0; i < 4; i++) {
+                comp[i] = new_id();
+                emit(out, OpCompositeExtract, {t_float, comp[i], pos, i});
+            }
+            const uint32_t vx = new_id();
+            emit(out, OpFDiv, {t_float, vx, comp[0], sx});
+            const uint32_t vy = new_id();
+            emit(out, OpFDiv, {t_float, vy, comp[1], sy});
+            const uint32_t v = new_id();
+            emit(out, OpCompositeConstruct, {t_v4, v, vx, vy, comp[3], one_f});
+            const uint32_t rv = new_id();
+            emit(out, OpMatrixTimesVector, {t_v4, rv, rmat, v});
+            uint32_t rc[3];
+            for (uint32_t i = 0; i < 3; i++) {
+                rc[i] = new_id();
+                emit(out, OpCompositeExtract, {t_float, rc[i], rv, i});
+            }
+            const uint32_t nx = new_id();
+            emit(out, OpFMul, {t_float, nx, sx, rc[0]});
+            const uint32_t ny = new_id();
+            emit(out, OpFMul, {t_float, ny, sy, rc[1]});
+            // comp[2] -- clip z -- passes through: X4's projection has
+            // m[10] == 0, so it is the constant near plane for every vertex.
+            const uint32_t res = new_id();
+            emit(out, OpCompositeConstruct, {t_v4, res, nx, ny, comp[2], rc[2]});
+            emit(out, OpStore, {ptr, res});
+        }
+        out.insert(out.end(), code.begin() + in.start,
+                   code.begin() + in.start + in.len);
+        if (in.op == OpFunctionEnd)
+            in_entry = false;
+    }
+    out[3] = bound;
+    code.swap(out);
+    return true;
+}
+
 // ---------------------------------------------------------------- task #35
 //
 // The ids `emit_off_axis` needs. Everything here is either a type or a value

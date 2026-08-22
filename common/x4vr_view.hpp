@@ -356,6 +356,43 @@ struct PoseBlock {
 };
 static_assert(sizeof(PoseBlock) == 128, "std140: two mat4 at 0 and 64");
 
+// Fill a PoseBlock from Euler angles in degrees, yaw about +y, pitch about
+// +x, roll about +z -- the same composition tools/headlook_clip.py uses, so
+// the layer and the offline check cannot come to disagree about what "10
+// degrees of yaw" means. r_inv is the TRANSPOSE, which for a rotation is the
+// inverse exactly; computing it as an inverse would introduce a difference
+// the shader would then have to be robust to.
+inline void pose_set_euler(PoseBlock &p, float yaw_deg, float pitch_deg,
+                           float roll_deg) {
+    const float d = 0.01745329251994330f;
+    const float cy = std::cos(yaw_deg * d), sy = std::sin(yaw_deg * d);
+    const float cp = std::cos(pitch_deg * d), sp = std::sin(pitch_deg * d);
+    const float cr = std::cos(roll_deg * d), sr = std::sin(roll_deg * d);
+    const float ry[9] = {cy, 0, sy, 0, 1, 0, -sy, 0, cy};     // row-major 3x3
+    const float rx[9] = {1, 0, 0, 0, cp, -sp, 0, sp, cp};
+    const float rz[9] = {cr, -sr, 0, sr, cr, 0, 0, 0, 1};
+    float a[9], m[9];
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) {
+            a[i * 3 + j] = 0;
+            for (int k = 0; k < 3; k++)
+                a[i * 3 + j] += ry[i * 3 + k] * rx[k * 3 + j];
+        }
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) {
+            m[i * 3 + j] = 0;
+            for (int k = 0; k < 3; k++)
+                m[i * 3 + j] += a[i * 3 + k] * rz[k * 3 + j];
+        }
+    p = PoseBlock{};
+    for (int c = 0; c < 3; c++)
+        for (int r = 0; r < 3; r++) {
+            p.r[c * 4 + r] = m[r * 3 + c];      // column-major for std140
+            p.r_inv[c * 4 + r] = m[c * 3 + r];  // transpose == inverse
+        }
+    p.r[15] = p.r_inv[15] = 1.0f;
+}
+
 inline PoseBlock pose_identity() {
     PoseBlock p{};
     for (int i = 0; i < 4; i++)
