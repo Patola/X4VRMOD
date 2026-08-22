@@ -5815,10 +5815,24 @@ about the layouts.
 
 Path 2 is why the damage was global rather than confined to rotated geometry,
 and it is why the frame showed a hard-edged bright rectangle: this is undefined
-behaviour, not a transform with a bug. **Nothing in 186b's log is
-interpretable** — not the `view` table (whose distribution differs wildly from
-186a's), not `perf` (GAMEPLAY 2.66 ms, faster than the control because much of
-the scene was degenerate or clipped), not the shadow line. Do not mine it.
+behaviour, not a transform with a bug.
+
+**What in 186b's log can and cannot be read — the distinction matters, and the
+first version of this section got it wrong by condemning the whole log.**
+
+*Genuine:* the `M_view` values themselves. The layer decodes them from X4's
+mapped uniform memory, which our patch never writes, before any shader runs.
+186b's dominant camera reads **14.7° / 8.62 m**, and the camera already
+recorded in this project across 64 stored run logs reads **15° / 8.70 m** —
+the same one, to the precision the log prints. That agreement is evidence the
+values survived, not that they were scrambled.
+
+*Not interpretable:* everything downstream of a shader executing. Draw counts
+and credit attribution (they depend on what actually ran), `perf` — GAMEPLAY
+2.66 ms, **faster** than the control, precisely because much of the scene was
+degenerate or clipped — the shadow line, and the picture. Do not mine those,
+and do not treat the 2.66 ms as a performance result: an undefined frame is not
+a fast frame.
 
 ### The scorer printed PASS over a FAIL the layer had already printed
 
