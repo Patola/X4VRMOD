@@ -105,3 +105,15 @@ finite `X4VR_CANVAS_M` can.
 −40 px and returned −40 for every near-cockpit window. `--anaglyph` writes the
 check a person can make: left eye into red, right into green+blue, so flat
 content is sharp and parallax is fringed.
+
+## guard_band.py — the shadow column (#56)
+
+The last column prices what a widened `<fov>` does to shadow resolution, and it
+is **conditional**: X4's shadow atlas is a fixed 10 × 2048×2048 D16 at every
+field from 1.0 to 1.5 and at both render extents, so IF cascades are fitted to
+the camera frustum a wider field spreads the same texels over a wider world.
+The ratio is the tangent ratio — the same one that sets `sym px/eye` — because
+a frustum-fitted cascade spans `2·z·tan(half)`. The difference is that render
+pixels can be bought back and the atlas cannot, so **#35's off-axis saving does
+not apply to it**. Whether the fit is frustum-based is unmeasured; the layer's
+`proj SHADOW` line reports the cascade extent and #56 needs it at two fields.

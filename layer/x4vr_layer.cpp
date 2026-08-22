@@ -5536,6 +5536,10 @@ void patch_view_before_submit() {
             bool view_identity = true;
             float view_angle = 0.0f, view_offset = 0.0f;
             uint32_t view_changes = 0;
+            // Task #56, same map and the same id for the same reason.
+            bool shadow_seen = false;
+            float shadow_scale = 0.0f;
+            uint32_t shadow_changes = 0;
         };
         static std::map<ViewSlot, ProjState> cams;
         static uint32_t next_id = 0, total = 0;
@@ -5784,6 +5788,66 @@ void patch_view_before_submit() {
                     X4VR_LOG("proj VIEW: %u reports logged -- all further "
                              "M_view reports suppressed from here on",
                              kViewTotal);
+            }
+        }
+
+        // ---- task #56: how coarse the shadows are, per camera -----------
+        //
+        // #33's guard band widens X4's <fov> so the engine culls more than it
+        // shows. Every stored run says the shadow atlas does NOT grow with it
+        // -- 10 maps of 2048x2048 D16 at fov 1.0 through 1.5 and at both
+        // render extents, not one dimension moving. So the texel budget is
+        // fixed, and the open question is whether the cascades are fitted to
+        // the camera frustum (widening spreads the same texels over a wider
+        // world, and every shadow gets coarser) or to a world extent from the
+        // video settings (widening costs nothing here).
+        //
+        // What answers it is the RATIO of csm-scale between two <fov> values,
+        // which is why the raw scale is printed beside the derived
+        // metres-per-texel: if the derivation's convention is wrong the ratio
+        // still answers, and the two hypotheses differ by ~4.7x.
+        const x4vr::ShadowTerms st = x4vr::read_shadow_terms(cblk, major);
+        if (st.ok) {
+            const bool sfirst = !c.shadow_seen;
+            const bool smoved =
+                std::fabs(st.csm0_scale - c.shadow_scale) >
+                1e-4f * std::fmax(1.0f, std::fabs(c.shadow_scale));
+            constexpr uint32_t kShadowPerCam = 4, kShadowTotal = 400;
+            static uint32_t shadow_total = 0;
+            if ((sfirst || smoved) && c.shadow_changes < kShadowPerCam &&
+                shadow_total < kShadowTotal) {
+                X4VR_LOG(
+                    "proj SHADOW cam#%u: mapsize=%.0f maxdist=%.0f "
+                    "factors=[%.4f %.4f %.4f %.4f %.4f] "
+                    "thresholds=[%.1f %.1f %.1f %.1f] "
+                    "csm0-scale=%.6g csm1-scale=%.6g%s",
+                    c.id, st.map_size, st.max_distance, st.factor[0],
+                    st.factor[1], st.factor[2], st.factor[3], st.factor[4],
+                    st.thresholds[0], st.thresholds[1], st.thresholds[2],
+                    st.thresholds[3], st.csm0_scale, st.csm1_scale,
+                    st.populated
+                        ? ""
+                        : "  <- M_shadowCSM0Clip is ALL ZEROS. No module in "
+                          "the dumps reads members 9/10, so X4 may never fill "
+                          "them; the cascade EXTENT is then unmeasured here "
+                          "and the scalars above are all this run establishes");
+                if (st.populated)
+                    X4VR_LOG("proj SHADOW cam#%u: cascade 0 spans %.1f m "
+                             "across %.0f texels -> %.4f m per texel. Compare "
+                             "this against another X4VR_FOV: fitted to the "
+                             "frustum it grows with the field, fixed extent it "
+                             "does not",
+                             c.id,
+                             st.csm0_scale > 0 ? 1.0f / st.csm0_scale : 0.0f,
+                             st.map_size * st.factor[0], st.csm0_m_per_texel);
+                c.shadow_seen = true;
+                c.shadow_scale = st.csm0_scale;
+                c.shadow_changes++;
+                shadow_total++;
+                if (c.shadow_changes == kShadowPerCam)
+                    X4VR_LOG("proj SHADOW: cam#%u reached %u reports -- "
+                             "further changes from THIS camera suppressed",
+                             c.id, kShadowPerCam);
             }
         }
         }

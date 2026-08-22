@@ -126,7 +126,25 @@ def main():
     print("  pitch budget: %s\n"
           % ("tracks yaw" if args.pitch_deg is None
              else "fixed at %.1f deg" % args.pitch_deg))
-    hdr = ("   yaw     X4VR_FOV   sym px/eye   sym area   asym px/eye  asym area")
+    print("The last column is task #56 and it is CONDITIONAL. X4's shadow")
+    print("atlas does not follow <fov>: every stored run reports 10 maps of")
+    print("2048x2048 D16 at fov 1.0, 1.1111, 1.437, 1.4917 and 1.5, and at")
+    print("render extents 1408 and 4224 -- not one dimension moves. So IF X4")
+    print("fits its cascades to the camera frustum, a wider field spreads the")
+    print("same texels over a wider world and every shadow in the frame gets")
+    print("coarser by the ratio below. IF it fits them to a world extent from")
+    print("the video settings, that column is 1.00x throughout. Which one is")
+    print("true is unmeasured: the layer's `proj SHADOW` line reports the")
+    print("cascade extent, and #56 needs it from two different X4VR_FOV runs.")
+    print("")
+    print("The number is not a second model. A cascade fitted to the frustum")
+    print("spans 2*z*tan(half), so its extent ratio IS the tangent ratio --")
+    print("the same one that sets 'sym px/eye'. The difference is that render")
+    print("pixels can be bought back and the atlas cannot, so #35's asym")
+    print("saving does NOT apply here: X4's <fov> is one symmetric number and")
+    print("the cascades follow it whatever we do per eye.\n")
+    hdr = ("   yaw     X4VR_FOV   sym px/eye   sym area   asym px/eye  asym area"
+           "   shadow texel")
     print(hdr)
     print("  " + "-" * (len(hdr) - 2))
 
@@ -161,8 +179,15 @@ def main():
             asym_wh = (w, h)
         asym_area = asym / (BASE_EYE_PX ** 2)
 
+        # Task #56. A frustum-fitted cascade spans 2*z*tan(half_angle), so the
+        # world it must cover scales exactly as the tangent does -- which is
+        # the same ratio as sym_px, because that column is the same tangent
+        # ratio applied to pixels. Fixed atlas, wider world, coarser shadow.
+        shadow_texel = max_tan / base_half_tan
         print("  %5.1f    %7.4f   %5.0f sq     %6.2fx    %4.0fx%-4.0f    %6.2fx"
-              % (b, knob, sym_px, sym_area, asym_wh[0], asym_wh[1], asym_area))
+              "     %6.2fx"
+              % (b, knob, sym_px, sym_area, asym_wh[0], asym_wh[1], asym_area,
+                 shadow_texel))
 
     # --- self-check --------------------------------------------------------
     rows = [required_extent(f, 0.0, 0.0) for f in EYE_FOV_DEG]

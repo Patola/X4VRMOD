@@ -828,6 +828,34 @@ int main(int argc, char **argv) {
                 blk[off + 11] = 1.0f;
                 blk[off + 14] = 0.1f;
             }
+            // Task #56's shadow terms, in block 0 ONLY. Members 9/10 are read
+            // by zero of the 409 dumped modules, so X4 may well leave them at
+            // whatever the buffer held -- and a report that only ever saw
+            // zeros would be a branch nobody had run. Block 0 exercises the
+            // populated path, block 1 stays zeroed and exercises the caveat.
+            // The numbers are chosen to make the arithmetic checkable:
+            //   |row0| = 0.002 -> cascade spans 500 m
+            //   2048 texels * factor 0.5 = 1024 across that span
+            //   -> 1 / (0.002 * 2048 * 0.5) = 0.48828 m per texel
+            if (b == 0) {
+                blk[144 + 0] = 0.002f;   // M_shadowCSM0Clip row 0, col-major
+                blk[144 + 5] = 0.002f;
+                blk[144 + 10] = 0.002f;
+                blk[144 + 15] = 1.0f;
+                blk[160 + 0] = 0.0005f;  // M_shadowCSM1Clip, a wider cascade
+                blk[160 + 5] = 0.0005f;
+                blk[160 + 10] = 0.0005f;
+                blk[160 + 15] = 1.0f;
+                blk[232] = 30.0f;        // V_csmthresholds
+                blk[233] = 120.0f;
+                blk[234] = 500.0f;
+                blk[235] = 2000.0f;
+                blk[359] = 1.0f;         // F_csm_blendstrength
+                blk[360] = 2048.0f;      // F_shadowmapsize
+                blk[361] = 8000.0f;      // F_shadowmaxdistance
+                for (int i = 0; i < 5; i++)
+                    blk[363 + i] = 0.5f; // F_texturefactorCSM0..4
+            }
         }
         VkDescriptorSetLayout vl[2] = {vdsl, vdsl};
         VkDescriptorSetAllocateInfo vai{};

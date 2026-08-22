@@ -1706,6 +1706,31 @@ view_arena_case() {
         printf 'FAIL %-38s offset 8.704 m not reported\n' "view: translation survives"
         fails=$((fails + 1))
     fi
+    # Task #56. Block 0 carries shadow terms and block 1 does not, so BOTH
+    # branches run. Members 9/10 are read by zero of the 409 dumped modules,
+    # which means X4 may leave them at whatever the buffer held -- so the
+    # all-zeros path is not a corner case, it is a live possibility, and a
+    # report that had only ever seen zeros would be half-untested.
+    #
+    # The arithmetic is asserted, not just its presence: |row0|=0.002 spans
+    # 500 m, 2048 texels at factor 0.5 is 1024 across it, so 0.4883 m/texel.
+    # A convention slip in read_shadow_terms would still print a number.
+    if grep -aq 'cascade 0 spans 500\.0 m across 1024 texels -> 0\.4883 m per texel' <<<"$out"; then
+        printf 'ok   %-38s 500 m / 1024 texels = 0.4883 m\n' \
+            "shadow: cascade arithmetic"
+    else
+        printf 'FAIL %-38s expected 500.0 m / 1024 texels / 0.4883\n' \
+            "shadow: cascade arithmetic"
+        grep -a 'proj SHADOW' <<<"$out" | sed 's/^/       | /' | head -4
+        fails=$((fails + 1))
+    fi
+    if grep -aq 'csm0-scale=0 csm1-scale=0  <- M_shadowCSM0Clip is ALL ZEROS' <<<"$out"; then
+        printf 'ok   %-38s an empty block says so\n' "shadow: unpopulated caveat"
+    else
+        printf 'FAIL %-38s empty block did not report ALL ZEROS\n' \
+            "shadow: unpopulated caveat"
+        fails=$((fails + 1))
+    fi
 }
 view_arena_case
 

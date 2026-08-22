@@ -37,8 +37,22 @@ enum ViewMat : uint32_t {
     kPrevJitter = 96,
     kViewProjection = 112,
     kViewInverse = 128,
+    // Camera-block members 9 and 10 are M_shadowCSM0Clip / M_shadowCSM1Clip
+    // -- world-to-shadow WITHOUT any object transform. Named without the
+    // "Clip" here since before task #56; the offsets are X4's.
     kShadowCSM0 = 144,
     kShadowCSM1 = 160,
+    // Task #56. Every offset below was read out of a dumped module's own
+    // `OpMemberDecorate ... Offset`, never counted along the GLSL: the block
+    // has array members (V_light_direction_view[3], V_evsm[GFX_MAX_CSM],
+    // six more sized by GFX_MAX_VOLUME_TYPES) whose lengths are #defines we
+    // do not have, so positional counting drifts by an unknown amount.
+    //   spirv-dis mod-0180.spv | grep 'OpMemberDecorate .* Offset'
+    kCsmThresholds = 232,     // V_csmthresholds       byte 928
+    kCsmBlendStrength = 359,  // F_csm_blendstrength   byte 1436
+    kShadowMapSize = 360,     // F_shadowmapsize       byte 1440
+    kShadowMaxDistance = 361, // F_shadowmaxdistance   byte 1444
+    kTextureFactorCSM0 = 363, // F_texturefactorCSM0.. byte 1452, five in a row
 };
 
 constexpr uint32_t kViewBlockBytes = 1792;
@@ -321,6 +335,82 @@ inline ViewTerms read_view_terms(const Mat4 &v, Major major) {
     // 8.70 m camera cannot hide in it by three orders of magnitude.
     r.identity = r.angle_deg < 0.05f && r.offset_m < 1e-3f;
     return r;
+}
+
+// How coarse X4's shadows are, and whether that tracks the field -- task #56.
+//
+// **The question.** #33's guard band buys head-rotation range by widening
+// X4's `<fov>` so the engine culls more than it shows. Every stored run says
+// the shadow atlas does NOT grow to match: 10 maps of 2048x2048 D16 at fov
+// 1.0, 1.1111, 1.437, 1.4917 and 1.5, and at render extents 1408 and 4224.
+// The pixel budget is fixed. So IF X4 fits its cascades to the camera
+// frustum, widening the field spreads the same texels over a wider world and
+// every shadow in the frame gets coarser -- including in the part the player
+// is looking at. If instead it fits them to a world extent from the video
+// settings, the field costs nothing here.
+//
+// **What settles it is a RATIO, so no convention has to be right.** The row
+// length of the world-to-shadow matrix is NDC-per-metre. Measure it at two
+// fields and divide: fitted-to-frustum shrinks it, fixed-extent does not.
+// That is why `csm0_scale` is reported raw beside the derived metres-per-texel
+// -- if the derivation's convention is wrong the ratio still answers.
+//
+// The metres-per-texel derivation, for the record: the fragment code weights a
+// cascade by `min(coord, -coord + 1)`, which is zero at 0 and at 1, so shadow
+// coords are in **[0,1]** and the cascade spans `1 / |row|` metres. The kernel
+// width is `1 / (F_shadowmapsize * texturefactor)`, so that product is the
+// texel count across the same [0,1]. Hence
+//
+//     metres per texel = 1 / (|row| * F_shadowmapsize * texturefactor)
+//
+// **`populated` is not decoration.** Members 9 and 10 are read by ZERO of the
+// 409 dumped modules -- the shaders take their cascade matrices from the
+// per-object block instead -- so X4 may leave these at whatever the buffer
+// held. A zero matrix would otherwise report an infinite cascade, which reads
+// as "fixed extent" and would answer the question backwards.
+struct ShadowTerms {
+    bool ok = false;
+    bool populated = false;   // the CSM matrix is not all zeros
+    float map_size = 0.0f;    // F_shadowmapsize
+    float max_distance = 0.0f;
+    float blend = 0.0f;
+    float factor[5] = {0, 0, 0, 0, 0};
+    float thresholds[4] = {0, 0, 0, 0};
+    float csm0_scale = 0.0f;  // |row0| of M_shadowCSM0Clip, NDC per metre
+    float csm1_scale = 0.0f;
+    float csm0_m_per_texel = 0.0f;
+};
+
+inline ShadowTerms read_shadow_terms(const float *blk, Major major) {
+    ShadowTerms s{};
+    if (!blk || major == Major::Unknown)
+        return s;
+    s.map_size = blk[kShadowMapSize];
+    s.max_distance = blk[kShadowMaxDistance];
+    s.blend = blk[kCsmBlendStrength];
+    for (int i = 0; i < 5; i++)
+        s.factor[i] = blk[kTextureFactorCSM0 + i];
+    for (int i = 0; i < 4; i++)
+        s.thresholds[i] = blk[kCsmThresholds + i];
+    auto row0 = [major](const Mat4 &m) {
+        // Row 0 of the transform, whichever way it is stored.
+        const float a = major == Major::Row ? m.m[0] : m.m[0];
+        const float b = major == Major::Row ? m.m[1] : m.m[4];
+        const float c = major == Major::Row ? m.m[2] : m.m[8];
+        return std::sqrt(a * a + b * b + c * c);
+    };
+    const Mat4 c0 = load(blk + kShadowCSM0), c1 = load(blk + kShadowCSM1);
+    s.csm0_scale = row0(c0);
+    s.csm1_scale = row0(c1);
+    bool any = false;
+    for (int i = 0; i < 16 && !any; i++)
+        any = std::fabs(c0.m[i]) > 1e-12f;
+    s.populated = any;
+    if (s.populated && s.csm0_scale > 1e-12f && s.map_size > 0.0f &&
+        s.factor[0] > 0.0f)
+        s.csm0_m_per_texel = 1.0f / (s.csm0_scale * s.map_size * s.factor[0]);
+    s.ok = true;
+    return s;
 }
 
 inline Mat4 make_eye_shear(float sx, float sy, float near_z, float dx,

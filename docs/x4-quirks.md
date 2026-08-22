@@ -5111,3 +5111,112 @@ that drew the element, and this frame ran `X4VR_FOV=2.21` whose scene camera
 reads 0.14976 while 89 of its 124 credited slots read 1.33333 — the two give
 0.08 m and 1.4 m for the same −43 px. Which camera draws the cockpit is not
 established, so the frame is reported in pixels against its own extremes.
+
+### #56 — the falsifier did not fire: X4's shadow atlas ignores `<fov>`
+
+Answered from stored logs, no run. The prediction filed with #56 was that
+widening `<fov>` for #33's guard band divides CSM texel density across the
+whole frame, with the falsifier *"a 2048 that is not 2048 — if X4 sizes its
+cascades from the field, the map dimensions move with `X4VR_FOV`"*.
+
+**It does not move.** Every run that carries `X4VR_MV_INVENTORY` reports
+exactly the same depth images:
+
+    fov (default 1.0)  take 83    10 x 2048x2048 D16   render 1408x1408
+    fov 1.1111         take 107   10 x 2048x2048 D16   render 1408x1408
+    fov 1.437          take 105   10 x 2048x2048 D16   render 1408x1408
+    fov 1.5            take 104   10 x 2048x2048 D16   render 1408x1408
+    fov 1.4917         take 166a  10 x 2048x2048 D16   render 4224x4224
+    fov 1.4917         take 184   10 x 2048x2048 D16   render 4224x4224
+
+A 1.5× spread in field and a 3× spread in render extent, and not one dimension
+moves. (Ten, not five, because the layer doubles them — the #51 cascades.) The
+size comes from the video settings, exactly as X4's own comment on
+`F_shadowmaxdistance` says: *"is set according to videoparameters"*.
+
+**So the shadow texel budget is fixed while the field grows.** That is half the
+prediction confirmed and the cheap half.
+
+#### What X4's own shader says about the mechanism
+
+* `F_shadowmapsize * F_texturefactorCSM{i}` is the effective texel count of
+  cascade *i* — it is what `GetCSMSample3Taps` divides to get its kernel width
+  ("want to stride samples by 2 texels"). So the cascades are packed into the
+  atlas at per-cascade resolutions.
+* Cascade selection is **containment, not distance**: `getCSMWeights` builds
+  `2 * min(coord, -coord + 1)` per cascade, a pyramid weight that falls to zero
+  at the edges of that cascade's own box. Which also fixes the convention —
+  shadow coords are in **[0,1]**, so a cascade spans `1 / |row0|` metres.
+* `F_shadowmaxdistance` drives only the fade-out, and it is a video setting.
+
+None of that says whether the cascade box is fitted to the camera frustum. That
+fit is CPU-side, and it is the half still open.
+
+#### The price, if cascades are frustum-fitted — now a column in `guard_band.py`
+
+A frustum-fitted cascade spans `2·z·tan(half)`, so its world extent scales as
+the tangent — **the same ratio that sets the `sym px/eye` column**. The
+difference is that render pixels can be bought back and a fixed atlas cannot:
+
+       yaw    X4VR_FOV   sym area   asym area   shadow texel
+       0.0     1.4917      1.00x      0.65x        1.00x
+       5.0     1.6002      1.36x      0.89x        1.17x
+      10.0     1.7358      2.06x      1.28x        1.44x
+      15.0     1.8714      3.33x      1.94x        1.82x
+      20.0     2.0071      5.96x      3.27x        2.44x     (yaw only)
+
+      10.0     1.9644      4.89x      3.02x        2.21x     (yaw AND pitch)
+      15.0     2.2278     25.72x     12.87x        5.07x
+
+**`#35` does not help here, and that is the finding.** Its off-axis projection
+takes ±10° of yaw from 2.06× to 1.28× in pixels — the reason it is on #33's
+critical path. It does nothing for the shadow column, because X4's `<fov>` is
+one symmetric number and the cascades follow *it*, not our per-eye frusta. So
+"the affordable envelope is a glance" costs **1.44× coarser shadows at ±10° of
+yaw** even after the saving that made it affordable.
+
+That matters more than a ratio usually would: the memory of the previous X4 VR
+attempt is that globally-applied shadows were its recurring problem, and this
+is precisely a VR-only setting degrading shadows globally.
+
+#### The instrument, and the run that settles it
+
+`proj SHADOW cam#N` now reports, per credited camera and beside `proj VIEW`:
+
+    proj SHADOW cam#0: mapsize=2048 maxdist=8000 factors=[...] thresholds=[...]
+                       csm0-scale=0.002 csm1-scale=0.0005
+    proj SHADOW cam#0: cascade 0 spans 500.0 m across 1024 texels -> 0.4883 m
+                       per texel
+
+**What answers #56 is the RATIO of `csm0-scale` between two `X4VR_FOV` values**,
+which is why the raw scale is printed beside the derived metres-per-texel: if
+the derivation's convention is wrong the ratio still answers, and the two
+hypotheses differ by 1.00× against ~1.44×.
+
+**PREDICTION, before the run.** Frustum-fitted: `cascade 0 spans` grows by
+1.44× going 1.4917 → 1.7358, and `m per texel` with it. Fixed extent: both
+unchanged to four digits, and the shadow column above becomes 1.00x throughout
+and #56 closes as not-a-cost.
+
+**Caveat that could void the take.** Members 9 and 10 are read by **zero** of
+the 409 dumped modules — the shaders take their cascade matrices from the
+per-object block instead — so X4 may leave them at whatever the buffer held.
+The report says `ALL ZEROS` in that case rather than reporting an infinite
+cascade, which would read as "fixed extent" and answer the question backwards.
+If that is what comes back, the extent has to be read from set 3 members 3–7
+instead, which the layer does not track today.
+
+Both runs, flatscreen, no headset, one line each:
+
+    X4VR_TAKE=185a-CSM-NARROW X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_DUMP_MATRICES=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take185a.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_MV_INVENTORY=1 ./launch/x4vr-launch.sh
+
+    X4VR_TAKE=185b-CSM-WIDE X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_DUMP_MATRICES=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take185b.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.7358 X4VR_BINDLESS_MIRROR=1 X4VR_MV_INVENTORY=1 ./launch/x4vr-launch.sh
+
+In game: load the save, sit in the cockpit somewhere with **ground or hull
+shadows visible**, and stay put for ~30 s. Nothing else — this is a
+measurement take, not an interaction one, and the two must be the same scene or
+the cascades are fitted to different worlds and nothing is comparable.
+
+Cost: two short flatscreen runs. Acceptance: `python3 tools/score_run.py` on
+each, then compare their `shadow` lines. Interaction-safe (no probe, no dumps);
+`X4VR_DUMP_MATRICES` is what produces every line above.

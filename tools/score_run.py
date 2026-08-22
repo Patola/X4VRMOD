@@ -668,6 +668,51 @@ def main(path):
                               "but it is not the player's eye, so what it "
                               "draws is worth identifying (#53)")
 
+                # ---- task #56: what the guard band costs in shadows ----
+                #
+                # The map size is already known fixed: 10 x 2048x2048 D16 in
+                # every stored run from fov 1.0 to 1.5 and at both render
+                # extents. What this reports is the cascade EXTENT, and the
+                # number that answers #56 is its RATIO between two X4VR_FOV
+                # values -- so it prints the raw scale to be compared, never a
+                # verdict from one run.
+                sh = re.findall(
+                    r"proj SHADOW cam#(\d+): mapsize=([\d.]+) maxdist=([\d.]+) "
+                    r"factors=\[([\d. ]+)\] thresholds=\[([-\d. ]+)\] "
+                    r"csm0-scale=([\d.eE+-]+)", text)
+                span = re.findall(
+                    r"cascade 0 spans ([\d.]+) m across ([\d.]+) texels -> "
+                    r"([\d.]+) m per texel", text)
+                if sh:
+                    sizes = {s[1] for s in sh}
+                    scales = sorted({float(s[5]) for s in sh})
+                    print(f"shadow  mapsize {'/'.join(sorted(sizes))}, "
+                          f"maxdist {sh[0][2]}, factors [{sh[0][3]}]")
+                    print(f"        csm0 scale (NDC per metre): "
+                          f"{', '.join(f'{v:.6g}' for v in scales[:6])}")
+                    if span:
+                        m, t, mpt = span[0]
+                        print(f"        cascade 0 spans {m} m across {t} "
+                              f"texels = {mpt} m per texel")
+                        print(f"        #56 needs the SAME line from a run at "
+                              f"a different X4VR_FOV. Fitted to the frustum "
+                              f"the span grows with the field; fixed extent "
+                              f"it does not. One run cannot answer it.")
+                    else:
+                        print("        cascade extent NOT measured — "
+                              "M_shadowCSM0Clip read back as zeros, which no "
+                              "dumped module reads, so X4 may never fill it. "
+                              "That is a fact about the buffer, not about the "
+                              "cascades")
+                else:
+                    # Same rule as the `view` line above: silence must not be
+                    # readable as "the shadows are fine". A log without the
+                    # instrument says nothing about them.
+                    print("shadow  no 'proj SHADOW' line — the cascade extent "
+                          "was NOT read this run (log predates #56, or the "
+                          "decode never ran). #56 is unanswered by this log, "
+                          "not answered in the negative")
+
                 if asked is not None and eye is None:
                     # A FAIL, not a warn. #33's ceiling experiment asks exactly
                     # one question -- will X4 accept a <fov> wider than anything
