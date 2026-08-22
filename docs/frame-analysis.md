@@ -630,6 +630,19 @@ offsets are in **floats**, so the byte offset = float-offset × 4:
 Buffer is ≥ 704 bytes (11 × 64). **7 matrices patched, 4 left** (jitter ×2,
 shadow ×2).
 
+> **Superseded as a plan, kept as the record — see "Correction 1/2" at the end
+> of `x4-quirks.md` (2026-08-22).** The offsets above are correct and still
+> used. The **PATCH** column is not what happened: `M_view` turned out to be
+> identity for nearly every camera (X4 bakes the camera into
+> `M_worldviewprojection` on the CPU), so patching it, `M_viewprojection` or
+> `M_viewinverse` does nothing for geometry, and the eye offset went into the
+> vertex stage instead. The block also does not stop at 11 — it has 72 members,
+> and `tools/uniform_block_scan.py` counts the readers of each per shader
+> stage. Two later refinements the plan above could not anticipate: member 4
+> `M_invprojection_uj` had to be corrected *beside* member 2 rather than
+> derived from it (take 83), and "identity for nearly every camera" is not
+> "identity for every camera" — 9 of 64 runs log a real view transform.
+
 ### What this tells us
 
 - **X4 is a deferred renderer.** `M_invprojection` / `M_viewinverse` are the

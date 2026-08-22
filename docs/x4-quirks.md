@@ -4682,7 +4682,16 @@ stands — but it is a working shader rather than a dangling symbol, and that is
 a different category from the stubs. Worth knowing it is there before someone
 rediscovers it and over-reads it.
 
-### Correction 1 — the camera block has 72 members; this file listed five
+### Correction 1 — the camera block has 72 members, and nobody had counted the readers
+
+**Provenance first, because I nearly overclaimed this.** `frame-analysis.md`'s
+Phase-2 section "Per-view frame-constants UBO" already tabulates the **first 11
+matrices** with float offsets, from a RenderDoc capture — `M_jitter`,
+`M_prevjitter`, `M_viewprojection`, `M_viewinverse` and the two CSM clip
+matrices included. That table is right and it is a year of this project older
+than I assumed. What was missing is everything after member 11 (61 more
+members), and — the part that actually decides work — **how many shader stages
+read each one**.
 
 `tools/uniform_block_scan.py`, over the 409 dumps, attributed per entry point.
 The full table is in the tool's output; the part that matters:
@@ -4715,6 +4724,17 @@ Three things in there were not known:
 * **`M_view` (0) is the most-read matrix in the block.** 262 vertex + 160
   fragment entry points. It is identity, so they are no-ops — which is exactly
   what makes the next correction matter.
+
+**And the two documents disagree with each other, which is worse than either
+being wrong.** `frame-analysis.md`'s Phase-2 table marks `M_view`,
+`M_viewprojection` and `M_viewinverse` **PATCH** — that was the plan before any
+of it ran. Section 4 of *this* file says writing them "has no visual effect at
+all". A reader who opens one gets the opposite instruction from the other, and
+both were written with confidence. Correction 2 lands between them: the Phase-2
+plan could not have worked, because those matrices are identity for nearly
+every camera, and section 4's blanket is not safe either. `frame-analysis.md`
+now carries a pointer here rather than being edited — the wrong turn stays
+where it was taken.
 
 ### Correction 2 — `M_view` is NOT always identity
 
