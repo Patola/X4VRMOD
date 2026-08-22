@@ -4503,3 +4503,63 @@ would have reported every real frame as "NOT THE SAME OBJECT" and probed two
 arbitrary points for a displaced copy. Both now take `--dx`, and
 `eye_component.py` refuses the displacement probe at `--dx=0` instead of
 testing the anchor against itself.
+
+### Take 184 — all three predictions confirmed; the mechanism is settled
+
+| prediction | result |
+|---|---|
+| both eyes agree on every Sun frame | **yes** — warm-excess ratios 1.00 across all 13 Sun frames; `eye_component.py` reports BOTH EYES AGREE at 0–1% |
+| core radii within ~10% instead of 1.5× | **yes, and far better** — R/L 0.996–1.004 |
+| near-field parallax survives | **yes** — 3 frames with matched tiles shifting up to 9 px, and the Sun carries a genuine 0.6–0.9 px sub-pixel disparity |
+
+The Sun's own sub-pixel disparity is worth keeping: at zero cant, content at
+true infinity would land at **exactly** the same pixel. 0.6–0.9 px says X4's
+sun is far but **finite**, which agrees with the skybox note — its planets are
+reachable geometry, not infinity. It is also what proves the run was not
+vacuous: the eyes still differ.
+
+**#49's mechanism is established.** X4 computes flare/glare geometry from the
+Sun's position *within the rendered image*. The off-axis cant moves that
+position by ±512 px in opposite directions per eye, so each eye computed flare
+for a Sun a quarter-frame from the other's. Remove the divergence and the
+difference vanishes completely — not "improves", vanishes to 0–1%.
+
+**A second defect the cant was causing.** Patola: the static load screen is no
+longer cross-eyed. That is consistent with take 183's own data, where the flat
+frames aligned at the **infinity offset** — the 2D artwork was carrying the
+full eye offset. Screen-locked canvas content should sit at a chosen depth, not
+be displaced as though it were at infinity. Filed separately; it is a #40 gap
+that only the cant exposes.
+
+**So the cant breaks an unbounded class**, not two things. Anything X4 keys to
+the image centre — flare, ghosts, vignette, lens dirt, any centre-weighted
+post-process — diverges per eye under it, and we cannot enumerate them from
+outside.
+
+### What the cant is worth, in numbers
+
+Both configurations render 4224² per eye; `X4VR_RES` fixes the extent, so the
+cant buys no pixels — it decides *where content lands inside the same buffer*.
+Against take 183's declared target (`-54,40,44,-55` for eye 0):
+
+    canted tangent span     H = 2.2155   V = 2.3938
+    symmetric +/-55 span        2.8563
+    fraction used           H = 0.776    V = 0.838   -> area 0.650
+
+So a symmetric render spends **1.54× the pixels** for the same headset view, or
+equivalently the cant gives **1.24× linear resolution**. That is the price of
+turning it off, and it is not nothing. (The tangent-space centre of that target
+comes out at −15.04°, exactly what the scorer reports, so the arithmetic is
+sound.)
+
+Frame time does not decide it: 33.40 ms at identity against 33.65 ms canted —
+the same number.
+
+**This is a design decision on #35, not a bug fix, and it is Patola's to make.**
+Option A: drop the cant, render symmetric, declare symmetric — closes the whole
+class, costs 1.24× linear resolution. Option B: keep the cant and repair each
+screen-position-dependent effect — preserves resolution, but the set is not
+enumerable from outside X4 and every member is a per-eye rivalry defect.
+Option C: reduce the cant — trades the two continuously, and is only attractive
+if the flare gate turns out to be threshold-like rather than continuous, which
+is not yet known.
