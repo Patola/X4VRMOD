@@ -5651,3 +5651,105 @@ Also fixed on the way: the decoration was first written under the
 `!existing_view_var` guard, which is about `gl_ViewIndex`, not about the pose
 block. Hanging a new decoration off an unrelated condition is how it goes
 missing on exactly the modules that already did something else.
+
+---
+
+## Takes 186a / 186b — the flatscreen measurement of #33's rotation
+
+**READ THIS FIRST AFTER A CONTEXT RESET.** Written before the run, which is the
+rule: the predictions below are what the take tests, and they are dated by
+being in this commit rather than a later one.
+
+### State of #33 going in
+
+Built, and each verified to a stated level:
+
+| piece | verified how |
+|---|---|
+| the math — `P·R·P⁻¹` and `M_invproj·Rclip⁻¹ = R⁻¹·M_invproj` | `headlook_clip.py --self-check`, six measured cameras, 2.6e-09 / 8.9e-16 |
+| the channel (#54/#59) — set 5, one write/frame | executes on a real GPU; a driven value moves the picture and identity does not |
+| the vertex conjugation (#60) | **executes**; 180° yaw clips every vertex under the conjugation and does not under #59's transport form |
+| the object-block fallback (#62) | 384/409 dumps patch, 25 refuse, **all 25 non-World**, 0 invalid |
+| the fragment `R⁻¹` (#61) | 244/409 patch and `spirv-val` clean — **but has never executed** |
+
+**Not built at all:** the runtime head-pose source and the declared-pose update.
+The rotation comes from a static `X4VR_POSE_YAW`, deliberately, so a wrong
+picture has one candidate cause rather than two.
+
+**The highest-risk item is the fragment `R⁻¹`, and 186b is its first
+execution.** The harness proves the vertex side; nothing yet drives the
+fragment side on a GPU. If something is wrong in this take, that is where to
+look first.
+
+### Predictions, before the measurement
+
+1. **Both logs score PASS**, and 186b carries `pose: channel up — set 5
+   binding 0`, `pose: static rotation yaw=10.00 pitch=0.00 roll=0.00`, and
+   `pose final: … — OK` with pipelines-created equal to pipelines-extended. An
+   unequal pair there is a FAIL, not a warning: a pipeline that missed the
+   substitution ran with our set unbound.
+2. **`headlook_verify --verify` shows a large positive lift** — raw "off vs on"
+   correlation low because the world moved, high after the predicted warp — and
+   the predicted centre shift is **≈ 87 px** at `sx = 0.70024`.
+3. **The cockpit rotates and the HUD does not.** That split is the design.
+4. **A wedge of missing world geometry on one side, about 10° wide**, because
+   `X4VR_FOV` is unchanged and X4 culled it. The starfield backdrop stays,
+   because it is procedural and does not rotate. Both are expected, neither is
+   this take's subject.
+5. **Shadows stay attached to what casts them.** This is the fragment `R⁻¹`
+   working, and it is the prediction I am least able to support: 8.7 m of
+   error at 50 m if it does not.
+
+### The assumption I reasoned but did not test
+
+The pose patch runs **before** the shear and the affine, so its edit is emitted
+first and theirs applies to the already-rotated position. That is the order I
+believe is right — the eye offset belongs in the *rotated* frame, because the
+eye sits at `head + R·(±d,0,0)` — and the shear's own derivation survives it,
+since the conjugation leaves `z_c` at the near plane exactly. But it is
+reasoning, not a measurement, and if the stereo looks wrong while the rotation
+looks right, this is the first thing to suspect.
+
+`X4VR_OFFAXIS` is unset in both runs, so the affine is not a variable here.
+
+### The two runs
+
+    X4VR_TAKE=186a-ROT-OFF X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take186a.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 ./launch/x4vr-launch.sh
+
+    X4VR_TAKE=186b-ROT-YAW10 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take186b.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_POSE=1 X4VR_POSE_ROTATE=1 X4VR_POSE_YAW=10 X4VR_BINDLESS_MIRROR=1 ./launch/x4vr-launch.sh
+
+186a is take 164a's line unchanged; 186b adds exactly three variables. No
+headset, no probe, no dumps — interaction-safe, and `X4VR_DUMP_MATRICES` is
+what produces the `proj` lines the acceptance needs.
+
+**In game:** load the save, sit still in the cockpit with the frame visible and
+some world geometry outside it (a station or a ship — plain starfield is not
+enough for the fit). One screenshot of the whole SBS window to
+`/tmp/x4-186a.jpg`. Quit, run 186b, return to as close to the same pose as
+possible, screenshot to `/tmp/x4-186b.jpg`.
+
+### Acceptance
+
+    python3 tools/headlook_verify.py --self-check
+    python3 tools/score_run.py /tmp/x4vr-take186a.log
+    python3 tools/score_run.py /tmp/x4vr-take186b.log
+    python3 tools/headlook_verify.py --verify /tmp/x4-186a.jpg /tmp/x4-186b.jpg \
+        --sx 0.70024 --yaw 10
+
+Take `sx` from 186b's `proj` line marked `<- honours X4VR_FOV`, not from this
+document: if the log says something other than 0.70024, the log is the
+authority and the take is telling you something.
+
+### If the lift is absent
+
+Sweep `--yaw` and find what *does* fit. A fitted angle that is not 10° is
+specific evidence:
+
+* **fitted ≈ −10°** — a sign convention, in `pose_set_euler` or in the shader.
+* **fitted ≈ 10° but only near the centre** — the homography is not being
+  applied, only its linearisation; suspect a module taking the transport form.
+* **no angle fits anywhere** — the vertex patch is not reaching the modules
+  that draw the cockpit. Read `pose: N module(s) read the pose block` and the
+  refusal line against `tools/module_map.py`.
+
+Do **not** add a knob to make it fit.
