@@ -5656,6 +5656,12 @@ missing on exactly the modules that already did something else.
 
 ## Takes 186a / 186b — the flatscreen measurement of #33's rotation
 
+> **THE RUN HAPPENED. Read "Take 186 — RESULT" at the end of this file
+> first.** 186a is a clean control and stands. 186b died on a descriptor-set
+> index collision before it could test anything, so **none of the predictions
+> below were reached** — they are not wrong, they are unmeasured, and they
+> carry forward to take 187 unchanged. This section is kept exactly as written.
+
 **READ THIS FIRST AFTER A CONTEXT RESET.** Written before the run, which is the
 rule: the predictions below are what the take tests, and they are dated by
 being in this commit rather than a later one.
@@ -5753,3 +5759,187 @@ specific evidence:
   refusal line against `tools/module_map.py`.
 
 Do **not** add a knob to make it fit.
+
+## Take 186 — RESULT: 186a is clean, 186b collided with X4's set 5
+
+**READ THIS FIRST AFTER A CONTEXT RESET.** Supersedes the specification above
+as a *plan*; that section is kept unedited because its predictions are still
+the acceptance criteria, just for take 187 instead.
+
+### What each run says
+
+**186a (rotation off) — PASS, and it stands as the control.** Cockpit, HUD,
+starfield, both eyes healthy. `sx=0.70024` on the fov camera (109.998° =
+fov 1.492, x196), GAMEPLAY 6.67 ms. The code changed after this run, but only
+inside `pose_wanted()`-gated paths, and 186a set no `X4VR_POSE`, so every line
+it executed is still the code on `main`. It does **not** need re-running.
+
+**186b (yaw 10°) — FAIL. Dead as evidence, and not because the transform was
+wrong: it never ran.** The layer said so itself:
+
+```
+pose: WARNING — could not extend a pipeline layout (declares 6 set(s), ours is index 5)
+pose final: set 5, 5/6 pipeline layout(s) extended, 26/1135 pipeline(s) got it,
+            2310217 bind(s) — FAIL
+```
+
+Twenty-six of one thousand one hundred thirty-five pipelines got the pose set.
+Over three hundred modules were patched to read it.
+
+### The root cause: the index was inferred from the wrong object
+
+`pose_set_index()` defaulted to 5, and the code said why:
+
+> X4 declares sets 0-4 across all 409 dumps, so 5 is the first free index
+
+The 409 dumps are **shader modules**, and a module declares the sets it
+**reads**. A **pipeline layout** declares the sets X4 **binds**, and a layout
+routinely declares sets that no module in that pipeline reads. Those are two
+different objects, and the survey was of the wrong one. X4's main pipeline
+layout — the one carrying **1109 of its 1135 pipelines** — declares six sets,
+so index 5 was X4's.
+
+This is the same error class as `nm -D` proving a symbol is imported rather
+than called, and as "all 128 blocks, M_view is always identity" being
+exhaustive over a snapshot. The claim was true about the dumps and said nothing
+about the layouts.
+
+### Two corruption paths, and the second was not anticipated
+
+1. **Our patched modules read X4's set 5 as a pose block.** Whatever X4 keeps
+   there was loaded as a `mat4` and multiplied into `gl_Position`.
+2. **Our binds disturbed X4's own set 5, for X4's own draws.** Descriptor set
+   compatibility for set *N* depends on sets 0..*N*; our extended layout matches
+   X4's only through set 4, so every one of our **2,310,217** binds at index 5
+   invalidated X4's binding there. Modules we never patched were corrupted too.
+
+Path 2 is why the damage was global rather than confined to rotated geometry,
+and it is why the frame showed a hard-edged bright rectangle: this is undefined
+behaviour, not a transform with a bug. **Nothing in 186b's log is
+interpretable** — not the `view` table (whose distribution differs wildly from
+186a's), not `perf` (GAMEPLAY 2.66 ms, faster than the control because much of
+the scene was degenerate or clipped), not the shadow line. Do not mine it.
+
+### The scorer printed PASS over a FAIL the layer had already printed
+
+`score_run.py` reported `PASS` for 186b, and above it: `pose not reported —
+this build predates the instrument`. Both came from the block that greps
+`vr pose:` — the pose **declared to the runtime**, which a flatscreen take
+legitimately never logs. The message was true about its own subject and
+irrelevant to the run being scored, and there was **no check at all** for
+#59's channel.
+
+Every run handed over gets this file as its acceptance check. An acceptance
+check that cannot see a FAIL the layer already printed is worse than none: it
+converts a correct diagnosis into a confirmation. Fixed — 186b now exits 1, and
+the runtime-pose message names its subject.
+
+### Why no harness case caught it
+
+Every case in `run-multiview-render.sh` passed, including the four `exec:` ones
+that prove the conjugation executes. All of them built pipeline layouts
+declaring **one or two** sets, so index 5 always fit. The suite certified the
+configuration, not the code — the third time in this project that a self-test
+passed only in its simplest configuration.
+
+`X4VR_TEST_PAD_SETS` now builds the harness at X4's width, and the new pair is
+a discriminator: identical runs, only the index differs, and the observable
+flips.
+
+| case | index | 6-set layout | result |
+|---|---|---|---|
+| `width: 6-set layout, derived index` | 31 | yes | `drawn=0` — conjugation clips at 180°, 0 collisions |
+| `width: index 5 collides, fails closed` | 5 | yes | `drawn=1` — collision, geometry left unrotated |
+
+### The fixes
+
+* **The index is no longer inferred from X4.** It sits at
+  `maxBoundDescriptorSets - 1` — **31** on the RX 7900 XTX (RADV NAVI31,
+  limit 32). Colliding would require X4 to use every set the device allows.
+  The limit is captured at `vkCreateDevice`, which necessarily precedes the
+  first module patch — and the index must be frozen before that patch, because
+  it is baked into the SPIR-V.
+* **A collision is a hard stop.** The old code warned — the warning even said
+  "so their modules must not be patched" — and then patched them for another
+  two million draws. `pose_active()` now goes false, patching stops, binding
+  stops. A report that names a risk without the code preventing it is not a
+  guard.
+* **`pose final:` reports the evidence**: `set 31 of maxBoundDescriptorSets=32,
+  X4's widest pipeline layout declares 6 set(s), …`. That middle number is the
+  one whose absence cost the take, and it was free — the counter was already in
+  hand.
+
+One consequence worth stating: the limit check in `pose_init` can now only fire
+for an explicit `X4VR_POSE_SET`, since the derived index is legal by
+construction. On the default path it compares a number against the number it
+was computed from. Said out loud in the code, because a guard that cannot fail
+reads like coverage it does not provide.
+
+### Take 187 — the re-run
+
+Only the rotation run is needed; **186a stands as the control**. Every
+prediction from the 186 section applies unchanged, with one edit: the channel
+now comes up on **set 31**, not set 5.
+
+The acceptance line to look for, before anything else:
+
+```
+pose final: set 31 of maxBoundDescriptorSets=32, X4's widest pipeline layout
+            declares 6 set(s), N/N pipeline layout(s) extended, M/M pipeline(s)
+            got it, … — OK
+```
+
+`N/N` and `M/M` must be **equal pairs** and it must end in `OK`. If X4's widest
+layout comes back wider than 6, that is new information and worth recording
+either way — the index has room to 31.
+
+**The command, in full, on one line:**
+
+```
+X4VR_TAKE=187-ROT-YAW10 X4VR_POSE=1 X4VR_POSE_ROTATE=1 X4VR_POSE_YAW=10 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_BINDLESS_MIRROR=1 X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS=1 X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_LOG=/tmp/x4vr-take187.log ./launch/x4vr-launch.sh
+```
+
+Derived from 186b's logged `env: run =` line, with `X4VR_LOG` renamed so 186b's
+data is not overwritten, and `X4VR_TAKE` renamed. Nothing else changed — the
+fix is in the code, not in the knobs.
+
+**In-game:** load the default quicksave with Enter at the menu (it puts the ship
+in the same place every time, with a shop, a gate and a station ahead at roughly
+10–12 km). Sit still in the cockpit. Take one screenshot to `/tmp/x4-187.jpg`.
+Do not open the map. Quit normally so the final report is written.
+
+**What to look at, in this order:**
+
+1. **Does the cockpit look intact?** Not "is it rotated" — intact. A repeat of
+   186b's hard-edged bright rectangle means the channel is still colliding, and
+   the log will say so directly.
+2. **The cockpit frame should be rotated ~10° to one side while the HUD stays
+   put.** The HUD is excluded on purpose (#30's canvas), so cockpit-moves-and-
+   HUD-does-not is the expected picture, not a defect.
+3. **A wedge of missing world geometry at one edge**, roughly 10° wide, is
+   expected: it is the guard band, and it is the known cost of rotating inside
+   X4's own frustum.
+4. **The procedural backdrop will not rotate.** Known gap, not a new defect.
+5. **Shadows should stay attached to what casts them.** This is the fragment
+   `R⁻¹`'s first execution — if shadows detach, that is the suspect.
+
+**Acceptance:**
+
+```
+python3 tools/score_run.py /tmp/x4vr-take187.log
+python3 tools/headlook_verify.py --self-check
+python3 tools/headlook_verify.py --verify /tmp/x4-186a.jpg /tmp/x4-187.jpg --sx 0.70024 --yaw 10
+```
+
+Take `sx` from take 187's own `proj` line marked `<- honours X4VR_FOV`, not from
+this document. The predicted centre shift is `sx·tan 10° = 0.1235` NDC ≈ **87 px**
+on a 1408-wide eye.
+
+**`score_run.py` must exit 0 before the screenshots mean anything.** If
+`pose-channel` reports a collision or a FAIL, stop there: the frame is undefined
+and fitting a rotation to it could produce a confident wrong answer. And if the
+lift is absent while the channel reads OK, the diagnostic tree in the 186
+section applies unchanged — a fitted ≈ −10° is a sign convention, a fit only
+near centre means a module took the transport form, and nothing fitting means
+the patch is not reaching the cockpit's modules. **Do not add a knob to make it
+fit.**
