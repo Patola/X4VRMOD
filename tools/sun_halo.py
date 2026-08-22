@@ -97,13 +97,25 @@ def measure(p0, p1, crop=None, expect_dx=EXPECT_DX, profile=False):
     # construction. Take 181's present-n3 scored a perfect 1.000/1.000 and I
     # read it as the negative control this task had been missing. A rendered
     # scene has near geometry that does NOT align at that offset.
+    #
+    # The first cut of this compared |L-R| against a FIXED 0.02 over the whole
+    # overlap. Space is mostly black, so most pixels sat below 0.02 in both
+    # eyes and matched no matter how they were aligned: it measured DARKNESS,
+    # not flatness, and rejected three real gameplay frames of take 182 --
+    # including the external-camera phase the run existed to capture. Patola
+    # caught it. Only pixels that carry signal can testify, the tolerance has
+    # to scale with the signal, and a frame with too little of it must say
+    # "cannot tell" rather than guess.
     h_, w_ = m0.shape
     sh = int(round(abs(expect_dx)))
+    out_flat = None
     if 0 < sh < w_:
-        d = np.abs(m0[:, sh:] - m1[:, :w_ - sh])
-        out_flat = float((d < 0.02).mean())
-    else:
-        out_flat = 0.0
+        A, B = m0[:, sh:], m1[:, :w_ - sh]
+        lit = np.maximum(A, B) > 0.02
+        if lit.mean() > 0.02:
+            d = np.abs(A - B)[lit]
+            tol = 0.10 * np.maximum(A, B)[lit] + 0.005
+            out_flat = float((d < tol).mean())
     (lx, ly), (rx, ry) = s0, s1
     dx = rx - lx
     h, w = m0.shape
@@ -154,7 +166,7 @@ def report(tag, r):
         print(f"{tag:<16} {r['error']}")
         return
     flag = '' if r['same_object'] else '   <- NOT THE SAME OBJECT, ratios meaningless'
-    if r.get('flat', 0) > 0.95:
+    if r.get('flat') is not None and r['flat'] > 0.95:
         print(f"{tag:<16} FLAT FRAME — {100 * r['flat']:.1f}% of it aligns at the "
               f"infinity offset, so there is no 3D scene here. This is the "
               f"loading screen/canvas artwork and its 'Sun' is a picture, "

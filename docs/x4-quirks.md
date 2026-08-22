@@ -3912,3 +3912,111 @@ orientation where the LEFT eye is the deficient one would separate "follows the
 layer" from "follows the geometry" — and take 172 already reported that changing
 angles does not change it, which is worth reconfirming now that the measurement
 is trustworthy.
+
+### Take 182 — IT FLIPS. #49 is a shared volumetric, not a broken eye.
+
+Patola, from the headset: *"it's not always the same eye that's bigger, it
+depends on the rotation!"* He is right, and my instrument had hidden it.
+
+```
+frame   left    right
+n8      0.4021  0.1289     right deficient
+n9      0.4128  0.1293     right deficient
+n12     0.2734  0.2667     BOTH EYES HAVE IT
+n13     0.2446  0.1247     right deficient
+n14     0.1282  0.2626     LEFT DEFICIENT — the flip
+n15     0.3921  0.1261     right deficient
+n17     0.4664  0.1279     right deficient
+```
+
+Two things fall out of that table:
+
+1. **The deficient eye is always at ≈0.128** — the same floor in every row, and
+   in n14 it is the LEFT eye sitting on it. The healthy eye ranges 0.24–0.48.
+   The glow is not attenuated by some amount; it is **binary, per eye, per
+   frame**: drawn or not drawn. 0.128 is the background nebula with nothing
+   added.
+2. **It is not "layer 1 is broken".** Every earlier take happened to catch
+   right-deficient frames, and I read a scene-dependent gate as a property of
+   the eye. The confound between "layer 1" and "the negative shear sign" is
+   resolved: it is **neither** — it depends on the scene.
+
+#### The instrument bug that hid it
+
+My flat-frame check compared `|L-R|` against a **fixed** 0.02 over the whole
+overlap. Space is mostly black, so most pixels were below 0.02 in both eyes and
+matched regardless of alignment — it measured **darkness, not flatness**, and
+rejected n12, n13 and n14 as "loading screen". Those are three of the four
+frames that carry the flip. It now masks to pixels with signal and scales the
+tolerance with it, and returns "cannot tell" when too little of the frame is
+lit. Patola caught this from the pictures.
+
+#### Two hypotheses killed by a static scan of the 409 dumped modules
+
+A SPIR-V scan for `OpAccessChain` into set=1 binding=0 (declaration is not use):
+
+* **`M_projection_uj` (member 3) is read by ZERO modules.** It cannot cause
+  anything. Take 181's dismissal of it was right for the wrong reason — I argued
+  "with AA off member 3 equals member 1", when the real answer is that nothing
+  reads it. The unpatched-member-3 gap is cosmetic, not live.
+* **No FRAGMENT shader reads `M_projection` (member 1) at all** — all 34 readers
+  are vertex or compute. The "fragment shaders re-project with the centre frame"
+  idea is dead too. mod-0365–0370 are **Vertex**, so they do get the vertex
+  patch.
+
+#### What the scan found instead
+
+A tight cluster reads the sun's direction *and* the volumetric set:
+
+```
+mod-0365..0370 (Vertex)   1:M_projection 2:M_invprojection 11:V_viewportpixelsize
+                          16:V_lightcolor1 21:V_light_direction_view
+                          28..33:V_volume_scatter_power/phase*/I_volume_phases
+                          58:I_maindepth 65:F_volume_off 66:F_volume_scale
+mod-0364     (GLCompute)  21:V_light_direction_view 25:V_volume_size
+                          29:V_volume_sigma_extinction 34:I_volume_bind_index
+mod-0358                  2:M_invprojection 24:V_volume_range 25:V_volume_size
+```
+
+and the run's own log names the structure:
+
+```
+img #33/#75/#91:   64x64x64  usage=0x8f      <- STORAGE: written by compute
+img #34/#76/#92: 128x128x64  usage=0x8f      <- froxel volume
+mv final: compute — 15 pipeline(s), 7 shader(s) dispatched
+bindless mirror: 9 REFUSED (7 of those are compute: no gl_ViewIndex exists there)
+invproj:         248 corrected (3 compute cannot be)
+```
+
+**`mv_double_candidate()` requires `imageType == VK_IMAGE_TYPE_2D`, so a 3D image
+is never doubled.** There is exactly one scattering volume, and the compute
+shaders that fill it cannot be per-eye because `gl_ViewIndex` does not exist in
+compute — the layer already says so in two separate lines.
+
+**Hypothesis (not yet proven): X4 builds its volumetric in-scatter into a shared
+froxel volume in the CENTRE camera's frustum. Both eyes then sample it with their
+own per-eye reconstruction, so the lookups land offset by ±B in opposite
+directions. Where an eye's lookup falls outside the volume — or into a froxel the
+centre camera resolved as occluded — that eye gets no in-scatter at all.**
+
+That predicts binary, per-eye, rotation-dependent, flipping, warm, directional,
+absent-not-attenuated, correct-when-present, with the rest of the frame
+identical. Every one of those is observed.
+
+#### IN-SCATTER IS RE-OPENED
+
+Take 177 "refuted" in-scatter (`X4VR_DISABLE_FOG=1`, "numbers unchanged to three
+decimals"). That refutation used the band-ratio instrument which has since been
+shown to measure the wrong model, sometimes on the wrong object, and its frames
+were never checked for whether the Sun was in them. **It does not stand.** Do not
+cite it again.
+
+#### Next, and it is not a run
+
+1. Confirm which pass writes img #34/#76/#92 and which modules sample them.
+2. Then choose: build the volume per-eye (costly, and compute has no view
+   index), build it once over a union frustum wide enough for both eyes, or
+   **sample it with centre-frame positions in both eyes** — which makes the
+   in-scatter mono. Mono is slightly wrong in depth but **symmetric**, and a
+   symmetric diffuse glow is what comfort requires: the disparity is the harm,
+   not the offset. A knob (`X4VR_INSCATTER_MONO`) would test it in one take.
