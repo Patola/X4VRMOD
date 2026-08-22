@@ -4094,3 +4094,91 @@ The dump's `mod-NNNN` is creation order from the run that produced it and does
 #101/#130/#153, and `mod-0101`/`mod-0130`/`mod-0153` all have vertex entry
 points. Pass serials drift the same way (take 179 vs 180). **Join dumps to logs
 by content, never by number.**
+
+### The GLSL read — #49's glow term named, and my own hypothesis refuted
+
+Extracted `shadergl/` from the `.cat`/`.dat` again (587 files, **/tmp only, never
+committed — Egosoft's copyright**). The parser reads each `.cat` line from the
+RIGHT (`md5`, `timestamp`, `size`, then the path), because X4's paths contain
+spaces.
+
+`volume_apply.frag.glsl` is the in-scatter applier — the warm glow:
+
+```glsl
+RetrieveZBufferViewPos(view_pos);                  // -> UnProject -> M_invprojection
+vec3 vdir = normalize(view_pos);
+vec3 ldirs = normalize(V_light_direction_view[0].xyz);
+float vdotl = dot(vdir, ldirs);                    // concentrates it on the Sun
+...
+float shad = GetDepthGodRay();                     // <-- THE GATE
+color.rgb += shad * V_lightcolor1.rgb * Integrate_SimpleDirectional_VOLUME_NUM(vol.rgb, vdotl);
+```
+
+`vdotl` is why it is a halo around the Sun and nothing else; `V_lightcolor1` is
+why it is warm.
+
+#### MY MIXED-FRAME HYPOTHESIS IS REFUTED — by arithmetic, before any run
+
+`common.glsl` defines the pair exactly:
+
+```glsl
+vec3 Project  (vec3 v) { vec4 t = M_projection    * vec4(v,1); return t.xyz/t.w; }  // member 1
+vec3 UnProject(vec3 v) { vec4 t = M_invprojection * vec4(v,1); return t.xyz/t.w; }  // member 2
+```
+
+So `volume_apply` really does use the patched member 2 and the unpatched member
+1, and `view2volume()` → `Project()` really is the volume lookup. But compose
+them: the patched reconstruction is `T(d)·M_invproj·A⁻¹`, so
+
+```
+Project ∘ UnProject_patched = M_proj · T(d) · M_invproj · A⁻¹ = A⁻¹  (+ the T(d) term)
+```
+
+because `M_proj · M_invproj = I`. **`A⁻¹` is exactly the right mapping into a
+centre-frame volume**, and the volume IS centre-frame — `volume_walk.comp.glsl`
+builds it through the same `view2volume()`, in compute, which cannot be per-eye.
+The only residue is the ±3.2 cm eye translation, which is a depth-dependent
+shift of ~0.03/z radians — nothing at all at the Sun's distance.
+
+So the mixed frame is **real but not the cause**. Recorded as refuted; it was
+committed as a prediction and it did not survive contact with the source. It may
+still matter for near-field content and is worth its own task, not this one.
+
+#### The gate, and why it is ours to break
+
+```glsl
+float GetDepthGodRay() {
+    float depth = saturate((GetViewPos().z - volume_fom_min) / volume_fom_max);
+    return GetDepthGodRay(GetFragUV(), depth);
+}
+float GetDepthGodRay(vec2 uv, float depth) {
+    float ret;
+    FOM_GETF_2DARRAY(ret, PLS_GODRAYS, 4, uv, depth)   // <-- 2D ARRAY lookup
+    ret /= 3;  ret = exp(-ret);  return saturate(ret);
+}
+```
+
+`PLS_GODRAYS` is a **2D ARRAY** texture (Fourier Opacity Maps) sampled at
+`GetFragUV()` with a depth slice, and the result goes through `exp(-ret)` and
+`saturate`. That is a **binary-ish gate**: a large `ret` drives `shad` to 0 and
+the whole in-scatter term with it — *absent, not attenuated*, which is exactly
+what take 182 measured, and it depends on what occludes the Sun, which is why it
+tracks rotation and flips between eyes.
+
+**A 2D array sampled from a fragment shader is precisely what the bindless
+index-offset patch redirects per view** (`X4VR_BINDLESS_MIRROR` /
+`X4VR_BINDLESS_PATCH`; the run logs `366 modules edited, 9 REFUSED`). If view 1
+is sent to a layer of `PLS_GODRAYS` that was never rendered — or to the wrong
+descriptor — `shad` collapses for that eye alone.
+
+#### Next, still no run needed
+
+1. Find `PLS_GODRAYS`' image in the layer's inventory: is it doubled, and is its
+   layer 1 ever rendered? The `LAYER 1 NEVER RENDERED` report added for take 180
+   lists 5 of 29 — check whether the godray array is among the 39 doubled images
+   that have **no tracked writers at all**, which has never been examined.
+2. Check whether `volume_apply`'s fragment entry is one of the 366 modules the
+   index-offset patch edited, and whether the offset is applied to *this*
+   sampler.
+3. Only then choose the fix. `X4VR_BINDLESS_PATCH=0` remains a vacuous control —
+   it makes both eyes view 0 — so it cannot be the test.
