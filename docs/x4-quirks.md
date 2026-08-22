@@ -5508,3 +5508,29 @@ Next, in order, and the first is a prerequisite for trusting any take:
    takes the last time.
 3. Only then a flatscreen take at a static angle, read with
    `tools/register_affine.py` against the predicted warp.
+
+#### 14 World modules refuse the rotation, and that is a gap not a refusal
+
+Asked while answering "what are the constraints". Of the 43 dumped modules
+`patch_vertex_pose_rotate` refuses, `classify` calls **29 non-World and 14
+World**. The non-World ones are right to refuse — fullscreen passes and UI,
+which must not rotate. The 14 World ones are a **defect in waiting**: they are
+scene geometry that would keep X4's frame while everything around them turns
+with the head.
+
+They are the same class task #23 already met — *"18 of X4's 341 world modules
+have no camera block"* — and it has a solved answer:
+`patch_vertex_eye_offset_mvp` recovers `sx` from `M_worldviewprojection`
+(`sx = |row0(MVP).xyz| / |row3(MVP).xyz|`) for exactly these modules. The
+rotation needs the same recovery, and then it needs `w_c`, which the MVP form
+also has.
+
+Until that exists the constraint is concrete and worth stating in the plain
+form: **a small amount of world geometry will not follow the head.** Which
+geometry is not yet named — the 14 can be identified against X4's shader
+sources by their rarest property name, the same join that named the starfield
+and the suns.
+
+This is the shape of #48, found before a take rather than after one, and it is
+the reason the module counter in the layer names its refusals rather than
+counting them silently.
