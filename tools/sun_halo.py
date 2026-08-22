@@ -2,15 +2,30 @@
 # SPDX-License-Identifier: GPL-3.0-or-later WITH x4vrmod-linking-exception
 """Measure the Sun's per-eye difference in a pair of eye-image layers.
 
-Task #49. **What is wrong is that a warm, red-dominant, radially extended glow
-component is ABSENT in the right eye** -- not attenuated. Take 179 settled it by
-looking: the left eye's Sun is a round orange glow at one moment and a large
-diagonal orange plume a few seconds later; the right eye's is a smaller white
-core with radial spikes, twice, essentially unchanged. The right eye's spikes
-look *sharper* because nothing is washing them out.
+Task #49. **NEITHER EYE MATCHES VANILLA**, which is the whole point and took
+until take 183 plus a vanilla reference to establish. Two earlier headlines
+here were wrong and are kept only as warnings: "the halo is 30% weaker in the
+right eye" (it is not an attenuation) and "a warm component is ABSENT in the
+right eye" (either eye can be the one that loses it).
+
+What vanilla X4 shows, over nine orientations: a compact warm glow, warm excess
+0.159-0.211 at 2-3 disc radii, two screen-locked horizontal bars, and a small
+starburst that wanders as the Sun moves across the frame. What our eyes show at
+one instant: one eye with a large diagonal warm plume vanilla never has, the
+other sitting BELOW vanilla's warm level with a dense spike pattern vanilla has
+not got -- and saturated disc radii differing 1.5x between the eyes.
+
+So do not read a row as "the good eye and the bad eye". Read it as two
+different wrong answers, and compare both against vanilla.
 
     tools/sun_halo.py <layer0> <layer1> [--crop=out.png] [--profile]
     tools/sun_halo.py --prefix=/tmp/x4vr-t180 --crop=/tmp/c
+    tools/sun_halo.py --prefix=/tmp/x4vr-t184 --crop=/tmp/c --dx=0
+
+`--dx` is the run's eye-to-eye offset for content at infinity, default -1024.
+It is a property of the RUN. A take with the identity affine puts the Sun at
+the same pixel in both eyes; leaving the default there makes every real frame
+read "NOT THE SAME OBJECT".
 
 THREE THINGS THIS TOOL GOT WRONG BEFORE, EACH OF WHICH COST A CONCLUSION:
 
@@ -211,6 +226,12 @@ def main():
     opts = {a.split('=')[0]: (a.split('=', 1)[1] if '=' in a else '1')
             for a in sys.argv[1:] if a.startswith('--')}
     prof = '--profile' in opts
+    # The infinity offset is a property of the RUN, not a constant. A take with
+    # X4VR_OFFAXIS="-55,55,55,-55" (the identity affine) puts the Sun at the
+    # same pixel in both eyes, so dx is ~0 and the -1024 default would report
+    # every real frame as "NOT THE SAME OBJECT" and every scene as non-flat.
+    # Read the run's own `canvas ... eye offsets` line and pass it here.
+    edx = float(opts.get('--dx', EXPECT_DX))
     if '--prefix' in opts:
         pre = opts['--prefix']
         pairs = []
@@ -231,7 +252,7 @@ def main():
             m = re.search(r'n(\d+)$', t[0])
             return (1, int(m.group(1)) if m else 0, 0)
         for tag, p0, p1 in sorted(pairs, key=key):
-            report(tag, measure(p0, p1, profile=prof,
+            report(tag, measure(p0, p1, profile=prof, expect_dx=edx,
                                 crop=opts.get('--crop') and
                                 f"{opts['--crop']}-{tag}.png" or None))
         return 0
@@ -239,7 +260,8 @@ def main():
         print(__doc__.strip())
         return 2
     report(os.path.basename(args[0]),
-           measure(args[0], args[1], crop=opts.get('--crop'), profile=prof))
+           measure(args[0], args[1], crop=opts.get('--crop'), profile=prof,
+                   expect_dx=edx))
     return 0
 
 

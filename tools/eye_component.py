@@ -83,7 +83,7 @@ def annulus_map(w):
     return (a * ao - b * bo) / (ao - bo)
 
 
-def absent_or_displaced(rich, poor, c_rich, c_poor):
+def absent_or_displaced(rich, poor, c_rich, c_poor, dx=OFFSET):
     """Is the component elsewhere in the poorer eye, or nowhere at all?"""
     amap = annulus_map(poor[..., 0] - poor[..., 2])
     rmap = annulus_map(rich[..., 0] - rich[..., 2])
@@ -92,17 +92,25 @@ def absent_or_displaced(rich, poor, c_rich, c_poor):
     print(f'    poorer eye at its own anchor reads {here:+.4f}; '
           f'richer eye reads {there:+.4f}')
     verdict = 'ABSENT'
-    for name, x in (('+offset', c_poor[1] + OFFSET),
-                    ('-offset', c_poor[1] - OFFSET)):
-        if not 0 <= x < amap.shape[1]:
-            print(f'    {name} site is off-image')
-            continue
-        v = float(amap[c_poor[0], int(x)])
-        hit = v > 0.5 * there
-        if hit:
-            verdict = 'DISPLACED'
-        print(f'    {name} site x={x:.0f} reads {v:+.4f}   '
-              f'{"CANDIDATE" if hit else "nothing there"}')
+    if abs(dx) < 1.0:
+        # Both probe sites would BE the anchor. With no eye offset there is no
+        # displaced position for a component to hide at, so the question does
+        # not arise -- saying "nothing there" would be testing the anchor
+        # against itself and calling the tautology a result.
+        print('    eye offset is 0, so there is no displaced site to probe — '
+              'displacement is not a live hypothesis for this run')
+    else:
+        for name, x in (('+offset', c_poor[1] + abs(dx)),
+                        ('-offset', c_poor[1] - abs(dx))):
+            if not 0 <= x < amap.shape[1]:
+                print(f'    {name} site is off-image')
+                continue
+            v = float(amap[c_poor[0], int(x)])
+            hit = v > 0.5 * there
+            if hit:
+                verdict = 'DISPLACED'
+            print(f'    {name} site x={x:.0f} reads {v:+.4f}   '
+                  f'{"CANDIDATE" if hit else "nothing there"}')
     m = amap.copy()
     yy, xx = np.mgrid[0:m.shape[0], 0:m.shape[1]]
     m[np.hypot(yy - c_poor[0], xx - c_poor[1]) < 150] = -9
@@ -141,7 +149,7 @@ def directional(diff):
               f'{np.degrees(np.arctan2(sy_, cx_)) / 2.0:+6.1f} deg')
 
 
-def run(tag, p0, p1):
+def run(tag, p0, p1, dx=OFFSET):
     l0, l1 = load_lin(p0), load_lin(p1)
     c0, c1 = anchor(l0), anchor(l1)
     print(f'=== {tag} ===')
@@ -178,7 +186,8 @@ def run(tag, p0, p1):
               'control, not a null result.')
         return
     directional(d if rich == 0 else -d)
-    absent_or_displaced(*((l0, l1, c0, c1) if rich == 0 else (l1, l0, c1, c0)))
+    absent_or_displaced(*((l0, l1, c0, c1) if rich == 0 else (l1, l0, c1, c0)),
+                        dx=dx)
 
 
 def main():
@@ -186,15 +195,21 @@ def main():
     ap.add_argument('images', nargs='*')
     ap.add_argument('--prefix', help='dump prefix, e.g. /tmp/x4vr-t183')
     ap.add_argument('--frames', help='comma-separated present indices')
+    # A property of the RUN, not a constant: it is where a displaced copy would
+    # land, so it comes from that take's own eye offset. A take with the
+    # identity affine (X4VR_OFFAXIS="-55,55,55,-55") has an offset of 0, and
+    # probing +/-1027 there would test two arbitrary points.
+    ap.add_argument('--dx', type=float, default=OFFSET,
+                    help='eye-to-eye offset at infinity in px (default 1027)')
     a = ap.parse_args()
     if a.prefix:
         if not a.frames:
             sys.exit('--prefix needs --frames (a negative control among them)')
         for f in a.frames.split(','):
             run(f'present-n{f}', f'{a.prefix}-present-n{f}-layer0.png',
-                f'{a.prefix}-present-n{f}-layer1.png')
+                f'{a.prefix}-present-n{f}-layer1.png', dx=a.dx)
     elif len(a.images) == 2:
-        run('pair', *a.images)
+        run('pair', *a.images, dx=a.dx)
     else:
         ap.error('give two images, or --prefix with --frames')
 

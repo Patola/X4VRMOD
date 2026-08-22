@@ -4417,3 +4417,89 @@ one, and the gate is something our projection patch breaks. If instead the
 plume comes and goes in vanilla on the same slow cadence, then neither eye is
 defective, X4's own effect is orientation-gated, and #49 becomes "the two eyes
 disagree about an orientation the ship holds only once" — a different fix.
+
+### The vanilla reference — my prediction was wrong, and it reframes #49
+
+Nine unmodded screenshots (`/tmp/scr3`, 3440x1440, cockpit, Sun in view, rolled
+clockwise). **I predicted the warm plume would be present continuously. It is
+not there at all.** Vanilla shows a compact symmetric warm glow, two horizontal
+bars, and a small starburst — and nothing resembling the diagonal plume.
+
+Measured with the annulus scaled to the disc radius (2–3R), because vanilla is
+a different resolution and FOV from a VR eye and fixed pixel radii would not
+compare:
+
+| | core R | warm excess (2–3R) |
+|---|---|---|
+| vanilla, 9 orientations | 13–16 px | **0.159–0.211** — stable to ±13% |
+| n16 layer0 — no plume | 19 px | 0.122 |
+| n16 layer1 — has plume | **29 px** | 0.158 |
+| n10 layer1 — no plume | 17 px | 0.119 |
+| n10 layer0 — has plume | 23 px | 0.218 |
+
+**Neither eye matches vanilla.** The plume eye has a plume vanilla never shows.
+The no-plume eye sits *below* vanilla's warm level and carries a dense fine
+radial spike pattern vanilla has not got. And at one instant our two eyes
+disagree about the saturated disc radius by 1.5x — 19 px against 29 px, same
+Sun, same moment.
+
+So #49 is **not** "one eye loses a component". It is **two different wrong
+answers**, and the earlier framing — including this file's own "the deficient
+eye sits at 0.128, the healthy one at 0.24–0.48" — had the polarity question
+backwards by never asking it.
+
+**Caveat, stated so nobody later treats these as commensurable:** vanilla is a
+different scene (its Sun is smaller, R≈15 against our 17–29) and the shots are
+JPEG. Absolute photometry does not cross from vanilla to a VR dump. The
+morphology does, and the morphology is unambiguous.
+
+### Patola's observation, which names the mechanism class
+
+> "even when I am rolling the ship, some horizontal projections from the Sun
+> remain horizontal. And the Sun rays roll whenever I pitch up or down or yaw
+> left or right."
+
+The horizontal bars are **screen-locked** — they do not rotate when the world
+does. The other flare elements move when the Sun's position in the frame moves.
+The nine vanilla crops show the same thing: the starburst wanders around the
+disc from frame to frame. **X4's flare/glare geometry is a function of where
+the Sun sits in the rendered image.**
+
+That is exactly the constraint take 183 arrived at from the other direction:
+the eyes differ only by 64 mm and the frustum cant, and at the Sun's distance
+the translation is nothing, so whatever drives the difference must read the
+projection. It does — through the Sun's screen position, which our ±0.2425 NDC
+cant moves by **±512 px in opposite directions**. Each eye then computes flare
+geometry for a Sun that is a quarter of a frame away from where the other eye
+has it, and neither position is the one vanilla uses.
+
+### Take 184 — the discriminating run, and what it must show
+
+`X4VR_OFFAXIS="-55,55,55,-55"` is arithmetically the identity affine
+(`layer/x4vr_layer.cpp:3760`), so both eyes render a symmetric frustum and the
+Sun lands at the **same pixel** in both. The IPD is passed to
+`patch_vertex_eye_offset` independently of the off-axis arguments
+(`x4vr_layer.cpp:4609–4621`), so the eyes still differ by ±32 mm: this is
+**not** one of the vacuous controls. Non-vacuity is checked from the run's own
+scorer output — the present dumps must still show parallax, not come back
+bit-identical.
+
+**Predictions, committed before the run:**
+
+1. The Sun looks the **same in both eyes** — `eye_component.py` reports BOTH
+   EYES AGREE on every frame with a Sun in it.
+2. Both eyes look like **vanilla**: no diagonal plume, no dense spike pattern,
+   warm excess at 2–3R near 0.17, and the two eyes' core radii within ~10% of
+   each other instead of 1.5x apart.
+3. Near-field parallax is still present — cockpit and HUD differ between eyes.
+
+If 1 holds but 2 fails, the flare depends on screen position but our symmetric
+frustum is still not X4's. If 1 fails, the screen-position story is wrong and
+something per-eye that is not the Sun's position is driving it.
+
+**Instrument note.** Both `sun_halo.py` and `eye_component.py` had the −1024 px
+infinity offset as a constant. At zero cant that offset is 0, and the default
+would have reported every real frame as "NOT THE SAME OBJECT" and probed two
+arbitrary points for a displaced copy. Both now take `--dx`, and
+`eye_component.py` refuses the displacement probe at `--dx=0` instead of
+testing the anchor against itself.
