@@ -5985,3 +5985,115 @@ section applies unchanged — a fitted ≈ −10° is a sign convention, a fit o
 near centre means a module took the transport form, and nothing fitting means
 the patch is not reaching the cockpit's modules. **Do not add a knob to make it
 fit.**
+
+## Take 187 — RESULT: #33's rotation is CONFIRMED, and one new seam
+
+**READ THIS FIRST AFTER A CONTEXT RESET.** The predictions written in the
+"Takes 186a / 186b" section were finally reached. Four of five confirmed, one
+partly, and one new defect found.
+
+### The channel came up clean
+
+```
+pose-channel  set 31 of maxBoundDescriptorSets=32, X4's widest pipeline layout
+              declares 6 set(s), 6/6 pipeline layout(s) extended,
+              1027/1027 pipeline(s) got it, 2430057 bind(s) — OK
+```
+
+Equal pairs, `OK`, `score_run.py` exit 0. And **X4's widest layout declares
+exactly 6**, which is the number take 186b's collision implied — the diagnosis
+was right, and the index at 31 clears it with room to spare.
+
+`invproj final: per-eye M_invprojection — 228 modules corrected` — **the
+fragment `R⁻¹` (#61) executed for the first time**, on 228 modules, plus 2 on
+the `_uj` path. It had never run on any hardware before this take.
+
+### The rotation is exactly what was asked for
+
+`headlook_verify --scan` over ±16° of yaw, both eyes:
+
+| yaw | left | right |
+|---|---|---|
+| +6° | 0.024 | 0.024 |
+| +8° | 0.080 | 0.075 |
+| **+10°** | **0.714** | **0.718** |
+| +12° | 0.154 | 0.176 |
+| +14° | 0.019 | 0.020 |
+
+A sharp isolated spike at **+10.00°**, against ~0.02 everywhere else and
+0.001/0.004 before the warp. Not a plateau — the neighbours at ±2° are 4–9×
+lower — so the argmax is a real peak and not aperture ambiguity. Correct sign,
+both eyes agreeing to 0.004. **This is `P·R·P⁻¹` executing in X4 at the angle
+we asked for.**
+
+The captures came back 2816×1412 and 2818×1411 for the same 2816×1408
+composite, so the tool now centre-crops to a common extent and **prints the
+resulting origin bias** (1.0 px in x) next to the 87 px predicted shift. It
+used to refuse outright. Cropping is not free — `ndc_map` is referenced to the
+frame centre — which is why the bias is reported rather than absorbed, and why
+`--scan` exists to settle the answer independently of it.
+
+### The guard band, predicted to one pixel
+
+The wedge of missing geometry is on the **left**, and its edge is not
+approximately where the math says — it is exactly there:
+
+```
+predicted guard-band edge:  NDC -0.70021  ->  x = 211.1 px
+measured hard edge:         NDC -0.70170  ->  x = 210   px
+```
+
+The prediction comes from solving the gather map for the destination whose
+source sits on the frame's left edge; the measurement comes from a
+brightness-step detector run on the screenshot. Two independent derivations,
+**1 px apart**. The band is **15.0 % of the eye width for 10° of yaw**, and the
+fit returns *zero* valid pixels left of it — there is no source data there,
+which is what a guard band is.
+
+### NEW: a hard vertical seam at x = 746, in both eyes
+
+Not the guard band, and not scene content that the rotation moved. The luma
+profile across it, median over the fit band:
+
+```
+187 measured   x=740..752:  39 40 40 40 40 40 | 27 27 26 26 27 27 28
+186a warped    x=740..752:  38 39 40 40 41 41 | 41 41 41 41 40 40 40
+```
+
+A **one-pixel cliff, 40 → 27** (×0.67) in the measured frame, where the
+predicted frame is flat to within 1.3 luma. Identical in both eyes, same
+column. Resampling cannot make that edge and then hide it in the prediction.
+
+What is *not* wrong: the region between the guard band and the seam reproduces
+at **gain 1.000** in both eyes. The transform is right there.
+
+**Hypothesis, to be tested first and NOT a finding.** The seam sits at
+x = 746, and the eye centre plus *half* the predicted centre shift is
+704 + 86.9/2 = **747.5** — 1.5 px away. That is what a pass receiving half the
+rotation would look like, e.g. a half-resolution screen-space pass where the
+shift was applied in pixels rather than in normalised coordinates. It is one
+coincidence and nothing more until a second measurement agrees.
+
+**How to test it, and why not from this take.** The right-hand region measures
+"×0.66–0.71 darker than predicted", but those are near-black pixels
+(median luma 5 against 7.6) in a **jpeg** — that ratio is compression noise
+dressed as photometry, and this project has already spent eight takes on a
+ratio that presumed attenuation where a component was simply absent. The
+40 → 27 step is in well-exposed pixels and is solid; the darkening claim is
+not. A photometric answer needs the **PNG** present dump
+(`X4VR_MV_DUMP_PRESENT`), not a screenshot, and the per-pass instrument to name
+which pass writes that column boundary. Filed rather than chased here.
+
+### Scoreboard against the predictions
+
+| # | prediction | outcome |
+|---|---|---|
+| 1 | both logs PASS, `pose final: … OK` | **confirmed** — 6/6, 1027/1027, exit 0 |
+| 2 | large lift, ≈87 px centre shift | **confirmed** — +0.71 both eyes, peak at exactly 10° |
+| 3 | cockpit rotates, HUD does not | **confirmed** — HUD elements sit where 186a had them |
+| 4 | ~10° wedge of missing geometry | **confirmed** — 15.0 % of eye width, edge predicted to 1 px |
+| 5 | shadows stay attached | **not contradicted**; no detachment seen, but nothing here measures it directly, and #61's first execution deserves a better instrument than an eye |
+
+Prediction 5 is recorded as unmeasured rather than passed. Nothing in this take
+isolates shadow attachment, and "it looked fine" is not the acceptance standard
+this project uses.

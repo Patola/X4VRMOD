@@ -122,13 +122,45 @@ def ncc(a, b):
     return (float((x * y).sum() / d) if d > 0 else float('nan')), int(m.sum())
 
 
+def reconcile(a, b):
+    """Crop two near-equal frames to a common extent, centred.
+
+    Screen captures of the same 2816x1408 composite came back 2816x1412 and
+    2818x1411 -- a few pixels of capture border, differing between grabs. The
+    tool used to refuse outright, which is safe but useless.
+
+    Cropping is NOT free here, and the reason is the one register_affine.py
+    already learned: `ndc_map` is referenced to the frame's CENTRE, so removing
+    k pixels from one edge moves the origin the whole measurement is expressed
+    in by k/2. Centring the crop keeps that bias to half the size DIFFERENCE
+    rather than half the border, and `--scan` exists so the answer can be shown
+    to be insensitive to what is left. Never silently absorb this: the caller
+    prints the bias next to the result.
+    """
+    h = min(a.shape[0], b.shape[0])
+    w = min(a.shape[1], b.shape[1])
+
+    def crop(x):
+        dy, dx = (x.shape[0] - h) // 2, (x.shape[1] - w) // 2
+        return x[dy:dy + h, dx:dx + w]
+
+    return crop(a), crop(b)
+
+
+def fit_at(ref, meas, sx, sy, yaw, pitch, band):
+    """(correlation before, correlation after the predicted warp, px used)."""
+    h = ref.shape[0]
+    lo, hi = int(band[0] * h), int(band[1] * h)
+    b = edges(meas)[lo:hi]
+    raw, _ = ncc(edges(ref)[lo:hi], b)
+    fit, n = ncc(edges(warp(ref, sx, sy, yaw, pitch))[lo:hi], b)
+    return raw, fit, n
+
+
 def report(ref, meas, sx, sy, yaw, pitch, band, label):
     h = ref.shape[0]
     lo, hi = int(band[0] * h), int(band[1] * h)
-    a, b = edges(ref)[lo:hi], edges(meas)[lo:hi]
-    raw, _ = ncc(a, b)
-    pred = edges(warp(ref, sx, sy, yaw, pitch))[lo:hi]
-    fit, n = ncc(pred, b)
+    raw, fit, n = fit_at(ref, meas, sx, sy, yaw, pitch, band)
     centre = sx * math.tan(math.radians(yaw))
     print(f'  {label:<10} rows {lo}-{hi}   correlation "off" vs "on": '
           f'{raw:.3f}')
@@ -207,6 +239,12 @@ def main():
     ap.add_argument('--sy', type=float, default=None, help='defaults to -sx')
     ap.add_argument('--yaw', type=float, default=10.0)
     ap.add_argument('--pitch', type=float, default=0.0)
+    ap.add_argument('--scan', default=None, metavar='LO,HI,STEP',
+                    help='sweep yaw and print the whole fit curve, e.g. '
+                         '"-20,20,2". This is the diagnostic the docs call '
+                         'for when a fit at the expected angle is absent — it '
+                         'answers "what DID X4 apply", not "did it apply what '
+                         'I asked"')
     ap.add_argument('--band', default='0.15,0.55',
                     help='row fraction to fit over; the default avoids the '
                          'HUD, which is EXCLUDED from the rotation on purpose')
@@ -219,9 +257,41 @@ def main():
     band = tuple(float(v) for v in a.band.split(','))
     off, on = gray(a.verify[0]), gray(a.verify[1])
     if off.shape != on.shape:
-        sys.exit(f'the two frames differ in size: {off.shape} vs {on.shape}')
+        s0, s1 = off.shape, on.shape
+        off, on = reconcile(off, on)
+        bias_y, bias_x = abs(s0[0] - s1[0]) / 2.0, abs(s0[1] - s1[1]) / 2.0
+        print(f'NOTE: the captures differ in size — {s1[1]}x{s1[0]} against '
+              f'{s0[1]}x{s0[0]}. Both centre-cropped to '
+              f'{off.shape[1]}x{off.shape[0]}.')
+        print(f'      Worst-case origin bias from that crop: {bias_x:.1f} px '
+              f'in x, {bias_y:.1f} px in y. Compare against the predicted '
+              f'shift below; if it is a few percent of it, the crop is not '
+              f'what decides the answer — and --scan settles it outright.\n')
     print(f'{a.verify[0]} -> {a.verify[1]}   {off.shape[1]}x{off.shape[0]}')
     print(f'sx={a.sx} sy={sy} yaw={a.yaw} pitch={a.pitch} band={band}\n')
+    if a.scan:
+        lo, hi, step = (float(v) for v in a.scan.split(','))
+        print('Scanning yaw. The CURVE is the result, not the argmax: a peak '
+              'on a plateau is')
+        print('aperture ambiguity, and reading the maximum off one would '
+              'invent a precision\nthat is not there.\n')
+        for which, name in ((0, 'left eye'), (1, 'right eye')):
+            r, m = half(off, which), half(on, which)
+            best, curve = None, []
+            y = lo
+            while y <= hi + 1e-9:
+                _, f, _ = fit_at(r, m, a.sx, sy, y, a.pitch, band)
+                curve.append((y, f))
+                if best is None or f > best[1]:
+                    best = (y, f)
+                y += step
+            print(f'  {name}: best yaw {best[0]:+.2f}°  fit {best[1]:.3f}')
+            for y, f in curve:
+                bar = '#' * max(0, int(round(f * 40)))
+                mark = '  <-' if y == best[0] else ''
+                print(f'    {y:+6.2f}°  {f:+.3f} {bar}{mark}')
+            print()
+        return
     for which, name in ((0, 'left eye'), (1, 'right eye')):
         report(half(off, which), half(on, which), a.sx, sy, a.yaw, a.pitch,
                band, name)
