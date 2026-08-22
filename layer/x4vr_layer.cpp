@@ -112,6 +112,13 @@ struct DeviceData {
     PFN_vkDestroyImageView DestroyImageView = nullptr;
     PFN_vkCreateDescriptorSetLayout CreateDescriptorSetLayout = nullptr;
     PFN_vkAllocateDescriptorSets AllocateDescriptorSets = nullptr;
+    // Task #59's channel. All five are new: the layer had never created a
+    // pipeline layout or a descriptor pool of its own before.
+    PFN_vkCreatePipelineLayout CreatePipelineLayout = nullptr;
+    PFN_vkDestroyPipelineLayout DestroyPipelineLayout = nullptr;
+    PFN_vkCreateDescriptorPool CreateDescriptorPool = nullptr;
+    PFN_vkDestroyDescriptorPool DestroyDescriptorPool = nullptr;
+    PFN_vkDestroyDescriptorSetLayout DestroyDescriptorSetLayout = nullptr;
     PFN_vkCreateRenderPass2 CreateRenderPass2 = nullptr;
     PFN_vkDestroyRenderPass DestroyRenderPass = nullptr;
     PFN_vkCreateGraphicsPipelines CreateGraphicsPipelines = nullptr;
@@ -137,6 +144,7 @@ struct DeviceData {
     PFN_vkGetBufferMemoryRequirements GetBufferMemoryRequirements = nullptr;
     PFN_vkQueueWaitIdle QueueWaitIdle = nullptr;
     VkPhysicalDeviceMemoryProperties memprops{};
+    VkPhysicalDeviceLimits limits{};
     // Kept for the same reason as memprops: the physical device is in scope
     // only during creation, and the swapchain path needs to ask it which
     // present modes the surface supports.
@@ -4209,6 +4217,19 @@ bool proj_invproj() {
 
 // The patching itself. Wrapped below so the dump happens on every path out of
 // it without four copies of the same two lines.
+// Task #59's channel lives next to the pipeline hooks it belongs with, 400
+// lines below; the shader patch is here and needs only these two.
+//
+// **The set index is a constant from the first module, not channel state.**
+// The SPIR-V bakes it, and vkCreateShaderModule can run long before any
+// pipeline layout exists -- so reading it out of the channel would bake
+// whatever the field held before pose_init ran, and an X4VR_POSE_SET override
+// would apply to the layout and not to the shader. Same class as the baked-sx
+// trap: a value fixed at module creation cannot come from state established
+// later.
+bool pose_wanted();
+uint32_t pose_set_index();
+
 VkResult create_shader_module_inner(
     VkDevice device, const VkShaderModuleCreateInfo *ci,
     const VkAllocationCallbacks *ac, VkShaderModule *out,
@@ -4458,11 +4479,64 @@ VkResult create_shader_module_inner(
                      K_world[12], K_nonworld[12]);
     });
 
+    // **Task #59 goes BEFORE this early return, and finding that out is the
+    // point of the harness.** The pose block is a channel, not a transform: it
+    // is independent of the shear, of `world`, and of have_k, which answer
+    // different questions. The first version put it beside the four vertex
+    // paths further down and it never ran -- this line returns first whenever
+    // no K was configured, so a run with X4VR_POSE and no X4VR_STEREO patched
+    // nothing at all, the channel came up, every counter read OK, and the
+    // transport probe moved nothing. Every report said success.
+    std::vector<uint32_t> pose_code;
+    if (pose_wanted() && ci->pCode && ci->codeSize >= 20) {
+        std::vector<uint32_t> pc(ci->codeSize / 4);
+        memcpy(pc.data(), ci->pCode, ci->codeSize);
+        if (x4vr::spv::patch_vertex_pose_clip(pc, pose_set_index(), 0)) {
+            static uint32_t n = 0;
+            n++;
+            if (n <= 3 || (n % 100) == 0)
+                X4VR_LOG("pose: %u module(s) read the pose block (set %u)", n,
+                         pose_set_index());
+            // **The pose rides the shear's variant selection, and that is
+            // deliberate.** With a K configured, a pose-patched module still
+            // goes through needs_original(), so passes the shear excludes get
+            // no pose either -- shadow passes, whose transform is light-space
+            // and must never be head-rotated, and UI passes, which are #30's
+            // canvas and must stay screen-locked. Both exclusions are right
+            // for #33 for the same reason they are right for the shear.
+            //
+            // With NO K there is no second variant to fall back to, so every
+            // module is patched unconditionally and the coverage is different.
+            // That is a test configuration, and it says so rather than being
+            // discovered later as "the pose reaches more passes on my machine".
+            if (!have_k) {
+                static bool warned = false;
+                if (!warned) {
+                    warned = true;
+                    X4VR_LOG("pose: WARNING — X4VR_POSE with no shear "
+                             "configured. Every module is patched, including "
+                             "the shadow and UI passes the shear excludes, "
+                             "because with no K there is no original variant "
+                             "to select. TEST configuration only");
+                }
+                VkShaderModuleCreateInfo mod = *ci;
+                mod.codeSize = pc.size() * 4;
+                mod.pCode = pc.data();
+                return d->CreateShaderModule(device, &mod, ac, out);
+            }
+            pose_code.swap(pc);
+        }
+    }
     if (!have_k || !ci->pCode || ci->codeSize < 20)
         return d->CreateShaderModule(device, ci, ac, out);
 
-    std::vector<uint32_t> code(ci->codeSize / 4);
-    memcpy(code.data(), ci->pCode, ci->codeSize);
+    std::vector<uint32_t> code;
+    if (!pose_code.empty()) {
+        code.swap(pose_code);
+    } else {
+        code.resize(ci->codeSize / 4);
+        memcpy(code.data(), ci->pCode, ci->codeSize);
+    }
 
     // Applied before the vertex patch, and before the NotVertex early-out,
     // because X4 ships one module carrying both entry points: the same bytes
@@ -4968,6 +5042,286 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyShaderModule(
 // pipeline-creation time, nothing per frame.
 // Compute, which this layer has never hooked at all.
 //
+// ------------------------------------------------- task #59: the pose channel
+//
+// A layer-owned uniform block, reachable from every patched shader, carrying a
+// value that changes every FRAME. Everything the layer corrects today is a
+// constant baked at vkCreateShaderModule; a head pose is not, and #54 compared
+// the ways to deliver one and chose this. Its reasoning is in
+// docs/x4-quirks.md and the short version is in patch_vertex_pose_clip.
+//
+// **Off unless X4VR_POSE is set.** With it unset not one Vulkan call changes
+// and no module is patched, so every tagged state still reproduces -- the same
+// discipline X4VR_OFFAXIS follows.
+//
+// THE SET INDEX IS FIXED, and that is a constraint rather than a preference.
+// The SPIR-V patch bakes the set number at vkCreateShaderModule, which happens
+// before any pipeline layout exists, so the index cannot be chosen per layout.
+// X4 declares sets 0-4 and nothing higher across all 409 dumps, so 5 is free.
+// A layout that declares fewer sets gets EMPTY layouts in the gaps, because
+// pSetLayouts has no holes -- and filling gaps is safe: pipeline layout
+// compatibility for set N depends only on sets 0..N, so adding sets ABOVE
+// everything X4 uses leaves its bind-once-use-many intact. Appending anywhere
+// else would break it silently.
+constexpr uint32_t kPoseBinding = 0;
+// Regions cycled per command-buffer recording, not per frame. X4 may not
+// re-record a command buffer that is still executing -- Vulkan forbids it --
+// so keying a region to the recording epoch is exactly as safe as X4's own
+// command-buffer reuse, and needs no fence of ours.
+constexpr uint32_t kPoseRegions = 4;
+
+struct PoseChannel {
+    bool on = false;          // X4VR_POSE asked for it
+    bool ready = false;       // ...and every object was created
+    bool failed = false;
+    VkDevice device = VK_NULL_HANDLE;
+    VkDescriptorSetLayout dsl = VK_NULL_HANDLE;
+    VkDescriptorSetLayout empty = VK_NULL_HANDLE;
+    VkDescriptorPool pool = VK_NULL_HANDLE;
+    VkDescriptorSet set[kPoseRegions] = {};
+    VkBuffer buf = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    uint8_t *host = nullptr;
+    VkDeviceSize stride = 0;
+    std::mutex mu;
+    std::unordered_map<VkPipelineLayout, VkPipelineLayout> extended;
+    std::unordered_map<VkPipeline, VkPipelineLayout> pipe_layout;
+    std::unordered_map<VkCommandBuffer, uint32_t> cb_region;
+    uint64_t next_region = 0;
+    // The counters the acceptance check reads. `pipes_seen` against
+    // `pipes_extended` must be EQUAL: a pipeline that missed the substitution
+    // runs with our set unbound, which is undefined behaviour rather than a
+    // degraded picture, so an unequal pair is a failure and not a warning.
+    uint64_t layouts_seen = 0, layouts_extended = 0;
+    uint64_t pipes_seen = 0, pipes_extended = 0, binds = 0;
+    x4vr::PoseBlock value = x4vr::pose_identity();
+} g_pose;
+
+bool pose_wanted() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_POSE");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
+
+// Asked for, built, and the layer is running against the target. Every site
+// that touches the channel goes through this one predicate, so "on" cannot
+// come to mean different things in different places.
+bool pose_active() { return pose_wanted() && g_pose.ready && g_active; }
+
+// Read once, before anything can bake it. X4 declares sets 0-4 across all 409
+// dumps, so 5 is the first free index; the override exists for a build of X4
+// that grows one.
+uint32_t pose_set_index() {
+    static const uint32_t idx = [] {
+        const char *e = getenv("X4VR_POSE_SET");
+        const int v = e ? atoi(e) : 5;
+        return (uint32_t)(v < 0 ? 5 : v);
+    }();
+    return idx;
+}
+
+// Create the block, the pool, the sets and the two layouts. Lazy, on the first
+// pipeline layout X4 creates, because that is the first moment the channel is
+// needed and the device is known.
+bool pose_init(DeviceData *d, VkDevice dev) {
+    if (g_pose.ready)
+        return true;
+    if (g_pose.failed || !pose_wanted() || !d->CreatePipelineLayout ||
+        !d->CreateDescriptorPool || !d->AllocateMemory)
+        return g_pose.ready;
+    g_pose.failed = true; // cleared on success; every early return stays failed
+    g_pose.device = dev;
+    if (d->limits.maxBoundDescriptorSets &&
+        pose_set_index() >= d->limits.maxBoundDescriptorSets) {
+        X4VR_LOG("pose: set %u is beyond maxBoundDescriptorSets=%u — channel "
+                 "OFF. Nothing is patched, so this is a refusal, not a "
+                 "degradation",
+                 pose_set_index(), d->limits.maxBoundDescriptorSets);
+        return false;
+    }
+
+    VkDescriptorSetLayoutBinding b{};
+    b.binding = kPoseBinding;
+    b.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    b.descriptorCount = 1;
+    b.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |
+                   VK_SHADER_STAGE_COMPUTE_BIT;
+    VkDescriptorSetLayoutCreateInfo lci{};
+    lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    lci.bindingCount = 1;
+    lci.pBindings = &b;
+    if (d->CreateDescriptorSetLayout(dev, &lci, nullptr, &g_pose.dsl) !=
+        VK_SUCCESS)
+        return false;
+    VkDescriptorSetLayoutCreateInfo eci{};
+    eci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    if (d->CreateDescriptorSetLayout(dev, &eci, nullptr, &g_pose.empty) !=
+        VK_SUCCESS)
+        return false;
+
+    VkDescriptorPoolSize ps{};
+    ps.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    ps.descriptorCount = kPoseRegions;
+    VkDescriptorPoolCreateInfo pci{};
+    pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pci.maxSets = kPoseRegions;
+    pci.poolSizeCount = 1;
+    pci.pPoolSizes = &ps;
+    if (d->CreateDescriptorPool(dev, &pci, nullptr, &g_pose.pool) != VK_SUCCESS)
+        return false;
+
+    g_pose.stride = sizeof(x4vr::PoseBlock);
+    if (d->limits.minUniformBufferOffsetAlignment > 1) {
+        const VkDeviceSize a = d->limits.minUniformBufferOffsetAlignment;
+        g_pose.stride = (g_pose.stride + a - 1) / a * a;
+    }
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = g_pose.stride * kPoseRegions;
+    bci.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (d->CreateBuffer(dev, &bci, nullptr, &g_pose.buf) != VK_SUCCESS)
+        return false;
+    VkMemoryRequirements req{};
+    d->GetBufferMemoryRequirements(dev, g_pose.buf, &req);
+    uint32_t type = UINT32_MAX;
+    const VkMemoryPropertyFlags want = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (uint32_t i = 0; i < d->memprops.memoryTypeCount; i++)
+        if ((req.memoryTypeBits & (1u << i)) &&
+            (d->memprops.memoryTypes[i].propertyFlags & want) == want) {
+            type = i;
+            break;
+        }
+    VkMemoryAllocateInfo mai{};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex = type;
+    void *ptr = nullptr;
+    if (type == UINT32_MAX ||
+        d->AllocateMemory(dev, &mai, nullptr, &g_pose.mem) != VK_SUCCESS ||
+        d->BindBufferMemory(dev, g_pose.buf, g_pose.mem, 0) != VK_SUCCESS ||
+        d->MapMemory(dev, g_pose.mem, 0, VK_WHOLE_SIZE, 0, &ptr) != VK_SUCCESS)
+        return false;
+    g_pose.host = (uint8_t *)ptr;
+
+    VkDescriptorSetLayout dsls[kPoseRegions];
+    for (uint32_t i = 0; i < kPoseRegions; i++)
+        dsls[i] = g_pose.dsl;
+    VkDescriptorSetAllocateInfo dai{};
+    dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dai.descriptorPool = g_pose.pool;
+    dai.descriptorSetCount = kPoseRegions;
+    dai.pSetLayouts = dsls;
+    if (d->AllocateDescriptorSets(dev, &dai, g_pose.set) != VK_SUCCESS)
+        return false;
+    VkDescriptorBufferInfo dbi[kPoseRegions]{};
+    VkWriteDescriptorSet w[kPoseRegions]{};
+    for (uint32_t i = 0; i < kPoseRegions; i++) {
+        dbi[i].buffer = g_pose.buf;
+        dbi[i].offset = g_pose.stride * i;
+        dbi[i].range = sizeof(x4vr::PoseBlock);
+        w[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[i].dstSet = g_pose.set[i];
+        w[i].dstBinding = kPoseBinding;
+        w[i].descriptorCount = 1;
+        w[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        w[i].pBufferInfo = &dbi[i];
+    }
+    d->UpdateDescriptorSets(dev, kPoseRegions, w, 0, nullptr);
+    // X4VR_POSE_TEST_DX exists so the channel can be PROVEN, not just built.
+    // Identity is indistinguishable from a channel that never arrives -- the
+    // frame looks right either way -- so the acceptance test needs a value
+    // whose absence is visible. A clip-space x offset of 2 pushes a fullscreen
+    // triangle entirely off screen, which is a binary signal the harness reads
+    // as coverage going to zero. Not a knob for a real run: it is a transport
+    // probe, and #33 replaces what fills this block.
+    if (const char *e = getenv("X4VR_POSE_TEST_DX")) {
+        g_pose.value.r[12] = (float)atof(e);
+        X4VR_LOG("pose: TEST value r[12]=%.3f — this is a transport probe, "
+                 "not a pose. Every patched vertex shader shifts clip x by "
+                 "%.3f*w",
+                 g_pose.value.r[12], g_pose.value.r[12]);
+    }
+    // Identity in every region before anything can read one. A region that has
+    // never been written holds whatever the allocation held, and a garbage
+    // matrix in the vertex stage is a black screen with no line saying why.
+    for (uint32_t i = 0; i < kPoseRegions; i++)
+        memcpy(g_pose.host + g_pose.stride * i, &g_pose.value,
+               sizeof(g_pose.value));
+
+    g_pose.failed = false;
+    g_pose.ready = true;
+    X4VR_LOG("pose: channel up — set %u binding %u, %u region(s) of %llu B, "
+             "identity until #33 drives it",
+             pose_set_index(), kPoseBinding, kPoseRegions,
+             (unsigned long long)g_pose.stride);
+    return true;
+}
+
+// The value for the frame, written into the region this command buffer was
+// given. Called from the submit hook, which is after X4 has finished recording
+// and before the GPU runs it.
+void pose_publish(VkCommandBuffer cb) {
+    if (!g_pose.ready)
+        return;
+    std::lock_guard<std::mutex> lock(g_pose.mu);
+    auto it = g_pose.cb_region.find(cb);
+    if (it == g_pose.cb_region.end())
+        return;
+    memcpy(g_pose.host + g_pose.stride * it->second, &g_pose.value,
+           sizeof(g_pose.value));
+}
+
+// X4's layout plus ours, or X4's unchanged if anything refuses.
+VkPipelineLayout pose_extend_layout(DeviceData *d, VkDevice dev,
+                                    VkPipelineLayout orig,
+                                    const VkPipelineLayoutCreateInfo *ci) {
+    std::vector<VkDescriptorSetLayout> sets(ci->pSetLayouts,
+                                            ci->pSetLayouts + ci->setLayoutCount);
+    if (sets.size() > pose_set_index())
+        return VK_NULL_HANDLE; // X4 already uses our index -- refuse, loudly
+    while (sets.size() < pose_set_index())
+        sets.push_back(g_pose.empty);
+    sets.push_back(g_pose.dsl);
+    VkPipelineLayoutCreateInfo e = *ci;
+    e.setLayoutCount = (uint32_t)sets.size();
+    e.pSetLayouts = sets.data();
+    VkPipelineLayout ext = VK_NULL_HANDLE;
+    if (d->CreatePipelineLayout(dev, &e, nullptr, &ext) != VK_SUCCESS)
+        return VK_NULL_HANDLE;
+    return ext;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreatePipelineLayout(
+    VkDevice device, const VkPipelineLayoutCreateInfo *ci,
+    const VkAllocationCallbacks *ac, VkPipelineLayout *out) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    const VkResult r = d->CreatePipelineLayout(device, ci, ac, out);
+    if (r != VK_SUCCESS || !pose_wanted() || !g_active)
+        return r;
+    if (!pose_init(d, device))
+        return r;
+    std::lock_guard<std::mutex> lock(g_pose.mu);
+    g_pose.layouts_seen++;
+    if (VkPipelineLayout ext = pose_extend_layout(d, device, *out, ci)) {
+        g_pose.extended[*out] = ext;
+        g_pose.layouts_extended++;
+    } else if (g_pose.layouts_seen - g_pose.layouts_extended <= 3) {
+        X4VR_LOG("pose: WARNING — could not extend a pipeline layout "
+                 "(declares %u set(s), ours is index %u). Pipelines built on "
+                 "it get NO pose set, so their modules must not be patched",
+                 ci->setLayoutCount, pose_set_index());
+    }
+    return r;
+}
+
 // Every instrument here -- the writer lists, the masked/unmasked split, the
 // pipeline provenance, the probe -- is built around render passes, so a frame
 // stage performed by a dispatch is not merely unhandled but *invisible*: it
@@ -4986,8 +5340,33 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
+
+    // Task #59, same as the graphics path. Compute is included because the
+    // head rotation is EYE-INDEPENDENT -- unlike every per-eye correction it
+    // is not blocked by compute having no gl_ViewIndex -- and the froxel
+    // volume is filled by compute.
+    std::vector<VkComputePipelineCreateInfo> csubs;
+    if (pose_active()) {
+        std::lock_guard<std::mutex> lock(g_pose.mu);
+        csubs.assign(ci, ci + count);
+        for (uint32_t i = 0; i < count; i++) {
+            g_pose.pipes_seen++;
+            auto e = g_pose.extended.find(ci[i].layout);
+            if (e != g_pose.extended.end()) {
+                csubs[i].layout = e->second;
+                g_pose.pipes_extended++;
+            }
+        }
+        ci = csubs.data();
+    }
     const VkResult r =
         d->CreateComputePipelines(device, cache, count, ci, ac, out);
+    if (r == VK_SUCCESS && pose_active()) {
+        std::lock_guard<std::mutex> lock(g_pose.mu);
+        for (uint32_t i = 0; i < count; i++)
+            if (out[i] != VK_NULL_HANDLE)
+                g_pose.pipe_layout[out[i]] = ci[i].layout;
+    }
     if (r != VK_SUCCESS || !g_mv_inventory || !g_active)
         return r;
     for (uint32_t i = 0; i < count; i++) {
@@ -5062,6 +5441,24 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
     {
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
+    }
+
+    // Task #59: every pipeline gets the layout that declares our set, or none
+    // of its modules may be patched. `subs` keeps the rewritten create-infos
+    // alive across the driver call.
+    std::vector<VkGraphicsPipelineCreateInfo> subs;
+    if (pose_active()) {
+        std::lock_guard<std::mutex> lock(g_pose.mu);
+        subs.assign(ci, ci + count);
+        for (uint32_t i = 0; i < count; i++) {
+            g_pose.pipes_seen++;
+            auto e = g_pose.extended.find(ci[i].layout);
+            if (e != g_pose.extended.end()) {
+                subs[i].layout = e->second;
+                g_pose.pipes_extended++;
+            }
+        }
+        ci = subs.data();
     }
 
     // Phase 4b diagnosis: a pipeline is compiled for multiview only if the
@@ -5174,6 +5571,19 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
     // a masked pass can be checked. Recorded after the call, below, once the
     // handles exist.
     auto record_provenance = [&](VkResult r) {
+        // Task #59 first, and OUTSIDE the g_mv gate below: the pose channel is
+        // independent of multiview, and a pipeline whose extended layout was
+        // not recorded cannot have our set bound at CmdBindPipeline. Putting
+        // it inside that gate would have made the channel silently dead on
+        // every run without X4VR_MV -- the same shape as the braces bug at
+        // patch_path, where one statement ran under a condition meant for
+        // another.
+        if (r == VK_SUCCESS && pose_active()) {
+            std::lock_guard<std::mutex> lock(g_pose.mu);
+            for (uint32_t i = 0; i < count; i++)
+                if (out[i] != VK_NULL_HANDLE)
+                    g_pose.pipe_layout[out[i]] = ci[i].layout;
+        }
         if (!g_mv || !g_active || r != VK_SUCCESS)
             return;
         std::vector<bool> mv(count);
@@ -6069,6 +6479,14 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueueSubmit(VkQueue queue,
         d = &g_devices.at(dispatch_key(queue));
     }
     patch_view_before_submit();
+    // Task #59: publish this frame's pose into the region each submitted
+    // command buffer was given. Submit time is the latest moment that is still
+    // before the GPU reads it, which is the same reasoning
+    // patch_view_before_submit is placed on.
+    if (pose_active())
+        for (uint32_t i = 0; i < submitCount; i++)
+            for (uint32_t j = 0; j < submits[i].commandBufferCount; j++)
+                pose_publish(submits[i].pCommandBuffers[j]);
     // #36: the runtime shares this queue on any device with one graphics
     // queue. Uncontended when it does not, and inert until the XR thread
     // starts submitting.
@@ -8180,6 +8598,16 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
         cb_enter_pass(cb, bi->pInheritanceInfo->renderPass);
     else
         cb_leave_pass(cb);
+    // Task #59: this command buffer's region of the pose ring. Vulkan forbids
+    // re-recording a command buffer that is still executing, so a region keyed
+    // to the recording epoch is free by exactly the same rule that lets X4
+    // reuse the buffer -- no fence of ours, and no frame counter that could
+    // disagree with X4's own pacing.
+    if (pose_active()) {
+        std::lock_guard<std::mutex> lock(g_pose.mu);
+        g_pose.cb_region[cb] =
+            (uint32_t)(g_pose.next_region++ % kPoseRegions);
+    }
     return d->BeginCommandBuffer(cb, bi);
 }
 
@@ -8190,6 +8618,31 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
     {
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(cb));
+    }
+    // Task #59. Bound HERE rather than once per command buffer, because a
+    // pipeline whose layout declares our set and runs with nothing bound to it
+    // is undefined behaviour, not a degraded picture. Binding at the pipeline
+    // itself makes "declared" and "bound" the same event.
+    //
+    // The layout is the pipeline's OWN extended layout: descriptor set binding
+    // needs a layout compatible for the set being bound, which depends on sets
+    // 0..N, and X4's pipelines differ below our index.
+    if (pose_active()) {
+        VkPipelineLayout lay = VK_NULL_HANDLE;
+        uint32_t region = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_pose.mu);
+            auto pl = g_pose.pipe_layout.find(p);
+            if (pl != g_pose.pipe_layout.end())
+                lay = pl->second;
+            auto rg = g_pose.cb_region.find(cb);
+            region = rg == g_pose.cb_region.end() ? 0 : rg->second;
+            if (lay)
+                g_pose.binds++;
+        }
+        if (lay)
+            d->CmdBindDescriptorSets(cb, bp, lay, pose_set_index(), 1,
+                                     &g_pose.set[region], 0, nullptr);
     }
     if (bp == VK_PIPELINE_BIND_POINT_COMPUTE && g_mv_inventory && g_active) {
         std::lock_guard<std::mutex> lock(g_comp_mu);
@@ -9907,6 +10360,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(CreateImageView);
     RESOLVE(CreateDescriptorSetLayout);
     RESOLVE(AllocateDescriptorSets);
+    RESOLVE(CreatePipelineLayout);
+    RESOLVE(DestroyPipelineLayout);
+    RESOLVE(CreateDescriptorPool);
+    RESOLVE(DestroyDescriptorPool);
+    RESOLVE(DestroyDescriptorSetLayout);
     RESOLVE(DestroyImageView);
     RESOLVE(CreateRenderPass2);
     RESOLVE(DestroyRenderPass);
@@ -9941,6 +10399,15 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
         if (auto gpmp = (PFN_vkGetPhysicalDeviceMemoryProperties)gipa(
                 inst, "vkGetPhysicalDeviceMemoryProperties"))
             gpmp(phys, &d.memprops);
+        // Task #59 needs maxBoundDescriptorSets and the uniform-buffer offset
+        // alignment. Cached here for the same reason memprops is: the physical
+        // device is in scope only during creation.
+        if (auto gpp = (PFN_vkGetPhysicalDeviceProperties)gipa(
+                inst, "vkGetPhysicalDeviceProperties")) {
+            VkPhysicalDeviceProperties pp{};
+            gpp(phys, &pp);
+            d.limits = pp.limits;
+        }
         d.phys = phys;
     }
     // Core in 1.3; the KHR alias is what a 1.2 device exposes. Left null if
@@ -10026,6 +10493,62 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
 
 VKAPI_ATTR void VKAPI_CALL x4vr_DestroyDevice(
     VkDevice device, const VkAllocationCallbacks *ac) {
+    // Task #59: the acceptance counters, then the objects. `seen` and
+    // `extended` must be EQUAL -- a pipeline that missed the substitution runs
+    // with a layout that does not declare our set while its module reads it,
+    // which is undefined behaviour rather than a degraded picture. That is why
+    // the mismatch prints as a FAIL and not as a note.
+    if (pose_wanted() && g_pose.ready) {
+        std::lock_guard<std::mutex> lock(g_pose.mu);
+        const bool ok = g_pose.pipes_seen == g_pose.pipes_extended;
+        X4VR_LOG("pose final: set %u, %llu/%llu pipeline layout(s) extended, "
+                 "%llu/%llu pipeline(s) got it, %llu bind(s) — %s",
+                 pose_set_index(),
+                 (unsigned long long)g_pose.layouts_extended,
+                 (unsigned long long)g_pose.layouts_seen,
+                 (unsigned long long)g_pose.pipes_extended,
+                 (unsigned long long)g_pose.pipes_seen,
+                 (unsigned long long)g_pose.binds,
+                 ok ? "OK"
+                    : "FAIL: a pipeline was created against a layout without "
+                      "our set. Any patched module bound through it read an "
+                      "unbound descriptor");
+        DeviceData *dd = nullptr;
+        {
+            std::lock_guard<std::mutex> l2(g_mu);
+            auto it = g_devices.find(dispatch_key(device));
+            if (it != g_devices.end())
+                dd = &it->second;
+        }
+        if (dd) {
+            for (auto &[orig, ext] : g_pose.extended)
+                dd->DestroyPipelineLayout(device, ext, nullptr);
+            g_pose.extended.clear();
+            if (g_pose.pool)
+                dd->DestroyDescriptorPool(device, g_pose.pool, nullptr);
+            if (g_pose.dsl)
+                dd->DestroyDescriptorSetLayout(device, g_pose.dsl, nullptr);
+            if (g_pose.empty)
+                dd->DestroyDescriptorSetLayout(device, g_pose.empty, nullptr);
+            if (g_pose.host)
+                dd->UnmapMemory(device, g_pose.mem);
+            if (g_pose.buf)
+                dd->DestroyBuffer(device, g_pose.buf, nullptr);
+            if (g_pose.mem)
+                dd->FreeMemory(device, g_pose.mem, nullptr);
+        }
+        // Field by field, not `g_pose = PoseChannel{}`: the struct owns the
+        // mutex this scope is holding, so assigning over it would destroy the
+        // lock under the lock.
+        g_pose.ready = false;
+        g_pose.pool = VK_NULL_HANDLE;
+        g_pose.dsl = g_pose.empty = VK_NULL_HANDLE;
+        g_pose.buf = VK_NULL_HANDLE;
+        g_pose.mem = VK_NULL_HANDLE;
+        g_pose.host = nullptr;
+        g_pose.pipe_layout.clear();
+        g_pose.cb_region.clear();
+    }
     if (probe_hooks_wanted() && g_mv && g_active) {
         std::lock_guard<std::mutex> lock(g_mu);
         auto it = g_devices.find(dispatch_key(device));
@@ -10159,6 +10682,8 @@ const NameFunc kHooks[] = {
     {"vkDestroyImageView", (PFN_vkVoidFunction)x4vr_DestroyImageView},
     {"vkCreateRenderPass2", (PFN_vkVoidFunction)x4vr_CreateRenderPass2},
     {"vkDestroyRenderPass", (PFN_vkVoidFunction)x4vr_DestroyRenderPass},
+    {"vkCreatePipelineLayout",
+     (PFN_vkVoidFunction)x4vr_CreatePipelineLayout},
     {"vkCreateGraphicsPipelines",
      (PFN_vkVoidFunction)x4vr_CreateGraphicsPipelines},
 };

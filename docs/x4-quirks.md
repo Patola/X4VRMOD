@@ -5356,3 +5356,87 @@ layouts, a headless harness case where a shader reads the block and the value
 arrives on a real GPU, and a counter in the log pairing pipelines created
 against pipelines that got the extended layout — an unequal pair being a fail,
 not a warning.
+
+### #59 — the pose channel is built, and it is proven rather than assumed
+
+`X4VR_POSE=1`. Off by default: with it unset not one Vulkan call changes, no
+module is patched, and the suite asserts that the log carries no `pose` line at
+all — so every tagged state still reproduces.
+
+    pose: channel up — set 5 binding 0, 4 region(s) of 128 B, identity until #33 drives it
+    pose: 1 module(s) read the pose block (set 5)
+    pose final: set 5, 2/2 pipeline layout(s) extended, 2/2 pipeline(s) got it, 2 bind(s) — OK
+
+**What was built**, exactly as #54 decided: `vkCreatePipelineLayout` is hooked
+and appends our set at index 5 (the first index X4 never uses), filling any
+gaps with empty layouts because `pSetLayouts` has no holes. Compatibility for
+sets 0–4 is untouched, so X4's bind-once-use-many still works. Pipelines are
+substituted at creation, our set is bound at `vkCmdBindPipeline` — so
+"declared" and "bound" are the same event — and the value is written at submit,
+the same moment `patch_view_before_submit` already uses.
+
+**The set index is a constant read before any module is patched.** SPIR-V bakes
+it at `vkCreateShaderModule`, which can run long before a pipeline layout
+exists, so reading it out of channel state would bake whatever the field held
+and an `X4VR_POSE_SET` override would apply to the layout and not the shader.
+The same class as the baked-`sx` trap: a value fixed at module creation cannot
+come from state established later.
+
+**Regions are keyed to the command buffer's recording epoch, not to a frame
+counter.** Vulkan forbids re-recording a command buffer that is still
+executing, so a region assigned at `vkBeginCommandBuffer` is free by exactly
+the rule that lets X4 reuse the buffer — no fence of ours, and no frame counter
+that could disagree with X4's own pacing.
+
+**It carries `R` alone.** `sx`/`sy` stay live from X4's block, because six of
+the sixteen entries of `P·R·P⁻¹` scale with them. That is what keeps the
+payload camera-independent, and it is why one write per frame serves every draw
+where writing X4's arena would need one per credited slot.
+
+#### The two bugs the harness caught, both of which reported success
+
+**1. The channel was dead unless the shear was on.** The patch went in beside
+the four vertex paths — which sit *below* `if (!have_k) return`. So with
+`X4VR_POSE` and no `X4VR_STEREO` nothing was patched at all, and yet: the
+channel came up, `2/2` layouts extended, `2/2` pipelines got it, 2 binds, `OK`,
+and the frame looked right. Every report said success and nothing was
+delivered. The patch now runs before that return.
+
+**That is the whole reason the acceptance test drives a value.** Identity and
+"never arrived" produce the same picture, so `X4VR_POSE_TEST_DX=2` shifts clip
+x by `2·w` and pushes the fullscreen triangle off screen: coverage goes to
+zero, or the channel is not there. `pose: identity is inert` is the control
+that keeps the probe honest.
+
+**2. My second test asserted the opposite of the right answer.** It expected
+the pose to arrive under `X4VR_STEREO` too, on the reasoning that delivery and
+classification answer different questions. They do at the `have_k` gate — bug 1
+— and they do **not** at the variant selection: a pose-patched module still
+goes through `needs_original()`, so a pass the shear excludes gets no pose
+either. Those exclusions are the shadow passes, whose transform is light-space
+and must never be head-rotated, and the UI passes, which are #30's canvas and
+must stay screen-locked. Both are exactly what #33 must also leave alone.
+
+So the case now asserts the **exclusion**, and asserts the log line that
+explains it rather than just the number.
+
+One consequence worth stating because it is a trap: with no `K` there is no
+second variant to fall back to, so every module is patched and the coverage
+differs from a real run. The layer warns when that happens and names it a test
+configuration.
+
+#### What is NOT in this
+
+No head tracking, and no rotation. The block ships identity, so a patched
+module is a no-op — which is what makes it safe to leave on while the rest of
+#33 is built. Applying member 0 straight to clip space is a **transport** test;
+`P·R·P⁻¹` needs the live `sx`/`sy` conjugation, and that arithmetic is #33's,
+not the channel's. What #33 changes here is what the shader does with the
+block, not how it gets it.
+
+Fragment and compute are reachable — the set declares all three stages and the
+compute pipelines are substituted too — but nothing reads it there yet. The
+member-2/4 correction is #33's.
+
+Validation-clean: the VUID set is identical with the channel on and off, in
+both the default and stereo configurations.

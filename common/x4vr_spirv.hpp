@@ -133,6 +133,13 @@ enum : uint32_t {
 };
 
 enum : uint32_t { DecorationBinding = 33, DecorationDescriptorSet = 34 };
+// For patch_vertex_pose_clip's synthesised uniform block (#59).
+enum : uint32_t {
+    DecorationBlock = 2,
+    DecorationColMajor = 5,
+    DecorationMatrixStride = 7,
+    DecorationOffset = 35,
+};
 
 struct Inst {
     uint32_t op = 0;
@@ -741,6 +748,247 @@ inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16],
     }
 
     out[3] = bound; // updated id bound
+    code.swap(out);
+    return true;
+}
+
+/// Task #59 — read a matrix from the LAYER's own uniform block and apply it to
+/// `gl_Position`, declaring the block from nothing.
+///
+/// **This is the per-frame channel, not the head rotation.** #54 chose it over
+/// writing X4's camera block for two reasons that are facts rather than taste:
+/// the members that read back unused are unused only because the injector
+/// forces `ssao=0`, `ssr=false` and `antialiasing=none` — all three of which we
+/// expect to relax — and whether a single well-timed write into X4's arena
+/// survives its own CPU writes has never been measured (`X4VR_TEST_VERIFY` has
+/// produced no line in 190 stored runs). A block only we write has neither
+/// problem.
+///
+/// **What #33 changes here is the arithmetic, not the plumbing.** The head
+/// rotation in clip space is `P·R·P⁻¹`, and `tools/headlook_clip.py` shows six
+/// of its sixteen entries scale with `sx`/`sy` — which vary 33x with zoom and
+/// differ per camera. So the block carries `R` alone and the shader will have
+/// to conjugate it with the live `sx`/`sy` it already loads for the shear.
+/// Applying member 0 straight to clip space, as this does, is a *transport*
+/// test: correct only when the matrix is a clip-space transform in its own
+/// right, which identity always is.
+///
+/// Identity is the shipped value, so with the channel on and nothing driving
+/// it the frame is unchanged — the same property that lets every pre-#35 tag
+/// reproduce with `X4VR_OFFAXIS` unset.
+///
+/// **The variable is NOT added to the entry point's interface list**, and that
+/// is deliberate rather than forgotten. Before SPIR-V 1.4 the list may contain
+/// only Input and Output variables, so adding a Uniform would make 1.0 and 1.2
+/// modules invalid — and X4's dumps are 398 modules at 1.2 and 11 at 1.0. From
+/// 1.4 on it would be required; a module at that version reaching here would
+/// need the extra id, which is why the version is checked and refused instead.
+inline bool patch_vertex_pose_clip(std::vector<uint32_t> &code, uint32_t set,
+                                   uint32_t binding) {
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return false;
+    // See the note above: at 1.4 and later every global in scope must appear
+    // in the entry point's interface, and this does not add it there. Refusing
+    // is the honest answer; silently emitting an invalid module is not.
+    if (code[1] >= 0x00010400u)
+        return false;
+
+    uint32_t bound = code[3];
+    auto new_id = [&bound] { return bound++; };
+
+    uint32_t entry_fn = 0;
+    std::unordered_map<uint32_t, uint32_t> struct_pos_member;
+    std::vector<uint32_t> var_pos_direct;
+    struct PtrType { uint32_t storage, pointee; };
+    std::unordered_map<uint32_t, PtrType> ptr_types;
+    std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> vars;
+    uint32_t t_float = 0, t_v4 = 0, t_mat4 = 0, t_int = 0, ptr_out_v4 = 0;
+    size_t first_fn = 0, last_annotation_end = 0, first_global = 0;
+    bool have_first_fn = false, have_first_global = false;
+
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (!have_first_global)
+            switch (in.op) {
+            case OpTypeInt: case OpTypeFloat: case OpTypeVector:
+            case OpTypeMatrix: case OpTypeStruct: case OpTypePointer:
+            case OpConstant: case OpConstantComposite: case OpVariable:
+                first_global = in.start;
+                have_first_global = true;
+                break;
+            default:
+                break;
+            }
+        switch (in.op) {
+        case OpEntryPoint:
+            // Vertex only. A fragment entry point in the same module is
+            // untouched, which matters because X4's modules carry both.
+            if (in.len >= 3 && w[1] == 0)
+                entry_fn = w[2];
+            break;
+        case OpDecorate:
+            last_annotation_end = in.start + in.len;
+            if (in.len >= 4 && w[2] == DecorationBuiltIn &&
+                w[3] == BuiltInPosition)
+                var_pos_direct.push_back(w[1]);
+            break;
+        case OpMemberDecorate:
+            last_annotation_end = in.start + in.len;
+            if (in.len >= 5 && w[3] == DecorationBuiltIn &&
+                w[4] == BuiltInPosition)
+                struct_pos_member[w[1]] = w[2];
+            break;
+        case OpTypeFloat:
+            if (in.len >= 3 && w[2] == 32)
+                t_float = w[1];
+            break;
+        case OpTypeInt:
+            if (in.len >= 4 && w[2] == 32 && w[3] == 1)
+                t_int = w[1];
+            break;
+        case OpTypeVector:
+            if (in.len >= 4 && w[2] == t_float && w[3] == 4)
+                t_v4 = w[1];
+            break;
+        case OpTypeMatrix:
+            if (in.len >= 4 && w[2] == t_v4 && w[3] == 4)
+                t_mat4 = w[1];
+            break;
+        case OpTypePointer:
+            if (in.len >= 4) {
+                ptr_types[w[1]] = {w[2], w[3]};
+                if (w[2] == StorageClassOutput && w[3] == t_v4)
+                    ptr_out_v4 = w[1];
+            }
+            break;
+        case OpVariable:
+            if (in.len >= 4)
+                vars[w[2]] = {w[1], w[3]};
+            break;
+        case OpFunction:
+            if (!have_first_fn) {
+                first_fn = in.start;
+                have_first_fn = true;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    if (!entry_fn || !t_float || !t_v4 || !have_first_fn)
+        return false;
+
+    uint32_t pos_var = 0, pos_member = 0;
+    bool via_struct = false;
+    for (auto &[id, ts] : vars) {
+        if (ts.second != StorageClassOutput)
+            continue;
+        auto pt = ptr_types.find(ts.first);
+        if (pt == ptr_types.end())
+            continue;
+        auto sm = struct_pos_member.find(pt->second.pointee);
+        if (sm != struct_pos_member.end()) {
+            pos_var = id;
+            pos_member = sm->second;
+            via_struct = true;
+            break;
+        }
+    }
+    if (!pos_var)
+        for (uint32_t v : var_pos_direct)
+            if (vars.count(v) && vars[v].second == StorageClassOutput) {
+                pos_var = v;
+                via_struct = false;
+                break;
+            }
+    if (!pos_var)
+        return false;
+
+    // --- declarations --------------------------------------------------
+    std::vector<uint32_t> decls, annos;
+    if (!t_mat4) {
+        t_mat4 = new_id();
+        emit(decls, OpTypeMatrix, {t_mat4, t_v4, 4});
+    }
+    if (!t_int) {
+        t_int = new_id();
+        emit(decls, OpTypeInt, {t_int, 32, 1});
+    }
+    if (!ptr_out_v4) {
+        ptr_out_v4 = new_id();
+        emit(decls, OpTypePointer, {ptr_out_v4, StorageClassOutput, t_v4});
+    }
+    // struct { mat4 R; mat4 Rinv; } -- std140, so 64-byte members, column
+    // major, 16-byte matrix stride. The layout is asserted against the C++
+    // struct in tests/view_math.cpp rather than trusted: a mismatch here reads
+    // back as a plausible wrong matrix, not as an error.
+    const uint32_t t_block = new_id();
+    emit(decls, OpTypeStruct, {t_block, t_mat4, t_mat4});
+    const uint32_t ptr_block = new_id();
+    emit(decls, OpTypePointer, {ptr_block, StorageClassUniform, t_block});
+    const uint32_t ptr_uni_mat = new_id();
+    emit(decls, OpTypePointer, {ptr_uni_mat, StorageClassUniform, t_mat4});
+    const uint32_t block_var = new_id();
+    emit(decls, OpVariable, {ptr_block, block_var, StorageClassUniform});
+    const uint32_t c_zero = new_id();
+    emit(decls, OpConstant, {t_int, c_zero, 0});
+    uint32_t const_member_idx = 0;
+    if (via_struct) {
+        const_member_idx = new_id();
+        emit(decls, OpConstant, {t_int, const_member_idx, pos_member});
+    }
+
+    emit(annos, OpDecorate, {t_block, DecorationBlock});
+    for (uint32_t m = 0; m < 2; m++) {
+        emit(annos, OpMemberDecorate, {t_block, m, DecorationOffset, m * 64});
+        emit(annos, OpMemberDecorate, {t_block, m, DecorationColMajor});
+        emit(annos, OpMemberDecorate, {t_block, m, DecorationMatrixStride, 16});
+    }
+    emit(annos, OpDecorate, {block_var, DecorationDescriptorSet, set});
+    emit(annos, OpDecorate, {block_var, DecorationBinding, binding});
+
+    // Annotations form their own section ahead of every type, so they cannot
+    // ride along with the declarations appended before the first function --
+    // that lands in the types section and the module stops validating. Same
+    // anchor rule as patch_vertex_clip's ViewIndex decoration.
+    const size_t anno_at = last_annotation_end
+                               ? last_annotation_end
+                               : (have_first_global ? first_global : first_fn);
+
+    std::vector<uint32_t> out;
+    out.reserve(code.size() + decls.size() + annos.size() + 32);
+    out.insert(out.end(), code.begin(), code.begin() + 5);
+    bool in_entry = false;
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (in.start == anno_at)
+            out.insert(out.end(), annos.begin(), annos.end());
+        if (in.start == first_fn)
+            out.insert(out.end(), decls.begin(), decls.end());
+        if (in.op == OpFunction && in.len >= 3 && w[2] == entry_fn)
+            in_entry = true;
+        if (in_entry && in.op == OpReturn) {
+            const uint32_t mptr = new_id();
+            emit(out, OpAccessChain, {ptr_uni_mat, mptr, block_var, c_zero});
+            const uint32_t m = new_id();
+            emit(out, OpLoad, {t_mat4, m, mptr});
+            const uint32_t ptr = via_struct ? new_id() : pos_var;
+            if (via_struct)
+                emit(out, OpAccessChain,
+                     {ptr_out_v4, ptr, pos_var, const_member_idx});
+            const uint32_t loaded = new_id();
+            emit(out, OpLoad, {t_v4, loaded, ptr});
+            const uint32_t mul = new_id();
+            emit(out, OpMatrixTimesVector, {t_v4, mul, m, loaded});
+            emit(out, OpStore, {ptr, mul});
+        }
+        out.insert(out.end(), code.begin() + in.start,
+                   code.begin() + in.start + in.len);
+        if (in.op == OpFunctionEnd)
+            in_entry = false;
+    }
+    out[3] = bound;
     code.swap(out);
     return true;
 }

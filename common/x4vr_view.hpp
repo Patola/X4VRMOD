@@ -337,6 +337,32 @@ inline ViewTerms read_view_terms(const Mat4 &v, Major major) {
     return r;
 }
 
+// The per-frame block the layer hands its patched shaders -- tasks #54/#59.
+//
+// std140, and the C++ layout has to match what patch_vertex_pose_clip declares
+// in SPIR-V: two column-major mat4 at offsets 0 and 64, matrix stride 16.
+// tests/view_math.cpp asserts the sizes rather than trusting them, because a
+// mismatch reads back as a plausible wrong matrix rather than as an error.
+//
+// It carries R ALONE. The clip-space form of a head rotation is P.R.P^-1 and
+// six of its sixteen entries scale with sx/sy (tools/headlook_clip.py), which
+// vary 33x with zoom and differ per camera -- so the conjugation belongs in the
+// shader, next to the live sx it already loads, and the per-frame channel stays
+// camera-independent. That is what allows ONE write per frame to serve every
+// draw, where writing X4's own arena would need one write per credited slot.
+struct PoseBlock {
+    float r[16];      // identity until #33 drives it
+    float r_inv[16];
+};
+static_assert(sizeof(PoseBlock) == 128, "std140: two mat4 at 0 and 64");
+
+inline PoseBlock pose_identity() {
+    PoseBlock p{};
+    for (int i = 0; i < 4; i++)
+        p.r[i * 4 + i] = p.r_inv[i * 4 + i] = 1.0f;
+    return p;
+}
+
 // How coarse X4's shadows are, and whether that tracks the field -- task #56.
 //
 // **The question.** #33's guard band buys head-rotation range by widening

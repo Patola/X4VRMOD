@@ -1734,6 +1734,97 @@ view_arena_case() {
 }
 view_arena_case
 
+# Task #59: the per-frame pose channel, proven rather than merely built.
+#
+# The identity case is the one that matters most. A channel that never arrives
+# and a channel carrying identity produce the SAME picture, so "it looks right"
+# is not evidence of anything -- which is why the second case drives a value
+# whose absence is visible: a clip-space x offset of 2 pushes the fullscreen
+# triangle entirely off screen, and coverage goes to zero.
+#
+# That pair also caught the real bug in this work. The first version put the
+# patch beside the four vertex paths, below `if (!have_k) return` -- so with
+# X4VR_POSE and no X4VR_STEREO nothing was patched, the channel came up, every
+# counter read OK, and the probe moved nothing. Every report said success.
+pose_case() {
+    local label="$1" want_drawn="$2"; shift 2
+    local log out drawn final
+    log="$(mktemp)"
+    out=$(env VK_ADD_LAYER_PATH="$BUILD/layer" \
+        VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+        X4VR_MV=1 X4VR_POSE=1 "$@" X4VR_LOG="$log" \
+        timeout 120 "$BIN" "$VS" "$FS" "$SF" 2>&1)
+    drawn=$(sed -n 's/^LAYER0_DRAWN=//p' <<<"$out")
+    final=$(grep -ao 'pose final: .*' "$log" | tail -1)
+    rm -f "$log"
+    if [[ "$drawn" == "$want_drawn" && "$final" == *"OK" ]]; then
+        printf 'ok   %-38s drawn=%s\n' "$label" "$drawn"
+    else
+        printf 'FAIL %-38s want drawn=%s, got %s; final="%s"\n' \
+            "$label" "$want_drawn" "${drawn:-?}" "$final"
+        fails=$((fails + 1))
+    fi
+}
+pose_case "pose: identity is inert"          1
+pose_case "pose: the value arrives"          0 X4VR_POSE_TEST_DX=2
+
+# **This case asserts an EXCLUSION, and it started life asserting the
+# opposite.** With a shear configured, a pose-patched module still goes through
+# needs_original(), so a pass the shear excludes gets no pose either. Both of
+# this harness's passes are unsheared, so the probe moves nothing and drawn
+# stays 1 -- and that is correct, not a miss: the exclusions are the shadow
+# passes, whose transform is light-space and must never be head-rotated, and
+# the UI passes, which are #30's canvas and must stay screen-locked.
+#
+# The first version of this case expected drawn=0 on the reasoning that
+# "delivery and classification answer different questions". They do at the
+# have_k gate -- which was a real bug and is fixed above -- and they do NOT at
+# the variant selection, where the shear's exclusions are exactly the passes
+# #33 must also leave alone. Asserting the log line as well as the number, so
+# the case documents the mechanism rather than pinning a value.
+pose_excluded_case() {
+    local log out drawn
+    log="$(mktemp)"
+    out=$(env VK_ADD_LAYER_PATH="$BUILD/layer" \
+        VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+        X4VR_MV=1 X4VR_POSE=1 X4VR_STEREO=1 X4VR_POSE_TEST_DX=2 \
+        X4VR_LOG="$log" timeout 120 "$BIN" "$VS" "$FS" "$SF" 2>&1)
+    drawn=$(sed -n 's/^LAYER0_DRAWN=//p' <<<"$out")
+    local excl
+    excl=$(grep -ac 'unsheared pipeline: using unpatched modules' "$log")
+    rm -f "$log"
+    if [[ "$drawn" == 1 && "$excl" -ge 1 ]]; then
+        printf 'ok   %-38s unsheared pass takes original\n' \
+            "pose: the shear's exclusions hold"
+    else
+        printf 'FAIL %-38s drawn=%s exclusion-lines=%s\n' \
+            "pose: the shear's exclusions hold" "${drawn:-?}" "$excl"
+        fails=$((fails + 1))
+    fi
+}
+pose_excluded_case
+
+# With the channel unset, none of it exists: no patch, no set, no line.
+pose_off_case() {
+    local log out n drawn
+    log="$(mktemp)"
+    out=$(env VK_ADD_LAYER_PATH="$BUILD/layer" \
+        VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+        X4VR_MV=1 X4VR_LOG="$log" timeout 120 "$BIN" "$VS" "$FS" "$SF" 2>&1)
+    n=$(grep -ac 'pose' "$log")
+    drawn=$(sed -n 's/^LAYER0_DRAWN=//p' <<<"$out")
+    rm -f "$log"
+    if [[ "$n" == 0 && "$drawn" == 1 ]]; then
+        printf 'ok   %-38s no pose line, frame unchanged\n' \
+            "pose: unset changes nothing"
+    else
+        printf 'FAIL %-38s %s pose line(s), drawn=%s\n' \
+            "pose: unset changes nothing" "$n" "$drawn"
+        fails=$((fails + 1))
+    fi
+}
+pose_off_case
+
 verdict_case "verdict: captured"        0 "captured"
 verdict_case "verdict: reached, no file" 1 "REACHED but never captured"
 verdict_case "verdict: never reached"   5 "NEVER REACHED"
