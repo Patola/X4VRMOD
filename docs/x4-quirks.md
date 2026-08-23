@@ -7583,18 +7583,74 @@ the tenth instance, and this time it retired a live hypothesis.
 are `->original` overall. So this is a rule firing broadly, not an accident at
 two passes.
 
-**One explanation already refuted — recorded so it is not tried again.** The
-obvious candidate is the take-70 no-depth rule at x4vr_layer.cpp:2027, whose
-comment names rp #31/#32 by number. It cannot be the cause here: that branch
-is `if (!g_shear_nodepth && !subpass_has_depth(...))`, `g_shear_nodepth` is
-`X4VR_SHEAR_LIGHTS`, and **take 195 ran with `X4VR_SHEAR_LIGHTS=1`** — the
-branch was skipped and rp #31/#32 bound `->original` anyway.
+**A WRONG TURN, kept because it is the eleventh instance.** I first wrote that
+the take-70 no-depth rule at x4vr_layer.cpp:2027 "cannot be the cause", on the
+grounds that its branch is `if (!g_shear_nodepth && ...)` and take 195 ran
+`X4VR_SHEAR_LIGHTS=1`. **That refutation was itself wrong.** `g_shear_nodepth`
+reads **`X4VR_SHEAR_NODEPTH`** (x4vr_layer.cpp:1982). `X4VR_SHEAR_LIGHTS` is a
+different knob entirely — it is `wide_camera` at x4vr_layer.cpp:4809, a
+per-MODULE classification switch for #48, nothing to do with this per-PASS
+rule. I matched a variable to a knob from memory instead of grepping what it
+reads, which is the same mistake as hooking a symbol X4 never imports.
 
-**The untested candidate** is the rule the same function falls through to,
-`unsheared[i] = any && all_ldr` (x4vr_layer.cpp:2060): every colour attachment
-LDR, at least one present. Whether rp #31/#32's attachments are all-LDR is
-**not yet checked** — check it before believing this, given the paragraph
-above.
+### The rule, read rather than guessed
+
+From take 195's own inventory line, and the knob table:
+
+```
+rp #31.0: 1 colour [97H] no-depth final=1 -> MONO (fullscreen post) +MASKED(fullscreen)
+rp #32.0: 1 colour [97H] no-depth final=1 -> MONO (fullscreen post) +MASKED(fullscreen)
+```
+
+One colour attachment, format 97, **H = not LDR**, and **no depth**. Walking
+`classify_unsheared` (x4vr_layer.cpp:1999) with `X4VR_SHEAR_NODEPTH` unset,
+which it was:
+
+| rule | line | rp #31/#32 |
+|---|---|---|
+| `colorAttachmentCount == 0` → shadow | 2003 | no, 1 colour |
+| `!g_shear_nodepth && !subpass_has_depth` | 2027 | **FIRES — unsheared = true** |
+| `g_shear_ui && any && all_ldr` | 2056 | not reached |
+| `unsheared = any && all_ldr` | 2060 | not reached (and would be *false*: 97 is HDR) |
+
+**So it is the take-70 no-depth rule, and nothing else.** The last row matters:
+had the rule at 2027 not fired, the all-LDR fall-through would have marked
+these passes **sheared**, so the two rules disagree about rp #31/#32 and only
+one of them is in force.
+
+The chain is now complete: no depth → `unsheared` → `needs_original()` → both
+stages bind the original twin → **#22/#39's per-eye `M_invprojection`
+correction and #61's `R⁻¹` never execute at rp #31/#32.**
+
+**A latent instrument defect found in passing, not yet a problem.** The
+inventory's own `why` string (x4vr_layer.cpp:2352) is computed as
+`... : !subpass_has_depth(ci, sp) ? "fullscreen post" : unsheared[i] ? ...`,
+which consults `subpass_has_depth` **without** `g_shear_nodepth`. It happens to
+read correctly here because the rule did fire — but under
+`X4VR_SHEAR_NODEPTH=1` it would still print "fullscreen post" for a pass that
+`classify_unsheared` had marked sheared. It recomputes the decision instead of
+recording it, which is the defect
+[[record-the-branch-dont-recompute-it]] names.
+
+### What this licenses, and the one knob that discriminates
+
+The "one gate, two transforms" shape stated above is now **supported, not
+suspected**: `needs_original()` is a single flag disabling the vertex shear
+*and* the fragment reconstruction correction, and rp #31/#32 need opposite
+answers from the two.
+
+`X4VR_SHEAR_NODEPTH=1` flips exactly this rule and **has never been run — 180
+stored logs, zero occurrences.** It is not a fix: it restores the shear too,
+and take 70 measured what that costs (#57 disagreeing 85% between the eyes,
+the hull shadowed in one eye and blown white in the other). It is a
+*discriminator*. If the seam moves or vanishes under it, the seam is in this
+gate; the take will look worse in other ways, and that is expected rather than
+a regression.
+
+**The prediction, before the run:** the seam at `sx·tan(θ/2)` should change
+under `X4VR_SHEAR_NODEPTH=1`. If it does not move at all, the gate is not
+where the seam comes from and the reconstruction is cleared a second time — by
+the right instrument this time.
 
 **The shape of the suspected defect, stated before it is tested:** one gate,
 `needs_original()`, switches off two different transforms — the vertex shear
@@ -7627,20 +7683,28 @@ Everything below this line supersedes earlier "read this first" banners.
 
 ## The immediate next task
 
-**Find out why rp #31/#32 bind `->original`.** Two sections above this one
-("...but at rp #31/#32 the patched module is not the one BOUND") has the
-evidence, the one explanation already refuted, and the untested candidate.
+**Decide whether `needs_original()` splits into two gates.** The rule is now
+READ, not guessed: rp #31/#32 have one HDR colour attachment and **no depth**,
+so the take-70 rule at x4vr_layer.cpp:2027 fires, `unsheared` goes true,
+`needs_original()` returns true, and both stages bind the original twin. The
+per-eye `M_invprojection` correction and #61's `R⁻¹` therefore **never execute
+in the two passes that show the seam.** Sections above have the walk-through.
 
-**Why it comes first:** the correction those two passes need is *emitted
-perfectly and never runs there*. That is a live, specific, mechanical defect
-sitting exactly where the seam is, and it costs no take to investigate — take
-195's log already carries the bind lines.
+**The shape:** one flag disables the vertex shear *and* the fragment
+reconstruction correction. Take 70 proved the shear must stay off for these
+passes (#57 disagreed 85% between eyes with it on). The reconstruction
+correction is exactly what a deferred lighting pass needs. Opposite answers,
+one gate — so the fix is a third variant: unsheared vertices, corrected
+fragments.
 
-**Do this before anything else on the seam**, and note it is **offline work**:
-read which rule sets `unsheared` for those passes, then decide whether
-`needs_original()` should stay one gate or split into "shear this pass's
-vertices" and "correct this pass's reconstruction". The section above states
-the suspected shape *before* the test, as this file requires.
+**The cheap discriminator first, before building that.**
+`X4VR_SHEAR_NODEPTH=1` flips this rule and **has never been run — 180 stored
+logs, zero occurrences.** It is not a fix (it restores the shear too, and take
+70 measured what that costs), it is a test. **Prediction, before the run:** the
+seam at `sx·tan(θ/2)` changes. If it does not move at all, the gate is not
+where the seam comes from and the reconstruction is cleared for the second
+time — by the right instrument this time. Expect the take to look *worse* in
+other ways; that is the knob doing its job, not a regression.
 
 **The previous next task is DONE** — `frag-invproj-check` takes a pose set,
 both negative controls fire, and all 244 eligible modules compute `R⁻¹·M`
@@ -7651,13 +7715,14 @@ exactly. That is hypothesis four eliminated.
 1. **prev-MVP motion vector** — 0 of 409 modules access `M_prevworldviewprojection`.
 2. **camera-positioned classification** — take 195 reclassified those modules
    and the seam did not move a pixel.
-3. **~~uncorrected reconstruction~~ — REVIVED, see two sections above.** It was
+3. **~~uncorrected reconstruction~~ — REVIVED AND NOW MECHANISED.** It was
    killed by an offline check answering "does the patch apply?" when the
-   question was "does the corrected module run?". At rp #31/#32 it does not.
+   question was "does the corrected module run?". At rp #31/#32 it does not:
+   no depth → take-70 rule → `needs_original()` → the original twin is bound.
 4. **`R⁻¹` arithmetic** — all 244 eligible modules compute `R⁻¹·M` to
    0.000e+00, with two negative controls confirming the check has range.
 
-## The pattern that dominated this stretch — TEN instances
+## The pattern that dominated this stretch — ELEVEN instances
 
 **Every instrument here recorded a different event than the question asked.**
 `NEVER REACHED` meant "not while watched"; the give-up sat inside the branch its
@@ -7668,7 +7733,15 @@ rather than use; the bind description was keyed on `out[i]` before
 modules rather than lines; the bind-time case counted passes and was blind to
 content; `frag-invproj-check` could not see the term it exists to check; and
 the check that retired the reconstruction hypothesis asked whether the patch
-*applies* when the question was whether the patched module *runs*.
+*applies* when the question was whether the patched module *runs*; and I
+refuted the take-70 rule by matching `g_shear_nodepth` to the wrong env var
+from memory instead of grepping the two lines that define it.
+
+**The newest one is the cheapest to avoid: `grep` what a variable reads before
+reasoning about the branch it gates.** `X4VR_SHEAR_LIGHTS` and
+`X4VR_SHEAR_NODEPTH` are different knobs at different granularities — one
+per-module, one per-pass — and assuming they were the same produced a
+confident, published, wrong refutation.
 
 **Before trusting any instrument here, ask which event it records.** And a
 green case is worth nothing until it has been seen to fail — the negative
