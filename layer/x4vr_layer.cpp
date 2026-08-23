@@ -5929,6 +5929,13 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
                 const char *variant = "patched";
                 if (got != asked) {
                     auto cv = g_variants.canvas.find(asked);
+                    // "original" names the GEOMETRY path, not the module: this
+                    // twin still carries every fragment edit (see the twin's
+                    // construction from `frag_only`). Read as "unpatched" it
+                    // says the opposite of the truth, which is what happened
+                    // in take 196 -- so the token stays, because score_run.py
+                    // and module_map.py both parse it, and the meaning is
+                    // written down here instead.
                     variant = (cv != g_variants.canvas.end() &&
                                cv->second == got)
                                   ? "CANVAS"
@@ -5996,8 +6003,21 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
     static bool logged = false;
     if (!logged) {
         logged = true;
-        X4VR_LOG("unsheared pipeline: using unpatched modules (shadow + UI "
-                 "exclusion active)");
+        // "unpatched" until take 197, and it was FALSE from take 23 onward.
+        // The twin this binds is built from `frag_only` -- the module AFTER
+        // the fragment edits and BEFORE the vertex ones -- so it keeps the
+        // bindless index offset and the per-eye M_invprojection correction,
+        // including #61's R^-1. Only the geometry edit is dropped, because
+        // "unsheared" is a statement about vertices.
+        //
+        // The old wording cost a whole investigation: it reads as "nothing of
+        // ours runs in this pass", which sent take 196 after a defect that
+        // was not there and briefly revived a correctly-dead hypothesis. The
+        // code was fixed in take 23 and this sentence was not, which is how a
+        // comment becomes active misinformation.
+        X4VR_LOG("unsheared pipeline: binding the no-shear twin (shadow + UI "
+                 "exclusion active) — vertex edit dropped, fragment edits "
+                 "KEPT: bindless offset and per-eye M_invprojection");
     }
     VkResult r =
         d->CreateGraphicsPipelines(device, cache, count, infos.data(), ac, out);

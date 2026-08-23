@@ -167,13 +167,22 @@ SHIFTED="1,0,0,0, 0,1,0,0, 0,0,1,0, 1.0,0,0,1"
 #                    K_nonworld. This harness's fullscreen.vert has no camera
 #                    block, so it is always NonWorld and takes K_nonworld.
 #   the *pass*    -> needs_original() returns classify_unsheared()[subpass], and
-#                    an unsheared pass binds the UNPATCHED module, whatever the
-#                    module was patched with.
+#                    an unsheared pass binds the NO-SHEAR TWIN, whatever the
+#                    module was patched with. The twin is NOT the pristine
+#                    bytes: it is built from `frag_only`, after the fragment
+#                    edits and before the vertex ones, so it keeps the bindless
+#                    offset and the per-eye M_invprojection (including #61's
+#                    R^-1) and loses only the geometry edit. That is what
+#                    "unsheared twin keeps the frag patch" below asserts, and
+#                    it was the take-23 bug when the twin really was pristine.
+#                    This comment said "UNPATCHED" until take 197 and misled an
+#                    entire investigation; the code was fixed in take 23 and
+#                    the sentence describing it was not.
 #
 # Since take 71 a colour pass with no depth is unsheared, and every pass this
 # harness renders is that shape. So the patched module was built, logged
 # ("patched vertex shader #1 (ui)"), and then thrown away at pipeline creation
-# ("unsheared pipeline: using unpatched modules"). K_nonworld was inert, the
+# ("unsheared pipeline: binding the no-shear twin"). K_nonworld was inert, the
 # triangle never moved, and three of these cases had been failing ever since --
 # not because the patch broke, but because nothing was binding it.
 #
@@ -1863,7 +1872,12 @@ pose_excluded_case() {
         X4VR_LOG="$log" timeout 120 "$BIN" "$VS" "$FS" "$SF" 2>&1)
     drawn=$(sed -n 's/^LAYER0_DRAWN=//p' <<<"$out")
     local excl
-    excl=$(grep -ac 'unsheared pipeline: using unpatched modules' "$log")
+    # Matches the stable prefix, not the whole sentence. The old form
+    # pinned the words "using unpatched modules", which were WRONG (the
+    # twin keeps every fragment edit) -- so correcting the layer's message
+    # broke this case, and a case that breaks when a false statement is
+    # corrected was pinning the wrong thing.
+    excl=$(grep -ac 'unsheared pipeline:' "$log")
     rm -f "$log"
     if [[ "$drawn" == 1 && "$excl" -ge 1 ]]; then
         printf 'ok   %-38s unsheared pass takes original\n' \

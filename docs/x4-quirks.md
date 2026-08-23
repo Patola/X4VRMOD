@@ -478,13 +478,27 @@ Two independent gates decide whether `K` reaches a draw, and both must pass:
   block under `wide_camera`) or `NonWorld` -- and picks `K_world` or
   `K_nonworld`;
 * `needs_original()` reads the **pass** -- and an unsheared pass binds the
-  **unpatched** module, whatever the patched one contains. Unsheared means
+  **no-shear twin**, whatever the patched one contains. Unsheared means
   depth-only shadow, all-LDR/UI, and since take 71 *any* colour pass with no
   depth.
 
-*Do:* look for this line, which is the whole answer when it appears:
+  **The twin is NOT the pristine bytes.** It is built from `frag_only` -- after
+  the fragment edits, before the vertex ones -- so it keeps the bindless index
+  offset and the per-eye `M_invprojection` including #61's `R⁻¹`, and loses
+  only the geometry edit. This bullet said "**unpatched**" until take 197 and
+  that was false from take 23 onward, when the pristine-twin bug was fixed and
+  this sentence was not. It cost take 196 (see that section): read as
+  "nothing of ours runs in this pass", it revived a correctly-dead hypothesis.
+  `tests/run-multiview-render.sh`'s case *"unsheared twin keeps the frag
+  patch"* asserts the truth on a combined vertex+fragment module.
 
-    unsheared pipeline: using unpatched modules (shadow + UI exclusion active)
+*Do:* look for this line, which names the exclusion when it appears:
+
+    unsheared pipeline: binding the no-shear twin (shadow + UI exclusion
+    active) — vertex edit dropped, fragment edits KEPT
+
+(Before take 197 the same line read "using unpatched modules". Logs from takes
+1–196 carry the old wording and mean the same thing.)
 
 *Do:* in the offline harness, every rendered pass is colour-with-no-depth, so
 the exclusion always fires and the knob is inert. `X4VR_SHEAR_NODEPTH=1`
@@ -7569,15 +7583,36 @@ twin* back in at pipeline creation. Both stages, all three modules, every
 occurrence in the log: those six module entries never appear as `->patched`
 anywhere.
 
-**So the per-eye `M_invprojection` correction and #61's `R⁻¹` — which the
-section above proves are emitted exactly right — do not execute in the two
-passes that show the seam.**
+**RETRACTED — this paragraph was wrong, and it is left standing because the
+retraction is the finding.** It read: *"So the per-eye `M_invprojection`
+correction and #61's `R⁻¹` do not execute in the two passes that show the
+seam,"* and concluded that the third hypothesis had died to the wrong
+instrument.
 
-That reopens the third "dead" hypothesis, and it died to the wrong
-instrument. The check that killed it asked *"does the patch apply to rp #31's
-modules?"* and got yes. The question was *"does the corrected module run
-there?"* and the answer is no. **Patched and bound are different events** —
-the tenth instance, and this time it retired a live hypothesis.
+**The correction DOES execute there.** `g_variants.original` is not the
+pristine module: it is built from `frag_only`, captured at
+x4vr_layer.cpp:4784 *after* the fragment patches and *before* the vertex ones.
+The twin keeps the bindless index offset and the per-eye `M_invprojection`
+including `R⁻¹`, and drops only the geometry edit — the constructor's own
+comment says so, and `tests/run-multiview-render.sh`'s case *"unsheared twin
+keeps the frag patch"* has asserted it on a combined vertex+fragment module
+since take 23.
+
+So **hypothesis three was correctly dead the first time.** The offline check's
+verdict stood; reviving it was the error.
+
+**What made this survive three readings** is that the code was fixed in take 23
+and three sentences describing the old behaviour were not:
+
+* the layer's own log line — *"unsheared pipeline: using unpatched modules"*;
+* this file's `needs_original()` bullet — *"binds the **unpatched** module"*;
+* `run-multiview-render.sh`'s header — *"binds the UNPATCHED module"*.
+
+All three are corrected as of take 197. I read the log line and two comments
+and never read the constructor, which is where the answer had been all along.
+**A sentence that describes behaviour the code no longer has is not stale
+documentation, it is active misinformation** — and it is more dangerous than
+no comment, because it answers the question and stops the search.
 
 18 passes bind a genuinely-World module as `->original`; 64 of 254 bind lines
 are `->original` overall. So this is a rule firing broadly, not an accident at
@@ -7691,9 +7726,16 @@ cross-correlation across three bands returned dx = −5, 0, −3 — three answe
 so that instrument is wrong here, exactly because the knob changed the content
 it would have to match on.
 
-**Conclusion: restoring the correction did not remove the seam.** Hypothesis
-three dies a second time, and this time by an instrument that observed the
-right event.
+**Conclusion, as restated after the retraction above.** The correction was
+already running at rp #31/#32 in take 195, so 196 did not "restore" it — what
+196 added was the **vertex shear and rotation** at the no-depth passes. The
+seam survived that too, and strengthened. So:
+
+* hypothesis three (uncorrected reconstruction) is dead, for the reason the
+  original offline check gave;
+* **and** the seam is not removed by shearing those passes either.
+
+Two things the seam is not, from one take.
 
 ### Two things I got wrong about this run
 
@@ -7728,7 +7770,7 @@ land in the same column.
 fragments — which removes the confound by construction. That is now the work,
 not another knob.
 
-# RESUME HERE AFTER A COMPACT — state as of take 196
+# RESUME HERE AFTER A COMPACT — state as of take 197
 
 Everything below this line supersedes earlier "read this first" banners.
 
@@ -7758,43 +7800,72 @@ Everything below this line supersedes earlier "read this first" banners.
 
 ## The immediate next task
 
-**Build the third variant: unsheared vertices, corrected fragments.** Take 196
-settled that `needs_original()` is one gate over two transforms and that the
-gate is *not* the seam's cause — but the two transforms still need opposite
-answers at rp #31/#32, and no knob can give them that. The shear must stay off
-(take 70: #57 disagreed 85% between eyes with it on); the fragment
-reconstruction correction must be on (a deferred lighting pass is exactly what
-it is for). Today one flag decides both.
+**Not settled, and the two candidates at rp #31/#32 are both spent.** The seam
+is NOT the absent reconstruction correction — it was never absent, because the
+no-shear twin carries it (see the RETRACTED paragraph in the take-196 section)
+— and NOT the absent vertex shear there, because take 196 added it and the
+seam stayed and strengthened.
 
-This is also **the only clean test left for the seam.** Take 196 had to
-restore the shear to restore the correction, so it could not separate them;
-the third variant removes that confound by construction.
+**The third variant does not need building: it already exists.**
+`g_variants.original` *is* unsheared-vertices-with-corrected-fragments, built
+from `frag_only` at x4vr_layer.cpp:4784, since take 23, with the harness case
+*"unsheared twin keeps the frag patch"* asserting it on a combined
+vertex+fragment module. Task #63 was written on the retracted premise and is
+closed unbuilt.
 
-**Do NOT reach for another knob here.** Take 196 was the last cheap
-discriminator and it has been spent. What remains is the variant.
+**Read the constructor, not the log line.** Take 196 was spent because three
+sentences described behaviour the code had not had since take 23. The habit
+that would have saved it: when a comment or log line answers your question,
+go find the code that produces the thing it describes and confirm it there.
 
-**What the seam is NOT, after 196:** the absence of the reconstruction
-correction at rp #31/#32. Restoring it left the seam at the same
-`sx·tan(θ/2)`, separation 437 px against the law's 432.1.
+**What is still true about the seam:** law `sx·tan(θ/2)`, verified to 1.1 px
+over six cases and to **0.1 px** on take 195's guard-to-seam separation; it
+appears at rp #31/#32; and it survives both variant selections available for
+those passes. It tracks the head rotation, not the eye offset — so the next
+thing to eliminate is on the rotation side, not the stereo side.
+
+**Do not spend a take on a guess here.** Both cheap discriminators are gone,
+and the last one was spent on a premise that three comments had made look
+solid.
 
 **The previous next task is DONE** — `frag-invproj-check` takes a pose set,
 both negative controls fire, and all 244 eligible modules compute `R⁻¹·M`
 exactly. That is hypothesis four eliminated.
 
-## Four dead hypotheses — do not revive without new evidence
+## Five dead hypotheses — do not revive without new evidence
 
 1. **prev-MVP motion vector** — 0 of 409 modules access `M_prevworldviewprojection`.
 2. **camera-positioned classification** — take 195 reclassified those modules
    and the seam did not move a pixel.
-3. **uncorrected reconstruction — DEAD TWICE, the second time properly.** It
-   was first killed by an offline check answering "does the patch apply?" when
-   the question was "does the corrected module run?" — at rp #31/#32 it did
-   not, so that verdict was void. **Take 196 forced the corrected modules to
-   bind there and the seam stayed**, separation 437 px against the law's
-   432.1. Note the confound: 196 restored the shear too, and only the third
-   variant removes it.
-4. **`R⁻¹` arithmetic** — all 244 eligible modules compute `R⁻¹·M` to
+3. **uncorrected reconstruction — DEAD, and my revival of it was the error.**
+   The offline check was right: the correction reaches rp #31/#32, because the
+   no-shear twin carries every fragment edit. I revived this on the strength of
+   three comments that had been false since take 23 and cost take 196 doing it.
+4. **shearing rp #31/#32** — take 196 did exactly that; the seam stayed and
+   strengthened (step 4→7, 4→6), and take 70's #57 defect came back with it.
+5. **`R⁻¹` arithmetic** — all 244 eligible modules compute `R⁻¹·M` to
    0.000e+00, with two negative controls confirming the check has range.
+
+## A SECOND pattern, and it cost more than the first — take 197
+
+**Three sentences described behaviour the code stopped having in take 23**: the
+layer's `unsheared pipeline: using unpatched modules`, this file's
+`needs_original()` bullet, and the harness header's *"binds the UNPATCHED
+module"*. All said the no-shear twin is the pristine module. It is not — it
+carries every fragment edit, and a harness case has asserted that since take 23.
+
+I read all three, believed them, published a mechanism, and spent take 196 on
+it. The constructor at x4vr_layer.cpp:4784 is four lines long and says the
+opposite.
+
+**A comment that describes behaviour the code no longer has is not stale
+documentation — it is active misinformation, and it is worse than no comment,
+because it answers the question and stops the search.** All three are corrected
+as of take 197.
+
+**The habit:** when a comment or a log line answers your question, go find the
+code that produces the thing it describes and confirm it there. Especially when
+it is the answer you were hoping for.
 
 ## The pattern that dominated this stretch — ELEVEN instances
 
