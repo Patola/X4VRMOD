@@ -7428,3 +7428,44 @@ That is the next offline step and it costs nothing.
 hypotheses dead (prev-MVP, camera-positioned classification, uncorrected
 reconstruction), one narrowed and untested (`R⁻¹` composition in the two
 modules that do take the correction).
+
+## #61's R⁻¹ arithmetic has NEVER been checked against a reference
+
+The check asked for cannot be run. `frag-invproj-check` takes
+`<in> [set] [binding] [member] [dl] [dr] [oa_l] [oa_r]` — **no pose set** — so
+it calls `patch_fragment_invproj_eye` with `pose_set` at its default
+`0xffffffff`, i.e. with the `R⁻¹` composition **off**. Every
+`CHECKED=10 WORST=0.000e+00` in the previous section verified the per-eye
+invproj arithmetic and nothing about `R⁻¹`.
+
+**What #61 actually has:**
+
+* `rinv: reconstruction takes R-inverse` / `rinv: a non-reconstructor refuses` —
+  these check that the patch **emits** and that `spirv-val` accepts it, and that
+  the right modules refuse.
+* `headlook_clip.py --self-check` — checks the identity
+  `M_invproj·Rclip⁻¹ = R⁻¹·M_invproj` **on paper**, to 8.9e-16.
+* Take 187 — first execution on real hardware, 228 modules.
+
+**What it does not have:** any check that the SPIR-V it emits *computes* that
+identity. The offline mode that exists precisely to interpret emitted arithmetic
+against `common/x4vr_view.hpp` — and which reports `WORST=` for the eye offsets
+— has never been pointed at the `R⁻¹` term, because the CLI cannot pass it one.
+
+That is the ninth instance of this project's dominant pattern, and the sharpest:
+**the instrument that verifies arithmetic exists, is used routinely, and has a
+blind spot exactly over the newest and least-executed piece of code.** #61 is
+the component that had never run at all until take 187; it is also the one whose
+arithmetic has never been checked.
+
+### The next step, and it is small
+
+Extend `frag-invproj-check` to accept a pose set and a rotation, and compare the
+emitted arithmetic against `x4vr_view.hpp`'s `R⁻¹·M_invproj` the same way it
+already compares the eye offsets. Then run it over the 244 eligible modules,
+mod-0366 and mod-0370 among them.
+
+**Do this before any further seam work.** If `R⁻¹` is emitted wrongly, the seam
+has a candidate cause that no run could have found — and if it is emitted
+correctly, that is the fourth hypothesis eliminated and the reconstruction is
+cleared for good.
