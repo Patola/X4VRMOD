@@ -690,3 +690,51 @@ are not committed):
     python3 tools/register_affine.py --self-check
     python3 tools/register_affine.py /tmp/x4-164a.jpg /tmp/x4-164b.jpg 0.0 0.72
     python3 tools/register_affine.py --verify /tmp/x4-164a.jpg /tmp/x4-164c.jpg 1.2892 0.2425 1.1931 -0.1932 0.0 0.55
+
+## `stage16-classify-x4s-bytes` — take 197
+
+The layer classifies the module **X4 sent**, not the one it had just written.
+Scorer PASS, and the two independent numbers agree to the module.
+
+    X4VR_POSE_ROTATE=1 X4VR_TAKE=197-CLASSIFY-FIX X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_SHEAR_LIGHTS=1 X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_POSE_YAW=20 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take197.log X4VR_PIPE_INVENTORY=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_MV_INVENTORY=1 ./launch/x4vr-launch.sh
+
+**The defect it fixes.** `patch_vertex_pose_rotate` emits an access chain into
+camera-block member 1 inside the vertex function, and `classify()`'s wide
+reading treats an access to member 0, 1, 7 or 8 there as proof of world
+geometry (task #48). The layer then classified `code`, which by that point
+holds `pose_code` — so the patch manufactured the exact evidence the classifier
+looks for. Live from take 195, when #49's fix made the wide reading the default.
+
+**What it establishes, from this run:**
+
+* **`classify  19 procedural module(s) seen, 0 of them also reported World`.**
+  X4 has zero World-and-procedural modules — 0 of 409 dumps under either
+  reading — so any nonzero count is proof the classification ran on our bytes.
+  Takes 195 and 196 each reported **14**, and both were scored PASS before the
+  section existed.
+* **The paths balance to the module.** `live-sx 322 → 294` (−28),
+  `mvp-sx 14 → 12` (−2), `clip 14 → 44` (+30). Exactly **30** modules moved off
+  the World paths, which is the count predicted offline from the dumps before
+  the run.
+* **rp #31/#32 read correctly now:** `(World,procedural,live-sx)` →
+  `(NonWorld,MONO,procedural,clip)`. Kind, patch path and the mono verdict all
+  change together, which is what a screen-space quad should get.
+* **No regression in #49.** `clip=1 cam-pos=0` still holds, so #49 was *not*
+  passing because of this defect. That was the named risk and it did not happen.
+
+**What it does NOT establish.** Nothing about the x=791 seam, and that was
+predicted before the run: edges at x=360 and x=792, separation **432 px**
+against the law's 432.1 — **byte-identical to take 195**. The fix does not move
+it. It does retire take 196's +4.9 px as the `X4VR_SHEAR_NODEPTH` knob's
+perturbation rather than the seam wandering, since 195 and 197 agree exactly
+across a code change.
+
+**A state is code and knobs.** The fix has no knob: it is unconditional, and
+`X4VR_SHEAR_LIGHTS=0` still selects the narrow reading, which never flipped, so
+every pre-195 tag reproduces from this commit unchanged.
+
+**Reproducing the seam measurement** (X4's rendered output is not committed):
+median signed column-to-column step over all rows of the left eye — a seam is a
+coherent full-height discontinuity, scene edges are local and cancel. Compare
+the guard-to-seam *separation*, never absolute x: the PNGs differ in height and
+content cross-correlation over three bands returned dx = −5, 0, −3.
