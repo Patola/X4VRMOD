@@ -4793,9 +4793,21 @@ VkResult create_shader_module_inner(
     // by a per-object matrix -- X4's instanced deferred light volumes. Default
     // off so the current known-good behaviour is what runs unless a measurement
     // asks for the other one; a state is code *and* knobs.
+    // **Default ON since take 195.** It was a knob while #48's reading was
+    // unproven; take 195 settled it -- with it on, the scorer reports
+    // `clip=1 cam-pos=0; no camera-positioned module draws uncanted in a
+    // stereo pass` and PASSes, where 192/193/194 all FAILed on 8-9 modules
+    // (the instanced light volumes and p1_star, the suns and bright stars)
+    // drawing mono in X4's own frustum inside a canted pass.
+    //
+    // Leaving a verified fix behind an opt-in is how it gets forgotten, and
+    // that check is itself dormant unless X4VR_PIPE_INVENTORY=1 -- so every
+    // take from 186 to 191 was unexamined on this axis rather than clean.
+    // X4VR_SHEAR_LIGHTS=0 still turns it off, because the old classification
+    // is what the pre-195 takes were measured under.
     static const bool wide_camera = [] {
         const char *s = getenv("X4VR_SHEAR_LIGHTS");
-        return s && *s && *s != '0';
+        return !s || !*s || *s != '0';
     }();
     const x4vr::spv::Kind kind = x4vr::spv::classify(code, wide_camera);
     // Task #48. The 18 modules the two readings disagree about: world geometry

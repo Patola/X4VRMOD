@@ -7330,3 +7330,63 @@ revisiting, not the classification.
 
 **Do not spend a take on it.** The answer is in `needs_original()` and the
 harness can exercise it.
+
+## needs_original() — read, and it names the seam's passes itself
+
+`needs_original(rp, subpass)` is **per-pass, not per-module**: it returns
+`g_variants.unsheared[rp][subpass]`. So "these modules read `-> original`" was
+never about the modules — the *pass* is marked unsheared and every module in it
+takes the original.
+
+The rule that marks them, at `x4vr_layer.cpp:2027`:
+
+```c
+if (!g_shear_nodepth && !subpass_has_depth(ci, sp)) { unsheared[i] = true; }
+```
+
+**A no-depth pass is unsheared by rule**, and the comment above it explains why,
+from take 70: shearing a fullscreen quad displaces it per eye while the buffers
+it samples stay put, so every fragment reads the wrong texel — measured as 85 %
+disagreement between the eyes, with the hull shadowed in one and blown white in
+the other.
+
+**That comment names the seam's passes explicitly:**
+
+> *"#57, the lighting output written by the no-depth rp #31/#32, disagrees by
+> 85 %"*
+
+rp #31 and #32 are the **deferred lighting output**. The bisect landed on them
+from the other end — five runs of capture and attribution — and the code had
+them written down all along, in a comment about a different defect.
+
+### What that makes the seam
+
+The lighting output is a fullscreen quad that must **not** be transformed — it
+is correctly unsheared, and the pose rides the same exclusion deliberately. But
+it *reconstructs* world position from a G-buffer whose geometry **was** rotated.
+The transform must not reach the quad; it must reach the **reconstruction**.
+
+That is precisely what #61's fragment `R⁻¹` was built for, and #61 executed for
+the first time in take 187 on 228 modules. So the live question is no longer
+"which pass" but **"does the `R⁻¹` correction actually reach rp #31/#32's
+reconstruction, and is it the right correction there"** — a code question about
+`patch_fragment_invproj_eye`'s coverage, answerable offline against the dumps.
+
+**Not a claim that this is the cause.** It is a lead with the same shape as the
+`M_prevworldviewprojection` one that died: plausible, code-grounded, untested.
+The difference is that this time the passes were identified by measurement
+first, and the code found afterwards.
+
+## X4VR_SHEAR_LIGHTS is now the DEFAULT
+
+Take 195 settled #48/#49: with it on the scorer reports `clip=1 cam-pos=0` and
+PASSes, where 192/193/194 all FAILed on 8–9 camera-positioned modules drawing
+mono in X4's frustum inside a canted pass.
+
+`X4VR_SHEAR_LIGHTS=0` still turns it off, because the pre-195 takes were
+measured under the old classification and their numbers only mean something
+against it.
+
+Leaving a verified fix behind an opt-in is how it gets forgotten — and this one
+was invisible anyway, since the check that catches it is dormant unless
+`X4VR_PIPE_INVENTORY=1`.
