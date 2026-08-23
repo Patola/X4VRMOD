@@ -7012,3 +7012,59 @@ Worth noting for whoever writes that run: **#26/#28/#30 never execute** and
 invisible to every image-based instrument this project has. An inventory that
 reports what X4 *created* will list all seven; only the pass-end record says
 which four actually ran.
+
+## Take 192 — the pipe inventory does NOT answer the question, and the scorer FAILED
+
+Two results, both negative, both worth having.
+
+### 1. The scorer FAILED, on a different defect that was dormant
+
+```
+FAIL  8 camera-positioned module(s) draw in STEREO pass(es) rp #13, rp #18, rp #23
+      without the affine — world geometry left in X4's frustum, mono, while the
+      rest of the pass is canted by 30.07°. p1_star (the suns and bright stars)
+      is in this set. Re-run with X4VR_SHEAR_LIGHTS=1
+```
+
+This is **#49**, not the seam. It matters that it appeared now: the check needs
+`X4VR_PIPE_INVENTORY` to see camera-positioned modules, and **every take from
+186 to 191 ran with the inventory off**, so this check was dormant through all
+of them. Those runs were not clean — they were unexamined on this axis, and
+their `PASS` lines should be read with that qualifier.
+
+### 2. The inventory reports the wrong render pass for this question
+
+`module_map.py` lists, for the bracket:
+
+```
+rp #26.0   mod-0152, mod-0166, mod-0168   NonWorld,camera-positioned,MONO,procedural,clip
+rp #28.0   mod-0168, mod-0181            "
+rp #30.0   mod-0189, mod-0366, 0368, 0370 "
+```
+
+**It lists exactly the three passes that never execute, and says nothing about
+#27, #29 or #31 — the three that do.** That is the inverse of what was predicted
+before the run, where the worry was that it would list all seven.
+
+The cause is almost certainly Vulkan's **pipeline/render-pass compatibility**: a
+pipeline records the render pass it was *created against*, and may then be used
+with any compatible one. X4 creates against #26/#28/#30 and draws through
+#27/#29/#31. So the inventory answers "which modules named this pass at
+creation", and the question is "which module did this pass bind at draw".
+
+That is the same defect class as every other instrument in this chain, for the
+fifth time: **the record is of a different event than the one being asked
+about.** `NEVER REACHED` meant "not while watched"; `after_rp_reached` recorded
+only the current target; the fixture ordered the bug away; the give-up sat
+inside the branch its failure mode skipped. Now the inventory keys on creation
+where the question is about use.
+
+### What would answer it
+
+A **bind-time** record: at `vkCmdBindPipeline`, log the pipeline together with
+the render pass currently being recorded. The layer already tracks the current
+pass for the mask/canvas logic, so the join exists; it is the logging that keys
+on the wrong end. Until that lands, `module_map.py` output must not be read as
+"pass N uses module M".
+
+**Do not re-run take 192's shape.** It will produce the same three passes.
