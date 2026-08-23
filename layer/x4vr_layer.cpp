@@ -5058,9 +5058,49 @@ VkResult create_shader_module_inner(
     return d->CreateShaderModule(device, ci, ac, out);
 }
 
+// **Every offline sweep in docs/ is quoted as "N of 409", and nothing has ever
+// established that 409 is the population.** It is the number of modules ONE run
+// with X4VR_DUMP_SHADERS happened to write. The per-patch counters cannot
+// answer it either: they count modules a patch MATCHED, and a module matching
+// nothing is invisible to all of them. `patched vertex shader #350` is not a
+// total, it is a cadence -- that line prints every 50th, so it reports a floor.
+//
+// This counts every module X4 creates, by stage, and says plainly whether the
+// sweeps were over a population or a sample.
+std::atomic<uint64_t> g_modules_created{0}, g_modules_vert{0},
+    g_modules_frag{0}, g_modules_comp{0}, g_modules_other{0};
+
+// The stage, from the module's own OpEntryPoint execution model. Cheap: the
+// first entry point is within the first few dozen words of every real module.
+void count_module_stage(const VkShaderModuleCreateInfo *ci) {
+    g_modules_created.fetch_add(1);
+    if (!ci || !ci->pCode || ci->codeSize < 20) {
+        g_modules_other.fetch_add(1);
+        return;
+    }
+    const uint32_t *w = (const uint32_t *)ci->pCode;
+    const size_t n = ci->codeSize / 4;
+    if (w[0] != 0x07230203u) { g_modules_other.fetch_add(1); return; }
+    for (size_t i = 5; i < n;) {
+        const uint32_t wc = w[i] >> 16, op = w[i] & 0xffff;
+        if (wc == 0 || i + wc > n) break;
+        if (op == 15 && wc >= 3) { // OpEntryPoint
+            switch (w[i + 1]) {
+            case 0: g_modules_vert.fetch_add(1); return;   // Vertex
+            case 4: g_modules_frag.fetch_add(1); return;   // Fragment
+            case 5: g_modules_comp.fetch_add(1); return;   // GLCompute
+            default: g_modules_other.fetch_add(1); return;
+            }
+        }
+        i += wc;
+    }
+    g_modules_other.fetch_add(1);
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     VkDevice device, const VkShaderModuleCreateInfo *ci,
     const VkAllocationCallbacks *ac, VkShaderModule *out) {
+    count_module_stage(ci);
     bool frag_patched = false;
     VkResult r = create_shader_module_inner(device, ci, ac, out, &frag_patched);
     // X4's bytes, not ours: the handle is whatever the game will bind, but the
@@ -10679,6 +10719,22 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyDevice(
     // with a layout that does not declare our set while its module reads it,
     // which is undefined behaviour rather than a degraded picture. That is why
     // the mismatch prints as a FAIL and not as a note.
+    {
+        const uint64_t tot = g_modules_created.load();
+        X4VR_LOG("modules: %llu created this run — %llu vertex, %llu fragment, "
+                 "%llu compute, %llu other. The offline sweeps quoted in docs/ "
+                 "are over 409 dumped modules, so this run %s",
+                 (unsigned long long)tot,
+                 (unsigned long long)g_modules_vert.load(),
+                 (unsigned long long)g_modules_frag.load(),
+                 (unsigned long long)g_modules_comp.load(),
+                 (unsigned long long)g_modules_other.load(),
+                 tot > 409 ? "saw MORE than the dumps hold: every \"N of 409\" "
+                             "figure is over a SAMPLE, not a population"
+                           : "stayed within them, which is consistent with 409 "
+                             "being the whole set but does not prove it for "
+                             "scenes this run never entered");
+    }
     if (pose_wanted() && g_pose.ready) {
         std::lock_guard<std::mutex> lock(g_pose.mu);
         const bool collided = g_pose.collided.load();

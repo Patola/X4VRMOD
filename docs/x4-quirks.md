@@ -6461,3 +6461,43 @@ the same kind of check that killed this one:
 The last point deserves settling first and costs nothing in-game: **compare the
 module count X4 creates in a run against 409.** If X4 creates materially more,
 every offline sweep in this project has been over a sample, not a population.
+
+### The module-count check — what it could and could not answer
+
+**It could not be answered from the existing logs, and the numbers that look
+like they answer it do not.** `patched vertex shader #350` is not a total: that
+line prints every 50th (`patched % 50`), so it reports a **floor**. The pose
+counter prints every 100th, so its "300" is a floor too. Reading either as a
+count is the take-186b mistake in miniature — using an artifact's shape as if it
+were a measurement.
+
+There was **no total-modules counter in the layer at all**, and the per-patch
+counters cannot substitute: they count modules a patch *matched*, and a module
+matching nothing is invisible to every one of them.
+
+**What is established offline:** the dumps are `mod-0000.spv … mod-0408.spv`,
+**409 files, sequential with no gaps**, so the run that produced them created
+exactly 409 modules and the capture is complete *for that run*. That is a real
+fact and it is narrower than how "409" has been used: it licenses "409 in the
+dump run", not "409 is what X4 has".
+
+**What is now instrumented:** `x4vr_CreateShaderModule` counts every module by
+stage from its own `OpEntryPoint`, and the end-of-run report says
+
+```
+modules: N created this run — V vertex, F fragment, C compute, O other.
+The offline sweeps quoted in docs/ are over 409 dumped modules, so this run
+{saw MORE than the dumps hold: every "N of 409" figure is over a SAMPLE,
+ not a population | stayed within them, which is consistent with 409 being
+ the whole set but does not prove it for scenes this run never entered}
+```
+
+Verified on the harness, which creates 4 modules and reports `4 created — 2
+vertex, 2 fragment`. It costs nothing and rides along on the next take of any
+kind; **no run should be spent on this question alone.**
+
+Note the wording of the negative branch. A run staying under 409 does *not*
+prove 409 is the population — it proves only that this scene did not exceed it.
+The map, station interiors, other ships and the menu all load geometry these
+takes never touched. The claim to avoid is the one this project keeps making:
+treating a complete survey of one situation as a statement about all of them.
