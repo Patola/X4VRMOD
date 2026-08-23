@@ -6212,9 +6212,33 @@ takes used. At 1 it is a full readback and stall on every frame (~1 fps) and it
 would cost the run its own interaction, which is what happened to take 98.
 
 **In-game:** identical to 187 — Enter at the menu for the quicksave, sit still
-in the cockpit, one screenshot to `/tmp/x4-188.jpg`, no map, quit normally.
-~2½ minutes plus load. The PNGs land at `/tmp/x4vr-t188*.png` and are the
-**only** thing any brightness claim may be made from.
+in the cockpit, one screenshot to **`/tmp/x4-188.png`** (PNG, not jpg), no map,
+quit normally. ~2½ minutes plus load. The layer's own PNGs land at
+`/tmp/x4vr-t188*.png` and remain the **primary** source; the screenshot is the
+cross-check.
+
+> **Why PNG for the screenshot, from measuring the 187 one.** Its JPEG is
+> 4:2:0 — luma full resolution, chroma halved *horizontally*. Luma being full
+> res is why the grayscale edge work in the 187 section stands. But two things
+> do not survive it:
+>
+> * **DCT ringing at a hard edge.** Both edges under study sit 2 px into an 8×8
+>   block, so they are not maximally distorted, but quantisation still softens
+>   and rings a one-pixel cliff. The guard band's "predicted 211.1, measured
+>   210" agreement is therefore *consistent with* the prediction rather than
+>   confirmed to 1 px — the instrument's own resolution on a JPEG is about that
+>   same scale. Take 188 measures the control on PNG and can claim it properly.
+> * **Colour.** The seam is a *tone* change, and chroma is exactly the channel
+>   4:2:0 halves horizontally — across a vertical edge, the worst case. Every
+>   measurement so far has been luma-only partly because of this. A PNG allows
+>   a chroma measurement, which may separate "fog term missing" from "different
+>   exposure" in a way luma cannot.
+>
+> PNG does **not** fix the capture path. 186a and 187 came back 2816×1412 and
+> 2818×1411 for the same 2816×1408 composite — that jitter is the compositor and
+> the grab tool, not the format, and it is why the layer's own dump is primary.
+> If the PNG screenshot and the present dump disagree *geometrically*, that
+> isolates the compositor and is worth knowing on its own.
 
 **Acceptance:**
 
