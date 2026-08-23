@@ -1614,6 +1614,85 @@ def main(path):
               f"X4 declares more descriptor sets than our index assumed. "
               f"{collide[0].split('pose:', 1)[-1].strip()[:120]}")
 
+    # --- which VARIANT the no-depth passes actually bind --------------------
+    #
+    # Take 196 is why this exists, and it exists here rather than as a grep
+    # because a grep I picked is what cost takes 101 and 102.
+    #
+    # The distinction this section is about: a module can be PATCHED and still
+    # not be the one BOUND. classify_unsheared() marks a colour pass with no
+    # depth attachment `unsheared` (x4vr_layer.cpp:2027), needs_original() then
+    # returns true for it, and pipeline creation swaps the ORIGINAL twin back
+    # in. Take 195's rp #31/#32 -- the deferred lighting output, and the two
+    # passes the x=791 seam is bracketed to -- bind `->original` on both
+    # stages, so the per-eye M_invprojection correction and #61's R^-1 are
+    # emitted perfectly and never execute there.
+    #
+    # An offline check over the dumps cannot see this by construction: it
+    # patches a file and interprets the result, and the layer's variant
+    # selection never enters. That is how the "uncorrected reconstruction"
+    # hypothesis was retired by an instrument answering a different question.
+    #
+    # X4VR_SHEAR_NODEPTH=1 flips the rule. The check is GATE ON INTENT: if the
+    # run asked for it, those passes must stop binding `->original`. Whether
+    # the resulting frame looks better is a different question and not one this
+    # file answers -- the knob also restores the shear, which take 70 measured
+    # at 85% per-eye disagreement on #57, so a WORSE-looking take is the knob
+    # working, not a regression.
+    binds = [ln for ln in lines if "bind rp #" in ln]
+    nodepth_rps = set()
+    for ln in lines:
+        m = re.search(r"rp #(\d+)\.\d+: .*\bno-depth\b", ln)
+        if m:
+            nodepth_rps.add(m.group(1))
+    want_nodepth = "X4VR_SHEAR_NODEPTH=1" in (run or "")
+    if not binds:
+        if want_nodepth:
+            fails.append(
+                "the run asked for X4VR_SHEAR_NODEPTH=1 and there are no "
+                "`bind rp #` lines to say whether it changed anything — that "
+                "record needs X4VR_PIPE_INVENTORY=1. The run cannot answer "
+                "the question it was launched to ask")
+    elif not nodepth_rps:
+        print("shear-nodepth no pass was reported as no-depth — the render "
+              "pass inventory needs X4VR_MV_INVENTORY=1, so which passes the "
+              "rule applies to is unknown here")
+    else:
+        orig = set()
+        patched = set()
+        for ln in binds:
+            m = re.search(r"bind rp #(\d+)\b", ln)
+            if not m or m.group(1) not in nodepth_rps:
+                continue
+            if "->original" in ln:
+                orig.add(m.group(1))
+            if "->patched" in ln:
+                patched.add(m.group(1))
+        seen = sorted(orig | patched, key=int)
+        print(f"shear-nodepth {len(nodepth_rps)} no-depth pass(es); of those "
+              f"that bind, {len(orig)} bind ->original "
+              f"{sorted(orig, key=int)}, {len(patched)} bind ->patched "
+              f"{sorted(patched, key=int)}")
+        if want_nodepth and orig:
+            fails.append(
+                f"the run asked for X4VR_SHEAR_NODEPTH=1, which exists to stop "
+                f"no-depth passes binding the original twin, and "
+                f"{len(orig)} of them still bind ->original "
+                f"{sorted(orig, key=int)}. The knob did not reach the "
+                f"decision it names, so this take is not a test of it — "
+                f"whatever the frame looks like")
+        elif want_nodepth and not seen:
+            fails.append(
+                "the run asked for X4VR_SHEAR_NODEPTH=1 but no no-depth pass "
+                "bound any tracked module, so nothing was observed either "
+                "way. Gate on intent: the question was asked and not answered")
+        elif not want_nodepth and orig:
+            # The baseline, printed so the next take has something to diff
+            # against rather than a remembered number.
+            print(f"shear-nodepth baseline: X4VR_SHEAR_NODEPTH is off, so "
+                  f"->original at {sorted(orig, key=int)} is the rule working "
+                  f"as written, not a defect")
+
     # --- the map gate ------------------------------------------------------
     #
     # Take 146 is why this lives in the scorer instead of in a grep. The check
