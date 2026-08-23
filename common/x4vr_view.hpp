@@ -353,8 +353,22 @@ inline ViewTerms read_view_terms(const Mat4 &v, Major major) {
 struct PoseBlock {
     float r[16];      // identity until #33 drives it
     float r_inv[16];
+    // The PREVIOUS frame's r, for X4's motion-vector path. Take 188's seam was
+    // this member's absence: X4's common world vertex shader ends with
+    // `IO_mv = M_prevworldviewprojection * IO_mv`, and we rotated gl_Position
+    // while leaving that alone, so the G-buffer reported a constant apparent
+    // motion of exactly the head rotation and every temporal pass smeared
+    // along it. The seam sat on the ray at yaw/2 -- the angular bisector
+    // between the two orientations -- to 1.1 px over six measured cases.
+    //
+    // It is a SEPARATE matrix and not just r because the correct velocity
+    // *does* include genuine head motion: when the head is really turning the
+    // pixel really moved, and TAA must know. Only when the pose is static do
+    // the two coincide, which is what makes the static take a clean test.
+    float r_prev[16];
 };
-static_assert(sizeof(PoseBlock) == 128, "std140: two mat4 at 0 and 64");
+static_assert(sizeof(PoseBlock) == 192,
+              "std140: three mat4 at 0, 64 and 128");
 
 // Fill a PoseBlock from Euler angles in degrees, yaw about +y, pitch about
 // +x, roll about +z -- the same composition tools/headlook_clip.py uses, so
@@ -391,13 +405,29 @@ inline void pose_set_euler(PoseBlock &p, float yaw_deg, float pitch_deg,
             p.r_inv[c * 4 + r] = m[c * 3 + r];  // transpose == inverse
         }
     p.r[15] = p.r_inv[15] = 1.0f;
+    // r_prev starts EQUAL to r, which is the no-head-motion case and the only
+    // honest starting value: on the first frame there is no previous pose, and
+    // seeding it with identity would announce a full head rotation's worth of
+    // motion for one frame. pose_roll_frame() advances it afterwards.
+    for (int i = 0; i < 16; i++)
+        p.r_prev[i] = p.r[i];
 }
 
 inline PoseBlock pose_identity() {
     PoseBlock p{};
     for (int i = 0; i < 4; i++)
-        p.r[i * 4 + i] = p.r_inv[i * 4 + i] = 1.0f;
+        p.r[i * 4 + i] = p.r_inv[i * 4 + i] = p.r_prev[i * 4 + i] = 1.0f;
     return p;
+}
+
+// Roll the current rotation into the previous slot, once per frame. With a
+// static X4VR_POSE_YAW this is a no-op by construction -- r never changes, so
+// r_prev == r always -- and that is exactly why take 189 is a clean test of
+// the patch rather than of this function. It exists now so that a live pose is
+// correct the day it lands instead of reintroducing take 188's seam in motion.
+inline void pose_roll_frame(PoseBlock &p) {
+    for (int i = 0; i < 16; i++)
+        p.r_prev[i] = p.r[i];
 }
 
 // How coarse X4's shadows are, and whether that tracks the field -- task #56.

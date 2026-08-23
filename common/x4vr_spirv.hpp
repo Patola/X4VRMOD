@@ -1031,7 +1031,9 @@ inline bool patch_vertex_pose_rotate(std::vector<uint32_t> &code,
                                      uint32_t cam_member,
                                      uint32_t obj_set = 0xffffffffu,
                                      uint32_t obj_binding = 0,
-                                     uint32_t obj_member = 0) {
+                                     uint32_t obj_member = 0,
+                                     uint32_t obj_prev_member = 0xffffffffu,
+                                     bool *did_motion = nullptr) {
     std::vector<Inst> insts;
     if (!iterate(code, insts))
         return false;
@@ -1227,6 +1229,80 @@ inline bool patch_vertex_pose_rotate(std::vector<uint32_t> &code,
     if (!pos_var)
         return false;
 
+    // ---- task #33: the MOTION VECTOR, which take 188 proved we were leaving
+    // behind. X4's common world vertex shader ends with
+    //
+    //     IO_mv = M_prevworldviewprojection * IO_mv;
+    //
+    // and IO_mv feeds the deferred G-buffer that common_taa and motionblur
+    // consume. Rotating gl_Position alone made every patched module report a
+    // constant apparent motion of exactly the head rotation.
+    //
+    // Found STRUCTURALLY, not by the name "IO_mv": trace the object block's
+    // prev-MVP member -> OpLoad -> OpMatrixTimesVector -> OpStore, and take
+    // that store's pointer. A debug name is not something to depend on in a
+    // shipped shader, and the trace is what the code actually does.
+    //
+    // This lookup is deliberately INDEPENDENT of obj_var above. That one only
+    // exists when there is no camera block, because it is the sx/sy fallback;
+    // a module can perfectly well have a camera block AND a prev-MVP, and 341
+    // of the 409 dumps declare one.
+    uint32_t mv_ptr = 0;
+    if (obj_prev_member != 0xffffffffu && obj_set != 0xffffffffu) {
+        uint32_t mv_obj = 0;
+        for (auto &[id, ts] : vars) {
+            if (ts.second != StorageClassUniform) continue;
+            auto st = var_set.find(id), b = var_binding.find(id);
+            if (st == var_set.end() || b == var_binding.end()) continue;
+            if (st->second != obj_set || b->second != obj_binding) continue;
+            auto pt = ptr_types.find(ts.first);
+            if (pt == ptr_types.end()) continue;
+            auto sm = struct_members.find(pt->second.pointee);
+            if (sm == struct_members.end() ||
+                obj_prev_member >= sm->second.size())
+                continue;
+            if (sm->second[obj_prev_member] != t_mat4) continue;
+            mv_obj = id;
+            break;
+        }
+        if (mv_obj) {
+            // Constant ids whose value is obj_prev_member, so the access chain
+            // can be recognised without evaluating arbitrary expressions.
+            std::unordered_map<uint32_t, uint32_t> const_val;
+            for (const Inst &in : insts)
+                if (in.op == OpConstant && in.len >= 4)
+                    const_val[code[in.start + 2]] = code[in.start + 3];
+            std::unordered_map<uint32_t, bool> is_prev_chain, is_prev_mat,
+                is_prev_prod;
+            for (const Inst &in : insts) {
+                const uint32_t *w = &code[in.start];
+                if (in.op == OpAccessChain && in.len >= 5 && w[3] == mv_obj) {
+                    auto cv = const_val.find(w[4]);
+                    if (cv != const_val.end() && cv->second == obj_prev_member)
+                        is_prev_chain[w[2]] = true;
+                } else if (in.op == OpLoad && in.len >= 4 &&
+                           is_prev_chain.count(w[3])) {
+                    is_prev_mat[w[2]] = true;
+                } else if (in.op == OpMatrixTimesVector && in.len >= 5 &&
+                           is_prev_mat.count(w[3])) {
+                    is_prev_prod[w[2]] = true;
+                } else if (in.op == OpStore && in.len >= 3 &&
+                           is_prev_prod.count(w[2])) {
+                    // The pointer must be an Output vec4 we can load and store
+                    // back. Anything else -- a struct member, a different type
+                    // -- is refused rather than guessed at.
+                    auto v = vars.find(w[1]);
+                    if (v != vars.end() &&
+                        v->second.second == StorageClassOutput) {
+                        auto pt = ptr_types.find(v->second.first);
+                        if (pt != ptr_types.end() && pt->second.pointee == t_v4)
+                            mv_ptr = w[1];
+                    }
+                }
+            }
+        }
+    }
+
     std::vector<uint32_t> decls, annos;
     if (!t_int) { t_int = new_id(); emit(decls, OpTypeInt, {t_int, 32, 1}); }
     if (!ptr_out_v4) {
@@ -1237,8 +1313,16 @@ inline bool patch_vertex_pose_rotate(std::vector<uint32_t> &code,
         ptr_uni_float = new_id();
         emit(decls, OpTypePointer, {ptr_uni_float, StorageClassUniform, t_float});
     }
+    // Three mat4 when the motion vector is corrected, two otherwise. Members 0
+    // and 1 keep the same offsets either way, so a two-member view and a
+    // three-member view read the same PoseBlock -- which is what lets
+    // patch_vertex_pose_clip and patch_fragment_invproj_eye stay as they are.
+    const uint32_t pose_members = mv_ptr ? 3u : 2u;
     const uint32_t t_block = new_id();
-    emit(decls, OpTypeStruct, {t_block, t_mat4, t_mat4});
+    if (pose_members == 3)
+        emit(decls, OpTypeStruct, {t_block, t_mat4, t_mat4, t_mat4});
+    else
+        emit(decls, OpTypeStruct, {t_block, t_mat4, t_mat4});
     const uint32_t ptr_block = new_id();
     emit(decls, OpTypePointer, {ptr_block, StorageClassUniform, t_block});
     const uint32_t ptr_uni_mat = new_id();
@@ -1249,6 +1333,13 @@ inline bool patch_vertex_pose_rotate(std::vector<uint32_t> &code,
     emit(decls, OpConstant, {t_int, c0, 0});
     const uint32_t c1 = new_id();
     emit(decls, OpConstant, {t_int, c1, 1});
+    // Pose member 2 is r_prev. A dedicated constant, because the c2 built for
+    // the sx/sy fallback only exists when there is no camera block.
+    uint32_t c_prev = 0;
+    if (mv_ptr) {
+        c_prev = new_id();
+        emit(decls, OpConstant, {t_int, c_prev, 2});
+    }
     const uint32_t c_cam = new_id();
     emit(decls, OpConstant, {t_int, c_cam, cam_member});
     uint32_t one_bits;
@@ -1276,7 +1367,7 @@ inline bool patch_vertex_pose_rotate(std::vector<uint32_t> &code,
         emit(decls, OpConstant, {t_int, c_pos, pos_member});
     }
     emit(annos, OpDecorate, {t_block, DecorationBlock});
-    for (uint32_t m = 0; m < 2; m++) {
+    for (uint32_t m = 0; m < pose_members; m++) {
         emit(annos, OpMemberDecorate, {t_block, m, DecorationOffset, m * 64});
         emit(annos, OpMemberDecorate, {t_block, m, DecorationColMajor});
         emit(annos, OpMemberDecorate, {t_block, m, DecorationMatrixStride, 16});
@@ -1373,43 +1464,63 @@ inline bool patch_vertex_pose_rotate(std::vector<uint32_t> &code,
                 emit(out, OpFNegate, {t_float, neg_one, one_f});
                 emit(out, OpSelect, {t_float, sy, ok, ny, neg_one});
             }
-            const uint32_t p_r = new_id();
-            emit(out, OpAccessChain, {ptr_uni_mat, p_r, pose_var, c0});
-            const uint32_t rmat = new_id();
-            emit(out, OpLoad, {t_mat4, rmat, p_r});
+            // The conjugation, once, as a lambda applied to both outputs.
+            // Writing it twice is precisely how this project produced "fixed
+            // here, broken next door" -- the sx fix that was not also made for
+            // sy in the same commit. The position and the motion vector are
+            // both clip-space vec4 from the same projection, so they take
+            // identical arithmetic and differ only in WHICH rotation.
+            auto conjugate = [&](uint32_t target, uint32_t pose_member) {
+                const uint32_t p_r = new_id();
+                emit(out, OpAccessChain,
+                     {ptr_uni_mat, p_r, pose_var, pose_member});
+                const uint32_t rmat = new_id();
+                emit(out, OpLoad, {t_mat4, rmat, p_r});
+                const uint32_t pos = new_id();
+                emit(out, OpLoad, {t_v4, pos, target});
+                uint32_t comp[4];
+                for (uint32_t i = 0; i < 4; i++) {
+                    comp[i] = new_id();
+                    emit(out, OpCompositeExtract, {t_float, comp[i], pos, i});
+                }
+                const uint32_t vx = new_id();
+                emit(out, OpFDiv, {t_float, vx, comp[0], sx});
+                const uint32_t vy = new_id();
+                emit(out, OpFDiv, {t_float, vy, comp[1], sy});
+                const uint32_t v = new_id();
+                emit(out, OpCompositeConstruct,
+                     {t_v4, v, vx, vy, comp[3], one_f});
+                const uint32_t rv = new_id();
+                emit(out, OpMatrixTimesVector, {t_v4, rv, rmat, v});
+                uint32_t rc[3];
+                for (uint32_t i = 0; i < 3; i++) {
+                    rc[i] = new_id();
+                    emit(out, OpCompositeExtract, {t_float, rc[i], rv, i});
+                }
+                const uint32_t nx = new_id();
+                emit(out, OpFMul, {t_float, nx, sx, rc[0]});
+                const uint32_t ny = new_id();
+                emit(out, OpFMul, {t_float, ny, sy, rc[1]});
+                // comp[2] -- clip z -- passes through: X4's projection has
+                // m[10] == 0, so it is the constant near plane for every
+                // vertex.
+                const uint32_t res = new_id();
+                emit(out, OpCompositeConstruct,
+                     {t_v4, res, nx, ny, comp[2], rc[2]});
+                emit(out, OpStore, {target, res});
+            };
 
             const uint32_t ptr = via_struct ? new_id() : pos_var;
             if (via_struct)
                 emit(out, OpAccessChain, {ptr_out_v4, ptr, pos_var, c_pos});
-            const uint32_t pos = new_id();
-            emit(out, OpLoad, {t_v4, pos, ptr});
-            uint32_t comp[4];
-            for (uint32_t i = 0; i < 4; i++) {
-                comp[i] = new_id();
-                emit(out, OpCompositeExtract, {t_float, comp[i], pos, i});
-            }
-            const uint32_t vx = new_id();
-            emit(out, OpFDiv, {t_float, vx, comp[0], sx});
-            const uint32_t vy = new_id();
-            emit(out, OpFDiv, {t_float, vy, comp[1], sy});
-            const uint32_t v = new_id();
-            emit(out, OpCompositeConstruct, {t_v4, v, vx, vy, comp[3], one_f});
-            const uint32_t rv = new_id();
-            emit(out, OpMatrixTimesVector, {t_v4, rv, rmat, v});
-            uint32_t rc[3];
-            for (uint32_t i = 0; i < 3; i++) {
-                rc[i] = new_id();
-                emit(out, OpCompositeExtract, {t_float, rc[i], rv, i});
-            }
-            const uint32_t nx = new_id();
-            emit(out, OpFMul, {t_float, nx, sx, rc[0]});
-            const uint32_t ny = new_id();
-            emit(out, OpFMul, {t_float, ny, sy, rc[1]});
-            // comp[2] -- clip z -- passes through: X4's projection has
-            // m[10] == 0, so it is the constant near plane for every vertex.
-            const uint32_t res = new_id();
-            emit(out, OpCompositeConstruct, {t_v4, res, nx, ny, comp[2], rc[2]});
-            emit(out, OpStore, {ptr, res});
+            conjugate(ptr, c0);
+            // The motion vector takes the PREVIOUS frame's rotation, member 2.
+            // Not member 0: correct velocity includes real head motion, so the
+            // two must be allowed to differ. They coincide only when the pose
+            // is static, which is what makes a static take a clean test of
+            // this patch rather than of the roll that maintains r_prev.
+            if (mv_ptr)
+                conjugate(mv_ptr, c_prev);
         }
         out.insert(out.end(), code.begin() + in.start,
                    code.begin() + in.start + in.len);
@@ -1418,6 +1529,8 @@ inline bool patch_vertex_pose_rotate(std::vector<uint32_t> &code,
     }
     out[3] = bound;
     code.swap(out);
+    if (did_motion)
+        *did_motion = mv_ptr != 0;
     return true;
 }
 

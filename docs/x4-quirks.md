@@ -6374,3 +6374,90 @@ the acceptance test, and it is a **prediction registered before the fix**:
 Do this in the harness first — a module declaring both object-block members,
 asserting the patch rewrites both and that `spirv-val` accepts it — before
 spending a take.
+
+## RETRACTION: the motion-vector mechanism is NOT supported by X4's modules
+
+The section above ("Take 188 — the seam is SOLVED") names a mechanism. **The
+mechanism is refuted. The measurement is not.** Both halves matter and they are
+kept apart deliberately.
+
+### What still stands
+
+`seam NDC = sx · tan(θ/2)` and `guard NDC = (sx·sinθ − cosθ)/(cosθ + sinθ/sx)`,
+fitted to **1.1 px worst case over six cases** spanning two angles and two `sx`
+values. Nothing below touches that. The guard-band control passed at 358.5
+against 358.8 predicted, so take 188 is sound.
+
+### What is refuted
+
+I claimed the seam came from X4's motion-vector path, on the strength of
+`IO_mv = M_prevworldviewprojection * IO_mv` in `high__common.vert.glsl` plus
+our own "3 compute cannot be" log line. Scanning all 409 dumped modules for an
+access chain whose **base is the variable of the block holding that member** and
+whose first index is 2:
+
+```
+409 modules (394 vertex); 341 have M_prevworldviewprojection at member 2
+of a bound block; 0 actually ACCESS that member.
+```
+
+**341 declare it and none reads it.** `common.glsl` declares the whole block, so
+every module that includes it names the member whether or not it uses it.
+Declaring is not reading — the same distinction that cost take 186b, where 409
+modules' *declared* descriptor sets were used to conclude something about the
+*pipeline layouts* X4 binds. Second time in three days, in the same file, from
+the same 409 dumps.
+
+The first count I ran said "303 modules access member 2" and that number was
+wrong: it matched an index-2 access chain into **any** base, not into the block
+in question. A predicate that reads something other than what it claims is how
+this project has produced confident wrong answers before.
+
+### What was built, and what it is worth
+
+The `r_prev` work is done and it is *correct*, but it currently patches **zero**
+real modules, so it is **not a fix for the seam** and must not be run as one:
+
+* `PoseBlock` grows `r_prev` (192 B, three mat4 at 0/64/128). Members 0 and 1
+  keep their offsets, so `patch_vertex_pose_clip` and
+  `patch_fragment_invproj_eye` read the same buffer unchanged.
+* `pose_set_euler` seeds `r_prev = r` — the no-head-motion case. Seeding it with
+  identity would announce a full rotation's worth of motion on the first frame.
+* `pose_roll_frame()` advances it; with a static pose it is a no-op by
+  construction.
+* `patch_vertex_pose_rotate` finds the motion-vector output **structurally** —
+  block member → `OpLoad` → `OpMatrixTimesVector` → `OpStore`, taking that
+  store's pointer — rather than by the debug name `IO_mv`. It applies the same
+  conjugation, factored into one lambda so the position and the motion vector
+  cannot drift apart.
+* Offline over all 409 dumps: **384 patched, 25 refused, 0 spirv-val failures,
+  0 motion vectors** — unchanged from before the work, which is the point.
+* The layer now logs `pose: N module(s) took the MOTION VECTOR correction`. If
+  that line never appears in a run, the correction reached nothing. **A fix that
+  patches no module must never be mistaken for a fix that worked**, and the only
+  way to guarantee that is to make the count visible.
+
+### Do not spend a take on this
+
+The acceptance test written in the previous section — "with `r_prev = r` the
+seam vanishes" — **cannot pass**, because nothing was patched. Running it would
+burn a take to observe an unchanged frame.
+
+### What the next question actually is
+
+The seam's law is exact and its cause is unknown. `sx·tan(θ/2)` is the ray
+halfway *in angle* between X4's view axis and ours, so something still has one
+foot in each orientation — but it is not the prev-MVP path in any module X4
+loaded. Candidates not yet excluded, and none of them may be asserted before
+the same kind of check that killed this one:
+
+* a **compute** stage — the log says 3 compute modules cannot take the fragment
+  `R⁻¹`, and compute is invisible to every render-pass instrument we have;
+* a pass reading `M_view`/`M_viewinverse` while its geometry took our clip-space
+  rotation, which is a mismatch of exactly one rotation;
+* something outside the 409 dumps entirely — that set is what one run loaded,
+  and its completeness has never been established.
+
+The last point deserves settling first and costs nothing in-game: **compare the
+module count X4 creates in a run against 409.** If X4 creates materially more,
+every offline sweep in this project has been over a sample, not a population.

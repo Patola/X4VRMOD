@@ -4171,6 +4171,10 @@ constexpr uint32_t kCameraProjMember = 1;
 constexpr uint32_t kObjectSet = 3;
 constexpr uint32_t kObjectBinding = 0;
 constexpr uint32_t kObjectMvpMember = 0;
+// M_prevworldviewprojection, read from a dumped module's own OpMemberName
+// rather than counted along X4's GLSL: member 0 M_worldviewprojection,
+// 1 M_world, 2 M_prevworldviewprojection. 341 of the 409 dumps declare it.
+constexpr uint32_t kObjectPrevMvpMember = 2;
 constexpr uint32_t kCameraInvProjMember = 2; // M_invprojection
 // M_invprojection_uj -- the *other* inverse projection, and the one that
 // mattered. Reading mod-0180 (the sun light with cascaded shadows) shows the
@@ -4513,10 +4517,25 @@ VkResult create_shader_module_inner(
             // without this they would be scene geometry that sits still while
             // everything around it turns. With it, every World module in the
             // dumps is reached and only non-World ones refuse.
+            bool did_mv = false;
             did = x4vr::spv::patch_vertex_pose_rotate(
                 pc, pose_set_index(), 0, kCameraSet, kCameraBinding,
                 kCameraProjMember, kObjectSet, kObjectBinding,
-                kObjectMvpMember);
+                kObjectMvpMember, kObjectPrevMvpMember, &did_mv);
+            // **Counted and reported, because offline it is ZERO.** Take 188's
+            // seam was blamed on X4's motion-vector path -- `IO_mv =
+            // M_prevworldviewprojection * IO_mv` in X4's own GLSL -- but not
+            // one of the 409 dumped modules ACCESSES that member. 341 declare
+            // it, because common.glsl declares the whole block, and declaring
+            // is not reading. If this counter stays 0 in a real run then the
+            // motion-vector correction reached nothing and cannot be the
+            // explanation for anything; a fix that patches no module must
+            // never be mistaken for a fix that worked.
+            static uint32_t mv_n = 0;
+            if (did_mv && ++mv_n <= 3)
+                X4VR_LOG("pose: %u module(s) took the MOTION VECTOR "
+                         "correction (object block member %u)",
+                         mv_n, kObjectPrevMvpMember);
             static uint32_t refused = 0;
             if (!did && ++refused <= 3)
                 X4VR_LOG("pose: a vertex module has neither a camera block at "
