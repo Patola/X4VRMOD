@@ -5889,6 +5889,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
     // vkCreateShaderModule, so it is the key into `info`; the final module is
     // whatever the swap left behind, and comparing the two is what names the
     // variant.
+    std::vector<std::string> pipe_descs(g_pipe_inventory ? count : 0);
     if (g_pipe_inventory) {
         std::lock_guard<std::mutex> lock(g_variants.mu);
         // Read directly rather than through is_canvas_pass()/needs_original():
@@ -5937,10 +5938,15 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
                 if (n < 0 || (size_t)n >= sizeof(stagebuf))
                     break;
             }
-            {
-                std::lock_guard<std::mutex> bl(g_bind_mu);
-                g_pipe_desc[out[i]] = stagebuf;
-            }
+            // Keyed by INDEX here and stored after creation. The first
+            // version wrote g_pipe_desc[out[i]] at this point -- but `out` is
+            // not filled until d->CreateGraphicsPipelines runs, ~20 lines
+            // below, so it keyed on an uninitialised handle. Every one of take
+            // 193's 179 binds then read "(no inventory entry)", and I called
+            // that a pipeline-substitution hypothesis when it was simply a
+            // value read before it was written.
+            if (i < pipe_descs.size())
+                pipe_descs[i] = stagebuf;
             X4VR_LOG("pipe: rp #%u.%u [%s%s]%s",
                      rp_serial, ci[i].subpass,
                      pass_flag(g_variants.canvas_pass, ci[i].renderPass,
@@ -5955,9 +5961,22 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
         }
     }
 
+    // Both creation paths publish, through one lambda: the `!any` early return
+    // is a second exit and forgetting it there is exactly the "fixed here,
+    // broken next door" shape this project keeps producing.
+    auto publish_descs = [&](VkResult r) {
+        if (r != VK_SUCCESS || pipe_descs.empty())
+            return;
+        std::lock_guard<std::mutex> bl(g_bind_mu);
+        for (uint32_t i = 0; i < count; i++)
+            if (out[i] != VK_NULL_HANDLE && !pipe_descs[i].empty())
+                g_pipe_desc[out[i]] = pipe_descs[i];
+    };
+
     if (!any) {
         VkResult r = d->CreateGraphicsPipelines(device, cache, count, ci, ac,
                                                 out);
+        publish_descs(r);
         record_provenance(r);
         return r;
     }
@@ -5970,6 +5989,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
     }
     VkResult r =
         d->CreateGraphicsPipelines(device, cache, count, infos.data(), ac, out);
+    publish_descs(r);
     record_provenance(r);
     return r;
 }

@@ -7181,3 +7181,50 @@ an eighth instance of the pattern, and this time it is in the case I wrote one
 step ago specifically to avoid it: **counting the set difference proved
 attribution and said nothing about content.** The case needs a second assertion
 that a bind line resolves to a named module.
+
+### The join, fixed — and it was never the substitution hypothesis
+
+**Cause:** `g_pipe_desc[out[i]] = stagebuf` ran at ~line 5942 while
+`d->CreateGraphicsPipelines` fills `out` at 5959/5972 — **twenty lines later**.
+The description was keyed on a handle that had not been written yet. Take 193's
+179 binds all read `(no inventory entry)` for that reason and nothing else.
+
+I called it "most likely pipeline substitution — multiview or canvas variants".
+That was wrong, and the zero-overlap figure I cited as evidence *for* it is
+better evidence against: a substitution split would leave some overlap, and
+reading uninitialised memory leaves exactly none. **Zero is not a small number
+here, it is a different kind of number**, and I read it as the former.
+
+**Fix:** accumulate by index, publish after creation, through **one lambda
+called on both creation paths** — the `!any` early return is a second exit and
+forgetting it there is the shape this project keeps producing.
+
+### The case now asserts content, not just attribution
+
+Two cases, and the split is the point:
+
+```
+ok   bind-time: alias pass is attributed    2 pass(es) bind, 3 with the alias
+ok   bind-time: the line names a module     3/3 bind line(s) name a module
+```
+
+Negative control with the broken join restored:
+
+```
+ok   bind-time: alias pass is attributed    2 pass(es) bind, 3 with the alias
+FAIL bind-time: the line names a module     3 bind line(s), 0 naming a module
+```
+
+The first case passes on the broken build — **it did pass, on take 193** — and
+the second reproduces that log's exact signature. Counting the set difference
+proved attribution and was blind to content; only an assertion about content
+catches this.
+
+End to end in the harness, `module_map.py` now prints a `BOUND AT DRAW` section
+and, unprompted, the line that take 192 needed:
+
+```
+passes that BOUND a pipeline created against another pass: rp #1
+```
+
+That is the alias, found by the tool rather than by knowing where to look.

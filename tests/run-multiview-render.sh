@@ -2026,6 +2026,33 @@ bindtime_case() { # label
 }
 bindtime_case "bind-time: alias pass is attributed"
 
+# **The case above counts PASSES and says nothing about CONTENT**, so it passed
+# on the build that produced take 193 -- where all 179 bind lines read
+# "(no inventory entry)" because the description was keyed on `out[i]` before
+# vkCreateGraphicsPipelines had filled it. Proving attribution is not proving
+# the join. This asserts a bind line actually RESOLVES to a module.
+bindtime_detail_case() {
+    local label="$1" log n_bind n_detail
+    log="$(mktemp)"
+    env VK_ADD_LAYER_PATH="$BUILD/layer" \
+        VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+        X4VR_MV=1 X4VR_STEREO=1 X4VR_TEST_XRP=1 X4VR_PIPE_INVENTORY=1 \
+        X4VR_MV_INVENTORY=1 X4VR_LOG="$log" timeout 120 "$BIN" \
+        "$VS" "$FS" "$SF" >/dev/null 2>&1
+    n_bind=$(grep -ac 'bind rp #' "$log")
+    n_detail=$(grep -a 'bind rp #' "$log" | grep -c 'mod#')
+    rm -f "$log"
+    if [[ "${n_bind:-0}" -gt 0 && "${n_detail:-0}" -gt 0 ]]; then
+        printf 'ok   %-38s %s/%s bind line(s) name a module\n' \
+            "$label" "$n_detail" "$n_bind"
+    else
+        printf 'FAIL %-38s %s bind line(s), %s naming a module\n' \
+            "$label" "${n_bind:-0}" "${n_detail:-0}"
+        fails=$((fails + 1))
+    fi
+}
+bindtime_detail_case "bind-time: the line names a module"
+
 # --- the round-robin's give-up, which had no test and cost take 179 ---------
 #
 # The three verdict cases below use the fixture 0,1,5 -- the CAPTURABLE target
