@@ -7770,6 +7770,66 @@ land in the same column.
 fragments — which removes the confound by construction. That is now the work,
 not another knob.
 
+## What is left on the rotation side — the complement, enumerated (take 197)
+
+All offline, no take. The method is this file's own: a transform reaching a
+subset makes the complement wrong, so **enumerate what does NOT carry it.**
+
+### What the rotation reaches
+
+| | count | source |
+|---|---|---|
+| vertex conjugation `P·R·P⁻¹` accepted | **384** of 409 | `vert-pose-rotate` sweep |
+| refused (not World / no camera or object block) | 25 | same |
+| fragment `R⁻¹` in the reconstruction | **244**, all exact | `frag-invproj-check` sweep |
+
+### What it does not reach — and which of those are fine
+
+* **10 compute modules.** No vertex stage, and the invproj patch refuses
+  compute, so no patch we have can reach them. Two use `S_sampler3D`
+  (mod-0177, mod-0364 — the volumetric froxel grid), two `S_samplerCube`
+  (mod-0266/0267 — the skybox).
+* **The froxel volume is nonetheless CONSISTENT.** `volume_apply.frag` does
+  `RetrieveZBufferViewPos` then `view2volume(view_pos)`, and `view2volume`
+  calls `Project()`. The reconstruction is corrected into X4's frame by #61,
+  `Project()` uses `M_projection` — which the layer **cannot** alter, since
+  `patch_vertex_eye_offset` only *reads* it for live `sx` and a shader cannot
+  write a uniform — and the volume was built by compute in X4's frame. The
+  round trip closes.
+* **The motion-vector path is ABSENT in this configuration.** 341 modules
+  declare `M_prevworldviewprojection`; **0 access it** (access chains resolved
+  to their base variable, not matched by index); and **0 modules write any
+  motion-vector output at all**. So hypothesis 1 is dead for a stronger reason
+  than recorded, and **`r_prev` is inert** — correctly built, correctly wired
+  (three block members, `c_prev = 2`), and matching **0 of 384** modules
+  because there is nothing to correct.
+* **TAA is not running.** `taa_apply.frag` writes through `imageStore`, and
+  the only `OpImageWrite` users among the 409 are the 10 compute modules. That
+  matters because `taa_apply` contains
+  `if (reproj_uv outside [0,1]) blend = 1` — a hard binary switch on a
+  reprojected coordinate, which is precisely a hard-edge generator. It is not
+  firing here.
+
+### What it does not reach, and is NOT accounted for
+
+* **Pure screen-space reads with no reprojection.** `volume_apply` also does
+  `RTResolve(S_sampler2D_AUTOMS[PLS_FOG_FLAT + i])` and `GetDepthGodRay()`,
+  both at the *current* fragment position. Those are correct only if the pass
+  that WROTE those targets carries the same rotation as the pass reading them.
+  Unchecked.
+* **`depth_godrays_pass.frag`** — the third re-projector. Unread.
+* **The skybox** (mod-0266/0267, compute, cube). [[x4-skybox-is-not-one-layer]]
+  says it broke all three previous attempts.
+
+### And one defect found on the way — see the commit
+
+The layer classified the module it had just written: `patch_vertex_pose_rotate`
+adds the camera-block access `classify(wide)` treats as proof of world
+geometry, and **30 modules** flipped `NonWorld → World` because of it — every
+one a procedural fullscreen quad, rp #31's and #32's among them. Live since
+take 195 only. Fixed, with a fixture and a paired case; **not yet validated in
+game.**
+
 # RESUME HERE AFTER A COMPACT — state as of take 197
 
 Everything below this line supersedes earlier "read this first" banners.
@@ -7799,6 +7859,13 @@ Everything below this line supersedes earlier "read this first" banners.
   configuration, not a shippable one.
 
 ## The immediate next task
+
+**Validate the classify fix with a take, before anything else on the seam.**
+The layer was classifying the module it had just written, and 30 procedural
+fullscreen quads — rp #31's and #32's among them — were being dispatched as
+world geometry since take 195. That is fixed and harness-tested but **has
+never run in game**, and until it does, every seam measurement is taken
+through a known-wrong dispatch. See the enumeration section above.
 
 **Not settled, and the two candidates at rp #31/#32 are both spent.** The seam
 is NOT the absent reconstruction correction — it was never absent, because the
