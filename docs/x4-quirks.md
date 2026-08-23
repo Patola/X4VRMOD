@@ -7660,7 +7660,75 @@ disparity). A deferred lighting pass is a fullscreen quad that must NOT be
 sheared as geometry and MUST have its `M_invprojection` corrected. If one flag
 decides both, that pass cannot get what it needs.
 
-# RESUME HERE AFTER A COMPACT — state as of take 195
+## Take 196: the gate is NOT the seam's cause
+
+`X4VR_SHEAR_NODEPTH=1`, everything else byte-identical to take 195.
+
+**The knob reached the decision it names.** rp #31/#32 — still `1 colour [97H]
+no-depth`, so the same passes as in 195 — bound `->patched` on **both** stages:
+
+```
+bind rp #31  s0=mod#343/646039c1(World,procedural,live-sx)->patched s1=...->patched
+bind rp #32  s0=mod#143/888d50c6(World,procedural,live-sx)->patched s1=...->patched
+```
+
+11 eligible passes flipped, 0 stayed. So the per-eye `M_invprojection`
+correction and #61's `R⁻¹` **did execute at the seam's passes in this take.**
+
+**And the seam is still there.** Measured as the median signed column-to-column
+step over all rows of the left eye — a seam is a coherent full-height
+discontinuity, scene edges are local and cancel:
+
+| | guard edge | seam | separation | vs law |
+|---|---|---|---|---|
+| law (`sx`=0.70024, θ=20°) | −0.49029 NDC | +0.12347 NDC | **432.1 px** | — |
+| take 195 | x=360 (step +4) | x=792 (step −4) | 432 px | **−0.1 px** |
+| take 196 | x=368 (step +7) | x=805 (step −6) | 437 px | +4.9 px |
+
+**Separation is used because it needs no cross-take registration.** Absolute
+x does: the two PNGs differ in height (1410 vs 1407), and content
+cross-correlation across three bands returned dx = −5, 0, −3 — three answers,
+so that instrument is wrong here, exactly because the knob changed the content
+it would have to match on.
+
+**Conclusion: restoring the correction did not remove the seam.** Hypothesis
+three dies a second time, and this time by an instrument that observed the
+right event.
+
+### Two things I got wrong about this run
+
+**The prediction was not falsifiable.** I wrote "the seam should change". A
+knob that perturbs eleven passes will change *something*, so that sentence
+could not lose. It should have been the pair of specific outcomes: *vanishes*
+if the missing correction is the cause, *stays at 432 px separation* if not.
+The answer is the second, and the 4.9 px is perturbation, not removal.
+
+**The acceptance check FAILed a valid take.** `shear-nodepth` keyed on
+"no-depth passes still binding `->original`" and named rp #0/#33/#46. Those
+three are all-LDR (44L/50L/50L) and are held by the rule at
+x4vr_layer.cpp:2060, which this knob does not gate. Wrong granularity: no
+predicate over "no-depth passes" can split them out, because the classified
+object was wrong. Corrected to "no-depth AND at least one HDR attachment",
+read from the inventory's own format column, and re-proved against a doctored
+log.
+
+### The confound, stated plainly
+
+`X4VR_SHEAR_NODEPTH=1` restores the shear as well as the correction, so this
+is not a single-variable test. The seams also got **stronger** (step 4→7 and
+4→6), which is what take 70's #57 defect looks like coming back.
+
+What makes the conclusion survive the confound: **the seam sits at
+`sx·tan(θ/2)` in both takes, which is a function of the head rotation.** A
+shear artifact scales with the eye offset, not with θ. So the feature that
+persisted is the rotation-derived one, not a shear artifact that happens to
+land in the same column.
+
+**The clean test is the third variant** — unsheared vertices, corrected
+fragments — which removes the confound by construction. That is now the work,
+not another knob.
+
+# RESUME HERE AFTER A COMPACT — state as of take 196
 
 Everything below this line supersedes earlier "read this first" banners.
 
@@ -7678,33 +7746,36 @@ Everything below this line supersedes earlier "read this first" banners.
   measured under. That check is dormant unless `X4VR_PIPE_INVENTORY=1`, so takes
   186–191 were *unexamined* on that axis, not clean.
 * **Open defect: the x=791 seam.** Law `seam NDC = sx·tan(θ/2)`, verified to
-  **1.1 px over six cases, two angles, three `sx` values**. Bracketed to
-  **rp #31/#32, the deferred lighting output**.
+  **1.1 px over six cases, two angles, three `sx` values**, and to **0.1 px on
+  take 195's guard-to-seam separation** (432 measured, 432.1 predicted).
+  Appears at **rp #31/#32, the deferred lighting output**. **Take 196 forced
+  the corrected modules to bind there and the seam stayed** — so it is not the
+  missing correction, and the cheap discriminators are spent.
+* **Take 196 also PASSes** and is a candidate for known-good-runs, but note
+  what it cost: `X4VR_SHEAR_NODEPTH=1` restores take 70's #57 defect, and the
+  seams measurably strengthened (step 4→7, 4→6). It is a diagnostic
+  configuration, not a shippable one.
 
 ## The immediate next task
 
-**Decide whether `needs_original()` splits into two gates.** The rule is now
-READ, not guessed: rp #31/#32 have one HDR colour attachment and **no depth**,
-so the take-70 rule at x4vr_layer.cpp:2027 fires, `unsheared` goes true,
-`needs_original()` returns true, and both stages bind the original twin. The
-per-eye `M_invprojection` correction and #61's `R⁻¹` therefore **never execute
-in the two passes that show the seam.** Sections above have the walk-through.
+**Build the third variant: unsheared vertices, corrected fragments.** Take 196
+settled that `needs_original()` is one gate over two transforms and that the
+gate is *not* the seam's cause — but the two transforms still need opposite
+answers at rp #31/#32, and no knob can give them that. The shear must stay off
+(take 70: #57 disagreed 85% between eyes with it on); the fragment
+reconstruction correction must be on (a deferred lighting pass is exactly what
+it is for). Today one flag decides both.
 
-**The shape:** one flag disables the vertex shear *and* the fragment
-reconstruction correction. Take 70 proved the shear must stay off for these
-passes (#57 disagreed 85% between eyes with it on). The reconstruction
-correction is exactly what a deferred lighting pass needs. Opposite answers,
-one gate — so the fix is a third variant: unsheared vertices, corrected
-fragments.
+This is also **the only clean test left for the seam.** Take 196 had to
+restore the shear to restore the correction, so it could not separate them;
+the third variant removes that confound by construction.
 
-**The cheap discriminator first, before building that.**
-`X4VR_SHEAR_NODEPTH=1` flips this rule and **has never been run — 180 stored
-logs, zero occurrences.** It is not a fix (it restores the shear too, and take
-70 measured what that costs), it is a test. **Prediction, before the run:** the
-seam at `sx·tan(θ/2)` changes. If it does not move at all, the gate is not
-where the seam comes from and the reconstruction is cleared for the second
-time — by the right instrument this time. Expect the take to look *worse* in
-other ways; that is the knob doing its job, not a regression.
+**Do NOT reach for another knob here.** Take 196 was the last cheap
+discriminator and it has been spent. What remains is the variant.
+
+**What the seam is NOT, after 196:** the absence of the reconstruction
+correction at rp #31/#32. Restoring it left the seam at the same
+`sx·tan(θ/2)`, separation 437 px against the law's 432.1.
 
 **The previous next task is DONE** — `frag-invproj-check` takes a pose set,
 both negative controls fire, and all 244 eligible modules compute `R⁻¹·M`
@@ -7715,10 +7786,13 @@ exactly. That is hypothesis four eliminated.
 1. **prev-MVP motion vector** — 0 of 409 modules access `M_prevworldviewprojection`.
 2. **camera-positioned classification** — take 195 reclassified those modules
    and the seam did not move a pixel.
-3. **~~uncorrected reconstruction~~ — REVIVED AND NOW MECHANISED.** It was
-   killed by an offline check answering "does the patch apply?" when the
-   question was "does the corrected module run?". At rp #31/#32 it does not:
-   no depth → take-70 rule → `needs_original()` → the original twin is bound.
+3. **uncorrected reconstruction — DEAD TWICE, the second time properly.** It
+   was first killed by an offline check answering "does the patch apply?" when
+   the question was "does the corrected module run?" — at rp #31/#32 it did
+   not, so that verdict was void. **Take 196 forced the corrected modules to
+   bind there and the seam stayed**, separation 437 px against the law's
+   432.1. Note the confound: 196 restored the shear too, and only the third
+   variant removes it.
 4. **`R⁻¹` arithmetic** — all 244 eligible modules compute `R⁻¹·M` to
    0.000e+00, with two negative controls confirming the check has range.
 
