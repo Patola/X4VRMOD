@@ -4809,7 +4809,26 @@ VkResult create_shader_module_inner(
         const char *s = getenv("X4VR_SHEAR_LIGHTS");
         return !s || !*s || *s != '0';
     }();
-    const x4vr::spv::Kind kind = x4vr::spv::classify(code, wide_camera);
+    // **X4's OWN bytes, not `code`.** `code` may hold `pose_code` -- the output
+    // of patch_vertex_pose_rotate, swapped in above -- and that patch emits an
+    // OpAccessChain into camera-block member 1 inside the vertex function,
+    // which is one of the four members (0, 1, 7, 8) the WIDE reading treats as
+    // proof of world geometry. Classifying it asks "what did we just write?"
+    // instead of "what did X4 send?", and the patch manufactures the exact
+    // evidence the classifier looks for.
+    //
+    // Measured over the 409 dumps: 30 modules flip NonWorld -> World that way,
+    // and **all 30 are procedural fullscreen quads** -- including both of
+    // rp #31's pairs and rp #32's, the passes the x=791 seam appears at. They
+    // were being dispatched as world geometry: K_world, the live-sx path and
+    // the affine, applied to a screen-space triangle.
+    //
+    // Live only since take 195, when #49's fix made the wide reading the
+    // default; the narrow reading does not flip. So takes 195 and 196 were
+    // measured through it.
+    const std::vector<uint32_t> x4_words(ci->pCode,
+                                         ci->pCode + ci->codeSize / 4);
+    const x4vr::spv::Kind kind = x4vr::spv::classify(x4_words, wide_camera);
     // Task #48. The 18 modules the two readings disagree about: world geometry
     // positioned by the CAMERA rather than by a per-object matrix -- X4's
     // instanced light volumes, and `p1_star`, which draws the suns and the
@@ -4818,11 +4837,14 @@ VkResult create_shader_module_inner(
     // draw mono and in X4's own frustum inside a STEREO pass while the 152
     // world modules around them are canted by +/-15.04 deg.
     //
-    // Computed from the same `code` the dispatch branched on, so it cannot
-    // disagree with `kind` the way take 171's second classify() call did.
+    // Computed from the same words `kind` was, so it cannot disagree with it
+    // the way take 171's second classify() call did -- and, since take 197,
+    // those are X4's words rather than ours. Making the two agree was the
+    // take-171 fix; it was achieved by having BOTH read the module we had just
+    // written, which is a guard that cannot fail.
     const bool camera_positioned =
         kind != x4vr::spv::Kind::World &&
-        x4vr::spv::classify(code, true) == x4vr::spv::Kind::World;
+        x4vr::spv::classify(x4_words, true) == x4vr::spv::Kind::World;
     if (kind == x4vr::spv::Kind::NotVertex) {
         if (!frag_patched)
             return d->CreateShaderModule(device, ci, ac, out);

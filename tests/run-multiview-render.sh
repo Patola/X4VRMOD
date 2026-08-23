@@ -417,6 +417,61 @@ PATCHDIR="$(mktemp -d)"
 trap 'rm -rf "$PATCHDIR"' EXIT
 PATCHER="$BUILD/tests/x4vr_test_spirv_patch"
 
+# Take 197. The layer must classify the module X4 SENT, not the one it just
+# wrote.
+#
+# patch_vertex_pose_rotate emits an OpAccessChain into camera-block member 1
+# inside the vertex function, and the WIDE reading treats an access to member
+# 0, 1, 7 or 8 there as proof of world geometry (task #48). So the patch
+# manufactures the exact evidence the classifier looks for, and a module
+# classified AFTER it reads World when X4's own bytes read NonWorld.
+#
+# Measured over the 409 dumps: 30 modules flipped that way and every one was a
+# procedural fullscreen quad -- screen-space triangles being handed K_world,
+# the live-sx path and the affine. Both of rp #31's module pairs and rp #32's
+# were in that set, which is where the x=791 seam appears. Live only from take
+# 195, when #49's fix made the wide reading the default.
+#
+# sample_fullscreen_uncam.vert is that shape: a procedural fullscreen triangle
+# declaring the camera block and reading member 2 only, so it is NonWorld
+# before the patch and World after. The pair below is the point -- the offline
+# leg proves the fixture still reproduces the flip, so a green layer leg means
+# "the layer ignored our edit" rather than "nothing flips any more".
+uncam="$BUILD/tests/sample_fullscreen_uncam.vert.spv"
+rawk=$("$PATCHER" classify "$uncam" 2>&1 | sed -n 's/.*WIDE=\([A-Za-z]*\).*/\1/p')
+tmpr=$(mktemp)
+"$PATCHER" vert-pose-rotate "$uncam" "$tmpr" 31 1 0 1 >/dev/null 2>&1
+rotk=$("$PATCHER" classify "$tmpr" 2>&1 | sed -n 's/.*WIDE=\([A-Za-z]*\).*/\1/p')
+rm -f "$tmpr"
+if [[ "$rawk" == NonWorld && "$rotk" == World ]]; then
+    printf 'ok   %-38s raw=%s rotated=%s\n' \
+        "classify: the fixture still flips" "$rawk" "$rotk"
+else
+    printf 'FAIL %-38s want NonWorld->World, got %s->%s (fixture no longer reproduces the trap)\n' \
+        "classify: the fixture still flips" "${rawk:-?}" "${rotk:-?}"
+    fails=$((fails + 1))
+fi
+
+# ...and the layer, driven with the rotation ON and the wide reading ON --
+# exactly takes 195/196 -- must still report NonWorld for it.
+uncam_log="$(mktemp)"
+env X4VR_LOG="$uncam_log" X4VR_MV=1 X4VR_STEREO=1 X4VR_PIPE_INVENTORY=1 \
+    X4VR_POSE=1 X4VR_POSE_ROTATE=1 X4VR_POSE_YAW=20 X4VR_SHEAR_LIGHTS=1 \
+    "VK_ADD_LAYER_PATH=$BUILD/layer" \
+    "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    timeout 120 "$BIN" "$uncam" "$FS" "$SF" >/dev/null 2>&1
+uncam_kind=$(grep -oE 's0=mod#[0-9]+/[0-9a-f]+\([A-Za-z]+' "$uncam_log" |
+    head -1 | sed 's/.*(//')
+rm -f "$uncam_log"
+if [[ "$uncam_kind" == NonWorld ]]; then
+    printf 'ok   %-38s kind=%s under pose+wide\n' \
+        "classify: layer reads X4's bytes" "$uncam_kind"
+else
+    printf 'FAIL %-38s want NonWorld, got "%s" — the layer classified the module it wrote\n' \
+        "classify: layer reads X4's bytes" "${uncam_kind:-?}"
+    fails=$((fails + 1))
+fi
+
 frag_case() {
     local label="$1" want1="$2" wantd="$3" shader="$4" arr="$5"; shift 5
     local out g1 gd
