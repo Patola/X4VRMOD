@@ -7830,7 +7830,7 @@ one a procedural fullscreen quad, rp #31's and #32's among them. Live since
 take 195 only. Fixed, with a fixture and a paired case; **not yet validated in
 game.**
 
-# RESUME HERE AFTER A COMPACT — state as of take 197
+# RESUME HERE AFTER A COMPACT — state as of take 197 (validated)
 
 Everything below this line supersedes earlier "read this first" banners.
 
@@ -7860,12 +7860,21 @@ Everything below this line supersedes earlier "read this first" banners.
 
 ## The immediate next task
 
-**Validate the classify fix with a take, before anything else on the seam.**
-The layer was classifying the module it had just written, and 30 procedural
-fullscreen quads — rp #31's and #32's among them — were being dispatched as
-world geometry since take 195. That is fixed and harness-tested but **has
-never run in game**, and until it does, every seam measurement is taken
-through a known-wrong dispatch. See the enumeration section above.
+**DONE — take 197 validated the classify fix, tagged
+`stage17-classify-x4s-bytes`.** World-and-procedural 14 → 0; the patch paths
+balance to the module (live-sx −28, mvp-sx −2, clip +30 = exactly the 30
+predicted offline); rp #31/#32 now read `(NonWorld,MONO,procedural,clip)`;
+`cam-pos=0` still holds so #49 was not passing because of the defect. **The
+seam did not move** — edges at 360 and 792, separation 432 px against the law's
+432.1, byte-identical to take 195 — which was the prediction, and which also
+retires take 196's +4.9 px as `X4VR_SHEAR_NODEPTH`'s perturbation.
+
+**No next task chosen for the seam.** Both rp #31/#32 candidates are spent and
+the measurements are now taken through a dispatch that is finally correct. What
+remains unaccounted is in the enumeration section: `volume_apply`'s
+non-reprojecting screen-space reads (`RTResolve(PLS_FOG_FLAT+i)`,
+`GetDepthGodRay()`), `depth_godrays_pass.frag`, and the skybox. **Read those
+three before proposing a take.**
 
 **Not settled, and the two candidates at rp #31/#32 are both spent.** The seam
 is NOT the absent reconstruction correction — it was never absent, because the
