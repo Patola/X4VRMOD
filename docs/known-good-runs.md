@@ -691,7 +691,7 @@ are not committed):
     python3 tools/register_affine.py /tmp/x4-164a.jpg /tmp/x4-164b.jpg 0.0 0.72
     python3 tools/register_affine.py --verify /tmp/x4-164a.jpg /tmp/x4-164c.jpg 1.2892 0.2425 1.1931 -0.1932 0.0 0.55
 
-## `stage16-classify-x4s-bytes` — take 197
+## `stage17-classify-x4s-bytes` — take 197
 
 The layer classifies the module **X4 sent**, not the one it had just written.
 Scorer PASS, and the two independent numbers agree to the module.
