@@ -6568,3 +6568,57 @@ The one instrument that would name it is the per-pass capture, and **its
 give-up path still has no test** — that is the defect that ate take 179. The
 correct order is: give `X4VR_MV_DUMP_AFTER_RP` its missing regression test in
 the harness, *then* bisect. Not another guess from a source file.
+
+### The give-up path: defect reproduced, fix written, test NOT achieved
+
+**Status: incomplete, and the bisect must not be run yet.** Recorded plainly
+because a half-finished guard that reads as finished is how take 179 was lost in
+the first place.
+
+**The defect is real and was mis-described.** The give-up that existed covers
+"target reached but it has no doubled colour attachment" — after
+`kAfterRpGiveUp` reaches it advances. What had **no give-up at all** is a target
+that is *never reached*: a serial that simply does not occur. Nothing
+incremented, so it held the round-robin index forever and starved every entry
+behind it.
+
+**Reproduced in the harness**, which is the part that matters:
+
+```
+X4VR_MV_DUMP_AFTER_RP=5,0   ->  target rp #5: NEVER REACHED
+                                target rp #0: NEVER REACHED
+```
+
+rp #0 is *capturable* — the existing `verdict: captured` case proves it — and
+under this ordering it never captures. One unreachable entry voids the list.
+
+**Why the existing three verdict cases never caught it:** their fixture is
+`X4VR_MV_DUMP_AFTER_RP=0,1,5`. The capturable target is **first**, so the index
+always advances and nothing ever starves. The suite tested the ordering in which
+the bug is invisible — the third instance of that pattern recorded in this file.
+
+**The fix is written** — a give-up counted in cadence *arms*, advancing past a
+target the frame never contains — **and it cannot be exercised headless.** The
+arm lives in `probe_collect`, which runs from `x4vr_QueuePresentKHR`; the
+harness has no swapchain, never presents, and reaches `probe_collect` only at
+device destroy with `queue == VK_NULL_HANDLE`, which skips the whole block. The
+run above fired the give-up **zero** times.
+
+There is a second obstacle behind that one, and it is the more fundamental of
+the two: **the harness renders its passes once.** Even with arming driven
+headless, giving up on target 5 leaves target 0 with no further pass-0 end to be
+captured at. A single-frame fixture can pin *starvation* but can never
+demonstrate *recovery*.
+
+**What it would take:** make `multiview_render` render N frames rather than one,
+so both the arm cadence and the recovery have somewhere to happen. That is
+bounded work on the harness and it is the honest prerequisite for trusting this
+instrument. Until then:
+
+* the starvation reproduction above is real and should become a case the moment
+  recovery is demonstrable;
+* `X4VR_MV_DUMP_AFTER_RP` must be given **one** target per run, or a list whose
+  first entry is known reachable;
+* **do not bisect the seam with it yet.** The instrument's failure mode is
+  exactly "produces nothing and says little", which costs a take and teaches
+  nothing — which is what happened the last time.

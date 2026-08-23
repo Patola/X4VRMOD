@@ -7849,6 +7849,13 @@ struct MvProbe {
     uint32_t after_no_att = 0;         // reaches of the current target with
                                        // no doubled attachment to read
     bool after_armed = true;           // X4VR_MV_DUMP_AFTER_RP cadence fired
+    // Take 179's actual failure, which had NO give-up at all. The list only
+    // advanced on a capture, or on a target reached with no doubled colour
+    // attachment. A target that is NEVER REACHED -- a serial that simply does
+    // not occur in the frame -- incremented nothing, so it held the index
+    // forever and starved every entry behind it. Six targets, zero files.
+    bool after_seen = false;           // current target reached since arming
+    uint32_t after_miss = 0;           // consecutive arms that never saw it
     bool force_dump = false;           // this sample must be written out
     bool full_res = false;             // ... and at full resolution
     uint32_t after_target = 0;         // which rp this capture is of
@@ -8397,6 +8404,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
             (int64_t)rp_serial == dump_after_rp_current()) {
             std::lock_guard<std::mutex> lock(g_probe_mu);
             after_rp_reached().insert((int64_t)rp_serial);
+            if ((int64_t)rp_serial == dump_after_rp_current())
+                g_probe.after_seen = true;
         }
         if (dump_after_rp() >= 0 &&
             (int64_t)rp_serial == dump_after_rp_current() && atts.empty()) {
@@ -8457,6 +8466,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
                         g_probe.after_target = rp_serial;
                         g_probe.after_no_att = 0;
                         after_rp_captured().insert((int64_t)rp_serial);
+                        g_probe.after_miss = 0;
+                        g_probe.after_seen = false;
                         dump_after_rp_idx()++;
                     }
                 }
@@ -8501,8 +8512,24 @@ void probe_collect(DeviceData *d, VkQueue queue) {
         if (!g_probe.armed && g_probe.presents % kProbeEvery == 0)
             g_probe.armed = true;
         if (dump_after_rp() >= 0 && !g_probe.after_armed &&
-            g_probe.presents % g_dump_after_every == 0)
+            g_probe.presents % g_dump_after_every == 0) {
+            // Advance past a target the frame never contains. Without this a
+            // bad first entry voids the whole list, which is what take 179
+            // spent a run discovering. Counted in ARMS, not frames: the
+            // question is "did the target show up in a window where we were
+            // actually looking", and between arms we are not looking.
+            if (!g_probe.after_seen && ++g_probe.after_miss >= kAfterRpGiveUp) {
+                const int64_t t = dump_after_rp_current();
+                X4VR_LOG("mv dump: giving up on rp #%lld — armed %u time(s) "
+                         "and the pass never occurred. Advancing so it does "
+                         "not starve the rest of the list (take 179's defect).",
+                         (long long)t, g_probe.after_miss);
+                g_probe.after_miss = 0;
+                dump_after_rp_idx()++;
+            }
+            g_probe.after_seen = false;
             g_probe.after_armed = true;
+        }
         // Armed but never satisfied means the round has covered everything
         // that actually appears; start the next sweep.
         if (g_probe.armed && !g_probe.pending) {
