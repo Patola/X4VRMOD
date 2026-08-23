@@ -7503,6 +7503,107 @@ no more than the one that could not see `R⁻¹` at all.
 **Then:** run it over the 244 eligible modules, mod-0366 and mod-0370 included,
 before any further seam work.
 
+### DONE, and the answer is: #61's R⁻¹ is exact in all 244 modules
+
+Built as specced, plus a second negative control the spec did not ask for.
+Costs nothing but a rebuild — no take.
+
+**The two controls, both run BEFORE the result was believed:**
+
+| control | what it breaks | fixture | mod-0366 |
+|---|---|---|---|
+| `X4VR_CHECK_RINV_FLIP=1` | reference composed `M·R⁻¹`, not `R⁻¹·M` | 1.736e+00 | 1.736e+00 |
+| `X4VR_CHECK_RINV_ROWMAJOR=1` | pose block decoded with the other majorness | 4.960e-01 | 4.960e-01 |
+| *(neither)* | — | **0.000e+00** | **0.000e+00** |
+
+The second control is why the pose matrix is now **decoded from `PoseBlock`'s
+raw bytes** through the offset, stride and majorness the module declares,
+rather than copied out of `pose.r_inv`. Seeding `r_inv` directly would have
+agreed with *any* layout — and `patch_fragment_invproj_eye`'s own comment
+(x4vr_spirv.hpp:3126) warns that a layout mismatch "reads back as a plausible
+wrong matrix, not as an error". The check now reads `LAYOUT=off64/stride16/col`
+out of the emitted SPIR-V and the suite pins it.
+
+An identity rotation is **refused**: it commutes with everything, so the
+flipped order would agree with the right one and the check would pass while
+proving nothing.
+
+**The sweep, all 409 dumps, ypr = 10,−7,3:**
+
+| outcome | modules |
+|---|---|
+| `CHECKED=10 WORST=0.000e+00` | **244** |
+| `FAIL=no_load_to_check` | 162 |
+| `FAIL=patch_refused` (compute) | 3 |
+
+244 is exactly the eligible count the layer reports offline, which is a
+cross-check that the swept set is the same set.
+
+**And the same sweep with the flip control on: 244 checked, ZERO still at
+zero, every one of them 1.724e+00.** That is the part that matters — without
+it, a module that silently never received the `R⁻¹` term would have scored a
+perfect zero and been counted as correct. It did not happen to any of them.
+
+The flipped error is exactly **10·sin(yaw)** — 0.1745 at 1°, 0.8716 at 5°,
+1.7365 at 10°, 5.000 at 30° — the 10 being the `1/near` term in the inverted
+projection. So the number is a function of the input rather than a constant,
+and the correct order stays exact at 1°, 5°, 10°, 30° and 90°.
+
+**Hypothesis four is dead.** #61 emits, validates, executes, *and* computes the
+identity it claims.
+
+### ...but at rp #31/#32 the patched module is not the one BOUND
+
+Checking what the result above actually licenses turned up something that
+narrows the seam rather than clearing it. From take 195's own log, no new run:
+
+```
+bind rp #31  s0=mod#125/e65754b1(World,procedural,live-sx)->original s1=...->original
+bind rp #31  s0=mod#127/646039c1(World,procedural,live-sx)->original s1=...->original
+bind rp #32  s0=mod#109/888d50c6(World,procedural,live-sx)->original s1=...->original
+```
+
+`->original` is not "unpatched". x4vr_layer.cpp:5930 sets it when `got !=
+asked` — the module **was** patched and the layer then swapped the *original
+twin* back in at pipeline creation. Both stages, all three modules, every
+occurrence in the log: those six module entries never appear as `->patched`
+anywhere.
+
+**So the per-eye `M_invprojection` correction and #61's `R⁻¹` — which the
+section above proves are emitted exactly right — do not execute in the two
+passes that show the seam.**
+
+That reopens the third "dead" hypothesis, and it died to the wrong
+instrument. The check that killed it asked *"does the patch apply to rp #31's
+modules?"* and got yes. The question was *"does the corrected module run
+there?"* and the answer is no. **Patched and bound are different events** —
+the tenth instance, and this time it retired a live hypothesis.
+
+18 passes bind a genuinely-World module as `->original`; 64 of 254 bind lines
+are `->original` overall. So this is a rule firing broadly, not an accident at
+two passes.
+
+**One explanation already refuted — recorded so it is not tried again.** The
+obvious candidate is the take-70 no-depth rule at x4vr_layer.cpp:2027, whose
+comment names rp #31/#32 by number. It cannot be the cause here: that branch
+is `if (!g_shear_nodepth && !subpass_has_depth(...))`, `g_shear_nodepth` is
+`X4VR_SHEAR_LIGHTS`, and **take 195 ran with `X4VR_SHEAR_LIGHTS=1`** — the
+branch was skipped and rp #31/#32 bound `->original` anyway.
+
+**The untested candidate** is the rule the same function falls through to,
+`unsheared[i] = any && all_ldr` (x4vr_layer.cpp:2060): every colour attachment
+LDR, at least one present. Whether rp #31/#32's attachments are all-LDR is
+**not yet checked** — check it before believing this, given the paragraph
+above.
+
+**The shape of the suspected defect, stated before it is tested:** one gate,
+`needs_original()`, switches off two different transforms — the vertex shear
+*and* the fragment reconstruction correction. The take-70 rule exists for the
+shear and is right for it (shearing no-depth passes gave #57 an 85% per-eye
+disparity). A deferred lighting pass is a fullscreen quad that must NOT be
+sheared as geometry and MUST have its `M_invprojection` corrected. If one flag
+decides both, that pass cannot get what it needs.
+
 # RESUME HERE AFTER A COMPACT — state as of take 195
 
 Everything below this line supersedes earlier "read this first" banners.
@@ -7526,29 +7627,37 @@ Everything below this line supersedes earlier "read this first" banners.
 
 ## The immediate next task
 
-**Extend `frag-invproj-check` to take a pose set.** The spec is in the section
-directly above this one ("Extending frag-invproj-check for R⁻¹ — the spec, not
-the code"): four coupled changes, the acceptance that must fail first, and why
-the reference's multiplication order is the trap.
+**Find out why rp #31/#32 bind `->original`.** Two sections above this one
+("...but at rp #31/#32 the patched module is not the one BOUND") has the
+evidence, the one explanation already refuted, and the untested candidate.
 
-**Why it comes first:** #61's `R⁻¹` has been proven to *emit*, to hold *on
-paper*, and to *execute* — but **never to compute the identity it claims**. The
-offline instrument built for exactly that gap cannot see it, because the CLI
-cannot pass a pose set.
+**Why it comes first:** the correction those two passes need is *emitted
+perfectly and never runs there*. That is a live, specific, mechanical defect
+sitting exactly where the seam is, and it costs no take to investigate — take
+195's log already carries the bind lines.
 
-**What to expect:** either a nonzero `WORST=` on mod-0366/0370, which gives the
-seam a candidate cause no run could have found — or ~1e-7, which eliminates a
-fourth hypothesis and clears the reconstruction for good. Both are results.
+**Do this before anything else on the seam**, and note it is **offline work**:
+read which rule sets `unsheared` for those passes, then decide whether
+`needs_original()` should stay one gate or split into "shear this pass's
+vertices" and "correct this pass's reconstruction". The section above states
+the suspected shape *before* the test, as this file requires.
 
-## Three dead hypotheses — do not revive without new evidence
+**The previous next task is DONE** — `frag-invproj-check` takes a pose set,
+both negative controls fire, and all 244 eligible modules compute `R⁻¹·M`
+exactly. That is hypothesis four eliminated.
+
+## Four dead hypotheses — do not revive without new evidence
 
 1. **prev-MVP motion vector** — 0 of 409 modules access `M_prevworldviewprojection`.
 2. **camera-positioned classification** — take 195 reclassified those modules
    and the seam did not move a pixel.
-3. **uncorrected reconstruction** — both of rp #31's modules load
-   `M_invprojection` and take the correction exactly.
+3. **~~uncorrected reconstruction~~ — REVIVED, see two sections above.** It was
+   killed by an offline check answering "does the patch apply?" when the
+   question was "does the corrected module run?". At rp #31/#32 it does not.
+4. **`R⁻¹` arithmetic** — all 244 eligible modules compute `R⁻¹·M` to
+   0.000e+00, with two negative controls confirming the check has range.
 
-## The pattern that dominated this stretch — NINE instances
+## The pattern that dominated this stretch — TEN instances
 
 **Every instrument here recorded a different event than the question asked.**
 `NEVER REACHED` meant "not while watched"; the give-up sat inside the branch its
@@ -7557,11 +7666,14 @@ the harness rendered one frame; the pipe inventory keyed on pipeline *creation*
 rather than use; the bind description was keyed on `out[i]` before
 `vkCreateGraphicsPipelines` wrote it; the module_map message keyed on parsed
 modules rather than lines; the bind-time case counted passes and was blind to
-content; and `frag-invproj-check` cannot see the term it exists to check.
+content; `frag-invproj-check` could not see the term it exists to check; and
+the check that retired the reconstruction hypothesis asked whether the patch
+*applies* when the question was whether the patched module *runs*.
 
 **Before trusting any instrument here, ask which event it records.** And a
 green case is worth nothing until it has been seen to fail — the negative
-control caught three of these.
+control caught four of these, the newest being the whole-sweep flip run that
+proved no module had silently missed the `R⁻¹` term.
 
 ## Method note
 
