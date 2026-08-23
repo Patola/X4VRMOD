@@ -7141,3 +7141,43 @@ and it appeared *in the fix for the sixth*. It is keyed on `binds` now.
 Both views use the same module-parsing regex, so the creation list and the bind
 list cannot drift into disagreeing for a reason other than the one being
 studied.
+
+## Take 193 — the bind record works, the JOIN does not
+
+`pose-channel … 6/6, 1088/1088, OK`. Scorer FAILs on **#49** again (9
+camera-positioned modules in rp #13/#18/#23), which is the dormant check from
+take 192 and not this run's subject.
+
+**The bind-time record fires and attributes correctly.** 179 distinct
+(pass, pipeline) binds, naming real serials — rp #0, #33, #15 — including
+passes the creation view never mentions. That half works.
+
+**Every one of them reads `(no inventory entry)`.** 1073 `pipe:` lines
+captured a description; 179 binds looked one up; **zero matched.** Not a
+partial overlap — none.
+
+So the handle the bind path looks up is not the handle the creation path
+stored. The most likely cause is that the layer substitutes pipelines
+(multiview variants, canvas variants) and the two paths see different sides of
+that substitution — `out[i]` at creation versus what X4 later binds. That is a
+hypothesis; the diagnostic that settles it is the zero overlap itself, which is
+too clean to be a race or a lifetime issue.
+
+**What worked:** `module_map.py` said exactly this, in one line, at the top of
+its output — *"179 'bind rp #' line(s), none carrying module detail"*. That
+message exists because keying it on the parsed modules instead of the lines was
+the bug found while writing it. Had it kept the earlier wording it would have
+said "this build predates bind-time attribution" and sent the next reader to
+rebuild a layer that was working.
+
+**Where this leaves the seam:** unchanged. Still #27, #29 or #31, still
+unnamed. Two runs have now been spent on attribution and neither produced a
+name, because both instruments answered a question adjacent to the one asked.
+
+**Do not spend take 194 until the join is fixed and a harness case covers it.**
+The existing `bind-time: alias pass is attributed` case counts *passes*, not
+*module detail* — it passes on exactly the build that produced this log. That is
+an eighth instance of the pattern, and this time it is in the case I wrote one
+step ago specifically to avoid it: **counting the set difference proved
+attribution and said nothing about content.** The case needs a second assertion
+that a bind line resolves to a named module.
