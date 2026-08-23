@@ -7930,12 +7930,22 @@ seam did not move** — edges at 360 and 792, separation 432 px against the law'
 432.1, byte-identical to take 195 — which was the prediction, and which also
 retires take 196's +4.9 px as `X4VR_SHEAR_NODEPTH`'s perturbation.
 
-**No next task chosen for the seam.** Both rp #31/#32 candidates are spent and
-the measurements are now taken through a dispatch that is finally correct. What
-remains unaccounted is in the enumeration section: `volume_apply`'s
-non-reprojecting screen-space reads (`RTResolve(PLS_FOG_FLAT+i)`,
-`GetDepthGodRay()`), `depth_godrays_pass.frag`, and the skybox. **Read those
-three before proposing a take.**
+**The seam's one live candidate is the god-ray march** — see "The three
+unaccounted items, read" above. `depth_godrays_pass` differences a
+round-tripped re-projection against the fragment's own UV, mixing the unrotated
+and rotated frames, and marches on the result with a hard
+`if (IsOutsideUV(uv.xy)) break`. It is compiled in at rp #31.
+
+**But the law argues against it, and that is why the next step is free.**
+`sx·tan(θ/2)` has no light-direction term; a god-ray artifact must have one.
+Every stored take is the same savegame at the same instant, so the data cannot
+separate them.
+
+**Next: fly until the sun is in a different direction and look.** No build, no
+take, no knob. Seam moves with the sun → the god-ray march. Seam stays at
+`sx·tan(θ/2)` → the god-ray path is eliminated and the law's independence from
+the light is measured rather than assumed. Both outcomes are worth more than
+another instrumented run.
 
 **Not settled, and the two candidates at rp #31/#32 are both spent.** The seam
 is NOT the absent reconstruction correction — it was never absent, because the
