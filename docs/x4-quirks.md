@@ -7280,3 +7280,53 @@ modules take the rotation and see whether the seam moves or goes. That is
   pass, against 29 named-at-creation-but-never-binding. This is not an edge
   case in X4, it is pervasive — take 192's creation-keyed output was
   systematically misleading, not unluckily so.
+
+## Take 195 — RESULT: #49 is FIXED, and take 194's seam hypothesis is DEAD
+
+`score_run.py` **PASS**, exit 0. Two results, and the second is the important one.
+
+### #49 is fixed by `X4VR_SHEAR_LIGHTS=1`
+
+```
+pipe  clip=1 cam-pos=0; no camera-positioned module draws uncanted in a stereo pass
+```
+
+The FAIL that fired on takes 192, 193 and 194 is gone. The 18 modules — the
+instanced light volumes and `p1_star` — now classify World and take `live-sx`.
+**That is a real fix for a real defect**, and it should be the default rather
+than a knob; filed as such.
+
+### The seam did not move. At all.
+
+| | 190/191/194 | **195, shear-lights on** |
+|---|---|---|
+| guard @358 | 14–20 | **21 / 22** |
+| seam @791 | 10–14 | **15 / 18** |
+
+**And the knob demonstrably reached the modules.** Take 194 showed the seam
+passes binding `NonWorld,camera-positioned,MONO,procedural,clip`; take 195 shows
+the same modules as `World,procedural,live-sx`. The reclassification happened,
+the seam stayed at exactly x=791.
+
+That is the cleanest possible negative: **the intervention reached the target
+and the observable did not change.** Take 194's correlation — the image boundary
+sitting at a variant-selection boundary — was the coincidence it was explicitly
+flagged as possibly being. The camera-positioned classification is **not** the
+seam's cause.
+
+### The one thing take 195 adds
+
+Those modules are now `World, procedural, live-sx` and **still read
+`-> original`.** Reclassification did not change which variant they take, so
+something *else* withholds the patch from them — `needs_original()`, most
+plausibly because they are procedural fullscreen, which is #30's canvas
+exclusion and may be entirely correct.
+
+**That is the next thread, and it is a code question, not a run.** Read why
+`needs_original()` selects the original for a `World,procedural,live-sx` module
+and whether the pose rotation is withheld along with the shear. If it is, these
+passes draw in X4's unrotated frame *by design* — and the design is what needs
+revisiting, not the classification.
+
+**Do not spend a take on it.** The answer is in `needs_original()` and the
+harness can exercise it.
