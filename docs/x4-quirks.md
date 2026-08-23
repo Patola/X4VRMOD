@@ -6064,6 +6064,12 @@ A **one-pixel cliff, 40 → 27** (×0.67) in the measured frame, where the
 predicted frame is flat to within 1.3 luma. Identical in both eyes, same
 column. Resampling cannot make that edge and then hide it in the prediction.
 
+> **The ×0.67 is the fit band only — do not read it as the seam's character.**
+> The later section "The x=746 seam" measures the ratio by row band and gets
+> 4.00 / 0.70 / 0.63 / 0.03 / 0.00 / 3.00: rows 55–80 % go to *black* on the
+> right and the outer bands go the other way. This is not a gain step, and the
+> single number here was a band-limited view of something that is not uniform.
+
 What is *not* wrong: the region between the guard band and the seam reproduces
 at **gain 1.000** in both eyes. The transform is right there.
 
@@ -6097,3 +6103,130 @@ which pass writes that column boundary. Filed rather than chased here.
 Prediction 5 is recorded as unmeasured rather than passed. Nothing in this take
 isolates shadow attachment, and "it looked fine" is not the acceptance standard
 this project uses.
+
+## The x=746 seam — two hypotheses killed without a run, and take 188
+
+Follows "Take 187 — RESULT". **No take was spent on anything below except the
+one specified at the end.**
+
+### What the seam is, measured
+
+* **Both eyes, same column** (746 / 745, and that 1 px is the 2818-vs-2816
+  capture width, not disparity). World geometry at any finite depth would sit
+  at different columns in the two eyes. This is screen-space or infinitely far.
+* **Geometry crosses it unbroken.** The cockpit rail and struts run straight
+  through the boundary with no displacement. Only the sky/nebula tone changes.
+* **It is NOT a uniform photometric step.** The ratio right/left across the
+  boundary, by row band, is 4.00 / 0.70 / 0.63 / 0.03 / 0.00 / 3.00. Rows
+  55–80 % go to *black* on the right, and the top and bottom bands go the other
+  way. A gain difference cannot do that. The "×0.67" in the previous section is
+  the fit band only, and it is not the whole story.
+* **It is caused by the rotation.** 186a has no step within ±12 px of 746
+  (max 2.0 against a frame-wide 17), and 186a and 187 differ only by the pose.
+
+### Two hypotheses killed from data already in hand
+
+**H2 — the seam is a guard band belonging to a pass with a different `sx`.**
+Solving `(sx·s − c)/(c + s/sx) = +0.0597` for `sx` gives **6.020** (or a
+negative root). X4 used `sx` = 0.70024, 1.00000, 1.33333, 3.78085 in this run.
+No match, and 6.02 is outside the whole observed range. **Dead.**
+
+**H4 — the seam is world content that rotated correctly.** Then it was at
+NDC −0.0629 = x 659.7 in the unrotated frame. 186a's largest step anywhere in
+x 647..671 is **2.0**, against a frame-wide maximum of 17. There is nothing
+there to rotate. **Dead.** (This also independently re-confirms the earlier
+finding that the warped prediction is flat across the seam.)
+
+**H3 — not rotation-related** is dead too, by the 186a comparison above.
+
+### The leading mechanism — from X4's own code and our own log
+
+X4 ships a `volume_*` shader family: `volume_base.comp`, `volume_point.comp`,
+`volume_noise.comp`, `volume_convert.comp`, plus `volume_apply/blend/medium/
+dist` fragment stages. That is a **volumetric froxel grid** — `volume_base.comp`
+bounds itself on `V_volume_size.xy` and stores into a 3D image indexed by
+`gl_GlobalInvocationID.xyz`; `volume_point.comp` transforms an offset by
+`mat3(M_viewinverse)`.
+
+Take 187's own log says:
+
+```
+invproj final: per-eye M_invprojection — 228 modules corrected
+               (offline: 244 of 409 eligible, 3 compute cannot be)
+```
+
+**Compute shaders cannot receive #61's fragment `R⁻¹`.** So a volumetric medium
+built in X4's *unrotated* view, on a grid of finite extent, is then applied over
+geometry we *did* rotate. A grid boundary is exactly the kind of thing that
+produces one hard straight edge, and "sky changes, geometry does not" is exactly
+what a fog/medium term looks like.
+
+**This is a hypothesis, not a finding.** It is written down because it came from
+reading X4's shaders and our own log rather than from guessing, but nothing here
+names the pass. Do not act on it before take 188.
+
+### Why take 188 is not a per-pass bisect
+
+The obvious instrument is `X4VR_MV_DUMP_AFTER_RP`. **Take 179 already lost its
+bisect to it**: the round-robin advances only after a capture lands, so one
+unreachable target starved the whole list and the run produced zero files. The
+docs record the give-up path that fixes this as **not covered by any test** —
+`run-multiview-render.sh` says so in its own comment. Building this run on it
+would risk repeating take 179 exactly. Take 188 therefore uses only the
+**cadenced present dump**, which is bounded, proven, and writes PNG.
+
+### Take 188 — vary the angle, and let the guard band prove the run
+
+One run at **yaw 20°** instead of 10°. Everything else identical to 187 plus the
+two dump knobs — diffed mechanically against 187's logged `env: run =` line:
+`X4VR_MV_DUMP` and `X4VR_MV_DUMP_PRESENT` added, nothing dropped, nothing else
+changed but the angle, the take name and the log path.
+
+**Predictions, written before the run:**
+
+| what | at 10° (measured) | at 20° (predicted) |
+|---|---|---|
+| guard-band edge — **the positive control** | 210 | **358.8** |
+| seam, if it takes *half* the rotation | 746 | **793.7** |
+| seam, if it takes the *full* rotation | 746 | **834.9** |
+| seam, if it is fixed in screen space | 746 | **746** |
+
+The guard band is the control and it matters more than the seam: it is already
+explained to 1 px, so **if it does not move to 358.8 ± 2, the run is wrong and
+the seam reading means nothing.** A measurement with no control is how this
+project has lost takes before.
+
+The three seam outcomes are 40 px apart — far outside the ±1 px this edge is
+measurable to — so they cannot be confused. Any *fourth* answer is real
+information: compute what map sends 746 → the observed column, and do not force
+it into one of the three.
+
+**The command, in full, on one line:**
+
+```
+X4VR_TAKE=188-ROT-YAW20 X4VR_POSE=1 X4VR_POSE_ROTATE=1 X4VR_POSE_YAW=20 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_BINDLESS_MIRROR=1 X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS=1 X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_MV_DUMP=/tmp/x4vr-t188 X4VR_MV_DUMP_PRESENT=300 X4VR_LOG=/tmp/x4vr-take188.log ./launch/x4vr-launch.sh
+```
+
+`X4VR_MV_DUMP_PRESENT` **is a cadence, not a flag** — 300 is a value seven prior
+takes used. At 1 it is a full readback and stall on every frame (~1 fps) and it
+would cost the run its own interaction, which is what happened to take 98.
+
+**In-game:** identical to 187 — Enter at the menu for the quicksave, sit still
+in the cockpit, one screenshot to `/tmp/x4-188.jpg`, no map, quit normally.
+~2½ minutes plus load. The PNGs land at `/tmp/x4vr-t188*.png` and are the
+**only** thing any brightness claim may be made from.
+
+**Acceptance:**
+
+```
+python3 tools/score_run.py /tmp/x4vr-take188.log
+```
+
+must exit 0 with `pose-channel … — OK` before the images mean anything. Then the
+guard-band control and the seam position, both from the PNG.
+
+**What this run does NOT do:** it does not name the pass. It establishes the
+seam's motion law, which is what decides whether the volumetric-froxel
+hypothesis is worth the per-pass bisect — and if it is, the give-up path in
+`X4VR_MV_DUMP_AFTER_RP` should get its missing test *first*, because that is the
+defect that ate take 179.
