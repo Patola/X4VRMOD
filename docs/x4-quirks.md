@@ -6750,3 +6750,85 @@ a nonexistent render pass when the pass was ending fine, just too early.
 **The seam bisect is now unblocked.** The instrument can be given a list without
 one bad entry voiding it — though a list whose first entry is known reachable
 remains the cheaper habit.
+
+## Take 189 — the seam bisect
+
+The instrument is fixed and has a test that fails without the fix, so the
+round-robin can finally be given a list without one bad entry voiding it.
+
+### The chain to walk, from take 99's inventory
+
+The eye image is `[97H]`. The passes writing it, in serial order:
+
+```
+13 17 22 23 24 25   STEREO (world)        ..and 44 50 53 58
+14 15 26..32 46..49 51 52   MONO (fullscreen post)
+```
+
+Only a **doubled** colour attachment can be captured, so the STEREO passes are
+the reliable targets and the MONO ones may report `SKIPPED — no doubled colour
+attachment`. That is now harmless: the give-up advances past them.
+
+**The targets:** `13,17,22,25,29,32,44,49,53,58` — spaced to bracket, not to
+enumerate. The first dump that shows the seam brackets it between itself and the
+previous one; a second run narrows inside that bracket.
+
+### The premise that has to be checked, not assumed
+
+**Take 99's serial numbering may not be take 189's.** Serials come from
+`g_rp_serial++` at `vkCreateRenderPass`, so they follow creation order, and take
+99 ran with different knobs. Take 179 died of exactly this class — a bisect
+built on an assumed pass structure.
+
+So the run carries `X4VR_MV_INVENTORY=1`, which makes the log record **this
+run's own** serial → pass mapping. If the targets land wrong, the log says what
+they should have been and the next run is a re-target rather than a re-discovery.
+The give-up means wrong targets cost cadence, not the run.
+
+### Predictions, before the measurement
+
+1. `score_run.py` exits 0 with `pose-channel … — OK`.
+2. Each captured dump is 1408×1408 per layer. In the ones that show the seam it
+   is at **x = 791 ± 2**, and the guard band at **x = 358.5 ± 2** — the same two
+   edges take 188 measured, since nothing about the geometry changed.
+3. **The seam appears at some pass and not before it.** The first target showing
+   a step at 791 names the bracket. If *every* captured pass shows it, including
+   rp #13, then it is introduced at or before the first world pass and the
+   bracket moves earlier — that is a result, not a failure.
+4. If **no** captured pass shows it while the presented frame does, the seam is
+   introduced after the last target, i.e. in the composite or a present pass —
+   also a result, and it would point at our own SBS path rather than X4's.
+
+### The command, in full, on one line
+
+```
+X4VR_TAKE=189-SEAM-BISECT X4VR_POSE=1 X4VR_POSE_ROTATE=1 X4VR_POSE_YAW=20 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_BINDLESS_MIRROR=1 X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS=1 X4VR_SBS_LAYERS=2 X4VR_SBS_RIGHT_LAYER=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_MV_INVENTORY=1 X4VR_MV_DUMP_AFTER_RP=13,17,22,25,29,32,44,49,53,58 X4VR_MV_DUMP_AFTER_RP_EVERY=90 X4VR_MV_DUMP=/tmp/x4vr-t189 X4VR_LOG=/tmp/x4vr-take189.log ./launch/x4vr-launch.sh
+```
+
+Diffed against take 188's logged `env: run =`: three knobs added
+(`X4VR_MV_INVENTORY`, `X4VR_MV_DUMP_AFTER_RP`, `_EVERY`), one dropped
+(`X4VR_MV_DUMP_PRESENT` — the named-pass capture and the present dump contend
+for the same single staging buffer, and the named-pass path skips the sweep
+entirely while armed). Yaw stays 20° so the edges are the ones already measured.
+
+**In-game:** load the quicksave, sit still in the cockpit, and **stay there for
+about 60 seconds** — ten targets at 90 presents each, plus two arms for any
+target that turns out unreachable. No screenshot needed; the dumps are the
+measurement. Quit normally.
+
+**Cost:** one run, ~2½ min. Each capture is a full-resolution readback and a
+stall, so expect ten visible hitches. That is the instrument's price and it is
+why the cadence is 90 and not 1 (take 98 ran it at 1 and dropped to ~1 fps).
+
+**Acceptance:**
+
+```
+python3 tools/score_run.py /tmp/x4vr-take189.log
+grep -a 'target rp #' /tmp/x4vr-take189.log
+ls /tmp/x4vr-t189-*.png
+```
+
+`score_run.py` must exit 0 first. Then the per-target verdicts, then the images.
+Read the verdicts **before** the images: "captured" is the only one that means a
+file is worth looking at, and `NEVER REACHED` now means "never ended while it
+was the current target", not "does not exist".
