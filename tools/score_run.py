@@ -1614,6 +1614,52 @@ def main(path):
               f"X4 declares more descriptor sets than our index assumed. "
               f"{collide[0].split('pose:', 1)[-1].strip()[:120]}")
 
+    # --- was the classification computed on X4's bytes or on ours? ----------
+    #
+    # An intrinsic invariant, which is why it is here and not a count of rp
+    # numbers: **X4 has ZERO World-and-procedural modules.** Measured over all
+    # 409 dumps under both readings, narrow and wide. "World" means positioned
+    # by a per-object matrix or the camera; "procedural" means the vertex
+    # shader synthesises a fullscreen triangle from gl_VertexIndex. Nothing is
+    # both, and task #40's comment records the same count from the other side.
+    #
+    # So a module reported as both is proof that the layer classified a module
+    # it wrote rather than the one X4 sent. patch_vertex_pose_rotate emits an
+    # access chain into camera-block member 1 inside the vertex function, and
+    # classify()'s wide reading treats an access to member 0, 1, 7 or 8 there
+    # as proof of world geometry -- so the patch manufactures the evidence the
+    # classifier looks for. 30 of the 409 flip that way offline; takes 195 and
+    # 196 each logged 28 of them, and both were scored PASS by this file before
+    # this section existed.
+    #
+    # Fixed in take 197 by classifying ci->pCode. This section is what says
+    # whether that reached the game.
+    kindlines = [ln for ln in lines if "mod#" in ln and ("pipe:" in ln or
+                                                         "bind rp #" in ln)]
+    wp = set(re.findall(r"mod#\d+/([0-9a-f]{8})\(World[^)]*,procedural", " ".join(kindlines)))
+    proc = set(re.findall(r"mod#\d+/([0-9a-f]{8})\([^)]*procedural", " ".join(kindlines)))
+    if not kindlines:
+        print("classify      no module lines — needs X4VR_PIPE_INVENTORY=1, so "
+              "this run says nothing about which bytes were classified")
+    elif not proc:
+        # A zero that means "nothing was examined" reads identically to a zero
+        # that means "nothing was wrong". Say which this is.
+        print("classify      no procedural module was reported at all, so the "
+              "World-and-procedural check had nothing to run on")
+    else:
+        print(f"classify      {len(proc)} procedural module(s) seen, "
+              f"{len(wp)} of them also reported World")
+        if wp:
+            fails.append(
+                f"{len(wp)} module(s) are reported as World AND procedural, and "
+                f"X4 has none — 0 of 409 dumps under either reading. That means "
+                f"the layer classified a module it had written, not the one X4 "
+                f"sent: the pose patch adds the camera-block access the wide "
+                f"reading treats as world geometry. Those modules took K_world, "
+                f"the live-sx path and the affine while being screen-space "
+                f"triangles, so nothing measured in this run about geometry is "
+                f"evidence")
+
     # --- which VARIANT the no-depth passes actually bind --------------------
     #
     # Take 196 is why this exists, and it exists here rather than as a grep
