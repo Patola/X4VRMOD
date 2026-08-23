@@ -7502,3 +7502,70 @@ no more than the one that could not see `R⁻¹` at all.
 
 **Then:** run it over the 244 eligible modules, mod-0366 and mod-0370 included,
 before any further seam work.
+
+# RESUME HERE AFTER A COMPACT — state as of take 195
+
+Everything below this line supersedes earlier "read this first" banners.
+
+## Where the project is
+
+* **#33's head rotation is CONFIRMED.** Take 187: `headlook_verify --scan` gives
+  a sharp isolated spike at **+10.00°** in both eyes (0.714/0.718 against ~0.02
+  elsewhere). The guard band was predicted to **1 px** by two independent
+  derivations. Channel on **set 31**, 6/6 layouts, `OK`.
+* **NOT built:** the runtime head-pose source. The rotation is still a static
+  `X4VR_POSE_YAW`. **This is the next feature**, and it is separable from the
+  seam below.
+* **#49 is FIXED and now DEFAULT.** `X4VR_SHEAR_LIGHTS` defaults ON since take
+  195; `=0` restores the old classification, which is what takes before 195 were
+  measured under. That check is dormant unless `X4VR_PIPE_INVENTORY=1`, so takes
+  186–191 were *unexamined* on that axis, not clean.
+* **Open defect: the x=791 seam.** Law `seam NDC = sx·tan(θ/2)`, verified to
+  **1.1 px over six cases, two angles, three `sx` values**. Bracketed to
+  **rp #31/#32, the deferred lighting output**.
+
+## The immediate next task
+
+**Extend `frag-invproj-check` to take a pose set.** The spec is in the section
+directly above this one ("Extending frag-invproj-check for R⁻¹ — the spec, not
+the code"): four coupled changes, the acceptance that must fail first, and why
+the reference's multiplication order is the trap.
+
+**Why it comes first:** #61's `R⁻¹` has been proven to *emit*, to hold *on
+paper*, and to *execute* — but **never to compute the identity it claims**. The
+offline instrument built for exactly that gap cannot see it, because the CLI
+cannot pass a pose set.
+
+**What to expect:** either a nonzero `WORST=` on mod-0366/0370, which gives the
+seam a candidate cause no run could have found — or ~1e-7, which eliminates a
+fourth hypothesis and clears the reconstruction for good. Both are results.
+
+## Three dead hypotheses — do not revive without new evidence
+
+1. **prev-MVP motion vector** — 0 of 409 modules access `M_prevworldviewprojection`.
+2. **camera-positioned classification** — take 195 reclassified those modules
+   and the seam did not move a pixel.
+3. **uncorrected reconstruction** — both of rp #31's modules load
+   `M_invprojection` and take the correction exactly.
+
+## The pattern that dominated this stretch — NINE instances
+
+**Every instrument here recorded a different event than the question asked.**
+`NEVER REACHED` meant "not while watched"; the give-up sat inside the branch its
+own failure mode skips; the test fixture was ordered so the bug could not occur;
+the harness rendered one frame; the pipe inventory keyed on pipeline *creation*
+rather than use; the bind description was keyed on `out[i]` before
+`vkCreateGraphicsPipelines` wrote it; the module_map message keyed on parsed
+modules rather than lines; the bind-time case counted passes and was blind to
+content; and `frag-invproj-check` cannot see the term it exists to check.
+
+**Before trusting any instrument here, ask which event it records.** And a
+green case is worth nothing until it has been seen to fail — the negative
+control caught three of these.
+
+## Method note
+
+Elimination has outperformed instrumentation. Take 195 killed a hypothesis in
+one run by changing a knob and re-measuring. Five runs of capture and
+attribution produced one name and no cause. Prefer "switch it off and
+re-measure" over "build a probe to watch it".
