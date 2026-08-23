@@ -6904,3 +6904,59 @@ later: only ~5 % of X4's modules are fragment shaders, yet `invproj` reports
 restricted to fragment stages despite its name. Not chased here, but that name
 is misleading and some count somewhere is measuring a different population than
 it claims.
+
+## Take 190 — RESULT: the seam is present by rp #31, and #26/#28/#30 never run
+
+`score_run.py` exit 0, `pose-channel … 6/6, 1131/1131, OK`.
+
+**The premise held.** Take 190's own inventory matches take 99's exactly across
+rp #25–#33, so the serial numbering is stable between runs with different knobs.
+That was flagged as an assumption before the run and is now checked, which is
+the only reason the numbers below can be compared with take 189's.
+
+| target | dumps | lit | guard @358 | seam @791 |
+|---|---|---|---|---|
+| rp #26 | — | — | **NEVER REACHED** | |
+| rp #27 | 9 | **0** | inconclusive | inconclusive |
+| rp #28 | — | — | **NEVER REACHED** | |
+| rp #30 | — | — | **NEVER REACHED** | |
+| rp #31 | 8 | 7 | **14.0** | **10.0** |
+| rp #32 | 8 | 8 | **20.0** | **14.0** |
+
+**rp #32 reproduces take 189 exactly** (guard 20, seam 14) — the positive
+control passed, so the two runs are comparable.
+
+### What is now known
+
+Three of the seven passes in the bracket — **#26, #28, #30 — never execute**.
+They are created and never used in this scene. So the chain that actually runs
+between the last clean point and the first dirty one is:
+
+```
+#25 clean (take 189)  →  #27 ?  →  #29 ?  →  #31 SEAM  →  #32 SEAM
+```
+
+**The seam is introduced at #27, #29 or #31.**
+
+### rp #27 is inconclusive for a different reason than last time
+
+In take 189, rp #13/#17/#22 came back black because they sampled the menu — a
+protocol failure, fixed here by holding the cockpit. **That fix worked**:
+#31 and #32 got 7 and 8 lit frames in this run.
+
+rp #27 still came back black across all 9 captures *in the same run*. So it was
+sampled in the cockpit and its own output is dark. That is a fact about #27, not
+a mistimed capture, and it is worth knowing on its own — a pass writing `[97H]`
+that leaves it near-black sits oddly between #25 (mean 23) and #31 (mean 25).
+
+### Next, and it is cheap
+
+Target **#29 and #31 only**, with the measurement made size-aware. rp #29
+renders at **352×352** — a quarter of the eye per axis — so if it is a
+downsampled copy the seam sits at **x ≈ 197.8** and the guard at **x ≈ 89.6**,
+not at 791/358. Take 189 skipped it for exactly this reason and that was a
+missed measurement, not an absent one.
+
+If #29 shows a seam at 197.8, the introduction is at or before the downsample
+and the quarter-res chain is implicated. If #29 is clean and #31 is not, it is
+#31 itself — a single pass, nameable from the inventory.
