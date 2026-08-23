@@ -6254,3 +6254,123 @@ seam's motion law, which is what decides whether the volumetric-froxel
 hypothesis is worth the per-pass bisect — and if it is, the give-up path in
 `X4VR_MV_DUMP_AFTER_RP` should get its missing test *first*, because that is the
 defect that ate take 179.
+
+## Take 188 — the seam is SOLVED: we rotate the position and not the motion vector
+
+**READ THIS FIRST AFTER A CONTEXT RESET.** Take 188 passed its control, the seam
+obeys a closed-form law to 1.1 px across six independent cases, and the
+mechanism is named from X4's own source. This is a real defect in our patch and
+it is **not cosmetic**.
+
+### The run
+
+`score_run.py` exit 0. `pose-channel  set 31 of maxBoundDescriptorSets=32, X4's
+widest pipeline layout declares 6 set(s), 6/6 pipeline layout(s) extended,
+1088/1088 pipeline(s) got it, 1437140 bind(s) — OK`.
+
+**The control passed.** The guard band had to move 210 → 358.8 for the run to
+mean anything; it measured **358.5**. Everything below rests on that.
+
+### The law, from six cases
+
+Patola took an extra screenshot nobody asked for — the frame at the instant the
+cockpit loads, before the fade-in finishes — and it is what made this solvable.
+X4 is at a **different `sx` (1.0)** during that transition, which breaks the
+degeneracy between "half the shift" and "half the angle" that two points at one
+`sx` could never separate.
+
+| frame | sx | yaw | edge | predicted | measured | err |
+|---|---|---|---|---|---|---|
+| 187 | 0.70024 | 10° | guard | 211.1 | 210 | +1.1 |
+| 187 | 0.70024 | 10° | seam | 747.1 | 746 | +1.1 |
+| 188 | 0.70024 | 20° | guard | 358.8 | 358.5 | +0.3 |
+| 188 | 0.70024 | 20° | seam | 790.9 | 791 | −0.1 |
+| 188 fade-in | 1.00000 | 20° | guard | 375.7 | 375 | +0.7 |
+| 188 fade-in | 1.00000 | 20° | seam | 828.1 | 827 | +1.1 |
+
+```
+guard NDC = (sx·sin θ − cos θ) / (cos θ + sin θ/sx)     the rotated frame's left edge
+seam  NDC = sx · tan(θ/2)                                the ray HALFWAY IN ANGLE
+```
+
+Half the **shift** is refuted: it predicts 793.7 at 20° against 791 measured,
+while half the **angle** predicts 790.9. The earlier "704 + 86.9/2 = 747.5"
+coincidence was the right family and the wrong member — at one angle the two are
+1 px apart and cannot be told apart, which is exactly why one coincidence was
+recorded as a hypothesis and not a finding.
+
+### The mechanism
+
+An angular bisector is the signature of something with **one foot in each
+orientation**. X4's common world vertex shader
+(`shadergl__glsl__high__common.vert.glsl`) ends its motion-vector path with
+
+```
+IO_mv = M_prevworldviewprojection * IO_mv;
+```
+
+`M_prevworldviewprojection` sits in the object block beside
+`M_worldviewprojection`, and `IO_mv` flows into `p1__deferred__gbuffer_access`
+— the G-buffer's motion vector, which `common_taa.glsl` and `motionblur.frag`
+consume.
+
+**`patch_vertex_pose_rotate` matches only `BuiltInPosition`.** It rewrites
+`gl_Position` and nothing else, and the layer contains no reference to
+`M_prevworldviewprojection` anywhere. So every World module we patch emits:
+
+* a **position** carrying our head rotation, and
+* a **motion vector** that does not.
+
+The G-buffer therefore reports a constant apparent motion of exactly our head
+rotation, for every pixel, forever. A temporal pass that samples the midpoint
+between where a pixel is and where it says it came from lands on the ray at
+θ/2 — which is the measured law, to 1.1 px, across two angles and two `sx`.
+
+This also explains every qualitative thing observed:
+
+* geometry crosses the seam **unbroken** — nothing is displaced, an accumulation
+  term changes;
+* only the **sky tone** changes, and the ratio is wildly non-uniform by row
+  (4.00 / 0.70 / 0.63 / 0.03 / 0.00 / 3.00) — that is a blur/accumulation
+  weight, not a gain;
+* the **fade-in appears only inside the band**, because that band is where the
+  temporal buffer has content it believes is valid.
+
+The volumetric-froxel hypothesis from the previous section is **dead**. It was
+reached honestly — from X4's shaders and our own "3 compute cannot be" log line
+— and it was wrong. Kept above, unedited.
+
+### Why this is not cosmetic
+
+With a **static** test pose the fake motion is constant, and the damage is one
+seam. With **real head tracking** the injected motion vector is proportional to
+head rotation *rate*, so every head turn drives TAA reprojection and motion blur
+with a full-magnitude bogus velocity: smearing and ghosting that scale with how
+fast the player looks around. That is a nausea mechanism, not a blemish, and it
+would have been extremely hard to diagnose once the pose was live and moving —
+the artifact would have looked like "VR head-tracking feels smeary".
+
+Finding it now, with a static pose that pins the seam to a measurable column, is
+the whole argument for having driven the rotation from a constant.
+
+### The fix, and what it needs that does not exist yet
+
+The motion-vector path must carry the rotation too — and **not the same
+rotation**. The correct velocity includes genuine head motion, because the pixel
+really did move on screen. So:
+
+* `gl_Position` takes the **current** frame's `R`;
+* the `M_prevworldviewprojection` path must take the **previous** frame's `R`.
+
+`PoseBlock` currently holds `r` and `r_inv` only. It needs `r_prev`, and
+`pose_publish()` must roll the current value into it once per frame. With a
+static pose `r_prev == r`, the two agree, and the seam must vanish — which is
+the acceptance test, and it is a **prediction registered before the fix**:
+
+> With `r_prev = r` wired and `X4VR_POSE_YAW=20`, the seam at x=791 disappears
+> while the guard band stays at 358.5. If the guard band moves, the fix touched
+> the position path and is wrong.
+
+Do this in the harness first — a module declaring both object-block members,
+asserting the patch rewrites both and that `spirv-val` accepts it — before
+spending a take.
