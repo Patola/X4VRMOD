@@ -6668,3 +6668,40 @@ and it is a *different* bug from the two fixed above.
 **Consequence, unchanged:** the seam bisect stays blocked. Give
 `X4VR_MV_DUMP_AFTER_RP` one target per run, or a list whose first entry is known
 reachable.
+
+### The pending latch: fixed, and recovery still blocked one layer down
+
+**The latch was real and is fixed.** `g_probe.pending` is cleared only in
+`probe_collect`, which a real run reaches from present. With no swapchain the
+first capture latched it true forever and every later one was refused. The
+headless frame boundary now drains each frame via
+`probe_collect(d, queue, /*count_frame=*/false)` — it empties the staging
+buffer without pushing the present counter that a real run's cadence is
+expressed in, so X4 is untouched.
+
+**Recovery still does not happen, and the reason is now known and is mine.**
+`X4VR_TEST_FRAMES` wraps the recording of the **output** pass, at
+`multiview_render.cpp:~1018`. The harness records a *first* command buffer far
+earlier, at ~384, and that one contains rp #0 and the other early passes. So the
+loop re-records only the tail of the frame; rp #0 and rp #4 end exactly once,
+early, while the target is still the unreachable one, and never end again.
+
+The evidence that pins it: with `0,1,5` rp #0 reports **captured**, and with
+`5,0` the same rp #0 reports **NEVER REACHED**. The pass did not change — only
+whether it was the current target at the single moment it ended.
+
+That also corrects a reading of the verdict line worth writing down:
+**"NEVER REACHED" does not mean the pass never ended.** `after_rp_reached()` is
+populated only for the pass that is the *current target*, so the verdict means
+"never ended while it was being watched". A pass that ends before the
+round-robin reaches it is indistinguishable, in that report, from one that does
+not exist. That is a second instrument reporting something narrower than its
+words claim.
+
+**What remains, and it is small:** extend `X4VR_TEST_FRAMES` to enclose the
+first command buffer's recording as well, so every pass in the frame recurs.
+Then the starving-first case can finally demonstrate recovery and become a
+regression test.
+
+**Unchanged:** the seam bisect stays blocked. One target per run, or a list
+whose first entry is known reachable.

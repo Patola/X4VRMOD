@@ -6687,6 +6687,8 @@ void hammer_thread() {
 
 // Defined next to the probe state, which is declared further down.
 void after_rp_headless_frame();
+bool probe_is_headless();
+void probe_collect(DeviceData *d, VkQueue queue, bool count_frame = true);
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueueSubmit(VkQueue queue,
                                                 uint32_t submitCount,
@@ -6703,12 +6705,23 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueueSubmit(VkQueue queue,
     // X4VR_MV_DUMP_AFTER_RP_EVERY stay "presents" where a player can reason
     // about them. It is deliberately NOT a general fallback -- it is the
     // narrowest thing that makes the guard testable.
-    after_rp_headless_frame();
     DeviceData *d;
     {
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(queue));
     }
+    // **Drain the staging buffer every headless frame.** `pending` is cleared
+    // only in probe_collect, which a real run reaches from present -- so with
+    // no swapchain the FIRST capture latched `pending` true forever and every
+    // later one was refused. The round-robin could then advance past a dead
+    // target and still never capture the live one, which read as "the give-up
+    // does not work" when the give-up was fine.
+    //
+    // count_frame = false: this drains, but it is not a present, so the
+    // cadence counter a real run uses is untouched.
+    if (dump_after_rp() >= 0 && probe_is_headless())
+        probe_collect(d, queue, false);
+    after_rp_headless_frame();
     patch_view_before_submit();
     // Task #59: publish this frame's pose into the region each submitted
     // command buffer was given. Submit time is the latest moment that is still
@@ -8542,6 +8555,13 @@ void after_rp_arm_tick() {
     g_probe.after_armed = true;
 }
 
+// True until the first present. The only thing that distinguishes the offline
+// suite from a real X4 run, and the gate on every path below.
+bool probe_is_headless() {
+    std::lock_guard<std::mutex> lock(g_probe_mu);
+    return g_probe.presents == 0;
+}
+
 // The headless frame boundary itself. Gated on presents == 0 so a real X4 run
 // never reaches it and the units of X4VR_MV_DUMP_AFTER_RP_EVERY stay
 // "presents", which is what a player can reason about.
@@ -8566,9 +8586,12 @@ void after_rp_headless_frame() {
 // finished -- vkDestroyDevice requires an idle device. That path exists so the
 // offline suite, which never presents, can still exercise this code: an
 // instrument nothing tests is how the last three misreadings happened.
-void probe_collect(DeviceData *d, VkQueue queue) {
+// `count_frame == false` means "drain, but this is not a present": the headless
+// frame boundary needs the staging buffer emptied every frame, without pushing
+// the present counter that a real run's cadence is expressed in.
+void probe_collect(DeviceData *d, VkQueue queue, bool count_frame) {
     std::lock_guard<std::mutex> lock(g_probe_mu);
-    if (queue != VK_NULL_HANDLE) {
+    if (queue != VK_NULL_HANDLE && count_frame) {
         g_probe.presents++;
         if (!g_probe.armed && g_probe.presents % kProbeEvery == 0)
             g_probe.armed = true;
