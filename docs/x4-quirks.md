@@ -6501,3 +6501,70 @@ prove 409 is the population — it proves only that this scene did not exceed it
 The map, station interiors, other ships and the menu all load geometry these
 takes never touched. The claim to avoid is the one this project keeps making:
 treating a complete survey of one situation as a statement about all of them.
+
+### The seam, after the retraction: what the 94 present dumps add
+
+Take 188's PNG present dumps had not been looked at. They are 47 frames x 2
+layers at the exact 1408x1408 eye extent with no compositor in the path, and
+they carry three things the screenshots could not.
+
+**1. The law holds across THREE cameras, not one.** X4 ran four `sx` values in
+take 188. Predicting *both* edges for each and checking against the steps the
+dumps actually contain:
+
+| sx | guard predicted | seam predicted | found |
+|---|---|---|---|
+| 0.70024 | 358.8 | 790.9 | guard 358, seam 790 |
+| 1.00000 | 375.7 | 828.1 | guard 375, seam 827 |
+| 1.33333 | 419.3 | 869.5 | seam 869 |
+| 3.78085 | 945.5 | 1173.3 | — (that camera draws little) |
+
+Five matched predictions, worst error ~1 px. **Both edges scale with each
+camera's own `sx`**, so whatever draws the seam uses the camera projection —
+it is not a fixed screen-space artifact, not the compositor, and not the
+capture path.
+
+**2. Two cameras' edges coexist in one frame.** Frame 16 carries steps at
+**358, 375 and 827** together — the `sx=0.70024` guard *and* the `sx=1.0` pair.
+X4 composites several cameras into one presented image, which this project
+already knew ("One number, several cameras") and which now has a picture.
+
+**3. The seam is stable for the whole of gameplay.** Frames 17–44 read 358 and
+790 every time, to ±1. Frames 1–3 are the load transition at `sx=1.0` and
+`sx=1.33333`; frames 0, 4, 45, 46 are black.
+
+### What the law MEANS, verified rather than asserted
+
+Running the gather map backwards from the seam, over four `sx` and four angles:
+
+```
+worst |pre-image + seam| = 1.1e-16
+the rotation maps  -sx*tan(y/2)  EXACTLY onto  +sx*tan(y/2)
+```
+
+**The seam sits where our rotation maps a point onto its own mirror image about
+the screen centre.** That is a much sharper constraint than "half the angle": it
+says something in X4 is *symmetric about the view axis*, and our rotation
+carries one side of it onto the other, so the two disagree exactly there.
+
+That is checked numerically to 1e-16 before being written down, which is the
+lesson from the retraction directly above: the previous mechanism was a
+plausible line of GLSL that no module X4 loads ever executes.
+
+### Where the seam comes from: still unknown, and it stays unknown
+
+**I do not know which pass draws it**, and this file has already carried one
+confident wrong answer to that question this week. What is now fenced off:
+
+* **not** the prev-MVP motion vector — 0 of 409 modules access that member;
+* **not** a fixed screen-space or compositor artifact — it tracks each camera's
+  `sx` across three different values;
+* **not** the guard band, which is separately explained to 1 px and moves by a
+  different law;
+* **not** scene content the rotation moved — the warped prediction is flat
+  across it.
+
+The one instrument that would name it is the per-pass capture, and **its
+give-up path still has no test** — that is the defect that ate take 179. The
+correct order is: give `X4VR_MV_DUMP_AFTER_RP` its missing regression test in
+the harness, *then* bisect. Not another guess from a source file.
