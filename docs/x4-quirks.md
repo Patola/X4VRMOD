@@ -7068,3 +7068,46 @@ on the wrong end. Until that lands, `module_map.py` output must not be read as
 "pass N uses module M".
 
 **Do not re-run take 192's shape.** It will produce the same three passes.
+
+### Bind-time attribution — built, with a case that fails without it
+
+`pipe: rp #N` answers *which modules named this pass at creation*.
+`bind rp #N` answers *which module did this pass actually bind*. Take 192 needed
+the second and got the first.
+
+**The harness case came first and failed first.** `X4VR_TEST_XRP=1` creates
+`rp_alias`, a distinct render pass with **identical create-info** — hence
+compatible — and draws the pipeline created against `rp` inside it. That is X4's
+shape exactly: create against one pass, draw through a compatible other.
+
+The assertion is a **discriminator, not a fixed serial**: count the distinct
+render passes that bound a pipeline, with the alias and without, and require
+exactly one more with it.
+
+```
+ok   bind-time: alias pass is attributed    2 pass(es) bind, 3 with the alias
+```
+
+Negative control — the log line disabled, everything else identical:
+
+```
+FAIL bind-time: alias pass is attributed    wanted 0+1 binding passes, got 0
+```
+
+**My first version of this case was wrong and the fix is worth recording.** It
+hard-coded "the alias is the last render pass created" and read the highest
+serial, which was 7. The alias is created immediately after `rp`, so it is
+serial **1**. The record was working and the test was looking in the wrong
+place — the sixth time in this chain that the instrument and the question were
+about different things, and the first time it was the *test* rather than the
+layer. Counting a set difference removes the guess entirely.
+
+**Cost:** an `unordered_map` lookup and a `set` insert per `vkCmdBindPipeline`,
+deduplicated per (pass, pipeline), so a pipeline bound every frame prints once.
+No readback, no stall. Unlike the capture, this can be left on for a whole run —
+which is what makes it usable on passes that write nothing visible, the exact
+case that ended the bisect.
+
+**Still to do:** `module_map.py` reads `pipe:` lines. It needs to read `bind`
+lines too, or its output will keep meaning "created against" while the question
+is "used by".

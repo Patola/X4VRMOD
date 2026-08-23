@@ -258,6 +258,22 @@ int main(int argc, char **argv) {
     VkRenderPass rp;
     CHECK(vkCreateRenderPass(dev, &rpci, nullptr, &rp));
 
+    // X4VR_TEST_XRP: a render pass COMPATIBLE with `rp` but a different object,
+    // so a pipeline created against `rp` can be bound inside it. That is X4's
+    // actual shape and the reason take 192 answered the wrong question: a
+    // pipeline records the pass it was CREATED against, and Vulkan lets it be
+    // used with any compatible one. X4 creates against rp #26/#28/#30 and draws
+    // through #27/#29/#31, so a creation-keyed inventory names three passes
+    // that never execute and misses the three that do.
+    //
+    // Identical create-info, hence compatible, hence the framebuffer built for
+    // `rp` is legal here too.
+    VkRenderPass rp_alias = VK_NULL_HANDLE;
+    const char *xrp_env = getenv("X4VR_TEST_XRP");
+    const bool want_xrp = xrp_env && *xrp_env && *xrp_env != '0';
+    if (want_xrp)
+        CHECK(vkCreateRenderPass(dev, &rpci, nullptr, &rp_alias));
+
     VkFramebufferCreateInfo fbci{};
     fbci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     fbci.renderPass = rp;
@@ -424,6 +440,18 @@ int main(int argc, char **argv) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     vkCmdEndRenderPass(cmd);
+
+    // The same pipeline, bound inside the ALIAS pass. A creation-keyed record
+    // attributes this draw to `rp`; a bind-time record attributes it to
+    // `rp_alias`. The two disagree by construction, which is the point.
+    if (rp_alias != VK_NULL_HANDLE) {
+        VkRenderPassBeginInfo abi = rpbi;
+        abi.renderPass = rp_alias;
+        vkCmdBeginRenderPass(cmd, &abi, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRenderPass(cmd);
+    }
 
     // Both layers out. If the image was never doubled this copy is invalid
     // and validation says so; if it was doubled but never rendered, layer 1
@@ -1262,6 +1290,8 @@ int main(int argc, char **argv) {
     vkDestroyBuffer(dev, buf, nullptr);
     vkFreeMemory(dev, bmem, nullptr);
     vkDestroyFramebuffer(dev, fb, nullptr);
+    if (rp_alias != VK_NULL_HANDLE)
+        vkDestroyRenderPass(dev, rp_alias, nullptr);
     vkDestroyRenderPass(dev, rp, nullptr);
     vkDestroyImageView(dev, view, nullptr);
     vkDestroyImage(dev, img, nullptr);

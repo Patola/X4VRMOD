@@ -1983,6 +1983,49 @@ pose_width_case "width: 6-set layout, derived index" 0 0 \
 pose_width_case "width: index 5 collides, fails closed" 1 1 \
     X4VR_POSE_ROTATE=1 X4VR_POSE_YAW=180 X4VR_POSE_SET=5
 
+# --- bind-time attribution: which pass USED a module, not which CREATED it ---
+#
+# Take 192 spent a run on the pipe inventory and answered the wrong question.
+# A pipeline records the render pass it was CREATED against and Vulkan permits
+# it to be used with any COMPATIBLE pass, so X4 creates against rp #26/#28/#30
+# and draws through #27/#29/#31 -- and a creation-keyed inventory named the
+# three passes that never execute while missing the three that do.
+#
+# X4VR_TEST_XRP builds exactly that: one pipeline, created against `rp`, bound
+# and drawn inside `rp_alias`, a distinct but compatible pass. A creation-keyed
+# record attributes the draw to `rp`; a bind-time record attributes it to
+# `rp_alias`. They disagree by construction.
+#
+# The assertion is on the ALIAS's serial, because that is the one only a
+# bind-time record can produce. This case fails on every build that does not
+# have one -- which is the whole reason it is written before the feature.
+bindtime_case() { # label
+    local label="$1" log on off
+    # Distinct render passes that BOUND a pipeline, with the alias and without.
+    # A discriminator rather than a fixed serial: the alias is created straight
+    # after `rp`, so hard-coding "the last pass" was wrong once already -- it is
+    # serial 1, not the highest. Counting the SET removes the guess.
+    count_binds() {
+        log="$(mktemp)"
+        env VK_ADD_LAYER_PATH="$BUILD/layer" \
+            VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+            X4VR_MV=1 X4VR_PIPE_INVENTORY=1 X4VR_MV_INVENTORY=1 "$@" \
+            X4VR_LOG="$log" timeout 120 "$BIN" >/dev/null 2>&1
+        grep -ao 'bind rp #[0-9]*' "$log" | sort -u | wc -l
+        rm -f "$log"
+    }
+    off=$(count_binds)
+    on=$(count_binds X4VR_TEST_XRP=1)
+    if [[ "$on" -eq $((off + 1)) ]]; then
+        printf 'ok   %-38s %s pass(es) bind, %s with the alias\n' "$label" "$off" "$on"
+    else
+        printf 'FAIL %-38s wanted %s+1 binding passes with the alias, got %s\n' \
+            "$label" "$off" "$on"
+        fails=$((fails + 1))
+    fi
+}
+bindtime_case "bind-time: alias pass is attributed"
+
 # --- the round-robin's give-up, which had no test and cost take 179 ---------
 #
 # The three verdict cases below use the fixture 0,1,5 -- the CAPTURABLE target

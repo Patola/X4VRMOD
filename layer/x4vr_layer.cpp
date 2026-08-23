@@ -955,6 +955,15 @@ std::unordered_map<VkDescriptorUpdateTemplate, std::vector<uint32_t>>
 // watched at the one moment both are known: vkCmdBindPipeline.
 std::mutex g_cb_mu;
 std::unordered_map<VkPipeline, bool> g_pipe_mv;      // built for multiview
+// **Bind-time attribution.** A pipeline records the render pass it was CREATED
+// against, and Vulkan lets it be used with any COMPATIBLE pass. X4 creates
+// against rp #26/#28/#30 and draws through #27/#29/#31, so take 192's
+// creation-keyed inventory named three passes that never execute and missed the
+// three that do. `pipe: rp #N` answers "which modules named this pass at
+// creation"; `bind rp #N` answers "which module did this pass actually bind".
+std::mutex g_bind_mu;
+std::unordered_map<VkPipeline, std::string> g_pipe_desc;
+std::set<std::pair<uint32_t, VkPipeline>> g_bind_seen;
 std::unordered_map<VkCommandBuffer, bool> g_cb_mask; // inside a masked pass
 // Which framebuffer a command buffer is currently rendering into, so that
 // vkCmdEndRenderPass can name the images the pass just finished writing.
@@ -5928,6 +5937,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
                 if (n < 0 || (size_t)n >= sizeof(stagebuf))
                     break;
             }
+            {
+                std::lock_guard<std::mutex> bl(g_bind_mu);
+                g_pipe_desc[out[i]] = stagebuf;
+            }
             X4VR_LOG("pipe: rp #%u.%u [%s%s]%s",
                      rp_serial, ci[i].subpass,
                      pass_flag(g_variants.canvas_pass, ci[i].renderPass,
@@ -8927,6 +8940,50 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
 VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
                                                 VkPipelineBindPoint bp,
                                                 VkPipeline p) {
+    // The bind-time record. Keyed on the pass CURRENTLY BEING RECORDED rather
+    // than the one the pipeline names, which is the whole difference: those two
+    // are the same only when X4 happens not to exercise render-pass
+    // compatibility, and in the post chain it does.
+    //
+    // Deduplicated per (pass, pipeline) so a pipeline bound every frame prints
+    // once. The set is the instrument's whole cost -- no readback, no stall --
+    // which is why this can be left on for a whole run where the capture
+    // cannot.
+    if (g_pipe_inventory && g_active) {
+        VkRenderPass rp = VK_NULL_HANDLE;
+        {
+            std::lock_guard<std::mutex> lock(g_cb_mu);
+            auto it = g_cb_rp.find(cb);
+            if (it != g_cb_rp.end())
+                rp = it->second;
+        }
+        if (rp != VK_NULL_HANDLE) {
+            uint32_t serial = UINT32_MAX;
+            {
+                std::lock_guard<std::mutex> lock(g_variants.mu);
+                auto rs = g_rp_serials.find(rp);
+                if (rs != g_rp_serials.end())
+                    serial = rs->second;
+            }
+            if (serial != UINT32_MAX) {
+                std::string desc;
+                bool fresh = false;
+                {
+                    std::lock_guard<std::mutex> bl(g_bind_mu);
+                    fresh = g_bind_seen.insert({serial, p}).second;
+                    if (fresh) {
+                        auto dit = g_pipe_desc.find(p);
+                        desc = dit == g_pipe_desc.end() ? std::string()
+                                                        : dit->second;
+                    }
+                }
+                if (fresh)
+                    X4VR_LOG("bind rp #%u %s%s", serial,
+                             desc.empty() ? "(no inventory entry)" : "",
+                             desc.c_str());
+            }
+        }
+    }
     DeviceData *d;
     {
         std::lock_guard<std::mutex> lock(g_mu);
