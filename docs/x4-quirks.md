@@ -6622,3 +6622,49 @@ instrument. Until then:
 * **do not bisect the seam with it yet.** The instrument's failure mode is
   exactly "produces nothing and says little", which costs a take and teaches
   nothing — which is what happened the last time.
+
+### X4VR_TEST_FRAMES — the harness renders N frames, and two traps on the way
+
+**Status: the frame loop works and is verified. Recovery for the round-robin is
+still NOT demonstrated.** Recorded as unfinished, because "the harness renders N
+frames now" would read as more than was achieved.
+
+**Trap 1: re-submitting a recorded buffer is not a frame.** The first version
+looped only `vkQueueSubmit`. That runs the GPU work N times and calls the
+layer's pass-end hook **once**, because `vkCmdEndRenderPass` is a *recording*
+command. Every frame-counting path in the layer still saw a single frame. The
+loop now encloses `vkResetCommandBuffer` → record → submit, which is what a real
+frame loop looks like from the layer's side.
+
+**Trap 2: the give-up was gated on the re-arm.** It sat behind
+`!g_probe.after_armed`, and a target that is never reached never *disarms* — so
+it never re-arms, so the give-up could not run in precisely the case it exists
+for. A guard placed inside the path its own failure mode prevents from
+executing. It is now evaluated on the frame boundary, where the question
+actually belongs: *did the target appear in the window we were watching.*
+
+**What works now**
+
+* `X4VR_TEST_FRAMES=N` re-records and re-submits N times (default 1, capped
+  512). At N=1 every existing case is unchanged — full suite green, five shell
+  suites green — and at N=6 the frame's own assertions are unchanged
+  (`LAYER0_DRAWN=1 LAYER1_DRAWN=1 SAMPLED_NONZERO=1`).
+* A headless frame boundary: `x4vr_QueueSubmit` drives the arm tick **only when
+  `presents == 0`**, so a real X4 run is untouched and the units of
+  `X4VR_MV_DUMP_AFTER_RP_EVERY` stay "presents" for anyone reasoning about it.
+* One shared `after_rp_arm_tick()` for both drivers, so the game path and the
+  suite path cannot drift.
+* The give-up now **fires** — 3 times in a 12-frame run with a starving list,
+  where before it fired 0 times ever.
+
+**What still does not work.** With `X4VR_MV_DUMP_AFTER_RP=5,0`, target 5 is
+abandoned and the index advances, but **target 0 still never captures**. Since
+serials are assigned at `vkCreateRenderPass` (`g_rp_serial++`), rp #0 recurs
+every frame and the pass-end certainly happens, so the remaining fault is in the
+capture arming or in `g_probe.pending` — which is drained in `probe_collect`,
+and headless that runs only at device destroy. That is the next thing to read,
+and it is a *different* bug from the two fixed above.
+
+**Consequence, unchanged:** the seam bisect stays blocked. Give
+`X4VR_MV_DUMP_AFTER_RP` one target per run, or a list whose first entry is known
+reachable.

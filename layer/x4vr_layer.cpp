@@ -6685,10 +6685,25 @@ void hammer_thread() {
     }
 }
 
+// Defined next to the probe state, which is declared further down.
+void after_rp_headless_frame();
+
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueueSubmit(VkQueue queue,
                                                 uint32_t submitCount,
                                                 const VkSubmitInfo *submits,
                                                 VkFence fence) {
+    // **A frame boundary for an application that never presents.** The named
+    // pass capture arms on present, and the offline suite has no swapchain, so
+    // every cadence-driven path in this file was unreachable from the suite --
+    // which is why the round-robin give-up could be written, shipped and never
+    // once observed to fire.
+    //
+    // Gated on `presents == 0`, so a real X4 run is untouched: the moment one
+    // present has happened this never runs again, and the units of
+    // X4VR_MV_DUMP_AFTER_RP_EVERY stay "presents" where a player can reason
+    // about them. It is deliberately NOT a general fallback -- it is the
+    // narrowest thing that makes the guard testable.
+    after_rp_headless_frame();
     DeviceData *d;
     {
         std::lock_guard<std::mutex> lock(g_mu);
@@ -7856,6 +7871,7 @@ struct MvProbe {
     // forever and starved every entry behind it. Six targets, zero files.
     bool after_seen = false;           // current target reached since arming
     uint32_t after_miss = 0;           // consecutive arms that never saw it
+    uint64_t submits_no_present = 0;   // frame counter for a headless caller
     bool force_dump = false;           // this sample must be written out
     bool full_res = false;             // ... and at full resolution
     uint32_t after_target = 0;         // which rp this capture is of
@@ -8500,6 +8516,51 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
 }
 
 // Read what the frame just wrote. Present is the safe moment: the work is
+// One arm of the named-pass capture, shared by the present path and -- for a
+// headless app that never presents -- the submit path. ONE function, because
+// the two callers must not be able to drift: a give-up that fires in the game
+// and not in the suite is a guard nobody can test, which is the state this was
+// in until take 188's follow-up.
+//
+// Caller holds g_probe_mu.
+void after_rp_arm_tick() {
+    // Advance past a target the frame never contains. Without this a bad first
+    // entry voids the whole list, which is what take 179 spent a run
+    // discovering. Counted in ARMS, not frames: the question is "did the target
+    // show up in a window where we were actually looking", and between arms we
+    // are not looking.
+    if (!g_probe.after_seen && ++g_probe.after_miss >= kAfterRpGiveUp) {
+        const int64_t t = dump_after_rp_current();
+        X4VR_LOG("mv dump: giving up on rp #%lld — armed %u time(s) and the "
+                 "pass never occurred. Advancing so it does not starve the "
+                 "rest of the list (take 179's defect).",
+                 (long long)t, g_probe.after_miss);
+        g_probe.after_miss = 0;
+        dump_after_rp_idx()++;
+    }
+    g_probe.after_seen = false;
+    g_probe.after_armed = true;
+}
+
+// The headless frame boundary itself. Gated on presents == 0 so a real X4 run
+// never reaches it and the units of X4VR_MV_DUMP_AFTER_RP_EVERY stay
+// "presents", which is what a player can reason about.
+void after_rp_headless_frame() {
+    if (dump_after_rp() < 0)
+        return;
+    std::lock_guard<std::mutex> lock(g_probe_mu);
+    if (g_probe.presents != 0)
+        return;
+    g_probe.submits_no_present++;
+    // NOT gated on `!after_armed`. A target that is never reached never
+    // disarms, so it never re-arms either -- gating the give-up on the re-arm
+    // made it unreachable in exactly the case it exists for. The question a
+    // frame boundary answers is "did the target appear in the window we were
+    // watching", which has nothing to do with whether we are already armed.
+    if (g_probe.submits_no_present % g_dump_after_every == 0)
+        after_rp_arm_tick();
+}
+
 // submitted, and idling the queue here costs a diagnostic run nothing.
 // queue == VK_NULL_HANDLE means the caller has already guaranteed the work is
 // finished -- vkDestroyDevice requires an idle device. That path exists so the
@@ -8511,25 +8572,11 @@ void probe_collect(DeviceData *d, VkQueue queue) {
         g_probe.presents++;
         if (!g_probe.armed && g_probe.presents % kProbeEvery == 0)
             g_probe.armed = true;
-        if (dump_after_rp() >= 0 && !g_probe.after_armed &&
-            g_probe.presents % g_dump_after_every == 0) {
-            // Advance past a target the frame never contains. Without this a
-            // bad first entry voids the whole list, which is what take 179
-            // spent a run discovering. Counted in ARMS, not frames: the
-            // question is "did the target show up in a window where we were
-            // actually looking", and between arms we are not looking.
-            if (!g_probe.after_seen && ++g_probe.after_miss >= kAfterRpGiveUp) {
-                const int64_t t = dump_after_rp_current();
-                X4VR_LOG("mv dump: giving up on rp #%lld — armed %u time(s) "
-                         "and the pass never occurred. Advancing so it does "
-                         "not starve the rest of the list (take 179's defect).",
-                         (long long)t, g_probe.after_miss);
-                g_probe.after_miss = 0;
-                dump_after_rp_idx()++;
-            }
-            g_probe.after_seen = false;
-            g_probe.after_armed = true;
-        }
+        // Same reasoning as the headless path: not gated on `!after_armed`,
+        // because a never-reached target never disarms.
+        if (dump_after_rp() >= 0 &&
+            g_probe.presents % g_dump_after_every == 0)
+            after_rp_arm_tick();
         // Armed but never satisfied means the round has covered everything
         // that actually appears; start the next sweep.
         if (g_probe.armed && !g_probe.pending) {

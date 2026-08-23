@@ -1015,6 +1015,24 @@ int main(int argc, char **argv) {
                                        &cpipe));
     }
 
+    // **X4VR_TEST_FRAMES: RE-RECORD and re-submit N times.**
+    //
+    // Re-submitting a pre-recorded buffer is not enough, and finding that out
+    // is the whole reason this exists. The layer's pass-end hook is
+    // vkCmdEndRenderPass -- a RECORDING command. Submitting the same buffer
+    // eight times runs the GPU work eight times and calls the layer's hook
+    // ONCE, so every frame-counting path in the layer still saw a single
+    // frame. The loop therefore encloses the recording, not just the submit.
+    //
+    // This is what makes the named-pass round-robin testable at all: a target
+    // abandoned on one frame gets a real pass-end on the next to be captured
+    // at. Default 1, so every existing case records and submits exactly as
+    // before.
+    const char *frames_env = getenv("X4VR_TEST_FRAMES");
+    long frames = frames_env && *frames_env ? atol(frames_env) : 1;
+    if (frames < 1) frames = 1;
+    if (frames > 512) frames = 512;
+    for (long frame = 0; frame < frames; frame++) {
     CHECK(vkResetCommandBuffer(cmd, 0));
     CHECK(vkBeginCommandBuffer(cmd, &cbbi));
     // Both layers to SHADER_READ_ONLY, so this says nothing about whether a
@@ -1085,7 +1103,22 @@ int main(int argc, char **argv) {
                                buf, 1, &oc);
     }
     CHECK(vkEndCommandBuffer(cmd));
+    // **X4VR_TEST_FRAMES: submit the recorded frame N times.**
+    //
+    // Every cadence-driven path in the layer -- the named-pass round-robin, its
+    // give-up, the probe sweep -- counts frames, and this harness rendered
+    // exactly one. So none of them could ever be observed here: the give-up
+    // that take 179 lost a run to was written, shipped, and never once seen to
+    // fire, because a single frame can show STARVATION but never RECOVERY.
+    //
+    // Re-submitting the same command buffer is legal and is what a real frame
+    // loop looks like from the layer's side: the same passes end again, with
+    // the same serials, so a target abandoned on one frame can be captured on
+    // the next. Default 1, so every existing case is byte-identical.
     CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
+    if (frame + 1 < frames)
+        CHECK(vkQueueWaitIdle(queue));
+    } // X4VR_TEST_FRAMES
     CHECK(vkQueueWaitIdle(queue));
 
     // An image-to-image blit, for the layer's transfer-edge inventory. Placed
