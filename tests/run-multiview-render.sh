@@ -966,6 +966,78 @@ eval_case "invproj: emits T(d)·M (no affine)"
 eval_case "invproj: emits T(d)·M·A⁻¹ per eye" "$OA_L" "$OA_R"
 eval_case "invproj: emits the identity map"   "$OA_SYM"
 
+# Task #61's R^-1 -- which not one of the three cases above can see. They run
+# with no pose set, so the patch emits no rotation term at all, and their
+# perfect zeros say the eye offsets are right and NOTHING about the rotation.
+# #61 had been proven to emit, to hold on paper and to execute on a GPU, but
+# never to compute the identity it claims, because this CLI could not pass it
+# a pose set. The "-" arguments are the off-axis slots, skipped to reach past
+# them.
+eval_case "invproj: R⁻¹ composed, no affine"  - - 31 0 10,-7,3
+eval_case "invproj: R⁻¹ composed with A⁻¹"    "$OA_L" "$OA_R" 31 0 10,-7,3
+
+# ...and the negative controls, because a zero from a check that has never
+# been seen to go red is indistinguishable from a check that evaluated
+# nothing. Both of these ran BEFORE the case above was believed.
+#
+#   FLIP     composes the reference M·R⁻¹ instead of R⁻¹·M. #61 left-
+#            multiplies, and the wrong order would have made the check agree
+#            with a wrong emission -- the one trap the spec named.
+#   ROWMAJOR decodes the pose block's bytes with the other majorness. The
+#            patch's own comment says a layout mismatch "reads back as a
+#            plausible wrong matrix, not as an error"; this is what makes
+#            the offset, the stride and the majorness checkable instead of
+#            assumed.
+control_case() {
+    local label="$1" var="$2"; shift 2
+    local out worst checked
+    out=$(env "$var=1" "$PATCHER" frag-invproj-check \
+        "$BUILD/tests/sample_invproj.frag.spv" 1 0 2 -0.032 0.032 "$@" 2>&1)
+    worst=$(sed -n 's/.*WORST=//p' <<<"$out")
+    checked=$(sed -n 's/^CHECKED=\([0-9]*\).*/\1/p' <<<"$out")
+    # The error is 10·sin(yaw) -- the 10 from the 1/near term in the inverse
+    # projection -- so 0.1 is far below what any real mistake would score and
+    # far above float noise.
+    if [[ "$checked" == 10 ]] && awk "BEGIN{exit !($worst > 0.1)}" 2>/dev/null
+    then
+        printf 'ok   %-38s worst=%s, red as it must be\n' "$label" "$worst"
+    else
+        printf 'FAIL %-38s want checked=10 worst>0.1, got %s / %s\n' \
+            "$label" "${checked:-?}" "${worst:-?}"
+        fails=$((fails + 1))
+    fi
+}
+control_case "invproj: wrong R⁻¹ order is caught"  X4VR_CHECK_RINV_FLIP \
+    - - 31 0 10,-7,3
+control_case "invproj: wrong pose majorness caught" X4VR_CHECK_RINV_ROWMAJOR \
+    - - 31 0 10,-7,3
+
+# An identity rotation commutes with everything, so the flipped order would
+# agree with the right one and the check would pass while proving nothing.
+# Refusing it is what stops a future caller from reading that as a result.
+out=$("$PATCHER" frag-invproj-check "$BUILD/tests/sample_invproj.frag.spv" \
+    1 0 2 -0.032 0.032 - - 31 0 0,0,0 2>&1)
+if [[ "$out" == *identity_rotation_proves_nothing* ]]; then
+    printf 'ok   %-38s refused\n' "invproj: identity rotation refused"
+else
+    printf 'FAIL %-38s want a refusal, got "%s"\n' \
+        "invproj: identity rotation refused" "$out"
+    fails=$((fails + 1))
+fi
+
+# The layout the patch declares, pinned against x4vr::PoseBlock from the other
+# side. The C++ static_assert covers the struct; this covers what the SPIR-V
+# says about it, and a shader reads the bytes through the SPIR-V.
+out=$("$PATCHER" frag-invproj-check "$BUILD/tests/sample_invproj.frag.spv" \
+    1 0 2 -0.032 0.032 - - 31 0 10,0,0 2>&1 | sed -n 's/.*LAYOUT=//p')
+if [[ "$out" == "off64/stride16/col" ]]; then
+    printf 'ok   %-38s %s\n' "invproj: pose block layout is std140" "$out"
+else
+    printf 'FAIL %-38s want off64/stride16/col, got "%s"\n' \
+        "invproj: pose block layout is std140" "${out:-?}"
+    fails=$((fails + 1))
+fi
+
 # And the instrument, checked against the same shape. It reported "samples
 # nothing" about X4's real shaders until it learned to see through OpTypeArray,
 # so the count is asserted and not merely printed: it is the number that decides
