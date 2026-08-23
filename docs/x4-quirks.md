@@ -7469,3 +7469,36 @@ mod-0366 and mod-0370 among them.
 has a candidate cause that no run could have found — and if it is emitted
 correctly, that is the fourth hypothesis eliminated and the reconstruction is
 cleared for good.
+
+### Extending frag-invproj-check for R⁻¹ — the spec, not the code
+
+**Not started, deliberately.** The check mode is `tests/spirv_patch.cpp:203-612`
+— **409 lines** — and its interpreter has **no `OpMatrixTimesMatrix` case**,
+which is the opcode #61 emits for the `R⁻¹` composition. This is a real piece of
+work and beginning it without room to read the interpreter, extend it and verify
+it is how the last several half-built instruments in this file were made.
+
+**What the extension needs, in order:**
+
+1. **A pose-set argument**, passed through to
+   `patch_fragment_invproj_eye(..., pose_set, pose_binding)`. Today the CLI
+   never supplies one, so the emitted code has no `R⁻¹` term to interpret.
+2. **A second uniform block in the interpreter.** It currently seeds one block
+   with a known `M_invprojection`; the pose block at the pose set needs seeding
+   with a known `R⁻¹` (use `pose_set_euler`, so the reference and the emission
+   come from the same header — the property the existing check was built on).
+3. **`OpMatrixTimesMatrix` in the opcode switch.** Absent today; #61's patch
+   emits exactly one.
+4. **The reference:** `R⁻¹ · M_invproj` composed with the existing
+   `compose_inv_off_axis` / `compose_eye_untranslate` result, in that order —
+   #61 left-multiplies, and getting the order wrong would make the check agree
+   with a wrong emission.
+
+**Acceptance, and it must fail first:** point it at mod-0366 with a pose set and
+a non-identity rotation and confirm it reports a nonzero `WORST=` when the
+reference is composed in the *wrong* order — then fix the order and watch it go
+to ~1e-7. A check that has never been seen to fail on this arithmetic is worth
+no more than the one that could not see `R⁻¹` at all.
+
+**Then:** run it over the 244 eligible modules, mod-0366 and mod-0370 included,
+before any further seam work.
