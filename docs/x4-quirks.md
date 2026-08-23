@@ -7821,6 +7821,67 @@ subset makes the complement wrong, so **enumerate what does NOT carry it.**
 * **The skybox** (mod-0266/0267, compute, cube). [[x4-skybox-is-not-one-layer]]
   says it broke all three previous attempts.
 
+### The three unaccounted items, read (take 197)
+
+**1. The compute skybox — ELIMINATED, on principle.** mod-0266/0267 are
+cubemap→cubemap compute (`OpTypeImage Cube` sampled in, `Rgba16f` storage out):
+an envmap convolution. **A cubemap is indexed by direction, not by screen
+position**, so it is rotation-invariant by construction and being unreachable
+by every patch we have costs nothing. The planets are separate — real geometry
+with vertex shaders, classified and rotated normally.
+[[x4-skybox-is-not-one-layer]]'s warning is about stereo depth, not the
+rotation frame.
+
+**2. Every rotation refusal is correct.** All **25** modules
+`patch_vertex_pose_rotate` declines are NonWorld, fragment-only or compute — 0
+of 25 is world geometry. So no geometry anywhere draws unrotated, and the
+"unrotated geometry beside rotated geometry" shape is dead as a seam
+explanation.
+
+**3. `volume_apply`'s re-projection round-trips; `depth_godrays_pass`'s does
+NOT.** Ten fragment modules both `UnProject` and `Project` — six of them are
+rp #31's group (mod-0365/0366, 0367/0368, 0369/0370). The distinction between
+the two uses is the finding:
+
+* `view2volume` does `Project(UnProject(clip))` and *uses the result*.
+  `UnProject` is our patched `M_invprojection` = `R⁻¹·P⁻¹`, so it lands in X4's
+  unrotated frame; `Project` is X4's own `M_projection`, which we cannot alter;
+  the volume was built by compute in X4's frame. **Closed loop, correct.**
+* `depth_godrays_pass` does the same round trip and then **differences it
+  against the fragment's own UV**:
+
+      vec3 view1_cs = Project(UnProject(view0_cs) + ldir * 0.1);
+      vec3 ray_uv  = clipZ2uv(view1_cs) - view0_uv;
+
+  `view0_uv` is in the **rotated** frame; `clipZ2uv(view1_cs)` comes back
+  **unrotated**. So `ray_uv` is *(the light-direction step)* **+** *(the full
+  head-rotation displacement)*, and at 20° the second term dominates the first.
+  The march built on it then has a **hard early-out**:
+
+      if (IsOutsideUV(uv.xy)) break;
+
+  A rotation-contaminated direction plus a hard boundary — the same shape as
+  `taa_apply`'s `blend = 1`, except this one **is** compiled in: the FOM
+  harmonic loop of `GetDepthGodRay` is present in mod-0366/0370 (Cos, Sin, Exp
+  and six loops), absent in mod-0189.
+
+  X4's own author documents the vanilla version of this: *"avoids a cut-out
+  artifact (which I think is due to the incorrect perspective in the extension
+  pass)"*, in `common_fom.glsl`'s `GetDepthGodRay()`.
+
+**What this is NOT yet.** A candidate, not a cause. **The seam law argues
+against it**, and that argument is the reason not to spend a take on a hunch:
+`seam NDC = sx·tan(θ/2)` depends on `sx` and `θ` only, verified to 1.1 px over
+six cases and 0.1 px on takes 195 and 197 — and it contains **no light-direction
+term**. A god-ray artifact must depend on where the sun is. Every take so far
+is the same savegame at the same instant, so the stored data cannot separate
+them.
+
+**The discriminator, and it costs no build and no take:** fly until the sun is
+in a different direction and look. If the seam moves with the sun, it is the
+god-ray march; if it stays at `sx·tan(θ/2)`, the god-ray path is eliminated and
+the law's independence from the light is confirmed rather than assumed.
+
 ### And one defect found on the way — see the commit
 
 The layer classified the module it had just written: `patch_vertex_pose_rotate`
