@@ -7228,3 +7228,55 @@ passes that BOUND a pipeline created against another pass: rp #1
 ```
 
 That is the alias, found by the tool rather than by knowing where to look.
+
+## Take 194 — the three passes are NAMED
+
+`pose-channel … 6/6, 1222/1222, OK`. Scorer FAILs on **#49** (9
+camera-positioned modules in rp #13/#18/#23) — the dormant check again, not this
+run's subject. The join works: `=== BOUND AT DRAW ===` with real module detail.
+
+| pass | binds | class | variant |
+|---|---|---|---|
+| **#25** clean | mod-0018, 0020, #41, #42, #385… | **World, live-sx** | **patched** |
+| **#27** | mod-0152, 0166, 0168 | NonWorld, **camera-positioned**, MONO, procedural, clip | **original** |
+| **#29** | mod-0168, 0181 | same | **original** |
+| **#31** seam | mod-0370 | same | **original** |
+| **#32** seam | mod-0189 | same | **original** |
+
+**The clean/dirty boundary coincides exactly with a change of module class and
+variant.** The last clean pass binds *World* modules on `live-sx`, **patched** —
+they carry our rotation. Every pass from #27 on binds *NonWorld,
+camera-positioned, procedural* modules taking the **original** variant — they do
+not.
+
+That is a coherent mechanism: camera-positioned procedural fullscreen geometry
+drawn in X4's **unrotated** frame, over a scene the vertex patch **did** rotate.
+The two disagree, and a fullscreen quad's edge is a straight line.
+
+It also connects to the FAIL that has been firing since take 192: #49 is
+*camera-positioned modules drawing without the affine*. Same class, same
+"camera-positioned means it does not take the transform" shape, in a different
+pass group.
+
+### What this is NOT yet
+
+**`-> original` does not by itself mean "wrong".** `needs_original()` excludes
+shadow and UI passes on purpose, and #30's canvas is meant to stay screen-locked.
+An unpatched camera-positioned module may be correctly unpatched. What the table
+establishes is that the boundary in the *image* sits exactly at a boundary in
+*variant selection* — a correlation across one transition, not a demonstrated
+cause.
+
+The test that would settle it is elimination, not more attribution: make those
+modules take the rotation and see whether the seam moves or goes. That is
+`X4VR_SHEAR_LIGHTS=1`'s shape for #49, and the seam may want its own equivalent.
+
+### Two caveats from this run
+
+* **`warn  the layer's change budget ran out 131 s into a 144 s session`** — the
+  last 13 s produced no proj samples, so anything absent from the proj set may
+  simply not have been looked at. It does not affect the bind table.
+* The tool's diff shows **25 passes** binding pipelines created against another
+  pass, against 29 named-at-creation-but-never-binding. This is not an edge
+  case in X4, it is pervasive — take 192's creation-keyed output was
+  systematically misleading, not unluckily so.
