@@ -7111,3 +7111,33 @@ case that ended the bisect.
 **Still to do:** `module_map.py` reads `pipe:` lines. It needs to read `bind`
 lines too, or its output will keep meaning "created against" while the question
 is "used by".
+
+### module_map.py now reads bind lines, and says which view it is showing
+
+Three states, and it names which one it is in rather than printing a table that
+looks the same either way:
+
+* **`bind` lines with module detail** → a `BOUND AT DRAW` section first, then
+  the creation view, plus an explicit diff:
+  *passes named at CREATION but never seen binding* and *passes that BOUND a
+  pipeline created against another pass*. That disagreement **is**
+  render-pass compatibility, and it is the whole reason the section exists.
+* **`bind` lines with no module detail** → says so, and why (the pipelines'
+  modules were never inventoried).
+* **no `bind` lines** → says the build predates bind-time attribution and
+  labels the remaining table `CREATED AGAINST (may not be the pass that used
+  it)`.
+
+Verified against both a take-192 log (no bind lines) and a harness log (bind
+lines, unpatched modules), which is what caught the bug below.
+
+**The message was keyed on the wrong thing first.** It tested the *parsed
+modules* rather than the *lines*, so a log that had bind lines carrying no
+module detail reported "this build predates bind-time attribution" — absence of
+parseable content dressed as absence of the feature. That is the seventh
+instance in this chain of a report whose words are wider than what it measured,
+and it appeared *in the fix for the sixth*. It is keyed on `binds` now.
+
+Both views use the same module-parsing regex, so the creation list and the bind
+list cannot drift into disagreeing for a reason other than the one being
+studied.
