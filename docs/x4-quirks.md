@@ -6960,3 +6960,55 @@ missed measurement, not an absent one.
 If #29 shows a seam at 197.8, the introduction is at or before the downsample
 and the quarter-res chain is implicated. If #29 is clean and #31 is not, it is
 #31 itself — a single pass, nameable from the inventory.
+
+## Take 191 — RESULT: the bisect by capture is EXHAUSTED at #27/#29/#31
+
+`score_run.py` exit 0, `pose-channel … 6/6, 1156/1156, OK`.
+
+* **rp #31 — positive control, reproduced.** 13 of 14 captures lit, seam at
+  **x=790 (10)**, guard at **x=358 (15)**. Identical to take 190. The run is
+  comparable.
+* **rp #29 — 14 captures, NONE lit** (max mean 5.7), measured size-aware so a
+  downsampled target could not hide the seam. Not a mistimed capture: #31 got 13
+  lit frames in the same run, in the same cockpit hold.
+
+### The final state of the bisect
+
+```
+#25  clean (mean 23)
+#26  never executes
+#27  BLACK  —  9 captures, cockpit
+#28  never executes
+#29  BLACK  — 14 captures, cockpit, size-aware
+#30  never executes
+#31  SEAM   guard 358 / seam 790
+#32  SEAM   guard 358 / seam 791
+```
+
+**The seam is introduced at #27, #29 or #31, and it cannot be narrowed further
+by end-of-pass capture**, because two of the three leave their attachment dark.
+That was written down as a possibility *before* this run, so it is a reached
+limit rather than a surprise.
+
+Both dark passes write `[97H]` and leave it near-black, and take 189 measured
+rp #29 at **352×352**. That is the shape of a downsample/auxiliary chain —
+bloom or luminance — where the capture grabs a full attachment that the pass
+only partly writes. Stated as shape, not identity: nothing here names them.
+
+### Do NOT run another bisect
+
+The instrument has given everything it can. Three passes remain and the method
+that distinguished the first four cannot separate them. Another capture run
+would produce the same three lines.
+
+**The next method is the pipeline inventory** — `X4VR_PIPE_INVENTORY` and
+task #42's "log each module's classification against the passes that bind it".
+That names the shader modules bound by #27, #29 and #31, and a named module can
+be read from `/tmp/x4-shadersrc` directly. One run, no images, and it answers
+"what are these three passes" rather than "which one looks different".
+
+Worth noting for whoever writes that run: **#26/#28/#30 never execute** and
+**#27/#29 write dark**, so five of the seven passes in the original bracket are
+invisible to every image-based instrument this project has. An inventory that
+reports what X4 *created* will list all seven; only the pass-end record says
+which four actually ran.
