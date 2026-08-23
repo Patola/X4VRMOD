@@ -1639,12 +1639,31 @@ def main(path):
     # file answers -- the knob also restores the shear, which take 70 measured
     # at 85% per-eye disagreement on #57, so a WORSE-looking take is the knob
     # working, not a regression.
+    # Take 196 corrected this predicate. The first version keyed on "no-depth"
+    # alone and FAILed a valid take: rp #0/#33/#46 stayed `->original` under
+    # the knob, and they are RIGHT to. They carry formats 44L/50L/50L -- every
+    # colour attachment LDR -- so they are held by the all-LDR rule at
+    # x4vr_layer.cpp:2060, a DIFFERENT rule that X4VR_SHEAR_NODEPTH does not
+    # gate. A pass can be no-depth and all-LDR at once; the knob only reaches
+    # the ones that are no-depth and NOT all-LDR.
+    #
+    # This is the wrong-granularity error again: no predicate over "no-depth
+    # passes" can split the two, because the classified object was wrong. The
+    # eligible object is "no-depth AND at least one HDR colour attachment",
+    # which the inventory's own format column already states -- `[97H]` versus
+    # `[44L]` -- so it is read here rather than assumed.
     binds = [ln for ln in lines if "bind rp #" in ln]
-    nodepth_rps = set()
+    nodepth_rps = set()   # eligible: the knob should flip these
+    ldr_held = set()      # no-depth but all-LDR: held by the other rule
     for ln in lines:
-        m = re.search(r"rp #(\d+)\.\d+: .*\bno-depth\b", ln)
-        if m:
+        m = re.search(r"rp #(\d+)\.\d+: .*?\[([0-9LH,]+)\].*?\bno-depth\b", ln)
+        if not m:
+            continue
+        tags = m.group(2)
+        if "H" in tags:
             nodepth_rps.add(m.group(1))
+        else:
+            ldr_held.add(m.group(1))
     want_nodepth = "X4VR_SHEAR_NODEPTH=1" in (run or "")
     if not binds:
         if want_nodepth:
@@ -1669,10 +1688,15 @@ def main(path):
             if "->patched" in ln:
                 patched.add(m.group(1))
         seen = sorted(orig | patched, key=int)
-        print(f"shear-nodepth {len(nodepth_rps)} no-depth pass(es); of those "
-              f"that bind, {len(orig)} bind ->original "
+        print(f"shear-nodepth {len(nodepth_rps)} no-depth HDR pass(es) are "
+              f"eligible; of those that bind, {len(orig)} bind ->original "
               f"{sorted(orig, key=int)}, {len(patched)} bind ->patched "
               f"{sorted(patched, key=int)}")
+        if ldr_held:
+            print(f"shear-nodepth {len(ldr_held)} further no-depth pass(es) "
+                  f"are all-LDR {sorted(ldr_held, key=int)} — held by the "
+                  f"rule at x4vr_layer.cpp:2060, which this knob does not "
+                  f"gate. Their ->original is correct, not a miss")
         if want_nodepth and orig:
             fails.append(
                 f"the run asked for X4VR_SHEAR_NODEPTH=1, which exists to stop "
