@@ -6832,3 +6832,75 @@ ls /tmp/x4vr-t189-*.png
 Read the verdicts **before** the images: "captured" is the only one that means a
 file is worth looking at, and `NEVER REACHED` now means "never ended while it
 was the current target", not "does not exist".
+
+## Take 189 — RESULT: the seam is a fullscreen post pass, not world geometry
+
+`score_run.py` exit 0, `pose-channel … 6/6, 1107/1107, OK`. The instrument
+worked: 6 targets captured, 1 skipped, 3 never reached, 58 dumps, and **no
+starvation** — the give-up did its job on a real run.
+
+### The bracket
+
+| target | dumps | content | guard @358 | seam @791 |
+|---|---|---|---|---|
+| rp #13 | 5 | mean 0–1 | — | — |
+| rp #17 | 6 | mean 0–1 | — | — |
+| rp #22 | 6 | mean 0–2 | — | — |
+| **rp #25** | 4 | **mean 21–23** | **0.0** | **1.0** |
+| rp #29 | 4 | 352×352 | out of range | out of range |
+| **rp #32** | 4 | **mean 23–30** | **19.0** | **14.0** |
+
+**rp #25 has a lit frame and no seam. rp #32 has a lit frame and both edges.**
+Their capture indices interleave (n0,2,4,6 against n1,3,5,7) at comparable mean
+luma, so they are the same scene moments apart — like for like.
+
+**The seam is introduced between rp #25 and rp #32.** From take 99's inventory
+that span is rp #26–#32, and every one of them is a **MONO (fullscreen post)**
+pass on the eye image `[97H]`. The world geometry passes are not where it comes
+from.
+
+Two further facts from the same table: **rp #29 renders at 352×352**, a quarter
+of the eye in each axis — a downsampled post chain sits inside the bracket. And
+`rp #44: SKIPPED — no doubled colour attachment`, which is the verdict working
+as designed rather than a failure.
+
+### What this does NOT establish
+
+**rp #13, #17 and #22 are inconclusive, not clear.** All their captures came
+back at mean 0–2, i.e. they never caught a lit frame — their per-target `n`
+counters run to n14–n16 while #25/#32 stop at n6/n7, so those targets were
+sampled during loading and the menu. Absence of a seam in a black frame is not
+absence of a seam. They must be re-captured before anything is said about them.
+
+That is the same error the earlier "NEVER REACHED" wording invited, in a new
+costume: a report that looks like evidence of absence when it is absence of
+evidence.
+
+### Next: narrow inside the bracket
+
+One run, targets **26, 27, 28, 30, 31, 32** — every pass in the span, since
+there are only six. Same knobs otherwise. The first that shows a step at x=791
+names the pass, and #32 is included as the positive control: it must still show
+the seam or the run is not comparable to this one.
+
+The one thing to fix in the protocol: **the early targets sampled the menu.**
+Ask for the cockpit to be reached first and held, or raise
+`X4VR_MV_DUMP_AFTER_RP_EVERY` so the first arm lands after the scene is up.
+
+### The module count, riding free
+
+```
+modules: 389 created this run — 374 vertex, 5 fragment, 10 compute, 0 other
+```
+
+**Under 409, so this run stayed inside the dump set** — the offline sweeps are
+consistent with it, though as the counter's own wording says, that does not
+prove 409 is the population for scenes this run never entered.
+
+Corroborated rather than trusted: `spirv-dis` over 60 dumps gives 51 vertex,
+5 fragment, 4 compute, which matches the classifier's shape. Worth noting for
+later: only ~5 % of X4's modules are fragment shaders, yet `invproj` reports
+"244 of 409 eligible" — so `patch_fragment_invproj_eye` is evidently not
+restricted to fragment stages despite its name. Not chased here, but that name
+is misleading and some count somewhere is measuring a different population than
+it claims.
