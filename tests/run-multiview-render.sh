@@ -1983,6 +1983,43 @@ pose_width_case "width: 6-set layout, derived index" 0 0 \
 pose_width_case "width: index 5 collides, fails closed" 1 1 \
     X4VR_POSE_ROTATE=1 X4VR_POSE_YAW=180 X4VR_POSE_SET=5
 
+# --- the round-robin's give-up, which had no test and cost take 179 ---------
+#
+# The three verdict cases below use the fixture 0,1,5 -- the CAPTURABLE target
+# FIRST -- so the index always advances and nothing can ever starve. They passed
+# for months over a give-up that did not exist, and then over one that could not
+# fire.
+#
+# This pair is the discriminator: same list, same targets, ONE knob apart.
+#   1 frame   -> rp #0 is starved by the unreachable rp #5 ahead of it
+#   12 frames -> the give-up abandons #5 and #0 is captured
+#
+# It needs X4VR_TEST_FRAMES because a single-frame harness can show starvation
+# but never recovery: every pass ends exactly once, so a target reached only
+# after the round-robin moves on has no second chance. That is why the fix and
+# the test had to land together.
+starve_case() { # label frames want_substring_for_rp0
+    local label="$1" frames="$2" want="$3"
+    local log pre line
+    log="$(mktemp)"; pre="$(mktemp -u)"
+    env VK_ADD_LAYER_PATH="$BUILD/layer" \
+        VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+        X4VR_VR=0 X4VR_STEREO=1 X4VR_MV=1 \
+        X4VR_MV_DUMP_AFTER_RP=5,0 X4VR_TEST_FRAMES="$frames" \
+        X4VR_MV_DUMP_AFTER_RP_EVERY=2 X4VR_MV_DUMP="$pre" X4VR_LOG="$log" \
+        timeout 180 "$BIN" >/dev/null 2>&1
+    line=$(grep -a "target rp #0:" "$log" | head -1 | sed 's/.*target rp/target rp/')
+    rm -f "$log" "$pre"-*
+    if [[ "$line" == *"$want"* ]]; then
+        printf 'ok   %-38s %s\n' "$label" "$(echo "$line" | cut -c1-40)"
+    else
+        printf 'FAIL %-38s want "%s", got: %s\n' "$label" "$want" "${line:-no verdict}"
+        fails=$((fails + 1))
+    fi
+}
+starve_case "round-robin: one frame starves rp #0"  1  "NEVER REACHED"
+starve_case "round-robin: give-up recovers rp #0"   12 "captured"
+
 verdict_case "verdict: captured"        0 "captured"
 verdict_case "verdict: reached, no file" 1 "REACHED but never captured"
 verdict_case "verdict: never reached"   5 "NEVER REACHED"

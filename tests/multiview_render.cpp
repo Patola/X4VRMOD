@@ -381,8 +381,25 @@ int main(int argc, char **argv) {
     VkCommandBufferBeginInfo cbbi{};
     cbbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     cbbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    CHECK(vkBeginCommandBuffer(cmd, &cbbi));
 
+    // **X4VR_TEST_FRAMES — read once, used by BOTH recordings.**
+    //
+    // The first version wrapped only the output pass at the bottom of this
+    // file, and that was not enough: this command buffer holds rp #0 and the
+    // other early passes, so those ended exactly once no matter what N said.
+    // The named-pass round-robin could then advance past a dead target and
+    // find its live one already over. Every pass in the frame has to recur,
+    // or "N frames" is only true of the tail of the frame.
+    const char *frames_env = getenv("X4VR_TEST_FRAMES");
+    long frames = frames_env && *frames_env ? atol(frames_env) : 1;
+    if (frames < 1) frames = 1;
+    if (frames > 512) frames = 512;
+
+    // Idempotent by construction: the pass clears and redraws, and the copy
+    // writes the same buffer offsets, so frame N leaves exactly what frame 0
+    // did. That is what makes re-running safe rather than merely tolerated.
+    // Declared OUTSIDE the loop: both outlive it. `orpbi` is derived from
+    // `rpbi` further down, and `si` is reused by the later submits.
     VkClearValue clear{};
     clear.color.float32[0] = 0.0f;
     clear.color.float32[1] = 0.0f;
@@ -395,6 +412,14 @@ int main(int argc, char **argv) {
     rpbi.renderArea = sc;
     rpbi.clearValueCount = 1;
     rpbi.pClearValues = &clear;
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+
+    for (long frame = 0; frame < frames; frame++) {
+    CHECK(vkResetCommandBuffer(cmd, 0));
+    CHECK(vkBeginCommandBuffer(cmd, &cbbi));
     vkCmdBeginRenderPass(cmd, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
     vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -418,13 +443,9 @@ int main(int argc, char **argv) {
                                buf, 1, &c);
     }
     CHECK(vkEndCommandBuffer(cmd));
-
-    VkSubmitInfo si{};
-    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    si.commandBufferCount = 1;
-    si.pCommandBuffers = &cmd;
     CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
     CHECK(vkQueueWaitIdle(queue));
+    } // X4VR_TEST_FRAMES
 
     void *ptr = nullptr;
     CHECK(vkMapMemory(dev, bmem, 0, LAYER_BYTES * 2, 0, &ptr));
@@ -1028,10 +1049,6 @@ int main(int argc, char **argv) {
     // abandoned on one frame gets a real pass-end on the next to be captured
     // at. Default 1, so every existing case records and submits exactly as
     // before.
-    const char *frames_env = getenv("X4VR_TEST_FRAMES");
-    long frames = frames_env && *frames_env ? atol(frames_env) : 1;
-    if (frames < 1) frames = 1;
-    if (frames > 512) frames = 512;
     for (long frame = 0; frame < frames; frame++) {
     CHECK(vkResetCommandBuffer(cmd, 0));
     CHECK(vkBeginCommandBuffer(cmd, &cbbi));

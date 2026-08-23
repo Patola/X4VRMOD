@@ -6705,3 +6705,48 @@ regression test.
 
 **Unchanged:** the seam bisect stays blocked. One target per run, or a list
 whose first entry is known reachable.
+
+### The give-up now works, and has a test that can fail
+
+**Done.** `X4VR_MV_DUMP_AFTER_RP` no longer starves on a bad entry, and the
+suite proves it with a pair that differs by one knob:
+
+```
+round-robin: one frame starves rp #0   target rp #0: NEVER REACHED
+round-robin: give-up recovers rp #0    target rp #0: captured
+```
+
+Same list (`5,0`), same targets, `X4VR_TEST_FRAMES` 1 against 12. The first is
+take 179's defect reproduced; the second is it not happening.
+
+**Four things had to be true at once**, and each was independently sufficient to
+hide the bug:
+
+1. **The give-up for a never-reached target did not exist.** One existed for
+   "reached but no doubled attachment"; a serial that simply never occurs
+   incremented nothing and held the index forever.
+2. **It was gated on `!after_armed`** — and a never-reached target never
+   disarms, so the guard sat inside the branch its own failure mode skips.
+3. **`g_probe.pending` latched.** It is cleared in `probe_collect`, which a real
+   run reaches from present; with no swapchain the first capture blocked every
+   later one. Now drained per frame with `count_frame = false`, so the present
+   counter a real run's cadence uses stays untouched.
+4. **`X4VR_TEST_FRAMES` covered only the tail of the frame.** The harness
+   records *two* command buffers; the loop wrapped the second. rp #0 lives in
+   the first, so it ended exactly once no matter what N said. Both recordings
+   are now inside the loop, which is what "render N frames" has to mean.
+
+**The fixture was the root of it.** The three verdict cases use `0,1,5` — the
+capturable target **first** — so the index always advances and nothing can
+starve. They passed over a missing give-up, then over an unreachable one, then
+over a latched buffer. A test whose fixture is ordered so the bug cannot occur
+is not a weak test, it is a *reassuring* one, which is worse.
+
+Also corrected: **"NEVER REACHED" does not mean the pass never ended.**
+`after_rp_reached()` is populated only for the *current* target, so the verdict
+means "never ended while it was being watched". That wording sent me looking for
+a nonexistent render pass when the pass was ending fine, just too early.
+
+**The seam bisect is now unblocked.** The instrument can be given a list without
+one bad entry voiding it — though a list whose first entry is known reachable
+remains the cheaper habit.
