@@ -7390,3 +7390,41 @@ against it.
 Leaving a verified fix behind an opt-in is how it gets forgotten — and this one
 was invisible anyway, since the check that catches it is dormant unless
 `X4VR_PIPE_INVENTORY=1`.
+
+## invproj coverage of the seam's modules — the lead is WEAKENED, not confirmed
+
+`frag-invproj-check` over the modules each bracket pass binds:
+
+| pass | module | invproj |
+|---|---|---|
+| **#31 seam** | mod-0366 | `CHECKED=10 WORST=0.000e+00` |
+| **#31 seam** | mod-0370 | `CHECKED=10 WORST=0.000e+00` |
+| **#32 seam** | mod-0189 | `FAIL=no_load_to_check` |
+| #27 | mod-0152 | `CHECKED=10 WORST=0.000e+00` |
+| #27 | mod-0166 | `FAIL=no_load_to_check` |
+| #27 / #29 | mod-0168 | `CHECKED=10 WORST=0.000e+00` |
+| #29 | mod-0181 | `FAIL=no_load_to_check` |
+
+**Both of rp #31's modules load `M_invprojection` and both take the correction
+exactly.** So the reconstruction at the first pass that shows the seam *is*
+corrected — and the seam is there anyway.
+
+That is evidence **against** last section's lead as stated ("the `R⁻¹` does not
+reach the reconstruction"). It reaches it. Either the correction applied there
+is the wrong one for what that pass does, or the seam does not come from the
+reconstruction at all.
+
+`FAIL=no_load_to_check` on mod-0189/0166/0181 means those modules never load
+`M_invprojection` — there is nothing for the patch to correct, which is not a
+gap in coverage but an absence of the thing covered.
+
+**A caveat on this check:** it was run with the eye offsets only, not with a
+pose set, so it verifies the per-eye invproj arithmetic and **not** the `R⁻¹`
+composition #61 adds. A run of the same check with the pose set supplied would
+say whether the `R⁻¹` term specifically is emitted correctly in mod-0366/0370.
+That is the next offline step and it costs nothing.
+
+**Status of the seam: still unexplained.** Bracketed to rp #31/#32, three
+hypotheses dead (prev-MVP, camera-positioned classification, uncorrected
+reconstruction), one narrowed and untested (`R⁻¹` composition in the two
+modules that do take the correction).
