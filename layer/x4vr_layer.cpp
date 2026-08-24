@@ -50,6 +50,11 @@
 namespace {
 
 constexpr VkDeviceSize kViewBlockRange = 1792; // from frame analysis
+// X4's per-object block. Hoisted here from the patch section because the
+// descriptor bind hook -- which runs per draw, far above it -- needs the
+// set index to find the live shadow cascade (task #56).
+constexpr uint32_t kObjectSet = 3;
+constexpr uint32_t kObjectBinding = 0;
 
 // ---------------------------------------------------------------- dispatch
 // Loader dispatch key: the first pointer-sized word of every dispatchable
@@ -502,6 +507,17 @@ bool app_is_target(const char *app_name) {
 }
 
 // ---------------------------------------------------------------- tracking
+// The one gate for everything the matrix instrument costs. Two copies of this
+// lambda already existed; task #56 needed a third, in the descriptor-write and
+// per-draw bind hooks, and three copies of a getenv is how they drift.
+inline bool want_matrices() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_DUMP_MATRICES");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
+
 struct ViewSlot {
     VkBuffer buffer;
     VkDeviceSize offset;
@@ -527,6 +543,42 @@ struct Tracking {
     // rather than derived later, because "which passes did that camera draw
     // into" is not recoverable from a draw count after the fact.
     std::map<ViewSlot, uint32_t> credit_masked;
+
+    // ---- task #56: the OBJECT block, which is a different buffer ---------
+    //
+    // `M_shadowCSM0` lives at member 3 of the WORLD/object block (set 3
+    // binding 0), and 189 of the dumped modules sample it. The camera block's
+    // `M_shadowCSM0Clip` at member 9 is declared by 370 and sampled by ZERO,
+    // so reading it returned whatever the buffer held -- takes 197 and 201,
+    // identical runs on a byte-identical layer, disagreed.
+    //
+    // **The range is RECORDED, not assumed.** The camera block proves range is
+    // not the struct size: its last member sits at byte 1556 and X4 binds
+    // 1792. Nothing in the SPIR-V predicts the object block's bind range, so
+    // the slot carries whatever range the descriptor write declared and the
+    // bounds check below uses that rather than a constant. What the run
+    // observes is logged, so the next one can assert it.
+    struct ObjSlot {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceSize offset = 0;
+        VkDeviceSize range = 0;
+        bool operator<(const ObjSlot &o) const {
+            if (buffer != o.buffer) return buffer < o.buffer;
+            if (offset != o.offset) return offset < o.offset;
+            return range < o.range;
+        }
+    };
+    // Every UBO slot by dstSet, kept ONLY when the instrument asks. The write
+    // hook cannot know which index a set will be bound at -- that is decided
+    // at vkCmdBindDescriptorSets -- so this mirrors the camera path: record by
+    // handle here, filter by set index there.
+    std::unordered_map<VkDescriptorSet, std::vector<ObjSlot>> obj_sets;
+    std::unordered_map<VkCommandBuffer, std::vector<ObjSlot>> obj_bound;
+    std::map<ObjSlot, uint32_t> obj_credit;
+    // (set index, range) -> writes seen. An inventory, so "which range is the
+    // object block" is answered by the run instead of by a guess.
+    std::map<std::pair<uint32_t, VkDeviceSize>, uint32_t> obj_ranges;
+
     uint64_t frame = 0;
     // X4 double-buffers the view arena (two buffers alternate per frame),
     // so "did the winner change" must ignore expected alternation: keep the
@@ -1073,6 +1125,33 @@ void canvas_refuse(const char *why) {
 
 // Host pointer for a (buffer, offset) view slot, or nullptr if the backing
 // memory is not currently mapped. Caller holds g_track.mu.
+// Task #56. Same walk as slot_host_ptr, but bounded by the slot's OWN range
+// rather than by kViewBlockBytes: the object block is a different size, and
+// borrowing the camera block's constant here would either reject every valid
+// slot or read past a smaller buffer. The range came from the descriptor
+// write, so this is the size X4 actually bound.
+float *obj_slot_host_ptr(const Tracking::ObjSlot &s) {
+    auto b = g_track.buf_binding.find(s.buffer);
+    if (b == g_track.buf_binding.end())
+        return nullptr;
+    auto m = g_track.mapped.find(b->second.memory);
+    if (m == g_track.mapped.end() || !m->second.ptr)
+        return nullptr;
+    const VkDeviceSize abs = b->second.offset + s.offset;
+    if (abs < m->second.offset)
+        return nullptr;
+    const VkDeviceSize rel = abs - m->second.offset;
+    // The cascade sits at float 48..79, so the slot must reach at least that
+    // far. Checked against the range AND the mapping, because either being
+    // short is a reason not to read.
+    const VkDeviceSize need = (x4vr::kObjShadowCSM1 + 16) * sizeof(float);
+    if (s.range < need)
+        return nullptr;
+    if (m->second.size != VK_WHOLE_SIZE && rel + need > m->second.size)
+        return nullptr;
+    return (float *)((uint8_t *)m->second.ptr + rel);
+}
+
 float *slot_host_ptr(const ViewSlot &s) {
     auto b = g_track.buf_binding.find(s.buffer);
     if (b == g_track.buf_binding.end())
@@ -1118,6 +1197,16 @@ void credit_draw(VkCommandBuffer cb) {
         masked = m != g_cb_mask.end() && m->second;
     }
     std::lock_guard<std::mutex> lock(g_track.mu);
+    // Task #56. Credited on the same draws as the camera slots, so "the object
+    // block this frame drew through most" means the same thing as it does for
+    // the camera -- and so the two counts are comparable rather than sampled
+    // at different moments.
+    if (want) {
+        auto ob = g_track.obj_bound.find(cb);
+        if (ob != g_track.obj_bound.end())
+            for (const Tracking::ObjSlot &s : ob->second)
+                g_track.obj_credit[s]++;
+    }
     auto it = g_track.bound.find(cb);
     if (it == g_track.bound.end())
         return;
@@ -1241,6 +1330,10 @@ void frame_flush() {
                  g_track.credit.size(), (unsigned long long)bufsize);
     }
     g_track.credit.clear();
+    // Task #56: same lifetime as `credit`, and for the same reason --
+    // an object slot's draw count that outlived its frame would make a
+    // stale block win the pick.
+    g_track.obj_credit.clear();
     // Cleared together, always. These two are read as a pair -- "N draws, M of
     // them per-eye" -- and a masked count that outlived its own frame's total
     // would report more masked draws than draws.
@@ -1794,6 +1887,22 @@ VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSets(
             continue;
         for (uint32_t j = 0; j < w.descriptorCount; j++) {
             const VkDescriptorBufferInfo &bi = w.pBufferInfo[j];
+            // Task #56: every UBO slot, whatever its range, kept only when
+            // the instrument is on. vkUpdateDescriptorSets is rare compared
+            // with draws, so this costs nothing per frame -- unlike the bind
+            // hook, which is per draw and stays filtered.
+            if (want_matrices() && bi.range != kViewBlockRange &&
+                bi.range != VK_WHOLE_SIZE) {
+                auto &os = g_track.obj_sets[w.dstSet];
+                Tracking::ObjSlot o{bi.buffer, bi.offset, bi.range};
+                bool odup = false;
+                for (auto &e : os)
+                    if (e.buffer == o.buffer && e.offset == o.offset &&
+                        e.range == o.range)
+                        odup = true;
+                if (!odup && os.size() < 4096)
+                    os.push_back(o);
+            }
             if (bi.range != kViewBlockRange)
                 continue;
             auto &slots = g_track.sets[w.dstSet];
@@ -1829,6 +1938,28 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindDescriptorSets(
         return e ? (uint32_t)atoi(e) : 1u;
     }();
     std::lock_guard<std::mutex> lock(g_track.mu);
+    // Task #56: the object block, at a DIFFERENT set index and a different
+    // range. Gated on the instrument, because this hook runs per draw and the
+    // camera path above is the only thing every run should pay for.
+    if (want_matrices()) {
+        auto &ob = g_track.obj_bound[cb];
+        for (uint32_t i = 0; i < setCount; i++) {
+            if (firstSet + i != kObjectSet)
+                continue;
+            auto it = g_track.obj_sets.find(sets[i]);
+            if (it == g_track.obj_sets.end())
+                continue;
+            for (const Tracking::ObjSlot &s : it->second) {
+                g_track.obj_ranges[{firstSet + i, s.range}]++;
+                bool dup = false;
+                for (auto &e : ob)
+                    if (e.buffer == s.buffer && e.offset == s.offset)
+                        dup = true;
+                if (!dup && ob.size() < 4096)
+                    ob.push_back(s);
+            }
+        }
+    }
     auto &bound = g_track.bound[cb];
     for (uint32_t i = 0; i < setCount; i++) {
         if (firstSet + i != view_set)
@@ -4177,8 +4308,8 @@ constexpr uint32_t kCameraProjMember = 1;
 // dumps and by shape in patch_vertex_eye_offset_mvp, which refuses unless the
 // member really is a mat4. Not env-configurable, for the reason above: a knob
 // here would let someone force a wrong buffer past that check.
-constexpr uint32_t kObjectSet = 3;
-constexpr uint32_t kObjectBinding = 0;
+// (kObjectSet / kObjectBinding hoisted to the top of the file for #56:
+//  the per-draw bind hook needs them and sits far above here.)
 constexpr uint32_t kObjectMvpMember = 0;
 // M_prevworldviewprojection, read from a dumped module's own OpMemberName
 // rather than counted along X4's GLSL: member 0 M_worldviewprojection,
@@ -6287,6 +6418,80 @@ void patch_view_before_submit() {
         if (cams.find(*best) == cams.end() && cams.size() < 256)
             cams.emplace(*best, ProjState{}).first->second.id = next_id++;
 
+        // ---- task #56: the object block's cascade, once per report --------
+        //
+        // Picked before the camera loop so every camera reports the same
+        // cascade, which is what X4's own shaders see: the CSM is light-space
+        // and global, while the object block that carries it is per-draw.
+        //
+        // `obj_spread` is the guard against exactly the assumption this could
+        // otherwise smuggle in -- that any object slot speaks for all of them.
+        // It counts distinct |row0| values across the frame's slots, and >1 is
+        // reported rather than averaged, because averaging cascades from
+        // different objects would be a number with no referent.
+        const float *obj_blk = nullptr;
+        uint32_t obj_spread = 0, obj_slots = 0;
+        VkDeviceSize obj_range = 0;
+        {
+            uint32_t best_n = 0;
+            std::vector<float> scales;
+            for (auto &[oslot, on] : g_track.obj_credit) {
+                float *p = obj_slot_host_ptr(oslot);
+                if (!p)
+                    continue;
+                obj_slots++;
+                const x4vr::Mat4 c =
+                    x4vr::load(p + x4vr::kObjShadowCSM0);
+                const float s = std::sqrt(c.m[0] * c.m[0] + c.m[4] * c.m[4] +
+                                          c.m[8] * c.m[8]);
+                if (s > 1e-12f) {
+                    bool seen = false;
+                    for (float v : scales)
+                        if (std::fabs(v - s) <= 1e-4f * std::fmax(1.0f, v))
+                            seen = true;
+                    if (!seen && scales.size() < 64)
+                        scales.push_back(s);
+                }
+                if (on > best_n) {
+                    best_n = on;
+                    obj_blk = p;
+                    obj_range = oslot.range;
+                }
+            }
+            obj_spread = (uint32_t)scales.size();
+        }
+        if (want_matrices()) {
+            static bool obj_logged = false;
+            if (!obj_logged && (obj_slots || !g_track.obj_ranges.empty())) {
+                obj_logged = true;
+                // The observed (set, range) inventory. The camera block proves
+                // range is not the struct size -- its last member is at byte
+                // 1556 and X4 binds 1792 -- so this is recorded rather than
+                // predicted, and the next run can assert it.
+                std::string inv;
+                for (auto &[k, n] : g_track.obj_ranges) {
+                    char b[64];
+                    snprintf(b, sizeof(b), "%sset%u/range%llu x%u",
+                             inv.empty() ? "" : ", ", k.first,
+                             (unsigned long long)k.second, n);
+                    inv += b;
+                }
+                X4VR_LOG("proj OBJBLOCK: %u slot(s) readable, winner range=%llu"
+                         ", %u distinct cascade scale(s) this frame. "
+                         "Bound ranges seen: %s",
+                         obj_slots, (unsigned long long)obj_range, obj_spread,
+                         inv.empty() ? "(none)" : inv.c_str());
+                if (obj_spread > 1)
+                    X4VR_LOG("proj OBJBLOCK: WARNING -- %u distinct cascade "
+                             "scales across the object slots. The CSM is "
+                             "light-space and should be identical in every "
+                             "one, so either X4 varies it per draw or the "
+                             "slot walk is reading the wrong member. Do NOT "
+                             "read the numbers below as one cascade",
+                             obj_spread);
+            }
+        }
+
         for (auto &[slot, slot_n] : g_track.credit) {
         // No draw-count bar here, deliberately. The first version of this loop
         // kept the winner's >=50 test and take 157 still missed the 2.21
@@ -6519,7 +6724,20 @@ void patch_view_before_submit() {
         // which is why the raw scale is printed beside the derived
         // metres-per-texel: if the derivation's convention is wrong the ratio
         // still answers, and the two hypotheses differ by ~4.7x.
-        const x4vr::ShadowTerms st = x4vr::read_shadow_terms(cblk, major);
+        // Task #56: the LIVE cascade, from the object block. One source for
+        // the whole report -- the object block is per-DRAW, so there are many
+        // instances, and the most-credited one is picked by the same rule the
+        // camera uses. Whether X4 writes the same cascade into all of them is
+        // NOT assumed: obj_spread below counts how many distinct scales the
+        // frame's object slots carry, and a spread >1 is reported rather than
+        // averaged away.
+        const float *ocsm0 = nullptr, *ocsm1 = nullptr;
+        if (obj_blk) {
+            ocsm0 = obj_blk + x4vr::kObjShadowCSM0;
+            ocsm1 = obj_blk + x4vr::kObjShadowCSM1;
+        }
+        const x4vr::ShadowTerms st =
+            x4vr::read_shadow_terms(cblk, major, ocsm0, ocsm1);
         if (st.ok) {
             const bool sfirst = !c.shadow_seen;
             const bool smoved =

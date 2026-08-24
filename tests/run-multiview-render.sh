@@ -1872,6 +1872,19 @@ view_arena_case() {
             "shadow: no span without a source"
         fails=$((fails + 1))
     fi
+    # The fixture POISONS camera-block members 9/10 with 0.009 (a 111 m
+    # cascade, produced by nothing else here). They used to hold 0.002 -- the
+    # same value the object block now carries -- so reading the wrong member
+    # gave exactly the right answer and this case passed for as long as it
+    # existed. If the layer ever reads member 9 again, the number names itself.
+    if ! grep -aqE 'csm0-scale=0\.009|spans 111' <<<"$out"; then
+        printf 'ok   %-38s dead member 9 is not read\n' \
+            "shadow: the poison is not reported"
+    else
+        printf 'FAIL %-38s reported 0.009/111 m — that is camera member 9\n' \
+            "shadow: the poison is not reported"
+        fails=$((fails + 1))
+    fi
 }
 view_arena_case
 
@@ -1949,6 +1962,82 @@ pose_excluded_case() {
     fi
 }
 pose_excluded_case
+
+# ---- task #56: the OBJECT block, at set 3 and a non-1792 range ------------
+#
+# The layer's camera tracking filters descriptor writes on range == 1792, so a
+# block of any other size is invisible to it at EVERY set index -- which is why
+# X4VR_VIEW_SET=3 was never going to work. The object path records whatever
+# range the write declares and bounds its read by that.
+#
+# The fixture binds 576 deliberately: if it were 1792 the slot would ride the
+# camera path and this would prove nothing.
+objblock_case() {
+    local log out
+    log="$(mktemp)"
+    out=$(env VK_ADD_LAYER_PATH="$BUILD/layer" \
+        VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+        X4VR_MV=1 X4VR_TEST_VIEW_ARENA=1 X4VR_TEST_OBJ_BLOCK=1 \
+        X4VR_DUMP_MATRICES=1 X4VR_LOG="$log" timeout 120 "$BIN" 2>&1)
+    local logtext; logtext=$(cat "$log"); rm -f "$log"
+    # The live member: 0.002 at object member 3, 0.0005 at member 4.
+    if grep -aq 'csm0-scale=0.002 csm1-scale=0.0005' <<<"$logtext"; then
+        printf 'ok   %-38s member 3 read, member 4 too\n' \
+            "objblock: the live cascade is measured"
+    else
+        printf 'FAIL %-38s want csm0=0.002 csm1=0.0005\n' \
+            "objblock: the live cascade is measured"
+        grep -a 'proj SHADOW' <<<"$logtext" | sed 's/^/       | /' | head -2
+        fails=$((fails + 1))
+    fi
+    # ...and the arithmetic the old layer case used to assert, now over the
+    # member X4 actually samples.
+    if grep -aq 'cascade 0 spans 500.0 m across 1024 texels -> 0.4883' <<<"$logtext"; then
+        printf 'ok   %-38s 500 m / 1024 texels = 0.4883 m\n' \
+            "objblock: the arithmetic survives the move"
+    else
+        printf 'FAIL %-38s expected 500.0 m / 1024 / 0.4883\n' \
+            "objblock: the arithmetic survives the move"
+        fails=$((fails + 1))
+    fi
+    # The range is RECORDED. The camera block proves range is not the struct
+    # size (last member at 1556, X4 binds 1792), so nothing predicts 576 and
+    # the run has to report what it saw.
+    if grep -aq 'set3/range576' <<<"$logtext"; then
+        printf 'ok   %-38s set3/range576, observed not assumed\n' \
+            "objblock: the bound range is recorded"
+    else
+        printf 'FAIL %-38s no set3/range576 in the inventory\n' \
+            "objblock: the bound range is recorded"
+        grep -a 'proj OBJBLOCK' <<<"$logtext" | sed 's/^/       | /' | head -2
+        fails=$((fails + 1))
+    fi
+    # The guard against the assumption this could otherwise smuggle in: that
+    # any one object slot speaks for all of them. One slot here, so exactly one
+    # distinct scale, and a spread >1 must warn rather than average.
+    if grep -aq '1 distinct cascade scale(s) this frame' <<<"$logtext" &&
+       ! grep -aq 'OBJBLOCK: WARNING' <<<"$logtext"; then
+        printf 'ok   %-38s one slot, one scale, no warning\n' \
+            "objblock: the spread guard agrees"
+    else
+        printf 'FAIL %-38s spread guard disagreed\n' \
+            "objblock: the spread guard agrees"
+        grep -a 'proj OBJBLOCK' <<<"$logtext" | sed 's/^/       | /' | head -2
+        fails=$((fails + 1))
+    fi
+    # And the poison again, from the arm that DOES measure: proving the number
+    # came from set 3 rather than from camera member 9 happening to be right.
+    if ! grep -aqE 'csm0-scale=0\.009|spans 111' <<<"$logtext"; then
+        printf 'ok   %-38s and still not from member 9\n' \
+            "objblock: measured from set 3, not the camera"
+    else
+        printf 'FAIL %-38s the value came from the poisoned dead member\n' \
+            "objblock: measured from set 3, not the camera"
+        fails=$((fails + 1))
+    fi
+}
+objblock_case
+
 
 # With the channel unset, none of it exists: no patch, no set, no line.
 pose_off_case() {

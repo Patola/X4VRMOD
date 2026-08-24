@@ -36,6 +36,9 @@ static std::vector<uint32_t> load_spv(const char *path) {
     return v;
 }
 
+// X4's per-object block, the one that carries the live shadow cascade.
+static constexpr uint32_t kObjectSetIdx = 3;
+
 int main(int argc, char **argv) {
     const char *vs_path = argc > 1 ? argv[1] : "tests/fullscreen.vert.spv";
     const char *fs_path = argc > 2 ? argv[2] : "tests/solid.frag.spv";
@@ -777,7 +780,22 @@ int main(int argc, char **argv) {
     // default path is byte-identical to before, because this file pins about a
     // hundred assertions that have nothing to do with #53.
     const bool view_arena = getenv("X4VR_TEST_VIEW_ARENA") != nullptr;
+    // X4VR_TEST_OBJ_BLOCK -- task #56's OBJECT block, at set 3.
+    //
+    // The cascade the shaders actually sample is M_shadowCSM0, member 3 of the
+    // WORLD/object block at set 3 binding 0 (189 of the dumped modules read
+    // it). The camera block's M_shadowCSM0Clip at member 9 is declared by 370
+    // and read by ZERO, and the layer used to report it -- which is why takes
+    // 197 and 201, identical runs, disagreed.
+    //
+    // Requires the arena, because the shadow SCALARS are genuinely camera-block
+    // members and are still read from there.
+    const bool obj_block =
+        view_arena && getenv("X4VR_TEST_OBJ_BLOCK") != nullptr;
     VkDescriptorSetLayout vdsl = VK_NULL_HANDLE;
+    VkBuffer objbuf = VK_NULL_HANDLE;
+    VkDeviceMemory objmem = VK_NULL_HANDLE;
+    VkDescriptorSet objset = VK_NULL_HANDLE;
     if (view_arena) {
         VkDescriptorSetLayoutBinding vb{};
         vb.binding = 0;
@@ -796,10 +814,10 @@ int main(int argc, char **argv) {
     dps[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     dps[0].descriptorCount = kSlots;
     dps[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    dps[1].descriptorCount = 2;
+    dps[1].descriptorCount = obj_block ? 3 : 2;
     VkDescriptorPoolCreateInfo dpci{};
     dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    dpci.maxSets = view_arena ? 3 : 1;
+    dpci.maxSets = obj_block ? 4 : (view_arena ? 3 : 1);
     dpci.poolSizeCount = view_arena ? 2 : 1;
     dpci.pPoolSizes = dps;
     VkDescriptorPool dpool;
@@ -925,13 +943,22 @@ int main(int argc, char **argv) {
             //   2048 texels * factor 0.5 = 1024 across that span
             //   -> 1 / (0.002 * 2048 * 0.5) = 0.48828 m per texel
             if (b == 0) {
-                blk[144 + 0] = 0.002f;   // M_shadowCSM0Clip row 0, col-major
-                blk[144 + 5] = 0.002f;
-                blk[144 + 10] = 0.002f;
+                // **POISON, since take 201.** These are members 9 and 10 --
+                // M_shadowCSM0Clip / M_shadowCSM1Clip -- which 370 dumped
+                // modules declare and ZERO sample. The layer must NOT read
+                // them. They used to hold 0.002 here, so a report that read
+                // the wrong member produced exactly the right answer and the
+                // case passed: a green test on a dead member.
+                //
+                // 0.009 spans 111 m, nothing else in this fixture produces
+                // that, so a regression names itself in the failure text.
+                blk[144 + 0] = 0.009f;
+                blk[144 + 5] = 0.009f;
+                blk[144 + 10] = 0.009f;
                 blk[144 + 15] = 1.0f;
-                blk[160 + 0] = 0.0005f;  // M_shadowCSM1Clip, a wider cascade
-                blk[160 + 5] = 0.0005f;
-                blk[160 + 10] = 0.0005f;
+                blk[160 + 0] = 0.009f;
+                blk[160 + 5] = 0.009f;
+                blk[160 + 10] = 0.009f;
                 blk[160 + 15] = 1.0f;
                 blk[232] = 30.0f;        // V_csmthresholds
                 blk[233] = 120.0f;
@@ -965,6 +992,76 @@ int main(int argc, char **argv) {
             vw[b].pBufferInfo = &vbi[b];
         }
         vkUpdateDescriptorSets(dev, 2, vw, 0, nullptr);
+
+        // ---- task #56: the OBJECT block at set 3 -----------------------
+        //
+        // A DIFFERENT buffer at a DIFFERENT range. 576 rather than 1792 is
+        // the point: the layer's camera tracking filters on range == 1792, so
+        // a block of any other size is invisible to it, and the object path
+        // has to record whatever range the descriptor declares. If this were
+        // 1792 the case would pass through the camera path and prove nothing.
+        if (obj_block) {
+            VkBufferCreateInfo objbci{};
+            objbci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            objbci.size = 1024;
+            objbci.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+            objbci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            CHECK(vkCreateBuffer(dev, &objbci, nullptr, &objbuf));
+            VkMemoryRequirements objmr{};
+            vkGetBufferMemoryRequirements(dev, objbuf, &objmr);
+            VkPhysicalDeviceMemoryProperties objmp{};
+            vkGetPhysicalDeviceMemoryProperties(phys[0], &objmp);
+            uint32_t objmt = UINT32_MAX;
+            for (uint32_t i = 0; i < objmp.memoryTypeCount; i++) {
+                const VkMemoryPropertyFlags w =
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                    VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+                if ((objmr.memoryTypeBits & (1u << i)) &&
+                    (objmp.memoryTypes[i].propertyFlags & w) == w) { objmt = i; break; }
+            }
+            if (objmt == UINT32_MAX) { printf("FAIL=no_host_visible_obj:0\n"); return 1; }
+            VkMemoryAllocateInfo objmai{};
+            objmai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            objmai.allocationSize = objmr.size;
+            objmai.memoryTypeIndex = objmt;
+            CHECK(vkAllocateMemory(dev, &objmai, nullptr, &objmem));
+            CHECK(vkBindBufferMemory(dev, objbuf, objmem, 0));
+            void *objp = nullptr;
+            CHECK(vkMapMemory(dev, objmem, 0, VK_WHOLE_SIZE, 0, &objp));
+            float *objb = (float *)objp;
+            memset(objb, 0, 1024);
+            // The LIVE cascade, at member 3 = float 48. The same numbers the
+            // camera block used to carry, so the arithmetic the old case
+            // asserted is reproduced here -- from the member X4 actually
+            // samples. |row0| = 0.002 spans 500 m; 2048 texels at factor 0.5
+            // is 1024 across it; 0.48828 m per texel.
+            objb[48 + 0] = 0.002f;
+            objb[48 + 5] = 0.002f;
+            objb[48 + 10] = 0.002f;
+            objb[48 + 15] = 1.0f;
+            objb[64 + 0] = 0.0005f;   // member 4, a wider cascade
+            objb[64 + 5] = 0.0005f;
+            objb[64 + 10] = 0.0005f;
+            objb[64 + 15] = 1.0f;
+            VkDescriptorSetAllocateInfo objai{};
+            objai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            objai.descriptorPool = dpool;
+            objai.descriptorSetCount = 1;
+            objai.pSetLayouts = &vdsl;
+            CHECK(vkAllocateDescriptorSets(dev, &objai, &objset));
+            VkDescriptorBufferInfo objbi{};
+            objbi.buffer = objbuf;
+            objbi.offset = 0;
+            objbi.range = 576;
+            VkWriteDescriptorSet objw{};
+            objw.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            objw.dstSet = objset;
+            objw.dstBinding = 0;
+            objw.descriptorCount = 1;
+            objw.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            objw.pBufferInfo = &objbi;
+            vkUpdateDescriptorSets(dev, 1, &objw, 0, nullptr);
+        }
     }
 
     // X4VR_TEST_PAD_SETS reproduces the SHAPE of X4's real pipeline layout,
@@ -984,13 +1081,22 @@ int main(int argc, char **argv) {
     VkDescriptorSetLayout sl2[16] = {dsl, vdsl};
     const uint32_t base2 = view_arena ? 2u : 1u;
     uint32_t count2 = base2;
-    if (pad > base2) {
+    // Task #56: reach set 3 with a REAL uniform layout there. PAD_SETS fills
+    // the gap with EMPTY layouts, which are fine for width but cannot take a
+    // descriptor -- so the object block needs set 2 padded and set 3 declared.
+    uint32_t want_sets = pad;
+    if (obj_block && want_sets < kObjectSetIdx + 1)
+        want_sets = kObjectSetIdx + 1;
+    const uint32_t pad_target = want_sets;
+    if (pad_target > base2) {
         VkDescriptorSetLayoutCreateInfo eci{};
         eci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         CHECK(vkCreateDescriptorSetLayout(dev, &eci, nullptr, &pad_dsl));
-        count2 = pad < 16 ? pad : 16;
+        count2 = pad_target < 16 ? pad_target : 16;
         for (uint32_t i = base2; i < count2; i++)
             sl2[i] = pad_dsl;
+        if (obj_block && kObjectSetIdx < count2)
+            sl2[kObjectSetIdx] = vdsl;
     }
     VkPipelineLayoutCreateInfo plci2{};
     plci2.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -1115,6 +1221,12 @@ int main(int argc, char **argv) {
     if (view_arena)
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pl2, 1, 1,
                                 &vset[0], 0, nullptr);
+    // Task #56: bound once, before any draw, and left bound. The object block
+    // is credited on the same draws as the camera slots, so binding it later
+    // would credit it on fewer and make the two counts incomparable.
+    if (obj_block)
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pl2,
+                                kObjectSetIdx, 1, &objset, 0, nullptr);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     if (view_arena) {
         // patch_view_before_submit() refuses unless the winning block carries
