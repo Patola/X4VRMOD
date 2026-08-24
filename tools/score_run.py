@@ -707,37 +707,23 @@ def main(path):
                         # summary would have answered a fifty-take question
                         # wrongly, which is why the requirement is now stated
                         # as three runs and as SETS.
-                        # Take 201 retired this question rather than answering
-                        # it. NO number of runs can settle #56 from this read,
-                        # because the read is of the wrong member.
+                        # Take 201 found this reading the wrong member and
+                        # the capture that followed fixed it: the layer now
+                        # takes M_shadowCSM0 from member 3 of the OBJECT block
+                        # (set 3, 189 samplers) instead of M_shadowCSM0Clip
+                        # from camera member 9 (370 declare, 0 sample).
                         #
-                        #   M_shadowCSM0      member 3, 341 declare, 189 ACCESS
-                        #   M_shadowCSM0Clip  member 9, 370 declare,   0 access
-                        #
-                        # They are in DIFFERENT blocks -- 99 modules declare
-                        # both and none shares a struct -- and ShadowTerms
-                        # reads the second. X4 has no reason to keep a member
-                        # nothing samples up to date, so what comes back is
-                        # whatever the buffer held.
-                        #
-                        # The evidence, all four takes at hand: 197 and 201 are
-                        # the SAME configuration and the same binary and give
-                        # different sets; 199 (yaw 0) and 201 (yaw 20) give
-                        # IDENTICAL sets, so yaw is not the driver either; and
-                        # 199 and 201 report 1.2 m and 1.3 m from that one
-                        # identical set, so the summary is not even a function
-                        # of the numbers above it.
-                        #
-                        # `populated` guards the all-zero case. It cannot guard
-                        # plausible stale data, which is what this is.
-                        print(f"        #56 CANNOT be answered from this line "
-                              f"— it reads M_shadowCSM0Clip (member 9), which "
-                              f"370 modules declare and ZERO sample; the live "
-                              f"matrix is M_shadowCSM0 (member 3, 189 "
-                              f"samplers) in a different block. Takes 197 and "
-                              f"201 are identical runs and disagree. Do not "
-                              f"spend another take on it: point ShadowTerms at "
-                              f"member 3 first.")
+                        # This message said "CANNOT be answered" until the
+                        # capture landed. Leaving it would have been the same
+                        # failure the whole investigation kept hitting: a
+                        # sentence describing behaviour the code no longer has.
+                        print(f"        #56 is measurable now (the cascade "
+                              f"comes from object-block member 3). It still "
+                              f"needs THREE runs: two at one X4VR_FOV with yaw "
+                              f"held, for the run-to-run spread, and one at "
+                              f"another field. Compare the SETS. Takes "
+                              f"197/199/200/201 measured the DEAD member and "
+                              f"cannot be reused.")
                     else:
                         print("        cascade extent NOT measured — "
                               "M_shadowCSM0Clip read back as zeros, which no "
@@ -1699,6 +1685,38 @@ def main(path):
                 f"the live-sx path and the affine while being screen-space "
                 f"triangles, so nothing measured in this run about geometry is "
                 f"evidence")
+
+    # --- did the cascade come from the block X4's shaders sample? -----------
+    #
+    # The layer prints `proj OBJBLOCK:` once it has walked the object slots.
+    # Its absence in a run that asked for matrices means the build predates the
+    # capture, and then every csm number above came from camera member 9 --
+    # which 370 dumped modules declare and ZERO sample.
+    #
+    # `spread` is the guard that matters: the object block is per-DRAW, so if
+    # its slots disagree about the cascade then no single one speaks for the
+    # frame and the numbers have no referent. The layer warns; this fails.
+    ob = [ln for ln in lines if "proj OBJBLOCK:" in ln]
+    if not ob:
+        if "X4VR_DUMP_MATRICES=1" in (run or ""):
+            print("objblock      no `proj OBJBLOCK` line — this build predates "
+                  "the object-block capture, so any csm number above came from "
+                  "the dead camera member and is not evidence")
+    else:
+        tail = ob[0].split("proj OBJBLOCK:", 1)[1].strip()
+        print(f"objblock      {tail[:150]}")
+        m = re.search(r"(\d+) distinct cascade scale", ob[0])
+        spread = int(m.group(1)) if m else -1
+        if any("OBJBLOCK: WARNING" in ln for ln in lines) or spread > 1:
+            fails.append(
+                f"the frame's object slots carry {spread} distinct cascade "
+                f"scales. The CSM is light-space and should be identical in "
+                f"every slot, so either X4 varies it per draw or the slot walk "
+                f"reads the wrong member — either way no single slot speaks "
+                f"for the frame and the csm numbers above have no referent")
+        elif spread == 0:
+            print("objblock      spread 0 — no slot carried a nonzero cascade, "
+                  "so the scales above are unmeasured rather than measured")
 
     # --- which VARIANT the no-depth passes actually bind --------------------
     #

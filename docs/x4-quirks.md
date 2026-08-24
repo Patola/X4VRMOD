@@ -8220,7 +8220,93 @@ names it by value: `reported 0.009/111 m — that is camera member 9`.
 **#56 is answerable by measurement now** rather than blocked on the instrument.
 It still wants the three runs: two at one field for the spread, one at another.
 
-# RESUME HERE AFTER A COMPACT — state as of take 201
+# RESUME HERE AFTER A COMPACT — state as of take 202
+
+Everything below supersedes earlier "read this first" banners.
+
+## Where the project is
+
+* **The x=791 seam is SETTLED** — tagged `stage18-seam-laws-confirmed`. It is
+  **geometry, not a defective transform**: the guard edge
+  `(sx·sinθ − cosθ)/(cosθ + sinθ/sx)` and the bisector `sx·tan(θ/2)`, both
+  confirmed to **0.1 px** against two independent variables (θ in take 199,
+  `sx` in take 200, which moved the two edges in *opposite* directions).
+  **Nine transform hypotheses died and none was the cause.** Do not reopen it;
+  closing the band is a DESIGN question (render wider, or accept it).
+* **#33's rotation is confirmed** and the classify fix is in
+  (`stage17-classify-x4s-bytes`). Still not built: the runtime head-pose
+  source — the rotation is a static `X4VR_POSE_YAW`.
+* **The object-block capture is in.** `read_shadow_terms` now takes the cascade
+  X4's shaders sample: `M_shadowCSM0`, member 3 of the object block (set 3,
+  189 samplers), not `M_shadowCSM0Clip` at camera member 9 (370 declare,
+  **0 sample**).
+
+## THE RUN IN FLIGHT — take 202, first of three for #56
+
+    X4VR_POSE_ROTATE=1 X4VR_TAKE=202-CSM-A1 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_SHEAR_LIGHTS=1 X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_POSE_YAW=20 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take202.log X4VR_PIPE_INVENTORY=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_MV_INVENTORY=1 ./launch/x4vr-launch.sh
+
+Load, let the fade-in finish, screenshot `/tmp/x4-202.png`, quit. No flying, no
+zoom, no `M`. Derived from take 201 — only `X4VR_TAKE` and `X4VR_LOG` differ.
+
+**#56 needs THREE runs and this is one of them:**
+
+| | take | fov | yaw | purpose |
+|---|---|---|---|---|
+| 1 | **202** | 1.4917 | 20 | field A, sample 1 |
+| 2 | 203 | 1.4917 | 20 | **identical repeat** → the run-to-run spread |
+| 3 | 204 | 1.75 | 20 | field B |
+
+Two at one field first, because takes 197 and 201 were identical runs that
+disagreed — on the dead member, but the spread has never been measured on the
+live one either.
+
+### How to read take 202's result
+
+Run `python3 tools/score_run.py /tmp/x4vr-take202.log` and read, in order:
+
+1. **`objblock`** — must be present. Its absence means the build predates the
+   capture and every csm number is from the dead member. **A spread > 1 is a
+   FAIL**: the object block is per-draw, so if its slots disagree no single one
+   speaks for the frame. Check this *before* looking at any cascade number.
+2. **`csm0 scale (NDC per metre)`** — the SET, not the summary. Take 201 showed
+   `spans` is not even a function of the set.
+3. The standing gates: `classify … 0 of them also reported World`, the `sx` set
+   `0.70024 / 1.33333 / 1.00000 / 3.78085`, `pose-channel … OK`.
+
+**Takes 197/199/200/201 cannot be reused for #56** — all four measured
+`M_shadowCSM0Clip`, which nothing samples.
+
+### What #56 asks
+
+Does widening `<fov>` coarsen the shadows? Fitted-to-frustum spreads the same
+texel budget over a wider world and the cascade span **grows with the field**;
+fixed-extent leaves it alone. The atlas itself does not grow — every stored run
+says 10 maps of 2048² D16 regardless of field.
+
+## Measuring the seam from a screenshot, if it ever comes up again
+
+Count the **fraction of rows** carrying a sign-consistent column-to-column
+step. **Do not use the median over rows** — that needs the seam to span >50% of
+the height and returned a false ABSENT on takes 198b/198c when a station
+covered part of the view. Compare guard-to-seam **separation**, never absolute
+x: the PNGs differ in height between sessions and content cross-correlation
+gave three different offsets.
+
+## The two patterns that dominated this stretch
+
+**Every instrument recorded a different event than the question asked** —
+eleven instances, ending with `read_shadow_terms` reading a member nothing
+samples. Before trusting one, ask which event it records.
+
+**A comment describing behaviour the code no longer has is active
+misinformation**, worse than no comment, because it answers the question and
+stops the search. Three of them cost take 196. When a comment or log line
+answers your question, go find the code that produces the thing it describes.
+
+**And a green case is worth nothing until seen to fail.** The shadow fixture
+held the same 0.002 in the dead member that the live one carries, so reading
+the wrong member gave the right answer and the case passed for as long as it
+existed. It is poisoned to 0.009 now.
 
 Everything below this line supersedes earlier "read this first" banners.
 
