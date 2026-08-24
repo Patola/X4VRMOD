@@ -7960,7 +7960,68 @@ guard edge at −1. If both edges vanish, the seam is rotation-geometry and the
 extent hypothesis is live; if an edge survives at θ=0, it is the widened FOV
 alone and the rotation is not involved.
 
-# RESUME HERE AFTER A COMPACT — state as of take 198
+## Take 199: the seam needs the rotation — the widened FOV alone does not make it
+
+`X4VR_POSE_YAW=0` with `X4VR_POSE_ROTATE=1`. Never run before: takes 187–198
+all used 10 or 20. Scorer PASS, `sx` set unchanged, `classify` still 0.
+
+Checked before the run, so the take could not silently become
+`POSE_ROTATE=0`: `pose_rotate()` reads only `X4VR_POSE_ROTATE`, so every module
+is still patched and the set still bound; the yaw block is guarded by
+`if (yaw != 0 || pitch != 0 || roll != 0)`, so the value stays
+`pose_identity()`. **The whole #33 machinery ran and computed identity.**
+
+| frame | yaw | x=359 | x=791 | background |
+|---|---|---|---|---|
+| 198a | 20 | 58.5% of rows (1 column beats it) | **62.7% (0 beat it — strongest in frame)** | med 11.5%, p95 16.9% |
+| 199 | **0** | **6.8% (1181 columns beat it)** | **12.2% (399 beat it)** | med 10.6%, p95 16.0% |
+
+At θ=0 both predicted columns fall **to or below background** — x=359 is below
+the median of all columns. Not weaker: indistinguishable from ordinary scene
+texture. The frame's strongest edge is at x=613, which is scene content.
+
+**`X4VR_FOV=1.4917` was on throughout.** The widened field was fully in effect
+and produced no seam. **So the widened FOV alone is not the cause — the seam
+requires a non-zero rotation.**
+
+**The confound, which Patola named himself:** at yaw=0 the seam and the
+rotation vanish *together*, so this take alone cannot separate "the rotation's
+value causes it" from "anything that co-varies with a non-zero rotation". What
+narrows it is the sx-dependence, and that is the next take.
+
+### A gap in the record worth naming
+
+**Every take from 186b to 199 — fourteen runs — used `X4VR_FOV=1.4917`.** So
+the law's "verified over three `sx` values" came from the *several cameras
+inside one frame*, never from moving the knob. The knob has not been varied
+once during the entire seam investigation.
+
+### PREDICTIONS for the next take, committed before it runs
+
+`X4VR_FOV=1.75` at yaw 20. X4's `<fov>` is a linear scale on the half-angle —
+`full degrees = X4VR_FOV × 73.7399`, the layer's own law at
+x4vr_layer.cpp:9482, which reproduces all four of take 199's cameras — so
+`sx = 1/tan(36.87° × fov)` and fov 1.75 gives `sx = 0.4765`.
+
+| | fov 1.4917 (now) | fov 1.75 (predicted) | move |
+|---|---|---|---|
+| guard edge x | 358.8 | **374.1** | **+15.3, RIGHT** |
+| seam x | 790.9 | **763.1** | **−27.8, LEFT** |
+| separation | 432.1 | **389.1** | −43.0 |
+
+**The two edges move in OPPOSITE directions.** No capture offset, crop or
+uniform scaling can produce that, so it is a confound-proof test of both laws
+at once — and the guard formula has never been tested against a knob change at
+all.
+
+**It also answers #56**, which the scorer has printed a request for on every
+run since take 148: *"needs the SAME line from a run at a different
+X4VR_FOV"*. Fitted-to-frustum makes the cascade span grow with the field;
+fixed-extent does not. One run, two long-standing questions.
+
+The ceiling is not a risk: take 158 measured X4's `<fov>` honoured at **2.21**.
+
+# RESUME HERE AFTER A COMPACT — state as of take 199
 
 Everything below this line supersedes earlier "read this first" banners.
 
