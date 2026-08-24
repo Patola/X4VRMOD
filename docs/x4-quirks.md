@@ -8021,7 +8021,67 @@ fixed-extent does not. One run, two long-standing questions.
 
 The ceiling is not a risk: take 158 measured X4's `<fov>` honoured at **2.21**.
 
-# RESUME HERE AFTER A COMPACT — state as of take 199
+## Take 200: both laws confirmed to 0.1 px, in OPPOSITE directions
+
+`X4VR_FOV=1.75`, single-knob change from take 197. Scorer PASS. X4 honoured it
+exactly — `sx=0.47650`, `129.044°`, against 0.47650 / 129.045 predicted — and
+the other three cameras did not move, which is the control that says the field
+changed and nothing else.
+
+| | predicted | measured | error | motion from fov 1.4917 |
+|---|---|---|---|---|
+| guard edge | 374.1 | **374** (54.3% of rows) | **−0.1 px** | 359 → 374, **RIGHT** |
+| seam | 763.1 | **763** (42.8% of rows) | **−0.1 px** | 791 → 763, **LEFT** |
+
+**The two edges moved in opposite directions and converged, both landing within
+0.1 px of a prediction committed before the run.** No capture offset, crop or
+uniform scale can produce opposite motion, so this is immune to the alignment
+problems that dogged takes 195–198.
+
+**The seam is settled as geometry.** It is the widened field plus the rotation,
+nothing else:
+
+* `x = guard edge` — `(sx·sinθ − cosθ)/(cosθ + sinθ/sx)`, where the *unrotated*
+  field's edge lands after rotating by θ. Beyond it the render has nothing to
+  supply, because X4 culled it.
+* `x = seam` — `sx·tan(θ/2)`, the bisector.
+
+Both are now verified against **two independent variables**: θ (takes 187–199,
+including the θ=0 null) and `sx` via the knob (take 200). Nine hypotheses about
+a transform being wrong are dead, and none of them was ever the cause.
+
+### #56: a pair cannot answer it, and I nearly answered it wrongly
+
+The scorer has printed *"needs the SAME line from a run at a different
+X4VR_FOV"* on every run since take 148. Comparing take 197 (0.9 m, fov 1.4917)
+against take 200 (1.2 m, fov 1.75) reads as **"the span grows with the field"**.
+
+That is wrong. **Take 199 is fov 1.4917 — the same field as 197 — and reports
+1.2 m.** The whole difference appears at a *fixed* field.
+
+| take | fov | yaw | csm0 scale set | reported span |
+|---|---|---|---|---|
+| 197 | 1.4917 | 20 | 0, 1.13137, 1.1359, 1.13591 | 0.9 m |
+| 199 | 1.4917 | 0 | 0, **0.8**, 1.1359, 1.13591 | 1.2 m |
+| 200 | 1.75 | 20 | 0, **0.8**, **1.2291** | 1.2 m |
+
+199 was run to test the seam at θ=0 and happens to be the fixed-FOV control
+#56 needed. Without it, a fifty-take question would have been closed with the
+wrong answer off a summary line.
+
+**The prompt is corrected** to demand three runs — two at one field to
+establish the run-to-run spread, one at another — and to say compare the
+**sets**, not the summary. Which is what this file has said since
+[[one-number-several-cameras]] and what the scorer's own `proj` section
+already says about `sx`.
+
+**#56 stays open.** There is a hint in the sets — `1.1359x` at fov 1.4917
+becomes `1.2291` at fov 1.75, i.e. NDC-per-metre **grew**, so the cascade
+covers *fewer* metres at a wider field, which is neither "fitted to frustum"
+(shrinks) nor "fixed extent" (unchanged) — but the sets are not stable at fixed
+fov either, so that is a lead and not a result.
+
+# RESUME HERE AFTER A COMPACT — state as of take 200
 
 Everything below this line supersedes earlier "read this first" banners.
 

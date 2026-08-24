@@ -694,10 +694,26 @@ def main(path):
                         m, t, mpt = span[0]
                         print(f"        cascade 0 spans {m} m across {t} "
                               f"texels = {mpt} m per texel")
-                        print(f"        #56 needs the SAME line from a run at "
-                              f"a different X4VR_FOV. Fitted to the frustum "
-                              f"the span grows with the field; fixed extent "
-                              f"it does not. One run cannot answer it.")
+                        # Take 200 corrected this prompt. It used to say "the
+                        # SAME line from a run at a different X4VR_FOV", and a
+                        # PAIR CANNOT ANSWER IT: takes 197 and 199 have the
+                        # same X4VR_FOV=1.4917 and report 0.9 m and 1.2 m. So
+                        # 197 (0.9) against 200 (1.2, fov 1.75) would have
+                        # read as "the span grows with the field" when the
+                        # same difference appears at a FIXED field.
+                        #
+                        # 199 was run to test the seam at yaw=0 and happens to
+                        # be the fixed-FOV control #56 needed. Without it this
+                        # summary would have answered a fifty-take question
+                        # wrongly, which is why the requirement is now stated
+                        # as three runs and as SETS.
+                        print(f"        #56 needs THREE runs, not two: two at "
+                              f"the same X4VR_FOV to establish the run-to-run "
+                              f"spread, and one at a different field. Takes "
+                              f"197 and 199 are both fov 1.4917 and report "
+                              f"0.9 m and 1.2 m, so a single pair proves "
+                              f"nothing. Compare the scale SETS above, not "
+                              f"this summary.")
                     else:
                         print("        cascade extent NOT measured — "
                               "M_shadowCSM0Clip read back as zeros, which no "
