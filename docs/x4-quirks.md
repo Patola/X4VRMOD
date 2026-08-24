@@ -7891,7 +7891,76 @@ one a procedural fullscreen quad, rp #31's and #32's among them. Live since
 take 195 only. Fixed, with a fixture and a paired case; **not yet validated in
 game.**
 
-# RESUME HERE AFTER A COMPACT — state as of take 197 (validated)
+## Take 198: the seam is independent of the light — the god-ray path is dead
+
+Interaction take, keyboard only, rotating in place. Three sun directions, one
+run, scorer PASS and the `sx` set unchanged.
+
+| frame | sun | x=359 (guard) | x=791 (seam) | separation |
+|---|---|---|---|---|
+| 198a | off-screen (load) | +11 on 58.5% of rows | −8 on 62.7% | **432 px** |
+| 198b | **ON SCREEN** | +4 on 30.2% | −12 on 35.8% | **432 px** |
+| 198c | behind | +6 on 27.2% | −5 on 12.5% | **432 px** |
+
+**Both edges sit at exactly the same two columns in all three.** The contrast
+varies — it is a lighting discontinuity, so it tracks scene brightness — but
+the position does not move at all.
+
+`depth_godrays_pass` derives its march from `mat3(M_view)·V_direction1`, so a
+god-ray artifact MUST move with the sun. It does not. **Hypothesis dead**, and
+the law's independence from the light is now measured rather than assumed:
+`seam NDC = sx·tan(θ/2)` holds across three very different scenes (46–50% of
+pixels differ between frames) at one `sx` and one `θ`.
+
+### Two instruments were wrong before Patola's eye was
+
+He said *"the seam never turned invisible or moved relative to the screen."*
+
+1. **My edge detector reported NOTHING in 198b and 198c.** It ranked columns by
+   the *median* signed step over all rows — which requires the seam to span
+   **more than half the height**. That held in 195/196/197, framed on open space
+   through the canopy; point the ship elsewhere and a station or planet covers
+   part of the frame, the seam spans 30% of rows, and a median reports zero.
+   Counting the *fraction* of rows carrying a sign-consistent step finds it
+   immediately. **An instrument encoding an assumption that held in every frame
+   it was built on.**
+2. **My "control" could not see the variable.** I used the scorer's `view`
+   angles to confirm the camera had rotated. It could not: `X4VR_DUMP_MATRICES`
+   caps itself at **8 reports per camera**, all of which fire at load —
+   `proj VIEW: cam#N reached 8 reports — further M_view changes from THIS
+   camera suppressed`. The whole flying sequence is invisible to it, and 197's
+   and 198's angle sets look nearly identical *because both are just the load*.
+   The control had to come from the images instead: 46–50% of pixels differ
+   between the three frames.
+
+**Neither was a close call, and his eye was right about both.** Consult the
+channel you called decisive — [[consult-the-channel-you-called-decisive]].
+
+### What this leaves, and it is a different SHAPE of hypothesis
+
+Every remaining candidate has been about a **transform being wrong**. All are
+dead. What survives is a seam that is a pure function of `sx` and `θ` and of
+nothing else — not the light, not the scene, not the dispatch, not the
+reconstruction.
+
+`x=359` is the **guard-band edge**, predicted by
+`(sx·sinθ − cosθ)/(cosθ + sinθ/sx)`. `x=791` is the **bisector**, `sx·tan(θ/2)`.
+Both are properties of the widened-field geometry #33 introduces.
+
+So the next hypothesis class is **extent, not transform**: a pass whose
+viewport, scissor, or buffer size still describes the *unwidened* field, so its
+valid region ends where the original field ended. That would be a pure function
+of `sx` and `θ`, independent of light and scene — which is exactly what has now
+been measured.
+
+**The cheapest test, and it has never been run:** every take from 187 to 198
+used `X4VR_POSE_YAW=10` or `20`. **`X4VR_POSE_YAW=0` with `X4VR_POSE_ROTATE=1`
+has never been run at all.** At θ=0 the law puts the seam at NDC 0 and the
+guard edge at −1. If both edges vanish, the seam is rotation-geometry and the
+extent hypothesis is live; if an edge survives at θ=0, it is the widened FOV
+alone and the rotation is not involved.
+
+# RESUME HERE AFTER A COMPACT — state as of take 198
 
 Everything below this line supersedes earlier "read this first" banners.
 
