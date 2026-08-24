@@ -7999,22 +7999,24 @@ seam did not move** — edges at 360 and 792, separation 432 px against the law'
 432.1, byte-identical to take 195 — which was the prediction, and which also
 retires take 196's +4.9 px as `X4VR_SHEAR_NODEPTH`'s perturbation.
 
-**The seam's one live candidate is the god-ray march** — see "The three
-unaccounted items, read" above. `depth_godrays_pass` differences a
-round-tripped re-projection against the fragment's own UV, mixing the unrotated
-and rotated frames, and marches on the result with a hard
-`if (IsOutsideUV(uv.xy)) break`. It is compiled in at rp #31.
+**Run `X4VR_POSE_YAW=0` with `X4VR_POSE_ROTATE=1`.** It has never been run —
+every take from 187 to 198 used yaw 10 or 20 — and it is the cheapest
+discriminator left, using only knobs that already exist.
 
-**But the law argues against it, and that is why the next step is free.**
-`sx·tan(θ/2)` has no light-direction term; a god-ray artifact must have one.
-Every stored take is the same savegame at the same instant, so the data cannot
-separate them.
+**Why now:** take 198 killed the last transform-shaped hypothesis. What
+survives is a seam that is a pure function of `sx` and `θ` and of nothing else
+— not the light, not the scene, not the dispatch, not the reconstruction. Both
+edges are widened-field geometry: `x=359` is the guard-band edge, `x=791` the
+bisector `sx·tan(θ/2)`.
 
-**Next: fly until the sun is in a different direction and look.** No build, no
-take, no knob. Seam moves with the sun → the god-ray march. Seam stays at
-`sx·tan(θ/2)` → the god-ray path is eliminated and the law's independence from
-the light is measured rather than assumed. Both outcomes are worth more than
-another instrumented run.
+**So the next hypothesis class is extent, not transform** — a pass whose
+viewport, scissor or buffer still describes the *unwidened* field, ending where
+the original field ended.
+
+**At θ=0** the law puts the seam at NDC 0 and the guard edge at −1. Both edges
+should vanish. If one survives, it belongs to the widened FOV alone and the
+rotation is not involved at all — which would move the whole investigation off
+#33 and onto #24.
 
 **Not settled, and the two candidates at rp #31/#32 are both spent.** The seam
 is NOT the absent reconstruction correction — it was never absent, because the
@@ -8048,7 +8050,7 @@ solid.
 both negative controls fire, and all 244 eligible modules compute `R⁻¹·M`
 exactly. That is hypothesis four eliminated.
 
-## Five dead hypotheses — do not revive without new evidence
+## Seven dead hypotheses — do not revive without new evidence
 
 1. **prev-MVP motion vector** — 0 of 409 modules access `M_prevworldviewprojection`.
 2. **camera-positioned classification** — take 195 reclassified those modules
@@ -8061,6 +8063,10 @@ exactly. That is hypothesis four eliminated.
    strengthened (step 4→7, 4→6), and take 70's #57 defect came back with it.
 5. **`R⁻¹` arithmetic** — all 244 eligible modules compute `R⁻¹·M` to
    0.000e+00, with two negative controls confirming the check has range.
+6. **the classify defect** — take 197 fixed it; 30 procedural quads stopped
+   being dispatched as world geometry and the seam did not move a pixel.
+7. **the god-ray march** — take 198: three sun directions, both edges at the
+   same two columns every time. A god-ray artifact must move with the sun.
 
 ## A SECOND pattern, and it cost more than the first — take 197
 
