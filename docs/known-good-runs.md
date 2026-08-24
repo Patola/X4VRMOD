@@ -738,3 +738,44 @@ median signed column-to-column step over all rows of the left eye — a seam is 
 coherent full-height discontinuity, scene edges are local and cancel. Compare
 the guard-to-seam *separation*, never absolute x: the PNGs differ in height and
 content cross-correlation over three bands returned dx = −5, 0, −3.
+
+## `stage18-seam-laws-confirmed` — takes 199 and 200
+
+The x=791 seam is settled as **geometry, not a defective transform**. Two runs,
+both scorer PASS, each answering a question the other cannot.
+
+    X4VR_POSE_ROTATE=1 X4VR_TAKE=199-YAW-ZERO X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_SHEAR_LIGHTS=1 X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_POSE_YAW=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take199.log X4VR_PIPE_INVENTORY=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_MV_INVENTORY=1 ./launch/x4vr-launch.sh
+
+    X4VR_POSE_ROTATE=1 X4VR_TAKE=200-FOV-175 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_SHEAR_LIGHTS=1 X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_POSE_YAW=20 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take200.log X4VR_PIPE_INVENTORY=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.75 X4VR_BINDLESS_MIRROR=1 X4VR_MV_INVENTORY=1 ./launch/x4vr-launch.sh
+
+**What they establish:**
+
+* **199 (θ=0):** both edges fall to or below background — x=359 to 6.8% of rows
+  with 1181 columns beating it, x=791 to 12.2% — against 58.5% and 62.7% at
+  θ=20. `X4VR_FOV=1.4917` was on throughout, so **the widened field alone does
+  not make the seam; it needs the rotation.** The machinery still ran and
+  computed identity (`pose_rotate()` reads only `X4VR_POSE_ROTATE`; the value
+  is guarded by `yaw != 0`), so this is the rotation's VALUE, not its presence.
+* **200 (fov 1.75, sx 0.47650):** guard edge predicted 374.1, measured **374**;
+  seam predicted 763.1, measured **763**. Both **−0.1 px**, and they moved in
+  **opposite directions** — guard right, seam left. Predictions were committed
+  to docs before the run.
+
+**Why the pair matters more than either alone.** 199 varies θ with `sx` fixed;
+200 varies `sx` with θ fixed. Together the two laws are pinned against two
+independent variables, and opposite-direction motion rules out every alignment
+confound that made takes 195–198 hard to read.
+
+**What they do NOT establish.** Nothing about whether the seam is *acceptable*
+— only what it is. The guard edge is the boundary of what a widened render can
+supply after rotation, and closing it is a design question (render wider, or
+accept the band), not a bug hunt.
+
+**A state is code and knobs.** Neither run adds one: 199 sets an existing knob
+to 0, 200 sets an existing knob to 1.75, and the default configuration is
+unchanged.
+
+**Reproducing the measurement** (X4's rendered output is not committed): count
+the **fraction of rows** carrying a sign-consistent column-to-column step, not
+the median over rows — the median needs the seam to span >50% of the height and
+returns a false ABSENT when a station covers part of the view.
