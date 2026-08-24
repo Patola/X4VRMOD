@@ -8174,6 +8174,52 @@ second so a revert cannot pass silently.
 **A green test on a dead member** is what this was for as long as it existed —
 worth keeping in mind next time a case passes on a fixture we wrote ourselves.
 
+## The object-block capture — built, GPU-driven, and seen to fail
+
+The other half of #56. The layer now tracks X4's per-object block (set 3)
+beside the camera block, and `read_shadow_terms` gets the cascade X4's own
+shaders sample.
+
+**The range is recorded, not assumed.** The camera block proves range is not
+the struct size — last member at byte 1556, X4 binds 1792 — so nothing in the
+SPIR-V predicts the object block's. The slot carries whatever the descriptor
+write declared, `obj_slot_host_ptr` bounds its read by *that*, and the observed
+`(set, range)` inventory is logged so the next run can assert it. **The harness
+binds 576 deliberately**: at 1792 the slot would ride the camera path and the
+case would prove nothing.
+
+**Cost is gated.** `vkUpdateDescriptorSets` is rare, so recording slots there
+is free. `vkCmdBindDescriptorSets` is **per draw**, so the object walk there is
+behind `want_matrices()` — which also replaced two copies of the same getenv
+lambda. A run without `X4VR_DUMP_MATRICES` emits no `OBJBLOCK` line and does no
+extra per-draw work; asserted, not assumed.
+
+**`obj_spread` guards the assumption this could otherwise smuggle in** — that
+one object slot speaks for all of them. The block is per-draw, so it counts
+distinct cascade scales across the frame's slots and **warns on >1 rather than
+averaging**, because a mean of cascades from different objects is a number with
+no referent.
+
+### The fixture is now poisoned, and that is the point
+
+Camera members 9/10 hold **0.009** — a 111 m cascade nothing else here
+produces. They used to hold **0.002**, *the same value the object block
+carries*. So reading the wrong member gave exactly the right answer and the
+case passed for as long as it existed: **a green test on a dead member**, which
+is what let take 201's defect survive to take 201.
+
+**Watched to fail.** With the old read restored, five cases go red and one
+names it by value: `reported 0.009/111 m — that is camera member 9`.
+
+| | without the object block | with it |
+|---|---|---|
+| cascade | `csm scales are UNMEASURED` | `csm0=0.002 csm1=0.0005` |
+| span | *(none printed)* | `500.0 m across 1024 texels -> 0.4883 m per texel` |
+| range | — | `set3/range576`, observed |
+
+**#56 is answerable by measurement now** rather than blocked on the instrument.
+It still wants the three runs: two at one field for the spread, one at another.
+
 # RESUME HERE AFTER A COMPACT — state as of take 201
 
 Everything below this line supersedes earlier "read this first" banners.
