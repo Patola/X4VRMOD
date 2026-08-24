@@ -8081,7 +8081,65 @@ covers *fewer* metres at a wider field, which is neither "fitted to frustum"
 (shrinks) nor "fixed extent" (unchanged) — but the sets are not stable at fixed
 fov either, so that is a lead and not a result.
 
-# RESUME HERE AFTER A COMPACT — state as of take 200
+## Take 201: #56 is unanswerable by runs — the instrument reads a dead member
+
+A pure repeat of take 197. Same knobs, same binary — `git log bcf2fad..HEAD --
+layer/ common/` is empty, so the layer was byte-identical. It disagrees with
+197.
+
+| take | fov | yaw | csm0 scale set | span |
+|---|---|---|---|---|
+| 197 | 1.4917 | 20 | 0, **1.13137**, 1.1359, 1.13591 | 0.9 m |
+| 199 | 1.4917 | 0 | 0, **0.8**, 1.1359, 1.13591 | 1.2 m |
+| 200 | 1.75 | 20 | 0, **0.8**, **1.2291** | 1.2 m |
+| 201 | 1.4917 | 20 | 0, **0.8**, 1.1359, 1.13591 | **1.3 m** |
+
+Three things at once, and each kills a different reading:
+
+* **197 vs 201 — identical configuration, different set.** There is run-to-run
+  variation at a completely fixed config.
+* **199 vs 201 — identical set across different yaw.** So yaw is not the
+  driver; 197 is simply the odd one out.
+* **199 vs 201 — identical set, different span (1.2 vs 1.3).** The summary is
+  not even a function of the numbers printed above it.
+
+### The root cause, base-resolved over all 409 dumps
+
+| member | index | declared by | **sampled by** |
+|---|---|---|---|
+| `M_shadowCSM0` | 3 | 341 | **189** |
+| `M_shadowCSM0Clip` | 9 | 370 | **0** |
+
+**They are in different blocks.** 99 modules declare both and **none** shares a
+struct. `ShadowTerms` reads the second one. X4 has no reason to keep a member
+nothing samples up to date, so what comes back is whatever the buffer held —
+which is exactly the non-reproducibility above.
+
+**The risk was written down and built on anyway.** `ShadowTerms`'s own comment
+says *"Members 9 and 10 are read by ZERO of the 409 dumped modules … so X4 may
+leave these at whatever the buffer held"*, and adds a `populated` guard. That
+guard catches an **all-zero** matrix. It cannot catch **plausible stale data**,
+which is what this is — and plausible stale data is the harder failure, because
+it reads as a measurement.
+
+**So #56 needs no further takes.** It needs `ShadowTerms` pointed at member 3,
+in the block the shaders actually sample. Until then every shadow number in
+every log back to take 148 describes an unmaintained buffer.
+
+### The contrast that proves this is specific
+
+The same take's seam measurement reproduces essentially perfectly:
+
+| take | guard | seam |
+|---|---|---|
+| 197 | x=360 on 58.5% of rows | x=792 on 62.9% |
+| 201 | x=359 on 58.5% of rows | x=791 on **63.0%** |
+
+Row fractions agree to 0.1 points; the 1 px offset is capture alignment between
+sessions. **The pipeline is reproducible.** It is this one read that is not, and
+that is why "the game is nondeterministic" is not an available excuse.
+
+# RESUME HERE AFTER A COMPACT — state as of take 201
 
 Everything below this line supersedes earlier "read this first" banners.
 

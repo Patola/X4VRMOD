@@ -707,13 +707,37 @@ def main(path):
                         # summary would have answered a fifty-take question
                         # wrongly, which is why the requirement is now stated
                         # as three runs and as SETS.
-                        print(f"        #56 needs THREE runs, not two: two at "
-                              f"the same X4VR_FOV to establish the run-to-run "
-                              f"spread, and one at a different field. Takes "
-                              f"197 and 199 are both fov 1.4917 and report "
-                              f"0.9 m and 1.2 m, so a single pair proves "
-                              f"nothing. Compare the scale SETS above, not "
-                              f"this summary.")
+                        # Take 201 retired this question rather than answering
+                        # it. NO number of runs can settle #56 from this read,
+                        # because the read is of the wrong member.
+                        #
+                        #   M_shadowCSM0      member 3, 341 declare, 189 ACCESS
+                        #   M_shadowCSM0Clip  member 9, 370 declare,   0 access
+                        #
+                        # They are in DIFFERENT blocks -- 99 modules declare
+                        # both and none shares a struct -- and ShadowTerms
+                        # reads the second. X4 has no reason to keep a member
+                        # nothing samples up to date, so what comes back is
+                        # whatever the buffer held.
+                        #
+                        # The evidence, all four takes at hand: 197 and 201 are
+                        # the SAME configuration and the same binary and give
+                        # different sets; 199 (yaw 0) and 201 (yaw 20) give
+                        # IDENTICAL sets, so yaw is not the driver either; and
+                        # 199 and 201 report 1.2 m and 1.3 m from that one
+                        # identical set, so the summary is not even a function
+                        # of the numbers above it.
+                        #
+                        # `populated` guards the all-zero case. It cannot guard
+                        # plausible stale data, which is what this is.
+                        print(f"        #56 CANNOT be answered from this line "
+                              f"— it reads M_shadowCSM0Clip (member 9), which "
+                              f"370 modules declare and ZERO sample; the live "
+                              f"matrix is M_shadowCSM0 (member 3, 189 "
+                              f"samplers) in a different block. Takes 197 and "
+                              f"201 are identical runs and disagree. Do not "
+                              f"spend another take on it: point ShadowTerms at "
+                              f"member 3 first.")
                     else:
                         print("        cascade extent NOT measured — "
                               "M_shadowCSM0Clip read back as zeros, which no "
