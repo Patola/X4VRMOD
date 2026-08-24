@@ -461,20 +461,59 @@ inline void pose_roll_frame(PoseBlock &p) {
 // per-object block instead -- so X4 may leave these at whatever the buffer
 // held. A zero matrix would otherwise report an infinite cascade, which reads
 // as "fixed extent" and would answer the question backwards.
+// Member 3 of the WORLD/object block (set 3 binding 0) is `M_shadowCSM0`, at
+// byte 192 -> float 48; CSM1 follows at 64. That block is ~576 bytes and holds
+// 15 members. It is NOT the camera block, and `kShadowCSM0` above (float 144)
+// indexes the camera block's `M_shadowCSM0Clip` -- correct for that block, and
+// the wrong object entirely. See the comment on `cascade_measured`.
+enum : uint32_t {
+    kObjShadowCSM0 = 48,      // M_shadowCSM0, object block member 3
+    kObjShadowCSM1 = 64,      // M_shadowCSM1, member 4
+    kObjBlockBytes = 576,
+};
+
 struct ShadowTerms {
     bool ok = false;
-    bool populated = false;   // the CSM matrix is not all zeros
-    float map_size = 0.0f;    // F_shadowmapsize
+    bool populated = false;   // the live CSM matrix was supplied and is nonzero
+    // **The cascade numbers are only meaningful when this is true.**
+    //
+    // Take 201: `read_shadow_terms` read `M_shadowCSM0Clip`, camera-block
+    // member 9. Over all 409 dumps, 370 modules DECLARE it and **0 sample
+    // it**; the live matrix is `M_shadowCSM0` at member 3 of the WORLD/object
+    // block, sampled by 189. Different blocks -- 99 modules declare both and
+    // none shares a struct. X4 has no reason to keep a member nothing reads
+    // current, so what came back was whatever the buffer held: takes 197 and
+    // 201 are the same knobs and a byte-identical layer and disagree, while
+    // the same takes' seam measurements reproduce to 0.1 points.
+    //
+    // `populated` guarded the all-zero case and could not guard plausible
+    // stale data -- the harder failure, because it reads as a measurement.
+    // This flag is that guard: the cascade fields stay zero and unreported
+    // unless a caller supplies the LIVE matrix.
+    bool cascade_measured = false;
+    float map_size = 0.0f;    // F_shadowmapsize        -- camera block, live
     float max_distance = 0.0f;
     float blend = 0.0f;
     float factor[5] = {0, 0, 0, 0, 0};
     float thresholds[4] = {0, 0, 0, 0};
-    float csm0_scale = 0.0f;  // |row0| of M_shadowCSM0Clip, NDC per metre
+    float csm0_scale = 0.0f;  // |row0| of M_shadowCSM0, NDC per metre
     float csm1_scale = 0.0f;
     float csm0_m_per_texel = 0.0f;
 };
 
-inline ShadowTerms read_shadow_terms(const float *blk, Major major) {
+// `blk` is the CAMERA block (set 1 binding 0): the scalars genuinely live
+// there and are sampled by X4's own shaders.
+//
+// `csm0` / `csm1` are the LIVE cascade matrices, from members 3 and 4 of the
+// OBJECT block (set 3 binding 0) at kObjShadowCSM0 / kObjShadowCSM1. They are
+// separate arguments because they are in a DIFFERENT BUFFER -- one the layer
+// does not yet capture, since g_track only records UBO slots whose range is
+// kViewBlockBytes (1792) and the object block is ~576. Passing nullptr is the
+// honest state today, and it makes the function report the scalars and refuse
+// the cascade rather than dress up an unmaintained member as a number.
+inline ShadowTerms read_shadow_terms(const float *blk, Major major,
+                                     const float *csm0 = nullptr,
+                                     const float *csm1 = nullptr) {
     ShadowTerms s{};
     if (!blk || major == Major::Unknown)
         return s;
@@ -492,13 +531,20 @@ inline ShadowTerms read_shadow_terms(const float *blk, Major major) {
         const float c = major == Major::Row ? m.m[2] : m.m[8];
         return std::sqrt(a * a + b * b + c * c);
     };
-    const Mat4 c0 = load(blk + kShadowCSM0), c1 = load(blk + kShadowCSM1);
+    // No cascade source, no cascade numbers. The scalars above are still
+    // real, so `ok` stays true and the caller reports what it has.
+    if (!csm0) {
+        s.ok = true;
+        return s;
+    }
+    const Mat4 c0 = load(csm0), c1 = load(csm1 ? csm1 : csm0);
     s.csm0_scale = row0(c0);
-    s.csm1_scale = row0(c1);
+    s.csm1_scale = csm1 ? row0(c1) : 0.0f;
     bool any = false;
     for (int i = 0; i < 16 && !any; i++)
         any = std::fabs(c0.m[i]) > 1e-12f;
     s.populated = any;
+    s.cascade_measured = any;
     if (s.populated && s.csm0_scale > 1e-12f && s.map_size > 0.0f &&
         s.factor[0] > 0.0f)
         s.csm0_m_per_texel = 1.0f / (s.csm0_scale * s.map_size * s.factor[0]);

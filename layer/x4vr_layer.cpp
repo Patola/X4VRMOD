@@ -6538,13 +6538,18 @@ void patch_view_before_submit() {
                     st.factor[1], st.factor[2], st.factor[3], st.factor[4],
                     st.thresholds[0], st.thresholds[1], st.thresholds[2],
                     st.thresholds[3], st.csm0_scale, st.csm1_scale,
-                    st.populated
+                    st.cascade_measured
                         ? ""
-                        : "  <- M_shadowCSM0Clip is ALL ZEROS. No module in "
-                          "the dumps reads members 9/10, so X4 may never fill "
-                          "them; the cascade EXTENT is then unmeasured here "
-                          "and the scalars above are all this run establishes");
-                if (st.populated)
+                        : "  <- csm scales are UNMEASURED and read 0 on "
+                          "purpose. This block is the CAMERA one, whose "
+                          "M_shadowCSM0Clip (member 9) 370 dumped modules "
+                          "declare and ZERO sample; the live matrix is "
+                          "M_shadowCSM0, member 3 of the OBJECT block at set 3 "
+                          "binding 0, sampled by 189. g_track only records UBO "
+                          "slots of range 1792 and that block is ~576, so the "
+                          "layer cannot reach it yet (task #56). The scalars "
+                          "above are real and are all this run establishes");
+                if (st.cascade_measured)
                     X4VR_LOG("proj SHADOW cam#%u: cascade 0 spans %.1f m "
                              "across %.0f texels -> %.4f m per texel. Compare "
                              "this against another X4VR_FOV: fitted to the "

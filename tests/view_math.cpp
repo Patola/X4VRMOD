@@ -1031,6 +1031,57 @@ int main() {
         }
     }
 
+    // ---- task #56: read_shadow_terms, with the cascade source explicit ----
+    //
+    // This arithmetic used to be asserted only through the layer, on a fixture
+    // that wrote the cascade into camera-block members 9/10. Take 201 showed
+    // those are `M_shadowCSM0Clip`, which 370 dumped modules declare and ZERO
+    // sample -- so the layer was reading an unmaintained buffer and the test
+    // was confirming the arithmetic over a source that is never live.
+    //
+    // The arithmetic was never the bug. It moves here, where the matrix is
+    // passed directly and no GPU or fixture is involved, and the layer-side
+    // cases now assert the REFUSAL instead.
+    {
+        float blk[x4vr::kViewBlockBytes / 4] = {};
+        blk[x4vr::kShadowMapSize] = 2048.0f;
+        blk[x4vr::kShadowMaxDistance] = 5000.0f;
+        blk[x4vr::kTextureFactorCSM0] = 0.5f;
+        // |row0| = 0.002 -> the cascade spans 500 m; 2048 texels at factor 0.5
+        // is 1024 across it, so 0.4883 m per texel.
+        float csm[16] = {};
+        csm[0] = 0.002f;
+        csm[5] = 0.002f;
+        csm[10] = 0.002f;
+        csm[15] = 1.0f;
+
+        const x4vr::ShadowTerms none =
+            x4vr::read_shadow_terms(blk, x4vr::Major::Column);
+        check(none.ok, "no cascade source: the scalars still read");
+        check(!none.cascade_measured,
+              "...and the cascade refuses rather than reporting a number");
+        check(none.csm0_scale == 0.0f && none.csm0_m_per_texel == 0.0f,
+              "...leaving the derived fields at zero, not at stale data");
+
+        const x4vr::ShadowTerms live =
+            x4vr::read_shadow_terms(blk, x4vr::Major::Column, csm, csm);
+        check(live.cascade_measured, "a live cascade matrix IS measured");
+        check_near(live.csm0_scale, 0.002f, 1e-6f, "...|row0| is recovered");
+        check_near(1.0f / live.csm0_scale, 500.0f, 0.5f,
+                   "...the cascade spans 500 m");
+        check_near(live.csm0_m_per_texel, 0.4883f, 1e-3f,
+                   "...1024 texels across it = 0.4883 m per texel");
+
+        // The failure take 201 actually hit: not zeros, but plausible numbers
+        // from a buffer nothing maintains. `populated` could never catch that;
+        // only refusing an absent source can.
+        float zeros[16] = {};
+        const x4vr::ShadowTerms z =
+            x4vr::read_shadow_terms(blk, x4vr::Major::Column, zeros, zeros);
+        check(!z.cascade_measured,
+              "an all-zero cascade is still refused, as before");
+    }
+
     printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n", g_fail);
     return g_fail ? 1 : 0;
 }

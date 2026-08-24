@@ -1842,29 +1842,34 @@ view_arena_case() {
         printf 'FAIL %-38s offset 8.704 m not reported\n' "view: translation survives"
         fails=$((fails + 1))
     fi
-    # Task #56. Block 0 carries shadow terms and block 1 does not, so BOTH
-    # branches run. Members 9/10 are read by zero of the 409 dumped modules,
-    # which means X4 may leave them at whatever the buffer held -- so the
-    # all-zeros path is not a corner case, it is a live possibility, and a
-    # report that had only ever seen zeros would be half-untested.
+    # Task #56, rewritten at take 201. These cases used to assert
+    # `cascade 0 spans 500.0 m ...`, computed from camera-block members 9/10 --
+    # `M_shadowCSM0Clip`, which 370 of the 409 dumped modules DECLARE and ZERO
+    # sample. The layer was reading a buffer X4 has no reason to maintain, and
+    # this case was confirming the arithmetic over a source that is never live:
+    # a green test on a dead member.
     #
-    # The arithmetic is asserted, not just its presence: |row0|=0.002 spans
-    # 500 m, 2048 texels at factor 0.5 is 1024 across it, so 0.4883 m/texel.
-    # A convention slip in read_shadow_terms would still print a number.
-    if grep -aq 'cascade 0 spans 500\.0 m across 1024 texels -> 0\.4883 m per texel' <<<"$out"; then
-        printf 'ok   %-38s 500 m / 1024 texels = 0.4883 m\n' \
-            "shadow: cascade arithmetic"
+    # The arithmetic was never wrong, so it moved to tests/view_math.cpp where
+    # the matrix is passed directly. What belongs HERE is the refusal: with no
+    # live cascade source the layer must report the scalars and decline the
+    # cascade, rather than dress up whatever the buffer held as a measurement.
+    if grep -aq 'csm0-scale=0 csm1-scale=0  <- csm scales are UNMEASURED' <<<"$out"; then
+        printf 'ok   %-38s scalars kept, cascade declined\n' \
+            "shadow: cascade refuses a dead source"
     else
-        printf 'FAIL %-38s expected 500.0 m / 1024 texels / 0.4883\n' \
-            "shadow: cascade arithmetic"
+        printf 'FAIL %-38s expected the UNMEASURED refusal\n' \
+            "shadow: cascade refuses a dead source"
         grep -a 'proj SHADOW' <<<"$out" | sed 's/^/       | /' | head -4
         fails=$((fails + 1))
     fi
-    if grep -aq 'csm0-scale=0 csm1-scale=0  <- M_shadowCSM0Clip is ALL ZEROS' <<<"$out"; then
-        printf 'ok   %-38s an empty block says so\n' "shadow: unpopulated caveat"
+    # ...and it must NOT print a span, because a span implies a measurement.
+    # The old text is named so a revert cannot pass silently.
+    if ! grep -aq 'cascade 0 spans' <<<"$out"; then
+        printf 'ok   %-38s and prints no span at all\n' \
+            "shadow: no span without a source"
     else
-        printf 'FAIL %-38s empty block did not report ALL ZEROS\n' \
-            "shadow: unpopulated caveat"
+        printf 'FAIL %-38s printed a span from an unmaintained member\n' \
+            "shadow: no span without a source"
         fails=$((fails + 1))
     fi
 }
