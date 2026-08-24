@@ -8139,6 +8139,41 @@ Row fractions agree to 0.1 points; the 1 px offset is capture alignment between
 sessions. **The pipeline is reproducible.** It is this one read that is not, and
 that is why "the game is nondeterministic" is not an available excuse.
 
+## ShadowTerms: the fix is half a fix, and the other half is plumbing
+
+`read_shadow_terms` now **refuses** rather than reporting the dead member. The
+cascade matrices are explicit arguments defaulting to `nullptr`; with no live
+source the fields stay zero, `cascade_measured` stays false, and the layer
+prints the scalars — which really are camera-block members X4 maintains — plus
+why the scales are absent.
+
+**It cannot simply "read member 3", and the reason is the point:**
+
+| | block | set/binding | member | byte | block size | samplers |
+|---|---|---|---|---|---|---|
+| `M_shadowCSM0` | WORLD/object | **3 / 0** | 3 | 192 | **~576 B** | **189** |
+| `M_shadowCSM0Clip` | CAMERA | 1 / 0 | 9 | 576 | 1792 B | **0** |
+
+Different **buffers**, not different offsets. And the layer cannot reach the
+object block at any set index today: `g_track` only records UBO slots whose
+range is `kViewBlockBytes` (1792), so a ~576-byte block is never a candidate.
+**`X4VR_VIEW_SET=3` does not help** — the filter is on size, not on set.
+
+**What `populated` could never do.** It guarded the all-zero case. The failure
+that actually happened was *plausible* stale data, which reads as a
+measurement — the harder failure, and the one a zero-check cannot see.
+`cascade_measured` is that guard.
+
+**The arithmetic was never wrong**, so it moved to `tests/view_math.cpp` where
+the matrix is passed directly: `|row0| = 0.002` spans 500 m, 1024 texels
+across it, 0.4883 m per texel — the same numbers the layer case asserted, now
+over a source that *can* be live. The two harness cases assert the refusal and,
+separately, that **no span is printed at all**; the old text is named in the
+second so a revert cannot pass silently.
+
+**A green test on a dead member** is what this was for as long as it existed —
+worth keeping in mind next time a case passes on a fixture we wrote ourselves.
+
 # RESUME HERE AFTER A COMPACT — state as of take 201
 
 Everything below this line supersedes earlier "read this first" banners.
