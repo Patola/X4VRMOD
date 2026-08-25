@@ -1545,6 +1545,41 @@ void headlook_tick() {
         return e && *e ? (float)atof(e) : 0.0f;
     }();
     g_headlook.gain_pitch_deg_per_count = gpitch;
+    // Task #68: the servo's own ceiling, so an experiment that raises X4's
+    // can be seen at all.
+    //
+    // X4's free-look clamp is data -- libraries/parameters.xml,
+    // `<lookaround><internal maxpitch="35" maxyaw="65">` -- and an extension
+    // can override it. But the servo clamps its TARGET to these limits, so
+    // with them fixed at 65/35 it would never command past the old stop and
+    // the camera could not go there whatever X4's file said. The measurement
+    // would have read "no change" and meant nothing: a guard that cannot
+    // fail, which is how several takes have already been wasted here.
+    //
+    // Default is exactly the shipped 65/35, so every existing run is
+    // unaffected and omitting these is the control.
+    static const float ylim = [] {
+        const char *e = getenv("X4VR_HEADLOOK_YAW_LIMIT");
+        return e && *e ? (float)atof(e) : 0.0f;
+    }();
+    static const float plim = [] {
+        const char *e = getenv("X4VR_HEADLOOK_PITCH_LIMIT");
+        return e && *e ? (float)atof(e) : 0.0f;
+    }();
+    static const bool limits_said = [] {
+        if (ylim > 0.0f || plim > 0.0f)
+            X4VR_LOG("headlook: servo limits yaw=%.2f pitch=%.2f deg (default "
+                     "65/35 is X4's own, from parameters.xml). Raising these "
+                     "alone changes NOTHING unless X4's file is overridden too "
+                     "— X4 clamps its camera independently (task #68)",
+                     ylim > 0.0f ? ylim : 65.0f, plim > 0.0f ? plim : 35.0f);
+        return true;
+    }();
+    (void)limits_said;
+    if (ylim > 0.0f)
+        g_headlook.yaw_limit_deg = ylim;
+    if (plim > 0.0f)
+        g_headlook.pitch_limit_deg = plim;
 
     float yaw = 0.0f, pitch = 0.0f;
     uint64_t updates = 0;
