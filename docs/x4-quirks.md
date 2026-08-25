@@ -8220,6 +8220,74 @@ names it by value: `reported 0.009/111 m — that is camera member 9`.
 **#56 is answerable by measurement now** rather than blocked on the instrument.
 It still wants the three runs: two at one field for the spread, one at another.
 
+# Take 204 — the clamp MOVED. 85 yaw is right; 85 pitch is our own singularity
+
+**`MOVED ✓` — X4 reached exactly 85.00 deg in BOTH axes** against a command of
+85.00, pinning to the new limit as precisely as it used to pin to 65.00/35.00.
+`fileprobe` independently confirms X4 read the extension's `libraries/` (2
+probes, which take 203 did not have).
+
+So the free-look clamp is **data, live, and reachable**. `libraries/parameters.xml`,
+`<playercamera><lookaround><internal maxpitch maxyaw>`, overridden by an
+extension carrying a 4-line `<diff>`.
+
+### Yaw 85 is a good number. Patola's eye, which is the only judge here
+
+*"I have to look very far to the left to finally see some black strip on the
+left, and that's when I stopped. Same for the right. For looking up I couldn't
+even get to this point before getting to the limit of my own neck."*
+
+At `X4VR_FOV=1.4917` the rendered field covers essentially the whole of an 85
+deg turn. **The guard band is not the binding constraint at this yaw** — the
+neck is. That retires the worry that raising the clamp would just expose black.
+
+### Pitch 85 walked into a singularity we had already documented
+
+*"some kind of gimbal lock, with it doing jumps of rotations of the camera."*
+
+**Ours, not X4's, and predictable from a constant ten lines above the limit I
+was setting.** `head_angles()` in `common/x4vr_headlook.hpp` ends with
+
+    a.yaw_reliable = horiz > 0.09f; // ~85 deg of pitch
+
+Yaw is a singularity when the nose points at the ceiling: `fx` and `fz` both
+collapse and `atan2` returns tracker noise. **Take 128 found that the expensive
+way** — Patola looked up, garbage yaw drove the estimate somewhere arbitrary
+and it STAYED there. The guard holds `want_yaw` at the last command while
+unreliable, so crossing in and out of the region freezes and resumes the yaw:
+exactly the jumping reported.
+
+Setting `pitch_limit_deg = 85` put the limit **exactly at the guard's own
+threshold**. I took X4's `trackmaxpitch="85"` at face value without checking it
+against our extraction, which is documented in the file I was editing.
+
+**Pitch must stay clear of it.** The guard trips at ~84.8 deg, so a limit near
+**70** keeps 15 deg of margin and is still double X4's stock 35. Yaw has no
+such constraint — the singularity is in pitch only.
+
+### The FAIL, and it may be the same event
+
+`the pose fell back to identity 1 time(s) AFTER it had been driven` —
+`cam_valid` went to 0 mid-run, so those frames were submitted world-locked.
+**One occurrence**, and the gimbal-lock episode is a candidate cause: if the
+servo lost the camera while yaw was unreliable, that is what it would look
+like. Not established, and worth re-checking on a run with pitch limited below
+the singularity — if it disappears, the cause was the pitch limit.
+
+### Loading bar at ~60%, and it is not the `modified` flag
+
+Patola: the savegame loading screen used to run to 100%, and in the last two
+runs it starts loading a bit past 60%. **Both of those runs had the extension
+active**, so the correlation is with the extension, not with `modified` —
+`modified` is a *consequence* of the extension being active, not a cause of
+anything. X4 most likely recomputes its content index when the extension set
+changes, leaving the progress estimate measuring against a stale total.
+
+**Free control on the way out:** after removing the extension, watch whether
+the bar returns to 100%. If it does, the extension explains it and there is
+nothing to chase. If it does not, something else changed and this becomes a
+real question.
+
 # Take 203 — RESULT. Two of four predictions right, and one instrument blind
 
 `PASS`, and a candidate for known-good-runs. Scored against the predictions
