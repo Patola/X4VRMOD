@@ -8274,19 +8274,32 @@ servo lost the camera while yaw was unreliable, that is what it would look
 like. Not established, and worth re-checking on a run with pitch limited below
 the singularity — if it disappears, the cause was the pitch limit.
 
-### Loading bar at ~60%, and it is not the `modified` flag
+### Loading bar at ~68%: it IS the `modified` flag, and my control was blind
 
-Patola: the savegame loading screen used to run to 100%, and in the last two
-runs it starts loading a bit past 60%. **Both of those runs had the extension
-active**, so the correlation is with the extension, not with `modified` —
-`modified` is a *consequence* of the extension being active, not a cause of
-anything. X4 most likely recomputes its content index when the extension set
-changes, leaving the progress estimate measuring against a stale total.
+I said the bar correlated with the **extension** being active and that
+`modified` was *"a consequence of the same cause, not a cause of anything"*.
+**Wrong.** Patola ran a proper 2x2 and it tracks the SAVE's flag in both
+directions, with the extension state irrelevant:
 
-**Free control on the way out:** after removing the extension, watch whether
-the bar returns to 100%. If it does, the extension explains it and there is
-nothing to chase. If it does not, something else changed and this becomes a
-real question.
+| extension | save | bar |
+|---|---|---|
+| ON | unmodified | 100% |
+| OFF | unmodified | 100% |
+| ON | unmodified → then quicksaved as modified | 100% → **68%** |
+| OFF (no unofficial extensions at all) | modified | **68%** |
+
+The last row is decisive: no extension anywhere, modified save, 68%.
+
+**And the control I proposed could not have found this.** I suggested "remove
+the extension and see if the bar returns to 100%" — but removing the extension
+also meant restoring an unmodified save, so both variables would have moved
+together and the confounded result would have confirmed my wrong hypothesis.
+Patola varied them independently. His experiment was the better one and mine
+would have entrenched the error.
+
+Benign either way: X4 presumably skips a verification step for modified saves,
+so the progress estimate measures against a total it no longer spends. Nothing
+to chase, and now explained rather than guessed at.
 
 # Take 203 — RESULT. Two of four predictions right, and one instrument blind
 
