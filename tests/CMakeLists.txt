@@ -96,3 +96,5 @@ endif()
 # The Lua chunk scan. Pure string work on buffers that are NOT NUL-terminated,
 # which is the hazard it exists to pin. Self-checking: no runner script.
 add_executable(x4vr_test_lua_scan lua_scan.cpp)
+
+add_executable(x4vr_test_guard_budget guard_budget.cpp)

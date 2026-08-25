@@ -38,6 +38,7 @@
 #include "../common/x4vr_log.hpp"
 #include "../common/x4vr_sbs.hpp"
 #include "../common/x4vr_spirv.hpp"
+#include "../common/x4vr_guard.hpp"
 #include "../common/x4vr_view.hpp"
 #include "x4vr_sbs.hpp"
 #include "../common/x4vr_env.hpp"
@@ -5699,6 +5700,93 @@ bool pose_init(DeviceData *d, VkDevice dev) {
     return true;
 }
 
+// ---- #33: the live pose, as a RESIDUAL over what the injector commanded ----
+//
+// X4 already turns its own camera: the injector drives free-look from the head
+// and publishes the angle it commanded, and that command is what the frame was
+// drawn with. So the conjugation's job is not the head angle -- it is the part
+// X4 did not deliver. Measured over 2398 live `camread` samples in 15 takes:
+// below X4's clamp that residual is median 0.22 deg and p90 2.27, and past the
+// clamp (65.00 yaw / 35.00 pitch, hard) it runs to 71.
+//
+// **What is applied must equal what is declared.** The compositor reprojects
+// against the pose we declare; if the shader rotates by more or less than
+// that, the world swims exactly when the head moves. So the clamped residual
+// is stored here and the submit path declares command + THIS, never the raw
+// head pose. That is also why the clamp lives in one place.
+//
+// The budget is not a preference. Past it the homography samples outside what
+// X4 drew and returns black -- see common/x4vr_guard.hpp.
+struct PoseResidual {
+    std::atomic<float> budget_deg{-1.0f};   // <0: not established, apply none
+    std::atomic<float> applied_yaw{0.0f};
+    std::atomic<float> applied_pitch{0.0f};
+    std::atomic<uint64_t> updates{0}, clamped{0};
+} g_residual;
+
+// Once, when the runtime's frusta first arrive. Both inputs are needed: the
+// budget is the gap between what the headset wants to see and what X4 renders,
+// so neither alone answers it.
+void pose_budget_establish(const float fov_rad[2][4]) {
+    if (g_residual.budget_deg.load() >= 0.0f)
+        return;
+    const char *fe = getenv("X4VR_FOV");
+    if (!fe || !*fe) {
+        g_residual.budget_deg.store(0.0f);
+        X4VR_LOG("pose residual: X4VR_FOV unset, so X4's field is the player's "
+                 "own and this run did not ask for a guard band — budget 0.00 "
+                 "deg, the conjugation applies NOTHING. Not a failure: a run "
+                 "that did not buy range does not get range");
+        return;
+    }
+    x4vr::EyeFov eyes[2];
+    for (int e = 0; e < 2; e++)
+        eyes[e] = {fov_rad[e][0], fov_rad[e][1], fov_rad[e][2], fov_rad[e][3]};
+    const float fov = (float)atof(fe);
+    const float ht = x4vr::guard::half_tan_of_x4vr_fov(fov);
+    const float b = x4vr::guard::max_budget_deg(eyes, 2, ht);
+    g_residual.budget_deg.store(b);
+    X4VR_LOG("pose residual: X4VR_FOV=%.4f renders %.1f deg, runtime wants "
+             "%.1f x %.1f deg per eye -> budget %.2f deg of head rotation. "
+             "The servo's residual is median 0.22 / p90 2.27 deg below X4's "
+             "clamp, so a budget under ~2.3 clamps the ordinary case%s",
+             fov, fov * 73.7399f,
+             (fov_rad[0][1] - fov_rad[0][0]) * 57.2957795f,
+             (fov_rad[0][2] - fov_rad[0][3]) * 57.2957795f, b,
+             b < 2.3f ? " — WHICH THIS ONE DOES" : "");
+}
+
+// Called once per located VR frame, from the session thread.
+void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
+                         float cmd_pitch, bool cmd_valid) {
+    if (!pose_active())
+        return;
+    const float budget = g_residual.budget_deg.load();
+    if (budget < 0.0f)
+        return;
+    // With no valid command X4 rendered along its own axis and identity is
+    // declared, so the residual IS the whole head angle -- and the clamp below
+    // is then doing all the work. Deliberately not special-cased: the same
+    // rule applies either way, and "what we applied" stays true.
+    const x4vr::guard::Residual r = x4vr::guard::residual_of(
+        head_yaw, head_pitch, cmd_yaw, cmd_pitch, cmd_valid, budget);
+    if (r.clamped)
+        g_residual.clamped.fetch_add(1, std::memory_order_relaxed);
+    g_residual.updates.fetch_add(1, std::memory_order_relaxed);
+    g_residual.applied_yaw.store(r.yaw);
+    g_residual.applied_pitch.store(r.pitch);
+    const float cy = r.yaw, cp = r.pitch;
+    {
+        std::lock_guard<std::mutex> lock(g_pose.mu);
+        // Roll BEFORE setting, so r_prev is genuinely the previous frame's
+        // rotation. With the static stand-in this was a no-op by construction;
+        // with a live pose it is take 188's seam, and skipping it would smear
+        // every temporal pass along the head's motion.
+        x4vr::pose_roll_frame(g_pose.value);
+        x4vr::pose_set_euler(g_pose.value, cy, cp, 0.0f);
+    }
+}
+
 // The value for the frame, written into the region this command buffer was
 // given. Called from the submit hook, which is after X4 has finished recording
 // and before the GPU runs it.
@@ -10112,6 +10200,10 @@ void vr_thread() {
                 g_vrs.fov_rad[e][3] = views[e].fov.angleDown;
             }
             g_vrs.fov_seen.store(true, std::memory_order_release);
+            // #33: both halves of the budget are known for the first time
+            // here -- the runtime's field just arrived and X4's came from the
+            // config we served it.
+            pose_budget_establish(g_vrs.fov_rad);
             const float k = 57.2957795130823f;
             X4VR_LOG("vr fov: runtime reports eye0 l=%.2f r=%.2f u=%.2f "
                      "d=%.2f, eye1 l=%.2f r=%.2f u=%.2f d=%.2f deg — latched "
@@ -10145,6 +10237,29 @@ void vr_thread() {
                              views[0].fov.angleUp * 57.2957795130823f,
                              views[0].fov.angleDown * 57.2957795130823f);
             }
+        }
+        // #33: the residual, BEFORE the projection views are filled.
+        //
+        // Order is the whole point. The declared pose below is command +
+        // whatever this applied, and if the residual were computed after the
+        // declaration the compositor would be told last frame's rotation while
+        // the shader used this one's. That is a one-frame disagreement between
+        // the pixels and the pose they claim -- the swimming the declared-pose
+        // comment warns about, reintroduced by ordering alone.
+        if (have) {
+            const auto &o = views[0].pose.orientation;
+            const x4vr::HeadAngles ha =
+                x4vr::head_angles(o.x, o.y, o.z, o.w);
+            float cy = 0.0f, cp = 0.0f;
+            bool cv = false;
+            if (const x4vr::Shared *sh = shared_state()) {
+                cv = sh->cam_valid.load(std::memory_order_relaxed) != 0;
+                if (cv) {
+                    cy = sh->cam_yaw_deg.load(std::memory_order_relaxed);
+                    cp = sh->cam_pitch_deg.load(std::memory_order_relaxed);
+                }
+            }
+            pose_drive_residual(ha.yaw_deg, ha.pitch_deg, cy, cp, cv);
         }
         // Task #38: submit the eye image, once X4's present thread has put one
         // in the swapchain. Until then this is still a zero-layer frame, which
@@ -10214,17 +10329,38 @@ void vr_thread() {
                         decl_yaw = sh->cam_yaw_deg.load(std::memory_order_relaxed);
                         decl_pitch =
                             sh->cam_pitch_deg.load(std::memory_order_relaxed);
-                        x4vr::quat_of_angles(decl_yaw, decl_pitch, q);
                     }
                 }
+                // #33: plus the residual the shader ACTUALLY applied this
+                // frame. Added unconditionally, including when cam_valid is 0
+                // -- there the command is zero and the declaration becomes the
+                // residual alone, which is still exactly what was rendered.
+                //
+                // Not the head pose. What gets declared has to be what the
+                // pixels came from, and past the guard band the conjugation is
+                // clamped, so the head is not it.
+                const float ay = g_residual.applied_yaw.load();
+                const float ap = g_residual.applied_pitch.load();
+                decl_yaw += ay;
+                decl_pitch += ap;
+                if (valid || ay != 0.0f || ap != 0.0f)
+                    x4vr::quat_of_angles(decl_yaw, decl_pitch, q);
                 if (e == 0) {
                     static uint64_t n = 0;
                     if ((n++ % 600) == 0)
                         X4VR_LOG("vr pose: shared=%u cam_valid=%u declared "
-                                 "yaw=%.2f pitch=%.2f deg%s",
+                                 "yaw=%.2f pitch=%.2f deg (X4 %.2f,%.2f + "
+                                 "residual %.2f,%.2f applied, budget %.2f, "
+                                 "%llu/%llu clamped)%s",
                                  linked, valid, decl_yaw, decl_pitch,
-                                 valid ? "" : "  <- IDENTITY, the image is "
-                                              "world-locked");
+                                 decl_yaw - ay, decl_pitch - ap, ay, ap,
+                                 g_residual.budget_deg.load(),
+                                 (unsigned long long)g_residual.clamped.load(),
+                                 (unsigned long long)g_residual.updates.load(),
+                                 (valid || ay != 0.0f || ap != 0.0f)
+                                     ? ""
+                                     : "  <- IDENTITY, the image is "
+                                       "world-locked");
                 }
                 pv[e].pose.orientation.x = q[0];
                 pv[e].pose.orientation.y = q[1];
