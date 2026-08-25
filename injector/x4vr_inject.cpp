@@ -31,6 +31,7 @@
 #include <atomic>
 #include <cmath>
 #include <set>
+#include <map>
 #include <mutex>
 #include <vector>
 #include <cstdio>
@@ -114,6 +115,144 @@ void file_probe(const char *how, const char *path) {
     if (seen.size() == 400)
         X4VR_LOG("fileprobe: 400 distinct paths — capping, so this run says "
                  "nothing about anything X4 opened after this point");
+}
+
+// ---- X4VR_CATPATCH: substitute archive bytes on the way out of read() ------
+//
+// Task #68. X4's free-look clamp lives in libraries/parameters.xml INSIDE
+// 08.cat/08.dat, and take 204 proved that raising it works -- via an
+// extension, which costs the savegame's `modified` flag. That flag exists to
+// stop mods that give an advantage from being equated with vanilla play. This
+// mod gives none, is Linux-only and niche, and Egosoft will not sign anything
+// built on an injector plus a Vulkan layer, so there is no legitimate way to
+// carry the change without tainting every user's saves.
+//
+// So: leave the archive alone on disk and substitute the bytes as X4 reads
+// them. The substitution is the SAME LENGTH -- `maxpitch="35" maxyaw="65"` ->
+// `maxpitch="70" maxyaw="85"` -- so no offset shifts, no .cat index rewrite,
+// and every other member stays exactly where it was.
+//
+// **Whether this is enough is the open question, and the reason it is a knob
+// rather than a default.** 08.cat carries an MD5 per member, and 08_sig.dat
+// carries a .sig blob per file. If X4 verifies at load and hashes what it
+// received, it will hash OUR bytes and mismatch. That is why the table can
+// carry the .cat's MD5 line too (kCatMd5* below): patch both and the archive
+// is self-consistent from X4's point of view. If signatures are checked as
+// well, this cannot win and the extension route is the only one left.
+//
+// Nothing is written to the player's install, which is the whole point.
+struct BytePatch {
+    const char *file;      // basename to match on open
+    long long offset;      // absolute, within that file
+    const char *from;
+    const char *to;
+};
+
+// Offsets computed from 08.cat's index (a running sum of member sizes) against
+// this build of X4; `catpatch: MISS` in the log means the bytes were not what
+// was expected and NOTHING was substituted -- a version change, not a silent
+// wrong edit.
+const BytePatch kPatches[] = {
+    // libraries/parameters.xml, member offset 17604207 + 14573.
+    {"08.dat", 17618780LL, "maxpitch=\"35\" maxyaw=\"65\"",
+     "maxpitch=\"70\" maxyaw=\"85\""},
+};
+
+bool catpatch_on() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_CATPATCH");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
+
+std::mutex &catfd_mu() {
+    static std::mutex m;
+    return m;
+}
+std::map<int, std::string> &catfds() {
+    static std::map<int, std::string> m;
+    return m;
+}
+
+const char *basename_of(const char *path) {
+    const char *s = strrchr(path, '/');
+    return s ? s + 1 : path;
+}
+
+// Called from the open family: remember fds that name a file we patch.
+void catpatch_track(int fd, const char *path) {
+    if (!catpatch_on() || fd < 0 || !path)
+        return;
+    const char *b = basename_of(path);
+    for (const BytePatch &p : kPatches) {
+        if (strcmp(b, p.file) == 0) {
+            std::lock_guard<std::mutex> lock(catfd_mu());
+            catfds()[fd] = p.file;
+            return;
+        }
+    }
+}
+
+void catpatch_untrack(int fd) {
+    if (!catpatch_on())
+        return;
+    std::lock_guard<std::mutex> lock(catfd_mu());
+    catfds().erase(fd);
+}
+
+// Rewrite whatever of this read overlaps a patch window. `start` is the file
+// offset the returned bytes begin at.
+void catpatch_apply(int fd, void *buf, ssize_t n, long long start) {
+    if (!catpatch_on() || n <= 0)
+        return;
+    std::string file;
+    {
+        std::lock_guard<std::mutex> lock(catfd_mu());
+        auto it = catfds().find(fd);
+        if (it == catfds().end())
+            return;
+        file = it->second;
+    }
+    for (const BytePatch &p : kPatches) {
+        if (file != p.file)
+            continue;
+        const long long len = (long long)strlen(p.from);
+        const long long lo = p.offset, hi = p.offset + len;
+        if (start >= hi || start + n <= lo)
+            continue;
+        // Overlap. Only substitute the part of the window this read covers,
+        // because X4 is free to split it across two reads.
+        for (long long i = 0; i < len; i++) {
+            const long long abs = lo + i;
+            if (abs < start || abs >= start + n)
+                continue;
+            uint8_t *dst = (uint8_t *)buf + (abs - start);
+            // Verified before written: if the byte is not what the table
+            // expects, the offsets belong to a different build of X4 and
+            // substituting would corrupt whatever is really there.
+            if (*dst != (uint8_t)p.from[i]) {
+                static bool said = false;
+                if (!said) {
+                    said = true;
+                    X4VR_LOG("catpatch: MISS at %s+%lld — expected '%c', found "
+                             "'%c'. Offsets are for another build of X4; "
+                             "NOTHING substituted",
+                             p.file, abs, p.from[i], *dst);
+                }
+                return;
+            }
+            *dst = (uint8_t)p.to[i];
+        }
+        static bool hit = false;
+        if (!hit) {
+            hit = true;
+            X4VR_LOG("catpatch: %s+%lld '%s' -> '%s' (read %lld..%lld) — the "
+                     "archive on disk is UNTOUCHED; if the save still comes "
+                     "back modified, X4 verified what it read (task #68)",
+                     p.file, p.offset, p.from, p.to, start, start + n);
+        }
+    }
 }
 
 bool overrides_disabled() {
@@ -2309,7 +2448,11 @@ int open(const char *path, int flags, ...) {
         if (!to.empty())
             return real_open(to.c_str(), flags, mode);
     }
-    return real_open(path, flags, mode);
+    {
+        const int fd = real_open(path, flags, mode);
+        catpatch_track(fd, path);
+        return fd;
+    }
 }
 
 int open64(const char *path, int flags, ...) {
@@ -2330,7 +2473,11 @@ int open64(const char *path, int flags, ...) {
         if (!to.empty())
             return real_open64(to.c_str(), flags, mode);
     }
-    return real_open64(path, flags, mode);
+    {
+        const int fd = real_open64(path, flags, mode);
+        catpatch_track(fd, path);
+        return fd;
+    }
 }
 
 int openat(int dirfd, const char *path, int flags, ...) {
@@ -2351,7 +2498,11 @@ int openat(int dirfd, const char *path, int flags, ...) {
         if (!to.empty())
             return real_openat(dirfd, to.c_str(), flags, mode);
     }
-    return real_openat(dirfd, path, flags, mode);
+    {
+        const int fd = real_openat(dirfd, path, flags, mode);
+        catpatch_track(fd, path);
+        return fd;
+    }
 }
 
 int openat64(int dirfd, const char *path, int flags, ...) {
@@ -2441,3 +2592,77 @@ FILE *fopen64(const char *path, const char *mode) {
 }
 
 } // extern "C"
+
+// ---- the read family, for X4VR_CATPATCH (task #68) -------------------------
+//
+// Only fds that named a file in the patch table do any work; every other read
+// pays one map lookup behind a static bool, and with the knob off, nothing at
+// all. X4 reads its archives constantly, so this stays on the cheap path.
+//
+// The file offset is recovered AFTER the read rather than before: lseek to the
+// current position and subtract what was returned. One extra syscall on
+// tracked fds only, and it cannot race with the read it describes the way a
+// before-and-after pair could.
+extern "C" ssize_t read(int fd, void *buf, size_t count) {
+    static auto real_read = real<ssize_t (*)(int, void *, size_t)>("read");
+    const ssize_t n = real_read(fd, buf, count);
+    if (n > 0 && catpatch_on()) {
+        static auto real_lseek = real<off_t (*)(int, off_t, int)>("lseek");
+        const off_t here = real_lseek(fd, 0, SEEK_CUR);
+        if (here >= n)
+            catpatch_apply(fd, buf, n, (long long)here - n);
+    }
+    return n;
+}
+
+extern "C" ssize_t pread(int fd, void *buf, size_t count, off_t offset) {
+    static auto real_pread =
+        real<ssize_t (*)(int, void *, size_t, off_t)>("pread");
+    const ssize_t n = real_pread(fd, buf, count, offset);
+    if (n > 0)
+        catpatch_apply(fd, buf, n, (long long)offset);
+    return n;
+}
+
+extern "C" ssize_t pread64(int fd, void *buf, size_t count, off64_t offset) {
+    static auto real_pread64 =
+        real<ssize_t (*)(int, void *, size_t, off64_t)>("pread64");
+    const ssize_t n = real_pread64(fd, buf, count, offset);
+    if (n > 0)
+        catpatch_apply(fd, buf, n, (long long)offset);
+    return n;
+}
+
+extern "C" int close(int fd) {
+    static auto real_close = real<int (*)(int)>("close");
+    catpatch_untrack(fd);
+    return real_close(fd);
+}
+
+// X4 may map the archive instead of reading it. If it does, the substitution
+// above never fires and the take would read as "X4 verified our bytes" when in
+// truth it never saw them. Logged so that case is distinguishable.
+extern "C" void *mmap(void *addr, size_t len, int prot, int flags, int fd,
+                      off_t off) {
+    static auto real_mmap =
+        real<void *(*)(void *, size_t, int, int, int, off_t)>("mmap");
+    void *p = real_mmap(addr, len, prot, flags, fd, off);
+    if (catpatch_on() && fd >= 0 && p != MAP_FAILED) {
+        bool tracked = false;
+        {
+            std::lock_guard<std::mutex> lock(catfd_mu());
+            tracked = catfds().count(fd) != 0;
+        }
+        if (tracked) {
+            static bool said = false;
+            if (!said) {
+                said = true;
+                X4VR_LOG("catpatch: X4 MMAPPED a patched archive (len %zu off "
+                         "%lld) — read() substitution does not cover mmap, so "
+                         "this run cannot say whether the bytes were seen",
+                         len, (long long)off);
+            }
+        }
+    }
+    return p;
+}
