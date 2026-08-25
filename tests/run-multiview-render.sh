@@ -2104,6 +2104,65 @@ objblock_rewrite_case() {
 }
 objblock_rewrite_case
 
+# ---- task #67: the two camera walks, reported side by side -----------------
+#
+# `g_track.sets` appends one entry per descriptor write, dedupes on
+# (buffer, offset), and is never cleared or capped — so a set handle X4
+# re-points at a new arena region keeps every region it has ever held, and
+# credit_draw credits all of them on every draw. Take 202 decoded 600 slots
+# with 125 of them carrying three distinct projections each.
+#
+# `sets_live` is the same record with vkUpdateDescriptorSets' actual semantics.
+# NOTHING is reported off it yet: the point is to measure the difference on a
+# real X4 frame before moving camera attribution underneath settled results.
+#
+# Two runs, because a comparison that has only ever printed AGREES is not known
+# to be able to print anything else.
+livesets_case() {
+    local log line
+    for mode in same rewrite; do
+        log="$(mktemp)"
+        env VK_ADD_LAYER_PATH="$BUILD/layer" \
+            VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+            X4VR_MV=1 X4VR_TEST_VIEW_ARENA=1 X4VR_DUMP_MATRICES=1 \
+            ${mode:+$([ "$mode" = rewrite ] && echo X4VR_TEST_VIEW_REWRITE=1)} \
+            X4VR_LOG="$log" timeout 120 "$BIN" >/dev/null 2>&1
+        line=$(grep -a -o 'LIVESETS: accumulating [0-9]* slot(s), winner offset=[0-9]* draws=[0-9]* | superseding [0-9]* slot(s), winner offset=[0-9]* draws=[0-9]* | winner [A-Z]*' "$log" | head -1)
+        rm -f "$log"
+        local acc sup verdict
+        acc=$(sed -n 's/.*accumulating \([0-9]*\) slot.*/\1/p' <<<"$line")
+        sup=$(sed -n 's/.*superseding \([0-9]*\) slot.*/\1/p' <<<"$line")
+        verdict=${line##*winner }
+        if [ "$mode" = same ]; then
+            # Written once each, the two records ARE the same. If this run
+            # disagrees, the instrument invents differences and nothing it
+            # says about X4 can be trusted.
+            if [ -n "$line" ] && [ "$acc" = "$sup" ] && [ "$verdict" = AGREES ]; then
+                printf 'ok   %-38s %s slots both ways, AGREES\n' \
+                    "livesets: no rewrite, no difference" "$acc"
+            else
+                printf 'FAIL %-38s want equal counts and AGREES\n' \
+                    "livesets: no rewrite, no difference"
+                printf '       | %s\n' "${line:-<no LIVESETS line at all>}"
+                fails=$((fails + 1))
+            fi
+        else
+            # One binding rewritten to a region nothing else names: the stale
+            # entry must be dropped AND must stop winning.
+            if [ -n "$line" ] && [ "$sup" -lt "$acc" ] && [ "$verdict" = DIFFERS ]; then
+                printf 'ok   %-38s %s -> %s slots, winner moves\n' \
+                    "livesets: a rewrite is seen to differ" "$acc" "$sup"
+            else
+                printf 'FAIL %-38s want superseding < accumulating, DIFFERS\n' \
+                    "livesets: a rewrite is seen to differ"
+                printf '       | %s\n' "${line:-<no LIVESETS line at all>}"
+                fails=$((fails + 1))
+            fi
+        fi
+    done
+}
+livesets_case
+
 
 # With the channel unset, none of it exists: no patch, no set, no line.
 pose_off_case() {

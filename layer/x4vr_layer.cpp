@@ -533,9 +533,38 @@ struct Tracking {
     // descriptor set -> its range-1792 UBO slots
     std::unordered_map<VkDescriptorSet, std::vector<ViewSlot>> sets;
     // command buffer -> currently bound view slots (any set index)
+    //
+    // This one REPLACES on each bind, so it is not where the staleness is.
     std::unordered_map<VkCommandBuffer, std::vector<ViewSlot>> bound;
     // per-frame draw credit
     std::map<ViewSlot, uint32_t> credit;
+
+    // ---- task #67: the same walk, done correctly, reported side by side ----
+    //
+    // **The accumulation is in `sets` above, not in `bound`.** `sets` appends
+    // one entry per descriptor write, dedupes on (buffer, offset), and is
+    // never cleared or capped -- so a set handle X4 re-points at a new arena
+    // region keeps every region it has ever held. `bound` then copies that
+    // whole list and `credit_draw` credits ALL of it on every draw. Take 202
+    // decoded 600 slots and had 125 of them carrying three distinct
+    // projections each, which is the signature.
+    //
+    // `sets_live` is the same record with the semantics vkUpdateDescriptorSets
+    // actually has: a write to (set, binding) SUPERSEDES what that binding
+    // held. Same shape as the object path's `obj_sets` after task #66.
+    //
+    // Deliberately a second set rather than a fix in place. Changing which
+    // slot wins would move camera attribution underneath results that are
+    // already settled, and the difference cannot be checked offline: the
+    // harness can prove the mechanism, but "did any settled number move" needs
+    // X4. So this reports the difference while changing NOTHING about what is
+    // reported, rides along on whatever take runs next, and the default flips
+    // once the difference is known.
+    //
+    // All three are gated on X4VR_DUMP_MATRICES via credit_draw's `want`.
+    std::unordered_map<VkDescriptorSet, std::map<uint32_t, ViewSlot>> sets_live;
+    std::unordered_map<VkCommandBuffer, std::vector<ViewSlot>> bound_live;
+    std::map<ViewSlot, uint32_t> credit_live;
     // ...and the subset of those draws that happened inside a VIEW-MASKED
     // pass, i.e. one the layer renders per eye. Task #53: a camera whose
     // M_view is not identity is only our problem if our per-eye transforms
@@ -1219,6 +1248,14 @@ void credit_draw(VkCommandBuffer cb) {
             for (const Tracking::ObjSlot &s : ob->second)
                 g_track.obj_credit[s]++;
     }
+    // Task #67, credited on the SAME draws as `credit` so the two counts are
+    // comparable rather than sampled at different moments.
+    if (want) {
+        auto lb = g_track.bound_live.find(cb);
+        if (lb != g_track.bound_live.end())
+            for (const ViewSlot &s : lb->second)
+                g_track.credit_live[s]++;
+    }
     auto it = g_track.bound.find(cb);
     if (it == g_track.bound.end())
         return;
@@ -1342,6 +1379,7 @@ void frame_flush() {
                  g_track.credit.size(), (unsigned long long)bufsize);
     }
     g_track.credit.clear();
+    g_track.credit_live.clear();
     // Task #56: same lifetime as `credit`, and for the same reason --
     // an object slot's draw count that outlived its frame would make a
     // stale block win the pick.
@@ -1921,6 +1959,11 @@ VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSets(
                     dup = true;
             if (!dup)
                 slots.push_back(s);
+            // Task #67: the same write, recorded with the semantics
+            // vkUpdateDescriptorSets has. Reported beside the append above,
+            // never instead of it -- see the comment on `sets_live`.
+            if (want_matrices())
+                g_track.sets_live[w.dstSet][w.dstBinding + j] = s;
         }
     }
 }
@@ -1979,6 +2022,17 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindDescriptorSets(
             continue;
         // replace: a new bind supersedes previously bound view slots
         bound = it->second;
+        // Task #67: the same bind off the superseding record. Same replace
+        // rule, so the ONLY difference between the two walks is whether a
+        // descriptor write accumulated or replaced.
+        if (want_matrices()) {
+            auto lv = g_track.sets_live.find(sets[i]);
+            auto &bl = g_track.bound_live[cb];
+            bl.clear();
+            if (lv != g_track.sets_live.end())
+                for (const auto &[binding, s] : lv->second)
+                    bl.push_back(s);
+        }
     }
 }
 
@@ -6470,6 +6524,47 @@ void patch_view_before_submit() {
             }
             obj_spread = (uint32_t)scales.size();
         }
+        // ---- task #67: what the two camera walks disagree about ------------
+        //
+        // Reported, not acted on. Every camera number below still comes from
+        // the accumulating walk; this says what the superseding one WOULD have
+        // picked, so the size of the change is known before anything depends
+        // on it.
+        //
+        // Its own once-flag, NOT the object block's. The first version sat
+        // inside the OBJBLOCK gate, which needs an object slot to have been
+        // seen -- so it stayed silent in every harness configuration that does
+        // not set X4VR_TEST_OBJ_BLOCK, and an instrument nothing can exercise
+        // is one nobody has watched work.
+        if (want_matrices()) {
+            static bool live_logged = false;
+            if (!live_logged && !g_track.credit.empty()) {
+                live_logged = true;
+                const ViewSlot *abest = nullptr, *lbest = nullptr;
+                uint32_t an = 0, ln = 0;
+                for (auto &[slot, n] : g_track.credit)
+                    if (n > an) { an = n; abest = &slot; }
+                for (auto &[slot, n] : g_track.credit_live)
+                    if (n > ln) { ln = n; lbest = &slot; }
+                const bool agree =
+                    abest && lbest && abest->buffer == lbest->buffer &&
+                    abest->offset == lbest->offset;
+                X4VR_LOG(
+                    "proj LIVESETS: accumulating %zu slot(s), winner "
+                    "offset=%llu draws=%u | superseding %zu slot(s), winner "
+                    "offset=%llu draws=%u | winner %s. `sets` appends every "
+                    "descriptor write and never clears, so a set handle keeps "
+                    "every arena region it has ever held; `sets_live` keeps "
+                    "the one the last write named. NOTHING reported above "
+                    "uses the superseding walk yet (task #67)",
+                    g_track.credit.size(),
+                    (unsigned long long)(abest ? abest->offset : 0), an,
+                    g_track.credit_live.size(),
+                    (unsigned long long)(lbest ? lbest->offset : 0), ln,
+                    agree ? "AGREES — the pick is unaffected"
+                          : "DIFFERS — camera attribution moves");
+            }
+        }
         if (want_matrices()) {
             static bool obj_logged = false;
             if (!obj_logged && (obj_slots || !g_track.obj_ranges.empty())) {
@@ -9267,11 +9362,16 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
     // cascades. The per-draw cost was the same mistake: an O(history) loop
     // inside credit_draw.
     //
-    // NOT applied to g_track.bound (the camera slots) in this commit, though
-    // the defect is identical there. Every camera number the project has
-    // settled was measured under the accumulating version, so changing that
-    // attribution is a deliberate re-baselining with its own validation, not a
-    // drive-by -- it is task #67.
+    // Not needed for g_track.bound: that one REPLACES on each bind. The
+    // camera path's staleness is in `g_track.sets` instead, which appends a
+    // slot per descriptor write and never clears -- see the comment on
+    // `sets_live`. Task #67 reports that difference rather than fixing it,
+    // because every camera number the project has settled was measured under
+    // the accumulating version.
+    //
+    // (The first version of this comment said the defect was "identical" in
+    // g_track.bound. It is not, and I had not read the assignment at the bind
+    // site when I wrote that.)
     {
         std::lock_guard<std::mutex> lock(g_track.mu);
         auto ob = g_track.obj_bound.find(cb);

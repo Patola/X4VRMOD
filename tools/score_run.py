@@ -1740,6 +1740,36 @@ def main(path):
     # `spread` is the guard that matters: the object block is per-DRAW, so if
     # its slots disagree about the cascade then no single one speaks for the
     # frame and the numbers have no referent. The layer warns; this fails.
+    # --- task #67: the two camera walks, reported not acted on --------------
+    #
+    # Neither outcome is a FAIL. This run's camera numbers all come from the
+    # accumulating walk either way; the line says how much would move if the
+    # default flipped, which is the thing that could not be known offline.
+    lv = [ln for ln in lines if "proj LIVESETS:" in ln]
+    if lv:
+        m = re.search(r"accumulating (\d+) slot\(s\), winner offset=(\d+) "
+                      r"draws=(\d+) \| superseding (\d+) slot\(s\), winner "
+                      r"offset=(\d+) draws=(\d+) \| winner (\w+)", lv[0])
+        if m:
+            acc, ao, an, sup, so, sn, verdict = m.groups()
+            print(f"livesets      accumulating {acc} slot(s) → superseding "
+                  f"{sup}; winner {verdict.lower()}"
+                  + ("" if verdict == "AGREES" else
+                     f" (offset {ao} draws {an} → offset {so} draws {sn})"))
+            drop = int(acc) - int(sup)
+            if drop > 0:
+                print(f"livesets      {drop} slot(s) were stale descriptor "
+                      f"writes. #67 is the decision to flip the default; "
+                      f"nothing above uses the superseding walk yet")
+            if verdict != "AGREES":
+                print("livesets      the WINNER moves, so flipping #67 "
+                      "re-baselines camera attribution — settled camera "
+                      "numbers must be re-read, not assumed to carry over")
+    elif "X4VR_DUMP_MATRICES=1" in (run or ""):
+        print("livesets      no `proj LIVESETS` line — this build predates "
+              "#67's side-by-side, so this log says nothing about how much "
+              "stale descriptor writes move the camera pick")
+
     ob = [ln for ln in lines if "proj OBJBLOCK:" in ln]
     if not ob:
         if "X4VR_DUMP_MATRICES=1" in (run or ""):

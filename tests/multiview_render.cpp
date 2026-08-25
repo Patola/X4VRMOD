@@ -878,7 +878,13 @@ int main(int argc, char **argv) {
             vstride = (1792 + align - 1) / align * align;
         VkBufferCreateInfo bci{};
         bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bci.size = vstride + 1792;
+        // One extra stride under X4VR_TEST_VIEW_REWRITE, so the rewrite can
+        // name a region NO other descriptor set does. Pointing it at an
+        // existing block makes both walks pick the same winner and leaves the
+        // "winner DIFFERS" branch unexercised. Zeros, so every other run is
+        // byte-identical.
+        bci.size = vstride + 1792 +
+                   (getenv("X4VR_TEST_VIEW_REWRITE") ? vstride : 0);
         bci.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
         bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         CHECK(vkCreateBuffer(dev, &bci, nullptr, &vbuf));
@@ -992,6 +998,32 @@ int main(int argc, char **argv) {
             vw[b].pBufferInfo = &vbi[b];
         }
         vkUpdateDescriptorSets(dev, 2, vw, 0, nullptr);
+
+        // X4VR_TEST_VIEW_REWRITE -- task #67, and the only configuration in
+        // which the two camera walks can disagree.
+        //
+        // Written once each, the accumulating and superseding records are
+        // identical, so a "LIVESETS ... AGREES" line would prove nothing about
+        // the instrument. Re-point vset[0]'s binding 0 at the second block and
+        // they must diverge: the accumulating record keeps both regions and
+        // credits both on every draw, the superseding one keeps the live one.
+        //
+        // It re-points at the THIRD region, which nothing else names, so the
+        // stale entry at offset 0 keeps vset[0]'s whole draw count to itself.
+        // That makes the two walks disagree about the WINNER and not merely
+        // the slot count: the accumulating one still picks offset 0, the
+        // superseding one picks 2*vstride. Both branches of the comparison
+        // then get exercised by the pair of runs.
+        //
+        // This case asserts slot BOOKKEEPING, not block contents; the third
+        // region is zeros and nothing reads it for geometry.
+        if (getenv("X4VR_TEST_VIEW_REWRITE")) {
+            VkDescriptorBufferInfo rbi = vbi[0];
+            rbi.offset = 2 * vstride;
+            VkWriteDescriptorSet rw = vw[0];
+            rw.pBufferInfo = &rbi;
+            vkUpdateDescriptorSets(dev, 1, &rw, 0, nullptr);
+        }
 
         // ---- task #56: the OBJECT block at set 3 -----------------------
         //

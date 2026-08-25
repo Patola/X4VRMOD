@@ -8352,11 +8352,35 @@ cost a measurement ten prior takes already had.
 13748 binds, no other range at set 3. The declared members reach ~560 bytes and
 768 is that rounded to a 256-byte alignment. Corrected.
 
-**`g_track.bound` (the camera slots) has the identical never-cleared defect**
-and is *not* fixed here. Every camera number the project has settled was
-measured under the accumulating version, so re-baselining it is a deliberate
-change with its own validation — task #67. It is also the likeliest explanation
-for *"cam#N is a UBO slot, not a camera"*.
+**CORRECTION, made while building #67.** This section first said *"`g_track.bound`
+(the camera slots) has the identical never-cleared defect"*. **That named the
+wrong member.** `bound` **replaces** on each bind (`bound = it->second`) — I
+inferred the defect from the absence of a `.clear()` without reading the
+assignment at the bind site, which is the same mistake the false CSM invariant
+was.
+
+The camera path's staleness is real but lives in **`g_track.sets`**: it appends
+one entry per descriptor write, dedupes on (buffer, offset), and is never
+cleared *or capped*. `bound` then copies that whole accumulated list and
+`credit_draw` credits every entry on every draw. Take 202 decoded **600 slots**
+with **125 of them carrying three distinct projections each** — that is the
+signature, and it is the likeliest explanation for *"cam#N is a UBO slot, not a
+camera"*.
+
+Still not fixed, deliberately. Every settled camera number was measured through
+the accumulating walk, and the one thing that could not be established offline
+is *how much* flipping it moves. So **task #67 reports instead of acting**:
+`sets_live` records the same writes with the semantics `vkUpdateDescriptorSets`
+actually has, and one `proj LIVESETS` line per run says what the superseding
+walk *would* have picked. Nothing above it uses that walk. The default flips
+once a real X4 frame has shown the size of the change — and that line rides
+free on whatever take runs next, so it confounds nothing.
+
+`tests/run-multiview-render.sh` runs it twice: written once the two walks must
+agree (an instrument that invents differences is useless), and with one binding
+re-pointed at a region nothing else names they must differ in **both** the slot
+count and the winner. Before that second case the `DIFFERS` branch had never
+been seen to fire.
 
 ## Measuring the seam from a screenshot, if it ever comes up again
 
