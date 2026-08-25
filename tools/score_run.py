@@ -1740,6 +1740,53 @@ def main(path):
     # `spread` is the guard that matters: the object block is per-DRAW, so if
     # its slots disagree about the cascade then no single one speaks for the
     # frame and the numbers have no referent. The layer warns; this fails.
+    # --- task #68: did X4's free-look clamp actually move? ------------------
+    #
+    # X4's own readback, from `inject camread: X4 <y>,<p> ... | cmd <y>,<p>`.
+    # Two things have to be true before the answer means anything, and both are
+    # checked here rather than assumed:
+    #
+    #   * the read-back must be LIVE. 66% of the samples across 15 stored takes
+    #     have raw 0.0000,0.0000 -- X4 reporting nothing, not reporting zero --
+    #     and averaging those in says "the camera never moved".
+    #   * the COMMAND must have exceeded the old stop. The servo clamps its own
+    #     target, so if it never asked past 65 the camera could not go there
+    #     and "no change" is a statement about the player's neck, not about X4.
+    cam = re.findall(
+        r"camread: X4 (-?[\d.]+),(-?[\d.]+) deg \(raw (-?[\d.]+),(-?[\d.]+)\)"
+        r" \| cmd (-?[\d.]+),(-?[\d.]+)", text)
+    if cam:
+        live = [c for c in cam
+                if not (float(c[2]) == 0.0 and float(c[3]) == 0.0)]
+        print(f"clamp   {len(cam)} camread sample(s), {len(live)} with a live "
+              f"read-back ({len(cam) - len(live)} returned raw 0,0)")
+        if not live:
+            print("clamp   NOTHING to read — every sample is a dead read-back, "
+                  "so this run says nothing about the clamp")
+        else:
+            xy = max(abs(float(c[0])) for c in live)
+            xp = max(abs(float(c[1])) for c in live)
+            cy = max(abs(float(c[4])) for c in live)
+            cp = max(abs(float(c[5])) for c in live)
+            print(f"clamp   max |X4| yaw={xy:.2f} pitch={xp:.2f} deg   "
+                  f"(max |command| yaw={cy:.2f} pitch={cp:.2f})")
+            asked = cy > 66.0
+            if not asked:
+                print("clamp   INCONCLUSIVE — the command never exceeded 66 "
+                      "deg, so the servo never asked to go past the old stop. "
+                      "Turn the head further, or raise "
+                      "X4VR_HEADLOOK_YAW_LIMIT; a 65.00 here is the servo's "
+                      "ceiling, not X4's")
+            elif xy > 65.5:
+                print(f"clamp   MOVED ✓ — X4 reached {xy:.2f} deg of yaw, past "
+                      f"the 65.00 stop every stored take pins to. The override "
+                      f"reached X4 and the limit is data, confirmed live")
+            else:
+                print("clamp   DID NOT MOVE — the command asked past 66 deg "
+                      "and X4 still stopped at 65.00, so the override did not "
+                      "reach the camera. Check `fileprobe` for whether the "
+                      "file was even read before blaming the value")
+
     # --- task #68: which door does X4 knock on for parameters.xml? ----------
     #
     # It records ATTEMPTS, so a path that does not exist still shows up -- that
