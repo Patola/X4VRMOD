@@ -8497,13 +8497,33 @@ that is the first requirement for reaching it non-intrusively.
 expensive region into something X4 renders *properly* — no reprojection, no
 guard band, free.
 
-**That is a lead, not a finding, and this project has been burned by exactly
-this shape before.** X4 never shipped a VR edition, and its `INPUT_SOURCE_*`
-headset names and the `enableopentrack` tag are dead residue
-([[x4vr-vr-residue-is-not-a-door]]). `trackmax*` is a better bet than those —
-it sits on the same element as two attributes proven live to the digit, rather
-than dangling in an enum — but "X4 parses this element" is not "X4 selects
-these attributes". **Unverified.**
+**SETTLED: do not pursue `trackmax*`.** It is a VR-shaped name in a binary
+whose entire VR surface is residue, and the section *"The residue is much wider
+than `IsVRMode`"* above ends with an instruction I did not follow before
+spending on this: **"Before spending anything on a VR-shaped name in this
+binary, re-read this section."**
+
+Re-reading it answers the question. What would have to switch X4 into "tracked"
+mode is its head-tracker path — the twenty-two `*ActiveHeadTracker*` accessors,
+`IsHeadTrackingActive`, `GetOpenTrackConnectionStatus`, and the
+`enableopentrack` config tag sitting at `false` in the player's own file. All of
+it is listed there as residue, reopened four separate times, and OpenTrack is a
+forbidden path besides.
+
+And the evidence I had gathered for `trackmax*` is exactly the class that
+section names as insufficient. `trackmaxyaw` and `trackmaxpitch` DO appear in
+the binary — but in an **alphabetically sorted attribute-name interning table**
+(`…sway, tactical, takeoff…`), which is consistent with the names being
+data-derived and proves only that they were *named*. X4's own
+`libraries/parameters.xsd` does not cover this section at all, so the schema
+adds nothing either. Quoting the rule it broke: *"an exported symbol, a
+vocabulary string and a config tag are each evidence that a feature was named,
+never that it is implemented here."*
+
+**So #68 raises `maxyaw`/`maxpitch` directly.** Those are proven live to the
+digit — the overshoot pins to exactly 65.00 and 35.00 — and depend on no
+VR-shaped name at all. The 85/85 pair is recorded here only so the next person
+does not re-find it and think it is a door.
 
 ### The delivery problem, which is the real open question
 
@@ -8527,13 +8547,21 @@ once and never written":
 
 Route 1 is the one that fits. It is not built.
 
-### What to settle first, and it is cheap
+### What #68 carries
 
-**Does X4 use `trackmax*` at all, and what makes input "tracked"?** If it does,
-route 1 delivers 85/85 without changing a single number X4 did not already
-ship. If it does not, route 1 still delivers by raising `maxyaw`/`maxpitch`
-directly — those are proven live. So the delivery work is worth doing either
-way, and the `trackmax*` question only decides *which value* it carries.
+`maxyaw` and `maxpitch`, raised directly. Not `trackmax*` — see above.
+
+The value to raise them *to* is open and is a comfort question, not a technical
+one: `<external>` and `<externalengine>` in the same file already use
+`maxpitch="85"`, so 85 is a number X4 itself considers reasonable for a
+look-around, but the internal view has cockpit geometry behind it and the
+honest answer is what the canopy actually shows. That is Patola's eye, not a
+measurement.
+
+**The one thing that could still refuse:** that these values are read once into
+a camera object and clamped again somewhere downstream. Nothing suggests it,
+but #68's first take is what would show it — X4's own readback going past 65.00
+is the whole acceptance test, and it needs no new instrument.
 
 Extracted to `/tmp/x4-libs` with `/tmp/x4cat.py`. **X4's content — never
 committed**, same rule as the shaders and the Lua.
