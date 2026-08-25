@@ -8220,6 +8220,54 @@ names it by value: `reported 0.009/111 m — that is camera member 9`.
 **#56 is answerable by measurement now** rather than blocked on the instrument.
 It still wants the three runs: two at one field for the spread, one at another.
 
+# THE RUN IN FLIGHT — take 203, flatscreen, three passive instruments
+
+    X4VR_POSE_ROTATE=1 X4VR_TAKE=203-PROBE X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_SHEAR_LIGHTS=1 X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_POSE_YAW=20 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take203.log X4VR_PIPE_INVENTORY=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_MV_INVENTORY=1 X4VR_FILEPROBE=1 ./launch/x4vr-launch.sh
+
+Derived from take 202's logged `env: run =` line. **Only three tokens differ**:
+`X4VR_TAKE`, `X4VR_LOG`, and the added `X4VR_FILEPROBE=1`. Same field, same
+yaw, same everything else — so every number is directly comparable to 202.
+
+**Flatscreen on purpose.** `X4VR_VR` is absent, as it was in 202. Both open
+questions this take answers are answerable without a headset, and the third
+instrument (`pose residual`) needs the runtime's frusta and will stay silent —
+that is expected, not a failure. It gets its own VR take later.
+
+### Predictions, filed before the run
+
+1. **The take-202 `FAIL` is gone.** No `csm-scale=inf` anywhere, and
+   `objblock` reports far fewer than 167 slots. 202 accumulated every
+   descriptor write ever made to the set and read regions X4 had recycled;
+   writes supersede now. *If `inf` survives, the fix did not take and the
+   scorer will FAIL on it by name.*
+2. **`livesets` shows a large gap** — accumulating in the hundreds (202
+   decoded 600 camera slots), superseding a handful. Whether the WINNER moves
+   is genuinely unknown and is the number #67 is waiting on.
+3. **`fileprobe` sees `camerasettings`** at a user-level path. That is the
+   POSITIVE CONTROL, because the player has one on disk. Whether it also sees
+   a user-level `parameters.xml` is the open question and either answer is
+   informative.
+4. **Everything else matches 202**: `sx` set `0.70024 / 1.33333 / 1.00000 /
+   3.78085`, `classify … 0 of them also reported World`, `pose-channel … OK`,
+   thresholds `[5.2 23.9 195.1 1338.7]`, gameplay perf in the 6.4–7.5 ms band.
+
+### What each answer unlocks
+
+* `fileprobe` finds a user-level `parameters.xml` → **#68 is nearly free**: the
+  injector's existing `fopen` path serves it, nothing is written, the save's
+  `modified="0"` is untouched.
+* It does not, but the control fired → #68 needs the extension route, and the
+  `modified="0"` question has to be settled before spending it.
+* The control did NOT fire → the run never reached that code and the take says
+  nothing either way. The scorer says so rather than reading silence as "no".
+
+### Cost
+
+One ordinary flatscreen take, no headset, no flying. The probe is deduped and
+capped at 400 paths and the `livesets` walk is gated behind
+`X4VR_DUMP_MATRICES`, which this take already sets — so neither should move the
+perf number. Prediction 4 includes that band precisely so a surprise is visible.
+
 # RESUME HERE AFTER A COMPACT — state as of take 202
 
 Everything below supersedes earlier "read this first" banners.
