@@ -8236,52 +8236,127 @@ Everything below supersedes earlier "read this first" banners.
 * **#33's rotation is confirmed** and the classify fix is in
   (`stage17-classify-x4s-bytes`). Still not built: the runtime head-pose
   source — the rotation is a static `X4VR_POSE_YAW`.
-* **The object-block capture is in.** `read_shadow_terms` now takes the cascade
-  X4's shaders sample: `M_shadowCSM0`, member 3 of the object block (set 3,
-  189 samplers), not `M_shadowCSM0Clip` at camera member 9 (370 declare,
-  **0 sample**).
+* **#56 is ANSWERED** — from stored logs, no run. X4's cascade **splits** move
+  with `<fov>` (nearer as the field widens); the **atlas** does not. The guard
+  band's shadow price lands on the **far** field. Full evidence in the take-202
+  section below. **`csm0-scale` is not the quantity** — `V_csmthresholds` is.
+* **The object-block capture is in but is NOT #56's evidence.**
+  `read_shadow_terms` reads `M_shadowCSM0`, member 3 of the object block (set
+  3, 189 samplers) rather than the dead `M_shadowCSM0Clip` — but that member is
+  **per-object** and composes the draw's own source frame, so its `|row0|` is a
+  cascade scale only for a view-space reader and the walk does not identify
+  which. Take 202's `FAIL` came from this and from a walk that was reading
+  recycled memory; both are fixed, and neither was a defect in X4.
 
-## THE RUN IN FLIGHT — take 202, first of three for #56
+## Take 202 — #56 ANSWERED, and the FAIL was my own instrument
 
-    X4VR_POSE_ROTATE=1 X4VR_TAKE=202-CSM-A1 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_SHEAR_LIGHTS=1 X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_POSE_YAW=20 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take202.log X4VR_PIPE_INVENTORY=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_MV_INVENTORY=1 ./launch/x4vr-launch.sh
+Take 202 ran and FAILed: *"the frame's object slots carry 2 distinct cascade
+scales"*. **Both halves of that line were wrong** — the invariant it asserted
+and the walk it asserted it about — and #56 turned out to be answerable from
+logs already on disk, with no run at all.
 
-Load, let the fade-in finish, screenshot `/tmp/x4-202.png`, quit. No flying, no
-zoom, no `M`. Derived from take 201 — only `X4VR_TAKE` and `X4VR_LOG` differ.
+### The answer
 
-**#56 needs THREE runs and this is one of them:**
+**X4's cascade split distances DO respond to `<fov>`. The atlas does not.**
 
-| | take | fov | yaw | purpose |
-|---|---|---|---|---|
-| 1 | **202** | 1.4917 | 20 | field A, sample 1 |
-| 2 | 203 | 1.4917 | 20 | **identical repeat** → the run-to-run spread |
-| 3 | 204 | 1.75 | 20 | field B |
+`V_csmthresholds` is a `vec4` in the camera block at float 232, and X4's own
+`common_frag.glsl:1071` does `if (depth < V_csmthresholds[i])` — so these are
+the cascade split distances in view metres, read live from X4 rather than
+derived by us.
 
-Two at one field first, because takes 197 and 201 were identical runs that
-disagreed — on the dead member, but the spread has never been measured on the
-live one either.
+| fov | fov-sensitive set | also present |
+|---|---|---|
+| 1.4917 | `[5.2 23.9 195.1 1338.7]` — **takes 190–199, 201, 202** | `[7.2 33.3 269.9 1856.4]` |
+| 1.75 | `[4.7 21.1 173.6 1189.6]` — take 200 | `[7.2 33.3 269.9 1856.4]` |
 
-### How to read take 202's result
+The control was already run **eleven times**: every stored take at fov 1.4917
+gives the identical set to the printed precision, across different yaw, shear
+and classification knobs. Takes 200 and 202 differ in `X4VR_TAKE`, `X4VR_LOG`
+and `X4VR_FOV` and **nothing else** — a single-variable comparison.
 
-Run `python3 tools/score_run.py /tmp/x4vr-take202.log` and read, in order:
+`mapsize` 2048, `maxdist` 5000 and `factors` [1 1 1 1 1] are unchanged at both
+fields, as is the 10 × 2048² D16 atlas.
 
-1. **`objblock`** — must be present. Its absence means the build predates the
-   capture and every csm number is from the dead member. **A spread > 1 is a
-   FAIL**: the object block is per-draw, so if its slots disagree no single one
-   speaks for the frame. Check this *before* looking at any cascade number.
-2. **`csm0 scale (NDC per metre)`** — the SET, not the summary. Take 201 showed
-   `spans` is not even a function of the set.
-3. The standing gates: `classify … 0 of them also reported World`, the `sx` set
-   `0.70024 / 1.33333 / 1.00000 / 3.78085`, `pose-channel … OK`.
+**So the splits move NEARER as the field widens** — ×0.888 for a ×1.173
+widening. That is neither hypothesis in #56's framing: fitted-to-frustum would
+make cascade 0 *grow* with the field, fixed-extent would leave it alone. With
+the atlas fixed and the splits pulled inward, the last cascade covers
+1189.6→5000 m instead of 1338.7→5000 m on the same texels — **the guard band's
+shadow price lands on the far field, not the near one.**
 
-**Takes 197/199/200/201 cannot be reused for #56** — all four measured
-`M_shadowCSM0Clip`, which nothing samples.
+**Direction established, law NOT.** ×0.888 matches neither `tan(θ/2)` (0.681)
+nor `1/sx` (0.681) nor `cos` (0.751). Two points cannot fit a law and I am not
+going to pretend otherwise; a third field would discriminate and costs one
+take, whenever the law actually matters for a decision.
 
-### What #56 asks
+### Why `<fov>` reaches X4's CPU at all
 
-Does widening `<fov>` coarsen the shadows? Fitted-to-frustum spreads the same
-texel budget over a wider world and the cascade span **grows with the field**;
-fixed-extent leaves it alone. The atlas itself does not grow — every stored run
-says 10 maps of 2048² D16 regardless of field.
+Because `X4VR_FOV` is a **config override**, not a projection patch
+(`injector/x4vr_config.hpp:109`) — the injector serves X4's own `<fov>` tag, so
+X4 computes its splits from it. That is task #24's non-intrusive path paying
+off in a place it was not designed for.
+
+### The camera that carries the shadows is not the one we widen
+
+In take 202, **85 camera slots only ever show `sx=1.33333`** and **38 only ever
+show `sx=0.70024`** — disjoint, zero overlap, so these are two real populations
+and not one slot sampled before and after our own rewrite. **All 58
+shadow-configured slots are in the 1.33333 group; none is in the widened one.**
+X4 never attaches a cascade configuration to the camera whose field we widen,
+yet the splits it uploads still respond to the setting.
+
+### What the FAIL actually was
+
+Two separate defects, both mine.
+
+**The invariant was false.** The warning said *"the CSM is light-space and
+should be identical in every slot"*. X4's shipped GLSL refutes it: there is
+exactly **one** declaration of `M_shadowCSM0`, member 3 of the per-**object**
+`BUFFER_BINDING_SLOT_WORLD` block — and X4 feeds it three different source
+frames. `mul(vec4(Pos,1), M_shadowCSM0)` with object-space `Pos` in 186 vertex
+entry points, `mul(vec4(IO_world_pos,1), …)` in others, and
+`mul(vec4(view_pos,1), …)` in 54 fragment ones. It carries the draw's own
+transform composed with the cascade, so **a spread is the expected reading**,
+and `|row0|` is a cascade scale only for a view-space reader. Fifty-odd takes
+of `csm0-scale` were chasing a quantity that never had the meaning assumed.
+
+**And the walk was reading dead memory.** `obj_sets` appended one entry per
+descriptor write and was **never cleared**; `obj_bound` was never cleared
+either. X4 re-points set 3 binding 0 at a fresh sub-allocation per draw — 13748
+binds in this take — so the walk accumulated 167 slots and credited *all of
+them on every draw*. About half had been recycled by the time the report ran,
+which is where `csm0-scale=inf` came from, and the "2 distinct scales" was
+`{0.154204, inf}`. A descriptor write **replaces** a binding; the layer now
+models it that way, keyed by `dstBinding`, and clears `obj_bound` at
+`vkBeginCommandBuffer`.
+
+`tests/run-multiview-render.sh` gained `X4VR_TEST_OBJ_REWRITE`, which writes
+one binding twice and asserts the second wins with **one** distinct scale. It
+fails on the old code and passes on the new. The pre-existing cases pass either
+way — the fixture only ever wrote once, which is exactly why this hid.
+
+**The same rewrite silently disarmed three negative controls**, because they
+grepped for wording I deleted (`cascade 0 spans`, `OBJBLOCK: WARNING`). All
+three are re-pointed at the current text with a note to move them together.
+
+### The rule this broke, again
+
+**Sweep the stored logs for the line a proposed run would produce, before
+specifying the run.** The three-take plan for #56 asked for a fixed-field
+control that eleven takes already contained. This is the second time; the first
+cost a measurement ten prior takes already had.
+
+### What is still open
+
+`kObjBlockBytes` was `576`, a guess from a dump. X4 binds **768** — measured,
+13748 binds, no other range at set 3. The declared members reach ~560 bytes and
+768 is that rounded to a 256-byte alignment. Corrected.
+
+**`g_track.bound` (the camera slots) has the identical never-cleared defect**
+and is *not* fixed here. Every camera number the project has settled was
+measured under the accumulating version, so re-baselining it is a deliberate
+change with its own validation — task #67. It is also the likeliest explanation
+for *"cam#N is a UBO slot, not a camera"*.
 
 ## Measuring the seam from a screenshot, if it ever comes up again
 
@@ -8310,7 +8385,13 @@ existed. It is poisoned to 0.009 now.
 
 Everything below this line supersedes earlier "read this first" banners.
 
-## Where the project is
+## Where the project is — AS OF TAKE 196, SUPERSEDED
+
+**Kept for the reasoning, not for the status.** Two bullets below are now
+false: the seam is **settled as geometry** (take 199/200, tagged
+`stage18-seam-laws-confirmed`), and "the next feature" list has moved on. The
+current state is the *first* "Where the project is" under the RESUME HERE
+banner. If these two disagree, that one wins.
 
 * **#33's head rotation is CONFIRMED.** Take 187: `headlook_verify --scan` gives
   a sharp isolated spike at **+10.00°** in both eyes (0.714/0.718 against ~0.02
@@ -8334,7 +8415,26 @@ Everything below this line supersedes earlier "read this first" banners.
   seams measurably strengthened (step 4→7, 4→6). It is a diagnostic
   configuration, not a shippable one.
 
-## The immediate next task
+## The immediate next task — as of take 202
+
+**No run is pending, and none is owed.** #56 closed without one. Take 202's
+`FAIL` was the instrument; the layer, the scorer and the render suite are
+fixed, and the suites are green.
+
+**The next feature is the runtime head-pose source for #33** — the rotation is
+still a static `X4VR_POSE_YAW`. Everything under it is built and proven:
+the conjugation (#61, 244/244 modules at 0.000e+00), the per-frame channel
+(#59, set 31, 1125/1125 pipelines), and the classification (#48/#49).
+
+Two instrument tasks are open and neither blocks that: **#67** (the camera slot
+walk has the same never-cleared defect the object walk had, and re-baselining
+it moves settled camera numbers) and a third `<fov>` point if #56's *law* ever
+has to be known rather than its direction.
+
+---
+
+*Everything below this line is the take-197 note it replaced, kept for the
+reasoning.*
 
 **DONE — take 197 validated the classify fix, tagged
 `stage17-classify-x4s-bytes`.** World-and-procedural 14 → 0; the patch paths

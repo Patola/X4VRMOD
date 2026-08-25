@@ -572,7 +572,19 @@ struct Tracking {
     // hook cannot know which index a set will be bound at -- that is decided
     // at vkCmdBindDescriptorSets -- so this mirrors the camera path: record by
     // handle here, filter by set index there.
-    std::unordered_map<VkDescriptorSet, std::vector<ObjSlot>> obj_sets;
+    //
+    // Keyed by dstBinding and REPLACED on each write, because that is what
+    // vkUpdateDescriptorSets does: a write to (set, binding) supersedes what
+    // that binding held. The first version appended instead, deduping on
+    // (buffer, offset, range) -- so a set X4 re-pointed at a fresh per-draw
+    // sub-allocation grew an entry per write and kept every dead one. Take 202
+    // read 167 of them at once.
+    //
+    // The binding is in the key rather than assumed to be kObjectBinding: all
+    // four of X4's blocks do sit at binding 0 (uniform_block_scan over the 409
+    // dumps), but that is an observation about this build, and a map that
+    // silently merged two bindings would report one as the other.
+    std::unordered_map<VkDescriptorSet, std::map<uint32_t, ObjSlot>> obj_sets;
     std::unordered_map<VkCommandBuffer, std::vector<ObjSlot>> obj_bound;
     std::map<ObjSlot, uint32_t> obj_credit;
     // (set index, range) -> writes seen. An inventory, so "which range is the
@@ -1893,15 +1905,11 @@ VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSets(
             // hook, which is per draw and stays filtered.
             if (want_matrices() && bi.range != kViewBlockRange &&
                 bi.range != VK_WHOLE_SIZE) {
-                auto &os = g_track.obj_sets[w.dstSet];
-                Tracking::ObjSlot o{bi.buffer, bi.offset, bi.range};
-                bool odup = false;
-                for (auto &e : os)
-                    if (e.buffer == o.buffer && e.offset == o.offset &&
-                        e.range == o.range)
-                        odup = true;
-                if (!odup && os.size() < 4096)
-                    os.push_back(o);
+                // Replaces, never appends: see the comment on obj_sets. A
+                // descriptorCount>1 write fills consecutive bindings from
+                // dstBinding, so j indexes the binding as well as the info.
+                g_track.obj_sets[w.dstSet][w.dstBinding + j] =
+                    Tracking::ObjSlot{bi.buffer, bi.offset, bi.range};
             }
             if (bi.range != kViewBlockRange)
                 continue;
@@ -1949,7 +1957,9 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindDescriptorSets(
             auto it = g_track.obj_sets.find(sets[i]);
             if (it == g_track.obj_sets.end())
                 continue;
-            for (const Tracking::ObjSlot &s : it->second) {
+            for (const auto &[binding, s] : it->second) {
+                if (binding != kObjectBinding)
+                    continue;
                 g_track.obj_ranges[{firstSet + i, s.range}]++;
                 bool dup = false;
                 for (auto &e : ob)
@@ -6482,12 +6492,20 @@ void patch_view_before_submit() {
                          obj_slots, (unsigned long long)obj_range, obj_spread,
                          inv.empty() ? "(none)" : inv.c_str());
                 if (obj_spread > 1)
-                    X4VR_LOG("proj OBJBLOCK: WARNING -- %u distinct cascade "
-                             "scales across the object slots. The CSM is "
-                             "light-space and should be identical in every "
-                             "one, so either X4 varies it per draw or the "
-                             "slot walk is reading the wrong member. Do NOT "
-                             "read the numbers below as one cascade",
+                    X4VR_LOG("proj OBJBLOCK: %u distinct |row0| across the "
+                             "object slots -- EXPECTED, not a defect. "
+                             "M_shadowCSM0 is member 3 of the per-OBJECT "
+                             "block and X4 feeds it three different source "
+                             "frames: object-space Pos (186 vertex entry "
+                             "points), world-space IO_world_pos, and "
+                             "view-space view_pos (54 fragment ones). So it "
+                             "carries the draw's own transform, not one "
+                             "light-space cascade, and its |row0| is only a "
+                             "cascade scale for a slot bound to a "
+                             "view-space reader. This walk does not identify "
+                             "which, so do NOT read the numbers below as a "
+                             "cascade. #56 is answered from V_csmthresholds "
+                             "instead -- see docs/x4-quirks.md",
                              obj_spread);
             }
         }
@@ -6758,22 +6776,28 @@ void patch_view_before_submit() {
                     st.thresholds[3], st.csm0_scale, st.csm1_scale,
                     st.cascade_measured
                         ? ""
-                        : "  <- csm scales are UNMEASURED and read 0 on "
-                          "purpose. This block is the CAMERA one, whose "
-                          "M_shadowCSM0Clip (member 9) 370 dumped modules "
-                          "declare and ZERO sample; the live matrix is "
-                          "M_shadowCSM0, member 3 of the OBJECT block at set 3 "
-                          "binding 0, sampled by 189. g_track only records UBO "
-                          "slots of range 1792 and that block is ~576, so the "
-                          "layer cannot reach it yet (task #56). The scalars "
-                          "above are real and are all this run establishes");
+                        : "  <- csm scales read 0 because no object slot was "
+                          "supplied for this report. The scalars above are "
+                          "live camera-block members and are real on their "
+                          "own: `thresholds` is V_csmthresholds, which X4's "
+                          "own common_frag.glsl compares against view depth "
+                          "to pick a cascade, and it is what answers #56");
+                // NOT "compare this against another X4VR_FOV" any more. That
+                // prompt ran on every take from 148 to 202 and the comparison
+                // it asked for cannot be made from this number: |row0| of
+                // member 3 folds in the draw's own source frame (see the
+                // OBJBLOCK line). `thresholds` is the quantity that answers
+                // #56, it is on the line above, and it is already answered:
+                // identical across eleven stored takes at X4VR_FOV=1.4917 and
+                // different at 1.75, with takes 200/202 differing in nothing
+                // else. Splits move NEARER as the field widens.
                 if (st.cascade_measured)
-                    X4VR_LOG("proj SHADOW cam#%u: cascade 0 spans %.1f m "
-                             "across %.0f texels -> %.4f m per texel. Compare "
-                             "this against another X4VR_FOV: fitted to the "
-                             "frustum it grows with the field, fixed extent it "
-                             "does not",
-                             c.id,
+                    X4VR_LOG("proj SHADOW cam#%u: object-block member 3 "
+                             "|row0|=%.6g -> %.1f m, %.0f texels, %.4f m per "
+                             "texel IF this slot's reader takes view space. "
+                             "Unverified here -- treat as provenance, not a "
+                             "cascade",
+                             c.id, st.csm0_scale,
                              st.csm0_scale > 0 ? 1.0f / st.csm0_scale : 0.0f,
                              st.map_size * st.factor[0], st.csm0_m_per_texel);
                 c.shadow_seen = true;
@@ -9230,6 +9254,29 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
         std::lock_guard<std::mutex> lock(g_pose.mu);
         g_pose.cb_region[cb] =
             (uint32_t)(g_pose.next_region++ % kPoseRegions);
+    }
+    // Task #56/#66: this command buffer's object-block binds die here.
+    //
+    // Vulkan requires a reset before re-recording, so whatever set 3 was bound
+    // to on the previous recording is gone -- crediting it on this frame's
+    // draws credits history. That is not a small error for THIS map: the object
+    // block is per-draw, X4 sub-allocates a fresh region for every one, and
+    // take 202 accumulated 167 of them and then read all 167 on every draw.
+    // Roughly half had been recycled by the time the report ran, which is where
+    // `csm0-scale=inf` came from and why the frame appeared to carry two
+    // cascades. The per-draw cost was the same mistake: an O(history) loop
+    // inside credit_draw.
+    //
+    // NOT applied to g_track.bound (the camera slots) in this commit, though
+    // the defect is identical there. Every camera number the project has
+    // settled was measured under the accumulating version, so changing that
+    // attribution is a deliberate re-baselining with its own validation, not a
+    // drive-by -- it is task #67.
+    {
+        std::lock_guard<std::mutex> lock(g_track.mu);
+        auto ob = g_track.obj_bound.find(cb);
+        if (ob != g_track.obj_bound.end())
+            ob->second.clear();
     }
     return d->BeginCommandBuffer(cb, bi);
 }

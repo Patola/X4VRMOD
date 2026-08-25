@@ -1853,7 +1853,7 @@ view_arena_case() {
     # the matrix is passed directly. What belongs HERE is the refusal: with no
     # live cascade source the layer must report the scalars and decline the
     # cascade, rather than dress up whatever the buffer held as a measurement.
-    if grep -aq 'csm0-scale=0 csm1-scale=0  <- csm scales are UNMEASURED' <<<"$out"; then
+    if grep -aq 'csm0-scale=0 csm1-scale=0  <- csm scales read 0' <<<"$out"; then
         printf 'ok   %-38s scalars kept, cascade declined\n' \
             "shadow: cascade refuses a dead source"
     else
@@ -1862,9 +1862,15 @@ view_arena_case() {
         grep -a 'proj SHADOW' <<<"$out" | sed 's/^/       | /' | head -4
         fails=$((fails + 1))
     fi
-    # ...and it must NOT print a span, because a span implies a measurement.
-    # The old text is named so a revert cannot pass silently.
-    if ! grep -aq 'cascade 0 spans' <<<"$out"; then
+    # ...and it must NOT print the matrix line at all, because printing it
+    # implies a measurement was made.
+    #
+    # This grep names the phrase the CURRENT layer emits. It used to look for
+    # 'cascade 0 spans', which the take-202 rewrite deleted -- leaving a guard
+    # that could no longer fail, passing on every run for the wrong reason.
+    # Whenever that line is reworded again, reword this with it, or the case
+    # goes quiet instead of red.
+    if ! grep -aq 'object-block member 3 |row0|=' <<<"$out"; then
         printf 'ok   %-38s and prints no span at all\n' \
             "shadow: no span without a source"
     else
@@ -1992,7 +1998,8 @@ objblock_case() {
     fi
     # ...and the arithmetic the old layer case used to assert, now over the
     # member X4 actually samples.
-    if grep -aq 'cascade 0 spans 500.0 m across 1024 texels -> 0.4883' <<<"$logtext"; then
+    if grep -aq 'object-block member 3 |row0|=0.002 -> 500.0 m, 1024 texels, 0.4883' \
+            <<<"$logtext"; then
         printf 'ok   %-38s 500 m / 1024 texels = 0.4883 m\n' \
             "objblock: the arithmetic survives the move"
     else
@@ -2014,10 +2021,14 @@ objblock_case() {
     fi
     # The guard against the assumption this could otherwise smuggle in: that
     # any one object slot speaks for all of them. One slot here, so exactly one
-    # distinct scale, and a spread >1 must warn rather than average.
+    # distinct scale, and a spread >1 must say so rather than average.
+    #
+    # The second grep names the CURRENT phrase. It used to look for
+    # 'OBJBLOCK: WARNING', which the take-202 rewrite deleted along with the
+    # false invariant that message asserted -- so it could no longer fail.
     if grep -aq '1 distinct cascade scale(s) this frame' <<<"$logtext" &&
-       ! grep -aq 'OBJBLOCK: WARNING' <<<"$logtext"; then
-        printf 'ok   %-38s one slot, one scale, no warning\n' \
+       ! grep -aq 'distinct |row0| across the object slots' <<<"$logtext"; then
+        printf 'ok   %-38s one slot, one scale, no spread note\n' \
             "objblock: the spread guard agrees"
     else
         printf 'FAIL %-38s spread guard disagreed\n' \
@@ -2037,6 +2048,61 @@ objblock_case() {
     fi
 }
 objblock_case
+
+# ---- take 202's defect: a descriptor write REPLACES, it does not accumulate --
+#
+# X4 re-points set 3 binding 0 at a fresh sub-allocation per draw -- 13748 binds
+# in take 202. The layer appended each write to a per-set vector and credited
+# the whole vector on every draw, so by the report it held 167 slots, about half
+# of them regions X4 had already recycled. Those read as `csm0-scale=inf`, the
+# frame appeared to carry two cascades, and the run FAILed on a defect that was
+# entirely the instrument's.
+#
+# The fixture writes binding 0 twice, at offset 0 then offset 256. Only the
+# second is live afterwards, so the one correct answer is 0.008 / 125 m / ONE
+# distinct scale. The old code reports both regions and picks by draw count.
+objblock_rewrite_case() {
+    local log logtext
+    log="$(mktemp)"
+    env VK_ADD_LAYER_PATH="$BUILD/layer" \
+        VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core \
+        X4VR_MV=1 X4VR_TEST_VIEW_ARENA=1 X4VR_TEST_OBJ_BLOCK=1 \
+        X4VR_TEST_OBJ_REWRITE=1 \
+        X4VR_DUMP_MATRICES=1 X4VR_LOG="$log" timeout 120 "$BIN" >/dev/null 2>&1
+    logtext=$(cat "$log"); rm -f "$log"
+    # The SECOND region, and only it.
+    if grep -aq 'csm0-scale=0.008 csm1-scale=0.002' <<<"$logtext"; then
+        printf 'ok   %-38s latest write wins\n' \
+            "objblock: a rewrite replaces the slot"
+    else
+        printf 'FAIL %-38s want csm0=0.008 (the second write)\n' \
+            "objblock: a rewrite replaces the slot"
+        grep -a 'proj SHADOW' <<<"$logtext" | sed 's/^/       | /' | head -2
+        fails=$((fails + 1))
+    fi
+    # The superseded region must be GONE, not outvoted. 0.002 at member 3 is
+    # the first write's cascade and nothing else here produces it.
+    if ! grep -aq 'csm0-scale=0.002 csm1-scale=0.0005' <<<"$logtext"; then
+        printf 'ok   %-38s the superseded region is dropped\n' \
+            "objblock: no stale slot survives"
+    else
+        printf 'FAIL %-38s the first write is still being read\n' \
+            "objblock: no stale slot survives"
+        fails=$((fails + 1))
+    fi
+    # Two writes, one live binding: still one scale. This is the assertion that
+    # take 202 got wrong, and it is what a revert breaks first.
+    if grep -aq '1 distinct cascade scale(s) this frame' <<<"$logtext"; then
+        printf 'ok   %-38s two writes, one live slot\n' \
+            "objblock: rewriting does not inflate the spread"
+    else
+        printf 'FAIL %-38s a rewrite inflated the spread\n' \
+            "objblock: rewriting does not inflate the spread"
+        grep -a 'proj OBJBLOCK' <<<"$logtext" | sed 's/^/       | /' | head -2
+        fails=$((fails + 1))
+    fi
+}
+objblock_rewrite_case
 
 
 # With the channel unset, none of it exists: no patch, no set, no line.

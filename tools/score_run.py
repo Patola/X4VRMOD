@@ -681,8 +681,8 @@ def main(path):
                     r"factors=\[([\d. ]+)\] thresholds=\[([-\d. ]+)\] "
                     r"csm0-scale=([\d.eE+-]+)", text)
                 span = re.findall(
-                    r"cascade 0 spans ([\d.]+) m across ([\d.]+) texels -> "
-                    r"([\d.]+) m per texel", text)
+                    r"object-block member 3 \|row0\|=[\d.eE+-]+ -> ([\d.]+) m, "
+                    r"([\d.]+) texels, ([\d.]+) m per texel", text)
                 if sh:
                     sizes = {s[1] for s in sh}
                     scales = sorted({float(s[5]) for s in sh})
@@ -690,10 +690,48 @@ def main(path):
                           f"maxdist {sh[0][2]}, factors [{sh[0][3]}]")
                     print(f"        csm0 scale (NDC per metre): "
                           f"{', '.join(f'{v:.6g}' for v in scales[:6])}")
+                    # ---- what actually answers #56: V_csmthresholds --------
+                    #
+                    # Camera block float 232, live, and X4's own
+                    # common_frag.glsl:1071 does `if (depth < V_csmthresholds[i])`
+                    # -- so these are the cascade split distances in view metres,
+                    # read from X4 rather than derived by us.
+                    #
+                    # This is the quantity fifty-odd takes should have been
+                    # comparing. `csm0-scale` cannot answer it: member 3 is
+                    # per-object and folds in the draw's own source frame.
+                    REF = {"[5.2 23.9 195.1 1338.7]": "1.4917",
+                           "[4.7 21.1 173.6 1189.6]": "1.75"}
+                    FIXED = "[7.2 33.3 269.9 1856.4]"
+                    tsets = sorted({f"[{s[4].strip()}]" for s in sh}
+                                   - {"[0.0 0.0 0.0 0.0]"})
+                    if tsets:
+                        print(f"        V_csmthresholds (cascade splits, view "
+                              f"metres): {'  '.join(tsets)}")
+                        fov = re.search(r"X4VR_FOV=([\d.]+)", run or "")
+                        for ts in tsets:
+                            if ts == FIXED:
+                                print(f"        {ts} is the fov-INDEPENDENT "
+                                      f"set — identical at 1.4917 and 1.75, so "
+                                      f"it is not evidence either way")
+                            elif ts in REF:
+                                same = fov and fov.group(1) == REF[ts]
+                                print(f"        {ts} is the stored set for "
+                                      f"X4VR_FOV={REF[ts]}"
+                                      + ("  ✓ matches this run"
+                                         if same else
+                                         f"  ⚠ but this run is fov="
+                                         f"{fov.group(1) if fov else '?'}"))
+                            else:
+                                print(f"        {ts} is a NEW set — no stored "
+                                      f"take has it. Worth recording: the "
+                                      f"splits are otherwise reproducible to "
+                                      f"the printed precision")
                     if span:
                         m, t, mpt = span[0]
-                        print(f"        cascade 0 spans {m} m across {t} "
-                              f"texels = {mpt} m per texel")
+                        print(f"        object-block member 3: {m} m, {t} "
+                              f"texels, {mpt} m per texel — provenance only, "
+                              f"NOT a cascade (see objblock below)")
                         # Take 200 corrected this prompt. It used to say "the
                         # SAME line from a run at a different X4VR_FOV", and a
                         # PAIR CANNOT ANSWER IT: takes 197 and 199 have the
@@ -713,23 +751,29 @@ def main(path):
                         # (set 3, 189 samplers) instead of M_shadowCSM0Clip
                         # from camera member 9 (370 declare, 0 sample).
                         #
-                        # This message said "CANNOT be answered" until the
-                        # capture landed. Leaving it would have been the same
-                        # failure the whole investigation kept hitting: a
-                        # sentence describing behaviour the code no longer has.
-                        print(f"        #56 is measurable now (the cascade "
-                              f"comes from object-block member 3). It still "
-                              f"needs THREE runs: two at one X4VR_FOV with yaw "
-                              f"held, for the run-to-run spread, and one at "
-                              f"another field. Compare the SETS. Takes "
-                              f"197/199/200/201 measured the DEAD member and "
-                              f"cannot be reused.")
-                    else:
-                        print("        cascade extent NOT measured — "
-                              "M_shadowCSM0Clip read back as zeros, which no "
-                              "dumped module reads, so X4 may never fill it. "
-                              "That is a fact about the buffer, not about the "
-                              "cascades")
+                        # And this message asked for three runs the stored
+                        # logs already contained. Sweeping /tmp for the line a
+                        # proposed run would produce is the standing rule and
+                        # it was skipped again.
+                    print("        #56 is ANSWERED — no run needed, and this "
+                          "section no longer asks for one. X4's splits DO "
+                          "respond to <fov>: identical across 11 stored takes "
+                          "at fov 1.4917 and different at 1.75, with takes 200 "
+                          "and 202 differing in nothing else. They move NEARER "
+                          "as the field widens (x0.888 for a x1.173 widening) "
+                          "while mapsize/maxdist/factors do not move at all — "
+                          "so the far cascades stretch and the guard band's "
+                          "shadow price lands on the far field. Direction "
+                          "established, LAW not: two points cannot fit one, "
+                          "and the ratio matches neither tan nor 1/sx.")
+                    if not tsets:
+                        # Not "cascade extent NOT measured — M_shadowCSM0Clip
+                        # read back as zeros", which is what stood here: the
+                        # layer stopped reading that member at take 202 and the
+                        # sentence outlived it by one commit.
+                        print("        no nonzero V_csmthresholds in this log "
+                              "— every shadow report carried [0 0 0 0], so "
+                              "this run says nothing about #56")
                 else:
                     # Same rule as the `view` line above: silence must not be
                     # readable as "the shadows are fine". A log without the
@@ -1707,16 +1751,34 @@ def main(path):
         print(f"objblock      {tail[:150]}")
         m = re.search(r"(\d+) distinct cascade scale", ob[0])
         spread = int(m.group(1)) if m else -1
-        if any("OBJBLOCK: WARNING" in ln for ln in lines) or spread > 1:
-            fails.append(
-                f"the frame's object slots carry {spread} distinct cascade "
-                f"scales. The CSM is light-space and should be identical in "
-                f"every slot, so either X4 varies it per draw or the slot walk "
-                f"reads the wrong member — either way no single slot speaks "
-                f"for the frame and the csm numbers above have no referent")
+        # NOT a FAIL any more, and the reason it used to be one was wrong.
+        #
+        # Take 202 failed here on "the CSM is light-space and should be
+        # identical in every slot". X4's own GLSL refutes that: M_shadowCSM0 is
+        # member 3 of the per-OBJECT block and is applied to three different
+        # source frames — object-space `Pos` in 186 vertex entry points,
+        # world-space `IO_world_pos` in others, view-space `view_pos` in 54
+        # fragment ones. It carries the draw's own transform, so a spread is
+        # the expected reading, not a defect.
+        #
+        # The half of take 202's spread that WAS a defect is fixed in the
+        # layer: writes accumulated per descriptor set instead of superseding,
+        # so the walk read regions X4 had recycled and got `inf`.
+        if spread > 1:
+            print(f"objblock      {spread} distinct |row0| — EXPECTED. Member 3 "
+                  f"is per-object and composes the draw's own frame, so this "
+                  f"is a cascade scale only for a view-space reader and the "
+                  f"walk does not identify which. Not #56's evidence; see the "
+                  f"#56 line above")
         elif spread == 0:
-            print("objblock      spread 0 — no slot carried a nonzero cascade, "
+            print("objblock      spread 0 — no slot carried a nonzero matrix, "
                   "so the scales above are unmeasured rather than measured")
+        if any("=inf" in ln for ln in lines if "csm" in ln):
+            fails.append(
+                "an object slot read `csm-scale=inf`, which means the walk "
+                "read a buffer region X4 had already recycled. That was take "
+                "202's defect and the layer fix should have removed it — a "
+                "recurrence means descriptor writes are accumulating again")
 
     # --- which VARIANT the no-depth passes actually bind --------------------
     #

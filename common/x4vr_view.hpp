@@ -462,14 +462,28 @@ inline void pose_roll_frame(PoseBlock &p) {
 // held. A zero matrix would otherwise report an infinite cascade, which reads
 // as "fixed extent" and would answer the question backwards.
 // Member 3 of the WORLD/object block (set 3 binding 0) is `M_shadowCSM0`, at
-// byte 192 -> float 48; CSM1 follows at 64. That block is ~576 bytes and holds
-// 15 members. It is NOT the camera block, and `kShadowCSM0` above (float 144)
-// indexes the camera block's `M_shadowCSM0Clip` -- correct for that block, and
-// the wrong object entirely. See the comment on `cascade_measured`.
+// byte 192 -> float 48; CSM1 follows at 64. It is NOT the camera block, and
+// `kShadowCSM0` above (float 144) indexes the camera block's
+// `M_shadowCSM0Clip` -- correct for that block, and the wrong object entirely.
+//
+// **|row0| of this matrix is NOT a cascade scale**, which is the thing 50-odd
+// takes assumed. X4's own GLSL applies M_shadowCSM0 to three different source
+// frames -- `mul(vec4(Pos,1), M_shadowCSM0)` in 186 vertex entry points
+// (object space), `mul(vec4(IO_world_pos,1), ...)` in others, and
+// `mul(vec4(view_pos,1), ...)` in 54 fragment ones -- so the block carries the
+// draw's own transform composed with the cascade. Only a slot bound to a
+// view-space reader yields a cascade scale, and neither this function nor the
+// layer's slot walk establishes which. #56 was answered from `V_csmthresholds`
+// instead; see docs/x4-quirks.md.
 enum : uint32_t {
     kObjShadowCSM0 = 48,      // M_shadowCSM0, object block member 3
     kObjShadowCSM1 = 64,      // M_shadowCSM1, member 4
-    kObjBlockBytes = 576,
+    // X4 binds this block with range **768** -- measured, 13748 binds in take
+    // 202, no other range at set 3. Not the struct size: the declared members
+    // reach ~560 bytes, and 768 is that rounded up to a 256-byte offset
+    // alignment. The earlier 576 here was a guess from a dump and was never
+    // what X4 bound.
+    kObjBlockBytes = 768,
 };
 
 struct ShadowTerms {
@@ -504,13 +518,14 @@ struct ShadowTerms {
 // `blk` is the CAMERA block (set 1 binding 0): the scalars genuinely live
 // there and are sampled by X4's own shaders.
 //
-// `csm0` / `csm1` are the LIVE cascade matrices, from members 3 and 4 of the
-// OBJECT block (set 3 binding 0) at kObjShadowCSM0 / kObjShadowCSM1. They are
-// separate arguments because they are in a DIFFERENT BUFFER -- one the layer
-// does not yet capture, since g_track only records UBO slots whose range is
-// kViewBlockBytes (1792) and the object block is ~576. Passing nullptr is the
-// honest state today, and it makes the function report the scalars and refuse
-// the cascade rather than dress up an unmaintained member as a number.
+// `csm0` / `csm1` are members 3 and 4 of the OBJECT block (set 3 binding 0) at
+// kObjShadowCSM0 / kObjShadowCSM1. They are separate arguments because they
+// are in a DIFFERENT BUFFER, which the layer does now capture -- but see the
+// enum above: what comes back is the draw's own transform composed with the
+// cascade, so `csm0_scale` is a cascade scale only for a view-space reader.
+// Passing nullptr makes the function report the camera-block scalars and
+// refuse the matrix, which is the right call whenever the caller cannot say
+// which reader its slot belongs to.
 inline ShadowTerms read_shadow_terms(const float *blk, Major major,
                                      const float *csm0 = nullptr,
                                      const float *csm1 = nullptr) {

@@ -1061,6 +1061,36 @@ int main(int argc, char **argv) {
             objw.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             objw.pBufferInfo = &objbi;
             vkUpdateDescriptorSets(dev, 1, &objw, 0, nullptr);
+
+            // X4VR_TEST_OBJ_REWRITE -- take 202's defect, in miniature.
+            //
+            // X4 re-points set 3 binding 0 at a fresh sub-allocation for every
+            // draw: take 202 logged 13748 binds and the layer had accumulated
+            // 167 slots, credited ALL of them on every draw, and read the dead
+            // ones -- which is where `csm0-scale=inf` and "2 distinct cascade
+            // scales" came from. vkUpdateDescriptorSets REPLACES a binding, so
+            // after this second write the only correct answer is the second
+            // region: |row0| 0.008, 125 m, and ONE distinct scale.
+            //
+            // The old append-and-dedupe code cannot produce that. It reports
+            // two scales and picks between them by draw count, so this case
+            // fails closed against a revert.
+            if (getenv("X4VR_TEST_OBJ_REWRITE")) {
+                const uint32_t base = 256 / 4;   // second region, byte 256
+                objb[base + 48 + 0] = 0.008f;
+                objb[base + 48 + 5] = 0.008f;
+                objb[base + 48 + 10] = 0.008f;
+                objb[base + 48 + 15] = 1.0f;
+                objb[base + 64 + 0] = 0.002f;
+                objb[base + 64 + 5] = 0.002f;
+                objb[base + 64 + 10] = 0.002f;
+                objb[base + 64 + 15] = 1.0f;
+                VkDescriptorBufferInfo objbi2 = objbi;
+                objbi2.offset = 256;
+                VkWriteDescriptorSet objw2 = objw;
+                objw2.pBufferInfo = &objbi2;
+                vkUpdateDescriptorSets(dev, 1, &objw2, 0, nullptr);
+            }
         }
     }
 
