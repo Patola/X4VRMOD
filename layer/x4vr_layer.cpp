@@ -6625,9 +6625,25 @@ void patch_view_before_submit() {
         // not set X4VR_TEST_OBJ_BLOCK, and an instrument nothing can exercise
         // is one nobody has watched work.
         if (want_matrices()) {
-            static bool live_logged = false;
-            if (!live_logged && !g_track.credit.empty()) {
-                live_logged = true;
+            // Take 203 fired this ONCE, at the first report, and read
+            // "accumulating 3 slot(s) -> superseding 3; winner AGREES". Three,
+            // because at the first report three slots had been written -- the
+            // 539 in the `view` section is cumulative over 126 reports. The
+            // instrument sampled the one moment where the accumulation it
+            // exists to measure has not happened yet, so the take says nothing
+            // about #67.
+            //
+            // Now it reports the GROWTH: the first report, then every time the
+            // accumulating count doubles, capped. The last line is then the
+            // closest thing to the run's steady state, and the sequence shows
+            // whether the two walks diverge as history piles up.
+            static size_t logged_at = 0;
+            static uint32_t live_reports = 0;
+            const size_t now_n = g_track.credit.size();
+            if (now_n && live_reports < 8 &&
+                (logged_at == 0 || now_n >= logged_at * 2)) {
+                logged_at = now_n;
+                live_reports++;
                 const ViewSlot *abest = nullptr, *lbest = nullptr;
                 uint32_t an = 0, ln = 0;
                 for (auto &[slot, n] : g_track.credit)

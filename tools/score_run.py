@@ -1789,9 +1789,17 @@ def main(path):
     # default flipped, which is the thing that could not be known offline.
     lv = [ln for ln in lines if "proj LIVESETS:" in ln]
     if lv:
+        # The LAST line, not the first. Take 203 logged one report at the first
+        # opportunity and read "3 slot(s)" — three, because the accumulation
+        # this measures had not happened yet. The layer now reports a growth
+        # series (first, then each doubling), so the final line is the closest
+        # thing to the run's steady state and the earlier ones show the climb.
+        if len(lv) > 1:
+            print(f"livesets      {len(lv)} report(s) as the count grew; the "
+                  f"last is the steady state and is what is read below")
         m = re.search(r"accumulating (\d+) slot\(s\), winner offset=(\d+) "
                       r"draws=(\d+) \| superseding (\d+) slot\(s\), winner "
-                      r"offset=(\d+) draws=(\d+) \| winner (\w+)", lv[0])
+                      r"offset=(\d+) draws=(\d+) \| winner (\w+)", lv[-1])
         if m:
             acc, ao, an, sup, so, sn, verdict = m.groups()
             print(f"livesets      accumulating {acc} slot(s) → superseding "

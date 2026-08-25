@@ -8220,7 +8220,75 @@ names it by value: `reported 0.009/111 m — that is camera member 9`.
 **#56 is answerable by measurement now** rather than blocked on the instrument.
 It still wants the three runs: two at one field for the spread, one at another.
 
-# THE RUN IN FLIGHT — take 203, flatscreen, three passive instruments
+# Take 203 — RESULT. Two of four predictions right, and one instrument blind
+
+`PASS`, and a candidate for known-good-runs. Scored against the predictions
+filed before the run, which is the point of filing them.
+
+### 1. The #66 fix is CONFIRMED ✓
+
+**No `csm-scale=inf` anywhere**, and take 202's `FAIL` is gone. The walk no
+longer reads regions X4 recycled. `objblock` reports 106 slots against 202's
+167 — I said "far fewer", which oversells a 37% drop, but the defect the number
+was a symptom of is what mattered and it is gone.
+
+The `csm0 scale` set is now `0, 4.92e-07, 2.70e-06, 0.154203, 0.154204,
+108.812` — six finite values where 202 had `{0.154204, inf}`. That is the
+predicted behaviour, not a regression: member 3 is `world x lightVP`, so
+`|row0|` is the object's own scale times the cascade's, and a heavily scaled
+object reads 108.812 while a huge one reads 4.9e-07. The two 0.15420x values
+are the unscaled objects. The layer labels the spread EXPECTED and does not
+call it a cascade.
+
+### 2. `livesets` read 3 slots. WRONG, and the instrument is blind ✗
+
+Predicted "accumulating in the hundreds". It logged **3**.
+
+Not a fact about X4 — a fact about when I sampled. The line fired once, at the
+first report (`t=267548.845`, the same instant as the first `proj CAMERA`),
+when three slots had been written. The **539** in the `view` section is
+cumulative over **126** reports. I conflated the two, so the instrument
+measured the one moment where the accumulation it exists to detect has not
+happened yet.
+
+Same shape as take 198's blind control (`X4VR_DUMP_MATRICES` caps at 8 reports,
+all at load) and as *"a complete survey of one instant"*. **#67 is not
+answered.** The layer now reports a growth series — the first report, then each
+doubling, capped at 8 — and the scorer reads the LAST line.
+
+### 3. `fileprobe` answered #68, with its control ✓
+
+* **`camerasettings` probed at 1 user-level path** — the positive control
+  fired, so this run reached the code.
+* **No user-level `parameters.xml` probe at all.** 186 distinct interesting
+  paths, 150 archive opens, well under the 400 cap.
+
+**The cheap door is CLOSED.** X4 does not look for a user-level
+`parameters.xml`, so the existing `fopen` route cannot serve the clamp. #68
+needs the extension route — and that puts the save's `modified="0"` squarely on
+the table before anything is spent.
+
+### 4. "Everything else matches 202" — half right ✗
+
+Identical, as predicted: the `sx` set `0.70024 / 1.33333 / 1.00000 / 3.78085`,
+`classify 19 / 0 World`, `pose-channel 1105/1105 OK`, thresholds
+`[5.2 23.9 195.1 1338.7]`, patch-site counters `live-sx=296 mvp-sx=12
+baked-sx=0`, and perf 6.75 ms inside the predicted 6.4–7.5 band.
+
+**The `view` section is not.** 202 was dominated by `14.7–14.9 deg / 8.6 m`
+cameras with thousands of draws; 203 has **no 14.x entry at all** and leads
+with `116.6 deg / 0.00 m` and `124.4 deg / 14874.90 m`. The first cameras
+reported differ in kind: 202's read `M_view is NOT IDENTITY -- 14.90 deg,
+offset 8.755 m`, 203's read `M_view IDENTITY`.
+
+**Scene state, not code.** Every pipeline-side number is byte-identical, and
+nothing I changed touches the camera credit path — `bound_live`/`sets_live` are
+additive and separate. The two takes caught different moments. But it means
+**203 is not a clean camera-side comparison to 202**, and any future prediction
+of "the view section will match" needs the scene pinned harder than "load and
+wait for the fade".
+
+# THE RUN THAT PRODUCED THIS — take 203, flatscreen, three passive instruments
 
     X4VR_POSE_ROTATE=1 X4VR_TAKE=203-PROBE X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_SHEAR_LIGHTS=1 X4VR_DUMP_MATRICES=1 X4VR_RES=1408x1408 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_POSE_YAW=20 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take203.log X4VR_PIPE_INVENTORY=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_MV_INVENTORY=1 X4VR_FILEPROBE=1 ./launch/x4vr-launch.sh
 
