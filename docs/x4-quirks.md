@@ -8435,6 +8435,19 @@ everything above ~27° median.
 occurs **129 times exactly** while every other value above 60 occurs once.
 `|X4 pitch|` never exceeds **35.00°**. Round numbers, hard stops.
 
+**CORRECTION — that paragraph is circular on its own, and I published it as
+confirmation.** The largest |command| in the same 2398 samples is *also*
+exactly 65.00: the servo clamps its own target there, so "X4 never exceeded 65"
+partly restates our own ceiling. An instrument whose subject cannot exceed the
+limit it is being tested for cannot establish that limit.
+
+**What is not circular is the overshoot.** 303 samples show X4's camera going
+PAST the command and still pinning to exactly 65.00 — furthest is **X4 65.00
+against a command of 53.04** — and 256 do the same in pitch, **35.00 against
+26.83**. A ceiling that were merely ours would be sailed straight through by an
+overshoot. That, plus take 136 (which ran with the OLD 56.5/40 limits and still
+read 65.00/35.00), is the evidence. The maximum never was.
+
 That matches `yaw_limit_deg = 65.0f` / `pitch_limit_deg = 35.0f`, which
 `x4vr_headlook.hpp` has used all along — **the constants were right and three
 comments were wrong**, all repeating take 117's superseded 56.5: the header's
@@ -8460,6 +8473,70 @@ sized together.
 Caveat on frequency: ~5% of live samples sit past the clamp, but these are
 takes where the extremes were being deliberately exercised. That fraction says
 nothing about normal play.
+
+## Is X4's 65/35 reachable? It is DATA, and there is an 85/85 beside it
+
+The guard band cannot buy the past-the-clamp region at any price, so the clamp
+itself was the only lever left. It turns out not to be compiled in.
+
+**`libraries/parameters.xml`** (inside `08.cat`), under `<playercamera>`:
+
+    <lookaround>
+      <internal maxpitch="35" maxyaw="65" anglespeed="200" angleacc="500"
+                trackmaxpitch="85" trackmaxyaw="85"/>
+      <external maxpitch="85" .../>
+      ...
+    </lookaround>
+
+`maxyaw="65"` and `maxpitch="35"` are **exactly** the measured stops, to the
+digit. So the limit is data X4 parses, not a constant in the executable — and
+that is the first requirement for reaching it non-intrusively.
+
+**And the same element carries `trackmaxpitch="85" trackmaxyaw="85"`.** The
+`track` prefix reads as head-tracking, and 85/85 would convert most of the
+expensive region into something X4 renders *properly* — no reprojection, no
+guard band, free.
+
+**That is a lead, not a finding, and this project has been burned by exactly
+this shape before.** X4 never shipped a VR edition, and its `INPUT_SOURCE_*`
+headset names and the `enableopentrack` tag are dead residue
+([[x4vr-vr-residue-is-not-a-door]]). `trackmax*` is a better bet than those —
+it sits on the same element as two attributes proven live to the digit, rather
+than dangling in an enum — but "X4 parses this element" is not "X4 selects
+these attributes". **Unverified.**
+
+### The delivery problem, which is the real open question
+
+`parameters.xml` lives **inside `08.cat`**, not loose. The injector interposes
+`fopen`/`open`/`openat`, which is how `<fov>` and `inputmap.xml` are served,
+and both of those are loose files. An archive member is not reachable that way.
+
+Three routes, in order of how much they respect "the player's files are read
+once and never written":
+
+1. **Synthesise an extension in memory.** X4 enumerates `extensions/` and
+   merges `extensions/<name>/libraries/parameters.xml`. Interposing
+   `opendir`/`readdir` alongside the existing `open` family would let the
+   injector present an extension that exists nowhere on disk. Nothing written,
+   same mechanism class as everything else the injector does.
+2. **Archive-level interception** — hook the reads into `08.dat` and substitute
+   bytes at the member's offset. Doable (the `.cat` index is plain text and the
+   offset is a running sum) but it means owning X4's archive format.
+3. **Write a real extension directory.** Simplest, and the only one that
+   modifies the player's install. Against the standing constraint.
+
+Route 1 is the one that fits. It is not built.
+
+### What to settle first, and it is cheap
+
+**Does X4 use `trackmax*` at all, and what makes input "tracked"?** If it does,
+route 1 delivers 85/85 without changing a single number X4 did not already
+ship. If it does not, route 1 still delivers by raising `maxyaw`/`maxpitch`
+directly — those are proven live. So the delivery work is worth doing either
+way, and the `trackmax*` question only decides *which value* it carries.
+
+Extracted to `/tmp/x4-libs` with `/tmp/x4cat.py`. **X4's content — never
+committed**, same rule as the shaders and the Lua.
 
 ## Measuring the seam from a screenshot, if it ever comes up again
 
