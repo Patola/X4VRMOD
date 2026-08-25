@@ -22,8 +22,13 @@
 //      counts, so the command is rounded. Adding the *desired* angle to the
 //      estimate would accumulate the rounding residue forever -- a slow drift
 //      built by the very code that exists to avoid drift.
-//   2. **Never command past the clamp.** X4 stops at +56.5 deg (take 117,
-//      thirteen dumps of exactly zero at snr ~625). Commanding further would
+//   2. **Never command past the clamp.** X4 stops at **+-65.00 deg yaw and
+//      +-35.00 deg pitch** -- the values `yaw_limit_deg`/`pitch_limit_deg`
+//      below actually use. (This line said 56.5, from take 117, for long after
+//      the constants were corrected. Re-measured across 2398 live `camread`
+//      samples in 15 takes: |X4 yaw| never exceeds 65.00, which occurs 129
+//      times exactly while every other value above 60 occurs once, and
+//      |X4 pitch| never exceeds 35.00.) Commanding further would
 //      wind the estimate up past where X4 actually is, and the view would then
 //      lag by the whole accumulated excess on the way back. Clamping our own
 //      target is the entire fix, and it needs no readback and no event

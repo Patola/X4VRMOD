@@ -10174,7 +10174,10 @@ void vr_thread() {
                 //
                 // Deliberately the injector's *command*, not the live head
                 // pose. X4's camera lags the head by a frame and stops dead at
-                // 56.5 deg, so declaring the head pose would claim the image
+                // 65.00 deg yaw / 35.00 deg pitch (measured; this comment said
+                // 56.5, which was take 117's superseded number and not what
+                // x4vr_headlook.hpp's limits use), so declaring the head pose
+                // would claim the image
                 // was rendered from somewhere it was not, and the compositor
                 // would reproject a frame that does not match -- the world
                 // would swim exactly when the head moves fastest or reaches

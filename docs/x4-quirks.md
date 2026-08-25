@@ -8382,6 +8382,85 @@ re-pointed at a region nothing else names they must differ in **both** the slot
 count and the winner. Before that second case the `DIFFERS` branch had never
 been seen to fire.
 
+## #33: the log sweep — residual, and X4's clamp is 65/35 not 56.5
+
+Swept before scoping any work, and it answered the design question without a
+run. **The runtime pose is already located, converted and published** —
+`locate_views` every VR frame, `views[0].pose.orientation` → `head_angles()` →
+`head_share_write()`, which drives X4's own free-look through the injector. The
+#59 channel (`g_pose`) is the *only* thing still fed a static Euler.
+
+So the question was never "which OpenXR call". It is **what job the shader
+conjugation does now that the camera-driving path exists**, since both rotate
+the view and nothing guards against having both on.
+
+### The instrument was already there
+
+`inject camread: X4 <y>,<p> deg (raw …) | cmd <y>,<p> | head <y>,<p>` carries
+all three angles. **6962 samples across 16 takes.**
+
+**Two-thirds of them are a dead read-back** — 4564 of 6962 have `raw 0.0000,
+0.0000`, X4 reporting nothing rather than reporting zero. Taken at face value
+they would have said "the residual is ≈0" and closed the question backwards.
+Only the 2398 live samples mean anything.
+
+### The residual has two regimes
+
+`|head − X4|` yaw, live samples only, binned by `|head|`:
+
+| bin (deg) | n | median | p90 | max |
+|---|---|---|---|---|
+| 0–10 | 1625 | 0.31 | 22.15 | 74.74 |
+| 10–20 | 249 | 3.32 | 24.73 | 81.64 |
+| 20–30 | 156 | 1.99 | 28.80 | 91.28 |
+| 30–40 | 110 | 1.15 | 15.16 | 56.30 |
+| 40–50 | 110 | 0.22 | 3.27 | 54.43 |
+| 50–56.5 | 21 | 0.54 | 3.67 | 10.79 |
+| 56.5–70 | 19 | 1.18 | 12.06 | 12.78 |
+| **70–200** | **108** | **27.15** | **48.67** | **79.37** |
+
+Take 149 alone (n=571, all `CLOSED`, the cleanest session): median **0.22°**,
+p90 **2.27°**, max 14.28°. The high p90 in the low bins is fast-motion
+transient plus four early takes whose servo was not tracking at all (136, 139,
+141, 147 have medians of 63°, 21°, 12°, 6°) — those are in the table because
+excluding them would be selecting on the outcome.
+
+**So: below the clamp the servo tracks to a few tenths of a degree. Past it the
+residual is unbounded** — head reaches 136°, X4 stops, and the difference is
+everything above ~27° median.
+
+### X4's clamp is 65.00 / 35.00, and three comments said 56.5
+
+`|X4 yaw|` never exceeds **65.00°** in any of the 2398 live samples, and 65.00
+occurs **129 times exactly** while every other value above 60 occurs once.
+`|X4 pitch|` never exceeds **35.00°**. Round numbers, hard stops.
+
+That matches `yaw_limit_deg = 65.0f` / `pitch_limit_deg = 35.0f`, which
+`x4vr_headlook.hpp` has used all along — **the constants were right and three
+comments were wrong**, all repeating take 117's superseded 56.5: the header's
+own rule 2, twenty lines above the constant that contradicts it;
+`x4vr_layer.cpp`'s declared-pose comment; and `tests/headlook.cpp`, whose case
+`head_look_step(mild, {56.5f, 0.0f}); // exactly at the clamp` was **not at the
+clamp at all**, so it never exercised `clamped`. All corrected, test still
+passes.
+
+### What this decides
+
+**Residual, not replacement.** The conjugation is a sub-degree correction
+almost always, which is the regime reprojection handles well. Its real job is
+the region past X4's clamp.
+
+**And that region is bounded by the guard band, not by the conjugation.** At
+`X4VR_FOV=1.4917` the rendered half-field is ~55°. A head 71° past where X4 is
+pointing (136 − 65) is asking to see something X4 never drew — reprojection
+cannot invent it, and the result is the black edge. So "look past the clamp"
+is a **#24 guard-band question wearing a #33 costume**, and the two have to be
+sized together.
+
+Caveat on frequency: ~5% of live samples sit past the clamp, but these are
+takes where the extremes were being deliberately exercised. That fraction says
+nothing about normal play.
+
 ## Measuring the seam from a screenshot, if it ever comes up again
 
 Count the **fraction of rows** carrying a sign-consistent column-to-column

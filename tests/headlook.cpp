@@ -49,7 +49,7 @@ int main() {
               "identity orientation is dead ahead");
 
         const float cases[][2] = {{0, 0},   {30, 0},   {-45, 0}, {0, 20},
-                                  {0, -35}, {56.5f, 0}, {25, -15}, {-70, 12}};
+                                  {0, -35}, {65.0f, 0}, {25, -15}, {-70, 12}};
         float worst = 0.0f;
         for (const auto &c : cases) {
             float x, y, z, w;
@@ -69,7 +69,7 @@ int main() {
     // headset, as a world that tilts the wrong way when the head turns.
     {
         const float cases[][2] = {{0, 0},    {30, 0},  {-45, 0},  {0, 20},
-                                  {0, -35},  {56.5f, 0}, {25, -15}, {-56, 39}};
+                                  {0, -35},  {65.0f, 0}, {25, -15}, {-56, 39}};
         float worst = 0.0f;
         for (const auto &c : cases) {
             float q[4];
@@ -189,14 +189,14 @@ int main() {
         }
         x4vr::HeadLook mild;
         for (int i = 0; i < 500; i++)
-            x4vr::head_look_step(mild, {56.5f, 0.0f}); // exactly at the clamp
+            x4vr::head_look_step(mild, {65.0f, 0.0f}); // exactly at the clamp (65, not 56.5)
         int mild_steps = 0;
         while (std::fabs(mild.cmd_yaw_deg) > 0.25f && mild_steps < 200) {
             x4vr::head_look_step(mild, {0.0f, 0.0f});
             mild_steps++;
         }
         check(steps_to_return <= mild_steps + 1,
-              "a 170 deg excursion returns no slower than a 56.5 deg one");
+              "a 170 deg excursion returns no slower than one at the 65 deg clamp");
         printf("      return from 170 deg: %d steps; from the clamp: %d\n",
                steps_to_return, mild_steps);
         printf("      steps to return from a 170 deg excursion: %d\n",
