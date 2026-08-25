@@ -1740,6 +1740,48 @@ def main(path):
     # `spread` is the guard that matters: the object block is per-DRAW, so if
     # its slots disagree about the cascade then no single one speaks for the
     # frame and the numbers have no referent. The layer warns; this fails.
+    # --- task #68: which door does X4 knock on for parameters.xml? ----------
+    #
+    # It records ATTEMPTS, so a path that does not exist still shows up -- that
+    # is the whole question, since the file we want to serve is not on disk.
+    fp = [ln.split("fileprobe: ", 1)[1].strip()
+          for ln in lines if "fileprobe: " in ln]
+    if fp:
+        userdir = [p for p in fp if "parameters.xml" in p and
+                   "/EgoSoft/" in p]
+        ext = [p for p in fp if "extensions/" in p and "parameters.xml" in p]
+        arch = [p for p in fp if p.endswith(".cat)") or p.endswith(".dat)")]
+        cam = [p for p in fp if "camerasettings" in p]
+        print(f"fileprobe     {len(fp)} distinct interesting path(s)")
+        if userdir:
+            print(f"fileprobe     X4 DOES probe a user-level parameters.xml — "
+                  f"the existing fopen path can serve it and #68 is nearly "
+                  f"free: {userdir[0]}")
+        else:
+            print("fileprobe     no user-level parameters.xml probe. The "
+                  "cheapest door is CLOSED, so #68 needs the extension route "
+                  "or archive interception")
+        if ext:
+            print(f"fileprobe     extension libraries/ IS probed ({len(ext)}), "
+                  f"so a synthesised extension would be read — but weigh the "
+                  f"save's modified=\"0\" before spending it")
+        if cam:
+            print(f"fileprobe     camerasettings probed at {len(cam)} path(s) "
+                  f"— this is the POSITIVE CONTROL for a user-level library "
+                  f"override, since the player has one on disk")
+        else:
+            print("fileprobe     camerasettings NOT probed — the control did "
+                  "not fire, so a missing parameters.xml probe proves nothing "
+                  "about X4 and only that this run did not reach that code")
+        print(f"fileprobe     {len(arch)} archive open(s)")
+        if any("capping" in ln for ln in lines):
+            print("fileprobe     CAPPED at 400 — anything opened later is "
+                  "unrecorded, so absence below the cap is not evidence")
+    elif "X4VR_FILEPROBE=1" in (run or ""):
+        print("fileprobe     asked for, but NOTHING matched — the probe is "
+              "wired to fopen/fopen64/open/open64/openat, so this means X4 "
+              "reached none of them for these names, not that it never looks")
+
     # --- task #67: the two camera walks, reported not acted on --------------
     #
     # Neither outcome is a FAIL. This run's camera numbers all come from the

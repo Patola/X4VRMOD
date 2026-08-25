@@ -30,6 +30,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <set>
 #include <mutex>
 #include <vector>
 #include <cstdio>
@@ -59,6 +60,60 @@ bool is_config_xml(const char *path) {
 // able to distinguish that from "we rebound it and it did not take".
 bool is_inputmap_path(const char *path) {
     return path && strstr(path, "inputmap");
+}
+
+// X4VR_FILEPROBE -- task #68: which door does X4 knock on?
+//
+// X4's free-look clamp is `<lookaround><internal maxpitch="35" maxyaw="65">`
+// in libraries/parameters.xml, which lives INSIDE 08.cat. The injector serves
+// config.xml and inputmap.xml because X4 opens those as loose files; an
+// archive member is not reachable that way, and building a delivery route
+// before knowing which paths X4 actually tries would be guessing.
+//
+// So this records the attempts instead. Three candidate doors:
+//
+//   <userdir>/parameters.xml   X4 already reads a user-level override of
+//                              libraries/camerasettings.xml (the player has
+//                              one), so it may do the same here. If it does,
+//                              the EXISTING fopen path serves it and #68 is
+//                              nearly free.
+//   extensions/*/libraries/…   the mod route. Real and already enumerated --
+//                              the install has DLCs and workshop mods -- but
+//                              an unsigned extension risks the save's
+//                              modified="0", which is not ours to spend.
+//   *.cat / *.dat              archive reads, the fallback that means owning
+//                              X4's container format.
+//
+// Deduped and capped: X4 opens thousands of files and a flood would cost the
+// take it rides on. Nothing is served differently -- this only watches.
+bool file_probe_on() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_FILEPROBE");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
+
+void file_probe(const char *how, const char *path) {
+    if (!file_probe_on() || !path)
+        return;
+    const bool interesting =
+        strstr(path, "parameters.xml") || strstr(path, "camerasettings") ||
+        strstr(path, "content.xml") || strstr(path, "extensions/") ||
+        strstr(path, ".cat") || strstr(path, ".dat");
+    if (!interesting)
+        return;
+    static std::mutex mu;
+    static std::set<std::string> seen;
+    std::lock_guard<std::mutex> lock(mu);
+    if (seen.size() >= 400)
+        return;
+    if (!seen.insert(std::string(how) + " " + path).second)
+        return;
+    X4VR_LOG("fileprobe: %s(%s)", how, path);
+    if (seen.size() == 400)
+        X4VR_LOG("fileprobe: 400 distinct paths — capping, so this run says "
+                 "nothing about anything X4 opened after this point");
 }
 
 bool overrides_disabled() {
@@ -2211,6 +2266,7 @@ int open(const char *path, int flags, ...) {
         mode = va_arg(ap, mode_t);
         va_end(ap);
     }
+    file_probe("open", path);
     if (is_config_xml(path) || is_inputmap_path(path))
         X4VR_LOG("open(%s, 0x%x)", path, flags);
     if ((flags & O_ACCMODE) != O_RDONLY) {
@@ -2231,6 +2287,7 @@ int open64(const char *path, int flags, ...) {
         mode = va_arg(ap, mode_t);
         va_end(ap);
     }
+    file_probe("open64", path);
     if (is_config_xml(path) || is_inputmap_path(path))
         X4VR_LOG("open64(%s, 0x%x)", path, flags);
     if ((flags & O_ACCMODE) != O_RDONLY) {
@@ -2251,6 +2308,7 @@ int openat(int dirfd, const char *path, int flags, ...) {
         mode = va_arg(ap, mode_t);
         va_end(ap);
     }
+    file_probe("openat", path);
     if (is_config_xml(path) || is_inputmap_path(path))
         X4VR_LOG("openat(%d, %s, 0x%x)", dirfd, path, flags);
     if ((flags & O_ACCMODE) != O_RDONLY) {
@@ -2292,6 +2350,7 @@ static bool is_read_only(const char *mode) {
 
 FILE *fopen(const char *path, const char *mode) {
     static auto real_fopen = real<FILE *(*)(const char *, const char *)>("fopen");
+    file_probe("fopen", path);
     if (is_config_xml(path) || is_inputmap_path(path))
         X4VR_LOG("fopen(%s, %s)", path, mode);
     if (!overrides_disabled() && x4vr::is_x4_config(path)) {
@@ -2320,6 +2379,7 @@ FILE *fopen(const char *path, const char *mode) {
 FILE *fopen64(const char *path, const char *mode) {
     static auto real_fopen64 =
         real<FILE *(*)(const char *, const char *)>("fopen64");
+    file_probe("fopen64", path);
     if (is_config_xml(path) || is_inputmap_path(path))
         X4VR_LOG("fopen64(%s, %s)", path, mode);
     if (!overrides_disabled() && x4vr::is_x4_config(path)) {
