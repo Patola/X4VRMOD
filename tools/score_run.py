@@ -1767,15 +1767,29 @@ def main(path):
     # here and external samples are reported separately, never mixed in.
     cam_pat = (r"camread: X4 (-?[\d.]+),(-?[\d.]+) deg \(raw (-?[\d.]+),"
                r"(-?[\d.]+)\) \| cmd (-?[\d.]+),(-?[\d.]+)")
-    view, by_view = None, {"cockpit": [], "external": [], "unknown": []}
+    view, first_to = None, None
+    by_view = {"cockpit": [], "external": [], "unknown": []}
     for ln in lines:
         if "view is now the cockpit" in ln:
-            view = "cockpit"; continue
+            view = "cockpit"; first_to = first_to or "cockpit"; continue
         if "view is now external" in ln:
-            view = "external"; continue
+            view = "external"; first_to = first_to or "external"; continue
         m = re.search(cam_pat, ln)
         if m:
             by_view[view or "unknown"].append(m.groups())
+    # The samples before the FIRST transition belong to whatever the run was
+    # not transitioning to. Take 209 logged 537 camread lines and this section
+    # judged on 24, because everything before the first transition sat in
+    # `unknown` and was dropped once a cockpit sample existed — 95% of the
+    # evidence discarded silently, on a run where the player never left the
+    # cockpit except briefly.
+    if by_view["unknown"] and first_to:
+        was = "external" if first_to == "cockpit" else "cockpit"
+        by_view[was] = by_view["unknown"] + by_view[was]
+        print(f"clamp   {len(by_view['unknown'])} pre-transition sample(s) "
+              f"credited to {was.upper()} — the first transition was TO "
+              f"{first_to}, so the run was in {was} before it")
+        by_view["unknown"] = []
     ext = [c for c in by_view["external"]
            if not (float(c[2]) == 0.0 and float(c[3]) == 0.0)]
     if ext:
@@ -1810,6 +1824,19 @@ def main(path):
             cp = max(abs(float(c[5])) for c in live)
             print(f"clamp   max |X4| yaw={xy:.2f} pitch={xp:.2f} deg   "
                   f"(max |command| yaw={cy:.2f} pitch={cp:.2f})")
+            # Pitch gets the same guard as yaw, and take 209 is why it needed
+            # one. There the neck ran out at 34.49 deg of command against a 75
+            # deg limit, and X4 read 35.07 — barely past the stock 35.00, which
+            # every fixed-clamp take pins to exactly. Without this the pitch
+            # number reads as a measurement when the experiment never ran.
+            if cp <= 36.0:
+                print(f"clamp   pitch INCONCLUSIVE — the command only reached "
+                      f"{cp:.2f} deg, so nothing asked past the stock 35.00 "
+                      f"stop. X4 read {xp:.2f}"
+                      + (", which is past 35.00 and weakly suggests the limit "
+                         "did move, but a neck is not a measurement"
+                         if xp > 35.02 else
+                         ", and 35.00 is exactly where a stock clamp sits"))
             asked = cy > 66.0
             if not asked:
                 print("clamp   INCONCLUSIVE — the command never exceeded 66 "
