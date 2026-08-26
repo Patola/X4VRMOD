@@ -187,6 +187,27 @@ int main() {
             x4vr::head_look_step(s, {0.0f, 0.0f});
             steps_to_return++;
         }
+        // Spinning past the back: the head crosses +180 and atan2 reports
+        // -179. Unwrapped that is an error of -358 and the servo drives a full
+        // reverse spin, which is exactly what a player turning their chair
+        // would hit. The short way is 2 deg.
+        {
+            x4vr::HeadLook spin;
+            spin.gain_deg_per_count = 0.115f;
+            spin.yaw_limit_deg = 180.0f;
+            spin.pitch_limit_deg = 70.0f;
+            for (int i = 0; i < 400; i++)
+                x4vr::head_look_step(spin, {179.0f, 0.0f, true});
+            const float before = spin.cmd_yaw_deg;
+            const x4vr::Delta d = x4vr::head_look_step(spin, {-179.0f, 0.0f, true});
+            check(std::fabs(before - 179.0f) < 2.0f,
+                  "spin: servo reaches +179 before the crossing");
+            // The short way is NEGATIVE-going by 2 deg, so a handful of counts.
+            // The long way would be ~358 deg, i.e. a step pinned at max.
+            check(std::abs(d.dx) < 40,
+                  "spin: crossing +-180 takes the short way, not a reverse spin");
+            printf("      crossing 180: cmd %.1f -> step dx=%d\n", before, d.dx);
+        }
         x4vr::HeadLook mild;
         for (int i = 0; i < 500; i++)
             x4vr::head_look_step(mild, {65.0f, 0.0f}); // exactly at the clamp (65, not 56.5)

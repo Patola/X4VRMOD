@@ -200,7 +200,22 @@ inline Delta head_look_step(HeadLook &s, const HeadAngles &head) {
         clampf(head.pitch_deg, -s.pitch_limit_deg, s.pitch_limit_deg);
     d.clamped = want_yaw != head.yaw_deg || want_pitch != head.pitch_deg;
 
-    const float err_yaw = want_yaw - s.cmd_yaw_deg;
+    // **Yaw error takes the SHORT way round.**
+    //
+    // head_angles() gets yaw from atan2, so it lives in (-180, 180] and a head
+    // that turns past the back jumps from +179 to -179. Unwrapped, that is an
+    // error of -358 and the servo drives the camera all the way back the other
+    // way at full step -- a whole reverse spin, exactly at the point a player
+    // turning their chair reaches.
+    //
+    // Inert below a 90 deg limit: with want and cmd both inside +-65, the
+    // error cannot reach 180 and this never fires. It only matters once the
+    // clamp is opened up, which is why it was never seen before.
+    float err_yaw = want_yaw - s.cmd_yaw_deg;
+    while (err_yaw > 180.0f)
+        err_yaw -= 360.0f;
+    while (err_yaw < -180.0f)
+        err_yaw += 360.0f;
     const float err_pitch = want_pitch - s.cmd_pitch_deg;
 
     // A head looking straight up has no meaningful yaw, so hold the last one
@@ -221,6 +236,14 @@ inline Delta head_look_step(HeadLook &s, const HeadAngles &head) {
     // folding the *wanted* angle in here instead would accumulate it forever.
     s.cmd_yaw_deg += s.sign_yaw * (float)d.dx * s.gain_deg_per_count;
     s.cmd_pitch_deg += s.sign_pitch * (float)d.dy * gp;
+    // Kept in the same (-180, 180] range the head angle uses, so the two are
+    // comparable next frame. Without this the estimate drifts out of range and
+    // the wrap above starts correcting against a number the head can never
+    // report.
+    while (s.cmd_yaw_deg > 180.0f)
+        s.cmd_yaw_deg -= 360.0f;
+    while (s.cmd_yaw_deg < -180.0f)
+        s.cmd_yaw_deg += 360.0f;
     return d;
 }
 
