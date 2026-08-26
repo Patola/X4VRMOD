@@ -8220,6 +8220,57 @@ names it by value: `reported 0.009/111 m — that is camera member 9`.
 **#56 is answerable by measurement now** rather than blocked on the instrument.
 It still wants the three runs: two at one field for the spread, one at another.
 
+# #68 CLOSED: the clamp is reachable, but not without `modified="1"`
+
+Four runs, each a single-variable step, and the route is settled.
+
+| run | substitution | `modified` |
+|---|---|---|
+| 205b (1st) | silent — hooked to the wrong door | **0** |
+| 205b (2nd) | content only | **1** |
+| 205c | content **+** the member's MD5 in `08.cat` | **1** |
+
+The first row is the control the second needed: byte-identical run, the
+substitution not firing, flag clean. So **the substitution is the single
+variable and X4 verifies the content it reads.** The MD5 hypothesis is refuted
+outright — index and content were consistent and it flagged anyway.
+
+That leaves the signature. `08_sig.dat` holds `libraries/parameters.xml.sig`,
+**1024 bytes** — RSA over the exact file — and X4 opens every `_sig.cat`/
+`_sig.dat` at startup. Not forgeable.
+
+### The seam that exists, and why it is not taken
+
+205c shows X4 reading the same 144 KB window **three times** (hits #2, #3, #4,
+all `17600512..17747968`). If one of those is the verification pass and the
+others are the parse, feeding the original bytes to one and patched bytes to
+the others would very likely defeat the check.
+
+**That is not a route this project will take.** Keeping a checksum consistent
+with content we changed is bookkeeping; feeding a verification routine
+different bytes than the parser gets is deceiving an integrity control that
+exists precisely to detect this modification — and it would ship, making other
+people's installs report unmodified when they are not. The flag is how a player
+tells the difference. Suppressing it is not ours to do on their behalf.
+
+### What remains
+
+* **The extension.** X4's own supported mechanism: opt-in, visible in Settings
+  → Extensions, removable by deleting a directory. Costs `modified="1"`, which
+  every other X4 mod also costs. **This is the recommendation.**
+* **In-memory, after the parse.** Let X4 read and verify its pristine file,
+  then change the value in its parsed state. No integrity check is deceived —
+  the files genuinely are unmodified and the verification correctly says so.
+  Consistent with what the layer already does (SPIR-V, projections, descriptor
+  sets). Costs: finding the value in memory, which is version-fragile and
+  unbuilt. **Open, not recommended without a reason to pay for it.**
+
+### Cheaper check than saving, for next time
+
+Patola: **X4 states "modified" at the top of the menu screen at startup.** The
+save-and-inspect cycle used through all of #68 was never necessary to read the
+session's state — only to read a *file's*. Worth using first.
+
 # Take 204 — the clamp MOVED. 85 yaw is right; 85 pitch is our own singularity
 
 **`MOVED ✓` — X4 reached exactly 85.00 deg in BOTH axes** against a command of
