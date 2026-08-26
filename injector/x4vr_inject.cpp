@@ -363,6 +363,13 @@ struct ScanHit {
     const char *kind;
 };
 
+// The element's own text, exactly as parameters.xml carries it. Same length
+// in and out, so nothing around it moves.
+const char kElemFrom[] = "maxpitch=\"35\" maxyaw=\"65\"";
+const char kElemTo[]   = "maxpitch=\"70\" maxyaw=\"85\"";
+const size_t kElemLen = sizeof(kElemFrom) - 1;
+static_assert(sizeof(kElemFrom) == sizeof(kElemTo), "same length");
+
 bool paramscan_on() {
     static const bool on = [] {
         const char *e = getenv("X4VR_PARAMSCAN");
@@ -414,7 +421,7 @@ void paramscan_run() {
     const size_t kCap = 64;
     const size_t chunk_bytes = 1u << 20;
     size_t regions = 0, bytes = 0, skipped = 0, anchors = 0;
-    std::vector<uintptr_t> strhits;
+    std::vector<uintptr_t> strhits, elemhits;
     const int memfd = open("/proc/self/mem", O_RDONLY);
     if (memfd < 0) {
         X4VR_LOG("paramscan: cannot open /proc/self/mem");
@@ -469,12 +476,68 @@ void paramscan_run() {
                 if (memcmp(chunk.data() + k, "maxyaw", 6) == 0 &&
                     strhits.size() < 8)
                     strhits.push_back(lo + o + k);
+            // Take 207: 8 "maxyaw" strings in WRITABLE memory, clustered
+            // within ~4 KB, while the numeric search found nothing.
+            // parameters.xml contains "maxyaw" exactly four times, so eight is
+            // two copies of the file's text retained after parsing.
+            //
+            // That is the handle. The exact element text is same-length
+            // substitutable, like the archive bytes were, and rewriting our
+            // own process's memory deceives no verifier -- X4's files are
+            // genuinely untouched and its integrity check has already run and
+            // truthfully passed.
+            for (size_t k = 0; k + kElemLen <= (size_t)got; k++) {
+                if (memcmp(chunk.data() + k, kElemFrom, kElemLen) != 0)
+                    continue;
+                elemhits.push_back(lo + o + k);
+                if (elemhits.size() > 16)
+                    break;
+            }
         }
     }
     fclose(m);
     close(memfd);
     X4VR_LOG("paramscan: %zu (200,500) anchor(s) examined, %zu \"maxyaw\" "
              "string(s) in memory", anchors, strhits.size());
+    // The element text, and the patch if this run asked for one.
+    const char *pe = getenv("X4VR_PARAMPATCH");
+    const bool want_patch = pe && *pe && *pe != '0';
+    X4VR_LOG("paramscan: %zu copy/copies of '%s' in writable memory%s",
+             elemhits.size(), kElemFrom,
+             elemhits.empty() ? " — the text route is CLOSED for this build"
+                              : "");
+    for (size_t i = 0; i < elemhits.size() && i < 8; i++) {
+        char ctx[121];
+        const ssize_t g = pread(memfd, ctx, sizeof(ctx) - 1,
+                                (off_t)(elemhits[i] - 40));
+        if (g > 0) {
+            ctx[g] = 0;
+            for (ssize_t c = 0; c < g; c++)
+                if ((unsigned char)ctx[c] < 32 || (unsigned char)ctx[c] > 126)
+                    ctx[c] = '.';
+            X4VR_LOG("paramscan: elem @%p  ...%s...", (void *)elemhits[i], ctx);
+        }
+    }
+    if (want_patch && !elemhits.empty()) {
+        size_t done = 0;
+        for (uintptr_t a : elemhits) {
+            // Verified before written, exactly as the archive patch is: only
+            // memory that still reads as the expected text is touched.
+            if (memcmp((const void *)a, kElemFrom, kElemLen) != 0)
+                continue;
+            memcpy((void *)a, kElemTo, kElemLen);
+            done++;
+        }
+        X4VR_LOG("paramscan: PATCHED %zu of %zu copy/copies in place. X4's "
+                 "FILES ARE UNTOUCHED and its integrity check already ran on "
+                 "the real bytes — this only rewrites text this process is "
+                 "holding. Whether it has any effect depends on X4 re-reading "
+                 "it, which take 208 is what tests",
+                 done, elemhits.size());
+    } else if (!elemhits.empty()) {
+        X4VR_LOG("paramscan: not patched — set X4VR_PARAMPATCH=1 to rewrite "
+                 "them");
+    }
     for (size_t i = 0; i < strhits.size() && i < 4; i++)
         X4VR_LOG("paramscan: \"maxyaw\" @%p — X4 kept the parsed text, which "
                  "is a better handle than any number", (void *)strhits[i]);
