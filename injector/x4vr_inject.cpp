@@ -34,6 +34,7 @@
 #include <map>
 #include <mutex>
 #include <vector>
+#include <thread>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -335,6 +336,141 @@ void catpatch_apply_file(FILE *f, void *buf, ssize_t n, long long start) {
     catpatch_apply_named(file, buf, n, start);
 }
 
+// ---- X4VR_PARAMSCAN: find the clamp AFTER X4 has parsed it ----------------
+//
+// Task #68's one remaining honest route. Read-substitution is closed: X4
+// verifies the bytes it reads and the protection is an RSA signature we cannot
+// forge, and feeding a verifier different bytes than the parser is not
+// something this project will do. But there is nothing dishonest about letting
+// X4 read and verify its genuine, untouched files -- the check runs on real
+// data and truthfully reports unmodified -- and then changing the value it
+// parsed. That is the same class as the SPIR-V, projection and descriptor work
+// the layer already does.
+//
+// **This only REPORTS.** Whether the parsed values are locatable at all, and
+// uniquely, is unknown, and building a writer before knowing that would be
+// building on a guess. The signature is strong: X4's own element is
+//
+//   <internal maxpitch="35" maxyaw="65" anglespeed="200" angleacc="500"
+//             trackmaxpitch="85" trackmaxyaw="85"/>
+//
+// so a 35 adjacent to a 65 is already selective, and the neighbours let a real
+// hit be told from a coincidence by eye. Both float and int32 are searched
+// because how X4 stores them is not established -- guessing one and finding
+// nothing would be indistinguishable from "not there".
+struct ScanHit {
+    uintptr_t addr;
+    const char *kind;
+};
+
+bool paramscan_on() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_PARAMSCAN");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
+
+template <typename T>
+void paramscan_region(const uint8_t *base, size_t len, const char *kind,
+                      T a, T b, std::vector<ScanHit> &out, size_t cap,
+                      uintptr_t at) {
+    if (len < sizeof(T) * 2)
+        return;
+    for (size_t i = 0; i + sizeof(T) * 2 <= len && out.size() < cap;
+         i += sizeof(T)) {
+        T x, y;
+        memcpy(&x, base + i, sizeof(T));
+        memcpy(&y, base + i + sizeof(T), sizeof(T));
+        // Either order: the struct may hold pitch first or yaw first, and
+        // assuming one would half the search for no reason.
+        if ((x == a && y == b) || (x == b && y == a))
+            out.push_back({at + i, kind});
+    }
+}
+
+void paramscan_run() {
+    std::vector<ScanHit> hits;
+    const size_t kCap = 64;
+    const size_t chunk_bytes = 1u << 20;
+    size_t regions = 0, bytes = 0, skipped = 0;
+    const int memfd = open("/proc/self/mem", O_RDONLY);
+    if (memfd < 0) {
+        X4VR_LOG("paramscan: cannot open /proc/self/mem");
+        return;
+    }
+    FILE *m = fopen("/proc/self/maps", "r");
+    if (!m) {
+        X4VR_LOG("paramscan: cannot read /proc/self/maps");
+        return;
+    }
+    char line[512];
+    while (fgets(line, sizeof(line), m) && hits.size() < kCap) {
+        uintptr_t lo = 0, hi = 0;
+        char perms[8] = {0}, path[256] = {0};
+        if (sscanf(line, "%lx-%lx %7s %*s %*s %*s %255s", &lo, &hi, perms,
+                   path) < 3)
+            continue;
+        if (perms[0] != 'r' || perms[1] != 'w')
+            continue;
+        // Anonymous and heap only. File-backed rw regions are libraries' data
+        // segments and X4's parsed parameters are not in one.
+        if (path[0] && strcmp(path, "[heap]") != 0)
+            continue;
+        const size_t len = hi - lo;
+        if (len < 64 || len > (size_t)512 << 20)
+            continue;
+        regions++;
+        // Copied out through /proc/self/mem rather than dereferenced.
+        //
+        // The first version walked the pointers directly and took a SIGSEGV:
+        // /proc/self/maps lists regions that are not all safely readable, and
+        // one bad page kills the process -- which in X4 would be a crash
+        // blamed on the mod. pread returns EIO/EFAULT instead, so an
+        // unreadable region is skipped and counted.
+        std::vector<uint8_t> chunk(chunk_bytes);
+        for (size_t o = 0; o < len && hits.size() < kCap; o += chunk_bytes) {
+            const size_t want = std::min(chunk_bytes, len - o);
+            const ssize_t got = pread(memfd, chunk.data(), want,
+                                      (off_t)(lo + o));
+            if (got <= 0) {
+                skipped++;
+                break;
+            }
+            bytes += (size_t)got;
+            paramscan_region<float>(chunk.data(), (size_t)got, "f32", 35.0f,
+                                    65.0f, hits, kCap, lo + o);
+            paramscan_region<int32_t>(chunk.data(), (size_t)got, "i32", 35, 65,
+                                      hits, kCap, lo + o);
+        }
+    }
+    fclose(m);
+    close(memfd);
+    X4VR_LOG("paramscan: %zu region(s), %zu MB read, %zu unreadable, "
+             "%zu hit(s)%s", regions, bytes >> 20, skipped, hits.size(),
+             hits.size() >= kCap ? " (CAPPED — more exist)" : "");
+    if (hits.empty()) {
+        X4VR_LOG("paramscan: NOTHING found. Either X4 stores these as another "
+                 "type (double? scaled to radians?), or not adjacently, or the "
+                 "scan ran before the parse. It is not evidence that the value "
+                 "is unreachable");
+        return;
+    }
+    // Context, so a real camera struct can be told from a coincidence: the
+    // element's other attributes are 200, 500, 85, 85 and should be nearby.
+    for (size_t i = 0; i < hits.size() && i < 12; i++) {
+        const float *f = (const float *)(hits[i].addr - 16);
+        char buf[256];
+        int n = snprintf(buf, sizeof(buf), "paramscan: %s @%p  ",
+                         hits[i].kind, (void *)hits[i].addr);
+        for (int k = 0; k < 12 && n < (int)sizeof(buf) - 16; k++)
+            n += snprintf(buf + n, sizeof(buf) - n, "%g ", f[k]);
+        X4VR_LOG("%s", buf);
+    }
+    X4VR_LOG("paramscan: the row that is X4's camera block should read "
+             "... 35 65 200 500 85 85 ... — anything else is a coincidence");
+}
+
 bool overrides_disabled() {
     static const bool off = [] {
         const char *e = getenv("X4VR_NO_CONFIG");
@@ -634,6 +770,27 @@ __attribute__((constructor)) static void x4vr_inject_init() {
     X4VR_LOG("injector loaded into pid %d (%s)", getpid(), exe);
     if (exe_is_game(exe))
         log_startup_env();
+    // Task #68: the parsed clamp, once X4 has had time to parse it. A delay
+    // rather than a hook, because the parse has no seam we can name -- and if
+    // it turns out to have run too early, the log says "NOTHING found" and
+    // that is explicitly not evidence of absence.
+    // X4VR_PARAMSCAN_ANY exists so the scanner can be exercised outside the
+    // game: the first validation run planted the values in a test binary and
+    // found nothing, because the gate below is on the exe being X4 and the
+    // test was not. A scanner that has only ever reported "nothing" in a
+    // process it never ran in proves nothing about X4.
+    if (paramscan_on() && (exe_is_game(exe) || getenv("X4VR_PARAMSCAN_ANY"))) {
+        static const int delay = [] {
+            const char *e = getenv("X4VR_PARAMSCAN_DELAY");
+            return e && *e ? atoi(e) : 45;
+        }();
+        std::thread([] {
+            struct timespec ts = {delay, 0};
+            nanosleep(&ts, nullptr);
+            X4VR_LOG("paramscan: scanning at t+%ds", delay);
+            paramscan_run();
+        }).detach();
+    }
 }
 
 // X4 sets SDL_VIDEO_DRIVER itself -- the string "x11,wayland" is in the
