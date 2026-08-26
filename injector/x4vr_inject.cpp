@@ -371,20 +371,40 @@ bool paramscan_on() {
     return on;
 }
 
+// Take 206: searching for a 35 adjacent to a 65 returned 64 hits, hit the cap,
+// and every one was the same repeating 5-tuple with a stepping coordinate
+// (35, 1524, ..., 65 / 35, 1528, ..., 65) -- glyph metrics or an atlas. One
+// false-positive family ate the entire budget, so the run was not evidence
+// about the float case at all.
+//
+// The anchor is now (200, 500) -- `anglespeed` and `angleacc`, far rarer than
+// two small round numbers -- and a hit additionally requires 35, 65 and two
+// 85s within the surrounding window. All six values of X4's element, which no
+// glyph table is going to reproduce by accident.
 template <typename T>
 void paramscan_region(const uint8_t *base, size_t len, const char *kind,
-                      T a, T b, std::vector<ScanHit> &out, size_t cap,
-                      uintptr_t at) {
-    if (len < sizeof(T) * 2)
+                      std::vector<ScanHit> &out, size_t cap, uintptr_t at,
+                      size_t &seen) {
+    const size_t W = 16;                    // slots either side of the anchor
+    if (len < sizeof(T) * (W * 2 + 2))
         return;
-    for (size_t i = 0; i + sizeof(T) * 2 <= len && out.size() < cap;
-         i += sizeof(T)) {
+    for (size_t i = sizeof(T) * W;
+         i + sizeof(T) * (W + 2) <= len && out.size() < cap; i += sizeof(T)) {
         T x, y;
         memcpy(&x, base + i, sizeof(T));
         memcpy(&y, base + i + sizeof(T), sizeof(T));
-        // Either order: the struct may hold pitch first or yaw first, and
-        // assuming one would half the search for no reason.
-        if ((x == a && y == b) || (x == b && y == a))
+        if (!((x == (T)200 && y == (T)500) || (x == (T)500 && y == (T)200)))
+            continue;
+        int n35 = 0, n65 = 0, n85 = 0;
+        for (size_t k = 0; k < W * 2; k++) {
+            T v;
+            memcpy(&v, base + i - sizeof(T) * W + sizeof(T) * k, sizeof(T));
+            if (v == (T)35) n35++;
+            else if (v == (T)65) n65++;
+            else if (v == (T)85) n85++;
+        }
+        seen++;
+        if (n35 && n65 && n85 >= 2)
             out.push_back({at + i, kind});
     }
 }
@@ -393,7 +413,8 @@ void paramscan_run() {
     std::vector<ScanHit> hits;
     const size_t kCap = 64;
     const size_t chunk_bytes = 1u << 20;
-    size_t regions = 0, bytes = 0, skipped = 0;
+    size_t regions = 0, bytes = 0, skipped = 0, anchors = 0;
+    std::vector<uintptr_t> strhits;
     const int memfd = open("/proc/self/mem", O_RDONLY);
     if (memfd < 0) {
         X4VR_LOG("paramscan: cannot open /proc/self/mem");
@@ -438,14 +459,25 @@ void paramscan_run() {
                 break;
             }
             bytes += (size_t)got;
-            paramscan_region<float>(chunk.data(), (size_t)got, "f32", 35.0f,
-                                    65.0f, hits, kCap, lo + o);
-            paramscan_region<int32_t>(chunk.data(), (size_t)got, "i32", 35, 65,
-                                      hits, kCap, lo + o);
+            paramscan_region<float>(chunk.data(), (size_t)got, "f32", hits,
+                                    kCap, lo + o, anchors);
+            paramscan_region<int32_t>(chunk.data(), (size_t)got, "i32", hits,
+                                      kCap, lo + o, anchors);
+            // A DOM kept in memory would be a far better handle than any
+            // number, so look for the attribute name too.
+            for (size_t k = 0; k + 6 <= (size_t)got; k++)
+                if (memcmp(chunk.data() + k, "maxyaw", 6) == 0 &&
+                    strhits.size() < 8)
+                    strhits.push_back(lo + o + k);
         }
     }
     fclose(m);
     close(memfd);
+    X4VR_LOG("paramscan: %zu (200,500) anchor(s) examined, %zu \"maxyaw\" "
+             "string(s) in memory", anchors, strhits.size());
+    for (size_t i = 0; i < strhits.size() && i < 4; i++)
+        X4VR_LOG("paramscan: \"maxyaw\" @%p — X4 kept the parsed text, which "
+                 "is a better handle than any number", (void *)strhits[i]);
     X4VR_LOG("paramscan: %zu region(s), %zu MB read, %zu unreadable, "
              "%zu hit(s)%s", regions, bytes >> 20, skipped, hits.size(),
              hits.size() >= kCap ? " (CAPPED — more exist)" : "");
@@ -459,12 +491,20 @@ void paramscan_run() {
     // Context, so a real camera struct can be told from a coincidence: the
     // element's other attributes are 200, 500, 85, 85 and should be nearby.
     for (size_t i = 0; i < hits.size() && i < 12; i++) {
-        const float *f = (const float *)(hits[i].addr - 16);
-        char buf[256];
+        // Printed in the type that MATCHED. Take 206 dumped int bit patterns
+        // as floats -- 4.90454e-44 for 35 -- and the rows were unreadable
+        // until decoded by hand.
+        char buf[320];
         int n = snprintf(buf, sizeof(buf), "paramscan: %s @%p  ",
                          hits[i].kind, (void *)hits[i].addr);
-        for (int k = 0; k < 12 && n < (int)sizeof(buf) - 16; k++)
-            n += snprintf(buf + n, sizeof(buf) - n, "%g ", f[k]);
+        const bool isf = hits[i].kind[0] == 'f';
+        for (int k = -8; k < 12 && n < (int)sizeof(buf) - 16; k++) {
+            const uint8_t *q = (const uint8_t *)hits[i].addr + k * 4;
+            if (isf) { float v; memcpy(&v, q, 4);
+                       n += snprintf(buf + n, sizeof(buf) - n, "%g ", v); }
+            else     { int32_t v; memcpy(&v, q, 4);
+                       n += snprintf(buf + n, sizeof(buf) - n, "%d ", v); }
+        }
         X4VR_LOG("%s", buf);
     }
     X4VR_LOG("paramscan: the row that is X4's camera block should read "
