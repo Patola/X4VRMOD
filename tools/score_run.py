@@ -1752,9 +1752,49 @@ def main(path):
     #   * the COMMAND must have exceeded the old stop. The servo clamps its own
     #     target, so if it never asked past 65 the camera could not go there
     #     and "no change" is a statement about the player's neck, not about X4.
-    cam = re.findall(
-        r"camread: X4 (-?[\d.]+),(-?[\d.]+) deg \(raw (-?[\d.]+),(-?[\d.]+)\)"
-        r" \| cmd (-?[\d.]+),(-?[\d.]+)", text)
+    # ...and it must be the COCKPIT camera.
+    #
+    # Take 208 reported "MOVED, X4 reached 175.76 deg" and it was wrong. X4's
+    # `<external>` element declares maxpitch="85" and NO maxyaw at all, so
+    # external-view yaw is unbounded BY DESIGN. Segmented by the injector's own
+    # `headlook: view is now ...` lines, that run reads:
+    #
+    #     cockpit   n=220  max |X4| yaw= 65.00 pitch=35.00   (command asked 69.95)
+    #     external  n= 62  max |X4| yaw=175.76 pitch=69.09
+    #
+    # The cockpit clamp had not moved at all. Aggregating the two populations
+    # turned "no effect" into a confident success, so the walk is segmented
+    # here and external samples are reported separately, never mixed in.
+    cam_pat = (r"camread: X4 (-?[\d.]+),(-?[\d.]+) deg \(raw (-?[\d.]+),"
+               r"(-?[\d.]+)\) \| cmd (-?[\d.]+),(-?[\d.]+)")
+    view, by_view = None, {"cockpit": [], "external": [], "unknown": []}
+    for ln in lines:
+        if "view is now the cockpit" in ln:
+            view = "cockpit"; continue
+        if "view is now external" in ln:
+            view = "external"; continue
+        m = re.search(cam_pat, ln)
+        if m:
+            by_view[view or "unknown"].append(m.groups())
+    ext = [c for c in by_view["external"]
+           if not (float(c[2]) == 0.0 and float(c[3]) == 0.0)]
+    if ext:
+        print(f"clamp   {len(ext)} EXTERNAL-view sample(s) excluded, max |X4| "
+              f"yaw={max(abs(float(c[0])) for c in ext):.2f} — <external> "
+              f"declares no maxyaw, so that number is unbounded by design and "
+              f"says nothing about the cockpit clamp")
+    cam = by_view["cockpit"] or by_view["unknown"]
+    if cam and not by_view["cockpit"]:
+        # Distinguish "never transitioned" from "transitioned but never INTO
+        # the cockpit": the first means the pre-transition samples are as good
+        # as we get, the second means the cockpit population is genuinely
+        # absent. Saying "no view transitions" while also excluding external
+        # samples, as this did, is self-contradictory on its face.
+        print("clamp   %s — the samples read below are the ones before any "
+              "transition, so treat them as cockpit only if the run started "
+              "there" % ("no cockpit transition in this log, though external "
+                         "ones occurred" if by_view["external"] else
+                         "no view transitions in this log at all"))
     if cam:
         live = [c for c in cam
                 if not (float(c[2]) == 0.0 and float(c[3]) == 0.0)]
