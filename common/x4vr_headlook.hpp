@@ -58,9 +58,20 @@ namespace x4vr {
 struct HeadAngles {
     float yaw_deg = 0.0f;   // + = turning left (right-handed, Y up)
     float pitch_deg = 0.0f; // + = looking up
-    // False when the head is looking near-vertically and yaw is a singularity.
-    // See head_angles(); the caller must hold its previous yaw rather than
-    // follow this one.
+    // How much of the yaw reading to believe, 0..1, fading to zero as the head
+    // approaches vertical. NOT a flag, and that matters: the flag it replaces
+    // switched yaw tracking off in one step, so crossing the region froze the
+    // yaw and re-crossing resumed it — the "jumps of rotations" Patola hit at
+    // 85 deg of pitch in take 204.
+    //
+    // **Quaternions do not remove this.** X4's mouselook is a two-axis yaw/
+    // pitch channel, so whatever representation the pose arrives in has to
+    // land on (yaw, pitch), and that map is degenerate at the poles however it
+    // is computed. Near vertical a tiny head wobble genuinely does swing the
+    // yaw through a large angle, and the honest response is to stop believing
+    // it — smoothly, rather than at a cliff.
+    float yaw_weight = 1.0f;
+    // Kept for callers that only need the yes/no. Derived, never set alone.
     bool yaw_reliable = true;
 };
 
@@ -88,8 +99,17 @@ inline HeadAngles head_angles(float qx, float qy, float qz, float qw) {
     // he came back to level and the world was leaned down and to the left.
     // Clamping the commanded angle does not help, because the corrupt value is
     // inside the clamp.
+    // `horiz` is cos(pitch): 1 looking level, 0 straight up. The fade runs
+    // from full confidence at 70 deg of pitch (0.342) to none at 84.8 (0.09),
+    // the point the old hard gate sat on. Smoothstep rather than linear so the
+    // derivative is continuous at both ends too — a kink is a smaller jolt
+    // than a cliff but it is still a jolt.
     const float horiz = std::sqrt(fx * fx + fz * fz);
-    a.yaw_reliable = horiz > 0.09f; // ~85 deg of pitch
+    const float lo = 0.09f, hi = 0.342f;
+    float t = (horiz - lo) / (hi - lo);
+    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    a.yaw_weight = t * t * (3.0f - 2.0f * t);
+    a.yaw_reliable = a.yaw_weight > 0.0f;
     return a;
 }
 
@@ -193,9 +213,12 @@ inline Delta head_look_step(HeadLook &s, const HeadAngles &head) {
     if (!(s.gain_deg_per_count > 0.0f))
         return d; // uncalibrated: send nothing rather than something arbitrary
 
+    // Always the head's own yaw now. Substituting cmd_yaw when the reading was
+    // unreliable made the error exactly zero, which is a step change in the
+    // command the instant the gate flips; the weight below fades the step
+    // instead, and reaches the same zero without the edge.
     const float want_yaw =
-        head.yaw_reliable ? clampf(head.yaw_deg, -s.yaw_limit_deg, s.yaw_limit_deg)
-                          : s.cmd_yaw_deg;
+        clampf(head.yaw_deg, -s.yaw_limit_deg, s.yaw_limit_deg);
     const float want_pitch =
         clampf(head.pitch_deg, -s.pitch_limit_deg, s.pitch_limit_deg);
     d.clamped = want_yaw != head.yaw_deg || want_pitch != head.pitch_deg;
@@ -227,8 +250,13 @@ inline Delta head_look_step(HeadLook &s, const HeadAngles &head) {
         clampf(s.servo_kp * err_yaw, -s.max_step_deg, s.max_step_deg);
     const float step_pitch =
         clampf(s.servo_kp * err_pitch, -s.max_step_deg, s.max_step_deg);
-    if (head.yaw_reliable && std::fabs(err_yaw) >= s.dead_zone_deg)
-        d.dx = (int)std::lround(s.sign_yaw * step_yaw / s.gain_deg_per_count);
+    // Weighted, so the yaw command fades out as the head nears vertical
+    // instead of being cut off. At weight 1 -- anything below 70 deg of pitch,
+    // which is every take before 204 -- this is arithmetically identical to
+    // what it replaced.
+    if (head.yaw_weight > 0.0f && std::fabs(err_yaw) >= s.dead_zone_deg)
+        d.dx = (int)std::lround(s.sign_yaw * step_yaw * head.yaw_weight /
+                                s.gain_deg_per_count);
     if (std::fabs(err_pitch) >= s.dead_zone_deg)
         d.dy = (int)std::lround(s.sign_pitch * step_pitch / gp);
 

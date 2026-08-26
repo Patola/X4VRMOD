@@ -208,6 +208,41 @@ int main() {
                   "spin: crossing +-180 takes the short way, not a reverse spin");
             printf("      crossing 180: cmd %.1f -> step dx=%d\n", before, d.dx);
         }
+        // The defect take 204 hit: the yaw gate was a cliff, so crossing it
+        // froze the yaw and re-crossing resumed it -- "jumps of rotations".
+        // Sweep pitch through the fade with a constant yaw error and assert
+        // the command never jumps between adjacent samples.
+        {
+            int prev = 0; int worst = 0; bool first = true;
+            for (float pitch = 60.0f; pitch <= 89.0f; pitch += 0.25f) {
+                // forward vector for this pitch, yaw fixed at 30 deg
+                const float p = pitch * 3.14159265f / 180.0f;
+                const float y = 30.0f * 3.14159265f / 180.0f;
+                const float fy = std::sin(p), ch = std::cos(p);
+                const float fx = -ch * std::sin(y), fz = -ch * std::cos(y);
+                // reconstruct HeadAngles the way head_angles() would
+                x4vr::HeadAngles a;
+                a.yaw_deg = std::atan2(-fx, -fz) * 57.2957795130823f;
+                a.pitch_deg = std::asin(fy) * 57.2957795130823f;
+                const float horiz = std::sqrt(fx * fx + fz * fz);
+                float t = (horiz - 0.09f) / (0.342f - 0.09f);
+                t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+                a.yaw_weight = t * t * (3.0f - 2.0f * t);
+                a.yaw_reliable = a.yaw_weight > 0.0f;
+                x4vr::HeadLook s2;
+                s2.gain_deg_per_count = 0.115f;
+                s2.yaw_limit_deg = 180.0f;
+                s2.pitch_limit_deg = 89.0f;
+                const x4vr::Delta d = x4vr::head_look_step(s2, a);
+                if (!first && std::abs(d.dx - prev) > worst)
+                    worst = std::abs(d.dx - prev);
+                prev = d.dx; first = false;
+            }
+            check(worst <= 4,
+                  "pitch sweep through the fade makes no yaw jump");
+            printf("      worst adjacent dx change across 60-89 deg: %d\n",
+                   worst);
+        }
         x4vr::HeadLook mild;
         for (int i = 0; i < 500; i++)
             x4vr::head_look_step(mild, {65.0f, 0.0f}); // exactly at the clamp (65, not 56.5)
