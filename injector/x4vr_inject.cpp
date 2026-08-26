@@ -201,19 +201,43 @@ void catpatch_untrack(int fd) {
     catfds().erase(fd);
 }
 
+// ...and the same by FILE*, which is what X4 actually uses.
+//
+// Take 205b fired nothing: the fd hooks above were wired into open/open64/
+// openat, and X4 opens its archives with **fopen** -- `fileprobe: fopen(
+// ./08.dat)`, against 175 fopen calls and 2 open64 in that run. The fixture I
+// validated against used open()+read() directly, so it exercised a path X4
+// does not take, and take 203's fileprobe had already recorded which one it
+// does. A green test on the wrong door.
+//
+// Hooking read() alone would not have rescued it either: glibc's stdio calls
+// its own hidden alias rather than the interposable `read`, so fread never
+// reaches an LD_PRELOAD hook on it. The substitution has to happen at the
+// level X4 actually calls, which is fread.
+std::map<FILE *, std::string> &catfiles() {
+    static std::map<FILE *, std::string> m;
+    return m;
+}
+
+void catpatch_track_file(FILE *f, const char *path) {
+    if (!catpatch_on() || !f || !path)
+        return;
+    const char *b = basename_of(path);
+    for (const BytePatch &p : kPatches) {
+        if (strcmp(b, p.file) == 0) {
+            std::lock_guard<std::mutex> lock(catfd_mu());
+            catfiles()[f] = p.file;
+            return;
+        }
+    }
+}
+
 // Rewrite whatever of this read overlaps a patch window. `start` is the file
 // offset the returned bytes begin at.
-void catpatch_apply(int fd, void *buf, ssize_t n, long long start) {
+void catpatch_apply_named(const std::string &file, void *buf, ssize_t n,
+                          long long start) {
     if (!catpatch_on() || n <= 0)
         return;
-    std::string file;
-    {
-        std::lock_guard<std::mutex> lock(catfd_mu());
-        auto it = catfds().find(fd);
-        if (it == catfds().end())
-            return;
-        file = it->second;
-    }
     for (const BytePatch &p : kPatches) {
         if (file != p.file)
             continue;
@@ -253,6 +277,34 @@ void catpatch_apply(int fd, void *buf, ssize_t n, long long start) {
                      p.file, p.offset, p.from, p.to, start, start + n);
         }
     }
+}
+
+void catpatch_apply(int fd, void *buf, ssize_t n, long long start) {
+    if (!catpatch_on() || n <= 0)
+        return;
+    std::string file;
+    {
+        std::lock_guard<std::mutex> lock(catfd_mu());
+        auto it = catfds().find(fd);
+        if (it == catfds().end())
+            return;
+        file = it->second;
+    }
+    catpatch_apply_named(file, buf, n, start);
+}
+
+void catpatch_apply_file(FILE *f, void *buf, ssize_t n, long long start) {
+    if (!catpatch_on() || n <= 0)
+        return;
+    std::string file;
+    {
+        std::lock_guard<std::mutex> lock(catfd_mu());
+        auto it = catfiles().find(f);
+        if (it == catfiles().end())
+            return;
+        file = it->second;
+    }
+    catpatch_apply_named(file, buf, n, start);
 }
 
 bool overrides_disabled() {
@@ -2559,7 +2611,11 @@ FILE *fopen(const char *path, const char *mode) {
                 return real_fopen(prof.path.c_str(), mode);
         }
     }
-    return real_fopen(path, mode);
+    {
+        FILE *f = real_fopen(path, mode);
+        catpatch_track_file(f, path);
+        return f;
+    }
 }
 
 FILE *fopen64(const char *path, const char *mode) {
@@ -2588,7 +2644,11 @@ FILE *fopen64(const char *path, const char *mode) {
                 return real_fopen64(prof.path.c_str(), mode);
         }
     }
-    return real_fopen64(path, mode);
+    {
+        FILE *f = real_fopen64(path, mode);
+        catpatch_track_file(f, path);
+        return f;
+    }
 }
 
 } // extern "C"
@@ -2665,4 +2725,46 @@ extern "C" void *mmap(void *addr, size_t len, int prot, int flags, int fd,
         }
     }
     return p;
+}
+
+// ---- the stdio read family, which is the one X4 uses -----------------------
+//
+// Position is taken AFTER the call with ftello and the byte count subtracted,
+// so a short read is described correctly and there is no before/after pair to
+// race. fread returns ITEMS, not bytes.
+extern "C" size_t fread(void *buf, size_t size, size_t n, FILE *f) {
+    static auto real_fread =
+        real<size_t (*)(void *, size_t, size_t, FILE *)>("fread");
+    const size_t got = real_fread(buf, size, n, f);
+    if (got && size && catpatch_on()) {
+        const long long bytes = (long long)got * (long long)size;
+        const off_t here = ftello(f);
+        if (here >= bytes)
+            catpatch_apply_file(f, buf, (ssize_t)bytes,
+                                (long long)here - bytes);
+    }
+    return got;
+}
+
+extern "C" size_t fread_unlocked(void *buf, size_t size, size_t n, FILE *f) {
+    static auto real_fru =
+        real<size_t (*)(void *, size_t, size_t, FILE *)>("fread_unlocked");
+    const size_t got = real_fru(buf, size, n, f);
+    if (got && size && catpatch_on()) {
+        const long long bytes = (long long)got * (long long)size;
+        const off_t here = ftello(f);
+        if (here >= bytes)
+            catpatch_apply_file(f, buf, (ssize_t)bytes,
+                                (long long)here - bytes);
+    }
+    return got;
+}
+
+extern "C" int fclose(FILE *f) {
+    static auto real_fclose = real<int (*)(FILE *)>("fclose");
+    if (catpatch_on() && f) {
+        std::lock_guard<std::mutex> lock(catfd_mu());
+        catfiles().erase(f);
+    }
+    return real_fclose(f);
 }
