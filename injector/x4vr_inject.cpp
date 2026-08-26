@@ -146,6 +146,7 @@ struct BytePatch {
     long long offset;      // absolute, within that file
     const char *from;
     const char *to;
+    const char *env;       // extra knob this entry needs, or nullptr
 };
 
 // Offsets computed from 08.cat's index (a running sum of member sizes) against
@@ -155,7 +156,22 @@ struct BytePatch {
 const BytePatch kPatches[] = {
     // libraries/parameters.xml, member offset 17604207 + 14573.
     {"08.dat", 17618780LL, "maxpitch=\"35\" maxyaw=\"65\"",
-     "maxpitch=\"70\" maxyaw=\"85\""},
+     "maxpitch=\"70\" maxyaw=\"85\"", nullptr},
+    // X4VR_CATPATCH_MD5: the member's MD5 in 08.cat's index, so the archive is
+    // self-consistent. Take 205b substituted the content and the save came
+    // back modified="1" against a byte-identical control run where the
+    // substitution silently did not fire -- so X4 verified what it read. This
+    // entry tests WHICH check caught it.
+    //
+    // Its own knob because it is one hypothesis, not an improvement: MD5 is
+    // trivially recomputable (this value took seconds), so it cannot be what
+    // protects the archive. X4 also opens every `_sig.cat`/`_sig.dat` at
+    // startup and 08_sig.dat holds `libraries/parameters.xml.sig`, 1024 bytes
+    // -- an RSA signature, which is what an anti-tamper check would use and
+    // which cannot be forged. If this entry does not clear the flag, that is
+    // the answer and the route is closed.
+    {"08.cat", 37267LL, "384543b4b1b4c30cc23dad489eccb130",
+     "9b40b775c51422f5b7e97b0bc0fb9664", "X4VR_CATPATCH_MD5"},
 };
 
 bool catpatch_on() {
@@ -241,6 +257,11 @@ void catpatch_apply_named(const std::string &file, void *buf, ssize_t n,
     for (const BytePatch &p : kPatches) {
         if (file != p.file)
             continue;
+        if (p.env) {
+            const char *e = getenv(p.env);
+            if (!(e && *e && *e != '0'))
+                continue;
+        }
         const long long len = (long long)strlen(p.from);
         const long long lo = p.offset, hi = p.offset + len;
         if (start >= hi || start + n <= lo)
@@ -268,14 +289,21 @@ void catpatch_apply_named(const std::string &file, void *buf, ssize_t n,
             }
             *dst = (uint8_t)p.to[i];
         }
-        static bool hit = false;
-        if (!hit) {
-            hit = true;
-            X4VR_LOG("catpatch: %s+%lld '%s' -> '%s' (read %lld..%lld) — the "
-                     "archive on disk is UNTOUCHED; if the save still comes "
-                     "back modified, X4 verified what it read (task #68)",
-                     p.file, p.offset, p.from, p.to, start, start + n);
-        }
+        // Every hit, up to a bound, not just the first. If X4 reads the window
+        // more than once -- say a verification pass and then a parse -- that
+        // is visible here and only here, and it would be the one seam worth
+        // knowing about. Take 205b logged a single 144 KB page-aligned read
+        // covering the whole member, but it was capped at one report so the
+        // count was never established.
+        static std::atomic<int> hits{0};
+        const int k = hits.fetch_add(1);
+        if (k < 8)
+            X4VR_LOG("catpatch: hit #%d %s+%lld '%s' -> '%s' (read %lld..%lld)"
+                     " — the archive on disk is UNTOUCHED; if the save still "
+                     "comes back modified, X4 verified what it read (#68)",
+                     k + 1, p.file, p.offset, p.from, p.to, start, start + n);
+        else if (k == 8)
+            X4VR_LOG("catpatch: 8 hits reported, further ones silent");
     }
 }
 
