@@ -2131,7 +2131,44 @@ void headlook_tick() {
     last_obs_yaw = obs_now_yaw;
     last_obs_pitch = obs_now_pitch;
 
+    // The yaw fade, measured at FULL RATE.
+    //
+    // The headlook lines below are every 30th call, and adjacent ones can
+    // differ by tens of degrees purely because the player moved fast — a
+    // doctored 65 deg cliff sat inside take 209's own 62.68 deg level
+    // baseline, so no statistic over those samples can separate "the fade
+    // failed" from "he turned quickly". Consecutive frames can.
+    //
+    // Bucketed by pitch because the claim is specifically about steep angles:
+    // above 82 deg the weight is under 0.05 and the command must be nearly
+    // frozen, whatever the head does.
+    static float last_cmd_yaw = 0.0f;
+    static bool have_last = false;
+    static float worst_level = 0.0f, worst_fade = 0.0f, worst_deep = 0.0f;
+    const float pre_cmd = g_headlook.cmd_yaw_deg;
     const x4vr::Delta d = x4vr::head_look_step(g_headlook, {yaw, pitch});
+    if (have_last) {
+        float step = std::fabs(g_headlook.cmd_yaw_deg - pre_cmd);
+        if (step < 180.0f) {                       // not the +-180 wrap itself
+            const float ap = std::fabs(pitch);
+            float &slot = ap >= 82.0f ? worst_deep
+                                      : (ap >= 65.0f ? worst_fade : worst_level);
+            if (step > slot)
+                slot = step;
+        }
+    }
+    last_cmd_yaw = g_headlook.cmd_yaw_deg;
+    have_last = true;
+    (void)last_cmd_yaw;
+    {
+        static uint64_t fn = 0;
+        if ((fn++ % 900) == 0)
+            X4VR_LOG("fade: worst single-frame yaw command step — level "
+                     "%.3f deg, fade band (65-82) %.3f, deep (>=82) %.3f. The "
+                     "deep figure is the one the cliff broke: above 82 the "
+                     "weight is under 0.05 and the command must barely move",
+                     worst_level, worst_fade, worst_deep);
+    }
 
     // Reported whether or not anything is sent yet, because this line is how
     // the calibration run recovers the gain: a known command against the angle

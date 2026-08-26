@@ -1740,6 +1740,38 @@ def main(path):
     # `spread` is the guard that matters: the object block is per-DRAW, so if
     # its slots disagree about the cascade then no single one speaks for the
     # frame and the numbers have no referent. The layer warns; this fails.
+    # --- the yaw fade near vertical ----------------------------------------
+    #
+    # Read from the injector's own full-rate tracker, NOT from the sampled
+    # headlook lines. Those are every 30th call, so adjacent ones differ by
+    # tens of degrees when the player moves fast: a doctored 65 deg cliff sat
+    # inside take 209's own 62.68 deg level baseline, and no statistic over
+    # them could tell the defect from a quick turn. Consecutive frames can.
+    # (\d+(?:\.\d+)?) not ([\d.]+): the greedy version swallowed the sentence's
+    # trailing period and float() threw on "0.021." — caught by a doctored line,
+    # which is the only reason this section was ever run against one.
+    fd = re.findall(r"fade: worst single-frame yaw command step — level "
+                    r"(\d+(?:\.\d+)?) deg, fade band \(65-82\) "
+                    r"(\d+(?:\.\d+)?), deep \(>=82\) (\d+(?:\.\d+)?)", text)
+    if fd:
+        lv, fb, dp = (float(x) for x in fd[-1])
+        print(f"fade    worst single-frame command step: level {lv:.3f} deg, "
+              f"fade band {fb:.3f}, deep {dp:.3f}")
+        if fb == 0.0 and dp == 0.0:
+            print("fade    the head never pitched past 65 deg, so this run "
+                  "does NOT exercise the fade — look further up or down")
+        elif dp > 1.0:
+            fails.append(
+                f"the yaw command moved {dp:.3f} deg in a single frame while "
+                f"the head was past 82 deg of pitch, where the fade weight is "
+                f"under 0.05 and it should be nearly frozen. That is the cliff")
+        else:
+            print("fade    deep-region command is quiet, which is what the "
+                  "smoothstep is for — the cliff jumped 65 counts here offline")
+    elif "X4VR_HEADLOOK=1" in (run or ""):
+        print("fade    no `fade:` line — this build predates the full-rate "
+              "tracker, so the log says nothing about the yaw fade")
+
     # --- task #68: did X4's free-look clamp actually move? ------------------
     #
     # X4's own readback, from `inject camread: X4 <y>,<p> ... | cmd <y>,<p>`.
