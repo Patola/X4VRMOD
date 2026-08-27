@@ -75,6 +75,34 @@ struct HeadAngles {
     bool yaw_reliable = true;
 };
 
+// How much of the yaw reading to believe, from cos(pitch).
+//
+// A pure function of pitch, deliberately: the LAYER computes the head angles
+// and only yaw/pitch cross the shared block, so the injector rebuilds
+// HeadAngles from those two numbers alone. When the weight lived only inside
+// head_angles() the injector's brace-init left it at its default 1.0 and the
+// guard was never active in a real run at ALL -- not the fade, and not the
+// hard `yaw_reliable` cliff before it. It ran in tests and nowhere else, which
+// is why take 204 gimbal-locked: the servo was chasing raw noisy yaw all the
+// way to vertical with nothing damping it.
+//
+// horiz is cos(pitch) exactly -- the forward vector is unit length, so
+// sqrt(fx^2+fz^2) == sqrt(1 - fy^2) == cos(asin(fy)) -- and that is what makes
+// the injector able to recover it without a wider channel.
+//
+// Full confidence to 70 deg of pitch (0.342), none at 84.8 (0.09). Smoothstep,
+// so the derivative is continuous at both ends and not just the value.
+inline float yaw_weight_of_horiz(float horiz) {
+    const float lo = 0.09f, hi = 0.342f;
+    float t = (horiz - lo) / (hi - lo);
+    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+inline float yaw_weight_of_pitch_deg(float pitch_deg) {
+    return yaw_weight_of_horiz(std::cos(pitch_deg * 0.01745329251994330f));
+}
+
 // OpenXR poses are right-handed, Y up, -Z forward. Decompose the forward axis
 // rather than converting to Euler angles generally: we want "where is the nose
 // pointing", which is exactly the forward vector, and a general decomposition
@@ -99,16 +127,7 @@ inline HeadAngles head_angles(float qx, float qy, float qz, float qw) {
     // he came back to level and the world was leaned down and to the left.
     // Clamping the commanded angle does not help, because the corrupt value is
     // inside the clamp.
-    // `horiz` is cos(pitch): 1 looking level, 0 straight up. The fade runs
-    // from full confidence at 70 deg of pitch (0.342) to none at 84.8 (0.09),
-    // the point the old hard gate sat on. Smoothstep rather than linear so the
-    // derivative is continuous at both ends too — a kink is a smaller jolt
-    // than a cliff but it is still a jolt.
-    const float horiz = std::sqrt(fx * fx + fz * fz);
-    const float lo = 0.09f, hi = 0.342f;
-    float t = (horiz - lo) / (hi - lo);
-    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
-    a.yaw_weight = t * t * (3.0f - 2.0f * t);
+    a.yaw_weight = yaw_weight_of_horiz(std::sqrt(fx * fx + fz * fz));
     a.yaw_reliable = a.yaw_weight > 0.0f;
     return a;
 }

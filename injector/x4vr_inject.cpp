@@ -2146,7 +2146,15 @@ void headlook_tick() {
     static bool have_last = false;
     static float worst_level = 0.0f, worst_fade = 0.0f, worst_deep = 0.0f;
     const float pre_cmd = g_headlook.cmd_yaw_deg;
-    const x4vr::Delta d = x4vr::head_look_step(g_headlook, {yaw, pitch});
+    // The weight RECOVERED from pitch. `{yaw, pitch}` left yaw_weight at its
+    // default 1.0, so the fade — and the hard gate before it — never applied
+    // in a real run; see yaw_weight_of_pitch_deg().
+    x4vr::HeadAngles ha;
+    ha.yaw_deg = yaw;
+    ha.pitch_deg = pitch;
+    ha.yaw_weight = x4vr::yaw_weight_of_pitch_deg(pitch);
+    ha.yaw_reliable = ha.yaw_weight > 0.0f;
+    const x4vr::Delta d = x4vr::head_look_step(g_headlook, ha);
     if (have_last) {
         float step = std::fabs(g_headlook.cmd_yaw_deg - pre_cmd);
         if (step < 180.0f) {                       // not the +-180 wrap itself

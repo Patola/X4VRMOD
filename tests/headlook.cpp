@@ -243,6 +243,30 @@ int main() {
             printf("      worst adjacent dx change across 60-89 deg: %d\n",
                    worst);
         }
+        // The weight must be RECOVERABLE FROM PITCH ALONE, because that is
+        // all the injector has: only yaw and pitch cross the shared block, and
+        // when the weight lived solely inside head_angles() the injector's
+        // brace-init left it at 1.0 and the guard never applied in a real run.
+        // If these two ever disagree, the injector is silently unguarded again.
+        {
+            float worst = 0.0f;
+            for (float p = 0.0f; p <= 89.0f; p += 0.5f) {
+                const float pr = p * 3.14159265358979f / 180.0f;
+                const float fy = std::sin(pr), ch = std::cos(pr);
+                const float fx = -ch * 0.5f, fz = -ch * 0.8660254f;
+                const x4vr::HeadAngles a = x4vr::head_angles(
+                    /*qx*/ 0, 0, 0, 1);  // unused; build the weight directly
+                (void)a;
+                const float from_vec = x4vr::yaw_weight_of_horiz(
+                    std::sqrt(fx * fx + fz * fz));
+                const float from_pitch = x4vr::yaw_weight_of_pitch_deg(p);
+                worst = std::max(worst, std::fabs(from_vec - from_pitch));
+                (void)fy;
+            }
+            check(worst < 1e-4f,
+                  "yaw weight from pitch matches the forward vector");
+            printf("      worst weight mismatch over 0-89 deg: %.2e\n", worst);
+        }
         x4vr::HeadLook mild;
         for (int i = 0; i < 500; i++)
             x4vr::head_look_step(mild, {65.0f, 0.0f}); // exactly at the clamp (65, not 56.5)

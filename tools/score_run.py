@@ -1760,14 +1760,22 @@ def main(path):
         if fb == 0.0 and dp == 0.0:
             print("fade    the head never pitched past 65 deg, so this run "
                   "does NOT exercise the fade — look further up or down")
-        elif dp > 1.0:
+        elif dp > 1.4:
+            # 1.4 is derived, not chosen: max_step_deg is 12 and the smoothstep
+            # weight at exactly 82 deg is 0.0994, so the largest step the fade
+            # can permit anywhere in this bucket is 12 * 0.0994 = 1.19 deg,
+            # plus rounding to whole mouse counts. Anything above that means
+            # the weight was NOT applied — which is exactly what take 210
+            # found, where the injector had left it at its default 1.0.
             fails.append(
-                f"the yaw command moved {dp:.3f} deg in a single frame while "
-                f"the head was past 82 deg of pitch, where the fade weight is "
-                f"under 0.05 and it should be nearly frozen. That is the cliff")
+                f"the yaw command moved {dp:.3f} deg in a single frame past 82 "
+                f"deg of pitch, where the weight is 0.0994 and max_step_deg is "
+                f"12, so the fade cannot permit more than 1.19. The weight is "
+                f"not reaching the servo")
         else:
-            print("fade    deep-region command is quiet, which is what the "
-                  "smoothstep is for — the cliff jumped 65 counts here offline")
+            print(f"fade    deep step {dp:.3f} deg is within the 1.19 the "
+                  f"weight permits (0.0994 x max_step 12), so the fade is "
+                  f"reaching the servo")
     elif "X4VR_HEADLOOK=1" in (run or ""):
         print("fade    no `fade:` line — this build predates the full-rate "
               "tracker, so the log says nothing about the yaw fade")
