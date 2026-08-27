@@ -1961,12 +1961,25 @@ def main(path):
                 # servo produces -- which is what the doctored control read.
                 ratio = ay / iy if iy > 1e-6 else float("inf")
                 if abs(ay) > 0.45 * abs(iy):
+                    # **Do not name a cause here.** The first version of this
+                    # message asserted "the lead is not reaching the servo",
+                    # and take 212 read 0.94x with the lead reaching the servo
+                    # perfectly -- 99.3% of its commanded deltas matched the
+                    # lead model exactly, against 35.9% for the no-lead model.
+                    # The cause was the PLANT: X4's response is sub-linear in
+                    # the per-step delta, so commanding more returns
+                    # proportionally less. A failure message that names one
+                    # cause sends the next reader to check the wrong thing.
                     fails.append(
                         f"the lead did not remove the lag: yaw tau {ay*1000:.1f} "
                         f"ms armed against {iy*1000:.1f} ms idle ({ratio:.2f}x, "
-                        f"wanted <0.45x; 0.26 measured offline). If the two are "
-                        f"nearly EQUAL the lead is not reaching the servo — "
-                        f"check lead_scale was read, do not add a knob")
+                        f"wanted <0.45x; 0.26 measured offline). Two candidates, "
+                        f"and they are distinguishable: reconstruct the commanded "
+                        f"dx from the lagsample stream and compare it against the "
+                        f"`headlook: ... delta` lines. If the ARMED deltas match "
+                        f"a no-lead model, the lead is not reaching the servo. If "
+                        f"they match the lead model, it is X4's response that is "
+                        f"not linear — see task #73 in docs/x4-quirks.md")
                 else:
                     print(f"lagfit  the lead removes the lag: yaw tau "
                           f"{iy*1000:.1f} -> {ay*1000:.1f} ms ({ratio:.2f}x) at "

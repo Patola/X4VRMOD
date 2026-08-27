@@ -8220,6 +8220,78 @@ names it by value: `reported 0.009/111 m — that is camera member 9`.
 **#56 is answerable by measurement now** rather than blocked on the instrument.
 It still wants the three runs: two at one field for the spread, one at another.
 
+# Take 212 — the lead is CORRECT and does nothing. X4's response is not linear
+
+**`lagfit` 0.94x, and the scorer's stated cause was wrong.** It said "the lead
+is not reaching the servo". The lead was reaching the servo perfectly.
+
+The exact check, against 941 commanded deltas the game actually received —
+reconstruct the dx the servo should have sent, with and without the lead, and
+compare to the `headlook: ... delta` lines:
+
+| arm | matches a NO-LEAD model | matches the LEAD model |
+|---|---|---|
+| IDLE | **100.0%** | 49.0% |
+| ARMED | 35.9% | **99.3%** |
+
+So the arithmetic is right, the knob was read, the A/B toggled (16 phases,
+exactly 20 s, `scale 1.00`), and the servo commanded exactly what the lead asks
+for. The camera still ended up in the same place.
+
+## The plant is not an integrator
+
+`tests/servo_lag.cpp` models X4's camera as `cam += commanded`. Measured, it is
+nothing of the kind. Delivery — how much of a commanded step the camera
+actually performs — collapses as the command grows, and depends on **which way
+it is already moving**:
+
+| commanded | continuing the current motion | reversing it |
+|---|---|---|
+| 0–2° | 126.4% (n=1569) | 96.9% (n=517) |
+| 2–4° | 101.9% (n=473) | 62.5% (n=103) |
+| 4–6° | 95.3% (n=154) | 49.2% (n=33) |
+| 10–12° | 87.5% (n=104) | **21.2%** (n=37) |
+
+Over 1° commands the mean delivery was **85.2% in IDLE against 64.5% in ARMED**
+— and ARMED issued 211 commands past 6° where IDLE issued 19. **The lead makes
+commands bigger, and bigger commands are where X4 pays out least.** The closed
+loop then absorbs the difference and settles at nearly the same error, which is
+why 0.94x rather than a clean null.
+
+## Two of my own explanations died on the way
+
+**"X4 caps the camera at `anglespeed=200`."** Refuted: the camera reaches
+**541 deg/s**, p99 350. An earlier draft of this section claimed the ceiling
+matched 200 × dt = 8.42° "exactly" — that was an averaging coincidence across
+varying frame times, and checking the speed distribution directly killed it.
+
+**"The asymmetry is the mechanism — the lead fails because it asks for
+reversals."** Refuted by restricting the fit to steady turns of 3+ samples in
+one direction, where the plant delivers 95–126%:
+
+| | IDLE | ARMED | ratio |
+|---|---|---|---|
+| steady turn | 151.4 ms (n=1294) | 149.3 ms (n=1123) | **0.99x** |
+| reversing | 35.7 ms (n=175) | 41.0 ms (n=256) | 1.15x |
+
+The lead does not help *even where the plant is linear*. Whatever X4 is doing,
+it is not a per-step saturation that steady motion escapes.
+
+## What is established, and what is not
+
+**Established:** the lead is implemented correctly and commanded correctly;
+X4's delivery is sub-linear in command size and strongly direction-dependent;
+there is no hard 200 deg/s cap; the camera carries momentum (commanded ~nothing
+while moving, it still travelled ~77% of the previous step, n=128).
+
+**NOT established:** the form of X4's response. The coast-decay profile had
+n=21 and was too noisy to fit a time constant — no model is claimed from it.
+
+**The next measurement is `<lookaround><internal anglespeed angleacc>`** — the
+same node as #68's `maxyaw`/`maxpitch`, which we already proved is live data
+and already have an extension for. Raising them is a DIAGNOSTIC even if we
+would never ship it: if the delivery curve straightens, the mechanism is named.
+
 # #73 — the lag is the servo's ramp error, MEASURED from stored logs
 
 **No run was spent on this.** Takes 209/210/211 already logged X4's own camera
