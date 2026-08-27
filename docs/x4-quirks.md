@@ -8220,6 +8220,41 @@ names it by value: `reported 0.009/111 m — that is camera member 9`.
 **#56 is answerable by measurement now** rather than blocked on the instrument.
 It still wants the three runs: two at one field for the spread, one at another.
 
+# Take 211 — the fade is LIVE, and 4224² is not viable on this hardware
+
+**`deep 0.575` against the 1.19 the weight permits, and Patola looked fully up
+and down twice with no gimbal lock.** The progression 11.960 → 2.070 → 0.575 is
+the monotone damping the smoothstep is for. Take 210 measured a guard that was
+switched off; this one measured it working.
+
+Also confirmed by hand at 4224²: **HUD elements click normally**, before and
+after steering, and **looking around does not disturb steering**. The mouse
+grab survives a render larger than the 3440x1440 screen.
+
+### The framerate is the resolution, not the instrumentation
+
+| take | eye | upscaler | head-look | GAMEPLAY |
+|---|---|---|---|---|
+| 210 | 1408² | — | yes | **8.48 ms** (118 fps) |
+| 168b | 4224² | fsr_quality | no | **34.87 ms** (29 fps) |
+| 211 | 4224² | fsr_quality | yes | **44.36 ms** (23 fps) |
+
+**168b already ran 29 fps at this extent with no head-look instrumentation at
+all**, so 4224² was unviable before any of it. 9x the pixels for 5.2x the frame
+time is sub-linear, which is what upscaling buys and is still far too slow.
+
+The reprojection Patola saw is visible in the counters: **6331 blits against
+19026 submitted layers — each rendered image shown about three times.** X4's
+rendering is the bottleneck; the VR loop is running fine and repeating what it
+has.
+
+**The 27% gap between 168b and 211 is real but confounded** — different scenes,
+different durations, and 211 had a player actively moving their head, which
+changes what is drawn. `X4VR_CAMREAD`/`X4VR_CAMLOOP` call into X4 per frame and
+are the obvious suspects. Settling it needs one A/B at the same extent with
+those two omitted, and that is only worth spending if 4224² is ever back on the
+table. It is not: **29 fps is not a VR framerate at any instrumentation level.**
+
 # #68 CLOSED: the clamp is reachable, but not without `modified="1"`
 
 Four runs, each a single-variable step, and the route is settled.
