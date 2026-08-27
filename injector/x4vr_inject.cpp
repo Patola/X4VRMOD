@@ -1922,6 +1922,20 @@ static bool panprobe_enabled() {
     return on;
 }
 
+// Task #73's per-pose lag samples. On by its own knob, and implied by the A/B
+// -- a run that asks for the comparison always produces the measurement that
+// judges it, rather than depending on a second flag being remembered.
+static bool lag_log_enabled() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_HEADLOOK_LAGLOG");
+        if (e && *e && *e != '0')
+            return true;
+        const char *ab = getenv("X4VR_HEADLOOK_LEAD_AB");
+        return ab && *ab && atof(ab) > 0.0;
+    }();
+    return on;
+}
+
 static double mono_seconds() {
     struct timespec ts {};
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -2059,6 +2073,46 @@ void headlook_tick() {
         g_headlook.yaw_limit_deg = ylim;
     if (plim > 0.0f)
         g_headlook.pitch_limit_deg = plim;
+
+    // **Task #73's lead, and the A/B that measures it.**
+    //
+    // X4VR_HEADLOOK_LEAD is the scale (1.0 = the full (1/kp - 1) anticipation
+    // the arithmetic calls for; 0 = exactly the servo as it shipped).
+    //
+    // X4VR_HEADLOOK_LEAD_AB, in seconds, alternates the lead on and off inside
+    // ONE run. That is not a convenience: the lag depends on the frame rate,
+    // so two separate takes would differ in frame rate as well as in the lead
+    // and could not tell a servo fix from a frame-time change. Alternating
+    // within a run makes the frame rate a covariate instead of a confound, and
+    // both arms pay the same instrumentation cost.
+    static const float lead_scale = [] {
+        const char *e = getenv("X4VR_HEADLOOK_LEAD");
+        return e && *e ? (float)atof(e) : 0.0f;
+    }();
+    static const double lead_ab = [] {
+        const char *e = getenv("X4VR_HEADLOOK_LEAD_AB");
+        return e && *e ? atof(e) : 0.0;
+    }();
+    bool lead_armed = lead_scale > 0.0f;
+    if (lead_ab > 0.0) {
+        static const double t0 = mono_seconds();
+        const long phase = (long)((mono_seconds() - t0) / lead_ab);
+        lead_armed = (phase & 1) != 0; // the run OPENS on the control arm
+        static long said_phase = -1;
+        if (phase != said_phase) {
+            said_phase = phase;
+            // Intent, not outcome: this records what the run ASKED for. If the
+            // lead turns out not to reach the servo, this line must still say
+            // it was armed, or the scorer would silently compare two identical
+            // arms and report a null as a pass.
+            X4VR_LOG("headlook: lead %s (scale %.2f, A/B phase %ld, %.0f s)",
+                     lead_armed ? "ARMED" : "IDLE",
+                     lead_armed ? (lead_scale > 0.0f ? lead_scale : 1.0f) : 0.0f,
+                     phase, lead_ab);
+        }
+    }
+    g_headlook.lead_scale =
+        lead_armed ? (lead_scale > 0.0f ? lead_scale : 1.0f) : 0.0f;
 
     float yaw = 0.0f, pitch = 0.0f;
     uint64_t updates = 0;
@@ -2361,6 +2415,31 @@ void headlook_tick() {
                      kRad2Deg * -r.yaw, kRad2Deg * r.pitch, r.yaw, r.pitch,
                      g_headlook.cmd_yaw_deg, g_headlook.cmd_pitch_deg, yaw,
                      pitch, g_camloop ? " CLOSED" : " open-loop");
+    }
+
+    // **Task #73's measurement, at FULL rate.**
+    //
+    // The lag was first measured from `camread`, which prints one sample in 30
+    // -- about 350 ms apart at the headset's rate and 1.1 s at 20 fps. That was
+    // enough for a SLOPE (error against head rate needs a spread of speeds, not
+    // fine sampling) but it cannot resolve a ~40 ms lag directly, and it cannot
+    // see which side of an A/B boundary a sample fell on. So this emits every
+    // pose while the measurement is running.
+    //
+    // `view` and `arm` are STAMPED rather than left for the scorer to re-derive
+    // from transition lines: an instrument that recomputes the decision it
+    // reports can end up reporting a different one than the code took, which is
+    // how 18 modules once logged "World" after being dispatched as UI.
+    //
+    // `cam=` is X4's readback as it stood BEFORE this tick's command, which is
+    // the pairing the regression needs: error at the moment of observation.
+    if (lag_log_enabled()) {
+        X4VR_LOG("lagsample: arm=%d view=%s steer=%d cam=%d head=%.3f,%.3f "
+                 "x4=%.3f,%.3f",
+                 lead_armed ? 1 : 0, cockpit ? "cockpit" : "external",
+                 steering ? 1 : 0, have_cam ? 1 : 0, yaw, pitch,
+                 have_cam ? kRad2Deg * -r.yaw : 0.0f,
+                 have_cam ? kRad2Deg * r.pitch : 0.0f);
     }
 
     if ((n++ % 30) == 0 || d.clamped)

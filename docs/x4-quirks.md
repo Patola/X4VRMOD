@@ -8220,6 +8220,116 @@ names it by value: `reported 0.009/111 m — that is camera member 9`.
 **#56 is answerable by measurement now** rather than blocked on the instrument.
 It still wants the three runs: two at one field for the spread, one at another.
 
+# #73 — the lag is the servo's ramp error, MEASURED from stored logs
+
+**No run was spent on this.** Takes 209/210/211 already logged X4's own camera
+readback beside the head angle (`camread:`), and the lag is the slope of
+tracking error against head rate. Six measurements, two frame rates:
+
+| take | pose rate | yaw τ | pitch τ | fps | τ / pose period |
+|---|---|---|---|---|---|
+| 209 | 85 Hz | 43.8 ms | 38.7 ms | ~240 | 3.73 / 3.30 |
+| 210 | 85 Hz | 41.4 ms | 42.1 ms | ~120 | 3.51 / 3.57 |
+| 211 | 26.6 Hz | 160.4 ms | 203.8 ms | ~20 | 4.27 / 5.42 |
+
+**τ is not a constant — it scales with the pose period.** That refutes every
+fixed-latency explanation at once: tracker latency, our render cost, and X4's
+own `anglespeed="200" angleacc="500"`. A rate limiter inside X4 would hold τ
+constant in milliseconds. It does not.
+
+**The lag is the ramp-following error of a proportional controller** — a type-0
+loop tracking a moving target sits behind by a fixed fraction of its step
+period, forever. The servo steps once per published pose (x4vr_inject.cpp,
+`if (!fresh) return;`) and the layer publishes one pose per submitted frame, so
+**the lag is 3–4 frame-times**: ~40 ms at 90 Hz, ~180 ms at 20 fps.
+
+**Which of 3T and 4T depends on where you sample, and getting that wrong cost
+half a day.** Steady state on a ramp gives `e = e(1−kp) + rate·T`, so the error
+*at the instant of observation* is `rate·T/kp` = **4T**, and after that tick's
+correction has been applied it is `(1−kp)` times that = **3T**. X4's readback
+reports the camera before our command lands, so `lagsample` and the historical
+`camread` both measure 4T = 47 ms at 85 Hz. The logs read 38.7–43.8, and the
+gap is in the expected direction: their head rate came from samples 350 ms
+apart, and noise in a regressor *attenuates* a slope. So the stored logs are a
+lower bound, not a disagreement.
+
+**The first draft of this section predicted the lead would cancel the lag
+outright.** It measured post-step while the instrument measures pre-step — a
+whole frame of correction — and the two disagreed by 4× on identical data
+(0.06× against 0.27×). The corrected arithmetic is below. Recorded rather than
+edited away, because "my harness and my instrument measured different
+quantities" is the same defect as [the selftest that passed only in its
+simplest configuration](#), twice before.
+
+## The harness reproduces take 136, which is why I believe it
+
+`tests/servo_lag.cpp` drives the REAL `head_look_step` against a plant model.
+It predicts 36.8 ms at 85 Hz (measured 41) and 112 ms at 26.6 Hz (measured
+160–204). Independently, at `kp = 1.0` it reports *never settles, 46 deg/s of
+camera jitter* — which is take 136's `X4 span so fast Patola could not read the
+screen`, reproduced from arithmetic alone.
+
+**Raising kp is a trap and the harness prices it.** kp 0.5 buys 12 ms but costs
++24.8% step overshoot; at a plant delay of 2 frames even kp 0.25 overshoots
+13.9%. X4's true input-to-camera delay is UNKNOWN, so a gain that depends on it
+is a gain that can fail in the field.
+
+## The fix: lead the target by the head's own motion
+
+```
+want = head + (1/kp − 1) × (head − head_at_last_pose)
+```
+
+The lead lives in the **angle domain**, so it carries no clock and no `dt` and
+is automatically correct at any frame rate. It sits OUTSIDE the loop, so loop
+stability is untouched — this is feed-forward, not a gain change.
+
+### PREDICTIONS for take 212, committed before it runs
+
+With the lead, `e = 0.75e + 0.25·rate·T`, so the steady pre-step error is
+`rate·T` — **exactly one frame time, whatever the frame rate**. 4T → 1T:
+
+| condition | now (4T) | with the lead (1T) |
+|---|---|---|
+| 85 Hz | 47 ms | **12 ms** |
+| 26.6 Hz | 150 ms | **38 ms** |
+
+The ideal ratio is therefore **0.25**, not zero. A head that *accelerates*
+leaves a second-order residual a velocity lead cannot model, and
+`tests/servo_lag.cpp` measures **0.26 on a realistic trajectory at both rates**.
+`score_run.py` fails above **0.45** — clear of that, and still under half the
+1.00 a lead that never reached the servo produces.
+
+1. **The A/B is visible in the log without a screenshot.** `lagfit` reports τ
+   per arm; ARMED must come in under 0.45× IDLE at the same frame rate.
+2. **The improvement is frame-rate independent.** Both arms are measured at
+   whatever fps the run hits, and the ratio must hold across the spread. This is
+   the claim that distinguishes a servo fix from a frame-time change, and it is
+   why the arms alternate WITHIN one take instead of across two.
+3. **The lead will amplify tracker noise ~4×.** Priced offline: at 0.05° of
+   noise the camera drifts ~5 deg/s with the head still. `lagfit` reports
+   `still` — camera rate while the head is stationary — per arm. If ARMED `still`
+   exceeds ~5 deg/s the mitigation is the runtime's `XrSpaceVelocity` (which the
+   layer does not currently request; it publishes yaw/pitch only) or a low-pass
+   on the derived rate. **Predicted BEFORE the run so a bad number cannot be
+   re-read as a success.**
+4. **Yaw wrap and the pole.** The lead introduces a NEW yaw subtraction, and an
+   unwrapped one across ±180 would command a −358° lead — the same class of
+   defect the error term already carries a wrap for. It is wrapped, weighted by
+   `yaw_weight`, and clamped; `tests/servo_lag.cpp` §7 covers all four,
+   including a mid-run toggle differencing against a stale head.
+5. **A handful of wild samples can set the answer.** Least squares weights by
+   rate *squared*, so six samples out of 3186 at an implausible 1675 deg/s moved
+   the fitted τ from 140 ms to 69 — a 2× error from 0.2% of the data. `lagfit`
+   now drops anything past `12 × pose_rate` (the servo's own slew ceiling, where
+   the error is set by the step clamp rather than the lag) and prints how many
+   it dropped. A dropped count in the hundreds means the pose stream is
+   glitching and the τ below it should not be read.
+
+**What would refute the diagnosis:** ARMED and IDLE reporting the same τ. That
+would mean the lead is not reaching the servo, and the first thing to check is
+whether `lead_scale` was read at all — not to add a knob.
+
 # Take 211 — the fade is LIVE, and 4224² is not viable on this hardware
 
 **`deep 0.575` against the 1.19 the weight permits, and Patola looked fully up

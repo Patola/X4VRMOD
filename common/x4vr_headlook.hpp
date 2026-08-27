@@ -49,6 +49,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace x4vr {
 
@@ -220,6 +221,57 @@ struct HeadLook {
     // Where we believe X4 is pointing. Advanced only by what we actually sent.
     float cmd_yaw_deg = 0.0f;
     float cmd_pitch_deg = 0.0f;
+
+    // **Task #73: the lag is arithmetic, not latency, and this is the fix.**
+    //
+    // A proportional servo tracking a MOVING target sits behind it forever, by
+    // a fixed fraction of its own step period. That is the defining property of
+    // a type-0 loop, not a defect in the tuning. Measured across takes
+    // 209/210/211 -- from `camread`, no run spent on it -- the lag was 41 ms at
+    // an 85 Hz pose rate and 160-204 ms at 26.6 Hz. It SCALES with the period,
+    // which is what rules out tracker latency, our render cost, and X4's own
+    // `anglespeed`/`angleacc`: a fixed delay would not.
+    //
+    // In units of the step period the six measurements were 3.3 to 5.4, and
+    // (1 - kp)/kp is exactly 3.0 at kp = 0.25.
+    //
+    // So aim at where the head WILL be rather than where it is. The lead is
+    // (1/kp - 1) times the head's motion since the last pose -- a difference of
+    // ANGLES, carrying no clock and no dt, which is why it needs no retuning
+    // when the frame rate collapses. tests/servo_lag.cpp measures 36.8 -> 1.5 ms
+    // at 85 Hz and 112 -> -0.5 ms at 26.6 Hz against this very function.
+    //
+    // **Feed-forward, not a gain change.** It is outside the loop, so it cannot
+    // affect stability. Raising kp instead was measured and rejected: kp 0.5
+    // buys 12 ms and costs +24.8% step overshoot, and X4's true input-to-camera
+    // delay is unknown, so a gain that depends on it can fail in the field. The
+    // same harness reports kp 1.0 as never settling with 46 deg/s of jitter --
+    // take 136, which Patola saw as the screen spinning too fast to read.
+    //
+    // 0 disables it exactly, so every earlier run remains reproducible and the
+    // A/B has a true control arm.
+    float lead_scale = 0.0f;
+    // Ceiling on the lead, in degrees.
+    //
+    // **This is a sanity bound, NOT the thing that bounds the damage.** A
+    // corrupt pose can only ever command max_step_deg, because the step is
+    // clamped to it after the error is formed -- so the guard against a glitch
+    // was already there, and giving this the same value only broke honest
+    // motion.
+    //
+    // It was 12 for exactly that mistaken reason and tests/servo_lag.cpp caught
+    // it: at 26.6 Hz a 240 deg/s turn moves 9 deg between poses, so the correct
+    // lead is 27, and clipping it at 12 left 63 ms of the lag in place at the
+    // one frame rate the fix is most needed. A fixed angle cannot separate "a
+    // fast head at a low frame rate" from "a bad sample" -- only a RATE can,
+    // and the lead is deliberately dt-free. So this is set where no plausible
+    // head reaches it: 45 deg is a 240 deg/s turn sampled at 16 Hz.
+    float lead_max_deg = 45.0f;
+    // The previous pose, for the difference above. NaN means "no previous" --
+    // the first pose after arming or a recentre leads by nothing rather than by
+    // the whole angle from zero.
+    float last_head_yaw_deg = std::numeric_limits<float>::quiet_NaN();
+    float last_head_pitch_deg = std::numeric_limits<float>::quiet_NaN();
 };
 
 inline float clampf(float v, float lo, float hi) {
@@ -232,15 +284,56 @@ inline Delta head_look_step(HeadLook &s, const HeadAngles &head) {
     if (!(s.gain_deg_per_count > 0.0f))
         return d; // uncalibrated: send nothing rather than something arbitrary
 
+    // **#73's lead: aim where the head will be, not where it is.**
+    //
+    // The head's motion since the last pose, times (1/kp - 1), is exactly the
+    // distance a proportional servo would otherwise stay behind. See lead_scale
+    // for the measurement this comes from.
+    float lead_yaw = 0.0f, lead_pitch = 0.0f;
+    if (s.lead_scale > 0.0f && s.servo_kp > 0.0f) {
+        const float k = s.lead_scale * (1.0f / s.servo_kp - 1.0f);
+        if (!std::isnan(s.last_head_yaw_deg)) {
+            // **Wrapped, for the same reason err_yaw below is.** This is a NEW
+            // subtraction of two yaws, so it carries the ±180 defect in its own
+            // right: a head crossing the back would otherwise show a -358 deg
+            // "motion" and the lead would command a full reverse spin -- the
+            // failure the error term was already fixed for, reintroduced one
+            // function later. Weighted too, because near vertical the yaw is
+            // noise and its derivative is worse noise.
+            float dy = head.yaw_deg - s.last_head_yaw_deg;
+            while (dy > 180.0f)
+                dy -= 360.0f;
+            while (dy < -180.0f)
+                dy += 360.0f;
+            lead_yaw = clampf(k * dy * head.yaw_weight, -s.lead_max_deg,
+                              s.lead_max_deg);
+        }
+        if (!std::isnan(s.last_head_pitch_deg))
+            lead_pitch = clampf(k * (head.pitch_deg - s.last_head_pitch_deg),
+                                -s.lead_max_deg, s.lead_max_deg);
+    }
+    // **Outside the branch on purpose.** The A/B in take 212 toggles lead_scale
+    // mid-run; if this only advanced while the lead was armed, the first pose
+    // after re-arming would difference against a head position from twenty
+    // seconds ago and command the clamp.
+    s.last_head_yaw_deg = head.yaw_deg;
+    s.last_head_pitch_deg = head.pitch_deg;
+
     // Always the head's own yaw now. Substituting cmd_yaw when the reading was
     // unreliable made the error exactly zero, which is a step change in the
     // command the instant the gate flips; the weight below fades the step
     // instead, and reaches the same zero without the edge.
     const float want_yaw =
-        clampf(head.yaw_deg, -s.yaw_limit_deg, s.yaw_limit_deg);
+        clampf(head.yaw_deg + lead_yaw, -s.yaw_limit_deg, s.yaw_limit_deg);
     const float want_pitch =
-        clampf(head.pitch_deg, -s.pitch_limit_deg, s.pitch_limit_deg);
-    d.clamped = want_yaw != head.yaw_deg || want_pitch != head.pitch_deg;
+        clampf(head.pitch_deg + lead_pitch, -s.pitch_limit_deg,
+               s.pitch_limit_deg);
+    // The LEAD must not be reported as the head hitting X4's stop -- it is our
+    // own anticipation, and `clamped` drives the scorer's clamp measurement.
+    d.clamped = clampf(head.yaw_deg, -s.yaw_limit_deg, s.yaw_limit_deg) !=
+                    head.yaw_deg ||
+                clampf(head.pitch_deg, -s.pitch_limit_deg, s.pitch_limit_deg) !=
+                    head.pitch_deg;
 
     // **Yaw error takes the SHORT way round.**
     //

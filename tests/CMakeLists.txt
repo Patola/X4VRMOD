@@ -98,3 +98,9 @@ endif()
 add_executable(x4vr_test_lua_scan lua_scan.cpp)
 
 add_executable(x4vr_test_guard_budget guard_budget.cpp)
+
+# Task #73's lag, and the lead that removes it. Drives the real head_look_step
+# against a model of X4's camera. Its claim to being more than a story is that
+# it independently reproduces take 136 -- kp 1.0 spinning too fast to read --
+# from arithmetic alone. Self-checking: no runner script.
+add_executable(x4vr_test_servo_lag servo_lag.cpp)

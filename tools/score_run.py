@@ -1780,6 +1780,219 @@ def main(path):
         print("fade    no `fade:` line — this build predates the full-rate "
               "tracker, so the log says nothing about the yaw fade")
 
+    # --- task #73: the head-look lag, and whether the lead removes it -------
+    #
+    # WHAT A HEALTHY RUN READS, stated before the numbers are read:
+    #
+    #   tau IDLE  ~ 3 x the pose period      (37 ms at 90 Hz, 150 ms at 20 fps)
+    #   tau ARMED < 25% of IDLE, at a MATCHED pose rate
+    #   still ARMED   the camera's drift with the head held still -- the price
+    #
+    # tau is the slope of tracking error against head rate. A slope does not
+    # need fine sampling, only a spread of speeds, which is why the same
+    # measurement was possible from `camread` at one sample in 30 -- but that
+    # cannot tell which side of an A/B boundary a sample fell on, so the
+    # per-pose `lagsample` line exists for this.
+    #
+    # The arms alternate WITHIN one run on purpose. The lag is proportional to
+    # the pose period, so two separate takes would differ in frame rate as well
+    # as in the lead, and no comparison between them could separate a servo fix
+    # from a frame-time change. The pose rate is therefore printed per arm, and
+    # a mismatch is called out rather than silently averaged over.
+    lag = re.findall(
+        r"\[\s*(\d+\.\d+)\]\s+inject\s+lagsample: arm=(\d) view=(\w+) "
+        r"steer=(\d) cam=(\d) head=(-?\d+\.\d+),(-?\d+\.\d+) "
+        r"x4=(-?\d+\.\d+),(-?\d+\.\d+)", text)
+    if lag:
+        def wrap180(d):
+            while d > 180.0:
+                d -= 360.0
+            while d < -180.0:
+                d += 360.0
+            return d
+
+        # Only samples where the question is even defined: the cockpit (the
+        # external camera is a DIFFERENT camera -- task #72 -- and mixing them
+        # is what made take 208 report a false MOVED), a live readback, and the
+        # servo actually steering.
+        # **And not against X4's stop.** The servo targets its own limits, which
+        # default to X4's shipped 65/35; past those the error is the CLAMP, not
+        # the lag, and it persists at near-zero head rate — exactly the shape
+        # that drags a regression. Read from the run line so a take with the
+        # clamp extension enabled measures against the limits it actually used.
+        def limit_of(name, dflt):
+            m = re.search(name + r"=(\d+(?:\.\d+)?)", run or "")
+            return float(m.group(1)) if m else dflt
+
+        ylim = limit_of("X4VR_HEADLOOK_YAW_LIMIT", 65.0)
+        plim = limit_of("X4VR_HEADLOOK_PITCH_LIMIT", 35.0)
+        usable = [(float(t), int(a), float(hy), float(hp), float(xy), float(xp))
+                  for t, a, v, st, cm, hy, hp, xy, xp in lag
+                  if v == "cockpit" and st == "1" and cm == "1"
+                  and abs(float(hy)) < ylim - 2.0
+                  and abs(float(hp)) < plim - 2.0]
+        if lag and not usable:
+            print(f"lagfit  every sample was outside the cockpit, unsteered, "
+                  f"or past the {ylim:.0f}/{plim:.0f} deg servo limits — "
+                  f"nothing to fit")
+        arms = {}
+        for i in range(1, len(usable)):
+            t0, a0, hy0, hp0, xy0, xp0 = usable[i - 1]
+            t1, a1, hy1, hp1, xy1, xp1 = usable[i]
+            dt = t1 - t0
+            # Both ends inside the same arm, or the pair straddles a toggle and
+            # says nothing about either.
+            if dt <= 0 or dt > 0.5 or a0 != a1:
+                continue
+            d = arms.setdefault(a1, {"yaw": [], "pitch": [], "dt": [],
+                                     "still": [], "wild": 0})
+            d["dt"].append(dt)
+            # **Reject head rates the servo could not have tracked anyway.**
+            #
+            # max_step_deg is 12 per pose, so the camera's own ceiling is
+            # 12 x pose_rate deg/s. Above that the error is set by the STEP
+            # CLAMP, not by the lag, and the linear model does not apply --
+            # so such a sample measures a different thing while carrying
+            # enormous leverage in a least squares fit.
+            #
+            # This is not hypothetical. Six samples out of 3186, from a
+            # discontinuity in a synthetic trajectory, moved tau from 140 ms to
+            # 69 -- a 2x error from 0.2% of the data, because least squares
+            # weights by rate SQUARED and those had 1675 deg/s. A tracker
+            # hiccup or a dropped pose in a real run does the same thing.
+            ceiling = 12.0 / max(dt, 1e-6)
+            ry = wrap180(hy1 - hy0) / dt
+            rp = (hp1 - hp0) / dt
+            if abs(ry) > ceiling or abs(rp) > ceiling:
+                d["wild"] += 1
+                continue
+            d["yaw"].append((ry, wrap180(hy1 - xy1)))
+            d["pitch"].append((rp, hp1 - xp1))
+            # The price of the lead: how fast the camera moves when the head is
+            # NOT moving. Predicted before the run at ~5 deg/s for 0.05 deg of
+            # tracker noise, so this is read against a number, not impressions.
+            #
+            # **Held still for a WHILE, and judged on NET displacement.** Two
+            # earlier versions of this were wrong in opposite ways. Testing one
+            # interval scored a head reversing direction as "still" -- an unled
+            # camera is at its furthest behind exactly there -- and reported the
+            # control arm as the jittery one, which is backwards. Then requiring
+            # every interval to be under 0.05 deg made it unmeasurable, because
+            # the tracker noise this exists to measure is itself 0.05 deg, so
+            # the predicate could never fire on the very signal it is about.
+            #
+            # Net displacement over a window rejects noise (it averages out) but
+            # not real motion. The camera is then judged on PATH length, which
+            # noise does not average out -- that is the jitter a player sees.
+            W = 5
+            if i >= W and all(usable[j][1] == a1 for j in range(i - W, i + 1)):
+                span = usable[i][0] - usable[i - W][0]
+                net_y = abs(wrap180(usable[i][2] - usable[i - W][2]))
+                net_p = abs(usable[i][3] - usable[i - W][3])
+                if 0 < span < 1.5 and net_y < 0.5 and net_p < 0.5:
+                    path = sum(abs(wrap180(usable[j][4] - usable[j - 1][4]))
+                               for j in range(i - W + 1, i + 1))
+                    d["still"].append(path / span)
+
+        def slope(pairs):
+            n = len(pairs)
+            if n < 30:
+                return None
+            sw = sum(w for w, _ in pairs)
+            se = sum(e for _, e in pairs)
+            sww = sum(w * w for w, _ in pairs)
+            swe = sum(w * e for w, e in pairs)
+            den = n * sww - sw * sw
+            if abs(den) < 1e-9:
+                return None
+            return (n * swe - sw * se) / den
+
+        names = {0: "IDLE (control)", 1: "ARMED (lead)"}
+        taus = {}
+        for a in sorted(arms):
+            d = arms[a]
+            hz = len(d["dt"]) / max(sum(d["dt"]), 1e-6)
+            ty, tp = slope(d["yaw"]), slope(d["pitch"])
+            still = (sorted(d["still"])[len(d["still"]) // 2]
+                     if d["still"] else float("nan"))
+            taus[a] = (ty, tp, hz)
+            sy = f"{ty * 1000:7.1f}" if ty is not None else "      ?"
+            sp = f"{tp * 1000:7.1f}" if tp is not None else "      ?"
+            wild = (f"  dropped {d['wild']} past the servo's own "
+                    f"{12.0 * hz:.0f} deg/s ceiling" if d["wild"] else "")
+            print(f"lagfit  {names.get(a, a):15s} n={len(d['yaw']):5d} "
+                  f"pose {hz:5.1f} Hz  tau yaw {sy} ms  pitch {sp} ms  "
+                  f"still {still:5.2f} deg/s{wild}")
+
+        if 0 not in taus or 1 not in taus:
+            print("lagfit  only one arm present — the A/B needs both, so this "
+                  "run cannot judge the lead. Check X4VR_HEADLOOK_LEAD_AB was "
+                  "set and the run outlasted one full period")
+        else:
+            (iy, ip, ihz), (ay, ap, ahz) = taus[0], taus[1]
+            # A confounded comparison is worse than none: say so rather than
+            # dividing two numbers taken at different frame rates.
+            if ihz > 0 and abs(ahz - ihz) / ihz > 0.25:
+                fails.append(
+                    f"the two arms ran at different pose rates ({ihz:.1f} vs "
+                    f"{ahz:.1f} Hz), so the lag difference between them is "
+                    f"confounded with the frame rate — the whole reason the "
+                    f"arms alternate inside one run. Re-run; do not read the "
+                    f"ratio below")
+            if iy is not None and ay is not None:
+                # 4 T is what an unled proportional servo must read at the
+                # instant a sample is taken: steady state on a ramp gives
+                # e = e(1-kp) + rate*T, so e = rate*T/kp. If the control arm
+                # does not show it, the model this run tests is wrong and the
+                # ratio below means nothing.
+                expect = 4.0 / max(ihz, 1e-6)
+                if iy < 0.4 * expect:
+                    print(f"lagfit  NOTE control arm tau {iy*1000:.1f} ms is "
+                          f"well under the {expect*1000:.1f} ms a kp=0.25 servo "
+                          f"must show at {ihz:.1f} Hz — the head may not have "
+                          f"moved fast enough to measure a slope")
+                # **0.45 is derived, and it is not the ideal.** The arithmetic
+                # says the lead takes the pre-step error from 4 T to 1 T, so the
+                # ideal ratio is 0.25; against a head that ACCELERATES the
+                # velocity lead leaves a second-order residual it cannot model,
+                # and tests/servo_lag.cpp measures 0.26 on a realistic
+                # trajectory at both 85 and 26.6 Hz. 0.45 sits clear of that and
+                # still well under half the 1.00 a lead that never reached the
+                # servo produces -- which is what the doctored control read.
+                ratio = ay / iy if iy > 1e-6 else float("inf")
+                if abs(ay) > 0.45 * abs(iy):
+                    fails.append(
+                        f"the lead did not remove the lag: yaw tau {ay*1000:.1f} "
+                        f"ms armed against {iy*1000:.1f} ms idle ({ratio:.2f}x, "
+                        f"wanted <0.45x; 0.26 measured offline). If the two are "
+                        f"nearly EQUAL the lead is not reaching the servo — "
+                        f"check lead_scale was read, do not add a knob")
+                else:
+                    print(f"lagfit  the lead removes the lag: yaw tau "
+                          f"{iy*1000:.1f} -> {ay*1000:.1f} ms ({ratio:.2f}x) at "
+                          f"a matched {ihz:.1f} Hz")
+            armed_still = (sorted(arms[1]["still"])[len(arms[1]["still"]) // 2]
+                           if arms[1]["still"] else None)
+            idle_still = (sorted(arms[0]["still"])[len(arms[0]["still"]) // 2]
+                          if arms[0]["still"] else None)
+            if armed_still is not None and idle_still is not None:
+                if armed_still > 8.0:
+                    fails.append(
+                        f"the lead's noise gain is worse than predicted: the "
+                        f"camera drifts {armed_still:.2f} deg/s with the head "
+                        f"still ({idle_still:.2f} idle), against ~5 predicted "
+                        f"for 0.05 deg of tracker noise. The mitigation is the "
+                        f"runtime's XrSpaceVelocity or a low-pass on the "
+                        f"derived rate, NOT a smaller lead")
+                else:
+                    print(f"lagfit  noise price: {idle_still:.2f} -> "
+                          f"{armed_still:.2f} deg/s of camera drift with the "
+                          f"head still, inside the ~5 predicted")
+    elif "X4VR_HEADLOOK_LEAD_AB" in (run or ""):
+        fails.append("the run asked for the lead A/B but no `lagsample:` line "
+                     "was emitted — the instrument did not run, so this take "
+                     "measures nothing about #73")
+
     # --- task #68: did X4's free-look clamp actually move? ------------------
     #
     # X4's own readback, from `inject camread: X4 <y>,<p> ... | cmd <y>,<p>`.
