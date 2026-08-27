@@ -8503,9 +8503,80 @@ capped at 400 paths and the `livesets` walk is gated behind
 `X4VR_DUMP_MATRICES`, which this take already sets — so neither should move the
 perf number. Prediction 4 includes that band precisely so a surprise is visible.
 
-# RESUME HERE AFTER A COMPACT — state as of take 202
+# RESUME HERE AFTER A COMPACT — state as of take 211
 
-Everything below supersedes earlier "read this first" banners.
+Everything below supersedes earlier "read this first" banners, including the
+take-202 one further down.
+
+## Physical state of the machine right now
+
+* **The clamp extension is DISABLED** and the quicksave is restored to
+  `modified="0"`. Verify both before reading anything into a run:
+  `grep -o 'x4vrmod_lookaround" enabled="[^"]*"' ~/.config/EgoSoft/X4/96679891/content.xml`
+  and `zcat .../save/quicksave.xml.gz | head -c 400 | grep -o 'modified="[^"]*"'`.
+* The extension itself still exists at
+  `<X4>/extensions/x4vrmod_lookaround/` carrying **maxyaw 180, maxpitch 75**.
+  Delete that directory to remove it entirely.
+* Last take is **211**. No run is pending.
+
+## What is SETTLED, do not re-litigate
+
+* **#68 is closed.** X4's free-look clamp is data in `libraries/parameters.xml`
+  and raising it WORKS — take 204 pinned 85.00/85.00, take 211 reached
+  177.98/75.00. The only delivery that works is **X4's extension system**, and
+  it costs the savegame's `modified="1"`. Both alternatives are REFUTED by
+  measurement: read-substitution of the archive (`X4VR_CATPATCH`) because X4
+  verifies content and the protection is an unforgeable RSA signature, and
+  patching the retained XML text (`X4VR_PARAMPATCH`) because X4 parses once at
+  startup and never re-reads. Those knobs still exist; **do not spend runs on
+  them again.**
+* **The design decision:** ship the mod at X4's stock 65/35 with clean saves,
+  and offer the clamp as a documented **opt-in extension**. Patola agreed. The
+  mod itself has always been `modified="0"` — only the clamp costs the flag.
+* **The yaw fade is live and confirmed** (take 211: `deep 0.575` against the
+  1.19 the weight permits, and Patola looked fully up and down with no gimbal
+  lock). Quaternions do NOT remove the singularity — X4's mouselook is a
+  two-axis channel and the map is degenerate at the poles however computed.
+* **4224² is not viable**: 29 fps with NO instrumentation (take 168b). Not an
+  instrumentation problem.
+* **Steering is independent of head-look** and **HUD clicks work** — both
+  confirmed by hand at 4224² in take 211. Protect these.
+
+## Open, roughly in order of value
+
+* **#71** mouse suppression — real mouse motion does nothing while head-look is
+  armed. Patola confirmed mouse steering dead, arrow keys fine.
+* **#72** head-look keeps driving in external view despite logging "idle"
+  (command reached 163.80 there against 69.95 in cockpit).
+* **#73** the lag, reported since the beginning. Structural: a P controller
+  steering through mouse deltas, so it worsens as the framerate drops.
+* **#67** flip the camera-slot walk once a take shows how much attribution
+  moves — `livesets` reports it and rides free on any `X4VR_DUMP_MATRICES` run.
+* **#70** cockpit shadows darken as the head yaws right.
+* **#33's remaining piece** and #41/#43/#44/#45/#46/#49/#52/#57/#25 unchanged.
+
+## Instruments added this stretch, and how to read them
+
+* `clamp` **segments by view** — `<external>` declares no `maxyaw`, so external
+  samples are unbounded by design and are excluded. Pre-transition samples are
+  credited by inferring from the first transition's direction. Aggregating the
+  two populations is what produced a false `MOVED` on take 208.
+* `fade` reads the injector's **full-rate** tracker, not the sampled headlook
+  lines — those are every 30th call and a doctored 65 deg cliff hid inside take
+  209's own level baseline. Threshold 1.19 is DERIVED: `max_step_deg` 12 x the
+  weight 0.0994 at 82 deg.
+* `fileprobe`, `livesets`, `objblock` as described in their own sections.
+* New knobs: `X4VR_HEADLOOK_YAW_LIMIT` / `_PITCH_LIMIT` (default 65/35, so
+  omitting them is the control), `X4VR_FILEPROBE`, `X4VR_PARAMSCAN`.
+
+## The pattern that cost the most this stretch
+
+**Four separate instruments reported confidently on data they were not
+measuring**: the clamp aggregating two camera populations, the clamp again
+judging on 24 of 537 samples, the fade inferring from a sampled log, and the
+yaw guard that had never been wired into the real path at all. Every one was
+caught by Patola's own account disagreeing with the log. **When his eye and the
+instrument disagree, the instrument is wrong until proven otherwise.**
 
 ## Where the project is
 
