@@ -104,3 +104,9 @@ add_executable(x4vr_test_guard_budget guard_budget.cpp)
 # it independently reproduces take 136 -- kp 1.0 spinning too fast to read --
 # from arithmetic alone. Self-checking: no runner script.
 add_executable(x4vr_test_servo_lag servo_lag.cpp)
+
+# Task #73's open-loop identification sequence, checked before a take is spent
+# on it: that it never drives X4's camera into the clamp during a measured
+# phase, and that the trace it produces can actually tell the candidate plants
+# apart. Self-checking: no runner script.
+add_executable(x4vr_test_plantid plantid.cpp)

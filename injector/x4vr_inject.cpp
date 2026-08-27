@@ -48,6 +48,7 @@ extern char **environ;
 #include "x4vr_config.hpp"
 #include "x4vr_inputmap.hpp"
 #include "../common/x4vr_headlook.hpp"
+#include "../common/x4vr_plantid.hpp"
 #include "x4vr_lua.hpp"
 
 namespace {
@@ -1922,6 +1923,18 @@ static bool panprobe_enabled() {
     return on;
 }
 
+// Task #73's open-loop plant identification. Replaces the servo entirely for
+// the length of the run, so this is never something to leave on by accident.
+static std::atomic<bool> g_plantid_done{false};
+
+static bool plantid_enabled() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_PLANTID");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
+
 // Task #73's per-pose lag samples. On by its own knob, and implied by the A/B
 // -- a run that asks for the comparison always produces the measurement that
 // judges it, rather than depending on a second flag being remembered.
@@ -2208,7 +2221,8 @@ void headlook_tick() {
     ha.pitch_deg = pitch;
     ha.yaw_weight = x4vr::yaw_weight_of_pitch_deg(pitch);
     ha.yaw_reliable = ha.yaw_weight > 0.0f;
-    const x4vr::Delta d = x4vr::head_look_step(g_headlook, ha);
+    x4vr::Delta d = x4vr::head_look_step(g_headlook, ha);
+
     if (have_last) {
         float step = std::fabs(g_headlook.cmd_yaw_deg - pre_cmd);
         if (step < 180.0f) {                       // not the +-180 wrap itself
@@ -2370,6 +2384,69 @@ void headlook_tick() {
     // the test is what take 147 cost.
     const bool steering = armed_now && may_steer;
     g_headlook_steering.store(steering, std::memory_order_relaxed);
+
+    // **Task #73: open-loop plant identification REPLACES the servo.**
+    //
+    // Everything take 212 established about X4's camera was inferred through a
+    // closed loop, which chooses its command from the very error it is trying
+    // to measure. Two explanations built that way died in one session. This
+    // drives the plant with a fixed, known sequence instead and simply watches.
+    //
+    // The head is not in the loop: the player can move however they like and
+    // not one command changes.
+    //
+    // **Sited after `steering`, and gated on it.** The sequence must not
+    // advance on a tick whose command is discarded -- during a load, in the
+    // menu, or in external view the delta never reaches X4, and an element
+    // whose SUSTAIN ran while nothing was being sent would read as "the camera
+    // delivered nothing", which is a conclusion this run is specifically meant
+    // to be able to draw honestly. An earlier revision stepped it above, where
+    // `steering` is not yet known.
+    if (plantid_enabled()) {
+        static x4vr::PlantId pid;
+        static bool said = false, waited = false;
+        if (!said) {
+            said = true;
+            X4VR_LOG("plantid: open-loop sequence armed — %d sizes x 2 "
+                     "directions x %d pass(es) = %d measured ticks (~%.0f s at "
+                     "24 Hz, plus reset). The servo is OFF and the head drives "
+                     "NOTHING for the whole run.",
+                     x4vr::PlantId::kNumSizes, pid.passes,
+                     x4vr::plant_id_total_steps(pid),
+                     x4vr::plant_id_total_steps(pid) / 24.0);
+        }
+        if (!steering) {
+            if (!waited) {
+                waited = true;
+                X4VR_LOG("plantid: holding — not steering yet (cockpit + HUD "
+                         "up + relative mouse). The sequence does not advance "
+                         "until a command can actually reach X4.");
+            }
+            d.dx = d.dy = 0;
+        } else {
+            waited = false;
+            const float cam_now = kRad2Deg * -r.yaw;
+            const x4vr::PlantStep ps =
+                x4vr::plant_id_step(pid, cam_now, have_cam, 0.115f);
+            d.dx = ps.dx;
+            d.dy = 0;
+            d.clamped = false;
+            // Logged EVERY tick, and the readback is the camera BEFORE this
+            // tick's command -- the same pairing lagsample uses, so the two
+            // instruments can be read against each other.
+            X4VR_LOG("plantid: pass=%d elem=%d size=%+d phase=%s k=%d dx=%+d "
+                     "cam=%.4f meas=%d camok=%d%s",
+                     pid.pass, pid.element, pid.size_counts(),
+                     x4vr::plant_phase_name(pid.phase), pid.k, ps.dx, cam_now,
+                     ps.measuring ? 1 : 0, have_cam ? 1 : 0,
+                     pid.finished ? " FINISHED" : "");
+            if (pid.finished && !g_plantid_done.exchange(true))
+                X4VR_LOG("plantid: sequence COMPLETE — every element ran. The "
+                         "run can be ended now; nothing after this line is "
+                         "part of the measurement.");
+        }
+    }
+
     if (steering)
         send_mouse_delta(d.dx, d.dy);
 

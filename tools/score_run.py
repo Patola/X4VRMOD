@@ -1780,6 +1780,135 @@ def main(path):
         print("fade    no `fade:` line — this build predates the full-rate "
               "tracker, so the log says nothing about the yaw fade")
 
+    # --- task #73: open-loop identification of X4's camera ------------------
+    #
+    # Take 212 measured the plant THROUGH a closed loop, which picks its command
+    # from the error it is trying to measure. Two explanations built that way
+    # died the same day. X4VR_PLANTID replaces the servo with a fixed sequence
+    # and the head drives nothing, so what comes out is the plant and only the
+    # plant.
+    #
+    # WHAT EACH CANDIDATE READS, stated before the numbers are:
+    #
+    #   integrator (what tests/servo_lag.cpp assumed)
+    #       delivery ~100% at EVERY size, and the camera stops dead when the
+    #       commands stop (coast ~0%).
+    #   per-step cap (the "anglespeed" story, already doubted -- take 212 saw
+    #   541 deg/s)
+    #       delivery ~100% small, collapsing at large sizes; coast ~0%.
+    #   smoothed / momentum
+    #       delivery below 100% everywhere, and the camera KEEPS MOVING after
+    #       the commands stop -- a coast that decays over several steps.
+    #
+    # The pair (how delivery fades across the staircase, how much the coast
+    # retains) separates all three; tests/plantid.cpp checks that it does,
+    # against simulated plants of each kind.
+    # `[-+]?`, not `-?`: the injector prints size and dx with %+d, so a
+    # positive one arrives as "+16". With `-?` the pattern silently kept only
+    # the negative-direction elements -- half the run, and exactly the half
+    # that would have made a direction-dependent plant look symmetric.
+    pid = re.findall(
+        r"\[\s*(\d+\.\d+)\]\s+inject\s+plantid: pass=(\d+) elem=(\d+) "
+        r"size=([-+]?\d+) phase=(\w+) k=(\d+) dx=([-+]?\d+) cam=(-?\d+\.\d+) "
+        r"meas=(\d) camok=(\d)", text)
+    if pid:
+        m = re.search(r"X4VR_HEADLOOK_GAIN=(\d+(?:\.\d+)?)", run or "")
+        gain = float(m.group(1)) if m else 0.115
+        S = [dict(t=float(a), size=int(d), phase=e, k=int(f), dx=int(g),
+                  cam=float(h), meas=i == "1", ok=j == "1")
+             for a, b, c, d, e, f, g, h, i, j in pid]
+        done = "sequence COMPLETE" in text
+        elems = {(int(c), int(b)) for a, b, c, *_ in pid}
+        print(f"plantid {len(S)} tick(s), {len(elems)} element-pass(es), "
+              f"sequence {'COMPLETE' if done else 'INCOMPLETE — the run ended early, '
+                                                 'so the largest sizes may be missing'}")
+
+        # Delivery per size: commanded degrees against degrees actually moved.
+        # sign_yaw is -1, so a positive dx is a negative camera move.
+        deliv = {}
+        for a, b in zip(S, S[1:]):
+            if not (a["meas"] and a["ok"] and b["ok"]):
+                continue
+            if a["phase"] != "sustain" or a["dx"] == 0:
+                continue
+            dt = b["t"] - a["t"]
+            if not (0 < dt < 0.5):
+                continue
+            cmd = -a["dx"] * gain
+            moved = b["cam"] - a["cam"]
+            d = deliv.setdefault(abs(a["size"]), [0.0, 0.0, 0])
+            d[0] += abs(cmd)
+            d[1] += abs(moved)
+            d[2] += 1
+        if deliv:
+            print("plantid  sustained delivery, by command size:")
+            small = large = None
+            for sz in sorted(deliv):
+                c, mv, n = deliv[sz]
+                if n < 5:
+                    continue
+                frac = mv / c if c else 0.0
+                bar = "#" * int(round(frac * 20))
+                print(f"           {sz:4d} counts ({sz*gain:5.2f} deg) n={n:4d}  "
+                      f"delivered {frac*100:5.1f}%  {bar}")
+                if small is None:
+                    small = frac
+                large = frac
+            fade = (large / small) if (small and small > 1e-6) else float("nan")
+        else:
+            small = large = fade = None
+            print("plantid  no usable sustained steps — was the camera "
+                  "read-back live? (camok=0 everywhere means X4 reported "
+                  "nothing, not that it reported zero)")
+
+        # The coast: with nothing commanded, how much motion survives?
+        coast = []
+        for i in range(1, len(S) - 1):
+            a, b, c = S[i - 1], S[i], S[i + 1]
+            if not (b["phase"] in ("coast", "decay") and b["dx"] == 0):
+                continue
+            if not (a["ok"] and b["ok"] and c["ok"] and b["meas"]):
+                continue
+            if not (0 < b["t"] - a["t"] < 0.5 and 0 < c["t"] - b["t"] < 0.5):
+                continue
+            prev = abs(b["cam"] - a["cam"])
+            nxt = abs(c["cam"] - b["cam"])
+            if prev > 0.05:
+                coast.append(nxt / prev)
+        if coast:
+            coast.sort()
+            cmed = coast[len(coast) // 2]
+            print(f"plantid  coast: with nothing commanded the camera still "
+                  f"travels {cmed*100:.0f}% of the previous step (n={len(coast)})")
+        else:
+            cmed = None
+            print("plantid  coast UNMEASURED — no quiet step followed a moving "
+                  "one")
+
+        # Name it, or say plainly that it is none of the three.
+        if fade is not None and fade == fade and cmed is not None:
+            print(f"plantid  signature: fade {fade:.2f}x across the staircase, "
+                  f"coast {cmed*100:.0f}%")
+            if cmed > 0.35:
+                print("plantid  => SMOOTHED / MOMENTUM. The camera keeps moving "
+                      "after the command stops, so X4 filters the mouse input "
+                      "rather than applying it. A servo that commands POSITION "
+                      "increments is the wrong shape for this plant; the lead "
+                      "adding more command cannot fix it (take 212, 0.94x).")
+            elif fade < 0.75:
+                print("plantid  => PER-STEP CAP. Delivery is flat for small "
+                      "commands and collapses for large ones, with no coast. "
+                      "Keep max_step_deg under the knee above and the servo "
+                      "stays in the linear region.")
+            else:
+                print("plantid  => INTEGRATOR, near enough. Then the plant is "
+                      "NOT what defeated the lead in take 212 and the cause is "
+                      "still open — do not close #73 on this.")
+        elif deliv:
+            print("plantid  signature INCOMPLETE — one of the two numbers is "
+                  "missing, so no candidate is named. Naming one on a single "
+                  "number is how the 200 deg/s story survived a day.")
+
     # --- task #73: the head-look lag, and whether the lead removes it -------
     #
     # WHAT A HEALTHY RUN READS, stated before the numbers are read:
