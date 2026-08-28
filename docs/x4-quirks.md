@@ -8220,6 +8220,68 @@ names it by value: `reported 0.009/111 m — that is camera member 9`.
 **#56 is answerable by measurement now** rather than blocked on the instrument.
 It still wants the three runs: two at one field for the spread, one at another.
 
+# What is inside the reprojected eye image — ONE layer, everything
+
+Read, not inferred, at the submission site: `const XrCompositionLayerBaseHeader
+*layers[1]`, `layer_count = 1`. A single `XrCompositionLayerProjection` with two
+views, both pointing at the one swapchain X4's frame was copied into. **The
+scene, the cockpit, the HUD and the cursor are all pixels in that one image.**
+
+## So #76's HUD counter-rotation is ARITHMETIC, not a defect in the HUD path
+
+The compositor's job is to take an image declared as rendered from pose D and
+display it correctly for head pose H, which it does by rotating the whole image
+by (D - H). Every pixel in it moves together. Screen-locked content — which
+should stay fixed relative to the head — therefore counter-rotates by exactly
+(H - D), and D is X4's camera, so:
+
+**the HUD moves opposite the head by exactly the head-look tracking error.**
+
+Measured from take 214's own samples, inside the clamp:
+
+| | median | p90 | p99 | max |
+|---|---|---|---|---|
+| IDLE | 0.46 | 2.40 | 5.40 | 8.57 deg |
+| ARMED (lead) | 0.30 | 1.79 | 4.08 | 11.82 deg |
+
+## The canvas cannot fix this, and was never on
+
+`canvas_ndc_of()` extracts `k[0]`, `k[12]`, `k[5]`, `k[13]` — a per-axis scale
+and offset in NDC. **There is no rotation term.** #30's canvas moves the UI's
+stereo disparity; it cannot head-lock anything, however complete it is.
+
+And it never ran: `canvas_wanted()` needs `X4VR_CANVAS_M` or the off-axis path,
+and takes 212, 213 and 214 contain **zero** `canvas` lines between them. The
+`residual 0.0000` in every `vr pose` line says the same thing from the other
+side.
+
+**The only fix is structural**: screen-locked content needs its own composition
+layer, declared with the HEAD pose rather than X4's camera, so the compositor
+leaves it alone. That is #57's "separate screen-locked from world-at-infinity",
+and it is real work rather than a sign flip.
+
+## #77 (roll): the compositor is ALREADY correcting it, and that is right
+
+The declared quaternion is built by `quat_of_angles(yaw, pitch)` — no roll term
+— so when the head rolls by phi the compositor rotates the image by -phi. For
+the world and for the cockpit that is CORRECT: roll your head in a real cockpit
+and the cockpit counter-rolls in your view.
+
+So roll is not simply "not working". It is correct for everything that is
+world- or ship-fixed and wrong for screen-locked UI, which is the same
+single-layer problem as #76. **What Patola sees needs separating before any
+work**: is the horizon/cockpit rolling wrongly, or is it the HUD and reticle?
+Opposite causes.
+
+## And a correction to take 214's headline
+
+`lagfit`'s tau improved **3.3x** (35.6 -> 10.7 ms). The raw error a player
+actually lives with improved only **1.3-1.5x** (table above). Tau is the SLOPE
+of error against head rate; the lived distribution mixes all rates and also
+carries the lead's noise, which take 214 measured at 0.00 -> 3.97 deg/s. Both
+numbers are true and they answer different questions. Quote the distribution
+when the subject is comfort.
+
 # Take 214 — the lead WORKS. 4T -> 1T, measured on hardware
 
 | | IDLE (control) | ARMED (lead) | |
