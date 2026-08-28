@@ -193,6 +193,14 @@ const uint32_t g_sbs_right_layer = [] {
     return e && *e ? (uint32_t)strtoul(e, nullptr, 0) : 0u;
 }();
 
+// Task #75: log the declared pose beside X4's own readback, once per submitted
+// frame. Off by default -- it is a line per frame, and the periodic `vr pose`
+// block stays either way for runs that are not asking this question.
+static bool poselog_enabled() {
+    static const bool on = x4vr::env_on("X4VR_POSELOG", false);
+    return on;
+}
+
 // Present mode override, for measurement only. -1 leaves X4's choice alone.
 // 0 = IMMEDIATE, 1 = MAILBOX, 2 = FIFO (X4's own, and the one to play in).
 //
@@ -10337,9 +10345,19 @@ void vr_thread() {
                 // next run picks one from data instead of from a description.
                 float q[4] = {0.0f, 0.0f, 0.0f, 1.0f};
                 float decl_yaw = 0.0f, decl_pitch = 0.0f;
+                // Task #75: X4's own readback, published beside the belief.
+                float raw_yaw = 0.0f, raw_pitch = 0.0f;
+                unsigned raw_valid = 0;
+                uint64_t raw_ns = 0;
                 unsigned valid = 0, linked = 0;
                 if (const x4vr::Shared *sh = shared_state()) {
                     linked = 1;
+                    raw_yaw = sh->cam_raw_yaw_deg.load(std::memory_order_relaxed);
+                    raw_pitch =
+                        sh->cam_raw_pitch_deg.load(std::memory_order_relaxed);
+                    raw_valid =
+                        sh->cam_raw_valid.load(std::memory_order_relaxed);
+                    raw_ns = sh->cam_raw_ns.load(std::memory_order_relaxed);
                     valid = sh->cam_valid.load(std::memory_order_relaxed);
                     if (valid) {
                         decl_yaw = sh->cam_yaw_deg.load(std::memory_order_relaxed);
@@ -10361,6 +10379,42 @@ void vr_thread() {
                 decl_pitch += ap;
                 if (valid || ay != 0.0f || ap != 0.0f)
                     x4vr::quat_of_angles(decl_yaw, decl_pitch, q);
+                if (e == 0 && poselog_enabled()) {
+                    // **Task #75, at FULL rate and on ONE line.**
+                    //
+                    // `declared` is what this frame is being submitted with and
+                    // what the compositor will reproject by. `x4` is what X4
+                    // actually reported. Their difference is the angle the warp
+                    // applies that the pixels were never drawn with -- and the
+                    // servo's belief is stored AFTER its step, so it is
+                    // expected to run ahead.
+                    //
+                    // `age` is not decoration. The readback is older than this
+                    // frame, and if it is old the difference below is mostly
+                    // the camera having moved rather than a declaration error.
+                    // The one previous attempt at this number paired the
+                    // periodic line below against `camread` across a 0.25 s
+                    // window and got 6-7 deg of pure sampling offset.
+                    struct timespec nts {};
+                    clock_gettime(CLOCK_MONOTONIC, &nts);
+                    const double now =
+                        (double)nts.tv_sec + (double)nts.tv_nsec * 1e-9;
+                    const double age =
+                        raw_ns ? now - (double)raw_ns * 1e-9 : -1.0;
+                    X4VR_LOG("poselag: declared=%.4f,%.4f x4=%.4f,%.4f "
+                             "d=%.4f,%.4f age=%.4f valid=%u rawvalid=%u "
+                             "residual=%.4f,%.4f",
+                             // `d` subtracts the residual back out on purpose:
+                             // the shader rotated the pixels by it, so the pose
+                             // they came from is (X4's camera + residual) and
+                             // the like-for-like comparison is command against
+                             // readback. It is 0.0 in every run so far, which
+                             // is why this could have been wrong unnoticed.
+                             decl_yaw, decl_pitch, raw_yaw, raw_pitch,
+                             (decl_yaw - ay) - raw_yaw,
+                             (decl_pitch - ap) - raw_pitch, age, valid,
+                             raw_valid, ay, ap);
+                }
                 if (e == 0) {
                     static uint64_t n = 0;
                     if ((n++ % 600) == 0)

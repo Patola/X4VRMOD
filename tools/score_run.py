@@ -1780,6 +1780,127 @@ def main(path):
         print("fade    no `fade:` line — this build predates the full-rate "
               "tracker, so the log says nothing about the yaw fade")
 
+    # --- task #75: is the declared pose the pose X4 rendered from? ----------
+    #
+    # The layer submits `sh->cam_yaw_deg` as the orientation the frame was drawn
+    # with, and the compositor reprojects by it. That field is the injector's
+    # BELIEF, stored after the servo step, so it contains a command X4 will not
+    # receive for about two ticks. If it runs ahead of the pixels the warp is
+    # applied by an angle the frame was never drawn with -- the world swims
+    # exactly when the head moves.
+    #
+    # WHAT A HEALTHY RUN READS, before the numbers:
+    #
+    #   |d| small and NOT growing with the step size -> the declaration matches
+    #       the pixels and #75 is not a defect.
+    #   |d| ~ one servo step, growing when the lead is armed -> the declaration
+    #       leads the pixels, and the lead makes it worse while making the
+    #       tracking better. Those pull opposite ways on what a person sees.
+    #
+    # **`age` is load-bearing.** The readback is older than the frame; if it is
+    # old, `d` is mostly the camera having moved and says nothing about the
+    # declaration. The previous attempt at this number paired the periodic
+    # `vr pose` line against `camread` across a 0.25 s window and got 6-7 deg of
+    # pure sampling offset from seven samples. Anything over ~1.5 tick periods
+    # is reported and excluded rather than averaged in.
+    pl = re.findall(
+        r"\[\s*(\d+\.\d+)\]\s+layer\s+poselag: declared=(-?\d+\.\d+),(-?\d+\.\d+) "
+        r"x4=(-?\d+\.\d+),(-?\d+\.\d+) d=(-?\d+\.\d+),(-?\d+\.\d+) "
+        r"age=(-?\d+\.\d+) valid=(\d) rawvalid=(\d)", text)
+    if pl:
+        rows = [(float(a), float(f), float(g), float(h), i == "1", j == "1")
+                for a, b, c, d_, e, f, g, h, i, j in pl]
+        live = [r for r in rows if r[4] and r[5]]
+        print(f"poselag {len(rows)} submitted frame(s), {len(live)} with both a "
+              f"declared pose and a live read-back")
+        if not live:
+            print("poselag  nothing to compare — cam_valid or rawvalid was 0 "
+                  "throughout, so the image was world-locked and no "
+                  "reprojection error can arise")
+        else:
+            ages = sorted(r[3] for r in live)
+            amed = ages[len(ages) // 2]
+            # **Relative to the run's own cadence, with only a slack margin.**
+            # A fixed 50 ms floor was tried first and let a doctored case
+            # through untouched: at a 77 Hz tick the typical age is 6 ms and a
+            # 36 ms sample -- six ticks stale -- sat comfortably under the
+            # floor. The floor exists to stop a tiny median excluding
+            # everything, so it belongs as a few ms of slack, not as a ceiling
+            # larger than the effect.
+            cutoff = max(3 * amed, amed + 0.005)
+            fresh = [r for r in live if 0 <= r[3] <= cutoff]
+            stale = len(live) - len(fresh)
+            print(f"poselag  read-back age: median {amed*1000:.1f} ms, "
+                  f"p90 {ages[int(0.9*(len(ages)-1))]*1000:.1f} ms"
+                  f"{f', {stale} sample(s) excluded as stale' if stale else ''}")
+            if fresh:
+                dy = sorted(abs(r[1]) for r in fresh)
+                n = len(dy)
+                print(f"poselag  |declared - X4| yaw: median {dy[n//2]:.3f} deg, "
+                      f"p90 {dy[int(0.9*(n-1))]:.3f}, max {dy[-1]:.3f}  (n={n})")
+
+                # **Split by the lead's A/B arm, which is the whole point.**
+                #
+                # The layer cannot stamp the arm -- it does not know it -- so
+                # the join is on time, against the injector's own `lead
+                # ARMED/IDLE` transitions. Those are statements of INTENT with
+                # timestamps, not a re-derivation of the branch, and the phases
+                # are 20 s apart so a millisecond join cannot land in the wrong
+                # one.
+                #
+                # This is the trade-off #73 never measured: the lead reduces
+                # the tracking error lagfit reports while enlarging every
+                # command, and every command is exactly the angle the
+                # declaration runs ahead by.
+                ph = re.findall(
+                    r"\[\s*(\d+\.\d+)\]\s+inject\s+headlook: lead (ARMED|IDLE)",
+                    text)
+                if ph:
+                    marks = [(float(t), s == "ARMED") for t, s in ph]
+
+                    def arm_at(t):
+                        cur = None
+                        for mt, a in marks:
+                            if mt <= t:
+                                cur = a
+                            else:
+                                break
+                        return cur
+
+                    by = {True: [], False: []}
+                    for r in fresh:
+                        a = arm_at(r[0])
+                        if a is not None:
+                            by[a].append(abs(r[1]))
+                    if by[True] and by[False]:
+                        out = {}
+                        for a, name in ((False, "IDLE (control)"),
+                                        (True, "ARMED (lead)  ")):
+                            v = sorted(by[a])
+                            m = len(v)
+                            out[a] = v[int(0.9 * (m - 1))]
+                            print(f"poselag  {name} n={m:5d}  |declared - X4| "
+                                  f"median {v[m//2]:.3f} deg  p90 "
+                                  f"{out[a]:.3f}  max {v[-1]:.3f}")
+                        if out[False] > 1e-6:
+                            g = out[True] / out[False]
+                            print(f"poselag  the lead changes the declaration "
+                                  f"error by {g:.2f}x at p90 — "
+                                  f"{'it BUYS tracking with reprojection error, and #73 must be judged on both' if g > 1.3 else 'no material trade-off; the lead is not paying for its tracking gain here'}")
+                # The scale that matters: one servo step. Below a tenth of a
+                # degree the compositor's warp is inside its own filtering and
+                # this is not a mechanism worth chasing.
+                if dy[int(0.9 * (n - 1))] < 0.1:
+                    print("poselag  => the declaration TRACKS the pixels. #75's "
+                          "mechanism exists but is too small to explain "
+                          "anything; look elsewhere for #73's residual.")
+                else:
+                    print(f"poselag  => the declaration LEADS the pixels by up "
+                          f"to {dy[-1]:.2f} deg. The compositor is warping each "
+                          f"frame by an angle it was not drawn with, and that "
+                          f"is a per-frame position error the servo's own "
+                          f"tracking number cannot see.")
+
     # --- task #73: open-loop identification of X4's camera ------------------
     #
     # Take 212 measured the plant THROUGH a closed loop, which picks its command

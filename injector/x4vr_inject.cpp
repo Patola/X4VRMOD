@@ -2458,6 +2458,27 @@ void headlook_tick() {
         sh->cam_pitch_deg.store(g_headlook.cmd_pitch_deg,
                                 std::memory_order_relaxed);
         sh->cam_valid.store(steering ? 1u : 0u, std::memory_order_relaxed);
+        // **Task #75: what X4 actually said, beside what we believe.**
+        //
+        // `r` was read at the TOP of this tick, before the servo stepped, so it
+        // is X4's camera as it stood before this frame's command -- while
+        // cam_yaw_deg above already contains that command. The gap between them
+        // is exactly the angle the compositor would reproject by that the
+        // pixels were never drawn with, and until now nothing carried both
+        // numbers on one line.
+        //
+        // Stamped, because the readback is older than the frame the layer is
+        // about to submit and "how much older" must be visible rather than
+        // assumed small.
+        if (have_cam) {
+            sh->cam_raw_yaw_deg.store(kRad2Deg * -r.yaw,
+                                      std::memory_order_relaxed);
+            sh->cam_raw_pitch_deg.store(kRad2Deg * r.pitch,
+                                        std::memory_order_relaxed);
+        }
+        sh->cam_raw_valid.store(have_cam ? 1u : 0u, std::memory_order_relaxed);
+        sh->cam_raw_ns.store((uint64_t)(mono_seconds() * 1e9),
+                             std::memory_order_relaxed);
     }
 
     // The camera stops being ours when X4 stops listening, so the estimate has

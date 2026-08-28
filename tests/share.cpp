@@ -38,6 +38,28 @@ int main() {
     s->seq.store(1); // odd: a write in progress
     ck(!x4vr::share_read(s,&x,&y,&v), "mid-write (odd seq) is refused");
     s->seq.store(2);
+
+    // Task #75: the raw readback travels beside the belief, and the two must
+    // stay distinguishable. They are separate fields for one reason -- the
+    // belief is stored AFTER the servo step and so contains a command X4 has
+    // not received -- and a future edit that aliases them would erase exactly
+    // the quantity the channel was widened to carry.
+    s->cam_yaw_deg.store(30.0f);
+    s->cam_pitch_deg.store(5.0f);
+    s->cam_raw_yaw_deg.store(27.5f);
+    s->cam_raw_pitch_deg.store(4.5f);
+    s->cam_raw_valid.store(1);
+    s->cam_raw_ns.store(123456789ull);
+    ck(s->cam_yaw_deg.load() == 30.0f && s->cam_raw_yaw_deg.load() == 27.5f &&
+       s->cam_yaw_deg.load() != s->cam_raw_yaw_deg.load(),
+       "belief and readback are separate fields");
+    ck(s->cam_raw_ns.load() == 123456789ull && s->cam_raw_valid.load() == 1,
+       "the readback carries its own timestamp and validity");
+    // The version had to move with the layout. A reader built against v1 must
+    // refuse a v2 block rather than read cam_raw_* out of the cursor pixels.
+    ck(x4vr::kShareVersion >= 2u, "kShareVersion was bumped for the new fields");
+    ck(s->cam_raw_valid.is_lock_free() && s->cam_raw_ns.is_lock_free(),
+       "the new atomics are lock-free (written from the SDL hook path)");
     // The earlier cases left x=12.5 y=34.5, which differ -- every read before
     // the writer's first update would count as a tear. Seed them equal.
     s->cursor_x.store(0.f); s->cursor_y.store(0.f);

@@ -34,7 +34,10 @@ namespace x4vr {
 // interpreted. Bump kShareVersion on any layout change; the reader checks both
 // and refuses a mismatch instead of reading a field that has moved.
 constexpr uint32_t kShareMagic = 0x52565834u;
-constexpr uint32_t kShareVersion = 1u;
+// 2: task #75 added the raw camera readback and its timestamp beside the
+// injector's belief, so the declared pose and the pose X4 actually reports can
+// appear on one line instead of being paired across two logs after the fact.
+constexpr uint32_t kShareVersion = 2u;
 
 struct Shared {
     uint32_t magic = kShareMagic;
@@ -102,11 +105,41 @@ struct Shared {
     // #33: where the injector believes it has driven X4's camera. The layer
     // submits this as the composition layer's orientation, because that is the
     // pose the frame was RENDERED from. Not the head pose: X4's camera lags it
-    // and clamps at 56.5 deg, and declaring a pose X4 did not render from is
-    // what makes the world swim.
+    // and clamps at 65.00 deg yaw / 35.00 pitch (take 136, measured off X4's
+    // own readback -- this said 56.5, which was take 117's integrated estimate
+    // and was superseded), and declaring a pose X4 did not render from is what
+    // makes the world swim.
     std::atomic<float> cam_yaw_deg{0.f};
     std::atomic<float> cam_pitch_deg{0.f};
     std::atomic<uint32_t> cam_valid{0};
+
+    // ---- task #75: what X4 ACTUALLY reported, beside what we declared ------
+    //
+    // `cam_yaw_deg` above is the injector's BELIEF, and it is stored after the
+    // servo step -- so it already contains a command X4 will not receive for
+    // about two ticks. The layer declares it as the pose the frame was
+    // rendered from, and the compositor reprojects by it. If the belief runs
+    // ahead of the pixels, the compositor warps the frame by an angle it was
+    // never drawn with, and the world swims exactly when the head moves.
+    //
+    // Nothing measured that, because no line ever carried both numbers. The
+    // one attempt paired the layer's periodic `vr pose` against `camread` and
+    // got 6-7 deg from seven samples across a 0.25 s window -- during which the
+    // camera moves further than the effect. That is not a measurement.
+    //
+    // So the injector publishes X4's raw readback next to its belief, stamped
+    // with when it was taken, and the layer logs all of it on ONE line at
+    // submission. The stamp is what makes it honest: the readback is older than
+    // the frame, and by how much has to be visible rather than assumed small.
+    std::atomic<float> cam_raw_yaw_deg{0.f};
+    std::atomic<float> cam_raw_pitch_deg{0.f};
+    // 0 when GetCameraRotation reported nothing this tick. X4 returns exactly
+    // 0.0000,0.0000 while loading and in some views, which is "no answer", not
+    // "centred" -- 66% of the samples across 15 stored takes.
+    std::atomic<uint32_t> cam_raw_valid{0};
+    // CLOCK_MONOTONIC nanoseconds when the readback was taken. Same clock the
+    // log prefix uses, so a line's own timestamp minus this IS the age.
+    std::atomic<uint64_t> cam_raw_ns{0};
 };
 
 // A snapshot torn-free read of the fields the layer cares about.
