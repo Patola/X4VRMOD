@@ -8220,6 +8220,64 @@ names it by value: `reported 0.009/111 m — that is camera member 9`.
 **#56 is answerable by measurement now** rather than blocked on the instrument.
 It still wants the three runs: two at one field for the spread, one at another.
 
+# #75 — the layer declares the SERVO'S COMMAND, not the head pose. Read, not inferred
+
+Patola's "two systems fighting" is structurally right, and the code says so in
+its own words at the submission site (x4vr_layer.cpp, the projection view
+construction):
+
+> *"Deliberately the injector's **command**, not the live head pose."*
+
+`pv[e].pose.orientation` is built from `sh->cam_yaw_deg` / `cam_pitch_deg` --
+the injector's belief about where X4's camera ended up -- plus the shader
+residual, and falls back to identity when `cam_valid` is 0. So the compositor
+DOES reproject the eye image, and it reprojects using the servo's belief.
+
+**What follows, if the declaration is accurate:** the servo's lag does not make
+the image trail the head. The compositor corrects the image's position. What
+lags instead is the visible FIELD -- the rendered content's edge follows X4's
+camera, so turning fast swings a black boundary in. That is exactly what Patola
+saw once take 213's sequence completed and the camera froze: *"I could still
+actually move my head but I would see the black space around."*
+
+## The specific way it can be wrong, and how big that is
+
+`sh->cam_yaw_deg` is stored AFTER `head_look_step` (x4vr_inject.cpp:2457), so
+the declared pose includes a command X4 will not receive for ~2 ticks. The
+declaration therefore runs ahead of the pixels by something on the order of one
+step, and the compositor reprojects by an angle the frame was never drawn with.
+
+The step size, computed per tick from the command model verified in take 212 at
+99.3%:
+
+| | median | p90 | p99 | max |
+|---|---|---|---|---|
+| IDLE | 0.58° | 2.76° | 5.75° | 9.89° |
+| ARMED | 0.69° | **5.17°** | **11.96°** | 11.96° |
+
+**The lead nearly doubles it in the tail.** So the lead reduces the tracking
+error `lagfit` measures while roughly doubling the angle the compositor
+reprojects by in error. Those pull in opposite directions on what a person
+actually sees, and #73's objective -- minimise (head - camera) -- never
+accounted for the second one.
+
+## What is NOT established, and the instrument that would settle it
+
+**The size of the mismatch AT RENDER TIME is unmeasured.** Pairing the layer's
+`vr pose` lines against `camread` gives 6-7 deg, and that number is worthless:
+`vr pose` fires once per 600 frames, the pairing window is 0.25 s, and the
+camera moves further than the effect within it. Take 212 yields 7 pairs.
+
+Worse, the arithmetic may cancel. At render time X4 has landed commands up to
+n-2, so `declared - actual` is closer to `step_n - step_{n-1}` than to `step_n`
+-- small for a smooth trajectory. **Whether the mismatch is one step or one
+step's difference is exactly what is not known, and it is the whole question.**
+
+The instrument is cheap and needs no run to design: log the declared pose and
+X4's readback on the SAME line at full rate, from the layer, at submission.
+Until that exists this section is a mechanism with a plausible size, not a
+finding.
+
 # #73 (1) — the acceptance threshold was unachievable, and that is my fault
 
 **Task (1) asked whether `lagfit`'s tau is the wrong statistic under X4's
