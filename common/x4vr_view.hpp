@@ -567,6 +567,40 @@ inline ShadowTerms read_shadow_terms(const float *blk, Major major,
     return s;
 }
 
+// **Task #77: where the eye offset points when the head is rolled.**
+//
+// The disparity is baked into the image along image-x, in X4's camera frame,
+// which has no roll. The compositor then displays that image for a head at
+// roll phi by rotating it by -phi -- and the disparity rotates with it. The
+// eyes are separated along panel-x always, because the panels are head-fixed,
+// so sin(phi) of the disparity ends up VERTICAL. Vertical disparity cannot be
+// fused: it produces strain and double vision rather than depth.
+//
+// Patola found it at 90 deg by closing one eye at a time. The reason it
+// matters far more than that stunt: it scales as sin(phi), so a 15-20 deg head
+// tilt -- held unconsciously for long stretches -- already turns a third of the
+// disparity vertical, and nobody would report that as "roll is broken".
+//
+// So point the offset where it has to end up. Baking (cos phi, sin phi) means
+// the compositor's -phi lands it back on panel-x exactly:
+//
+//     rotate((m cos, m sin), -phi) = (m cos^2 + m sin^2, -m cos sin + m sin cos)
+//                                  = (m, 0)
+//
+// The zero in the second component is the whole fix, and it is exact rather
+// than small. tests/view_math.cpp checks both that and the defect it replaces.
+struct EyeOffset {
+    float dx = 0.0f, dy = 0.0f;
+};
+
+inline EyeOffset eye_offset_for_roll(float ipd, float roll_rad, bool right) {
+    const float h = (right ? 0.5f : -0.5f) * ipd;
+    EyeOffset o;
+    o.dx = h * std::cos(roll_rad);
+    o.dy = h * std::sin(roll_rad);
+    return o;
+}
+
 inline Mat4 make_eye_shear(float sx, float sy, float near_z, float dx,
                            float dy = 0.0f) {
     Mat4 k{};

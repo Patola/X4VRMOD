@@ -1082,6 +1082,74 @@ int main() {
               "an all-zero cascade is still refused, as before");
     }
 
+    // ---- task #77: the disparity must survive head roll ------------------
+    //
+    // The image carries its disparity along image-x. The compositor displays it
+    // for a head at roll phi by rotating the image by -phi, and the eyes are
+    // separated along panel-x always, because panels are head-fixed. So the
+    // question each case below asks is: after that rotation, how much of the
+    // disparity is left on panel-x, and how much has become VERTICAL?
+    //
+    // Vertical disparity is not a small error. The visual system cannot fuse
+    // it at all -- it produces strain and double vision instead of depth.
+    {
+        printf("\n#77: does the eye disparity survive head roll?\n");
+        const float ipd = 0.064f, sx = 2.0f, sy = 2.0f, nz = 0.1f;
+        // NDC displacement of a point at view depth z is m8 * near / z, per the
+        // derivation locked above. z cancels out of every ratio below, so this
+        // works in units of the baked shear itself.
+        auto disparity_after_roll = [&](float roll_deg, bool compensate,
+                                        float *px, float *py) {
+            const float phi = roll_deg * 3.14159265358979f / 180.0f;
+            const x4vr::EyeOffset l =
+                compensate ? x4vr::eye_offset_for_roll(ipd, phi, false)
+                           : x4vr::EyeOffset{-0.5f * ipd, 0.0f};
+            const x4vr::EyeOffset r =
+                compensate ? x4vr::eye_offset_for_roll(ipd, phi, true)
+                           : x4vr::EyeOffset{+0.5f * ipd, 0.0f};
+            const x4vr::Mat4 kl = x4vr::make_eye_shear(sx, sy, nz, l.dx, l.dy);
+            const x4vr::Mat4 kr = x4vr::make_eye_shear(sx, sy, nz, r.dx, r.dy);
+            // The disparity IS the difference between the eyes' shears.
+            const float dx = kr.m[8] - kl.m[8];
+            const float dy = kr.m[9] - kl.m[9];
+            // The compositor rotates the image by -phi.
+            const float c = std::cos(-phi), s = std::sin(-phi);
+            *px = dx * c - dy * s;
+            *py = dx * s + dy * c;
+        };
+
+        for (float roll : {0.0f, 15.0f, 45.0f, 90.0f}) {
+            float bx = 0, by = 0, gx = 0, gy = 0;
+            disparity_after_roll(roll, false, &bx, &by); // as shipped
+            disparity_after_roll(roll, true, &gx, &gy);  // with the fix
+            char msg[192];
+            const float mag = std::sqrt(bx * bx + by * by);
+            std::snprintf(msg, sizeof msg,
+                          "roll %5.1f deg: shipped leaves %5.1f%% of the "
+                          "disparity VERTICAL, fixed leaves %.4f%%",
+                          roll, mag > 0 ? 100.0f * std::fabs(by) / mag : 0.0f,
+                          mag > 0 ? 100.0f * std::fabs(gy) / mag : 0.0f);
+            printf("     %s\n", msg);
+            // The fix must put ALL of it back on panel-x, at every angle.
+            check(std::fabs(gy) < 1e-6f * std::fabs(gx) + 1e-9f,
+                  "fixed: no vertical component");
+            check(std::fabs(std::fabs(gx) - mag) < 1e-6f,
+                  "fixed: the full magnitude survives, none is lost");
+        }
+        // And the defect is REAL at the angle Patola reported, or this whole
+        // task is chasing something that does not happen.
+        float bx = 0, by = 0;
+        disparity_after_roll(90.0f, false, &bx, &by);
+        check(std::fabs(bx) < 1e-6f && std::fabs(by) > 1e-6f,
+              "shipped: at 90 deg the disparity is ENTIRELY vertical");
+        // A 15 deg tilt is the case that matters in practice, because it is
+        // held unconsciously and nobody would report it.
+        disparity_after_roll(15.0f, false, &bx, &by);
+        const float frac = std::fabs(by) / std::sqrt(bx * bx + by * by);
+        check(frac > 0.2f,
+              "shipped: even a 15 deg tilt puts >20% of it vertical");
+    }
+
     printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n", g_fail);
     return g_fail ? 1 : 0;
 }

@@ -8272,6 +8272,49 @@ applies the roll" is an assumption about a pose we have never given a roll to.
 Declare a deliberately rolled pose in one throwaway run and see whether the
 image counter-rotates.
 
+## #77 step 1 DONE: the fix's arithmetic is proven offline
+
+`eye_offset_for_roll(ipd, phi, right)` points the eye offset at
+`(cos phi, sin phi)` so the compositor's `-phi` lands it back on panel-x.
+`tests/view_math.cpp` drives it through the real `make_eye_shear` and the
+rotation the compositor applies:
+
+| head roll | shipped: disparity left VERTICAL | with the fix |
+|---|---|---|
+| 0 deg | 0.0% | 0.0000% |
+| 15 deg | **25.9%** | 0.0000% |
+| 45 deg | 70.7% | 0.0000% |
+| 90 deg | **100.0%** | 0.0000% |
+
+25.9% at 15 degrees is `sin(15)` exactly, which is the whole argument for
+priority: that is an unconscious head tilt, not a stunt. The test also asserts
+the DEFECT is real at 90 deg and above 20% at 15 deg — if that ever stops
+holding, the task was chasing something that does not happen.
+
+The fix loses no magnitude: all of it returns to panel-x, checked at every
+angle.
+
+## What remains is the delivery, and it is the bigger half
+
+The arithmetic is not the hard part. Two things stand between it and a run:
+
+1. **The live roll is not published.** `head_angles()` drops roll on purpose,
+   and the pose block's roll comes from `X4VR_POSE_ROLL` — a static env knob
+   whose own comment calls it "a stand-in for head tracking, so the transform
+   can be measured on a flatscreen take". It has to come from
+   `views[0].pose.orientation` instead.
+2. **The shear is BAKED.** `patch_vertex_clip` takes `const float k[16]` and
+   bakes it into the SPIR-V at variant creation, so the disparity direction is
+   a compile-time constant. Making it per-frame means the vertex stage reading
+   `(cos phi, sin phi)` and scaling the two shear terms.
+
+**(2) is more tractable than it looks**, and this was worth checking before
+estimating: the pose uniform's `stageFlags` already include
+`VK_SHADER_STAGE_VERTEX_BIT`, and `patch_vertex_pose_clip(pc,
+pose_set_index(), 0)` already exists — a vertex patch that reads that very
+buffer. The machinery is built; what is missing is a patch that uses it to
+scale the shear rather than to rotate the world.
+
 # What is inside the reprojected eye image — ONE layer, everything
 
 Read, not inferred, at the submission site: `const XrCompositionLayerBaseHeader
