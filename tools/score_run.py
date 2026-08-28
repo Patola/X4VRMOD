@@ -1823,25 +1823,69 @@ def main(path):
               f"sequence {'COMPLETE' if done else 'INCOMPLETE — the run ended early, '
                                                  'so the largest sizes may be missing'}")
 
-        # Delivery per size: commanded degrees against degrees actually moved.
-        # sign_yaw is -1, so a positive dx is a negative camera move.
+        # **Delivery is measured from the IMPULSE, over a window, not from the
+        # step that issued the command.**
+        #
+        # X4 answers a mouse delta about two ticks later. Crediting the motion
+        # to the commanding tick therefore charges each command with its
+        # predecessor's motion and loses its own to the following phase -- and
+        # because the sustain burst is SHORT for big commands (they eat the
+        # runway fastest), the largest sizes lose the largest share. Take 213
+        # read that as delivery collapsing from 94% to 33% and this scorer
+        # called it a PER-STEP CAP. It was an artefact: summed over a window
+        # that outlives the delay, every size delivers 100.0%.
+        #
+        # The impulse phase exists for exactly this: one command, then quiet.
+        # Sum the whole response and the delay cannot bias it.
         deliv = {}
-        for a, b in zip(S, S[1:]):
-            if not (a["meas"] and a["ok"] and b["ok"]):
+        lagprof = {}
+        for i, s in enumerate(S):
+            # `impulse` OR `coast`, to read both builds. Take 213 stamped each
+            # line with the phase the sequence had moved ON to, so its single
+            # impulse command arrives labelled `coast` with k=0; the build
+            # after it stamps the phase that produced the command. Neither
+            # spelling can collide with a sustained tick, which is labelled
+            # `sustain` (or `decay` on the last one, same bug).
+            if s["dx"] == 0 or s["phase"] not in ("impulse", "coast"):
                 continue
-            if a["phase"] != "sustain" or a["dx"] == 0:
+            w = S[i:i + 10]
+            if len(w) < 10 or not all(x["ok"] for x in w):
                 continue
-            dt = b["t"] - a["t"]
-            if not (0 < dt < 0.5):
+            if any(x["dx"] != 0 for x in w[1:]):
                 continue
-            cmd = -a["dx"] * gain
-            moved = b["cam"] - a["cam"]
-            d = deliv.setdefault(abs(a["size"]), [0.0, 0.0, 0])
-            d[0] += abs(cmd)
-            d[1] += abs(moved)
+            if any(not (0 < w[j + 1]["t"] - w[j]["t"] < 0.5) for j in range(9)):
+                continue
+            sgn = -1.0 if s["dx"] > 0 else 1.0
+            d = deliv.setdefault(abs(s["size"]), [0.0, 0.0, 0])
+            d[0] += abs(s["dx"]) * gain
+            d[1] += (w[9]["cam"] - w[0]["cam"]) * sgn
             d[2] += 1
+            for j in range(8):
+                lagprof.setdefault(j, []).append(
+                    (w[j + 1]["cam"] - w[j]["cam"]) * sgn)
+        # Where the response actually lands. This is a first-class number: it is
+        # X4's input-to-camera transport delay, which nothing before take 213
+        # had measured, and it is what made take 212's plant look nonlinear.
+        if lagprof:
+            tot = sum(sum(v) / len(v) for v in lagprof.values())
+            print("plantid  impulse response, degrees per tick after the "
+                  "command:")
+            row = "           "
+            peak, peakj = -1e9, 0
+            for j in sorted(lagprof):
+                m = sum(lagprof[j]) / len(lagprof[j])
+                row += f"+{j}:{m:6.2f}  "
+                if m > peak:
+                    peak, peakj = m, j
+            print(row)
+            print(f"plantid  transport delay: the response peaks {peakj} tick(s) "
+                  f"after the command ({peakj * (S[1]['t'] - S[0]['t']) * 1000:.0f} "
+                  f"ms at this tick rate), and {peak/max(tot,1e-9)*100:.0f}% of "
+                  f"it arrives in that one tick")
+
         if deliv:
-            print("plantid  sustained delivery, by command size:")
+            print("plantid  delivery per command size, summed over the whole "
+                  "impulse response:")
             small = large = None
             for sz in sorted(deliv):
                 c, mv, n = deliv[sz]
@@ -1886,15 +1930,32 @@ def main(path):
                   "one")
 
         # Name it, or say plainly that it is none of the three.
-        if fade is not None and fade == fade and cmed is not None:
+        #
+        # **Coast is checked first, and alone.** It is the one number that
+        # separates a smoothing plant from a stiff one whatever the delivery
+        # curve looks like -- and for a smoother the delivery curve is not
+        # trustworthy anyway: the reset leaves residual velocity that the 8-step
+        # settle does not fully bleed off, which swamps the smallest impulses
+        # and made `fade` come out NaN. Requiring both numbers before naming
+        # anything turned a correct diagnosis into "INCOMPLETE".
+        if cmed is not None and cmed > 0.35:
+            print(f"plantid  signature: coast {cmed*100:.0f}%")
+            print("plantid  => SMOOTHED / MOMENTUM. The camera keeps moving "
+                  "after the command stops, so X4 filters the mouse input "
+                  "rather than applying it. A servo that commands POSITION "
+                  "increments is the wrong shape for this plant; the lead "
+                  "adding more command cannot fix it (take 212, 0.94x).")
+        elif fade is not None and fade == fade and cmed is not None:
             print(f"plantid  signature: fade {fade:.2f}x across the staircase, "
                   f"coast {cmed*100:.0f}%")
-            if cmed > 0.35:
-                print("plantid  => SMOOTHED / MOMENTUM. The camera keeps moving "
-                      "after the command stops, so X4 filters the mouse input "
-                      "rather than applying it. A servo that commands POSITION "
-                      "increments is the wrong shape for this plant; the lead "
-                      "adding more command cannot fix it (take 212, 0.94x).")
+            if small is not None and small > 0.9 and fade > 0.9 and cmed < 0.2:
+                print("plantid  => PURE INTEGRATOR with transport delay. Every "
+                      "size delivers what it asked for and the camera stops "
+                      "dead when the commands do. There is NO cap, NO "
+                      "momentum and NO nonlinearity, so the plant is exactly "
+                      "what tests/servo_lag.cpp models -- and take 212's null "
+                      "is therefore NOT the plant's doing. #73's cause is "
+                      "still open; do not close it on this run.")
             elif fade < 0.75:
                 print("plantid  => PER-STEP CAP. Delivery is flat for small "
                       "commands and collapses for large ones, with no coast. "

@@ -8220,6 +8220,59 @@ names it by value: `reported 0.009/111 m — that is camera member 9`.
 **#56 is answerable by measurement now** rather than blocked on the instrument.
 It still wants the three runs: two at one field for the spread, one at another.
 
+# Take 213 — X4's camera is a PURE INTEGRATOR. Every plant story is dead
+
+**Open-loop, head out of the loop entirely. 99.6% delivery at every command
+size, and the camera stops dead when the commands do.**
+
+| commanded | 0.23° | 0.46° | 0.92° | 1.84° | 3.68° | 7.36° | 11.96° |
+|---|---|---|---|---|---|---|---|
+| delivered | 99.6% | 99.6% | 99.6% | 99.6% | 99.6% | 99.6% | 99.6% |
+
+There is **no cap, no momentum, no nonlinearity**. What there IS, and what
+nothing before this run had measured: a **transport delay of 2 ticks, 42 ms**,
+with 77% of the response landing in that single tick.
+
+## That delay faked every finding take 212 built on
+
+Take 212 credited each command's motion to the tick that issued it. The motion
+arrives two ticks later, so every number it produced was really measuring the
+delay:
+
+* **"Delivery falls from 95% to 71% with size."** Artefact. The sustain burst
+  is SHORT for big commands (they eat the runway fastest), so the largest sizes
+  lose the largest share of their motion to the following phase. Summed over a
+  window that outlives the delay, every size delivers 100%.
+* **"Continuing pays 87–126%, reversing pays 21–49%."** Artefact. Delayed
+  motion from the previous command adds when the new one continues it and
+  subtracts when it opposes it. No nonlinearity required.
+* **"The camera coasts 77% when commanded nothing."** Artefact — that was the
+  delayed motion arriving, on n=128 through a closed loop. Open-loop, n=145,
+  the coast is **0%**.
+
+This scorer said **PER-STEP CAP** on its first reading of take 213, for exactly
+the same reason. The verdict now comes from the IMPULSE response, which is
+delay-immune, and the fix was to the metric — the run's data was right all along.
+
+## Which means #73 is still open, and the plant is not the answer
+
+The plant is precisely what `tests/servo_lag.cpp` models: an integrator with a
+delay. The lead was designed for that plant and holds against it in simulation
+across delays 0–4 on a realistic accelerating head (0.25x → 0.32x). Yet take
+212 measured 0.94x with the lead provably reaching the servo (99.3% of its
+commanded deltas matched the lead model).
+
+**So the cause of take 212's null is unfound.** Three explanations have now
+died — a 200 deg/s cap, a reversal asymmetry, and plant nonlinearity in general
+— and each died to a measurement rather than an argument. Do not close #73 on
+take 213; the scorer says so in the run itself.
+
+**What is NOT yet ruled out**, and roughly in order of cheapness: that
+`lagfit`'s tau is the wrong statistic under a 42 ms delay; that take 212's
+23.6 Hz pose rate against its ~23 fps frame rate coalesced or dropped commands
+in a way 76.9 Hz does not; and that the readback X4 gives us is itself delayed
+differently from the camera it reports.
+
 # Take 212 — the lead is CORRECT and does nothing. X4's response is not linear
 
 **`lagfit` 0.94x, and the scorer's stated cause was wrong.** It said "the lead

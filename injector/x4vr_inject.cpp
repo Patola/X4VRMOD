@@ -2437,7 +2437,7 @@ void headlook_tick() {
             X4VR_LOG("plantid: pass=%d elem=%d size=%+d phase=%s k=%d dx=%+d "
                      "cam=%.4f meas=%d camok=%d%s",
                      pid.pass, pid.element, pid.size_counts(),
-                     x4vr::plant_phase_name(pid.phase), pid.k, ps.dx, cam_now,
+                     x4vr::plant_phase_name(ps.acted), pid.k, ps.dx, cam_now,
                      ps.measuring ? 1 : 0, have_cam ? 1 : 0,
                      pid.finished ? " FINISHED" : "");
             if (pid.finished && !g_plantid_done.exchange(true))

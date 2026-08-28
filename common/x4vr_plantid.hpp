@@ -120,6 +120,14 @@ struct PlantStep {
     int dx = 0;
     bool measuring = false; // false during reset: not part of the answer
     bool phase_changed = false;
+    // **The phase that PRODUCED this dx**, which is not the same as the
+    // phase the sequence is in afterwards. Take 213 logged the latter, so the
+    // single impulse command every element makes arrived stamped `phase=coast`
+    // and an analysis looking for `phase=impulse AND dx!=0` found nothing at
+    // all. An instrument that reports a different branch than the one it took
+    // is the same defect as 18 modules logging "World" after being dispatched
+    // as UI.
+    PlantPhase acted = PlantPhase::Reset;
 };
 
 inline PlantStep plant_id_step(PlantId &p, float cam_yaw_deg, bool have_cam,
@@ -128,7 +136,7 @@ inline PlantStep plant_id_step(PlantId &p, float cam_yaw_deg, bool have_cam,
     if (p.finished || p.phase == PlantPhase::Done)
         return out;
 
-    const PlantPhase was = p.phase;
+    out.acted = p.phase;
     switch (p.phase) {
     case PlantPhase::Reset: {
         // Closed-loop, deliberately: this is the only part that may use the
@@ -208,7 +216,6 @@ inline PlantStep plant_id_step(PlantId &p, float cam_yaw_deg, bool have_cam,
     default:
         return out;
     }
-    (void)was;
 }
 
 // How many ticks one full run takes, so the run can be priced before it is
