@@ -8220,6 +8220,58 @@ names it by value: `reported 0.009/111 m — that is camera member 9`.
 **#56 is answerable by measurement now** rather than blocked on the instrument.
 It still wants the three runs: two at one field for the spread, one at another.
 
+# Head roll makes the stereo disparity VERTICAL — Patola's eye found it
+
+**Symptom, from closing each eye alternately at about 90 deg of head roll:** the
+left and right images sit one ABOVE the other instead of side by side.
+
+**That is unfusable.** Vertical disparity does not produce depth; it produces
+strain and double vision. It is not a cosmetic complaint.
+
+## The chain, every step read rather than inferred
+
+1. The disparity is a baked projection shear:
+   `make_eye_shear(sx, 0.0f, nz, +-0.5f * ipd)`. **`sy` and `dy` are zero** —
+   the offset is purely along image-x, in X4's camera frame.
+2. K is built ONCE at shader-variant creation and baked into the SPIR-V. It is
+   a compile-time constant, not a per-frame value.
+3. X4's camera has no roll, and the declared pose is
+   `quat_of_angles(yaw, pitch)` — also no roll.
+4. The compositor displays an image declared from D for head pose H by rotating
+   it by (D - H), which therefore carries the **full head roll**.
+5. The disparity direction rotates with the image. The eyes are separated along
+   panel-x always, because panels are head-fixed. So `sin(phi)` of the
+   disparity becomes vertical.
+
+## The part that matters more than the 90 degree case
+
+It scales as `sin(phi)`. A **15-20 deg head tilt** — which people hold
+unconsciously for long stretches — already turns a third of the disparity
+vertical. This is a candidate contributor to ordinary session discomfort, not
+an artefact of a deliberate stunt, and nobody would report it as "roll is
+broken" because at small angles it just feels tiring.
+
+Patola found it by deliberately rolling to 90 and testing one eye at a time.
+No instrument in this project would have.
+
+## The fix, and the machinery is already there
+
+`make_eye_shear` already accepts `sy` and `dy` and writes
+`k.m[9] = -sy * dy / near_z`. **The math exists and has never been used.**
+Drive the disparity along the rotated axis —
+`dx = +-(ipd/2)cos(phi)`, `dy = +-(ipd/2)sin(phi)` — so the compositor's
+`-phi` puts it back on panel-x.
+
+It cannot be baked, because phi is per-frame. The vehicle is #59's layer-owned
+descriptor set for the head pose, which already delivers per-frame data to the
+patched shaders. The eye is square in current runs, so `sx == sy` and a first
+version can skip the aspect question.
+
+**Check step 4 before building.** The chain is arithmetic, but "the runtime
+applies the roll" is an assumption about a pose we have never given a roll to.
+Declare a deliberately rolled pose in one throwaway run and see whether the
+image counter-rotates.
+
 # What is inside the reprojected eye image — ONE layer, everything
 
 Read, not inferred, at the submission site: `const XrCompositionLayerBaseHeader
