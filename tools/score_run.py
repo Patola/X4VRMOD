@@ -1878,10 +1878,16 @@ def main(path):
                 if m > peak:
                     peak, peakj = m, j
             print(row)
+            # Median tick period, not the gap between the first two samples:
+            # those can straddle a phase boundary and mis-state the delay in ms
+            # by 2x, which this line did on take 213 (42 ms against 26).
+            gaps = sorted(b["t"] - a["t"] for a, b in zip(S, S[1:])
+                          if 0 < b["t"] - a["t"] < 0.5)
+            tick = gaps[len(gaps) // 2] if gaps else 0.0
             print(f"plantid  transport delay: the response peaks {peakj} tick(s) "
-                  f"after the command ({peakj * (S[1]['t'] - S[0]['t']) * 1000:.0f} "
-                  f"ms at this tick rate), and {peak/max(tot,1e-9)*100:.0f}% of "
-                  f"it arrives in that one tick")
+                  f"after the command ({peakj * tick * 1000:.0f} ms at this "
+                  f"{1/tick if tick else 0:.0f} Hz tick rate), and "
+                  f"{peak/max(tot,1e-9)*100:.0f}% of it arrives in that one tick")
 
         if deliv:
             print("plantid  delivery per command size, summed over the whole "
@@ -2141,16 +2147,28 @@ def main(path):
                           f"well under the {expect*1000:.1f} ms a kp=0.25 servo "
                           f"must show at {ihz:.1f} Hz — the head may not have "
                           f"moved fast enough to measure a slope")
-                # **0.45 is derived, and it is not the ideal.** The arithmetic
-                # says the lead takes the pre-step error from 4 T to 1 T, so the
-                # ideal ratio is 0.25; against a head that ACCELERATES the
-                # velocity lead leaves a second-order residual it cannot model,
-                # and tests/servo_lag.cpp measures 0.26 on a realistic
-                # trajectory at both 85 and 26.6 Hz. 0.45 sits clear of that and
-                # still well under half the 1.00 a lead that never reached the
-                # servo produces -- which is what the doctored control read.
+                # **This threshold depends on X4's transport delay, and the
+                # first version of it did not know that.**
+                #
+                # 0.45 came from a delay-1 RAMP simulation. Replaying take 212's
+                # OWN head trajectory through the real servo and the plant take
+                # 213 identified shows the achievable ratio is a strong function
+                # of the delay -- a perfectly working lead reads:
+                #
+                #     delay 0 -> 0.39x     delay 2 -> 0.63x
+                #     delay 1 -> 0.50x     delay 3 -> 0.73x
+                #
+                # Take 213 measured X4's delay at 2 ticks. So on a real head the
+                # best available is around 0.63x, and the old threshold could
+                # not be met however well the lead worked: it failed take 212
+                # for being physical. A ramp is the lead's best case and must
+                # not be what an acceptance bound is derived from.
+                #
+                # 0.85 is what is left -- clear of the 1.00 a lead that never
+                # reached the servo gives, and above everything a working one
+                # produces at any plausible delay.
                 ratio = ay / iy if iy > 1e-6 else float("inf")
-                if abs(ay) > 0.45 * abs(iy):
+                if abs(ay) > 0.85 * abs(iy):
                     # **Do not name a cause here.** The first version of this
                     # message asserted "the lead is not reaching the servo",
                     # and take 212 read 0.94x with the lead reaching the servo
@@ -2163,7 +2181,9 @@ def main(path):
                     fails.append(
                         f"the lead did not remove the lag: yaw tau {ay*1000:.1f} "
                         f"ms armed against {iy*1000:.1f} ms idle ({ratio:.2f}x, "
-                        f"wanted <0.45x; 0.26 measured offline). Two candidates, "
+                        f"wanted <0.85x; a working lead reads 0.39-0.73x depending on "
+                        f"X4's transport delay, which take 213 measured at 2 "
+                        f"ticks). Two candidates, "
                         f"and they are distinguishable: reconstruct the commanded "
                         f"dx from the lagsample stream and compare it against the "
                         f"`headlook: ... delta` lines. If the ARMED deltas match "

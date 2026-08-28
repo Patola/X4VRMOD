@@ -8220,6 +8220,61 @@ names it by value: `reported 0.009/111 m — that is camera member 9`.
 **#56 is answerable by measurement now** rather than blocked on the instrument.
 It still wants the three runs: two at one field for the spread, one at another.
 
+# #73 (1) — the acceptance threshold was unachievable, and that is my fault
+
+**Task (1) asked whether `lagfit`'s tau is the wrong statistic under X4's
+transport delay. Answer: not wrong, but its achievable value is a strong
+function of that delay, and the threshold ignored it.**
+
+Take 212's OWN head trajectory, replayed through the real `head_look_step` and
+the plant take 213 identified (pure integrator, N ticks of delay), then fitted
+with the same regression `score_run.py` runs:
+
+| plant delay | IDLE tau | ARMED tau | ratio |
+|---|---|---|---|
+| 0 | 103.7 ms | 40.2 ms | **0.39x** |
+| 1 | 118.3 ms | 58.7 ms | **0.50x** |
+| 2 | 136.8 ms | 85.7 ms | **0.63x** |
+| 3 | 159.5 ms | 116.4 ms | **0.73x** |
+
+Take 213 measured X4's delay at **2 ticks**. Take 212 measured IDLE at 142.4 ms,
+which sits between the delay-2 and delay-3 rows — consistent.
+
+**So the best a perfectly working lead could read on that run was ~0.63x, and
+the threshold was 0.45x.** That number came from a delay-1 RAMP simulation, and
+a ramp is the lead's best case: it is exactly the input a velocity
+feed-forward cancels. Deriving an acceptance bound from the easiest case is the
+same error as the post-step convention earlier in #73 — twice in one task.
+
+Threshold is now **0.85x**, derived from the table above: clear of the 1.00x a
+lead that never reached the servo produces, and above everything a working one
+gives at any plausible delay.
+
+## But take 212 still fails it, and that residual is real
+
+0.94x measured against 0.63x predicted at the matching delay. The statistic
+explains most of the gap and not all of it. Four explanations have now died to
+measurement — a 200 deg/s cap, a reversal asymmetry, plant nonlinearity in
+general, and now the threshold — and **#73's cause is still open.**
+
+The live candidate is task #75: the compositor reprojects the submitted image
+to the head's current pose, so two systems move the view at once with different
+dynamics. Establish what pose the layer actually declares per frame BEFORE
+building anything on that.
+
+## Take 213's camera did not freeze — the sequence finished
+
+Patola reported the camera stopping 30-60 s in and never moving again. It
+stopped at **t+29.8 s, at pass 2 element 13 size -104**: the last element of the
+last pass. `dx` is zero for every tick afterwards because the sequence was
+COMPLETE, which the log says on its own line.
+
+The handover priced the run at ~3 minutes by assuming a 24 Hz tick. At 1408x1408
+the tick rate was **76.9 Hz**, so it finished in 30 s and he watched a dead game
+for 171 s. All 42 impulses landed before the freeze, so the measurement is
+unaffected — but a run's price has to be quoted against the tick rate it will
+actually have, not the one the previous take happened to run at.
+
 # Take 213 — X4's camera is a PURE INTEGRATOR. Every plant story is dead
 
 **Open-loop, head out of the loop entirely. 99.6% delivery at every command
