@@ -8220,6 +8220,71 @@ names it by value: `reported 0.009/111 m — that is camera member 9`.
 **#56 is answerable by measurement now** rather than blocked on the instrument.
 It still wants the three runs: two at one field for the spread, one at another.
 
+# Take 214 — the lead WORKS. 4T -> 1T, measured on hardware
+
+| | IDLE (control) | ARMED (lead) | |
+|---|---|---|---|
+| tracking tau | 35.6 ms | **10.7 ms** | **0.30x** |
+| pose rate | 88.6 Hz | 87.2 Hz | matched |
+
+**1 T at 88.6 Hz is 11.3 ms and the lead measured 10.7.** The arithmetic
+predicted the pre-step error goes from `rate*T/kp` = 4T to exactly `rate*T` =
+1T, and that is what came back. #73's core claim is settled on hardware.
+
+Replaying take 214's own head trajectory through the real servo and take 213's
+identified plant reproduces it: at delay 2, IDLE 36.1 ms, ARMED 10.2 ms, ratio
+**0.28x** against the measured 0.30x. The model is right at this rate.
+
+## So what was different about take 212?
+
+The pose rate, and nothing else that has survived scrutiny.
+
+| take | pose rate | measured | model (delay 2) |
+|---|---|---|---|
+| 214 | 88.6 Hz | 0.30x | 0.28x — **matches** |
+| 212 | 23.6 Hz | 0.94x | 0.63x — does not |
+
+The lead extrapolates `(1/kp - 1)` times the head's motion since the last pose,
+so its prediction horizon is 3 T. At 88.6 Hz that is 34 ms of extrapolation; at
+23.6 Hz it is 127 ms, and a head does not travel in a straight line for an
+eighth of a second. The velocity feed-forward's own assumption fails as the
+pose rate drops.
+
+**That condition is one we have already ruled out**: 4224 squared runs at 29 fps
+with no instrumentation at all (take 168b). The lead works at every rate the mod
+is playable at. The 23.6 Hz residual is recorded as unexplained rather than
+chased — the model under-predicts it too, so something beyond the horizon
+argument is also present there.
+
+## #75 ANSWERED, and the mechanism is exactly as predicted
+
+`poselag`, at full rate with a fresh read-back (median age 7.4 ms against an
+11.3 ms tick):
+
+| | median | p90 | max |
+|---|---|---|---|
+| IDLE | 0.115 | 0.575 | 2.185 deg |
+| ARMED | 0.230 | **1.495** | **9.315 deg** |
+
+**The declaration error IS the pending command, proven by a coincidence that
+cannot be one:** the largest `|declared - X4|` in the run is 9.315 deg, and the
+largest single-frame command step the `fade` tracker recorded is 9.315 deg. The
+same number. The declared pose runs ahead of the pixels by exactly the command
+X4 has not yet received, which is what the share's new field was added to test.
+
+So the lead buys tracking with reprojection error, 2.60x at p90.
+
+## Whether that trade is BAD is NOT established
+
+Do not assume it. The declared pose leads in the direction of motion, so the
+compositor displaces the frame FORWARD — and the content inside that frame was
+rendered from a camera that LAGS. The displacement may partially cancel the
+render lag for distant geometry while causing parallax error on the near
+cockpit. Those are opposite conclusions and nothing here separates them.
+
+It needs Patola's eye on an A/B, or a targeted test. Recorded as a measured
+trade-off with an unknown sign, not as a defect.
+
 # #75 — the layer declares the SERVO'S COMMAND, not the head pose. Read, not inferred
 
 Patola's "two systems fighting" is structurally right, and the code says so in
