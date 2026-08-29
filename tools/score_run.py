@@ -1788,6 +1788,22 @@ def main(path):
     # is to set one knob, patch nothing, and read the null as "the fix does not
     # work". The layer names the missing knob; this repeats it where the run is
     # judged.
+    # The A/B's own phases, reported as INTENT. This run is judged by a person,
+    # so the log's job is to say what was asked for at each moment -- the
+    # verdict comes from Patola, and the timestamps let his account and the
+    # knob be lined up afterwards instead of trusting either alone.
+    rab = re.findall(r"\[\s*(\d+\.\d+)\]\s+layer\s+roll A/B: (COMPENSATED|control)", text)
+    if rab:
+        comp = sum(1 for _, w in rab if w == "COMPENSATED")
+        span = float(rab[-1][0]) - float(rab[0][0])
+        print(f"roll    A/B ran {len(rab)} phase(s) over {span:.0f} s: "
+              f"{comp} compensated, {len(rab)-comp} control")
+        if len(rab) < 4:
+            fails.append(
+                f"the A/B only reached {len(rab)} phase(s) — too few for "
+                f"Patola to have felt the switch more than once. A subjective "
+                f"verdict on one transition is an anecdote; run longer")
+
     # The VALUE, which take 215 did not carry and could not have. Printed
     # before the verdict, because a verdict on an unpublished number is what
     # made that take unreadable.

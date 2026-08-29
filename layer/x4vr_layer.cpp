@@ -5889,8 +5889,46 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
             return e && *e ? (float)atof(e) : 0.0f;
         }();
         static const bool force_on = getenv("X4VR_ROLL_FORCE") != nullptr;
-        const float roll_used = force_on ? forced : head_roll;
-        const float weight_used = force_on ? 1.0f : roll_weight;
+
+        // **X4VR_ROLL_AB: alternate the compensation on and off, in one run.**
+        //
+        // Take 215 said the live roll does nothing; take 216, forced to 40 deg,
+        // produced a comfort null at 40 deg of left tilt and asymmetric
+        // discomfort either side of it. Both cannot be right, and the
+        // difference between them is not the code -- it is which of Patola's
+        // senses was asked. Closing one eye to compare two nearly-identical
+        // images is a weak instrument, in his own words; locating the angle
+        // where the strain STOPS is a strong one.
+        //
+        // So stop asking him to measure an angle. Alternate the fix and let
+        // him say when it feels better, holding a tilt. A null is far easier
+        // to find than a magnitude, and this is the same reason the lead's A/B
+        // lived inside one run: two takes would differ in more than the knob.
+        static const double ab = [] {
+            const char *e = getenv("X4VR_ROLL_AB");
+            return e && *e ? atof(e) : 0.0;
+        }();
+        bool ab_armed = true;
+        if (ab > 0.0) {
+            struct timespec ts {};
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            const double now = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+            static const double t0 = now;
+            const long phase = (long)((now - t0) / ab);
+            ab_armed = (phase & 1) != 0; // opens on the CONTROL arm
+            static long said = -1;
+            if (phase != said) {
+                said = phase;
+                X4VR_LOG("roll A/B: %s (phase %ld, %.0f s) — intent, whatever "
+                         "the shader then does with it",
+                         ab_armed ? "COMPENSATED" : "control (no compensation)",
+                         phase, ab);
+            }
+        }
+
+        const float roll_used =
+            !ab_armed ? 0.0f : (force_on ? forced : head_roll);
+        const float weight_used = !ab_armed ? 1.0f : (force_on ? 1.0f : roll_weight);
         x4vr::pose_set_roll(g_pose.value, roll_used, weight_used);
 
         // The value, at the same cadence as the rest of the periodic block.
@@ -5898,10 +5936,12 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
         static uint64_t rn = 0;
         if ((rn++ % 600) == 0)
             X4VR_LOG("roll: head %.2f deg, weight %.3f -> published %.2f deg "
-                     "as (cos,sin)=(%.4f,%.4f)%s",
+                     "as (cos,sin)=(%.4f,%.4f)%s%s",
                      head_roll, roll_weight, roll_used * weight_used,
                      g_pose.value.roll_cs[0], g_pose.value.roll_cs[1],
-                     force_on ? "  FORCED, head ignored" : "");
+                     force_on ? "  FORCED, head ignored" : "",
+                     ab > 0.0 ? (ab_armed ? "  [A/B: COMPENSATED]"
+                                          : "  [A/B: control]") : "");
     }
 }
 
