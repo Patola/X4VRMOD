@@ -8315,6 +8315,47 @@ pose_set_index(), 0)` already exists — a vertex patch that reads that very
 buffer. The machinery is built; what is missing is a patch that uses it to
 scale the shear rather than to rotate the world.
 
+# Take 219 — confirmed at 65 deg. The mechanism is proven; only the LIVE path is untested.
+
+Null exactly at the forced 65 deg, with the same clean alternation: level
+comfortable / 65 uncomfortable, switch, 65 comfortable / level uncomfortable.
+
+Three independent confirmations now, and they close the last mechanical
+hypothesis:
+
+| take | forced roll | result |
+|---|---|---|
+| 216 | 40 deg, constant | null at 40 deg left |
+| 218 | 40 deg, alternating with 0 | null tracks the switch, both held and moving |
+| 219 | 65 deg, alternating with 0 | null at 65 deg left |
+
+**There is no angle-dependent defect between 40 and 65**, which is the range
+take 217 was in. So the codegen, the buffer, the binding, the sign, the
+per-frame delivery of a CHANGING value and the behaviour at large angles are
+all established. What has never been confirmed is the one path that reads the
+head instead of a constant.
+
+## Method: a subjective VR test needs a SWITCH, not a verdict
+
+Patola's own observation, and it is the most transferable thing in this
+stretch: *"sense of depth is complex and subject to lots of noise... my brain
+tries to make sense of what I'm seeing by constantly adjusting its
+parameters."*
+
+That is why takes 216, 218 and 219 produced clean answers and 217 did not. All
+three working takes gave him a **transition** to detect. Take 217 asked him to
+judge a steady state — and a steady wrongness is exactly what the visual system
+adapts to and stops reporting.
+
+**So: never ask for an absolute judgement of a rendered frame. Alternate, and
+ask when it changes.** The same reasoning that put the lead's A/B inside one
+run applies to the eye as an instrument, and for a stronger reason: the
+instrument itself re-calibrates while you use it.
+
+It also means an observer who has seen the transition is a BETTER instrument
+than one who has not. Take 217 was run by an uncalibrated observer, and rerunning
+it now is not repetition -- the instrument has changed.
+
 # Take 218 — the channel DOES deliver a changing value. #59 is cleared.
 
 Patola, holding still and then tracking the null: comfortable at level, switch,
