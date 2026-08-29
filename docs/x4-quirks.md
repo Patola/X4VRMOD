@@ -8315,6 +8315,66 @@ pose_set_index(), 0)` already exists — a vertex patch that reads that very
 buffer. The machinery is built; what is missing is a patch that uses it to
 scale the shear rather than to rotate the world.
 
+## #77 step 3 DONE: the codegen, and two defects spirv-val caught
+
+`patch_vertex_eye_offset` gained `roll_set`/`roll_binding`. Absent, it emits
+the old words; present, it turns the disparity by the head's roll:
+
+    x -= sx * d * cos(phi)
+    y -= sy * d * sin(phi)      <- the Y half has never existed before
+
+`(cos phi, sin phi)` arrive as DATA in a new `PoseBlock` vec4 at offset 192,
+because computing them in-shader needs GLSL.std.450 and not every module
+imports it — this patch must not start refusing modules it used to accept.
+
+The block is declared as a **one-member view at offset 192**, no mat4 type, no
+ColMajor, no MatrixStride. That is the same trick the two-mat4 and three-mat4
+views already rely on, carried one step further.
+
+### The disassembly, which is the real proof
+
+    %71 = extract .x            cos
+    %72 = extract .y            sin
+    %73 = sx * d
+    %74 = %73 * cos             delta x
+    %78 = x - %74
+    %79 = AccessChain cam, member 1, col 1, row 1     sy = P[1][1]
+    %82 = (sy * d) * sin        delta y
+    %84 = y - %82
+    %85 = insert x into loaded
+    %86 = insert y into **%85**  <- chained, not both into `loaded`
+
+### Two defects, and neither was visible in C++
+
+1. **Four decorations pushed into `annos`, which this function never flushes.**
+   It writes its one existing decoration inline at `anno_at`. The result would
+   have been an undecorated uniform block: a module that still assembles and
+   binds to nothing.
+2. **`c_one` is created only when the off-axis affine is on**, and roll is
+   mutually exclusive with it — so `AccessChain(..., c_one, c_one)` carried
+   **id 0**. spirv-val: `error: line 139: Id is 0`. The source read correctly;
+   only the assembler could see it.
+
+A third was avoided rather than caught: `OpVariable` takes
+`{pointer type, result id, storage class}` and the first draft reversed the
+first two.
+
+### What is locked in
+
+`tests/run-multiview-render.sh` now asserts, on a real GPU under validation:
+
+* roll absent -> **byte-identical** to the pre-#77 words (`cmp` against the
+  same module patched by the previous build);
+* roll present -> exactly **2** OpCompositeInsert, one `DescriptorSet 7`, one
+  `0 Offset 192`, and spirv-val OK;
+* roll + off-axis -> **refused**. The affine rewrites x and y from the sheared
+  x and was derived assuming the offset is horizontal. The combination may be
+  fine; nothing has measured it, so it is refused rather than emitted.
+
+**Still not wired end to end.** The layer does not yet call this with a
+`roll_set`, and `pose_set_roll` is not yet driven from the live head. That is
+the remaining step and it is plumbing, not codegen.
+
 ## #77 step 2 DONE: roll comes out of the quaternion
 
 `head_angles()` now returns `roll_deg`, measured about the FORWARD axis against

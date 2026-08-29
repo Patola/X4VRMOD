@@ -366,9 +366,45 @@ struct PoseBlock {
     // pixel really moved, and TAA must know. Only when the pose is static do
     // the two coincide, which is what makes the static take a clean test.
     float r_prev[16];
+
+    // **Task #77: where the eye offset points, as (cos roll, sin roll).**
+    //
+    // The disparity is baked along image-x, and the compositor rotates the
+    // submitted image by the head's full orientation -- so at roll phi a
+    // sin(phi) share of it becomes VERTICAL, which the eye cannot fuse. Turning
+    // the offset by phi in the shader is the fix, and phi is per-frame, so it
+    // has to arrive here rather than be baked.
+    //
+    // Two floats and not an angle: the shader would otherwise need sin and cos
+    // of its own, which means importing GLSL.std.450 into modules that may not
+    // have it. A vec4 rather than a vec2 because std140 aligns vec4 to 16 and
+    // this is the last member -- the padding exists either way, so spending it
+    // on named slack is free. z and w are reserved and written as 0.
+    //
+    // Identity is (1, 0): no roll, offset along x, which is exactly what every
+    // run before this did. A block left at zeros would put the offset at the
+    // ORIGIN and collapse the stereo, so the layer writes (1,0) at init rather
+    // than relying on the caller.
+    float roll_cs[4];
 };
-static_assert(sizeof(PoseBlock) == 192,
-              "std140: three mat4 at 0, 64 and 128");
+static_assert(sizeof(PoseBlock) == 208,
+              "std140: three mat4 at 0, 64, 128 and a vec4 at 192");
+// The offset the SPIR-V patch decorates its one-member view with. Named here so
+// the shader-side constant and the struct cannot drift apart silently.
+constexpr uint32_t kPoseRollOffset = 192;
+
+// Fill the roll slot. Degrees in, (cos, sin) out, and the weight is the SAME
+// guard yaw uses -- at the pole yaw and roll are one rotation and the split
+// between them is arbitrary, so fading roll there with a second predicate would
+// be a second place to get it wrong. Weight 0 leaves (1, 0): no rotation.
+inline void pose_set_roll(PoseBlock &p, float roll_deg, float weight = 1.0f) {
+    const float w = weight < 0.0f ? 0.0f : (weight > 1.0f ? 1.0f : weight);
+    const float r = roll_deg * w * 0.01745329251994330f;
+    p.roll_cs[0] = std::cos(r);
+    p.roll_cs[1] = std::sin(r);
+    p.roll_cs[2] = 0.0f;
+    p.roll_cs[3] = 0.0f;
+}
 
 // Fill a PoseBlock from Euler angles in degrees, yaw about +y, pitch about
 // +x, roll about +z -- the same composition tools/headlook_clip.py uses, so
@@ -417,6 +453,12 @@ inline PoseBlock pose_identity() {
     PoseBlock p{};
     for (int i = 0; i < 4; i++)
         p.r[i * 4 + i] = p.r_inv[i * 4 + i] = p.r_prev[i * 4 + i] = 1.0f;
+    // (cos 0, sin 0). Zeros here would put the eye offset at the origin and
+    // collapse the stereo to mono -- the identity of a direction is not the
+    // identity of a matrix, and value-initialising the struct gives the wrong
+    // one for this member alone.
+    p.roll_cs[0] = 1.0f;
+    p.roll_cs[1] = 0.0f;
     return p;
 }
 

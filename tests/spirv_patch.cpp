@@ -160,9 +160,23 @@ int main(int argc, char **argv) {
                                            : x4vr::OffAxis{};
         const x4vr::OffAxis oar = argc > 10 ? parse_off_axis(argv[10])
                                             : x4vr::OffAxis{};
+        // #77: argv[11] is the descriptor set carrying the roll (cos, sin).
+        // Absent means unrolled, and the emitted words are then byte-identical
+        // to the pre-#77 ones -- measured, not assumed: patching
+        // sample_camera_block.vert.spv both ways gives 590 words either way and
+        // `cmp` reports no difference.
+        const uint32_t roll_set =
+            argc > 11 ? (uint32_t)strtoul(argv[11], nullptr, 0) : 0xffffffffu;
+        // "-" means ABSENT, not "an off-axis with default fields". The
+        // arguments are positional, so reaching argv[11] means passing
+        // something at 9 and 10 -- and presence alone used to turn the affine
+        // on, which made the roll case impossible to invoke at all (it is
+        // refused in combination, deliberately). Presence is not intent.
+        const bool have_oal = argc > 9 && strcmp(argv[9], "-") != 0;
+        const bool have_oar = argc > 10 && strcmp(argv[10], "-") != 0;
         const bool ok = x4vr::spv::patch_vertex_eye_offset(
             code, set, binding, member, dl, have_dr ? &dr : nullptr,
-            argc > 9 ? &oal : nullptr, argc > 10 ? &oar : nullptr);
+            have_oal ? &oal : nullptr, have_oar ? &oar : nullptr, roll_set, 0);
         printf("PATCHED=%d\n", ok ? 1 : 0);
         if (!ok && code != before) {
             printf("FAIL=refusal_modified_code\n");

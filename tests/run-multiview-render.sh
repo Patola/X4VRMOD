@@ -715,6 +715,53 @@ if command -v spirv-dis >/dev/null; then
             "...one insert, one ViewIndex" "$ins" "$vidx"
         fails=$((fails + 1))
     fi
+    # ---- task #77: the roll-turned eye offset -------------------------
+    #
+    # Three things, and the first is the one that protects every tagged state
+    # before #77: with no roll set the words must be BYTE-IDENTICAL to what
+    # this function emitted before the parameter existed.
+    "$PATCHER" vert-eye-offset "$BUILD/tests/sample_camera_block.vert.spv" \
+        "$PATCHDIR/roll_off.spv" 1 0 1 -0.008 0.008 >/dev/null 2>&1
+    "$PATCHER" vert-eye-offset "$BUILD/tests/sample_camera_block.vert.spv" \
+        "$PATCHDIR/roll_on.spv" 1 0 1 -0.008 0.008 - - 7 >/dev/null 2>&1
+    if cmp -s "$PATCHDIR/eye.spv" "$PATCHDIR/roll_off.spv"; then
+        printf 'ok   %-38s\n' "...roll absent emits the old words"
+    else
+        printf 'FAIL %-38s roll_set unset changed the output\n' \
+            "...roll absent emits the old words"
+        fails=$((fails + 1))
+    fi
+    # With the roll on: TWO inserts (x and y, chained) where the unrolled form
+    # has one, and a second uniform block at the set we asked for. A patch that
+    # wrote both components into the pre-insert vector would still validate and
+    # would silently drop the x edit.
+    rins=$(spirv-dis "$PATCHDIR/roll_on.spv" 2>/dev/null | grep -c 'OpCompositeInsert')
+    rset=$(spirv-dis "$PATCHDIR/roll_on.spv" 2>/dev/null | grep -c 'DescriptorSet 7')
+    roff=$(spirv-dis "$PATCHDIR/roll_on.spv" 2>/dev/null | grep -c '0 Offset 192')
+    rval=BAD
+    spirv-val --target-env vulkan1.2 "$PATCHDIR/roll_on.spv" >/dev/null 2>&1 && rval=OK
+    if [[ "$rins" == 2 && "$rset" == 1 && "$roff" == 1 && "$rval" == OK ]]; then
+        printf 'ok   %-38s inserts=%s set7=%s off192=%s val=%s\n' \
+            "...roll adds the y term" "$rins" "$rset" "$roff" "$rval"
+    else
+        printf 'FAIL %-38s want 2/1/1/OK, got %s/%s/%s/%s\n' \
+            "...roll adds the y term" "$rins" "$rset" "$roff" "$rval"
+        fails=$((fails + 1))
+    fi
+    # Refused in combination with the off-axis affine, which rewrites x and y
+    # from the sheared x and was derived assuming the offset is horizontal.
+    # Untested together, so refused rather than emitted.
+    rc=$("$PATCHER" vert-eye-offset "$BUILD/tests/sample_camera_block.vert.spv" \
+        "$PATCHDIR/roll_oa.spv" 1 0 1 -0.008 0.008 "1,0,1,0" - 7 2>&1 \
+        | sed -n 's/^PATCHED=//p')
+    if [[ "$rc" == 0 ]]; then
+        printf 'ok   %-38s patched=%s\n' "...roll+offaxis is refused" "$rc"
+    else
+        printf 'FAIL %-38s want patched=0, got %s\n' \
+            "...roll+offaxis is refused" "${rc:-?}"
+        fails=$((fails + 1))
+    fi
+
     # Mono: no second eye, so no gl_ViewIndex and no MultiView capability. The
     # layer uses this path for the unsheared twin, where an unused builtin
     # would be a needless capability on a module that never needs it.

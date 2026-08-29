@@ -1805,9 +1805,20 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
                                     float d_left,
                                     const float *d_right = nullptr,
                                     const OffAxis *oa_left = nullptr,
-                                    const OffAxis *oa_right = nullptr) {
+                                    const OffAxis *oa_right = nullptr,
+                                    uint32_t roll_set = 0xffffffffu,
+                                    uint32_t roll_binding = 0) {
     std::vector<Inst> insts;
     if (!iterate(code, insts))
+        return false;
+    // **Refused rather than emitted untested.** The off-axis affine rewrites x
+    // AND y from the sheared x, so a roll term added before it would flow
+    // through arithmetic that was derived assuming the offset is horizontal.
+    // The combination may well be correct; nothing has measured it, and a
+    // module that renders plausibly-wrong geometry is the failure this project
+    // pays most for. The caller falls back exactly as it does for a module with
+    // no camera block.
+    if (roll_set != 0xffffffffu && oa_left != nullptr)
         return false;
 
     uint32_t bound = code[3];
@@ -2034,6 +2045,40 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
     const uint32_t const_member_idx = via_struct ? iconst(pos_member) : 0;
     const uint32_t c_dl = fconst(d_left);
 
+    // ---- task #77: the roll the eye offset has to be turned by -------------
+    //
+    // A ONE-MEMBER view of our PoseBlock, decorated at the roll slot's offset
+    // rather than starting at zero. That is the same trick the three-mat4 and
+    // two-mat4 views already rely on -- "members 0 and 1 keep the same offsets
+    // either way, so a two-member view and a three-member view read the same
+    // PoseBlock" -- carried one step further: a view that declares ONLY the
+    // vec4 needs no mat4 type, no ColMajor and no MatrixStride, so it adds
+    // nothing this module might not already have.
+    // **The decorations are emitted in the loop below, not into `annos`.**
+    // This function never flushes that vector -- it writes its one existing
+    // decoration inline at `anno_at`, the way the gl_ViewIndex BuiltIn is
+    // written. Four decorations pushed into `annos` here would have been
+    // silently discarded, leaving an undecorated uniform block: a module that
+    // still assembles and binds to nothing. That is the failure mode this
+    // whole patch exists to avoid, arriving through the back door.
+    const bool roll_on = roll_set != 0xffffffffu;
+    uint32_t roll_var = 0, ptr_uniform_v4 = 0, c_rollmem = 0, t_rollblock = 0;
+    if (roll_on) {
+        t_rollblock = new_id();
+        emit(decls, OpTypeStruct, {t_rollblock, t_v4});
+        const uint32_t ptr_rollblock = new_id();
+        emit(decls, OpTypePointer,
+             {ptr_rollblock, StorageClassUniform, t_rollblock});
+        roll_var = new_id();
+        // {pointer type, result id, storage class} -- the order every other
+        // OpVariable in this file uses. Reversing the first two assembles and
+        // then declares a variable of the wrong type.
+        emit(decls, OpVariable, {ptr_rollblock, roll_var, StorageClassUniform});
+        ptr_uniform_v4 = new_id();
+        emit(decls, OpTypePointer, {ptr_uniform_v4, StorageClassUniform, t_v4});
+        c_rollmem = iconst(0);
+    }
+
     const bool stereo = d_right != nullptr;
     // gl_ViewIndex is needed by whichever of the two is per-view, and the two
     // are independent: a runtime can hand back canted frusta with the eye
@@ -2054,6 +2099,16 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
     // emitted words identical to the pre-#35 ones when it is not.
     OffAxisIds oa{};
     uint32_t c_one = 0, c_oa[4] = {}, c_oad[4] = {};
+    // #77 needs the integer 1 to index P[1][1], and until now only the off-axis
+    // branch ever created it. Roll and off-axis are mutually exclusive here, so
+    // this cannot double-declare -- and keeping the oa_on creation exactly
+    // where it was preserves that path's byte-for-byte output.
+    //
+    // Caught by spirv-val, which is the entire argument for running it: the
+    // module assembled, the arithmetic looked right in the source, and the
+    // AccessChain simply carried id 0. Nothing at the C++ level could see it.
+    if (roll_on)
+        c_one = iconst(1);
     if (oa_on) {
         if (!t_bool) {
             t_bool = new_id();
@@ -2105,6 +2160,19 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
         if (need_view && in.start == anno_at)
             emit(out, OpDecorate,
                  {view_var, DecorationBuiltIn, BuiltInViewIndex});
+        if (roll_on && in.start == anno_at) {
+            // A one-member view of PoseBlock decorated at the roll slot's own
+            // offset rather than at zero. Legal and deliberate: SPIR-V member
+            // offsets are explicit, so a module may declare only the part of a
+            // block it uses -- which is what already lets the two-mat4 and
+            // three-mat4 views read the same buffer. Declaring only the vec4
+            // needs no mat4 type, no ColMajor and no MatrixStride.
+            emit(out, OpDecorate, {t_rollblock, DecorationBlock});
+            emit(out, OpMemberDecorate,
+                 {t_rollblock, 0u, DecorationOffset, x4vr::kPoseRollOffset});
+            emit(out, OpDecorate, {roll_var, DecorationDescriptorSet, roll_set});
+            emit(out, OpDecorate, {roll_var, DecorationBinding, roll_binding});
+        }
         if (in.start == first_fn)
             out.insert(out.end(), decls.begin(), decls.end());
 
@@ -2146,8 +2214,43 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
                 emit(out, OpFAdd, {t_float, d, c_dl, scaled});
             }
 
-            const uint32_t delta = new_id();
-            emit(out, OpFMul, {t_float, delta, sx, d});
+            // **Task #77: turn the offset by the head's roll.**
+            //
+            // Unrolled this is `x -= sx*d`, which puts the disparity along
+            // image-x. The compositor then rotates the submitted image by the
+            // head's full orientation, so at roll phi a sin(phi) share of it
+            // becomes VERTICAL -- and vertical disparity cannot be fused.
+            //
+            //     x -= sx * d * cos(phi)
+            //     y -= sy * d * sin(phi)
+            //
+            // puts it back on the panel's horizontal after that rotation with
+            // no magnitude lost. tests/view_math.cpp proves the cancellation at
+            // 0, 15, 45 and 90 degrees against this very arithmetic.
+            //
+            // cos and sin arrive as DATA rather than being computed here: both
+            // need GLSL.std.450, which not every module imports, and this patch
+            // must not begin refusing modules it used to accept.
+            uint32_t roll_c = 0, roll_s = 0;
+            if (roll_on) {
+                const uint32_t p_rc = new_id();
+                emit(out, OpAccessChain,
+                     {ptr_uniform_v4, p_rc, roll_var, c_rollmem});
+                const uint32_t rcs = new_id();
+                emit(out, OpLoad, {t_v4, rcs, p_rc});
+                roll_c = new_id();
+                emit(out, OpCompositeExtract, {t_float, roll_c, rcs, 0});
+                roll_s = new_id();
+                emit(out, OpCompositeExtract, {t_float, roll_s, rcs, 1});
+            }
+
+            const uint32_t delta_base = new_id();
+            emit(out, OpFMul, {t_float, delta_base, sx, d});
+            uint32_t delta = delta_base;
+            if (roll_on) {
+                delta = new_id();
+                emit(out, OpFMul, {t_float, delta, delta_base, roll_c});
+            }
 
             const uint32_t ptr = via_struct ? new_id() : pos_var;
             if (via_struct)
@@ -2159,6 +2262,33 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
             emit(out, OpCompositeExtract, {t_float, x, loaded, 0});
             const uint32_t nx = new_id();
             emit(out, OpFSub, {t_float, nx, x, delta});
+
+            // The Y half, which has never existed before now. It is the
+            // vertical counterpart of the line above and reads sy the same
+            // logical way the off-axis branch below does -- column 1,
+            // component 1 -- so the two cannot disagree about which entry of
+            // X4's projection is the vertical scale.
+            //
+            // Emitted only under roll: with the head level sin(phi) is 0, and
+            // spending a load, a multiply and a subtract to change nothing
+            // would make every existing run pay for a case it never enters.
+            // That is also what keeps the roll_off words byte-identical.
+            uint32_t ny = 0;
+            if (roll_on) {
+                const uint32_t p_sy_r = new_id();
+                emit(out, OpAccessChain, {ptr_uniform_float, p_sy_r, cam_var,
+                                          c_member, c_one, c_one});
+                const uint32_t sy_r = new_id();
+                emit(out, OpLoad, {t_float, sy_r, p_sy_r});
+                const uint32_t dy0 = new_id();
+                emit(out, OpFMul, {t_float, dy0, sy_r, d});
+                const uint32_t dy = new_id();
+                emit(out, OpFMul, {t_float, dy, dy0, roll_s});
+                const uint32_t y = new_id();
+                emit(out, OpCompositeExtract, {t_float, y, loaded, 1});
+                ny = new_id();
+                emit(out, OpFSub, {t_float, ny, y, dy});
+            }
 
             uint32_t np;
             if (oa_on) {
@@ -2178,6 +2308,13 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
             } else {
                 np = new_id();
                 emit(out, OpCompositeInsert, {t_v4, np, nx, loaded, 0});
+                if (roll_on) {
+                    // x first, then y into the RESULT of that insert -- not
+                    // both into `loaded`, which would discard the x edit.
+                    const uint32_t np2 = new_id();
+                    emit(out, OpCompositeInsert, {t_v4, np2, ny, np, 1});
+                    np = np2;
+                }
             }
             emit(out, OpStore, {ptr, np});
         }
