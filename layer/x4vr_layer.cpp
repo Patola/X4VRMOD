@@ -5926,8 +5926,16 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
             }
         }
 
+        // X4VR_ROLL_FORCE stays RAW -- it means "the value that lands in the
+        // buffer", which is how takes 216/218/219 were calibrated, and running
+        // it through the negation would silently move the null those three
+        // runs located. The live arm is the one that needs converting from a
+        // head angle into a shear angle, and roll_compensation_deg is where
+        // that conversion lives and is tested.
         const float roll_used =
-            !ab_armed ? 0.0f : (force_on ? forced : head_roll);
+            !ab_armed ? 0.0f
+                      : (force_on ? forced
+                                  : x4vr::roll_compensation_deg(head_roll));
         const float weight_used = !ab_armed ? 1.0f : (force_on ? 1.0f : roll_weight);
         x4vr::pose_set_roll(g_pose.value, roll_used, weight_used);
 

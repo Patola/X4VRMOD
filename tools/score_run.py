@@ -1847,6 +1847,44 @@ def main(path):
                 f"and the buffer, so the shader is turning the disparity by "
                 f"almost nothing. This is the value, not the arithmetic")
 
+        # The SIGN, which every line above throws away by taking abs(). Take
+        # 220 published the right magnitude with the wrong sign and scored
+        # clean here; the defect lived in the one dimension the instrument had
+        # already discarded, and Patola paid for it with a run.
+        #
+        # The shear must be the head's roll NEGATED (see roll_compensation_deg
+        # -- calibrated on takes 216 and 219, not derived). Only samples with a
+        # real tilt can tell the two apart, so small ones are excluded rather
+        # than averaged in.
+        if not forced:
+            agree = disagree = 0
+            for a, b, c, _d, _e, tail in rv:
+                if "[A/B: control]" in tail:
+                    continue
+                h, w, p = float(a), float(b), float(c)
+                if abs(h) * w < 5.0:
+                    continue
+                if abs(p - (-h * w)) < abs(p - (h * w)):
+                    agree += 1
+                else:
+                    disagree += 1
+            if agree or disagree:
+                print(f"roll    sign: {agree} sample(s) match -head, "
+                      f"{disagree} match +head (of {agree + disagree} tilted "
+                      f"past 5 deg on the compensated arm)")
+            if disagree > agree:
+                fails.append(
+                    f"the published shear follows the head's roll UNNEGATED "
+                    f"({disagree} of {agree + disagree} tilted samples) — this "
+                    f"is take 220's defect. At head roll H it leaves the "
+                    f"disparity at 2H instead of 0, and past 45 deg the eyes "
+                    f"also swap, so neither A/B arm can have a null. The map "
+                    f"is roll_compensation_deg() and it is a negation")
+            elif not agree and not disagree and heads[-1] >= 5.0:
+                print("roll    sign: UNJUDGED — no compensated-arm sample was "
+                      "tilted past 5 deg, so this run says nothing about the "
+                      "head-to-shear map, only about the magnitude")
+
     if "roll stereo: ON" in text:
         print("roll    ON — the eye offset turns with the head. Under tilt the "
               "disparity should stay HORIZONTAL: close one eye, then the "

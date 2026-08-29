@@ -393,6 +393,30 @@ static_assert(sizeof(PoseBlock) == 208,
 // the shader-side constant and the struct cannot drift apart silently.
 constexpr uint32_t kPoseRollOffset = 192;
 
+// The shear angle that cancels a head roll, in the frame pose_set_roll wants.
+//
+// It is the head's roll NEGATED, and that negation is the whole of task #77's
+// second half. The compositor turns the rendered image by the head's roll to
+// hold the world level; that turn is what drags the disparity into the
+// vertical. So the disparity has to be pre-turned the OTHER way to arrive
+// horizontal on a panel that is head-fixed and therefore never tilts.
+//
+// CALIBRATED, not derived -- a derivation is what got this wrong. Takes 216
+// (forced +40) and 219 (forced +65) each put the comfort null at a head rolled
+// LEFT by that angle, and head_angles() reports a left roll as NEGATIVE (take
+// 219 logged head -76..-84 deg while the null sat at +65). Two points, opposite
+// signs, so the map is a negation and not an offset.
+//
+// Take 220 fed head_roll straight through and Patola reported BOTH A/B arms
+// wrong "in different ways": at head roll H the control arm leaves the
+// disparity at H off horizontal, and the uncompensated-sign arm leaves it at
+// 2H -- which past 45 deg has a negative horizontal component, so the eyes are
+// also swapped. Two distinct wrongnesses, no null anywhere, which is exactly
+// what he described and exactly what take 217 had already reported.
+inline float roll_compensation_deg(float head_roll_deg) {
+    return -head_roll_deg;
+}
+
 // Fill the roll slot. Degrees in, (cos, sin) out, and the weight is the SAME
 // guard yaw uses -- at the pole yaw and roll are one rotation and the split
 // between them is arbitrary, so fading roll there with a second predicate would

@@ -8315,6 +8315,91 @@ pose_set_index(), 0)` already exists — a vertex patch that reads that very
 buffer. The machinery is built; what is missing is a patch that uses it to
 scale the shear rather than to rotate the world.
 
+# Take 220 — the live path had a SIGN ERROR. Found in the stored logs, not the headset.
+
+Patola, on the live-roll A/B: *"I could perceive the two phases changing,
+[but] neither was more comfortable than the other. Both were comfortable with
+the head level and uncomfortable when rolled left or right, but in different
+ways."*
+
+That is not a null. It is a **description of a specific defect**, and the log
+had already recorded it three takes running.
+
+## The calibration was in the logs the whole time
+
+`X4VR_ROLL_FORCE` publishes a shear angle directly. Patola located the comfort
+null twice, at two different angles, and the layer logged the head angle at the
+same moment:
+
+| take | shear published | Patola's null | `head_angles()` read |
+|---|---|---|---|
+| 216 | **+40.00** | 40 deg **left** | +0.1 .. +2.7 (head level; he tilted to find it) |
+| 218 | **+40.00** | 40 deg **left** | **-52.63** during the held-left phase |
+| 219 | **+65.00** | 65 deg **left** | **-76.14 / -84.58 / -82.91** |
+
+**A left roll reads NEGATIVE, and the shear that cancels it is POSITIVE.** Two
+points, opposite signs, so the map is a negation. The live path published
+`head_roll` unchanged:
+
+    roll: head -61.51 deg, weight 1.000 -> published -61.51 deg   [A/B: COMPENSATED]
+    roll: head -74.77 deg, weight 1.000 -> published -74.77 deg   [A/B: COMPENSATED]
+
+## Why BOTH arms were wrong, in DIFFERENT ways
+
+Writing D for the disparity angle on the panel, H for head roll and V for the
+published shear, the calibration gives `D = V + H`:
+
+| arm | V | D at H = -65 | vertical | horizontal |
+|---|---|---|---|---|
+| control | 0 | -65 | 91% | +0.42 — correct polarity |
+| compensated, **as shipped in 220** | H | **-130** | 77% | **-0.64 — eyes SWAPPED** |
+| compensated, fixed | -H | **0** | 0% | full, correct |
+
+So the control arm gave vertical disparity with the eyes the right way round,
+and the compensated arm gave *less* vertical disparity with the eyes **inverted**
+— pseudoscopic. Two distinct wrongnesses, no null anywhere, both vanishing at
+H = 0. That is Patola's report, line for line, including "in different ways"
+and "both were comfortable with the head level".
+
+**Take 217 is the same defect** and its report — *"no situation in which the
+eyes looked right, neither before nor after the timed changes"* — was accurate.
+He had rolled **right** that run (`head +51.95 / +50.90 / +47.57`), which the
+model says is equally broken. See the refutation note under take 219's method
+section: I attributed a correct observation to the observer.
+
+## The fix
+
+`roll_compensation_deg()` in `common/x4vr_view.hpp`, a negation with the
+calibration written next to it. `X4VR_ROLL_FORCE` deliberately stays RAW —
+it means "the value that lands in the buffer", which is how 216/218/219 were
+calibrated, and negating it would silently move the null those runs located.
+
+## Both instruments were blind in the SAME dimension
+
+This is the part worth carrying forward.
+
+1. `tests/view_math.cpp` took the **shear** angle and used it for the
+   compositor rotation as well. Both sides moved together, so any head-to-shear
+   sign error cancelled itself inside the model. It passed through takes 215,
+   217 and 220. Now parameterised on the head angle, with the two roles
+   separated, and it fails on take 220's code (7 cases).
+2. `tools/score_run.py` took `abs()` of every head and published sample before
+   comparing them. It checked the magnitude — which was always right — and
+   discarded the sign, which was the defect. Now checks the sign explicitly;
+   re-scoring takes 217 and 220 gives **13 of 13 tilted samples matching
+   `+head`** and a FAIL on both.
+
+A model and a scorer, built at different times for different purposes, both
+dropped the same dimension. The reason is the same in each: I built them to
+answer "is the disparity being rotated at all", which was the open question at
+the time, and neither was rebuilt when the question became "rotated which
+way". **An instrument inherits the question it was built for.** When the
+question changes, re-read the instrument before trusting its verdict.
+
+There is also a plain rule underneath: **an instrument that takes `abs()` of a
+quantity can never report a sign error in it**, and half of this project's
+defects have been signs.
+
 # Take 219 — confirmed at 65 deg. The mechanism is proven; only the LIVE path is untested.
 
 Null exactly at the forced 65 deg, with the same clean alternation: level
@@ -8355,6 +8440,15 @@ instrument itself re-calibrates while you use it.
 It also means an observer who has seen the transition is a BETTER instrument
 than one who has not. Take 217 was run by an uncalibrated observer, and rerunning
 it now is not repetition -- the instrument has changed.
+
+> **REFUTED by take 220 — see "Take 220" above.** The paragraph above is kept
+> because it was the published explanation and the method finding around it
+> still holds, but its verdict on take 217 is WRONG. Take 217 failed because
+> the live path had a **sign error**, which the log proves and which no
+> property of the observer could have caused. Patola reported "no situation in
+> which the eyes looked right" and that was an accurate reading of a genuinely
+> two-sided defect. I doubted a correct report because I had already decided
+> the mechanism was proven.
 
 # Take 218 — the channel DOES deliver a changing value. #59 is cleared.
 

@@ -1098,36 +1098,43 @@ int main() {
         // NDC displacement of a point at view depth z is m8 * near / z, per the
         // derivation locked above. z cancels out of every ratio below, so this
         // works in units of the baked shear itself.
-        auto disparity_after_roll = [&](float roll_deg, bool compensate,
-                                        float *px, float *py) {
-            const float phi = roll_deg * 3.14159265358979f / 180.0f;
-            const x4vr::EyeOffset l =
-                compensate ? x4vr::eye_offset_for_roll(ipd, phi, false)
-                           : x4vr::EyeOffset{-0.5f * ipd, 0.0f};
-            const x4vr::EyeOffset r =
-                compensate ? x4vr::eye_offset_for_roll(ipd, phi, true)
-                           : x4vr::EyeOffset{+0.5f * ipd, 0.0f};
+        // Parameterised on the HEAD's roll and the shear angle SEPARATELY,
+        // because take 220 was wrong in the map between them and a model that
+        // takes only one of the two cannot express that bug, let alone fail on
+        // it. The old version took the shear angle and used it for the
+        // compositor as well, so both sides moved together and every sign
+        // error cancelled itself. It passed throughout take 220.
+        const float deg = 3.14159265358979f / 180.0f;
+        auto disparity_on_panel = [&](float head_deg, float shear_deg,
+                                      float *px, float *py) {
+            const float v = shear_deg * deg;
+            const x4vr::EyeOffset l = x4vr::eye_offset_for_roll(ipd, v, false);
+            const x4vr::EyeOffset r = x4vr::eye_offset_for_roll(ipd, v, true);
             const x4vr::Mat4 kl = x4vr::make_eye_shear(sx, sy, nz, l.dx, l.dy);
             const x4vr::Mat4 kr = x4vr::make_eye_shear(sx, sy, nz, r.dx, r.dy);
             // The disparity IS the difference between the eyes' shears.
             const float dx = kr.m[8] - kl.m[8];
             const float dy = kr.m[9] - kl.m[9];
-            // The compositor rotates the image by -phi.
-            const float c = std::cos(-phi), s = std::sin(-phi);
+            // The compositor turns the rendered image by the head's roll,
+            // measured in the same sense the shear angle is. That sense is
+            // CALIBRATED: takes 216 and 219 found the null with a shear of
+            // +40 / +65 against a head that head_angles() reported at about
+            // -40 / -65. Nothing here derives it.
+            const float c = std::cos(head_deg * deg), s = std::sin(head_deg * deg);
             *px = dx * c - dy * s;
             *py = dx * s + dy * c;
         };
 
-        for (float roll : {0.0f, 15.0f, 45.0f, 90.0f}) {
+        for (float head : {0.0f, -15.0f, -45.0f, -90.0f}) {
             float bx = 0, by = 0, gx = 0, gy = 0;
-            disparity_after_roll(roll, false, &bx, &by); // as shipped
-            disparity_after_roll(roll, true, &gx, &gy);  // with the fix
+            disparity_on_panel(head, 0.0f, &bx, &by); // as shipped: no shear
+            disparity_on_panel(head, x4vr::roll_compensation_deg(head), &gx, &gy);
             char msg[192];
             const float mag = std::sqrt(bx * bx + by * by);
             std::snprintf(msg, sizeof msg,
-                          "roll %5.1f deg: shipped leaves %5.1f%% of the "
+                          "head roll %6.1f deg: shipped leaves %5.1f%% of the "
                           "disparity VERTICAL, fixed leaves %.4f%%",
-                          roll, mag > 0 ? 100.0f * std::fabs(by) / mag : 0.0f,
+                          head, mag > 0 ? 100.0f * std::fabs(by) / mag : 0.0f,
                           mag > 0 ? 100.0f * std::fabs(gy) / mag : 0.0f);
             printf("     %s\n", msg);
             // The fix must put ALL of it back on panel-x, at every angle.
@@ -1139,15 +1146,48 @@ int main() {
         // And the defect is REAL at the angle Patola reported, or this whole
         // task is chasing something that does not happen.
         float bx = 0, by = 0;
-        disparity_after_roll(90.0f, false, &bx, &by);
+        disparity_on_panel(-90.0f, 0.0f, &bx, &by);
         check(std::fabs(bx) < 1e-6f && std::fabs(by) > 1e-6f,
               "shipped: at 90 deg the disparity is ENTIRELY vertical");
         // A 15 deg tilt is the case that matters in practice, because it is
         // held unconsciously and nobody would report it.
-        disparity_after_roll(15.0f, false, &bx, &by);
+        disparity_on_panel(-15.0f, 0.0f, &bx, &by);
         const float frac = std::fabs(by) / std::sqrt(bx * bx + by * by);
         check(frac > 0.2f,
               "shipped: even a 15 deg tilt puts >20% of it vertical");
+
+        // ---- the map from head angle to shear angle, against the runs ------
+        //
+        // This is the assertion take 220 would have failed, and the only one
+        // here anchored outside the model: the numbers are what the layer
+        // logged and what Patola reported, not what the arithmetic implies.
+        //
+        // Take 219: forced shear +65.00, comfort null with the head rolled
+        // LEFT, head_angles() reporting -76.14 / -84.58 / -82.91 through those
+        // phases. Take 216 is the same story at +40. So a negative head angle
+        // must produce a POSITIVE shear.
+        check(x4vr::roll_compensation_deg(-76.14f) > 0.0f,
+              "take 219's head (-76.14 deg) asks for a POSITIVE shear");
+        check(std::fabs(x4vr::roll_compensation_deg(-65.0f) - 65.0f) < 1e-4f,
+              "the null take 219 found: head -65 -> shear +65");
+        check(std::fabs(x4vr::roll_compensation_deg(-40.0f) - 40.0f) < 1e-4f,
+              "the null take 216 found: head -40 -> shear +40");
+
+        // Take 220's bug, stated as its consequence rather than its code, so
+        // that reintroducing it any other way still fails here. Feeding the
+        // head angle through unnegated leaves the disparity at 2H, and past
+        // 45 deg of tilt that has a NEGATIVE horizontal component -- the eyes
+        // swap, on top of the vertical error. Two different wrongnesses, no
+        // null at any angle: exactly what takes 217 and 220 reported.
+        float ux = 0, uy = 0;
+        disparity_on_panel(-65.0f, -65.0f, &ux, &uy); // shear = head, unnegated
+        check(std::fabs(uy) > 1e-6f,
+              "take 220's sign: still vertical, so it could not feel right");
+        float cx = 0, cy2 = 0;
+        disparity_on_panel(-65.0f, 0.0f, &cx, &cy2); // the control arm
+        check(ux * cx < 0.0f,
+              "take 220's sign: the eyes SWAP relative to the control arm, "
+              "which is why neither arm had a null and they felt different");
     }
 
     printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n", g_fail);
