@@ -8315,6 +8315,60 @@ pose_set_index(), 0)` already exists — a vertex patch that reads that very
 buffer. The machinery is built; what is missing is a patch that uses it to
 scale the shear rather than to rotate the world.
 
+# Take 217 — the live roll fails where the FORCED roll worked. Unexplained.
+
+Patola, holding a tilt both ways across 12 phases: never right, in either arm.
+
+**And the run is clean**, which is what makes this hard. The value chain is
+exact: head 48.80 deg -> published 48.80 -> `(cos,sin)=(0.6587,0.7524)`, which
+is cos and sin of 48.8 to four places. The control arm publishes exactly 0. The
+sampling is adequate — 12 compensated samples past 25 deg of tilt, median 49.9.
+
+So take 216 (a CONSTANT forced 40 deg, comfort null at 40 deg of left tilt,
+asymmetric either side) and take 217 (the live head roll, never right)
+contradict each other, and every link I can measure is correct in both.
+
+**What is NOT ruled out**, in the order I would attack them:
+
+1. **The channel has never delivered a CHANGING value.** `budget 0.00` on every
+   run means `r` has always been identity, so a stale region and a fresh one
+   were indistinguishable for the whole life of #59. Take 217 is the first time
+   a per-frame-varying value crossed it. `pose_publish` writes at submit into
+   the region assigned at record, which looks right — but "looks right" is what
+   this section is about.
+2. **Render-time roll against display-time roll.** The shader uses the value as
+   of submit; the compositor reprojects to a newer pose. Constant forcing is
+   immune to that and a live value is not. Patola held still, which should have
+   made it small — should.
+3. **The model fits 216 too well to be wrong and 217 too badly to be right**,
+   which usually means the two runs differ in something not yet named.
+
+## The discriminator needs NO new code
+
+`X4VR_ROLL_FORCE=40` with `X4VR_ROLL_AB=25` already alternates **40 against 0**,
+because the A/B's control arm publishes zero whatever the source. Hold a 40 deg
+LEFT tilt and stay still:
+
+* **the comfort alternates** -> a changing value IS delivered per frame, and
+  the fault is in the live path's value rather than the channel;
+* **it never alternates** -> the channel does not deliver change, which also
+  means #33's conjugation has never worked and nobody could have known.
+
+One knob difference from take 216, one subjective judgement of the kind Patola
+trusts, and it splits the two families of cause.
+
+## And a check of mine that had never once passed
+
+`pose final:` prints at TEARDOWN and takes 214, 216 and 217 all fail to reach
+it. The scorer failed on its absence — so it failed **every** pose run this
+project has done, including take 216, which produced a clean positive result
+while carrying that FAIL.
+
+A check that has never passed is not a check; it is a false alarm on every run,
+and a false alarm is how a real one comes to be ignored. It now judges on
+`pose: channel up`, which is present, and reports the missing teardown line
+without failing.
+
 # Take 215 — the roll fix did NOTHING, and the run could not say why
 
 Patola: still one image above the other at 90 deg. And the run is unreadable,

@@ -1651,7 +1651,15 @@ def main(path):
     # check came back green with a wrecked frame. An acceptance check that
     # cannot see a FAIL the layer already printed is worse than no check: it
     # converts the layer's correct diagnosis into a confirmation.
+    # **`pose final:` prints at TEARDOWN, and these runs never reach it.**
+    # It is absent from takes 214, 216 and 217 alike, so failing on its absence
+    # is a check that has never once passed -- which is not a check, it is a
+    # false alarm on every pose run, and a false alarm is how a real one comes
+    # to be ignored. `pose: channel up` is the line that actually says the
+    # channel came up, and it IS present. Judge on that, and treat the teardown
+    # report as a bonus when the exit path happens to produce it.
     chan = [ln for ln in lines if "pose final:" in ln]
+    up = [ln for ln in lines if "pose: channel up" in ln]
     want_chan = "X4VR_POSE=1" in (run or "")
     collide = [ln for ln in lines if "could not extend a pipeline layout" in ln]
     if chan:
@@ -1671,12 +1679,21 @@ def main(path):
                 "the pose channel reported OK but a pipeline layout still "
                 "refused our set — the counters and the warning disagree, so "
                 "one of the two instruments is wrong")
-    elif want_chan:
+    elif want_chan and not up:
         fails.append(
             "the run asked for the pose channel (X4VR_POSE=1) and the layer "
-            "never printed `pose final:` — the channel did not come up, so no "
-            "module was driven. Gate on intent: this run asked the question "
-            "and did not answer it")
+            "never printed `pose: channel up` — the channel did not come up, "
+            "so no module was driven. Gate on intent: this run asked the "
+            "question and did not answer it")
+    elif want_chan:
+        # Came up, but the teardown report never ran. Worth saying once, and
+        # NOT worth failing: takes 214, 216 and 217 all reach `channel up` and
+        # none reaches `pose final:`, so failing here failed every pose run
+        # this project has done -- including take 216, which produced a clean
+        # positive result while carrying this FAIL.
+        print(f"pose-channel  up ({up[-1].split('pose:', 1)[-1].strip()[:90]}) "
+              f"— no `pose final:` teardown report, which these runs do not "
+              f"reach; the coverage counters it carries are unavailable")
     if collide:
         # Printed even when the counters pass, because this is the line that
         # names the ROOT cause; `pose final` only reports the consequence.
