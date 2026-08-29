@@ -201,6 +201,20 @@ static bool poselog_enabled() {
     return on;
 }
 
+// Task #77: turn the eye disparity by the head's roll.
+//
+// **Off by default, and it must stay that way until a take has judged it.**
+// The arithmetic is proven (tests/view_math.cpp: 25.9% of the disparity goes
+// vertical at 15 deg of tilt, 0.0000% with this on) and the codegen is proven
+// (run-multiview-render.sh, byte-identical when off, spirv-val when on) --
+// but "proven offline" and "correct on X4's own shaders in motion" are
+// different claims, and every state tagged before this one was recorded with
+// it absent. A default that changes what a re-run reproduces is not a default.
+static bool roll_stereo_enabled() {
+    static const bool on = x4vr::env_on("X4VR_ROLL_STEREO", false);
+    return on;
+}
+
 // Present mode override, for measurement only. -1 leaves X4's choice alone.
 // 0 = IMMEDIATE, 1 = MAILBOX, 2 = FIFO (X4's own, and the one to play in).
 //
@@ -4447,6 +4461,16 @@ bool proj_invproj() {
 bool pose_wanted();
 bool pose_rotate();
 uint32_t pose_set_index();
+// The binding within that set. Moved up here from the channel below rather
+// than forward-declared a second time: a constexpr cannot be declared without
+// a value, and two spellings of one number is how a set index and a binding
+// come to disagree.
+constexpr uint32_t kPoseBinding = 0;
+// #77 also needs to know whether the channel is live, and that function lives
+// 1000 lines below with the pipeline hooks it belongs with -- declared rather
+// than moved, because its definition belongs next to the descriptor it
+// describes.
+bool pose_active();
 // Latches when one of X4's pipeline layouts turns out to declare our index.
 // The comment above is why this has to be a hard stop rather than a correction:
 // the index is already baked into every module patched so far, and no later
@@ -5114,9 +5138,52 @@ VkResult create_shader_module_inner(
         const OffAxisPair &oa = offaxis_target();
         const x4vr::OffAxis *oal = oa.on ? &oa.eye[0] : nullptr;
         const x4vr::OffAxis *oar = (oa.on && KR) ? &oa.eye[1] : nullptr;
+        // Task #77. The pose set is where (cos roll, sin roll) lives, so this
+        // asks for it only when the pose channel is actually up -- a roll_set
+        // pointing at a descriptor nothing binds is a module that reads
+        // garbage, which is worse than one that does not turn the disparity.
+        //
+        // patch_vertex_eye_offset REFUSES roll together with the off-axis
+        // affine, so passing both here costs the live-sx path and falls back
+        // to the baked matrix. Gated on `!oa.on` for that reason rather than
+        // letting the refusal do it silently: the fallback is visible in
+        // n_baked, but the CAUSE would not be.
+        const bool roll_on =
+            roll_stereo_enabled() && pose_active() && !oa.on;
+        // **Said once, and said loudest when it is NOT going to happen.**
+        //
+        // X4VR_ROLL_STEREO needs the pose channel, and X4VR_POSE is absent
+        // from every run command this project has used -- takes 212, 213 and
+        // 214 all carry X4VR_POSELOG and none carries X4VR_POSE. Asking for
+        // the roll without it would patch nothing, change nothing, and read as
+        // "the fix does not work" rather than "the fix never ran". That is the
+        // shape of failure this project has paid for most often, so the
+        // asked-for-but-inactive case names the missing knob outright.
+        static bool roll_said = false;
+        if (roll_stereo_enabled() && !roll_said) {
+            roll_said = true;
+            if (roll_on)
+                X4VR_LOG("roll stereo: ON — the eye offset turns with the "
+                         "head, reading (cos,sin) from pose set %u binding %u. "
+                         "sin(phi) of the disparity would otherwise be VERTICAL "
+                         "and unfusable (task #77)",
+                         pose_set_index(), kPoseBinding);
+            else if (!pose_active())
+                X4VR_LOG("roll stereo: ASKED FOR BUT INACTIVE — the pose "
+                         "channel is down, so nothing is patched and the "
+                         "disparity still goes vertical under head tilt. Add "
+                         "X4VR_POSE=1; it is NOT implied by X4VR_ROLL_STEREO "
+                         "and is absent from every run command so far");
+            else
+                X4VR_LOG("roll stereo: ASKED FOR BUT REFUSED — the off-axis "
+                         "affine is on, and the two are untested together, so "
+                         "patch_vertex_eye_offset declines the pair rather "
+                         "than emitting arithmetic nothing has measured");
+        }
         vert_patched = x4vr::spv::patch_vertex_eye_offset(
             code, kCameraSet, kCameraBinding, kCameraProjMember, dl,
-            KR ? &dr : nullptr, oal, oar);
+            KR ? &dr : nullptr, oal, oar,
+            roll_on ? pose_set_index() : 0xffffffffu, kPoseBinding);
         if (vert_patched) {
             n_live++;
             patch_path = "live-sx";
@@ -5418,7 +5485,6 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyShaderModule(
 // compatibility for set N depends only on sets 0..N, so adding sets ABOVE
 // everything X4 uses leaves its bind-once-use-many intact. Appending anywhere
 // else would break it silently.
-constexpr uint32_t kPoseBinding = 0;
 // Regions cycled per command-buffer recording, not per frame. X4 may not
 // re-record a command buffer that is still executing -- Vulkan forbids it --
 // so keying a region to the recording epoch is exactly as safe as X4's own
@@ -5766,7 +5832,8 @@ void pose_budget_establish(const float fov_rad[2][4]) {
 
 // Called once per located VR frame, from the session thread.
 void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
-                         float cmd_pitch, bool cmd_valid) {
+                         float cmd_pitch, bool cmd_valid, float head_roll,
+                         float roll_weight) {
     if (!pose_active())
         return;
     const float budget = g_residual.budget_deg.load();
@@ -5792,6 +5859,20 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
         // every temporal pass along the head's motion.
         x4vr::pose_roll_frame(g_pose.value);
         x4vr::pose_set_euler(g_pose.value, cy, cp, 0.0f);
+        // **Task #77, and it is NOT the same rotation as the line above.**
+        //
+        // pose_set_euler's roll argument stays 0: `r` is the residual the
+        // WORLD is conjugated by, and the head's roll is not part of that --
+        // the compositor already counter-rotates the image, which is correct
+        // for world and cockpit alike. What is wrong is the DISPARITY riding
+        // that rotation into the vertical, and this slot is read by the eye
+        // offset alone.
+        //
+        // Writing it unconditionally, including when the knob is off: the
+        // shader only reads this member if it was patched to, and publishing
+        // it either way means a run that turns the knob on mid-investigation
+        // is not also turning on a code path that has never executed.
+        x4vr::pose_set_roll(g_pose.value, head_roll, roll_weight);
     }
 }
 
@@ -10283,7 +10364,14 @@ void vr_thread() {
                     cp = sh->cam_pitch_deg.load(std::memory_order_relaxed);
                 }
             }
-            pose_drive_residual(ha.yaw_deg, ha.pitch_deg, cy, cp, cv);
+            // #77: the roll and the weight that guards it. yaw_weight is the
+            // right guard for both -- at the pole yaw and roll are one
+            // rotation and the split between them is arbitrary, so the
+            // disparity must stop being turned exactly where the yaw stops
+            // being believed. Giving roll its own predicate would be a second
+            // place to get the same fade wrong.
+            pose_drive_residual(ha.yaw_deg, ha.pitch_deg, cy, cp, cv,
+                                ha.roll_deg, ha.yaw_weight);
         }
         // Task #38: submit the eye image, once X4's present thread has put one
         // in the swapchain. Until then this is still a zero-layer frame, which

@@ -1780,6 +1780,34 @@ def main(path):
         print("fade    no `fade:` line — this build predates the full-rate "
               "tracker, so the log says nothing about the yaw fade")
 
+    # --- task #77: did the roll-turned disparity actually run? --------------
+    #
+    # Three states, and the two that are NOT "on" are the ones worth printing.
+    # X4VR_ROLL_STEREO needs the pose channel, and X4VR_POSE is absent from
+    # every run command this project has used -- so the natural way to try this
+    # is to set one knob, patch nothing, and read the null as "the fix does not
+    # work". The layer names the missing knob; this repeats it where the run is
+    # judged.
+    if "roll stereo: ON" in text:
+        print("roll    ON — the eye offset turns with the head. Under tilt the "
+              "disparity should stay HORIZONTAL: close one eye, then the "
+              "other, and the two images must differ side-to-side, never one "
+              "above the other")
+    elif "roll stereo: ASKED FOR BUT INACTIVE" in text:
+        fails.append(
+            "X4VR_ROLL_STEREO was set but the pose channel is down, so nothing "
+            "was patched and the disparity still goes vertical under head "
+            "tilt. Add X4VR_POSE=1 — it is not implied. This run says nothing "
+            "about #77")
+    elif "roll stereo: ASKED FOR BUT REFUSED" in text:
+        fails.append(
+            "X4VR_ROLL_STEREO was set but refused: the off-axis affine is on "
+            "and the two are untested together. Drop X4VR_OFFAXIS for this "
+            "measurement, or accept that #77 is unmeasured in this run")
+    elif "X4VR_ROLL_STEREO" in (run or ""):
+        print("roll    the knob is in the command line but the layer never "
+              "reported on it — the layer may predate #77")
+
     # --- task #75: is the declared pose the pose X4 rendered from? ----------
     #
     # The layer submits `sh->cam_yaw_deg` as the orientation the frame was drawn
