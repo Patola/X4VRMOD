@@ -8315,6 +8315,38 @@ pose_set_index(), 0)` already exists — a vertex patch that reads that very
 buffer. The machinery is built; what is missing is a patch that uses it to
 scale the shear rather than to rotate the world.
 
+# Take 218 — the channel DOES deliver a changing value. #59 is cleared.
+
+Patola, holding still and then tracking the null: comfortable at level, switch,
+uncomfortable; roll left to ~40 and comfortable again; switch, and level is
+comfortable once more. Several cycles, and separately several cycles held at
+40 deg left where it alternated comfortable/uncomfortable exactly on the
+boundaries.
+
+**So a per-frame CHANGING value crosses the pose channel correctly.** That was
+the leading hypothesis for take 217 and it is dead. It also clears something
+larger by accident: `budget 0.00` on every run meant `r` had always been
+identity, so nothing had ever shown that #59's per-frame delivery works at all.
+Now something has. **#33's conjugation is not silently dead.**
+
+## What is left, and it is a narrow window
+
+Take 217's compensated arm is flawless in the data — published == head to the
+digit across all 21 samples, weight 1.000, 12 of them past 25 deg:
+
+    head  48.80 -> published  48.80      head -68.33 -> published -68.33
+    head  63.34 -> published  63.34      head -66.18 -> published -66.18
+
+Those are the same buffer contents a forced run at that angle would produce,
+and forced runs are comfortable. So either take 217's verdict was reached
+before Patola had a calibrated sense of what "right" feels like — 216 and 218
+gave him a switching reference, 217 offered none if it was working — or there
+is a defect that appears past ~50 deg and not at 40.
+
+**Both takes that WORK tested 40 deg. The take that failed was at 48-68.** That
+is the only untested variable left, and forcing 65 deg tests it directly with
+the protocol Patola is now practised at.
+
 # Take 217 — the live roll fails where the FORCED roll worked. Unexplained.
 
 Patola, holding a tilt both ways across 12 phases: never right, in either arm.
