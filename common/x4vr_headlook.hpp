@@ -74,6 +74,11 @@ struct HeadAngles {
     float yaw_weight = 1.0f;
     // Kept for callers that only need the yes/no. Derived, never set alone.
     bool yaw_reliable = true;
+    // Rotation about the forward axis, + = tilting the head to the LEFT ear.
+    // NOT for driving X4 -- free-look has no roll axis and never will. This
+    // exists because the STEREO needs it: see head_angles() and task #77.
+    // Shares yaw's singularity, and yaw_weight is the guard for both.
+    float roll_deg = 0.0f;
 };
 
 // How much of the yaw reading to believe, from cos(pitch).
@@ -130,6 +135,47 @@ inline HeadAngles head_angles(float qx, float qy, float qz, float qw) {
     // inside the clamp.
     a.yaw_weight = yaw_weight_of_horiz(std::sqrt(fx * fx + fz * fz));
     a.yaw_reliable = a.yaw_weight > 0.0f;
+
+    // **Roll, which this function dropped for six months and should not have.**
+    //
+    // The comment above says a general Euler decomposition "would drag roll back
+    // in through gimbal choices nobody needs to reason about", and that was
+    // right for driving X4: free-look has no roll axis, so there was nothing to
+    // send it to. But the STEREO needs it. The disparity is baked along image-x
+    // and the compositor rotates the image by the head's full orientation, so
+    // at roll phi a sin(phi) share of the disparity becomes vertical, which the
+    // eye cannot fuse (task #77 -- Patola found it at 90 deg by closing one eye
+    // at a time, and it is already a quarter of the disparity at 15).
+    //
+    // Measured about the FORWARD axis, against the roll-free frame, so it is
+    // exactly the angle the eye offset has to be turned by:
+    //
+    //   u   = the head's own up,  q * (0,1,0)
+    //   r0  = normalise(f x worldUp)   -- the roll-free right
+    //   u0  = r0 x f                   -- the roll-free up
+    //   roll = atan2(u . r0, u . u0)
+    //
+    // Degenerate exactly where yaw is, and for the same reason: pointing at the
+    // ceiling, yaw and roll are the same rotation and the split between them is
+    // arbitrary. yaw_weight already fades that region and is reused rather than
+    // given a second spelling -- one predicate, one place.
+    const float ux = 2.0f * (qx * qy - qw * qz);
+    const float uy = 1.0f - 2.0f * (qx * qx + qz * qz);
+    const float uz = 2.0f * (qy * qz + qw * qx);
+    // r0 = f x worldUp, with worldUp = (0,1,0): (fy*0 - fz*1, fz*0 - fx*0, fx*1 - fy*0)
+    float r0x = -fz, r0y = 0.0f, r0z = fx;
+    const float r0n = std::sqrt(r0x * r0x + r0z * r0z);
+    if (r0n > 1e-6f) {
+        r0x /= r0n;
+        r0z /= r0n;
+        // u0 = r0 x f
+        const float u0x = r0y * fz - r0z * fy;
+        const float u0y = r0z * fx - r0x * fz;
+        const float u0z = r0x * fy - r0y * fx;
+        a.roll_deg = std::atan2(ux * r0x + uy * r0y + uz * r0z,
+                                ux * u0x + uy * u0y + uz * u0z) *
+                     57.2957795130823f;
+    }
     return a;
 }
 

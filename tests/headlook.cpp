@@ -452,6 +452,73 @@ int main() {
               "pitch stops at its own limit, not yaw's");
     }
 
+    // ---- task #77: roll comes back out of the quaternion ------------------
+    //
+    // head_angles() dropped roll on purpose for as long as X4's camera was the
+    // only consumer, because free-look has no roll axis. The STEREO needs it:
+    // the disparity is baked along image-x and the compositor rotates the image
+    // by the head's full orientation, so sin(roll) of it goes vertical.
+    //
+    // Round-tripped against quaternions built the other way, at every
+    // combination rather than one convenient angle -- a sign error or an axis
+    // swap survives a single case easily, and this one has to be exact because
+    // the eye offset is turned by whatever comes out.
+    {
+        auto q_of = [](float yaw, float pitch, float roll, float q[4]) {
+            const float d = 0.008726646f; // half angle, degrees
+            const float cy = std::cos(yaw * d), sy = std::sin(yaw * d);
+            const float cp = std::cos(pitch * d), sp = std::sin(pitch * d);
+            const float cr = std::cos(roll * d), sr = std::sin(roll * d);
+            const float a[4] = {0, sy, 0, cy};   // yaw about +Y
+            const float b[4] = {sp, 0, 0, cp};   // pitch about +X
+            const float c[4] = {0, 0, -sr, cr};  // roll about -Z (forward)
+            auto mul = [](const float x[4], const float y[4], float o[4]) {
+                o[0] = x[3]*y[0] + x[0]*y[3] + x[1]*y[2] - x[2]*y[1];
+                o[1] = x[3]*y[1] - x[0]*y[2] + x[1]*y[3] + x[2]*y[0];
+                o[2] = x[3]*y[2] + x[0]*y[1] - x[1]*y[0] + x[2]*y[3];
+                o[3] = x[3]*y[3] - x[0]*y[0] - x[1]*y[1] - x[2]*y[2];
+            };
+            float t[4];
+            mul(a, b, t);
+            mul(t, c, q);
+        };
+        int bad = 0, n = 0;
+        for (float yaw : {0.0f, 30.0f, -50.0f})
+            for (float pitch : {0.0f, 20.0f, -35.0f})
+                for (float roll : {0.0f, 15.0f, -45.0f, 90.0f}) {
+                    float q[4];
+                    q_of(yaw, pitch, roll, q);
+                    const x4vr::HeadAngles a =
+                        x4vr::head_angles(q[0], q[1], q[2], q[3]);
+                    n++;
+                    if (!near(a.roll_deg, roll, 0.05f) ||
+                        !near(a.yaw_deg, yaw, 0.05f) ||
+                        !near(a.pitch_deg, pitch, 0.05f))
+                        bad++;
+                }
+        char buf[96];
+        std::snprintf(buf, sizeof buf,
+                      "yaw/pitch/roll round-trip exactly (%d of %d)", n - bad, n);
+        check(bad == 0, buf);
+
+        // Level head, no roll -- the case that must not acquire one by
+        // accident, because every existing run is this case and a spurious
+        // roll would rotate the disparity of a head that is not tilted.
+        float q[4];
+        q_of(25.0f, -10.0f, 0.0f, q);
+        const x4vr::HeadAngles lvl = x4vr::head_angles(q[0], q[1], q[2], q[3]);
+        check(near(lvl.roll_deg, 0.0f, 1e-3f),
+              "a level head reports exactly zero roll");
+
+        // At the pole yaw and roll are the same rotation and the split is
+        // arbitrary. yaw_weight is the existing guard and must be the one that
+        // fires -- roll does not get a second, differently-spelled predicate.
+        q_of(0.0f, 89.5f, 30.0f, q);
+        const x4vr::HeadAngles pole = x4vr::head_angles(q[0], q[1], q[2], q[3]);
+        check(pole.yaw_weight == 0.0f,
+              "at the pole the existing yaw guard is what fires");
+    }
+
     printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n", g_fail);
     return g_fail ? 1 : 0;
 }

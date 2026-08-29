@@ -8315,6 +8315,63 @@ pose_set_index(), 0)` already exists — a vertex patch that reads that very
 buffer. The machinery is built; what is missing is a patch that uses it to
 scale the shear rather than to rotate the world.
 
+## #77 step 2 DONE: roll comes out of the quaternion
+
+`head_angles()` now returns `roll_deg`, measured about the FORWARD axis against
+the roll-free frame — exactly the angle the eye offset has to be turned by:
+
+    u    = the head's own up
+    r0   = normalise(f x worldUp)     the roll-free right
+    u0   = r0 x f                     the roll-free up
+    roll = atan2(u . r0, u . u0)
+
+Round-tripped in `tests/headlook.cpp` against quaternions built the other way,
+at **36 combinations** of yaw/pitch/roll rather than one convenient angle — a
+sign error or an axis swap survives a single case easily, and this has to be
+exact because the disparity is turned by whatever comes out. A level head
+reports exactly zero, which is the case every existing run is in.
+
+Degenerate exactly where yaw is, and for the same reason: at the ceiling, yaw
+and roll ARE the same rotation. `yaw_weight` is reused as the guard rather than
+given a second spelling.
+
+## #77 step 3: the vehicle already exists, and it is NOT patch_vertex_clip
+
+The obvious target was `patch_vertex_clip`, which bakes `const float k[16]`.
+Patching that to read a per-frame roll would have been the wrong work.
+
+**`patch_vertex_eye_offset` is the vehicle.** It already replaced the baked
+matrix for the same class of reason (`sx` ranges 1.15 to 37.75 across a session
+as the player zooms, so no constant can be baked), and it already:
+
+* reads a uniform block member at a (set, binding, member) at runtime;
+* selects per-view arithmetically off `gl_ViewIndex`;
+* reads `sy` from `M_projection[1][1]` as well as `sx`, when #35's off-axis
+  affine is on — so the Y half of the shear is already reachable.
+
+Its form collapses to one multiply because X4's `m[10] = 0` makes clip z the
+constant near plane:
+
+    x_c' = x_c - sx * d        (near cancels)
+
+**`d` is the only baked part**, and its doc says why: "the eye offset in metres,
+our own choice, so it stays a constant". Under roll it stops being a constant.
+What #77 needs is:
+
+    x_c' = x_c - sx * d * cos(phi)
+    y_c' = y_c - sy * d * sin(phi)
+
+with `(cos phi, sin phi)` read per frame from OUR pose block — the camera block
+belongs to X4 and cannot carry it. That means extending `PoseBlock` (currently
+`static_assert(sizeof == 192)`, three mat4 at 0/64/128) with a vec4 at 192, and
+adding the two multiplies to a 476-line codegen function.
+
+**Not started, deliberately.** Half-finished SPIR-V codegen does not fail
+loudly — it produces subtly wrong geometry in a shader that still compiles and
+still draws, which is the most expensive failure mode this project has. It is
+scoped here so the next session starts from the vehicle rather than
+rediscovering that `patch_vertex_clip` was the wrong door.
+
 # What is inside the reprojected eye image — ONE layer, everything
 
 Read, not inferred, at the submission site: `const XrCompositionLayerBaseHeader
