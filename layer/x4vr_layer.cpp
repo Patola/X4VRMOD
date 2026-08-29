@@ -5872,7 +5872,36 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
         // shader only reads this member if it was patched to, and publishing
         // it either way means a run that turns the knob on mid-investigation
         // is not also turning on a code path that has never executed.
-        x4vr::pose_set_roll(g_pose.value, head_roll, roll_weight);
+        // **X4VR_ROLL_FORCE: drive the shear directly, head held level.**
+        //
+        // Take 215 turned the roll on, patched 300 modules, wrote the value
+        // 17513 times and changed NOTHING that Patola could see -- and could
+        // not say why, because no line carried the value. "The roll arrived as
+        // zero" and "the arithmetic is wrong" produce the same null, and this
+        // project has paid for that confusion more than for any other.
+        //
+        // So: a constant roll, independent of the head. With the head LEVEL,
+        // if the disparity visibly tilts then the shader path is alive and the
+        // fault is in the value; if nothing moves, the path is dead however
+        // many modules were patched. One run separates them.
+        static const float forced = [] {
+            const char *e = getenv("X4VR_ROLL_FORCE");
+            return e && *e ? (float)atof(e) : 0.0f;
+        }();
+        static const bool force_on = getenv("X4VR_ROLL_FORCE") != nullptr;
+        const float roll_used = force_on ? forced : head_roll;
+        const float weight_used = force_on ? 1.0f : roll_weight;
+        x4vr::pose_set_roll(g_pose.value, roll_used, weight_used);
+
+        // The value, at the same cadence as the rest of the periodic block.
+        // What goes in the buffer, not what we believe went in.
+        static uint64_t rn = 0;
+        if ((rn++ % 600) == 0)
+            X4VR_LOG("roll: head %.2f deg, weight %.3f -> published %.2f deg "
+                     "as (cos,sin)=(%.4f,%.4f)%s",
+                     head_roll, roll_weight, roll_used * weight_used,
+                     g_pose.value.roll_cs[0], g_pose.value.roll_cs[1],
+                     force_on ? "  FORCED, head ignored" : "");
     }
 }
 

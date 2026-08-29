@@ -1788,6 +1788,32 @@ def main(path):
     # is to set one knob, patch nothing, and read the null as "the fix does not
     # work". The layer names the missing knob; this repeats it where the run is
     # judged.
+    # The VALUE, which take 215 did not carry and could not have. Printed
+    # before the verdict, because a verdict on an unpublished number is what
+    # made that take unreadable.
+    rv = re.findall(r"roll: head (-?\d+\.\d+) deg, weight (\d+\.\d+) -> "
+                    r"published (-?\d+\.\d+) deg as \(cos,sin\)="
+                    r"\((-?\d+\.\d+),(-?\d+\.\d+)\)(.*)", text)
+    if rv:
+        heads = sorted(abs(float(a)) for a, b, c, d, e, f in rv)
+        pubs = sorted(abs(float(c)) for a, b, c, d, e, f in rv)
+        forced = "FORCED" in rv[0][5]
+        n = len(rv)
+        print(f"roll    {n} sample(s){'  FORCED, head ignored' if forced else ''}: "
+              f"head |roll| median {heads[n//2]:.2f} max {heads[-1]:.2f} deg, "
+              f"published median {pubs[n//2]:.2f} max {pubs[-1]:.2f} deg")
+        if not forced and heads[-1] < 5.0:
+            fails.append(
+                f"the head never rolled more than {heads[-1]:.2f} deg, so this "
+                f"run does NOT exercise #77 whatever else it shows — tilt the "
+                f"head, or use X4VR_ROLL_FORCE to drive the shear directly")
+        elif pubs[-1] < 0.5 * heads[-1]:
+            fails.append(
+                f"the head rolled to {heads[-1]:.2f} deg but only {pubs[-1]:.2f} "
+                f"was published — the value is being lost between head_angles() "
+                f"and the buffer, so the shader is turning the disparity by "
+                f"almost nothing. This is the value, not the arithmetic")
+
     if "roll stereo: ON" in text:
         print("roll    ON — the eye offset turns with the head. Under tilt the "
               "disparity should stay HORIZONTAL: close one eye, then the "

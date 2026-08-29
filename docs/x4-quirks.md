@@ -8315,6 +8315,54 @@ pose_set_index(), 0)` already exists — a vertex patch that reads that very
 buffer. The machinery is built; what is missing is a patch that uses it to
 scale the shear rather than to rotate the world.
 
+# Take 215 — the roll fix did NOTHING, and the run could not say why
+
+Patola: still one image above the other at 90 deg. And the run is unreadable,
+which is my error rather than the fix's.
+
+**Everything upstream worked.** The log proves each link:
+
+| link | evidence |
+|---|---|
+| pose channel up | `channel up — set 31 binding 0, 4 region(s) of 208 B` (208 = the extended block) |
+| modules patched | `live-sx=300 mvp-sx=12 baked-sx=0` |
+| modules read it | `pose: 300 module(s) read the pose block (set 31)` |
+| the value written | `0/17513 clamped` — pose_drive_residual ran 17513 times |
+| roll requested | `roll stereo: ON` |
+
+Take 214 for contrast reads `0/0`: without `X4VR_POSE` the residual never ran
+at all. So 215 is not the null 214 would have been.
+
+## The error: no instrument on the load-bearing value
+
+Nothing logged the roll. `pose_set_roll` appeared exactly ONCE in the layer —
+the call — and the periodic block reported `applied_yaw`/`applied_pitch` and
+not the roll beside them.
+
+So **"the roll arrived as zero" and "the arithmetic is wrong" produce the same
+null**, and take 215 cannot separate them. That is the single most repeated
+mistake in this project's history and I made it again, in the same session I
+wrote "half-finished SPIR-V codegen does not fail loudly".
+
+Worse, I had flagged the check and then dropped it. Asked whether to verify
+that the compositor applies the roll before building, I accepted "the fix would
+already include a similar check" — and it does not, because **a fix that
+produces no change tests nothing about why.**
+
+## What take 216 separates
+
+`X4VR_ROLL_FORCE=<deg>` drives the shear with a CONSTANT roll, head held level:
+
+* the disparity visibly tilts -> the shader path is alive and the fault is the
+  VALUE (extraction, publication, or the weight);
+* nothing moves -> the path is dead however many modules were patched, and the
+  next question is binding, not arithmetic.
+
+`roll:` now logs head, weight, published degrees and the published `(cos,sin)`
+every 600 frames, and `score_run.py` FAILS a run whose head never rolled past
+5 deg (it did not exercise #77 at all) or whose published value is under half
+the head's (the value is being lost). Both watched to fire.
+
 ## #77 step 3 DONE: the codegen, and two defects spirv-val caught
 
 `patch_vertex_eye_offset` gained `roll_set`/`roll_binding`. Absent, it emits
