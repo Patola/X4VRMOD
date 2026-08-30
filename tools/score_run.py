@@ -1797,6 +1797,33 @@ def main(path):
                 f"triangles, so nothing measured in this run about geometry is "
                 f"evidence")
 
+    # --- task #70: the field the cascades were fitted to vs the one we render -
+    #
+    # This section exists because take 223's acceptance check was a grep for a
+    # single `sx`, and that number came back byte-identical across a 33% change
+    # in the knob that sets it -- X4 runs several cameras and the one the
+    # `stereo:` line happens to report ignores <fov>. The layer now emits the
+    # SET, partitioned, and this reads the LAST report because the counts
+    # accumulate over the run.
+    ffield = re.findall(r"layer\s+proj FIELD: (\d+) slot\(s\) tracked\. (.*)", text)
+    fverd = re.findall(r"layer\s+proj FIELD: (UNJUDGED|MATCH|MISMATCH)([^\n]*)", text)
+    if not ffield:
+        print("field   not reported — this build predates the #70 instrument, "
+              "or no camera block was credited, so this run says nothing about "
+              "whether the cascades and the scene share a field")
+    else:
+        print(f"field   {ffield[-1][0]} slot(s): {ffield[-1][1]}")
+        if fverd:
+            v, rest = fverd[-1]
+            print(f"field   {v}{rest}")
+            # Deliberately NOT a fail. #70 is open and every shipping-config
+            # run has it, and this file's own history says a scorer that fails
+            # a good run teaches the reader to skip the verdict. Promote this
+            # to fails.append() the moment a fix lands, because from then on a
+            # MISMATCH is a regression rather than the known state.
+            if v == "MISMATCH":
+                print("field   ^ this is #70, and it is OPEN — expected in any "
+                      "run at the shipping field, not a failure of this run")
     # --- did the cascade come from the block X4's shaders sample? -----------
     #
     # The layer prints `proj OBJBLOCK:` once it has walked the object slots.
