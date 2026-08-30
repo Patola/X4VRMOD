@@ -1953,6 +1953,47 @@ def main(path):
                       "tilted past 5 deg, so this run says nothing about the "
                       "head-to-shear map, only about the magnitude")
 
+    # --- task #74: the head's lateral/vertical shift ------------------------
+    #
+    # Gated on INTENT, not outcome: a run that asked for translation and
+    # published nothing is a failure even though every other line is clean,
+    # and that is the case a "report what we saw" section would pass silently.
+    tv = re.findall(r"head translate: raw \((-?\d+\.\d+), (-?\d+\.\d+), "
+                    r"(-?\d+\.\d+)\) m in head axes -> published "
+                    r"\((-?\d+\.\d+), (-?\d+\.\d+)\)([^\n]*)", text)
+    asked = "X4VR_HEAD_TRANSLATE=1" in (run or "")
+    if tv:
+        txs = [abs(float(a[3])) for a in tv]
+        tys = [abs(float(a[4])) for a in tv]
+        raws = [max(abs(float(a[0])), abs(float(a[1]))) for a in tv]
+        clamped = sum(1 for a in tv if "CLAMPED" in a[5])
+        latch = re.search(r"neutral point latched at \(([^)]*)\)", text)
+        print(f"translate  {len(tv)} sample(s): |published| max x {max(txs):.4f} "
+              f"y {max(tys):.4f} m, raw head motion max {max(raws):.4f} m"
+              f"{f', {clamped} CLAMPED' if clamped else ''}")
+        if latch:
+            print(f"translate  neutral point ({latch.group(1)}) — every value "
+                  f"above is measured from there, not the stage origin")
+        # A run where the head never actually moved says nothing, whatever the
+        # code did. State it rather than reporting a clean zero as a pass.
+        if max(raws) < 0.02:
+            fails.append(
+                f"the head never moved more than {max(raws):.4f} m, so this run "
+                f"does NOT exercise #74 whatever else it shows — lean left and "
+                f"right, and up and down, by a hand's width at least")
+        elif clamped == len(tv):
+            fails.append(
+                f"every one of {len(tv)} sample(s) was CLAMPED, so the shift "
+                f"was pinned at the limit the whole run and nothing varied — "
+                f"raise X4VR_HEAD_TRANSLATE_MAX or lean less")
+    elif asked:
+        fails.append(
+            "X4VR_HEAD_TRANSLATE=1 was asked for and the layer published no "
+            "shift at all — the knob did not reach the pose block. Check that "
+            "the VR views were located; the shift is computed from them")
+    else:
+        print("translate  not asked for in this run (X4VR_HEAD_TRANSLATE unset)")
+
     if "roll stereo: ON" in text:
         print("roll    ON — the eye offset turns with the head. Under tilt the "
               "disparity should stay HORIZONTAL: close one eye, then the "
