@@ -8315,6 +8315,55 @@ pose_set_index(), 0)` already exists — a vertex patch that reads that very
 buffer. The machinery is built; what is missing is a patch that uses it to
 scale the shear rather than to rotate the world.
 
+# Take 221 — #77 CLOSED. Two independent channels, agreeing for the first time.
+
+    roll  sign: 17 sample(s) match -head, 0 match +head (of 17 tilted past 5 deg)
+    PASS  this run is a candidate for docs/known-good-runs.md
+
+Patola: *"I was able to clearly perceive between the two states — one of them
+consistently comfortable the whole time, when my head was level and when it
+was rolled to either side, and the other only comfortable when it was level."*
+
+That is the predicted signal exactly, and it was **pre-registered**: control arm
+tilt-dependent, compensated arm tilt-independent, the switch to detect being
+"tilt matters / tilt doesn't matter" rather than comfortable/uncomfortable.
+Both directions, which kills the last residual worry that the fix was an
+accident of one sign.
+
+**What makes this different from every earlier #77 take** is that the objective
+channel did not depend on the subjective one. The scorer read the sign off the
+log — 17 of 17 — and would have said the same thing with the headset in a box.
+Takes 215 through 220 had no such channel; the eye was the only instrument, and
+it was asked a question (an absolute judgement of a steady state) that it is
+known to be bad at.
+
+## The FAIL on this run was MINE, and it was the same mistake a fourth time
+
+The run scored FAIL on `pose fell back to identity 1 time(s) AFTER it had been
+driven`. It had not. The single sample sits inside a window head-look had
+announced 1.5 s earlier:
+
+    [197886.806] headlook: view is now external/floating — idle
+    [197888.290] vr pose: ... cam_valid=0 ...        <- "the gate dropped out"
+    [197888.995] headlook: view is now the cockpit — steering
+
+Head-look was idle **by design**; identity is the designed consequence. Take
+220 carries the identical false FAIL at the identical offset inside its own
+external-view window. The verdict even ended "check `steering`" — pointing at
+the one component that had behaved correctly.
+
+The comment directly above that check, written after take 150, says it was
+already *"the third check in this file to grade by a condition it did not
+actually test."* This was the fourth, inside the very check that documents the
+pattern. **Writing the lesson next to the code does not prevent the lesson.**
+What prevents it is the check consulting the system's own declaration, which
+in every one of these cases was in the same log a second or two earlier.
+
+Now gated on the gate's announcement — on head-look having SAID it was idle,
+never on the pose having come out identity. Take 221 PASSES, take 219 is
+unchanged, and take 220 still FAILS on the real defect: the fix made the check
+specific, not permissive.
+
 # Take 220 — the live path had a SIGN ERROR. Found in the stored logs, not the headset.
 
 Patola, on the live-roll A/B: *"I could perceive the two phases changing,

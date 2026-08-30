@@ -1603,9 +1603,56 @@ def main(path):
         ident = [ln for ln in pose[first_driven:] if "cam_valid=0" in ln]
         pre = first_driven
         unlinked = [ln for ln in pose if "shared=0" in ln]
+
+        # ...and a FOURTH time, in this same check, exactly as the paragraph
+        # above warned. Takes 220 and 221 each reported one post-arming identity
+        # sample and each was INSIDE an external-view window the gate had
+        # announced 1.5 s earlier:
+        #
+        #   [197886.806] headlook: view is now external/floating — idle
+        #   [197888.290] vr pose: ... cam_valid=0 ...   <- "the gate dropped out"
+        #   [197888.995] headlook: view is now the cockpit — steering
+        #
+        # Head-look was not live; it was idle BY DESIGN, and identity is the
+        # designed consequence. The verdict even pointed at `steering`, which
+        # is the one thing that had behaved correctly.
+        #
+        # Gating on the gate's own announcement, not on a branch re-derived
+        # here: what makes a sample excusable is that head-look SAID it was
+        # idle, never that the pose happened to come out identity.
+        idle_win, open_at = [], None
+        for ln in lines:
+            if "headlook: view is now" not in ln:
+                continue
+            m = re.search(r"\[\s*(\d+\.\d+)\]", ln)
+            if not m:
+                continue
+            t = float(m.group(1))
+            if "idle" in ln:
+                open_at = t if open_at is None else open_at
+            elif open_at is not None:
+                idle_win.append((open_at, t))
+                open_at = None
+        if open_at is not None:
+            idle_win.append((open_at, float("inf")))
+
+        def _in_idle(ln):
+            m = re.search(r"\[\s*(\d+\.\d+)\]", ln)
+            if not m:
+                return False
+            t = float(m.group(1))
+            return any(a <= t <= b for a, b in idle_win)
+
+        excused = [ln for ln in ident if _in_idle(ln)]
+        ident = [ln for ln in ident if not _in_idle(ln)]
         print(f"pose  {len(pose)} sample(s), {len(driven)} driven, {pre} "
               f"identity before head-look armed (expected), {len(ident)} "
               f"identity after (not expected)")
+        if excused:
+            print(f"pose  {len(excused)} further identity sample(s) fall inside "
+                  f"{len(idle_win)} window(s) where head-look ANNOUNCED itself "
+                  f"idle (external/floating view) — identity is correct there, "
+                  f"and counting them was a false FAIL on takes 220 and 221")
         if unlinked:
             fails.append(
                 f"the layer could not reach the injector's shared state on "
@@ -1616,9 +1663,12 @@ def main(path):
         elif ident:
             fails.append(
                 f"the pose fell back to identity {len(ident)} time(s) AFTER it "
-                f"had been driven — the gate dropped out mid-run, so those "
-                f"frames were submitted world-locked while head-look was live. "
-                f"cam_valid went back to 0: check `steering`, not X4's camera")
+                f"had been driven, while head-look had NOT announced itself "
+                f"idle — the gate dropped out mid-run, so those frames were "
+                f"submitted world-locked with head-look live. cam_valid went "
+                f"back to 0 with no `view is now external/floating` before it, "
+                f"so this is not the by-design idle: check what cleared "
+                f"cam_valid, not X4's camera")
         elif not driven and "X4VR_HEADLOOK=1" in (run or ""):
             fails.append(
                 "the pose was never driven — every frame went to the runtime "
