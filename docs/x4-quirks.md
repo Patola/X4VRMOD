@@ -10696,3 +10696,33 @@ Elimination has outperformed instrumentation. Take 195 killed a hypothesis in
 one run by changing a knob and re-measuring. Five runs of capture and
 attribution produced one name and no cause. Prefer "switch it off and
 re-measure" over "build a probe to watch it".
+
+# #77 REGRESSION — the vertex map rotated, the fragment map did not
+
+Found while estimating #74 (head translation), by reading the code rather than
+from a run.
+
+`patch_vertex_eye_offset` with roll on displaces the eye along
+`(cos φ, sin φ)`. `patch_fragment_invproj_eye` computes a **scalar** d and
+applies `T(d)` along x only — and in current runs it cannot do otherwise,
+because it is called with `pose_set = pose_rotate() ? ... : 0xffffffff` and
+`pose_rotate()` is OFF, so the fragment side has no pose access at all.
+
+The call site states the invariant it violates:
+
+> the affine applied to gl_Position and the affine undone before the deferred
+> reconstruction have to be the same map or the reconstruction is wrong by the
+> difference
+
+Residual: `d·(cos φ − 1, sin φ)`. **Zero at φ = 0**, so every pre-#77 tag and
+all level-headed play is unaffected — but |residual| = 1.08·d at 65 deg, larger
+than the eye offset itself. It corrupts `view_pos`, so it lands in per-eye
+deferred lighting and shadows. Take 221 judged stereo geometry and comfort and
+would not have shown it.
+
+Shipped and defaulted ON in c3e7689. Confirmable offline in the harness before
+any take.
+
+**The fix is also #74's prerequisite.** Threading a per-frame 2D offset into
+the fragment correction is the same machinery head translation needs, because
+translation is the same vector from a different source.
