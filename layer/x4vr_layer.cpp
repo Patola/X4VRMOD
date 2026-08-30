@@ -201,6 +201,17 @@ static bool poselog_enabled() {
     return on;
 }
 
+// Task #70: X4VR_CSM_DEBUG=1 — turn on X4's OWN cascade colour visualisation
+// by writing B_csmdebugcolor into every credited camera block.
+//
+// A measurement knob, not a fix, and deliberately not defaulted on: it
+// multiplies the global-light output by a cascade colour, so it makes the game
+// unplayable while it is set. Off unless asked for.
+static bool csm_debug_enabled() {
+    static const bool on = x4vr::env_on("X4VR_CSM_DEBUG", false);
+    return on;
+}
+
 // Task #77: turn the eye disparity by the head's roll.
 //
 // **ON by default since take 221**, which is the condition the previous
@@ -6596,7 +6607,11 @@ void patch_view_before_submit() {
         const char *e = getenv("X4VR_DUMP_MATRICES");
         return e && *e && *e != '0';
     }();
-    if (ox == 0.0f && oy == 0.0f && oz == 0.0f && !dump) {
+    // Task #70. In the guard as well as at the write site: the walk below is
+    // where the camera blocks are reached at all, so a debug knob that did not
+    // open this gate would set nothing and report nothing -- which is take
+    // 224's failure exactly, and the one this file now names on its way out.
+    if (ox == 0.0f && oy == 0.0f && oz == 0.0f && !dump && !csm_debug_enabled()) {
         // Say so, once. Take 224 was spent on a report that could not fire:
         // this walk is gated here, and its absence from the log was
         // indistinguishable from "the instrument is broken" or "this build
@@ -6921,6 +6936,22 @@ void patch_view_before_submit() {
         // proxy with the thing it stood for costs nothing and stops the
         // instrument from choosing which cameras exist.
         float *cblk = slot_host_ptr(slot);
+        // **Task #70's discriminator, and it is X4's own code.**
+        //
+        // Set on EVERY credited camera block, every frame, because X4 rewrites
+        // the arena per frame and a one-shot write would be gone by the next
+        // one. Writing rather than reading is unique to this member; see
+        // kCsmDebugColor for why it is worth the exception.
+        //
+        // What it decides: the cockpit sits ~1 m out, well inside cascade 0,
+        // so it must be RED and must STAY red as the camera turns. If the
+        // colours shift while turning, the reconstructed `view_pos.z` is
+        // moving when the geometry is not, and #70 is a depth error. If they
+        // hold steady while the shadows still fade, the depth is sound and the
+        // drift is LATERAL -- which no amount of widening the blend tent can
+        // fix, and only rewriting M_shadowCSM would.
+        if (cblk && csm_debug_enabled())
+            ((uint32_t *)cblk)[x4vr::kCsmDebugColor] = 1u;
         if (!cblk)
             continue;
         // A block X4 has not populated reads back zeros, and a zero matrix

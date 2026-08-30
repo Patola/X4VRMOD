@@ -53,6 +53,21 @@ enum ViewMat : uint32_t {
     kShadowMapSize = 360,     // F_shadowmapsize       byte 1440
     kShadowMaxDistance = 361, // F_shadowmaxdistance   byte 1444
     kTextureFactorCSM0 = 363, // F_texturefactorCSM0.. byte 1452, five in a row
+    // Task #70. **X4's own cascade debug visualisation**, and the only member
+    // here we WRITE rather than read.
+    //
+    //   l_pass_globallight.frag.glsl:
+    //     if (B_csmdebugcolor) OUT_RT0.rgb *= CSMColorCascades(view_pos.z);
+    //
+    // `CSMColorCascades` tints by which cascade `view_pos.z` falls in --
+    // 0 red, 1 yellow, 2 green, 3 cyan, past the last threshold blue -- and it
+    // reads the SAME `view_pos` the real shadow lookup does. So it is a direct
+    // readout of the reconstructed depth, written by Egosoft, and no
+    // instrument of ours can be wrong about it.
+    //
+    // A bool in std140 occupies 32 bits; any non-zero word is true.
+    kCsmDebugColor = 380,     // B_csmdebugcolor       byte 1520
+    kShadowEnable = 381,      // B_shadow              byte 1524
 };
 
 constexpr uint32_t kViewBlockBytes = 1792;
