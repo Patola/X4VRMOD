@@ -8315,6 +8315,78 @@ pose_set_index(), 0)` already exists — a vertex patch that reads that very
 buffer. The machinery is built; what is missing is a patch that uses it to
 scale the shear rather than to rotate the world.
 
+# #70 — the vanilla control says the shadows are OURS
+
+Patola, on stock X4, in **the same scene** where he sees the defect: *"Vanilla
+X4 does not shift the shadow the way our headtracking does... The shadows
+inside the cockpit stay put."*
+
+He also reported, unprompted, that glass reflections/refractions **do** shift
+subtly under vanilla mouselook, and that this is not what he is seeing with the
+shadows. That is worth recording as a property of the observer, not just of the
+game: he is discriminating between two view-dependent effects rather than
+reporting motion in general, which is what makes the negative meaningful.
+
+## What it is NOT
+
+Three candidates, all eliminated from evidence already on disk:
+
+1. **#33's world conjugation.** `X4VR_POSE_ROTATE` is absent from take 221's
+   command line and every recent one, and no rotate line appears in any log.
+   The rotation never ran.
+2. **The stereo shear, including #77's roll.** `classify_unsheared()` marks
+   depth-only passes (the cascade render) AND no-depth passes (deferred
+   lighting, a fullscreen triangle) as unsheared, and the layer logs
+   `binding the no-shear twin (shadow + UI exclusion active) — vertex edit
+   dropped`. The vertex patch that carries the eye offset and the roll does not
+   reach either pass.
+3. **`M_invprojection_uj` never being corrected.** This is the member that once
+   cost 13 takes of nulls, so it was the first suspect. Take 98's teardown
+   report settles it: **2 modules corrected of 2 eligible**, both shadow
+   cascades. The first-present count of 0 in recent logs is meaningless — the
+   code says so itself: at first present X4 has typically created no deferred
+   module yet.
+
+## The mechanism that IS there, from X4's own GLSL
+
+    RetrieveZBufferViewPos:  view_pos = (M_invprojection * vec4(uv2clip(uv), depth, 1)).xyz / w
+    GetShadow(ndotl, view_pos):
+        fade      = f(view_pos.z, F_shadowmaxdistance)
+        coords[i] = mul(vec4(view_pos, 1), M_shadowCSM_i)
+        return saturate(fade + GetCSMShadow(ndotl, coords))
+
+`view_pos` is reconstructed by **`M_invprojection`**, the member we rewrite per
+eye, and it reaches the shadow term by **two** paths: the CSM coordinate lookup,
+and a distance fade that scales brightness directly. The `M_shadowCSM*`
+matrices live in the per-**object** block and never carry our correction.
+
+This would be yaw-dependent even though our error is not: X4 rebuilds
+`M_shadowCSM` each frame as view->light, so a fixed view-space error is rotated
+by the camera's own orientation before it reaches the atlas.
+
+**The mechanism is proven to exist; the error is not.** If #39's correction is
+exact, `view_pos` lands back in X4's frame and every line above is benign. That
+is the open question, and it is not answerable by reading more source.
+
+## The discriminator: X4VR_IPD=0
+
+`configured_ipd()` is read by `strtof`, so `X4VR_IPD=0` is honoured as zero
+rather than falling back to the default, and **no downstream guard skips
+patching when it is zero**: `dl`/`dr` become 0, the shear matrices become
+identity, the invproj correction composes with an identity. Every module is
+still patched, every pass still doubled, `X4VR_FOV` still widened. Only the eye
+offset goes away.
+
+So it varies exactly one thing, which is what take 213's control failed to do
+and what Patola's 2x2 got right where my proposal did not.
+
+- shadows stop tracking yaw -> the per-eye reconstruction is the cause, and the
+  fix has to make the shadow term read a frame the CSM matrices agree with
+- shadows still track yaw -> the eye offset is NOT the cause, and the next
+  suspect is #56's measured mismatch: all 58 shadow-configured camera slots sit
+  in the `sx=1.33333` group and none in the widened one, so the cascade is
+  configured on a camera whose field we never touched
+
 # Take 221 — #77 CLOSED. Two independent channels, agreeing for the first time.
 
     roll  sign: 17 sample(s) match -head, 0 match +head (of 17 tilted past 5 deg)
