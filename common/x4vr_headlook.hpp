@@ -525,4 +525,38 @@ inline void head_look_recentre(HeadLook &s) {
     s.cmd_pitch_deg = 0.0f;
 }
 
+// **Task #74: the head's displacement, resolved into the head's OWN axes.**
+//
+// The eye offset is applied in the camera's frame, so a room-space vector would
+// have to be re-resolved every time the head turned -- lean left, then turn 90
+// degrees, and an unrotated shift would push the view sideways in a direction
+// that no longer means "left". Rotating by the inverse of the head orientation
+// is what makes "I leaned left" mean the same thing at every heading.
+//
+// The caller supplies the displacement already measured from a neutral point;
+// recentring, clamping and scaling all stay in the layer, because doing any of
+// them here as well would put one number in two places.
+struct HeadShift {
+    float x = 0.0f, y = 0.0f, z = 0.0f;
+};
+
+inline HeadShift head_shift(float qx, float qy, float qz, float qw, float dx,
+                            float dy, float dz) {
+    // v' = v + 2w(u x v) + 2u x (u x v), with u the CONJUGATE vector part --
+    // that is the inverse rotation, world-into-head, not head-into-world.
+    // Getting it the other way round would still look like tracking, because
+    // it moves when the head moves; it would just move wrongly the moment the
+    // head is not facing forward, which is exactly the case a level-headed
+    // test never reaches.
+    const float ux = -qx, uy = -qy, uz = -qz;
+    const float tx = 2.0f * (uy * dz - uz * dy);
+    const float ty = 2.0f * (uz * dx - ux * dz);
+    const float tz = 2.0f * (ux * dy - uy * dx);
+    HeadShift r;
+    r.x = dx + qw * tx + (uy * tz - uz * ty);
+    r.y = dy + qw * ty + (uz * tx - ux * tz);
+    r.z = dz + qw * tz + (ux * ty - uy * tx);
+    return r;
+}
+
 } // namespace x4vr

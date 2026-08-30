@@ -212,6 +212,34 @@ static bool csm_debug_enabled() {
     return on;
 }
 
+// Task #74: X4VR_HEAD_TRANSLATE=1 — feed the head's lateral/vertical shift
+// into the eye offset. Off by default: it is new behaviour that no take has
+// judged, and the project's rule is that a default which changes what a re-run
+// reproduces is not a default.
+static bool head_translate_enabled() {
+    static const bool on = x4vr::env_on("X4VR_HEAD_TRANSLATE", false);
+    return on;
+}
+// Metres. Generous against the 0.064 the IPD already offsets without anything
+// falling off the frustum edge, but finite, because X4's CPU-side culling does
+// not move with the shear.
+static float head_translate_max() {
+    static const float v = [] {
+        const char *e = getenv("X4VR_HEAD_TRANSLATE_MAX");
+        return e && *e ? strtof(e, nullptr) : 0.25f;
+    }();
+    return v;
+}
+// 1.0 is life-size. Exposed because the honest amount and the comfortable
+// amount are different questions, and only a take can separate them.
+static float head_translate_gain() {
+    static const float v = [] {
+        const char *e = getenv("X4VR_HEAD_TRANSLATE_GAIN");
+        return e && *e ? strtof(e, nullptr) : 1.0f;
+    }();
+    return v;
+}
+
 // Task #77: turn the eye disparity by the head's roll.
 //
 // **ON by default since take 221**, which is the condition the previous
@@ -5876,7 +5904,7 @@ void pose_budget_establish(const float fov_rad[2][4]) {
 // Called once per located VR frame, from the session thread.
 void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
                          float cmd_pitch, bool cmd_valid, float head_roll,
-                         float roll_weight) {
+                         float roll_weight, float shift_x, float shift_y) {
     if (!pose_active())
         return;
     const float budget = g_residual.budget_deg.load();
@@ -5981,6 +6009,10 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
                                   : x4vr::roll_compensation_deg(head_roll));
         const float weight_used = !ab_armed ? 1.0f : (force_on ? 1.0f : roll_weight);
         x4vr::pose_set_roll(g_pose.value, roll_used, weight_used);
+        // Task #74, written AFTER the roll so the ordering is stated rather
+        // than inherited: pose_set_roll no longer clears z/w, but a reader
+        // should not have to know that to see that both survive.
+        x4vr::pose_set_head_shift(g_pose.value, shift_x, shift_y);
 
         // The value, at the same cadence as the rest of the periodic block.
         // What goes in the buffer, not what we believe went in.
@@ -5989,7 +6021,7 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
             X4VR_LOG("roll: head %.2f deg, weight %.3f -> published %.2f deg "
                      "as (cos,sin)=(%.4f,%.4f)%s%s",
                      head_roll, roll_weight, roll_used * weight_used,
-                     g_pose.value.roll_cs[0], g_pose.value.roll_cs[1],
+                     g_pose.value.eye_ofs[0], g_pose.value.eye_ofs[1],
                      force_on ? "  FORCED, head ignored" : "",
                      ab > 0.0 ? (ab_armed ? "  [A/B: COMPENSATED]"
                                           : "  [A/B: control]") : "");
@@ -10583,8 +10615,61 @@ void vr_thread() {
             // disparity must stop being turned exactly where the yaw stops
             // being believed. Giving roll its own predicate would be a second
             // place to get the same fade wrong.
+            // **Task #74: the head's X/Y shift.**
+            //
+            // The HEAD centre, not an eye: views[0] is the left eye, so its
+            // position swings by ipd/2 as the head turns and using it alone
+            // would read a pure rotation as a translation. Averaging the two
+            // views puts the point back between them.
+            float tx = 0.0f, ty = 0.0f;
+            if (head_translate_enabled()) {
+                const auto &p0 = views[0].pose.position;
+                const auto &p1 = views[1].pose.position;
+                const float cx = 0.5f * (p0.x + p1.x);
+                const float cyp = 0.5f * (p0.y + p1.y);
+                const float cz = 0.5f * (p0.z + p1.z);
+                // Neutral point, latched once. Without it the shift would be
+                // the player's offset from the runtime's stage origin, which
+                // is wherever they happened to set their guardian -- a metre
+                // of constant shear before they have moved at all.
+                static bool centred = false;
+                static float ox = 0.0f, oy = 0.0f, oz = 0.0f;
+                if (!centred) {
+                    centred = true;
+                    ox = cx;
+                    oy = cyp;
+                    oz = cz;
+                    X4VR_LOG("head translate: neutral point latched at "
+                             "(%.3f, %.3f, %.3f) m — every shift below is "
+                             "measured from here, not from the stage origin",
+                             ox, oy, oz);
+                }
+                const x4vr::HeadShift hs = x4vr::head_shift(
+                    o.x, o.y, o.z, o.w, cx - ox, cyp - oy, cz - oz);
+                // Clamped because X4 culls on the CPU against its own frustum
+                // and that culling does NOT move with the shear. The IPD
+                // already offsets 6.4 cm and nothing has fallen off the edge,
+                // so a limit a few times that is generous; a big lean would
+                // start sampling geometry X4 never drew.
+                const float lim = head_translate_max();
+                const float gain = head_translate_gain();
+                tx = x4vr::clampf(hs.x * gain, -lim, lim);
+                ty = x4vr::clampf(hs.y * gain, -lim, lim);
+                static uint64_t tn = 0;
+                if ((tn++ % 600) == 0)
+                    X4VR_LOG("head translate: raw (%.4f, %.4f, %.4f) m in head "
+                             "axes -> published (%.4f, %.4f) after gain %.2f "
+                             "and clamp %.3f%s. z is NOT applied: a lateral "
+                             "shift is exactly a projection shear, forward is "
+                             "not",
+                             hs.x, hs.y, hs.z, tx, ty, gain, lim,
+                             (std::fabs(hs.x * gain) > lim ||
+                              std::fabs(hs.y * gain) > lim)
+                                 ? " — CLAMPED"
+                                 : "");
+            }
             pose_drive_residual(ha.yaw_deg, ha.pitch_deg, cy, cp, cv,
-                                ha.roll_deg, ha.yaw_weight);
+                                ha.roll_deg, ha.yaw_weight, tx, ty);
         }
         // Task #38: submit the eye image, once X4's present thread has put one
         // in the swapchain. Until then this is still a zero-layer frame, which

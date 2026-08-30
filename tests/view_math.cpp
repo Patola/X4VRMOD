@@ -1209,6 +1209,37 @@ int main() {
                   "scalar untranslate == (d, 0), bit for bit");
         }
 
+        // ---- #74: the head shift adds, and does NOT flip per eye -----------
+        //
+        // The separation flips between the eyes; the head's own movement does
+        // not -- leaning right moves BOTH eyes right. Getting that wrong would
+        // read as an IPD that changes when you lean, which is a vergence error
+        // rather than a visible misplacement, so nothing on screen would say
+        // "the translation is wrong" -- it would just be uncomfortable.
+        for (float head : {0.0f, -40.0f}) {
+            const float phi =
+                x4vr::roll_compensation_deg(head) * 3.14159265358979f / 180.0f;
+            const float tx = 0.11f, ty = -0.07f;
+            const x4vr::EyeOffset l =
+                x4vr::eye_offset_total(0.064f, phi, false, tx, ty);
+            const x4vr::EyeOffset r =
+                x4vr::eye_offset_total(0.064f, phi, true, tx, ty);
+            // The MIDPOINT of the two eyes is the head, so it must be exactly
+            // the shift -- the separation cancels there and nothing else may.
+            check(std::fabs(0.5f * (l.dx + r.dx) - tx) < 1e-6f &&
+                      std::fabs(0.5f * (l.dy + r.dy) - ty) < 1e-6f,
+                  "#74: the eyes' midpoint IS the head shift");
+            // And the difference between the eyes is untouched by it: the
+            // stereo separation must not change when the head moves.
+            const x4vr::EyeOffset l0 =
+                x4vr::eye_offset_total(0.064f, phi, false, 0.0f, 0.0f);
+            const x4vr::EyeOffset r0 =
+                x4vr::eye_offset_total(0.064f, phi, true, 0.0f, 0.0f);
+            check(std::fabs((r.dx - l.dx) - (r0.dx - l0.dx)) < 1e-6f &&
+                      std::fabs((r.dy - l.dy) - (r0.dy - l0.dy)) < 1e-6f,
+                  "#74: the shift leaves the eye SEPARATION untouched");
+        }
+
         // ---- the map from head angle to shear angle, against the runs ------
         //
         // This is the assertion take 220 would have failed, and the only one

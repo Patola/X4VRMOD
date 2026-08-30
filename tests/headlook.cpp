@@ -519,6 +519,95 @@ int main() {
               "at the pole the existing yaw guard is what fires");
     }
 
+    // ---- task #74: the head shift lands in the HEAD's axes ----------------
+    //
+    // The direction is the whole content of this function, and "does it move"
+    // would pass on the forward rotation as readily as the inverse -- so the
+    // test is built the way the requirement is stated: **leaning left must
+    // read as left at every heading.**
+    //
+    // A vector that IS head-left by construction is rotated out into world
+    // space with the forward rotation, handed to head_shift, and must come
+    // back as head-left. Using the wrong rotation inside makes this fail at
+    // every non-zero heading, and pass at zero -- which is exactly the case a
+    // level-headed test would have covered and nothing else.
+    {
+        printf("\n#74: does the head shift land in the head's own axes?\n");
+        auto q_of = [](float yaw, float pitch, float roll, float q[4]) {
+            const float d = 0.008726646f;
+            const float cy = std::cos(yaw * d), sy = std::sin(yaw * d);
+            const float cp = std::cos(pitch * d), sp = std::sin(pitch * d);
+            const float cr = std::cos(roll * d), sr = std::sin(roll * d);
+            const float a[4] = {0, sy, 0, cy};
+            const float b[4] = {sp, 0, 0, cp};
+            const float c[4] = {0, 0, -sr, cr};
+            auto mul = [](const float x[4], const float y[4], float o[4]) {
+                o[0] = x[3]*y[0] + x[0]*y[3] + x[1]*y[2] - x[2]*y[1];
+                o[1] = x[3]*y[1] - x[0]*y[2] + x[1]*y[3] + x[2]*y[0];
+                o[2] = x[3]*y[2] + x[0]*y[1] - x[1]*y[0] + x[2]*y[3];
+                o[3] = x[3]*y[3] - x[0]*y[0] - x[1]*y[1] - x[2]*y[2];
+            };
+            float t[4];
+            mul(a, b, t);
+            mul(t, c, q);
+        };
+        // FORWARD rotation: head axes -> world. The counterpart of what
+        // head_shift undoes, written out separately so the test does not
+        // prove a function against itself.
+        auto to_world = [](const float q[4], const float v[3], float o[3]) {
+            const float ux = q[0], uy = q[1], uz = q[2], w = q[3];
+            const float tx = 2.0f * (uy * v[2] - uz * v[1]);
+            const float ty = 2.0f * (uz * v[0] - ux * v[2]);
+            const float tz = 2.0f * (ux * v[1] - uy * v[0]);
+            o[0] = v[0] + w * tx + (uy * tz - uz * ty);
+            o[1] = v[1] + w * ty + (uz * tx - ux * tz);
+            o[2] = v[2] + w * tz + (ux * ty - uy * tx);
+        };
+        int bad = 0, n = 0;
+        const float axes[3][3] = {{0.12f, 0, 0}, {0, 0.08f, 0}, {0, 0, 0.05f}};
+        for (float yaw : {0.0f, 37.0f, -80.0f, 150.0f})
+            for (float pitch : {0.0f, 25.0f, -40.0f})
+                for (float roll : {0.0f, 30.0f, -55.0f})
+                    for (const auto &want : axes) {
+                        float q[4];
+                        q_of(yaw, pitch, roll, q);
+                        float w[3];
+                        to_world(q, want, w);
+                        const x4vr::HeadShift got =
+                            x4vr::head_shift(q[0], q[1], q[2], q[3],
+                                             w[0], w[1], w[2]);
+                        n++;
+                        if (!near(got.x, want[0], 1e-5f) ||
+                            !near(got.y, want[1], 1e-5f) ||
+                            !near(got.z, want[2], 1e-5f))
+                            bad++;
+                    }
+        char buf[128];
+        std::snprintf(buf, sizeof buf,
+                      "a head-frame shift survives the round trip through "
+                      "world space (%d of %d)", n - bad, n);
+        check(bad == 0, buf);
+
+        // Length is preserved -- it is a rotation, and a version that scaled
+        // would still pass a direction-only check at unit length.
+        float q[4];
+        q_of(41.0f, -17.0f, 22.0f, q);
+        const x4vr::HeadShift s =
+            x4vr::head_shift(q[0], q[1], q[2], q[3], 0.3f, -0.2f, 0.1f);
+        const float len = std::sqrt(s.x * s.x + s.y * s.y + s.z * s.z);
+        check(near(len, std::sqrt(0.3f*0.3f + 0.2f*0.2f + 0.1f*0.1f), 1e-5f),
+              "the shift is rotated, not rescaled");
+
+        // Identity head: the shift passes through untouched. This is the case
+        // every level-headed run exercises, and the one that cannot tell the
+        // inverse from the forward rotation -- recorded as such so nobody
+        // reads a green here as covering the direction.
+        const x4vr::HeadShift id = x4vr::head_shift(0, 0, 0, 1, 0.4f, 0.5f, 0.6f);
+        check(near(id.x, 0.4f, 1e-6f) && near(id.y, 0.5f, 1e-6f) &&
+                  near(id.z, 0.6f, 1e-6f),
+              "identity head passes the shift through (proves NO direction)");
+    }
+
     printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n", g_fail);
     return g_fail ? 1 : 0;
 }

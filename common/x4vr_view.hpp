@@ -394,19 +394,32 @@ struct PoseBlock {
     // of its own, which means importing GLSL.std.450 into modules that may not
     // have it. A vec4 rather than a vec2 because std140 aligns vec4 to 16 and
     // this is the last member -- the padding exists either way, so spending it
-    // on named slack is free. z and w are reserved and written as 0.
+    // on named slack is free.
     //
-    // Identity is (1, 0): no roll, offset along x, which is exactly what every
-    // run before this did. A block left at zeros would put the offset at the
-    // ORIGIN and collapse the stereo, so the layer writes (1,0) at init rather
-    // than relying on the caller.
-    float roll_cs[4];
+    // **Task #74 claims z and w**, which #77 wrote as zero and called
+    // reserved. The layout is now
+    //
+    //     (cos roll, sin roll, head_x, head_y)
+    //
+    // and the eye offset the shaders apply is
+    //
+    //     v = d * (cos, sin) + (head_x, head_y)
+    //
+    // where `d` is +/- ipd/2 and flips per eye, while the head shift does NOT:
+    // moving your head right moves BOTH eyes right. Metres in both terms, so
+    // they add without a scale factor.
+    //
+    // Identity is (1, 0, 0, 0): no roll, offset along x, no head shift, which
+    // is exactly what every run before #77 did. A block left at zeros would put
+    // the offset at the ORIGIN and collapse the stereo, so the layer writes the
+    // identity at init rather than relying on the caller.
+    float eye_ofs[4];
 };
 static_assert(sizeof(PoseBlock) == 208,
               "std140: three mat4 at 0, 64, 128 and a vec4 at 192");
 // The offset the SPIR-V patch decorates its one-member view with. Named here so
 // the shader-side constant and the struct cannot drift apart silently.
-constexpr uint32_t kPoseRollOffset = 192;
+constexpr uint32_t kPoseEyeOfsOffset = 192;
 
 // The shear angle that cancels a head roll, in the frame pose_set_roll wants.
 //
@@ -439,11 +452,31 @@ inline float roll_compensation_deg(float head_roll_deg) {
 inline void pose_set_roll(PoseBlock &p, float roll_deg, float weight = 1.0f) {
     const float w = weight < 0.0f ? 0.0f : (weight > 1.0f ? 1.0f : weight);
     const float r = roll_deg * w * 0.01745329251994330f;
-    p.roll_cs[0] = std::cos(r);
-    p.roll_cs[1] = std::sin(r);
-    p.roll_cs[2] = 0.0f;
-    p.roll_cs[3] = 0.0f;
+    p.eye_ofs[0] = std::cos(r);
+    p.eye_ofs[1] = std::sin(r);
+    // z and w are #74's, and this function no longer clears them. It used to,
+    // when they were reserved -- and leaving that in would have made the head
+    // shift vanish or survive depending on which of the two setters the layer
+    // happened to call last, which is a race written in source.
 }
+
+// **Task #74: the head's lateral and vertical offset, in metres.**
+//
+// In the HEAD's own frame, not the room's: the caller resolves the world-space
+// displacement into head axes before arriving here, because the shear is
+// applied in the camera's frame and a room-space vector would swing as the head
+// turns. Not scaled, not clamped, not recentred -- the layer owns all three,
+// and doing any of them twice is how two spellings of one number begin.
+//
+// There is no z. A lateral eye shift is EXACTLY a projection shear
+// (x_ndc = sx*(x-d)/z), which is why this rides #77's machinery for free;
+// moving along the view axis rescales by z/(z-dz), which is depth-dependent
+// and not expressible in a projection matrix at all.
+inline void pose_set_head_shift(PoseBlock &p, float tx, float ty) {
+    p.eye_ofs[2] = tx;
+    p.eye_ofs[3] = ty;
+}
+
 
 // Fill a PoseBlock from Euler angles in degrees, yaw about +y, pitch about
 // +x, roll about +z -- the same composition tools/headlook_clip.py uses, so
@@ -496,8 +529,10 @@ inline PoseBlock pose_identity() {
     // collapse the stereo to mono -- the identity of a direction is not the
     // identity of a matrix, and value-initialising the struct gives the wrong
     // one for this member alone.
-    p.roll_cs[0] = 1.0f;
-    p.roll_cs[1] = 0.0f;
+    p.eye_ofs[0] = 1.0f;
+    p.eye_ofs[1] = 0.0f;
+    p.eye_ofs[2] = 0.0f;
+    p.eye_ofs[3] = 0.0f;
     return p;
 }
 
@@ -680,6 +715,21 @@ inline EyeOffset eye_offset_for_roll(float ipd, float roll_rad, bool right) {
     o.dx = h * std::cos(roll_rad);
     o.dy = h * std::sin(roll_rad);
     return o;
+}
+
+// **The vector both shader stages apply, in one place.**
+//
+// vertex:   gl_Position.xy -= (sx, sy) * v
+// fragment: row0 += v.x * row3 ; row1 += v.y * row3
+//
+// They compute it inline from the same vec4, so this is not called at runtime
+// -- it exists so the tests have ONE definition to check both against.
+// #77's regression was two spellings of this vector, one of which never
+// learned about roll; writing it down is the cheapest guard against a third.
+inline EyeOffset eye_offset_total(float ipd, float roll_rad, bool right,
+                                  float tx, float ty) {
+    const EyeOffset e = eye_offset_for_roll(ipd, roll_rad, right);
+    return EyeOffset{e.dx + tx, e.dy + ty};
 }
 
 inline Mat4 make_eye_shear(float sx, float sy, float near_z, float dx,

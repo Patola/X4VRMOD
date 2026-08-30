@@ -2169,7 +2169,7 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
             // needs no mat4 type, no ColMajor and no MatrixStride.
             emit(out, OpDecorate, {t_rollblock, DecorationBlock});
             emit(out, OpMemberDecorate,
-                 {t_rollblock, 0u, DecorationOffset, x4vr::kPoseRollOffset});
+                 {t_rollblock, 0u, DecorationOffset, x4vr::kPoseEyeOfsOffset});
             emit(out, OpDecorate, {roll_var, DecorationDescriptorSet, roll_set});
             emit(out, OpDecorate, {roll_var, DecorationBinding, roll_binding});
         }
@@ -2231,7 +2231,7 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
             // cos and sin arrive as DATA rather than being computed here: both
             // need GLSL.std.450, which not every module imports, and this patch
             // must not begin refusing modules it used to accept.
-            uint32_t roll_c = 0, roll_s = 0;
+            uint32_t roll_c = 0, roll_s = 0, shift_x = 0, shift_y = 0;
             if (roll_on) {
                 const uint32_t p_rc = new_id();
                 emit(out, OpAccessChain,
@@ -2242,14 +2242,30 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
                 emit(out, OpCompositeExtract, {t_float, roll_c, rcs, 0});
                 roll_s = new_id();
                 emit(out, OpCompositeExtract, {t_float, roll_s, rcs, 1});
+                // Task #74: z and w are the head's shift, in metres, in the
+                // head's own frame. ONE path, not a second flag: with roll off
+                // the layer writes (1, 0) here, so d*cos + tx degenerates to
+                // d + tx and d*sin + ty to ty, both exactly right. A separate
+                // "translate" toggle in the shader would have made four
+                // combinations where the arithmetic only has one.
+                shift_x = new_id();
+                emit(out, OpCompositeExtract, {t_float, shift_x, rcs, 2});
+                shift_y = new_id();
+                emit(out, OpCompositeExtract, {t_float, shift_y, rcs, 3});
             }
 
             const uint32_t delta_base = new_id();
             emit(out, OpFMul, {t_float, delta_base, sx, d});
             uint32_t delta = delta_base;
             if (roll_on) {
+                const uint32_t dcos = new_id();
+                emit(out, OpFMul, {t_float, dcos, delta_base, roll_c});
+                // sx scales the shift the same way it scales the separation:
+                // both are view-space metres becoming clip units.
+                const uint32_t tsx = new_id();
+                emit(out, OpFMul, {t_float, tsx, sx, shift_x});
                 delta = new_id();
-                emit(out, OpFMul, {t_float, delta, delta_base, roll_c});
+                emit(out, OpFAdd, {t_float, delta, dcos, tsx});
             }
 
             const uint32_t ptr = via_struct ? new_id() : pos_var;
@@ -2282,8 +2298,12 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
                 emit(out, OpLoad, {t_float, sy_r, p_sy_r});
                 const uint32_t dy0 = new_id();
                 emit(out, OpFMul, {t_float, dy0, sy_r, d});
+                const uint32_t dsin = new_id();
+                emit(out, OpFMul, {t_float, dsin, dy0, roll_s});
+                const uint32_t tsy = new_id();
+                emit(out, OpFMul, {t_float, tsy, sy_r, shift_y});
                 const uint32_t dy = new_id();
-                emit(out, OpFMul, {t_float, dy, dy0, roll_s});
+                emit(out, OpFAdd, {t_float, dy, dsin, tsy});
                 const uint32_t y = new_id();
                 emit(out, OpCompositeExtract, {t_float, y, loaded, 1});
                 ny = new_id();
@@ -3254,7 +3274,7 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
 
     // Task #77's roll slot, as a one-member vec4 view of PoseBlock at its own
     // offset -- the SAME declaration patch_vertex_eye_offset makes, down to
-    // kPoseRollOffset. One buffer, one spelling: a second constant here is how
+    // kPoseEyeOfsOffset. One buffer, one spelling: a second constant here is how
     // the two stages would come to disagree about where the roll lives, which
     // is the whole class of defect this change is repairing.
     uint32_t roll_var = 0, ptr_roll_v4 = 0, c_zero_i = 0, t_roll_block = 0;
@@ -3335,7 +3355,7 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
         if (in.start == anno_at && roll_var) {
             emit(out, OpDecorate, {t_roll_block, DecorationBlock});
             emit(out, OpMemberDecorate,
-                 {t_roll_block, 0u, DecorationOffset, x4vr::kPoseRollOffset});
+                 {t_roll_block, 0u, DecorationOffset, x4vr::kPoseEyeOfsOffset});
             emit(out, OpDecorate,
                  {roll_var, DecorationDescriptorSet, roll_set});
             emit(out, OpDecorate, {roll_var, DecorationBinding, roll_binding});
@@ -3395,10 +3415,22 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
                 emit(out, OpCompositeExtract, {t_float, cs, rcs, 0});
                 const uint32_t sn = new_id();
                 emit(out, OpCompositeExtract, {t_float, sn, rcs, 1});
+                // Task #74: z and w carry the head's shift. Added here and
+                // multiplied by nothing, because unlike the vertex stage this
+                // matrix is already in view-space metres -- there is no sx to
+                // convert through. Same vector, both stages, one buffer.
+                const uint32_t tx = new_id();
+                emit(out, OpCompositeExtract, {t_float, tx, rcs, 2});
+                const uint32_t ty = new_id();
+                emit(out, OpCompositeExtract, {t_float, ty, rcs, 3});
+                const uint32_t dc = new_id();
+                emit(out, OpFMul, {t_float, dc, d, cs});
+                const uint32_t ds = new_id();
+                emit(out, OpFMul, {t_float, ds, d, sn});
                 d_row[0] = new_id();
-                emit(out, OpFMul, {t_float, d_row[0], d, cs});
+                emit(out, OpFAdd, {t_float, d_row[0], dc, tx});
                 d_row[1] = new_id();
-                emit(out, OpFMul, {t_float, d_row[1], d, sn});
+                emit(out, OpFAdd, {t_float, d_row[1], ds, ty});
             }
 
             // row r += d_row[r] * row 3, one column at a time. Both rows read
