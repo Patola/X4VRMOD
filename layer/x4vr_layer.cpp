@@ -6596,8 +6596,28 @@ void patch_view_before_submit() {
         const char *e = getenv("X4VR_DUMP_MATRICES");
         return e && *e && *e != '0';
     }();
-    if (ox == 0.0f && oy == 0.0f && oz == 0.0f && !dump)
+    if (ox == 0.0f && oy == 0.0f && oz == 0.0f && !dump) {
+        // Say so, once. Take 224 was spent on a `proj FIELD` report that could
+        // not fire: the whole walk below is gated here, and its absence from
+        // the log was indistinguishable from "the instrument is broken" or
+        // "this build predates it". I had checked that the report's inputs
+        // were non-empty in take 203's log without checking what take 203 set
+        // to produce them, which is the same mistake as reading a number
+        // without its configuration.
+        //
+        // A silent early return in an instrument is a lie of omission. Naming
+        // the knob costs one line per run and makes the next reader's grep
+        // self-explaining.
+        static bool said = false;
+        if (!said) {
+            said = true;
+            X4VR_LOG("proj: camera walk OFF — needs X4VR_DUMP_MATRICES=1 (or an "
+                     "X4VR_TEST_EYE_* offset). No proj CAMERA/VIEW/SHADOW/FIELD "
+                     "line can appear in this run, so nothing here speaks to "
+                     "the camera fields, the cascades, or #70");
+        }
         return;
+    }
 
     std::lock_guard<std::mutex> lock(g_track.mu);
     // winner of the frame so far = the main camera

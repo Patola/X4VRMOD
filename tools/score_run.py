@@ -1808,9 +1808,21 @@ def main(path):
     ffield = re.findall(r"layer\s+proj FIELD: (\d+) slot\(s\) tracked\. (.*)", text)
     fverd = re.findall(r"layer\s+proj FIELD: (UNJUDGED|MATCH|MISMATCH)([^\n]*)", text)
     if not ffield:
-        print("field   not reported — this build predates the #70 instrument, "
-              "or no camera block was credited, so this run says nothing about "
-              "whether the cascades and the scene share a field")
+        # Name the KNOB, the way the `classify` line above does. The first
+        # version of this message offered "predates the instrument, or no
+        # camera block was credited" and take 224 was neither: the walk that
+        # produces these lines is gated on X4VR_DUMP_MATRICES, which the run
+        # did not set. A message that lists every cause except the actual one
+        # sends the reader to debug the instrument.
+        if "camera walk OFF" in text:
+            print("field   not reported — the camera walk is OFF in this run. "
+                  "It needs X4VR_DUMP_MATRICES=1, and without it no proj "
+                  "CAMERA/VIEW/SHADOW/FIELD line can exist, so this run says "
+                  "nothing about #70 either way")
+        else:
+            print("field   not reported, and the layer did not say the walk was "
+                  "off either — so either this build predates the #70 "
+                  "instrument, or no camera block was credited at all")
     else:
         print(f"field   {ffield[-1][0]} slot(s): {ffield[-1][1]}")
         if fverd:

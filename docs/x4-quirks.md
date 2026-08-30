@@ -8315,6 +8315,70 @@ pose_set_index(), 0)` already exists — a vertex patch that reads that very
 buffer. The machinery is built; what is missing is a patch that uses it to
 scale the shear rather than to rotate the world.
 
+# Take 224 — the instrument could not fire, and #70 FADES rather than slides
+
+Two things, and the second is worth more than the first.
+
+## The instrument was gated on a knob I did not set
+
+`proj FIELD` did not appear. Neither did `proj CAMERA`, `proj VIEW` or `proj
+SHADOW` — **the entire camera walk has been dormant in every recent take**,
+because it sits behind:
+
+    if (ox == 0.0f && oy == 0.0f && oz == 0.0f && !dump)   // x4vr_layer.cpp
+        return;                                            // dump = X4VR_DUMP_MATRICES
+
+I validated the report by confirming its inputs were non-empty in take 203's
+log. They were. **I never checked what take 203 set in order to produce them**
+— and the answer was `X4VR_DUMP_MATRICES=1`, which take 224 did not carry. So
+the validation established that the data exists under some configuration and
+said nothing about the configuration I then asked for.
+
+That is "patched is not bound" wearing different clothes: builds clean, scorer
+parses, inputs exist — none of which is *executed*. The memory for it exists
+and says to drive new layer code on the GPU harness before spending a take. I
+did not, and it cost one.
+
+Two changes so the absence can never be silent again:
+
+* the layer names the knob on its way out of that early return, once per run
+* `score_run.py` reads that line and says so, instead of listing every cause
+  except the real one ("this build predates the instrument, or no camera block
+  was credited" — take 224 was neither)
+
+A silent early return in an instrument is a lie of omission, and the fix is one
+line per run.
+
+## The defect FADES, it does not slide
+
+Patola, unprompted and correcting the description this task has carried since
+it was filed: *"maybe a better description is that they are fading-in/fading-out,
+not changing position (this time at least)."*
+
+`#70`'s title says "darken progressively", and every model in this file so far
+has been built around the CSM **coordinate** drifting — a shadow that slides.
+A shadow that fades in and out is the shadow **factor** changing while its
+geometry stays put, and X4's own code has exactly two places that can do that,
+both driven by `view_pos.z` rather than by `coords.xy`:
+
+    fade = saturate((view_pos.z - 0.9 * F_shadowmaxdistance) / (0.1 * F_shadowmaxdistance))
+    return saturate(fade + GetCSMShadow(ndotl, coords))
+
+and the cascade **selection/blend** inside `GetCSMShadow`, chosen against the
+thresholds `[7.2 33.3 269.9 1856.4]`.
+
+This does not contradict the field-mismatch diagnosis — it sharpens it.
+`M_invprojection` maps clip back to view, so a projection mismatch corrupts the
+recovered **z**, not merely the lateral coordinate. And the corruption varies
+across the screen, so a cockpit surface's recovered z changes as the camera
+turns even though its true z never does. That is a shadow strength that fades
+with where you look, which is what he sees.
+
+**What it changes:** a fix validated only on "does the shadow sit still" could
+pass while leaving the z path wrong. The measurement has to cover the
+strength, not just the position — and `csm0-scale`, being `|row0|`, sees
+neither.
+
 # Take 223 — #70 IS the field mismatch, and `<fov>`=1.0 is not a fix we can ship
 
 Patola: *"this fixed the shadows issue... The shadows on the rails, the right
