@@ -8315,6 +8315,90 @@ pose_set_index(), 0)` already exists — a vertex patch that reads that very
 buffer. The machinery is built; what is missing is a patch that uses it to
 scale the shear rather than to rotate the world.
 
+# #70 — the FADE is proven from X4's source, and three leads are dead
+
+No run. Everything below is from X4's shipped GLSL and the stored logs.
+
+## Why it fades instead of sliding — this is the mechanism
+
+`GetCSMShadow` does not select a cascade. It **blends** across five of them:
+
+    vec4 weights = getCSMWeights(coords, ndotl);
+    Shadow += w0 * GetCSMSample3Taps(0, coords[0].xyz - ...);
+    Shadow += w1 * ...   // and so on
+    w4 = 1 - saturate(w0+w1+w2+w3);
+
+and the weights are a **tent function of all three components** of each
+cascade's coordinate:
+
+    vec3 base_weight = 2 * min(coord, -coord + 1);   // 0 at the box faces
+    weight = 3 * base_weight;
+    ret[i] = satElemMin3(weight);                    // min across x, y AND z
+
+So the shadow is a continuous function of `coords`. **A coordinate drift too
+small to visibly displace a shadow still redistributes the blend weights and
+changes its BRIGHTNESS.** That is exactly what Patola reported —
+*"fading-in/fading-out, not changing position"* — and it is derived from X4's
+code rather than fitted to the observation.
+
+Two consequences worth keeping:
+
+* the weight saturates once a coordinate is more than **1/6 of the box** from
+  any face, so small drifts are invisible and there is a KNEE, not a slope
+* `w4` absorbs whatever the first four do not cover, so the total wanders
+  smoothly rather than popping
+
+## Three leads, dead
+
+1. **`V_csmthresholds` — WITHDRAWN, and I promoted it one message too early.**
+   It has exactly one non-comment reader in all of X4's GLSL, inside
+   `CSMColorCascades`, which returns per-cascade debug COLOURS. The production
+   path never reads it. The "two threshold sets in one run" observation is a
+   *fingerprint* identifying which camera block is which — useful, but not a
+   mechanism.
+2. **Our `M_invprojection` correction — exonerated.** It is built from
+   `configured_ipd()` and `offaxis_target()`, and take 222 ran with ipd 0, no
+   off-axis and no pose rotation, making the patch an identity. The defect
+   persisted.
+3. **`assumed_proj_sx()` — not in the path, but it explains a failed
+   prediction.** It returns a hardcoded **0.889**, which is *no camera in the
+   run*: take 225 measured {0.70024, 1.33333, 1.00000, 3.78085}. The layer's
+   `stereo:` line prints this constant, which is why the `sx` I asked for as
+   take 223's acceptance check was byte-identical across the knob change. My
+   follow-up explanation — "a camera slot that ignores the setting" — was also
+   wrong. It was never reporting a camera at all.
+
+## The mismatch is a LADDER, and vanilla is not at zero
+
+X4's own configured field is **`<fov>` 1.1111** (81.9 deg, sx 1.1513), read
+from `config.xml`. So take 223's `fov=1.0` was **not** "X4's native field" as
+this file previously called it — it coincided exactly with the camera
+population pinned at sx 1.33333:
+
+    take 223   fov 1.0     render sx 1.33333   vs 1.33333    0% mismatch   clean
+    vanilla    fov 1.1111  render sx 1.15130   vs 1.33333   16% mismatch   clean
+    shipping   fov 1.4917  render sx 0.70024   vs 1.33333   90% mismatch   BROKEN
+
+Monotone in the mismatch, and consistent with the tent's knee: vanilla is not
+mismatch-free, it is merely under the threshold. **The knee sits somewhere
+between 16% and 90%**, and that is worth locating, because the minimum field
+that fills the panels (`X4VR_FOV` 1.275, sx 0.9325) is a **43%** mismatch — it
+may or may not be under the knee, and if it is not there is no field that both
+fills the headset and keeps the shadows.
+
+## The control nobody has run
+
+Every wide-field observation so far is confounded: the stereo shear, multiview,
+the bindless mirror and the patches were all live. **`X4VR_NO_LAYER=1` with
+`X4VR_FOV=1.4917` and nothing else** runs X4 with a widened `<fov>` and none of
+our rendering — the injector rewrites the config, the layer is not loaded.
+
+* shadows fade -> the wide field alone does it, in unmodified X4. #70 is "X4
+  does not support 110 deg for shadows", the layer is not implicated at all,
+  and the whole task changes shape
+* shadows stay put -> the field is harmless by itself and the defect is the
+  INTERACTION between the wide field and our rendering
+
 # Take 225 — I built an instrument that already existed, on the wrong object
 
 `proj FIELD` fired, and it was wrong three ways at once. It is removed.
