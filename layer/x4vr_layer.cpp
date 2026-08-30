@@ -6950,8 +6950,59 @@ void patch_view_before_submit() {
         // hold steady while the shadows still fade, the depth is sound and the
         // drift is LATERAL -- which no amount of widening the blend tent can
         // fix, and only rewriting M_shadowCSM would.
-        if (cblk && csm_debug_enabled())
+        // **X4VR_CSM_BANDS=a,b,c,d — move the colour bands onto the geometry.**
+        //
+        // Take 229's null was weak and I built it that way. The cockpit sits
+        // ~1 m out and the nearest stock threshold is 5.2 m, so the whole
+        // cockpit read one flat red and a depth error of several metres would
+        // have produced no colour change at all. "z stayed under 5.2" is not
+        // "z is accurate", and cascade 0 spans only 6.5 m, so an error well
+        // inside that bound could still swing the blend weights.
+        //
+        // Putting the band edges AT the cockpit turns a flat field into depth
+        // contours: any wobble in the reconstructed z then moves a visible
+        // line. Safe to write because V_csmthresholds is read by exactly
+        // mod-0175 and mod-0176 -- the same two global-light modules that read
+        // B_csmdebugcolor, and nothing else in all 409 dumps. It cannot reach
+        // the real shadow term, so it changes the readout and not the subject.
+        static const bool bands_on = getenv("X4VR_CSM_BANDS") != nullptr;
+        struct CsmBands {
+            float v[4];
+        };
+        static const CsmBands bands = [] {
+            CsmBands b{{5.2f, 23.9f, 195.1f, 1338.7f}};
+            const char *e = getenv("X4VR_CSM_BANDS");
+            if (e && *e) {
+                char *p = const_cast<char *>(e);
+                for (int i = 0; i < 4 && p && *p; i++) {
+                    b.v[i] = strtof(p, &p);
+                    while (p && (*p == ',' || *p == ' '))
+                        p++;
+                }
+            }
+            return b;
+        }();
+        if (cblk && csm_debug_enabled()) {
             ((uint32_t *)cblk)[x4vr::kCsmDebugColor] = 1u;
+            if (bands_on)
+                for (int i = 0; i < 4; i++)
+                    cblk[x4vr::kCsmThresholds + i] = bands.v[i];
+            // Once. Take 229 had no line at all, so the only evidence the
+            // write landed was Patola describing a red cockpit -- which is
+            // the channel this project keeps being told not to score from.
+            static bool said_csm = false;
+            if (!said_csm) {
+                said_csm = true;
+                X4VR_LOG("csm debug: B_csmdebugcolor=1 written to the camera "
+                         "block (member 63, byte 1520). Bands %s: "
+                         "[%.2f %.2f %.2f %.2f] m — cascade 0 red, 1 yellow, "
+                         "2 green, 3 cyan, beyond blue. Shadowed surfaces stay "
+                         "grey because the tint multiplies the GLOBAL LIGHT, "
+                         "which is ~0 in shadow",
+                         bands_on ? "FORCED" : "X4's own",
+                         bands.v[0], bands.v[1], bands.v[2], bands.v[3]);
+            }
+        }
         if (!cblk)
             continue;
         // A block X4 has not populated reads back zeros, and a zero matrix
