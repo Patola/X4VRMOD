@@ -8315,6 +8315,78 @@ pose_set_index(), 0)` already exists — a vertex patch that reads that very
 buffer. The machinery is built; what is missing is a patch that uses it to
 scale the shear rather than to rotate the world.
 
+# Take 225 — I built an instrument that already existed, on the wrong object
+
+`proj FIELD` fired, and it was wrong three ways at once. It is removed.
+
+    field  shadow-configured (125): {...}.  rendering (125): {...}   <- identical sets
+    field  MISMATCH — cascades fitted to 179.97 deg, scene rendered at 179.97 deg (1.0000x)
+
+**It printed MISMATCH while reporting the same number on both sides**, at
+179.97 degrees — a degenerate block, not a camera.
+
+1. **The partition does not partition.** All 125 slots landed in *both* halves.
+   `shadow_seen` means "read_shadow_terms could decode this block", which every
+   camera block permits; `masked_draws > 0` is true of nearly every slot. Two
+   predicates, neither selective, and I never asked what fraction they would
+   admit.
+2. **It was keyed on the wrong object.** Four lines above my verdict, in the
+   same output: `125 slot(s) carried 3 distinct projection(s) — cam#N is a UBO
+   slot, not a camera`. X4 re-points one slot at different sub-allocations, so
+   a slot has no single field to be classified by. The log stated the premise
+   was false in the same breath as the conclusion built on it.
+3. **The verdict read `begin()`** — the numerically smallest sx — so it named
+   the two most degenerate blocks in the set and ignored the 88 slots carrying
+   the actual scene.
+
+## And it duplicated a better instrument that predates the task
+
+    proj  4 distinct sx — compare this SET against the previous take's, not the range:
+          sx=0.70024   |sy/sx|=1.0000 109.998° = fov 1.492   x304  <- honours X4VR_FOV
+          sx=1.33333   |sy/sx|=1.0000  73.740° = fov 1.000   x241
+          sx=1.00000   |sy/sx|=1.0000  90.000° = fov 1.221   x120
+          sx=3.78085   |sy/sx|=1.5000  29.630° = fov 0.402   x23
+
+That is `score_run.py`'s `proj` section, from commit 7447533 — the sx SET, with
+counts, degrees, fov equivalents, and a marker for which entry honours the
+knob. It is exactly what I set out to build, **including the very rule I cited
+as the reason for building it** ("compare this SET ... not the range").
+
+It was invisible in takes 221-224 only because the camera walk was off. I
+grepped the layer for shadow instrumentation and grepped old logs for data, and
+never read the scorer section whose output I had been reading all session.
+
+**Before building an instrument, read what the existing one prints on a run
+that switched it on.** Absence of a section in recent logs is a statement about
+recent configurations, not about what exists.
+
+## What take 225 actually establishes
+
+* **Four fields coexist, not two.** The earlier "two populations = X4's field
+  and ours" reading was incomplete: there is also a 90 deg camera (fov 1.221)
+  and a 29.6 deg one at a *different aspect* (|sy/sx|=1.5, the only entry whose
+  aspect is not 1.0).
+* **Two cascade threshold sets are live in one run:**
+
+      V_csmthresholds: [5.2 23.9 195.1 1338.7]   <- the stored set for X4VR_FOV=1.4917
+                       [7.2 33.3 269.9 1856.4]   <- fov-INDEPENDENT
+
+  One tracks `<fov>`, one does not, and both are uploaded during the same
+  session. That is a **within-frame** inconsistency in the cascade fit, and it
+  is a better lead for #70 than a mismatch between camera populations.
+* It connects directly to the fading. `GetCSMShadow` selects a cascade by
+  comparing against these thresholds. Two sets in play means the same geometry
+  can be assigned to different cascades depending on which set the draw's block
+  carries — a different shadow map, so a different shadow **strength**. That is
+  a fade, not a slide.
+* **Half the run was unobserved**: `the layer's change budget ran out 119 s
+  into a 232 s session`. Anything absent from the sets above may simply not
+  have been looked at.
+
+The open question is now specific: **which threshold set does the deferred
+lighting pass read, and does it match the field that wrote the depth buffer it
+samples?**
+
 # Take 224 — the instrument could not fire, and #70 FADES rather than slides
 
 Two things, and the second is worth more than the first.

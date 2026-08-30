@@ -6597,24 +6597,25 @@ void patch_view_before_submit() {
         return e && *e && *e != '0';
     }();
     if (ox == 0.0f && oy == 0.0f && oz == 0.0f && !dump) {
-        // Say so, once. Take 224 was spent on a `proj FIELD` report that could
-        // not fire: the whole walk below is gated here, and its absence from
-        // the log was indistinguishable from "the instrument is broken" or
-        // "this build predates it". I had checked that the report's inputs
-        // were non-empty in take 203's log without checking what take 203 set
-        // to produce them, which is the same mistake as reading a number
-        // without its configuration.
+        // Say so, once. Take 224 was spent on a report that could not fire:
+        // this walk is gated here, and its absence from the log was
+        // indistinguishable from "the instrument is broken" or "this build
+        // predates it". I had checked that the data existed in take 203's log
+        // without checking what take 203 SET to produce it, which is the same
+        // mistake as reading a number without its configuration.
         //
         // A silent early return in an instrument is a lie of omission. Naming
         // the knob costs one line per run and makes the next reader's grep
-        // self-explaining.
+        // self-explaining. Everything score_run.py's `proj`, `view` and
+        // `shadow` sections report -- including the sx SET that answers #70 --
+        // is downstream of this return.
         static bool said = false;
         if (!said) {
             said = true;
             X4VR_LOG("proj: camera walk OFF — needs X4VR_DUMP_MATRICES=1 (or an "
-                     "X4VR_TEST_EYE_* offset). No proj CAMERA/VIEW/SHADOW/FIELD "
-                     "line can appear in this run, so nothing here speaks to "
-                     "the camera fields, the cascades, or #70");
+                     "X4VR_TEST_EYE_* offset). No proj CAMERA/VIEW/SHADOW line "
+                     "can appear in this run, so nothing here speaks to the "
+                     "camera fields, the cascades, or #70");
         }
         return;
     }
@@ -6732,15 +6733,6 @@ void patch_view_before_submit() {
             bool shadow_seen = false;
             float shadow_scale = 0.0f;
             uint32_t shadow_changes = 0;
-            // Task #70. Accumulated across the run, not sampled: the FIELD
-            // report below has to say which slots X4 actually renders THROUGH,
-            // and one frame's count is not that. `masked_draws` is the
-            // observed fact that our per-eye transforms reach this slot --
-            // recorded where it is seen rather than re-derived at report time,
-            // because a report that recomputes its own classification can
-            // evaluate a different predicate than the code did.
-            uint64_t draws = 0, masked_draws = 0;
-            float last_sx = 0.0f;
         };
         static std::map<ViewSlot, ProjState> cams;
         static uint32_t next_id = 0, total = 0;
@@ -6950,13 +6942,6 @@ void patch_view_before_submit() {
         if (it == cams.end())
             continue;
         ProjState &c = it->second;
-        // Task #70's inputs, accumulated on every credited draw regardless of
-        // whether any line below is logged. Every budget in this block is a
-        // LOGGING budget; tying the measurement to it would make the field
-        // report describe the first 400 changes rather than the run.
-        c.draws += slot_n;
-        if (t.ok && t.sx != 0.0f)
-            c.last_sx = t.sx;
         // Task #35 depends on this sign, so the run has to be able to refute
         // it. patch_vertex_eye_offset_mvp recovers |sy| from a squared length
         // and supplies the minus from measurement -- 35,783 sampled blocks
@@ -7074,7 +7059,6 @@ void patch_view_before_submit() {
             if (mi != g_track.credit_masked.end())
                 masked_n = mi->second;
         }
-        c.masked_draws += masked_n; // task #70, see ProjState
         if (!vt.ok) {
             if (!g_track.logged_view_fail) {
                 g_track.logged_view_fail = true;
@@ -7224,116 +7208,6 @@ void patch_view_before_submit() {
         }
         }
 
-        // ---- task #70: the field SET, shadow-configured against rendering --
-        //
-        // Take 223 fixed the shifting shadows by dropping <fov> to 1.0, and
-        // the acceptance check I wrote for it asked for a single number --
-        // `sx` out of the `stereo:` line. That number was BYTE-IDENTICAL
-        // across a 33% change in the knob that sets it, because
-        // X4VR_PROJ_LIVE reports whichever camera the logging draw used and
-        // take 202 had already established that X4 runs several cameras with
-        // some slots ignoring <fov> entirely. The existing rule is written
-        // down: compare value SETS across a knob change, not summaries. This
-        // is that rule made into an instrument.
-        //
-        // What it reports is the partition, because the defect IS a partition:
-        // all 58 shadow-configured slots sat at sx=1.33333 (73.74 deg, X4's
-        // own field) while the scene rendered at 0.70024 (110 deg). view_pos
-        // comes from a depth buffer written by one and M_shadowCSM was built
-        // for the other, so the cancellation that keeps a cockpit shadow still
-        // under rotation fails by the gap between them.
-        //
-        // PERIODIC, not final. `invproj final` is the cautionary case: a
-        // perfectly good count that no recent run has ever printed, because
-        // these runs are killed rather than quit and never reach teardown.
-        {
-            static double last_field = 0.0;
-            timespec fts{};
-            clock_gettime(CLOCK_MONOTONIC, &fts);
-            const double fnow = fts.tv_sec + fts.tv_nsec * 1e-9;
-            if (fnow - last_field >= 20.0) {
-                last_field = fnow;
-                // Grouped on sx rounded to 4 dp: X4 re-uploads the same field
-                // with float noise, and an ungrouped list would read as dozens
-                // of distinct fields when there are two.
-                std::map<int, std::pair<uint32_t, uint32_t>> shadow_set, render_set;
-                uint32_t nsh = 0, nrend = 0;
-                for (const auto &[sl, st2] : cams) {
-                    (void)sl;
-                    if (st2.last_sx == 0.0f)
-                        continue;
-                    const int key = (int)std::lround(st2.last_sx * 10000.0f);
-                    if (st2.shadow_seen) {
-                        shadow_set[key].first++;
-                        shadow_set[key].second += (uint32_t)st2.draws;
-                        nsh++;
-                    }
-                    if (st2.masked_draws > 0) {
-                        render_set[key].first++;
-                        render_set[key].second += (uint32_t)st2.draws;
-                        nrend++;
-                    }
-                }
-                auto fmt = [](const std::map<int, std::pair<uint32_t, uint32_t>> &s,
-                              char *out, size_t n) {
-                    size_t off = 0;
-                    out[0] = '\0';
-                    for (const auto &[k, v] : s) {
-                        const float sx = k / 10000.0f;
-                        // sx = 1/tan(half), so the field is what the reader
-                        // actually wants to compare against X4VR_FOV.
-                        const float deg = 2.0f * std::atan(1.0f / sx) *
-                                          57.2957795130823f;
-                        const int w = std::snprintf(
-                            out + off, off < n ? n - off : 0,
-                            "%s%.4f (%.1f deg) x%u slot(s), %u draw(s)",
-                            off ? ", " : "", sx, deg, v.first, v.second);
-                        if (w <= 0 || (size_t)w >= (off < n ? n - off : 0))
-                            break;
-                        off += (size_t)w;
-                    }
-                };
-                char sbuf[512], rbuf[512];
-                fmt(shadow_set, sbuf, sizeof sbuf);
-                fmt(render_set, rbuf, sizeof rbuf);
-                X4VR_LOG("proj FIELD: %zu slot(s) tracked. shadow-configured "
-                         "(%u): {%s}. rendering, i.e. drawing into view-masked "
-                         "passes (%u): {%s}",
-                         cams.size(), nsh, nsh ? sbuf : "none seen", nrend,
-                         nrend ? rbuf : "none seen");
-                // The verdict, and it must be able to decline. A report that
-                // can only say MATCH or MISMATCH would say MATCH on a run that
-                // saw neither population, which is the shape of every false
-                // pass this project has paid for.
-                if (!nsh || !nrend) {
-                    X4VR_LOG("proj FIELD: UNJUDGED — %s seen, so this run says "
-                             "nothing about #70's mismatch either way",
-                             !nsh && !nrend
-                                 ? "neither a shadow-configured nor a rendering "
-                                   "slot was"
-                                 : (!nsh ? "no shadow-configured slot was"
-                                         : "no rendering slot was"));
-                } else if (shadow_set.size() == 1 && render_set.size() == 1 &&
-                           shadow_set.begin()->first == render_set.begin()->first) {
-                    X4VR_LOG("proj FIELD: MATCH — the cascades are fitted to "
-                             "the same field X4 renders, so #70's mechanism is "
-                             "absent from this configuration");
-                } else {
-                    const float ssx = shadow_set.begin()->first / 10000.0f;
-                    const float rsx = render_set.begin()->first / 10000.0f;
-                    const float sdeg =
-                        2.0f * std::atan(1.0f / ssx) * 57.2957795130823f;
-                    const float rdeg =
-                        2.0f * std::atan(1.0f / rsx) * 57.2957795130823f;
-                    X4VR_LOG("proj FIELD: MISMATCH — cascades fitted to %.2f "
-                             "deg, scene rendered at %.2f deg (%.4fx). This is "
-                             "#70: view_pos comes from one field and "
-                             "M_shadowCSM was built for the other, so shadows "
-                             "slide by the gap as the camera turns",
-                             sdeg, rdeg, sdeg != 0.0f ? rdeg / sdeg : 0.0f);
-                }
-            }
-        }
     }
 
     if (ox == 0.0f && oy == 0.0f && oz == 0.0f)

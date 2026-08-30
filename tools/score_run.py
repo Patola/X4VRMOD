@@ -1797,45 +1797,24 @@ def main(path):
                 f"triangles, so nothing measured in this run about geometry is "
                 f"evidence")
 
-    # --- task #70: the field the cascades were fitted to vs the one we render -
+    # The camera walk that produces `proj`, `view` and `shadow` above is gated
+    # on X4VR_DUMP_MATRICES, and take 224 was spent on a run that did not set
+    # it. Absence of those sections then reads as "the instrument is broken"
+    # rather than "it was never switched on", so name the knob.
     #
-    # This section exists because take 223's acceptance check was a grep for a
-    # single `sx`, and that number came back byte-identical across a 33% change
-    # in the knob that sets it -- X4 runs several cameras and the one the
-    # `stereo:` line happens to report ignores <fov>. The layer now emits the
-    # SET, partitioned, and this reads the LAST report because the counts
-    # accumulate over the run.
-    ffield = re.findall(r"layer\s+proj FIELD: (\d+) slot\(s\) tracked\. (.*)", text)
-    fverd = re.findall(r"layer\s+proj FIELD: (UNJUDGED|MATCH|MISMATCH)([^\n]*)", text)
-    if not ffield:
-        # Name the KNOB, the way the `classify` line above does. The first
-        # version of this message offered "predates the instrument, or no
-        # camera block was credited" and take 224 was neither: the walk that
-        # produces these lines is gated on X4VR_DUMP_MATRICES, which the run
-        # did not set. A message that lists every cause except the actual one
-        # sends the reader to debug the instrument.
-        if "camera walk OFF" in text:
-            print("field   not reported — the camera walk is OFF in this run. "
-                  "It needs X4VR_DUMP_MATRICES=1, and without it no proj "
-                  "CAMERA/VIEW/SHADOW/FIELD line can exist, so this run says "
-                  "nothing about #70 either way")
-        else:
-            print("field   not reported, and the layer did not say the walk was "
-                  "off either — so either this build predates the #70 "
-                  "instrument, or no camera block was credited at all")
-    else:
-        print(f"field   {ffield[-1][0]} slot(s): {ffield[-1][1]}")
-        if fverd:
-            v, rest = fverd[-1]
-            print(f"field   {v}{rest}")
-            # Deliberately NOT a fail. #70 is open and every shipping-config
-            # run has it, and this file's own history says a scorer that fails
-            # a good run teaches the reader to skip the verdict. Promote this
-            # to fails.append() the moment a fix lands, because from then on a
-            # MISMATCH is a regression rather than the known state.
-            if v == "MISMATCH":
-                print("field   ^ this is #70, and it is OPEN — expected in any "
-                      "run at the shipping field, not a failure of this run")
+    # There is deliberately no separate #70 verdict here. I built one --
+    # `proj FIELD`, partitioning slots into shadow-configured and rendering --
+    # and it was wrong at the design level: `proj` above already reports the sx
+    # SET with counts, degrees and which entry honours X4VR_FOV, and it said so
+    # before this task existed. Worse, my partition keyed on the SLOT, while the
+    # same output states "cam#N is a UBO slot, not a camera", so all 125 slots
+    # landed in both halves and the verdict printed "MISMATCH -- 179.97 deg vs
+    # 179.97 deg (1.0000x)". Read the `proj` set; it is the better instrument.
+    if "camera walk OFF" in text:
+        print("field   the camera walk is OFF in this run — it needs "
+              "X4VR_DUMP_MATRICES=1, and without it the proj/view/shadow "
+              "sections above cannot exist, so this run says nothing about "
+              "the camera fields, the cascades, or #70")
     # --- did the cascade come from the block X4's shaders sample? -----------
     #
     # The layer prints `proj OBJBLOCK:` once it has walked the object slots.
