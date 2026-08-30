@@ -8315,6 +8315,83 @@ pose_set_index(), 0)` already exists — a vertex patch that reads that very
 buffer. The machinery is built; what is missing is a patch that uses it to
 scale the shear rather than to rotate the world.
 
+# Take 223 — #70 IS the field mismatch, and `<fov>`=1.0 is not a fix we can ship
+
+Patola: *"this fixed the shadows issue... The shadows on the rails, the right
+arm of the ship and other parts are consistently still now."* Not just the
+cockpit — the whole ship. `#70` is the mismatch between the field X4 renders
+and the field its shadow cascades are fitted to.
+
+The injector rewrites X4's `<fov>` in an in-memory config, so this is a real
+change to X4's own projection and not a layer-side reinterpretation:
+
+    take 222   config: effective fov=1.4917 res=1408x1408 (fov from X4VR_FOV)
+    take 223   config: effective fov=1.0    res=1408x1408 (fov from X4VR_FOV)
+
+## MY PREDICTION WAS WRONG, in the way this project already documented
+
+I committed to `sx=1.3333` appearing in take 223's `stereo:` line. It reports
+**`sx=0.8890` — byte-identical to take 222's**, across a 33% change in the
+knob that is supposed to set it.
+
+`X4VR_PROJ_LIVE=1` makes that line report the *live* sx from whichever camera
+block the logging draw happened to use, and take 202 already established that
+**X4 runs several cameras at once and some slots ignore the `<fov>` setting**.
+The existing memory says it in one line: *compare value SETS across a knob
+change, not summaries.* I quoted a summary. Agreement where there should have
+been a difference is an alarm, and it was sitting in the output I asked for.
+
+The mechanism survived only because `config: effective fov` is a different
+observable that did move. **Predicting the wrong observable is not the same as
+predicting the wrong mechanism, and the run cannot tell them apart** — a
+correct mechanism validated by a wrong prediction is one coincidence away from
+a wrong mechanism validated the same way.
+
+## Why `<fov>`=1.0 cannot be the answer, independent of shadows
+
+    take 223   pose residual: X4VR_FOV=1.0000 renders 73.7 deg,
+               runtime wants 94.0 x 99.0 deg per eye
+
+**X4 draws 20.3 degrees per eye less than the headset displays.** The edges are
+fed by geometry X4 never rendered. That is the exact condition `offaxis:
+WARNING` exists to catch, and it did not fire here only because this run did
+not enable the off-axis path — so the guard was absent, not satisfied.
+
+So the floor on the field is **`X4VR_FOV` ≈ 94.0 / 73.7399 = 1.275** just to
+fill the panels, before any margin for head rotation. `#70` is present there
+too. **There is no value of this knob that both fills the headset and fixes the
+shadows**, which makes it a knob setting we cannot ship rather than a fix.
+
+## And the trade is NOT performance
+
+    take 222   GAMEPLAY 6.98 ms (143 fps)   fov 1.4917, 110.0 deg
+    take 223   GAMEPLAY 6.92 ms (145 fps)   fov 1.0000,  73.7 deg
+
+Narrowing the field by a third bought **0.06 ms**. At 1408x1408 per eye this
+render is not fill-bound, so the wide field costs essentially nothing in frame
+time. The trade is field-of-view against shadow correctness and nothing else,
+which is worth knowing before anyone proposes buying shadows with resolution.
+
+## What has to happen next
+
+The shadow-configured slots sit at `sx=1.33333` — X4's default field — and
+appear **pinned** there while `<fov>` moves the rendering camera. At fov 1.0
+the rendering camera lands on 1.33333 too, they agree, and the defect vanishes.
+So:
+
+* **(a) make the shadow side follow the wide field** — needs to know what pins
+  it. NOT a config value: `config.xml` carries only `<shadows>2</shadows>` and
+  `<softshadows>true</softshadows>`, which are quality, not field.
+* **(b) correct the shadow term in the shader** — we already patch fragment
+  modules for `M_invprojection`; this composes a known field correction before
+  the CSM lookup. Same class as #22/#39, which work.
+* **(c) narrow the field** — refuted above, and #24 exists to prevent it.
+
+Before any of that, the mismatch needs to be **objectively measurable**: report
+the sx *set* per run, shadow-configured slots against the rendering slot. That
+is what take 223 should have been scored on, and it is the instrument that lets
+a fix be validated without spending Patola's eyes on every candidate.
+
 # Take 222 — the eye offset is NOT it, and the two camera populations get names
 
 `X4VR_IPD=0.0`, confirmed in the log as `stereo: ipd=0.0000 sx=0.8890 near=0.100
