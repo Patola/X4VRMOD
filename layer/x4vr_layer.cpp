@@ -203,15 +203,25 @@ static bool poselog_enabled() {
 
 // Task #77: turn the eye disparity by the head's roll.
 //
-// **Off by default, and it must stay that way until a take has judged it.**
-// The arithmetic is proven (tests/view_math.cpp: 25.9% of the disparity goes
-// vertical at 15 deg of tilt, 0.0000% with this on) and the codegen is proven
-// (run-multiview-render.sh, byte-identical when off, spirv-val when on) --
-// but "proven offline" and "correct on X4's own shaders in motion" are
-// different claims, and every state tagged before this one was recorded with
-// it absent. A default that changes what a re-run reproduces is not a default.
+// **ON by default since take 221**, which is the condition the previous
+// comment here set: "off by default, and it must stay that way until a take
+// has judged it". Take 221 judged it on two independent channels -- the
+// scorer read the sign off the log (17 of 17 tilted samples) and Patola
+// reported the compensated arm comfortable at every tilt in both directions.
+// Tagged as v0.77-roll-stereo with the default still OFF, so the validated
+// state reproduces exactly at that tag.
+//
+// Default-ON rather than opt-in because the defect it removes is invisible to
+// the person suffering it: a 15 deg head tilt, held unconsciously, puts 25.9%
+// of the disparity VERTICAL, and vertical disparity cannot be fused at all --
+// it produces strain rather than a visible artifact to complain about. An
+// opt-in knob protects nobody who does not already know to set it.
+//
+// Still guarded at the call site: roll_on additionally requires pose_active()
+// and refuses to combine with the off-axis path, so this engages only in the
+// configuration take 221 validated. X4VR_ROLL_STEREO=0 turns it off.
 static bool roll_stereo_enabled() {
-    static const bool on = x4vr::env_on("X4VR_ROLL_STEREO", false);
+    static const bool on = x4vr::env_on("X4VR_ROLL_STEREO", true);
     return on;
 }
 
