@@ -8315,6 +8315,40 @@ pose_set_index(), 0)` already exists — a vertex patch that reads that very
 buffer. The machinery is built; what is missing is a patch that uses it to
 scale the shear rather than to rotate the world.
 
+# Take 228 — the knee is BELOW the floor. #70 is PARKED at Patola's decision.
+
+    A  fov 1.20  res 1408x1408   CLEAN
+    B  fov 1.28  res 1408x1408   FADE
+
+At the shipping aspect the knee is between **fov 1.20 (88.5 deg)** and **1.28
+(94.4 deg)**. The floor that fills the panels is **1.3426 (99 deg)**, above
+both. **No field both fills the headset and keeps the shadows.**
+
+The aspect prediction also held: 2:1 put the knee near 1.35, 1:1 puts it near
+1.28. A larger vertical field at equal `<fov>` moves the knee DOWN, which is
+the direction predicted from the frustum being larger, and is the reason the
+first measurement did not transfer.
+
+    aspect   clean   fades   knee between
+    2:1      1.20    1.35    1.20 .. 1.35
+    1:1      1.20    1.28    1.20 .. 1.28   <- shipping
+
+## Decision: ship 1.4917 and carry the defect
+
+Patola: *"I would say we go with our intended FOV now, like if this issue
+didn't exist. Since we confirmed that it is internal to X4, I will not struggle
+with it at this point of the mod."*
+
+So `X4VR_FOV=1.4917` stands, #70 is a **known, characterised, upstream**
+defect, and it is deferred to an end-of-project brainstorm rather than
+blocking. Nothing in the code changes; the knob was never altered.
+
+**What #70 is NOT, established and not to be re-litigated:** not the roll
+compensation, not the per-eye `M_invprojection` correction, not
+`M_invprojection_uj`, not the cascade thresholds, not `assumed_proj_sx`, and
+not the Vulkan layer in any part — take 226 reproduced it with the layer
+unloaded.
+
 # Take 227 — the knee is real, but I measured it at the WRONG ASPECT
 
     A  fov 1.35  res 2816x1408   shadows FADE
