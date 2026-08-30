@@ -8315,6 +8315,71 @@ pose_set_index(), 0)` already exists — a vertex patch that reads that very
 buffer. The machinery is built; what is missing is a patch that uses it to
 scale the shear rather than to rotate the world.
 
+# Take 222 — the eye offset is NOT it, and the two camera populations get names
+
+`X4VR_IPD=0.0`, confirmed in the log as `stereo: ipd=0.0000 sx=0.8890 near=0.100
+-> shear m8 L=0.00000 R=-0.00000`. Patola: *"the shifting shadows appear even
+with IPD 0."* The per-eye reconstruction hypothesis is **refuted**.
+
+In hindsight the classification already implied it: with the deferred lighting
+pass `unsheared`, the only per-eye influence on the shadow term was through
+`M_invprojection`, and at ipd 0 that correction composes with an identity.
+
+## What the yaw-dependence actually requires
+
+Cockpit shadows are static in vanilla for a reason worth stating, because it is
+the whole diagnosis. The cockpit and the sun do not move relative to each other
+when you look around, so the shadow on a cockpit surface must not change. The
+shader computes `mul(vec4(view_pos,1), M_shadowCSM0)`, and BOTH factors change
+as the camera rotates: `view_pos` rotates one way, `M_shadowCSM0` — which X4
+rebuilds each frame as view->shadow — rotates the other. **The product is
+invariant, and vanilla's static shadows are that cancellation working.**
+
+So a shadow that moves with yaw means the two factors were built from
+**different camera orientations or different fields**, and the residual grows
+with the angle. That is the shape of the defect, independent of which of our
+changes causes it.
+
+## The two camera populations are X4's field and ours
+
+Take 202 recorded, as an unexplained fact, that camera slots fall into two
+disjoint groups — 85 slots only ever showing `sx=1.33333`, 38 only ever showing
+`sx=0.70024` — and that **all 58 shadow-configured slots are in the 1.33333
+group**. The layer's own law names them:
+
+    full_deg = X4VR_FOV * 73.7399        (x4vr_layer.cpp:10148)
+    sx       = 1 / tan(full_deg / 2)
+
+    X4VR_FOV = 1.0     ->  73.74 deg  ->  sx = 1.33333   <- all 58 shadow slots
+    X4VR_FOV = 1.4917  -> 110.00 deg  ->  sx = 0.70024   <- what we render into
+
+**X4 attaches the cascade configuration to a camera at its native field, and we
+render the scene at 110 degrees.** `view_pos` is reconstructed from a depth
+buffer written by the wide camera; `M_shadowCSM0` was built for the narrow one.
+The cancellation above is between exactly those two, and `X4VR_IPD` does not
+appear anywhere in it — which is why take 222 changed nothing.
+
+## `csm0-scale` could never have seen this
+
+`proj SHADOW` reports `csm0-scale = |row0|` — a **magnitude**. A rotation or
+field mismatch leaves the magnitude untouched, so the instrument built to watch
+the cascades is structurally incapable of reporting this defect. That is the
+same blind spot as `score_run.py` taking `abs()` of the roll samples, found two
+days earlier in this same session, and the same root cause: both were built to
+answer "how big", and the question is "which way".
+
+## The discriminator: X4VR_FOV=1.0
+
+One knob, and it makes the rendered camera and the shadow-configured camera the
+same field. Predicted log line: `sx=1.3333`, matching the 58 slots exactly.
+
+- shadows stop tracking yaw -> #70 is the field mismatch, and the fix is to
+  make the cascade configuration follow the field we actually render, or to
+  reconstruct the shadow term in the frame the cascades were built for
+- shadows still track yaw -> the field is not it either, and what remains is
+  the doubled-pass machinery itself: multiview, the bindless mirror's per-view
+  descriptor offset, and the 1:1 render aspect
+
 # #70 — the vanilla control says the shadows are OURS
 
 Patola, on stock X4, in **the same scene** where he sees the defect: *"Vanilla
