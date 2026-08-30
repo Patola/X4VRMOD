@@ -8315,6 +8315,39 @@ pose_set_index(), 0)` already exists — a vertex patch that reads that very
 buffer. The machinery is built; what is missing is a patch that uses it to
 scale the shear rather than to rotate the world.
 
+# Take 227 — the knee is real, but I measured it at the WRONG ASPECT
+
+    A  fov 1.35  res 2816x1408   shadows FADE
+    B  fov 1.20  res 2816x1408   shadows CLEAN
+
+So there is a knee, and at this aspect it lies between fov 1.20 and 1.35.
+
+**But `res=2816x1408` is 2:1, and every VR run renders 1408x1408 at 1:1.** I
+omitted `X4VR_RES` from the control commands, and the launcher only halves the
+width when `X4VR_SBS=1`, which these runs did not set — so the full SBS width
+survived into X4's config.
+
+The comment at that exact line in `x4vr-launch.sh` describes take 101 making
+the same class of mistake: *"the aspect test that run was supposed to be
+measured nothing, because the aspect never changed."* Mine changed an aspect I
+did not intend to change, which is the same failure read backwards.
+
+`<fov>` sets the HORIZONTAL field, so at equal fov a 2:1 render has the same
+horizontal and about half the vertical tangent — a smaller frustum. **The knee
+above is therefore measured on an easier configuration than the one we ship.**
+
+What survives the mistake:
+
+* the extremes agree across both aspects — 1.4917 fades at 2:1 (take 226) and
+  at 1:1 (every VR run), and 1.0 was clean at 1:1 (take 223)
+* so the ladder is real; only the knee's POSITION is unmeasured at 1:1
+
+What it probably means, flagged as inference and not measurement: if 1.35
+already fades at the easier aspect, then 1.3426 — the floor that fills the
+panels — is unlikely to survive at 1:1, and **no panel-filling field would
+exist**. That rests on an unproven assumption about which axis drives the
+coordinate drift, so it is a prediction to test, not a conclusion.
+
 # Take 226 — #70 IS X4's, not ours. The layer was never involved.
 
     X4VR_TAKE=226-FOVCTRL X4VR_NO_LAYER=1 X4VR_FOV=1.4917 ...
