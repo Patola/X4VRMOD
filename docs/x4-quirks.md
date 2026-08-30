@@ -8315,6 +8315,67 @@ pose_set_index(), 0)` already exists — a vertex patch that reads that very
 buffer. The machinery is built; what is missing is a patch that uses it to
 scale the shear rather than to rotate the world.
 
+# Take 226 — #70 IS X4's, not ours. The layer was never involved.
+
+    X4VR_TAKE=226-FOVCTRL X4VR_NO_LAYER=1 X4VR_FOV=1.4917 ...
+
+No Vulkan layer loaded. No shear, no multiview, no bindless mirror, no
+patched module — only the injector rewriting `<fov>` to 110 degrees.
+Patola: *"The shadows fade, that is, I see the same defect I was seeing in our
+runs."*
+
+**A widened `<fov>` reproduces #70 in otherwise-unmodified X4.** Every wide-field
+observation before this was confounded with the whole rendering stack; this one
+is not. The layer is exonerated completely, and so is every hypothesis in this
+file that named one of its transforms.
+
+It also names the thing that killed the earlier attempts. The standing memory
+of the previous X4 VR project is that *globally-applied shadows were its
+recurring problem*; the mechanism is now known — X4's cascade blend weights are
+a tent over the shadow coordinate, and a wide field walks the coordinates far
+enough that the weights start moving.
+
+## This reframes #70 from a defect to a CONSTRAINT
+
+We are still the ones setting `<fov>`, so it is still our decision — a player
+in vanilla would never choose 110 degrees and would never see this. The
+question is no longer "what did we break" but **"what field can we ship"**.
+
+    fov      field      sx        mismatch vs 1.33333   shadows
+    1.0000    73.74     1.33333       0.0%              clean   (take 223)
+    1.1111    81.93     1.15174      15.8%              clean   (vanilla default)
+    1.2000    88.49     1.02675      29.9%              ?
+    1.3426    99.00     0.85403      56.1%              ?   <- floor to fill the panels
+    1.4000   103.24     0.79208      68.3%              ?
+    1.4917   110.00     0.70024      90.4%              BROKEN  (take 226)
+
+**Correction to the previous entry: the floor is 1.3426, not 1.275.** The
+runtime wants 94.0 x 99.0 deg per eye and the render aspect is |sy/sx| = 1.0,
+so the binding constraint is the **vertical** 99, not the horizontal 94. That
+puts the cheapest shippable field at a 56% mismatch rather than 43%.
+
+And 1.3426 fills the panels with **zero margin** for the compositor's
+reprojection, which take 225 measured at up to 4.03 deg. A field that exactly
+covers the panels leaves the edges of a reprojected frame fed by nothing.
+
+## Testing is now cheap for the first time in this project
+
+`X4VR_NO_LAYER=1` + flatscreen + no headset + ~2 minutes per arm. No comfort
+judgement, no stereo, no VR setup — just "do the cockpit shadows fade when I
+mouselook". The knee can be bisected in an afternoon, which is not true of any
+other question this project has faced.
+
+The decision point is **1.35** (just above the floor). Clean there means a
+shippable field exists; broken means none does via `<fov>`, and the fallback is
+a design change rather than a value — accept a narrower virtual view, or find
+another way to widen what X4 draws.
+
+A second axis exists if the field one fails: `<shadows>` and `<softshadows>`
+are in the same `config.xml` the injector already rewrites. `F_csm_blendstrength`
+is NOT that axis — `getCSMWeights` overwrites it (`w = 100000; w = 10;`) and
+the value is dead — but the quality level may change cascade count or map size,
+which do reach the blend.
+
 # #70 — the FADE is proven from X4's source, and three leads are dead
 
 No run. Everything below is from X4's shipped GLSL and the stored logs.
