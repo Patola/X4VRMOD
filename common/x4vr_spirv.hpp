@@ -2941,9 +2941,34 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
                                        const OffAxis *oa_left = nullptr,
                                        const OffAxis *oa_right = nullptr,
                                        uint32_t pose_set = 0xffffffffu,
-                                       uint32_t pose_binding = 0) {
+                                       uint32_t pose_binding = 0,
+                                       uint32_t roll_set = 0xffffffffu,
+                                       uint32_t roll_binding = 0) {
     std::vector<Inst> insts;
     if (!iterate(code, insts))
+        return false;
+
+    // **Task #77's regression.** The vertex stage displaces the eye along
+    // (cos roll, sin roll); this function undoes it. Before this parameter
+    // existed it undid a purely horizontal d, so from the moment #77 shipped
+    // the two were no longer the same map and the reconstruction was wrong by
+    // d*(cos-1, sin) -- 1.08*d at 65 degrees, larger than the eye offset.
+    //
+    // Refused rather than guessed at, exactly as patch_vertex_eye_offset
+    // refuses roll together with the off-axis affine: #61's R^-1 wants to own
+    // the same composition, the combination has never run, and #33's rotation
+    // is off in every current take. So this costs nothing today and stops a
+    // silently-wrong module tomorrow.
+    if (roll_set != 0xffffffffu && pose_set != 0xffffffffu)
+        return false;
+    // ...and the off-axis affine, because patch_vertex_eye_offset refuses
+    // that pair. The two stages must accept and refuse the SAME set: a
+    // fragment module patched for a combination the vertex stage declined
+    // would undo an offset that was never applied, which is this regression
+    // again with the sign flipped. The layer's roll_active() already excludes
+    // it, so this only closes the direct-call door -- which is the door the
+    // harness comes through.
+    if (roll_set != 0xffffffffu && (oa_left != nullptr || oa_right != nullptr))
         return false;
 
     uint32_t bound = code[3];
@@ -3227,6 +3252,30 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
         emit(decls, OpConstant, {t_int, c_one_i, 1});  // member 1 = r_inv
     }
 
+    // Task #77's roll slot, as a one-member vec4 view of PoseBlock at its own
+    // offset -- the SAME declaration patch_vertex_eye_offset makes, down to
+    // kPoseRollOffset. One buffer, one spelling: a second constant here is how
+    // the two stages would come to disagree about where the roll lives, which
+    // is the whole class of defect this change is repairing.
+    uint32_t roll_var = 0, ptr_roll_v4 = 0, c_zero_i = 0, t_roll_block = 0;
+    if (roll_set != 0xffffffffu) {
+        if (!t_int) {
+            t_int = new_id();
+            emit(decls, OpTypeInt, {t_int, 32, 1});
+        }
+        t_roll_block = new_id();
+        emit(decls, OpTypeStruct, {t_roll_block, t_v4});
+        const uint32_t ptr_rblock = new_id();
+        emit(decls, OpTypePointer,
+             {ptr_rblock, StorageClassUniform, t_roll_block});
+        ptr_roll_v4 = new_id();
+        emit(decls, OpTypePointer, {ptr_roll_v4, StorageClassUniform, t_v4});
+        roll_var = new_id();
+        emit(decls, OpVariable, {ptr_rblock, roll_var, StorageClassUniform});
+        c_zero_i = new_id();
+        emit(decls, OpConstant, {t_int, c_zero_i, 0});
+    }
+
     const size_t anno_at = last_annotation_end
                                ? last_annotation_end
                                : (have_first_global ? first_global : first_fn);
@@ -3281,6 +3330,16 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
                  {pose_var, DecorationDescriptorSet, pose_set});
             emit(out, OpDecorate, {pose_var, DecorationBinding, pose_binding});
         }
+        // Its own `if`, keyed on its own variable, for the reason the comment
+        // above gives about hanging a decoration off an unrelated condition.
+        if (in.start == anno_at && roll_var) {
+            emit(out, OpDecorate, {t_roll_block, DecorationBlock});
+            emit(out, OpMemberDecorate,
+                 {t_roll_block, 0u, DecorationOffset, x4vr::kPoseRollOffset});
+            emit(out, OpDecorate,
+                 {roll_var, DecorationDescriptorSet, roll_set});
+            emit(out, OpDecorate, {roll_var, DecorationBinding, roll_binding});
+        }
         if (in.start == first_fn)
             out.insert(out.end(), decls.begin(), decls.end());
 
@@ -3318,23 +3377,55 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
                 src = emit_inv_off_axis(out, bound, t, t_mat4, raw);
             }
 
-            // row 0 += d * row 3, one column at a time
+            // **Task #77.** The vertex stage displaces the eye along
+            // (cos roll, sin roll), so the reconstruction has to undo that
+            // same vector -- T(d*cos, d*sin), not T(d).
+            //
+            // With roll off this reduces to one row and the emitted words are
+            // unchanged, ids included, which is what keeps every pre-#77 tag
+            // byte-identical. The harness asserts that rather than trusting it.
+            uint32_t d_row[2] = {d, 0};
+            if (roll_var) {
+                const uint32_t rp = new_id();
+                emit(out, OpAccessChain,
+                     {ptr_roll_v4, rp, roll_var, c_zero_i});
+                const uint32_t rcs = new_id();
+                emit(out, OpLoad, {t_v4, rcs, rp});
+                const uint32_t cs = new_id();
+                emit(out, OpCompositeExtract, {t_float, cs, rcs, 0});
+                const uint32_t sn = new_id();
+                emit(out, OpCompositeExtract, {t_float, sn, rcs, 1});
+                d_row[0] = new_id();
+                emit(out, OpFMul, {t_float, d_row[0], d, cs});
+                d_row[1] = new_id();
+                emit(out, OpFMul, {t_float, d_row[1], d, sn});
+            }
+
+            // row r += d_row[r] * row 3, one column at a time. Both rows read
+            // `src`, never `acc`: rows 0 and 1 are independent components and
+            // chaining them would make row 1 depend on row 0's rewrite.
             uint32_t acc = src;
-            for (uint32_t c = 0; c < 4; c++) {
-                const uint32_t x = new_id();
-                emit(out, OpCompositeExtract, {t_float, x, src, c, 0});
-                const uint32_t wv = new_id();
-                emit(out, OpCompositeExtract, {t_float, wv, src, c, 3});
-                const uint32_t dw = new_id();
-                emit(out, OpFMul, {t_float, dw, d, wv});
-                const uint32_t nx = new_id();
-                emit(out, OpFAdd, {t_float, nx, x, dw});
-                // With the pose composed the last insert can no longer take
-                // over `orig`: R^-1 has to be applied AFTER it, and whatever
-                // runs last is what downstream uses must see.
-                const uint32_t next = (c == 3 && !pose_var) ? orig : new_id();
-                emit(out, OpCompositeInsert, {t_mat4, next, nx, acc, c, 0});
-                acc = next;
+            const int nrows = roll_var ? 2 : 1;
+            for (int r = 0; r < nrows; r++) {
+                for (uint32_t c = 0; c < 4; c++) {
+                    const uint32_t x = new_id();
+                    emit(out, OpCompositeExtract,
+                         {t_float, x, src, c, (uint32_t)r});
+                    const uint32_t wv = new_id();
+                    emit(out, OpCompositeExtract, {t_float, wv, src, c, 3});
+                    const uint32_t dw = new_id();
+                    emit(out, OpFMul, {t_float, dw, d_row[r], wv});
+                    const uint32_t nx = new_id();
+                    emit(out, OpFAdd, {t_float, nx, x, dw});
+                    // With the pose composed the last insert can no longer take
+                    // over `orig`: R^-1 has to be applied AFTER it, and whatever
+                    // runs last is what downstream uses must see.
+                    const bool last = (r == nrows - 1) && (c == 3);
+                    const uint32_t next = (last && !pose_var) ? orig : new_id();
+                    emit(out, OpCompositeInsert,
+                         {t_mat4, next, nx, acc, c, (uint32_t)r});
+                    acc = next;
+                }
             }
             // Task #61. `M_invprojection` IS `P^-1`, so the P's cancel in
             // `M_invprojection · Rclip^-1` and the whole correction collapses

@@ -964,6 +964,69 @@ inv_case "invproj: affine, symmetric"   1 sample_invproj.frag.spv 1 0 2 \
     "$OA_SYM"
 inv_case "invproj: affine refuses a backwards frustum" 0 \
     sample_invproj.frag.spv 1 0 2 "40,-54,44,-55"
+
+# **Task #77's regression.** The vertex stage displaces the eye along
+# (cos roll, sin roll); before these cases existed this function undid a purely
+# horizontal d, so from the moment #77 shipped the two were no longer the same
+# map and the reconstruction was wrong by d*(cos-1, sin) -- 1.08*d at 65
+# degrees, larger than the eye offset itself, feeding per-eye lighting and
+# shadows. It shipped defaulted-ON and no take would have shown it.
+#
+# The acceptance sets of the two stages must be IDENTICAL. A combination
+# patched here and declined there undoes an offset that was never applied,
+# which is the same defect with the sign flipped -- so every refusal below
+# mirrors one in the vertex block above.
+inv_case "invproj: roll, per-frame (cos,sin)" 1 sample_invproj.frag.spv 1 0 2 \
+    - - 31
+inv_case "invproj: roll refuses with #61's pose" 0 sample_invproj.frag.spv 1 0 2 \
+    - - 31 31
+inv_case "invproj: roll refuses with the affine, L" 0 \
+    sample_invproj.frag.spv 1 0 2 "$OA_L" - 31
+inv_case "invproj: roll refuses with the affine, R" 0 \
+    sample_invproj.frag.spv 1 0 2 - "$OA_R" 31
+# #61's pose alone still patches. Never exercised before -- the harness had no
+# argument for it, so "refuses roll with pose" would have passed by never
+# reaching the branch, which is a check that cannot fail.
+inv_case "invproj: #61 pose alone still patches" 1 sample_invproj.frag.spv 1 0 2 \
+    - - - 31
+
+# The roll must reach BOTH rows, not just row 0: that is the whole content of
+# the fix, and "it validates" would be true of a module that changed nothing.
+# Counted from the disassembly rather than inferred from PATCHED=1.
+roll_rows() {
+    local args=("$@") r0 r1
+    "$PATCHER" frag-invproj "$BUILD/tests/sample_invproj.frag.spv" \
+        "$PATCHDIR/inv-rows.spv" 1 0 2 -0.032 0.032 "${args[@]}" >/dev/null 2>&1
+    r0=$(spirv-dis "$PATCHDIR/inv-rows.spv" | grep -cE 'OpCompositeInsert .* [0-9]+ 0$')
+    r1=$(spirv-dis "$PATCHDIR/inv-rows.spv" | grep -cE 'OpCompositeInsert .* [0-9]+ 1$')
+    echo "$r0 $r1"
+}
+read -r R0_OFF R1_OFF <<<"$(roll_rows)"
+read -r R0_ON R1_ON <<<"$(roll_rows - - 31)"
+if [[ "$R0_OFF" == 4 && "$R1_OFF" == 0 && "$R0_ON" == 4 && "$R1_ON" == 4 ]]; then
+    printf 'ok   %-38s off=(%s,%s) on=(%s,%s)\n' \
+        "invproj: roll writes row 1 too" "$R0_OFF" "$R1_OFF" "$R0_ON" "$R1_ON"
+else
+    printf 'FAIL %-38s want off=(4,0) on=(4,4), got off=(%s,%s) on=(%s,%s)\n' \
+        "invproj: roll writes row 1 too" "$R0_OFF" "$R1_OFF" "$R0_ON" "$R1_ON"
+    fails=$((fails + 1))
+fi
+
+# And with the roll absent the emitted words must be BYTE-IDENTICAL to what the
+# pre-fix patcher produced, or every tag before this one stops reproducing.
+# `cmp` against a module patched with no roll argument at all, which is the
+# path every existing take took.
+"$PATCHER" frag-invproj "$BUILD/tests/sample_invproj.frag.spv" \
+    "$PATCHDIR/inv-noroll-a.spv" 1 0 2 -0.032 0.032 >/dev/null 2>&1
+"$PATCHER" frag-invproj "$BUILD/tests/sample_invproj.frag.spv" \
+    "$PATCHDIR/inv-noroll-b.spv" 1 0 2 -0.032 0.032 - - >/dev/null 2>&1
+if cmp -s "$PATCHDIR/inv-noroll-a.spv" "$PATCHDIR/inv-noroll-b.spv"; then
+    printf 'ok   %-38s cmp clean\n' "invproj: roll absent changes nothing"
+else
+    printf 'FAIL %-38s the no-roll path moved\n' \
+        "invproj: roll absent changes nothing"
+    fails=$((fails + 1))
+fi
 inv_case "invproj: affine refuses garbage angles"      0 \
     sample_invproj.frag.spv 1 0 2 "not,a,frustum,x"
 

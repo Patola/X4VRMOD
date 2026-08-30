@@ -866,9 +866,20 @@ inline void apply_off_axis_folded(const OffAxis &o, float sx, float sy,
 //
 // What patch_fragment_invproj_eye has emitted since task #22, written out here
 // only so the composition above can be proven offline against the vertex path.
+inline void compose_eye_untranslate(float dx, float dy, float m[16]) {
+    for (int c = 0; c < 4; c++) {
+        m[c * 4 + 0] += dx * m[c * 4 + 3];
+        m[c * 4 + 1] += dy * m[c * 4 + 3];
+    }
+}
+
+// The scalar form, kept because task #22's callers mean exactly this: an
+// unrolled eye, offset along x alone. It delegates rather than duplicating the
+// loop -- **#77's regression was two spellings of one map**, where the vertex
+// stage learned to rotate the offset and this one did not, so the last thing
+// this file should carry is a second place to change.
 inline void compose_eye_untranslate(float d, float m[16]) {
-    for (int c = 0; c < 4; c++)
-        m[c * 4 + 0] += d * m[c * 4 + 3];
+    compose_eye_untranslate(d, 0.0f, m);
 }
 
 // M -> M·A⁻¹, undoing the off-axis affine on the clip coordinate a deferred

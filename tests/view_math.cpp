@@ -1156,6 +1156,59 @@ int main() {
         check(frac > 0.2f,
               "shipped: even a 15 deg tilt puts >20% of it vertical");
 
+        // ---- #77's REGRESSION: the two stages must undo one another --------
+        //
+        // The vertex stage displaces the eye by `eye_offset_for_roll`; the
+        // fragment stage undoes it with `compose_eye_untranslate`. Until this
+        // case existed the second took a SCALAR, so when #77 taught the first
+        // to rotate, the second kept undoing a purely horizontal offset and the
+        // reconstruction was wrong by d*(cos-1, sin) -- 1.08*d at 65 degrees,
+        // larger than the offset itself, feeding per-eye lighting and shadows.
+        //
+        // NOT a round trip. `T(v)` then `T(-v)` cancels whether or not the
+        // implementation swaps dx and dy, because both calls swap identically
+        // -- a check that cannot fail on the very error it is aimed at. The
+        // convention is asserted DIRECTLY instead: applied to the identity,
+        // whose row 3 is (0,0,0,1), the offset lands in column 3, and dx must
+        // be in row 0 and dy in row 1.
+        {
+            float m[16] = {1, 0, 0, 0, 0, 1, 0, 0,
+                           0, 0, 1, 0, 0, 0, 0, 1};
+            x4vr::compose_eye_untranslate(0.3f, 0.7f, m);
+            check(std::fabs(m[12] - 0.3f) < 1e-6f &&
+                      std::fabs(m[13] - 0.7f) < 1e-6f,
+                  "untranslate: dx lands on row 0, dy on row 1 (not swapped)");
+        }
+        // And the offset the VERTEX stage builds must be (h*cos, h*sin) about
+        // the same angle, with the two eyes opposed. This is the other half of
+        // the join: the fragment stage undoes the vector this produces, so if
+        // either convention moves alone the reconstruction is wrong by the
+        // difference -- which is what shipped.
+        for (float head : {-15.0f, -40.0f, -65.0f, 30.0f}) {
+            const float phi =
+                x4vr::roll_compensation_deg(head) * 3.14159265358979f / 180.0f;
+            const x4vr::EyeOffset l = x4vr::eye_offset_for_roll(0.064f, phi, false);
+            const x4vr::EyeOffset r = x4vr::eye_offset_for_roll(0.064f, phi, true);
+            const float h = 0.5f * 0.064f;
+            check(std::fabs(r.dx - h * std::cos(phi)) < 1e-6f &&
+                      std::fabs(r.dy - h * std::sin(phi)) < 1e-6f,
+                  "eye offset is (h*cos, h*sin) -- cos on x, sin on y");
+            check(std::fabs(l.dx + r.dx) < 1e-6f &&
+                      std::fabs(l.dy + r.dy) < 1e-6f,
+                  "the two eyes are exactly opposed at any roll");
+        }
+        // And the scalar overload must still be exactly the unrolled case, or
+        // task #22's 244 modules quietly change meaning.
+        {
+            float a[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+            float b[16];
+            std::memcpy(b, a, sizeof(a));
+            x4vr::compose_eye_untranslate(0.032f, a);
+            x4vr::compose_eye_untranslate(0.032f, 0.0f, b);
+            check(std::memcmp(a, b, sizeof(a)) == 0,
+                  "scalar untranslate == (d, 0), bit for bit");
+        }
+
         // ---- the map from head angle to shear angle, against the runs ------
         //
         // This is the assertion take 220 would have failed, and the only one

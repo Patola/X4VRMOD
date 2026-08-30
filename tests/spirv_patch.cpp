@@ -166,7 +166,9 @@ int main(int argc, char **argv) {
         // sample_camera_block.vert.spv both ways gives 590 words either way and
         // `cmp` reports no difference.
         const uint32_t roll_set =
-            argc > 11 ? (uint32_t)strtoul(argv[11], nullptr, 0) : 0xffffffffu;
+            arg_given(argc, argv, 11)
+                ? (uint32_t)strtoul(argv[11], nullptr, 0)
+                : 0xffffffffu;
         // "-" means ABSENT, not "an off-axis with default fields". The
         // arguments are positional, so reaching argv[11] means passing
         // something at 9 and 10 -- and presence alone used to turn the affine
@@ -766,9 +768,32 @@ int main(int argc, char **argv) {
                                            : x4vr::OffAxis{};
         const x4vr::OffAxis oar = argc > 10 ? parse_off_axis(argv[10])
                                             : x4vr::OffAxis{};
+        // #77's regression: argv[11] is the descriptor set carrying the roll,
+        // the SAME argument position vert-eye-offset uses, so the two stages
+        // are invoked the same way in the harness as they are in the layer.
+        // Absent means unrolled and the emitted words must be byte-identical
+        // to the pre-fix ones -- asserted below, not assumed.
+        const uint32_t roll_set =
+            arg_given(argc, argv, 11)
+                ? (uint32_t)strtoul(argv[11], nullptr, 0)
+                : 0xffffffffu;
+        // "-" means ABSENT. Positional arguments mean reaching argv[11]
+        // requires passing something at 9 and 10, and presence alone used to
+        // turn the affine on -- which would make the roll case impossible to
+        // invoke, since the two are refused in combination.
+        const bool have_oal = argc > 9 && strcmp(argv[9], "-") != 0;
+        const bool have_oar = argc > 10 && strcmp(argv[10], "-") != 0;
+        // argv[12] is #61's pose set. It exists so the roll+pose REFUSAL can
+        // be exercised at all: with pose_set hardcoded absent, a case named
+        // "refuses roll with pose" passed by never reaching the branch, which
+        // is a check that cannot fail.
+        const uint32_t pose_set =
+            arg_given(argc, argv, 12)
+                ? (uint32_t)strtoul(argv[12], nullptr, 0)
+                : 0xffffffffu;
         const bool ok = x4vr::spv::patch_fragment_invproj_eye(
-            code, set, binding, member, dl, dr, argc > 9 ? &oal : nullptr,
-            argc > 10 ? &oar : nullptr);
+            code, set, binding, member, dl, dr, have_oal ? &oal : nullptr,
+            have_oar ? &oar : nullptr, pose_set, 0, roll_set, 0);
         printf("PATCHED=%d\n", ok ? 1 : 0);
         if (!ok && code != before) {
             printf("FAIL=refusal_modified_code\n");

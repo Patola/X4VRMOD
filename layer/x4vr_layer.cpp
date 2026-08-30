@@ -4492,6 +4492,20 @@ constexpr uint32_t kPoseBinding = 0;
 // than moved, because its definition belongs next to the descriptor it
 // describes.
 bool pose_active();
+
+// **Task #77: ONE predicate, both stages.**
+//
+// The vertex stage displaces the eye along (cos roll, sin roll) and the
+// fragment stage undoes it. If the two ever disagree about whether roll is on,
+// the deferred reconstruction is wrong by the whole rotated offset -- which is
+// exactly the regression this repairs, and it existed because the condition
+// was an expression at one call site and *nothing at all* at the other.
+//
+// So it is a function, not a copied line. `!oa.on` is part of it because
+// patch_vertex_eye_offset refuses roll together with the off-axis affine; a
+// fragment stage that applied roll where the vertex stage had declined would
+// be the same defect with the sign flipped.
+bool roll_active(const OffAxisPair &oa);
 // Latches when one of X4's pipeline layouts turns out to declare our index.
 // The comment above is why this has to be a hard stop rather than a correction:
 // the index is already baked into every module patched so far, and no later
@@ -4948,9 +4962,14 @@ VkResult create_shader_module_inner(
         // tag reproduce with X4VR_OFFAXIS unset.
         const uint32_t pset =
             pose_rotate() ? pose_set_index() : 0xffffffffu;
+        // Task #77's regression: the SAME roll the vertex stage applies, from
+        // the SAME predicate, so the map applied to gl_Position and the map
+        // undone here cannot drift apart again.
+        const uint32_t rset =
+            roll_active(oa) ? pose_set_index() : 0xffffffffu;
         if (x4vr::spv::patch_fragment_invproj_eye(
                 code, kCameraSet, kCameraBinding, kCameraInvProjMember, dl,
-                dr, oal, oar, pset, 0)) {
+                dr, oal, oar, pset, 0, rset, kPoseBinding)) {
             frag_patched = true;
             g_invproj_patched++;
         }
@@ -4960,7 +4979,7 @@ VkResult create_shader_module_inner(
         // healthy-looking 236 hide a 0 here, which is the whole defect.
         if (x4vr::spv::patch_fragment_invproj_eye(
                 code, kCameraSet, kCameraBinding, kCameraInvProjUjMember,
-                dl, dr, oal, oar, pset, 0)) {
+                dl, dr, oal, oar, pset, 0, rset, kPoseBinding)) {
             frag_patched = true;
             g_invproj_uj_patched++;
         }
@@ -5169,8 +5188,7 @@ VkResult create_shader_module_inner(
         // to the baked matrix. Gated on `!oa.on` for that reason rather than
         // letting the refusal do it silently: the fallback is visible in
         // n_baked, but the CAUSE would not be.
-        const bool roll_on =
-            roll_stereo_enabled() && pose_active() && !oa.on;
+        const bool roll_on = roll_active(oa);
         // **Said once, and said loudest when it is NOT going to happen.**
         //
         // X4VR_ROLL_STEREO needs the pose channel, and X4VR_POSE is absent
@@ -5564,6 +5582,10 @@ bool pose_wanted() {
 // that touches the channel goes through this one predicate, so "on" cannot
 // come to mean different things in different places.
 bool pose_collided() { return g_pose.collided.load(); }
+
+bool roll_active(const OffAxisPair &oa) {
+    return roll_stereo_enabled() && pose_active() && !oa.on;
+}
 
 bool pose_active() {
     return pose_wanted() && g_pose.ready && g_active && !pose_collided();
