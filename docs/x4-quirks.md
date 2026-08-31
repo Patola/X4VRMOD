@@ -10825,3 +10825,66 @@ reprojected by the FULL head angle, and the drift was described in similar
 terms rather than dramatically worse. A reprojection artifact should scale with
 the reprojection angle. This one does not appear to, which is the next thing to
 pin down and the reason no mechanism is named here.
+
+# Take 238 — the Z artifact was the declared position, and it is GONE
+
+`X4VR_HEAD_TRANSLATE=1` together with `X4VR_DECLARE_RENDERED_POS=1`, a
+combination that had never run: take 231 had translation with the headset's own
+position declared, and takes 233/234 tested the declared position with the
+shift at zero, where it has almost nothing to correct. Testing a fix in the one
+configuration where it cannot act is a mistake worth naming.
+
+Patola: *"this time there was no Z artifact, only the X/Y artifacts."*
+
+So the mechanism was exactly what it looked like. With translation on we render
+from a SHIFTED eye and were declaring the UNSHIFTED one; a compositor handed a
+positional difference reprojects it, and a positional reprojection reads as
+apparent depth. Declaring the position we actually rendered from removes the
+difference and the artifact with it.
+
+**Still open:** the rotation-coupled X/Y drift, which take 237 localised to the
+submission side and which nothing here touches.
+
+## Can the artifact be turned into Z translation? No -- but its honest form is available
+
+Patola asked whether the effect could be used deliberately. It cannot, for two
+reasons, and both matter:
+
+* **Without depth a positional delta can only shift the image RIGIDLY**, as if
+  every pixel were at one distance. Moving forward makes near things grow while
+  far things barely change; a rigid shift feels like the world sliding past
+  rather than being approached. It is not the effect, only a cousin of it.
+* **What a runtime does with a declared position that disagrees with the pixels
+  is unspecified.** Building on it is building on behaviour that a WiVRn update
+  may change -- the same class of mistake as building on VR residue.
+
+**The real version is available though**, and take 238's log records it:
+`XR_KHR_composition_layer_depth` is among the 62 instance extensions WiVRn
+offers. Submitting X4's depth beside the colour lets the compositor do true
+positional reprojection with parallax -- near moving more than far -- which is
+genuine Z and would sharpen X/Y as well.
+
+Why X/Y were nearly free and Z is not is GEOMETRY, not an implementation gap:
+a lateral eye shift is exactly a projection shear (`x_ndc = sx*(x-d)/z`), an
+exact operation on what X4 already drew, while moving along the view axis
+rescales by `z/(z-dz)`, which is depth-dependent and has no exact shear form.
+
+Costs, so the route is not remembered as free:
+
+    disocclusion   reprojection can only show what was rendered; lean far enough
+                   and geometry behind the cockpit frame should appear, and
+                   there is no data for it. A VISIBLE defect, bounded by how far
+                   you move -- negligible at centimetres, not at 25 of them
+    plumbing       the depth exists (the deferred passes read it) but getting it
+                   into a per-eye depth swapchain at present time is real work
+    performance    an extra swapchain and copy per frame
+    scope          it does nothing for the X/Y rotation drift
+
+A fourth route, recorded so it is not rediscovered: write `M_view`'s
+translation so X4 genuinely renders from the moved eye. Exact, no disocclusion,
+no extra swapchain -- but a per-frame write into a block 500+ slots share,
+needing slot selection, and X4's CPU-side culling would not move with it.
+
+DEFERRED, not rejected. #74 is not clean while the X/Y drift stands, #76 gates
+#71, and depth reprojection would introduce a visible-artifact class into the
+territory that killed the previous attempts.
