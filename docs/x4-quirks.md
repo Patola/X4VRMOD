@@ -10070,12 +10070,88 @@ capped at 400 paths and the `livesets` walk is gated behind
 `X4VR_DUMP_MATRICES`, which this take already sets — so neither should move the
 perf number. Prediction 4 includes that band precisely so a surprise is visible.
 
-# RESUME HERE AFTER A COMPACT — state as of take 211
+# RESUME HERE AFTER A COMPACT — state as of take 238
 
 Everything below supersedes earlier "read this first" banners, including the
-take-202 one further down.
+take-211 one that used to head this section and the take-202 one further down.
+
+## What closed since take 211
+
+* **#73 the lag — FIXED.** The lead lives in the angle domain (`want = head +
+  (1/kp - 1)*(head - head_at_last_pose)`), no clock, no dt. Take 214: tau 35.6
+  -> 10.7 ms, 0.30x, about 1T. `X4VR_HEADLOOK_LEAD=1.0`.
+* **#77 head roll turning the disparity VERTICAL — CLOSED**, tagged
+  `v0.77-roll-stereo`, and `X4VR_ROLL_STEREO` now defaults ON. Take 221 agreed
+  on two independent channels: the scorer read the sign off the log (17 of 17)
+  and Patola reported the compensated arm comfortable at every tilt.
+  A **regression** in it was found later by reading code, not from a run: the
+  vertex stage rotated the eye offset and the fragment stage still undid a
+  purely horizontal one. Fixed, harness-validated, byte-identical when off.
+* **#70 the shifting/fading shadows — PARKED, and it is X4's.** Take 226
+  reproduced it with `X4VR_NO_LAYER=1`. It is a wide-`<fov>` defect in X4's own
+  cascade blending; the knee sits between fov 1.20 and 1.28 at the shipping
+  aspect while the floor to fill the panels is 1.3426, so **no field both fills
+  the headset and keeps the shadows**. Shipping 1.4917 and carrying it.
+* **#74 head X/Y translation — BUILT, off by default, not clean.** Works
+  "beautifully" by Patola's account. Needs `X4VR_DECLARE_RENDERED_POS=1`
+  alongside it, which take 238 proved removes the Z artifact. The rotation
+  drift below is still amplified with it on.
+
+## The open drift, and what six takes eliminated
+
+A small, static, **deterministic-in-angle** displacement: roll either way lifts
+the cockpit, pitch either way lifts it, yaw either way pushes it back. Even in
+the angle. Pre-existing -- Patola had never reported it because it is "almost
+unnoticeable" without translation.
+
+    1  the head-translation path        present with X4VR_HEAD_TRANSLATE off
+    2  the neck orbit in our shift      present with the shift at zero
+    3  the declared POSITION            take 234, knob confirmed live
+    4  servo lag / timing warp          persists while the pose is HELD
+    5  X4's own camera orbiting         vanilla rotates in place, no parallax
+    6  everything upstream of submit    take 237 phase B: camera rotated by
+                                        numpad with the head still -> NO drift,
+                                        "rotation is perfectly pivoted"
+    7  declared vs rendered FOV         both 110 deg, checked in the source
+
+**No mechanism is named. Do not adopt one without a control** -- this file
+already carries six of mine. Two cautions are recorded with take 237: phase A
+is not a clean read of "drift", and the magnitude does not scale with the
+reprojection angle the way a reprojection artifact should.
+
+## Where the work goes next
+
+**#76 (HUD counter-rotation) gates #71 (steering/aiming)** -- Patola's
+observation, and it reorders everything: aiming is guided by HUD markings, so a
+sliding HUD cannot be aimed through however free the mouse is.
+
+And #76's hard part is **already solved inside X4**. See the "#76/#57" section:
+`copy_gamma.frag.glsl` composites `ui.rgb + (1-ui.a)*hudless.rgb`, the scene
+arrives **already HUD-less**, and `U_fsr3g_useuitexture` -- member 21 of
+`BLOCK_BUFFER_BINDING_SLOT_DYNAMIC`, **set 4 binding 0, byte 512**, sampled by
+mod-0012 -- makes X4 emit the hudless image alone.
+
+Settle these before building, cheapest first:
+
+1. **Is set 4 binding 0 writable the way the camera block is?** It is called
+   DYNAMIC, so per-draw sub-allocations may break the write path
+   `X4VR_CSM_DEBUG` uses. Grep-and-read work, no run. Everything else depends
+   on it.
+2. One cheap take: set the switch and look. HUD gone + scene intact answers
+   whether the UI texture survives, at the same time.
+3. Then reaching `S_diffuse_map` and copying it into a swapchain of our own.
+
+## The technique that found both
+
+**#70's cascade visualiser and #76's UI switch were both found by reading X4's
+shipped GLSL for a uniform that already does what we want** -- not by
+instrumenting the frame, and not by patching. `/tmp/x4-shadersrc`, 587 files.
+Verify the same way each time: declared at a consistent offset across ALL
+dumps, and *genuinely sampled* by a module that matters -- `M_shadowCSM0Clip`
+is declared by 370 modules and sampled by zero.
 
 ## Physical state of the machine right now
+
 
 * **The clamp extension is DISABLED** and the quicksave is restored to
   `modified="0"`. Verify both before reading anything into a run:
