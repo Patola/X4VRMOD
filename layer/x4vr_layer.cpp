@@ -57,6 +57,16 @@ constexpr VkDeviceSize kViewBlockRange = 1792; // from frame analysis
 constexpr uint32_t kObjectSet = 3;
 constexpr uint32_t kObjectBinding = 0;
 
+// Task #76. X4's per-draw block, and the switch inside it that makes
+// `copy_gamma.frag.glsl` emit the HUD-less scene alone. The byte offset is the
+// address -- the member INDEX is 21 in this build and is deliberately not used,
+// because that block is generated per shader family and an index means
+// different things in different modules. See patch_fragment_force_block_uint.
+constexpr uint32_t kDynamicSet = 4;
+constexpr uint32_t kDynamicBinding = 0;
+constexpr uint32_t kUiSwitchByteOffset = 512;
+constexpr const char *kUiSwitchName = "U_fsr3g_useuitexture";
+
 // ---------------------------------------------------------------- dispatch
 // Loader dispatch key: the first pointer-sized word of every dispatchable
 // handle.
@@ -1129,6 +1139,10 @@ std::atomic<uint64_t> g_invproj_uj_patched{0};
 // forced to a passthrough, to separate "the fog produces the difference between
 // the eyes" from "the fog carries a difference made upstream".
 std::atomic<uint64_t> g_fog_disabled{0};
+// Task #76. Expected to reach exactly 4 -- the four copy_gamma permutations the
+// offline census names -- so the teardown line below is a standing check on the
+// signature rather than a progress report.
+std::atomic<uint64_t> g_hudless_patched{0};
 // Of the refusals, the ones that are refusals by construction: compute has no
 // gl_ViewIndex, so a compute shader sampling the heap cannot be made per-view
 // by this mechanism at all.
@@ -3147,6 +3161,44 @@ void canvas_report(const char *when) {
 // nothing is a wasted live run. It also made the suite's negative case pass
 // vacuously: with no output at all, "found no per-eye slots" and "never ran"
 // were the same string.
+// The two knobs that edit X4's OWN shading rather than our per-view sampling,
+// reported unconditionally and from OUTSIDE any gate.
+//
+// **The fog line used to live inside bindless_report(), whose first statement
+// returns unless a bindless knob is on.** Its comment claimed it was "reported
+// unconditionally, including the 0" and it was not: a run with
+// X4VR_DISABLE_FOG=1 and the bindless knobs off printed nothing at all, so
+// "fog still on" and "fog disabled and it changed nothing" -- the two readings
+// the line exists to separate -- were still indistinguishable. Found while
+// wiring #76, whose report had inherited the same gate and produced the same
+// silence in the harness.
+//
+// This is the take-173 failure once more: two unrelated features on one gate,
+// with no log line saying so. The comment three functions down says exactly
+// that about X4VR_BINDLESS_PATCH silently disabling X4VR_PROJ_INVPROJ.
+void shader_knob_report(const char *when) {
+    // Zeros included. A line that only appears when the knob fired cannot tell
+    // "the knob did nothing" from "the run predates the knob".
+    X4VR_LOG("fog %s: volumetric composite forced to passthrough in %llu "
+             "module(s) (offline: 8 of 409 match the fog signature)",
+             when, (unsigned long long)g_fog_disabled.load());
+    // Task #76, with the EXPECTED count beside the observed one. The offline
+    // census says exactly four modules carry a uint named
+    // U_fsr3g_useuitexture at byte 512 of set 4 binding 0 -- the four
+    // copy_gamma permutations, and tests/run-multiview-render.sh asserts that
+    // number against the dumps. Any other number here means the signature no
+    // longer selects what it was built to select, which is not something to
+    // discover from a screenshot.
+    const uint64_t n = g_hudless_patched.load();
+    X4VR_LOG("hudless %s: switch forced in %llu module(s)%s", when,
+             (unsigned long long)n,
+             n == 0 ? " — X4VR_HUDLESS unset, or no module matched"
+                    : (n == 4 ? " — 4, as the offline census predicts"
+                              : " — EXPECTED 4; the signature has drifted, do "
+                                "NOT read the screen as an answer about the "
+                                "switch"));
+}
+
 void bindless_report(const char *when) {
     if (!g_bindless_survey && !g_bindless_mirror)
         return;
@@ -3254,13 +3306,6 @@ void bindless_report(const char *when) {
                               "X4VR_PROJ_INVPROJ=1, or turn the affine off "
                               "with X4VR_OFFAXIS=off.");
         }
-        // Reported unconditionally, including the 0. "Fog still on" and "fog
-        // disabled and it changed nothing" are opposite conclusions from the
-        // same probe numbers, and a line that only appears when the knob fired
-        // cannot tell them apart after the fact.
-        X4VR_LOG("fog %s: volumetric composite forced to passthrough in %llu "
-                 "module(s) (offline: 8 of 409 match the fog signature)",
-                 when, (unsigned long long)g_fog_disabled.load());
         // The unsheared twin is the module the srgb-resolve passes actually
         // run. If this is 0, no pipeline ever took one and the twin's contents
         // are irrelevant -- a distinction take twenty-three could not draw.
@@ -4973,6 +5018,10 @@ VkResult create_shader_module_inner(
     // The transform reuses an existing ViewIndex input on the second call --
     // two variables decorated with the same builtin would be invalid SPIR-V.
     bool frag_patched = false;
+    // Task #76, kept apart from `frag_patched` on purpose: that one is
+    // published as g_mod_frag_patched and printed as "index-offset APPLIED".
+    // They mean different things and must not merge.
+    bool hudless_patched = false;
     // Named, because it gates TWO unrelated things below and used to gate
     // them as one. See the hoist under "Task #22".
     const bool bindless_ok = g_bindless_patch && g_bindless_mirror;
@@ -5137,6 +5186,74 @@ VkResult create_shader_module_inner(
         }
     }
 
+    // ------------------------------------------------------ task #76 / #57
+    //
+    // Force X4's own UI-composition switch, so `copy_gamma.frag.glsl` emits the
+    // HUD-less scene alone instead of compositing the UI texture over it. That
+    // separation is the half of #57 we cannot build ourselves, and X4 already
+    // maintains it -- for FSR3 frame generation, which needs a HUD-less input.
+    //
+    // **A shader patch and not a host write.** The switch is set 4 binding 0
+    // byte 512, and that block is generated per shader family: 123 of the 370
+    // modules that declare it start a member at byte 512 and in only FOUR is it
+    // this switch; the rest keep floats there. Writing the buffer by offset
+    // would put 1.4e-45 into pattern strength and tiling across the frame. The
+    // camera block tolerates a write by offset because one layout covers every
+    // slot -- see patch_fragment_force_block_uint, and
+    // tools/block_offset_census.py, which makes that check routine.
+    //
+    // Value-based like every other knob, and the VALUE is the control: setting
+    // it to 0 forces the switch to its shipped state, which exercises every
+    // step -- same modules matched, same instruction rewritten, same driver
+    // recompile -- and must be invisible. An A/B between 1 and 0 therefore
+    // differs in one thing, where an A/B between 1 and unset differs in two.
+    //
+    // Placed before the twin snapshot for the reason the fog knob above is:
+    // the present pass is all-LDR, so it takes the UNSHEARED twin for every one
+    // of its pipelines. A patch applied after this point would be created,
+    // logged, and never bound -- which this project has done before.
+    //
+    // The value is parsed STRICTLY: exactly "0" or exactly "1", nothing else.
+    // `strtoul` returns 0 for anything it cannot read, so a typo -- or the "-"
+    // this project has used as an absent-sentinel elsewhere -- would silently
+    // select the CONTROL arm, and the run would come back reporting that
+    // forcing the switch changed nothing. Confusing "unreadable" with "zero"
+    // has cost this project a take before; here it would cost a take and a
+    // wrong conclusion together.
+    const char *hl = getenv("X4VR_HUDLESS");
+    if (hl && *hl && !((hl[0] == '0' || hl[0] == '1') && hl[1] == '\0')) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            X4VR_LOG("hudless: X4VR_HUDLESS=\"%s\" is neither 0 nor 1 — "
+                     "IGNORED, nothing is patched. 1 forces the HUD-less "
+                     "scene; 0 is the control that must look identical to "
+                     "leaving it unset.",
+                     hl);
+        }
+        hl = nullptr;
+    }
+    if (hl && *hl) {
+        const uint32_t v = (uint32_t)(hl[0] - '0');
+        uint32_t loads = 0;
+        if (x4vr::spv::patch_fragment_force_block_uint(
+                code, kDynamicSet, kDynamicBinding, kUiSwitchByteOffset,
+                kUiSwitchName, v, &loads)) {
+            hudless_patched = true;
+            const uint64_t n = ++g_hudless_patched;
+            // All four copy_gamma permutations are created; only one is bound.
+            // The count is logged because "4" is the number the offline census
+            // predicts, and a different one means the signature has drifted --
+            // a cheap standing check on a claim this depends on.
+            X4VR_LOG("hudless #%llu: %s forced to %u (%u load(s) rewritten) — "
+                     "%s",
+                     (unsigned long long)n, kUiSwitchName, v, loads,
+                     v ? "X4 emits the HUD-less scene alone"
+                       : "SHIPPED value: this is the negative control and must "
+                         "look identical to X4VR_HUDLESS unset");
+        }
+    }
+
     // The bytes for the unsheared twin below: fragment edit kept, vertex shear
     // not yet applied.
     //
@@ -5146,8 +5263,18 @@ VkResult create_shader_module_inner(
     // twin for every one of its pipelines, so #103 was the one image in the
     // frame still sampling view 0's slots in both eyes. The twin must lose the
     // geometry edit and nothing else.
+    //
+    // `|| hudless_patched`, and NOT by folding #76 into `frag_patched`. That
+    // flag is reported as "index-offset APPLIED" at pipeline creation, so
+    // setting it from an unrelated patch would make an instrument name a
+    // transform that never ran. Same reason the fog knob is not folded in --
+    // though note the fog knob then reaches neither this snapshot nor the
+    // recreate condition below, so X4VR_DISABLE_FOG only takes effect on
+    // modules that some OTHER patch also touched. Pre-existing, harmless in
+    // practice because the fog modules all sample the bindless heap, and left
+    // alone here rather than fixed in a commit about something else.
     std::vector<uint32_t> frag_only;
-    if (frag_patched)
+    if (frag_patched || hudless_patched)
         frag_only = code;
     // Set here and cleared on every driver-rejection fallback below, so the
     // flag names what the game actually got rather than what we attempted.
@@ -5362,8 +5489,11 @@ VkResult create_shader_module_inner(
     }
 
     // `|| frag_patched` so a module that only needed the fragment edit still
-    // gets created from the edited bytes.
-    if (vert_patched || frag_patched) {
+    // gets created from the edited bytes. `|| hudless_patched` likewise: the
+    // present-pass module needs no vertex edit and, with the bindless knobs
+    // off, no fragment one either, so without this #76's patch would be
+    // computed and thrown away.
+    if (vert_patched || frag_patched || hudless_patched) {
         VkShaderModuleCreateInfo mod = *ci;
         mod.codeSize = code.size() * 4;
         mod.pCode = code.data();
@@ -5376,7 +5506,7 @@ VkResult create_shader_module_inner(
             // still has to sample per view.
             VkShaderModule orig = VK_NULL_HANDLE;
             VkShaderModuleCreateInfo oci = *ci;
-            if (frag_patched) {
+            if (frag_patched || hudless_patched) {
                 oci.codeSize = frag_only.size() * 4;
                 oci.pCode = frag_only.data();
             }
@@ -5402,7 +5532,7 @@ VkResult create_shader_module_inner(
             // nothing that used to get a canvas loses one.
             if (have_canvas && !x4vr::spv::is_procedural_fullscreen(code)) {
                 std::vector<uint32_t> cv;
-                if (frag_patched) {
+                if (frag_patched || hudless_patched) {
                     cv = frag_only;
                 } else {
                     cv.resize(ci->codeSize / 4);
@@ -10077,6 +10207,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
             mv_report("first present");
             bindless_report("first present");
             canvas_report("first present");
+            shader_knob_report("first present");
             // Everything written from here on is a *late* write, which is what
             // says whether mirroring can be done once at startup or has to
             // track X4 for the whole session.
@@ -12164,6 +12295,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyDevice(
     mv_report("final");
     bindless_report("final");
     canvas_report("final");
+    shader_knob_report("final");
     // Before anything device-owned goes away: the frame loop holds a session
     // bound to this device, and a thread still calling xrEndFrame while the
     // device is destroyed is the one crash this step could plausibly cause.

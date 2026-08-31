@@ -69,6 +69,9 @@ configure_file(sample_camera_block.vert.spv sample_camera_block.vert.spv COPYONL
 configure_file(sample_light_volume.vert.spv sample_light_volume.vert.spv COPYONLY)
 configure_file(sample_invproj.frag.spv sample_invproj.frag.spv COPYONLY)
 configure_file(sample_combined.spv sample_combined.spv COPYONLY)
+# Task #76's pair: the copy_gamma shape, and the collider that must be refused.
+configure_file(sample_uiswitch.frag.spv sample_uiswitch.frag.spv COPYONLY)
+configure_file(sample_uiswitch_float.frag.spv sample_uiswitch_float.frag.spv COPYONLY)
 configure_file(skybox_cube.comp.spv skybox_cube.comp.spv COPYONLY)
 configure_file(noop.comp.spv noop.comp.spv COPYONLY)
 

@@ -98,6 +98,8 @@ int main(int argc, char **argv) {
                 "[dl] [dr] [oa_l] [oa_r]\n"
                 "       %s frag-invproj-check <in> [set] [binding] [member] "
                 "[dl] [dr] [oa_l] [oa_r] [pose_set] [pose_binding] [ypr]\n"
+                "       %s frag-force-uint <in> <out> <set> <binding> "
+                "<byteoffset> <name> <value>\n"
                 "       %s list <in>\n"
                 "\n"
                 "  oa_l / oa_r are off-axis frusta as \"l,r,u,d\" in DEGREES.\n"
@@ -114,7 +116,7 @@ int main(int argc, char **argv) {
                 "  order (M.R^-1 instead of R^-1.M). That is the negative\n"
                 "  control: a check that has never been seen to fail on this\n"
                 "  arithmetic is worth no more than one that cannot see it.\n",
-                argv[0], argv[0], argv[0], argv[0], argv[0]);
+                argv[0], argv[0], argv[0], argv[0], argv[0], argv[0]);
         return 2;
     }
     // `list` is what read X4's own shaders. It is the same code path the layer
@@ -928,6 +930,48 @@ int main(int argc, char **argv) {
             printf("TEX set=%u binding=%u count=%u%s%s\n", t.set, t.binding,
                    t.count, t.arrayed ? " arrayed" : "",
                    t.depth ? " depth" : "");
+        return 0;
+    }
+    // Task #76: force one uint member of one uniform block to a constant.
+    //
+    //   frag-force-uint <in> <out> <set> <binding> <byteoffset> <name> <value>
+    //
+    // Prints LOADS=<n> beside PATCHED, because "the transform applied" and "it
+    // reached every read" are different claims and X4's copy_gamma reads the
+    // switch exactly once. A patch that rewrote one of two loads would still
+    // print PATCHED=1 and leave the branch live.
+    if (strcmp(argv[1], "frag-force-uint") == 0) {
+        if (argc < 9) {
+            fprintf(stderr, "frag-force-uint needs <in> <out> <set> <binding> "
+                            "<byteoffset> <name> <value>\n");
+            return 2;
+        }
+        std::vector<uint32_t> code = load_spv(argv[2]);
+        if (code.empty()) {
+            printf("FAIL=load\n");
+            return 1;
+        }
+        const std::vector<uint32_t> before = code;
+        const uint32_t set = (uint32_t)strtoul(argv[4], nullptr, 0);
+        const uint32_t binding = (uint32_t)strtoul(argv[5], nullptr, 0);
+        const uint32_t byteoff = (uint32_t)strtoul(argv[6], nullptr, 0);
+        const uint32_t value = (uint32_t)strtoul(argv[8], nullptr, 0);
+        uint32_t loads = 0;
+        const bool ok = x4vr::spv::patch_fragment_force_block_uint(
+            code, set, binding, byteoff, argv[7], value, &loads);
+        printf("PATCHED=%d LOADS=%u WORDS=%zu\n", ok ? 1 : 0, loads,
+               code.size());
+        if (!ok && code != before) {
+            printf("FAIL=refusal_modified_code\n");
+            return 1;
+        }
+        FILE *f = fopen(argv[3], "wb");
+        if (!f) {
+            printf("FAIL=open_out\n");
+            return 1;
+        }
+        fwrite(code.data(), 4, code.size(), f);
+        fclose(f);
         return 0;
     }
     if (argc < 4) {

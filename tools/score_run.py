@@ -1994,6 +1994,58 @@ def main(path):
     else:
         print("translate  not asked for in this run (X4VR_HEAD_TRANSLATE unset)")
 
+    # --- task #76: X4's own UI-composition switch ---------------------------
+    #
+    # Gated on INTENT for the reason #74 above is: a run that asked to force the
+    # switch and forced it in zero modules is a failure, and it looks exactly
+    # like a run that never asked.
+    #
+    # The expected count is FOUR, and it is not a rule of thumb: exactly four of
+    # the 409 dumped modules carry a uint named U_fsr3g_useuitexture at byte 512
+    # of set 4 binding 0 -- the four copy_gamma permutations -- which
+    # tools/block_offset_census.py measures and the offline suite asserts. A
+    # different number means the signature stopped selecting what it was built
+    # for, and then nothing seen on screen is evidence about the switch.
+    #
+    # 0 is the CONTROL arm and must be scored as a legitimate run, not as
+    # "nothing happened": it forces the switch to its shipped value, so the
+    # modules are still matched and rewritten and the screen must be unchanged.
+    hud = re.findall(r"hudless (?:first present|final): switch forced in "
+                     r"(\d+) module", text)
+    hud_asked = re.search(r"X4VR_HUDLESS=([^\s]+)", run or "")
+    hud_bad = "is neither 0 nor 1" in text
+    if hud_bad:
+        fails.append(
+            "X4VR_HUDLESS was set to something that is neither 0 nor 1, so the "
+            "layer ignored it and patched NOTHING. This run says nothing about "
+            "#76 in either direction")
+    elif hud_asked:
+        n = int(hud[-1]) if hud else 0
+        arm = ("FORCED — X4 should emit the HUD-less scene, so the HUD must be "
+               "GONE and the scene otherwise intact"
+               if hud_asked.group(1) == "1" else
+               "CONTROL — the switch is forced to its SHIPPED value, so this "
+               "must look identical to a run with X4VR_HUDLESS unset")
+        print(f"hudless  X4VR_HUDLESS={hud_asked.group(1)}: {n} module(s) "
+              f"patched — {arm}")
+        if not hud:
+            fails.append(
+                "X4VR_HUDLESS was asked for and the layer printed no hudless "
+                "report at all — the run did not reach a present, so there is "
+                "nothing to read")
+        elif n != 4:
+            fails.append(
+                f"X4VR_HUDLESS forced the switch in {n} module(s), not the 4 "
+                f"the offline census predicts. The signature no longer selects "
+                f"the copy_gamma permutations, so do NOT read the screen as an "
+                f"answer about #76 — re-run tools/block_offset_census.py 4 0 "
+                f"--at 512 against a fresh dump first")
+    elif hud:
+        print(f"hudless  not asked for (X4VR_HUDLESS unset); "
+              f"{hud[-1]} module(s) patched, as expected")
+    else:
+        print("hudless  not asked for in this run (X4VR_HUDLESS unset)")
+
     if "roll stereo: ON" in text:
         print("roll    ON — the eye offset turns with the head. Under tilt the "
               "disparity should stay HORIZONTAL: close one eye, then the "

@@ -11227,6 +11227,94 @@ intact.
 One caution for the design, not for this finding: the UI target is logged
 `MASKED`, so the layer is already doubling it per eye.
 
+## The branch-force patch: BUILT, offline-validated, not yet run
+
+`patch_fragment_force_block_uint`, wired to `X4VR_HUDLESS`. It replaces every
+load of one `uint` block member with a constant, so the branch it feeds is
+statically known.
+
+    %343 = OpAccessChain %_ptr_Uniform_uint %__0 %int_21
+    %343 = OpLoad  %uint %342          ->   %343 = OpCopyObject %uint %uint_1_0
+    %344 = OpINotEqual %bool %343 %uint_0_0        (untouched)
+           OpBranchConditional %344 ...            (untouched)
+
+Both are four words, the result id is kept, and on `mod-0012` the constant
+already existed -- so the patched module is **1431 words, exactly as many as
+X4 shipped**. Nothing is renumbered and nothing downstream is touched.
+
+### The signature, and what it selects
+
+Deliberately over-determined: set 4 binding 0, a member at byte **exactly 512**,
+whose type is a 32-bit **unsigned** int, whose `OpMemberName` is
+`U_fsr3g_useuitexture`, and which is actually **loaded**. The member INDEX is
+not used -- it is 21 in this build, and an index means different things in
+different families.
+
+Type alone would also select the right four today, since every other member at
+byte 512 is a float or a vec4. That is an observation about this build, so the
+name is required as well; if a future X4 strips `OpMemberName` this refuses and
+changes nothing, which is the safe direction to fail.
+
+Run against **X4's own dumps**, not only against a fixture we wrote:
+
+    4 of 409 matched — mod-0011, 0012, 0184, 0185 — all valid SPIR-V,
+    exactly 1 load rewritten each, and the module's OTHER uint load
+    (S_diffuse_idx, the UI texture's bindless index) left alone.
+
+That assertion is now in `tests/run-multiview-render.sh` and skips loudly when
+`/tmp/x4vr-shaders` is absent.
+
+### `X4VR_HUDLESS=0` is the control, and it is the point
+
+The value is a parameter so that 0 forces the switch to its **shipped** value.
+That exercises every step -- same four modules matched, same instruction
+rewritten, same driver recompile -- and must look identical to leaving the knob
+unset. An A/B between 1 and 0 differs in one thing; an A/B between 1 and unset
+differs in two. If forcing 0 changes the screen, the patch is landing somewhere
+it should not and nothing about forcing 1 is interpretable.
+
+The value is parsed strictly: exactly `"0"` or exactly `"1"`. `strtoul` returns
+0 for anything it cannot read, so a typo would have silently selected the
+control arm and the run would have come back reporting that forcing the switch
+changed nothing. That confusion has cost a take before.
+
+### Where it is applied, and why there
+
+**Before the unsheared-twin snapshot.** The present pass is all-LDR, so
+`classify_unsheared` marks it unsheared and every one of its pipelines takes
+the TWIN. A patch applied after that point would be created, logged, and never
+bound -- which this project has done before. `hudless_patched` is threaded into
+the twin snapshot, the module recreate and the canvas variant, and is kept
+SEPARATE from `frag_patched`, which is published as "index-offset APPLIED" and
+would otherwise name a transform that never ran.
+
+### A defect found while wiring it
+
+The fog knob's report claimed to be *"reported unconditionally, including the
+0"* and sat inside `bindless_report()`, whose first statement returns unless a
+bindless knob is on. So `X4VR_DISABLE_FOG=1` with the bindless knobs off printed
+**nothing at all**, and the two readings that line exists to separate -- "fog
+still on" and "fog disabled and it changed nothing" -- stayed
+indistinguishable. #76's report had inherited the same gate, which is how it
+surfaced: the harness ran the knob and no line appeared.
+
+Both now live in `shader_knob_report()`, outside every gate. This is take 173's
+failure again -- two unrelated features on one gate, with no log line saying so
+-- and the comment naming that failure is three functions away in the same file.
+
+### What is verified, and what is not
+
+* **Verified offline**: the transform, on X4's own bytes, 4 of 409, valid, one
+  load each, the right load.
+* **Verified on a GPU under validation**: the value parse, the report firing at
+  zero and when unset, and a knob-set run being otherwise unchanged. 202 cases,
+  no failures. No fixture there declares X4's block, so the harness does not
+  test MATCHING -- the dumps do.
+* **NOT verified anywhere yet**: that the patched module is the one X4 BINDS.
+  That depends on X4's pass structure and is reasoned from code, not run. It is
+  the first thing the live take reads -- the teardown line must say 4, and the
+  scorer FAILs on any other number.
+
 ## The shape of the fix
 
     layer A   hudless scene, declared with the pose it was RENDERED from

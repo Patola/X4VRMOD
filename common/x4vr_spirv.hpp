@@ -75,6 +75,12 @@ enum : uint32_t {
     OpDecorate = 71,
     OpMemberDecorate = 72,
     OpCompositeConstruct = 80,
+    // For patch_fragment_force_block_uint. Four words like OpLoad -- op, result
+    // type, result id, operand -- so substituting one for the other keeps the
+    // result id and every downstream use without moving anything.
+    OpCopyObject = 83,
+    OpName = 5,
+    OpMemberName = 6,
     OpSampledImage = 86,
     OpImageSampleImplicitLod = 87,
     OpImageSampleExplicitLod = 88,
@@ -4604,6 +4610,242 @@ inline bool patch_fragment_disable_fog(std::vector<uint32_t> &code) {
     }
     if (!placed)
         return false; // no function body: nothing to disable, change nothing
+    out[3] = bound;
+    code.swap(out);
+    return true;
+}
+
+/// Replaces every load of one `uint` member of one uniform block with a
+/// constant, so the branch it feeds becomes statically known.
+///
+/// **Task #76/#57.** X4's `copy_gamma.frag.glsl` ends with
+///
+///     if (U_fsr3g_useuitexture) { OUT_RT0 = hudless; }
+///     else { OUT_RT0.rgb = ui.rgb + (1.0 - ui.a) * hudless.rgb; }
+///
+/// so the scene reaches the present pass already HUD-less and the HUD is a
+/// separate premultiplied-alpha texture. Forcing that switch true makes X4
+/// hand us the hudless image alone, which is the half of #57 we cannot build
+/// ourselves. X4 maintains the separation for FSR3 frame generation.
+///
+/// **Why a shader patch and not a host write to the buffer.** The switch lives
+/// at set 4 binding 0 byte 512, and that block is generated per shader family:
+/// 123 of the 370 dumped modules that declare it start a member at byte 512 and
+/// in only FOUR is it this switch. The other 119 keep a float there --
+/// `U_patternstr` in 54 of them -- so writing `uint 1` at that offset would
+/// write `1.4e-45` into pattern strength, tiling and glow colour across the
+/// whole frame. The camera block tolerates a write by offset because one layout
+/// covers every slot; this one does not. See `tools/block_offset_census.py`,
+/// which exists to make that check routine.
+///
+/// **The signature is structural and deliberately over-determined**: a uniform
+/// block at (set, binding), a member at exactly `want_offset`, whose type is a
+/// 32-bit UNSIGNED int, and whose `OpMemberName` is `want_name`. Over the 409
+/// dumps that selects exactly the four `copy_gamma` permutations -- mod-0011,
+/// 0012, 0184, 0185 -- and mod-0012 is the one the layer's own log already
+/// names at the present pass. Type alone would also select those four today
+/// (every other member at byte 512 is a float or a vec4), but "every other
+/// module currently keeps a float there" is an observation about this build,
+/// so the name is required as well. If a future X4 strips `OpMemberName` this
+/// refuses and changes nothing, which is the safe direction to fail.
+///
+/// **`value` is a parameter so that 0 is a negative control.** Forcing the
+/// switch to its shipped value exercises the whole path -- the same modules
+/// matched, the same instruction rewritten, the same driver recompile -- and
+/// must be visually identical to not patching at all. If forcing 0 changes the
+/// screen, the patch is landing somewhere it should not, and that is worth
+/// knowing before reading anything into forcing 1.
+///
+/// The rewrite is `OpLoad` -> `OpCopyObject`: same four words, same result id,
+/// so no downstream instruction is touched and no id is renumbered. Only the
+/// constant has to be added, and only if the module does not already have one.
+///
+/// A refusal leaves the module byte-identical, which the offline suite asserts.
+inline bool patch_fragment_force_block_uint(std::vector<uint32_t> &code,
+                                            uint32_t want_set,
+                                            uint32_t want_binding,
+                                            uint32_t want_offset,
+                                            const char *want_name,
+                                            uint32_t value,
+                                            uint32_t *loads_out = nullptr) {
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return false;
+
+    // (struct id, member) packed into one key, so this needs no <map> and no
+    // pair hash. The header is included by the layer, which lives inside X4's
+    // process; keeping its dependencies and its allocations down is not
+    // fastidiousness.
+    auto key = [](uint32_t s, uint32_t m) {
+        return ((uint64_t)s << 32) | m;
+    };
+    std::unordered_map<uint32_t, uint32_t> set_of, bind_of, ptr_to;
+    std::unordered_map<uint64_t, uint32_t> moffset;
+    std::unordered_set<uint64_t> name_ok; // members whose name is want_name
+    std::unordered_map<uint32_t, std::vector<uint32_t>> struct_members;
+    std::unordered_map<uint32_t, uint32_t> const_val, const_type;
+    std::unordered_set<uint32_t> t_uint32;
+
+    for (const auto &in : insts) {
+        const uint32_t *w = &code[in.start];
+        switch (in.op) {
+        case OpDecorate:
+            if (in.len >= 4 && w[2] == DecorationDescriptorSet)
+                set_of[w[1]] = w[3];
+            else if (in.len >= 4 && w[2] == DecorationBinding)
+                bind_of[w[1]] = w[3];
+            break;
+        case OpMemberDecorate:
+            if (in.len >= 5 && w[3] == DecorationOffset)
+                moffset[key(w[1], w[2])] = w[4];
+            break;
+        case OpMemberName:
+            // Compared in place against want_name, byte by byte out of the
+            // packed literal, rather than materialised into a std::string.
+            // The literal is NUL-padded to a word boundary, so the match ends
+            // when both sides reach their terminator together.
+            if (in.len >= 4 && want_name) {
+                const char *p = want_name;
+                bool eq = false, stop = false;
+                for (uint32_t i = 3; i < in.len && !stop; i++)
+                    for (int b = 0; b < 4; b++) {
+                        const char c = (char)((w[i] >> (8 * b)) & 0xff);
+                        if (c != *p) {
+                            stop = true;
+                            break;
+                        }
+                        if (!c) { // both ended here
+                            eq = stop = true;
+                            break;
+                        }
+                        p++;
+                    }
+                if (eq)
+                    name_ok.insert(key(w[1], w[2]));
+            }
+            break;
+        case OpTypeInt:
+            // Unsigned only. `bool` in std140 is a uint here; a SIGNED int at
+            // the same offset would be a different member of a different
+            // shader family, and this must not match it.
+            if (in.len >= 4 && w[2] == 32u && w[3] == 0u)
+                t_uint32.insert(w[1]);
+            break;
+        case OpTypeStruct:
+            if (in.len >= 2)
+                struct_members[w[1]].assign(&w[2], &w[in.len]);
+            break;
+        case OpTypePointer:
+            if (in.len >= 4)
+                ptr_to[w[1]] = w[3];
+            break;
+        case OpConstant:
+            if (in.len >= 4) {
+                const_type[w[2]] = w[1];
+                const_val[w[2]] = w[3];
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
+    // The block variable, and the struct behind it.
+    uint32_t var = 0, stype = 0;
+    for (const auto &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (in.op != OpVariable || in.len < 3)
+            continue;
+        auto s = set_of.find(w[2]), b = bind_of.find(w[2]);
+        if (s == set_of.end() || b == bind_of.end())
+            continue;
+        if (s->second != want_set || b->second != want_binding)
+            continue;
+        auto p = ptr_to.find(w[1]);
+        if (p == ptr_to.end() || !struct_members.count(p->second))
+            continue; // an image or sampler at the same (set, binding)
+        var = w[2];
+        stype = p->second;
+    }
+    if (!var)
+        return false;
+
+    // The member: offset AND unsigned-32 type AND name must all agree.
+    uint32_t member = UINT32_MAX, t_uint = 0;
+    const auto &members = struct_members[stype];
+    for (uint32_t m = 0; m < members.size(); m++) {
+        auto o = moffset.find(key(stype, m));
+        if (o == moffset.end() || o->second != want_offset)
+            continue;
+        if (!t_uint32.count(members[m]))
+            return false; // right offset, wrong type: NOT our switch
+        if (!name_ok.count(key(stype, m)))
+            return false; // right offset and type, wrong shader family
+        member = m;
+        t_uint = members[m];
+        break;
+    }
+    if (member == UINT32_MAX)
+        return false;
+
+    // Every direct scalar access chain to that member, then every load through
+    // one. `in.len == 5` keeps this to `chain %ptr %var %member` -- a longer
+    // chain indexes into something that is not this scalar.
+    std::unordered_set<uint32_t> ptrs;
+    for (const auto &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (in.op != OpAccessChain || in.len != 5 || w[3] != var)
+            continue;
+        auto c = const_val.find(w[4]);
+        if (c != const_val.end() && c->second == member)
+            ptrs.insert(w[2]);
+    }
+    std::unordered_set<size_t> targets;
+    for (size_t i = 0; i < insts.size(); i++) {
+        const uint32_t *w = &code[insts[i].start];
+        if (insts[i].op == OpLoad && insts[i].len >= 4 && ptrs.count(w[3]) &&
+            w[1] == t_uint)
+            targets.insert(i);
+    }
+    if (targets.empty())
+        return false; // declared but never read -- exactly M_shadowCSM0Clip's
+                      // failure mode, and the reason this returns false
+    if (loads_out)
+        *loads_out = (uint32_t)targets.size();
+
+    // Reuse an existing constant when there is one. `patch_fragment_disable_fog`
+    // appends unconditionally and its comment explains why -- matching a FLOAT
+    // means matching a bit pattern. An unsigned integer literal is one word and
+    // compares exactly, so that hazard does not apply here.
+    uint32_t bound = code[3], c_val = 0;
+    for (const auto &[id, t] : const_type)
+        if (t == t_uint && const_val[id] == value) {
+            c_val = id;
+            break;
+        }
+    std::vector<uint32_t> consts;
+    if (!c_val) {
+        c_val = bound++;
+        emit(consts, OpConstant, {t_uint, c_val, value});
+    }
+
+    std::vector<uint32_t> out(code.begin(), code.begin() + 5);
+    bool placed = consts.empty();
+    for (size_t i = 0; i < insts.size(); i++) {
+        const auto &in = insts[i];
+        const uint32_t *w = &code[in.start];
+        if (!placed && in.op == OpFunction) {
+            out.insert(out.end(), consts.begin(), consts.end());
+            placed = true;
+        }
+        if (targets.count(i))
+            emit(out, OpCopyObject, {t_uint, w[2], c_val});
+        else
+            out.insert(out.end(), code.begin() + in.start,
+                       code.begin() + in.start + in.len);
+    }
+    if (!placed)
+        return false; // no function body: nothing was rewritten, change nothing
     out[3] = bound;
     code.swap(out);
     return true;

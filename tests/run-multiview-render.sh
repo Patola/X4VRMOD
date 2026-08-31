@@ -618,6 +618,192 @@ idx_case "...refuses a vertex-only module"       0 fullscreen.vert.spv 0 7
 idx_case "...refuses a binding that is not there" 0 sample_bindless.frag.spv 0 3
 idx_case "...patches aliased vars on one binding" 1 sample_alias_binding.frag.spv 0 5
 
+# --- task #76: forcing X4's UI-composition switch --------------------------
+#
+# `copy_gamma.frag.glsl` emits the hudless scene alone when
+# U_fsr3g_useuitexture is true, and composites the separate premultiplied-alpha
+# UI texture over it when false. Forcing that switch is how #57 gets the
+# hudless image, and it is a shader patch rather than a host write because the
+# block it lives in is generated per shader family: 123 of the 370 dumped
+# modules that declare set 4 binding 0 start a member at byte 512 and in only
+# FOUR is it the switch. See tools/block_offset_census.py.
+#
+# So the refusals here are not hygiene, they are the whole reason for the
+# design, and sample_uiswitch_float.frag is the actual collider: the same
+# block with U_patternstr -- 54 of the 119 -- at the same byte.
+force_case() {
+    local label="$1" want="$2" shader="$3" set="$4" bind="$5" off="$6"
+    local name="$7" val="$8" wantloads="${9:-}"
+    local out got loads
+    out=$("$PATCHER" frag-force-uint "$BUILD/tests/$shader" \
+        "$PATCHDIR/force.spv" "$set" "$bind" "$off" "$name" "$val" 2>&1)
+    got=$(sed -n 's/^PATCHED=\([01]\).*/\1/p' <<<"$out")
+    loads=$(sed -n 's/.*LOADS=\([0-9]*\).*/\1/p' <<<"$out")
+    local val_st=skip
+    if [[ "$got" == 1 ]]; then
+        spirv-val --target-env vulkan1.2 "$PATCHDIR/force.spv" >/dev/null 2>&1 \
+            && val_st=OK || val_st=BAD
+    fi
+    if [[ "$got" == "$want" && "$val_st" != BAD ]] &&
+       [[ -z "$wantloads" || "$loads" == "$wantloads" ]]; then
+        printf 'ok   %-38s patched=%s loads=%s val=%s\n' \
+            "$label" "$got" "${loads:-0}" "$val_st"
+    else
+        printf 'FAIL %-38s want patched=%s loads=%s, got patched=%s loads=%s val=%s\n' \
+            "$label" "$want" "${wantloads:-any}" "${got:-?}" "${loads:-?}" "$val_st"
+        fails=$((fails + 1))
+    fi
+}
+
+FSW=U_fsr3g_useuitexture
+force_case "force: the copy_gamma shape"      1 sample_uiswitch.frag.spv 4 0 512 $FSW 1 1
+# The negative control the live take depends on. Forcing the switch to its
+# SHIPPED value exercises every step -- same module matched, same instruction
+# rewritten, same driver recompile -- and must be invisible on screen. If this
+# ever refuses, the control stops being available and forcing 1 stops being
+# interpretable.
+force_case "force: 0 is a working control"    1 sample_uiswitch.frag.spv 4 0 512 $FSW 0 1
+# THE case. A float at the same byte under the commonest colliding name.
+force_case "force refuses a float at 512"     0 sample_uiswitch_float.frag.spv 4 0 512 U_patternstr 1
+force_case "...refuses the wrong member name" 0 sample_uiswitch.frag.spv 4 0 512 U_patternstr 1
+force_case "...refuses a wrong byte offset"   0 sample_uiswitch.frag.spv 4 0 508 $FSW 1
+force_case "...refuses a declared-unread one" 0 sample_uiswitch.frag.spv 4 0 480 S_diffuse_idx 1
+force_case "...refuses a missing set"         0 sample_uiswitch.frag.spv 3 0 512 $FSW 1
+force_case "...refuses a block-less module"   0 sample.frag.spv 4 0 512 $FSW 1
+
+# The member index in the fixture is 3, not X4's 21. That is deliberate: a
+# transform that keyed on the index would pass every case above and fail on
+# X4. Asserted rather than left to the comment in the .frag.
+fixture_member=$(spirv-dis "$BUILD/tests/sample_uiswitch.frag.spv" 2>/dev/null |
+    sed -n 's/.*OpMemberName %DynamicBlock \([0-9]*\) "U_fsr3g_useuitexture".*/\1/p')
+if [[ -n "$fixture_member" && "$fixture_member" != 21 ]]; then
+    printf 'ok   %-38s member=%s (X4 uses 21, so index is untested-by-luck)\n' \
+        "force: fixture does not share X4's index" "$fixture_member"
+else
+    printf 'FAIL %-38s member=%s — fixture must NOT use X4'"'"'s member index\n' \
+        "force: fixture does not share X4's index" "${fixture_member:-?}"
+    fails=$((fails + 1))
+fi
+
+# The substitution costs NOTHING when the constant already exists, and exactly
+# one instruction when it does not. Both arms are asserted because only one of
+# them is reachable with the values the layer actually uses -- 0 and 1 are
+# already in any module that compares the switch against zero -- so the append
+# path would otherwise ship untested.
+words_of() { sed -n 's/.*WORDS=\([0-9]*\).*/\1/p' <<<"$1"; }
+src_words=$(( $(stat -c%s "$BUILD/tests/sample_uiswitch.frag.spv") / 4 ))
+w_reuse=$(words_of "$("$PATCHER" frag-force-uint \
+    "$BUILD/tests/sample_uiswitch.frag.spv" "$PATCHDIR/force.spv" \
+    4 0 512 $FSW 1 2>&1)")
+w_new=$(words_of "$("$PATCHER" frag-force-uint \
+    "$BUILD/tests/sample_uiswitch.frag.spv" "$PATCHDIR/force7.spv" \
+    4 0 512 $FSW 7 2>&1)")
+val7=BAD
+spirv-val --target-env vulkan1.2 "$PATCHDIR/force7.spv" >/dev/null 2>&1 && val7=OK
+if [[ "$w_reuse" == "$src_words" && "$w_new" == $((src_words + 4)) &&
+      "$val7" == OK ]]; then
+    printf 'ok   %-38s reuse=%s(+0) new=%s(+4) val=%s\n' \
+        "force: constant reused, else appended" "$w_reuse" "$w_new" "$val7"
+else
+    printf 'FAIL %-38s src=%s reuse=%s (want +0) new=%s (want +4) val=%s\n' \
+        "force: constant reused, else appended" "$src_words" "${w_reuse:-?}" \
+        "${w_new:-?}" "$val7"
+    fails=$((fails + 1))
+fi
+
+# ...and against X4's OWN bytes, which is the only check that can fail for a
+# reason the fixture cannot express. The fixture is a shader we wrote to the
+# shape we believe X4 has; this asserts the belief.
+#
+# Opportunistic: the dumps are Egosoft's and live in /tmp, never in the repo, so
+# this skips loudly rather than failing on a machine that has not run
+# X4VR_MV_DUMP=1. The expected count is 4 -- the four copy_gamma permutations,
+# from tools/block_offset_census.py 4 0 --at 512 -- and it is the SAME number
+# the layer prints at teardown, so the offline claim and the live one are
+# checked against each other rather than each against itself.
+if [[ -d /tmp/x4vr-shaders ]] && compgen -G '/tmp/x4vr-shaders/mod-*.spv' >/dev/null; then
+    real_hits=0 real_bad=0 real_multi=0 real_n=0
+    for dump in /tmp/x4vr-shaders/mod-*.spv; do
+        real_n=$((real_n + 1))
+        rout=$("$PATCHER" frag-force-uint "$dump" "$PATCHDIR/real.spv" \
+            4 0 512 $FSW 1 2>&1 | head -1)
+        [[ "$rout" == PATCHED=1* ]] || continue
+        real_hits=$((real_hits + 1))
+        [[ "$rout" == *LOADS=1* ]] || real_multi=$((real_multi + 1))
+        spirv-val --target-env vulkan1.2 "$PATCHDIR/real.spv" >/dev/null 2>&1 ||
+            real_bad=$((real_bad + 1))
+    done
+    if [[ "$real_hits" == 4 && "$real_bad" == 0 && "$real_multi" == 0 ]]; then
+        printf 'ok   %-38s %s/%s matched, all valid, 1 load each\n' \
+            "force: X4's own dumps" "$real_hits" "$real_n"
+    else
+        printf 'FAIL %-38s want 4 of %s with 1 load each, got %s (invalid=%s multiload=%s)\n' \
+            "force: X4's own dumps" "$real_n" "$real_hits" "$real_bad" "$real_multi"
+        fails=$((fails + 1))
+    fi
+else
+    printf 'skip %-38s (no dumps in /tmp/x4vr-shaders)\n' "force: X4's own dumps"
+fi
+
+# The layer's side of the knob, on a real GPU under validation.
+#
+# **What this can and cannot show, stated because the difference matters.** No
+# shader here declares X4's block, so the count is 0 and the MATCHING is not
+# under test -- that is settled above, against X4's own dumps. What runs here is
+# everything around it: the strict value parse, the report firing whether or not
+# anything matched, and a run with the knob set being otherwise unchanged. The
+# one thing neither leg reaches is "the patched module is the one BOUND", which
+# depends on X4's pass structure; the live take reads that off the teardown
+# count and the screen together.
+hud_probe() {
+    local label="$1" value="$2" want_n="$3" want_warn="$4"
+    local hl; hl="$(mktemp)"
+    env X4VR_LOG="$hl" X4VR_MV=1 X4VR_STEREO=1 X4VR_HUDLESS="$value" \
+        "VK_ADD_LAYER_PATH=$BUILD/layer" \
+        "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+        timeout 120 "$BIN" "$VS" "$FS" "$SF" >/dev/null 2>&1
+    local n warned
+    n=$(sed -n 's/.*hudless [a-z]*: switch forced in \([0-9]*\) module.*/\1/p' \
+        "$hl" | tail -1)
+    warned=$(grep -c 'is neither 0 nor 1' "$hl")
+    rm -f "$hl"
+    if [[ "$n" == "$want_n" && "$warned" == "$want_warn" ]]; then
+        printf 'ok   %-38s value=%-6s forced=%s warned=%s\n' \
+            "$label" "\"$value\"" "$n" "$warned"
+    else
+        printf 'FAIL %-38s value=%s want forced=%s warned=%s, got forced=%s warned=%s\n' \
+            "$label" "$value" "$want_n" "$want_warn" "${n:-MISSING}" "$warned"
+        fails=$((fails + 1))
+    fi
+}
+hud_probe "hudless: reports even at zero"  1  0 0
+# The report must exist with the knob UNSET too, or "the switch was not forced"
+# and "the run predates the knob" read the same in a log.
+hud_probe "hudless: reports when unset"    "" 0 0
+# The strict parse. Without it this would force the CONTROL arm and say nothing.
+hud_probe "hudless: refuses a bad value"   yes 0 1
+hud_probe "hudless: refuses 2"             2   0 1
+
+# The branch really is constant afterwards: the OpLoad is gone and an
+# OpCopyObject of a constant stands in its place, keeping the same result id.
+# Counted from the disassembly, because PATCHED=1 only says the transform ran.
+if command -v spirv-dis >/dev/null; then
+    "$PATCHER" frag-force-uint "$BUILD/tests/sample_uiswitch.frag.spv" \
+        "$PATCHDIR/force.spv" 4 0 512 $FSW 1 >/dev/null 2>&1
+    before_n=$(spirv-dis "$BUILD/tests/sample_uiswitch.frag.spv" 2>/dev/null |
+        grep -c 'OpLoad %uint')
+    after_n=$(spirv-dis "$PATCHDIR/force.spv" 2>/dev/null | grep -c 'OpLoad %uint')
+    copy_n=$(spirv-dis "$PATCHDIR/force.spv" 2>/dev/null | grep -c 'OpCopyObject')
+    if [[ "$before_n" == 1 && "$after_n" == 0 && "$copy_n" == 1 ]]; then
+        printf 'ok   %-38s uint loads %s->%s, copies=%s\n' \
+            "force: the load is really gone" "$before_n" "$after_n" "$copy_n"
+    else
+        printf 'FAIL %-38s want 1->0 loads and 1 copy, got %s->%s copies=%s\n' \
+            "force: the load is really gone" "$before_n" "$after_n" "$copy_n"
+        fails=$((fails + 1))
+    fi
+fi
+
 # Take forty-eight, as an assertion rather than a story. Two variables share
 # (set 0, binding 5) -- X4's shape in 228 of 409 modules. The patch must offset
 # EACH of them EXACTLY ONCE. The old code stopped at the first variable, so the
