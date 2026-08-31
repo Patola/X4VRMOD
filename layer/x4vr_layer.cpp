@@ -3182,21 +3182,32 @@ void shader_knob_report(const char *when) {
     X4VR_LOG("fog %s: volumetric composite forced to passthrough in %llu "
              "module(s) (offline: 8 of 409 match the fog signature)",
              when, (unsigned long long)g_fog_disabled.load());
-    // Task #76, with the EXPECTED count beside the observed one. The offline
-    // census says exactly four modules carry a uint named
+    // Task #76. The offline census says exactly four modules carry a uint named
     // U_fsr3g_useuitexture at byte 512 of set 4 binding 0 -- the four
-    // copy_gamma permutations, and tests/run-multiview-render.sh asserts that
-    // number against the dumps. Any other number here means the signature no
-    // longer selects what it was built to select, which is not something to
-    // discover from a screenshot.
+    // copy_gamma permutations -- and tests/run-multiview-render.sh asserts that
+    // against the dumps.
+    //
+    // **At "first present" this count is a SNAPSHOT, not a total, and take 239a
+    // is why the distinction is spelled out here.** X4 creates those
+    // permutations lazily: two were patched 3 ms before the first present and
+    // the other two 9.8 s later, so the first-present line read 2 and the run
+    // was scored FAIL against an expectation only the teardown line can meet --
+    // and these runs do not reach teardown, which the scorer already says about
+    // the pose channel two sections up. The per-module `hudless #N` lines are
+    // the record; this is a progress marker.
     const uint64_t n = g_hudless_patched.load();
+    const bool final_report = when && strcmp(when, "final") == 0;
     X4VR_LOG("hudless %s: switch forced in %llu module(s)%s", when,
              (unsigned long long)n,
              n == 0 ? " — X4VR_HUDLESS unset, or no module matched"
-                    : (n == 4 ? " — 4, as the offline census predicts"
-                              : " — EXPECTED 4; the signature has drifted, do "
-                                "NOT read the screen as an answer about the "
-                                "switch"));
+             : !final_report
+                 ? " — a SNAPSHOT; X4 creates the copy_gamma permutations "
+                   "lazily, so count the `hudless #N` lines for the total"
+             : n <= 4 ? " — at or below the 4 the offline census names; X4 "
+                        "creates only the permutations it needs"
+                      : " — MORE than the 4 the offline census names, so the "
+                        "signature has widened. Do NOT read the screen as an "
+                        "answer about the switch");
 }
 
 void bindless_report(const char *when) {

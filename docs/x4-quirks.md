@@ -11302,6 +11302,101 @@ Both now live in `shader_knob_report()`, outside every gate. This is take 173's
 failure again -- two unrelated features on one gate, with no log line saying so
 -- and the comment naming that failure is three functions away in the same file.
 
+### Take 239: it works, completely
+
+`X4VR_HUDLESS=1`, and Patola's report:
+
+> starting loadscreen didn't appear, all black. On the 3D menu, the text
+> overlay where you select continue, options, etc was not drawn. [...] the
+> savegame loadscreen was also not drawn. Started in the cockpit, HUD was not
+> there. Pressed M to bring the map, the cockpit was blurred but nothing
+> appeared. [...] I exited the game blind.
+
+and with the knob off, *"all the above elements were back."*
+
+**The patched module IS the one X4 binds** -- the last thing that had not been
+verified anywhere. And the switch does exactly what the GLSL says: `OUT_RT0 =
+hudless`, with the whole UI composite dropped.
+
+Three things follow, and the second and third are design constraints rather
+than confirmations:
+
+1. **Every scrap of X4's UI lives in that one texture.** Menus, load screens,
+   the map, the HUD -- all gone together, all back together. Nothing UI-shaped
+   survived in `hudless`, so the separation #57 needs is total, not partial.
+2. **X4's menu blur is in the SCENE chain, not the UI.** Pressing M blurred the
+   cockpit and drew nothing. So when the UI moves to its own layer, the scene
+   layer will still blur behind it. That is arguably the right behaviour -- the
+   depth cue survives -- but the blur will be locked to the scene's frame and
+   the menu to the head's.
+3. **Load screens are UI in their entirety**, so during a load our scene layer
+   is black and everything the player sees is on the UI layer.
+
+**Not yet observed: that X4 still RENDERS the UI texture.** The composite stops
+sampling it; nothing tells X4's CPU side that, since the switch is now a shader
+constant rather than game state, so its UI passes should be untouched. That is
+a strong inference and not a measurement -- the next step samples the texture,
+which settles it directly.
+
+**The tight control was not run.** 239b was launched with `X4VR_HUDLESS=-`, and
+the strict parse rejected it: *"is neither 0 nor 1 — IGNORED, nothing is
+patched"*. So the control arm was an UNSET run, not a forced-to-0 one. What is
+shown is patch-vs-no-patch; what is not shown is that rewriting the load with
+the shipped value is invisible. Worth having, not worth a run of its own -- the
+composite we build next is a stronger test of the same thing. (The strict parse
+earning its place on its first outing is the small mercy here: `strtoul("-")` is
+0, so without it the run would have silently taken the control arm and reported
+that forcing the switch changed nothing.)
+
+### The acceptance rule was wrong, and it FAILed a run that answered perfectly
+
+The scorer demanded the count be exactly 4 and 239a reported **2**, so a run
+whose screen answered the question completely was scored FAIL.
+
+**X4 creates the copy_gamma permutations lazily.** Two were patched 3 ms before
+the first present and the other two **9.8 seconds later**:
+
+    356269.102  hudless #1
+    356269.102  hudless #2
+    356269.105  mv first present   <- the aggregate line says 2 here
+    356278.948  hudless #3
+    356278.948  hudless #4
+
+The number the rule wanted exists only in the *final* report, and these runs do
+not reach teardown -- which `score_run.py` **already says**, about the pose
+channel, two sections above the one I wrote. The offline "4 of 409" ranges over
+the dump corpus; the live count ranges over one run's module creations, and I
+equated them.
+
+Fixed in both places: the layer now labels the first-present figure a snapshot,
+and the scorer counts the per-module `hudless #N` lines, which are monotonic
+and available without a teardown. Four is a **ceiling**, not a target -- fewer
+means X4 did not need every permutation, and only *more* invalidates the
+screen. 239a now reads `4 module(s) patched (ceiling 4)`.
+
+Same shape as take 202 and the four earlier false FAILs in that file: a
+rule of mine, about a number my own instrument produced, contradicting an
+observation that was never in doubt.
+
+### The pose FAIL in both arms is the map, and it is not #76
+
+Both 239a and 239b FAIL on *"the pose fell back to identity N times AFTER it
+had been driven"*. It is in **both** arms, so it has nothing to do with the
+switch -- and every late identity sample sits inside a map-or-menu window:
+
+    239a   M down 356402.347   identity 356402.487, 356409.154
+           ESC   356411.580/356412.850   identity 356415.829
+    239b   M down 356635.327   identity 356636.710, 356643.377, 356650.043
+           ESC   356654.425/356655.601   identity 356656.708
+
+Identity is *correct* there -- there is no cockpit camera with the map up. The
+defect is that head-look announces itself idle for external/floating view and
+not for the map, so the scorer cannot tell a legitimate drop-out from a real
+one. That is #72's territory and the scorer already has a `map` section holding
+the intervals it would need. **Not fixed here**, deliberately: absorbing it into
+the exclusion during a commit about something else is how a real dropout would
+later get hidden by a rule written to make a different run go green.
+
 ### What is verified, and what is not
 
 * **Verified offline**: the transform, on X4's own bytes, 4 of 409, valid, one
@@ -11310,10 +11405,11 @@ failure again -- two unrelated features on one gate, with no log line saying so
   zero and when unset, and a knob-set run being otherwise unchanged. 202 cases,
   no failures. No fixture there declares X4's block, so the harness does not
   test MATCHING -- the dumps do.
-* **NOT verified anywhere yet**: that the patched module is the one X4 BINDS.
-  That depends on X4's pass structure and is reasoned from code, not run. It is
-  the first thing the live take reads -- the teardown line must say 4, and the
-  scorer FAILs on any other number.
+* **Verified live, take 239**: that the patched module is the one X4 BINDS, and
+  that the UI is separable in its entirety.
+* **Still not verified**: that X4 keeps rendering the UI texture (inference),
+  and that forcing the shipped value is invisible (the control that was not
+  run).
 
 ## The shape of the fix
 

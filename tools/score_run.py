@@ -2000,18 +2000,30 @@ def main(path):
     # switch and forced it in zero modules is a failure, and it looks exactly
     # like a run that never asked.
     #
-    # The expected count is FOUR, and it is not a rule of thumb: exactly four of
-    # the 409 dumped modules carry a uint named U_fsr3g_useuitexture at byte 512
-    # of set 4 binding 0 -- the four copy_gamma permutations -- which
-    # tools/block_offset_census.py measures and the offline suite asserts. A
-    # different number means the signature stopped selecting what it was built
-    # for, and then nothing seen on screen is evidence about the switch.
+    # **Counted from the PER-MODULE lines, not from the aggregate, and take 239a
+    # is the whole reason.** The aggregate at "first present" is a snapshot: X4
+    # creates the copy_gamma permutations lazily, so 239a patched two of them
+    # 3 ms before the first present and the other two 9.8 s later. The line read
+    # 2, this section demanded 4, and a run whose screen answered the question
+    # perfectly -- every scrap of UI gone, all of it back without the knob --
+    # was scored FAIL by a rule I wrote. The teardown line could have said 4 and
+    # these runs never reach teardown, which this same file says about the pose
+    # channel a few sections up.
+    #
+    # So: `hudless #N` is one line per module and N is monotonic, which makes it
+    # the only count available in a run that exits the way these do.
+    #
+    # Four is a CEILING, not a target: exactly four of the 409 dumped modules
+    # carry a uint named U_fsr3g_useuitexture at byte 512 of set 4 binding 0
+    # (tools/block_offset_census.py, asserted by the offline suite). Fewer means
+    # X4 did not need every permutation; MORE means the signature widened, and
+    # only that direction invalidates the screen.
     #
     # 0 is the CONTROL arm and must be scored as a legitimate run, not as
     # "nothing happened": it forces the switch to its shipped value, so the
     # modules are still matched and rewritten and the screen must be unchanged.
-    hud = re.findall(r"hudless (?:first present|final): switch forced in "
-                     r"(\d+) module", text)
+    hud = [m.group(1) for m in
+           re.finditer(r"hudless #(\d+): U_fsr3g_useuitexture forced", text)]
     hud_asked = re.search(r"X4VR_HUDLESS=([^\s]+)", run or "")
     hud_bad = "is neither 0 nor 1" in text
     if hud_bad:
@@ -2020,29 +2032,33 @@ def main(path):
             "layer ignored it and patched NOTHING. This run says nothing about "
             "#76 in either direction")
     elif hud_asked:
-        n = int(hud[-1]) if hud else 0
-        arm = ("FORCED — X4 should emit the HUD-less scene, so the HUD must be "
-               "GONE and the scene otherwise intact"
+        n = max((int(x) for x in hud), default=0)
+        arm = ("FORCED — X4 should emit the HUD-less scene, so ALL of X4's UI "
+               "must be GONE (menus, load screens, map, HUD) and the scene "
+               "otherwise intact"
                if hud_asked.group(1) == "1" else
                "CONTROL — the switch is forced to its SHIPPED value, so this "
                "must look identical to a run with X4VR_HUDLESS unset")
         print(f"hudless  X4VR_HUDLESS={hud_asked.group(1)}: {n} module(s) "
-              f"patched — {arm}")
-        if not hud:
+              f"patched (ceiling 4) — {arm}")
+        if n == 0:
             fails.append(
-                "X4VR_HUDLESS was asked for and the layer printed no hudless "
-                "report at all — the run did not reach a present, so there is "
-                "nothing to read")
-        elif n != 4:
+                "X4VR_HUDLESS was asked for and NOT ONE module was patched — "
+                "the signature matched nothing X4 created. Re-run "
+                "tools/block_offset_census.py 4 0 --at 512 against a fresh "
+                "dump; this run says nothing about #76")
+        elif n > 4:
             fails.append(
-                f"X4VR_HUDLESS forced the switch in {n} module(s), not the 4 "
-                f"the offline census predicts. The signature no longer selects "
-                f"the copy_gamma permutations, so do NOT read the screen as an "
-                f"answer about #76 — re-run tools/block_offset_census.py 4 0 "
-                f"--at 512 against a fresh dump first")
+                f"X4VR_HUDLESS forced the switch in {n} module(s), MORE than "
+                f"the 4 the offline census names, so the signature has widened "
+                f"and is hitting shaders it was not built for. Do NOT read the "
+                f"screen as an answer about #76")
+        elif n < 4:
+            print(f"hudless  {n} of the 4 known permutations were created this "
+                  f"run — X4 makes them lazily, so this is not a shortfall")
     elif hud:
         print(f"hudless  not asked for (X4VR_HUDLESS unset); "
-              f"{hud[-1]} module(s) patched, as expected")
+              f"{max(int(x) for x in hud)} module(s) patched, as expected")
     else:
         print("hudless  not asked for in this run (X4VR_HUDLESS unset)")
 
