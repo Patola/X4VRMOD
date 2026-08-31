@@ -10726,3 +10726,41 @@ any take.
 **The fix is also #74's prerequisite.** Threading a per-frame 2D offset into
 the fragment correction is the same machinery head translation needs, because
 translation is the same vector from a different source.
+
+# Take 235 — the dump comparison CANNOT work while the servo follows the head
+
+The protocol asked Patola to hold head poses and dumped the presented eye image
+at each. The correlation came out clean -- n13/14/15 are the roll hold at -42
+deg, n20-23 pitch up, n28-31 yaw +40 -- and the measurement is still worthless.
+
+At `X4VR_FOV=1.4917` the scale is **8.60 px per degree** near the centre
+(`704 * sx * pi/180`, sx = 0.70024). Within a single held pose the declared
+camera moved:
+
+    roll -42 hold    yaw  -1.15 ..  +3.32  ( 38.5 px)   pitch +0.34 .. +7.22  (59.2 px)
+    pitch-up hold    yaw -10.89 ..  -5.27  ( 48.4 px)   pitch +21.6 .. +34.1  (107.8 px)
+    yaw +40 hold     yaw +34.61 .. +43.77  ( 78.8 px)   pitch +1.08 .. +3.14  (17.7 px)
+
+The drift under investigation is "ever so slightly". The confound is an order
+of magnitude bigger, and no amount of predict-and-subtract rescues it: the dump
+timestamps are file mtimes, uncertain by a good fraction of a second, during
+which the pose moves degrees.
+
+**The flaw is structural, not a matter of holding stiller.** The servo makes
+X4's camera follow the head, so any head motion moves the entire rendered scene;
+asking for a held head pose is asking for a held camera, and 1 degree is 8.6 px.
+
+Two further notes for whoever measures dumps next:
+
+* phase correlation on a space scene returns **zero** for the inter-eye
+  disparity, because the modal shift is the far field at 0 -- the scorer's own
+  `eye` section reports the same pairs as "22 with parallax, spread 39 px". A
+  global peak is the wrong statistic when the quantity varies with depth, which
+  is the aggregates-hide-local-defects trap in a new place.
+* the dumps carry no log line, so correlation runs through file mtimes against
+  the log's monotonic clock. That is good to a second, which is fine for a held
+  pose and useless during motion.
+
+The way out is to stop moving the head at all: `X4VR_ROLL_FORCE` changes the
+published roll with the head level and still, so the camera pose is genuinely
+constant and the only difference between dumps is the shear.
