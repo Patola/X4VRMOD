@@ -233,15 +233,24 @@ static float head_translate_max() {
 // **X4VR_HEAD_PIVOT="x,y,z" — where the eye midpoint sits relative to the
 // head's rotation centre, in head axes, metres.**
 //
-// Defaults estimated from take 231's own report rather than from a table: the
-// even-in-angle residual Patola felt is h*(1-cos) up and f*(1-cos) back, and he
-// noticed both at moderate angles, which puts h and f in the 8-12 cm range. Up
-// and FORWARD, because eyes are above the neck and ahead of it.
+// **DEFAULT ZERO, i.e. the model is off unless asked for.**
 //
-// Per-person, so it is a knob. Wrong by a centimetre leaves a millimetre of
-// residual swing at 45 degrees, which is far below the effect it removes;
-// wrong by a sign doubles it, which is why the test asserts zero and not
-// "small".
+// I derived these from take 231's report -- roll and pitch both raising him,
+// yaw pushing him back, all direction-independent, which is the signature of
+// an even-in-angle term -- and shipped 0.10/0.08 as defaults. Take 232 then
+// swept Y across 0.06, 0.10 and 0.14 and the effect did not move. A 2.3x
+// change in the one number the orbit scales linearly with produced no
+// difference, so the orbit is NOT what he is feeling, and the diagnosis was
+// wrong.
+//
+// Patola also reported apparent Z motion, and nothing here writes Z at all --
+// a second, independent reason to look outside this code.
+//
+// The mechanism stays because it is correct physics and carries a test with a
+// negative control, but its default is zero: it was added to fix a failed run
+// without first establishing that this code caused the failure, which is the
+// rule this project has for exactly this situation. Set the components
+// explicitly if a measurement ever asks for them.
 static float head_pivot_x() {
     static const float v = [] {
         const char *e = getenv("X4VR_HEAD_PIVOT_X");
@@ -252,14 +261,14 @@ static float head_pivot_x() {
 static float head_pivot_y() {
     static const float v = [] {
         const char *e = getenv("X4VR_HEAD_PIVOT_Y");
-        return e && *e ? strtof(e, nullptr) : 0.10f;
+        return e && *e ? strtof(e, nullptr) : 0.0f;
     }();
     return v;
 }
 static float head_pivot_z() {
     static const float v = [] {
         const char *e = getenv("X4VR_HEAD_PIVOT_Z");
-        return e && *e ? strtof(e, nullptr) : 0.08f;
+        return e && *e ? strtof(e, nullptr) : 0.0f;
     }();
     return v;
 }
