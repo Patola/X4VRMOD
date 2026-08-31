@@ -588,6 +588,79 @@ int main() {
                       "world space (%d of %d)", n - bad, n);
         check(bad == 0, buf);
 
+        // ---- the neck model: a PURE ROTATION must shift nothing -----------
+        //
+        // Take 231 is this case. Head translation worked, and then rolling
+        // either way raised Patola toward the roof, pitching either way did
+        // the same, and yawing either way pushed him back from whatever he
+        // was looking at. Direction-independent, so the term is EVEN in the
+        // angle: the eye midpoint orbits a rotation centre it does not sit on,
+        // and resolving that arc into head axes leaves h*(1-cos) up and
+        // -f*(1-cos) back.
+        //
+        // Nothing before this asserted it, because every earlier case fed a
+        // displacement directly and never asked what a rotation ALONE does.
+        // The requirement is zero, exactly -- not small -- since a wrong pivot
+        // sign doubles the effect instead of removing it.
+        {
+            const float pivot[3] = {0.0f, 0.10f, 0.08f};
+            int bad = 0, n = 0;
+            float worst = 0.0f;
+            for (float yaw : {0.0f, 20.0f, -45.0f, 90.0f})
+                for (float pitch : {0.0f, 15.0f, -35.0f})
+                    for (float roll : {0.0f, 25.0f, -60.0f}) {
+                        float q[4];
+                        q_of(yaw, pitch, roll, q);
+                        // Where the eye midpoint is after this rotation, given
+                        // a rotation centre held fixed at the world origin.
+                        float eye[3];
+                        to_world(q, pivot, eye);
+                        // What the layer computes: eye - R*pivot, which must
+                        // land back on the stationary centre.
+                        const x4vr::HeadShift back = x4vr::head_to_world(
+                            q[0], q[1], q[2], q[3], pivot[0], pivot[1],
+                            pivot[2]);
+                        const float dx = eye[0] - back.x;
+                        const float dy = eye[1] - back.y;
+                        const float dz = eye[2] - back.z;
+                        const x4vr::HeadShift got = x4vr::head_shift(
+                            q[0], q[1], q[2], q[3], dx, dy, dz);
+                        const float e = std::fmax(
+                            std::fabs(got.x),
+                            std::fmax(std::fabs(got.y), std::fabs(got.z)));
+                        worst = std::fmax(worst, e);
+                        n++;
+                        if (e > 1e-5f)
+                            bad++;
+                    }
+            char nb[144];
+            std::snprintf(nb, sizeof nb,
+                          "a pure head rotation shifts NOTHING once the pivot "
+                          "is removed (%d of %d, worst %.2e m)", n - bad, n,
+                          worst);
+            check(bad == 0, nb);
+
+            // And the defect is REAL without the model, or this is guarding
+            // nothing. Same rotations, pivot NOT removed: the residual has to
+            // be big enough that Patola would feel it, which he did.
+            float peak = 0.0f;
+            for (float ang : {25.0f, 45.0f, 60.0f}) {
+                float q[4];
+                q_of(0.0f, ang, 0.0f, q);
+                float eye[3];
+                to_world(q, pivot, eye);
+                const x4vr::HeadShift got = x4vr::head_shift(
+                    q[0], q[1], q[2], q[3], eye[0] - pivot[0],
+                    eye[1] - pivot[1], eye[2] - pivot[2]);
+                peak = std::fmax(peak, std::fabs(got.y));
+            }
+            char pb[128];
+            std::snprintf(pb, sizeof pb,
+                          "without the model a pure pitch raises the head by "
+                          "%.1f mm -- the take 231 defect", peak * 1000.0f);
+            check(peak > 0.005f, pb);
+        }
+
         // Length is preserved -- it is a rotation, and a version that scaled
         // would still pass a direction-only check at unit length.
         float q[4];

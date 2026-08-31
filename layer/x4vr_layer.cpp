@@ -230,6 +230,40 @@ static float head_translate_max() {
     }();
     return v;
 }
+// **X4VR_HEAD_PIVOT="x,y,z" — where the eye midpoint sits relative to the
+// head's rotation centre, in head axes, metres.**
+//
+// Defaults estimated from take 231's own report rather than from a table: the
+// even-in-angle residual Patola felt is h*(1-cos) up and f*(1-cos) back, and he
+// noticed both at moderate angles, which puts h and f in the 8-12 cm range. Up
+// and FORWARD, because eyes are above the neck and ahead of it.
+//
+// Per-person, so it is a knob. Wrong by a centimetre leaves a millimetre of
+// residual swing at 45 degrees, which is far below the effect it removes;
+// wrong by a sign doubles it, which is why the test asserts zero and not
+// "small".
+static float head_pivot_x() {
+    static const float v = [] {
+        const char *e = getenv("X4VR_HEAD_PIVOT_X");
+        return e && *e ? strtof(e, nullptr) : 0.0f;
+    }();
+    return v;
+}
+static float head_pivot_y() {
+    static const float v = [] {
+        const char *e = getenv("X4VR_HEAD_PIVOT_Y");
+        return e && *e ? strtof(e, nullptr) : 0.10f;
+    }();
+    return v;
+}
+static float head_pivot_z() {
+    static const float v = [] {
+        const char *e = getenv("X4VR_HEAD_PIVOT_Z");
+        return e && *e ? strtof(e, nullptr) : 0.08f;
+    }();
+    return v;
+}
+
 // 1.0 is life-size. Exposed because the honest amount and the comfortable
 // amount are different questions, and only a take can separate them.
 static float head_translate_gain() {
@@ -10625,9 +10659,28 @@ void vr_thread() {
             if (head_translate_enabled()) {
                 const auto &p0 = views[0].pose.position;
                 const auto &p1 = views[1].pose.position;
-                const float cx = 0.5f * (p0.x + p1.x);
-                const float cyp = 0.5f * (p0.y + p1.y);
-                const float cz = 0.5f * (p0.z + p1.z);
+                // **The inverse neck model, and take 231 is why it exists.**
+                //
+                // The eye midpoint is not the head's rotation centre: it sits
+                // above and in front of it, so a pure head rotation swings it
+                // along an arc. Take 231 measured that arc through Patola --
+                // roll BOTH ways raised him, pitch BOTH ways raised him, yaw
+                // BOTH ways pushed him back. Direction-independent means the
+                // term is EVEN in the angle, and resolving the arc into head
+                // axes leaves exactly h*(1-cos) up and -f*(1-cos) back.
+                //
+                // The arc is real -- eyes do move when a head turns. It is
+                // wrong HERE because X4's camera has already rotated in place
+                // about the cockpit eye point, so adding the orbit on top puts
+                // the eye where no real head pose is. A pure rotation must
+                // produce zero shift, and subtracting R*pivot is what makes
+                // that true by construction rather than by tuning.
+                const x4vr::HeadShift piv = x4vr::head_to_world(
+                    o.x, o.y, o.z, o.w, head_pivot_x(), head_pivot_y(),
+                    head_pivot_z());
+                const float cx = 0.5f * (p0.x + p1.x) - piv.x;
+                const float cyp = 0.5f * (p0.y + p1.y) - piv.y;
+                const float cz = 0.5f * (p0.z + p1.z) - piv.z;
                 // Neutral point, latched once. Without it the shift would be
                 // the player's offset from the runtime's stage origin, which
                 // is wherever they happened to set their guardian -- a metre
@@ -10641,8 +10694,12 @@ void vr_thread() {
                     oz = cz;
                     X4VR_LOG("head translate: neutral point latched at "
                              "(%.3f, %.3f, %.3f) m — every shift below is "
-                             "measured from here, not from the stage origin",
-                             ox, oy, oz);
+                             "measured from here, not from the stage origin. "
+                             "Neck pivot (%.3f, %.3f, %.3f) m in head axes is "
+                             "subtracted first, so a pure rotation shifts "
+                             "NOTHING (take 231's defect)",
+                             ox, oy, oz, head_pivot_x(), head_pivot_y(),
+                             head_pivot_z());
                 }
                 const x4vr::HeadShift hs = x4vr::head_shift(
                     o.x, o.y, o.z, o.w, cx - ox, cyp - oy, cz - oz);

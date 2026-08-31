@@ -540,6 +540,25 @@ struct HeadShift {
     float x = 0.0f, y = 0.0f, z = 0.0f;
 };
 
+// Head axes -> world. The inverse of head_shift, and it exists for #74's neck
+// model: the pivot offset is stated in head axes and has to be rotated OUT to
+// be subtracted from a world-space eye position.
+//
+// tests/headlook.cpp deliberately keeps its own copy of this arithmetic rather
+// than calling here, so the round-trip case is an independent oracle instead of
+// a function checked against itself.
+inline HeadShift head_to_world(float qx, float qy, float qz, float qw, float vx,
+                               float vy, float vz) {
+    const float tx = 2.0f * (qy * vz - qz * vy);
+    const float ty = 2.0f * (qz * vx - qx * vz);
+    const float tz = 2.0f * (qx * vy - qy * vx);
+    HeadShift r;
+    r.x = vx + qw * tx + (qy * tz - qz * ty);
+    r.y = vy + qw * ty + (qz * tx - qx * tz);
+    r.z = vz + qw * tz + (qx * ty - qy * tx);
+    return r;
+}
+
 inline HeadShift head_shift(float qx, float qy, float qz, float qw, float dx,
                             float dy, float dz) {
     // v' = v + 2w(u x v) + 2u x (u x v), with u the CONJUGATE vector part --
