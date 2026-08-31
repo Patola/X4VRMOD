@@ -10764,3 +10764,64 @@ Two further notes for whoever measures dumps next:
 The way out is to stop moving the head at all: `X4VR_ROLL_FORCE` changes the
 published roll with the head level and still, so the camera pose is genuinely
 constant and the only difference between dumps is the shear.
+
+# Take 237 — the drift is LOCALISED: submission side, not render side
+
+Two phases, each with the confounding variable structurally absent rather than
+asked to be small. The design is Patola's: he proposed the numpad half.
+
+    Phase A   head rotates, X4's camera does NOT   (X4VR_HEADLOOK unset)
+              -> the cockpit drifts, same directions, no Z
+    Phase B   X4's camera rotates via numpad, head still
+              -> NO drift. "rotation is perfectly pivoted"
+
+**Phase B clears everything upstream of layer submission.** X4's rendering, the
+stereo shear, the SPIR-V patches, the projection arithmetic and the servo are
+all geometrically correct under camera rotation. Six takes of elimination end
+here: the drift requires the HEAD to move relative to the DECLARED pose, and
+does not require X4's camera to move at all.
+
+The scorer pins the configuration: `pose 0 driven, 32 identity`, `world-locked
+all run`, `poselag nothing to compare`. The declared pose was identity
+throughout, so the only mechanism acting was the compositor reprojecting our
+layer by the full head rotation.
+
+## The obvious suspect there is CLEAN
+
+    declared   vr_declared_fov() = +/-55 deg on all four sides
+               (X4VR_FOV 1.4917 * 73.7399 = 110.0 deg)
+    rendered   sx = sy = 0.70024  ->  110.0 deg on both axes at 1:1
+
+The declared frustum matches what X4 renders, on both axes. Not an FOV
+mismatch.
+
+## What is eliminated, cumulatively
+
+    1  the head-translation path        present with X4VR_HEAD_TRANSLATE off
+    2  the neck orbit in our shift      present with the shift at zero
+    3  the declared POSITION            take 234, knob confirmed live
+    4  servo lag / timing warp          persists while the pose is HELD
+    5  X4's own camera orbiting         vanilla rotates in place, no parallax
+    6  everything upstream of submit    take 237 phase B
+    7  declared vs rendered FOV         both 110 deg, checked above
+
+## A caution for whoever resumes this
+
+Phase A is NOT a clean read of "drift". With head-look off and an identity
+declared pose, rotating the head is exactly like looking around a fixed screen
+floating in space -- the image swings through the view because you are looking
+away from it, and that is expected. The drift is an EXTRA displacement on top
+of that, and separating the two by eye is a much harder judgement than the
+phase-B null, which is unambiguous.
+
+So phase B is the load-bearing half. Phase A says "something remains"; it does
+not say how much.
+
+The magnitude also failed to behave as a reprojection would: in take 233 with
+head-look ON, the servo makes the declared orientation follow the head, so the
+reprojection angle for yaw and pitch is near zero (poselag median 0.000, p90
+0.115) -- yet drift was reported on those axes too. In take 237 every axis was
+reprojected by the FULL head angle, and the drift was described in similar
+terms rather than dramatically worse. A reprojection artifact should scale with
+the reprojection angle. This one does not appear to, which is the next thing to
+pin down and the reason no mechanism is named here.
