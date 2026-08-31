@@ -58,6 +58,31 @@ in the dumps we have", never "X4 does not use it"**: the injector forces
 `ssao=0`, `ssr=false`, `antialiasing=none`, so `M_projection_uj`, `M_jitter`
 and `M_prevworldviewprojection` read zero because we emptied them.
 
+## block_offset_census.py
+
+**What else lives at byte N of a uniform block — the test to run before writing
+one.** `uniform_block_scan.py` aggregates by member *index*, which is right for
+the camera block, where one layout covers every module. Sets 2 and 4 are
+generated per shader family, so the same index — and the same byte — is a
+different variable in different modules.
+
+    tools/block_offset_census.py 1 0              # layouts: camera == 1
+    tools/block_offset_census.py 4 0 --at 512     # who ELSE is at that byte
+    tools/block_offset_census.py 4 0 --name fsr3g
+    tools/block_offset_census.py 4 0 --layout mod-0012
+
+A host write addresses a byte and X4 binds many shader families through one
+descriptor slot, so the question a write must survive is not "do the modules I
+care about agree on the offset" — four permutations of one shader always will —
+but **what every other module keeps there**. Byte 512 of set 4 is
+`U_fsr3g_useuitexture` in 4 modules and `U_patternstr`/`U_pattern_color`/six
+more in 119; byte 1520 of set 1 is `B_csmdebugcolor` in all 370. That contrast
+is the tool's own control, and the second case is the one `X4VR_CSM_DEBUG`
+writes live.
+
+Counts over `/tmp/x4vr-shaders` are **405 X4 modules plus 4 of ours** — the
+cursor shim is in the dumps, and it declares `g_tCursor` at set 1 binding 0.
+
 ## headlook_clip.py
 
 The clip-space matrix for #33's head rotation, derived and self-checked

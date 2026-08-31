@@ -10133,13 +10133,20 @@ mod-0012 -- makes X4 emit the hudless image alone.
 
 Settle these before building, cheapest first:
 
-1. **Is set 4 binding 0 writable the way the camera block is?** It is called
-   DYNAMIC, so per-draw sub-allocations may break the write path
-   `X4VR_CSM_DEBUG` uses. Grep-and-read work, no run. Everything else depends
-   on it.
-2. One cheap take: set the switch and look. HUD gone + scene intact answers
+1. ~~**Is set 4 binding 0 writable the way the camera block is?**~~
+   **ANSWERED, offline** -- see "Is set 4 binding 0 writable the way the camera
+   block is?" below. The mechanism transfers (no dynamic offsets, mapped
+   coherent arena, the same walk already reads set 3's per-draw block); the
+   ADDRESSING does not. 123 of 370 modules have a member at byte 512 and in
+   only 4 is it the switch, so a write by offset corrupts ~119 shader
+   families. **Do not write the buffer.** Force the branch in mod-0012's
+   SPIR-V instead -- `OpLoad` -> `OpCopyObject`, an in-place four-word
+   substitution in a module the layer already patches every frame.
+2. One cheap take: force the branch and look. HUD gone + scene intact answers
    whether the UI texture survives, at the same time.
-3. Then reaching `S_diffuse_map` and copying it into a swapchain of our own.
+3. Then reaching the UI texture. `S_diffuse_idx` (member 16, byte 480) is its
+   bindless index, but the UI's own render pass is a cheaper source and the
+   layer already hooks `vkCreateFramebuffer`.
 
 ## The technique that found both
 
@@ -11013,6 +11020,8 @@ the hudless image alone.
     member       21 of BLOCK_BUFFER_BINDING_SLOT_DYNAMIC
     location     descriptor set 4, binding 0, byte 512 (uint index 128)
     declared by  4 modules, ALL agreeing on offset 512
+                 -- which is a TAUTOLOGY, not reassurance: those four are the
+                 four copy_gamma permutations. See the correction below.
     SAMPLED by   mod-0012 -- one of the composite's own fragment modules --
                  as OpAccessChain %_ptr_Uniform_uint %__0 %int_21
     type         uint, so any non-zero word is true
@@ -11025,10 +11034,140 @@ modules and sampled by zero, and that cost this project takes.
 * that setting it leaves the UI texture intact and reachable -- the branch says
   FFX would own composition, and X4 may or may not keep feeding the texture
 * how to locate `S_diffuse_map` at that draw and copy it into a swapchain of
-  our own
-* whether set 4 binding 0 is writable the way the camera block is. It is called
-  DYNAMIC, which suggests per-draw sub-allocations, so the write path the CSM
-  debug knob uses may not transfer unchanged
+  our own -- but see below: its bindless index is member 16 of the same block,
+  and there is a cheaper source than the block
+
+**ANSWERED below:** whether set 4 binding 0 is writable the way the camera
+block is. The mechanism transfers; the addressing does not.
+
+## Is set 4 binding 0 writable the way the camera block is?
+
+Offline, no run. **The mechanism transfers. The addressing does not, and that
+retires the write as the route.**
+
+### The mechanism transfers -- all four properties the camera write needs hold
+
+1. **No dynamic offsets.** Despite the name, X4 never passes
+   `pDynamicOffsets`: descriptor sets are baked -- 1652 allocations, static
+   `(buffer, offset)` pairs, set state appearing in renderdoc as *Initial
+   Contents* (`docs/frame-analysis.md`, the capture). The descriptor's own
+   offset IS the address.
+2. **Same arena, same access.** Memory 793/829 are ~268 MB host-coherent
+   persistently mapped; X4 updates constants by plain CPU memcpy, with zero
+   `vkCmdUpdateBuffer` in the whole frame.
+3. **The layer's walk already reaches a per-draw block.** `proj OBJBLOCK`
+   reports up to **331 slots readable, winner range 768, `set3/range768
+   x13748`** in one frame. That is set 3, the *per-object* block, reached
+   through the same `buf_binding -> mapped` walk. Per-draw is not the obstacle.
+4. **The write window is the same.** `X4VR_CSM_DEBUG` writes from the submit
+   hook -- after X4 has recorded every draw and memcpy'd its constants, before
+   the GPU reads them.
+
+### The addressing does not -- measured, not reasoned
+
+`tools/block_offset_census.py` was written for this and is the test to run
+before writing any block offset ever again:
+
+    tools/block_offset_census.py 4 0 --at 512
+
+The camera block is safe to write **by offset** because every slot has ONE
+layout. The DYNAMIC block is generated per shader family by
+`MACRO_BUFFER_DYNAMIC`, exactly like set 2's MATERIAL block: **38 distinct
+layouts across the 370 modules that declare it**, sizes from 432 to 3824 bytes.
+
+Byte 512, across all 370:
+
+| modules | type | member at byte 512 |
+|---|---|---|
+| 54 | float | `U_patternstr` |
+| 32 | vec4 | `U_pattern_color` |
+| 14 | float | `U_diffuse_tiling` |
+| 8 | float | `U_diffusestr` |
+| 6 | vec4 | `S_color_glow_color` |
+| **4** | **uint** | **`U_fsr3g_useuitexture`** |
+| 2 | float | `U_waterlevel` |
+| 2 | float | `U_override_normal_pattern` |
+| 1 | vec4 | `S_shad_color` |
+
+**123 modules have a member starting exactly at byte 512, 19 more straddle it,
+and in only 4 is it the switch.** Writing `uint 1` into the other 119 writes
+float `1.4e-45` -- a denormal that reads as zero -- so a blind write by offset
+zeroes pattern strength, diffuse tiling, glow colour and water level across the
+frame. Not "might not work": a global visual corruption with nothing to do with
+the HUD. Byte 480 is worse -- **13** different members, `S_diffuse_idx` in 4
+against `S_pattern_tiling` (36), `S_pattern_color` (32), `U_diffusestr` (14).
+
+**The negative control, run first.** Same tool, the block whose write is known
+to work -- `X4VR_CSM_DEBUG` writes byte 1520 and takes 229/230 saw it on
+screen:
+
+    set 1 binding 0  ->  1 distinct layout, 370 modules, 72 members
+    byte 1520        ->  370 modules, ALL uint B_csmdebugcolor, 0 straddling
+
+One name at one byte in every module that has it. The instrument separates the
+two cases, so its reading on set 4 is a measurement rather than a shape.
+
+(That control also caught a real thing about the dump set: **four of the 409
+dumps are OURS**, not X4's -- the cursor shim declares `g_tCursor` at set 1
+binding 0. Counted naively they appeared as a second camera-block "layout" with
+zero members. Any count over `/tmp/x4vr-shaders` is 405 X4 modules plus 4 of
+ours.)
+
+**Correction to this file.** The line above says the switch is "declared by 4
+modules, ALL agreeing on offset 512" and offers the agreement as
+reassurance. It is a tautology: the four are the four `copy_gamma`
+permutations, so of course they agree. The number that decides the question is
+the 119 that put something *else* there, and it had not been measured. The
+consistent-offset test is the right test for the CAMERA block, where one layout
+covers every slot; it is the wrong test here.
+
+Writing it safely would mean aiming at the exact slot bound for the
+`copy_gamma` draw -- per-draw pipeline-to-descriptor tracking the layer does
+not have (`obj_bound` is hardcoded to set index 3, and
+`x4vr_CmdBindDescriptorSets` passes `dynCount`/`dyn` straight through without
+recording them).
+
+### And that is moot, because the module is one we already patch
+
+    take 235:  mv final: rp #0 <- frag module #12 (mod-0012.spv)
+               samples set 0 binding 5[53306], set 0 binding 5[53306]
+               [index-offset APPLIED]
+
+**`mod-0012` is the present pass's fragment module, it runs every frame, and
+the layer already rewrites it.** Two bindless samples -- exactly `copy_gamma`'s
+`hudless` and `ui`. This was never a candidate module; it is one we have been
+modifying since task #13.
+
+So force the branch in the SPIR-V instead of in the buffer. The switch is read
+once, as `OpAccessChain %_ptr_Uniform_uint %block %int_21` then `OpLoad %uint`.
+`OpLoad` is four words (op, type, result, pointer) and `OpCopyObject` is four
+words (op, type, result, operand), so it is an **in-place substitution** --
+same word count, no re-layout, no new ids beyond one `uint` constant. Against
+per-draw descriptor tracking, that is not a close call.
+
+### Where the UI texture comes from
+
+`S_diffuse_idx` -- member 16, byte 480, `uint`, read by the fragment stage --
+is the bindless index of `S_diffuse_map`, so the UI texture's identity is in
+the same block as the switch. Reading it host-side has the same addressing
+problem, and **we probably do not need to**: the UI has its own render pass
+(the capture's 2816x1385 `B8G8R8A8_SRGB`, 232 draws, immediately before the
+1-draw final blit), and the layer already hooks `vkCreateFramebuffer` and knows
+every pass's attachments.
+
+### Two things to settle before building on this
+
+* **`#103`.** This file's frame analysis calls it "LDR composition (scene +
+  UI)" and describes a fullscreen textured quad bringing the scene in with UI
+  geometry drawn on top. `copy_gamma`'s GLSL says the UI arrives as a
+  *separate* premultiplied-alpha texture. Both cannot describe the same image.
+  A full-screen UI backdrop would reconcile them, but that is a guess and it
+  has not been checked.
+* **The no-dynamic-offsets fact rests on one renderdoc capture**, and it is the
+  only direct evidence about how set 4 is bound. It does not change the
+  recommendation -- the aliasing table retires the write either way -- but if
+  we ever do need to read that block host-side it wants confirming. One counter
+  on `dynCount` in `x4vr_CmdBindDescriptorSets` rides along free on any take.
 
 ## The shape of the fix
 
