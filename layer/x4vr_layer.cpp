@@ -283,6 +283,32 @@ static float head_translate_gain() {
     return v;
 }
 
+// **Task #75/#74: what the eye image was actually rendered FROM.**
+//
+// Take 233's control: with translation OFF, rolling or pitching still lifts the
+// cockpit slightly and yawing still pushes it back -- small, even in the angle,
+// and present long before #74 existed. The declared layer pose carries
+// views[e].pose.position, which orbits the neck, while X4 renders from a camera
+// that only ROTATES. The compositor is told the pixels came from a moving point
+// when they came from a fixed one, and reprojects the difference.
+//
+// With translation on we apply that same orbit again through the shear, which
+// is why it grew from "almost unnoticeable" to worth reporting.
+struct RenderedEye {
+    std::atomic<int> valid{0};
+    std::atomic<float> nx{0.0f}, ny{0.0f}, nz{0.0f}; // neutral, runtime space
+    std::atomic<float> sx{0.0f}, sy{0.0f};           // shift, head axes
+};
+static RenderedEye g_reye;
+
+// X4VR_DECLARE_RENDERED_POS=1 — declare the position we rendered from instead
+// of the one the headset is at. Off by default: it changes what the compositor
+// is told on every frame, and no take has judged it.
+static bool declare_rendered_pos() {
+    static const bool on = x4vr::env_on("X4VR_DECLARE_RENDERED_POS", false);
+    return on;
+}
+
 // Task #77: turn the eye disparity by the head's roll.
 //
 // **ON by default since take 221**, which is the condition the previous
@@ -10665,7 +10691,7 @@ void vr_thread() {
             // would read a pure rotation as a translation. Averaging the two
             // views puts the point back between them.
             float tx = 0.0f, ty = 0.0f;
-            if (head_translate_enabled()) {
+            {
                 const auto &p0 = views[0].pose.position;
                 const auto &p1 = views[1].pose.position;
                 // **The inverse neck model, and take 231 is why it exists.**
@@ -10719,10 +10745,21 @@ void vr_thread() {
                 // start sampling geometry X4 never drew.
                 const float lim = head_translate_max();
                 const float gain = head_translate_gain();
-                tx = x4vr::clampf(hs.x * gain, -lim, lim);
-                ty = x4vr::clampf(hs.y * gain, -lim, lim);
+                if (head_translate_enabled()) {
+                    tx = x4vr::clampf(hs.x * gain, -lim, lim);
+                    ty = x4vr::clampf(hs.y * gain, -lim, lim);
+                }
+                // Published whether or not the shift is applied: the neutral is
+                // what the declared position needs even when tx/ty are zero,
+                // and that is the case take 233 measured.
+                g_reye.nx.store(ox, std::memory_order_relaxed);
+                g_reye.ny.store(oy, std::memory_order_relaxed);
+                g_reye.nz.store(oz, std::memory_order_relaxed);
+                g_reye.sx.store(tx, std::memory_order_relaxed);
+                g_reye.sy.store(ty, std::memory_order_relaxed);
+                g_reye.valid.store(1, std::memory_order_release);
                 static uint64_t tn = 0;
-                if ((tn++ % 600) == 0)
+                if (head_translate_enabled() && (tn++ % 600) == 0)
                     X4VR_LOG("head translate: raw (%.4f, %.4f, %.4f) m in head "
                              "axes -> published (%.4f, %.4f) after gain %.2f "
                              "and clamp %.3f%s. z is NOT applied: a lateral "
@@ -10889,6 +10926,36 @@ void vr_thread() {
                 pv[e].pose.orientation.z = q[2];
                 pv[e].pose.orientation.w = q[3];
                 pv[e].pose.position = views[e].pose.position;
+                // #75's position half. The pixels came from the NEUTRAL point
+                // plus our own eye offset -- never from the orbiting point the
+                // runtime reports -- so declaring the latter asks the
+                // compositor to correct a difference that is not in the image.
+                if (declare_rendered_pos() &&
+                    g_reye.valid.load(std::memory_order_acquire)) {
+                    const float half = 0.5f * configured_ipd();
+                    const x4vr::HeadShift off = x4vr::head_to_world(
+                        q[0], q[1], q[2], q[3],
+                        (e == 0 ? -half : half) +
+                            g_reye.sx.load(std::memory_order_relaxed),
+                        g_reye.sy.load(std::memory_order_relaxed), 0.0f);
+                    pv[e].pose.position.x =
+                        g_reye.nx.load(std::memory_order_relaxed) + off.x;
+                    pv[e].pose.position.y =
+                        g_reye.ny.load(std::memory_order_relaxed) + off.y;
+                    pv[e].pose.position.z =
+                        g_reye.nz.load(std::memory_order_relaxed) + off.z;
+                    static bool said_rp = false;
+                    if (!said_rp) {
+                        said_rp = true;
+                        X4VR_LOG("declared position: RENDERED-FROM, not the "
+                                 "headset's. neutral + R*(eye %.4f + shift) — "
+                                 "the runtime's own eye position orbits the "
+                                 "neck and X4's camera does not, and take 233 "
+                                 "measured that difference as a small "
+                                 "even-in-angle drift with translation OFF",
+                                 half);
+                    }
+                }
                 // Task #35 piece 2: the frustum the AFFINE was baked for, from
                 // whichever source offaxis_target() latched. The two must name
                 // the same rectangle or the compositor maps our pixels onto a
