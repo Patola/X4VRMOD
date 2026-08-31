@@ -2654,6 +2654,45 @@ target — something copies the post-processed scene into it and UI is drawn on
 top — and the actual tonemapping happens elsewhere (`#95`'s writers are rp
 #31/#30/#32/#38/#39/#64).
 
+> **CORRECTED (take 238 follow-up). `#103` is the UI TEXTURE, not a
+> composition.** The paragraph above is right that it is not a tonemap output
+> and right that three of its pipelines are UI. What it gets wrong is the
+> fullscreen quad: *"something copies the post-processed scene into it"* is an
+> inference from shape, and `mod-0022` has since been **named**.
+>
+> `tools/name_module.py` fingerprints a module by its DYNAMIC block, whose tail
+> is generated from the shader's own `<properties>` list. `mod-0022`'s tail
+> matches `visual_transition.xml` — X4's full-screen UI fade — and its
+> fragment ends
+>
+>     ColorBaseDiffuse.rgb *= U_useralphascale;      // premultiply
+>     OUT_RT0 = saturate(vec4(rgb, a * F_alphascale));
+>
+> **premultiplied alpha**, which is exactly the format `copy_gamma.frag.glsl`
+> consumes as `ui.rgb + (1.0 - ui.a) * hudless.rgb`. It brings in a UI overlay,
+> not the scene. (`xu_simple_hdr_out.xml` has an identical property list; the
+> tie breaks on the vertex stage — `mod-0022` declares only `gl_VertexIndex`,
+> i.e. `drawfs.vert.glsl`, which is `visual_transition`'s.)
+>
+> Take 203's numbering makes the same target `#65`, 1408×1408 `fmt=50`, and it
+> shows the whole writer set: **rp #33** draws `visual_transition` and **rp
+> #45** draws `mod-0261/0263/0265/0345`, which name as `xu_ui_unlit_sdf`,
+> `xu_ui_unlit` and `xu_ui_unlit_sdf_outline` — SDF text and UI quads, carrying
+> `U_mat_dynamicglow`/`U_threshold`/`U_offset`, the UIGLOW uniforms of
+> `common_ui.glsl`'s `ui_output()`. Nothing but UI writes it.
+>
+> Note those four are classified `World,live-sx` by the layer. That is the
+> documented false positive — X4's UI vertex shaders read member 0 of the set-3
+> block exactly as world geometry does — and it is why "what is this module"
+> must be answered by naming rather than by classification.
+>
+> Consequence for #57/#76: **the separation is already there in the frame.** The
+> UI target holds UI alone with alpha, and the scene reaches `copy_gamma`
+> already HUD-less. What is NOT yet directly observed is that `copy_gamma`'s
+> `S_diffuse_idx` resolves to this image — the bindless index is a runtime
+> value. The take that forces `U_fsr3g_useuitexture` answers it for free: HUD
+> gone, scene intact.
+
 `X4VR_MASK_TONEMAP` therefore masks more than a tonemap: it masks every
 single-SRGB-attachment pass, UI geometry included. Empirically harmless — the
 screen was unchanged and `MISMATCHED=0`, `layer-0-only=0`, `wide=0` — because

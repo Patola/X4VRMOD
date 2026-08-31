@@ -83,6 +83,32 @@ writes live.
 Counts over `/tmp/x4vr-shaders` are **405 X4 modules plus 4 of ours** — the
 cursor shim is in the dumps, and it declares `g_tCursor` at set 1 binding 0.
 
+## name_module.py
+
+**What a dumped module IS, not just which dump it is.** The FNV-1a hash join
+(`module_map.py`) answers "which mod-NNNN"; this answers "which X4 shader".
+
+    tools/name_module.py mod-0012 mod-0022
+    tools/name_module.py                     # everything it can name
+    tools/name_module.py --ambiguous         # the ones it cannot pin
+
+The DYNAMIC block's tail is generated from the shader's own `<properties>` list
+in `shadergl/ogl/*.xml`, so the member names are the property names with a type
+prefix — a fingerprint from a dump back to a source file. Validated on a module
+identified independently: `mod-0012` matches `copy_gamma.xml` EXACT and nothing
+else, and the layer already names it in the log.
+
+**38 of 409 named uniquely, 24 ambiguous, 308 unmatched.** The named ones are
+the post-process, present and UI shaders — small property lists, no
+macro-injected members — which is the class every question about the composite
+and the HUD lands in. UNMATCHED means the fingerprint cannot pin it, never "not
+an X4 shader". Ambiguity is reported, not hidden: `visual_transition` and
+`xu_simple_hdr_out` have identical property lists, and the tie breaks on the
+vertex stage.
+
+This is the tool that settled `#103` — the "fullscreen quad bringing the scene
+in" is `visual_transition`, a UI fade, so the target holds UI alone.
+
 ## headlook_clip.py
 
 The clip-space matrix for #33's head rotation, derived and self-checked

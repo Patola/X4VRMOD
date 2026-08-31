@@ -11155,19 +11155,77 @@ problem, and **we probably do not need to**: the UI has its own render pass
 1-draw final blit), and the layer already hooks `vkCreateFramebuffer` and knows
 every pass's attachments.
 
-### Two things to settle before building on this
+### One thing still to settle
 
-* **`#103`.** This file's frame analysis calls it "LDR composition (scene +
-  UI)" and describes a fullscreen textured quad bringing the scene in with UI
-  geometry drawn on top. `copy_gamma`'s GLSL says the UI arrives as a
-  *separate* premultiplied-alpha texture. Both cannot describe the same image.
-  A full-screen UI backdrop would reconcile them, but that is a guess and it
-  has not been checked.
-* **The no-dynamic-offsets fact rests on one renderdoc capture**, and it is the
-  only direct evidence about how set 4 is bound. It does not change the
-  recommendation -- the aliasing table retires the write either way -- but if
-  we ever do need to read that block host-side it wants confirming. One counter
-  on `dynCount` in `x4vr_CmdBindDescriptorSets` rides along free on any take.
+**The no-dynamic-offsets fact rests on one renderdoc capture**, and it is the
+only direct evidence about how set 4 is bound. It does not change the
+recommendation -- the aliasing table retires the write either way -- but if we
+ever do need to read that block host-side it wants confirming. One counter on
+`dynCount` in `x4vr_CmdBindDescriptorSets` rides along free on any take.
+
+## The `#103` contradiction: RESOLVED, and it was never a contradiction
+
+`docs/frame-analysis.md` called `#103` *"LDR composition (scene + UI)"* while
+`copy_gamma.frag.glsl` says the UI arrives as a separate premultiplied-alpha
+texture. **`#103` is the UI texture.** The two were not competing measurements:
+one is X4's current shipped source, the other a **label inferred from shape**
+in an old capture -- an SRGB LDR target after the HDR chain, with a fullscreen
+textured quad drawn into it, therefore "something copies the scene in".
+
+The step that fails is the fullscreen quad, and it fails because that draw can
+now be **named** instead of inferred.
+
+### Naming a module from its own block
+
+`tools/name_module.py`. The DYNAMIC block's tail (byte 432 on) is generated
+from the shader's `<properties>` list in `shadergl/ogl/*.xml`, so the member
+names ARE the property names with a type prefix. That is a fingerprint from a
+dump to a source file. Validated on a module identified independently:
+`mod-0012` matches `copy_gamma.xml` EXACT and nothing else, and we already knew
+it was `copy_gamma` from the layer's own log and its two bindless samples.
+
+    mod-0022   ->  visual_transition.xml     X4's full-screen UI fade
+    mod-0261   ->  xu_ui_unlit_sdf.xml       SDF text
+    mod-0263   ->  xu_ui_unlit.xml           UI quads
+    mod-0265   ->  xu_ui_unlit.xml
+    mod-0345   ->  xu_ui_unlit.xml
+
+`visual_transition.frag.glsl` ends by **premultiplying alpha** --
+`rgb *= U_useralphascale; OUT_RT0 = saturate(vec4(rgb, a * F_alphascale))` --
+which is precisely the format `copy_gamma` consumes. It is a UI overlay, not a
+scene blit.
+
+### The whole writer set, in our own configuration
+
+Take 203 numbers the same target `#65`, 1408x1408 `fmt=50 B8G8R8A8_SRGB`, and
+its framebuffer lines name **both** its passes:
+
+    fb  rp #33: 1408x1408 attachments=1 imgs=[#65]   <- visual_transition
+    fb  rp #45: 1408x1408 attachments=1 imgs=[#65]   <- xu_ui_unlit*, SDF text
+
+**Nothing but UI writes it.** rp #33 is also the only pass the layer tags
+`canvas` that is not a present pass, and rp #45's modules were bound as
+`-> original`, i.e. treated as unsheared. Two instruments already agree it is
+the UI.
+
+Note those four UI modules are classified **`World,live-sx`** by the layer.
+That is the documented false positive -- X4's UI vertex shaders read member 0
+of the set-3 block exactly as world geometry does -- and it is the reason "what
+is this module" has to be answered by naming and not by classification. Reading
+the classification as the answer is what produced the "scene + UI" label in the
+first place.
+
+### What this changes for #57/#76
+
+**The separation exists in the frame already**, not only in the shader source:
+one image holding UI alone with alpha, and a scene that reaches `copy_gamma`
+HUD-less. The remaining unobserved link is that `copy_gamma`'s `S_diffuse_idx`
+resolves to that image -- a runtime bindless value, not readable offline. The
+take that forces `U_fsr3g_useuitexture` settles it for free: HUD gone, scene
+intact.
+
+One caution for the design, not for this finding: the UI target is logged
+`MASKED`, so the layer is already doubling it per eye.
 
 ## The shape of the fix
 
