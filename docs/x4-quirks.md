@@ -10888,3 +10888,77 @@ needing slot selection, and X4's CPU-side culling would not move with it.
 DEFERRED, not rejected. #74 is not clean while the X/Y drift stands, #76 gates
 #71, and depth reprojection would introduce a visible-artifact class into the
 territory that killed the previous attempts.
+
+# #76/#57 — X4 ALREADY SEPARATES THE HUD, and ships the switch to prove it
+
+Found by reading X4's shipped GLSL rather than by instrumenting the frame. The
+same technique that found `B_csmdebugcolor` for #70.
+
+## Why one layer can never fix #76
+
+X4 renders with **no roll** -- we never drive roll into its camera -- so the
+declared layer pose has two choices and both are wrong:
+
+    declare roll = 0      world stays level (right), HUD counter-rotates (wrong)
+    declare roll = head   HUD stays put (right), world rolls with the head (wrong)
+
+Patola confirmed the first directly: *"all the HUD elements always stay
+perfectly level to the world and accompany the roll of my head, rolling to the
+opposite side."* One layer cannot satisfy both, which is exactly why #57 asks
+for a second one. #30/#40's canvas does NOT solve this: it is shader-side
+stereo placement, putting the UI at a chosen depth, and the UI still travels in
+the same composition layer and is still reprojected.
+
+## The composite, from `copy_gamma.frag.glsl`
+
+    if (U_fsr3g_useuitexture) {
+        // FFX will own UI composition, so feed only HUDLESS into swapchain
+        OUT_RT0 = hudless;
+    } else {
+        OUT_RT0 = hudless;
+        vec4 ui = texelFetch(S_diffuse_map, ivec2(gl_FragCoord.xy), 0);
+        OUT_RT0.rgb = ui.rgb + (1.0 - ui.a) * hudless.rgb;
+    }
+
+**The scene arrives at this pass already HUD-less**, in every AA mode including
+the plain fallback -- the variable is called `hudless` throughout. The UI is a
+separate texture, premultiplied alpha, `texelFetch`ed 1:1 with no filtering.
+`test/dlssg_ui_verify.frag.glsl` states the same law independently, because
+DLSS frame generation needs a HUD-less input:
+
+    reconstructed = ui.rgb + (1.0 - ui.a) * LinearFromSRGB_Deprecated(hudless.rgb)
+
+**So the separation #57 needs already exists inside X4**, maintained for
+somebody else's feature, and `U_fsr3g_useuitexture` is the switch that hands us
+the hudless image alone.
+
+## Where the switch lives, verified the way #70 taught
+
+    member       21 of BLOCK_BUFFER_BINDING_SLOT_DYNAMIC
+    location     descriptor set 4, binding 0, byte 512 (uint index 128)
+    declared by  4 modules, ALL agreeing on offset 512
+    SAMPLED by   mod-0012 -- one of the composite's own fragment modules --
+                 as OpAccessChain %_ptr_Uniform_uint %__0 %int_21
+    type         uint, so any non-zero word is true
+
+The sampled check is not a formality: `M_shadowCSM0Clip` is declared by 370
+modules and sampled by zero, and that cost this project takes.
+
+## What is NOT yet established
+
+* that setting it leaves the UI texture intact and reachable -- the branch says
+  FFX would own composition, and X4 may or may not keep feeding the texture
+* how to locate `S_diffuse_map` at that draw and copy it into a swapchain of
+  our own
+* whether set 4 binding 0 is writable the way the camera block is. It is called
+  DYNAMIC, which suggests per-draw sub-allocations, so the write path the CSM
+  debug knob uses may not transfer unchanged
+
+## The shape of the fix
+
+    layer A   hudless scene, declared with the pose it was RENDERED from
+    layer B   the UI texture, declared with the HEAD pose so it does not move
+
+which is #57 exactly, and it also gates #71: aiming is guided by HUD markings,
+so a HUD that slides cannot be aimed through however free the mouse is. That
+dependency is Patola's observation, and it reorders the remaining work.
