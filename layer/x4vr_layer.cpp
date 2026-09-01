@@ -3229,6 +3229,9 @@ uint32_t ui_scan(uint32_t *out_serial) {
 // The image the latch named, so a later writer can be checked against it.
 // UINT32_MAX until one is named.
 std::atomic<uint32_t> g_ui_serial{UINT32_MAX};
+// Render passes BEGUN against that image since it was named. See the counter
+// site in x4vr_CmdBeginRenderPass for what this does and does not prove.
+std::atomic<uint64_t> g_ui_pass_begins{0};
 
 // Latched at the first frame where the scan resolves to exactly one image, and
 // silent afterwards. The alternative -- reporting only from mv_report -- puts
@@ -9702,6 +9705,50 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBeginRenderPass(
     if (probe_hooks_wanted() && g_mv && g_active) {
         std::lock_guard<std::mutex> lock(g_cb_mu);
         g_cb_fb[cb] = bi->framebuffer;
+    }
+    // ---- task #57: is X4 still DRAWING the UI, or only owning a framebuffer?
+    //
+    // Take 240 found the UI target and it was tempting to read that as "X4
+    // still renders it under X4VR_HUDLESS". It is not the same claim: writers
+    // are recorded at vkCreateFramebuffer, and creating a framebuffer is not
+    // drawing through it -- the same distinction as a symbol being imported
+    // rather than called.
+    //
+    // This counts render passes BEGUN against that image, which is a step
+    // closer and needs no knob. It is still *recorded*, not *executed*: a
+    // command buffer could in principle be built and never submitted. X4
+    // presents every frame, so the gap is small, but the log says "recorded"
+    // and not "drew" because those are different words for a reason.
+    if (g_mv && g_active) {
+        const uint32_t ui = g_ui_serial.load(std::memory_order_relaxed);
+        if (ui != UINT32_MAX) {
+            bool hit = false;
+            {
+                std::lock_guard<std::mutex> lock(g_cb_mu);
+                auto a = g_fb_atts.find(bi->framebuffer);
+                if (a != g_fb_atts.end())
+                    for (const auto &at : a->second)
+                        if (at.serial == ui) {
+                            hit = true;
+                            break;
+                        }
+            }
+            // Two one-shots, not a cadence. The first says X4 draws the UI at
+            // all; the second, ~10 s of frames later, says it keeps doing it
+            // rather than having drawn it once at load. Neither costs anything
+            // after it fires, and these runs never reach a teardown report.
+            if (hit) {
+                const uint64_t n = ++g_ui_pass_begins;
+                if (n == 1 || n == 600)
+                    X4VR_LOG("ui: X4 has RECORDED %llu render pass(es) into "
+                             "img #%u since it was identified%s",
+                             (unsigned long long)n, ui,
+                             n == 1 ? " — it is still drawing the UI, "
+                                      "whatever the composite does with it"
+                                    : " — and is still doing so, so this is "
+                                      "per-frame and not a one-off at load");
+            }
+        }
     }
     d->CmdBeginRenderPass(cb, bi, contents);
 }

@@ -11499,7 +11499,7 @@ retraction check for that, and it is **UNEXERCISED**: nothing in X4's frame or
 in the render test writes an image with a canvas pass and then a non-canvas
 one, so its silence is the absence of a test rather than a confirmation.
 
-### Still NOT established: that X4 keeps rendering the UI
+### Does X4 keep rendering the UI? Counted, not inferred
 
 Take 240 ran with `X4VR_HUDLESS=1`, so it is tempting to read "the UI target
 was found" as "X4 still draws into it". **It is not the same claim.** Writers
@@ -11507,9 +11507,21 @@ are recorded at `vkCreateFramebuffer`, and creating a framebuffer is not
 drawing through it -- the same distinction as `nm -D` proving a symbol is
 imported rather than called.
 
-What would settle it is already available and costs nothing: `bind rp #N` lines
-record pipelines bound **at draw time**, and they need `X4VR_PIPE_INVENTORY=1`,
-which take 240 did not set. The next run gets it.
+`X4VR_PIPE_INVENTORY=1` would have answered it, but a counter answers it better
+and needs no knob:
+
+    ui: X4 has RECORDED N render pass(es) into img #65 since it was identified
+
+Two one-shots, at N=1 and N=600. The first says X4 draws the UI at all; the
+second, about ten seconds of frames later, says it keeps doing so rather than
+having drawn it once at load. Both are free after they fire, and neither needs
+a teardown the runs never reach.
+
+It says **RECORDED**, not *drew*: this counts `vkCmdBeginRenderPass`, and a
+command buffer could in principle be built and never submitted. X4 presents
+every frame so the gap is small, but the two are different words for a reason.
+Exercised in the harness, which is what stops it shipping as a line nobody has
+seen fire.
 
 ### X4 recentres the view when the map opens
 
@@ -11521,6 +11533,60 @@ every run since 239: the identity samples all sit inside map/menu windows
 because X4 has taken the camera back to centre and there is no cockpit camera
 to read. It is #78's mechanism, named -- and it is more than a scorer problem, since
 head-look's neutral moves underneath it every time a menu opens.
+
+## #57 step 2: layer B — the plan, before the code
+
+Layer A exists: `X4VR_HUDLESS=1` makes X4 emit the hudless scene, and the
+compositor blits it into the runtime's swapchain every frame. Layer B is
+`img #65`, submitted as a **second projection layer** -- projection rather than
+quad because take 240 measured the image `DOUBLED to 2`, so X4 already renders
+the UI once per view.
+
+    layer A   hudless scene, declared with the pose it was RENDERED from
+    layer B   the UI target, declared with the HEAD pose, alpha-blended over it
+
+`frame_end()` already takes an array and a count, so submitting two layers
+needs no change there. `proj_ui` gets
+`XR_COMPOSITION_LAYER_BLEND_TEXTURE_ALPHA_BIT` and **premultiplied** alpha --
+which is what X4 produces: `visual_transition` ends `rgb *= U_useralphascale`
+and `copy_gamma` consumes `ui.rgb + (1-ui.a)*hudless.rgb`.
+
+### The copy, and where the risk actually is
+
+The hard part is not the layer, it is getting `#65`'s bytes without corrupting
+an image X4 owns. Copying at present time means guessing the layout X4 left it
+in, and a wrong `oldLayout` is undefined behaviour rather than an error.
+
+**That problem is already solved in this file.** The MV probe captures an
+attachment at `vkCmdEndRenderPass`: it barriers from `a.final_layout` -- the
+layout the render pass itself declared, recorded by `record_final_layouts()` --
+to `TRANSFER_SRC_OPTIMAL`, copies, and barriers back to exactly that layout.
+Nothing is guessed, and the moment is the one where the UI image is complete.
+
+So layer B copies at the end of every pass that writes the UI target.
+
+### Two things that follow from that, both costs
+
+* **The swapchain image is not acquired yet.** Acquisition happens on the
+  present thread, and writing an unacquired image is invalid. So the UI pass
+  copies into a **layer-owned staging image**, and the compositor copies
+  staging -> XR swapchain at present, where acquisition already happens and the
+  existing eye blit already does exactly this.
+* **Which UI pass is last is not known a priori.** Take 203's frame has two
+  (rp #33 then rp #45, creation order, which is not execution order). Copying
+  at every UI pass end means the last one wins, at the price of one redundant
+  copy: 1408x1408x4x2 layers = 15.9 MB, so ~48 MB/frame across the three copies
+  rather than 32. **That is a real number against "performance is king"** and it
+  is written down here so the first measurement is compared against a
+  prediction rather than against nothing. If it costs, the fix is to learn the
+  last UI pass from frame 1 and copy only after it.
+
+### What must be true before this is judged by eye
+
+The identification has a latch and the latch has a blind spot (above). Once
+layer B is wired, a wrong identification stops being a line in a log and
+becomes a wrong image in the headset -- so `ui_retract_if_disqualified()` needs
+its fixture built at that point, not left UNEXERCISED as it is now.
 
 ### Then, and not before
 

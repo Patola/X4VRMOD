@@ -835,7 +835,19 @@ fi
 # accepted everything, or that keyed on the wrong clause, fails here.
 ui_r0=$(grep -c 'img #0 is NOT the UI target — written by a pass the canvas predicate does not call UI' "$ui_log")
 ui_r2=$(grep -c 'img #2 is NOT the UI target — no writer recorded yet' "$ui_log")
+# "X4 owns a framebuffer for it" and "X4 draws into it" are different claims,
+# and the second is the one #57 needs. The counter answers it without a knob;
+# asserting it here is what stops it shipping as a line nobody has seen fire.
+ui_drew=$(grep -c 'ui: X4 has RECORDED 1 render pass(es) into img #1' "$ui_log")
 rm -f "$ui_log"
+if [[ "$ui_drew" == 1 ]]; then
+    printf 'ok   %-38s counted at the pass, not the framebuffer\n' \
+        "ui target: draws into it are counted"
+else
+    printf 'FAIL %-38s want one "RECORDED 1 render pass(es) into img #1", got %s\n' \
+        "ui target: draws into it are counted" "$ui_drew"
+    fails=$((fails + 1))
+fi
 if [[ "$ui_r0" == 1 && "$ui_r2" == 1 ]]; then
     printf 'ok   %-38s #0 non-canvas writer, #2 no writer\n' \
         "ui target: rejects for the right reason"
