@@ -1994,6 +1994,39 @@ def main(path):
     else:
         print("translate  not asked for in this run (X4VR_HEAD_TRANSLATE unset)")
 
+    # --- task #57: which image carries the UI -------------------------------
+    #
+    # Read from the LATCHED `ui: TARGET` line, not from the `ui final:` report.
+    # The report fires from mv_report, whose useful call is at teardown, and
+    # these runs do not reach teardown — the same trap that made #76's first
+    # acceptance rule unsatisfiable. The latch fires at the framebuffer, so any
+    # run that renders UI has it.
+    #
+    # Not gated on intent: the identification is unconditional, and a run that
+    # cannot name the UI target is one nothing about #57 can be built on,
+    # whatever it was asked for.
+    uit = re.search(r"ui: TARGET img #(\d+) — (\d+)x(\d+) fmt=(\d+), "
+                    r"(DOUBLED to 2|NOT doubled)", text)
+    uiwarn = re.findall(r"ui \S+ \S*\s*: (\d+) UI-only target\(s\) — EXPECTED",
+                        text)
+    if uit:
+        print(f"ui      img #{uit.group(1)} carries the UI — "
+              f"{uit.group(2)}x{uit.group(3)} fmt={uit.group(4)}, "
+              f"{uit.group(5)}")
+        if uit.group(5) != "DOUBLED to 2":
+            fails.append(
+                "the UI target is NOT doubled, so it holds one image for both "
+                "eyes. #57's second layer cannot be a projection layer as "
+                "designed — it would show the left eye's UI to both")
+    elif "ui final:" in text or "ui first present:" in text:
+        fails.append(
+            "no `ui: TARGET` line — the predicate never resolved to exactly "
+            "one image, so which image carries the UI is NOT established and "
+            "#57 has nothing to put on a layer. The `ui ...: img #N is NOT "
+            "the UI target` lines name the reason each candidate was rejected")
+    else:
+        print("ui      no UI-target report — this build predates task #57")
+
     # --- task #76: X4's own UI-composition switch ---------------------------
     #
     # Gated on INTENT for the reason #74 above is: a run that asked to force the

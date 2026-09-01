@@ -776,6 +776,75 @@ hud_probe() {
         fails=$((fails + 1))
     fi
 }
+# --- task #57: naming X4's UI render target --------------------------------
+#
+# The predicate: every pass that has written the image is one the canvas
+# predicate calls UI, and the image is not a swapchain image. Both halves are
+# load-bearing — X4's present passes are canvas passes too, and only the image
+# tells them apart.
+#
+# **Both arms are asserted, and the positive one is why this exists.** A check
+# that has only ever answered "not found" cannot be distinguished from one that
+# is broken. With a canvas pass in the frame the harness has exactly one
+# qualifying image; without one it has none, and the report must say so rather
+# than going quiet.
+ui_log="$(mktemp)"
+env X4VR_LOG="$ui_log" X4VR_MV=1 X4VR_STEREO=1 X4VR_MV_INVENTORY=1 \
+    X4VR_CANVAS_M=8 \
+    "VK_ADD_LAYER_PATH=$BUILD/layer" \
+    "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    timeout 120 "$BIN" "$VS" "$FS" "$SF" >/dev/null 2>&1
+
+ui_n=$(grep -c 'is a UI-ONLY target' "$ui_log")
+ui_img=$(sed -n 's/.*ui final: img #\([0-9]*\) is a UI-ONLY target.*/\1/p' "$ui_log" | head -1)
+ui_warn=$(grep -c 'UI-only target(s) — EXPECTED exactly 1' "$ui_log")
+ui_doubled=$(grep -c 'is a UI-ONLY target.*DOUBLED to 2' "$ui_log")
+if [[ "$ui_n" == 1 && "$ui_img" == 1 && "$ui_warn" == 0 && "$ui_doubled" == 1 ]]; then
+    printf 'ok   %-38s img #%s, doubled, no warning\n' \
+        "ui target: exactly one, and it is #1" "$ui_img"
+else
+    printf 'FAIL %-38s want n=1 img=1 warn=0 doubled=1, got %s/%s/%s/%s\n' \
+        "ui target: exactly one, and it is #1" "$ui_n" "${ui_img:-none}" \
+        "$ui_warn" "$ui_doubled"
+    fails=$((fails + 1))
+fi
+
+# The LATCHED headline, which is the line a run actually gets read on. It is
+# separate from the report above because the report only fires from mv_report,
+# and mv_report's useful call is at teardown — which the VR runs never reach.
+# This harness never presents either, so the latch is hooked at the
+# framebuffer; asserting it here is what proves it does not need a present.
+ui_latched=$(grep -c 'ui: TARGET img #1 ' "$ui_log")
+ui_latch_n=$(grep -c 'ui: TARGET' "$ui_log")
+if [[ "$ui_latched" == 1 && "$ui_latch_n" == 1 ]]; then
+    printf 'ok   %-38s once, with no present in the run\n' \
+        "ui target: latched headline"
+else
+    printf 'FAIL %-38s want exactly one "ui: TARGET img #1", got %s (of %s)\n' \
+        "ui target: latched headline" "$ui_latched" "$ui_latch_n"
+    fails=$((fails + 1))
+fi
+
+# **The negative control, and it is in the SAME frame as the positive.**
+#
+# Dropping X4VR_CANVAS_M does not work as a negative arm — it was tried, and
+# the pass is still classified +CANVAS, so both arms found the same image and
+# the "control" asserted nothing. What discriminates is that the other two
+# images in this very frame are rejected, each for its own reason: #0 has a
+# world pass among its writers, #2 has no writer at all. A predicate that
+# accepted everything, or that keyed on the wrong clause, fails here.
+ui_r0=$(grep -c 'img #0 is NOT the UI target — written by a pass the canvas predicate does not call UI' "$ui_log")
+ui_r2=$(grep -c 'img #2 is NOT the UI target — no writer recorded yet' "$ui_log")
+rm -f "$ui_log"
+if [[ "$ui_r0" == 1 && "$ui_r2" == 1 ]]; then
+    printf 'ok   %-38s #0 non-canvas writer, #2 no writer\n' \
+        "ui target: rejects for the right reason"
+else
+    printf 'FAIL %-38s want one reason line each for #0 and #2, got %s and %s\n' \
+        "ui target: rejects for the right reason" "$ui_r0" "$ui_r2"
+    fails=$((fails + 1))
+fi
+
 hud_probe "hudless: reports even at zero"  1  0 0
 # The report must exist with the knob UNSET too, or "the switch was not forced"
 # and "the run predates the knob" read the same in a log.

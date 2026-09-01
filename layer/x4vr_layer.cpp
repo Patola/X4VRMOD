@@ -1255,6 +1255,34 @@ struct PassKinds {
     // written* with *written by something the tracker does not watch* -- and
     // those are opposite diagnoses.
     uint32_t usage = 0;   // so the report can say whether compute COULD write it
+    // Task #57. Whether every pass that has written this image is one the
+    // canvas predicate calls UI.
+    //
+    // **Recorded here, at the framebuffer, and never recomputed from a serial
+    // later.** The two are not the same question: a serial is only a number
+    // once the render pass handle is gone, and an instrument that re-derived
+    // "was that a canvas pass?" from it would be evaluating a different
+    // predicate than the one the dispatch used. Eighteen modules once logged
+    // "World" after being handled as UI for exactly that reason.
+    //
+    // `saw_writer` distinguishes "no writer yet" from "a non-canvas writer",
+    // which are opposite diagnoses: the first is a seeded entry the frame has
+    // not reached, the second is a disqualification.
+    bool saw_writer = false;
+    bool any_non_canvas = false;
+    // ...and the image's own properties, COPIED here rather than looked up in
+    // g_images when the report runs.
+    //
+    // The first version did look them up, and the harness caught it in one
+    // run: `mv_report("final")` fires from vkDestroyInstance, by which time
+    // every VkImage is gone from g_images, so the UI target reported "no
+    // ImageInfo (untracked image)" at teardown while it would have resolved
+    // perfectly at first present. A report that works in one of its two call
+    // sites and silently degrades in the other is worse than one that never
+    // works, because the working half makes the broken half look like data.
+    VkFormat fmt = VK_FORMAT_UNDEFINED;
+    uint32_t width = 0, height = 0, img_layers = 0;
+    bool doubled = false, is_swapchain = false;
 };
 std::unordered_map<uint32_t, PassKinds> g_img_writers; // by image serial
 
@@ -2877,6 +2905,96 @@ void mv_report(const char *when) {
              when, g_mv_stats.pipe_masked, g_mv_stats.pipe_unmasked,
              g_mv_stats.pipe_dynamic, g_mv_stats.widened);
     // Images with writers of both kinds. Layer 1 misses every unmasked
+    // ------------------------------------------------------------ task #57
+    //
+    // Detail here; the HEADLINE is latched by ui_identify_once() from the
+    // present path, and that split is deliberate. `mv_report` runs at first
+    // present and at teardown, and at first present the writer map is still
+    // empty -- take 203 logged `img #65 writers — masked rp []` there and
+    // `[33,45]` only at the end. Teardown is the one that would have the
+    // answer, and **these runs do not reach teardown**: take 239's acceptance
+    // rule died of exactly that, on the line two sections below. So the
+    // identification cannot be a teardown-only report.
+    //
+    // **X4's UI render target, named structurally.** Take 239 proved the whole
+    // UI lives in one texture: forcing `U_fsr3g_useuitexture` dropped menus,
+    // load screens, the map and the HUD together, and the scene survived. The
+    // next step puts that texture on a composition layer of its own, and this
+    // is the step before it -- finding the image, with no behaviour change.
+    //
+    // The predicate: every pass that has written it is one the canvas
+    // predicate calls UI, and it is NOT a swapchain image. Both halves are
+    // needed. X4's present passes are ALSO canvas passes -- rp #0/#1/#4/#7/#10
+    // in take 203, all `+PRESENT-CAND +CANVAS` -- and the only thing telling
+    // them from the UI pass by shape is which image they write.
+    //
+    // Take 203's inventory is the paper check on this, and it selects exactly
+    // one image: writers rp [33,45] wrote `#65` (`50L` = B8G8R8A8_SRGB), where
+    // rp #33 draws `visual_transition` and rp #45 draws `xu_ui_unlit*`. Every
+    // other canvas pass in that frame wrote a `44L` swapchain image.
+    //
+    // **The count is what is reported, not the identity.** If this is not
+    // exactly 1 the plan does not survive contact, and the number has to be
+    // seen before anything is built on it -- not inferred from a screenshot
+    // afterwards.
+    {
+        std::lock_guard<std::mutex> lock(g_img_mu);
+        uint32_t n_ui = 0;
+        for (const auto &e : g_img_writers) {
+            // Every rejection names ITS OWN reason, and the reasons are not
+            // collapsed into one "did not match". A predicate with four clauses
+            // that reports a single bit cannot say whether it found nothing
+            // because the frame had no UI pass or because the image it wanted
+            // is a swapchain image -- and those want opposite responses.
+            const char *why = nullptr;
+            if (!e.second.saw_writer)
+                why = "no writer recorded yet";
+            else if (e.second.any_non_canvas)
+                why = "written by a pass the canvas predicate does not call UI";
+            else if (e.second.is_swapchain)
+                why = "is a swapchain image — this is a present target";
+            else if (!is_ldr_format(e.second.fmt))
+                why = "format is not 8-bit LDR";
+            if (why) {
+                // Only when the inventory is on: on a healthy frame this would
+                // otherwise be one line per doubled image, every run.
+                if (g_mv_inventory)
+                    X4VR_LOG("ui %s: img #%u is NOT the UI target — %s", when,
+                             e.first, why);
+                continue;
+            }
+            n_ui++;
+            // `layers` is what X4 ASKED for; `doubled` is what the layer
+            // allocated. Printing the first alone would read "layers=1" for an
+            // image that has two, which is the number #57 depends on.
+            X4VR_LOG("ui %s: img #%u is a UI-ONLY target — %ux%u fmt=%u, X4 "
+                     "asked for %u layer(s), %s, %zu masked writer(s), %zu "
+                     "unmasked",
+                     when, e.first, e.second.width, e.second.height,
+                     (unsigned)e.second.fmt, e.second.img_layers,
+                     e.second.doubled
+                         ? "DOUBLED to 2 — already per-eye, so #57's second "
+                           "layer can be a projection layer"
+                         : "NOT doubled — mono, so a projection layer would "
+                           "show the same image to both eyes",
+                     e.second.masked.size(), e.second.unmasked.size());
+        }
+        // Zero and many are different failures and must not read alike. Zero
+        // means the predicate found nothing -- either the frame never reached
+        // a UI pass, or the canvas predicate no longer fires on it. Many means
+        // it does not discriminate, and #57 cannot be built on it as written.
+        if (n_ui != 1)
+            X4VR_LOG("ui %s: %u UI-only target(s) — EXPECTED exactly 1. %s",
+                     when, n_ui,
+                     n_ui == 0
+                         ? "Either no UI pass ran before this report, or the "
+                           "canvas predicate stopped firing on it. #57 has "
+                           "nothing to put on a layer."
+                         : "The predicate does not discriminate, so which "
+                           "image carries the UI is NOT established. Do not "
+                           "build the second layer on it yet.");
+    }
+
     // contribution, so this list is the shortlist for any partial divergence.
     {
         std::lock_guard<std::mutex> lock(g_img_mu);
@@ -3089,6 +3207,45 @@ void mv_report(const char *when) {
         for (const auto &e : g_comp_dispatches)
             X4VR_LOG("mv %s: compute module #%u — %llu dispatch(es)", when,
                      e.first, (unsigned long long)e.second);
+    }
+}
+
+// Task #57. The UI-target scan, factored so the headline and the detail cannot
+// drift apart: one predicate, two callers. Returns how many images qualify and
+// writes the last one's serial. Caller holds g_img_mu.
+uint32_t ui_scan(uint32_t *out_serial) {
+    uint32_t n = 0;
+    for (const auto &e : g_img_writers) {
+        if (!e.second.saw_writer || e.second.any_non_canvas ||
+            e.second.is_swapchain || !is_ldr_format(e.second.fmt))
+            continue;
+        n++;
+        if (out_serial)
+            *out_serial = e.first;
+    }
+    return n;
+}
+
+// Latched at the first frame where the scan resolves to exactly one image, and
+// silent afterwards. The alternative -- reporting only from mv_report -- puts
+// the answer in a teardown line that the runs which matter never reach.
+void ui_identify_once() {
+    static bool said = false;
+    if (said)
+        return;
+    uint32_t serial = 0, n;
+    {
+        std::lock_guard<std::mutex> lock(g_img_mu);
+        n = ui_scan(&serial);
+        if (n != 1)
+            return;
+        said = true;
+        const auto &k = g_img_writers[serial];
+        X4VR_LOG("ui: TARGET img #%u — %ux%u fmt=%u, %s, %zu masked writer(s). "
+                 "This is the image #57 puts on its own composition layer.",
+                 serial, k.width, k.height, (unsigned)k.fmt,
+                 k.doubled ? "DOUBLED to 2 (per-eye)" : "NOT doubled (mono)",
+                 k.masked.size());
     }
 }
 
@@ -3866,6 +4023,18 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
     uint32_t serial = UINT32_MAX;
     bool masked = false;
     std::vector<VkImageLayout> finals;
+    // Task #57: is every subpass of this render pass one the canvas predicate
+    // calls UI? Read here, under the lock this block already holds, and read
+    // DIRECTLY rather than through is_canvas_pass() -- that helper takes
+    // g_variants.mu itself, and calling it from the writer-recording block
+    // below would nest g_variants.mu inside g_img_mu, which no other path
+    // does.
+    //
+    // ALL subpasses, not any. X4's UI passes are single-subpass -- every
+    // `rp #N.0` line in the inventory -- so the two readings agree on this
+    // build, and "all" is the one that stays right if a later pass mixes UI
+    // with something else.
+    bool all_canvas = false;
     {
         std::lock_guard<std::mutex> lock(g_variants.mu);
         auto it = g_rp_serials.find(ci->renderPass);
@@ -3875,6 +4044,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
         auto f = g_rp_final.find(ci->renderPass);
         if (f != g_rp_final.end())
             finals = f->second;
+        auto c = g_variants.canvas_pass.find(ci->renderPass);
+        if (c != g_variants.canvas_pass.end() && !c->second.empty())
+            all_canvas = std::all_of(c->second.begin(), c->second.end(),
+                                     [](bool b) { return b; });
     }
 
     // A view-masked pass needs every attachment to be an array view spanning
@@ -3975,12 +4148,31 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
                 auto &side = masked ? k.masked : k.unmasked;
                 if (std::find(side.begin(), side.end(), serial) == side.end())
                     side.push_back(serial);
+                // Task #57, recorded from the pass HANDLE while we still have
+                // it. Latched: one non-canvas writer disqualifies an image
+                // permanently, because "the UI target" is a claim about every
+                // pass that has ever written it, not about the last one.
+                k.saw_writer = true;
+                if (!all_canvas)
+                    k.any_non_canvas = true;
+                k.fmt = im->second.format;
+                k.width = im->second.extent.width;
+                k.height = im->second.extent.height;
+                k.img_layers = im->second.layers;
+                k.doubled = im->second.doubled;
+                k.is_swapchain = im->second.swapchain;
                 if (k.masked.empty() && !k.unmasked.empty())
                     now_shared.push_back(im->second.serial);
                 else if (!k.masked.empty())
                     now_per_eye.push_back(im->second.serial);
             }
         }
+        // Task #57, here rather than only in the present path. The answer can
+        // change only when a writer is recorded, which is this call -- and a
+        // headless caller never presents, so hooking presents alone left the
+        // latch untestable in the harness. Outside the lock above, because
+        // ui_identify_once takes g_img_mu itself.
+        ui_identify_once();
         if (g_mirror_repair) {
             for (uint32_t s : now_shared)
                 repair_mirror_for_image(d, device, s);
@@ -10250,6 +10442,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     VkDeviceSize dump_layer_bytes = 0;
     uint32_t dump_layers = 0, dump_w = 0, dump_h = 0;
     bool dump_bgra = false;
+    // Task #57: latched, so the identification lands in every run that
+    // renders UI rather than only in one that reaches teardown.
+    if (g_mv && g_active)
+        ui_identify_once();
+
     if (g_dump_present_every && g_active && pi->swapchainCount == 1) {
         // Said once, loudly, because this knob reads like a boolean and is a
         // cadence. Take 98 was run with =1 and dumped every frame: a ~12 MB

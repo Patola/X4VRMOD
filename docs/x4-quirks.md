@@ -11411,6 +11411,80 @@ later get hidden by a rule written to make a different run go green.
   and that forcing the shipped value is invisible (the control that was not
   run).
 
+## #57 step 1: naming the UI render target
+
+Written **before** the run that tests it.
+
+### The predicate
+
+    an image is the UI target iff
+      every pass that has written it is one the canvas predicate calls UI
+      AND it is not a swapchain image
+      AND its format is 8-bit LDR
+
+**Both of the first two clauses are load-bearing.** X4's present passes are
+*also* canvas passes -- take 203 has rp #0/#1/#4/#7/#10 all reading
+`+PRESENT-CAND +CANVAS` -- and the only thing separating them from the UI pass
+by shape is which image they write. Drop the swapchain clause and the predicate
+returns five present targets alongside the one that matters.
+
+Paper check against take 203's inventory, which selects exactly one image:
+
+    img #65 writers — masked rp [33,45] unmasked rp []
+    rp #33.0: 1 colour [50L] no-depth ... +CANVAS   <- visual_transition
+    rp #45.0: 1 colour [50L] no-depth ... +CANVAS   <- xu_ui_unlit*
+
+Every other canvas pass in that frame wrote a `44L` swapchain image.
+
+### Two things the harness caught that a live run would have hidden
+
+* **The lookup ran after the images were gone.** The first version resolved the
+  image's format and extent from `g_images` at report time. `mv_report("final")`
+  fires from `vkDestroyInstance`, by which point every `VkImage` has been
+  destroyed -- so the target reported *"no ImageInfo (untracked image)"* at
+  teardown while resolving perfectly at first present. A report that works at
+  one of its two call sites and degrades at the other is worse than one that
+  never works, because the working half makes the broken half look like data.
+  The image's properties are now COPIED into the writer record when the writer
+  is recorded.
+* **The identification could not be a teardown line.** `mv_report` runs at
+  first present -- where the writer map is still empty, take 203 logged
+  `img #65 writers — masked rp []` there -- and at teardown, which these runs
+  never reach. That is exactly what made #76's first acceptance rule
+  unsatisfiable, one section up. So the headline is **latched** at the
+  framebuffer, fires once, and needs neither a present nor a clean exit.
+
+### What the run must say
+
+    ui: TARGET img #N — WxH fmt=F, DOUBLED to 2 (per-eye), K masked writer(s)
+
+`DOUBLED` is the number #57 depends on: the layer already masks the UI pass, so
+X4's UI is rendered **twice, once per view**, and the second composition layer
+can be a projection layer rather than a quad. If it comes back `NOT doubled`
+the design changes, and the scorer FAILs on it rather than letting a mono UI
+reach both eyes silently.
+
+Exactly 1 is required. Zero and many are different failures and are reported as
+such; every rejected candidate names *its own* reason, because "no UI pass ran"
+and "the image I want is a swapchain image" want opposite responses.
+
+Asserted in the harness on a real GPU, with the negative control **in the same
+frame** as the positive: img #1 is accepted, img #0 rejected for having a world
+pass among its writers, img #2 for having no writer. Dropping `X4VR_CANVAS_M`
+was tried as the negative arm and does not work -- the pass is still classified
+`+CANVAS`, so both arms found the same image and the control asserted nothing.
+
+### Then, and not before
+
+Layer A is already there: `X4VR_HUDLESS=1` makes X4 emit the hudless scene, and
+the layer blits it into the runtime's swapchain every frame. Layer B is the UI
+target, copied into a second swapchain and submitted with
+`XR_COMPOSITION_LAYER_BLEND_TEXTURE_ALPHA_BIT` and **premultiplied** alpha --
+which is what X4 produces, since `visual_transition` ends
+`rgb *= U_useralphascale` and `copy_gamma` consumes `ui.rgb + (1-ui.a)*hudless`.
+Declared with the head pose rather than the rendered one, which is the whole
+point.
+
 ## The shape of the fix
 
     layer A   hudless scene, declared with the pose it was RENDERED from
