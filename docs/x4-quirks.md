@@ -11474,6 +11474,54 @@ pass among its writers, img #2 for having no writer. Dropping `X4VR_CANVAS_M`
 was tried as the negative arm and does not work -- the pass is still classified
 `+CANVAS`, so both arms found the same image and the control asserted nothing.
 
+### Take 240: img #65, and it is per-eye
+
+    ui: TARGET img #65 — 1408x1408 fmt=50, DOUBLED to 2 (per-eye),
+        1 masked writer(s) so far.
+
+The predicate resolved to **exactly one** image, at the size of the eye, format
+`50` = `B8G8R8A8_SRGB`, and **doubled** -- so X4's UI is already rendered twice,
+once per view, and layer B can be a projection layer rather than a quad. And it
+is `#65`, the same serial take 203 named, from a completely different
+configuration.
+
+The latch fired **9.6 s after the first present**, which is the design being
+right rather than lucky: `mv_report`'s first-present call had
+`img #65 writers — masked rp []`, and the run never reached teardown. A
+teardown-only report would have come back empty, exactly as #76's first
+acceptance rule did.
+
+**A weakness the run exposed.** The latch says `1 masked writer(s) so far`
+while take 203's finished frame has **two** passes writing that image. A latch
+reports the first moment the answer is 1, not a settled answer -- so a later
+non-canvas writer would invalidate an announcement already made. There is now a
+retraction check for that, and it is **UNEXERCISED**: nothing in X4's frame or
+in the render test writes an image with a canvas pass and then a non-canvas
+one, so its silence is the absence of a test rather than a confirmation.
+
+### Still NOT established: that X4 keeps rendering the UI
+
+Take 240 ran with `X4VR_HUDLESS=1`, so it is tempting to read "the UI target
+was found" as "X4 still draws into it". **It is not the same claim.** Writers
+are recorded at `vkCreateFramebuffer`, and creating a framebuffer is not
+drawing through it -- the same distinction as `nm -D` proving a symbol is
+imported rather than called.
+
+What would settle it is already available and costs nothing: `bind rp #N` lines
+record pipelines bound **at draw time**, and they need `X4VR_PIPE_INVENTORY=1`,
+which take 240 did not set. The next run gets it.
+
+### X4 recentres the view when the map opens
+
+Patola, take 240: *"when I bring up the (invisible) map, before or during the
+blur, the game also centers the view of the cockpit."*
+
+That is X4's own behaviour and it explains the pose dropout that has FAILed
+every run since 239: the identity samples all sit inside map/menu windows
+because X4 has taken the camera back to centre and there is no cockpit camera
+to read. It is #78's mechanism, named -- and it is more than a scorer problem, since
+head-look's neutral moves underneath it every time a menu opens.
+
 ### Then, and not before
 
 Layer A is already there: `X4VR_HUDLESS=1` makes X4 emit the hudless scene, and

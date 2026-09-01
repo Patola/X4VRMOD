@@ -3226,27 +3226,61 @@ uint32_t ui_scan(uint32_t *out_serial) {
     return n;
 }
 
+// The image the latch named, so a later writer can be checked against it.
+// UINT32_MAX until one is named.
+std::atomic<uint32_t> g_ui_serial{UINT32_MAX};
+
 // Latched at the first frame where the scan resolves to exactly one image, and
 // silent afterwards. The alternative -- reporting only from mv_report -- puts
 // the answer in a teardown line that the runs which matter never reach.
+//
+// **A latch reports the first moment the answer is 1, not a settled answer**,
+// and take 240 showed the gap: it fired 9.6 s after the first present with
+// `1 masked writer(s)`, while take 203's frame ends with TWO passes writing the
+// same image. Everything after the latch is unexamined by it -- so if a later,
+// non-canvas pass writes that image, the announcement was wrong and has to be
+// withdrawn out loud. ui_retract_if_disqualified() is that half; without it
+// this is a guard that can only ever agree with itself.
 void ui_identify_once() {
+    if (g_ui_serial.load(std::memory_order_relaxed) != UINT32_MAX)
+        return;
+    uint32_t serial = 0;
+    std::lock_guard<std::mutex> lock(g_img_mu);
+    if (ui_scan(&serial) != 1)
+        return;
+    g_ui_serial.store(serial, std::memory_order_relaxed);
+    const auto &k = g_img_writers[serial];
+    X4VR_LOG("ui: TARGET img #%u — %ux%u fmt=%u, %s, %zu masked writer(s) so "
+             "far. This is the image #57 puts on its own composition layer.",
+             serial, k.width, k.height, (unsigned)k.fmt,
+             k.doubled ? "DOUBLED to 2 (per-eye)" : "NOT doubled (mono)",
+             k.masked.size());
+}
+
+// Called after a writer is recorded. Says so, once, if the image the latch
+// named has since been written by a pass that is not UI.
+//
+// **UNEXERCISED. Nothing has ever made this fire**, in the harness or in a
+// take: it needs an image written first by a canvas pass and later by a
+// non-canvas one, and neither X4's frame nor the render test produces that
+// order. So its silence is not evidence -- it is the absence of a test. Do not
+// read "no retraction in the log" as "the identification was re-confirmed".
+// Building the fixture is a render-test change and has not been worth it while
+// nothing depends on the answer; it becomes worth it the moment #57's second
+// layer is wired, because then a wrong identification shows up as a wrong
+// image in the headset rather than as a line in a log.
+void ui_retract_if_disqualified(uint32_t serial, bool all_canvas) {
+    if (all_canvas || g_ui_serial.load(std::memory_order_relaxed) != serial)
+        return;
     static bool said = false;
     if (said)
         return;
-    uint32_t serial = 0, n;
-    {
-        std::lock_guard<std::mutex> lock(g_img_mu);
-        n = ui_scan(&serial);
-        if (n != 1)
-            return;
-        said = true;
-        const auto &k = g_img_writers[serial];
-        X4VR_LOG("ui: TARGET img #%u — %ux%u fmt=%u, %s, %zu masked writer(s). "
-                 "This is the image #57 puts on its own composition layer.",
-                 serial, k.width, k.height, (unsigned)k.fmt,
-                 k.doubled ? "DOUBLED to 2 (per-eye)" : "NOT doubled (mono)",
-                 k.masked.size());
-    }
+    said = true;
+    X4VR_LOG("ui: RETRACTED — img #%u was announced as the UI target and has "
+             "now been written by a pass the canvas predicate does NOT call "
+             "UI. The identification is WRONG; #57 must not be built on it, "
+             "and any earlier `ui: TARGET` line in this log is superseded.",
+             serial);
 }
 
 // Was a canvas asked for? Read from the environment, not from whether one was
@@ -4135,6 +4169,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
         // them outside it: repair takes g_prov_mu and g_desc_mu, and taking
         // those under g_img_mu would invert the order the mirror path uses.
         std::vector<uint32_t> now_shared, now_per_eye;
+        // Every image serial this framebuffer named, so the retraction check
+        // below can be asked about each of them by serial rather than by
+        // re-walking g_images after the lock is gone.
+        std::vector<uint32_t> touched;
         {
             std::lock_guard<std::mutex> lock(g_img_mu);
             for (uint32_t i = 0; i < ci->attachmentCount; i++) {
@@ -4161,6 +4199,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
                 k.img_layers = im->second.layers;
                 k.doubled = im->second.doubled;
                 k.is_swapchain = im->second.swapchain;
+                touched.push_back(im->second.serial);
                 if (k.masked.empty() && !k.unmasked.empty())
                     now_shared.push_back(im->second.serial);
                 else if (!k.masked.empty())
@@ -4172,6 +4211,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
         // headless caller never presents, so hooking presents alone left the
         // latch untestable in the harness. Outside the lock above, because
         // ui_identify_once takes g_img_mu itself.
+        //
+        // Retraction FIRST: a writer recorded by this very call may be the one
+        // that disqualifies an image the latch already named, and checking
+        // after re-latching would compare the new state against itself.
+        for (uint32_t s : touched)
+            ui_retract_if_disqualified(s, all_canvas);
         ui_identify_once();
         if (g_mirror_repair) {
             for (uint32_t s : now_shared)
