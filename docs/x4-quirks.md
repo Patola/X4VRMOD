@@ -11565,6 +11565,25 @@ Nothing is guessed, and the moment is the one where the UI image is complete.
 
 So layer B copies at the end of every pass that writes the UI target.
 
+**And the premise is measured, not assumed.** `final=N` in the pass inventory
+is `VkAttachmentDescription::finalLayout`, straight from X4's own render-pass
+create info -- the code is four lines above the log line. Take 203's UI pass
+reads:
+
+    rp #33.0: 1 colour [50L] no-depth final=2 ...
+
+`2` is `VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL`, **not** `5`
+(`SHADER_READ_ONLY_OPTIMAL`). So X4 issues its own barrier somewhere between
+that pass and `copy_gamma` sampling the image -- a barrier the layer does not
+track. A present-time copy would therefore have to guess, and would guess
+`COLOR_ATTACHMENT_OPTIMAL` when the image is by then in `SHADER_READ_ONLY`.
+Wrong `oldLayout` is undefined behaviour, not an error, so it would not even
+fail loudly.
+
+That is the whole argument for capturing at the pass end rather than at
+present, and it is worth having checked: had `final` read `5`, the staging
+image below would be unnecessary and the copy would be one step instead of two.
+
 ### Two things that follow from that, both costs
 
 * **The swapchain image is not acquired yet.** Acquisition happens on the
