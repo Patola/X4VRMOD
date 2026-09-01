@@ -10070,10 +10070,91 @@ capped at 400 paths and the `livesets` walk is gated behind
 `X4VR_DUMP_MATRICES`, which this take already sets — so neither should move the
 perf number. Prediction 4 includes that band precisely so a surprise is visible.
 
-# RESUME HERE AFTER A COMPACT — state as of take 238
+# RESUME HERE AFTER A COMPACT — state as of take 240
 
 Everything below supersedes earlier "read this first" banners, including the
 take-211 one that used to head this section and the take-202 one further down.
+
+## THE NEXT TASK: layer B's code
+
+Everything it needs is measured and committed. Nothing is waiting on Patola.
+
+**What #57 becomes:**
+
+    layer A   the hudless scene, declared with the pose it was RENDERED from
+              — EXISTS. X4VR_HUDLESS=1 + the blit the compositor already does.
+    layer B   img #65, declared with the HEAD pose, alpha-blended over it
+              — TO BUILD.
+
+**What is settled, so do not re-derive it:**
+
+* `X4VR_HUDLESS=1` works. Take 239: menus, load screens, map and HUD all
+  vanished together and all came back without it. The patched module is the one
+  X4 binds.
+* The UI target is **`img #65`**, 1408x1408, `B8G8R8A8_SRGB`, and **DOUBLED to
+  2** — X4 renders the UI once per view, so layer B is a **projection layer**,
+  not a quad. Take 240, `ui: TARGET`.
+* X4 **still draws** it under HUDLESS — counted at `vkCmdBeginRenderPass`, not
+  inferred from a framebuffer existing.
+* The copy must happen at **`vkCmdEndRenderPass`**, not at present. Take 203's
+  UI pass declares `final=2` (`COLOR_ATTACHMENT_OPTIMAL`), not `5`
+  (`SHADER_READ_ONLY`), so X4 re-barriers it before `copy_gamma` samples it and
+  a present-time copy would guess wrong — silently, since a bad `oldLayout` is
+  undefined behaviour rather than an error. The MV probe's capture path already
+  does this dance correctly; copy it.
+
+**The block that remains**, in order:
+
+1. `GetImageMemoryRequirements` + `BindImageMemory` in `DeviceData`, and a
+   device-local memory-type finder. **Neither exists yet** — the layer has only
+   ever substituted X4's image create-infos, never allocated an image.
+2. A layer-owned staging image, 2 layers, same extent/format as `#65`.
+3. The pass-end capture: barrier `#65` `final_layout` -> `TRANSFER_SRC`, copy
+   both layers into staging, barrier back to exactly `final_layout`.
+4. A second XR swapchain, and the staging -> swapchain copy in the compositor
+   at present, where acquisition already happens. (Staging exists **because**
+   the swapchain image is not acquired during X4's recording.)
+5. `proj_ui` beside `proj` in the frame loop —
+   `XR_COMPOSITION_LAYER_BLEND_TEXTURE_ALPHA_BIT`, premultiplied alpha (X4's
+   own convention), the **head** pose. `frame_end()` already takes an array.
+
+**Costs predicted before the measurement**: three copies of 15.9 MB per frame
+instead of two, ~48 MB/frame. If it shows in the perf number, learn which UI
+pass runs last from frame 1 and copy only after it.
+
+**Do first, when the code lands**: `ui_retract_if_disqualified()` is
+**UNEXERCISED**. While the identification is only a log line that is tolerable;
+once layer B is wired a wrong identification becomes a wrong image in the
+headset, and the fixture has to exist by then.
+
+**Drive it in the headless harness under validation before spending a take.**
+The barriers act on an image X4 owns; that is the riskiest code in this task.
+
+## What closed since take 238
+
+* **#76 — the switch WORKS.** `X4VR_HUDLESS=1` forces
+  `U_fsr3g_useuitexture` in mod-0011/0012/0184/0185's SPIR-V (`OpLoad` ->
+  `OpCopyObject`, four words, same result id). Never write it into the buffer:
+  123 of the 370 modules that declare set 4 binding 0 start a member at byte
+  512 and only FOUR are the switch — the rest keep floats there.
+  `tools/block_offset_census.py` is the test before writing any block offset.
+* **#57 step 1 — the UI target is named**, structurally and live.
+* **Two tools**: `block_offset_census.py` (what else is at byte N) and
+  `name_module.py` (name a dump from its DYNAMIC block against X4's .ogl XMLs;
+  38 of 409 uniquely, which is the post-process/present/UI class).
+
+## Two acceptance rules of mine that failed healthy runs
+
+Both are the same shape and it cost a take: **an expected number must come from
+a log line the run actually reaches.** These runs are quit blind and never
+reach teardown — `score_run.py` says so about the pose channel — so:
+
+* #76's first rule demanded exactly 4 patched modules and read the
+  *first-present* aggregate, which is a snapshot: X4 creates the copy_gamma
+  permutations lazily, two of them 9.8 s apart. Now counts per-module lines,
+  and 4 is a **ceiling**, not a target.
+* #57's identification is **latched at the framebuffer** for the same reason,
+  not reported at teardown.
 
 ## What closed since take 211
 
@@ -10131,7 +10212,8 @@ arrives **already HUD-less**, and `U_fsr3g_useuitexture` -- member 21 of
 `BLOCK_BUFFER_BINDING_SLOT_DYNAMIC`, **set 4 binding 0, byte 512**, sampled by
 mod-0012 -- makes X4 emit the hudless image alone.
 
-Settle these before building, cheapest first:
+**All three of the questions below are now ANSWERED** — kept as written because
+the order they were settled in is the record, not clutter.
 
 1. ~~**Is set 4 binding 0 writable the way the camera block is?**~~
    **ANSWERED, offline** -- see "Is set 4 binding 0 writable the way the camera
