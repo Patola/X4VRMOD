@@ -12907,3 +12907,59 @@ distance we submit, and that is a different defect entirely.
 No fix is proposed from this. The measurement names a target — "the quad's
 presented depth against its submitted depth" — and the A/B above decides
 whether that target is real before anything is built for it.
+
+## Take 249 CLOSES the disparity thread — and Patola redirects, correctly
+
+*"So is the odd stereo separation going to help solving the HUD slip?"*
+
+**No. It is not, and the question should have been asked by me several messages
+ago.** They are two defects with no demonstrated common cause, and the SBS
+thread was allowed to run on its own momentum.
+
+### The disparity thread closes itself
+
+Take 249, the map at `X4VR_CANVAS_M=0.7` against take 248's 1.40 m, same
+method, same blobs:
+
+    canvas 1.40 m   map UI disparity  -7 .. -10 px
+    canvas 0.70 m   map UI disparity  -13 .. -16 px  (one strong blob -23, m=0.43)
+
+**Halving the distance roughly doubles the disparity, as geometry requires.**
+The quad's stereo does respond to the distance we submit; there is no bug in how
+it is placed. What is left is a uniform factor — both distances read about half
+the absolute disparity expected — which is either the recorder's own
+attenuation or an IPD scale, and either way it is **#25's comfort question,
+which Patola has explicitly deferred.** It is not a blocker and it is not
+related to the slip.
+
+### One free finding that DOES bear on the slip
+
+Is the slip a function of head ROTATION? Regressing the HUD-vs-world slip
+against the accumulated yaw, on the two mono clips:
+
+    canvas 2.50 m   r=+0.126   2% of the slip variance is yaw-linear
+    canvas 0.70 m   r=+0.377  14% of the slip variance is yaw-linear
+
+**The slip is essentially independent of where the head is pointing.** That
+kills the rotating-eye-offset hypothesis filed after take 247 — a term in
+`R(C)` would have been almost entirely yaw-linear — and it agrees with the
+1/distance magnitude scaling: the slip is driven by head TRANSLATION.
+
+### The contradiction that remains, stated and not resolved
+
+Two measurements point opposite ways and both are sound:
+
+* the slip is translation-driven and scales as 1/distance — the parallax
+  signature, which says the quad should be anchored so head translation does
+  not move it relative to the scene;
+* take 247 did exactly that and was **3.5x worse in x and 6x in y**, with
+  Patola reporting the take-244 artefacts back.
+
+`xrLocateViews` uses `s.space`, the same space the quad is submitted in, so 247
+was not a space-mismatch bug. **I have no reconciliation and am not inventing
+one.** What is missing is the actual geometry per frame — the head position,
+the quad centre and the scene's declared position, side by side in the log —
+rather than three inferences from pixels. Every hypothesis in this section has
+been built by reasoning backwards from an image.
+
+**#57's remaining work is the slip. The separation is parked under #25.**
