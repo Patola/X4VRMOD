@@ -156,9 +156,38 @@ def camera_series(logpath):
     return out
 
 
+def frames_from_video(path, outdir, fps=None):
+    """Decode a clip to PNG frames and return the glob for them.
+
+    **A video is a better instrument than the dumps for this question**, and
+    take 245b is why. Dumps land every ~4 s, so between two of them the head
+    has moved through a large, unknown angle and the correlation has no
+    unambiguous peak — every margin came back ~0.001. At 30 fps consecutive
+    frames differ by a few pixels, which is the regime cross-correlation is
+    actually good at, and 10 s gives 300 samples instead of 25.
+
+    Lossy compression is acceptable HERE and would not be for a brightness
+    measurement: this reads the POSITION of an edge, not its value. The
+    PNG-never-JPEG rule is about photometry.
+    """
+    import os
+    import subprocess
+    os.makedirs(outdir, exist_ok=True)
+    for old in glob.glob(f"{outdir}/f*.png"):
+        os.unlink(old)
+    cmd = ['ffmpeg', '-v', 'error', '-i', path]
+    if fps:
+        cmd += ['-vf', f'fps={fps}']
+    cmd += [f'{outdir}/f%05d.png']
+    subprocess.run(cmd, check=True)
+    n = len(glob.glob(f"{outdir}/f*.png"))
+    print(f"decoded {n} frame(s) from {path.split('/')[-1]}")
+    return f"{outdir}/f*.png"
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('pattern', help='glob for the dump series, in order')
+    ap.add_argument('pattern', help='glob for a dump series, or a video file')
     ap.add_argument('--log', help='run log, for X4 camera yaw')
     ap.add_argument('--range', type=int, default=400,
                     help='search half-width in px (default 400)')
@@ -168,7 +197,24 @@ def main():
                     help='correlation peak must beat its rivals by this '
                          '(default 0.05; take 237 static pairs read 0.34-0.52 '
                          'and its scene changes 0.000-0.009)')
+    ap.add_argument('--frames-dir', default='/tmp/x4vr-clip',
+                    help='where to decode a video (default /tmp/x4vr-clip)')
+    ap.add_argument('--fps', type=float,
+                    help='resample the video to this rate before analysing')
     a = ap.parse_args()
+
+    # A video argument re-tunes the search: at 30 fps the per-frame motion is a
+    # few px, so a +-400 px window is mostly noise to be maximised over, and an
+    # 8 px "did the world move" floor would discard almost every frame. Both
+    # defaults were sized for dumps 4 s apart.
+    if a.pattern.lower().endswith(('.mp4', '.mkv', '.webm', '.mov', '.avi')):
+        if ap.get_default('range') == a.range:
+            a.range = 60
+        if ap.get_default('min_grey') == a.min_grey:
+            a.min_grey = 2.0
+        a.pattern = frames_from_video(a.pattern, a.frames_dir, a.fps)
+        print(f"video mode: search +-{a.range} px, world floor "
+              f"{a.min_grey:.0f} px")
 
     files = sorted(glob.glob(a.pattern),
                    key=lambda p: [int(t) if t.isdigit() else t
