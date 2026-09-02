@@ -198,6 +198,44 @@ def frames_from_video(path, outdir, fps=None):
     return f"{outdir}/f*.png"
 
 
+def selftest(frame):
+    """Prove the tool recovers a ratio it is TOLD, before believing one it finds.
+
+    Two audits, and the second is the one that matters:
+
+      rigid       shift the whole frame by a known dx; both channels must
+                  return exactly that, so the ratio is 1.000 by construction
+      differential  move the HUD and the background by DIFFERENT known amounts
+                  and check the reported ratio is A/B
+
+    The rigid test alone is not enough and nearly let a real question go
+    unanswered: it cannot see a bias that only appears when the two channels
+    disagree, which is the only case this tool is ever used in. `grey` is the
+    whole frame and `hud` is a couple of hundred sparse pixels, and nothing had
+    shown that asymmetry harmless until this ran.
+    """
+    a = decode(frame)
+    m = (channels(a)['hud'] > 0)[..., None]
+    hud_layer, bg_layer = a * m, a * (~m)
+    bad = 0
+    for A, B in ((10, 10), (9, 10), (8, 10), (18, 20), (27, 30)):
+        b = np.roll(bg_layer, B, axis=1) + np.roll(hud_layer, A, axis=1)
+        ca, cb = channels(a), channels(b)
+        sh = shift(ca['hud'], cb['hud'], -60, 60)
+        sg = shift(ca['grey'], cb['grey'], -60, 60)
+        if sh is None or sg is None or not sg[0]:
+            print(f"  hud={A} world={B}: NO SIGNAL")
+            bad += 1
+            continue
+        got, want = sh[0] / sg[0], A / B
+        ok = abs(got - want) < 0.06
+        bad += not ok
+        print(f"  hud={A:3d} world={B:3d}  want {want:.2f}  got {got:.3f}"
+              f"   {'ok' if ok else 'BIAS'}")
+    print("selftest PASSED" if not bad else f"selftest FAILED ({bad})")
+    return 0 if not bad else 1
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('pattern', help='glob for a dump series, or a video file')
@@ -214,7 +252,13 @@ def main():
                     help='where to decode a video (default /tmp/x4vr-clip)')
     ap.add_argument('--fps', type=float,
                     help='resample the video to this rate before analysing')
+    ap.add_argument('--selftest', action='store_true',
+                    help='audit the tool on synthetic shifts of `pattern`'
+                         ' (a single frame) and exit')
     a = ap.parse_args()
+
+    if a.selftest:
+        return selftest(sorted(glob.glob(a.pattern))[0])
 
     # A video argument re-tunes the search: at 30 fps the per-frame motion is a
     # few px, so a +-400 px window is mostly noise to be maximised over, and an

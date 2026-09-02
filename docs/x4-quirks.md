@@ -12586,3 +12586,70 @@ one, cheaply, with a clip he already knows how to record.
 If P246.2 fires, the next step is auditing `hud_vs_camera.py` against a
 SYNTHETIC pair — translate a known image by a known amount in each channel and
 check both report it — rather than another take.
+
+## Take 246: BOTH predictions missed, and the instrument is now audited
+
+    canvas    yaw (all usable)   yaw (|dx_grey|>=8)      pitch
+    2.50 m    0.92               0.90  sd 0.115  n=55    1.00
+    0.70 m    1.00               0.95  sd 0.154  n=45    1.00
+
+**P246.1 is REFUTED.** Parallax predicted 0.64 at 0.70 m and would have made the
+near canvas *worse*. It came back better. The scene layer's missing
+head-translation parallax is not the cause, and #75 loses this as a symptom.
+
+**P246.2 is not confirmed either.** It predicted 0.90 unchanged; the point
+estimate moved to 1.00.
+
+**The confounds were checked and eliminated, in order:**
+
+* **Config.** `diff` of the two `env: run =` lines: only `X4VR_CANVAS_M`,
+  `X4VR_LOG` and `X4VR_TAKE`. A genuine single-variable pair.
+* **Servo gain.** Fitting `declared` against X4's own readback over the paired
+  `poselag` lines gives slope **0.9964 / 0.9951 / 0.9966** for takes 245A / 246
+  / 244. No gain error, and no difference between runs.
+* **The clamp.** 245A's clip reached ±65° (the servo's stop) and 246's only
+  −44..+32, so the excursions differed. But binning 245A's ratio by accumulated
+  travel gives 0.910 / 0.825 / 0.880 / **1.000**, best at the largest
+  excursion — the opposite of a clamp signature.
+* **The same HUD element** is tracked in every clip: the target-bracket cluster,
+  confirmed by rendering the mask and looking at it.
+
+### The tool is now audited rather than trusted
+
+`--selftest` runs two audits on a real frame, and the second is the one that
+matters:
+
+    rigid         shift the whole frame by a known dx; both channels must
+                  return exactly it
+    differential  move the HUD and the background by DIFFERENT known amounts
+                  and check the reported ratio is A/B
+
+Rigid passes exactly at 3/5/8/12/20/35 px on all three clips. **Differential
+recovers 0.80, 0.90 and 1.00 to three decimals** on both VR clips. So the
+instrument carries no bias in the only regime it is ever used in, and the
+numbers above are real.
+
+**The rigid test alone would have been useless and nearly shipped as
+reassurance** — it cannot see a bias that appears only when the two channels
+disagree, which is the entire use. `grey` is the whole frame and `hud` is a
+couple of hundred sparse pixels; that asymmetry is now measured harmless rather
+than assumed harmless.
+
+### What the numbers can and cannot support
+
+Compared like-for-like on the strong-pairs subsets, 0.90 ± 0.115 (n=55) against
+0.95 ± 0.154 (n=45) are **not statistically distinct**, and the verdict flips
+with the subset — 245A reads 0.92 over all usable pairs and 0.90 over strong
+ones; 246 reads 1.00 and 0.95. Consecutive-frame pairs share a frame, so the
+effective sample is smaller than n and the true spread is wider than the naive
+standard error.
+
+**So the honest position is that the data cannot presently separate "the HUD
+tracks the cockpit correctly" from "it tracks 5-10% short", and it has refuted
+the one mechanism that was on the table.** What it does say clearly is that
+nothing here is a doubling, a sign error, or a frame error — those are all
+excluded by an order of magnitude.
+
+The next input is not another number. **It is whether Patola still sees the
+defect at 0.70 m with the current build**, which the 246 clip does not answer
+because he was asked for a measurement and not for a judgement.
