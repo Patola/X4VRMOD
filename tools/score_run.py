@@ -2120,10 +2120,24 @@ def main(path):
                 da = sum((x - ma) ** 2 for x in a) ** 0.5
                 db = sum((y - mb) ** 2 for y in b) ** 0.5
                 return num / (da * db) if da > 1e-9 and db > 1e-9 else 0.0
-            print(f"        t_head vs d_scene      r={corr(th, ds):+.3f}")
-            print(f"        t_head vs (d_quad-zm)  r={corr(th, dqe):+.3f}")
-            print("        both r near +1 => the layers agree about the "
-                  "viewer and the slip is NOT this")
+            rs, rq = corr(th, ds), corr(th, dqe)
+            print(f"        t_head vs d_scene      r={rs:+.3f}")
+            print(f"        t_head vs (d_quad-zm)  r={rq:+.3f}")
+            # **Conditional, because the first version was not.** It printed
+            # "both r near +1 => the layers agree" unconditionally, and take
+            # 250 came back with +0.986 and +0.095 under that sentence. A
+            # canned line that reads like a verdict is worse than no line.
+            if rs > 0.8 and rq > 0.8:
+                print("        both track the head => the layers agree about "
+                      "the viewer, and the slip is NOT this")
+            elif rs > 0.8:
+                print("        the scene's declared viewpoint does NOT follow "
+                      "the head (d_scene grows with t_head) while the quad's "
+                      "distance does not track it — the two layers are told "
+                      "different things about where the viewer is")
+            else:
+                print("        neither tracks the head; read the medians "
+                      "above rather than these correlations")
         if hv == 0:
             fails.append(
                 "every `geom` sample has hv=0, so the head was never located "

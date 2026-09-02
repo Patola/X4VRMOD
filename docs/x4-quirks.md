@@ -13024,3 +13024,78 @@ where the head never leaves the neutral point measures nothing.
 
 No prediction is filed. Filing one here would be a fourth guess dressed as a
 hypothesis, and the line exists precisely to stop that.
+
+## Take 250: the slip is head TRANSLATION, and the numbers are the layer's own
+
+Patola ran it in two clean phases — *"the usual yaw, pitch, roll head movements
+with the head still. After that, I've only done leaning movements"* — which is a
+better experiment than the one asked for, because it puts the A/B inside one
+run.
+
+    13587 samples, head located in all of them
+
+    t_head    |head - neutral|     median 0.0294  p90 0.2509  max 0.4384 m
+    d_scene   |head - declared|    median 0.0392  p90 0.2418  max 0.4690 m
+    d_quad-zm quad vs nominal      median 0.0254  p90 0.1216  max 0.3653 m
+
+    t_head vs d_scene       r=+0.986
+    t_head vs (d_quad-zm)   r=+0.095
+
+**`d_scene` tracks `t_head` almost exactly.** The scene's declared viewpoint is
+pinned at the neutral point and does not follow the head at all — so the
+compositor is being told the pixels came from somewhere up to **0.47 m** from
+where the viewer actually is. That is not an inference from pixels; it is the
+layer reporting its own submission.
+
+### The phase split, which is the finding
+
+    window      t_head med/max     d_scene med/max    |yaw| med/max
+     90-105s    0.042 / 0.127      0.042 / 0.134       4.2 / 59.0    ROTATION
+    105-120s    0.059 / 0.430      0.053 / 0.459       2.9 / 17.6    leaning
+    120-135s    0.229 / 0.372      0.223 / 0.376       5.0 / 20.4    leaning
+    135-150s    0.131 / 0.438      0.126 / 0.469       4.5 / 23.7    leaning
+
+**During the ROTATION-ONLY phase — head deliberately still — the head still
+translates 4.2 cm median and 12.7 cm peak.** That is the neck arc, and it is
+unavoidable: a head cannot yaw about the point between the eyes.
+
+At a 1.40 m canvas that translation is **1.72° median, 5.18° peak** of parallax
+on a quad that is real geometry. The slip measured from the clips was 2.34° at
+2.50 m and 7.52° at 0.70 m, which the 1/distance law puts at **4.18° at 1.40 m.**
+Same quantity, same size, arrived at from the opposite end — video before,
+submitted geometry now.
+
+**So the HUD slip is head translation, confirmed.** And the estimate made from
+the clips two takes ago — "both imply the same ~10 cm head motion" — is
+independently confirmed by the layer at 4-13 cm during rotation.
+
+### What this makes of #74, whose title said it first
+
+> **#74 — Head translation is not wired at all; only yaw/pitch cross the
+> channel.**
+
+X4 never renders the head's translation, because only yaw and pitch reach it.
+The scene therefore *cannot* respond to a lean, and declaring the neutral point
+is the honest description of that (#75's reasoning, unchanged). But the quad is
+real geometry, so the compositor gives it the full parallax of a translation the
+scene does not have. **The two layers disagree because one of them is told about
+the lean and the other cannot be.** The HUD slip is a symptom of #74, not of
+anything in #57.
+
+That reframes the remaining work: the slip is not fixable inside the quad's
+placement, which is what takes 242-247 kept trying. Take 247 removed the quad's
+parallax and made it worse, which says the scene is NOT simply frozen either —
+the compositor is doing something with the declared position that has not been
+established, and `X4VR_DECLARE_RENDERED_POS` is the knob that changes it.
+
+**No fix is proposed here.** The next step is one elimination with an existing
+knob and no code, and it is written up separately so that this measurement
+stands on its own.
+
+### A scorer defect found by its own output
+
+The geom section printed *"both r near +1 => the layers agree about the viewer
+and the slip is NOT this"* unconditionally — under numbers reading +0.986 and
++0.095. A canned sentence that reads like a verdict is worse than no sentence,
+and this one would have said "not this" about the run that proves it is. Now
+conditioned on the two correlations, with a distinct branch for each case.
