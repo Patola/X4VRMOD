@@ -11938,17 +11938,24 @@ void vr_thread() {
                 {
                     static uint64_t n = 0;
                     if ((n++ % 600) == 0)
+                        // **The POSITION is in here because take 244's line
+                        // left it out.** That line reported the declared
+                        // angles and the size, which take 243's build also
+                        // printed — so when 244 came back unchanged I could
+                        // not tell from the log whether the orbit had run at
+                        // all, and had to infer it from an unrelated line that
+                        // happened to be new. A line that cannot distinguish
+                        // the build it is reporting on is not evidence.
                         X4VR_LOG("ui: quad at %.2f m, %.2f x %.2f m, declared "
-                                 "yaw=%.2f pitch=%.2f deg — the SAME pose as "
-                                 "the scene layer, because both are the same "
-                                 "camera's image. NOT head-locked: X4 draws "
-                                 "the HUD world-anchored, so it counter-rotates "
-                                 "inside the texture and lands on the ship. "
-                                 "The HUD must LEAVE THE VIEW when the head "
-                                 "turns; if it follows the head instead, this "
-                                 "is backwards and identity was right.",
+                                 "yaw=%.2f pitch=%.2f deg, centre "
+                                 "(%.3f, %.3f, %.3f) = neutral + R*(0,0,-zm). "
+                                 "If the centre does not move as the yaw "
+                                 "changes, the orbit is not running.",
                                  zm, quad_ui.size.width, quad_ui.size.height,
-                                 g_vrs.last_decl_yaw, g_vrs.last_decl_pitch);
+                                 g_vrs.last_decl_yaw, g_vrs.last_decl_pitch,
+                                 quad_ui.pose.position.x,
+                                 quad_ui.pose.position.y,
+                                 quad_ui.pose.position.z);
                 }
             }
         }

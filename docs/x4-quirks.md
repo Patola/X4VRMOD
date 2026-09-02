@@ -10076,51 +10076,37 @@ perf number. Prediction 4 includes that band precisely so a surprise is visible.
 Everything below supersedes earlier "read this first" banners, including the
 take-211 one that used to head this section and the take-202 one further down.
 
-## THE NEXT TASK: run take 244. Two changes, both built and tested.
+## THE NEXT TASK: take 245, and it is NOT another placement guess.
 
-Take 243 **refuted** the previous banner's headline fix. Read "Take 243:
-P243.1 REFUTED" below before anything else; the short version:
+Take 244 refuted take 243's fix, which had refuted take 242's. Patola:
+*"we're again stuck in that situation where you change random knobs and they
+don't have an effect... why nothing has an effect on this?"* Read
+"Take 244: STOP" below before touching the quad.
 
-1. **The HUD is still opposite the head, and the geometry says 243a was a
-   no-op.** A quad is a rectangle *centred at* `pose.position` and turned about
-   that centre. 243a changed the orientation and left the centre pinned dead
-   ahead, so content near the middle of the texture never moved. Fixed: the
-   centre now ORBITS the neutral point to sit `zm` along the camera's forward
-   axis — position and orientation are one rigid placement.
-2. **What 243 did prove:** the panel's centre was fixed in space across two
-   takes and the HUD still moved, so the content moves *within the texture*.
-   X4's cockpit HUD is world-anchored in angle — now forced by observation, not
-   inferred. That part of the take-242 conclusion stands.
-3. **"Eye separation feels wrong" has a named suspect at last.** Nothing has
-   ever compared the runtime's own eye separation against `X4VR_IPD`, which is
-   what the SCENE is sheared by while the quad's stereo comes from the
-   runtime's eye poses. A new `ipd:` line reports both. Distance improving it
-   slightly at 1.4 m is exactly what a scale disagreement does.
+**The reason nothing works:** all three takes placed the quad from an ASSUMPTION
+about where the HUD sits inside X4's UI texture as the camera turns — a
+different assumption each time — and nothing has ever measured it. #55 filed
+that exact experiment and said disparity could not settle it. Three takes later
+it is finally built: `tools/hud_vs_camera.py`, validated against take 237's
+static-camera dumps as a negative control.
 
-Still true and still the trap: **do not head-lock the HUD in the cockpit**
-(rejected twice), and note that the correct placement *looks* like head-locking
-because the panel follows the camera — the content counter-turns inside it, so
-the HUD lands on the ship. `tests/headlook.cpp` has all of it as arithmetic,
-including the contrast against 243a's pinned centre.
+**DO NOT build a fourth placement before running it.** The answer is one
+number, the tool prints it, and it selects the placement.
 
-**Do NOT re-litigate the frame from prose.** `tests/headlook.cpp` has it as
-arithmetic — four cases, including the screen-locked class, which is the one
-that would have to change if P243.4 fires. And do not head-lock the HUD in the
-cockpit; that has been rejected twice (see the take-241 correction), and note
-that the fix above is *not* that, however much the declared pose looks like it.
+**The pivot artefact is real and was under-weighted — Patola said so and he is
+right.** Layer A declares `position = neutral + R(C)·(±ipd/2 + head_shift)`, and
+take 244 measured the shift at **0.17 m**. That whole vector is rotated by the
+camera angle, so a 17 cm lever swings with every turn — "a larger rotation arm
+than my neck", fed to the compositor as where the pixels came from. #74 is
+documented "not clean" and has been ON in every recent take. `X4VR_HEAD_TRANSLATE=0`
+eliminates it with no code. This is a nausea issue, not a cosmetic one.
 
-**A thing take 242 could not see, found while writing the test:** identity also
-put a ROLL on the HUD whenever yaw and pitch were combined — 26.6° at yaw −60 /
-pitch 30, zero on either axis alone. Patola's roll check was a pure head roll,
-which is the one row where the cross-term vanishes. The measurement was sound
-and the configuration hid the defect.
+Take 245 has two arms, specified in full below: **245A comfort** (arm off,
+canvas 2.5 m, no instruments) and **245B measurement** (dumps, will stutter,
+not for judging comfort).
 
-**Known interaction, pre-existing:** take 242 already fails the scorer with
-*"the pose fell back to identity 3 times AFTER it had been driven"*. That is
-#72/#75 and not new, but it now moves the quad too. Consistent with the scene
-rather than independent of it, which is better — the whole world snaps together
-instead of the HUD sliding against it — but it is still a snap and it will be
-visible in 243.
+Still true: **do not head-lock the HUD in the cockpit** (rejected twice), and
+`tests/headlook.cpp` holds the placement arithmetic including 243a's no-op.
 
 ## The previous task: layer B's code — DONE
 
@@ -12173,3 +12159,126 @@ the whole point of the run's second half — read it even if P244.1 fails.
 
 Roll is again the control and must not change. `python3 tools/score_run.py
 /tmp/x4vr-take244.log` is the acceptance check.
+
+## Take 244: STOP. Three takes, three placements, one unchanged report.
+
+Patola: *"We're again stuck in that situation where you change random knobs and
+they don't have an effect... the HUD on the cockpit still goes to the opposite
+direction of my head (why nothing has an effect on this?)"*
+
+He is right, and the question is the correct one to ask. The answer is that all
+three placements were built on an **assumption about where the HUD sits inside
+X4's UI texture as the camera turns**, and the assumption was different every
+time — while nothing ever measured it:
+
+    take 242   assumed screen-locked   content at 0     -> quad at identity
+    take 243   assumed world-anchored  content at -C    -> quad rotated
+    take 244   ditto                                    -> quad rotated + orbited
+
+If the content is at neither 0 nor −C, all three are wrong and none of them
+could have worked. Their joint result — *"opposite the head"* at every
+placement — is consistent with content at **−2C**, which no take has tested,
+because no take has measured the number.
+
+**#55 said this in writing and I did not act on it.** It measured the HUD's
+disparity, found zero, and stated that zero cannot separate screen-locked from
+world-at-infinity — *"under a head rotation those diverge"*. It filed the
+distinguishing experiment. Three takes later I am building it.
+
+### What was eliminated first, so the list is honest
+
+* **Stale binary — NO.** Take 244's log carries the `ipd:` line, which exists
+  only in the orbit build. It ran the code it was meant to.
+* **The pose being zero — NO.** `cam_valid` is 0 for the first 113 s (loading,
+  expected) and 1 through the cockpit window; the quad's declared angle reaches
+  27.61°.
+* **A scale error in the quad — NO.** X4's half-angle at `X4VR_FOV=1.4917` is
+  `1.4917 × 73.7399 / 2 = 55.0°`, and the panel is 4.00 m wide at 1.40 m, i.e.
+  `atan(2.0/1.4) = 55.0°`. They agree exactly, so the texture is not being
+  magnified.
+
+That leaves the content's own frame, which is the one thing never measured.
+
+### `tools/hud_vs_camera.py` — the measurement, and its control
+
+Cross-correlate consecutive present dumps in two channels: `hud` (X4's
+green/cyan overlay) and `grey` (the cockpit, overlay removed). `grey` is the
+WORLD's motion in the same image at the same instant, so it calibrates
+pixels-per-degree with no knowledge of the field, and the verdict is the ratio:
+
+    dx_hud / dx_grey ~ 1   world-anchored
+    ~ 0                    screen-locked
+    ~ 2                    X4 counter-rotates it twice — what 242/243/244 imply
+
+**Validated on take 237's 74 dumps as a negative control** — that run had no
+head-look and X4's camera never left 0.00, so every pair must come back
+unusable. Three defects were found doing it, all of which produced
+confident-looking wrong answers:
+
+* It halved every image as if it were an SBS composite. The present dumps are
+  written one file per array layer and are already 1408×1408, so the search
+  window no longer fit and `shift()` returned `None` — printed as "no signal"
+  and summarised as *"the camera did not turn"*. A geometry mistake was exiting
+  through the same door as a real null; it now raises.
+* It correlated everything against file [0], which is the black start-up frame.
+  Consecutive pairs instead, with scene breaks not bridged.
+* **It had no margin gate**, though the docstring quotes #55's reason for one.
+  Four scene-change pairs with correlation margins of 0.000–0.009 were folded
+  into a headline median of −0.65 — a confident number assembled from noise.
+  Static pairs read 0.34–0.52, so the gate separates them cleanly.
+
+### The pivot artefact, which Patola says I under-weighted — he is right
+
+*"as if the pivot was wrong or there was a larger rotation arm than my neck,
+making the cockpit shift up, the sides of the cockpit get more distant when I
+look at them... doing that for a long time might cause VR motion sickness"*
+
+There is a mechanism and it is in the log. Layer A declares its position as
+
+    off = head_to_world(R(C), (±ipd/2) + g_reye.sx, g_reye.sy, 0)
+    position = neutral + off
+
+so the head-translate shift is **rotated by the camera angle**. Take 244's
+scorer reports `translate |published| max x 0.1412 y 0.1715 m`. That is a 17 cm
+lever swinging with every turn of the head, fed to the compositor as the point
+the pixels were rendered from — which is exactly "a larger rotation arm than my
+neck". #74 is documented as *"built, default OFF, not clean... a small
+deterministic-in-angle drift remains, seven hypotheses eliminated"*, and it has
+been ON in every recent take.
+
+It is eliminable with a knob and no code: `X4VR_HEAD_TRANSLATE=0`. That is
+Patola's own method — switch the candidate off and re-measure — and it should
+have been tried the first time he described the artefact.
+
+### Take 245 — two arms, and they are different KINDS of run
+
+**245A: comfort. No instruments, nothing to read.** Delivers two of the three
+things asked for: the overlays further away, and the 17 cm arm gone.
+
+    X4VR_TAKE=245A-NOARM X4VR_CANVAS_M=2.5 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DECLARE_RENDERED_POS=1 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HUDLESS=1 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take245a.log X4VR_UI_LAYER=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+`X4VR_HEAD_TRANSLATE` is **absent**, which is the change. Question: does the
+cockpit still shift and stretch as the head turns? **The HUD is not expected to
+be fixed in this arm** and I am not claiming it will be.
+
+**245B: measurement. It will stutter — do not judge comfort in it.** No
+HUDLESS, no UI layer: the HUD is composited into the eye image, which is the
+dump path take 237 proved works.
+
+    X4VR_TAKE=245B-HUDFRAME X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_ROLL_STEREO=1 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_HEADLOOK_GAIN=0.115 X4VR_HEADLOOK_LEAD=1.0 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_MV_DUMP=/tmp/x4vr-t245b X4VR_MV_DUMP_PRESENT=600 X4VR_POSELOG=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take245b.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 ./launch/x4vr-launch.sh
+
+In the cockpit, **hold each position for about 6 seconds** — dumps land every
+600 presents, so a position passed through is a position not captured. Straight
+ahead, then ~30° left, ~30° right, up, down. Then:
+
+    python3 tools/hud_vs_camera.py '/tmp/x4vr-t245b-present-n*-layer0.png' \
+                                   --log /tmp/x4vr-take245b.log
+
+**P245.1.** At least four usable pairs, i.e. `dx_grey` past 8 px with both
+margins past 0.05. If they are all UNUSABLE the positions were not held long
+enough and the run says nothing — that is the failure mode to watch for, not a
+result.
+
+**P245.2.** The ratio is one of the three named values. I am not predicting
+which, because predicting it is what the last three takes did. Whatever it is,
+it selects the placement, and the placement stops being a guess.
