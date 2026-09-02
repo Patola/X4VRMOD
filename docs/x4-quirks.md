@@ -12653,3 +12653,79 @@ excluded by an order of magnitude.
 The next input is not another number. **It is whether Patola still sees the
 defect at 0.70 m with the current build**, which the 246 clip does not answer
 because he was asked for a measurement and not for a judgement.
+
+## P246.1 WAS RIGHT. I refuted it with an instrument that cannot see it.
+
+Patola, on take 246: *"The HUD still slips and the amount feels even greater
+than the previous run."* That contradicts the ratio metric, which said 246
+(0.70 m) tracked BETTER than 245A (2.50 m) — 1.00 against 0.92.
+
+**The observer was right and the instrument was answering a different
+question.** `hud_vs_camera.py` compares per-frame-pair MOTION: a rate. Parallax
+from head translation does not change the rate at which the HUD sweeps, it adds
+a POSITION offset. A rate metric can no more see a position error than `abs()`
+can report a sign. I built the ratio to settle "world-anchored or
+screen-locked", which is genuinely a rate question, and then reused it to test
+parallax without asking whether it could.
+
+### The measurement that does see it
+
+Track the largest HUD blob's absolute position, subtract the world's
+accumulated motion, and the result is CONSTANT if the HUD is locked to the
+cockpit. Its wander is the slip:
+
+    canvas   HUD-vs-world wander        implied head translation
+    2.50 m   sd 21.2 px = 2.34 deg      t = zm*tan(sd) = 10.2 cm
+    0.70 m   sd 68.2 px = 7.52 deg      t              =  9.2 cm
+
+    ratio of wander   3.22x measured   |   1/distance predicts 3.57x
+
+**Two clips at very different canvas distances imply the same physical head
+motion, ~10 cm.** That is the identification: the effect is not a property of
+the HUD or of the frame, it is one translation seen through two lever arms.
+Take 244's scorer had independently measured raw head motion at 0.17 m max, so
+this is three numbers from three sources agreeing on one quantity.
+
+At 0.70 m the wander RANGE is 33.9 deg. That is not subtle, and it is exactly
+*"the amount feels even greater than the previous run"*.
+
+### Why the quad has parallax and the scene does not
+
+A projection layer is reprojected by a 2D warp with no depth, so it **cannot**
+apply translation parallax — the scene behaves as though the head never leaves
+the point its pose was declared from. A quad is real geometry and the
+compositor gives it the full parallax of the true head position. Anchoring the
+quad to the latched neutral point therefore bought `t/zm` radians of swim that
+the scene can never have. This is task #75's shape and now has a number.
+
+### The fix, and why it is NOT head-locking
+
+The quad now anchors to the **live head centre** (the midpoint of the two eye
+poses) instead of the latched neutral point:
+
+    position = head_centre_now + R(C) * (0, 0, -zm)
+
+so its offset from the eye is constant and it has the same relationship to head
+translation the scene layer has. **The orientation is untouched** — still the
+camera's, so turning the head still sweeps the HUD out of view. It follows the
+head's TRANSLATION only, and it does that in order to match the scene rather
+than to follow the player. Head-locking is a rotation claim; this is not one.
+
+Falls back to the neutral point until the head is located, which is the old
+behaviour and correct before tracking starts.
+
+### Take 247
+
+245A/246's line with `X4VR_CANVAS_M` back to a comfortable **1.4** and the
+names moved on:
+
+    X4VR_TAKE=247-HEADANCHOR X4VR_CANVAS_M=1.4 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DECLARE_RENDERED_POS=1 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HUDLESS=1 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take247.log X4VR_UI_LAYER=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+**P247.1.** The HUD stays on the cockpit: the wander drops from ~7.5 deg (0.70 m)
+and ~2.3 deg (2.50 m) to well under 1 deg, and stops scaling with distance.
+Judgement first — *does it still slip?* — and a clip second if it does.
+
+**P247.2.** Turning the head still sweeps the HUD out of view. If it now follows
+the head, the translation anchor has been applied to the rotation as well and
+this is the rejected behaviour again; say so immediately and it comes straight
+back out.
