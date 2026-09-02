@@ -11492,17 +11492,15 @@ void vr_thread() {
             {
                 const auto &p0 = views[0].pose.position;
                 const auto &p1 = views[1].pose.position;
-                // **The head centre, published for the UI quad — task #57's
-                // parallax, measured off two of Patola's clips.**
+                // **The head centre. An INSTRUMENT, not the quad's anchor —
+                // take 247 tried that and it was 3.5x worse.**
                 //
-                // A projection layer is reprojected by a 2D warp that has no
-                // depth, so it CANNOT apply translation parallax: the scene
-                // behaves as though the head never moves off the point its
-                // pose was declared from. A quad is real geometry, and the
-                // compositor gives it the full parallax of the true head
-                // position. Anchoring the quad to the latched neutral point
-                // therefore made the HUD swim against the cockpit by t/zm
-                // radians for every t the head translated.
+                // The argument that lost, kept because it is a good one that a
+                // measurement beat: a projection layer is reprojected by a 2D
+                // warp with no depth, so it cannot carry translation parallax,
+                // while a quad is real geometry and gets all of it. Anchoring
+                // the quad to a fixed point therefore looked like it must swim
+                // by t/zm for every t the head moved.
                 //
                 // Measured, and the scaling is what identifies it: the HUD's
                 // wander against the world was sd 2.34 deg at a 2.50 m canvas
@@ -11511,12 +11509,11 @@ void vr_thread() {
                 // physical head motion from two independent clips, and take
                 // 244's scorer had already measured raw head motion at 0.17 m.
                 //
-                // So the quad follows the head's TRANSLATION, which is what
-                // makes it match the scene layer. **It does not follow the
-                // head's rotation** — the orientation stays the camera's, so
-                // turning the head still sweeps the HUD out of view, which is
-                // the behaviour Patola has asked for and I have broken twice.
-                // Matching the scene is the point; head-locking is not.
+                // The signature is real and still stands. What it is NOT is a
+                // licence to move the quad: take 247 did, and Patola got the
+                // take-244 artefacts back with wander 3.5x worse in x and 6x
+                // in y. See the quad's placement for the rule the clips do
+                // support — both layers on the SAME anchor, whatever it is.
                 g_vrs.head_x.store(0.5f * (p0.x + p1.x),
                                    std::memory_order_relaxed);
                 g_vrs.head_y.store(0.5f * (p0.y + p1.y),
@@ -11948,30 +11945,32 @@ void vr_thread() {
                     g_vrs.last_decl_q[0], g_vrs.last_decl_q[1],
                     g_vrs.last_decl_q[2], g_vrs.last_decl_q[3], 0.0f, 0.0f,
                     -zm);
-                // **Anchored to the LIVE head centre, not the latched neutral
-                // point.** See the head_x publication for the measurement: a
-                // fixed anchor gave the quad t/zm radians of parallax that the
-                // scene layer cannot have, 7.5 deg at 0.70 m. Falls back to
-                // the neutral point when the head has not been located yet,
-                // which is the old behaviour and correct before tracking
-                // starts.
-                const bool live = g_vrs.head_valid.load(
-                                      std::memory_order_acquire) != 0;
-                const float ax = live ? g_vrs.head_x.load(
-                                            std::memory_order_relaxed)
-                                      : g_reye.nx.load(
-                                            std::memory_order_relaxed);
-                const float ay = live ? g_vrs.head_y.load(
-                                            std::memory_order_relaxed)
-                                      : g_reye.ny.load(
-                                            std::memory_order_relaxed);
-                const float az = live ? g_vrs.head_z.load(
-                                            std::memory_order_relaxed)
-                                      : g_reye.nz.load(
-                                            std::memory_order_relaxed);
-                quad_ui.pose.position.x = ax + off.x;
-                quad_ui.pose.position.y = ay + off.y;
-                quad_ui.pose.position.z = az + off.z;
+                // **The NEUTRAL point, and take 247 is why it is not the live
+                // head centre.**
+                //
+                // Take 247 anchored this to the head, on the reasoning that a
+                // projection layer cannot carry translation parallax so the
+                // quad should not either. Measured on Patola's clip it was
+                // **3.5x worse horizontally and 6x worse vertically** than the
+                // arrangement it replaced — wander sd 14.60 deg where the
+                // un-"fixed" behaviour predicted 4.18 — and he reported the
+                // take-244-era artefacts back with it.
+                //
+                // The rule the three clips actually establish is simpler than
+                // the parallax argument: **the quad and the scene layer must be
+                // anchored to the SAME point.** 245A reached that state by
+                // taking the head's translation OUT of the scene's declared
+                // position (X4VR_HEAD_TRANSLATE=0), leaving both on the fixed
+                // neutral point, and Patola reported the drift and the bad
+                // separation gone. Take 247 broke the match again from the
+                // other side. Whether either is "correct in itself" is not the
+                // question the evidence answers; agreeing is.
+                quad_ui.pose.position.x =
+                    g_reye.nx.load(std::memory_order_relaxed) + off.x;
+                quad_ui.pose.position.y =
+                    g_reye.ny.load(std::memory_order_relaxed) + off.y;
+                quad_ui.pose.position.z =
+                    g_reye.nz.load(std::memory_order_relaxed) + off.z;
                 // Sized to subtend the SAME field the scene layer declares, at
                 // the canvas distance. Any other size would put a HUD element
                 // at a different angle from the world feature it labels, which

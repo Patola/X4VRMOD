@@ -12729,3 +12729,58 @@ Judgement first — *does it still slip?* — and a clip second if it does.
 the head, the translation anchor has been applied to the rotation as well and
 this is the rejected behaviour again; say so immediately and it comes straight
 back out.
+
+## Take 247: the head anchor is REVERTED. It was 3.5x worse, and measured so.
+
+Patola: *"It not only didn't fix the issue, it reintroduced weird eye separation
+and the artifact of the quads drifting weirdly that was solved after 245A."*
+
+The clip agrees, and by a wide margin:
+
+    anchor    canvas    x wander            y wander
+    neutral   2.50 m    sd 21.2 px  2.34°   sd 44.8 px   4.94°
+    neutral   0.70 m    sd 68.2 px  7.52°   sd 35.3 px   3.89°
+    HEAD      1.40 m    sd 132.4 px 14.60°  sd 269.8 px 29.75°
+
+The un-"fixed" behaviour would have predicted 4.18° at 1.40 m by its own
+1/distance law. The anchor delivered **14.60° — 3.5x worse in x and 6x in y**,
+with a monotonic vertical drift across the clip (by quarter: 478 → 451 → 578 →
+870 px). Reverted.
+
+### What the three clips actually establish
+
+Not "the quad should have parallax" or "it should not". **Both layers must be
+anchored to the SAME point**, and the evidence is a clean 2x2:
+
+    scene anchor      quad anchor     result
+    moving (#74 on)   fixed neutral   drift + bad separation   (takes 242-244)
+    fixed             fixed neutral   Patola: solved           (245A)
+    fixed             moving (head)   drift + bad separation   (247)
+
+245A and 247 break the match from opposite sides and produce the same
+complaint. That is the invariant, and it is stronger evidence than either
+mechanism I argued from, because it is a 2x2 rather than a story.
+
+**So #74's translate arm and take 247's head anchor were the same mistake made
+twice, from opposite ends** — once by moving the scene's anchor, once by moving
+the quad's. The first cost three takes to find; the second was caught in one
+because the drift metric existed by then.
+
+### The parallax signature is still real, and still unexplained
+
+With both anchors fixed, the wander still scaled 1/distance — 2.34° at 2.50 m
+against 7.52° at 0.70 m, 3.22x for 3.57x — and both clips implied the same
+~10 cm displacement. That is not noise and the revert does not explain it away.
+
+**A hypothesis, filed and NOT built:** the scene's declared position is
+`neutral + R(C)·(±ipd/2, 0, 0)` — per-eye, and it ORBITS on a 32 mm radius as
+the camera turns — while the quad's anchor is the neutral point with no eye
+offset at all. The two differ by a rotating ±32 mm, which is `64mm/zm` of
+angular disagreement: 5.2° at 0.70 m, 1.5° at 2.50 m against the measured 7.52
+and 2.34. Right law, right order, and it would also read as *"the eye separation
+feels wrong"* because the disagreement is opposite in the two eyes.
+
+If that is it, the fix is **two quads**, `XR_EYE_VISIBILITY_LEFT` and `_RIGHT`,
+each anchored at `neutral + R(C)·(±ipd/2)`, so the UI gets the same per-eye
+viewpoint the scene has. **Not built.** It is one more mechanism that fits, and
+this section exists because the last two also fit.
