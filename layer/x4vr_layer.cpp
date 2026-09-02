@@ -11060,6 +11060,11 @@ struct VrState {
     // swapchain lock does not promise that forever.
     std::atomic<float> head_x{0.f}, head_y{0.f}, head_z{0.f};
     std::atomic<unsigned> head_valid{0};
+    // Eye 0's DECLARED position — what layer A tells the compositor the pixels
+    // came from. Published for the geometry line, which is the whole point:
+    // three fixes for the HUD slip were built by reasoning backwards from a
+    // video because the layer never logged the geometry it actually submits.
+    std::atomic<float> decl_x{0.f}, decl_y{0.f}, decl_z{0.f};
     std::mutex sc_mu;               // XrSwapchain wants external synchronisation
     std::atomic<bool> sc_ready{false};
     std::atomic<bool> sc_failed{false}; // tried once and could not; do not retry
@@ -11853,6 +11858,20 @@ void vr_thread() {
                 // confirmed on hardware that it honours what we give it rather
                 // than substituting its own.
                 const OffAxisPair &oat = offaxis_target();
+                // **Published AFTER both branches, so it is what was actually
+                // declared and not what one path would have declared.** The
+                // geometry line below is worthless if it reports the value
+                // from the branch I happened to instrument; #75's
+                // declare_rendered_pos() and the plain runtime position are
+                // different points and either can be live.
+                if (e == 0) {
+                    g_vrs.decl_x.store(pv[0].pose.position.x,
+                                       std::memory_order_relaxed);
+                    g_vrs.decl_y.store(pv[0].pose.position.y,
+                                       std::memory_order_relaxed);
+                    g_vrs.decl_z.store(pv[0].pose.position.z,
+                                       std::memory_order_relaxed);
+                }
                 pv[e].fov = oat.on ? oat.fov[e] : g_vr_fov;
                 pv[e].subImage.swapchain = g_vrs.sc.handle;
                 pv[e].subImage.imageRect = {
@@ -11982,6 +12001,67 @@ void vr_thread() {
                     zm * (std::tan(f.angleUp) - std::tan(f.angleDown));
                 layers[1] = (const XrCompositionLayerBaseHeader *)&quad_ui;
                 layer_count = 2;
+                // ---- the geometry line -------------------------------------
+                //
+                // **Three fixes for the HUD slip were built by reasoning
+                // backwards from a video, because the layer never logged the
+                // geometry it submits.** Takes 244, 247 and the two anchors
+                // before them all rested on an inferred relationship between
+                // the head, the scene's declared viewpoint and the quad's
+                // centre. Those are three points the layer HAS, exactly, every
+                // frame, and it was printing none of them.
+                //
+                // Full rate, like `poselag`, and for the same reason: the slip
+                // varies on a sub-second timescale and a 600-frame sample would
+                // alias it. It rides on X4VR_POSELOG, which every recent run
+                // already sets.
+                //
+                // The three derived scalars are the question, stated so the
+                // answer can be read without a tool:
+                //
+                //   t_head    |head - neutral|   how far the head has moved
+                //             from the anchor both layers are built on
+                //   d_scene   |head - declared|  the offset the compositor is
+                //             asked to reconcile for layer A
+                //   d_quad    |head - quadcentre| the quad's true distance from
+                //             the eye, which is `zm` ONLY if the head has not
+                //             moved off the neutral point
+                //
+                // If d_quad tracks zm while d_scene stays near zero, the two
+                // layers disagree about where the viewer is, and that gap is
+                // the slip. If both move together, they do not, and the slip
+                // is somewhere else entirely — which is worth knowing for
+                // certain rather than by inference from pixels.
+                if (poselog_enabled()) {
+                    const float hx = g_vrs.head_x.load(std::memory_order_relaxed);
+                    const float hy = g_vrs.head_y.load(std::memory_order_relaxed);
+                    const float hz = g_vrs.head_z.load(std::memory_order_relaxed);
+                    const float nx = g_reye.nx.load(std::memory_order_relaxed);
+                    const float ny = g_reye.ny.load(std::memory_order_relaxed);
+                    const float nz2 = g_reye.nz.load(std::memory_order_relaxed);
+                    const float dx_ = g_vrs.decl_x.load(std::memory_order_relaxed);
+                    const float dy_ = g_vrs.decl_y.load(std::memory_order_relaxed);
+                    const float dz_ = g_vrs.decl_z.load(std::memory_order_relaxed);
+                    auto dist = [](float ax, float ay, float az, float bx,
+                                   float by, float bz) {
+                        const float x = ax - bx, y = ay - by, z = az - bz;
+                        return std::sqrt(x * x + y * y + z * z);
+                    };
+                    X4VR_LOG("geom: head=%.4f,%.4f,%.4f neutral=%.4f,%.4f,%.4f "
+                             "declared=%.4f,%.4f,%.4f quad=%.4f,%.4f,%.4f "
+                             "zm=%.3f t_head=%.4f d_scene=%.4f d_quad=%.4f "
+                             "hv=%u yaw=%.2f pitch=%.2f",
+                             hx, hy, hz, nx, ny, nz2, dx_, dy_, dz_,
+                             quad_ui.pose.position.x, quad_ui.pose.position.y,
+                             quad_ui.pose.position.z, zm,
+                             dist(hx, hy, hz, nx, ny, nz2),
+                             dist(hx, hy, hz, dx_, dy_, dz_),
+                             dist(hx, hy, hz, quad_ui.pose.position.x,
+                                  quad_ui.pose.position.y,
+                                  quad_ui.pose.position.z),
+                             g_vrs.head_valid.load(std::memory_order_relaxed),
+                             g_vrs.last_decl_yaw, g_vrs.last_decl_pitch);
+                }
                 // **Periodic, not once.** The first version said this a single
                 // time and it was latched at start-up, when nothing is driving
                 // and every angle is zero -- so it could only ever print the

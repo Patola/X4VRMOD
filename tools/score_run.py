@@ -2078,6 +2078,61 @@ def main(path):
                     "was not driving, or the head never turned while the UI "
                     "was up")
 
+    # --- task #57: the geometry the layer actually submits -------------------
+    #
+    # **This exists because three fixes for the HUD slip were argued from a
+    # video.** The head, the scene's declared viewpoint and the quad's centre
+    # are three points the layer has exactly, every frame, and none of them was
+    # ever printed. The line reports them; this reports what they mean.
+    #
+    # The discriminator is not any single magnitude but whether the two layers
+    # AGREE about where the viewer is. `d_scene` is how far the head is from
+    # the point layer A claims the pixels came from; `d_quad - zm` is how far
+    # the quad's true distance from the eye has drifted from its nominal one.
+    # If those two track each other, both layers see the same head displacement
+    # and the slip is elsewhere. If `d_quad - zm` moves while `d_scene` stays
+    # flat, they do not, and that gap is the slip.
+    geom = re.findall(
+        r"geom: head=\S+ neutral=\S+ declared=\S+ quad=\S+ zm=([\d.]+) "
+        r"t_head=([\d.]+) d_scene=([\d.]+) d_quad=([\d.]+) hv=(\d)", text)
+    if geom:
+        import statistics
+        zmv = [float(g[0]) for g in geom]
+        th = [float(g[1]) for g in geom]
+        ds = [float(g[2]) for g in geom]
+        dq = [float(g[3]) for g in geom]
+        hv = sum(1 for g in geom if g[4] == "1")
+        dqe = [q - z for q, z in zip(dq, zmv)]
+        def stat(v):
+            s = sorted(v)
+            return (statistics.median(s), s[int(0.9 * (len(s) - 1))], s[-1])
+        print(f"geom    {len(geom)} sample(s), head located in {hv}")
+        for nm, v in (("t_head  head from neutral", th),
+                      ("d_scene head from declared", ds),
+                      ("d_quad-zm quad vs nominal", dqe)):
+            m, p, x = stat([abs(a) for a in v])
+            print(f"        {nm:<28} median {m:.4f}  p90 {p:.4f}  max {x:.4f} m")
+        # Do the two layers see the same head displacement?
+        if len(th) > 20 and statistics.pstdev(th) > 1e-4:
+            def corr(a, b):
+                ma, mb = statistics.fmean(a), statistics.fmean(b)
+                num = sum((x - ma) * (y - mb) for x, y in zip(a, b))
+                da = sum((x - ma) ** 2 for x in a) ** 0.5
+                db = sum((y - mb) ** 2 for y in b) ** 0.5
+                return num / (da * db) if da > 1e-9 and db > 1e-9 else 0.0
+            print(f"        t_head vs d_scene      r={corr(th, ds):+.3f}")
+            print(f"        t_head vs (d_quad-zm)  r={corr(th, dqe):+.3f}")
+            print("        both r near +1 => the layers agree about the "
+                  "viewer and the slip is NOT this")
+        if hv == 0:
+            fails.append(
+                "every `geom` sample has hv=0, so the head was never located "
+                "and head/neutral/declared are all the same latched point — "
+                "this run cannot say anything about the slip's geometry")
+    elif "X4VR_UI_LAYER=1" in (run or ""):
+        print("geom    no `geom` line — build predates it, or X4VR_POSELOG "
+              "is unset (the line rides on it)")
+
     # --- task #76: X4's own UI-composition switch ---------------------------
     #
     # Gated on INTENT for the reason #74 above is: a run that asked to force the

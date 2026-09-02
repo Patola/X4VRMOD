@@ -12963,3 +12963,64 @@ rather than three inferences from pixels. Every hypothesis in this section has
 been built by reasoning backwards from an image.
 
 **#57's remaining work is the slip. The separation is parked under #25.**
+
+## The geometry line — and take 250
+
+Patola: *"Add the geometry log line. It's better to be correct than do things in
+a hurry, in fact it's our directive — we have no deadline."*
+
+**Three fixes for the HUD slip were argued from a video.** The head, the scene's
+declared viewpoint and the quad's centre are three points the layer holds
+exactly, every frame, and it printed none of them. Every hypothesis in takes
+244-249 reasoned backwards from pixels to those numbers. The line prints them.
+
+    geom: head=x,y,z neutral=x,y,z declared=x,y,z quad=x,y,z zm=..
+          t_head=.. d_scene=.. d_quad=.. hv=.. yaw=.. pitch=..
+
+Full rate, like `poselag`, because the slip varies sub-second and a 600-frame
+sample would alias it. It rides on `X4VR_POSELOG`, which every recent run sets.
+
+`declared` is published **after both branches** of the position code, so it is
+what was actually declared rather than what one path would have declared —
+`declare_rendered_pos()` and the plain runtime position are different points and
+either can be live. Instrumenting the branch I happened to be looking at is how
+several of these numbers went wrong before.
+
+The three scalars state the question:
+
+    t_head    |head - neutral|      how far the head has moved from the anchor
+    d_scene   |head - declared|     the offset the compositor must reconcile
+                                    for layer A
+    d_quad    |head - quad centre|  which equals zm ONLY if the head has not
+                                    left the neutral point
+
+`score_run.py` reports medians, p90 and max for each, plus the correlation of
+`t_head` against `d_scene` and against `d_quad - zm`. **If both correlations are
+near +1 the two layers agree about where the viewer is, and the slip is not
+this** — which would be as useful as a confirmation, and is the outcome that
+would stop a fourth anchor experiment before it started. It FAILs a run where
+every sample has `hv=0`, since head/neutral/declared then collapse to one
+latched point and the run cannot speak to the geometry at all. Both paths were
+exercised on a synthetic log before shipping.
+
+**The harness cannot reach this**, and that is stated rather than implied: there
+is no OpenXR session in `run-multiview-render.sh`, so the quad block never runs
+and neither does the line. It compiles and the 209 existing cases still pass;
+the line itself is first exercised in the headset.
+
+### Take 250 — no behaviour change, just the numbers
+
+Identical to take 248 apart from the take and log names. **The build's behaviour
+is unchanged** — the head anchor is reverted, the quad is back on the neutral
+point, and nothing about the frame moved. This run exists to read three
+positions.
+
+    X4VR_TAKE=250-GEOM X4VR_CANVAS_M=1.4 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DECLARE_RENDERED_POS=1 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HUDLESS=1 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take250.log X4VR_UI_LAYER=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+In the cockpit, look around normally for a minute or so and **lean**: left and
+right, forward and back, a hand's width or two. The leans are the point —
+`t_head` is the quantity every remaining hypothesis is a function of, and a run
+where the head never leaves the neutral point measures nothing.
+
+No prediction is filed. Filing one here would be a fourth guess dressed as a
+hypothesis, and the line exists precisely to stop that.
