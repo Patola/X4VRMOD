@@ -12547,3 +12547,42 @@ neither pose nor field:
 **No third fix is going to be proposed from this.** Two mechanisms remain, the
 evidence does not choose between them, and the last four takes were spent on
 mechanisms that fitted a number.
+
+### Take 246 — the 0.70 m clip, and what it decides
+
+245A's line verbatim with **`X4VR_CANVAS_M` 2.5 → 0.7** and the take/log names
+moved on. Nothing else changes, so the canvas distance is the only variable
+against a clip that has already been measured.
+
+    X4VR_TAKE=246-CANVAS070 X4VR_CANVAS_M=0.7 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DECLARE_RENDERED_POS=1 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HUDLESS=1 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take246.log X4VR_UI_LAYER=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+Record the same clip as `/dados/x4-vr.mp4`: in the cockpit, ~20 s at 30 fps,
+head **left, right, up, down**, slowly and smoothly, keeping cockpit struts and
+the target-bracket cluster in frame. Then
+
+    python3 tools/hud_vs_camera.py <clip> --fps 15
+    python3 tools/score_run.py /tmp/x4vr-take246.log
+
+**P246.1 — the whole point.** Parallax scales as 1/distance, so if it is the
+cause the yaw ratio moves from 0.90 to about **0.64**:
+
+    parallax share at 2.5 m = 1 - 0.90 = 0.10
+    at 0.70 m                = 0.10 x 2.5/0.7 = 0.357  ->  ratio 0.64
+
+**P246.2 — the falsifier, and it is the likely one.** If the yaw ratio comes
+back at **0.90 again**, parallax is dead and the remaining suspect is my own
+instrument: the `grey` channel is the whole frame while `hud` is ~220 sparse
+pixels, and nothing has shown that asymmetry is harmless.
+
+**Already awkward for the parallax hypothesis, stated before the run so it is
+not claimed afterwards:** pitch measured exactly 1.00 at 2.5 m. Head
+translation during a turn is not purely horizontal, so parallax should have
+degraded pitch as well and it did not. Patola also reports the HUD behaving the
+same at 0.70, 1.40 and 2.50 m across takes 242–245, which is the same
+observation from the other side. **The expected outcome of this run is the
+falsifier**, and it is worth running because it converts "two candidates" into
+one, cheaply, with a clip he already knows how to record.
+
+If P246.2 fires, the next step is auditing `hud_vs_camera.py` against a
+SYNTHETIC pair — translate a known image by a known amount in each channel and
+check both report it — rather than another take.
