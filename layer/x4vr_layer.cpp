@@ -11038,11 +11038,23 @@ struct VrState {
     std::atomic<bool> ui_ready{false};
     std::atomic<bool> ui_failed{false};
     std::atomic<uint64_t> ui_released{0};
-    // Task #57. Layer A's declared angles, kept so the quad's log line can put
-    // the two poses side by side. The claim "identity is the ship's frame"
-    // predicts these are non-zero while the quad's are zero; a run where both
-    // are zero says nothing, and a run where they track each other refutes it.
+    // Task #57. Layer A's declared pose, which the UI quad now SHARES.
+    //
+    // Take 242 measured why they must be the same. The quad is a re-projection
+    // of an image X4 rendered through its camera, so the pose it declares has
+    // to be the pose that camera was at -- exactly the rule layer A follows.
+    // Declared at identity instead, the quad claimed the UI was rendered from
+    // the ship's forward axis, which is false the moment the camera turns: the
+    // HUD then showed up at -C with the head at +C and moved at twice the head
+    // angle. See "Settled on paper, no take" in docs/x4-quirks.md.
+    //
+    // **This is not head-locking.** X4 draws the cockpit HUD world-anchored, so
+    // it already sits at -C inside the image; declaring +C puts it back on the
+    // ship at 0 and it LEAVES THE VIEW when the head turns, which is the
+    // behaviour Patola has asked for twice. The angles are kept beside the
+    // quaternion for the log line, which is what makes that claim refutable.
     float last_decl_yaw = 0.0f, last_decl_pitch = 0.0f;
+    float last_decl_q[4] = {0.0f, 0.0f, 0.0f, 1.0f};
     std::mutex sc_mu;               // XrSwapchain wants external synchronisation
     std::atomic<bool> sc_ready{false};
     std::atomic<bool> sc_failed{false}; // tried once and could not; do not retry
@@ -11653,10 +11665,27 @@ void vr_thread() {
                 decl_pitch += ap;
                 if (valid || ay != 0.0f || ap != 0.0f)
                     x4vr::quat_of_angles(decl_yaw, decl_pitch, q);
-                    // Task #57: kept so the quad's log line can put the
-                    // two declared poses side by side.
-                    g_vrs.last_decl_yaw = decl_yaw;
-                    g_vrs.last_decl_pitch = decl_pitch;
+                // Task #57: the UI quad declares THIS pose, not identity, so it
+                // is published rather than recomputed there. Recomputing it
+                // from the angles at the submission site would be a second
+                // place for the two layers to disagree, and a quad that
+                // disagrees with the scene by even a frame is the swimming this
+                // file warns about above.
+                //
+                // Outside the `if` deliberately: when nothing is driving, `q`
+                // is identity and so is the quad, which is the correct
+                // arrangement for a run without head-look and the behaviour
+                // every take before 243 had.
+                //
+                // (These four assignments were under an unbraced `if` and ran
+                // unconditionally by accident. Harmless then -- the angles are
+                // zero in that branch -- and not harmless now.)
+                g_vrs.last_decl_yaw = decl_yaw;
+                g_vrs.last_decl_pitch = decl_pitch;
+                g_vrs.last_decl_q[0] = q[0];
+                g_vrs.last_decl_q[1] = q[1];
+                g_vrs.last_decl_q[2] = q[2];
+                g_vrs.last_decl_q[3] = q[3];
                 if (e == 0 && poselog_enabled()) {
                     // **Task #75, at FULL rate and on ONE line.**
                     //
@@ -11781,14 +11810,26 @@ void vr_thread() {
             // is not wired yet -- deliberately, because the cockpit is the case
             // being settled.
             //
-            // **The ship's frame is IDENTITY here, and that is worth spelling
-            // out because it looks too easy.** Layer A's declared orientation
-            // is built from the head-look COMMAND, which is measured from X4's
-            // own forward axis -- so identity in this reference space already
-            // means "where the ship is pointing". Turning the head moves layer
-            // A's pose and leaves this one alone, which is exactly the
-            // behaviour asked for. That is reasoning, not a measurement: the
-            // declared values are logged below so the run can contradict it.
+            // **It declares layer A's pose, and identity was the bug.** Take
+            // 242 ran the identity version and Patola measured the HUD moving
+            // at twice the head angle. The reasoning identity rested on -- "the
+            // ship's frame is identity in this reference space" -- is true and
+            // is not the point. The quad does not declare where the HUD is; it
+            // declares the camera the IMAGE was rendered through, which is the
+            // rule layer A follows and the only honest one for a re-projection.
+            //
+            // X4 draws the cockpit HUD world-anchored (#55's open half, closed
+            // by take 242), so it already sits at -C inside the texture when
+            // the camera is at +C. Declaring +C returns it to the ship at 0.
+            // Identity left it at -C while the head was at +C: 2C apart, which
+            // is exactly what was reported.
+            //
+            // **Not head-locking**, which has been rejected twice: the frame
+            // turns with the camera and the content counter-turns inside it by
+            // the same angle, so the HUD sits on the ship and LEAVES THE VIEW
+            // when the head turns. That is the behavioural test, and the line
+            // logged below reports both poses so the run can still contradict
+            // this.
             //
             // The position carries the neutral point but NOT the head shift:
             // leaning moves the player relative to the cockpit, and the cockpit
@@ -11810,7 +11851,10 @@ void vr_thread() {
                     {0, 0},
                     {(int32_t)g_vrs.ui_sc.width, (int32_t)g_vrs.ui_sc.height}};
                 quad_ui.subImage.imageArrayIndex = 0;
-                quad_ui.pose.orientation = {0.0f, 0.0f, 0.0f, 1.0f};
+                quad_ui.pose.orientation.x = g_vrs.last_decl_q[0];
+                quad_ui.pose.orientation.y = g_vrs.last_decl_q[1];
+                quad_ui.pose.orientation.z = g_vrs.last_decl_q[2];
+                quad_ui.pose.orientation.w = g_vrs.last_decl_q[3];
                 quad_ui.pose.position.x =
                     g_reye.nx.load(std::memory_order_relaxed);
                 quad_ui.pose.position.y =
@@ -11828,18 +11872,27 @@ void vr_thread() {
                     zm * (std::tan(f.angleUp) - std::tan(f.angleDown));
                 layers[1] = (const XrCompositionLayerBaseHeader *)&quad_ui;
                 layer_count = 2;
-                static bool said_ui = false;
-                if (!said_ui) {
-                    said_ui = true;
-                    X4VR_LOG("ui: SUBMITTING a quad at %.2f m, %.2f x %.2f m, "
-                             "orientation IDENTITY = the ship's forward axis "
-                             "(NOT the head). The HUD should stay with the "
-                             "cockpit and leave the view when the head turns. "
-                             "Scene layer is at yaw %.2f pitch %.2f deg, so the "
-                             "two poses differ by the head-look command — if "
-                             "they do not, this identity claim is wrong.",
-                             zm, quad_ui.size.width, quad_ui.size.height,
-                             g_vrs.last_decl_yaw, g_vrs.last_decl_pitch);
+                // **Periodic, not once.** The first version said this a single
+                // time and it was latched at start-up, when nothing is driving
+                // and every angle is zero -- so it could only ever print the
+                // one configuration in which the claim is untestable. Take
+                // 242's identity bug survived a log line for exactly that
+                // reason. At 600 frames this costs nothing and covers the
+                // cockpit, where the angles are non-zero.
+                {
+                    static uint64_t n = 0;
+                    if ((n++ % 600) == 0)
+                        X4VR_LOG("ui: quad at %.2f m, %.2f x %.2f m, declared "
+                                 "yaw=%.2f pitch=%.2f deg — the SAME pose as "
+                                 "the scene layer, because both are the same "
+                                 "camera's image. NOT head-locked: X4 draws "
+                                 "the HUD world-anchored, so it counter-rotates "
+                                 "inside the texture and lands on the ship. "
+                                 "The HUD must LEAVE THE VIEW when the head "
+                                 "turns; if it follows the head instead, this "
+                                 "is backwards and identity was right.",
+                                 zm, quad_ui.size.width, quad_ui.size.height,
+                                 g_vrs.last_decl_yaw, g_vrs.last_decl_pitch);
                 }
             }
         }

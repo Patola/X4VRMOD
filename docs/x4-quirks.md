@@ -10071,33 +10071,56 @@ capped at 400 paths and the `livesets` walk is gated behind
 `X4VR_DUMP_MATRICES`, which this take already sets — so neither should move the
 perf number. Prediction 4 includes that band precisely so a surprise is visible.
 
-# RESUME HERE AFTER A COMPACT — state as of take 240
+# RESUME HERE AFTER A COMPACT — state as of take 242, fix built for 243
 
 Everything below supersedes earlier "read this first" banners, including the
 take-211 one that used to head this section and the take-202 one further down.
 
-## THE NEXT TASK: #57's two remaining defects — NOT another take
+## THE NEXT TASK: run take 243. The paper work is DONE.
 
-Layer B is BUILT and submitting. The frame is confirmed right and roll is
-fixed. Two defects remain and **the first one is settled on paper, not in the
-headset**:
+The banner this replaces sent the reader to settle defect 1 on paper and called
+defect 2 concrete. **Both were the wrong way round.** Both are now resolved
+without a run, and the code is built, tested and committed:
 
-1. **Yaw/pitch double.** Settle the sign against `head_angles()` and the
-   servo's convention before any run. I have reasoned it both ways in one
-   sitting and been wrong about this frame twice; a third guess is not worth a
-   take. See "Take 242" below.
-2. **Stereo separation wrong everywhere.** The quad shows array layer 0 --
-   the LEFT eye's render -- to both eyes, and the UI pass is masked so it is
-   drawn per-eye and sheared. A quad needs an eye-neutral source. This one is
-   mine and is concrete.
+1. **Yaw/pitch double — FIXED, and the servo was innocent.** `head_look_step()`
+   applies `sign_yaw` twice, so it cancels and `cam_yaw_deg` is in head
+   convention; layer A's declaration was right all along. The bug was the
+   QUAD's: it declared identity, but the image it carries was rendered through
+   X4's camera at C, and X4 draws the cockpit HUD **world-anchored**, so the
+   content already sits at −C. Identity left it at −C with the head at +C. The
+   quad now declares layer A's pose, and `R * R⁻¹` is identity on all three
+   axes. **This is not head-locking** — the frame turns while the content
+   counter-turns, so the HUD lands on the ship and leaves the view.
+2. **Stereo separation — RETRACTED, there was nothing to fix.**
+   `classify_unsheared()` marks the UI pass all-LDR, so it binds the ORIGINAL
+   unpatched modules: both array layers are identical and the quad's source is
+   already eye-neutral. "The UI is drawn per-eye and sheared" confused the
+   variant *emitted* for a module with the variant *bound* in a pass.
+   What is left of that report is the canvas distance, which is defect 3.
+3. **0.70 m is too close** — infinity-drawn content at arm's length. Take 243b
+   tries 1.4 m.
 
-Then `X4VR_CANVAS_M` (0.70 m read as too close; try 1.2-1.5) but only after
-defect 2, since wrong separation and wrong distance look the same.
+Take 243 is specified at the end of this section, as 243a/243b, one variable
+each. `tools/score_run.py` is the acceptance check and now has a rule for this.
 
-**Do NOT re-litigate the frame.** Take 242's log shows layer A at
-`declared yaw=-8.02` with the quad at identity, which is what the design
-predicted. And do not head-lock the HUD in the cockpit -- that has been
-rejected twice; see the take-241 correction.
+**Do NOT re-litigate the frame from prose.** `tests/headlook.cpp` has it as
+arithmetic — four cases, including the screen-locked class, which is the one
+that would have to change if P243.4 fires. And do not head-lock the HUD in the
+cockpit; that has been rejected twice (see the take-241 correction), and note
+that the fix above is *not* that, however much the declared pose looks like it.
+
+**A thing take 242 could not see, found while writing the test:** identity also
+put a ROLL on the HUD whenever yaw and pitch were combined — 26.6° at yaw −60 /
+pitch 30, zero on either axis alone. Patola's roll check was a pure head roll,
+which is the one row where the cross-term vanishes. The measurement was sound
+and the configuration hid the defect.
+
+**Known interaction, pre-existing:** take 242 already fails the scorer with
+*"the pose fell back to identity 3 times AFTER it had been driven"*. That is
+#72/#75 and not new, but it now moves the quad too. Consistent with the scene
+rather than independent of it, which is better — the whole world snaps together
+instead of the HUD sliding against it — but it is still a snap and it will be
+visible in 243.
 
 ## The previous task: layer B's code — DONE
 
@@ -11864,3 +11887,185 @@ wrong separation and wrong distance both read as "uncomfortably close".
 which is #57 exactly, and it also gates #71: aiming is guided by HUD markings,
 so a HUD that slides cannot be aimed through however free the mouse is. That
 dependency is Patola's observation, and it reorders the remaining work.
+
+## Settled on paper, no take: what take 242 actually measured
+
+The banner said defect 1 was paper work and defect 2 was concrete. **Both were
+wrong that way round.** Defect 1 is settled below and the fix is three lines;
+defect 2's mechanism is refuted by the code and is retracted.
+
+### #55's open half is ANSWERED, and take 242 was the experiment
+
+#55 measured every HUD element at **zero** disparity against −20 to −43 px on
+the cockpit beside it, and then said exactly what it could not conclude:
+
+> 0 px is what screen-locked content reads *and* what world geometry at
+> infinity reads. Under a head rotation those diverge: screen-locked follows
+> the head, world-at-infinity rotates correctly. **This method cannot separate
+> them** [...] What separates them is a canvas at a *finite* distance —
+> `X4VR_CANVAS_M=2`, which moves screen-space content and leaves world alone.
+> Filed rather than guessed.
+
+Take 242 put the UI on a canvas at a finite distance. **The falsifier fired.**
+
+    quad at the ship's direction, head and X4 camera both at +C:
+
+      screen-locked content   sits at image angle 0
+                              -> displayed at ship angle 0     ship-fixed, correct
+      world-at-infinity       sits at image angle -C
+                              -> displayed at ship angle -C    head at +C, so 2C apart
+
+Patola saw the second: *"the HUD moves in the opposite direction of my head,
+does not become fixed in space... it might be doing that twice."* Had the HUD
+been screen-locked, the identity quad would have made it ship-fixed and he
+would have called it correct — which is what he called the **map**.
+
+**So X4's cockpit HUD is world-anchored in angle and drawn at infinity.** Both
+halves at once, which is the third possibility #55 could not reach with one
+frame. It is also the only self-consistent reading of the older roll report,
+*"all the HUD elements always stay perfectly level to the world"* — level to
+the **world**, not to the screen.
+
+That closes #55's open half and it retires the "X4 draws the HUD in screen
+space" sentence in the take-242 section above, which was written as an
+unsettled candidate and is now refuted.
+
+### Defect 1: the servo's sign is CORRECT — the quad's declaration is not
+
+The banner sent me to check `head_angles()` against the servo. Done, and the
+servo is innocent. `head_look_step()` applies `sign_yaw` **twice**:
+
+    d.dx          = lround(sign_yaw * step_yaw * weight / gain)
+    s.cmd_yaw_deg += sign_yaw * (float)d.dx * gain
+
+`sign_yaw² = 1`, so `cmd_yaw_deg` accumulates in **head convention** (+ = left)
+and not in the mouse convention. It has to: the next frame forms
+`err_yaw = want_yaw - cmd_yaw_deg` against a `want_yaw` derived from
+`head.yaw_deg`, and a loop cannot close across two conventions.
+`tests/headlook.cpp` pins the other end — `quat_of_angles` round-trips through
+`head_angles`. So `cam_yaw_deg`, `decl_yaw`, and layer A's declared quaternion
+are all in head convention and all correct.
+
+**There is no sign error anywhere in the chain.** The doubling is not a sign; it
+is a missing rotation, and the arithmetic above says which:
+
+    HUD displayed angle = Q + (content angle in the texture)
+                        = Q + (-C)
+
+    Q = 0 (today)   ->  -C    wrong by 2C, which is what take 242 saw
+    Q = C           ->   0    ship-fixed, which is what #57 asks for
+
+**The quad must declare the same orientation layer A declares.** Not because
+the HUD lives there, but because the quad is a re-projection of an image
+rendered through X4's camera, and the honest declaration for such an image is
+the pose it was rendered from — which is the rule layer A already follows. The
+image is the same image; only the depth differs.
+
+**This is NOT the head-locking Patola rejected twice, and the difference must
+be stated so it is not re-read as one.** Head-locked means the HUD's displayed
+angle equals the head's. Here it is `Q − C = 0`: the quad's *frame* turns with
+the camera while the content inside it counter-turns by exactly as much, and
+the HUD lands on the ship and stays there. The behavioural test is the same one
+Patola has given twice — **turn your head and the HUD must leave the view.**
+Identity was the arrangement that could not do that, because it declared "this
+image was rendered from the ship's forward axis", which is false the moment the
+camera turns.
+
+The take-242 log line was not wrong; it was answering a smaller question than I
+credited it with. It asked *are the two declared poses different?* and they
+were. Nothing in it observed the frame the **content** was in, and that is the
+frame that decides the behaviour. I wrote "the frame is CONFIRMED right" from a
+line that could only ever confirm the declaration.
+
+### Defect 2: RETRACTED — the source is already eye-neutral
+
+The claim was: *"the quad submits `imageArrayIndex = 0` and layer 0 is the LEFT
+eye's render — the UI pass is masked, so it is drawn per-eye and sheared."*
+
+**The second half is false, and `classify_unsheared()` says so:**
+
+    unsheared[i] = any && all_ldr;      // every colour attachment 8-bit
+
+The UI pass is all-LDR, so it is `unsheared` — the pipelines bound in it take
+the **original, unpatched** twins. No K, no cant, no per-eye anything. Both
+array layers of img #65 carry identical pixels, so `imageArrayIndex = 0` is
+eye-neutral by construction and has been since long before layer B existed.
+
+What misled me is real and worth keeping: X4's UI vertex shaders *are*
+classified `World, live-sx`, because they read set-3 member 0 exactly as world
+geometry does. That is about the variant **emitted** for a module. Which variant
+gets **bound** is a per-pass decision, and in this pass it is the original.
+Emitted is not bound — the same distinction that cost a take before.
+
+**So there is nothing to fix here, and one less thing to build.** The residual
+"wrong stereo separation" has a simpler cause with no code in it: content X4
+drew **at infinity** is being presented at **0.70 m**. Zero disparity in the
+source, 0.70 m of vergence demand from the quad — a reticle over a ship 5 km
+away asks the eyes to converge at arm's length. That is not a defect in the
+quad; it is the canvas distance, and it is why every panel showed it equally.
+
+Defect 2 and "0.70 m is too close" were one defect all along, exactly as that
+section feared they might be. They are not separable because they are not two.
+
+### Predictions for take 243, before it runs
+
+**P243.1.** With the quad declared at layer A's orientation, the HUD **stays
+with the cockpit** under yaw and pitch: turn the head and it slides out of view
+and stays where the ship is pointing. Refuted if it instead follows the head
+(that would mean the content was screen-locked after all and this is exactly
+backwards), or if it still moves at twice the head angle (the content carries a
+rotation neither layer accounts for).
+
+**P243.2.** Roll stays fixed. The quad's declared roll is still zero — the
+servo drives no roll, so `quat_of_angles` builds none — and take 242 already
+confirmed roll is right at that value. This is the control: it must not change,
+and if it does, the change reached something it was not aimed at.
+
+**P243.3.** At `X4VR_CANVAS_M=1.4` the panels read **further away and more
+comfortable** than 0.70 m. This is a magnitude across two runs, which is the
+one thing Patola's eye is explicitly not for, so it is a *tie-breaker only* —
+P243.1 is what the take is for.
+
+**P243.4.** Menus, the map and load screens now sit at whatever X4's camera is
+doing when they are on screen. If X4 pins or recentres the camera while they
+are up — which is what #78 saw from the other side — they stay ship-fixed and
+look as they did in take 242. **If they instead follow the head, then the two
+content classes genuinely need different poses from one texture**, and #57
+grows a second part: `classify_unsheared()`'s note already says no pass-level
+predicate can separate them, so that part would need the late-selected variant
+shape, not another knob. Filed as a prediction rather than pre-built, because
+the cheap outcome is the likely one and building for the other costs a lot.
+
+### Take 243 — two arms, one variable each
+
+Both lines are take 242's `env: run =` verbatim with only the marked field
+changed, so anything that differs between 242 and 243a is the code and nothing
+else. **243a changes no knob at all** — `X4VR_CANVAS_M` stays at 0.70 so the
+frame fix is the single difference from take 242. 243b then moves the distance
+alone, against 243a.
+
+**243a — the frame. This is what the take is for.**
+
+    X4VR_TAKE=243A-QUADPOSE X4VR_CANVAS_M=0.7 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DECLARE_RENDERED_POS=1 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HUDLESS=1 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_HEAD_TRANSLATE=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take243a.log X4VR_UI_LAYER=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+**243b — the distance, and only the distance.** Same line, `X4VR_TAKE=243B-DIST`,
+`X4VR_CANVAS_M=1.4`, `X4VR_LOG=/tmp/x4vr-take243b.log`.
+
+In-game, both arms: load the quicksave into the cockpit, then —
+
+* **Turn your head left and right, and up and down, slowly.** The question is
+  one thing: *does the HUD stay with the cockpit and leave the view, or does it
+  move opposite / follow you?* This is P243.1 and it is a transition within the
+  run, which is the judgement your eye is for.
+* **Turn AND look up at the same time**, holding both. New: does the HUD tilt?
+  Identity rolled it up to 26.6° in that combination and nothing has ever tested
+  it. Zero tilt is the pass.
+* **Roll your head.** Control (P243.2) — must be unchanged from take 242.
+* **Press M for the map**, look around, press ESC. P243.4: does the map stay put
+  or follow your head? Either answer is useful; "follows" means the two content
+  classes need splitting and #57 grows a part.
+
+Then `python3 tools/score_run.py /tmp/x4vr-take243a.log`, which is the
+acceptance check. It now FAILs a run whose `ui: quad` samples are all under 1°,
+because the quad and the ship coincide there and such a run cannot tell this fix
+from take 242's identity — the failure mode take 242 shipped with.

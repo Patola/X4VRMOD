@@ -2014,10 +2014,21 @@ def main(path):
               f"{uit.group(2)}x{uit.group(3)} fmt={uit.group(4)}, "
               f"{uit.group(5)}")
         if uit.group(5) != "DOUBLED to 2":
+            # **The reason here used to be wrong and it would have failed a
+            # healthy run.** It said a non-doubled target "would show the left
+            # eye's UI to both", which assumed the UI pass is drawn per-eye. It
+            # is not: classify_unsheared() marks it all-LDR, so the original
+            # unpatched modules are bound and BOTH array layers carry identical
+            # pixels. Layer B is also a quad, not the projection layer that
+            # sentence was written for.
+            #
+            # What doubling is still needed for is narrow and real: ui_capture()
+            # copies two array layers into a two-layer staging image, so a
+            # target with one layer would make that copy wrong.
             fails.append(
-                "the UI target is NOT doubled, so it holds one image for both "
-                "eyes. #57's second layer cannot be a projection layer as "
-                "designed — it would show the left eye's UI to both")
+                "the UI target is NOT doubled, so ui_capture()'s two-layer "
+                "copy has no second layer to read. The quad itself only needs "
+                "layer 0 — this is about the capture, not about the stereo")
     elif "ui final:" in text or "ui first present:" in text:
         fails.append(
             "no `ui: TARGET` line — the predicate never resolved to exactly "
@@ -2026,6 +2037,46 @@ def main(path):
             "the UI target` lines name the reason each candidate was rejected")
     else:
         print("ui      no UI-target report — this build predates task #57")
+
+    # --- task #57 take 243: was the quad's pose actually EXERCISED? ----------
+    #
+    # **The rule take 242 needed and did not have.** Its submission line was
+    # latched once, at start-up, where nothing is driving and every angle is
+    # zero — so it printed the one configuration in which its own claim could
+    # not be tested, and a wrong frame survived a green log. The line is now
+    # periodic; this checks that at least one sample caught a turned camera.
+    #
+    # Gated on intent, and on intent only: a run that asked for the UI layer
+    # and never saw a non-zero declared angle has not tested anything about the
+    # quad's frame, whatever the screen looked like.
+    if "X4VR_UI_LAYER=1" in (run or ""):
+        quads = re.findall(r"ui: quad at [\d.]+ m, [\d.]+ x [\d.]+ m, "
+                           r"declared yaw=(-?[\d.]+) pitch=(-?[\d.]+) deg",
+                           text)
+        if not quads and "ui: SUBMITTING a quad" in text:
+            # Take 242 and earlier. That build latched ONE line at start-up and
+            # declared identity; it cannot report a turned camera because it
+            # never printed a second sample. Not a failure of the run — a
+            # failure of the instrument it shipped with, and saying so is the
+            # difference between "did not happen" and "cannot be seen here".
+            print("ui quad build predates the periodic line — identity-era "
+                  "submission, frame NOT testable from this log")
+        elif not quads:
+            fails.append(
+                "X4VR_UI_LAYER=1 but no `ui: quad` line — the quad never "
+                "submitted, so nothing about #57's frame was exercised")
+        else:
+            worst = max(max(abs(float(y)), abs(float(p))) for y, p in quads)
+            print(f"ui quad {len(quads)} submission sample(s), largest "
+                  f"declared angle {worst:.2f} deg")
+            if worst < 1.0:
+                fails.append(
+                    f"every one of the {len(quads)} `ui: quad` samples "
+                    f"declared under 1 deg (largest {worst:.2f}). The quad and "
+                    "the ship's frame coincide there, so this run cannot tell "
+                    "the fix from take 242's identity — the head-look servo "
+                    "was not driving, or the head never turned while the UI "
+                    "was up")
 
     # --- task #76: X4's own UI-composition switch ---------------------------
     #

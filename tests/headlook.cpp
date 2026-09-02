@@ -681,6 +681,119 @@ int main() {
               "identity head passes the shift through (proves NO direction)");
     }
 
+    // ---- task #57: which pose the UI quad must declare --------------------
+    //
+    // **This is the arithmetic I got wrong twice and guessed at a third time.**
+    // It is here so it can never be re-derived in prose again.
+    //
+    // The quad carries an image X4 rendered through its camera at pose C. What
+    // the player sees is the quad's declared pose composed with wherever the
+    // content sits INSIDE that image:
+    //
+    //     displayed = R(Q) * (content, in camera coordinates)
+    //
+    // and the two content classes sit in different places, which is the whole
+    // of #57's title:
+    //
+    //     world-anchored (the cockpit HUD)   R(C)^-1   -- it counter-rotates
+    //     screen-locked  (menus, the map)    identity  -- it stays centred
+    //
+    // Take 242 ran Q = identity and Patola measured the HUD at twice the head
+    // angle. The lines below say why, and they say it in the yaw/pitch/roll
+    // pattern he reported -- yaw and pitch broken, roll clean -- which is the
+    // signature that makes this the right explanation rather than a fitting one.
+    {
+        auto qmul = [](const float a[4], const float b[4], float o[4]) {
+            o[0] = a[3]*b[0] + a[0]*b[3] + a[1]*b[2] - a[2]*b[1];
+            o[1] = a[3]*b[1] - a[0]*b[2] + a[1]*b[3] + a[2]*b[0];
+            o[2] = a[3]*b[2] + a[0]*b[1] - a[1]*b[0] + a[2]*b[3];
+            o[3] = a[3]*b[3] - a[0]*b[0] - a[1]*b[1] - a[2]*b[2];
+        };
+        auto qconj = [](const float a[4], float o[4]) {
+            o[0] = -a[0]; o[1] = -a[1]; o[2] = -a[2]; o[3] = a[3];
+        };
+
+        int bad_world = 0, bad_ident = 0, bad_roll = 0, bad_screen = 0, n = 0;
+        for (float cy : {0.0f, 12.0f, -25.0f, 47.0f, -60.0f})
+            for (float cp : {0.0f, 8.0f, -15.0f, 30.0f}) {
+                // Where X4's camera is, and therefore what layer A declares.
+                float R[4];
+                x4vr::quat_of_angles(cy, cp, R);
+                // World-anchored content, expressed in that camera's frame.
+                float content[4];
+                qconj(R, content);
+                n++;
+
+                // Q = C -- the fix. R * R^-1 is identity for ANY yaw/pitch, so
+                // this needs no small-angle argument and no commutation
+                // argument: the HUD lands dead ahead of the SHIP and stays
+                // there while the head moves.
+                float shown[4];
+                qmul(R, content, shown);
+                x4vr::HeadAngles a =
+                    x4vr::head_angles(shown[0], shown[1], shown[2], shown[3]);
+                if (!near(a.yaw_deg, 0.0f, 0.05f) ||
+                    !near(a.pitch_deg, 0.0f, 0.05f))
+                    bad_world++;
+
+                // Q = identity -- take 242. The content keeps its own
+                // counter-rotation, so it shows up on the far side from the
+                // head by the whole camera angle: 2C of apparent motion.
+                a = x4vr::head_angles(content[0], content[1], content[2],
+                                      content[3]);
+                const bool opposite =
+                    (cy == 0.0f || a.yaw_deg * cy < 0.0f) &&
+                    (cp == 0.0f || a.pitch_deg * cp < 0.0f);
+                if (!opposite)
+                    bad_ident++;
+                // ...and OFF the axes it also acquires a roll, which I
+                // asserted was zero and it is not. R^-1 is pitch^-1 * yaw^-1,
+                // the opposite order to the yaw-then-pitch the readback
+                // assumes, and the two disagree by a genuine rotation: 26.6 deg
+                // at yaw -60 / pitch 30, not a rounding artefact.
+                //
+                // **This is why take 242's roll check passed.** Patola tested
+                // roll by rolling his head, which is yaw ~ pitch ~ 0 -- the one
+                // row of this table where the cross-term is exactly zero. The
+                // measurement was sound and the configuration hid the defect.
+                // Nobody has yet seen a HUD roll while turning AND looking up,
+                // because nothing has asked for that combination on purpose.
+                //
+                // The fix removes it outright: R * R^-1 is identity on all
+                // three axes, which is the arm asserted above.
+                const bool on_axis = (cy == 0.0f || cp == 0.0f);
+                if (on_axis != near(a.roll_deg, 0.0f, 0.05f))
+                    bad_roll++;
+
+                // Screen-locked content under the SAME fix follows the camera,
+                // because that is what screen-locked means. Asserted, not
+                // hoped: if X4's menus turn out to want the ship's frame too,
+                // one texture cannot serve both and #57 grows a second part
+                // (P243.4). This line is what would have to change.
+                a = x4vr::head_angles(R[0], R[1], R[2], R[3]);
+                if (!near(a.yaw_deg, cy, 0.05f) ||
+                    !near(a.pitch_deg, cp, 0.05f))
+                    bad_screen++;
+            }
+
+        char buf[112];
+        std::snprintf(buf, sizeof buf,
+                      "#57: declaring the scene pose pins the HUD to the ship "
+                      "(%d of %d)", n - bad_world, n);
+        check(bad_world == 0, buf);
+        std::snprintf(buf, sizeof buf,
+                      "#57: identity puts it on the OPPOSITE side — take 242 "
+                      "(%d of %d)", n - bad_ident, n);
+        check(bad_ident == 0, buf);
+        check(bad_roll == 0,
+              "#57: identity also ROLLED the HUD off-axis (0 on-axis, 26.6 deg "
+              "at -60/30) — the fix is exact on all three");
+        std::snprintf(buf, sizeof buf,
+                      "#57: screen-locked content follows the camera (%d of %d)",
+                      n - bad_screen, n);
+        check(bad_screen == 0, buf);
+    }
+
     printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n", g_fail);
     return g_fail ? 1 : 0;
 }
