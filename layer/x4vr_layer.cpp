@@ -11487,6 +11487,38 @@ void vr_thread() {
             {
                 const auto &p0 = views[0].pose.position;
                 const auto &p1 = views[1].pose.position;
+                // **The runtime's OWN eye separation, against the one we baked
+                // the scene with. Nothing has ever compared these.**
+                //
+                // X4VR_IPD sets the shear that gives the SCENE its stereo. The
+                // UI quad has no shear: the runtime derives its stereo from
+                // these two positions. So the two layers are separated by two
+                // different numbers, and if they disagree the UI can never sit
+                // convincingly in front of the scene at any distance -- which
+                // is what "the eye separation still feels wrong, slightly
+                // better further away" describes in takes 243a and 243b.
+                //
+                // This is a real comparison and not a guard that can only
+                // agree: one side is a pose the runtime measured from the
+                // headset, the other is a number from the environment. They
+                // have no common ancestor.
+                static bool said_ipd = false;
+                if (!said_ipd) {
+                    said_ipd = true;
+                    const float ex = p1.x - p0.x, ey = p1.y - p0.y,
+                                ez = p1.z - p0.z;
+                    const float meas =
+                        std::sqrt(ex * ex + ey * ey + ez * ez);
+                    const float cfg = configured_ipd();
+                    X4VR_LOG("ipd: runtime reports %.4f m between the eyes; "
+                             "the scene is sheared with X4VR_IPD=%.4f — "
+                             "%+.1f%%. The quad's stereo comes from the "
+                             "runtime's number and the scene's from the knob, "
+                             "so a difference here is a disagreement the "
+                             "canvas distance cannot fix",
+                             meas, cfg,
+                             cfg > 0.0f ? 100.0f * (meas - cfg) / cfg : 0.0f);
+                }
                 // **The inverse neck model, and take 231 is why it exists.**
                 //
                 // The eye midpoint is not the head's rotation centre: it sits
@@ -11855,12 +11887,36 @@ void vr_thread() {
                 quad_ui.pose.orientation.y = g_vrs.last_decl_q[1];
                 quad_ui.pose.orientation.z = g_vrs.last_decl_q[2];
                 quad_ui.pose.orientation.w = g_vrs.last_decl_q[3];
+                // **The CENTRE has to orbit too, and take 243a is why.**
+                //
+                // 243a declared the orientation above and changed nothing Patola
+                // could see. The geometry says it could not have: a quad's
+                // orientation turns the panel about its OWN centre, and the
+                // centre was pinned straight ahead of the ship. Content drawn
+                // near the middle of the texture therefore kept the same world
+                // direction under every orientation this could declare -- the
+                // one thing the change was made to move.
+                //
+                // So place the panel where X4's image plane actually was:
+                // rigidly attached to the camera, zm metres along ITS forward
+                // axis, orbiting the neutral point rather than spinning in
+                // place. Then a HUD element the texture holds at -C lands at
+                // C + (-C) = 0 and sits on the ship.
+                //
+                // Position and orientation are one rigid placement and must
+                // move together. Declaring one without the other is what 243a
+                // was, and it is a half-transform: it rotated the frame the
+                // content is drawn in without moving the frame's origin.
+                const x4vr::HeadShift off = x4vr::head_to_world(
+                    g_vrs.last_decl_q[0], g_vrs.last_decl_q[1],
+                    g_vrs.last_decl_q[2], g_vrs.last_decl_q[3], 0.0f, 0.0f,
+                    -zm);
                 quad_ui.pose.position.x =
-                    g_reye.nx.load(std::memory_order_relaxed);
+                    g_reye.nx.load(std::memory_order_relaxed) + off.x;
                 quad_ui.pose.position.y =
-                    g_reye.ny.load(std::memory_order_relaxed);
+                    g_reye.ny.load(std::memory_order_relaxed) + off.y;
                 quad_ui.pose.position.z =
-                    g_reye.nz.load(std::memory_order_relaxed) - zm;
+                    g_reye.nz.load(std::memory_order_relaxed) + off.z;
                 // Sized to subtend the SAME field the scene layer declares, at
                 // the canvas distance. Any other size would put a HUD element
                 // at a different angle from the world feature it labels, which

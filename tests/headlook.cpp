@@ -776,6 +776,69 @@ int main() {
                     bad_screen++;
             }
 
+        // **Take 243a: the orientation above is only half a placement.**
+        //
+        // A quad is a rectangle CENTRED at pose.position and turned about that
+        // centre by pose.orientation. Turning it does not move the centre, so
+        // content drawn in the middle of the texture keeps its world direction
+        // under every orientation -- which is exactly the content whose
+        // direction the fix was meant to change. 243a declared the pose, the
+        // panel spun in place, and Patola saw no difference at all.
+        //
+        // The panel has to go where X4's image plane was: zm along the
+        // CAMERA's forward axis, orbiting the neutral point. That is what
+        // moves the centre, and the centre is what carries the content.
+        {
+            int bad_centre = 0, bad_spin = 0, m = 0;
+            for (float cy : {12.0f, -25.0f, 47.0f})
+                for (float cp : {0.0f, 8.0f, -15.0f}) {
+                    float R[4];
+                    x4vr::quat_of_angles(cy, cp, R);
+                    const float zm = 1.4f;
+                    m++;
+                    // Where the panel's centre ends up once it orbits, read
+                    // back as a direction. It must point along the camera's
+                    // own forward axis -- the same angles, not merely "some
+                    // different place".
+                    const x4vr::HeadShift off =
+                        x4vr::head_to_world(R[0], R[1], R[2], R[3], 0, 0, -zm);
+                    const float len = std::sqrt(off.x*off.x + off.y*off.y +
+                                                off.z*off.z);
+                    const x4vr::HeadAngles at = x4vr::head_angles(
+                        R[0], R[1], R[2], R[3]);
+                    // direction of the offset, in the same yaw/pitch terms
+                    const float yaw = std::atan2(-off.x, -off.z) * 57.2957795f;
+                    const float pitch =
+                        std::asin(off.y / (len > 0 ? len : 1)) * 57.2957795f;
+                    if (!near(len, zm, 1e-4f) || !near(yaw, at.yaw_deg, 0.05f) ||
+                        !near(pitch, at.pitch_deg, 0.05f))
+                        bad_centre++;
+                    // ...and the take-243a arrangement, at the SAME camera
+                    // angle: centre pinned at (0, 0, -zm) whatever the
+                    // orientation. Its direction is dead ahead, so the two
+                    // placements differ by the whole camera angle -- which is
+                    // the difference 243a did not make. Asserted as a contrast
+                    // between the two, because "the centre is straight ahead"
+                    // on its own is true by construction and would be a check
+                    // that cannot fail.
+                    const float spin_yaw =
+                        std::atan2(-0.0f, -(-zm)) * 57.2957795f;
+                    const float spin_pitch = 0.0f;
+                    if (!near(yaw - spin_yaw, at.yaw_deg, 0.05f) ||
+                        !near(pitch - spin_pitch, at.pitch_deg, 0.05f))
+                        bad_spin++;
+                }
+            char b2[120];
+            std::snprintf(b2, sizeof b2,
+                          "#57: the panel CENTRE orbits onto the camera axis "
+                          "(%d of %d)", m - bad_centre, m);
+            check(bad_centre == 0, b2);
+            std::snprintf(b2, sizeof b2,
+                          "#57: orbited vs 243a's pinned centre differ by the "
+                          "whole camera angle (%d of %d)", m - bad_spin, m);
+            check(bad_spin == 0, b2);
+        }
+
         char buf[112];
         std::snprintf(buf, sizeof buf,
                       "#57: declaring the scene pose pins the HUD to the ship "
