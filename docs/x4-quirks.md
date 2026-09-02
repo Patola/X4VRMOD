@@ -10076,7 +10076,30 @@ perf number. Prediction 4 includes that band precisely so a surprise is visible.
 Everything below supersedes earlier "read this first" banners, including the
 take-211 one that used to head this section and the take-202 one further down.
 
-## THE NEXT TASK: layer B's code
+## THE NEXT TASK: #57's two remaining defects — NOT another take
+
+Layer B is BUILT and submitting. The frame is confirmed right and roll is
+fixed. Two defects remain and **the first one is settled on paper, not in the
+headset**:
+
+1. **Yaw/pitch double.** Settle the sign against `head_angles()` and the
+   servo's convention before any run. I have reasoned it both ways in one
+   sitting and been wrong about this frame twice; a third guess is not worth a
+   take. See "Take 242" below.
+2. **Stereo separation wrong everywhere.** The quad shows array layer 0 --
+   the LEFT eye's render -- to both eyes, and the UI pass is masked so it is
+   drawn per-eye and sheared. A quad needs an eye-neutral source. This one is
+   mine and is concrete.
+
+Then `X4VR_CANVAS_M` (0.70 m read as too close; try 1.2-1.5) but only after
+defect 2, since wrong separation and wrong distance look the same.
+
+**Do NOT re-litigate the frame.** Take 242's log shows layer A at
+`declared yaw=-8.02` with the quad at identity, which is what the design
+predicted. And do not head-lock the HUD in the cockpit -- that has been
+rejected twice; see the take-241 correction.
+
+## The previous task: layer B's code — DONE
 
 Everything it needs is measured and committed. Nothing is waiting on Patola.
 
@@ -11765,6 +11788,70 @@ alone:
   to place it at a chosen depth. Putting that image on a quad at a finite
   distance would apply parallax twice. One of the two has to go, and which one
   depends on the distance above.
+
+## Take 242: the frame is RIGHT, two defects remain
+
+The quad, in the ship's frame at 0.70 m. Patola's report, and it is the most
+informative one this task has had.
+
+### The identity claim is CONFIRMED, from the log
+
+    ui: SUBMITTING a quad at 0.70 m ... orientation IDENTITY
+    vr pose: declared yaw=-8.02 pitch=6.19 deg
+
+Layer A's pose tracks the head-look command while the quad sits at identity, so
+the two poses differ by exactly that command -- which is what the claim
+predicted and what the line was written to be able to refute. **The frame is
+not the problem**, and that rules out a whole class.
+
+**Roll is FIXED**: *"rolling my head would not roll the HUD (it stayed level
+with the cockpit), which is good"*. That is the quad's identity orientation
+doing its job.
+
+### Defect 1: yaw and pitch still double
+
+*"the HUD moves in the opposite direction of my head, does not become fixed in
+space... I imagine that it might be doing that twice."*
+
+Patola's reading, and the roll/yaw asymmetry is the evidence for it: the servo
+drives yaw and pitch only, while #77's roll is a shear rather than a geometric
+rotation -- so a mechanism living in the SERVO would leave roll clean and break
+exactly these two.
+
+The candidate is the image CONTENT, not the layer. X4 draws the HUD in screen
+space against a camera the servo has already turned by +theta to follow the
+head, so inside the image the HUD sits at (ship + theta); pinning that to a quad
+at the ship's direction displaces it by -theta while the head is at +theta.
+
+**The arithmetic is NOT settled and must not be guessed at a fourth time.** I
+have talked myself round this loop in both directions in one sitting, and the
+frame has already been wrong twice. Settle the sign on paper against
+`head_angles()` and the servo's own convention -- the way #77 was eventually
+settled -- before spending a take. If the paper says the current arrangement is
+already correct, then something else supplies the second rotation and the paper
+will say what.
+
+### Defect 2: the stereo separation is wrong EVERYWHERE
+
+Consistent across the start-up load screen, the savegame load screen and the
+map, which is what makes it separable from defect 1: the map *"behaved
+correctly"* in framing and still had the wrong separation.
+
+**Suspect, and it is mine.** The quad submits `imageArrayIndex = 0` with
+`XR_EYE_VISIBILITY_BOTH`, and **layer 0 is the LEFT eye's render** -- the UI
+pass is masked, so it is drawn per-eye with per-eye transforms. Showing the left
+eye's image to both eyes gives a left-biased picture, and the quad then adds its
+own parallax on top of a disparity that is already baked in.
+
+A quad needs a genuinely **eye-neutral** source. Dropping the #30/#40 canvas map
+was necessary but not sufficient: the pass is still masked and still sheared.
+The fix is to make the UI pass eye-neutral, not to pick the other array layer.
+
+### Also: 0.70 m is too close
+
+*"It look uncomfortably close"*, on every panel. A knob, not a rebuild --
+`X4VR_CANVAS_M`. Try 1.2-1.5 m. Judge it only after defect 2 is fixed, because
+wrong separation and wrong distance both read as "uncomfortably close".
 
 ## The shape of the fix
 
