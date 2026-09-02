@@ -12356,3 +12356,74 @@ target on its own — `X4VR_MV_DUMP_AFTER_RP=33,56`, the two passes take 244's
 inventory shows writing `img #65` — instead of the composited present. There is
 then no nebula, no stars and no cockpit in the image, so no colour trick is
 needed and the contamination question does not arise.
+
+## The HUD's frame, MEASURED at last — and the defect is 10% in yaw only
+
+Patola recorded two 20 s clips at 30 fps. `tools/hud_vs_camera.py` cross-
+correlates consecutive frames in a cyan-only HUD channel against a HUD-removed
+luma channel, so the cockpit in the same image calibrates pixels-per-degree and
+the verdict is a ratio. A clip is a far better instrument than take 245b's
+dumps: 4 s apart the head has moved through a large unknown angle and nothing
+correlates, while at 30 fps consecutive frames differ by a few px.
+
+    clip                       yaw            pitch
+    vanilla X4, no mod         1.00 (84)      1.00 (78)
+    VR, take 245A config       0.90 (55)      1.00 (97)
+
+**X4's cockpit HUD is WORLD-ANCHORED, exactly, on both axes.** 84 usable pairs
+in vanilla X4, median 1.00, 79 verdicts "world-anchored" and **zero** reading
+screen-locked or doubled. #55's open half is closed with a number, and takes
+243/244 had the right premise after all — the content really is at −C.
+
+**In VR it tracks at 0.90 in yaw and 1.00 in pitch.** 55 pairs with the world
+moving ≥8 px, sd 0.115, and direction-independent: 0.890 for one sense of the
+turn, 0.900 for the other. That is a clean scale factor on ONE AXIS, not a
+lag (a lag reproduces the same rate under constant velocity) and not a sign
+error.
+
+**Verified before believing it:** the cyan mask on the VR frames selects only
+the target-bracket cluster — 0.024% coverage — and NOT the cockpit's own
+emissive cyan panels, which would have biased the ratio toward 1.0 by measuring
+the cockpit twice. The mask image was inspected, not assumed.
+
+### The structural suspect, from the code
+
+    pv[e].fov = oat.on ? oat.fov[e] : g_vr_fov;   // scene: the RUNTIME's
+                                                  // per-eye ASYMMETRIC frustum
+    const XrFovf &f = g_vr_fov;                   // quad: X4's SYMMETRIC fov
+
+**The two layers carrying one camera's image are described by two different
+fields.** This run's runtime reports eye0 `l=-54 r=+40 u=+44 d=-55` — strongly
+asymmetric horizontally — while `g_vr_fov` is X4's symmetric ±55.0°
+(`x4_half_for_fov(1.4917) = 1.4917 × 73.7399 / 2`). The scene's pixels are
+remapped onto the runtime's frustum by the affine; the quad's are placed at
+X4's angles. Nothing makes those agree.
+
+Taking the measurement at face value, HUD motion / world motion =
+`tan(assumed) / tan(true)`, so `tan(true) = tan(55.0°)/0.90 = 1.587` and X4's
+true horizontal half-angle is about **57.8°** while its vertical is exactly the
+55.0° we assume. X4's UI is not square in angle even though it renders into a
+square 1408×1408 target.
+
+**That is task #45, open since before any of this: "Check whether X4 lays the
+HUD out against the window rather than the render extent."** X4 is told its
+window is 2816×1408 — the SBS composite, aspect 2:1 — while it renders
+1408×1408. A horizontal field derived from the window and a vertical one
+derived from the render is exactly the shape of a yaw-only error.
+
+**Not yet established, and not to be guessed:** whether 57.8° is right, and
+whether the fix is the quad's width, `x4_half_for_fov`, or what X4 is told
+about its window. The next step reads X4's own projection for the UI camera
+(`X4VR_DUMP_MATRICES=1` gives sx = 1/tan(half)) and compares it to 55.0° —
+paper, from a run we may already have.
+
+### The honest gap
+
+10% over a 50° turn is about 5° of slip. That is a real defect and it is the
+right shape, but it is smaller than *"goes to the opposite side of my head"*
+sounds. Either the recording does not capture the runtime's final reprojection
+(so his eyes see more than the capture does), or the slip feels far larger in a
+headset than the number suggests, or there is a second effect the clip does not
+show. **Recorded as a discrepancy rather than resolved**, because the last four
+takes were spent on explanations that fitted a description instead of a
+measurement.

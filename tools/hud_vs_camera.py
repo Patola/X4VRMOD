@@ -20,11 +20,11 @@ Nothing ever measured it. #55 measured the HUD's DISPARITY and said in writing
 that disparity cannot separate screen-locked from world-at-infinity — the two
 diverge only under a head ROTATION. This is that measurement.
 
-**The method, and the control is the point.** Take the dumps in order and
-cross-correlate each against the first, in two channels:
+**The method, and the control is the point.** Take the frames in order and
+cross-correlate CONSECUTIVE ones, on both axes, in two channels:
 
-    hud    (G+B)/2 - R      X4's green/cyan overlay, cockpit suppressed
-    grey   luma - 3*hud     the cockpit, overlay suppressed
+    hud    cyan-only mask   X4's overlay (see channels() for why not (G+B)/2-R)
+    grey   luma, HUD removed   the cockpit
 
 `grey` is not decoration: it is the WORLD's motion in the same image, measured
 by the same code, at the same instant. It calibrates pixels-per-degree without
@@ -134,6 +134,19 @@ def shift(a, b, lo, hi, band=None):
     return dx, pk, pk - (max(rivals) if rivals else 0.0)
 
 
+def shift_v(a, b, lo, hi):
+    """Vertical shift, by transposing into the horizontal routine.
+
+    **Added because the clip contained the answer and the tool could not see
+    it.** Patola's video pans left, right, up and down; measuring only `dx`
+    reads the two pitch segments as near-zero motion with noisy ratios, and
+    then folds that noise into the same median as the yaw segments. Yaw and
+    pitch are separate questions here — the servo drives them with separate
+    gains and separate clamps — so they get separate numbers.
+    """
+    return shift(a.T.copy(), b.T.copy(), lo, hi)
+
+
 def camera_series(logpath):
     """X4's own camera yaw over time, from X4VR_CAMREAD's lines."""
     out = []
@@ -241,6 +254,7 @@ def main():
     print(f"{'pair':<40} {'dx_hud':>8} {'dx_grey':>8} {'ratio':>7} "
           f"{'m_hud':>6} {'m_grey':>6}  verdict")
     ratios = []
+    by_axis = {}
     for i, f in enumerate(files):
         ch = channels(decode(f))
         # **Halve ONLY a side-by-side composite.** The layer's present dumps
@@ -263,8 +277,21 @@ def main():
         pair = f"{prev_name} -> {name}"
         sh = shift(prev['hud'], ch['hud'], -a.range, a.range)
         sg = shift(prev['grey'], ch['grey'], -a.range, a.range)
+        vh = shift_v(prev['hud'], ch['hud'], -a.range, a.range)
+        vg = shift_v(prev['grey'], ch['grey'], -a.range, a.range)
         prev, prev_name = ch, name
         f = pair
+        # Each axis is scored on its OWN motion. A yaw-only pass has no
+        # vertical signal and its dy ratio is noise; folding the two into one
+        # median is how the first version buried the pitch answer.
+        for axis, s_, g_ in (('yaw', sh, sg), ('pitch', vh, vg)):
+            if s_ is None or g_ is None:
+                continue
+            dh, _, mh_ = s_
+            dg, _, mg_ = g_
+            if abs(dg) < a.min_grey or mh_ < a.min_margin or mg_ < a.min_margin:
+                continue
+            by_axis.setdefault(axis, []).append(dh / dg)
         if sh is None or sg is None:
             print(f"{f:<40} {'—':>8} {'—':>8}   no signal")
             continue
@@ -307,6 +334,13 @@ def main():
     else:
         m = float(np.median(ratios))
         print(f"median ratio over {len(ratios)} usable pair(s): {m:.2f}")
+        for axis in ('yaw', 'pitch'):
+            v = by_axis.get(axis, [])
+            if v:
+                print(f"  {axis:<6} {float(np.median(v)):.2f} "
+                      f"over {len(v)} pair(s)")
+            else:
+                print(f"  {axis:<6} no pair had enough motion on this axis")
         print("  ~1 world-anchored | ~0 screen-locked | ~2 doubled by X4")
 
     if a.log:
