@@ -12784,3 +12784,70 @@ If that is it, the fix is **two quads**, `XR_EYE_VISIBILITY_LEFT` and `_RIGHT`,
 each anchored at `neutral + R(C)·(±ipd/2)`, so the UI gets the same per-eye
 viewpoint the scene has. **Not built.** It is one more mechanism that fits, and
 this section exists because the last two also fit.
+
+## Take 248 — the SBS clip, and what it settles
+
+Two inputs arrived with this. First, **the `ipd:` instrument fired and killed
+its own hypothesis**: the runtime reports **0.0629 m** between the eyes against
+`X4VR_IPD=0.0640`, a −1.7% / 1.1 mm difference, identical in 245A, 246 and 247.
+Far too small to be seen. The scene's shear and the quad's runtime-derived
+stereo are built on effectively the same separation, so that is not the defect.
+
+Second, and it is the useful one — Patola: *"the wrong stereo separation is more
+visible on the quads, e.g. the map, the start screen and not the cockpit."*
+**That localises it to the UI layer.** The cockpit is the scene layer, whose
+stereo comes from our baked shear; the map and the start screen are the quad,
+whose stereo the runtime derives. Whatever is wrong is on the derived side, and
+the scene's shear is exonerated by the same sentence.
+
+### Why SBS answers it and a mono clip cannot
+
+Every measurement so far has been a RATIO — HUD motion against world motion —
+and a ratio cannot say which side is wrong. A side-by-side capture carries the
+two eyes in one frame, so the horizontal offset between the halves is an
+**absolute** disparity, and disparity converts to depth with no unknowns:
+
+    depth = (ipd/2) / tan(disparity/2)          ipd = 0.0629 m, measured
+
+    0.70 m -> 5.145 deg      2.50 m -> 1.441 deg
+    1.40 m -> 2.574 deg      infinity -> 0.000 deg
+
+So the clip reports, in metres, **where each thing actually is** — and the quad
+is supposed to be at exactly `X4VR_CANVAS_M`. The cockpit in the same frames is
+the control: its implied depth must come out at cockpit scale, around 1 m.
+
+### The run
+
+245A's line with `X4VR_CANVAS_M=1.4` and the names moved on. The build is back
+to the neutral anchor, so this is 245A's behaviour at 1.4 m:
+
+    X4VR_TAKE=248-SBS X4VR_CANVAS_M=1.4 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DECLARE_RENDERED_POS=1 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HUDLESS=1 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take248.log X4VR_UI_LAYER=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+**Recorded SIDE-BY-SIDE**, and the protocol is built around holding still,
+because disparity is measured within one frame and motion blur is the enemy:
+
+    ~5 s   cockpit, looking straight ahead, HEAD STILL
+    ~8 s   slow head turns L/R/U/D  (keeps the wander metric comparable)
+    ~3 s   still again, straight ahead
+    ~5 s   press M for the map, HEAD STILL while it is up
+    ~3 s   ESC, still
+
+The still sections are the measurement; the moving section only keeps this clip
+comparable with the last three.
+
+**P248.1 — the control.** Cockpit struts read an implied depth of order 1 m, so
+between roughly 3 and 8 deg of disparity. If the cockpit reads at infinity
+(0 deg) the scene has no stereo at all and everything else in this section is
+moot.
+
+**P248.2 — the quad.** The map and the HUD read **2.57 deg = 1.40 m**, the
+canvas distance. Any other number is the defect, and its SIZE names the
+mechanism: near zero means the quad is being shown flat to both eyes; a
+consistent scale factor means the disparity is derived from the wrong
+separation or the wrong distance; opposite signs between elements means
+something is per-eye that should not be.
+
+**No tool is being written for this in advance.** Two instruments in this task
+were built for data whose shape was assumed — the nebula channel and the
+SBS-halving — and both produced confident wrong answers. The analysis is
+written after one real frame of the actual capture format has been looked at.
