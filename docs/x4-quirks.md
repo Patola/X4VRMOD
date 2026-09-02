@@ -12497,3 +12497,53 @@ next piece of paper, and it is not a take.
 This also **retracts the #45 suggestion made one message earlier**: X4 does not
 lay the HUD out non-square, so "against the window rather than the render
 extent" is not this defect. #45 remains open on its own merits.
+
+## RETRACTED, one commit later: the frustum-aspect explanation is REFUTED
+
+The section above derived the 10% from the runtime frustum's h/v tan-span ratio
+of 0.9255 against a measured 0.90, called the vanilla clip's 1.00 the control,
+and committed it. **`X4VR_OFFAXIS` is not set in take 245A.** There is no
+`offaxis` line anywhere in its log, so `oat.on` is false, the affine never runs,
+and
+
+    pv[e].fov = oat.on ? oat.fov[e] : g_vr_fov;   // -> g_vr_fov
+    const XrFovf &f = g_vr_fov;                   // quad
+
+**both layers are declared with the SAME symmetric ±55.0° field.** The runtime's
+asymmetric frustum, from which 0.9255 was computed, is not used by anything in
+that run. The agreement was a coincidence, and I checked the code for the
+mechanism only after the number matched.
+
+That is the failure mode this file already names twice — a matching number
+ending the search. It got past me because 0.925 against 0.90 was a *good* match
+and I went looking for confirmation instead of for the configuration.
+
+**What survives, because it was measured rather than derived:**
+
+* X4's cockpit HUD is world-anchored: vanilla 1.00 on both axes, 84 pairs.
+* In VR it tracks at 0.90 in yaw, 1.00 in pitch, 55 pairs, sd 0.115,
+  direction-independent.
+* The SAME HUD element is tracked in both clips — the target-bracket cluster,
+  confirmed by rendering the mask for one frame of each and looking at it.
+* X4's projection is angularly square (`|sy/sx| = 1.0000` on every camera but a
+  4-draw group), and `x4_half_for_fov` is exact against its own matrix.
+
+**What is now open, and it is smaller and sharper than before:** with the affine
+off, the scene layer and the quad share a pose, a field and a source image.
+There is no mapping difference left to explain 0.90, so the cause is something
+neither pose nor field:
+
+1. **Parallax asymmetry.** The quad is real geometry at a finite distance and
+   the compositor gives it full head-translation parallax; a projection layer is
+   a 2D reprojection and gets none. Take 244 measured 0.17 m of real head
+   motion. At 2.5 m that is ~3.9°. **This is task #75's shape.** It predicts the
+   effect scales with 1/distance — and Patola reports the HUD behaving the same
+   at 0.70, 1.40 and 2.50 m, which argues against it. Testable without a new
+   run only if a clip exists at another distance; none does.
+2. **A measurement bias not yet found.** The `grey` channel is the whole frame
+   (cockpit + nebula + stars); the `hud` channel is ~220 sparse pixels. They are
+   not weighted alike.
+
+**No third fix is going to be proposed from this.** Two mechanisms remain, the
+evidence does not choose between them, and the last four takes were spent on
+mechanisms that fitted a number.
