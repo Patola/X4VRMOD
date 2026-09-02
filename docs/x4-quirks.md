@@ -9348,7 +9348,8 @@ and takes 212, 213 and 214 contain **zero** `canvas` lines between them. The
 side.
 
 **The only fix is structural**: screen-locked content needs its own composition
-layer, declared with the HEAD pose rather than X4's camera, so the compositor
+layer, declared in the SHIP's frame at a finite distance (NOT the head pose
+-- see the take-241 correction), so the compositor
 leaves it alone. That is #57's "separate screen-locked from world-at-infinity",
 and it is real work rather than a sign flip.
 
@@ -10083,8 +10084,11 @@ Everything it needs is measured and committed. Nothing is waiting on Patola.
 
     layer A   the hudless scene, declared with the pose it was RENDERED from
               — EXISTS. X4VR_HUDLESS=1 + the blit the compositor already does.
-    layer B   img #65, declared with the HEAD pose, alpha-blended over it
-              — TO BUILD.
+    layer B   img #65, alpha-blended over it, declared in the SHIP's frame
+              at a FINITE distance — **not** the head pose. Take 241 built
+              the head-pose version and Patola rejected it for the second
+              time; #57's title says "finite canvas" and always did.
+              — BUILT WRONG, needs re-framing.
 
 **What is settled, so do not re-derive it:**
 
@@ -11625,7 +11629,8 @@ quad because take 240 measured the image `DOUBLED to 2`, so X4 already renders
 the UI once per view.
 
     layer A   hudless scene, declared with the pose it was RENDERED from
-    layer B   the UI target, declared with the HEAD pose, alpha-blended over it
+    layer B   the UI target, alpha-blended over it, in the SHIP's frame at a
+              finite distance — NOT the head pose (take-241 correction)
 
 `frame_end()` already takes an array and a count, so submitting two layers
 needs no change there. `proj_ui` gets
@@ -11700,10 +11705,74 @@ which is what X4 produces, since `visual_transition` ends
 Declared with the head pose rather than the rendered one, which is the whole
 point.
 
+## CORRECTION, take 241: layer B's frame was WRONG, and repeatedly
+
+Everything below that says the UI layer is declared **with the head pose** is
+wrong, and it is wrong in the same way in several places because I wrote it
+once and re-read my own note as if it were settled.
+
+Patola:
+
+> the HUD was **never** intended to follow my head in the cockpit, and **this
+> is not the first time you insist on it**. Instead it was meant to stay fixed
+> relative to the cockpit. It should be world-locked, but not in the infinity;
+> it should behave as floating widgets projected in a plane or sphere
+> representing the view of the cockpit.
+
+**The record said so before any of this was written.** #57's title is
+*"Separate screen-locked from world-at-infinity with a **finite canvas**"*, and
+#30/#40 was *"UI on a **floating canvas**"*. Head-locking is the obvious VR
+idiom and the cheap one — the pose is already in hand and no distance has to be
+chosen — and that is exactly why it kept winning over the title.
+
+**The distinction is modal**, and it is his to make, not mine: in the cockpit
+the HUD belongs to the **ship**, like real instruments, so turning the head
+leaves it behind. In walking mode a minimal head-locked HUD *is* right.
+
+### What take 241 does establish
+
+The mechanism works end to end — identification, capture, blit, submission —
+and the pose is demonstrably being honoured, because the **savegame load screen
+came out head-locked**, which is what a head-pose layer B does.
+
+* The **starting load screen appeared again**, where take 239 had it black. The
+  UI is genuinely coming back through layer B and not through `copy_gamma`.
+* **Roll is correct**: the HUD followed the head's roll.
+* **Pitch and yaw are inverted.** A sign error on top of the frame error — and
+  worth keeping, because whatever frame is chosen the convention still has to
+  be right. #77 was a sign error of exactly this shape.
+* **The start-menu text is still missing** while the load screen is not. Two UI
+  things behaving differently, unexplained.
+
+### What the frame has to become
+
+    layer B pose = the SHIP's orientation, not the head's and not the
+                   rendered camera's (which contains the head-look servo)
+                 = rendered_pose  o  headlook^-1
+
+and at a **finite distance**, which a projection layer cannot express — it has
+no depth, so the compositor treats it as infinitely far. That points at a
+**quad layer** per eye (`XrCompositionLayerQuad` carries `eyeVisibility` and a
+`size` in metres), not the projection layer take 241 submits.
+
+Two interactions to settle before building it, neither of them mine to decide
+alone:
+
+* **The distance.** "A plane or sphere representing the view of the cockpit"
+  needs a number, and it wants to sit where the cockpit glass is rather than
+  where the instruments are.
+* **Double parallax.** #30/#40 already bakes a per-eye shift into the UI image
+  to place it at a chosen depth. Putting that image on a quad at a finite
+  distance would apply parallax twice. One of the two has to go, and which one
+  depends on the distance above.
+
 ## The shape of the fix
 
     layer A   hudless scene, declared with the pose it was RENDERED from
-    layer B   the UI texture, declared with the HEAD pose so it does not move
+    layer B   the UI texture, declared with the SHIP's frame at a FINITE
+              distance -- NOT the head pose. See the take-241 correction
+              above; head-locking is right in walking mode and wrong in the
+              cockpit, and I built the wrong one twice.
 
 which is #57 exactly, and it also gates #71: aiming is guided by HUD markings,
 so a HUD that slides cannot be aimed through however free the mouse is. That

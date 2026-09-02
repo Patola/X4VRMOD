@@ -11723,16 +11723,34 @@ void vr_thread() {
             layers[0] = (const XrCompositionLayerBaseHeader *)&proj;
             layer_count = 1;
 
-            // ---- task #57: the UI, on its own layer, at the HEAD's pose ----
+            // ---- task #57: the UI, on its own layer ------------------------
             //
-            // **This is the whole point of #57, and it is one line's worth of
-            // difference from layer A: `views[e].pose` instead of the declared
-            // render pose.** X4's HUD is drawn in screen space, so it belongs
-            // wherever the head is looking now; the scene belongs where it was
-            // rendered from. Declaring both with the same pose is exactly the
-            // state that makes the HUD slide across the world (#76), and
-            // declaring the scene with the head pose would glue the world to
-            // the face instead.
+            // **THE POSE BELOW IS WRONG AND TAKE 241 PROVED IT.** It declares
+            // the head pose, which head-locks the HUD. Patola, on seeing it:
+            // *"the HUD was never intended to follow my head in the cockpit,
+            // and this is not the first time you insist on it."* In the
+            // cockpit the HUD belongs to the SHIP -- floating widgets at a
+            // finite distance, like real instruments, so turning the head
+            // leaves them behind. Head-locked is right only in walking mode.
+            //
+            // #57's own title says "finite canvas" and #30/#40 said "floating
+            // canvas". The head pose won anyway because it is the cheap answer:
+            // already in hand, and no distance to choose.
+            //
+            // Kept as-is rather than half-corrected, because the fix is not a
+            // different pose in this expression -- it is a QUAD layer (a
+            // projection layer has no depth, so the compositor puts it at
+            // infinity) in the ship's frame, which is
+            // `rendered_pose o headlook^-1`. See the take-241 correction in
+            // docs/x4-quirks.md, including the two things that need settling
+            // first: the distance, and the double parallax against #30/#40's
+            // per-eye canvas shift.
+            //
+            // What take 241 DID establish: the chain works end to end, and the
+            // pose is honoured -- the load screen came out head-locked, which
+            // is exactly what this asks for. Roll followed correctly; pitch and
+            // yaw are INVERTED, a sign error that survives whatever frame is
+            // chosen and still has to be fixed.
             //
             // The FOV is layer A's, unchanged. Both layers cover the same
             // field; only the pose they are anchored to differs.
