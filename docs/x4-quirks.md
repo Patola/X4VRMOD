@@ -13099,3 +13099,85 @@ and the slip is NOT this"* unconditionally — under numbers reading +0.986 and
 +0.095. A canned sentence that reads like a verdict is worse than no sentence,
 and this one would have said "not this" about the run that proves it is. Now
 conditioned on the two correlations, with a distinct branch for each case.
+
+## The DECLARE_RENDERED_POS elimination — take 251
+
+A knob, no code, one variable. It changes exactly the quantity take 250
+measured.
+
+    X4VR_DECLARE_RENDERED_POS=1   (all recent takes)
+        pv[e].pose.position = neutral + R(C)*(±ipd/2 + shift)
+        -> pinned at the neutral point.  MEASURED: d_scene tracks t_head at
+           r=+0.986, reaching 0.47 m
+
+    X4VR_DECLARE_RENDERED_POS unset  (the layer's default)
+        pv[e].pose.position = views[e].pose.position
+        -> the runtime's TRUE eye.  d_scene collapses to ~ipd/2 and stops
+           tracking t_head
+
+So the run flips "does the scene's declared viewpoint follow the head" and
+nothing else. **The quad is untouched**: it is real geometry at
+`neutral + R(C)*(0,0,-zm)` and the compositor gives it the full parallax of the
+head's translation in both arms.
+
+### The model take 247 forces, and why this discriminates
+
+Take 247 removed the quad's parallax by anchoring it to the head. Under
+"the scene is simply frozen at its declared point and has no parallax", that
+should have MATCHED the scene and driven the slip to zero. It was **3.5x worse
+in x and 6x in y**.
+
+**So the compositor is not ignoring the declared position.** The only reading
+that survives 247 is that it DOES reproject positionally, synthesising an
+approximate parallax for layer A from (declared -> actual head). Then:
+
+    now (=1)   scene: approximate parallax from a 0.04-0.13 m reconciliation
+               quad:  exact parallax          ->  residual mismatch = the slip
+    take 247   scene: approximate parallax
+               quad:  NONE                    ->  full mismatch, 3.5x worse  ✓
+    take 251   scene: NOTHING to reconcile, so no reprojection and no parallax
+               quad:  exact parallax          ->  full mismatch the other way
+
+**P251.1 — this is expected to be WORSE, and it is a diagnostic, not a candidate
+fix.** Patola should not run it hoping for an improvement. The slip should grow
+to roughly the full `t/zm` instead of the residual.
+
+**P251.2 — the falsifier, and it is the valuable outcome.** If the slip is
+UNCHANGED, the compositor is not using the declared position at all — and then
+take 247's failure has no explanation in this model and the whole picture goes
+back on the bench. That would be worth more than a confirmation.
+
+**P251.3 — log-side, and it checks the knob rather than the theory.** `d_scene`
+must collapse from "tracks t_head at r=+0.986, max 0.47 m" to roughly constant
+at ~0.031 m with r near zero. If it does not, the knob did not reach the
+declaration and the run says nothing about anything.
+
+### The run
+
+    X4VR_TAKE=251-NODECLPOS X4VR_CANVAS_M=1.4 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HUDLESS=1 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take251.log X4VR_UI_LAYER=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+`X4VR_DECLARE_RENDERED_POS` is **absent**, which is the whole change. Take 250's
+line with that one variable removed and the names moved on.
+
+**Record ~20 s, mono, in the cockpit, slow head turns L/R/U/D — the same clip as
+`x4-vr.mp4` and `x4-vr2.mp4`.** Not SBS, and no leaning: this must be
+comparable with the two clips whose slip is already measured at 2.34 deg
+(2.50 m) and 7.52 deg (0.70 m).
+
+    python3 tools/score_run.py /tmp/x4vr-take251.log      # P251.3, the knob
+    <clip> -> the drift metric                            # P251.1/2, the slip
+
+**The slip is measured from the clip, not judged.** A cross-run magnitude
+comparison is the one thing Patola's eye is explicitly not for
+([[patola-senses-transitions-not-magnitudes]]), and "worse or the same" is
+precisely a cross-run magnitude question. His impression is welcome and will be
+recorded, but the number decides.
+
+### Why this is worth a take when it cannot improve anything
+
+Because it is the only remaining cheap discriminator between two models that
+predict opposite fixes, and because every alternative on the table costs code
+built on an unestablished premise. Three fixes were already built that way. A
+knob that can only make things worse, but tells us which of two mechanisms is
+live, is a better purchase than a fourth fix that might make things better for a
+reason we cannot name.
