@@ -59,11 +59,34 @@ def decode(path):
 
 
 def channels(lin):
-    """Identical to hud_frame.py's, deliberately — one definition of "the HUD"
-    across both tools, so #55's numbers and these are comparable."""
-    luma = 0.2126 * lin[..., 0] + 0.7152 * lin[..., 1] + 0.0722 * lin[..., 2]
-    hud = np.clip(0.5 * (lin[..., 1] + lin[..., 2]) - lin[..., 0], 0.0, None)
-    return {'hud': hud, 'grey': np.clip(luma - 3.0 * hud, 0, None)}
+    """Isolate X4's HUD from the scene behind it.
+
+    **`hud_frame.py`'s channel does not work here, and take 245b is the
+    counter-example.** That tool uses `(G+B)/2 - R`, which was right for take
+    162's frame. Take 245b's cockpit looks out at a blue-purple NEBULA, and
+    that expression scores the entire nebula as HUD: measured coverage 66% of
+    the frame, where a HUD overlay is well under 1%. Both channels then carried
+    the same content, every correlation margin collapsed to ~0.001, and the
+    tool reported "the camera did not turn" for a run whose log shows it
+    turning through 62 degrees.
+
+    The separator that works is that X4's HUD is **cyan** — G and B roughly
+    equal — while the nebula is **blue-purple**, B clearly above G. So require
+    G to be at least as strong as B, and both well above R. On take 245b's n17
+    that gives 0.09% coverage and picks out the radar arc and the target
+    brackets; `(G+B)/2 - R` gave 66%.
+
+    A colour test alone still catches blue-white stars, which are WORLD content
+    and would bias the answer toward "world-anchored" — the very verdict being
+    tested. Do not trust this channel on a star-heavy frame without checking
+    the margin, and prefer dumping the UI target on its own, where the question
+    does not arise at all.
+    """
+    R, G, B = lin[..., 0], lin[..., 1], lin[..., 2]
+    mx = lin.max(2)
+    hud = np.where((G >= 0.9 * B) & (G > 1.3 * R) & (mx > 0.1), mx, 0.0)
+    luma = 0.2126 * R + 0.7152 * G + 0.0722 * B
+    return {'hud': hud, 'grey': np.where(hud > 0, 0.0, luma)}
 
 
 def shift(a, b, lo, hi, band=None):

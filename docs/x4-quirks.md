@@ -12282,3 +12282,77 @@ result.
 **P245.2.** The ratio is one of the three named values. I am not predicting
 which, because predicting it is what the last three takes did. Whatever it is,
 it selects the placement, and the placement stops being a guess.
+
+## Take 245: the 17 cm arm was real, and 245B's instrument was not ready
+
+### 245A — the elimination WORKED, and it closes more than it aimed at
+
+Patola: *"the pitch up shifting the quad in the savegame loadscreen is solved
+and now turning my head doesn't push the cockpit away like before to a
+noticeable degree. So it's much better now. Stereo separation feels better now
+too, only looking up at the borders in the overlay seem to be a bit wrong."*
+
+Three complaints improved from removing **one** thing: `X4VR_HEAD_TRANSLATE`.
+Layer A had been declaring
+
+    position = neutral + R(C) · (±ipd/2 + head_shift)
+
+with the shift measured at **0.17 m** in take 244. That whole vector is rotated
+by the camera angle, so the point the compositor is told the pixels came from
+swung on a 17 cm lever with every turn of the head. Consequences, all three of
+which Patola reported separately and I had been treating as three problems:
+
+* **the cockpit "pushed away" and its sides stretched** — the compositor was
+  reprojecting for a viewpoint that moved when the real head barely had;
+* **the load screen drifted on pitch up** — the quad's centre does NOT use the
+  shift, so it stood still while the WORLD swung under it. The relative motion
+  was read as the quad drifting. Only pitch-up because that is where the shift
+  got large enough to see;
+* **stereo separation felt wrong** — the declared eye positions carried the
+  swinging vector on top of the IPD.
+
+**#74's head translation, as implemented, is harmful and stays OFF.** It is not
+"built, default OFF, not clean" any more; it is a known cause of the artefact
+Patola identified as the nausea risk. The seven eliminated hypotheses in its
+notes were all looking for a small drift, and the thing to look at was the lever
+arm the declaration multiplies it by.
+
+This is Patola's method and it should have been run the first time he described
+the artefact, not the third.
+
+### 245B — no usable pair, and the instrument is why
+
+`hud_vs_camera.py` reported NO USABLE PAIR over 25 dumps of a run whose log
+shows X4's camera moving through 62°. Two causes, both mine:
+
+**1. The protocol I specified defeats the measurement.** I asked Patola to HOLD
+each position ~6 s so a dump would land in it. Dumps land every ~4 s, so
+consecutive dumps fall inside the SAME hold and the world has not moved between
+them — `dx_grey = 0` with good confidence, correctly reported as unusable. The
+pairs that matter are across DIFFERENT holds, which a consecutive-pairs tool
+never forms.
+
+**2. The `hud` channel does not survive a nebula.** Inherited from
+`hud_frame.py`: `(G+B)/2 - R`, correct for take 162's frame. Take 245b's cockpit
+looks out at a blue-purple nebula, and that expression scored **66% of the
+frame** as HUD. Both channels then carried the same content and every margin
+collapsed to ~0.001.
+
+X4's HUD is **cyan** (G ≈ B); the nebula is blue-purple (B > G). Requiring
+`G >= 0.9B and G > 1.3R` gives **0.09%** coverage on the same frame and picks
+out the radar arc and the target brackets. On take 237's static control the
+margin rises from 0.34 to **0.876**. Fixed, with the counter-example recorded in
+the docstring.
+
+**What 245b hints at but does NOT establish:** in three of five cockpit pairs
+`dx_hud` lands within a few px of `dx_grey` (68/73, 188/191, 20/21), which is
+ratio ≈ 1, i.e. world-anchored. **Every one of those margins is ~0.000.** It is
+recorded as a hint and nothing is built on it; reading a verdict out of
+zero-margin correlations is the exact mistake this tool's margin gate exists to
+prevent.
+
+**The better instrument, if the measurement is still needed:** dump the UI
+target on its own — `X4VR_MV_DUMP_AFTER_RP=33,56`, the two passes take 244's
+inventory shows writing `img #65` — instead of the composited present. There is
+then no nebula, no stars and no cockpit in the image, so no colour trick is
+needed and the contamination question does not arise.
