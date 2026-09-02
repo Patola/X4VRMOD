@@ -12427,3 +12427,73 @@ headset than the number suggests, or there is a second effect the clip does not
 show. **Recorded as a discrepancy rather than resolved**, because the last four
 takes were spent on explanations that fitted a description instead of a
 measurement.
+
+## CONFIRMED: Patola's recording IS what he sees, and the number is the defect
+
+*"The VR recording is exactly what I see in the headset."* So the 10% measured
+in the clip is the whole of *"the HUD still goes to the opposite direction of my
+head, not becoming fixed in relation to the cockpit"*.
+
+**His description was accurate and my reading of it was not.** "Goes to the
+opposite side" is what correct world-locked content does; the load-bearing half
+was always *"not becoming fixed in relation to the cockpit"*, which is exactly a
+0.90 tracking ratio. The DOUBLING was my inference — he offered it once as
+*"I imagine that it might be doing that twice"* and three takes were built on my
+promotion of that guess to a premise.
+
+### X4's projection is square — so the asymmetry is ours
+
+From `proj CAMERA` walks in takes 106 and 112, every camera but one 4-draw
+group reports `|sy/sx| = 1.0000`:
+
+    25-29 draws   sx=1.33333  ratio=1.0000    ignores <fov>
+    19    draws   sx=0.75405  ratio=1.0000    HONOURS <fov>
+    4     draws   sx=3.78085  ratio=1.5000
+
+`1/0.75405 = 1.326 = tan(52.98°)` and `x4_half_for_fov(1.437) = 1.437 ×
+73.7399/2 = 52.98°` — **exact**. So `x4_half_for_fov` is validated against X4's
+own matrix, and X4's render is angularly SQUARE on both axes.
+
+### The number that matches
+
+    runtime eye0 frustum   l=-54 r=+40 u=+44 d=-55
+      horizontal tan-span  tan54 + tan40 = 2.2155
+      vertical   tan-span  tan55 + tan44 = 2.3938
+      h/v                                  0.9255
+
+    measured HUD tracking  yaw 0.90 (sd 0.115, n=55)   pitch 1.00
+    predicted              0.9255                       difference 0.025
+
+And the vanilla clip, which has no affine and no runtime frustum in it, reads
+**1.00 on both axes** — the control the prediction requires.
+
+### What this does and does NOT establish
+
+**Established:** the scene and the UI are displayed through mappings that differ
+by the runtime frustum's aspect. The UI pass is deliberately `unsheared`, so it
+keeps X4's original symmetric ±55° framing and the quad reproduces that
+faithfully; the scene is remapped by the affine onto a frustum whose horizontal
+and vertical spans differ by 7.5%. Nothing makes those agree, and the HUD is
+what reveals it.
+
+**NOT established, and a ratio cannot establish it: WHICH SIDE IS WRONG.** The
+measurement says the two disagree, not which one is at its true angle. Two
+readings fit equally:
+
+* the quad is faithful and the **WORLD is horizontally wrong by 7.5%** — an
+  aspect error in #35's affine, invisible against a starfield and exactly the
+  kind of thing that costs comfort. Note `make_canvas_k`'s neighbours already
+  carry `sy_s = -sx_s`, deriving one axis from the other, which is the habit
+  that would produce this;
+* the affine is right and the **quad should be sized from the runtime frustum**
+  rather than from X4's symmetric field.
+
+**Do not pick one by argument.** Separating them needs an ABSOLUTE angular
+reference — something whose true angular size is known — not another ratio.
+The cheap candidate is a rigid cockpit feature measured in both clips against a
+HUD element beside it, which cancels the unknown per-axis scale. That is the
+next piece of paper, and it is not a take.
+
+This also **retracts the #45 suggestion made one message earlier**: X4 does not
+lay the HUD out non-square, so "against the window rather than the render
+extent" is not this defect. #45 remains open on its own merits.
