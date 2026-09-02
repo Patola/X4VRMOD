@@ -3241,6 +3241,23 @@ inline bool ui_layer_enabled() {
     return on;
 }
 
+// Where the UI canvas sits, in metres. **The same knob the baked shift used**,
+// with the same meaning -- "where the UI sits" -- because it is the same
+// quantity and two knobs for one distance is how they drift apart. Patola's
+// call: at the cockpit glass.
+//
+// The default is a value, not a refusal: with X4VR_UI_LAYER=1 and no distance
+// named, a quad still has to go somewhere, and putting it at infinity would
+// silently be the thing #57 exists to stop.
+inline float ui_canvas_m() {
+    static const float m = [] {
+        const char *e = getenv("X4VR_CANVAS_M");
+        const float v = (e && *e) ? strtof(e, nullptr) : 0.0f;
+        return v > 0.0f ? v : 0.7f;
+    }();
+    return m;
+}
+
 // The image the latch named, so a later writer can be checked against it.
 // UINT32_MAX until one is named.
 std::atomic<uint32_t> g_ui_serial{UINT32_MAX};
@@ -5101,7 +5118,29 @@ VkResult create_shader_module_inner(
             const bool asked_z = cm && *cm;
             const float z = asked_z ? strtof(cm, nullptr) : 0.0f;
             const OffAxisPair &oa = offaxis_target();
-            if (asked_z && !(z > 0.0f)) {
+            // ---- task #57: the baked shift and layer B are EXCLUSIVE -------
+            //
+            // Both place the UI at a distance, and doing both applies the
+            // parallax twice. With layer B on, the quad carries the depth and
+            // X4VR_CANVAS_M is its distance in metres -- the same meaning this
+            // knob already had, so it is reused rather than duplicated.
+            //
+            // This is not a preference. A quad layer's stereo is computed by
+            // the RUNTIME from the layer pose and the viewer's eyes, so its
+            // source image must be the same for both eyes and must carry no
+            // per-eye shift of ours. Baking one in would fight the compositor
+            // rather than help it.
+            if (ui_layer_enabled()) {
+                static bool said = false;
+                if (!said) {
+                    said = true;
+                    X4VR_LOG("canvas: baked per-eye shift NOT built — "
+                             "X4VR_UI_LAYER=1 puts the UI on a quad at %.2f m "
+                             "and the runtime derives the stereo from the quad "
+                             "pose. Two depths would be two parallaxes.",
+                             asked_z ? z : 0.0f);
+                }
+            } else if (asked_z && !(z > 0.0f)) {
                 X4VR_LOG("canvas: REFUSED — X4VR_CANVAS_M=\"%s\" is not a "
                          "positive distance; no canvas built",
                          cm);
@@ -10999,6 +11038,11 @@ struct VrState {
     std::atomic<bool> ui_ready{false};
     std::atomic<bool> ui_failed{false};
     std::atomic<uint64_t> ui_released{0};
+    // Task #57. Layer A's declared angles, kept so the quad's log line can put
+    // the two poses side by side. The claim "identity is the ship's frame"
+    // predicts these are non-zero while the quad's are zero; a run where both
+    // are zero says nothing, and a run where they track each other refutes it.
+    float last_decl_yaw = 0.0f, last_decl_pitch = 0.0f;
     std::mutex sc_mu;               // XrSwapchain wants external synchronisation
     std::atomic<bool> sc_ready{false};
     std::atomic<bool> sc_failed{false}; // tried once and could not; do not retry
@@ -11516,9 +11560,10 @@ void vr_thread() {
         // is what takes 112/113 ran.
         XrCompositionLayerProjectionView pv[2] = {};
         XrCompositionLayerProjection proj = {};
-        // Task #57 layer B, submitted OVER the scene.
-        XrCompositionLayerProjectionView pvu[2] = {};
-        XrCompositionLayerProjection proj_ui = {};
+        // Task #57 layer B, submitted OVER the scene. A QUAD, not a
+        // projection layer: a projection layer carries no depth, so the
+        // compositor places it at infinity, and #57 asks for a finite canvas.
+        XrCompositionLayerQuad quad_ui = {};
         const XrCompositionLayerBaseHeader *layers[2] = {nullptr, nullptr};
         uint32_t layer_count = 0;
         if (have && should_render && g_vrs.sc_ready.load() &&
@@ -11608,6 +11653,10 @@ void vr_thread() {
                 decl_pitch += ap;
                 if (valid || ay != 0.0f || ap != 0.0f)
                     x4vr::quat_of_angles(decl_yaw, decl_pitch, q);
+                    // Task #57: kept so the quad's log line can put the
+                    // two declared poses side by side.
+                    g_vrs.last_decl_yaw = decl_yaw;
+                    g_vrs.last_decl_pitch = decl_pitch;
                 if (e == 0 && poselog_enabled()) {
                     // **Task #75, at FULL rate and on ONE line.**
                     //
@@ -11723,74 +11772,74 @@ void vr_thread() {
             layers[0] = (const XrCompositionLayerBaseHeader *)&proj;
             layer_count = 1;
 
-            // ---- task #57: the UI, on its own layer ------------------------
+            // ---- task #57: the UI, on a finite canvas in the SHIP's frame
             //
-            // **THE POSE BELOW IS WRONG AND TAKE 241 PROVED IT.** It declares
-            // the head pose, which head-locks the HUD. Patola, on seeing it:
-            // *"the HUD was never intended to follow my head in the cockpit,
-            // and this is not the first time you insist on it."* In the
-            // cockpit the HUD belongs to the SHIP -- floating widgets at a
-            // finite distance, like real instruments, so turning the head
-            // leaves them behind. Head-locked is right only in walking mode.
+            // **Not the head pose.** Take 241 declared the head's and Patola
+            // rejected it for the second time: in the cockpit the HUD belongs
+            // to the SHIP, like real instruments, so turning the head leaves it
+            // behind. Head-locked is right in walking mode only, and that mode
+            // is not wired yet -- deliberately, because the cockpit is the case
+            // being settled.
             //
-            // #57's own title says "finite canvas" and #30/#40 said "floating
-            // canvas". The head pose won anyway because it is the cheap answer:
-            // already in hand, and no distance to choose.
+            // **The ship's frame is IDENTITY here, and that is worth spelling
+            // out because it looks too easy.** Layer A's declared orientation
+            // is built from the head-look COMMAND, which is measured from X4's
+            // own forward axis -- so identity in this reference space already
+            // means "where the ship is pointing". Turning the head moves layer
+            // A's pose and leaves this one alone, which is exactly the
+            // behaviour asked for. That is reasoning, not a measurement: the
+            // declared values are logged below so the run can contradict it.
             //
-            // Kept as-is rather than half-corrected, because the fix is not a
-            // different pose in this expression -- it is a QUAD layer (a
-            // projection layer has no depth, so the compositor puts it at
-            // infinity) in the ship's frame, which is
-            // `rendered_pose o headlook^-1`. See the take-241 correction in
-            // docs/x4-quirks.md, including the two things that need settling
-            // first: the distance, and the double parallax against #30/#40's
-            // per-eye canvas shift.
+            // The position carries the neutral point but NOT the head shift:
+            // leaning moves the player relative to the cockpit, and the cockpit
+            // does not follow.
             //
-            // What take 241 DID establish: the chain works end to end, and the
-            // pose is honoured -- the load screen came out head-locked, which
-            // is exactly what this asks for. Roll followed correctly; pitch and
-            // yaw are INVERTED, a sign error that survives whatever frame is
-            // chosen and still has to be fixed.
-            //
-            // The FOV is layer A's, unchanged. Both layers cover the same
-            // field; only the pose they are anchored to differs.
-            //
-            // BLEND_TEXTURE_SOURCE_ALPHA, and the alpha is PREMULTIPLIED --
-            // which is X4's own convention, not a choice of ours:
-            // visual_transition ends `rgb *= U_useralphascale` and copy_gamma
-            // consumes `ui.rgb + (1-ui.a)*hudless.rgb`, which is premultiplied
-            // "over". So XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT is
-            // deliberately NOT set; setting it would tell the compositor to
-            // multiply by alpha a second time and darken every antialiased
-            // edge in the HUD.
+            // A quad's stereo is the RUNTIME's job -- it derives both eyes from
+            // this pose and the viewer -- so one layer with EYE_VISIBILITY_BOTH
+            // is correct, and the baked per-eye shift is switched off upstream.
             if (g_vrs.ui_ready.load(std::memory_order_relaxed) &&
                 g_vrs.ui_released.load(std::memory_order_relaxed) > 0) {
-                for (uint32_t e = 0; e < 2; e++) {
-                    pvu[e] = pv[e];
-                    pvu[e].pose = views[e].pose;
-                    pvu[e].subImage.swapchain = g_vrs.ui_sc.handle;
-                    pvu[e].subImage.imageRect = {
-                        {0, 0},
-                        {(int32_t)g_vrs.ui_sc.width,
-                         (int32_t)g_vrs.ui_sc.height}};
-                    pvu[e].subImage.imageArrayIndex = e;
-                }
-                proj_ui.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION;
-                proj_ui.space = g_vrs.session.space;
-                proj_ui.viewCount = 2;
-                proj_ui.views = pvu;
-                proj_ui.layerFlags =
+                const float zm = ui_canvas_m();
+                quad_ui.type = XR_TYPE_COMPOSITION_LAYER_QUAD;
+                quad_ui.space = g_vrs.session.space;
+                quad_ui.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+                quad_ui.layerFlags =
                     XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-                layers[1] = (const XrCompositionLayerBaseHeader *)&proj_ui;
+                quad_ui.subImage.swapchain = g_vrs.ui_sc.handle;
+                quad_ui.subImage.imageRect = {
+                    {0, 0},
+                    {(int32_t)g_vrs.ui_sc.width, (int32_t)g_vrs.ui_sc.height}};
+                quad_ui.subImage.imageArrayIndex = 0;
+                quad_ui.pose.orientation = {0.0f, 0.0f, 0.0f, 1.0f};
+                quad_ui.pose.position.x =
+                    g_reye.nx.load(std::memory_order_relaxed);
+                quad_ui.pose.position.y =
+                    g_reye.ny.load(std::memory_order_relaxed);
+                quad_ui.pose.position.z =
+                    g_reye.nz.load(std::memory_order_relaxed) - zm;
+                // Sized to subtend the SAME field the scene layer declares, at
+                // the canvas distance. Any other size would put a HUD element
+                // at a different angle from the world feature it labels, which
+                // is the whole reason the reticle has to be believable.
+                const XrFovf &f = g_vr_fov;
+                quad_ui.size.width =
+                    zm * (std::tan(f.angleRight) - std::tan(f.angleLeft));
+                quad_ui.size.height =
+                    zm * (std::tan(f.angleUp) - std::tan(f.angleDown));
+                layers[1] = (const XrCompositionLayerBaseHeader *)&quad_ui;
                 layer_count = 2;
                 static bool said_ui = false;
                 if (!said_ui) {
                     said_ui = true;
-                    X4VR_LOG("ui: SUBMITTING two layers — scene at the "
-                             "RENDERED pose, UI at the HEAD pose, alpha "
-                             "blended (premultiplied, X4's own convention). "
-                             "The HUD should now stay with the head instead of "
-                             "sliding across the world.");
+                    X4VR_LOG("ui: SUBMITTING a quad at %.2f m, %.2f x %.2f m, "
+                             "orientation IDENTITY = the ship's forward axis "
+                             "(NOT the head). The HUD should stay with the "
+                             "cockpit and leave the view when the head turns. "
+                             "Scene layer is at yaw %.2f pitch %.2f deg, so the "
+                             "two poses differ by the head-look command — if "
+                             "they do not, this identity claim is wrong.",
+                             zm, quad_ui.size.width, quad_ui.size.height,
+                             g_vrs.last_decl_yaw, g_vrs.last_decl_pitch);
                 }
             }
         }
