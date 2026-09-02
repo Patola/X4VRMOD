@@ -12851,3 +12851,59 @@ something is per-eye that should not be.
 were built for data whose shape was assumed — the nebula channel and the
 SBS-halving — and both produced confident wrong answers. The analysis is
 written after one real frame of the actual capture format has been looked at.
+
+## Take 248: the quad's disparity is ~1/3 of the cockpit's, and that is the defect
+
+The SBS clip works. `mean|L-R|` is 0.007–0.044 across the session, so the halves
+are genuinely two eyes and not a duplicated mono view — checked before anything
+was measured.
+
+**The zero control holds.** The starfield reads **+0 px** in every frame where
+the correlation has a real peak (margins 0.50 and 0.26). The −26-ish readings
+that appear alongside it all carry margins of 0.01–0.13: aperture ambiguity on a
+field of repeating dots, which is #55's lesson arriving again in a new tool.
+Only the confident readings are used below.
+
+    same capture, same method, same zero point
+      cockpit hull (scene layer)   -23 px    best margin 0.29
+      map UI       (quad)           -8 px    best margins 0.16-0.27,
+                                             3 frames, many blobs, -7..-10
+      starfield    (infinity)        0 px    margins 0.50, 0.26
+
+**The ratio 23:8 = 2.88x is calibration-free** — it needs no px-per-degree, no
+capture FOV, no assumption about the recorder. Whatever the scale, **the map is
+presented 2.9x further away than the cockpit hull.**
+
+And the quad is submitted at exactly the right place. Take 248's own log:
+
+    ui: quad at 1.40 m, ... centre (0.003, 1.131, -1.400) = neutral + R*(0,0,-zm)
+    head translate: neutral point latched at (0.003, 1.131, 0.000) m
+
+1.400 m ahead of the neutral point, to three decimals. **The submission is
+correct and the presentation is not.** For −8 px to be right at a 1.40 m
+canvas, the cockpit hull would have to be **0.49 m** from the eye, which it
+plainly is not. Across every calibration considered the map reads 2.8–3.8 m.
+
+This is what Patola reported independently and before any of it was measured:
+*"the wrong stereo separation is more visible on the quads, e.g. the map, the
+start screen and not the cockpit."* The scene's baked shear is exonerated; the
+defect is on the layer whose stereo the runtime derives.
+
+### What is NOT concluded
+
+Which side of "the quad reads 2.9x too far" is at fault is still open, because
+the hull's true distance is not independently known. The two readings that fit:
+
+* the quad's disparity is genuinely too weak, by roughly half;
+* or the capture attenuates disparity uniformly and the hull is nearer than a
+  cockpit hull looks.
+
+**The second is testable and cheap, and the test is calibration-free.** Change
+`X4VR_CANVAS_M` from 1.40 to 0.70 and record ten seconds of the map alone. A
+quad whose disparity comes from its submitted distance must DOUBLE, −8 px to
+about −16. If it does not move, the disparity is not being derived from the
+distance we submit, and that is a different defect entirely.
+
+No fix is proposed from this. The measurement names a target — "the quad's
+presented depth against its submitted depth" — and the A/B above decides
+whether that target is real before anything is built for it.
