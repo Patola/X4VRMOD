@@ -124,6 +124,11 @@ struct DeviceData {
     PFN_vkCmdClearColorImage CmdClearColorImage = nullptr;
     PFN_vkCreateImage CreateImage = nullptr;
     PFN_vkDestroyImage DestroyImage = nullptr;
+    // Task #57. The layer has never allocated an IMAGE before -- it has
+    // only ever substituted X4's create-infos, so X4 owned the memory.
+    // Layer B needs a staging image of its own.
+    PFN_vkGetImageMemoryRequirements GetImageMemoryRequirements = nullptr;
+    PFN_vkBindImageMemory BindImageMemory = nullptr;
     PFN_vkCreateImageView CreateImageView = nullptr;
     PFN_vkDestroyImageView DestroyImageView = nullptr;
     PFN_vkCreateDescriptorSetLayout CreateDescriptorSetLayout = nullptr;
@@ -3224,6 +3229,16 @@ uint32_t ui_scan(uint32_t *out_serial) {
             *out_serial = e.first;
     }
     return n;
+}
+
+// Task #57 layer B. Value-based like every other knob here, and OFF by default
+// so every tagged state still reproduces: a known-good state is code AND knobs.
+inline bool ui_layer_enabled() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_UI_LAYER");
+        return e && *e && *e != '0';
+    }();
+    return on;
 }
 
 // The image the latch named, so a later writer can be checked against it.
@@ -9593,6 +9608,190 @@ bool probe_buffer_ready(DeviceData *d, VkDevice dev, VkDeviceSize need) {
     return true;
 }
 
+// ---------------------------------------------------------------- task #57
+//
+// **Layer B's staging image.** X4's UI target (`img #65`, take 240) copied out
+// at the end of every pass that writes it, into an image the layer owns.
+//
+// Why a copy at all, and why HERE rather than at present:
+//
+// * The XR swapchain image is not acquired while X4 is recording -- acquisition
+//   happens on the present thread -- and writing an unacquired image is
+//   invalid. So the pass-end copy cannot go straight to the swapchain.
+// * A present-time copy of `#65` would have to GUESS the layout X4 left it in.
+//   Take 203's UI pass declares `final=2` (`COLOR_ATTACHMENT_OPTIMAL`), not `5`
+//   (`SHADER_READ_ONLY_OPTIMAL`), so X4 re-barriers the image itself before
+//   `copy_gamma` samples it -- through a barrier the layer does not track. A
+//   wrong `oldLayout` is undefined behaviour rather than an error, so that
+//   guess would not even fail loudly.
+//
+// At `vkCmdEndRenderPass` the layout is not a guess: it is the render pass's
+// own declared `finalLayout`, recorded by `record_final_layouts()`. This is the
+// same dance `probe_emit` below already does, and it is copied from there
+// deliberately rather than re-derived.
+//
+// **Every UI pass, not the last one.** Which pass writes the UI last is not
+// knowable a priori -- take 203's frame has two, and creation order is not
+// execution order -- so each one copies and the last to run wins. The price is
+// one redundant 15.9 MB copy per frame, written down in docs/x4-quirks.md
+// before the first measurement so the perf number has a prediction to be
+// compared against. If it shows, learn the last pass from frame 1.
+struct UiStage {
+    std::mutex mu;
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    VkExtent2D extent{};
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    bool failed = false;
+    // The staging image's own layout, which the layer owns end to end. Starts
+    // UNDEFINED because that is what vkCreateImage gives, and the first
+    // transition must say so or the driver is entitled to keep garbage.
+    VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    std::atomic<uint64_t> captures{0};
+} g_ui_stage;
+
+// Creates it on first use. Caller holds g_ui_stage.mu.
+bool ui_stage_ready(DeviceData *d, VkDevice dev, VkExtent2D ext, VkFormat fmt) {
+    if (g_ui_stage.image != VK_NULL_HANDLE)
+        return g_ui_stage.extent.width == ext.width &&
+               g_ui_stage.extent.height == ext.height &&
+               g_ui_stage.format == fmt;
+    if (g_ui_stage.failed || !d->CreateImage || !d->AllocateMemory ||
+        !d->GetImageMemoryRequirements || !d->BindImageMemory ||
+        !d->CmdCopyImage)
+        return false;
+
+    VkImageCreateInfo ici{};
+    ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = fmt;
+    ici.extent = {ext.width, ext.height, 1};
+    ici.mipLevels = 1;
+    // Two, because take 240 measured the UI target DOUBLED: X4 renders the UI
+    // once per view, so layer B is a projection layer and both layers matter.
+    ici.arrayLayers = 2;
+    ici.samples = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (d->CreateImage(dev, &ici, nullptr, &g_ui_stage.image) != VK_SUCCESS) {
+        g_ui_stage.failed = true;
+        X4VR_LOG("ui: staging image REFUSED at vkCreateImage (%ux%u x2, fmt "
+                 "%d) — layer B is off for this run",
+                 ext.width, ext.height, (int)fmt);
+        return false;
+    }
+    VkMemoryRequirements req{};
+    d->GetImageMemoryRequirements(dev, g_ui_stage.image, &req);
+    // DEVICE_LOCAL, unlike the probe's readback buffer: nothing on the CPU
+    // ever looks at this. It is copied into on X4's queue and copied out of on
+    // the same queue, so host visibility would only cost bandwidth.
+    uint32_t type = UINT32_MAX;
+    for (uint32_t i = 0; i < d->memprops.memoryTypeCount; i++)
+        if ((req.memoryTypeBits & (1u << i)) &&
+            (d->memprops.memoryTypes[i].propertyFlags &
+             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+            type = i;
+            break;
+        }
+    VkMemoryAllocateInfo mai{};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex = type;
+    if (type == UINT32_MAX ||
+        d->AllocateMemory(dev, &mai, nullptr, &g_ui_stage.mem) != VK_SUCCESS ||
+        d->BindImageMemory(dev, g_ui_stage.image, g_ui_stage.mem, 0) !=
+            VK_SUCCESS) {
+        d->DestroyImage(dev, g_ui_stage.image, nullptr);
+        g_ui_stage.image = VK_NULL_HANDLE;
+        g_ui_stage.failed = true;
+        X4VR_LOG("ui: staging image REFUSED — no device-local memory type for "
+                 "%llu bytes — layer B is off for this run",
+                 (unsigned long long)req.size);
+        return false;
+    }
+    g_ui_stage.extent = ext;
+    g_ui_stage.format = fmt;
+    g_ui_stage.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    X4VR_LOG("ui: staging image %ux%u x2 layers, fmt %d, %llu bytes "
+             "device-local — layer B has somewhere to put the UI",
+             ext.width, ext.height, (int)fmt,
+             (unsigned long long)req.size);
+    return true;
+}
+
+// The capture, emitted straight after vkCmdEndRenderPass into X4's own command
+// buffer. `a` is the UI target as the pass declared it.
+void ui_capture(DeviceData *d, VkCommandBuffer cb, const FbAtt &a) {
+    std::lock_guard<std::mutex> lock(g_ui_stage.mu);
+    VkExtent2D ext{a.extent.width, a.extent.height};
+    if (!ui_stage_ready(d, d->device, ext, a.format))
+        return;
+
+    // Two barriers in one call: X4's image to TRANSFER_SRC from the layout its
+    // own render pass declared, and ours to TRANSFER_DST from wherever we left
+    // it. Ours is UNDEFINED the first time and TRANSFER_SRC afterwards, since
+    // the present-side copy reads it -- tracked rather than assumed, because
+    // "it is always TRANSFER_SRC by now" is true only after the first frame.
+    VkImageMemoryBarrier to[2]{};
+    to[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    to[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    to[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    to[0].oldLayout = a.final_layout;
+    to[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    to[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to[0].image = a.image;
+    to[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 2};
+    to[1] = to[0];
+    to[1].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    to[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    to[1].oldLayout = g_ui_stage.layout;
+    to[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    to[1].image = g_ui_stage.image;
+    d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                          nullptr, 2, to);
+
+    VkImageCopy r[2]{};
+    for (uint32_t l = 0; l < 2; l++) {
+        r[l].srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, l, 1};
+        r[l].dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, l, 1};
+        r[l].extent = {ext.width, ext.height, 1};
+    }
+    d->CmdCopyImage(cb, a.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    g_ui_stage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 2,
+                    r);
+
+    // X4's image goes back to EXACTLY the layout its pass declared, or the next
+    // command X4 records operates on an image in a layout it never asked for.
+    // Ours stays in TRANSFER_SRC, ready for the present-side copy.
+    VkImageMemoryBarrier back[2]{};
+    back[0] = to[0];
+    back[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    back[0].dstAccessMask =
+        VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    back[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    back[0].newLayout = a.final_layout;
+    back[1] = to[1];
+    back[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    back[1].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    back[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    back[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
+                          nullptr, 2, back);
+    g_ui_stage.layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+
+    const uint64_t n = ++g_ui_stage.captures;
+    if (n == 1 || n == 600)
+        X4VR_LOG("ui: CAPTURED the UI target into staging %llu time(s)%s",
+                 (unsigned long long)n,
+                 n == 1 ? " — the bytes are ours now; nothing is submitted yet"
+                        : " — still per-frame, so this is not a one-off");
+}
+
 // Emitted straight after vkCmdEndRenderPass, into the same command buffer.
 void probe_emit(DeviceData *d, VkCommandBuffer cb, const FbAtt &a) {
     const uint32_t bpp = format_bpp(a.format);
@@ -9702,7 +9901,11 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBeginRenderPass(
         d = &g_devices.at(dispatch_key(cb));
     }
     cb_enter_pass(cb, bi->renderPass);
-    if (probe_hooks_wanted() && g_mv && g_active) {
+    // `|| ui_layer_enabled()`: the capture below needs the same framebuffer
+    // record the probe needs, and gating it on the probe's knob would have made
+    // layer B silently depend on an unrelated instrument being on. That exact
+    // coupling cost take 173.
+    if ((probe_hooks_wanted() || ui_layer_enabled()) && g_mv && g_active) {
         std::lock_guard<std::mutex> lock(g_cb_mu);
         g_cb_fb[cb] = bi->framebuffer;
     }
@@ -9760,6 +9963,35 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
         d = &g_devices.at(dispatch_key(cb));
     }
     d->CmdEndRenderPass(cb);
+
+    // ---- task #57: copy the UI target out, while its layout is not a guess --
+    //
+    // Its own gate and its own framebuffer lookup, deliberately not folded into
+    // the probe block below: that one is gated on probe_hooks_wanted(), and
+    // layer B must not switch itself off because an unrelated instrument is.
+    if (ui_layer_enabled() && g_mv && g_active) {
+        const uint32_t ui = g_ui_serial.load(std::memory_order_relaxed);
+        if (ui != UINT32_MAX) {
+            FbAtt hit{};
+            bool found = false;
+            {
+                std::lock_guard<std::mutex> lock(g_cb_mu);
+                auto f = g_cb_fb.find(cb);
+                if (f != g_cb_fb.end()) {
+                    auto a = g_fb_atts.find(f->second);
+                    if (a != g_fb_atts.end())
+                        for (const auto &at : a->second)
+                            if (at.serial == ui) {
+                                hit = at;
+                                found = true;
+                                break;
+                            }
+                }
+            }
+            if (found)
+                ui_capture(d, cb, hit);
+        }
+    }
 
     if (probe_hooks_wanted() && g_mv && g_active) {
         std::vector<FbAtt> atts;
@@ -10759,6 +10991,14 @@ struct VrState {
     // because its shape comes from the eye image and that does not exist until
     // X4 has created its own swapchain — which happens long after the session.
     x4vr::xr::Swapchain sc;
+    // Task #57 layer B. A SECOND swapchain, same extent and format as the eye
+    // one, carrying X4's UI alone. Kept beside `sc` rather than folded into it
+    // because the two are submitted as different composition layers with
+    // different poses -- that difference is the entire point of #57.
+    x4vr::xr::Swapchain ui_sc;
+    std::atomic<bool> ui_ready{false};
+    std::atomic<bool> ui_failed{false};
+    std::atomic<uint64_t> ui_released{0};
     std::mutex sc_mu;               // XrSwapchain wants external synchronisation
     std::atomic<bool> sc_ready{false};
     std::atomic<bool> sc_failed{false}; // tried once and could not; do not retry
@@ -11000,6 +11240,58 @@ bool vr_begin_blit(VkSwapchainKHR x4sc) {
         return false;
     }
     g_sbs.request_vr_blit(g_vrs.sc.images[idx], eye, 2);
+
+    // ---- task #57 layer B ---------------------------------------------------
+    //
+    // Only once the eye swapchain is up and only if the knob asked: layer B is
+    // an addition to a working layer A, never a precondition for it. If any of
+    // this fails the run still submits the scene, which is the behaviour every
+    // tagged state already has.
+    if (ui_layer_enabled() && !g_vrs.ui_failed.load(std::memory_order_relaxed)) {
+        if (!g_vrs.ui_ready.load(std::memory_order_relaxed)) {
+            // The SAME format the eye swapchain got. The staging image is a
+            // copy of X4's UI target, so a different format here would make
+            // vkCmdCopyImage invalid rather than merely wrong-looking.
+            const XrResult r = x4vr::xr::swapchain_create(
+                g_vrs.ui_sc, g_vrs.session, g_vrs.sc.format, eye.width,
+                eye.height, 2, 1);
+            if (r != XR_SUCCESS) {
+                g_vrs.ui_failed.store(true, std::memory_order_relaxed);
+                X4VR_LOG("ui: NO SECOND LAYER THIS RUN — xrCreateSwapchain "
+                         "(%ux%u, 2 layers, format %d) -> %s. The scene layer "
+                         "is unaffected.",
+                         eye.width, eye.height, (int)g_vrs.sc.format,
+                         x4vr::xr::result_name(r));
+            } else {
+                g_vrs.ui_ready.store(true, std::memory_order_relaxed);
+                X4VR_LOG("ui: swapchain %ux%u x2 layers, %zu image(s), format "
+                         "%d — layer B has somewhere to submit from",
+                         eye.width, eye.height, g_vrs.ui_sc.images.size(),
+                         (int)g_vrs.sc.format);
+            }
+        }
+        if (g_vrs.ui_ready.load(std::memory_order_relaxed)) {
+            uint32_t uidx = 0;
+            bool uowed = false;
+            if (x4vr::xr::swapchain_acquire_timeout(
+                    g_vrs.ui_sc, &uidx, (XrDuration)2000000, &uowed)) {
+                std::lock_guard<std::mutex> slock(g_ui_stage.mu);
+                // Only if the staging image actually holds a frame. Blitting an
+                // untouched image would submit whatever the allocator left
+                // there, and a garbage UI layer over a correct scene reads as
+                // "the identification is wrong" rather than as "nothing was
+                // captured yet".
+                if (g_ui_stage.image != VK_NULL_HANDLE &&
+                    g_ui_stage.captures.load(std::memory_order_relaxed) > 0)
+                    g_sbs.request_ui_blit(g_ui_stage.image,
+                                          g_vrs.ui_sc.images[uidx], eye);
+                else if (uowed)
+                    x4vr::xr::swapchain_release(g_vrs.ui_sc);
+            } else if (uowed) {
+                x4vr::xr::swapchain_release(g_vrs.ui_sc);
+            }
+        }
+    }
     return true;
 }
 
@@ -11009,6 +11301,20 @@ void vr_finish_blit() {
     std::lock_guard<std::mutex> lock(g_vrs.sc_mu);
     x4vr::xr::swapchain_release(g_vrs.sc);
     g_vrs.released.fetch_add(1, std::memory_order_relaxed);
+    // Task #57. Released only when the composite was actually asked to fill it
+    // -- request_ui_blit clears its handles as it records, so a non-zero blit
+    // count is the acknowledgement. Releasing an image the composite skipped
+    // would hand the runtime last frame's UI, and releasing one never acquired
+    // is an error.
+    if (g_vrs.ui_ready.load(std::memory_order_relaxed)) {
+        static uint64_t seen = 0;
+        const uint64_t now = g_sbs.ui_blits();
+        if (now != seen) {
+            seen = now;
+            x4vr::xr::swapchain_release(g_vrs.ui_sc);
+            g_vrs.ui_released.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
 }
 
 void vr_thread() {
@@ -11210,7 +11516,10 @@ void vr_thread() {
         // is what takes 112/113 ran.
         XrCompositionLayerProjectionView pv[2] = {};
         XrCompositionLayerProjection proj = {};
-        const XrCompositionLayerBaseHeader *layers[1] = {nullptr};
+        // Task #57 layer B, submitted OVER the scene.
+        XrCompositionLayerProjectionView pvu[2] = {};
+        XrCompositionLayerProjection proj_ui = {};
+        const XrCompositionLayerBaseHeader *layers[2] = {nullptr, nullptr};
         uint32_t layer_count = 0;
         if (have && should_render && g_vrs.sc_ready.load() &&
             g_vrs.released.load() > 0) {
@@ -11413,6 +11722,59 @@ void vr_thread() {
             proj.views = pv;
             layers[0] = (const XrCompositionLayerBaseHeader *)&proj;
             layer_count = 1;
+
+            // ---- task #57: the UI, on its own layer, at the HEAD's pose ----
+            //
+            // **This is the whole point of #57, and it is one line's worth of
+            // difference from layer A: `views[e].pose` instead of the declared
+            // render pose.** X4's HUD is drawn in screen space, so it belongs
+            // wherever the head is looking now; the scene belongs where it was
+            // rendered from. Declaring both with the same pose is exactly the
+            // state that makes the HUD slide across the world (#76), and
+            // declaring the scene with the head pose would glue the world to
+            // the face instead.
+            //
+            // The FOV is layer A's, unchanged. Both layers cover the same
+            // field; only the pose they are anchored to differs.
+            //
+            // BLEND_TEXTURE_SOURCE_ALPHA, and the alpha is PREMULTIPLIED --
+            // which is X4's own convention, not a choice of ours:
+            // visual_transition ends `rgb *= U_useralphascale` and copy_gamma
+            // consumes `ui.rgb + (1-ui.a)*hudless.rgb`, which is premultiplied
+            // "over". So XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT is
+            // deliberately NOT set; setting it would tell the compositor to
+            // multiply by alpha a second time and darken every antialiased
+            // edge in the HUD.
+            if (g_vrs.ui_ready.load(std::memory_order_relaxed) &&
+                g_vrs.ui_released.load(std::memory_order_relaxed) > 0) {
+                for (uint32_t e = 0; e < 2; e++) {
+                    pvu[e] = pv[e];
+                    pvu[e].pose = views[e].pose;
+                    pvu[e].subImage.swapchain = g_vrs.ui_sc.handle;
+                    pvu[e].subImage.imageRect = {
+                        {0, 0},
+                        {(int32_t)g_vrs.ui_sc.width,
+                         (int32_t)g_vrs.ui_sc.height}};
+                    pvu[e].subImage.imageArrayIndex = e;
+                }
+                proj_ui.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION;
+                proj_ui.space = g_vrs.session.space;
+                proj_ui.viewCount = 2;
+                proj_ui.views = pvu;
+                proj_ui.layerFlags =
+                    XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+                layers[1] = (const XrCompositionLayerBaseHeader *)&proj_ui;
+                layer_count = 2;
+                static bool said_ui = false;
+                if (!said_ui) {
+                    said_ui = true;
+                    X4VR_LOG("ui: SUBMITTING two layers — scene at the "
+                             "RENDERED pose, UI at the HEAD pose, alpha "
+                             "blended (premultiplied, X4's own convention). "
+                             "The HUD should now stay with the head instead of "
+                             "sliding across the world.");
+                }
+            }
         }
         // The lock covers xrEndFrame because that is where the runtime's
         // client compositor submits, and on a one-graphics-queue device that
@@ -12331,6 +12693,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(CreateImage);
     RESOLVE(DestroyImage);
     RESOLVE(CreateImageView);
+    RESOLVE(GetImageMemoryRequirements);
+    RESOLVE(BindImageMemory);
     RESOLVE(CreateDescriptorSetLayout);
     RESOLVE(AllocateDescriptorSets);
     RESOLVE(CreatePipelineLayout);

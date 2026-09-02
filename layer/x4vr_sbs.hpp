@@ -146,6 +146,13 @@ public:
     VkDeviceSize dump_layer_bytes_ = 0;
     // Set by request_vr_blit(), likewise one-shot.
     VkImage vr_dst_ = VK_NULL_HANDLE;
+    // Task #57 layer B. `ui_src_` is the layer's staging image, filled at the
+    // end of X4's UI pass; `ui_dst_` is the second XR swapchain's acquired
+    // image. Both are cleared after one composite, like vr_dst_ above, so a
+    // frame where the runtime had no image ready simply does not ask.
+    VkImage ui_src_ = VK_NULL_HANDLE, ui_dst_ = VK_NULL_HANDLE;
+    VkExtent2D ui_extent_{};
+    uint64_t ui_blits_ = 0, ui_refused_ = 0;
     VkExtent2D vr_extent_{};
     uint32_t vr_layers_ = 0;
     // Counted so the log can say "the blit ran N times" rather than the caller
@@ -206,6 +213,15 @@ public:
         vr_extent_ = extent;
         vr_layers_ = layers;
     }
+
+    void request_ui_blit(VkImage src, VkImage dst, VkExtent2D extent) {
+        std::lock_guard<std::mutex> lock(mu_);
+        ui_src_ = src;
+        ui_dst_ = dst;
+        ui_extent_ = extent;
+    }
+    uint64_t ui_blits() const { return ui_blits_; }
+    uint64_t ui_refused() const { return ui_refused_; }
 
     // What the eye image actually is, for the caller that has to create a
     // swapchain matching it before it can ask for a blit.
@@ -506,6 +522,68 @@ public:
                     vr_blits_++;
                 }
                 vr_dst_ = VK_NULL_HANDLE;
+            }
+            // ---- task #57 layer B: the UI, staging -> its own swapchain ----
+            //
+            // Same shape as the eye blit above and for the same reasons: the
+            // destination is entirely overwritten so its old layout does not
+            // matter, and it is left in COLOR_ATTACHMENT_OPTIMAL, which is
+            // what the OpenXR Vulkan binding wants at xrReleaseSwapchainImage.
+            //
+            // The SOURCE is ours and is already in TRANSFER_SRC -- ui_capture()
+            // left it there. It is not X4's UI image: copying that here would
+            // mean guessing the layout X4 left it in, which is the whole reason
+            // the staging image exists.
+            if (ui_src_ != VK_NULL_HANDLE && ui_dst_ != VK_NULL_HANDLE) {
+                if (ui_extent_.width != c.eye.width ||
+                    ui_extent_.height != c.eye.height) {
+                    // Refused loudly and once, like the eye blit's mismatch:
+                    // a copy with unequal extents is invalid, and scaling here
+                    // would put the UI at a size the declared FOV disagrees
+                    // with.
+                    if (!ui_refused_++)
+                        X4VR_LOG("ui: NOT blitting — the UI swapchain is %ux%u "
+                                 "but the eye image is %ux%u. #57 declares the "
+                                 "same field for both layers, so they must be "
+                                 "the same size.",
+                                 ui_extent_.width, ui_extent_.height,
+                                 c.eye.width, c.eye.height);
+                } else {
+                    VkImageMemoryBarrier ub{};
+                    ub.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                    ub.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    ub.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    ub.image = ui_dst_;
+                    ub.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0,
+                                           2};
+                    ub.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                    ub.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    ub.srcAccessMask = 0;
+                    ub.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    fns_.CmdPipelineBarrier(
+                        cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                        nullptr, 1, &ub);
+                    VkImageCopy uc{};
+                    uc.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 2};
+                    uc.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 2};
+                    uc.extent = {ui_extent_.width, ui_extent_.height, 1};
+                    fns_.CmdCopyImage(cb, ui_src_,
+                                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                      ui_dst_,
+                                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                                      &uc);
+                    ub.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    ub.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    ub.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    ub.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                    fns_.CmdPipelineBarrier(
+                        cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
+                        nullptr, 0, nullptr, 1, &ub);
+                    ui_blits_++;
+                }
+                ui_src_ = ui_dst_ = VK_NULL_HANDLE;
             }
             b[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             b[0].newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;

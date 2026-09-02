@@ -857,6 +857,74 @@ else
     fails=$((fails + 1))
 fi
 
+# --- task #57 layer B: the capture --------------------------------------
+#
+# What this CAN test: the staging image is created, the copy is recorded, and
+# the whole thing adds no validation error. That last one is the case — the
+# barriers act on an image X4 owns, transitioning it out of the layout its own
+# render pass declared and back, and getting that wrong is undefined behaviour
+# rather than an error.
+#
+# What it CANNOT test: the submission. There is no OpenXR session here, so the
+# second swapchain and proj_ui never run. Said out loud so a green suite is not
+# read as "layer B works".
+#
+# The count is compared against a CONTROL RUN, not against zero: the plain
+# config already emits two VUIDs (task #79, pre-existing and unrelated), and a
+# rule demanding zero would have failed for someone else's reason.
+# Sets LB_ERRS and LB_LOG. NOT a command substitution: that runs the body in a
+# subshell, so the log path it picked would be lost and the caller would read an
+# unset variable — which is exactly how this failed the first time.
+LB_ERRS=0
+LB_LOG=""
+lb_run() {
+    LB_LOG="$(mktemp)"
+    LB_ERRS=$(env X4VR_LOG="$LB_LOG" X4VR_MV=1 X4VR_STEREO=1 X4VR_CANVAS_M=8 \
+        X4VR_MV_INVENTORY=1 "$@" \
+        "VK_ADD_LAYER_PATH=$BUILD/layer" \
+        "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+        VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation \
+        timeout 120 "$BIN" "$VS" "$FS" "$SF" 2>&1 |
+        grep -c 'Validation Error' || true)
+}
+lb_run
+lb_off=$LB_ERRS
+lb_off_stage=$(grep -c 'ui: staging image\|ui: CAPTURED' "$LB_LOG" || true)
+rm -f "$LB_LOG"
+lb_run X4VR_UI_LAYER=1
+lb_on=$LB_ERRS
+lb_on_stage=$(grep -c 'ui: staging image ' "$LB_LOG" || true)
+lb_on_cap=$(grep -c 'ui: CAPTURED the UI target into staging 1 time' "$LB_LOG" || true)
+rm -f "$LB_LOG"
+
+if [[ "$lb_on" == "$lb_off" ]]; then
+    printf 'ok   %-38s %s VUID(s) with, %s without — adds none\n' \
+        "layer B: validation-clean" "$lb_on" "$lb_off"
+else
+    printf 'FAIL %-38s %s VUID(s) with X4VR_UI_LAYER=1, %s without — the capture adds %s\n' \
+        "layer B: validation-clean" "$lb_on" "$lb_off" \
+        "$((lb_on - lb_off))"
+    fails=$((fails + 1))
+fi
+if [[ "$lb_on_stage" == 1 && "$lb_on_cap" == 1 ]]; then
+    printf 'ok   %-38s staging created, one capture recorded\n' \
+        "layer B: the capture runs"
+else
+    printf 'FAIL %-38s want one staging line and one capture, got %s and %s\n' \
+        "layer B: the capture runs" "$lb_on_stage" "$lb_on_cap"
+    fails=$((fails + 1))
+fi
+# Off means OFF: no image allocated, no copy recorded. A knob whose "off" still
+# does the work cannot serve as the control arm of anything.
+if [[ "$lb_off_stage" == 0 ]]; then
+    printf 'ok   %-38s no image, no copy, with the knob off\n' \
+        "layer B: off changes nothing"
+else
+    printf 'FAIL %-38s %s staging/capture line(s) with the knob OFF\n' \
+        "layer B: off changes nothing" "$lb_off_stage"
+    fails=$((fails + 1))
+fi
+
 hud_probe "hudless: reports even at zero"  1  0 0
 # The report must exist with the knob UNSET too, or "the switch was not forced"
 # and "the run predates the knob" read the same in a log.
