@@ -23,6 +23,14 @@ add_executable(x4vr_test_share share.cpp)
 find_package(Threads REQUIRED)
 target_link_libraries(x4vr_test_share PRIVATE Threads::Threads)
 
+# The dump format itself, round-tripped through an independent decoder. Needs
+# no Vulkan and no GPU: the encoder is pure, which is why it was worth moving
+# out of the layer's translation unit where nothing could reach it. Self-
+# checking like view_math and share -- no runner script.
+find_package(ZLIB REQUIRED)
+add_executable(x4vr_test_png_writer png_writer.cpp)
+target_link_libraries(x4vr_test_png_writer PRIVATE ZLIB::ZLIB)
+
 # Where the cursor lands and what its bytes mean (task #17). Needs no Vulkan
 # library -- it only uses the header's enums and two pure functions -- and no
 # GPU, which is the whole point of pulling them out of the overlay class.
