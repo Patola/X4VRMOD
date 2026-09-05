@@ -10076,28 +10076,83 @@ perf number. Prediction 4 includes that band precisely so a surprise is visible.
 Everything below supersedes earlier "read this first" banners. **Where this
 banner and an older section disagree, this banner wins.**
 
-## THE NEXT TASK: build Patola's TINT. Do not spend a take first.
+## THE NEXT TASK: take 257, `X4VR_UI_DUMP`. The instrument is BUILT and tested.
 
-His suggestion, and it is the right instrument: *"if what you need is to clearly
-separate the HUD from the cockpit and background/skybox, tint them differently.
-You already did that once."* (`B_csmdebugcolor`, for the shadow cascades.)
+Patola asked for a tint: *"if what you need is to clearly separate the HUD from
+the cockpit and background/skybox, tint them differently. You already did that
+once."* Right question. **The answer turned out not to need a tint at all**, and
+finding that out was the work.
 
-**Why it comes before any run.** The whole day failed on one thing: the `hud`
-cyan channel is CONTAMINATED in cockpit frames — rendering the mask shows it
-covering stars and cockpit console panels, both world geometry. There is no
-colour threshold that fixes it, measured not assumed: G/R medians 2.35
-(known-good UI) vs 3.08 (contaminated) overlap, and brightness fails because the
-menu UI is dim while the cockpit HUD is a bright stroke.
+**X4 already renders its whole UI into an image of its own** — take 240 found it
+and take 256's log names it again: `ui: TARGET img #65 — 1408x1408 fmt=50,
+DOUBLED to 2 (per-eye)`. Dumping *that* beside the eye image gives a mask by
+construction, with no shader patched and nothing about the rendered frame
+changed. `X4VR_UI_DUMP=N` does it, on the same composite as the present dump so
+the pair is one frame by construction rather than by timing.
 
-Marking the UI at the source removes the classification problem instead of
-fighting it. The machinery exists — the layer already does fragment-side SPIR-V
-patching (`patch_fragment_force_block_uint`, `g_frag_patch_ok/refused`) and the
-canvas variant already singles out exactly the UI passes. A fragment transform
-on the colour store in the canvas variant, behind a knob, default off.
+**Why the tint was the worse of the two, concretely.** A fragment tint has to be
+applied at pipeline creation, keyed on the canvas predicate — and that predicate
+fires on X4's PRESENT passes too: take 203's inventory logged rp #0/#1/#4/#7/#10
+as `+PRESENT-CAND +CANVAS`. Tinting those tints the whole composited frame, so
+the instrument would have destroyed exactly what it was built to measure. The
+discriminator that *does* separate the UI pass from the present pass is image
+identity, and that is known only at runtime, after the pipelines exist. The
+dump is on the right side of that: it runs where the answer is already known.
 
-It lands on the CHEAP path — the present dumps that already work at 3.05 MB and
-+1.2 ms/frame, no probe, no queue drain, no dump cap — and it answers BOTH open
-questions with one instrument.
+**Cost, measured rather than feared.** Take 256 ran a 19.52 ms median with a
+144.87 ms mean and p90 1013.91 at `MV_DUMP_PRESENT=10` — one frame in ten
+costing about a second. The PNG encode is **41 ms per layer** (measured offline,
+1408x1408, zlib level 1), so that second is `QueueWaitIdle`, not writing. Adding
+the UI target rides on a drain already paid: **about +8%**, two more files per
+dump. This also corrects a guess I nearly acted on — moving the encode to a
+background thread would have bought 8% of the stall, not most of it.
+
+### Committed BEFORE the run
+
+1. **C is (0,0).** The composite maps the UI 1:1, so the mask from img #65 lands
+   on the UI in the composed frame. If C is not zero, the composite moves the UI
+   relative to its own target — which would be a finding in its own right, and
+   the tool refuses to report B rather than reporting a number from a
+   misaligned mask.
+2. **On menu and loadscreen frames A is about -23 px**, agreeing with what the
+   composed frame already measures there (-23.0 against 22.5 predicted, 1.02x).
+   That is the check that the new channel reproduces the one result the old one
+   got right.
+3. **In the COCKPIT, A is unknown.** This is the new information. The previous
+   cockpit numbers came from the contaminated cyan channel and are void; the
+   "3.33x too much separation" was contamination and is retracted.
+4. **The cyan channel will disagree with A on cockpit frames.** The tool prints
+   both on the same frames, so the contamination becomes a measured difference.
+   If they agree, the contamination was harmless and I was wrong to void those
+   readings.
+
+### What was verified before asking for the run
+
+* `tests/png_writer.cpp` — 12 cases, all passing. The dump format now has a
+  round trip through an **independently written** decoder (chunk stream, CRCs,
+  all five PNG row filters from the spec, not from what the encoder emits). The
+  encoder moved to `common/x4vr_png.hpp` for this: it used to live inside the
+  layer's translation unit where `tests/run-dump-format.sh` could not reach it,
+  and that script exists *because* take 177 failed on a format change.
+* `tests/run-dump-format.sh` — still passing on a real GPU, PNG and PPM
+  pixel-identical.
+* `tests/run-multiview-render.sh` — 209 ok, 0 FAIL, including every validation
+  case. The layer is clean under the validation layers.
+* `tools/ui_disparity.py --selftest` — the analyser recovers an imposed +22 px
+  UI shift **while the synthetic world moves -35 px the other way**, through a
+  composite where two thirds of the UI is only 43% opaque. It reads exactly
+  **0** in the null where the UI is still and the world still slides 35 px, and
+  it **skips** rather than inventing a number when the UI target is empty.
+* The analysers glob `-present-n*` explicitly, so the new `-ui-n*` files cannot
+  be swept into an eye-image measurement.
+
+**One thing the selftest showed that I did not expect**, recorded because it
+cuts against me: on the synthetic, the old cyan channel gets the right answer
+when the UI is opaque, and only fails (returning the world's -35) once the UI is
+made semi-transparent. So the contamination is not automatically fatal — it
+depends on how much of the mask the UI actually dominates. That is an argument
+for measuring the two side by side, which the tool now does, and against my
+having asserted the cyan channel was useless everywhere.
 
 ## What is SOLID (measured, controlled, believable)
 
@@ -10150,6 +10205,19 @@ look at), or the frames he reacts to are not among the 32 measured.
 * **`X4VR_MV_DUMP_IMG` needs `X4VR_MV_PROBE` or `X4VR_MV_DUMP_AFTER_RP`** —
   `probe_hooks_wanted()`. Take 256 set neither; adding the knob alone dumps
   NOTHING. The cap is now `X4VR_MV_DUMP_IMG_MAX` (default still 6).
+  **`X4VR_UI_DUMP` supersedes it for the UI**: same image, no probe, no queue
+  drain, no cap, and paired with the eye image from one composite.
+* **`X4VR_UI_DUMP` is a CADENCE, not a flag**, like `X4VR_MV_DUMP_PRESENT`. It
+  also forces an eye dump on the presents where it fires, because a mask
+  without the frame it masks is not worth writing.
+* **`X4VR_UI_DUMP` does not turn on layer B.** The staging capture is shared
+  (`ui_capture_wanted()`), the quad submission is not — so the measurement can
+  be taken without the behaviour change that would remove the UI from the
+  presented eye image and leave nothing to mask.
+* **UI dumps are RGBA, always PNG.** They ignore `X4VR_DUMP_PPM` on purpose:
+  PPM has no alpha, and alpha is X4's own coverage — possibly the mask itself.
+  Which of alpha and colour IS the mask is still open; `ui_disparity.py` takes
+  `--mask` and prints the coverage of both plus how far they agree.
 * **Never share a `--frames-dir` between concurrent jobs** — extraction clears
   the directory and silently kills the other run.
 * **A watcher must not be able to observe itself** — `pgrep -f "<pattern>"`
