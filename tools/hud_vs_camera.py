@@ -51,6 +51,7 @@ import sys
 
 import numpy as np
 from PIL import Image
+from scipy import ndimage
 
 
 def decode(path):
@@ -86,7 +87,77 @@ def channels(lin):
     mx = lin.max(2)
     hud = np.where((G >= 0.9 * B) & (G > 1.3 * R) & (mx > 0.1), mx, 0.0)
     luma = 0.2126 * R + 0.7152 * G + 0.0722 * B
-    return {'hud': hud, 'grey': np.where(hud > 0, 0.0, luma)}
+    grey = np.where(hud > 0, 0.0, luma)
+    cock = cockpit_mask(grey, hud)
+    # Two disjoint halves of the SAME cockpit, for the matched control. Both
+    # are the same rigid object, so their motion ratio must be 1.00 -- measured
+    # on the same clip, with the same motion and the same difficulty as the
+    # real run. An unmatched control licenses nothing: `hud_vs_cockpit` read
+    # 0.00 on a nearly-static clip and 2.41 deg where the truth was zero on a
+    # moving one.
+    w = cock.shape[1] // 2
+    ca, cb = np.zeros_like(cock), np.zeros_like(cock)
+    ca[:, :w] = cock[:, :w]
+    cb[:, w:] = cock[:, w:]
+    return {'hud': hud, 'grey': grey, 'cockpit': cock,
+            'cockpit_a': ca, 'cockpit_b': cb}
+
+
+def cockpit_mask(grey, hud=None, scale=31, keep=75.0, min_area=0):
+    """`grey` with everything but the COCKPIT suppressed.
+
+    **Why `grey` is the wrong reference for #57.** It is the whole scene: a
+    cockpit at arm's length mixed with a starfield at infinity. Those two move
+    IDENTICALLY under head rotation and DIFFERENTLY under head translation, so
+    a ratio against `grey` averages over the reference frame itself. Patola's
+    report is always about the cockpit — "not becoming fixed in relation to the
+    cockpit" — so the reference has to be the cockpit alone.
+
+    **Local variance at a large scale is the separator, and brightness is not.**
+    X4's canopy struts are DARK against a lit nebula in places and light grey
+    against black space in others, so no luminance threshold catches both. What
+    the cockpit always has is extended structure. In a 31 px window:
+
+        nebula     smooth gradient             -> tiny variance
+        strut edge half dark, half light       -> large variance
+
+    **The variance test alone is NOT enough, and looking at the mask is how
+    that was found rather than reasoning about it.** The first version argued
+    that a star is "one bright pixel in 961, so tiny variance" and kept the top
+    quartile. Rendered over the frame, it outlined the canopy correctly *and
+    marked every star with its own little box* — a point source against black
+    is exactly a high-variance neighbourhood, and the box filter smears it to
+    the filter's footprint. That is the starfield at infinity walking straight
+    back into the reference the mask exists to purify.
+
+    **Size is the separator that works.** The canopy is a few huge connected
+    regions; a star's box is about one filter footprint. Dropping components
+    below `min_area` keeps the struts and deletes the sky.
+
+    **And the HUD must be cut out with a MARGIN, which the render also showed.**
+    `grey` sets HUD pixels to zero, so every HUD glyph leaves a hard-edged hole,
+    and a hole is high variance. With only the exact HUD pixels excluded, the
+    mask grew red blobs precisely on the target bracket and the speed gauge —
+    the HUD leaking into the channel that is supposed to be its independent
+    reference, which would drag the ratio toward 1.00 and manufacture the
+    verdict "world-anchored". Excluding a neighbourhood removes the holes' edges
+    as well as the holes.
+    """
+    m1 = ndimage.uniform_filter(grey, scale)
+    m2 = ndimage.uniform_filter(grey * grey, scale)
+    var = np.maximum(m2 - m1 * m1, 0.0)
+    keep_px = var >= np.percentile(var, keep)
+    if hud is not None:
+        near_hud = ndimage.uniform_filter(
+            (hud > 0).astype(np.float32), 2 * scale + 1) > 0
+        keep_px &= ~near_hud
+    lab, n = ndimage.label(keep_px)
+    if n:
+        area = ndimage.sum(keep_px, lab, np.arange(1, n + 1))
+        big = np.zeros(n + 1, dtype=bool)
+        big[1:] = area >= (min_area if min_area else 4 * scale * scale)
+        keep_px = big[lab]
+    return np.where(keep_px, grey, 0.0)
 
 
 def shift(a, b, lo, hi, band=None):
@@ -252,6 +323,18 @@ def main():
                     help='where to decode a video (default /tmp/x4vr-clip)')
     ap.add_argument('--fps', type=float,
                     help='resample the video to this rate before analysing')
+    ap.add_argument('--reference', default='grey',
+                    choices=('grey', 'cockpit'),
+                    help="denominator channel. 'grey' is the whole scene "
+                         "(cockpit AND a starfield at infinity, which move "
+                         "alike under rotation and differently under "
+                         "translation). 'cockpit' is the reference #57 is "
+                         "actually posed about.")
+    ap.add_argument('--control', action='store_true',
+                    help='MATCHED negative control: ratio of one half of the '
+                         'cockpit against the other. Same rigid object, so it '
+                         'MUST read 1.00 on the same clip with the same '
+                         'motion. Any departure is this clip\'s floor.')
     ap.add_argument('--selftest', action='store_true',
                     help='audit the tool on synthetic shifts of `pattern`'
                          ' (a single frame) and exit')
@@ -295,8 +378,11 @@ def main():
     # still usable, so one load screen no longer destroys the run.
     prev = None
     prev_name = None
-    print(f"{'pair':<40} {'dx_hud':>8} {'dx_grey':>8} {'ratio':>7} "
-          f"{'m_hud':>6} {'m_grey':>6}  verdict")
+    # NUM/DEN are channel names, so the control reuses this loop untouched
+    # rather than getting a parallel copy that could drift from it.
+    NUM, DEN = ('cockpit_a', 'cockpit_b') if a.control else ('hud', a.reference)
+    print(f"{'pair':<40} {'dx_'+NUM:>10} {'dx_'+DEN:>10} {'ratio':>7} "
+          f"{'m_num':>6} {'m_den':>6}  verdict")
     ratios = []
     by_axis = {}
     for i, f in enumerate(files):
@@ -311,7 +397,7 @@ def main():
             ch = {k: v[:, :ww // 2] for k, v in ch.items()}
         name = f.split('/')[-1].replace('-layer0.png', '').replace(
             'x4vr-', '')
-        gs, hs = float(ch['grey'].std()), float(ch['hud'].std())
+        gs, hs = float(ch[DEN].std()), float(ch[NUM].std())
         if gs < 0.01 or hs < 1e-4:
             prev, prev_name = None, None    # scene break: do not bridge it
             continue
@@ -319,10 +405,10 @@ def main():
             prev, prev_name = ch, name
             continue
         pair = f"{prev_name} -> {name}"
-        sh = shift(prev['hud'], ch['hud'], -a.range, a.range)
-        sg = shift(prev['grey'], ch['grey'], -a.range, a.range)
-        vh = shift_v(prev['hud'], ch['hud'], -a.range, a.range)
-        vg = shift_v(prev['grey'], ch['grey'], -a.range, a.range)
+        sh = shift(prev[NUM], ch[NUM], -a.range, a.range)
+        sg = shift(prev[DEN], ch[DEN], -a.range, a.range)
+        vh = shift_v(prev[NUM], ch[NUM], -a.range, a.range)
+        vg = shift_v(prev[DEN], ch[DEN], -a.range, a.range)
         prev, prev_name = ch, name
         f = pair
         # Each axis is scored on its OWN motion. A yaw-only pass has no
