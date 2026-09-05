@@ -108,8 +108,16 @@ def channels(lin):
     chk = ((yy // 2 + xx // 2) & 1).astype(bool)
     ca = np.where(chk, cock, 0.0)
     cb = np.where(chk, 0.0, cock)
+    # The HUD needs its own control, and the cockpit's does not stand in for
+    # it: `cockpit` is dense and `hud` is sparse (median 264 px in a cockpit
+    # frame), so a control proving the cockpit channel correlates reliably says
+    # nothing about whether the sparse one does. Same checkerboard, same logic,
+    # applied to the HUD: two interleaved samples of ONE overlay must move
+    # together, so their ratio is 1.00 by construction.
+    ha = np.where(chk, hud, 0.0)
+    hb = np.where(chk, 0.0, hud)
     return {'hud': hud, 'grey': grey, 'cockpit': cock,
-            'cockpit_a': ca, 'cockpit_b': cb}
+            'cockpit_a': ca, 'cockpit_b': cb, 'hud_a': ha, 'hud_b': hb}
 
 
 def cockpit_mask(grey, hud=None, scale=31, keep=75.0, min_area=0):
@@ -339,6 +347,11 @@ def main():
                          "alike under rotation and differently under "
                          "translation). 'cockpit' is the reference #57 is "
                          "actually posed about.")
+    ap.add_argument('--control-channel', default='cockpit',
+                    choices=('cockpit', 'hud'),
+                    help='which channel --control audits (default cockpit). '
+                         "'hud' audits the SPARSE channel, which the cockpit "
+                         'control does not bound.')
     ap.add_argument('--control', action='store_true',
                     help='MATCHED negative control: ratio of one half of the '
                          'cockpit against the other. Same rigid object, so it '
@@ -389,7 +402,8 @@ def main():
     prev_name = None
     # NUM/DEN are channel names, so the control reuses this loop untouched
     # rather than getting a parallel copy that could drift from it.
-    NUM, DEN = ('cockpit_a', 'cockpit_b') if a.control else ('hud', a.reference)
+    NUM, DEN = ((a.control_channel + '_a', a.control_channel + '_b')
+                if a.control else ('hud', a.reference))
     print(f"{'pair':<40} {'dx_'+NUM:>10} {'dx_'+DEN:>10} {'ratio':>7} "
           f"{'m_num':>6} {'m_den':>6}  verdict")
     ratios = []

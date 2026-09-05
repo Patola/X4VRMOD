@@ -14161,7 +14161,16 @@ of every one of these runs says
 
     canvas: 1.400 m -> s=0.01601 NDC (L=+s R=-s), 11.3 px on a 1408-wide eye
 
-so **the UI's horizontal disparity between the two layers must be 11.3 px**, flat
+**and 11.3 px is the PER-EYE shift, not the disparity.** `L=+s, R=-s`, so the
+separation between the two layers is **22.5 px**, and writing 11.3 into a
+prediction would have made a correct result look like a factor-of-two defect.
+Checked independently against the physics rather than by re-reading the same
+line: at the image centre the angular scale is `704*sx` = 8.60 px/deg (NOT the
+12.8 px/deg the full field averages to — `x_ndc = sx*tan(θ)` compresses the
+centre), and 1.4 m at 64 mm subtends 2.619 deg, giving 2.619 * 8.60 = **22.5
+px**. The two derivations agree.
+
+So the UI's horizontal disparity between the layers must be **22.5 px**, flat
 across the whole element, with **zero** vertical disparity. Anything else is the
 defect, quantified:
 
@@ -14181,3 +14190,81 @@ to be isolated by the cyan channel first — the same `hud` mask
 
 **This is now a task in its own right, not a footnote to #57.** It has a
 prediction (11.3 px, flat, no vertical), the data exists, and it costs no run.
+
+## Take 256 measured: the canvas is CORRECT on menus, and the cockpit channel is contaminated
+
+### The one solid result of the day
+
+On the 32 dense menu/loadscreen frames — 160k UI pixels, correlation peak 0.98,
+the two eye layers of the SAME instant differing by a pure translation, which is
+the one configuration where NCC is unambiguous:
+
+    UI disparity   dx median -23.0 px   quartiles -23.0 .. -23.0   dy +0.0
+    predicted      dx  -22.5 px                                    dy  0.0
+    => 1.02x, and the cockpit in the same frames also reads -23.0 px
+
+**Flat, exact, no vertical component, and the cockpit agrees.** Both sit at
+1.40 m, which is what the canvas is for. `X4VR_CANVAS_M=1.4` is right, and
+`sbs_depth`'s independent 1.000 ratio agrees with it.
+
+**This does not confirm Patola's report on those screens**, and that is stated
+plainly rather than smoothed over: he named menu text and savegame loadscreens
+specifically, at takes 253, 255 and 256, and those frames measure correct to 2%.
+Either the defect is something a disparity number does not capture — a plane at
+1.4 m spanning 110 deg puts its corners at 2.44 m, geometrically right but
+perhaps not right to look at — or the frames he reacts to are not among the 32.
+Unresolved, and his report stands as data.
+
+### RETRACTED within the hour: the "cockpit HUD is 3.33x too separated"
+
+The cockpit-phase frames read -75 px against 22.5 predicted, which looked like a
+large, quantified defect. **It is mask contamination.** Rendering the `hud` mask
+over frame n94 — the same look-at-it step that caught the star boxes and the
+HUD-hole leak — shows the red covering scattered STARS across the upper field
+and COCKPIT CONSOLE elements at the bottom, both of which are world geometry.
+Console parts sit close to the eye and therefore carry large disparity by
+construction, which is the whole of the 3.33x.
+
+The channel's own docstring predicted this in writing: *"A colour test alone
+still catches blue-white stars, which are WORLD content and would bias the
+answer toward world-anchored — the very verdict being tested."* It was right,
+and the warning was ignored for a whole day of measurements.
+
+### Which also unsettles the 0.45
+
+The rate result — HUD at **0.45x** the cockpit in yaw, **0.30x** in pitch,
+against a cockpit-channel control of exactly 1.00/1.00 — was measured on cockpit
+frames with **that same contaminated channel**. Both controls (cockpit
+checkerboard and HUD checkerboard) read 1.00, but a checkerboard control proves
+only that **the channel correlates with itself**. It says nothing about whether
+the channel IS the HUD. A clean audit of the wrong quantity, for the fourth time
+in this file.
+
+Direction of the bias is worth noting: the contaminants are console (moves with
+the cockpit, ratio 1) and stars (move with the world, ratio 1), so both drag the
+number TOWARD 1.00. A true HUD ratio would then be **below** 0.45, not above.
+Suggestive, not established.
+
+### There is no colour rule that separates them, measured not assumed
+
+    known-good UI (menu n51, 160k px)   G/R median 2.35   G median 0.144
+    contaminated (cockpit n94, 2.4k px) G/R median 3.08   G median 0.578
+
+The G/R distributions overlap. Brightness separates these two frames, but it
+cannot be used: the menu UI is dim because the menu is dim, while the cockpit
+HUD is a bright cyan stroke. There is no threshold that survives both contexts.
+
+### The clean path: dump the UI target ALONE
+
+`img #65` is the UI render target, and `X4VR_MV_DUMP_IMG=65` writes it directly
+— **no scene, no stars, no console, nothing to separate.** It is capped at
+`kMaxDumps = 6` per image, which is far too few for a rate measurement.
+
+**But disparity does not need pairs.** It is measured WITHIN one dump, layer0
+against layer1, so six dumps are six independent measurements of the pure UI's
+per-eye separation in the cockpit — exactly the question the contaminated
+channel could not answer. That is the next measurement, and it is cheap.
+
+The rate question (#57's slip) still needs many pairs of a clean UI channel, and
+the 6-dump cap blocks it. Raising that cap is a small, contained layer change,
+and it should be made deliberately rather than folded into a take.
