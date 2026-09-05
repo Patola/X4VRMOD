@@ -2092,15 +2092,28 @@ def main(path):
     # If those two track each other, both layers see the same head displacement
     # and the slip is elsewhere. If `d_quad - zm` moves while `d_scene` stays
     # flat, they do not, and that gap is the slip.
-    geom = re.findall(
-        r"geom: head=\S+ neutral=\S+ declared=\S+ quad=\S+ zm=([\d.]+) "
-        r"t_head=([\d.]+) d_scene=([\d.]+) d_quad=([\d.]+) hv=\d(?: qv=(\d))?", text)
+    #
+    # **Pre-declaration samples must be dropped, and take 253 is why.** The
+    # first frames are logged before the scene's viewpoint has ever been
+    # declared, so `declared=0,0,0` and `d_scene` degenerates into the head's
+    # height above the origin -- about 1.13 m, twenty times the real range.
+    # Take 253 had 81 such samples out of 14523: 0.56% of the data, and they
+    # dragged r(t_head, d_scene) from +0.919 down to +0.259, which reads as
+    # "neither tracks the head" when in fact they track it closely. A handful
+    # of high-leverage points at the wrong end of the range is all a
+    # correlation needs to invert its verdict.
+    geom = [m.groupdict() for m in re.finditer(
+        r"geom: head=\S+ neutral=\S+ declared=(?P<decl>\S+) quad=\S+ "
+        r"zm=(?P<zm>[\d.]+) t_head=(?P<th>[\d.]+) d_scene=(?P<ds>[\d.]+) "
+        r"d_quad=(?P<dq>[\d.]+) hv=\d(?: qv=(?P<qv>\d))?", text)]
+    predecl = sum(1 for g in geom if g["decl"] == "0.0000,0.0000,0.0000")
+    geom = [g for g in geom if g["decl"] != "0.0000,0.0000,0.0000"]
     if geom:
         import statistics
-        zmv = [float(g[0]) for g in geom]
-        th = [float(g[1]) for g in geom]
-        ds = [float(g[2]) for g in geom]
-        dq = [float(g[3]) for g in geom]
+        zmv = [float(g["zm"]) for g in geom]
+        th = [float(g["th"]) for g in geom]
+        ds = [float(g["ds"]) for g in geom]
+        dq = [float(g["dq"]) for g in geom]
         # qv is ABSENT on the pre-253 line format and "0" when the UI layer
         # is off. Those are different statements and the first draft printed
         # "quad never submitted" for take 252, which had submitted it 12940
@@ -2109,8 +2122,8 @@ def main(path):
         # `re.findall` yields '' for a non-participating optional group,
         # NOT None — so an `is not None` test is always true and the
         # old-format check silently passed. Compare against ''.
-        have_qv = any(g[4] != "" for g in geom)
-        qv = sum(1 for g in geom if g[4] == "1")
+        have_qv = any(g["qv"] is not None for g in geom)
+        qv = sum(1 for g in geom if g["qv"] == "1")
         hv = len(geom)
         dqe = [q - z for q, z in zip(dq, zmv)]
         def stat(v):
@@ -2118,7 +2131,9 @@ def main(path):
             return (statistics.median(s), s[int(0.9 * (len(s) - 1))], s[-1])
         print(f"geom    {len(geom)} sample(s), head located in {hv}, "
               + (f"quad submitted in {qv}" if have_qv
-                 else "quad state not recorded (log predates qv=)"))
+                 else "quad state not recorded (log predates qv=)")
+              + (f"; {predecl} pre-declaration sample(s) dropped" if predecl
+                 else ""))
         for nm, v in (("t_head  head from neutral", th),
                       ("d_scene head from declared", ds),
                       ("d_quad-zm quad vs nominal", dqe)):
