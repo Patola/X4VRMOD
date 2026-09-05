@@ -13817,3 +13817,87 @@ renumber it rather than keep fixing the UI.
 
 **Cost:** one take, about five minutes of Patola's time, and it eliminates
 whichever way it lands.
+
+## RETRACTION — `hud_vs_cockpit` fails a MATCHED control, and today's #57 numbers go with it
+
+The replacement instrument was validated on the vanilla clip, which reads 0.00.
+**That control was unmatched**: the vanilla clip's median per-frame motion is
+**0.0 px** — it is nearly static. It showed the tool invents nothing when nothing
+moves. It never showed the tool TRACKS under motion, which is the failure that
+retired `hud_drift` one section earlier.
+
+The matched control is two COCKPIT patches on the same clip. They are bolted to
+the same rigid cockpit, so the true answer is **exactly zero**, with the same
+head motion, the same 64x64 templates and the same tracking difficulty:
+
+    take 254 clip          x MAD      y MAD    truth
+    HUD vs cockpit         2.93 deg   0.63 deg  unknown
+    cockpit vs cockpit     2.41 deg   5.02 deg  ZERO
+
+**The floor is 2.4-5.0 deg and every number reported today sits at or below it.**
+In y the "signal" (0.63) is EIGHT TIMES SMALLER than the floor (5.02). There is
+no measurement here at all.
+
+### What this retracts
+
+Everything derived from `hud_vs_cockpit`, without exception:
+
+* **"P253.4 refuted, the path model is dead."** WITHDRAWN. 2.93 against a 2.41
+  floor establishes nothing about the canvas.
+* **"The canvas is 3.2x worse normalised (0.97 vs 3.06)."** WITHDRAWN — and it
+  was already doubtful on its own terms: across takes 252/253/254 the x MAD
+  reads 2.20 / 2.93 / 2.93 while `t_head` runs 0.0553 / 0.0234 / 0.0913. A
+  quantity flat across a 3.9x range of its supposed driver is not proportional
+  to it, so **dividing by `atan(t_head/zm)` was never licensed**. A floor is
+  exactly what "flat regardless of the input" looks like.
+* **"Arm A's 2.20 deg is predicted, not fitted"** (against `atan(0.0553/1.4)` =
+  2.26). WITHDRAWN. It was a noise floor landing near a number I had computed in
+  advance — the most seductive shape a wrong result can take, because I wrote the
+  prediction down first and it *matched*.
+* **"P254.2 fired, per-eye transforms are exonerated."** NOT ESTABLISHED. The
+  shear was genuinely off — both gates passed — but the measurement that was to
+  judge it cannot resolve the difference.
+
+### What still stands
+
+* **Log-side facts.** Arm B ran (canvas swapped into 8 stages, quad submitted in
+  0 of 14523 frames, and the HUD appeared on the flatscreen SBS). Take 254 ran
+  with the shear off (no `stereo:` line, `canvas: REFUSED` present).
+* **Patola's reports**, which never depended on my tools: the HUD moves wrongly
+  in the quad arm, in the canvas arm, and with the shear off. The eliminations
+  that rest on his perception stand; the ones that rest on my two trackers do
+  not.
+* **`hud_vs_camera`**, which has passed every control it has been given —
+  selftest on a real take-253 frame, a built-in per-pair `grey` control, and
+  1.00 on vanilla. Its readings: yaw **1.00** vanilla, **0.93** arm A, **0.89**
+  arm B, pitch **1.00** everywhere. Small samples (14 and 17 pairs), so treat
+  the 0.93/0.89 as suggestive, not settled.
+* **`sbs_depth`'s 1.40 m.** Its match is far easier — same frame, same instant,
+  a small horizontal disparity searched in a band — and many frames agreed
+  exactly (-24/-24, -26/-26, -34/-34). It still owes a control before it is
+  quoted as settled.
+
+### The real lesson, which is one level up from the last one
+
+Two instruments have now died on this task, and they died the same death:
+**NCC template matching on a self-similar, moving scene, losing 50-75% of its
+frames.** The class is wrong, not the parameters. `hud_drift` accumulated its
+reference; `hud_vs_cockpit` did not accumulate but still had to track a single
+small patch through motion, and could not.
+
+`hud_vs_camera` is the survivor, and the reason is structural: it correlates
+**whole regions** between **consecutive** frames. Many pixels, small
+displacements, nothing carried forward. Its one known flaw is the reference —
+`grey` mixes the cockpit with a starfield at infinity.
+
+**So the instrument #57 needs is `hud_vs_camera` with a COCKPIT mask in place of
+`grey`** — region-wise, differential, and answering the question about the
+reference frame Patola actually uses. It gets a matched control before it is
+believed: correlate the cockpit mask against itself split in halves, which must
+read 1.00.
+
+**And the rule this session earns:** a negative control must match the
+DIFFICULTY of the real measurement, not merely have a known answer. A control
+run on easy data licenses nothing about hard data. The cheapest matched control
+is usually already inside the data — here, a second patch on the same rigid
+object.

@@ -74,7 +74,7 @@ def pick_hud(hud, min_px=80, pad=8):
     return hud[y0:y1, x0:x1].copy(), ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
 
 
-def pick_cockpit(grey, hud, size=64, avoid=48):
+def pick_cockpit(grey, hud, size=64, avoid=48, exclude=None):
     """The most distinctive cockpit patch: highest gradient energy, away from
     the HUD and away from the frame edge.
 
@@ -96,31 +96,58 @@ def pick_cockpit(grey, hud, size=64, avoid=48):
     h, w = grey.shape
     m = size
     e[:m, :] = 0; e[-m:, :] = 0; e[:, :m] = 0; e[:, -m:] = 0
+    if exclude:
+        # Keep a second patch well clear of the first, so the two are not
+        # overlapping views of one feature.
+        for (ex, ey) in exclude:
+            y0, y1 = max(0, int(ey) - 2 * size), min(h, int(ey) + 2 * size)
+            x0, x1 = max(0, int(ex) - 2 * size), min(w, int(ex) + 2 * size)
+            e[y0:y1, x0:x1] = 0.0
     iy, ix = np.unravel_index(np.argmax(e), e.shape)
     y0, y1 = iy - size // 2, iy + size // 2
     x0, x1 = ix - size // 2, ix + size // 2
     return grey[y0:y1, x0:x1].copy(), ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
 
 
-def track(fs, margin, radius, cock_size):
+def track(fs, margin, radius, cock_size, control=False):
+    """control=True is the MATCHED negative control, and it is not optional
+    diligence -- it is the only thing that says whether a reading is real.
+
+    It replaces the HUD patch with a SECOND COCKPIT patch. Two patches on the
+    same rigid cockpit cannot move relative to each other, so the true answer
+    is ZERO, measured on the same clip, with the same head motion, the same
+    template sizes and the same tracking difficulty as the real run.
+
+    The vanilla clip does NOT do this job. Its median per-frame motion is 0.0 px
+    -- it is nearly static, so it only ever showed that the tool invents nothing
+    when nothing moves. It never showed that the tool TRACKS under motion, which
+    is the failure mode that retired hud_drift.
+    """
     hud_t = cock_t = None
     hud_p = cock_p = None
     rows, lost_h, lost_c = [], 0, 0
     for f in fs:
         ch = channels(decode(f))
         hud, grey = ch['hud'], ch['grey']
+        first = hud if not control else grey
         if hud_t is None:
-            got = pick_hud(hud)
+            if control:
+                cock_t, cock_p = pick_cockpit(grey, hud, cock_size)
+                got = pick_cockpit(grey, hud, cock_size, exclude=[cock_p])
+            else:
+                got = pick_hud(hud)
             if not got:
                 continue
             hud_t, hud_p = got
-            cock_t, cock_p = pick_cockpit(grey, hud, cock_size)
-            print(f'  HUD template     {hud_t.shape[1]}x{hud_t.shape[0]} px '
+            if not control:
+                cock_t, cock_p = pick_cockpit(grey, hud, cock_size)
+            print(f'  {"cockpit-B" if control else "HUD      "} template '
+                  f'{hud_t.shape[1]}x{hud_t.shape[0]} px '
                   f'at ({hud_p[0]:.0f},{hud_p[1]:.0f})')
-            print(f'  cockpit template {cock_t.shape[1]}x{cock_t.shape[0]} px '
+            print(f'  cockpit   template {cock_t.shape[1]}x{cock_t.shape[0]} px '
                   f'at ({cock_p[0]:.0f},{cock_p[1]:.0f})')
             continue
-        rh = ncc_find(hud_t, hud, margin, near=hud_p, radius=radius)
+        rh = ncc_find(hud_t, first, margin, near=hud_p, radius=radius)
         rc = ncc_find(cock_t, grey, margin, near=cock_p, radius=radius)
         if rh is None:
             lost_h += 1
@@ -174,6 +201,12 @@ def main():
     ap.add_argument('--margin', type=float, default=0.08)
     ap.add_argument('--radius', type=float, default=140.0)
     ap.add_argument('--cockpit-size', type=int, default=64)
+    ap.add_argument('--control', action='store_true',
+                    help='MATCHED negative control: track two COCKPIT patches '
+                         'instead of HUD-vs-cockpit. They are rigidly attached, '
+                         'so the true answer is zero on the same clip with the '
+                         'same motion and the same tracking difficulty. Any '
+                         'reading here is the floor for that clip.')
     ap.add_argument('--selftest', action='store_true')
     a = ap.parse_args()
 
@@ -187,7 +220,10 @@ def main():
         print(f'need frames, got {len(fs)}', file=sys.stderr)
         return 2
     attempted = len(fs) - 1          # frame 1 supplies the templates
-    rows, lost_h, lost_c = track(fs, a.margin, a.radius, a.cockpit_size)
+    rows, lost_h, lost_c = track(fs, a.margin, a.radius, a.cockpit_size,
+                                 a.control)
+    if a.control:
+        print('  [MATCHED CONTROL: two cockpit patches, true answer is ZERO]')
     if len(rows) < 20:
         print(f'TARGET LOST -- HUD {lost_h}, cockpit {lost_c}; only '
               f'{len(rows)} usable pair(s). This clip cannot be measured.')
