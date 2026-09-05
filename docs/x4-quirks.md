@@ -13728,3 +13728,55 @@ HUD-vs-cockpit MAD falls to the floor, the shear is the cause; if it holds near
 3 deg, it is the servo and the missing translation. That is one take and it
 splits the last two candidates, in the style that has actually worked here —
 switch a candidate off and re-measure rather than build a probe to watch it.
+
+### Take 254 — the elimination that splits the last two candidates
+
+Two mechanisms survive. One is switchable, so the cheapest discriminator is to
+switch it off and re-measure — the method that has actually worked here, rather
+than building a probe to watch it.
+
+**Turn the per-eye world shear off.** `X4VR_STEREO` removed; everything else
+identical to 253 except the take name and the log path:
+
+    X4VR_TAKE=254-NOSHEAR X4VR_CANVAS_M=1.4 X4VR_BINDLESS_PATCH=1 X4VR_DECLARE_RENDERED_POS=1 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take254.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+**It removes two things, and that is admitted rather than hidden.** Without a
+right eye the canvas also refuses (`canvas: REFUSED — a canvas needs a right eye
+and none is configured`). But a constant per-eye NDC translation cannot produce
+a head-DEPENDENT displacement — that was established by reading the block, which
+touches no pose data — so the shear is the only live variable among the two.
+`X4VR_ROLL_STEREO` is left in the line and is inert without stereo; keeping it
+makes the diff against take 253 exactly one variable on paper as well as in
+effect.
+
+Checked before asking for the run rather than after: `have_kr` stays false, `KR`
+is null and "that null is what keeps the module mono", and #59's pose block sits
+deliberately BEFORE the no-K early return, so head-look still drives. The run
+will look FLAT in the headset. That is the point, not a regression.
+
+**Protocol.** 1600x1600, mono recording, ~20 s, in the cockpit, the same
+head-sweep amplitude as 252/253. A mismatch is now recoverable — both runs carry
+`t_head` and the normalisation divides it out — but matching is still cheaper.
+
+**Acceptance, `score_run.py` first.** The `stereo:` line reporting `shear m8
+L=... R=...` must be **ABSENT**, and `canvas: REFUSED` **present**. Together they
+are the positive confirmation that the shear is off; neither is a fault here.
+Then:
+
+    python3 tools/hud_vs_cockpit.py /dados/<clip> --px-per-deg 14.17
+
+**P254.1.** HUD-vs-cockpit MAD falls to the floor (under 0.3 deg, where the
+vanilla control sits). Then a per-eye transform is the cause, and since the
+canvas cannot be, it is the depth-dependent world shear — which is applied to
+World passes and never to UI passes, exactly the asymmetry this measurement
+sees. That would make #57 a shear-consistency task.
+
+**P254.2, and it is the one to expect if the yaw-only signature is a coincidence.**
+The MAD holds near 2-3 deg. Then per-eye transforms are exonerated altogether,
+and what is left is the servo rotating X4's camera about a pivot that is not the
+eye while no head translation ever reaches X4 — #73, #74 and #75. **#57 would
+then be a symptom of those, not a task of its own**, and the honest move is to
+renumber it rather than keep fixing the UI.
+
+**Cost:** one take, about five minutes of Patola's time, and it eliminates
+whichever way it lands.
