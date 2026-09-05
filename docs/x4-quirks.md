@@ -14027,3 +14027,63 @@ Two rules, both cheap:
 * Every concurrent job needs its OWN `--frames-dir`. Sharing one silently killed
   a control mid-run, because `frames_from_video` clears the directory before it
   extracts.
+
+### Take 255 — lossless dumps, because the substrate was the problem
+
+**The configuration is NOT free to choose, and this is the one fact that decides
+it.** `X4VR_MV_DUMP_PRESENT` writes the PRESENTED EYE IMAGE. In the quad arm the
+HUD is not in that image at all — it is a separate OpenXR composition layer,
+which is exactly why Patola could not see it on the flatscreen SBS in take 252.
+Dumping the quad arm would produce a series of HUD-less frames and a confident
+null. So this run must be the **canvas arm**, take 253's line, where X4
+composites its own UI and the HUD is in the pixels being dumped.
+
+    X4VR_TAKE=255-DUMPS X4VR_MV_DUMP_PRESENT=45 X4VR_MV_DUMP=/tmp/x4vr-t255 X4VR_CANVAS_M=1.4 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DECLARE_RENDERED_POS=1 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take255.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+Diff against take 253: the take name, the log path, and **two added knobs**.
+Nothing else moves.
+
+**`X4VR_MV_DUMP=/tmp/x4vr-t255` is not cosmetic.** The default prefix is
+`/tmp/x4vr`, which is where takes 180-245b already wrote 540 dumps. Without a
+per-take prefix this run would overwrite data that cannot be regenerated.
+
+**This is a MEASUREMENT run, not an interaction run.** Each dump does a
+`QueueWaitIdle`, a full read-back of both eye layers and two PNG compressions, so
+the game will stutter badly throughout. That is the instrument's price, it is
+expected, and **nothing about feel, performance or comfort should be judged from
+this take** — including the HUD's behaviour, which is what the dumps are for.
+
+**Protocol.** In the cockpit, ~60 s, slow and smooth continuous sweeps: left,
+right, up, down, then a slow roll. Slow because the stutter makes fast sweeps
+useless, and continuous because pairs are what the tool consumes. Then quit.
+Expect roughly 300 dumps x 2 layers, about 2.5 GB in /tmp (9 GB free after
+clearing 6.1 GB of my own extracted video frames, which are re-derivable from
+the clips in /dados).
+
+**Acceptance, `score_run.py` first**, then the dump-mode invocation the tool was
+actually written for — note the glob is quoted and there is no `--fps`, because
+these are frames, not video:
+
+    python3 tools/hud_vs_camera.py '/tmp/x4vr-t255-present-n*-layer0.png' --log /tmp/x4vr-take255.log --control
+    python3 tools/hud_vs_camera.py '/tmp/x4vr-t255-present-n*-layer0.png' --log /tmp/x4vr-take255.log --reference cockpit
+
+**P255.1 — THE GATE, and it comes first.** The `--control` run (one cockpit half
+against the other, truth 1.00 by construction) must read **1.00**. It read 0.83
+on video. If it still reads 0.83 on lossless dumps then compression was NOT the
+problem, the whole ratio approach is wrong for this question, and no number from
+the second command means anything. **Do not read the measurement before the
+control.**
+
+**P255.2 — the yield.** Usable pairs should rise from the 14-17 of 300-350 video
+frames to a large fraction of the dumps. If the yield stays at 5%, the HUD
+channel is starved for some reason other than compression and that is the next
+thing to find.
+
+**P255.3 — only if 1 and 2 pass** does the HUD-vs-cockpit ratio finally mean
+something, and #57 gets a number instead of an argument.
+
+**Bonus, at no extra cost:** the dump writes BOTH eye layers (`-layer0` and
+`-layer1`) of the same instant, losslessly. That is a free, exact measurement of
+the per-eye separation Patola reported as "visibly wrong" on the menu text and
+the savegame loadscreen — `sbs_depth.py`'s question, on data far better than the
+SBS clip it was run on, and it needs no calibration constant.
