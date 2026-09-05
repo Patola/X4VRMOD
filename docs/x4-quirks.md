@@ -13181,3 +13181,52 @@ built on an unestablished premise. Three fixes were already built that way. A
 knob that can only make things worse, but tells us which of two mechanisms is
 live, is a better purchase than a fourth fix that might make things better for a
 reason we cannot name.
+
+## The drift tracker silently re-targeted, and take 251 caught it
+
+Take 251's clip came back reading a 21.5 deg slip. **It was never computed**,
+because the numbers underneath it did not survive a look.
+
+Patola had changed two things about the recording, and said so: 1600x1600
+instead of 1024x1024 after resetting the Quest 3, and **wider head sweeps** than
+the earlier clips. The resolution is harmless — it rescales. The sweep is not.
+
+`drift.py` tracked *"the largest cyan blob in the frame"*. That is the same
+physical element only while it stays in frame AND stays the largest. Looking
+further off-axis takes the target-bracket cluster out of view — one frame of
+251 keeps **22 HUD pixels** — and the tracker then latches onto a different
+element without saying so.
+
+    clip                     re-targets (frame-to-frame centroid jump > 50 px)
+    245A  2.50 m, 1024 px      0 of 300    max jump 24.2 px
+    246   0.70 m, 1024 px      0 of 386    max jump 33.4 px
+    251   1.40 m, 1600 px     24 of 260    max jump 1577.1 px   <- 9.2%
+
+**The recording is valid; the metric was not valid for it.** That distinction
+matters, and it is Patola's clip that is fine.
+
+### The earlier numbers were CHECKED, not assumed
+
+The 2.34 deg (2.50 m) and 7.52 deg (0.70 m) figures come from that same tracker,
+and the 1/distance scaling built on them is what identified the slip as
+parallax, which take 250's geometry then corroborated. Three conclusions rest on
+those two numbers, so "the earlier sweeps were probably smaller" was not good
+enough. **Both earlier clips have zero re-targets**, above. They stand.
+
+### `tools/hud_drift.py`
+
+Matches ONE template, taken once from the first usable frame, by normalised
+cross-correlation over the whole frame, with a margin gate. When the peak does
+not beat its rivals it reports **TARGET LOST** for that frame and contributes
+nothing, instead of following whatever else is bright.
+
+Validated against the old method where the old method was sound: on 245A it
+reads **2.35 deg** against the previous **2.34**, with 0 lost frames and a
+median match margin of 0.259. Agreement on a clean clip is what earns the right
+to be believed on a dirty one.
+
+**A tracker that silently re-targets is the same failure class as an instrument
+that keeps answering the question it was built for after the question moved.**
+Both report confidently about the wrong object. This file now has four
+instances of that class — `abs()` over a sign, a rate metric against a position
+error, a nebula scored as HUD, and now a re-targeting tracker.
