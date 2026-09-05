@@ -11065,6 +11065,11 @@ struct VrState {
     // three fixes for the HUD slip were built by reasoning backwards from a
     // video because the layer never logged the geometry it actually submits.
     std::atomic<float> decl_x{0.f}, decl_y{0.f}, decl_z{0.f};
+    // The quad's submitted centre, for the same line. `quad_valid` stays 0 for
+    // a run with the UI layer off, and the line says so rather than printing a
+    // stale or zero position as if it were a submission.
+    std::atomic<float> quad_x{0.f}, quad_y{0.f}, quad_z{0.f}, quad_zm{0.f};
+    std::atomic<unsigned> quad_valid{0};
     std::mutex sc_mu;               // XrSwapchain wants external synchronisation
     std::atomic<bool> sc_ready{false};
     std::atomic<bool> sc_failed{false}; // tried once and could not; do not retry
@@ -12001,67 +12006,19 @@ void vr_thread() {
                     zm * (std::tan(f.angleUp) - std::tan(f.angleDown));
                 layers[1] = (const XrCompositionLayerBaseHeader *)&quad_ui;
                 layer_count = 2;
-                // ---- the geometry line -------------------------------------
-                //
-                // **Three fixes for the HUD slip were built by reasoning
-                // backwards from a video, because the layer never logged the
-                // geometry it submits.** Takes 244, 247 and the two anchors
-                // before them all rested on an inferred relationship between
-                // the head, the scene's declared viewpoint and the quad's
-                // centre. Those are three points the layer HAS, exactly, every
-                // frame, and it was printing none of them.
-                //
-                // Full rate, like `poselag`, and for the same reason: the slip
-                // varies on a sub-second timescale and a 600-frame sample would
-                // alias it. It rides on X4VR_POSELOG, which every recent run
-                // already sets.
-                //
-                // The three derived scalars are the question, stated so the
-                // answer can be read without a tool:
-                //
-                //   t_head    |head - neutral|   how far the head has moved
-                //             from the anchor both layers are built on
-                //   d_scene   |head - declared|  the offset the compositor is
-                //             asked to reconcile for layer A
-                //   d_quad    |head - quadcentre| the quad's true distance from
-                //             the eye, which is `zm` ONLY if the head has not
-                //             moved off the neutral point
-                //
-                // If d_quad tracks zm while d_scene stays near zero, the two
-                // layers disagree about where the viewer is, and that gap is
-                // the slip. If both move together, they do not, and the slip
-                // is somewhere else entirely — which is worth knowing for
-                // certain rather than by inference from pixels.
-                if (poselog_enabled()) {
-                    const float hx = g_vrs.head_x.load(std::memory_order_relaxed);
-                    const float hy = g_vrs.head_y.load(std::memory_order_relaxed);
-                    const float hz = g_vrs.head_z.load(std::memory_order_relaxed);
-                    const float nx = g_reye.nx.load(std::memory_order_relaxed);
-                    const float ny = g_reye.ny.load(std::memory_order_relaxed);
-                    const float nz2 = g_reye.nz.load(std::memory_order_relaxed);
-                    const float dx_ = g_vrs.decl_x.load(std::memory_order_relaxed);
-                    const float dy_ = g_vrs.decl_y.load(std::memory_order_relaxed);
-                    const float dz_ = g_vrs.decl_z.load(std::memory_order_relaxed);
-                    auto dist = [](float ax, float ay, float az, float bx,
-                                   float by, float bz) {
-                        const float x = ax - bx, y = ay - by, z = az - bz;
-                        return std::sqrt(x * x + y * y + z * z);
-                    };
-                    X4VR_LOG("geom: head=%.4f,%.4f,%.4f neutral=%.4f,%.4f,%.4f "
-                             "declared=%.4f,%.4f,%.4f quad=%.4f,%.4f,%.4f "
-                             "zm=%.3f t_head=%.4f d_scene=%.4f d_quad=%.4f "
-                             "hv=%u yaw=%.2f pitch=%.2f",
-                             hx, hy, hz, nx, ny, nz2, dx_, dy_, dz_,
-                             quad_ui.pose.position.x, quad_ui.pose.position.y,
-                             quad_ui.pose.position.z, zm,
-                             dist(hx, hy, hz, nx, ny, nz2),
-                             dist(hx, hy, hz, dx_, dy_, dz_),
-                             dist(hx, hy, hz, quad_ui.pose.position.x,
-                                  quad_ui.pose.position.y,
-                                  quad_ui.pose.position.z),
-                             g_vrs.head_valid.load(std::memory_order_relaxed),
-                             g_vrs.last_decl_yaw, g_vrs.last_decl_pitch);
-                }
+                // The quad's geometry, PUBLISHED not logged. The line itself
+                // moved outside this block: take 253's arm runs with the UI
+                // layer OFF, and a geom line emitted here would have left that
+                // arm with no `t_head` — repeating exactly the confound that
+                // made take 251 unreadable.
+                g_vrs.quad_x.store(quad_ui.pose.position.x,
+                                   std::memory_order_relaxed);
+                g_vrs.quad_y.store(quad_ui.pose.position.y,
+                                   std::memory_order_relaxed);
+                g_vrs.quad_z.store(quad_ui.pose.position.z,
+                                   std::memory_order_relaxed);
+                g_vrs.quad_zm.store(zm, std::memory_order_relaxed);
+                g_vrs.quad_valid.store(1, std::memory_order_release);
                 // **Periodic, not once.** The first version said this a single
                 // time and it was latched at start-up, when nothing is driving
                 // and every angle is zero -- so it could only ever print the
@@ -12092,6 +12049,46 @@ void vr_thread() {
                                  quad_ui.pose.position.z);
                 }
             }
+        }
+        // ---- the geometry line, task #57 -----------------------------
+        //
+        // **Outside the quad block on purpose.** Three fixes for the HUD slip
+        // were argued from a video because the layer never logged the geometry
+        // it submits. It logs it now — and it must do so in BOTH arms of the
+        // canvas-vs-quad A/B, because the comparison is `slip / (t_head/zm)`
+        // and an arm without `t_head` cannot be normalised. Take 251 already
+        // cost a run to that class of gap.
+        //
+        // Full rate, like `poselag`, and on the same knob.
+        if (poselog_enabled() && g_vrs.head_valid.load(std::memory_order_acquire)) {
+            const float hx = g_vrs.head_x.load(std::memory_order_relaxed);
+            const float hy = g_vrs.head_y.load(std::memory_order_relaxed);
+            const float hz = g_vrs.head_z.load(std::memory_order_relaxed);
+            const float nx = g_reye.nx.load(std::memory_order_relaxed);
+            const float ny = g_reye.ny.load(std::memory_order_relaxed);
+            const float nz = g_reye.nz.load(std::memory_order_relaxed);
+            const float dx = g_vrs.decl_x.load(std::memory_order_relaxed);
+            const float dy = g_vrs.decl_y.load(std::memory_order_relaxed);
+            const float dz = g_vrs.decl_z.load(std::memory_order_relaxed);
+            const unsigned qv = g_vrs.quad_valid.load(std::memory_order_acquire);
+            const float qx = g_vrs.quad_x.load(std::memory_order_relaxed);
+            const float qy = g_vrs.quad_y.load(std::memory_order_relaxed);
+            const float qz = g_vrs.quad_z.load(std::memory_order_relaxed);
+            const float qzm = g_vrs.quad_zm.load(std::memory_order_relaxed);
+            auto dist = [](float ax, float ay, float az, float bx, float by,
+                           float bz) {
+                const float x = ax - bx, y = ay - by, z = az - bz;
+                return std::sqrt(x * x + y * y + z * z);
+            };
+            X4VR_LOG("geom: head=%.4f,%.4f,%.4f neutral=%.4f,%.4f,%.4f "
+                     "declared=%.4f,%.4f,%.4f quad=%.4f,%.4f,%.4f zm=%.3f "
+                     "t_head=%.4f d_scene=%.4f d_quad=%.4f hv=1 qv=%u "
+                     "yaw=%.2f pitch=%.2f",
+                     hx, hy, hz, nx, ny, nz, dx, dy, dz, qx, qy, qz, qzm,
+                     dist(hx, hy, hz, nx, ny, nz),
+                     dist(hx, hy, hz, dx, dy, dz),
+                     qv ? dist(hx, hy, hz, qx, qy, qz) : 0.0f, qv,
+                     g_vrs.last_decl_yaw, g_vrs.last_decl_pitch);
         }
         // The lock covers xrEndFrame because that is where the runtime's
         // client compositor submits, and on a one-graphics-queue device that

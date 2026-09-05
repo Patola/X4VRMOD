@@ -13302,3 +13302,114 @@ take 247's failure keeps its explanation.
 declared position is not what the compositor reprojects from, take 247's failure
 has no explanation in the current model, and the picture goes back on the bench
 — which is worth more than a confirmation and is why this arm is worth running.
+
+## Take 252 closes the model, and Patola's question opens the real one
+
+**P252.2 fired — the falsifier.** Normalising each arm by its OWN head motion,
+which is exactly what the geom line was added for:
+
+    take  knob          zm    t_head med   full parallax   slip MAD   ratio
+    251   DECLARE OFF  1.40   0.0693 m      2.83 deg        5.28 deg   1.86
+    252   DECLARE ON   1.40   0.0553 m      2.26 deg        4.19 deg   1.85
+
+**Identical.** The declared position makes no difference to the slip whatever.
+(The absolute 1.85 is not meaningful — it divides a spread by a median. The
+EQUALITY is, because both arms are computed the same way.) So the model that
+explained take 247's failure — the compositor synthesising parallax from the
+declared position — is dead, and with it the last mechanism on the table.
+
+The instrument also proved itself here: two runs with 25% different head motion
+normalised to the same number.
+
+### Patola's question, which is the right frame
+
+> *"Why can all other graphical elements be seen side-by-side on the desktop
+> screen, whereas the HUD can't — it is only visible in VR? What makes it
+> special? Wouldn't that specialness be the reason we've been struggling?"*
+
+**Yes.** `X4VR_HUDLESS=1` forces X4's own compositing switch, so X4 emits a
+scene with no UI — that is the desktop image. The HUD lives in `img #65`, which
+the layer copies onto a **separate OpenXR composition layer**, and only the
+compositor sees that. The specialness is entirely ours.
+
+And it is the cause. Everything on the desktop — cockpit, stars, all of it — is
+**pixels in one projection layer**, warped as a flat image. The quad is **the
+only object in the pipeline the compositor renders as geometry.** Two objects,
+two paths through the runtime.
+
+Five takes moved the quad's pose (242, 243, 244), its anchor (247) and the
+scene's declared pose (251/252), and none of them touched the slip. **It was
+never a pose problem. It is a path problem** — which is what the 1/distance
+scaling, the independence from yaw, and now the independence from the declared
+position have each said separately.
+
+### The canvas path: VERIFIED, not assumed
+
+The alternative is to give the UI depth INSIDE X4's image — #30/#40's baked
+per-eye shift, `make_canvas_k` — so it stays in the same layer and the same path
+as the world, and the mismatch cannot arise by construction. Checked rather
+than trusted, because "built" is not "bound":
+
+* **It binds.** Takes 98/99 report `canvas final: 346-348 variant(s) built, 0
+  REFUSED, swapped into 18 pipeline stage(s)`. Not a dormant code path — a
+  demonstrated one.
+* **The recent zeros are by design.** 245c/246/247/248 all report `swapped into
+  0` because `ui_layer_enabled()` refuses to build the baked shift when the quad
+  is on; the two are deliberately exclusive.
+* **The `unsheared` interaction is not luck**, and the code says so at the swap
+  site: *"a canvas pass is one with colour, no depth and all-LDR attachments,
+  and take 71 made exactly that shape unsheared. The two predicates agree by
+  construction."* The canvas variant is preferred over the original inside a
+  canvas pass, so the UI pass being unsheared does not block it.
+* **The harness cannot exercise it** — its shaders do not classify as World, so
+  it reports `0 variant(s) built ... NOTHING DREW ON THE CANVAS`. The layer's
+  own line says that plainly, which is why the gap was visible.
+
+Known cost, recorded when it was built: X4 hit-tests its UI on the CPU in
+unshifted screen space, so a GPU-side shift moves what is seen away from what
+can be clicked. The cursor shim already publishes the same canvas map to
+compensate (`g_canvas_map.publish`), also built, also dormant.
+
+### The geom line had to move first
+
+It was emitted inside the quad block. Arm B runs with the UI layer OFF, so that
+arm would have carried **no `t_head`** — and the comparison is `slip /
+(t_head/zm)`. That is precisely the confound that made take 251 unreadable, and
+it would have repeated on the first run of the new arm. The line now emits once
+per frame outside the block, with the quad's geometry published into it and a
+`qv=` flag saying whether a quad was submitted at all.
+
+Two instrument defects were found doing that, both of the same family:
+
+* the scorer printed *"quad never submitted (UI layer off)"* for take 252, which
+  had submitted it 12940 times — on a log that simply predates the field.
+  Didn't-happen versus cannot-say, conflated for the second time in this file.
+* the cause was `re.findall` yielding **`''`** for a non-participating optional
+  group rather than `None`, so the `is not None` guard was always true.
+
+### Take 253 — arm B
+
+Arm A is take 252, already run and measured. This is the same line with
+`X4VR_UI_LAYER` and `X4VR_HUDLESS` **removed**, so X4 composites its own UI and
+the canvas gives it depth:
+
+    X4VR_TAKE=253-CANVAS X4VR_CANVAS_M=1.4 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DECLARE_RENDERED_POS=1 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take253.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+Record as 251/252 were: **1600x1600, mono, ~20 s, cockpit, the same head-sweep
+amplitude.** A mismatch is now recoverable — both arms carry `t_head` — but
+matching is still cheaper than normalising.
+
+**P253.1 — the point.** The slip, normalised, falls well below 1.85. The HUD and
+the cockpit are in one image on one layer, so no path difference exists to
+produce one.
+
+**P253.2 — the acceptance check, and it comes first.** `score_run.py` must
+report a **non-zero canvas swap count**. Zero means the arm did not happen and
+nothing below it means anything — the take-98/99 precedent says 18 stages is the
+expected order.
+
+**P253.3 — the known cost, expected and not a defect.** The UI will be at the
+right depth but mouse clicks will land off it, because X4 hit-tests in unshifted
+screen space. The cursor shim's compensation is dormant. **Do not judge clicking
+in this arm**; it is a depth measurement, and if the canvas wins on the slip
+then wiring the cursor map back up is the follow-on work rather than a surprise.

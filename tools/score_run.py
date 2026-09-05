@@ -2094,19 +2094,31 @@ def main(path):
     # flat, they do not, and that gap is the slip.
     geom = re.findall(
         r"geom: head=\S+ neutral=\S+ declared=\S+ quad=\S+ zm=([\d.]+) "
-        r"t_head=([\d.]+) d_scene=([\d.]+) d_quad=([\d.]+) hv=(\d)", text)
+        r"t_head=([\d.]+) d_scene=([\d.]+) d_quad=([\d.]+) hv=\d(?: qv=(\d))?", text)
     if geom:
         import statistics
         zmv = [float(g[0]) for g in geom]
         th = [float(g[1]) for g in geom]
         ds = [float(g[2]) for g in geom]
         dq = [float(g[3]) for g in geom]
-        hv = sum(1 for g in geom if g[4] == "1")
+        # qv is ABSENT on the pre-253 line format and "0" when the UI layer
+        # is off. Those are different statements and the first draft printed
+        # "quad never submitted" for take 252, which had submitted it 12940
+        # times on a log that simply predates the field. Same
+        # didn't-happen/cannot-say confusion this file has already fixed once.
+        # `re.findall` yields '' for a non-participating optional group,
+        # NOT None — so an `is not None` test is always true and the
+        # old-format check silently passed. Compare against ''.
+        have_qv = any(g[4] != "" for g in geom)
+        qv = sum(1 for g in geom if g[4] == "1")
+        hv = len(geom)
         dqe = [q - z for q, z in zip(dq, zmv)]
         def stat(v):
             s = sorted(v)
             return (statistics.median(s), s[int(0.9 * (len(s) - 1))], s[-1])
-        print(f"geom    {len(geom)} sample(s), head located in {hv}")
+        print(f"geom    {len(geom)} sample(s), head located in {hv}, "
+              + (f"quad submitted in {qv}" if have_qv
+                 else "quad state not recorded (log predates qv=)"))
         for nm, v in (("t_head  head from neutral", th),
                       ("d_scene head from declared", ds),
                       ("d_quad-zm quad vs nominal", dqe)):
@@ -2138,11 +2150,9 @@ def main(path):
             else:
                 print("        neither tracks the head; read the medians "
                       "above rather than these correlations")
-        if hv == 0:
-            fails.append(
-                "every `geom` sample has hv=0, so the head was never located "
-                "and head/neutral/declared are all the same latched point — "
-                "this run cannot say anything about the slip's geometry")
+        if have_qv and qv == 0:
+            print("        quad never submitted (UI layer off) — d_quad is not "
+                  "meaningful here; t_head and d_scene are")
     elif "X4VR_UI_LAYER=1" in (run or ""):
         print("geom    no `geom` line — build predates it, or X4VR_POSELOG "
               "is unset (the line rides on it)")
