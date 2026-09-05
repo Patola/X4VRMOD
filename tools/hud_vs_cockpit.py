@@ -186,6 +186,7 @@ def main():
     if len(fs) < 20:
         print(f'need frames, got {len(fs)}', file=sys.stderr)
         return 2
+    attempted = len(fs) - 1          # frame 1 supplies the templates
     rows, lost_h, lost_c = track(fs, a.margin, a.radius, a.cockpit_size)
     if len(rows) < 20:
         print(f'TARGET LOST -- HUD {lost_h}, cockpit {lost_c}; only '
@@ -195,8 +196,12 @@ def main():
     k = a.px_per_deg or 1.0
     unit = 'deg' if a.px_per_deg else 'px'
     n = len(rows)
-    print(f'  tracked {n} frame(s); LOST  HUD {lost_h}  cockpit {lost_c}  '
-          f'({100*(lost_h+lost_c)/(2*(n+1)):.0f}%)')
+    # Percentages are per tracker over the frames ATTEMPTED, not over the
+    # frames that survived -- dividing losses by successes is how a 67% loss
+    # rate printed as "328%".
+    print(f'  tracked {n} of {attempted} frame(s); LOST  '
+          f'HUD {lost_h} ({100*lost_h/attempted:.0f}%)  '
+          f'cockpit {lost_c} ({100*lost_c/attempted:.0f}%)')
     print(f'  match margins    HUD {np.median(rows[:,2]):.3f}  '
           f'cockpit {np.median(rows[:,3]):.3f}')
     for ax, col in (('x', 0), ('y', 1)):
