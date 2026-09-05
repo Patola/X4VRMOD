@@ -10071,42 +10071,83 @@ capped at 400 paths and the `livesets` walk is gated behind
 `X4VR_DUMP_MATRICES`, which this take already sets — so neither should move the
 perf number. Prediction 4 includes that band precisely so a surprise is visible.
 
-# RESUME HERE AFTER A COMPACT — state as of take 243, fix built for 244
+# RESUME HERE AFTER A COMPACT — state as of take 252, arm B pending
 
-Everything below supersedes earlier "read this first" banners, including the
-take-211 one that used to head this section and the take-202 one further down.
+Everything below supersedes earlier "read this first" banners.
 
-## THE NEXT TASK: take 245, and it is NOT another placement guess.
+## THE NEXT TASK: take 253 has been handed to Patola. Score it, do not rebuild.
 
-Take 244 refuted take 243's fix, which had refuted take 242's. Patola:
-*"we're again stuck in that situation where you change random knobs and they
-don't have an effect... why nothing has an effect on this?"* Read
-"Take 244: STOP" below before touching the quad.
+The command, the protocol and P253.1-3 are in **"Take 253 — arm B"** at the end
+of this file. It is arm B of a two-arm A/B; **arm A is take 252, already run and
+measured.** Nothing needs building before the result comes back.
 
-**The reason nothing works:** all three takes placed the quad from an ASSUMPTION
-about where the HUD sits inside X4's UI texture as the camera turns — a
-different assumption each time — and nothing has ever measured it. #55 filed
-that exact experiment and said disparity could not settle it. Three takes later
-it is finally built: `tools/hud_vs_camera.py`, validated against take 237's
-static-camera dumps as a negative control.
+    arm A  take 252  UI on the QUAD    normalised slip ratio 1.85
+    arm B  take 253  UI on the CANVAS  pending
 
-**DO NOT build a fourth placement before running it.** The answer is one
-number, the tool prints it, and it selects the placement.
+**Score arm B in this order.** `score_run.py` first: a **non-zero canvas swap
+count** or the arm did not happen and nothing else in the run means anything
+(takes 98/99 set the expected order at 18 pipeline stages). Then the clip:
 
-**The pivot artefact is real and was under-weighted — Patola said so and he is
-right.** Layer A declares `position = neutral + R(C)·(±ipd/2 + head_shift)`, and
-take 244 measured the shift at **0.17 m**. That whole vector is rotated by the
-camera angle, so a 17 cm lever swings with every turn — "a larger rotation arm
-than my neck", fed to the compositor as where the pixels came from. #74 is
-documented "not clean" and has been ON in every recent take. `X4VR_HEAD_TRANSLATE=0`
-eliminates it with no code. This is a nausea issue, not a cosmetic one.
+    python3 tools/hud_drift.py <clip> --px-per-deg 14.17 --radius 140
+    ratio = slip_MAD / degrees(atan(t_head_median / zm))
 
-Take 245 has two arms, specified in full below: **245A comfort** (arm off,
-canvas 2.5 m, no instruments) and **245B measurement** (dumps, will stutter,
-not for judging comfort).
+`t_head` comes from the `geom:` line via `score_run.py`. **Always compare
+ratios, never raw slip** — take 251 was wasted comparing raw numbers across runs
+with different head motion.
 
-Still true: **do not head-lock the HUD in the cockpit** (rejected twice), and
-`tests/headlook.cpp` holds the placement arithmetic including 243a's no-op.
+## THE FINDING, and it took five takes to reach
+
+**The HUD slip is a PATH problem, not a pose problem.** Everything the desktop
+shows — cockpit, stars, all of it — is pixels in ONE projection layer. The UI
+quad is the only object in the pipeline the compositor renders as **geometry**.
+Two objects, two paths through the runtime, and the disagreement between them is
+the slip.
+
+Patola asked the question that produced this: *"what makes the HUD special —
+wouldn't that specialness be the reason we've been struggling?"* It is, and the
+specialness is entirely ours: `X4VR_HUDLESS=1` strips the UI out of X4's image
+so the layer can put it on its own composition layer.
+
+## DEAD ENDS — do not revisit without new evidence
+
+* **Moving the quad's pose.** Takes 242 (identity), 243 (orientation only), 244
+  (orbited centre). None changed the slip.
+* **Moving the quad's anchor.** Take 247 anchored it to the head: **3.5x worse
+  in x, 6x in y**, reverted.
+* **The scene's declared position.** Takes 251/252 flipped
+  `X4VR_DECLARE_RENDERED_POS` and the normalised ratio came back **1.86 vs
+  1.85** — no effect. This killed the model that had explained 247.
+* **The IPD.** The runtime reports 0.0629 m against `X4VR_IPD=0.0640`, −1.7%.
+  Too small to see. Instrument fired, hypothesis died.
+* **Stereo separation on the quads.** Real, quantified (the map presents at
+  ~2.9x the cockpit hull's distance), and **parked under #25** at Patola's
+  explicit direction: the slip is what blocks gameplay.
+* **#74's head translation.** Harmful as implemented — its 0.17 m shift is
+  rotated by the camera angle into a lever arm. Take 245A removing it fixed
+  three complaints at once. **Keep `X4VR_HEAD_TRANSLATE` off.**
+
+## What is measured and trustworthy
+
+* X4's cockpit HUD is **world-anchored**, exactly, both axes (vanilla clip,
+  ratio 1.00 over 84 pairs). X4's projection is angularly square.
+* The slip is **head translation**: `d_scene` tracks `t_head` at r=+0.986, and
+  during a ROTATION-ONLY phase the head still moves 4.2 cm median / 12.7 cm
+  peak — the neck arc. At 1.4 m that is 1.7-5.2 deg.
+* The canvas path **binds** — takes 98/99, 346-348 variants, 18 stages. Recent
+  zeros are `ui_layer_enabled()` refusing by design.
+
+## Instruments — all four have bitten, all four are now guarded
+
+* `tools/hud_drift.py` — tracks ONE template with a **motion prior**, says
+  TARGET LOST. Reports sd AND a robust MAD, and flags when sd > 2.5x MAD. Use
+  the MAD. Two earlier versions silently re-targeted.
+* `tools/hud_vs_camera.py` — `--selftest` audits it on synthetic shifts,
+  including the DIFFERENTIAL case; a rigid-shift-only audit proves nothing.
+* The `geom:` line — head, neutral, declared and quad positions, full rate,
+  outside the quad block so BOTH arms carry `t_head`.
+* `score_run.py` geom section — medians and correlations, with a conditional
+  verdict. It once printed "the layers agree" unconditionally under numbers
+  that disagreed.
 
 ## The previous task: layer B's code — DONE
 
