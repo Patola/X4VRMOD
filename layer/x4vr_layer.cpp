@@ -36,6 +36,7 @@
 
 #define X4VR_LOG_TAG "layer"
 #include "../common/x4vr_log.hpp"
+#include "../common/x4vr_png.hpp"
 #include "../common/x4vr_sbs.hpp"
 #include "../common/x4vr_spirv.hpp"
 #include "../common/x4vr_guard.hpp"
@@ -3239,6 +3240,45 @@ inline bool ui_layer_enabled() {
         return e && *e && *e != '0';
     }();
     return on;
+}
+
+// X4VR_UI_DUMP=N — write the UI-only target beside the eye image every N
+// presents. Patola's instrument, in the form that changes nothing: *"if what
+// you need is to clearly separate the HUD from the cockpit and
+// background/skybox, tint them differently."* Right question, and the answer
+// turns out not to need a tint at all -- X4 already renders the whole UI into
+// an image of its own, which take 240 identified and take 256 names again as
+// img #65. Dumping THAT beside the frame gives a mask by construction, with no
+// shader patched and nothing about the rendered frame changed.
+//
+// A tint would have had to be applied at pipeline creation, keyed on the canvas
+// predicate -- and that predicate fires on X4's PRESENT passes too (rp
+// #0/#1/#4/#7/#10 all logged `+PRESENT-CAND +CANVAS` in take 203). Tinting
+// those tints the whole composited frame, and the instrument would have
+// destroyed what it was built to measure. The discriminator that does work is
+// image identity, and it is only known at runtime, after the pipelines exist.
+//
+// **A CADENCE, not a flag.** Same shape as X4VR_MV_DUMP_PRESENT and stated
+// again here because this project has run a cadence knob as a boolean and got
+// a full readback on every frame at about 1 fps.
+inline uint64_t ui_dump_every() {
+    static const uint64_t n = [] {
+        const char *e = getenv("X4VR_UI_DUMP");
+        if (!e || !*e)
+            return (uint64_t)0;
+        const long v = strtol(e, nullptr, 10);
+        return v > 0 ? (uint64_t)v : (uint64_t)0;
+    }();
+    return n;
+}
+
+// The capture into the staging image serves layer B *and* the dump above, and
+// neither must switch the other off. Layer B changes what the player sees; the
+// dump changes nothing at all, and a run that wants only the measurement must
+// not be forced to take the behaviour change with it -- that coupling cost
+// take 173, and the comment at the g_cb_fb gate says so about the probe.
+inline bool ui_capture_wanted() {
+    return ui_layer_enabled() || ui_dump_every() != 0;
 }
 
 // Where the UI canvas sits, in metres. **The same knob the baked shift used**,
@@ -9440,63 +9480,13 @@ float half_to_float(uint16_t h) {
 // Reinhard then gamma, so the whole HDR range shows structure rather than
 // clipping to white wherever the sun is -- which is exactly the region under
 // suspicion.
-// Lossless PNG, because these dumps are PHOTOMETRY. tools/bright_object.py
-// computes luminance ratios off them and a JPEG artefact around a saturated Sun
-// would land exactly where the measurement is taken -- Patola asked for jpg or
-// png and png is the half of that question that keeps the data.
-//
-// Take 176 wrote ~3 GB of uncompressed PPM in bursts and froze the game for
-// 30 s at a time, with 10 usable frames in between; he got the Sun in shot by
-// luck. A 4224x4224 frame is 53 MB raw and 4-8 MB as PNG, and level 1 costs
-// far less time than writing the difference.
-//
-// Emits one IDAT from a single compress2 call: simple, and the sizes here are
-// nowhere near the point where streaming would matter.
-void write_png_rgb(const char *path, const uint8_t *rgb, uint32_t w,
-                   uint32_t h) {
-    std::vector<uint8_t> raw((size_t)h * (1 + (size_t)w * 3));
-    for (uint32_t y = 0; y < h; y++) {
-        raw[(size_t)y * (1 + (size_t)w * 3)] = 0; // filter: none
-        memcpy(&raw[(size_t)y * (1 + (size_t)w * 3) + 1],
-               rgb + (size_t)y * w * 3, (size_t)w * 3);
-    }
-    uLongf cap = compressBound((uLong)raw.size());
-    std::vector<uint8_t> z(cap);
-    if (compress2(z.data(), &cap, raw.data(), (uLong)raw.size(), 1) != Z_OK)
-        return;
-    FILE *f = fopen(path, "wb");
-    if (!f)
-        return;
-    auto be32 = [](uint8_t *o, uint32_t v) {
-        o[0] = v >> 24; o[1] = v >> 16; o[2] = v >> 8; o[3] = (uint8_t)v;
-    };
-    auto chunk = [&](const char *tag, const uint8_t *d, uint32_t n) {
-        uint8_t hdr[4];
-        be32(hdr, n);
-        fwrite(hdr, 1, 4, f);
-        fwrite(tag, 1, 4, f);
-        if (n)
-            fwrite(d, 1, n, f);
-        uLong c = crc32(0, (const Bytef *)tag, 4);
-        if (n)
-            c = crc32(c, (const Bytef *)d, n);
-        uint8_t cb[4];
-        be32(cb, (uint32_t)c);
-        fwrite(cb, 1, 4, f);
-    };
-    static const uint8_t sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
-    fwrite(sig, 1, 8, f);
-    uint8_t ihdr[13];
-    be32(ihdr, w);
-    be32(ihdr + 4, h);
-    ihdr[8] = 8;   // bit depth
-    ihdr[9] = 2;   // colour type: truecolour RGB
-    ihdr[10] = ihdr[11] = ihdr[12] = 0;
-    chunk("IHDR", ihdr, 13);
-    chunk("IDAT", z.data(), (uint32_t)cap);
-    chunk("IEND", nullptr, 0);
-    fclose(f);
-}
+// The PNG writer moved to common/x4vr_png.hpp so tests/run-dump-format.sh can
+// call it. That script exists because take 177 FAILED with "no present dumps
+// were found" while twenty sat on disk -- the layer changed format and the
+// analysers did not -- and a guard that cannot invoke the thing it guards is
+// no guard at all. See the header for why the alpha variant exists.
+using x4vr::png::write_png_n;
+using x4vr::png::write_png_rgb;
 
 // PPM stays reachable for anything that wants a header it can parse in four
 // lines of awk: X4VR_DUMP_PPM=1.
@@ -9580,6 +9570,26 @@ void write_ppm8(const char *path, const uint8_t *px, uint32_t w, uint32_t h,
                 rgb[((size_t)y * w + x) * 3 + c] = bgra ? p[2 - c] : p[c];
         }
     emit_rgb(path, rgb, w, h);
+}
+
+/// The UI target, alpha kept. **Always PNG, never PPM**, and it ignores
+/// X4VR_DUMP_PPM on purpose: PPM has no alpha channel, so honouring that knob
+/// here would silently discard the thing this dump exists to carry. `path`
+/// arrives without an extension, like every other writer here.
+void write_ui8(const char *path, const uint8_t *px, uint32_t w, uint32_t h,
+               bool bgra) {
+    std::vector<uint8_t> rgba((size_t)w * h * 4);
+    for (uint32_t y = 0; y < h; y++)
+        for (uint32_t x = 0; x < w; x++) {
+            const uint8_t *p = px + ((size_t)y * w + x) * 4;
+            uint8_t *o = &rgba[((size_t)y * w + x) * 4];
+            for (uint32_t c = 0; c < 3; c++)
+                o[c] = bgra ? p[2 - c] : p[c];
+            o[3] = p[3];
+        }
+    char full[544];
+    snprintf(full, sizeof full, "%s.png", path);
+    write_png_n(full, rgba.data(), w, h, 4);
 }
 
 uint64_t fnv1a(const void *p, size_t n) {
@@ -9757,6 +9767,87 @@ bool ui_stage_ready(DeviceData *d, VkDevice dev, VkExtent2D ext, VkFormat fmt) {
              "device-local — layer B has somewhere to put the UI",
              ext.width, ext.height, (int)fmt,
              (unsigned long long)req.size);
+    return true;
+}
+
+// X4VR_UI_DUMP's readback buffer, host-visible, holding both layers.
+//
+// **Deliberately not g_probe.buf.** The present dump writes the eye image into
+// that one in the very same present, and two writers into one buffer is
+// precisely how a mask from one image ends up describing another -- the
+// failure this whole instrument exists to rule out. The extra ~16 MB is not
+// worth the ambiguity.
+struct {
+    std::mutex mu;
+    VkBuffer buf = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    void *ptr = nullptr;
+    VkDeviceSize layer_bytes = 0;
+    bool failed = false;
+    // What the compositor had actually RECORDED when the last request was
+    // made, so the writer can tell a copy that happened from one that fell
+    // through a path that does not dump. See SbsCompositor::ui_dumps().
+    uint64_t seen = 0;
+} g_ui_read;
+
+// Creates it on first use. Caller holds g_ui_read.mu.
+bool ui_read_ready(DeviceData *d, VkDevice dev, VkDeviceSize layer_bytes) {
+    layer_bytes = (layer_bytes + 255) & ~(VkDeviceSize)255;
+    if (g_ui_read.buf != VK_NULL_HANDLE && g_ui_read.layer_bytes >= layer_bytes)
+        return true;
+    if (g_ui_read.failed || !d->CreateBuffer || !d->AllocateMemory ||
+        !d->CmdCopyImageToBuffer)
+        return false;
+    if (g_ui_read.buf != VK_NULL_HANDLE) {
+        // Only ever resized between dumps, and a dump waits for the queue
+        // before it reads, so nothing is in flight here.
+        if (g_ui_read.ptr)
+            d->UnmapMemory(dev, g_ui_read.mem);
+        d->DestroyBuffer(dev, g_ui_read.buf, nullptr);
+        d->FreeMemory(dev, g_ui_read.mem, nullptr);
+        g_ui_read.buf = VK_NULL_HANDLE;
+        g_ui_read.mem = VK_NULL_HANDLE;
+        g_ui_read.ptr = nullptr;
+    }
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size = layer_bytes * 2;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (d->CreateBuffer(dev, &bci, nullptr, &g_ui_read.buf) != VK_SUCCESS) {
+        g_ui_read.failed = true;
+        X4VR_LOG("ui dump: readback buffer REFUSED at vkCreateBuffer (%llu "
+                 "bytes) — X4VR_UI_DUMP is off for this run",
+                 (unsigned long long)bci.size);
+        return false;
+    }
+    VkMemoryRequirements req{};
+    d->GetBufferMemoryRequirements(dev, g_ui_read.buf, &req);
+    uint32_t type = UINT32_MAX;
+    const VkMemoryPropertyFlags want = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (uint32_t i = 0; i < d->memprops.memoryTypeCount; i++)
+        if ((req.memoryTypeBits & (1u << i)) &&
+            (d->memprops.memoryTypes[i].propertyFlags & want) == want) {
+            type = i;
+            break;
+        }
+    VkMemoryAllocateInfo mai{};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex = type;
+    if (type == UINT32_MAX ||
+        d->AllocateMemory(dev, &mai, nullptr, &g_ui_read.mem) != VK_SUCCESS ||
+        d->BindBufferMemory(dev, g_ui_read.buf, g_ui_read.mem, 0) !=
+            VK_SUCCESS ||
+        d->MapMemory(dev, g_ui_read.mem, 0, VK_WHOLE_SIZE, 0, &g_ui_read.ptr) !=
+            VK_SUCCESS) {
+        g_ui_read.failed = true;
+        X4VR_LOG("ui dump: could not map the readback buffer — X4VR_UI_DUMP is "
+                 "off for this run");
+        return false;
+    }
+    g_ui_read.layer_bytes = layer_bytes;
     return true;
 }
 
@@ -9940,11 +10031,11 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBeginRenderPass(
         d = &g_devices.at(dispatch_key(cb));
     }
     cb_enter_pass(cb, bi->renderPass);
-    // `|| ui_layer_enabled()`: the capture below needs the same framebuffer
+    // `|| ui_capture_wanted()`: the capture below needs the same framebuffer
     // record the probe needs, and gating it on the probe's knob would have made
     // layer B silently depend on an unrelated instrument being on. That exact
     // coupling cost take 173.
-    if ((probe_hooks_wanted() || ui_layer_enabled()) && g_mv && g_active) {
+    if ((probe_hooks_wanted() || ui_capture_wanted()) && g_mv && g_active) {
         std::lock_guard<std::mutex> lock(g_cb_mu);
         g_cb_fb[cb] = bi->framebuffer;
     }
@@ -10008,7 +10099,10 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
     // Its own gate and its own framebuffer lookup, deliberately not folded into
     // the probe block below: that one is gated on probe_hooks_wanted(), and
     // layer B must not switch itself off because an unrelated instrument is.
-    if (ui_layer_enabled() && g_mv && g_active) {
+    //
+    // `ui_capture_wanted()` and not `ui_layer_enabled()`: X4VR_UI_DUMP needs
+    // the staging image filled, and nothing else layer B does.
+    if (ui_capture_wanted() && g_mv && g_active) {
         const uint32_t ui = g_ui_serial.load(std::memory_order_relaxed);
         if (ui != UINT32_MAX) {
             FbAtt hit{};
@@ -10827,13 +10921,27 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     if (g_mv && g_active)
         ui_identify_once();
 
-    if (g_dump_present_every && g_active && pi->swapchainCount == 1) {
+    // Task #57: this present's UI-target dump, if one was asked for.
+    VkDeviceSize ui_layer_bytes = 0;
+    uint32_t ui_w = 0, ui_h = 0;
+    bool ui_bgra = false, ui_asked = false;
+
+    if ((g_dump_present_every || ui_dump_every()) && g_active &&
+        pi->swapchainCount == 1) {
         // Said once, loudly, because this knob reads like a boolean and is a
         // cadence. Take 98 was run with =1 and dumped every frame: a ~12 MB
         // readback plus a full pipeline stall per present took the game to
         // about 1 fps, which made the run almost impossible to interact with
         // and cost the interaction half of what it was measuring. The number
         // is the cost, so the log states it in the units that hurt.
+        //
+        // What the stall actually is, measured since: take 256 ran a 19.52 ms
+        // MEDIAN with a 144.87 ms mean and p90 1013.91 at cadence 10 — one
+        // frame in ten costing about a second. The PNG encode is 41 ms per
+        // layer (measured offline, 1408x1408, zlib level 1), so the second
+        // belongs to QueueWaitIdle and not to the writing. That is why adding
+        // the UI target below is close to free: it rides on a drain that has
+        // already been paid, for about +8%.
         static bool said = false;
         if (!said) {
             said = true;
@@ -10843,7 +10951,14 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                      (unsigned long long)g_dump_present_every);
         }
         static uint64_t presents = 0;
-        if (presents++ % g_dump_present_every == 0) {
+        const uint64_t p = presents++;
+        const bool ui_now = ui_dump_every() && (p % ui_dump_every() == 0);
+        // **Asking for the UI also asks for the eye image.** The pair is the
+        // instrument: a UI mask is only worth having against the frame it was
+        // captured with, and the composite that copies one is the composite
+        // that copies the other. Letting the two cadences drift apart would
+        // produce files that look like pairs and are not.
+        if (ui_now || (g_dump_present_every && p % g_dump_present_every == 0)) {
             x4vr::SbsCompositor::EyeInfo ei;
             if (g_sbs.eye_info(pi->pSwapchains[0], &ei)) {
                 const uint32_t bpp = format_bpp(ei.format);
@@ -10861,6 +10976,40 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                         dump_bgra = ei.format == VK_FORMAT_B8G8R8A8_UNORM ||
                                     ei.format == VK_FORMAT_B8G8R8A8_SRGB;
                     }
+                }
+            }
+        }
+        // Only alongside a real eye dump. Without one there is nothing to
+        // apply the mask to, and a lone UI image would be an answer to a
+        // question nobody asked.
+        if (ui_now && dump_layers) {
+            VkImage src = VK_NULL_HANDLE;
+            VkExtent2D ext{};
+            VkFormat fmt = VK_FORMAT_UNDEFINED;
+            {
+                std::lock_guard<std::mutex> lock(g_ui_stage.mu);
+                src = g_ui_stage.image;
+                ext = g_ui_stage.extent;
+                fmt = g_ui_stage.format;
+            }
+            const uint32_t bpp = format_bpp(fmt);
+            // A staging image exists only once X4 has drawn a UI pass. Early
+            // presents legitimately have none, so this is silent rather than a
+            // warning; the teardown line reports the count that resulted.
+            if (src != VK_NULL_HANDLE && bpp && ext.width && ext.height) {
+                const VkDeviceSize per =
+                    (VkDeviceSize)ext.width * ext.height * bpp;
+                std::lock_guard<std::mutex> lock(g_ui_read.mu);
+                if (ui_read_ready(d, d->device, per)) {
+                    g_ui_read.seen = g_sbs.ui_dumps();
+                    g_sbs.request_ui_dump(src, g_ui_read.buf, ext,
+                                          g_ui_read.layer_bytes);
+                    ui_layer_bytes = g_ui_read.layer_bytes;
+                    ui_w = ext.width;
+                    ui_h = ext.height;
+                    ui_bgra = fmt == VK_FORMAT_B8G8R8A8_UNORM ||
+                              fmt == VK_FORMAT_B8G8R8A8_SRGB;
+                    ui_asked = true;
                 }
             }
         }
@@ -10916,10 +11065,16 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     // a performance measurement.
     if (dump_layers && d->QueueWaitIdle) {
         d->QueueWaitIdle(queue);
+        // Hoisted out of the g_probe_mu scope below so the UI target can be
+        // written under the SAME index. `-present-n7-layer0` and `-ui-n7-layer0`
+        // are one frame, and the filenames are the only thing the offline tool
+        // has to go on.
+        static uint64_t seq = 0;
+        const uint64_t n = seq;
+        {
         std::lock_guard<std::mutex> lock(g_probe_mu);
         if (g_probe.ptr) {
-            static uint64_t seq = 0;
-            const uint64_t n = seq++;
+            seq++;
             for (uint32_t l = 0; l < dump_layers; l++) {
                 char path[512];
                 snprintf(path, sizeof(path), "%s-present-n%llu-layer%u",
@@ -10975,6 +11130,62 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                              px[7]);
                 }
             }
+        }
+        }
+        // ---- task #57: the UI target for this same frame -------------------
+        //
+        // Gated on the compositor's own counter having MOVED, not on the
+        // request having been made. composite() records this copy in one
+        // branch only; a request that fell through the other would still be
+        // sitting in the compositor, and writing files from a stale buffer
+        // would pair frame N's eye image with frame N-1's mask -- silently,
+        // and looking exactly like a real pair. Report the branch that ran,
+        // never re-derive it.
+        if (ui_asked && g_sbs.ui_dumps() > g_ui_read.seen) {
+            std::lock_guard<std::mutex> lock(g_ui_read.mu);
+            if (g_ui_read.ptr) {
+                uint64_t nz[2] = {0, 0}, na[2] = {0, 0};
+                for (uint32_t l = 0; l < 2; l++) {
+                    const uint8_t *src =
+                        (const uint8_t *)g_ui_read.ptr + ui_layer_bytes * l;
+                    char path[512];
+                    snprintf(path, sizeof(path), "%s-ui-n%llu-layer%u",
+                             g_mv_dump ? g_mv_dump : "/tmp/x4vr",
+                             (unsigned long long)n, l);
+                    write_ui8(path, src, ui_w, ui_h, ui_bgra);
+                    // Counted here rather than left to the offline tool,
+                    // because "the mask is empty" and "the dump never ran"
+                    // produce the same silence downstream, and this project
+                    // has read one as the other before. Both criteria, since
+                    // which of them IS the UI is exactly what is unsettled:
+                    // alpha is X4's own composite coverage, colour is what
+                    // survives if the composite ignores it.
+                    for (size_t i = 0; i < (size_t)ui_w * ui_h; i++) {
+                        const uint8_t *p = src + i * 4;
+                        if (p[0] | p[1] | p[2])
+                            nz[l]++;
+                        if (p[3])
+                            na[l]++;
+                    }
+                }
+                const double tot = (double)ui_w * ui_h;
+                X4VR_LOG("ui dump: frame %llu — %ux%u x2, bgra=%d. Coverage "
+                         "layer0 %.2f%% colour / %.2f%% alpha, layer1 %.2f%% / "
+                         "%.2f%%. Near-zero on BOTH criteria means the UI "
+                         "target was empty this frame, not that the dump "
+                         "failed.",
+                         (unsigned long long)n, ui_w, ui_h, (int)ui_bgra,
+                         100.0 * nz[0] / tot, 100.0 * na[0] / tot,
+                         100.0 * nz[1] / tot, 100.0 * na[1] / tot);
+            }
+        } else if (ui_asked) {
+            static uint32_t missed = 0;
+            if (++missed <= 3)
+                X4VR_LOG("ui dump: frame %llu asked for the UI target and the "
+                         "composite did NOT record the copy — no file written, "
+                         "which is right: a mask from another frame is worse "
+                         "than none.",
+                         (unsigned long long)n);
         }
     }
     frame_flush();

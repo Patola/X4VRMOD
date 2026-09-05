@@ -144,6 +144,16 @@ public:
     // Set by request_dump(), consumed and cleared by the next composite().
     VkBuffer dump_buf_ = VK_NULL_HANDLE;
     VkDeviceSize dump_layer_bytes_ = 0;
+    // Set by request_ui_dump(), consumed by the SAME composite as dump_buf_.
+    // `ui_dumps_` counts the copies actually RECORDED, not the ones asked for:
+    // the caller writes files only when it moved, so a request that fell
+    // through the non-virtualized path below cannot be written out later
+    // against a different frame's eye image.
+    VkImage ui_dump_src_ = VK_NULL_HANDLE;
+    VkBuffer ui_dump_buf_ = VK_NULL_HANDLE;
+    VkDeviceSize ui_dump_layer_bytes_ = 0;
+    VkExtent2D ui_dump_extent_{};
+    uint64_t ui_dumps_ = 0;
     // Set by request_vr_blit(), likewise one-shot.
     VkImage vr_dst_ = VK_NULL_HANDLE;
     // Task #57 layer B. `ui_src_` is the layer's staging image, filled at the
@@ -187,6 +197,32 @@ public:
         dump_buf_ = buf;
         dump_layer_bytes_ = layer_bytes;
     }
+
+    // Task #57's instrument: the UI-only target, copied out during the SAME
+    // composite as the eye image above, so the two describe one frame.
+    //
+    // That is the whole point of it. The eye image is what the player saw and
+    // this says exactly which of its pixels are UI -- by construction, not by
+    // colour. Every attempt to answer that downstream failed: the `hud` cyan
+    // channel covers stars and cockpit console panels, and no threshold
+    // separates them (G/R medians 2.35 for known-good UI against 3.08 for the
+    // contaminated mask, overlapping; brightness fails because menu UI is dim
+    // while the cockpit HUD is a bright stroke). A mask taken from a DIFFERENT
+    // composite would reintroduce exactly the cross-time ambiguity that voided
+    // those measurements, so the pairing is not a convenience.
+    //
+    // Unlike request_dump this needs no barrier of ours. `src` is the layer's
+    // own staging image, which ui_capture() leaves in TRANSFER_SRC at the end
+    // of X4's UI pass and nothing between there and here touches.
+    void request_ui_dump(VkImage src, VkBuffer buf, VkExtent2D extent,
+                         VkDeviceSize layer_bytes) {
+        std::lock_guard<std::mutex> lock(mu_);
+        ui_dump_src_ = src;
+        ui_dump_buf_ = buf;
+        ui_dump_extent_ = extent;
+        ui_dump_layer_bytes_ = layer_bytes;
+    }
+    uint64_t ui_dumps() const { return ui_dumps_; }
 
     // Task #38: a one-shot request to copy the eye image into an OpenXR
     // swapchain image during the next composite.
@@ -465,6 +501,30 @@ public:
                     cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dump_buf_, n,
                     r);
                 dump_buf_ = VK_NULL_HANDLE;
+            }
+            // Task #57: the UI-only target for the same frame, recorded here
+            // and not in a command buffer of its own so that "same frame" is a
+            // property of the code rather than of the caller's timing.
+            //
+            // Always two layers: take 240 measured this image DOUBLED and take
+            // 256's log names it again -- `img #65 — 1408x1408 fmt=50, DOUBLED
+            // to 2 (per-eye)`. It is per-eye already, which is what makes the
+            // per-eye disparity readable straight off it.
+            if (ui_dump_buf_ != VK_NULL_HANDLE &&
+                ui_dump_src_ != VK_NULL_HANDLE) {
+                VkBufferImageCopy r[2]{};
+                for (uint32_t l = 0; l < 2; l++) {
+                    r[l].bufferOffset = ui_dump_layer_bytes_ * l;
+                    r[l].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, l, 1};
+                    r[l].imageExtent = {ui_dump_extent_.width,
+                                        ui_dump_extent_.height, 1};
+                }
+                fns_.CmdCopyImageToBuffer(cb, ui_dump_src_,
+                                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                          ui_dump_buf_, 2, r);
+                ui_dumps_++;
+                ui_dump_buf_ = VK_NULL_HANDLE;
+                ui_dump_src_ = VK_NULL_HANDLE;
             }
             // Task #38: the same finished frame, into the runtime's swapchain.
             // Also while it is still in TRANSFER_SRC, and for the same reason.
