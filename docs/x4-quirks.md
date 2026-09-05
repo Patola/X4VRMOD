@@ -10071,110 +10071,92 @@ capped at 400 paths and the `livesets` walk is gated behind
 `X4VR_DUMP_MATRICES`, which this take already sets — so neither should move the
 perf number. Prediction 4 includes that band precisely so a surprise is visible.
 
-# RESUME HERE AFTER A COMPACT — state as of take 253, take 254 pending
+# RESUME HERE AFTER A COMPACT — state as of take 256
 
-Everything below supersedes earlier "read this first" banners.
+Everything below supersedes earlier "read this first" banners. **Where this
+banner and an older section disagree, this banner wins.**
 
-## THE NEXT TASK: take 254 is handed to Patola. Score it, do not rebuild.
+## THE NEXT TASK: build Patola's TINT. Do not spend a take first.
 
-The command, the protocol and P254.1-2 are in **"Take 254 — the elimination that
-splits the last two candidates"** at the end of this file. Nothing needs
-building before the result comes back.
+His suggestion, and it is the right instrument: *"if what you need is to clearly
+separate the HUD from the cockpit and background/skybox, tint them differently.
+You already did that once."* (`B_csmdebugcolor`, for the shadow cascades.)
 
-**Score it in this order.** `score_run.py` first: the `stereo:` line reporting
-`shear m8 L=... R=...` must be **ABSENT** and `canvas: REFUSED` **present** —
-together they confirm the shear is actually off, and neither is a fault in this
-run. Then the clip:
+**Why it comes before any run.** The whole day failed on one thing: the `hud`
+cyan channel is CONTAMINATED in cockpit frames — rendering the mask shows it
+covering stars and cockpit console panels, both world geometry. There is no
+colour threshold that fixes it, measured not assumed: G/R medians 2.35
+(known-good UI) vs 3.08 (contaminated) overlap, and brightness fails because the
+menu UI is dim while the cockpit HUD is a bright stroke.
 
-    python3 tools/hud_vs_cockpit.py <clip> --px-per-deg 14.17
+Marking the UI at the source removes the classification problem instead of
+fighting it. The machinery exists — the layer already does fragment-side SPIR-V
+patching (`patch_fragment_force_block_uint`, `g_frag_patch_ok/refused`) and the
+canvas variant already singles out exactly the UI passes. A fragment transform
+on the colour store in the canvas variant, behind a knob, default off.
 
-Floor (under 0.3 deg) ⇒ the per-eye world shear is the cause. Near 2-3 deg ⇒
-per-eye transforms are exonerated and #57 is a symptom of #73/#74/#75.
+It lands on the CHEAP path — the present dumps that already work at 3.05 MB and
++1.2 ms/frame, no probe, no queue drain, no dump cap — and it answers BOTH open
+questions with one instrument.
 
-## THE FINDING: the path model is DEAD, and so is the pose model
+## What is SOLID (measured, controlled, believable)
 
-Take 253 put the UI and the cockpit in ONE image, ONE layer, ONE path — the
-thing five takes of pose work could not do — and the slip **grew per unit of
-head motion**:
+* **The canvas is correct on menus and loadscreens.** 32 dense frames, 160k UI
+  px, peak 0.98: UI per-eye disparity **-23.0 px against 22.5 predicted (1.02x)**,
+  flat across quartiles, **zero vertical**, and the cockpit in the same frames
+  also -23.0. Both at 1.40 m. `X4VR_CANVAS_M=1.4` is RIGHT.
+  This is the one correlation configuration that is unambiguous — same instant,
+  pure translation — unlike every cross-time measurement, which all failed.
+* **The cockpit sits at 1.40 m** (`sbs_depth`, within-frame ratio 1.000 over 43
+  frames, calibration-free). Agrees with the above independently.
+* **Take 256 is a healthy run** — `PASS`, 126 dumps, 84 with parallax, 884
+  displaced tiles all sheared the right way, 63 fps.
 
-    clip                    x MAD      y MAD    t_head med   normalised
-    vanilla  (control)      0.00 deg   0.00 deg      —            —
-    252 arm A, quad         2.20 deg   1.88 deg   0.0553 m      0.97
-    253 arm B, canvas       2.93 deg   2.30 deg   0.0234 m      3.06
+## What is VOID or UNRESOLVED — do not build on these
 
-Patola called it unchanged and was exactly right in ABSOLUTE terms; the arms
-separate only once head motion is divided out, which an eye cannot do.
+* **Every `hud_vs_cockpit` tracker number** (2.20/2.93 deg etc). Its control WAS
+  properly matched and read 2.41/5.02 deg where truth is zero, and unmeasurable
+  on another clip. Retired.
+* **`hud_drift.py` — RETIRED**, fails its control (45 px where truth is zero).
+* **The 0.45 / 0.30 rate result.** Measured on the contaminated channel. Both
+  checkerboard controls read 1.00, but that proves the channel correlates with
+  ITSELF, not that it is the HUD. Contaminants bias toward 1.00, so a true ratio
+  would be BELOW 0.45 — suggestive only.
+* **The cockpit-phase "3.33x too much separation"** — contamination, retracted.
+* **"The path model is dead" / "the canvas is 3.2x worse"** — withdrawn, they
+  came from the retired tracker.
+* **"The declared position makes no difference"** — unestablished, not
+  disproven; both its numbers came from the retired tracker.
+* **The lag hypothesis** — refuted by its own sign (+0.115 on one arm against
+  -0.14/-0.17 on others, with control noise of the same size).
 
-**Two candidates survive** — both VR-only, both arm-independent, both absent from
-the control that reads 0.00:
+## STANDING, unexplained: Patola sees wrong UI separation
 
-* the **per-eye world shear** (`m8 = ±0.42666`), depth-dependent by construction,
-  applied to World passes and **never** to UI passes;
-* the **servo** rotating X4's camera about a pivot that is not the eye, while no
-  head translation reaches X4 at all (#74 is off by necessity).
+Reported unprompted at takes 253, 255 and 256 — menu text and savegame
+loadscreens. **The measurement says those frames are correct to 2%.** Do not
+dismiss this: his eye has been right and mine wrong repeatedly this week. Either
+the defect is something disparity does not capture (a plane at 1.4 m spanning
+110 deg puts its corners at 2.44 m — geometrically right, perhaps not right to
+look at), or the frames he reacts to are not among the 32 measured.
 
-The yaw-only rate deficit sits with them: `hud_vs_camera` reads yaw **1.00**
-vanilla, **0.93** arm A, **0.89** arm B, with pitch **1.00** in all three. A
-horizontal-only, arm-independent effect is what a horizontal shear looks like.
-**#57 may not be a UI-placement task at all** — P254.2 means renumbering it.
+## Instrument rules earned the hard way
 
-## DEAD ENDS — do not revisit without new evidence
-
-* **Moving the quad's pose.** Takes 242 (identity), 243 (orientation only), 244
-  (orbited centre). None changed the slip.
-* **Moving the quad's anchor.** Take 247 anchored it to the head: **3.5x worse
-  in x, 6x in y**, reverted.
-* **The path itself.** Take 253, above. The canvas is **3.2x worse normalised**.
-* **The canvas DEPTH.** Measured, not assumed: the cockpit sits at **1.40 m**
-  against a HUD set to 1.40 m (`sbs_depth.py`, within-frame ratio 1.000 over 43
-  frames, calibration-free). `X4VR_CANVAS_M=1.4` is RIGHT.
-* **The IPD.** Runtime 0.0630 m against `X4VR_IPD=0.0640`, −1.5%. Too small.
-* **Stereo separation on the quads.** Real, quantified, **parked under #25** at
-  Patola's explicit direction.
-* **#74's head translation.** Harmful as implemented — a 0.17 m lever arm.
-  **Keep `X4VR_HEAD_TRANSLATE` off.**
-
-**NOT a dead end any more:** *the scene's declared position.* Takes 251/252 gave
-1.86 vs 1.85 and that was published as "no effect" — but both numbers came from
-`hud_drift`, which is now retired. **Unestablished, not disproven.**
-
-## What is measured and trustworthy
-
-* X4's cockpit HUD is **world-anchored**, exactly, both axes (vanilla clip,
-  ratio 1.00 over 84 pairs). X4's projection is angularly square.
-* HUD-vs-cockpit slip is **2-3 deg MAD in VR and 0.00 in vanilla** — real,
-  VR-only, and present in both arms.
-* Arm A's 2.20 deg is **predicted, not fitted**: a quad at 1.4 m carries the full
-  head-translation parallax a flat layer lacks, `atan(0.0553/1.4)` = 2.26 deg.
-  That explains arm A and anti-predicts arm B, so it is a special case.
-* The canvas path binds (98/99). **Its swap count is reported at `first
-  present`, a snapshot — takes 98/99's 18 is a `final:` teardown TOTAL over
-  346-348 variants. Non-zero is the criterion; these runs never reach teardown.**
-
-## Instruments — read this before trusting any slip number
-
-* **`tools/hud_drift.py` is RETIRED. Do not use it for #57.** It fails its own
-  negative control: 45 px MAD with 69% of frames lost on the vanilla clip, where
-  relative slip is structurally ZERO. Its numerator subtracts an *accumulated*
-  world estimate, so per-frame bias integrates into invented slip. Every figure
-  it produced is unreliable, including the published 1.85/1.86.
-* **`tools/hud_vs_cockpit.py` — use this.** Two patches in the SAME frame, the
-  vector between them; common motion cancels, nothing accumulates. Reads
-  **0.00 on the control**. `--selftest` covers rigid (must return 0) AND
-  differential (must recover the imposed shift).
-* `tools/hud_vs_camera.py` — sound for RATE questions, `--selftest` passes on a
-  real take-253 frame. It measures rates, so it **cannot see a parallax offset**;
-  it once "refuted" a correct hypothesis for that reason.
-* `tools/sbs_depth.py` — depth from an SBS clip, **calibration-free** (the
-  within-frame disparity ratio is the inverse depth ratio, so FOV and
-  px-per-degree cancel). Ratio within the frame, then median — never the reverse.
-* The `geom:` line — full rate, outside the quad block so every arm carries
-  `t_head`; `score_run.py` now drops pre-declaration samples (81 of them moved
-  take 253's correlation from +0.259 to +0.919).
-
-**Calibration debt:** `14.17 px/deg` appears in every command in this project
-with **no recorded derivation**. Treat any number that depends on it as
-provisional; prefer measurements that need no such constant.
+* **A control must match the DIFFICULTY of the measurement, not just have a
+  known answer.** A control on easy data licenses nothing about hard data.
+* **A control proves the channel correlates with itself, not that the channel is
+  what you think.** Four clean audits of the wrong quantity in this file.
+* **Render any mask and LOOK at it.** That is what caught the star boxes, the
+  HUD leaking into its own reference, and the contamination that voided a day.
+* **`X4VR_MV_DUMP_IMG` needs `X4VR_MV_PROBE` or `X4VR_MV_DUMP_AFTER_RP`** —
+  `probe_hooks_wanted()`. Take 256 set neither; adding the knob alone dumps
+  NOTHING. The cap is now `X4VR_MV_DUMP_IMG_MAX` (default still 6).
+* **Never share a `--frames-dir` between concurrent jobs** — extraction clears
+  the directory and silently kills the other run.
+* **A watcher must not be able to observe itself** — `pgrep -f "<pattern>"`
+  matches the watcher's own argv. Six waiters idled ~3 h on this; Patola caught
+  it, twice in one session.
+* `14.17 px/deg` still has NO recorded derivation. Prefer measurements that need
+  no such constant.
 
 ## The previous task: layer B's code — DONE
 
