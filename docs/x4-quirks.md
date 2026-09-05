@@ -13901,3 +13901,47 @@ DIFFICULTY of the real measurement, not merely have a known answer. A control
 run on easy data licenses nothing about hard data. The cheapest matched control
 is usually already inside the data — here, a second patch on the same rigid
 object.
+
+### The tracker's floor is not even stable — all three clips, matched control
+
+`--control` tracks two COCKPIT patches, which are the same rigid object, so the
+answer is **zero** on every clip:
+
+    clip   HUD-vs-cockpit (reported)   matched control (truth ZERO)   usable
+    252    2.20 deg / 1.88 deg          0.42 deg / 0.42 deg           25 of 360
+    253    2.93 deg / 2.30 deg          UNMEASURABLE                  16 of 404
+    254    2.93 deg / 0.63 deg          2.41 deg / 5.02 deg          107 of 315
+
+Not one high floor but **three different failures**: a floor of 0.42, an outright
+inability to complete, and a floor that exceeds the signal on both axes. A tool
+whose noise level swings by an order of magnitude between clips cannot be
+corrected by subtracting a floor, because there is no floor to subtract — only a
+per-clip one that must be measured every time and is sometimes unmeasurable.
+
+Take 252's control at 0.42 against its 2.20 reading is the one case that might
+still be real. It rests on **25 tracked frames of 360**, so it is a hint, not a
+measurement, and it is not enough to reinstate anything.
+
+### Building the replacement, and what only rendering it revealed
+
+`hud_vs_camera` gets a `cockpit` reference so its ratio is against the frame #57
+is posed about, instead of `grey`, which mixes the cockpit with a starfield at
+infinity. Two faults in the mask were found by drawing it over a frame and
+LOOKING, and neither was reachable by argument:
+
+* **The star boxes.** I reasoned that a star is "one bright pixel in 961, so tiny
+  variance". Wrong: a point source against black is a *high*-variance
+  neighbourhood, and the box filter smears it out to the filter's footprint. The
+  first mask outlined the canopy correctly and stamped a little box on **every
+  star** — the infinity reference walking back into the channel built to exclude
+  it. Fixed by dropping connected components below ~4 footprints.
+* **The HUD leaking into its own reference.** `grey` zeroes HUD pixels, so each
+  glyph leaves a hard-edged hole, and holes are high variance. The mask grew
+  blobs sitting exactly on the target bracket and the speed gauge. Left alone,
+  the reference channel would partly track the HUD, dragging the ratio toward
+  1.00 and **manufacturing the verdict "world-anchored"** — the answer under
+  test. Fixed by excluding a neighbourhood of the HUD, not just its pixels.
+
+Both would have produced a confident, plausible, wrong number. The general
+lesson is cheap and was earned expensively today: **when a channel decides what
+counts as the reference, render it and look at it.**
