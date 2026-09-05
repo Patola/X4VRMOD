@@ -13945,3 +13945,85 @@ LOOKING, and neither was reachable by argument:
 Both would have produced a confident, plausible, wrong number. The general
 lesson is cheap and was earned expensively today: **when a channel decides what
 counts as the reference, render it and look at it.**
+
+## The rate instrument fails its matched control too — video is the wrong substrate
+
+`hud_vs_camera --control` correlates one half of the cockpit against the other.
+Same rigid object, same clip, same motion: the answer is **1.00 by
+construction**. On take 254's clip it reads **0.830** (quartiles 0.75-1.00).
+
+That is a larger departure from truth than any measurement it was to judge:
+
+    clip                     yaw ratio   pairs
+    vanilla                    1.00        34
+    252 arm A, quad            0.93        14
+    253 arm B, canvas          0.89        17
+    254 no shear               1.00        15
+    254 MATCHED CONTROL        0.83        17   <- truth is 1.00
+
+**So the 0.93 and 0.89 cannot be distinguished from the instrument's own error**,
+and the tidy "shear ON = 0.93/0.89, shear OFF = 1.00" table is not a finding.
+
+### The lag hypothesis is REFUTED — by its own sign
+
+Splitting each run at its median rate, a temporal lag predicts the FAST bucket
+sitting materially below the SLOW one, in every run, in the same direction:
+
+    clip                 slow    fast    fast-slow
+    vanilla              1.000   0.970    -0.030
+    252 arm A            1.000   0.830    -0.170
+    253 arm B            0.800   0.915    **+0.115**
+    254 no shear         1.000   0.860    -0.140
+    254 CONTROL          0.775   0.860    +0.085   <- truth is flat 1.00
+
+**Take 253 has the opposite sign**, and the matched control — whose truth is a
+flat 1.00 at every rate — swings by +0.085 on its own. With 5-10 pairs per
+bucket, the -0.14 and -0.17 are the same size as the control's noise. The
+attractive story that #57 is X4's HUD lagging its own camera does not survive
+its first honest test, and it was mine, not the data's.
+
+One result IS clean and worth keeping: **vanilla's fast bucket reads 0.970
+against 1.000 slow.** So the correlator does not systematically underestimate a
+sparse HUD at these displacements. The tool is not inherently rate-biased; it
+simply cannot resolve 10% on these clips.
+
+### The real problem: 95% of every clip is unmeasurable
+
+Every run yields **14-17 usable pairs out of 300-350 frames**. The margin gate
+throws away almost everything, and the reason is the substrate: these are
+**H.264 headset recordings**, and compression destroys exactly what the HUD
+channel needs — thin, sparse, high-frequency cyan strokes on a dark field. The
+`grey` channel survives it (whole-image structure), which is why world motion
+measures fine and only the HUD is starved.
+
+**And the tool always said so.** Its own usage line is a PNG glob:
+
+    tools/hud_vs_camera.py '/tmp/x4vr-t245-present-n*-layer0.png'
+
+and its defaults were, in its own words, "sized for dumps 4 s apart". It was
+built for **lossless present dumps** and has been fed compressed video all day.
+Three instruments were then rebuilt to fix a problem that is in the input.
+
+**So: no more video analysis for #57.** The next measurement uses
+`X4VR_MV_DUMP_PRESENT` — lossless per-eye PNGs, at a cadence, during a head
+sweep — and the existing dump sets (t180-t245b) do not substitute, because they
+predate the sweep protocol: t237's log shows X4's camera at 0.00 for its whole
+session and 245b was recorded holding still.
+
+### Process failure, recorded because Patola had to catch it
+
+Six background waiters sat for ~3 hours while the work they were waiting on had
+already finished. Five used `pgrep -f "hud_vs_camera.py /dados"`, which **matches
+the waiter's own shell command line**, so the count could never reach zero; the
+sixth waited for a string in a file whose job had crashed. I diagnosed this exact
+self-match bug earlier in the same session, wrote it up, and then wrote three
+more of them.
+
+Two rules, both cheap:
+
+* A watcher must not be able to observe itself. Match on a PID, or a marker file
+  the job writes on exit — never a pattern that appears in the watcher's own
+  argv.
+* Every concurrent job needs its OWN `--frames-dir`. Sharing one silently killed
+  a control mid-run, because `frames_from_video` clears the directory before it
+  extracts.
