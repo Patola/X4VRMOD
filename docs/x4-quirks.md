@@ -14268,3 +14268,59 @@ channel could not answer. That is the next measurement, and it is cheap.
 The rate question (#57's slip) still needs many pairs of a clean UI channel, and
 the 6-dump cap blocks it. Raising that cap is a small, contained layer change,
 and it should be made deliberately rather than folded into a take.
+
+### The 6-dump cap is now a knob — `X4VR_MV_DUMP_IMG_MAX`
+
+`kMaxDumps` was a hardcoded 6, "capped so a long run cannot fill /tmp" — a good
+reason that had become a wall. It now reads `X4VR_MV_DUMP_IMG_MAX` and **keeps 6
+as the default**, so a run that does not ask still cannot fill the disk. Sized
+against measurement rather than fear: take 256 priced a dump at 3.05 MB for both
+layers, so 200 dumps of one image is about 600 MB. Built, and the 13
+self-running tests still pass. (`x4vr_test_spirv_patch` is a CLI tool that exits
+2 on its usage banner and `x4vr_test_xr_probe` needs a live runtime — neither is
+a regression, and neither is a test that runs itself.)
+
+### A trap found while writing the command, NOT after spending the take
+
+`X4VR_MV_DUMP_IMG` fires from `probe_collect`, and its callers are gated on
+
+    probe_hooks_wanted() = g_mv_probe || dump_after_rp() >= 0
+
+**Take 256 set neither.** Adding `X4VR_MV_DUMP_IMG=65` to that command line
+would have dumped nothing at all, and the run would have come back empty for a
+reason having nothing to do with the question. The sweep probe also costs: it
+arms every `kProbeEvery = 30` presents and drains the GPU each time — take 176
+froze for 30 s at a stretch with ~10 usable frames between.
+
+I could not verify the path end-to-end offline. `tests/multiview_render.cpp`
+never presents and does not exercise `MV_DUMP_IMG`, so the headless harness that
+has saved takes before cannot reach this one without new harness code.
+
+### Patola's tint is the better instrument, and it should be built before another take
+
+His words: *"if what you need is to clearly separate the HUD from the cockpit and
+background/skybox, tint them differently. You already did that once."* He is
+right on both counts — `B_csmdebugcolor` is exactly that trick, used for the
+shadow cascades.
+
+**Why it beats the img-dump path.** Marking the UI AT THE SOURCE removes the
+whole classification problem instead of fighting it downstream. The cyan channel
+cannot be fixed by any threshold — measured, not assumed: known-good UI has
+G/R median 2.35 and the contaminated cockpit mask 3.08, the distributions
+overlap, and brightness cannot separate them because the menu UI is dim while
+the cockpit HUD is a bright stroke. A tint written by the canvas variant is
+unambiguous by construction.
+
+And it lands on the CHEAP path: the present dumps that already work at 3.05 MB
+and +1.2 ms/frame, with no probe, no queue drain, and no 6-dump cap. That answers
+**both** open questions with one instrument — the UI's per-eye disparity in the
+cockpit (currently unknown; the 3.33x reading was contamination) and the rate
+question (#57's slip, currently 0.45 on a dirty channel), because a tinted
+channel gives as many pairs as there are dumps.
+
+The machinery exists: the layer already does fragment-side SPIR-V patching
+(`patch_fragment_force_block_uint`, `g_frag_patch_ok/refused`,
+`g_mod_frag_patched`), and the canvas variant already singles out exactly the UI
+passes. The work is a fragment transform on the colour store in the canvas
+variant, behind a knob, defaulting off. **That is a contained change and it
+should be made deliberately, not folded into a take at the end of a long day.**

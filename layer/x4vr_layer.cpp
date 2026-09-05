@@ -10421,7 +10421,24 @@ void probe_collect(DeviceData *d, VkQueue queue, bool count_frame) {
         while (*s == ' ')
             s++;
     }
-    const uint32_t kMaxDumps = 6;
+    // Was a hardcoded 6, "capped so a long run cannot fill /tmp" — a good
+    // reason that had become a wall. Six dumps of img #65 is plenty to measure
+    // the UI's per-eye DISPARITY, which is taken WITHIN one dump (layer0
+    // against layer1) and needs no pairs at all. It is nowhere near enough for
+    // the RATE question, which consumes consecutive pairs and wants dozens.
+    //
+    // So the cap becomes a knob and keeps its old value as the default: a run
+    // that does not ask still cannot fill the disk, and one that asks says how
+    // much it wants. Sized against measurement, not fear — take 256 priced a
+    // present dump at 3.05 MB for both layers, so 200 dumps of one image is
+    // about 600 MB.
+    static const uint32_t kMaxDumps = [] {
+        const char *e = getenv("X4VR_MV_DUMP_IMG_MAX");
+        if (!e || !*e)
+            return 6u;
+        const long v = strtol(e, nullptr, 10);
+        return v > 0 ? (uint32_t)v : 6u;
+    }();
     static std::mutex dump_mu;
     static std::unordered_map<uint32_t, uint32_t> dumps_by_img;
     uint32_t dumps = 0;
