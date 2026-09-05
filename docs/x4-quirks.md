@@ -13670,3 +13670,61 @@ slip than arm A did. Patola reported it as unchanged and said explicitly he
 would not notice a small change. **The number decides this one, not the eye** --
 which is the opposite of the usual rule here, and only because the two arms were
 not exercised equally.
+
+### P253.4 REFUTED — and the path model dies with it
+
+    clip                     x MAD      y MAD    t_head med   full parallax   normalised
+    vanilla  (control)       0.00 deg   0.00 deg      —             —              —
+    252 arm A, quad          2.20 deg   1.88 deg   0.0553 m      2.26 deg        0.97
+    253 arm B, canvas        2.93 deg   2.30 deg   0.0234 m      0.96 deg        3.06
+
+P253.4 offered two outcomes: **under 0.3 deg** if the canvas removed the path
+difference, or **0.96 deg** if the mechanism were untouched. Arm B reads **2.93
+deg** — above both, and above arm A in absolute terms **while the head moved 2.4x
+less**. Normalised, arm B is **3.2x worse** than the arm it was meant to fix.
+
+**So the path difference is not the cause.** The UI and the cockpit were put in
+one image, in one layer, in one path — the thing five takes of pose work could
+not do — and the slip did not merely survive, it grew per unit of head motion.
+Patola's report and the instrument agree exactly: *"It seemed the same to me...
+if it changed by a small amount, I wouldn't probably notice"*, and in ABSOLUTE
+terms 2.20 against 2.93 deg is indeed about the same. The two arms differ only
+once the head motion is divided out, which is not something an eye can do.
+
+**What this costs.** The explanation for arm A was good — 2.20 deg against a
+predicted 2.26 — and it is still probably right *for arm A*: a quad at 1.4 m
+does carry parallax a flat layer lacks. But it cannot be the general cause,
+because removing the quad made things worse. A mechanism that explains one arm
+and anti-predicts the other is a special case, not the cause.
+
+**Six mechanisms are now eliminated by measurement**, each with a number:
+quad pose (242/243/244), quad anchor (247, 3.5x worse), declared position
+(251 vs 252 — now downgraded to *unestablished*, since both readings came from
+the broken instrument), IPD (-1.5%, too small), canvas depth (measured 1.40 m
+against a cockpit at 1.40 m, ratio 1.000), and now the path itself (253).
+
+**What is left, and it is short.** Only two things are VR-only, present in BOTH
+arms, and absent from the vanilla control that reads 0.00:
+
+* **the per-eye world shear** (`m8 = +-0.42666`), which is depth-dependent by
+  construction and is applied to World passes but never to UI passes — so the
+  cockpit's rendered position carries a term the HUD's does not, and that term
+  moves when the patch's depth from the eye changes;
+* **the head-look servo**, which rotates X4's camera about a pivot that is not
+  the eye, while no head TRANSLATION is fed to X4 at all (#74 is off by
+  necessity) — so the eye point moves in a way X4 never hears about.
+
+Both are #73/#75 territory rather than #57's. That is the reframing this take
+bought: **#57 may not be a UI-placement task at all.**
+
+Note the yaw-only rate deficit sits with them and is also arm-independent:
+`hud_vs_camera` reads yaw **1.00** vanilla, **0.93** arm A, **0.89** arm B, with
+pitch at 1.00 in all three. A horizontal-only, VR-only, arm-independent effect
+is what a horizontal per-eye shear would look like.
+
+**The next step is an elimination, not a fix.** Both survivors are switchable, so
+neither needs a new knob: run the same clip with the stereo shear OFF. If the
+HUD-vs-cockpit MAD falls to the floor, the shear is the cause; if it holds near
+3 deg, it is the servo and the missing translation. That is one take and it
+splits the last two candidates, in the style that has actually worked here —
+switch a candidate off and re-measure rather than build a probe to watch it.
