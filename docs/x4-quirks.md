@@ -14087,3 +14087,61 @@ something, and #57 gets a number instead of an argument.
 the per-eye separation Patola reported as "visibly wrong" on the menu text and
 the savegame loadscreen — `sbs_depth.py`'s question, on data far better than the
 SBS clip it was run on, and it needs no calibration constant.
+
+### Take 256 — the same run at cadence 10, because the gap was the problem
+
+Take 255's dumps are lossless and healthy (`PASS`, 87 of 120 frames with parallax,
+all 662 displaced tiles sheared the right way). The failure was **the interval**,
+not the images, and Patola caught it: *"from my own visual assessment of the
+pictures, 52 to 114 would be usable"*. He was right.
+
+Measured with an unbounded phase-correlation estimator, the displacement between
+consecutive dumps is **bimodal**: median 8 px, p90 218, max 564. At ~1.3 s apart
+a pair is either parked in a menu (0 px) or mid-sweep (100-500 px), with little
+in between — and only **3%** exceed the +-400 px search bound, so the bound was
+never the main fault. **41 pairs do sit in the workable 8-120 px band**, which is
+why the pictures look fine and the tool still reported 1-2 usable pairs.
+
+The cadence was chosen for disk and stall cost and never checked against how far
+a head sweep travels in that time. Take 255 prices both honestly:
+
+    per dump           3.05 MB  (240 files, 366 MB, both eye layers)
+    frame time         6.88 ms without dumps -> 8.11 ms at cadence 45
+    so per dump        ~55 ms of stall, amortised 1.23 ms/frame at 45
+
+At cadence 10 that is ~5.5 ms/frame amortised — about 80 fps, dumps ~125 ms
+apart, ~713 dumps and ~2.2 GB. To land in the 8-120 px band at 125 ms the sweep
+wants 5-75 deg/s, which any comfortable continuous motion satisfies.
+
+    X4VR_TAKE=256-DUMPS10 X4VR_MV_DUMP_PRESENT=10 X4VR_MV_DUMP=/tmp/x4vr-t256 X4VR_CANVAS_M=1.4 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DECLARE_RENDERED_POS=1 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take256.log X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+Diff against take 255: the take name, the log path, the dump prefix, and the
+cadence. Nothing else.
+
+**Protocol — and "keep moving" is the whole point.** In the cockpit, ~40 s of
+CONTINUOUS motion: swing left, then right, then up, then down, then a slow roll,
+taking roughly 3 s per swing and **never pausing**. A parked pair reads 0 px and
+is discarded, and take 255 lost most of its dumps to exactly that. Then quit
+promptly — dumps keep being written in menus and cost disk for nothing.
+
+**Acceptance, and the control is the gate.** `score_run.py` first, then:
+
+    python3 tools/hud_vs_camera.py '/tmp/x4vr-t256-present-n*-layer0.png' --log /tmp/x4vr-take256.log --control --range 150
+    python3 tools/hud_vs_camera.py '/tmp/x4vr-t256-present-n*-layer0.png' --log /tmp/x4vr-take256.log --reference cockpit --range 150
+
+**P256.1 — yield.** Usable pairs should rise from 1-2 into the dozens. If it
+stays in single figures with the gaps this small, the HUD channel is starved for
+a reason that is not the interval, and that is the next thing to find.
+
+**P256.2 — the control, checkerboard.** Must read **1.00**. Note the earlier
+left/right-half control was NOT matched — content flows across a screen-space
+boundary between frames, making it harder than the measurement, and a control
+harder than the measurement cannot condemn it. That flaw is why the 0.83 that
+voided the rate readings is itself withdrawn. The checkerboard split follows the
+content.
+
+**P256.3 — only then** does HUD-vs-cockpit mean anything.
+
+**Still void regardless:** every `hud_vs_cockpit` tracker number. Its control WAS
+matched (two 64x64 cockpit patches tracked exactly like the HUD patch) and it
+read 2.41/5.02 deg where the truth is zero.

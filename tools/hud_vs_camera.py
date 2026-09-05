@@ -89,16 +89,25 @@ def channels(lin):
     luma = 0.2126 * R + 0.7152 * G + 0.0722 * B
     grey = np.where(hud > 0, 0.0, luma)
     cock = cockpit_mask(grey, hud)
-    # Two disjoint halves of the SAME cockpit, for the matched control. Both
-    # are the same rigid object, so their motion ratio must be 1.00 -- measured
-    # on the same clip, with the same motion and the same difficulty as the
-    # real run. An unmatched control licenses nothing: `hud_vs_cockpit` read
-    # 0.00 on a nearly-static clip and 2.41 deg where the truth was zero on a
-    # moving one.
-    w = cock.shape[1] // 2
-    ca, cb = np.zeros_like(cock), np.zeros_like(cock)
-    ca[:, :w] = cock[:, :w]
-    cb[:, w:] = cock[:, w:]
+    # Two interleaved halves of the SAME cockpit, for the matched control.
+    # Ratio must be 1.00: same rigid object, same clip, same motion.
+    #
+    # **The first version split it LEFT half against RIGHT half, and that was
+    # not a matched control -- it was a harder problem.** Content moves between
+    # frames, so a screen-space boundary lets struts flow across it: the left
+    # mask in frame 1 and the left mask in frame 2 hold partly different
+    # physical parts, and the correlation is degraded by an effect the real
+    # measurement never suffers, because `hud` and `cockpit` are each
+    # whole-frame. A control that is harder than the measurement cannot condemn
+    # it -- and it did: the 0.83 that voided the rate readings came from it.
+    #
+    # A CHECKERBOARD follows the content instead. Both channels sample the same
+    # structures at the same places, at half density, so anything that moves
+    # moves in both, and no boundary sweeps across the frame.
+    yy, xx = np.indices(cock.shape)
+    chk = ((yy // 2 + xx // 2) & 1).astype(bool)
+    ca = np.where(chk, cock, 0.0)
+    cb = np.where(chk, 0.0, cock)
     return {'hud': hud, 'grey': grey, 'cockpit': cock,
             'cockpit_a': ca, 'cockpit_b': cb}
 
