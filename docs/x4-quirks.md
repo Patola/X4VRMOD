@@ -14145,3 +14145,39 @@ content.
 **Still void regardless:** every `hud_vs_cockpit` tracker number. Its control WAS
 matched (two 64x64 cockpit patches tracked exactly like the HUD patch) and it
 read 2.41/5.02 deg where the truth is zero.
+
+### STANDING DEFECT, reported by Patola across takes 253-256: UI per-eye separation is wrong
+
+His words, unprompted and repeated: *"the last few runs have the HUD and
+interface elements like the menu text and savegame loadscreens with the per-eye
+separation wrong."* Reported at 253, restated at 255, restated again at 256. It
+is not a passing impression and it is not the slip; it is a second, independent
+defect and it has been sitting under the slip work all week.
+
+**It is measurable from data already on disk, with no further take.** Every
+present dump writes BOTH eye layers of the same instant, losslessly:
+`-layer0` and `-layer1`. And the canvas makes a falsifiable prediction — the log
+of every one of these runs says
+
+    canvas: 1.400 m -> s=0.01601 NDC (L=+s R=-s), 11.3 px on a 1408-wide eye
+
+so **the UI's horizontal disparity between the two layers must be 11.3 px**, flat
+across the whole element, with **zero** vertical disparity. Anything else is the
+defect, quantified:
+
+* wrong magnitude -> the UI sits at the wrong depth (but note `sbs_depth`
+  already measured the COCKPIT at 1.40 m against a HUD set to 1.40 m, so a gross
+  depth error is unlikely and something else is moving it);
+* magnitude varying across the element -> it is not being treated as a flat
+  canvas at all;
+* any vertical component -> the eyes are asked to diverge vertically, which does
+  not fuse and is the "cross-eyed" half of #52.
+
+The scorer's `eye` section already tile-matches the two layers, but it reports
+the WORLD: *"884 displaced tile(s) move left and 4 move right, shift -39..+0
+px"*. That is the scene's parallax across many depths, not the UI's. The UI has
+to be isolated by the cyan channel first — the same `hud` mask
+`hud_vs_camera.channels()` builds — and measured on its own.
+
+**This is now a task in its own right, not a footnote to #57.** It has a
+prediction (11.3 px, flat, no vertical), the data exists, and it costs no run.
