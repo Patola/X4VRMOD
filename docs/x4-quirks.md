@@ -13627,3 +13627,46 @@ Its known limit still stands and matters: it measures *rates*, so it cannot see
 a parallax offset, and it once "refuted" P246.1 for that reason. But "does the
 HUD move with the cockpit or against it" is a rate question, which is the one
 this instrument was built for and the one #57 is about.
+
+### The correctly-posed instrument, and a prediction written before arm B lands
+
+`hud_vs_cockpit.py` tracks a HUD patch and a cockpit patch **in the same frame**
+and reports the vector between them. Common motion cancels in the frame --
+rotation, servo lag, rigid reprojection, shake -- so nothing accumulates and the
+floor is match noise. Its selftest covers both configurations that matter:
+rigid motion must return 0, an imposed differential must be recovered exactly.
+
+    clip                     x MAD      y MAD    truth
+    vanilla  (control)       0.00 deg   0.00 deg  ZERO
+    252 arm A, quad          2.20 deg   1.88 deg  unknown
+
+**The control reads zero.** On the same clip `hud_drift` invented 45 px. That is
+the difference between a differential measurement and an accumulated one.
+
+**Arm A's 2.20 deg is not a free parameter — it is predicted.** In arm A the HUD
+is a compositor QUAD at 1.4 m, which the runtime renders with true parallax for
+the live head pose, while the scene is a FLAT projection layer, which carries no
+parallax at all. Under head translation the two must therefore diverge by the
+full parallax of that translation at the quad's distance:
+
+    atan(t_head_median / z_quad) = atan(0.0553 / 1.4) = 2.26 deg
+    measured                                            2.20 deg   (0.97x)
+
+So the quad carries **exactly the parallax the scene lacks**, and the ratio this
+project has been computing all along -- `slip / atan(t_head/zm)` -- is **0.97 on
+the good instrument, not 1.85**. The 1.85 was hud_drift's inflation, and the
+quantity was sound; only the numerator was junk.
+
+**P253.4, written now, before arm B is measured.** If the canvas removes the
+path difference, both HUD and cockpit are flat pixels in one layer, no
+differential parallax can arise, and arm B reads at the floor -- call it under
+0.3 deg. If the mechanism is untouched, arm B reads the full parallax for ITS
+head motion, `atan(0.0234/1.4)` = **0.96 deg**. Those two predictions are 3x
+apart and the instrument's floor is 0.00, so this is decidable.
+
+Note what a "win" would look like from inside the headset: arm B's head motion
+was 2.4x smaller, so even an unfixed mechanism produces a *smaller absolute*
+slip than arm A did. Patola reported it as unchanged and said explicitly he
+would not notice a small change. **The number decides this one, not the eye** --
+which is the opposite of the usual rule here, and only because the two arms were
+not exercised equally.
