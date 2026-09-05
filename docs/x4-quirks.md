@@ -10071,42 +10071,52 @@ capped at 400 paths and the `livesets` walk is gated behind
 `X4VR_DUMP_MATRICES`, which this take already sets — so neither should move the
 perf number. Prediction 4 includes that band precisely so a surprise is visible.
 
-# RESUME HERE AFTER A COMPACT — state as of take 252, arm B pending
+# RESUME HERE AFTER A COMPACT — state as of take 253, take 254 pending
 
 Everything below supersedes earlier "read this first" banners.
 
-## THE NEXT TASK: take 253 has been handed to Patola. Score it, do not rebuild.
+## THE NEXT TASK: take 254 is handed to Patola. Score it, do not rebuild.
 
-The command, the protocol and P253.1-3 are in **"Take 253 — arm B"** at the end
-of this file. It is arm B of a two-arm A/B; **arm A is take 252, already run and
-measured.** Nothing needs building before the result comes back.
+The command, the protocol and P254.1-2 are in **"Take 254 — the elimination that
+splits the last two candidates"** at the end of this file. Nothing needs
+building before the result comes back.
 
-    arm A  take 252  UI on the QUAD    normalised slip ratio 1.85
-    arm B  take 253  UI on the CANVAS  pending
+**Score it in this order.** `score_run.py` first: the `stereo:` line reporting
+`shear m8 L=... R=...` must be **ABSENT** and `canvas: REFUSED` **present** —
+together they confirm the shear is actually off, and neither is a fault in this
+run. Then the clip:
 
-**Score arm B in this order.** `score_run.py` first: a **non-zero canvas swap
-count** or the arm did not happen and nothing else in the run means anything
-(takes 98/99 set the expected order at 18 pipeline stages). Then the clip:
+    python3 tools/hud_vs_cockpit.py <clip> --px-per-deg 14.17
 
-    python3 tools/hud_drift.py <clip> --px-per-deg 14.17 --radius 140
-    ratio = slip_MAD / degrees(atan(t_head_median / zm))
+Floor (under 0.3 deg) ⇒ the per-eye world shear is the cause. Near 2-3 deg ⇒
+per-eye transforms are exonerated and #57 is a symptom of #73/#74/#75.
 
-`t_head` comes from the `geom:` line via `score_run.py`. **Always compare
-ratios, never raw slip** — take 251 was wasted comparing raw numbers across runs
-with different head motion.
+## THE FINDING: the path model is DEAD, and so is the pose model
 
-## THE FINDING, and it took five takes to reach
+Take 253 put the UI and the cockpit in ONE image, ONE layer, ONE path — the
+thing five takes of pose work could not do — and the slip **grew per unit of
+head motion**:
 
-**The HUD slip is a PATH problem, not a pose problem.** Everything the desktop
-shows — cockpit, stars, all of it — is pixels in ONE projection layer. The UI
-quad is the only object in the pipeline the compositor renders as **geometry**.
-Two objects, two paths through the runtime, and the disagreement between them is
-the slip.
+    clip                    x MAD      y MAD    t_head med   normalised
+    vanilla  (control)      0.00 deg   0.00 deg      —            —
+    252 arm A, quad         2.20 deg   1.88 deg   0.0553 m      0.97
+    253 arm B, canvas       2.93 deg   2.30 deg   0.0234 m      3.06
 
-Patola asked the question that produced this: *"what makes the HUD special —
-wouldn't that specialness be the reason we've been struggling?"* It is, and the
-specialness is entirely ours: `X4VR_HUDLESS=1` strips the UI out of X4's image
-so the layer can put it on its own composition layer.
+Patola called it unchanged and was exactly right in ABSOLUTE terms; the arms
+separate only once head motion is divided out, which an eye cannot do.
+
+**Two candidates survive** — both VR-only, both arm-independent, both absent from
+the control that reads 0.00:
+
+* the **per-eye world shear** (`m8 = ±0.42666`), depth-dependent by construction,
+  applied to World passes and **never** to UI passes;
+* the **servo** rotating X4's camera about a pivot that is not the eye, while no
+  head translation reaches X4 at all (#74 is off by necessity).
+
+The yaw-only rate deficit sits with them: `hud_vs_camera` reads yaw **1.00**
+vanilla, **0.93** arm A, **0.89** arm B, with pitch **1.00** in all three. A
+horizontal-only, arm-independent effect is what a horizontal shear looks like.
+**#57 may not be a UI-placement task at all** — P254.2 means renumbering it.
 
 ## DEAD ENDS — do not revisit without new evidence
 
@@ -10114,40 +10124,57 @@ so the layer can put it on its own composition layer.
   (orbited centre). None changed the slip.
 * **Moving the quad's anchor.** Take 247 anchored it to the head: **3.5x worse
   in x, 6x in y**, reverted.
-* **The scene's declared position.** Takes 251/252 flipped
-  `X4VR_DECLARE_RENDERED_POS` and the normalised ratio came back **1.86 vs
-  1.85** — no effect. This killed the model that had explained 247.
-* **The IPD.** The runtime reports 0.0629 m against `X4VR_IPD=0.0640`, −1.7%.
-  Too small to see. Instrument fired, hypothesis died.
-* **Stereo separation on the quads.** Real, quantified (the map presents at
-  ~2.9x the cockpit hull's distance), and **parked under #25** at Patola's
-  explicit direction: the slip is what blocks gameplay.
-* **#74's head translation.** Harmful as implemented — its 0.17 m shift is
-  rotated by the camera angle into a lever arm. Take 245A removing it fixed
-  three complaints at once. **Keep `X4VR_HEAD_TRANSLATE` off.**
+* **The path itself.** Take 253, above. The canvas is **3.2x worse normalised**.
+* **The canvas DEPTH.** Measured, not assumed: the cockpit sits at **1.40 m**
+  against a HUD set to 1.40 m (`sbs_depth.py`, within-frame ratio 1.000 over 43
+  frames, calibration-free). `X4VR_CANVAS_M=1.4` is RIGHT.
+* **The IPD.** Runtime 0.0630 m against `X4VR_IPD=0.0640`, −1.5%. Too small.
+* **Stereo separation on the quads.** Real, quantified, **parked under #25** at
+  Patola's explicit direction.
+* **#74's head translation.** Harmful as implemented — a 0.17 m lever arm.
+  **Keep `X4VR_HEAD_TRANSLATE` off.**
+
+**NOT a dead end any more:** *the scene's declared position.* Takes 251/252 gave
+1.86 vs 1.85 and that was published as "no effect" — but both numbers came from
+`hud_drift`, which is now retired. **Unestablished, not disproven.**
 
 ## What is measured and trustworthy
 
 * X4's cockpit HUD is **world-anchored**, exactly, both axes (vanilla clip,
   ratio 1.00 over 84 pairs). X4's projection is angularly square.
-* The slip is **head translation**: `d_scene` tracks `t_head` at r=+0.986, and
-  during a ROTATION-ONLY phase the head still moves 4.2 cm median / 12.7 cm
-  peak — the neck arc. At 1.4 m that is 1.7-5.2 deg.
-* The canvas path **binds** — takes 98/99, 346-348 variants, 18 stages. Recent
-  zeros are `ui_layer_enabled()` refusing by design.
+* HUD-vs-cockpit slip is **2-3 deg MAD in VR and 0.00 in vanilla** — real,
+  VR-only, and present in both arms.
+* Arm A's 2.20 deg is **predicted, not fitted**: a quad at 1.4 m carries the full
+  head-translation parallax a flat layer lacks, `atan(0.0553/1.4)` = 2.26 deg.
+  That explains arm A and anti-predicts arm B, so it is a special case.
+* The canvas path binds (98/99). **Its swap count is reported at `first
+  present`, a snapshot — takes 98/99's 18 is a `final:` teardown TOTAL over
+  346-348 variants. Non-zero is the criterion; these runs never reach teardown.**
 
-## Instruments — all four have bitten, all four are now guarded
+## Instruments — read this before trusting any slip number
 
-* `tools/hud_drift.py` — tracks ONE template with a **motion prior**, says
-  TARGET LOST. Reports sd AND a robust MAD, and flags when sd > 2.5x MAD. Use
-  the MAD. Two earlier versions silently re-targeted.
-* `tools/hud_vs_camera.py` — `--selftest` audits it on synthetic shifts,
-  including the DIFFERENTIAL case; a rigid-shift-only audit proves nothing.
-* The `geom:` line — head, neutral, declared and quad positions, full rate,
-  outside the quad block so BOTH arms carry `t_head`.
-* `score_run.py` geom section — medians and correlations, with a conditional
-  verdict. It once printed "the layers agree" unconditionally under numbers
-  that disagreed.
+* **`tools/hud_drift.py` is RETIRED. Do not use it for #57.** It fails its own
+  negative control: 45 px MAD with 69% of frames lost on the vanilla clip, where
+  relative slip is structurally ZERO. Its numerator subtracts an *accumulated*
+  world estimate, so per-frame bias integrates into invented slip. Every figure
+  it produced is unreliable, including the published 1.85/1.86.
+* **`tools/hud_vs_cockpit.py` — use this.** Two patches in the SAME frame, the
+  vector between them; common motion cancels, nothing accumulates. Reads
+  **0.00 on the control**. `--selftest` covers rigid (must return 0) AND
+  differential (must recover the imposed shift).
+* `tools/hud_vs_camera.py` — sound for RATE questions, `--selftest` passes on a
+  real take-253 frame. It measures rates, so it **cannot see a parallax offset**;
+  it once "refuted" a correct hypothesis for that reason.
+* `tools/sbs_depth.py` — depth from an SBS clip, **calibration-free** (the
+  within-frame disparity ratio is the inverse depth ratio, so FOV and
+  px-per-degree cancel). Ratio within the frame, then median — never the reverse.
+* The `geom:` line — full rate, outside the quad block so every arm carries
+  `t_head`; `score_run.py` now drops pre-declaration samples (81 of them moved
+  take 253's correlation from +0.259 to +0.919).
+
+**Calibration debt:** `14.17 px/deg` appears in every command in this project
+with **no recorded derivation**. Treat any number that depends on it as
+provisional; prefer measurements that need no such constant.
 
 ## The previous task: layer B's code — DONE
 
@@ -13254,7 +13281,17 @@ parallax, which take 250's geometry then corroborated. Three conclusions rest on
 those two numbers, so "the earlier sweeps were probably smaller" was not good
 enough. **Both earlier clips have zero re-targets**, above. They stand.
 
-### `tools/hud_drift.py`
+### `tools/hud_drift.py` — RETIRED at take 253, see the end of this file
+
+> **Superseded. Do not use it for #57.** It fails its own negative control (45 px
+> MAD, 69% lost, on a clip whose true relative slip is zero), because its
+> residual is taken against an *accumulated* world estimate whose per-frame bias
+> integrates. `tools/hud_vs_cockpit.py` replaces it and reads 0.00 on that same
+> control. The paragraph below — "agreement on a clean clip earns the right to be
+> believed on a dirty one" — is exactly the reasoning that let it through: two
+> instruments agreeing on an easy clip says nothing about either one's floor,
+> and neither was ever shown a case with a known answer. The section is kept as
+> written because the takes it scored are in the record.
 
 Matches ONE template, taken once from the first usable frame, by normalised
 cross-correlation over the whole frame, with a margin gate. When the peak does

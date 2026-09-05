@@ -1,6 +1,31 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later WITH x4vrmod-linking-exception
-"""How far does X4's HUD wander against the world? Track ONE element.
+"""RETIRED — this tool fails its own negative control. Use hud_vs_cockpit.py.
+
+**Do not use this for task #57.** Run on the vanilla desktop clip, where the
+HUD is world-anchored and relative slip is therefore structurally ZERO, it
+reports **45 px of MAD with 69% of frames lost**. It has no healthy value, so
+every reading it ever produced looked like a symptom — including the 1.85/1.86
+"normalised slip ratios" that nine takes were scored against, and the
+"identical, so the declared position makes no difference" conclusion drawn from
+them. Those numbers are retracted; see docs/x4-quirks.md, take 253.
+
+**The design fault is the accumulation.** It reports `relx = hud_x - wx`, where
+`wx` is the *summed* per-frame world shift. A per-frame bias does not average
+out, it integrates: 0.05 px of bias over 400 frames is 20 px of invented slip.
+A residual against an accumulated estimate carries that estimate's random walk.
+
+`tools/hud_vs_cockpit.py` replaces it by measuring a difference **within one
+frame** — two patches, the vector between them — so common motion cancels
+exactly and nothing accumulates. It reads **0.00 on the same control clip**.
+
+Kept, unmodified, because the takes it scored are in the record and a reader
+tracing them needs to see what produced those numbers. Read below for what it
+was trying to do; do not run it for new work.
+
+---
+
+How far does X4's HUD wander against the world? Track ONE element.
 
     tools/hud_drift.py <clip.mp4|glob> --px-per-deg 9.07
 
