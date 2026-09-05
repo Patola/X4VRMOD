@@ -13454,3 +13454,176 @@ right depth but mouse clicks will land off it, because X4 hit-tests in unshifted
 screen space. The cursor shim's compensation is dormant. **Do not judge clicking
 in this arm**; it is a depth measurement, and if the canvas wins on the slip
 then wiring the cursor map back up is the follow-on work rather than a surprise.
+
+### What a WON arm B reads — written before the numbers
+
+"Below 1.85" is not a criterion until the bottom of the scale is known, and this
+instrument's bottom is not zero. `hud_drift` reports `relx = hud_x − wx`, where
+`wx` is the **accumulated sum** of per-frame world shifts. A per-frame bias does
+not average out, it integrates: 0.05 px of bias over 400 frames is 20 px of
+invented slip, 1.4 deg at this clip's scale. So the floor is a property of the
+clip, not of the tool, and it has to be measured rather than assumed.
+
+**The floor's control is the vanilla desktop clip** — X4 rendering natively, its
+HUD world-anchored (measured, ratio 1.00, 84 pairs). Relative slip there is
+structurally zero, so whatever `hud_drift` reports on it is the floor.
+
+Arm B should read AT that floor, because it is structurally incapable of
+relative slip: the HUD and the cockpit are the same pixels in one rigid layer.
+The compositor still reprojects that layer, and the `poselag` line in this very
+run says it does so by up to 3.56 deg — but a rigid warp moves HUD and world
+**together**, so it is common-mode and this measurement cannot see it. (That is
+\#75, and it stays open regardless of how arm B scores.)
+
+Three readings and what each would mean:
+
+* **at the floor** — the path model is right and the canvas removes the slip.
+* **well under 1.85 but well over the floor** — the path difference was part of
+  it and something else contributes; the mechanism is incomplete, not wrong.
+* **at 1.85** — P253.1 is refuted, and the path model dies with the pose models.
+
+**P253.2 was miscited and the citation is the error, not the run.** The banner
+demanded 18 swapped stages on the precedent of takes 98/99. Those logs report
+`canvas **final**:` — a teardown total over 346-348 variants. Take 253 reports
+`canvas **first present**:` — a snapshot taken seconds in, with one variant built
+so far. A snapshot compared against a cumulative total is not a discrepancy, and
+these runs never reach teardown at all (`final:` appears zero times in the log,
+which is also why the `pose final:` report is missing). **Non-zero was always the
+real criterion**; 8 satisfies it. Patola's own observation confirms it
+independently and better than any count: *the HUD appeared on the flatscreen SBS
+this time*, which is precisely what "the UI is inside X4's image" looks like from
+the desktop, and precisely what arm A could not do.
+
+## Take 253 — the arm ran, and the instrument that was to judge it does not work
+
+**The arm happened.** Three independent signs, in increasing order of weight:
+
+* `canvas: 1.400 m -> s=0.01601 NDC (L=+s R=-s), 11.3 px on a 1408-wide eye`,
+  then `canvas first present: 1 variant(s) built, 0 REFUSED, swapped into 8
+  pipeline stage(s)`. Arm A's log says the opposite in words: `canvas: baked
+  per-eye shift NOT built — X4VR_UI_LAYER=1 puts the UI on a quad`, and `swapped
+  into 0 pipeline stage(s)`. The two arms differ in exactly the intended
+  variable and in nothing else — the env lines are otherwise identical.
+* `geom` reports the quad submitted in **0 of 14523** frames (`qv=0`
+  throughout), against 12940 submissions in arm A.
+* **Patola saw the HUD on the flatscreen SBS.** That is the canvas signature
+  seen from outside: the UI is inside X4's image, so the desktop mirror carries
+  it. Arm A structurally could not do that, and it is what made the question
+  "what makes the HUD special?" answerable in the first place.
+
+### The head moved 2.4x less, which is why the normalisation exists
+
+    take  arm            n       t_head median   d_scene median   r
+    252   A, quad     12940       0.0553 m         0.0658 m     +0.856
+    253   B, canvas   14442       0.0234 m         0.0431 m     +0.919
+
+Raw slip between these two arms would have been meaningless. (The `r` for 253
+reads +0.259 straight from `score_run.py`, because 81 of 14523 samples are
+**pre-declaration** — `declared=0,0,0` — and sit at d_scene 1.13 m with t_head 0.
+0.56% of the samples, 20x out in range, and the correlation collapses. Excluding
+them gives +0.919. The scorer should drop pre-declaration samples; until it does,
+read its geom correlations with that in mind.)
+
+`zm` is **0.000 for every sample in arm B** and that is correct, not a fault:
+`zm` is the *quad's* distance and arm B has no quad. The normalisation therefore
+takes 1.4 m from `X4VR_CANVAS_M`, the same nominal distance arm A's quad had.
+
+### hud_drift cannot answer this question, and the control proves it
+
+The negative control is the vanilla desktop clip: X4 rendering natively, its HUD
+world-anchored (ratio 1.00). Relative slip there is **structurally zero**, so
+whatever the tool reports on it is invention.
+
+    clip                    slip MAD    lost   sd>2.5xMAD   truth
+    vanilla  (control)      45.22 px     69%      flagged   ZERO
+    252 arm A, quad          4.19 deg    32%      flagged   unknown
+    253 arm B, canvas        4.29 deg    34%      flagged   unknown
+
+**Two structurally different configurations return the same number with the same
+failure signature**, and the by-quarter profiles are near-identical (+71.7 +44.4
++59.6 +56.1 against +66.4 +40.1 +52.7 +47.9) across runs whose head motion
+differed 2.4x. Agreement where there must be a difference is the alarm, and here
+it fires next to a control that should read zero and reads 45 px.
+
+**A hypothesis, tested and refuted.** `hud_drift` estimates world motion with
+`shift(prev, grey, -60, 60)` — a hardcoded window. If a sweep moved the image
+more than 60 px between sampled frames the estimate would saturate, `wx` would
+under-accumulate, and the residual would be invented drift. Measured with an
+unbounded phase-correlation estimator: per-frame |dx| median 0.0 px / p90 17 /
+max 44 on the vanilla clip and 22 / 42 / 90 on arm B, exceeding 60 px in **0%
+and 1%** of pairs. Not the cause. Recorded because it was the obvious cause and
+it is wrong.
+
+What the frames show instead: the vanilla clip is dense with similar cyan
+elements — radar disc, message box, both side panels, the reticle — so a 23x25
+template has many rivals, the margin gate rejects most frames, and the survivors
+are not all the same object. The VR clips pick the **target-bracket cluster**,
+which is anchored to a *ship*, not the cockpit, so it is the wrong object for a
+cockpit-lock question even when tracking succeeds.
+
+### The number this A/B was to be judged against was already over the line
+
+Take 251 was declared unreadable at **23% lost**. The re-run of arm A above
+reproduces its published 4.19 deg exactly — at **32% lost**. The reference value
+the whole comparison rested on was worse than the run rejected for being
+unreadable.
+
+**How that got through is specific and worth naming.** The table that diagnosed
+take 251 has a `lost` column, and that column is what condemned it:
+
+    canvas   knob          slip sd    slip MAD   lost
+    1.40 m   DECLARE OFF   15.05 deg   5.28 deg   23%   <- flagged
+
+The table two sections later, which drew the conclusion, does not:
+
+    take  knob          zm    t_head med   full parallax   slip MAD   ratio
+    252   DECLARE ON   1.40   0.0553 m      2.26 deg        4.19 deg   1.85
+
+**The validity gate was dropped from the table where it would have disqualified
+the new number.** Not hidden — just not carried forward, in the one place it
+mattered most.
+
+**What this retracts.** The claim was: *"Identical. The declared position makes
+no difference to the slip whatever"*, killing the model that explained take 247.
+Both arms of that comparison lost 23% and 32% of their frames on an instrument
+whose control reads 45 px where zero is the truth. **The conclusion may still be
+right — but it is not established, and it was published as settled.** The
+elimination of `X4VR_DECLARE_RENDERED_POS` goes back to open pending a
+measurement on an instrument that passes its control.
+
+### Arm B cannot slip, structurally — read before believing any number
+
+The canvas shift is computed once, in the block at `x4vr_layer.cpp:5117-5205`,
+from `configured_ipd()`, `x4_half_for_fov(X4VR_FOV)` and `X4VR_CANVAS_M`. That
+block reads **no head or pose data** — grepped, not assumed. `K_canvas[12]` is a
+constant per-eye NDC translation.
+
+So inside one eye's image, HUD-to-cockpit geometry is X4's own layout plus a
+constant, with no head-motion term anywhere. The compositor still reprojects the
+layer — the `poselag` line in this very run says by up to 3.56 deg — but a rigid
+warp moves HUD and cockpit **together**. That is common-mode, invisible to a
+relative measurement, and it is #75, which stays open either way.
+
+The shift's magnitude is also right, checked rather than assumed: `s =
+sx·(ipd/2)/z` with sx = 0.70044 (a 55.00 deg half-angle from `X4VR_FOV=1.4917`)
+gives 2.619 deg of total disparity, against the 2.6187 deg that 1.4 m at 64 mm
+actually subtends. A constant NDC offset is also the correct *shape*: two eyes'
+projections of a fronto-parallel plane differ by exactly `sx·ipd/z` everywhere,
+so a flat canvas is a constant translation and nothing else.
+
+### The instrument that survives its control
+
+`hud_vs_camera` is differential — it correlates consecutive frames and reports
+`dx_hud/dx_grey` — so nothing accumulates and there is no random walk to drift.
+`grey` is the world's motion in the same image at the same instant, which makes
+it self-calibrating and its own control.
+
+* `--selftest` on a real frame from take 253's own clip: **PASSED**, including
+  the differential cases (hud=8/world=10 recovers 0.800, 9/10 recovers 0.900).
+* On the vanilla control: **median ratio 1.00 over 34 usable pairs, yaw 1.00,
+  pitch 1.00 over 73.** World-anchored, exactly.
+
+Its known limit still stands and matters: it measures *rates*, so it cannot see
+a parallax offset, and it once "refuted" P246.1 for that reason. But "does the
+HUD move with the cockpit or against it" is a rate question, which is the one
+this instrument was built for and the one #57 is about.
