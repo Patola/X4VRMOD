@@ -13230,3 +13230,75 @@ that keeps answering the question it was built for after the question moved.**
 Both report confidently about the wrong object. This file now has four
 instances of that class — `abs()` over a sign, a rate metric against a position
 error, a nebula scored as HUD, and now a re-targeting tracker.
+
+## Take 251: P251.3 CONFIRMED, P251.1/2 INCONCLUSIVE — and the confound is mine
+
+**P251.3 passed exactly.** `d_scene` collapsed from "tracks `t_head` at r=+0.986,
+max 0.47 m" to a **constant 0.0315 m** — median = p90 = max, r=+0.000. That is
+`ipd/2 = 0.032` to three decimals. The knob reached the declaration; the arm is
+real.
+
+**P251.1 and P251.2 cannot be decided from this run**, and the reason is a
+confound I introduced by under-specifying the recording.
+
+### Three variables moved, not one
+
+I asked for "the same clip as `x4-vr.mp4` and `x4-vr2.mp4`" and did not say what
+"same" meant. Patola reported the differences immediately and unprompted: he had
+reset the Quest 3, so the capture is **1600x1600 instead of 1024x1024**, and he
+**swept his head further** than in the earlier clips. Neither is his error —
+both are things my run specification should have pinned and did not.
+
+The resolution rescales harmlessly. **The sweep does not, because the slip is a
+function of head translation and a wider sweep produces more of it.** The geom
+line now measures exactly that, and it is not subtle:
+
+    take 250   t_head median 0.0294 m
+    take 251   t_head median 0.0693 m     2.4x more head motion
+
+### What the clips say, with the tracker rebuilt and a motion prior
+
+    canvas   knob          slip sd    slip MAD   lost
+    2.50 m   DECLARE on     2.35 deg   1.80 deg    0%
+    0.70 m   DECLARE on     6.97 deg   2.94 deg    6%
+    1.40 m   DECLARE OFF   15.05 deg   5.28 deg   23%   <- sd flagged as
+                                                           outlier-contaminated
+
+Take 251 lost 23% of its frames and its sd is 2.85x its robust spread, which the
+tool now flags on its own. **Use the MAD.** The 1/distance law puts a
+DECLARE-on run at 1.40 m near 3.2 deg, against 5.28 measured with the knob off —
+1.6x, in the predicted direction.
+
+**But normalising by the head motion that drives it removes the margin.** At
+`t_head` 0.0693 m and a 1.40 m canvas the full parallax is 2.83 deg, and the
+measured 5.28 is 1.86x that — a ratio the DECLARE-on runs cannot be compared
+against, because **245A and 246 predate the geom line and their `t_head` is
+unknown.** There is no normalised control.
+
+So: the slip got bigger, the head moved 2.4x more, and the two cannot be
+separated. **That is inconclusive, and reporting the 1.6x as a confirmation
+would be reading a confounded number as an answer.**
+
+### Take 252 — the matched arm
+
+The fix is not a better analysis, it is the missing control. Take 251's line
+with `X4VR_DECLARE_RENDERED_POS=1` restored and the names moved on:
+
+    X4VR_TAKE=252-DECLPOS-ON X4VR_DECLARE_RENDERED_POS=1 X4VR_CANVAS_M=1.4 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HUDLESS=1 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take252.log X4VR_UI_LAYER=1 X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+**Record it exactly as 251 was recorded** — same 1600x1600, same head-sweep
+amplitude, same ~20 s, mono. It does not matter what that amplitude is, only
+that it matches, and **the geom line makes even a mismatch recoverable**: both
+runs now report `t_head`, so the comparison is `slip / (t_head/zm)` and a
+difference in exercise divides out. That is the whole reason the line exists,
+and take 251 is the last comparison that will need a caveat instead of a
+normalisation.
+
+**P252.1.** Normalised, the DECLARE-on arm reads materially BELOW 251's 1.86.
+Then the declared position is doing useful work, the compositor uses it, and
+take 247's failure keeps its explanation.
+
+**P252.2, the falsifier.** The two normalised ratios come out the same. Then the
+declared position is not what the compositor reprojects from, take 247's failure
+has no explanation in the current model, and the picture goes back on the bench
+— which is worth more than a confirmation and is why this arm is worth running.

@@ -45,22 +45,41 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hud_vs_camera import decode, channels, shift          # noqa: E402
 
 
-def ncc_find(tpl, img, margin_min):
-    """Locate tpl anywhere in img by normalised cross-correlation.
+def ncc_find(tpl, img, margin_min, near=None, radius=None):
+    """Locate tpl in img by normalised cross-correlation.
 
     Returns (x, y, peak, margin) or None when the peak does not beat its
-    rivals — which is reported as a LOST frame, never as a position.
+    rivals — reported as a LOST frame, never as a position.
+
+    **`near`/`radius` are a motion prior, and both trackers needed one.** The
+    first version took the largest blob and lost the target when it left frame
+    (take 251). The second matched a fixed template over the WHOLE frame, and
+    on take 246 it disagreed with the first — 10.64 deg against 7.52, with a
+    101 deg range — because a fixed template can be stolen by a different
+    element once the target's appearance drifts, and searching everywhere gives
+    it the chance. Neither failure is visible in the output without a check.
+
+    Constraining the search to a neighbourhood of the last known position fixes
+    both: a distant impostor cannot win, and a target that genuinely leaves
+    produces no match and is reported lost.
     """
     th, tw = tpl.shape
     t = tpl - tpl.mean()
     nt = float(np.sqrt((t * t).sum()))
     if nt < 1e-6:
         return None
-    # FFT-free: the frames are small and this stays legible.
-    best = None
+    ys0, ys1 = 0, img.shape[0] - th + 1
+    xs0, xs1 = 0, img.shape[1] - tw + 1
+    if near is not None and radius is not None:
+        ys0 = max(ys0, int(near[1] - th / 2 - radius))
+        ys1 = min(ys1, int(near[1] - th / 2 + radius) + 1)
+        xs0 = max(xs0, int(near[0] - tw / 2 - radius))
+        xs1 = min(xs1, int(near[0] - tw / 2 + radius) + 1)
+        if ys1 <= ys0 or xs1 <= xs0:
+            return None
     scores = np.full((img.shape[0] - th + 1, img.shape[1] - tw + 1), -2.0)
-    for y in range(0, scores.shape[0], 2):
-        for x in range(0, scores.shape[1], 2):
+    for y in range(ys0, ys1, 2):
+        for x in range(xs0, xs1, 2):
             w = img[y:y + th, x:x + tw]
             b = w - w.mean()
             nb = float(np.sqrt((b * b).sum()))
@@ -103,6 +122,10 @@ def main():
     ap.add_argument('--frames-dir', default='/tmp/x4vr-drift')
     ap.add_argument('--margin', type=float, default=0.08,
                     help='NCC peak must beat its best rival by this')
+    ap.add_argument('--radius', type=float, default=90.0,
+                    help='motion prior: search within this many px of the last '
+                         'known position (default 90). Without it a fixed '
+                         'template can be stolen by a distant element.')
     a = ap.parse_args()
 
     fs = frames_of(a.pattern, a.frames_dir, a.fps)
@@ -111,6 +134,7 @@ def main():
         return 2
 
     tpl = None
+    last = None
     prev = None
     wx = 0.0
     rows = []
@@ -139,12 +163,14 @@ def main():
             if (y1 - y0) < 12 or (x1 - x0) < 12:
                 continue
             tpl = hud[y0:y1, x0:x1].copy()
+            last = ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
             print(f'template: {x1-x0}x{y1-y0} px from {f.split("/")[-1]}')
             continue
-        r = ncc_find(tpl, hud, a.margin)
+        r = ncc_find(tpl, hud, a.margin, near=last, radius=a.radius)
         if r is None:
             lost += 1
             continue
+        last = (r[0], r[1])
         rows.append((wx, r[0], r[1], r[3]))
 
     if len(rows) < 20:
@@ -159,8 +185,14 @@ def main():
           f'({100*lost/(len(rows)+lost):.0f}%)   median match margin '
           f'{np.median(a_[:,3]):.3f}')
     print(f'  world travel      {a_[:,0].min():.0f}..{a_[:,0].max():.0f} px')
+    mad = float(np.median(np.abs(relx - np.median(relx)))) * 1.4826
     print(f'  HUD-vs-world sd   {relx.std()/k:.2f} {unit}'
+          f'   robust(MAD) {mad/k:.2f} {unit}'
           f'   range {(relx.max()-relx.min())/k:.2f} {unit}')
+    # sd and MAD diverging is the tell that a few frames tracked something else
+    if relx.std() > 2.5 * mad:
+        print('  NOTE sd is more than 2.5x the robust spread — a few frames '
+              'are outliers; trust the MAD and check the lost-frame count')
     q = len(a_) // 4
     print('  by quarter        ' + '  '.join(
         f'{relx[i*q:(i+1)*q].mean()/k:+.2f}' for i in range(4)))
