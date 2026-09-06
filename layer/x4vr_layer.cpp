@@ -3277,6 +3277,38 @@ inline uint64_t ui_dump_every() {
 // dump changes nothing at all, and a run that wants only the measurement must
 // not be forced to take the behaviour change with it -- that coupling cost
 // take 173, and the comment at the g_cb_fb gate says so about the probe.
+// X4VR_UI_DUMP=PERIOD:BURST — capture BURST *consecutive* presents each
+// period, instead of one. Default 1, which is exactly the old behaviour.
+//
+// **Why a burst is not simply "dump more often".** A dump waits for the queue
+// and then encodes, and that wait is what costs the second: take 256 measured
+// p90 1013.91 ms against a 19.52 ms median at cadence 10, while the PNG encode
+// is 41 ms per layer. So consecutive DUMPS are about 1.3 s apart in wall clock
+// however adjacent their frame numbers are — and a head turns a long way in
+// 1.3 s. That is why 22 of take 257's 24 cockpit pairs came back beyond the
+// +-320 px search or with no usable peak: the instrument could not see a pair
+// close enough together in time to compare.
+//
+// A burst records BURST copies with NO wait and NO encode, then waits once and
+// writes them all. During the burst each frame costs a GPU copy, so the frames
+// really are one frame apart, which is what task #76 needs to measure whether
+// the HUD moves with the ship or twice as far.
+//
+// It costs memory instead of time: BURST * (eye + UI) * 2 layers, about 32 MB
+// per slot at 1408x1408. The log states the figure rather than leaving it to
+// be discovered.
+inline uint32_t ui_dump_burst() {
+    static const uint32_t n = [] {
+        const char *e = getenv("X4VR_UI_DUMP");
+        const char *c = e ? strchr(e, ':') : nullptr;
+        if (!c || !c[1])
+            return 1u;
+        const long v = strtol(c + 1, nullptr, 10);
+        return v > 0 ? (uint32_t)v : 1u;
+    }();
+    return n;
+}
+
 inline bool ui_capture_wanted() {
     return ui_layer_enabled() || ui_dump_every() != 0;
 }
@@ -9784,16 +9816,41 @@ struct {
     void *ptr = nullptr;
     VkDeviceSize layer_bytes = 0;
     bool failed = false;
+    uint32_t slots = 0;
     // What the compositor had actually RECORDED when the last request was
     // made, so the writer can tell a copy that happened from one that fell
     // through a path that does not dump. See SbsCompositor::ui_dumps().
     uint64_t seen = 0;
 } g_ui_read;
 
+// One captured present, held until the whole burst is read back together.
+// Everything the writer needs is recorded HERE, at capture time, rather than
+// re-read at flush time -- the cursor position especially, which would
+// otherwise be the same value on every frame of a burst and would silently
+// describe the flush instead of the frame.
+struct BurstSlot {
+    uint32_t w = 0, h = 0, layers = 0;
+    bool bgra = false;
+    VkDeviceSize eye_layer_bytes = 0, eye_base = 0;
+    uint32_t uw = 0, uh = 0;
+    bool ubgra = false, has_ui = false;
+    VkDeviceSize ui_layer_bytes = 0, ui_base = 0;
+    uint64_t ui_seen = 0;
+    float cx = 0.f, cy = 0.f;
+    bool cursor_vis = false, cursor_have = false;
+};
+struct {
+    std::vector<BurstSlot> slots;
+    uint32_t idx = 0;
+    bool capturing = false;
+} g_burst;
+
 // Creates it on first use. Caller holds g_ui_read.mu.
-bool ui_read_ready(DeviceData *d, VkDevice dev, VkDeviceSize layer_bytes) {
+bool ui_read_ready(DeviceData *d, VkDevice dev, VkDeviceSize layer_bytes,
+                   uint32_t slots) {
     layer_bytes = (layer_bytes + 255) & ~(VkDeviceSize)255;
-    if (g_ui_read.buf != VK_NULL_HANDLE && g_ui_read.layer_bytes >= layer_bytes)
+    if (g_ui_read.buf != VK_NULL_HANDLE &&
+        g_ui_read.layer_bytes >= layer_bytes && g_ui_read.slots >= slots)
         return true;
     if (g_ui_read.failed || !d->CreateBuffer || !d->AllocateMemory ||
         !d->CmdCopyImageToBuffer)
@@ -9811,7 +9868,7 @@ bool ui_read_ready(DeviceData *d, VkDevice dev, VkDeviceSize layer_bytes) {
     }
     VkBufferCreateInfo bci{};
     bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bci.size = layer_bytes * 2;
+    bci.size = layer_bytes * 2 * slots;
     bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     if (d->CreateBuffer(dev, &bci, nullptr, &g_ui_read.buf) != VK_SUCCESS) {
@@ -9848,6 +9905,12 @@ bool ui_read_ready(DeviceData *d, VkDevice dev, VkDeviceSize layer_bytes) {
         return false;
     }
     g_ui_read.layer_bytes = layer_bytes;
+    g_ui_read.slots = slots;
+    if (slots > 1)
+        X4VR_LOG("ui dump: burst buffer %llu MB for %u slot(s) of 2 layer(s) "
+                 "— the burst trades memory for the queue wait, which is what "
+                 "made consecutive dumps 1.3 s apart",
+                 (unsigned long long)(bci.size >> 20), slots);
     return true;
 }
 
@@ -10922,9 +10985,9 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
         ui_identify_once();
 
     // Task #57: this present's UI-target dump, if one was asked for.
-    VkDeviceSize ui_layer_bytes = 0;
+    VkDeviceSize ui_layer_bytes = 0, ui_base = 0, dump_base = 0;
     uint32_t ui_w = 0, ui_h = 0;
-    bool ui_bgra = false, ui_asked = false;
+    bool ui_bgra = false, ui_asked = false, flush_burst = false;
 
     if ((g_dump_present_every || ui_dump_every()) && g_active &&
         pi->swapchainCount == 1) {
@@ -10952,7 +11015,17 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
         }
         static uint64_t presents = 0;
         const uint64_t p = presents++;
-        const bool ui_now = ui_dump_every() && (p % ui_dump_every() == 0);
+        // A burst starts on the period boundary and then runs to completion:
+        // once capturing, every present is taken until the ring is full. That
+        // is the whole point — the frames must be ADJACENT, so the cadence
+        // cannot re-gate them individually.
+        if (ui_dump_every() && !g_burst.capturing &&
+            (p % ui_dump_every()) == 0) {
+            g_burst.capturing = true;
+            g_burst.idx = 0;
+            g_burst.slots.assign(ui_dump_burst(), BurstSlot{});
+        }
+        const bool ui_now = g_burst.capturing;
         // **Asking for the UI also asks for the eye image.** The pair is the
         // instrument: a UI mask is only worth having against the frame it was
         // captured with, and the composite that copies one is the composite
@@ -10966,9 +11039,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                     const VkDeviceSize per =
                         (VkDeviceSize)ei.extent.width * ei.extent.height * bpp;
                     const uint32_t n = ei.layers > 2 ? 2 : ei.layers;
+                    const uint32_t nslots = ui_now ? ui_dump_burst() : 1u;
                     std::lock_guard<std::mutex> lock(g_probe_mu);
-                    if (probe_buffer_ready(d, d->device, per * n)) {
-                        g_sbs.request_dump(g_probe.buf, per);
+                    if (probe_buffer_ready(d, d->device, per * n * nslots)) {
+                        dump_base = ui_now ? per * n * g_burst.idx : 0;
+                        g_sbs.request_dump(g_probe.buf, per, dump_base);
                         dump_layer_bytes = per;
                         dump_layers = n;
                         dump_w = ei.extent.width;
@@ -11000,10 +11075,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                 const VkDeviceSize per =
                     (VkDeviceSize)ext.width * ext.height * bpp;
                 std::lock_guard<std::mutex> lock(g_ui_read.mu);
-                if (ui_read_ready(d, d->device, per)) {
+                if (ui_read_ready(d, d->device, per, ui_dump_burst())) {
                     g_ui_read.seen = g_sbs.ui_dumps();
+                    ui_base = g_ui_read.layer_bytes * 2 * g_burst.idx;
                     g_sbs.request_ui_dump(src, g_ui_read.buf, ext,
-                                          g_ui_read.layer_bytes);
+                                          g_ui_read.layer_bytes, ui_base);
                     ui_layer_bytes = g_ui_read.layer_bytes;
                     ui_w = ext.width;
                     ui_h = ext.height;
@@ -11011,6 +11087,24 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                               fmt == VK_FORMAT_B8G8R8A8_SRGB;
                     ui_asked = true;
                 }
+            }
+        }
+        // Record what this slot holds, then advance. The ring is flushed only
+        // when it is FULL, so a burst interrupted by teardown writes nothing
+        // rather than writing frames whose copies may not have executed.
+        if (g_burst.capturing && g_burst.idx < g_burst.slots.size()) {
+            BurstSlot &sl = g_burst.slots[g_burst.idx];
+            sl.w = dump_w; sl.h = dump_h; sl.layers = dump_layers;
+            sl.bgra = dump_bgra;
+            sl.eye_layer_bytes = dump_layer_bytes; sl.eye_base = dump_base;
+            sl.uw = ui_w; sl.uh = ui_h; sl.ubgra = ui_bgra;
+            sl.has_ui = ui_asked; sl.ui_layer_bytes = ui_layer_bytes;
+            sl.ui_base = ui_base; sl.ui_seen = g_ui_read.seen;
+            sl.cursor_have =
+                x4vr::share_read(shared_state(), &sl.cx, &sl.cy, &sl.cursor_vis);
+            if (++g_burst.idx >= g_burst.slots.size()) {
+                g_burst.capturing = false;
+                flush_burst = true;
             }
         }
     }
@@ -11063,43 +11157,81 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     // still building. Idling is acceptable here for the same reason it is in
     // probe_collect: this runs only when asked for, and a diagnostic run is not
     // a performance measurement.
-    if (dump_layers && d->QueueWaitIdle) {
+    // In burst mode the wait happens ONCE, after the last frame of the burst
+    // has been recorded — that is the whole mechanism. Waiting per frame is
+    // what put ~1.3 s of wall clock between consecutive dumps and made 22 of
+    // take 257's 24 cockpit pairs unmeasurable; recording without waiting
+    // costs only a GPU copy, so the frames really are one frame apart.
+    const bool burst_mode = ui_dump_every() != 0;
+    if ((burst_mode ? flush_burst : dump_layers != 0) && d->QueueWaitIdle) {
         d->QueueWaitIdle(queue);
-        // Hoisted out of the g_probe_mu scope below so the UI target can be
-        // written under the SAME index. `-present-n7-layer0` and `-ui-n7-layer0`
-        // are one frame, and the filenames are the only thing the offline tool
-        // has to go on.
+        // The frames to write: the whole ring in burst mode, or the one frame
+        // the old cadence captured. One path either way, so the non-burst case
+        // cannot drift away from the burst case.
+        std::vector<BurstSlot> todo;
+        if (burst_mode) {
+            todo.swap(g_burst.slots);
+        } else {
+            BurstSlot one;
+            one.w = dump_w; one.h = dump_h; one.layers = dump_layers;
+            one.bgra = dump_bgra; one.eye_layer_bytes = dump_layer_bytes;
+            one.uw = ui_w; one.uh = ui_h; one.ubgra = ui_bgra;
+            one.has_ui = ui_asked; one.ui_layer_bytes = ui_layer_bytes;
+            one.ui_seen = g_ui_read.seen;
+            one.cursor_have = x4vr::share_read(shared_state(), &one.cx, &one.cy,
+                                               &one.cursor_vis);
+            todo.push_back(one);
+        }
         static uint64_t seq = 0;
-        const uint64_t n = seq;
-        {
-        std::lock_guard<std::mutex> lock(g_probe_mu);
-        if (g_probe.ptr) {
-            seq++;
-            for (uint32_t l = 0; l < dump_layers; l++) {
-                char path[512];
-                snprintf(path, sizeof(path), "%s-present-n%llu-layer%u",
-                         g_mv_dump ? g_mv_dump : "/tmp/x4vr",
-                         (unsigned long long)n, l);
-                write_ppm8(path,
-                           (const uint8_t *)g_probe.ptr + dump_layer_bytes * l,
-                           dump_w, dump_h, dump_bgra);
-            }
-            // The pointer, paired with the frame. Without this the dump says
-            // what the frame held but not where the cursor was, which is
-            // exactly why take 93 could not answer whether one was in it --
-            // a search through a busy picture instead of a lookup.
-            float cx = 0.f, cy = 0.f;
-            bool vis = false;
-            const bool have = x4vr::share_read(shared_state(), &cx, &cy, &vis);
-            X4VR_LOG("mv dump: present frame %llu — %ux%u, %u layer(s), bgra=%d,"
-                     " cursor %s",
-                     (unsigned long long)n, dump_w, dump_h, dump_layers,
-                     (int)dump_bgra,
-                     have ? (vis ? "" : "hidden ") : "unknown (no channel)");
-            if (have)
-                X4VR_LOG("mv dump: frame %llu cursor at x=%.1f y=%.1f%s",
-                         (unsigned long long)n, cx, cy,
-                         vis ? "" : " (not visible)");
+        const uint64_t ui_recorded = g_sbs.ui_dumps();
+        // Which sequence numbers this flush actually wrote. **Reported, not
+        // left to be derived.** The obvious rule -- "frames n..n+BURST-1 are
+        // one burst" -- is wrong the moment a slot is skipped for having no
+        // eye dump, because the skip happens BEFORE the number is consumed and
+        // every later burst is then misaligned by one. A tool pairing on that
+        // arithmetic would silently compare across a burst boundary and call
+        // the result adjacent.
+        std::vector<uint64_t> wrote;
+        for (const BurstSlot &sl : todo) {
+            if (!sl.layers)
+                continue;
+            // Sequence numbers are consecutive across a burst, so
+            // `-present-n7` and `-present-n8` are ONE FRAME apart in burst
+            // mode and one period apart otherwise. The offline tools pair by
+            // this number; nothing else tells them how far apart two dumps
+            // are, so the log line below states it.
+            const uint64_t n = seq++;
+            wrote.push_back(n);
+            {
+                std::lock_guard<std::mutex> lock(g_probe_mu);
+                if (g_probe.ptr) {
+                    for (uint32_t l = 0; l < sl.layers; l++) {
+                        char path[512];
+                        snprintf(path, sizeof(path), "%s-present-n%llu-layer%u",
+                                 g_mv_dump ? g_mv_dump : "/tmp/x4vr",
+                                 (unsigned long long)n, l);
+                        write_ppm8(path,
+                                   (const uint8_t *)g_probe.ptr + sl.eye_base +
+                                       sl.eye_layer_bytes * l,
+                                   sl.w, sl.h, sl.bgra);
+                    }
+                    // The pointer, paired with the frame. Without this the
+                    // dump says what the frame held but not where the cursor
+                    // was, which is exactly why take 93 could not answer
+                    // whether one was in it -- a search through a busy picture
+                    // instead of a lookup. Read at CAPTURE time, not here: at
+                    // flush time every frame of a burst would report the same
+                    // position.
+                    X4VR_LOG("mv dump: present frame %llu — %ux%u, %u layer(s),"
+                             " bgra=%d, cursor %s",
+                             (unsigned long long)n, sl.w, sl.h, sl.layers,
+                             (int)sl.bgra,
+                             sl.cursor_have ? (sl.cursor_vis ? "" : "hidden ")
+                                            : "unknown (no channel)");
+                    if (sl.cursor_have)
+                        X4VR_LOG("mv dump: frame %llu cursor at x=%.1f y=%.1f%s",
+                                 (unsigned long long)n, sl.cx, sl.cy,
+                                 sl.cursor_vis ? "" : " (not visible)");
             // Once, when an image first arrives. The format is passed through
             // from SDL unconverted on purpose, so this line is the measurement
             // that decides how to unpack it -- a guessed conversion table would
@@ -11130,62 +11262,80 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                              px[7]);
                 }
             }
-        }
-        }
-        // ---- task #57: the UI target for this same frame -------------------
-        //
-        // Gated on the compositor's own counter having MOVED, not on the
-        // request having been made. composite() records this copy in one
-        // branch only; a request that fell through the other would still be
-        // sitting in the compositor, and writing files from a stale buffer
-        // would pair frame N's eye image with frame N-1's mask -- silently,
-        // and looking exactly like a real pair. Report the branch that ran,
-        // never re-derive it.
-        if (ui_asked && g_sbs.ui_dumps() > g_ui_read.seen) {
-            std::lock_guard<std::mutex> lock(g_ui_read.mu);
-            if (g_ui_read.ptr) {
-                uint64_t nz[2] = {0, 0}, na[2] = {0, 0};
-                for (uint32_t l = 0; l < 2; l++) {
-                    const uint8_t *src =
-                        (const uint8_t *)g_ui_read.ptr + ui_layer_bytes * l;
-                    char path[512];
-                    snprintf(path, sizeof(path), "%s-ui-n%llu-layer%u",
-                             g_mv_dump ? g_mv_dump : "/tmp/x4vr",
-                             (unsigned long long)n, l);
-                    write_ui8(path, src, ui_w, ui_h, ui_bgra);
-                    // Counted here rather than left to the offline tool,
-                    // because "the mask is empty" and "the dump never ran"
-                    // produce the same silence downstream, and this project
-                    // has read one as the other before. Both criteria, since
-                    // which of them IS the UI is exactly what is unsettled:
-                    // alpha is X4's own composite coverage, colour is what
-                    // survives if the composite ignores it.
-                    for (size_t i = 0; i < (size_t)ui_w * ui_h; i++) {
-                        const uint8_t *p = src + i * 4;
-                        if (p[0] | p[1] | p[2])
-                            nz[l]++;
-                        if (p[3])
-                            na[l]++;
-                    }
                 }
-                const double tot = (double)ui_w * ui_h;
-                X4VR_LOG("ui dump: frame %llu — %ux%u x2, bgra=%d. Coverage "
-                         "layer0 %.2f%% colour / %.2f%% alpha, layer1 %.2f%% / "
-                         "%.2f%%. Near-zero on BOTH criteria means the UI "
-                         "target was empty this frame, not that the dump "
-                         "failed.",
-                         (unsigned long long)n, ui_w, ui_h, (int)ui_bgra,
-                         100.0 * nz[0] / tot, 100.0 * na[0] / tot,
-                         100.0 * nz[1] / tot, 100.0 * na[1] / tot);
             }
-        } else if (ui_asked) {
-            static uint32_t missed = 0;
-            if (++missed <= 3)
-                X4VR_LOG("ui dump: frame %llu asked for the UI target and the "
-                         "composite did NOT record the copy — no file written, "
-                         "which is right: a mask from another frame is worse "
-                         "than none.",
-                         (unsigned long long)n);
+            // ---- task #57: the UI target for this same frame ---------------
+            //
+            // Gated on the compositor's own counter having MOVED, not on the
+            // request having been made. composite() records this copy in one
+            // branch only; a request that fell through the other would still
+            // be sitting in the compositor, and writing files from a stale
+            // buffer would pair frame N's eye image with frame N-1's mask --
+            // silently, and looking exactly like a real pair. Report the
+            // branch that ran, never re-derive it.
+            if (sl.has_ui && ui_recorded > sl.ui_seen) {
+                std::lock_guard<std::mutex> lock(g_ui_read.mu);
+                if (g_ui_read.ptr) {
+                    uint64_t nz[2] = {0, 0}, na[2] = {0, 0};
+                    for (uint32_t l = 0; l < 2; l++) {
+                        const uint8_t *src = (const uint8_t *)g_ui_read.ptr +
+                                             sl.ui_base +
+                                             sl.ui_layer_bytes * l;
+                        char path[512];
+                        snprintf(path, sizeof(path), "%s-ui-n%llu-layer%u",
+                                 g_mv_dump ? g_mv_dump : "/tmp/x4vr",
+                                 (unsigned long long)n, l);
+                        write_ui8(path, src, sl.uw, sl.uh, sl.ubgra);
+                        // Counted here rather than left to the offline tool,
+                        // because "the mask is empty" and "the dump never ran"
+                        // produce the same silence downstream, and this project
+                        // has read one as the other before. Both criteria,
+                        // since which of them IS the UI is unsettled: alpha is
+                        // X4's own composite coverage, colour is what survives
+                        // if the composite ignores it.
+                        for (size_t i = 0; i < (size_t)sl.uw * sl.uh; i++) {
+                            const uint8_t *q = src + i * 4;
+                            if (q[0] | q[1] | q[2])
+                                nz[l]++;
+                            if (q[3])
+                                na[l]++;
+                        }
+                    }
+                    const double tot = (double)sl.uw * sl.uh;
+                    X4VR_LOG("ui dump: frame %llu — %ux%u x2, bgra=%d. Coverage"
+                             " layer0 %.2f%% colour / %.2f%% alpha, layer1 "
+                             "%.2f%% / %.2f%%. Near-zero on BOTH criteria means"
+                             " the UI target was empty this frame, not that the"
+                             " dump failed.",
+                             (unsigned long long)n, sl.uw, sl.uh, (int)sl.ubgra,
+                             100.0 * nz[0] / tot, 100.0 * na[0] / tot,
+                             100.0 * nz[1] / tot, 100.0 * na[1] / tot);
+                }
+            } else if (sl.has_ui) {
+                static uint32_t missed = 0;
+                if (++missed <= 3)
+                    X4VR_LOG("ui dump: frame %llu asked for the UI target and "
+                             "the composite did NOT record the copy — no file "
+                             "written, which is right: a mask from another "
+                             "frame is worse than none.",
+                             (unsigned long long)n);
+            }
+        }
+        // One line per burst, every burst, because the offline tool reads
+        // them: `tools/hud_slide.py --burst-log`. Frames listed here are
+        // CONSECUTIVE PRESENTS; the gap to the next burst is a whole period,
+        // and comparing across that gap is what task #76 must not do.
+        if (burst_mode && wrote.size() > 1) {
+            char b[256];
+            int k = 0;
+            for (size_t i = 0; i < wrote.size() && k >= 0 &&
+                               (size_t)k + 24 < sizeof b; i++)
+                k += snprintf(b + k, sizeof(b) - k, "%s%llu", i ? "," : "",
+                              (unsigned long long)wrote[i]);
+            X4VR_LOG("ui dump: burst frames %s — consecutive presents, one "
+                     "frame apart. Pairs WITHIN this list are adjacent in "
+                     "time; the next burst is a whole period later.",
+                     b);
         }
     }
     frame_flush();

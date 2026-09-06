@@ -144,6 +144,10 @@ public:
     // Set by request_dump(), consumed and cleared by the next composite().
     VkBuffer dump_buf_ = VK_NULL_HANDLE;
     VkDeviceSize dump_layer_bytes_ = 0;
+    // Where in that buffer this frame's copy lands. Non-zero only in burst
+    // mode, where several consecutive frames are captured into one allocation
+    // before any of them is read back.
+    VkDeviceSize dump_base_ = 0;
     // Set by request_ui_dump(), consumed by the SAME composite as dump_buf_.
     // `ui_dumps_` counts the copies actually RECORDED, not the ones asked for:
     // the caller writes files only when it moved, so a request that fell
@@ -152,6 +156,7 @@ public:
     VkImage ui_dump_src_ = VK_NULL_HANDLE;
     VkBuffer ui_dump_buf_ = VK_NULL_HANDLE;
     VkDeviceSize ui_dump_layer_bytes_ = 0;
+    VkDeviceSize ui_dump_base_ = 0;
     VkExtent2D ui_dump_extent_{};
     uint64_t ui_dumps_ = 0;
     // Set by request_vr_blit(), likewise one-shot.
@@ -192,10 +197,12 @@ public:
     //
     // Cleared as soon as it is recorded, so a request costs exactly one frame
     // and a caller that stops asking stops paying.
-    void request_dump(VkBuffer buf, VkDeviceSize layer_bytes) {
+    void request_dump(VkBuffer buf, VkDeviceSize layer_bytes,
+                      VkDeviceSize base = 0) {
         std::lock_guard<std::mutex> lock(mu_);
         dump_buf_ = buf;
         dump_layer_bytes_ = layer_bytes;
+        dump_base_ = base;
     }
 
     // Task #57's instrument: the UI-only target, copied out during the SAME
@@ -215,12 +222,13 @@ public:
     // own staging image, which ui_capture() leaves in TRANSFER_SRC at the end
     // of X4's UI pass and nothing between there and here touches.
     void request_ui_dump(VkImage src, VkBuffer buf, VkExtent2D extent,
-                         VkDeviceSize layer_bytes) {
+                         VkDeviceSize layer_bytes, VkDeviceSize base = 0) {
         std::lock_guard<std::mutex> lock(mu_);
         ui_dump_src_ = src;
         ui_dump_buf_ = buf;
         ui_dump_extent_ = extent;
         ui_dump_layer_bytes_ = layer_bytes;
+        ui_dump_base_ = base;
     }
     uint64_t ui_dumps() const { return ui_dumps_; }
 
@@ -493,7 +501,7 @@ public:
                 const uint32_t n = c.eye_layers > 2 ? 2 : c.eye_layers;
                 VkBufferImageCopy r[2]{};
                 for (uint32_t l = 0; l < n; l++) {
-                    r[l].bufferOffset = dump_layer_bytes_ * l;
+                    r[l].bufferOffset = dump_base_ + dump_layer_bytes_ * l;
                     r[l].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, l, 1};
                     r[l].imageExtent = {c.eye.width, c.eye.height, 1};
                 }
@@ -514,7 +522,7 @@ public:
                 ui_dump_src_ != VK_NULL_HANDLE) {
                 VkBufferImageCopy r[2]{};
                 for (uint32_t l = 0; l < 2; l++) {
-                    r[l].bufferOffset = ui_dump_layer_bytes_ * l;
+                    r[l].bufferOffset = ui_dump_base_ + ui_dump_layer_bytes_ * l;
                     r[l].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, l, 1};
                     r[l].imageExtent = {ui_dump_extent_.width,
                                         ui_dump_extent_.height, 1};
