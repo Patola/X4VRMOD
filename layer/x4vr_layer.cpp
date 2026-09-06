@@ -36,6 +36,7 @@
 
 #define X4VR_LOG_TAG "layer"
 #include "../common/x4vr_log.hpp"
+#include "../common/x4vr_dumpio.hpp"
 #include "../common/x4vr_dumpspec.hpp"
 #include "../common/x4vr_png.hpp"
 #include "../common/x4vr_sbs.hpp"
@@ -9618,13 +9619,13 @@ void write_ppm_rg(const char *path, const uint16_t *px, uint32_t w, uint32_t h) 
 // one the dumper could not write.
 void write_ppm8(const char *path, const uint8_t *px, uint32_t w, uint32_t h,
                 bool bgra) {
-    std::vector<uint8_t> rgb((size_t)w * h * 3);
-    for (uint32_t y = 0; y < h; y++)
-        for (uint32_t x = 0; x < w; x++) {
-            const uint8_t *p = px + ((size_t)y * w + x) * 4;
-            for (uint32_t c = 0; c < 3; c++)
-                rgb[((size_t)y * w + x) * 3 + c] = bgra ? p[2 - c] : p[c];
-        }
+    // ONE bulk read of the mapped buffer, then all per-pixel work from RAM.
+    // The old loop did three scalar byte loads per pixel straight out of
+    // write-combined memory and cost 549 ms per layer in take 259 — 46% of
+    // the whole flush. See common/x4vr_dumpio.hpp.
+    static thread_local std::vector<uint8_t> src, rgb;
+    x4vr::dump::snapshot(src, px, (size_t)w * h * 4);
+    x4vr::dump::to_rgb(rgb, src.data(), w, h, bgra);
     emit_rgb(path, rgb, w, h);
 }
 
@@ -9632,20 +9633,20 @@ void write_ppm8(const char *path, const uint8_t *px, uint32_t w, uint32_t h,
 /// X4VR_DUMP_PPM on purpose: PPM has no alpha channel, so honouring that knob
 /// here would silently discard the thing this dump exists to carry. `path`
 /// arrives without an extension, like every other writer here.
-void write_ui8(const char *path, const uint8_t *px, uint32_t w, uint32_t h,
-               bool bgra) {
-    std::vector<uint8_t> rgba((size_t)w * h * 4);
-    for (uint32_t y = 0; y < h; y++)
-        for (uint32_t x = 0; x < w; x++) {
-            const uint8_t *p = px + ((size_t)y * w + x) * 4;
-            uint8_t *o = &rgba[((size_t)y * w + x) * 4];
-            for (uint32_t c = 0; c < 3; c++)
-                o[c] = bgra ? p[2 - c] : p[c];
-            o[3] = p[3];
-        }
+// Returns the coverage it counted, because it has the bytes in RAM anyway.
+// The flush used to count them in a SECOND per-pixel pass over the mapped
+// buffer, which take 259 measured at 1076 ms per frame -- 45% of the whole
+// flush, for two numbers that are already free here.
+x4vr::dump::Coverage write_ui8(const char *path, const uint8_t *px, uint32_t w,
+                               uint32_t h, bool bgra) {
+    static thread_local std::vector<uint8_t> src, rgba;
+    x4vr::dump::snapshot(src, px, (size_t)w * h * 4);
+    const x4vr::dump::Coverage cov =
+        x4vr::dump::to_rgba_counted(rgba, src.data(), w, h, bgra);
     char full[544];
     snprintf(full, sizeof full, "%s.png", path);
     write_png_n(full, rgba.data(), w, h, 4);
+    return cov;
 }
 
 uint64_t fnv1a(const void *p, size_t n) {
@@ -11384,7 +11385,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                                  g_mv_dump ? g_mv_dump : "/tmp/x4vr",
                                  (unsigned long long)n, l);
                         const double tw = mono_now();
-                        write_ui8(path, src, sl.uw, sl.uh, sl.ubgra);
+                        const x4vr::dump::Coverage cov =
+                            write_ui8(path, src, sl.uw, sl.uh, sl.ubgra);
+                        nz[l] = cov.colour;
+                        na[l] = cov.alpha;
                         const double tc = mono_now();
                         t_ui += tc - tw;
                         // Counted here rather than left to the offline tool,
@@ -11394,13 +11398,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                         // since which of them IS the UI is unsettled: alpha is
                         // X4's own composite coverage, colour is what survives
                         // if the composite ignores it.
-                        for (size_t i = 0; i < (size_t)sl.uw * sl.uh; i++) {
-                            const uint8_t *q = src + i * 4;
-                            if (q[0] | q[1] | q[2])
-                                nz[l]++;
-                            if (q[3])
-                                na[l]++;
-                        }
+                        // The second pass over the mapped buffer is GONE --
+                        // write_ui8 counts while it already has the bytes in
+                        // RAM. Kept as a timed term so a future run says so
+                        // rather than leaving the reader to infer it from a
+                        // missing number.
                         t_cov += mono_now() - tc;
                     }
                     const double tot = (double)sl.uw * sl.uh;

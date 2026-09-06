@@ -45,6 +45,13 @@ add_executable(x4vr_test_shquote shquote.cpp)
 # work: no Vulkan, no GPU. Self-checking -- no runner script.
 add_executable(x4vr_test_dumpspec dumpspec.cpp)
 
+# The dump writers' pixel transforms, rewritten because take 259 measured them
+# at 91% of a 2378 ms/frame flush -- both read the write-combined readback
+# buffer one byte at a time. A performance change that alters output is a
+# correctness bug wearing a stopwatch, so every case is compared byte for byte
+# against the ORIGINAL per-pixel code, kept in the test verbatim.
+add_executable(x4vr_test_dumpio dumpio.cpp)
+
 # Is the readback memory type what makes a dump expensive? Take 258 spent
 # 2451 ms per frame in the flush while the PNG encode measured 57-125 ms per
 # image. Both readback buffers take the first HOST_VISIBLE|HOST_COHERENT type,

@@ -36,6 +36,7 @@
 #include <string>
 #include <vector>
 
+#include "../common/x4vr_dumpio.hpp"
 #include "../common/x4vr_png.hpp"
 
 #define CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { \
@@ -394,6 +395,42 @@ int main() {
         printf("FAIL coverage differs between buffers (%llu vs %llu)\n",
                (unsigned long long)cv_a, (unsigned long long)cv_b);
         return 1;
+    }
+
+    // ---- the actual change: scalar-from-WC vs snapshot-then-work ---------
+    // The two hot terms of take 259's flush, A/B'd on write-combined memory.
+    // OLD is write_ppm8's loop verbatim: three scalar byte loads per pixel,
+    // with the channel-order test inside the inner loop. NEW is one bulk
+    // memcpy followed by the same work from RAM.
+    {
+        std::vector<uint8_t> rgb((size_t)W * H * 3), snap;
+        auto old_way = [&](const uint8_t *px, bool bgra, double *ms) {
+            const auto t0 = std::chrono::steady_clock::now();
+            for (uint32_t y = 0; y < H; y++)
+                for (uint32_t x = 0; x < W; x++) {
+                    const uint8_t *p = px + ((size_t)y * W + x) * 4;
+                    for (uint32_t c = 0; c < 3; c++)
+                        rgb[((size_t)y * W + x) * 3 + c] =
+                            bgra ? p[2 - c] : p[c];
+                }
+            *ms = ms_since(t0);
+        };
+        auto new_way = [&](const uint8_t *px, bool bgra, double *ms) {
+            const auto t0 = std::chrono::steady_clock::now();
+            x4vr::dump::snapshot(snap, px, (size_t)W * H * 4);
+            x4vr::dump::to_rgb(rgb, snap.data(), W, H, bgra);
+            *ms = ms_since(t0);
+        };
+        double o = 0, nw = 0, o2 = 0, n2 = 0;
+        old_way((const uint8_t *)wcp, true, &o);
+        new_way((const uint8_t *)wcp, true, &nw);
+        old_way((const uint8_t *)wcp, true, &o2);
+        new_way((const uint8_t *)wcp, true, &n2);
+        const double ob = o < o2 ? o : o2, nb = nw < n2 ? nw : n2;
+        printf("\nthe eye write's pixel loop, on WRITE-COMBINED memory:\n"
+               "  OLD scalar-from-WC  %7.1f ms      NEW snapshot+RAM  %7.1f ms"
+               "   (%.1fx)\n", ob, nb, ob / nb);
+        printf("  take 259 measured 549 ms per layer for this term.\n");
     }
 
     const char *out = getenv("X4VR_TEST_TMP") ? getenv("X4VR_TEST_TMP")
