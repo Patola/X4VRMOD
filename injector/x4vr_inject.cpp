@@ -29,6 +29,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <cctype>
 #include <cmath>
 #include <set>
 #include <map>
@@ -50,6 +51,7 @@ extern char **environ;
 #include "../common/x4vr_headlook.hpp"
 #include "../common/x4vr_plantid.hpp"
 #include "x4vr_lua.hpp"
+#include "../common/x4vr_shquote.hpp"
 
 namespace {
 
@@ -836,11 +838,23 @@ void log_startup_env() {
     // variable, listing them *is* the command. X4VR_TAKE is an ordinary
     // variable with no meaning to the code -- it exists only to be printed
     // here, so a run can carry its own name.
+    //
+    // **The value is QUOTED when it needs to be, and that is the point of the
+    // line.** Take 258's command was written from this log line and contained
+    //
+    //     X4VR_WATCH_WANT=ui dump: burst frames
+    //
+    // which no shell reads as one assignment: `X4VR_WATCH_WANT=ui` is the
+    // assignment and `dump:` is the command. Patola had to repair it by hand
+    // before the take could start. The claim "copy-pasteable" was in this
+    // comment while the code could not honour it for any value with a space --
+    // and the whole documented method for building the next run is to diff
+    // this line against the previous take's.
     std::string run;
     for (char **e = environ; e && *e; e++)
         if (!strncmp(*e, "X4VR_", 5)) {
             run += ' ';
-            run += *e;
+            run += x4vr::sh_quote_assignment(*e);
         }
     X4VR_LOG("env: run =%s ./launch/x4vr-launch.sh", run.c_str());
     // argv, for the command-line switches that pick a backend

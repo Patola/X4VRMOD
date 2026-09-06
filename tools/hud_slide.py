@@ -61,6 +61,12 @@ CTRL_TOL = 0.25     # how far a control may sit from +1 before the pair is void
 MIN_MARGIN = 0.05
 ADJACENT = None     # burst membership, set from --burst-log
 MIN_MOTION = 15     # px of scene motion below which the ratio is quantisation
+# The dump prefix was hard-coded to t257, and take 257's dumps had been deleted
+# by the time take 258 landed: every decode would have failed, every frame been
+# skipped, and the tool would have printed "no answer from this data" -- a false
+# null attributed to the NEW run. A path that names one take must be an
+# argument, and a prefix that matches nothing must be an error, not an answer.
+PREFIX = '/tmp/x4vr-t258'
 
 
 def ds(a, k=COARSE):
@@ -108,8 +114,8 @@ def shift2(a, b):
 def channels(n):
     """(scene, ui, scene_a, scene_b, ui_a, ui_b) for dump n, or None."""
     try:
-        p = decode(f'/tmp/x4vr-t257-present-n{n}-layer0.png')
-        r, al = decode_rgba(f'/tmp/x4vr-t257-ui-n{n}-layer0.png')
+        p = decode(f'{PREFIX}-present-n{n}-layer0.png')
+        r, al = decode_rgba(f'{PREFIX}-ui-n{n}-layer0.png')
     except Exception:
         return None
     L = 0.2126 * p[..., 0] + 0.7152 * p[..., 1] + 0.0722 * p[..., 2]
@@ -160,11 +166,12 @@ def main(lo, hi):
     print(f'{"pair":>9} {"scene":>7} {"ui":>7} {"ratio":>7}  '
           f'{"ctl scene":>9} {"ctl ui":>7}  verdict')
     prev = prev_n = None
-    ratios, dropped, void, skipped_gap = [], 0, 0, 0
+    ratios, dropped, void, skipped_gap, decoded = [], 0, 0, 0, 0
     for n in range(lo, hi + 1):
         cur = channels(n)
         if cur is None:
             continue
+        decoded += 1
         # Only compare frames the layer says are adjacent. Without a burst log
         # every consecutive pair is compared, which is right for a run that had
         # no bursts and wrong for one that did.
@@ -221,7 +228,18 @@ def main(lo, hi):
                   f'{cr(ca,s)} {cr(cu,u):>7}  {tag}')
         prev, prev_n = cur, n
 
-    print(f'\n  {len(ratios)} pair(s) survived their controls, '
+    # Distinguish "the data says nothing" from "there is no data". They print
+    # the same way otherwise, and the second one is about the command line.
+    if decoded == 0:
+        print(f'\nNO FRAME DECODED in n{lo}..n{hi} under prefix {PREFIX!r}.\n'
+              f'  This is not a measurement — nothing was read. Check '
+              f'--prefix and the range:\n'
+              f'    ls {PREFIX}-present-n*-layer0.png | wc -l',
+              file=sys.stderr)
+        return 2
+    print(f'\n  {decoded} frame(s) decoded under {PREFIX}, '
+          f'{skipped_gap} pair(s) skipped as non-adjacent')
+    print(f'  {len(ratios)} pair(s) survived their controls, '
           f'{void} VOIDED by a control, {dropped} unmeasurable or too still')
     if not ratios:
         print('  no answer from this data. The cadence is the limit: '
@@ -248,7 +266,10 @@ if __name__ == '__main__':
     ap.add_argument('hi', type=int)
     ap.add_argument('--burst-log', help="the take's log, for the layer's "
                                         "`ui dump: burst frames` lines")
+    ap.add_argument('--prefix', default=PREFIX,
+                    help=f'dump prefix, i.e. X4VR_MV_DUMP (default {PREFIX})')
     a = ap.parse_args()
+    PREFIX = a.prefix
     ADJACENT = None
     if a.burst_log:
         ADJACENT = burst_groups(a.burst_log)

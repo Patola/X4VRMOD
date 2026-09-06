@@ -31,6 +31,14 @@ find_package(ZLIB REQUIRED)
 add_executable(x4vr_test_png_writer png_writer.cpp)
 target_link_libraries(x4vr_test_png_writer PRIVATE ZLIB::ZLIB)
 
+# The injector's `env: run =` line must round-trip through a shell, because the
+# documented way to build the next take's command is to diff it against the
+# previous take's. Take 258's command shipped an unquoted value with spaces and
+# would not start; Patola repaired it by hand. Round-tripped through sh, zsh
+# and bash themselves rather than against an expected string, so a quoting bug
+# and a wrong expectation cannot cancel. Self-checking -- no runner script.
+add_executable(x4vr_test_shquote shquote.cpp)
+
 # Where the cursor lands and what its bytes mean (task #17). Needs no Vulkan
 # library -- it only uses the header's enums and two pure functions -- and no
 # GPU, which is the whole point of pulling them out of the overlay class.

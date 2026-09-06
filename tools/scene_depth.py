@@ -36,6 +36,11 @@ K = SX * IPD * (W / 2)          # 31.556; z = K / |dx|
 RX, RY = 60, 8
 GRID = 6
 MIN_MARGIN = 0.02
+# Named per run, never hard-coded to a take. This was pinned to t257 while
+# take 257's dumps were being deleted to make room for take 258 -- every
+# decode would then have failed, every frame been skipped, and the tool would
+# have reported "nothing measurable" about a run it never opened a file from.
+PREFIX = '/tmp/x4vr-t258'
 
 
 def depth_m(dx):
@@ -49,10 +54,10 @@ def main(lo, hi):
           f'   {"median z":>9}', flush=True)
     for n in range(lo, hi + 1):
         try:
-            r0, a0 = decode_rgba(f'/tmp/x4vr-t257-ui-n{n}-layer0.png')
-            r1, a1 = decode_rgba(f'/tmp/x4vr-t257-ui-n{n}-layer1.png')
-            p0 = decode(f'/tmp/x4vr-t257-present-n{n}-layer0.png')
-            p1 = decode(f'/tmp/x4vr-t257-present-n{n}-layer1.png')
+            r0, a0 = decode_rgba(f'{PREFIX}-ui-n{n}-layer0.png')
+            r1, a1 = decode_rgba(f'{PREFIX}-ui-n{n}-layer1.png')
+            p0 = decode(f'{PREFIX}-present-n{n}-layer0.png')
+            p1 = decode(f'{PREFIX}-present-n{n}-layer1.png')
         except Exception:
             continue
         ui0 = (a0 > 0) | (r0.max(2) > 0)
@@ -99,8 +104,13 @@ def main(lo, hi):
               f'   {depth_m(med):>8.2f}m', flush=True)
 
     if not rows:
-        print('nothing measurable')
-        return 1
+        # "no data" and "data that says nothing" print identically otherwise,
+        # and only one of them is about the command line.
+        print(f'NO FRAME DECODED in n{lo}..n{hi} under prefix {PREFIX!r} — '
+              f'nothing was read, so this is not a measurement. Check '
+              f'--prefix:\n    ls {PREFIX}-present-n*-layer0.png | wc -l',
+              file=sys.stderr)
+        return 2
     allt = np.concatenate([r[2] for r in rows])
     uis = np.array([r[1] for r in rows if r[1] is not None], dtype=float)
     print(f'\n{len(rows)} frame(s), {len(allt)} scene tile measurement(s)')
@@ -135,4 +145,12 @@ def main(lo, hi):
 
 
 if __name__ == '__main__':
-    sys.exit(main(int(sys.argv[1]), int(sys.argv[2])))
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument('lo', type=int)
+    ap.add_argument('hi', type=int)
+    ap.add_argument('--prefix', default=PREFIX,
+                    help=f'dump prefix, i.e. X4VR_MV_DUMP (default {PREFIX})')
+    a = ap.parse_args()
+    PREFIX = a.prefix
+    sys.exit(main(a.lo, a.hi))
