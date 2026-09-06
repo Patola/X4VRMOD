@@ -176,6 +176,7 @@ def analyse(lo, hi, prefix, burst_log, chan=1, raw_scene=False):
     per_pair, skipped_big, no_tiles, decoded = [], 0, 0, 0
     by_pos = {}
     matched = []
+    xy = []
     for n in range(lo, hi + 1):
         cur = channels(prefix, n, raw_scene)
         if cur is None:
@@ -215,6 +216,14 @@ def analyse(lo, hi, prefix, burst_log, chan=1, raw_scene=False):
                     if len(both) >= MIN_TILES:
                         for k, v in both:
                             by_pos.setdefault(k, []).append(v)
+                        # **The slope too, not just the median of ratios.**
+                        # A 4 px denominator carries +-25%, and a median of
+                        # ratios of small numbers is biased upward — the exact
+                        # defect fixed in hud_slide.py this same session and
+                        # then written straight back into this new code. Keep
+                        # the raw pairs so the summary can regress ui on scene.
+                        for k, _ in both:
+                            xy.append((srow[k], urow[k]))
                         vals = sorted(v for _, v in both)
                         matched.append(float(np.median(vals)))
                         print(f'{prev_n:4d}->{n:<4d} {s[0]:+7.0f} {u[0]:+7.0f} '
@@ -266,7 +275,35 @@ def analyse(lo, hi, prefix, burst_log, chan=1, raw_scene=False):
             return
         print(f'  UI motion / SCENE motion AT THE SAME TILE, same pair:')
         print(f'    median over pairs {np.median(matched):+.2f}   '
-              f'IQR {spread(matched):.2f}   n={len(matched)}')
+              f'IQR {spread(matched):.2f}   n={len(matched)} pair(s)')
+        # The slope over all matched tiles, which a small denominator cannot
+        # inflate the way a median of ratios can. Both ends printed so the
+        # errors-in-variables bracket is visible rather than implied.
+        if len(xy) >= 8:
+            x = np.array([a for a, _ in xy], float)
+            y = np.array([b for _, b in xy], float)
+            sxx, syy, sxy = float((x*x).sum()), float((y*y).sum()), float((x*y).sum())
+            if sxx > 1e-9 and abs(sxy) > 1e-9:
+                lo_, hi_ = sxy/sxx, syy/sxy
+                mx, my = x.mean(), y.mean()
+                cxx = float(((x-mx)**2).sum())
+                b_ = float(((x-mx)*(y-my)).sum())/cxx if cxx > 1e-9 else float('nan')
+                print(f'    SLOPE over {len(xy)} matched tile(s) '
+                      f'{(lo_*hi_)**0.5:+.2f}  (ui~scene {lo_:+.2f}, '
+                      f'1/(scene~ui) {hi_:+.2f})')
+                print(f'    with an intercept: ui = {b_:+.2f}*scene '
+                      f'{my - b_*mx:+.1f} px')
+                big = np.abs(x) >= 15
+                if big.sum() >= 8:
+                    bx, by = x[big], y[big]
+                    bl = float((bx*by).sum()/(bx*bx).sum())
+                    bh = float((by*by).sum()/(bx*by).sum())
+                    print(f'    |scene tile| >= 15 px: n={int(big.sum())} '
+                          f'slope {(bl*bh)**0.5:+.2f} — quantisation cannot '
+                          f'reach these')
+                else:
+                    print(f'    |scene tile| >= 15 px: only {int(big.sum())} '
+                          f'tile(s), too few to check the well-measured subset')
         print(f'\n  PER-TILE-POSITION median of that matched ratio:')
         for ty in range(GRID):
             cells = []

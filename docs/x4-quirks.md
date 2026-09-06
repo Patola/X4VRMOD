@@ -10215,7 +10215,41 @@ against that denominator. The 4.9x scatter called unexplained above was the
 denominator moving.
 
 **The replacement is `--channel both`**: both channels, SAME pair, SAME tile, so
-the field dependence cancels whatever causes it. Note that dividing the two
+the field dependence cancels whatever causes it.
+
+## #76's REAL number, from the matched measurement
+
+    median over pairs        +1.51   IQR 0.32   n=33 pairs
+    SLOPE over 138 tiles     +1.40   (ui~scene 1.35, 1/(scene~ui) 1.45)
+    |scene tile| >= 15 px    +1.39   n=129   <-- THE NUMBER
+    intercept                ui = 1.34*scene + 2.8 px
+
+    +1.47(  3) +1.62(  5) +1.30(  5)      all nine cells above +1.00
+    +1.21( 13) +1.79( 32) +1.32( 27)
+    +1.43( 16) +1.88( 25) +1.35( 12)
+
+**The HUD moves ~1.4x as far as whatever is directly behind it.** Quote the
+SLOPE, not the median: the median of per-tile ratios uses a 4 px denominator
+floor (+-25%) and reads 1.51, while the slope over the well-measured subset
+reads 1.39 and matches the all-tile slope of 1.40 to 0.7%. That defect —
+median-of-ratios over small denominators — was fixed in `hud_slide.py` earlier
+the same session and then written straight back into `hud_tiles.py`'s new
+matched mode. Same class, in the code being added. Grep the file.
+
+**LEADING HYPOTHESIS, NOT TESTED: translation parallax.** Rotation moves every
+depth alike; translation does not. A UI at 1.37 m against scene at infinity
+gives 1.39 for `d = 0.39*theta*1.37` — about **2.2 cm of lateral head
+translation per 180 ms pair** (12 cm/s) at a typical 30 px scene motion, against
+a logged head span of 0.260 x 0.185 y 0.330 m. Right order, but that is ONE FREE
+PARAMETER FITTED TO ONE NUMBER.
+
+**THE DECISIVE TEST, offline, no take:** correlate the per-pair matched ratio
+against the HEAD TRANSLATION for that pair, which `X4VR_POSELOG` already
+records. Translation is read from the LOG, not derived from the image, so this
+is not the ratio-against-its-own-denominator trap. Parallax predicts the ratio
+rises with translation at fixed rotation; flat refutes it and sends the search
+back to how the canvas is transformed. Only after that does `X4VR_CANVAS_M`
+become a question. Note that dividing the two
 separate per-position maps does NOT do this — they are built over different pair
 populations (scene 200 pairs, UI only the 35 under `MAX_UI`, which are the
 small-motion pairs whose ratios run high).
