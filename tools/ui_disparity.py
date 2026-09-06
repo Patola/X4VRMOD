@@ -439,12 +439,24 @@ def run_ui_mode(fs, a):
               f'asked to diverge vertically, which does not fuse. That is #52.')
     if per_tile:
         t = np.array([p[2] for p in per_tile], dtype=float)
+        spread = float(np.percentile(t, 90) - np.percentile(t, 10))
         print(f'\n  per-tile dx over {len(t)} tile measurement(s): '
               f'median {np.median(t):+.1f}  p10 {np.percentile(t,10):+.1f}  '
-              f'p90 {np.percentile(t,90):+.1f}  spread '
-              f'{np.percentile(t,90)-np.percentile(t,10):.1f} px')
-        print('  a flat canvas has the SAME disparity everywhere; spread here '
-              'means the UI is not being placed as one.')
+              f'p90 {np.percentile(t,90):+.1f}  spread {spread:.1f} px')
+        # **Only complain when there is something to complain about.** This
+        # line used to fire unconditionally -- it announced "the UI is not
+        # being placed as one" under a spread of 1.0 px, which is the flat
+        # canvas being CONFIRMED. A verdict printed whatever the number says
+        # nothing, and in a long report it reads as a finding.
+        if spread > 3.0:
+            print(f'  a flat canvas has the SAME disparity everywhere, so '
+                  f'{spread:.1f} px of spread means the UI is NOT being placed '
+                  f'as one. Check the per-frame lines first: a couple of frames '
+                  f'from a different scene can produce this on their own.')
+        else:
+            print(f'  a flat canvas has the SAME disparity everywhere, and '
+                  f'{spread:.1f} px is that: the tiles agree, so the UI IS '
+                  f'being placed as a single flat canvas.')
     return 0
 
 
@@ -727,12 +739,24 @@ def main():
               f'asked to diverge vertically, which does not fuse. That is #52.')
     if per_tile:
         t = np.array([(p[2]) for p in per_tile], dtype=float)
+        spread = float(np.percentile(t, 90) - np.percentile(t, 10))
         print(f'\n  per-tile dx over {len(t)} tile measurement(s): '
               f'median {np.median(t):+.1f}  p10 {np.percentile(t,10):+.1f}  '
-              f'p90 {np.percentile(t,90):+.1f}  spread '
-              f'{np.percentile(t,90)-np.percentile(t,10):.1f} px')
-        print('  a flat canvas has the SAME disparity everywhere; spread here '
-              'means the UI is not being placed as one.')
+              f'p90 {np.percentile(t,90):+.1f}  spread {spread:.1f} px')
+        # **Only complain when there is something to complain about.** This
+        # line used to fire unconditionally -- it announced "the UI is not
+        # being placed as one" under a spread of 1.0 px, which is the flat
+        # canvas being CONFIRMED. A verdict printed whatever the number says
+        # nothing, and in a long report it reads as a finding.
+        if spread > 3.0:
+            print(f'  a flat canvas has the SAME disparity everywhere, so '
+                  f'{spread:.1f} px of spread means the UI is NOT being placed '
+                  f'as one. Check the per-frame lines first: a couple of frames '
+                  f'from a different scene can produce this on their own.')
+        else:
+            print(f'  a flat canvas has the SAME disparity everywhere, and '
+                  f'{spread:.1f} px is that: the tiles agree, so the UI IS '
+                  f'being placed as a single flat canvas.')
     return 0
 
 
