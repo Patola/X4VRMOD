@@ -110,14 +110,25 @@ def ui_sibling(present_path, layer):
 def ui_masks(rgb, alpha):
     """Candidate UI masks, and their coverage.
 
-    Two of them, because which one IS the UI is not settled and guessing would
-    be the fourth clean audit of the wrong quantity in this investigation.
-    `alpha` is X4's own composite coverage; `colour` is what survives if the
-    composite ignores alpha and keys on content instead. They are reported
-    separately and their disagreement is reported too.
+    **`alpha` alone is WRONG, measured on take 257 frame n45.** X4 writes some
+    HUD elements into this target with colour and ZERO alpha — the weapon arcs
+    and the weapon-bracket rectangles among them, 1.19% of that frame. They are
+    invisible in any image viewer, which is why Patola reported them "missing"
+    from the dumps, and `alpha > 0` drops them from the measurement too. They
+    are precisely the elements whose motion is under investigation.
+
+    The reverse also exists: 1.47% of that frame has alpha and no colour, a
+    dimming scrim over the lower console. It carries no structure, so it
+    contributes nothing to a correlation either way.
+
+    So `union` is the default: any pixel where the UI target has content of
+    either kind. All three are reported, because a mask this instrument depends
+    on should never be a silent choice.
     """
     lum = 0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2]
-    return {'alpha': alpha > 0.0, 'colour': rgb.max(2) > 0.0}, lum
+    a = alpha > 0.0
+    c = rgb.max(2) > 0.0
+    return {'alpha': a, 'colour': c, 'union': a | c}, lum
 
 
 def ncc_shift(a, b, rx, ry):
@@ -219,8 +230,14 @@ def run_ui_mode(fs, a):
     """--ui: mask from X4's own UI target, not from colour."""
     A, B, C, cyan, cover, agree, per_tile = [], [], [], [], [], [], []
     used = skipped = 0
+    truncated = 0
     for f in fs:
         if used >= a.max_frames:
+            # **Say it.** Take 257 measured 40 frames and stopped at n44 while
+            # the cockpit ran to n65 and the map to n85 -- and reported "40
+            # frame(s) measured" as though that were the whole run. A cap that
+            # is silent reads as completeness.
+            truncated = len(fs) - fs.index(f)
             break
         if not os.path.exists(f.replace('-layer0.png', '-layer1.png')):
             continue
@@ -270,9 +287,18 @@ def run_ui_mode(fs, a):
     ax = np.array([r[0] for r in A], dtype=float)
     ay = np.array([r[1] for r in A], dtype=float)
     print(f'\n  {used} frame(s) measured, {skipped} skipped')
-    print(f'  mask coverage: alpha {100*np.mean([c["alpha"] for c in cover]):.2f}%'
+    if truncated:
+        print(f'  *** --max-frames={a.max_frames} STOPPED EARLY: {truncated} '
+              f'later dump(s) were never looked at. Everything below describes '
+              f'the FIRST {used} measurable frames only. Raise --max-frames or '
+              f'use --frames LO-HI to measure a particular scene. ***')
+    print(f'  mask = {a.mask}. coverage: alpha '
+          f'{100*np.mean([c["alpha"] for c in cover]):.2f}%'
           f'  colour {100*np.mean([c["colour"] for c in cover]):.2f}%'
-          f'  — the two criteria agree on {100*np.mean(agree):.2f}% of pixels')
+          f'  union {100*np.mean([c["union"] for c in cover]):.2f}%'
+          f'  — alpha and colour agree on {100*np.mean(agree):.2f}% of pixels.'
+          f'\n  alpha-only misses the weapon arcs and brackets, which X4 writes '
+          f'with colour and zero alpha.')
     print(f'\n  A  UI dump alone   dx median {np.median(ax):+.1f} px  '
           f'(quartiles {np.percentile(ax,25):+.1f}..{np.percentile(ax,75):+.1f})'
           f'   dy median {np.median(ay):+.1f} px')
@@ -493,8 +519,15 @@ def main():
     ap.add_argument('--ui', action='store_true',
                     help="mask from X4's own UI target (X4VR_UI_DUMP), not "
                          "from colour")
-    ap.add_argument('--mask', choices=('alpha', 'colour'), default='alpha',
-                    help='which UI-dump criterion is the mask, with --ui')
+    ap.add_argument('--mask', choices=('alpha', 'colour', 'union'),
+                    default='union',
+                    help='which UI-dump criterion is the mask, with --ui. '
+                         'alpha alone DROPS the weapon arcs and brackets, '
+                         'which X4 writes with colour and zero alpha')
+    ap.add_argument('--frames', metavar='LO-HI',
+                    help='restrict to dump numbers LO..HI, so one scene can '
+                         'be measured on its own instead of averaged with the '
+                         'menu frames that precede it')
     ap.add_argument('--min-ui-px', type=int, default=2000,
                     help='UI pixels a frame needs before it is measured')
     ap.add_argument('--min-margin', type=float, default=0.02)
@@ -510,6 +543,15 @@ def main():
     if not fs:
         print('no dumps matched', file=sys.stderr)
         return 2
+
+    if a.frames:
+        lo, hi = (int(v) for v in a.frames.split('-'))
+        fs = [f for f in fs
+              if lo <= int(re.search(r'-n(\d+)-', f).group(1)) <= hi]
+        if not fs:
+            print(f'no dumps in the range n{lo}..n{hi}', file=sys.stderr)
+            return 2
+        print(f'  restricted to n{lo}..n{hi}: {len(fs)} dump(s)')
 
     if a.ui:
         return run_ui_mode(fs, a)
