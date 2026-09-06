@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later WITH x4vrmod-linking-exception
 #
-# Watch a take's log for the evidence the run was FOR, and say out loud whether
-# it is arriving.
+# Watch a take's log for the evidence the run was FOR, and report whether it is
+# arriving -- as a DESKTOP NOTIFICATION, which is what reaches Patola in VR.
 #
 # **Why this exists.** For take 257 I handed over "abort early if, after a
 # minute, this grep returns 0". Patola: *"when I am in VR it is very difficult
@@ -12,17 +12,29 @@
 # elsewhere."*
 #
 # He is right, and the fix is not a better-worded instruction. A check a player
-# in a headset cannot perform is not a check. **Speech is the only channel that
-# reaches him**, so this speaks; it never asks him to look at anything.
+# in a headset cannot perform is not a check.
 #
-# It also speaks on SUCCESS. Silence that means "fine" and silence that means
+# **notify-send, NOT speech.** The first version used spd-say. Patola, from
+# inside VR: *"it talked an error message continuously to me, because it is
+# apparently not properly configured."* So the first thing this tool ever did
+# was intrude on the session it existed to protect -- speech-dispatcher is
+# misconfigured here, spd-say still exits 0, and my fallback chain therefore
+# never fired. An output channel that reports success while producing garbage is
+# worse than one that plainly fails.
+#
+# His answer: *"an useful way to reach me when I'm there is using the
+# notification system, it seems either WiVRn or WayVR do this because I receive
+# some floating notification pop-ups when I am in VR. So notify-send should
+# work."* One notification per event, never a stream.
+#
+# It notifies on SUCCESS too. Silence that means "fine" and silence that means
 # "the watchdog died" are the same silence, and a watcher that can only report
 # bad news cannot be trusted to be running at all -- the same defect as a guard
 # that can only ever agree with itself.
 #
 #   tools/watch_run.sh /tmp/x4vr-take258.log \
-#       --want 'ui dump: frame'      --by 90  --say 'you eye dumps' \
-#       --want 'ui: TARGET img'      --by 60  --say 'you eye target'
+#       --want 'ui dump: frame'      --by 90  --say 'UI dumps' \
+#       --want 'ui: TARGET img'      --by 60  --say 'UI target'
 #
 # --kill additionally ends X4 when a check fails its deadline: the take is
 # worthless without its instrument, so continuing only spends the thing this
@@ -36,9 +48,10 @@ declare -a WANT SAYS BY
 usage() {
     cat >&2 <<'USAGE'
 usage: watch_run.sh <logfile> [--kill] [--poll SEC]
-                    (--want PATTERN --by SECONDS --say PHRASE)...
-Speaks when each pattern first appears, and speaks a warning if it has not
-appeared by its deadline. --kill also terminates X4 on a failed deadline.
+                    (--want PATTERN --by SECONDS --say LABEL)...
+Sends a desktop notification when each pattern first appears, and a critical
+one if it has not appeared by its deadline. --kill also terminates X4 on a
+failed deadline. LABEL names the thing in the notification, e.g. 'UI dumps'.
 USAGE
     exit 2
 }
@@ -57,23 +70,28 @@ while [[ $# -gt 0 ]]; do
 done
 [[ ${#WANT[@]} -gt 0 && ${#WANT[@]} -eq ${#BY[@]} && ${#WANT[@]} -eq ${#SAYS[@]} ]] || usage
 
-# Spoken, not printed. Falls back through what is installed rather than assuming
-# one of them: a watchdog that dies because a package is missing is worse than
-# no watchdog, because it looks like everything is fine.
-say() {
-    printf '[watch_run] %s\n' "$1"
-    if command -v spd-say >/dev/null; then spd-say -w -- "$1" 2>/dev/null && return; fi
-    if command -v espeak-ng >/dev/null; then espeak-ng -- "$1" 2>/dev/null && return; fi
-    # No speech anywhere: at least make a noise, so the failure is still audible.
-    if command -v paplay >/dev/null; then
-        paplay /usr/share/sounds/freedesktop/stereo/dialog-warning.oga 2>/dev/null
+# One desktop notification per event, and always a line on stdout so the
+# terminal transcript stands on its own afterwards.
+#
+# `urgency` is critical only for failures: in VR a critical notification is the
+# one worth interrupting for, and marking everything critical would train it to
+# be ignored. -t 0 lets a critical one persist until dismissed; the successes
+# time out on their own.
+notify() {
+    local urgency="$1" body="$2"
+    printf '[watch_run] %s: %s\n' "$urgency" "$body"
+    command -v notify-send >/dev/null || return 0
+    if [[ $urgency == critical ]]; then
+        notify-send -u critical -t 0 -a x4vr "X4VR take" "$body" 2>/dev/null
+    else
+        notify-send -u normal -t 8000 -a x4vr "X4VR take" "$body" 2>/dev/null
     fi
 }
 
 # X4's process is "Main()", so `pkill -x X4` never matches it.
 x4_pids() { pgrep -f 'X4 Foundations/X4' 2>/dev/null; }
 
-say "x4 v r watchdog armed"
+notify normal "watchdog armed"
 
 start=$SECONDS
 declare -a done_flag
@@ -91,7 +109,7 @@ while [[ $remaining -gt 0 ]]; do
     if x4_pids >/dev/null; then
         seen_x4=1
     elif [[ $seen_x4 == 1 ]]; then
-        say "x4 exited"
+        notify normal "X4 exited"
         break
     fi
     # Waiting on the PIDs and not on a pattern that could match this script's
@@ -102,17 +120,17 @@ while [[ $remaining -gt 0 ]]; do
         [[ ${done_flag[i]} == 1 ]] && continue
         if [[ -f "$LOG" ]] && grep -qF -- "${WANT[i]}" "$LOG"; then
             done_flag[i]=1; remaining=$((remaining - 1))
-            say "${SAYS[i]} are recording"
+            notify normal "${SAYS[i]}: recording"
         elif [[ $elapsed -ge ${BY[i]} ]]; then
             done_flag[i]=1; remaining=$((remaining - 1))
             if [[ $KILL == 1 ]]; then
-                say "${SAYS[i]} missing. ending the run."
+                notify critical "${SAYS[i]}: MISSING — ending the run"
                 # TERM, not KILL: X4 gets to close its files, and the log stays
                 # readable afterwards -- which is the only thing that will
                 # explain what went wrong.
                 x4_pids | xargs -r kill 2>/dev/null
             else
-                say "warning. ${SAYS[i]} missing. this take will not measure."
+                notify critical "${SAYS[i]}: MISSING — this take will not measure"
             fi
         fi
     done
@@ -121,4 +139,4 @@ done
 
 # Never leaves without saying so, for the reason in the header: silence must
 # not be ambiguous.
-say "watchdog finished"
+notify normal "watchdog finished"
