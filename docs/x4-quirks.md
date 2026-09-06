@@ -10071,66 +10071,133 @@ capped at 400 paths and the `livesets` walk is gated behind
 `X4VR_DUMP_MATRICES`, which this take already sets — so neither should move the
 perf number. Prediction 4 includes that band precisely so a surprise is visible.
 
-# RESUME HERE AFTER A COMPACT — state as of take 260 (delivered, NOT yet run)
+# RESUME HERE AFTER A COMPACT — state as of take 260 (RUN and scored)
 
 Everything below supersedes earlier "read this first" banners. **Where this
 banner and an older section disagree, this banner wins.**
-
-## THE NEXT TASK: take 260, the #76 elimination. Command delivered, not run.
 
 Patola's priority, still standing: *"We can hold the eye separation issue for
 the moment while we are trying to solve the sliding HUD... The HUD is more
 important than to focus on these side defects."*
 
-    X4VR_WATCH_SAY='burst dumps' X4VR_TAKE=260-NOPOSE X4VR_CANVAS_M=1.4 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DECLARE_RENDERED_POS=1 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_POSE=0 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_MV_DUMP=/tmp/x4vr-t260 X4VR_UI_DUMP=600:6:150 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take260.log X4VR_WATCH_WANT='ui dump: burst frames' X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+## TAKE 260 IS SCORED. Its elimination is VOID — read this before reusing it.
 
-**Diff from take 259: `TAKE`, `MV_DUMP`, `LOG`, and `X4VR_POSE=1` -> `0`.
-Nothing else.** `POSE=0` also disables roll compensation, but roll only rotates
-the EYE OFFSET and this measurement compares one eye across time, so roll
-contributes nothing to it. One effective change.
+Take 260 ran `X4VR_POSE=1 -> 0` as a single-variable elimination for #76. **It
+eliminated nothing, because the pose channel was already uploading IDENTITY in
+take 259.** The evidence was in take 259's own log — the log I read in order to
+design take 260:
 
-In game: cockpit, **4 minutes**, look around continuously and naturally, then
-ESC and quit. Four rather than eight because the flush fix gives far more
-bursts per minute. ~4 GB in /tmp.
+    pose: channel up — set 31 binding 0, 4 region(s) of 208 B,
+                                        identity until #33 drives it
+    pose residual: X4VR_FOV=1.4917 renders 110.0 deg, runtime wants 94.0 x 99.0
+        deg per eye -> budget 0.00 deg of head rotation. ... so a budget under
+        ~2.3 clamps the ordinary case — WHICH THIS ONE DOES
 
-    grep -m3 "ui dump: flush" /tmp/x4vr-take260.log
-    tools/score_run.py /tmp/x4vr-take260.log
-    python3 tools/hud_slide.py 0 600 --burst-log /tmp/x4vr-take260.log --prefix /tmp/x4vr-t260
-    python3 tools/hud_slide.py 0 600 --burst-log /tmp/x4vr-take260.log --prefix /tmp/x4vr-t260 --span-scan
+and all 20 `vr pose:` samples in take 259 logged `residual 0.00,0.00 applied`.
+`pose_set_euler(g_pose.value, cy, cp, 0)` is fed exactly that residual, so the
+World rotation `R` was identity in BOTH runs. #33 — the task that would drive it
+— is still `pending`.
 
-**PREDICTIONS, on record before the run:**
+**So P260.1 and P260.2 are both VOID.** The ratio could not have moved to +1.00,
+and its staying at +1.8 says nothing about the pose subsystem. That subsystem is
+**not eliminated; it was never exercised.** Do not record it as ruled out.
 
-* **P260.0** — the flush reads **100-150 ms/frame** (take 259: 2378), `cov`
-  ~0, a burst under 1 s. Tests the flush fix independently of #76.
-* **P260.1** — if the ratio moves toward **+1.00**, the pose channel's rotation
-  of the World modules is the mechanism.
-* **P260.2** — if it stays near **+1.8**, that whole subsystem is eliminated.
+The general rule this broke: a knob whose effect is gated by a budget, a
+residual or a "not driven yet" note is not a variable until something drives it.
+Grep the previous take's log for the quantity the knob is supposed to move,
+**and confirm it was non-zero**, before spending a run on turning it off.
 
-**Which of P260.1/P260.2 is not predicted, deliberately.** Two takes died on me
-picking a mechanism before measuring one.
+## WHAT TAKE 260 DID ESTABLISH
 
-## #76 — MEASURED. Ratio ~1.8, MULTIPLICATIVE. #75 refuted as the cause.
+**P260.0 — the flush fix, MISSED HIGH but working.** Predicted 100-150 ms/frame;
+measured **median 185** over 71 bursts (min 96, max 433), against take 259's
+2378. That is **12.9x**, with `cov` **0 on every burst** as predicted. A burst is
+~1.1 s, not the predicted "under 1 s".
 
-Take 259, 49 adjacent pairs: **all 49 survived their controls, 0 voided, all 49
-exclude +1.** Median **+1.77**, IQR 1.63-2.17.
+The miss is now explained and the explanation is offline-verified: the residue is
+**PNG deflate**, not readback. `tests/readback_speed.cpp` measures `write_png_n`
+at **121.6 ms per 1408x1408 layer even from cached RAM**, while the bulk read of
+the same bytes is 80x faster than the old scalar path and no longer material.
+Further reduction needs a compression-level change, not more readback work.
+Real frames beat the test's figure because deflate is content-dependent: the
+sparse UI layer costs ~56 ms for both layers, the dense present layer ~127 ms.
 
-`hud_slide.py --span-scan` then paired frames k apart WITHIN each burst, which
-gives k*dt over the same physical head motion — five time scales from one run,
-and no need for Patola to control his head speed:
+**The yield more than doubled**: 71 bursts / 425 frames in 4 minutes, against 34
+bursts / 197 frames in 8 minutes for take 259.
 
-    span 1   210 ms  n=49  ratio +1.77      span 4   839 ms  n= 4  +1.91
-    span 2   419 ms  n=23  ratio +1.91      span 5  1049 ms  n= 2  +1.83
-    span 3   629 ms  n= 9  ratio +1.72      trend +0.012/step — FLAT
+**#76 REPRODUCED across two sessions.** See the #76 section below — the slope,
+not the median, is the cross-run number.
 
-**Flat across a 5x range of dt, so the excess motion is MULTIPLICATIVE** — it
-scales with the scene motion. Any fixed-offset or fixed-lag mechanism is
-excluded. **#75 predicts exactly +2.00, constant; the medians sit at 1.72-1.91.
-Refuted as the cause** — eliminated before a fix was built on it.
+## #76 — MEASURED TWICE, REPRODUCED. Ratio ~1.7, MULTIPLICATIVE.
 
-Both channels are drawn by X4 into the same frame, so the difference is in what
-OUR patches do to one and not the other: the pose channel rotates the World
-modules (#33/#62) while the UI gets the canvas map instead. That is what take
-260 cuts.
+**Report the SLOPE, not the median of per-pair ratios.** `hud_slide.py` prints
+both since this session. The median is dominated by small-motion pairs, whose
+ratios are mostly noise; the slope is not, and it is the number that survives a
+change of run:
+
+                  pairs   median   slope   slope |scene|>=40   intercept
+      take 259      49    +1.77    1.756       1.701           -2.4 px
+      take 260     133    +1.90    1.811       1.694           -2.9 px
+
+The medians look 7% apart and the well-measured slopes agree to **0.4%**. Take
+260 simply has 3x the pairs and proportionally more small ones. `scene` carries
+error like `ui` does, so the slope is quoted as the geometric mean of the
+`ui~scene` and `1/(scene~ui)` fits, which brackets the errors-in-variables bias.
+
+**MULTIPLICATIVE, now by two independent routes.** First, `--span-scan`, pairing
+frames k apart WITHIN each burst so k*dt covers the same physical head motion —
+five time scales from one run, needing no control over Patola's head speed:
+
+    take 259   span 1..5: +1.77 +1.91 +1.72 +1.91 +1.83   trend +0.012/step
+    take 260   span 1..5: +1.90 +1.91 +1.96 +1.95 +1.88   trend +0.001/step
+
+Second, and not derived from the span scan: **the regression intercept**. A
+fixed per-pair offset would appear as a large intercept, and both runs give
+`ui = 1.7*scene - 2.5 px`. Every fixed-offset and fixed-lag mechanism is
+excluded twice over.
+
+**#75 stays refuted as the cause.** "The head rotation counted twice" predicts
+exactly +2.00 and constant. chi2 against a constant +2.00 is **66 per dof** on
+take 260 and 89 on take 259, and the well-measured slope is 1.69.
+
+**THE SCATTER IS REAL AND STILL UNEXPLAINED.** Observed spread is **4.9x** the
+stated per-pair error (259: 4.6x), and chi2 against the BEST constant is still
+33 per dof. No single constant fits. Something varies pair to pair that neither
+quantisation nor the controls account for — this is the live thread, and the
+two open questions below both attack it.
+
+**Where it can still be.** With the pose channel known inert (see the take 260
+section above) and the canvas contributing only a CONSTANT per-eye offset
+(+-11.3 px, identical in consecutive frames of one eye, so it cancels in every
+difference), **our layer applies no per-frame differential between the scene and
+the UI in either run.** Both are drawn by X4 into one image and reprojected
+together by the compositor. So the 1.7x is X4's own rendering, or the
+servo/compositor interaction — not a transform of ours. Earlier text here
+claimed the difference was "what OUR patches do to one and not the other"; that
+was written when the pose channel was believed live.
+
+## #76's two open questions, both answerable OFFLINE from take 260's dumps
+
+`tools/hud_tiles.py` (new, selftested against synthetic rigid and mixed cases):
+
+1. **Is the UI one object, or a mixture?** `--channel ui`, the default. A single
+   ratio of 1.7 means one thing if every part of the HUD moves at 1.7, and a
+   completely different thing if world-anchored brackets sit at +1 while other
+   parts run past +2 and 1.7 is their average. **`hud_slide.py`'s checkerboard
+   control cannot answer this** — a checkerboard samples the same spatial
+   mixture in both halves, so a mixture reads a contented +1.00 either way. Only
+   a SPATIAL split separates them.
+2. **Is the SCENE one object?** `--channel scene`. The head moved over a 0.26 m
+   span. 5 cm of sideways translation shifts something at 1.4 m by ~26 px and
+   leaves infinity alone, and the cockpit interior is about a metre away. If the
+   cockpit and the starfield disagree, then the DENOMINATOR of every ratio above
+   is an average over depths and the ratio is not a property of the HUD at all.
+
+**Then, and only then, the vanilla baseline** — the same measurement with the
+layer instrumenting only: no VR, no stereo, no canvas, no pose, mouselook by
+hand. Establishes which side is the defect before any more of our transforms are
+suspected. This project has spent 13 takes on the wrong side of exactly that
+question once already.
 
 **A WITHDRAWN claim of mine — do not resurrect it.** I reported that the ratio
 "falls with head speed", from `corr(|scene|, ui/scene) = -0.40` and a table of
@@ -10152,6 +10219,7 @@ This tool has now failed from BOTH ends:
     take 257   one dump per period, ~1.3 s apart   motion PAST +-320 px
     take 258   six CONSECUTIVE presents, 8.5 ms    motion UNDER 15 px
     take 259   150 ms asked, 209.7 ms achieved     49 pairs, in band
+    take 260   150 ms asked, 180.0 ms achieved    133 pairs, in band
 
 Take 258 is the sharper lesson: at 117 presents/s a pair is 8.5 ms apart, and
 clearing 15 px needs a **138 deg/s** head turn. **No head speed could have
@@ -10160,10 +10228,11 @@ irrelevant. The spacing was an unstated default, not a decision. The layer now
 records `t_capture` per slot and logs the ACHIEVED milliseconds, so a bad gap is
 visible in the first burst rather than after the take.
 
-**209.7 ms against 150 asked is a 40% overshoot and is not understood.** Watch
-it; if a run needs a specific dt, calibrate from the previous run's line.
+**The overshoot is real but shrank with the flush fix: 40% on take 259, 20% on
+take 260.** Consistent with the flush itself having been part of the delay.
+Watch it; if a run needs a specific dt, calibrate from the previous run's line.
 
-## The flush — was 2378 ms/frame, fixed, VERIFY IN TAKE 260's LOG
+## The flush — was 2378 ms/frame, now 185. VERIFIED in take 260.
 
 Take 259's own breakdown, after three offline hypotheses had each been measured
 and each been wrong:
@@ -10185,6 +10254,22 @@ verbatim and requires byte-for-byte agreement (76 checks).
 worth 3.5% — it benchmarked `write_png_n`, a BULK read, which neither hot path
 does. `t_cov` is kept and should now read ~0: a term that vanishes from the log
 is indistinguishable from one nobody measured.
+
+**Take 260 measured it: median 185 ms/frame over 71 bursts** (min 96, max 433;
+eye 127, ui 56, cov 0). That is 12.9x, against a prediction of 100-150 — **the
+prediction missed high** and a burst is ~1.1 s rather than "under 1 s".
+
+**Why it missed, verified offline rather than guessed.** The residue is PNG
+deflate, not readback. `tests/readback_speed.cpp` puts `write_png_n` at **121.6
+ms per 1408x1408 layer even from CACHED RAM**, while the bulk read of the same
+bytes is 80x faster than the old scalar path and no longer material. So the
+remaining cost cannot be attacked from the readback side at all; it needs a
+compression-level change. Real frames beat the synthetic figure because deflate
+is content-dependent — the sparse UI layer costs ~56 ms for both layers against
+the dense present layer's ~127 ms.
+
+The fix paid for itself in data: **71 bursts / 425 frames in 4 minutes**, against
+34 bursts / 197 frames in 8 minutes for take 259.
 
 ## #80 — CONFIRMED offline. Not started; #76 has priority.
 

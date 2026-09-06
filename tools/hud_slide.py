@@ -250,7 +250,7 @@ def main(lo, hi):
             ratio = (u[0] / s[0]) if ok else None
             if ok:
                 err = abs(ratio) * (1.0 / abs(s[0]) + 1.0 / max(abs(u[0]), 1))
-                ratios.append((ratio, err))
+                ratios.append((ratio, err, s[0], u[0]))
                 tag = f'ratio {ratio:+.2f} +- {err:.2f}'
             print(f'{str(prev_n)+"->"+str(n):>9} {fmt(s)} {fmt(u)} '
                   f'{ratio if ratio is None else round(ratio,2)!s:>7}  '
@@ -318,7 +318,55 @@ def main(lo, hi):
     print('    +1 = HUD moves with the ship (correct in the cockpit)\n'
           '     0 = HUD is screen-locked\n'
           '    +2 = HUD moves twice the ship, so it slides AGAINST the head')
+    slope_summary(np.array([x[2] for x in ratios], float),
+                  np.array([x[3] for x in ratios], float), r)
     return 0
+
+
+def slope_summary(x, y, r):
+    """The comparable number: a SLOPE, not the median of per-pair ratios.
+
+    Takes 259 and 260 differ by one knob that turned out to change nothing,
+    yet their median ratios read +1.77 and +1.90 -- because take 260 has three
+    times as many pairs and proportionally more SMALL ones, and a ratio of two
+    small shifts is mostly noise that the median then inherits. On the same two
+    runs the slope moved only 1.756 -> 1.811, and over the well-measured pairs
+    (|scene| >= 40 px) it read 1.701 -> 1.694. The median is the statistic that
+    moved; the slope is the one that did not.
+
+    `scene` carries measurement error like `ui` does, so an ordinary y-on-x fit
+    is attenuated toward zero and an x-on-y fit is inflated. The true slope
+    lies between them, and their geometric mean is the equal-error estimate.
+    Both ends are printed so the bracket is visible rather than implied.
+
+    The intercept is printed for its own reason: a MULTIPLICATIVE effect must
+    pass through the origin. It is an independent check on the span scan, which
+    reaches the same conclusion by varying dt instead.
+    """
+    n = len(x)
+    sxx, syy, sxy = float((x * x).sum()), float((y * y).sum()), float((x * y).sum())
+    if sxx < 1e-9 or abs(sxy) < 1e-9:
+        print('  slope: undegenerate fit impossible — no spread in the shifts')
+        return
+    lo, hi = sxy / sxx, syy / sxy
+    mx, my = x.mean(), y.mean()
+    cxx = float(((x - mx) ** 2).sum())
+    b = float(((x - mx) * (y - my)).sum()) / cxx if cxx > 1e-9 else float('nan')
+    print(f'  slope  {(lo*hi)**0.5:+.2f}  (ui~scene {lo:+.2f}, '
+          f'1/(scene~ui) {hi:+.2f}) over n={n} — the cross-run number')
+    print(f'  with an intercept: ui = {b:+.2f}*scene {my - b*mx:+.1f} px '
+          f'— an intercept near 0 px is what MULTIPLICATIVE means')
+    big = np.abs(x) >= 40
+    if big.sum() >= 5:
+        bx, by = x[big], y[big]
+        bl = float((bx * by).sum() / (bx * bx).sum())
+        bh = float((by * by).sum() / (bx * by).sum())
+        print(f'  |scene| >= 40 px: n={int(big.sum())} '
+              f'median {np.median(r[big]):+.2f} slope {(bl*bh)**0.5:+.2f} '
+              f'— quantisation cannot reach these')
+    else:
+        print(f'  |scene| >= 40 px: only {int(big.sum())} pair(s), too few for '
+              f'a slope over the well-measured subset')
 
 
 def span_scan(lo, hi):
