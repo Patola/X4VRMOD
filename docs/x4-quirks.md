@@ -10071,184 +10071,272 @@ capped at 400 paths and the `livesets` walk is gated behind
 `X4VR_DUMP_MATRICES`, which this take already sets — so neither should move the
 perf number. Prediction 4 includes that band precisely so a surprise is visible.
 
-# RESUME HERE AFTER A COMPACT — state as of take 258 (delivered, unanalysed)
+# RESUME HERE AFTER A COMPACT — state as of take 260 (delivered, NOT yet run)
 
 Everything below supersedes earlier "read this first" banners. **Where this
 banner and an older section disagree, this banner wins.**
 
-## THE NEXT TASK: analyse take 258. The command was delivered and NOT scored.
+## THE NEXT TASK: take 260, the #76 elimination. Command delivered, not run.
 
-Patola ran take 257, then asked to hold the eye-separation work and focus on the
-sliding HUD: *"We can hold the eye separation issue for the moment while we are
-trying to solve the sliding HUD, no? The HUD is more important than to focus on
-these side defects."* That priority stands.
+Patola's priority, still standing: *"We can hold the eye separation issue for
+the moment while we are trying to solve the sliding HUD... The HUD is more
+important than to focus on these side defects."*
 
-Take 258 is the burst run for **#76**. Its acceptance is:
+    X4VR_WATCH_SAY='burst dumps' X4VR_TAKE=260-NOPOSE X4VR_CANVAS_M=1.4 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DECLARE_RENDERED_POS=1 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_POSE=0 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_MV_DUMP=/tmp/x4vr-t260 X4VR_UI_DUMP=600:6:150 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take260.log X4VR_WATCH_WANT='ui dump: burst frames' X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
 
-    tools/score_run.py /tmp/x4vr-take258.log
-    tools/hud_slide.py 1 200 --burst-log /tmp/x4vr-take258.log
+**Diff from take 259: `TAKE`, `MV_DUMP`, `LOG`, and `X4VR_POSE=1` -> `0`.
+Nothing else.** `POSE=0` also disables roll compensation, but roll only rotates
+the EYE OFFSET and this measurement compares one eye across time, so roll
+contributes nothing to it. One effective change.
 
-**Check the burst fired before reading any ratio.** The burst path has never
-executed anywhere — `tests/multiview_render.cpp` never presents, so no harness
-can reach it. `grep -c "ui dump: burst frames" /tmp/x4vr-take258.log` is the
-one-line answer; `hud_slide.py --burst-log` refuses outright if that line is
-absent, rather than comparing frames a period apart and calling them adjacent.
+In game: cockpit, **4 minutes**, look around continuously and naturally, then
+ESC and quit. Four rather than eight because the flush fix gives far more
+bursts per minute. ~4 GB in /tmp.
 
-## #76: the live lead, and how far it is from a finding
+    grep -m3 "ui dump: flush" /tmp/x4vr-take260.log
+    tools/score_run.py /tmp/x4vr-take260.log
+    python3 tools/hud_slide.py 0 600 --burst-log /tmp/x4vr-take260.log --prefix /tmp/x4vr-t260
+    python3 tools/hud_slide.py 0 600 --burst-log /tmp/x4vr-take260.log --prefix /tmp/x4vr-t260 --span-scan
 
-Take 257 gave **two** usable pairs: **+1.72 +- 0.15** and **+1.94 +- 0.09**,
-both excluding +1. The ratio is (UI motion) / (scene motion) within one pair.
+**PREDICTIONS, on record before the run:**
 
-    ratio  0   HUD screen-locked, does not move in the image
-    ratio +1   HUD moves with the ship — CORRECT in the cockpit
-    ratio +2   HUD moves twice the ship, so relative to the cockpit it slides
-               AGAINST the head — which is what Patola reports
+* **P260.0** — the flush reads **100-150 ms/frame** (take 259: 2378), `cov`
+  ~0, a burst under 1 s. Tests the flush fix independently of #76.
+* **P260.1** — if the ratio moves toward **+1.00**, the pose channel's rotation
+  of the World modules is the mechanism.
+* **P260.2** — if it stays near **+1.8**, that whole subsystem is eliminated.
 
-**Two pairs is not a finding.** The mechanism that would give exactly +2 is
-already open as **#75**: the servo turns X4's camera (so the HUD moves in X4's
-own frame) and the layer applies its own rotation on top — the head rotation
-counted twice. **Do not act on #75 until take 258 says whether the ratio is 2,
-or 1.7, or varies with head speed.** Three interventions aimed at one unmeasured
-quantity is the pattern that already cost three takes.
+**Which of P260.1/P260.2 is not predicted, deliberately.** Two takes died on me
+picking a mechanism before measuring one.
 
-Why only two pairs: 22 of 24 were beyond the +-320 px search or had no usable
-peak, because consecutive dumps in take 257 are ~1.3 s apart in WALL clock. That
-is what the burst fixes.
+## #76 — MEASURED. Ratio ~1.8, MULTIPLICATIVE. #75 refuted as the cause.
 
-## The burst, and why a naive one would not have worked
+Take 259, 49 adjacent pairs: **all 49 survived their controls, 0 voided, all 49
+exclude +1.** Median **+1.77**, IQR 1.63-2.17.
 
-`X4VR_UI_DUMP=PERIOD:BURST` (take 258 used `600:6`). A dump's cost is the
-QueueWaitIdle, not the encode: take 256 measured p90 1013.91 ms against a
-19.52 ms median, and the PNG encode is 41 ms per layer. So dumping *more often*
-leaves consecutive dumps ~1.3 s apart however adjacent their frame numbers.
+`hud_slide.py --span-scan` then paired frames k apart WITHIN each burst, which
+gives k*dt over the same physical head motion — five time scales from one run,
+and no need for Patola to control his head speed:
 
-A burst records BURST copies with **no wait and no encode**, then waits once and
-writes them all — during the burst each frame costs a GPU copy, so the frames
-really are one frame apart. Memory instead of time: ~32 MB per slot.
+    span 1   210 ms  n=49  ratio +1.77      span 4   839 ms  n= 4  +1.91
+    span 2   419 ms  n=23  ratio +1.91      span 5  1049 ms  n= 2  +1.83
+    span 3   629 ms  n= 9  ratio +1.72      trend +0.012/step — FLAT
 
-* BURST defaults to 1, and burst and non-burst are ONE path with a ring of one.
-* The cursor is captured per frame, not read at flush time.
-* An interrupted burst writes NOTHING — the ring flushes only when full.
-* The layer LOGS `ui dump: burst frames a,b,c,...` per burst and the tool reads
-  it. Deriving membership as `n..n+BURST-1` is WRONG: a slot with no eye dump is
-  skipped before it consumes a number, and every later burst is then misaligned.
-* In burst mode `X4VR_MV_DUMP_PRESENT` is IGNORED and says so once — left live,
-  it recorded eye copies into slot 0 that nothing ever wrote out.
+**Flat across a 5x range of dt, so the excess motion is MULTIPLICATIVE** — it
+scales with the scene motion. Any fixed-offset or fixed-lag mechanism is
+excluded. **#75 predicts exactly +2.00, constant; the medians sit at 1.72-1.91.
+Refuted as the cause** — eliminated before a fix was built on it.
+
+Both channels are drawn by X4 into the same frame, so the difference is in what
+OUR patches do to one and not the other: the pose channel rotates the World
+modules (#33/#62) while the UI gets the canvas map instead. That is what take
+260 cuts.
+
+**A WITHDRAWN claim of mine — do not resurrect it.** I reported that the ratio
+"falls with head speed", from `corr(|scene|, ui/scene) = -0.40` and a table of
+ratio-by-head-rate. **That is an artifact.** `scene` is the denominator of the
+ratio, so noise in it produces a negative correlation with no physics behind
+it. The span scan uses a variable I SET rather than one I measured, and it came
+out the opposite way: span 2 has a larger median |scene| than span 1 and a
+HIGHER ratio. Never correlate a derived ratio against its own denominator.
+
+## The dump cadence — settled, and the trap it replaced
+
+`X4VR_UI_DUMP=PERIOD[:BURST[:GAPMS]]`, gap in WALL CLOCK, default **150 ms**.
+Parsed once in `common/x4vr_dumpspec.hpp`, pinned by `tests/dumpspec.cpp`.
+
+**The measurable band is 15..300 px of image motion** — MIN_MOTION at the
+bottom, the +-320 px search at the top. At 12.8 px/deg that is 1.2..23 deg.
+This tool has now failed from BOTH ends:
+
+    take 257   one dump per period, ~1.3 s apart   motion PAST +-320 px
+    take 258   six CONSECUTIVE presents, 8.5 ms    motion UNDER 15 px
+    take 259   150 ms asked, 209.7 ms achieved     49 pairs, in band
+
+Take 258 is the sharper lesson: at 117 presents/s a pair is 8.5 ms apart, and
+clearing 15 px needs a **138 deg/s** head turn. **No head speed could have
+produced a measurement**, so Patola's pauses — which I first blamed — were
+irrelevant. The spacing was an unstated default, not a decision. The layer now
+records `t_capture` per slot and logs the ACHIEVED milliseconds, so a bad gap is
+visible in the first burst rather than after the take.
+
+**209.7 ms against 150 asked is a 40% overshoot and is not understood.** Watch
+it; if a run needs a specific dt, calibrate from the previous run's line.
+
+## The flush — was 2378 ms/frame, fixed, VERIFY IN TAKE 260's LOG
+
+Take 259's own breakdown, after three offline hypotheses had each been measured
+and each been wrong:
+
+    QueueWaitIdle 2 ms · eye 1098 · ui write 203 · coverage 1076 · OTHER 0
+
+**OTHER is zero**, so that is the whole cost. Both hot terms read the
+write-combined readback buffer ONE BYTE AT A TIME — `write_ppm8` did
+`rgb[...] = bgra ? p[2 - c] : p[c]`, and the flush counted UI coverage in a
+SECOND per-pixel pass over the same bytes.
+
+Now: one bulk memcpy per layer into RAM, per-pixel work from there, coverage
+folded into the pass `write_ui8` already made (`common/x4vr_dumpio.hpp`).
+Offline A/B on real WC memory: **519.9 -> 25.7 ms, 20.2x**, and 519.9 matches
+the 549 measured in situ. `tests/dumpio.cpp` holds the ORIGINAL per-pixel code
+verbatim and requires byte-for-byte agreement (76 checks).
+
+**No memory-type change was needed.** An earlier test concluded the type was
+worth 3.5% — it benchmarked `write_png_n`, a BULK read, which neither hot path
+does. `t_cov` is kept and should now read ~0: a term that vanishes from the log
+is indistinguishable from one nobody measured.
+
+## #80 — CONFIRMED offline. Not started; #76 has priority.
+
+*"Rolling my head does not make the HUD adapt the eye separation as it does
+with the cockpit."* Measured on take 258's dumps by `tools/roll_disparity.py`,
+per-tile disparity ANGLE:
+
+    n102 (control)  scene  +0.0 deg  MAD 0.0  11 tiles   UI 0 deg   log roll  +0.48
+    n108            scene -48.9 deg  MAD 1.8  12 tiles   UI 0 deg   log roll -49.35
+    n114            scene +46.5 deg  MAD 1.5   7 tiles   UI 0 deg
+    n132            scene  -9.8 deg  MAD 0.6   8 tiles   UI 0 deg
+
+Three code facts, each read before the measurement: `make_canvas_k` puts the UI
+disparity in `k[12]` alone (no k[13], no roll input, built once at pipeline
+creation); the scene's stereo goes through the pose channel gated by
+`roll_active()`; and **`quat_of_angles(decl_yaw, decl_pitch, q)` carries no
+roll**, so the head's roll reaches the display entirely as compositor
+reprojection, rotating the image by -phi. The scene therefore lands at +0.45
+deg (correct) and the UI at +phi — **17.1 px of VERTICAL disparity at 49 deg,
+~1.15 deg of divergence, which eyes cannot fuse.** Not cosmetic.
+
+Fix shape: rotate the canvas disparity with the head, `k[12] = -ax*d*cos(phi)/z`
+and `k[13] = -ay*d*sin(phi)/z`, delivered per frame through the pose channel the
+scene already uses. **The SIGN must come from a measurement** —
+`roll_disparity.py` reads both channels' angles directly, so a take with the fix
+supplies it.
 
 ## What is SOLID (measured, controlled, believable)
 
-* **The UI canvas is correct everywhere measured.** Take 257, union mask, per
-  scene: cockpit (25 frames), map (19), menus (37) all give **A = -23.0 px
-  against 22.5 predicted = 1.02x**, dy 0, C = (0,0), B = A. Per-tile spread
-  **1.0 px** in cockpit and map — the flat canvas CONFIRMED, not a defect.
-* **`X4VR_CANVAS_M=1.4` is right**, and the cockpit sits at 1.40 m by an
+* **The UI canvas is correct everywhere measured.** Take 257, union mask:
+  cockpit (25 frames), map (19), menus (37) all give **A = -23.0 px against
+  22.5 predicted = 1.02x**, dy 0, per-tile spread **1.0 px**. The flat canvas
+  CONFIRMED, not a defect.
+* **`X4VR_CANVAS_M=1.4` is right**; the cockpit sits at 1.40 m by an
   independent calibration-free route (`sbs_depth`).
-* **The cyan channel's contamination is now measured, not asserted.** On cockpit
-  frames it was measurable on **2 of 25** and read **-60 px** where the truth is
-  -23. On map and menu frames it agreed. That is the retraction of "3.33x too
-  much separation" turned into a number.
-* **Scene depth, cockpit (667 tiles):** min -60 px (0.53 m), median -20 (1.58 m),
-  p90 0 (infinity). 40.2% of tiles at infinity — the stars, which is the anchor
-  proving the measurement works.
+* **#76's ratio is ~1.8 and multiplicative** (above).
+* **#80 is real** (above).
+* **The cyan channel's contamination is a number:** measurable on 2 of 25
+  cockpit frames, reading -60 where the truth is -23.
+* **Scene depth, cockpit (667 tiles):** min -60 px (0.53 m), median -20
+  (1.58 m), p90 0 (infinity); 40.2% at infinity — the stars, the anchor proving
+  the measurement works.
+* **notify-send reaches Patola in VR — CONFIRMED on take 258**, not assumed.
+* **8 minutes in the headset without pausing** (take 259) against his usual
+  30 s - 2 min. Worth noting, not yet bankable: a stuttering run is not a clean
+  comfort comparison.
 
 ## X4's UI target (img #65) — how to read the dumps
 
 * 1408x1408, fmt 50 (B8G8R8A8_SRGB), **DOUBLED to 2 layers (per-eye)**.
 * **`alpha` alone is the WRONG mask.** X4 writes the weapon arcs and the
-  weapon-bracket rectangles with **colour and ZERO alpha** — 1.19% of frame n45.
-  They are invisible in any image viewer, which is why Patola reported them
-  "missing" from the dumps; they are present, just transparent. `--mask union`
-  (alpha OR colour) is the default and the right one.
-* The reverse also exists: ~1.47% has alpha and no colour, a dimming scrim over
-  the lower console. No structure, so it cannot bias a correlation.
+  weapon-bracket rectangles with **colour and ZERO alpha** — 1.19% of frame
+  n45. Invisible in any viewer, which is why Patola reported them "missing".
+  `--mask union` (alpha OR colour) is the default and the right one.
+* The reverse exists too: ~1.47% has alpha and no colour, a dimming scrim over
+  the lower console.
 * Coverage varies enormously by scene — 2.3% cockpit, 68% menu, 99.3% map — so
-  an average coverage across scenes is meaningless.
+  an average across scenes is meaningless.
 
 ## HELD by Patola's decision: the per-eye separation at the corners
 
-His words, and the most diagnostic thing said about it: *"It is something more
-visible on the corners."* Also: the bright start-screen quad did NOT look wrong,
-only the menu overlay and the savegame loadscreen. **That rules out the mono
-loadscreen lead** (n1/n2 are literally identical between eyes; he would have
-seen the start quad too).
+*"It is something more visible on the corners."* The bright start-screen quad
+did NOT look wrong, only the menu overlay and the savegame loadscreen — **which
+rules out the mono loadscreen lead**.
 
-**Every offline measurement is structurally blind to this.** The present dump is
-copied inside `composite()` and the VR blit sends that same image — so the dumps
-are exactly the bytes handed to the compositor, and everything the runtime then
-does to them is downstream of anything measurable here. That is why 81 frames
-measure 1.02x while he sees it wrong.
+**Every offline measurement is structurally blind to it.** The present dump is
+copied inside `composite()` and the VR blit sends that same image, so the dumps
+are exactly the bytes handed to the compositor and everything the runtime does
+is downstream. That is why 81 frames measure 1.02x while he sees it wrong.
 
-Three corner-weighted candidates, all in take 257's log, NOT discriminated:
+Three corner-weighted candidates, NOT discriminated, to be varied INDEPENDENTLY
+(a 2x2, not a sequence of single guesses):
 
-1. **Declared frustum vs the runtime's.** `vr fov: runtime reports eye0
-   l=-54.00 r=40.00 u=44.00 d=-55.00, eye1 l=-40.00 r=54.00 ...` while the layer
-   declares a symmetric +-55.00 per eye. Runtime wants 94.0 x 99.0 deg, canted
-   15.04 deg, and vertically ASYMMETRIC. `No off-axis affine this run`.
+1. **Declared frustum vs the runtime's** — runtime wants 94.0 x 99.0 deg,
+   canted 15.04 deg, vertically ASYMMETRIC; the layer declares symmetric +-55.
 2. **The declared viewpoint does not follow the head** — `t_head vs d_scene
-   r=+0.925`, up to 0.17 m, head span 0.145 x 0.170 x 0.192 m.
+   r=+0.925` in take 257, +0.846 in take 259.
 3. **The compositor warps each frame by an angle it was not drawn with** —
-   `poselag ... LEADS the pixels by up to 11.96 deg`, p90 6.21.
-
-They must be varied INDEPENDENTLY (a 2x2, not a sequence of single guesses).
+   `poselag ... LEADS the pixels by up to 11.96 deg`.
 
 ## What is VOID — do not build on these
 
-* Every `hud_vs_cockpit` number, and `hud_drift.py` entirely — both retired for
+* Every `hud_vs_cockpit` number, and `hud_drift.py` entirely — retired for
   failing their controls after their numbers had been believed.
 * The 0.45/0.30 rate result (contaminated channel).
 * The cockpit-phase "3.33x too much separation" — contamination, now quantified.
 * "The path model is dead" / "the canvas is 3.2x worse".
 * "The declared position makes no difference" — unestablished, not disproven.
 * The mono-loadscreen lead — ruled out by Patola's own observation.
+* **"#76's ratio falls with head speed"** — an artifact of correlating a ratio
+  with its own denominator. WITHDRAWN.
+* **"The readback memory type costs 3.5%"** — benchmarked the wrong operation.
+  WITHDRAWN; the access pattern was the whole thing.
+* **"The pauses caused take 258's null"** — no head speed could have measured
+  anything at 8.5 ms. WITHDRAWN.
 
 ## Instrument rules earned the hard way
 
 * **A control must match the DIFFICULTY of the measurement**, not just have a
-  known answer.
-* **A control proves the channel correlates with itself**, not that the channel
-  is what you think.
-* **Render any mask and LOOK at it.** That caught the star boxes, the HUD
-  leaking into its own reference, the contamination that voided a day, and the
-  zero-alpha weapon arcs.
+  known answer. `roll_disparity.py`'s control carries a dx as well as a dy for
+  exactly this reason.
+* **A control proves the channel correlates with itself**, not that it is what
+  you think.
+* **Render any mask and LOOK at it.**
 * **A discrimination metric only discriminates over the range it was built
   for.** `ncc_shift`'s margin measures peak ISOLATION; gating a +-6 px
-  refinement on it rejected all 24 of take 257's pairs while their own controls
-  read +1.00. Take 256 hit the same wall from the other side. **The gate belongs
-  on the wide search, always.**
-* **Never print a verdict that fires whatever the number is.** The per-tile line
-  said "the UI is not being placed as one" unconditionally, under a 1.0 px
-  spread that CONFIRMED the flat canvas.
-* **A cap or an argument that is silently ignored is a defect.** `--max-frames
-  40` truncated 93 dumps and reported "40 frame(s) measured"; an empty
-  `--frames` meant "no filter" and measured three scenes as one. The shell here
-  is **zsh**, which does NOT word-split unquoted parameters.
-* **No mid-run check Patola has to perform.** In VR his senses are taken.
-  `X4VR_WATCH=1` arms `tools/watch_run.sh` from the launcher; it reports by
-  **notify-send** — speech is FORBIDDEN, it read an error aloud at him during a
-  take — and gives up if X4 never appears.
-* **Verify a cleanup, do not report it.** I said six stale waiters "all died to
-  one kill"; five were still alive 10 hours later.
-* **`X4VR_UI_DUMP` does not turn on layer B** (`ui_capture_wanted()` splits the
-  staging capture from the quad submission).
-* **UI dumps are RGBA, always PNG**, ignoring `X4VR_DUMP_PPM` — PPM has no
-  alpha.
-* **Never share a `--frames-dir` between concurrent jobs.**
-* **A watcher must not be able to observe itself** — `pgrep -f` matches its own
-  argv.
+  refinement on it rejected all 24 of take 257's pairs while their controls read
+  +1.00. **The gate belongs on the wide search, always.**
+* **Range failures have TWO ends.** Fixing "too far apart" produced "too close
+  together". Before changing a spacing, write down the acceptable band and the
+  value the change will produce, and check containment.
+* **Never print a verdict that fires whatever the number is** — and never key
+  one on an EXTREME when the hypothesis is about coherence. `roll_disparity.py`
+  first printed CONFIRMED from `max(|dy|)`; its own table refuted it. A
+  rotation is coherent, so only a coherence statistic can test one.
+* **A goodness-of-fit statistic can be weakest exactly where the effect is
+  strongest.** r2 of dy against dx scored 0.30 on the frame whose twelve tiles
+  agreed to 1.8 deg, because cockpit tiles sit at similar depth.
+* **Never correlate a derived ratio against its own numerator or denominator.**
+* **Benchmark the operation the code performs**, not a convenient proxy.
+* **A cap or argument silently ignored is a defect.** The shell here is
+  **zsh**, which does NOT word-split unquoted parameters.
+* **Quote any value with a space in a handed-over command.** Take 258's
+  `X4VR_WATCH_WANT=ui dump: burst frames` starts no shell. Fixed at
+  `common/x4vr_shquote.hpp`; `env: run =` now round-trips.
+* **No mid-run check Patola has to perform.** `X4VR_WATCH=1` arms
+  `tools/watch_run.sh`; **notify-send only — speech is FORBIDDEN.**
+* **Verify a cleanup, do not report it.**
+* **A watcher must not observe itself** — and `pkill -f <pattern>` in the same
+  command line as the relaunch kills the launching shell.
+* **Cache per burst, not per run.** `channels()` returns ~95 MB a frame.
+* **`X4VR_UI_DUMP` does not turn on layer B.**
+* **UI dumps are RGBA, always PNG**, ignoring `X4VR_DUMP_PPM`.
 * `14.17 px/deg` still has NO recorded derivation.
 
-## Tools added since take 256
+## Tools added or changed since take 258
 
-    tools/hud_slide.py      #76: UI motion / scene motion per pair, with a
-                            checkerboard control on BOTH channels; --burst-log
-    tools/scene_depth.py    scene disparity outside the UI mask, with two
-                            physical anchors (stars at infinity, cockpit 1.4 m)
-    tools/watch_run.sh      the run watches itself and notify-sends
-    tools/ui_disparity.py   --ui --mask union --frames LO-HI --check-crop
-    tests/png_writer.cpp    the dump format, round-tripped through an
-                            independently written decoder (12 cases)
-    common/x4vr_png.hpp     the encoder, moved out of the layer so a test can
-                            reach it
+    tools/hud_slide.py       #76. --prefix, --burst-log, --span-scan.
+                             Reads the achieved gap from the log; its null
+                             names WHICH side of the band the run fell on and
+                             what gap would land in it.
+    tools/roll_disparity.py  #80. Per-tile disparity ANGLE, with a synthetic
+                             (dx,dy) control and a negative-control frame.
+    tools/scene_depth.py     --prefix; "no frame decoded" is an error, not a null
+    common/x4vr_dumpio.hpp   snapshot + to_rgb + to_rgba_counted (the flush fix)
+    common/x4vr_dumpspec.hpp X4VR_UI_DUMP's grammar, one parser
+    common/x4vr_shquote.hpp  shell quoting for `env: run =`
+    tests/dumpio.cpp         byte-identity against the original per-pixel code
+    tests/dumpspec.cpp       the cadence grammar, take 258's `600:6` first
+    tests/shquote.cpp        round-trips through sh, zsh and bash themselves
+    tests/readback_speed.cpp WC vs cached, keyed on the operation under study
+
 
 ## The previous task: layer B's code — DONE
 
