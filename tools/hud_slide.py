@@ -349,6 +349,13 @@ def span_scan(lo, hi):
     pooled, because a ratio averaged over spans is exactly the number this
     function exists to stop being quoted.
     """
+    # Cleared per burst. Pairs NEVER cross a burst boundary, so nothing outside
+    # the current one can be needed again -- and channels() returns six
+    # 1408x1408 float64 arrays, about 95 MB per frame. Holding all 198 of take
+    # 259's frames would be 18.8 GB; the first version did exactly that and was
+    # at 6 GB and climbing halfway through. Bounded here at one burst, ~0.6 GB,
+    # which is what makes a longer run (more bursts, not more per burst)
+    # affordable rather than fatal.
     cache = {}
 
     def chan(n):
@@ -360,6 +367,7 @@ def span_scan(lo, hi):
     print(f'{"pair":>11} {"span":>4} {"scene":>7} {"ui":>7} {"ratio":>7}  '
           f'{"ctl s":>6} {"ctl u":>6}  verdict')
     for g in (ADJACENT or []):
+        cache.clear()
         inb = [n for n in g if lo <= n <= hi]
         for ai in range(len(inb)):
             for bi in range(ai + 1, len(inb)):
