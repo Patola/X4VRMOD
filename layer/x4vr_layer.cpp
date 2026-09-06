@@ -36,6 +36,7 @@
 
 #define X4VR_LOG_TAG "layer"
 #include "../common/x4vr_log.hpp"
+#include "../common/x4vr_dumpspec.hpp"
 #include "../common/x4vr_png.hpp"
 #include "../common/x4vr_sbs.hpp"
 #include "../common/x4vr_spirv.hpp"
@@ -3261,16 +3262,26 @@ inline bool ui_layer_enabled() {
 // **A CADENCE, not a flag.** Same shape as X4VR_MV_DUMP_PRESENT and stated
 // again here because this project has run a cadence knob as a boolean and got
 // a full readback on every frame at about 1 fps.
-inline uint64_t ui_dump_every() {
-    static const uint64_t n = [] {
-        const char *e = getenv("X4VR_UI_DUMP");
-        if (!e || !*e)
-            return (uint64_t)0;
-        const long v = strtol(e, nullptr, 10);
-        return v > 0 ? (uint64_t)v : (uint64_t)0;
+// The one parse of X4VR_UI_DUMP. Three lambdas used to read the same string
+// independently; common/x4vr_dumpspec.hpp holds the grammar now, so they
+// cannot come to disagree about what a malformed spec means, and tests/ can
+// reach it.
+inline const x4vr::DumpSpec &dump_spec() {
+    static const x4vr::DumpSpec s = [] {
+        const x4vr::DumpSpec v = x4vr::parse_dump_spec(getenv("X4VR_UI_DUMP"));
+        if (v.malformed)
+            X4VR_LOG("ui dump: X4VR_UI_DUMP=\"%s\" did not parse as "
+                     "PERIOD[:BURST[:GAPMS]] — using period %llu, burst %u, "
+                     "gap %u ms. A spec that is not what you meant is worse "
+                     "than one that is refused, so check this line.",
+                     getenv("X4VR_UI_DUMP") ? getenv("X4VR_UI_DUMP") : "",
+                     (unsigned long long)v.period, v.burst, v.gap_ms);
+        return v;
     }();
-    return n;
+    return s;
 }
+
+inline uint64_t ui_dump_every() { return dump_spec().period; }
 
 // The capture into the staging image serves layer B *and* the dump above, and
 // neither must switch the other off. Layer B changes what the player sees; the
@@ -3297,17 +3308,30 @@ inline uint64_t ui_dump_every() {
 // It costs memory instead of time: BURST * (eye + UI) * 2 layers, about 32 MB
 // per slot at 1408x1408. The log states the figure rather than leaving it to
 // be discovered.
-inline uint32_t ui_dump_burst() {
-    static const uint32_t n = [] {
-        const char *e = getenv("X4VR_UI_DUMP");
-        const char *c = e ? strchr(e, ':') : nullptr;
-        if (!c || !c[1])
-            return 1u;
-        const long v = strtol(c + 1, nullptr, 10);
-        return v > 0 ? (uint32_t)v : 1u;
-    }();
-    return n;
-}
+inline uint32_t ui_dump_burst() { return dump_spec().burst; }
+
+// Milliseconds between the frames OF a burst — `X4VR_UI_DUMP=PERIOD:BURST:GAP`.
+//
+// **Take 258 died on this number being an unstated 0.** A burst took six
+// CONSECUTIVE presents, which at the 117 presents/s that run measured is
+// **8.5 ms apart**; `tools/hud_slide.py` needs 15..300 px of image motion and
+// at 12.8 px/deg that is 1.2..23 deg. In 8.5 ms even a violent 100 deg/s head
+// turn moves 11 px — under the floor. Every one of the 130 pairs was rejected
+// as quantisation, and the run could not have succeeded at any head speed.
+// Take 257 had failed from the other side: one dump per period, ~1.3 s apart,
+// motion past the +-320 px search. The measurable band was never sampled.
+//
+// So the gap is now stated, and stated in TIME rather than in presents: the
+// frame rate varies by scene (117/s here, 241/s in the calmest windows) and a
+// stride in frames would mean a different angle in each. At the default
+// 150 ms a pair is in band for head rates from 8 to 156 deg/s, which covers a
+// slow scan and a quick look alike — it does not ask Patola to move at any
+// particular speed.
+//
+// 0 restores the old behaviour explicitly, for a run that wants adjacent
+// presents for some other reason. It is not the default because the default
+// has to be a value that can produce a measurement.
+inline uint32_t ui_dump_gap_ms() { return dump_spec().gap_ms; }
 
 inline bool ui_capture_wanted() {
     return ui_layer_enabled() || ui_dump_every() != 0;
@@ -9838,12 +9862,29 @@ struct BurstSlot {
     uint64_t ui_seen = 0;
     float cx = 0.f, cy = 0.f;
     bool cursor_vis = false, cursor_have = false;
+    // When this frame was CAPTURED, not when it was written. The two differ by
+    // the whole flush -- take 258's log lines were 2.4 s apart while the
+    // frames behind them were 8.5 ms apart, and nothing in the log said so.
+    // An offline tool pairing these frames needs the spacing to decide whether
+    // a shift is measurable at all; leaving it to be inferred from the
+    // sequence number is what let that take look healthy while being
+    // unmeasurable.
+    double t_capture = 0.0;
 };
 struct {
     std::vector<BurstSlot> slots;
     uint32_t idx = 0;
     bool capturing = false;
+    double last_capture = 0.0;   // for X4VR_UI_DUMP's third field
 } g_burst;
+
+// Monotonic seconds. The same clock X4VR_LOG stamps lines with, so a capture
+// time can be lined up against everything else in the log.
+inline double mono_now() {
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
 
 // Creates it on first use. Caller holds g_ui_read.mu.
 bool ui_read_ready(DeviceData *d, VkDevice dev, VkDeviceSize layer_bytes,
@@ -11017,16 +11058,28 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
         static uint64_t presents = 0;
         const uint64_t p = presents++;
         // A burst starts on the period boundary and then runs to completion:
-        // once capturing, every present is taken until the ring is full. That
-        // is the whole point — the frames must be ADJACENT, so the cadence
-        // cannot re-gate them individually.
+        // once capturing, presents are taken until the ring is full. The
+        // period cannot re-gate them — that is the whole point — but the GAP
+        // between them is its own number, and it is not "every present".
+        //
+        // **Take 258 took six consecutive presents 8.5 ms apart and no pair
+        // was measurable at any head speed.** See ui_dump_gap_ms(). Frames
+        // within a burst are now spaced by wall clock, so what "one burst"
+        // means in seconds is decided here and reported below rather than
+        // being an emergent property of the frame rate.
+        const double t_now = mono_now();
         if (ui_dump_every() && !g_burst.capturing &&
             (p % ui_dump_every()) == 0) {
             g_burst.capturing = true;
             g_burst.idx = 0;
             g_burst.slots.assign(ui_dump_burst(), BurstSlot{});
+            g_burst.last_capture = 0.0;   // first frame of a burst is immediate
         }
-        const bool ui_now = g_burst.capturing;
+        const bool ui_now =
+            g_burst.capturing &&
+            (g_burst.last_capture == 0.0 || ui_dump_gap_ms() == 0 ||
+             (t_now - g_burst.last_capture) * 1000.0 >=
+                 (double)ui_dump_gap_ms());
         // **Asking for the UI also asks for the eye image.** The pair is the
         // instrument: a UI mask is only worth having against the frame it was
         // captured with, and the composite that copies one is the composite
@@ -11111,7 +11164,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
         // Record what this slot holds, then advance. The ring is flushed only
         // when it is FULL, so a burst interrupted by teardown writes nothing
         // rather than writing frames whose copies may not have executed.
-        if (g_burst.capturing && g_burst.idx < g_burst.slots.size()) {
+        // **`ui_now`, not `g_burst.capturing`.** A present that the gap
+        // skipped recorded no copy, so recording a slot for it would describe
+        // a frame whose bytes were never fetched -- and it would consume a
+        // ring index, so the copy that DID run would be read back from the
+        // wrong offset. The two must be the same predicate.
+        if (ui_now && g_burst.idx < g_burst.slots.size()) {
             BurstSlot &sl = g_burst.slots[g_burst.idx];
             sl.w = dump_w; sl.h = dump_h; sl.layers = dump_layers;
             sl.bgra = dump_bgra;
@@ -11119,6 +11177,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
             sl.uw = ui_w; sl.uh = ui_h; sl.ubgra = ui_bgra;
             sl.has_ui = ui_asked; sl.ui_layer_bytes = ui_layer_bytes;
             sl.ui_base = ui_base; sl.ui_seen = g_ui_read.seen;
+            sl.t_capture = t_now;
+            g_burst.last_capture = t_now;
             sl.cursor_have =
                 x4vr::share_read(shared_state(), &sl.cx, &sl.cy, &sl.cursor_vis);
             if (++g_burst.idx >= g_burst.slots.size()) {
@@ -11182,7 +11242,9 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     // take 257's 24 cockpit pairs unmeasurable; recording without waiting
     // costs only a GPU copy, so the frames really are one frame apart.
     if ((burst_mode ? flush_burst : dump_layers != 0) && d->QueueWaitIdle) {
+        const double t_wait0 = mono_now();
         d->QueueWaitIdle(queue);
+        const double t_wait = mono_now() - t_wait0;
         // The frames to write: the whole ring in burst mode, or the one frame
         // the old cadence captured. One path either way, so the non-burst case
         // cannot drift away from the burst case.
@@ -11210,9 +11272,21 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
         // arithmetic would silently compare across a burst boundary and call
         // the result adjacent.
         std::vector<uint64_t> wrote;
+        std::vector<double> todo_times;
+        // Where the flush's wall clock actually goes. **Three hypotheses about
+        // this were measured offline and all three were wrong** -- the
+        // readback memory type (86 ms of 2451), the per-pixel coverage loop
+        // (40 ms), and the logging path (line-buffered, one open). Encoding
+        // take 258's own bytes and writing all 24 files takes 137 ms/frame in
+        // a harness against 2451 ms observed, so ~90% of the cost has never
+        // been located. Guessing a fourth time is not a plan; the flush now
+        // reports its own breakdown and the next run answers it.
+        double t_eye = 0.0, t_ui = 0.0, t_cov = 0.0, t_uiblock = 0.0;
+        const double t_flush0 = mono_now();
         for (const BurstSlot &sl : todo) {
             if (!sl.layers)
                 continue;
+            todo_times.push_back(sl.t_capture);
             // Sequence numbers are consecutive across a burst, so
             // `-present-n7` and `-present-n8` are ONE FRAME apart in burst
             // mode and one period apart otherwise. The offline tools pair by
@@ -11221,6 +11295,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
             const uint64_t n = seq++;
             wrote.push_back(n);
             {
+                // Timed OUTSIDE the lock acquisition would miss a wait on the
+                // probe mutex, which is one of the places the missing 2 s
+                // could be hiding. The clock starts before the lock.
+                const double t0 = mono_now();
                 std::lock_guard<std::mutex> lock(g_probe_mu);
                 if (g_probe.ptr) {
                     for (uint32_t l = 0; l < sl.layers; l++) {
@@ -11281,6 +11359,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                 }
             }
                 }
+                t_eye += mono_now() - t0;
             }
             // ---- task #57: the UI target for this same frame ---------------
             //
@@ -11292,6 +11371,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
             // silently, and looking exactly like a real pair. Report the
             // branch that ran, never re-derive it.
             if (sl.has_ui && ui_recorded > sl.ui_seen) {
+                const double tu0 = mono_now();
                 std::lock_guard<std::mutex> lock(g_ui_read.mu);
                 if (g_ui_read.ptr) {
                     uint64_t nz[2] = {0, 0}, na[2] = {0, 0};
@@ -11303,7 +11383,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                         snprintf(path, sizeof(path), "%s-ui-n%llu-layer%u",
                                  g_mv_dump ? g_mv_dump : "/tmp/x4vr",
                                  (unsigned long long)n, l);
+                        const double tw = mono_now();
                         write_ui8(path, src, sl.uw, sl.uh, sl.ubgra);
+                        const double tc = mono_now();
+                        t_ui += tc - tw;
                         // Counted here rather than left to the offline tool,
                         // because "the mask is empty" and "the dump never ran"
                         // produce the same silence downstream, and this project
@@ -11318,6 +11401,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                             if (q[3])
                                 na[l]++;
                         }
+                        t_cov += mono_now() - tc;
                     }
                     const double tot = (double)sl.uw * sl.uh;
                     X4VR_LOG("ui dump: frame %llu — %ux%u x2, bgra=%d. Coverage"
@@ -11329,6 +11413,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                              100.0 * nz[0] / tot, 100.0 * na[0] / tot,
                              100.0 * nz[1] / tot, 100.0 * na[1] / tot);
                 }
+                t_uiblock += mono_now() - tu0;
             } else if (sl.has_ui) {
                 static uint32_t missed = 0;
                 if (++missed <= 3)
@@ -11350,10 +11435,65 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                                (size_t)k + 24 < sizeof b; i++)
                 k += snprintf(b + k, sizeof(b) - k, "%s%llu", i ? "," : "",
                               (unsigned long long)wrote[i]);
-            X4VR_LOG("ui dump: burst frames %s — consecutive presents, one "
-                     "frame apart. Pairs WITHIN this list are adjacent in "
-                     "time; the next burst is a whole period later.",
-                     b);
+            // **The spacing, measured, not described.** The old line said
+            // "consecutive presents, one frame apart" -- true, and it was the
+            // defect: at 117 presents/s that is 8.5 ms, and no pair in take
+            // 258 could move far enough to measure at any head speed. The
+            // line asserted the property that made the run useless while
+            // sounding like a guarantee. Now it reports the milliseconds, so
+            // the offline tool can decide measurability from data and so a
+            // wrong gap is visible in the first burst rather than after the
+            // take.
+            double gmin = 1e9, gmax = 0.0, gsum = 0.0;
+            int gn = 0;
+            for (size_t i = 1; i < todo_times.size(); i++) {
+                const double g = (todo_times[i] - todo_times[i - 1]) * 1000.0;
+                if (g < gmin) gmin = g;
+                if (g > gmax) gmax = g;
+                gsum += g;
+                gn++;
+            }
+            char gaps[192] = "spacing unknown";
+            if (gn > 0) {
+                // 12.8 px/deg on a 1408-wide eye at the declared field; the
+                // offline search covers 15..300 px. Stated here so the log
+                // says whether this burst could measure anything at all.
+                const double mean = gsum / gn;
+                snprintf(gaps, sizeof gaps,
+                         "%.1f ms apart (min %.1f, max %.1f) — measurable for "
+                         "head rates %.0f..%.0f deg/s",
+                         mean, gmin, gmax, 15.0 / 12.8 / (mean / 1000.0),
+                         300.0 / 12.8 / (mean / 1000.0));
+            }
+            X4VR_LOG("ui dump: burst frames %s — captured %s. Pairs WITHIN "
+                     "this list are adjacent in time; the next burst is a "
+                     "whole period later.",
+                     b, gaps);
+        }
+        // Where the stall went. Every term is measured; `other` is what is
+        // left of the flush after the terms above, and it is the number that
+        // matters, because three separate offline hypotheses about this cost
+        // were each measured and each turned out to be a few per cent:
+        // the readback memory type (86 ms/frame), the coverage loop (40 ms),
+        // and the log path (line-buffered, one open). Encoding this take's own
+        // bytes and writing all 24 files takes 137 ms/frame in a harness
+        // against the 2451 ms take 258 observed. If `other` is large, the cost
+        // is in none of the parts that have been looked at, and THAT is the
+        // finding — not another guess.
+        if (burst_mode && !wrote.empty()) {
+            const double total = mono_now() - t_flush0 + t_wait;
+            const double known = t_eye + t_uiblock;
+            const double nf = (double)wrote.size();
+            X4VR_LOG("ui dump: flush %.0f ms for %u frame(s) = %.0f ms/frame — "
+                     "QueueWaitIdle %.0f, eye %.0f, ui block %.0f (of which "
+                     "write %.0f + coverage %.0f), OTHER %.0f. Per frame: "
+                     "eye %.0f, ui %.0f, cov %.0f, other %.0f ms.",
+                     total * 1000.0, (unsigned)wrote.size(),
+                     total * 1000.0 / nf, t_wait * 1000.0, t_eye * 1000.0,
+                     t_uiblock * 1000.0, t_ui * 1000.0, t_cov * 1000.0,
+                     (total - t_wait - known) * 1000.0, t_eye * 1000.0 / nf,
+                     t_ui * 1000.0 / nf, t_cov * 1000.0 / nf,
+                     (total - t_wait - known) * 1000.0 / nf);
         }
     }
     frame_flush();

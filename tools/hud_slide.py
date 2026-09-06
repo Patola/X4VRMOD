@@ -41,11 +41,23 @@ rule the retired tools broke.
 
 **Stated before running, so a null cannot be reinterpreted afterwards:**
 the search is coarse-to-fine, +-320 px at full resolution, which at roughly
-12.8 px/deg is about +-25 deg of image motion. Motion beyond that is
-unmeasurable and the pair is dropped rather than folded in at the bound --
-several pairs in take 257 hit exactly that, because consecutive dumps there are
-about 1.3 s apart in wall time and a head turns a long way in 1.3 s.
+12.8 px/deg is about +-25 deg of image motion, and MIN_MOTION puts a floor at
+15 px. So a pair is measurable only in a BAND, 15..300 px, and this tool has
+now failed from both ends of it:
+
+    take 257   one dump per period, ~1.3 s apart   motion PAST +-320 px
+    take 258   six consecutive presents, 8.5 ms    motion UNDER 15 px
+
+Take 258 is the sharper lesson. At 117 presents/s a pair is 8.5 ms apart, and
+15 px at 12.8 px/deg needs 1.17 deg -- a 138 deg/s head turn. **No head speed
+could have produced a measurement**, and nothing in the run said so, because
+the spacing was an unstated default rather than a decision. The layer now
+takes X4VR_UI_DUMP=PERIOD:BURST:GAPMS and prints the achieved milliseconds;
+this reads that line, and a null here says which side of the band it fell on
+and what gap would land in it. A diagnosis carried over from another take is
+worse than none, because the two failures need opposite fixes.
 """
+import re
 import sys
 
 import numpy as np
@@ -67,6 +79,7 @@ MIN_MOTION = 15     # px of scene motion below which the ratio is quantisation
 # null attributed to the NEW run. A path that names one take must be an
 # argument, and a prefix that matches nothing must be an error, not an answer.
 PREFIX = '/tmp/x4vr-t258'
+GAP_MS = None       # ms between burst frames, read from the log's own line
 
 
 def ds(a, k=COARSE):
@@ -142,8 +155,15 @@ def burst_groups(log_path):
     skipped before it consumes a sequence number, so "n..n+BURST-1 is a burst"
     goes wrong from the first skip onward and every later pair would be
     compared across a boundary while looking adjacent.
+
+    Returns (groups, mean_gap_ms). **The spacing is read, never assumed.** Take
+    258's line said "consecutive presents, one frame apart" -- true, and it was
+    the whole defect: at 117 presents/s that is 8.5 ms, and no pair could move
+    15 px at any head speed. The layer now states the milliseconds and this
+    reads them, so "no answer" can say WHICH side of the band the run fell on
+    instead of repeating a number from a different take.
     """
-    groups = []
+    groups, gaps = [], []
     try:
         with open(log_path) as f:
             for line in f:
@@ -156,10 +176,13 @@ def burst_groups(log_path):
                     groups.append([int(v) for v in nums.split(',') if v != ''])
                 except ValueError:
                     continue
+                m = re.search(r'captured ([0-9.]+) ms apart', rest)
+                if m:
+                    gaps.append(float(m.group(1)))
     except OSError as e:
         print(f'could not read {log_path}: {e}', file=sys.stderr)
-        return None
-    return groups
+        return None, None
+    return groups, (sum(gaps) / len(gaps) if gaps else None)
 
 
 def main(lo, hi):
@@ -167,6 +190,10 @@ def main(lo, hi):
           f'{"ctl scene":>9} {"ctl ui":>7}  verdict')
     prev = prev_n = None
     ratios, dropped, void, skipped_gap, decoded = [], 0, 0, 0, 0
+    # Every scene shift that MEASURED, whatever the verdict on its pair. A
+    # null has to say which way it failed, and the rejected rows are the only
+    # evidence of that.
+    scene_moves = []
     for n in range(lo, hi + 1):
         cur = channels(n)
         if cur is None:
@@ -185,6 +212,8 @@ def main(lo, hi):
         elif prev is not None:
             s = shift2(prev[0], cur[0])
             u = shift2(prev[1], cur[1])
+            if s is not None:
+                scene_moves.append(s[0])
             ca = shift2(prev[2], cur[3])   # scene checkerboard, truth +1
             cu = shift2(prev[4], cur[5])   # ui checkerboard, truth +1
             tag, ok = '', True
@@ -242,9 +271,42 @@ def main(lo, hi):
     print(f'  {len(ratios)} pair(s) survived their controls, '
           f'{void} VOIDED by a control, {dropped} unmeasurable or too still')
     if not ratios:
-        print('  no answer from this data. The cadence is the limit: '
-              'consecutive dumps are ~1.3 s apart here and a head turns far '
-              'in 1.3 s.')
+        # **Which side of the band, from THIS run's numbers.** The old text
+        # said "consecutive dumps are ~1.3 s apart here" unconditionally, and
+        # printed exactly that about take 258, where they were 8.5 ms apart --
+        # a diagnosis from a different take presented as this one's. The two
+        # failures need opposite fixes, so naming the wrong one is worse than
+        # naming none.
+        moved = [abs(m) for m in scene_moves]
+        med = float(np.median(moved)) if moved else 0.0
+        print(f'\n  no answer from this data.')
+        if GAP_MS:
+            print(f'  frames within a burst were {GAP_MS:.1f} ms apart '
+                  f'(from the layer\'s own line).')
+        if not moved:
+            print('  no pair had a measurable scene shift at all — nothing to '
+                  'diagnose from; check the dumps decode and the mask is not '
+                  'empty.')
+        elif med < MIN_MOTION:
+            # Scale the gap so the median pair lands mid-band. Derived from
+            # what the run measured, not from a number I picked.
+            want = 60.0
+            print(f'  the scene moved {med:.0f} px per pair, median — BELOW '
+                  f'the {MIN_MOTION} px floor, so the frames are too CLOSE '
+                  f'together in time.')
+            if GAP_MS and med > 0:
+                print(f'  to put the median pair near {want:.0f} px, the gap '
+                      f'wants to be about {GAP_MS * want / med:.0f} ms: '
+                      f'X4VR_UI_DUMP=PERIOD:BURST:{round(GAP_MS*want/med/10)*10:.0f}')
+            elif GAP_MS:
+                print('  the gap cannot be scaled from a zero median.')
+        else:
+            print(f'  the scene moved {med:.0f} px per pair, median — at or '
+                  f'past the +-320 px search on many pairs, so the frames are '
+                  f'too FAR apart in time.')
+            if GAP_MS:
+                print(f'  to put the median pair near 60 px, the gap wants to '
+                      f'be about {GAP_MS * 60.0 / med:.0f} ms.')
         return 1
     r = np.array([x[0] for x in ratios])
     e = np.array([x[1] for x in ratios])
@@ -272,12 +334,15 @@ if __name__ == '__main__':
     PREFIX = a.prefix
     ADJACENT = None
     if a.burst_log:
-        ADJACENT = burst_groups(a.burst_log)
+        ADJACENT, GAP_MS = burst_groups(a.burst_log)
         if not ADJACENT:
             print(f'no `ui dump: burst frames` lines in {a.burst_log} — that '
                   f'run had no bursts, so no pair in it is one frame apart',
                   file=sys.stderr)
             sys.exit(2)
         print(f'  {len(ADJACENT)} burst(s) in the log, '
-              f'{sum(len(g) for g in ADJACENT)} frame(s) total')
+              f'{sum(len(g) for g in ADJACENT)} frame(s) total'
+              + (f', {GAP_MS:.1f} ms apart within a burst' if GAP_MS
+                 else ' (the log does not state the spacing — a run from '
+                      'before take 259, where it was one present)'))
     sys.exit(main(a.lo, a.hi))

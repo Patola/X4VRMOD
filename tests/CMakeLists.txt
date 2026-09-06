@@ -39,6 +39,22 @@ target_link_libraries(x4vr_test_png_writer PRIVATE ZLIB::ZLIB)
 # and a wrong expectation cannot cancel. Self-checking -- no runner script.
 add_executable(x4vr_test_shquote shquote.cpp)
 
+# X4VR_UI_DUMP's grammar, PERIOD[:BURST[:GAPMS]]. Take 258 ran `600:6`, whose
+# missing third field meant six consecutive presents 8.5 ms apart -- below the
+# offline search's floor at any head speed, and nothing said so. Pure string
+# work: no Vulkan, no GPU. Self-checking -- no runner script.
+add_executable(x4vr_test_dumpspec dumpspec.cpp)
+
+# Is the readback memory type what makes a dump expensive? Take 258 spent
+# 2451 ms per frame in the flush while the PNG encode measured 57-125 ms per
+# image. Both readback buffers take the first HOST_VISIBLE|HOST_COHERENT type,
+# which on AMD is uncached write-combined, and CPU reads from write-combined
+# memory are slow in a way writes are not. Needs a real GPU -- it allocates
+# both types, copies one source into each, and times the read. Refuses to
+# report a ratio if both requests chose the same type.
+add_executable(x4vr_test_readback_speed readback_speed.cpp)
+target_link_libraries(x4vr_test_readback_speed PRIVATE Vulkan::Vulkan ZLIB::ZLIB)
+
 # Where the cursor lands and what its bytes mean (task #17). Needs no Vulkan
 # library -- it only uses the header's enums and two pure functions -- and no
 # GPU, which is the whole point of pulling them out of the overlay class.
