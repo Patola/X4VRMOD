@@ -293,10 +293,10 @@ def main():
           f'(|angle| > {ROT_DEG:.0f} deg, MAD < {MAD_DEG:.0f} deg); '
           f'{len(lvl)} level')
     for r in rot:
-        n, _, rui, _, _, _, near, (med, mad, ntl) = r
+        n, _, rui, _, _, _, near, (med, mad, ntl), uang = r
         exp = f'{near[1]:+.2f} deg' if near else 'not sampled in the log'
         print(f'    n{n}: scene {med:+.1f} +- {mad:.1f} deg over {ntl} tiles; '
-              f'UI {r[8]:+.1f} deg; nearest logged head roll {exp}')
+              f'UI {uang:+.1f} deg; nearest logged head roll {exp}')
 
     ui_rot = [r for r in rot if abs(r[8]) > ROT_DEG]
     print()
