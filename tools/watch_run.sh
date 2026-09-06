@@ -42,7 +42,7 @@
 # because ending a run he is in the middle of is his call and not mine.
 set -uo pipefail
 
-LOG=""; KILL=0; POLL=5
+LOG=""; KILL=0; POLL=5; STARTUP=180
 declare -a WANT SAYS BY
 
 usage() {
@@ -62,6 +62,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --kill) KILL=1; shift ;;
         --poll) POLL="$2"; shift 2 ;;
+        --startup) STARTUP="$2"; shift 2 ;;
         --want) WANT+=("$2"); shift 2 ;;
         --by)   BY+=("$2");   shift 2 ;;
         --say)  SAYS+=("$2"); shift 2 ;;
@@ -110,6 +111,14 @@ while [[ $remaining -gt 0 ]]; do
         seen_x4=1
     elif [[ $seen_x4 == 1 ]]; then
         notify normal "X4 exited"
+        break
+    elif [[ $((SECONDS - start)) -ge $STARTUP ]]; then
+        # **A watchdog that outlives a failed launch is the bug it exists to
+        # catch.** Wired into the launcher, this starts before X4 does; if X4
+        # never appears -- a crash on startup, a bad knob -- waiting forever
+        # would leave exactly the kind of stale process that idled for ten
+        # hours on takes 255/256. Give up, say so, and go.
+        notify critical "X4 never started within ${STARTUP}s — watchdog exiting"
         break
     fi
     # Waiting on the PIDs and not on a pattern that could match this script's

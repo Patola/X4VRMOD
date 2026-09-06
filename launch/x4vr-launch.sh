@@ -490,6 +490,42 @@ if [[ "${X4VR_SBS:-0}" == 1 && "${X4VR_GAMESCOPE:-0}" != 1 ]]; then
          "the display, so the halves will not be the SBS size" >&2
 fi
 
+# ---------------------------------------------------------------- watchdog
+#
+# X4VR_WATCH=1 starts tools/watch_run.sh alongside the game.
+#
+# **Why it is here and not in the operator's hands.** For take 257 the handover
+# said "abort early if, after a minute, this grep returns 0". Patola, from
+# inside the headset: *"when I am in VR it is very difficult to take other
+# inputs or do other things, my senses are taken."* A check the player cannot
+# perform is not a check. This one runs itself and reports by notify-send,
+# which is what reaches him in VR.
+#
+# Backgrounded before the exec below, so it survives the shell being replaced.
+# It gives up if X4 never appears (--startup), because a watchdog outliving a
+# failed launch is precisely the stale process it exists to prevent.
+if [[ "${X4VR_WATCH:-0}" == 1 && -n "${X4VR_LOG:-}" ]]; then
+    WATCH=("$X4VR_LOG" --startup "${X4VR_WATCH_STARTUP:-180}")
+    # Dumps were asked for, so their absence is a dead run: check for them.
+    if [[ -n "${X4VR_MV_DUMP:-}" ]]; then
+        WATCH+=(--want 'mv dump: present frame' --by "${X4VR_WATCH_BY:-200}"
+                --say 'frame dumps')
+    fi
+    # Whatever else THIS take depends on. One pattern, because a watchdog with
+    # a long checklist is a second thing to get wrong.
+    if [[ -n "${X4VR_WATCH_WANT:-}" ]]; then
+        WATCH+=(--want "$X4VR_WATCH_WANT" --by "${X4VR_WATCH_BY:-200}"
+                --say "${X4VR_WATCH_SAY:-what this take is for}")
+    fi
+    if [[ ${#WATCH[@]} -gt 3 ]]; then
+        "$ROOT/tools/watch_run.sh" "${WATCH[@]}" >/dev/null 2>&1 &
+        echo "x4vr-launch: watchdog armed on $X4VR_LOG — it will notify-send" \
+             "if the run stops producing what it was started for" >&2
+    else
+        echo "x4vr-launch: X4VR_WATCH=1 but nothing to watch for" >&2
+    fi
+fi
+
 if [[ "${X4VR_GAMESCOPE:-0}" == 1 ]]; then
     # Single source of truth for the SBS size lives in the C header, so the
     # launcher reads it from there rather than keeping a third copy.

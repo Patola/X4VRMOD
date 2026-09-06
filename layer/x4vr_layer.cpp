@@ -10988,6 +10988,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     VkDeviceSize ui_layer_bytes = 0, ui_base = 0, dump_base = 0;
     uint32_t ui_w = 0, ui_h = 0;
     bool ui_bgra = false, ui_asked = false, flush_burst = false;
+    const bool burst_mode = ui_dump_every() != 0;
 
     if ((g_dump_present_every || ui_dump_every()) && g_active &&
         pi->swapchainCount == 1) {
@@ -11031,7 +11032,25 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
         // captured with, and the composite that copies one is the composite
         // that copies the other. Letting the two cadences drift apart would
         // produce files that look like pairs and are not.
-        if (ui_now || (g_dump_present_every && p % g_dump_present_every == 0)) {
+        // **In burst mode the ring owns the eye dump; X4VR_MV_DUMP_PRESENT's
+        // own cadence is ignored.** Left in, it would record a copy into slot
+        // base 0 on a present where no burst is capturing — and the write
+        // block only runs when a burst FLUSHES, so that copy would be
+        // recorded, paid for, and never written. Silent waste that looks like
+        // nothing at all.
+        if (burst_mode && g_dump_present_every) {
+            static bool said_ignore = false;
+            if (!said_ignore) {
+                said_ignore = true;
+                X4VR_LOG("mv dump: X4VR_MV_DUMP_PRESENT=%llu IGNORED — "
+                         "X4VR_UI_DUMP is driving the dumps, and it writes the "
+                         "eye image with every UI capture. Two cadences into "
+                         "one buffer would record copies nothing writes out.",
+                         (unsigned long long)g_dump_present_every);
+            }
+        }
+        if (ui_now || (!burst_mode && g_dump_present_every &&
+                       p % g_dump_present_every == 0)) {
             x4vr::SbsCompositor::EyeInfo ei;
             if (g_sbs.eye_info(pi->pSwapchains[0], &ei)) {
                 const uint32_t bpp = format_bpp(ei.format);
@@ -11162,7 +11181,6 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     // what put ~1.3 s of wall clock between consecutive dumps and made 22 of
     // take 257's 24 cockpit pairs unmeasurable; recording without waiting
     // costs only a GPU copy, so the frames really are one frame apart.
-    const bool burst_mode = ui_dump_every() != 0;
     if ((burst_mode ? flush_burst : dump_layers != 0) && d->QueueWaitIdle) {
         d->QueueWaitIdle(queue);
         // The frames to write: the whole ring in burst mode, or the one frame
