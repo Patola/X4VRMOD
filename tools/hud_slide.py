@@ -321,6 +321,118 @@ def main(lo, hi):
     return 0
 
 
+def span_scan(lo, hi):
+    """Ratio as a function of the TIME between the paired frames.
+
+    **This is the discriminator take 259 could not supply, from take 259's own
+    data.** Its 49 accepted pairs gave a median ratio of +1.77 that is not
+    constant (sd 0.36 against a median per-pair error of 0.08) and falls as
+    the motion grows (corr -0.40). Two shapes fitted equally well over those
+    pairs -- 17.4 px residual against 16.9 px -- and they mean different
+    things:
+
+        multiplicative   ui = k * scene          ratio is CONSTANT in dt
+        additive         |ui| = |scene| + c      ratio FALLS as dt grows,
+                                                 because scene grows and c
+                                                 does not
+
+    Adjacent pairs cannot separate them: every pair shares one dt, so the two
+    models are fitted to one slice. But a burst holds six frames at a CONSTANT
+    gap, so pairing frames k apart gives k*dt over the SAME physical head
+    motion. Five time scales, one run, no new take -- and the head speed is
+    not a variable I have to ask Patola to control, which is what makes this
+    better than asking for slow sweeps and fast snaps.
+
+    A span is only usable while the motion stays inside the +-320 px search,
+    so fast bursts drop out at large spans and slow ones drop out at small
+    ones. That is expected and the coverage is reported per span rather than
+    pooled, because a ratio averaged over spans is exactly the number this
+    function exists to stop being quoted.
+    """
+    cache = {}
+
+    def chan(n):
+        if n not in cache:
+            cache[n] = channels(n)
+        return cache[n]
+
+    by_span = {}
+    print(f'{"pair":>11} {"span":>4} {"scene":>7} {"ui":>7} {"ratio":>7}  '
+          f'{"ctl s":>6} {"ctl u":>6}  verdict')
+    for g in (ADJACENT or []):
+        inb = [n for n in g if lo <= n <= hi]
+        for ai in range(len(inb)):
+            for bi in range(ai + 1, len(inb)):
+                na, nb = inb[ai], inb[bi]
+                span = bi - ai
+                A, B = chan(na), chan(nb)
+                if A is None or B is None:
+                    continue
+                sv = shift2(A[0], B[0])
+                uv = shift2(A[1], B[1])
+                ca = shift2(A[2], B[3])
+                cu = shift2(A[4], B[5])
+                tag, ok_ = '', True
+                if sv is None or uv is None:
+                    tag, ok_ = 'unmeasurable', False
+                elif sv[3] or uv[3]:
+                    tag, ok_ = 'OUT OF RANGE', False
+                elif sv[2] < MIN_MARGIN or uv[2] < MIN_MARGIN:
+                    tag, ok_ = f'weak peak {min(sv[2],uv[2]):.3f}', False
+                elif abs(sv[0]) < MIN_MOTION:
+                    tag, ok_ = f'scene only {sv[0]:+d} px', False
+                else:
+                    for c, ref, nm in ((ca, sv, 's'), (cu, uv, 'u')):
+                        if c is None or abs(ref[0]) < 1e-6:
+                            tag, ok_ = f'{nm} control unmeasurable', False
+                        elif abs(c[0] / ref[0] - 1.0) > CTRL_TOL:
+                            tag, ok_ = f'{nm} control {c[0]/ref[0]:+.2f}', False
+                r = (uv[0] / sv[0]) if ok_ else None
+                if ok_:
+                    by_span.setdefault(span, []).append((r, sv[0], uv[0]))
+                    tag = f'ratio {r:+.2f}'
+                print(f'{str(na)+"->"+str(nb):>11} {span:>4} '
+                      f'{(sv[0] if sv else 0):>7} {(uv[0] if uv else 0):>7} '
+                      f'{("%.2f" % r) if r else "—":>7}  '
+                      f'{(("%+.2f" % (ca[0]/sv[0])) if ca and sv and sv[0] else "—"):>6} '
+                      f'{(("%+.2f" % (cu[0]/uv[0])) if cu and uv and uv[0] else "—"):>6}  '
+                      f'{tag}', flush=True)
+
+    print(f'\n  ratio by span (span 1 = {GAP_MS or float("nan"):.0f} ms):')
+    meds = []
+    for sp in sorted(by_span):
+        v = np.array([x[0] for x in by_span[sp]])
+        sc = np.array([abs(x[1]) for x in by_span[sp]])
+        print(f'    span {sp} ({sp * (GAP_MS or float("nan")):>6.0f} ms)  '
+              f'n={len(v):>3}  ratio median {np.median(v):+.2f}  '
+              f'IQR {np.percentile(v,25):+.2f}..{np.percentile(v,75):+.2f}  '
+              f'|scene| median {np.median(sc):>5.0f} px')
+        meds.append((sp, float(np.median(v)), len(v)))
+    if len(meds) < 2:
+        print('\n  fewer than two spans have data — this cannot discriminate. '
+              'Not a null.')
+        return 1
+    # The verdict is the TREND across spans, inside a branch on it.
+    sp = np.array([m[0] for m in meds], float)
+    md = np.array([m[1] for m in meds], float)
+    slope = float(np.polyfit(sp, md, 1)[0])
+    print(f'\n  trend across spans: {slope:+.3f} ratio per span step')
+    if abs(slope) < 0.05:
+        print('  FLAT -> the ratio does not depend on dt, so the HUD motion '
+              'is MULTIPLICATIVE:')
+        print('  it scales with the scene motion. An additive per-pair offset '
+              'is excluded.')
+    elif slope < 0:
+        print('  FALLING -> the ratio shrinks as dt grows, which is what an '
+              'ADDITIVE offset does:')
+        print('  the scene motion grows with dt and the extra HUD '
+              'displacement does not.')
+    else:
+        print('  RISING -> neither model predicts this. Both are wrong; do '
+              'not pick between them.')
+    return 0
+
+
 if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser()
@@ -328,6 +440,9 @@ if __name__ == '__main__':
     ap.add_argument('hi', type=int)
     ap.add_argument('--burst-log', help="the take's log, for the layer's "
                                         "`ui dump: burst frames` lines")
+    ap.add_argument('--span-scan', action='store_true',
+                    help='pair frames 1..5 apart WITHIN each burst, to test '
+                         'whether the ratio depends on dt')
     ap.add_argument('--prefix', default=PREFIX,
                     help=f'dump prefix, i.e. X4VR_MV_DUMP (default {PREFIX})')
     a = ap.parse_args()
@@ -345,4 +460,11 @@ if __name__ == '__main__':
               + (f', {GAP_MS:.1f} ms apart within a burst' if GAP_MS
                  else ' (the log does not state the spacing — a run from '
                       'before take 259, where it was one present)'))
+    if a.span_scan:
+        if not ADJACENT:
+            print('--span-scan needs --burst-log: it pairs frames WITHIN a '
+                  'burst and nothing else says which those are',
+                  file=sys.stderr)
+            sys.exit(2)
+        sys.exit(span_scan(a.lo, a.hi))
     sys.exit(main(a.lo, a.hi))

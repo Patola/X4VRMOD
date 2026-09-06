@@ -11391,18 +11391,21 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                         na[l] = cov.alpha;
                         const double tc = mono_now();
                         t_ui += tc - tw;
-                        // Counted here rather than left to the offline tool,
-                        // because "the mask is empty" and "the dump never ran"
-                        // produce the same silence downstream, and this project
-                        // has read one as the other before. Both criteria,
-                        // since which of them IS the UI is unsettled: alpha is
-                        // X4's own composite coverage, colour is what survives
-                        // if the composite ignores it.
-                        // The second pass over the mapped buffer is GONE --
-                        // write_ui8 counts while it already has the bytes in
-                        // RAM. Kept as a timed term so a future run says so
-                        // rather than leaving the reader to infer it from a
-                        // missing number.
+                        // Coverage still reported, still on both criteria --
+                        // "the mask is empty" and "the dump never ran" produce
+                        // the same silence downstream and this project has read
+                        // one as the other before, and which of alpha or colour
+                        // IS the UI is unsettled (X4 writes the weapon arcs
+                        // with colour and zero alpha). What is gone is the
+                        // SECOND per-pixel pass over the mapped buffer that
+                        // produced it: write_ui8 counts while it already has
+                        // the bytes in RAM. That pass was 1076 ms per frame in
+                        // take 259, 45% of the whole flush.
+                        //
+                        // t_cov is kept, and should now read ~0. A term that
+                        // vanishes from the log is indistinguishable from a
+                        // term nobody measured; one that reports zero says the
+                        // change took.
                         t_cov += mono_now() - tc;
                     }
                     const double tot = (double)sl.uw * sl.uh;
