@@ -173,6 +173,36 @@ def tiles(mask, n, min_px):
                 yield (tx, ty, y0, y1, x0, x1)
 
 
+def mask_window(mask, rx, ry):
+    """Slices bounding `mask`, widened so a shift up to (rx, ry) stays inside.
+
+    **Why crop at all.** The UI covers about 3% of a cockpit frame, so a
+    brute-force NCC over the full 1408x1408 spends ~97% of its time on pixels
+    that are zero in both layers. Cropping is ~30x less work.
+
+    **Why it is not merely faster.** Those zero pixels are not neutral: after
+    the mean subtraction inside ncc_shift they enter both norms, which dilutes
+    the peak and shrinks the margin. Take 257's cockpit frames came back at
+    margins of 0.036-0.055, close enough to the 0.02 floor that frames were
+    being dropped. Cropping raises the margin on the SAME data.
+
+    That said, cropping does change which pixels enter the statistic, so it is
+    NOT a no-op and must not be assumed equivalent -- `--check-crop` measures
+    both ways on the same frames and reports every disagreement.
+
+    The widening is rx + pad + 1 where ncc_shift's own pad is rx + 2, so
+    layer 1's copy of a feature at the edge of the mask is still inside the
+    window at every offset the search visits.
+    """
+    ys, xs = np.where(mask)
+    if ys.size == 0:
+        return None
+    h, w = mask.shape
+    my, mx = ry + 4, rx + 4
+    return (slice(max(0, int(ys.min()) - my), min(h, int(ys.max()) + 1 + my)),
+            slice(max(0, int(xs.min()) - mx), min(w, int(xs.max()) + 1 + mx)))
+
+
 def measure_ui_dump(f, a):
     """The three numbers from one present dump and its UI sibling.
 
@@ -199,7 +229,14 @@ def measure_ui_dump(f, a):
     # cannot contribute.
     ua = np.where(m0[key], lum0, 0.0)
     ub = np.where(m1[key], lum1, 0.0)
-    out['A'] = ncc_shift(ua, ub, a.range_x, a.range_y)
+    # Coverage above is taken over the WHOLE frame, before any crop, so the
+    # percentages still mean "of the screen" and not "of the window".
+    win = mask_window(m0[key], a.range_x, a.range_y) if not a.no_crop else None
+    if win is not None:
+        out['window'] = (win[0].stop - win[0].start, win[1].stop - win[1].start)
+    def W(x):
+        return x if win is None else x[win]
+    out['A'] = ncc_shift(W(ua), W(ub), a.range_x, a.range_y)
 
     # C: does the composite put the UI where the UI dump has it? Compared over
     # the mask, layer 0 against layer 0 -- one eye, so any offset found here is
@@ -213,17 +250,80 @@ def measure_ui_dump(f, a):
         out['mask0'] = m0[key]
         out['shape'] = (lum0.shape, plum0.shape)
         return out
-    out['C'] = ncc_shift(np.where(m0[key], lum0, 0.0),
-                         np.where(m0[key], plum0, 0.0), a.range_x, a.range_y)
+    out['C'] = ncc_shift(W(np.where(m0[key], lum0, 0.0)),
+                         W(np.where(m0[key], plum0, 0.0)),
+                         a.range_x, a.range_y)
 
     # B: the composed frame, restricted to the mask.
     p1 = decode(f.replace('-layer0.png', '-layer1.png'))
     plum1 = 0.2126 * p1[..., 0] + 0.7152 * p1[..., 1] + 0.0722 * p1[..., 2]
-    out['B'] = ncc_shift(np.where(m0[key], plum0, 0.0),
-                         np.where(m1[key], plum1, 0.0), a.range_x, a.range_y)
+    out['B'] = ncc_shift(W(np.where(m0[key], plum0, 0.0)),
+                         W(np.where(m1[key], plum1, 0.0)),
+                         a.range_x, a.range_y)
     out['mask0'] = m0[key]
     out['ua'], out['ub'] = ua, ub
     return out
+
+
+def run_crop_check(fs, a):
+    """Measure every frame BOTH ways and report each disagreement.
+
+    Patola's condition for adopting the crop was "if cropping to the mask's
+    bounding box doesn't make it less accurate". Cropping changes which pixels
+    enter the NCC -- the means and the norms both move -- so it is not a no-op
+    and cannot be argued equivalent. This measures it on the real dumps, which
+    is the only thing that settles it.
+
+    A disagreement is not automatically the crop being wrong. The full-frame
+    path is the one whose margins were sitting at 0.036, so where they differ
+    the margins are printed and the more discriminating measurement is the one
+    to believe. The point is to SEE the disagreements, not to assume there are
+    none.
+    """
+    import copy
+    import time
+    same = diff = 0
+    t_crop = t_full = 0.0
+    dm = []
+    print(f'{"frame":>6}  {"cropped":>18}  {"full frame":>18}  '
+          f'{"margin crop/full":>18}  window')
+    for f in fs[:a.max_frames]:
+        b_crop = copy.copy(a); b_crop.no_crop = False
+        b_full = copy.copy(a); b_full.no_crop = True
+        t0 = time.time(); mc = measure_ui_dump(f, b_crop); t_crop += time.time() - t0
+        t0 = time.time(); mf = measure_ui_dump(f, b_full); t_full += time.time() - t0
+        if mc is None or mf is None:
+            continue
+        n = re.search(r'-n(\d+)-', f).group(1)
+        row_bad = False
+        cells = []
+        for k in ('A', 'B', 'C'):
+            rc, rf = mc.get(k), mf.get(k)
+            if rc is None or rf is None:
+                cells.append(f'{k}:--')
+                continue
+            ok = rc[0] == rf[0] and rc[1] == rf[1]
+            row_bad |= not ok
+            cells.append(f'{k}:{rc[0]:+d},{rc[1]:+d}'
+                         + ('' if ok else f'!={rf[0]:+d},{rf[1]:+d}'))
+        if row_bad:
+            diff += 1
+        else:
+            same += 1
+        if mc.get('A') and mf.get('A'):
+            dm.append(mc['A'][3] - mf['A'][3])
+        w = mc.get('window', ('-', '-'))
+        print(f'{"n"+n:>6}  {" ".join(cells):<40}  '
+              f'{mc["A"][3]:.3f}/{mf["A"][3]:.3f}  {w[0]}x{w[1]}')
+    print(f'\n  {same} frame(s) AGREE on all of A/B/C, {diff} disagree')
+    if dm:
+        dm = np.array(dm)
+        print(f'  A margin change from cropping: median {np.median(dm):+.3f}, '
+              f'worst {dm.min():+.3f}, best {dm.max():+.3f} '
+              f'(positive = cropping discriminates better)')
+    print(f'  time: cropped {t_crop:.1f}s, full frame {t_full:.1f}s '
+          f'({t_full / max(t_crop, 1e-9):.1f}x)')
+    return 0 if diff == 0 else 1
 
 
 def run_ui_mode(fs, a):
@@ -393,7 +493,8 @@ def _synth(a, du, dw, blobs=26):
     class Args:
         pass
     b = Args()
-    for k in ('range_x', 'range_y', 'mask', 'min_ui_px', 'min_margin'):
+    for k in ('range_x', 'range_y', 'mask', 'min_ui_px', 'min_margin',
+              'no_crop'):
         setattr(b, k, getattr(a, k))
     b.range_x = max(b.range_x, 60)
     return d, pre, b, measure_ui_dump(f'{pre}-present-n0-layer0.png', b)
@@ -524,6 +625,12 @@ def main():
                     help='which UI-dump criterion is the mask, with --ui. '
                          'alpha alone DROPS the weapon arcs and brackets, '
                          'which X4 writes with colour and zero alpha')
+    ap.add_argument('--no-crop', action='store_true',
+                    help='correlate over the whole frame instead of the '
+                         'mask bounding box (slow; the reference path)')
+    ap.add_argument('--check-crop', action='store_true',
+                    help='measure every frame BOTH ways and report each '
+                         'disagreement, instead of reporting a result')
     ap.add_argument('--frames', metavar='LO-HI',
                     help='restrict to dump numbers LO..HI, so one scene can '
                          'be measured on its own instead of averaged with the '
@@ -544,7 +651,15 @@ def main():
         print('no dumps matched', file=sys.stderr)
         return 2
 
-    if a.frames:
+    if a.frames is not None:
+        # **An empty --frames is an ERROR, not "no filter".** zsh does not
+        # word-split unquoted parameters, so a `--frames "$2"` built from a
+        # `set -- $spec` that silently failed to split passed the empty string
+        # -- and this quietly measured all 93 dumps instead of the 25 asked
+        # for, mixing three scenes, for twenty minutes.
+        if not a.frames.strip():
+            print('--frames was given an empty value', file=sys.stderr)
+            return 2
         lo, hi = (int(v) for v in a.frames.split('-'))
         fs = [f for f in fs
               if lo <= int(re.search(r'-n(\d+)-', f).group(1)) <= hi]
@@ -553,6 +668,8 @@ def main():
             return 2
         print(f'  restricted to n{lo}..n{hi}: {len(fs)} dump(s)')
 
+    if a.check_crop:
+        return run_crop_check(fs, a)
     if a.ui:
         return run_ui_mode(fs, a)
 
