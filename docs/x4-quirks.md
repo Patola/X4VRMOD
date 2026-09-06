@@ -10180,18 +10180,64 @@ was written when the pose channel was believed live.
 
 `tools/hud_tiles.py` (new, selftested against synthetic rigid and mixed cases):
 
-1. **Is the UI one object, or a mixture?** `--channel ui`, the default. A single
-   ratio of 1.7 means one thing if every part of the HUD moves at 1.7, and a
-   completely different thing if world-anchored brackets sit at +1 while other
-   parts run past +2 and 1.7 is their average. **`hud_slide.py`'s checkerboard
-   control cannot answer this** — a checkerboard samples the same spatial
-   mixture in both halves, so a mixture reads a contented +1.00 either way. Only
-   a SPATIAL split separates them.
-2. **Is the SCENE one object?** `--channel scene`. The head moved over a 0.26 m
-   span. 5 cm of sideways translation shifts something at 1.4 m by ~26 px and
-   leaves infinity alone, and the cockpit interior is about a metre away. If the
-   cockpit and the starfield disagree, then the DENOMINATOR of every ratio above
-   is an average over depths and the ratio is not a property of the HUD at all.
+1. **Is the UI one object, or a mixture?** `--channel ui`. **A MIXTURE**: 35
+   pairs, median IQR across tiles 0.56, 26/35 past the bar.
+2. **Is the SCENE one object?** `--channel scene`. **ALSO A MIXTURE, and this
+   is the one that matters**: 202 pairs, median IQR 0.64, 185/202 past the bar.
+
+The rigid control — the same frames displaced by a KNOWN amount, same tiles,
+same search — reads **0.00**, so the correlator is not the source. Nor is the
+mask: #76's scene channel punches UI-shaped holes that MOVE WITH THE UI, so a
+tile containing one would carry a signal at the UI's rate. Filling them
+(`--raw-scene`) changes the channel — pair 88->89's global shift moves +34 to
++32 — and leaves the disagreement intact, **0.67 against 0.64**, 185/200 past
+the bar.
+
+**The per-tile-position map says what it is** (median over 160-199 pairs/cell):
+
+    +1.55 +1.00 +1.64
+    +1.69 +0.97 +1.53
+    +1.39 +0.93 +1.31
+
+Stable and left-right symmetric: centre column 1.00, both edge columns 1.3-1.7.
+**That is mostly PROJECTION GEOMETRY, not a defect.** A 110 deg rectilinear
+projection scales image displacement as `(1 + tan^2 θ)` under yaw — averaged
+over a tile that is 1.98 at the edges against 1.075 at the centre, so
+**predicted outer/centre 1.84, measured 1.57**. Same sign, same order. The 17%
+shortfall is NOT accounted for (content is not uniform within a tile, and pitch
+contributes a different pattern), so this is "mostly explained", not closed.
+
+**CONSEQUENCE — the biggest withdrawal in this file.** Dividing UI motion by ONE
+global scene number averages over that field dependence, so **"the HUD moves
+1.7x the scene" is not a property of the HUD.** Withdrawn, and with it the
+MULTIPLICATIVE shape and the chi2 refutation of #75 — all three were computed
+against that denominator. The 4.9x scatter called unexplained above was the
+denominator moving.
+
+**The replacement is `--channel both`**: both channels, SAME pair, SAME tile, so
+the field dependence cancels whatever causes it. Note that dividing the two
+separate per-position maps does NOT do this — they are built over different pair
+populations (scene 200 pairs, UI only the 35 under `MAX_UI`, which are the
+small-motion pairs whose ratios run high).
+
+## Depth in take 260's frames — `scene_depth.py`, 366 frames, 9792 tiles
+
+    UI     dx median -23.0 px  ->  1.37 m, flat in every frame (the canvas)
+    SCENE  40.7% at infinity · median 1.50 m · 10% nearer than 0.57 m
+           nearest at the -60 px SEARCH BOUND (0.53 m) — not a measurement
+
+Anchor 1 passes: 40.7% of tiles read |dx| <= 2 px, which is the starfield; 0%
+would mean the instrument was broken. **The canvas at 1.37 m sits in the middle
+of a scene spanning ~0.5 m to infinity**, with console and struts genuinely
+nearer than the HUD plane. Under pure rotation that is harmless — rotation moves
+every depth identically. Under this take's 0.26 m of head translation it is not.
+
+**42.8% of scene tiles are nearer than the UI plane, and that is NOT an
+occlusion finding.** Scene tiles are sampled where the UI is NOT drawn, by
+construction, so this is the depth of the scene AROUND the UI, never behind it.
+Testing an occlusion conflict needs `X4VR_HUDLESS=1` or a pre-composite dump —
+a different run, not this data. The tool says so itself; do not re-derive the
+claim it refuses.
 
 **Then, and only then, the vanilla baseline** — the same measurement with the
 layer instrumenting only: no VR, no stereo, no canvas, no pose, mouselook by
