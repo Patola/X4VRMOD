@@ -81,8 +81,19 @@ def spread(v):
     return s[min(n - 1, (3 * n) // 4)] - s[n // 4]
 
 
-def channels(prefix, n):
-    """(scene, ui, ui_mask) for dump n, or None. Same construction as #76."""
+def channels(prefix, n, raw_scene=False):
+    """(scene, ui, ui_mask) for dump n, or None. Same construction as #76.
+
+    `raw_scene` leaves the UI pixels IN the scene channel instead of zeroing
+    them. **This is an elimination, not a convenience.** #76's scene channel is
+    the present image with UI-shaped holes punched in it, and those holes MOVE
+    WITH THE UI. A scene tile containing a large hole therefore carries a
+    hole-edge signal at the UI's rate, which would show up as the scene
+    disagreeing with itself — the exact result being tested for. Re-measuring
+    with the holes filled separates a real depth mixture from an artifact of
+    the mask. The UI is ~3% of a cockpit frame, so leaving it in barely
+    perturbs a dense correlation.
+    """
     try:
         p = decode(f'{prefix}-present-n{n}-layer0.png')
         r, al = decode_rgba(f'{prefix}-ui-n{n}-layer0.png')
@@ -91,7 +102,8 @@ def channels(prefix, n):
     L = 0.2126 * p[..., 0] + 0.7152 * p[..., 1] + 0.0722 * p[..., 2]
     uim = (al > 0) | (r.max(2) > 0)
     uil = 0.2126 * r[..., 0] + 0.7152 * r[..., 1] + 0.0722 * r[..., 2]
-    return np.where(~uim, L, 0.0), np.where(uim, uil, 0.0), uim
+    scene = L if raw_scene else np.where(~uim, L, 0.0)
+    return scene, np.where(uim, uil, 0.0), uim
 
 
 def tile_shift(a, b, cx, cy, rad):
@@ -122,13 +134,27 @@ def tile_shift(a, b, cx, cy, rad):
     return dx + f[0], dy + f[1], at_bound
 
 
+def shift_fill(a, dx, dy):
+    """Shift by (dx, dy) with ZERO fill, not np.roll's wrap.
+
+    A wrap would move real content into the opposite edge tiles, which are
+    exactly the tiles the rigid control has to be trusted on.
+    """
+    out = np.zeros_like(a)
+    h, w = a.shape
+    ys, yd = (slice(0, h - dy), slice(dy, h)) if dy >= 0 else (slice(-dy, h), slice(0, h + dy))
+    xs, xd = (slice(0, w - dx), slice(dx, w)) if dx >= 0 else (slice(-dx, w), slice(0, w + dx))
+    out[yd, xd] = a[ys, xs]
+    return out
+
+
 def checker(t):
     yy, xx = np.indices(t.shape)
     chk = ((yy // 2 + xx // 2) & 1).astype(bool)
     return np.where(chk, t, 0.0), np.where(~chk, t, 0.0)
 
 
-def analyse(lo, hi, prefix, burst_log, chan=1):
+def analyse(lo, hi, prefix, burst_log, chan=1, raw_scene=False):
     groups, gap = burst_groups(burst_log)
     if not groups:
         sys.exit(f'NO BURSTS in {burst_log} — nothing is adjacent, so no pair '
@@ -143,12 +169,15 @@ def analyse(lo, hi, prefix, burst_log, chan=1):
     print(f'  per-tile search spans -24 .. 2x(global UI) + 24 px — a '
           f'screen-locked tile (0) and a double tile (2x) are both inside it')
     print(f'\n{"pair":>9} {"scene":>7} {"ui":>7} {"glob":>6}  '
-          f'{"tiles":>5} {"ratios (per tile)":<34} {"MAD":>5}  verdict')
+          f'{"tiles":>5} {"ratios (per tile)":<28} {"IQR":>5} {"ctrl":>6}  '
+          f'verdict')
 
     prev = prev_n = None
     per_pair, skipped_big, no_tiles, decoded = [], 0, 0, 0
+    by_pos = {}
+    matched = []
     for n in range(lo, hi + 1):
-        cur = channels(prefix, n)
+        cur = channels(prefix, n, raw_scene)
         if cur is None:
             continue
         decoded += 1
@@ -157,26 +186,101 @@ def analyse(lo, hi, prefix, burst_log, chan=1):
             u = shift2(prev[1], cur[1])
             if s and u and not s[3] and not u[3] and abs(s[0]) >= MIN_SCENE:
                 g_ratio = u[0] / s[0]
-                g = u if chan == 1 else s
+                # In matched mode BOTH channels get tiled, so the range guard
+                # must cover whichever moved further — guarding on the scene
+                # alone would let a large UI shift through with a search window
+                # wider than the tile.
+                g = (u if chan == 1 else s if chan == 0 else
+                     (u if abs(u[0]) > abs(s[0]) else s))
                 if abs(g[0]) > MAX_UI or abs(g[1]) > MAX_UI:
                     skipped_big += 1
+                elif chan == 2:
+                    # **THE MATCHED MEASUREMENT.** Both channels, same pair,
+                    # same tile: how much further does the HUD move than
+                    # whatever is behind it AT THAT PLACE ON SCREEN.
+                    #
+                    # Comparing the two separate per-position maps does NOT do
+                    # this. They are built over different pair populations --
+                    # the scene tiles 200 pairs, the UI only the 35 whose
+                    # motion is under MAX_UI, which are the small-motion pairs
+                    # whose ratios run high. Dividing one map by the other
+                    # compares different runs of the world and cancels nothing.
+                    # Here every ratio is one pair, one tile, both channels.
+                    srow = {(r[0], r[1]): r[2]
+                            for r in tile_pair(prev, cur, s, 0)}
+                    urow = {(r[0], r[1]): r[2]
+                            for r in tile_pair(prev, cur, u, 1)}
+                    both = [(k, urow[k] / srow[k]) for k in urow
+                            if k in srow and abs(srow[k]) >= 4]
+                    if len(both) >= MIN_TILES:
+                        for k, v in both:
+                            by_pos.setdefault(k, []).append(v)
+                        vals = sorted(v for _, v in both)
+                        matched.append(float(np.median(vals)))
+                        print(f'{prev_n:4d}->{n:<4d} {s[0]:+7.0f} {u[0]:+7.0f} '
+                              f'{g_ratio:+6.2f}  {len(both):5d} '
+                              f'{" ".join(f"{v:+.2f}" for _, v in both[:6]):<28} '
+                              f'{spread(vals):5.2f} {0.0:6.2f}  '
+                              f'matched median {np.median(vals):+.2f}')
+                    else:
+                        no_tiles += 1
                 else:
                     rows = tile_pair(prev, cur, g, chan)
-                    if len(rows) >= MIN_TILES:
-                        rs = [r / s[0] for r in rows]
+                    # The SAME frame displaced rigidly by the SAME amount, tiled
+                    # the same way: whatever spread this shows is the floor.
+                    ctrl = tile_pair(prev, cur, g, chan,
+                                     rigid=shift_fill(prev[chan],
+                                                      int(g[0]), int(g[1])))
+                    if len(rows) >= MIN_TILES and len(ctrl) >= MIN_TILES:
+                        rs = [r[2] / s[0] for r in rows]
+                        cs = [c[2] / g[0] for c in ctrl]
+                        for tx, ty, dx in rows:
+                            by_pos.setdefault((tx, ty), []).append(dx / s[0])
                         med = float(np.median(rs))
-                        iqr = spread(rs)
-                        txt = ' '.join(f'{x:+.2f}' for x in rs[:8])
+                        iqr, ciqr = spread(rs), spread(cs)
+                        txt = ' '.join(f'{x:+.2f}' for x in rs[:6])
                         verdict = ('tiles AGREE — one object'
-                                   if iqr <= ONE_OBJECT_IQR else
+                                   if iqr <= max(ONE_OBJECT_IQR, 2 * ciqr) else
                                    'tiles DISAGREE — a mixture')
                         print(f'{prev_n:4d}->{n:<4d} {s[0]:+7.0f} {u[0]:+7.0f} '
-                              f'{g_ratio:+6.2f}  {len(rs):5d} {txt:<34} '
-                              f'{iqr:5.2f}  {verdict}')
-                        per_pair.append((med, iqr, len(rs)))
+                              f'{g_ratio:+6.2f}  {len(rs):5d} {txt:<28} '
+                              f'{iqr:5.2f} {ciqr:6.2f}  {verdict}')
+                        per_pair.append((med, iqr, len(rs), ciqr))
                     else:
                         no_tiles += 1
         prev, prev_n = cur, n
+
+    # **Matched mode reports first.** It fills `matched`, not `per_pair`, and
+    # the generic block below returns early on an empty `per_pair` — so the
+    # smoke test printed four matched medians and then "NO PAIR could be
+    # tiled" underneath them. A summary that contradicts the rows above it is
+    # worse than no summary, because the summary is what gets quoted.
+    if chan == 2:
+        print(f'\n  {decoded} frame(s) decoded under {prefix}')
+        print(f'  {len(matched)} pair(s) had >= {MIN_TILES} tiles measurable in '
+              f'BOTH channels, {skipped_big} skipped (UI motion over {MAX_UI} '
+              f'px), {no_tiles} with too few shared tiles')
+        if not matched:
+            print('  NO PAIR had both channels measurable at a shared tile — '
+                  'this says nothing about the HUD.')
+            return
+        print(f'  UI motion / SCENE motion AT THE SAME TILE, same pair:')
+        print(f'    median over pairs {np.median(matched):+.2f}   '
+              f'IQR {spread(matched):.2f}   n={len(matched)}')
+        print(f'\n  PER-TILE-POSITION median of that matched ratio:')
+        for ty in range(GRID):
+            cells = []
+            for tx in range(GRID):
+                v = by_pos.get((tx, ty))
+                cells.append(f'{np.median(v):+5.2f}({len(v):3d})' if v
+                             else '   --      ')
+            print('      ' + ' '.join(cells))
+        print(f'\n  +1.00 everywhere = the HUD moves with whatever is behind '
+              f'it at that spot.\n  Above +1 = it slides. This cancels the '
+              f'field dependence that made\n  the single global ratio '
+              f'meaningless, because both channels are read\n  at the SAME '
+              f'screen position in the SAME pair.')
+        return
 
     print(f'\n  {decoded} frame(s) decoded under {prefix}')
     print(f'  {len(per_pair)} pair(s) tiled, {skipped_big} skipped (UI motion '
@@ -188,26 +292,64 @@ def analyse(lo, hi, prefix, burst_log, chan=1):
         return
     iqrs = [p[1] for p in per_pair]
     meds = [p[0] for p in per_pair]
+    ctrls = [p[3] for p in per_pair]
     typical = float(np.median(iqrs))
+    floor = float(np.median(ctrls))
     print(f'  per-tile ratio: median of pair medians {np.median(meds):+.2f}')
-    print(f'  per-pair spread ACROSS TILES: median IQR {typical:.2f} '
-          f'(threshold {ONE_OBJECT_IQR:.2f}), '
-          f'{sum(1 for x in iqrs if x > ONE_OBJECT_IQR)}/{len(iqrs)} pair(s) '
-          f'over it')
-    if typical <= ONE_OBJECT_IQR:
-        print(f'  => ONE OBJECT. Every part of the UI moves together, so the '
-              f'{np.median(meds):+.2f} is a property of the whole HUD and a '
-              f'single transform is scaling it.')
+    print(f'  per-pair spread ACROSS TILES: median IQR {typical:.2f}')
+    print(f'  RIGID CONTROL, same frames displaced by a known amount: '
+          f'median IQR {floor:.2f}')
+    # **The control sets the bar, not the constant.** A tile of a sparse UI is
+    # a far worse estimator than the whole frame, and ONE_OBJECT_IQR was
+    # reasoned from the global precision. Whatever spread the rigid control
+    # shows is what this instrument produces on something that IS one object.
+    bar = max(ONE_OBJECT_IQR, 2 * floor)
+    over = sum(1 for x in iqrs if x > bar)
+    print(f'  bar = max(stated {ONE_OBJECT_IQR:.2f}, 2x control {2*floor:.2f}) '
+          f'= {bar:.2f}; {over}/{len(iqrs)} pair(s) over it')
+    if typical <= bar:
+        print(f'  => NO EVIDENCE OF A MIXTURE. The tile spread is within what '
+              f'this instrument produces on a rigid displacement of the same '
+              f'frames, so it cannot separate one object from several here.')
+        if floor >= ONE_OBJECT_IQR:
+            print(f'  The control is ABOVE the stated threshold on its own, so '
+                  f'the threshold was too tight for tile-scale sparsity and '
+                  f'any verdict read off it alone would have been noise.')
     else:
-        print(f'  => A MIXTURE. Parts of the UI move at different rates, so '
-              f'the single ratio hud_slide.py reports is an average over '
-              f'things with different causes, and #76 needs splitting.')
+        rel = (f'{typical/floor:.1f}x the rigid control' if floor > 0.01
+               else f'far above the rigid control, which reads {floor:.2f} — '
+                    f'the machinery contributes nothing measurable here')
+        print(f'  => A MIXTURE. The tile spread is {rel}, so parts of this '
+              f'channel move at different rates and the single ratio '
+              f'hud_slide.py reports averages over causes that differ.')
+        # **The control is EASIER than the measurement, and that is a limit on
+        # this verdict.** It displaces identical content by an exact integer,
+        # while real consecutive frames also differ by new content, lighting
+        # and geometry that moved. So 0.00 bounds the CORRELATOR's error, not
+        # frame-to-frame change. The spatial map below is what separates real
+        # structure from per-pair noise: noise cannot hold a stable position.
+        print()
+        print(f'  PER-TILE-POSITION median ratio over all pairs — a stable '
+              f'spatial pattern is structure, a shuffled one is noise:')
+        for ty in range(GRID):
+            cells = []
+            for tx in range(GRID):
+                v = by_pos.get((tx, ty))
+                cells.append(f'{np.median(v):+5.2f}({len(v):3d})' if v
+                             else '   --      ')
+            print('      ' + ' '.join(cells))
 
 
-def tile_pair(pa, pb, u, chan=1):
+def tile_pair(pa, pb, u, chan=1, rigid=None):
     """Per-tile dx, searched around the global shift `u` of that channel.
 
     `chan` selects which channel is tiled: 1 = UI, 0 = scene.
+
+    `rigid` replaces frame B with a supplied image. Passing
+    `shift_fill(pa[chan], u)` makes this THE NEGATIVE CONTROL: the same real
+    frame, the same sparsity, the same tiles, the same search, displaced by a
+    known amount that is rigid by construction. Its tile spread is the noise
+    floor, and without it the mixture threshold is a number I picked.
 
     **The scene needs tiling for its own reason, not as a control.** The
     measurement divides by a single "scene motion", and in the cockpit the
@@ -223,6 +365,8 @@ def tile_pair(pa, pb, u, chan=1):
     mask = pa[2] if chan == 1 else (pa[0] > 0.02)
     for (_tx, _ty, y0, y1, x0, x1) in tiles(mask, GRID, MIN_TILE_PX):
         ta, tb = pa[chan][y0:y1, x0:x1], pb[chan][y0:y1, x0:x1]
+        if rigid is not None:
+            tb = rigid[y0:y1, x0:x1]
         t = tile_shift(ta, tb, u[0], u[1], rad)
         if t is None or t[2]:
             continue
@@ -243,7 +387,7 @@ def tile_pair(pa, pb, u, chan=1):
         tol = max(CTRL_FLOOR_PX, CTRL_TOL * abs(t[0]))
         if abs(c1[0] - t[0]) > tol or abs(c2[0] - t[0]) > tol:
             continue
-        out.append(t[0])
+        out.append((_tx, _ty, t[0]))
     return out
 
 
@@ -287,7 +431,7 @@ def selftest():
                   'cannot judge')
             fails += 1
             return
-        r = sorted(x / 40.0 for x in rows)
+        r = sorted(x[2] / 40.0 for x in rows)
         iqr = spread(r)
         agree = iqr <= ONE_OBJECT_IQR
         good = 'correct' if agree == want_agree else 'WRONG'
@@ -309,6 +453,27 @@ def selftest():
     # must read DISAGREE, or the statistic only works from one side.
     case('C minority locked', (40, 40, 0), False)
 
+    # D: the RIGID CONTROL, run on the mixture image. The control replaces
+    # frame B with frame A displaced by a known amount, so it must read AGREE
+    # even where the real pair is a mixture -- it measures the INSTRUMENT, not
+    # the data. If it inherited the mixture it would excuse any spread.
+    a, b, m = build((40, 0, 0))
+    rows = tile_pair((None, a, m), (None, b, m), (40, 0, 1.0, False),
+                     rigid=shift_fill(a, 40, 0))
+    if len(rows) < MIN_TILES:
+        print(f'  FAIL D control: only {len(rows)} tiles survived')
+        fails += 1
+    else:
+        r = sorted(x[2] / 40.0 for x in rows)
+        iqr = spread(r)
+        ok_ = iqr <= ONE_OBJECT_IQR
+        print(f'  D rigid control  : {len(r)} tiles median {np.median(r):+.2f} '
+              f'IQR {iqr:.2f} -> '
+              f'{"AGREE (correct)" if ok_ else "DISAGREE (WRONG — the control "
+                                              "inherited the mixture)"}')
+        if not ok_:
+            fails += 1
+
     print(f'  {"FAIL" if fails else "ok  "} hud_tiles selftest, '
           f'{fails} failure(s)')
     return 1 if fails else 0
@@ -320,14 +485,21 @@ if __name__ == '__main__':
     ap.add_argument('hi', nargs='?', type=int)
     ap.add_argument('--prefix', default='/tmp/x4vr-t260')
     ap.add_argument('--burst-log')
-    ap.add_argument('--channel', choices=('ui', 'scene'), default='ui',
+    ap.add_argument('--channel', choices=('ui', 'scene', 'both'), default='ui',
                     help='which channel to tile. "scene" asks whether the '
                          'DENOMINATOR of every #76 ratio is itself one object.')
+    ap.add_argument('--raw-scene', action='store_true',
+                    help='do NOT punch UI-shaped holes in the scene channel. '
+                         'Those holes move with the UI, so a scene tile '
+                         'containing one carries a signal at the UI rate — '
+                         'which is the very disagreement being measured.')
     ap.add_argument('--selftest', action='store_true')
     a = ap.parse_args()
     if a.selftest:
         sys.exit(selftest())
     if a.lo is None or a.hi is None or not a.burst_log:
         sys.exit('need: lo hi --burst-log LOG [--prefix P] [--channel ui|scene]')
-    print(f'  tiling the {a.channel.upper()} channel, {GRID}x{GRID}')
-    analyse(a.lo, a.hi, a.prefix, a.burst_log, 1 if a.channel == 'ui' else 0)
+    print(f'  tiling the {a.channel.upper()} channel, {GRID}x{GRID}'
+          f'{", UI holes FILLED" if a.raw_scene else ""}')
+    analyse(a.lo, a.hi, a.prefix, a.burst_log,
+            {'ui': 1, 'scene': 0, 'both': 2}[a.channel], a.raw_scene)
