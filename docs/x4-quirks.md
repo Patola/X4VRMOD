@@ -10273,15 +10273,62 @@ different consequences:
                                   -- this one is already hard to reconcile
     offset genuinely zero      -> something about 1408 caused it
 
-**`bracket_pair.py` cannot answer this as it stands.** `W = 1408` is a module
-constant that feeds `K_DISP` and `NEAR_PX`, and `SEARCH_R`, `MAX_OFFSET`,
-`CLUSTER_GAP`, `DEPTH_RX/RY`, `blob_is_near(half=80)` and `VEL_TOL` are all
-lengths in that frame, with `MIN_BLOB/MAX_BLOB` an area that scales as W^2.
-Pointing it at 2816x2816 dumps without re-framing it would be the
-`instrument-assumed-the-frame-it-was-built-on` failure again, on the very
-instrument that took three refutations to stabilise. Re-framing costs no takes
--- 18 present frames are already in `/tmp/x4vr-t268-*` -- but it is a deliberate
-change, not something to slip in while reporting a different result.
+### The re-frame is DONE and verified. #84 is still unsettled, and it is my fault.
+
+`bracket_pair.py` now reads its frame from the data -- the decoded image width
+and the burst spacing the layer itself logged -- and `reframe()` documents what
+scales by S, by S^2, by S*T, and what does not scale at all. Verified two ways:
+
+* **A bit-exact no-op at 1408.** Re-run against take 267: 47 pairings, 91
+  ambiguous, 204 candidates, 2 rejected, 9 unreadable, and all four bins to the
+  digit. Every stored verdict still means what it meant.
+* **Twelve selftest cases pass**, four of them new: `reframe(1408)` moves
+  nothing, `reframe(2816)` doubles lengths and quadruples areas, `NEAR_PX`
+  follows W (35.1 -> 70.1 px, because a threshold in METRES must), and take
+  268's actual frame is refused.
+
+**Take 268 cannot settle #84, and the reason is a knob I chose.** Three
+independent failures, any one of them fatal:
+
+    only 3 adjacent pairs carry a bracket (n6-n11) against take 267's 365
+    1-2 bracket clusters per frame, so <=6 candidate pairings before any test
+    the pairs are 1216 ms apart, against the 178 ms the method was built on
+
+The third is the one that matters and it is a consequence of dropping the burst
+from `600:6:150` to `1800:2:150`. **I made that change to save disk, and never
+asked what it did to the measurement.** At 1216 ms `MOVE_R` becomes 822 px, the
+search window blows past `MAX_BLOB`, and no ship is ever re-found -- so the tool
+reported "0 accepted, 0 dropped" with both failure modes looking identical. It
+now counts `whose ship was never re-found` separately, because "no bracket" and
+"bracket whose ship vanished" have opposite diagnoses.
+
+That counter immediately showed something about take 267 that was invisible for
+the whole of #84's history: **61 brackets there also lost their ship**, against
+47 accepted and 91 ambiguous. Not a defect and not a reason to re-open anything
+-- but a third of the population was being discarded through a path that printed
+nothing, and no conclusion should rest on a denominator nobody has seen.
+
+**The disk arithmetic that drove the change was wrong.** I priced `600:6:150`
+at 2816 by scaling take 267's file COUNT, forgetting that the burst count falls
+with the frame rate: at ~56 fps average instead of ~133, the same period yields
+27 bursts rather than 73. Take 267's own dump spec at 2816 costs ~2 GB, not 8.
+There was never a reason to change it.
+
+**`pairing_is_local()` is the guard that would have caught it**, and it is
+written to be able to fail: it compares the frame-to-frame search radius against
+the offset being measured and refuses above 3x. Take 267 sits at 0.67, take 268
+at 4.57. This is the third time the pair spacing has been the defect -- 257 too
+far, 258 too close, 268 too far again -- so the band is now checked by the tool
+instead of by me remembering.
+
+**What a take that settles #84 must do.** `X4VR_UI_DUMP=300:6:150` at
+2816x2816: ~54 bursts x 5 adjacent pairs = 270 pairs, ~35 pairings at take 267's
+rate, ~4 GB against 8.9 GB free. **Prediction to check first, from the run's own
+first burst line:** the 6-slot ring should bring the spacing back to ~178 ms
+(the layer will report a 380 MB burst buffer, up from 90 MB). If it still logs
+~1200 ms, then the write cost at 2816 dominates rather than the ring depth, and
+#84 is not measurable at that resolution by this method at all -- which is worth
+knowing before spending the rest of the take.
 
 ## #84: DO NOT PROPOSE A FOURTH MECHANISM FOR THE CENTRE BIN
 

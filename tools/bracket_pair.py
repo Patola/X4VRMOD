@@ -5,6 +5,11 @@
     tools/bracket_pair.py 0 600 --burst-log /tmp/x4vr-take267.log --prefix /tmp/x4vr-t267
     tools/bracket_pair.py --selftest
 
+**Resolution is read from the frames, not passed in.** See `reframe()`. Take
+268 rendered 2816x2816 and the tool handles it; what it could NOT handle was
+that take's burst spacing of 1216 ms against the 178 ms this method needs, and
+it says so instead of printing a table.
+
 Take 267 left a real but unexplained defect: the object brackets sit about
 29 px off their ships at the edge of the field and nothing at the centre. The
 first attempt to characterise it paired each bracket with the NEAREST bright
@@ -39,13 +44,37 @@ from ui_disparity import decode_rgba, ncc_shift           # noqa: E402
 from hud_vs_camera import decode                          # noqa: E402
 from hud_slide import burst_groups                        # noqa: E402
 
-W = 1408
+# --- THE FRAME EVERY CONSTANT BELOW LIVES IN --------------------------------
+#
+# Lengths are px in a **1408-wide eye**; areas are px^2 in that eye; the
+# frame-to-frame displacements are px between two dumps **178 ms apart**. Take
+# 268 rendered 2816x2816 and dumped 1216 ms apart, so running this file against
+# those frames unchanged would measure in a frame that does not exist -- the
+# same mistake as the seam detector that demanded >50% row coverage.
+#
+# `reframe()` is called from the DATA (the decoded image width and the gap the
+# layer itself logged), never from a flag. A flag can be forgotten; --max-frames
+# and --frames both were, in one session.
+BASE_W = 1408
+BASE_GAP_MS = 177.6   # take 267's measured burst spacing, from burst_groups()
+
+W = BASE_W
+S = 1.0               # length scale, W / BASE_W
+T = 1.0               # time scale, gap_ms / BASE_GAP_MS
+
 MIN_CLUSTER = 30      # green pixels before a cluster is a bracket
 CLUSTER_GAP = 40      # row gap that separates two brackets
 SEARCH_R = 90         # px around a bracket to look for its ship
 BLOB_FRAC = 0.5       # of the window max, to call a pixel part of a blob
 MIN_BLOB, MAX_BLOB = 4, 4000
 MAX_OFFSET = 90       # a bracket further than this from any blob is unpaired
+GROUP_R = 25          # px; splits two ships in one window into two candidates
+MOVE_R = 60           # px an object may travel BETWEEN the two dumped frames
+NEAR_HALF = 80        # half-width of blob_is_near's correlation window
+CENTRE_ECC = 150      # |ecc| under this is the centre bin
+ECC_BINS = ((-800, -400), (-400, -150), (-150, 150), (150, 400), (400, 800))
+MIN_ROWS = 12         # pairings needed before a fit is printed -- a SAMPLE
+                      # count, not a length, so it does not scale
 # A pairing is accepted only if the best velocity match beats the runner-up by
 # this many px of velocity difference. Without it "co-movement" degrades into
 # "whichever candidate happened to be closest", which is the method that failed.
@@ -91,10 +120,101 @@ DEPTH_REJECT = True
 # and left the centre bin identical to the digit; without these counters there
 # is no way to tell "nothing near was found" from "every read returned None
 # and everything passed by default".
-STATS = {'tested': 0, 'rejected': 0, 'unreadable': 0, 'depth': []}
+STATS = {'tested': 0, 'rejected': 0, 'unreadable': 0, 'depth': [],
+         'unrefound': 0}
+_FRAME_SET = False
 
 
-def blob_is_near(s0, s1, x, y, half=80):
+def _reset_frame():
+    """Back to the 1408 literals. For the selftest only."""
+    global _FRAME_SET
+    _FRAME_SET = False
+    reframe(BASE_W, BASE_GAP_MS)
+
+
+def reframe(width, gap_ms=None):
+    """Move every constant into the frame THIS run's dumps were made in.
+
+    **What scales, and why -- including what does NOT.** Getting this wrong is
+    silent: the tool still prints a table, it is just measuring something else.
+
+      x S    lengths: CLUSTER_GAP, SEARCH_R, MAX_OFFSET, GROUP_R, NEAR_HALF,
+             DEPTH_RX/RY, the eccentricity bins.
+      x S    velocity TOLERANCES (VEL_TOL, VEL_MARGIN, VEL_TOL_LONE). These
+             bound the MISMATCH between two velocities, so they track centroid
+             noise -- which is a length -- not the speed. A longer baseline does
+             not loosen them; it sharpens the discrimination.
+      x S    MIN_CLUSTER. A bracket is LINE ART, so its pixel count grows with
+             perimeter, not area. Measured across the two takes: total green
+             went 60-107 px at 1408 to 213-287 px at 2816, a factor 2.9 where
+             area would give 4.0 and perimeter 2.0. The exponent is really
+             ~1.55 and depends on how X4 rasterises a stroke, so S is chosen as
+             the CONSERVATIVE end -- too permissive costs ambiguous drops, too
+             strict silently deletes real brackets, and at S**2 it deleted the
+             72 px clusters that are plainly brackets.
+      x S^2  MIN_BLOB / MAX_BLOB. These are SCENE blobs -- filled ship bodies,
+             not strokes -- so they really are areas.
+      x S*T  MOVE_R alone. It is how far an object travels between the two
+             dumped frames, so it carries the time base as well as the scale.
+      via W  K_DISP and NEAR_PX. K = sx*ipd*(W/2) already carries W, and a
+             threshold stated in METRES maps to a pixel count that scales.
+      none   BLOB_FRAC and the brightness cuts (fractions and luminances),
+             NEAR_M (metres), MIN_ROWS (a sample count), the booleans.
+    """
+    global W, S, T, MIN_CLUSTER, CLUSTER_GAP, SEARCH_R, MIN_BLOB, MAX_BLOB
+    global MAX_OFFSET, GROUP_R, MOVE_R, NEAR_HALF, CENTRE_ECC, ECC_BINS
+    global VEL_MARGIN, VEL_TOL, VEL_TOL_LONE, K_DISP, NEAR_PX
+    global DEPTH_RX, DEPTH_RY
+
+    global _FRAME_SET
+    if _FRAME_SET and W == width:
+        return
+    # Mixed-resolution dumps under one prefix would silently mix two frames.
+    if _FRAME_SET and W != width:
+        sys.exit(f'frames disagree on width: already reframed to {W}, now '
+                 f'given {width}. One prefix, one resolution.')
+    _FRAME_SET = True
+    W, S = width, width / float(BASE_W)
+    T = 1.0 if gap_ms is None else gap_ms / BASE_GAP_MS
+
+    MIN_CLUSTER = 30 * S
+    CLUSTER_GAP = 40 * S
+    SEARCH_R = 90 * S
+    MAX_OFFSET = 90 * S
+    GROUP_R = 25 * S
+    NEAR_HALF = 80 * S
+    DEPTH_RX, DEPTH_RY = int(round(60 * S)), int(round(8 * S))
+    CENTRE_ECC = 150 * S
+    ECC_BINS = tuple((a * S, b * S) for a, b in
+                     ((-800, -400), (-400, -150), (-150, 150),
+                      (150, 400), (400, 800)))
+    VEL_MARGIN, VEL_TOL, VEL_TOL_LONE = 2.5 * S, 6.0 * S, 1.8 * S
+    MIN_BLOB, MAX_BLOB = max(4, int(round(4 * S * S))), int(round(4000 * S * S))
+    MOVE_R = 60 * S * T
+    K_DISP = 0.70044 * 0.064 * (W / 2)
+    NEAR_PX = K_DISP / NEAR_M
+
+
+def pairing_is_local():
+    """Is the frame-to-frame search still narrower than the effect?
+
+    **A guard that can fail, and names what would have to differ.** MOVE_R is
+    how far the tool will chase an object between two dumps; MAX_OFFSET is the
+    bracket-to-ship distance being measured. Once the chase is several times
+    the measurement, "the nearest blob that moved like this" stops being a
+    statement about one object -- any blob in a large neighbourhood qualifies,
+    and co-movement quietly degrades back into the proximity rule this file
+    exists to replace.
+
+    Take 267 ran at MOVE_R/MAX_OFFSET = 0.67. Take 268 dumped 1216 ms apart
+    instead of 178, which puts it at 4.6 -- the pairs are too far apart in TIME,
+    the mirror of take 258's pairs being too close. Both ends are failures and
+    both were found the expensive way.
+    """
+    return MOVE_R <= 3.0 * MAX_OFFSET, MOVE_R / MAX_OFFSET
+
+
+def blob_is_near(s0, s1, x, y, half=None):
     """True when this candidate's own stereo disparity says it is cockpit.
 
     Measured on the candidate itself, not inferred from where it sits on
@@ -107,8 +227,16 @@ def blob_is_near(s0, s1, x, y, half=80):
     each side, so the window has to exceed 2*(DEPTH_RX+2) = 124 px. The first
     version used half=34 -- a 68 px window -- and every call returned None
     while the selftest reported "not near", which reads exactly like a
-    candidate that passed.
+    candidate that passed. Now asserted rather than commented, so a future
+    re-scaling cannot re-create it quietly.
     """
+    if half is None:
+        half = NEAR_HALF
+    if 2 * half <= 2 * (DEPTH_RX + 2):
+        sys.exit(f'blob_is_near: window {2*half:.0f} px cannot hold a '
+                 f'correlation core for DEPTH_RX={DEPTH_RX} (needs '
+                 f'>{2*(DEPTH_RX+2)}); every call would return None and read '
+                 f'as "not near"')
     y0, y1 = max(0, int(y - half)), min(s0.shape[0], int(y + half))
     x0, x1 = max(0, int(x - half)), min(s0.shape[1], int(x + half))
     a, b = s0[y0:y1, x0:x1], s1[y0:y1, x0:x1]
@@ -120,13 +248,16 @@ def blob_is_near(s0, s1, x, y, half=80):
     return abs(r[0]) > NEAR_PX, r[0]
 
 
-def green_clusters(prefix, n, layer=0):
+def green_clusters(prefix, n, layer=0, gap_ms=None):
     """(x, y, npx) per green bracket cluster, plus the UI mask and scene."""
     try:
         r, a = decode_rgba(f'{prefix}-ui-n{n}-layer{layer}.png')
         p = decode(f'{prefix}-present-n{n}-layer{layer}.png')
     except Exception:
         return None, None
+    # The frame comes from the DATA. Every length below is meaningless until
+    # this has run, so it runs before the first one is used.
+    reframe(r.shape[1], gap_ms)
     ui = (a > 0) | (r.max(2) > 0)
     g = (ui & (r[..., 1] > 0.25) & (r[..., 1] > r[..., 2] * 1.35)
          & (r[..., 1] > r[..., 0] * 1.35))
@@ -182,8 +313,8 @@ def blobs_near(scene, bx, by, r=SEARCH_R):
     for i in range(len(pts)):
         if used[i]:
             continue
-        sel = (np.abs(pts[:, 0] - pts[i, 0]) < 25) & \
-              (np.abs(pts[:, 1] - pts[i, 1]) < 25) & ~used
+        sel = (np.abs(pts[:, 0] - pts[i, 0]) < GROUP_R) & \
+              (np.abs(pts[:, 1] - pts[i, 1]) < GROUP_R) & ~used
         if sel.sum() < MIN_BLOB:
             continue
         used |= sel
@@ -209,7 +340,7 @@ def pair_frame(ca, sa, cb, sb, oa=None):
     Yields (ecc, dx, dy, vel_err, margin) per accepted bracket.
     """
     for (bx, by, _n) in ca:
-        nxt = nearest(cb, bx, by, 60)      # the same bracket, next frame
+        nxt = nearest(cb, bx, by, MOVE_R)  # the same bracket, next frame
         if nxt is None:
             continue
         vb = (nxt[0] - bx, nxt[1] - by)
@@ -233,13 +364,18 @@ def pair_frame(ca, sa, cb, sb, oa=None):
             cands = kept
         scored = []
         for (sx, sy, _w) in cands:
-            m = nearest(blobs_near(sb, sx, sy, 60), sx, sy, 60)
+            m = nearest(blobs_near(sb, sx, sy, MOVE_R), sx, sy, MOVE_R)
             if m is None:
                 continue
             vs = (m[0] - sx, m[1] - sy)
             err = ((vs[0] - vb[0]) ** 2 + (vs[1] - vb[1]) ** 2) ** 0.5
             scored.append((err, sx, sy))
         if not scored:
+            # **Silent before this counter.** Take 268 reported "0 accepted, 0
+            # dropped" and the two failure modes -- no bracket, versus a
+            # bracket whose ship could not be re-found -- were indistinguishable
+            # in the output. They have opposite diagnoses.
+            STATS['unrefound'] += 1
             continue
         scored.sort()
         err, sx, sy = scored[0]
@@ -361,23 +497,85 @@ def selftest():
     if not near or far:
         fails += 1
 
+    # ---- the RE-FRAME: a no-op at 1408, and the guard that stops 268 ------
+    #
+    # The regression that matters is the first one. Everything this file has
+    # ever concluded was measured at 1408, so if reframe() moves a single
+    # constant there, every stored verdict silently changes meaning.
+    base = dict(MIN_CLUSTER=30, CLUSTER_GAP=40, SEARCH_R=90, MAX_OFFSET=90,
+                GROUP_R=25, NEAR_HALF=80, MOVE_R=60, DEPTH_RX=60, DEPTH_RY=8,
+                CENTRE_ECC=150, VEL_TOL=6.0, VEL_MARGIN=2.5, VEL_TOL_LONE=1.8,
+                MIN_BLOB=4, MAX_BLOB=4000)
+    _reset_frame()
+    bad = [k for k, v in base.items() if globals()[k] != v]
+    print(f'  reframe(1408) is a no-op      : '
+          f'{"correct" if not bad else "WRONG — moved " + ", ".join(bad)}')
+    if bad:
+        fails += 1
+
+    _FRAME_SET_SAVE = globals()['_FRAME_SET']
+    globals()['_FRAME_SET'] = False
+    reframe(2816, BASE_GAP_MS)
+    want = {'MIN_CLUSTER': 60, 'CLUSTER_GAP': 80, 'SEARCH_R': 180,
+            'MAX_OFFSET': 180, 'GROUP_R': 50, 'NEAR_HALF': 160, 'MOVE_R': 120,
+            'DEPTH_RX': 120, 'CENTRE_ECC': 300, 'VEL_TOL': 12.0,
+            'MIN_BLOB': 16, 'MAX_BLOB': 16000}
+    off = [f'{k} {globals()[k]} != {v}' for k, v in want.items()
+           if abs(globals()[k] - v) > 1e-6]
+    print(f'  reframe(2816): lengths x2, areas x4 : '
+          f'{"correct" if not off else "WRONG — " + "; ".join(off)}')
+    if off:
+        fails += 1
+    # K scales with W, and a threshold in METRES must follow it.
+    print(f'  depth threshold follows W     : NEAR_PX {NEAR_PX:.1f} px '
+          f'(was 35.1) -> {"correct" if abs(NEAR_PX - 70.1) < 0.5 else "WRONG"}')
+    if abs(NEAR_PX - 70.1) >= 0.5:
+        fails += 1
+    ok_local, ratio = pairing_is_local()
+    print(f'  2816 at 178 ms is still local : ratio {ratio:.2f} -> '
+          f'{"correct" if ok_local else "WRONG — refuses a good frame"}')
+    if not ok_local:
+        fails += 1
+
+    # Take 268's ACTUAL frame: 2816 wide, but dumped 1216 ms apart. The
+    # resolution is fine; the time base is not, and only the guard says so.
+    globals()['_FRAME_SET'] = False
+    reframe(2816, 1216.5)
+    ok_local, ratio = pairing_is_local()
+    print(f'  take 268 (2816 @ 1216 ms)     : ratio {ratio:.2f} -> '
+          f'{"correctly REFUSED" if not ok_local else "WRONG — accepted it"}')
+    if ok_local:
+        fails += 1
+    globals()['_FRAME_SET'] = _FRAME_SET_SAVE
+    _reset_frame()
+
     print(f'  {"FAIL" if fails else "ok  "} bracket_pair selftest, '
           f'{fails} failure(s)')
     return 1 if fails else 0
 
 
 def main(lo, hi, prefix, log, layer=0):
-    groups, _ = burst_groups(log)
+    groups, gap_ms = burst_groups(log)
     if not groups:
         sys.exit(f'NO BURSTS in {log}')
     adj = set()
     for g in groups:
         for i in range(len(g) - 1):
             adj.add((g[i], g[i + 1]))
+    print(f'  {len(groups)} burst(s), {len(adj)} adjacent pair(s), '
+          f'{"%.0f ms apart (measured, not requested)" % gap_ms if gap_ms else "spacing UNKNOWN"}')
+    if not gap_ms:
+        # Otherwise T defaults to 1.0 and pairing_is_local() waves through a
+        # run whose spacing nobody knows -- a guard that cannot fail.
+        print(f'  WARNING: this log states no burst spacing, so the time base '
+              f'is ASSUMED to be\n  the {BASE_GAP_MS:.0f} ms this method was '
+              f'built on. The locality guard below cannot\n  protect a run it '
+              f'has no timing for; check the layer logged "captured N ms '
+              f'apart".')
     rows, ambiguous = [], 0
     prev = prev_n = None
     for n in range(lo, hi + 1):
-        cur = green_clusters(prefix, n, layer)
+        cur = green_clusters(prefix, n, layer, gap_ms)
         if cur[0] is None:
             continue
         if prev is not None and (prev_n, n) in adj:
@@ -388,11 +586,26 @@ def main(lo, hi, prefix, log, layer=0):
                 else:
                     rows.append(r)
         prev, prev_n = cur, n
+    print(f'  frame: {W}x? eye, S={S:.3f} lengths, T={T:.3f} time '
+          f'(MOVE_R {MOVE_R:.0f} px vs MAX_OFFSET {MAX_OFFSET:.0f} px)')
     print(f'  {len(rows)} pairing(s) accepted by CO-MOVEMENT, '
-          f'{ambiguous} dropped as ambiguous')
+          f'{ambiguous} dropped as ambiguous, '
+          f'{STATS["unrefound"]} whose ship was never re-found')
+    ok, ratio = pairing_is_local()
+    if not ok:
+        print(f'\n  REFUSING TO REPORT: the frame-to-frame search is '
+              f'{ratio:.1f}x the offset being measured (needs <=3.0).')
+        print(f'  These dumps are {T*BASE_GAP_MS:.0f} ms apart against the '
+              f'{BASE_GAP_MS:.0f} ms this method was built on. Over that long '
+              f'a baseline\n  "the blob that moved like the bracket" stops '
+              f'naming ONE object, and the\n  pairing degrades back into the '
+              f'proximity rule this file exists to replace.')
+        print(f'  What would have to differ: dumps closer together in TIME. '
+              f'Resolution is\n  not the problem -- S={S:.1f} is handled.')
+        return
     if STATS['tested']:
         d = [x for x in STATS['depth'] if x[1] is not None]
-        ctr = [x[1] for x in d if x[0] < 150]
+        ctr = [x[1] for x in d if x[0] < CENTRE_ECC]
         print(f'  depth test: {STATS["tested"]} candidate(s), '
               f'{STATS["rejected"]} rejected as nearer than {NEAR_M} m, '
               f'{STATS["unreadable"]} UNREADABLE (passed by default)')
@@ -402,17 +615,17 @@ def main(lo, hi, prefix, log, layer=0):
                   f'disparity median {st.median(ctr):+.0f} px '
                   f'(min {min(ctr):+d}, max {max(ctr):+d}) -> '
                   f'median depth {K_DISP / max(abs(st.median(ctr)), 1e-6):.2f} m')
-    if len(rows) < 12:
-        print('  too few to fit — this says nothing about the offset.')
+    if len(rows) < MIN_ROWS:
+        print(f'  too few to fit ({len(rows)} < {MIN_ROWS}) — this says '
+              f'nothing about the offset.')
         return
     a = np.array([r[:3] for r in rows])
     e, dx, dy = a[:, 0], a[:, 1], a[:, 2]
     print(f'\n  signed ecc      n    mean dx     sd     mean dy     sd')
-    for lo_, hi_ in ((-800, -400), (-400, -150), (-150, 150),
-                     (150, 400), (400, 800)):
+    for lo_, hi_ in ECC_BINS:
         m = (e >= lo_) & (e < hi_)
         if m.sum() > 2:
-            print(f'  {lo_:+5d}..{hi_:+5d}  {m.sum():4d}  {dx[m].mean():+7.2f} '
+            print(f'  {lo_:+5.0f}..{hi_:+5.0f}  {m.sum():4d}  {dx[m].mean():+7.2f} '
                   f'{dx[m].std():6.2f}   {dy[m].mean():+7.2f} {dy[m].std():6.2f}')
     A = np.stack([np.ones_like(e), e], 1)
     sol, *_ = np.linalg.lstsq(A, dx, rcond=None)
