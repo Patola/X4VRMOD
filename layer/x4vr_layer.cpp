@@ -1435,10 +1435,13 @@ void credit_draw(VkCommandBuffer cb) {
     // returns early otherwise), so on a run with no multiview this stays 0 and
     // the masked column reads as "no masked passes existed", which is true.
     bool masked = false;
+    bool on_canvas = false;   // task #82, read under the SAME lock as masked
     if (want) {
         std::lock_guard<std::mutex> lock(g_cb_mu);
         auto m = g_cb_mask.find(cb);
         masked = m != g_cb_mask.end() && m->second;
+        auto cc = g_cb_canvas.find(cb);
+        on_canvas = cc != g_cb_canvas.end() && cc->second;
     }
     std::lock_guard<std::mutex> lock(g_track.mu);
     // Task #56. Credited on the same draws as the camera slots, so "the object
@@ -1455,12 +1458,6 @@ void credit_draw(VkCommandBuffer cb) {
         // #81 scales, so it is the set whose M_worldviewprojection decides
         // whether a per-draw predicate can separate chrome from world-anchored
         // markers.
-        bool on_canvas = false;
-        {
-            std::lock_guard<std::mutex> cl(g_cb_mu);
-            auto cc = g_cb_canvas.find(cb);
-            on_canvas = cc != g_cb_canvas.end() && cc->second;
-        }
         if (on_canvas) {
             g_canvas_draws++;
             if (ob != g_track.obj_bound.end())
@@ -7651,8 +7648,16 @@ void patch_view_before_submit() {
             // UI draws; it was a publish of mine gated on an unrelated knob.
             // These three counters separate the three cases before any
             // verdict is read, and the empty case is now LOUD.
-            if (!ui_mvp_logged && g_track.obj_credit_ui.empty()) {
-                ui_mvp_logged = true;
+            // **A "not yet" MUST NOT latch as a "no".** Take 264 fired
+            // this at t=103454.050 while the first canvas pipeline was not
+            // bound until 103454.695 -- 645 ms later. The count was honestly
+            // zero at that instant, the once-flag latched, and the run
+            // reported "0 draws hit them" about a UI it had not drawn yet.
+            // So the diagnostic waits for many evaluations and NEVER latches;
+            // only a real answer does.
+            static uint32_t ui_mvp_tries = 0;
+            if (!ui_mvp_logged && g_track.obj_credit_ui.empty() &&
+                ++ui_mvp_tries == 240) {
                 if (g_canvas_pipes.load() == 0)
                     X4VR_LOG("ui mvp #82: NO ANSWER — 0 pipelines were "
                              "recorded as canvas-mapped, so no draw could be "
@@ -7661,10 +7666,11 @@ void patch_view_before_submit() {
                              "'canvas first present: ... swapped into N') or "
                              "the recording is broken");
                 else if (g_canvas_draws.load() == 0)
-                    X4VR_LOG("ui mvp #82: NO ANSWER — %u canvas pipeline(s) "
-                             "recorded but 0 draws hit them. The UI was not "
-                             "drawn through them in this run",
-                             g_canvas_pipes.load());
+                    X4VR_LOG("ui mvp #82: NO ANSWER after %u evaluations — "
+                             "%u canvas pipeline(s) recorded but 0 draws hit "
+                             "them yet. Still watching; a later line "
+                             "supersedes this one",
+                             ui_mvp_tries, g_canvas_pipes.load());
                 else
                     X4VR_LOG("ui mvp #82: ANSWER, and it is a real one — %u "
                              "canvas pipeline(s), %llu draw(s) through them, "
