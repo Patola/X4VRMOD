@@ -53,11 +53,11 @@ VEL_MARGIN = 2.5
 VEL_TOL = 6.0         # px/frame; beyond this nothing co-moves with anything
 
 
-def green_clusters(prefix, n):
+def green_clusters(prefix, n, layer=0):
     """(x, y, npx) per green bracket cluster, plus the UI mask and scene."""
     try:
-        r, a = decode_rgba(f'{prefix}-ui-n{n}-layer0.png')
-        p = decode(f'{prefix}-present-n{n}-layer0.png')
+        r, a = decode_rgba(f'{prefix}-ui-n{n}-layer{layer}.png')
+        p = decode(f'{prefix}-present-n{n}-layer{layer}.png')
     except Exception:
         return None, None
     ui = (a > 0) | (r.max(2) > 0)
@@ -207,7 +207,7 @@ def selftest():
     return 1 if fails else 0
 
 
-def main(lo, hi, prefix, log):
+def main(lo, hi, prefix, log, layer=0):
     groups, _ = burst_groups(log)
     if not groups:
         sys.exit(f'NO BURSTS in {log}')
@@ -218,7 +218,7 @@ def main(lo, hi, prefix, log):
     rows, ambiguous = [], 0
     prev = prev_n = None
     for n in range(lo, hi + 1):
-        cur = green_clusters(prefix, n)
+        cur = green_clusters(prefix, n, layer)
         if cur[0] is None:
             continue
         if prev is not None and (prev_n, n) in adj:
@@ -260,10 +260,14 @@ if __name__ == '__main__':
     ap.add_argument('hi', nargs='?', type=int)
     ap.add_argument('--prefix', default='/tmp/x4vr-t267')
     ap.add_argument('--burst-log')
+    ap.add_argument('--layer', type=int, default=0,
+                    help='which eye. Running BOTH and comparing splits a mono '
+                         'layout error from a stereo one, which is the first '
+                         'question about a constant offset.')
     ap.add_argument('--selftest', action='store_true')
     a = ap.parse_args()
     if a.selftest:
         sys.exit(selftest())
     if a.lo is None or a.hi is None or not a.burst_log:
         sys.exit('need: lo hi --burst-log LOG [--prefix P]')
-    main(a.lo, a.hi, a.prefix, a.burst_log)
+    main(a.lo, a.hi, a.prefix, a.burst_log, a.layer)
