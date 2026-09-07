@@ -454,7 +454,8 @@ inline bool is_procedural_fullscreen(const std::vector<uint32_t> &code) {
 /// real failure mode and not a theoretical one.
 inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16],
                               const float *k_right = nullptr,
-                              float w_gate_eps = 0.0f) {
+                              float w_gate_eps = 0.0f,
+                              bool gate_perspective = true) {
     std::vector<Inst> insts;
     if (!iterate(code, insts))
         return false;
@@ -786,8 +787,21 @@ inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16],
                 emit(out, OpFMul, {t_float, d2, d, d});
                 const uint32_t cond = new_id();
                 emit(out, OpFOrdLessThan, {t_bool, cond, d2, g_eps2});
+                // **Polarity, and take 266 settled it the hard way.** The
+                // first version scaled where w ~ 1, and Patola reported the
+                // exact inverse of the intended result: the sliding returned
+                // on the chrome while the object MARKERS started following
+                // his head. So the markers are the w ~ 1 (orthographic)
+                // population and X4's cockpit HUD -- radar, panels,
+                // notifications -- is drawn as 3D geometry through a
+                // PERSPECTIVE projection, built from X4's default field,
+                // which is precisely why #45's correction is what it needs.
+                // `gate_perspective` selects w !~ 1; false restores take
+                // 266's polarity for a bisect.
                 const uint32_t t = new_id();
-                emit(out, OpSelect, {t_float, t, cond, g_one, g_zero});
+                emit(out, OpSelect, {t_float, t, cond,
+                                     gate_perspective ? g_zero : g_one,
+                                     gate_perspective ? g_one : g_zero});
                 const uint32_t diff = new_id();
                 emit(out, OpFSub, {t_v4, diff, mul, loaded});
                 const uint32_t sc = new_id();

@@ -46,7 +46,8 @@ check() {  # label  module  want_drawn
 
 for w in 1 5; do
     src="$ROOT/tests/wgate_w${w}.vert.spv"
-    "$PATCH" "$src" "$TMP/w${w}.gated.spv" 0.02 || { echo "patch failed"; exit 1; }
+    "$PATCH" "$src" "$TMP/w${w}.gated.spv" 0.02         || { echo "patch failed"; exit 1; }
+    "$PATCH" "$src" "$TMP/w${w}.w1.spv" 0.02 w1         || { echo "patch failed"; exit 1; }
     if command -v spirv-val >/dev/null; then
         spirv-val "$TMP/w${w}.gated.spv" >/dev/null 2>&1 \
             && printf 'ok   %-34s\n' "w=$w gated module validates" \
@@ -58,9 +59,16 @@ done
 # rest of the table means nothing.
 check "CONTROL unpatched w=1"        "$ROOT/tests/wgate_w1.vert.spv" 1
 check "CONTROL unpatched w=5"        "$ROOT/tests/wgate_w5.vert.spv" 1
-# The measurement.
-check "gated w=1 — gate must FIRE"   "$TMP/w1.gated.spv"             0
-check "gated w=5 — gate must be OFF" "$TMP/w5.gated.spv"             1
+# DEFAULT POLARITY: scale the PERSPECTIVE draws. Take 266 established that
+# X4's cockpit HUD is the perspective population and the object markers are
+# the orthographic one, by running the opposite polarity and getting the exact
+# inverse of the intended result in the headset.
+check "perspective-gate w=1 (ortho)"  "$TMP/w1.gated.spv"            1
+check "perspective-gate w=5 (persp)"  "$TMP/w5.gated.spv"            0
+# TAKE 266's POLARITY, kept so the bisect knob is covered and so the two are
+# visibly each other's inverse rather than one being "the" behaviour.
+check "w1-gate w=1 (take 266)"        "$TMP/w1.w1.spv"               0
+check "w1-gate w=5 (take 266)"        "$TMP/w5.w1.spv"               1
 
 [[ $fails -eq 0 ]] && echo "all cases passed" || echo "$fails case(s) failed"
 exit $((fails ? 1 : 0))

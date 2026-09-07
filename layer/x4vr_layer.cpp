@@ -5020,6 +5020,19 @@ float ui_wgate_eps() {
     return eps;
 }
 
+// Task #82's gate POLARITY. Take 266 ran the w~1 polarity and produced the
+// exact inverse of the intended result, which is what identified the two
+// populations: the object markers are orthographic (w ~ 1) and X4's cockpit
+// HUD is perspective. Default true = scale the perspective draws.
+// X4VR_UI_WGATE_W1=1 restores take 266 for a bisect.
+bool ui_wgate_perspective() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_UI_WGATE_W1");
+        return !(e && *e && *e != '0');
+    }();
+    return on;
+}
+
 bool proj_invproj() {
     static const bool on = [] {
         const char *e = getenv("X4VR_PROJ_INVPROJ");
@@ -6022,7 +6035,8 @@ VkResult create_shader_module_inner(
                 // world point does not. X4VR_UI_WGATE overrides the epsilon;
                 // 0 restores take 262's ungated behaviour for a bisect.
                 if (!x4vr::spv::patch_vertex_clip(cv, K_canvas, K_canvas_r,
-                                                  ui_wgate_eps())) {
+                                                  ui_wgate_eps(),
+                                                  ui_wgate_perspective())) {
                     canvas_refuse("patch_vertex_clip declined the module");
                 } else {
                     VkShaderModuleCreateInfo cci = *ci;

@@ -8,15 +8,20 @@
 #include "../common/x4vr_spirv.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <vector>
 
 int main(int argc, char **argv) {
     if (argc < 4) {
-        fprintf(stderr, "usage: %s <in.spv> <out.spv> <eps>\n", argv[0]);
+        fprintf(stderr, "usage: %s <in.spv> <out.spv> <eps> [w1]\n"
+                        "  default polarity scales the PERSPECTIVE draws;\n"
+                        "  pass 'w1' for take 266's polarity (scale w~1)\n",
+                argv[0]);
         return 2;
     }
+    const bool perspective = !(argc > 4 && strcmp(argv[4], "w1") == 0);
     std::ifstream f(argv[1], std::ios::binary);
     std::vector<char> b((std::istreambuf_iterator<char>(f)),
                         std::istreambuf_iterator<char>());
@@ -27,7 +32,8 @@ int main(int argc, char **argv) {
     std::vector<uint32_t> code(b.size() / 4);
     memcpy(code.data(), b.data(), code.size() * 4);
     const float k[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 0, 0, 1};
-    if (!x4vr::spv::patch_vertex_clip(code, k, nullptr, (float)atof(argv[3]))) {
+    if (!x4vr::spv::patch_vertex_clip(code, k, nullptr, (float)atof(argv[3]),
+                                      perspective)) {
         fprintf(stderr, "patch REFUSED %s\n", argv[1]);
         return 1;
     }
