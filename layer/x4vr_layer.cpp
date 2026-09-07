@@ -5265,10 +5265,23 @@ VkResult create_shader_module_inner(
                 const float sy_s = -sx_s;
                 const float dl = -0.5f * configured_ipd();
                 const float dr = +0.5f * configured_ipd();
+                // **Task #81 / #45.** X4 lays its UI out against its DEFAULT
+                // field whatever <fov> we set, so without this the HUD is
+                // displayed at atan(n*tan(half_world)) where X4 meant
+                // atan(n*0.75) and slides tan(half_world)/0.75 as far as the
+                // world -- 1.904x at X4VR_FOV=1.4917, which is #76.
+                //
+                // OFF by default: take 261 confirmed the mechanism but nobody
+                // has yet SEEN the corrected HUD, and the correction roughly
+                // halves its linear size at 1.4917. Correct and readable are
+                // different questions and only Patola can answer the second.
+                const char *uf = getenv("X4VR_UI_FOV");
+                const float ui_fov = uf && *uf ? (float)atof(uf) : 0.0f;
+                const float ui_ht = x4vr::ui_half_tan_of_fov(ui_fov);
                 x4vr::make_canvas_k(oa.on ? oa.eye[0] : x4vr::OffAxis{}, sx_s,
-                                    sy_s, dl, z, K_canvas);
+                                    sy_s, dl, z, K_canvas, ui_ht);
                 x4vr::make_canvas_k(oa.on ? oa.eye[1] : x4vr::OffAxis{}, sx_s,
-                                    sy_s, dr, z, K_canvas_r);
+                                    sy_s, dr, z, K_canvas_r, ui_ht);
                 have_canvas = true;
                 // Published for the cursor overlay, which has to move the
                 // pointer by the same map or it lands a fixed distance from
@@ -5298,6 +5311,26 @@ VkResult create_shader_module_inner(
                 else
                     X4VR_LOG("canvas: %.3f m -> s=%.5f NDC (L=+s R=-s)%s",
                              z, K_canvas[12], px);
+                // Always logged, including when OFF, and always with the
+                // number actually applied. A run that cannot be told apart
+                // from its predecessor in the log is a run that will be
+                // misattributed later.
+                if (ui_ht > 0.0f)
+                    X4VR_LOG("ui field: X4VR_UI_FOV=%.4f -> X4 lays the UI out "
+                             "at half %.2f deg (tan %.4f) against a rendered "
+                             "half of %.2f deg, so the UI pass is scaled by "
+                             "%.4f. #45/#81: without this the HUD moves "
+                             "%.3fx the world.",
+                             ui_fov,
+                             x4vr::x4_half_for_fov(ui_fov) * 57.2957795130823f,
+                             ui_ht, half * 57.2957795130823f, K_canvas[0],
+                             1.0f / (ui_ht * sx_s));
+                else
+                    X4VR_LOG("ui field: X4VR_UI_FOV unset — the UI keeps X4's "
+                             "screen NDC unscaled, which take 261 showed makes "
+                             "it move %.3fx the world at this field (#45/#76). "
+                             "Set X4VR_UI_FOV=1.0 to correct it.",
+                             1.0f / (0.75f * sx_s));
             }
         }
         if (have_k)

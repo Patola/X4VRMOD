@@ -1027,8 +1027,35 @@ inline CanvasNdc canvas_ndc_of(const float k[16]) {
     return c;
 }
 
+// Task #81 / #45. `ui_half_tan` is the tangent of the half-angle X4 LAYS ITS UI
+// OUT AGAINST, which take 261 established is NOT the field we render at.
+//
+// X4 lays the UI out against its DEFAULT fov=1.0 -- half 36.87 deg, tan 0.75 --
+// whatever <fov> we set, while the world renders at X4VR_FOV. So an element X4
+// places at NDC n means angle atan(n * 0.75), and we display it at
+// atan(n * tan(half_world)): pushed outward, and moving tan(half_world)/0.75 as
+// far as the world under any camera rotation. At X4VR_FOV=1.4917 that ratio is
+// 1.904, which IS #76's sliding HUD. Take 261 ran fov=1.0, where the two fields
+// coincide, and the measured gain fell from 1.40 to 1.05 with its field
+// dependence gone.
+//
+// The correction is a scale about the centre by ui_half_tan/tan(half_world) =
+// ui_half_tan * sx_screen, COMPOSED with whatever the off-axis map already put
+// in k[0]/k[5] rather than replacing it.
+//
+// **Zero or negative means OFF, and off is bit-exact identity** -- every state
+// tagged before this existed still reproduces, which is why it is a parameter
+// with a default rather than a new unconditional term.
+//
+// NOT applied to k[12]. That is the canvas DISPARITY, set by the canvas
+// distance z, and a plane's disparity does not depend on where content sits
+// within the plane. Scale first, then shift per eye.
+//
+// **Only the non-canted path is MEASURED.** Take 261 logged no CANTED line, so
+// the composition on the off-axis path is arithmetic, not evidence.
 inline void make_canvas_k(const OffAxis &o, float sx_screen, float sy_screen,
-                          float d_eye, float z, float k[16]) {
+                          float d_eye, float z, float k[16],
+                          float ui_half_tan = 0.0f) {
     for (int i = 0; i < 16; i++)
         k[i] = 0.0f;
     k[0] = k[5] = k[10] = k[15] = 1.0f;
@@ -1043,6 +1070,14 @@ inline void make_canvas_k(const OffAxis &o, float sx_screen, float sy_screen,
         k[5] = o.ay_num / sy_screen;
         k[12] = o.bx;
         k[13] = o.by;
+    }
+    if (ui_half_tan > 0.0f && std::fabs(sx_screen) > 1e-9f) {
+        // sy_screen is -sx_screen at every call site, so the magnitude is the
+        // same for both axes; multiplying preserves the sign convention k[5]
+        // already carries instead of re-deriving it.
+        const float s = ui_half_tan * std::fabs(sx_screen);
+        k[0] *= s;
+        k[5] *= s;
     }
     if (z > 0.0f)
         k[12] -= ax_num * d_eye / z;
@@ -1083,6 +1118,17 @@ inline float x4_fov_for_half(float half_rad) {
 // A missing or non-positive knob means X4's default fov of 1.0.
 inline float x4_half_for_fov(float fov) {
     return (fov > 0.0f ? fov : 1.0f) * 73.7399f * 0.5f * 0.01745329251994330f;
+}
+
+// The half-tangent X4 lays its UI out against, from X4VR_UI_FOV. Unset, empty
+// or non-positive returns 0 -- the OFF value make_canvas_k treats as identity.
+// 1.0 is the measured answer (X4's own default field); the knob takes a fov
+// rather than a tangent so the 0.964 residual take 261 left open can be tried
+// without arithmetic at the call site.
+inline float ui_half_tan_of_fov(float ui_fov) {
+    if (!(ui_fov > 0.0f))
+        return 0.0f;
+    return std::tan(x4_half_for_fov(ui_fov));
 }
 
 inline void format_mat(char *buf, size_t n, const Mat4 &a) {

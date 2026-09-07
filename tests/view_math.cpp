@@ -920,6 +920,123 @@ int main() {
                            worst);
                 }
 
+                // ---- Task #81 / #45: the UI layout-field correction --------
+                //
+                // Take 261 established that X4 lays its UI out against its
+                // DEFAULT fov=1.0 (half-tan 0.75) whatever <fov> we set, so an
+                // element X4 places at NDC n means angle atan(n*0.75) and we
+                // were displaying it at atan(n*tan(half_world)). The fix is a
+                // scale by ui_half_tan/tan(half_world).
+                //
+                // The claim under test is ANGULAR, so the checks are angular:
+                // where does a point X4 placed at NDC n actually end up.
+                {
+                    const x4vr::OffAxis none{};
+                    float k[16];
+
+                    // 1. OFF is bit-exact identity. Every state tagged before
+                    //    #81 existed must still reproduce, so this is an
+                    //    equality, not a tolerance.
+                    x4vr::make_canvas_k(none, sx_s, sy_s, 0.0f, 0.0f, k, 0.0f);
+                    check(k[0] == 1.0f && k[5] == 1.0f,
+                          "#81 OFF (ui_half_tan=0) leaves k[0]/k[5] exactly 1");
+                    x4vr::make_canvas_k(none, sx_s, sy_s, 0.0f, 0.0f, k, -1.0f);
+                    check(k[0] == 1.0f && k[5] == 1.0f,
+                          "#81 a negative ui_half_tan is OFF, not a mirror");
+
+                    // 2. The angular round-trip, across the fields we might
+                    //    ship and the ones we have measured. A point X4 draws
+                    //    at NDC n must subtend atan(n * ui_half_tan).
+                    float worst_ang = 0.0f;
+                    for (float wf : {1.0f, 1.2f, 1.3426f, 1.4917f, 1.7f}) {
+                        const float hw = x4vr::x4_half_for_fov(wf);
+                        const float tw = std::tan(hw);
+                        const float sxw = 1.0f / tw;
+                        for (float uf : {1.0f, 0.964f}) {
+                            const float tu = x4vr::ui_half_tan_of_fov(uf);
+                            x4vr::make_canvas_k(none, sxw, -sxw, 0.0f, 0.0f, k,
+                                                tu);
+                            for (float n : {-0.9f, -0.4f, 0.0f, 0.25f, 0.8f}) {
+                                const float got = std::atan(k[0] * n * tw);
+                                const float want = std::atan(n * tu);
+                                worst_ang = std::fmax(worst_ang,
+                                                      std::fabs(got - want));
+                            }
+                        }
+                    }
+                    check(worst_ang < 1e-6f,
+                          "#81 a point X4 placed at NDC n subtends "
+                          "atan(n*ui_half_tan) — 5 world fields x 2 UI fields "
+                          "x 5 positions");
+                    printf("     worst angular error %.2e rad (%.2e deg)\n",
+                           worst_ang, worst_ang * 57.2957795f);
+
+                    // 3. The take-261 configuration: when the two fields
+                    //    coincide the correction is a NO-OP. This is the case
+                    //    Patola actually flew, and the case the measurement
+                    //    returned 1.05 for, so it must come out at exactly 1.
+                    const float t10 = x4vr::ui_half_tan_of_fov(1.0f);
+                    const float sx10 = 1.0f / std::tan(x4vr::x4_half_for_fov(1.0f));
+                    x4vr::make_canvas_k(none, sx10, -sx10, 0.0f, 0.0f, k, t10);
+                    check(std::fabs(k[0] - 1.0f) < 1e-6f &&
+                              std::fabs(k[5] - 1.0f) < 1e-6f,
+                          "#81 at X4VR_FOV=1.0 the correction is a no-op — "
+                          "which is why take 261 measured 1.00 without it");
+
+                    // 4. The shipping numbers, against the arithmetic in the
+                    //    task. A silent change to either would otherwise show
+                    //    up only as a wrongly sized HUD in a headset.
+                    struct { float fov, want; } kExp[] = {
+                        {1.3426f, 0.6405f}, {1.4917f, 0.5252f}, {1.7f, 0.3875f}};
+                    for (const auto &e : kExp) {
+                        const float sxe =
+                            1.0f / std::tan(x4vr::x4_half_for_fov(e.fov));
+                        x4vr::make_canvas_k(none, sxe, -sxe, 0.0f, 0.0f, k,
+                                            x4vr::ui_half_tan_of_fov(1.0f));
+                        char tag[96];
+                        snprintf(tag, sizeof tag,
+                                 "#81 scale at X4VR_FOV=%.4f is %.4f", e.fov,
+                                 e.want);
+                        check_near(k[0], e.want, 1e-3f, tag);
+                    }
+
+                    // 5. The correction must NOT touch the canvas disparity.
+                    //    k[12] is set by the canvas DISTANCE, and a plane's
+                    //    disparity does not depend on where content sits
+                    //    within the plane. If #81 scaled it too, the UI would
+                    //    silently change depth with the field.
+                    for (float z : {0.5f, 1.4f, 10.0f}) {
+                        float koff[16], kon[16];
+                        x4vr::make_canvas_k(none, sx_s, sy_s, d_eye[0], z, koff,
+                                            0.0f);
+                        x4vr::make_canvas_k(none, sx_s, sy_s, d_eye[0], z, kon,
+                                            x4vr::ui_half_tan_of_fov(1.0f));
+                        check(koff[12] == kon[12],
+                              "#81 leaves the canvas disparity k[12] alone, so "
+                              "the UI plane stays at the distance asked for");
+                    }
+
+                    // 6. It COMPOSES with the off-axis map rather than
+                    //    replacing it. Only the non-canted path is measured,
+                    //    so this pins the arithmetic and says nothing more.
+                    {
+                        const x4vr::EyeFrustum sym =
+                            x4vr::frustum_of_angles(-half, half, half, -half);
+                        const x4vr::OffAxis id = x4vr::make_off_axis(sym, 0.0f);
+                        float kbase[16], kboth[16];
+                        const float tu = x4vr::ui_half_tan_of_fov(1.0f);
+                        x4vr::make_canvas_k(id, sx_s, sy_s, 0.0f, 0.0f, kbase,
+                                            0.0f);
+                        x4vr::make_canvas_k(id, sx_s, sy_s, 0.0f, 0.0f, kboth,
+                                            tu);
+                        const float s = tu * std::fabs(sx_s);
+                        check_near(kboth[0], kbase[0] * s, 1e-6f,
+                                   "#81 composes with the off-axis k[0]");
+                        check_near(kboth[5], kbase[5] * s, 1e-6f,
+                                   "#81 composes with the off-axis k[5]");
+                    }
+                }
+
                 // Canted, at infinity: the UI must land at the angle X4 drew
                 // it at, in BOTH eyes. Same angle in both eyes is zero
                 // disparity, which is what "pinned at infinity" means.
