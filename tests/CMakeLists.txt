@@ -11,6 +11,7 @@ target_link_libraries(x4vr_test_multiview_render PRIVATE Vulkan::Vulkan)
 # The shader patches, exercised without a GPU. Needs no Vulkan library at all --
 # it only ever rewrites words in a buffer, which is the point.
 add_executable(x4vr_test_spirv_patch spirv_patch.cpp)
+add_executable(x4vr_test_wgate_patch wgate_patch.cpp)   # task #82
 
 # The projection math. Self-checking: it takes no arguments and returns
 # non-zero on the first bad case, so it needs no runner script.

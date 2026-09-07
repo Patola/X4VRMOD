@@ -5007,6 +5007,19 @@ constexpr uint32_t kCameraInvProjUjMember = 4; // M_invprojection_uj
 // This is the same trap the take-50 control fell into with X4VR_STEREO, which
 // this file already records -- omitting a variable and setting it to 0 stopped
 // being the same thing the moment the default changed.
+// Task #82. Half-width of the "this vertex left with w == 1" test, in clip w.
+// Default 0.02: an orthographic UI quad emerges with w EXACTLY 1, so the only
+// job of the epsilon is float slop, and a world point would have to sit within
+// 2% of one unit of depth to be caught. 0 disables the gate, which reproduces
+// take 262 (correct chrome, wrong markers).
+float ui_wgate_eps() {
+    static const float eps = [] {
+        const char *e = getenv("X4VR_UI_WGATE");
+        return e && *e ? (float)atof(e) : 0.02f;
+    }();
+    return eps;
+}
+
 bool proj_invproj() {
     static const bool on = [] {
         const char *e = getenv("X4VR_PROJ_INVPROJ");
@@ -6000,7 +6013,16 @@ VkResult create_shader_module_inner(
                     memcpy(cv.data(), ci->pCode, ci->codeSize);
                 }
                 VkShaderModule cm = VK_NULL_HANDLE;
-                if (!x4vr::spv::patch_vertex_clip(cv, K_canvas, K_canvas_r)) {
+                // **Task #82's w-gate, ON whenever the #81 scale is.** An
+                // ungated scale is known-wrong: take 262 showed it moves the
+                // world-anchored object markers, which are already in the
+                // rendered field and need no correction. The gate applies the
+                // map only to vertices leaving with w ~ 1, which is what an
+                // orthographic UI quad produces and a perspective-projected
+                // world point does not. X4VR_UI_WGATE overrides the epsilon;
+                // 0 restores take 262's ungated behaviour for a bisect.
+                if (!x4vr::spv::patch_vertex_clip(cv, K_canvas, K_canvas_r,
+                                                  ui_wgate_eps())) {
                     canvas_refuse("patch_vertex_clip declined the module");
                 } else {
                     VkShaderModuleCreateInfo cci = *ci;

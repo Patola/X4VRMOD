@@ -109,6 +109,7 @@ enum : uint32_t {
     OpExtInst = 12,
     OpTypeBool = 20,
     OpSelect = 169,
+    OpFOrdLessThan = 184,   // task #82's w-gate
     OpFDiv = 136,
     OpFOrdGreaterThan = 186,
     GLSLstd450Sqrt = 31,
@@ -427,8 +428,33 @@ inline bool is_procedural_fullscreen(const std::vector<uint32_t> &code) {
 /// `float(view)` is exact for 0 and 1, so this is a selection and not a blend:
 /// the difference matrix is added once or not at all, with no rounding in
 /// between.
+/// **Task #82's w-gate.** With `w_gate_eps > 0` the map is applied ONLY to
+/// vertices whose `gl_Position.w` is within `w_gate_eps` of 1.
+///
+/// X4 has one UI vertex shader and positions every vertex by
+/// M_worldviewprojection, a per-draw uniform, so screen-space chrome and
+/// world-anchored object markers share a module and only the DATA differs --
+/// no per-module predicate can split them. But an orthographic UI quad
+/// emerges with w == 1 exactly, while a perspective-projected world point
+/// gets w = view depth. Take 265 measured the UI passes as BIMODAL, so the
+/// two really are distinguishable per draw.
+///
+/// The gate is on the RESULT, not the matrix: `res = p + t*(K*p - p)`, which
+/// is three vec4 ops and needs no matrix reconstruction. `t` is 1 or 0 exactly
+/// (OpSelect on a scalar condition with a scalar result, core SPIR-V 1.0), so
+/// this is a selection and not a blend.
+///
+/// The test is `(w-1)^2 < eps^2` rather than `|w-1| < eps` to avoid needing
+/// GLSL.std.450's FAbs, which many of X4's modules do not import.
+///
+/// **Per-VERTEX, and that is a stated limitation.** A primitive whose vertices
+/// straddle the threshold would be sheared rather than moved. Screen-space
+/// quads have w == 1 on every vertex and world billboards are small, so
+/// straddling needs a world primitive spanning w=1+-eps -- rare, but it is a
+/// real failure mode and not a theoretical one.
 inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16],
-                              const float *k_right = nullptr) {
+                              const float *k_right = nullptr,
+                              float w_gate_eps = 0.0f) {
     std::vector<Inst> insts;
     if (!iterate(code, insts))
         return false;
@@ -444,6 +470,7 @@ inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16],
     std::unordered_map<uint32_t, PtrType> ptr_types;
     std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> vars; // id -> (type, storage)
     uint32_t t_float = 0, t_v4 = 0, t_mat4 = 0, t_int = 0;
+    uint32_t t_bool = 0;                      // task #82's w-gate
     uint32_t ptr_out_v4 = 0;
     size_t first_fn = 0;
     bool have_first_fn = false;
@@ -509,6 +536,10 @@ inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16],
             if (in.len >= 4 && w[2] == DecorationBuiltIn &&
                 w[3] == BuiltInPosition)
                 var_pos_direct.push_back(w[1]);
+            break;
+        case OpTypeBool:
+            if (in.len >= 2 && !t_bool)
+                t_bool = w[1];
             break;
         case OpTypeFloat:
             if (in.len >= 3 && w[2] == 32 && !t_float)
@@ -630,6 +661,19 @@ inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16],
     uint32_t col[4];
     const uint32_t const_k = mat_const(k, col);
 
+    // --- task #82: the w-gate's types and constants ---------------------
+    const bool w_gate = w_gate_eps > 0.0f;
+    uint32_t g_one = 0, g_zero = 0, g_eps2 = 0;
+    if (w_gate) {
+        if (!t_bool) {
+            t_bool = new_id();
+            emit(decls, OpTypeBool, {t_bool});
+        }
+        g_one = fconst(1.0f);
+        g_zero = fconst(0.0f);
+        g_eps2 = fconst(w_gate_eps * w_gate_eps);
+    }
+
     // --- stereo: the difference matrix and the ViewIndex input ----------
     uint32_t diff_col[4] = {0, 0, 0, 0};
     uint32_t view_var = 0;
@@ -731,7 +775,27 @@ inline bool patch_vertex_clip(std::vector<uint32_t> &code, const float k[16],
             }
             const uint32_t mul = new_id();
             emit(out, OpMatrixTimesVector, {t_v4, mul, use_k, loaded});
-            emit(out, OpStore, {ptr, mul});
+            uint32_t result = mul;
+            if (w_gate) {
+                // t = ((w - 1)^2 < eps^2) ? 1 : 0, then p + t*(K*p - p).
+                const uint32_t wc = new_id();
+                emit(out, OpCompositeExtract, {t_float, wc, loaded, 3});
+                const uint32_t d = new_id();
+                emit(out, OpFSub, {t_float, d, wc, g_one});
+                const uint32_t d2 = new_id();
+                emit(out, OpFMul, {t_float, d2, d, d});
+                const uint32_t cond = new_id();
+                emit(out, OpFOrdLessThan, {t_bool, cond, d2, g_eps2});
+                const uint32_t t = new_id();
+                emit(out, OpSelect, {t_float, t, cond, g_one, g_zero});
+                const uint32_t diff = new_id();
+                emit(out, OpFSub, {t_v4, diff, mul, loaded});
+                const uint32_t sc = new_id();
+                emit(out, OpVectorTimesScalar, {t_v4, sc, diff, t});
+                result = new_id();
+                emit(out, OpFAdd, {t_v4, result, loaded, sc});
+            }
+            emit(out, OpStore, {ptr, result});
         }
 
         // The ViewIndex variable is an Input, so it belongs in the entry
