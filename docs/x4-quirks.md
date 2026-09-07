@@ -10147,6 +10147,69 @@ pair, not this run's fault.
    ~(-24,-26) px; the centre bin is abandoned, see below.
 3. **#25 / the stereo separation** remains held by Patola's own decision.
 
+## TAKE 268 — #83's resolution call. PREDICTIONS, WRITTEN BEFORE THE RUN
+
+One variable: **2816x2816 per eye instead of 1408x1408**, 4x the pixels. Every
+other knob is byte-identical to take 267, including `X4VR_POSE=0`.
+
+**`X4VR_RES` cannot be set from the command line in SBS mode** -- the launcher
+exports `X4VR_RES="$((W/2))x$H"` over whatever was passed. Resolution moves
+through `X4VR_W`/`X4VR_H`; `X4VR_RES` is passed too, matching takes 166a/166b,
+so the logged `env: run =` line does not lie about the size. Take 101 died to
+exactly this.
+
+    X4VR_WATCH_SAY='burst dumps' X4VR_TAKE=268-HIRES X4VR_CANVAS_M=1.4 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DECLARE_RENDERED_POS=1 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_W=5632 X4VR_H=2816 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_POSE=0 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_MV_DUMP=/tmp/x4vr-t268 X4VR_UI_DUMP=1800:2:150 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take268.log X4VR_WATCH_WANT='ui dump: burst frames' X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_UI_FOV=1.0 X4VR_UI_WGATE=0.02 X4VR_UI_WGATE_W1=0 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+**Why 2816 and not some other number.** The UI scale is **0.5252**, from take
+267's own log, not from arithmetic here: `ui field: X4VR_UI_FOV=1.0000 -> X4
+lays the UI out at half 36.87 deg (tan 0.7500) against a rendered half of 55.00
+deg, so the UI pass is scaled by 0.5252`. A HUD glyph therefore keeps `0.5252 x
+render_width / 1408` of the pixels it had at 1408x1408 **before #81 existed** --
+the state Patola could read. Parity is at `1408 / 0.5252 = 2681`; 2816 is the
+next clean doubling and clears it at **1.05x**. The runtime asks for 3096x3243
+per eye anyway, so 1408 was never near what the panel wanted.
+
+**The second knob change, declared rather than smuggled:** `X4VR_UI_DUMP`
+drops from `600:6:150` to `1800:2:150`. Not a measurement choice -- take 267's
+dumps are 2.0 GB and /tmp has 5.6 GB free, so the same budget at 4x the bytes
+would fill the disk mid-run. `X4VR_MV_DUMP` stays set only to keep the dump
+filenames per-run; in burst mode the ring owns both the ui and the present
+dump, so they cannot be separated.
+
+**P1 -- extents.** `X4 renders 2816x2816, eye 2816x2816 (from X4VR_RES),
+composite 5632x2816`. If it still reads 1408x1408 the run measured nothing.
+
+**P2 -- the premise, and the most informative line in the run.** `ui img #N
+carries the UI -- 2816x2816`. The scorer prints the UI target's own extent. If
+X4 sizes that target from the render, resolution buys HUD pixels and #83 is a
+settings question. **If it stays 1408x1408, resolution cannot buy them and #83
+needs an entirely different answer** -- that possibility has never been tested,
+because every stored log is 1408x1408.
+
+**P3 -- readability.** Given P2, the HUD should read at least as well as it did
+before #81 existed. Not "better than take 267" -- that is a magnitude against
+memory, which Patola's eye is not the instrument for. The question is absolute
+and binary: *can you read the notification panel text?*
+
+**P4 -- cost. 6.05 ms (165 fps).** Take 267's GAMEPLAY was 4.20 ms (238 fps);
+the only measured 1x->4x ratio we own is take 158->159, 6.80 -> 9.82 = 1.44x.
+Falsifier: materially above ~7.5 ms means the fov-1.4917 scene scales worse
+than the fov-2.21 scene did. Take 160 already showed the curve going
+superlinear by 9x, so this is a live possibility rather than a formality, and
+above 11.1 ms the setting fails a 90 fps budget outright.
+
+**P5 -- the FAIL will fire again.** `X4VR_ROLL_STEREO was set but the pose
+channel is down` is inherited from `X4VR_POSE=0` and is about #77. It is not
+this run failing.
+
+**P6 -- an unknown settled for free.** `X4VR_HEADLOOK_GAIN=0.115` is
+degrees-per-mouse-count, and it has only ever been tuned at 1408x1408. Nothing
+in this tree records whether X4's mouse-look is resolution-normalised. The loop
+is closed (`X4VR_CAMREAD` / `X4VR_CAMLOOP`), so a wrong gain model changes
+speed and damping, not the fixed point -- at worst head-look feels sluggish or
+twitchy. `poselag |declared - X4| yaw` read median 0.345 deg / p90 0.805 in take
+267; a large rise there is a gain-model failure, **not** a #83 result.
+
 ## #84: DO NOT PROPOSE A FOURTH MECHANISM FOR THE CENTRE BIN
 
 Three hypotheses, three refutations, each costing a full re-measurement:
