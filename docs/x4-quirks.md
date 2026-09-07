@@ -10274,7 +10274,10 @@ but do not record the model as confirmed.
 **THE PREDICTION THIS MAKES, and it is a strong one:** the gain should be
 `tan(half_world) / 0.75`, so it is a function of `X4VR_FOV` alone —
 
-    X4VR_FOV  1.4917 -> gain 1.90     1.2 -> 1.37     1.0 -> 1.00
+    X4VR_FOV  1.0 -> 1.00   1.2 -> 1.30   1.3426 -> 1.56   1.4917 -> 1.90
+
+(1.37 appeared here first and was WRONG -- written without computing it.
+tan(44.24 deg)/0.75 = 1.30.)
 
 **At X4VR_FOV=1.0 the slide should VANISH.** A predicted null at a knob we
 already have, and the cheapest possible discriminator: if the HUD still slides

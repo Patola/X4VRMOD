@@ -51,6 +51,8 @@ reported as UNCONDITIONED rather than given a number. That check is the
 difference between this measurement and a plausible-looking division.
 """
 import argparse
+import math
+import re
 import sys
 
 import numpy as np
@@ -62,9 +64,39 @@ from hud_slide import burst_groups, shift2                     # noqa: E402
 from hud_tiles import tile_shift                               # noqa: E402
 from ui_disparity import tiles                                  # noqa: E402
 
-K = 0.70044 * 0.064 * (1408 / 2)     # 31.556; z = K / |disparity_px|
+# **Both of these track X4VR_FOV and MUST be read from the run, not baked.**
+# sx = 1/tan(half) and half = fov*73.7399/2, so a take at fov=1.0 has
+# HALF_TAN 0.75 against 1.4281 and K 60.07 against 31.556 -- a 90% error in
+# every depth and a 47% error in every field factor, silently. The values
+# below are only the fov=1.4917 defaults; set_fov() overwrites them from the
+# log's own `env: run =` line before anything is measured.
 W = 1408
+IPD = 0.064
 HALF_TAN = 1.4281                    # tan(55 deg), X4VR_FOV=1.4917 -> 110 deg
+K = (1.0 / HALF_TAN) * IPD * (W / 2)  # 31.556; z = K / |disparity_px|
+
+
+def set_fov(fov):
+    """Recompute the FOV-derived constants. Returns the half-angle in deg."""
+    global HALF_TAN, K
+    half = fov * 73.7399 * 0.5
+    HALF_TAN = math.tan(math.radians(half))
+    K = (1.0 / HALF_TAN) * IPD * (W / 2)
+    return half
+
+
+def fov_from_log(path):
+    """X4VR_FOV as the RUN used it, from the injector's own env line."""
+    try:
+        with open(path) as f:
+            for line in f:
+                if 'env: run =' in line:
+                    m = re.search(r'X4VR_FOV=([0-9.]+)', line)
+                    if m:
+                        return float(m.group(1))
+    except OSError:
+        pass
+    return None
 GRID = 3                             # motion tiles, 469 px
 DSUB = 2                             # depth sub-tiles inside each motion tile
 RX, RY = 60, 8                       # disparity search, same as scene_depth
@@ -174,6 +206,14 @@ def frame_data(prefix, n):
 
 
 def analyse(lo, hi, prefix, burst_log):
+    fov = fov_from_log(burst_log)
+    if fov is None:
+        sys.exit(f'NO X4VR_FOV in {burst_log}. Every depth and every field '
+                 f'factor here is derived from it, so guessing would produce '
+                 f'confident wrong numbers. Not a null about the HUD.')
+    half = set_fov(fov)
+    print(f'  X4VR_FOV={fov} from the log -> half-angle {half:.2f} deg, '
+          f'tan {HALF_TAN:.4f}, K {K:.3f}')
     groups, gap = burst_groups(burst_log)
     if not groups:
         sys.exit(f'NO BURSTS in {burst_log} — nothing here is adjacent.')
