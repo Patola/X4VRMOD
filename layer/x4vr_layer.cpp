@@ -1236,6 +1236,8 @@ std::unordered_map<VkCommandBuffer, VkRenderPass> g_cb_rp;
 // subpass at draw time, and "the draw uses a module we scaled" is the question
 // anyway. Written under g_cb_mu with the rest of the per-cb tracking.
 std::unordered_map<VkPipeline, bool> g_pipe_canvas;
+std::atomic<uint32_t> g_canvas_pipes{0};      // task #82
+std::atomic<uint64_t> g_canvas_draws{0};      // task #82
 std::unordered_map<VkCommandBuffer, bool> g_cb_canvas;
 
 // A doubled colour attachment of a masked pass, with the layout that pass
@@ -1459,9 +1461,12 @@ void credit_draw(VkCommandBuffer cb) {
             auto cc = g_cb_canvas.find(cb);
             on_canvas = cc != g_cb_canvas.end() && cc->second;
         }
-        if (on_canvas && ob != g_track.obj_bound.end())
-            for (const Tracking::ObjSlot &s : ob->second)
-                g_track.obj_credit_ui[s]++;
+        if (on_canvas) {
+            g_canvas_draws++;
+            if (ob != g_track.obj_bound.end())
+                for (const Tracking::ObjSlot &s : ob->second)
+                    g_track.obj_credit_ui[s]++;
+        }
     }
     // Task #67, credited on the SAME draws as `credit` so the two counts are
     // comparable rather than sampled at different moments.
@@ -7189,6 +7194,22 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
     // Both creation paths publish, through one lambda: the `!any` early return
     // is a second exit and forgetting it there is exactly the "fixed here,
     // broken next door" shape this project keeps producing.
+    // **Task #82, and deliberately NOT folded into publish_descs.** That
+    // lambda returns early when `pipe_descs` is empty, and pipe_descs is sized
+    // zero unless X4VR_PIPE_INVENTORY is set -- so appending this there made it
+    // depend on an unrelated instrument, and take 263 reported nothing at all.
+    // A publish that another knob can silence is not a publish.
+    auto publish_canvas = [&](VkResult r) {
+        if (r != VK_SUCCESS)
+            return;
+        std::lock_guard<std::mutex> lock(g_cb_mu);
+        for (uint32_t i = 0; i < count; i++)
+            if (out[i] != VK_NULL_HANDLE && took_canvas[i]) {
+                g_pipe_canvas[out[i]] = true;
+                g_canvas_pipes++;
+            }
+    };
+
     auto publish_descs = [&](VkResult r) {
         if (r != VK_SUCCESS || pipe_descs.empty())
             return;
@@ -7196,18 +7217,13 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
         for (uint32_t i = 0; i < count; i++)
             if (out[i] != VK_NULL_HANDLE && !pipe_descs[i].empty())
                 g_pipe_desc[out[i]] = pipe_descs[i];
-        {
-            std::lock_guard<std::mutex> lock(g_cb_mu);
-            for (uint32_t i = 0; i < count; i++)
-                if (out[i] != VK_NULL_HANDLE && took_canvas[i])
-                    g_pipe_canvas[out[i]] = true;   // task #82
-        }
     };
 
     if (!any) {
         VkResult r = d->CreateGraphicsPipelines(device, cache, count, ci, ac,
                                                 out);
         publish_descs(r);
+        publish_canvas(r);
         record_provenance(r);
         return r;
     }
@@ -7234,6 +7250,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
     VkResult r =
         d->CreateGraphicsPipelines(device, cache, count, infos.data(), ac, out);
     publish_descs(r);
+    publish_canvas(r);
     record_provenance(r);
     return r;
 }
@@ -7629,6 +7646,37 @@ void patch_view_before_submit() {
             // Reported unconditionally when the canvas-credited set is
             // non-empty, INCLUDING when it is all one mode, because "no split
             // is possible" is the answer that changes the plan most.
+            // **A silent instrument must say WHICH way it was silent.**
+            // Take 263 printed nothing and looked like a run that found no
+            // UI draws; it was a publish of mine gated on an unrelated knob.
+            // These three counters separate the three cases before any
+            // verdict is read, and the empty case is now LOUD.
+            if (!ui_mvp_logged && g_track.obj_credit_ui.empty()) {
+                ui_mvp_logged = true;
+                if (g_canvas_pipes.load() == 0)
+                    X4VR_LOG("ui mvp #82: NO ANSWER — 0 pipelines were "
+                             "recorded as canvas-mapped, so no draw could be "
+                             "credited. That is this instrument failing, not "
+                             "X4: either no canvas variant was swapped (check "
+                             "'canvas first present: ... swapped into N') or "
+                             "the recording is broken");
+                else if (g_canvas_draws.load() == 0)
+                    X4VR_LOG("ui mvp #82: NO ANSWER — %u canvas pipeline(s) "
+                             "recorded but 0 draws hit them. The UI was not "
+                             "drawn through them in this run",
+                             g_canvas_pipes.load());
+                else
+                    X4VR_LOG("ui mvp #82: ANSWER, and it is a real one — %u "
+                             "canvas pipeline(s), %llu draw(s) through them, "
+                             "but NOT ONE bound a set-%u object block. So "
+                             "M_worldviewprojection does not reach these "
+                             "shaders through the per-object block at all, "
+                             "and m[11] cannot be the predicate. #82 needs a "
+                             "different signal; do not look for this one",
+                             g_canvas_pipes.load(),
+                             (unsigned long long)g_canvas_draws.load(),
+                             kObjectSet);
+            }
             if (!ui_mvp_logged && !g_track.obj_credit_ui.empty()) {
                 ui_mvp_logged = true;
                 uint32_t persp = 0, ortho = 0, odd = 0, slots = 0;
