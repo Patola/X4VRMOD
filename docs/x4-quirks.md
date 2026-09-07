@@ -10210,6 +10210,79 @@ speed and damping, not the fixed point -- at worst head-look feels sluggish or
 twitchy. `poselag |declared - X4| yaw` read median 0.345 deg / p90 0.805 in take
 267; a large rise there is a gain-model failure, **not** a #83 result.
 
+## TAKE 268 RESULT — the HUD reads, and the price is 2.6x, not 1.44x
+
+    P1 extents            2816x2816, composite 5632x2816          CONFIRMED
+    P2 ui target scales   ui img #65 carries the UI -- 2816x2816   CONFIRMED
+    P3 HUD readable       "I could read the HUD notification panel" CONFIRMED
+    P4 6.05 ms (165 fps)  11.0 ms at matched draws (~91 fps)       REFUTED
+    P5 ROLL_STEREO FAIL   fired, as predicted                      CONFIRMED
+    P6 head-look gain     no failure; see the confound below       NO EFFECT
+
+**P2 is the one that mattered and it holds.** X4 sizes its UI render target
+from the render extent, so resolution does buy HUD pixels. #83's premise was
+never tested before this run and it is now.
+
+**P4's falsifier fired, and it still fires after controlling for the scene.**
+The naive read is contaminated -- take 267 sat parked while 268 flew to a
+station -- but `draws` separates them cleanly, and X4's own draw count is the
+cut the scorer already uses:
+
+    draws=117 (open space)   1408x1408  4.20 ms (238 fps)   [take 267]
+    draws=117 (open space)   2816x2816 ~11.0 ms ( ~91 fps)  [take 268]
+    draws=455-458 (station)  2816x2816  33.4 ms ( 30 fps)   [take 268, unmatched]
+
+**2.6x the time for 4x the pixels**, against the 1.44x that takes 158->159
+measured at fov 2.21. The confound runs the *favourable* way -- 268 dumped
+sparsely (`1800:2:150` vs `600:6:150`), so it had fewer stalls -- which makes
+2.6x a lower bound rather than an overstatement.
+
+**The 33 ms station figure is NOT attributable to resolution.** Take 267 never
+exceeded 117 draws, so there is no 1408x1408 station number to compare against.
+Worth stating because 30 fps is the kind of number that gets quoted: it is
+unmeasured at the other resolution, not measured and blamed. What the run *does*
+say is that X4 is not draw-bound in the ordinary case -- draws of 40, 47 and 117
+all sit at ~11 ms.
+
+**P6 is a non-result, not a pass.** The residual improved (0.115 vs 0.345 deg
+median) but Patola also moved his head less (span 0.144/0.079/0.126 m against
+0.202/0.133/0.175 m), which is enough to explain it on its own. The honest
+statement: the servo did not misbehave at 2816x2816 and nothing suggests a
+gain-model failure. It is not evidence that the gain is resolution-independent.
+
+**A new FAIL that take 267 did not have:** the pose fell back to identity once
+after being driven, with no `view is now external/floating` before it -- one
+frame in 27605. Belongs to #72's family (the gate dropping out), logged here so
+it is not rediscovered as new.
+
+## #84 — BELOW THRESHOLD AT 2816, AND THE INSTRUMENT CANNOT YET SAY MORE
+
+Patola, unprompted and having tried to provoke it: *"flew with the ship and
+tried lots of ships and stations; the brackets were in sync the entire time.
+Tried really hard and having them at the extreme, could see no deviation
+whatsoever, always perfectly centered, both large and small ships, green
+brackets and blue brackets."* On take 267 he found #84 without being asked to
+look, so this is the same observer on the same question.
+
+**Do not record #84 as fixed.** Two scalings survive that report and they have
+different consequences:
+
+    offset constant in PIXELS  -> still 24 px at 2816, but half the ANGLE
+                                  (1.87 deg -> 0.94 deg): invisible, still there
+    offset constant in ANGLE   -> 48 px at 2816, same angle: he would see it
+                                  -- this one is already hard to reconcile
+    offset genuinely zero      -> something about 1408 caused it
+
+**`bracket_pair.py` cannot answer this as it stands.** `W = 1408` is a module
+constant that feeds `K_DISP` and `NEAR_PX`, and `SEARCH_R`, `MAX_OFFSET`,
+`CLUSTER_GAP`, `DEPTH_RX/RY`, `blob_is_near(half=80)` and `VEL_TOL` are all
+lengths in that frame, with `MIN_BLOB/MAX_BLOB` an area that scales as W^2.
+Pointing it at 2816x2816 dumps without re-framing it would be the
+`instrument-assumed-the-frame-it-was-built-on` failure again, on the very
+instrument that took three refutations to stabilise. Re-framing costs no takes
+-- 18 present frames are already in `/tmp/x4vr-t268-*` -- but it is a deliberate
+change, not something to slip in while reporting a different result.
+
 ## #84: DO NOT PROPOSE A FOURTH MECHANISM FOR THE CENTRE BIN
 
 Three hypotheses, three refutations, each costing a full re-measurement:
