@@ -10071,7 +10071,137 @@ capped at 400 paths and the `livesets` walk is gated behind
 `X4VR_DUMP_MATRICES`, which this take already sets — so neither should move the
 perf number. Prediction 4 includes that band precisely so a surprise is visible.
 
-# RESUME HERE AFTER A COMPACT — state as of take 262 (RUN and scored)
+# RESUME HERE AFTER A COMPACT — state as of take 267 (RUN and scored)
+
+Everything below supersedes earlier "read this first" banners. **Where this
+banner and an older section disagree, this banner wins.**
+
+## #76 IS SOLVED. The mechanism is #45 and the fix is #81 + #82.
+
+**X4 lays its UI out against its DEFAULT field (fov=1.0, half-tan 0.75)
+whatever `<fov>` we set, while rendering the world at the field we asked for.**
+An element X4 places at NDC `n` means angle `atan(n*0.75)` but was displayed at
+`atan(n*tan(half_world))` -- pushed outward, and moving `tan(half_world)/0.75`
+as far as the world under any camera rotation. At `X4VR_FOV=1.4917` that is
+**1.904**, and that was the sliding HUD.
+
+Confirmed by prediction, not by fitting after the fact:
+
+                          260 (no fix)  261 (fov 1.0)  262 (fix, full FOV)
+    matched slope             1.40          1.05             1.01
+    well-measured             1.39          1.05             0.99
+    global slope              1.81          1.02             1.05
+
+Take 261 narrowed the FIELD to make the two coincide; take 262 corrected the UI
+instead and got the same result at the full 110 deg.
+
+## THE KNOBS, and their state
+
+    X4VR_UI_FOV=1.0        the field X4 lays its UI out against. UNSET BY
+                           DEFAULT -- unset means no correction, i.e. the
+                           sliding HUD. Set it to get the fix.
+    X4VR_UI_WGATE=0.02     half-width of the "w == 1" test. Default 0.02, and
+                           it only matters when UI_FOV is set.
+    X4VR_UI_WGATE_W1=0     gate polarity. Default (0) scales the PERSPECTIVE
+                           draws, which take 266 established is right. 1
+                           restores take 266's inverted polarity for a bisect.
+
+**`X4VR_UI_FOV` IS STILL OFF BY DEFAULT ON PURPOSE.** The correction works, but
+it costs HUD resolution (#83) and nobody has yet judged that at a shippable
+`X4VR_RES`. Flipping the default is a decision for Patola, not a cleanup.
+
+**REPRODUCTION TRAP:** take 262's command line no longer reproduces take 262,
+because the w-gate now defaults on. Same trap `X4VR_PROJ_INVPROJ` already
+carries -- omitting a variable stopped being the same as setting it to 0 the
+moment the default changed. Set the knobs explicitly.
+
+## THE LAST GOOD COMMAND (take 267)
+
+    X4VR_WATCH_SAY='burst dumps' X4VR_TAKE=267-WGATEP X4VR_CANVAS_M=1.4 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_DECLARE_RENDERED_POS=1 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_RES=1408x1408 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_POSE=0 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_MV_DUMP=/tmp/x4vr-t267 X4VR_UI_DUMP=600:6:150 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take267.log X4VR_WATCH_WANT='ui dump: burst frames' X4VR_MASK_PRESENT=1 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_UI_FOV=1.0 X4VR_UI_WGATE=0.02 X4VR_UI_WGATE_W1=0 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+Cockpit, 4 minutes, brackets visible. The `FAIL X4VR_ROLL_STEREO ... pose
+channel is down` line is EXPECTED in every one of these -- a deliberate knob
+pair, not this run's fault.
+
+## WHAT PATOLA SAW ON 267, and what each part means
+
+* main HUD correctly fixed in the cockpit -- **#81 working**
+* object brackets stable in their positions -- **#82 working**
+* brackets "sheared" at the screen corners -- **he likes it, keep it**, but it
+  is the per-vertex nature of the w-gate (a primitive straddling `w = 1 +- eps`
+  is sheared rather than moved), so it is a known mechanism that WILL act on
+  any menu quad crossing that band.
+* HUD resolution reduced -- **#83**, and his own reframing is the useful one:
+  at 1408x1408 per eye this may be moot, since the correction costs a
+  FRACTION of linear extent and a higher `X4VR_RES` restores the pixels.
+* brackets miss their positions toward the sides -- **#84**, real, ~(-24,-26) px.
+
+## WHAT IS NEXT, in order
+
+1. **#83 first, because it gates #81's default.** Run take 267's command at a
+   higher `X4VR_RES` and ask whether the HUD is readable. If it is, flip
+   `X4VR_UI_FOV=1.0` on by default and #76 closes. Do NOT try to fix
+   readability by magnifying about the screen centre -- magnification and slide
+   are the same parameter, and it would reintroduce #76 exactly.
+2. **#84** is characterised and can wait. Outer bins are clean (sd 3.5-6.9) at
+   ~(-24,-26) px; the centre bin is abandoned, see below.
+3. **#25 / the stereo separation** remains held by Patola's own decision.
+
+## #84: DO NOT PROPOSE A FOURTH MECHANISM FOR THE CENTRE BIN
+
+Three hypotheses, three refutations, each costing a full re-measurement:
+
+    lone-candidate loophole -> centre unchanged (46.52 -> 45.11), -65% pairings
+    absolute brightness floor -> EVERY bin worse (3.5-6.9 -> 55-67)
+    cockpit depth rejection -> centre identical to the digit
+
+Three STRUCTURAL limits are now pinned by tests in `tools/bracket_pair.py`, and
+they are properties of the method rather than bugs:
+
+* co-movement is blind between two objects at infinity (a star and a distant
+  ship share a velocity)
+* brightness cannot both exclude stars and admit a dim ship beside a console
+* a disparity window wide enough to SEARCH is too wide to be LOCAL
+
+Anyone resuming: characterise what those 16 centre pairings actually latch onto
+BEFORE proposing a mechanism. Every attempt so far built the hypothesis and the
+fix in the same step.
+
+## WITHDRAWN TODAY — do not resurrect any of these
+
+* **"the HUD moves 1.7x the scene"**, and with it the multiplicative shape and
+  the chi2 refutation of #75. All three divided by one global "scene motion"
+  over a scene whose parts do not move together. **#75 is UNDECIDED, not
+  refuted.**
+* **take 260's `X4VR_POSE=0` elimination.** The pose channel was uploading
+  IDENTITY in both runs -- "identity until #33 drives it", budget 0.00 -- so the
+  test could only come out one way. The pose subsystem is NOT ruled out.
+* **"the brackets are pinned to the canvas at 1.37 m."** Measured on a window
+  holding 640x more chrome pixels than bracket pixels; the colour split
+  reversed it. Brackets read dx +0, untouched.
+* **"the bracket offset grows toward the sides."** From nearest-blob pairing
+  whose middle bins carried sd ~26 px. Co-movement pairing says mostly CONSTANT.
+* **my predicted #82 split of ~2940/2934.** Measured 1254 perspective / 4788
+  orthographic.
+
+## THE INSTRUMENT RULES THIS SESSION ADDED
+
+* **Drive new layer code on the GPU before spending a take.** Takes 263, 264
+  and 265 were lost to instrument bugs a harness run catches in a second:
+  a publish gated on an unrelated knob, a report that latched a premature zero,
+  and a lock-order inversion the comment above the edit forbade.
+  `tests/run-wgate.sh` is that harness for the w-gate.
+* **A silent instrument must say WHICH way it was silent.** "rejected nothing"
+  and "could not read" are the same output and mean opposite things.
+* **Change ONE thing, and verify a revert actually reverts.** One attempt
+  changed three things, measured the combination, then "reverted" one of them
+  and produced a THIRD configuration that read as new information.
+* **Record the prediction before the run.** It is what turned three centre-bin
+  attempts into clean refutations instead of ambiguous outcomes.
+
+---
+
+# Earlier banner — state as of take 262 (RUN and scored)
 
 ## #81 WORKS AT FULL FIELD OF VIEW — and exposed two follow-ons
 
