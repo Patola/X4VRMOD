@@ -10071,7 +10071,56 @@ capped at 400 paths and the `livesets` walk is gated behind
 `X4VR_DUMP_MATRICES`, which this take already sets — so neither should move the
 perf number. Prediction 4 includes that band precisely so a surprise is visible.
 
-# RESUME HERE AFTER A COMPACT — state as of take 261 (RUN and scored)
+# RESUME HERE AFTER A COMPACT — state as of take 262 (RUN and scored)
+
+## #81 WORKS AT FULL FIELD OF VIEW — and exposed two follow-ons
+
+Take 262 ran `X4VR_UI_FOV=1.0` at the shipping `X4VR_FOV=1.4917`, one variable
+against take 260:
+
+                          260 (no fix, 110)  261 (fov 1.0)  262 (fix, 110)
+    matched slope               1.40             1.05           1.01
+    well-measured subset        1.39             1.05           0.99
+    median over pairs           1.51             1.02           1.02
+    global slope                1.81             1.02           1.05
+    intercept                  -2.9 px          +0.5 px        +1.9 px
+
+**Take 262 achieves at the full 110 deg what take 261 only reached by throwing
+away a quarter of the field.** P262.0 also passed: the log carries
+`ui field: X4VR_UI_FOV=1.0000 ... scaled by 0.5252` BEFORE the canvas variants
+were built, so the scale reached the shaders rather than merely being computed.
+
+**Patola, in the headset:** radar, weapon brackets, direction indicator and
+notification panel all became cockpit-fixed. Two things did not:
+
+* **#82 — the ship/station/portal brackets are now wrong.** They are
+  WORLD-PROJECTED, already in the rendered field, and never needed the
+  correction; scaling them anyway makes them move ~0.53x the world, which is
+  exactly "following my head without being head-locked". **Latent, not new** —
+  the canvas map has always covered every non-procedural module in a UI pass,
+  and was invisible while it was a +-11.3 px translation.
+* **#83 — the HUD lost resolution.** The scale is baked into the VERTEX
+  shaders, so X4 rasterises the UI at half linear size, a quarter of the
+  pixels, with glyph quads sampling the font atlas at half rate.
+
+**DO NOT default `X4VR_UI_FOV` on until #82 is settled** — it trades a sliding
+HUD for wrong object markers, and there are no cosmetic defects in VR.
+
+**The aggregate did NOT catch #82.** hud_tiles reports +1.01 because the chrome
+dominates: brackets are sparse and the tile NCC locks onto contrast. The only
+hints are the per-pair IQR rising 0.07 -> 0.26 and one cell at +0.67 with n=5.
+That is consistent with the mixture, not evidence of it. **The eye saw this and
+the instrument did not.** Note hud_tiles DID call the UI channel a mixture on
+take 260 (IQR 0.56, 26/35 pairs) and that finding was set aside to chase the
+scene — this is what it was.
+
+**Instrument warning:** the smaller UI weakened the measurement — 15 pairs / 60
+tiles against take 260's 33 / 138, because fewer tiles clear `MIN_TILE_PX`.
+Re-derive that constant before reading a quiet result as a null.
+
+---
+
+# Earlier banner — state as of take 261 (RUN and scored)
 
 ## #76 IS SOLVED IN PRINCIPLE — #45 is the mechanism, confirmed by prediction
 
