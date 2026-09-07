@@ -778,6 +778,8 @@ struct Tracking {
     // (set index, range) -> writes seen. An inventory, so "which range is the
     // object block" is answered by the run instead of by a guess.
     std::map<std::pair<uint32_t, VkDeviceSize>, uint32_t> obj_ranges;
+    // Task #82: obj_credit restricted to canvas-mapped draws.
+    std::map<ObjSlot, uint32_t> obj_credit_ui;
 
     uint64_t frame = 0;
     // X4 double-buffers the view arena (two buffers alternate per frame),
@@ -1227,6 +1229,14 @@ std::unordered_map<VkCommandBuffer, VkFramebuffer> g_cb_fb;
 // Which pass the buffer is inside, so a probe capture can name the pass whose
 // end it followed. #103 has two writers and they need not hold the same thing.
 std::unordered_map<VkCommandBuffer, VkRenderPass> g_cb_rp;
+// **Task #82.** Which pipelines actually got a canvas-mapped vertex module,
+// and which command buffer is currently bound to one. Gating the #82
+// instrument on the PIPELINE rather than on (renderPass, subpass) is not a
+// shortcut: vkCmdNextSubpass is not hooked, so there is no per-command-buffer
+// subpass at draw time, and "the draw uses a module we scaled" is the question
+// anyway. Written under g_cb_mu with the rest of the per-cb tracking.
+std::unordered_map<VkPipeline, bool> g_pipe_canvas;
+std::unordered_map<VkCommandBuffer, bool> g_cb_canvas;
 
 // A doubled colour attachment of a masked pass, with the layout that pass
 // leaves it in. Collected at framebuffer creation, where the pass, the views
@@ -1438,6 +1448,20 @@ void credit_draw(VkCommandBuffer cb) {
         if (ob != g_track.obj_bound.end())
             for (const Tracking::ObjSlot &s : ob->second)
                 g_track.obj_credit[s]++;
+        // Task #82: the same slots, credited ONLY when this draw goes through
+        // a pipeline that took a canvas-mapped vertex module. That is the set
+        // #81 scales, so it is the set whose M_worldviewprojection decides
+        // whether a per-draw predicate can separate chrome from world-anchored
+        // markers.
+        bool on_canvas = false;
+        {
+            std::lock_guard<std::mutex> cl(g_cb_mu);
+            auto cc = g_cb_canvas.find(cb);
+            on_canvas = cc != g_cb_canvas.end() && cc->second;
+        }
+        if (on_canvas && ob != g_track.obj_bound.end())
+            for (const Tracking::ObjSlot &s : ob->second)
+                g_track.obj_credit_ui[s]++;
     }
     // Task #67, credited on the SAME draws as `credit` so the two counts are
     // comparable rather than sampled at different moments.
@@ -7020,6 +7044,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
     std::vector<VkGraphicsPipelineCreateInfo> infos;
     std::vector<std::vector<VkPipelineShaderStageCreateInfo>> stages;
     bool any = false;
+    std::vector<bool> took_canvas(count, false);   // task #82
     for (uint32_t i = 0; i < count; i++) {
         if (ci[i].renderPass == VK_NULL_HANDLE ||
             !needs_original(ci[i].renderPass, ci[i].subpass))
@@ -7055,6 +7080,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
                 if (cv != g_variants.canvas.end()) {
                     st.module = cv->second;
                     g_variants.canvas_swapped++;
+                    took_canvas[i] = true;   // task #82
                     continue;
                 }
             }
@@ -7170,6 +7196,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
         for (uint32_t i = 0; i < count; i++)
             if (out[i] != VK_NULL_HANDLE && !pipe_descs[i].empty())
                 g_pipe_desc[out[i]] = pipe_descs[i];
+        {
+            std::lock_guard<std::mutex> lock(g_cb_mu);
+            for (uint32_t i = 0; i < count; i++)
+                if (out[i] != VK_NULL_HANDLE && took_canvas[i])
+                    g_pipe_canvas[out[i]] = true;   // task #82
+        }
     };
 
     if (!any) {
@@ -7571,6 +7603,70 @@ void patch_view_before_submit() {
         }
         if (want_matrices()) {
             static bool obj_logged = false;
+            static bool ui_mvp_logged = false;   // task #82
+            // ---- Task #82: can a per-draw predicate split the HUD? ----
+            //
+            // X4 has ONE ui vertex shader and it positions every vertex by
+            // M_worldviewprojection, a per-draw uniform. So the chrome and the
+            // world-anchored object markers share a module and only the MATRIX
+            // differs -- no per-module predicate can separate them, which is
+            // the #30 warning ("the module cannot decide for itself") landing
+            // exactly. This asks whether the matrix itself can.
+            //
+            // In column-major storage m[11] carries view z into clip w: it is
+            // +-1 for a PERSPECTIVE matrix and 0 for an ORTHOGRAPHIC one. Two
+            // answers, and they mean opposite things:
+            //
+            //   BIMODAL  the markers come through with the camera's
+            //            projection. A one-instruction branch in the patched
+            //            shader can skip them, and #82 is cheap.
+            //   ALL ZERO everything is drawn orthographically at positions X4
+            //            already computed on the CPU. Nothing at draw time
+            //            distinguishes them and #82 needs another approach
+            //            entirely -- do NOT go looking for a predicate that
+            //            this measurement says cannot exist.
+            //
+            // Reported unconditionally when the canvas-credited set is
+            // non-empty, INCLUDING when it is all one mode, because "no split
+            // is possible" is the answer that changes the plan most.
+            if (!ui_mvp_logged && !g_track.obj_credit_ui.empty()) {
+                ui_mvp_logged = true;
+                uint32_t persp = 0, ortho = 0, odd = 0, slots = 0;
+                float wmin = 1e30f, wmax = -1e30f;
+                for (auto &[oslot, on] : g_track.obj_credit_ui) {
+                    float *p = obj_slot_host_ptr(oslot);
+                    if (!p)
+                        continue;
+                    slots++;
+                    const x4vr::Mat4 m =
+                        x4vr::load(p + kObjectMvpMember * 16);
+                    const float w = m.m[11];
+                    wmin = std::fmin(wmin, w);
+                    wmax = std::fmax(wmax, w);
+                    if (std::fabs(std::fabs(w) - 1.0f) < 0.05f)
+                        persp += on;
+                    else if (std::fabs(w) < 0.01f)
+                        ortho += on;
+                    else
+                        odd += on;
+                }
+                X4VR_LOG("ui mvp #82: %u canvas-credited object slot(s); draws "
+                         "by M_worldviewprojection m[11] — PERSPECTIVE(|w|~1) "
+                         "%u, ORTHOGRAPHIC(w~0) %u, neither %u. Range "
+                         "%.4f..%.4f",
+                         slots, persp, ortho, odd, wmin, wmax);
+                if (persp && ortho)
+                    X4VR_LOG("ui mvp #82: BIMODAL — the UI passes carry BOTH "
+                             "kinds, so a per-draw branch on m[11] CAN skip "
+                             "the world-anchored markers and #82 is a shader "
+                             "branch");
+                else
+                    X4VR_LOG("ui mvp #82: SINGLE MODE — every canvas-credited "
+                             "draw is the same kind, so m[11] CANNOT separate "
+                             "chrome from markers and #82 needs a different "
+                             "signal. This is a real answer, not a null: do "
+                             "not go looking for a predicate that is not there");
+            }
             if (!obj_logged && (obj_slots || !g_track.obj_ranges.empty())) {
                 obj_logged = true;
                 // The observed (set, range) inventory. The camera block proves
@@ -10836,6 +10932,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
 VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
                                                 VkPipelineBindPoint bp,
                                                 VkPipeline p) {
+    // Task #82, before anything else so an early return cannot skip it.
+    if (bp == VK_PIPELINE_BIND_POINT_GRAPHICS) {
+        std::lock_guard<std::mutex> lock(g_cb_mu);
+        g_cb_canvas[cb] = g_pipe_canvas.count(p) != 0;
+    }
     // The bind-time record. Keyed on the pass CURRENTLY BEING RECORDED rather
     // than the one the pipeline names, which is the whole difference: those two
     // are the same only when X4 happens not to exercise render-pass
