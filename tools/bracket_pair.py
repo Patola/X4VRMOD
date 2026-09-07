@@ -51,6 +51,19 @@ MAX_OFFSET = 90       # a bracket further than this from any blob is unpaired
 # "whichever candidate happened to be closest", which is the method that failed.
 VEL_MARGIN = 2.5
 VEL_TOL = 6.0         # px/frame; beyond this nothing co-moves with anything
+# **A lone candidate gets margin = infinity below, which is an unconditional
+# pass -- and that IS a check that cannot fail.** --strict-lone holds it to
+# this tolerance instead. OFF by default, and the reason is measured, not
+# assumed: applied ALONE against a baseline confirmed to reproduce 48 pairings
+# exactly, it dropped 31 of them (65% of the data) and left the centre bin's
+# scatter untouched, 46.52 -> 45.11. The prediction on record was that the
+# centre would clean up if lone acceptances were its cause. THEY ARE NOT.
+# Outer-bin values barely moved (-21.79 -> -20.28, -35.47 -> -33.55), so the
+# loophole was not biasing them either -- it costs sample size and buys
+# nothing. Kept as a flag because the rigour is real even where the benefit is
+# not, and so the negative result is not re-derived.
+VEL_TOL_LONE = 1.8
+STRICT_LONE = False
 
 
 def green_clusters(prefix, n, layer=0):
@@ -150,7 +163,11 @@ def pair_frame(ca, sa, cb, sb):
         scored.sort()
         err, sx, sy = scored[0]
         margin = (scored[1][0] - err) if len(scored) > 1 else 1e9
-        if err > VEL_TOL or margin < VEL_MARGIN:
+        if len(scored) == 1 and STRICT_LONE:
+            if err > VEL_TOL_LONE:
+                yield None
+                continue
+        elif err > VEL_TOL or margin < VEL_MARGIN:
             yield None                     # ambiguous: counted, not resolved
             continue
         if abs(bx - sx) > MAX_OFFSET:
@@ -264,8 +281,15 @@ if __name__ == '__main__':
                     help='which eye. Running BOTH and comparing splits a mono '
                          'layout error from a stereo one, which is the first '
                          'question about a constant offset.')
+    ap.add_argument('--strict-lone', action='store_true',
+                    help='hold a LONE candidate to a tight velocity match '
+                         'instead of passing it unconditionally. Measured: '
+                         'costs 65%% of pairings and does NOT clean the centre '
+                         'bin (46.52 -> 45.11).')
     ap.add_argument('--selftest', action='store_true')
     a = ap.parse_args()
+    STRICT_LONE = a.strict_lone
+    globals()['STRICT_LONE'] = a.strict_lone
     if a.selftest:
         sys.exit(selftest())
     if a.lo is None or a.hi is None or not a.burst_log:
