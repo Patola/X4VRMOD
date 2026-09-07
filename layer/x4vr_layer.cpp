@@ -7685,7 +7685,7 @@ void patch_view_before_submit() {
             }
             if (!ui_mvp_logged && !g_track.obj_credit_ui.empty()) {
                 ui_mvp_logged = true;
-                uint32_t persp = 0, ortho = 0, odd = 0, slots = 0;
+                uint32_t persp = 0, ortho = 0, slots = 0;
                 float wmin = 1e30f, wmax = -1e30f;
                 for (auto &[oslot, on] : g_track.obj_credit_ui) {
                     float *p = obj_slot_host_ptr(oslot);
@@ -7694,21 +7694,29 @@ void patch_view_before_submit() {
                     slots++;
                     const x4vr::Mat4 m =
                         x4vr::load(p + kObjectMvpMember * 16);
-                    const float w = m.m[11];
-                    wmin = std::fmin(wmin, w);
-                    wmax = std::fmax(wmax, w);
-                    if (std::fabs(std::fabs(w) - 1.0f) < 0.05f)
+                    // **The whole last ROW, not m[11] alone.** Take 265 used
+                    // m[11] and put 46% of draws in "neither" with a range to
+                    // 190.0: M_worldviewprojection is world x view x
+                    // projection, so the object's own transform scales the
+                    // perspective term and its rotation can move it into m[3]
+                    // or m[7]. A matrix is orthographic iff its last row is
+                    // (0,0,0,w), which is rotation- and scale-invariant.
+                    const float row3 = std::fabs(m.m[3]) + std::fabs(m.m[7]) +
+                                       std::fabs(m.m[11]);
+                    const float w15 = std::fmax(std::fabs(m.m[15]), 1e-6f);
+                    const float rel = row3 / w15;
+                    wmin = std::fmin(wmin, rel);
+                    wmax = std::fmax(wmax, rel);
+                    if (rel > 1e-3f)
                         persp += on;
-                    else if (std::fabs(w) < 0.01f)
-                        ortho += on;
                     else
-                        odd += on;
+                        ortho += on;
                 }
                 X4VR_LOG("ui mvp #82: %u canvas-credited object slot(s); draws "
-                         "by M_worldviewprojection m[11] — PERSPECTIVE(|w|~1) "
-                         "%u, ORTHOGRAPHIC(w~0) %u, neither %u. Range "
-                         "%.4f..%.4f",
-                         slots, persp, ortho, odd, wmin, wmax);
+                         "by |last row|/|m15| of M_worldviewprojection — "
+                         "PERSPECTIVE(>1e-3) %u, ORTHOGRAPHIC(~0) %u. "
+                         "Ratio range %.6f..%.4f%s",
+                         slots, persp, ortho, wmin, wmax, "");
                 if (persp && ortho)
                     X4VR_LOG("ui mvp #82: BIMODAL — the UI passes carry BOTH "
                              "kinds, so a per-draw branch on m[11] CAN skip "
