@@ -10071,7 +10071,48 @@ capped at 400 paths and the `livesets` walk is gated behind
 `X4VR_DUMP_MATRICES`, which this take already sets — so neither should move the
 perf number. Prediction 4 includes that band precisely so a surprise is visible.
 
-# RESUME HERE AFTER A COMPACT — state as of take 260 (RUN and scored)
+# RESUME HERE AFTER A COMPACT — state as of take 261 (RUN and scored)
+
+## #76 IS SOLVED IN PRINCIPLE — #45 is the mechanism, confirmed by prediction
+
+**X4 lays its UI out against its DEFAULT field (fov=1.0, 73.7399 deg, half-tan
+0.75) whatever `<fov>` we set, while rendering the world at the field we asked
+for.** A UI element X4 places at NDC `n` therefore means angle `atan(n*0.75)`
+but is displayed at `atan(n*tan(half_world))` — pushed outward, and moving by
+`tan(half_world)/0.75` as much as the world under any camera rotation. At
+X4VR_FOV=1.4917 that ratio is **1.904**. That is the sliding HUD.
+
+Take 260's field-dependence fit predicted `gain = tan(half_world)/0.75`, a
+function of X4VR_FOV alone, and take 261 ran fov=1.0 to test it:
+
+                              take 260 (1.4917)   take 261 (1.0)   predicted
+    matched slope, n=143            1.40              1.05          1.00+-0.10
+    matched median over pairs       1.51              1.02          ~1.00
+    IQR across pairs                0.32              0.07          small
+    per-cell range (9 cells)     1.21..1.88        1.00..1.12       flat ~1.00
+    global slope (hud_slide)        1.81              1.02          ~1.00
+    intercept                      -2.9 px           +0.5 px        ~0
+
+**The field dependence vanished too**, 1.21..1.88 down to 1.00..1.12 — which is
+what the two-field model requires and what nothing else on the table predicts.
+Corroborated in the same log by an unrelated line: the canvas reads 21.5 px
+against 11.3, the same 1.904. And Patola, in the headset, unprompted: *"for the
+first time the HUD was fixed to the cockpit in a very comfortable/ideal
+distance."*
+
+**RESIDUAL, unexplained:** 1.05 not 1.00, edges 1.07-1.12 against centre
+1.00-1.02, implying a UI field of fov 0.964. Inside the measurement's own IQR
+of 0.07, so possibly nothing. Do not build on it without re-measuring.
+
+**THE FIX IS TASK #81**, in `make_canvas_k`, whose `k[0]/k[5]` scale slots
+already exist and sit at 1.0 on the non-canted path:
+`k[0] = k[5] = 0.75 * sx_screen`. **fov=1.0 is a DIAGNOSTIC, never the fix** —
+it costs ~25% of the headset's field and works only by making the two fields
+coincide.
+
+---
+
+# Earlier banner — state as of take 260 (RUN and scored)
 
 Everything below supersedes earlier "read this first" banners. **Where this
 banner and an older section disagree, this banner wins.**
