@@ -10243,7 +10243,46 @@ translation per 180 ms pair** (12 cm/s) at a typical 30 px scene motion, against
 a logged head span of 0.260 x 0.185 y 0.330 m. Right order, but that is ONE FREE
 PARAMETER FITTED TO ONE NUMBER.
 
-**THE DECISIVE TEST, offline, no take:** correlate the per-pair matched ratio
+## #45 IS THE MECHANISM — the UI is laid out against X4's DEFAULT field
+
+**The FOV sweep cannot be done offline.** All three takes that carry UI dumps
+(258, 259, 260) ran `X4VR_FOV=1.4917`. There is no stored variation to exploit;
+say so rather than manufacture one.
+
+What IS available offline is the FIELD DEPENDENCE of the matched gain, and it
+is sharper. Fitting `log(gain)` on `log(1+x^2)` over the matched map's cells
+with n >= 10:
+
+    beta - 1 = -0.523   ->  beta = 0.48      gain at field 1.0:  G = 1.90
+
+and G is not an arbitrary number:
+
+    tan(55.00 deg)  /  tan(36.87 deg)  =  1.4281 / 0.7500  =  1.904
+    rendered field     X4's DEFAULT fov=1.0        measured G =  1.90
+
+**X4 lays its UI out against its DEFAULT 73.74 deg field while rendering the
+world at the 110 deg we asked for.** That is exactly task #45's suspicion, and
+it agrees with #56's finding that the shadow splits follow `<fov>` while the
+atlas does not — different X4 subsystems honour the knob differently.
+
+The same two-field model predicts the gain FALLS toward the edges, 1.90 at the
+centre tile to 1.25 at the outer tiles, against ~1.33 measured. Sign and order
+right. **It predicts beta = 0.31 where 0.48 was measured, and that gap is NOT
+explained** — the cells carry only n = 12..32 each and the medians are coarse,
+but do not record the model as confirmed.
+
+**THE PREDICTION THIS MAKES, and it is a strong one:** the gain should be
+`tan(half_world) / 0.75`, so it is a function of `X4VR_FOV` alone —
+
+    X4VR_FOV  1.4917 -> gain 1.90     1.2 -> 1.37     1.0 -> 1.00
+
+**At X4VR_FOV=1.0 the slide should VANISH.** A predicted null at a knob we
+already have, and the cheapest possible discriminator: if the HUD still slides
+at fov=1.0 the two-field model is dead. Note #70 parks wide-fov shading defects
+with a floor at 1.3426, so 1.0 is outside the range the project wants to ship —
+this is a DIAGNOSTIC setting, not a candidate fix.
+
+**THE OLDER TEST, now superseded but still valid:** correlate the per-pair matched ratio
 against the HEAD TRANSLATION for that pair, which `X4VR_POSELOG` already
 records. Translation is read from the LOG, not derived from the image, so this
 is not the ratio-against-its-own-denominator trap. Parallax predicts the ratio
