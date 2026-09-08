@@ -10163,17 +10163,37 @@ buy HUD legibility by magnifying about the screen centre** -- magnification and
 slide are the same parameter, so it would reintroduce #76 exactly. Legibility
 is bought with `X4VR_RES`, nothing else.
 
-1. **The menus and the map have never been seen with the correction on.** The
-   w-gate is per-vertex, so a primitive straddling `w = 1 +- 0.02` is SHEARED
-   rather than moved. Patola liked that on the object brackets, but #44 (the
-   map draws dark and blurry) predates the scale and has not been looked at
-   since. This is the largest untested surface of a default that now ships.
-2. **#84** is characterised and unsettled -- see the section below for why take
+**Menus and the map are DONE** (take 269 and 270): no shear, text legible, the
+map gate is clean, and #44 is closed as refuted. The shipping default's
+untested surface is now tested, except the cockpit-fitting and station-building
+menus, which Patola parked because they contain 3D views.
+
+1. **#71 — mouse steering and aiming. THIS IS THE ONE, and #76 closing is what
+   unblocked it.** Patola's own reasoning, recorded long before: *"aiming is
+   guided by HUD markings, so a sliding HUD cannot be aimed through however
+   free the mouse is."* The HUD no longer slides. Real mouse motion still does
+   nothing while head-look is armed, so steering and aiming are dead — which is
+   the difference between a demo and a playable game.
+2. **#78 — measured today, and the fix is a design choice rather than a
+   search.** We zero the declared pose in ONE frame while X4 eases its camera
+   over ~0.9 s; ramping our side down over X4's own ease would remove a
+   disagreement of up to 55 deg. Small, and it can ride along with #71's take
+   instead of costing its own.
+3. **#72 / #73** — the rest of the head-look family, and #73 is structural (a P
+   controller steering through mouse deltas gets worse as the framerate drops).
+4. **#84** is characterised and unsettled -- see the section below for why take
    268 could not settle it and what a take that can must do.
-3. **#25 / the stereo separation** remains held by Patola's own decision.
-4. **A resolution the mod should default to** is now a real question rather
+5. **#25 / the stereo separation** remains held by Patola's own decision, but it
+   now has a concrete number attached: the UI canvas ships at **0.7 m** by
+   default while every take since 243 ran at 1.4 m.
+6. **A resolution the mod should default to** is now a real question rather
    than an abstract one: 2816x2816 measured ~11 ms (91 fps) in open space and
    33 ms (30 fps) at a station. That is #35's guard-band arithmetic, not #76's.
+
+**Walking mode (leaving the cockpit) is deliberately NOT on this list yet.** It
+is a different HUD regime — head-locked out of the seat, cockpit-fixed in it,
+which Patola has had to correct more than once — and it is a new surface for
+every rendering question already open. It gets much cheaper once input works.
 
 ## TAKE 270 RESULT — the map gate is CLEAN, and #78 is measured at last
 
