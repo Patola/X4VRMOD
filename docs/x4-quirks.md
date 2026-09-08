@@ -10175,6 +10175,66 @@ is bought with `X4VR_RES`, nothing else.
    than an abstract one: 2816x2816 measured ~11 ms (91 fps) in open space and
    33 ms (30 fps) at a station. That is #35's guard-band arithmetic, not #76's.
 
+## TAKE 270 RESULT — the map gate is CLEAN, and #78 is measured at last
+
+    P1 instrument repaired   25 M presses, 13 intervals        CONFIRMED
+    P2 HUD gate releases     13 HUD-down intervals             CONFIRMED
+    P3 mouselook relapse     13 of 13 FREE, 12 re-acquires      NO DEFECT
+    P4 map dark before compositing?   NO -- 1.03x the menus     ANSWERED
+    P5 #78                   measured, and the sharp edge is OURS
+
+**P3 is a real pass and take 147's defect is gone.** Every one of the 13
+map-open intervals is free of mouselook, and head tracking re-acquired 12 times
+after. The map can be dragged.
+
+### #78, characterised — and it is not what the task title says
+
+Patola: *"when I open the map, instead of the quad simply appearing, I see a
+very short animation of the cockpit turning ... it takes less than a second,
+maybe .2-.5 second."* Measured per-frame at 11 ms across all 13 opens:
+
+    declared pose zeroed   median    3 ms after the map opens -- ONE FRAME
+    X4's camera settled    median  898 ms  (range 453-1425 ms)
+    head yaw at open       median 28.5 deg, max 55.0 deg
+    => the two disagree for ~895 ms, by up to 55 deg
+
+**The instant edge is ours.** #78 is filed as "X4 recentres the view when the
+map opens"; what actually happens is that WE drop the declared pose to identity
+in a single frame while X4 eases its own camera to centre over ~0.9 s. For that
+window the compositor is reprojecting X4's image by an angle it was not drawn
+with, and the size of the error is simply wherever the player's head was
+pointing. A player looking straight ahead would never see it; Patola saw it
+because he had turned to look at something.
+
+That also explains the standing `pose fell back to identity` FAIL, which grew
+1 -> 15 -> 24 across takes 268/269/270 as map use grew. It is the map.
+
+### P4 — the map is NOT darkened before compositing
+
+Matched on the scaled 27.77% full-screen surface, same resolution and knobs,
+take 270's map against take 269's menus (which Patola calls perfectly legible):
+
+    take 270 MAP     n=42  lum mean 0.0148  p99 0.1871  frac>0.15  1.49%
+    take 269 MENUS   n=34  lum mean 0.0143  p99 0.3037  frac>0.15  1.92%
+    ratio 1.03x mean luminance
+
+So X4 does not draw the map darker than its other menus, and nothing before the
+composite is dimming it. If #44's darkness is still present it lives after this
+point, or it is contrast rather than luminance. **Patola did not report on the
+map's appearance this run**, so that half of #44 is still unanswered.
+
+### Two of my own errors, recorded
+
+* I first correlated the identity-pose episodes against map opens using the
+  `vr pose:` channel and reported "6 of 24 within 2 s". That channel samples
+  every **9.3 s**; the event is 0.2-0.5 s long. It could not have resolved it
+  and the number meant nothing. WITHDRAWN. `poselag` at 11 ms was the right
+  channel and it was in the same log.
+* My first `poselag` regex ended `.*valid=(\d)` — greedy, so it matched
+  `rawvalid=1` and reported `valid=1` for all 31499 samples. The corrected
+  count, 10103, matches what score_run.py had printed on the same file. **The
+  cross-check was available the whole time.**
+
 ## TAKE 270 — the map. PREDICTIONS, WRITTEN BEFORE THE RUN
 
 **Zero knob changes from take 269** — only the take name, log and dump prefix.
