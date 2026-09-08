@@ -10195,6 +10195,63 @@ is a different HUD regime — head-locked out of the seat, cockpit-fixed in it,
 which Patola has had to correct more than once — and it is a new surface for
 every rendering question already open. It gets much cheaper once input works.
 
+## TAKE 271 RESULT — the corner defect is NOT in the UI target, so it is DOWNSTREAM
+
+**P1 confirmed exactly.** `canvas: 0.700 m -> s=0.03201 NDC, 45.1 px on a
+2816-wide eye`, and the UI quad's bbox centre moved to 1453 against a frame
+centre of 1408 — +45 px, the doubled per-eye shift.
+
+**P2, the depth ordering — 0.70 m OVERSHOOTS.** Patola: *"the whole HUD's
+apparent position is something like projected on a slight curved surface 30-40
+cm in front of the two discs of the protagonist's seat. So the cockpit is behind
+it, the instrument at the left is also slightly behind it."* At 1.4 m the HUD
+was behind the cockpit; at 0.7 m it is in front. The answer lies between, and
+the cockpit's own 0.57-1.05 m bulk is the range to bisect in — **later**, for the
+reason below.
+
+### The corner separation is a DIFFERENT DEFECT, and the canvas cannot cause it
+
+*"The eye separation is felt strongly at the start menu text overlay, at the
+corners the eyes don't even fuse ... When I call for the map on the cockpit, the
+separation is imperceptible at the center but very strong at the corner."*
+
+**A canvas at the wrong distance produces a UNIFORM disparity error across a
+flat quad** — the same at the centre as at the corners. Zero-at-centre-
+growing-outward is geometrically a different thing, and "the eyes don't even
+fuse" means VERTICAL disparity, which the canvas has none of.
+
+Measured on take 271's own dumps, tiles from centre to corner across a menu, a
+map and a load screen:
+
+    123 tiles    dx = -90.0 everywhere, sd 0.00    (exactly the 0.70 m value)
+                 dy =  +0.0 everywhere, sd 0.00, |dy| max 0
+
+**The UI render target is perfect.** Uniform horizontal disparity, exactly the
+commanded value, and zero vertical anywhere. So the defect Patola sees **is not
+in anything this project draws** — it is introduced after the UI target.
+
+**What is downstream, and the one that fits:** the eye image is copied
+byte-for-byte into the OpenXR swapchain, so the remaining stage is the runtime's
+own reprojection and lens distortion. The layer logs *"declaring a symmetric
+field of +-55.00 deg per eye ... **The runtime's own views are canted (the FOV
+centre is 15.04 deg out) and it honours ours instead**"*. We hand a symmetric
+image to canted optics. An error from that is **exactly zero on the optical axis
+and grows toward the edges**, differs per eye, and has a vertical component once
+the cant is not purely horizontal — which is the reported symptom, in all three
+of its details.
+
+**That is #35, and #41 is the take already written for it.** Steps 1 and 2
+(#39, #40) are done and have never been tested together.
+
+**A limit to state plainly: no dump can see this.** Everything this project can
+capture is upstream of the runtime's warp, so the corner defect is invisible to
+every offline tool here, and its absence in the dumps is not evidence against
+it. That is why three takes of canvas tuning never touched it.
+
+**Consequence for the depth question: do NOT bisect the canvas distance yet.**
+Depth judgement through an image whose corners will not fuse is unreliable, so
+the distance should be settled after the warp, not before.
+
 ## TAKE 271 — the canvas at 0.70 m. PREDICTIONS, WRITTEN BEFORE THE RUN
 
 **One variable.** `X4VR_CANVAS_M` 1.4 -> 0.7, the shipping default. The dump
