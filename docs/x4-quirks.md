@@ -10195,6 +10195,39 @@ is a different HUD regime — head-locked out of the seat, cockpit-fixed in it,
 which Patola has had to correct more than once — and it is a new surface for
 every rendering question already open. It gets much cheaper once input works.
 
+## TAKE 271 — the canvas at 0.70 m. PREDICTIONS, WRITTEN BEFORE THE RUN
+
+**One variable.** `X4VR_CANVAS_M` 1.4 -> 0.7, the shipping default. The dump
+spec is left byte-identical to take 270 on purpose: changing it "harmlessly"
+for disk reasons is what broke take 268.
+
+    X4VR_WATCH_SAY='burst dumps' X4VR_TAKE=271-CANVAS07 X4VR_CANVAS_M=0.7 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=0 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_MV_DUMP=/tmp/x4vr-t271 X4VR_UI_DUMP=600:6:150 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take271.log X4VR_WATCH_WANT='ui dump: burst frames' X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+**P1 — arithmetic, checkable in the first second of the log.** The canvas line
+must read `canvas 0.700 m -> s=0.03202 NDC ... 45.1 px on a 2816-wide eye`, so
+**90.2 px of total UI disparity against the cockpit's measured 89 px median.**
+Within ~1%. If the log says anything else the knob did not take.
+
+**P2 — the judgement, and it is WITHIN-frame, not across runs.** Does the HUD
+sit ON the console surface, float in FRONT of it, or float BEHIND it? Compared
+with the console *in the same view*, not with a memory of take 270. That is the
+comparison Patola's eye is reliable for.
+
+**P3 — a real risk, stated before rather than after.** 0.70 m is near the usual
+VR comfort floor for sustained convergence. If it reads as correctly placed but
+uncomfortable, the finding is that **X4's cockpit itself sits uncomfortably
+close**, which is a world-scale question and NOT an argument for putting the
+HUD back at the wrong depth.
+
+**PARALLAX CANNOT BE USED AS THE TEST, so it is not asked for.** #74: head
+translation never reaches X4's rendering. The compositor reprojects HUD and
+cockpit together, so leaning produces no differential motion between them and
+would prove nothing either way.
+
+**What this take cannot settle:** the cockpit spans 0.32..1.4 m, so a single
+distance is a compromise wherever it is put. 0.70 m is the best single value
+available; matching per-element depth is #57.
+
 ## THE HUD's "odd stereo separation" — measured, and it opens a CONTRADICTION
 
 Patola has reported this unprompted three times (takes 267, 268, 269), which
