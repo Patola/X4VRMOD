@@ -10209,6 +10209,38 @@ because he had turned to look at something.
 That also explains the standing `pose fell back to identity` FAIL, which grew
 1 -> 15 -> 24 across takes 268/269/270 as map use grew. It is the map.
 
+### #44 IS CLOSED — refuted on both channels, and I should never have defended it
+
+Patola, asked the categorical questions: *"Map text is legible. The map seems
+perfectly tinted, not dark or blurry. Only the cockpit behind it is blurry.
+What is the exit smear? ... if that's it, it was immediate."*
+
+    filed as                          measured / observed
+    "renders as a dark overlay"       1.03x the menus' luminance; not dark
+    "blurry"                          the MAP is sharp; the COCKPIT BEHIND it
+                                      is blurred -- X4's own menu backdrop
+    "1-2 s smear on exit"             immediate; the reporter does not
+                                      recognise the description
+
+**Where that description came from: nowhere.** Every occurrence of "the map
+draws dark and blurry with a 1-2 s smear on exit" in this file was written by
+ME, today, in the take 269 and 270 specifications. `git log -S` finds no
+earlier source. There is no recorded observation, no take, no dump — only the
+task title, which I repeated until it read like evidence, elaborated into two
+separate questions ("dark" AND "blurry"), and then used to instruct Patola
+**not** to judge whether it had got worse. I protected a claim that had nothing
+underneath it.
+
+*Why it matters beyond one task:* an issue title is a hypothesis somebody typed
+once. This file's own rule is that predictions are committed BEFORE the
+measurement and wrong turns are never edited away — a title that was never
+tested is neither. **Before designing a take around an existing task, grep for
+the observation that created it.** Two takes carried caution about a defect
+that no evidence in this repository ever described.
+
+The blurred cockpit behind the map is X4's deliberate backdrop treatment for an
+open menu, present in the flat game. Not a defect, and not a new task.
+
 ### P4 — the map is NOT darkened before compositing
 
 Matched on the scaled 27.77% full-screen surface, same resolution and knobs,
