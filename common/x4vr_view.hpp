@@ -1131,6 +1131,23 @@ inline float ui_half_tan_of_fov(float ui_fov) {
     return std::tan(x4_half_for_fov(ui_fov));
 }
 
+// X4VR_UI_FOV's value, resolved from the raw environment string.
+//
+// **ON by default since take 268 — this is where #76's default lives.** A
+// literal in the layer could not be tested, and a default that moves under a
+// stored command line has now bitten this project twice (X4VR_PROJ_INVPROJ,
+// then the w-gate). Keeping it in a pure function means the semantics are
+// pinned by tests/view_math.cpp rather than by a comment.
+//
+//   unset / empty  -> 1.0, X4's own default field: the correction is ON
+//   "0" / negative -> 0.0, which ui_half_tan_of_fov() reports as OFF
+//   anything else  -> that value, for trying take 261's 0.964 residual
+inline float ui_fov_from_env(const char *env_value) {
+    if (!env_value || !*env_value)
+        return 1.0f;
+    return (float)atof(env_value);
+}
+
 inline void format_mat(char *buf, size_t n, const Mat4 &a) {
     snprintf(buf, n,
              "[%8.3f %8.3f %8.3f %8.3f | %8.3f %8.3f %8.3f %8.3f | "

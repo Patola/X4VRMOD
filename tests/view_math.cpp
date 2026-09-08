@@ -944,6 +944,24 @@ int main() {
                     check(k[0] == 1.0f && k[5] == 1.0f,
                           "#81 a negative ui_half_tan is OFF, not a mirror");
 
+                    // 1b. THE DEFAULT ITSELF. #76 shipped on at take 268, and
+                    //     a default that moves under a stored command line has
+                    //     already cost this project two runs. Unset must mean
+                    //     ON; only an explicit non-positive value turns it off.
+                    check(x4vr::ui_fov_from_env(nullptr) == 1.0f,
+                          "#76 unset X4VR_UI_FOV defaults to 1.0 — ON");
+                    check(x4vr::ui_fov_from_env("") == 1.0f,
+                          "#76 empty X4VR_UI_FOV defaults to 1.0 — ON");
+                    check(x4vr::ui_half_tan_of_fov(
+                              x4vr::ui_fov_from_env(nullptr)) > 0.74f,
+                          "#76 the default resolves to X4's 0.75 half-tan");
+                    check(x4vr::ui_half_tan_of_fov(
+                              x4vr::ui_fov_from_env("0")) == 0.0f,
+                          "#76 X4VR_UI_FOV=0 is the OFF switch");
+                    check(std::fabs(x4vr::ui_fov_from_env("0.964") - 0.964f)
+                              < 1e-6f,
+                          "#76 an explicit fov still passes through");
+
                     // 2. The angular round-trip, across the fields we might
                     //    ship and the ones we have measured. A point X4 draws
                     //    at NDC n must subtend atan(n * ui_half_tan).

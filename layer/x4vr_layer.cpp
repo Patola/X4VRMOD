@@ -5323,12 +5323,28 @@ VkResult create_shader_module_inner(
                 // atan(n*0.75) and slides tan(half_world)/0.75 as far as the
                 // world -- 1.904x at X4VR_FOV=1.4917, which is #76.
                 //
-                // OFF by default: take 261 confirmed the mechanism but nobody
-                // has yet SEEN the corrected HUD, and the correction roughly
-                // halves its linear size at 1.4917. Correct and readable are
-                // different questions and only Patola can answer the second.
+                // **ON by default since take 268; #76 is CLOSED.** It was off
+                // while "correct" and "readable" were still separate open
+                // questions -- the scale roughly halves the HUD's linear size,
+                // and take 262 left Patola unable to read the notification
+                // panel at 1408x1408. Take 268 answered it: at 2816x2816 the
+                // HUD reads, and the runtime asks for 3096x3243 per eye
+                // anyway, so no real session runs where the correction costs
+                // legibility. 1408 was only ever the development size.
+                //
+                // Flipping this changes TWO FLOATS -- k[0] and k[5] of a matrix
+                // that is built and uploaded either way. It does not change
+                // which modules are patched, which draws are gated, or the
+                // instruction count: ui_wgate_eps() defaults to 0.02
+                // independently of this knob, so the w-gate is emitted and its
+                // per-vertex branch runs in both settings.
+                //
+                // **X4VR_UI_FOV=0 turns it OFF** and restores the sliding HUD
+                // for a bisect. Omitting the variable NO LONGER does that --
+                // the same trap X4VR_PROJ_INVPROJ already carries, and the
+                // second time a default has moved under a stored command line.
                 const char *uf = getenv("X4VR_UI_FOV");
-                const float ui_fov = uf && *uf ? (float)atof(uf) : 0.0f;
+                const float ui_fov = x4vr::ui_fov_from_env(uf);
                 const float ui_ht = x4vr::ui_half_tan_of_fov(ui_fov);
                 x4vr::make_canvas_k(oa.on ? oa.eye[0] : x4vr::OffAxis{}, sx_s,
                                     sy_s, dl, z, K_canvas, ui_ht);
@@ -5378,11 +5394,14 @@ VkResult create_shader_module_inner(
                              ui_ht, half * 57.2957795130823f, K_canvas[0],
                              1.0f / (ui_ht * sx_s));
                 else
-                    X4VR_LOG("ui field: X4VR_UI_FOV unset — the UI keeps X4's "
-                             "screen NDC unscaled, which take 261 showed makes "
-                             "it move %.3fx the world at this field (#45/#76). "
-                             "Set X4VR_UI_FOV=1.0 to correct it.",
-                             1.0f / (0.75f * sx_s));
+                    X4VR_LOG("ui field: X4VR_UI_FOV=\"%s\" is not positive, so "
+                             "#76's correction is EXPLICITLY DISABLED for this "
+                             "run and the UI keeps X4's screen NDC unscaled — "
+                             "it will move %.3fx the world at this field "
+                             "(#45/#76). This is NOT the default any more; "
+                             "something in this run's environment turned it "
+                             "off.",
+                             uf ? uf : "", 1.0f / (0.75f * sx_s));
             }
         }
         if (have_k)

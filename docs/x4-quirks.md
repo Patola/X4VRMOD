@@ -10071,12 +10071,12 @@ capped at 400 paths and the `livesets` walk is gated behind
 `X4VR_DUMP_MATRICES`, which this take already sets — so neither should move the
 perf number. Prediction 4 includes that band precisely so a surprise is visible.
 
-# RESUME HERE AFTER A COMPACT — state as of take 267 (RUN and scored)
+# RESUME HERE AFTER A COMPACT — state as of take 268 (RUN, scored, #76 CLOSED)
 
 Everything below supersedes earlier "read this first" banners. **Where this
 banner and an older section disagree, this banner wins.**
 
-## #76 IS SOLVED. The mechanism is #45 and the fix is #81 + #82.
+## #76 IS CLOSED. The mechanism is #45 and the fix is #81 + #82.
 
 **X4 lays its UI out against its DEFAULT field (fov=1.0, half-tan 0.75)
 whatever `<fov>` we set, while rendering the world at the field we asked for.**
@@ -10097,23 +10097,42 @@ instead and got the same result at the full 110 deg.
 
 ## THE KNOBS, and their state
 
-    X4VR_UI_FOV=1.0        the field X4 lays its UI out against. UNSET BY
-                           DEFAULT -- unset means no correction, i.e. the
-                           sliding HUD. Set it to get the fix.
+    X4VR_UI_FOV=1.0        the field X4 lays its UI out against. **ON BY
+                           DEFAULT since take 268.** Set it to 0 to turn the
+                           correction OFF and get the sliding HUD back for a
+                           bisect; omitting it no longer does that.
     X4VR_UI_WGATE=0.02     half-width of the "w == 1" test. Default 0.02, and
-                           it only matters when UI_FOV is set.
+                           it only matters when UI_FOV is non-zero.
     X4VR_UI_WGATE_W1=0     gate polarity. Default (0) scales the PERSPECTIVE
                            draws, which take 266 established is right. 1
                            restores take 266's inverted polarity for a bisect.
 
-**`X4VR_UI_FOV` IS STILL OFF BY DEFAULT ON PURPOSE.** The correction works, but
-it costs HUD resolution (#83) and nobody has yet judged that at a shippable
-`X4VR_RES`. Flipping the default is a decision for Patola, not a cleanup.
+**Flipping the default changed TWO FLOATS.** `k[0]` and `k[5]` of a matrix that
+is built and uploaded either way; `make_canvas_k` skips one branch when the
+scale is off. It does NOT change which modules are patched, which draws are
+gated, the instruction count, or any allocation -- `ui_wgate_eps()` defaults to
+0.02 *independently* of `X4VR_UI_FOV`, so the w-gate is emitted and its
+per-vertex branch runs in both settings. There is no performance difference
+between the two defaults, which is why the decision was purely about gameplay.
 
-**REPRODUCTION TRAP:** take 262's command line no longer reproduces take 262,
-because the w-gate now defaults on. Same trap `X4VR_PROJ_INVPROJ` already
-carries -- omitting a variable stopped being the same as setting it to 0 the
-moment the default changed. Set the knobs explicitly.
+The default now lives in `x4vr::ui_fov_from_env()` in `common/x4vr_view.hpp`,
+not as a literal in the layer, **so it is pinned by tests** (`view_math`: unset
+-> 1.0, empty -> 1.0, resolves to the 0.75 half-tan, `=0` is the off switch, an
+explicit fov still passes through). A literal could not be tested, and a
+default moving under a stored command line has now cost this project twice.
+
+**REPRODUCTION TRAP, now with two entries.** Omitting a variable stopped being
+the same as setting it to 0 the moment each default moved:
+
+    X4VR_UI_WGATE   defaulted on at take 267 -> take 262's line no longer
+                    reproduces take 262
+    X4VR_UI_FOV     defaults on at take 268 -> EVERY command line stored in
+                    this file from takes 260-266 now behaves differently,
+                    because they were written when unset meant OFF
+
+Set the knobs explicitly in anything you intend to reproduce. The layer's log
+line states the value actually applied on both branches, so a run can always be
+told apart from its predecessor afterwards.
 
 ## THE LAST GOOD COMMAND (take 267)
 
@@ -10138,14 +10157,23 @@ pair, not this run's fault.
 
 ## WHAT IS NEXT, in order
 
-1. **#83 first, because it gates #81's default.** Run take 267's command at a
-   higher `X4VR_RES` and ask whether the HUD is readable. If it is, flip
-   `X4VR_UI_FOV=1.0` on by default and #76 closes. Do NOT try to fix
-   readability by magnifying about the screen centre -- magnification and slide
-   are the same parameter, and it would reintroduce #76 exactly.
-2. **#84** is characterised and can wait. Outer bins are clean (sd 3.5-6.9) at
-   ~(-24,-26) px; the centre bin is abandoned, see below.
+**#83 and #76 are both DONE.** Take 268 answered the readability question and
+the default is flipped. The standing warning survives closure: **never try to
+buy HUD legibility by magnifying about the screen centre** -- magnification and
+slide are the same parameter, so it would reintroduce #76 exactly. Legibility
+is bought with `X4VR_RES`, nothing else.
+
+1. **The menus and the map have never been seen with the correction on.** The
+   w-gate is per-vertex, so a primitive straddling `w = 1 +- 0.02` is SHEARED
+   rather than moved. Patola liked that on the object brackets, but #44 (the
+   map draws dark and blurry) predates the scale and has not been looked at
+   since. This is the largest untested surface of a default that now ships.
+2. **#84** is characterised and unsettled -- see the section below for why take
+   268 could not settle it and what a take that can must do.
 3. **#25 / the stereo separation** remains held by Patola's own decision.
+4. **A resolution the mod should default to** is now a real question rather
+   than an abstract one: 2816x2816 measured ~11 ms (91 fps) in open space and
+   33 ms (30 fps) at a station. That is #35's guard-band arithmetic, not #76's.
 
 ## TAKE 268 — #83's resolution call. PREDICTIONS, WRITTEN BEFORE THE RUN
 
