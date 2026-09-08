@@ -10175,6 +10175,66 @@ is bought with `X4VR_RES`, nothing else.
    than an abstract one: 2816x2816 measured ~11 ms (91 fps) in open space and
    33 ms (30 fps) at a station. That is #35's guard-band arithmetic, not #76's.
 
+## TAKE 269 RESULT — menus are SCALED, P2 refuted, and the map verdict is void
+
+    P1 cockpit HUD holds       "nothing slid against the cockpit"      CONFIRMED
+    P2 menus are untouched     they are SCALED, 0.527 of the frame     REFUTED
+    P3 #44 not judged as worse observer kept to categorical answers    HELD
+    P4 shear needs a straddle  "nothing sheared into a wedge"          CONFIRMED
+    map gate                   VOID — my key instrument went blind
+
+**P2 was wrong about the mechanism and right about nothing.** Menus do NOT take
+the orthographic path. Measured straight off the UI dumps, 24 frames identical
+to the pixel:
+
+    bbox x 689..2172, y 666..2149 -> 1483 x 1483 in a 2816 frame
+    coverage 27.77%   and   0.527^2 = 27.77%
+
+A full-screen quad scaled by 0.5252 produces exactly that, so the menus go
+through the PERSPECTIVE branch and receive #81's scale. The two-population
+model of #82 is not the whole story: the split is not "HUD vs markers", it is
+whatever X4 chose to draw with a perspective matrix, and menus are in it.
+
+**The outcome is nevertheless the one we want, which is a separate finding from
+the mechanism being wrong.** Patola, unprompted: *"I like the new positioning
+of the HUD overlay a lot, it also makes the start menu much clearer and
+unobtrusive to the 3D scenario around."* Text perfectly legible, nothing
+sheared, nothing sliding. A full-screen menu stretched across 110 deg would
+need head movement to read its corners; at 0.5252 it subtends the 73.74 deg
+Egosoft laid it out for. **Do not "fix" this.**
+
+**The menus are placed correctly in stereo**, measured on both layers:
+
+    L0 centre +22.5 px   L1 centre -22.5 px   disparity 45.0 px
+    widths 1483 / 1483 -- identical, so no per-eye scale error
+    z = K/|dx| = 63.1/45.0 = 1.40 m == X4VR_CANVAS_M exactly
+
+**NOT scaled, and correctly so:** the solid black loading curtain fills the
+whole frame (100% coverage, x 0..2815). A curtain shrunk to the middle 52% would
+show the scene around it, which is exactly what a curtain is for preventing.
+
+**`map NOT EXERCISED` IS MY INSTRUMENT FAILING, NOT THE MAP.** Patola pressed M
+to enter and to leave. `note_key_event()` caps real key events at
+`seen_other >= 40`, and take 269 logged exactly 40: **27 of them `repeat=1`
+auto-repeats of two held keys (x and z), across only 3 distinct scancodes.** The
+budget was spent at t=165242 against a log ending at 165485, so the instrument
+was blind for the last **243 seconds** — the whole map-and-menus part of the
+run. Take 122 hit this with OUR key repeating and the fix split the budget
+ours/theirs; it never stopped ONE key eating the share meant for the others.
+Auto-repeats no longer charge the budget, and the cap is 200. **Takes 268 and
+269 both logged exactly 40, so both map verdicts are void, not negative.**
+
+**Deliberately not covered, at Patola's choice:** the cockpit-fitting and
+station-building menus, which contain 3D views and are their own case.
+
+**A default that does not match any take we have run.** `ui_canvas_m()` returns
+**0.7 m** when unset, but every take since 243 has passed
+`X4VR_CANVAS_M=1.4`. So the shipping default puts the UI at half the distance
+we have ever judged, at 90 px of disparity instead of 45. Patola's *"I could
+still see some eye separation issues"* is about the 1.4 m we tested; nobody has
+looked at 0.7 m since the canvas moved. That is #25's question and it is now a
+concrete one.
+
 ## TAKE 269 — menus and the map, the shipping default's untested surface
 
 PREDICTIONS, WRITTEN BEFORE THE RUN. One knob changed from take 268: the dump

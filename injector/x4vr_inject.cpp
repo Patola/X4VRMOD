@@ -1492,13 +1492,29 @@ void note_key_event(const Sdl3KeyEvent *k, const char *via, int action) {
         break;
     }
 
+    // **An auto-repeat carries no information, and it crowded out the subject
+    // AGAIN.** Take 122's fix split this budget by ours/theirs so our own
+    // repeating key could not spend it all. Take 269 shows that was half the
+    // problem: 27 of the 40 events were `repeat=1` from two REAL held keys (x
+    // and z), the budget ran out 243 s before the log ended, and every M and
+    // Esc press Patola made fell in that blind window. score_run then reported
+    // "map NOT EXERCISED" for a run whose map was exercised twice — an
+    // instrument's silence read as the subject's absence.
+    //
+    // A held key's first DOWN (repeat=0) and its UP are still logged, so
+    // nothing that identifies a press is lost.
+    if (!ours && k->repeat)
+        return;
     static int seen_ours = 0, seen_other = 0;
     if (ours) {
         if (seen_ours >= 3)
             return;
         seen_ours++;
     } else {
-        if (seen_other >= 40)
+        // 40 was sized for the two-minute takes of #33's bring-up. Sessions
+        // now run six minutes through several menus; the cap exists to stop a
+        // flood, not to ration a whole run.
+        if (seen_other >= 200)
             return;
         seen_other++;
     }
