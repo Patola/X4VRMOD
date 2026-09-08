@@ -10195,6 +10195,59 @@ is a different HUD regime — head-locked out of the seat, cockpit-fixed in it,
 which Patola has had to correct more than once — and it is a new surface for
 every rendering question already open. It gets much cheaper once input works.
 
+## THE HUD's "odd stereo separation" — measured, and it opens a CONTRADICTION
+
+Patola has reported this unprompted three times (takes 267, 268, 269), which
+outranks any tooling here. Measured offline from take 270's dumps, no take
+spent.
+
+**The UI canvas is exactly where we put it.** Positive control, same code path,
+correlating the UI layers against each other: **45.0 px -> 1.40 m**, against a
+truth of `K/1.40 = 45.1 px` with `K = sx*ipd*(W/2) = 63.1` at 2816. The
+instrument is calibrated on these very images.
+
+**An artifact caught before it was reported.** The first pass masked the UI out
+with `np.where(~ui, lum, 0)` and correlated what was left. That leaves HOLES
+SHAPED LIKE THE UI, offset by the UI's own disparity, so the correlation locks
+onto the mask: 13 of 16 sites returned exactly -45/-46 px, the UI's value. Re-run
+on windows containing **zero UI pixels in either eye**, only 3 of 62 read 45+-1.
+The mask was the measurement.
+
+**Clean cockpit windows, away from the HUD:**
+
+    disparity px   p10 54   p25 68   median 89   p75 97   p90 102
+    depth      m   p10 0.62 p25 0.65 median 0.71 p75 0.92 p90 1.17
+
+**This contradicts the tree by a factor of two, and it is NOT resolved.**
+`tools/scene_depth.py` states that *"the cockpit was independently placed at
+1.40 m by sbs_depth (calibration free, within-frame ratio), so cockpit tiles
+MUST read ~-23 px"* — 23 px at 1408 is **46 px at 2816**, and I measure 89.
+`X4VR_CANVAS_M=1.4` was chosen to match that 1.40 m, which is why every take
+since 243 has carried it.
+
+**Do not act on either number.** Three disagreeing measurements mean the
+instrument is wrong; two disagreeing by exactly 2x mean it even louder. Two
+readings survive and they need different responses:
+
+* **Both right, different surfaces.** My windows have zero UI, so they are by
+  construction where the HUD ISN'T — the periphery: canopy frame and side
+  structures, genuinely nearer than the dashboard. Then the cockpit spans at
+  least 0.62..1.40 m, **no single flat canvas can match it**, and that is #57,
+  not a knob.
+* **My instrument doubles.** A repeating cockpit texture with a period near the
+  disparity can put NCC on the wrong peak. The control rules this out for the
+  UI, which is smooth; it does not rule it out for cockpit panelling.
+
+**The discriminator, and it costs no take:** map the disparity SPATIALLY over
+the frame instead of taking a median. Real geometry gives a coherent
+picture — centre one value, periphery another, with structure. An instrument
+error gives a scatter, or a bimodal 45/89 split with nothing in between.
+
+**Also worth noting either way:** `ui_canvas_m()` defaults to **0.7 m**, which
+is within 2% of my measured median. If my number is the right one, the shipping
+default was correct all along and every take since 243 has run at twice the
+right distance.
+
 ## TAKE 270 RESULT — the map gate is CLEAN, and #78 is measured at last
 
     P1 instrument repaired   25 M presses, 13 intervals        CONFIRMED
