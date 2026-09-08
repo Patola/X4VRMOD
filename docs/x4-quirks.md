@@ -10195,6 +10195,85 @@ is a different HUD regime — head-locked out of the seat, cockpit-fixed in it,
 which Patola has had to correct more than once — and it is a new surface for
 every rendering question already open. It gets much cheaper once input works.
 
+## #41 RE-SPECIFIED — the old spec would burn a take on a race it documents as unwinnable
+
+**What #35's two finished steps actually do**, since the titles do not say:
+
+* **#39 (step 1) — undo the affine in the deferred reconstruction.** X4 rebuilds
+  world position from depth through `M_invprojection`. Once an off-axis affine
+  is applied to the projection, that reconstruction reads along the wrong ray
+  and every deferred consumer — lighting, shadows, fog — is wrong by the cant.
+  #39 gives ~226 modules a per-eye inverse with the affine undone.
+* **#40 (step 2) — screen-space UI in the DECLARED frame.** The world took the
+  canted affine while screen-locked content stayed in X4's symmetric frame, so
+  the two disagreed. #40 puts screen-space UI on the per-pass canvas in the
+  declared frame — the same canvas #30 built and #81/#82 now scale and gate.
+* Already proven separately: **piece 1**, the affine is emitted by both live-sx
+  vertex patches per view (takes 164a/b/c, tagged `stage15-offaxis-emission`);
+  **piece 2**, one latched frustum pair feeds both the shader coefficients and
+  `XrCompositionLayerProjectionView::fov` (take 165b).
+
+**The spec at "#41 — the take" is STALE in two decisive ways, and I nearly
+handed it over as written:**
+
+1. **Its run B uses `X4VR_OFFAXIS=runtime`, which this same file records as
+   unwinnable.** *"Four takes were lost to one race, and it is not winnable ...
+   **Use explicit angles.** Task #47 is the real fix."* The coefficients bake at
+   `vkCreateShaderModule`, X4 compiles that ~1 ms after creating its device, and
+   the runtime needs ~8 ms from cold. Running B as written buys a fifth loss.
+2. **"No `X4VR_CANVAS_M`. Infinity is the state that ships"** — no longer true.
+   `ui_canvas_m()` returns **0.7 m** when unset, so omitting it now names a
+   finite canvas. The premise the run was designed around is gone.
+
+Also superseded by events: it asks for 4224x4224 per eye, which take 160 priced
+at 20.75 ms/48 fps, and takes 166b-170 already ran past it. **The cant itself is
+confirmed working from inside** (169b, Patola one eye at a time) and must not be
+re-filed as a defect.
+
+### The corrected #41 — explicit angles, modern knobs, one variable
+
+The frusta are a property of the headset, so they can be named. Take 271's own
+log corroborates the stored values: eye0 `40-(-54) = 94 deg` horizontal and
+`44-(-55) = 99 deg` vertical, against its `runtime wants 94.0 x 99.0 deg per
+eye`. Same Quest 3, same optics.
+
+**A — control.** Take 271 exactly, with the affine stated OFF rather than left
+to lose the race:
+
+    X4VR_WATCH_SAY='burst dumps' X4VR_TAKE=272A-OACTRL X4VR_OFFAXIS=off X4VR_CANVAS_M=0.7 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=0 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_MV_DUMP=/tmp/x4vr-t272a X4VR_UI_DUMP=600:6:150 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_PROJ_INVPROJ=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take272a.log X4VR_WATCH_WANT='ui dump: burst frames' X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+**B — the test.** Identical but for the affine, named explicitly so no latch
+race exists:
+
+    X4VR_WATCH_SAY='burst dumps' X4VR_TAKE=272B-OACANT X4VR_OFFAXIS=-54,40,44,-55 X4VR_CANVAS_M=0.7 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=0 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_MV_DUMP=/tmp/x4vr-t272b X4VR_UI_DUMP=600:6:150 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_PROJ_INVPROJ=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take272b.log X4VR_WATCH_WANT='ui dump: burst frames' X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+`X4VR_CANVAS_M=0.7` is stated in BOTH so the canvas is not a second variable,
+and `X4VR_PROJ_INVPROJ=1` is stated for the reason the old spec gave and which
+has since bitten twice more.
+
+#### Predicted, before the run
+
+**P1 — B must latch, and its own log says so in the first second.** `offaxis:`
+naming eye0 `l=-54.00 r=40.00 u=44.00 d=-55.00` and eye1 mirrored, `canvas: ...
+CANTED`, and `invproj final: off-axis affine UNDONE in the deferred
+reconstruction`. A `canvas final: 0 variant(s)` or a missing `offaxis:` line
+means it did not take, and **zero is the failure that looks like success**.
+
+**P2 — A must reproduce take 271** to the digit on the UI: `dx = -90.0`
+uniform, `dy = 0`. If the control moved, #39/#40 are not inert when unasked and
+that is the finding.
+
+**P3 — the corner fusion is Patola's call and only his.** No dump can see this
+stage. The question is exactly: *do the corners of the start menu and the map
+fuse in B where they did not in A?* Not "is it better" — fuse or not fuse.
+
+**P4 — a real risk, named now.** Canting the render creates MONOCULAR WINGS:
+each eye sees ~14 deg the other cannot. Take 169b already produced this and
+Patola read it correctly as the frusta working. **Content in a wing cannot fuse
+because there is nothing to fuse it with**, so if the corner problem MOVES
+outward rather than disappearing, that is the wing and not a failure — and it
+is the argument for #43's reduced render extent.
+
 ## TAKE 271 RESULT — the corner defect is NOT in the UI target, so it is DOWNSTREAM
 
 **P1 confirmed exactly.** `canvas: 0.700 m -> s=0.03201 NDC, 45.1 px on a
