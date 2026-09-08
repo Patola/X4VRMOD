@@ -10175,6 +10175,46 @@ is bought with `X4VR_RES`, nothing else.
    than an abstract one: 2816x2816 measured ~11 ms (91 fps) in open space and
    33 ms (30 fps) at a station. That is #35's guard-band arithmetic, not #76's.
 
+## TAKE 270 — the map. PREDICTIONS, WRITTEN BEFORE THE RUN
+
+**Zero knob changes from take 269** — only the take name, log and dump prefix.
+The thing that changed is the INJECTOR: auto-repeats no longer eat the key
+budget, so the M presses will be visible this time. Verified before the run
+that the other two map-gate signals already fire: take 269's log holds 7 `HUD
+is now` and 8 `relative mouse mode` lines. Only the M anchor was missing.
+
+    X4VR_WATCH_SAY='burst dumps' X4VR_TAKE=270-MAP X4VR_CANVAS_M=1.4 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=0 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_MV_DUMP=/tmp/x4vr-t270 X4VR_UI_DUMP=600:6:150 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take270.log X4VR_WATCH_WANT='ui dump: burst frames' X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+**P1 -- the instrument first, and if this fails nothing else counts.** The
+`map` line must report **8 or more M presses** paired into intervals. A repeat
+of `NOT EXERCISED` means the injector fix did not take, and the run says
+nothing about the map either way.
+
+**P2 -- the HUD gate releases on every map open.** Take 269 already produced 7
+releases; with the M anchors present they should pair into intervals.
+
+**P3 -- mouselook relapse is the genuinely open question.** Take 147 could not
+drag the map because X4 re-entered relative mouse mode inside the map. No
+prediction is offered: this is what the run is for, and a guess here would just
+be something to defend afterwards.
+
+**P4 -- #44's darkness gets a free discriminator, from the dumps.** The UI
+dumps are the UI-ONLY target, before compositing. So:
+
+    map content dark IN THE DUMP     -> X4 draws it that way, upstream
+    map content normal in the dump   -> our composite darkens it, ours to fix
+
+That question has never been asked and it costs nothing. It also splits "dark"
+from "blurry", which have been one word since #44 was written.
+
+**P5 -- #78, view recentring.** With the head held still across an open/close
+cycle, any yaw change in X4's camera is X4's doing. `camread` and `poselag`
+record it, so this is measured rather than remembered -- which is why the
+protocol asks for a still head on the first three cycles.
+
+**Deliberately still not covered:** the cockpit-fitting and station-building
+menus, at Patola's choice — they contain 3D views and are their own case.
+
 ## TAKE 269 RESULT — menus are SCALED, P2 refuted, and the map verdict is void
 
     P1 cockpit HUD holds       "nothing slid against the cockpit"      CONFIRMED
