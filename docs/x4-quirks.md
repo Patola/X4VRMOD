@@ -10175,6 +10175,54 @@ is bought with `X4VR_RES`, nothing else.
    than an abstract one: 2816x2816 measured ~11 ms (91 fps) in open space and
    33 ms (30 fps) at a station. That is #35's guard-band arithmetic, not #76's.
 
+## TAKE 269 — menus and the map, the shipping default's untested surface
+
+PREDICTIONS, WRITTEN BEFORE THE RUN. One knob changed from take 268: the dump
+spec goes back to `600:6:150`, so bursts land inside a held-open screen and a
+6-frame burst can span the 1-2 s exit smear. `X4VR_UI_FOV=1.0` is stated
+explicitly even though it is now the default, so this command still means the
+same thing after the next default moves.
+
+    X4VR_WATCH_SAY='burst dumps' X4VR_TAKE=269-MENUS X4VR_CANVAS_M=1.4 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=0 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_MV_DUMP=/tmp/x4vr-t269 X4VR_UI_DUMP=600:6:150 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOG=/tmp/x4vr-take269.log X4VR_WATCH_WANT='ui dump: burst frames' X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+**The instrument is the UI dump, not the #82 report.** `ui mvp #82` latches
+ONCE (`ui_mvp_logged`), so it fires in the cockpit and says nothing about menu
+draws -- the same once-flag shape that cost take 264. Making it re-report per
+surface is a layer change and would need the harness first, so it is not in
+this take. The dumps answer the question categorically instead: a full-screen
+menu either fills the frame or sits inside the middle 52.5% of it, and nobody
+needs a reference to tell those apart.
+
+**P1 -- regression, and it must hold.** The cockpit HUD stays fixed to the
+cockpit exactly as in take 268. If this fails, nothing else in the run counts.
+
+**P2 -- menus are ORTHOGRAPHIC, so the w-gate should leave them ALONE.** They
+are full-screen 2D overlays, the same population as the object markers, which
+means `w == 1` and `t == 0` and no scale. **So menus should look exactly as
+they did before #81 existed -- unshrunk, filling the frame.** If they come back
+shrunk to ~52%, they are perspective, the two-population model is incomplete,
+and #82 needs a third case. This is the prediction most likely to be wrong and
+it is the reason for the run.
+
+**P3 -- #44 is expected and is NOT news.** The map drew dark and blurry with a
+1-2 s smear on exit long before the scale existed. **Do not ask whether it is
+worse** -- that is a magnitude against memory, and Patola's eye is not the
+instrument for it. The answerable questions are categorical: is anything
+SHEARED into a wedge, is text legible at 2816, does anything slide against the
+cockpit that should not.
+
+**P4 -- shear needs a straddle.** A primitive is sheared only when its vertices
+sit on both sides of `w = 1 +- 0.02`. A pure orthographic quad (all w == 1) and
+a pure perspective one (all w >> 1) are each gated as a unit and come out
+clean. So shear should appear only where X4 draws something at roughly ONE
+METRE of view depth. Patola already saw it on the corner brackets in take 267
+and liked it, which means those vertices do straddle -- so the mechanism is
+live, and menus are worth checking for it specifically.
+
+**If P2 fails, the follow-up is an A/B, not a fix.** Re-run this command with
+`X4VR_UI_FOV=0` and compare the same screens. That separates "our scale did it"
+from "it was always like that" without either of us judging a magnitude.
+
 ## TAKE 268 — #83's resolution call. PREDICTIONS, WRITTEN BEFORE THE RUN
 
 One variable: **2816x2816 per eye instead of 1408x1408**, 4x the pixels. Every
