@@ -10071,10 +10071,83 @@ capped at 400 paths and the `livesets` walk is gated behind
 `X4VR_DUMP_MATRICES`, which this take already sets — so neither should move the
 perf number. Prediction 4 includes that band precisely so a surprise is visible.
 
-# RESUME HERE AFTER A COMPACT — state as of take 268 (RUN, scored, #76 CLOSED)
+# RESUME HERE AFTER A COMPACT — state as of take 271, next is take 272 A/B
 
 Everything below supersedes earlier "read this first" banners. **Where this
 banner and an older section disagree, this banner wins.**
+
+## THE IMMEDIATE NEXT ACTION
+
+**Take 272 A then B, both specified verbatim under "#41 RE-SPECIFIED" below**,
+with their predictions. A first, scored, THEN B — 2.4 GB each against 4.8 GB
+free in /tmp, so back-to-back runs the second out of disk.
+
+**The question B answers is binary and only Patola can answer it:** at the
+corners of the start menu and the map, **do the eyes fuse in B where they did
+not in A?** Not "better". Fuse or not.
+
+**Score B's log FIRST for `offaxis:` naming eye0 l=-54.00 r=40.00 u=44.00
+d=-55.00 and a non-zero `canvas final: N variant(s)`.** Zero variants or a
+missing `offaxis:` line means the affine never took and the run says nothing —
+that is the failure that looks like success.
+
+**Expect monocular wings in B and do NOT read them as a failure.** Canting
+gives each eye ~14 deg the other cannot see; take 169b already produced this and
+Patola read it correctly. If the corner trouble MOVES OUTWARD instead of
+vanishing, that is the wing working, and it is the argument for #43.
+
+## CLOSED TODAY, with tags
+
+* **#76 CLOSED**, tagged `v0.76-ui-field`. `X4VR_UI_FOV` now defaults **ON**
+  (`=0` disables; omitting no longer does). The default lives in
+  `x4vr::ui_fov_from_env()` and is pinned by `view_math`.
+* **#83 ANSWERED.** The HUD reads at 2816x2816. Price, matched on draws=117:
+  4.20 ms at 1408 -> ~11.0 ms at 2816, and 33 ms at a station. **Legibility is
+  bought with `X4VR_RES` and never by magnifying about the screen centre.**
+* **#44 CLOSED — REFUTED.** Map legible, correctly tinted, sharp; only X4's own
+  menu backdrop blurs; no exit smear. Its whole description traced back to the
+  task title, written by me, never observed.
+* **The map gate is clean**: 13 of 13 intervals free of mouselook. Take 147's
+  defect is gone.
+
+## MEASURED TODAY, still open
+
+* **#78 — the sharp edge is OURS.** We drop the declared pose to identity in
+  ONE frame (median 3 ms) while X4 eases its camera to centre over median
+  898 ms; they disagree for ~895 ms by up to **55 deg**. Fix is a design choice:
+  ramp our side down over X4's ease. Explains the identity-pose FAIL growing
+  1 -> 15 -> 24 with map use.
+* **The cockpit SPANS 0.32..1.4 m plus the canopy at infinity**, bulk
+  0.57-1.05 m. It is not at one depth, so **no single flat canvas is right** —
+  that is #57. The tree's "cockpit is at 1.40 m" was an uncontrolled instrument
+  (identical HUD/cockpit pairs, the mask-artifact signature; the note that it
+  "still owes a control" was dropped when the number was requoted).
+* **Canvas distance: 1.4 m puts the HUD BEHIND the cockpit, 0.7 m puts it in
+  FRONT.** The answer is between — **but do not bisect it yet**, because depth
+  judgement through non-fusing corners is unreliable.
+* **The corner non-fusion is DOWNSTREAM of everything we can dump.** Take 271's
+  UI target measures `dx = -90.0` uniform (sd 0.00) and `dy = 0` (sd 0.00) over
+  123 tiles centre-to-corner. **No dump can see the defect** — every capture is
+  upstream of the runtime's warp — so its absence from our tools is not evidence
+  against it. This is why three takes of canvas tuning never touched it.
+* **#71 is STRUCTURAL, not a bug.** MOUSELOOK is the only channel that holds an
+  absolute camera angle and holding it IS how X4 suspends ship control; the
+  directional states spring home (take 154); 1931 FFI cdefs and both C->Lua
+  bridges expose `GetCameraRotation` and **no setter**. But **arrow keys work
+  under MOUSELOOK** — only the *mouse* is suspended, because it is the shared
+  resource. Likely answer is a control scheme (stick to fly, head to look);
+  the cheap untested question is whether joystick/gamepad steering survives.
+
+## INSTRUMENTS REPAIRED TODAY
+
+* `note_key_event` capped real keys at 40 and auto-repeats ate 27 of them, so
+  takes 268 and 269 went blind for their last 243 s. **Both map verdicts in
+  those takes are VOID, not negative.** Repeats no longer charge; cap is 200.
+* `bracket_pair.py` now reads its frame from the data (`reframe()`), verified a
+  bit-exact no-op at 1408 (47 pairings, all bins to the digit), and
+  `pairing_is_local()` refuses when the frame-to-frame search exceeds 3x the
+  offset being measured. Take 268 could not settle #84 because I shrank its
+  burst for DISK and took the pair spacing from 178 ms to 1216 ms.
 
 ## #76 IS CLOSED. The mechanism is #45 and the fix is #81 + #82.
 
