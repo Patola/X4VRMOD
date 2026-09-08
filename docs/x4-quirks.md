@@ -10218,7 +10218,56 @@ The mask was the measurement.
     disparity px   p10 54   p25 68   median 89   p75 97   p90 102
     depth      m   p10 0.62 p25 0.65 median 0.71 p75 0.92 p90 1.17
 
-**This contradicts the tree by a factor of two, and it is NOT resolved.**
+### RESOLVED by the spatial map: the geometry is real and 1.40 m was the artifact
+
+Two frames, 512 px windows on a 10x10 grid, UI-free cells only. Frames 54 and
+55 reproduce nearly cell-for-cell, and the picture is a **cockpit**:
+
+               0     1     2     3     4     5     6     7     8     9
+      y0     118    83    92    92   100   102    95    98   100   107   <- canopy frame, NEAR
+      y1     118    98    64     0    98    93     0     0    90   107
+      y2       0     0    72     0     U     U     0    68    79    44   <- 0 = through the
+      y3       0     0     0     0     U     U     0    65    78     0      canopy, infinity
+      y4       0     0     U     U     U     U     U     U     U     0
+      y5      32     0     U     U     U     U     U     U     U    43
+      y6      80    68     U     U     U     U     U     U     U    70
+      y7      88    93     U     U     U     U     U    44    54    70
+      y8      88    96     U     U     U     U     U    46    54    69
+      y9     200   200    57    60    67    49    74    80    67     1   <- lower console,
+                                                                            saturating
+**Zeros through the canopy where space is, large values around the frame where
+the structure is.** That is geometry. An NCC picking wrong peaks gives scatter,
+and a two-peak instrument gives a bimodal 45/89 split; the histogram is neither
+— it is broad and continuous from 35 to 130 px with 36 windows at infinity.
+
+    35-50 px (1.26-1.80 m)   8      70- 80 px (0.79-0.90 m)  15
+    50-60 px (1.05-1.26 m)   8      80- 90 px (0.70-0.79 m)   9
+    60-70 px (0.90-1.05 m)  14      90-100 px (0.63-0.70 m)  21
+
+**So the cockpit is not AT a depth, it SPANS one:** under 0.32 m at the lower
+console (saturating the +-200 px search, so nearer than the instrument can
+read) out to ~1.4 m on the right side, plus the canopy at infinity. **1.40 m is
+the far end of that range, not its middle**, and the bulk sits at 0.57-1.05 m.
+
+**Therefore no single flat canvas distance is correct — that is #57, not a
+knob.** And of the two candidates, the shipping default of 0.7 m is near the
+median of visible structure while the 1.4 m every take has used is at the
+extreme.
+
+### Where the 1.40 m came from — an uncontrolled instrument, flagged and then quoted anyway
+
+The tree's own record of `sbs_depth`: *"many frames agreed exactly (-24/-24,
+-26/-26, -34/-34). **It still owes a control before it is quoted as settled.**"*
+HUD and cockpit returning identical values pair after pair is the mask-artifact
+signature, and the missing control is exactly the one I ran today. Two pages
+later it is quoted as *"`sbs_depth`'s independent 1.000 ratio"*, and
+`tools/scene_depth.py:16` hardens it into *"cockpit tiles MUST read ~-23 px"* —
+an assumption compiled into a tool. `X4VR_CANVAS_M=1.4` rests on that chain.
+
+**A caveat that survives:** windows reading 200 px are at the search limit, so
+anything nearer than 0.32 m is unmeasured, not absent.
+
+### The superseded reading, kept because the wrong turn is the record
 `tools/scene_depth.py` states that *"the cockpit was independently placed at
 1.40 m by sbs_depth (calibration free, within-frame ratio), so cockpit tiles
 MUST read ~-23 px"* — 23 px at 1408 is **46 px at 2816**, and I measure 89.
