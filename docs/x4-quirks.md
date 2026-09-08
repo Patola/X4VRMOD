@@ -10209,9 +10209,30 @@ must read `canvas 0.700 m -> s=0.03202 NDC ... 45.1 px on a 2816-wide eye`, so
 Within ~1%. If the log says anything else the knob did not take.
 
 **P2 — the judgement, and it is WITHIN-frame, not across runs.** Does the HUD
-sit ON the console surface, float in FRONT of it, or float BEHIND it? Compared
-with the console *in the same view*, not with a memory of take 270. That is the
+sit ON the cockpit surface, float in FRONT of it, or float BEHIND it? Compared
+with the cockpit *in the same view*, not with a memory of take 270. That is the
 comparison Patola's eye is reliable for.
+
+**NAME THE ELEMENTS, because "the console" was wrong.** Patola asked which
+surface to compare against, and the first answer named the radar — which #30
+already measured as **world geometry projected onto the dashboard**, i.e. part
+of the cockpit. Comparing our canvas against the radar would have compared the
+cockpit with itself. Rendering the UI mask over a take-270 cockpit frame settles
+what is ours:
+
+    ON OUR CANVAS      reticle cluster at centre; two curved brackets flanking
+                       it; the bar list on the right; a small bar bottom-left;
+                       the rounded square at bottom-centre
+    COCKPIT, NOT OURS  the left-hand instrument panel with the red lights, the
+                       blue radar arc bottom-left, the canopy struts, the white
+                       structure on the right
+
+**And the dashboard is not one depth either**, from the same spatial map: the
+bottom-LEFT corner saturates the +-200 px search (nearer than **0.32 m**) while
+the bottom-CENTRE reads 49-80 px (**0.79-1.29 m**). So the rounded square at
+bottom-centre should land close at 0.70 m, while anything over that near left
+corner will still read as too far. That is the #57 compromise made visible, and
+it is the reason to ask WHICH element rather than "the HUD".
 
 **P3 — a real risk, stated before rather than after.** 0.70 m is near the usual
 VR comfort floor for sustained convergence. If it reads as correctly placed but
