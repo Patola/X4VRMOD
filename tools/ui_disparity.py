@@ -163,14 +163,108 @@ def ncc_shift(a, b, rx, ry):
     return bxy[0], bxy[1], best, best - max(second, -1.0)
 
 
-def tiles(mask, n, min_px):
+def tiles(mask, n, min_px, box=True):
+    """Split `mask` into n x n tiles, yielding those carrying enough UI.
+
+    **`box` tiles the UI's bounding box, not the image, and that is the whole
+    point.** #81 shrinks the UI to roughly the middle half of the eye image, so
+    an image-tiled 4x4 grid puts the UI's own corners INSIDE the four central
+    tiles and averages them against its centre. Every "per-tile dx" this file
+    printed before that flag existed was tiled over the image, which is why
+    take 271 could report `spread 0.0 px` while Patola was watching the corners
+    of that same UI fail to fuse: the corners were never a tile.
+
+    The eccentricity the player feels is eccentricity WITHIN THE UI. Tile the
+    UI.
+    """
     h, w = mask.shape
+    y_lo, y_hi, x_lo, x_hi = 0, h, 0, w
+    if box:
+        ys, xs = np.where(mask > 0)
+        if ys.size == 0:
+            return
+        y_lo, y_hi = int(ys.min()), int(ys.max()) + 1
+        x_lo, x_hi = int(xs.min()), int(xs.max()) + 1
+    bh, bw = y_hi - y_lo, x_hi - x_lo
     for ty in range(n):
         for tx in range(n):
-            y0, y1 = ty * h // n, (ty + 1) * h // n
-            x0, x1 = tx * w // n, (tx + 1) * w // n
+            y0, y1 = y_lo + ty * bh // n, y_lo + (ty + 1) * bh // n
+            x0, x1 = x_lo + tx * bw // n, x_lo + (tx + 1) * bw // n
             if (mask[y0:y1, x0:x1] > 0).sum() >= min_px:
                 yield (tx, ty, y0, y1, x0, x1)
+
+
+def report_per_tile(per_tile, n):
+    """Per-tile dx BY POSITION, then pooled — never pooled alone.
+
+    **A pooled median cannot say where its tiles were.** The line this replaces
+    printed `per-tile dx over 123 tile measurement(s) ... spread 0.0 px` and was
+    quoted into the RESUME banner as "uniform, sd 0.00, over 123 tiles
+    centre-to-corner". The tool never measured a corner and had no way to say
+    so: tiles with too little UI are silently dropped, so a grid that only ever
+    resolved its middle reports perfect agreement. Agreement among the tiles you
+    kept is not agreement across the field.
+
+    So: print the grid with a '.' wherever no tile was measured, and print dx
+    against eccentricity. The '.'s are the finding when there are any.
+    """
+    if not per_tile:
+        return None
+    import collections
+    cell = collections.defaultdict(list)
+    for tx, ty, dx, _dy in per_tile:
+        cell[(tx, ty)].append(dx)
+    t = np.array([p[2] for p in per_tile], dtype=float)
+    spread = float(np.percentile(t, 90) - np.percentile(t, 10))
+
+    print(f'\n  per-tile dx by POSITION over the UI\'s own bounding box '
+          f'({n}x{n}, "." = never measured):')
+    for ty in range(n):
+        row = []
+        for tx in range(n):
+            v = cell.get((tx, ty))
+            row.append(f'{np.median(v):+6.1f}' if v else '     .')
+        print('   ' + ' '.join(row))
+
+    # Eccentricity: distance of the tile centre from the grid centre, in tile
+    # units, so it does not depend on the box's pixel size or aspect.
+    c = (n - 1) / 2.0
+    ecc, val = [], []
+    for (tx, ty), v in cell.items():
+        ecc.append(((tx - c) ** 2 + (ty - c) ** 2) ** 0.5)
+        val.append(np.median(v))
+    ecc, val = np.array(ecc), np.array(val)
+    inner, outer = ecc <= np.median(ecc), ecc > np.median(ecc)
+    out = {'gradient': None, 'missing': n * n - len(cell), 'cells': len(cell)}
+    if inner.sum() and outer.sum():
+        out['gradient'] = float(np.median(val[outer]) - np.median(val[inner]))
+    print(f'\n  per-tile dx pooled: median {np.median(t):+.1f}  '
+          f'p10 {np.percentile(t,10):+.1f}  p90 {np.percentile(t,90):+.1f}  '
+          f'spread {spread:.1f} px over {len(t)} measurement(s)')
+    if inner.sum() and outer.sum():
+        di = float(np.median(val[outer]) - np.median(val[inner]))
+        print(f'  centre {np.median(val[inner]):+.1f} px vs edge '
+              f'{np.median(val[outer]):+.1f} px  =>  {di:+.1f} px of GRADIENT '
+              f'from centre to edge')
+        # Branch on the number. A line printed whatever the value is says
+        # nothing -- take 253's "the UI is not placed as one" fired under a
+        # 1.0 px spread that CONFIRMED the flat canvas.
+        if abs(di) > 3.0:
+            print(f'  a flat canvas has the SAME disparity everywhere, so '
+                  f'{abs(di):.1f} px of centre-to-edge gradient means the UI is '
+                  f'NOT a flat canvas — and a gradient is exactly the shape '
+                  f'that fuses at the centre and fails at the corners.')
+        else:
+            print(f'  a flat canvas has the SAME disparity everywhere, and '
+                  f'{abs(di):.1f} px of centre-to-edge gradient is that: within '
+                  f'the tiles measured, the UI IS one flat canvas.')
+    else:
+        print('  only one eccentricity ring was measurable — this run says '
+              'NOTHING about centre versus corner.')
+    if out['missing']:
+        print(f'  {out["missing"]} of {n*n} cells never reached --min-px and '
+              f'are unmeasured. They are not evidence of agreement.')
+    return out
 
 
 def mask_window(mask, rx, ry):
@@ -367,7 +461,7 @@ def run_ui_mode(fs, a):
         # Per tile on the UI dump itself. A flat canvas has the SAME disparity
         # everywhere, so a spread across tiles IS the defect -- and a
         # whole-frame correlation averages exactly that away.
-        for (tx, ty, y0, y1, x0, x1) in tiles(m['mask0'], a.tiles, a.min_px):
+        for (tx, ty, y0, y1, x0, x1) in tiles(m['mask0'], a.tiles, a.min_px, not a.tile_image):
             rt = ncc_shift(m['ua'][y0:y1, x0:x1], m['ub'][y0:y1, x0:x1],
                            a.range_x, a.range_y)
             if rt is not None and rt[3] >= a.min_margin:
@@ -437,26 +531,7 @@ def run_ui_mode(fs, a):
     if abs(np.median(ay)) > 1.0:
         print(f'\n  VERTICAL disparity {np.median(ay):+.1f} px — the eyes are '
               f'asked to diverge vertically, which does not fuse. That is #52.')
-    if per_tile:
-        t = np.array([p[2] for p in per_tile], dtype=float)
-        spread = float(np.percentile(t, 90) - np.percentile(t, 10))
-        print(f'\n  per-tile dx over {len(t)} tile measurement(s): '
-              f'median {np.median(t):+.1f}  p10 {np.percentile(t,10):+.1f}  '
-              f'p90 {np.percentile(t,90):+.1f}  spread {spread:.1f} px')
-        # **Only complain when there is something to complain about.** This
-        # line used to fire unconditionally -- it announced "the UI is not
-        # being placed as one" under a spread of 1.0 px, which is the flat
-        # canvas being CONFIRMED. A verdict printed whatever the number says
-        # nothing, and in a long report it reads as a finding.
-        if spread > 3.0:
-            print(f'  a flat canvas has the SAME disparity everywhere, so '
-                  f'{spread:.1f} px of spread means the UI is NOT being placed '
-                  f'as one. Check the per-frame lines first: a couple of frames '
-                  f'from a different scene can produce this on their own.')
-        else:
-            print(f'  a flat canvas has the SAME disparity everywhere, and '
-                  f'{spread:.1f} px is that: the tiles agree, so the UI IS '
-                  f'being placed as a single flat canvas.')
+    report_per_tile(per_tile, a.tiles)
     return 0
 
 
@@ -611,6 +686,70 @@ def selftest(a):
           'returned None' if me is None else f'returned {me.get("A")}')
     _cleanup(d, pre)
 
+    # ---- the per-tile report, in the configuration it is actually used in ---
+    #
+    # **Two of these assert that the statistic can express the answer I want to
+    # RULE OUT.** A gradient detector that only ever reads ~0 passes every flat
+    # case ever written and would have agreed with take 271's "uniform,
+    # sd 0.00" for the same reason the old one did. So the eccentric case is
+    # built first and must come back non-zero and correctly signed.
+    import io as _io
+    import contextlib as _ctx
+
+    def _grid(fn, n=4):
+        """Synthetic per-tile list: dx = fn(eccentricity in tile units)."""
+        c = (n - 1) / 2.0
+        return [(tx, ty, fn(((tx - c) ** 2 + (ty - c) ** 2) ** 0.5), 0)
+                for ty in range(n) for tx in range(n)]
+
+    def _quiet(pt, n=4):
+        with _ctx.redirect_stdout(_io.StringIO()):
+            return report_per_tile(pt, n)
+
+    flat = _quiet(_grid(lambda e: -90))
+    check('per-tile: a flat canvas reports NO gradient',
+          flat is not None and abs(flat['gradient']) < 0.5,
+          f'gradient {flat["gradient"]:+.1f} px on a uniform -90 grid')
+
+    # A per-eye SCALE about the centre -- zero disparity at the middle, growing
+    # outward. This is the exact shape that fuses at the centre and fails at the
+    # corners, and it is what the pooled median was blind to.
+    #
+    # The expected value is DERIVED, not guessed. On a 4x4 grid the tile
+    # eccentricities are 0.707 (x4), 1.581 (x8) and 2.121 (x4); the median is
+    # 1.581, so `inner` is the first twelve and `outer` the four corners, and
+    # their median eccentricities are 1.581 and 2.121. A -k*e ramp must
+    # therefore report -k*(2.121-1.581) = -0.540*k. Guessing "< -8" here failed
+    # a correct instrument, which is the same arithmetic-free constant that
+    # cost takes 257 and 258.
+    K = 12.0
+    want = -K * (2.1213 - 1.5811)
+    ramp = _quiet(_grid(lambda e: -90 - K * e))
+    check('per-tile: an eccentric ramp IS reported, signed, and past the verdict',
+          ramp is not None and abs(ramp['gradient'] - want) < 0.2
+          and abs(ramp['gradient']) > 3.0,
+          f'gradient {ramp["gradient"]:+.1f} px on a -90-{K:.0f}e grid '
+          f'(derived {want:+.1f}, and past the 3.0 px verdict threshold)')
+
+    # And the failure that actually happened: a grid whose outer ring was never
+    # measured must NOT read as agreement.
+    partial = _quiet([t for t in _grid(lambda e: -90) if t[0] in (1, 2)
+                      and t[1] in (1, 2)])
+    check('per-tile: unmeasured cells are counted, not assumed to agree',
+          partial is not None and partial['missing'] == 12,
+          f'{partial["missing"]} of 16 cells reported unmeasured')
+
+    # tiles(): the box must follow the UI, because #81 shrinks the UI to the
+    # middle of the eye image and an image-tiled grid then has no outer ring.
+    m = np.zeros((400, 400), dtype=bool)
+    m[150:250, 150:250] = True
+    n_box = len(list(tiles(m, 4, 1, box=True)))
+    n_img = len(list(tiles(m, 4, 1, box=False)))
+    check('tiles: the box follows the UI; the image grid loses its outer ring',
+          n_box == 16 and n_img < 16,
+          f'box {n_box}/16 cells, image {n_img}/16 — the image grid is what '
+          f'every per-tile number before take 272 was measured on')
+
     if fails:
         print(f'\n{fails} case(s) FAILED')
         return 1
@@ -626,6 +765,11 @@ def main():
     ap.add_argument('--range-x', type=int, default=60)
     ap.add_argument('--range-y', type=int, default=16)
     ap.add_argument('--tiles', type=int, default=4)
+    ap.add_argument('--tile-image', action='store_true',
+                    help='tile the whole eye image instead of the UI\'s '
+                         'bounding box — reproduces every per-tile number '
+                         'printed before take 272, which could not resolve the '
+                         'UI\'s own corners at all')
     ap.add_argument('--min-px', type=int, default=400,
                     help='UI pixels a tile needs before it is measured')
     ap.add_argument('--max-frames', type=int, default=40)
@@ -707,7 +851,7 @@ def main():
         rc = ncc_shift(c0['cockpit'], c1['cockpit'], a.range_x, a.range_y)
         if rc is not None and rc[3] >= 0.02:
             ck_dx.append(rc[0])
-        for (tx, ty, y0, y1, x0, x1) in tiles(h0, a.tiles, a.min_px):
+        for (tx, ty, y0, y1, x0, x1) in tiles(h0, a.tiles, a.min_px, not a.tile_image):
             rt = ncc_shift(h0[y0:y1, x0:x1], h1[y0:y1, x0:x1],
                            a.range_x, a.range_y)
             if rt is not None and rt[3] >= 0.02:
@@ -737,26 +881,7 @@ def main():
     if abs(np.median(uy)) > 1.0:
         print(f'  VERTICAL disparity {np.median(uy):+.1f} px — the eyes are '
               f'asked to diverge vertically, which does not fuse. That is #52.')
-    if per_tile:
-        t = np.array([(p[2]) for p in per_tile], dtype=float)
-        spread = float(np.percentile(t, 90) - np.percentile(t, 10))
-        print(f'\n  per-tile dx over {len(t)} tile measurement(s): '
-              f'median {np.median(t):+.1f}  p10 {np.percentile(t,10):+.1f}  '
-              f'p90 {np.percentile(t,90):+.1f}  spread {spread:.1f} px')
-        # **Only complain when there is something to complain about.** This
-        # line used to fire unconditionally -- it announced "the UI is not
-        # being placed as one" under a spread of 1.0 px, which is the flat
-        # canvas being CONFIRMED. A verdict printed whatever the number says
-        # nothing, and in a long report it reads as a finding.
-        if spread > 3.0:
-            print(f'  a flat canvas has the SAME disparity everywhere, so '
-                  f'{spread:.1f} px of spread means the UI is NOT being placed '
-                  f'as one. Check the per-frame lines first: a couple of frames '
-                  f'from a different scene can produce this on their own.')
-        else:
-            print(f'  a flat canvas has the SAME disparity everywhere, and '
-                  f'{spread:.1f} px is that: the tiles agree, so the UI IS '
-                  f'being placed as a single flat canvas.')
+    report_per_tile(per_tile, a.tiles)
     return 0
 
 

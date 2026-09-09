@@ -10125,11 +10125,25 @@ vanishing, that is the wing working, and it is the argument for #43.
 * **Canvas distance: 1.4 m puts the HUD BEHIND the cockpit, 0.7 m puts it in
   FRONT.** The answer is between — **but do not bisect it yet**, because depth
   judgement through non-fusing corners is unreliable.
-* **The corner non-fusion is DOWNSTREAM of everything we can dump.** Take 271's
-  UI target measures `dx = -90.0` uniform (sd 0.00) and `dy = 0` (sd 0.00) over
-  123 tiles centre-to-corner. **No dump can see the defect** — every capture is
-  upstream of the runtime's warp — so its absence from our tools is not evidence
-  against it. This is why three takes of canvas tuning never touched it.
+* **WITHDRAWN at take 272: "the corner non-fusion is downstream of everything
+  we can dump".** It rested on take 271's `dx = -90.0` uniform, sd 0.00, which
+  I quoted as "over 123 tiles centre-to-corner". **It was not centre-to-corner
+  and could not have been.** `ui_disparity.py` tiled the whole 2816x2816 eye
+  image while #81 shrinks the UI to roughly the middle half of it, so the UI's
+  own corners sat INSIDE the four central cells and were averaged against its
+  centre. The tool then silently dropped every cell holding too little UI and
+  reported perfect agreement among the ones it kept. `--selftest` now pins the
+  geometry: a UI covering the middle quarter yields **4 of 16 cells** under
+  image tiling and 16 of 16 over its own bounding box.
+  So the sd 0.00 says the UI's MIDDLE is a flat canvas, and says nothing about
+  its corners. Every conclusion that stood on "no dump can see it" — including
+  the claim that this is why canvas tuning never touched it — is unsupported
+  until re-measured. `tiles()` now tiles the UI's bounding box by default
+  (`--tile-image` restores the old blind grid) and `report_per_tile()` prints
+  the grid with `.` for unmeasured cells plus an explicit centre-to-edge
+  gradient. See [[x4vr-aggregates-hide-local-defects]] and
+  [[complete-survey-of-one-instant]]: this was a complete survey of the wrong
+  population, and the aggregate could not express where its tiles were.
 * **#71 is STRUCTURAL, not a bug.** MOUSELOOK is the only channel that holds an
   absolute camera angle and holding it IS how X4 suspends ship control; the
   directional states spring home (take 154); 1931 FFI cdefs and both C->Lua
