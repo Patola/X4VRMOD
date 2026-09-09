@@ -779,3 +779,61 @@ unchanged.
 the **fraction of rows** carrying a sign-consistent column-to-column step, not
 the median over rows — the median needs the seam to span >50% of the height and
 returns a false ABSENT when a station covers part of the view.
+
+## Take 274 — `v0.57-canvas-far`: the UI fuses everywhere it has a HUD
+
+**A state is code and knobs**, and this one is knobs: no code changed between
+take 273 and take 274. The single variable is `X4VR_CANVAS_M`, 0.7 -> 1000.
+
+    X4VR_WATCH_SAY='burst dumps' X4VR_TAKE=274-CANVASFAR X4VR_CANVAS_M=1000 \
+    X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 \
+    X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_RES=2816x2816 \
+    X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 \
+    X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=0 \
+    X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_MV_DUMP=/tmp/x4vr-t274 \
+    X4VR_UI_DUMP=1800:6:150 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 \
+    X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 \
+    X4VR_LOG=/tmp/x4vr-take274.log X4VR_WATCH_WANT='ui dump: burst frames' \
+    X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 \
+    X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 \
+    X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+**Both halves of the prediction landed, and both were committed to docs before
+the run.** Predicted: the corners fuse, and the cockpit HUD detaches. Patola:
+
+> all the places where there is HUD (3D menu screen, savegame loadscreen,
+> cockpit map, ESC menu), it fuses perfectly. Only thing now is that the cockpit
+> HUD appears at infinity which feels really odd (specially the lower left panel
+> that occludes the cockpit whilst looking distant).
+
+**The regression names its own mechanism: an occlusion/disparity conflict.** The
+lower-left panel is DRAWN OVER the cockpit, so occlusion says "in front", while
+0.0 px of disparity says "at infinity". Two depth cues in direct contradiction,
+which is why it reads as odd rather than merely far.
+
+**So 0.70 m was never wrong — it was right for the wrong scope.** What the
+canvas must match is whatever is BEHIND it, and that differs by context:
+
+    start menu / loadscreen / map / ESC   world behind is at infinity  -> far
+    cockpit HUD                           cockpit at 0.32-1.40 m       -> ~0.7
+
+Take 273's recording is what established the first row: the start menu's
+backdrop measured `dx = 0` at peaks 0.97-0.99. One global constant cannot serve
+both rows, and that is #57 restated.
+
+**Scored, and it does not regress anything measured.** `canvas 1000.000 m ->
+s=0.00002 NDC, 0.0 px`; 1 variant built, 0 REFUSED, swapped into 8 stages;
+15953 layers submitted; GAMEPLAY **11.67 ms (86 fps)**, faster than 273's
+33.43 ms — the canvas distance is two floats in a matrix that is uploaded
+either way, so read that as scene difference, not as a saving.
+
+**Two standing FAILs carried unchanged from takes 272 and 273**, identical
+across the whole family, so they do not distinguish this state: the pose falls
+back to identity once after being driven, and `X4VR_ROLL_STEREO` is set while
+`X4VR_POSE=0` leaves the roll channel unpatched.
+
+**What this state does NOT establish.** Patola reports *"lots of jitter when
+glancing around, but maybe that's on the telemetry, had it before too."* This
+run carries `X4VR_MV_DUMP` and `X4VR_UI_DUMP=1800:6:150`, and a dump burst
+stalls the frame — so the jitter is NOT attributable from this take. It needs a
+dumpless repeat before it is called a defect or dismissed as one.
