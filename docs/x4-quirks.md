@@ -15872,3 +15872,58 @@ The machinery exists: the layer already does fragment-side SPIR-V patching
 passes. The work is a fragment transform on the colour store in the canvas
 variant, behind a knob, defaulting off. **That is a contained change and it
 should be made deliberately, not folded into a take at the end of a long day.**
+
+## Take 277 — the jitter is a 30 Hz temporal INVERSION, locked to X4's render rate
+
+Patola: *"the video goes beyond what I was looking and then bounces back to my
+actual head rotation"*, plus ghosting on fast motion. Nauseating. 90 fps stereo
+capture at `/dados/x4-vr-stutter.mp4`, 2160x1080, 6.2 Mbit/s, 145 s.
+
+**Measured on the left eye, 270 consecutive frames at 90 fps (t=24..27 s):**
+
+    per-frame dx            sd 7.3 px
+    9-frame smoothed dx     sd 1.7 px      -> the NET head sweep IS smooth
+    roughness / trend       4.4x
+    sign reversals          83.0% horizontal, 81.5% vertical
+    residual oscillation    30.4 Hz (2.96 captured frames)
+    X4 GAMEPLAY in take 277 33.47 ms = 30 fps
+    display                 90 Hz
+
+**The oscillation frequency IS X4's render rate.** Each rendered frame is shown
+about three times, and the presented motion inside one render period reads
+
+    +13  -3  +2      +14  -4  +1      +12  -15  +3      +10  -5  +2
+
+— a large jump when new content lands, then **backwards**. Not "fails to
+update" (which would be +13, 0, 0) but an actual reversal. Head motion is
+smooth: the 9-frame trend has sd 1.7 px, and 30 Hz is far above any human head
+frequency, so **this is not the servo and not the head.**
+
+**This is #75, and it is OURS, not the runtime's.** If we declared, for each
+submitted image, the pose that image was actually rendered with, reprojection
+would produce smooth motion — that is what reprojection is for. It does not, so
+the pose we hand the runtime does not correspond to the image we hand it.
+`poselag` has been saying exactly this for many takes: *"the declaration LEADS
+the pixels ... the compositor is warping each frame by an angle it was not drawn
+with."*
+
+**Eliminated, with the A/B verified in the log**: the head-look LEAD. Take 276
+ran `X4VR_HEADLOOK_LEAD_AB=20` and logged `lead ARMED` at phases 1/3/5/7/9 —
+five armed arms against five controls — and Patola could not tell the arms
+apart. #73's anticipation is not the cause, which the 30 Hz signature now
+explains: the lead acts on head-motion timescales, the defect is at 30 Hz.
+
+**Discarded, before it became a finding:** blits/submitted ~= 0.5 looked like
+"half our frames re-present a stale image". It is just X4's render rate over the
+display rate (56/90 = 0.62 against a measured 0.603). Reprojection filling that
+gap is what reprojection is for.
+
+**A range failure caught in the act, the third this session.** The first pass
+measured frame-to-frame motion by NCC over +-12 px and returned `dx range
+-12..12` — pinned at both ends of its own search, producing an alternating
++-max pattern that LOOKS exactly like the real defect. Re-measured with FFT
+phase correlation, which has no search range to saturate: -26..24 against a
++-90 limit, and the reversal rate went UP (75% -> 83%). Had the first number
+been reported, the conclusion would have been right by accident and the
+magnitude wrong. See [[range-failures-have-two-ends]],
+[[state-the-instrument-range]].
