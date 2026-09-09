@@ -15950,3 +15950,34 @@ at the same magnitude. #75 is a single shared frame-delivery defect, not a
 per-eye rivalry defect stacked on one — which is consistent with the mechanism
 being the pose declared per SUBMITTED FRAME, a per-frame quantity that cannot
 differ between eyes.
+
+### #75, where the fix has to go — and why take 278 was NOT specified
+
+The declared orientation is built at `x4vr_layer.cpp:~12590` as **X4's camera
+angle from a read-back, plus the servo's residual** (`decl_yaw = x4 + ay`). Two
+properties of that make it the prime suspect for a 30 Hz inversion:
+
+* the read-back is **stale by a varying amount** — `poselag` reports age median
+  15.6 ms, p90 33.4 ms, which at 90 Hz is 1.5 to 3 display frames; and
+* the residual is applied to the PIXELS by the shader as well as to the
+  declaration, so any disagreement between the two is a warp by an angle the
+  image was not drawn with.
+
+`X4VR_DECLARE_RENDERED_POS` already fixes #75's **position** half and says so in
+its own log line. **The orientation half is untouched**, and orientation is what
+a yaw/pitch inversion lives in.
+
+**There is no clean single-variable knob that nulls the residual.** Its budget
+comes from `pose_budget_establish()`, which derives it from `X4VR_FOV`: unset
+the field and the budget goes to 0, but the rendered field changes with it. That
+is two variables, and [[vary-them-independently]] is explicit about what that
+buys.
+
+**So the next step is reading the servo's angle path, not a take.** Three
+previous X4VR attempts died as good-state -> fix-cascade -> dead-end, and
+[[three-fixes-one-unmeasured-number]] records three takes that each fixed one
+defect a different way and failed identically because all three rested on a
+guess at the same unmeasured quantity. A patch written now would be a fourth.
+The quantity to measure first is which of the two terms — the stale read-back or
+the residual — carries the 30 Hz component, and `poselag` already logs both at
+full rate in takes 275/276/277.
