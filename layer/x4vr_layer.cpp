@@ -351,9 +351,39 @@ static bool declare_rendered_pos() {
 //
 // So this reads X4's camera HERE, on the submitting thread, at submission time,
 // rather than taking the injector's copy from a tick up to 35 ms old.
+// X4VR_DECLARE_RENDERED_ROT_AB=<seconds> alternates the two arms in ONE run,
+// starting in the CONTROL arm. Patola's eye is reliable for a switch within a
+// run and not for a magnitude remembered from an earlier one, so a two-run
+// comparison would be the weaker instrument even though it is the easier one to
+// write. #73 was closed exactly this way.
+//
+// The switch is itself visible when the head is moving: the declaration jumps
+// by 0.2*(head - x4), which is ~0.1 deg standing still and ~5 deg mid-turn.
+// That snap is the phase change, not the defect, and the handover says so.
 static bool declare_rendered_rot() {
     static const bool on = x4vr::env_on("X4VR_DECLARE_RENDERED_ROT", false);
-    return on;
+    static const double ab = [] {
+        const char *e = getenv("X4VR_DECLARE_RENDERED_ROT_AB");
+        return (e && *e) ? atof(e) : 0.0;
+    }();
+    if (!on)
+        return false;
+    if (ab <= 0.0)
+        return true;
+    struct timespec ts {};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    const double t = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+    static const double t0 = t;
+    const long ph = (long)((t - t0) / ab);
+    const bool cur = (ph % 2) == 1; // phase 0 is the control
+    static long last = -1;
+    if (ph != last) {
+        last = ph;
+        X4VR_LOG("declrot: A/B phase %ld -> %s", ph,
+                 cur ? "FIX — declaring X4's own camera"
+                     : "CONTROL — declaring the servo command");
+    }
+    return cur;
 }
 
 // X4's own camera getter, resolved the same way the injector resolves it --
