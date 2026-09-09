@@ -2526,30 +2526,64 @@ def main(path):
                   f"{dy[n//2]:.3f} deg, p90 {dy[int(0.9*(n-1))]:.3f}, "
                   f"max {dy[-1]:.3f}")
             # The comparison that decides it, against this run's own numbers.
+            # **NOT the median.** X4's camera is a 30 Hz staircase and the
+            # draw->submit gap is 13-22 ms, so in ~76% of frames it has not
+            # stepped at all and dyaw is exactly 0. The median therefore reads
+            # 0.000 in EVERY speed bin -- including one whose p90 is 9.9 deg and
+            # whose max is 15.0 -- which is a statistic that cannot express the
+            # alternative it exists to rule out. Take 279 was scored "SMALL" on
+            # it and the conclusion was wrong.
+            nz = [v for v in dy if v > 0.001]
+            print(f"camstamp  the camera stepped between draw and submit in "
+                  f"{100.0*len(nz)/n:.1f}% of frames; in the rest dyaw is "
+                  f"exactly 0, so the MEDIAN is 0 by construction and the tail "
+                  f"is the only usable statistic")
+            if nz:
+                nz.sort()
+                print(f"camstamp  dyaw GIVEN a step: median "
+                      f"{nz[len(nz)//2]:.3f} deg, p90 "
+                      f"{nz[int(0.9*(len(nz)-1))]:.3f}")
             if gain:
                 gm = gain[len(gain) // 2]
                 gp = gain[int(0.9 * (len(gain) - 1))]
                 print(f"camstamp  this run's gain error |cmd-X4| for scale: "
                       f"median {gm:.3f} deg, p90 {gp:.3f}")
-                ratio = dy[n // 2] / max(gm, 1e-9)
-                if ratio < 0.25:
-                    print(f"camstamp  => the gap is {ratio:.2f}x the gain error"
-                          f" — SMALL. Camera-at-submit is camera-at-render for "
-                          f"practical purposes, so take 278's fix declared the "
-                          f"right pose and the crossover has another cause. "
-                          f"Look at the servo lag (#78/#71), not the "
-                          f"declaration.")
-                elif ratio > 0.75:
-                    print(f"camstamp  => the gap is {ratio:.2f}x the gain error"
-                          f" — COMPARABLE. Take 278 swapped one lead for "
-                          f"another, which is exactly why the arms crossed "
-                          f"over. The declaration must be the ATDRAW sample; "
-                          f"declaring at submit cannot be right at any speed.")
+                # TWO ratios, because one cannot say this. Over all frames the
+                # gap is diluted by the majority in which the camera never
+                # stepped, and that number says how atsubmit compares to the
+                # command on average. Given a step it says how WRONG atsubmit is
+                # when it is wrong at all. A single ratio collapses "better on
+                # average" and "off by a full step a quarter of the time" into
+                # one figure, and they want different fixes.
+                r_all = dy[int(0.9 * (n - 1))] / max(gp, 1e-9)
+                r_step = ((nz[int(0.9 * (len(nz) - 1))] / max(gp, 1e-9))
+                          if nz else 0.0)
+                frac = 100.0 * len(nz) / n
+                print(f"camstamp  => p90 over ALL frames {r_all:.2f}x the gain "
+                      f"error; p90 GIVEN a step {r_step:.2f}x")
+                if r_all < 0.75:
+                    print(f"camstamp  => declaring camera-at-submit BEATS "
+                          f"declaring the command — it is exact in "
+                          f"{100.0-frac:.0f}% of frames, where the command is "
+                          f"wrong in nearly all of them. Take 278's fix was "
+                          f"directionally right.")
                 else:
-                    print(f"camstamp  => the gap is {ratio:.2f}x the gain error"
-                          f" — INTERMEDIATE. Neither reading is clean; the "
-                          f"atdraw sample is still the better declaration but "
-                          f"it will not fully close #75 on its own.")
+                    print(f"camstamp  => declaring camera-at-submit does NOT "
+                          f"beat the command; take 278 swapped one lead for "
+                          f"another.")
+                if r_step > 0.75:
+                    print(f"camstamp  => but it is NOT clean: in {frac:.0f}% of "
+                          f"frames the camera steps in between and atsubmit is "
+                          f"off by a FULL camera step — the same size as the "
+                          f"gain error it replaced. That is not a coincidence: "
+                          f"the servo's command is what makes the camera step, "
+                          f"so step size and gain error are one quantity seen "
+                          f"at two points in the loop. Declare the ATDRAW "
+                          f"sample; it removes this residual by construction.")
+                else:
+                    print(f"camstamp  => and it is clean: even given a step the "
+                          f"gap stays under the gain error, so atdraw would buy "
+                          f"little over atsubmit.")
             else:
                 print("camstamp  no poselag gain error in this log to scale "
                       "against — the dyaw number above stands alone and the "
