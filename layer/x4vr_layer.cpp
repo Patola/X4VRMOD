@@ -327,6 +327,66 @@ static bool declare_rendered_pos() {
     return on;
 }
 
+// **Task #75's ORIENTATION half.** `X4VR_DECLARE_RENDERED_POS` above only ever
+// fixed the position, and its own log line says so; the orientation kept
+// declaring `cam_yaw_deg`, which is the head-look servo's COMMAND and not the
+// angle X4's camera actually held when it drew the pixels.
+//
+// Measured offline from takes 276/277, no run spent:
+//
+//   * |head - cmd| / |head - x4| = 0.80, and it is 0.80 in EVERY head-speed
+//     bin (0.78 / 0.81 / 0.80). A constant ratio is a gain error, not a lag:
+//     rearranged it says cmd = 0.2*head + 0.8*x4, i.e. the command sits a fifth
+//     of the way from X4's camera towards the head. So the compositor is asked
+//     to warp by 80% of the error that is really in the image and leaves 20%
+//     standing -- median 0.35 deg, p90 4.57 deg, ~5 deg at the fastest tenth of
+//     head motion, which is 150 px at 30 px/deg.
+//   * the readback is ALSO stale: `age` median 18.2 ms, p90 35.7 ms.
+//
+// Both had to go together, and that is why this is one knob and not two. At the
+// fastest tenth the gain error is 4.83 deg and the staleness error 4.64 deg --
+// 0.96x, the same size. Declaring `cam_raw_yaw_deg` alone would have taken 7.88
+// deg to 4.64 and read as "still jitters", refuting a correct hypothesis. See
+// [[three-fixes-one-unmeasured-number]].
+//
+// So this reads X4's camera HERE, on the submitting thread, at submission time,
+// rather than taking the injector's copy from a tick up to 35 ms old.
+static bool declare_rendered_rot() {
+    static const bool on = x4vr::env_on("X4VR_DECLARE_RENDERED_ROT", false);
+    return on;
+}
+
+// X4's own camera getter, resolved the same way the injector resolves it --
+// same process, so this is a direct call and not an IPC. The declaration is
+// read from `injector/x4vr_inject.cpp` (`struct X4Rotation { float yaw, pitch,
+// roll; }`, `X4Rotation (*)()`), which is the only reason it may be called:
+// this project does not call an X4 function whose FFI declaration it has not
+// read. The sign and scale convention below is copied from the injector's own
+// use (`kRad2Deg * -r.yaw`, `kRad2Deg * r.pitch`) rather than re-derived, so
+// the two cannot drift apart.
+struct X4Rot {
+    float yaw, pitch, roll;
+};
+static bool x4_camera_rotation_now(float *yaw_deg, float *pitch_deg) {
+    using Fn = X4Rot (*)();
+    static Fn fn = [] () -> Fn {
+        Fn f = (Fn)dlsym(RTLD_DEFAULT, "GetCameraRotation");
+        X4VR_LOG("declrot: GetCameraRotation %s",
+                 f ? "resolved — the declared orientation can be X4's own "
+                     "camera, read on this thread at submission time"
+                   : "NOT FOUND — X4VR_DECLARE_RENDERED_ROT cannot act, the "
+                     "declaration stays the servo command");
+        return f;
+    }();
+    if (!fn)
+        return false;
+    const X4Rot r = fn();
+    constexpr float kRad2Deg = 57.2957795130823f;
+    *yaw_deg = kRad2Deg * -r.yaw;
+    *pitch_deg = kRad2Deg * r.pitch;
+    return true;
+}
+
 // Task #77: turn the eye disparity by the head's roll.
 //
 // **ON by default since take 221**, which is the condition the previous
@@ -12448,6 +12508,15 @@ void vr_thread() {
         uint32_t layer_count = 0;
         if (have && should_render && g_vrs.sc_ready.load() &&
             g_vrs.released.load() > 0) {
+            // #75: X4's camera, read ONCE for this frame on this thread.
+            //
+            // Hoisted above the eye loop rather than cached inside it, because
+            // X4's camera can step between eye 0 and eye 1 and declaring a
+            // different orientation per eye is a per-eye disparity -- the one
+            // class of defect this project never accepts as small.
+            float now_yaw = 0.0f, now_pitch = 0.0f;
+            const bool now_ok = declare_rendered_rot() &&
+                                x4_camera_rotation_now(&now_yaw, &now_pitch);
             for (uint32_t e = 0; e < 2; e++) {
                 pv[e].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
                 // The pose we RENDERED from, which is not the pose the head is
@@ -12514,9 +12583,26 @@ void vr_thread() {
                     raw_ns = sh->cam_raw_ns.load(std::memory_order_relaxed);
                     valid = sh->cam_valid.load(std::memory_order_relaxed);
                     if (valid) {
-                        decl_yaw = sh->cam_yaw_deg.load(std::memory_order_relaxed);
-                        decl_pitch =
-                            sh->cam_pitch_deg.load(std::memory_order_relaxed);
+                        // #75. `cam_yaw_deg` is the servo's COMMAND, and the
+                        // measurement says it is 0.2*head + 0.8*x4 -- a fifth
+                        // of the way from the camera that drew the pixels
+                        // towards the head. Declaring it makes the compositor
+                        // undo only 80% of the error in the image.
+                        //
+                        // The gate stays `valid` on purpose: outside steering
+                        // the declaration is identity and the image is
+                        // world-locked, which is a separate behaviour (#78) and
+                        // moving it here would be a second variable in one
+                        // knob. See [[vary-them-independently]].
+                        if (now_ok) {
+                            decl_yaw = now_yaw;
+                            decl_pitch = now_pitch;
+                        } else {
+                            decl_yaw =
+                                sh->cam_yaw_deg.load(std::memory_order_relaxed);
+                            decl_pitch =
+                                sh->cam_pitch_deg.load(std::memory_order_relaxed);
+                        }
                     }
                 }
                 // #33: plus the residual the shader ACTUALLY applied this
@@ -12576,9 +12662,24 @@ void vr_thread() {
                         (double)nts.tv_sec + (double)nts.tv_nsec * 1e-9;
                     const double age =
                         raw_ns ? now - (double)raw_ns * 1e-9 : -1.0;
+                    // `cmd` and `rot` are logged in BOTH arms deliberately.
+                    // With X4VR_DECLARE_RENDERED_ROT on, `declared` stops being
+                    // the servo command, so `d` silently stops meaning "gain
+                    // error" and starts meaning "staleness" -- the same
+                    // instrument answering a different question because the
+                    // question moved under it. Carrying the command on the line
+                    // unconditionally means one scorer reads both arms and the
+                    // A/B compares like with like.
+                    float cmd_yaw = 0.0f, cmd_pitch = 0.0f;
+                    if (const x4vr::Shared *sh = shared_state()) {
+                        cmd_yaw =
+                            sh->cam_yaw_deg.load(std::memory_order_relaxed);
+                        cmd_pitch =
+                            sh->cam_pitch_deg.load(std::memory_order_relaxed);
+                    }
                     X4VR_LOG("poselag: declared=%.4f,%.4f x4=%.4f,%.4f "
                              "d=%.4f,%.4f age=%.4f valid=%u rawvalid=%u "
-                             "residual=%.4f,%.4f",
+                             "residual=%.4f,%.4f cmd=%.4f,%.4f rot=%u",
                              // `d` subtracts the residual back out on purpose:
                              // the shader rotated the pixels by it, so the pose
                              // they came from is (X4's camera + residual) and
@@ -12588,7 +12689,8 @@ void vr_thread() {
                              decl_yaw, decl_pitch, raw_yaw, raw_pitch,
                              (decl_yaw - ay) - raw_yaw,
                              (decl_pitch - ap) - raw_pitch, age, valid,
-                             raw_valid, ay, ap);
+                             raw_valid, ay, ap, cmd_yaw, cmd_pitch,
+                             now_ok ? 1u : 0u);
                 }
                 if (e == 0) {
                     static uint64_t n = 0;

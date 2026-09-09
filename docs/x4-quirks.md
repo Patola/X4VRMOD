@@ -15981,3 +15981,115 @@ guess at the same unmeasured quantity. A patch written now would be a fourth.
 The quantity to measure first is which of the two terms — the stale read-back or
 the residual — carries the 30 Hz component, and `poselag` already logs both at
 full rate in takes 275/276/277.
+
+## #75 SOLVED offline — the declaration is 20% of the way to the head, and take 278 tests the fix
+
+**No run was spent on any of this.** Takes 275/276/277 already logged every term
+at full rate; the work was reading them with a control attached.
+
+### What the terms actually are
+
+`poselag` builds the declared orientation as `cam_yaw_deg + residual`.
+
+* **`residual` is identically zero** — 31481/31481 samples in take 275,
+  18045/18045 in 276, 23189/23189 in 277. It was half of what the previous
+  commit called "the two terms"; it is not a term at all.
+* So `declared == cam_yaw_deg`, the head-look servo's **command**, while the
+  pixels came from **`cam_raw_yaw_deg`**, X4's actual camera.
+
+### The number, and how it was checked
+
+Joining take 276's `lagsample` (`head=`, `x4=`) to `poselag` (`declared=`) on
+timestamp — 2943 rows, median join error 0.00 ms:
+
+| head speed | \|head−cmd\| (warp applied) | \|head−x4\| (error in the image) | ratio |
+|---|---|---|---|
+| slowest half | 0.223 deg | 0.287 deg | **0.78x** |
+| 50–90 pct | 2.379 | 2.921 | **0.81x** |
+| fastest 10% | 19.874 | 24.888 | **0.80x** |
+
+**A constant ratio across every speed bin is a gain error, not a lag.**
+Rearranged, `cmd = 0.2*head + 0.8*x4`: the declaration sits a fifth of the way
+from the camera that drew the pixels towards the head, so the compositor is
+asked to undo 80% of the error in the image and **leaves 20% standing** —
+median 0.345 deg, p90 4.566 deg.
+
+Confirmed a second, independent way. Fitting `x4[i+k] ~ declared[i]` puts the
+best k at **+2 frames (22.2 ms)**, 34% better than k=0; and the error scales
+with speed as `4.830 deg / 229.2 deg/s = 21.1 ms`. Two routes, one number.
+The lag fit's controls behave: self-vs-self returns k=0, self-vs-self+4 returns
+k=−4.
+
+### Why this is the 30 Hz inversion
+
+Within one 30 Hz period the content and the declaration are both frozen while
+the head moves at 90 Hz, so the reprojection is smooth. At each boundary the
+content steps by `Δx4` and the declaration steps by `0.8*Δx4 + 0.2*Δhead`. The
+mismatch `0.2*(Δhead − Δx4)` is a **discontinuity at every 30 Hz boundary**, and
+its sign follows whether the servo over- or under-shot — which is the
+alternating per-frame dx the take-277 video shows.
+
+### Two hypotheses of mine that the data killed, before they reached a run
+
+* **"Which term carries the 30 Hz spectral peak"** — the question the previous
+  commit posed. Its instrument failed its own control: a synthetic smooth 0.25 Hz
+  sweep, which has no 30 Hz by construction, read a 29.5 Hz peak at 4.98x,
+  higher than any real term. `age` peaks at 30.8 Hz, so the **sample clock**
+  carries 30 Hz and interpolating anything onto a uniform grid injects it. The
+  instrument shared a parameter with the effect. Both terms are 30 Hz staircases
+  anyway — that is X4's render rate, not a defect.
+* **"Two unsynchronised 30 Hz clocks beating"** — refuted directly. Lock
+  fraction **1.00**: x4 never steps without the declaration stepping (0.0% of
+  frames). Both are written by the same injector tick. There is no beat.
+
+### The fix, and why it is ONE knob and not two
+
+`X4VR_DECLARE_RENDERED_ROT=1` declares X4's own camera, read **on the
+submitting thread at submission time** via `GetCameraRotation` (already resolved
+and called in-process by the injector; its FFI declaration was read before use).
+
+Both error sources had to go together, and the arithmetic says so:
+
+| head speed | gain error (cmd vs x4) | staleness (v × age) | ratio |
+|---|---|---|---|
+| slowest half | 0.115 deg | 0.025 | 0.22x |
+| 50–90 pct | 0.575 | 0.382 | 0.66x |
+| fastest 10% | **4.830** | **4.640** | **0.96x** |
+
+At speed they are the **same size**. Declaring `cam_raw_yaw_deg` alone — the
+obvious one-line change — would have taken 7.88 deg to 4.64 and read as "still
+jitters", refuting a correct hypothesis. That is why the fix reads the camera
+fresh instead of taking the injector's copy, whose `age` is 18.2 ms median /
+35.7 ms p90.
+
+### PREDICTIONS FOR TAKE 278, recorded before the run
+
+* **P278.1** The jitter/inversion at ordinary looking-around speeds is markedly
+  reduced or gone. This is the claim; the mechanism above is only worth
+  something if Patola's eye says so on an A/B within one run.
+* **P278.2** Nothing perceptible changes with the head still — the error there
+  was already 0.115 deg.
+* **P278.3 (predicted REGRESSION, and the reason to watch for it).** The warp
+  gets *bigger*, not smaller: from `0.8*(head−x4)` to the full `(head−x4)`, so
+  ~20 deg becomes ~25 deg at the fastest 10%. More of the periphery must be
+  reprojected from outside the rendered frame, so **peripheral smear or black
+  edge on fast head turns may get worse** even as the judder goes.
+* **P278.4** This fix does **not** touch the servo lag itself. X4's camera is
+  median 1.15 deg and p90 17.6 deg behind the head (max 80.7) — that is #78/#71
+  and it stays. If the fast-turn complaint is dominated by the lag, this fix
+  will not remove it.
+
+### What would REFUTE the fix
+
+`score_run.py` reports `#75 fix ACTED` and Patola still reports the same jitter
+at ordinary speeds. That would put the cause outside the declaration entirely,
+and the next suspect is the content clock — not another declaration knob.
+
+**The scorer was rewritten for this and both arms were tested on synthetic logs
+covering all four intent x outcome cells.** Under the fix, `|declared − X4|`
+stops meaning "gain error" and starts meaning "the injector's copy is stale", so
+the old rule would have reported a healthy run as "the declaration LEADS the
+pixels" — this scorer failing a healthy run for the third time. `cmd=` and
+`rot=` now ride on every `poselag` line so one scorer reads both arms, and a run
+that sets the knob without it acting is a loud FAIL rather than a quiet
+"control arm".

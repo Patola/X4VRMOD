@@ -2283,14 +2283,52 @@ def main(path):
     # `vr pose` line against `camread` across a 0.25 s window and got 6-7 deg of
     # pure sampling offset from seven samples. Anything over ~1.5 tick periods
     # is reported and excluded rather than averaged in.
+    #
+    # **`rot` splits this report in two, and it has to.** Under
+    # X4VR_DECLARE_RENDERED_ROT the declaration stops being the servo command
+    # and becomes X4's camera read on the submitting thread, so `d` stops
+    # meaning "the gain error" and starts meaning "the injector's copy is
+    # stale" -- a healthy run would be reported as "the declaration LEADS the
+    # pixels" by a rule written for the other arm. That is this scorer failing a
+    # healthy run for the third time if it is left alone, so the arm is read off
+    # the log line rather than assumed, and `cmd` is carried in BOTH arms so the
+    # two are compared like with like.
     pl = re.findall(
         r"\[\s*(\d+\.\d+)\]\s+layer\s+poselag: declared=(-?\d+\.\d+),(-?\d+\.\d+) "
         r"x4=(-?\d+\.\d+),(-?\d+\.\d+) d=(-?\d+\.\d+),(-?\d+\.\d+) "
-        r"age=(-?\d+\.\d+) valid=(\d) rawvalid=(\d)", text)
+        r"age=(-?\d+\.\d+) valid=(\d) rawvalid=(\d)"
+        r"(?: residual=-?\d+\.\d+,-?\d+\.\d+"
+        r"(?: cmd=(-?\d+\.\d+),(-?\d+\.\d+) rot=(\d))?)?", text)
     if pl:
-        rows = [(float(a), float(f), float(g), float(h), i == "1", j == "1")
-                for a, b, c, d_, e, f, g, h, i, j in pl]
+        # Groups, in order: ts, decl_y, decl_p, x4_y, x4_p, d_y, d_p, age,
+        # valid, rawvalid, cmd_y, cmd_p, rot. The last three are absent in logs
+        # written before the #75 A/B, and `None` there means "unknown arm",
+        # which is deliberately not the same value as either arm.
+        rows = []
+        for g in pl:
+            rows.append((
+                float(g[0]),                                   # 0 ts
+                float(g[5]), float(g[6]),                      # 1,2 d yaw/pitch
+                float(g[7]),                                   # 3 age
+                g[8] == "1", g[9] == "1",                      # 4,5 valid flags
+                float(g[1]),                                   # 6 declared yaw
+                float(g[3]),                                   # 7 x4 yaw
+                float(g[10]) if g[10] else None,               # 8 cmd yaw
+                (g[12] == "1") if g[12] else None,             # 9 rot arm
+            ))
         live = [r for r in rows if r[4] and r[5]]
+        # Which arm produced this log is READ off the line, never inferred from
+        # the knob I believe I passed: an env block can arrive truncated, which
+        # is how take 114 died.
+        rot_on = [r for r in live if r[9] is True]
+        rot_off = [r for r in live if r[9] is False]
+        if rot_on or rot_off:
+            print(f"poselag  arm: {len(rot_on)} frame(s) declared X4's OWN "
+                  f"camera (#75 fix ON), {len(rot_off)} declared the servo "
+                  f"command (control)")
+        elif live:
+            print("poselag  arm: log predates the #75 A/B — no cmd=/rot= "
+                  "fields, so only the control reading below applies")
         print(f"poselag {len(rows)} submitted frame(s), {len(live)} with both a "
               f"declared pose and a live read-back")
         if not live:
@@ -2367,19 +2405,79 @@ def main(path):
                             print(f"poselag  the lead changes the declaration "
                                   f"error by {g:.2f}x at p90 — "
                                   f"{'it BUYS tracking with reprojection error, and #73 must be judged on both' if g > 1.3 else 'no material trade-off; the lead is not paying for its tracking gain here'}")
-                # The scale that matters: one servo step. Below a tenth of a
-                # degree the compositor's warp is inside its own filtering and
-                # this is not a mechanism worth chasing.
-                if dy[int(0.9 * (n - 1))] < 0.1:
-                    print("poselag  => the declaration TRACKS the pixels. #75's "
-                          "mechanism exists but is too small to explain "
-                          "anything; look elsewhere for #73's residual.")
-                else:
-                    print(f"poselag  => the declaration LEADS the pixels by up "
-                          f"to {dy[-1]:.2f} deg. The compositor is warping each "
-                          f"frame by an angle it was not drawn with, and that "
-                          f"is a per-frame position error the servo's own "
-                          f"tracking number cannot see.")
+                # **The #75 A/B, scored on the quantity the fix acts on.**
+                #
+                # Offline from takes 276/277: cmd = 0.2*head + 0.8*x4, so the
+                # command sits a fifth of the way from the camera that drew the
+                # pixels towards the head, and the compositor undoes only 80% of
+                # the error in the image. |cmd - x4| is that leftover fifth, and
+                # it is the number the fix is supposed to drive to zero. It is
+                # computed the same way in both arms, which is the only reason
+                # the arms can be compared at all.
+                gain = sorted(abs(r[8] - r[7]) for r in fresh
+                              if r[8] is not None)
+                if gain:
+                    m = len(gain)
+                    print(f"poselag  |cmd - X4| (the fifth left uncorrected): "
+                          f"median {gain[m//2]:.3f} deg, p90 "
+                          f"{gain[int(0.9*(m-1))]:.3f}, max {gain[-1]:.3f}")
+                # **Intent, then outcome, and never outcome alone.** `rot=` says
+                # what HAPPENED; the env line says what the run ASKED for. If
+                # the knob was set and no frame carries rot=1 the fix was inert,
+                # and reporting that as "the control arm" would quietly turn a
+                # broken run into a clean-looking one — the exact shape of
+                # `gate-on-intent-not-outcome`.
+                asked_rot = bool(run and "X4VR_DECLARE_RENDERED_ROT=1" in run)
+                if asked_rot and not rot_on:
+                    why = ("GetCameraRotation did NOT resolve"
+                           if "declrot: GetCameraRotation NOT FOUND" in text
+                           else "no declrot: line at all, so the knob never "
+                                "reached the layer")
+                    fails.append(
+                        f"X4VR_DECLARE_RENDERED_ROT=1 was set but every frame "
+                        f"declared the servo command — {why}. This run does "
+                        f"NOT test #75's fix")
+                elif rot_on and not asked_rot:
+                    fails.append(
+                        "frames declared X4's own camera but the env line does "
+                        "not carry X4VR_DECLARE_RENDERED_ROT=1 — the log and "
+                        "the command line disagree about what was run")
+                if rot_on:
+                    # In this arm `declared` IS X4's camera, so |declared - X4|
+                    # measures the injector's copy going stale, not a lead. It
+                    # SHOULD be non-zero and it should be about v*age; reading
+                    # it as a lead here is the failure this split exists to
+                    # prevent.
+                    dr = sorted(abs(r[6] - r[7]) for r in rot_on)
+                    m = len(dr)
+                    print(f"poselag  fix ON: |declared - X4readback| median "
+                          f"{dr[m//2]:.3f} deg p90 {dr[int(0.9*(m-1))]:.3f} — "
+                          f"this is the injector's copy going stale over "
+                          f"{amed*1000:.0f} ms, NOT a lead; the declaration is "
+                          f"X4's camera by construction here")
+                    if gain:
+                        print(f"poselag  => #75 fix ACTED. The declaration no "
+                              f"longer carries the {gain[len(gain)//2]:.3f} deg "
+                              f"median command offset, and the compositor is "
+                              f"being asked for the whole error rather than 80% "
+                              f"of it. Judge the run on whether the jitter went, "
+                              f"not on this number.")
+                elif rot_off or not (rot_on or rot_off):
+                    # The control arm, and every log written before the A/B.
+                    # The scale that matters: one servo step. Below a tenth of a
+                    # degree the compositor's warp is inside its own filtering
+                    # and this is not a mechanism worth chasing.
+                    if dy[int(0.9 * (n - 1))] < 0.1:
+                        print("poselag  => the declaration TRACKS the pixels. "
+                              "#75's mechanism exists but is too small to "
+                              "explain anything; look elsewhere for #73's "
+                              "residual.")
+                    else:
+                        print(f"poselag  => the declaration LEADS the pixels by "
+                              f"up to {dy[-1]:.2f} deg. The compositor is "
+                              f"warping each frame by an angle it was not drawn "
+                              f"with, and that is a per-frame position error the "
+                              f"servo's own tracking number cannot see.")
 
     # --- task #73: open-loop identification of X4's camera ------------------
     #
