@@ -16093,3 +16093,63 @@ pixels" — this scorer failing a healthy run for the third time. `cmd=` and
 `rot=` now ride on every `poselag` line so one scorer reads both arms, and a run
 that sets the knob without it acting is a loud FAIL rather than a quiet
 "control arm".
+
+## Take 279 prices the instrument and picks the sample — atdraw, not atsubmit
+
+**camstamp costs nothing, and that is measured, not assumed.** Take 279's first
+perf window read **1.87 ms/frame (534 fps) with 980 camstamp lines already
+emitted**; take 278's matched first window, camstamp absent, read 2.05 ms. The
+instrumented run was faster. The 33.06 ms gameplay phase is scene load — Patola
+flew closer to a station — and the bound above rules the instrument out.
+
+### The median could not express the answer
+
+X4's camera is a 30 Hz staircase and the draw->submit gap is 13-22 ms, so **in
+76.5% of frames the camera has not stepped and dyaw is exactly 0**. The median
+therefore reads 0.000 in EVERY speed bin, including one whose p90 is 9.896 deg
+and whose max is 15.040. Take 279 was first scored "0.00x — SMALL, look
+elsewhere" on that median and the conclusion was wrong. Same failure as take
+257's, recorded in [[statistic-cannot-express-the-alternative]].
+
+### Corrected, on matched statistics inside the one run
+
+| | dyaw | gain error |
+|---|---|---|
+| p90, all frames | 1.367 deg | 6.555 deg |
+| **p90, given a step** | **6.658** | **6.555** |
+| median, given a step | 1.031 | 0.920 |
+
+Two ratios, because one cannot say this: **0.21x over all frames** (atsubmit
+beats the command — it is EXACT in 76% of frames, where the command is wrong in
+nearly all of them) and **1.02x given a step** (when atsubmit is wrong it is off
+by a FULL camera step).
+
+**dyaw-given-a-step IS the gain error, to within noise, and that is structural
+rather than coincidental**: the servo's command is what makes X4's camera step,
+so step size and gain error are one quantity seen at two points in the loop.
+
+### So the declaration is the ATDRAW sample
+
+`X4VR_DECLARE_RENDERED_ROT` now takes 0 / 1 (at-submit, what take 278 ran) /
+2 (at-draw). **1 is kept rather than replaced** so take 278's arm stays
+reproducible; silently redefining it would make that log incomparable.
+
+### PREDICTIONS FOR TAKE 280, recorded before the run
+
+* **P280.1** The jitter at ordinary looking-around speeds is markedly reduced or
+  gone in the at-draw phases, and the improvement does NOT narrow with head
+  speed the way take 278's did (0.28x -> 0.80x across the speed bins).
+* **P280.2** `dyaw` is unchanged by the knob — it is a property of X4's frame
+  pipeline, not of what we declare. If it moves, the stamp is being taken
+  somewhere other than where it is believed to be taken.
+* **P280.3 (regression, unchanged from 278)** The warp grows, so peripheral
+  smear on fast turns may worsen even as the judder goes.
+* **P280.4** This still does not touch the servo lag. X4's camera is p90 17.6
+  deg behind the head; that is #78/#71 and it stays.
+
+### What would REFUTE it
+
+`score_run.py` reports `#75 fix ACTED [at-draw]` and the at-draw phases feel no
+different from the control ones. That puts the cause outside the declaration
+entirely, and the next suspect is X4's own 30 fps content clock against the
+90 Hz display — not another declaration knob.

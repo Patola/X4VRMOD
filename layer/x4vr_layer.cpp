@@ -360,8 +360,40 @@ static bool declare_rendered_pos() {
 // The switch is itself visible when the head is moving: the declaration jumps
 // by 0.2*(head - x4), which is ~0.1 deg standing still and ~5 deg mid-turn.
 // That snap is the phase change, not the defect, and the handover says so.
+// 0 = off (declare the servo command), 1 = the sample taken AT SUBMIT (what
+// take 278 ran), 2 = the sample taken AT THE FIRST RENDER PASS.
+//
+// **Take 279 says 2.** Measured over 23201 clean frames: declaring the submit
+// sample beats the command (p90 over all frames 0.21x the gain error, because
+// it is exact in 76% of frames where the command is wrong in nearly all of
+// them) but it is NOT clean -- in the other 24% X4's camera steps between draw
+// and submit and the declaration is off by a FULL camera step, p90 6.658 deg
+// against a gain error of 6.555. Those are the same number because the servo's
+// command is what makes the camera step, so step size and gain error are one
+// quantity seen at two points in the loop.
+//
+// The atdraw sample removes that residual by construction: it IS the camera the
+// draws were recorded against.
+//
+// 1 is kept rather than replaced so take 278's arm stays reproducible at this
+// tag. Silently redefining what =1 means would make its log incomparable.
+static int declare_rendered_rot_mode() {
+    static const int m = [] {
+        const char *e = getenv("X4VR_DECLARE_RENDERED_ROT");
+        if (!e || !*e)
+            return 0;
+        if (!strcmp(e, "draw"))
+            return 2;
+        if (!strcmp(e, "submit"))
+            return 1;
+        const int v = atoi(e);
+        return (v < 0 || v > 2) ? 0 : v;
+    }();
+    return m;
+}
+
 static bool declare_rendered_rot() {
-    static const bool on = x4vr::env_on("X4VR_DECLARE_RENDERED_ROT", false);
+    const bool on = declare_rendered_rot_mode() != 0;
     static const double ab = [] {
         const char *e = getenv("X4VR_DECLARE_RENDERED_ROT_AB");
         return (e && *e) ? atof(e) : 0.0;
@@ -457,7 +489,10 @@ inline double mono_now();
 // frame -- the FIRST render pass -- because that is the closest this layer can
 // stand to "when X4 decided what this frame looks like".
 static void camstamp_at_first_pass() {
-    if (!camstamp_enabled())
+    // Gated on the MODE, not on the A/B-aware predicate: the stamp has to exist
+    // for the phase the fix is ON, and a value only sampled during that phase
+    // would be one frame late at every transition.
+    if (!camstamp_enabled() && declare_rendered_rot_mode() != 2)
         return;
     const uint32_t f = g_camstamp.frame.load(std::memory_order_relaxed);
     if (g_camstamp.stamped.load(std::memory_order_relaxed) == f)
@@ -12607,8 +12642,27 @@ void vr_thread() {
             // different orientation per eye is a per-eye disparity -- the one
             // class of defect this project never accepts as small.
             float now_yaw = 0.0f, now_pitch = 0.0f;
-            const bool now_ok = declare_rendered_rot() &&
-                                x4_camera_rotation_now(&now_yaw, &now_pitch);
+            bool now_ok = false;
+            unsigned rot_used = 0;
+            if (declare_rendered_rot()) {
+                if (declare_rendered_rot_mode() == 2) {
+                    // The camera the draws were actually recorded against.
+                    // Only usable once a frame has been stamped -- before the
+                    // first render pass there is nothing to declare and the
+                    // command is still the better of the two.
+                    if (g_camstamp.seq.load(std::memory_order_acquire)) {
+                        now_yaw =
+                            g_camstamp.yaw.load(std::memory_order_relaxed);
+                        now_pitch =
+                            g_camstamp.pitch.load(std::memory_order_relaxed);
+                        now_ok = true;
+                        rot_used = 2;
+                    }
+                } else if (x4_camera_rotation_now(&now_yaw, &now_pitch)) {
+                    now_ok = true;
+                    rot_used = 1;
+                }
+            }
             for (uint32_t e = 0; e < 2; e++) {
                 pv[e].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
                 // The pose we RENDERED from, which is not the pose the head is
@@ -12781,8 +12835,7 @@ void vr_thread() {
                              decl_yaw, decl_pitch, raw_yaw, raw_pitch,
                              (decl_yaw - ay) - raw_yaw,
                              (decl_pitch - ap) - raw_pitch, age, valid,
-                             raw_valid, ay, ap, cmd_yaw, cmd_pitch,
-                             now_ok ? 1u : 0u);
+                             raw_valid, ay, ap, cmd_yaw, cmd_pitch, rot_used);
                     // **The two-timestamp line: the number take 278 assumed.**
                     //
                     // `atdraw` is X4's camera sampled at the first render pass

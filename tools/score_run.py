@@ -2317,17 +2317,25 @@ def main(path):
                 float(g[1]),                                   # 6 declared yaw
                 float(g[3]),                                   # 7 x4 yaw
                 float(g[10]) if g[10] else None,               # 8 cmd yaw
-                (g[12] == "1") if g[12] else None,             # 9 rot arm
+                # 9: rot MODE, not a bool. 0 = servo command, 1 = the
+                # sample at submit (take 278), 2 = the sample at the first
+                # render pass (take 280). Read as a bool this would file
+                # every mode-2 frame under "control" and report the fix as
+                # never having acted.
+                int(g[12]) if g[12] else None,
             ))
         live = [r for r in rows if r[4] and r[5]]
         # Which arm produced this log is READ off the line, never inferred from
         # the knob I believe I passed: an env block can arrive truncated, which
         # is how take 114 died.
-        rot_on = [r for r in live if r[9] is True]
-        rot_off = [r for r in live if r[9] is False]
+        rot_on = [r for r in live if r[9]]
+        rot_off = [r for r in live if r[9] == 0]
+        modes = sorted({r[9] for r in rot_on})
+        msrc = "+".join({1: "at-submit", 2: "at-draw"}.get(m, f"mode{m}")
+                        for m in modes)
         if rot_on or rot_off:
             print(f"poselag  arm: {len(rot_on)} frame(s) declared X4's OWN "
-                  f"camera (#75 fix ON), {len(rot_off)} declared the servo "
+                  f"camera [{msrc}], {len(rot_off)} declared the servo "
                   f"command (control)")
         elif live:
             print("poselag  arm: log predates the #75 A/B — no cmd=/rot= "
@@ -2430,14 +2438,19 @@ def main(path):
                 # and reporting that as "the control arm" would quietly turn a
                 # broken run into a clean-looking one — the exact shape of
                 # `gate-on-intent-not-outcome`.
-                asked_rot = bool(run and "X4VR_DECLARE_RENDERED_ROT=1" in run)
+                # Any non-zero setting, not just "=1": the knob also takes
+                # 2 and the words submit/draw, and matching only "=1" would
+                # call a mode-2 run unasked-for and FAIL it.
+                asked_rot = bool(run and any(
+                    f"X4VR_DECLARE_RENDERED_ROT={v}" in run
+                    for v in ("1", "2", "draw", "submit")))
                 if asked_rot and not rot_on:
                     why = ("GetCameraRotation did NOT resolve"
                            if "declrot: GetCameraRotation NOT FOUND" in text
                            else "no declrot: line at all, so the knob never "
                                 "reached the layer")
                     fails.append(
-                        f"X4VR_DECLARE_RENDERED_ROT=1 was set but every frame "
+                        f"X4VR_DECLARE_RENDERED_ROT was set but every frame "
                         f"declared the servo command — {why}. This run does "
                         f"NOT test #75's fix")
                 elif rot_on and not asked_rot:
