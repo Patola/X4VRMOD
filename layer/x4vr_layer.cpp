@@ -386,6 +386,37 @@ static bool declare_rendered_rot() {
     return cur;
 }
 
+// **X4VR_CAMSTAMP=1 — the number take 278 rested on and never measured.**
+//
+// Take 278's fix declared `camera(T_submit)`. But the pixels were drawn at
+// T_render < T_submit, so a FRESHER read leads the rendered pose by MORE, not
+// less. Which of the two candidate declarations is closer to the pose the
+// pixels actually came from depends entirely on `T_submit - T_render`, and no
+// log this project has ever taken carries it. The speed-matched arms crossed
+// over at ~100 deg/s in take 278 for exactly that reason.
+//
+// So: sample X4's camera at the FIRST render pass of each frame -- X4's render
+// thread, before it has drawn anything -- and carry it to the submission site,
+// where the second sample is already taken. The difference between the two IS
+// the missing quantity, and it is measured rather than assumed.
+//
+// Written on X4's render thread, read on the VR thread. `seq` is stored LAST
+// with release ordering and read FIRST with acquire, so a reader either sees a
+// complete stamp or an older one, never half of each.
+struct CamStamp {
+    std::atomic<float> yaw{0.0f}, pitch{0.0f};
+    std::atomic<double> t{0.0};
+    std::atomic<uint32_t> seq{0};
+    std::atomic<uint32_t> frame{0};   // bumped at each present
+    std::atomic<uint32_t> stamped{0}; // which frame this stamp belongs to
+};
+static CamStamp g_camstamp;
+
+static bool camstamp_enabled() {
+    static const bool on = x4vr::env_on("X4VR_CAMSTAMP", false);
+    return on;
+}
+
 // X4's own camera getter, resolved the same way the injector resolves it --
 // same process, so this is a direct call and not an IPC. The declaration is
 // read from `injector/x4vr_inject.cpp` (`struct X4Rotation { float yaw, pitch,
@@ -415,6 +446,30 @@ static bool x4_camera_rotation_now(float *yaw_deg, float *pitch_deg) {
     *yaw_deg = kRad2Deg * -r.yaw;
     *pitch_deg = kRad2Deg * r.pitch;
     return true;
+}
+
+// Defined further down, next to the capture code that also uses it. Declared
+// here because the camstamp needs the SAME clock X4VR_LOG stamps lines with --
+// a second clock would make `dt` incomparable to every other time in the log.
+inline double mono_now();
+
+// Called from x4vr_CmdBeginRenderPass, on X4's render thread. Samples once per
+// frame -- the FIRST render pass -- because that is the closest this layer can
+// stand to "when X4 decided what this frame looks like".
+static void camstamp_at_first_pass() {
+    if (!camstamp_enabled())
+        return;
+    const uint32_t f = g_camstamp.frame.load(std::memory_order_relaxed);
+    if (g_camstamp.stamped.load(std::memory_order_relaxed) == f)
+        return; // already stamped this frame
+    float y = 0.0f, p = 0.0f;
+    if (!x4_camera_rotation_now(&y, &p))
+        return;
+    g_camstamp.stamped.store(f, std::memory_order_relaxed);
+    g_camstamp.yaw.store(y, std::memory_order_relaxed);
+    g_camstamp.pitch.store(p, std::memory_order_relaxed);
+    g_camstamp.t.store(mono_now(), std::memory_order_relaxed);
+    g_camstamp.seq.fetch_add(1, std::memory_order_release);
 }
 
 // Task #77: turn the eye disparity by the head's roll.
@@ -10472,6 +10527,10 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBeginRenderPass(
         d = &g_devices.at(dispatch_key(cb));
     }
     cb_enter_pass(cb, bi->renderPass);
+    // #75: X4's camera at the START of the frame's drawing, on X4's own thread.
+    // Cheap (one call, once per frame) and gated, so a run that did not ask for
+    // it pays nothing.
+    camstamp_at_first_pass();
     // `|| ui_capture_wanted()`: the capture below needs the same framebuffer
     // record the probe needs, and gating it on the probe's knob would have made
     // layer B silently depend on an unrelated instrument being on. That exact
@@ -11299,6 +11358,9 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     // it would otherwise never get one, and "no session" would be reported for
     // a reason that has nothing to do with the runtime.
     vr_start_session_deferred();
+    // #75: the frame boundary the camstamp counts against. Bumped here so the
+    // NEXT frame's first render pass takes a fresh sample.
+    g_camstamp.frame.fetch_add(1, std::memory_order_relaxed);
     // #36: everything below that touches the queue -- the SBS composite, the
     // cursor overlay, the readback's QueueWaitIdle, and the present itself --
     // is inside this scope, so one lock covers X4's whole side of the shared
@@ -12721,6 +12783,44 @@ void vr_thread() {
                              (decl_pitch - ap) - raw_pitch, age, valid,
                              raw_valid, ay, ap, cmd_yaw, cmd_pitch,
                              now_ok ? 1u : 0u);
+                    // **The two-timestamp line: the number take 278 assumed.**
+                    //
+                    // `atdraw` is X4's camera sampled at the first render pass
+                    // of this frame, on X4's own thread; `atsubmit` is the same
+                    // call made here. `dt` is how far apart the two samples
+                    // are, and `dyaw` is how far X4's camera moved in between.
+                    //
+                    // dyaw is the WHOLE question. If it is ~0, "camera at
+                    // render" and "camera at submit" are the same pose and take
+                    // 278's fix declared the right thing; if it is comparable
+                    // to the 0.35-4.8 deg gain error, the fix swapped one lead
+                    // for another and the declaration has to be the atdraw
+                    // sample instead. Nothing else in this run decides that.
+                    if (camstamp_enabled()) {
+                        const uint32_t sq =
+                            g_camstamp.seq.load(std::memory_order_acquire);
+                        const float sy =
+                            g_camstamp.yaw.load(std::memory_order_relaxed);
+                        const float sp =
+                            g_camstamp.pitch.load(std::memory_order_relaxed);
+                        const double st =
+                            g_camstamp.t.load(std::memory_order_relaxed);
+                        float ny = 0.0f, np = 0.0f;
+                        const bool got =
+                            x4_camera_rotation_now(&ny, &np);
+                        // `seq` is re-read after the payload: if it moved, X4's
+                        // render thread stamped a new frame while this was
+                        // being read and the pairing is not a pairing. Reported
+                        // as torn rather than averaged in.
+                        const uint32_t sq2 =
+                            g_camstamp.seq.load(std::memory_order_acquire);
+                        X4VR_LOG("camstamp: atdraw=%.4f,%.4f atsubmit=%.4f,%.4f "
+                                 "dt=%.4f dyaw=%.4f dpitch=%.4f seq=%u "
+                                 "torn=%u got=%u",
+                                 sy, sp, ny, np, got ? mono_now() - st : -1.0,
+                                 got ? ny - sy : 0.0f, got ? np - sp : 0.0f, sq,
+                                 sq != sq2 ? 1u : 0u, got ? 1u : 0u);
+                    }
                 }
                 if (e == 0) {
                     static uint64_t n = 0;

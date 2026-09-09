@@ -111,6 +111,9 @@ def main(path):
         return 2
 
     fails = []
+    # The poselag gain error, hoisted so the camstamp section can scale
+    # against it whether or not the poselag branches that fill it ran.
+    gain = []
     run = next((ln.split("env: run =", 1)[1].strip()
                 for ln in lines if "env: run =" in ln), None)
     print(f"run  {run or '(not recorded — pre-take-34 build)'}")
@@ -2414,7 +2417,7 @@ def main(path):
                 # it is the number the fix is supposed to drive to zero. It is
                 # computed the same way in both arms, which is the only reason
                 # the arms can be compared at all.
-                gain = sorted(abs(r[8] - r[7]) for r in fresh
+                gain[:] = sorted(abs(r[8] - r[7]) for r in fresh
                               if r[8] is not None)
                 if gain:
                     m = len(gain)
@@ -2478,6 +2481,79 @@ def main(path):
                               f"warping each frame by an angle it was not drawn "
                               f"with, and that is a per-frame position error the "
                               f"servo's own tracking number cannot see.")
+
+    # --- task #75: the render-to-submit gap take 278 assumed -----------------
+    #
+    # Take 278 declared `camera(T_submit)` on the reasoning that a fresher read
+    # is a better one. But the pixels were drawn at T_render < T_submit, so a
+    # fresher read leads the RENDERED pose by more, not less, and which
+    # candidate is closer depends on how far the camera moves in between. That
+    # quantity was never measured; the speed-matched arms crossed over at
+    # ~100 deg/s because of it.
+    #
+    # `dyaw` is that quantity, measured. The verdict is a comparison against
+    # THIS run's own gain error, not against a constant carried from an earlier
+    # take -- a threshold remembered from another run is how a scorer ends up
+    # answering a question that has moved.
+    cs = re.findall(
+        r"camstamp: atdraw=(-?\d+\.\d+),(-?\d+\.\d+) "
+        r"atsubmit=(-?\d+\.\d+),(-?\d+\.\d+) dt=(-?\d+\.\d+) "
+        r"dyaw=(-?\d+\.\d+) dpitch=(-?\d+\.\d+) seq=(\d+) torn=(\d) got=(\d)",
+        text)
+    if cs:
+        # torn=0 AND got=1. Both conditions were inverted when this was first
+        # written, so every clean frame was discarded and every unusable one
+        # kept — and the FAIL branch fired on all four synthetic cases, which
+        # is the only reason it was caught before a run.
+        good = [(abs(float(g[5])), abs(float(g[6])), float(g[4]))
+                for g in cs if g[8] == "0" and g[9] == "1"]
+        torn = sum(1 for g in cs if g[8] == "1")
+        nogot = sum(1 for g in cs if g[9] == "0")
+        print(f"camstamp {len(cs)} frame(s), {len(good)} clean "
+              f"({torn} torn — X4 stamped a new frame mid-read, "
+              f"{nogot} with no camera call)")
+        if not good:
+            fails.append("camstamp produced no clean pair — X4VR_CAMSTAMP was "
+                         "set but every frame was torn or unstamped, so this "
+                         "run does NOT measure the render-to-submit gap")
+        else:
+            dy = sorted(g[0] for g in good)
+            dts = sorted(g[2] for g in good)
+            n = len(dy)
+            print(f"camstamp  render->submit dt: median {dts[n//2]*1000:.1f} ms,"
+                  f" p90 {dts[int(0.9*(n-1))]*1000:.1f} ms")
+            print(f"camstamp  |camera moved in between| yaw: median "
+                  f"{dy[n//2]:.3f} deg, p90 {dy[int(0.9*(n-1))]:.3f}, "
+                  f"max {dy[-1]:.3f}")
+            # The comparison that decides it, against this run's own numbers.
+            if gain:
+                gm = gain[len(gain) // 2]
+                gp = gain[int(0.9 * (len(gain) - 1))]
+                print(f"camstamp  this run's gain error |cmd-X4| for scale: "
+                      f"median {gm:.3f} deg, p90 {gp:.3f}")
+                ratio = dy[n // 2] / max(gm, 1e-9)
+                if ratio < 0.25:
+                    print(f"camstamp  => the gap is {ratio:.2f}x the gain error"
+                          f" — SMALL. Camera-at-submit is camera-at-render for "
+                          f"practical purposes, so take 278's fix declared the "
+                          f"right pose and the crossover has another cause. "
+                          f"Look at the servo lag (#78/#71), not the "
+                          f"declaration.")
+                elif ratio > 0.75:
+                    print(f"camstamp  => the gap is {ratio:.2f}x the gain error"
+                          f" — COMPARABLE. Take 278 swapped one lead for "
+                          f"another, which is exactly why the arms crossed "
+                          f"over. The declaration must be the ATDRAW sample; "
+                          f"declaring at submit cannot be right at any speed.")
+                else:
+                    print(f"camstamp  => the gap is {ratio:.2f}x the gain error"
+                          f" — INTERMEDIATE. Neither reading is clean; the "
+                          f"atdraw sample is still the better declaration but "
+                          f"it will not fully close #75 on its own.")
+            else:
+                print("camstamp  no poselag gain error in this log to scale "
+                      "against — the dyaw number above stands alone and the "
+                      "comparison that decides #75 cannot be made")
 
     # --- task #73: open-loop identification of X4's camera ------------------
     #
