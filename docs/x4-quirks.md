@@ -10071,30 +10071,93 @@ capped at 400 paths and the `livesets` walk is gated behind
 `X4VR_DUMP_MATRICES`, which this take already sets — so neither should move the
 perf number. Prediction 4 includes that band precisely so a surprise is visible.
 
-# RESUME HERE AFTER A COMPACT — state as of take 271, next is take 272 A/B
+# RESUME HERE AFTER A COMPACT — state as of take 272 A/B, both RUN and SCORED
 
 Everything below supersedes earlier "read this first" banners. **Where this
 banner and an older section disagree, this banner wins.**
 
 ## THE IMMEDIATE NEXT ACTION
 
-**Take 272 A then B, both specified verbatim under "#41 RE-SPECIFIED" below**,
-with their predictions. A first, scored, THEN B — 2.4 GB each against 4.8 GB
-free in /tmp, so back-to-back runs the second out of disk.
+**A stereo recording from the headset, which Patola has offered and which is a
+capture we have never had.** Every dump this project takes is UPSTREAM of the
+runtime's warp; a headset recording is the only instrument on the far side of
+it. It also converts the one question his eye cannot answer — magnitude across
+runs — into a file that can be measured.
 
-**The question B answers is binary and only Patola can answer it:** at the
-corners of the start menu and the map, **do the eyes fuse in B where they did
-not in A?** Not "better". Fuse or not.
+**Its value depends entirely on where in the chain it is taken**, and that is
+checkable from the file without asking: post-warp frames carry the lens
+distortion signature and dark corners, pre-warp frames are rectilinear with
+content to the edge. If it captures the submitted eye buffers it duplicates our
+present dumps and adds nothing; if it captures post-warp it is decisive.
 
-**Score B's log FIRST for `offaxis:` naming eye0 l=-54.00 r=40.00 u=44.00
-d=-55.00 and a non-zero `canvas final: N variant(s)`.** Zero variants or a
-missing `offaxis:` line means the affine never took and the run says nothing —
-that is the failure that looks like success.
+**What it decides.** Take 272 established that the UI we SUBMIT is geometrically
+perfect corner to corner (below). So the corner non-fusion is one of:
 
-**Expect monocular wings in B and do NOT read them as a failure.** Canting
-gives each eye ~14 deg the other cannot see; take 169b already produced this and
-Patola read it correctly. If the corner trouble MOVES OUTWARD instead of
-vanishing, that is the wing working, and it is the argument for #43.
+* **(a) downstream** — introduced by the runtime's warp or reprojection; or
+* **(b) not a rendering defect at all** — a correct flat canvas at 0.70 m
+  subtending ~44 deg half-diagonal necessarily asks for ~3.3 deg of
+  uncompensated disparity in the far periphery, which is past where peripheral
+  fusion holds while fixating elsewhere.
+
+The recording separates them in one measurement: if it shows the same uniform
+disparity the dumps do, it is (b) and the fix is the canvas distance; if it
+shows a gradient the dumps do not, it is (a) and the fix is in what we declare.
+
+**If (b): the single-variable knob is `X4VR_CANVAS_M=1000`, NOT omitting the
+variable.** `ui_ht` — the #76/#81 UI-field correction — is an argument to
+`make_canvas_k`, and that call sits inside `else if (asked_z || oa.on)`. With no
+distance named and the cant off, no canvas is built at all and **#76 silently
+switches back off**, blowing the HUD up 1.904x. Omitting the knob moves two
+variables. (`ui_canvas_m()`'s 0.7 m default governs the `X4VR_UI_LAYER` quad
+path only — a different reader of the same name.)
+
+## TAKE 272 A/B — RUN, SCORED, AND IT SETTLES #41
+
+Patola: *"no, run B does not fix it, the eyes don't fuse in either. In run B,
+the starting static loadscreen is horribly shifted, whereas in run A it looks
+ok."*
+
+**B's null is a REAL negative, and the loadscreen is what proves it.** The layer
+printed the prediction before the run: `offaxis: WARNING — this target is CANTED
+... the Sun's flare (#49) and the 2D load screen (#52) are both known to diverge
+per eye under it`. So B demonstrably reached the pipeline; a run that changed
+nothing could not have broken the loadscreen.
+
+**The cant does not buy corner fusion.** It costs an unbounded, unenumerable
+class of per-eye rivalry defects and buys 1.24x linear resolution. Corner fusion
+was the one benefit that could have justified the price, and it is refuted.
+**Take Option A** from "What the cant is worth, in numbers" — render symmetric,
+declare symmetric, which is already what ships (`X4VR_OFFAXIS` defaults off).
+That closes #41, and closes **#49 and #52 outright**, since both exist only
+under cant.
+
+**The submitted UI is geometrically perfect, and this time the measurement could
+have found otherwise.** Over the UI's own bounding box, 5x5, corners included:
+
+    take 272A n21   17 of 25 cells   dx -90.0 everywhere   gradient +0.0 px
+    take 272A n31   20 of 25 cells   dx -90.0 everywhere   gradient +0.0 px
+                    dy 0 in every cell; no cell saturated the +-40 px band
+
+The per-tile search is a band around the GLOBAL disparity, so a deviation up to
++-40 px would have been found and none was. -90.0 px is exactly the 0.70 m
+canvas (2 x 45.1). **This is not take 271's number re-quoted** — that one was
+tiled over the eye image and never reached a corner. See the WITHDRAWN entry
+below.
+
+**The loadscreen is at INFINITY, and that is by construction.** Procedural
+fullscreen quads are excluded from the canvas at `x4vr_layer.cpp:6039`, so they
+carry no per-eye shift at all. Take 272A n11 measures `dx = 0` over a 100%
+coverage frame — which is why it looks right in A. Under B's canted declaration
+the same unmapped quad diverges: measured `dx <= -800 px`, **saturating an
++-800 px search, so the true value is outside it.** The simple #52 arithmetic
+predicts 683 px (2 x 0.24251 x 1408), so the model is INCOMPLETE — recorded, not
+explained away. A 100%-coverage frame may also be the 3D menu backdrop rather
+than 2D artwork, which would carry the world's cant instead.
+
+**Take 272 predates the instrument fix.** Both logs scored clean otherwise; both
+carry the same two standing FAILs (pose fell back to identity 4x in A / 6x in B
+after being driven, and `X4VR_ROLL_STEREO` set with `X4VR_POSE=0`), identical
+across the pair, so they do not confound the A/B.
 
 ## CLOSED TODAY, with tags
 
