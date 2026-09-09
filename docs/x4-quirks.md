@@ -10111,6 +10111,52 @@ switches back off**, blowing the HUD up 1.904x. Omitting the knob moves two
 variables. (`ui_canvas_m()`'s 0.7 m default governs the `X4VR_UI_LAYER` quad
 path only — a different reader of the same name.)
 
+## TAKE 273 — the stereo recording is PRE-WARP, but it reframes #57
+
+`/dados/x4-vr-stereo.mp4`, 2160x1080 = two 1080x1080 eyes SBS, 30 fps, 196 s.
+**Rectilinear, full-bleed, no barrel distortion and no dark corners: it is the
+submitted eye buffers, not the panels.** So it does NOT settle "is the corner
+defect downstream of the warp" — that question is still open and still needs a
+post-warp capture.
+
+**What it does deliver, which no UI-only dump can: the UI and the world in the
+SAME frame.**
+
+    start menu, t=25s   scene backdrop  dx   0 px   (peaks 0.97-0.99)
+                        UI (menu text)  dx -58 px   (+-5, by superposition)
+    map, t=155s         map panel       dx -60..-70 px (peaks 0.92-0.98)
+
+**The backdrop of the start menu is at INFINITY while the UI sits at 0.70 m.**
+From our own numbers, not the video's: 2*atan(0.032/0.70) = **5.23 deg** of
+vergence demand against a backdrop asking for 0. Panum's fusional limit is
+~0.1-0.2 deg foveally and at best 1-2 deg in the periphery, so this is 3-25x
+past it. Fuse the UI and the backdrop doubles; fuse the backdrop and the UI
+doubles; at the corners you cannot foveate either, so you get whatever your
+vergence happens to be and it is wrong for one of them. **That is a complete
+arithmetic account of Patola's report and it needed no new measurement.**
+
+**So #57 is not "pick a distance", it is "pick a distance PER CONTEXT".** In the
+start menu and the map there is no cockpit — the world behind is at infinity, so
+a near canvas fights everything. In the cockpit the HUD legitimately belongs at
+the ship's distance (0.32-1.4 m, bulk 0.57-1.05). One global constant cannot
+serve both, and that is the reframing take 273 bought.
+
+**Caveats, stated because the numbers invite over-reading:**
+
+* **Do NOT convert the recording's pixels to degrees.** -58 px is 1.7x what a
+  faithful full-field downscale of our -90 px at 2816 predicts, so the recording
+  is cropped or zoomed by a factor we have not pinned. The 5.23 deg above comes
+  from the canvas arithmetic, never from the video.
+* **Four correlation attempts on the UI disagreed with what is plainly visible
+  in the frame** before the answer was taken by superposition instead. The menu
+  is a thin overlay on a bright 3D backdrop, so NCC locks onto the backdrop
+  (UI-region peaks 0.22-0.72 against the scene's 0.97-0.99) — the same
+  contamination `--ui` exists to avoid, and a composited recording has no UI
+  mask. See [[three-contradictory-measurements]]: the instrument was wrong, not
+  the observation.
+* The map's "right third" reading (-29 px, margin 0.005) is not trustworthy and
+  is excluded.
+
 ## TAKE 272 A/B — RUN, SCORED, AND IT SETTLES #41
 
 Patola: *"no, run B does not fix it, the eyes don't fuse in either. In run B,
