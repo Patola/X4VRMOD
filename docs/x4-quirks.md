@@ -15927,3 +15927,26 @@ phase correlation, which has no search range to saturate: -26..24 against a
 been reported, the conclusion would have been right by accident and the
 magnitude wrong. See [[range-failures-have-two-ends]],
 [[state-the-instrument-range]].
+
+### The two eyes are in temporal lockstep — #75 is ONE defect, not two
+
+Patola: *"the ghosting looked the same in both eyes as far as I could notice."*
+Measured on take 277's capture, same 270-frame window, both eyes:
+
+    L per-frame dx sd 7.31 px      R per-frame dx sd 7.29 px
+    cross-correlation of the two eyes' motion series:
+        lag -1  -0.5356
+        lag  0  +0.9996   <-- peak
+        lag +1  -0.5389
+    per-frame motion sign agrees 268/269 frames (99.6%)
+    per-frame |L-R| motion difference: median 0.0 px, p90 0.0 px
+
+**The null discriminates**, which is what makes it worth anything: a one-frame
+eye offset would have peaked at lag +-1, and those lags read **-0.54** against
++0.9996 at zero. The test had every chance to find an offset and found none.
+
+So there is no per-eye timing skew, and both eyes carry the SAME 30 Hz inversion
+at the same magnitude. #75 is a single shared frame-delivery defect, not a
+per-eye rivalry defect stacked on one — which is consistent with the mechanism
+being the pose declared per SUBMITTED FRAME, a per-frame quantity that cannot
+differ between eyes.
