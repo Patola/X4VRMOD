@@ -16445,10 +16445,29 @@ display frames. X4's camera rotates about the ship's pivot rather than the eye,
 so even pure head-look produces parallax the warp cannot undo — which is why it
 scales with head speed.
 
-### UNPRICED: camdiff's cost
+### camdiff PRICED — under 1%, and the 58 fps was my reading, not the instrument
 
-Take 282 ran **17.14 ms (58 fps)** against take 280's 11.36 ms (88 fps).
-`camdiff` takes `g_track.mu` at every present and walks the credit map, which is
-not obviously free the way `camstamp` provably was. This is NOT yet attributed:
-the range was 10.98-32.71 and the scene may differ. **Do not carry camdiff into
-a take whose number matters until it is priced**, the way take 279's was.
+Priced the way `camstamp` was: matched phases, instrument on against off. Three
+takes share the same two scene phases.
+
+| phase | take 280 (off) | take 281 (off) | **take 282 (ON)** |
+|---|---|---|---|
+| ~17 ms phase | 17.76 ms (8 win) | 17.16 ms (8 win) | **17.19 ms (7 win)** |
+| ~11.4 ms phase | 11.35 ms (27 win) | 11.36 ms (13 win) | **11.44 ms (4 win)** |
+
+**0.08-0.09 ms, under 1%** — and in the 17 ms phase take 282 lands BETWEEN the
+two instrument-free runs, so the difference is smaller than the run-to-run
+spread with it off.
+
+**The 58 fps GAMEPLAY figure was a composition artifact and I should have read
+it as one.** That number is a median over windows whose scenes differ by 3x.
+Take 280 spent 27 of 31 gameplay windows in the 11.35 ms phase; take 282 spent 4
+of 8 there and the rest at 17.19 / 23.04 / 32.71. Same per-phase cost, different
+mix, and the median moves from 11.36 to 17.14 without any setting changing.
+
+The scorer prints *"session-wide, so it compares scenes, not settings"* directly
+above that line. I quoted the aggregate against a previous run's aggregate
+anyway, which is the cross-run comparison the per-phase table exists to replace.
+See [[x4vr-aggregates-hide-local-defects]] and [[one-number-several-cameras]].
+
+`camdiff` may be carried into a take whose number matters.
