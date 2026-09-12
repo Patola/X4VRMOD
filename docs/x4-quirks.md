@@ -16280,3 +16280,69 @@ instrument.
 * **P281.4** The logged camera cadence is unchanged from take 280 (~26 Hz, 39 Hz
   while moving). If it is not, the recording changed the thing it measures and
   the capture is priced wrong.
+
+## WITHDRAWN, then INVERTED — X4 INTERPOLATES, and the channel is the defect
+
+**The take-281 analysis above is withdrawn.** It was run on a convenience
+re-encode, not on the capture. Patola flagged the original and the numbers are
+not close:
+
+| | original | re-encode |
+|---|---|---|
+| frames | **7536 / 125.6 s = 60 fps**, VFR | 11162 at a constant 90 fps |
+
+**The transcode padded 60 fps up to 90 by DUPLICATING frames** — 32.5% inserted
+duplicates — and duplicate frames were the entire signal the measurement was
+about. I checked the file's rate and took `avg_frame_rate=90` as a property of
+the capture; it was ffmpeg's output setting.
+See [[check-provenance-before-measuring]].
+
+**The capture rate was also read wrong.** 90 fps was asked for and assumed
+delivered. WiVRn captures on the 90 Hz clock but DROPS about one frame in three:
+the intervals alternate **11.11 / 22.22 ms**, exactly 1x and 2x a display frame.
+The data survives, but only through the PTS, using pairs exactly one display
+frame apart.
+
+### Re-measured on the original, 1-display-frame pairs only
+
+| | re-encode (void) | **original** |
+|---|---|---|
+| frames moving >1 px | 40.7% | **79.3%** |
+| median displacement | 0.187 px | **4.857 px** |
+
+Negative control, the pause at 01:34: median **0.073 px**, 7.9% moving — so the
+sweep motion is the camera and not the ship or the scene, and the ~16% of
+sweep frames below threshold are direction reversals.
+
+### P281.1 REFUTED, P281.2 CONFIRMED — and #75 moves
+
+**X4 renders smooth ~90 fps camera motion while `GetCameraRotation` reports a
+~38 Hz staircase** (41.7% of frames while moving). The image moves on ~80% of
+consecutive display frames; the channel we sample changes on 42%.
+
+**So every declaration this project has ever tried — `cmd`, `raw`, `atsubmit`,
+`atdraw` — is a sample of a staircase that X4's renderer does not use.** We
+declare a staircase against smooth content, the compositor warps by the
+difference, and that difference oscillates at ~38 Hz. That is the jitter, and it
+explains what four takes could not:
+
+* it survives every declaration variant, because all four sample one channel;
+* it scales with head speed, because the staircase's step size does;
+* it is ~30-38 Hz, which is what take 277's video measured as 30.4 Hz.
+
+The `[[three-fixes-one-unmeasured-number]]` pattern was called correctly at take
+280 — four interventions, one shared input — but the shared input was not the
+cadence of X4's camera. It was **the assumption that `GetCameraRotation`
+describes what X4 draws.** It does not.
+
+### THE FIX IS NO LONGER A CHOICE OF SAMPLE
+
+`GetCameraRotation` must stop being the source of the declared orientation. The
+rendered camera has to come from what the shaders actually use — the per-object
+model-view matrices, since `M_view` is IDENTITY under X4's camera-relative
+rendering. The passive instrument proposed after take 280 is now the FIX, not a
+diagnostic.
+
+Declaring the head pose instead is NOT the answer: past the yaw clamp X4's
+camera stops while the head keeps going, which is the case the original comment
+at the declaration site was written to avoid.
