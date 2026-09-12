@@ -2602,6 +2602,63 @@ def main(path):
                       "against — the dyaw number above stands alone and the "
                       "comparison that decides #75 cannot be made")
 
+    # --- task #75: which per-view member carries the SMOOTH camera ----------
+    #
+    # Take 281's ORIGINAL capture (the re-encode was void -- its transcode
+    # manufactured 32.5% duplicate frames, and duplicates were the signal) says
+    # X4 renders smooth ~90 fps motion: 79.3% of consecutive display frames move,
+    # median 4.857 px, against 0.073 px held still. `GetCameraRotation` changes
+    # on 41.7%. So X4 interpolates and that getter does not describe what X4
+    # draws -- which retires every declaration this project has tried, since all
+    # four sample it.
+    #
+    # `camdiff` diffs the 11 mat4s of the per-view block per frame. The member
+    # changing on ~80-90% of frames is the smooth camera the declaration must
+    # read. The verdict is NOT hardcoded to a member name: naming the expected
+    # winner in advance is how an instrument ends up confirming the guess it was
+    # built around.
+    cd_ = re.findall(
+        r"camdiff: cam@(\d+) draws=(\d+) (\S+)\s+changed on\s+([\d.]+)% of "
+        r"(\d+) frames, max delta ([\d.]+)", text)
+    if cd_:
+        # Last complete report only: the counters are cumulative, so the final
+        # block is the one with the most frames behind it.
+        last = {}
+        for cam, draws, name, pct, fr, mx in cd_:
+            last[name] = (float(pct), int(fr), float(mx), cam, int(draws))
+        fr = max(v[1] for v in last.values())
+        cam = next(iter(last.values()))[3]
+        print(f"camdiff  per-view block of camera @{cam}, {fr} frames diffed")
+        for name, (pct, _f, mx, _c, _d) in sorted(
+                last.items(), key=lambda kv: -kv[1][0]):
+            print(f"camdiff    {name:<18} {pct:5.1f}%  max delta {mx:.6f}")
+        # A member only counts as the smooth camera if it ALSO carries real
+        # motion: a jitter matrix dithering in its last bit changes on every
+        # frame and means nothing, which is what max delta is here to catch.
+        smooth = [n for n, v in last.items()
+                  if v[0] >= 70.0 and v[2] > 1e-4]
+        stair = [n for n, v in last.items() if 25.0 <= v[0] <= 55.0]
+        if smooth:
+            print(f"camdiff  => SMOOTH channel(s): {', '.join(smooth)} — "
+                  f"changing on >=70% of frames with real magnitude. This is "
+                  f"what the declared orientation must be read from; "
+                  f"GetCameraRotation is not it.")
+        else:
+            print("camdiff  => NO member changes on >=70% of frames with real "
+                  "magnitude. Either X4's smooth camera is not in this block "
+                  "at all (it would then be per-object, baked CPU-side under "
+                  "camera-relative rendering), or the wrong camera was picked "
+                  "— check the draws count above against the `proj CAMERA` "
+                  "lines before concluding anything.")
+        if stair:
+            print(f"camdiff  => staircase-rate member(s): {', '.join(stair)} — "
+                  f"these move at GetCameraRotation's ~40%, so they are another "
+                  f"view of the channel already known to be wrong")
+    elif run and "X4VR_CAMDIFF=1" in run:
+        fails.append("X4VR_CAMDIFF=1 was set but no camdiff line was written — "
+                     "no credited camera block was readable, so this run does "
+                     "NOT locate the smooth camera")
+
     # --- task #73: open-loop identification of X4's camera ------------------
     #
     # Take 212 measured the plant THROUGH a closed loop, which picks its command

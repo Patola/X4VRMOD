@@ -449,6 +449,48 @@ static bool camstamp_enabled() {
     return on;
 }
 
+// **X4VR_CAMDIFF=1 — find the channel that carries the SMOOTH camera.**
+//
+// Take 281's original capture (the re-encode was void; it had manufactured 32.5%
+// duplicate frames) says X4 renders smooth ~90 fps motion -- 79.3% of
+// consecutive display frames move, median 4.857 px, against 0.073 px in the
+// held-still control -- while `GetCameraRotation` changes on only 41.7%. So X4
+// interpolates and that getter does NOT describe what X4 draws. Every
+// declaration this project has tried samples it.
+//
+// The smooth camera therefore lives somewhere in the per-view constants X4
+// uploads. **Which member is not worth guessing**: `M_view` is IDENTITY under
+// camera-relative rendering, which also means `M_viewinverse` is and
+// `M_viewprojection` collapses to `M_projection`, so the rotation has to be
+// carried by something else -- plausibly the shadow matrices, which are
+// world-to-light and cannot be camera-relative, but that is a hypothesis and
+// this instrument exists so it does not have to be one.
+//
+// So: diff the whole block per frame and report, per mat4, on what fraction of
+// frames it changed. A member changing on ~80-90% of frames is the smooth
+// camera; one changing on ~40% is another view of the staircase we already
+// have. Reporting ALL members including the static ones is deliberate -- a
+// member that never changes and a member never examined look identical in a
+// report that only lists hits.
+static bool camdiff_enabled() {
+    static const bool on = x4vr::env_on("X4VR_CAMDIFF", false);
+    return on;
+}
+
+struct CamDiff {
+    static constexpr uint32_t kFloats = 176; // the 11 mat4s, 704 bytes
+    static constexpr uint32_t kMats = 11;
+    float prev[kFloats] = {};
+    bool have = false;
+    uint64_t frames = 0;
+    uint64_t changed[kMats] = {};
+    // Largest single-frame delta seen per member, so a member that changes
+    // often but by nothing (a jitter matrix dithering in the last bit) is
+    // distinguishable from one carrying real motion.
+    float maxdelta[kMats] = {};
+};
+static CamDiff g_camdiff;
+
 // X4's own camera getter, resolved the same way the injector resolves it --
 // same process, so this is a direct call and not an IPC. The declaration is
 // read from `injector/x4vr_inject.cpp` (`struct X4Rotation { float yaw, pitch,
@@ -11386,6 +11428,68 @@ inline bool vr_begin_blit(VkSwapchainKHR) { return false; }
 inline void vr_finish_blit() {}
 #endif
 
+// #75. Sampled at end-of-frame on X4's OWN thread, not at the first render
+// pass: the credit map is built during the frame, so at the first pass there is
+// nothing populated to read. This is a diff of bytes X4 wrote, so end-of-frame
+// is exactly right -- it is the state the frame was drawn with.
+//
+// One camera, chosen as the most-drawn credited slot and NAMED in the report.
+// Averaging several cameras here would repeat the defect #53 was written to fix:
+// X4 runs several cameras at once and pooling them hides which one moved.
+static void camdiff_sample() {
+    if (!camdiff_enabled())
+        return;
+    // g_track.mu, not g_mu: `credit` and the mapping tables slot_host_ptr walks
+    // both live under the Tracking mutex, and slot_host_ptr documents at its
+    // definition that the caller holds it.
+    std::lock_guard<std::mutex> lock(g_track.mu);
+    const ViewSlot *best = nullptr;
+    uint32_t best_n = 0;
+    for (auto &kv : g_track.credit)
+        if (kv.second > best_n) {
+            best_n = kv.second;
+            best = &kv.first;
+        }
+    if (!best)
+        return;
+    float *cblk = slot_host_ptr(*best);
+    if (!cblk)
+        return;
+    CamDiff &d = g_camdiff;
+    if (d.have) {
+        d.frames++;
+        for (uint32_t m = 0; m < CamDiff::kMats; m++) {
+            float mx = 0.0f;
+            for (uint32_t i = m * 16; i < m * 16 + 16; i++)
+                mx = std::fmax(mx, std::fabs(cblk[i] - d.prev[i]));
+            if (mx > 0.0f) {
+                d.changed[m]++;
+                d.maxdelta[m] = std::fmax(d.maxdelta[m], mx);
+            }
+        }
+        // Every 900 frames -- ~10 s at 90 Hz, long enough that a rate is a rate
+        // and not a handful of samples.
+        if ((d.frames % 900) == 0) {
+            static const char *nm[CamDiff::kMats] = {
+                "M_view",          "M_projection",   "M_invprojection",
+                "M_projection_uj", "M_invproj_uj",   "M_jitter",
+                "M_prevjitter",    "M_viewprojection", "M_viewinverse",
+                "M_shadowCSM0",    "M_shadowCSM1"};
+            for (uint32_t m = 0; m < CamDiff::kMats; m++)
+                X4VR_LOG("camdiff: cam@%llu draws=%u %-17s changed on %5.1f%% "
+                         "of %llu frames, max delta %.6f",
+                         (unsigned long long)best->offset, best_n, nm[m],
+                         100.0 * (double)d.changed[m] / (double)d.frames,
+                         (unsigned long long)d.frames, d.maxdelta[m]);
+            X4VR_LOG("camdiff: a member changing on ~80-90%% of frames is the "
+                     "SMOOTH camera and is what the declaration must read; ~40%% "
+                     "is another view of the GetCameraRotation staircase");
+        }
+    }
+    memcpy(d.prev, cblk, sizeof(d.prev));
+    d.have = true;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     VkQueue queue, const VkPresentInfoKHR *pi) {
     // Backstop. The session normally starts at the first vkGetDeviceQueue, but
@@ -11396,6 +11500,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     // #75: the frame boundary the camstamp counts against. Bumped here so the
     // NEXT frame's first render pass takes a fresh sample.
     g_camstamp.frame.fetch_add(1, std::memory_order_relaxed);
+    camdiff_sample();
     // #36: everything below that touches the queue -- the SBS composite, the
     // cursor overlay, the readback's QueueWaitIdle, and the present itself --
     // is inside this scope, so one lock covers X4's whole side of the shared

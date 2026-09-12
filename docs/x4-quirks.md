@@ -16346,3 +16346,43 @@ diagnostic.
 Declaring the head pose instead is NOT the answer: past the yaw clamp X4's
 camera stops while the head keeps going, which is the case the original comment
 at the declaration site was written to avoid.
+
+## Take 282 — X4VR_CAMDIFF locates the smooth camera
+
+`GetCameraRotation` is retired as a source. The smooth camera must be read from
+what the shaders actually use, and rather than guess which of the 11 per-view
+mat4s carries it, `X4VR_CAMDIFF=1` diffs the whole 704-byte block per frame and
+reports, per member, on what fraction of frames it changed.
+
+**Sampled at end-of-frame on X4's own thread**, not at the first render pass:
+the credit map is built during the frame, so at the first pass there is nothing
+populated to read. One camera, the most-drawn credited slot, NAMED in the report
+with its draw count — pooling several would repeat the defect #53 exists to fix.
+
+**The verdict is not hardcoded to a member name.** Naming the expected winner in
+advance is how an instrument confirms the guess it was built around.
+
+### PREDICTIONS FOR TAKE 282, recorded before the run
+
+* **P282.1** Exactly one family of members changes on ~80-90% of frames with
+  real magnitude, and it is NOT `M_view` — `M_view` is IDENTITY under
+  camera-relative rendering, which also empties `M_viewinverse` and collapses
+  `M_viewprojection` onto `M_projection`. The shadow matrices are the standing
+  hypothesis because world-to-light cannot be camera-relative, but the
+  instrument exists so that this does not have to be assumed.
+* **P282.2** `M_jitter` changes on ~100% of frames with a magnitude near 1e-6.
+  It is TAA dither, not camera motion, and the max-delta gate must reject it.
+  If the report calls it the smooth channel, the gate is wrong and the run says
+  nothing.
+* **P282.3** At least one member changes at ~40%, matching
+  `GetCameraRotation`'s cadence — another view of the staircase.
+* **P282.4 (the outcome that would move #75 again)** NO member reaches 70% with
+  real magnitude. Then X4's smooth camera is not in the per-view block at all
+  and is baked per-object CPU-side, which makes the object blocks (#66's walk)
+  the next place to look and makes the fix substantially harder.
+
+### What this run does NOT do
+
+It changes nothing the player sees. The declaration still reads the at-draw
+sample, which take 280 showed is not the jitter. This is a locate, not a fix,
+and the jitter is expected to be exactly as Patola last reported it.
