@@ -16153,3 +16153,74 @@ reproducible; silently redefining it would make that log incomparable.
 different from the control ones. That puts the cause outside the declaration
 entirely, and the next suspect is X4's own 30 fps content clock against the
 90 Hz display — not another declaration knob.
+
+## Take 280 REFUTES the declaration — and names the shared input
+
+**P280.1 is refuted on the channel that decides it.** The A/B ran (20 phases,
+11008 at-draw frames against 12347 control, logged and balanced) and Patola
+could not tell the phases apart: *"There were no phases... There was still
+jitter."* The declaration is now provably exact and the jitter is unchanged, so
+**#75's declared orientation is ELIMINATED as its cause.**
+
+**P280.2 is confirmed**, which is what makes the refutation trustworthy rather
+than a null from a knob that did nothing: `dyaw` is identical across arms
+(median 0.458 deg in BOTH, p90 1.146 vs 1.260, stepped 26.6% vs 28.6%). The knob
+does not move it, so the stamp is taken where it is believed to be taken.
+
+### What take 280 did establish
+
+`camstamp` logs `atdraw` on every frame in both arms, so the declaration error
+against the rendered-from pose is computable the SAME way in each — the first
+like-for-like version of this number:
+
+| head speed | at-draw | control (`\|cmd - atdraw\|`) |
+|---|---|---|
+| 0-10 deg/s | 0.000 | 0.461 |
+| 10-30 | 0.000 | 0.805 |
+| 30-60 | 0.000 | 1.144 |
+| 60-100 | 0.000 | 1.265 |
+
+Frame counts are matched across arms in every bin, so take 278's speed confound
+is gone. The at-draw column being 0.000 is **partly a tautology** and is not
+offered as more: in that arm `declared` and `atdraw` come from one source, so it
+verifies the plumbing and says nothing about whether `atdraw` is the pose the
+pixels came from. See [[x4vr-guard-that-cannot-fail]].
+
+### The shared input, which is the real finding
+
+We submit at **90.9 Hz**. X4's camera, through `GetCameraRotation`, changes on
+**28.6% of rendered frames (26 Hz)** — 42.9% while the head moves (39 Hz). About
+**2.3 rendered frames share each camera value.**
+
+**Every declaration tried is a function of that one channel**: `cmd` is the
+servo driven by it, `raw` is it, `atsubmit` and `atdraw` are it sampled at two
+instants. Four interventions, four identical outcomes, one shared input — the
+pattern [[three-fixes-one-unmeasured-number]] exists to catch, one level up from
+where it caught it before.
+
+### THE QUESTION FOR TAKE 281 — and no fix until it is answered
+
+**Does X4's renderer move smoothly between its 26 Hz camera updates?**
+
+* If X4 renders a staircase, the content steps and a correct declaration lets
+  the compositor smooth it — but then take 280 should have worked, so something
+  downstream is not reprojecting.
+* If X4 **interpolates** — 90 smooth frames from a camera re-read 26 times a
+  second — then we have been declaring a staircase against smooth content all
+  along and **no sample from this channel can be right**. This fits every
+  observation: jitter that survives all four declarations and scales with head
+  speed.
+
+The instrument is NOT a dump burst: dumping slows the game, each rendered frame
+then gets a fresh camera, and the staircase would vanish as an artifact of the
+instrument. The measurement has to be passive — the per-object model-view
+rotation X4 uploads per frame, whose change cadence can be compared directly
+against `GetCameraRotation`'s. `M_view` cannot serve: it is IDENTITY under X4's
+camera-relative rendering, which is why the rotation lives in the per-object
+blocks.
+
+### What stays
+
+The at-draw declaration is kept and is strictly more correct (0.000 against
+0.46-1.27 deg) at no measured cost — take 280 ran 11.36 ms against take 278's
+11.38. It is not the jitter fix and is not presented as one.
