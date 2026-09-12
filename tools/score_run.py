@@ -2602,6 +2602,51 @@ def main(path):
                       "against — the dyaw number above stands alone and the "
                       "comparison that decides #75 cannot be made")
 
+    # --- task #75: do WE send sparsely, or does X4 ignore what we send? -----
+    #
+    # X4's camera changes on a near-constant ~43% of RENDERED frames across
+    # takes 280/281/282 (42.9%, 41.7% at 88 fps; 44.6% at 58 fps), so it tracks
+    # the frame loop rather than a fixed sim clock. `inputrate` counts, at full
+    # rate, how often the servo actually emits a delta against how often X4's
+    # camera then moves. The two hypotheses want opposite fixes.
+    ir = re.findall(
+        r"inputrate: (\d+) ticks in ([\d.]+) s = ([\d.]+) Hz \| delta sent on "
+        r"([\d.]+)% \(=([\d.]+) Hz\) \| X4 camera moved on ([\d.]+)% "
+        r"\(=([\d.]+) Hz\) \| clamped ([\d.]+)%", text)
+    if ir:
+        g = ir[-1]  # cumulative, so the last line has the most behind it
+        ticks, secs, hz = int(g[0]), float(g[1]), float(g[2])
+        sent_p, sent_hz = float(g[3]), float(g[4])
+        cam_p, cam_hz = float(g[5]), float(g[6])
+        clamp_p = float(g[7])
+        print(f"inputrate  {ticks} ticks over {secs:.0f} s = {hz:.1f} Hz; "
+              f"delta sent on {sent_p:.1f}% ({sent_hz:.1f} Hz), X4 camera moved "
+              f"on {cam_p:.1f}% ({cam_hz:.1f} Hz), clamped {clamp_p:.1f}%")
+        if sent_p < 60.0:
+            print(f"inputrate  => OURS. The servo emits a delta on only "
+                  f"{sent_p:.1f}% of ticks, so X4 cannot update more often than "
+                  f"we ask it to. A count needs 0.23 deg of error while the "
+                  f"dead zone sits at 0.15, and lround DISCARDS the residue — "
+                  f"carrying it instead would emit on nearly every tick at the "
+                  f"same average rate. This is fixable here.")
+        elif cam_p < 0.75 * sent_p:
+            print(f"inputrate  => X4's. We send on {sent_p:.1f}% of ticks and "
+                  f"the camera moves on only {cam_p:.1f}%, so X4 is sampling "
+                  f"the mouse at its own rate and dropping the rest. Not "
+                  f"fixable from this side: the staleness has to be hidden "
+                  f"rather than removed, which means #86-style work on the "
+                  f"warp, not on the input.")
+        else:
+            print(f"inputrate  => the camera follows what we send "
+                  f"({cam_p:.1f}% against {sent_p:.1f}%), so the rate is set by "
+                  f"the TICK rate of {hz:.1f} Hz. If that is below the display "
+                  f"rate the head-pose publish is the bottleneck, and it is "
+                  f"ours.")
+        if hz < 60.0:
+            print(f"inputrate  NOTE: the tick rate itself is only {hz:.1f} Hz. "
+                  f"The servo cannot act faster than it is ticked, so this "
+                  f"bounds everything above.")
+
     # --- task #75: which per-view member carries the SMOOTH camera ----------
     #
     # Take 281's ORIGINAL capture (the re-encode was void -- its transcode

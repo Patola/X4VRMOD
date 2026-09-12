@@ -2570,6 +2570,66 @@ void headlook_tick() {
                  have_cam ? kRad2Deg * r.pitch : 0.0f);
     }
 
+    // **Task #75: do WE send sparsely, or does X4 ignore what we send?**
+    //
+    // X4's camera changes on a near-constant ~43% of RENDERED frames across
+    // three runs -- 42.9% and 41.7% at 88 fps, 44.6% at 58 fps -- so it is tied
+    // to the frame loop rather than to a fixed sim clock. Two hypotheses with
+    // opposite fixes, and until now nothing in the log separated them:
+    //
+    //   ours   the servo emits a delta on only ~43% of ticks, because a count
+    //          needs 0.23 deg of error (kp 0.25, gain 0.115, lround) and the
+    //          0.15 deg dead zone sits below that. Fixable here: carry the
+    //          rounding residue instead of discarding it.
+    //   X4's   we send on nearly every tick and X4 samples the mouse at its own
+    //          rate. Not fixable from this side, and the staleness has to be
+    //          hidden rather than removed.
+    //
+    // COUNTED, not sampled: the `headlook:` line above fires every 30 ticks AND
+    // on every clamp, so reading a rate off it would be reading a biased subset
+    // -- which is how the 12.4%-zero-delta figure misled me once already.
+    //
+    // `cam_moved` is X4's readback changing between ticks, which is the same
+    // event `camdiff` counts per frame from the other side of the process. The
+    // two are expected to agree; if they do not, one of them is wrong.
+    {
+        static uint64_t ticks = 0, sent = 0, cam_moved = 0, clamps = 0;
+        static float last_cam = 0.0f;
+        static double t0 = 0.0;
+        const double now = mono_seconds();
+        if (t0 == 0.0)
+            t0 = now;
+        ticks++;
+        if (d.dx != 0 || d.dy != 0)
+            sent++;
+        if (d.clamped)
+            clamps++;
+        if (have_cam) {
+            const float c = kRad2Deg * -r.yaw;
+            if (c != last_cam)
+                cam_moved++;
+            last_cam = c;
+        }
+        if ((ticks % 600) == 0) {
+            const double dt = now - t0;
+            X4VR_LOG("inputrate: %llu ticks in %.1f s = %.1f Hz | delta sent on "
+                     "%.1f%% (=%.1f Hz) | X4 camera moved on %.1f%% (=%.1f Hz) "
+                     "| clamped %.1f%% | deadzone %.2f deg, %.3f deg per count, "
+                     "kp %.2f -> a count needs %.3f deg of error",
+                     (unsigned long long)ticks, dt, dt > 0 ? ticks / dt : 0.0,
+                     100.0 * (double)sent / (double)ticks,
+                     dt > 0 ? sent / dt : 0.0,
+                     100.0 * (double)cam_moved / (double)ticks,
+                     dt > 0 ? cam_moved / dt : 0.0,
+                     100.0 * (double)clamps / (double)ticks,
+                     g_headlook.dead_zone_deg, g_headlook.gain_deg_per_count,
+                     g_headlook.servo_kp,
+                     0.5f * g_headlook.gain_deg_per_count /
+                         (g_headlook.servo_kp > 0.0f ? g_headlook.servo_kp
+                                                     : 1.0f));
+        }
+    }
+
     if ((n++ % 30) == 0 || d.clamped)
         X4VR_LOG("headlook: head %.2f,%.2f -> cmd %.2f,%.2f delta %d,%d%s",
                  yaw, pitch, g_headlook.cmd_yaw_deg, g_headlook.cmd_pitch_deg,

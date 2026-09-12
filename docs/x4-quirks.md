@@ -16471,3 +16471,45 @@ anyway, which is the cross-run comparison the per-phase table exists to replace.
 See [[x4vr-aggregates-hide-local-defects]] and [[one-number-several-cameras]].
 
 `camdiff` may be carried into a take whose number matters.
+
+## Take 283 — is the 26 Hz camera OURS or X4's?
+
+The rate is not a fixed sim clock. Across three runs the camera changes on a
+near-constant fraction of RENDERED frames:
+
+| run | render | camera changes | rate |
+|---|---|---|---|
+| 280 | 88 fps | 42.9% | 39.0 Hz |
+| 281 | 88 fps | 41.7% | 37.9 Hz |
+| 282 | 58 fps | 44.6% | 25.9 Hz |
+
+**~43% of rendered frames, whatever the frame rate.** That is tied to the frame
+loop, and it splits into two hypotheses whose fixes point in opposite
+directions:
+
+* **OURS** — the servo emits a delta on only ~43% of ticks. A count needs
+  **0.23 deg** of error (`kp` 0.25, gain 0.115, `lround`) while the dead zone
+  sits at **0.15**, and `lround` DISCARDS the residue. Fixable here: carry it.
+* **X4's** — we send on nearly every tick and X4 samples the mouse at its own
+  rate. Not fixable from this side; the staleness would have to be hidden.
+
+`X4VR_HEADLOOK=1` now emits `inputrate` every 600 ticks, COUNTED at full rate.
+Not sampled: the `headlook:` line fires every 30 ticks AND on every clamp, and
+reading a rate off that biased subset is how its 12.4%-zero-delta figure misled
+me once already.
+
+`cam_moved` here is the same event `camdiff` counts from the other side of the
+process. **They are expected to agree, and disagreement means one is wrong** —
+that is the cross-check, not a redundancy.
+
+### PREDICTIONS FOR TAKE 283, recorded before the run
+
+* **P283.1** The tick rate is ~the render rate, because the layer publishes one
+  head pose per submitted frame and the servo gates on `fresh`. If it is
+  materially lower, the publish is the bottleneck and everything above is moot.
+* **P283.2** `delta sent on` lands near **43%**, matching the camera rate —
+  i.e. OURS, and the residue-carrying fix applies.
+* **P283.3** `X4 camera moved on` agrees with `camdiff`'s per-frame figure to
+  within a couple of points. Disagreement invalidates one instrument and the
+  run says nothing until that is settled.
+* **P283.4** Nothing the player sees changes. This is a counter.
