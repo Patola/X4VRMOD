@@ -16386,3 +16386,69 @@ advance is how an instrument confirms the guess it was built around.
 It changes nothing the player sees. The declaration still reads the at-draw
 sample, which take 280 showed is not the jitter. This is a locate, not a fix,
 and the jitter is expected to be exactly as Patola last reported it.
+
+## Take 282: X4 does NOT interpolate — and take 281's capture was POST-reprojection
+
+**The "X4 interpolates" conclusion is withdrawn. That is twice on take 281.**
+
+`camdiff`, reading the bytes X4 uploads, from inside X4:
+
+| member | changed on | max delta |
+|---|---|---|
+| `M_view` | **44.6%** | 13755.35 |
+| `M_viewprojection` | **44.6%** | 9632.02 |
+| `M_viewinverse` | **44.6%** | 11834.48 |
+| `M_projection`, `_uj`, `M_jitter`, `M_prevjitter` | 0.1% | — |
+| `M_shadowCSM0/1` | **0.0%** | 0.000000 |
+
+This run rendered at **58 fps**; a ~26 Hz camera against 58 fps is 45%. **The
+view matrix the shaders use steps at the camera rate.** X4 renders a staircase,
+and `GetCameraRotation` was describing it correctly all along.
+
+* **P282.1 REFUTED** — the shadow matrices never change. The standing hypothesis
+  was wrong, which is what the instrument was built to allow.
+* **P282.2 partly refuted** — `M_jitter` did not change on ~100% of frames
+  either; it moves with everything else at the block's rewrite rate.
+* **P282.3 CONFIRMED** — three members move at the staircase rate.
+* **P282.4 fired**, but its stated consequence does NOT follow: no member reaches
+  70% because **there is no smooth camera to find**. `M_view` is also NOT
+  identity for this camera (max delta 13755 m), so #53's "identity in every one"
+  is a per-camera fact, not a global one.
+
+### Where take 281 went wrong the second time
+
+I called the capture **pre-warp from the absence of lens distortion and dark
+corners**. That was an inference from an appearance, not a measurement, and
+`camdiff` contradicts it: X4's content steps on 44.6% of frames while the
+capture moves on 79-84%. Nothing downstream of X4 can ADD motion except the
+compositor, so **the capture is post-reprojection** — WiVRn records the
+composited frame before the lens pass, not X4's submitted frame.
+
+The capture's interval pattern is a strict `22, 11, 22, 11` — it takes two of
+every three display frames and never three in a row, so the longest run of
+consecutive display frames is **one pair**. A per-frame smoothness sequence
+cannot be built from it at all.
+
+### What this leaves standing
+
+1. X4's content is stale for 2-3 display frames (44.6% step rate, measured
+   inside X4).
+2. **Reprojection IS working** — the post-reprojection capture moves on 79-84%
+   of frames where the content moves on 45%.
+3. The declared orientation is exact (take 280, `|declared - atdraw|` = 0.000).
+4. Patola still sees jitter.
+
+So the surviving mechanism is that **rotation-only reprojection cannot repair
+content staleness for anything that is not pure rotation about the eye**: scene
+motion, the ship's own translation, and cockpit parallax all freeze for 2-3
+display frames. X4's camera rotates about the ship's pivot rather than the eye,
+so even pure head-look produces parallax the warp cannot undo — which is why it
+scales with head speed.
+
+### UNPRICED: camdiff's cost
+
+Take 282 ran **17.14 ms (58 fps)** against take 280's 11.36 ms (88 fps).
+`camdiff` takes `g_track.mu` at every present and walks the credit map, which is
+not obviously free the way `camstamp` provably was. This is NOT yet attributed:
+the range was 10.98-32.71 and the scene may differ. **Do not carry camdiff into
+a take whose number matters until it is priced**, the way take 279's was.
