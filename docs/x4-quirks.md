@@ -16224,3 +16224,59 @@ blocks.
 The at-draw declaration is kept and is strictly more correct (0.000 against
 0.46-1.27 deg) at no measured cost — take 280 ran 11.36 ms against take 278's
 11.38. It is not the jitter fix and is not presented as one.
+
+## Take 281 — a recording that can answer the matrix question without the matrix
+
+Take 280 measured X4 rendering at **88 fps while its camera changes on 28.6% of
+frames (26 Hz)**. Whether that staircase reaches the pixels is the whole
+question, and a capture can settle it because it shows the image rather than the
+channel we have been sampling.
+
+**The discriminator is CONSTANT ANGULAR VELOCITY, and it is why the protocol
+matters more than the length.** Under a steady sweep:
+
+* a smoothly interpolated render gives **equal per-frame displacement** — the
+  image moves on ~100% of frames;
+* a 26 Hz staircase gives **0, 0, X, 0, 0, X** — the image moves on ~29% of
+  frames, in gaps of 3.
+
+Random movement cannot separate those: a step and a genuine change of velocity
+look identical frame to frame. Take 280's "uniform speed, random direction" was
+the right instinct for an A/B and is the wrong substrate for this.
+
+**Single condition, no A/B.** `X4VR_DECLARE_RENDERED_ROT=2` with no `_AB`, so
+every frame of the recording is comparable. Alternating here would split the
+capture into arms too short to fit a steady sweep.
+See [[x4vr-instruments-perturb-interaction]].
+
+### Where in the chain the capture sits decides WHICH question it answers
+
+Checked from the file, never by asking — post-warp frames carry lens distortion
+and dark corners, pre-warp frames are rectilinear to the edge:
+
+* **pre-warp** (what take 273 turned out to be): the capture IS X4's submitted
+  frame, so the declaration cannot touch it and the stepping it shows is X4's
+  renderer directly. **That answers the matrix question outright** and the
+  passive per-object instrument is not needed.
+* **post-warp**: the capture is after reprojection, so stepping there means the
+  compositor is not smoothing a staircase it should be smoothing — a different
+  and equally useful answer.
+
+Either way it informs the next step, which is why it is worth doing before the
+instrument.
+
+### PREDICTIONS FOR TAKE 281, recorded before the capture
+
+* **P281.1** During a steady sweep the image moves on **~29% of frames in gaps
+  of 3**, matching the logged camera cadence. X4 renders a staircase, the content
+  steps, and the jitter is X4's 26 Hz sim rate reaching the eye.
+* **P281.2 (the alternative, and the one that would reframe #75 again)** The
+  image moves on **~100% of frames** while the log says 28.6%. X4 interpolates,
+  every declaration we have sampled is a staircase against smooth content, and
+  the fix is to stop taking the orientation from `GetCameraRotation` at all.
+* **P281.3** The per-frame displacement during a steady sweep is *equal* in
+  whichever frames do move. Unequal steps under constant velocity would mean a
+  third thing is modulating it and neither P281.1 nor P281.2 is clean.
+* **P281.4** The logged camera cadence is unchanged from take 280 (~26 Hz, 39 Hz
+  while moving). If it is not, the recording changed the thing it measures and
+  the capture is priced wrong.
