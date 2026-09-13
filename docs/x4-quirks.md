@@ -17624,3 +17624,95 @@ Two things this found that would have cost the take:
 then X4 applies exactly what we send and the uncommanded motion has a source
 outside the mouse channel entirely — a different search, and this prediction
 should be read as refuted rather than explained.
+
+### Take 288 — the plant is an INTEGRATOR WITH DEAD TIME, and the first verdict was wrong
+
+The run completed: 2900 ticks, 43 element-passes, sequence COMPLETE. The camera
+swept 83.9 deg peak-to-peak and never came within 23 deg of X4's stop, so no
+measured sample is a clamp measurement.
+
+**What X4 actually is**, from the open-loop sequence:
+
+```
+impulse response   +0: 0.00  +1: 0.16  +2: 0.15  +3: 3.45  +4..+7: 0.00
+delivery           99.7 99.6 99.6 99.6 99.6 99.6 99.6 %   (2 -> 104 counts)
+```
+
+92% of the response arrives in **one** tick, **three ticks late**, and exactly
+**0.000** arrives after it. Delivery is 99.6% at every size across the whole
+range. That is a faithful integrator with a transport delay — **no momentum, no
+cap, no nonlinearity.** An independent stack of the 42 isolated impulses,
+computed outside the scorer, gives the same shape and a total of 0.996.
+
+#### P288.3 is REFUTED, and the scorer said the opposite
+
+I predicted coast > 35% and SMOOTHED / MOMENTUM. The scorer duly printed
+**"coast 100% => SMOOTHED / MOMENTUM"** — and it was wrong, for a reason the same
+output contained: **during COAST a delayed integrator is still paying out the
+impulse from three ticks back.** It moves with nothing commanded, so coast reads
+100%, identically to momentum and with the opposite fix.
+
+The scorer checked coast *first and alone*, under a comment claiming it "is the
+one number that separates a smoothing plant from a stiff one whatever the
+delivery curve looks like". It does not separate either from dead time.
+
+**Why the validation missed it:** the three plants I validated against were
+Integrator, Smoother and Capped, and **not one had a transport delay**. A control
+set that excludes the answer cannot catch a wrong answer. Adding
+`delayed-integrator` to `tests/run-plantid-scorer.sh` reproduces the failure
+exactly — the old scorer calls it SMOOTHED / MOMENTUM, the same as a delayed
+smoother.
+
+**What separates them was already printed and thrown away:** the response
+*width*. Delay moves the response; smoothing widens it.
+
+| planted | in one tick | old verdict | new verdict |
+|---|---|---|---|
+| integrator | 100% | PURE INTEGRATOR | PURE INTEGRATOR, no delay |
+| smoother | 28% | SMOOTHED / MOMENTUM | SMOOTHED / MOMENTUM |
+| capped | 100% | PER-STEP CAP | PER-STEP CAP |
+| **delayed integrator** | **100%** | **SMOOTHED / MOMENTUM** ✗ | INTEGRATOR WITH TRANSPORT DELAY |
+| **delayed smoother** | **72%** | SMOOTHED / MOMENTUM | SMOOTHED / MOMENTUM |
+| **take 288** | **92%** | **SMOOTHED / MOMENTUM** ✗ | **INTEGRATOR WITH TRANSPORT DELAY of 3** |
+
+5 of 5 on the planted set after the fix.
+
+#### What Patola saw, and why it was correct
+
+He expected the camera to move independently of his head. Instead the cockpit
+stayed at his head's angle while **"the frustum was what was moving — a black
+band from the right eating more of the visible scene, then moving back."**
+
+That is the sequence working. The layer's shader conjugation applied **0.00 deg
+for all 16950 frames** of the run; the sweep reached his eyes entirely through
+the *declared* pose, which followed X4's camera to the digit (median
+|declared − x4| = 0.000, over 7992 frames, 83.9 deg peak-to-peak). The compositor
+therefore placed each frame up to 42 deg from where he was looking, and the
+uncovered side is black. The band growing and shrinking **is** the sweep.
+
+#### The mechanism is still not in hand — and the test says so
+
+`tests/servo_rate.cpp` now drives the real servo against the measured plant.
+At kp = 0.25 the loop reaches X4's clamp at a dead time of **6 ticks**; at the
+**measured 3** it is completely calm — max excursion 20.24 deg, zero reversals.
+So dead time *at the rate it was measured* does not explain 285b/287b either.
+
+That section also caught a defect in its own statistic: at one tick per camera
+update a single update can move at most `max_step_deg` = 12 deg, so the log's
+">20 deg per update" slam measure **read 0.0% on a run pinned to both clamps with
+113 reversals.** It cannot express the failure at that period, and max excursion
+and reversal count are now reported beside it.
+
+**P289 — the one question left, and one run answers it.** Take 288 measured 3
+ticks at its 30.3 Hz tick rate. Whether that is **99 ms of wall clock** or
+**3 of X4's frames** cannot be told from a single rate, and it decides everything,
+because stability depends on the dead time in *ticks*:
+
+- **fixed in TIME** — 99 ms is 3 ticks at 30 Hz, 5 at 50, **9 at 90**, walking
+  straight past the threshold of 6. That ordering matches all four labelled
+  sessions: 287a (drain, ~50 Hz) calm, 285b-s1/s2 and 287b (90 Hz) wild.
+- **fixed in FRAMES** — it stays 3 at every rate, the loop never crosses, and the
+  oscillation has a cause still unfound.
+
+One `plantid` run with `X4VR_TICK_HZ=90` reports 9 ticks or 3. Nothing else
+changes, and the servo is off throughout so it cannot go wild.

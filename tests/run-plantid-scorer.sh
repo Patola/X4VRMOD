@@ -67,9 +67,19 @@ check() { # <truth> <expected substring>
 
 # Each plant must get its OWN name. Two of three would mean the verdict is a
 # coin flip dressed as a diagnosis.
-check integrator "PURE INTEGRATOR"
-check smoother   "SMOOTHED / MOMENTUM"
-check capped     "PER-STEP CAP"
+#
+# **The delayed pair is the control this set was missing**, and its absence let
+# the scorer call take 288 "SMOOTHED / MOMENTUM" when the response was a pure
+# integrator arriving whole, three ticks late. Coast cannot tell those apart --
+# during COAST a delayed integrator is still paying out the impulse -- so the
+# verdict now reads the response WIDTH, and these two cases are what force it
+# to. `delayed-integrator` and `smoother` returning the same name is the exact
+# failure to guard against; they are adjacent here on purpose.
+check integrator         "PURE INTEGRATOR, no delay"
+check smoother           "SMOOTHED / MOMENTUM"
+check capped             "PER-STEP CAP"
+check delayed-integrator "INTEGRATOR WITH TRANSPORT DELAY"
+check delayed-smoother   "SMOOTHED / MOMENTUM"
 
 if [ "$fail" = 0 ]; then
     echo "all cases passed"

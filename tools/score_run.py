@@ -3347,6 +3347,7 @@ def main(path):
         # Where the response actually lands. This is a first-class number: it is
         # X4's input-to-camera transport delay, which nothing before take 213
         # had measured, and it is what made take 212's plant look nonlinear.
+        conc, peakj = None, None
         if lagprof:
             tot = sum(sum(v) / len(v) for v in lagprof.values())
             print("plantid  impulse response, degrees per tick after the "
@@ -3365,10 +3366,11 @@ def main(path):
             gaps = sorted(b["t"] - a["t"] for a, b in zip(S, S[1:])
                           if 0 < b["t"] - a["t"] < 0.5)
             tick = gaps[len(gaps) // 2] if gaps else 0.0
+            conc = peak / max(tot, 1e-9)
             print(f"plantid  transport delay: the response peaks {peakj} tick(s) "
                   f"after the command ({peakj * tick * 1000:.0f} ms at this "
                   f"{1/tick if tick else 0:.0f} Hz tick rate), and "
-                  f"{peak/max(tot,1e-9)*100:.0f}% of it arrives in that one tick")
+                  f"{conc*100:.0f}% of it arrives in that one tick")
 
         if deliv:
             print("plantid  delivery per command size, summed over the whole "
@@ -3416,46 +3418,84 @@ def main(path):
             print("plantid  coast UNMEASURED — no quiet step followed a moving "
                   "one")
 
-        # Name it, or say plainly that it is none of the three.
+        # Name it, or say plainly that it is none of the candidates.
         #
-        # **Coast is checked first, and alone.** It is the one number that
-        # separates a smoothing plant from a stiff one whatever the delivery
-        # curve looks like -- and for a smoother the delivery curve is not
-        # trustworthy anyway: the reset leaves residual velocity that the 8-step
-        # settle does not fully bleed off, which swamps the smallest impulses
-        # and made `fade` come out NaN. Requiring both numbers before naming
-        # anything turned a correct diagnosis into "INCOMPLETE".
-        if cmed is not None and cmed > 0.35:
-            print(f"plantid  signature: coast {cmed*100:.0f}%")
-            print("plantid  => SMOOTHED / MOMENTUM. The camera keeps moving "
-                  "after the command stops, so X4 filters the mouse input "
-                  "rather than applying it. A servo that commands POSITION "
-                  "increments is the wrong shape for this plant; the lead "
-                  "adding more command cannot fix it (take 212, 0.94x).")
-        elif fade is not None and fade == fade and cmed is not None:
-            print(f"plantid  signature: fade {fade:.2f}x across the staircase, "
-                  f"coast {cmed*100:.0f}%")
-            if small is not None and small > 0.9 and fade > 0.9 and cmed < 0.2:
-                print("plantid  => PURE INTEGRATOR with transport delay. Every "
-                      "size delivers what it asked for and the camera stops "
-                      "dead when the commands do. There is NO cap, NO "
-                      "momentum and NO nonlinearity, so the plant is exactly "
-                      "what tests/servo_lag.cpp models -- and take 212's null "
-                      "is therefore NOT the plant's doing. #73's cause is "
-                      "still open; do not close it on this run.")
-            elif fade < 0.75:
+        # **Coast used to be checked first and alone, and that was wrong.** The
+        # claim was that coast "separates a smoothing plant from a stiff one
+        # whatever the delivery curve looks like". It does not separate either
+        # from a plant with TRANSPORT DELAY: during COAST a delayed integrator is
+        # still delivering the impulse from three ticks back, so it moves with
+        # nothing commanded and reads 100% — the same as momentum, for a
+        # completely different reason and with the opposite fix.
+        #
+        # Take 288 is that plant, and this code called it SMOOTHED / MOMENTUM.
+        # It was validated against Integrator, Smoother and Capped, not one of
+        # which had a delay; a control set that excludes the answer cannot catch
+        # a wrong answer. tests/run-plantid-scorer.sh now carries a delayed
+        # integrator and a delayed smoother as well.
+        #
+        # **What actually separates them is the SHAPE of the impulse response**,
+        # which this function already computed and threw away: a delayed
+        # integrator puts all of its response in ONE tick (100% on the synthetic
+        # control, 92% on take 288), while a smoother spreads it (28% undelayed,
+        # 72% delayed). Delay moves the response; smoothing widens it, and only
+        # the width tells them apart.
+        if conc is None:
+            print("plantid  signature UNAVAILABLE — no impulse response, so the "
+                  "response WIDTH cannot be measured. Coast alone cannot name a "
+                  "plant: see the note above.")
+        elif conc >= 0.82:
+            # One tick holds essentially all of it: the plant applies what it is
+            # given, whole, after a fixed delay. `fade` then splits a faithful
+            # integrator from one that saturates on large commands.
+            #
+            # Built up piecewise rather than as one f-string with a trailing
+            # conditional: written that way, `... else ""` binds to the WHOLE
+            # concatenation, so a run with no coast measurement printed a blank
+            # line where its signature should be. I wrote that bug in this very
+            # edit and caught it before running.
+            sig = f"plantid  signature: {conc*100:.0f}% of the response in one tick"
+            sig += " (concentrated)"
+            if fade is not None and fade == fade:
+                sig += f", fade {fade:.2f}x"
+            if cmed is not None:
+                sig += f", coast {cmed*100:.0f}%"
+            print(sig)
+            if fade is not None and fade == fade and fade < 0.75:
                 print("plantid  => PER-STEP CAP. Delivery is flat for small "
-                      "commands and collapses for large ones, with no coast. "
-                      "Keep max_step_deg under the knee above and the servo "
-                      "stays in the linear region.")
+                      "commands and collapses for large ones. Keep "
+                      "max_step_deg under the knee above and the servo stays "
+                      "in the linear region.")
+            elif peakj == 0:
+                print("plantid  => PURE INTEGRATOR, no delay. Every size "
+                      "delivers what it asked for in the very next tick. There "
+                      "is NO cap, NO momentum and NO nonlinearity, so the plant "
+                      "is exactly what tests/servo_lag.cpp models.")
             else:
-                print("plantid  => INTEGRATOR, near enough. Then the plant is "
-                      "NOT what defeated the lead in take 212 and the cause is "
-                      "still open — do not close #73 on this.")
-        elif deliv:
-            print("plantid  signature INCOMPLETE — one of the two numbers is "
-                  "missing, so no candidate is named. Naming one on a single "
-                  "number is how the 200 deg/s story survived a day.")
+                print(f"plantid  => INTEGRATOR WITH TRANSPORT DELAY of {peakj} "
+                      f"tick(s). Every size delivers what it asked for and the "
+                      f"response arrives whole; there is NO momentum, NO cap "
+                      f"and NO nonlinearity. **The coast figure above is the "
+                      f"DELAY, not momentum** — during COAST the camera is "
+                      f"still paying out the impulse from {peakj} ticks back. "
+                      f"A proportional servo against dead time is the classic "
+                      f"oscillator, and re-observing a reading it has already "
+                      f"acted on multiplies its gain; that is where to look, "
+                      f"not at the plant's linearity.")
+        elif conc <= 0.75:
+            print(f"plantid  signature: only {conc*100:.0f}% of the response in "
+                  f"one tick (spread over {peakj}+ ticks)"
+                  + (f", coast {cmed*100:.0f}%" if cmed is not None else ""))
+            print("plantid  => SMOOTHED / MOMENTUM. The response is WIDE, not "
+                  "merely late: X4 filters the mouse input rather than applying "
+                  "it. A servo that commands POSITION increments is the wrong "
+                  "shape for this plant; the lead adding more command cannot "
+                  "fix it (take 212, 0.94x).")
+        else:
+            print(f"plantid  signature AMBIGUOUS — {conc*100:.0f}% of the "
+                  f"response in one tick falls between the concentrated (>=82%) "
+                  f"and spread (<=75%) bands. No candidate is named. Naming one "
+                  f"anyway is how the 200 deg/s story survived a day.")
 
     # --- task #73: the head-look lag, and whether the lead removes it -------
     #

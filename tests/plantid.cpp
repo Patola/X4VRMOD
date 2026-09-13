@@ -79,6 +79,30 @@ struct Capped : Plant {
     double angle() const override { return a; }
 };
 
+// **Transport delay, and it is the control the set was missing.**
+//
+// Take 288 came back with 99.6% delivered at every size, the whole impulse
+// response landing in ONE tick three ticks late, and exactly 0.000 after it --
+// a pure integrator with dead time. score_run.py called that "SMOOTHED /
+// MOMENTUM", because its coast statistic asks "did the camera move while
+// nothing was commanded" and a delayed integrator does that trivially: during
+// COAST it is still delivering the IMPULSE from three ticks back.
+//
+// The verdict was validated against Integrator, Smoother and Capped, and NOT
+// ONE of them had a transport delay. A control set that excludes the answer
+// cannot catch a wrong answer -- see [[x4vr-metric-must-discriminate]].
+struct Delayed : Plant {
+    Plant *inner;
+    std::vector<double> pipe;
+    Delayed(Plant *p, int n) : inner(p), pipe((size_t)n, 0.0) {}
+    void step(double c) override {
+        pipe.push_back(c);
+        inner->step(pipe.front());
+        pipe.erase(pipe.begin());
+    }
+    double angle() const override { return inner->angle(); }
+};
+
 struct Trace {
     std::vector<double> cmd, cam;
     std::vector<x4vr::PlantPhase> phase;
@@ -175,11 +199,14 @@ int main(int argc, char **argv) {
     // each and checks it names the right one.
     if (argc == 3 && std::string(argv[1]) == "--emit") {
         const std::string dir = argv[2];
-        Integrator integ;
-        Smoother smooth(0.25);
+        Integrator integ, integ2;
+        Smoother smooth(0.25), smooth2(0.25);
         Capped cap(4.0);
-        struct { Plant *p; const char *name; } cases[3] = {
-            {&integ, "integrator"}, {&smooth, "smoother"}, {&cap, "capped"}};
+        // 3 ticks: what take 288 measured off the real game.
+        Delayed dinteg(&integ2, 3), dsmooth(&smooth2, 3);
+        struct { Plant *p; const char *name; } cases[5] = {
+            {&integ, "integrator"}, {&smooth, "smoother"}, {&cap, "capped"},
+            {&dinteg, "delayed-integrator"}, {&dsmooth, "delayed-smoother"}};
         for (auto &c : cases) {
             const std::string path = dir + "/synth-" + c.name + ".log";
             emit(*c.p, path.c_str(), 3, 50.0);

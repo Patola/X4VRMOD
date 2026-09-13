@@ -88,12 +88,32 @@ struct Plant {
     int period = 1;                     // servo steps per camera update
     int k = 0;
 
+    // **Take 288 measured this, open-loop, and it is the whole plant.**
+    //
+    //   impulse response  +0: 0.00  +1: 0.16  +2: 0.15  +3: 3.45  +4..+7: 0.00
+    //   delivery          99.6-99.7% at every size from 2 to 104 counts
+    //
+    // 92% of the response arrives in ONE tick, three ticks late, and exactly
+    // nothing arrives after it. That is dead time on a faithful integrator --
+    // not momentum, not a cap, not a nonlinearity. Everything the servo sends
+    // is delivered, whole, `delay` ticks later.
+    int delay = 3;
+    std::vector<float> pipe_y, pipe_p;
+
+    void arm() {
+        pipe_y.assign((size_t)delay, 0.0f);
+        pipe_p.assign((size_t)delay, 0.0f);
+    }
+
     // Returns true on the ticks where the readback refreshes.
     bool step(float sign_yaw, int dx, float sign_pitch, int dy) {
-        yaw = x4vr::clampf(yaw + sign_yaw * (float)dx * gain, -yaw_limit,
-                           yaw_limit);
-        pitch = x4vr::clampf(pitch + sign_pitch * (float)dy * gain,
-                             -pitch_limit, pitch_limit);
+        pipe_y.push_back(sign_yaw * (float)dx * gain);
+        pipe_p.push_back(sign_pitch * (float)dy * gain);
+        const float dy_now = pipe_y.front(), dp_now = pipe_p.front();
+        pipe_y.erase(pipe_y.begin());
+        pipe_p.erase(pipe_p.begin());
+        yaw = x4vr::clampf(yaw + dy_now, -yaw_limit, yaw_limit);
+        pitch = x4vr::clampf(pitch + dp_now, -pitch_limit, pitch_limit);
         if (++k < period)
             return false;
         k = 0;
@@ -115,7 +135,12 @@ struct Result {
 // plant's report refreshes every `period` steps.
 template <class F>
 static Result drive(int period, float kp, float lead, float plant_gain, F traj,
-                    int steps) {
+                    int steps, int delay = 0) {
+    // **Default 0, deliberately.** Sections 1-4 below and the P288.1/P288.2
+    // assertions were all taken against a plant with NO dead time, before take
+    // 288 measured any. Changing this default would silently re-run them against
+    // a different plant and leave their comments describing a result that no
+    // longer exists. Section 5 passes the measured delay explicitly.
     x4vr::HeadLook s;
     s.gain_deg_per_count = 0.115f; // what the SERVO believes
     s.servo_kp = kp;
@@ -123,6 +148,8 @@ static Result drive(int period, float kp, float lead, float plant_gain, F traj,
     Plant p;
     p.period = period;
     p.gain = plant_gain;            // what X4 actually does
+    p.delay = delay;
+    p.arm();
 
     Result r;
     int updates = 0;
@@ -229,6 +256,8 @@ int main() {
             s.lead_scale = 1.0f;
             Plant p;
             p.period = period;
+            p.delay = 0; // P288.2 was taken with no dead time; see drive()
+            p.arm();
             p.yaw = p.pub_yaw = 65.0f; // thrown there by whatever started it
             double worst_late = 0.0;
             int updates = 0;
@@ -295,6 +324,91 @@ int main() {
                     "rms error %.2f deg\n", lead, r.slam_pct, r.max_move,
                     r.rms_err);
     }
+
+    // ---- 5. the plant take 288 actually measured -------------------------
+    //
+    // Sections 1-4 ran against a plant with no dead time, because none had been
+    // measured. Take 288 drove X4 open-loop and the answer was not the rate
+    // mismatch and not momentum: **a faithful integrator with a transport delay
+    // of 3 ticks.** 99.6% delivered at every size from 2 to 104 counts, 92% of
+    // the impulse response in one tick three ticks late, and exactly 0.000
+    // after it.
+    //
+    // A proportional controller against dead time is the textbook oscillator,
+    // and this one has a second multiplier on top: head_look_observe() re-pins
+    // the estimate to the published reading every tick, so on the ticks between
+    // two camera updates the servo re-sends a correction already in flight.
+    //
+    // **The delay is fixed in TIME, not in ticks -- 3 ticks at take 288's 30 Hz
+    // is 99 ms.** One run at one rate cannot separate "99 ms" from "3 frames",
+    // and that distinction decides whether raising X4VR_TICK_HZ multiplies the
+    // dead time or leaves it alone. The sweep below therefore reports the
+    // threshold in TICKS and says what each rate would imply, rather than
+    // asserting a scaling this run cannot support.
+    std::printf("\n5. the measured plant: an integrator with dead time\n");
+    std::printf("%8s %8s %10s %10s %10s %10s\n", "delay", "period", "slam%",
+                "max move", "max |cam|", "reversals");
+    // **max |cam| and reversals, not slam%% alone.** At one tick per camera
+    // update a single update can only move max_step_deg = 12 deg, so the log's
+    // ">20 deg per update" statistic CANNOT fire however violently the loop
+    // oscillates -- and it read 0.0%% on a run that was pinned to both clamps
+    // with 113 reversals. A statistic that cannot express the failure is not a
+    // measurement of it; see [[statistic-cannot-express-the-alternative]].
+    int reaches_clamp_at = 0;
+    for (int delay : {0, 1, 2, 3, 4, 5, 6, 9}) {
+        const Result r = drive(1, 0.25f, 1.0f, 0.115f,
+                               [](int i) { return turning(i, 0.5, 20.0); },
+                               90 * 20, delay);
+        std::printf("%8d %8d %9.1f%% %9.2f %10.2f %10d\n", delay, 1,
+                    r.slam_pct, r.max_move, r.max_excursion, r.reversals);
+        if (r.max_excursion >= 64.9 && !reaches_clamp_at)
+            reaches_clamp_at = delay;
+    }
+
+    // The model has to be ABLE to produce the failure, or nothing it says about
+    // the measured point means anything.
+    check(reaches_clamp_at > 0,
+          "the model can reach the clamp at SOME dead time — otherwise this "
+          "section could only ever report calm");
+
+    // **The measured point is calm, and that is the finding.** Take 288 read 3
+    // ticks of dead time at its 30 Hz tick rate. At kp = 0.25 that is well
+    // inside stability, so dead time at the rate it was measured does NOT
+    // explain takes 285b/287b either. Asserted so a future change that makes it
+    // slam gets noticed rather than welcomed.
+    {
+        const Result r = drive(1, 0.25f, 1.0f, 0.115f,
+                               [](int i) { return turning(i, 0.5, 20.0); },
+                               90 * 20, 3);
+        check(r.max_excursion < 30.0 && r.reversals == 0,
+              "at the MEASURED dead time of 3 ticks the loop is calm — so this "
+              "is not the mechanism at the rate it was measured");
+    }
+
+    std::printf("\n  first dead time that reaches the clamp: %d tick(s), at "
+                "kp = 0.25.\n", reaches_clamp_at);
+
+    // **P289, and it is the one question left.** The delay is 3 ticks at take
+    // 288's 30.3 Hz tick rate. Whether that is 99 ms of wall clock or 3 of X4's
+    // frames cannot be told from one run at one rate -- and it decides
+    // everything, because the servo's stability depends on the dead time in
+    // TICKS:
+    //
+    //   fixed in TIME    99 ms is 3 ticks at 30 Hz, 5 at 50, 9 at 90. Raising
+    //                    X4VR_TICK_HZ walks the loop straight past the
+    //                    threshold above, and that ordering matches all four
+    //                    labelled sessions: 287a (50 Hz, drain) calm, 285b-s1/
+    //                    s2 and 287b (90 Hz) wild.
+    //   fixed in FRAMES  3 ticks at every rate, the loop never crosses, and the
+    //                    oscillation has a cause still unfound.
+    //
+    // One plantid run at X4VR_TICK_HZ=90 separates them: the transport delay
+    // comes back as 9 ticks or as 3. Nothing else in the run needs to change.
+    std::printf("\n  P289: if the 3-tick delay is fixed in TIME (99 ms at take "
+                "288's 30.3 Hz),\n        it is ~9 ticks at X4VR_TICK_HZ=90 — "
+                "past the %d above.\n        If it is fixed in FRAMES it stays "
+                "3 and this is not the cause.\n        One plantid run at 90 Hz "
+                "reports which.\n", reaches_clamp_at);
 
     std::printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n",
                 g_fail);
