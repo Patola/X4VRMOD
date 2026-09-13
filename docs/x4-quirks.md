@@ -16574,3 +16574,34 @@ third somewhere. **This is ours and it is the lever**: at 73% acceptance, a
 Note 56/90 = 0.62 was already recorded earlier in this file as the
 blits/submitted ratio and dismissed as "render rate over display rate". It may
 be the same 55 Hz showing up twice. Worth checking before assuming a new cause.
+
+### The 56/90 lead is REFUTED — the loss is between our own two components
+
+Measured, not assumed: take 283's submit rate is **89.6 Hz** (18688 poselag
+lines over 208.7 s; median dt 11.00 ms), and **89.3 Hz** over the last 100 s.
+
+The earlier `56/90 = 0.62` was X4's render rate over display rate **at that
+time**, when X4 rendered at 56 fps. Take 283 renders at 88 fps and submits at
+89.6 Hz. Same magnitude, different quantity — a coincidence, and the reason to
+check it rather than build on it.
+
+So the chain is tighter than it looked:
+
+| stage | rate |
+|---|---|
+| head pose PUBLISHED (`head_share_write`, once per submitted frame) | **~90 Hz** |
+| head pose CONSUMED (injector tick) | **~55 Hz** |
+
+**We drop ~39% of head poses between the layer and the injector.** Nothing about
+X4 is involved in that step.
+
+The injector's tick runs from the `SDL_PeepEvents` hook and gates on
+`fresh = updates != last_updates`, so several publishes landing between two
+polls collapse into ONE tick. The narrow question is therefore: **how often does
+X4 call `SDL_PeepEvents` during gameplay?** The 18 kHz figure in
+`x4vr_headlook.hpp`'s comment was measured at take 119, in a different phase,
+and must not be carried forward — if the real gameplay rate is ~55 Hz, that hook
+cannot carry 90 Hz and the tick needs a different driver.
+
+**This is the one lever left that is entirely ours.** At the measured 73%
+acceptance, a 90 Hz tick would put X4's camera near 65 Hz instead of 40.
