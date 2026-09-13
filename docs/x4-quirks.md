@@ -17078,3 +17078,82 @@ this comparison and they were never exercised, because 285a ran without
 
 **Do not design a fix before that measurement.** The last hypothesis died to a
 harness; this one has two live alternatives with opposite fixes.
+
+### The staleness matcher — and the version of it that would have lied
+
+`common/x4vr_camring.hpp` answers the one question take 285b left open: is an
+off-thread `GetCameraRotation` returning a value X4 has already moved past, or is
+the camera genuinely slewing at ~1000 °/s? It matches a reading against the
+**time series X4's own thread recorded**, because fast motion spreads that
+series' values apart and makes the match *sharper* — it cannot make the matched
+entry *old*. Only staleness does.
+
+The header exists so `tests/camring.cpp` drives the **same code the injector
+uses**, not a copy of it.
+
+**The control is the instrument.** A reading taken on X4's own thread, run
+through the identical matcher with the newest entry excluded, scores ~one poll
+period. That is what "current" looks like *through this matcher*; without it the
+probe's number is a bare quantity of milliseconds with nothing to be read
+against. Control and measurement print on one line so the lag can never be quoted
+without its scale.
+
+#### The first version reported 500 ms of lag for a perfectly current reading
+
+Closest-in-value across the window is wrong, and confidently so. Driven with a
+monotonic ramp it is exact at every depth — which is precisely why a single
+happy-path case would have passed it. But a real camera **revisits** every angle:
+
+| sweep | reported lag for a CURRENT reading |
+|---|---|
+| 0.5 Hz | 11.11 ms — correct |
+| 2.0 Hz | **500.00 ms** |
+| 5.0 Hz | **1200.00 ms** |
+
+Take 285b's camera oscillated between X4's clamps several times a second. Pointed
+at it, that matcher would have reported enormous staleness *whatever the truth
+was* — confirming the hypothesis it was built to test. This is the third
+instrument in this project that would have answered its own question.
+
+Fixed by scanning from the **newest** entry backwards and taking the first match
+within a tolerance derived from the camera's own per-sample motion, then walking
+to the local minimum. Returning the first in-tolerance entry instead was one
+frame early at every depth — a systematic 11 ms bias, the same order as the
+staleness being hunted, so it would have read as signal.
+
+**Validated before the run**, all exact:
+
+| planted | reported |
+|---|---|
+| 0.0 ms | 0.0 ms |
+| 11.1 ms | 11.1 ms |
+| 44.4 ms | 44.4 ms |
+| 100.0 ms | 100.0 ms |
+| 200.0 ms | 200.0 ms |
+| 500.0 ms | **REFUSED** — beyond the 300 ms window, stated not pinned |
+
+And the two properties that make the answer meaningful rather than merely
+present: a current reading scores **0.00 ms at 50, 200, 600 and 1200 °/s**, so
+speed alone never manufactures a lag and the alternative stays distinguishable;
+and a near-static camera is **refused**, because with every entry matching
+equally the reported age is whichever tie happened to win.
+
+### P286 — committed before the run
+
+- **P286.1** `camlag` reports OURS within a frame or two of CONTROL, i.e. **not
+  stale**. The getter almost certainly reads a plain cached field. If so,
+  staleness is refuted, take 285b's 59.588° two-thread disagreement was genuine
+  fast motion, and — with the servo arithmetic already cleared by
+  `tests/headlook.cpp` — **both** of my explanations for the oscillation are
+  dead and the cause is somewhere I have not yet looked.
+- **P286.2** If instead OURS runs tens of milliseconds behind CONTROL, the fix is
+  forced and is not the one I proposed earlier: sample the camera on X4's thread
+  and pass the value across, never call the getter from the tick's own thread.
+- **P286.3** The control itself lands near one X4 poll period. If it does not,
+  the matcher is mis-scaled and nothing else on the line may be quoted.
+
+**Caveat, stated up front:** this runs flatscreen, where the drain rate and
+thread structure differ from the gamescope+VR configuration the episode occurred
+in. A *stale* result there is conclusive. A *not stale* result is strong but
+wants one VR confirmation before #75's staleness branch is closed, because the
+oscillation has only ever been observed under the VR configuration.

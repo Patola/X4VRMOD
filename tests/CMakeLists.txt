@@ -125,6 +125,11 @@ add_executable(x4vr_test_inputmap inputmap.cpp)
 # Self-checking like view_math: no runner script.
 add_executable(x4vr_test_headlook headlook.cpp)
 
+# Task #75: the staleness matcher, driven against series whose lag is known by
+# construction. Uses common/x4vr_camring.hpp itself, not a copy, so a change to
+# the matcher cannot pass here and fail in the injector.
+add_executable(x4vr_test_camring camring.cpp)
+
 # The injector's hand-written SDL_MouseMotionEvent, asserted against the real
 # SDL3 headers. The injector cannot include them (SDL2 and SDL3 share X4's
 # process tree); this standalone binary can, so a future SDL that moves a field

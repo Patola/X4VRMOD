@@ -3008,6 +3008,61 @@ def main(path):
                   f"proof of thread-safety; it is the configuration the tick "
                   f"driver needs, exercised in the cheapest place it could fail.")
 
+    # --- task #75: is the off-thread camera read STALE, or is the camera fast?
+    #
+    # Take 285b's two threads disagreed by up to 59.588 deg during the
+    # oscillation, and staleness and genuine ~1000 deg/s burst motion both
+    # predict exactly that — with opposite fixes. `camlag` matches each reading
+    # against the series X4's OWN thread recorded, which fast motion cannot age.
+    #
+    # The CONTROL is the whole point: a reading taken on X4's thread, run
+    # through the identical matcher, gives the lag that "current" scores. A bare
+    # number of milliseconds from the probe would have nothing to be read
+    # against, and tests/camring.cpp shows why that matters — an earlier version
+    # of this matcher reported 500 ms of lag for a perfectly current reading on a
+    # 2 Hz sweep, purely from value recurrence.
+    cl = [m.groupdict() for m in re.finditer(
+        r"camlag: CONTROL \(X4's own thread\) n=(?P<sn>\d+) mean (?P<sm>[\d.]+) "
+        r"ms max (?P<sx>[\d.]+) \| OURS \(off-thread\) n=(?P<on>\d+) mean "
+        r"(?P<om>[\d.]+) ms max (?P<ox>[\d.]+) \| match residual "
+        r"(?P<res>[\d.]+) deg \| (?P<ref>\d+) refused", text)]
+    if cl:
+        g = cl[-1]  # cumulative counters, so the last line has the most behind it
+        sn, on = int(g["sn"]), int(g["on"])
+        sm, om = float(g["sm"]), float(g["om"])
+        sx, ox = float(g["sx"]), float(g["ox"])
+        ref = int(g["ref"])
+        print(f"camlag     CONTROL (X4's thread) n={sn} mean {sm:.2f} ms "
+              f"max {sx:.2f} | OURS (off-thread) n={on} mean {om:.2f} ms "
+              f"max {ox:.2f} | residual {float(g['res']):.3f} deg | "
+              f"{ref} refused")
+        if sn < 100 or on < 100:
+            print(f"camlag     => TOO FEW SAMPLES ({sn} control, {on} ours). "
+                  f"The camera has to be MOVING for a match to mean anything — "
+                  f"free-look has to be active and swinging for most of the run.")
+        elif ref > 4 * on:
+            print(f"camlag     => MOSTLY REFUSED ({ref} refusals against {on} "
+                  f"measurements): the camera was too still for the window to "
+                  f"support a match. Inconclusive, not a null.")
+        elif om > sm + 8.0:
+            print(f"camlag     => STALE. Our off-thread reading is {om:.1f} ms "
+                  f"old against the {sm:.1f} ms a reading taken on X4's own "
+                  f"thread scores through the same matcher — {om - sm:.1f} ms "
+                  f"of real staleness. At the ~1000 deg/s the oscillation "
+                  f"reached, that is {(om - sm) * 1.0:.0f} deg of error the "
+                  f"servo steers on, which is the size of the jumps. The tick "
+                  f"driver must sample the camera on X4's thread and pass the "
+                  f"value across, NOT call the getter from its own.")
+        else:
+            print(f"camlag     => NOT STALE. Our off-thread reading scores "
+                  f"{om:.1f} ms against the control's {sm:.1f} ms, a difference "
+                  f"of {om - sm:.1f} ms — within a frame or two, so the read is "
+                  f"as current as X4's own. **Staleness is refuted**, and take "
+                  f"285b's 59.588 deg two-thread disagreement was genuine fast "
+                  f"motion, not a stale value. The oscillation's cause is "
+                  f"elsewhere and the servo arithmetic is already cleared "
+                  f"(tests/headlook.cpp). Do not build a freshness fix.")
+
     if "TWO THREADS are in headlook_tick" in text:
         fails.append("two threads entered headlook_tick — the servo's state is "
                      "not atomic, so the command itself is corrupt, not just "

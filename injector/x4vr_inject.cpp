@@ -48,6 +48,7 @@ extern char **environ;
 #include "../common/x4vr_share.hpp"
 #include "x4vr_config.hpp"
 #include "x4vr_inputmap.hpp"
+#include "../common/x4vr_camring.hpp"
 #include "../common/x4vr_headlook.hpp"
 #include "../common/x4vr_plantid.hpp"
 #include "x4vr_lua.hpp"
@@ -1106,6 +1107,30 @@ struct CamProbe {
     std::atomic<float> drain_yaw{0.0f};
     std::atomic<uint32_t> drain_seen{0};
 } g_camprobe;
+
+// **Task #75: is the off-thread camera read STALE, or is the camera just fast?**
+//
+// Take 285b's two reads of the same camera on the same frame -- ours from the
+// tick thread, the layer's at the first render pass -- disagreed by up to
+// 59.588 deg during the oscillation and by 1.5 deg outside it. Staleness (our
+// read returns a value X4 has moved past) and genuine ~1000 deg/s burst motion
+// (the two threads sample either side of a burst) BOTH predict a disagreement
+// the size of the jump, so that comparison cannot choose between them -- and
+// they have opposite fixes.
+//
+// What separates them is a value matched against a TIME SERIES rather than
+// against a single other sample. X4's own thread writes every reading it takes
+// into this ring; a reader then asks "how old is the reading I just got?" by
+// finding the ring entry closest in value and reporting the age of that entry.
+// Fast motion makes the ring entries far apart in value and the match sharp;
+// it does not make the match OLD. Only staleness does.
+//
+// Range, stated rather than assumed: N entries at X4's poll rate is about
+// 128/90 = 1.4 s of history, so a lag beyond that reads as "the oldest entry"
+// and must not be quoted as a measurement. `spread` below is the second gate:
+// with a static camera every entry matches equally and the lag is noise, so a
+// window whose values span less than `kMinSpread` is refused outright.
+x4vr::CamRing g_camring;
 // True while head-look is actually driving X4's camera; read by the event
 // drain to decide whether the player's own mouse motion should reach the view.
 std::atomic<bool> g_headlook_steering{false};
@@ -2914,6 +2939,44 @@ static int camprobe_hz() {
     return hz;
 }
 
+// Accumulated by both sides; `self` is the control and `ours` the measurement.
+struct CamLag {
+    std::atomic<uint64_t> self_n{0}, ours_n{0}, refused{0};
+    std::atomic<uint64_t> self_us{0}, ours_us{0};   // summed lag, microseconds
+    std::atomic<uint64_t> self_max_us{0}, ours_max_us{0};
+    std::atomic<uint64_t> ours_resid_milli{0};      // summed match residual, 1e-3 deg
+} g_camlag;
+
+static void bump_max(std::atomic<uint64_t> &m, uint64_t v) {
+    uint64_t cur = m.load(std::memory_order_relaxed);
+    while (v > cur && !m.compare_exchange_weak(cur, v, std::memory_order_relaxed))
+        ;
+}
+
+// Called from X4's OWN thread, in the event-drain hook. Pushes the reading into
+// the ring, then matches that same reading against the ring MINUS the entry it
+// just wrote. That is the control: a value known to be current, run through the
+// identical matcher, so the measurement below has a scale to be read against
+// rather than a bare number of milliseconds.
+static void camring_tick_on_x4_thread() {
+    if (!camprobe_hz() || !this_is_the_game())
+        return;
+    X4Rotation r{};
+    if (!x4_camera_rotation(&r))
+        return;
+    const float y = kRad2Deg * -r.yaw;
+    const double now = mono_seconds();
+    double lag = 0.0;
+    float spread = 0.0f, resid = 0.0f;
+    if (g_camring.age_of(y, now, 1, &lag, &spread, &resid)) {
+        g_camlag.self_n.fetch_add(1, std::memory_order_relaxed);
+        g_camlag.self_us.fetch_add((uint64_t)(lag * 1e6),
+                                   std::memory_order_relaxed);
+        bump_max(g_camlag.self_max_us, (uint64_t)(lag * 1e6));
+    }
+    g_camring.push(y, now);
+}
+
 static void camprobe_start() {
     if (!camprobe_hz() || !this_is_the_game())
         return;
@@ -2952,6 +3015,25 @@ static void camprobe_start() {
                 g_camprobe.last_yaw.store(y, std::memory_order_relaxed);
                 g_camprobe.last_pitch.store(p, std::memory_order_relaxed);
                 const double now = mono_seconds();
+                // The measurement: how old is the value WE just read, against
+                // the series X4's own thread recorded? Fast motion spreads the
+                // ring's values apart and makes the match sharper; it cannot
+                // make the match old. Only a stale read can.
+                {
+                    double lag = 0.0;
+                    float spread = 0.0f, resid = 0.0f;
+                    if (g_camring.age_of(y, now, 0, &lag, &spread, &resid)) {
+                        g_camlag.ours_n.fetch_add(1, std::memory_order_relaxed);
+                        g_camlag.ours_us.fetch_add((uint64_t)(lag * 1e6),
+                                                   std::memory_order_relaxed);
+                        bump_max(g_camlag.ours_max_us, (uint64_t)(lag * 1e6));
+                        g_camlag.ours_resid_milli.fetch_add(
+                            (uint64_t)(resid * 1000.0f),
+                            std::memory_order_relaxed);
+                    } else {
+                        g_camlag.refused.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
                 if (now - t_log >= 2.0) {
                     t_log = now;
                     X4VR_LOG("camprobe: %llu call(s) off-thread, %llu non-zero, "
@@ -2967,6 +3049,38 @@ static void camprobe_start() {
                              g_camprobe.drain_yaw.load(std::memory_order_relaxed),
                              g_camprobe.drain_seen.load(
                                  std::memory_order_relaxed));
+                    // Control and measurement on ONE line, so the lag can never
+                    // be quoted without the number that gives it a scale.
+                    const uint64_t sn = g_camlag.self_n.load(
+                        std::memory_order_relaxed);
+                    const uint64_t on = g_camlag.ours_n.load(
+                        std::memory_order_relaxed);
+                    X4VR_LOG("camlag: CONTROL (X4's own thread) n=%llu mean "
+                             "%.2f ms max %.2f | OURS (off-thread) n=%llu mean "
+                             "%.2f ms max %.2f | match residual %.3f deg | "
+                             "%llu refused (camera too still, spread < %.1f "
+                             "deg) | ring %d entries",
+                             (unsigned long long)sn,
+                             sn ? g_camlag.self_us.load(
+                                      std::memory_order_relaxed) /
+                                      (double)sn / 1000.0
+                                : 0.0,
+                             g_camlag.self_max_us.load(
+                                 std::memory_order_relaxed) / 1000.0,
+                             (unsigned long long)on,
+                             on ? g_camlag.ours_us.load(
+                                      std::memory_order_relaxed) /
+                                      (double)on / 1000.0
+                                : 0.0,
+                             g_camlag.ours_max_us.load(
+                                 std::memory_order_relaxed) / 1000.0,
+                             on ? g_camlag.ours_resid_milli.load(
+                                      std::memory_order_relaxed) /
+                                      (double)on / 1000.0
+                                : 0.0,
+                             (unsigned long long)g_camlag.refused.load(
+                                 std::memory_order_relaxed),
+                             (double)x4vr::CamRing::kMinSpread, x4vr::CamRing::N);
                 }
             }
         }).detach();
@@ -3246,6 +3360,8 @@ void SDL_PumpEvents(void) {
         // at which X4 is provably running its own event loop.
         tick_driver_start();
         camprobe_start();
+        // X4's OWN thread, which is what makes this the control.
+        camring_tick_on_x4_thread();
         // MOVED, not duplicated — see the two-thread guard in headlook_tick.
         if (!tick_hz())
             headlook_tick();
@@ -3302,6 +3418,8 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
     if (this_is_the_game() && !g_pump_seen.load(std::memory_order_relaxed)) {
         tick_driver_start();
         camprobe_start();
+        // X4's OWN thread, which is what makes this the control.
+        camring_tick_on_x4_thread();
         if (!tick_hz())
             headlook_tick();
         panprobe_tick();
