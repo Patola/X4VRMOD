@@ -17859,3 +17859,81 @@ in X4's own frame, the servo sees the same dead time at any tick rate, and the
 "9 ticks at 90 Hz" branch is dead. If the 90 Hz arm reports ~3 updates instead,
 raising the tick rate really does multiply the dead time and
 `tests/servo_rate.cpp`'s threshold of 6 is in reach.
+
+### Takes 290a/290b — P289's premise is dead, and so is dead time as the mechanism
+
+Both arms completed with the update-counted sequence. **The fix worked on its
+target:** delivery is **99.6% flat at every one of the seven sizes in both arms**,
+against take 289's 49.8–124.6%.
+
+| | tick rate | calibrated | peak lag | delivery | coast |
+|---|---|---|---|---|---|
+| 290a | 28.2 Hz | 1.39 ticks/update | +2 steps | 99.6% flat | **0%** |
+| 290b | 75.1 Hz | 1.30 ticks/update | +2 steps | 99.6% flat | **0%** |
+
+#### P289 answered, in the negative
+
+It asked whether take 288's 3-tick delay was fixed in **time** (→ 9 ticks at
+90 Hz, past `servo_rate.cpp`'s threshold of 6) or in **frames**. It is neither:
+
+```
+290a   2 steps x 1.39 ticks/step = 2.78 ticks   at 28.2 Hz =  99 ms
+290b   2 steps x 1.30 ticks/step = 2.60 ticks   at 75.1 Hz =  35 ms
+```
+
+**Constant in OUR ticks, not in time.** X4 does not know our tick rate, so a lag
+that counts ~2.7 of our ticks however fast we tick is in our own sampling path —
+command out at the top of tick N, camera read at the top of tick N+1 or N+2 —
+not in X4's plant. Either way it is nowhere near 6, so **transport delay is
+refuted as the mechanism for 285b/287b's oscillation.**
+
+The calibration also settles a standing question: **1.39 and 1.30 ticks per
+camera update at a 2.7× difference in tick rate.** X4's readback tracks our tick
+rate rather than sitting at a fixed ~12–16 Hz, which is what take 288's
+`inputrate` line claimed and take 289's 12.1 → 16.0 appeared to contradict. The
+apparent contradiction was the still-camera phases: over the whole run the ratio
+reads 8.6 and 14.3, but that is "how often the camera had anything to report",
+not staleness.
+
+#### Two hard facts, each now measured three times
+
+- **Delivery is 99.6% flat from 2 to 104 counts** (288, 290a, 290b). No cap, no
+  sub-linearity, no direction asymmetry. Take 212's "delivery falls from 95% to
+  71% as the command grows, 87–126% continuing against 21–49% reversing" is
+  **dead** — it was closed-loop inference, exactly as the header of
+  `x4vr_plantid.hpp` warned.
+- **Coast is 0% in both arms.** With the sequence in the readback's time base the
+  camera stops dead when commands stop. **Momentum is refuted**, and take 288's
+  coast of 100% is confirmed as the transport-delay artefact it was called.
+
+#### Two more scorer defects, both mine
+
+- **The ticks-per-update gate refused 290b.** It computed `len(S)/changes` over
+  the logged lines — correct while the injector logged every tick, wrong the
+  moment it began logging one line per sequence step. Most of the sequence is
+  SETTLE/COAST/DECAY, where the camera is still because nothing was commanded,
+  not because the readback is stale. It read 3.7 and threw away a run whose
+  delivery column was flat at every size. Removed; the >110% impossibility is
+  sound on its own and still catches take 289. **An instrument that re-derives a
+  quantity the log already states can end up evaluating a different one** — the
+  injector prints the calibrated ratio, and that is what should have been read.
+- **290b printed SMOOTHED / MOMENTUM against its own coast of 0%.** A smoother's
+  defining property is that velocity persists; coast near zero refutes momentum
+  whatever the width says. The verdict now reports **CONTRADICTORY** and names
+  nothing, rather than letting the width win. The bands were set from planted
+  plants and moving one to break a tie in live data would be fitting the
+  instrument to the answer — which is how this file got SMOOTHED / MOMENTUM onto
+  a delayed integrator in the first place.
+
+#### Where #75 stands
+
+Seven mechanisms are now dead: servo arithmetic, in-flight commands, the stale
+off-thread read, the event channel, the dead camera, the rate mismatch, the gain,
+momentum, and dead time. The plant is a **faithful integrator** — it delivers
+99.6% of every command at every size and stops when told.
+
+The oscillation of 285b/287b is therefore **not in the plant**, and
+`tests/servo_rate.cpp` says it is not in the servo at the measured parameters
+either. What remains unexplained is 290b's response *width* — 49% in one step
+with no coast — which is neither smoothing nor a clean delay, and the isolated
+0.50 bump at lag +7 that goes with it.

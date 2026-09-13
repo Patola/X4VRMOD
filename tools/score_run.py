@@ -3473,17 +3473,31 @@ def main(path):
         # ONE tick, so once the readback refreshes less often than every ~3
         # ticks, that tick usually falls between two readbacks and the impulse is
         # simply not observed.
-        cam_changes = sum(1 for a, b in zip(S, S[1:]) if a["cam"] != b["cam"])
-        tpu = (len(S) / cam_changes) if cam_changes else float("inf")
+        # **The ticks-per-update half of this gate is gone, because it measured
+        # the wrong thing the moment the log changed under it.**
+        #
+        # It computed len(S)/changes over the logged lines. That was right while
+        # the injector logged every tick. It now logs one line per SEQUENCE STEP,
+        # and most of the sequence is SETTLE, COAST and DECAY — where nothing is
+        # commanded and the camera is genuinely still, so the value does not
+        # change because nothing happened, not because the readback is stale. On
+        # take 290b it read 3.7 and refused a run whose delivery column was
+        # 99.6% flat at every one of the seven sizes.
+        #
+        # The real ratio is measured in Calibrate, where the camera is certainly
+        # moving, and the injector logs it: takes 290a/290b report 1.39 and 1.30.
+        # Reported below as context, never gated on — an instrument that
+        # re-derives a quantity the log already states can evaluate a different
+        # one, which is what happened here.
         bad = None
         if fracs and max(fracs) > 1.10:
             bad = (f"delivery reaches {max(fracs)*100:.1f}% — nothing here can "
                    f"deliver MORE than it was commanded")
-        elif tpu > 3.0:
-            bad = (f"{tpu:.1f} servo ticks per camera update — the one-tick "
-                   f"IMPULSE usually falls entirely between two readbacks")
         if bad:
             print(f"plantid  UNMEASURABLE — {bad}.")
+            print(f"plantid  Delivery is the validity signal: take 288 and both "
+                  f"arms of 290 read 99.6% flat at every size, take 289 read "
+                  f"49.8-124.6%. ")
             print(f"plantid  The phases are counted in TICKS but the plant is "
                   f"only visible when the camera readback CHANGES, and this run "
                   f"had {tpu:.1f} ticks per update. Take 288 ran 2.5 and read "
@@ -3534,6 +3548,27 @@ def main(path):
                       f"oscillator, and re-observing a reading it has already "
                       f"acted on multiplies its gain; that is where to look, "
                       f"not at the plant's linearity.")
+        elif conc <= 0.75 and cmed is not None and cmed < 0.15:
+            # **The two statistics contradict each other, so name neither.**
+            # A smoother's defining property is that velocity PERSISTS: after the
+            # command stops the camera keeps moving and decays. Coast measures
+            # exactly that, and near zero it refutes momentum whatever the width
+            # says. A wide response with no coast is the other thing that widens
+            # a response -- jitter in WHEN a delayed impulse lands -- and take
+            # 290b is that: 49% in one step against a coast of 0%.
+            #
+            # Reported as a conflict rather than resolved by moving a band. The
+            # bands were set from planted plants; moving one to break a tie in
+            # live data is fitting the instrument to the answer, which is how
+            # this file got "SMOOTHED / MOMENTUM" on a delayed integrator in the
+            # first place.
+            print(f"plantid  signature CONTRADICTORY — {conc*100:.0f}% of the "
+                  f"response in one step says SPREAD, but coast "
+                  f"{cmed*100:.0f}% says the camera STOPS DEAD, and no smoother "
+                  f"does both.")
+            print("plantid  => NOT MOMENTUM (coast refutes it), but the delay is "
+                  "not cleanly measured either — the width is being widened by "
+                  "something other than the plant. No candidate is named.")
         elif conc <= 0.75:
             print(f"plantid  signature: only {conc*100:.0f}% of the response in "
                   f"one tick (spread over {peakj}+ ticks)"
