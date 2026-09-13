@@ -3372,6 +3372,7 @@ def main(path):
                   f"{1/tick if tick else 0:.0f} Hz tick rate), and "
                   f"{conc*100:.0f}% of it arrives in that one tick")
 
+        fracs = []
         if deliv:
             print("plantid  delivery per command size, summed over the whole "
                   "impulse response:")
@@ -3387,6 +3388,7 @@ def main(path):
                 if small is None:
                     small = frac
                 large = frac
+                fracs.append(frac)
             fade = (large / small) if (small and small > 1e-6) else float("nan")
         else:
             small = large = fade = None
@@ -3440,7 +3442,57 @@ def main(path):
         # control, 92% on take 288), while a smoother spreads it (28% undelayed,
         # 72% delayed). Delay moves the response; smoothing widens it, and only
         # the width tells them apart.
-        if conc is None:
+        # **Is this run measurable at all? Take 289 was not, and I named a plant
+        # from it anyway.**
+        #
+        # plantid's phases are counted in TICKS -- IMPULSE is one tick, COAST is
+        # fourteen -- but the plant is only observable when X4's camera readback
+        # CHANGES. Take 288 ran 2.5 ticks per camera update and every size
+        # delivered 99.6-99.7%. Take 289 raised X4VR_TICK_HZ to 90 while the
+        # camera update rate barely moved (12.1 -> 16.0 per second), giving 5.7
+        # ticks per update: the one-tick impulse now usually falls entirely
+        # between two readbacks, and delivery came back 49.8 / 83.0 / 124.6%.
+        #
+        # **124.6% is impossible.** An integrator cannot deliver more than it was
+        # commanded, so that column is not a plant measurement and nothing
+        # downstream of it means anything. The scorer printed "SMOOTHED /
+        # MOMENTUM" from it regardless, contradicting take 288 on the same game.
+        #
+        # So: gate on the delivery column before naming anything. A flat column
+        # is what a measurable run looks like; a scattered one says the sequence
+        # out-ran the readback and the fix is the run's cadence, not the verdict.
+        # **Gate on the CAUSE, not on the spread.** My first version refused any
+        # delivery column spanning more than 25 points — which is precisely the
+        # signature of a PER-STEP CAP, so it called two of the three plants it
+        # exists to name "unmeasurable". A gate that rejects the answer is worse
+        # than no gate. Caught by tests/run-plantid-scorer.sh, which is the only
+        # reason it is not in this file.
+        #
+        # What is left is one genuine impossibility plus the direct measurement
+        # of the failure: how many ticks pass per camera update. The IMPULSE is
+        # ONE tick, so once the readback refreshes less often than every ~3
+        # ticks, that tick usually falls between two readbacks and the impulse is
+        # simply not observed.
+        cam_changes = sum(1 for a, b in zip(S, S[1:]) if a["cam"] != b["cam"])
+        tpu = (len(S) / cam_changes) if cam_changes else float("inf")
+        bad = None
+        if fracs and max(fracs) > 1.10:
+            bad = (f"delivery reaches {max(fracs)*100:.1f}% — nothing here can "
+                   f"deliver MORE than it was commanded")
+        elif tpu > 3.0:
+            bad = (f"{tpu:.1f} servo ticks per camera update — the one-tick "
+                   f"IMPULSE usually falls entirely between two readbacks")
+        if bad:
+            print(f"plantid  UNMEASURABLE — {bad}.")
+            print(f"plantid  The phases are counted in TICKS but the plant is "
+                  f"only visible when the camera readback CHANGES, and this run "
+                  f"had {tpu:.1f} ticks per update. Take 288 ran 2.5 and read "
+                  f"99.6% flat at every size; take 289 raised X4VR_TICK_HZ to 90, "
+                  f"got 5.7, and read 49.8-124.6%. Re-run with the tick near X4's "
+                  f"camera update rate, or lengthen plantid's phases so each "
+                  f"covers the same number of UPDATES — do NOT read a plant off "
+                  f"these numbers.")
+        elif conc is None:
             print("plantid  signature UNAVAILABLE — no impulse response, so the "
                   "response WIDTH cannot be measured. Coast alone cannot name a "
                   "plant: see the note above.")

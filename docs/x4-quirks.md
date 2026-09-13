@@ -17716,3 +17716,73 @@ because stability depends on the dead time in *ticks*:
 
 One `plantid` run with `X4VR_TICK_HZ=90` reports 9 ticks or 3. Nothing else
 changes, and the servo is off throughout so it cannot go wild.
+
+### Take 289 — P289 is NOT answered: the run is unmeasurable
+
+Same command as 288 with `X4VR_TICK_HZ=90` added. The driver ran (90.0 Hz median
+over 76 windows) and the sequence completed, 3873 ticks, 43 element-passes. The
+scorer then printed **"only 38% of the response in one tick → SMOOTHED /
+MOMENTUM"** — flatly contradicting take 288 on the same game, the same build and
+the same plant.
+
+**The delivery column is what settles it:**
+
+| counts | take 288 (30 Hz) | take 289 (91 Hz) |
+|---|---|---|
+| 2 | 99.7% | 83.0% |
+| 4 | 99.6% | 49.8% |
+| 8 | 99.6% | 83.0% |
+| 16 | 99.6% | **124.6%** |
+| 32 | 99.6% | 64.4% |
+| 64 | 99.6% | 87.7% |
+| 104 | 99.6% | 49.8% |
+
+**124.6% is impossible** — nothing in this system delivers more than it was
+commanded. Take 289 is not a plant measurement.
+
+#### Why, and it is plantid's own design
+
+`plantid`'s phases are counted in **ticks** — IMPULSE is one tick, COAST is
+fourteen — but the plant is only observable when X4's camera readback *changes*.
+
+| | tick rate | camera changes | ticks per update |
+|---|---|---|---|
+| take 288 | 30.3 Hz | 12.1 /s | **2.5** |
+| take 289 | 90.9 Hz | 16.0 /s | **5.7** |
+
+Tripling the tick rate barely moved the readback rate, so each phase now covers
+less than half as many updates and the one-tick impulse usually falls entirely
+*between* two readbacks. The response looked "wider" purely because it was being
+sampled three times faster than the thing it was sampling —
+[[instrument-inherits-its-question]]: the width discriminator I added yesterday
+was derived from a run where tick ≈ camera rate, and it does not survive a rate
+change.
+
+This also contradicts take 285b's banked claim that `X4VR_TICK_HZ=90` raises X4's
+camera rate from 28.2 to 54.5 Hz. Here it went 12.1 → 16.0. Flagged, not chased.
+
+#### The gate that should have stopped me, and the gate that was wrong
+
+`score_run.py` now refuses to name a plant when the run cannot support one. My
+**first** version gated on the delivery column spanning more than 25 points —
+which is exactly the signature of a **PER-STEP CAP**, so it declared two of the
+three plants it exists to name "unmeasurable". `tests/run-plantid-scorer.sh`
+caught that immediately; a gate that rejects the answer is worse than no gate.
+
+What survives is one genuine impossibility (>110% delivered) plus the direct
+measurement of the cause (ticks per camera update > 3). 5 of 5 planted plants
+still pass, take 288 still reads INTEGRATOR WITH TRANSPORT DELAY of 3, take 289
+now reads UNMEASURABLE.
+
+#### Where P289 stands
+
+**Unanswered.** The question — is the 3-tick delay fixed in time (≈99 ms, so
+9 ticks at 90 Hz and past `servo_rate.cpp`'s threshold of 6) or fixed in frames
+(3 ticks always, and not the cause) — needs a run where the sequence and the
+readback are on comparable cadences at BOTH rates. The fix is plantid's phase
+lengths: they must be expressed in camera updates, not ticks, so a 90 Hz run
+covers the same number of observations as a 30 Hz one. That is a change to
+`common/x4vr_plantid.hpp` and it is testable offline against
+`tests/plantid.cpp`'s existing plants before any further take is spent.
+
+Take 288 remains the only valid plant measurement.
