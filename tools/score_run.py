@@ -2725,25 +2725,67 @@ def main(path):
         def med(xs):
             s = sorted(xs)
             return s[len(s) // 2]
-        pump = med([float(g[1]) for g in pr])
-        peep = med([float(g[2]) for g in pr])
-        wait = med([float(g[3]) for g in pr])
-        entered = med([float(g[4]) for g in pr])
+        # RATES FROM TOTALS, not medians of the components. `entered` must equal
+        # `fresh + skipped`, and it does per window -- but the median of a sum is
+        # not the sum of the medians, so printing three independent medians made
+        # take 284's line read 60.5 = 51.7 + 23.0 and look self-inconsistent when
+        # the data was exact. A statistic that cannot express an identity the
+        # data satisfies is the wrong statistic.
+        secs = sum(float(g[0]) for g in pr)
+
+        def rate(i):
+            return sum(float(g[i]) * float(g[0]) for g in pr) / secs
+        pump, peep, wait = rate(1), rate(2), rate(3)
+        entered, fresh, skipped, pub = rate(4), rate(6), rate(7), rate(8)
         nopose = sum(int(g[5]) for g in pr)
-        fresh = med([float(g[6]) for g in pr])
-        skipped = med([float(g[7]) for g in pr])
-        pub = med([float(g[8]) for g in pr])
-        acted = med([float(g[9]) for g in pr])
+        acted = 100.0 * fresh / pub if pub else 0.0
         driver = pr[-1][10]
         pubs = [float(g[8]) for g in pr]
         freshes = [float(g[6]) for g in pr]
-        print(f"pumprate   {len(pr)} windows | driver={driver} | pump "
-              f"{pump:.1f} Hz, peep {peep:.1f} Hz, wait {wait:.1f} Hz")
+        pumps = [float(g[1]) for g in pr]
+        print(f"pumprate   {len(pr)} windows over {secs:.0f} s | driver="
+              f"{driver} | pump {pump:.1f} Hz (range {min(pumps):.1f}-"
+              f"{max(pumps):.1f}), peep {peep:.1f} Hz, wait {wait:.1f} Hz")
         print(f"pumprate   layer published {pub:.1f} Hz (range "
               f"{min(pubs):.1f}-{max(pubs):.1f}) -> tick entered {entered:.1f} "
               f"Hz -> fresh {fresh:.1f} Hz (range {min(freshes):.1f}-"
               f"{max(freshes):.1f}), skipped {skipped:.1f} Hz, nopose {nopose} "
               f"total => acted on {acted:.1f}% of published")
+        # The decisive test is PER WINDOW, not on the aggregate. Take 284's
+        # median pump (60.7) sat below its median published (90) and the verdict
+        # said THE HOOK -- while in 30 of its windows pump ran at 103-142 Hz,
+        # ABOVE the publish rate, with fresh unchanged at ~53. Those windows
+        # refute "too few polls" on their own, and an aggregate hid them.
+        # If polls were spread evenly, `fresh` would reach min(pump, published):
+        # every publish interval would contain at least one poll. How far short
+        # it falls measures how CLUSTERED the polls are, per window, with no
+        # group comparison — two self-selected groups of windows differ in head
+        # speed and frame rate as well as in poll rate, so a fast-vs-slow split
+        # cannot attribute the difference to polling.
+        ratio = sorted((float(g[6]) / min(float(g[1]), float(g[8])), float(g[1]),
+                        float(g[8]), float(g[6]))
+                       for g in pr if min(float(g[1]), float(g[8])) > 1.0)
+        if ratio:
+            mid = ratio[len(ratio) // 2][0]
+            # The window that polled hardest: does over-polling ever saturate?
+            top = max(ratio, key=lambda r: r[1])
+            print(f"pumprate   fresh / min(pump, published) = {mid:.2f} median "
+                  f"(1.00 would mean every publish interval contained a poll). "
+                  f"Hardest-polling window: {top[1]:.0f} Hz of polls against "
+                  f"{top[2]:.0f} Hz of publishes caught {top[3]:.1f} Hz "
+                  f"({top[3] / top[2]:.2f} of them), at {top[1] / max(top[3], 1e-9):.1f} "
+                  f"polls per tick.")
+            if top[3] >= 0.95 * top[2]:
+                print(f"pumprate   => CLUSTERED POLLS, and over-polling "
+                      f"saturates. The hardest-polling window caught EVERY "
+                      f"publish, so nothing caps the tick below {top[2]:.0f} Hz "
+                      f"— the deficit elsewhere is phase, not capacity: the "
+                      f"polls arrive in bursts, so at the usual ~1.5x over-rate "
+                      f"only ~{100 * mid:.0f}% of publish intervals contain "
+                      f"one. Note this run reached that rate because OUR OWN "
+                      f"injected events lengthen the drain loop, which is take "
+                      f"119's runaway in miniature and not a lever to pull. The "
+                      f"fix is to stop deriving the tick from the drain at all.")
         drv = pump if driver == "pump" else peep
         if pub <= 0.0:
             print("pumprate   => the layer published NOTHING in the median "
@@ -2783,6 +2825,21 @@ def main(path):
                   f"SDL_PumpEvents in this run, which has not happened since "
                   f"take 118. Check the `sdl:` line before reading anything "
                   f"above.")
+        # pump == peep to the count is a structural fact about X4's event loop,
+        # and it is what finally retires the 18 kHz figure: a `while
+        # (PollEvent(&e))` drain calls BOTH once per iteration, so the pair rate
+        # is the iteration count and 18 kHz was take 119's own 3.2-million-event
+        # flood making that loop spin. Our injected events still inflate it.
+        eq = sum(1 for g in pr if abs(float(g[1]) - float(g[2])) < 0.01)
+        if eq > 0.9 * len(pr):
+            print(f"pumprate   pump == peep in {eq}/{len(pr)} windows, to the "
+                  f"count — X4 calls them as a PAIR, which is what a `while "
+                  f"(SDL_PollEvent(&e))` drain does. So `pump` counts drain "
+                  f"ITERATIONS, not event-loop passes, and it rises when our own "
+                  f"synthetic mouse events lengthen the drain: it is partly our "
+                  f"own signal and must not be read as X4's poll rate. The "
+                  f"~18 kHz in x4vr_headlook.hpp was this loop spinning on take "
+                  f"119's 3.2 million queued key events.")
 
     # --- task #75: which per-view member carries the SMOOTH camera ----------
     #

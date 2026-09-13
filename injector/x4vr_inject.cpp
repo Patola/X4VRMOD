@@ -2671,9 +2671,20 @@ void headlook_tick() {
     //                and looked like a frozen camera. `reads` is counted and
     //                used as the denominator, and printed so a low read rate
     //                cannot be mistaken for a low move rate.
+    //   `sent`       counted `d.dx != 0`, but `d` is computed ~160 lines above
+    //                where `steering` becomes known and send_mouse_delta is
+    //                gated on it -- so every tick with the HUD down or the view
+    //                external counted a delta that was computed and thrown away.
+    //                Take 284 read "delta sent on 100.0%" against a camera
+    //                moving on 13.1%, and concluded X4 was ignoring us; the
+    //                protocol for that run deliberately included a still
+    //                segment and a map segment, which is precisely when nothing
+    //                was being sent. This is the SAME defect as `cam_moved`
+    //                above -- counted at a site that cannot see the gate -- and
+    //                I fixed one and left its twin in the same block.
     {
-        static uint64_t ticks = 0, sent = 0, reads = 0, cam_moved = 0,
-                        clamps = 0;
+        static uint64_t ticks = 0, sent = 0, steer_ticks = 0, reads = 0,
+                        cam_moved = 0, clamps = 0;
         static float last_cam = 0.0f;
         static bool have_last = false;
         static double t0 = 0.0;
@@ -2681,7 +2692,12 @@ void headlook_tick() {
         if (t0 == 0.0)
             t0 = now;
         ticks++;
-        if (d.dx != 0 || d.dy != 0)
+        // What actually left the process, under the same `steering` the send is
+        // gated on -- and the steering ticks beside it, so "we sent nothing"
+        // cannot be read as "we had nothing to send".
+        if (steering)
+            steer_ticks++;
+        if (steering && (d.dx != 0 || d.dy != 0))
             sent++;
         if (d.clamped)
             clamps++;
@@ -2703,14 +2719,17 @@ void headlook_tick() {
         }
         const double dt = now - t0;
         if (dt >= 2.0) {
-            X4VR_LOG("inputrate: %llu ticks in %.2f s = %.1f Hz | delta sent on "
-                     "%.1f%% (=%.1f Hz) | camera read on %.1f%% of ticks, moved "
+            X4VR_LOG("inputrate: %llu ticks in %.2f s = %.1f Hz | steering on "
+                     "%.1f%% of ticks, delta sent on %.1f%% of STEERING ticks "
+                     "(=%.1f Hz) | camera read on %.1f%% of ticks, moved "
                      "on %.1f%% of READS (=%.1f Hz) | clamped %.1f%% | deadzone "
                      "%.2f deg, %.3f deg per count, kp %.2f -> a count needs "
                      "%.3f deg of error",
                      (unsigned long long)ticks, dt, ticks / dt,
-                     100.0 * (double)sent / (double)ticks, sent / dt,
-                     100.0 * (double)reads / (double)ticks,
+                     100.0 * (double)steer_ticks / (double)ticks,
+                     steer_ticks ? 100.0 * (double)sent / (double)steer_ticks
+                                 : 0.0,
+                     sent / dt, 100.0 * (double)reads / (double)ticks,
                      reads ? 100.0 * (double)cam_moved / (double)reads : 0.0,
                      cam_moved / dt, 100.0 * (double)clamps / (double)ticks,
                      g_headlook.dead_zone_deg, g_headlook.gain_deg_per_count,
@@ -2718,7 +2737,7 @@ void headlook_tick() {
                      0.5f * g_headlook.gain_deg_per_count /
                          (g_headlook.servo_kp > 0.0f ? g_headlook.servo_kp
                                                      : 1.0f));
-            ticks = sent = reads = cam_moved = clamps = 0;
+            ticks = sent = steer_ticks = reads = cam_moved = clamps = 0;
             t0 = now;
         }
     }

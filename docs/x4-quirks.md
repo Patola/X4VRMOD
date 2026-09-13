@@ -16689,3 +16689,81 @@ either old figure and says why.
 The `inputrate` verdict's 0.75 boundary sits at ~74% for a run sending on ~99% of
 ticks, and take 283 measured **73%** — 1.2 points from flipping. The scorer now
 prints that margin. `pumprate` decides the same question without a threshold.
+
+### Take 284 — the accounting closes, and P284.2 is refuted
+
+225 s, 112 windows, log-only. Every number below is per-window or a total; no
+medians of components that must sum.
+
+| quantity | measured |
+|---|---|
+| poses **published** by the layer | 20243 = **89.9 Hz**, range 87.5–90.9, **zero** windows below 10 Hz |
+| `pump` (= `entered`) | 17145 = 76.1 Hz, range **24.3–422.3** |
+| `peep` | 17145 — **equal to `pump` to the count in 111/112 windows** |
+| `fresh` (servo ticks) | 10482 = 46.5 Hz |
+| `skipped` | 6663 = 29.6 Hz |
+| `nopose` | **0**, whole run |
+| poses that produced a tick | **51.8%** |
+
+- **P284.2 REFUTED.** The publish rate is 89.9 Hz in every window. The ~55 Hz of
+  take 283 was not a low publish rate; poses really are being dropped.
+- **P284.4 CONFIRMED** exactly: `nopose` is 0. Pose validity is not involved.
+- **P284.1 REFUTED as stated.** `pump` is not X4's render rate. `pump == peep`
+  to the count means X4 calls them as a **pair**, which is what
+  `while (SDL_PollEvent(&e))` does — `SDL_PollEvent` is `SDL_PumpEvents` plus one
+  `SDL_PeepEvents(GET)`. So `pump` counts **drain-loop iterations**, and the loop
+  runs until the queue empties. Our own synthetic mouse events lengthen it, so
+  `pump` is partly our own signal and must never be read as X4's poll rate.
+- **The ~18 kHz is retired by measurement, not by argument.** It was this same
+  drain loop spinning on take 119's 3.2 million queued key events. With a normal
+  queue the pair rate is 24–422 Hz.
+
+**P284.3 CONFIRMED, with the mechanism corrected.** Not a hard rate cap:
+
+| window | polls | publishes | fresh | caught |
+|---|---|---|---|---|
+| typical over-polling | 136 Hz | 89.5 Hz | 54.9 Hz | 0.61 |
+| hardest-polling | **422 Hz** | 90.0 Hz | **90.0 Hz** | **1.00** |
+
+`fresh / min(pump, published)` has median **0.79**. If polls were evenly spaced
+that ratio would be 1.00 — every publish interval would contain one. It is not,
+because **the polls arrive in bursts**: 2.6 polls per tick at the usual rate,
+4.7 at the extreme. Over-polling *saturates* — the hardest-polling window caught
+every single publish — so **nothing caps the tick below 90 Hz.** The deficit is
+phase, not capacity.
+
+That also means the obvious lever is the forbidden one: the way this run reached
+422 Hz was our own events lengthening the drain, which is take 119's runaway in
+miniature. **The fix is to stop deriving the tick from the drain at all** — give
+it a cadence we own — not to make X4 drain harder.
+
+#### Four instrument defects, three of them mine from this session
+
+1. **My scorer printed medians of `fresh`, `skipped` and `entered`** — components
+   that must sum. The line read `60.5 = 51.7 + 23.0` and looked broken while the
+   data was exact in 112/112 windows: the median of a sum is not the sum of
+   medians. Rates now come from totals.
+2. **My first reading of the log indexed regex groups positionally** and got
+   `fresh`/`nopose`/`skipped` shifted by one, printing "fresh = 0.0 Hz in every
+   window". Caught only because that contradicted the scorer's own total. This is
+   the fourth time in this project that reading a list positionally has produced
+   a wrong number; named groups now.
+3. **My new "fast windows vs slow windows" branch compared two self-selected
+   groups.** The fast-polling windows are also the fast-head-movement and
+   high-frame-rate windows, so the difference could not be attributed to
+   polling. Replaced with the per-window `fresh / min(pump, published)` ratio,
+   which needs no grouping — and which then *refuted* the "second ceiling"
+   hypothesis that branch had been built to support.
+4. **`inputrate`'s `sent` counted `d.dx != 0`, not what was sent.** `d` is
+   computed ~160 lines before `steering` is known and `send_mouse_delta` is gated
+   on `steering`. Take 284 printed "delta sent on 100.0%" against "camera moved
+   on 13.1%" and concluded *"X4's — not fixable from this side"*. **That verdict
+   is WITHDRAWN**: the run's protocol deliberately contained a 20 s still segment
+   and a 21 s map segment (HUD down 180–201 s), which is exactly when nothing was
+   being sent. This is the **same defect as `cam_moved`/`have_cam`, in the same
+   code block, which I fixed in the same commit** — one instance fixed, its twin
+   left in place.
+
+Also not usable: `corr(fresh/published, camdiff M_view%) = −0.744`. The run has
+two phase clusters at opposite ends of both axes, so that coefficient describes
+the clustering, not a relationship. Do not cite it.
