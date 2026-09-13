@@ -17157,3 +17157,56 @@ thread structure differ from the gamescope+VR configuration the episode occurred
 in. A *stale* result there is conclusive. A *not stale* result is strong but
 wants one VR confirmation before #75's staleness branch is closed, because the
 oscillation has only ever been observed under the VR configuration.
+
+### Take 286 — staleness REFUTED, and both standing explanations are now dead
+
+284 s flatscreen, camera swung on free-look throughout. Read **per window**, not
+off the last cumulative line — that is the dilution defect that made take 283's
+`inputrate` report 33.4% where differencing said 73%, and I had already fixed it
+in two instruments before writing it a third time here. It mattered: the
+cumulative means are 18.41/13.13 ms against per-window medians of 11.22/6.71,
+inflated by matches saturated at the 300 ms window edge.
+
+| | per-window median | range |
+|---|---|---|
+| CONTROL (X4's own thread) | **11.22 ms** | 6.79 – 55.68 |
+| OURS (off-thread) | **6.71 ms** | 2.80 – 51.40 |
+| OURS − CONTROL | **−4.04 ms** | −17.86 … **+1.83** |
+
+- **P286.3 holds**: CONTROL's 11.22 ms sits on one 90 Hz frame, which is its
+  structural floor, so the matcher is correctly scaled and the rest of the line
+  may be read.
+- **P286.1 CONFIRMED.** In the **worst of 90 windows** the off-thread read is
+  **1.83 ms** behind X4's own — not a mean that could hide a bad stretch. At the
+  ~1000 °/s the oscillation reached, that bounds the servo's input error at a few
+  degrees. The episode needed ~60.
+- 25639 off-thread calls, 17055 non-zero, **0 outside ±200°**, no crash.
+
+**A structural asymmetry, recorded rather than left to flatter the result:**
+CONTROL excludes the entry it just wrote, so its floor is one poll period while
+OURS' floor is zero. A perfectly current off-thread read should therefore score
+about a frame *better*, not equal — which is roughly what −4.04 ms is. The
+defensible claim is the **bound**, not the sign.
+
+#### Both of my explanations for take 285b are now dead
+
+| explanation | status |
+|---|---|
+| servo re-commands while commands are in flight (burst delivery) | refuted offline — `tests/headlook.cpp`, all 8 cells of burst x lead x amplitude stable |
+| the off-thread camera read is stale | refuted here — worst window 1.83 ms |
+
+I proposed both, in that order, each as the leading explanation. Neither
+survived, and **neither cost a take**: one died to a harness written before the
+fix, the other to a 3-minute flatscreen run. That is the pattern to keep.
+
+**What has NOT been examined** — the difference between the drain-driven tick and
+the thread-driven one, minus the two pieces now cleared. What remains is the
+*coupling* rather than the arithmetic: `SDL_PushEvent` called from a foreign
+thread while X4 drains, the free-look key re-assertion now issued at 90 Hz from
+that thread, and whatever ordering X4 sees between our synthetic motion events
+and its own frame boundaries. None of that is modelled anywhere, and none of it
+should be guessed at: the next step is to characterise what X4 receives, not to
+propose a third mechanism.
+
+`X4VR_TICK_HZ` stays unused meanwhile. It is off by default, so nothing is
+broken while this is open.

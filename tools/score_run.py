@@ -3027,15 +3027,57 @@ def main(path):
         r"(?P<om>[\d.]+) ms max (?P<ox>[\d.]+) \| match residual "
         r"(?P<res>[\d.]+) deg \| (?P<ref>\d+) refused", text)]
     if cl:
-        g = cl[-1]  # cumulative counters, so the last line has the most behind it
-        sn, on = int(g["sn"]), int(g["on"])
-        sm, om = float(g["sm"]), float(g["om"])
-        sx, ox = float(g["sx"]), float(g["ox"])
-        ref = int(g["ref"])
-        print(f"camlag     CONTROL (X4's thread) n={sn} mean {sm:.2f} ms "
-              f"max {sx:.2f} | OURS (off-thread) n={on} mean {om:.2f} ms "
-              f"max {ox:.2f} | residual {float(g['res']):.3f} deg | "
-              f"{ref} refused")
+        last = cl[-1]
+        sn, on = int(last["sn"]), int(last["on"])
+        sx, ox = float(last["sx"]), float(last["ox"])
+        ref = int(last["ref"])
+        # DIFFERENCED, not read off the last line. These are cumulative counters
+        # and quoting the final mean is the same dilution defect that made take
+        # 283's `inputrate` report 33.4% where per-window differencing said 73%.
+        # I fixed that in two instruments and then wrote it a third time here.
+        # It matters: the cumulative means are 18.41/13.13 ms, pulled up by
+        # matches saturated at the window edge, while the per-window medians are
+        # 10.90/6.67.
+        wins = []
+        for a, b in zip(cl, cl[1:]):
+            dsn = int(b["sn"]) - int(a["sn"])
+            don = int(b["on"]) - int(a["on"])
+            if dsn < 20 or don < 20:
+                continue
+            wins.append((
+                (float(b["sm"]) * int(b["sn"]) - float(a["sm"]) * int(a["sn"]))
+                / dsn,
+                (float(b["om"]) * int(b["on"]) - float(a["om"]) * int(a["on"]))
+                / don))
+
+        def med(xs):
+            s = sorted(xs)
+            return s[len(s) // 2]
+        if wins:
+            sm = med([w[0] for w in wins])
+            om = med([w[1] for w in wins])
+            diffs = [w[1] - w[0] for w in wins]
+            worst = max(diffs)
+            print(f"camlag     {len(wins)} windows | CONTROL (X4's thread) "
+                  f"median {sm:.2f} ms, n={sn} | OURS (off-thread) median "
+                  f"{om:.2f} ms, n={on} | OURS-CONTROL median {med(diffs):+.2f} "
+                  f"ms, worst window {worst:+.2f} | residual "
+                  f"{float(last['res']):.3f} deg | {ref} refused")
+            print(f"camlag     max matched age CONTROL {sx:.1f} ms, OURS "
+                  f"{ox:.1f} ms — at/near the 300 ms window these are SATURATED, "
+                  f"not measurements, and they are what inflate the cumulative "
+                  f"means over the per-window medians above.")
+            # A structural offset, stated rather than left to flatter the result.
+            print(f"camlag     NOTE: CONTROL excludes the entry it just wrote, "
+                  f"so its floor is one poll period while OURS' floor is zero. "
+                  f"A perfectly current off-thread read should therefore score "
+                  f"about a frame BETTER, not equal. Read the bound, not the "
+                  f"sign.")
+        else:
+            sm, om, worst = float(last["sm"]), float(last["om"]), 0.0
+            print(f"camlag     too few windows to difference; cumulative only: "
+                  f"CONTROL {sm:.2f} ms OURS {om:.2f} ms — do not quote these "
+                  f"as a result.")
         if sn < 100 or on < 100:
             print(f"camlag     => TOO FEW SAMPLES ({sn} control, {on} ours). "
                   f"The camera has to be MOVING for a match to mean anything — "
@@ -3044,7 +3086,7 @@ def main(path):
             print(f"camlag     => MOSTLY REFUSED ({ref} refusals against {on} "
                   f"measurements): the camera was too still for the window to "
                   f"support a match. Inconclusive, not a null.")
-        elif om > sm + 8.0:
+        elif worst > 8.0:
             print(f"camlag     => STALE. Our off-thread reading is {om:.1f} ms "
                   f"old against the {sm:.1f} ms a reading taken on X4's own "
                   f"thread scores through the same matcher — {om - sm:.1f} ms "
@@ -3054,14 +3096,18 @@ def main(path):
                   f"driver must sample the camera on X4's thread and pass the "
                   f"value across, NOT call the getter from its own.")
         else:
-            print(f"camlag     => NOT STALE. Our off-thread reading scores "
-                  f"{om:.1f} ms against the control's {sm:.1f} ms, a difference "
-                  f"of {om - sm:.1f} ms — within a frame or two, so the read is "
-                  f"as current as X4's own. **Staleness is refuted**, and take "
-                  f"285b's 59.588 deg two-thread disagreement was genuine fast "
-                  f"motion, not a stale value. The oscillation's cause is "
-                  f"elsewhere and the servo arithmetic is already cleared "
-                  f"(tests/headlook.cpp). Do not build a freshness fix.")
+            print(f"camlag     => NOT STALE. Per window, our off-thread reading "
+                  f"medians {om:.1f} ms against the control's {sm:.1f} ms, and "
+                  f"in the WORST of {len(wins)} windows it is only "
+                  f"{worst:+.1f} ms behind — not an average that could hide a "
+                  f"bad stretch. At the ~1000 deg/s the oscillation reached, "
+                  f"that bounds the error the servo steers on at a few degrees, "
+                  f"where the episode needed ~60. **Staleness is refuted**: "
+                  f"take 285b's 59.588 deg two-thread disagreement was genuine "
+                  f"fast motion. With the servo arithmetic already cleared by "
+                  f"tests/headlook.cpp, BOTH standing explanations are dead and "
+                  f"the cause is somewhere not yet looked at. Do not build a "
+                  f"freshness fix.")
 
     if "TWO THREADS are in headlook_tick" in text:
         fails.append("two threads entered headlook_tick — the servo's state is "
