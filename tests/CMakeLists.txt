@@ -137,6 +137,16 @@ add_executable(x4vr_test_camring camring.cpp)
 find_package(SDL3 QUIET)
 if(SDL3_FOUND OR EXISTS /usr/include/SDL3/SDL_events.h)
   add_executable(x4vr_test_sdl_event_layout sdl_event_layout.cpp)
+  # Task #75: the injector's queue-time measurement rests entirely on SDL
+  # keeping a timestamp we set ourselves. A version that overwrote it would
+  # leave `evflow` reporting a latency near zero with no other symptom -- a
+  # plausible number, silently wrong. Needs the LIBRARY, not just the headers.
+  if(SDL3_FOUND)
+    add_executable(x4vr_test_sdl_push_timestamp sdl_push_timestamp.cpp)
+    target_link_libraries(x4vr_test_sdl_push_timestamp PRIVATE SDL3::SDL3)
+  else()
+    message(STATUS "SDL3 library not found — skipping x4vr_test_sdl_push_timestamp")
+  endif()
 else()
   message(STATUS "SDL3 headers not found — skipping x4vr_test_sdl_event_layout")
 endif()

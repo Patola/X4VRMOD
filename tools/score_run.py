@@ -2940,6 +2940,76 @@ def main(path):
                   f"~18 kHz in x4vr_headlook.hpp was this loop spinning on take "
                   f"119's 3.2 million queued key events.")
 
+    # --- task #75: what does X4 actually RECEIVE? ---------------------------
+    #
+    # A census, not a hypothesis. Two mechanisms have already been proposed and
+    # refuted — the servo arithmetic (tests/headlook.cpp, all 8 cells stable)
+    # and a stale off-thread camera read (take 286, worst window 1.83 ms) — so
+    # this counts both ends of the channel rather than testing a third guess.
+    #
+    # `pushed` and `got` come from their own sites: "delayed" and "DROPPED" want
+    # opposite fixes and one counter cannot separate them.
+    ef = re.findall(
+        r"evflow: motion pushed ([\d.]+) Hz -> X4 took ([\d.]+) Hz \((-?\d+) "
+        r"in flight/lost\) \| key pushed ([\d.]+) Hz -> took ([\d.]+) Hz \| "
+        r"queue time mean ([\d.]+) ms max ([\d.]+) \| player's own motion "
+        r"([\d.]+) Hz \| ours per drain 0\.\.8\+: ([\d/]+) \| drains "
+        r"([\d.]+) Hz", text)
+    if ef:
+        def med(xs):
+            s = sorted(xs)
+            return s[len(s) // 2]
+        pm = med([float(g[0]) for g in ef])
+        gm = med([float(g[1]) for g in ef])
+        qmean = med([float(g[5]) for g in ef])
+        qmax = max(float(g[6]) for g in ef)
+        foreign = med([float(g[7]) for g in ef])
+        # The histograms are per-window counts; summed they describe the run.
+        hist = [0] * 9
+        for g in ef:
+            for i, v in enumerate(g[8].split("/")[:9]):
+                hist[i] += int(v)
+        tot = sum(hist) or 1
+        multi = sum(hist[2:])
+        print(f"evflow     {len(ef)} windows | motion pushed {pm:.1f} Hz -> X4 "
+              f"took {gm:.1f} Hz | queue time mean {qmean:.2f} ms, max "
+              f"{qmax:.2f} | player's own motion {foreign:.1f} Hz")
+        print(f"evflow     ours per drain: " +
+              ", ".join(f"{i if i < 8 else '8+'}:{100.0 * hist[i] / tot:.1f}%"
+                        for i in range(9) if hist[i]))
+        if gm > 0 and qmean == 0.0 and qmax == 0.0:
+            print(f"evflow     => THE TIMESTAMP DID NOT SURVIVE. X4 took "
+                  f"{gm:.1f} Hz of our events but every queue time read zero, "
+                  f"so X4's SDL is overwriting the field this measurement rides "
+                  f"in — tests/sdl_push_timestamp.cpp passes against the system "
+                  f"SDL 3.4.16, and X4 ships its own. The queue time is VOID "
+                  f"here; the counts and the burst histogram still stand.")
+        elif pm > 0 and gm < 0.8 * pm:
+            print(f"evflow     => COMMANDS ARE BEING LOST. We push {pm:.1f} Hz "
+                  f"and X4 takes only {gm:.1f} Hz — {100.0 * (1 - gm / pm):.0f}% "
+                  f"never arrive. The servo's error never closes because most of "
+                  f"what it sends is discarded, which is a different defect from "
+                  f"delay and wants a different fix: stop pushing faster than "
+                  f"the queue is drained.")
+        elif multi > 0.25 * tot:
+            print(f"evflow     => BACKLOG. {100.0 * multi / tot:.0f}% of drains "
+                  f"hand X4 two or more of our commands at once, each emitted on "
+                  f"a separate tick believing it would act alone. Mean queue "
+                  f"time {qmean:.2f} ms, worst {qmax:.2f} ms — that is how long "
+                  f"the servo steers without its last command having landed.")
+        else:
+            print(f"evflow     => CLEAN. X4 takes what we push "
+                  f"({gm:.1f} of {pm:.1f} Hz), {100.0 * multi / tot:.0f}% of "
+                  f"drains carry more than one, and the queue time is "
+                  f"{qmean:.2f} ms. The channel is not the defect either, and "
+                  f"with the servo and the camera read already cleared, nothing "
+                  f"proposed so far explains take 285b.")
+        if foreign > 1.0:
+            print(f"evflow     NOTE: {foreign:.1f} Hz of the player's OWN mouse "
+                  f"motion crossed the same channel. Those compete with ours "
+                  f"for X4's free-look, and the run should have had hands off "
+                  f"the mouse.")
+
     # --- task #75: did our own tick cadence actually run? -------------------
     #
     # Reported separately from `pumprate` because "the driver ran at 90 Hz" and

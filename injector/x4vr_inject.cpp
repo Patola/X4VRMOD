@@ -1098,6 +1098,40 @@ struct PumpRate {
     double t_window = 0.0;
 } g_pumprate;
 
+// **Task #75: what does X4 actually RECEIVE?**
+//
+// Two explanations for take 285b's oscillation are dead: the servo arithmetic
+// (refuted offline across burst x lead x amplitude) and a stale off-thread
+// camera read (refuted by take 286, worst window 1.83 ms). What is left is the
+// COUPLING rather than the arithmetic -- SDL_PushEvent called from a foreign
+// thread while X4 drains -- and nothing in this project has ever measured it.
+//
+// So this counts both ends of the one channel that carries our commands into X4,
+// and is deliberately a census rather than a hypothesis: how many events we
+// push, how many X4 takes, how long each takes to cross, and how many arrive
+// together. A third guessed mechanism would be the third in a row.
+//
+// The crossing time rides in the event's own `timestamp`, which is the field
+// that means exactly that. SDL3 fills it only when it is zero, so ours survives,
+// and X4 sees a monotonic-ns value from the same clock SDL would have used.
+//
+// `pushed - got` is the number that decides whether commands are being DROPPED
+// or merely delayed -- and those want opposite fixes, which is why the two are
+// counted at their own sites rather than inferred from one another.
+struct EvFlow {
+    std::atomic<uint64_t> pushed_motion{0}, pushed_key{0};
+    std::atomic<uint64_t> got_motion{0}, got_key{0}, got_foreign{0};
+    std::atomic<uint64_t> lat_sum_us{0}, lat_n{0}, lat_max_us{0};
+    std::atomic<uint64_t> drains{0};
+    // Ours per single SDL_PeepEvents(GET): index 8 is "8 or more". A servo that
+    // commands once per tick should see 1; anything else is the queue holding
+    // our commands back and handing X4 several at once.
+    std::atomic<uint64_t> burst[9] = {};
+    uint64_t p_pm = 0, p_pk = 0, p_gm = 0, p_gk = 0, p_fo = 0;
+    uint64_t p_ls = 0, p_ln = 0, p_dr = 0, p_burst[9] = {};
+    double t_window = 0.0;
+} g_evflow;
+
 // Written by whichever thread runs the tick, read by the off-thread camera probe
 // below, so the probe compares its own reading against one taken through X4's
 // normal call path. See camprobe_start() for what the probe is for.
@@ -3144,6 +3178,47 @@ void pumprate_report() {
     g_pumprate.p_pump = cp;
     g_pumprate.p_peep = cq;
     g_pumprate.p_wait = cw;
+    // **The event census, on the same windows as everything else.**
+    //
+    // `pushed` and `got` are counted at their own sites, never inferred from one
+    // another, because "delayed" and "DROPPED" want opposite fixes and a single
+    // counter cannot tell them apart.
+    {
+        const uint64_t pm = g_evflow.pushed_motion.load(std::memory_order_relaxed);
+        const uint64_t pk = g_evflow.pushed_key.load(std::memory_order_relaxed);
+        const uint64_t gm = g_evflow.got_motion.load(std::memory_order_relaxed);
+        const uint64_t gk = g_evflow.got_key.load(std::memory_order_relaxed);
+        const uint64_t fo = g_evflow.got_foreign.load(std::memory_order_relaxed);
+        const uint64_t ls = g_evflow.lat_sum_us.load(std::memory_order_relaxed);
+        const uint64_t ln = g_evflow.lat_n.load(std::memory_order_relaxed);
+        const uint64_t dr = g_evflow.drains.load(std::memory_order_relaxed);
+        const uint64_t d_pm = pm - g_evflow.p_pm, d_gm = gm - g_evflow.p_gm;
+        const uint64_t d_pk = pk - g_evflow.p_pk, d_gk = gk - g_evflow.p_gk;
+        const uint64_t d_ln = ln - g_evflow.p_ln;
+        const uint64_t d_ls = ls - g_evflow.p_ls;
+        char bhist[96];
+        int bo = 0;
+        for (int i = 0; i < 9 && bo < (int)sizeof(bhist) - 12; i++) {
+            const uint64_t v = g_evflow.burst[i].load(std::memory_order_relaxed);
+            bo += snprintf(bhist + bo, sizeof(bhist) - bo, "%s%llu",
+                           i ? "/" : "", (unsigned long long)(v - g_evflow.p_burst[i]));
+            g_evflow.p_burst[i] = v;
+        }
+        X4VR_LOG("evflow: motion pushed %.1f Hz -> X4 took %.1f Hz (%+lld "
+                 "in flight/lost) | key pushed %.1f Hz -> took %.1f Hz | "
+                 "queue time mean %.2f ms max %.2f | player's own motion "
+                 "%.1f Hz | ours per drain 0..8+: %s | drains %.1f Hz",
+                 hz(d_pm), hz(d_gm), (long long)d_pm - (long long)d_gm,
+                 hz(d_pk), hz(d_gk),
+                 d_ln ? (double)d_ls / (double)d_ln / 1000.0 : 0.0,
+                 g_evflow.lat_max_us.load(std::memory_order_relaxed) / 1000.0,
+                 hz(fo - g_evflow.p_fo), bhist, hz(dr - g_evflow.p_dr));
+        g_evflow.p_pm = pm; g_evflow.p_gm = gm;
+        g_evflow.p_pk = pk; g_evflow.p_gk = gk;
+        g_evflow.p_fo = fo; g_evflow.p_ls = ls;
+        g_evflow.p_ln = ln; g_evflow.p_dr = dr;
+    }
+
     g_pumprate.entered = g_pumprate.nopose = 0;
     g_pumprate.fresh = g_pumprate.skipped = 0;
     // The mark carries forward so the next window's baseline is this window's
@@ -3245,7 +3320,16 @@ void send_key_down(int scancode) { send_key(scancode, true); }
 static void push_our_event(void *ev) {
     // reserved is at a fixed offset in every SDL_Event; both of our event types
     // share the layout, which tests/sdl_event_layout.cpp asserts.
-    ((Sdl3MouseEvent *)ev)->reserved = kOurEventMagic;
+    auto *m = (Sdl3MouseEvent *)ev;
+    m->reserved = kOurEventMagic;
+    // Stamped BEFORE the push, so the drain side can subtract and get the time
+    // the event spent in SDL's queue. SDL3 only fills this when it is zero, and
+    // the value is monotonic ns -- the same clock it would have written itself.
+    m->timestamp = (uint64_t)(mono_seconds() * 1e9);
+    if (m->type == SDL_EV_MOUSE_MOTION)
+        g_evflow.pushed_motion.fetch_add(1, std::memory_order_relaxed);
+    else
+        g_evflow.pushed_key.fetch_add(1, std::memory_order_relaxed);
     static auto push = real<int (*)(void *)>("SDL_PushEvent");
     if (push)
         push(ev);
@@ -3426,9 +3510,47 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
         pumprate_report();
     }
     const bool consuming = action == 2;
+    // Counted ONLY on GET. A peek leaves the event in the queue and X4 would be
+    // credited with receiving it twice -- the same trap the fold below is
+    // guarded against, one field over.
+    int ours_this_drain = 0;
+    const double drain_now = consuming && n > 0 ? mono_seconds() : 0.0;
     if (n > 0 && events && this_is_the_game()) {
         for (int i = 0; i < n; i++) {
             auto *e = (Sdl3MouseEvent *)((unsigned char *)events + 128 * i);
+            if (consuming) {
+                const bool mine = e->reserved == kOurEventMagic;
+                const bool is_motion = e->type == SDL_EV_MOUSE_MOTION;
+                if (mine) {
+                    ours_this_drain++;
+                    if (is_motion)
+                        g_evflow.got_motion.fetch_add(
+                            1, std::memory_order_relaxed);
+                    else
+                        g_evflow.got_key.fetch_add(1,
+                                                   std::memory_order_relaxed);
+                    // How long this command sat in SDL's queue. This is the
+                    // quantity the servo is blind to: it commands again each
+                    // tick with no knowledge that the last one has not landed.
+                    const uint64_t sent_ns = e->timestamp;
+                    if (sent_ns) {
+                        const double lat =
+                            drain_now - (double)sent_ns * 1e-9;
+                        if (lat >= 0.0 && lat < 5.0) {
+                            const uint64_t us = (uint64_t)(lat * 1e6);
+                            g_evflow.lat_sum_us.fetch_add(
+                                us, std::memory_order_relaxed);
+                            g_evflow.lat_n.fetch_add(
+                                1, std::memory_order_relaxed);
+                            bump_max(g_evflow.lat_max_us, us);
+                        }
+                    }
+                } else if (is_motion) {
+                    // The player's own mouse, competing for the same channel.
+                    g_evflow.got_foreign.fetch_add(1,
+                                                   std::memory_order_relaxed);
+                }
+            }
             if (e->type == SDL_EV_KEY_DOWN || e->type == SDL_EV_KEY_UP)
                 note_key_event((const Sdl3KeyEvent *)e, "peep", action);
             if (e->type >= SDL_EV_MOUSE_MOTION && e->type <= SDL_EV_MOUSE_UP) {
@@ -3453,6 +3575,14 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
                 }
             }
         }
+    }
+    // A drain that handed X4 more than one of our commands at once is the whole
+    // question: the servo emitted them on separate ticks believing each would
+    // act alone.
+    if (consuming && n > 0 && this_is_the_game()) {
+        g_evflow.drains.fetch_add(1, std::memory_order_relaxed);
+        const int b = ours_this_drain > 8 ? 8 : ours_this_drain;
+        g_evflow.burst[b].fetch_add(1, std::memory_order_relaxed);
     }
     return n;
 }

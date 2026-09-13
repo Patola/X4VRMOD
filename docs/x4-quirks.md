@@ -17210,3 +17210,60 @@ propose a third mechanism.
 
 `X4VR_TICK_HZ` stays unused meanwhile. It is off by default, so nothing is
 broken while this is open.
+
+### The event census — what X4 actually receives
+
+Two mechanisms proposed and refuted, so this counts rather than guesses. `evflow`
+instruments **both ends of the one channel that carries our commands into X4**:
+
+| counted | where | what it settles |
+|---|---|---|
+| `pushed` motion/key | `push_our_event` | how much we emit |
+| `got` motion/key | the `SDL_PeepEvents(GET)` walk | how much X4 **takes** |
+| queue time | the event's own `timestamp`, stamped before the push | how long a command sits before landing |
+| ours-per-drain histogram | one `SDL_PeepEvents(GET)` call | whether X4 gets several commands at once |
+| the player's own motion | same walk, non-ours | what competes for the same channel |
+
+`pushed` and `got` are counted **at their own sites, never inferred from one
+another**: "delayed" and "DROPPED" want opposite fixes, and one counter cannot
+separate them. Counted only on GET — a peek leaves the event queued and would
+credit X4 with receiving it twice.
+
+**The one assumption, pinned against the real library.** The whole queue-time
+measurement rests on SDL preserving a `timestamp` we set ourselves.
+`tests/sdl_push_timestamp.cpp` links real SDL3 and asserts it, because a version
+that overwrote the field would leave `evflow` reporting a latency near zero with
+no other symptom — a plausible number, silently wrong. Against **SDL 3.4.16**:
+
+- a non-zero timestamp **survives** the push;
+- a zero one is filled in by SDL, so zero cannot be mistaken for one of ours;
+- the marker field and the payload survive;
+- the queue is **FIFO**, and one `SDL_PeepEvents(GET)` returned all eight queued
+  events — so "several of ours in one drain" is a real backlog, not reordering.
+
+X4 ships its own SDL, so this can still fail there. The scorer detects exactly
+that: non-zero `got` with every queue time reading zero is reported as **the
+timestamp did not survive**, with the queue time declared void and the counts
+left standing, rather than as "no delay".
+
+### P287 — committed before the run
+
+- **P287.1** `pushed ≈ got`. Nothing is dropped; SDL's queue is reliable and X4
+  drains it to empty. If instead `got` is well under `pushed`, commands are being
+  discarded, the servo's error can never close, and that is a third defect
+  distinct from both refuted ones.
+- **P287.2** The ours-per-drain histogram has real mass at **2 and above** while
+  the thread driver runs, and essentially none at the drain-driven rate. This is
+  the one I expect to carry the answer: it is the direct measurement of the
+  backlog that take 285b's 3–5x max-step jumps imply, and nothing has measured it
+  yet.
+- **P287.3** Queue time is tens of milliseconds during fast motion. At the
+  ~1000 °/s the oscillation reached, 40 ms is 40° of command in flight that the
+  servo has no knowledge of.
+- **P287.4** The player's own motion is ~0 Hz. If it is not, the run was
+  contaminated and P287.2 cannot be read.
+
+**If P287.1–P287.3 all come back clean, the channel is innocent too**, and every
+mechanism proposed for take 285b is dead. That would be a real result and not a
+failure — it would mean the difference is in X4's own handling of *when* input
+arrives relative to its frame, which nothing on our side has ever looked at.
