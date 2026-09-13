@@ -142,8 +142,16 @@ int main() {
         // Same writer, same contention, through the seqlock.
         std::atomic<bool> stop3{false};
         long torn_guarded = 0, got = 0;
-        std::thread w3([&]{ for (int i = 1; i <= kIter && !stop3; i++) publish(i); });
-        for (int i = 0; i < kIter; i++) {
+        std::thread w3([&]{ for (int i = 1; !stop3; i++) publish(i % 300000 + 1); });
+        // **Read until enough COMPLETED, not for a fixed number of attempts.**
+        // A fixed attempt count made this arm flaky: against a hot writer on a
+        // loaded machine the guarded reader can starve, and it failed once in a
+        // full-suite run while passing three times alone. A flaky assertion in a
+        // suite is worse than none -- it teaches me to re-run until green.
+        const long kWant = 20000;
+        long attempts = 0;
+        while (got < kWant && attempts < 40L * kIter) {
+            attempts++;
             x4vr::CamSnap c;
             if (!x4vr::share_read_camera(s, &c)) continue;
             got++;
@@ -158,9 +166,10 @@ int main() {
         // a pass bought by not looking. The writer here is as hot as a thread
         // can be, which is not the game, so the bar is only that enough reads
         // completed for the zero above to mean something.
-        snprintf(buf, sizeof buf, "  ...and it completed enough to count (%ld)",
-                 got);
-        ck(got > 10000, buf);
+        snprintf(buf, sizeof buf,
+                 "  ...and it completed enough to count (%ld in %ld attempts)",
+                 got, attempts);
+        ck(got >= kWant, buf);
 
         // **The cadence that actually ships.** The servo publishes at 90 Hz and
         // the layer reads once a frame, so the two are nowhere near this
