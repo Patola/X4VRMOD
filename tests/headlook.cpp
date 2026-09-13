@@ -311,6 +311,123 @@ int main() {
                "%.3f deg\n", worst);
     }
 
+    // ---- take 285b: a plant that delivers in BURSTS, not every tick
+    //
+    // The half-strength plant above is sluggish but delivers something every
+    // single tick, so it cannot express the failure X4VR_TICK_HZ=90 produced.
+    // X4 consumes queued mouse events in its own event loop, not on our
+    // cadence: during take 285b's episode the camera moved on 24% of ticks
+    // (against 70-86% outside it) and then jumped by EXACT multiples of
+    // max_step -- 3x, 4x and 5x of 11.918 deg -- because three to five
+    // maximum-size commands landed in one frame.
+    //
+    // This plant models exactly that and nothing else: commands accumulate, and
+    // every `burst` ticks the whole accumulation is applied at once. In between,
+    // `head_look_observe` keeps reporting the unchanged angle -- which is what
+    // makes the servo re-command an error it has already answered.
+    //
+    // Written to FAIL first. Under the drain-driven tick, burst == 1 by
+    // construction (the tick was the drain), and that arm must stay clean, or
+    // the harness is not reproducing a regression but a pre-existing fault.
+    // A 2x2, not a single arm. Take 285b ran with X4VR_HEADLOOK_LEAD=1.0, and
+    // the lead reads head MOTION -- so a parked head produces no lead at all and
+    // a one-armed test would have silently measured the wrong servo. Varying
+    // burst and lead independently is the only way to say which one it is, or
+    // whether it takes both.
+    {
+        struct Result { float worst_jump, worst_err, worst_cam; int reversals; };
+        auto run = [](int burst, float lead, float amp = 45.0f) {
+            x4vr::HeadLook s;
+            s.gain_deg_per_count = 0.115f;
+            s.lead_scale = lead;
+            float actual = 0.0f, pending = 0.0f, prev = 0.0f;
+            Result r{0.0f, 0.0f, 0.0f, 0};
+            int last_sign = 0;
+            for (int i = 0; i < 900; i++) {
+                // A head sweeping +-45 deg at 0.5 Hz, sampled at 90 Hz: about
+                // 1.6 deg per tick at the fastest, which is an ordinary look
+                // around and well inside X4's 65 deg clamp. Nothing here asks
+                // for an excursion.
+                const float head =
+                    amp * std::sin(2.0f * 3.14159265f * 0.5f * (float)i / 90.0f);
+                x4vr::head_look_observe(s, actual, 0.0f);
+                const x4vr::Delta d = x4vr::head_look_step(s, {head, 0.0f});
+                pending += s.sign_yaw * (float)d.dx * s.gain_deg_per_count;
+                if ((i % burst) == (burst - 1)) {
+                    actual = x4vr::clampf(actual + pending, -65.0f, 65.0f);
+                    pending = 0.0f;
+                }
+                const float jump = std::fabs(actual - prev);
+                if (i > 90) { // one full sweep to settle
+                    r.worst_jump = std::fmax(r.worst_jump, jump);
+                    r.worst_err = std::fmax(r.worst_err,
+                                            std::fabs(actual - head));
+                    r.worst_cam = std::fmax(r.worst_cam, std::fabs(actual));
+                    const int sgn = actual > prev ? 1 : (actual < prev ? -1 : 0);
+                    if (sgn && last_sign && sgn != last_sign && jump > 20.0f)
+                        r.reversals++;
+                    if (sgn)
+                        last_sign = sgn;
+                }
+                prev = actual;
+            }
+            return r;
+        };
+
+        // The amplitude is the third variable, and it is not a free parameter:
+        // take 285b's own `headlook` lines show the head reaching -70.0..+63.9,
+        // i.e. PAST X4's 65 deg clamp. At +-45 the camera never reaches the
+        // clamp at all, and a sweep that cannot reach it cannot reproduce a
+        // failure whose signature is cmd pinned at +-53.04 = +-(65 - max_step).
+        printf("      burst x lead x amplitude, head sweeping at 0.5 Hz:\n");
+        printf("        %-6s %-6s %-6s %10s %10s %10s %10s\n",
+               "burst", "lead", "amp", "worst_err", "worst_jump", "max|cam|",
+               "revs");
+        Result g[2][2][2];
+        const int bursts[2] = {1, 4};
+        const float leads[2] = {0.0f, 1.0f};
+        const float amps[2] = {45.0f, 70.0f};
+        for (int bi = 0; bi < 2; bi++)
+            for (int li = 0; li < 2; li++)
+                for (int ai = 0; ai < 2; ai++) {
+                    g[bi][li][ai] = run(bursts[bi], leads[li], amps[ai]);
+                    printf("        %-6d %-6.1f %-6.0f %10.2f %10.2f %10.2f "
+                           "%10d\n", bursts[bi], leads[li], amps[ai],
+                           g[bi][li][ai].worst_err, g[bi][li][ai].worst_jump,
+                           g[bi][li][ai].worst_cam, g[bi][li][ai].reversals);
+                }
+
+        // **This harness was written to REPRODUCE take 285b and does not.**
+        //
+        // It was built first, before any fix, precisely so that the mechanism
+        // could be confirmed before a fix was designed around it. All eight
+        // cells are stable: the worst is 11.03 deg of error and 9.77 deg jumps,
+        // against a real episode of 59.6 deg jumps and sustained clamp-to-clamp
+        // reversals. The reproduction FAILED, and that is the finding.
+        //
+        // What it rules out is worth more than what it was meant to show:
+        // burst delivery, the #73 lead, and driving the camera into X4's 65 deg
+        // clamp are all individually and jointly innocent, across the ranges
+        // take 285b actually exercised. So the oscillation is **not in the servo
+        // arithmetic**, and the in-flight-command compensation I had proposed
+        // would not have fixed it — it would have cost a take to learn that.
+        //
+        // These now assert the invariant that IS true, so the file keeps its
+        // value: if a future change to the servo makes burst delivery unstable,
+        // this catches it offline. They are not a reproduction and must not be
+        // cited as one.
+        for (int bi = 0; bi < 2; bi++)
+            for (int li = 0; li < 2; li++)
+                for (int ai = 0; ai < 2; ai++)
+                    check(g[bi][li][ai].reversals == 0 &&
+                              g[bi][li][ai].worst_jump < 3.0f * 11.0f,
+                          "servo is stable under burst delivery "
+                          "(burst/lead/amp grid)");
+        check(g[1][1][1].worst_cam >= 64.9f,
+              "the +-70 deg arm really does drive the camera into X4's clamp, "
+              "so the grid covers the regime take 285b ran in");
+    }
+
     // ---- one frame cannot cross the range
     {
         x4vr::HeadLook s;

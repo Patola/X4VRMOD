@@ -17003,3 +17003,78 @@ pushed-but-unconsumed command from the error before stepping) demonstrated
 against it. Only then is another run worth spending. Designing the fix and its
 hypothesis in one step is how three earlier attempts each needed a full
 re-measurement to refute.
+
+### The offline reproduction FAILED — and that is the result
+
+`tests/headlook.cpp` now carries a burst-delivery plant: commands accumulate and
+every `burst` ticks the whole accumulation lands at once, which is what X4 does
+when it drains queued mouse events on its own loop rather than on our cadence.
+Built **before** any fix, exactly so the mechanism had to be confirmed first.
+
+Varied as a 2x2x2 — and the amplitude is not a free parameter, take 285b's own
+`headlook` lines show the head reaching −70.0…+63.9°, past X4's 65° clamp:
+
+| burst | lead | amp | worst_err | worst_jump | max\|cam\| | reversals |
+|---|---|---|---|---|---|---|
+| 1 | 0.0 | 45 | 4.71 | 1.61 | 44.73 | 0 |
+| 1 | 0.0 | 70 | 7.21 | 2.41 | 64.86 | 0 |
+| 1 | 1.0 | 45 | 0.11 | 1.61 | 45.08 | 0 |
+| 1 | 1.0 | 70 | 5.14 | 2.42 | 64.86 | 0 |
+| 4 | 0.0 | 45 | 7.07 | 6.32 | 45.08 | 0 |
+| 4 | 0.0 | 70 | 11.03 | 9.77 | 65.00 | 0 |
+| 4 | 1.0 | 45 | 2.48 | 6.44 | 45.20 | 0 |
+| **4** | **1.0** | **70** | **5.05** | **9.77** | **65.00** | **0** |
+
+**All eight cells are stable.** The worst is 11.03° of error and 9.77° jumps,
+against a real episode of 59.6° jumps and sustained clamp-to-clamp reversals. The
+bottom row is take 285b's exact setting, including reaching X4's clamp.
+
+So **the oscillation is not in the servo arithmetic.** Burst delivery, the #73
+lead, and driving into the 65° clamp are innocent individually and jointly, over
+the ranges the real run exercised. **The in-flight-command compensation proposed
+in the previous entry would not have fixed it** — building it would have cost a
+take to learn that. This is what the offline step was for.
+
+The assertions are now flipped to the invariant that *is* true, so the file keeps
+its value as a regression guard. It must not be cited as a reproduction.
+
+#### A new lead, and it is AMBIGUOUS — recorded as such
+
+Take 285b logs X4's camera read from **two different threads** on the same frame:
+`poselag x4=` is the injector's read from our tick thread, `camstamp atdraw=` is
+the layer's read at the first render pass, on X4's render thread. Over 21461
+frames carrying both:
+
+| window | n | median | p90 | max |
+|---|---|---|---|---|
+| **episode 110–138 s** | 2509 | 0.000 | **29.794** | **59.588** |
+| before 0–100 s | 8902 | 0.000 | 0.000 | 1.490 |
+| after 145–240 s | 7848 | 0.000 | 1.146 | 9.167 |
+
+During the episode the two threads disagree about the same camera by up to
+**59.588°** — the *same number* as the largest frame-to-frame jump — while
+outside it they agree to within 1.5°.
+
+**This cannot distinguish cause from effect, and must not be reported as if it
+could.** Two readings:
+
+1. **Staleness (cause):** the off-thread read returns a value X4's own thread has
+   already moved past, so the servo steers on a camera that is wrong by tens of
+   degrees and commands max step in the wrong direction.
+2. **Fast motion (effect):** the camera genuinely slews at ~1000 °/s in bursts,
+   and the two threads simply sample either side of a burst, so the disagreement
+   is the burst size and nothing more.
+
+Both predict a disagreement equal to the jump size. Take 285a established that
+the off-thread call does not crash and returns in-range values; it said **nothing
+about freshness**, which is a different property and the one that matters here.
+
+**What separates them** is a pair of reads taken close together in time with the
+gap recorded — same camera, both threads, known Δt. If the disagreement persists
+as Δt goes to zero it is staleness; if it scales with Δt it is motion. The
+`camprobe` struct already has the `drain_yaw`/`drain_seen` fields for exactly
+this comparison and they were never exercised, because 285a ran without
+`X4VR_HEADLOOK` so the tick never wrote them.
+
+**Do not design a fix before that measurement.** The last hypothesis died to a
+harness; this one has two live alternatives with opposite fixes.
