@@ -2609,19 +2609,54 @@ def main(path):
     # the frame loop rather than a fixed sim clock. `inputrate` counts, at full
     # rate, how often the servo actually emits a delta against how often X4's
     # camera then moves. The two hypotheses want opposite fixes.
+    #
+    # Read per WINDOW and described, never selected from. Four runs once
+    # reported ~17.3 ms across a 35% knob change because a "calmest window"
+    # selector kept finding the loading phase, so what is printed here is the
+    # median with the spread and the window count beside it -- and the number of
+    # windows that disagree with the verdict, so a verdict cannot hide a split.
     ir = re.findall(
         r"inputrate: (\d+) ticks in ([\d.]+) s = ([\d.]+) Hz \| delta sent on "
-        r"([\d.]+)% \(=([\d.]+) Hz\) \| X4 camera moved on ([\d.]+)% "
-        r"\(=([\d.]+) Hz\) \| clamped ([\d.]+)%", text)
+        r"([\d.]+)% \(=([\d.]+) Hz\) \| camera read on ([\d.]+)% of ticks, "
+        r"moved on ([\d.]+)% of READS \(=([\d.]+) Hz\) \| clamped ([\d.]+)%",
+        text)
+    # The line changed shape when the window and the denominator were fixed. A
+    # regex that silently matches nothing would read an older log as "the
+    # instrument was not running", so the old shape is recognised and named.
+    ir_old = re.findall(r"inputrate: (\d+) ticks in ([\d.]+) s = ([\d.]+) Hz "
+                        r"\|.*X4 camera moved on ([\d.]+)%", text)
+    if not ir and ir_old:
+        print(f"inputrate  {len(ir_old)} lines, but in the PRE-FIX cumulative "
+              f"format: totals since the first tick, and `cam_moved` divided by "
+              f"all ticks rather than by reads. Last line says "
+              f"{float(ir_old[-1][2]):.1f} Hz and {float(ir_old[-1][3]):.1f}% "
+              f"camera movement — do not quote either: the first is diluted by "
+              f"startup and the second conflates 'did not move' with 'could not "
+              f"be read'. Difference consecutive lines by hand, or re-run.")
     if ir:
-        g = ir[-1]  # cumulative, so the last line has the most behind it
-        ticks, secs, hz = int(g[0]), float(g[1]), float(g[2])
-        sent_p, sent_hz = float(g[3]), float(g[4])
-        cam_p, cam_hz = float(g[5]), float(g[6])
-        clamp_p = float(g[7])
-        print(f"inputrate  {ticks} ticks over {secs:.0f} s = {hz:.1f} Hz; "
-              f"delta sent on {sent_p:.1f}% ({sent_hz:.1f} Hz), X4 camera moved "
-              f"on {cam_p:.1f}% ({cam_hz:.1f} Hz), clamped {clamp_p:.1f}%")
+        def med(xs):
+            s = sorted(xs)
+            return s[len(s) // 2]
+        hzs = [float(g[2]) for g in ir]
+        sents = [float(g[3]) for g in ir]
+        reads = [float(g[5]) for g in ir]
+        cams = [float(g[6]) for g in ir]
+        clamps = [float(g[8]) for g in ir]
+        hz, sent_p, read_p, cam_p, clamp_p = (med(hzs), med(sents), med(reads),
+                                              med(cams), med(clamps))
+        sent_hz, cam_hz = med([float(g[4]) for g in ir]), med(
+            [float(g[7]) for g in ir])
+        ticks = sum(int(g[0]) for g in ir)
+        secs = sum(float(g[1]) for g in ir)
+        print(f"inputrate  {len(ir)} windows, {ticks} ticks over {secs:.0f} s | "
+              f"median tick {hz:.1f} Hz (range {min(hzs):.1f}-{max(hzs):.1f}); "
+              f"delta sent on {sent_p:.1f}% ({sent_hz:.1f} Hz); camera readable "
+              f"on {read_p:.1f}% of ticks and moved on {cam_p:.1f}% of those "
+              f"({cam_hz:.1f} Hz); clamped {clamp_p:.1f}%")
+        if read_p < 95.0:
+            print(f"inputrate  NOTE: the camera was only readable on "
+                  f"{read_p:.1f}% of ticks, so the movement figure rests on a "
+                  f"subset. Below ~50% treat it as unmeasured rather than low.")
         if sent_p < 60.0:
             print(f"inputrate  => OURS. The servo emits a delta on only "
                   f"{sent_p:.1f}% of ticks, so X4 cannot update more often than "
@@ -2642,10 +2677,112 @@ def main(path):
                   f"the TICK rate of {hz:.1f} Hz. If that is below the display "
                   f"rate the head-pose publish is the bottleneck, and it is "
                   f"ours.")
+        # The 0.75 boundary sits at ~74% for a run that sends on ~99% of ticks,
+        # and take 283 measured 73% acceptance -- one point from flipping the
+        # verdict. A threshold that close to the data has to say so rather than
+        # present either side as settled.
+        if sent_p >= 60.0:
+            margin = cam_p - 0.75 * sent_p
+            if abs(margin) < 5.0:
+                print(f"inputrate  NOTE: that verdict is {abs(margin):.1f} "
+                      f"points from its own threshold ({cam_p:.1f}% against "
+                      f"0.75x{sent_p:.1f}%={0.75 * sent_p:.1f}%), so it is not "
+                      f"settled by this number alone. `pumprate` decides it "
+                      f"without a threshold.")
         if hz < 60.0:
             print(f"inputrate  NOTE: the tick rate itself is only {hz:.1f} Hz. "
                   f"The servo cannot act faster than it is ticked, so this "
-                  f"bounds everything above.")
+                  f"bounds everything above — see `pumprate` for which step "
+                  f"loses them.")
+        # A median verdict over a run that split in half is worth little, so the
+        # split is reported rather than left for the median to absorb.
+        dis = sum(1 for s in sents if (s < 60.0) != (sent_p < 60.0))
+        if dis:
+            print(f"inputrate  NOTE: {dis} of {len(ir)} windows fall on the "
+                  f"OTHER side of the 60% send threshold, so the verdict above "
+                  f"describes a median, not the whole run. Read the windows.")
+
+    # --- task #75: where the published head poses go ------------------------
+    #
+    # The layer publishes one pose per submitted frame (89.6 Hz over take 283's
+    # 208 s) and `inputrate` counts ~55 ticks/s, so about 39% are lost between
+    # two components that are BOTH ours. `inputrate` cannot say which step,
+    # because it counts ticks after two early returns; `pumprate` counts each
+    # step at its own site, and prints the layer's own publish count on the same
+    # line as the fresh count it should equal.
+    #
+    # The first measurement this answers is which hook drives. X4 calls
+    # SDL_PumpEvents in every take since 118, and the SDL_PeepEvents tick site
+    # is gated on !g_pump_seen, so that path has been dead code throughout --
+    # which makes the "~18 kHz" in headlook_tick's comment a fact about a hook
+    # that does not drive anything.
+    pr = re.findall(
+        r"pumprate: ([\d.]+) s \| pump ([\d.]+) Hz peep ([\d.]+) Hz wait "
+        r"([\d.]+) Hz \| tick entered ([\d.]+) Hz, nopose (\d+), fresh "
+        r"([\d.]+) Hz, skipped ([\d.]+) Hz \| layer published ([\d.]+) Hz \| "
+        r"acted on ([\d.]+)% of published \| driver=(\w+)", text)
+    if pr:
+        def med(xs):
+            s = sorted(xs)
+            return s[len(s) // 2]
+        pump = med([float(g[1]) for g in pr])
+        peep = med([float(g[2]) for g in pr])
+        wait = med([float(g[3]) for g in pr])
+        entered = med([float(g[4]) for g in pr])
+        nopose = sum(int(g[5]) for g in pr)
+        fresh = med([float(g[6]) for g in pr])
+        skipped = med([float(g[7]) for g in pr])
+        pub = med([float(g[8]) for g in pr])
+        acted = med([float(g[9]) for g in pr])
+        driver = pr[-1][10]
+        pubs = [float(g[8]) for g in pr]
+        freshes = [float(g[6]) for g in pr]
+        print(f"pumprate   {len(pr)} windows | driver={driver} | pump "
+              f"{pump:.1f} Hz, peep {peep:.1f} Hz, wait {wait:.1f} Hz")
+        print(f"pumprate   layer published {pub:.1f} Hz (range "
+              f"{min(pubs):.1f}-{max(pubs):.1f}) -> tick entered {entered:.1f} "
+              f"Hz -> fresh {fresh:.1f} Hz (range {min(freshes):.1f}-"
+              f"{max(freshes):.1f}), skipped {skipped:.1f} Hz, nopose {nopose} "
+              f"total => acted on {acted:.1f}% of published")
+        drv = pump if driver == "pump" else peep
+        if pub <= 0.0:
+            print("pumprate   => the layer published NOTHING in the median "
+                  "window. Either head-look was not armed or the layer was not "
+                  "loaded; nothing below this line means anything.")
+        elif acted >= 90.0:
+            print(f"pumprate   => NO loss here. {acted:.1f}% of published poses "
+                  f"reached the servo, so the ~55 Hz tick of take 283 was the "
+                  f"PUBLISH rate being low in those windows, not poses being "
+                  f"dropped. The bottleneck is upstream of this instrument — "
+                  f"the layer's submit rate.")
+        elif drv < 0.9 * pub:
+            print(f"pumprate   => THE HOOK. X4 calls {driver} only "
+                  f"{drv:.1f} times/s against {pub:.1f} poses published, so "
+                  f"several publishes collapse into one poll and the loss is "
+                  f"structural: the servo cannot tick faster than X4 asks for "
+                  f"events. Fixable on our side only by giving the tick a "
+                  f"different driver than X4's event loop — and that is the one "
+                  f"lever left that is entirely ours.")
+        elif nopose > 0.2 * len(pr) * pub * 2.0:
+            print(f"pumprate   => POSE VALIDITY. {driver} runs fast enough "
+                  f"({drv:.1f} Hz against {pub:.1f} published) but "
+                  f"head_share_read refused {nopose} times, which is the "
+                  f"valid==0 or torn-read path. The loss is in the layer's pose, "
+                  f"not in the tick rate.")
+        else:
+            print(f"pumprate   => INCONSISTENT, and that is a defect of this "
+                  f"instrument rather than a finding: {driver} runs at "
+                  f"{drv:.1f} Hz, above the {pub:.1f} Hz publish rate, and "
+                  f"nopose is only {nopose} — so every published pose should "
+                  f"have been seen, yet only {acted:.1f}% were. Either `updates` "
+                  f"advances more than once per publish, or the windows of the "
+                  f"two counters are misaligned. Do not spend a take on this "
+                  f"number until it is resolved.")
+        if driver == "peep":
+            print(f"pumprate   NOTE: driver=peep means X4 never called "
+                  f"SDL_PumpEvents in this run, which has not happened since "
+                  f"take 118. Check the `sdl:` line before reading anything "
+                  f"above.")
 
     # --- task #75: which per-view member carries the SMOOTH camera ----------
     #

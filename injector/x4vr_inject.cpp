@@ -1048,6 +1048,54 @@ std::atomic<uint32_t> g_motion_which{0};
 std::atomic<uint32_t> g_motion_seen{0};
 // Set on the first SDL_PumpEvents from X4; see the interposer.
 std::atomic<bool> g_pump_seen{false};
+
+// **Task #75: where the head poses go.**
+//
+// The layer publishes one pose per submitted frame -- 89.6 Hz measured over
+// take 283's 208 s -- and `inputrate` counts ~55 ticks/s. Something drops about
+// 39% of them, and X4 is not involved in that step: both ends are ours.
+//
+// `inputrate` cannot say which step, because it counts ticks AFTER two early
+// returns. A slow hook, a pose with valid==0, and several publishes collapsing
+// into one poll all produce the same 55 Hz there, and they want different
+// fixes. So each is counted separately, at its own site:
+//
+//   pump/peep/wait  how often X4 calls each event entry point. The tick runs
+//                   from SDL_PumpEvents -- the SDL_PeepEvents call site is
+//                   gated on !g_pump_seen, and g_pump_seen is set in every take
+//                   since 118, so that path has been dead code throughout. The
+//                   "~18 kHz" in headlook_tick's comment was measured on
+//                   SDL_PeepEvents at take 119 and says nothing about the
+//                   driver; peep is counted here only to retire that figure
+//                   with a measurement instead of reasoning.
+//   entered         headlook_tick past `armed` and this_is_the_game.
+//   nopose          head_share_read returned false: pose invalid or torn.
+//   fresh/skipped   past, or short of, the `updates != last_updates` gate.
+//   published       delta of the layer's own `updates` counter over the window.
+//
+// `published` is the number that makes this a measurement rather than a
+// comparison across two logs: it is the layer's publish count read from shared
+// memory, printed on the SAME line as the fresh count it should equal. No
+// cross-run arithmetic, and no matching of windows between two instruments.
+//
+// Per-window deltas, not cumulative totals. The last cumulative `inputrate`
+// line of take 283 reported the camera acting on 33.4% when per-window
+// differencing showed 73% -- a figure diluted by ~100 s of startup, which I
+// then printed as a verdict.
+struct PumpRate {
+    std::atomic<uint64_t> pump{0}, peep{0}, wait{0};
+    uint64_t entered = 0, nopose = 0, fresh = 0, skipped = 0;
+    // `mark` is the counter as of the previous emit, NOT as of the first read of
+    // this window: the poses published between the last read of one window and
+    // the first read of the next belong to a window, and dropping them would
+    // bias `published` down by exactly the loss being measured.
+    uint64_t updates_mark = 0, updates_last = 0;
+    bool have_updates = false;
+    // Cumulative values as of the last emitted line, so each line reports its
+    // own window.
+    uint64_t p_pump = 0, p_peep = 0, p_wait = 0;
+    double t_window = 0.0;
+} g_pumprate;
 // True while head-look is actually driving X4's camera; read by the event
 // drain to decide whether the player's own mouse motion should reach the view.
 std::atomic<bool> g_headlook_steering{false};
@@ -2055,6 +2103,7 @@ void headlook_tick() {
     }();
     if (!armed || !this_is_the_game())
         return;
+    g_pumprate.entered++;
 
     static x4vr::HeadShared *hs = x4vr_head_state();
     static const float gain = [] {
@@ -2160,10 +2209,19 @@ void headlook_tick() {
     float yaw = 0.0f, pitch = 0.0f;
     uint64_t updates = 0;
     if (!x4vr::head_share_read(hs, &yaw, &pitch, &updates)) {
+        g_pumprate.nopose++;
         if (g_headlook_active.exchange(false, std::memory_order_relaxed))
             send_key(headlook_scancode(), false);
         return;
     }
+    // The layer's own publish counter, captured before the freshness gate can
+    // return. Its delta over the window is how many poses were published, which
+    // is the quantity `fresh` is supposed to equal.
+    if (!g_pumprate.have_updates) {
+        g_pumprate.have_updates = true;
+        g_pumprate.updates_mark = updates;
+    }
+    g_pumprate.updates_last = updates;
     // **Once per published pose, not once per call.** Take 119 flooded SDL's
     // event queue: SDL_PeepEvents runs far more often than once a frame -- ~18
     // thousand times a second measured -- and send_key_down had no gate, so
@@ -2182,6 +2240,10 @@ void headlook_tick() {
     static uint64_t last_updates = 0;
     static int stale = 0;
     const bool fresh = updates != last_updates;
+    if (fresh)
+        g_pumprate.fresh++;
+    else
+        g_pumprate.skipped++;
     stale = fresh ? 0 : stale + 1;
     last_updates = updates;
     if (stale > 5000) {
@@ -2592,9 +2654,28 @@ void headlook_tick() {
     // `cam_moved` is X4's readback changing between ticks, which is the same
     // event `camdiff` counts per frame from the other side of the process. The
     // two are expected to agree; if they do not, one of them is wrong.
+    //
+    // Two defects of this instrument, both fixed here rather than carried:
+    //
+    //   the window   it used to print totals since the first tick, so the last
+    //                line of a run averaged over everything before it. Take
+    //                283's final line said the camera acted on 33.4% and I
+    //                printed that as a verdict; differencing consecutive lines
+    //                gave 73%, the startup phase being the whole difference.
+    //                Per-window now, with the window length on the line.
+    //   the denominator
+    //                `cam_moved` only incremented where `have_cam` held, but it
+    //                was divided by ALL ticks -- so "the camera did not move"
+    //                and "the camera could not be read" produced the same
+    //                number, and a run with camread off would have reported 0%
+    //                and looked like a frozen camera. `reads` is counted and
+    //                used as the denominator, and printed so a low read rate
+    //                cannot be mistaken for a low move rate.
     {
-        static uint64_t ticks = 0, sent = 0, cam_moved = 0, clamps = 0;
+        static uint64_t ticks = 0, sent = 0, reads = 0, cam_moved = 0,
+                        clamps = 0;
         static float last_cam = 0.0f;
+        static bool have_last = false;
         static double t0 = 0.0;
         const double now = mono_seconds();
         if (t0 == 0.0)
@@ -2606,27 +2687,39 @@ void headlook_tick() {
             clamps++;
         if (have_cam) {
             const float c = kRad2Deg * -r.yaw;
-            if (c != last_cam)
-                cam_moved++;
+            // Only a read that has a predecessor can show a change. Counting
+            // the first one would credit a move that was never observed.
+            if (have_last) {
+                reads++;
+                if (c != last_cam)
+                    cam_moved++;
+            }
             last_cam = c;
+            have_last = true;
+        } else {
+            // A gap breaks the pair: the next reading would be compared against
+            // one from before the gap, and any change across it is unattributed.
+            have_last = false;
         }
-        if ((ticks % 600) == 0) {
-            const double dt = now - t0;
-            X4VR_LOG("inputrate: %llu ticks in %.1f s = %.1f Hz | delta sent on "
-                     "%.1f%% (=%.1f Hz) | X4 camera moved on %.1f%% (=%.1f Hz) "
-                     "| clamped %.1f%% | deadzone %.2f deg, %.3f deg per count, "
-                     "kp %.2f -> a count needs %.3f deg of error",
-                     (unsigned long long)ticks, dt, dt > 0 ? ticks / dt : 0.0,
-                     100.0 * (double)sent / (double)ticks,
-                     dt > 0 ? sent / dt : 0.0,
-                     100.0 * (double)cam_moved / (double)ticks,
-                     dt > 0 ? cam_moved / dt : 0.0,
-                     100.0 * (double)clamps / (double)ticks,
+        const double dt = now - t0;
+        if (dt >= 2.0) {
+            X4VR_LOG("inputrate: %llu ticks in %.2f s = %.1f Hz | delta sent on "
+                     "%.1f%% (=%.1f Hz) | camera read on %.1f%% of ticks, moved "
+                     "on %.1f%% of READS (=%.1f Hz) | clamped %.1f%% | deadzone "
+                     "%.2f deg, %.3f deg per count, kp %.2f -> a count needs "
+                     "%.3f deg of error",
+                     (unsigned long long)ticks, dt, ticks / dt,
+                     100.0 * (double)sent / (double)ticks, sent / dt,
+                     100.0 * (double)reads / (double)ticks,
+                     reads ? 100.0 * (double)cam_moved / (double)reads : 0.0,
+                     cam_moved / dt, 100.0 * (double)clamps / (double)ticks,
                      g_headlook.dead_zone_deg, g_headlook.gain_deg_per_count,
                      g_headlook.servo_kp,
                      0.5f * g_headlook.gain_deg_per_count /
                          (g_headlook.servo_kp > 0.0f ? g_headlook.servo_kp
                                                      : 1.0f));
+            ticks = sent = reads = cam_moved = clamps = 0;
+            t0 = now;
         }
     }
 
@@ -2634,6 +2727,65 @@ void headlook_tick() {
         X4VR_LOG("headlook: head %.2f,%.2f -> cmd %.2f,%.2f delta %d,%d%s",
                  yaw, pitch, g_headlook.cmd_yaw_deg, g_headlook.cmd_pitch_deg,
                  d.dx, d.dy, d.clamped ? " CLAMPED" : "");
+}
+
+// **Task #75: one line that accounts for every published pose.**
+//
+// Called from the same site as headlook_tick, under the same condition, so the
+// report always describes whichever hook is actually driving. Putting it only in
+// SDL_PumpEvents would have left the instrument silent in exactly the
+// configuration where SDL_PeepEvents drives.
+//
+// Fixed 2 s windows. Not "every N ticks": the window length would then be set by
+// the very rate being measured, so a slow phase would be averaged over a longer
+// span than a fast one and the two could not be compared. Windows also make the
+// phases Patola flies visible -- take 283's rate fell from ~88 Hz early to
+// ~52-58 Hz in gameplay, and a cumulative counter hid that behind one average.
+void pumprate_report() {
+    const double now = mono_seconds();
+    if (g_pumprate.t_window == 0.0) {
+        g_pumprate.t_window = now;
+        return;
+    }
+    const double dt = now - g_pumprate.t_window;
+    if (dt < 2.0)
+        return;
+
+    const uint64_t cp = g_pumprate.pump.load(std::memory_order_relaxed);
+    const uint64_t cq = g_pumprate.peep.load(std::memory_order_relaxed);
+    const uint64_t cw = g_pumprate.wait.load(std::memory_order_relaxed);
+    const uint64_t pump = cp - g_pumprate.p_pump;
+    const uint64_t peep = cq - g_pumprate.p_peep;
+    const uint64_t wait = cw - g_pumprate.p_wait;
+    // A monotonic counter's delta: how many poses the layer published in this
+    // window. `fresh` should equal it, and the gap is the loss being hunted.
+    const uint64_t published =
+        g_pumprate.have_updates
+            ? g_pumprate.updates_last - g_pumprate.updates_mark
+            : 0;
+    const auto hz = [&](uint64_t c) { return dt > 0.0 ? (double)c / dt : 0.0; };
+
+    X4VR_LOG("pumprate: %.2f s | pump %.1f Hz peep %.1f Hz wait %.1f Hz | "
+             "tick entered %.1f Hz, nopose %llu, fresh %.1f Hz, skipped %.1f Hz "
+             "| layer published %.1f Hz | acted on %.1f%% of published | "
+             "driver=%s",
+             dt, hz(pump), hz(peep), hz(wait), hz(g_pumprate.entered),
+             (unsigned long long)g_pumprate.nopose, hz(g_pumprate.fresh),
+             hz(g_pumprate.skipped), hz(published),
+             published ? 100.0 * (double)g_pumprate.fresh / (double)published
+                       : 0.0,
+             g_pump_seen.load(std::memory_order_relaxed) ? "pump" : "peep");
+
+    g_pumprate.p_pump = cp;
+    g_pumprate.p_peep = cq;
+    g_pumprate.p_wait = cw;
+    g_pumprate.entered = g_pumprate.nopose = 0;
+    g_pumprate.fresh = g_pumprate.skipped = 0;
+    // The mark carries forward so the next window's baseline is this window's
+    // last reading, with no gap between them. `have_updates` stays set unless
+    // nothing was ever read.
+    g_pumprate.updates_mark = g_pumprate.updates_last;
+    g_pumprate.t_window = now;
 }
 
 // ---- the mouse half -------------------------------------------------------
@@ -2838,8 +2990,10 @@ void SDL_PumpEvents(void) {
         if (!g_pump_seen.exchange(true, std::memory_order_relaxed))
             X4VR_LOG("sdl: SDL_PumpEvents is called — head-look drives from "
                      "here, not from inside the drain");
+        g_pumprate.pump.fetch_add(1, std::memory_order_relaxed);
         headlook_tick();
         panprobe_tick();
+        pumprate_report();
     }
     real_fn();
 }
@@ -2847,6 +3001,8 @@ void SDL_PumpEvents(void) {
 bool SDL_WaitEvent(void *event) {
     static auto real_fn = real<bool (*)(void *)>("SDL_WaitEvent");
     const bool r = real_fn(event);
+    if (this_is_the_game())
+        g_pumprate.wait.fetch_add(1, std::memory_order_relaxed);
     if (r && event && this_is_the_game()) {
         auto *e = (Sdl3MouseEvent *)event;
         if (e->type == SDL_EV_KEY_DOWN || e->type == SDL_EV_KEY_UP)
@@ -2884,9 +3040,12 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
     // more work, so the queue never empties and input arrives minutes late --
     // which is exactly what "it took some time to activate and kept applying
     // after I released" describes.
+    if (this_is_the_game())
+        g_pumprate.peep.fetch_add(1, std::memory_order_relaxed);
     if (this_is_the_game() && !g_pump_seen.load(std::memory_order_relaxed)) {
         headlook_tick();
         panprobe_tick();
+        pumprate_report();
     }
     const bool consuming = action == 2;
     if (n > 0 && events && this_is_the_game()) {

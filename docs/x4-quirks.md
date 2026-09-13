@@ -16605,3 +16605,87 @@ cannot carry 90 Hz and the tick needs a different driver.
 
 **This is the one lever left that is entirely ours.** At the measured 73%
 acceptance, a 90 Hz tick would put X4's camera near 65 Hz instead of 40.
+
+### The hook named in that question is the wrong one — corrected before take 284
+
+The paragraph above says "the injector's tick runs from the `SDL_PeepEvents`
+hook". **It does not, and has not since take 118.** Left standing as written
+because wrong turns stay in this file, but nothing should be built on it.
+
+`injector/x4vr_inject.cpp` calls `headlook_tick()` from two places:
+
+| site | condition |
+|---|---|
+| `SDL_PumpEvents` | `this_is_the_game()` — and it sets `g_pump_seen` |
+| `SDL_PeepEvents` | `this_is_the_game() && !g_pump_seen` |
+
+`g_pump_seen` is set on the first `SDL_PumpEvents`, and the line
+`sdl: SDL_PumpEvents is called` appears in **all eight** of takes 276-283. So the
+`SDL_PeepEvents` tick site has been **dead code in every take ever measured**,
+and the "~18 kHz" in `headlook_tick`'s comment is a fact about a hook that drives
+nothing. It was true when it was written — at take 119 `SDL_PeepEvents` *was* the
+driver — and the comment simply outlived its architecture, which is the third
+time a stale comment in this project has cost or nearly cost a take.
+
+**Reading the gate order gave a second correction, and this one is about the
+measurement rather than the prose.** `inputrate` counts at a point *after* two
+early returns:
+
+```
+head_share_read fails  -> return        (pose invalid, or the seqlock retried out)
+!fresh                 -> return        (this publish was already seen)
+...                                     <- inputrate counts here
+```
+
+So `inputrate`'s ~55 Hz is **not** a hook rate and **not** a publish rate. A slow
+hook, a `valid == 0` pose, and several publishes collapsing into one poll all
+produce the same 55 Hz there — and they want three different fixes. The question
+as posed could not have been answered by the instrument that raised it.
+
+### P284 — committed before the run
+
+`pumprate` counts each step at its own site and prints the layer's own `updates`
+delta on the same line as the `fresh` count it should equal, so the accounting
+closes inside one line with no cross-log arithmetic.
+
+- **P284.1** `pump` ≈ X4's render rate (~88 Hz), not ~18 kHz, and not ~55 Hz.
+  `SDL_PumpEvents` is a once-per-frame call in every engine that has one; the
+  18 kHz was `SDL_PeepEvents` being looped until the queue drained.
+- **P284.2** If P284.1 holds, `fresh` ≈ `published` ≈ 90 Hz and **`pumprate`
+  reports NO loss** — which would mean the ~55 Hz of take 283 was the *publish*
+  rate being low in those windows, not poses being dropped, and relocates the
+  defect to the layer's submit rate. This is the outcome I consider most likely,
+  and it contradicts the "we drop 39%" headline above.
+- **P284.3** The alternative: `pump` measures ~55 Hz, the hook is frame-locked to
+  something slower than the display, and the fix is to give the tick a driver
+  that is not X4's event loop.
+- **P284.4** `nopose` is ~0. If it is large instead, the loss is pose *validity*
+  in the layer, and neither of the above applies.
+
+P284.2 and P284.3 are distinguished by one number — `pump` against `published`,
+both on the same line. There is no threshold to tune and no subset to select.
+
+**Two instrument defects fixed in the same commit**, both identified as bugs
+rather than findings, so that neither survives into the next reading:
+
+- `inputrate` printed **cumulative** totals since the first tick. Take 283's last
+  line said the camera acted on 33.4%; per-window differencing said 73%, the
+  ~100 s of startup being the entire difference. I printed the 33.4% as a
+  verdict. Both `inputrate` and `pumprate` now emit fixed **2 s windows** — fixed
+  in *time*, not in ticks, because a per-N-ticks window has its length set by the
+  very rate being measured.
+- `cam_moved` only incremented where `have_cam` held but was divided by **all**
+  ticks, so "the camera did not move" and "the camera could not be read"
+  produced the same number — and a run with `X4VR_CAMREAD=0` would have reported
+  0% and read as a frozen camera. The denominator is now `reads`, printed beside
+  the rate so a low read rate cannot be mistaken for a low move rate, and a gap
+  in the readings breaks the pair instead of being compared across.
+
+The scorer recognises the **old** `inputrate` shape and names it rather than
+silently matching nothing, because a regex that quietly finds zero lines reads as
+"the instrument was not running". On take 283's log it now refuses to quote
+either old figure and says why.
+
+The `inputrate` verdict's 0.75 boundary sits at ~74% for a run sending on ~99% of
+ticks, and take 283 measured **73%** — 1.2 points from flipping. The scorer now
+prints that margin. `pumprate` decides the same question without a threshold.
