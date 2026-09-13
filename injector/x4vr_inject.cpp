@@ -2638,15 +2638,34 @@ void headlook_tick() {
             d.dx = ps.dx;
             d.dy = 0;
             d.clamped = false;
-            // Logged EVERY tick, and the readback is the camera BEFORE this
+            // **Logged only on the ticks where the sequence ADVANCED**, which is
+            // once per camera update. The readback is the camera BEFORE this
             // tick's command -- the same pairing lagsample uses, so the two
             // instruments can be read against each other.
-            X4VR_LOG("plantid: pass=%d elem=%d size=%+d phase=%s k=%d dx=%+d "
-                     "cam=%.4f meas=%d camok=%d%s",
-                     pid.pass, pid.element, pid.size_counts(),
-                     x4vr::plant_phase_name(ps.acted), pid.k, ps.dx, cam_now,
-                     ps.measuring ? 1 : 0, have_cam ? 1 : 0,
-                     pid.finished ? " FINISHED" : "");
+            //
+            // It used to log every tick, and that is take 289's defect: with 5.7
+            // ticks per update the scorer's lag profile was indexed by tick, so
+            // one camera update smeared across six lines and the impulse
+            // response came back "wider" purely because the tick rate had
+            // tripled. One line per observation puts the measurement in the
+            // readback's own time base at any tick rate.
+            static bool said_ratio = false;
+            if (ps.stepped && !said_ratio &&
+                pid.phase != x4vr::PlantPhase::Calibrate) {
+                said_ratio = true;
+                X4VR_LOG("plantid: calibrated %.2f servo ticks per camera "
+                         "update (%d change(s) in %d ticks). Phases are counted "
+                         "in UPDATES from here, so this run is the same "
+                         "experiment as one at any other tick rate.",
+                         pid.ticks_per_update, pid.cal_changes, pid.cal_cmp);
+            }
+            if (ps.stepped)
+                X4VR_LOG("plantid: pass=%d elem=%d size=%+d phase=%s k=%d dx=%+d "
+                         "cam=%.4f meas=%d camok=%d%s",
+                         pid.pass, pid.element, pid.size_counts(),
+                         x4vr::plant_phase_name(ps.acted), pid.k, ps.dx, cam_now,
+                         ps.measuring ? 1 : 0, have_cam ? 1 : 0,
+                         pid.finished ? " FINISHED" : "");
             if (pid.finished && !g_plantid_done.exchange(true))
                 X4VR_LOG("plantid: sequence COMPLETE — every element ran. The "
                          "run can be ended now; nothing after this line is "

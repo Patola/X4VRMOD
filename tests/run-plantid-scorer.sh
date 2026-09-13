@@ -81,6 +81,17 @@ check capped             "PER-STEP CAP"
 check delayed-integrator "INTEGRATOR WITH TRANSPORT DELAY"
 check delayed-smoother   "SMOOTHED / MOMENTUM"
 
+# **Take 289's actual condition: the readback refreshing 3x slower than the tick.**
+# The same plant must get the same NAME at either sampling rate. Before the
+# sequence was moved into the readback's time base it did not: identical hardware
+# read INTEGRATOR WITH TRANSPORT DELAY at 30 Hz and SMOOTHED / MOMENTUM at 90,
+# and that is the whole reason take 289 was void. The DELAY is now reported in
+# camera updates, so 3 ticks of dead time sampled every 3 ticks is 1 update --
+# the same physical lag, stated in the only unit that does not move with our own
+# tick rate.
+check delayed-integrator-sampled3 "INTEGRATOR WITH TRANSPORT DELAY"
+check smoother-sampled3           "SMOOTHED / MOMENTUM"
+
 if [ "$fail" = 0 ]; then
     echo "all cases passed"
 else

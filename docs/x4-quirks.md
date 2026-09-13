@@ -17786,3 +17786,76 @@ covers the same number of observations as a 30 Hz one. That is a change to
 `tests/plantid.cpp`'s existing plants before any further take is spent.
 
 Take 288 remains the only valid plant measurement.
+
+### The fix: plantid now runs in the readback's time base
+
+`plant_id_step` stepped once per servo tick. It now steps once per **camera
+update** and sends nothing on the ticks in between — one command per observation,
+every phase counted in observations. The same experiment at any tick rate, which
+is what P289 needs in order to compare two of them.
+
+Three things this required, each of which broke something first:
+
+- **A `Calibrate` phase, because a value change is not a refresh.** During SETTLE
+  and COAST the camera is genuinely still, so "the readback did not change" and
+  "the readback did not refresh" are the same observation with opposite meanings.
+  The ratio has to be measured where the camera is certainly moving, so one short
+  phase drives a constant command and counts changes. Excluded from the
+  measurement, like Reset.
+- **That phase alternates direction.** 40 ticks × 16 counts is 73.6°, against
+  X4's 65° stop — and a clamped camera stops changing, so the ratio would have
+  read the clamp, silently, and every phase length after it would have been
+  wrong. Reversing every 10 ticks bounds the excursion at 18.4°.
+- **The ratio is comparisons ÷ changes, not ticks ÷ changes.** The first tick has
+  nothing to compare against, so 40 ticks give 39 comparisons, and 40/39 = 1.026
+  for a readback that refreshes *every* tick. The fractional accumulator then
+  skipped one step in 39 and smeared the impulse response — which turned the
+  `delayed-integrator` control back into "SMOOTHED / MOMENTUM" in the validation
+  run. Caught there, not in the field.
+
+The injector logs only the ticks where the sequence advanced, so one logged line
+is one observation and the scorer's lag profile is indexed by observation rather
+than by tick. Logging the idle ticks would put the tick rate straight back into
+the measurement.
+
+#### The proof: the same plant, sampled at two rates, gets the same name
+
+`tests/plantid.cpp` grew a `Sampled` wrapper that holds the published angle for
+N steps while the plant integrates underneath — exactly what
+`GetCameraRotation` does between X4's camera ticks, and exactly take 289's
+condition. `tests/run-plantid-scorer.sh` now drives **seven** plants end to end
+through the real `score_run.py`:
+
+| planted | verdict |
+|---|---|
+| integrator | PURE INTEGRATOR, no delay |
+| smoother | SMOOTHED / MOMENTUM |
+| capped | PER-STEP CAP |
+| delayed integrator | INTEGRATOR WITH TRANSPORT DELAY of 3 |
+| delayed smoother | SMOOTHED / MOMENTUM |
+| **delayed integrator, sampled 3×** | **INTEGRATOR WITH TRANSPORT DELAY of 1** |
+| **smoother, sampled 3×** | **SMOOTHED / MOMENTUM** |
+
+The last two are the ones that matter. Under-sampling no longer changes what a
+plant is called, and the delay is reported in **camera updates** — 3 ticks of
+dead time sampled every 3 ticks is 1 update, the same physical lag stated in the
+one unit that does not move with our own tick rate.
+
+#### What it costs, and why both arms must be re-run
+
+2418 measured updates: **200 s at 12.1 Hz** (take 288's readback rate) or 151 s
+at 16.0 Hz, plus ~264 reset steps. A run now costs the same wall clock at any
+tick rate — that is the point, and it is also why it is longer than take 288's
+97 s.
+
+**Take 288 cannot serve as the 30 Hz arm.** It was measured with tick-counted
+phases and a tick-indexed lag profile; comparing it against an update-counted run
+would be the cross-instrument arithmetic that produced this whole detour. Both
+arms get the new code.
+
+**P289 restated in the unit that now carries it:** take 288's 3 ticks at 2.5
+ticks per update is ~1.2 updates. If both arms report ~1 update, the lag is fixed
+in X4's own frame, the servo sees the same dead time at any tick rate, and the
+"9 ticks at 90 Hz" branch is dead. If the 90 Hz arm reports ~3 updates instead,
+raising the tick rate really does multiply the dead time and
+`tests/servo_rate.cpp`'s threshold of 6 is in reach.

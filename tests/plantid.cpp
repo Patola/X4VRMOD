@@ -103,6 +103,26 @@ struct Delayed : Plant {
     double angle() const override { return inner->angle(); }
 };
 
+// **The readback refreshing slower than the tick — take 289's actual condition.**
+//
+// Every plant above publishes a fresh angle on every step, which is take 288's
+// 2.5 ticks per update rounded to 1. Take 289 ran 5.7, and that alone turned a
+// 99.6%-flat delivery column into 49.8-124.6%. A plant set that cannot express
+// the failure cannot demonstrate the fix, so this wrapper holds the published
+// value for `period` steps while the inner plant keeps integrating underneath —
+// exactly what GetCameraRotation does between X4's camera ticks.
+struct Sampled : Plant {
+    Plant *inner;
+    int period, k = 0;
+    double published = 0.0;
+    Sampled(Plant *p, int n) : inner(p), period(n) {}
+    void step(double c) override {
+        inner->step(c);
+        if (++k >= period) { k = 0; published = inner->angle(); }
+    }
+    double angle() const override { return published; }
+};
+
 struct Trace {
     std::vector<double> cmd, cam;
     std::vector<x4vr::PlantPhase> phase;
@@ -120,7 +140,7 @@ static Trace run_sequence(Plant &p, int passes) {
         const x4vr::PlantStep ps =
             x4vr::plant_id_step(pid, (float)before, true, kGain);
         const double cmd = -ps.dx * (double)kGain; // sign_yaw is -1
-        if (ps.measuring) {
+        if (ps.measuring && ps.stepped) {
             t.cmd.push_back(cmd);
             t.cam.push_back(before);
             t.phase.push_back(pid.phase);
@@ -176,6 +196,7 @@ static void emit(Plant &p, const char *path, int passes, double rate_hz) {
         const x4vr::PlantStep ps =
             x4vr::plant_id_step(pid, (float)before, true, kGain);
         t += 1.0 / rate_hz;
+        if (!ps.stepped) { p.step(-ps.dx * (double)kGain); continue; }
         std::fprintf(f,
                      "[ %11.3f] inject  plantid: pass=%d elem=%d size=%+d "
                      "phase=%s k=%d dx=%+d cam=%.4f meas=%d camok=%d%s\n",
@@ -204,9 +225,21 @@ int main(int argc, char **argv) {
         Capped cap(4.0);
         // 3 ticks: what take 288 measured off the real game.
         Delayed dinteg(&integ2, 3), dsmooth(&smooth2, 3);
-        struct { Plant *p; const char *name; } cases[5] = {
+        // **The same plant, sampled at 1x and 3x — take 289's condition.**
+        // A readback refreshing three times slower than the tick must NOT change
+        // what the plant is called. Before the fix it did: identical hardware
+        // read INTEGRATOR WITH TRANSPORT DELAY at 30 Hz and SMOOTHED / MOMENTUM
+        // at 90.
+        Integrator integ3;
+        Delayed dinteg_inner(&integ3, 3);
+        Sampled dinteg_s3(&dinteg_inner, 3);
+        Smoother smooth3(0.25);
+        Sampled smooth_s3(&smooth3, 3);
+        struct { Plant *p; const char *name; } cases[7] = {
             {&integ, "integrator"}, {&smooth, "smoother"}, {&cap, "capped"},
-            {&dinteg, "delayed-integrator"}, {&dsmooth, "delayed-smoother"}};
+            {&dinteg, "delayed-integrator"}, {&dsmooth, "delayed-smoother"},
+            {&dinteg_s3, "delayed-integrator-sampled3"},
+            {&smooth_s3, "smoother-sampled3"}};
         for (auto &c : cases) {
             const std::string path = dir + "/synth-" + c.name + ".log";
             emit(*c.p, path.c_str(), 3, 50.0);
@@ -233,9 +266,19 @@ int main(int argc, char **argv) {
         check(t.worst_measured_abs < kClamp - 3.0,
               "no measured sample is near X4's clamp", buf);
 
-        std::snprintf(buf, sizeof buf, "~%.0f s at 24 Hz plus %d reset ticks",
-                      t.cmd.size() / 24.0, t.resets);
-        check(t.cmd.size() / 24.0 < 400.0, "the run fits in one sitting", buf);
+        // **Priced against the CAMERA UPDATE rate, not a tick rate.** The
+        // phases are counted in updates now, so a run costs the same wall clock
+        // whether the servo ticks at 30 Hz or 90 -- which is what makes P289's
+        // two arms comparable, and also what makes the run longer. Takes 288 and
+        // 289 measured X4's readback changing 12.1 and 16.0 times a second; the
+        // slower one is the price to quote.
+        const double slow = x4vr::plant_id_seconds(spec, 12.1, kGain);
+        const double fast = x4vr::plant_id_seconds(spec, 16.0, kGain);
+        std::snprintf(buf, sizeof buf,
+                      "%zu measured UPDATES = %.0f s at 12.1 Hz / %.0f s at "
+                      "16.0 Hz, plus %d reset step(s)",
+                      t.cmd.size(), slow, fast, t.resets);
+        check(slow < 400.0, "the run fits in one sitting", buf);
 
         // **The runway must be on the side the burst travels toward.** With it
         // on the wrong side the sequence still runs, still logs, and still

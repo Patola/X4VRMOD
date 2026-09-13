@@ -33,10 +33,32 @@
 
 namespace x4vr {
 
-enum class PlantPhase { Reset, Settle, Impulse, Coast, Sustain, Decay, Done };
+// **Take 289: the sequence must run in the READBACK's time base, not the tick's.**
+//
+// Every phase below was counted in ticks -- IMPULSE one, COAST fourteen -- while
+// the plant is only observable when X4's camera readback CHANGES. Take 288 ran
+// 2.5 ticks per update and every command size delivered 99.6-99.7%. Take 289
+// raised X4VR_TICK_HZ to 90; the readback rate barely moved (12.1 -> 16.0 per
+// second), giving 5.7 ticks per update, and delivery came back 49.8 / 83.0 /
+// 124.6%. **124.6% is impossible**, and the run was void.
+//
+// So the sequence now steps once per camera update and idles in between. One
+// command per observation, phases counted in observations: the same experiment
+// at any tick rate, which is exactly what P289 needs in order to compare two.
+//
+// **Calibrate exists because a value change is not a refresh.** During SETTLE
+// and COAST the camera is genuinely still, so "the readback did not change" and
+// "the readback did not refresh" are the same observation with opposite
+// meanings. The ratio therefore has to be measured where the camera is
+// definitely moving: one short phase, driving a constant command, counting ticks
+// against changes. It is excluded from the measurement like Reset is.
+enum class PlantPhase {
+    Calibrate, Reset, Settle, Impulse, Coast, Sustain, Decay, Done
+};
 
 inline const char *plant_phase_name(PlantPhase p) {
     switch (p) {
+    case PlantPhase::Calibrate: return "calibrate";
     case PlantPhase::Reset: return "reset";
     case PlantPhase::Settle: return "settle";
     case PlantPhase::Impulse: return "impulse";
@@ -78,11 +100,25 @@ struct PlantId {
     int passes = 3;         // repeats, so a single glitchy element cannot set
                             // the answer
 
+    // --- the readback's time base ------------------------------------------
+    //
+    // How many servo ticks pass per camera update, measured in Calibrate. The
+    // measured phases step once per update and send nothing on the ticks
+    // between, so the whole experiment is identical at 30 Hz and at 90.
+    int calib_ticks = 40;       // ticks to spend measuring; ~1.3 s at 30 Hz
+    int calib_counts = 16;      // command per calibrate tick: must MOVE the camera
+    float ticks_per_update = 1.0f;
+    int cal_t = 0, cal_cmp = 0, cal_changes = 0;
+    float cal_last = 0.0f;
+    bool cal_have = false;
+    // Sub-tick counter: the sequence acts when this reaches ticks_per_update.
+    float sub = 0.0f;
+
     // --- live state -------------------------------------------------------
     int pass = 0;
     int element = 0;
-    PlantPhase phase = PlantPhase::Reset;
-    int k = 0;              // step within the phase
+    PlantPhase phase = PlantPhase::Calibrate;
+    int k = 0;              // step within the phase (in camera UPDATES)
     bool finished = false;
 
     int size_counts() const {
@@ -127,7 +163,13 @@ struct PlantStep {
     // all. An instrument that reports a different branch than the one it took
     // is the same defect as 18 modules logging "World" after being dispatched
     // as UI.
-    PlantPhase acted = PlantPhase::Reset;
+    PlantPhase acted = PlantPhase::Calibrate;
+    // **True only on the ticks where the sequence actually advanced.** The
+    // injector logs these and skips the rest, so one logged line is one camera
+    // update and the scorer's lag profile is indexed by OBSERVATION rather than
+    // by tick. Logging the idle ticks would put the tick rate straight back into
+    // the measurement, which is take 289's defect with extra steps.
+    bool stepped = false;
 };
 
 inline PlantStep plant_id_step(PlantId &p, float cam_yaw_deg, bool have_cam,
@@ -137,6 +179,69 @@ inline PlantStep plant_id_step(PlantId &p, float cam_yaw_deg, bool have_cam,
         return out;
 
     out.acted = p.phase;
+
+    // **Calibrate: how many ticks per camera update?** Driven with a constant
+    // command so the camera is certainly moving and a value change therefore IS
+    // a refresh. Excluded from the measurement.
+    if (p.phase == PlantPhase::Calibrate) {
+        out.stepped = true;
+        // **Alternating, because a straight drive walks into X4's stop.** 40
+        // ticks of 16 counts is 73.6 deg against a 65 deg clamp, and a clamped
+        // camera stops changing — so the ratio this phase exists to measure
+        // would read the clamp instead, silently, and every phase length after
+        // it would be wrong. Reversing every 10 ticks bounds the excursion at
+        // 18.4 deg from wherever the camera happens to start.
+        const bool back = ((p.cal_t / 10) % 2) != 0;
+        out.dx = back ? -p.calib_counts : p.calib_counts;
+        if (have_cam) {
+            // **Comparisons, not ticks, and the difference is not cosmetic.**
+            // The first tick has nothing to compare against, so 40 ticks yield
+            // 39 comparisons. Dividing ticks by changes gave 40/39 = 1.026 for a
+            // readback that refreshes EVERY tick — and the fractional
+            // accumulator below then skipped one step in every 39, smearing the
+            // impulse response and turning a delayed integrator into "SMOOTHED /
+            // MOMENTUM". The ratio has to be exactly 1.0 in that case, and only
+            // comparisons/changes gives it.
+            if (p.cal_have) {
+                p.cal_cmp++;
+                if (cam_yaw_deg != p.cal_last)
+                    p.cal_changes++;
+            }
+            p.cal_last = cam_yaw_deg;
+            p.cal_have = true;
+        }
+        if (++p.cal_t >= p.calib_ticks) {
+            // Four changes is the floor for a ratio worth having; below it the
+            // readback may simply not be live and 1.0 is the safe answer --
+            // that is the old behaviour, which was correct whenever the tick
+            // rate already matched the readback.
+            p.ticks_per_update =
+                (p.cal_changes >= 4 && p.cal_cmp > 0)
+                    ? (float)p.cal_cmp / (float)p.cal_changes
+                    : 1.0f;
+            if (p.ticks_per_update < 1.0f)
+                p.ticks_per_update = 1.0f;
+            if (p.ticks_per_update > 16.0f)
+                p.ticks_per_update = 16.0f; // a runaway ratio would stall the run
+            p.sub = 0.0f;
+            p.k = 0;
+            p.phase = PlantPhase::Reset;
+            out.phase_changed = true;
+        }
+        return out;
+    }
+
+    // **The throttle.** Every phase below counts in camera updates, so the
+    // sequence acts once per `ticks_per_update` ticks and sends nothing in
+    // between. Fractional, accumulated rather than rounded: a ratio of 2.5 must
+    // average 2.5, and rounding it to 2 or 3 would bias every phase length by up
+    // to 20% and put the tick rate back into the answer.
+    p.sub += 1.0f;
+    if (p.sub < p.ticks_per_update)
+        return out;            // idle tick: dx 0, stepped false, nothing logged
+    p.sub -= p.ticks_per_update;
+    out.stepped = true;
+
     switch (p.phase) {
     case PlantPhase::Reset: {
         // Closed-loop, deliberately: this is the only part that may use the
@@ -218,8 +323,11 @@ inline PlantStep plant_id_step(PlantId &p, float cam_yaw_deg, bool have_cam,
     }
 }
 
-// How many ticks one full run takes, so the run can be priced before it is
-// spent rather than discovered to be too short afterwards.
+// How many MEASURED SEQUENCE STEPS one full run takes — which is now camera
+// updates, not ticks. Multiply by `ticks_per_update` for the tick cost and
+// divide by the camera's update rate for the wall-clock cost; `plant_id_seconds`
+// does that, so a run is priced before it is spent rather than discovered to be
+// too short afterwards.
 inline int plant_id_total_steps(const PlantId &p,
                                 float gain_deg_per_count = 0.115f) {
     int per_pass = 0;
@@ -232,6 +340,22 @@ inline int plant_id_total_steps(const PlantId &p,
     return p.passes * per_pass; // excludes the reset phases, which are closed
                                 // loop and vary with where the camera happens
                                 // to be
+}
+
+// Wall-clock cost, in seconds, at a given camera UPDATE rate.
+//
+// **The update rate, not the tick rate.** The sequence now advances once per
+// update, so a run costs the same time whether the servo ticks at 30 Hz or 90 —
+// which is the whole point, and also the thing that makes P289's two arms
+// comparable. Take 288's readback changed 12.1 times a second and take 289's
+// 16.0, so a full run is 200-265 s at these phase lengths: long, and the price
+// of asking the question at a rate the plant can actually answer.
+inline double plant_id_seconds(const PlantId &p, double camera_update_hz,
+                               float gain_deg_per_count = 0.115f) {
+    if (!(camera_update_hz > 0.0))
+        return 0.0;
+    return (double)plant_id_total_steps(p, gain_deg_per_count) /
+           camera_update_hz;
 }
 
 } // namespace x4vr
