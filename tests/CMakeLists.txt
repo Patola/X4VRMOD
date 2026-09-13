@@ -176,3 +176,11 @@ add_executable(x4vr_test_servo_rate servo_rate.cpp)
 # phase, and that the trace it produces can actually tell the candidate plants
 # apart. Self-checking: no runner script.
 add_executable(x4vr_test_plantid plantid.cpp)
+
+# Task #75: X4's latency band, measured with the servo RUNNING. plantid needs
+# the servo out of the loop for four minutes; this recovers the same band from
+# an exogenous dither the servo does not know it is sending, which is what makes
+# closed-loop identification valid. Proves the recovery on planted bands, proves
+# it refuses when the dither is off, and measures the amplitude needed rather
+# than guessing one into a player's headset. Self-checking: no runner script.
+add_executable(x4vr_test_dither_id dither_id.cpp)

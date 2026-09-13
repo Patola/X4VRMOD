@@ -18095,3 +18095,46 @@ as one.
 The one practical conclusion that survives all of this unchanged: **`X4VR_TICK_HZ`
 is the variable that moves the loop between the calm and unstable regimes, and it
 stays off by default.**
+
+### Measuring the latency band during ordinary play — NOT ACHIEVED
+
+`plantid` needs the servo out of the loop for four minutes, so it cannot run
+while anyone is playing, and the session that refutes the model — 285b-s1, calm
+at 68.6 Hz where s2 went wild at 70.7 with every other measured variable
+identical — differs, if it differs at all, in exactly this band.
+
+The route is an **exogenous dither**: a few mouse counts the servo does not know
+it is sending, drawn from an LFSR so it is uncorrelated with the head, the camera
+and the command. That is what makes closed-loop identification valid, and it is
+the only thing that does.
+
+**The signal is demonstrably there.** With a planted delay D, the two correlation
+sequences satisfy `b[L] = a[L−D]` to four decimals — for a fixed 2-tick delay,
+`b[2..] = a[0..]` reading −0.11522 against −0.11527, 0.05787 against 0.05793,
+−0.01586 against −0.01593. The plant is in the data.
+
+**Turning that into a band is not solved.** Four estimators, four failures, each
+diagnosed rather than patched:
+
+| estimator | failure |
+|---|---|
+| `corr(dither, camera)` | recovers **P/(1+PC)**, not P — the servo corrects the dither and its reaction is inside the answer. Planted 5.00 came back 11.35; a band of width **zero** reported a spread of 4.10. |
+| deconvolution, instrument = injected **delta** | a differenced white sequence is MA(1), not white, so `a` is non-causal and forward substitution from L=0 is invalid. |
+| deconvolution, instrument = white **offset** | correct in principle — but the injection is itself a first difference, so `a` inherits that shape and deconvolving a difference is an **integration**. The tail drifts: −0.04, −0.05, −0.07, −0.08 over successive lags. |
+| match filter, b against a | fixed delays recover with a constant +1.2 bias and a correct **zero** width; jittered bands collapse — the only quantity wanted. |
+
+Holding each dither level past the lag range, to separate `a`'s two lobes, made
+it worse.
+
+`tests/dither_id.cpp` keeps the harness and the diagnosis. It carries **one**
+assertion — that with the dither off the recovery refuses rather than building a
+band out of the loop itself — and prints the rest as diagnosis. Asserting on a
+number I cannot recover would be a guard that cannot fail, and the file says in
+its banner that it is not a measurement.
+
+**No take on this.** The rule this project runs on is that the acceptance check is
+shown to discriminate *before* the run is spent, and here it demonstrably does
+not. The next attempt starts from the table above rather than from scratch; the
+most likely fix is an injection whose position offset is white in its own right,
+so that `a` carries no difference structure at all — every failure above traces
+back to that one choice.
