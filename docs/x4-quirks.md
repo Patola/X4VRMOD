@@ -17541,3 +17541,86 @@ takes 284, 285b and 287b stands as measured, and remains what #75 has left.
 The fix is still worth having — 0.0078% of frames at 90 Hz is a wrong declared
 pose roughly every twenty minutes, and [[no-cosmetic-defects-in-vr]] applies — but
 it is not the cause of the slam and must not be reported as one.
+
+### What moves the camera uncommanded — the answer needs `plantid`, which has never run
+
+X4's own `libraries/parameters.xml` already names a candidate, in the same node
+as #68's clamp:
+
+    <internal maxpitch="35" maxyaw="65" anglespeed="200" angleacc="500" .../>
+
+`angleacc` is an angular **acceleration**. A plant with acceleration has
+velocity, and a camera with velocity keeps moving after the command stops —
+which is what "moves uncommanded" looks like from the current command alone. And
+this project already measured it once: the section *"What is established, and
+what is not"* above records **"the camera carries momentum (commanded ~nothing
+while moving, it still travelled ~77% of the previous step, n=128)"**, and in the
+same breath that the form of the response was **NOT established**.
+
+#### Three instruments, three answers I could not use
+
+- **Differentiating the camera twice** gave velocities to 3164 °/s and
+  accelerations to **217 219 °/s²** against X4's declared 200/500. A maximum 400×
+  the median is noise, not a plant: `age` is quantised to 0.1 ms and the line
+  stamp to 1 ms, and a second derivative multiplies that.
+- **A least-squares FIR fit** of camera motion on the last six commands returned
+  h[0] = **−1.086** with coefficients alternating sign and summing to 1.9, at
+  R² 0.88. Physically impossible, and the reason is collinearity: consecutive
+  commands are nearly the same number.
+- **The aggregate realised/commanded ratio** reads 1.00 and always will —
+  momentum redistributes motion in time without changing the total.
+
+All three fail for one reason, and it is written in this document already: **the
+data is closed-loop.** The command is computed from the camera position, so no
+regression of one on the other identifies the plant. That is the exact sentence
+that justified building `plantid` — *"Everything take 212 established about X4's
+camera was inferred through a closed loop, which chooses its command from the
+very error it is trying to measure."*
+
+I rebuilt, badly, what the project already has in a form designed to work. See
+[[read-the-existing-report-first]].
+
+#### `plantid` is built, tested, wired — and has never been run
+
+Zero `plantid:` lines in any log on disk. The sequence drives X4 open-loop with
+a known signal and the head out of the loop entirely: RESET, SETTLE, **IMPULSE**,
+**COAST** (14 steps of commanding nothing — "an integrator stops dead, a smoother
+decays, momentum overshoots"), SUSTAIN, DECAY. 7 sizes × 2 directions × 3 passes
+= 2642 ticks, about **53 s** at the measured 50 Hz drain rate.
+
+#### The acceptance check now discriminates, which it never did
+
+`score_run.py`'s plantid block carried a comment crediting `tests/plantid.cpp`
+with validating it. That file checks **its own** statistics on **its own**
+in-memory trace and never emits a line the scorer can read — two separate pieces
+of arithmetic, one tested, and the untested one is the one that names the plant
+on the day. `tests/run-plantid-scorer.sh` closes it: the real `plant_id_step`
+drives an integrator, a smoother and a per-step cap, emits the injector's exact
+log format, and the real scorer must name each. It does, **3 of 3**:
+
+| planted | scorer's verdict | coast | fade |
+|---|---|---|---|
+| integrator | PURE INTEGRATOR | 0% | 1.00x |
+| smoother (k=0.25) | **SMOOTHED / MOMENTUM** | **75%** | — |
+| per-step cap | PER-STEP CAP | 0% | 0.33x |
+
+The smoother reads **75%** coast against take 212's measured **77%**. That is a
+prior, not the answer, and it is written here before the run rather than after.
+
+Two things this found that would have cost the take:
+
+- `score_run.py` refuses any file with no render-pass inventory **before** it
+  reaches any instrument block, so the run must carry `X4VR_MV=1` or the scorer
+  prints UNSCORABLE and never scores the thing the take was spent on.
+- `tests/run-plantid-scorer.sh` reported `SKIP  not built` with the binary
+  present: Patola's `CDPATH=.:/home/patola:/dados` makes `cd` **print** the
+  directory, so `$(cd … && pwd)` captured two lines. That is
+  [[workaround-hid-the-defect]] reproduced in a brand-new script — fixed with
+  `CDPATH=` inside the script, and a missing binary in an existing build tree is
+  now a FAIL rather than a silent skip.
+
+**P288.3, committed before the run:** the coast will read above 35% and
+`score_run.py` will say SMOOTHED / MOMENTUM. If it says PURE INTEGRATOR instead,
+then X4 applies exactly what we send and the uncommanded motion has a source
+outside the mouse channel entirely — a different search, and this prediction
+should be read as refuted rather than explained.

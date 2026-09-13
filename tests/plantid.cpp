@@ -17,6 +17,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <vector>
 
 static int failures = 0;
@@ -112,9 +114,79 @@ static Trace run_sequence(Plant &p, int passes) {
     return t;
 }
 
-int main() {
+// **Emit the log the injector would emit, so score_run.py can be driven on it.**
+//
+// score_run.py's plantid block carries a comment saying "tests/plantid.cpp
+// checks that it does, against simulated plants of each kind." It did not: this
+// file checked its OWN statistics, computed from its own trace, and never
+// produced a line the scorer could read. Two different pieces of arithmetic, one
+// of them tested — and the untested one is the one that names the plant on the
+// day. See [[stale-comment-is-misinformation]].
+//
+// The format is copied from the injector's X4VR_LOG call verbatim, including
+// that `pass`/`element`/`k`/`size_counts()` are read AFTER plant_id_step has
+// advanced them while `dx` and the phase come from the step that acted. Getting
+// that pairing wrong here would validate the scorer against a log shape the
+// injector never produces.
+static void emit(Plant &p, const char *path, int passes, double rate_hz) {
+    FILE *f = std::fopen(path, "w");
+    if (!f) {
+        std::printf("  FAIL could not write %s\n", path);
+        failures++;
+        return;
+    }
+    double t = 100.0;
+    std::fprintf(f, "[ %11.3f] inject  env: run = X4VR_TAKE=SYNTH "
+                    "X4VR_HEADLOOK_GAIN=%.3f X4VR_PLANTID=1 ./launch/"
+                    "x4vr-launch.sh\n", t, (double)kGain);
+    // score_run.py refuses a file with no render-pass inventory before it
+    // reaches any instrument block — so a real plantid take needs the layer
+    // running and this line present, and a synthetic one needs it too or the
+    // scorer is never exercised at all. Finding that out here is the whole
+    // point of driving the scorer offline.
+    std::fprintf(f, "[ %11.3f] layer   mv: X4 uses vkCreateRenderPass (v1)\n", t);
+    x4vr::PlantId pid;
+    pid.passes = passes;
+    for (int guard = 0; guard < 200000 && !pid.finished; guard++) {
+        const double before = p.angle();
+        const x4vr::PlantStep ps =
+            x4vr::plant_id_step(pid, (float)before, true, kGain);
+        t += 1.0 / rate_hz;
+        std::fprintf(f,
+                     "[ %11.3f] inject  plantid: pass=%d elem=%d size=%+d "
+                     "phase=%s k=%d dx=%+d cam=%.4f meas=%d camok=%d%s\n",
+                     t, pid.pass, pid.element, pid.size_counts(),
+                     x4vr::plant_phase_name(ps.acted), pid.k, ps.dx, before,
+                     ps.measuring ? 1 : 0, 1,
+                     pid.finished ? " FINISHED" : "");
+        p.step(-ps.dx * (double)kGain); // sign_yaw is -1
+    }
+    std::fprintf(f, "[ %11.3f] inject  plantid: sequence COMPLETE — every "
+                    "element ran.\n", t);
+    std::fclose(f);
+}
+
+int main(int argc, char **argv) {
     char buf[256];
     x4vr::PlantId spec;
+
+    // `--emit <dir>`: write one synthetic log per candidate plant and stop.
+    // Driven by tests/run-plantid-scorer.sh, which then runs score_run.py on
+    // each and checks it names the right one.
+    if (argc == 3 && std::string(argv[1]) == "--emit") {
+        const std::string dir = argv[2];
+        Integrator integ;
+        Smoother smooth(0.25);
+        Capped cap(4.0);
+        struct { Plant *p; const char *name; } cases[3] = {
+            {&integ, "integrator"}, {&smooth, "smoother"}, {&cap, "capped"}};
+        for (auto &c : cases) {
+            const std::string path = dir + "/synth-" + c.name + ".log";
+            emit(*c.p, path.c_str(), 3, 50.0);
+            std::printf("wrote %s\n", path.c_str());
+        }
+        return 0;
+    }
 
     std::printf("1. the sequence is bounded and complete\n");
     {

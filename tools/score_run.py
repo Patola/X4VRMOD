@@ -3275,8 +3275,15 @@ def main(path):
     #       the commands stop -- a coast that decays over several steps.
     #
     # The pair (how delivery fades across the staircase, how much the coast
-    # retains) separates all three; tests/plantid.cpp checks that it does,
-    # against simulated plants of each kind.
+    # retains) separates all three.
+    #
+    # **tests/run-plantid-scorer.sh checks that THIS code does**, by emitting the
+    # injector's exact log format from an integrator, a smoother and a per-step
+    # cap and requiring the three verdicts below to come out right. This comment
+    # used to credit tests/plantid.cpp, which checks its own statistics on its own
+    # in-memory trace and never produces a line this parser can read — two
+    # different pieces of arithmetic, and the untested one is the one that names
+    # the plant on the day the take is spent.
     # `[-+]?`, not `-?`: the injector prints size and dx with %+d, so a
     # positive one arrives as "+16". With `-?` the pattern silently kept only
     # the negative-direction elements -- half the run, and exactly the half
