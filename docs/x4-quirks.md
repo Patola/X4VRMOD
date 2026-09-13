@@ -16923,3 +16923,83 @@ the 11.5% phase loss. That is one single-variable change.
 improved. Nothing in this log speaks to it, and it must not be settled by asking
 for a comparison against the memory of an earlier take — that channel is reliable
 for transitions inside one run, not for magnitudes across runs.
+
+### Take 285a — P285.1 confirmed properly, in the cheap configuration
+
+16607 off-thread `GetCameraRotation` calls, 7448 non-zero, **0 outside ±200°**,
+no crash. The flatscreen probe is now the standing cheap re-check after any X4
+update. (The sliding HUD in that run is expected and not a finding: 285a carries
+none of `X4VR_CANVAS_M`, `X4VR_UI_WGATE`, or the declaration knobs.)
+
+### Take 285b, second session — X4VR_TICK_HZ=90 makes the camera oscillate clamp to clamp
+
+**This is a regression introduced by the tick driver.** The second run appended
+to the same `X4VR_LOG`, so the file holds two sessions and the scorer refuses it;
+split at the second `env: run =` line, session 1 reproduces the published numbers
+exactly, and **the two env lines are identical in all 39 variables**. Same
+configuration, different outcome — an intermittent fault, which is what a race or
+a marginal loop looks like.
+
+The episode runs **t = 110–138 s** and ends exactly at the map open (HUD down at
+t = 139.4), which is what Patola reported: head movement started it, holding the
+head still did **not** end it, opening and closing the map did.
+
+What the frames show, at t = 136.2:
+
+```
+       t    x4_yaw     dyaw  declared   cmd_yaw   x4-cmd  val
+ 136.116    65.000    0.000    65.000    53.040   11.960    1
+ 136.149    58.697   -6.303    65.000    46.737   11.960    1
+ 136.181    28.674  -30.023    58.697    16.715   11.960    1
+ 136.227   -30.913  -59.588    28.674   -27.233   -3.680    1  <<<
+ 136.272   -65.000  -34.087   -30.913   -53.040  -11.960    1
+```
+
+- The camera slams **+65 → −65, clamp to clamp, in ~150 ms**, repeatedly.
+- The per-frame jumps are **exact integer multiples of 11.918°**: 3x = 35.753,
+  4x = 47.670, 5x = 59.588. `max_step_deg` is 12.0, which quantises to 11.96 at
+  `gain 0.115`. So X4 is applying **three to five maximum-size commands in a
+  single frame**.
+- `x4 − cmd` is pinned at **exactly ±11.960** for dozens of consecutive frames:
+  the servo's error sits at exactly one max step, tick after tick.
+- `cam_valid = 1` on all 2521 frames of the episode and `declared` is non-zero
+  throughout, so this is not the not-steering path and not a declaration fault.
+- `clamped%` is **0.0** through the episode — `d.clamped` reports the *target*
+  being clamped to `yaw_limit`, not the *step* being limited to `max_step`, so
+  it cannot see this. An instrument that cannot express the failure it is next
+  to.
+
+**Leading explanation, not yet established: the servo re-commands while its
+previous commands are still in flight.** During the episode X4's camera moves on
+only 24% of ticks (against 70–86% outside it) while we tick at 89.5 Hz, so
+delivery takes about four ticks. The servo sees a 12° error, commands max step,
+sees the camera unmoved next tick, commands max step again — four times — and
+then X4 applies all four at once for a ~48° overshoot. The error reverses, still
+saturated, and the oscillation sustains itself without any further head movement.
+The rates agree: 90 ticks/s x 11.96° is 1076 °/s of command, and 21 bursts/s x
+~50° is ~1050 °/s observed.
+
+Under the old drain-driven tick this could not happen, because the tick *was* the
+drain: delivery took one tick by construction, and the command rate was
+rate-matched to X4's consumption for free. Raising the tick rate above the
+consumption rate turns the SDL event queue into an unmodelled integrator.
+
+Note the queue does **not** need to grow for this: `pump` is *lower* during the
+episode (119.6 vs 145.4 Hz), so events are not piling up unboundedly. A delivery
+latency of several ticks is sufficient on its own.
+
+**Status and safety.** `X4VR_TICK_HZ` is **off by default** — `tick_hz()` returns
+0 unless the variable is set — so the default path is exactly the pre-285b
+behaviour and is unaffected. The knob must not be used again until the servo
+accounts for in-flight command. Session 1's measurement (camera 28.2 → 54.5 Hz)
+still stands as a measurement, but the win is **unusable** in this form: a camera
+slamming between clamps is a far worse VR defect than the jitter it was meant to
+reduce.
+
+**Next, and it must not be a take.** `tests/headlook.cpp` already models a plant
+and a servo. The in-flight mechanism should be *reproduced offline there first* —
+a plant that delivers command in bursts of N ticks — and the fix (subtract the
+pushed-but-unconsumed command from the error before stepping) demonstrated
+against it. Only then is another run worth spending. Designing the fix and its
+hypothesis in one step is how three earlier attempts each needed a full
+re-measurement to refute.
