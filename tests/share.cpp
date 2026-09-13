@@ -57,7 +57,7 @@ int main() {
        "the readback carries its own timestamp and validity");
     // The version had to move with the layout. A reader built against v1 must
     // refuse a v2 block rather than read cam_raw_* out of the cursor pixels.
-    ck(x4vr::kShareVersion >= 2u, "kShareVersion was bumped for the new fields");
+    ck(x4vr::kShareVersion >= 3u, "kShareVersion was bumped for cam_seq");
     ck(s->cam_raw_valid.is_lock_free() && s->cam_raw_ns.is_lock_free(),
        "the new atomics are lock-free (written from the SDL hook path)");
     // The earlier cases left x=12.5 y=34.5, which differ -- every read before
@@ -73,6 +73,123 @@ int main() {
         if(x4vr::share_read(s,&a,&b,&vv) && a!=b) mixed++; }
     stop=true; w.join();
     ck(mixed==0, "no torn pair under a concurrent writer");
+
+    // ---- task #75: the CAMERA block, which had no seqlock at all -----------
+    //
+    // Seven fields published by the servo tick and read by the layer's
+    // submission block. The layer took the readback near the top of that block
+    // and `cam_yaw_deg` a hundred lines further down, so one `poselag` line
+    // could carry `x4=` and `cmd=` from ticks an unbounded distance apart --
+    // and #75's uncommanded-motion residual was measured by subtracting one
+    // from the other. The declared pose has the same hazard and it is worse:
+    // a yaw from one tick with a pitch from the next is an orientation the
+    // frame was never rendered from, and the compositor warps by it.
+    //
+    // Every field is derived from one counter, so "all seven agree on k" is a
+    // complete consistency check rather than a pairwise one.
+    printf("\n");
+    {
+        auto publish = [&](int k) {
+            x4vr::CamSnap c;
+            c.yaw_deg = (float)k;
+            c.pitch_deg = -(float)k;
+            c.valid = (k & 1) != 0;
+            c.raw_yaw_deg = 2.0f * (float)k;
+            c.raw_pitch_deg = -2.0f * (float)k;
+            c.raw_valid = (k & 1) != 0;
+            c.raw_ns = (uint64_t)k;
+            x4vr::share_write_camera(s, c);
+        };
+        auto consistent = [](const x4vr::CamSnap &c) {
+            const int k = (int)c.yaw_deg;
+            return c.pitch_deg == -(float)k && c.raw_yaw_deg == 2.0f * (float)k &&
+                   c.raw_pitch_deg == -2.0f * (float)k &&
+                   c.raw_ns == (uint64_t)k && c.valid == ((k & 1) != 0) &&
+                   c.raw_valid == ((k & 1) != 0);
+        };
+        publish(0);
+        const int kIter = 400000;
+
+        // **The negative control, and it runs FIRST.** If the unguarded reader
+        // never tears on this machine then the race is not being exercised, and
+        // the guarded arm below would pass for that reason rather than because
+        // the seqlock works -- a guard that cannot fail. So this arm must see
+        // tears, and the test fails if it does not.
+        std::atomic<bool> stop2{false};
+        long torn_unguarded = 0;
+        std::thread w2([&]{ for (int i = 1; i <= kIter && !stop2; i++) publish(i); });
+        for (int i = 0; i < kIter; i++) {
+            // The OLD read, reproduced: the readback first...
+            x4vr::CamSnap c;
+            c.raw_yaw_deg = s->cam_raw_yaw_deg.load(std::memory_order_relaxed);
+            c.raw_pitch_deg = s->cam_raw_pitch_deg.load(std::memory_order_relaxed);
+            c.raw_valid = s->cam_raw_valid.load(std::memory_order_relaxed) != 0;
+            c.raw_ns = s->cam_raw_ns.load(std::memory_order_relaxed);
+            c.valid = s->cam_valid.load(std::memory_order_relaxed) != 0;
+            // ...then a frame of submission work...
+            for (volatile int spin = 0; spin < 24; spin++) {}
+            // ...and the command, loaded again much later.
+            c.yaw_deg = s->cam_yaw_deg.load(std::memory_order_relaxed);
+            c.pitch_deg = s->cam_pitch_deg.load(std::memory_order_relaxed);
+            if (!consistent(c)) torn_unguarded++;
+        }
+        stop2 = true; w2.join();
+        char buf[160];
+        snprintf(buf, sizeof buf, "control: the OLD read tears (%ld of %d)",
+                 torn_unguarded, kIter);
+        ck(torn_unguarded > 0, buf);
+
+        // Same writer, same contention, through the seqlock.
+        std::atomic<bool> stop3{false};
+        long torn_guarded = 0, got = 0;
+        std::thread w3([&]{ for (int i = 1; i <= kIter && !stop3; i++) publish(i); });
+        for (int i = 0; i < kIter; i++) {
+            x4vr::CamSnap c;
+            if (!x4vr::share_read_camera(s, &c)) continue;
+            got++;
+            for (volatile int spin = 0; spin < 24; spin++) {}
+            if (!consistent(c)) torn_guarded++;
+        }
+        stop3 = true; w3.join();
+        snprintf(buf, sizeof buf, "guarded: 0 torn of %ld completed", got);
+        ck(torn_guarded == 0, buf);
+        // **"Never tears" is worth nothing if it barely read.** The first
+        // version of this arm refused 98% and asserted only on the survivors --
+        // a pass bought by not looking. The writer here is as hot as a thread
+        // can be, which is not the game, so the bar is only that enough reads
+        // completed for the zero above to mean something.
+        snprintf(buf, sizeof buf, "  ...and it completed enough to count (%ld)",
+                 got);
+        ck(got > 10000, buf);
+
+        // **The cadence that actually ships.** The servo publishes at 90 Hz and
+        // the layer reads once a frame, so the two are nowhere near this
+        // contended -- and a refusal costs a frame served from the previous
+        // snapshot. Refusals have to be rare at the real ratio, not merely
+        // survivable at the worst one.
+        std::atomic<bool> stop4{false};
+        long refused_real = 0, got_real = 0, torn_real = 0;
+        std::thread w4([&]{
+            for (int i = 1; i <= kIter && !stop4; i++) {
+                publish(i);
+                for (volatile int spin = 0; spin < 2000; spin++) {}
+            }
+        });
+        for (int i = 0; i < 200000; i++) {
+            x4vr::CamSnap c;
+            if (!x4vr::share_read_camera(s, &c)) { refused_real++; continue; }
+            got_real++;
+            if (!consistent(c)) torn_real++;
+        }
+        stop4 = true; w4.join();
+        const double pct = 100.0 * (double)refused_real /
+                           (double)(refused_real + got_real);
+        snprintf(buf, sizeof buf,
+                 "at a realistic write cadence: %.3f%% refused, %ld torn", pct,
+                 torn_real);
+        ck(pct < 1.0 && torn_real == 0, buf);
+    }
+
     printf("\n%s\n", fails?"FAILURES":"all cases passed");
     return fails!=0;
 }

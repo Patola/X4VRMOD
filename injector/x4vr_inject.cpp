@@ -2661,10 +2661,15 @@ void headlook_tick() {
     // the pose it was rendered from rather than with identity. Cleared when not
     // steering, which puts the layer back to the world-locked quad.
     if (x4vr::Shared *sh = x4vr_shared_state()) {
-        sh->cam_yaw_deg.store(g_headlook.cmd_yaw_deg, std::memory_order_relaxed);
-        sh->cam_pitch_deg.store(g_headlook.cmd_pitch_deg,
-                                std::memory_order_relaxed);
-        sh->cam_valid.store(steering ? 1u : 0u, std::memory_order_relaxed);
+        // **One publish, under the camera seqlock.** These were seven separate
+        // relaxed stores, and the layer read them at two different points in its
+        // submission block -- so `poselag` could print `x4=` from one tick and
+        // `cmd=` from another, and the declared pose could mix a yaw and a pitch
+        // that never coexisted. See share_write_camera for the whole account.
+        x4vr::CamSnap snap;
+        snap.yaw_deg = g_headlook.cmd_yaw_deg;
+        snap.pitch_deg = g_headlook.cmd_pitch_deg;
+        snap.valid = steering;
         // **Task #75: what X4 actually said, beside what we believe.**
         //
         // `r` was read at the TOP of this tick, before the servo stepped, so it
@@ -2677,15 +2682,22 @@ void headlook_tick() {
         // Stamped, because the readback is older than the frame the layer is
         // about to submit and "how much older" must be visible rather than
         // assumed small.
+        // Carried forward when this tick had no reading, which is what the
+        // seven separate stores did too: `cam_raw_valid` says which it is, and
+        // overwriting a real angle with zero would make "no answer" and "centred"
+        // the same value again.
         if (have_cam) {
-            sh->cam_raw_yaw_deg.store(kRad2Deg * -r.yaw,
-                                      std::memory_order_relaxed);
-            sh->cam_raw_pitch_deg.store(kRad2Deg * r.pitch,
-                                        std::memory_order_relaxed);
+            snap.raw_yaw_deg = kRad2Deg * -r.yaw;
+            snap.raw_pitch_deg = kRad2Deg * r.pitch;
+        } else {
+            snap.raw_yaw_deg =
+                sh->cam_raw_yaw_deg.load(std::memory_order_relaxed);
+            snap.raw_pitch_deg =
+                sh->cam_raw_pitch_deg.load(std::memory_order_relaxed);
         }
-        sh->cam_raw_valid.store(have_cam ? 1u : 0u, std::memory_order_relaxed);
-        sh->cam_raw_ns.store((uint64_t)(mono_seconds() * 1e9),
-                             std::memory_order_relaxed);
+        snap.raw_valid = have_cam;
+        snap.raw_ns = (uint64_t)(mono_seconds() * 1e9);
+        x4vr::share_write_camera(sh, snap);
     }
 
     // The camera stops being ours when X4 stops listening, so the estimate has

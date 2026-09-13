@@ -37,7 +37,8 @@ constexpr uint32_t kShareMagic = 0x52565834u;
 // 2: task #75 added the raw camera readback and its timestamp beside the
 // injector's belief, so the declared pose and the pose X4 actually reports can
 // appear on one line instead of being paired across two logs after the fact.
-constexpr uint32_t kShareVersion = 2u;
+// 3: that block got the seqlock it should have had from the start (`cam_seq`).
+constexpr uint32_t kShareVersion = 3u;
 
 struct Shared {
     uint32_t magic = kShareMagic;
@@ -109,6 +110,31 @@ struct Shared {
     // own readback -- this said 56.5, which was take 117's integrated estimate
     // and was superseded), and declaring a pose X4 did not render from is what
     // makes the world swim.
+    // **Its own seqlock, and the note at the top of this file is why.** That
+    // note says two floats "would tear harmlessly in practice, but 'in practice'
+    // is how a reader ends up with x from one frame and y from the next exactly
+    // once, during the measurement that matters" -- and then this whole block
+    // was added underneath it without one. It happened exactly as written.
+    //
+    // Two things went wrong, and the second is the worse one:
+    //
+    //   the DECLARED pose  yaw from one tick with pitch from the next is an
+    //                      orientation the frame was never rendered from, and
+    //                      the compositor reprojects by it. At the 20-30 deg per
+    //                      frame takes 285b/287b reached, that is a large warp
+    //                      applied to pixels that never had it.
+    //   the MEASUREMENT    `poselag` loaded the readback near the top of the
+    //                      submission block and `cam_yaw_deg` again a hundred
+    //                      lines further down, so `x4=` and `cmd=` on one line
+    //                      could come from ticks an unbounded distance apart.
+    //                      Task #75's uncommanded-motion residual was measured
+    //                      by subtracting one from the other.
+    //
+    // Separate from `seq` because the cursor moves on X4's input path and the
+    // camera on the servo tick; sharing a counter would make each reader retry
+    // on the other's writes for a payload that had not moved.
+    std::atomic<uint32_t> cam_seq{0};
+
     std::atomic<float> cam_yaw_deg{0.f};
     std::atomic<float> cam_pitch_deg{0.f};
     std::atomic<uint32_t> cam_valid{0};
@@ -141,6 +167,81 @@ struct Shared {
     // log prefix uses, so a line's own timestamp minus this IS the age.
     std::atomic<uint64_t> cam_raw_ns{0};
 };
+
+// ---- the camera block, as one consistent snapshot ------------------------
+//
+// Every field the servo tick publishes about the camera, read together or not
+// at all. `CamSnap` exists so a caller cannot take half of it by accident: the
+// layer used to load the readback near the top of its submission block and the
+// command a hundred lines further down, which is not a tear of one tick but of
+// however long the code in between takes.
+struct CamSnap {
+    float yaw_deg = 0.0f;       // the servo's BELIEF, stored after its step
+    float pitch_deg = 0.0f;
+    bool valid = false;         // steering
+    float raw_yaw_deg = 0.0f;   // what GetCameraRotation actually reported
+    float raw_pitch_deg = 0.0f;
+    bool raw_valid = false;
+    uint64_t raw_ns = 0;
+};
+
+// Publish the whole block. Called from the servo tick, the only writer.
+inline void share_write_camera(Shared *s, const CamSnap &c) {
+    if (!s)
+        return;
+    s->cam_seq.fetch_add(1, std::memory_order_relaxed); // -> odd
+    std::atomic_thread_fence(std::memory_order_release);
+    s->cam_yaw_deg.store(c.yaw_deg, std::memory_order_relaxed);
+    s->cam_pitch_deg.store(c.pitch_deg, std::memory_order_relaxed);
+    s->cam_valid.store(c.valid ? 1u : 0u, std::memory_order_relaxed);
+    s->cam_raw_yaw_deg.store(c.raw_yaw_deg, std::memory_order_relaxed);
+    s->cam_raw_pitch_deg.store(c.raw_pitch_deg, std::memory_order_relaxed);
+    s->cam_raw_valid.store(c.raw_valid ? 1u : 0u, std::memory_order_relaxed);
+    s->cam_raw_ns.store(c.raw_ns, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
+    s->cam_seq.fetch_add(1, std::memory_order_relaxed); // -> even
+}
+
+// Read it. Same discipline as share_read.
+//
+// **`out` is carried, not filled.** On failure `*out` is left exactly as the
+// caller had it, so a caller that keeps one `CamSnap` across frames gets the
+// last complete snapshot -- a frame stale, never inconsistent -- rather than a
+// pose of zero. That matters at the declaration site: refusing there and
+// leaving `cv` false declares IDENTITY to the compositor, which pops the world
+// lock for a frame, and is a worse artefact than the tear this replaces.
+//
+// Both callers therefore hold a static snapshot. A fresh `CamSnap` per call
+// would give zeroes on refusal and the guarantee above would be a comment
+// describing behaviour the code does not have.
+inline bool share_read_camera(const Shared *s, CamSnap *out) {
+    if (!s || !out || s->magic != kShareMagic || s->version != kShareVersion)
+        return false;
+    // 32, not 8. The writer holds the block open for seven relaxed stores, so a
+    // reader that gives up after eight attempts refuses constantly whenever the
+    // two threads are in step -- measured at 98% refusal against a hot writer in
+    // tests/share.cpp. Refusals are not free here: each one is a frame served
+    // from the previous snapshot.
+    for (int tries = 0; tries < 32; tries++) {
+        const uint32_t a = s->cam_seq.load(std::memory_order_acquire);
+        if (a & 1u)
+            continue;
+        CamSnap c;
+        c.yaw_deg = s->cam_yaw_deg.load(std::memory_order_relaxed);
+        c.pitch_deg = s->cam_pitch_deg.load(std::memory_order_relaxed);
+        c.valid = s->cam_valid.load(std::memory_order_relaxed) != 0;
+        c.raw_yaw_deg = s->cam_raw_yaw_deg.load(std::memory_order_relaxed);
+        c.raw_pitch_deg = s->cam_raw_pitch_deg.load(std::memory_order_relaxed);
+        c.raw_valid = s->cam_raw_valid.load(std::memory_order_relaxed) != 0;
+        c.raw_ns = s->cam_raw_ns.load(std::memory_order_relaxed);
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (s->cam_seq.load(std::memory_order_relaxed) != a)
+            continue;
+        *out = c;
+        return true;
+    }
+    return false;
+}
 
 // A snapshot torn-free read of the fields the layer cares about.
 inline bool share_read(const Shared *s, float *x, float *y, bool *visible) {

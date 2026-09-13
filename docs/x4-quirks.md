@@ -17472,3 +17472,72 @@ the camera is moving 20–30° per frame that tear can fabricate a large single-
 reports X4 at +65.00,+35.00 against a head at −3.78,−0.64 — but the size of the
 uncommanded component is only as good as that pairing. Closing that hole is
 cheaper than a take and comes before any mechanism is built on this number.
+
+### The seqlock hole, closed — and the residual survives it
+
+The camera block of `Shared` had **no seqlock at all**, while the file's own
+opening note says two floats "would tear harmlessly in practice, but 'in
+practice' is how a reader ends up with x from one frame and y from the next
+exactly once, during the measurement that matters." The block was added
+underneath that note without one.
+
+Two sites were exposed, and the second is the one that made me flag the residual:
+
+- **the declared pose** — a yaw from one tick with a pitch from the next is an
+  orientation the frame was never rendered from, and the compositor reprojects
+  by it;
+- **`poselag`** — the layer loaded the readback near the top of its submission
+  block and `cam_yaw_deg` again a hundred lines further down, two independent
+  loads, so one line could carry `x4=` and `cmd=` from different ticks.
+
+Closed with `cam_seq` + `share_write_camera`/`share_read_camera`
+(`kShareVersion` 2 → 3). `tests/share.cpp` drives it with a writer thread and a
+**negative control that runs first**: the old two-load read, reproduced exactly,
+tears on **207917 of 400000** reads. Without that arm the guarded one would pass
+for want of contention rather than because the seqlock works.
+
+Two defects of my own, found by the test rather than by reading:
+
+- The first guarded arm **refused 98%** of its reads and asserted only on the
+  survivors — a pass bought by not looking. `share_read_camera` gave up after
+  eight attempts while the writer holds the block open for seven stores. Raised
+  to 32; the arm now completes 57125 reads with zero tears, and a second arm at
+  a realistic write cadence reports **0.000% refused**.
+- I wrote a header comment promising that a refused read "reports the last
+  complete snapshot instead — a frame stale, never inconsistent", and then wrote
+  callers that passed a fresh `CamSnap` and got **zeroes**. At the declaration
+  site that drops the pose to identity for a frame: the world lock popping,
+  which is a bigger artefact than the tear being fixed. Both callers now hold a
+  static snapshot, which is what makes the sentence true. See
+  [[stale-comment-is-misinformation]] — this time I wrote the comment and the
+  code that contradicted it in the same edit.
+
+#### Re-measured: the tear did NOT contaminate #75
+
+No take needed — the tear is detectable in the logs already on disk. The servo
+sets `cmd = raw + sign·dx·gain` with `dx` a **whole** mouse count, so on an
+untorn line `(cmd − x4)` is an exact multiple of the gain. A torn line took `cmd`
+from a different tick and picks up X4's own camera motion in between, which is
+not a multiple of anything.
+
+| | |
+|---|---|
+| `poselag` lines, takes 280–287b | **239 668** |
+| observed torn | **0** |
+| detector sensitivity, measured on 92 386 planted tears | **16.0%** |
+| true tear rate, Rule of Three at 95% | **< 0.0078%** |
+
+The sensitivity number is the point: a tear is only visible when X4's camera moved
+by a non-multiple of the gain between the two ticks, so the detector misses 84% of
+them and the bound is widened to match. **The 100%-untorn column on its own would
+have been a guard that cannot fail** — every value in this system is quantised to
+0.115°, and I checked whether differences are too before believing it.
+
+So the gap between the two loads was microseconds, not a frame, and my caveat on
+the previous entry was right to raise and wrong by three orders of magnitude.
+**The uncommanded motion is not an artefact of the tear**: 11.9 / 17.8 / 33.0° in
+takes 284, 285b and 287b stands as measured, and remains what #75 has left.
+
+The fix is still worth having — 0.0078% of frames at 90 Hz is a wrong declared
+pose roughly every twenty minutes, and [[no-cosmetic-defects-in-vr]] applies — but
+it is not the cause of the slam and must not be reported as one.

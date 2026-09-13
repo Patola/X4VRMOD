@@ -12564,10 +12564,21 @@ void vr_thread() {
             float cy = 0.0f, cp = 0.0f;
             bool cv = false;
             if (const x4vr::Shared *sh = shared_state()) {
-                cv = sh->cam_valid.load(std::memory_order_relaxed) != 0;
+                // One snapshot. A yaw from one tick with a pitch from the next
+                // is an orientation the frame was never rendered from, and this
+                // is the site the compositor reprojects by.
+                //
+                // **Static, so a refusal serves the previous frame's pose.**
+                // A fresh CamSnap here would be all zeroes when the reader lost
+                // the race, `cv` would go false, and the declaration would drop
+                // to identity for one frame -- the world lock popping, which is
+                // a bigger artefact than the tear this replaces.
+                static x4vr::CamSnap snap;
+                x4vr::share_read_camera(sh, &snap);
+                cv = snap.valid;
                 if (cv) {
-                    cy = sh->cam_yaw_deg.load(std::memory_order_relaxed);
-                    cp = sh->cam_pitch_deg.load(std::memory_order_relaxed);
+                    cy = snap.yaw_deg;
+                    cp = snap.pitch_deg;
                 }
             }
             // #77: the roll and the weight that guards it. yaw_weight is the
@@ -12824,15 +12835,26 @@ void vr_thread() {
                 unsigned raw_valid = 0;
                 uint64_t raw_ns = 0;
                 unsigned valid = 0, linked = 0;
+                // **Taken ONCE, and carried to the log line below.** `cmd_yaw`
+                // used to be loaded again a hundred lines further down, so a
+                // single `poselag` line could carry `x4=` and `cmd=` from ticks
+                // an unbounded distance apart -- and #75's uncommanded-motion
+                // residual was measured by subtracting one from the other.
+                float cmd_yaw = 0.0f, cmd_pitch = 0.0f;
                 if (const x4vr::Shared *sh = shared_state()) {
                     linked = 1;
-                    raw_yaw = sh->cam_raw_yaw_deg.load(std::memory_order_relaxed);
-                    raw_pitch =
-                        sh->cam_raw_pitch_deg.load(std::memory_order_relaxed);
-                    raw_valid =
-                        sh->cam_raw_valid.load(std::memory_order_relaxed);
-                    raw_ns = sh->cam_raw_ns.load(std::memory_order_relaxed);
-                    valid = sh->cam_valid.load(std::memory_order_relaxed);
+                    // Static for the same reason as the declaration site: a
+                    // refusal reports the previous tick's numbers rather than
+                    // a line of zeroes that the scorer would read as data.
+                    static x4vr::CamSnap snap;
+                    x4vr::share_read_camera(sh, &snap);
+                    raw_yaw = snap.raw_yaw_deg;
+                    raw_pitch = snap.raw_pitch_deg;
+                    raw_valid = snap.raw_valid ? 1u : 0u;
+                    raw_ns = snap.raw_ns;
+                    valid = snap.valid ? 1u : 0u;
+                    cmd_yaw = snap.yaw_deg;
+                    cmd_pitch = snap.pitch_deg;
                     if (valid) {
                         // #75. `cam_yaw_deg` is the servo's COMMAND, and the
                         // measurement says it is 0.2*head + 0.8*x4 -- a fifth
@@ -12849,10 +12871,8 @@ void vr_thread() {
                             decl_yaw = now_yaw;
                             decl_pitch = now_pitch;
                         } else {
-                            decl_yaw =
-                                sh->cam_yaw_deg.load(std::memory_order_relaxed);
-                            decl_pitch =
-                                sh->cam_pitch_deg.load(std::memory_order_relaxed);
+                            decl_yaw = snap.yaw_deg;
+                            decl_pitch = snap.pitch_deg;
                         }
                     }
                 }
@@ -12921,13 +12941,9 @@ void vr_thread() {
                     // question moved under it. Carrying the command on the line
                     // unconditionally means one scorer reads both arms and the
                     // A/B compares like with like.
-                    float cmd_yaw = 0.0f, cmd_pitch = 0.0f;
-                    if (const x4vr::Shared *sh = shared_state()) {
-                        cmd_yaw =
-                            sh->cam_yaw_deg.load(std::memory_order_relaxed);
-                        cmd_pitch =
-                            sh->cam_pitch_deg.load(std::memory_order_relaxed);
-                    }
+                    // `cmd_yaw`/`cmd_pitch` come from the snapshot taken above,
+                    // beside the readback they are compared against. The second
+                    // load that used to be here is the defect this fixes.
                     X4VR_LOG("poselag: declared=%.4f,%.4f x4=%.4f,%.4f "
                              "d=%.4f,%.4f age=%.4f valid=%u rawvalid=%u "
                              "residual=%.4f,%.4f cmd=%.4f,%.4f rot=%u",
