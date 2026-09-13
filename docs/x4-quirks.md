@@ -16853,3 +16853,73 @@ scorer now sets non-steering windows aside, reports the two modes, and says so.
 
 P285.2 and P285.3 are independent: the first says the poses arrive, the second
 says X4 acts on them. Only the second is a fix.
+
+### Take 285b — the tick driver works, and X4's camera rate nearly doubled
+
+183 s, 91 windows, log only. `X4VR_TICK_HZ=90`, otherwise take 284 exactly.
+Compared in the **driven mode only** — windows where X4's camera was actually
+moving — because the aggregate is bimodal and its median names the empty valley.
+
+| | take 284 (drain) | take 285b (ours@90) |
+|---|---|---|
+| servo tick, driven windows | 28.8 Hz | **68.5 Hz** (2.4x) |
+| **X4's camera** | 28.2 Hz | **54.5 Hz** (1.9x) |
+| poses acted on, whole run | 51.8% | **88.5%** |
+| X4 acted per tick | 92.8% | 79.3% |
+| gameplay frame time | 11.36 ms | **11.26 ms** |
+
+- **P285.3 CONFIRMED — the prediction that could have failed.** X4's camera rate
+  is tick-locked, and raising the tick raised it: 28.2 → 54.5 Hz. This is the
+  first change in #75 that moved the defect's own quantity rather than
+  relocating it.
+- **P285.1 holds, but measured the expensive way.** The flatscreen `camprobe` run
+  was not taken; 285b itself is the evidence, because with `X4VR_CAMREAD=1` and
+  the tick on our own thread, `GetCameraRotation` was called ~79 times a second
+  from a foreign thread for 183 s. No crash. 486 `camread` samples span yaw
+  −63.94…+62.80 and pitch −35.00…+35.00 — **exactly X4's own documented clamps**
+  (`maxyaw="65" maxpitch="35"`), with nothing outside ±200°. That is evidence the
+  call neither crashes nor tears; it is still not a proof of thread-safety, and
+  `X4VR_CAMPROBE_HZ` remains the cheap way to re-check it after any X4 update.
+- No `TWO THREADS` line: the drain suppression worked, so the tick moved rather
+  than gaining a caller.
+- **The driver is free.** 11.26 ms against take 284's 11.36 ms.
+- `tickdrv` held **90.0 Hz** (range 89.9–90.1), 0% of wakeups late, **zero
+  re-phases**, over all 91 windows.
+
+#### P285.2 was wrong, and foreseeably so
+
+I predicted `acted on` above 95%; it is **88.5%**, with 10.7 Hz of ticks seeing no
+new pose. The cause is not a defect: our tick runs at 90.0 Hz and the layer
+publishes at 89.7 Hz, so **two free-running clocks at the same nominal rate beat
+against each other** — sometimes two ticks fall inside one publish interval and
+one is wasted; sometimes two publishes fall inside one tick interval and one is
+skipped. Choosing exactly the publish rate is the *worst* case for phase, and I
+chose it because it looked like the natural match. Sampling theory says the same
+thing the log says directly, in a line that was already printing before this run:
+
+> Hardest-polling window: 193 Hz of polls against 90 Hz of publishes caught
+> 89.9 Hz (1.00 of them), at 2.1 polls per tick.
+
+About 2x oversampling captures everything. **The tick rate should be above the
+publish rate, not equal to it.**
+
+#### The new open question: is X4's consumption saturating?
+
+Two points now exist for X4's camera rate against the servo tick:
+
+| servo tick | X4 camera | acted per tick |
+|---|---|---|
+| 28.8 Hz | 28.2 Hz | 92.8% |
+| 68.5 Hz | 54.5 Hz | 79.3% |
+
+Linear would have put the second at ~66 Hz. It is 54.5, and the per-tick
+acceptance fell from 92.8% to 79.3% — consistent with **X4's own consumption
+approaching a ceiling somewhere near 55–60 Hz**, which would mean further tick
+rate buys progressively less. Two points cannot distinguish a ceiling from a
+shallower slope; a third at a much higher tick rate can, and the same run closes
+the 11.5% phase loss. That is one single-variable change.
+
+**Unknown, and the only thing that matters:** P285.4, whether the jitter actually
+improved. Nothing in this log speaks to it, and it must not be settled by asking
+for a comparison against the memory of an earlier take — that channel is reliable
+for transitions inside one run, not for magnitudes across runs.
