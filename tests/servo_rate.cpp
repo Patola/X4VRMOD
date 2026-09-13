@@ -202,6 +202,58 @@ static x4vr::HeadAngles turning(int i, double hz, double amp) {
     return h;
 }
 
+
+// The measured plant: a faithful integrator whose latency JITTERS over a band
+// fixed in milliseconds. Arrival order is preserved -- X4 applies mouse deltas
+// in the order it dequeues them -- so a command drawn a shorter delay than its
+// predecessor lands with it, never before it.
+struct Jit { double slam = 0; double max_exc = 0; int reversals = 0; };
+
+template <class F>
+static Jit run_jitter(double tick_hz, int lo, int hi, F traj, double seconds) {
+    x4vr::HeadLook s;
+    s.gain_deg_per_count = 0.115f;
+    s.servo_kp = 0.25f;
+    s.lead_scale = 1.0f;
+    Plant p;
+    p.period = 1;
+    p.delay = 0;
+    p.arm();
+    std::mt19937 rng(20260913u);
+    std::uniform_int_distribution<int> jit(lo, hi);
+    std::vector<std::pair<int, float>> q;
+    int last_due = -1, updates = 0;
+    double prev_pub = 0.0, prev_vel = 0.0;
+    Jit r;
+    const int steps = (int)(tick_hz * seconds);
+    for (int i = 0; i < steps; i++) {
+        x4vr::head_look_observe(s, p.pub_yaw, p.pub_pitch);
+        const x4vr::Delta d = x4vr::head_look_step(s, traj(i));
+        int due = i + jit(rng);
+        if (due < last_due) due = last_due;
+        last_due = due;
+        q.emplace_back(due, s.sign_yaw * (float)d.dx * s.gain_deg_per_count);
+        float land = 0.0f;
+        for (size_t k = 0; k < q.size();) {
+            if (q[k].first <= i) { land += q[k].second; q.erase(q.begin() + (long)k); }
+            else break;
+        }
+        p.yaw = x4vr::clampf(p.yaw + land, -p.yaw_limit, p.yaw_limit);
+        p.pub_yaw = p.yaw;
+        const double vel = (double)p.pub_yaw - prev_pub;
+        if (updates > 0) {
+            if (std::fabs(vel) > 20.0) r.slam += 1.0;
+            if (updates > 1 && vel * prev_vel < 0.0) r.reversals++;
+        }
+        prev_vel = vel;
+        prev_pub = p.pub_yaw;
+        updates++;
+        r.max_exc = std::fmax(r.max_exc, std::fabs((double)p.yaw));
+    }
+    r.slam = updates > 1 ? 100.0 * r.slam / (double)(updates - 1) : 0.0;
+    return r;
+}
+
 int main() {
     std::printf("A head turning at 20 deg amplitude, 0.5 Hz, servo at 90 Hz.\n");
     std::printf("`period` is servo steps per camera update: 1 is every take\n");
@@ -518,6 +570,92 @@ int main() {
     check(wild_at_90,
           "P291: at ~70 Hz the SAME jitter reaches X4's clamp — the rate at "
           "which 285b-s2 and 287b went wild, and the only variable that moved");
+
+    // ---- 7. how much head motion does the model NEED? ---------------------
+    //
+    // Take 285b-s1 ran at 68.6 Hz -- the same rate as the two wild sessions --
+    // and was not reported wild. Section 6 calls it 14.8%. So either its head
+    // was too quiet to excite the loop, or the model is simply too eager.
+    //
+    // Measured from `camread`, whose cadence is `% 30` only and therefore does
+    // NOT oversample the wild moments the way `headlook` does (it fires on
+    // `% 30 || clamped`), head angular rate over each session:
+    //
+    //   287a     calm, 28 Hz    p50   3.9   p90  56.3   max 113.9 deg/s
+    //   285b-s1  calm, 68.6 Hz  p50   6.2   p90  69.4   max 117.5
+    //   285b-s2  WILD, 70.7 Hz  p50  33.4   p90 103.7   max 161.9
+    //   287b     WILD, 69.7 Hz  p50   5.3   p90  87.7   max 160.6
+    //
+    // **287b went wild with a QUIETER head than s1's** -- p50 5.3 against 6.2,
+    // p90 87.7 against 69.4 only at the tail. So "s1 was not excited enough" is
+    // not obviously true, and the peak-rate split (118 vs 161) is a threshold
+    // fitted to four points, which is not evidence.
+    //
+    // **P292, committed before this runs: the model's threshold at 68.6 Hz lies
+    // BELOW 117 deg/s, so it over-predicts s1 and the jitter model is
+    // incomplete.** The excitation used in section 6 already peaks at only
+    // 62.8 deg/s (20 deg at 0.5 Hz) and that was enough. If the threshold comes
+    // out above 117 the prediction is refuted and s1 is explained by excitation
+    // after all -- which would be the better outcome, and is why it is written
+    // down before the number exists.
+    //
+    // Amplitude is held at 20 deg and the FREQUENCY swept, so the excursion
+    // stays well inside X4's clamp and only the rate varies. One variable.
+    std::printf("\n7. the excitation the model needs, at each measured rate\n");
+    std::printf("%12s", "peak deg/s");
+    const double rates[] = {28.0, 68.6};
+    for (double hz : rates) std::printf("%14.1f Hz", hz);
+    std::printf("\n");
+    double thresh[2] = {0.0, 0.0};
+    for (double peak : {5.0, 10.0, 20.0, 40.0, 62.8, 90.0, 118.0, 160.0, 220.0}) {
+        std::printf("%12.1f", peak);
+        for (int a = 0; a < 2; a++) {
+            const double f = peak / (20.0 * 2.0 * M_PI); // amp 20 deg
+            const double tick_ms = 1000.0 / rates[a];
+            const Jit r = run_jitter(rates[a], (int)std::floor(40.0 / tick_ms),
+                                     (int)std::ceil(165.0 / tick_ms),
+                                     [f](int i) { return turning(i, f, 20.0); },
+                                     20.0);
+            std::printf("   %6.1f%% %6.1f", r.slam, r.max_exc);
+            if (r.max_exc >= 64.9 && thresh[a] == 0.0) thresh[a] = peak;
+        }
+        std::printf("\n");
+    }
+    std::printf("%12s", "");
+    for (int a = 0; a < 2; a++) std::printf("   %-13s", "slam%  max|cam|");
+    std::printf("\n\n  threshold (first peak rate reaching the clamp): "
+                "28.0 Hz -> %.0f deg/s, 68.6 Hz -> %.0f deg/s\n",
+                thresh[0], thresh[1]);
+    std::printf("  measured peaks: 287a 113.9, 285b-s1 117.5 (both CALM) | "
+                "285b-s2 161.9, 287b 160.6 (both WILD)\n");
+
+    // **The control: a head that does not move at all.** A model that slams
+    // into the clamp with a FROZEN head is not "marginally unstable and needing
+    // excitation" -- it is an unconditional oscillator, and then excitation can
+    // never be the reason one session stayed calm. Run beside a FIXED delay of
+    // the same mean, because if both behave alike the jitter is doing no work
+    // and section 5's threshold on the MEAN is the whole story.
+    std::printf("\n   control — a frozen head, and jitter against a fixed mean:\n");
+    auto still = [](int) {
+        x4vr::HeadAngles h;
+        h.yaw_deg = 5.0f; h.pitch_deg = 0.0f; h.yaw_weight = 1.0f;
+        return h;
+    };
+    for (double hz : {28.0, 68.6}) {
+        const double tick_ms = 1000.0 / hz;
+        const int lo = (int)std::floor(40.0 / tick_ms), hi = (int)std::ceil(165.0 / tick_ms);
+        const int mean = (lo + hi) / 2;
+        const Jit j = run_jitter(hz, lo, hi, still, 20.0);
+        const Jit f = run_jitter(hz, mean, mean, still, 20.0);
+        std::printf("     %5.1f Hz  jitter %d-%d: slam %5.1f%% max %5.2f | "
+                    "FIXED %d: slam %5.1f%% max %5.2f\n", hz, lo, hi, j.slam,
+                    j.max_exc, mean, f.slam, f.max_exc);
+    }
+
+    check(thresh[1] > 0.0 && thresh[1] < 117.0,
+          "P292: at 68.6 Hz the model goes unstable BELOW s1's measured peak of "
+          "117.5 deg/s — so it over-predicts s1, and excitation does not "
+          "explain why that session stayed calm");
 
     std::printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n",
                 g_fail);

@@ -18019,3 +18019,79 @@ the same rate as the two wild sessions, and was not reported wild. The model
 calls it 14.8%. A marginally unstable loop needs excitation to show it, and "no
 wild report" is weaker evidence than "went wild" — but it is one of only four
 labelled sessions and it does not support the model. #75 is not closed on this.
+
+### P292 — excitation is NOT why 285b-s1 stayed calm, and the model is refuted
+
+Head angular rate per session, from `camread` (cadence `% 30` only, so it does
+**not** oversample the wild moments the way `headlook` does — that one fires on
+`% 30 || clamped`):
+
+| take | tick | p50 | p90 | max | report |
+|---|---|---|---|---|---|
+| 287a | 28.0 Hz | 3.9 | 56.3 | 113.9 | calm |
+| 285b-s1 | 68.6 Hz | 6.2 | 69.4 | 117.5 | calm |
+| 285b-s2 | 70.7 Hz | 33.4 | 103.7 | 161.9 | **WILD** |
+| 287b | 69.7 Hz | 5.3 | 87.7 | 160.6 | **WILD** |
+
+**287b went wild with a quieter head than s1's** — p50 5.3 against 6.2. The
+peak-rate split (118 calm / 161 wild) is a threshold fitted to four points and is
+not evidence.
+
+**P292 was committed before the sweep and is confirmed.** Sweeping the head's
+peak rate at each measured tick rate, amplitude held at 20° and only the
+frequency varied:
+
+| peak °/s | 28.0 Hz | 68.6 Hz |
+|---|---|---|
+| 5 | 0.0%, max 20.1 | **14.2%, max 65.0** |
+| 62.8 | 0.0%, max 20.6 | 15.0%, max 65.0 |
+| 118 | 0.0%, max 23.0 | 15.5%, max 65.0 |
+| 220 | 0.0%, max 31.6 | 14.7%, max 65.0 |
+
+At 68.6 Hz the model reaches X4's clamp at **5 °/s — the lowest rate swept** —
+and at 28 Hz it never does, at any rate up to 220. **The model needs no
+excitation at all.**
+
+The control settles it: with the head **frozen**, 68.6 Hz still slams (15.0%,
+max 65.00) while 28 Hz stays at 8.16°. This is not a marginally unstable loop
+waiting for a trigger; it is an unconditional oscillator above some tick rate,
+and then excitation can never be the reason a session stayed calm.
+
+A second control separates two things I had been treating as one:
+
+```
+68.6 Hz, frozen head:  jitter 2-12  slam 15.0%  max 65.00
+                       FIXED    7   slam  0.0%  max 65.00
+```
+
+**The mean delay decides whether it fails; the jitter decides how violently.** A
+fixed delay of the same mean still walks to the clamp, but smoothly — no slams.
+Section 5's threshold on the mean was the whole instability story; section 6's
+jitter is what turns a slow walk into 20°+ steps.
+
+#### s1 and s2 differ in nothing measurable
+
+Restricted to servo-active windows:
+
+| take | windows | tick Hz | camera moved | ticks per camera move | report |
+|---|---|---|---|---|---|
+| 287a | 46 | 28.0 | 27.4 Hz | 1.02 | calm |
+| 285b-s1 | 41 | 68.6 | 54.5 Hz | 1.26 | calm |
+| 285b-s2 | 73 | 70.7 | 52.0 Hz | 1.36 | **WILD** |
+| 287b | 44 | 69.7 | 50.1 Hz | 1.39 | **WILD** |
+
+s1 and s2 are the same configuration at the same rates. And s1's calmness is not
+merely an absent report: the independent slam statistic reads **0.0%** for s1
+against 7.1% and 7.5% for s2 and 287b.
+
+**So the jitter model is refuted for s1.** Something damps the real loop that the
+model lacks. The quantity it is most sensitive to is the latency band, which has
+only ever been measured in `plantid` runs (290a/290b) and never during ordinary
+play — closed-loop data cannot give it. If that band is not constant across
+sessions, s1 having a shorter one would explain everything, and nothing measured
+so far excludes it. That is a hypothesis, not a finding, and it is written here
+as one.
+
+The one practical conclusion that survives all of this unchanged: **`X4VR_TICK_HZ`
+is the variable that moves the loop between the calm and unstable regimes, and it
+stays off by default.**
