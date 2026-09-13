@@ -16767,3 +16767,89 @@ it a cadence we own — not to make X4 drain harder.
 Also not usable: `corr(fresh/published, camdiff M_view%) = −0.744`. The run has
 two phase clusters at opposite ends of both axes, so that coefficient describes
 the clustering, not a relationship. Do not cite it.
+
+### The threading question, settled — and what it forced the design to be
+
+`headlook_tick` makes two foreign calls and keeps a great deal of non-atomic
+state. Those are three separate questions and only one was ever open.
+
+| what the tick touches | verdict |
+|---|---|
+| `last_updates`, `stale`, the inputrate counters, **all of `g_headlook`** | **Not a question — a constraint.** Two threads in the tick corrupt the servo command, not merely a statistic. The knob must MOVE the tick, never add a caller. |
+| `SDL_PushEvent` | Safe. SDL's queue is mutex-protected and push is the producer-side call. The real hazard is RATE: takes 119 and 124 livelocked X4's `while (PollEvent())` drain with 18 kHz of pushes. 90/s is 2x today's ~46/s and 200x under that. |
+| **`GetCameraRotation`** | **Open, and not settleable by reading** — X4 is closed source. Its failure mode is a crash. |
+
+So the design is forced, not chosen:
+
+- The drain's call is **suppressed** when `X4VR_TICK_HZ` is set, and a guard in
+  the tick compares the thread now inside it against the one that was and names
+  both. A guard that merely set a flag could not tell "moved" from "called
+  twice", which is the one mistake this knob must not make.
+- The unknown gets its own probe rather than a VR take. `X4VR_CAMPROBE_HZ` runs a
+  thread that does nothing but call the getter and bound-check the result, so it
+  can be run **flatscreen with no headset** — the cheapest configuration in which
+  it can fail. It is deliberately *not* part of the tick: the tick reads the
+  camera only after the freshness gate, and with no layer publishing there are no
+  fresh poses, so a flatscreen run of the tick would never reach the call under
+  test. An instrument that cannot execute the thing it measures has already
+  failed twice in this project.
+
+**Verified offline before handover**, because compiling is not running:
+
+- The cadence arithmetic, as a standalone program with a fake tick of controlled
+  duration: 90 Hz asked → **90.0 Hz achieved** (89.6 with 8 ms of work per tick).
+  With a 20 ms tick — longer than the 11.1 ms period — it degrades to 49.7 Hz
+  with a **minimum gap of 20.00 ms**, i.e. it drops ticks and never bursts. That
+  mattered: absolute deadlines make `clock_nanosleep` return immediately once the
+  deadline is past, so without the re-phase an overrunning tick would become a
+  busy loop pushing SDL events — take 119's livelock, rebuilt by accident.
+- The two-thread guard: 0 firings on 1000 single-thread calls, exactly 1 on
+  10000 calls across two threads.
+- `tests/headlook.cpp`: all cases pass, including the windup, spin-crossing and
+  #74 shift-frame sets.
+
+#### Why the tick rate is worth raising at all — checked first
+
+A driver that cannot act is the mistake this project has made most often, so
+before building it: does X4's camera rate follow **our tick** or **X4's frame
+rate**? From take 284's own log, restricted to windows where the camera was
+actually being driven:
+
+| t | tick | X4 fps | camera moved | moved/tick |
+|---|---|---|---|---|
+| 129 s | 51.0 Hz | 88.3 | 38.3 Hz | 0.76 |
+| 145 s | 58.5 Hz | 86.5 | 41.3 Hz | 0.72 |
+| 177 s | 28.8 Hz | 29.5 | 28.2 Hz | 0.98 |
+
+At 129–145 s the camera moves at ~0.7x the **tick** while X4 renders at 88 fps.
+**Tick-locked, not frame-locked** — so the fix can act, and at ~0.7–1.0 per tick a
+90 Hz tick should put X4's camera near 65–90 Hz instead of 40.
+
+That comparison also exposed a fifth instrument defect, from the same family as
+the other four: `inputrate`'s camera-movement figure is **bimodal** — take 284's
+deciles are 0, 0, 0, 0, 6.5, 51.8, 77.2, 92.7, 98.3 — and its median of 13.1%
+names the **empty valley between the two modes**, a value no window ever had. The
+zero mode is the first ~90 s, during which X4's camera did not move at all. The
+scorer now sets non-steering windows aside, reports the two modes, and says so.
+
+### P285 — committed before the run
+
+- **P285.1** `camprobe` survives. `GetCameraRotation` is a small getter over
+  cached state and I expect no crash and no out-of-range reading. If it *is*
+  unsafe, the tick driver must sample on X4's thread and pass the value across,
+  and that is a different and larger change.
+- **P285.2** `tickdrv` holds 90 Hz with **zero** re-phases, and `pumprate`
+  reports `acted on` above 95% — up from 51.8%. This is near-certain if the
+  driver runs at all: the cadence is ours and the publish rate is 90 Hz.
+- **P285.3** `inputrate`'s steering windows still show X4 acting on 0.7–1.0 of
+  our ticks, so X4's camera rate lands near 65–90 Hz instead of 40. **This is the
+  prediction that can fail**, and the one the whole change rests on: if X4's
+  consumption turns out to be frame-locked after all, `acted on` will read 99%
+  while the camera rate does not budge, and the win is nil.
+- **P285.4** The jitter is reduced but NOT gone. Rotation-only reprojection still
+  cannot repair content staleness for motion that is not pure rotation about the
+  eye, and X4's camera rotates about the ship's pivot. P285.3 bounds how much of
+  the jitter was ever the tick rate.
+
+P285.2 and P285.3 are independent: the first says the poses arrive, the second
+says X4 acts on them. Only the second is a fix.

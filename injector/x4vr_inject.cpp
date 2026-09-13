@@ -1096,6 +1096,16 @@ struct PumpRate {
     uint64_t p_pump = 0, p_peep = 0, p_wait = 0;
     double t_window = 0.0;
 } g_pumprate;
+
+// Written by whichever thread runs the tick, read by the off-thread camera probe
+// below, so the probe compares its own reading against one taken through X4's
+// normal call path. See camprobe_start() for what the probe is for.
+struct CamProbe {
+    std::atomic<uint64_t> calls{0}, nonzero{0}, absurd{0};
+    std::atomic<float> last_yaw{0.0f}, last_pitch{0.0f};
+    std::atomic<float> drain_yaw{0.0f};
+    std::atomic<uint32_t> drain_seen{0};
+} g_camprobe;
 // True while head-look is actually driving X4's camera; read by the event
 // drain to decide whether the player's own mouse motion should reach the view.
 std::atomic<bool> g_headlook_steering{false};
@@ -2096,6 +2106,33 @@ void send_key_down(int scancode);
 static void push_our_event(void *ev);
 void send_key(int scancode, bool down);
 
+// **Task #75's fix: where the tick's cadence comes from.**
+//
+// 0 = X4's event drain, exactly as every take so far. Anything else is a rate in
+// Hz, driven by a thread of ours.
+//
+// Take 284 measured the drain delivering 46.5 ticks/s against 89.9 poses
+// published, and `fresh / min(pump, published)` at 0.79 -- the polls arrive in
+// bursts, so publish intervals go unvisited even in windows that polled at
+// 422 Hz. The deficit is phase, not capacity, which is why polling harder is not
+// the answer and a cadence of our own is.
+//
+// It MOVES the tick; it never adds a second caller. headlook_tick keeps
+// non-atomic state -- `last_updates`, `stale`, the inputrate counters, the whole
+// of g_headlook -- so two threads in it would corrupt the servo, not merely
+// race a statistic. `tick_guard` below turns that constraint into something that
+// reports rather than something I have to remember.
+static int tick_hz() {
+    static const int hz = [] {
+        const char *e = getenv("X4VR_TICK_HZ");
+        const int v = e && *e ? atoi(e) : 0;
+        // 400 Hz is far above any display rate and still 45x below take 119's
+        // 18 kHz drain. Above that the push rate itself becomes the hazard.
+        return (v < 0 || v > 400) ? 0 : v;
+    }();
+    return hz;
+}
+
 void headlook_tick() {
     static const bool armed = [] {
         const char *e = getenv("X4VR_HEADLOOK");
@@ -2103,6 +2140,25 @@ void headlook_tick() {
     }();
     if (!armed || !this_is_the_game())
         return;
+    // A guard that can actually fail: it compares the thread now inside the tick
+    // against the one that was, and names both. Had this merely set a flag and
+    // returned, it could not distinguish "moved the tick" from "called it from
+    // two places", which is the mistake the driver exists to avoid.
+    {
+        static std::atomic<unsigned long> owner{0};
+        const unsigned long me = (unsigned long)pthread_self();
+        unsigned long prev = owner.exchange(me, std::memory_order_relaxed);
+        if (prev != 0 && prev != me) {
+            static std::atomic<bool> said{false};
+            if (!said.exchange(true, std::memory_order_relaxed))
+                X4VR_LOG("headlook: TWO THREADS are in headlook_tick (%lu and "
+                         "%lu). The servo's state is not atomic, so this "
+                         "corrupts the command rather than just the counters. "
+                         "X4VR_TICK_HZ is supposed to MOVE the tick, not add a "
+                         "caller — the drain's call is not being suppressed.",
+                         prev, me);
+        }
+    }
     g_pumprate.entered++;
 
     static x4vr::HeadShared *hs = x4vr_head_state();
@@ -2703,6 +2759,10 @@ void headlook_tick() {
             clamps++;
         if (have_cam) {
             const float c = kRad2Deg * -r.yaw;
+            // For camprobe to compare against. Whichever thread the tick is on,
+            // this is the reading taken through X4's own call path.
+            g_camprobe.drain_yaw.store(c, std::memory_order_relaxed);
+            g_camprobe.drain_seen.fetch_add(1, std::memory_order_relaxed);
             // Only a read that has a predecessor can show a change. Counting
             // the first one would credit a move that was never observed.
             if (have_last) {
@@ -2748,6 +2808,171 @@ void headlook_tick() {
                  d.dx, d.dy, d.clamped ? " CLAMPED" : "");
 }
 
+// The tick's own cadence. Started lazily from the drain hook, so it cannot exist
+// before X4 is up and SDL is running, and never exists in a non-game process.
+static void tick_driver_start() {
+    if (!tick_hz() || !this_is_the_game())
+        return;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        const int hz = tick_hz();
+        X4VR_LOG("headlook: tick driver is OURS at %d Hz — X4's event drain no "
+                 "longer calls the tick. Take 284 measured the drain delivering "
+                 "46.5 ticks/s against 89.9 poses published (0.79 of "
+                 "min(pump,published)); this run asks whether a cadence of our "
+                 "own reaches the publish rate. Watch `pumprate` for fresh, and "
+                 "`inputrate` for whether X4 still acts on ~0.7-1.0 per tick.",
+                 hz);
+        std::thread([hz] {
+            struct timespec next;
+            clock_gettime(CLOCK_MONOTONIC, &next);
+            const long period_ns = 1000000000L / (hz > 0 ? hz : 1);
+            uint64_t late = 0, ticks = 0, resync = 0;
+            double t_log = mono_seconds();
+            for (;;) {
+                next.tv_nsec += period_ns;
+                while (next.tv_nsec >= 1000000000L) {
+                    next.tv_nsec -= 1000000000L;
+                    next.tv_sec++;
+                }
+                // **Never spin to catch up.** With absolute deadlines, a tick
+                // that overruns its period leaves `next` in the past, and
+                // clock_nanosleep then returns immediately -- so a slow patch
+                // would turn this into a busy loop pushing SDL events as fast as
+                // it can, which is precisely take 119's drain livelock. If the
+                // deadline is more than two periods stale, give up the missed
+                // ticks and re-phase to now. Dropping ticks is the benign
+                // failure; bursting is not.
+                {
+                    struct timespec now_ts;
+                    clock_gettime(CLOCK_MONOTONIC, &now_ts);
+                    const double behind =
+                        (double)(now_ts.tv_sec - next.tv_sec) +
+                        (double)(now_ts.tv_nsec - next.tv_nsec) * 1e-9;
+                    if (behind > 2.0 * (double)period_ns * 1e-9) {
+                        next = now_ts;
+                        resync++;
+                    }
+                }
+                // Absolute deadlines, so a slow tick is absorbed instead of
+                // accumulating into drift. A relative sleep would make the real
+                // cadence (period + work), which is the rate this run is
+                // measuring -- the instrument would set its own answer.
+                clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, nullptr);
+                struct timespec now_ts;
+                clock_gettime(CLOCK_MONOTONIC, &now_ts);
+                const double slip = (now_ts.tv_sec - next.tv_sec) +
+                                    (now_ts.tv_nsec - next.tv_nsec) * 1e-9;
+                if (slip > 0.5 * period_ns * 1e-9)
+                    late++;
+                ticks++;
+                headlook_tick();
+                const double now = mono_seconds();
+                if (now - t_log >= 2.0) {
+                    // The cadence ACHIEVED, beside the one asked for. A driver
+                    // that reported only its setting could not tell a fix from a
+                    // thread that never ran.
+                    X4VR_LOG("tickdrv: asked %d Hz, ran %.1f Hz over %.2f s, "
+                             "%.1f%% of wakeups late by >half a period, %llu "
+                             "re-phase(s) after overrun",
+                             hz, ticks / (now - t_log), now - t_log,
+                             100.0 * (double)late / (double)(ticks ? ticks : 1),
+                             (unsigned long long)resync);
+                    ticks = late = resync = 0;
+                    t_log = now;
+                }
+            }
+        }).detach();
+    });
+}
+
+// **Task #75: is GetCameraRotation safe to call off X4's own thread?**
+//
+// This cannot be answered by reading -- X4 is closed source -- and its failure
+// mode is a crash, so it must not be answered inside a VR take. The probe runs
+// on its own thread at a set rate and does nothing but call the getter and
+// compare it against the last value X4's own thread read, so it can be run
+// FLATSCREEN with no headset: the cheapest configuration in which it can fail.
+//
+// It is deliberately NOT part of the tick. The tick reads the camera only after
+// the freshness gate, and with no layer publishing there are no fresh poses, so
+// a flatscreen run of the tick would never reach the call being tested. An
+// instrument that cannot execute the thing it measures has failed twice in this
+// project already.
+//
+// `disagree` is not itself a defect: the two threads sample at different
+// instants, so the values SHOULD differ while the camera moves. What would be a
+// defect is a value outside the plausible range, or the process dying.
+// (CamProbe itself is declared beside PumpRate, above — the tick writes to it.)
+
+static int camprobe_hz() {
+    static const int hz = [] {
+        const char *e = getenv("X4VR_CAMPROBE_HZ");
+        const int v = e && *e ? atoi(e) : 0;
+        return (v < 0 || v > 1000) ? 0 : v;
+    }();
+    return hz;
+}
+
+static void camprobe_start() {
+    if (!camprobe_hz() || !this_is_the_game())
+        return;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        const int hz = camprobe_hz();
+        X4VR_LOG("camprobe: starting a thread calling GetCameraRotation at %d "
+                 "Hz. This answers ONLY whether the call survives off X4's own "
+                 "thread — it drives nothing and steers nothing. Run it "
+                 "flatscreen first; if X4 dies, the tick driver must not call "
+                 "the getter from its thread.",
+                 hz);
+        std::thread([hz] {
+            struct timespec next;
+            clock_gettime(CLOCK_MONOTONIC, &next);
+            const long period_ns = 1000000000L / (hz > 0 ? hz : 1);
+            double t_log = mono_seconds();
+            for (;;) {
+                next.tv_nsec += period_ns;
+                while (next.tv_nsec >= 1000000000L) {
+                    next.tv_nsec -= 1000000000L;
+                    next.tv_sec++;
+                }
+                clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, nullptr);
+                X4Rotation r{};
+                if (!x4_camera_rotation(&r))
+                    continue;
+                const float y = kRad2Deg * -r.yaw, p = kRad2Deg * r.pitch;
+                g_camprobe.calls.fetch_add(1, std::memory_order_relaxed);
+                if (y != 0.0f || p != 0.0f)
+                    g_camprobe.nonzero.fetch_add(1, std::memory_order_relaxed);
+                // A free-look camera cannot be outside these bounds. Anything
+                // else means the read raced something, which is the finding.
+                if (!(y > -200.0f && y < 200.0f && p > -200.0f && p < 200.0f))
+                    g_camprobe.absurd.fetch_add(1, std::memory_order_relaxed);
+                g_camprobe.last_yaw.store(y, std::memory_order_relaxed);
+                g_camprobe.last_pitch.store(p, std::memory_order_relaxed);
+                const double now = mono_seconds();
+                if (now - t_log >= 2.0) {
+                    t_log = now;
+                    X4VR_LOG("camprobe: %llu call(s) off-thread, %llu non-zero, "
+                             "%llu ABSURD | probe %.3f,%.3f | X4-thread %.3f "
+                             "(seen %u) | alive",
+                             (unsigned long long)g_camprobe.calls.load(
+                                 std::memory_order_relaxed),
+                             (unsigned long long)g_camprobe.nonzero.load(
+                                 std::memory_order_relaxed),
+                             (unsigned long long)g_camprobe.absurd.load(
+                                 std::memory_order_relaxed),
+                             y, p,
+                             g_camprobe.drain_yaw.load(std::memory_order_relaxed),
+                             g_camprobe.drain_seen.load(
+                                 std::memory_order_relaxed));
+                }
+            }
+        }).detach();
+    });
+}
+
 // **Task #75: one line that accounts for every published pose.**
 //
 // Called from the same site as headlook_tick, under the same condition, so the
@@ -2784,16 +3009,23 @@ void pumprate_report() {
             : 0;
     const auto hz = [&](uint64_t c) { return dt > 0.0 ? (double)c / dt : 0.0; };
 
+    char tickdrv[32];
+    if (tick_hz())
+        snprintf(tickdrv, sizeof(tickdrv), "ours@%dHz", tick_hz());
+    else
+        snprintf(tickdrv, sizeof(tickdrv), "drain");
+
     X4VR_LOG("pumprate: %.2f s | pump %.1f Hz peep %.1f Hz wait %.1f Hz | "
              "tick entered %.1f Hz, nopose %llu, fresh %.1f Hz, skipped %.1f Hz "
              "| layer published %.1f Hz | acted on %.1f%% of published | "
-             "driver=%s",
+             "driver=%s tick=%s",
              dt, hz(pump), hz(peep), hz(wait), hz(g_pumprate.entered),
              (unsigned long long)g_pumprate.nopose, hz(g_pumprate.fresh),
              hz(g_pumprate.skipped), hz(published),
              published ? 100.0 * (double)g_pumprate.fresh / (double)published
                        : 0.0,
-             g_pump_seen.load(std::memory_order_relaxed) ? "pump" : "peep");
+             g_pump_seen.load(std::memory_order_relaxed) ? "pump" : "peep",
+             tickdrv);
 
     g_pumprate.p_pump = cp;
     g_pumprate.p_peep = cq;
@@ -3010,7 +3242,13 @@ void SDL_PumpEvents(void) {
             X4VR_LOG("sdl: SDL_PumpEvents is called — head-look drives from "
                      "here, not from inside the drain");
         g_pumprate.pump.fetch_add(1, std::memory_order_relaxed);
-        headlook_tick();
+        // Started here rather than in the constructor: this is the first point
+        // at which X4 is provably running its own event loop.
+        tick_driver_start();
+        camprobe_start();
+        // MOVED, not duplicated — see the two-thread guard in headlook_tick.
+        if (!tick_hz())
+            headlook_tick();
         panprobe_tick();
         pumprate_report();
     }
@@ -3062,7 +3300,10 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
     if (this_is_the_game())
         g_pumprate.peep.fetch_add(1, std::memory_order_relaxed);
     if (this_is_the_game() && !g_pump_seen.load(std::memory_order_relaxed)) {
-        headlook_tick();
+        tick_driver_start();
+        camprobe_start();
+        if (!tick_hz())
+            headlook_tick();
         panprobe_tick();
         pumprate_report();
     }

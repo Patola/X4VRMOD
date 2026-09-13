@@ -2620,12 +2620,66 @@ def main(path):
         r"([\d.]+)% \(=([\d.]+) Hz\) \| camera read on ([\d.]+)% of ticks, "
         r"moved on ([\d.]+)% of READS \(=([\d.]+) Hz\) \| clamped ([\d.]+)%",
         text)
+    # Current shape, with `steering` as the send's denominator. Named groups: the
+    # positional form of this block has already produced two wrong readings.
+    ir3 = [m.groupdict() for m in re.finditer(
+        r"inputrate: (?P<ticks>\d+) ticks in (?P<secs>[\d.]+) s = "
+        r"(?P<hz>[\d.]+) Hz \| steering on (?P<steer>[\d.]+)% of ticks, delta "
+        r"sent on (?P<sent>[\d.]+)% of STEERING ticks \(=(?P<senthz>[\d.]+) Hz\)"
+        r" \| camera read on (?P<read>[\d.]+)% of ticks, moved on "
+        r"(?P<cam>[\d.]+)% of READS \(=(?P<camhz>[\d.]+) Hz\) \| clamped "
+        r"(?P<clamp>[\d.]+)%", text)]
+    if ir3:
+        def med(xs):
+            s = sorted(xs)
+            return s[len(s) // 2]
+        # Only the STEERING windows can speak to whether X4 acts on what we
+        # send — take 284's protocol had a 20 s still segment and a 21 s map
+        # segment, and scoring those together produced "delta sent on 100.0%
+        # against a camera moving on 13.1%" and the verdict that X4 was ignoring
+        # us. Windows with no steering are counted and set aside, not averaged in.
+        on = [g for g in ir3 if float(g["steer"]) > 50.0]
+        off = len(ir3) - len(on)
+        ticks = sum(int(g["ticks"]) for g in ir3)
+        secs = sum(float(g["secs"]) for g in ir3)
+        hzs = [float(g["hz"]) for g in ir3]
+        print(f"inputrate  {len(ir3)} windows, {ticks} ticks over {secs:.0f} s | "
+              f"tick {med(hzs):.1f} Hz median (range {min(hzs):.1f}-"
+              f"{max(hzs):.1f}) | {off} window(s) had no steering and are set "
+              f"aside")
+        if on:
+            cams = [float(g["cam"]) for g in on]
+            sents = [float(g["sent"]) for g in on]
+            reads = [float(g["read"]) for g in on]
+            ticks_on = med([float(g["hz"]) for g in on])
+            print(f"inputrate  steering windows ({len(on)}): delta sent on "
+                  f"{med(sents):.1f}% of them, camera readable on "
+                  f"{med(reads):.1f}%, camera moved on {med(cams):.1f}% of reads"
+                  f" — i.e. {med(cams) / 100.0 * ticks_on:.1f} Hz against a "
+                  f"{ticks_on:.1f} Hz tick")
+            # Bimodal by construction: a window either has the camera moving or
+            # it does not. Take 284's deciles were 0,0,0,0,6.5,51.8,77.2,92.7,
+            # 98.3 and its median of 13.1% named the empty valley between the two
+            # modes — a value no window actually had.
+            lo = sum(1 for c in cams if c < 20.0)
+            hi = sum(1 for c in cams if c > 60.0)
+            if lo and hi:
+                print(f"inputrate  NOTE: that distribution is BIMODAL — "
+                      f"{lo} window(s) below 20% and {hi} above 60%. The median "
+                      f"names the gap between them and describes neither; read "
+                      f"the two modes, not the middle.")
+            if hi:
+                act = med([c for c in cams if c > 60.0])
+                print(f"inputrate  => where the camera was actually being "
+                      f"driven, X4 acted on {act:.1f}% of our ticks. So X4's "
+                      f"camera rate tracks the TICK rate, and raising the tick "
+                      f"raises it — which is what X4VR_TICK_HZ tests.")
     # The line changed shape when the window and the denominator were fixed. A
     # regex that silently matches nothing would read an older log as "the
     # instrument was not running", so the old shape is recognised and named.
     ir_old = re.findall(r"inputrate: (\d+) ticks in ([\d.]+) s = ([\d.]+) Hz "
                         r"\|.*X4 camera moved on ([\d.]+)%", text)
-    if not ir and ir_old:
+    if not ir and not ir3 and ir_old:
         print(f"inputrate  {len(ir_old)} lines, but in the PRE-FIX cumulative "
               f"format: totals since the first tick, and `cam_moved` divided by "
               f"all ticks rather than by reads. Last line says "
@@ -2716,11 +2770,22 @@ def main(path):
     # is gated on !g_pump_seen, so that path has been dead code throughout --
     # which makes the "~18 kHz" in headlook_tick's comment a fact about a hook
     # that does not drive anything.
-    pr = re.findall(
-        r"pumprate: ([\d.]+) s \| pump ([\d.]+) Hz peep ([\d.]+) Hz wait "
-        r"([\d.]+) Hz \| tick entered ([\d.]+) Hz, nopose (\d+), fresh "
-        r"([\d.]+) Hz, skipped ([\d.]+) Hz \| layer published ([\d.]+) Hz \| "
-        r"acted on ([\d.]+)% of published \| driver=(\w+)", text)
+    # `tick=` is optional: takes 284 and earlier predate the driver, and a regex
+    # that silently matched nothing would read those logs as having no instrument
+    # at all rather than as having the drain-driven one.
+    # NAMED groups, and dicts rather than tuples. This one line has twelve fields
+    # and I have now mis-indexed it TWICE in one sitting — once shifting
+    # fresh/nopose/skipped by one while reading the log by hand, once reading
+    # `tick=` as `driver=` here, which silently disabled the whole driver verdict
+    # while every other line looked right. A twelve-field positional tuple is a
+    # defect waiting for its next reader.
+    pr = [m.groupdict() for m in re.finditer(
+        r"pumprate: (?P<dt>[\d.]+) s \| pump (?P<pump>[\d.]+) Hz peep "
+        r"(?P<peep>[\d.]+) Hz wait (?P<wait>[\d.]+) Hz \| tick entered "
+        r"(?P<ent>[\d.]+) Hz, nopose (?P<nopose>\d+), fresh (?P<fresh>[\d.]+) Hz,"
+        r" skipped (?P<skip>[\d.]+) Hz \| layer published (?P<pub>[\d.]+) Hz \| "
+        r"acted on (?P<acted>[\d.]+)% of published \| driver=(?P<driver>\w+)"
+        r"(?: tick=(?P<tick>\S+))?", text)]
     if pr:
         def med(xs):
             s = sorted(xs)
@@ -2731,18 +2796,19 @@ def main(path):
         # take 284's line read 60.5 = 51.7 + 23.0 and look self-inconsistent when
         # the data was exact. A statistic that cannot express an identity the
         # data satisfies is the wrong statistic.
-        secs = sum(float(g[0]) for g in pr)
+        secs = sum(float(g["dt"]) for g in pr)
 
-        def rate(i):
-            return sum(float(g[i]) * float(g[0]) for g in pr) / secs
-        pump, peep, wait = rate(1), rate(2), rate(3)
-        entered, fresh, skipped, pub = rate(4), rate(6), rate(7), rate(8)
-        nopose = sum(int(g[5]) for g in pr)
+        def rate(k):
+            return sum(float(g[k]) * float(g["dt"]) for g in pr) / secs
+        pump, peep, wait = rate("pump"), rate("peep"), rate("wait")
+        entered, fresh = rate("ent"), rate("fresh")
+        skipped, pub = rate("skip"), rate("pub")
+        nopose = sum(int(g["nopose"]) for g in pr)
         acted = 100.0 * fresh / pub if pub else 0.0
-        driver = pr[-1][10]
-        pubs = [float(g[8]) for g in pr]
-        freshes = [float(g[6]) for g in pr]
-        pumps = [float(g[1]) for g in pr]
+        driver = pr[-1]["driver"]
+        pubs = [float(g["pub"]) for g in pr]
+        freshes = [float(g["fresh"]) for g in pr]
+        pumps = [float(g["pump"]) for g in pr]
         print(f"pumprate   {len(pr)} windows over {secs:.0f} s | driver="
               f"{driver} | pump {pump:.1f} Hz (range {min(pumps):.1f}-"
               f"{max(pumps):.1f}), peep {peep:.1f} Hz, wait {wait:.1f} Hz")
@@ -2762,9 +2828,10 @@ def main(path):
         # group comparison — two self-selected groups of windows differ in head
         # speed and frame rate as well as in poll rate, so a fast-vs-slow split
         # cannot attribute the difference to polling.
-        ratio = sorted((float(g[6]) / min(float(g[1]), float(g[8])), float(g[1]),
-                        float(g[8]), float(g[6]))
-                       for g in pr if min(float(g[1]), float(g[8])) > 1.0)
+        ratio = sorted((float(g["fresh"]) / min(float(g["pump"]), float(g["pub"])),
+                        float(g["pump"]), float(g["pub"]), float(g["fresh"]))
+                       for g in pr
+                       if min(float(g["pump"]), float(g["pub"])) > 1.0)
         if ratio:
             mid = ratio[len(ratio) // 2][0]
             # The window that polled hardest: does over-polling ever saturate?
@@ -2787,10 +2854,41 @@ def main(path):
                       f"119's runaway in miniature and not a lever to pull. The "
                       f"fix is to stop deriving the tick from the drain at all.")
         drv = pump if driver == "pump" else peep
+        # Which cadence the tick ran on decides what every number above means.
+        # With our own driver, `pump` is no longer the tick's supply and the
+        # hook branches below would be answering a question the run retired.
+        tickmode = pr[-1]["tick"] or "drain"
+        asked = None
+        m_tick = re.match(r"ours@(\d+)Hz", tickmode)
+        if m_tick:
+            asked = float(m_tick.group(1))
+            print(f"pumprate   tick driver is OURS at {asked:.0f} Hz — `pump` is "
+                  f"X4's drain rate and no longer the tick's supply.")
+            if entered < 0.85 * asked:
+                print(f"pumprate   => THE DRIVER DID NOT RUN at its rate: asked "
+                      f"{asked:.0f} Hz, the tick was entered {entered:.1f} Hz. "
+                      f"Read `tickdrv` before anything else — nothing below "
+                      f"speaks to the fix until the cadence is real.")
+            elif acted >= 95.0:
+                print(f"pumprate   => FIXED. {acted:.1f}% of published poses "
+                      f"reached the servo at {fresh:.1f} Hz against "
+                      f"{pub:.1f} Hz published, up from take 284's 51.8% on the "
+                      f"drain. Judge the jitter on the headset, and check "
+                      f"`inputrate` for whether X4 still acts on ~0.7-1.0 per "
+                      f"tick — if it does, X4's camera rate roughly doubled.")
+            else:
+                print(f"pumprate   => the driver ran ({entered:.1f} Hz) but only "
+                      f"{acted:.1f}% of publishes produced a tick. At a cadence "
+                      f"at or above the publish rate the freshness gate should "
+                      f"catch nearly all of them, so this is the gate or the "
+                      f"phase, not the rate: {skipped:.1f} Hz of ticks saw no "
+                      f"new pose.")
         if pub <= 0.0:
             print("pumprate   => the layer published NOTHING in the median "
                   "window. Either head-look was not armed or the layer was not "
                   "loaded; nothing below this line means anything.")
+        elif asked is not None:
+            pass  # the driver branch above is the verdict; the hook ones are moot
         elif acted >= 90.0:
             print(f"pumprate   => NO loss here. {acted:.1f}% of published poses "
                   f"reached the servo, so the ~55 Hz tick of take 283 was the "
@@ -2830,7 +2928,8 @@ def main(path):
         # (PollEvent(&e))` drain calls BOTH once per iteration, so the pair rate
         # is the iteration count and 18 kHz was take 119's own 3.2-million-event
         # flood making that loop spin. Our injected events still inflate it.
-        eq = sum(1 for g in pr if abs(float(g[1]) - float(g[2])) < 0.01)
+        eq = sum(1 for g in pr
+                 if abs(float(g["pump"]) - float(g["peep"])) < 0.01)
         if eq > 0.9 * len(pr):
             print(f"pumprate   pump == peep in {eq}/{len(pr)} windows, to the "
                   f"count — X4 calls them as a PAIR, which is what a `while "
@@ -2840,6 +2939,81 @@ def main(path):
                   f"own signal and must not be read as X4's poll rate. The "
                   f"~18 kHz in x4vr_headlook.hpp was this loop spinning on take "
                   f"119's 3.2 million queued key events.")
+
+    # --- task #75: did our own tick cadence actually run? -------------------
+    #
+    # Reported separately from `pumprate` because "the driver ran at 90 Hz" and
+    # "the servo ticked 90 times a second" are different claims, and a driver
+    # that reported only its SETTING could not tell a working fix from a thread
+    # that never started. The re-phase count is the safety net: with absolute
+    # deadlines, a tick slower than its period would otherwise busy-loop pushing
+    # SDL events, which is take 119's drain livelock.
+    td = re.findall(r"tickdrv: asked (\d+) Hz, ran ([\d.]+) Hz over ([\d.]+) s, "
+                    r"([\d.]+)% of wakeups late by >half a period, (\d+) "
+                    r"re-phase\(s\) after overrun", text)
+    if td:
+        def med(xs):
+            s = sorted(xs)
+            return s[len(s) // 2]
+        ask = float(td[-1][0])
+        ran = med([float(g[1]) for g in td])
+        lates = med([float(g[3]) for g in td])
+        resync = sum(int(g[4]) for g in td)
+        rans = [float(g[1]) for g in td]
+        print(f"tickdrv    {len(td)} window(s) | asked {ask:.0f} Hz, ran "
+              f"{ran:.1f} Hz median (range {min(rans):.1f}-{max(rans):.1f}), "
+              f"{lates:.1f}% of wakeups late, {resync} re-phase(s)")
+        if ran < 0.85 * ask:
+            print(f"tickdrv    => the cadence was NOT achieved ({ran:.1f} of "
+                  f"{ask:.0f} Hz). With {resync} re-phase(s) the tick is "
+                  f"overrunning its period, so the servo is being starved by its "
+                  f"own driver and the run does not test the fix.")
+        elif resync > 0:
+            print(f"tickdrv    NOTE: {resync} re-phase(s) — some ticks ran long "
+                  f"enough to miss a deadline by over two periods. Ticks were "
+                  f"DROPPED rather than bursting, which is the intended failure, "
+                  f"but a large count means the tick itself is too slow.")
+        else:
+            print(f"tickdrv    => cadence held at {ran:.1f} Hz with no "
+                  f"re-phasing, so the rate below is the one asked for.")
+
+    # --- task #75: is GetCameraRotation safe off X4's own thread? -----------
+    #
+    # The question is whether X4 survives and whether the value is sane — NOT
+    # whether the two threads agree. They sample at different instants, so while
+    # the camera moves they SHOULD differ; agreement would mean the probe was
+    # reading a stale copy.
+    cp = re.findall(r"camprobe: (\d+) call\(s\) off-thread, (\d+) non-zero, "
+                    r"(\d+) ABSURD \| probe (-?[\d.]+),(-?[\d.]+) \| "
+                    r"X4-thread (-?[\d.]+) \(seen (\d+)\)", text)
+    if cp:
+        calls, nz, absurd = (int(cp[-1][0]), int(cp[-1][1]), int(cp[-1][2]))
+        print(f"camprobe   {calls} off-thread GetCameraRotation call(s), {nz} "
+              f"non-zero, {absurd} outside +/-200 deg, over {len(cp)} report(s)")
+        if absurd:
+            print(f"camprobe   => UNSAFE: {absurd} reading(s) outside any "
+                  f"possible camera angle. The getter races something when "
+                  f"called off X4's thread, so the tick driver must NOT call it "
+                  f"from its own thread — sample it on X4's thread and pass the "
+                  f"value across.")
+        elif nz == 0:
+            print(f"camprobe   => INCONCLUSIVE: every reading was 0,0, so the "
+                  f"camera never moved and the call was never exercised against "
+                  f"live state. Free-look has to be active during the probe for "
+                  f"this to mean anything.")
+        else:
+            print(f"camprobe   => the call SURVIVED {calls} off-thread "
+                  f"invocations with {nz} live non-zero readings and nothing out "
+                  f"of range. That is evidence it does not crash or tear, not a "
+                  f"proof of thread-safety; it is the configuration the tick "
+                  f"driver needs, exercised in the cheapest place it could fail.")
+
+    if "TWO THREADS are in headlook_tick" in text:
+        fails.append("two threads entered headlook_tick — the servo's state is "
+                     "not atomic, so the command itself is corrupt, not just "
+                     "the counters. X4VR_TICK_HZ must MOVE the tick, not add a "
+                     "caller: the drain's call was not suppressed. Every "
+                     "head-look number in this run is void.")
 
     # --- task #75: which per-view member carries the SMOOTH camera ----------
     #
