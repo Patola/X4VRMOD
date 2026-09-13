@@ -17937,3 +17937,85 @@ The oscillation of 285b/287b is therefore **not in the plant**, and
 either. What remains unexplained is 290b's response *width* — 49% in one step
 with no coast — which is neither smoothing nor a clean delay, and the isolated
 0.50 bump at lag +7 that goes with it.
+
+### The width difference, characterised: it is bucket size, and the real quantity is JITTER
+
+Decomposing the impulse response per lag instead of reading the pooled mean:
+
+```
+take 290a   lag  0    1     2     3..7          take 290b   lag 0..3        4..7
+  MEAN         0.18 0.72  2.87  0.00              MEAN        0.09 .. 0.49  0.005 .. 0.50
+  MEDIAN       0.00 0.00  0.46  0.00              MEDIAN      0.00 .. 0.00  0.00  .. 0.00
+```
+
+**The median is 0.000 at every lag in both takes.** Each impulse's response lands
+in exactly ONE step — whichever one the camera happened to move in — and zero in
+all the others. The "impulse response" is a mean over 42 sparse windows, so what
+it measures is the *distribution of arrival step*, not a plant shape. In 290b,
+three windows supply **77%** of all the mass past lag 4; one of them is the whole
+11.918 deg command landing at lag 7.
+
+Measured in milliseconds instead of bucket indices — per impulse, bracketed by
+the step's own timestamps:
+
+| | tick | step size | latency median | p10 | p90 | max | **p90−p10** |
+|---|---|---|---|---|---|---|---|
+| 290a | 28.2 Hz | 35 ms | 108.8 ms | 39.0 | 139.5 | 162 | **100.5 ms** |
+| 290b | 75.1 Hz | 11 ms | 52.8 ms | 38.5 | 128.0 | 167 | **89.5 ms** |
+
+The medians differ because the buckets differ; **the spread agrees**. All 42
+impulses resolve in both arms, and there is no dependence on command size —
+correlation **+0.03** and **−0.18** across 2 to 104 counts, with every size
+spanning roughly 25–165 ms.
+
+**So X4's input-to-camera latency is not a constant to be compensated. It wanders
+over roughly 40–165 ms, about 90–100 ms of jitter, at both tick rates.** The
+"width" difference between the arms was 35 ms buckets against 11 ms buckets and
+nothing else.
+
+#### My control table was built on windows where the servo was not running
+
+Restricting `inputrate` to windows with steering above 50% **and** deltas going
+out above 5 Hz — the windows where the servo was actually working:
+
+| take | tick rate | Patola's report |
+|---|---|---|
+| 287a | **28.0 Hz** | ghosting, camera fine |
+| 285b-s1 | 68.6 Hz | no wild report |
+| 285b-s2 | 70.7 Hz | **WENT WILD** |
+| 287b | 69.7 Hz | **WENT WILD** |
+| 280–284 | *no such window exists* | — |
+
+Two corrections to what this document said before. Take 287a ran at **28.0 Hz**
+where it mattered, not the 50.1 Hz median I quoted over all windows — the idle
+windows were dragging it up. And takes 280–284 **never exercised the servo at
+all**, so their "0.0–0.5% slam" was the slam rate of a servo that was not
+running. They are silent on this question, not evidence for it. Same error as
+[[x4vr-window-from-system-state]]: a measurement window chosen by something other
+than the program's own record of what it was doing.
+
+#### P291 — the jitter, not the delay, and it was committed before the run
+
+`tests/servo_rate.cpp` section 5 swept a **fixed** delay: calm to 5 ticks, at the
+clamp by 6. The measured 40–165 ms in ticks is 1–5 at 28 Hz and 2–12 at 70 Hz.
+
+Driven with the measured distribution — order preserved, since X4 applies deltas
+in the order it dequeues them — against the real `head_look_step`:
+
+| tick Hz | delay range | slam | max \|cam\| | reversals | |
+|---|---|---|---|---|---|
+| 28.0 | 1–5 | **0.0%** | 20.47 | 0 | 287a: calm |
+| 50.0 | 2–9 | 12.6% | 65.00 | 12 | no take ran here |
+| 68.6 | 2–12 | 14.8% | 65.00 | 6 | 285b-s1: not reported wild |
+| 70.7 | 2–12 | **14.9%** | **65.00** | 7 | 285b-s2 / 287b: **WENT WILD** |
+
+**Both halves of P291 confirmed.** A latency that jitters over a fixed band in
+*milliseconds* spans more *ticks* the faster we tick, and crosses section 5's
+threshold between 28 and 70 Hz — which is exactly the variable that separates the
+calm session from the wild ones.
+
+**What does not fit, stated rather than smoothed over:** 285b-s1 ran at 68.6 Hz,
+the same rate as the two wild sessions, and was not reported wild. The model
+calls it 14.8%. A marginally unstable loop needs excitation to show it, and "no
+wild report" is weaker evidence than "went wild" — but it is one of only four
+labelled sessions and it does not support the model. #75 is not closed on this.

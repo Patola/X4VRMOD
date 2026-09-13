@@ -57,6 +57,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <random>
 #include <vector>
 
 static int g_fail = 0;
@@ -409,6 +410,114 @@ int main() {
                 "past the %d above.\n        If it is fixed in FRAMES it stays "
                 "3 and this is not the cause.\n        One plantid run at 90 Hz "
                 "reports which.\n", reaches_clamp_at);
+
+    // ---- 6. the plant's latency JITTERS, and that is not a fixed delay ----
+    //
+    // Takes 290a/290b measured X4's input-to-camera latency per impulse, in
+    // milliseconds, independent of the sampling bucket:
+    //
+    //   290a (28.2 Hz tick)   median 108.8 ms   p10 39.0   p90 139.5   max 162
+    //   290b (75.1 Hz tick)   median  52.8 ms   p10 38.5   p90 128.0   max 167
+    //
+    // The medians differ because 290a's buckets are 35 ms and 290b's are 11, but
+    // the SPREAD agrees: 100.5 ms against 89.5 ms, p90-p10, with no dependence on
+    // command size (corr +0.03 and -0.18 across 2 to 104 counts). So the plant's
+    // latency is not a constant to be compensated -- it wanders over roughly
+    // 40-165 ms, and the servo cannot know where in that range any given command
+    // will land.
+    //
+    // Section 5 swept a FIXED delay and found the loop calm to 5 ticks and at the
+    // clamp by 6. In ticks, the measured range is:
+    //
+    //   at 29 Hz (34.5 ms ticks)   1.2 - 4.8 ticks   -- never reaches 6
+    //   at 90 Hz (11.1 ms ticks)   3.6 - 14.9 ticks  -- past 6 for most of it
+    //
+    // **P291, committed before this runs: a delay jittering over the measured
+    // range destabilises the loop at 90 Hz and not at 29 Hz.** If both stay calm,
+    // jitter is not the mechanism either and section 5's threshold is the wrong
+    // lens. If BOTH go unstable, the tick rate is not what separates the wild
+    // sessions from the calm ones and the 4-of-4 correlation was luck.
+    std::printf("\n6. the MEASURED latency, which jitters over 40-165 ms\n");
+    std::printf("%10s %9s %9s %10s %10s %10s\n", "tick Hz", "delay lo",
+                "delay hi", "slam%", "max |cam|", "reversals");
+    struct Arm { double hz; const char *note; };
+    // **The rates are taken from windows where the servo was actually
+    // WORKING** -- steering above 50% and deltas going out above 5 Hz. Measured
+    // over all windows instead, takes 280-284 looked like calm 30-60 Hz
+    // sessions; they have no such window at all, so they never exercised the
+    // servo and cannot discriminate anything. And take 287a, which I listed as
+    // a calm 50 Hz arm, ran at 28.0 Hz where it mattered.
+    const Arm arms[] = {{28.0, "287a: calm"}, {50.0, "no take ran here"},
+                        {68.6, "285b-s1: not reported wild"},
+                        {70.7, "285b-s2 / 287b: WENT WILD"}};
+    bool wild_at_90 = false, calm_at_29 = false;
+    for (const Arm &a : arms) {
+        const double tick_ms = 1000.0 / a.hz;
+        const int lo = (int)std::floor(40.0 / tick_ms);
+        const int hi = (int)std::ceil(165.0 / tick_ms);
+        // A jittering delay must NOT reorder: X4 applies mouse deltas in the
+        // order it dequeues them. Each command gets a due tick, clamped to be no
+        // earlier than the previous one's, and everything due is released.
+        x4vr::HeadLook s2;
+        s2.gain_deg_per_count = 0.115f;
+        s2.servo_kp = 0.25f;
+        s2.lead_scale = 1.0f;
+        Plant p;
+        p.period = 1;
+        p.delay = 0;
+        p.arm();
+        std::mt19937 rng(20260913u);
+        std::uniform_int_distribution<int> jit(lo, hi);
+        std::vector<std::pair<int, float>> q; // (due tick, degrees)
+        int last_due = -1;
+        double prev_pub = 0.0, prev_vel = 0.0;
+        int updates = 0, reversals = 0;
+        double max_move = 0.0, max_exc = 0.0, slam = 0.0;
+        const int steps = (int)(a.hz * 20.0);
+        for (int i = 0; i < steps; i++) {
+            x4vr::head_look_observe(s2, p.pub_yaw, p.pub_pitch);
+            const x4vr::HeadAngles head = turning(i, 0.5, 20.0);
+            const x4vr::Delta d = x4vr::head_look_step(s2, head);
+            int due = i + jit(rng);
+            if (due < last_due)
+                due = last_due;
+            last_due = due;
+            q.emplace_back(due, s2.sign_yaw * (float)d.dx * s2.gain_deg_per_count);
+            float land = 0.0f;
+            for (size_t k = 0; k < q.size();) {
+                if (q[k].first <= i) { land += q[k].second; q.erase(q.begin() + (long)k); }
+                else break;          // ordered, so the first not-due ends it
+            }
+            p.yaw = x4vr::clampf(p.yaw + land, -p.yaw_limit, p.yaw_limit);
+            p.pub_yaw = p.yaw;
+            const double vel = (double)p.pub_yaw - prev_pub;
+            const double move = std::fabs(vel);
+            if (updates > 0) {
+                if (move > 20.0) slam += 1.0;
+                max_move = std::fmax(max_move, move);
+                if (updates > 1 && vel * prev_vel < 0.0) reversals++;
+            }
+            prev_vel = vel;
+            prev_pub = p.pub_yaw;
+            updates++;
+            max_exc = std::fmax(max_exc, std::fabs((double)p.yaw));
+        }
+        slam = updates > 1 ? 100.0 * slam / (double)(updates - 1) : 0.0;
+        std::printf("%10.1f %9d %9d %9.1f%% %10.2f %10d   %s\n", a.hz, lo, hi,
+                    slam, max_exc, reversals, a.note);
+        if (a.hz >= 70.0 && max_exc >= 64.9) wild_at_90 = true;
+        if (a.hz <= 29.0 && max_exc < 40.0) calm_at_29 = true;
+    }
+    // **"every pre-driver session was calm" is NOT supported and is not
+    // claimed.** Takes 280-284 have no window where the servo was working, so
+    // they are silent on this, not evidence for it. The only measured calm arm
+    // with the servo actually running is take 287a, at 28.0 Hz.
+    check(calm_at_29,
+          "P291: at 28.0 Hz the jittering delay stays calm, which is where take "
+          "287a ran with the servo working and the camera fine");
+    check(wild_at_90,
+          "P291: at ~70 Hz the SAME jitter reaches X4's clamp — the rate at "
+          "which 285b-s2 and 287b went wild, and the only variable that moved");
 
     std::printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n",
                 g_fail);
