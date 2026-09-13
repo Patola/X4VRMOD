@@ -17357,3 +17357,118 @@ not wrong, it is too permissive for this rate** — and that is a hypothesis abo
 a fix, so it gets tested offline before any take, like the last two.
 
 `X4VR_TICK_HZ` stays unused until then; it is off by default.
+
+### The withdrawal: the camera was never being commanded
+
+**Everything under "And the cause, which none of the three was" above is wrong,
+and this is how.** The `camread` lines quoted there are real, and X4's camera
+really does read exactly `0.0000,0.0000` for the whole run-up. The causal story
+built on them is not: **we were not sending anything during that window.**
+
+`send_mouse_delta` is gated on `steering`, and `inputrate` counts that same
+variable. In take 287b every window from t=0 to t=98.8 s reads `steering on 0.0%
+of ticks`. The camera comes alive at t=100.60 and tracks the head immediately and
+well — X4 +0.11 against head +0.15, X4 −9.28 against head −8.89, X4 −3.67 against
+head −3.65. **The first blow-up is at t≈103.5, three seconds after engagement,
+with the camera live and non-zero throughout.** Nothing accumulated, because
+`head_look_observe` re-pins `cmd` to X4's zero at the top of every tick and the
+step is re-derived from the head — which is why the log prints the same `cmd
+0.46,1.73` over and over instead of a rising number.
+
+I read `camread` lines from the idle phase and attributed them to the wild phase.
+The steering state was in the same log, in a line the scorer already parses. This
+is `window-from-system-state` exactly: a verdict whose measurement window came
+from somewhere other than the program's own record of its state.
+
+#### So the dead-camera gate was not built
+
+Swept across every take carrying an `inputrate` line — **1245 s** of instrumented
+ticks, 669 s of it live steering — the number of 2 s windows that sent a delta
+into a frozen camera is **zero**. The single near-miss is one 2 s window of take
+287a at 1.0 Hz of sending. The `steering` predicate (cockpit ∧ HUD ∧ relative
+mouse) already covers the hazard completely, and a new gate in the servo's
+control path is the exact shape of thing that broke head tracking three times.
+
+#### What the poselag stream actually measures
+
+`camread` prints one tick in 30 and was aliasing a full oscillation. `poselag`
+runs at frame rate and carries `x4=` and `cmd=` together, so the loop can be read
+per camera update. Servo ticks per camera update, and camera updates moving more
+than 20° — the slam itself:
+
+| take | tick driver | Patola's report | cam Hz | N med | N max | slam |
+|---|---|---|---|---|---|---|
+| 278–284 | none | — | 30–48 | 1.0 | 4–6 | 0.0–0.5% |
+| 287a | drain | ghosting, camera fine | 29.4 | 1.0 | 4 | **0.0%** |
+| 285b-s1 | 90 Hz | no wild report | 62.5 | 1.0 | 6 | **0.0%** |
+| 285b-s2 | 90 Hz | **went wild** | 58.8 | 1.0 | 11 | **7.1%** |
+| 287b | 90 Hz | **went wild** | 55.6 | 1.0 | 7 | **7.5%** |
+
+The statistic agrees with his eye on 4 of 4 labelled sessions, and 285b-s1 is the
+control that makes it worth something: same binary, same knobs, same tick driver,
+0.0%.
+
+#### P288.1 and P288.2 — the rate mismatch, refuted offline
+
+X4 reports at 30–60 Hz while `X4VR_TICK_HZ` steps the servo at 90, and
+`head_look_observe` overwrites `cmd` every tick — so on the ticks between two
+camera updates the servo re-observes a reading it has already acted on and sends
+the same correction again. M commands per intended correction is a loop gain of
+M·kp. `tests/servo_rate.cpp` drives the real `head_look_step` against a plant
+whose *report* rate is decoupled from the step rate (`tests/servo_lag.cpp` steps
+its plant once per servo step, so it cannot express the question at all).
+
+Both predictions were committed in the file before it was run, and both hold:
+
+- **P288.1 confirmed.** The first period that slams is **11** (loop gain 2.75).
+  The measured median is 1–2. The control passes: period 1 is calm, matching the
+  takes without the driver.
+- **P288.2 confirmed.** With the head frozen and the camera thrown to the +65
+  clamp, the model settles to **0.000°/update** at every period up to 4. Patola
+  held his head still mid-oscillation and it did not cure it, so his observation
+  refutes this mechanism on its own.
+
+#### The gain mismatch, refuted from the logs
+
+The same harness shows a **8.7×** gain error is enough on its own with the rates
+matched. Measured instead of assumed: realised move over commanded move, on the
+updates where exactly one command acted and the axis was not on X4's stop, binned
+by command size across takes 280–287b — **1.00 at every size in every take**,
+including 8–12° commands in 287b. X4 applies what we send, at the gain we
+believe, across the whole range. A constant gain error is also refuted by the
+calm phases of the same runs.
+
+#### What is left standing
+
+Six mechanisms are now dead: servo arithmetic, in-flight commands, the stale
+off-thread read, the event channel, the dead camera, the rate mismatch, and the
+gain. The residual is this, from the onset of 287b's first slam:
+
+```
+    t(s)   x4_yaw   x4_pit |  step_y  step_p |   dx4_y   dx4_p
+ 103.475    -6.99    -4.24 |    1.38   -1.38 |    1.15   -3.78
+ 103.509    -4.47   -10.54 |    1.04    0.00 |    2.52   -6.30
+ 103.552    -0.46   -19.82 |    0.46    2.07 |    4.01   -9.28
+```
+
+At 103.509 the servo commanded **0.00** of pitch and X4's camera moved **−6.30°**;
+at 103.552 it commanded **+2.07** and the camera moved **−9.28**, the other way.
+Across the updates where the command was under half a mouse count and the axis was
+off its stop, the median motion is one count (0.115°) everywhere — but the maximum
+is 1.5–3.7° in the calm takes and **11.9 / 17.8 / 33.0°** in 284, 285b and 287b.
+**Something other than our servo moves X4's camera, by tens of degrees, and it is
+largest in exactly the sessions that went wild.**
+
+It is not #78's auto-recentre: that would pull toward zero, and the correlation
+between the uncommanded motion and the camera's position is +0.02 to +0.45 — the
+wrong sign, and weak.
+
+**Caveat, stated before the next step is chosen:** `cam_raw_yaw_deg` and
+`cam_raw_pitch_deg` are two separate atomics written without a seqlock, so a
+layer-side read can mix yaw from one tick with pitch from the one before. While
+the camera is moving 20–30° per frame that tear can fabricate a large single-axis
+"move", and this residual is measured from exactly those pairs. The slam itself is
+**not** in doubt — `camread` sees it through one single-threaded `X4Rotation`, and
+reports X4 at +65.00,+35.00 against a head at −3.78,−0.64 — but the size of the
+uncommanded component is only as good as that pairing. Closing that hole is
+cheaper than a take and comes before any mechanism is built on this number.

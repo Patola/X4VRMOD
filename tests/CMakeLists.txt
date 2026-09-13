@@ -163,6 +163,14 @@ add_executable(x4vr_test_guard_budget guard_budget.cpp)
 # from arithmetic alone. Self-checking: no runner script.
 add_executable(x4vr_test_servo_lag servo_lag.cpp)
 
+# Task #75: servo_lag's plant steps once per servo step. X4's camera reports at
+# 30-60 Hz while X4VR_TICK_HZ drives the servo at 90, so that 1:1 assumption is
+# exactly what cannot be assumed -- this drives the same real head_look_step()
+# against a plant whose REPORT rate is decoupled from the step rate, and reports
+# the same slam statistic the poselag stream measures. Self-checking: no runner
+# script.
+add_executable(x4vr_test_servo_rate servo_rate.cpp)
+
 # Task #73's open-loop identification sequence, checked before a take is spent
 # on it: that it never drives X4's camera into the clamp during a measured
 # phase, and that the trace it produces can actually tell the candidate plants
