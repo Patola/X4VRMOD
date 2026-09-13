@@ -2949,12 +2949,23 @@ def main(path):
     #
     # `pushed` and `got` come from their own sites: "delayed" and "DROPPED" want
     # opposite fixes and one counter cannot separate them.
+    # `%+lld` always prints a sign, so the in-flight count arrives as "+0" and a
+    # `-?\d+` matched only the windows where it happened to go NEGATIVE: 2 lines
+    # of 94 in take 287a, from which a "CLEAN" verdict was printed. A regex that
+    # silently matches a biased subset is worse than one that matches nothing,
+    # because nothing is visible as nothing. The count check below exists so this
+    # class cannot recur silently — it has now cost two readings in this task.
     ef = re.findall(
-        r"evflow: motion pushed ([\d.]+) Hz -> X4 took ([\d.]+) Hz \((-?\d+) "
+        r"evflow: motion pushed ([\d.]+) Hz -> X4 took ([\d.]+) Hz \(([-+]?\d+) "
         r"in flight/lost\) \| key pushed ([\d.]+) Hz -> took ([\d.]+) Hz \| "
         r"queue time mean ([\d.]+) ms max ([\d.]+) \| player's own motion "
         r"([\d.]+) Hz \| ours per drain 0\.\.8\+: ([\d/]+) \| drains "
         r"([\d.]+) Hz", text)
+    ef_raw = text.count("evflow: motion pushed")
+    if ef_raw and len(ef) != ef_raw:
+        print(f"evflow     PARSE DEFECT: {ef_raw} lines in the log, {len(ef)} "
+              f"matched by the scorer. Whatever is printed below describes that "
+              f"SUBSET, which is not the run. Fix the pattern before reading it.")
     if ef:
         def med(xs):
             s = sorted(xs)

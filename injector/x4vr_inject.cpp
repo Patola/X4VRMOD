@@ -3322,10 +3322,20 @@ static void push_our_event(void *ev) {
     // share the layout, which tests/sdl_event_layout.cpp asserts.
     auto *m = (Sdl3MouseEvent *)ev;
     m->reserved = kOurEventMagic;
-    // Stamped BEFORE the push, so the drain side can subtract and get the time
-    // the event spent in SDL's queue. SDL3 only fills this when it is zero, and
-    // the value is monotonic ns -- the same clock it would have written itself.
-    m->timestamp = (uint64_t)(mono_seconds() * 1e9);
+    // **Left at zero ON PURPOSE, so SDL stamps it.**
+    //
+    // Take 287a wrote `mono_seconds() * 1e9` here -- CLOCK_MONOTONIC since BOOT,
+    // about 6.4e14 ns -- while SDL fills this field from SDL_GetTicksNS, which
+    // counts from SDL_Init and was around 1e10. Four orders of magnitude out, in
+    // a field handed straight to X4, and that run ghosted for its whole length
+    // in the drain-driven configuration that has never had a problem.
+    //
+    // tests/sdl_push_timestamp.cpp proved SDL PRESERVES a value we set. It never
+    // asked whether X4 READS it, which is the question that mattered: verifying
+    // the wrong property is how an instrument comes to perturb the thing it
+    // measures. SDL already stamps every event with its push time, so the queue
+    // time can be had for free, by reading rather than writing.
+    m->timestamp = 0;
     if (m->type == SDL_EV_MOUSE_MOTION)
         g_evflow.pushed_motion.fetch_add(1, std::memory_order_relaxed);
     else
@@ -3514,7 +3524,6 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
     // credited with receiving it twice -- the same trap the fold below is
     // guarded against, one field over.
     int ours_this_drain = 0;
-    const double drain_now = consuming && n > 0 ? mono_seconds() : 0.0;
     if (n > 0 && events && this_is_the_game()) {
         for (int i = 0; i < n; i++) {
             auto *e = (Sdl3MouseEvent *)((unsigned char *)events + 128 * i);
@@ -3532,10 +3541,14 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
                     // How long this command sat in SDL's queue. This is the
                     // quantity the servo is blind to: it commands again each
                     // tick with no knowledge that the last one has not landed.
+                    // SDL's own clock at BOTH ends. Our CLOCK_MONOTONIC cannot be
+                    // subtracted from a field SDL wrote from SDL_GetTicksNS --
+                    // different epochs, which is the whole of take 287a's defect.
+                    static auto ticks_ns = real<uint64_t (*)()>("SDL_GetTicksNS");
                     const uint64_t sent_ns = e->timestamp;
-                    if (sent_ns) {
+                    if (sent_ns && ticks_ns) {
                         const double lat =
-                            drain_now - (double)sent_ns * 1e-9;
+                            ((double)ticks_ns() - (double)sent_ns) * 1e-9;
                         if (lat >= 0.0 && lat < 5.0) {
                             const uint64_t us = (uint64_t)(lat * 1e6);
                             g_evflow.lat_sum_us.fetch_add(

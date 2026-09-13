@@ -17267,3 +17267,93 @@ left standing, rather than as "no delay".
 mechanism proposed for take 285b is dead. That would be a real result and not a
 failure — it would mean the difference is in X4's own handling of *when* input
 arrives relative to its frame, which nothing on our side has ever looked at.
+
+### Take 287 — the channel is innocent, and the cause is finally located
+
+#### First: 287a's ghosting was MINE
+
+`push_our_event` stamped `timestamp = mono_seconds() * 1e9` — CLOCK_MONOTONIC
+**since boot**, about 6.4e14 ns — into a field SDL fills from `SDL_GetTicksNS`,
+which counts from `SDL_Init` and was around 1e10. **Four orders of magnitude
+out, in a field handed straight to X4.** 287a ghosted for its whole length in the
+drain-driven configuration that has never had a problem.
+
+`tests/sdl_push_timestamp.cpp` proved SDL *preserves* a value we set. It never
+asked whether X4 *reads* it — and that was the question that mattered. Verifying
+the wrong property is how an instrument comes to perturb the thing it measures;
+the test passed, and gave me confidence in exactly the wrong direction.
+
+Fixed by leaving the field at **zero so SDL stamps it**, and reading it at the
+drain with `SDL_GetTicksNS` at both ends. The queue time was always available for
+free by reading; writing was never necessary.
+
+#### Second: the scorer read 2 lines out of 94 and printed a verdict
+
+The log prints `%+lld`, so the in-flight count arrives as `(+0 in flight/lost)`,
+and the pattern had `-?\d+`, which does not match a leading `+`. It matched
+**only the windows where the count went negative**: 2 of 94 in 287a, 9 of 95 in
+287b — and "CLEAN" was printed from that. A regex that silently matches a biased
+subset is worse than one matching nothing, because nothing is visible as nothing.
+The scorer now compares its match count against the raw line count and says
+`PARSE DEFECT` when they differ.
+
+#### The census, read properly — restricted to windows actually pushing commands
+
+| | 287a (drain) | 287b (thread, 90 Hz) |
+|---|---|---|
+| pushed → took | 1389 → 1390 | 3138 → 3136 |
+| queue time median | 0.01 ms | 6.56 ms |
+| drains carrying **≥2** of ours | **0 of 2898** | **0 of 6513** |
+| player's own motion | 0.0 Hz | 0.0 Hz |
+
+- **P287.1 CONFIRMED** — 1:1, nothing dropped.
+- **P287.2 REFUTED outright** — 100.00% of drains carry exactly one command.
+  There is no backlog in the queue. This was the prediction I expected to carry
+  the answer.
+- **P287.3 REFUTED** — 6.56 ms, not tens.
+- **P287.4 confirmed.**
+
+**So the channel is innocent too.** Servo arithmetic, camera-read freshness, and
+now the event channel: three mechanisms, three refutations, none of which cost a
+take beyond the ones that produced the data.
+
+#### And the cause, which none of the three was
+
+The episode is located exactly: X4's camera first moves at **t = 99.4 s**, goes
+wild at **104–122 s** with 47–59° jumps, and the map cycle at **122.6–124.4 s**
+ends it permanently — matching Patola's report that it could never be re-triggered
+afterwards.
+
+At engagement the servo was **perfectly converged** — `cmd ≈ head ≈ −1°`, dx of
+2–4 counts — so accumulated startup windup is refuted as well. And at t=104.66,
+head +9.8 with `cmd` 53.04 and dx +104 is the servo *correctly* driving a camera
+already pinned at +65 back toward the head. **The servo is responding, not
+causing.**
+
+What the `camread` lines show through the whole run-up:
+
+```
+camread: X4 -0.00,0.00 deg (raw 0.0000,0.0000) | cmd 0.46,1.73 | head 1.50,7.19 CLOSED
+camread: X4 -0.00,0.00 deg (raw 0.0000,0.0000) | cmd 0.46,1.84 | head 2.01,7.31 CLOSED
+```
+
+**X4's camera reads EXACTLY zero, for seconds, while the head moves and the servo
+commands.** `head_look_observe` therefore pins the estimate to 0 every tick, the
+error never closes, and the servo keeps sending. X4 is not in free-look yet, so
+those deltas go somewhere else or accumulate; when free-look finally engages,
+what has piled up lands at once and slams the camera into the ±65 clamp — and the
+oscillation follows from there.
+
+That explains every observation at once: why it is always *early*, why holding
+the head still does not end it, why a map cycle cures it permanently (a clean
+idle→steering transition establishes free-look properly), and why the 90 Hz tick
+makes it far worse than the drain — twice as many commands are pumped into the
+dead window.
+
+The servo already has a stall detector for "commanding into a dead camera", and
+`tests/headlook.cpp` reports it firing **twice in 300 frames**. At 90 Hz that
+leaves hundreds of commands going out during the dead window. **The detector is
+not wrong, it is too permissive for this rate** — and that is a hypothesis about
+a fix, so it gets tested offline before any take, like the last two.
+
+`X4VR_TICK_HZ` stays unused until then; it is off by default.
