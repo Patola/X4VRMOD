@@ -16513,3 +16513,64 @@ that is the cross-check, not a redundancy.
   within a couple of points. Disagreement invalidates one instrument and the
   run says nothing until that is settled.
 * **P283.4** Nothing the player sees changes. This is a counter.
+
+## Take 283 — the bottleneck is OUR tick rate, and my scorer read a diluted number
+
+**The `inputrate` verdict printed "X4's" and is WITHDRAWN.** It read a counter
+cumulative over 209 s that included ~100 s in which `cam_moved` was 0.0%.
+Differenced into per-window rates, with no new run:
+
+| window | t(s) | tick Hz | sent% | camera moved% |
+|---|---|---|---|---|
+| 1-2 | 17-24 | **87-90** | 100 | **0.0** |
+| 3-9 | 34-100 | 49-62 | 100 | **0.0** |
+| 10-19 | 110-209 | 52-58 | ~99 | **70-77** |
+
+During gameplay X4's camera moves on **~73% of ticks**, not 33.4%.
+
+### Two defects in my own instruments, both found by the cross-check
+
+1. **`cam_moved` conflates "did not move" with "could not be read."** It only
+   increments inside `if (have_cam)`, so a run with no readback reports 0.0% --
+   indistinguishable from a stationary camera. Windows 1-9 are almost certainly
+   the latter. Same shape as [[x4vr-identical-inputs-different-verdicts]].
+2. **The counters are cumulative and never reset**, so every percentage is an
+   average over phases that differ by 3x in frame rate. The per-window table
+   above is the only honest reading, and the scorer must difference consecutive
+   lines rather than quote the last one.
+
+**And `camdiff` is not the cross-check I claimed.** It diffs all 16 floats of
+`M_view`, which carries TRANSLATION (max delta 13767 while the ship flies);
+`inputrate` counts yaw only. They measure different quantities and I labelled
+them the same event. P283.3's "disagreement invalidates one instrument" did not
+apply -- the mislabelling was mine.
+
+### The corrected chain
+
+| stage | rate |
+|---|---|
+| display | 90 Hz |
+| X4 render | 88 fps |
+| **head-pose tick** | **~52-57 Hz** (87-90 Hz in the early windows) |
+| delta sent | ~99% of ticks |
+| X4 camera acts | ~73% of ticks -> **~40 Hz** |
+
+That ~40 Hz agrees with `camdiff`'s independent 37.9-39.0 Hz at 88 fps, so the
+two sides of the process do corroborate once the quantities are matched.
+
+**X4 honours nearly three-quarters of what we send. The binding constraint is
+that we only tick at ~55 Hz while X4 renders at 88 and the display runs at 90.**
+P283.2 is refuted (the emit side is not sparse; the residue-carrying fix would
+have bought nothing) and so is the "X4's, not fixable from this side" verdict.
+
+### NEXT: why does the tick rate fall from ~88 Hz to ~55 Hz?
+
+`head_share_write` sits in the VR thread's frame loop, one write per located
+view, gated on `have`. The early windows tick at 87-90 Hz and gameplay ticks at
+52-58, so the publish -- or the injector's consumption of it -- loses about a
+third somewhere. **This is ours and it is the lever**: at 73% acceptance, a
+90 Hz tick would put X4's camera near 65 Hz instead of 40.
+
+Note 56/90 = 0.62 was already recorded earlier in this file as the
+blits/submitted ratio and dismissed as "render rate over display rate". It may
+be the same 55 Hz showing up twice. Worth checking before assuming a new cause.
