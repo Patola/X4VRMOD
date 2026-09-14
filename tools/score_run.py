@@ -3613,7 +3613,16 @@ def main(path):
         gaps = sorted(T[i + 1] - T[i] for i in range(n) if 0 < T[i + 1] - T[i] < 0.5)
         tick = gaps[len(gaps) // 2] if gaps else 0.0
         var = sum(v * v for v in V[:n])
-        ML = 28
+        # **12 taps, not 28, and take 291 is why.** The forward substitution is
+        # sequential, so P[0..12] are bit-identical at either setting -- ML only
+        # decides how many taps enter `keep`. Beyond the plant's support those
+        # taps are noise, and the 5% floor does not remove them because the floor
+        # is relative to a peak the noise can itself set. Replaying take 291's own
+        # timestamps and command sequence with a HEALTHY 40-165 ms band planted in
+        # place of X4 read mass 1.43 at ML=28; the take read 1.46. The instrument
+        # produced that verdict, not X4. At 43.5 Hz, 12 taps is 276 ms -- past any
+        # latency this servo stays stable at.
+        ML = 12
         if var < 1e-9:
             print("dither   UNMEASURABLE — the dither column is all zeros")
         else:
@@ -3643,29 +3652,68 @@ def main(path):
                           "after the command:")
                     print("           " + "  ".join(
                         f"+{L}:{P[L]:5.2f}" for L in range(min(10, ML + 1))))
-                    print(f"dither   latency {mu*tick*1000:.1f} ms mean, "
-                          f"{sd*tick*1000:.1f} ms spread "
-                          f"({mu:.2f} +- {sd:.2f} ticks), recovered mass {tot:.2f}")
-                    # **The instrument's own range statement.** The deconvolution
-                    # needs the camera inside its clamp; past a mean of ~6 ticks
-                    # the servo slams between X4's stops and a clamp is the one
-                    # nonlinearity it cannot see through. In range the mass sits
-                    # at 1.00-1.02; a planted 2-8 band read 1.09 and its mean came
-                    # back 7.20 against 5.00.
-                    if abs(tot - 1.0) > 0.05:
-                        print(f"dither   => OUT OF RANGE. Recovered mass {tot:.2f} "
-                              f"is not 1.0, so the deconvolution drifted — most "
-                              f"likely the camera reached X4's clamp during the "
-                              f"run. Do NOT read the band above.")
+                    print(f"dither   latency {mu*tick*1000:.0f} ms mean "
+                          f"({mu:.2f} ticks), recovered mass {tot:.2f}")
+                    # The tap spread is NOT the plant's spread. Planting bands of
+                    # the same MEAN and varying WIDTH on take 291's own data moved
+                    # this number less than the seed-to-seed scatter did, while
+                    # varying the mean at fixed width moved it cleanly. It is a
+                    # second reading of the mean wearing a spread's units, so it
+                    # is printed as diagnostics and never as a measurement.
+                    print(f"dither   (tap spread {sd*tick*1000:.0f} ms / "
+                          f"{sd:.2f} ticks — conditioning, NOT the plant's "
+                          f"jitter; see below)")
+                    # **The instrument's own range statement, calibrated rather
+                    # than assumed.** Replaying take 291's real timestamps and
+                    # real command sequence with a known band planted in place of
+                    # X4, at this run's dither amplitude:
+                    #
+                    #   truth ms   25    50    70    90   110   140 | 180   220   300
+                    #   read ms    41    64    63    88   109   124 | 148   121   138
+                    #   mass     1.14  1.07  0.87  0.81  0.76  0.53 |0.35  0.14  0.23
+                    #
+                    # Mass falls monotonically with the mean and separates what is
+                    # reachable (0.53-1.14) from what is past the window
+                    # (0.14-0.41) with no overlap. The old gate demanded mass
+                    # within 0.05 of 1.0, which every one of those healthy rows
+                    # fails -- it was calibrated on a quiet synthetic servo, and
+                    # in ordinary play the player's own steering carries 51x the
+                    # instrument's variance.
+                    if tot < 0.45:
+                        print(f"dither   => OUT OF REACH. Mass {tot:.2f} is below "
+                              f"the 0.45 floor, which means the true latency is "
+                              f"past this window ({ML} taps = "
+                              f"{ML*tick*1000:.0f} ms). The mean above is a "
+                              f"truncation artefact — do NOT read it.")
+                    elif tot > 1.35:
+                        # **Both ends, and the first draft only had one.** A mass
+                        # of 3.92 sailed through a lone `< 0.45` floor and the
+                        # next branch announced "the mass is fine" about a number
+                        # it had never looked at. Every healthy row of the
+                        # calibration above sits under 1.14.
+                        print(f"dither   => ILL-CONDITIONED. Mass {tot:.2f} is far "
+                              f"above the 1.14 the calibration reaches, so the "
+                              f"deconvolution diverged rather than measured. Seen "
+                              f"when the servo is slamming against X4's stops: "
+                              f"the plant is not linear there and this instrument "
+                              f"cannot see through it. Read the `clamp` and "
+                              f"`poselag` blocks instead.")
                     elif mu > 6.0:
                         print(f"dither   => OUT OF RANGE. A mean of {mu:.2f} ticks "
                               f"is past the stability threshold this servo slams "
-                              f"at; the mass looks clean but the regime does not.")
+                              f"at; the mass is fine but the regime is not.")
                     else:
-                        print(f"dither   => IN RANGE, mass {tot:.2f}. This is X4's "
-                              f"input-to-camera latency measured with the servo "
-                              f"RUNNING — the first such figure; takes 290a/290b "
-                              f"got 40-165 ms open-loop with plantid.")
+                        lo, hi = mu*tick*1000 - 20, mu*tick*1000 + 20
+                        print(f"dither   => IN RANGE, mass {tot:.2f}. X4's "
+                              f"input-to-camera latency with the servo RUNNING is "
+                              f"{lo:.0f}-{hi:.0f} ms (the calibration above is "
+                              f"good to about +-20 ms). Open-loop plantid got "
+                              f"40-165 ms in takes 290a/290b.")
+                        print(f"dither   => the WIDTH of the band is NOT measured "
+                              f"here. At {int(max(abs(v) for v in V))} count(s) "
+                              f"this instrument resolves the mean and nothing "
+                              f"finer; a tight band and a 40-165 ms one are "
+                              f"indistinguishable at this amplitude.")
 
     # --- task #73: the head-look lag, and whether the lead removes it -------
     #

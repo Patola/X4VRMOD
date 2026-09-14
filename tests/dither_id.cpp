@@ -204,12 +204,35 @@ static Stats session(int lo, int hi, int counts, int cap, double HZ, double secs
 // implementation, in Python -- can be driven against a planted band. The C++
 // recovery above being right says nothing about the Python one, and the Python
 // one is what reads the take.
-static void emit(int lo, int hi, int counts, double HZ, double secs,
+// **`play` is take 291's regime, and its absence is why this file certified a
+// statistic the take could not use.** Every case here drove a 20 deg 0.3 Hz sine
+// at a metronome-uniform 70 Hz -- a servo so quiet the recovery returned a
+// planted spread exactly. Take 291 was ordinary play: the player's own steering
+// carried 51x the instrument's variance and the tick wandered from 9 to 51 ms.
+// Under THOSE conditions the tap spread stops tracking the plant's width, and
+// nothing here said so. Measured on take 291 and reproduced by these numbers:
+//
+//              |dx| median   |dx| p99   var(servo)   tick p05..p95
+//   take 291         3          71         205        9 .. 51 ms
+//
+// Run it in the configuration the real measurement uses. That rule has now cost
+// this project an instrument three times.
+struct Regime {
+    bool play = false;          // wandering tick + steering that reaches the stop
+    double hz = 70.0;
+};
+
+static void emit(int lo, int hi, int counts, Regime rg, double secs,
                  const char *path) {
     x4vr::HeadLook s;
     s.gain_deg_per_count = 0.115f; s.servo_kp = 0.25f; s.lead_scale = 1.0f;
     Plant p(lo, hi);
     Dither d(counts, 100000);
+    // Separate stream from the plant's jitter, so the tick and the latency are
+    // independent -- moving two things at once is how the last control confirmed
+    // a hypothesis it should have refuted.
+    std::mt19937 trng{777u};
+    std::uniform_real_distribution<double> tj(9.0, 51.0);
     FILE *f = std::fopen(path, "w");
     if (!f) { std::printf("  FAIL cannot write %s\n", path); g_fail++; return; }
     double t = 100.0;
@@ -217,18 +240,34 @@ static void emit(int lo, int hi, int counts, double HZ, double secs,
                     "X4VR_HEADLOOK_GAIN=0.115 X4VR_DITHER=%d ./launch/"
                     "x4vr-launch.sh\n", t, counts);
     std::fprintf(f, "[ %11.3f] layer   mv: X4 uses vkCreateRenderPass (v1)\n", t);
-    const int N = (int)(HZ * secs);
+    const int N = (int)(rg.hz * secs);
+    double tt = 0.0;
     for (int i = 0; i < N; i++) {
         const float cam_before = p.pub;   // read at the TOP of the tick
         x4vr::head_look_observe(s, p.pub, 0.0f);
         x4vr::HeadAngles h;
-        const double tt = i / HZ;
-        h.yaw_deg = (float)(20.0 * std::sin(2.0 * M_PI * 0.3 * tt));
+        // The quiet case is unchanged, so the four original plants still read
+        // exactly what they read before.
+        // Play is not a sine. Take 291's servo sat at |dx| median 3 and p99 71 --
+        // nearly still, with rare fast sweeps. A continuous sine big enough to
+        // reach that p99 sits at the saturation stop the whole time (measured:
+        // var 3249 against the real 205). So: slow drift, plus a look-away-and-
+        // back burst that returns to where it started.
+        double burst = 0.0;
+        if (rg.play) {
+            const double ph = std::fmod(tt, 4.0);
+            if (ph < 0.26) burst = 26.0 * std::sin(M_PI * ph / 0.26);
+        }
+        h.yaw_deg = rg.play
+            ? (float)(20.0 * std::sin(2.0 * M_PI * 0.07 * tt) +
+                       8.0 * std::sin(2.0 * M_PI * 0.28 * tt + 1.1) + burst)
+            : (float)(20.0 * std::sin(2.0 * M_PI * 0.3 * tt));
         h.pitch_deg = 0.0f; h.yaw_weight = 1.0f;
         const x4vr::Delta dd = x4vr::head_look_step(s, h);
         const int dv = d.next_delta();
         const int dx = dd.dx + dv;
-        t += 1.0 / HZ;
+        const double dt = rg.play ? tj(trng) / 1000.0 : 1.0 / rg.hz;
+        t += dt; tt += dt;
         std::fprintf(f, "[ %11.3f] inject  dither: v=%+d dx=%+d cam=%.4f\n",
                      t, dv, dx, (double)cam_before);
         p.step(i, s.sign_yaw * (float)dx * s.gain_deg_per_count);
@@ -239,12 +278,20 @@ static void emit(int lo, int hi, int counts, double HZ, double secs,
 int main(int argc, char **argv) {
     if (argc == 3 && std::string(argv[1]) == "--emit") {
         const std::string dir = argv[2];
-        struct { int lo, hi; const char *name; } cases[4] = {
-            {2, 2, "fixed2"}, {3, 3, "fixed3"}, {2, 6, "band2-6"},
-            {1, 7, "band1-7"}};
+        // The last two are the REFUSAL cases, and they are what this file was
+        // missing. A wandering tick plus steering hard enough to reach X4's 65
+        // deg stop (measured: 0.1% and 0.4% of samples sitting on it) puts the
+        // loop somewhere the deconvolution has no business reporting from -- the
+        // plant is not linear at a clamp. The instrument must say so instead of
+        // returning a number, which is exactly what it failed to do on take 291.
+        struct { int lo, hi; bool play; const char *name; } cases[6] = {
+            {2, 2, false, "fixed2"},    {3, 3, false, "fixed3"},
+            {2, 6, false, "band2-6"},   {1, 7, false, "band1-7"},
+            {4, 4, true,  "slam-fixed"},{1, 7, true,  "slam-band"}};
         for (auto &c : cases) {
             const std::string path = dir + "/dither-" + c.name + ".log";
-            emit(c.lo, c.hi, 2, 70.0, 300.0, path.c_str());
+            Regime rg; rg.play = c.play; rg.hz = 70.0;
+            emit(c.lo, c.hi, 2, rg, 300.0, path.c_str());
             std::printf("wrote %s\n", path.c_str());
         }
         return 0;

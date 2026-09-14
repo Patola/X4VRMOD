@@ -18289,3 +18289,105 @@ and unstable regimes. It is off by default and stays off.
 | the check that the Python copy works | `tests/run-dither-scorer.sh` — 4 planted bands through the real scorer |
 | the open-loop instrument | `common/x4vr_plantid.hpp`, `tests/run-plantid-scorer.sh` |
 | the stability model | `tests/servo_rate.cpp` — clamp reached at a mean delay of 6 ticks |
+
+## Take 291 — the verdict, and the instrument was the defect
+
+**In-play latency: 50–90 ms, with the servo running.** Mass 0.93, mean 3.03 ticks
+at 43.5 Hz. That sits inside the 40–165 ms `plantid` measured open-loop, so the
+two instruments agree. At 43.5 Hz it is 3.0 ticks, and `servo_rate.cpp` puts the
+clamp at 6 — the loop was in its calm regime, which is what Patola reported.
+
+### P291.1 REFUTED, and the reason it gave was wrong
+
+The run read `OUT OF RANGE. Recovered mass 1.46 … most likely the camera reached
+X4's clamp during the run.` **It did not reach the clamp.** From the same log:
+zero samples were commanded outward at |cam| > 55 without moving, and the camera
+peaked at 62.91 against a 65 stop. The scorer named a cause it had never
+measured, and acting on it would have bought a take with a lower yaw limit to fix
+a clamp that was not there. Same shape as [[report-without-its-guard]]: a report
+that names a risk without naming the check generates work against a fiction.
+
+Four candidates were eliminated from take 291's own data before anything was
+rebuilt — no new run:
+
+| candidate | measurement | verdict |
+|---|---|---|
+| gaps where steering stopped | max gap 105 ms, one of them | dead |
+| the camera hit X4's clamp | 0 stuck samples, peak 62.91 of 65 | dead |
+| servo saturation | 0.27% of ticks at ±104 | dead |
+| uncommanded camera motion | 0 steps exceed 10 ticks of command budget | dead |
+
+That last row is worth keeping. The largest single step was **22.1° in one tick
+against a 1.84° command**, which looks exactly like the uncommanded motion #75
+has been hunting — and it is not. Summed over the preceding ten ticks, every one
+of those steps is covered by commands already in flight. X4 was paying out its
+backlog. 30.2% of moving samples step *against* the current tick's command, which
+is what a latency band does, not a defect.
+
+### What actually produced 1.46: 28 taps
+
+Replaying take 291's **own timestamps and own command sequence** with a healthy
+40–165 ms band planted in place of X4 read **mass 1.43**. The take read 1.46. The
+forward substitution is sequential, so `P[0..12]` are bit-identical at ML=28 and
+ML=12 — the tap count only decides how many enter the sum, and past the plant's
+support those taps are noise that the 5%-of-peak floor cannot remove *because the
+floor is relative to a peak the noise can itself set*. Re-read at ML=8, 10 and 12
+the take gives the identical 3.03 ± 1.43 ticks with 0% of its mass in the tail.
+
+ML=28 was chosen against `dither_id.cpp`'s synthetic sessions: a 20° 0.3 Hz sine
+at a metronome-uniform 70 Hz. Take 291 was ordinary play. **The player's own
+steering carried 51× the instrument's variance and the tick wandered from 9 to
+51 ms**, and nothing in the control set had ever run there. Third time this
+project has shipped an instrument validated only in its easiest configuration.
+
+### The old gate was calibrated on the wrong regime too
+
+`abs(mass - 1.0) > 0.05` was read off quiet synthetic runs where the mass sits at
+1.00–1.02. Planting known bands on take 291's real data, at its real amplitude:
+
+| truth ms | 25 | 50 | 70 | 90 | 110 | 140 | 180 | 220 | 300 |
+|---|---|---|---|---|---|---|---|---|---|
+| read ms | 41 | 64 | 63 | 88 | 109 | 124 | 148 | 121 | 138 |
+| mass | 1.14 | 1.07 | 0.87 | 0.81 | 0.76 | 0.53 | 0.35 | 0.14 | 0.23 |
+
+Every healthy row fails the old gate. Mass falls monotonically with the mean and
+separates reachable (0.53–1.14) from past-the-window (0.14–0.41) with no overlap,
+so it is now a two-sided gate: below 0.45 the answer is out of reach, above 1.35
+the deconvolution diverged. **The upper bound was missing from the first draft**,
+and a mass of 3.92 sailed through a lone floor into a branch that announced "the
+mass is fine" about a number it had never looked at.
+
+### P291.2 half-confirmed — and the width is NOT measurable here
+
+The mean is confirmed inside 40–165 ms. **The spread is not measured, and the tap
+spread is not it.** P291.2 said a spread under ~20 ms would be the interesting
+result; take 291 prints 33 ms, and that number cannot be read that way:
+
+* planting **the same mean with widths from 0 to 35 ms sd** moved the recovered
+  spread less than changing the random seed did (0.66–1.00 at one width);
+* planting **the same width with means from 60 to 120 ms** moved it cleanly
+  (0.90 → 0.52).
+
+It is a second reading of the mean wearing a spread's units. I had already
+written "0.93 sits in the fixed regime, not the jittered" before running the
+fixed-width control — which is the whole of [[vary-them-independently]], caught
+one step before it was published.
+
+So the open-loop 40–165 ms band stands unchallenged, because take 291 cannot
+challenge it. Resolving the width needs more amplitude: at 2 counts the sweep put
+the useful floor near 8 counts, which is **0.92°/tick in a headset**.
+
+### P291.3 holds, as written
+
+Take 291 ran at 43.5 Hz. s1 and s2 ran at ~70 Hz, where the same physical band is
+2.7–11.3 ticks and straddles the clamp threshold. Unchanged, and the run does
+nothing to it.
+
+### What changed in the tree
+
+`tools/score_run.py`: ML 28 → 12; the two-sided calibrated gate; the spread
+demoted to diagnostics with the reason printed beside it.
+`tests/dither_id.cpp`: a `play` regime — wandering tick plus steering that reaches
+X4's 65° stop — and two fixtures, `slam-fixed` and `slam-band`, that the scorer
+must **refuse**. An instrument that cannot decline is not an instrument, and the
+old one answered take 291's clamped-loop twin with a confident 222.1 ms.
