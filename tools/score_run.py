@@ -3584,6 +3584,89 @@ def main(path):
                   f"and spread (<=75%) bands. No candidate is named. Naming one "
                   f"anyway is how the 200 deg/s story survived a day.")
 
+    # --- task #75: X4's latency band, measured DURING PLAY ------------------
+    #
+    # An exogenous dither -- a few mouse counts the servo does not know it is
+    # sending -- makes closed-loop identification valid. Correlating it against
+    # the plant's total input and against the plant's output gives
+    # `b = a (*) P`, and the servo's reaction to the dither appears on both sides
+    # and divides out. Correlating against the output ALONE recovers P/(1+PC)
+    # instead, which turned a planted 5.00 into 11.35 the first time.
+    #
+    # **This is a second implementation of arithmetic that already exists in
+    # C++.** tests/run-dither-scorer.sh drives THIS code against planted bands
+    # emitted by tests/dither_id.cpp, because the C++ one being right says
+    # nothing about this one, and this one is what reads the take.
+    dth = re.findall(
+        r"\[\s*(\d+\.\d+)\]\s+inject\s+dither: v=([-+]?\d+) dx=([-+]?\d+) "
+        r"cam=(-?\d+\.\d+)", text)
+    if len(dth) > 500:
+        m = re.search(r"X4VR_HEADLOOK_GAIN=(\d+(?:\.\d+)?)", run or "")
+        g = float(m.group(1)) if m else 0.115
+        T = [float(a) for a, _, _, _ in dth]
+        V = [float(b) for _, b, _, _ in dth]
+        # sign_yaw is -1: a positive dx drives the camera negative.
+        U = [-float(c) * g for _, _, c, _ in dth]
+        C = [float(d) for _, _, _, d in dth]
+        n = len(V) - 1
+        DC = [C[i + 1] - C[i] for i in range(n)]
+        gaps = sorted(T[i + 1] - T[i] for i in range(n) if 0 < T[i + 1] - T[i] < 0.5)
+        tick = gaps[len(gaps) // 2] if gaps else 0.0
+        var = sum(v * v for v in V[:n])
+        ML = 28
+        if var < 1e-9:
+            print("dither   UNMEASURABLE — the dither column is all zeros")
+        else:
+            A = [sum(V[i - L] * U[i] for i in range(L, n)) / var for L in range(ML + 1)]
+            B = [sum(V[i - L] * DC[i] for i in range(L, n)) / var for L in range(ML + 1)]
+            if abs(A[0]) < 1e-9:
+                print("dither   UNMEASURABLE — the dither never reached the plant input")
+            else:
+                P = [0.0] * (ML + 1)
+                for L in range(ML + 1):
+                    acc = B[L] - sum(A[L - k] * P[k] for k in range(L))
+                    P[L] = acc / A[0]
+                peak = max(P)
+                # Taps under 5% of the peak are noise; counting them biased every
+                # planted band by +1.5 ticks of mean and +2.3 of spread, all in
+                # the same direction.
+                keep = [(L, p) for L, p in enumerate(P) if p > 0.05 * peak]
+                tot = sum(p for _, p in keep)
+                if tot < 1e-6:
+                    print("dither   UNMEASURABLE — no positive impulse response")
+                else:
+                    mu = sum(L * p for L, p in keep) / tot
+                    sd = (sum(p * (L - mu) ** 2 for L, p in keep) / tot) ** 0.5
+                    print(f"dither   {n} tick(s) at {1/tick if tick else 0:.1f} Hz, "
+                          f"dither amplitude {int(max(abs(v) for v in V))} count(s)")
+                    print("dither   impulse response, share delivered per tick "
+                          "after the command:")
+                    print("           " + "  ".join(
+                        f"+{L}:{P[L]:5.2f}" for L in range(min(10, ML + 1))))
+                    print(f"dither   latency {mu*tick*1000:.1f} ms mean, "
+                          f"{sd*tick*1000:.1f} ms spread "
+                          f"({mu:.2f} +- {sd:.2f} ticks), recovered mass {tot:.2f}")
+                    # **The instrument's own range statement.** The deconvolution
+                    # needs the camera inside its clamp; past a mean of ~6 ticks
+                    # the servo slams between X4's stops and a clamp is the one
+                    # nonlinearity it cannot see through. In range the mass sits
+                    # at 1.00-1.02; a planted 2-8 band read 1.09 and its mean came
+                    # back 7.20 against 5.00.
+                    if abs(tot - 1.0) > 0.05:
+                        print(f"dither   => OUT OF RANGE. Recovered mass {tot:.2f} "
+                              f"is not 1.0, so the deconvolution drifted — most "
+                              f"likely the camera reached X4's clamp during the "
+                              f"run. Do NOT read the band above.")
+                    elif mu > 6.0:
+                        print(f"dither   => OUT OF RANGE. A mean of {mu:.2f} ticks "
+                              f"is past the stability threshold this servo slams "
+                              f"at; the mass looks clean but the regime does not.")
+                    else:
+                        print(f"dither   => IN RANGE, mass {tot:.2f}. This is X4's "
+                              f"input-to-camera latency measured with the servo "
+                              f"RUNNING — the first such figure; takes 290a/290b "
+                              f"got 40-165 ms open-loop with plantid.")
+
     # --- task #73: the head-look lag, and whether the lead removes it -------
     #
     # WHAT A HEALTHY RUN READS, stated before the numbers are read:

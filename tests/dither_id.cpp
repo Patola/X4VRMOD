@@ -56,6 +56,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <random>
 #include <vector>
 
@@ -199,7 +200,55 @@ static Stats session(int lo, int hi, int counts, int cap, double HZ, double secs
     return st;
 }
 
-int main() {
+// Emit the injector's exact log format, so score_run.py's recovery -- a SECOND
+// implementation, in Python -- can be driven against a planted band. The C++
+// recovery above being right says nothing about the Python one, and the Python
+// one is what reads the take.
+static void emit(int lo, int hi, int counts, double HZ, double secs,
+                 const char *path) {
+    x4vr::HeadLook s;
+    s.gain_deg_per_count = 0.115f; s.servo_kp = 0.25f; s.lead_scale = 1.0f;
+    Plant p(lo, hi);
+    Dither d(counts, 100000);
+    FILE *f = std::fopen(path, "w");
+    if (!f) { std::printf("  FAIL cannot write %s\n", path); g_fail++; return; }
+    double t = 100.0;
+    std::fprintf(f, "[ %11.3f] inject  env: run = X4VR_TAKE=SYNTH "
+                    "X4VR_HEADLOOK_GAIN=0.115 X4VR_DITHER=%d ./launch/"
+                    "x4vr-launch.sh\n", t, counts);
+    std::fprintf(f, "[ %11.3f] layer   mv: X4 uses vkCreateRenderPass (v1)\n", t);
+    const int N = (int)(HZ * secs);
+    for (int i = 0; i < N; i++) {
+        const float cam_before = p.pub;   // read at the TOP of the tick
+        x4vr::head_look_observe(s, p.pub, 0.0f);
+        x4vr::HeadAngles h;
+        const double tt = i / HZ;
+        h.yaw_deg = (float)(20.0 * std::sin(2.0 * M_PI * 0.3 * tt));
+        h.pitch_deg = 0.0f; h.yaw_weight = 1.0f;
+        const x4vr::Delta dd = x4vr::head_look_step(s, h);
+        const int dv = d.next_delta();
+        const int dx = dd.dx + dv;
+        t += 1.0 / HZ;
+        std::fprintf(f, "[ %11.3f] inject  dither: v=%+d dx=%+d cam=%.4f\n",
+                     t, dv, dx, (double)cam_before);
+        p.step(i, s.sign_yaw * (float)dx * s.gain_deg_per_count);
+    }
+    std::fclose(f);
+}
+
+int main(int argc, char **argv) {
+    if (argc == 3 && std::string(argv[1]) == "--emit") {
+        const std::string dir = argv[2];
+        struct { int lo, hi; const char *name; } cases[4] = {
+            {2, 2, "fixed2"}, {3, 3, "fixed3"}, {2, 6, "band2-6"},
+            {1, 7, "band1-7"}};
+        for (auto &c : cases) {
+            const std::string path = dir + "/dither-" + c.name + ".log";
+            emit(c.lo, c.hi, 2, 70.0, 300.0, path.c_str());
+            std::printf("wrote %s\n", path.c_str());
+        }
+        return 0;
+    }
     const double HZ = 70.0;
     // **No cap.** Reflecting a draw to bound the accumulated offset destroys the
     // one property the instrument needs: at +-3 counts inside +-6 the reflection

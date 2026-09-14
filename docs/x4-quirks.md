@@ -18198,3 +18198,41 @@ have nothing to do with the instrument.
 The injector side is not built. `X4VR_DITHER` does not exist yet, and no take is
 proposed: what exists is the recovery, proven against planted bands, with its
 range measured and its own validity gate.
+
+### The dither is wired: `X4VR_DITHER`, and the run it enables
+
+`X4VR_DITHER=N` adds N mouse counts per tick, sign from a 16-bit LFSR, **after**
+`head_look_step` has run — so the servo's estimate never contains it and it is a
+disturbance rather than a command. Gated on `steering`, and that gate is
+load-bearing: a delta sent while not steering never reaches X4, so recording it
+as plant input would put a term in the correlation the plant never received.
+
+Each tick logs `dither: v=±N dx=±M cam=…`, with `cam` read at the TOP of the
+tick, before anything is sent — the state the logged command acted on. The scorer
+differences consecutive lines for the motion, so no tick may be skipped.
+
+**The scorer's recovery is a SECOND implementation**, in Python, of arithmetic
+that already exists in C++ — and it is the one that reads the take.
+`tests/run-dither-scorer.sh` drives it against bands planted by
+`tests/dither_id.cpp --emit`:
+
+| planted | recovered | mass |
+|---|---|---|
+| fixed 2 ticks | **2.00 ± 0.00** | 1.00 |
+| fixed 3 ticks | **3.00 ± 0.00** | 1.00 |
+| 2–6 (4.00 ± 1.41) | 4.82 ± 1.99 | 1.03 |
+| 1–7 (4.00 ± 2.00) | 5.06 ± 2.02 | 1.05 |
+
+Fixed delays come back with **zero width** — a recovery that invented a spread
+could not tell a jittering plant from a steady one, which is the entire question.
+
+The scorer refuses rather than reporting when the run is out of range: mass away
+from 1.0 means the deconvolution drifted, most likely because the camera reached
+X4's clamp, and a mean past 6 ticks is the regime where this servo slams between
+the stops whatever the mass says.
+
+**Take 291 is the drain-rate run.** At ~28 Hz the 40–165 ms measured open-loop is
+1.1–4.6 ticks and in range; at 70 Hz it is 2.7–11.3 and is not. So this measures
+the band during ordinary play at the drain rate. It does **not** settle 285b-s1
+against s2 — those ran at ~70 Hz, where the instrument cannot follow — and that
+limitation is stated here before the run rather than discovered in its results.

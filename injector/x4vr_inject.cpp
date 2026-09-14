@@ -2082,6 +2082,44 @@ static bool plantid_enabled() {
     return on;
 }
 
+// **Task #75: the exogenous dither, for measuring X4's latency band IN PLAY.**
+//
+// `plantid` takes the servo out of the loop for four minutes and cannot run
+// while anyone is playing. This is a few mouse counts the servo does not know it
+// is sending -- white, from an LFSR, so uncorrelated with the head, the camera
+// and the command. That independence is the whole basis of closed-loop
+// identification; correlating the command against the camera instead recovers
+// the controller along with the plant.
+//
+// **A white DELTA, not the difference of a white position.** X4 integrates
+// deltas, so `delta cam = P (*) u` convolves against the delta sequence and the
+// instrument has to match it. Four estimators died of differencing a position
+// sequence to keep its offset bounded -- see tests/dither_id.cpp. The offset does
+// not need bounding: the servo is a regulator and suppresses it, and capping the
+// walk destroys the whiteness the method depends on (12.6% of draws reflected at
+// +-3 inside +-6, and a planted fixed delay came back 2.51 instead of 2.00).
+//
+// Counts per tick. 2 is what tests/dither_id.cpp measured as sufficient; 0 is off
+// and is the default, because this puts a real tremor in the view.
+static int dither_counts() {
+    static const int n = [] {
+        const char *e = getenv("X4VR_DITHER");
+        const int v = (e && *e) ? atoi(e) : 0;
+        return v < 0 ? 0 : (v > 16 ? 16 : v);
+    }();
+    return n;
+}
+
+// The same LFSR tests/dither_id.cpp validates the recovery against. Taps
+// 0/2/3/5 over 16 bits; the sign is the low bit.
+static int dither_next(int counts) {
+    static uint16_t lfsr = 0xACE1u;
+    const uint16_t bit = (uint16_t)(((lfsr >> 0) ^ (lfsr >> 2) ^ (lfsr >> 3) ^
+                                     (lfsr >> 5)) & 1u);
+    lfsr = (uint16_t)((lfsr >> 1) | (bit << 15));
+    return (lfsr & 1u) ? counts : -counts;
+}
+
 // Task #73's per-pose lag samples. On by its own knob, and implied by the A/B
 // -- a run that asks for the comparison always produces the measurement that
 // judges it, rather than depending on a second flag being remembered.
@@ -2671,6 +2709,26 @@ void headlook_tick() {
                          "run can be ended now; nothing after this line is "
                          "part of the measurement.");
         }
+    }
+
+    // **Task #75: the dither, added AFTER the servo has stepped.** The estimate
+    // never contains it, so it is a disturbance rather than a command: the servo
+    // sees it only as camera motion it did not ask for and regulates it away.
+    //
+    // Gated on `steering`, and that is load-bearing rather than tidy. A delta
+    // sent while not steering never reaches X4, so recording it as plant input
+    // would put a term in the correlation that the plant never received and the
+    // recovered response would be wrong by however long the gap lasted.
+    if (dither_counts() > 0 && steering) {
+        const int dv = dither_next(dither_counts());
+        d.dx += dv;
+        // `r` was read at the TOP of this tick, before anything was sent, so
+        // `cam` is the state the logged command acted on. The scorer differences
+        // consecutive lines to get the motion, which is why every tick has to be
+        // logged and none may be skipped.
+        if (have_cam)
+            X4VR_LOG("dither: v=%+d dx=%+d cam=%.4f", dv, d.dx,
+                     kRad2Deg * -r.yaw);
     }
 
     if (steering)
