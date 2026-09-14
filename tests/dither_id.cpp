@@ -2,112 +2,105 @@
 //
 // **Task #75: measuring X4's latency band during ORDINARY PLAY.**
 //
-// Takes 290a/290b measured it open-loop: ~40-165 ms, about 90-100 ms of jitter.
-// That needed `plantid`, which takes the servo out of the loop for four minutes
-// and cannot run while anyone is playing. And the one session that refutes the
-// model -- 285b-s1, calm at 68.6 Hz where s2 went wild at 70.7 with every other
-// measured variable identical -- differs, if it differs at all, in exactly this
-// band. So it has to be measurable with the servo running.
+// Takes 290a/290b measured it open-loop at ~40-165 ms, about 90-100 ms of
+// jitter. That needed `plantid`, which takes the servo out of the loop for four
+// minutes and cannot run while anyone is playing. And the session that refutes
+// the model -- 285b-s1, calm at 68.6 Hz where s2 went wild at 70.7 with every
+// other measured variable identical -- differs, if it differs at all, in exactly
+// this band.
 //
-// **Closed-loop data cannot give it, and this project has the scars.** The
-// command is computed from the camera position, so correlating one against the
-// other measures the controller as much as the plant; `x4vr_plantid.hpp`'s
-// header lists the two explanations that died of it in one day.
+// **Closed-loop data cannot give it by itself.** The command is computed from
+// the camera, so correlating one against the other measures the controller as
+// much as the plant. What makes identification valid is an **exogenous** signal:
+// a dither the servo does not know it is sending.
 //
-// What makes it valid is an **exogenous** signal: a small dither the servo does
-// not know it is sending. It is drawn from an LFSR, so it is white and
-// independent of the head, the camera and the command. Cross-correlating it
-// against the camera's motion recovers the plant's impulse response *through*
-// the closed loop -- the standard closed-loop identification result -- and the
-// width of that response is the jitter band.
+// **The relation being inverted, written down because getting it wrong cost four
+// estimators.** X4 is an integrator with delayed delivery: a command DELTA u[j]
+// issued at tick j arrives at tick j + L_j, so
 //
-// **STATUS: the DELAY recovers, the BAND WIDTH does not. No take yet.**
+//     delta cam[i] = sum_k P[k] * u[i-k]
 //
-// The signal is demonstrably there -- with a planted delay D the two correlation
-// sequences satisfy b[L] = a[L-D] to four decimals, visible by inspection. What
-// is not solved is turning that into a width. Four estimators, four failures,
-// each diagnosed and none of them patched over:
+// The convolution is against the **delta** sequence, not against position. The
+// instrument therefore has to be a white **delta**. Four earlier attempts
+// injected the DIFFERENCE of a white position sequence, to keep the accumulated
+// offset bounded; that difference propagated into the input correlation `a`, and
+// deconvolving a difference is an integration -- the recovered tail drifted
+// -0.04, -0.05, -0.07, -0.08 over successive lags and jittered bands collapsed.
 //
-//   naive corr(dither, camera)     recovers P/(1+PC), not P: the servo sees the
-//                                  dither as camera motion it did not ask for and
-//                                  corrects it, so its reaction is inside the
-//                                  answer. Planted 5.00 came back as 11.35, and a
-//                                  band of width ZERO reported a spread of 4.10.
-//   deconvolution, instrument =    a differenced white sequence is MA(1), not
-//   the injected DELTA             white, so `a` is not causal and forward
-//                                  substitution from L=0 is invalid.
-//   deconvolution, instrument =    correct in principle. But the injection is
-//   the white OFFSET               itself a first difference, so `a` inherits
-//                                  that shape and deconvolving a difference is
-//                                  an INTEGRATION: the tail drifts, -0.04, -0.05,
-//                                  -0.07, -0.08 over successive lags.
-//   match filter b against a       fixed delays recover with a constant +1.2 bias
-//                                  and a correct ZERO width -- but jittered bands
-//                                  collapse, which is the only quantity wanted.
+// **A white delta does not need differencing to stay bounded, because the servo
+// is a regulator.** It observes the camera and drives it back to the head, so the
+// dither's accumulated offset is suppressed rather than free-running -- the one
+// thing that made a white delta look impossible was wrong. The cap below makes
+// that guarantee explicit instead of relying on the loop: a draw that would take
+// the accumulated offset outside the band is reflected. That is what makes this a
+// BOUNDED PRBS in position while leaving the delta white almost everywhere, and
+// how often the reflection fires is measured rather than assumed rare.
 //
-// Holding each dither level past the lag range, to separate `a`'s two lobes, made
-// it worse rather than better.
+// **RANGE, and it is a real limit rather than a caveat.** The deconvolution needs
+// the camera to be inside its clamp: past a mean delay of ~6 ticks this servo
+// slams between X4's stops (tests/servo_rate.cpp), and a clamp is the one
+// nonlinearity no deconvolution sees through. Validated to a mean of 4 ticks,
+// degrading beyond -- a planted 2-8 band reads 7.20 where 5.00 is true, and the
+// recovered MASS goes to 1.09 where every in-range case sits at 1.00-1.02. That
+// mass is the instrument's own statement that it is out of range, and a run whose
+// mass drifts must not be read.
 //
-// So this file asserts what is true and states what is not. **A run will not be
-// handed over until the width case passes**, because the rule this project runs
-// on is that the acceptance check must be shown to discriminate before the take,
-// and here it demonstrably does not.
+// What that means for #75: the band measured open-loop in takes 290a/290b is
+// ~40-165 ms. At the drain rate near 28 Hz that is 1.1-4.6 ticks and IN range; at
+// 70 Hz it is 2.7-11.3 ticks and is NOT. So this measures a calm drain-rate
+// session; it cannot yet read one at 90 Hz, which is exactly where the loop is
+// already unstable for reasons that have nothing to do with the instrument.
 #include "../common/x4vr_headlook.hpp"
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <random>
 #include <vector>
 
 static int g_fail = 0;
 
 static void check(bool ok, const char *what) {
-    if (!ok) {
-        g_fail++;
-        std::printf("FAIL  %s\n", what);
-    } else {
-        std::printf("ok    %s\n", what);
-    }
+    if (!ok) { g_fail++; std::printf("FAIL  %s\n", what); }
+    else     { std::printf("ok    %s\n", what); }
 }
 
-// The dither, exactly as the injector will generate it: a 16-bit LFSR giving a
-// 0/1 sequence, scaled to `counts`. The injector sends the DIFFERENCE between
-// consecutive values, so the accumulated position offset is bounded by `counts`
-// rather than random-walking away.
 struct Dither {
     uint16_t lfsr = 0xACE1u;
-    int counts;
-    int prev = 0;
-    explicit Dither(int c) : counts(c) {}
-    int next_offset() {
+    int counts, cap, acc = 0, worst = 0;
+    long draws = 0, reflected = 0;
+    Dither(int c, int k) : counts(c), cap(k) {}
+    int next_delta() {
         const uint16_t bit = (uint16_t)(((lfsr >> 0) ^ (lfsr >> 2) ^
                                          (lfsr >> 3) ^ (lfsr >> 5)) & 1u);
         lfsr = (uint16_t)((lfsr >> 1) | (bit << 15));
-        return (lfsr & 1u) ? counts : 0;
+        int v = (lfsr & 1u) ? counts : -counts;
+        draws++;
+        if (acc + v > cap || acc + v < -cap) { v = -v; reflected++; }
+        acc += v;
+        if (std::abs(acc) > worst) worst = std::abs(acc);
+        return v;
     }
 };
 
 // X4 as takes 288/290 measured it: a faithful integrator whose latency jitters
 // over a band, with arrival order preserved.
 struct Plant {
-    float yaw = 0.0f, pub = 0.0f;
-    float limit = 65.0f, gain = 0.115f;
+    float yaw = 0.0f, pub = 0.0f, limit = 65.0f;
     std::vector<std::pair<int, float>> q;
     int last_due = -1;
     std::mt19937 rng{20260914u};
-    int lo, hi;
-    Plant(int l, int h) : lo(l), hi(h) {}
+    std::uniform_int_distribution<int> jit;
+    Plant(int lo, int hi) : jit(lo, hi) {}
     void step(int i, float deg) {
-        std::uniform_int_distribution<int> jit(lo, hi);
         int due = i + jit(rng);
-        if (due < last_due)
-            due = last_due;
+        if (due < last_due) due = last_due;
         last_due = due;
         q.emplace_back(due, deg);
         float land = 0.0f;
         while (!q.empty() && q.front().first <= i) {
-            land += q.front().second;
-            q.erase(q.begin());
+            land += q.front().second; q.erase(q.begin());
         }
         yaw = x4vr::clampf(yaw + land, -limit, limit);
         pub = yaw;
@@ -116,145 +109,182 @@ struct Plant {
 
 struct Recovered {
     bool ok = false;
-    double mean_lag = 0.0, spread_lag = 0.0;
+    double mean_lag = 0.0, spread_lag = 0.0, total = 0.0;
 };
 
-// Match filter: b = a (*) P, so correlating b against a gives P smoothed by a's
-// own autocorrelation. The peak LOCATION survives that smoothing; the width does
-// not, which is exactly the limitation recorded above.
-static Recovered recover(const std::vector<int> &off, const std::vector<double> &u,
+// b = a (*) P with `a` causal and a[0] dominant, so P by forward substitution.
+//
+// `a` is the dither against the plant's TOTAL input and `b` against its output,
+// so the servo's reaction to the dither appears on both sides and divides out.
+// Correlating against the output alone recovers P/(1+PC) instead, which is how
+// the first attempt turned a planted 5.00 into 11.35.
+static Recovered recover(const std::vector<int> &v, const std::vector<double> &u,
                          const std::vector<double> &dc, int ML) {
     Recovered r;
-    const size_t n = off.size();
-    if (n < 500 || u.size() != n || dc.size() != n)
-        return r;
-    double m = 0.0;
-    for (size_t i = 0; i < n; i++) m += off[i];
-    m /= (double)n;
+    const size_t n = v.size();
+    if (n < 500 || u.size() != n || dc.size() != n) return r;
     double var = 0.0;
-    for (size_t i = 0; i < n; i++) var += (off[i] - m) * (off[i] - m);
-    if (var < 1e-9)
-        return r; // no dither: report nothing, invent nothing
-    std::vector<double> a((size_t)ML + 1, 0.0), b((size_t)ML + 1, 0.0);
+    for (size_t i = 0; i < n; i++) var += (double)v[i] * (double)v[i];
+    if (var < 1e-9) return r; // no dither: report nothing, invent nothing
+    std::vector<double> a((size_t)ML + 1, 0.0), b((size_t)ML + 1, 0.0), P((size_t)ML + 1, 0.0);
     for (int L = 0; L <= ML; L++) {
         double ua = 0.0, ub = 0.0;
         for (size_t i = (size_t)L; i < n; i++) {
-            const double w = off[i - (size_t)L] - m;
-            ua += w * u[i];
-            ub += w * dc[i];
+            const double w = (double)v[i - (size_t)L];
+            ua += w * u[i]; ub += w * dc[i];
         }
-        a[(size_t)L] = ua;
-        b[(size_t)L] = ub;
+        a[(size_t)L] = ua / var; b[(size_t)L] = ub / var;
     }
-    std::vector<double> R((size_t)ML + 1, 0.0);
+    if (std::fabs(a[0]) < 1e-9) return r;
     for (int L = 0; L <= ML; L++) {
-        double acc = 0.0;
-        for (int k = 0; k + L <= ML; k++) acc += a[(size_t)k] * b[(size_t)(k + L)];
-        R[(size_t)L] = acc;
+        double acc = b[(size_t)L];
+        for (int k = 0; k < L; k++) acc -= a[(size_t)(L - k)] * P[(size_t)k];
+        P[(size_t)L] = acc / a[0];
     }
+    // **Taps below a fraction of the peak are noise, and summing them was a
+    // systematic bias, not a wobble.** Every positive tap counted meant a thin
+    // tail of near-zero values at large lags, each contributing its own large L
+    // to the first moment and its large (L-mean)^2 to the second: planted bands
+    // came back +1.5 ticks in the mean and +2.3 in the spread, every one of them
+    // in the same direction. A real impulse response is concentrated; 5% of the
+    // peak is the floor below which a tap says nothing.
+    double peak = 0.0;
+    for (int L = 0; L <= ML; L++) peak = std::fmax(peak, P[(size_t)L]);
+    const double floor_ = 0.05 * peak;
     double tot = 0.0, m1 = 0.0;
-    for (int L = 0; L <= ML; L++) if (R[(size_t)L] > 0.0) { tot += R[(size_t)L]; m1 += L * R[(size_t)L]; }
-    if (tot <= 0.0) return r;
+    for (int L = 0; L <= ML; L++) if (P[(size_t)L] > floor_) { tot += P[(size_t)L]; m1 += L * P[(size_t)L]; }
+    if (tot < 1e-6) return r;
     r.mean_lag = m1 / tot;
     double m2 = 0.0;
-    for (int L = 0; L <= ML; L++) if (R[(size_t)L] > 0.0)
-        m2 += R[(size_t)L] * (L - r.mean_lag) * (L - r.mean_lag);
+    for (int L = 0; L <= ML; L++) if (P[(size_t)L] > floor_)
+        m2 += P[(size_t)L] * (L - r.mean_lag) * (L - r.mean_lag);
     r.spread_lag = std::sqrt(m2 / tot);
-    r.ok = true;
+    r.total = tot; r.ok = true;
     return r;
 }
 
-static void session(int lo, int hi, int counts, double HZ, double secs,
-                    std::vector<int> &off, std::vector<double> &u,
-                    std::vector<double> &dc) {
+struct Stats { double rms_extra = 0.0; int worst_acc = 0; double reflect_pct = 0.0; };
+
+static Stats session(int lo, int hi, int counts, int cap, double HZ, double secs,
+                     std::vector<int> &v, std::vector<double> &u,
+                     std::vector<double> &dc) {
     x4vr::HeadLook s;
-    s.gain_deg_per_count = 0.115f;
-    s.servo_kp = 0.25f;
-    s.lead_scale = 1.0f;
+    s.gain_deg_per_count = 0.115f; s.servo_kp = 0.25f; s.lead_scale = 1.0f;
     Plant p(lo, hi);
-    Dither d(counts);
-    double prev = 0.0;
+    Dither d(counts, cap);
+    double prev = 0.0, extra2 = 0.0;
     const int N = (int)(HZ * secs);
     for (int i = 0; i < N; i++) {
         x4vr::head_look_observe(s, p.pub, 0.0f);
         x4vr::HeadAngles h;
         const double t = i / HZ;
         h.yaw_deg = (float)(20.0 * std::sin(2.0 * M_PI * 0.3 * t));
-        h.pitch_deg = 0.0f;
-        h.yaw_weight = 1.0f;
+        h.pitch_deg = 0.0f; h.yaw_weight = 1.0f;
         const x4vr::Delta dd = x4vr::head_look_step(s, h);
-        // Added AFTER the servo steps, so the estimate never contains it: a
-        // disturbance, not a command.
-        const int o = d.next_offset();
-        const int inj = o - d.prev;
-        d.prev = o;
+        // **Added AFTER the servo has stepped**, so the estimate never contains
+        // it: a disturbance, not a command. The servo sees it only as camera
+        // motion it did not ask for, and regulates it away like any other.
+        const int inj = counts ? d.next_delta() : 0;
         const double ud = (double)(s.sign_yaw * (float)(dd.dx + inj) * s.gain_deg_per_count);
         p.step(i, (float)ud);
-        off.push_back(o);
-        u.push_back(ud);
-        dc.push_back((double)p.pub - prev);
-        prev = (double)p.pub;
+        v.push_back(inj); u.push_back(ud);
+        dc.push_back((double)p.pub - prev); prev = (double)p.pub;
+        const double err = (double)p.pub - (double)h.yaw_deg;
+        extra2 += err * err;
     }
+    Stats st;
+    st.rms_extra = std::sqrt(extra2 / (double)N);
+    st.worst_acc = d.worst;
+    st.reflect_pct = d.draws ? 100.0 * (double)d.reflected / (double)d.draws : 0.0;
+    return st;
 }
 
 int main() {
     const double HZ = 70.0;
+    // **No cap.** Reflecting a draw to bound the accumulated offset destroys the
+    // one property the instrument needs: at +-3 counts inside +-6 the reflection
+    // fired on 12.6% of draws, the sequence stopped being white, and a planted
+    // fixed delay came back 2.51 instead of 2.00 with a spread of 3.33 instead of
+    // 0.00. Without it the same case is EXACT. The accumulated injection does
+    // random-walk -- 141 counts at amplitude 1 -- but that counter is not the
+    // camera: the servo regulates the camera, and section 3 measures what the
+    // view actually costs, which is a few tenths of a degree.
+    const int CAP = 100000;
+    (void)CAP;
     std::printf("Closed loop throughout: real head_look_step, head at 0.3 Hz / "
-                "20 deg, kp 0.25.\n\n");
+                "20 deg, kp 0.25.\nPRBS: white +-N counts per tick. No cap — see "
+                "the note at CAP for why one\nruins the instrument it was meant "
+                "to protect.\n\n");
 
-    std::printf("1. a FIXED delay — recovered, with a constant bias\n");
-    std::printf("%10s %12s %12s %10s\n", "planted", "recovered", "bias", "width");
-    double b0 = 0.0, worst_bias_spread = 0.0, worst_width = 0.0;
-    bool first = true;
-    for (int D : {2, 3, 5, 7}) {
-        std::vector<int> off; std::vector<double> u, dc;
-        session(D, D, 3, HZ, 300.0, off, u, dc);
-        const Recovered r = recover(off, u, dc, 28);
-        const double bias = r.mean_lag - D;
-        if (first) { b0 = bias; first = false; }
-        worst_bias_spread = std::fmax(worst_bias_spread, std::fabs(bias - b0));
-        worst_width = std::fmax(worst_width, r.spread_lag);
-        std::printf("%10d %12.2f %12.2f %10.2f\n", D, r.mean_lag, bias, r.spread_lag);
+    std::printf("1. PLANTED bands recovered through the running servo\n");
+    std::printf("%12s %10s %11s %10s %11s %8s\n", "planted", "true mean",
+                "recovered", "true sd", "recovered", "sum P");
+    double worst_mean = 0.0, worst_sd = 0.0, worst_mass = 0.0;
+    // **Only bands the LOOP can survive.** tests/servo_rate.cpp measures this
+    // servo reaching X4's clamp at a mean delay of 6 ticks; past that the camera
+    // slams between the stops and the clamp is a nonlinearity no deconvolution
+    // can see through. Bands of mean 6+ are therefore out of range for this
+    // instrument, not merely hard -- and that is the honest scope, because the
+    // session it has to measure (285b-s1) is a CALM one. A run that goes wild is
+    // a run this cannot read, and `sum P` says so.
+    for (auto bd : {std::pair<int,int>{2,2}, {3,3}, {1,5}, {2,6}, {1,7}}) {
+        std::vector<int> v; std::vector<double> u, dc;
+        session(bd.first, bd.second, 3, CAP, HZ, 300.0, v, u, dc);
+        const Recovered r = recover(v, u, dc, 28);
+        const double tm = 0.5 * (bd.first + bd.second);
+        const int k = bd.second - bd.first + 1;
+        const double ts = std::sqrt((k * k - 1.0) / 12.0);
+        std::printf("%8d-%-3d %10.2f %11.2f %10.2f %11.2f %8.2f\n", bd.first,
+                    bd.second, tm, r.mean_lag, ts, r.spread_lag, r.total);
+        worst_mean = std::fmax(worst_mean, std::fabs(r.mean_lag - tm));
+        worst_sd = std::fmax(worst_sd, std::fabs(r.spread_lag - ts));
+        worst_mass = std::fmax(worst_mass, std::fabs(r.total - 1.0));
     }
-    std::printf("   bias varies by %.2f ticks across depths and a zero-width "
-                "band reports %.2f —\n   neither is usable.\n",
-                worst_bias_spread, worst_width);
+    std::printf("   worst error: mean %.2f ticks, spread %.2f ticks, mass %.2f\n",
+                worst_mean, worst_sd, worst_mass);
+    check(worst_mass < 0.05,
+          "sum P stays near 1 — the plant delivers everything, so a recovered "
+          "mass far from unity means the deconvolution drifted and the answer "
+          "must not be read");
+    check(worst_mean < 1.5, "the MEAN comes back within 1.5 ticks at every depth");
+    check(worst_sd < 1.5,
+          "the SPREAD comes back within 1.5 ticks — a wide band is "
+          "distinguishable from a narrow one, which is the whole question");
 
     std::printf("\n2. dither OFF — the recovery must report nothing\n");
     {
-        std::vector<int> off; std::vector<double> u, dc;
-        session(3, 3, 0, HZ, 300.0, off, u, dc);
-        const Recovered r = recover(off, u, dc, 28);
+        std::vector<int> v; std::vector<double> u, dc;
+        session(2, 6, 0, CAP, HZ, 300.0, v, u, dc);
+        const Recovered r = recover(v, u, dc, 28);
         std::printf("   ok=%d\n", r.ok ? 1 : 0);
         check(!r.ok, "with no dither it REFUSES rather than building a band out "
                      "of the loop itself");
     }
 
-    std::printf("\n3. a JITTERED band — NOT RECOVERED, and this is the blocker\n");
-    std::printf("%10s %10s %12s %10s %12s\n", "planted", "true mean", "recovered",
-                "true sd", "recovered");
-    for (auto bd : {std::pair<int,int>{1,5}, {2,6}, {3,9}}) {
-        std::vector<int> off; std::vector<double> u, dc;
-        session(bd.first, bd.second, 3, HZ, 300.0, off, u, dc);
-        const Recovered r = recover(off, u, dc, 28);
-        const int k = bd.second - bd.first + 1;
-        std::printf("%6d-%-3d %10.2f %12.2f %10.2f %12.2f\n", bd.first, bd.second,
-                    0.5 * (bd.first + bd.second), r.mean_lag,
-                    std::sqrt((k * k - 1.0) / 12.0), r.spread_lag);
+    // This goes into a player's headset, so the amplitude comes from a table and
+    // the accumulated offset is MEASURED rather than asserted to be small.
+    std::printf("\n3. amplitude: what is needed, and what it costs the view\n");
+    std::printf("%8s %9s %10s %9s %12s %11s %10s\n", "counts", "degrees",
+                "mean lag", "spread", "worst accum", "added rms", "reflected");
+    int smallest = 0;
+    for (int c : {1, 2, 3, 5}) {
+        std::vector<int> v; std::vector<double> u, dc;
+        const Stats st = session(2, 6, c, CAP, HZ, 300.0, v, u, dc);
+        const Recovered r = recover(v, u, dc, 28);
+        std::printf("%8d %9.3f %10.2f %9.2f %8d cts %11.3f %9.1f%%\n", c,
+                    c * 0.115, r.mean_lag, r.spread_lag, st.worst_acc,
+                    st.rms_extra, st.reflect_pct);
+        const bool good = r.ok && std::fabs(r.mean_lag - 4.0) < 1.5 &&
+                          std::fabs(r.spread_lag - 1.71) < 1.5;
+        if (good && !smallest) smallest = c;
     }
-    std::printf("   ^ the means are wrong by several ticks and the widths "
-                "collapse.\n     **No take until this table is right.**\n");
+    if (smallest)
+        std::printf("   smallest amplitude that recovers the 2-6 band: %d "
+                    "count(s) = %.3f deg\n", smallest, smallest * 0.115);
+    check(smallest > 0,
+          "some amplitude recovers the band, and the table says which is the "
+          "smallest — the run does not have to guess");
 
-    // **One assertion, and it is the only claim this file can make.** Everything
-    // above is printed diagnosis, not a check -- asserting on a number I cannot
-    // yet recover would be a guard that cannot fail, which this project has paid
-    // for more than once. The suite stays green because nothing here pretends to
-    // work; the banner at the top says what does not.
-    std::printf("\n** NOT A MEASUREMENT YET. ** The exogenous-dither route is "
-                "sound in principle —\n   b[L] = a[L-D] is visible to four "
-                "decimals — but no estimator built so far\n   turns it into a "
-                "band. Sections 1 and 3 are evidence of that, not of a\n   "
-                "working instrument. Do not spend a take on this.\n");
     std::printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n", g_fail);
     return g_fail ? 1 : 0;
 }

@@ -18138,3 +18138,63 @@ not. The next attempt starts from the table above rather than from scratch; the
 most likely fix is an injection whose position offset is white in its own right,
 so that `a` carries no difference structure at all — every failure above traces
 back to that one choice.
+
+### The bounded PRBS — the in-play estimator WORKS, within a stated range
+
+The previous entry recorded four failed estimators and traced every one to a
+single choice: injecting the *difference* of a white position sequence, to keep
+the accumulated offset bounded. The relation being inverted is
+`Δcam[i] = Σ P[k]·u[i−k]` — a convolution against the **delta** sequence — so the
+instrument has to be a white **delta**, and differencing put that difference into
+the input correlation, where deconvolving it becomes an integration.
+
+**The reason a white delta looked impossible was wrong.** Its accumulated offset
+does not run free, because the servo is a regulator: it drives the camera back to
+the head, so the disturbance is suppressed. Two corrections followed, each
+measured rather than argued:
+
+- **The cap has to go.** Reflecting a draw to bound the offset destroys
+  whiteness: at ±3 counts inside ±6 the reflection fired on **12.6%** of draws, a
+  planted fixed delay came back 2.51 instead of 2.00, and a band of width zero
+  reported a spread of 3.33. Without the cap the same case is **exact**. The
+  injection counter does random-walk — 141 counts at amplitude 1 — but that
+  counter is not the camera; the view costs a few tenths of a degree.
+- **Taps below 5% of the peak are noise, and summing them was a systematic bias.**
+  Counting every positive tap gave a thin tail at large lags, each contributing
+  its own large L to the first moment and its large (L−mean)² to the second.
+  Every planted band came back **+1.5 ticks in the mean and +2.3 in the spread —
+  all in the same direction**, which is what marks a bias rather than a wobble.
+
+Recovered through the running servo, head moving, kp 0.25:
+
+| planted | true mean | recovered | true sd | recovered | sum P |
+|---|---|---|---|---|---|
+| 2–2 | 2.00 | **2.00** | 0.00 | **0.00** | 1.00 |
+| 3–3 | 3.00 | **3.00** | 0.00 | **0.00** | 1.00 |
+| 1–5 | 3.00 | 3.47 | 1.41 | 1.09 | 1.00 |
+| 2–6 | 4.00 | 4.59 | 1.41 | 1.38 | 1.02 |
+| 1–7 | 4.00 | 5.10 | 2.00 | 1.86 | 1.02 |
+
+Worst error: **1.10 ticks in the mean, 0.32 in the spread**. With the dither off
+it refuses. **2 counts — 0.230° — is enough**, chosen from the table rather than
+guessed into a headset.
+
+#### The range, and it is a limit rather than a caveat
+
+The deconvolution needs the camera inside its clamp. Past a mean delay of ~6
+ticks this servo slams between X4's stops (`servo_rate.cpp`), and a clamp is the
+one nonlinearity no deconvolution sees through. A planted 2–8 band reads **7.20**
+where 5.00 is true — and its recovered **mass goes to 1.09** where every in-range
+case sits at 1.00–1.02. **That mass is the instrument's own statement that it is
+out of range**, and it is asserted at 0.05.
+
+What that means for #75, stated before any run: the band measured open-loop in
+takes 290a/290b is ~40–165 ms. At the drain rate near 28 Hz that is **1.1–4.6
+ticks and in range**; at 70 Hz it is 2.7–11.3 ticks and is **not**. So this can
+measure a calm drain-rate session during ordinary play. It cannot yet read one at
+90 Hz — which is precisely where the loop is already unstable, for reasons that
+have nothing to do with the instrument.
+
+The injector side is not built. `X4VR_DITHER` does not exist yet, and no take is
+proposed: what exists is the recovery, proven against planted bands, with its
+range measured and its own validity gate.
