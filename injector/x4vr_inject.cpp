@@ -2219,13 +2219,67 @@ void send_key(int scancode, bool down);
 // of g_headlook -- so two threads in it would corrupt the servo, not merely
 // race a statistic. `tick_guard` below turns that constraint into something that
 // reports rather than something I have to remember.
+// **X4VR_TICK_HZ IS HARMFUL. Do not set it, and do not reach for it to raise
+// X4's camera rate.** It is kept only so the takes that measured the damage can
+// be reproduced.
+//
+// It does exactly what it says -- it moves the servo tick off X4's event drain
+// onto a thread of our own at the requested rate -- and that move is the defect.
+// `headlook_tick()` is normally called from INSIDE the `SDL_PeepEvents`
+// interception below, so the mouse event it pushes is consumed by the very
+// `while (SDL_PollEvent(&e))` loop it was pushed into. Measured residency in
+// X4's queue, over the windows that actually pushed motion:
+//
+//   default (servo on the drain)    take 291   0.01 ms mean, 0.01 median
+//   X4VR_TICK_HZ=90 (own thread)    take 292  16.79 ms mean, 19.89 median
+//
+// Roughly 17 ms of pure added latency, and it lands on a loop whose stability
+// depends on total delay measured in TICKS -- so raising the rate shortens the
+// tick and charges the same milliseconds twice. `tests/servo_rate.cpp` section 9
+// drives the real servo from those measured rates and reproduces both outcomes:
+// 0.0% slam at the default against a measured 0.0%, and 32.3% at 90 Hz against a
+// measured 20.3%.
+//
+// Every session that ever went wild had this knob set:
+//
+//   285b-s2  70.7 Hz  WILD (7.1%)      287b  69.7 Hz  WILD (7.5%)
+//   292      75.8 Hz  WILD (20.3%)     285b-s1  68.6 Hz  calm -- UNEXPLAINED
+//
+// s1 is the one session with the knob that stayed calm and nothing measured
+// separates it from s2; that is still open (#75). It is not a reason to use the
+// knob. The camera-rate win it was added for is real (28.2 -> 54.5 Hz in s1) and
+// unusable: a camera slamming between X4's stops is a far worse VR defect than
+// the jitter it was meant to reduce, and there are no cosmetic defects in VR.
 static int tick_hz() {
     static const int hz = [] {
         const char *e = getenv("X4VR_TICK_HZ");
         const int v = e && *e ? atoi(e) : 0;
         // 400 Hz is far above any display rate and still 45x below take 119's
         // 18 kHz drain. Above that the push rate itself becomes the hazard.
-        return (v < 0 || v > 400) ? 0 : v;
+        const int clamped = (v < 0 || v > 400) ? 0 : v;
+        // Said once, at the point of use, because a knob documented only in
+        // docs/ is a knob whose warning is not read by whoever sets it.
+        //
+        // **Gated on the variable being SET, not on the value surviving the
+        // clamp.** `X4VR_TICK_HZ=500` asks for the harmful behaviour just as
+        // plainly as `=90` does; gating on `clamped` would have said nothing at
+        // all about the run that asked loudest. Intent, never outcome.
+        if (e && *e) {
+            X4VR_LOG("tick: X4VR_TICK_HZ=%s — this knob is HARMFUL and is kept "
+                     "only to reproduce takes 285b/287b/292. It moves the servo "
+                     "off X4's event drain, which measured +17 ms of queue "
+                     "latency (0.01 ms -> 19.89 ms median) and made the camera "
+                     "slam between X4's stops in 3 of the 4 sessions that used "
+                     "it.", e);
+            if (clamped)
+                X4VR_LOG("tick: driving the servo at %d Hz on our own thread — "
+                         "expect this run to be unstable.", clamped);
+            else
+                X4VR_LOG("tick: %s is outside 1..400 and was IGNORED — the servo "
+                         "stays on X4's drain, which is the good path. The run "
+                         "is NOT testing what its command line asked for.", e);
+        }
+        return clamped;
     }();
     return hz;
 }

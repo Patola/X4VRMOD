@@ -8,6 +8,13 @@ Findings and plans. See [../DESIGN.md](../DESIGN.md) for the architecture.
 | [x4-quirks.md](x4-quirks.md) | Pitfalls and traps. Every entry leads with the **symptom**, so it can be found by what went wrong rather than by what caused it. |
 | [phase4b-test-plan.md](phase4b-test-plan.md) | How the frame-doubling change gets verified, written before the change. |
 
+## Knobs that are known harmful
+
+`X4VR_TICK_HZ` — **do not set it.** It moves the servo tick off X4's event drain,
+which measured ~17 ms of added queue latency and made the camera slam between X4's
+stops in 3 of the 4 sessions that used it. Kept only to reproduce those takes. See
+*"`X4VR_TICK_HZ` is harmful"* in [x4-quirks.md](x4-quirks.md).
+
 ## Convention
 
 Predictions are committed **before** the measurement that tests them, and

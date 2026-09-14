@@ -16991,7 +16991,15 @@ latency of several ticks is sufficient on its own.
 **Status and safety.** `X4VR_TICK_HZ` is **off by default** — `tick_hz()` returns
 0 unless the variable is set — so the default path is exactly the pre-285b
 behaviour and is unaffected. The knob must not be used again until the servo
-accounts for in-flight command. Session 1's measurement (camera 28.2 → 54.5 Hz)
+accounts for in-flight command.
+
+> **Superseded — the conclusion held, the reason did not.** "Until the servo
+> accounts for in-flight command" names a fix that would unlock the knob, and
+> take 292 showed that fix is the wrong one: in-flight accounting was refuted by
+> `servo_rate.cpp` section 8, and the real cost is that the knob moves the servo
+> off X4's event drain and buys ~17 ms of queue latency. See
+> *"`X4VR_TICK_HZ` is harmful"* at the end of this file. Left in place because
+> wrong turns are not edited away. Session 1's measurement (camera 28.2 → 54.5 Hz)
 still stands as a measurement, but the win is **unusable** in this form: a camera
 slamming between clamps is a far worse VR defect than the jitter it was meant to
 reduce.
@@ -18607,3 +18615,69 @@ and `trackmaxyaw=85` is *consistent* — the camera never reached it. Consistent
 not confirmed, and this model cannot get further, because a run pinned at its own
 clamp says nothing about where X4's is. The 81.57 deg single update remains
 unexplained and the suite now asserts that it is unexplained.
+
+## `X4VR_TICK_HZ` is harmful — the verdict, and why it is kept
+
+**Symptom.** The camera slams between X4's stops, the frustum spins, and the view
+becomes unusable. Every session that has ever done this had `X4VR_TICK_HZ` set.
+
+**Do not set it.** It is kept in the tree only so takes 285b, 287b and 292 can be
+reproduced. It is off by default and stays off, and this is stronger than "off by
+default" — it is a knob that is known to break the thing it was added to improve.
+
+### What it does, and why that is the defect
+
+It does exactly what it claims: it moves the servo tick off X4's event drain onto
+a thread of our own at the requested rate. **That move is the whole problem.**
+
+`headlook_tick()` is normally called from *inside* the injector's
+`SDL_PeepEvents` interception, so the mouse event it pushes is consumed by the
+very `while (SDL_PollEvent(&e))` loop it was pushed into. Take it off that drain
+and the event has to wait for X4's next one — and `pumprate` measures those as
+clustered, so the wait is much longer than a drain period would suggest.
+
+Measured over the windows that actually pushed motion:
+
+| | servo runs on | queue residency |
+|---|---|---|
+| take 291, default | X4's drain | **0.01 ms** mean, 0.01 median |
+| take 292, `=90` | our own thread | **16.79 ms** mean, 19.89 median |
+
+That is ~17 ms of pure added latency, and it lands on a loop whose stability
+depends on total delay counted in **ticks** — so raising the rate shortens the
+tick and charges the same milliseconds twice over. `tests/servo_rate.cpp`
+section 9 drives the real `head_look_step()` from those measured rates, with no
+fitted parameter, and reproduces both outcomes: 0.0% slam at the default against
+a measured 0.0%, and 32.3% at 90 Hz against a measured 20.3%.
+
+### The record
+
+| session | rate | outcome |
+|---|---|---|
+| 285b-s2 | 70.7 Hz | **WILD** (7.1%) |
+| 287b | 69.7 Hz | **WILD** (7.5%) |
+| 292 | 75.8 Hz | **WILD** (20.3%) |
+| 285b-s1 | 68.6 Hz | calm (0.0%) — **unexplained** |
+| every take without the knob | — | calm |
+
+**285b-s1 is still open** and nothing measured separates it from s2 — same
+binary, same knobs, same tick driver. It is not a reason to use the knob; it is
+the remaining question in #75.
+
+### The win it was added for is real and unusable
+
+Session 1 measured X4's camera rate going 28.2 → 54.5 Hz, and that measurement
+still stands. Take 292 measured the same effect more carefully — 34.5 → 45.5 Hz,
+**sub-linear**: doubling our tick bought 1.3x the camera. Either way the rate does
+rise. It is bought with a camera that slams between X4's stops, which is a far
+worse VR defect than the jitter it was meant to reduce, and
+[[no-cosmetic-defects-in-vr]] applies in both directions — the cure must not be
+worse than the complaint.
+
+### If the camera rate is wanted again
+
+Not with this knob. The thing to change is what the servo does *on* X4's drain,
+not where it runs — the drain is the only place a pushed event is consumed for
+free. Any future attempt has to keep the queue residency at the 0.01 ms the
+default achieves, and `evflow`'s queue time restricted to motion windows is the
+number that says whether it did.
