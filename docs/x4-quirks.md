@@ -18916,3 +18916,61 @@ an input, and the corrected inputs are 1.4 against 1.7 rather than 1.3 against
 3.0 — a difference `servo_rate.cpp` section 8 already spans (1.15 at period 1
 against 1.56 at period 2, at dead time 5). What is left to explain is take 292's
 28 Hz, which is real, and why a shift of 1.4 → 1.7 flips a session.
+
+## Take 292's 28 Hz — it was never 28 Hz, and #75's answer is withdrawn
+
+The camera rate is **48.7 Hz** in take 292's wild windows, not 28.1. The 28 was
+three stacked defects in my own tooling, each found only because fixing the
+previous one exposed it.
+
+A readback that does not change counts as "no update", and three separate things
+make a change vanish **exactly when the camera is slamming**:
+
+1. the camera is **pinned on X4's yaw stop** at 65 deg — no change to report;
+2. it is **pinned on the pitch stop** at 35 deg — likewise;
+3. only **pitch** moved, and every measurement so far read yaw alone.
+
+Counting a publish as an update when either axis moved or either sat on its stop:
+
+| | camera, wild | tk/obs wild | tk/obs calm | |
+|---|---|---|---|---|
+| 285b-s2 | 25.6 → **63.4 Hz** | 3.22 → **1.30** | 1.22 | above its own calm rate |
+| 287b | 25.5 → **63.7 Hz** | 3.15 → **1.26** | **1.33** | **inverted** |
+| 292 | 28.1 → **48.7 Hz** | 2.66 → **1.54** | 1.22 | |
+
+**In two sessions of three the camera rate is HIGHER during the wild episode than
+during that session's own calm windows**, and in 287b the corrected ratio is
+*lower* when wild. There is no halving, in any session, and `tk/obs` does not
+separate the two states.
+
+### #75 ANSWERED is WITHDRAWN
+
+The claim "the controlling variable is ticks per camera observation" is retracted
+in full — not just its magnitudes, as the earlier annotation said. Every version
+of that ratio had the wildness in its denominator; each correction shrank the
+effect, and the third removed it. A quantity that changes this much under three
+successive fixes to how it is *counted* was never measuring X4.
+
+**What survives** is description only: s1 has no wild window, s2's wildness is one
+contiguous episode, s1 matches s2's calm phase, and p99 |dyaw| separates the two
+states cleanly (3.86 against 44.69). That is measured from the camera stream and
+never used tk/obs. **Nothing measured so far explains what starts an episode.**
+
+### Three stop-detection rules, each right on half the sessions
+
+Worth recording because each looked principled:
+
+* *largest repeated value* — gave 285b-s1 a stop of **24.52 deg** in a session
+  that never clamped;
+* *largest repeated value at ≥0.90 × peak* — fixed s1 and then excluded **take
+  292's real stop**, because 292 sits at 65.00 for 1442 samples while its peak is
+  79.64, so the rule demanded dwell above 71.68 and found none. That is what made
+  292's rate look real and produced the question this section answers;
+* *most-repeated value away from zero, holding ≥1% of samples* — separates
+  cleanly: 3.77 / 2.82 / 3.86% for the three sessions with episodes against
+  0.27 / 0.12 / 0.09% for the three without.
+
+Position does not identify a clamp; **dwell mass does**. And 292's 79.64 deg peak
+is still unexplained: the camera reaches it but never sits there, so it is not a
+stop — [[a-guard-that-cannot-fail]] applies to the earlier attempt to confirm
+`trackmaxyaw=85` from a model that pins at whatever limit it is handed.

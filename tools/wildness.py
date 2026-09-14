@@ -20,24 +20,32 @@ Two things this does that the earlier comparisons did not:
   stream, which rises when the camera oscillates and does not care whether it
   reaches a clamp. [[statistic-cannot-express-the-alternative]]
 
-**`tk/obs` IS NOT A PREDICTOR, and the first version of this file said it was.**
-The camera rate comes from `inputrate`'s "camera moved on N% of READS", and *the
-same pinning that blinds the slam counter also blinds this*: during a wild
-episode the camera sits on its stop 23-30% of the time, reports no change, and
-the measured rate collapses to about half. So tk/obs has the wildness in its own
-denominator and rises mechanically whenever the camera slams.
+**`tk/obs` IS NOT A PREDICTOR. The first version of this file said it was, and
+that finding is withdrawn.** The camera rate came from counting readbacks that
+CHANGED, and three separate things make a changed readback vanish exactly when
+the camera is slamming:
 
-Counting a sample as an update when it changed OR sat on the session's own
-saturation value, the difference disappears in three sessions of four:
+* it was **pinned on X4's yaw stop** (65 deg) -- no change to report;
+* it was **pinned on the pitch stop** (35 deg) -- likewise;
+* only **pitch** moved, and the rate was read from yaw alone.
 
-      285b-s2   wild 3.83 -> 1.89   calm 1.83
-      287b      wild 3.79 -> 1.86   calm 1.99   (wild is LOWER)
-      291       wild 2.52 -> 2.46   calm 2.75   (wild is LOWER)
-      292       wild 3.37 -> 2.46   calm 1.53
+All three depress the denominator of tk/obs during precisely the episodes it was
+being used to predict. Counting a publish as an update when either axis moved or
+either axis sat on its stop:
 
-Both columns are printed below. Read `corr`, never `raw`, and treat even `corr`
-as descriptive: no variable measured so far separates wild from calm across all
-six sessions. [[a-ratio-against-its-own-denominator]]
+      285b-s2   wild 25.6 -> 63.4 Hz    tk/obs 3.22 -> 1.30   calm 1.22
+      287b      wild 25.5 -> 63.7 Hz    tk/obs 3.15 -> 1.26   calm 1.33  INVERTED
+      292       wild 28.1 -> 48.7 Hz    tk/obs 2.66 -> 1.54   calm 1.22
+
+In two sessions of three the camera rate during the wild episode is **higher**
+than during that session's own calm windows, and in 287b the corrected tk/obs is
+LOWER when wild. It does not separate the two states.
+[[a-ratio-against-its-own-denominator]]
+
+**What still stands** is only the description: s1 has no wild window, s2's
+wildness is one contiguous episode, and s1 matches s2's calm phase. That comes
+from p99 |dyaw| on the camera stream and never used tk/obs. **Nothing measured so
+far explains what starts an episode.**
 
 Usage:  python3 tools/wildness.py <log> [<log> ...]
 """
@@ -52,7 +60,7 @@ IR = re.compile(
     r"^\[\s*(\d+\.\d+)\]\s+inject\s+inputrate: \d+ ticks in ([\d.]+) s = ([\d.]+) Hz \| "
     r"steering on ([\d.]+)% of ticks, delta sent on ([\d.]+)% of STEERING ticks \(=([\d.]+) Hz\) \| "
     r"camera read on [\d.]+% of ticks, moved on [\d.]+% of READS \(=([\d.]+) Hz\)", re.M)
-CS = re.compile(r"^\[\s*(\d+\.\d+)\]\s+layer\s+camstamp: atdraw=(-?[\d.]+),", re.M)
+CS = re.compile(r"^\[\s*(\d+\.\d+)\]\s+layer\s+camstamp: atdraw=(-?[\d.]+),(-?[\d.]+)", re.M)
 
 WILD_DEG = 15.0   # p99 |dyaw| above this is an oscillating camera, not steering
 
@@ -64,31 +72,46 @@ def windows(path):
     active = [(float(end) - float(dur), float(end), float(tick), float(cam))
               for end, dur, tick, steer, _sent, dhz, cam in IR.findall(text)
               if float(steer) > 50.0 and float(dhz) > 5.0 and float(cam) > 0.0]
-    stamps = sorted((float(t), float(y)) for t, y in CS.findall(text))
-    times = [t for t, _ in stamps]
+    stamps = sorted((float(t), float(y), float(p)) for t, y, p in CS.findall(text))
+    times = [t for t, _, _ in stamps]
     # This session's stop: the largest |yaw| the camera REPEATS consecutively,
     # i.e. a value it sat on rather than passed through. Not hard-coded 65 --
     # take 292 saturated at 79.64, which `<internal>`'s trackmaxyaw="85" allows,
     # and a fixed 65 would have mis-corrected it.
+    # **A stop is where the camera DWELLS, and the test is dwell mass.** Two
+    # earlier rules each worked on half the sessions. "Largest repeated value"
+    # gave 285b-s1 a stop of 24.52 deg in a session that never clamped. Adding
+    # ">= 0.90 * peak" fixed that and then excluded take 292's real stop: 292
+    # sits at 65.00 for 1442 samples but its peak is 79.64, so the rule demanded
+    # dwell above 71.68 and found none -- and that wrongly made 292's low camera
+    # rate look real.
+    #
+    # Position does not separate them; dwell does. The most-repeated value away
+    # from the at-rest zero, as a share of all samples:
+    #
+    #   285b-s2  65.00  3.77%      285b-s1   7.91  0.27%
+    #   287b     65.00  2.82%      287a     43.00  0.12%
+    #   292      65.00  3.86%      291       5.84  0.09%
+    #
+    # An order of magnitude apart, so 1% is a floor with room either side.
     repeats = {}
-    allyaw = [y for _, y in stamps]
+    allyaw = [y for _, y, _ in stamps]
     for k in range(len(allyaw) - 1):
-        if abs(allyaw[k + 1] - allyaw[k]) <= 1e-9:
+        if abs(allyaw[k + 1] - allyaw[k]) <= 1e-9 and abs(allyaw[k]) > 5.0:
             key = round(abs(allyaw[k]), 2)
             repeats[key] = repeats.get(key, 0) + 1
-    # **Only near the session's extreme counts as a stop.** 285b-s1 never reached
-    # a clamp, and its most-repeated value was 24.52 -- somewhere the camera
-    # happened to rest. Treating that as a stop credited it with updates it never
-    # had. A clamp is where the camera saturates, so require the repeated value to
-    # sit at the edge of the range actually visited.
-    peak = max((abs(y) for y in allyaw), default=0.0)
-    stop = max((v for v, n in repeats.items() if n >= 20 and v >= 0.90 * peak),
-               default=None)
+    stop = None
+    if repeats and allyaw:
+        cand, hits = max(repeats.items(), key=lambda kv: kv[1])
+        if hits >= 0.01 * len(allyaw):
+            stop = cand
     out = []
     for lo, hi, tick, cam in active:
         i = bisect.bisect_left(times, lo)
         j = bisect.bisect_right(times, hi)
-        yaw = [y for _, y in stamps[i:j]]
+        seg = stamps[i:j]
+        yaw = [y for _, y, _ in seg]
+        pit = [p for _, _, p in seg]
         if len(yaw) < 30:
             continue
         moves = [abs(yaw[k + 1] - yaw[k]) for k in range(len(yaw) - 1)
@@ -103,9 +126,17 @@ def windows(path):
         n = len(yaw) - 1
         fps = len(yaw) / (hi - lo)
         moved = sum(1 for k in range(n) if abs(yaw[k + 1] - yaw[k]) > 1e-9)
-        seen = moved if stop is None else sum(
-            1 for k in range(n)
-            if abs(yaw[k + 1] - yaw[k]) > 1e-9 or abs(abs(yaw[k]) - stop) < 0.5)
+        # **Either axis, and either stop.** Reading yaw alone counts a publish
+        # that moved only pitch as "no update", and X4's pitch has its own stop at
+        # maxpitch=35. Both omissions depress the rate exactly when the camera is
+        # slamming, which is when it is pinned in one axis or both. Counting them
+        # takes 285b-s2's wild windows from 25.6 Hz to 63.4 -- ABOVE its own calm
+        # windows, not half of them.
+        seen = sum(1 for k in range(n)
+                   if abs(yaw[k + 1] - yaw[k]) > 1e-9
+                   or abs(pit[k + 1] - pit[k]) > 1e-9
+                   or (stop is not None and abs(abs(yaw[k]) - stop) < 0.5)
+                   or abs(abs(pit[k]) - 35.0) < 0.5)
         out.append((tick, moved / n * fps, seen / n * fps, fps,
                     sorted(moves)[int(0.99 * len(moves))]))
     return out
