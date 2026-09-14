@@ -18391,3 +18391,75 @@ demoted to diagnostics with the reason printed beside it.
 X4's 65° stop — and two fixtures, `slam-fixed` and `slam-band`, that the scorer
 must **refuse**. An instrument that cannot decline is not an instrument, and the
 old one answered take 291's clamped-loop twin with a confident 222.1 ms.
+
+## Take 291, second reading — the delay is not a pure transport delay
+
+Take 291 can be asked one more question for free: **its tick wandered 9→51 ms
+inside the run**, so a delay fixed in wall time and a delay fixed in our own ticks
+make different predictions about the same 10853 samples.
+
+Recovering the impulse response in tick-lag, with both plants built as controls so
+the answer cannot come from the estimator:
+
+| plant | concentration in the peak tick |
+|---|---|
+| fixed in TIME, 70 ms | 0.36 |
+| fixed in TIME, 120 ms | 0.36 |
+| fixed in TICKS, 3 | 1.00 |
+| fixed in TICKS, 5 | 1.00 |
+| **take 291** | **0.61** |
+
+**X4's response is neither.** It sits between a pure time delay and a pure
+tick-locked one, which means the servo model's assumption of a transport delay —
+one number, in one unit — is wrong in a way no amount of tuning fixes.
+
+Fitting a mixed plant (n ticks of our cadence, then τ ms of X4's own response)
+against the two tick-domain observables:
+
+* **τ = 0 is excluded**: best misfit 14.93 against 0.27 for the mixed fit. X4
+  contributes a real component in *time*, and every acceptable fit puts it at
+  **20–30 ms** — about two of X4's own ~99 fps frames.
+* **n is 1–4 and not pinned**, and n = 0 scores 4.14, which this data cannot
+  reject. How much of the delay is ours is **open**.
+
+### A discriminator that only worked at the bin width I chose
+
+The first version of this measured concentration on a **millisecond grid** as
+well, and the two domains together appeared to pin the split at 3 ticks + 20 ms
+with a misfit of 2.0 against 83 for the worst of the grid. Sweeping the bin width
+afterwards:
+
+| bin ms | TIME 70 | TIME 120 | TICKS 3 | TICKS 5 |
+|---|---|---|---|---|
+| 12 | 0.31 | 0.40 | 0.29 | 0.44 |
+| 17 | 0.44 | 0.47 | 0.35 | 0.44 |
+| **23** | **0.49** | **0.67** | **0.42** | **0.33** |
+| 30 | 0.68 | 0.59 | 0.60 | 0.51 |
+
+The families separate at **23 ms and nowhere else** — and 23 ms is take 291's
+median tick, the one width at which the millisecond grid *is* the tick grid. The
+separation was the alignment, not the plant. Half the fit's observables were
+noise, and the conclusion they bought — *"most of the latency is ours"* — is
+withdrawn. The tick-domain column has no bin-width parameter and is what the table
+above rests on.
+
+I had also written that 290a and 290b "both read 2 of our own cadence steps, so
+the wall-clock difference was never X4" and offered it as independent
+corroboration. It corroborated the part that did not survive. It is left here
+because it was said.
+
+### What separates n from τ, and take 291 cannot do it
+
+Varying the tick rate: at 43.5 Hz our n ticks are n×23 ms, at 90 Hz they are
+n×11 ms, while τ does not move. The in-play latency at a second tick rate pins n
+directly. Take 291's own internal tick variation is not a controlled variable and
+the domain test above is exactly what fails on it.
+
+**P292.1** — if n ≈ 3, take 292 at 90 Hz reads roughly 20 + 3×11 = **53 ms**. If
+n ≈ 0 it reads **20–30 ms**, near 291's 70 ms only if n is large. A reading at or
+above 70 ms would refute the mixed model altogether.
+
+**P292.2** — the loop may go unstable at 90 Hz and the scorer refuse with
+ILL-CONDITIONED. That is a real outcome, not a failure: 285b-s2 went wild at
+70 Hz, and a run that slams at 90 is the same phenomenon with an instrument
+attached. Committed before the run.
