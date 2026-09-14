@@ -55,6 +55,7 @@
 // file exists to break, so it cannot express the question at all.
 #include "../common/x4vr_headlook.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <random>
@@ -130,6 +131,15 @@ struct Result {
     double max_excursion = 0.0;
     int reversals = 0;       // sign changes of camera velocity between updates
     double rms_err = 0.0;
+    // **p99 of the per-update move, and its absence is why section 8 read
+    // `period` as harmless.** Every statistic above is blind in the same way the
+    // LOG's slam counter was: `max_excursion` is dominated by the 20 deg the head
+    // is asking for and only moves once the loop reaches a stop, and `slam_pct`
+    // cannot fire below 20 deg per update. Take 285b's episode separates from its
+    // own calm windows at 44.69 deg against 4.76 on exactly this statistic, so it
+    // is the one the model has to report to be talking about the same thing.
+    // Fixed in tools/wildness.py first and left broken here, one file over.
+    double p99_move = 0.0;
 };
 
 // `traj` returns the head angles at step i. The servo runs at a fixed rate; the
@@ -155,6 +165,7 @@ static Result drive(int period, float kp, float lead, float plant_gain, F traj,
     Result r;
     int updates = 0;
     double prev_pub_yaw = 0.0, prev_vel = 0.0, err2 = 0.0;
+    std::vector<double> moves;
     for (int i = 0; i < steps; i++) {
         // The injector's order, and it matters: observe BEFORE step, so the
         // servo acts on this tick's reading. On the ticks where the plant did
@@ -172,6 +183,7 @@ static Result drive(int period, float kp, float lead, float plant_gain, F traj,
                 if (move > 20.0)
                     r.slam_pct += 1.0;
                 r.max_move = std::fmax(r.max_move, move);
+                moves.push_back(move);
                 if (updates > 1 && vel * prev_vel < 0.0)
                     r.reversals++;
             }
@@ -185,6 +197,10 @@ static Result drive(int period, float kp, float lead, float plant_gain, F traj,
     }
     if (updates > 1)
         r.slam_pct = 100.0 * r.slam_pct / (double)(updates - 1);
+    if (!moves.empty()) {
+        std::sort(moves.begin(), moves.end());
+        r.p99_move = moves[(size_t)(0.99 * (double)(moves.size() - 1))];
+    }
     r.rms_err = std::sqrt(err2 / (double)steps);
     return r;
 }
@@ -677,17 +693,28 @@ int main() {
     // `period` is an int here, so 1 and 2 bracket both takes.
     std::printf("\n8. period AND dead time together — the pair neither sweep "
                 "tried\n");
+    // **Reported as p99 |dyaw| over its BASELINE, because `period` moves both.**
+    // A camera sampled every `period` ticks shows `period` times as much motion
+    // per update from smooth tracking alone -- the head asks for at most
+    // amp*2*pi*hz = 62.8 deg/s, so a perfectly stable loop reads
+    // 62.8*period/90 deg per update. Reading the raw p99 would credit `period`
+    // with an instability that is really just a coarser sample. The ratio is 1.0
+    // for a loop that is merely tracking, whatever the period, and grows only
+    // when the camera is moving further than it was asked to.
     std::printf("%8s", "delay");
-    for (int p : {1, 2, 3}) std::printf("   period %d", p);
-    std::printf("      <- max |cam| deg, 65.00 is the clamp\n");
+    for (int p : {1, 2, 3}) std::printf("    period %d", p);
+    std::printf("   <- p99 |dyaw| / smooth-tracking baseline\n");
     int clamp_at[4] = {0, 0, 0, 0};
+    double ratio[4][9] = {{0}};
     for (int delay : {0, 1, 2, 3, 4, 5, 6, 7, 8}) {
         std::printf("%8d", delay);
         for (int p : {1, 2, 3}) {
             const Result r = drive(p, 0.25f, 1.0f, 0.115f,
                                    [](int i) { return turning(i, 0.5, 20.0); },
                                    90 * 20, delay);
-            std::printf("   %8.2f", r.max_excursion);
+            const double base = 20.0 * 2.0 * M_PI * 0.5 * (double)p / 90.0;
+            ratio[p][delay] = r.p99_move / base;
+            std::printf("   %9.2f", ratio[p][delay]);
             if (r.max_excursion >= 64.9 && !clamp_at[p]) clamp_at[p] = delay;
         }
         std::printf("\n");
@@ -696,16 +723,49 @@ int main() {
                 "period 2 -> %d, period 3 -> %d\n",
                 clamp_at[1], clamp_at[2], clamp_at[3]);
 
-    // **REFUTED, by the check written to be able to fail.** The boundary does not
-    // move: 6 at period 1, 6 at period 2, 6 at period 3. Re-sending a correction
-    // already in flight does NOT lower the dead time the loop tolerates, so it is
-    // not what made take 292 wild, and section 1's gain multiplication does not
-    // survive contact with a plant that has dead time. The story this section was
-    // written to support is wrong and the assertion now records that.
-    check(clamp_at[1] == clamp_at[2] && clamp_at[2] == clamp_at[3],
-          "period does NOT interact with dead time — the clamp boundary is the "
-          "same at 1, 2 and 3 steps per camera update, which refutes the "
-          "re-issued-command mechanism");
+    // **First refuted, then found — and the difference was the statistic.**
+    //
+    // This section originally read `max_excursion` and concluded that period does
+    // not interact with dead time, because the clamp is reached at 6 whatever the
+    // period. That is still true and `clamp_at` still says so. But max excursion
+    // is dominated by the 20 deg the head is asking for and only moves once the
+    // loop reaches a stop, so it cannot see a loop that is oscillating and has not
+    // got there yet -- the same blindness that made the LOG's slam counter read
+    // 0.0% on take 285b-s1 and label it calm. I found that in the log, fixed it in
+    // tools/wildness.py, and left the identical defect here, one file over.
+    // [[x4vr-fixed-here-broken-next-door]]
+    //
+    // With p99 over its baseline the mechanism is visible: at dead time 5, just
+    // under the clamp, the ratio grows 1.15 -> 1.56 -> 2.25 with period, and
+    // period 3 passes "moving twice as far as it was asked" one whole tick of dead
+    // time before period 1 does.
+    int cross[4] = {0, 0, 0, 0};
+    for (int p : {1, 2, 3})
+        for (int d = 0; d <= 8 && !cross[p]; d++)
+            if (ratio[p][d] >= 2.0) cross[p] = d;
+    std::printf("  ratio first reaches 2.0 at dead time: period 1 -> %d, "
+                "period 2 -> %d, period 3 -> %d\n", cross[1], cross[2], cross[3]);
+    check(ratio[1][5] < ratio[2][5] && ratio[2][5] < ratio[3][5],
+          "period DOES amplify the oscillation — at the dead time just below the "
+          "clamp the normalised p99 grows monotonically with it");
+    check(cross[3] < cross[1],
+          "period lowers the dead time at which the camera starts moving further "
+          "than it was asked to — the boundary moves, which max_excursion could "
+          "not see");
+
+    // **And it is nowhere near big enough, which is the open work.** Over 491
+    // windows, holding the tick rate and varying only ticks-per-observation takes
+    // the wild share from 2% to 97%; holding ticks-per-observation and varying the
+    // tick rate leaves it flat (3/0/0/4, and 92/97/100). So in the game `period`
+    // is the dominant variable and the delay in ticks is nearly irrelevant. Here
+    // it is the reverse: dead time decides, and tripling the period buys one tick.
+    // Asserting the gap keeps it from being quietly closed by a model that
+    // overclaims later.
+    check(cross[1] - cross[3] <= 2,
+          "the model's period effect is still only ~1 tick of dead time, against "
+          "data where period moves the wild share 2% -> 97% with the tick rate "
+          "held — the model reproduces the MECHANISM but not its WEIGHT, and that "
+          "gap is unexplained");
 
     // What is left is the plain sum, in TICKS, against section 5's threshold --
     // and the term that was missing is not a new mechanism but a measured one.

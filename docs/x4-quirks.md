@@ -18514,6 +18514,15 @@ needed period 11 to slam *at zero dead time*, and that gain multiplication does
 not survive contact with a plant that has any. The mechanism is refuted, by the
 assertion written to be able to refute it.
 
+> **This refutation was wrong, and the fault was the statistic.** `max_excursion`
+> is dominated by the 20 deg the head is asking for and only moves once the loop
+> reaches a stop, so it cannot see a loop that is oscillating and has not got
+> there yet — the *same* blindness that made the log's slam counter call take
+> 285b-s1 calm. Re-run on p99 of the per-update move over its smooth-tracking
+> baseline, the boundary *does* move. See *"Making the model show the period
+> mechanism"* below. Left as written: I refuted a correct hypothesis with a blind
+> instrument and it took the log analysis to notice.
+
 Worth naming why it was missed twice: section 1 swept period at dead time 0 and
 section 5 swept dead time at period 1, so each cleared the other's factor while
 holding it at the value where it cannot bite. Two sweeps, both honest, and the
@@ -18768,3 +18777,66 @@ which period destabilises, and making the model show it, is the open work.
 The practical rule needs no model: **keep ticks per camera observation near 1.**
 That is what the default path does (1.05–1.35 in every calm group) and what
 `X4VR_TICK_HZ` breaks.
+
+## Making the model show the period mechanism
+
+`servo_rate.cpp` section 8 said `period` does not interact with dead time, and
+491 windows of game data said `period` is *the* variable. The disagreement was
+the model's **statistic**, not its physics.
+
+### The same blindness, one file over
+
+Section 8 scored itself with `max_excursion` and the ">20 deg per update" slam
+counter. Both are blind in exactly the way the log's slam counter was blind:
+max excursion is dominated by the 20 deg the head is asking for and moves only
+once the loop reaches a stop, and the slam counter cannot fire below 20 deg per
+update. A loop oscillating harder and harder but not yet at the clamp reads
+identical to a calm one.
+
+That is the defect I had just found in the *log*, fixed in `tools/wildness.py`,
+and left standing in the model. [[x4vr-fixed-here-broken-next-door]] — the class
+was known, and I still shipped it one file over the same day.
+
+### The statistic, and why it is a ratio
+
+p99 of the per-update move, **divided by what smooth tracking would give**:
+a camera sampled every `period` ticks shows `period` times as much motion per
+update from tracking alone, so the raw p99 would credit `period` with an
+instability that is only a coarser sample. The head asks for at most
+`amp·2π·hz` = 62.8 deg/s, so the baseline is `62.8·period/90` deg per update. The
+ratio reads 1.0 for a loop that is merely tracking, at any period.
+
+### The mechanism is there
+
+| dead time | period 1 | period 2 | period 3 |
+|---|---|---|---|
+| 0–4 | 0.99 | 1.07 | 1.04–1.15 |
+| **5** | **1.15** | **1.56** | **2.25** |
+| 6+ | 17.13 | 17.13 | 17.13 |
+
+At dead time 5, just under the clamp, the ratio grows monotonically with period,
+and period 3 passes "moving twice as far as it was asked" **one whole tick of
+dead time earlier** than period 1. `max_excursion` could not see any of that,
+because all three reach the stop at 6.
+
+### It is the right mechanism at the wrong weight, and that is the open work
+
+In the game, holding the tick rate and varying only ticks-per-observation moves
+the wild share from **2% to 97%**, while holding ticks-per-observation and varying
+the tick rate leaves it flat (3/0/0/4, and 92/97/100). So `period` dominates and
+the delay in ticks is nearly irrelevant.
+
+In the model it is the reverse: dead time decides, and tripling the period buys
+one tick. Section 8 now asserts **both** — that the effect exists
+(`cross[3] < cross[1]`) and that it is still only ~1 tick (`cross[1] - cross[3]
+<= 2`) — so the gap is bounded from both sides and cannot be quietly closed by a
+model that later overclaims.
+
+**What the model still lacks is a reason for `period` to dominate.** Two things it
+does not have: X4's camera readback rate is an *input* here, set by hand, where in
+the game it halved (53 → 27 Hz) during the episodes for reasons nothing has
+measured; and the plant integrates every command the instant its dead time
+expires, with no queue, where `evflow` measures ~17 ms of queue residency whenever
+the servo is off X4's drain. Either could carry the missing weight. Neither is
+modelled, and guessing which before measuring is what
+[[hypothesis-and-fix-in-one-step]] costs.
