@@ -3367,10 +3367,18 @@ def main(path):
                           if 0 < b["t"] - a["t"] < 0.5)
             tick = gaps[len(gaps) // 2] if gaps else 0.0
             conc = peak / max(tot, 1e-9)
-            print(f"plantid  transport delay: the response peaks {peakj} tick(s) "
-                  f"after the command ({peakj * tick * 1000:.0f} ms at this "
-                  f"{1/tick if tick else 0:.0f} Hz tick rate), and "
-                  f"{conc*100:.0f}% of it arrives in that one tick")
+            # **"tick" was the wrong word and it cost a wrong reading.** Since
+            # take 289 the sequence steps in the READBACK's time base, so `S` is
+            # one sample per camera update and this gap is the camera update
+            # period -- not X4VR_TICK_HZ, which in take 290a was 45.3 Hz against
+            # the 29 Hz printed here. The milliseconds were always right; the
+            # label invited comparing 290a's "2 ticks" with 290b's across two
+            # different tick rates and concluding the delay was fixed in ticks.
+            print(f"plantid  transport delay: the response peaks {peakj} camera "
+                  f"update(s) after the command ({peakj * tick * 1000:.0f} ms at "
+                  f"this {1/tick if tick else 0:.0f} Hz CAMERA UPDATE rate — not "
+                  f"the servo tick), and {conc*100:.0f}% of it arrives in that "
+                  f"one update")
 
         fracs = []
         if deliv:
