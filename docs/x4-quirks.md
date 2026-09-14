@@ -18693,6 +18693,13 @@ number that says whether it did.
 
 ## #75 ANSWERED — s1 and s2 do not differ, and the variable is ticks per camera observation
 
+> **SUPERSEDED AGAIN — this whole section's conclusion is now withdrawn, not
+> just its magnitudes.** The note below was written after one correction; two
+> more followed (pitch-only publishes, and the pitch stop), and together they
+> remove the effect entirely — in 287b the corrected ratio is *lower* when wild.
+> See *"Take 292's 28 Hz — it was never 28 Hz"* at the end of the file. The
+> paragraph below is kept as the intermediate position it was.
+>
 > **Magnitudes in this section are WITHDRAWN; the shape is not.** Every `tk/obs`
 > figure below is computed from "camera moved on N% of READS", and a camera
 > pinned on its stop reports no change — so the denominator collapses exactly
