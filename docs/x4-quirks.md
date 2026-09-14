@@ -18840,3 +18840,68 @@ expires, with no queue, where `evflow` measures ~17 ms of queue residency whenev
 the servo is off X4's drain. Either could carry the missing weight. Neither is
 modelled, and guessing which before measuring is what
 [[hypothesis-and-fix-in-one-step]] costs.
+
+## Modelling the camera-rate halving — there was nothing to model
+
+Asked to model the halving (53 → 27 Hz during the wild episodes) so the model
+could show `period` dominating, the first thing to check was whether it is real.
+**In two of the three sessions it is not.**
+
+`tk/obs` = tick ÷ camera rate, and the camera rate comes from `inputrate`'s
+"camera moved on N% of READS". **A camera pinned on its stop does not change
+value, so it counts as not moving** — the same blindness that made the slam
+counter call 285b-s1 calm, now in the *denominator of the predictor*. During the
+wild episodes the camera sits on its stop 23–30% of the time, and 71% of samples
+show no change against 45% when calm.
+
+Counting a sample as an update when it changed **or** sat on that session's own
+saturation value:
+
+| | tk/obs raw, wild ÷ calm | corrected |
+|---|---|---|
+| 285b-s2 | 3.22 / 1.43 = **2.25x** | 1.72 / 1.41 = **1.22x** |
+| 287b | 3.15 / 1.51 = **2.09x** | 1.65 / 1.51 = **1.09x** |
+| 292 | 2.66 / 1.26 = 2.11x | **unchanged** — no clamp dwell found |
+
+**Most of the contrast in the two sessions the finding was built on is an
+artefact.** [[a-ratio-against-its-own-denominator]] — I correlated a ratio with
+something that depresses its denominator, which is the exact failure that memory
+records, and I walked into it the day after citing it.
+
+Take 292 is different: its camera never *sat* near its peak, so its 28 Hz is real
+and is not explained by pinning. That is unexplained.
+
+### What survives, and what does not
+
+**Survives.** s1 has no wild window and s2's wildness is one contiguous episode;
+that is measured from p99 |dyaw| on the camera stream and never involved tk/obs.
+The pooled 2x2, redone with the corrected ratio over the same 491 windows, is
+still monotone down the rows (3%, 13%, 67%, 93%) with the top row flat-low
+(3/3/0/4) and the bottom flat-high (83/92/100) across every tick band.
+
+**Does not survive.** The magnitudes. "3.01 against 1.30" was inflated by
+pinning; corrected it is 1.72 against 1.41, and the threshold sits near
+**1.5–1.7**, not 2.2. Any statement of the form "the wild episodes run at three
+times the ticks per observation" is withdrawn.
+
+### Two defects in `tools/wildness.py`, both caught by disagreeing with itself
+
+*Mixed populations.* The first correction took `raw` from `inputrate` (counted at
+the servo tick) and `corr` from `camstamp` (per submitted frame) and printed them
+side by side. A correction that can only ADD updates came out **lower** than what
+it corrected, which is how it was noticed. Both now come from `camstamp`.
+
+*A stop that was not a stop.* Detecting the clamp as "the most-repeated value"
+gave 285b-s1 a stop of **24.52 deg** — somewhere the camera happened to rest in a
+session that never clamped at all — and credited it with updates it never had. It
+now also has to sit at the edge of the range actually visited, and the correction
+is a no-op in the three sessions that never reached a stop.
+
+### And so the modelling question dissolves
+
+There is no halving to put in the model for 285b-s2 or 287b: X4's camera kept
+publishing and the stop stopped it moving. The model already treats `period` as
+an input, and the corrected inputs are 1.4 against 1.7 rather than 1.3 against
+3.0 — a difference `servo_rate.cpp` section 8 already spans (1.15 at period 1
+against 1.56 at period 2, at dead time 5). What is left to explain is take 292's
+28 Hz, which is real, and why a shift of 1.4 → 1.7 flips a session.
