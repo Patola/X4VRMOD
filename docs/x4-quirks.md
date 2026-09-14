@@ -18236,3 +18236,56 @@ the stops whatever the mass says.
 the band during ordinary play at the drain rate. It does **not** settle 285b-s1
 against s2 — those ran at ~70 Hz, where the instrument cannot follow — and that
 limitation is stated here before the run rather than discovered in its results.
+
+## P291 — committed before take 291 exists
+
+Take 291 is the first attempt to measure X4's input-to-camera latency **with the
+servo running**. `X4VR_DITHER=2`, drain rate, ordinary play. The log is
+`/tmp/x4vr-take291.log`; the acceptance check is
+`python3 tools/score_run.py /tmp/x4vr-take291.log`, and the `dither` block is the
+whole of it.
+
+**The reference to compare against:** takes 290a/290b measured **40–165 ms**
+open-loop with `plantid`, ~90–100 ms of jitter, no dependence on command size.
+
+**P291.1 — the run will read IN RANGE.** At the drain rate near 28 Hz (35 ms
+ticks) the open-loop band is 1.1–4.6 ticks. The scorer's range is a mean under 6
+ticks with recovered mass within 0.05 of 1.0, so this should sit comfortably
+inside it. If it reads OUT OF RANGE the likely cause is the camera reaching X4's
+clamp during play, and the band must not be read — that is the instrument
+working.
+
+**P291.2 — the mean will land between 40 and 165 ms and the spread will be
+large.** If in-play agrees with open-loop, #75's plant model is confirmed on a
+second, independent instrument and the ~90–100 ms of jitter is a property of X4
+rather than of `plantid`. **A small spread (under ~20 ms) would be the
+interesting result**: it would mean the jitter is something `plantid`'s own
+sequence provokes, and the open-loop band would have to be re-examined.
+
+**P291.3 — this does NOT settle 285b-s1 against s2.** Those ran at ~70 Hz, where
+the same physical band is 2.7–11.3 ticks and the instrument cannot follow. Anyone
+reading take 291 as an explanation for why s1 stayed calm is reading it wrong.
+
+### What is already dead, so it is not re-proposed
+
+Servo arithmetic; in-flight commands; the stale off-thread read; the event
+channel; the dead camera; the rate mismatch; a gain mismatch; momentum; transport
+delay at the measured depth; and excitation as the reason s1 stayed calm. The
+plant is a **faithful integrator** — 99.6% of every command at every size from 2
+to 104 counts, and it stops when told.
+
+What stands: X4's latency **jitters**, the mean delay in *ticks* is what decides
+stability, and `X4VR_TICK_HZ` is the variable that moves the loop between the calm
+and unstable regimes. It is off by default and stays off.
+
+### Where the pieces are
+
+| | |
+|---|---|
+| the knob | `X4VR_DITHER=N` counts/tick, injector, after `head_look_step`, gated on `steering` |
+| the log line | `dither: v=±N dx=±M cam=…`, `cam` read at the TOP of the tick |
+| the recovery (C++) | `tests/dither_id.cpp` — planted bands, range, amplitude table |
+| the recovery (Python) | `tools/score_run.py`, the `dither` block — **this is what reads the take** |
+| the check that the Python copy works | `tests/run-dither-scorer.sh` — 4 planted bands through the real scorer |
+| the open-loop instrument | `common/x4vr_plantid.hpp`, `tests/run-plantid-scorer.sh` |
+| the stability model | `tests/servo_rate.cpp` — clamp reached at a mean delay of 6 ticks |
