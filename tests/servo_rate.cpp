@@ -739,6 +739,134 @@ int main() {
           "292 on opposite sides of the threshold — the queue term is what the "
           "model was missing, not a new mechanism");
 
+    // ---- 9. the measured operating points, in a TIME base -----------------
+    //
+    // Sections 1-8 count in ticks, so the tick rate is a free parameter and the
+    // queue time has nowhere to live. This one takes **four measured numbers per
+    // take and invents none**: the servo rate, X4's camera publish rate, the
+    // transport delay, and the time our events spend in X4's queue.
+    //
+    //                tick     camera   transport   queue    Patola
+    //   take 291   38.5 Hz   34.5 Hz     70 ms    0.01 ms   calm
+    //   take 292   75.8 Hz   45.5 Hz     70 ms   16.79 ms   WILD
+    //
+    // The queue term is structural rather than a tuning choice. Without
+    // X4VR_TICK_HZ the injector calls headlook_tick() from INSIDE its
+    // SDL_PeepEvents interception, so the event is pushed while X4 is in its own
+    // drain loop and the same loop consumes it -- 0.01 ms. With X4VR_TICK_HZ the
+    // servo runs on our thread and the event waits for X4's next drain, which
+    // `pumprate` measures as CLUSTERED, so the wait is far longer than half a
+    // drain period: 19.89 ms median against the 6.26 a uniform drain predicts.
+    //
+    // **A queue model was refuted before this was written.** "The event waits for
+    // the next drain at rate D" predicts 12.85 ms for 291 (measured 0.01) and
+    // 6.26 ms for 292 (measured 19.89), and correlates with the per-window
+    // measurement at -0.05 and +0.04. So the queue time is taken here as a
+    // measured input, not derived from a mechanism I could not confirm.
+    std::printf("\n9. the measured operating points, in a time base\n");
+    struct Point {
+        const char *name; double tick_hz, cam_hz, transport_ms, queue_ms;
+        bool wild;
+    };
+    const Point pts[2] = {
+        {"take 291", 38.5, 34.5, 70.0,  0.01, false},
+        {"take 292", 75.8, 45.5, 70.0, 16.79, true},
+    };
+    // **Two clamps, because the run says 65 is the wrong one.** The dither stream
+    // has take 292's camera reaching 79.64 deg and a single update moving 81.57,
+    // neither of which a 65 deg stop can produce -- and `<internal>` declares
+    // `maxyaw="65" trackmaxyaw="85"`. Running both makes that a test rather than
+    // a remark: if 85 is the operative limit the excursion should land near the
+    // measured 79.64, and if it does not, trackmaxyaw is not the explanation.
+    std::printf("%10s %6s %9s %9s %9s %10s %10s\n", "take", "limit",
+                "delay tk", "slam%", "max move", "max |cam|", "reversals");
+    bool ok291 = false, ok292 = false;
+    double exc85_292 = 0.0, move85_292 = 0.0;
+    for (float limit : {65.0f, 85.0f})
+    for (const Point &pt : pts) {
+        x4vr::HeadLook s;
+        s.gain_deg_per_count = 0.115f; s.servo_kp = 0.25f; s.lead_scale = 1.0f;
+        const double dt = 1.0 / pt.tick_hz;
+        const double lat = (pt.transport_ms + pt.queue_ms) / 1000.0;
+        const double cam_dt = 1.0 / pt.cam_hz;
+        std::vector<std::pair<double, float>> inflight; // (due seconds, degrees)
+        float yaw = 0.0f, pub = 0.0f, prev_pub = 0.0f;
+        double next_pub = cam_dt, prev_vel = 0.0;
+        int updates = 0, slams = 0, reversals = 0;
+        double max_move = 0.0, max_exc = 0.0;
+        const int steps = (int)(pt.tick_hz * 20.0);
+        for (int i = 0; i < steps; i++) {
+            const double t = i * dt;
+            x4vr::head_look_observe(s, pub, 0.0f);
+            const x4vr::HeadAngles h = turning(i, 0.5 / (pt.tick_hz / 90.0), 20.0);
+            const x4vr::Delta d = x4vr::head_look_step(s, h);
+            inflight.emplace_back(t + lat,
+                                  s.sign_yaw * (float)d.dx * 0.115f);
+            // everything whose time has come, integrated at the clamp
+            for (size_t k = 0; k < inflight.size();) {
+                if (inflight[k].first <= t) {
+                    yaw = x4vr::clampf(yaw + inflight[k].second, -limit, limit);
+                    inflight.erase(inflight.begin() + (long)k);
+                } else { k++; }
+            }
+            if (t >= next_pub) {                 // X4 publishes on its OWN grid
+                next_pub += cam_dt;
+                pub = yaw; updates++;
+                const double mv = std::fabs((double)pub - prev_pub);
+                if (mv > max_move) max_move = mv;
+                if (mv > 20.0) slams++;
+                const double vel = (double)pub - prev_pub;
+                if (vel * prev_vel < 0.0) reversals++;
+                if (std::fabs(vel) > 1e-6) prev_vel = vel;
+                prev_pub = pub;
+                if (std::fabs((double)pub) > max_exc) max_exc = std::fabs((double)pub);
+            }
+        }
+        const double slam_pct = updates ? 100.0 * slams / updates : 0.0;
+        std::printf("%10s %6.0f %9.2f %8.1f%% %9.2f %10.2f %10d\n", pt.name,
+                    (double)limit,
+                    (pt.transport_ms + pt.queue_ms) / 1000.0 * pt.tick_hz,
+                    slam_pct, max_move, max_exc, reversals);
+        if (limit > 70.0f && pt.wild) { exc85_292 = max_exc; move85_292 = max_move; }
+        if (limit > 70.0f) continue;   // the pass/fail pair is judged at 65
+        if (!pt.wild) ok291 = max_exc < 64.9;
+        else          ok292 = max_exc >= 64.9;
+    }
+
+    // **This is the falsifiable form of the account in section 8.** There the
+    // numbers were compared to a threshold by hand; here the real
+    // head_look_step() runs against them and either reproduces Patola's two
+    // reports or does not. Every input was measured for another purpose.
+    check(ok291, "at take 291's measured rates the model stays off the clamp, "
+                 "as Patola reported");
+    check(ok292, "at take 292's measured rates the model reaches the clamp — if "
+                 "this fails, the queue term does NOT explain take 292 and the "
+                 "account in section 8 is wrong");
+
+    // **The limit-85 row is NOT evidence for trackmaxyaw, and the check that
+    // said so could not fail.** The model pins at 65.00 given 65 and 85.00 given
+    // 85: it saturates at whatever stop it is handed, so asserting the result
+    // falls "near the measurement" tested my choice of constant. Hand it 100 and
+    // it reads 100.
+    //
+    // What the LOG says, with no model involved: take 292's camera reached
+    // **79.64 deg** and one update moved **81.57**. That excludes a 65 deg stop
+    // arithmetically — a position limit cannot be exceeded by 14.6 deg — and it
+    // is consistent with `trackmaxyaw="85"`, which the real camera never reached.
+    // Consistent is not confirmed, and this model cannot get past that, because a
+    // run that pins at its clamp says nothing about where the clamp is.
+    std::printf("  take 292 measured max |cam| 79.64, max move 81.57\n");
+    std::printf("  model pins at its own stop: %.2f at limit 85, and 65.00 at "
+                "limit 65 — it saturates at whichever it is given, so it cannot "
+                "locate X4's\n", exc85_292);
+    check(79.64 > 65.0,
+          "the MEASURED 79.64 deg excludes maxyaw=65 as the operative stop in "
+          "take 292 — arithmetic on the log, not a model output");
+    check(move85_292 < 40.0,
+          "the model does NOT reproduce the measured 81.57 deg single update at "
+          "either limit — something about take 292's excursion is still "
+          "unexplained, and this records that rather than hiding it");
+
     std::printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n",
                 g_fail);
     return g_fail ? 1 : 0;

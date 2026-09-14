@@ -18540,3 +18540,70 @@ pitch 38.39° against stock `maxpitch="35"`. `<internal>` declares
 `trackmaxyaw="85"`, so 76.79 may simply be a mode with a wider stop rather than
 anything uncommanded — but take 291 reached only 58.16 with a 53.86 command, and
 nothing yet says which. Recorded, not explained.
+
+## The queue model — refuted, then replaced by measurement
+
+**The model I set out to build is wrong, and it was refuted before a line of it
+was written.** "Our event waits for X4's next drain at rate D" predicts:
+
+| | drain rate | predicted 1/(2D) | measured |
+|---|---|---|---|
+| take 291 | 38.9 Hz | 12.85 ms | **0.01 ms** |
+| take 292 | 79.9 Hz | 6.26 ms | **19.89 ms** |
+
+Wrong by 1000x one way and 3x the other, and across the 140 and 149 motion
+windows the per-window correlation between prediction and measurement is
+**-0.05 and +0.04**. There is no relationship. `ours per drain` never exceeds 1
+in either take, so nothing is accumulating and it is not a backlog either.
+
+### What 0.01 ms actually is, from the call site
+
+`headlook_tick()` is called from **inside** the injector's `SDL_PeepEvents`
+interception:
+
+```c
+if (this_is_the_game() && !g_pump_seen.load(...)) {
+    ...
+    if (!tick_hz())
+        headlook_tick();      // runs INSIDE X4's drain
+```
+
+Without `X4VR_TICK_HZ` the servo pushes its event while X4 is in its own
+`while (SDL_PollEvent(&e))` loop, and that loop consumes it immediately — hence
+0.01 ms. With `X4VR_TICK_HZ` the servo runs on our own thread and the event waits
+for X4's next drain, which `pumprate` independently measures as **clustered**, so
+the wait is far longer than half a drain period: 19.89 ms against the 6.26 a
+uniform drain predicts. **This is structural, not a tuning choice** — the tick
+driver moves the servo off X4's drain and buys ~20 ms for it.
+
+### Section 9: the measured operating points, with nothing invented
+
+Four measured numbers per take — servo rate, X4's camera publish rate, transport
+delay, queue time — driving the real `head_look_step()` in a time base:
+
+| | delay | slam% model | slam% **measured** | Patola |
+|---|---|---|---|---|
+| take 291 | 2.70 tk | 0.0% | **0.0%** (2 of 10031) | calm |
+| take 292 | 6.58 tk | 32.3% | **20.3%** (2358 of 11639) | wild |
+
+It reproduces the split and the slam statistic to within 1.6x, having been given
+no free parameter to fit. That is the falsifiable form of the section 8 account.
+
+### It does NOT reproduce the excursion, and a check that could not fail
+
+Take 292's camera reached **79.64 deg** with one update moving **81.57**. The
+model's max move is 23.92 at any stop.
+
+I ran the model at `trackmaxyaw="85"` to test whether that explains it, and wrote
+a check that the excursion would "land near the measurement". **It passed, and it
+could not have done otherwise**: the model pins at 65.00 given 65 and 85.00 given
+85 — it saturates at whatever stop it is handed, so the assertion tested my choice
+of constant. Hand it 100 and it reads 100. Same shape as
+[[a-guard-that-cannot-fail]], caught one run later.
+
+What survives without a model: **79.64 exceeds 65 by 14.6 deg, and a position
+limit cannot be exceeded.** So `maxyaw=65` is not the operative stop in take 292,
+and `trackmaxyaw=85` is *consistent* — the camera never reached it. Consistent is
+not confirmed, and this model cannot get further, because a run pinned at its own
+clamp says nothing about where X4's is. The 81.57 deg single update remains
+unexplained and the suite now asserts that it is unexplained.
