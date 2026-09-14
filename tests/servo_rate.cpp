@@ -727,12 +727,12 @@ int main() {
     // assembled after seeing which take went wild, and every number in it was
     // measured for another purpose. It earns a prediction, not a conclusion.
     const double tick291 = 26.0, tick292 = 13.2;
-    const double d291 = (70.0 + 0.01) / tick291, d292 = (70.0 + 16.43) / tick292;
+    const double d291 = (70.0 + 0.01) / tick291, d292 = (70.0 + 16.79) / tick292;
     std::printf("\n  measured operating points against the %d-tick threshold:\n",
                 clamp_at[1]);
     std::printf("    take 291  (70.00 + 0.01) ms / %.1f ms = %.1f ticks  %s\n",
                 tick291, d291, d291 < clamp_at[1] ? "calm side" : "wild side");
-    std::printf("    take 292  (70.00 + 16.43) ms / %.1f ms = %.1f ticks  %s\n",
+    std::printf("    take 292  (70.00 + 16.79) ms / %.1f ms = %.1f ticks  %s\n",
                 tick292, d292, d292 < clamp_at[1] ? "calm side" : "wild side");
     check(d291 < clamp_at[1] && d292 >= clamp_at[1],
           "total delay in TICKS, including the measured queue time, puts 291 and "
