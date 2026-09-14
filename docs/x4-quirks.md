@@ -18515,7 +18515,14 @@ pair never tried.
 
 The term the model lacked is measured, and was measured for something else.
 `evflow` puts our motion events' time in X4's queue at **0.01 ms in take 291 and
-16.43 ms in take 292** — at 72 Hz we push faster than X4's drain takes them.
+16.8 ms in take 292** — at 72 Hz we push faster than X4's drain takes them.
+
+Restricted to windows that **actually pushed motion**, because the summary line
+averages idle windows in and happily prints a queue time next to
+`motion pushed 0.0 Hz`, with a `max` that is a running maximum and never resets.
+The restriction makes the gap larger, not smaller — 0.01 ms over 140 motion
+windows in 291 against 16.79 mean / 19.89 median over 149 in 292 — and it was
+checked before the account below was built on it.
 Against section 5's existing 6-tick threshold:
 
     take 291   (70.00 + 0.01) ms / 26.0 ms tick = 2.7 ticks   calm side

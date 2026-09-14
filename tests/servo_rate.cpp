@@ -710,8 +710,15 @@ int main() {
     // What is left is the plain sum, in TICKS, against section 5's threshold --
     // and the term that was missing is not a new mechanism but a measured one.
     // `evflow` puts the time our motion events spend in X4's queue at 0.01 ms in
-    // take 291 and **16.43 ms** in take 292, because at 72 Hz we push faster than
+    // take 291 and **16.8 ms** in take 292, because at 72 Hz we push faster than
     // X4's drain takes them.
+    //
+    // **Restricted to windows that actually pushed motion**, because the summary
+    // line averages over idle ones too and prints a queue time in windows
+    // reporting `motion pushed 0.0 Hz` — its `max` is a running maximum that
+    // never resets. The restriction makes the gap larger, not smaller: 0.01 ms
+    // over 140 motion windows in 291 against 16.79 mean / 19.89 median over 149
+    // in 292. Checked before the account below was built on it.
     //
     //   take 291  tick 26.0 ms   70 ms transport + 0.01 ms queue = 2.7 ticks  CALM
     //   take 292  tick 13.2 ms   70 ms transport + 16.4 ms queue = 6.5 ticks  WILD
