@@ -18693,6 +18693,17 @@ number that says whether it did.
 
 ## #75 ANSWERED — s1 and s2 do not differ, and the variable is ticks per camera observation
 
+> **Magnitudes in this section are WITHDRAWN; the shape is not.** Every `tk/obs`
+> figure below is computed from "camera moved on N% of READS", and a camera
+> pinned on its stop reports no change — so the denominator collapses exactly
+> when the camera slams. Corrected, 285b-s2's wild/calm ratio is 1.22x rather
+> than 2.25x and 287b's is 1.09x rather than 2.09x; the "3.01 against 1.30"
+> headline is an artefact and the threshold sits near 1.5–1.7, not 2.2. The
+> pooled 2x2 stays monotone once redone. See *"Modelling the camera-rate halving
+> — there was nothing to model"* at the end of this file. Left as written: the
+> analysis was right about the shape and wrong about the size, and it cited
+> [[a-ratio-against-its-own-denominator]] in the same session it walked into it.
+
 **The question was malformed.** "What makes 285b-s1 different from s2" presumes
 wildness is a property of a session. It is not. s2 contains a contiguous ~40 s
 episode and the remaining 55 windows are indistinguishable from all 41 of s1:
