@@ -2373,6 +2373,56 @@ void headlook_tick() {
     if (plim > 0.0f)
         g_headlook.pitch_limit_deg = plim;
 
+    // **Task #75: does the camera go unstable because it is NEAR X4's stop?**
+    //
+    // Four episodes have now been ordered against enough preceding calm to be
+    // trusted, and in every one the oscillation starts FIRST and the clamp
+    // follows 0.17-0.66 s later — one of them (292/6) is severe and never
+    // reaches the clamp at all, so contact is not necessary. But in three of the
+    // four the camera was sitting at **61-67 deg** when the oscillation began,
+    // just short of the 65 stop. The head is not the trigger (during episodes it
+    // is nearer centre than when calm, and never past 65), so the region just
+    // inside the stop is the remaining suspect.
+    //
+    // X4VR_HEADLOOK_YAW_LIMIT_AB, in seconds, alternates the servo's yaw limit
+    // between the shipped 65 and the value in X4VR_HEADLOOK_YAW_LIMIT_B. At 40
+    // the servo never asks the camera past 40 deg, so it cannot approach X4's
+    // stop — and if episodes stop with it, the near-stop region is the trigger.
+    //
+    // **Alternated inside one run, not across two takes, and that is not a
+    // convenience.** Episodes are rare (~1 per 2 min of steering) and their rate
+    // varies between sessions for reasons this project has spent days failing to
+    // pin: 285b-s1 and s2 were the same binary and the same knobs, and comparing
+    // them is what produced a finding that had to be withdrawn in full. Two takes
+    // would repeat that exact mistake.
+    static const double ylim_ab = [] {
+        const char *e = getenv("X4VR_HEADLOOK_YAW_LIMIT_AB");
+        return e && *e ? atof(e) : 0.0;
+    }();
+    static const float ylim_b = [] {
+        const char *e = getenv("X4VR_HEADLOOK_YAW_LIMIT_B");
+        return e && *e ? (float)atof(e) : 40.0f;
+    }();
+    if (ylim_ab > 0.0) {
+        static const double ab_t0 = mono_seconds();
+        const long phase = (long)((mono_seconds() - ab_t0) / ylim_ab);
+        // Opens on the CONTROL arm, like the lead A/B: phase 0 is the shipped
+        // limit, so a run that dies early still carries a baseline.
+        const bool narrow = (phase & 1) != 0;
+        g_headlook.yaw_limit_deg = narrow ? ylim_b : 65.0f;
+        static long ab_said = -1;
+        if (phase != ab_said) {
+            ab_said = phase;
+            // Intent, not outcome. If the limit somehow fails to reach the
+            // servo this must still say which arm the run ASKED for, or the
+            // scorer would split one population in half and report a null as a
+            // pass.
+            X4VR_LOG("headlook: yawlimit %s (%.1f deg, A/B phase %ld, %.0f s)",
+                     narrow ? "NARROW" : "control", g_headlook.yaw_limit_deg,
+                     phase, ylim_ab);
+        }
+    }
+
     // **Task #73's lead, and the A/B that measures it.**
     //
     // X4VR_HEADLOOK_LEAD is the scale (1.0 = the full (1/kp - 1) anticipation

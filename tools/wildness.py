@@ -66,7 +66,7 @@ WILD_DEG = 15.0   # p99 |dyaw| above this is an oscillating camera, not steering
 
 
 def windows(path):
-    """(tick, camera raw, camera corrected, X4 fps, p99|dyaw|) per window."""
+    """(tick, cam raw, cam corrected, X4 fps, p99|dyaw|, window start t)."""
     with open(path, errors="replace") as fh:
         text = fh.read()
     active = [(float(end) - float(dur), float(end), float(tick), float(cam))
@@ -137,8 +137,33 @@ def windows(path):
                    or abs(pit[k + 1] - pit[k]) > 1e-9
                    or (stop is not None and abs(abs(yaw[k]) - stop) < 0.5)
                    or abs(abs(pit[k]) - 35.0) < 0.5)
+        # **The window's own start time travels IN the row.** A parallel list
+        # rebuilt by a second function drifted out of step: `windows()` also
+        # drops windows with no camera movement, so zipping the two paired rows
+        # with the wrong A/B arm. Reading a list positionally against another
+        # list is a recurring defect here; there is now only one list.
         out.append((tick, moved / n * fps, seen / n * fps, fps,
-                    sorted(moves)[int(0.99 * len(moves))]))
+                    sorted(moves)[int(0.99 * len(moves))], lo))
+    return out
+
+
+AB = re.compile(r"^\[\s*(\d+\.\d+)\]\s+inject\s+headlook: yawlimit (\w+) "
+                r"\(([\d.]+) deg, A/B phase (\d+)", re.M)
+
+
+def arms(path):
+    """(start, end, 'control'|'NARROW') for each A/B phase, from the log's own
+    phase lines. The arm is read from what the run ASKED for, never re-derived
+    from the camera -- an instrument that recomputes the decision it reports can
+    evaluate a different predicate than the code did."""
+    with open(path, errors="replace") as fh:
+        marks = [(float(t), lab) for t, lab, _deg, _ph in AB.findall(fh.read())]
+    if not marks:
+        return []
+    out = []
+    for i, (t, lab) in enumerate(marks):
+        end = marks[i + 1][0] if i + 1 < len(marks) else float("inf")
+        out.append((t, end, lab))
     return out
 
 
@@ -164,6 +189,39 @@ def main(paths):
                   f"CORR {sum(r[0] for r in grp) / sum(r[2] for r in grp):5.2f}   "
                   f"p99|dyaw| {sum(r[4] for r in grp) / n:6.2f} deg")
         pool += [(r[0], r[2], r[0] / r[2], r[4] > WILD_DEG) for r in rows]
+
+        # **Task #75's yaw-limit A/B, split by the run's own phase lines.**
+        ph = arms(p)
+        if ph:
+            SEVERE = 40.0
+            by = {}
+            # **A 5 s guard band after each switch.** Episodes run 18-72 s, so
+            # one that begins in `control` can still be under way when the arm
+            # flips, and those windows would be scored against NARROW. Dropping
+            # the first 5 s of every phase costs a little data and removes a
+            # contamination that would look exactly like "narrowing does not
+            # help".
+            GUARD = 5.0
+            dropped = 0
+            for r in rows:
+                lab = next((l for a_, b_, l in ph if a_ + GUARD <= r[5] < b_), None)
+                if lab:
+                    by.setdefault(lab, []).append(r[4] >= SEVERE)
+                elif any(a_ <= r[5] < a_ + GUARD for a_, b_, l in ph):
+                    dropped += 1
+            print(f"      A/B over {len(ph)} phase(s), "
+                  f"{dropped} window(s) dropped in the {GUARD:.0f} s guard band:")
+            for lab in ("control", "NARROW"):
+                g = by.get(lab, [])
+                if g:
+                    print(f"        {lab:<8} {len(g):>4} window(s), "
+                          f"{100 * sum(g) / len(g):5.1f}% severe (p99 >= {SEVERE:.0f} deg)")
+            if by.get("control") and by.get("NARROW"):
+                c = 100 * sum(by["control"]) / len(by["control"])
+                n = 100 * sum(by["NARROW"]) / len(by["NARROW"])
+                print(f"        => narrowing the servo's yaw limit "
+                      f"{'REMOVES' if n < 0.25 * c else 'does NOT remove'} the "
+                      f"episodes ({c:.1f}% -> {n:.1f}%)")
 
     if len(paths) < 2:
         return 0

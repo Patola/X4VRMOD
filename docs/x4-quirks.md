@@ -19049,3 +19049,86 @@ episode is internal to the loop or to X4, which is consistent with
 `servo_rate.cpp` section 2: the model reaches its stops **with a frozen head**
 once the period is high enough. Answering it needs a take whose episodes are
 isolated by construction, not more analysis of these six.
+
+## The ordering question, ANSWERED without a run — and P293
+
+Asked to design a run with isolated episodes, the first step was a better onset
+detector. The old one keyed on a single >=20 deg jump and fired **6 s early** on
+an isolated pair in 285b-s2 that was followed by six seconds of quiet. An onset
+is *sustained* growth: the first of >=5 consecutive moving samples above 10 deg.
+On that definition four episodes have enough clean calm before them to order:
+
+| episode | calm before | clamp reached | \|cam\| just before onset |
+|---|---|---|---|
+| 285b-s2/0 | 12.1 s | **+0.66 s after onset** | 61.0 |
+| 292/6 | 14.1 s | **never** | 61.2 |
+| 292/7 | 10.0 s | **+0.17 s after** | 66.6 |
+| 292/10 | 44.2 s | **+0.19 s after** | 33.4 |
+
+**The oscillation always starts first.** 292/6 is the negative control: a severe
+episode that never touches the clamp, so contact is not necessary. The clamp is a
+consequence.
+
+285b-s2's onset at full sample resolution: the camera is driven smoothly out to
+**60.50 deg** by ordinary tracking — steps of 0.2-4 deg, decelerating to 0.23 near
+the top — then reverses, and the swings grow 3, 12, 25, 41 deg over about a
+second before reaching -65.00. That is a loop losing stability from a small
+perturbation, not a jolt.
+
+### The lead that replaces it: the camera is NEAR the stop when it starts
+
+Three of the four were at **61-67 deg** when the oscillation began, just inside
+X4's 65. The head is already eliminated — during episodes it sits nearer centre
+than when calm, and never passes 65 — so the region just short of the stop is
+what is left.
+
+**P293, committed before the run.** `X4VR_HEADLOOK_YAW_LIMIT_AB` alternates the
+servo's own yaw limit between the shipped 65 and 40 every 45 s. At 40 the servo
+never asks the camera past 40 deg, so it cannot approach X4's stop.
+
+* **Severe share drops to near zero in the NARROW arm** -> the near-stop region is
+  the trigger, and capping the servo's reach below X4's clamp is a fix that costs
+  only head-look range.
+* **Severe share is unchanged** -> the trigger is elsewhere and proximity to the
+  stop was a coincidence of three episodes. The run still bounds it.
+* **292/10 already argues against**, at 33.4 deg — one of four did not start
+  anywhere near the stop, so a partial effect is the outcome to expect.
+
+### Why it alternates inside one run
+
+Episodes are rare (~1 per 2 min of steering) and their rate varies between
+sessions for reasons this project has spent days failing to pin. 285b-s1 and s2
+were the same binary and the same knobs, and comparing them produced a finding
+withdrawn in full. **Two takes would repeat that exact mistake.** The statistic is
+the severe share of servo-active windows per arm, not episode count, so ~3 min per
+arm is enough.
+
+### What the design had to discard
+
+*An arm/idle A/B, so every episode began from rest.* Refuted before it was
+written: **X4's camera does not return to centre when steering stops.** It sits at
+65 -> 56 deg after 8-12 s in 285b-s2, and 65 -> 67.4 in 292. Re-arming would have
+started hard against the clamp with a large error and provoked an episode by
+construction — the contamination the design existed to avoid.
+
+*Provoking episodes with a gain mismatch.* It would study gain-mismatch
+instability, not X4's.
+
+*90 Hz.* Take 292 was severe in 68% of its windows, which is why nothing in it
+could be ordered. 70 Hz gives 23-25%, which is where episodes are isolated
+naturally.
+
+### The instrument, checked against a planted answer both ways
+
+`tools/wildness.py` splits by the run's own `headlook: yawlimit` phase lines —
+read from what the run ASKED for, never re-derived. Two synthetic logs, one where
+narrowing removes the episodes and one where it changes nothing, are scored
+100% -> 0.0% and 100% -> 100%. A 5 s guard band after each switch drops windows
+where an episode from the previous arm is still running; episodes last 18-72 s, so
+without it a spill-over would look exactly like "narrowing does not help".
+
+The first version of the split rebuilt the window list in a second function and
+zipped the two together. `windows()` also drops windows with no camera movement,
+so the lists drifted and rows were scored against the wrong arm — reading one list
+positionally against another, which is a recurring defect here. The window's start
+time now travels inside the row and there is only one list.
