@@ -18463,3 +18463,73 @@ above 70 ms would refute the mixed model altogether.
 ILL-CONDITIONED. That is a real outcome, not a failure: 285b-s2 went wild at
 70 Hz, and a run that slams at 90 is the same phenomenon with an instrument
 attached. Committed before the run.
+
+## Take 292 — the scorer refused, and the run answered anyway
+
+Patola: *"most of the time of this run I had the frustum rapidly spinning and
+sometimes I couldn't even see where I was heading. There were some brief moments
+of stability."* **P292.2, as written.** The loop went wild at 90 Hz.
+
+`dither` read `OUT OF REACH, mass 0.11` — the refusal path added after take 291,
+firing correctly on its first real run. At ML=12 and an 11 ms tick that window is
+132 ms, so the only thing the block can say is that the delay **exceeded 132 ms**,
+against 70 ms at 43.5 Hz. **P292.1 is unanswerable**: the model predicted 53 ms if
+n≈3 and 20–30 ms if n≈0, and an unstable loop has no transport delay to report.
+The n-versus-τ split stays open.
+
+### What the run did answer
+
+| | tick | camera update | steps per update | queue time |
+|---|---|---|---|---|
+| take 291, calm | 38.5 Hz | 34.5 Hz | **1.12** | **0.01 ms** |
+| take 292, wild | 75.8 Hz | 45.5 Hz | **1.67** | **16.43 ms** |
+
+X4's camera rate is **not** invariant — it rose 34.5 → 45.5 Hz — but it rose
+**sub-linearly**: doubling our tick bought 1.3× the camera. (The `inputrate` line
+reports 28.0 and 28.5 Hz for the same quantity, over its own restricted windows.
+Two measurements of one number disagree; the table above is the direct one, over
+all 10853 and 22602 samples.)
+
+### A mechanism proposed and refuted in the same hour
+
+`head_look_observe()` overwrites the estimate with the readback unconditionally —
+confirmed at the call site, there is no freshness check on the camera. So on the
+40% of ticks where the readback has not changed, the servo re-derives the same
+error and **re-sends a correction already in flight**. Section 1 of
+`servo_rate.cpp` already models that as a loop-gain multiplier. It looked
+conclusive: take 291 at 1.12 × 3.0 ticks = 0.78, take 292 at 1.67 × 5.3 = 2.2,
+either side of the 1 where a proportional loop lets go.
+
+**Section 8 sweeps the pair and the boundary does not move: dead time 6 at period
+1, 6 at period 2, 6 at period 3.** Period and dead time do not multiply. Section 1
+needed period 11 to slam *at zero dead time*, and that gain multiplication does
+not survive contact with a plant that has any. The mechanism is refuted, by the
+assertion written to be able to refute it.
+
+Worth naming why it was missed twice: section 1 swept period at dead time 0 and
+section 5 swept dead time at period 1, so each cleared the other's factor while
+holding it at the value where it cannot bite. Two sweeps, both honest, and the
+pair never tried.
+
+### What is left needs no new mechanism
+
+The term the model lacked is measured, and was measured for something else.
+`evflow` puts our motion events' time in X4's queue at **0.01 ms in take 291 and
+16.43 ms in take 292** — at 72 Hz we push faster than X4's drain takes them.
+Against section 5's existing 6-tick threshold:
+
+    take 291   (70.00 + 0.01) ms / 26.0 ms tick = 2.7 ticks   calm side
+    take 292   (70.00 + 16.43) ms / 13.2 ms tick = 6.5 ticks  wild side
+
+**This is an account, not a test.** It was assembled after seeing which take went
+wild and every number in it was taken for another purpose. It earns a prediction,
+not a conclusion — and the prediction is that the queue time, not the tick rate,
+is the controlled variable.
+
+### Uncommanded motion past X4's own stop
+
+`clamp` reports **max |X4| yaw 76.79°** against a maximum command of 65.00, and
+pitch 38.39° against stock `maxpitch="35"`. `<internal>` declares
+`trackmaxyaw="85"`, so 76.79 may simply be a mode with a wider stop rather than
+anything uncommanded — but take 291 reached only 58.16 with a 53.86 command, and
+nothing yet says which. Recorded, not explained.

@@ -657,6 +657,81 @@ int main() {
           "117.5 deg/s — so it over-predicts s1, and excitation does not "
           "explain why that session stayed calm");
 
+    // ---- 8. the two together, which is the combination nothing swept ------
+    //
+    // **Section 1 swept `period` at dead time 0 and needed 11 to slam. Section 5
+    // swept dead time at `period` 1 and needed 6. Take 292 ran at neither: about
+    // 1.7 steps per camera update AND about 5 ticks of dead time, and it was
+    // violently unstable.** Each factor was cleared on its own and the pair was
+    // never tried, which is how a mechanism survives two sweeps that both name it
+    // innocent. They are not independent — `period` multiplies the loop gain
+    // because head_look_observe() re-pins to an unchanged reading and re-sends a
+    // correction already in flight, and dead time is what that extra gain then
+    // rings against.
+    //
+    // Measured operating points, from the `dither` stream of each take:
+    //
+    //   take 291  tick 38.5 Hz  camera 34.5 Hz  period 1.12  delay ~3 ticks  CALM
+    //   take 292  tick 75.8 Hz  camera 45.5 Hz  period 1.67  delay ~5 ticks  WILD
+    //
+    // `period` is an int here, so 1 and 2 bracket both takes.
+    std::printf("\n8. period AND dead time together — the pair neither sweep "
+                "tried\n");
+    std::printf("%8s", "delay");
+    for (int p : {1, 2, 3}) std::printf("   period %d", p);
+    std::printf("      <- max |cam| deg, 65.00 is the clamp\n");
+    int clamp_at[4] = {0, 0, 0, 0};
+    for (int delay : {0, 1, 2, 3, 4, 5, 6, 7, 8}) {
+        std::printf("%8d", delay);
+        for (int p : {1, 2, 3}) {
+            const Result r = drive(p, 0.25f, 1.0f, 0.115f,
+                                   [](int i) { return turning(i, 0.5, 20.0); },
+                                   90 * 20, delay);
+            std::printf("   %8.2f", r.max_excursion);
+            if (r.max_excursion >= 64.9 && !clamp_at[p]) clamp_at[p] = delay;
+        }
+        std::printf("\n");
+    }
+    std::printf("  first dead time reaching the clamp: period 1 -> %d, "
+                "period 2 -> %d, period 3 -> %d\n",
+                clamp_at[1], clamp_at[2], clamp_at[3]);
+
+    // **REFUTED, by the check written to be able to fail.** The boundary does not
+    // move: 6 at period 1, 6 at period 2, 6 at period 3. Re-sending a correction
+    // already in flight does NOT lower the dead time the loop tolerates, so it is
+    // not what made take 292 wild, and section 1's gain multiplication does not
+    // survive contact with a plant that has dead time. The story this section was
+    // written to support is wrong and the assertion now records that.
+    check(clamp_at[1] == clamp_at[2] && clamp_at[2] == clamp_at[3],
+          "period does NOT interact with dead time — the clamp boundary is the "
+          "same at 1, 2 and 3 steps per camera update, which refutes the "
+          "re-issued-command mechanism");
+
+    // What is left is the plain sum, in TICKS, against section 5's threshold --
+    // and the term that was missing is not a new mechanism but a measured one.
+    // `evflow` puts the time our motion events spend in X4's queue at 0.01 ms in
+    // take 291 and **16.43 ms** in take 292, because at 72 Hz we push faster than
+    // X4's drain takes them.
+    //
+    //   take 291  tick 26.0 ms   70 ms transport + 0.01 ms queue = 2.7 ticks  CALM
+    //   take 292  tick 13.2 ms   70 ms transport + 16.4 ms queue = 6.5 ticks  WILD
+    //
+    // Opposite sides of the 6 above. **This is an account, not a test**: it was
+    // assembled after seeing which take went wild, and every number in it was
+    // measured for another purpose. It earns a prediction, not a conclusion.
+    const double tick291 = 26.0, tick292 = 13.2;
+    const double d291 = (70.0 + 0.01) / tick291, d292 = (70.0 + 16.43) / tick292;
+    std::printf("\n  measured operating points against the %d-tick threshold:\n",
+                clamp_at[1]);
+    std::printf("    take 291  (70.00 + 0.01) ms / %.1f ms = %.1f ticks  %s\n",
+                tick291, d291, d291 < clamp_at[1] ? "calm side" : "wild side");
+    std::printf("    take 292  (70.00 + 16.43) ms / %.1f ms = %.1f ticks  %s\n",
+                tick292, d292, d292 < clamp_at[1] ? "calm side" : "wild side");
+    check(d291 < clamp_at[1] && d292 >= clamp_at[1],
+          "total delay in TICKS, including the measured queue time, puts 291 and "
+          "292 on opposite sides of the threshold — the queue term is what the "
+          "model was missing, not a new mechanism");
+
     std::printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n",
                 g_fail);
     return g_fail ? 1 : 0;
