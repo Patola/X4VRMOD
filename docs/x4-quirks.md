@@ -18981,3 +18981,71 @@ Position does not identify a clamp; **dwell mass does**. And 292's 79.64 deg pea
 is still unexplained: the camera reaches it but never sits there, so it is not a
 stop — [[a-guard-that-cannot-fail]] applies to the earlier attempt to confirm
 `trackmaxyaw=85` from a model that pins at whatever limit it is handed.
+
+## What starts an episode — the player does not
+
+Taking "episode" to mean the **severe** state (p99 |dyaw| >= 40 deg), which is one
+population: 14 of 18 wild windows in 285b-s2, 8 of 10 in 287b, 80 of 100 in 292.
+The handful of marginal windows (15–25 deg) have **no clamp contact at all** and
+are most likely fast head turns, not the same thing. Clamp contact tracks severity
+monotonically — 0–0.6% calm, 0–9.8% marginal, 10.8–25.8% mid, 22.9–35.1% severe.
+
+### The head is NEARLY STILL during an episode
+
+`camread` carries the servo's own input, `| head yaw,pitch`, one sample in 30.
+I nearly declared this an instrument gap — `geom`'s `yaw=` is
+`last_decl_yaw`, X4's camera under `DECLARE_RENDERED_ROT=2`, which is why it
+matched `camstamp` to two decimals — and the head was logged all along.
+[[read-the-existing-report-first]]
+
+| | \|head\| median | max | past 65 deg |
+|---|---|---|---|
+| 285b-s2 severe | **9.0** | 50.9 | **0.0%** |
+| 285b-s2 calm | 25.1 | 69.8 | 0.4% |
+| 287b severe | **3.6** | 21.0 | **0.0%** |
+| 287b calm | 17.4 | 54.3 | 0.0% |
+| 292 severe | **4.1** | 50.3 | **0.0%** |
+| 292 calm | 10.0 | **75.8** | 1.1% |
+
+**The camera slams to ±65 deg while the head sits within 10 deg of centre**, and
+the head passes X4's stop *only during calm windows*. The obvious mechanism — the
+player turns past the clamp, the error never closes, the servo winds up — is
+refuted, and refuted backwards: the head is further out when nothing is wrong.
+
+This is what P288.2 saw from the other side. Patola held his head still
+mid-oscillation and it did not stop.
+
+### Nor does head RATE before the onset
+
+Angular rate over the 3 s before each severe onset, against the same session's
+calm baseline (deg/s, median):
+
+    285b-s2   40.5 before onset   against  51.3 calm
+    287b       7.5 before onset   against  34.3 calm
+    292        3.4 before onset   against   6.2 calm
+
+Lower in all three. The two single-episode sessions give only n=8, but 292 gives
+n=82 and agrees. Sampling is ~2.6 Hz, so this resolves a sustained turn and not a
+flick — stated because it bounds what the null covers.
+
+### What could NOT be measured, and why
+
+**Whether the clamp or the oscillation comes first is unanswerable from these
+logs.** Only 1 of 13 severe episodes has 15 s of calm before it, and that one puts
+both events 30 s before onset, inside windows classified as calm. The episodes are
+not isolated: take 292 is severe in 68% of its windows.
+
+The first attempt at this reported a clean ordering for 9 of 11 episodes in 292.
+It was an artefact — the search started 6 s before each onset and both events
+landed at −5.87 to −6.00 s, i.e. **on the search boundary**, because both were
+already under way before the window opened. [[range-failures-have-two-ends]] The
+tell was the numbers clustering at the limit, and it is why the table above says
+"cannot order" instead of an answer.
+
+### Where that leaves it
+
+The player is eliminated as the trigger — by angle and by rate. Whatever starts an
+episode is internal to the loop or to X4, which is consistent with
+`servo_rate.cpp` section 2: the model reaches its stops **with a frozen head**
+once the period is high enough. Answering it needs a take whose episodes are
+isolated by construction, not more analysis of these six.
