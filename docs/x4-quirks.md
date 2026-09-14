@@ -18681,3 +18681,90 @@ not where it runs — the drain is the only place a pushed event is consumed for
 free. Any future attempt has to keep the queue residency at the 0.01 ms the
 default achieves, and `evflow`'s queue time restricted to motion windows is the
 number that says whether it did.
+
+## #75 ANSWERED — s1 and s2 do not differ, and the variable is ticks per camera observation
+
+**The question was malformed.** "What makes 285b-s1 different from s2" presumes
+wildness is a property of a session. It is not. s2 contains a contiguous ~40 s
+episode and the remaining 55 windows are indistinguishable from all 41 of s1:
+
+| | windows | tick | camera | **tk/obs** | X4 fps | p99 \|dyaw\| |
+|---|---|---|---|---|---|---|
+| 285b-s1, all | 41 | 68.5 | 52.9 | **1.29** | 89.6 | 3.86 |
+| 285b-s2, calm | 55 | 69.7 | 53.6 | **1.30** | 89.4 | 4.76 |
+| 285b-s2, WILD | 18 | 82.6 | 27.4 | **3.01** | 89.7 | 44.69 |
+| 287b, calm | 34 | 69.0 | 51.1 | **1.35** | 89.3 | 4.74 |
+| 287b, WILD | 10 | 80.3 | 27.1 | **2.96** | 89.8 | 56.97 |
+
+s1 is s2's calm phase. Nothing about the session was ever going to explain it.
+
+**X4's frame rate is 89–90 in every group**, wild and calm alike, so the scene and
+the load are not it either — that hypothesis is refuted in the same table.
+
+### Two instruments had to be replaced first
+
+*The severity statistic was blind.* The log's ">20 deg per camera update" counter
+reads 0.0% on a camera **pinned to its stop**, because a pinned camera does not
+move — `servo_rate.cpp` section 5 already recorded it doing exactly that on a run
+with 113 reversals. That counter is what labelled s1 "calm". Replaced with p99 of
+|dyaw| over `camstamp`'s per-frame `atdraw` stream: 3.86 for s1, 44.69 for s2's
+episode, an order of magnitude with no threshold to argue about.
+
+*The window set was chosen by the log's extent.* Averaged over its whole span s1
+looks like 21.5 fps and s2 like 88.6 — an artefact of s1's span holding 8 minutes
+of menus. Windows now come from `inputrate`'s own record: steering above 50% of
+ticks and deltas going out above 5 Hz.
+
+*And a field that sounds right and is not:* `inputrate`'s `clamped %` counts **our
+servo's** command hitting its own ceiling, not X4's camera reaching its stop. Read
+as the latter it says s1 clamped *more* than s2 (24% of windows above 20% against
+22%) and anti-correlates with every wild report. The camera's own position, from
+`atdraw`, says 0.1% against 7.7%.
+
+### A threshold that passed on the training set and failed held out
+
+Pooling 285b and 287 alone, the **tick rate** looked decisive: 0% wild below
+40 Hz, 6–7% from 60–75, and **100% (18 of 18) above 80 Hz**. Applied to takes 291
+and 292, which set none of it, the relation **inverts** — take 292 is 85% wild at
+60–75 Hz and only 35% wild at 80–95.
+
+Take 292 settles it internally, with no cross-session comparison at all:
+
+    292 WILD windows   tick 74.8 Hz   camera 28.3 Hz   tk/obs 2.64
+    292 calm windows   tick 80.0 Hz   camera 64.4 Hz   tk/obs 1.24
+
+**Its calm windows run at a higher tick rate than its wild ones.** Tick rate only
+looked causal because within any one session it is collinear with tk/obs.
+
+### The 2x2, over 491 windows from six sessions
+
+`tools/wildness.py` reproduces this from the logs.
+
+| tk/obs | tick 20–60 | 60–70 | 70–78 | 78–95 | **row** |
+|---|---|---|---|---|---|
+| 0.9–1.3 | 3% (149) | 0% (66) | 0% (35) | 4% (28) | **2%** (278) |
+| 1.3–1.7 | 0% (7) | 12% (43) | 12% (34) | 43% (7) | **13%** (91) |
+| 1.7–2.2 | — | 100% (1) | 20% (5) | 100% (1) | **43%** (7) |
+| 2.2–4.5 | — | 92% (13) | 97% (67) | 100% (35) | **97%** (115) |
+| **column** | 3% | 15% | 50% | 56% | |
+
+Down a column the tick rate is held and tk/obs varies: 0 → 12 → 100 → 92, and
+0 → 12 → 20 → 97, and 4 → 43 → 100 → 100. Across a row tk/obs is held and the tick
+rate varies: 3, 0, 0, 4 — flat; and 92, 97, 100 — flat. **The controlling variable
+is how many commands the servo issues per camera reading.** Below 1.3 it is 2%
+wild; above 2.2, 97%.
+
+### This contradicts `servo_rate.cpp` section 8, and the data wins
+
+Section 8 swept `period` against dead time and found the clamp boundary unmoved —
+6 at period 1, 2 and 3 — and I wrote there that the re-issued-command mechanism
+was refuted. **491 windows across six sessions say `period` is the variable.** The
+refutation was of the model, not of the world: the model reproduces calm-versus-
+wild from the delay term alone and therefore never needed period, which is not the
+same as period having no effect. Section 8's assertion stands as written and is
+now known to be a statement about the model's blind spot. Finding the mechanism by
+which period destabilises, and making the model show it, is the open work.
+
+The practical rule needs no model: **keep ticks per camera observation near 1.**
+That is what the default path does (1.05–1.35 in every calm group) and what
+`X4VR_TICK_HZ` breaks.
