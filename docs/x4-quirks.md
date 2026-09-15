@@ -19378,3 +19378,59 @@ exactly what take 293's NARROW arm maximised by asking 40 while X4 allowed ~79.
 it alone changes nothing unless X4's file is overridden too; the converse is now
 also true — leaving it at 65 when the extension has raised X4's is what puts the
 servo in the regime where its overshoot is visible.
+
+## Pairing vs changing the servo — not a choice, and lag decides which servo lever
+
+They fix different defects and neither substitutes for the other.
+
+**Pairing is not optional and does not fix the overshoot.** With the servo capped
+below X4's limit the camera stops short of the head by the difference, at *every*
+head speed — a standing 15 deg error in the 65-against-80 case, not a transient.
+But with the limit paired (servo 85, head to 60, never near the stop) the
+overshoot is still there, because the law needs **saturation**, and the error
+exceeds `max_step/kp` = 48 deg on any fast turn:
+
+| head deg/s | max_step 12 | 6 | 3 |
+|---|---|---|---|
+| 60 | 3.02 | 3.02 | 3.02 |
+| 200 | 8.42 | 8.42 | 4.40 |
+| 350 | **22.00** | 10.15 | 4.40 |
+| 500 | **27.17** | 8.77 | 4.40 |
+
+### Overshoot alone picks the wrong lever
+
+Both overshoot and lag are disagreements between the neck and the view, so the
+honest score is the **larger of the two**. Paired, dead time 3:
+
+| setting | 350 deg/s over / lag / **worst** | 500 deg/s over / lag / **worst** |
+|---|---|---|
+| today 0.25/12 | 22.00 / 16.70 / **22.00** | 27.17 / 23.81 / **27.17** |
+| 0.25 / 6 | 10.15 / 16.70 / **16.70** | 8.77 / 31.64 / **31.64** |
+| 0.25 / 3 | 4.40 / 36.08 / **36.08** | 4.40 / 45.05 / **45.05** |
+| **0.15 / 12** | 16.59 / 16.70 / **16.70** | 17.63 / 23.81 / **23.81** |
+| 0.10 / 12 | 5.90 / 17.16 / **17.16** | 0.49 / 29.57 / **29.57** |
+
+**`max_step` 3 has the best overshoot of any row and is the worst setting on the
+table.** It does not remove the error, it moves it from forward to backward, and
+past 350 deg/s the lag it buys is larger than the overshoot it sold. Scoring on
+overshoot alone would have shipped it.
+
+### What the numbers actually recommend
+
+**`kp` 0.25 → 0.15, `max_step` unchanged.** Tied-best at 350 deg/s, outright best
+at 500, and identical to today at 120 where nothing differs. It costs no lag while
+the step is saturated — both rows read 16.70 and 23.81, because a clamped step
+does not care about `kp` — and it settles *faster* (143 ms against 413 at
+500 deg/s) since there is less overshoot to unwind.
+
+That it improves three axes and worsens none is exactly the shape that usually
+means a missing cost, so it is a **candidate, not a conclusion**, and the missing
+cost to look for is tracking a continuously moving head rather than a ramp-and-hold.
+
+### Both, then, and in this order
+
+1. **Pair `X4VR_HEADLOOK_YAW_LIMIT` to the path.** Free, fixes a persistent error,
+   and is also the only way a stock run can prove it is stock.
+2. **Then `kp` 0.15** as an A/B inside one run, against the standing-offset fix
+   already in place, so the two are never confounded the way take 293 confounded
+   the limit with the protocol.
