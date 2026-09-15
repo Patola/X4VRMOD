@@ -4060,6 +4060,29 @@ def main(path):
                          "did move, but a neck is not a measurement"
                          if xp > 35.02 else
                          ", and 35.00 is exactly where a stock clamp sits"))
+            # **X4's stop is NOT a constant, and assuming 65/35 cost take 293.**
+            #
+            #   285b-s2, 287b   X4 read exactly 65.00 / 35.00
+            #   292             76.79 / 38.39
+            #   293             78.79 / 48.87
+            #
+            # Same config file byte for byte (3822 bytes, 0 overrides), same
+            # DECLARE_RENDERED_ROT=2, and `residual` is 0.00 at p99 and max in
+            # both — so this is X4's own camera, not anything we add. Everything
+            # seen is bounded by the `trackmaxyaw="85" trackmaxpitch="85"` that
+            # `<internal>` declares next to maxyaw=65, and X4 lets individual
+            # cockpits override the defaults, so a different ship is the likely
+            # difference between the two pairs of takes.
+            #
+            # It has to be said loudly because a run that assumes 65 will place a
+            # manipulation nowhere near the real limit: take 293 capped the servo
+            # at 40 to keep the camera away from "the stop", and the stop was ~79.
+            if xy > 65.5 or xp > 35.5:
+                print(f"clamp   !! X4's OWN stop is NOT the stock 65/35 in this "
+                      f"run — it read yaw {xy:.2f}, pitch {xp:.2f}. Everything "
+                      f"below that assumes 65/35 is measuring against the wrong "
+                      f"limit, and so is any knob set relative to it. "
+                      f"trackmaxyaw/trackmaxpitch are both 85.")
             asked = cy > 66.0
             if not asked:
                 print("clamp   INCONCLUSIVE — the command never exceeded 66 "

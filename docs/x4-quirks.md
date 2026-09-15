@@ -19190,3 +19190,69 @@ after 285b-s2, 287b and 292, that the player is not driving this.
 **`max|head|` per window is not a clean covariate**, because a wild camera is
 exactly what stops a player turning their head. The banded table above is the best
 available control and is still partly circular; it is reported as such.
+
+## The overshoot past the commanded ceiling — X4's stop is not 65/35 in every run
+
+X4's own readback, not the declared pose:
+
+| take | camread max \|yaw\| | max \|pitch\| |
+|---|---|---|
+| 285b-s2 | **65.00** | **35.00** |
+| 287b | **65.00** | **35.00** |
+| 292 | **76.79** | **38.39** |
+| 293 | **78.79** | **48.87** |
+
+Two takes pin to X4's documented `maxyaw="65" maxpitch="35"` to the centidegree.
+Two exceed both, and everything seen is inside the `trackmaxyaw="85"
+trackmaxpitch="85"` that `<internal>` declares alongside them.
+
+### It is not ours
+
+*Not the declared pose.* `camstamp`'s `atdraw` is `decl_yaw + g_residual.applied_yaw`,
+so it is X4's camera **plus** a rotation we add — a real reason to distrust it
+here. Measured, the residual is **0.00 at p99 and at max** in both takes. It
+explains nothing, and the small camread/atdraw gap (76.79 vs 79.64) is sampling
+density, 1103 samples against 37335.
+
+*Not configuration.* `config:` and `inputmap:` are byte-identical across all four
+takes — 3822 bytes with 0 overrides, 48160 bytes — and all four ran
+`DECLARE_RENDERED_ROT=2 DECLARE_RENDERED_POS=1`.
+
+### It is #68's clamp extension, and the scorer already said so
+
+`score_run.py`'s own clamp block, on take 293:
+
+    clamp  MOVED ✓ — X4 reached 78.79 deg of yaw, past the 65.00 stop every
+           stored take pins to. The override reached X4 and the limit is data,
+           confirmed live
+
+That verdict exists for #68 and has been there all along. I read the first four
+lines of the block and went off to build a theory. [[read-the-existing-report-first]]
+— for the second time in this task, the answer was in output I had already
+generated. It did not print for take 292 only because that verdict is gated on
+the servo having *asked* past 66 deg, and 292's command peaked at 65.00; 293's
+reached 66.83, so it fired.
+
+So X4's clamp extension is installed and active, somewhere between take 287b and
+take 292.
+
+### Why this made P293 unmeasurable
+
+Take 293 capped the servo at 40 deg to keep the camera **away from X4's stop**,
+which the design assumed was 65. The stop was about **79**. The manipulation left
+39 deg of room below the limit it was meant to probe, so the NARROW arm never
+tested the hypothesis — which is exactly what the calm-window check found, a
+camera at 79.3 deg under a servo asking for at most 40.
+
+**Any knob set relative to "the stop" is wrong until the stop is read from the
+run.** `tools/wildness.py` already detects it per session by dwell mass and is
+unaffected; `score_run.py` now prints a loud `!!` line whenever X4's readback
+exceeds the stock 65/35, so the next design cannot quietly inherit the wrong
+number.
+
+### One thing for Patola, not for me to change
+
+#68 records the extension's cost as `modified="1"` on the savegame, and keeping
+saves at `modified="0"` is a standing constraint of this project. If the extension
+is installed for testing that is a deliberate trade; if it arrived by accident it
+wants removing. Flagged, not touched.
