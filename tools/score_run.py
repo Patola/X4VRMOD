@@ -4078,11 +4078,21 @@ def main(path):
             # manipulation nowhere near the real limit: take 293 capped the servo
             # at 40 to keep the camera away from "the stop", and the stop was ~79.
             if xy > 65.5 or xp > 35.5:
-                print(f"clamp   !! X4's OWN stop is NOT the stock 65/35 in this "
-                      f"run — it read yaw {xy:.2f}, pitch {xp:.2f}. Everything "
-                      f"below that assumes 65/35 is measuring against the wrong "
-                      f"limit, and so is any knob set relative to it. "
-                      f"trackmaxyaw/trackmaxpitch are both 85.")
+                print(f"clamp   !! EXTENDED PATH — X4's stop is NOT the stock "
+                      f"65/35 here; it read yaw {xy:.2f}, pitch {xp:.2f}. #68's "
+                      f"extension is loaded (modified=\"1\"). Any knob set "
+                      f"relative to \"the stop\" is against the wrong number.")
+            elif cy <= 65.5:
+                # **Asymmetric, and saying so is the point.** Exceeding 65.5
+                # PROVES the limit is raised; pinning at 65.00 proves nothing,
+                # because the servo's own yaw_limit_deg defaults to 65 and a
+                # camera stopped by US looks exactly like one stopped by X4.
+                # Separating them needs X4VR_HEADLOOK_YAW_LIMIT above 65.
+                print(f"clamp   path UNDETERMINED — X4 read at most {xy:.2f} "
+                      f"yaw, and the servo never asked past 65 either, so a "
+                      f"stock clamp and an extended one are indistinguishable "
+                      f"here. Do NOT record this run as unmodified; set "
+                      f"X4VR_HEADLOOK_YAW_LIMIT above 65 to tell them apart.")
             asked = cy > 66.0
             if not asked:
                 print("clamp   INCONCLUSIVE — the command never exceeded 66 "

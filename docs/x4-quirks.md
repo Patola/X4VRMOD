@@ -19256,3 +19256,63 @@ number.
 saves at `modified="0"` is a standing constraint of this project. If the extension
 is installed for testing that is a deliberate trade; if it arrived by accident it
 wants removing. Flagged, not touched.
+
+## Two paths, and the stock clamp was hiding a defect of ours
+
+Patola keeps #68's extension installed deliberately, and the project has to
+support **both** paths: with it (`modified="1"`, X4's own supported mechanism) and
+without it, for players who will not run a modified game. That is a product
+requirement, not a preference, and it means every measurement has to record which
+path it ran on.
+
+*(Ventures is not a reason for it — `venture="1"` is dead and must not be weighed
+in a trade-off. The requirement stands on the unmodified-install audience alone.)*
+
+### The 65.00 everywhere is OURS, not X4's
+
+`g_headlook.yaw_limit_deg` defaults to 65, so the servo's own target never exceeds
+65 in any of these takes. Every "camera sitting at 65.00" is the servo having
+converged on its own ceiling. X4's clamp is a *second*, independent limit at the
+same number by coincidence of the default.
+
+### The overshoot is the servo exceeding its own target
+
+X4's readback, split by whether the loop was unstable:
+
+| take | severe: max \|yaw\| / past 65.5 | calm: max \|yaw\| / past 65.5 |
+|---|---|---|
+| 285b-s2 | **65.00 / 0.00%** | **65.00 / 0.00%** |
+| 287b | **65.00 / 0.00%** | **65.00 / 0.00%** |
+| 292 | 79.64 / 7.27% | 70.56 / 1.24% |
+| 293 | 81.68 / 10.65% | 79.31 / 5.37% |
+
+The two stock takes read exactly 65.00 in **both** groups. X4's hard clamp
+contained the overshoot completely, even mid-slam, which is why nothing before
+take 292 ever saw it.
+
+**So the extension did not cause the overshoot. It removed the wall that was
+hiding it** — and the overshoot appears in CALM windows too (1.24%, 5.37%), so it
+is not only an instability artefact. Our servo overshoots its own target by up to
+14 deg in ordinary operation, and that is a defect of ours that three months of
+takes could not see.
+
+### The correction to what was said one entry ago
+
+That entry concluded "it is #68's clamp extension" from `score_run.py`'s
+`MOVED ✓`. **That verdict cannot distinguish an installed extension from any
+other reason X4's limit might be higher** — it fires whenever X4 exceeds 65 while
+the servo asked past 66. The conclusion happened to be right because Patola
+confirms the extension is installed, but it was not established by the line cited.
+A verdict that assumes its conclusion is not evidence for it.
+
+### Detection is ASYMMETRIC, and the scorer has to say so
+
+A take **proves** the clamp is raised when X4's readback exceeds 65.5 — nothing
+else can produce that. A take **cannot prove** the clamp is stock: with the
+servo's own ceiling also at 65, a camera pinned at 65.00 looks identical either
+way. Distinguishing them requires the servo to ask past X4's stop, i.e.
+`X4VR_HEADLOOK_YAW_LIMIT` above 65, which no ordinary run sets.
+
+**So "stock" is never confirmed by a normal take, only unrefuted.** Any A/B across
+the two paths must set the servo limit above 65 in both arms, or it is comparing
+a measured state against an assumed one.
