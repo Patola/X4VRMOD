@@ -19132,3 +19132,61 @@ zipped the two together. `windows()` also drops windows with no camera movement,
 so the lists drifted and rows were scored against the wrong arm — reading one list
 positionally against another, which is a recurring defect here. The window's start
 time now travels inside the row and there is only one list.
+
+## Take 293 — P293 is UNMEASURABLE, and the protocol was mine
+
+The A/B engaged: 13 phases, 45 s each, alternating correctly over 9 minutes,
+verified from the log's own `headlook: yawlimit` lines.
+
+**The arms differ.** Severe share 56.2% control against 42.0% NARROW, and within
+matched head-angle bands 65% -> 47% (0–30 deg) and 55% -> 24% (30–50 deg). Time
+spent past 45 deg halves, 38.1% -> 20.3%.
+
+**But the cap was never enforced, so none of that can be attributed to it.**
+Restricted to CALM windows, where the loop is tracking rather than overshooting
+and a 40 deg ceiling should be plainly visible:
+
+| arm | \|cam\| p99 | \|cam\| max | % past 45 deg |
+|---|---|---|---|
+| control (asks ≤65) | 71.6 | 78.8 | 38.1% |
+| NARROW (asks ≤40) | **71.6** | **79.3** | 20.3% |
+
+A servo whose target is capped at 40 deg left the camera at **79.3 deg**, the same
+as control. The knob did *something* — the time past 45 deg halved — but it did
+not do the thing P293 tested, which was to keep the camera away from X4's stop.
+**"Is the near-stop region the trigger" is therefore not answered**, and the 56→42
+difference has no established mechanism. [[x4vr-knob-null-refutes-the-knob]] in
+reverse: an effect exists, and the knob cannot be shown to have caused it.
+
+This also connects to a defect already on the record and still unexplained: X4's
+camera reaching **76.79 deg in take 292 against a maximum command of 65.00**. A
+camera that routinely overshoots the servo's target makes any ceiling-based
+manipulation untestable until it is understood. That is the blocker.
+
+### The run was 83% wild, and that is my fault
+
+Designed for the 23–25% regime that 285b-s2 and 287b sat in at ~70 Hz. It came
+back at **83%**, with Patola reporting *"almost the entire time was the frustum
+going wild, trembling, rotating, bouncing around"*.
+
+The tick rate was not the cause — 63.4/61.6 Hz here against 69–70 in those takes,
+**lower**. What differed is the protocol: I wrote *"look around naturally —
+including well out to the sides, since that's where episodes start."* Head yaw
+reached **135.8 deg**, against a maximum of 75.8 across every earlier take. I
+changed the input distribution while asking whether a change in the servo mattered,
+and the run was too continuously unstable for anything to isolate.
+[[x4vr-instruments-perturb-interaction]] — the instruction is part of the
+instrument.
+
+Patola also could not perceive the range halving. With the view spinning for 83%
+of the run that is expected and says nothing either way.
+
+### What the take did establish
+
+*Episodes are most likely when the head is NEAR CENTRE* — 65% severe in the
+0–30 deg band against 0% above 70 deg. That is the third independent confirmation,
+after 285b-s2, 287b and 292, that the player is not driving this.
+
+**`max|head|` per window is not a clean covariate**, because a wild camera is
+exactly what stops a player turning their head. The banded table above is the best
+available control and is still partly circular; it is reported as such.
