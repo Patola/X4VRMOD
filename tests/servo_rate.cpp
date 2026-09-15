@@ -927,6 +927,63 @@ int main() {
           "either limit — something about take 292's excursion is still "
           "unexplained, and this records that rather than hiding it");
 
+    // ---- 10. the servo overshoots its OWN limit, and X4 used to hide it ----
+    //
+    // Every take before 292 ran with X4's stock 65 deg clamp, which is the same
+    // number as `yaw_limit_deg`. A camera stopped by X4 and a camera stopped by
+    // us look identical, so three months of takes could not see that the servo
+    // sails past its own target. With #68's extension loaded the wall is gone
+    // and X4's readback reaches 79-82 deg against a servo asking for at most 65.
+    //
+    // The plant here is deliberately UNCLAMPED, which is the extended path, and
+    // the servo keeps its 65. Anything past 65 is ours.
+    std::printf("\n10. overshoot past the servo's OWN limit, plant unclamped\n");
+    std::printf("%8s %12s %12s %12s\n", "delay", "max |cam|", "overshoot",
+                "in flight");
+    double over_at3 = 0.0;
+    for (int delay : {0, 1, 2, 3, 4, 5, 6}) {
+        x4vr::HeadLook s;
+        s.gain_deg_per_count = 0.115f; s.servo_kp = 0.25f; s.lead_scale = 1.0f;
+        s.yaw_limit_deg = 65.0f;
+        // A head that parks well past the limit, which is what asks the servo to
+        // sit ON its stop -- the condition the real takes spend 3-4% of their
+        // samples in.
+        std::vector<float> pipe((size_t)delay, 0.0f);
+        float cam = 0.0f, worst = 0.0f;
+        double flight = 0.0;
+        const int steps = 90 * 12;
+        for (int i = 0; i < steps; i++) {
+            x4vr::head_look_observe(s, cam, 0.0f);
+            x4vr::HeadAngles h;
+            h.yaw_deg = 80.0f;            // past the servo's 65 on purpose
+            h.pitch_deg = 0.0f; h.yaw_weight = 1.0f; h.yaw_reliable = true;
+            const x4vr::Delta d = x4vr::head_look_step(s, h);
+            pipe.push_back(s.sign_yaw * (float)d.dx * 0.115f);
+            cam += pipe.front();
+            pipe.erase(pipe.begin());
+            if (std::fabs(cam) > worst) worst = std::fabs(cam);
+            if (i == steps / 2) {         // command sitting in the pipe, mid-run
+                flight = 0.0;
+                for (float v : pipe) flight += std::fabs(v);
+            }
+        }
+        std::printf("%8d %12.2f %12.2f %12.2f\n", delay, worst, worst - 65.0,
+                    flight);
+        if (delay == 3) over_at3 = worst - 65.0;
+    }
+    std::printf("  measured, X4's readback against a servo asking 65: "
+                "take 292 reached 76.79 (+11.79), take 293 78.79 (+13.79)\n");
+
+    // **The claim is that dead time alone produces it.** If the model overshoots
+    // by nothing at the measured 3-tick delay, the mechanism is something else
+    // and this section says so rather than the docs assuming it.
+    check(over_at3 > 1.0,
+          "the servo overshoots its own limit at the measured 3-tick dead time — "
+          "commands already in flight keep arriving after the target is reached");
+    check(over_at3 < 30.0,
+          "and by an amount of the same order as the 11.8-13.8 deg X4 actually "
+          "reported, not a runaway");
+
     std::printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n",
                 g_fail);
     return g_fail ? 1 : 0;

@@ -19316,3 +19316,65 @@ way. Distinguishing them requires the servo to ask past X4's stop, i.e.
 **So "stock" is never confirmed by a normal take, only unrefuted.** Any A/B across
 the two paths must set the servo limit above 65 in both arms, or it is comparing
 a measured state against an assumed one.
+
+## The servo's overshoot — a law, and no free fix
+
+With the plant unclamped (the extended path) and the servo's `yaw_limit_deg` at
+65, the real `head_look_step` sails past its own target:
+
+| dead time | 0 | 1 | **2** | **3** | 4 | 5 | 6 |
+|---|---|---|---|---|---|---|---|
+| overshoot | −0.14 | −0.03 | **+6.30** | **+17.80** | +29.76 | +41.72 | +53.68 |
+
+Against X4's readback: take 292 reached 76.79 (+11.79) and take 293 78.79
+(+13.79), so the effective dead time in play is ~2.5–2.8 ticks — consistent with
+take 291's measured 3.03.
+
+### The law
+
+Sweeping `max_step` at dead time 3, the ratio is flat at **0.49–0.53**:
+
+    overshoot ≈ 0.5 x dead_time_in_ticks x max_step_deg
+
+12 deg of step and 3 ticks of delay give 18, which is what the model reads and
+the right order for the game's 12–14. **It is exactly zero at a dead time of 1 or
+less**, so this is dead time spending a saturated command, not a tuning error:
+while the step is clamped the loop has no feedback authority and is running open
+at full rate.
+
+### Three levers, one curve
+
+| lever | overshoot | what it costs |
+|---|---|---|
+| `max_step` 12 → 6 | 17.80 → 8.83 | a 65 deg sweep goes 127 → 206 ms |
+| `max_step` 12 → 3 | 17.80 → 4.46 | 381 ms |
+| `kp` 0.25 → 0.15 | 17.80 → 3.77 | tracking lag, which #73's lead exists to fight |
+| `kp` 0.25 → 0.10 | 17.80 → **−0.14** | more of the same |
+| in-flight accounting | 17.80 → **−0.14** | **rms tracking error 0.40 → 3.57 deg** |
+
+**In-flight accounting is not the free fix it looks like.** Crediting commands
+already sent is arithmetically close to lowering the gain, which is why it lands
+on the same −0.14 as `kp` 0.10, and on a moving head (60 deg, 0.4 Hz) it makes
+tracking **nine times worse** and doubles the sweep time. Every lever here trades
+overshoot against responsiveness; there is no direction that buys both.
+
+It does at least fail gracefully. Crediting 3 ticks while the true delay is
+larger: 4 → 3.31, 5 → 12.39, 6 → 21.60, against today's 29.76, 41.72, 53.68.
+
+### Whether it is worth paying for depends on the path
+
+*Stock path.* X4's own clamp at 65 absorbs the whole overshoot — the two stock
+takes read exactly 65.00 with 0.00% past, in severe windows as well as calm. The
+defect is real but has no visible consequence there.
+
+*Extended path.* The camera goes ~14 deg past where the servo asked. Note which
+direction: with the head at 80 and the servo capped at 65, the overshoot lands the
+camera *nearer* the head, not further. The condition that exercises it is the
+servo's limit sitting **below X4's** — which is a configuration inconsistency, and
+exactly what take 293's NARROW arm maximised by asking 40 while X4 allowed ~79.
+
+**So the first thing to fix is not the servo but the pairing:**
+`X4VR_HEADLOOK_YAW_LIMIT` has to match the path. #68 already warns that raising
+it alone changes nothing unless X4's file is overridden too; the converse is now
+also true — leaving it at 65 when the extension has raised X4's is what puts the
+servo in the regime where its overshoot is visible.
