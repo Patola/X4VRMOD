@@ -19434,3 +19434,58 @@ cost to look for is tracking a continuously moving head rather than a ramp-and-h
 2. **Then `kp` 0.15** as an A/B inside one run, against the standing-offset fix
    already in place, so the two are never confounded the way take 293 confounded
    the limit with the protocol.
+
+## P294 — the kp A/B, committed before the run
+
+Patola confirms the extension sets **maxyaw=85**, so the servo is paired to 85 and
+the standing offset is gone before kp is touched. One variable at a time.
+
+`X4VR_HEADLOOK_KP_AB=45` alternates kp between the run's own value (0.25) and
+`X4VR_HEADLOOK_KP_B` (0.15) every 45 s, opening on the control arm.
+
+**P294.1 — over 350 deg/s of head rate, the worst neck-vs-view disagreement falls
+from ~22 deg to ~17.** Modelled at dead time 3. Below 150 deg/s the arms should be
+indistinguishable; a difference there would mean kp is doing something the model
+does not describe.
+
+**P294.2 — if the fast band is thin the run says nothing.** The effect exists only
+where the step saturates, above `max_step/kp` = 48 deg of error. The scorer says
+so explicitly rather than reporting a null.
+
+**P294.3 — kp also scales the lead**, `lead_scale * (1/kp - 1)`: 3.0x becomes
+5.67x. The arms differ in anticipation as well as gain. That is what setting kp
+does, so it is recorded rather than controlled, and #73 closed the lead as
+imperceptible.
+
+### The instrument already existed
+
+`lagsample` logs head AND X4's camera every tick, gated on
+`X4VR_HEADLOOK_LAGLOG`. I was about to build a duplicate because `camread` is
+1-in-30 and `geom`'s `yaw=` is the declared pose, not the head.
+[[read-the-existing-report-first]], third time in this task. It now also carries
+`kparm=`, `kp=` and `ylim=`, **stamped from the branch the code took** rather than
+joined by timestamp against the phase lines.
+
+Setting `X4VR_HEADLOOK_KP_AB` auto-arms `lagsample`, because a kp run without it
+cannot be scored at all — the failure take 293 already paid for. The handover sets
+`LAGLOG=1` explicitly anyway: a take is too expensive to spend testing a
+convenience.
+
+### Scored on the WORSE of overshoot and lag
+
+Both are the neck and the view disagreeing, and every lever trades one for the
+other — `max_step` 3 has the best overshoot on the table and the worst worst-case.
+The scorer bins by the head rate **3 ticks before** each sample, because the error
+is paid out from commands issued a dead time earlier; binning on the current rate
+filed a planted fast sweep's overshoot under "slow" the moment the head stopped,
+leaking a p90 of 19.7 deg into a band where nothing should exceed 5.
+
+Checked against two planted logs, one where ARM_B is better and one where it is
+not: `22.90 -> 17.49, ARM_B is better` and `22.90 -> 23.49, no difference beyond
+15%; a null here refutes it`.
+
+### Still open, deliberately not in this run
+
+Pitch. X4's pitch reached 48.87 deg, which a 35 deg clamp cannot produce, so its
+limit moved too — but `pitch_limit_deg` stays at 35 here rather than changing two
+things at once. The standing pitch offset survives this take by design.

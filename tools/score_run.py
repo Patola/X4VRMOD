@@ -3723,6 +3723,92 @@ def main(path):
                               f"finer; a tight band and a 40-165 ms one are "
                               f"indistinguishable at this amplitude.")
 
+    # --- task #75: the kp A/B, scored on the WORSE of overshoot and lag ------
+    #
+    # The servo overshoots its own target by 0.5 x dead_time x max_step, and the
+    # levers that shrink that all buy it back as lag. So neither number alone is
+    # the score: both are the neck and the view disagreeing, and the honest
+    # figure is the larger. Modelled, paired, dead time 3:
+    #
+    #                  350 deg/s over/lag/WORST     500 deg/s WORST
+    #   kp 0.25          22.00 / 16.70 / 22.00           27.17
+    #   kp 0.15          16.59 / 16.70 / 16.70           23.81
+    #
+    # and identical at 120 deg/s, where nothing differs. So the prediction is a
+    # change in the TAIL at speed and none in the middle -- reporting a median
+    # would report a null however well it worked.
+    lag = re.findall(
+        r"lagsample: arm=\d+ view=(\w+) steer=(\d) cam=(\d) "
+        r"head=(-?[\d.]+),(-?[\d.]+) x4=(-?[\d.]+),(-?[\d.]+) "
+        r"kparm=(-?\d+) kp=([\d.]+) ylim=([\d.]+)", text)
+    if lag:
+        rows = [(v, int(st), int(cv), float(hy), float(x4y), int(ka), float(kp),
+                 float(yl))
+                for v, st, cv, hy, _hp, x4y, _x4p, ka, kp, yl in lag]
+        use = [r for r in rows if r[0] == "cockpit" and r[1] and r[2]]
+        arms = sorted({r[5] for r in use})
+        print(f"kpab   {len(lag)} lagsample(s), {len(use)} in cockpit with "
+              f"steering and a live read-back; kp arm(s) {arms}")
+        if -1 in arms and len(arms) == 1:
+            print("kpab   no kp A/B in this run — X4VR_HEADLOOK_KP_AB unset, so "
+                  "this says nothing about kp")
+        elif len(arms) < 2:
+            print(f"kpab   ONLY ONE ARM present ({arms}) — the run ended inside "
+                  f"a single phase, or the A/B never flipped. Not scorable.")
+        else:
+            # Head rate from consecutive samples; the effect lives in the fast tail.
+            # **Bin by the rate that CAUSED the error, not the one beside it.**
+            # The error at tick i is paid out from commands issued ~3 ticks
+            # earlier (take 291's measured dead time), so binning on the current
+            # rate files a fast sweep's overshoot under "slow" the moment the
+            # head stops — which is exactly when the overshoot arrives. On the
+            # planted fixture that leaked a p90 of 19.74 deg into the under-150
+            # band, where nothing should exceed 5.
+            LAGT = 3
+            def band(lo, hi):
+                out = {}
+                for i in range(LAGT + 1, len(use)):
+                    a_, b_ = use[i - LAGT - 1], use[i - LAGT]
+                    rate = abs(b_[3] - a_[3]) * 63.0   # deg/s at the nominal tick
+                    if not (lo <= rate < hi):
+                        continue
+                    b_ = use[i]                        # ...but score THIS sample
+                    tgt = max(-b_[7], min(b_[7], b_[3]))   # the servo's own target
+                    out.setdefault(b_[5], []).append(abs(b_[4] - tgt))
+                return out
+            print(f"{'':7}{'head deg/s':<14}{'arm':<9}{'n':>6}{'p50':>8}"
+                  f"{'p90':>8}{'WORST':>9}")
+            for lo, hi, label in ((0, 150, "under 150"), (150, 350, "150-350"),
+                                  (350, 9e9, "over 350")):
+                g = band(lo, hi)
+                for arm in sorted(g):
+                    e = sorted(g[arm])
+                    if len(e) < 20:
+                        continue
+                    name = "control" if arm == 0 else "ARM_B"
+                    print(f"kpab   {label:<14}{name:<9}{len(e):>6}"
+                          f"{e[len(e)//2]:>8.2f}{e[int(0.90*len(e))]:>8.2f}"
+                          f"{e[-1]:>9.2f}")
+            fast = band(350, 9e9)
+            if 0 in fast and 1 in fast and len(fast[0]) >= 20 and len(fast[1]) >= 20:
+                w0, w1 = max(fast[0]), max(fast[1])
+                kpv = {r[5]: r[6] for r in use}
+                print(f"kpab   => over 350 deg/s the worst neck-vs-view "
+                      f"disagreement is {w0:.2f} deg at kp {kpv.get(0, 0):.3f} "
+                      f"and {w1:.2f} deg at kp {kpv.get(1, 0):.3f}")
+                if w1 < 0.85 * w0:
+                    print("kpab   => ARM_B is better, as the model predicted")
+                elif w1 > 1.15 * w0:
+                    print("kpab   => ARM_B is WORSE — the model's recommendation "
+                          "is refuted and kp should stay where it is")
+                else:
+                    print("kpab   => no difference beyond 15%; the model predicted "
+                          "22.00 -> 16.70, so a null here refutes it")
+            else:
+                print("kpab   the over-350 deg/s band has too few samples in one "
+                      "arm to compare — the effect only exists there, so this run "
+                      "did not exercise it. Turn the head FASTER, not more.")
+
     # --- task #73: the head-look lag, and whether the lead removes it -------
     #
     # WHAT A HEALTHY RUN READS, stated before the numbers are read:

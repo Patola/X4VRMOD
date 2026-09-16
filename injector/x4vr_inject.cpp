@@ -2123,13 +2123,23 @@ static int dither_next(int counts) {
 // Task #73's per-pose lag samples. On by its own knob, and implied by the A/B
 // -- a run that asks for the comparison always produces the measurement that
 // judges it, rather than depending on a second flag being remembered.
+// Which arm of the kp A/B is live, published for `lagsample` to stamp. -1 when
+// the A/B is not running, so the scorer can tell "one arm" from "no A/B".
+static std::atomic<int> g_kp_arm{-1};
+
 static bool lag_log_enabled() {
     static const bool on = [] {
         const char *e = getenv("X4VR_HEADLOOK_LAGLOG");
         if (e && *e && *e != '0')
             return true;
         const char *ab = getenv("X4VR_HEADLOOK_LEAD_AB");
-        return ab && *ab && atof(ab) > 0.0;
+        if (ab && *ab && atof(ab) > 0.0)
+            return true;
+        // The kp A/B's whole acceptance check is this stream. Arming one without
+        // the other would produce a run that cannot be scored, which is the
+        // failure take 293 already paid for.
+        const char *kab = getenv("X4VR_HEADLOOK_KP_AB");
+        return kab && *kab && atof(kab) > 0.0;
     }();
     return on;
 }
@@ -2332,6 +2342,65 @@ void headlook_tick() {
     }();
     if (kp > 0.0f)
         g_headlook.servo_kp = kp;
+
+    // **Task #75: the servo overshoots its own target, and kp is the lever the
+    // arithmetic picks.** Measured offline against the real head_look_step with
+    // the plant unclamped, dead time 3, the limit PAIRED so nothing sits on a
+    // stop. Score is the larger of overshoot and lag, because both are the neck
+    // and the view disagreeing:
+    //
+    //                    350 deg/s  over/lag/worst     500 deg/s worst
+    //   kp 0.25 (today)     22.00 / 16.70 / 22.00           27.17
+    //   kp 0.15             16.59 / 16.70 / 16.70           23.81
+    //   max_step 3           4.40 / 36.08 / 36.08           45.05
+    //
+    // max_step has the best overshoot on that table and the worst worst-case: it
+    // moves the error from forward to backward rather than removing it. kp costs
+    // nothing while the step is saturated -- a clamped step ignores kp, which is
+    // why both rows read the same lag -- and settles faster, 143 ms against 413.
+    //
+    // **kp also scales the lead**, `lead_scale * (1/kp - 1)`: 3.0x at 0.25
+    // becomes 5.67x at 0.15. The arms therefore differ in anticipation as well
+    // as gain, which is honest -- that IS what setting kp does -- but it means a
+    // difference here does not attribute to gain alone. #73 closed the lead as
+    // imperceptible, so this is recorded rather than controlled.
+    //
+    // Alternating inside one run for the reason take 293 taught: comparing arms
+    // across takes let my own protocol instruction change the input distribution
+    // and the run could not be read.
+    static const double kp_ab = [] {
+        const char *e = getenv("X4VR_HEADLOOK_KP_AB");
+        return e && *e ? atof(e) : 0.0;
+    }();
+    static const float kp_b = [] {
+        const char *e = getenv("X4VR_HEADLOOK_KP_B");
+        return e && *e ? (float)atof(e) : 0.15f;
+    }();
+    if (kp_ab > 0.0) {
+        static const double kab_t0 = mono_seconds();
+        static const float kp_a = g_headlook.servo_kp;   // whatever the run set
+        const long phase = (long)((mono_seconds() - kab_t0) / kp_ab);
+        const bool arm_b = (phase & 1) != 0;   // opens on the CONTROL arm
+        g_headlook.servo_kp = arm_b ? kp_b : kp_a;
+        // Stamped, not re-derived. `lagsample` carries it so the scorer reads
+        // the branch the code TOOK rather than recomputing it from timestamps
+        // against the phase lines -- a join that has to get guard bands and
+        // clock skew right, and that can evaluate a different predicate than
+        // this one did.
+        g_kp_arm.store(arm_b ? 1 : 0, std::memory_order_relaxed);
+        static long kab_said = -1;
+        if (phase != kab_said) {
+            kab_said = phase;
+            // Intent, never outcome: if kp somehow fails to reach the servo this
+            // must still name the arm the run ASKED for, or the scorer would
+            // split one population in half and call the null a pass.
+            X4VR_LOG("headlook: kp %s (%.3f, lead %.2fx, A/B phase %ld, %.0f s)",
+                     arm_b ? "ARM_B" : "control", g_headlook.servo_kp,
+                     g_headlook.servo_kp > 0.0f
+                         ? (1.0f / g_headlook.servo_kp - 1.0f) : 0.0f,
+                     phase, kp_ab);
+        }
+    }
     static const float gpitch = [] {
         const char *e = getenv("X4VR_HEADLOOK_GAIN_PITCH");
         return e && *e ? (float)atof(e) : 0.0f;
@@ -2933,11 +3002,13 @@ void headlook_tick() {
     // the pairing the regression needs: error at the moment of observation.
     if (lag_log_enabled()) {
         X4VR_LOG("lagsample: arm=%d view=%s steer=%d cam=%d head=%.3f,%.3f "
-                 "x4=%.3f,%.3f",
+                 "x4=%.3f,%.3f kparm=%d kp=%.3f ylim=%.1f",
                  lead_armed ? 1 : 0, cockpit ? "cockpit" : "external",
                  steering ? 1 : 0, have_cam ? 1 : 0, yaw, pitch,
                  have_cam ? kRad2Deg * -r.yaw : 0.0f,
-                 have_cam ? kRad2Deg * r.pitch : 0.0f);
+                 have_cam ? kRad2Deg * r.pitch : 0.0f,
+                 g_kp_arm.load(std::memory_order_relaxed), g_headlook.servo_kp,
+                 g_headlook.yaw_limit_deg);
     }
 
     // **Task #75: do WE send sparsely, or does X4 ignore what we send?**
