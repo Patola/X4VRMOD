@@ -3958,11 +3958,16 @@ def main(path):
         r"\[\s*(\d+\.\d+)\] inject  lagsample: arm=\d+ view=(\w+) "
         r"steer=(\d) cam=(\d) head=(-?[\d.]+),(-?[\d.]+) "
         r"x4=(-?[\d.]+),(-?[\d.]+) kparm=-?\d+ kp=[\d.]+ ylim=[\d.]+ "
-        r"rfarm=(-?\d+) rftau=([\d.]+)", text)
+        # **Tolerant of both spellings and of the field being absent.** Take
+        # 295 logged `rfhz=` before the knob was split into tau + slew, and no
+        # `ugarm=` at all; a regex that demands the newest shape silently
+        # unscores every earlier run. The control suite caught this the moment
+        # it was written the strict way.
+        r"rfarm=(-?\d+) rf(?:hz|tau)=([\d.]+)(?: ugarm=(-?\d+))?", text)
     if rf:
         rr = [(float(t), v, int(st), int(cv), float(hy), float(x4y), int(ar),
-               float(hz))
-              for t, v, st, cv, hy, _hp, x4y, _x4p, ar, hz in rf]
+               float(hz), int(ug) if ug else -1)
+              for t, v, st, cv, hy, _hp, x4y, _x4p, ar, hz, ug in rf]
         ck = [r for r in rr if r[1] == "cockpit" and r[2] and r[3]]
         arms = sorted({r[6] for r in ck})
         print(f"rfab   {len(rf)} lagsample(s) carry rfarm; {len(ck)} in cockpit "
@@ -4037,6 +4042,79 @@ def main(path):
                      "fault did not recur — the `clamp` plateau tells them apart."
                      if not ref else
                      "Each refusal is a 100-deg excursion that did NOT happen."))
+
+    # --- task #75: the freshness gate, scored the same way as the rate fix ---
+    #
+    # Same stream, same statistic, split on `ugarm` instead. PREDICTED from
+    # tests/servo_rate.cpp section 12 at take 295's measured rates:
+    #
+    #   gated (today)   tick 23.9 ms   lag 117.0 ms   worst |cam| 72.45
+    #   UNGATED         tick 11.9 ms   lag  53.2 ms   worst |cam| 78.55
+    #
+    # so ARM_B should roughly HALVE the lag and make the excursion somewhat
+    # worse while staying inside the limit. The excursion is the thing to watch:
+    # doubling the iteration rate doubles the motion in flight at a fixed
+    # per-tick step, which is the term that killed X4VR_TICK_HZ.
+    if rf and len({r[8] for r in rr if r[8] >= 0}) >= 2:
+        ck = [r for r in rr if r[1] == "cockpit" and r[2] and r[3]]
+        print(f"ugab   {len(ck)} cockpit tick(s) with steering and a live "
+              f"read-back; ungate arm(s) {sorted({r[8] for r in ck})}")
+        ph, cur = [], None
+        for r in ck:
+            if r[8] != cur:
+                ph.append([])
+                cur = r[8]
+            ph[-1].append(r)
+        per, rate = {}, {}
+        for seg in ph:
+            if len(seg) < 300:
+                continue
+            es, rs, n = 0.0, 0.0, 0
+            for a_, b_ in zip(seg, seg[1:]):
+                dt = b_[0] - a_[0]
+                if not (0.0 < dt <= 0.060):
+                    continue
+                es += (b_[5] - b_[4]) ** 2
+                rs += ((b_[4] - a_[4]) / dt) ** 2
+                n += 1
+            if n < 200 or rs <= 0.0:
+                continue
+            per.setdefault(seg[0][8], []).append(
+                1000.0 * math.sqrt(es / n) / math.sqrt(rs / n))
+            rate.setdefault(seg[0][8], []).append(
+                1000.0 * (seg[-1][0] - seg[0][0]) / max(1, len(seg) - 1))
+        print(f"{'':7}{'arm':<18}{'tick ms':>9}{'phases':>8}{'lag ms each':>28}")
+        for arm in sorted(per):
+            name = "control (gated)" if arm == 0 else "ARM_B (ungated)"
+            tk = sum(rate[arm]) / len(rate[arm])
+            vals = "  ".join(f"{v:.0f}" for v in per[arm])
+            print(f"ugab   {name:<18}{tk:>9.1f}{len(per[arm]):>8}{vals:>28}")
+        if 0 in per and 1 in per and len(per[0]) >= 2 and len(per[1]) >= 2:
+            if max(per[1]) < min(per[0]):
+                print("ugab   => SEPARATED — every ungated phase has less lag "
+                      "than every gated one, as section 12 predicted.")
+            elif min(per[1]) > max(per[0]):
+                print("ugab   => SEPARATED THE WRONG WAY — ungating made the lag "
+                      "worse. Keep the gate.")
+            else:
+                print(f"ugab   => the per-phase ranges OVERLAP (gated "
+                      f"{min(per[0]):.0f}-{max(per[0]):.0f}, ungated "
+                      f"{min(per[1]):.0f}-{max(per[1]):.0f}), so this run does "
+                      f"not separate them whatever the medians read.")
+            # The cost side. A halved lag bought with a spinning frustum is not
+            # a win, and take 295 is why this is printed next to the lag rather
+            # than left for the player to notice.
+            for arm in sorted(per):
+                seg = [r for r in ck if r[8] == arm]
+                worst = max(abs(r[5]) for r in seg)
+                sat = sum(1 for r in seg if abs(r[4]) < 15.0
+                          and abs(r[5] - r[4]) > 30.0)
+                print(f"ugab   {'gated' if arm==0 else 'ungated':<8} worst |X4| "
+                      f"{worst:6.2f} deg, {sat} sample(s) with the camera 30+ "
+                      f"deg off a centred head")
+        else:
+            print("ugab   too few complete phases per arm — the run must "
+                  "outlast four A/B periods")
 
     # --- task #73: the head-look lag, and whether the lead removes it -------
     #

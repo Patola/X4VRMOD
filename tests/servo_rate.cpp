@@ -1382,6 +1382,90 @@ int main() {
         std::printf("      %10.0f %12.2f %12.2f %14s\n", tau_ms, wc, wc - 85.0,
                     wc <= 86.0 ? "clean" : (wc <= 92.0 ? "marginal" : "SPINS"));
     }
+
+    // ---- REMOVING THE FRESHNESS GATE ------------------------------------
+    //
+    // `if (!fresh) return;` makes a tick happen only when a drain poll finds a
+    // NEW pose. Measured: the servo iterates at 41.9 Hz (take 295) and 52.2
+    // (294) while the drain runs at 84.2 and 103.7 and the layer publishes at
+    // ~89.7. So roughly half the available iteration rate is left on the floor
+    // by our own gate, not by anything X4 does.
+    //
+    // Modelled honestly, which means modelling what the gate actually costs and
+    // what removing it actually buys:
+    //
+    //   * the servo ticks at the DRAIN rate, not the publish rate;
+    //   * the head only updates at the PUBLISH rate, so an ungated tick
+    //     sometimes sees a repeat — that is not a bug, a proportional servo
+    //     simply applies another correction toward the same target;
+    //   * the dead time is in WALL CLOCK and barely moves, so doubling the
+    //     iteration rate DOUBLES dead_time_ticks — and with a per-tick step
+    //     ceiling that doubles the motion in flight. This is the term that
+    //     killed X4VR_TICK_HZ, and the model has to be able to show it.
+    std::printf("\n      removing `if (!fresh) return;` — saturating regime\n");
+    std::printf("      %26s %9s %9s %12s %10s\n", "", "tick ms", "lag ms",
+                "worst |cam|", "verdict");
+    double gate_cam[4] = {0, 0, 0, 0};
+    for (int cfg = 0; cfg < 4; cfg++) {
+        const bool ungated = (cfg & 1) != 0;
+        const bool ratefix = (cfg & 2) != 0;
+        x4vr::HeadLook s;
+        s.gain_deg_per_count = 0.115f; s.servo_kp = 0.25f;
+        s.yaw_limit_deg = 85.0f;
+        if (ratefix) {
+            s.rate_fix_tau_ms = 110.0f;          // the sweep's safe value
+            s.rate_fix_max_rate_deg_s = 600.0f;
+        }
+        // Take 295's measured rates. Ungated ticks at the drain, gated at the
+        // fresh rate; the head is sampled-and-held at the publish rate either
+        // way, so the ungated arm really does see repeats.
+        const double tick = ungated ? 1.0 / 84.2 : 1.0 / 41.9;
+        const double pub = 1.0 / 89.7;
+        // Removing the gate shortens the dead time by about half a tick — our
+        // command reaches X4's queue sooner on average — and by nothing else.
+        // Anything larger would be the harness inventing the answer.
+        const double kDeadS = 0.060 - 0.5 * (1.0 / 41.9 - tick);
+        std::vector<std::pair<double, float>> pipe;
+        double t = 0.0, cam = 0.0, wc = 0.0, err_sq = 0.0, held = 0.0,
+               next_pub = 0.0;
+        int n = 0;
+        for (int i = 0; i < 12000; i++) {
+            t += tick;
+            const double head = 70.0 * std::sin(2.0 * 3.14159265 * 1.4 * t);
+            if (t >= next_pub) { held = head; next_pub = t + pub; }
+            while (!pipe.empty() && pipe.front().first <= t) {
+                cam += pipe.front().second;
+                pipe.erase(pipe.begin());
+            }
+            x4vr::head_look_observe(s, (float)cam, 0.0f);
+            x4vr::HeadAngles h;
+            h.yaw_deg = (float)held; h.pitch_deg = 0.0f;   // the HELD pose
+            h.yaw_weight = 1.0f; h.yaw_reliable = true;
+            const x4vr::Delta d = x4vr::head_look_step(s, h, (float)tick);
+            pipe.push_back({t + kDeadS, s.sign_yaw * (float)d.dx * 0.115f});
+            if (i > 2000) {
+                wc = std::fmax(wc, std::fabs(cam));
+                const double e = cam - head;
+                err_sq += e * e; n++;
+            }
+        }
+        const double kRms = 70.0 * 2.0 * 3.14159265 * 1.4 / 1.41421356;
+        char name[64];
+        std::snprintf(name, sizeof name, "%s, ratefix %s",
+                      ungated ? "UNGATED" : "gated (today)",
+                      ratefix ? "tau110" : "off");
+        gate_cam[cfg] = wc;
+        std::printf("      %26s %9.1f %9.1f %12.2f %10s\n", name,
+                    1000.0 * tick, 1000.0 * std::sqrt(err_sq / n) / kRms, wc,
+                    wc <= 86.0 ? "clean" : (wc <= 92.0 ? "marginal" : "SPINS"));
+    }
+    check(gate_cam[1] > gate_cam[0],
+          "12: removing the gate with TODAY's per-tick constants makes the "
+          "excursion worse — doubling the iteration rate doubles the motion in "
+          "flight, which is what X4VR_TICK_HZ already demonstrated in game");
+    check(gate_cam[3] <= gate_cam[2] + 0.5,
+          "12: ...but with the rate fix on, the step ceiling is per SECOND, so "
+          "the same change costs nothing");
     }
 
     std::printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n",

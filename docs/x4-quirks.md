@@ -19969,3 +19969,69 @@ drain and remove only the freshness gate, or floor it on time.
 
 **Not attempted in a take until it is measured offline in the saturating
 regime**, which is the mistake this section exists to record.
+
+## The freshness gate, removed and verified offline (take 296 pending)
+
+`if (!fresh) return;` made a tick happen only when a drain poll happened to find
+a new pose. Measured: the servo iterates at **41.9 Hz** (take 295) and 52.2 (294)
+while the drain runs at 84.2 and 103.7 and the layer publishes at ~89.7. So about
+half the available iteration rate was being left on the floor by our own gate,
+not by anything X4 does — and lag is `(1/kp - 1) * tick_period`.
+
+### A time floor, not a bare removal
+
+Take 295 measured the drain between **25 and 325 Hz**. Ticking the servo at
+325 Hz is take 119's shape again, and it would leave the period as irregular as
+it already is. `X4VR_HEADLOOK_UNGATED=<ms>` acts on every drain entry but no more
+often than that floor, which bounds the rate AND regularises it. 0 keeps the
+gate, so every earlier take reproduces.
+
+Nothing else moves: the gate sits *after* the stand-down (`stale > 5000`) and
+after the mouselook key hold, and `stale` still counts non-fresh entries, so the
+dead-pose-channel path is untouched.
+
+### Verified in section 12, at take 295's own measured rates
+
+                                tick ms   lag ms   worst |cam|
+    gated (today), ratefix off     23.9    117.0         72.45   clean
+          UNGATED, ratefix off     11.9     53.2         78.55   clean
+    gated (today), ratefix tau110  23.9    112.3         71.30   clean
+       UNGATED, ratefix tau110     11.9    106.8         68.08   clean
+
+**Lag more than halves, 117 -> 53 ms, and the excursion grows to 78.55 while
+staying inside the 85 limit.** The model is deliberately unkind: the head is
+sampled-and-held at the publish rate, so the ungated arm really does see
+repeated poses, and the dead time shortens by only half a tick — anything more
+would be the harness inventing the answer.
+
+Two checks, and the first is the one that matters:
+
+* removing the gate with **today's per-tick constants** makes the excursion
+  worse, because doubling the iteration rate doubles the motion in flight at a
+  fixed per-tick step. That is the term that killed `X4VR_TICK_HZ`, and the
+  model reproduces it rather than hiding it.
+* with the rate fix on the step ceiling is per SECOND, so the same change costs
+  nothing — but tau 110 then puts the lag back to 106.8, which is the trade
+  section 12's sweep already established.
+
+So the pairing to test is **ungated with the rate fix OFF**: the only
+combination in the table that both halves the lag and stays clean.
+
+**What the model cannot see:** our own injected events lengthen X4's drain, so
+doubling the event rate may raise the drain rate that feeds the tick — take 119's
+runaway in miniature. That is what the floor is for, and it is the first thing to
+read in the log.
+
+### Scored by `ugab`, with its own planted controls
+
+Same stream and statistic as `rfab`, split on `ugarm`. Predicted: ARM_B roughly
+halves the lag; the excursion and the count of samples with the camera 30+ deg
+off a centred head are printed beside it, because **a halved lag bought with a
+spinning frustum is not a win** and take 295 is why that is printed rather than
+left for the player to notice.
+
+`tests/run-rfab-scorer.sh` now plants six logs — three for each block — and
+checks all three verdicts are reachable in both. Writing the new field into the
+regex strictly broke take 295's own parse (it logs `rfhz=`, before the knob was
+split, and no `ugarm=` at all); the control suite caught it on the first run, and
+the pattern now accepts both spellings and a missing field.

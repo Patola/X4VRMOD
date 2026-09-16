@@ -1091,6 +1091,8 @@ struct PumpRate {
     // the first read of the next belong to a window, and dropping them would
     // bias `published` down by exactly the loss being measured.
     uint64_t updates_mark = 0, updates_last = 0;
+    // Ticks the freshness gate would have refused; 0 unless X4VR_HEADLOOK_UNGATED.
+    uint64_t ungated_ticks = 0;
     bool have_updates = false;
     // Cumulative values as of the last emitted line, so each line reports its
     // own window.
@@ -2129,6 +2131,7 @@ static std::atomic<int> g_kp_arm{-1};
 // Which ratefix arm the code TOOK, so lagsample stamps the branch rather than
 // re-deriving it from a timestamp. [[record-the-branch-dont-recompute-it]].
 static std::atomic<int> g_ratefix_arm{-1};
+static std::atomic<int> g_ungate_arm{-1};
 
 static bool lag_log_enabled() {
     static const bool on = [] {
@@ -2146,7 +2149,10 @@ static bool lag_log_enabled() {
             return true;
         // Same for the ratefix A/B, and for the same reason.
         const char *rab = getenv("X4VR_HEADLOOK_RATEFIX_AB");
-        return rab && *rab && atof(rab) > 0.0;
+        if (rab && *rab && atof(rab) > 0.0)
+            return true;
+        const char *uab = getenv("X4VR_HEADLOOK_UNGATED_AB");
+        return uab && *uab && atof(uab) > 0.0;
     }();
     return on;
 }
@@ -2679,8 +2685,71 @@ void headlook_tick() {
         return;
     }
     g_headlook_active.store(true, std::memory_order_relaxed);
-    if (!fresh)
-        return; // nothing new to act on; acting anyway is what take 119 did
+
+    // **Task #75: the freshness gate is half the dead time, and it is ours.**
+    //
+    // `if (!fresh) return;` makes a tick happen only when a drain poll happens
+    // to find a new pose. Measured, the servo therefore iterates at 41.9 Hz
+    // (take 295) and 52.2 (294) while the drain runs at 84.2 and 103.7 and the
+    // layer publishes at ~89.7 — so roughly half the available iteration rate
+    // is left on the floor by our own gate, not by anything X4 does. Lag is
+    // (1/kp - 1) * tick_period, so that is a factor of two on the complaint.
+    //
+    // **A TIME floor, not a bare removal.** Take 295 measured the drain between
+    // 25 and 325 Hz; ticking the servo at 325 Hz would be take 119's shape
+    // again, and it would also leave the period as irregular as it is now. A
+    // minimum interval bounds the rate AND regularises it, which is the same
+    // wander section 12 charges for the tremble tail.
+    //
+    // Modelled in tests/servo_rate.cpp section 12, saturating regime, take
+    // 295's own rates:
+    //
+    //                                tick ms   lag ms   worst |cam|
+    //   gated (today), ratefix off      23.9    117.0         72.45   clean
+    //         UNGATED, ratefix off      11.9     53.2         78.55   clean
+    //      UNGATED, ratefix tau110      11.9    106.8         68.08   clean
+    //
+    // Lag more than halves and the excursion grows but stays inside the limit.
+    // The model cannot see one real risk: our own injected events lengthen X4's
+    // drain, so doubling the event rate may raise the drain rate that feeds
+    // this — take 119's runaway in miniature, and the reason for the floor.
+    //
+    // 0 (the default) keeps the gate, so every earlier take reproduces.
+    static const double ungate_ms = [] {
+        const char *e = getenv("X4VR_HEADLOOK_UNGATED");
+        return e && *e ? atof(e) : 0.0;
+    }();
+    static const double ungate_ab = [] {
+        const char *e = getenv("X4VR_HEADLOOK_UNGATED_AB");
+        return e && *e ? atof(e) : 0.0;
+    }();
+    bool ungated = ungate_ms > 0.0;
+    if (ungated && ungate_ab > 0.0) {
+        static const double t0 = mono_seconds();
+        const long phase = (long)((mono_seconds() - t0) / ungate_ab);
+        ungated = (phase & 1) != 0;
+        static long said = -1;
+        if (phase != said) {
+            said = phase;
+            X4VR_LOG("headlook: ungate %s (floor %.1f ms, A/B phase %ld, %.0f s)",
+                     ungated ? "ARM_B" : "control (gated)", ungate_ms, phase,
+                     ungate_ab);
+        }
+    }
+    g_ungate_arm.store(ungated ? 1 : 0, std::memory_order_relaxed);
+    if (!fresh) {
+        if (!ungated)
+            return; // nothing new to act on; acting anyway is what take 119 did
+        // Ungated: act on the LATEST pose even though it has not changed. For a
+        // proportional servo that is simply another correction toward the same
+        // target, not a double-count — the error shrinks each time.
+        static double last_ungated_s = 0.0;
+        const double now_s = mono_seconds();
+        if (now_s - last_ungated_s < ungate_ms * 0.001)
+            return; // the floor
+        last_ungated_s = now_s;
+        g_pumprate.ungated_ticks++;
+    }
 
     // Observed BEFORE the step, so the servo acts on this frame's reading.
     // It used to run after, which cost a frame of lag for no reason.
@@ -3131,7 +3200,7 @@ void headlook_tick() {
     // the pairing the regression needs: error at the moment of observation.
     if (lag_log_enabled()) {
         X4VR_LOG("lagsample: arm=%d view=%s steer=%d cam=%d head=%.3f,%.3f "
-                 "x4=%.3f,%.3f kparm=%d kp=%.3f ylim=%.1f rfarm=%d rftau=%.0f",
+                 "x4=%.3f,%.3f kparm=%d kp=%.3f ylim=%.1f rfarm=%d rftau=%.0f ugarm=%d",
                  lead_armed ? 1 : 0, cockpit ? "cockpit" : "external",
                  steering ? 1 : 0, have_cam ? 1 : 0, yaw, pitch,
                  have_cam ? kRad2Deg * -r.yaw : 0.0f,
@@ -3139,7 +3208,8 @@ void headlook_tick() {
                  g_kp_arm.load(std::memory_order_relaxed), g_headlook.servo_kp,
                  g_headlook.yaw_limit_deg,
          g_ratefix_arm.load(std::memory_order_relaxed),
-         g_headlook.rate_fix_tau_ms);
+         g_headlook.rate_fix_tau_ms,
+         g_ungate_arm.load(std::memory_order_relaxed));
     }
 
     // **Task #75: do WE send sparsely, or does X4 ignore what we send?**
