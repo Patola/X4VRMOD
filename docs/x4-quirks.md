@@ -19489,3 +19489,175 @@ not: `22.90 -> 17.49, ARM_B is better` and `22.90 -> 23.49, no difference beyond
 Pitch. X4's pitch reached 48.87 deg, which a 35 deg clamp cannot produce, so its
 limit moved too — but `pitch_limit_deg` stays at 35 here rather than changing two
 things at once. The standing pitch offset survives this take by design.
+
+## Take 294 — what it actually says
+
+Run: `X4VR_HEADLOOK_KP_AB=45 X4VR_HEADLOOK_KP_B=0.15 X4VR_HEADLOOK_YAW_LIMIT=85
+X4VR_HEADLOOK_LAGLOG=1`, no `X4VR_TICK_HZ`. 20667 lagsamples, 14376 cockpit with
+steering and a live read-back, 9 A/B phases (5 control, 4 ARM_B) over 395 s.
+
+### The kp A/B is NOT scorable, and the scorer's null must not be acted on
+
+The pooled `kpab` block printed *"no difference beyond 15%; the model predicted
+22.00 -> 16.70, so a null here refutes it"*. **Do not act on that line.** Split by
+phase — which is the unit of replication, because the A/B alternates every 45 s
+and an episode lasts tens of seconds — the arms interleave:
+
+    phase  arm       under-150 p90    WORST
+      2    control          1.68      62.66
+      3    ARM_B           11.61      49.49
+      4    control          4.25      27.57
+      5    ARM_B            3.19      36.80
+      6    control          5.34      49.22
+      7    ARM_B            2.50      19.55
+      8    control         45.16     100.66
+
+Three of the four comparable control phases sit at or below the ARM_B phases. The
+pooled control p90 of 25.14 against ARM_B's 3.84 is **carried by phase 8 alone**,
+and phase 8 is where the single read-back fault below happened. Four or five
+draws per arm cannot support a pooled tail statistic when one draw contains an
+outlier event two orders of magnitude larger than the effect.
+
+Three further defects in the block, all of which must be fixed before another kp
+take is specified:
+
+**The rate bins are contaminated.** `band()` takes the head rate from
+`use[i-4]`/`use[i-3]` **without checking those samples are adjacent in time**. A
+menu, a view change or any steer=0 stretch puts two distant samples side by side
+and manufactures a rate: the over-350 band contains "head rates" of 1738 and 2367
+deg/s, against a human maximum around 500-800 and a whole-run measured maximum of
+77 deg of travel. [[range-failures-have-two-ends]] — the gap test exists at the
+top of the function for the error and was never applied to the rate.
+
+**The magnitudes are not the modelled quantity.** The model predicts a worst case
+of 22.00 deg; the block reports 89.67. A 4x disagreement means the tail is made of
+something else — here, the episodes — so a null in it is not a null in the servo.
+[[instrument-inherits-its-question]].
+
+**The WORST column is a single sample.** Over 350 deg/s each arm has 148-159
+samples spread over four phases; comparing two maxima drawn from that is an
+extreme-value comparison, not a measurement.
+
+### CONFIRMED: the servo acts on an invalid camera read-back
+
+`head_look_observe` (common/x4vr_headlook.hpp:514) is two unconditional
+assignments. Whatever `GetCameraRotation` returns becomes the servo's idea of
+where the camera is, with no validity, freshness or plausibility test. The
+snapshot path 400 lines away in the same tick **does** protect itself — it carries
+`raw_valid` forward and its comment says overwriting a real angle with zero would
+make "no answer" and "centred" the same value. The control path never got that
+care.
+
+One instance in 395 s, at t=920748.87, tick by tick:
+
+    920748.828  head 16.852,9.345   x4   16.387,9.167    tracking, 0.5 deg error
+    920748.873  head 17.954,9.556   x4   -0.000,0.000    <-- X4 answers EXACTLY zero
+    920748.896  head 18.176,9.594   x4  104.123,63.783
+    920748.982  head 18.379,9.648   x4  119.043,66.101   servo emits delta 104,104
+    920749.190  head 16.655,9.726   x4   55.304,3.279
+    920753.492  head  4.012,6.075   x4   51.458,5.996    4.6 s later, still 47 deg out
+
+The head moved 2 deg across the whole event. The arithmetic of the servo's reply
+is exact: cmd is pinned to the 119.04 read, the step saturates at -11.96 =
+-`max_step`, so cmd becomes 107.08 and the delta is (107.08-119.04)/0.115 = -104
+counts. **It never recovered** — 4.6 s on, the camera sat at 51 deg with the head
+at 4, drifting the wrong way.
+
+Note what this is NOT: the 104.12 read is not our command either — a 39-count
+delta moves the camera 4.5 deg, not 88. Both reads are invalid. Those two frames
+carry `draws=4` and `draws=16/8` against the usual 34-35, out of arena block #25
+rather than the usual #3/#7/#8/#9/#11 — a different camera for ~150 ms while our
+`view` gate still said cockpit. [[x4vr-one-number-several-cameras]],
+[[record-the-branch-dont-recompute-it]].
+
+### WITHDRAWN: "EXTENDED PATH — X4's stop is not the stock 65"
+
+`score_run.py`'s clamp block reported *"!! EXTENDED PATH ... it read yaw 119.04
+... MOVED ✓ ... the override reached X4 and the limit is data, confirmed live"*.
+**That verdict is wrong and the block needs fixing.** It reads a MAX. Its evidence
+is 4 samples out of 14376, and all four are inside the read-back fault above, with
+the head at 18 deg. The other 20304 cockpit ticks pin at exactly 65.00-65.20 while
+the head reached 77.40.
+
+A max over a run containing view transitions and invalid reads is not a
+measurement of a stop. The block must require a *plateau* — repeated dwell at a
+value with the head demanding more — not an extremum.
+[[verdict-that-fires-whatever-the-number-is]], and the second time a clamp verdict
+has been believed on evidence that cannot distinguish the case
+([[confidence-label-shields-a-claim]]).
+
+This leaves #68's status genuinely unsettled again: 292 and 293 did read past 65
+(76.79 and 78.79) but in runs of 1-7 samples out of 1103/1221, which is the same
+shape as the faults, not a plateau.
+
+### The episodes track X4VR_TICK_HZ
+
+Count of **saturated commands issued while the head is inside 15 deg of centre** —
+the servo slamming at `max_step` when the neck is not asking for it — per minute,
+over every take that logs `headlook: ... delta`:
+
+    take        TICK_HZ   per min
+    285b-s1        90        0.0
+    285b-s2        90       14.9
+    287a            -        0.0
+    287b           90        8.7
+    288             -        0.0
+    289            90        0.0
+    290a            -        0.5
+    290b           90        0.7
+    291             -        0.0
+    292            90       29.1
+    293            70       52.7
+    294             -        2.7
+
+Every take above 2.7 had `X4VR_TICK_HZ` set. Every take without it reads 0.0-2.7,
+and take 294's 2.7 is not spread out: 16 of its 18 events are the read-back fault
+at t0+384 and the external-view stretch at t0+392-395, leaving two isolated
+samples in 6.5 minutes.
+
+The knob is **permissive, not sufficient** — 285b-s1, 289 and 290b had it at 90
+and stayed near zero, and 285b-s1/s2 are one session split into a calm and a wild
+phase. But it is the only setting common to every wild take, and the mechanism was
+derived before this count: `X4VR_TICK_HZ` moves the tick off X4's drain and adds
+~17 ms of queue, and overshoot is `0.5 x dead_time x max_step`, so a saturated
+loop at that dead time goes to a limit cycle. Take 292 shows exactly that — the
+head still at -5 deg for six seconds while the read-back flips -70 -> +25.9 ->
++65.6 -> -65.7 and the servo emits a saturated +-102 counts on every single
+sample.
+
+This is consistent with the knob already being documented HARMFUL, and it
+sharpens that entry: it does not merely cost latency, it is present in every
+session that went wild.
+
+**Not claimed:** that `TICK_HZ` is the whole of #75. 285b-s1 and s2 share it and
+differ, so something still selects the episode within a session. What is claimed
+is that the two takes whose wildness Patola described most vividly (292, 293) are
+the two highest rows in that table, and that the one take without the knob and
+without a read-back fault would have scored zero.
+
+## X4 ignores the PipeWire default sink — answered, not a PipeWire bug
+
+`~/.config/EgoSoft/X4/96679891/config.xml` (and our intercepted
+`config-x4vrmod.xml`):
+
+    <sounddevice>CORSAIR VIRTUOSO SE Wireless Ga, USB Audio (CARD=Ga,DEV=0)</sounddevice>
+
+X4 names an **ALSA card** directly. It never asks for the default, so no change of
+default can move it. Other titles ask for `default`, which resolves through
+PipeWire and follows.
+
+Ruled out on the way: WirePlumber's `restore-stream` is not pinning it — X4's
+saved keys are `channelMap`, `channelVolumes`, `mute`, `volume` and **no target**,
+and across all 1330 saved applications there are zero target pins. The usual
+"clear restore-stream" advice does not apply. X4 is one of ~90 pipewire-alsa
+clients in that file, so "it uses ALSA" alone would not have separated it either —
+the device NAME is what does.
+
+Fix: X4's Settings -> Audio device -> the default/system entry, then restart X4.
+Since the WiVRn sink is created on connect and destroyed on disconnect, connect
+VR first and launch X4 second.
+
+**Mod opportunity, not taken:** we already intercept the config load, and the
+intercepted copy is ours to write. Pointing `<sounddevice>` at the VR sink when a
+session is live would be in scope without touching the player's file. Filed, not
+built.
