@@ -19749,3 +19749,124 @@ The tick enters at 103.7 Hz and acts at 52.2 Hz because of `if (!fresh) return;`
 and whether that gate is discarding real poses or the counter is lying is exactly
 the unresolved question. Resolving it is a code read, not a take.
 [[read-the-existing-report-first]].
+
+## Take 295 — the tick period, and three fixes that precede it
+
+Predictions committed before the run, as always.
+
+### RESOLVED: the pumprate "inconsistency" was neither suspect
+
+`fresh` is `updates != last_updates` — an INDICATOR, not a count. Several
+publishes landing between two polls collapse into one `fresh`, so it counts
+*poll intervals that contained a publish*, and comparing it to the publish count
+as a percentage compares two different quantities. Nothing was lost and no
+counter was lying.
+
+The honest reading: **the servo ITERATES at `fresh` Hz**, 52.2 in take 294.
+Corroborated by a route that shares none of that arithmetic — the mean lagsample
+tick period is 19.9 ms = 50.3 Hz. Every iteration reads the LATEST pose, so the
+servo is never acting on stale data; what is lost is loop iterations, and lag is
+`(1/kp - 1) * tick_period`.
+
+### CONFIRMED and FIXED: the servo acted on invalid read-backs
+
+`head_look_observe` now refuses a reading further than `observe_max_jump_deg`
+(3 x max_step = 36 deg, the dead time times the step ceiling — not a free
+parameter) from our own command, for at most `observe_max_refusals` = 8
+consecutive ticks before resynchronising. **A guard that can never yield would
+strand the servo pushing at a camera that has genuinely moved**, which is the
+map-view accelerator again.
+
+Four cases in tests/headlook.cpp, and the negative controls are the ones that
+matter:
+
+    take-294 replay        6 refused, worst command 15.64 deg (was 107.08)
+    honest 250 deg/s sweep 0 refused of 400   <- the false-positive case
+    head past X4's stop    0 refused of 200   <- standing 20 deg gap
+    sustained real move    9 refused, 1 resync, cmd follows to 120
+
+`X4VR_HEADLOOK_OBSERVE_JUMP=0` restores the unguarded behaviour so earlier takes
+stay reproducible.
+
+### WITHDRAWN: the clamp block's `MOVED ✓`
+
+It read a MAX. Rewritten to find a **plateau**: the camera DID NOT MOVE while the
+target was 2+ deg past it, reported as p95 of that population. Both halves are
+needed — "target past camera" alone is true throughout ordinary lag, and scoring
+that returned 53.94 deg on take 294 against a real stop at 65.
+
+It now reads take 294 from `lagsample` (20308 cockpit ticks) rather than
+`camread` (479), and says:
+
+    PLATEAU yaw=65.00 deg, 248 sample(s) with the target 2+ deg past the camera
+    !! the MAX is 54.0 deg past the plateau — that excursion is not a stop
+    DID NOT MOVE — the command asked past 66 deg and X4 still stopped at 65.00
+
+**So take 294's extension did NOT reach the cockpit camera**, and the previous
+verdict was exactly backwards. An axis with no plateau now scores 0.0, not its
+max, so an unmeasured pitch can no longer fire a verdict off four fault samples.
+
+### FIXED: kpab's rate bins, and its verdict
+
+The rate came from `use[i-4]`/`use[i-3]` with no check that they were adjacent
+ticks, and used a fixed nominal 63 Hz against a tick that wanders 9-56 ms. Both
+corrected; 316 samples now excluded as gap artifacts, and ARM_B's over-350 band
+falls from 148 samples to 67 — **over half of it was manufactured by the gaps**.
+
+The verdict now judges a p90 rather than two maxima at unequal n, and a new
+per-PHASE line outranks the pooled one. On take 294 it says what the manual
+analysis found:
+
+    control  ph2:1.86  ph4:4.30  ph6:5.98  ph8:45.21
+    ARM_B    ph3:18.64 ph5:2.97  ph7:2.38
+    => the per-phase ranges OVERLAP ... **This run does not answer the kp
+       question** whatever the pooled line above says.
+
+### P295: what the rate fix is, and what it is not
+
+`servo_kp` and `max_step_deg` are both PER TICK, and the tick wanders 4.4x. So:
+
+    lag       = (1/kp - 1) * dt                 worse when dt is LONG
+    slew      = max_step / dt                   worse when dt is LONG
+    overshoot = 0.5 * (dead_time_s/dt) * max_step   worse when dt is SHORT
+
+No fixed pair is right across that spread. `X4VR_HEADLOOK_RATEFIX=<nominal Hz>`
+scales both by `dt/nominal`, which collapses them into one time constant
+`tau = 1/(kp * nominal)`. **At exactly the nominal the arithmetic is unchanged**,
+which is what lets the A/B measure the wander and nothing else — asserted as an
+exact-equality test.
+
+**P295.0 — the first check I wrote here FAILED and the check was wrong.** I
+asserted the fix would take a quarter off the lag. It takes 14%, and the algebra
+says it should: `lag = tau - dt`, and with the nominal set to today's mean rate
+tau IS today's lag. The rate fix makes the loop the same controller at every tick
+rate; it does not by itself make it a faster one. Consistency and speed are two
+knobs and the fix is the first. Kept visible rather than retuned away.
+
+Offline against take 294's REAL tick sequence — a contiguous 300-tick window
+whose p10/p50/p90 match the whole run's — in tests/servo_rate.cpp section 11:
+
+    nominal   tau ms   lag ms   overshoot
+        50      80.0     80.4        1.07      today's equivalent
+        70      57.1     60.4        1.64
+       100      40.0     50.4        2.44      <- take 295's ARM_B
+       140      28.6    137.4       62.59      UNSTABLE: tau under the 60 ms
+                                               dead time. Do not ask for this.
+
+**P295.1 — ARM_B at nominal 100 Hz should read ~50 ms against the control's
+~80.** The harness reproduced take 294's independently measured 85 ms as 90.4
+without being fitted to it, so the control arm is a check on the harness too: a
+control far from 80 means the harness, not the fix, is what to doubt.
+
+**P295.2 — the per-phase ranges must SEPARATE.** A median difference with
+overlapping phases is what take 294 produced and it meant nothing. The `rfab`
+block says so itself rather than reporting a winner.
+
+**P295.3 — the read-back guard should show 0 or very few refusals.** Take 294 had
+one fault in 395 s. A log full of `headlook: REFUSED` means the threshold is
+wrong and that is the finding, not a nuisance.
+
+`tests/run-rfab-scorer.sh` plants streams whose lag is known by construction and
+checks the block recovers it (80/50, 80/80, 50/80 all recovered to the
+millisecond) and reaches all three of its verdicts — because a scorer only ever
+seen to print one of them is worth nothing, which is what take 294's kpab was.

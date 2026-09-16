@@ -974,6 +974,105 @@ int main() {
         check(bad_screen == 0, buf);
     }
 
+    // ---- #75 take 294: the read-back plausibility guard
+    //
+    // The guard exists because ONE tick of X4 answering 0,0 put the camera
+    // 100 deg off the head for 4.6 s. But a guard is only worth having if it
+    // refuses the fault AND passes honest motion, so both are asserted here.
+    // The negative controls matter more than the positive one: a guard that
+    // refuses everything would look identical on the fault case alone.
+    {
+        // The measured sequence, verbatim from /tmp/x4vr-take294.log at
+        // t=920748.8-920749.0. head_yaw, x4_yaw.
+        const float seq[][2] = {{16.852f, 16.387f},  {17.954f, -0.000f},
+                                {18.176f, 104.123f}, {18.346f, 105.727f},
+                                {18.379f, 119.043f}, {18.317f, 93.751f},
+                                {18.046f, 81.747f},  {17.488f, 76.218f}};
+        x4vr::HeadLook s;
+        s.gain_deg_per_count = 0.115f;
+        x4vr::head_look_observe(s, seq[0][1], 0.0f); // prime
+        float worst_cmd = 0.0f;
+        for (size_t i = 1; i < sizeof seq / sizeof seq[0]; i++) {
+            x4vr::head_look_observe(s, seq[i][1], 0.0f);
+            x4vr::head_look_step(s, {seq[i][0], 0.0f});
+            worst_cmd = std::fmax(worst_cmd, std::fabs(s.cmd_yaw_deg));
+        }
+        check(s.observe_refused >= 6,
+              "#75: the take-294 read-back sequence is refused");
+        check(s.observe_resyncs == 0,
+              "#75: ...and the 7-sample fault fits inside the refusal budget");
+        check(worst_cmd < 40.0f,
+              "#75: the command never follows the read-back to 119 deg");
+        printf("      take-294 replay: %llu refused, worst command %.2f deg "
+               "(was 107.08 unguarded)\n",
+               (unsigned long long)s.observe_refused, worst_cmd);
+    }
+    {
+        // NEGATIVE CONTROL 1 -- an honest fast sweep must not be refused. This
+        // is the case the guard could plausibly break: during the dead time
+        // cmd runs ahead of the read-back, and if that gap reached the
+        // threshold the servo would start disbelieving its own success.
+        x4vr::HeadLook s;
+        s.gain_deg_per_count = 0.115f;
+        float cam = 0.0f;
+        float inflight[3] = {0, 0, 0}; // take 291's measured 3-tick dead time
+        for (int i = 0; i < 400; i++) {
+            const float head = 70.0f * std::sin(i * 0.05f); // ~250 deg/s peak
+            x4vr::head_look_observe(s, cam, 0.0f);
+            const x4vr::Delta d = x4vr::head_look_step(s, {head, 0.0f});
+            cam += inflight[0];
+            inflight[0] = inflight[1];
+            inflight[1] = inflight[2];
+            inflight[2] = s.sign_yaw * (float)d.dx * s.gain_deg_per_count;
+        }
+        check(s.observe_refused == 0,
+              "#75: an honest 250 deg/s sweep with 3 ticks of dead time is "
+              "never refused (the guard's false-positive case)");
+        printf("      honest sweep: %llu refused of 400\n",
+               (unsigned long long)s.observe_refused);
+    }
+    {
+        // NEGATIVE CONTROL 2 -- the head past X4's stop. cmd walks out to
+        // yaw_limit while the read-back pins at 65, so the gap is a standing
+        // 20 deg. If the threshold were set at the gap rather than above it,
+        // every clamped moment would be read as a fault.
+        x4vr::HeadLook s;
+        s.gain_deg_per_count = 0.115f;
+        s.yaw_limit_deg = 85.0f;
+        for (int i = 0; i < 200; i++) {
+            x4vr::head_look_observe(s, 65.0f, 0.0f); // X4 pinned at its stop
+            x4vr::head_look_step(s, {85.0f, 0.0f});  // head asks for more
+        }
+        check(s.observe_refused == 0,
+              "#75: a head held past X4's stop is not a fault (yaw_limit 85 "
+              "against a 65 deg stop)");
+    }
+    {
+        // The budget must RUN OUT. A guard that never yields would strand the
+        // servo pushing at a camera that has genuinely moved -- the map-view
+        // accelerator again.
+        x4vr::HeadLook s;
+        s.gain_deg_per_count = 0.115f;
+        x4vr::head_look_observe(s, 0.0f, 0.0f);
+        for (int i = 0; i < 40; i++)
+            x4vr::head_look_observe(s, 120.0f, 0.0f); // X4 really is elsewhere
+        check(s.observe_resyncs >= 1 && s.cmd_yaw_deg > 119.0f,
+              "#75: the refusal budget runs out and the servo resynchronises");
+        printf("      sustained move: %llu refused, %llu resync(s), cmd %.1f\n",
+               (unsigned long long)s.observe_refused,
+               (unsigned long long)s.observe_resyncs, s.cmd_yaw_deg);
+    }
+    {
+        // And it must be switchable off, or every earlier take stops being
+        // reproducible.
+        x4vr::HeadLook s;
+        s.observe_max_jump_deg = 0.0f;
+        x4vr::head_look_observe(s, 0.0f, 0.0f);
+        x4vr::head_look_observe(s, 119.043f, 0.0f);
+        check(s.observe_refused == 0 && s.cmd_yaw_deg > 119.0f,
+              "#75: observe_max_jump_deg = 0 restores the unguarded behaviour");
+    }
+
     printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n", g_fail);
     return g_fail ? 1 : 0;
 }

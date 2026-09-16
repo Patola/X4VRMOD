@@ -2910,14 +2910,39 @@ def main(path):
                   f"valid==0 or torn-read path. The loss is in the layer's pose, "
                   f"not in the tick rate.")
         else:
-            print(f"pumprate   => INCONSISTENT, and that is a defect of this "
-                  f"instrument rather than a finding: {driver} runs at "
-                  f"{drv:.1f} Hz, above the {pub:.1f} Hz publish rate, and "
-                  f"nopose is only {nopose} — so every published pose should "
-                  f"have been seen, yet only {acted:.1f}% were. Either `updates` "
-                  f"advances more than once per publish, or the windows of the "
-                  f"two counters are misaligned. Do not spend a take on this "
-                  f"number until it is resolved.")
+            # RESOLVED after take 294 -- it was neither of the two suspects.
+            #
+            # `fresh` is `updates != last_updates`, which is an INDICATOR, not a
+            # count: when several publishes land between two polls they all
+            # collapse into one `fresh`. So `fresh` counts POLL INTERVALS THAT
+            # CONTAINED AT LEAST ONE PUBLISH, and comparing it to the publish
+            # count as a percentage compares two different quantities. Clustered
+            # polls make the gap arbitrarily large while nothing whatever is
+            # going wrong.
+            #
+            # The honest reading is that the SERVO ITERATES at `fresh` Hz.
+            # Corroborated independently in take 294: mean lagsample tick 19.9 ms
+            # = 50.3 Hz against fresh 52.2 Hz, measured from timestamps that
+            # share none of this arithmetic.
+            #
+            # Nothing is lost by the collapse -- each iteration reads the LATEST
+            # pose, so the servo is never acting on stale data. What it costs is
+            # loop iterations, and the lag of a proportional servo is
+            # (1/kp - 1) * tick_period, so halving the iteration rate doubles
+            # the lag. That is the defect, and it is a real one.
+            print(f"pumprate   => the servo ITERATES at {fresh:.1f} Hz. "
+                  f"{driver} runs at {drv:.1f} Hz and the layer publishes at "
+                  f"{pub:.1f}, but `fresh` is an indicator, not a count: "
+                  f"publishes arriving between two polls collapse into one. So "
+                  f"the {acted:.1f}% is NOT lost poses — every iteration reads "
+                  f"the latest pose — it is lost ITERATIONS.")
+            print(f"pumprate   => lag of a proportional servo is "
+                  f"(1/kp - 1) * tick_period, so the iteration rate is the "
+                  f"lever: at {fresh:.1f} Hz that is "
+                  f"{3000.0/fresh if fresh else float('nan'):.0f} ms at kp 0.25, "
+                  f"against {3000.0/pub if pub else float('nan'):.0f} ms if "
+                  f"every publish drove one iteration. Take 294 measured 85 ms "
+                  f"end to end.")
         if driver == "peep":
             print(f"pumprate   NOTE: driver=peep means X4 never called "
                   f"SDL_PumpEvents in this run, which has not happened since "
@@ -3738,13 +3763,17 @@ def main(path):
     # change in the TAIL at speed and none in the middle -- reporting a median
     # would report a null however well it worked.
     lag = re.findall(
-        r"lagsample: arm=\d+ view=(\w+) steer=(\d) cam=(\d) "
-        r"head=(-?[\d.]+),(-?[\d.]+) x4=(-?[\d.]+),(-?[\d.]+) "
+        r"\[\s*(\d+\.\d+)\] inject  lagsample: arm=\d+ view=(\w+) steer=(\d) "
+        r"cam=(\d) head=(-?[\d.]+),(-?[\d.]+) x4=(-?[\d.]+),(-?[\d.]+) "
         r"kparm=(-?\d+) kp=([\d.]+) ylim=([\d.]+)", text)
     if lag:
+        # **The timestamp travels IN the row.** The rate below differences two
+        # samples and calls the result deg/s, which is only true if they are
+        # adjacent ticks -- and a parallel list of times would drift out of step
+        # with the filtering the way windows_t() did.
         rows = [(v, int(st), int(cv), float(hy), float(x4y), int(ka), float(kp),
-                 float(yl))
-                for v, st, cv, hy, _hp, x4y, _x4p, ka, kp, yl in lag]
+                 float(yl), float(t))
+                for t, v, st, cv, hy, _hp, x4y, _x4p, ka, kp, yl in lag]
         use = [r for r in rows if r[0] == "cockpit" and r[1] and r[2]]
         arms = sorted({r[5] for r in use})
         print(f"kpab   {len(lag)} lagsample(s), {len(use)} in cockpit with "
@@ -3765,17 +3794,49 @@ def main(path):
             # planted fixture that leaked a p90 of 19.74 deg into the under-150
             # band, where nothing should exceed 5.
             LAGT = 3
+            # **Take 294: the rate must come from ADJACENT samples.**
+            #
+            # Differencing use[i-4] and use[i-3] and calling it deg/s is only
+            # true if those two are consecutive ticks. A menu, a view change or
+            # any steer=0 stretch leaves a gap in `use`, and the difference
+            # across it is not a rate at all: take 294's over-350 band contained
+            # "head rates" of 1738 and 2367 deg/s, against a human maximum
+            # around 500-800 and a whole-run head travel of 77 deg. Those
+            # samples then carried the episodes into the band the servo model
+            # was supposed to own.
+            #
+            # The whole window i-4..i must be gap-free, because the error at i is
+            # attributed to the command issued at i-3.
+            GAP = 0.060   # s; the p99 tick is 56 ms, so this admits every real one
+            def adjacent(i):
+                for k in range(i - LAGT - 1, i):
+                    dt = use[k + 1][8] - use[k][8]
+                    if not (0.0 < dt <= GAP):
+                        return False
+                return True
+            # Rate in deg/s from the ACTUAL interval, not a nominal tick. The old
+            # fixed 63.0 was wrong by up to 4.4x on its own, since the tick
+            # wanders 9-56 ms.
             def band(lo, hi):
                 out = {}
                 for i in range(LAGT + 1, len(use)):
+                    if not adjacent(i):
+                        continue
                     a_, b_ = use[i - LAGT - 1], use[i - LAGT]
-                    rate = abs(b_[3] - a_[3]) * 63.0   # deg/s at the nominal tick
+                    rate = abs(b_[3] - a_[3]) / (b_[8] - a_[8])
                     if not (lo <= rate < hi):
                         continue
                     b_ = use[i]                        # ...but score THIS sample
                     tgt = max(-b_[7], min(b_[7], b_[3]))   # the servo's own target
                     out.setdefault(b_[5], []).append(abs(b_[4] - tgt))
                 return out
+            dropped = sum(1 for i in range(LAGT + 1, len(use))
+                          if not adjacent(i))
+            if dropped:
+                print(f"kpab   {dropped} of {len(use)-LAGT-1} sample(s) sit "
+                      f"across a gap wider than {1000*GAP:.0f} ms and are "
+                      f"excluded — their head 'rate' would be an artifact of the "
+                      f"gap, not a measurement")
             print(f"{'':7}{'head deg/s':<14}{'arm':<9}{'n':>6}{'p50':>8}"
                   f"{'p90':>8}{'WORST':>9}")
             for lo, hi, label in ((0, 150, "under 150"), (150, 350, "150-350"),
@@ -3791,23 +3852,191 @@ def main(path):
                           f"{e[-1]:>9.2f}")
             fast = band(350, 9e9)
             if 0 in fast and 1 in fast and len(fast[0]) >= 20 and len(fast[1]) >= 20:
-                w0, w1 = max(fast[0]), max(fast[1])
                 kpv = {r[5]: r[6] for r in use}
-                print(f"kpab   => over 350 deg/s the worst neck-vs-view "
+                # **Judge a QUANTILE, not two maxima.** Take 294 compared
+                # max(140 samples) against max(67) and called the result a null.
+                # An extreme-value comparison at unequal n is not a measurement:
+                # the larger sample wins by having more draws. p90 exists in both
+                # arms and moves with the effect the model predicts.
+                e0, e1 = sorted(fast[0]), sorted(fast[1])
+                w0, w1 = e0[int(0.90*len(e0))], e1[int(0.90*len(e1))]
+                print(f"kpab   => over 350 deg/s the p90 neck-vs-view "
                       f"disagreement is {w0:.2f} deg at kp {kpv.get(0, 0):.3f} "
-                      f"and {w1:.2f} deg at kp {kpv.get(1, 0):.3f}")
+                      f"(n={len(e0)}) and {w1:.2f} at kp {kpv.get(1, 0):.3f} "
+                      f"(n={len(e1)}); the maxima are {max(e0):.2f} and "
+                      f"{max(e1):.2f} and are NOT the verdict")
+
+                # **PER-PHASE CONSISTENCY, and it outranks the pooled number.**
+                #
+                # The arms alternate every N seconds, and an episode lasts tens
+                # of seconds, so a phase is the unit of replication and there are
+                # only four or five of them per arm. Take 294's pooled control
+                # p90 of 25.14 against ARM_B's 3.84 was carried ENTIRELY by
+                # phase 8 -- the other three control phases read 1.68, 4.25 and
+                # 5.34, below two of the three ARM_B phases. Pooling hid that.
+                ph = [(float(t), int(n)) for t, n in re.findall(
+                    r"\[\s*(\d+\.\d+)\] inject  headlook: kp \w+ \([\d.]+, "
+                    r"lead [\d.]+x, A/B phase (\d+)", text)]
+                if len(ph) >= 4:
+                    def phase_of(ts):
+                        p = None
+                        for pt, n in ph:
+                            if pt <= ts:
+                                p = n
+                            else:
+                                break
+                        return p
+                    per = {}
+                    for i in range(LAGT + 1, len(use)):
+                        if not adjacent(i):
+                            continue
+                        a_, b_ = use[i - LAGT - 1], use[i - LAGT]
+                        if abs(b_[3] - a_[3]) / (b_[8] - a_[8]) >= 150.0:
+                            continue          # the slow band: most of the mass
+                        b_ = use[i]
+                        k = phase_of(b_[8])
+                        if k is None:
+                            continue
+                        tgt = max(-b_[7], min(b_[7], b_[3]))
+                        per.setdefault((k, b_[5]), []).append(abs(b_[4] - tgt))
+                    tbl = {}
+                    for (k, arm), v in sorted(per.items()):
+                        if len(v) < 50:
+                            continue
+                        v = sorted(v)
+                        tbl.setdefault(arm, []).append((k, v[int(0.90*len(v))]))
+                    if 0 in tbl and 1 in tbl and len(tbl[0]) >= 2 and len(tbl[1]) >= 2:
+                        print(f"kpab   under 150 deg/s, p90 per PHASE "
+                              f"(the unit of replication):")
+                        for arm in (0, 1):
+                            s = "  ".join(f"ph{k}:{p:.2f}" for k, p in tbl[arm])
+                            print(f"kpab     {'control' if arm==0 else 'ARM_B':<8} {s}")
+                        lo0 = min(p for _, p in tbl[0])
+                        lo1 = min(p for _, p in tbl[1])
+                        hi0 = max(p for _, p in tbl[0])
+                        hi1 = max(p for _, p in tbl[1])
+                        if lo0 > hi1 or lo1 > hi0:
+                            print(f"kpab   => SEPARATED — every phase of one arm "
+                                  f"beats every phase of the other. The arms "
+                                  f"really do differ.")
+                        else:
+                            print(f"kpab   => the per-phase ranges OVERLAP "
+                                  f"(control {lo0:.2f}-{hi0:.2f}, ARM_B "
+                                  f"{lo1:.2f}-{hi1:.2f}), so any pooled "
+                                  f"difference is phase assignment, not kp. "
+                                  f"**This run does not answer the kp question** "
+                                  f"whatever the pooled line above says.")
                 if w1 < 0.85 * w0:
-                    print("kpab   => ARM_B is better, as the model predicted")
+                    print("kpab   => pooled: ARM_B is better, as the model "
+                          "predicted — but read the per-phase line first")
                 elif w1 > 1.15 * w0:
-                    print("kpab   => ARM_B is WORSE — the model's recommendation "
-                          "is refuted and kp should stay where it is")
+                    print("kpab   => pooled: ARM_B is WORSE — read the per-phase "
+                          "line before treating that as a refutation")
                 else:
-                    print("kpab   => no difference beyond 15%; the model predicted "
-                          "22.00 -> 16.70, so a null here refutes it")
+                    print("kpab   => pooled: no difference beyond 15%. The model "
+                          "predicted 22.00 -> 16.70. A null is only a refutation "
+                          "if the per-phase line above says SEPARATED.")
             else:
                 print("kpab   the over-350 deg/s band has too few samples in one "
                       "arm to compare — the effect only exists there, so this run "
                       "did not exercise it. Turn the head FASTER, not more.")
+
+    # --- task #75 take 295: the rate fix A/B, scored as a TIME ---------------
+    #
+    # The complaint is "the visuals take time to follow up on the movement", so
+    # the score is that time, in milliseconds, and not an angle. The error of a
+    # proportional servo tracking a moving head is (head_rate * lag), so dividing
+    # the rms error by the rms head rate within an arm gives a lag that does not
+    # depend on how fast the player happened to move during that arm -- which
+    # matters, because the arms alternate and the player is not controlled.
+    #
+    # PREDICTED, from tests/servo_rate.cpp section 11 driven by take 294's own
+    # tick sequence:  control 80 ms -> ARM_B 50 ms at nominal 100 Hz (tau 40 ms).
+    # The harness reproduced take 294's measured 85 ms as 90.4 without being
+    # fitted to it, so the control arm is a check on the harness as well.
+    rf = re.findall(
+        r"\[\s*(\d+\.\d+)\] inject  lagsample: arm=\d+ view=(\w+) "
+        r"steer=(\d) cam=(\d) head=(-?[\d.]+),(-?[\d.]+) "
+        r"x4=(-?[\d.]+),(-?[\d.]+) kparm=-?\d+ kp=[\d.]+ ylim=[\d.]+ "
+        r"rfarm=(-?\d+) rfhz=([\d.]+)", text)
+    if rf:
+        rr = [(float(t), v, int(st), int(cv), float(hy), float(x4y), int(ar),
+               float(hz))
+              for t, v, st, cv, hy, _hp, x4y, _x4p, ar, hz in rf]
+        ck = [r for r in rr if r[1] == "cockpit" and r[2] and r[3]]
+        arms = sorted({r[6] for r in ck})
+        print(f"rfab   {len(rf)} lagsample(s) carry rfarm; {len(ck)} in cockpit "
+              f"with steering and a live read-back; arm(s) {arms}")
+        if len(arms) < 2:
+            print("rfab   ONLY ONE ARM — X4VR_HEADLOOK_RATEFIX_AB unset, or the "
+                  "run ended inside one phase. Not scorable.")
+        else:
+            hz = max(r[7] for r in ck)
+            def lag_ms(rows):
+                """rms error / rms head rate, in ms. Adjacent samples only: the
+                rate is a derivative and a gap makes it an artifact — the same
+                defect kpab carried until take 294."""
+                es, rs, n = 0.0, 0.0, 0
+                for a_, b_ in zip(rows, rows[1:]):
+                    dt = b_[0] - a_[0]
+                    if not (0.0 < dt <= 0.060):
+                        continue
+                    e = b_[5] - b_[4]
+                    r_ = (b_[4] - a_[4]) / dt
+                    es += e * e
+                    rs += r_ * r_
+                    n += 1
+                if n < 200 or rs <= 0.0:
+                    return None, n
+                return 1000.0 * math.sqrt(es / n) / math.sqrt(rs / n), n
+            # Per PHASE first — the lesson take 294 taught the kp block.
+            ph, cur = [], None
+            for r in ck:
+                if r[6] != cur:
+                    ph.append([])
+                    cur = r[6]
+                ph[-1].append(r)
+            per = {}
+            for seg in ph:
+                if len(seg) < 300:
+                    continue
+                L, n = lag_ms(seg)
+                if L is not None:
+                    per.setdefault(seg[0][6], []).append(L)
+            print(f"{'':7}{'arm':<16}{'phases':>8}{'lag ms each':>34}")
+            for arm in sorted(per):
+                name = "control (off)" if arm == 0 else f"ARM_B @{hz:.0f}Hz"
+                vals = "  ".join(f"{v:.0f}" for v in per[arm])
+                print(f"rfab   {name:<16}{len(per[arm]):>8}{vals:>34}")
+            if 0 in per and 1 in per and len(per[0]) >= 2 and len(per[1]) >= 2:
+                m0 = sorted(per[0])[len(per[0]) // 2]
+                m1 = sorted(per[1])[len(per[1]) // 2]
+                print(f"rfab   => median lag {m0:.0f} ms control, {m1:.0f} ms "
+                      f"ARM_B; predicted 80 -> 50")
+                if max(per[1]) < min(per[0]):
+                    print(f"rfab   => SEPARATED — every ARM_B phase beats every "
+                          f"control phase. The fix works and should ship on.")
+                elif min(per[1]) > max(per[0]):
+                    print(f"rfab   => SEPARATED THE WRONG WAY — every ARM_B "
+                          f"phase is worse. The fix is refuted; leave it off.")
+                else:
+                    print(f"rfab   => the per-phase ranges OVERLAP (control "
+                          f"{min(per[0]):.0f}-{max(per[0]):.0f}, ARM_B "
+                          f"{min(per[1]):.0f}-{max(per[1]):.0f}). Whatever the "
+                          f"medians say, this run does not separate the arms — "
+                          f"the same trap take 294's kp A/B fell into.")
+            else:
+                print("rfab   too few complete phases per arm to compare — the "
+                      "run needs at least two of each, so it must outlast four "
+                      "A/B periods")
+            # Take 294's fault, counted rather than assumed gone.
+            ref = len(re.findall(r"headlook: REFUSED read-back", text))
+            rsy = len(re.findall(r"headlook: RESYNC to", text))
+            print(f"rfab   read-back guard: {ref} refusal(s), {rsy} resync(s). "
+                  + ("Zero refusals means either the guard never fired or the "
+                     "fault did not recur — the `clamp` plateau tells them apart."
+                     if not ref else
+                     "Each refusal is a 100-deg excursion that did NOT happen."))
 
     # --- task #73: the head-look lag, and whether the lead removes it -------
     #
@@ -4127,12 +4356,92 @@ def main(path):
             print("clamp   NOTHING to read — every sample is a dead read-back, "
                   "so this run says nothing about the clamp")
         else:
-            xy = max(abs(float(c[0])) for c in live)
-            xp = max(abs(float(c[1])) for c in live)
+            # **A stop is a PLATEAU, not a maximum. Take 294 is why.**
+            #
+            # The old code read `max |X4| yaw` and announced EXTENDED PATH on
+            # 119.04 deg. Four samples out of 14376 produced that number, all
+            # four inside one read-back fault with the head at 18 deg; the other
+            # 20304 cockpit ticks pinned at exactly 65.00-65.20. A maximum over a
+            # run containing view transitions and invalid read-backs is not a
+            # measurement of anything X4 does deliberately.
+            #
+            # What a stop looks like instead: the camera DWELLS at a value while
+            # the command keeps asking past it. Same dwell-mass rule
+            # tools/wildness.py settles its stop detection with, after three
+            # successive rules that were each right on half the sessions.
+            def plateau(seq):
+                """`seq` is (t, |camera|, |target|) in order. A stop is where the
+                camera DID NOT MOVE while the target was past it -- both halves
+                are needed. "Target past camera" alone is true throughout
+                ordinary lag, and scoring that returns wherever the camera
+                happened to be while the servo was behind (53.94 deg on take
+                294, against a real stop at 65.1).
+
+                Reported as a high QUANTILE: four fault samples move a max by
+                54 deg and cannot move a p95 at all."""
+                held = []
+                for (t0, v0, _), (t1, v1, tg1) in zip(seq, seq[1:]):
+                    dt = t1 - t0
+                    if not (0.0 < dt <= 0.5):
+                        continue          # a gap is not a stationary camera
+                    if tg1 > v1 + 2.0 and abs(v1 - v0) < 0.2:
+                        held.append(v1)   # told to go further, and did not
+                if len(held) < 20:
+                    return None, 0
+                held.sort()
+                return held[int(0.95 * len(held))], len(held)
+
+            # **Prefer lagsample: 20308 cockpit ticks against camread's 479.**
+            # The clamp block predates lagsample and kept reading the sparse
+            # stream out of habit. The target is the servo's own
+            # clamp(head, yaw_limit), which is what it was asking X4 for.
+            lag_ck = [r for r in rows if r[0] == "cockpit" and r[1] and r[2]] \
+                if "rows" in dir() and rows and len(rows[0]) >= 9 else []
+            if lag_ck:
+                py, ny = plateau([(r[8], abs(r[4]),
+                                   abs(max(-r[7], min(r[7], r[3]))))
+                                  for r in lag_ck])
+                pp, np_ = None, 0
+                src = f"lagsample, {len(lag_ck)} cockpit tick(s)"
+            else:
+                # camread carries no timestamp in `live`; its cadence is ~0.4 s
+                # and regular, so index stands in for time at a 1.0 spacing.
+                py, ny = plateau([(float(i), abs(float(c[0])), abs(float(c[4])))
+                                  for i, c in enumerate(live)])
+                pp, np_ = plateau([(float(i), abs(float(c[1])), abs(float(c[5])))
+                                   for i, c in enumerate(live)])
+                src = f"camread, {len(live)} sample(s)"
+
+            xy_max = max(abs(float(c[0])) for c in live)
+            xp_max = max(abs(float(c[1])) for c in live)
             cy = max(abs(float(c[4])) for c in live)
             cp = max(abs(float(c[5])) for c in live)
-            print(f"clamp   max |X4| yaw={xy:.2f} pitch={xp:.2f} deg   "
+            # The verdicts below read the PLATEAU. The max is kept in view
+            # because a gap between them is itself the read-back fault signal.
+            #
+            # **No plateau means UNMEASURED, and unmeasured must not be able to
+            # fire a verdict.** Falling back to the max here would reintroduce
+            # exactly the defect this replaces: take 294's pitch has no plateau
+            # and its max is 66.10, which would announce EXTENDED PATH off the
+            # same four fault samples. 0.0 cannot exceed any threshold below.
+            xy = py if py is not None else 0.0
+            xp = pp if pp is not None else 0.0
+            print(f"clamp   max |X4| yaw={xy_max:.2f} pitch={xp_max:.2f} deg   "
                   f"(max |command| yaw={cy:.2f} pitch={cp:.2f})")
+            if py is not None:
+                print(f"clamp   PLATEAU yaw={py:.2f} deg from {src}, {ny} "
+                      f"sample(s) with the target 2+ deg past the camera"
+                      + (f"; pitch={pp:.2f} ({np_})" if pp is not None else
+                         "; pitch not measured on this stream"))
+                if xy_max > py + 5.0:
+                    print(f"clamp   !! the MAX is {xy_max - py:.1f} deg past the "
+                          f"plateau — that excursion is not a stop. Check the "
+                          f"`headlook: REFUSED` lines; take 294's 119.04 came "
+                          f"from a read-back fault, not from X4's clamp")
+            else:
+                print(f"clamp   no plateau — the command never asked past where "
+                      f"the camera already was, so nothing here measures a stop "
+                      f"however large the max is")
             # Pitch gets the same guard as yaw, and take 209 is why it needed
             # one. There the neck ran out at 34.49 deg of command against a 75
             # deg limit, and X4 read 35.07 — barely past the stock 35.00, which
@@ -4174,8 +4483,11 @@ def main(path):
                 # because the servo's own yaw_limit_deg defaults to 65 and a
                 # camera stopped by US looks exactly like one stopped by X4.
                 # Separating them needs X4VR_HEADLOOK_YAW_LIMIT above 65.
-                print(f"clamp   path UNDETERMINED — X4 read at most {xy:.2f} "
-                      f"yaw, and the servo never asked past 65 either, so a "
+                print(f"clamp   path UNDETERMINED — "
+                      + (f"X4's stop was never measured (no plateau)"
+                         if py is None else
+                         f"X4's stop plateaus at {xy:.2f} yaw")
+                      + f", and the servo never asked past 65 either, so a "
                       f"stock clamp and an extended one are indistinguishable "
                       f"here. Do NOT record this run as unmodified; set "
                       f"X4VR_HEADLOOK_YAW_LIMIT above 65 to tell them apart.")

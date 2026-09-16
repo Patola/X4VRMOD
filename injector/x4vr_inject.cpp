@@ -2126,6 +2126,9 @@ static int dither_next(int counts) {
 // Which arm of the kp A/B is live, published for `lagsample` to stamp. -1 when
 // the A/B is not running, so the scorer can tell "one arm" from "no A/B".
 static std::atomic<int> g_kp_arm{-1};
+// Which ratefix arm the code TOOK, so lagsample stamps the branch rather than
+// re-deriving it from a timestamp. [[record-the-branch-dont-recompute-it]].
+static std::atomic<int> g_ratefix_arm{-1};
 
 static bool lag_log_enabled() {
     static const bool on = [] {
@@ -2139,7 +2142,11 @@ static bool lag_log_enabled() {
         // the other would produce a run that cannot be scored, which is the
         // failure take 293 already paid for.
         const char *kab = getenv("X4VR_HEADLOOK_KP_AB");
-        return kab && *kab && atof(kab) > 0.0;
+        if (kab && *kab && atof(kab) > 0.0)
+            return true;
+        // Same for the ratefix A/B, and for the same reason.
+        const char *rab = getenv("X4VR_HEADLOOK_RATEFIX_AB");
+        return rab && *rab && atof(rab) > 0.0;
     }();
     return on;
 }
@@ -2342,6 +2349,87 @@ void headlook_tick() {
     }();
     if (kp > 0.0f)
         g_headlook.servo_kp = kp;
+
+    // **Task #75: the read-back plausibility guard, ON by default.** See
+    // observe_max_jump_deg in x4vr_headlook.hpp for the measurement. The knob
+    // exists so an earlier take can be reproduced exactly (0 = unguarded), not
+    // as a tuning dial -- the threshold is 3 * max_step, which is the dead time
+    // times the step ceiling and not a free parameter.
+    // **Task #75 take 295: the rate fix, and its A/B.**
+    //
+    // X4VR_HEADLOOK_RATEFIX is the nominal Hz the per-tick constants were tuned
+    // at; with it set, kp and max_step are scaled by dt/nominal so the loop is
+    // the same controller at every tick rate. tau = 1/(kp * nominal), so the
+    // value IS the lag dial. Offline against take 294's real tick sequence
+    // (tests/servo_rate.cpp section 11):
+    //
+    //   nominal   tau ms   lag ms   overshoot
+    //       50      80.0     80.4        1.07   <- today's equivalent
+    //       70      57.1     60.4        1.64
+    //      100      40.0     50.4        2.44
+    //      140      28.6    137.4       62.59   <- UNSTABLE, tau under the
+    //                                              60 ms dead time; do not ask
+    //                                              for this in a take
+    //
+    // X4VR_HEADLOOK_RATEFIX_AB alternates it against OFF every N seconds, which
+    // is the only honest control: the two arms then differ in this and nothing
+    // else, including the scene and the player's mood.
+    static const float ratefix = [] {
+        const char *e = getenv("X4VR_HEADLOOK_RATEFIX");
+        return e && *e ? (float)atof(e) : 0.0f;
+    }();
+    if (ratefix > 0.0f)
+        g_headlook.rate_fix_nominal_hz = ratefix;
+    static const double ratefix_ab = [] {
+        const char *e = getenv("X4VR_HEADLOOK_RATEFIX_AB");
+        return e && *e ? atof(e) : 0.0;
+    }();
+    if (ratefix_ab > 0.0 && ratefix > 0.0) {
+        static const double t0 = mono_seconds();
+        const long phase = (long)((mono_seconds() - t0) / ratefix_ab);
+        const bool on = (phase & 1) != 0;
+        static long last_phase = -1;
+        g_headlook.rate_fix_nominal_hz = on ? ratefix : 0.0f;
+        g_ratefix_arm.store(on ? 1 : 0, std::memory_order_relaxed);
+        if (phase != last_phase) {
+            last_phase = phase;
+            X4VR_LOG("headlook: ratefix %s (nominal %.0f Hz, tau %.0f ms, "
+                     "A/B phase %ld, %.0f s)",
+                     on ? "ARM_B" : "control (off)", on ? ratefix : 0.0f,
+                     on && ratefix > 0.0f
+                         ? 1000.0f / (g_headlook.servo_kp * ratefix) : 0.0f,
+                     phase, ratefix_ab);
+        }
+    } else if (ratefix > 0.0f) {
+        static const bool rf_once = [] {
+            X4VR_LOG("headlook: ratefix ON at %.0f Hz nominal, tau %.0f ms — "
+                     "no A/B, so this run has no control arm",
+                     g_headlook.rate_fix_nominal_hz,
+                     1000.0f / (g_headlook.servo_kp *
+                                g_headlook.rate_fix_nominal_hz));
+            return true;
+        }();
+        (void)rf_once;
+    }
+
+    static const bool jump_once = [] {
+        const char *e = getenv("X4VR_HEADLOOK_OBSERVE_JUMP");
+        if (e && *e) {
+            g_headlook.observe_max_jump_deg = (float)atof(e);
+            X4VR_LOG("headlook: observe guard %s (%.1f deg, %d refusal budget)",
+                     g_headlook.observe_max_jump_deg > 0.0f ? "set" : "DISABLED",
+                     g_headlook.observe_max_jump_deg,
+                     g_headlook.observe_max_refusals);
+        } else {
+            X4VR_LOG("headlook: observe guard %.1f deg (default), refusal "
+                     "budget %d — a read-back further than this from our own "
+                     "command did not come from us",
+                     g_headlook.observe_max_jump_deg,
+                     g_headlook.observe_max_refusals);
+        }
+        return true;
+    }();
+    (void)jump_once;
 
     // **Task #75: the servo overshoots its own target, and kp is the lever the
     // arithmetic picks.** Measured offline against the real head_look_step with
@@ -2586,7 +2674,24 @@ void headlook_tick() {
     X4Rotation r{};
     const bool have_cam = camread_enabled() && x4_camera_rotation(&r);
     if (have_cam && g_camloop) {
-        x4vr::head_look_observe(g_headlook, kRad2Deg * -r.yaw, kRad2Deg * r.pitch);
+        const float obs_y = kRad2Deg * -r.yaw, obs_p = kRad2Deg * r.pitch;
+        const float was_y = g_headlook.cmd_yaw_deg;
+        const uint64_t was_resyncs = g_headlook.observe_resyncs;
+        if (!x4vr::head_look_observe(g_headlook, obs_y, obs_p)) {
+            // Rare by construction -- one fault in 395 s in take 294 -- so this
+            // logs the EVENT rather than a rate. If a run ever fills the log
+            // with these, the guard is wrong and that is the finding.
+            X4VR_LOG("headlook: REFUSED read-back %.2f,%.2f — %.2f deg from our "
+                     "own command %.2f (limit %.1f), refusal %d of %d",
+                     obs_y, obs_p, obs_y - was_y, was_y,
+                     g_headlook.observe_max_jump_deg,
+                     g_headlook.observe_refused_run,
+                     g_headlook.observe_max_refusals);
+        } else if (g_headlook.observe_resyncs != was_resyncs) {
+            X4VR_LOG("headlook: RESYNC to %.2f,%.2f — the refusal budget ran "
+                     "out, so X4 really did move the camera %.2f deg",
+                     obs_y, obs_p, obs_y - was_y);
+        }
     }
 
     // **Never keep pushing a camera that does not answer -- but know the
@@ -2639,7 +2744,18 @@ void headlook_tick() {
     ha.pitch_deg = pitch;
     ha.yaw_weight = x4vr::yaw_weight_of_pitch_deg(pitch);
     ha.yaw_reliable = ha.yaw_weight > 0.0f;
-    x4vr::Delta d = x4vr::head_look_step(g_headlook, ha);
+    // **The real interval between ticks, for the rate fix.** Measured here
+    // rather than assumed, because the whole point is that it wanders: take 294
+    // read p10 9.0 ms against p90 40.0. Clamped so a pause — alt-tab, a load —
+    // cannot present a multi-second dt as one enormous gain.
+    static double last_step_s = 0.0;
+    const double now_step_s = mono_seconds();
+    const float step_dt =
+        last_step_s > 0.0
+            ? (float)std::min(0.200, std::max(0.001, now_step_s - last_step_s))
+            : 0.0f;
+    last_step_s = now_step_s;
+    x4vr::Delta d = x4vr::head_look_step(g_headlook, ha, step_dt);
 
     if (have_last) {
         float step = std::fabs(g_headlook.cmd_yaw_deg - pre_cmd);
@@ -3002,13 +3118,15 @@ void headlook_tick() {
     // the pairing the regression needs: error at the moment of observation.
     if (lag_log_enabled()) {
         X4VR_LOG("lagsample: arm=%d view=%s steer=%d cam=%d head=%.3f,%.3f "
-                 "x4=%.3f,%.3f kparm=%d kp=%.3f ylim=%.1f",
+                 "x4=%.3f,%.3f kparm=%d kp=%.3f ylim=%.1f rfarm=%d rfhz=%.0f",
                  lead_armed ? 1 : 0, cockpit ? "cockpit" : "external",
                  steering ? 1 : 0, have_cam ? 1 : 0, yaw, pitch,
                  have_cam ? kRad2Deg * -r.yaw : 0.0f,
                  have_cam ? kRad2Deg * r.pitch : 0.0f,
                  g_kp_arm.load(std::memory_order_relaxed), g_headlook.servo_kp,
-                 g_headlook.yaw_limit_deg);
+                 g_headlook.yaw_limit_deg,
+         g_ratefix_arm.load(std::memory_order_relaxed),
+         g_headlook.rate_fix_nominal_hz);
     }
 
     // **Task #75: do WE send sparsely, or does X4 ignore what we send?**

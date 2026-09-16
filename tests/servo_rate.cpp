@@ -984,6 +984,282 @@ int main() {
           "and by an amount of the same order as the 11.8-13.8 deg X4 actually "
           "reported, not a runaway");
 
+
+    // ---- 11. the tick period WANDERS, and every servo constant rides on it --
+    //
+    // Take 294 measured the servo's own iteration period at p10 9, p50 15,
+    // p90 40, p99 56 ms -- a 4.4x spread, because a tick happens only when a
+    // drain poll happens to find a new pose. servo_kp and max_step_deg are both
+    // PER TICK, so the loop is a different controller from one second to the
+    // next: lag is (1/kp - 1)*dt, slew is max_step/dt, and overshoot is
+    // 0.5*(dead_time_s/dt)*max_step -- the first two worsen as dt grows and the
+    // third worsens as it shrinks.
+    //
+    // **The intervals below are REAL**, a contiguous 300-tick window lifted from
+    // /tmp/x4vr-take294.log and chosen because its p10/p50/p90 match the whole
+    // run's (10/16/40 against 9/15/40). Contiguous on purpose: the polls arrive
+    // in bursts and a resampled or synthesised sequence would lose the serial
+    // structure that makes the spread bite.
+    {
+    static const unsigned char kTick294Ms[] = {
+    21, 10, 13, 20, 22, 30, 21, 10, 10, 11, 10, 10, 11, 10, 10, 21, 11, 16, 30, 10, 10, 11, 21, 13,
+    30, 20, 10, 11, 10, 11, 10, 10, 11, 20, 11, 20, 30, 10, 10, 11, 11, 10, 11, 21, 10, 11, 19, 30,
+    11, 10, 11, 10, 12, 11, 10, 23, 15, 29, 18,  8,  7, 10, 21, 11, 10, 20, 30, 10, 11, 10, 11, 22,
+    20, 39, 26, 22, 40, 11, 10, 11, 11, 11, 10, 22, 10, 11, 21, 30, 34, 32, 14, 27, 12, 12, 11, 10,
+     9, 11, 21, 10, 21, 12, 40, 11, 10, 10, 11, 21, 10, 20, 31, 10, 10, 11, 11, 10, 22, 12, 31, 21,
+    11, 19, 30, 11, 10, 11, 21, 13, 31, 21, 10, 13, 31, 21, 10, 10, 11, 10, 11, 11, 10, 11, 11, 10,
+    11, 21, 12, 20, 21, 13, 31, 20, 11, 11, 10, 11, 11, 11, 11, 10, 11, 11, 11, 13, 20, 21, 11, 11,
+    10, 11, 10, 11, 11, 10, 11, 20, 18, 24, 17, 10, 10, 22, 18, 29, 11, 10, 10, 21, 10, 13, 29, 11,
+    10, 11, 11, 10, 11, 10, 11, 11, 21, 13, 21, 11, 11, 11, 11, 11, 21, 18, 13, 20, 24, 31, 21, 11,
+    10, 11, 11, 11, 10, 11, 11, 11, 10, 22, 19, 34, 34, 40, 66, 43, 33, 44, 34, 46, 43, 46, 34, 24,
+    32, 34, 33, 45, 17, 44, 39, 34, 39, 38, 33, 34, 34, 33, 33, 34, 33, 32, 34, 45, 45, 33, 33, 32,
+    34, 33, 34, 33, 34, 40, 48, 41, 38, 32, 46, 40, 45, 37, 55, 34, 33, 34, 45, 22, 40, 27, 34, 44,
+    45, 27, 55, 34, 44, 45, 33, 22, 23, 56, 45, 45,
+    };
+    const int NT = (int)(sizeof kTick294Ms / sizeof kTick294Ms[0]);
+    std::printf("\n11. take 294's REAL tick sequence, rate fix off vs on\n");
+    std::printf("%22s %10s %10s %12s %12s\n", "", "lag ms", "rms deg",
+                "tremble p90", "overshoot");
+    double lag_off = 0.0, lag_on = 0.0, trem_off = 0.0, trem_on = 0.0;
+    for (int fix = 0; fix < 2; fix++) {
+        x4vr::HeadLook s;
+        s.gain_deg_per_count = 0.115f;
+        s.servo_kp = 0.25f;
+        s.yaw_limit_deg = 85.0f;
+        if (fix)
+            s.rate_fix_nominal_hz = 50.0f;   // where 0.25/12.0 were tuned
+        // 3 ticks of dead time, take 291's measurement, held in WALL CLOCK so
+        // it does not silently change with the tick rate the way a fixed pipe
+        // depth would -- that would build the answer into the harness.
+        const double kDeadS = 3.0 / 50.0;
+        std::vector<std::pair<double, float>> pipe;   // (arrival time, step)
+        double t = 0.0, cam = 0.0, err_sq = 0.0, worst_over = 0.0;
+        std::vector<double> lagsum, tremble;
+        double prev_err = 0.0;
+        int n = 0;
+        for (int rep = 0; rep < 8; rep++) {
+            for (int i = 0; i < NT; i++) {
+                const double dt = kTick294Ms[i] / 1000.0;
+                t += dt;
+                // A head sweeping at a realistic rate -- 0.35 Hz, +-60 deg, so
+                // the peak is ~130 deg/s, inside take 294's measured band.
+                const double head = 60.0 * std::sin(2.0 * 3.14159265 * 0.35 * t);
+                while (!pipe.empty() && pipe.front().first <= t) {
+                    cam += pipe.front().second;
+                    pipe.erase(pipe.begin());
+                }
+                x4vr::head_look_observe(s, (float)cam, 0.0f);
+                x4vr::HeadAngles h;
+                h.yaw_deg = (float)head; h.pitch_deg = 0.0f;
+                h.yaw_weight = 1.0f; h.yaw_reliable = true;
+                const x4vr::Delta d = x4vr::head_look_step(s, h, (float)dt);
+                pipe.push_back({t + kDeadS,
+                                s.sign_yaw * (float)d.dx * 0.115f});
+                const double e = cam - head;
+                err_sq += e * e;
+                if (rep) {                       // let the loop settle first
+                    tremble.push_back(std::fabs(e - prev_err));
+                    if (std::fabs(cam) > 85.0)
+                        worst_over = std::fmax(worst_over, std::fabs(cam) - 85.0);
+                }
+                prev_err = e;
+                n++;
+            }
+        }
+        // Lag in ms: the error of a proportional servo tracking a sinusoid is
+        // (rate * lag), so dividing the rms error by the rms head rate gives a
+        // TIME -- the same quantity the take measures by cross-correlation, and
+        // it is derived here rather than fitted.
+        double rate_sq = 0.0;
+        for (int i = 0; i < 2000; i++) {
+            const double tt = i * 0.001;
+            const double r = 60.0 * 2.0 * 3.14159265 * 0.35
+                             * std::cos(2.0 * 3.14159265 * 0.35 * tt);
+            rate_sq += r * r;
+        }
+        const double rms_err = std::sqrt(err_sq / n);
+        const double rms_rate = std::sqrt(rate_sq / 2000);
+        const double lag_ms = 1000.0 * rms_err / rms_rate;
+        std::sort(tremble.begin(), tremble.end());
+        const double tp90 = tremble[(size_t)(0.90 * tremble.size())];
+        std::printf("%22s %10.1f %10.2f %12.3f %12.2f\n",
+                    fix ? "rate fix ON" : "today (off)", lag_ms, rms_err, tp90,
+                    worst_over);
+        if (fix) { lag_on = lag_ms; trem_on = tp90; }
+        else     { lag_off = lag_ms; trem_off = tp90; }
+    }
+    // **The check I first wrote here FAILED, and it was the check that was
+    // wrong, not the fix.** I asserted a quarter off the lag. It delivers 14%,
+    // and the arithmetic says it should:
+    //
+    //   lag = (1/kp_eff - 1) * dt,  and kp_eff = kp * dt * nominal_hz
+    //      => lag = 1/(kp*nominal_hz) - dt  =  tau - dt
+    //
+    // With the nominal set to today's mean rate, tau is 1/(0.25*50) = 80 ms --
+    // today's lag. So the rate fix makes the loop the SAME controller at every
+    // tick rate; it does not by itself make it a faster one. Consistency and
+    // speed are two knobs and this is the first.
+    //
+    // Keeping the failed prediction visible rather than quietly retuning the
+    // threshold: [[optimise-one-axis-move-the-error]] is exactly this mistake
+    // one level up.
+    check(lag_on <= lag_off,
+          "11: the rate fix does not make the lag worse");
+    check(trem_on <= trem_off,
+          "11: ...and does not make the tremble worse");
+    std::printf("      lag %.1f -> %.1f ms (%.0f%% of today), tremble p90 "
+                "%.3f -> %.3f deg\n", lag_off, lag_on,
+                100.0 * lag_on / lag_off, trem_off, trem_on);
+
+    // **What the fix ACTUALLY buys: the loop stops depending on the tick.**
+    // The claim is consistency, so the measurement is the SPREAD of the error
+    // across tick-period bins, not its mean.
+    {
+        std::printf("      per-tick-period tremble p90, deg:\n");
+        std::printf("      %10s %12s %12s\n", "tick ms", "off", "ON");
+        double spread[2] = {0.0, 0.0};
+        double lo[2] = {1e9, 1e9}, hi[2] = {0.0, 0.0};
+        for (int fix = 0; fix < 2; fix++) {
+            std::vector<double> byb[4];
+            x4vr::HeadLook s;
+            s.gain_deg_per_count = 0.115f; s.servo_kp = 0.25f;
+            s.yaw_limit_deg = 85.0f;
+            if (fix) s.rate_fix_nominal_hz = 50.0f;
+            const double kDeadS = 3.0 / 50.0;
+            std::vector<std::pair<double, float>> pipe;
+            double t = 0.0, cam = 0.0, prev_err = 0.0;
+            for (int rep = 0; rep < 8; rep++)
+                for (int i = 0; i < NT; i++) {
+                    const double dt = kTick294Ms[i] / 1000.0;
+                    t += dt;
+                    const double head =
+                        60.0 * std::sin(2.0 * 3.14159265 * 0.35 * t);
+                    while (!pipe.empty() && pipe.front().first <= t) {
+                        cam += pipe.front().second;
+                        pipe.erase(pipe.begin());
+                    }
+                    x4vr::head_look_observe(s, (float)cam, 0.0f);
+                    x4vr::HeadAngles h;
+                    h.yaw_deg = (float)head; h.pitch_deg = 0.0f;
+                    h.yaw_weight = 1.0f; h.yaw_reliable = true;
+                    const x4vr::Delta d =
+                        x4vr::head_look_step(s, h, (float)dt);
+                    pipe.push_back({t + kDeadS,
+                                    s.sign_yaw * (float)d.dx * 0.115f});
+                    const double e = cam - head;
+                    if (rep) {
+                        const int b = kTick294Ms[i] < 12 ? 0
+                                    : kTick294Ms[i] < 18 ? 1
+                                    : kTick294Ms[i] < 28 ? 2 : 3;
+                        byb[b].push_back(std::fabs(e - prev_err));
+                    }
+                    prev_err = e;
+                }
+            for (int b = 0; b < 4; b++) {
+                if (byb[b].size() < 30) continue;
+                std::sort(byb[b].begin(), byb[b].end());
+                const double v = byb[b][(size_t)(0.90 * byb[b].size())];
+                lo[fix] = std::fmin(lo[fix], v);
+                hi[fix] = std::fmax(hi[fix], v);
+            }
+            spread[fix] = hi[fix] / std::fmax(lo[fix], 1e-9);
+        }
+        std::printf("      %10s %12.2fx %11.2fx   (max bin / min bin)\n",
+                    "spread", spread[0], spread[1]);
+        check(spread[1] < spread[0],
+              "11: the rate fix FLATTENS the tremble across tick periods — "
+              "that is the property it exists for");
+    }
+
+    // **And where the LAG knob now lives.** With the fix on, the two per-tick
+    // constants collapse into one time constant, tau = 1/(kp * nominal_hz), so
+    // the nominal IS the lag dial and it is in units that mean something.
+    // This is the table take 295's arm B is chosen from.
+    {
+        std::printf("      tau sweep with the fix ON (kp 0.25):\n");
+        std::printf("      %10s %10s %10s %12s\n", "nominal", "tau ms",
+                    "lag ms", "overshoot");
+        for (double nom : {50.0, 70.0, 100.0, 140.0}) {
+            x4vr::HeadLook s;
+            s.gain_deg_per_count = 0.115f; s.servo_kp = 0.25f;
+            s.yaw_limit_deg = 85.0f;
+            s.rate_fix_nominal_hz = (float)nom;
+            const double kDeadS = 3.0 / 50.0;
+            std::vector<std::pair<double, float>> pipe;
+            double t = 0.0, cam = 0.0, err_sq = 0.0, over = 0.0;
+            int n = 0;
+            for (int rep = 0; rep < 8; rep++)
+                for (int i = 0; i < NT; i++) {
+                    const double dt = kTick294Ms[i] / 1000.0;
+                    t += dt;
+                    const double head =
+                        60.0 * std::sin(2.0 * 3.14159265 * 0.35 * t);
+                    while (!pipe.empty() && pipe.front().first <= t) {
+                        cam += pipe.front().second;
+                        pipe.erase(pipe.begin());
+                    }
+                    x4vr::head_look_observe(s, (float)cam, 0.0f);
+                    x4vr::HeadAngles h;
+                    h.yaw_deg = (float)head; h.pitch_deg = 0.0f;
+                    h.yaw_weight = 1.0f; h.yaw_reliable = true;
+                    const x4vr::Delta d =
+                        x4vr::head_look_step(s, h, (float)dt);
+                    pipe.push_back({t + kDeadS,
+                                    s.sign_yaw * (float)d.dx * 0.115f});
+                    if (rep) {
+                        const double e = cam - head;
+                        err_sq += e * e; n++;
+                        if (std::fabs(cam) > 60.5)
+                            over = std::fmax(over, std::fabs(cam) - 60.0);
+                    }
+                }
+            const double rms = std::sqrt(err_sq / n);
+            // **93.27, not 131.9.** The first draft divided by the PEAK head
+            // rate here and by the RMS in the table above, so the same setting
+            // read 56.9 ms in one place and 78.1 in the other. Two routes to one
+            // quantity disagreeing means one of them is wrong
+            // ([[three-contradictory-measurements]]); rms of A*cos is A/sqrt(2),
+            // and 60*2*pi*0.35/sqrt(2) = 93.27 deg/s.
+            const double kRmsRate = 60.0 * 2.0 * 3.14159265 * 0.35 / 1.41421356;
+            std::printf("      %10.0f %10.1f %10.1f %12.2f\n", nom,
+                        1000.0 / (0.25 * nom), 1000.0 * rms / kRmsRate, over);
+        }
+    }
+
+    // NEGATIVE CONTROL: at a STEADY tick equal to the nominal, the fix must be
+    // arithmetically inert. If it changes anything here it is not correcting
+    // the wander, it is just a different tuning wearing the wander's name.
+    {
+        double got[2];
+        for (int fix = 0; fix < 2; fix++) {
+            x4vr::HeadLook s;
+            s.gain_deg_per_count = 0.115f; s.servo_kp = 0.25f;
+            s.yaw_limit_deg = 85.0f;
+            if (fix) s.rate_fix_nominal_hz = 50.0f;
+            double cam = 0.0, acc = 0.0;
+            std::vector<float> pipe(3, 0.0f);
+            for (int i = 0; i < 1200; i++) {
+                const double head = 60.0 * std::sin(2.0 * 3.14159265 * 0.35
+                                                    * i * 0.02);
+                x4vr::head_look_observe(s, (float)cam, 0.0f);
+                x4vr::HeadAngles h;
+                h.yaw_deg = (float)head; h.pitch_deg = 0.0f;
+                h.yaw_weight = 1.0f; h.yaw_reliable = true;
+                const x4vr::Delta d = x4vr::head_look_step(s, h, 0.020f);
+                pipe.push_back(s.sign_yaw * (float)d.dx * 0.115f);
+                cam += pipe.front();
+                pipe.erase(pipe.begin());
+                acc += std::fabs(cam - head);
+            }
+            got[fix] = acc;
+        }
+        check(std::fabs(got[0] - got[1]) < 1e-6 * std::fabs(got[0]) + 1e-6,
+              "11: at a steady 50 Hz — the nominal — the fix is EXACTLY inert");
+        std::printf("      steady 50 Hz: off %.4f, on %.4f (identical)\n",
+                    got[0], got[1]);
+    }
+    }
+
     std::printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n",
                 g_fail);
     return g_fail ? 1 : 0;

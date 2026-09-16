@@ -49,6 +49,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 
 namespace x4vr {
@@ -249,6 +250,38 @@ struct HeadLook {
     // observation from crossing the entire range before the next one arrives.
     float max_step_deg = 12.0f;
 
+    // **Task #75: both constants above are PER TICK, and the tick wanders.**
+    //
+    // Take 294 measured the servo's own iteration period at p10 9.0 ms, p50
+    // 15.0, p90 40.0, p99 56.0 -- a 4.4x spread -- because a tick happens only
+    // when a drain poll finds a new pose. Every property of the loop rides on
+    // that period, and in opposite directions:
+    //
+    //   lag       = (1/kp - 1) * dt            worse when dt is LONG
+    //   slew      = max_step / dt              worse when dt is LONG
+    //   overshoot = 0.5 * dead_time_s/dt * max_step   worse when dt is SHORT
+    //
+    // So there is no fixed pair of constants that is right across the spread,
+    // and the loop is a different controller from one second to the next. That
+    // is the shape of "glitchy, jittery, with the visuals taking time to follow"
+    // -- take 294's own measured residual is 85 ms of lag with a tremble tail
+    // 1.9x worse in the slow bins.
+    //
+    // Set this to the rate the constants were tuned at and pass the real dt to
+    // head_look_step: the gain and the ceiling are then scaled by dt/nominal,
+    // which makes the time constant, the slew in deg/s and the overshoot in
+    // degrees all independent of the tick rate. **At exactly the nominal rate
+    // the arithmetic is unchanged**, which is what lets an A/B against it
+    // measure the wander and nothing else.
+    //
+    // 0 disables it, and that is the default until a take says otherwise.
+    float rate_fix_nominal_hz = 0.0f;
+    // kp_eff must stay well under 1 whatever dt does -- kp 1.0 is take 136, the
+    // screen spinning too fast to read. A 56 ms tick against a 50 Hz nominal
+    // asks for 0.25 * 2.8 = 0.70, so this ceiling is reached in real runs and
+    // is not decoration.
+    float rate_fix_kp_max = 0.60f;
+
     // **Both negative, and take 126 is why.** head_angles() reports +yaw as
     // turning LEFT and +pitch as looking UP, which is right for a right-handed
     // Y-up frame. Mouse axes disagree with both: positive xrel turns the view
@@ -267,6 +300,48 @@ struct HeadLook {
     // Where we believe X4 is pointing. Advanced only by what we actually sent.
     float cmd_yaw_deg = 0.0f;
     float cmd_pitch_deg = 0.0f;
+
+    // **Task #75, take 294: the read-back is a sensor and sensors glitch.**
+    //
+    // We are the only thing driving this camera, so between two ticks it cannot
+    // have moved further than the commands we issued -- at most max_step_deg
+    // per tick, and at most a dead time's worth of them can be in flight at
+    // once. A reading further away than that did not come from us, and acting
+    // on it is acting on someone else's camera.
+    //
+    // Measured: one tick of exactly 0,0 followed by 104.12 and 119.04 deg while
+    // the head sat at 18 and moved 2 deg. Neither reading is reachable from a
+    // 39-count command. The servo pinned cmd to 119.04, saturated at -max_step,
+    // and spent 4.6 s failing to get back -- it was still 47 deg out at the end.
+    // Those frames carried draws=4 out of arena block #25 against the usual
+    // 34-35 from #3/#7/#8/#9/#11: X4 was rendering a different camera for about
+    // 150 ms while our own view gate still said cockpit.
+    //
+    // The bound is a DISTANCE, not a rate, because the caller does not pass dt
+    // and the in-flight depth is what sets it. 3 ticks is take 291's measured
+    // dead time, so 3 * max_step = 36 deg is the furthest an honest reading can
+    // be from the last honest one.
+    float observe_max_jump_deg = 36.0f; // 0 disables the guard entirely
+
+    // **A guard that can never yield is worse than the glitch.** If X4 really
+    // does move the camera -- a cutscene, a teleport, something we have not
+    // characterised -- refusing forever would strand the servo pushing against
+    // a camera that is genuinely elsewhere, which is the map-view accelerator
+    // all over again. So the guard gives up after this many consecutive
+    // refusals and resynchronises to whatever X4 says.
+    //
+    // At 50 Hz, 8 refusals is 160 ms of disbelief: long enough to ride out the
+    // ~150 ms fault above, short enough that a real move costs a fifth of a
+    // second. head_look_recentre stays the explicit path for the events we DO
+    // know about (seat change, save load) and is not affected by any of this.
+    int observe_max_refusals = 8;
+
+    // Set by head_look_observe so the caller can log what it did. Not consumed
+    // by the servo.
+    int observe_refused_run = 0;   // consecutive refusals right now
+    uint64_t observe_refused = 0;  // total, for the run summary
+    uint64_t observe_resyncs = 0;  // times the refusal budget ran out
+    bool observe_have_last = false;
 
     // **Task #73: the lag is arithmetic, not latency, and this is the fix.**
     //
@@ -305,6 +380,13 @@ struct HeadLook {
     // was already there, and giving this the same value only broke honest
     // motion.
     //
+    // **Take 294: read this as being about the HEAD pose only.** The step clamp
+    // sits after the error, and the error is `want - cmd_yaw_deg`; it bounds a
+    // bad *head* reading and does nothing whatever about a bad *camera*
+    // reading, because head_look_observe writes cmd_yaw_deg directly. One tick
+    // of X4 answering 0,0 followed by 104 deg put the camera 100 deg off the
+    // head and it never came back. See observe_max_jump_deg below.
+    //
     // It was 12 for exactly that mistaken reason and tests/servo_lag.cpp caught
     // it: at 26.6 Hz a 240 deg/s turn moves 9 deg between poses, so the correct
     // lead is 27, and clipping it at 12 left 63 ms of the lag in place at the
@@ -325,10 +407,25 @@ inline float clampf(float v, float lo, float hi) {
 }
 
 // One frame: given where the head is, what to send X4 and what we now believe.
-inline Delta head_look_step(HeadLook &s, const HeadAngles &head) {
+// `dt_s` is the interval since the previous step. It is only read when
+// rate_fix_nominal_hz is set; 0 means "not supplied", which is what every call
+// site before take 295 passes and what keeps those runs reproducible.
+inline Delta head_look_step(HeadLook &s, const HeadAngles &head,
+                            float dt_s = 0.0f) {
     Delta d;
     if (!(s.gain_deg_per_count > 0.0f))
         return d; // uncalibrated: send nothing rather than something arbitrary
+
+    // **The rate fix. See rate_fix_nominal_hz.** Scaling BOTH the gain and the
+    // ceiling by dt/nominal is what makes the loop the same controller at every
+    // tick rate: the time constant, the slew in deg/s and the overshoot in
+    // degrees all stop depending on how often we happen to run.
+    float kp_eff = s.servo_kp, max_step_eff = s.max_step_deg;
+    if (s.rate_fix_nominal_hz > 0.0f && dt_s > 0.0f) {
+        const float scale = clampf(dt_s * s.rate_fix_nominal_hz, 0.05f, 4.0f);
+        kp_eff = std::fmin(s.servo_kp * scale, s.rate_fix_kp_max);
+        max_step_eff = s.max_step_deg * scale;
+    }
 
     // **#73's lead: aim where the head will be, not where it is.**
     //
@@ -336,8 +433,11 @@ inline Delta head_look_step(HeadLook &s, const HeadAngles &head) {
     // distance a proportional servo would otherwise stay behind. See lead_scale
     // for the measurement this comes from.
     float lead_yaw = 0.0f, lead_pitch = 0.0f;
-    if (s.lead_scale > 0.0f && s.servo_kp > 0.0f) {
-        const float k = s.lead_scale * (1.0f / s.servo_kp - 1.0f);
+    if (s.lead_scale > 0.0f && kp_eff > 0.0f) {
+        // kp_eff, not servo_kp: the lead is exactly the distance a
+        // proportional servo stays behind, so it has to be computed from
+        // the gain that servo is actually running.
+        const float k = s.lead_scale * (1.0f / kp_eff - 1.0f);
         if (!std::isnan(s.last_head_yaw_deg)) {
             // **Wrapped, for the same reason err_yaw below is.** This is a NEW
             // subtraction of two yaws, so it carries the ±180 defect in its own
@@ -405,9 +505,9 @@ inline Delta head_look_step(HeadLook &s, const HeadAngles &head) {
                          ? s.gain_pitch_deg_per_count
                          : s.gain_deg_per_count;
     const float step_yaw =
-        clampf(s.servo_kp * err_yaw, -s.max_step_deg, s.max_step_deg);
+        clampf(kp_eff * err_yaw, -max_step_eff, max_step_eff);
     const float step_pitch =
-        clampf(s.servo_kp * err_pitch, -s.max_step_deg, s.max_step_deg);
+        clampf(kp_eff * err_pitch, -max_step_eff, max_step_eff);
     // Weighted, so the yaw command fades out as the head nears vertical
     // instead of being cut off. At weight 1 -- anything below 70 deg of pitch,
     // which is every take before 204 -- this is arithmetically identical to
@@ -511,9 +611,34 @@ inline int stall_watch_step(StallWatch &w, float commanded_deg,
 // to be roughly right, the clamp is seen rather than modelled, and a recentre
 // on a seat change or save load corrects itself on the next frame instead of
 // leaving a permanent offset.
-inline void head_look_observe(HeadLook &s, float yaw_deg, float pitch_deg) {
+// Returns true if the reading was accepted. See observe_max_jump_deg for why
+// one can be refused, and observe_max_refusals for why refusal is bounded.
+inline bool head_look_observe(HeadLook &s, float yaw_deg, float pitch_deg) {
+    if (s.observe_max_jump_deg > 0.0f && s.observe_have_last) {
+        // Against cmd, not against the previous READING: cmd is where our
+        // commands have put the camera, so it already contains the step we
+        // just sent and the comparison does not charge us for our own motion.
+        float dy = yaw_deg - s.cmd_yaw_deg;
+        while (dy > 180.0f)
+            dy -= 360.0f;
+        while (dy < -180.0f)
+            dy += 360.0f;
+        const float dp = pitch_deg - s.cmd_pitch_deg;
+        const bool jumped = std::fabs(dy) > s.observe_max_jump_deg ||
+                            std::fabs(dp) > s.observe_max_jump_deg;
+        if (jumped) {
+            s.observe_refused++;
+            if (++s.observe_refused_run <= s.observe_max_refusals)
+                return false; // hold the last believed position
+            // Budget spent: X4 means it. Resynchronise and start again.
+            s.observe_resyncs++;
+        }
+    }
+    s.observe_refused_run = 0;
+    s.observe_have_last = true;
     s.cmd_yaw_deg = yaw_deg;
     s.cmd_pitch_deg = pitch_deg;
+    return true;
 }
 
 // X4 has put its own camera back to centre -- a seat change or a save load,
@@ -523,6 +648,11 @@ inline void head_look_observe(HeadLook &s, float yaw_deg, float pitch_deg) {
 inline void head_look_recentre(HeadLook &s) {
     s.cmd_yaw_deg = 0.0f;
     s.cmd_pitch_deg = 0.0f;
+    // The explicit path for a move we KNOW about, so the plausibility guard
+    // must not then refuse the readings that follow it -- they will legitimately
+    // be far from where cmd was a moment ago.
+    s.observe_refused_run = 0;
+    s.observe_have_last = false;
 }
 
 // **Task #74: the head's displacement, resolved into the head's OWN axes.**
