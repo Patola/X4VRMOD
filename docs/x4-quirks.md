@@ -19661,3 +19661,91 @@ VR first and launch X4 second.
 intercepted copy is ours to write. Pointing `<sounddevice>` at the VR sink when a
 session is live would be in scope without touching the player's file. Filed, not
 built.
+
+## Take 294's residual, with the episodes removed
+
+Patola on take 294: *"a bit better than the others with the frustum not going
+through wild spins, but it still felt glitchy, jittery, with the visuals taking
+time to follow up on the movement. It would be nauseating if I didn't have strong
+VR legs."* Two complaints, measured over the 13765 clean cockpit steering ticks
+(the read-back fault window 920748.80-920756.00 dropped).
+
+### LAG: 85 ms, and the servo's own term accounts for 60 of it
+
+Cross-correlating X4's camera against the head, both resampled to a uniform
+200 Hz grid so the shift is a time and not a tick count:
+
+    best alignment at tau = 85 ms (r = 0.954)
+
+**The peak is broad and the instrument says so**: r is 0.945 at 40 ms and 0.948 at
+140 ms, against 0.954 at the peak. Anything in 60-120 ms is indistinguishable
+here; 85 is the argmax, not a resolution. r at zero shift is already 0.921, so
+most of the signal is common-mode.
+
+A proportional servo sampled every `dt` settles to a standing error of
+`head_rate * dt * (1/kp - 1)`, i.e. an effective lag of `(1/kp - 1) * dt`
+independent of how fast the head moves. Mean tick period is 19.9 ms, kp is 0.25:
+
+    (1/0.25 - 1) * 19.9 ms = 60 ms   vs   85 ms measured
+
+60 of 85. The remaining 25 ms is **not** attributed here — the candidates are the
+pose already being ~11 ms old when the servo sees it (`poselag` read-back age
+median 11.4 ms), X4's own input-to-camera share (20-30 ms, take 291), and
+render-to-submit (`camstamp` median 9.7 ms) — and they sum to more than 25, so
+assigning it would be arithmetic in search of a budget.
+[[three-contradictory-measurements]].
+
+### P294.1 was pointed the wrong way
+
+The committed prediction wanted **kp 0.15**, to cut overshoot from 22 to 17 deg.
+But lag is `(1/kp - 1) * dt`, so kp 0.15 gives `5.67 * 19.9 = 113 ms` against
+today's 60 — **it would have made the complaint Patola actually has about 90%
+worse**, to buy 5 degrees on a defect he no longer reports.
+
+[[optimise-one-axis-move-the-error]] is in memory and it fired anyway. Lag WAS on
+the trade table (16.70) — I scored it as a tie-breaker between servo settings
+instead of asking which axis the player feels. The overshoot was real and
+measured; it was simply not the live complaint once the episodes went.
+
+Note the overshoot law `0.5 * dead_time * max_step` has no kp in it: kp does not
+change the size of an overshoot, only how small an error has to be before the step
+stops saturating (`max_step/kp` = 48 deg at 0.25, 30 deg at 0.40). So raising kp
+buys lag directly and costs only saturation MARGIN — which matters because the
+episodes are saturated limit cycles.
+
+### JITTER: the first reading did not survive its control
+
+Raw, `|d(error)|` per tick rises monotonically with the tick period — p50 0.110 ->
+0.519 deg across five bins, a 4.7x increase. That looks like a mechanism and is
+not one: divided by dt, the same bins read **11.67, 9.36, 10.05, 12.12, 12.76
+deg/s at p50** — flat, and not even monotonic. At the median the tremble is
+elapsed time and nothing else.
+
+What DOES survive is the tail: `|d(error)|/dt` at p90 reads 96, 84, 116, 153, 155
+deg/s — a 1.9x rise from the fastest bin to the slowest — **while the head is
+moving SLOWER in the long-tick bins** (p50 head rate 9.8 deg/s in the fastest,
+5.5 in the slowest). So long ticks are genuinely worse in the tail, and not
+because the head is doing more during them.
+
+A 1.9x tail effect, not a 4.7x one. [[a-ratio-against-its-own-denominator]].
+
+### The tick period is the lever, but its accounting is already flagged broken
+
+Mean 19.9 ms, p10 9.0, p50 15.0, p90 40.0, p99 56.0 — a **4.4x spread** in the
+sample period of a proportional loop, against a layer publishing at 89.5 Hz
+(11.2 ms). Both complaints point at it: lag is `3 * dt`, and the tremble tail
+grows with it.
+
+**Before anything is built on that**, `score_run.py`'s own pumprate block says:
+
+> INCONSISTENT, and that is a defect of this instrument rather than a finding:
+> pump runs at 103.7 Hz, above the 89.5 Hz publish rate, and nopose is only 0 — so
+> every published pose should have been seen, yet only 58.3% were. Either
+> `updates` advances more than once per publish, or the windows of the two
+> counters are misaligned. Do not spend a take on this number until it is
+> resolved.
+
+The tick enters at 103.7 Hz and acts at 52.2 Hz because of `if (!fresh) return;`,
+and whether that gate is discarding real poses or the counter is lying is exactly
+the unresolved question. Resolving it is a code read, not a take.
+[[read-the-existing-report-first]].
