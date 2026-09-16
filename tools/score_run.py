@@ -3958,7 +3958,7 @@ def main(path):
         r"\[\s*(\d+\.\d+)\] inject  lagsample: arm=\d+ view=(\w+) "
         r"steer=(\d) cam=(\d) head=(-?[\d.]+),(-?[\d.]+) "
         r"x4=(-?[\d.]+),(-?[\d.]+) kparm=-?\d+ kp=[\d.]+ ylim=[\d.]+ "
-        r"rfarm=(-?\d+) rfhz=([\d.]+)", text)
+        r"rfarm=(-?\d+) rftau=([\d.]+)", text)
     if rf:
         rr = [(float(t), v, int(st), int(cv), float(hy), float(x4y), int(ar),
                float(hz))
@@ -4005,7 +4005,7 @@ def main(path):
                     per.setdefault(seg[0][6], []).append(L)
             print(f"{'':7}{'arm':<16}{'phases':>8}{'lag ms each':>34}")
             for arm in sorted(per):
-                name = "control (off)" if arm == 0 else f"ARM_B @{hz:.0f}Hz"
+                name = "control (off)" if arm == 0 else f"ARM_B tau{hz:.0f}ms"
                 vals = "  ".join(f"{v:.0f}" for v in per[arm])
                 print(f"rfab   {name:<16}{len(per[arm]):>8}{vals:>34}")
             if 0 in per and 1 in per and len(per[0]) >= 2 and len(per[1]) >= 2:

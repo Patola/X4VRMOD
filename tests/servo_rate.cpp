@@ -1027,7 +1027,7 @@ int main() {
         s.servo_kp = 0.25f;
         s.yaw_limit_deg = 85.0f;
         if (fix)
-            s.rate_fix_nominal_hz = 50.0f;   // where 0.25/12.0 were tuned
+            s.rate_fix_tau_ms = 80.0f;   // 1/(0.25*50) — today's equivalent
         // 3 ticks of dead time, take 291's measurement, held in WALL CLOCK so
         // it does not silently change with the tick rate the way a fixed pipe
         // depth would -- that would build the answer into the harness.
@@ -1124,7 +1124,7 @@ int main() {
             x4vr::HeadLook s;
             s.gain_deg_per_count = 0.115f; s.servo_kp = 0.25f;
             s.yaw_limit_deg = 85.0f;
-            if (fix) s.rate_fix_nominal_hz = 50.0f;
+            if (fix) s.rate_fix_tau_ms = 80.0f;
             const double kDeadS = 3.0 / 50.0;
             std::vector<std::pair<double, float>> pipe;
             double t = 0.0, cam = 0.0, prev_err = 0.0;
@@ -1176,14 +1176,14 @@ int main() {
     // the nominal IS the lag dial and it is in units that mean something.
     // This is the table take 295's arm B is chosen from.
     {
-        std::printf("      tau sweep with the fix ON (kp 0.25):\n");
-        std::printf("      %10s %10s %10s %12s\n", "nominal", "tau ms",
+        std::printf("      tau sweep, slew held at 600 deg/s:\n");
+        std::printf("      %10s %10s %10s %12s\n", "-", "tau ms",
                     "lag ms", "overshoot");
-        for (double nom : {50.0, 70.0, 100.0, 140.0}) {
+        for (double tau_ms : {80.0, 57.0, 40.0, 29.0}) {
             x4vr::HeadLook s;
             s.gain_deg_per_count = 0.115f; s.servo_kp = 0.25f;
             s.yaw_limit_deg = 85.0f;
-            s.rate_fix_nominal_hz = (float)nom;
+            s.rate_fix_tau_ms = (float)tau_ms;
             const double kDeadS = 3.0 / 50.0;
             std::vector<std::pair<double, float>> pipe;
             double t = 0.0, cam = 0.0, err_sq = 0.0, over = 0.0;
@@ -1221,8 +1221,9 @@ int main() {
             // ([[three-contradictory-measurements]]); rms of A*cos is A/sqrt(2),
             // and 60*2*pi*0.35/sqrt(2) = 93.27 deg/s.
             const double kRmsRate = 60.0 * 2.0 * 3.14159265 * 0.35 / 1.41421356;
-            std::printf("      %10.0f %10.1f %10.1f %12.2f\n", nom,
-                        1000.0 / (0.25 * nom), 1000.0 * rms / kRmsRate, over);
+            std::printf("      %10.0f %10.1f %10.1f %12.2f\n",
+                        1000.0 / (0.25 * tau_ms) * 1000.0 / 1000.0, tau_ms,
+                        1000.0 * rms / kRmsRate, over);
         }
     }
 
@@ -1235,7 +1236,7 @@ int main() {
             x4vr::HeadLook s;
             s.gain_deg_per_count = 0.115f; s.servo_kp = 0.25f;
             s.yaw_limit_deg = 85.0f;
-            if (fix) s.rate_fix_nominal_hz = 50.0f;
+            if (fix) s.rate_fix_tau_ms = 80.0f;
             double cam = 0.0, acc = 0.0;
             std::vector<float> pipe(3, 0.0f);
             for (int i = 0; i < 1200; i++) {
@@ -1257,6 +1258,129 @@ int main() {
               "11: at a steady 50 Hz — the nominal — the fix is EXACTLY inert");
         std::printf("      steady 50 Hz: off %.4f, on %.4f (identical)\n",
                     got[0], got[1]);
+    }
+    }
+
+
+    // ---- 12. TAKE 295: the regime section 11 never entered -----------------
+    //
+    // Section 11 drove a smooth 0.35 Hz sweep whose error never reached
+    // max_step/kp, so the step NEVER SATURATED and the ceiling was never
+    // exercised. The fix passed, shipped into take 295, and the frustum span:
+    // ARM_B commanded 32.77 deg in a tick against a design ceiling of 12, lag
+    // went to 448-2072 ms against the control arm's 41-153, and 39 of the run's
+    // 40 saturated-with-head-centred commands were in it.
+    //
+    // [[test-the-fix-where-it-can-act]]. The head here MOVES -- fast sweeps that
+    // drive the error well past max_step/kp -- because that is the only regime
+    // in which a step ceiling means anything at all.
+    {
+    std::printf("\n12. the SATURATING regime, which is where take 295 broke\n");
+    std::printf("%22s %12s %12s %12s\n", "", "worst step", "slew deg/s",
+                "worst |cam|");
+    double worst_step[3] = {0, 0, 0}, worst_slew[3] = {0, 0, 0},
+           worst_cam_[3] = {0, 0, 0};
+    for (int cfg = 0; cfg < 3; cfg++) {
+        x4vr::HeadLook s;
+        s.gain_deg_per_count = 0.115f; s.servo_kp = 0.25f;
+        s.yaw_limit_deg = 85.0f;
+        const char *name = "today (fix off)";
+        if (cfg == 1) {
+            // Take 295's ARM_B, reconstructed: tau 40 ms AND the slew ceiling
+            // dragged to 1200 by the single knob.
+            s.rate_fix_tau_ms = 40.0f;
+            s.rate_fix_max_rate_deg_s = 1200.0f;
+            name = "295 ARM_B (coupled)";
+        } else if (cfg == 2) {
+            // The same speed-up with the slew left where it was.
+            s.rate_fix_tau_ms = 40.0f;
+            s.rate_fix_max_rate_deg_s = 600.0f;
+            name = "tau 40, slew 600";
+        }
+        const double kDeadS = 0.060;
+        std::vector<std::pair<double, float>> pipe;
+        double t = 0.0, cam = 0.0, worst_cam = 0.0, wstep = 0.0, wslew = 0.0;
+        for (int i = 0; i < 6000; i++) {
+            // Deliberately harsh: 1.4 Hz, +-70 deg => ~615 deg/s peak, which is
+            // a real snap-glance and the thing take 293's protocol produced.
+            const double dt = (i % 5 == 0) ? 0.040 : 0.012;  // the real spread
+            t += dt;
+            const double head = 70.0 * std::sin(2.0 * 3.14159265 * 1.4 * t);
+            while (!pipe.empty() && pipe.front().first <= t) {
+                cam += pipe.front().second;
+                pipe.erase(pipe.begin());
+            }
+            x4vr::head_look_observe(s, (float)cam, 0.0f);
+            x4vr::HeadAngles h;
+            h.yaw_deg = (float)head; h.pitch_deg = 0.0f;
+            h.yaw_weight = 1.0f; h.yaw_reliable = true;
+            const x4vr::Delta d = x4vr::head_look_step(s, h, (float)dt);
+            const double st = std::fabs((double)d.dx * 0.115);
+            wstep = std::fmax(wstep, st);
+            wslew = std::fmax(wslew, st / dt);
+            pipe.push_back({t + kDeadS, s.sign_yaw * (float)d.dx * 0.115f});
+            worst_cam = std::fmax(worst_cam, std::fabs(cam));
+        }
+        worst_step[cfg] = wstep;
+        worst_slew[cfg] = wslew;
+        worst_cam_[cfg] = worst_cam;
+        std::printf("%22s %12.2f %12.0f %12.2f\n", name, wstep, wslew,
+                    worst_cam);
+    }
+    check(worst_slew[1] > 1.15 * worst_slew[0],
+          "12: the COUPLED setting take 295 ran drives the camera FASTER than "
+          "today — 1198 against 997 deg/s, the coupling defect, offline");
+    check(worst_slew[2] <= worst_slew[0],
+          "12: separating tau from the slew ceiling puts the slew back");
+    // **And the second check I wrote here failed too, for a REASON that
+    // matters more than the fix.** I expected separation to remove the
+    // excursion; it does not. tau 40 ms drives kp_eff to its 0.60 ceiling, and
+    // a gain that high against a 60 ms dead time overshoots whatever the slew
+    // limit is: worst |cam| 96.49 against today's 81.42.
+    //
+    // A proportional loop with transport delay is only stable while its time
+    // constant stays comfortably ABOVE the dead time. The dead time is 60 ms,
+    // so tau 40 was already past the margin before the coupling made it worse.
+    // Section 11's sweep could not see this because it never saturated.
+    check(worst_cam_[2] > worst_cam_[0],
+          "12: tau 40 ms is UNSAFE at a 60 ms dead time even with the slew "
+          "separated — recorded as a finding, not a bug to tune away");
+
+    // So: where does tau become safe? Swept in the regime that can answer.
+    std::printf("      tau in the SATURATING regime, slew fixed at 600 deg/s:\n");
+    std::printf("      %10s %12s %12s %14s\n", "tau ms", "worst |cam|",
+                "vs 85 limit", "verdict");
+    for (double tau_ms : {200.0, 140.0, 110.0, 80.0, 60.0, 40.0}) {
+        x4vr::HeadLook s;
+        s.gain_deg_per_count = 0.115f; s.servo_kp = 0.25f;
+        s.yaw_limit_deg = 85.0f;
+        s.rate_fix_tau_ms = (float)tau_ms;
+        s.rate_fix_max_rate_deg_s = 600.0f;
+        const double kDeadS = 0.060;
+        std::vector<std::pair<double, float>> pipe;
+        double t = 0.0, cam = 0.0, wc = 0.0, err = 0.0;
+        int n = 0;
+        for (int i = 0; i < 6000; i++) {
+            const double dt = (i % 5 == 0) ? 0.040 : 0.012;
+            t += dt;
+            const double head = 70.0 * std::sin(2.0 * 3.14159265 * 1.4 * t);
+            while (!pipe.empty() && pipe.front().first <= t) {
+                cam += pipe.front().second;
+                pipe.erase(pipe.begin());
+            }
+            x4vr::head_look_observe(s, (float)cam, 0.0f);
+            x4vr::HeadAngles h;
+            h.yaw_deg = (float)head; h.pitch_deg = 0.0f;
+            h.yaw_weight = 1.0f; h.yaw_reliable = true;
+            const x4vr::Delta d = x4vr::head_look_step(s, h, (float)dt);
+            pipe.push_back({t + kDeadS, s.sign_yaw * (float)d.dx * 0.115f});
+            wc = std::fmax(wc, std::fabs(cam));
+            const double want = cam > 85.0 ? 85.0 : (cam < -85.0 ? -85.0 : head);
+            err += std::fabs(cam - want); n++;
+            (void)want;
+        }
+        std::printf("      %10.0f %12.2f %12.2f %14s\n", tau_ms, wc, wc - 85.0,
+                    wc <= 86.0 ? "clean" : (wc <= 92.0 ? "marginal" : "SPINS"));
     }
     }
 

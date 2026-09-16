@@ -2357,19 +2357,30 @@ void headlook_tick() {
     // times the step ceiling and not a free parameter.
     // **Task #75 take 295: the rate fix, and its A/B.**
     //
-    // X4VR_HEADLOOK_RATEFIX is the nominal Hz the per-tick constants were tuned
-    // at; with it set, kp and max_step are scaled by dt/nominal so the loop is
-    // the same controller at every tick rate. tau = 1/(kp * nominal), so the
-    // value IS the lag dial. Offline against take 294's real tick sequence
-    // (tests/servo_rate.cpp section 11):
+    // X4VR_HEADLOOK_RATEFIX is the TIME CONSTANT in milliseconds. kp_eff is
+    // dt/tau and the step ceiling is X4VR_HEADLOOK_MAXRATE * dt, so the loop
+    // answers in the same time however often it runs — and the two are
+    // INDEPENDENT, which take 295 is the reason for.
     //
-    //   nominal   tau ms   lag ms   overshoot
-    //       50      80.0     80.4        1.07   <- today's equivalent
-    //       70      57.1     60.4        1.64
-    //      100      40.0     50.4        2.44
-    //      140      28.6    137.4       62.59   <- UNSTABLE, tau under the
-    //                                              60 ms dead time; do not ask
-    //                                              for this in a take
+    // **Take 295 ran the coupled version and the frustum span.** One knob set
+    // both, so asking for tau 40 also took the slew from 600 to 1200 deg/s.
+    // ARM_B: steps of 32.77 deg against a ceiling of 12, lag 448-2072 ms
+    // against the control arm's 41-153, 39 of the run's 40
+    // saturated-with-head-centred commands, and 898 of its 901 read-back
+    // refusals.
+    //
+    // Swept offline in the SATURATING regime (servo_rate.cpp section 12), slew
+    // held at 600, against the measured 60 ms dead time:
+    //
+    //   tau ms   worst |cam| against an 85 limit
+    //      200         50.14   clean
+    //      140         71.88   clean
+    //      110         81.88   clean
+    //       80         92.35   SPINS   <- today's equivalent
+    //       40         96.49   SPINS
+    //
+    // So the safe direction is LONGER, not shorter. Do not ask a take for tau
+    // under 110 until the dead time itself is smaller.
     //
     // X4VR_HEADLOOK_RATEFIX_AB alternates it against OFF every N seconds, which
     // is the only honest control: the two arms then differ in this and nothing
@@ -2378,8 +2389,13 @@ void headlook_tick() {
         const char *e = getenv("X4VR_HEADLOOK_RATEFIX");
         return e && *e ? (float)atof(e) : 0.0f;
     }();
+    static const float maxrate = [] {
+        const char *e = getenv("X4VR_HEADLOOK_MAXRATE");
+        return e && *e ? (float)atof(e) : 600.0f;
+    }();
+    g_headlook.rate_fix_max_rate_deg_s = maxrate;
     if (ratefix > 0.0f)
-        g_headlook.rate_fix_nominal_hz = ratefix;
+        g_headlook.rate_fix_tau_ms = ratefix;
     static const double ratefix_ab = [] {
         const char *e = getenv("X4VR_HEADLOOK_RATEFIX_AB");
         return e && *e ? atof(e) : 0.0;
@@ -2389,24 +2405,21 @@ void headlook_tick() {
         const long phase = (long)((mono_seconds() - t0) / ratefix_ab);
         const bool on = (phase & 1) != 0;
         static long last_phase = -1;
-        g_headlook.rate_fix_nominal_hz = on ? ratefix : 0.0f;
+        g_headlook.rate_fix_tau_ms = on ? ratefix : 0.0f;
         g_ratefix_arm.store(on ? 1 : 0, std::memory_order_relaxed);
         if (phase != last_phase) {
             last_phase = phase;
-            X4VR_LOG("headlook: ratefix %s (nominal %.0f Hz, tau %.0f ms, "
+            X4VR_LOG("headlook: ratefix %s (tau %.0f ms, slew %.0f deg/s, "
                      "A/B phase %ld, %.0f s)",
                      on ? "ARM_B" : "control (off)", on ? ratefix : 0.0f,
-                     on && ratefix > 0.0f
-                         ? 1000.0f / (g_headlook.servo_kp * ratefix) : 0.0f,
-                     phase, ratefix_ab);
+                     maxrate, phase, ratefix_ab);
         }
     } else if (ratefix > 0.0f) {
         static const bool rf_once = [] {
-            X4VR_LOG("headlook: ratefix ON at %.0f Hz nominal, tau %.0f ms — "
+            X4VR_LOG("headlook: ratefix ON, tau %.0f ms, slew %.0f deg/s — "
                      "no A/B, so this run has no control arm",
-                     g_headlook.rate_fix_nominal_hz,
-                     1000.0f / (g_headlook.servo_kp *
-                                g_headlook.rate_fix_nominal_hz));
+                     g_headlook.rate_fix_tau_ms,
+                     g_headlook.rate_fix_max_rate_deg_s);
             return true;
         }();
         (void)rf_once;
@@ -3118,7 +3131,7 @@ void headlook_tick() {
     // the pairing the regression needs: error at the moment of observation.
     if (lag_log_enabled()) {
         X4VR_LOG("lagsample: arm=%d view=%s steer=%d cam=%d head=%.3f,%.3f "
-                 "x4=%.3f,%.3f kparm=%d kp=%.3f ylim=%.1f rfarm=%d rfhz=%.0f",
+                 "x4=%.3f,%.3f kparm=%d kp=%.3f ylim=%.1f rfarm=%d rftau=%.0f",
                  lead_armed ? 1 : 0, cockpit ? "cockpit" : "external",
                  steering ? 1 : 0, have_cam ? 1 : 0, yaw, pitch,
                  have_cam ? kRad2Deg * -r.yaw : 0.0f,
@@ -3126,7 +3139,7 @@ void headlook_tick() {
                  g_kp_arm.load(std::memory_order_relaxed), g_headlook.servo_kp,
                  g_headlook.yaw_limit_deg,
          g_ratefix_arm.load(std::memory_order_relaxed),
-         g_headlook.rate_fix_nominal_hz);
+         g_headlook.rate_fix_tau_ms);
     }
 
     // **Task #75: do WE send sparsely, or does X4 ignore what we send?**

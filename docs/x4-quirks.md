@@ -19870,3 +19870,102 @@ wrong and that is the finding, not a nuisance.
 checks the block recovers it (80/50, 80/80, 50/80 all recovered to the
 millisecond) and reaches all three of its verdicts — because a scorer only ever
 seen to print one of them is worth nothing, which is what take 294's kpab was.
+
+## Take 295 — the rate fix is REFUTED, and the defect was mine
+
+Patola: *"the spinning frustum came up again ... the glitching and jittering is
+still intolerable for gameplay; I am only tolerating it because these are
+measurement runs."*
+
+    rfab   control (off)     5    122  48  153  52  41      ms of lag
+    rfab   ARM_B @100Hz      4     564  448  2072  831
+    rfab   => SEPARATED THE WRONG WAY — every ARM_B phase is worse.
+    rfab   read-back guard: 901 refusal(s), 56 resync(s)
+
+Everything localises to ARM_B: **898 of 901 refusals, all 56 resyncs, and 39 of
+the run's 40 saturated-with-head-centred commands.** Commanded step p99 was 7.71
+deg in the control arm and 29.33 in ARM_B, max 32.77 against a design ceiling of
+12. P295.3 said a log full of REFUSED means the threshold is wrong and that is
+the finding; it was, twice over.
+
+### Cause 1: one knob was doing two jobs
+
+`nominal_hz` set BOTH the gain and the step ceiling, because I derived both from
+the same scale factor. So asking for tau 40 ms also doubled the slew:
+
+    nominal  50   dt 40 ms   kp_eff 0.500   max_step_eff 24.0 =  600 deg/s
+    nominal 100   dt 40 ms   kp_eff 0.600   max_step_eff 48.0 = 1200 deg/s
+
+[[vary-them-independently]], inside the fix built to settle a question that
+memory had already been written about. They are separate parameters now:
+`rate_fix_tau_ms` and `rate_fix_max_rate_deg_s`, and `X4VR_HEADLOOK_MAXRATE`
+is its own knob.
+
+### Cause 2: the guard was calibrated against a constant the code stopped using
+
+`observe_max_jump_deg` was a fixed 36 = 3 * `max_step_deg`. The rate fix scaled
+the step to 48, so the guard spent ARM_B refusing **honest** read-backs: the
+servo held a stale belief, the error grew, the next step was larger, refuse
+again. 56 times the budget ran out and it resynchronised. head_look_step now
+keeps the threshold at 3 * the step ceiling actually in force.
+
+### Cause 3: the offline test could not see either, and I knew better
+
+Section 11 drove a smooth 0.35 Hz sweep whose error never reached
+`max_step/kp`, so **the step never saturated and the ceiling was never
+exercised at all**. A step-ceiling bug cannot appear in a test that never
+reaches the ceiling. [[test-the-fix-where-it-can-act]], which is in memory and
+says exactly this.
+
+Section 12 now drives 1.4 Hz at +-70 deg (~615 deg/s, a real snap-glance) and
+reproduces it offline:
+
+                             worst step   slew deg/s  worst |cam|
+           today (fix off)        11.96          997        81.42
+       295 ARM_B (coupled)        20.24         1198        90.85
+          tau 40, slew 600        24.04          604        96.49
+
+### And the second correction failed too — which is the real finding
+
+Separating the knobs does NOT rescue tau 40. Sweeping tau in the saturating
+regime with the slew held at 600, against the measured 60 ms dead time:
+
+    tau ms   worst |cam| against an 85 deg limit
+       200         50.14   clean
+       140         71.88   clean
+       110         81.88   clean
+        80         92.35   SPINS    <- TODAY'S EQUIVALENT
+        60         95.45   SPINS
+        40         96.49   SPINS
+
+**Today's setting is already on the unstable side of the margin for fast head
+motion.** A proportional loop with transport delay is stable only while its time
+constant stays comfortably above the dead time, and 80 ms against 60 ms is not
+comfortable. That is why the episodes are intermittent: the same constants are
+fine for the gentle motion of section 11 and unstable for a snap-glance.
+
+So **the safe direction is a LONGER tau, not a shorter one — more lag, not
+less** — and P295.1's whole premise was backwards. Lag and spinning are one
+knob pulled in opposite directions, and there is no setting of it that gives
+Patola both.
+
+### What this redirects the work to
+
+Every row of that table is against a **60 ms dead time**, and tau must clear it
+by roughly 2x. Halve the dead time and tau 55 ms becomes as safe as 110 is now —
+that is the only way to buy lag back without buying spin.
+
+The dead time is our tick period (19.9 ms mean, wandering 9-56) plus X4's own
+input-to-camera share (20-30 ms, take 291) plus queueing. **The part we own is
+the tick, and it is the larger part.** The servo iterates at 42-52 Hz because a
+tick happens only when a drain poll finds a new pose, while the layer publishes
+at 89.7 Hz — so roughly half the available rate is being left on the floor by
+`if (!fresh) return;`, not by anything X4 does.
+
+`X4VR_TICK_HZ` tried exactly this and made it worse, by moving the tick onto our
+own thread and adding ~17 ms of queue — more dead time, which this table now
+explains as the reason it spun. The untried option is to keep the tick on X4's
+drain and remove only the freshness gate, or floor it on time.
+
+**Not attempted in a take until it is measured offline in the saturating
+regime**, which is the mistake this section exists to record.

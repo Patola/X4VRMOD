@@ -43,7 +43,7 @@ for ph in range(6):
         cam += rng.gauss(0, 0.02)
         out.append(f"[ {t:12.3f}] inject  lagsample: arm=1 view=cockpit steer=1 "
                    f"cam=1 head={head:.3f},0.000 x4={cam:.3f},0.000 kparm=0 "
-                   f"kp=0.250 ylim=85.0 rfarm={arm} rfhz=100")
+                   f"kp=0.250 ylim=85.0 rfarm={arm} rftau=110")
 open(path, "w").write(open(base, errors="replace").read() + "\n".join(out) + "\n")
 PY
 }

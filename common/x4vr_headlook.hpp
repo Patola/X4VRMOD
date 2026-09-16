@@ -275,11 +275,30 @@ struct HeadLook {
     // measure the wander and nothing else.
     //
     // 0 disables it, and that is the default until a take says otherwise.
-    float rate_fix_nominal_hz = 0.0f;
+    //
+    // **TAKE 295: one knob was doing two jobs, and that is what broke it.**
+    // The first version derived BOTH the gain and the step ceiling from a single
+    // `nominal_hz`, so raising it to halve the time constant also doubled the
+    // slew ceiling, 600 -> 1200 deg/s, and with it the overshoot, 18 -> 36 deg:
+    //
+    //   nominal 50   dt 40 ms   kp_eff 0.500   max_step_eff 24.0 =  600 deg/s
+    //   nominal 100  dt 40 ms   kp_eff 0.600   max_step_eff 48.0 = 1200 deg/s
+    //
+    // Take 295's ARM_B commanded steps of 32.77 deg against a design ceiling of
+    // 12, lag went to 448-2072 ms against a control arm's 41-153, and Patola saw
+    // the frustum spinning again. 39 of the run's 40 saturated-with-head-centred
+    // commands were in ARM_B, and 898 of its 901 read-back refusals.
+    // [[vary-them-independently]] -- inside my own fix.
+    //
+    // So the two are separate now. tau sets how fast the loop answers; max_rate
+    // bounds how fast the camera may be driven; neither moves when the other is
+    // set. Defaults reproduce today exactly: tau = 1/(0.25*50) = 80 ms, and
+    // 12 deg per 20 ms tick = 600 deg/s.
+    float rate_fix_tau_ms = 0.0f;          // 0 disables the whole fix
+    float rate_fix_max_rate_deg_s = 600.0f;
     // kp_eff must stay well under 1 whatever dt does -- kp 1.0 is take 136, the
-    // screen spinning too fast to read. A 56 ms tick against a 50 Hz nominal
-    // asks for 0.25 * 2.8 = 0.70, so this ceiling is reached in real runs and
-    // is not decoration.
+    // screen spinning too fast to read. A 56 ms tick against an 80 ms tau asks
+    // for 0.70, so this ceiling is reached in real runs and is not decoration.
     float rate_fix_kp_max = 0.60f;
 
     // **Both negative, and take 126 is why.** head_angles() reports +yaw as
@@ -321,6 +340,14 @@ struct HeadLook {
     // and the in-flight depth is what sets it. 3 ticks is take 291's measured
     // dead time, so 3 * max_step = 36 deg is the furthest an honest reading can
     // be from the last honest one.
+    //
+    // **Take 295: this must track the step the servo can ACTUALLY take.** The
+    // rate fix scaled max_step to 48 deg while this stayed at 36, so the guard
+    // spent the run refusing HONEST read-backs -- 898 refusals and 56 resyncs,
+    // all in the scaled arm. The servo then held a stale belief, the error grew,
+    // the next step was larger, and it refused again. A guard calibrated against
+    // a constant the code no longer uses is worse than no guard.
+    // head_look_step keeps this up to date; see rate_fix_tau_ms.
     float observe_max_jump_deg = 36.0f; // 0 disables the guard entirely
 
     // **A guard that can never yield is worse than the glitch.** If X4 really
@@ -421,10 +448,13 @@ inline Delta head_look_step(HeadLook &s, const HeadAngles &head,
     // tick rate: the time constant, the slew in deg/s and the overshoot in
     // degrees all stop depending on how often we happen to run.
     float kp_eff = s.servo_kp, max_step_eff = s.max_step_deg;
-    if (s.rate_fix_nominal_hz > 0.0f && dt_s > 0.0f) {
-        const float scale = clampf(dt_s * s.rate_fix_nominal_hz, 0.05f, 4.0f);
-        kp_eff = std::fmin(s.servo_kp * scale, s.rate_fix_kp_max);
-        max_step_eff = s.max_step_deg * scale;
+    if (s.rate_fix_tau_ms > 0.0f && dt_s > 0.0f) {
+        // kp = dt/tau is the discrete gain of a first-order lag with time
+        // constant tau, so the loop answers in the same TIME however often it
+        // runs. The ceiling is a SLEW: degrees per second, times the seconds
+        // this tick covers.
+        kp_eff = std::fmin(dt_s * 1000.0f / s.rate_fix_tau_ms, s.rate_fix_kp_max);
+        max_step_eff = s.rate_fix_max_rate_deg_s * dt_s;
     }
 
     // **#73's lead: aim where the head will be, not where it is.**
@@ -517,6 +547,12 @@ inline Delta head_look_step(HeadLook &s, const HeadAngles &head,
                                 s.gain_deg_per_count);
     if (std::fabs(err_pitch) >= s.dead_zone_deg)
         d.dy = (int)std::lround(s.sign_pitch * step_pitch / gp);
+
+    // **Keep the read-back guard calibrated against the step actually in use.**
+    // Not a tuning: it is 3 dead-time ticks of whatever ceiling this tick ran
+    // with, which is the same derivation as the constant it replaces.
+    if (s.observe_max_jump_deg > 0.0f)
+        s.observe_max_jump_deg = std::fmax(3.0f * max_step_eff, 12.0f);
 
     // Integrate what was SENT. Rounding to whole counts leaves a residue, and
     // folding the *wanted* angle in here instead would accumulate it forever.
