@@ -1093,6 +1093,8 @@ struct PumpRate {
     uint64_t updates_mark = 0, updates_last = 0;
     // Ticks the freshness gate would have refused; 0 unless X4VR_HEADLOOK_UNGATED.
     uint64_t ungated_ticks = 0;
+    // Every tick that reached the servo, whatever let it through.
+    uint64_t acted = 0;
     bool have_updates = false;
     // Cumulative values as of the last emitted line, so each line reports its
     // own window.
@@ -2737,19 +2739,41 @@ void headlook_tick() {
         }
     }
     g_ungate_arm.store(ungated ? 1 : 0, std::memory_order_relaxed);
+    // **The floor is measured from the last tick of ANY kind.** Measuring it
+    // from the last UNGATED tick, which is what this did first, does not bound
+    // the rate at all: a fresh tick followed 2 ms later by a stale one would
+    // both run, and the cap it exists to enforce would be advisory. The whole
+    // point of the floor is that take 295 measured X4's drain spiking to
+    // 325 Hz.
+    static double last_tick_s = 0.0;
+    const double now_s = mono_seconds();
     if (!fresh) {
         if (!ungated)
             return; // nothing new to act on; acting anyway is what take 119 did
         // Ungated: act on the LATEST pose even though it has not changed. For a
         // proportional servo that is simply another correction toward the same
         // target, not a double-count — the error shrinks each time.
-        static double last_ungated_s = 0.0;
-        const double now_s = mono_seconds();
-        if (now_s - last_ungated_s < ungate_ms * 0.001)
+        if (now_s - last_tick_s < ungate_ms * 0.001)
             return; // the floor
-        last_ungated_s = now_s;
         g_pumprate.ungated_ticks++;
+    } else if (ungated && now_s - last_tick_s < ungate_ms * 0.001) {
+        // A FRESH pose arriving inside the floor is dropped too: the cap is on
+        // how often the servo may ACT, not on which kind of tick it acts from.
+        //
+        // Note this DOES consume the freshness — `last_updates = updates` ran
+        // above — so the next entry will see the pose as stale. That costs
+        // nothing here and only here: in the ungated arm the next tick runs
+        // anyway once the floor expires, and reads the same latest pose. The
+        // branch is unreachable when gated, which is the only regime where
+        // consuming it would matter.
+        return;
     }
+    last_tick_s = now_s;
+    // **Count what the servo actually DID.** `fresh` counts poses seen, and
+    // with ungating on that is no longer the iteration count — the scorer's
+    // "the servo ITERATES at fresh Hz" line would be false by a factor of two
+    // in exactly the arm being measured.
+    g_pumprate.acted++;
 
     // Observed BEFORE the step, so the servo acts on this frame's reading.
     // It used to run after, which cost a frame of lag for no reason.
@@ -3630,11 +3654,12 @@ void pumprate_report() {
 
     X4VR_LOG("pumprate: %.2f s | pump %.1f Hz peep %.1f Hz wait %.1f Hz | "
              "tick entered %.1f Hz, nopose %llu, fresh %.1f Hz, skipped %.1f Hz "
-             "| layer published %.1f Hz | acted on %.1f%% of published | "
-             "driver=%s tick=%s",
+             "| layer published %.1f Hz | acted %.1f Hz (ungated %llu) | "
+             "acted on %.1f%% of published | driver=%s tick=%s",
              dt, hz(pump), hz(peep), hz(wait), hz(g_pumprate.entered),
              (unsigned long long)g_pumprate.nopose, hz(g_pumprate.fresh),
-             hz(g_pumprate.skipped), hz(published),
+             hz(g_pumprate.skipped), hz(published), hz(g_pumprate.acted),
+             (unsigned long long)g_pumprate.ungated_ticks,
              published ? 100.0 * (double)g_pumprate.fresh / (double)published
                        : 0.0,
              g_pump_seen.load(std::memory_order_relaxed) ? "pump" : "peep",
@@ -3686,6 +3711,7 @@ void pumprate_report() {
 
     g_pumprate.entered = g_pumprate.nopose = 0;
     g_pumprate.fresh = g_pumprate.skipped = 0;
+    g_pumprate.acted = g_pumprate.ungated_ticks = 0;
     // The mark carries forward so the next window's baseline is this window's
     // last reading, with no gap between them. `have_updates` stays set unless
     // nothing was ever read.

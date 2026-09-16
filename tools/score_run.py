@@ -2784,6 +2784,10 @@ def main(path):
         r"(?P<peep>[\d.]+) Hz wait (?P<wait>[\d.]+) Hz \| tick entered "
         r"(?P<ent>[\d.]+) Hz, nopose (?P<nopose>\d+), fresh (?P<fresh>[\d.]+) Hz,"
         r" skipped (?P<skip>[\d.]+) Hz \| layer published (?P<pub>[\d.]+) Hz \| "
+        # OPTIONAL: present only once X4VR_HEADLOOK_UNGATED existed. Making it
+        # mandatory would silently unscore every take up to 295 — the same
+        # break the rfab control suite caught when `ugarm` went in strictly.
+        r"(?:acted (?P<actedhz>[\d.]+) Hz \(ungated (?P<ung>\d+)\) \| )?"
         r"acted on (?P<acted>[\d.]+)% of published \| driver=(?P<driver>\w+)"
         r"(?: tick=(?P<tick>\S+))?", text)]
     if pr:
@@ -2930,12 +2934,26 @@ def main(path):
             # loop iterations, and the lag of a proportional servo is
             # (1/kp - 1) * tick_period, so halving the iteration rate doubles
             # the lag. That is the defect, and it is a real one.
-            print(f"pumprate   => the servo ITERATES at {fresh:.1f} Hz. "
-                  f"{driver} runs at {drv:.1f} Hz and the layer publishes at "
-                  f"{pub:.1f}, but `fresh` is an indicator, not a count: "
-                  f"publishes arriving between two polls collapse into one. So "
-                  f"the {acted:.1f}% is NOT lost poses — every iteration reads "
-                  f"the latest pose — it is lost ITERATIONS.")
+            # `acted` is logged from the branch the code took, so prefer it:
+            # with X4VR_HEADLOOK_UNGATED on, `fresh` is no longer the iteration
+            # count and this line would be wrong by 2x in the arm being measured.
+            acted_hz = None
+            if any(g.get("actedhz") for g in pr):
+                tot = sum(float(g["actedhz"]) * float(g["dt"])
+                          for g in pr if g.get("actedhz"))
+                span = sum(float(g["dt"]) for g in pr if g.get("actedhz"))
+                acted_hz = tot / span if span else None
+            if acted_hz and abs(acted_hz - fresh) > 0.05 * max(fresh, 1.0):
+                print(f"pumprate   => the servo ITERATES at {acted_hz:.1f} Hz, "
+                      f"NOT the {fresh:.1f} Hz `fresh` reports — ungating is on, "
+                      f"so stale poses are being acted on too. Read `ugab`.")
+            else:
+                print(f"pumprate   => the servo ITERATES at {fresh:.1f} Hz. "
+                      f"{driver} runs at {drv:.1f} Hz and the layer publishes "
+                      f"at {pub:.1f}, but `fresh` is an indicator, not a count: "
+                      f"publishes arriving between two polls collapse into one. "
+                      f"So the {acted:.1f}% is NOT lost poses — every iteration "
+                      f"reads the latest pose — it is lost ITERATIONS.")
             print(f"pumprate   => lag of a proportional servo is "
                   f"(1/kp - 1) * tick_period, so the iteration rate is the "
                   f"lever: at {fresh:.1f} Hz that is "
