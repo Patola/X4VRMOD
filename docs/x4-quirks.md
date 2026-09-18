@@ -20035,3 +20035,74 @@ checks all three verdicts are reachable in both. Writing the new field into the
 regex strictly broke take 295's own parse (it logs `rfhz=`, before the knob was
 split, and no `ugarm=` at all); the control suite caught it on the first run, and
 the pattern now accepts both spellings and a missing field.
+
+## Take 297 — the ghosting is NOT in what we build
+
+Patola recorded the monitor during a normal run and reported double/triple
+images in the headset at 0:33-0:38, 1:05-1:16 and after 1:22, **absent from the
+recording**. The recording turned out to contain the full side-by-side
+composite letterboxed onto his 3440x1440 monitor, so both eyes are in it and the
+stereo could be measured directly — no new run needed.
+
+### Each eye is individually clean
+
+A 3x magnification of one eye at 1:10, in the region he flagged: sharp station,
+sharp cockpit strut, no doubling, no smear, no trailing. Whatever he is seeing
+is not in the pixels we hand over.
+
+### My first hypothesis was wrong, and the measurement says so
+
+`X4VR_POSE=0` with `X4VR_ROLL_STEREO=1` has been printing as FAIL in the scorer
+on EVERY take — 294, 295, 296b, 297 — and I read past it every time
+([[read-the-existing-report-first]], fourth instance this task). Roll
+compensation armed against a dead pose channel sends disparity VERTICAL under
+head tilt, which is the classic fusion killer, so it looked like the answer.
+
+Measured instead, by bounded normalised cross-correlation over a tile grid
+(bounded because the first phase-correlation version wrapped at +-tile/2 and
+reported its own failures as +-60 px — [[state-the-instrument-range]]):
+
+    frame   VERTICAL |dy|            horizontal dx
+    0:05    p50 0.00  p90 0.36 deg   p10 -3.02  p50 -1.39 deg
+    0:35    p50 0.00  p90 0.24 deg   p10 -2.54  p50 -1.39 deg
+    1:10    p50 0.00  p90 0.42 deg   p10 -2.84  p50 -1.15 deg
+
+Vertical disparity is **zero at the median** and only 5-11 tiles of ~120 exceed
+0.5 deg. The ROLL_STEREO defect is real and still unfixed, but it is **not** what
+Patola is seeing. Horizontal disparity of 3.0 deg at a 64 mm IPD implies an
+object at ~1.2 m, which is a plausible cockpit console — the stereo geometry is
+broadly sane.
+
+### And "triple" does not fit a fusion failure at all
+
+Binocular disparity produces exactly TWO images. Three means a temporal
+mechanism, not a geometric one.
+
+### What the run does establish
+
+The defect is introduced **downstream of the composite**. Two facts about that
+path, neither yet a conclusion:
+
+**WiVRn is a STREAMING runtime.** At `X4VR_RES=2816x2816` per eye, two eyes,
+90 Hz, it is being handed **1.43 Gpixel/s — 2.9x a 4K60 stream** — to video
+encode and ship to the headset. Encoder starvation at that load produces exactly
+this class of artifact and is invisible to a local screen capture by
+construction.
+
+**This run ran at 57 fps against a 90 Hz headset** (17.68 ms, range
+11.46-40.56). But `gpu-screen-recorder` was running, and take 294 without it read
+10.29 ms / 97 fps — so the recording cost roughly 40% of the frame rate and
+**this run's fps is not representative**. [[price-the-instrument]]. The repeat
+rate in a normal run is a different and unmeasured number; the `blits` against
+`submitted` ratio is NOT it either, because 294 reads 71% at 97 fps where a
+simple repeat count would read ~0, so that counter's semantics are not what I
+assumed.
+
+### The decisive test is Patola's, and it is elimination not instrumentation
+
+Switching to **SteamVR** changes the runtime, the compositor and — if wired —
+removes video streaming entirely. If the artifact vanishes or changes character
+it is the runtime path; if it is identical it is ours. Second knob in the same
+direction: **halve `X4VR_RES`**. If it is encode bandwidth the artifact should
+fall sharply; if it is unchanged, bandwidth is not it.
+[[x4vr-eliminate-dont-instrument]].
