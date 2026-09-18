@@ -20144,11 +20144,36 @@ re-entry. `runtime_open` is simply called again.
 It falls back to `/proc/self/exe`, and SteamVR's client runs inside X4's own
 process, so the executable is X4 for both. Only re-entrancy distinguishes them.
 
-### The fix
+### The fix — FIRST ATTEMPT, take 299, WRONG PLACE
 
-A thread-local depth guard with RAII release in `vr_open_runtime()`. The inner
-call returns false, so SteamVR's own instance is created without our merged
-extensions — which is correct, they are the extensions X4's instance needs.
+A thread-local depth guard in `vr_open_runtime()`. **It never fired.** Take 299
+crashed identically and the log had zero guard messages.
+
+`vr_open_runtime()` opens with `if (g_vrs.rt.ok()) return true;` and by the time
+the re-entrant call arrives the runtime IS open — the log proves it, printing the
+runtime name, the system, both view configurations and the Vulkan requirements
+before the crash. So the early-out short-circuits and the depth check below it is
+never reached.
+
+**The recursion was never in opening the runtime.** It is in what
+`x4vr_CreateInstance` does *afterwards*: `vk_instance_extensions()` asks the
+runtime what X4's instance needs, and SteamVR answers by calling
+`vkEnumerateInstanceExtensionProperties` and `vkCreateInstance` itself. The full
+backtrace is **6521 frames, 469 of them ours** — `bt 14` had truncated it, which
+is why the second attempt looked shallow and I briefly believed it fixed.
+
+### The fix — SECOND ATTEMPT, around the whole block
+
+The guard belongs in `x4vr_CreateInstance`, wrapping everything from the runtime
+open through the merge, not around the open alone. On re-entry: no query, no
+merge, chain straight through.
+
+Checked by modelling the nesting rather than by reasoning about it: under an
+out-of-process runtime depth never exceeds 1, under an in-process one it reaches
+2 and returns, and **in both cases X4's instance is merged exactly once** and the
+depth unwinds to zero. That is the property that matters — a guard that stopped
+the recursion by also skipping the real merge would start X4 flat and look like a
+success.
 
 **Not verified by a run yet.** It is reasoned from the backtrace, and it cannot
 be exercised without an in-process runtime; the next take is its test. Two things

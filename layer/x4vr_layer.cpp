@@ -12283,23 +12283,13 @@ bool vr_open_runtime() {
     // The inner call returns false, which means SteamVR's own instance is
     // created without our merged extensions. That is correct -- they are the
     // extensions X4's instance needs, not SteamVR's.
-    static thread_local int depth = 0;
-    if (depth > 0) {
-        static bool said = false;
-        if (!said) {
-            said = true;
-            X4VR_LOG("vr: re-entered while the runtime was still opening — "
-                     "this runtime creates a Vulkan instance of its own from "
-                     "inside xrCreateInstance. Passing the inner instance "
-                     "through untouched; the outer one still gets the merge.");
-        }
-        return false;
-    }
-    struct Depth {
-        int &d;
-        explicit Depth(int &v) : d(v) { d++; }
-        ~Depth() { d--; }
-    } guard(depth);
+    // **The guard for this lives in x4vr_CreateInstance, not here.** Take 299
+    // put it here and it was bypassed: `rt.ok()` above returns true on the
+    // re-entrant call, because the FIRST call had already finished opening the
+    // runtime — the log shows the name, the system and the view config before
+    // the crash. The recursion is not in opening the runtime, it is in
+    // everything x4vr_CreateInstance does with it afterwards. 6521 frames, 469
+    // of them ours.
 
     X4VR_LOG("vr: X4VR_VR=1 — bringing the runtime up ahead of X4's instance");
     if (!x4vr::xr::runtime_open(g_vrs.rt, vr_say, nullptr)) {
@@ -13855,7 +13845,41 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateInstance(
     VkInstanceCreateInfo vr_ci{};
     std::vector<std::string> vr_ext_store;
     std::vector<const char *> vr_ext_names;
-    if (target && vr_open_runtime()) {
+
+    // **RE-ENTRANCY, and it has to be HERE — around everything, not around the
+    // runtime open.** Takes 298 and 299 both died to this.
+    //
+    // We ask the runtime what X4's instance needs, from inside X4's
+    // vkCreateInstance, because the answer has to be merged into the create-info
+    // before the instance exists. WiVRn is out of process and answers without
+    // touching Vulkan. SteamVR's vrclient.so answers by calling
+    // vkEnumerateInstanceExtensionProperties and vkCreateInstance itself — from
+    // inside our call — so the loader runs the layer chain again and we are
+    // re-entered.
+    //
+    // Take 299 guarded vr_open_runtime() and the guard never fired: by then the
+    // runtime was already open, `rt.ok()` short-circuits, and the recursion is
+    // in vk_instance_extensions() below rather than in the open. 6521 frames.
+    //
+    // On re-entry: no query, no merge, just chain through. SteamVR's own
+    // instance is built from its own struct, which is what it should be.
+    static thread_local int vr_depth = 0;
+    struct VrDepth {
+        int &d;
+        explicit VrDepth(int &v) : d(v) { d++; }
+        ~VrDepth() { d--; }
+    } vr_guard(vr_depth);
+    if (vr_depth > 1) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            X4VR_LOG("vr: re-entered vkCreateInstance from inside our own — "
+                     "this runtime does Vulkan work while answering what X4's "
+                     "instance needs. Passing the inner instance through "
+                     "untouched; X4's own still gets the merge.");
+        }
+    }
+    if (vr_depth == 1 && target && vr_open_runtime()) {
         std::vector<std::string> need;
         if (x4vr::xr::vk_instance_extensions(g_vrs.rt, need)) {
             vr_ci = *ci;
