@@ -1340,6 +1340,29 @@ def main(path):
             frames, located = int(frames), int(located)
             submitted = int(submitted)
             span = (float(sx_), float(sy_), float(sz_))
+            # **Did the run get the runtime it ASKED for?**
+            #
+            # XR_RUNTIME_JSON is how a take selects one, and a value that never
+            # reaches the process leaves the default in place — silently, and
+            # with every number below still looking healthy. Take 296 spent a
+            # whole run that way on a different variable.
+            _rj = re.search(r"XR_RUNTIME_JSON=(\S+)", text)
+            if _rj:
+                _want = _rj.group(1).lower()
+                _got = (rt_name or "").lower()
+                _key = ("steam" if "steamxr" in _want or "steamvr" in _want
+                        else "wivrn" if "wivrn" in _want
+                        else "monado" if "monado" in _want else None)
+                if _key and _key not in _got:
+                    print(f"vr  !! RUNTIME MISMATCH — the run asked for "
+                          f"{_rj.group(1)} but the session came up on "
+                          f"\"{rt_name}\". The variable did not reach the "
+                          f"process, so this run is NOT the A/B it was "
+                          f"specified as. Nothing below speaks to the runtime "
+                          f"question.")
+                elif _key:
+                    print(f"vr  runtime override honoured — asked for {_key}, "
+                          f"got \"{rt_name}\"")
             print(f"vr  runtime \"{rt_name}\" session={session} "
                   f"focused={focused} frames={frames} located={located} "
                   f"submitted={submitted}")
