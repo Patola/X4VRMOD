@@ -125,6 +125,13 @@ add_executable(x4vr_test_inputmap inputmap.cpp)
 # Self-checking like view_math: no runner script.
 add_executable(x4vr_test_headlook headlook.cpp)
 
+# The SHAPE of #36's queue lock, against the ABBA deadlock takes 298-301 hit
+# under SteamVR. Threads only -- no Vulkan, no runtime -- so it runs anywhere
+# and its negative control (the old nesting must deadlock) is deterministic.
+add_executable(x4vr_test_queue_lock queue_lock.cpp)
+find_package(Threads REQUIRED)
+target_link_libraries(x4vr_test_queue_lock PRIVATE Threads::Threads)
+
 # Task #75: the staleness matcher, driven against series whose lag is known by
 # construction. Uses common/x4vr_camring.hpp itself, not a copy, so a change to
 # the matcher cannot pass here and fail in the injector.

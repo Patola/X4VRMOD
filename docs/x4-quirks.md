@@ -20311,9 +20311,43 @@ synchronisation of `vkQueueSubmit` is the application's job. So the fix has to
 keep two submissions apart while not holding our mutex across a runtime call —
 those are in tension and it needs design, not a patch.
 
-**Not attempted here.** Take 295 is what happens when a fix is designed and
-shipped in one step ([[hypothesis-and-fix-in-one-step]]); this one is worth
-doing properly.
+### The fix, and why it costs the serialisation nothing
+
+**Narrow the lock to the queue operations and never hold it across a call into
+the runtime.** The tension above dissolves once ordering and exclusion are
+separated:
+
+* **Ordering** — the release must follow the composite's submit — is program
+  order on X4's present thread. It never needed a mutex, and the old comment
+  said so while keeping it inside the scope anyway.
+* **Exclusion** — two threads must not submit to one queue at once — is provided
+  by locking each queue operation individually. Every path is covered:
+  `g_sbs.composite()` submits through the dispatch table and now takes it;
+  `d->QueuePresentKHR()` now takes it; and the runtime's own `vkQueueSubmit`
+  arrives through `x4vr_QueueSubmit`, which already took it. Nothing is left
+  unserialised.
+
+Checked before touching anything: the ONLY global the XR thread and the present
+hook share is `g_camstamp`, and `CamStamp` is entirely `std::atomic`. So the
+mutex was providing no exclusion that anything depended on.
+
+`tests/queue_lock.cpp` tests the SHAPE rather than the arithmetic, and its
+negative control is the part that earns it — **the old nesting must deadlock**,
+and it does, deterministically, via a rendezvous so both threads hold their
+first lock before either reaches for its second. Then the new shape survives 20
+rounds, and a third case confirms 4000 submits across two threads still take
+exclusive turns.
+
+WiVRn is unaffected: the lock is held strictly less, the serialisation is
+identical, and out-of-process submits were never under it.
+
+### Also removed: the line that cost an hour
+
+`vr: submitting NO layers this run by design` was unconditional and false — take
+297 printed it and submitted 35297 layers. Milestone-A wording that outlived its
+branch, and it sent me looking for a mode that does not exist during the take-300
+diagnosis. Deleted rather than made conditional.
+[[stale-comment-is-misinformation]].
 
 ### Also settled, and it retires a proposed take
 

@@ -11524,7 +11524,31 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     if (g_sbs_enabled && g_active && pi->swapchainCount == 1)
         vr_blit = vr_begin_blit(pi->pSwapchains[0]);
 
-    VrQueueLock qlock;
+    // **NOT locked here any more. Takes 298-301 hung X4 under SteamVR.**
+    //
+    // `VrQueueLock qlock;` used to live here, at the top of this 557-line
+    // function, and be held to the end -- so xrReleaseSwapchainImage was called
+    // underneath it. A live gdb on the wedged process gave the whole cycle:
+    // X4's present thread held THIS lock and blocked on a SteamVR mutex inside
+    // that release, while our XR thread held that SteamVR mutex inside
+    // xrEndFrame and blocked on THIS lock inside x4vr_QueueSubmit. ABBA across
+    // a library boundary, neither side able to see the other's mutex.
+    //
+    // The comment above the old lock already knew: "The release does not [belong
+    // under this lock] either, but it must follow the composite's submit, so it
+    // stays below." That is an ORDERING requirement, and ordering on one thread
+    // is program order -- it never needed a mutex. Keeping it inside the
+    // exclusion scope conflated the two and is what deadlocked.
+    //
+    // So the lock now wraps the queue operations and nothing else. Every path
+    // that touches the queue takes it: the composite below (which submits
+    // through the dispatch table, bypassing our own hook), the present at the
+    // end, and the runtime's own vkQueueSubmit -- which arrives through
+    // x4vr_QueueSubmit and locks there. Serialisation is unchanged; what is
+    // gone is holding it across a call into the runtime.
+    //
+    // Verified as a SHAPE in tests/queue_lock.cpp, whose negative control is
+    // that the old nesting really does deadlock.
     if (g_active) {
         static bool once = false;
         if (!once) {
@@ -11738,6 +11762,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     uint32_t family = 0;
     if (g_sbs_enabled && g_active && pi->swapchainCount == 1) {
         if (queue_family_of(queue, family)) {
+            // SbsCompositor submits via fns_.QueueSubmit -- the dispatch table,
+            // not our hook -- so this is the one submit that would otherwise
+            // go unserialised.
+            VrQueueLock qlock;
             composited = g_sbs.composite(
                 queue, family, pi->pSwapchains[0], pi->pImageIndices[0],
                 pi->pWaitSemaphores, pi->waitSemaphoreCount,
@@ -11763,16 +11791,22 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
         vr_finish_blit();
 
     VkResult r;
-    if (composited != VK_NULL_HANDLE) {
-        // Our submit already waits on X4's semaphores, so the present now
-        // waits only on ours -- waiting on both would deadlock, since a
-        // binary semaphore can only be consumed once.
-        VkPresentInfoKHR sbs_pi = *pi;
-        sbs_pi.waitSemaphoreCount = 1;
-        sbs_pi.pWaitSemaphores = &composited;
-        r = d->QueuePresentKHR(queue, &sbs_pi);
-    } else {
-        r = d->QueuePresentKHR(queue, pi);
+    {
+        // vkQueuePresentKHR is a queue operation and wants the same external
+        // synchronisation vkQueueSubmit does. Taken HERE, after the release
+        // above rather than around it.
+        VrQueueLock qlock;
+        if (composited != VK_NULL_HANDLE) {
+            // Our submit already waits on X4's semaphores, so the present now
+            // waits only on ours -- waiting on both would deadlock, since a
+            // binary semaphore can only be consumed once.
+            VkPresentInfoKHR sbs_pi = *pi;
+            sbs_pi.waitSemaphoreCount = 1;
+            sbs_pi.pWaitSemaphores = &composited;
+            r = d->QueuePresentKHR(queue, &sbs_pi);
+        } else {
+            r = d->QueuePresentKHR(queue, pi);
+        }
     }
 
     // Read it back after the present has been chained down, so the wait costs
@@ -13720,8 +13754,6 @@ void vr_session_thread() {
              g_vrs.queue_family, g_vrs.queue_index,
              g_vrs.session.space_type == XR_REFERENCE_SPACE_TYPE_STAGE
                  ? "STAGE" : "LOCAL");
-    X4VR_LOG("vr: submitting NO layers this run by design — the headset will "
-             "show the runtime's own idle scene, not X4");
     g_vrs.session_ok.store(true);
     vr_thread();
 }
