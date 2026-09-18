@@ -403,6 +403,38 @@ else
     export X4VR_LOG
 fi
 
+# **A run must never destroy the previous run's data.**
+#
+# Take 296 was launched with take 295's command line -- the new env never
+# reached the process -- so it wrote 48 MB over /tmp/x4vr-take295.log and the
+# rate-fix refutation's raw log is gone. Per-run filenames were already the
+# rule; they do not help when the filename is the previous run's.
+#
+# So the check is on the FILE, not on the variable: if the destination already
+# exists it is moved aside with a numeric suffix and the move is announced.
+# Nothing is ever silently overwritten, and nothing is ever refused -- a run
+# Patola has already put the headset on for must not die on a filename.
+if [[ -n "${X4VR_LOG:-}" && -e "$X4VR_LOG" ]]; then
+    n=1
+    while [[ -e "$X4VR_LOG.prev$n" ]]; do n=$((n + 1)); done
+    mv -- "$X4VR_LOG" "$X4VR_LOG.prev$n"
+    echo "x4vr-launch: $X4VR_LOG existed — kept as $X4VR_LOG.prev$n" >&2
+    echo "x4vr-launch: if you did not mean to reuse that name, this run is" \
+         "probably the PREVIOUS take's command line. Check X4VR_TAKE below." >&2
+fi
+
+# And the independent tell: the label and the filename disagreeing means the
+# command line was assembled from two different takes. Cheap, and it is the
+# exact signature of what happened to 296.
+if [[ -n "${X4VR_TAKE:-}" && -n "${X4VR_LOG:-}" ]]; then
+    _tk="${X4VR_TAKE%%-*}"
+    if [[ "$X4VR_LOG" != *"$_tk"* ]]; then
+        echo "x4vr-launch: WARNING X4VR_TAKE=$X4VR_TAKE but X4VR_LOG=$X4VR_LOG" \
+             "— the label and the destination name disagree, which usually means" \
+             "half of one take's command line and half of another's." >&2
+    fi
+fi
+
 if [[ "${X4VR_NO_LAYER:-0}" != 1 ]]; then
     if [[ ! -f "$BUILD/layer/VK_LAYER_X4VR_core.json" ]]; then
         echo "x4vr-launch: layer manifest not found in $BUILD/layer — build first" >&2

@@ -2150,7 +2150,7 @@ static bool lag_log_enabled() {
         if (kab && *kab && atof(kab) > 0.0)
             return true;
         // Same for the ratefix A/B, and for the same reason.
-        const char *rab = getenv("X4VR_HEADLOOK_RATEFIX_AB");
+        const char *rab = getenv("X4VR_HEADLOOK_TAU_AB");
         if (rab && *rab && atof(rab) > 0.0)
             return true;
         const char *uab = getenv("X4VR_HEADLOOK_UNGATED_AB");
@@ -2393,8 +2393,22 @@ void headlook_tick() {
     // X4VR_HEADLOOK_RATEFIX_AB alternates it against OFF every N seconds, which
     // is the only honest control: the two arms then differ in this and nothing
     // else, including the scene and the player's mood.
+    // **RENAMED, and the old name is now fatal on purpose.**
+    //
+    // X4VR_HEADLOOK_RATEFIX meant "nominal Hz" in take 295 and "tau in ms"
+    // after the knob was split. Re-running take 295's command line therefore
+    // ran a DIFFERENT experiment under the same name — tau 100 ms and slew 600
+    // instead of tau 40 and slew 1200 — and nothing in the log said so. A knob
+    // whose meaning changes silently makes every stored command line a trap.
     static const float ratefix = [] {
-        const char *e = getenv("X4VR_HEADLOOK_RATEFIX");
+        if (const char *old_name = getenv("X4VR_HEADLOOK_RATEFIX")) {
+            if (*old_name)
+                X4VR_LOG("headlook: !! X4VR_HEADLOOK_RATEFIX=%s is the OLD name "
+                         "and meant nominal Hz; it now means tau in ms and is "
+                         "IGNORED. Use X4VR_HEADLOOK_TAU_MS. This run is NOT "
+                         "testing what its command line asked for.", old_name);
+        }
+        const char *e = getenv("X4VR_HEADLOOK_TAU_MS");
         return e && *e ? (float)atof(e) : 0.0f;
     }();
     static const float maxrate = [] {
@@ -2405,7 +2419,7 @@ void headlook_tick() {
     if (ratefix > 0.0f)
         g_headlook.rate_fix_tau_ms = ratefix;
     static const double ratefix_ab = [] {
-        const char *e = getenv("X4VR_HEADLOOK_RATEFIX_AB");
+        const char *e = getenv("X4VR_HEADLOOK_TAU_AB");
         return e && *e ? atof(e) : 0.0;
     }();
     if (ratefix_ab > 0.0 && ratefix > 0.0) {

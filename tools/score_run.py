@@ -3991,7 +3991,7 @@ def main(path):
         print(f"rfab   {len(rf)} lagsample(s) carry rfarm; {len(ck)} in cockpit "
               f"with steering and a live read-back; arm(s) {arms}")
         if len(arms) < 2:
-            print("rfab   ONLY ONE ARM — X4VR_HEADLOOK_RATEFIX_AB unset, or the "
+            print("rfab   ONLY ONE ARM — X4VR_HEADLOOK_TAU_AB unset, or the "
                   "run ended inside one phase. Not scorable.")
         else:
             hz = max(r[7] for r in ck)
