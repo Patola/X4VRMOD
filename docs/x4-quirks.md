@@ -20259,3 +20259,69 @@ what is not established is how SteamVR's `xrEndFrame` behaves while held.
 **Not diagnosed, and not to be patched on a guess.** gamescope also aborted in
 all three attempts, and it wraps everything — so the one-variable next step is
 `X4VR_GAMESCOPE=0`, which is cheaper than reasoning about a lock.
+
+## The SteamVR hang — DIAGNOSED from a live backtrace
+
+`gdb -p` on the wedged process while it hung. Three threads, and they form a
+cycle across the boundary between our lock and SteamVR's:
+
+**Thread 1, X4's own present thread**
+
+    x4vr_QueuePresentKHR (ours)   <- holds g_vr_queue_mu via VrQueueLock
+      -> vrclient.so              <- xrReleaseSwapchainImage
+      -> pthread_mutex_lock       <- BLOCKED on a SteamVR-internal mutex
+
+**Thread 20, our XR session thread**
+
+    vr_session_thread -> vr_thread
+      -> vrclient.so              <- inside xrEndFrame, holds SteamVR's mutex
+      -> x4vr_QueueSubmit (ours)
+      -> pthread_mutex_lock       <- BLOCKED on g_vr_queue_mu
+
+**A third thread, X4's renderer**, also blocked in `x4vr_QueueSubmit`, waiting
+behind the same lock.
+
+So: X4's present thread holds OUR lock and wants SteamVR's; our XR thread holds
+SteamVR's and wants OURS. Textbook ABBA, and neither side can see the other's.
+
+### Why 298 takes never hit it
+
+`VrQueueLock` is held across `xrReleaseSwapchainImage` — that is take 114c's
+documented path, `QueuePresentKHR -> vr_finish_blit -> swapchain_release ->
+xrReleaseSwapchainImage -> x4vr_QueueSubmit`, and 114c was fixed by making the
+lock re-entrant **per thread**. Re-entrancy is the right fix for one thread
+meeting itself and does nothing for two threads meeting each other.
+
+With WiVRn the second thread is never there: the runtime is out of process, so
+`xrEndFrame` does not call `vkQueueSubmit` inside X4 and our XR thread never
+holds a runtime lock while wanting ours. SteamVR does both in process.
+
+The existing comment above `g_vr_queue_mu` already states the principle for one
+case — *"xrWaitFrame is deliberately NOT covered: it blocks until the runtime's
+next frame boundary"* — and the correct generalisation is that **no call into
+the runtime may be made while holding this lock**. `xrReleaseSwapchainImage` is
+such a call and is made under it.
+
+### Why the naive fix is wrong
+
+Dropping the lock around `xrReleaseSwapchainImage` removes the deadlock and also
+removes the serialisation the lock exists for, because that call SUBMITS to the
+shared queue. #36 exists because this device has one graphics queue and external
+synchronisation of `vkQueueSubmit` is the application's job. So the fix has to
+keep two submissions apart while not holding our mutex across a runtime call —
+those are in tension and it needs design, not a patch.
+
+**Not attempted here.** Take 295 is what happens when a fix is designed and
+shipped in one step ([[hypothesis-and-fix-in-one-step]]); this one is worth
+doing properly.
+
+### Also settled, and it retires a proposed take
+
+X4 **and** gamescope dump core at the end of EVERY run, working or not:
+22:50:42/44 is take 295 and 23:43:28/29 is take 297, both of which produced full
+scorable data. So gamescope aborting under SteamVR was never evidence, and the
+`X4VR_GAMESCOPE=0` take it was about to justify is withdrawn —
+[[x4vr-metric-must-discriminate]], caught before it cost a run rather than
+after. That X4 segfaults on exit in every single run is a separate pre-existing
+defect, harmless to the data because it happens at teardown, and it should be
+recorded rather than kept as folklore.
