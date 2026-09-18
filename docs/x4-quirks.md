@@ -20359,3 +20359,64 @@ scorable data. So gamescope aborting under SteamVR was never evidence, and the
 after. That X4 segfaults on exit in every single run is a separate pre-existing
 defect, harmless to the data because it happens at teardown, and it should be
 recorded rather than kept as folklore.
+
+
+## Take 302 — the same deadlock, other half
+
+56ab22f narrowed the PRESENT side and shipped. Take 302 hung anyway, and the
+backtrace shows the cycle simply swapped ends:
+
+    X4's present thread  x4vr_QueuePresentKHR -> vrclient (the release)
+                           -> x4vr_QueueSubmit -> BLOCKED on ours
+                         ...so it holds SteamVR's mutex
+
+    our XR thread        vr_thread -> vrclient -> BLOCKED on SteamVR's mutex
+                         ...so it holds ours, across xrEndFrame
+
+The comment on the site I missed said so outright: *"X4's submits and presents
+take it here, the runtime's take it around xrEndFrame on the layer's XR
+thread."* I fixed the first clause and left the second. It hung earlier than
+before — `frames=1 submitted=0 swapchain=0 focused=0` — because the XR thread
+now wedges before the session ever goes live.
+
+The premise of that comment is right and its conclusion does not follow: the
+runtime's compositor does submit, but it submits **through vkQueueSubmit**,
+which means it arrives at `x4vr_QueueSubmit` and takes the lock there, per
+submit. The outer lock never added serialisation.
+
+**The rule, stated once and now applied at every site: nothing may hold
+`g_vr_queue_mu` across a call into the runtime.** `xrWaitFrame` had already been
+exempted for a different stated reason; it is the same rule. The three surviving
+`VrQueueLock` scopes wrap `d->QueueSubmit`, `g_sbs.composite()` and
+`d->QueuePresentKHR()` — queue operations only, audited one by one.
+
+### The test was wrong about its own truth table
+
+`tests/queue_lock.cpp` is now parameterised by lock ORDER rather than by four
+hand-written bodies, and the table is:
+
+    present        xr             result
+    OURS_FIRST     RUNTIME_FIRST  deadlock   takes 298-301
+    RUNTIME_FIRST  OURS_FIRST     deadlock   take 302, the half-fix
+    OURS_FIRST     OURS_FIRST     safe
+    RUNTIME_FIRST  RUNTIME_FIRST  safe       where the code is now
+
+I had asserted three of four cells hang. They do not — a cycle needs the two
+threads to DISAGREE on the order, so both matching cells are safe. **That is
+also the explanation for 298 takes of silence**: on WiVRn the runtime never
+submits in-process, so no RUNTIME_FIRST actor exists and no disagreement is
+possible. A one-axis test could not have caught the half-fix;
+[[vary-them-independently]] applied to a fix rather than a measurement.
+
+Two harness defects found on the way, both worth recording because both would
+have produced a confident wrong answer: the rendezvous spun unbounded (one
+actor holds `ours` while waiting, so a partner blocked on `ours` never arrives
+and the test hangs for reasons unrelated to its subject), and every acquisition
+now has a timeout.
+
+### And the mutex identity was an assumption until now
+
+`x4vr_QueueSubmit` takes `g_mu` and then `VrQueueLock`, and a backtrace reading
+`pthread_mutex_lock` inside it does not say which. Checked rather than assumed:
+`g_mu` is scoped to the device-map lookup and released immediately, and
+`vr_thread` never takes it at all. `g_vr_queue_mu` was the only candidate.

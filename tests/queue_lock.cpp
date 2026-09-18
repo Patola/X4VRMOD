@@ -49,83 +49,93 @@ struct Pair {
     // Both threads take their FIRST lock before either reaches for its second.
     // Without this the race is real but intermittent, and a test that only
     // sometimes reproduces the bug is not a regression test.
+    // BOUNDED. The first draft spun forever here: xr_old holds `ours` while
+    // waiting, so a partner blocked on `ours` never arrives, and the harness
+    // hung for a reason that had nothing to do with what it was testing.
     void rendezvous() {
         arrived.fetch_add(1);
-        while (arrived.load() < 2)
+        auto until = std::chrono::steady_clock::now() + 300ms;
+        while (arrived.load() < 2 && std::chrono::steady_clock::now() < until)
             std::this_thread::yield();
     }
 };
 
-// The XR session thread, identical in both shapes: it is inside the runtime,
-// holding the runtime's lock, when the runtime submits through our hook.
-static void xr_thread(Pair &p) {
-    std::unique_lock<std::timed_mutex> rt(p.runtime);   // inside xrEndFrame
-    p.rendezvous();
-    // vrclient calls vkQueueSubmit -> x4vr_QueueSubmit -> VrQueueLock
-    if (!p.ours.try_lock_for(400ms)) {
-        p.xr_stuck.store(true);
+// The whole thing reduces to LOCK ORDER, and saying so is clearer than four
+// hand-written thread bodies:
+//
+//   OURS_FIRST     take g_vr_queue_mu, then enter the runtime, which takes its
+//                  own mutex inside. That is a VrQueueLock wrapped around
+//                  xrEndFrame or around a 557-line present hook.
+//   RUNTIME_FIRST  enter the runtime with nothing of ours held; the runtime's
+//                  submit comes back through x4vr_QueueSubmit and takes ours
+//                  there.
+//
+// A cycle needs one of each. Two threads that agree on the order never
+// deadlock however wide the scopes are -- which is why the ORIGINAL code
+// survived 298 takes on WiVRn, where the runtime never submits in-process at
+// all and the second edge simply does not exist.
+enum Order { OURS_FIRST, RUNTIME_FIRST };
+
+static void actor(Pair &p, Order order, std::atomic<bool> &stuck) {
+    std::timed_mutex &first = order == OURS_FIRST ? p.ours : p.runtime;
+    std::timed_mutex &second = order == OURS_FIRST ? p.runtime : p.ours;
+    if (!first.try_lock_for(400ms)) {
+        stuck.store(true);
         return;
     }
-    p.ours.unlock();
-}
-
-// OLD: the lock is taken at the top of a 557-line present hook and held to the
-// end, so xrReleaseSwapchainImage is called underneath it.
-static void present_old(Pair &p) {
-    std::unique_lock<std::timed_mutex> ou(p.ours);      // VrQueueLock, line 35
     p.rendezvous();
-    if (!p.runtime.try_lock_for(400ms)) {               // xrReleaseSwapchainImage
-        p.present_stuck.store(true);
+    if (!second.try_lock_for(400ms)) {
+        stuck.store(true);
+        first.unlock();
         return;
     }
-    p.runtime.unlock();
+    second.unlock();
+    first.unlock();
 }
 
-// NEW: our lock wraps only the queue operation. The call into the runtime is
-// made with nothing of ours held. Ordering -- release must follow the
-// composite's submit -- is program order on this one thread and never needed
-// the mutex; the old comment above the lock said as much and kept it anyway.
-static void present_new(Pair &p) {
-    {
-        std::lock_guard<std::timed_mutex> ou(p.ours);   // the composite's submit
-    }
-    p.rendezvous();
-    if (!p.runtime.try_lock_for(400ms)) {               // xrReleaseSwapchainImage
-        p.present_stuck.store(true);
-        return;
-    }
-    p.runtime.unlock();
-    {
-        std::lock_guard<std::timed_mutex> ou(p.ours);   // the present itself
-    }
-}
-
-static bool deadlocks(void (*present)(Pair &)) {
+static bool deadlocks(Order present, Order xr) {
     Pair p;
-    std::thread a(present, std::ref(p));
-    std::thread b(xr_thread, std::ref(p));
+    std::thread a(actor, std::ref(p), present, std::ref(p.present_stuck));
+    std::thread b(actor, std::ref(p), xr, std::ref(p.xr_stuck));
     a.join();
     b.join();
     return p.present_stuck.load() || p.xr_stuck.load();
 }
 
-int main() {
-    // The negative control comes FIRST and is the one that earns the rest: a
-    // deadlock test that cannot reproduce the deadlock proves nothing about
-    // the fix that follows it.
-    bool old_hangs = false;
-    for (int i = 0; i < 5 && !old_hangs; i++)
-        old_hangs = deadlocks(present_old);
-    check(old_hangs,
-          "the OLD shape deadlocks — our lock held across the runtime call, "
-          "which is what takes 298-301 did");
+static bool hangs(Order present, Order xr, int rounds) {
+    for (int i = 0; i < rounds; i++)
+        if (deadlocks(present, xr))
+            return true;
+    return false;
+}
 
-    bool new_hangs = false;
-    for (int i = 0; i < 20; i++)
-        new_hangs |= deadlocks(present_new);
-    check(!new_hangs,
-          "the NEW shape does not, over 20 rounds — nothing of ours is held "
-          "while entering the runtime, so the cycle cannot form");
+int main() {
+    // **The truth table, and my first version of it was wrong.**
+    //
+    // I assumed three of four cells hang. They do not: a cycle needs the two
+    // threads to DISAGREE on the order, so the two matching cells are both
+    // safe. That is also why the original code ran for 298 takes — on WiVRn
+    // the runtime never submits inside X4, so there is no RUNTIME_FIRST actor
+    // and no disagreement is possible.
+    //
+    //   present        xr             result
+    //   OURS_FIRST     RUNTIME_FIRST  deadlock  <- takes 298-301
+    //   RUNTIME_FIRST  OURS_FIRST     deadlock  <- take 302, the half-fix
+    //   OURS_FIRST     OURS_FIRST     safe      <- but one call into the
+    //                                              runtime away from not being
+    //   RUNTIME_FIRST  RUNTIME_FIRST  safe      <- where the code is now
+    check(hangs(OURS_FIRST, RUNTIME_FIRST, 5),
+          "present holds ours into the runtime, xr holds the runtime into "
+          "ours — takes 298-301");
+    check(hangs(RUNTIME_FIRST, OURS_FIRST, 5),
+          "and the mirror — take 302, which is what 56ab22f left behind by "
+          "narrowing only the present side");
+    check(!hangs(RUNTIME_FIRST, RUNTIME_FIRST, 30),
+          "BOTH narrowed: neither side holds our lock while entering the "
+          "runtime, 30 rounds clean — this is where the code is now");
+    check(!hangs(OURS_FIRST, OURS_FIRST, 30),
+          "both un-narrowed is also acyclic, which is why this survived 298 "
+          "takes on WiVRn and says nothing about the fix");
 
     // And the property the narrowing must NOT cost: two submitters still get
     // exclusive turns on the queue. #36 exists because this device has one

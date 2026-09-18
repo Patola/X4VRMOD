@@ -13352,14 +13352,30 @@ void vr_thread() {
                      qv ? dist(hx, hy, hz, qx, qy, qz) : 0.0f, qv,
                      g_vrs.last_decl_yaw, g_vrs.last_decl_pitch);
         }
-        // The lock covers xrEndFrame because that is where the runtime's
-        // client compositor submits, and on a one-graphics-queue device that
-        // is X4's queue (#36). It is not held across xrWaitFrame above, which
-        // blocks for a whole headset frame.
-        {
-            VrQueueLock qlock;
-            x4vr::xr::frame_end(g_vrs.session, layers, layer_count);
-        }
+        // **NOT locked. Take 302 is the other half of takes 298-301.**
+        //
+        // This used to read: "The lock covers xrEndFrame because that is where
+        // the runtime's client compositor submits, and on a one-graphics-queue
+        // device that is X4's queue (#36)."
+        //
+        // The premise is right and the conclusion does not follow. That submit
+        // reaches the queue through vkQueueSubmit, which means it arrives at
+        // x4vr_QueueSubmit -- our own hook, in the device dispatch chain -- and
+        // takes the lock THERE, per submit. The outer lock never added
+        // serialisation; it only widened the window in which this thread holds
+        // our mutex while inside the runtime.
+        //
+        // Take 302 proved it by inverting the deadlock. Having narrowed the
+        // present side in 56ab22f, the cycle simply swapped ends: X4's present
+        // thread held SteamVR's mutex inside xrReleaseSwapchainImage and
+        // blocked on ours in x4vr_QueueSubmit, while THIS thread held ours
+        // across xrEndFrame and blocked on SteamVR's. Same cycle, same cause,
+        // the half I had not fixed.
+        //
+        // The rule, stated once and applied everywhere: **nothing may hold
+        // g_vr_queue_mu across a call into the runtime.** xrWaitFrame was
+        // already exempted for a different reason; it is the same rule.
+        x4vr::xr::frame_end(g_vrs.session, layers, layer_count);
         if (layer_count)
             g_vrs.submitted.fetch_add(1, std::memory_order_relaxed);
         // Only now: a frame has been begun, located and ended, so the runtime
