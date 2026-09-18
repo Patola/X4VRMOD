@@ -20198,3 +20198,64 @@ rate fix shipped broken.
 Patola: *"maybe not everybody will be able to use WiVRn, or even willing to do
 it; SteamVR is more mainstream."* WiVRn as a hard requirement is a real limit on
 who can run the mod, independent of what it does for the ghosting question.
+
+## Take 300 — the crash is fixed; X4 now HANGS during load under SteamVR
+
+The guard fired exactly once and everything downstream came up:
+
+    vr: re-entered vkCreateInstance from inside our own — ... (1 occurrence)
+    vr: instance extensions — X4 asked for 6, the runtime needs 5, added 3
+    vr: this device has no spare graphics queue — the runtime shares X4's
+        (family 0 index 0), serialised by the layer
+    vr: session created on X4's own device — ... reference space STAGE
+    vr: session -> XR_SESSION_STATE_FOCUSED
+    xr: chose format 50 — X4's eye image is format 44, so the copy is
+        byte-preserving
+    sbs: composite recording on queue family 0
+
+So the re-entrancy defect is CLOSED and SteamVR negotiates cleanly. The
+remaining failure is different in kind.
+
+### What the numbers say
+
+    frames=489 located=489 submitted=397
+    copy swapchain=1 blits=4 released=4 acquire_failed=0 refused=0
+    log spans 173498.333 -> 173515.091 = 16.8 s
+
+`acquire_failed=0` and `blits == released`, so nothing is stuck inside an
+acquire and no image leaked — **we stopped asking**. The log then stops
+entirely while X4 kept running (Patola heard music and had to kill both X4 and
+gamescope), so our hooks stopped being called rather than the game exiting.
+
+The last frames carry `valid=0`, `x4=-0.000,0.000`, `seq=7` and the final lines
+are shader patches. **X4 never left the loading/menu screen.** The black monitor
+is then expected rather than a second defect: `X4VR_MASK_PRESENT=1` masks the
+flat present, and there was no VR content to replace it with.
+
+### Ruled out, cheaply
+
+* **SteamVR's compositor did not crash.** `coredumpctl` shows no `vrcompositor`
+  core during take 300 — only gamescope's SIGABRT at 00:53, which is Patola
+  killing it. An earlier `vrcompositor` core at 00:44 belongs to take 299.
+* **Not a stall in shader patching.** Take 300 patched 4 fragment / 8 vertex
+  against take 297's 7 / 12 — the patching is sparse in both, so stopping at
+  vertex #250 is a symptom of a short run, not its cause.
+* **`vr: submitting NO layers this run by design` is MISINFORMATION**, not a
+  finding. It is unconditional and appears in take 297 too, which submitted
+  35297 layers. A Milestone-A line that outlived its branch —
+  [[stale-comment-is-misinformation]]. It cost a few minutes of chasing here and
+  should be deleted or made conditional.
+
+### The standing suspect
+
+This device has **one graphics queue**. The runtime shares X4's (family 0 index
+0) and the two are serialised by `VrQueueLock`. During take 300 the VR thread
+submitted 397 frames while X4 was still loading, which is the most contended
+this path has ever been — WiVRn runs may simply never have exercised it the same
+way. `VrQueueLock` is already re-entrant per thread and deliberately excludes
+`xrWaitFrame` (take 114c hung exactly there), so the obvious shapes are covered;
+what is not established is how SteamVR's `xrEndFrame` behaves while held.
+
+**Not diagnosed, and not to be patched on a guess.** gamescope also aborted in
+all three attempts, and it wraps everything — so the one-variable next step is
+`X4VR_GAMESCOPE=0`, which is cheaper than reasoning about a lock.
