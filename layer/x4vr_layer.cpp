@@ -12261,6 +12261,46 @@ bool vr_open_runtime() {
         return false;
     if (g_vrs.rt.ok())
         return true;
+
+    // **RE-ENTRANT, and take 298 crashed X4 because this was not.**
+    //
+    // We bring the runtime up from inside vkCreateInstance so the runtime's
+    // required extensions can be merged into the instance X4 asked for. A
+    // runtime that lives OUT of process -- WiVRn -- returns from
+    // xrCreateInstance without touching Vulkan, so this was never exercised.
+    //
+    // SteamVR's vrclient.so does it IN process: it creates its own VkInstance
+    // during xrCreateInstance, the loader runs the layer chain again, and we
+    // are re-entered. `rt.ok()` is still false because the first call has not
+    // returned, so the guard above does not catch it and runtime_open is
+    // called again -- and again. The backtrace is a 14-frame cycle repeating
+    // until the stack is gone: SIGSEGV, 53.9 MB core, no VR at all.
+    //
+    // app_is_target() cannot separate the two calls, and should not be asked
+    // to: SteamVR's client runs inside X4's own process, so /proc/self/exe is
+    // X4 for both. Only re-entrancy distinguishes them.
+    //
+    // The inner call returns false, which means SteamVR's own instance is
+    // created without our merged extensions. That is correct -- they are the
+    // extensions X4's instance needs, not SteamVR's.
+    static thread_local int depth = 0;
+    if (depth > 0) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            X4VR_LOG("vr: re-entered while the runtime was still opening — "
+                     "this runtime creates a Vulkan instance of its own from "
+                     "inside xrCreateInstance. Passing the inner instance "
+                     "through untouched; the outer one still gets the merge.");
+        }
+        return false;
+    }
+    struct Depth {
+        int &d;
+        explicit Depth(int &v) : d(v) { d++; }
+        ~Depth() { d--; }
+    } guard(depth);
+
     X4VR_LOG("vr: X4VR_VR=1 — bringing the runtime up ahead of X4's instance");
     if (!x4vr::xr::runtime_open(g_vrs.rt, vr_say, nullptr)) {
         // Loud, and then out of the way. A missing runtime must not stop the

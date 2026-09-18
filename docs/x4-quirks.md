@@ -20106,3 +20106,70 @@ it is the runtime path; if it is identical it is ours. Second knob in the same
 direction: **halve `X4VR_RES`**. If it is encode bandwidth the artifact should
 fall sharply; if it is unchanged, bandwidth is not it.
 [[x4vr-eliminate-dont-instrument]].
+
+## Take 298 — SteamVR crashes X4, and the bug is ours
+
+`XR_RUNTIME_JSON` reached the process and the override worked:
+
+    xr: runtime "SteamVR/OpenXR in Meta compatibility mode" 2.17.10
+    xr: system "SteamVR/OpenXR : oculus" — max swapchain 8192x8192
+    xr: view 0 — recommended 2528x2704
+    xr: wants Vulkan 1.0.0 .. 1.2.0
+    <SIGSEGV, 53.9 MB core>
+
+Patola confirmed SteamVR itself is healthy by running another VR title, and
+tried both the manifest path and the `active_runtime.json` symlink. Same crash.
+
+### Infinite recursion through vkCreateInstance
+
+`coredumpctl` gives a 14-frame cycle that repeats until the stack is gone:
+
+    x4vr_CreateInstance (ours)
+      -> gamescope_wsi -> MESA_device_select -> MND_timeline_semaphore
+      -> steamoverlayvulkanlayer -> libvulkan vkCreateInstance
+      -> SteamVR vrclient.so        <- creates its OWN VkInstance
+      -> x4vr_CreateInstance again
+
+We open the OpenXR runtime from **inside** `vkCreateInstance`, because the
+runtime's required instance extensions have to be merged into the create-info
+X4 wrote, and that has to happen before the instance exists. WiVRn lives out of
+process and returns from `xrCreateInstance` without touching Vulkan, so this was
+never exercised in 298 takes. SteamVR's client does it in process.
+
+`vr_open_runtime()`'s existing early-out is `if (g_vrs.rt.ok()) return true;` —
+and `rt.ok()` is still false during the first call, so it does not catch a
+re-entry. `runtime_open` is simply called again.
+
+**`app_is_target()` cannot separate the two calls and should not be asked to.**
+It falls back to `/proc/self/exe`, and SteamVR's client runs inside X4's own
+process, so the executable is X4 for both. Only re-entrancy distinguishes them.
+
+### The fix
+
+A thread-local depth guard with RAII release in `vr_open_runtime()`. The inner
+call returns false, so SteamVR's own instance is created without our merged
+extensions — which is correct, they are the extensions X4's instance needs.
+
+**Not verified by a run yet.** It is reasoned from the backtrace, and it cannot
+be exercised without an in-process runtime; the next take is its test. Two things
+to watch in that log, in order:
+
+1. **`vr: re-entered while the runtime was still opening`** — the guard firing,
+   which is the fix working rather than a warning.
+2. **`xr: wants Vulkan 1.0.0 .. 1.2.0`** — SteamVR accepts at most Vulkan 1.2.
+   If X4 builds a 1.3 instance this is the next thing that can fail, and it will
+   fail at the graphics-requirements check rather than in a stack overflow.
+
+Predicted next failure point if it moves past both: `x4vr_CreateDevice`, which
+looks up `dispatch_key(phys)` in `g_instances` and would treat a SteamVR-created
+device as X4's. It is gated on `g_vrs.rt.ok()` and does not call
+`vr_open_runtime()`, so it cannot recurse the same way, and SteamVR most likely
+uses X4's device through the OpenXR graphics binding rather than making its own —
+so this is flagged, not patched. Patching code that cannot be tested is how the
+rate fix shipped broken.
+
+### Why this is worth fixing on its own account
+
+Patola: *"maybe not everybody will be able to use WiVRn, or even willing to do
+it; SteamVR is more mainstream."* WiVRn as a hard requirement is a real limit on
+who can run the mod, independent of what it does for the ghosting question.
