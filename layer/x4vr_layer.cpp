@@ -13808,6 +13808,17 @@ void vr_report(const char *when) {
              (unsigned long long)g_vrs.released.load(),
              (unsigned long long)g_vrs.acquire_fail.load(),
              (unsigned long long)refused);
+    // The DENOMINATOR for the line above, from the runtime rather than from
+    // anyone's report of a headset setting. `blits` is new content per second;
+    // divided by this it says how many of the headset's frames were a REPEAT,
+    // which is the only statistic that ordered takes 303a-d the way they were
+    // seen. Printed as 0.00 when the runtime never gave one, so a missing
+    // measurement cannot be read as a fast display.
+    const double p_ms = (double)g_vrs.session.display_period_ns / 1.0e6;
+    X4VR_LOG("vr pace (%s): display period %.2f ms (%.1f Hz), changed %llu "
+             "time(s) mid-session",
+             when, p_ms, p_ms > 0.0 ? 1000.0 / p_ms : 0.0,
+             (unsigned long long)g_vrs.session.display_period_changes);
 }
 
 void vr_shutdown() {

@@ -20423,6 +20423,16 @@ now has a timeout.
 
 ## HANDOVER — three artifacts pending, predictions committed before the data
 
+> **RESOLVED by takes 303a-d and the headset recording — see
+> "Takes 303a-d" below.** Kept verbatim. Scoreboard against what actually
+> happened: the deadlock prediction was RIGHT (read `blits` first; thousands
+> means it is gone — it was 14778). The recording's stated purpose was
+> WRONG in an instructive way: it was to decide whether the ghosting is in
+> the pixels the compositor shows, and it could not, because the Quest
+> captures POST-reprojection output. The take-304 bandwidth framing was
+> superseded: the same knob is better justified as a frame-rate test, and
+> its "cannot be an A/B" weakness is real and unchanged.
+
 Written before any of the three exist, so none can be read backwards.
 
 ### A. Take 303 — SteamVR, does the deadlock survive two fixes?
@@ -20516,3 +20526,109 @@ it is real.
 
 **X4 segfaults on exit in EVERY run**, working or not. Harmless to the data
 because it is teardown, but it is a defect and not folklore.
+
+## Takes 303a-d — SteamVR runs, and the ghosting is not in any frame
+
+Four takes on 2026-09-19, command line byte-identical apart from `X4VR_TAKE`
+and `X4VR_LOG`, so the only variables are the runtime and the headset's
+refresh setting. Tagged `v0.78-steamvr`.
+
+### The deadlock is gone, and this is the first SteamVR run
+
+Takes 298-302 hung or cored. Take 303 reached **14778 blits, 18866 layers
+submitted**, against 4 for take 300 and 0 for take 302. Narrowing
+`g_vr_queue_mu` at BOTH sites — the present hook and `xrEndFrame` — is
+confirmed by a run, not only by `tests/queue_lock.cpp`. The standing caution
+"if it hangs a third time, stop narrowing sites and stop sharing the queue"
+was not needed and is retired.
+
+### The narrowing also fixed WiVRn, and the tail is where it shows
+
+Same runtime, same knobs, only the lock change between them:
+
+| WiVRn take | X4 fps | render->submit p90 | camera stepped | stale dyaw p90 |
+|---|---|---|---|---|
+| 294 before | **97** | 34.4 ms | 19.6 % | 3.39 deg |
+| 297 before | 57 | 37.9 ms | 16.0 % | 7.71 deg |
+| 303b after | 83 | **22.2 ms** | 2.7 % | 2.07 deg |
+| 303c after | 76 | **21.5 ms** | 5.8 % | 2.05 deg |
+
+Take 294 rendered FASTER than 303c and still had the larger tail, so this is
+not the scene getting easier. The MEDIAN barely moved (9.7 -> 10.8 ms) while
+the p90 collapsed — the signature of removing a contended lock rather than of
+a faster frame.
+
+**Do not read `dyaw` as a declaration error.** All four takes ran
+`X4VR_DECLARE_RENDERED_ROT=2`, which declares the AT-DRAW camera, so the
+declaration matches the pixels by construction. `camstamp`'s closing advice
+("Declare the ATDRAW sample; it removes this residual") is STALE — it was
+written while that choice was still open and still prints after it was made.
+`dyaw` and "stepped %" are consequences of the latency, not defects beside
+it. One quantity improved, and it is the render->submit tail.
+
+### The ghosting is in no single frame, and the recording cannot see repeats
+
+In-headset stereo capture, `/dados/x4-vr-stutter2.mp4`, 2160x1080 SBS at
+59.99 fps, 7620 frames, **zero duplicate frames** — a genuine capture, not a
+re-encode. Both eyes are sharp at the motion peak; no doubling within either.
+With take 297 having already measured the pre-submission composite clean
+(each eye sharp at 3x, vertical disparity 0.00 deg median), the ghosting is
+in **no single frame anywhere in the chain**. It is temporal.
+
+**But the recording cannot measure our repeat rate, and it was built to.**
+Interframe-difference autocorrelation over the busy stretch: lag-1 **+0.533**,
+decaying smoothly, no alternation, 0.00 % near-copy frames. If app-layer
+repeats reached the capture, lag-1 would be strongly negative. The Quest
+records the compositor's POST-reprojection output, where every frame is
+freshly warped to the current head pose whether or not we supplied new
+content. So the recording classifies (no doubling) and is blind to the
+mechanism (repeats). Stated because a future reader will otherwise take
+"no duplicates in the recording" as "no repeats in the pipeline".
+
+### The repeat rate is real, and the denominator is the open question
+
+`layer/x4vr_layer.cpp` says it outright: *"submitted counts headset frames,
+blits counts X4 frames that reached it."* Over a matched 90 s gameplay window:
+
+| take | runtime | X4 fps | blit Hz | Patola |
+|---|---|---|---|---|
+| 303 | SteamVR | 92.6 | **88.1** | no ghosting |
+| 303b | WiVRn | 81.5 | 68.3 | better |
+| 303c | WiVRn | 77.4 | 67.2 | some ghosting |
+| 303d | SteamVR | 76.2 | 72.4 | some, subtle |
+
+New content reaches the headset at 67-88 Hz against a panel at 72-90, so a
+quarter of displayed frames are a REPEAT in every run except 303 — the one
+he called suspiciously clean. Reprojection corrects a repeat for head
+rotation but NOT for scene motion, which puts the cost exactly where it was
+reported: fast relative motion, close to a station.
+
+**The honest caveat, and why take 304 exists.** Normalising blits by the
+assumed 72/90 Hz panel orders the four runs as Patola ranked them;
+normalising by our own measured submit rate does NOT. Two denominators, two
+orderings, and the panel rate was a REPORTED headset setting, never measured
+— `XR_FB_display_refresh_rate` is advertised by both runtimes and we never
+called it. So the ordering is not evidence yet. Fixed by reading
+`XrFrameState::predictedDisplayPeriod`, which is core, already received, and
+costs no extra call; reported as `vr pace` and scored by the `pace` block,
+with `tests/run-pace-scorer.sh` planting all of its verdicts. Every log
+before take 304 prints "not measured" rather than assuming a rate.
+
+### P304 — committed before the run
+
+Take 304 raises the new-content rate instead of lowering the panel rate, at
+`X4VR_RES=1408x1408` on WiVRn at 90 Hz.
+
+- **P304.1** `vr pace` reads ~90 Hz. If it reads 72, the four takes above
+  were NOT the 2x2 they look like and the table needs rebuilding.
+- **P304.2** blits rise from 67 Hz to **>= 90 Hz**, repeats fall below 5 %.
+- **P304.3** if repeats go below 5 % and the ghosting REMAINS, the frame
+  deficit is refuted as its cause. That is the outcome worth having.
+- **P304.4** confounded by construction: lowering `X4VR_RES` cuts both the
+  render cost and the stream bandwidth. A pass does not separate them; only
+  a sweep across the predicted threshold at ~1.0 does, and that is takes
+  after this one.
+
+Still open and NOT touched by any of this: #75's 85 ms servo lag, the ungate
+A/B (built, never run), and `X4VR_POSE=0` with `X4VR_ROLL_STEREO=1` which
+every one of these four takes still FAILs.

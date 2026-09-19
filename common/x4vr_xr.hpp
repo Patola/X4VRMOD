@@ -669,6 +669,23 @@ struct Session {
     XrFrameState frame = {};
     std::string last_error;
 
+    // The rate the runtime is PACING to, latched from xrWaitFrame's core
+    // XrFrameState -- no extension, no extra call. Takes 303a-d were scored
+    // against a panel rate that was a report of a headset SETTING rather than
+    // anything measured, and normalising the new-content rate by that assumed
+    // 72/90 Hz ordered the four runs differently than normalising by our own
+    // submit rate did. Two denominators, two orderings, no way to tell which
+    // one the display actually used. This is the display's own answer.
+    //
+    // Recorded here rather than logged in place: `say` is a macro over a sink
+    // that only exists inside runtime_open, and the layer already owns a
+    // logger. `changed` lets the layer report a runtime that drops its rate
+    // MID-session, which is the interesting case and would otherwise be
+    // invisible -- a compositor halving its rate under load looks exactly
+    // like our own frame deficit from every other instrument we have.
+    int64_t display_period_ns = 0;
+    uint64_t display_period_changes = 0;
+
     bool ok() const { return session != XR_NULL_HANDLE; }
 };
 
@@ -801,6 +818,13 @@ inline bool frame_begin(Session &s, bool *should_render) {
     s.frame.type = XR_TYPE_FRAME_STATE;
     if (s.rt->api.WaitFrame(s.session, &fwi, &s.frame) != XR_SUCCESS)
         return false;
+    // Latch the pacing rate for the layer to report. See Session's field.
+    if (s.frame.predictedDisplayPeriod > 0 &&
+        s.frame.predictedDisplayPeriod != s.display_period_ns) {
+        if (s.display_period_ns > 0)
+            s.display_period_changes++;
+        s.display_period_ns = s.frame.predictedDisplayPeriod;
+    }
     XrFrameBeginInfo fbi{};
     fbi.type = XR_TYPE_FRAME_BEGIN_INFO;
     const XrResult r = s.rt->api.BeginFrame(s.session, &fbi);

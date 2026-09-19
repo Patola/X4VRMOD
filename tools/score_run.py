@@ -1393,6 +1393,85 @@ def main(path):
                     print(f"    copy swapchain={sc_ok} blits={blits} "
                           f"released={released} acquire_failed={afail} "
                           f"refused={refused}")
+                    # How many of the headset's frames were a REPEAT.
+                    #
+                    # blits is new content; the display period is the rate the
+                    # headset consumes it at. Takes 303a-d were scored by
+                    # dividing blits by a panel rate taken from a REPORTED
+                    # headset setting, and dividing by our own submit rate
+                    # instead reordered the four runs -- so the denominator
+                    # was doing the arguing. This one comes from the runtime.
+                    #
+                    # Silent when the line is absent: every log before take
+                    # 304 predates the instrument, and a missing measurement
+                    # must not read as a fast display. That is the same trap
+                    # as reporting 0.00 disparity for a failed search.
+                    pace = None
+                    for ln in lines:
+                        m3 = re.search(r"vr pace \(\w+\): display period "
+                                       r"([\d.]+) ms \(([\d.]+) Hz\), "
+                                       r"changed (\d+) time", ln)
+                        if m3:
+                            pace = m3
+                    if pace is None:
+                        print("    pace  not measured — this log predates the "
+                              "display-period instrument, so the repeat "
+                              "fraction below cannot be computed and any "
+                              "panel rate quoted for it was assumed")
+                    else:
+                        p_ms, p_hz, chg = (float(pace.group(1)),
+                                           float(pace.group(2)),
+                                           int(pace.group(3)))
+                        if p_ms <= 0.0:
+                            print("    pace  the runtime never supplied a "
+                                  "display period — not an error, but the "
+                                  "repeat fraction is unavailable")
+                        else:
+                            print(f"    pace  display {p_hz:.1f} Hz "
+                                  f"({p_ms:.2f} ms)"
+                                  + (f", CHANGED {chg}x mid-session — the "
+                                     f"denominator moved, so any single "
+                                     f"repeat fraction below is an average "
+                                     f"over two regimes" if chg else ""))
+                        # Needs no duration: both are totals over the same
+                        # session, and the layer's own comment says what they
+                        # count -- "submitted counts headset frames, blits
+                        # counts X4 frames that reached it".
+                        if submitted > 0 and blits <= submitted:
+                            rep = 1.0 - blits / submitted
+                            print(f"    pace  {100 * rep:.1f}% of headset "
+                                  f"frames showed a REPEAT ({blits} new of "
+                                  f"{submitted} submitted)")
+                            # Reprojection corrects a repeat for head
+                            # ROTATION and not for scene motion, so the cost
+                            # lands exactly where Patola reported it: fast
+                            # relative motion, close to a station.
+                            if rep >= 0.20:
+                                print("    pace  => the headset is showing "
+                                      "one stale frame in five or worse. "
+                                      "Reprojection hides that for head "
+                                      "rotation but NOT for scene motion, so "
+                                      "it reads as doubling when something "
+                                      "moves fast across the view. Raise the "
+                                      "new-content rate (X4VR_RES) before "
+                                      "reading anything else here as a "
+                                      "rendering defect")
+                            elif rep >= 0.05:
+                                print("    pace  => a repeat rate this low "
+                                      "is not enough to explain a doubling "
+                                      "complaint on its own")
+                            else:
+                                print("    pace  => essentially every "
+                                      "headset frame carried new content; "
+                                      "the frame deficit is NOT available as "
+                                      "an explanation for this run")
+                        elif blits > submitted:
+                            print(f"    pace  blits ({blits}) EXCEEDS "
+                                  f"submitted ({submitted}) — X4 produced "
+                                  f"more frames than the headset consumed, "
+                                  f"so some of X4's work was dropped rather "
+                                  f"than shown; the repeat fraction is zero "
+                                  f"and the waste is on our side")
                     if not sc_ok:
                         why = next((ln.split("NO SUBMISSION THIS RUN — ", 1)[1]
                                     for ln in lines
