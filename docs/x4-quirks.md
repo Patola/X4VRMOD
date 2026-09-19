@@ -20857,3 +20857,61 @@ turn smoothly and continuously, do not drive to the stop. No mouse.
   gate costs ~16 % of iterations, so expect single-digit ms, not 117 -> 53.
   If `ugab` says OVERLAP with the ticks separated, the gate is not worth
   removing and #75's residual is elsewhere.
+
+## Take 306 — the freshness gate is NOT the lever. #75's residual is elsewhere.
+
+Protocol corrected (head kept inside the ceiling): **0.5 % saturation**, so
+`ugab` scored and the refusal added after take 305 correctly stayed quiet.
+
+| | tick | lag per phase | lagfit tau |
+|---|---|---|---|
+| control (gated) | 13.1 ms | 19 17 16 17 17 24 | 12.9 ms yaw |
+| ARM_B (ungated) | **12.3 ms** | 18 18 17 18 17 18 | (one arm, whole run) |
+
+**All three predictions held.**
+
+* **P306.1** scored — saturation 0.5 % against the 10 % threshold.
+* **P306.2** the ungated arm ticks **FASTER** than the control now, 12.3
+  against 13.1 ms. Take 305 had it slower; the floor fix (bounding stale
+  ticks only) is confirmed by a run.
+* **P306.3** and the lag does not move. OVERLAP, gated 16-24 vs ungated
+  17-18. Ungating buys ~6 % of tick rate and **zero ms of lag**.
+
+**Decision: keep the gate.** `X4VR_HEADLOOK_UNGATED` stays off by default. A
+default is not changed for a measured null.
+
+### The number that reframes #75
+
+Two independent estimators agree on this run: `ugab` ~17 ms both arms,
+`lagfit` 12.9 ms tau yaw. Take 294 read 32.0 ms on the same `lagfit` at a
+51.3 Hz pose rate; this run sits at 77.9 Hz. **The servo's own lag is now
+12-17 ms** and is no longer a plausible cause of "the visuals take time to
+follow the movement".
+
+Budget for take 306, all measured in the same run:
+
+    servo lag          12-17 ms
+    read-back age       6.3 ms median
+    render -> submit    6.3 ms median (p90 12.2)
+
+Plus compositor, stream and display, which we do not measure. Nothing in the
+servo is worth another take.
+
+### What IS chronic, in the same run
+
+**STARVED in 100 % of windows**, 12.3 Hz of new content missing run-wide, on
+SteamVR at 85 fps into a measured 90 Hz display. The frame deficit of takes
+303-304 is not a WiVRn phenomenon and not a resolution accident — it is the
+standing condition at 2816x2816 per eye on both runtimes. That, not the
+servo, is what remains of #75's felt symptom.
+
+`predictedDisplayPeriod` changed **14947 times** again (14903 in take 305),
+so SteamVR's pacing is genuinely variable, not a one-off.
+
+### Why this matters for the shim
+
+The question take 305/306 existed to answer was whether the shim would start
+from a ~53 ms or a ~117 ms servo. The answer is **neither: ~13-17 ms, and the
+gate has nothing to do with it.** The shim's parameters do not depend on a
+servo change that does not exist, so #71 can be measured against the input
+path as it stands. Nothing is blocked.
