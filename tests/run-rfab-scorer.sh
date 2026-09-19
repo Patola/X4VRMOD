@@ -23,11 +23,17 @@ fail=0
 ok()   { printf 'ok    %s\n' "$1"; }
 bad()  { printf 'FAIL  %s\n' "$1"; fail=1; }
 
-plant() {   # plant <path> <control_ms> <armb_ms> [which: rf|ug]
-    python3 - "$1" "$2" "$3" "$BASE" "${4:-rf}" <<'PY'
+plant() {   # plant <path> <control_ms> <armb_ms> [which: rf|ug] [sat]
+    python3 - "$1" "$2" "$3" "$BASE" "${4:-rf}" "${5:-no}" <<'PY'
 import math, random, sys
 path, ctl, b, base = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]), sys.argv[4]
 which = sys.argv[5]
+# `sat` drives the head PAST the servo's yaw ceiling so the camera pins at the
+# stop, which is the shape take 305 arrived in: 42% of samples at the stop and
+# the two arms saturated by different amounts. Without a planted case the
+# refusal that now guards this had only ever been seen fire once, on real data.
+sat = len(sys.argv) > 6 and sys.argv[6] == 'sat'
+YLIM = 85.0
 out, t, hist, rng = [], 930000.0, [], random.Random(7)
 for ph in range(6):
     arm = ph & 1
@@ -35,7 +41,8 @@ for ph in range(6):
     lag = (b if arm else ctl) / 1000.0
     for _ in range(900):
         t += 0.020
-        head = 45.0*math.sin(2*math.pi*0.3*t) + 6.0*math.sin(2*math.pi*1.1*t)
+        amp = 140.0 if sat else 45.0
+        head = amp*math.sin(2*math.pi*0.3*t) + 6.0*math.sin(2*math.pi*1.1*t)
         hist.append((t, head))
         tp, cam = t - lag, head
         for k in range(len(hist)-1, 0, -1):
@@ -43,9 +50,11 @@ for ph in range(6):
                 f = (tp-hist[k-1][0])/(hist[k][0]-hist[k-1][0])
                 cam = hist[k-1][1] + f*(hist[k][1]-hist[k-1][1]); break
         cam += rng.gauss(0, 0.02)
+        if sat:                       # X4's stop: the camera cannot follow
+            cam = max(-YLIM, min(YLIM, cam))
         out.append(f"[ {t:12.3f}] inject  lagsample: arm=1 view=cockpit steer=1 "
                    f"cam=1 head={head:.3f},0.000 x4={cam:.3f},0.000 kparm=0 "
-                   f"kp=0.250 ylim=85.0 rfarm={arm} rftau=110 "
+                   f"kp=0.250 ylim={YLIM:.1f} rfarm={arm} rftau=110 "
                    f"ugarm={ug}")
 open(path, "w").write(open(base, errors="replace").read() + "\n".join(out) + "\n")
 PY
@@ -88,6 +97,45 @@ check worse 50 80 "SEPARATED THE WRONG WAY"
 check ug-works 117 53 "SEPARATED — every ungated phase has less lag" ug
 check ug-null  117 117 "the per-phase ranges OVERLAP" ug
 check ug-worse  53 117 "SEPARATED THE WRONG WAY — ungating made the lag worse" ug
+
+# **The saturation refusal, planted.** Take 305 spent 42% of its samples with
+# the camera pinned at its yaw stop, where the "command error" the lag
+# estimate divides is the head's excursion past a camera that cannot follow,
+# and carries no timing at all. The block reported 229-850 ms and a confident
+# OVERLAP from it. It must refuse instead — and be SEEN to refuse on data
+# whose contamination is known by construction, not only on the one real run
+# that exposed it.
+satlog=/tmp/rfab-ctl-saturated.log
+plant "$satlog" 80 50 ug sat
+satout=$(python3 tools/score_run.py "$satlog" 2>&1 | grep -E '^ugab')
+if printf '%s' "$satout" | grep -q 'NOT SCORABLE'; then
+    ok "saturated -> ugab refuses instead of reporting a lag"
+else
+    bad "saturated -> ugab did NOT refuse"
+    printf '%s\n' "$satout" | sed 's/^/        got: /'
+fi
+# and no lag verdict underneath the refusal — two causes named for one
+# silence is how the next reader fixes the wrong thing
+if printf '%s' "$satout" | grep -qE '=> (SEPARATED|the per-phase ranges OVERLAP)'; then
+    bad "saturated -> a lag verdict was printed anyway"
+else
+    ok "saturated -> no lag verdict printed alongside the refusal"
+fi
+# the excursion half does NOT depend on the head staying inside the ceiling,
+# so it must survive the refusal
+if printf '%s' "$satout" | grep -q 'worst |X4|'; then
+    ok "saturated -> the excursion report still prints"
+else
+    bad "saturated -> the excursion report was lost with the lag"
+fi
+# NEGATIVE CONTROL: the clean ug plant must NOT trip the refusal, or the
+# guard is an off switch rather than a discriminator.
+cleanout=$(python3 tools/score_run.py /tmp/rfab-ctl-ug-works.log 2>&1 | grep -E '^ugab')
+if printf '%s' "$cleanout" | grep -q 'NOT SCORABLE'; then
+    bad "clean ug plant tripped the saturation refusal"
+else
+    ok "clean ug plant does not trip the refusal"
+fi
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

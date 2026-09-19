@@ -2787,18 +2787,30 @@ void headlook_tick() {
         if (now_s - last_tick_s < ungate_ms * 0.001)
             return; // the floor
         g_pumprate.ungated_ticks++;
-    } else if (ungated && now_s - last_tick_s < ungate_ms * 0.001) {
-        // A FRESH pose arriving inside the floor is dropped too: the cap is on
-        // how often the servo may ACT, not on which kind of tick it acts from.
-        //
-        // Note this DOES consume the freshness — `last_updates = updates` ran
-        // above — so the next entry will see the pose as stale. That costs
-        // nothing here and only here: in the ungated arm the next tick runs
-        // anyway once the floor expires, and reads the same latest pose. The
-        // branch is unreachable when gated, which is the only regime where
-        // consuming it would matter.
-        return;
     }
+    // **The floor must NOT apply to a FRESH tick** — take 305 measured the
+    // ungated arm ticking SLOWER than the control, 14.0 ms against 12.7.
+    //
+    // The floor exists to stop STALE ticks spamming the servo when X4's drain
+    // spikes (take 295 saw 325 Hz). Fresh ticks need no such bound: they are
+    // already capped by the layer's publish rate, ~85-90 Hz. Applying the
+    // floor to them means that whenever the natural rate is FASTER than the
+    // floor — 12.7 ms against an 11 ms floor in take 305 — the ungated arm
+    // refuses fresh ticks the control would have run, and the knob meant to
+    // raise the iteration rate lowers it instead.
+    //
+    // Stale ticks keep the floor and keep measuring it from the last tick of
+    // ANY kind, so they still only fill genuine gaps and cannot spam.
+    //
+    // What stood here was:
+    //
+    //     else if (ungated && now_s - last_tick_s < ungate_ms * 0.001)
+    //         return;
+    //
+    // reasoned as "the cap is on how often the servo may ACT, not on which
+    // kind of tick it acts from". That reasoning is sound for a servo whose
+    // natural rate exceeds the floor and wrong about which way the knob then
+    // points, which is only visible once measured.
     last_tick_s = now_s;
     // **Count what the servo actually DID.** `fresh` counts poses seen, and
     // with ungating on that is no longer the iteration count — the scorer's

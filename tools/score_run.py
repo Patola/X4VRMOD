@@ -4151,7 +4151,10 @@ def main(path):
     rf = re.findall(
         r"\[\s*(\d+\.\d+)\] inject  lagsample: arm=\d+ view=(\w+) "
         r"steer=(\d) cam=(\d) head=(-?[\d.]+),(-?[\d.]+) "
-        r"x4=(-?[\d.]+),(-?[\d.]+) kparm=-?\d+ kp=[\d.]+ ylim=[\d.]+ "
+        # ylim is CAPTURED now, not skipped. Without it nothing downstream can
+        # tell a lag sample from one taken with the camera pinned at its stop,
+        # which is what made take 305 unscorable without saying so.
+        r"x4=(-?[\d.]+),(-?[\d.]+) kparm=-?\d+ kp=[\d.]+ ylim=([\d.]+) "
         # **Tolerant of both spellings and of the field being absent.** Take
         # 295 logged `rfhz=` before the knob was split into tau + slew, and no
         # `ugarm=` at all; a regex that demands the newest shape silently
@@ -4159,9 +4162,10 @@ def main(path):
         # it was written the strict way.
         r"rfarm=(-?\d+) rf(?:hz|tau)=([\d.]+)(?: ugarm=(-?\d+))?", text)
     if rf:
+        # ylim APPENDED at index 9, so every existing index keeps its meaning.
         rr = [(float(t), v, int(st), int(cv), float(hy), float(x4y), int(ar),
-               float(hz), int(ug) if ug else -1)
-              for t, v, st, cv, hy, _hp, x4y, _x4p, ar, hz, ug in rf]
+               float(hz), int(ug) if ug else -1, float(yl))
+              for t, v, st, cv, hy, _hp, x4y, _x4p, yl, ar, hz, ug in rf]
         ck = [r for r in rr if r[1] == "cockpit" and r[2] and r[3]]
         arms = sorted({r[6] for r in ck})
         print(f"rfab   {len(rf)} lagsample(s) carry rfarm; {len(ck)} in cockpit "
@@ -4253,6 +4257,48 @@ def main(path):
         ck = [r for r in rr if r[1] == "cockpit" and r[2] and r[3]]
         print(f"ugab   {len(ck)} cockpit tick(s) with steering and a live "
               f"read-back; ungate arm(s) {sorted({r[8] for r in ck})}")
+        # **CLAMP SATURATION VOIDS THIS STATISTIC, and take 305 is why.**
+        #
+        # The lag estimate is rms(command error) / rms(head rate). When the
+        # head goes past the servo's own yaw ceiling the camera stops at the
+        # stop while the head keeps going, so the "error" is the head's
+        # excursion and carries no timing information at all. Take 305 ran
+        # 35% of its samples with the camera pinned at 65.00 and a head
+        # reaching 176.7 deg; the block printed lags of 229-850 ms — against
+        # take 294's 85 — and a confident OVERLAP verdict from them.
+        #
+        # Worse, the two arms saturated by DIFFERENT amounts (52% gated vs
+        # 33% ungated), so dropping the saturated samples does not rescue it
+        # either: the survivors are then two different populations, and the
+        # same data yields SEPARATED-THE-WRONG-WAY instead. One dataset, four
+        # answers, chosen by how the contamination is handled — which means
+        # the instrument is what is being measured.
+        #
+        # So this refuses rather than reports. A run that wants this number
+        # must keep the head inside the servo's ceiling.
+        ug_scorable = True
+        sat = [r for r in ck if r[9] > 0.0 and abs(r[5]) >= r[9] - 0.01]
+        if ck and len(sat) > 0.10 * len(ck):
+            per_arm = {}
+            for r in ck:
+                per_arm.setdefault(r[8], [0, 0])
+                per_arm[r[8]][1] += 1
+                if r[9] > 0.0 and abs(r[5]) >= r[9] - 0.01:
+                    per_arm[r[8]][0] += 1
+            share = ", ".join(
+                f"{'gated' if a == 0 else 'ungated'} "
+                f"{100 * c[0] / max(1, c[1]):.0f}%"
+                for a, c in sorted(per_arm.items()))
+            print(f"ugab   NOT SCORABLE — {100 * len(sat) / len(ck):.0f}% of "
+                  f"samples have the camera AT its yaw stop ({share}). The "
+                  f"lag estimate divides a command error by a head rate, and "
+                  f"at the stop the error is the head's excursion past a "
+                  f"camera that cannot follow — it carries no timing. Re-run "
+                  f"with the head kept INSIDE the servo's ceiling.")
+            print("ugab   (take 305 read 229-850 ms this way against take "
+                  "294's 85, and the arms saturated 52% vs 33% so removing "
+                  "them leaves two different populations, not a clean pair)")
+            ug_scorable = False
         ph, cur = [], None
         for r in ck:
             if r[8] != cur:
@@ -4260,7 +4306,7 @@ def main(path):
                 cur = r[8]
             ph[-1].append(r)
         per, rate = {}, {}
-        for seg in ph:
+        for seg in ph if ug_scorable else []:
             if len(seg) < 300:
                 continue
             es, rs, n = 0.0, 0.0, 0
@@ -4295,20 +4341,31 @@ def main(path):
                       f"{min(per[0]):.0f}-{max(per[0]):.0f}, ungated "
                       f"{min(per[1]):.0f}-{max(per[1]):.0f}), so this run does "
                       f"not separate them whatever the medians read.")
-            # The cost side. A halved lag bought with a spinning frustum is not
-            # a win, and take 295 is why this is printed next to the lag rather
-            # than left for the player to notice.
-            for arm in sorted(per):
-                seg = [r for r in ck if r[8] == arm]
-                worst = max(abs(r[5]) for r in seg)
-                sat = sum(1 for r in seg if abs(r[4]) < 15.0
-                          and abs(r[5] - r[4]) > 30.0)
-                print(f"ugab   {'gated' if arm==0 else 'ungated':<8} worst |X4| "
-                      f"{worst:6.2f} deg, {sat} sample(s) with the camera 30+ "
-                      f"deg off a centred head")
-        else:
+        elif ug_scorable:
             print("ugab   too few complete phases per arm — the run must "
                   "outlast four A/B periods")
+        # When not scorable the refusal above already said why. Printing
+        # "too few complete phases" underneath it names a second, wrong cause
+        # for the same silence, and the next reader fixes the run length
+        # instead of the protocol.
+
+        # **The cost side, reported whether or not the LAG was scorable.**
+        # A halved lag bought with a spinning frustum is not a win — take 295
+        # is why this sits beside the lag rather than being left for the
+        # player to notice. It used to live inside the comparison branch, so
+        # a run that could not be scored for lag also silently lost its
+        # excursion report, which is the half that does NOT depend on the
+        # head having stayed inside the ceiling.
+        for arm in sorted({r[8] for r in ck}):
+            seg = [r for r in ck if r[8] == arm]
+            if not seg:
+                continue
+            worst = max(abs(r[5]) for r in seg)
+            off = sum(1 for r in seg if abs(r[4]) < 15.0
+                      and abs(r[5] - r[4]) > 30.0)
+            print(f"ugab   {'gated' if arm == 0 else 'ungated':<8} worst |X4| "
+                  f"{worst:6.2f} deg, {off} sample(s) with the camera 30+ "
+                  f"deg off a centred head")
 
     # --- task #73: the head-look lag, and whether the lead removes it -------
     #

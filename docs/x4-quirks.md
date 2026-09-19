@@ -20781,3 +20781,79 @@ this project has already paid for.
 * **#46** — cursor invisible over much of the eye image until moved down.
 * **#72** — head-look keeps driving in external view while logging "idle"
   (command reached 163.80 there against 69.95 in cockpit).
+
+## Take 305 — NOT SCORABLE, and the protocol was mine
+
+The ungate A/B ran correctly — 15 phases, 8 gated / 7 ungated, alternating on
+schedule. The lag it was run to measure cannot be read from it.
+
+### Why: I asked for two incompatible things in one take
+
+The handover said *"please turn your head a good way off-centre sometimes...
+I want that exercised, not avoided."* That was for the overshoot half. It
+drove **42 % of samples to the camera's 65 deg yaw stop**, with the head
+reaching **176.7 deg**. The lag estimate is rms(command error) / rms(head
+rate); at the stop the "error" is the head's excursion past a camera that
+cannot follow and carries no timing at all. The block printed 229-850 ms
+against take 294's 85, and a confident OVERLAP.
+
+Dropping the saturated samples does not rescue it: the arms saturated by
+**different amounts (52 % gated, 33 % ungated)**, so the survivors are two
+different populations and the same data then reads SEPARATED THE WRONG WAY
+(gated 14-16 ms, ungated 97-441). One dataset, four answers, selected by how
+the contamination is handled — which means the instrument was what was being
+measured. Neither number is reported as a result.
+
+The excursion half the instruction was FOR reported `0 sample(s) with the
+camera 30+ deg off a centred head` in both arms, because that check requires
+a centred head and his was never centred during the big turns. The
+instruction cost the measurement and bought nothing.
+
+### What the take DOES establish
+
+* **The premise did not hold in this configuration.** The gated tick was
+  **12.7 ms**, not section 12's 23.9. Measured: pump 125.7 Hz, published
+  85.1, fresh 71.7 — the gate costs ~16 % of iterations here, not 50 %. There
+  was never 117 ms of gate-caused lag available to remove.
+* **The ungated arm ticked SLOWER** — 14.0 ms against the control's 12.7 —
+  and the code says why. The floor was applied to FRESH ticks as well as
+  stale ones, so with the natural rate (12.7 ms) faster than the floor
+  (11 ms) the ungated arm refused fresh ticks the control ran. The knob meant
+  to raise the iteration rate lowered it. **Fixed**: the floor now bounds
+  stale ticks only; fresh ticks are already capped by the publish rate.
+* **SteamVR's `predictedDisplayPeriod` changed 14903 times** in one session.
+  The pace line's headline 90.0 Hz is the last sample, not a constant. Only
+  visible because the change counter was added with the instrument.
+
+### Instrument defects fixed
+
+* **`ugab` now REFUSES** when >10 % of samples sit at the yaw stop, prints
+  the per-arm saturation share, and emits no lag verdict. `ylim` is captured
+  from the log for this; it was matched and discarded before, so nothing
+  downstream could tell a lag sample from a pinned one.
+* **The excursion report was inside the lag branch**, so an unscorable run
+  silently lost the half that does NOT depend on the head staying inside the
+  ceiling. Now printed either way.
+* **"too few complete phases per arm" printed underneath the refusal**,
+  naming a second and wrong cause for the same silence.
+* **Column collision**: at 6+ phases the phase count and the first lag value
+  ran together, so `6 phases, first lag 630` printed as `6630`. I read it as
+  n=6630 and started diagnosing a sampling defect that did not exist.
+* `tests/run-rfab-scorer.sh` gained a **planted saturating case** plus a
+  negative control, so the refusal is seen to fire on data whose
+  contamination is known by construction — and seen NOT to fire on clean
+  data, which is what stops it being an off switch.
+
+### P306 — committed before the re-run
+
+Same A/B, protocol corrected: **keep the head inside the servo's ceiling**,
+turn smoothly and continuously, do not drive to the stop. No mouse.
+
+* **P306.1** `ugab` scores (saturation under 10 %).
+* **P306.2** the ungated arm's tick is now FASTER than the control's, not
+  slower — this is the floor fix's first test and it is the precondition for
+  reading anything else.
+* **P306.3** the lag difference will be SMALL. At a 12.7 ms gated tick the
+  gate costs ~16 % of iterations, so expect single-digit ms, not 117 -> 53.
+  If `ugab` says OVERLAP with the ticks separated, the gate is not worth
+  removing and #75's residual is elsewhere.
