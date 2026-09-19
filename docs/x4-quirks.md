@@ -20420,3 +20420,99 @@ now has a timeout.
 `pthread_mutex_lock` inside it does not say which. Checked rather than assumed:
 `g_mu` is scoped to the device-map lookup and released immediately, and
 `vr_thread` never takes it at all. `g_vr_queue_mu` was the only candidate.
+
+## HANDOVER — three artifacts pending, predictions committed before the data
+
+Written before any of the three exist, so none can be read backwards.
+
+### A. Take 303 — SteamVR, does the deadlock survive two fixes?
+
+    XR_RUNTIME_JSON=/home/patola/.local/share/Steam/steamapps/common/SteamVR/steamxr_linux64_patched.json X4VR_HEADLOOK_LAGLOG=1 X4VR_TAKE=303-STEAMVR X4VR_CANVAS_M=1000 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=0 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take303.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+**Read `blits` FIRST.** Take 300 reached 4 and stopped; take 302 reached 0 with
+`frames=1 submitted=0 focused=0`. Thousands means the deadlock is gone.
+
+If it hangs, the capture goes to a PER-RUN name — `tee /tmp/x4vr-hang-303.txt` —
+because the 301 and 302 captures both went to `x4vr-hang-bt.txt` and the second
+overwrote the first. Read the FULL `bt`, never `bt 14`: that truncation is what
+made take 299 look shallow and cost a wrong diagnosis.
+
+**P303.1 — if it hangs a THIRD time with another arrangement of the same two
+mutexes, the per-site approach is wrong.** The answer then is to stop sharing
+the queue at all: reserve a dedicated one, or fall back to flat when none is
+spare, rather than serialising two compositors onto one. Do not narrow a fourth
+site.
+
+### B. The WiVRn in-headset stereo recording — the objective instrument
+
+This is the one that matters most, and the reason is a measurement already made.
+
+Take 297's recording turned out to contain the whole SBS composite, so both eyes
+were measurable **before submission**: each eye is individually sharp at 3x
+magnification, vertical disparity is 0.00 deg at the median (p90 0.24-0.42), and
+horizontal disparity implies a ~1.2 m console. **The pixels we hand over are
+clean and the stereo geometry is sane.**
+
+So a headset recording is not more of the same — it is the *other side* of the
+submission boundary:
+
+* artifact **absent** from the monitor capture and **present** in the headset
+  capture ⇒ the compositor, the reprojection or the video stream introduced it,
+  and nothing in our rendering is implicated;
+* artifact in **both** ⇒ take 297's measurement was looking in the wrong place
+  and the disparity work reopens.
+
+A mono headset capture is still worth having — Quest recordings usually are —
+because "is it in one eye" already splits the space. Do not reject a capture for
+being mono.
+
+**Provenance caveat, and it is not pedantry.** Ghosting IS duplicate/stale
+frames, and a re-encode can manufacture exactly that:
+[[check-provenance-before-measuring]] cost a wrong published conclusion once
+already. So this recording is for CLASSIFICATION — doubling vs smearing vs
+trailing vs strobing, one eye or both — and not for rates. If classification
+points somewhere needing numbers, ask for a lossless constant-frame-rate capture
+and say why.
+
+### C. The X4VR_RES halving under WiVRn — weakest of the three, and why
+
+    ...identical to take 297 but X4VR_RES=1408x1408 X4VR_W=2816 X4VR_H=1408
+    X4VR_TAKE=304-HALFRES X4VR_LOG=/tmp/x4vr-take304.log
+
+WiVRn is a STREAMING runtime and at 2816x2816 per eye, two eyes, 90 Hz it is
+handed **1.43 Gpixel/s — 2.9x a 4K60 stream** — to video-encode. Halving the
+dimension quarters that. If it is encode starvation the artifact should fall
+sharply; if unchanged, bandwidth is not it.
+
+**This one cannot be an A/B**, because `X4VR_RES` is fixed at init, so it is a
+cross-run comparison against take 297 — and Patola's eye is reliable for a
+switch WITHIN a run, not for intensity against the memory of an earlier one
+([[patola-senses-transitions-not-magnitudes]]). Treat a "seems better" as a
+hint, not a result. **The recording in (B) is what settles it**, because pixels
+do not depend on anyone's memory.
+
+Note also that take 297's own frame rate was NOT representative:
+`gpu-screen-recorder` cost roughly 40% of it (57 fps against take 294's 97), so
+do not compare 304's `perf` against 297's without accounting for that.
+
+### Still open underneath all of this
+
+**#75's residual.** With the episodes gone, take 294 measured **85 ms of lag**
+(broad peak; 60-120 ms indistinguishable), of which the servo's own
+`(1/kp - 1) * dt` accounts for 60 at a 19.9 ms mean tick. The jitter reading did
+NOT survive its control — divided by dt the tremble is flat at the median; only
+a 1.9x tail effect survives.
+
+**The tick period is the lever and the ungate A/B is BUILT AND NEVER RUN.**
+`X4VR_HEADLOOK_UNGATED=<ms floor>` plus `X4VR_HEADLOOK_UNGATED_AB=30`, scored by
+the `ugab` block, with three planted controls in `tests/run-rfab-scorer.sh`.
+Section 12 predicts lag 117 -> 53 ms with the excursion growing 72.45 -> 78.55
+and staying inside the limit. Take 296 was specified for it and never ran — the
+command line that arrived was take 295's, recalled from shell history.
+
+**`X4VR_POSE=0` with `X4VR_ROLL_STEREO=1`** has printed as FAIL on every take
+since 294 and is still unfixed. It is NOT the ghosting — measured, above — but
+it is real.
+
+**X4 segfaults on exit in EVERY run**, working or not. Harmless to the data
+because it is teardown, but it is a defect and not folklore.
