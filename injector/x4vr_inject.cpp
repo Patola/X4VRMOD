@@ -851,7 +851,24 @@ void log_startup_env() {
     // comment while the code could not honour it for any value with a space --
     // and the whole documented method for building the next run is to diff
     // this line against the previous take's.
+    // **Not only X4VR_*.** XR_RUNTIME_JSON is what SELECTS the runtime, and
+    // filtering to our own prefix dropped it: every SteamVR take from 298
+    // onward logged an `env: run =` line that, replayed verbatim, runs under
+    // WiVRn instead. The line the whole method depends on was silently
+    // recording a different experiment than the one that ran, and score_run
+    // already had to warn separately that the variable never arrived.
+    //
+    // Listed explicitly rather than by prefix: XR_* also covers loader debug
+    // vars that do not change what is measured, and a line that grows noise
+    // stops being diffable against the previous take.
+    static const char *const kAlsoRecord[] = {"XR_RUNTIME_JSON"};
     std::string run;
+    for (const char *name : kAlsoRecord)
+        if (const char *v = getenv(name)) {
+            std::string assign = std::string(name) + "=" + v;
+            run += ' ';
+            run += x4vr::sh_quote_assignment(assign.c_str());
+        }
     for (char **e = environ; e && *e; e++)
         if (!strncmp(*e, "X4VR_", 5)) {
             run += ' ';
