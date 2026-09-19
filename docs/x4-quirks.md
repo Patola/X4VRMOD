@@ -20632,3 +20632,53 @@ Take 304 raises the new-content rate instead of lowering the panel rate, at
 Still open and NOT touched by any of this: #75's 85 ms servo lag, the ungate
 A/B (built, never run), and `X4VR_POSE=0` with `X4VR_ROLL_STEREO=1` which
 every one of these four takes still FAILs.
+
+## Take 304 — the frame deficit is the trigger, WiVRn's handling is the severity
+
+`X4VR_W`/`X4VR_H`, not `X4VR_RES` (see the launcher warning added for this).
+Display period MEASURED for the first time: **90.0 Hz in both runs**, so the
+panel assumption the 303a-d table rested on did hold at 90.
+
+Per-5 s window, no window selected:
+
+| take | starved | new content (median) | deficit run-wide | Patola |
+|---|---|---|---|---|
+| 303c WiVRn 2816 | 98 % | 61.6 Hz | 26.4 Hz | some |
+| 303d **SteamVR** 2816 | 97 % | 58.8 Hz | **30.9 Hz** | **subtle** |
+| 304a WiVRn 2816 | 71 % | 63.2 Hz | 20.5 Hz | **a lot** |
+| 304b WiVRn 1408 | 24 % | **138.1 Hz** | 8.4 Hz | virtually none |
+| 304c WiVRn 2816 new client | 91 % | 57.4 Hz | 27.4 Hz | still there |
+
+**P304.2 held, P304.3's premise did not.** Halving the render size took the
+median new-content rate from 63 to 138 Hz and the ghosting went with it. But
+the deficit alone does NOT set the severity: **SteamVR carried the LARGEST
+deficit of all five runs (30.9 Hz, starved in 97 % of windows) and produced
+the mildest artifact.** So repeats are the trigger and what the runtime does
+with a starved stream is the severity. Updating the WiVRn client changed
+nothing (304c).
+
+At 2816x2816 per eye X4 delivers 57-63 Hz of new content into a 90 Hz
+display **in every run, including the ones that felt fine**. That is the
+standing condition, not a property of any one take.
+
+### Two instrument defects found by this take, both mine
+
+- **The `pace` block computed repeats from SESSION TOTALS** and printed
+  "14.8 % ... not enough to explain a doubling complaint" for take 304a,
+  whose flight phase was starved in 71 % of windows. Loading blits slowly and
+  drags a total down. All nine planted controls were totals, so they tested
+  the arithmetic and never the WINDOW. Now reports the per-window rate,
+  the starved fraction and the run-wide deficit, and the totals verdict
+  DEFERS when a series exists — with a control asserting the precedence.
+- **My own analysis picked "the last 90 s" as a gameplay window** and read
+  115.3 Hz out of a run whose first three minutes ran at 59.8. That is
+  take 158's selector defect in the other direction: it found the fastest
+  phase instead of the slowest. Describe the series; do not select from it.
+
+### What this does NOT settle
+
+304a vs 304b changed the render size AND the stream bandwidth together
+(1.43 -> 0.33 Gpixel/s), so which of the two WiVRn is failing on is still
+open. It is not worth a take: both point at WiVRn's streaming path, which is
+not ours, and two mitigations we control already work — SteamVR at full
+resolution, or a lower resolution on WiVRn.

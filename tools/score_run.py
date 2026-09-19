@@ -1381,12 +1381,17 @@ def main(path):
                 # the "vr copy" line is the evidence for: takes 112/113 ran a
                 # deliberately zero-layer session and must keep their verdicts.
                 copy = None
+                copies = []   # (t, blits) per periodic line, for the rate
                 for ln in lines:
                     m2 = re.search(r"vr copy \(\w+\): swapchain=(\d+) "
                                    r"blits=(\d+) released=(\d+) "
                                    r"acquire_failed=(\d+) refused=(\d+)", ln)
                     if m2:
                         copy = m2
+                        mt = re.match(r"\[\s*([\d.]+)\]", ln)
+                        if mt:
+                            copies.append((float(mt.group(1)),
+                                           int(m2.group(2))))
                 if copy:
                     sc_ok, blits, released, afail, refused = (
                         int(g) for g in copy.groups())
@@ -1433,10 +1438,49 @@ def main(path):
                                      f"denominator moved, so any single "
                                      f"repeat fraction below is an average "
                                      f"over two regimes" if chg else ""))
-                        # Needs no duration: both are totals over the same
-                        # session, and the layer's own comment says what they
-                        # count -- "submitted counts headset frames, blits
-                        # counts X4 frames that reached it".
+                        # **Totals, and totals were WRONG on take 304a.**
+                        #
+                        # This printed "14.8% of headset frames showed a
+                        # REPEAT" for a run whose gameplay never repeated a
+                        # frame at all: the loading phase blits slowly and
+                        # drags a session total down. The per-window series
+                        # below says 59.8 / 59.4 / 59.8 / 82.5 / 115.6 Hz --
+                        # one number cannot describe that, and the one this
+                        # chose described none of it.
+                        #
+                        # The controls in tests/run-pace-scorer.sh did not
+                        # catch it because all nine planted cases are totals;
+                        # they tested the arithmetic and never the WINDOW.
+                        # Kept below for the totals it is still good for, but
+                        # the starved fraction is the number to read.
+                        blit_win = []
+                        for a, b in zip(copies, copies[1:]):
+                            dt = b[0] - a[0]
+                            if dt > 0:
+                                blit_win.append((b[1] - a[1]) / dt)
+                        blit_win = blit_win[2:]  # before the swapchain exists
+                        if blit_win and p_ms > 0.0:
+                            starved = [v for v in blit_win if v < p_hz]
+                            s = sorted(blit_win)
+                            deficit = sum(max(0.0, p_hz - v)
+                                          for v in blit_win) / len(blit_win)
+                            print(f"    pace  new content {s[len(s) // 2]:.1f} "
+                                  f"Hz median, p10 {s[len(s) // 10]:.1f}, over "
+                                  f"{len(blit_win)} window(s) — NOT a total, "
+                                  f"the totals below mix loading with flight")
+                            print(f"    pace  STARVED in "
+                                  f"{100 * len(starved) / len(blit_win):.0f}% "
+                                  f"of windows, {deficit:.1f} Hz of new "
+                                  f"content missing run-wide")
+                            if len(starved) > 0.5 * len(blit_win):
+                                print("    pace  => the display is asking for "
+                                      "frames we are not producing for most "
+                                      "of the run. Measured on WiVRn this "
+                                      "reads as ghosting and on SteamVR it "
+                                      "mostly does not, so the deficit is "
+                                      "the trigger and the runtime's handling "
+                                      "of it is the severity — do not read a "
+                                      "clean SteamVR run as an absent deficit")
                         if submitted > 0 and blits <= submitted:
                             rep = 1.0 - blits / submitted
                             print(f"    pace  {100 * rep:.1f}% of headset "
@@ -1446,7 +1490,15 @@ def main(path):
                             # ROTATION and not for scene motion, so the cost
                             # lands exactly where Patola reported it: fast
                             # relative motion, close to a station.
-                            if rep >= 0.20:
+                            if blit_win:
+                                # The window series above already judged this
+                                # run and is the better statistic. Two verdicts
+                                # on one page, one of them from a number that
+                                # mixes loading with flight, is how take 304a
+                                # got "not enough to explain a doubling
+                                # complaint" printed under a 71%-starved run.
+                                pass
+                            elif rep >= 0.20:
                                 print("    pace  => the headset is showing "
                                       "one stale frame in five or worse. "
                                       "Reprojection hides that for head "

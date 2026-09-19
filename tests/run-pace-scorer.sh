@@ -40,11 +40,22 @@ fail=0
 ok()  { printf 'ok    %s\n' "$1"; }
 bad() { printf 'FAIL  %s\n' "$1"; fail=1; }
 
-# plant <name> <blits> <submitted> <period_ms> <changes> [omit_pace]
+# plant <name> <blits> <submitted> <period_ms> <changes> [omit_pace] [strip]
+#
+# `strip` removes the base's PERIODIC `vr copy` lines, leaving only the
+# planted one. That is what a run too short to produce a rate series looks
+# like, and it is the only way to exercise the totals fallback now that the
+# per-window statistic takes precedence over it. Take 304a is why the
+# precedence exists: its session totals said 14.8% repeats for a run whose
+# flight phase never repeated a frame.
 plant() {
-    local name=$1 blits=$2 sub=$3 per=$4 chg=$5 omit=${6:-no}
+    local name=$1 blits=$2 sub=$3 per=$4 chg=$5 omit=${6:-no} strip=${7:-no}
     local f="$WORK/$name.log"
-    cp "$BASE" "$f"
+    if [ "$strip" = strip ]; then
+        grep -av 'vr copy (' "$BASE" > "$f"
+    else
+        cp "$BASE" "$f"
+    fi
     {
         printf '[ 999999.000] layer   vr summary (planted): runtime=%s session=1 focused=1 frames=%d located=%d submitted=%d span=0.1000,0.1000,0.1000\n' \
             'PLANTED' "$sub" "$sub" "$sub"
@@ -68,20 +79,45 @@ want() {  # want <label> <output> <regex>
     fi
 }
 
-# 30% repeats at 90 Hz: the regime takes 303b-d were in.
-out=$(plant high 14000 20000 11.11 0)
+# --- the per-window rate, which is the number to read ------------------
+#
+# Take 303's own periodic series is the base here, so these assert the
+# statistic that take 304a needed and the session totals could not give.
+out=$(plant windowed 14000 20000 11.11 0)
 want "90.0 Hz read back from an 11.11 ms period" "$out" 'display 90\.0 Hz'
-want "30% repeats reported"                      "$out" '30\.0% of headset frames showed a REPEAT'
-want "high repeat reaches the loud verdict"      "$out" 'one stale frame in five or worse'
+want "a per-window rate is reported at all"      "$out" 'new content [0-9.]+ Hz median'
+want "and says it is not a total"                "$out" 'NOT a total'
+want "the starved fraction is reported"          "$out" 'STARVED in [0-9]+% of windows'
+want "with a run-wide deficit in Hz"             "$out" '[0-9.]+ Hz of new content missing run-wide'
 
-# 10%: real, but not enough to carry a doubling complaint on its own.
-out=$(plant mid 18000 20000 11.11 0)
+# PRECEDENCE. The totals verdict must NOT also fire when the window series
+# exists: take 304a printed "not enough to explain a doubling complaint" from
+# its totals directly beneath a 71%-starved window series. Two verdicts, one
+# of them computed over loading, is worse than one.
+if printf '%s' "$out" | grep -qE 'not enough to explain|NOT available as an explanation|one stale frame in five'; then
+    bad "a totals verdict fired even though the window series was available"
+else
+    ok "totals verdict defers to the window series"
+fi
+
+# --- the totals fallback, for a run too short to produce a rate series ---
+out=$(plant high 14000 20000 11.11 0 no strip)
+want "30% repeats reported"                 "$out" '30\.0% of headset frames showed a REPEAT'
+want "high repeat reaches the loud verdict" "$out" 'one stale frame in five or worse'
+want "and no window series is invented"     "$out" 'display 90\.0 Hz'
+if printf '%s' "$out" | grep -qE 'STARVED in'; then
+    bad "a starved fraction was printed with no periodic series to compute it from"
+else
+    ok "no starved fraction without a series to compute it from"
+fi
+
+out=$(plant mid 18000 20000 11.11 0 no strip)
 want "10% repeats reported"                 "$out" '10\.0% of headset frames showed a REPEAT'
 want "mid repeat says it cannot explain it" "$out" 'not enough to explain a doubling complaint'
 
 # 1%: the frame deficit must be explicitly REMOVED as an explanation, not
 # merely left unmentioned — a silent block reads as absence of a defect.
-out=$(plant low 19800 20000 11.11 0)
+out=$(plant low 19800 20000 11.11 0 no strip)
 want "1% repeats reported"               "$out" '1\.0% of headset frames showed a REPEAT'
 want "low repeat rules the deficit OUT"  "$out" 'NOT available as an explanation'
 
