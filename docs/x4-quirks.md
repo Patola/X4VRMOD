@@ -20682,3 +20682,102 @@ standing condition, not a property of any one take.
 open. It is not worth a take: both point at WiVRn's streaming path, which is
 not ours, and two mitigations we control already work — SteamVR at full
 resolution, or a lower resolution on WiVRn.
+
+## HANDOVER — the mouse shim (#71/#46/#64/#72), written before the work starts
+
+### Where the code actually is
+
+There is no separate shim binary. `cursor/README.md` is a **placeholder**; the
+work lives in two places:
+
+* **`injector/x4vr_inject.cpp`** — `LD_PRELOAD`, hooks SDL3. It owns the input
+  channel (#19, done):
+  - `SDL_GetKeyboardState` — copies the real array and forces the free-look
+    scancode bit. Polled state, no event synthesis, no key-up to lose.
+  - `SDL_PeepEvents` / `SDL_WaitEvent` — X4's drain. **`headlook_tick()` runs
+    INSIDE this interception**, and `send_mouse_delta()` pushes a synthetic
+    `SDL_EV_MOUSE_MOTION` with `xrel/yrel` into the very loop that is draining.
+    That is why queue residency is 0.01 ms.
+  - `SDL_GetMouseState` / `SDL_WarpMouseInWindow` — `fold_x()` for the SBS
+    split, plus `publish_cursor()` for the layer's drawn cursor.
+  - `SDL_SetWindowRelativeMouseMode` — tracked only, so `fold_x` stands down
+    during mouse-look. Passed through untouched by design.
+* **`layer/x4vr_cursor_draw.hpp`** — draws the cursor into the eye image (#17,
+  done), because the real SDL cursor is hidden (`hide_sdl_cursor`).
+
+X4 imports BOTH mouse idioms (`SDL_GetMouseState`+`SDL_WarpMouseInWindow` and
+`SDL_SetWindowRelativeMouseMode`); the injector hooks all of them.
+
+### The trap that must not be walked into again
+
+**`X4VR_TICK_HZ` is HARMFUL and is kept only to reproduce the damage.** Moving
+the servo tick off X4's drain onto a thread of our own measured:
+
+    servo on the drain      take 291   0.01 ms mean queue residency
+    X4VR_TICK_HZ=90         take 292  16.79 ms mean, 19.89 median
+
+~17 ms of pure added latency, charged to a loop whose stability is counted in
+TICKS. Every session that ever went wild had the knob set (285b-s2, 287b, 292),
+and 285b-s1 is the one that did not and is still unexplained.
+
+`tools/score_run.py` **told the reader to do exactly this** — "the fix is to
+stop deriving the tick from the drain at all" — from before take 292 measured
+the damage. It survived every scoring run since and changed a handover
+recommendation in this session before anyone checked it against the code it
+was recommending changes to. Now corrected to name `X4VR_HEADLOOK_UNGATED`
+and say explicitly NOT to move the tick.
+
+**Consequence for the ungate A/B: it does NOT belong to the shim work.**
+Removing `if (!fresh) return;` keeps the tick on the drain and only stops it
+skipping iterations — 117 -> 53 ms of servo lag (servo_rate.cpp section 12)
+with the 0.01 ms residency intact. The gate and the cadence are separate
+questions; the stale line had merged them. It can be run before, during or
+after the shim, and it is still built and never run.
+
+### #71 — what is OBSERVED and what is only supposed
+
+**Observed:** Patola confirmed by hand that mouse steering is dead while
+head-look is armed, and that arrow keys still work. Take 211 separately
+confirmed by hand that steering is independent of head-look and that HUD
+clicks work, at 4224². **Those two read as contradictory and are probably
+reconciled by "armed or not" — take 211 likely had head-look disarmed. That
+reconciliation is a GUESS and is the first thing to establish.**
+
+**Not established: the mechanism.** The obvious story is that head-look and
+the player share one channel (both are `SDL_EV_MOUSE_MOTION` with xrel/yrel)
+and a closed-loop regulator on that channel cancels an open-loop contribution.
+Plausible, unverified, and not to be built against until measured. Note that
+`evflow`'s "player's own motion 0.0 Hz" in every recent take is NOT evidence
+for it — every one of those takes was a measurement run in which Patola was
+not touching the mouse. An instrument reporting zero for an input nobody
+supplied says nothing.
+
+### What the first step should be, and what it must not be
+
+Measure before building, on a take where Patola DOES move the mouse while
+head-look is armed, with `evflow` reporting ours/theirs separately (it already
+splits them — the ours/theirs budget split exists since take 122).
+
+The three candidate mechanisms, which need different fixes:
+
+1. the player's events reach X4 and the servo steers the camera back
+   (regulator cancellation) — fix is to give head-look its own channel, or to
+   feed the player's delta into the servo's target instead of fighting it;
+2. the player's events are dropped or overwritten before X4 sees them — fix is
+   in our interception;
+3. X4 itself ignores motion while the free-look key is held — fix is not ours
+   at all, and would mean head-look must stop holding the key.
+
+Nothing in the tree distinguishes these today. **Do not design a fix before
+the take says which.** Three fixes for one unmeasured quantity is a pattern
+this project has already paid for.
+
+### Riding along
+
+* **#78** — we zero the declared pose in ONE frame while X4 eases over ~0.9 s,
+  disagreeing by up to 55 deg. The fix is a design choice, not a search, and
+  was explicitly noted as able to ride #71's take.
+* **#64** — pointer starts at (0,0) on savegame load.
+* **#46** — cursor invisible over much of the eye image until moved down.
+* **#72** — head-look keeps driving in external view while logging "idle"
+  (command reached 163.80 there against 69.95 in cockpit).

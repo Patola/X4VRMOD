@@ -3009,8 +3009,30 @@ def main(path):
                       f"only ~{100 * mid:.0f}% of publish intervals contain "
                       f"one. Note this run reached that rate because OUR OWN "
                       f"injected events lengthen the drain loop, which is take "
-                      f"119's runaway in miniature and not a lever to pull. The "
-                      f"fix is to stop deriving the tick from the drain at all.")
+                      f"119's runaway in miniature and not a lever to pull. "
+                      f"REMOVE the freshness gate (X4VR_HEADLOOK_UNGATED) — do "
+                      f"NOT move the tick off the drain.")
+            # That last sentence used to read "the fix is to stop deriving the
+            # tick from the drain at all", which is X4VR_TICK_HZ — the knob
+            # x4vr_inject.cpp documents as HARMFUL, in the comment that opens
+            # "that move is the defect". headlook_tick() is called from INSIDE
+            # the SDL_PeepEvents interception, so the mouse event it pushes is
+            # consumed by the very drain loop it was pushed into: 0.01 ms
+            # residency on the drain (take 291) against 16.79 ms on a thread of
+            # our own (take 292), and every session that ever went wild had the
+            # knob set. Staying on the drain is load-bearing.
+            #
+            # The gate and the cadence are separate questions and this line had
+            # merged them. Removing `if (!fresh) return;` keeps the tick where
+            # it is and only stops it skipping iterations — 117 -> 53 ms of
+            # servo lag in servo_rate.cpp section 12, with the 0.01 ms
+            # residency intact.
+            #
+            # Left as a warning about the class: this advice was written before
+            # take 292 measured the damage, survived every scoring run since,
+            # and was still being read as current — it changed a handover
+            # recommendation before anyone checked it against the code it was
+            # recommending changes to.
         drv = pump if driver == "pump" else peep
         # Which cadence the tick ran on decides what every number above means.
         # With our own driver, `pump` is no longer the tick's supply and the
