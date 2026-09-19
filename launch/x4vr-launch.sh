@@ -585,6 +585,18 @@ if [[ "${X4VR_GAMESCOPE:-0}" == 1 ]]; then
         # are presented into -- but X4 must render one eye. State it here rather
         # than leaving the injector to infer it, so the window size and the
         # render size are set in the same place and can be read together.
+        #
+        # This OVERWRITES any X4VR_RES on the command line, which is a trap
+        # worth shouting about: the render size is a function of X4VR_W/X4VR_H
+        # in this mode, so a take that changes X4VR_RES alone changes NOTHING
+        # and its log still prints the value it asked for. Every take since
+        # 268 has passed an X4VR_RES that merely happened to agree.
+        if [[ -n "${X4VR_RES:-}" && "$X4VR_RES" != "$(( W / 2 ))x${H}" ]]; then
+            echo "x4vr-launch: WARNING — X4VR_RES=$X4VR_RES was IGNORED." \
+                 "In SBS split mode the render size is X4VR_W/2 x X4VR_H," \
+                 "so this run renders $(( W / 2 ))x${H}. Set X4VR_W/X4VR_H" \
+                 "to change it; X4VR_RES alone does nothing here." >&2
+        fi
         export X4VR_RES="$(( W / 2 ))x${H}"
     fi
     if [[ -z "$W" || -z "$H" ]]; then
