@@ -21110,3 +21110,41 @@ does.
 **Neither is a fix, and neither justifies a take of its own.** Both ride the
 next run of any kind. Do not touch the publish path until a census line says
 what the pointer range and the eye extent actually are in the same run.
+
+## P307 — committed before take 307 runs
+
+First run carrying the cursor and pad censuses. **No knob changes from take
+306's line** except the take name and log, minus the two ungate knobs that
+closed with take 306 — so this is also a repeat of a known-good state.
+
+**Controller configuration: (2) — sc-controller running with Xbox emulation
+ON, X52 Pro NOT connected.** That is Patola's usual setup, so every historical
+take was in it and the census reading is comparable to the whole record. One
+variable: adding the HOTAS would change two things at once, and if X4 then
+opened only one device the census could not say which was declined. It also
+isolates the question we want first — while sc-controller runs, Steam cannot
+see his Steam Controller 2, so anything X4 sees arrived through SDL/evdev.
+
+* **P307.1** The cursor census reports **THE POSITION CHANNEL IS DEAD**, with
+  the pointer pinned at a single point. This is near-certain rather than a
+  prediction — `publish_cursor()`'s only caller is `SDL_GetMouseState` and
+  three stored logs show X4 never calls it. It is written down so the census
+  is seen to reproduce a known answer before anything is read off it that is
+  not already known.
+* **P307.2** `off-eye` will be **0 or near it**. A pointer pinned at (0,0)
+  maps through the measured contracting canvas to NDC (-0.525,-0.525), which
+  is well inside the eye, so the cull should not be what is eating the cursor.
+  A large `off-eye` count would refute the whole reading above.
+* **P307.3** The pad census reports **THE SDL PATH IS LIVE** — X4 enumerates
+  the sc-controller virtual pad, opens it, and polls its axes. sc-controller
+  presents a standard uinput X360 device for which SDL has a built-in mapping,
+  and X4's bundled SDL3 carries the evdev/udev backend. **If this holds, #71's
+  controller question reduces to BINDINGS**, and the X52 failure is most
+  likely the `INPUT_JOYAXIS_RX/RY` steering vs `X/Y` strafe story. If instead
+  it reports SEES NO DEVICE, something upstream of X4 is capturing the pad and
+  no rebinding could ever have worked.
+
+Nothing here reads the lag or overshoot estimators, so head position does not
+matter and there is no clamp-saturation hazard — the failure that cost take
+305. Both censuses are passive counters; the pad one needs no behaviour from
+the player at all.
