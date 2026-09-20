@@ -3240,6 +3240,112 @@ def main(path):
                   f"for X4's free-look, and the run should have had hands off "
                   f"the mouse.")
 
+    # --- #46/#64: did the cursor draw, and did its position ever move? ------
+    #
+    # Every early return in the overlay's record() used to be a bare
+    # `return false`, so takes 305 and 306 -- both of which armed the overlay
+    # and never drew a thing -- produced byte-identical logs. The census names
+    # the branch. Silent on older logs, which is the difference between "not
+    # measured" and "measured zero".
+    cc = re.findall(
+        r"cursor census \((\w+)\): (\d+) present\(s\) — (.*?) \| pointer "
+        r"x=(-?[\d.]+)\.\.(-?[\d.]+) y=(-?[\d.]+)\.\.(-?[\d.]+) against a "
+        r"(\d+)x(\d+) eye \(([^)]*)\)", text)
+    if cc:
+        when, total, bins, xlo, xhi, ylo, yhi, ew, eh, moved = cc[-1]
+        total, ew, eh = int(total), int(ew), int(eh)
+        xlo, xhi = float(xlo), float(xhi)
+        ylo, yhi = float(ylo), float(yhi)
+        drew = 0
+        reasons = {}
+        for part in bins.split(" | "):
+            bits = part.rsplit(" ", 1)
+            if len(bits) == 2 and bits[1].isdigit():
+                reasons[bits[0]] = int(bits[1])
+        drew = reasons.get("drew", 0)
+        print(f"cursor     {len(cc)} census line(s), last ({when}): {total} "
+              f"present(s), drew {drew} "
+              f"({100.0 * drew / total if total else 0.0:.1f}%) | {bins}")
+        print(f"cursor     pointer x={xlo:.0f}..{xhi:.0f} y={ylo:.0f}..{yhi:.0f} "
+              f"against a {ew}x{eh} eye")
+        # Ordered by what has to be true first: a position that never moves
+        # makes every placement question unanswerable, so it outranks a cull.
+        if xhi <= xlo and yhi <= ylo:
+            print(f"cursor     => THE POSITION CHANNEL IS DEAD. The pointer "
+                  f"never left ({xlo:.0f},{ylo:.0f}). publish_cursor()'s only "
+                  f"caller is our SDL_GetMouseState interposer and X4 does not "
+                  f"call it — check for a 'sdl: GetMouseState extent' line, "
+                  f"which logs on every new extreme and so appears on the first "
+                  f"call. #46's placement CANNOT be read from this run.")
+        elif drew == 0:
+            worst = max((v, k) for k, v in reasons.items() if k != "drew")
+            print(f"cursor     => NEVER DREW, and the reason is '{worst[1]}' "
+                  f"({worst[0]} of {total}). That names the branch; it does not "
+                  f"name the cause.")
+        else:
+            # The factor-2 prediction, committed in docs before this ran: the
+            # pointer measured 0..1408 in BOTH axes against a 2816 eye. Stated
+            # as a ratio so it reports whatever the number is, rather than
+            # announcing the prediction regardless.
+            rx = (xhi - xlo) / ew if ew else 0.0
+            ry = (yhi - ylo) / eh if eh else 0.0
+            print(f"cursor     => DREW. Pointer spans {100.0 * rx:.0f}% of the "
+                  f"eye in x and {100.0 * ry:.0f}% in y.")
+            if rx < 0.75 or ry < 0.75:
+                print(f"cursor     => AND CANNOT REACH THE WHOLE EYE. A pointer "
+                      f"covering {100.0 * rx:.0f}%x{100.0 * ry:.0f}% leaves the "
+                      f"rest unreachable whatever the canvas does. Near 50% in "
+                      f"BOTH axes is the logical-vs-physical factor of 2 "
+                      f"predicted for #46; near 50% in x ALONE would be the SBS "
+                      f"fold instead.")
+        if reasons.get("off-eye"):
+            print(f"cursor     NOTE: {reasons['off-eye']} frame(s) culled "
+                  f"off-eye. That cull is computed from the UNMAPPED position "
+                  f"while the draw uses the mapped one, and the canvas "
+                  f"contracts — so some of these would have been on-eye.")
+
+    # --- #71: what controllers does X4 actually see? ------------------------
+    #
+    # X4 requests SteamInput006 AND imports the whole SDL3 joystick API, and
+    # which path is live is not readable from the binaries. Silent unless X4
+    # touched the API, so a keyboard-and-mouse run carries no line about
+    # hardware nobody plugged in.
+    pc = re.findall(
+        r"pad census: enumerate (\d+) \(last saw (-?\d+) device\(s\)\) \| "
+        r"opened joystick (\d+) gamepad (\d+) \| axis reads (\d+) \| "
+        r"mapping files (\d+)", text)
+    pad_names = re.findall(r'pad: X4 (opened \w+) id=(\d+) name="([^"]*)"', text)
+    if pc:
+        en, seen, oj, op, ax, maps = (int(v) for v in pc[-1])
+        print(f"pad        enumerate {en} (last saw {seen} device(s)) | opened "
+              f"joystick {oj} gamepad {op} | axis reads {ax} | mappings {maps}")
+        for what, pid, name in pad_names:
+            print(f"pad        {what} id={pid} \"{name}\"")
+        if seen == 0:
+            print(f"pad        => X4 SEES NO DEVICE. It asked SDL {en} time(s) "
+                  f"and SDL had none to give, so nothing reached X4 through "
+                  f"evdev/udev at all. No rebinding could fix that — the "
+                  f"question is whether the device was captured upstream or "
+                  f"never presented. State the controller configuration.")
+        elif oj == 0 and op == 0:
+            print(f"pad        => ENUMERATED {seen} BUT OPENED NONE. X4 saw the "
+                  f"device and declined it — a mapping/GUID question, not a "
+                  f"binding one.")
+        elif ax == 0:
+            print(f"pad        => OPENED, NEVER POLLED. {oj + op} device(s) "
+                  f"opened and not one SDL_GetJoystickAxis call. The axes are "
+                  f"not being read, so no binding could have acted.")
+        else:
+            print(f"pad        => THE SDL PATH IS LIVE. {ax} axis read(s) "
+                  f"across {oj + op} opened device(s), so X4 is polling what "
+                  f"evdev gave it. Anything still not steering is a BINDING "
+                  f"question — his inputmap puts steering on "
+                  f"INPUT_JOYAXIS_RX/RY and strafe on X/Y.")
+    elif pad_names:
+        print(f"pad        {len(pad_names)} device line(s) but no census line — "
+              f"the report is gated on the pumprate cadence, which needs X4's "
+              f"drain to be running.")
+
     # --- task #75: did our own tick cadence actually run? -------------------
     #
     # Reported separately from `pumprate` because "the driver ran at 90 Hz" and
