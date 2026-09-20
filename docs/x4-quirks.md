@@ -20915,3 +20915,104 @@ from a ~53 ms or a ~117 ms servo. The answer is **neither: ~13-17 ms, and the
 gate has nothing to do with it.** The shim's parameters do not depend on a
 servo change that does not exist, so #71 can be measured against the input
 path as it stands. Nothing is blocked.
+
+## #71 reopened on the tree, not on a take — and the handover above is wrong
+
+No run was spent here. Everything below comes from the repo, X4's binary, and
+Patola's own `inputmap.xml`. It contradicts the "HANDOVER — the mouse shim"
+section above, which stays as written.
+
+### What the handover got wrong
+
+**1. "Nothing in the tree distinguishes these [three candidate mechanisms]
+today."** It does, on one line. `injector/x4vr_inject.cpp` in
+`SDL_PeepEvents`:
+
+```cpp
+if (consuming && e->type == SDL_EV_MOUSE_MOTION &&
+    e->reserved != kOurEventMagic &&
+    g_headlook_steering.load(std::memory_order_relaxed)) {
+    e->xrel = 0.0f;
+    e->yrel = 0.0f;
+}
+```
+
+That is candidate (2) — the player's events overwritten before X4 sees them —
+as our own deliberate code, from commit `503005b` (#33), with a comment giving
+the reason: the player's mouse fought the head and the servo dragged the view
+back.
+
+**2. "`evflow`'s 'player's own motion 0.0 Hz' ... every one of those takes was
+a measurement run in which Patola was not touching the mouse."** Six takes
+carry non-zero foreign motion — 123.6 Hz in take 291, 76.6 in 292, 50.5 in
+293, 42.5 in 304b. In take 304b three consecutive windows have foreign motion
+AND `steer=1` on *every* `lagsample` in them, so those events were blanked by
+the code above. `steer=` is stamped from the same local that arms the drop
+(one function, ~200 lines apart), not re-derived. This is **executed**, not
+merely emitted.
+
+**3. It ignored what this same file already said.** The "#71 is STRUCTURAL,
+not a bug" entry records that holding MOUSELOOK is how X4 suspends ship
+control, that `GetCameraRotation` has no setter in 1931 FFI cdefs, and names
+the cheap untested question. The handover was written into this file and did
+not read it.
+
+### And two claims I then made to Patola, both refuted by him
+
+**"There is no keyboard pitch/yaw in your inputmap at all, only roll on
+Q/E."** False. `inputmap.xml` lines 329-332:
+
+    INPUT_STATE_STEER_LEFT   -> INPUT_KEYCODE_LEFT
+    INPUT_STATE_STEER_RIGHT  -> INPUT_KEYCODE_RIGHT
+    INPUT_STATE_STEER_UP     -> INPUT_KEYCODE_DOWN
+    INPUT_STATE_STEER_DOWN   -> INPUT_KEYCODE_UP
+
+I had grepped `<state .*(STEERING|YAW|PITCH|ROLL)`. The analog axes are
+`INPUT_RANGE_STEERING_*`; the held keys are `INPUT_STATE_STEER_*`. One family
+surveyed, the other reported absent from the game. Patola flies with these
+daily and corrected it immediately.
+
+**"Steam was never in the loop — we exec the binary directly."** False. X4
+requests `SteamInput006` and `SteamController008` through
+`SteamInternal_FindOrCreateUserInterface`, ships `lib/libsteam_api.so`,
+imports `SteamAPI_IsSteamRunning`, and `launch/x4vr-launch.sh` exports
+`SteamAppId=392160`. The client must be running and X4 has a genuine Steam
+Input path.
+
+### What is actually established now
+
+* **A non-mouse steering channel already works under head-look.** Patola
+  steers with the arrow keys while MOUSELOOK is held, across many takes. That
+  confirms this file's own "only the *mouse* is suspended" and means **#71 is
+  a quality-of-control defect, not a playability blocker.** His words for the
+  arrow keys: *"far from perfect and not even close to using the mouse, but at
+  least it allowed me to get close to stations and steer."*
+* **Two mechanisms are live at once**, and they are not alternatives:
+  (2) we blank the player's `xrel`/`yrel` while steering, and (3) X4 suspends
+  mouse control while MOUSELOOK is held. **An A/B that only switches our drop
+  off cannot restore mouse steering**, because X4 reads motion as LOOK
+  regardless — it would be a null by construction. That is the take the
+  handover was about to ask for.
+* **Our inputmap rewrite is exonerated**: exactly one line differs from
+  Patola's own file, `INPUT_STATE_CAMERA_MOUSELOOK` moved to `INPUT_KEYCODE_F13`.
+  No joystick binding is touched.
+* **X4 is a native Wayland client** — `vkCreateWaylandSurfaceKHR`,
+  `SDL_GetCurrentVideoDriver()=wayland`, logged every run by #18. The X11-only
+  CEF overlay cannot reach it, which is Patola's diagnosis and is correct.
+* **X4 has TWO controller paths** — `SteamInput006` and the SDL3 evdev/udev
+  one (`/dev/input/event*` through libudev, in X4's bundled `libSDL3.so.0`),
+  tied together by its `SDL_GetGamepadSteamHandle` import. **Which one is live
+  in our configuration is unknown and is not readable from the binaries.**
+* Patola's X52 Pro and his sc-controller virtual pad both failed to fly the
+  ship. His inputmap puts steering on `INPUT_JOYAXIS_RX`/`RY` (Xbox right
+  stick) and strafe on `X`/`Y`, so a stick whose main axes are X/Y would
+  strafe rather than turn. **That is a prediction from the file, not a
+  measurement**, and it competes with "Steam Input captured the device".
+
+### What must NOT be done next
+
+Do not design #71's fix. Three mechanisms were listed in the handover, two are
+now known live, and the arrow-key finding changes what the fix is even *for* —
+it is no longer "restore steering" but "give back something better than
+digital keys". See [[hypothesis-and-fix-in-one-step]] and
+[[three-fixes-one-unmeasured-number]].
