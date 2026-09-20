@@ -21016,3 +21016,97 @@ now known live, and the arrow-key finding changes what the fix is even *for* —
 it is no longer "restore steering" but "give back something better than
 digital keys". See [[hypothesis-and-fix-in-one-step]] and
 [[three-fixes-one-unmeasured-number]].
+
+## #46/#64: the cursor channel is dead, and no log could have said so
+
+Found by reading, before any take. Two defects, stacked — the first is
+certain from stored logs, the second is a prediction.
+
+### 1. `publish_cursor` has one caller, and X4 never calls it
+
+`publish_cursor()` is called from exactly one place: our `SDL_GetMouseState`
+interposer. X4 **imports** `SDL_GetMouseState` — and never calls it.
+
+The proof is `note_extent`, which sits in the same interposer two lines above
+the publish and logs on every *new extreme*, so a single call would emit a
+line. Across takes 303b, 305 and 306 there is **not one**
+`sdl: GetMouseState extent` line. The drain's own `note_mouse_event` fires in
+the same runs under the same `this_is_the_game()` guard, so the guard is not
+the explanation.
+
+`SDL_WarpMouseInWindow` does **not** publish either — it folds x and passes
+through. The mouse-shim handover said both idioms "do `fold_x` +
+`publish_cursor`"; only one ever did, and it is the dead one.
+
+**So the cursor position in shared memory is permanently (0,0).** Take 303b is
+the only recent run whose overlay drew at all, and its one-shot says
+`first at x=0.0 y=0.0`. That is not a savegame-load artifact: **#64 is not
+"the pointer starts at (0,0)", it is "the pointer is never published".**
+
+This is [[x4vr-imports-are-not-calls]] for the fourth time in this project —
+after SDL_PollEvent (interposed for 47 takes, fired zero times) and
+SDL_GetKeyboardState.
+
+### 2. A factor of 2 between the pointer and the eye — predicted, not measured
+
+The drain measures the pointer ranging **0..1408 in both axes**
+(`sdl: motion extent x=0..1408 y=0..1408`). X4 believes its window is
+**2816x2816** (`SDL_GetWindowSize -> 2816x2816`, after our halving) and the eye
+image is **2816x2816**. Half, in *both* axes, so it is not the SBS fold, which
+is x-only.
+
+`cursor_rect()` maps the pointer against the eye extent. If the pointer is in
+logical units and the eye in physical pixels, the cursor is confined to the
+**top-left quadrant** — and the canvas map then contracts what is left.
+
+**The canvas contracts; it does not magnify.** Measured in take 303b:
+
+    canvas eye0 A=(0.5252,0.5252) B=(+0.00002,+0.00000)
+      -> hotspot moves +668.6,+668.5 px
+
+The header's own comment says "a scale of about 1.29 in x and 1.19 in y". The
+run says 0.5252 in both. Quadrant plus contraction would leave the cursor
+reachable only in an inner block of the upper-left quadrant — which is the
+shape of #46's complaint, and is **not confirmed**: nothing can be confirmed
+about placement while the position never updates at all. Fixing the publish
+without settling the 2 would move the cursor from a corner to a quadrant and
+look like progress. See [[x4vr-fixed-here-broken-next-door]].
+
+X4 never calls `SDL_GetWindowSizeInPixels` either, so no stored log
+distinguishes logical from physical. That is a question for the census below,
+not for reasoning.
+
+### A latent third: the cull asks a different question than the draw
+
+`record()` culls on `cursor_rect()`'s `onscreen`, computed from the **unmapped**
+position, then draws at the **mapped** one. With a contracting map the mapped
+point is always nearer the centre, so a pointer outside the eye can be culled
+while its drawn position would have been inside. It cannot fire at today's
+0..1408 range. It is recorded, not fixed — the census will count it if it ever
+does.
+
+### What was built, and what it must not be used for
+
+* **A cursor refusal census.** Every one of `record()`'s early returns was a
+  bare `return false`; takes 305 and 306 both armed the overlay, never drew,
+  and produced byte-identical logs. Now each branch tallies
+  (`not-ready | no-channel | no-cursor-image | bad-pitch | format |
+  no-pipeline | off-eye | drew`), reported periodically and at teardown with
+  the pointer range and the eye extent on the same line, and an explicit
+  **"NEVER MOVED — the channel is not being fed"** when the range is a point.
+  `refuse()` makes a bare `return false` impossible to add without picking a
+  bin, and `tests/cursor_place.cpp` fails the build if a reason has no name.
+* **A controller census** (#71). `SDL_GetJoysticks` / `OpenJoystick` /
+  `OpenGamepad` / `IsGamepad` / `GetJoystickAxis` /
+  `AddGamepadMappingsFromFile`, all six checked with `nm -D` before being
+  hooked and all six added to `tests/check-exports.sh`, whose comment is
+  explicit that adding a hook means adding it there. It says what X4
+  enumerates, what it opens, what those devices are NAMED, and — the part that
+  discriminates — whether the axes are ever **read**. A device that never
+  appears was never offered to X4, which no rebinding could fix; one that is
+  opened and never polled is a different defect from one polled into the wrong
+  binding.
+
+**Neither is a fix, and neither justifies a take of its own.** Both ride the
+next run of any kind. Do not touch the publish path until a census line says
+what the pointer range and the eye extent actually are in the same run.

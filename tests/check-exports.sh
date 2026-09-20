@@ -31,6 +31,8 @@ SDL_GetWindowSize SDL_GetWindowSizeInPixels
 SDL_PeepEvents SDL_WaitEvent SDL_PumpEvents
 SDL_GetMouseState SDL_WarpMouseInWindow SDL_SetWindowRelativeMouseMode
 SDL_GetKeyboardState SDL_SetCursor SDL_CreateColorCursor
+SDL_GetJoysticks SDL_OpenJoystick SDL_OpenGamepad
+SDL_IsGamepad SDL_GetJoystickAxis SDL_AddGamepadMappingsFromFile
 luaL_loadbuffer luaL_loadfile
 x4vr_shared_state x4vr_head_state
 "

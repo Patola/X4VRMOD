@@ -13438,8 +13438,12 @@ void vr_thread() {
         // line rather than in a second format saying the same things, so a run
         // that is killed rather than quit still leaves the scorer something it
         // can parse.
-        if (tick)
+        if (tick) {
             vr_report("periodic");
+            // Outside vr_report, which returns early when !g_vr. The cursor is
+            // drawn in flatscreen too, and #46 is not a VR-only defect.
+            g_sbs.cursor_report("periodic");
+        }
     }
 }
 
@@ -13824,6 +13828,7 @@ void vr_report(const char *when) {
 void vr_shutdown() {
     if (!g_vrs.started.load()) {
         vr_report("final");
+        g_sbs.cursor_report("final");
         x4vr::xr::runtime_close(g_vrs.rt);
         return;
     }
@@ -13831,6 +13836,7 @@ void vr_shutdown() {
     if (g_vrs.thread.joinable())
         g_vrs.thread.join(); // must finish before the device goes away
     vr_report("final");
+    g_sbs.cursor_report("final");
     // Before the session, which owns it. The present thread is gone by now:
     // this runs from vkDestroyDevice, after X4 has stopped presenting.
     if (g_vrs.sc_ready.load()) {

@@ -3665,6 +3665,10 @@ static void camprobe_start() {
 // span than a fast one and the two could not be compared. Windows also make the
 // phases Patola flies visible -- take 283's rate fell from ~88 Hz early to
 // ~52-58 Hz in gameplay, and a cumulative counter hid that behind one average.
+// #71's controller census, defined with the SDL joystick hooks far below. It
+// rides this cadence rather than owning one, so an idle run costs nothing.
+void pad_report();
+
 void pumprate_report() {
     const double now = mono_seconds();
     if (g_pumprate.t_window == 0.0) {
@@ -3751,6 +3755,7 @@ void pumprate_report() {
         g_evflow.p_fo = fo; g_evflow.p_ls = ls;
         g_evflow.p_ln = ln; g_evflow.p_dr = dr;
     }
+    pad_report();
 
     g_pumprate.entered = g_pumprate.nopose = 0;
     g_pumprate.fresh = g_pumprate.skipped = 0;
@@ -4218,6 +4223,145 @@ void SDL_WarpMouseInWindow(void *win, float x, float y) {
     static auto real_fn =
         real<void (*)(void *, float, float)>("SDL_WarpMouseInWindow");
     real_fn(win, this_is_the_game() ? fold_x(x) : x, y);
+}
+
+// ------------------------------------------------ the controller census (#71)
+//
+// X4 has TWO controller paths and we cannot tell from the binaries which one is
+// live: it requests `SteamInput006` and `SteamController008` through
+// SteamInternal_FindOrCreateUserInterface, AND imports the whole SDL3
+// joystick/gamepad API, with SDL_GetGamepadSteamHandle tying the two together.
+// Patola's X52 Pro and his sc-controller virtual pad both failed to fly the
+// ship, and at least two explanations survive that: his inputmap puts steering
+// on INPUT_JOYAXIS_RX/RY with strafe on X/Y, so a stick whose main axes are X/Y
+// would strafe rather than turn -- or Steam captured the device and SDL never
+// saw it.
+//
+// Those want opposite fixes, so this counts rather than guesses: what X4
+// enumerates, what it opens, and what it names them. A device that never
+// appears here was never offered to X4 at all, which is the one thing no amount
+// of rebinding could fix.
+//
+// Every symbol below was checked with `nm -D --undefined-only` before it was
+// hooked. This project has four times instrumented a function X4 never calls --
+// SDL_PollEvent for 47 takes, SDL_GetKeyboardState, and, as of today,
+// SDL_GetMouseState, which is publish_cursor's only caller. An import is not a
+// call, and the census exists to say which of the two this is.
+struct PadCensus {
+    std::atomic<uint64_t> enumerated{0}, opened_joy{0}, opened_pad{0};
+    std::atomic<uint64_t> axis_reads{0}, is_gamepad{0}, mappings{0};
+    std::atomic<int> last_count{-1};
+    std::atomic<bool> said{false};
+} g_pads;
+
+// Names are logged once each, keyed on the string, because X4 re-queries them
+// per frame in some menus and a per-call line would bury the log.
+void pad_note_name(const char *what, const char *name, uint32_t id) {
+    static std::mutex mu;
+    static std::vector<std::string> seen;
+    if (!name || !*name)
+        return;
+    std::lock_guard<std::mutex> lock(mu);
+    const std::string key = std::string(what) + "\x1f" + name;
+    for (const auto &s : seen)
+        if (s == key)
+            return;
+    seen.push_back(key);
+    X4VR_LOG("pad: X4 %s id=%u name=\"%s\"", what, id, name);
+}
+
+// SDL_JoystickID is Uint32, so the return is uint32_t* -- passed straight
+// through either way, but spelled correctly so the next reader is not misled
+// about what X4 is handed.
+uint32_t *SDL_GetJoysticks(int *count) {
+    static auto real_fn = real<uint32_t *(*)(int *)>("SDL_GetJoysticks");
+    uint32_t *r = real_fn(count);
+    if (this_is_the_game()) {
+        g_pads.enumerated.fetch_add(1, std::memory_order_relaxed);
+        const int n = count ? *count : -1;
+        // Logged on a CHANGE, not per call: X4 polls this. A hotplug is the
+        // event worth a line, and the first call is a change from -1.
+        if (g_pads.last_count.exchange(n, std::memory_order_relaxed) != n)
+            X4VR_LOG("pad: SDL_GetJoysticks -> %d device(s)", n);
+    }
+    return r;
+}
+
+void *SDL_OpenJoystick(uint32_t id) {
+    static auto real_fn = real<void *(*)(uint32_t)>("SDL_OpenJoystick");
+    void *r = real_fn(id);
+    if (this_is_the_game()) {
+        g_pads.opened_joy.fetch_add(1, std::memory_order_relaxed);
+        static auto name_fn = real<const char *(*)(void *)>("SDL_GetJoystickName");
+        X4VR_LOG("pad: SDL_OpenJoystick(%u) -> %s%s", id, r ? "ok" : "FAILED",
+                 r ? "" : " (X4 saw the device and could not open it)");
+        if (r && name_fn)
+            pad_note_name("opened joystick", name_fn(r), id);
+    }
+    return r;
+}
+
+void *SDL_OpenGamepad(uint32_t id) {
+    static auto real_fn = real<void *(*)(uint32_t)>("SDL_OpenGamepad");
+    void *r = real_fn(id);
+    if (this_is_the_game()) {
+        g_pads.opened_pad.fetch_add(1, std::memory_order_relaxed);
+        static auto name_fn = real<const char *(*)(void *)>("SDL_GetGamepadName");
+        X4VR_LOG("pad: SDL_OpenGamepad(%u) -> %s", id, r ? "ok" : "FAILED");
+        if (r && name_fn)
+            pad_note_name("opened gamepad", name_fn(r), id);
+    }
+    return r;
+}
+
+bool SDL_IsGamepad(uint32_t id) {
+    static auto real_fn = real<bool (*)(uint32_t)>("SDL_IsGamepad");
+    const bool r = real_fn(id);
+    if (this_is_the_game())
+        g_pads.is_gamepad.fetch_add(1, std::memory_order_relaxed);
+    return r;
+}
+
+// The one that says whether the axes are being READ, as opposed to the device
+// merely being opened. An X52 that enumerates, opens, and is never polled is a
+// different defect from one that is polled and whose values go nowhere.
+int16_t SDL_GetJoystickAxis(void *joy, int axis) {
+    static auto real_fn = real<int16_t (*)(void *, int)>("SDL_GetJoystickAxis");
+    const int16_t v = real_fn(joy, axis);
+    if (this_is_the_game())
+        g_pads.axis_reads.fetch_add(1, std::memory_order_relaxed);
+    return v;
+}
+
+int SDL_AddGamepadMappingsFromFile(const char *path) {
+    static auto real_fn = real<int (*)(const char *)>("SDL_AddGamepadMappingsFromFile");
+    const int r = real_fn(path);
+    if (this_is_the_game()) {
+        g_pads.mappings.fetch_add(1, std::memory_order_relaxed);
+        X4VR_LOG("pad: SDL_AddGamepadMappingsFromFile(\"%s\") -> %d mapping(s)",
+                 path ? path : "(null)", r);
+    }
+    return r;
+}
+
+// Called from the same cadence as the other injector reports.
+void pad_report() {
+    const uint64_t en = g_pads.enumerated.load(std::memory_order_relaxed);
+    const uint64_t oj = g_pads.opened_joy.load(std::memory_order_relaxed);
+    const uint64_t op = g_pads.opened_pad.load(std::memory_order_relaxed);
+    const uint64_t ax = g_pads.axis_reads.load(std::memory_order_relaxed);
+    // Silent until X4 touches the API at all, so a keyboard-and-mouse run does
+    // not carry a line about hardware nobody plugged in.
+    if (!en && !oj && !op && !ax)
+        return;
+    if (g_pads.said.exchange(true, std::memory_order_relaxed) && !ax)
+        return; // after the first line, only re-report once axes are polled
+    X4VR_LOG("pad census: enumerate %llu (last saw %d device(s)) | opened "
+             "joystick %llu gamepad %llu | axis reads %llu | mapping files %llu",
+             (unsigned long long)en, g_pads.last_count.load(),
+             (unsigned long long)oj, (unsigned long long)op,
+             (unsigned long long)ax,
+             (unsigned long long)g_pads.mappings.load(std::memory_order_relaxed));
 }
 
 // Tracked so fold_x can stand down during mouse-look. Passed through untouched:

@@ -59,7 +59,28 @@ static std::vector<uint32_t> load_spv(const char *path) {
     return v;
 }
 
+// #46's census names every refusal branch. A reason added without a name
+// prints "?" and the census stops being able to say WHY a run drew nothing --
+// which is the entire reason it exists, and a silent regression otherwise,
+// because nothing else reads this table.
+static void check_refusal_names() {
+    bool dup = false;
+    for (int i = 0; i < kCurReasonCount; i++) {
+        const char *n = cursor_refusal_name(i);
+        ok("every refusal reason has a name", n && *n && strcmp(n, "?") != 0);
+        for (int j = 0; j < i; j++)
+            if (strcmp(n, cursor_refusal_name(j)) == 0)
+                dup = true;
+    }
+    ok("refusal names are distinct", !dup);
+    // The guard the enum's tail exists for: a value past the end must not
+    // index off the table.
+    ok("out-of-range reason is handled",
+       strcmp(cursor_refusal_name(kCurReasonCount), "?") == 0);
+}
+
 int main(int argc, char **argv) {
+    check_refusal_names();
     // ---- the pixel format -------------------------------------------------
     // 0x16362004 is what take 94 read off the channel, and what SDL3's own
     // header prints for SDL_PIXELFORMAT_ARGB8888. Its memory order on a

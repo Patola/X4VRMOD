@@ -294,6 +294,26 @@ public:
             *refused = vr_refused_;
     }
 
+    // #46. The cursor overlay's refusal census, reported against the eye
+    // extent it was actually compositing into. Takes the same lock as the
+    // rest of the chain state because `chains_` is what holds that extent.
+    //
+    // Reported even when nothing drew -- a silent overlay is the case this
+    // exists for, and it is the case that produced identical logs in takes
+    // 305 and 306.
+    void cursor_report(const char *when) {
+        VkExtent2D eye{};
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            for (const auto &kv : chains_)
+                if (kv.second.eye.width) {
+                    eye = kv.second.eye;
+                    break;
+                }
+        }
+        cursor_.report(when, eye.width, eye.height);
+    }
+
     bool ready() const { return device_ && fns_.complete(); }
 
     // Called after the real swapchain has been created. Failure here is not

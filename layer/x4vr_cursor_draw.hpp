@@ -153,6 +153,39 @@ struct CursorFns {
     }
 };
 
+// Why a frame drew no cursor. Every one of these was a bare `return false`
+// until #46 was picked up, so a run in which the pointer was never visible and
+// a run in which X4 never built a cursor produced byte-identical logs: one
+// "overlay armed" line and silence. Takes 305 and 306 both armed the overlay
+// and never drew, and nothing in either log says which of six branches took it.
+//
+// Counted rather than logged per frame -- this runs once per present.
+enum CursorRefusal {
+    kCurDrew = 0,
+    kCurNotReady,     // configure() never ran, or a fn pointer is missing
+    kCurNoChannel,    // share_read failed -- the injector has published nothing
+    kCurNoImage,      // X4 has not built a cursor yet
+    kCurPitch,        // capture stride is not the tight w*4 the channel promises
+    kCurFormat,       // pixel format unmappable, or switched mid-session
+    kCurNoPipeline,   // ensure_shared/ensure_slot failed
+    kCurOffEye,       // cursor_rect culled it -- wholly outside the eye
+    kCurReasonCount
+};
+
+inline const char *cursor_refusal_name(int r) {
+    switch (r) {
+    case kCurDrew: return "drew";
+    case kCurNotReady: return "not-ready";
+    case kCurNoChannel: return "no-channel";
+    case kCurNoImage: return "no-cursor-image";
+    case kCurPitch: return "bad-pitch";
+    case kCurFormat: return "format";
+    case kCurNoPipeline: return "no-pipeline";
+    case kCurOffEye: return "off-eye";
+    default: return "?";
+    }
+}
+
 class CursorOverlay {
 public:
     // What the draw is aimed at. Passed as a struct because six positional
@@ -205,28 +238,34 @@ public:
                 const x4vr::CanvasNdc *canvas = nullptr) {
         if (!ready() || !shared || t.image == VK_NULL_HANDLE || !t.extent.width ||
             !t.extent.height)
-            return false;
+            return refuse(kCurNotReady);
 
         float px = 0.f, py = 0.f;
         bool visible = false;
         if (!share_read(shared, &px, &py, &visible))
-            return false;
+            return refuse(kCurNoChannel);
+        // Recorded before any refusal below, so the range is the channel's and
+        // not "the range over frames that happened to reach the draw".
+        px_lo_ = px < px_lo_ ? px : px_lo_;
+        px_hi_ = px > px_hi_ ? px : px_hi_;
+        py_lo_ = py < py_lo_ ? py : py_lo_;
+        py_hi_ = py > py_hi_ ? py : py_hi_;
 
         uint32_t cw = 0, ch = 0, fmt = 0, pitch = 0;
         int32_t hot_x = 0, hot_y = 0;
         if (!share_read_cursor(shared, scratch_, &cw, &ch, &hot_x, &hot_y, &fmt,
                                &pitch))
-            return false; // X4 has not built a cursor yet
+            return refuse(kCurNoImage); // X4 has not built a cursor yet
         // The injector repacks every capture to a tight w*4 stride, so this is
         // an invariant of the channel rather than a case to handle. Checked
         // because the upload below reads rows at that stride and a silent
         // mismatch would shear the glyph instead of failing.
         if (pitch != cw * 4u)
-            return false;
+            return refuse(kCurPitch);
 
         const VkFormat tex_fmt = cursor_format(fmt, t.format);
         if (tex_fmt == VK_FORMAT_UNDEFINED)
-            return false; // already logged, once
+            return refuse(kCurFormat); // already logged, once
         if (cursor_tex_format_ == VK_FORMAT_UNDEFINED) {
             cursor_tex_format_ = tex_fmt;
         } else if (cursor_tex_format_ != tex_fmt) {
@@ -241,7 +280,7 @@ public:
                          "drawn",
                          format_name(cursor_tex_format_), format_name(tex_fmt));
             }
-            return false;
+            return refuse(kCurFormat);
         }
 
         // Drawn whether or not the channel calls it visible. X4 imports neither
@@ -256,10 +295,10 @@ public:
         (void)visible;
 
         if (!ensure_shared(t.format))
-            return false;
+            return refuse(kCurNoPipeline);
         Slot *s = ensure_slot(t);
         if (!s)
-            return false;
+            return refuse(kCurNoPipeline);
 
         // The cursor image changes only when X4 switches cursor, so the upload
         // is keyed on the channel's own sequence number rather than done every
@@ -275,7 +314,7 @@ public:
         const CursorRect q = cursor_rect(px, py, hot_x, hot_y, cw, ch,
                                          t.extent.width, t.extent.height);
         if (!q.onscreen)
-            return false; // wholly outside the eye -- nothing to draw
+            return refuse(kCurOffEye); // wholly outside the eye
 
         struct Push {
             float rect[4];
@@ -357,7 +396,42 @@ public:
                      (map[0].x(hx) - hx) * 0.5f * (float)t.extent.width,
                      (map[0].y(hy) - hy) * 0.5f * (float)t.extent.height);
         }
+        refusal_[kCurDrew]++;
         return true;
+    }
+
+    // #46. The whole vector, plus the pointer range the channel delivered and
+    // the eye it was measured against -- the three numbers that decide whether
+    // a cursor nobody can see was never drawn, drawn off the eye, or drawn in
+    // one place because the position never moved.
+    //
+    // `eye_w`/`eye_h` are passed rather than remembered so this reports the
+    // extent the caller is actually compositing into, not the first one seen.
+    void report(const char *when, uint32_t eye_w, uint32_t eye_h) const {
+        uint64_t total = 0;
+        for (int i = 0; i < kCurReasonCount; i++)
+            total += refusal_[i];
+        if (!total)
+            return; // record() never ran; the overlay is not armed
+        char bins[256];
+        int n = 0;
+        for (int i = 0; i < kCurReasonCount && n < (int)sizeof(bins) - 1; i++) {
+            if (!refusal_[i])
+                continue;
+            n += snprintf(bins + n, sizeof(bins) - (size_t)n, "%s%s %llu",
+                          n ? " | " : "", cursor_refusal_name(i),
+                          (unsigned long long)refusal_[i]);
+        }
+        if (!n)
+            bins[0] = '\0';
+        const bool moved = px_hi_ > px_lo_ || py_hi_ > py_lo_;
+        X4VR_LOG("cursor census (%s): %llu present(s) — %s | pointer x=%.0f..%.0f "
+                 "y=%.0f..%.0f against a %ux%u eye (%s)",
+                 when, (unsigned long long)total, bins,
+                 px_lo_ > px_hi_ ? 0.f : px_lo_, px_lo_ > px_hi_ ? 0.f : px_hi_,
+                 py_lo_ > py_hi_ ? 0.f : py_lo_, py_lo_ > py_hi_ ? 0.f : py_hi_,
+                 eye_w, eye_h,
+                 moved ? "moved" : "NEVER MOVED — the channel is not being fed");
     }
 
     // Drop everything hanging off one eye image, because the image is about to
@@ -888,6 +962,22 @@ private:
     VkPipeline pipe_ = VK_NULL_HANDLE;
     VkFormat pass_format_ = VK_FORMAT_UNDEFINED;
     VkFormat cursor_tex_format_ = VK_FORMAT_UNDEFINED;
+    // Tally and refuse in one expression, so a future early return cannot be
+    // added without picking a bin -- a bare `return false` is what made the
+    // six existing ones indistinguishable.
+    bool refuse(CursorRefusal why) {
+        refusal_[why]++;
+        return false;
+    }
+
+    // #46's census. Indexed by CursorRefusal; `report()` prints the whole
+    // vector rather than the largest bin, because "never drew" and "drew
+    // sometimes" differ only in a bin that a maximum would hide.
+    uint64_t refusal_[kCurReasonCount] = {};
+    // The pointer position as the channel delivered it, over the run. A
+    // cursor pinned at one place and a cursor ranging over the eye are the
+    // same census otherwise, and #64 is exactly that distinction.
+    float px_lo_ = 1e9f, px_hi_ = -1e9f, py_lo_ = 1e9f, py_hi_ = -1e9f;
     std::unordered_map<VkImage, Slot> slots_;
     uint8_t scratch_[Shared::kCursorMax * Shared::kCursorMax * 4] = {};
     bool shared_failed_ = false;
