@@ -21148,3 +21148,98 @@ Nothing here reads the lag or overshoot estimators, so head position does not
 matter and there is no clamp-saturation hazard — the failure that cost take
 305. Both censuses are passive counters; the pad one needs no behaviour from
 the player at all.
+
+## Take 307 — two of three predictions REFUTED, and Patola's hands beat my census
+
+**Controller configuration 2** (sc-controller virtual Xbox pad, no HOTAS),
+SteamVR. Scored with `score_run.py`'s new `cursor` and `pad` blocks.
+
+### P307.1 REFUTED — X4 DOES call SDL_GetMouseState, in menus
+
+39 `sdl: GetMouseState extent` lines in take 307; zero in takes 303b, 305 and
+306. All three of those were **cockpit-only**. X4 polls the pointer when a
+menu or the map is open, and take 307 was the first run to open one.
+
+The silence was real and correctly read. **The quantifier was invented.** The
+honest claim was "not in these three takes, none of which opened a menu" — and
+I wrote "X4 never calls it" into this file, a commit message, and a memory.
+Fifth instance of a survey complete over the wrong population.
+
+**So "#64 is never published" is WITHDRAWN.** The position channel works; it
+is fed only while X4 is polling, which is when a cursor is on screen anyway.
+
+### P307.2 HELD — `off-eye` is 0
+
+The pre-map cull is not what eats the cursor. It remains latent.
+
+### #46 has a real number now, and it is not the factor of 2
+
+    drew 4441 of 17194 presents (25.8%), rest no-cursor-image
+    pointer x=0..1898 y=0..2024 against a 2816x2816 eye  =  67% x 72%
+
+**The logical-vs-physical factor of 2 is REFUTED** — 67/72%, not 50/50, and
+the scorer's own branch said so because the percentage was reported rather
+than the prediction announced. What survives is a genuine reachability limit:
+about a third of each axis the pointer cannot enter. Cause unknown; the
+canvas contraction (A=0.5252) is not it either, since the cull never fired.
+
+`no-cursor-image` at 74% is expected — cockpit flight selects no cursor.
+
+### P307.3 REFUTED, and the verdict it printed was FALSE
+
+The census said **"OPENED, NEVER POLLED ... no binding could have acted"**
+while Patola was steering the ship with the pad perfectly well.
+
+    pad  enumerate 0 (last saw -1 device(s)) | opened joystick 0 gamepad 1
+         | axis reads 0 | mappings 0
+    pad  opened gamepad id=2 "Xbox 360 Controller"
+
+`SDL_OpenGamepad(2)` succeeded, yet `SDL_GetJoysticks` and
+`SDL_GetJoystickAxis` were called **zero** times. X4 does not import
+`SDL_GetGamepadAxis` at all. So the axis values arrive as **events through
+`SDL_PeepEvents`** — the drain we have hooked since #19 and do not count by
+type — and X4 learned the device existed from an ADDED event rather than by
+enumerating.
+
+**I built the census around a polling API for an event-driven channel**, then
+published a confident negative from its zero. The instrument was the thing
+that was wrong; the watcher was right.
+
+### #71 IS ANSWERED — analog pad steering works under head-look
+
+Patola: *"the controls just responded normally and I was able to steer the
+ship with these controls just fine."* The log agrees that head-look was live
+while he did it: **`steer=1` in 1860 of the final 2000 `lagsample` lines
+(93%)**, which is the phase the pad was used in.
+
+So MOUSELOOK suspends **the mouse**, not an analog pad, and the head-look
+servo does **not** fight pad steering — the "expect something odd" I put in
+the handover did not happen.
+
+**"Stick to fly, head to look" is demonstrated rather than hypothesised.**
+#71 stops being an investigation and becomes a control-scheme decision, and
+his X52 failure is now most likely the `JOYAXIS_RX/RY` vs `X/Y` binding story
+after all — testable with a rebind, no take.
+
+### An instrument defect found in passing
+
+`note_extent`'s range accumulator **and** its 64-line cap are function-level
+statics **shared between its two callers** (`GetMouseState` positions and
+motion-event positions). Take 307 hit exactly 64 (39 + 25), so the instrument
+went silent while the real range kept growing: its last line reads
+`x=0..1738 y=0..1806` against the census's measured 1898/2024. Its printed
+range is both contaminated by the other caller and truncated. Trust the
+cursor census.
+
+## Runtime default: WiVRn from here on
+
+Patola's decision, recorded so handovers stop defaulting to SteamVR: **WiVRn
+is the default runtime for future takes** — it is more comfortable and lets
+him interact with the flatscreen and VR at the same time, which SteamVR does
+not. SteamVR stays useful as a *comparison* arm because it does not show the
+ghosting/artifacts WiVRn does, so it is the reference for judging smoothness.
+
+Mechanically: WiVRn needs `XR_RUNTIME_JSON` **UNSET**; SteamVR needs it
+pointed at `steamxr_linux64_patched.json`. Since take 298 the injector records
+`XR_RUNTIME_JSON` in the `env: run =` line, so which runtime a take used is
+recoverable from its log.
