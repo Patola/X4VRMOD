@@ -1029,6 +1029,41 @@ struct Sdl3MouseEvent {
 enum { SDL_EV_MOUSE_MOTION = 0x400, SDL_EV_MOUSE_DOWN = 0x401,
        SDL_EV_MOUSE_UP = 0x402 };
 
+// SDL3's SDL_JoyAxisEvent and SDL_GamepadAxisEvent, which share this layout
+// exactly -- checked against the real headers in tests/sdl_event_layout.cpp
+// like the two above.
+//
+// **Take 307 is why this exists.** The pad census counted SDL_GetJoystickAxis
+// and reported "OPENED, NEVER POLLED -- no binding could have acted" while
+// Patola was steering the ship with the pad perfectly well. X4 does not import
+// SDL_GetGamepadAxis at all, and called SDL_GetJoysticks and
+// SDL_GetJoystickAxis zero times, yet SDL_OpenGamepad(2) succeeded: the axis
+// values arrive as EVENTS, through the drain this file has hooked since #19.
+// The census watched a polling API for an event-driven channel.
+//
+// The per-axis range is the point, not the count. X4's steering is bound to
+// INPUT_JOYAXIS_RX/RY with strafe on X/Y, so "which axis index does this stick
+// actually move" is the whole question for the X52 -- and it is a number the
+// device reports, not one anybody has to guess.
+struct Sdl3AxisEvent {
+    uint32_t type;
+    uint32_t reserved;
+    uint64_t timestamp;
+    uint32_t which; // SDL_JoystickID
+    uint8_t axis;
+    uint8_t padding1, padding2, padding3;
+    int16_t value;
+    uint16_t padding4;
+};
+enum {
+    SDL_EV_JOY_AXIS = 0x600,
+    SDL_EV_JOY_BUTTON_DOWN = 0x603,
+    SDL_EV_JOY_ADDED = 0x605,
+    SDL_EV_PAD_AXIS = 0x650,
+    SDL_EV_PAD_BUTTON_DOWN = 0x651,
+    SDL_EV_PAD_ADDED = 0x653,
+};
+
 // SDL3 SDL_KeyboardEvent, laid out positionally for the same reason as
 // Sdl3MouseEvent above; tests/sdl_event_layout.cpp asserts both against the
 // real headers.
@@ -1565,19 +1600,78 @@ float fold_x(float x) {
 // Logging on a *new extreme* is self-limiting -- the range only ever widens, so
 // this settles to silence on its own -- and it captures the edges, which is the
 // only part of the range that discriminates 0..1408 from 0..2816.
+// **Take 307 found two defects here, and both flattered the instrument.**
+//
+// The accumulator and the cap were function-level statics, so the two callers
+// -- polled GetMouseState positions and motion-event positions -- SHARED one
+// range and one budget. The printed "GetMouseState extent" was therefore
+// widened by motion events and vice versa, and take 307 spent exactly 64
+// lines (39 + 25) between them and went silent while the real range kept
+// growing: its last line read x=0..1738 y=0..1806 where the cursor census
+// measured 1898/2024. A truncated range that stops announcing itself is worse
+// than no range, because it still looks like an answer.
+//
+// State is per caller now, keyed on the literal `what` pointer -- every call
+// site passes a string literal, so the pointer is a stable identity and no
+// allocation or comparison is needed. A caller that passed a computed string
+// would get its own slot per call and log once each, which is loud rather
+// than silent, and that is the right way round.
+struct ExtentState {
+    const char *what = nullptr;
+    float lo_x = 1e9f, hi_x = -1e9f, lo_y = 1e9f, hi_y = -1e9f;
+    int logged = 0;
+};
+ExtentState g_extents[4];
+
 void note_extent(const char *what, float x, float y) {
-    static float lo_x = 1e9f, hi_x = -1e9f, lo_y = 1e9f, hi_y = -1e9f;
-    static int logged = 0;
-    const bool wider = x < lo_x || x > hi_x || y < lo_y || y > hi_y;
-    if (!wider || logged >= 64)
+    ExtentState *s = nullptr;
+    for (auto &c : g_extents) {
+        if (c.what == what) { s = &c; break; }
+        if (!c.what) { c.what = what; s = &c; break; }
+    }
+    if (!s)
+        return; // more callers than slots; silent rather than wrong
+    const bool wider = x < s->lo_x || x > s->hi_x || y < s->lo_y || y > s->hi_y;
+    // The cap bounds LINES, not the range: the bounds keep widening after it
+    // is reached so a later reader -- or the final report -- still gets the
+    // true extent, which is the half take 307 lost.
+    s->lo_x = x < s->lo_x ? x : s->lo_x;
+    s->hi_x = x > s->hi_x ? x : s->hi_x;
+    s->lo_y = y < s->lo_y ? y : s->lo_y;
+    s->hi_y = y > s->hi_y ? y : s->hi_y;
+    if (!wider)
         return;
-    lo_x = x < lo_x ? x : lo_x;
-    hi_x = x > hi_x ? x : hi_x;
-    lo_y = y < lo_y ? y : lo_y;
-    hi_y = y > hi_y ? y : hi_y;
-    logged++;
+    if (s->logged == 64) {
+        s->logged++;
+        X4VR_LOG("sdl: %s extent — 64 lines, going quiet; the range keeps "
+                 "widening and the final value is reported at teardown", what);
+        return;
+    }
+    if (s->logged > 64)
+        return;
+    s->logged++;
     X4VR_LOG("sdl: %s extent x=%.0f..%.0f y=%.0f..%.0f (now %.0f,%.0f)", what,
-             lo_x, hi_x, lo_y, hi_y, x, y);
+             s->lo_x, s->hi_x, s->lo_y, s->hi_y, x, y);
+}
+
+// The true extent per caller, so a capped run still reports the range it
+// actually saw. Rides the periodic cadence and reprints only when a bound has
+// moved, which makes it self-limiting the way the per-line logging was meant
+// to be.
+void note_extent_report() {
+    for (auto &c : g_extents) {
+        if (!c.what || c.hi_x < c.lo_x)
+            continue;
+        static float seen[4][4];
+        const size_t i = (size_t)(&c - g_extents);
+        if (seen[i][0] == c.lo_x && seen[i][1] == c.hi_x &&
+            seen[i][2] == c.lo_y && seen[i][3] == c.hi_y)
+            continue;
+        seen[i][0] = c.lo_x; seen[i][1] = c.hi_x;
+        seen[i][2] = c.lo_y; seen[i][3] = c.hi_y;
+        X4VR_LOG("sdl: %s extent FINAL x=%.0f..%.0f y=%.0f..%.0f (%d line(s) "
+                 "logged)", c.what, c.lo_x, c.hi_x, c.lo_y, c.hi_y, c.logged);
+    }
 }
 
 // Every key event X4 drains, capped so the log stays readable. Take 121 left
@@ -3668,6 +3762,11 @@ static void camprobe_start() {
 // #71's controller census, defined with the SDL joystick hooks far below. It
 // rides this cadence rather than owning one, so an idle run costs nothing.
 void pad_report();
+// Called from BOTH drains for every event X4 is handed; see Sdl3AxisEvent for
+// why the event channel is what has to be watched.
+void pad_note_event(uint32_t type, const Sdl3AxisEvent *a);
+// The per-caller pointer ranges, whose 64-line cap take 307 hit.
+void note_extent_report();
 
 void pumprate_report() {
     const double now = mono_seconds();
@@ -3756,6 +3855,7 @@ void pumprate_report() {
         g_evflow.p_ln = ln; g_evflow.p_dr = dr;
     }
     pad_report();
+    note_extent_report();
 
     g_pumprate.entered = g_pumprate.nopose = 0;
     g_pumprate.fresh = g_pumprate.skipped = 0;
@@ -4019,6 +4119,11 @@ bool SDL_WaitEvent(void *event) {
             // meaningless -- it is also what X4 steers the camera by.
             e->x = fold_x(e->x);
         }
+        // Counted at BOTH drains. This file has already shipped a fix to one
+        // of two symmetric sites and had the defect come back through the
+        // other; a census that watched only PeepEvents would read zero for a
+        // session X4 happened to drain through WaitEvent.
+        pad_note_event(e->type, (const Sdl3AxisEvent *)e);
     }
     return r;
 }
@@ -4105,6 +4210,12 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
             }
             if (e->type == SDL_EV_KEY_DOWN || e->type == SDL_EV_KEY_UP)
                 note_key_event((const Sdl3KeyEvent *)e, "peep", action);
+            // Only on GET, like the ours/theirs counters above: a peek leaves
+            // the event in the queue and would be counted again when X4
+            // finally fetches it, inflating the axis traffic by however often
+            // X4 peeks.
+            if (consuming)
+                pad_note_event(e->type, (const Sdl3AxisEvent *)e);
             if (e->type >= SDL_EV_MOUSE_MOTION && e->type <= SDL_EV_MOUSE_UP) {
                 note_mouse_event(e);
                 if (consuming)
@@ -4252,7 +4363,101 @@ struct PadCensus {
     std::atomic<uint64_t> axis_reads{0}, is_gamepad{0}, mappings{0};
     std::atomic<int> last_count{-1};
     std::atomic<bool> said{false};
+    // The channel take 307 proved the values actually arrive on. Counted in
+    // the drain, per event family, because "X4 polled nothing" and "X4 was
+    // handed everything as events" are the two readings that got confused.
+    std::atomic<uint64_t> ev_joy_axis{0}, ev_pad_axis{0};
+    std::atomic<uint64_t> ev_buttons{0}, ev_added{0};
+    // Per-axis travel, which is the number that names a stick. 16 axes is
+    // more than an X52 Pro reports and the index is a uint8 anyway, so a
+    // device with more simply lands in the last bin rather than corrupting
+    // memory -- stated because a positional read with no bound is how this
+    // file's own SDL_Surface handling would have failed.
+    //
+    // **Kept per FAMILY, not pooled.** SDL numbers gamepad axes LEFTX=0,
+    // LEFTY=1, RIGHTX=2, RIGHTY=3 (asserted in tests/sdl_event_layout.cpp),
+    // which is NOT raw joystick numbering -- so index 3 means different
+    // hardware depending on which event carried it. The X52 is likely to
+    // arrive as a joystick and the sc-controller pad as a gamepad, and a
+    // range pooled across the two would name neither, which is the mistake
+    // this census already made once by watching the wrong API.
+    static constexpr int kAxes = 16;
+    static constexpr int kFamilies = 2; // 0 = joystick, 1 = gamepad
+    std::atomic<int32_t> axis_lo[kFamilies][kAxes];
+    std::atomic<int32_t> axis_hi[kFamilies][kAxes];
+    std::atomic<uint64_t> axis_n[kFamilies][kAxes];
+    // Which device instance ids were seen per family, so two sticks in one
+    // take cannot be read as one stick with twice the axes.
+    std::atomic<uint32_t> seen_ids[kFamilies][4];
+    PadCensus() {
+        for (int f = 0; f < kFamilies; f++) {
+            for (int i = 0; i < kAxes; i++) {
+                axis_lo[f][i].store(INT32_MAX, std::memory_order_relaxed);
+                axis_hi[f][i].store(INT32_MIN, std::memory_order_relaxed);
+                axis_n[f][i].store(0, std::memory_order_relaxed);
+            }
+            for (int i = 0; i < 4; i++)
+                seen_ids[f][i].store(UINT32_MAX, std::memory_order_relaxed);
+        }
+    }
 } g_pads;
+
+void pad_note_axis(const Sdl3AxisEvent *a, bool gamepad);
+
+// Dispatch for the drains. Deliberately a switch on the exact type rather
+// than a range test: SDL packs unrelated families adjacently (0x605 is
+// JOYSTICK_ADDED, 0x606 REMOVED) and a range would quietly fold an axis
+// count into a hotplug count the first time SDL renumbers anything.
+void pad_note_event(uint32_t type, const Sdl3AxisEvent *a) {
+    switch (type) {
+    case SDL_EV_JOY_AXIS:
+        pad_note_axis(a, false);
+        break;
+    case SDL_EV_PAD_AXIS:
+        pad_note_axis(a, true);
+        break;
+    case SDL_EV_JOY_BUTTON_DOWN:
+    case SDL_EV_PAD_BUTTON_DOWN:
+        g_pads.ev_buttons.fetch_add(1, std::memory_order_relaxed);
+        break;
+    case SDL_EV_JOY_ADDED:
+    case SDL_EV_PAD_ADDED:
+        g_pads.ev_added.fetch_add(1, std::memory_order_relaxed);
+        break;
+    default:
+        break;
+    }
+}
+
+// Called from the drain for every joystick/gamepad axis event X4 is handed.
+// `which` is carried so two devices cannot be summed into one stick -- the
+// X52 and the sc-controller pad may both be present, and a range pooled
+// across them would name neither.
+void pad_note_axis(const Sdl3AxisEvent *a, bool gamepad) {
+    if (!a)
+        return;
+    (gamepad ? g_pads.ev_pad_axis : g_pads.ev_joy_axis)
+        .fetch_add(1, std::memory_order_relaxed);
+    const int f = gamepad ? 1 : 0;
+    const int i = a->axis < PadCensus::kAxes ? a->axis : PadCensus::kAxes - 1;
+    const int32_t v = a->value;
+    // Monotone widening, so a relaxed CAS loop is not needed: a lost race can
+    // only fail to widen a bound that a later event will widen again.
+    if (v < g_pads.axis_lo[f][i].load(std::memory_order_relaxed))
+        g_pads.axis_lo[f][i].store(v, std::memory_order_relaxed);
+    if (v > g_pads.axis_hi[f][i].load(std::memory_order_relaxed))
+        g_pads.axis_hi[f][i].store(v, std::memory_order_relaxed);
+    g_pads.axis_n[f][i].fetch_add(1, std::memory_order_relaxed);
+    for (auto &slot : g_pads.seen_ids[f]) {
+        const uint32_t cur = slot.load(std::memory_order_relaxed);
+        if (cur == a->which)
+            break;
+        if (cur == UINT32_MAX) {
+            slot.store(a->which, std::memory_order_relaxed);
+            break;
+        }
+    }
+}
 
 // Names are logged once each, keyed on the string, because X4 re-queries them
 // per frame in some menus and a per-call line would bury the log.
@@ -4350,18 +4555,72 @@ void pad_report() {
     const uint64_t oj = g_pads.opened_joy.load(std::memory_order_relaxed);
     const uint64_t op = g_pads.opened_pad.load(std::memory_order_relaxed);
     const uint64_t ax = g_pads.axis_reads.load(std::memory_order_relaxed);
+    const uint64_t eja = g_pads.ev_joy_axis.load(std::memory_order_relaxed);
+    const uint64_t epa = g_pads.ev_pad_axis.load(std::memory_order_relaxed);
+    const uint64_t evb = g_pads.ev_buttons.load(std::memory_order_relaxed);
+    const uint64_t eva = g_pads.ev_added.load(std::memory_order_relaxed);
     // Silent until X4 touches the API at all, so a keyboard-and-mouse run does
     // not carry a line about hardware nobody plugged in.
-    if (!en && !oj && !op && !ax)
+    if (!en && !oj && !op && !ax && !eja && !epa && !evb && !eva)
         return;
-    if (g_pads.said.exchange(true, std::memory_order_relaxed) && !ax)
-        return; // after the first line, only re-report once axes are polled
+    // Re-reported while axis traffic is still growing, so a stick moved late
+    // in a take is not missed by a one-shot. `said` alone would have printed
+    // once, before the player touched anything -- which is exactly how take
+    // 307's census came to describe a device nobody had moved yet.
+    static uint64_t p_axis_ev = 0;
+    const uint64_t axis_ev = eja + epa;
+    const bool grew = axis_ev != p_axis_ev;
+    p_axis_ev = axis_ev;
+    if (g_pads.said.exchange(true, std::memory_order_relaxed) && !grew)
+        return;
     X4VR_LOG("pad census: enumerate %llu (last saw %d device(s)) | opened "
-             "joystick %llu gamepad %llu | axis reads %llu | mapping files %llu",
+             "joystick %llu gamepad %llu | POLLED axis reads %llu | EVENTS "
+             "joy-axis %llu pad-axis %llu buttons %llu added %llu | mapping "
+             "files %llu",
              (unsigned long long)en, g_pads.last_count.load(),
              (unsigned long long)oj, (unsigned long long)op,
-             (unsigned long long)ax,
+             (unsigned long long)ax, (unsigned long long)eja,
+             (unsigned long long)epa, (unsigned long long)evb,
+             (unsigned long long)eva,
              (unsigned long long)g_pads.mappings.load(std::memory_order_relaxed));
+    // The per-axis travel, which is what names a stick. Reported per FAMILY
+    // and WITHOUT inventing a mapping onto X4's INPUT_JOYAXIS_* names: the
+    // gamepad family is SDL's own LEFTX/LEFTY/RIGHTX/RIGHTY ordering, the
+    // joystick family is whatever the device reports, and which of those X4's
+    // "RX" means is a question for the inputmap, not for this line. Stating a
+    // raw index and its travel is a measurement; labelling it would be the
+    // guess that made the first version of this census wrong.
+    static const char *const kPadName[6] = {"LEFTX",  "LEFTY",  "RIGHTX",
+                                            "RIGHTY", "LTRIG",  "RTRIG"};
+    for (int f = 0; f < PadCensus::kFamilies; f++) {
+        char buf[320];
+        int n = 0;
+        for (int i = 0; i < PadCensus::kAxes && n < (int)sizeof(buf) - 40; i++) {
+            const uint64_t cnt =
+                g_pads.axis_n[f][i].load(std::memory_order_relaxed);
+            if (!cnt)
+                continue;
+            const int32_t lo = g_pads.axis_lo[f][i].load(std::memory_order_relaxed);
+            const int32_t hi = g_pads.axis_hi[f][i].load(std::memory_order_relaxed);
+            n += snprintf(buf + n, sizeof(buf) - (size_t)n, "%s%d%s%s:%d..%d",
+                          n ? " " : "", i,
+                          (f == 1 && i < 6) ? "=" : "",
+                          (f == 1 && i < 6) ? kPadName[i] : "", lo, hi);
+        }
+        if (!n)
+            continue;
+        char ids[64];
+        int m = 0;
+        for (auto &slot : g_pads.seen_ids[f]) {
+            const uint32_t v = slot.load(std::memory_order_relaxed);
+            if (v == UINT32_MAX)
+                break;
+            m += snprintf(ids + m, sizeof(ids) - (size_t)m, "%s%u", m ? "," : "",
+                          v);
+        }
+        X4VR_LOG("pad axes (%s, device id %s): %s", f ? "gamepad" : "joystick",
+                 m ? ids : "?", buf);
+    }
 }
 
 // Tracked so fold_x can stand down during mouse-look. Passed through untouched:

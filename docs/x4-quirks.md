@@ -21243,3 +21243,63 @@ Mechanically: WiVRn needs `XR_RUNTIME_JSON` **UNSET**; SteamVR needs it
 pointed at `steamxr_linux64_patched.json`. Since take 298 the injector records
 `XR_RUNTIME_JSON` in the `env: run =` line, so which runtime a take used is
 recoverable from its log.
+
+## Instrument fixes after take 307, and P308
+
+### The pad census now watches the channel the values arrive on
+
+Take 307 proved the axis values reach X4 as **events**, not polls. The census
+now counts, at **both** drains (`SDL_PeepEvents` and `SDL_WaitEvent` — this
+file has already shipped a fix to one of two symmetric sites and had the
+defect return through the other), and only on GET so a peek cannot be counted
+twice.
+
+`Sdl3AxisEvent` is read positionally and **asserted against the real SDL3
+headers** in `tests/sdl_event_layout.cpp`, along with all six event-type
+constants, because a renumber is exactly what an enum name cannot catch.
+
+**One assert caught a live defect in my own first version.** SDL orders
+*gamepad* axes `LEFTX=0, LEFTY=1, RIGHTX=2, RIGHTY=3` — which is NOT raw
+joystick numbering. I had pooled both families into one array and labelled the
+indices `X/Y/Z/RX/RY/RZ`, so an index would have meant different hardware
+depending on which event carried it, and the X52 (likely a joystick) would
+have been named with gamepad labels. Now kept **per family**, with the device
+instance id recorded, and the joystick family carries **no invented labels at
+all** — a raw index and its travel is a measurement; mapping it onto X4's
+`INPUT_JOYAXIS_*` names would be the same guess that made the census wrong the
+first time.
+
+### `note_extent` had two defects, both of which flattered it
+
+Its accumulator **and** its 64-line cap were function-level statics shared
+between its two callers, so the printed "GetMouseState extent" was widened by
+motion events and vice versa, and take 307 spent exactly 64 lines (39 + 25)
+and went quiet while the range kept growing — last line `x=0..1738 y=0..1806`
+against the census's measured 1898/2024. State is per caller now, the cap
+bounds **lines and not the range**, and a `FINAL` line reports the true extent
+on the periodic cadence.
+
+### P308 — committed before the run
+
+**Controller configuration: X52 Pro connected, sc-controller running with Xbox
+emulation OFF** — one game controller present, and sc-controller still keeps
+Steam from seeing the SC2, so Steam Input stays out of the picture. Compared
+against take 307 (configuration 2, pad only), which makes this a one-device
+run against a one-device baseline rather than a two-device run in which either
+could be doing the steering.
+
+**Runtime: WiVRn** (`XR_RUNTIME_JSON` unset), now the project default.
+
+* **P308.1** X4 opens the X52. The census names it, and says whether it came
+  through the joystick or gamepad family.
+* **P308.2** The stick's main travel lands on **axis indices 0 and 1**, which
+  the inputmap has on `INPUT_RANGE_STRAFE_LEFT_RIGHT` / `STRAFE_UP_DOWN` —
+  while steering sits on `RX`/`RY`. So the ship **strafes rather than turns**,
+  which is what "plugged it in and it didn't work" would look like from the
+  cockpit. If the axes land somewhere else, this explanation dies and the
+  census says where to look instead.
+* **P308.3** The values arrive by **events**, with polled reads still 0, like
+  take 307's pad.
+
+If P308.2 holds the fix is a rebind, and it ships non-intrusively through the
+inputmap rewrite that already moves `MOUSELOOK` to F13.

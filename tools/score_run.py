@@ -3312,35 +3312,61 @@ def main(path):
     # hardware nobody plugged in.
     pc = re.findall(
         r"pad census: enumerate (\d+) \(last saw (-?\d+) device\(s\)\) \| "
-        r"opened joystick (\d+) gamepad (\d+) \| axis reads (\d+) \| "
+        r"opened joystick (\d+) gamepad (\d+) \| POLLED axis reads (\d+) \| "
+        r"EVENTS joy-axis (\d+) pad-axis (\d+) buttons (\d+) added (\d+) \| "
         r"mapping files (\d+)", text)
     pad_names = re.findall(r'pad: X4 (opened \w+) id=(\d+) name="([^"]*)"', text)
+    pad_axes = re.findall(r"pad axes \((\w+), device id ([\d,?]+)\): (.+)", text)
     if pc:
-        en, seen, oj, op, ax, maps = (int(v) for v in pc[-1])
+        en, seen, oj, op, ax, eja, epa, evb, eva, maps = (int(v) if v.isdigit()
+                                                          else int(v)
+                                                          for v in pc[-1])
+        ev_axis = eja + epa
         print(f"pad        enumerate {en} (last saw {seen} device(s)) | opened "
-              f"joystick {oj} gamepad {op} | axis reads {ax} | mappings {maps}")
+              f"joystick {oj} gamepad {op} | mappings {maps}")
+        print(f"pad        axis values: POLLED {ax} | EVENTS joy {eja} pad "
+              f"{epa} | buttons {evb} | hotplug-added {eva}")
         for what, pid, name in pad_names:
             print(f"pad        {what} id={pid} \"{name}\"")
-        if seen == 0:
-            print(f"pad        => X4 SEES NO DEVICE. It asked SDL {en} time(s) "
-                  f"and SDL had none to give, so nothing reached X4 through "
+        for fam, ids, axes in pad_axes:
+            print(f"pad        axes seen ({fam}, device {ids}): {axes}")
+        # `seen` is -1 when X4 never called SDL_GetJoysticks at all, which take
+        # 307 showed is the normal case: it learns about devices from ADDED
+        # events and opens them directly. So "no device" must be judged on
+        # opens and events, not on an enumeration X4 does not perform.
+        if oj == 0 and op == 0 and eva == 0:
+            print(f"pad        => X4 SEES NO DEVICE. No open succeeded and no "
+                  f"ADDED event arrived, so nothing reached X4 through "
                   f"evdev/udev at all. No rebinding could fix that — the "
-                  f"question is whether the device was captured upstream or "
-                  f"never presented. State the controller configuration.")
+                  f"question is whether something captured the device upstream "
+                  f"or it was never presented. Check the run's stated "
+                  f"controller configuration.")
         elif oj == 0 and op == 0:
-            print(f"pad        => ENUMERATED {seen} BUT OPENED NONE. X4 saw the "
-                  f"device and declined it — a mapping/GUID question, not a "
-                  f"binding one.")
-        elif ax == 0:
-            print(f"pad        => OPENED, NEVER POLLED. {oj + op} device(s) "
-                  f"opened and not one SDL_GetJoystickAxis call. The axes are "
-                  f"not being read, so no binding could have acted.")
+            print(f"pad        => ANNOUNCED BUT NEVER OPENED. {eva} ADDED "
+                  f"event(s) and no successful open — a mapping/GUID question, "
+                  f"not a binding one.")
+        elif ax == 0 and ev_axis == 0:
+            print(f"pad        => OPENED, NO AXIS TRAFFIC. {oj + op} device(s) "
+                  f"opened and not one axis value arrived by either channel. "
+                  f"If the sticks were moved during this take that is a real "
+                  f"defect; if they were not, this line says nothing.")
         else:
-            print(f"pad        => THE SDL PATH IS LIVE. {ax} axis read(s) "
-                  f"across {oj + op} opened device(s), so X4 is polling what "
-                  f"evdev gave it. Anything still not steering is a BINDING "
-                  f"question — his inputmap puts steering on "
-                  f"INPUT_JOYAXIS_RX/RY and strafe on X/Y.")
+            how = ("EVENTS" if ev_axis and not ax else
+                   "POLLING" if ax and not ev_axis else "BOTH")
+            print(f"pad        => AXIS VALUES ARE REACHING X4, by {how} "
+                  f"({ax} polled, {ev_axis} events) across {oj + op} opened "
+                  f"device(s). Anything not steering is a BINDING question: "
+                  f"the inputmap puts steering on INPUT_JOYAXIS_RX/RY and "
+                  f"strafe on X/Y. Compare those against the axis indices "
+                  f"above — and note the gamepad family is SDL's "
+                  f"LEFTX/LEFTY/RIGHTX/RIGHTY order, which is NOT raw joystick "
+                  f"numbering, so an index means different hardware depending "
+                  f"on which family carried it.")
+        if eja and epa:
+            print(f"pad        NOTE: BOTH families carried axis values ({eja} "
+                  f"joystick, {epa} gamepad). Two devices, or one device seen "
+                  f"twice — read the per-family axis lines separately and do "
+                  f"not pool their indices.")
     elif pad_names:
         print(f"pad        {len(pad_names)} device line(s) but no census line — "
               f"the report is gated on the pumprate cadence, which needs X4's "

@@ -135,3 +135,75 @@ int main() {
     printf("\nall cases passed\n");
     return 0;
 }
+
+// ---------------------------------------------------------------------------
+// The joystick/gamepad axis event, same discipline. **Take 307 forced this
+// into existence.** The pad census counted SDL_GetJoystickAxis and reported
+// "OPENED, NEVER POLLED — no binding could have acted" while Patola was
+// steering the ship with the pad perfectly well: X4 does not import
+// SDL_GetGamepadAxis at all and called SDL_GetJoystickAxis zero times, because
+// the values arrive as EVENTS through the drain. The injector now reads them
+// positionally there, which is only safe if these offsets hold.
+struct Sdl3AxisEvent {
+    uint32_t type;
+    uint32_t reserved;
+    uint64_t timestamp;
+    uint32_t which;
+    uint8_t axis;
+    uint8_t padding1, padding2, padding3;
+    int16_t value;
+    uint16_t padding4;
+};
+
+#define AXIS_OFFSET(field)                                                     \
+    static_assert(offsetof(Sdl3AxisEvent, field) ==                            \
+                      offsetof(SDL_JoyAxisEvent, field),                       \
+                  "SDL3 moved SDL_JoyAxisEvent::" #field                       \
+                  " — the injector's positional layout is now wrong")
+
+AXIS_OFFSET(type);
+AXIS_OFFSET(reserved);
+AXIS_OFFSET(timestamp);
+AXIS_OFFSET(which);
+AXIS_OFFSET(axis);
+AXIS_OFFSET(value);
+static_assert(sizeof(Sdl3AxisEvent) == sizeof(SDL_JoyAxisEvent),
+              "SDL3 changed the size of SDL_JoyAxisEvent");
+
+// The gamepad axis event is read through the SAME struct, so its agreeing with
+// the joystick one is a precondition rather than a coincidence. If SDL ever
+// splits them, the injector needs two readers and this is what says so.
+static_assert(offsetof(SDL_GamepadAxisEvent, axis) ==
+                  offsetof(SDL_JoyAxisEvent, axis),
+              "SDL_GamepadAxisEvent::axis no longer matches SDL_JoyAxisEvent — "
+              "pad_note_axis() reads both through one layout");
+static_assert(offsetof(SDL_GamepadAxisEvent, value) ==
+                  offsetof(SDL_JoyAxisEvent, value),
+              "SDL_GamepadAxisEvent::value no longer matches SDL_JoyAxisEvent");
+static_assert(sizeof(SDL_GamepadAxisEvent) == sizeof(SDL_JoyAxisEvent),
+              "SDL_GamepadAxisEvent and SDL_JoyAxisEvent diverged in size");
+
+// The type values the injector switches on. A renumber is exactly the failure
+// an enum name cannot catch, and folding an axis count into a hotplug count is
+// how a census comes to describe a device nobody moved.
+static_assert((uint32_t)SDL_EVENT_JOYSTICK_AXIS_MOTION == 0x600u,
+              "SDL_EVENT_JOYSTICK_AXIS_MOTION renumbered — SDL_EV_JOY_AXIS is stale");
+static_assert((uint32_t)SDL_EVENT_JOYSTICK_BUTTON_DOWN == 0x603u,
+              "SDL_EVENT_JOYSTICK_BUTTON_DOWN renumbered — SDL_EV_JOY_BUTTON_DOWN is stale");
+static_assert((uint32_t)SDL_EVENT_JOYSTICK_ADDED == 0x605u,
+              "SDL_EVENT_JOYSTICK_ADDED renumbered — SDL_EV_JOY_ADDED is stale");
+static_assert((uint32_t)SDL_EVENT_GAMEPAD_AXIS_MOTION == 0x650u,
+              "SDL_EVENT_GAMEPAD_AXIS_MOTION renumbered — SDL_EV_PAD_AXIS is stale");
+static_assert((uint32_t)SDL_EVENT_GAMEPAD_BUTTON_DOWN == 0x651u,
+              "SDL_EVENT_GAMEPAD_BUTTON_DOWN renumbered — SDL_EV_PAD_BUTTON_DOWN is stale");
+static_assert((uint32_t)SDL_EVENT_GAMEPAD_ADDED == 0x653u,
+              "SDL_EVENT_GAMEPAD_ADDED renumbered — SDL_EV_PAD_ADDED is stale");
+
+// X4's steering is bound to INPUT_JOYAXIS_RX/RY and its strafe to X/Y, so the
+// census names axis indices 0..5. That naming is only correct if SDL's gamepad
+// axis enum still orders them the way the labels assume.
+static_assert((int)SDL_GAMEPAD_AXIS_LEFTX == 0 && (int)SDL_GAMEPAD_AXIS_LEFTY == 1 &&
+                  (int)SDL_GAMEPAD_AXIS_RIGHTX == 2 && (int)SDL_GAMEPAD_AXIS_RIGHTY == 3,
+              "SDL gamepad axis order changed — pad_report()'s X/Y/Z/RX/RY/RZ "
+              "labels describe RAW JOYSTICK indices and must not be read as "
+              "gamepad ones; check which family the census line came from");

@@ -100,23 +100,52 @@ want "off-eye -> notes the pre-map cull" /tmp/census-offeye.log cursor "culled o
 absent "no census line -> silent" "$BASE" cursor
 
 # ------------------------------------------------------------------ the pads
-pad() { printf '[  223999.000] inject  pad census: enumerate %s (last saw %s device(s)) | opened joystick %s gamepad %s | axis reads %s | mapping files %s' "$@"; }
+#
+# pad <enum> <seen> <openjoy> <openpad> <polled> <joy-ev> <pad-ev> <btn> <added> <maps>
+pad() { printf '[  223999.000] inject  pad census: enumerate %s (last saw %s device(s)) | opened joystick %s gamepad %s | POLLED axis reads %s | EVENTS joy-axis %s pad-axis %s buttons %s added %s | mapping files %s' "$@"; }
 
-plant /tmp/census-pad-none.log "$(pad 12 0 0 0 0 1)"
+plant /tmp/census-pad-none.log "$(pad 0 -1 0 0 0 0 0 0 0 1)"
 want "no device -> says nothing reached X4" /tmp/census-pad-none.log pad "X4 SEES NO DEVICE"
 
-plant /tmp/census-pad-declined.log "$(pad 12 1 0 0 0 1)"
-want "declined -> mapping not binding" /tmp/census-pad-declined.log pad "OPENED NONE"
+plant /tmp/census-pad-declined.log "$(pad 0 -1 0 0 0 0 0 0 2 1)"
+want "announced, never opened -> mapping not binding" /tmp/census-pad-declined.log pad "ANNOUNCED BUT NEVER OPENED"
 
-plant /tmp/census-pad-idle.log "$(pad 12 1 1 1 0 1)" \
-    '[  223998.000] inject  pad: X4 opened gamepad id=0 name="Microsoft X-Box 360 pad"'
-want "opened never polled -> says so"   /tmp/census-pad-idle.log pad "OPENED, NEVER POLLED"
-want "opened never polled -> names it"  /tmp/census-pad-idle.log pad 'Microsoft X-Box 360 pad'
+plant /tmp/census-pad-idle.log "$(pad 0 -1 0 1 0 0 0 0 1 1)" \
+    '[  223998.000] inject  pad: X4 opened gamepad id=2 name="Xbox 360 Controller"'
+want "opened, no traffic -> says so"  /tmp/census-pad-idle.log pad "OPENED, NO AXIS TRAFFIC"
+want "opened, no traffic -> hedges"   /tmp/census-pad-idle.log pad "if they were not, this line says nothing"
+want "opened -> names the device"     /tmp/census-pad-idle.log pad 'Xbox 360 Controller'
 
-plant /tmp/census-pad-live.log "$(pad 12 1 1 1 45678 1)" \
-    '[  223998.000] inject  pad: X4 opened gamepad id=0 name="Microsoft X-Box 360 pad"'
-want "polled -> SDL path live"      /tmp/census-pad-live.log pad "THE SDL PATH IS LIVE"
-want "polled -> points at bindings" /tmp/census-pad-live.log pad "BINDING"
+# TAKE 307's EXACT SHAPE, now that the event channel is counted: zero polls,
+# zero enumerations, one gamepad opened, and the axis values arriving as
+# events. The old block called this "no binding could have acted" while Patola
+# was steering the ship, so it is planted here permanently.
+plant /tmp/census-pad-events.log "$(pad 0 -1 0 1 0 0 8451 37 1 1)" \
+    '[  223998.000] inject  pad: X4 opened gamepad id=2 name="Xbox 360 Controller"' \
+    '[  223998.500] inject  pad axes (gamepad, device id 2): 0=LEFTX:-32768..32767 1=LEFTY:-32768..32767 2=RIGHTX:-31000..30144'
+want "take 307 shape -> values ARE reaching X4" /tmp/census-pad-events.log pad "AXIS VALUES ARE REACHING X4"
+want "take 307 shape -> names the channel"      /tmp/census-pad-events.log pad "by EVENTS"
+want "take 307 shape -> points at bindings"     /tmp/census-pad-events.log pad "BINDING question"
+want "take 307 shape -> prints the axis travel" /tmp/census-pad-events.log pad "2=RIGHTX:-31000..30144"
+# ...and must NOT print the old false verdict.
+if python3 tools/score_run.py /tmp/census-pad-events.log 2>&1 | grep -qE "NEVER POLLED|no binding could have acted"; then
+    bad "take 307 shape -> still prints the refuted 'never polled' verdict"
+else
+    ok "take 307 shape -> does not print the refuted verdict"
+fi
+
+# Polling only, which is what the FIRST version of the census assumed was the
+# only channel. It must still be reported correctly rather than dropped.
+plant /tmp/census-pad-polled.log "$(pad 12 1 1 0 45678 0 0 0 1 1)"
+want "polled only -> names POLLING" /tmp/census-pad-polled.log pad "by POLLING"
+
+# Both families carrying axis values: two devices, and their indices mean
+# different hardware. This is the X52-plus-emulated-pad configuration.
+plant /tmp/census-pad-both.log "$(pad 0 -1 1 1 0 2200 8451 12 2 1)" \
+    '[  223998.400] inject  pad axes (joystick, device id 3): 0:-32768..32767 1:-32768..32767' \
+    '[  223998.500] inject  pad axes (gamepad, device id 2): 2=RIGHTX:-31000..30144'
+want "two families -> warns against pooling" /tmp/census-pad-both.log pad "do not pool their indices"
+want "two families -> both axis lines print" /tmp/census-pad-both.log pad "joystick, device 3"
 
 absent "no pad line -> silent" "$BASE" pad
 
