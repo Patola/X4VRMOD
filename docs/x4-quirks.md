@@ -21476,3 +21476,86 @@ go, with `x` capped at 1408 — the mouse-look park — in two of them. The
 measurement needs a take whose protocol deliberately drives the pointer into
 all four corners with a cursor on screen (map or menu open). It rides any
 take; it does not need one of its own.
+
+## #46 — the mechanism, derived from measured numbers with no take spent
+
+### The cursor is confined to the central 52.5% of the eye, by the canvas
+
+Both take 307 and take 309 log the live affine as **`A=(0.5252,0.5252)`,
+`B=(+0.00002,+0.00000)`**. The draw applies it to the hotspot
+(`layer/x4vr_cursor_draw.hpp`), so for a pointer anywhere in `[0, eye]`:
+
+    drawn = 0.5252 * (2*px/eye - 1) + 0.00002   in [-0.5252, +0.5252]
+
+    pointer at the left/top edge   -> drawn at   668.5 px
+    pointer at the centre          -> drawn at  1408.0 px
+    pointer at the right/bottom    -> drawn at  2147.5 px
+
+**A 1479x1479 box centred in the 2816x2816 eye. A 669 px border on every side
+where no cursor can ever appear, and 72.4% of the eye's AREA unreachable** —
+whatever the player does with the mouse.
+
+That is "invisible over much of the eye image", it is arithmetic rather than a
+hypothesis, and it cost no run.
+
+### Why three takes could not see it
+
+The census measured the **published pointer range**, which is a fact about the
+protocol — where Patola happened to move the mouse — not about the geometry.
+Take 307 read 67%x72%, take 308 read a flat 1408 (X4 parks the pointer at the
+window centre for mouse-look), take 309 read 38%x47% after he got stuck in a
+menu. Three different numbers for a quantity that never changed.
+
+**The instrument measured a proxy for the thing.** Now it measures the thing:
+`cursor drawn (...)` reports the min/max of the **mapped** hotspot in NDC and
+as a percentage of the eye, so it is independent of how far the mouse was
+moved. [[instrument-inherits-its-question]].
+
+### This is the UI canvas working as designed — and that is the question
+
+The cursor takes the same map as the UI on purpose: X4 hit-tests CPU-side at
+an unshifted window coordinate, so if the menu moves and the pointer does not,
+every button still *works* while the pointer sits away from it. For **menus**
+the confinement is correct — the UI is there too.
+
+**It is wrong for anything outside the canvas.** A defect report of "the
+cursor is invisible over much of the eye" is a report that the player wanted
+to point at something the canvas does not cover.
+
+**Whether the cursor should be confined to the UI canvas is a design decision
+and it is Patola's**, not a defect to be silently fixed. The options differ in
+what they break, and none is obviously right:
+
+1. leave it — correct for menus, useless for anything in the periphery;
+2. unmap the cursor (draw at the raw pointer position) — reaches the whole eye
+   and immediately separates from every button it activates, which is the
+   exact failure the map was added to prevent;
+3. map the cursor only while a menu/map is up and leave it unmapped otherwise
+   — needs a reliable "is the UI capturing the pointer" predicate, and #72
+   already shows our view-state predicates are not always right;
+4. widen the canvas itself (#86 is already about per-context canvas distance).
+
+### An ambiguity I could not settle, and did not guess
+
+Two processes in the tree report different window sizes —
+`5632x2816` from the pid the layer runs in, `2816x2816` from another — and
+from the layer's side I cannot tell which one feeds the pointer. It matters:
+if the input path is in a 5632-wide space while the eye is 2816, the pointer
+and the image are in different coordinate systems and every placement number
+is measured across that seam.
+
+So the census now publishes `shared->window_w` — **the width the injector
+published next to the position it published** — on the same line as the eye
+extent, and the scorer prints `THE INPUT PATH AND THE IMAGE DISAGREE` and
+**suppresses the confinement verdict** when they differ. A seam outranks a
+geometry reading taken across it.
+
+### Instruments
+
+* `cursor drawn (...)` — mapped-hotspot NDC extent, percentage of eye, and the
+  channel's window width. Verified on the GPU harness (`cursor_render`, 0
+  validation errors) before any take, per [[x4vr-headless-gpu-harness]].
+* `tests/run-census-scorer.sh` gained 9 cases: the measured 0.5252 confinement
+  with its border and lost-area figures, an unconfined **negative control** so
+  the verdict is a discriminator and not an off switch, and the seam case with
+  a check that confinement is NOT reported across it.

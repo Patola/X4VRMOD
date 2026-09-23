@@ -352,6 +352,18 @@ public:
         const float hx = 2.f * px / w - 1.f, hy = 2.f * py / h - 1.f;
         const x4vr::CanvasNdc none[2];
         const x4vr::CanvasNdc *map = canvas ? canvas : none;
+        // View 0's mapped hotspot -- the eye Patola judges from, and the two
+        // views differ only by the canvas shift, which is 0.00002 NDC at
+        // X4VR_CANVAS_M=1000. Recorded before the draw so a frame the loop
+        // skips still counts.
+        {
+            const float mx = map[0].x(hx), my = map[0].y(hy);
+            dx_lo_ = mx < dx_lo_ ? mx : dx_lo_;
+            dx_hi_ = mx > dx_hi_ ? mx : dx_hi_;
+            dy_lo_ = my < dy_lo_ ? my : dy_lo_;
+            dy_hi_ = my > dy_hi_ ? my : dy_hi_;
+            chan_win_w_ = shared->window_w;
+        }
         for (uint32_t l = 0; l < s->fbs.size(); l++) {
             // A pure translation of the quad, per view: the hotspot goes where
             // the UI went and the bitmap keeps its pixel size. With #30's
@@ -432,6 +444,23 @@ public:
                  py_lo_ > py_hi_ ? 0.f : py_lo_, py_lo_ > py_hi_ ? 0.f : py_hi_,
                  eye_w, eye_h,
                  moved ? "moved" : "NEVER MOVED — the channel is not being fed");
+        // The quantity #46 is actually about. Reported as a percentage of the
+        // eye so it reads the same whatever the resolution, and with the
+        // window the INPUT path believes in on the same line -- if that
+        // differs from the eye, the pointer and the image disagree about their
+        // own coordinate space and no amount of canvas arithmetic will fix it.
+        if (dx_hi_ >= dx_lo_ && eye_w && eye_h) {
+            const float fx = (dx_hi_ - dx_lo_) * 0.5f;
+            const float fy = (dy_hi_ - dy_lo_) * 0.5f;
+            X4VR_LOG("cursor drawn (%s): ndc x=%.4f..%.4f y=%.4f..%.4f "
+                     "= %.0f%%x%.0f%% of the eye | channel says the window is "
+                     "%u wide against a %u eye%s",
+                     when, dx_lo_, dx_hi_, dy_lo_, dy_hi_, 100.0f * fx,
+                     100.0f * fy, chan_win_w_, eye_w,
+                     chan_win_w_ && chan_win_w_ != eye_w
+                         ? " — THESE DISAGREE"
+                         : "");
+        }
     }
 
     // Drop everything hanging off one eye image, because the image is about to
@@ -978,6 +1007,19 @@ private:
     // cursor pinned at one place and a cursor ranging over the eye are the
     // same census otherwise, and #64 is exactly that distinction.
     float px_lo_ = 1e9f, px_hi_ = -1e9f, py_lo_ = 1e9f, py_hi_ = -1e9f;
+    // Where the cursor was actually DRAWN, in NDC, after the canvas map.
+    //
+    // The pointer range above is a proxy and takes 307-309 showed it is a bad
+    // one: it says where the player moved the mouse, which is a fact about the
+    // protocol. THIS is the quantity #46 is about -- the part of the eye image
+    // a cursor can occupy -- and with a contracting canvas the two differ by
+    // the whole of the defect.
+    float dx_lo_ = 1e9f, dx_hi_ = -1e9f, dy_lo_ = 1e9f, dy_hi_ = -1e9f;
+    // What the INPUT path believes the window is, straight off the channel.
+    // Two processes in the tree report different window sizes and the layer
+    // cannot tell from its own side which one feeds the pointer; this is the
+    // one the injector published next to the position it published.
+    uint32_t chan_win_w_ = 0;
     std::unordered_map<VkImage, Slot> slots_;
     uint8_t scratch_[Shared::kCursorMax * Shared::kCursorMax * 4] = {};
     bool shared_failed_ = false;

@@ -3311,6 +3311,41 @@ def main(path):
                       f"where X4 parks the pointer for mouse-look, so a "
                       f"cockpit-only run reaches it for an uninteresting "
                       f"reason.")
+        # #46's actual quantity: where the cursor was DRAWN, after the canvas
+        # map. The pointer range above is a proxy that takes 307-309 showed is
+        # a bad one -- it reports the protocol, not the geometry.
+        cd = re.findall(
+            r"cursor drawn \((\w+)\): ndc x=(-?[\d.]+)\.\.(-?[\d.]+) "
+            r"y=(-?[\d.]+)\.\.(-?[\d.]+) = (\d+)%x(\d+)% of the eye \| channel "
+            r"says the window is (\d+) wide against a (\d+) eye", text)
+        if cd:
+            _, dxl, dxh, dyl, dyh, fx, fy, cw_, ce_ = cd[-1]
+            fx, fy, cw_, ce_ = int(fx), int(fy), int(cw_), int(ce_)
+            print(f"cursor     DRAWN over ndc x={dxl}..{dxh} y={dyl}..{dyh} "
+                  f"= {fx}%x{fy}% of the eye")
+            if cw_ and cw_ != ce_:
+                print(f"cursor     => THE INPUT PATH AND THE IMAGE DISAGREE. "
+                      f"The channel publishes against a {cw_}-wide window "
+                      f"while the eye is {ce_}. The pointer and the picture "
+                      f"are in different coordinate spaces, and every "
+                      f"placement number here is measured across that seam — "
+                      f"settle it before reading anything else.")
+            elif fx < 90 or fy < 90:
+                border = (100 - fx) / 2.0
+                print(f"cursor     => CONFINED. The cursor can only ever "
+                      f"occupy {fx}%x{fy}% of the eye — a border of about "
+                      f"{border:.0f}% of the width on every side where no "
+                      f"cursor can appear whatever the player does, and "
+                      f"{100 - fx * fy / 100.0:.0f}% of the AREA unreachable. "
+                      f"This is geometry, not protocol: unlike the pointer "
+                      f"range above it does not depend on where the mouse was "
+                      f"moved. If it matches the canvas affine, the cursor is "
+                      f"following the UI canvas by design and the question is "
+                      f"whether it SHOULD.")
+            else:
+                print(f"cursor     => the cursor reaches {fx}%x{fy}% of the "
+                      f"eye, so nothing is confining it.")
+
         if reasons.get("off-eye"):
             print(f"cursor     NOTE: {reasons['off-eye']} frame(s) culled "
                   f"off-eye. That cull is computed from the UNMAPPED position "

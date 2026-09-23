@@ -106,6 +106,47 @@ want "half in x only -> reports 50/100"    /tmp/census-halfx.log cursor "50% of 
 plant /tmp/census-offeye.log "$(cur 'drew 900 | off-eye 100' 0 2816 0 2816 moved)"
 want "off-eye -> notes the pre-map cull" /tmp/census-offeye.log cursor "culled off-eye"
 
+drawn() {  # drawn <ndc-half-span> <chan_win_w> <eye>
+    python3 - "$1" "$2" "$3" <<'PYX'
+import sys
+s, w, e = float(sys.argv[1]), sys.argv[2], sys.argv[3]
+pct = round(s * 100)
+print(f"[  223999.000] layer   cursor drawn (final): ndc x={-s:.4f}..{s:.4f} "
+      f"y={-s:.4f}..{s:.4f} = {pct}%x{pct}% of the eye | channel says the "
+      f"window is {w} wide against a {e} eye")
+PYX
+}
+
+# THE MEASURED CASE: a=0.5252 confines the cursor to the central 52.5%. This
+# is #46's mechanism and it is geometry, not protocol -- it holds however the
+# player moved the mouse, which is exactly what the pointer range could not
+# say.
+plant /tmp/census-drawn-confined.log "$(cur 'drew 1000' 0 2816 0 2816 moved)" "$(drawn 0.5252 2816 2816)"
+want "confined -> reports the drawn span"  /tmp/census-drawn-confined.log cursor "DRAWN over ndc"
+want "confined -> names it CONFINED"       /tmp/census-drawn-confined.log cursor "=> CONFINED"
+want "confined -> gives the border"        /tmp/census-drawn-confined.log cursor "border of about 24%"
+want "confined -> gives the lost area"     /tmp/census-drawn-confined.log cursor "72% of the AREA unreachable"
+want "confined -> points at the canvas"    /tmp/census-drawn-confined.log cursor "whether it SHOULD"
+
+# An unconfined cursor must NOT trip it, or the verdict is an off switch.
+plant /tmp/census-drawn-full.log "$(cur 'drew 1000' 0 2816 0 2816 moved)" "$(drawn 1.0 2816 2816)"
+want "unconfined -> says nothing confines it" /tmp/census-drawn-full.log cursor "nothing is confining it"
+if python3 tools/score_run.py /tmp/census-drawn-full.log 2>&1 | grep -qE "^cursor.*=> CONFINED"; then
+    bad "unconfined -> still claims CONFINED"
+else
+    ok "unconfined -> does not claim CONFINED"
+fi
+
+# The window/eye seam OUTRANKS the confinement verdict: if the pointer and the
+# image are in different spaces, every placement number is measured across it.
+plant /tmp/census-drawn-seam.log "$(cur 'drew 1000' 0 2816 0 2816 moved)" "$(drawn 0.5252 5632 2816)"
+want "seam -> flags the disagreement" /tmp/census-drawn-seam.log cursor "INPUT PATH AND THE IMAGE DISAGREE"
+if python3 tools/score_run.py /tmp/census-drawn-seam.log 2>&1 | grep -qE "^cursor.*=> CONFINED"; then
+    bad "seam -> reports confinement across an unsettled coordinate seam"
+else
+    ok "seam -> does not report confinement across the seam"
+fi
+
 # NEGATIVE CONTROL: a log with no census line must stay silent, or "not
 # measured" and "measured zero" become the same reading -- the exact defect
 # this block was written to end.
