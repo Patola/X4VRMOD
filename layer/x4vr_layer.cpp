@@ -9987,9 +9987,36 @@ const bool g_cursor_enabled = x4vr::env_on("X4VR_CURSOR", true);
 // Switching it OFF should invert both halves — cockpit correct, menus wrong.
 // If it does, the mechanism is settled and the fix is a per-context choice,
 // not a global one. See [[x4vr-eliminate-dont-instrument]].
+// `X4VR_CURSOR_CANVAS_AB=<seconds>` alternates instead, so one mode is the
+// other's reference INSIDE one run -- Patola's eye is reliable for a switch
+// within a run and not for intensity against memory of an earlier one
+// ([[patola-senses-transitions-not-magnitudes]]). Transitions are logged so
+// his report can be correlated against the schedule rather than against his
+// recollection of which arm he was in.
 bool cursor_canvas() {
     static const bool on = x4vr::env_on("X4VR_CURSOR_CANVAS", true);
-    return on;
+    static const double ab = [] {
+        const char *e = getenv("X4VR_CURSOR_CANVAS_AB");
+        return e && *e ? atof(e) : 0.0;
+    }();
+    if (ab <= 0.0)
+        return on;
+    // Same clock idiom as the A/B above, rather than a second one.
+    struct timespec ts {};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    const double t = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+    static const double t0 = t;
+    const long phase = (long)((t - t0) / ab);
+    const bool want = (phase % 2) == 0; // phase 0 is ON, the shipped default
+    static long said = -1;
+    if (said != phase) {
+        said = phase;
+        X4VR_LOG("cursor canvas: phase %ld — ARM %s (canvas %s). %s", phase,
+                 want ? "A" : "B", want ? "ON" : "OFF",
+                 want ? "cursor on the UI canvas: right in menus/map"
+                      : "cursor at the raw pointer: right in the cockpit");
+    }
+    return want;
 }
 
 const char *g_mv_dump = getenv("X4VR_MV_DUMP");

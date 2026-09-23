@@ -3315,14 +3315,50 @@ def main(path):
         # map. The pointer range above is a proxy that takes 307-309 showed is
         # a bad one -- it reports the protocol, not the geometry.
         cd = re.findall(
-            r"cursor drawn \((\w+)\): ndc x=(-?[\d.]+)\.\.(-?[\d.]+) "
-            r"y=(-?[\d.]+)\.\.(-?[\d.]+) = (\d+)%x(\d+)% of the eye \| channel "
+            r"cursor drawn \((\w+)\) ARM (\w) \(canvas (\w+)\): ndc "
+            r"x=(-?[\d.]+)\.\.(-?[\d.]+) y=(-?[\d.]+)\.\.(-?[\d.]+) = "
+            r"(\d+)%x(\d+)% of the eye \| (\d+) frame\(s\) \| channel "
             r"says the window is (\d+) wide against a (\d+) eye", text)
+        # The A/B schedule, stamped by the code that took the branch.
+        ph = re.findall(r"cursor canvas: phase (\d+) — ARM (\w) \(canvas (\w+)\)",
+                        text)
+        if ph:
+            arms = {}
+            for _, a, _s in ph:
+                arms[a] = arms.get(a, 0) + 1
+            print(f"cursor     A/B ran {len(ph)} phase(s): " +
+                  ", ".join(f"ARM {a} x{n}" for a, n in sorted(arms.items())))
+            if len(arms) < 2:
+                print(f"cursor     => THE A/B DID NOT ALTERNATE. Only ARM "
+                      f"{list(arms)[0]} ever ran, so there is no comparison in "
+                      f"this log — check X4VR_CURSOR_CANVAS_AB was set and the "
+                      f"run was longer than one phase.")
         if cd:
-            _, dxl, dxh, dyl, dyh, fx, fy, cw_, ce_ = cd[-1]
+            # Keep the LAST line per arm; the ranges are cumulative.
+            per_arm = {}
+            for rec in cd:
+                per_arm[rec[1]] = rec
+            for a in sorted(per_arm):
+                _, _, st, dxl, dxh, dyl, dyh, fx, fy, nfr, cw_, ce_ = per_arm[a]
+                print(f"cursor     ARM {a} (canvas {st}): drawn over ndc "
+                      f"x={dxl}..{dxh} y={dyl}..{dyh} = {fx}%x{fy}% of the "
+                      f"eye, {nfr} frame(s)")
+            if len(per_arm) == 2:
+                fa = int(per_arm["A"][7])
+                fb = int(per_arm["B"][7])
+                if fb > fa + 10:
+                    print(f"cursor     => THE KNOB ACTED. ARM B reaches "
+                          f"{fb}% of the eye against ARM A's {fa}%, so the "
+                          f"canvas map really was bypassed. Patola's report "
+                          f"decides which arm is BETTER; this line only says "
+                          f"the two arms were genuinely different.")
+                else:
+                    print(f"cursor     => THE KNOB DID NOT ACT. ARM A "
+                          f"{fa}% vs ARM B {fb}% — the two arms drew over the "
+                          f"same region, so whatever was observed is NOT the "
+                          f"canvas map and nothing here is scorable.")
+            _, _, _, dxl, dxh, dyl, dyh, fx, fy, _, cw_, ce_ = cd[-1]
             fx, fy, cw_, ce_ = int(fx), int(fy), int(cw_), int(ce_)
-            print(f"cursor     DRAWN over ndc x={dxl}..{dxh} y={dyl}..{dyh} "
-                  f"= {fx}%x{fy}% of the eye")
             if cw_ and cw_ != ce_:
                 print(f"cursor     => THE INPUT PATH AND THE IMAGE DISAGREE. "
                       f"The channel publishes against a {cw_}-wide window "

@@ -357,11 +357,13 @@ public:
         // X4VR_CANVAS_M=1000. Recorded before the draw so a frame the loop
         // skips still counts.
         {
+            const int arm = canvas ? 0 : 1;
             const float mx = map[0].x(hx), my = map[0].y(hy);
-            dx_lo_ = mx < dx_lo_ ? mx : dx_lo_;
-            dx_hi_ = mx > dx_hi_ ? mx : dx_hi_;
-            dy_lo_ = my < dy_lo_ ? my : dy_lo_;
-            dy_hi_ = my > dy_hi_ ? my : dy_hi_;
+            dx_lo_[arm] = mx < dx_lo_[arm] ? mx : dx_lo_[arm];
+            dx_hi_[arm] = mx > dx_hi_[arm] ? mx : dx_hi_[arm];
+            dy_lo_[arm] = my < dy_lo_[arm] ? my : dy_lo_[arm];
+            dy_hi_[arm] = my > dy_hi_[arm] ? my : dy_hi_[arm];
+            drew_arm_[arm]++;
             chan_win_w_ = shared->window_w;
         }
         for (uint32_t l = 0; l < s->fbs.size(); l++) {
@@ -449,14 +451,19 @@ public:
         // window the INPUT path believes in on the same line -- if that
         // differs from the eye, the pointer and the image disagree about their
         // own coordinate space and no amount of canvas arithmetic will fix it.
-        if (dx_hi_ >= dx_lo_ && eye_w && eye_h) {
-            const float fx = (dx_hi_ - dx_lo_) * 0.5f;
-            const float fy = (dy_hi_ - dy_lo_) * 0.5f;
-            X4VR_LOG("cursor drawn (%s): ndc x=%.4f..%.4f y=%.4f..%.4f "
-                     "= %.0f%%x%.0f%% of the eye | channel says the window is "
-                     "%u wide against a %u eye%s",
-                     when, dx_lo_, dx_hi_, dy_lo_, dy_hi_, 100.0f * fx,
-                     100.0f * fy, chan_win_w_, eye_w,
+        for (int arm = 0; arm < 2; arm++) {
+            if (dx_hi_[arm] < dx_lo_[arm] || !eye_w || !eye_h)
+                continue; // that arm never drew; silence, not a zero
+            const float fx = (dx_hi_[arm] - dx_lo_[arm]) * 0.5f;
+            const float fy = (dy_hi_[arm] - dy_lo_[arm]) * 0.5f;
+            X4VR_LOG("cursor drawn (%s) ARM %s (canvas %s): ndc "
+                     "x=%.4f..%.4f y=%.4f..%.4f = %.0f%%x%.0f%% of the eye | "
+                     "%llu frame(s) | channel says the window is %u wide "
+                     "against a %u eye%s",
+                     when, arm ? "B" : "A", arm ? "OFF" : "ON", dx_lo_[arm],
+                     dx_hi_[arm], dy_lo_[arm], dy_hi_[arm], 100.0f * fx,
+                     100.0f * fy, (unsigned long long)drew_arm_[arm],
+                     chan_win_w_, eye_w,
                      chan_win_w_ && chan_win_w_ != eye_w
                          ? " — THESE DISAGREE"
                          : "");
@@ -1014,7 +1021,16 @@ private:
     // protocol. THIS is the quantity #46 is about -- the part of the eye image
     // a cursor can occupy -- and with a contracting canvas the two differ by
     // the whole of the defect.
-    float dx_lo_ = 1e9f, dx_hi_ = -1e9f, dy_lo_ = 1e9f, dy_hi_ = -1e9f;
+    //
+    // Kept PER ARM for the X4VR_CURSOR_CANVAS_AB run: index 0 is "a canvas was
+    // passed", index 1 is "none was". Derived from the pointer the caller
+    // actually handed us, not from re-reading the knob — an instrument that
+    // re-derives the decision it reports can evaluate a different predicate
+    // than the code did. Pooling the two would average a 52% arm with a 100%
+    // one and prove nothing about either.
+    float dx_lo_[2] = {1e9f, 1e9f}, dx_hi_[2] = {-1e9f, -1e9f};
+    float dy_lo_[2] = {1e9f, 1e9f}, dy_hi_[2] = {-1e9f, -1e9f};
+    uint64_t drew_arm_[2] = {0, 0};
     // What the INPUT path believes the window is, straight off the channel.
     // Two processes in the tree report different window sizes and the layer
     // cannot tell from its own side which one feeds the pointer; this is the

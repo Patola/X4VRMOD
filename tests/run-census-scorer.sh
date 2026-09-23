@@ -106,15 +106,22 @@ want "half in x only -> reports 50/100"    /tmp/census-halfx.log cursor "50% of 
 plant /tmp/census-offeye.log "$(cur 'drew 900 | off-eye 100' 0 2816 0 2816 moved)"
 want "off-eye -> notes the pre-map cull" /tmp/census-offeye.log cursor "culled off-eye"
 
-drawn() {  # drawn <ndc-half-span> <chan_win_w> <eye>
-    python3 - "$1" "$2" "$3" <<'PYX'
+drawn() {  # drawn <ndc-half-span> <chan_win_w> <eye> [arm A|B]
+    python3 - "$1" "$2" "$3" "${4:-A}" <<'PYX'
 import sys
-s, w, e = float(sys.argv[1]), sys.argv[2], sys.argv[3]
+s, w, e, arm = float(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 pct = round(s * 100)
-print(f"[  223999.000] layer   cursor drawn (final): ndc x={-s:.4f}..{s:.4f} "
-      f"y={-s:.4f}..{s:.4f} = {pct}%x{pct}% of the eye | channel says the "
-      f"window is {w} wide against a {e} eye")
+st = "ON" if arm == "A" else "OFF"
+print(f"[  223999.000] layer   cursor drawn (final) ARM {arm} (canvas {st}): "
+      f"ndc x={-s:.4f}..{s:.4f} y={-s:.4f}..{s:.4f} = {pct}%x{pct}% of the "
+      f"eye | 1000 frame(s) | channel says the window is {w} wide against a "
+      f"{e} eye")
 PYX
+}
+
+phase() {  # phase <n> <A|B>
+    st="ON"; [ "$2" = B ] && st="OFF"
+    printf '[  223990.000] layer   cursor canvas: phase %s — ARM %s (canvas %s). x' "$1" "$2" "$st"
 }
 
 # THE MEASURED CASE: a=0.5252 confines the cursor to the central 52.5%. This
@@ -122,7 +129,7 @@ PYX
 # player moved the mouse, which is exactly what the pointer range could not
 # say.
 plant /tmp/census-drawn-confined.log "$(cur 'drew 1000' 0 2816 0 2816 moved)" "$(drawn 0.5252 2816 2816)"
-want "confined -> reports the drawn span"  /tmp/census-drawn-confined.log cursor "DRAWN over ndc"
+want "confined -> reports the drawn span"  /tmp/census-drawn-confined.log cursor "ARM A (canvas ON): drawn over ndc"
 want "confined -> names it CONFINED"       /tmp/census-drawn-confined.log cursor "=> CONFINED"
 want "confined -> gives the border"        /tmp/census-drawn-confined.log cursor "border of about 24%"
 want "confined -> gives the lost area"     /tmp/census-drawn-confined.log cursor "72% of the AREA unreachable"
@@ -146,6 +153,35 @@ if python3 tools/score_run.py /tmp/census-drawn-seam.log 2>&1 | grep -qE "^curso
 else
     ok "seam -> does not report confinement across the seam"
 fi
+
+# --- the A/B itself: both arms present, and the knob must be SEEN to act ---
+plant /tmp/census-ab-good.log "$(cur 'drew 2000' 0 2816 0 2816 moved)" \
+    "$(phase 0 A)" "$(phase 1 B)" "$(phase 2 A)" "$(phase 3 B)" \
+    "$(drawn 0.5252 2816 2816 A)" "$(drawn 1.0 2816 2816 B)"
+want "A/B -> counts the phases"     /tmp/census-ab-good.log cursor "A/B ran 4 phase(s)"
+want "A/B -> reports ARM A's span"  /tmp/census-ab-good.log cursor "ARM A (canvas ON): drawn over ndc"
+want "A/B -> reports ARM B's span"  /tmp/census-ab-good.log cursor "ARM B (canvas OFF): drawn over ndc"
+want "A/B -> says the knob acted"   /tmp/census-ab-good.log cursor "THE KNOB ACTED"
+want "A/B -> defers the verdict"    /tmp/census-ab-good.log cursor "report decides which arm is BETTER"
+
+# The failure this guards: the knob is set but nothing changes. Two arms that
+# drew over the SAME region mean whatever was observed was not the canvas, and
+# a run scored as if it were would blame the wrong thing.
+plant /tmp/census-ab-inert.log "$(cur 'drew 2000' 0 2816 0 2816 moved)" \
+    "$(phase 0 A)" "$(phase 1 B)" \
+    "$(drawn 0.5252 2816 2816 A)" "$(drawn 0.5252 2816 2816 B)"
+want "inert knob -> says it did NOT act" /tmp/census-ab-inert.log cursor "THE KNOB DID NOT ACT"
+if python3 tools/score_run.py /tmp/census-ab-inert.log 2>&1 | grep -qE "^cursor.*THE KNOB ACTED"; then
+    bad "inert knob -> also claims it acted"
+else
+    ok "inert knob -> does not also claim it acted"
+fi
+
+# One arm only: no comparison exists, and saying so beats reporting one arm as
+# if it were a result.
+plant /tmp/census-ab-onearm.log "$(cur 'drew 2000' 0 2816 0 2816 moved)" \
+    "$(phase 0 A)" "$(drawn 0.5252 2816 2816 A)"
+want "one arm -> refuses the comparison" /tmp/census-ab-onearm.log cursor "DID NOT ALTERNATE"
 
 # NEGATIVE CONTROL: a log with no census line must stay silent, or "not
 # measured" and "measured zero" become the same reading -- the exact defect

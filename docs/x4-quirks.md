@@ -21733,3 +21733,43 @@ this whole account is wrong — which is the point of running it.
 
 See [[x4vr-eliminate-dont-instrument]]: switch the candidate off and
 re-measure, rather than building a probe to watch it.
+
+## P311 — the cursor-canvas A/B, alternating within one run
+
+`X4VR_CURSOR_CANVAS_AB=30` alternates every 30 s, **phase 0 = ARM A = canvas
+ON = the shipped default**, so a run that dies early dies in the known state.
+Transitions are logged by the code that takes the branch, and the census keeps
+the drawn extent **per arm** so the log can prove the knob acted before any of
+Patola's report is read.
+
+**Controller configuration: no emulated pad, real mouse and keyboard** — same
+reason as take 310: `INPUT_JOYAXIS_RX/RY` drives `CONTROLLERMOUSECURSOR` in
+menus, a second cursor path we do not instrument.
+
+**Runtime: WiVRn.**
+
+### What each arm should do
+
+| | ARM A — canvas ON (current) | ARM B — canvas OFF |
+|---|---|---|
+| **map / menus** | cursor sits ON the buttons, clicking works — take 310 confirmed this | cursor drifts OFF the buttons, the error **growing toward the edge** and near zero at the centre |
+| **cockpit** | hover never highlights; selection unpredictable; clicks land ~1/4 screen away at the edge — take 310 | hover should start highlighting; selection should become predictable |
+| **reach** | 52% of the eye | 100% of the eye |
+
+* **P311.1** The census reports **ARM A ~52%, ARM B ~100%**, and the scorer
+  prints `THE KNOB ACTED`. If it prints `THE KNOB DID NOT ACT`, nothing else in
+  this run is scorable and my whole account of #46 is wrong.
+* **P311.2** **Hover highlighting appears in the cockpit during ARM B and
+  never during ARM A.** This is the sharpest observable: take 310 reported
+  *"there was never a cursor change when hovering something"* across the whole
+  run, so any hover at all is a change of state.
+* **P311.3** The map INVERTS — correct in A, wrong in B. **Both halves must
+  flip.** If the cockpit improves and the map does not break, the canvas map
+  is not the whole mechanism and something else is displacing the cursor.
+
+### What would refute this
+
+A run where the cockpit does not improve in ARM B. The account says the cursor
+is drawn at `A*n` while X4 hit-tests at `n`; drawing at `n` must therefore put
+the cursor where X4 tests. If it does not, the displacement is somewhere else
+and the arithmetic above is a coincidence.
