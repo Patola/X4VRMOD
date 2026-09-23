@@ -21625,3 +21625,37 @@ measurement: **with the cursor visible, is it still wrong, and where?** The
 `cursor drawn` instrument now reports the confinement as a number on any take,
 so the question to him is only "does the confined region match what you see,
 and does anything you need to point at fall outside it".
+
+## P310 — committed before the run: is #46's confinement what Patola sees?
+
+Take 309's line, new name and log. No knob changes. **Runtime WiVRn**
+(`XR_RUNTIME_JSON` unset).
+
+**Controller configuration: NO emulated pad — real mouse and keyboard.** The
+pad is irrelevant to #46 and would actively confound it, because his inputmap
+binds `INPUT_JOYAXIS_RX/RY` to **four** things at once:
+
+    INPUT_RANGE_STEERING_PRIMARY        (flight)
+    INPUT_RANGE_CONTROLLERMOUSECURSOR_X (menus)
+    INPUT_RANGE_MAP_ROTATE_LEFT_RIGHT   (map)
+    INPUT_RANGE_FP_YAW                  (on foot)
+
+So the right touchpad he has just mapped to the emulated right stick would,
+**in a menu, drive X4's own controller cursor** — a second cursor path that
+does not go through `SDL_GetMouseState` and therefore never reaches
+`publish_cursor`. The overlay would keep drawing the stale SDL pointer while
+X4 moved a different cursor on screen. That is worth knowing about on its own,
+and it is not what this take is for.
+
+* **P310.1** `cursor drawn` reports about **53%x53%** of the eye, matching
+  `0.75 * 0.7003`. The instrument has never run; this is its first reading and
+  a known answer is the right thing to check it against.
+* **P310.2** the channel's `window_w` **equals** the eye width, so no
+  `THE INPUT PATH AND THE IMAGE DISAGREE`. If it disagrees, that seam outranks
+  everything else here and the confinement number is void.
+* **P310.3 — the falsifier that matters.** The cursor stops **symmetrically**:
+  the same distance from the edge going up as going down. `k[0] == k[5]` and
+  `by = 0.00000`, so nothing in the current arithmetic can do otherwise.
+  **If Patola sees it reach further down than up, the canvas is NOT #46's
+  cause and there is a second mechanism** — and that, not the confinement, is
+  what the remaining work would be about.
