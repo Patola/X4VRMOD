@@ -21659,3 +21659,77 @@ and it is not what this take is for.
   **If Patola sees it reach further down than up, the canvas is NOT #46's
   cause and there is a second mechanism** — and that, not the confinement, is
   what the remaining work would be about.
+
+## Take 310 — #46's original report does NOT reproduce, and a worse defect does
+
+### P310.1 and P310.2 HELD; the confinement is real and CORRECT in the map
+
+    cursor  DRAWN over ndc x=-0.5252..0.5248 y=-0.5252..0.5248 = 52%x52%
+    cursor  pointer x=0..2815 y=0..2815  (100% of the window — swept properly)
+
+No `DISAGREE`, so `window_w == eye`: **no coordinate seam**. And the pointer
+covered the whole window while the drawn cursor covered 52%, which is exactly
+what separating the two instruments was for.
+
+**P310.3 is moot and that is the answer.** Patola: *"I opened the map and the
+cursor would go through the entire quad corners, it would not stop midway. It
+correctly selected the elements on the map as I would click them... there is no
+question if it was symmetric — it was perfectly fitted to the map."*
+
+The cursor reaches the corners of the **UI canvas**, which is the 52% region.
+It matches the UI because it takes the UI's map. **#46 as written — "invisible
+over much of the eye image until moved down" — does not reproduce, and the
+confinement is correct behaviour wherever X4's screen-space UI is what you are
+pointing at.**
+
+### The cockpit, which is a different and much worse defect
+
+Patola: *"the cursor didn't seem consistent. I would not guess when I would be
+able to click something, and I had to do several clicks to select an element...
+There were some times that even with the head centered clicking on 1/4 of
+screen distant from an element would select it... **There was never a cursor
+change when hovering something.**"*
+
+The last sentence is the diagnostic. X4 changes cursor on hover; that is X4's
+own statement about where it thinks the pointer is, and **it never fired**.
+
+The arithmetic accounts for all of it. The cursor is drawn at `A*n` with
+`A = 0.5252`; X4 hit-tests at the raw `n`; a cockpit target **appears** at `n`:
+
+| target at ndc | pointer needed to put the SEEN cursor on it | |
+|---|---|---|
+| 0.25 | 0.48 | |
+| 0.50 | 0.95 | |
+| 0.75 | **1.43** | off the window |
+| 1.00 | **1.90** | off the window |
+
+So beyond `n = 0.525` the required pointer position **does not exist**, and
+hover can never register — *"there was never a cursor change"*. And read the
+other way, a click that DOES select lands with the cursor drawn `0.4748*n`
+away: 6% of the eye width at `n=0.25`, 12% at `n=0.5`, **24% at the edge** —
+*"clicking on 1/4 of screen distant from an element would select it"*.
+
+**The cursor follows the UI canvas, and cockpit targets are not on it.** That
+is the defect, it is well defined, and it makes the game hard to play — which
+#46's original wording never conveyed.
+
+### Which settles the option 3 vs 4 question
+
+Option 4 was already withdrawn (it regresses #76). **Option 3 is now measured
+rather than supposed**, and the predicate is not "is a menu up" in the abstract
+— it is *"is the thing under the pointer on the canvas, or in the world"*.
+
+### The A/B, and it is an elimination not a fix
+
+New knob **`X4VR_CURSOR_CANVAS`, default 1 = every prior take's behaviour**, so
+no state changes. Setting it 0 passes `nullptr` for the canvas and draws the
+cursor at the raw pointer position.
+
+**Prediction: it inverts both halves.** Cockpit clicking becomes predictable
+and hover starts working; the map/menus break, with the cursor offset from the
+buttons it activates. If both flip, the mechanism is settled and the fix is
+per-context. If the cockpit does NOT improve, the canvas is not the cause and
+this whole account is wrong — which is the point of running it.
+
+See [[x4vr-eliminate-dont-instrument]]: switch the candidate off and
+re-measure, rather than building a probe to watch it.

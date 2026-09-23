@@ -9965,6 +9965,33 @@ const x4vr::Shared *shared_state() {
 // nothing.
 const bool g_cursor_enabled = x4vr::env_on("X4VR_CURSOR", true);
 
+// #46. Whether the drawn cursor takes the UI canvas map. **Default ON, which
+// is every prior take's behaviour**, so this is an elimination knob and not a
+// change of state.
+//
+// Take 310 measured the consequence of ON: the cursor is drawn at
+// `A*n` with `A = 0.5252`, while X4 hit-tests at the raw pointer `n`. In a
+// MENU or the MAP that is right, because X4's screen-space UI is scaled by the
+// same A and the button moves with the pointer — Patola confirmed the cursor
+// "went through the entire quad corners" and "correctly selected the elements
+// on the map".
+//
+// In the COCKPIT it is wrong, and the arithmetic says by how much: to put the
+// SEEN cursor on a target that appears at n, the pointer must reach n/A =
+// 1.904n, which leaves the window for n > 0.525 — so hover never registers,
+// which is exactly his *"there was never a cursor change when hovering
+// something"*. Conversely a click that DOES select lands with the cursor drawn
+// 0.4748n away, reaching 24% of the eye width at the field edge: his
+// *"clicking on 1/4 of screen distant from an element would select it"*.
+//
+// Switching it OFF should invert both halves — cockpit correct, menus wrong.
+// If it does, the mechanism is settled and the fix is a per-context choice,
+// not a global one. See [[x4vr-eliminate-dont-instrument]].
+bool cursor_canvas() {
+    static const bool on = x4vr::env_on("X4VR_CURSOR_CANVAS", true);
+    return on;
+}
+
 const char *g_mv_dump = getenv("X4VR_MV_DUMP");
 // X4VR_MV_DUMP_PRESENT=N — write the finished eye image every N presents.
 // Distinct from X4VR_MV_DUMP_IMG, which names images to catch at end-of-pass
@@ -11770,7 +11797,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                 queue, family, pi->pSwapchains[0], pi->pImageIndices[0],
                 pi->pWaitSemaphores, pi->waitSemaphoreCount,
                 g_cursor_enabled ? shared_state() : nullptr,
-                g_canvas_map.get());
+                cursor_canvas() ? g_canvas_map.get() : nullptr);
         } else {
             static bool warned = false;
             if (!warned) {
