@@ -196,6 +196,12 @@ absent "no census line -> silent" "$BASE" cursor
 sets() {  # sets <n> <found> <missed> <null> <changed> <steer> <free> <cockpit> <elsewhere> <buttons>
     printf '[  223995.000] inject  cursor sets: %s set(s) — handle found %s, NOT found %s, null %s | %s were a CHANGE (%s while head-look was STEERING, %s while it was NOT; %s in the COCKPIT, %s elsewhere) | %s mouse button press(es)' "$@"
 }
+
+# ...the same line with the view guard tripped, which is what a
+# X4VR_HEADLOOK=0 run produces.
+sets_unk() {  # same args
+    printf '[  223995.000] inject  cursor sets: %s set(s) — handle found %s, NOT found %s, null %s | %s were a CHANGE (%s while head-look was STEERING, %s while it was NOT; %s in the COCKPIT, %s elsewhere — VIEW NEVER STAMPED, the split is meaningless) | %s mouse button press(es)' "$@"
+}
 zero() { printf '[  223995.000] inject  cursor sets: 0 set(s) — X4 built 26 cursor(s) and has not SET one. x'; }
 
 plant /tmp/census-set-zero.log "$(zero)"
@@ -252,6 +258,21 @@ if python3 tools/score_run.py /tmp/census-set-312.log 2>&1 | grep -qE "^cursor-s
     bad "take 312 shape -> still reports hover registered"
 else
     ok "take 312 shape -> does not report hover registered"
+fi
+
+# **The X4VR_HEADLOOK=0 configuration, which is the one that can answer the
+# cockpit question -- and the one that silently breaks the view split.**
+# headlook_tick stamps g_in_cockpit and returns early when head-look is off, so
+# the flag sits at its `false` initialiser and every change bins as "elsewhere".
+# Without the guard the scorer would print NOT ONE CHANGE IN THE COCKPIT for a
+# run spent entirely in the cockpit -- a confident verdict from a default.
+plant /tmp/census-set-unstamped.log "$(sets_unk 60 60 0 0 40 0 40 0 40 5)"
+want "view unstamped -> refuses the split" /tmp/census-set-unstamped.log cursor-set "THE VIEW WAS NEVER STAMPED"
+want "view unstamped -> keeps what stands" /tmp/census-set-unstamped.log cursor-set "still stand; WHERE they happened does not"
+if python3 tools/score_run.py /tmp/census-set-unstamped.log 2>&1 | grep -qE "NOT ONE CHANGE IN THE COCKPIT"; then
+    bad "view unstamped -> still claims no cockpit change"
+else
+    ok "view unstamped -> does not claim no cockpit change"
 fi
 
 absent "no cursor-set line -> silent" "$BASE" cursor-set

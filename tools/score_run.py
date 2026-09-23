@@ -3410,10 +3410,14 @@ def main(path):
         r"cursor sets: (\d+) set\(s\) — handle found (\d+), NOT found (\d+), "
         r"null (\d+) \| (\d+) were a CHANGE \((\d+) while head-look was "
         r"STEERING, (\d+) while it was NOT; (\d+) in the COCKPIT, (\d+) "
-        r"elsewhere\) \| (\d+) mouse button", text)
+        r"elsewhere(?P<unk> — VIEW NEVER STAMPED[^)]*)?\) \| (\d+) mouse "
+        r"button", text)
     if cs:
-        (sets, found, missed, nul, chg, chg_st, chg_free, chg_cp, chg_el,
-         btn) = (int(v) for v in cs[-1])
+        rec = cs[-1]
+        view_unknown = bool(rec[9])
+        (sets, found, missed, nul, chg, chg_st, chg_free, chg_cp,
+         chg_el) = (int(v) for v in rec[:9])
+        btn = int(rec[10])
         print(f"cursor-set {sets} set(s): handle found {found}, NOT found "
               f"{missed}, null {nul} | {chg} change(s) — {chg_st} steering / "
               f"{chg_free} free, {chg_cp} COCKPIT / {chg_el} elsewhere | "
@@ -3434,6 +3438,13 @@ def main(path):
                   f"anything clickable. The canvas map is not the cause (take "
                   f"311's ARM B drew at the raw pointer and hover still "
                   f"failed), so the question is what position X4 hit-tests.")
+        elif view_unknown:
+            print(f"cursor-set => THE VIEW WAS NEVER STAMPED, so the "
+                  f"cockpit/elsewhere split is meaningless here — it reads "
+                  f"{chg_cp}/{chg_el} only because the flag sat at its "
+                  f"default. headlook_tick stamps it and returns early when "
+                  f"X4VR_HEADLOOK=0. The {chg} change(s) and {btn} button "
+                  f"press(es) still stand; WHERE they happened does not.")
         elif chg_cp == 0:
             print(f"cursor-set => NOT ONE CHANGE IN THE COCKPIT ({chg_el} of "
                   f"{chg} were elsewhere — map or menu). X4's shape is its "

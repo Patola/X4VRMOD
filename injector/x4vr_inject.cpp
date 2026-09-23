@@ -1324,6 +1324,14 @@ std::atomic<bool> g_headlook_steering{false};
 // SDL_SetCursor runs on whatever thread X4 sets a cursor from, at a moment
 // this file has never established is safe for one.
 std::atomic<bool> g_in_cockpit{false};
+// Whether g_in_cockpit has EVER been stamped. headlook_tick returns before the
+// stamp when X4VR_HEADLOOK=0 -- which is precisely the configuration needed to
+// test hover with MOUSELOOK released -- so the flag would sit at its `false`
+// initialiser and the census would bin every change as "elsewhere", printing
+// NOT ONE CHANGE IN THE COCKPIT for a run spent entirely in the cockpit. A
+// default that is indistinguishable from a measurement is the same defect this
+// file keeps paying for; the census refuses instead.
+std::atomic<bool> g_view_known{false};
 // Take 126 measured raw=48 for the apostrophe: on Linux this is the X11
 // keycode, which is the evdev code plus 8. Settable so a run can test whether
 // our key activates free-look with no real press to seed it -- the one thing
@@ -3262,6 +3270,7 @@ void headlook_tick() {
     const bool steering = armed_now && may_steer;
     g_headlook_steering.store(steering, std::memory_order_relaxed);
     g_in_cockpit.store(cockpit, std::memory_order_relaxed);
+    g_view_known.store(true, std::memory_order_relaxed);
 
     // **Task #73: open-loop plant identification REPLACES the servo.**
     //
@@ -4458,7 +4467,7 @@ void cursor_sets_report() {
     X4VR_LOG("cursor sets: %llu set(s) — handle found %llu, NOT found %llu, "
              "null %llu | %llu were a CHANGE (%llu while head-look was "
              "STEERING, %llu while it was NOT; %llu in the COCKPIT, %llu "
-             "elsewhere) | %llu mouse button press(es)",
+             "elsewhere%s) | %llu mouse button press(es)",
              (unsigned long long)s,
              (unsigned long long)g_cursor_sets.found.load(std::memory_order_relaxed),
              (unsigned long long)g_cursor_sets.missed.load(std::memory_order_relaxed),
@@ -4468,6 +4477,9 @@ void cursor_sets_report() {
              (unsigned long long)g_cursor_sets.changed_free.load(std::memory_order_relaxed),
              (unsigned long long)g_cursor_sets.changed_cockpit.load(std::memory_order_relaxed),
              (unsigned long long)g_cursor_sets.changed_elsewhere.load(std::memory_order_relaxed),
+             g_view_known.load(std::memory_order_relaxed)
+                 ? ""
+                 : " — VIEW NEVER STAMPED, the split is meaningless",
              (unsigned long long)g_cursor_sets.buttons.load(std::memory_order_relaxed));
 }
 

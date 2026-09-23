@@ -22021,3 +22021,49 @@ vanilla control already supplied the eye half.
   change on screen. That contradicts two takes and the earlier reading was of
   something else entirely; the honest next step would be to ask Patola to look
   again with that knowledge.
+
+## Releasing head-look: nothing exists, and the design makes the state unreachable
+
+Asked what exists for releasing head-look on demand. **Nothing player-facing**,
+and the reason is structural rather than an omission.
+
+The key is held **level-triggered** — `send_key_down` every 32nd pose while
+`may_steer`, and released for as long as `!may_steer` (take 147 proved an
+edge-triggered release cannot correct a re-entry it did not observe). The three
+release paths:
+
+| release | and then |
+|---|---|
+| `head_share_read` fails — no pose | VR tracking is dead anyway |
+| `stale > 5000` — layer stopped publishing | same |
+| `!may_steer`, i.e. `!(cockpit && hud)` | **X4's targeting brackets ARE the HUD** |
+
+`may_steer = cockpit && hud` is **exactly** the condition for holding the key.
+So *cockpit + HUD up + MOUSELOOK not held* cannot occur: every release path
+either kills tracking or removes the things we want to hover. The two halves of
+the test are mutually exclusive **by construction**, which is why no knob for
+it exists.
+
+### What does reach it: `X4VR_HEADLOOK=0`, an existing knob
+
+`headlook_tick()` returns before anything is forced, and `headlook_enabled()`
+also gates the inputmap rewrite — so `INPUT_STATE_CAMERA_MOUSELOOK` stays on
+X4's own binding and nothing of ours touches it. Stereo, SBS, the layer and the
+cursor overlay are unaffected. The cost is that the view will not follow his
+head for the run, which is uncomfortable and fine for two minutes.
+
+### A trap it would have walked into, caught before the take
+
+`g_in_cockpit` is stamped **inside** `headlook_tick`, after the early return.
+With `X4VR_HEADLOOK=0` it would never be stamped, sit at its `false`
+initialiser, and bin every cursor change as "elsewhere" — so the scorer would
+have printed **NOT ONE CHANGE IN THE COCKPIT for a run spent entirely in the
+cockpit**, on the very run built to answer that question, and the answer would
+have looked like a confirmation.
+
+A default that cannot be told from a measurement is the defect this file keeps
+paying for. There is now a `g_view_known` flag; the census appends **"VIEW
+NEVER STAMPED, the split is meaningless"** and the scorer refuses the
+cockpit verdict while keeping what still stands — the change and button counts
+are real, only WHERE is unknown. Planted in the suite (65 cases) with a check
+that the refuted verdict cannot come back.
