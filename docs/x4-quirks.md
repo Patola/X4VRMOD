@@ -21424,3 +21424,55 @@ reporting zero for an input nobody supplied.
 park again. The corner sweep did not happen (Patola got caught in a menu he
 had opened by accident), so this is another run that says where the pointer
 went, not where it can go. **The reachability protocol is still owed.**
+
+## #71 CLOSED — controllers work; the binding fix is a SHIP-TIME decision
+
+Patola's call after take 309, recorded verbatim in substance: he does not plan
+to play X4 with the X52, so fixing its bindings now is not work worth doing.
+What matters is that **a player who chooses that control scheme can use it
+seamlessly** — a shipping concern, not an investigation. His own preference is
+his sc-controller scheme emulating **mouse and keyboard**.
+
+So:
+
+* **The controller question is answered and closed.** Analog pad steering
+  works under head-look (take 307); the X52 enumerates, opens, and delivers
+  all nine axes (take 309); every symptom is a default binding, with steering
+  sitting on the throttle's mini-stick.
+* **The HOTAS becomes a REGRESSION CHECK**, run after the mouse-shim work
+  lands, to verify the shim has not disabled controllers. Not a lead, not a
+  blocker, and not scheduled before then.
+* **No device-specific profile is being built.** If one ships later, X4's own
+  per-device profiles (`inputmap_1..5.xml`) are a candidate mechanism
+  alongside our inputmap rewrite.
+
+### What this does to the shim's priorities
+
+His preferred input is emulated **mouse and keyboard**, and two things are now
+measured about that combination:
+
+* **Mouse steering cannot work while head-look holds MOUSELOOK**, and that is
+  X4's own structure, not ours — our `xrel`/`yrel` drop is a second cause on
+  top of it. This applies to ANY mouse source, including sc-controller's
+  emulated one.
+* **Arrow keys steer fine** under head-look, and so does an analog pad axis.
+
+So for his scheme the shim's job is **the cursor — aiming, menus, HUD clicks —
+and not steering**. That makes **#46 the highest-value remaining shim item**,
+ahead of #64 and #72, because it is what he actually touches every session.
+
+A note for his own toolchain, not for this repo: sc-controller can emit a
+gamepad axis as well as mouse motion, and take 307 proved an analog axis
+steers under head-look while mouse motion cannot. A touchpad mapped to the
+emulated pad's right stick would reach `INPUT_RANGE_STEERING_PRIMARY`/`PITCH`
+and give analog steering that survives head-look — with nothing required from
+this mod. His software, his call; recorded because the measurement that makes
+it worth trying is ours.
+
+### #46's protocol, still owed
+
+Three runs have now reported where the pointer WENT rather than where it can
+go, with `x` capped at 1408 — the mouse-look park — in two of them. The
+measurement needs a take whose protocol deliberately drives the pointer into
+all four corners with a cursor on screen (map or menu open). It rides any
+take; it does not need one of its own.
