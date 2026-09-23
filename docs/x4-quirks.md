@@ -21773,3 +21773,87 @@ A run where the cockpit does not improve in ARM B. The account says the cursor
 is drawn at `A*n` while X4 hit-tests at `n`; drawing at `n` must therefore put
 the cursor where X4 tests. If it does not, the displacement is somewhere else
 and the arithmetic above is a coincidence.
+
+## Take 311 — the map half is SETTLED; P311.2 is REFUTED and the cockpit is not the canvas
+
+    cursor  A/B ran 17 phase(s): ARM A x9, ARM B x8
+    cursor  ARM A (canvas ON):  drawn over 50%x37% of the eye, 8543 frame(s)
+    cursor  ARM B (canvas OFF): drawn over 100%x67% of the eye, 7185 frame(s)
+    cursor  => THE KNOB ACTED.
+
+### SETTLED: the canvas map is right for the map, and ARM A stays the default
+
+**P311.1 HELD** — the knob acted, 50% against 100%.
+
+**P311.3 HELD, both halves.** Patola: *"the cursor changed the reach between
+the two modes, being halfway at one time (matching the map) and going to all
+the reach in another"*; *"In the half-reach mode, the map works and in the
+full-reach mode, it had the error you mentioned"*; and *"In the map, the error
+seems to grow with distance from the centre."*
+
+That is the full predicted inversion including its gradient. **The canvas map
+is correct for X4's screen-space UI, `X4VR_CURSOR_CANVAS` stays at 1, and #46's
+original report is closed as not-reproducing.**
+
+### REFUTED: P311.2, and the reason is a mistake in how I read a null
+
+*"In the cockpit, in whatever mode I was, I couldn't get the cursor to change,
+so hovering had no effect."* Hover fails in **both** arms. Bypassing the canvas
+did not fix cockpit hover and did not make selection predictable — *"I could
+click on some elements in each mode but couldn't see a clear pattern."*
+
+And the sentence that explains why the prediction was bad in the first place:
+
+> *"It would only change when I got to the map and did something — like
+> clicking on an element (to become an arrow), or clicking away from an element
+> (where it becomes a cross...)"*
+
+**X4 changes the cursor in the MAP, on CLICK. Not on hover, and not in the
+cockpit at all.** So take 310's *"there was never a cursor change when hovering
+something"* was never evidence about where X4 thought the pointer was — **the
+signal whose absence I read does not exist in that context.** I used a null
+without establishing that the observable exists there, which needed one
+positive control and got none.
+
+The arithmetic that explained the map so exactly explained nothing about the
+cockpit. It was not wrong; it was answering a different question.
+
+### So what IS the cockpit defect? Unknown, and NOT to be guessed at
+
+Candidates exist — #84's constant bracket offset, X4 hit-testing world targets
+against its own UI field, the cursor's zero disparity against finite-depth
+ships, head-look moving the world under a window-space pointer — and naming
+four is exactly the position that has cost this project takes before
+([[three-fixes-one-unmeasured-number]]).
+
+**The next step is a control, not a hypothesis: run VANILLA X4, flatscreen, no
+mod, and find out whether cockpit click-to-select is reliable there at all.**
+[[x4vr-establish-which-side-is-correct]] — run the unmodified program before
+deciding which side is the defect, the same move that settled #50. It costs no
+VR take and no headset time.
+
+* if vanilla is **also** unreliable and hover also never fires -> it is X4's
+  own behaviour, #46's cockpit half is not ours, and the honest answer to a
+  player is a control-scheme recommendation;
+* if vanilla is **reliable** -> it is ours, and the vanilla run also gives the
+  reference behaviour to compare against.
+
+### Instrument defects fixed in this pass
+
+* The single-arm `CONFINED` verdict fired off `cd[-1]` — whichever arm logged
+  last — and printed *"can only ever occupy 100%x67% ... a border of about
+  0%"*, a statement about neither arm. Now suppressed when both arms are
+  present, because the per-arm lines ARE the result.
+* **My first attempt at that suppression set `fx = fy = -1`** and the
+  `fx < 90` branch duly reported *"-1%x-1% ... 100% of the AREA
+  unreachable"*. Gated on a flag now.
+  [[verdict-that-fires-whatever-the-number-is]] — interpretation belongs inside
+  a branch on the number, and **a sentinel is not a branch**.
+
+### Protocol feedback worth keeping
+
+*"I lost count of how many times it switched. It's rough to give attention to
+one aspect while focusing on the other aspects."* The handover asked for four
+simultaneous observations during a manual task. **One primary observable per
+take, and the rest only if they are free.** The phase count was not free — it
+was a second task — and the log already had it.

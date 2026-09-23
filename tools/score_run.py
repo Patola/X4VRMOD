@@ -3359,6 +3359,17 @@ def main(path):
                           f"canvas map and nothing here is scorable.")
             _, _, _, dxl, dxh, dyl, dyh, fx, fy, _, cw_, ce_ = cd[-1]
             fx, fy, cw_, ce_ = int(fx), int(fy), int(cw_), int(ce_)
+            # The single-arm CONFINED reading below describes ONE geometry. In
+            # an A/B there are two and `cd[-1]` is merely whichever logged
+            # last: take 311 printed "can only ever occupy 100%x67% — a border
+            # of about 0%" off ARM B, which is meaningless as a statement about
+            # the run. The per-arm lines above are the result.
+            #
+            # Gated on a FLAG, not by poisoning fx/fy: the first attempt set
+            # them to -1 and the `fx < 90` branch duly reported "-1%x-1% ...
+            # 100% of the AREA unreachable". Interpretation belongs inside a
+            # branch on the number, and a sentinel is not a branch.
+            single_arm = len(per_arm) < 2
             if cw_ and cw_ != ce_:
                 print(f"cursor     => THE INPUT PATH AND THE IMAGE DISAGREE. "
                       f"The channel publishes against a {cw_}-wide window "
@@ -3366,7 +3377,7 @@ def main(path):
                       f"are in different coordinate spaces, and every "
                       f"placement number here is measured across that seam — "
                       f"settle it before reading anything else.")
-            elif fx < 90 or fy < 90:
+            elif single_arm and (fx < 90 or fy < 90):
                 border = (100 - fx) / 2.0
                 print(f"cursor     => CONFINED. The cursor can only ever "
                       f"occupy {fx}%x{fy}% of the eye — a border of about "
@@ -3378,7 +3389,7 @@ def main(path):
                       f"moved. If it matches the canvas affine, the cursor is "
                       f"following the UI canvas by design and the question is "
                       f"whether it SHOULD.")
-            else:
+            elif single_arm:
                 print(f"cursor     => the cursor reaches {fx}%x{fy}% of the "
                       f"eye, so nothing is confining it.")
 
