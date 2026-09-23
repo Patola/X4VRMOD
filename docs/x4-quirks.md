@@ -21921,3 +21921,67 @@ aside first. Same rule as [[failed-run-overwrote-data]], one directory over.
 * **cursor DOES change over targets** -> the feature exists, its absence in
   takes 310/311 was real evidence after all, and the account deserves another
   look at the wide field specifically.
+
+## VANILLA CONTROL — ANSWERED: the hover signal EXISTS, and take 311's lesson inverts
+
+Patola ran unmodified X4, flatscreen, from Steam. **It changed nothing in his
+config or inputmap**, so the backup was unnecessary and the precaution cost
+nothing.
+
+**X4's cockpit hover feedback is unmissable:**
+
+* **arrow** when the pointer is NOT over a clickable element;
+* **cross inside a circle** when it IS — ships, stations, gates, even asteroids
+  when close;
+* **equally at any part of the screen, centre or edges.**
+
+And a correction he made to his own report, which matters: the element's white
+4-corner contour appears when it is **CLICKED**, not hovered, and disappears on
+deselect. **So the cursor SHAPE is the only hover observable there is.**
+
+### What this does to take 311's conclusion
+
+Take 310's *"there was never a cursor change when hovering something"* **was
+real evidence after all.** X4 does this feature, everywhere on screen, and in
+our runs it never fired.
+
+Take 311 refuted the *prediction* (bypass the canvas -> hover returns). On one
+passing remark — that X4 changes the cursor in the map on click — I concluded
+the signal did not exist in the cockpit and **discarded the observation**. That
+was wrong, and the control I had already decided to run is what caught it.
+
+**A failed prediction refutes the weakest LINK in the chain, not the
+observation at the end of it.** What died was "the canvas displacement is why
+hover never fires", not "hover never fires". See
+[[state-the-instrument-range]], which now carries the corrected version.
+
+### So the state of #46's cockpit half
+
+**X4 never registers the pointer over a cockpit target under our mod, in either
+cursor-canvas arm.** That is the defect. The canvas map is not the cause — ARM
+B put the drawn cursor at the raw pointer and hover still never fired.
+
+### The gap, and the instrument that closes it
+
+`SDL_SetCursor` was hooked and **counted nothing**, so no stored log can say
+whether X4 ever switched cursor during cockpit flight. Takes 310 and 311 show
+26 cursor *creations* with 10 distinct hotspots and nothing about which was
+*set* when.
+
+X4 imports only `SDL_CreateColorCursor` and `SDL_SetCursor` (`nm -D`), both
+hooked, so a set whose handle we cannot find is a defect and not a missing
+hook. The new `cursor sets:` line separates the three cases, which want
+different work:
+
+    sets = 0            X4 never registered a hover. The pointer never landed
+                        on a target -> the question is placement.
+    sets > 0, found = 0 X4 changed the cursor and we kept compositing the old
+                        image. OURS, invisible, and a stale composite.
+    sets > 0, found > 0 X4 changed it and we published the right image, so the
+                        shape DID change on screen and something else is wrong.
+
+`changed` counts only sets that differ from the previous cursor, because X4
+re-asserts the same one in some states and counting those would report a hover
+on every frame of a run that never had one.
+
+It rides the next take of any kind. **No dedicated run.**

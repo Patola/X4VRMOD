@@ -3803,6 +3803,8 @@ void pad_report();
 void pad_note_event(uint32_t type, const Sdl3AxisEvent *a);
 // The per-caller pointer ranges, whose 64-line cap take 307 hit.
 void note_extent_report();
+// #46: how often X4 set a cursor, which is its only hover signal.
+void cursor_sets_report();
 
 void pumprate_report() {
     const double now = mono_seconds();
@@ -3892,6 +3894,7 @@ void pumprate_report() {
     }
     pad_report();
     note_extent_report();
+    cursor_sets_report();
 
     g_pumprate.entered = g_pumprate.nopose = 0;
     g_pumprate.fresh = g_pumprate.skipped = 0;
@@ -4353,15 +4356,74 @@ void *SDL_CreateColorCursor(void *surface, int hot_x, int hot_y) {
 // Which of them is current. This is also the *shape* signal: X4 swapping cursor
 // is how the reticle becomes an arrow, so a shim that draws a fixed image would
 // be wrong exactly when the game is telling the player something.
+// **X4's cursor SHAPE is its only hover indication, and it is the signal takes
+// 310 and 311 read as absent.** The vanilla control settled that the signal
+// exists: unmodified X4 shows an arrow off a target and a cross-in-circle over
+// one, equally at the centre and the edges. (The white 4-corner contour is
+// SELECTED, not hover — Patola corrected that, and it matters, because it
+// leaves the cursor shape as the sole hover observable.)
+//
+// We hide X4's real cursor and composite our own captured copy, so a shape
+// change X4 makes is only visible if we notice the SetCursor and find the
+// handle. Neither was counted, which is why two takes could only say "it never
+// changed" and not WHICH of three things happened:
+//
+//   sets=0             X4 never registered a hover; the pointer never landed
+//                      on a target, and the question is placement.
+//   sets>0, found=0    X4 changed the cursor and we kept drawing the old
+//                      image. Ours, invisible, and a stale composite.
+//   sets>0, found>0    X4 changed it and we published the right image, so the
+//                      shape DID change on screen.
+//
+// X4 imports only SDL_CreateColorCursor and SDL_SetCursor (`nm -D`), both
+// hooked, so `found` should track `sets` — and a gap is a defect rather than a
+// missing hook.
+struct CursorSets {
+    std::atomic<uint64_t> sets{0}, found{0}, missed{0}, null{0}, changed{0};
+    std::atomic<const void *> last{nullptr};
+} g_cursor_sets;
+
+void cursor_sets_report() {
+    const uint64_t s = g_cursor_sets.sets.load(std::memory_order_relaxed);
+    if (!s)
+        return; // X4 has not set a cursor at all; silence, not a zero
+    static uint64_t p_s = 0;
+    if (s == p_s)
+        return; // only when it moves, so a static session stays quiet
+    p_s = s;
+    X4VR_LOG("cursor sets: %llu set(s) — handle found %llu, NOT found %llu, "
+             "null %llu | %llu were a CHANGE from the previous cursor",
+             (unsigned long long)s,
+             (unsigned long long)g_cursor_sets.found.load(std::memory_order_relaxed),
+             (unsigned long long)g_cursor_sets.missed.load(std::memory_order_relaxed),
+             (unsigned long long)g_cursor_sets.null.load(std::memory_order_relaxed),
+             (unsigned long long)g_cursor_sets.changed.load(std::memory_order_relaxed));
+}
+
 bool SDL_SetCursor(void *cursor) {
     static auto real_fn = real<bool (*)(void *)>("SDL_SetCursor");
     if (this_is_the_game()) {
-        std::lock_guard<std::mutex> lock(g_cursor_mu);
-        for (const CapturedCursor &c : g_cursors)
-            if (c.handle == cursor) {
-                publish_cursor_image(c);
-                break;
-            }
+        g_cursor_sets.sets.fetch_add(1, std::memory_order_relaxed);
+        if (!cursor)
+            g_cursor_sets.null.fetch_add(1, std::memory_order_relaxed);
+        // A CHANGE is the interesting event: X4 re-asserts the same cursor
+        // every frame in some states, and counting those as shape changes
+        // would report a hover on every frame of a run that never had one.
+        if (g_cursor_sets.last.exchange(cursor, std::memory_order_relaxed) !=
+            cursor)
+            g_cursor_sets.changed.fetch_add(1, std::memory_order_relaxed);
+        bool hit = false;
+        {
+            std::lock_guard<std::mutex> lock(g_cursor_mu);
+            for (const CapturedCursor &c : g_cursors)
+                if (c.handle == cursor) {
+                    publish_cursor_image(c);
+                    hit = true;
+                    break;
+                }
+        }
+        (hit ? g_cursor_sets.found : g_cursor_sets.missed)
+            .fetch_add(1, std::memory_order_relaxed);
     }
     return real_fn(cursor);
 }
