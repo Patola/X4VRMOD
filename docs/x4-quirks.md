@@ -21559,3 +21559,69 @@ geometry reading taken across it.
   with its border and lost-area figures, an unconfined **negative control** so
   the verdict is a discriminator and not an off switch, and the seam case with
   a check that confinement is NOT reported across it.
+
+## #86 read, and it does NOT fold into #46 — option 4 is a regression
+
+### They are different terms of the same matrix, and the code says so
+
+`make_canvas_k()` in `common/x4vr_view.hpp`:
+
+    k[0] = k[5] = ui_half_tan * |sx_screen|     <- the SCALE   (#81, #46's cause)
+    k[12] -= ax_num * d_eye / z                 <- the DISPARITY (#86's subject)
+
+with its own comment: *"NOT applied to k[12]. That is the canvas DISPARITY,
+set by the canvas distance z, and a plane's disparity does not depend on where
+content sits within the plane."*
+
+**#86 is about how far away the canvas appears. #46 is about how much of the
+field it covers.** Independent terms. Doing #86 would not touch #46's number
+and doing #46 would not touch #86's.
+
+### And the scale is #81, which means option 4 regresses #76
+
+`0.5252 / 0.75 = 0.7003`, and `ui_half_tan` is **0.75** — the tangent of the
+36.87 deg half-angle **X4 lays its UI out against**, whatever `<fov>` we set
+(#45, measured in take 261). The scale is what puts a UI element at the ANGLE
+X4 meant. Remove or widen it and the UI is displayed
+`tan(half_world)/0.75 = 1.904x` too far out, which **is #76's sliding HUD** —
+a closed task, default ON since take 268.
+
+So *"widen the canvas"* is not a tweak with a cost; it is undoing a correct
+fix. **Option 4 is withdrawn.**
+
+### Which raises a harder question: is #46 a defect at all?
+
+The UI and the cursor take the **same** map. X4 hit-tests CPU-side in its own
+unshifted space, and both the button and the pointer are scaled by the same
+0.5252, so they agree. The cursor is confined to exactly the region the UI
+occupies — and **there is nothing outside it to point at**, because X4 never
+drew UI there.
+
+Further, while head-look holds MOUSELOOK, X4 suspends mouse control entirely
+(#71), so there is no mouse aiming at world objects to be denied.
+
+### The original symptom does not follow from the current code
+
+*"Cursor is invisible over much of the eye image **until moved down**"* is a
+**vertical asymmetry**. The measured map is symmetric — `k[0] == k[5]`, and
+take 309 logs `B=(+0.00002,+0.00000)`, so `by` is zero and there is no
+vertical shift at all. Nothing in the present arithmetic can make the cursor
+behave differently up versus down.
+
+**So #46's report either predates this code or is about something the
+confinement does not explain.** [[stale-comment-is-misinformation]] — and
+building a fix for a symptom that may no longer reproduce is how this project
+has spent takes before.
+
+### Recommendation: do not choose between 3 and 4 yet
+
+Option 4 is dead. Option 3 (map the cursor only while the UI is capturing the
+pointer) is viable but needs a predicate, and #72 is standing evidence that
+our view-state predicates are not always right — so it is real work, to be
+spent only on a symptom that reproduces.
+
+What is missing is one observation, and it is Patola's eye rather than a
+measurement: **with the cursor visible, is it still wrong, and where?** The
+`cursor drawn` instrument now reports the confinement as a number on any take,
+so the question to him is only "does the confined region match what you see,
+and does anything you need to point at fall outside it".
