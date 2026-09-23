@@ -21857,3 +21857,67 @@ one aspect while focusing on the other aspects."* The handover asked for four
 simultaneous observations during a manual task. **One primary observable per
 take, and the rest only if they are free.** The phase count was not free — it
 was a second task — and the log already had it.
+
+## VANILLA CONTROL — does X4's cockpit cursor feedback exist at all?
+
+**Not a take.** No injector, no layer, no VR, no headset, no `X4VR_LOG`, and
+therefore **nothing for `score_run.py` to read** — stated explicitly because
+every *take* in this project gets the scorer as its acceptance check, and this
+run cannot ([[x4vr-hand-off-with-the-scorer]] does not apply where there is no
+log).
+
+The control is clean: the layer is activated **explicitly** by our launcher via
+`VK_ADD_LAYER_PATH` + `VK_INSTANCE_LAYERS`, there is **no implicit layer
+manifest installed**, and the injector arrives only by `LD_PRELOAD` from the
+same script. Launching X4 any other way picks up neither.
+
+### The one question
+
+**Does X4 EVER change the cursor when the pointer is over a clickable cockpit
+target?**
+
+This is the positive control that take 311 showed was missing. Take 310's
+*"there was never a cursor change when hovering something"* was read as X4
+telling us where it thought the pointer was — but X4 changes the cursor **in
+the map, on click**, and possibly nowhere else, in which case that silence
+carried no information and the account built on it was void.
+
+**It is fov-independent**: either the feature exists in the cockpit or it does
+not.
+
+### Free, from the same act of looking
+
+Is cockpit click-to-select **reliable** in vanilla?
+
+### What this does NOT answer, stated so a clean result is not over-read
+
+His `config.xml` has **`<fov>1.1111</fov>` at 3400x1440**; our served profile
+uses **1.4917 at 2816x2816**. So vanilla differs from our runs in **fov AND
+resolution**, which is two variables. Per #45 the UI is laid out at X4's
+default field whatever `<fov>` says, so vanilla already carries some
+UI-vs-world mismatch — smaller than ours, not zero.
+
+**"Vanilla clicks fine" therefore does NOT prove the wide field is harmless.**
+It would only mean X4's cockpit clicking works somewhere, which is the
+reference the next step needs.
+
+### Protect his config first
+
+Vanilla X4 writes `config.xml`. Ours never does — it forks
+`config-x4vrmod.xml` and redirects every write into it, precisely because X4
+saves settings while running; the header records the incident that forced it,
+*"a config.xml left at 2816x1408 / antialiasing=none afterwards"*. A vanilla
+run at his desktop resolution will rewrite his own file, so it gets copied
+aside first. Same rule as [[failed-run-overwrote-data]], one directory over.
+
+### How it reads
+
+* **cursor never changes over a cockpit target, and selection is unreliable**
+  -> X4's own behaviour. #46's cockpit half is **not ours**, and the honest
+  answer to a player is a control-scheme recommendation rather than a fix.
+* **cursor never changes, but selection IS reliable** -> the feature does not
+  exist and my hover premise was void, but the unreliability is still ours.
+  The next step measures WHERE the click lands, not whether it highlights.
+* **cursor DOES change over targets** -> the feature exists, its absence in
+  takes 310/311 was real evidence after all, and the account deserves another
+  look at the wide field specifically.
