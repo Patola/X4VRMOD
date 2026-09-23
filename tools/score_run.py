@@ -3341,8 +3341,31 @@ def main(path):
               f"{epa} | buttons {evb} | hotplug-added {eva}")
         for what, pid, name in pad_names:
             print(f"pad        {what} id={pid} \"{name}\"")
+        # LAST line per family only. The ranges are cumulative, so every
+        # periodic report restates the whole history and take 309 printed 130
+        # near-identical lines — a wall that buries the one line anybody reads
+        # and hides the differences between families inside it.
+        last_axes = {}
         for fam, ids, axes in pad_axes:
+            last_axes[fam] = (ids, axes)
+        for fam, (ids, axes) in last_axes.items():
             print(f"pad        axes seen ({fam}, device {ids}): {axes}")
+            # Full travel is what says an axis was actually swept to its
+            # stops; a partial range means the run never exercised it, and
+            # reading "this axis does not move" off that would be the same
+            # error as reporting zero for an input nobody supplied.
+            full, part = [], []
+            for m in re.finditer(r"(\d+)(?:=\w+)?:(-?\d+)\.\.(-?\d+)", axes):
+                idx, lo, hi = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                (full if hi - lo > 55000 else part).append(idx)
+            if full:
+                print(f"pad        swept to the stops ({fam}): "
+                      f"{', '.join(str(i) for i in full)}")
+            if part:
+                print(f"pad        only partly moved ({fam}): "
+                      f"{', '.join(str(i) for i in part)} — these were not "
+                      f"driven to their limits, so their absence from a "
+                      f"binding says nothing")
         # `seen` is -1 when X4 never called SDL_GetJoysticks at all, which take
         # 307 showed is the normal case: it learns about devices from ADDED
         # events and opens them directly. So "no device" must be judged on

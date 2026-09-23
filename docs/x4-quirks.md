@@ -21356,3 +21356,71 @@ back.
 It is where Patola happened to move the mouse. Measuring reachability needs a
 protocol that drives the pointer deliberately into all four corners, and until
 one runs, #46 has no measured extent.
+
+## Take 309 — P308 CONFIRMED on all three, and every complaint is a binding
+
+X52 Pro enumerated this time (`pad present: "Logitech X52 Professional
+H.O.T.A.S." [event265 js5]`), WiVRn, sc-controller not running.
+
+* **P308.1 HELD** — `opened joystick id=2 "Logitech X52 Professional
+  H.O.T.A.S."`, through the **joystick** family, not gamepad.
+* **P308.3 HELD** — `POLLED 0 | EVENTS joy 10482`. Zero polls. The channel is
+  events, exactly as take 307 implied and the rebuilt census now measures.
+* **P308.2 HELD** — the stick's main travel is on axes **0 and 1**, and X4 has
+  those on strafe.
+
+### Every symptom, against his own inputmap
+
+Axis travel measured in the run, bindings read from `inputmap.xml`:
+
+| axis | swept | X4 name | bound to | what Patola saw |
+|---|---|---|---|---|
+| 0 | full | `X` | `INPUT_RANGE_STRAFE_LEFT_RIGHT` | "would translate X instead of turning" |
+| 1 | full | `Y` | `INPUT_RANGE_STRAFE_UP_DOWN` | "...and Y" |
+| 2 | full | `Z` | `INPUT_RANGE_THROTTLE` | "throttle reversed" |
+| 3 | **partial** | `RX` | `INPUT_RANGE_STEERING_PRIMARY` | (the mini-stick; barely touched) |
+| 4 | **partial** | `RY` | `INPUT_RANGE_STEERING_PITCH` | (ditto) |
+| 5 | full | `RZ` | **`INPUT_STATE_FIRE_PRIMARY_WEAPON`** | "the rudder twist fired shot" |
+
+**Four independent behaviours, one explanation.** Strafing on the stick,
+throttle on the throttle, firing on the twist, and steering barely responding
+are four *different* bindings with four *different* observable effects, and
+all four line up with SDL axis index = conventional evdev order
+(`ABS_X`=0 … `ABS_RZ`=5). That is corroboration from genuinely independent
+sources, not four copies of one cause.
+
+**Steering was never dead. It is on axes 3/4 — the mini-stick on the
+throttle** — which the sweep only moved partially (`3:-9638..8609`,
+`4:-3470..385` against a ±32768 range). "Plugged it in and it didn't work"
+was a thumb-stick nobody thought to use.
+
+`invert_throttle` is already a `<param>` in the inputmap's `<config>` block,
+sitting at `false`.
+
+### The fix, and the decision that is NOT mine
+
+A rebind: steering onto 0/1, strafe onto 3/4, drop the `RZ` fire binding
+(twisting a stick should not shoot), flip `invert_throttle`. It would ship
+non-intrusively through the inputmap rewrite that already moves `MOUSELOOK`
+to F13 — the player changes nothing.
+
+**Whether X4VRMOD should ship a device-specific profile at all is Patola's
+call**, not a technical question. X4 also has its own per-device profiles
+(`inputmap_1..5.xml`), which may be the right mechanism rather than ours.
+Nothing is being built until he says which.
+
+### Instrument defect fixed in the same pass
+
+The `pad axes` ranges are cumulative, so every periodic report restated the
+whole history and take 309 printed **130 near-identical lines** — a wall that
+buries the one line anyone reads. The block now prints the **last** line per
+family, plus which axes were swept to their stops and which were not, because
+"this axis did not move" read off a partial sweep is the same error as
+reporting zero for an input nobody supplied.
+
+### #46 is still unmeasured
+
+`pointer x=335..1408 y=83..1408` — 38% x 47%, and `1408` is the mouse-look
+park again. The corner sweep did not happen (Patola got caught in a menu he
+had opened by accident), so this is another run that says where the pointer
+went, not where it can go. **The reachability protocol is still owed.**
