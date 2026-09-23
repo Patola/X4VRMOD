@@ -21303,3 +21303,56 @@ could be doing the steering.
 
 If P308.2 holds the fix is a rebind, and it ships non-intrusively through the
 inputmap rewrite that already moves `MOUSELOOK` to F13.
+
+## Take 308 — VOID: the X52 was powered but never enumerated
+
+Not an X4 defect, not a census defect, and not a stick defect. The run simply
+had no joystick attached.
+
+    take 308 ran   298254.6 -> 298440.8   (monotonic, 186 s)
+    X52 enumerated 298750.19              (310 s AFTER the run ended)
+
+dmesg carries **exactly one** X52 connect event and it is that one; the buffer
+covers the whole period (Steam Ctrl at 298026, WayVR at 298232), and
+`/proc/uptime` confirms the two clocks are the same. The build was current —
+36 `cursor census` lines.
+
+Patola plugged the stick in before launching and **it lit up**, both the
+throttle and the stick. That is bus power; the kernel never saw it on the data
+lines until it was re-seated. `jstest-gtk` showed nothing for the same reason
+and would not have rescanned. The device is healthy now: `js5` + `event265`,
+`crw-rw-rw-` with an explicit `user:patola:rw-` ACL, `joydev` loaded, and
+`fuser` reports no process holding either node.
+
+### The run recorded its own configuration — badly, so now it does
+
+A take specified as "X52 connected" ran without one and **nothing in the log
+said so.** The pad census was correctly silent, which is indistinguishable
+from "a device was present and X4 ignored it". Stating the controller
+configuration in the handover is necessary and is not sufficient: the handover
+describes intent, and intent is what failed here.
+
+So the injector now logs `pad present:` lines at startup, read from
+`/proc/bus/input/devices` — no SDL, no open, no grab, nothing that can perturb
+the device under test — naming every entry whose Handlers list a `js` node,
+or an explicit **NONE** with the powered-but-not-enumerated hint. Every take
+from here records what was actually plugged in.
+
+### A verdict of mine was overclaiming, and take 308 is what showed it
+
+The cursor block said **"CANNOT REACH THE WHOLE EYE"** from the pointer's
+observed range. Take 308 read `x=0..1408 y=0..1408` — and **1408 is half of
+2816, which is where X4 parks the pointer for mouse-look.** A cockpit-only run
+reaches exactly that for an entirely uninteresting reason, and take 307's
+menus took it to 1898/2024, so 1408 is no limit at all.
+
+"Was not seen there" is not "cannot go there". The verdict now says **NOT SEEN
+OVER THE WHOLE EYE**, states that it is where the pointer *went* rather than
+where it *can* go, and names the mouse-look park so the number is not read as
+a bound. The control suite gained a check that the word CANNOT cannot come
+back.
+
+**Consequence for #46: take 307's 67%x72% is not evidence of a limit either.**
+It is where Patola happened to move the mouse. Measuring reachability needs a
+protocol that drives the pointer deliberately into all four corners, and until
+one runs, #46 has no measured extent.

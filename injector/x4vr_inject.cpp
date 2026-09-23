@@ -875,6 +875,42 @@ void log_startup_env() {
             run += x4vr::sh_quote_assignment(*e);
         }
     X4VR_LOG("env: run =%s ./launch/x4vr-launch.sh", run.c_str());
+
+    // **The controller configuration, read from the KERNEL rather than from
+    // the handover text.** Take 308 was specified as "X52 Pro connected" and
+    // ran with the stick powered but never enumerated: it lit up on bus power
+    // while the kernel never saw it on the data lines, so dmesg's only X52
+    // entry landed 310 s AFTER the run ended. Nothing in the log said so, and
+    // the pad census was correctly silent -- which is indistinguishable from
+    // "a device was there and X4 ignored it" without this.
+    //
+    // /proc/bus/input/devices, not SDL: no library, no open, no grab, and
+    // nothing here can perturb the device under test. Entries whose Handlers
+    // list a `js` node are the ones a game could use.
+    if (FILE *f = fopen("/proc/bus/input/devices", "re")) {
+        char line[512], name[256] = "?";
+        int found = 0;
+        while (fgets(line, sizeof(line), f)) {
+            if (!strncmp(line, "N: Name=", 8)) {
+                snprintf(name, sizeof(name), "%s", line + 8);
+                char *nl = strpbrk(name, "\r\n");
+                if (nl)
+                    *nl = '\0';
+            } else if (!strncmp(line, "H: Handlers=", 12) && strstr(line, "js")) {
+                char *nl = strpbrk(line, "\r\n");
+                if (nl)
+                    *nl = '\0';
+                X4VR_LOG("pad present: %s [%s]", name, line + 12);
+                found++;
+            }
+        }
+        fclose(f);
+        if (!found)
+            X4VR_LOG("pad present: NONE — the kernel lists no joystick device. "
+                     "A stick that is plugged in and lit but absent here is "
+                     "powered and not enumerated; re-seat it and check dmesg "
+                     "before spending the take.");
+    }
     // argv, for the command-line switches that pick a backend
     // (-prefer-wayland and friends): the launcher does not add them, but the
     // Steam launch options are outside its view entirely.

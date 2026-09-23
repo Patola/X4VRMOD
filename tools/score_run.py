@@ -3289,15 +3289,28 @@ def main(path):
             # announcing the prediction regardless.
             rx = (xhi - xlo) / ew if ew else 0.0
             ry = (yhi - ylo) / eh if eh else 0.0
-            print(f"cursor     => DREW. Pointer spans {100.0 * rx:.0f}% of the "
-                  f"eye in x and {100.0 * ry:.0f}% in y.")
+            print(f"cursor     => DREW. Pointer was SEEN across {100.0 * rx:.0f}% "
+                  f"of the eye in x and {100.0 * ry:.0f}% in y.")
             if rx < 0.75 or ry < 0.75:
-                print(f"cursor     => AND CANNOT REACH THE WHOLE EYE. A pointer "
-                      f"covering {100.0 * rx:.0f}%x{100.0 * ry:.0f}% leaves the "
-                      f"rest unreachable whatever the canvas does. Near 50% in "
-                      f"BOTH axes is the logical-vs-physical factor of 2 "
-                      f"predicted for #46; near 50% in x ALONE would be the SBS "
-                      f"fold instead.")
+                # "Was not seen there" is not "cannot go there". This range is
+                # where the player moved the pointer, and take 308 -- a
+                # cockpit-only run -- read 0..1408 in both axes purely because
+                # X4 warps the pointer to the window centre (1408 = 2816/2)
+                # for mouse-look and it never went anywhere else. Saying
+                # "CANNOT REACH" from that would be inventing a limit out of a
+                # protocol, which is how this project has already published a
+                # confident negative from an input nobody supplied.
+                print(f"cursor     => NOT SEEN OVER THE WHOLE EYE "
+                      f"({100.0 * rx:.0f}%x{100.0 * ry:.0f}%). This is where "
+                      f"the pointer WENT, not where it CAN go — only a take "
+                      f"whose protocol drove it deliberately into all four "
+                      f"corners can tell a real limit from an unswept edge. "
+                      f"If it was swept: near 50% in BOTH axes is a "
+                      f"logical-vs-physical factor of 2, near 50% in x ALONE "
+                      f"is the SBS fold. Note 1408 = half of 2816 is also "
+                      f"where X4 parks the pointer for mouse-look, so a "
+                      f"cockpit-only run reaches it for an uninteresting "
+                      f"reason.")
         if reasons.get("off-eye"):
             print(f"cursor     NOTE: {reasons['off-eye']} frame(s) culled "
                   f"off-eye. That cull is computed from the UNMAPPED position "

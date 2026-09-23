@@ -81,13 +81,25 @@ absent "full coverage -> no reach complaint" /tmp/census-full.log "cursor     =>
 
 # Drew, but half the eye in BOTH axes -- the factor-of-2 predicted for #46.
 plant /tmp/census-half.log "$(cur 'drew 1000' 0 1408 0 1408 moved)"
-want "half in both axes -> flags the reach" /tmp/census-half.log cursor "CANNOT REACH THE WHOLE EYE"
+want "half in both axes -> flags the reach" /tmp/census-half.log cursor "NOT SEEN OVER THE WHOLE EYE"
 want "half in both axes -> reports 50/50"   /tmp/census-half.log cursor "50% of the eye in x and 50% in y"
+# The verdict must NOT promote "was not seen there" into "cannot go there".
+# Take 308 read 0..1408 in both axes purely because X4 parks the pointer at
+# the window centre for mouse-look and the player never moved it elsewhere --
+# a limit invented from a protocol is the same error as reporting zero for an
+# input nobody supplied.
+if python3 tools/score_run.py /tmp/census-half.log 2>&1 | grep -qE "^cursor.*CANNOT REACH"; then
+    bad "half in both axes -> still claims CANNOT reach from a sampled range"
+else
+    ok "half in both axes -> does not claim CANNOT from a sampled range"
+fi
+want "half in both axes -> says where it WENT not CAN go" /tmp/census-half.log cursor "not where it CAN go"
+want "half in both axes -> names the mouse-look park" /tmp/census-half.log cursor "1408 = half of 2816"
 
 # Half in x ALONE is the SBS fold, a different cause; the line must say so
 # rather than claiming the factor of 2 whatever the numbers are.
 plant /tmp/census-halfx.log "$(cur 'drew 1000' 0 1408 0 2816 moved)"
-want "half in x only -> still flags reach" /tmp/census-halfx.log cursor "CANNOT REACH THE WHOLE EYE"
+want "half in x only -> still flags reach" /tmp/census-halfx.log cursor "NOT SEEN OVER THE WHOLE EYE"
 want "half in x only -> reports 50/100"    /tmp/census-halfx.log cursor "50% of the eye in x and 100% in y"
 
 # The off-eye cull note rides any of them.
