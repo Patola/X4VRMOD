@@ -188,6 +188,41 @@ want "one arm -> refuses the comparison" /tmp/census-ab-onearm.log cursor "DID N
 # this block was written to end.
 absent "no census line -> silent" "$BASE" cursor
 
+# ------------------------------------------------- the cursor-set census (#46)
+#
+# The vanilla control proved X4's hover signal EXISTS, so a run where X4 never
+# sets a cursor is a positive finding and not a missing instrument. All four
+# outcomes are planted, including the zero.
+sets() {  # sets <n> <found> <missed> <null> <changed>
+    printf '[  223995.000] inject  cursor sets: %s set(s) — handle found %s, NOT found %s, null %s | %s were a CHANGE from the previous cursor' "$@"
+}
+zero() { printf '[  223995.000] inject  cursor sets: 0 set(s) — X4 built 26 cursor(s) and has not SET one. x'; }
+
+plant /tmp/census-set-zero.log "$(zero)"
+want "sets=0 -> printed, not silent"  /tmp/census-set-zero.log cursor-set "NEVER SET A CURSOR AT ALL"
+want "sets=0 -> says why it prints"   /tmp/census-set-zero.log cursor-set "looked like an old build"
+
+plant /tmp/census-set-stale.log "$(sets 400 380 20 0 37)"
+want "missed handles -> stale composite" /tmp/census-set-stale.log cursor-set "COMPOSITED A STALE IMAGE"
+want "missed handles -> says it is OURS" /tmp/census-set-stale.log cursor-set "this is OURS"
+# ...and it must OUTRANK the change reading, or a run reports a shape verdict
+# built on an image that was never drawn.
+if python3 tools/score_run.py /tmp/census-set-stale.log 2>&1 | grep -qE "^cursor-set => X4 (NEVER|DID) CHANGED?"; then
+    bad "stale composite -> also reports a shape verdict"
+else
+    ok "stale composite -> does not also report a shape verdict"
+fi
+
+plant /tmp/census-set-nohover.log "$(sets 400 400 0 0 1)"
+want "no change -> X4 never saw a hover" /tmp/census-set-nohover.log cursor-set "NEVER CHANGED THE CURSOR"
+want "no change -> exonerates the canvas" /tmp/census-set-nohover.log cursor-set "canvas map is not the cause"
+
+plant /tmp/census-set-hover.log "$(sets 400 400 0 0 37)"
+want "changes -> hover registered"   /tmp/census-set-hover.log cursor-set "DID CHANGE THE CURSOR 37 time(s)"
+want "changes -> flags the conflict" /tmp/census-set-hover.log cursor-set "contradicts takes 310/311"
+
+absent "no cursor-set line -> silent" "$BASE" cursor-set
+
 # ------------------------------------------------------------------ the pads
 #
 # pad <enum> <seen> <openjoy> <openpad> <polled> <joy-ev> <pad-ev> <btn> <added> <maps>

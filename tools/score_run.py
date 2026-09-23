@@ -3399,6 +3399,51 @@ def main(path):
                   f"while the draw uses the mapped one, and the canvas "
                   f"contracts — so some of these would have been on-eye.")
 
+    # --- #46: did X4 ever set a cursor? Its shape is the hover signal -------
+    #
+    # The vanilla control established the signal exists and is unmissable:
+    # unmodified X4 shows an arrow off a clickable element and a cross-in-circle
+    # over one, equally at centre and edges. So a run where X4 never SETS a
+    # cursor is a run where it never saw the pointer over anything.
+    cz = re.search(r"cursor sets: 0 set\(s\) — X4 built (\d+) cursor\(s\)", text)
+    cs = re.findall(
+        r"cursor sets: (\d+) set\(s\) — handle found (\d+), NOT found (\d+), "
+        r"null (\d+) \| (\d+) were a CHANGE", text)
+    if cs:
+        sets, found, missed, nul, chg = (int(v) for v in cs[-1])
+        print(f"cursor-set {sets} set(s): handle found {found}, NOT found "
+              f"{missed}, null {nul} | {chg} actual change(s)")
+        # Ordered by what has to be true first. A stale composite makes the
+        # shape question unanswerable from the screen, so it outranks any
+        # reading of whether the shape "changed".
+        if missed:
+            print(f"cursor-set => WE COMPOSITED A STALE IMAGE {missed} time(s). "
+                  f"X4 set a cursor whose handle we never captured, so the "
+                  f"drawn cursor kept the previous shape while X4's had "
+                  f"changed. X4 imports only SDL_CreateColorCursor and "
+                  f"SDL_SetCursor and both are hooked, so this is OURS — a "
+                  f"capture that missed, not an unhooked API.")
+        elif chg <= 1:
+            print(f"cursor-set => X4 NEVER CHANGED THE CURSOR ({chg} change). "
+                  f"It set one and kept it, so it never saw the pointer over "
+                  f"anything clickable during this run. The canvas map is not "
+                  f"the cause (take 311's ARM B drew at the raw pointer and "
+                  f"hover still failed), so the question is what position X4 "
+                  f"is hit-testing.")
+        else:
+            print(f"cursor-set => X4 DID CHANGE THE CURSOR {chg} time(s), and "
+                  f"we published every one. So hover registered and the shape "
+                  f"changed on screen — which contradicts takes 310/311 and "
+                  f"means the earlier reading was of a different failure.")
+    elif cz:
+        print(f"cursor-set 0 set(s) — X4 built {cz.group(1)} cursor(s) and set "
+              f"none")
+        print(f"cursor-set => X4 NEVER SET A CURSOR AT ALL. Its shape is its "
+              f"only hover indication, so it never saw the pointer over "
+              f"anything clickable. Printed rather than inferred from silence: "
+              f"this is the most informative of the three outcomes and an "
+              f"early return here would have looked like an old build.")
+
     # --- #71: what controllers does X4 actually see? ------------------------
     #
     # X4 requests SteamInput006 AND imports the whole SDL3 joystick API, and

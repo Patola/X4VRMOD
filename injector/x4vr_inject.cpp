@@ -4385,12 +4385,31 @@ struct CursorSets {
 
 void cursor_sets_report() {
     const uint64_t s = g_cursor_sets.sets.load(std::memory_order_relaxed);
-    if (!s)
-        return; // X4 has not set a cursor at all; silence, not a zero
-    static uint64_t p_s = 0;
+    // **sets == 0 is the most interesting outcome of the three, so it must
+    // PRINT.** An early return here would make "X4 never set a cursor" look
+    // exactly like "this build has no counter" -- which is the defect the
+    // cursor census was written to end, reintroduced one file over. The gate
+    // is instead "has X4 built any cursor at all": if it has not, there is
+    // nothing to set and silence is honest.
+    size_t built = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_cursor_mu);
+        built = g_cursors.size();
+    }
+    if (!built)
+        return;
+    static uint64_t p_s = UINT64_MAX;
     if (s == p_s)
         return; // only when it moves, so a static session stays quiet
     p_s = s;
+    if (!s) {
+        X4VR_LOG("cursor sets: 0 set(s) — X4 built %zu cursor(s) and has not "
+                 "SET one. Its cursor shape is its only hover indication, so "
+                 "this says X4 has not yet seen the pointer over anything "
+                 "clickable.",
+                 built);
+        return;
+    }
     X4VR_LOG("cursor sets: %llu set(s) — handle found %llu, NOT found %llu, "
              "null %llu | %llu were a CHANGE from the previous cursor",
              (unsigned long long)s,

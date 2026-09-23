@@ -21985,3 +21985,39 @@ re-asserts the same one in some states and counting those would report a hover
 on every frame of a run that never had one.
 
 It rides the next take of any kind. **No dedicated run.**
+
+## P312 — which of three? The cursor-set census, first reading
+
+Take 311's line **minus** `X4VR_CURSOR_CANVAS_AB`: the canvas stays at its
+default ON, which take 311 settled is correct for X4's screen-space UI. One
+variable, and the primary observable is the **log**, not Patola's eye — the
+vanilla control already supplied the eye half.
+
+**Controller configuration: no emulated pad, real mouse and keyboard.**
+**Runtime: WiVRn.**
+
+* **P312.1** `cursor sets` prints. It cannot be absent unless the build is
+  stale: the zero case is printed explicitly, gated only on X4 having built a
+  cursor at all.
+* **P312.2** `changed <= 1`, i.e. **X4 never changes the cursor**, matching
+  takes 310 and 311 and the report that hover never fires. This is the
+  prediction; the interesting outcomes are the other two.
+* **P312.3** `NOT found = 0`. X4 imports only `SDL_CreateColorCursor` and
+  `SDL_SetCursor`, both hooked, so every handle it sets should be one we
+  captured. A non-zero `NOT found` means we composited a stale image and the
+  shape question was never answerable from the screen — which would be ours,
+  and would supersede P312.2 rather than sit beside it.
+
+### What each outcome sends us to next
+
+* **`changed <= 1`** -> X4 is hit-testing a position the pointer never reaches.
+  The canvas is exonerated (take 311's ARM B drew at the raw pointer), so the
+  next question is what position X4 tests against — and #84's constant bracket
+  offset becomes the lead rather than a bystander.
+* **`NOT found > 0`** -> our capture missed a cursor. Ours, cheap, and it must
+  be fixed before any placement work, because until then nobody can see what X4
+  is doing with the shape.
+* **`changed > 1` with `NOT found = 0`** -> hover DID register and the shape DID
+  change on screen. That contradicts two takes and the earlier reading was of
+  something else entirely; the honest next step would be to ask Patola to look
+  again with that knowledge.
