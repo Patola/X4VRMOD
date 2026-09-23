@@ -3409,14 +3409,15 @@ def main(path):
     cs = re.findall(
         r"cursor sets: (\d+) set\(s\) — handle found (\d+), NOT found (\d+), "
         r"null (\d+) \| (\d+) were a CHANGE \((\d+) while head-look was "
-        r"STEERING, (\d+) while it was NOT\) \| (\d+) mouse button", text)
+        r"STEERING, (\d+) while it was NOT; (\d+) in the COCKPIT, (\d+) "
+        r"elsewhere\) \| (\d+) mouse button", text)
     if cs:
-        sets, found, missed, nul, chg, chg_st, chg_free, btn = (
-            int(v) for v in cs[-1])
+        (sets, found, missed, nul, chg, chg_st, chg_free, chg_cp, chg_el,
+         btn) = (int(v) for v in cs[-1])
         print(f"cursor-set {sets} set(s): handle found {found}, NOT found "
-              f"{missed}, null {nul} | {chg} change(s) — {chg_st} while "
-              f"head-look STEERING, {chg_free} while free | {btn} button "
-              f"press(es)")
+              f"{missed}, null {nul} | {chg} change(s) — {chg_st} steering / "
+              f"{chg_free} free, {chg_cp} COCKPIT / {chg_el} elsewhere | "
+              f"{btn} button press(es)")
         # Ordered by what has to be true first. A stale composite makes the
         # shape question unanswerable from the screen, so it outranks any
         # reading of whether the shape "changed".
@@ -3433,6 +3434,13 @@ def main(path):
                   f"anything clickable. The canvas map is not the cause (take "
                   f"311's ARM B drew at the raw pointer and hover still "
                   f"failed), so the question is what position X4 hit-tests.")
+        elif chg_cp == 0:
+            print(f"cursor-set => NOT ONE CHANGE IN THE COCKPIT ({chg_el} of "
+                  f"{chg} were elsewhere — map or menu). X4's shape is its "
+                  f"only hover signal and the vanilla control proved it fires "
+                  f"there, so in the cockpit X4 never saw the pointer over "
+                  f"anything clickable. Changes elsewhere cannot answer the "
+                  f"cockpit question and are not evidence for it.")
         elif chg_free == 0:
             print(f"cursor-set => EVERY CHANGE CAME WHILE HEAD-LOOK WAS "
                   f"STEERING ({chg_st} of {chg}), and none while it was free. "

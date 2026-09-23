@@ -1264,6 +1264,8 @@ struct CursorSets {
     // recomputes the decision it reports can evaluate a different predicate
     // than the code did.
     std::atomic<uint64_t> changed_steering{0}, changed_free{0};
+    // ...and by view, which is the axis take 312 could not name.
+    std::atomic<uint64_t> changed_cockpit{0}, changed_elsewhere{0};
     // Mouse buttons X4 was handed, so a cursor change can be attributed.
     // Clicking changes the shape too (his map report: arrow on an element,
     // cross off one), so without this a `changed` count cannot distinguish a
@@ -1308,6 +1310,20 @@ x4vr::CamRing g_camring;
 // True while head-look is actually driving X4's camera; read by the event
 // drain to decide whether the player's own mouse motion should reach the view.
 std::atomic<bool> g_headlook_steering{false};
+// Which VIEW X4 is in, stamped by headlook_tick where it already asks
+// x4_cockpit_view(), and read by SDL_SetCursor.
+//
+// **Take 312 needed this and did not have it.** The cursor-set census split
+// changes by whether head-look was steering, and `steering = armed &&
+// may_steer` is false BOTH when MOUSELOOK is released in the cockpit AND when
+// the map is open -- so 50 changes landed in one "while free" bin that mixed
+// the two, while Patola reported the shape never changed in the cockpit at
+// all. The counter could not contradict him because it never named the axis.
+//
+// Stamped rather than queried here: x4_cockpit_view() is an X4 FFI call and
+// SDL_SetCursor runs on whatever thread X4 sets a cursor from, at a moment
+// this file has never established is safe for one.
+std::atomic<bool> g_in_cockpit{false};
 // Take 126 measured raw=48 for the apostrophe: on Linux this is the X11
 // keycode, which is the evdev code plus 8. Settable so a run can test whether
 // our key activates free-look with no real press to seed it -- the one thing
@@ -3245,6 +3261,7 @@ void headlook_tick() {
     // the test is what take 147 cost.
     const bool steering = armed_now && may_steer;
     g_headlook_steering.store(steering, std::memory_order_relaxed);
+    g_in_cockpit.store(cockpit, std::memory_order_relaxed);
 
     // **Task #73: open-loop plant identification REPLACES the servo.**
     //
@@ -4440,7 +4457,8 @@ void cursor_sets_report() {
     }
     X4VR_LOG("cursor sets: %llu set(s) — handle found %llu, NOT found %llu, "
              "null %llu | %llu were a CHANGE (%llu while head-look was "
-             "STEERING, %llu while it was NOT) | %llu mouse button press(es)",
+             "STEERING, %llu while it was NOT; %llu in the COCKPIT, %llu "
+             "elsewhere) | %llu mouse button press(es)",
              (unsigned long long)s,
              (unsigned long long)g_cursor_sets.found.load(std::memory_order_relaxed),
              (unsigned long long)g_cursor_sets.missed.load(std::memory_order_relaxed),
@@ -4448,6 +4466,8 @@ void cursor_sets_report() {
              (unsigned long long)g_cursor_sets.changed.load(std::memory_order_relaxed),
              (unsigned long long)g_cursor_sets.changed_steering.load(std::memory_order_relaxed),
              (unsigned long long)g_cursor_sets.changed_free.load(std::memory_order_relaxed),
+             (unsigned long long)g_cursor_sets.changed_cockpit.load(std::memory_order_relaxed),
+             (unsigned long long)g_cursor_sets.changed_elsewhere.load(std::memory_order_relaxed),
              (unsigned long long)g_cursor_sets.buttons.load(std::memory_order_relaxed));
 }
 
@@ -4466,6 +4486,10 @@ bool SDL_SetCursor(void *cursor) {
             (g_headlook_steering.load(std::memory_order_relaxed)
                  ? g_cursor_sets.changed_steering
                  : g_cursor_sets.changed_free)
+                .fetch_add(1, std::memory_order_relaxed);
+            (g_in_cockpit.load(std::memory_order_relaxed)
+                 ? g_cursor_sets.changed_cockpit
+                 : g_cursor_sets.changed_elsewhere)
                 .fetch_add(1, std::memory_order_relaxed);
         }
         bool hit = false;

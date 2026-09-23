@@ -193,8 +193,8 @@ absent "no census line -> silent" "$BASE" cursor
 # The vanilla control proved X4's hover signal EXISTS, so a run where X4 never
 # sets a cursor is a positive finding and not a missing instrument. All four
 # outcomes are planted, including the zero.
-sets() {  # sets <n> <found> <missed> <null> <changed> <chg_steering> <chg_free> <buttons>
-    printf '[  223995.000] inject  cursor sets: %s set(s) — handle found %s, NOT found %s, null %s | %s were a CHANGE (%s while head-look was STEERING, %s while it was NOT) | %s mouse button press(es)' "$@"
+sets() {  # sets <n> <found> <missed> <null> <changed> <steer> <free> <cockpit> <elsewhere> <buttons>
+    printf '[  223995.000] inject  cursor sets: %s set(s) — handle found %s, NOT found %s, null %s | %s were a CHANGE (%s while head-look was STEERING, %s while it was NOT; %s in the COCKPIT, %s elsewhere) | %s mouse button press(es)' "$@"
 }
 zero() { printf '[  223995.000] inject  cursor sets: 0 set(s) — X4 built 26 cursor(s) and has not SET one. x'; }
 
@@ -202,7 +202,7 @@ plant /tmp/census-set-zero.log "$(zero)"
 want "sets=0 -> printed, not silent"  /tmp/census-set-zero.log cursor-set "NEVER SET A CURSOR AT ALL"
 want "sets=0 -> says why it prints"   /tmp/census-set-zero.log cursor-set "looked like an old build"
 
-plant /tmp/census-set-stale.log "$(sets 400 380 20 0 37 10 27 3)"
+plant /tmp/census-set-stale.log "$(sets 400 380 20 0 37 10 27 20 17 3)"
 want "missed handles -> stale composite" /tmp/census-set-stale.log cursor-set "COMPOSITED A STALE IMAGE"
 want "missed handles -> says it is OURS" /tmp/census-set-stale.log cursor-set "this is OURS"
 # ...and it must OUTRANK the change reading, or a run reports a shape verdict
@@ -213,11 +213,11 @@ else
     ok "stale composite -> does not also report a shape verdict"
 fi
 
-plant /tmp/census-set-nohover.log "$(sets 400 400 0 0 1 0 1 0)"
+plant /tmp/census-set-nohover.log "$(sets 400 400 0 0 1 0 1 1 0 0)"
 want "no change -> X4 never saw a hover" /tmp/census-set-nohover.log cursor-set "NEVER CHANGED THE CURSOR"
 want "no change -> exonerates the canvas" /tmp/census-set-nohover.log cursor-set "canvas map is not the cause"
 
-plant /tmp/census-set-hover.log "$(sets 400 400 0 0 37 5 32 2)"
+plant /tmp/census-set-hover.log "$(sets 400 400 0 0 37 5 32 30 7 2)"
 want "changes -> hover registered"   /tmp/census-set-hover.log cursor-set "DID CHANGE THE CURSOR 37 time(s)"
 want "changes -> flags the conflict" /tmp/census-set-hover.log cursor-set "contradicts takes 310/311"
 
@@ -226,7 +226,7 @@ want "changes -> flags the conflict" /tmp/census-set-hover.log cursor-set "contr
 # control -- so changes that ALL happened while steering say nothing about
 # placement, and a scorer that reported them as hover would send the next run
 # at the wrong defect.
-plant /tmp/census-set-steeronly.log "$(sets 400 400 0 0 12 12 0 0)"
+plant /tmp/census-set-steeronly.log "$(sets 400 400 0 0 12 12 0 12 0 0)"
 want "changes only while steering -> names #71" /tmp/census-set-steeronly.log cursor-set "EVERY CHANGE CAME WHILE HEAD-LOOK WAS STEERING"
 want "changes only while steering -> refuses"   /tmp/census-set-steeronly.log cursor-set "cannot choose between them"
 if python3 tools/score_run.py /tmp/census-set-steeronly.log 2>&1 | grep -qE "^cursor-set => X4 DID CHANGE"; then
@@ -237,8 +237,22 @@ fi
 
 # **His second question made this one necessary.** Clicking changes the shape
 # too, so changes that could all be clicks are not attributable to hover.
-plant /tmp/census-set-clicks.log "$(sets 400 400 0 0 4 0 4 6)"
+plant /tmp/census-set-clicks.log "$(sets 400 400 0 0 4 0 4 4 0 6)"
 want "changes <= clicks -> cautions" /tmp/census-set-clicks.log cursor-set "may ALL be clicks"
+
+# **TAKE 312's EXACT SHAPE.** 50 changes, all while head-look was free, 121
+# clicks -- and Patola reported the shape never changed in the cockpit once.
+# The old counter had one "free" bin that mixed cockpit-with-MOUSELOOK-released
+# together with map-is-open, so it could not contradict him. Split by view, the
+# same numbers say what he said.
+plant /tmp/census-set-312.log "$(sets 56 56 0 0 50 0 50 0 50 121)"
+want "take 312 shape -> no cockpit change" /tmp/census-set-312.log cursor-set "NOT ONE CHANGE IN THE COCKPIT"
+want "take 312 shape -> discounts the rest" /tmp/census-set-312.log cursor-set "are not evidence for it"
+if python3 tools/score_run.py /tmp/census-set-312.log 2>&1 | grep -qE "^cursor-set => X4 DID CHANGE"; then
+    bad "take 312 shape -> still reports hover registered"
+else
+    ok "take 312 shape -> does not report hover registered"
+fi
 
 absent "no cursor-set line -> silent" "$BASE" cursor-set
 
