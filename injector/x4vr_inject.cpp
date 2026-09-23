@@ -1224,6 +1224,54 @@ struct EvFlow {
     double t_window = 0.0;
 } g_evflow;
 
+// **X4's cursor SHAPE is its only hover indication, and it is the signal takes
+// 310 and 311 read as absent.** The vanilla control settled that the signal
+// exists: unmodified X4 shows an arrow off a target and a cross-in-circle over
+// one, equally at the centre and the edges. (The white 4-corner contour is
+// SELECTED, not hover — Patola corrected that, and it matters, because it
+// leaves the cursor shape as the sole hover observable.)
+//
+// We hide X4's real cursor and composite our own captured copy, so a shape
+// change X4 makes is only visible if we notice the SetCursor and find the
+// handle. Neither was counted, which is why two takes could only say "it never
+// changed" and not WHICH of three things happened:
+//
+//   sets=0             X4 never registered a hover; the pointer never landed
+//                      on a target, and the question is placement.
+//   sets>0, found=0    X4 changed the cursor and we kept drawing the old
+//                      image. Ours, invisible, and a stale composite.
+//   sets>0, found>0    X4 changed it and we published the right image, so the
+//                      shape DID change on screen.
+//
+// X4 imports only SDL_CreateColorCursor and SDL_SetCursor (`nm -D`), both
+// hooked, so `found` should track `sets` — and a gap is a defect rather than a
+// missing hook.
+struct CursorSets {
+    std::atomic<uint64_t> sets{0}, found{0}, missed{0}, null{0}, changed{0};
+    std::atomic<const void *> last{nullptr};
+    // **Split by whether head-look was STEERING at the moment X4 set it.**
+    //
+    // Patola's question -- "ok if I spend half a minute flying closer?" --
+    // exposed the confound: head-look holds MOUSELOOK, and #71 established
+    // that holding MOUSELOOK is how X4 SUSPENDS MOUSE CONTROL. So a run with
+    // `changed == 0` could mean nothing more than "X4 was not hit-testing the
+    // pointer, because we were holding the key that tells it not to" -- which
+    // is #71 restated, not a placement defect, and the two want completely
+    // different work.
+    //
+    // Taking the flag at the moment of the set rather than re-deriving it
+    // later: `steer` is the same local the drain reads, and an instrument that
+    // recomputes the decision it reports can evaluate a different predicate
+    // than the code did.
+    std::atomic<uint64_t> changed_steering{0}, changed_free{0};
+    // Mouse buttons X4 was handed, so a cursor change can be attributed.
+    // Clicking changes the shape too (his map report: arrow on an element,
+    // cross off one), so without this a `changed` count cannot distinguish a
+    // hover from a click -- and asking him to avoid clicking would be asking
+    // him to be careful instead of measuring.
+    std::atomic<uint64_t> buttons{0};
+} g_cursor_sets;
+
 // Written by whichever thread runs the tick, read by the off-thread camera probe
 // below, so the probe compares its own reading against one taken through X4's
 // normal call path. See camprobe_start() for what the probe is for.
@@ -4163,6 +4211,8 @@ bool SDL_WaitEvent(void *event) {
         // other; a census that watched only PeepEvents would read zero for a
         // session X4 happened to drain through WaitEvent.
         pad_note_event(e->type, (const Sdl3AxisEvent *)e);
+        if (e->type == SDL_EV_MOUSE_DOWN)
+            g_cursor_sets.buttons.fetch_add(1, std::memory_order_relaxed);
     }
     return r;
 }
@@ -4253,8 +4303,12 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
             // the event in the queue and would be counted again when X4
             // finally fetches it, inflating the axis traffic by however often
             // X4 peeks.
-            if (consuming)
+            if (consuming) {
                 pad_note_event(e->type, (const Sdl3AxisEvent *)e);
+                if (e->type == SDL_EV_MOUSE_DOWN)
+                    g_cursor_sets.buttons.fetch_add(1,
+                                                    std::memory_order_relaxed);
+            }
             if (e->type >= SDL_EV_MOUSE_MOTION && e->type <= SDL_EV_MOUSE_UP) {
                 note_mouse_event(e);
                 if (consuming)
@@ -4356,32 +4410,6 @@ void *SDL_CreateColorCursor(void *surface, int hot_x, int hot_y) {
 // Which of them is current. This is also the *shape* signal: X4 swapping cursor
 // is how the reticle becomes an arrow, so a shim that draws a fixed image would
 // be wrong exactly when the game is telling the player something.
-// **X4's cursor SHAPE is its only hover indication, and it is the signal takes
-// 310 and 311 read as absent.** The vanilla control settled that the signal
-// exists: unmodified X4 shows an arrow off a target and a cross-in-circle over
-// one, equally at the centre and the edges. (The white 4-corner contour is
-// SELECTED, not hover — Patola corrected that, and it matters, because it
-// leaves the cursor shape as the sole hover observable.)
-//
-// We hide X4's real cursor and composite our own captured copy, so a shape
-// change X4 makes is only visible if we notice the SetCursor and find the
-// handle. Neither was counted, which is why two takes could only say "it never
-// changed" and not WHICH of three things happened:
-//
-//   sets=0             X4 never registered a hover; the pointer never landed
-//                      on a target, and the question is placement.
-//   sets>0, found=0    X4 changed the cursor and we kept drawing the old
-//                      image. Ours, invisible, and a stale composite.
-//   sets>0, found>0    X4 changed it and we published the right image, so the
-//                      shape DID change on screen.
-//
-// X4 imports only SDL_CreateColorCursor and SDL_SetCursor (`nm -D`), both
-// hooked, so `found` should track `sets` — and a gap is a defect rather than a
-// missing hook.
-struct CursorSets {
-    std::atomic<uint64_t> sets{0}, found{0}, missed{0}, null{0}, changed{0};
-    std::atomic<const void *> last{nullptr};
-} g_cursor_sets;
 
 void cursor_sets_report() {
     const uint64_t s = g_cursor_sets.sets.load(std::memory_order_relaxed);
@@ -4411,12 +4439,16 @@ void cursor_sets_report() {
         return;
     }
     X4VR_LOG("cursor sets: %llu set(s) — handle found %llu, NOT found %llu, "
-             "null %llu | %llu were a CHANGE from the previous cursor",
+             "null %llu | %llu were a CHANGE (%llu while head-look was "
+             "STEERING, %llu while it was NOT) | %llu mouse button press(es)",
              (unsigned long long)s,
              (unsigned long long)g_cursor_sets.found.load(std::memory_order_relaxed),
              (unsigned long long)g_cursor_sets.missed.load(std::memory_order_relaxed),
              (unsigned long long)g_cursor_sets.null.load(std::memory_order_relaxed),
-             (unsigned long long)g_cursor_sets.changed.load(std::memory_order_relaxed));
+             (unsigned long long)g_cursor_sets.changed.load(std::memory_order_relaxed),
+             (unsigned long long)g_cursor_sets.changed_steering.load(std::memory_order_relaxed),
+             (unsigned long long)g_cursor_sets.changed_free.load(std::memory_order_relaxed),
+             (unsigned long long)g_cursor_sets.buttons.load(std::memory_order_relaxed));
 }
 
 bool SDL_SetCursor(void *cursor) {
@@ -4429,8 +4461,13 @@ bool SDL_SetCursor(void *cursor) {
         // every frame in some states, and counting those as shape changes
         // would report a hover on every frame of a run that never had one.
         if (g_cursor_sets.last.exchange(cursor, std::memory_order_relaxed) !=
-            cursor)
+            cursor) {
             g_cursor_sets.changed.fetch_add(1, std::memory_order_relaxed);
+            (g_headlook_steering.load(std::memory_order_relaxed)
+                 ? g_cursor_sets.changed_steering
+                 : g_cursor_sets.changed_free)
+                .fetch_add(1, std::memory_order_relaxed);
+        }
         bool hit = false;
         {
             std::lock_guard<std::mutex> lock(g_cursor_mu);

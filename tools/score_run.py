@@ -3408,11 +3408,15 @@ def main(path):
     cz = re.search(r"cursor sets: 0 set\(s\) — X4 built (\d+) cursor\(s\)", text)
     cs = re.findall(
         r"cursor sets: (\d+) set\(s\) — handle found (\d+), NOT found (\d+), "
-        r"null (\d+) \| (\d+) were a CHANGE", text)
+        r"null (\d+) \| (\d+) were a CHANGE \((\d+) while head-look was "
+        r"STEERING, (\d+) while it was NOT\) \| (\d+) mouse button", text)
     if cs:
-        sets, found, missed, nul, chg = (int(v) for v in cs[-1])
+        sets, found, missed, nul, chg, chg_st, chg_free, btn = (
+            int(v) for v in cs[-1])
         print(f"cursor-set {sets} set(s): handle found {found}, NOT found "
-              f"{missed}, null {nul} | {chg} actual change(s)")
+              f"{missed}, null {nul} | {chg} change(s) — {chg_st} while "
+              f"head-look STEERING, {chg_free} while free | {btn} button "
+              f"press(es)")
         # Ordered by what has to be true first. A stale composite makes the
         # shape question unanswerable from the screen, so it outranks any
         # reading of whether the shape "changed".
@@ -3426,15 +3430,27 @@ def main(path):
         elif chg <= 1:
             print(f"cursor-set => X4 NEVER CHANGED THE CURSOR ({chg} change). "
                   f"It set one and kept it, so it never saw the pointer over "
-                  f"anything clickable during this run. The canvas map is not "
-                  f"the cause (take 311's ARM B drew at the raw pointer and "
-                  f"hover still failed), so the question is what position X4 "
-                  f"is hit-testing.")
+                  f"anything clickable. The canvas map is not the cause (take "
+                  f"311's ARM B drew at the raw pointer and hover still "
+                  f"failed), so the question is what position X4 hit-tests.")
+        elif chg_free == 0:
+            print(f"cursor-set => EVERY CHANGE CAME WHILE HEAD-LOOK WAS "
+                  f"STEERING ({chg_st} of {chg}), and none while it was free. "
+                  f"That is #71 restated — holding MOUSELOOK is how X4 "
+                  f"suspends mouse control — and NOT a placement defect. The "
+                  f"two want completely different work, so this run cannot "
+                  f"choose between them: it needs free-look periods with the "
+                  f"pointer over a target.")
         else:
             print(f"cursor-set => X4 DID CHANGE THE CURSOR {chg} time(s), and "
                   f"we published every one. So hover registered and the shape "
                   f"changed on screen — which contradicts takes 310/311 and "
                   f"means the earlier reading was of a different failure.")
+            if btn and chg <= btn + 1:
+                print(f"cursor-set    CAUTION: {btn} button press(es) against "
+                      f"{chg} change(s). Clicking changes the shape too, so "
+                      f"these changes may ALL be clicks and none of them a "
+                      f"hover. Not attributable from this run.")
     elif cz:
         print(f"cursor-set 0 set(s) — X4 built {cz.group(1)} cursor(s) and set "
               f"none")
