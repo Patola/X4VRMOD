@@ -22067,3 +22067,56 @@ NEVER STAMPED, the split is meaningless"** and the scorer refuses the
 cockpit verdict while keeping what still stands — the change and button counts
 are real, only WHERE is unknown. Planted in the suite (65 cases) with a check
 that the refuted verdict cannot come back.
+
+## P313 — is MOUSELOOK what suppresses cockpit hover? (X4VR_HEADLOOK=0)
+
+Take 312's line **plus `X4VR_HEADLOOK=0`** and nothing else. One variable.
+**WiVRn. No emulated pad, real mouse and keyboard.**
+
+### Why this configuration and not a new knob
+
+`may_steer = cockpit && hud` is exactly the condition for holding MOUSELOOK, so
+*cockpit + HUD up + key released* is unreachable through any existing release
+path. `X4VR_HEADLOOK=0` reaches it: `headlook_tick()` returns before anything is
+forced, and `headlook_enabled()` also gates the inputmap rewrite, so
+`INPUT_STATE_CAMERA_MOUSELOOK` stays on X4's own binding and nothing of ours
+touches it.
+
+**Cost: the view will not follow his head for this run.** Uncomfortable, and
+acceptable for two minutes.
+
+### The protocol supplies the attribution the flag cannot
+
+With head-look off, `g_in_cockpit` is never stamped, so the census refuses the
+cockpit/elsewhere split (by design — see the `g_view_known` guard). So the
+attribution comes from the protocol instead: **do not open the map at all.**
+Every cursor change is then a cockpit change by construction.
+
+* **P313.1** `cursor sets` prints and appends **"VIEW NEVER STAMPED, the split
+  is meaningless"**, and the scorer refuses the split. **This is the guard
+  working, not a failure** — and the change and button counts still stand.
+* **P313.2** the cursor **appears in the cockpit without a map visit**. Take
+  312 needed one (*"does not appear until I bring up the map and leave it"*),
+  and the reason is that X4 had not SET a cursor yet. With MOUSELOOK not held,
+  X4 should be in normal pointer mode from the start and set one. If it still
+  needs a map visit, that behaviour is NOT a MOUSELOOK artifact and #64 is
+  larger than "seed a default cursor".
+* **P313.3 — the one that matters.** `changed` well above the button count,
+  and Patola sees **arrow -> cross-in-circle over a target**. That would mean
+  **holding MOUSELOOK is what suppresses cockpit hover**, #46's cockpit half is
+  #71's structure rather than a placement defect, and it cannot be fixed by
+  moving the cursor.
+
+### What refutes it, and where that goes
+
+Hover still failing with head-look off. Then MOUSELOOK is **not** the cause and
+something in our stack breaks X4's hit-testing regardless — far worse, and the
+next step would be **our mod in flatscreen** (injector + layer, `X4VR_VR=0`) to
+separate the mod from the VR path, since the vanilla control has already
+cleared X4 itself.
+
+### The caveat, stated so a clean result is not over-read
+
+A head-look-OFF run cannot say whether hover would **also** work with head-look
+ON. It can only say whether MOUSELOOK is what suppresses it. Those are
+different questions and only the second one is being asked.
