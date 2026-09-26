@@ -12793,7 +12793,29 @@ void vr_thread() {
                 // start sampling geometry X4 never drew.
                 const float lim = head_translate_max();
                 const float gain = head_translate_gain();
-                if (head_translate_enabled()) {
+                // **The shift reaches the shaders only through the pose
+                // channel** -- pose_drive_residual() returns at once when
+                // !pose_active() -- while the DECLARED position below adds
+                // g_reye.sx/sy regardless. With X4VR_POSE off, publishing a
+                // shift would tell the compositor the image came from a leaned
+                // eye it was never rendered from, and it would warp a lean that
+                // is not in the picture: take 238's Z artifact, from the other
+                // side. Refused, loudly, rather than half-applied.
+                const bool translate_can_act = pose_active();
+                if (head_translate_enabled() && !translate_can_act) {
+                    static bool said = false;
+                    if (!said) {
+                        said = true;
+                        X4VR_LOG("head translate: ASKED FOR BUT INACTIVE — "
+                                 "X4VR_POSE is off, so the shaders cannot "
+                                 "shift the eye, and declaring a shift the "
+                                 "image does not contain would make the "
+                                 "compositor warp a lean that is not there. "
+                                 "Refused. Add X4VR_POSE=1; it is NOT implied "
+                                 "by X4VR_HEAD_TRANSLATE");
+                    }
+                }
+                if (head_translate_enabled() && translate_can_act) {
                     tx = x4vr::clampf(hs.x * gain, -lim, lim);
                     ty = x4vr::clampf(hs.y * gain, -lim, lim);
                 }
