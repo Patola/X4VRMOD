@@ -4892,18 +4892,10 @@ struct OffAxisPair {
 // Defined with the VR state further down. Fills `out[eye] = {l, r, u, d}` in
 // radians from the first located frame and returns false until there is one.
 bool vr_located_fov(float out[2][4]);
-// True while waiting for that first located view could still succeed: this run
-// wants VR, a session is intended or already running, nothing has told it to
-// stop, and no view has been located yet. Without it the wait below would burn
-// its whole cap on a machine with no runtime at all.
-bool vr_awaiting_first_view();
 // Spawns the session thread if a device was noted and it has not been spawned
 // yet. Idempotent. Normally reached from vkGetDeviceQueue; the latch below has
 // to be able to reach it too — see the note there.
 void vr_start_session_deferred();
-// Has the session thread been spawned? Needed here only so the log line below
-// can report what it actually did rather than what it was about to try.
-bool vr_session_thread_started();
 
 // Non-latching. The per-module log line wants to *describe* the target, and
 // calling the latching accessor there would fix it at the first NONWORLD
@@ -12297,32 +12289,6 @@ inline XrFovf vr_declared_fov() {
 }
 const XrFovf g_vr_fov = vr_declared_fov();
 VrState g_vrs;
-
-// Task #35 piece 2. Forward-declared up with offaxis_target(), which is the
-// only caller: it needs the runtime's frusta at shader-patch time and must not
-// block waiting for them.
-bool vr_session_thread_started() {
-    return g_vrs.started.load(std::memory_order_acquire);
-}
-
-bool vr_awaiting_first_view() {
-    // `g_active`, and it is load-bearing. gamescope loads this layer too and
-    // creates its own VkDevice, and vr_note_device is gated on g_vr alone, so
-    // `pending` is set in that process as well. Without this the wait would
-    // stall gamescope's startup for its whole cap, every run — a five-second
-    // regression bought by a fix for a ten-millisecond race, in a process the
-    // layer already announces it is inert in.
-    //
-    // `pending` as well as `started`: the session is created outside the
-    // loader's device-creation chain, so there is a window where the intent
-    // exists and the thread does not. Treating that window as "give up" would
-    // reintroduce exactly the race this exists to close.
-    return g_vr && g_active &&
-           (g_vrs.pending || g_vrs.started.load(std::memory_order_acquire)) &&
-           !g_vrs.stop.load(std::memory_order_acquire) &&
-           !g_vrs.session_settled.load(std::memory_order_acquire) &&
-           !g_vrs.fov_seen.load(std::memory_order_acquire);
-}
 
 bool vr_located_fov(float out[2][4]) {
     if (!g_vr || !g_vrs.fov_seen.load(std::memory_order_acquire))
