@@ -363,6 +363,19 @@ public:
             dx_hi_[arm] = mx > dx_hi_[arm] ? mx : dx_hi_[arm];
             dy_lo_[arm] = my < dy_lo_[arm] ? my : dy_lo_[arm];
             dy_hi_[arm] = my > dy_hi_[arm] ? my : dy_hi_[arm];
+            // And where the map COULD put it: the images of the window's own
+            // edges. Without this the drawn extent above cannot say whether a
+            // small number is the map or the protocol -- take 313 drew 41%x43%
+            // under a map whose edge is 52.5%, and the scorer called that
+            // "geometry, not protocol". Drawn against reachable is the split.
+            const float ex0 = map[0].x(-1.f), ex1 = map[0].x(1.f);
+            const float ey0 = map[0].y(-1.f), ey1 = map[0].y(1.f);
+            const float elo = ex0 < ex1 ? ex0 : ex1, ehi = ex0 < ex1 ? ex1 : ex0;
+            const float flo = ey0 < ey1 ? ey0 : ey1, fhi = ey0 < ey1 ? ey1 : ey0;
+            rx_lo_[arm] = elo < rx_lo_[arm] ? elo : rx_lo_[arm];
+            rx_hi_[arm] = ehi > rx_hi_[arm] ? ehi : rx_hi_[arm];
+            ry_lo_[arm] = flo < ry_lo_[arm] ? flo : ry_lo_[arm];
+            ry_hi_[arm] = fhi > ry_hi_[arm] ? fhi : ry_hi_[arm];
             drew_arm_[arm]++;
             chan_win_w_ = shared->window_w;
         }
@@ -459,14 +472,16 @@ public:
             X4VR_LOG("cursor drawn (%s) ARM %s (canvas %s): ndc "
                      "x=%.4f..%.4f y=%.4f..%.4f = %.0f%%x%.0f%% of the eye | "
                      "%llu frame(s) | channel says the window is %u wide "
-                     "against a %u eye%s",
+                     "against a %u eye%s | reachable x=%.4f..%.4f "
+                     "y=%.4f..%.4f",
                      when, arm ? "B" : "A", arm ? "OFF" : "ON", dx_lo_[arm],
                      dx_hi_[arm], dy_lo_[arm], dy_hi_[arm], 100.0f * fx,
                      100.0f * fy, (unsigned long long)drew_arm_[arm],
                      chan_win_w_, eye_w,
                      chan_win_w_ && chan_win_w_ != eye_w
                          ? " — THESE DISAGREE"
-                         : "");
+                         : "",
+                     rx_lo_[arm], rx_hi_[arm], ry_lo_[arm], ry_hi_[arm]);
         }
     }
 
@@ -1031,6 +1046,10 @@ private:
     float dx_lo_[2] = {1e9f, 1e9f}, dx_hi_[2] = {-1e9f, -1e9f};
     float dy_lo_[2] = {1e9f, 1e9f}, dy_hi_[2] = {-1e9f, -1e9f};
     uint64_t drew_arm_[2] = {0, 0};
+    // Per arm, the union of the map's images of the window edges -- the box
+    // the cursor could occupy had the pointer been swept into every corner.
+    float rx_lo_[2] = {1e9f, 1e9f}, rx_hi_[2] = {-1e9f, -1e9f};
+    float ry_lo_[2] = {1e9f, 1e9f}, ry_hi_[2] = {-1e9f, -1e9f};
     // What the INPUT path believes the window is, straight off the channel.
     // Two processes in the tree report different window sizes and the layer
     // cannot tell from its own side which one feeds the pointer; this is the

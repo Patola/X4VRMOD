@@ -106,16 +106,21 @@ want "half in x only -> reports 50/100"    /tmp/census-halfx.log cursor "50% of 
 plant /tmp/census-offeye.log "$(cur 'drew 900 | off-eye 100' 0 2816 0 2816 moved)"
 want "off-eye -> notes the pre-map cull" /tmp/census-offeye.log cursor "culled off-eye"
 
-drawn() {  # drawn <ndc-half-span> <chan_win_w> <eye> [arm A|B]
-    python3 - "$1" "$2" "$3" "${4:-A}" <<'PYX'
+drawn() {  # drawn <ndc-half-span> <chan_win_w> <eye> [arm A|B] [reachable-half-span]
+    python3 - "$1" "$2" "$3" "${4:-A}" "${5:-}" <<'PYX'
 import sys
 s, w, e, arm = float(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+r = sys.argv[5]
 pct = round(s * 100)
 st = "ON" if arm == "A" else "OFF"
+# Without a 5th argument this is the line as the layer wrote it before the
+# reachable box existed, so older logs stay covered.
+tail = (f" | reachable x={-float(r):.4f}..{float(r):.4f} "
+        f"y={-float(r):.4f}..{float(r):.4f}") if r else ""
 print(f"[  223999.000] layer   cursor drawn (final) ARM {arm} (canvas {st}): "
       f"ndc x={-s:.4f}..{s:.4f} y={-s:.4f}..{s:.4f} = {pct}%x{pct}% of the "
       f"eye | 1000 frame(s) | channel says the window is {w} wide against a "
-      f"{e} eye")
+      f"{e} eye{tail}")
 PYX
 }
 
@@ -124,24 +129,61 @@ phase() {  # phase <n> <A|B>
     printf '[  223990.000] layer   cursor canvas: phase %s — ARM %s (canvas %s). x' "$1" "$2" "$st"
 }
 
-# THE MEASURED CASE: a=0.5252 confines the cursor to the central 52.5%. This
-# is #46's mechanism and it is geometry, not protocol -- it holds however the
-# player moved the mouse, which is exactly what the pointer range could not
-# say.
-plant /tmp/census-drawn-confined.log "$(cur 'drew 1000' 0 2816 0 2816 moved)" "$(drawn 0.5252 2816 2816)"
+# THE MEASURED CASE: a=0.5252 confines the cursor to the central 52.5%. The
+# GEOMETRIC claim comes from the map's reachable box, which the layer prints
+# beside the drawn extent. The drawn extent alone depends on where the mouse
+# went exactly as the pointer range does -- the old verdict said otherwise and
+# take 313 (41%x43% drawn under a 52.5% map) was the counterexample.
+plant /tmp/census-drawn-confined.log "$(cur 'drew 1000' 0 2816 0 2816 moved)" "$(drawn 0.5252 2816 2816 A 0.5252)"
 want "confined -> reports the drawn span"  /tmp/census-drawn-confined.log cursor "ARM A (canvas ON): drawn over ndc"
-want "confined -> names it CONFINED"       /tmp/census-drawn-confined.log cursor "=> CONFINED"
-want "confined -> gives the border"        /tmp/census-drawn-confined.log cursor "border of about 24%"
+want "confined -> reports the map's box"   /tmp/census-drawn-confined.log cursor "the map can reach x=-0.5252..0.5252"
+want "confined -> names it CONFINED BY THE MAP" /tmp/census-drawn-confined.log cursor "=> CONFINED BY THE MAP"
 want "confined -> gives the lost area"     /tmp/census-drawn-confined.log cursor "72% of the AREA unreachable"
 want "confined -> points at the canvas"    /tmp/census-drawn-confined.log cursor "whether it SHOULD"
+absent "confined, swept to the edge -> no protocol caveat" /tmp/census-drawn-confined.log "cursor     => and the pointer was not swept"
 
-# An unconfined cursor must NOT trip it, or the verdict is an off switch.
-plant /tmp/census-drawn-full.log "$(cur 'drew 1000' 0 2816 0 2816 moved)" "$(drawn 1.0 2816 2816)"
+# Take 313's shape: the map allows 52.5% and the cursor was drawn over 42%.
+# The confinement is still the map's; the 42% is the protocol and must be
+# called that, not reported as the limit.
+plant /tmp/census-drawn-unswept.log "$(cur 'drew 1000' 0 2816 0 2816 moved)" "$(drawn 0.42 2816 2816 A 0.5252)"
+want "unswept -> still CONFINED BY THE MAP" /tmp/census-drawn-unswept.log cursor "=> CONFINED BY THE MAP"
+want "unswept -> map box, not drawn box"    /tmp/census-drawn-unswept.log cursor "at most 53%x53% of the eye"
+want "unswept -> drawn span is the PROTOCOL" /tmp/census-drawn-unswept.log cursor "is the PROTOCOL, not the limit"
+
+# A log from before the reachable box: nothing may be claimed as geometry.
+plant /tmp/census-drawn-old.log "$(cur 'drew 1000' 0 2816 0 2816 moved)" "$(drawn 0.5252 2816 2816)"
+want "old log -> refuses the geometric claim" /tmp/census-drawn-old.log cursor "predates the reachable box"
+if python3 tools/score_run.py /tmp/census-drawn-old.log 2>&1 | grep -qE "^cursor.*(=> CONFINED|This is geometry)"; then
+    bad "old log -> still calls a drawn extent geometry"
+else
+    ok "old log -> does not call a drawn extent geometry"
+fi
+
+# An unconfined cursor must NOT trip it, or the verdict is an off switch --
+# with the box, and on an old log without it.
+plant /tmp/census-drawn-full.log "$(cur 'drew 1000' 0 2816 0 2816 moved)" "$(drawn 1.0 2816 2816 A 1.0)"
 want "unconfined -> says nothing confines it" /tmp/census-drawn-full.log cursor "nothing is confining it"
 if python3 tools/score_run.py /tmp/census-drawn-full.log 2>&1 | grep -qE "^cursor.*=> CONFINED"; then
     bad "unconfined -> still claims CONFINED"
 else
     ok "unconfined -> does not claim CONFINED"
+fi
+plant /tmp/census-drawn-full-old.log "$(cur 'drew 1000' 0 2816 0 2816 moved)" "$(drawn 1.0 2816 2816)"
+want "unconfined, old log -> says nothing confines it" /tmp/census-drawn-full-old.log cursor "nothing is confining it"
+
+# The final census is written at teardown, after the chains are gone, and
+# take 313's read "against a 0x0 eye". The scorer must borrow the extent from
+# an earlier census and say so, never divide by zero into "0% of the eye".
+cur0() {
+    printf '[  224000.000] layer   cursor census (final): 1000 present(s) — drew 1000 | pointer x=0..2563 y=0..2509 against a 0x0 eye (moved)'
+}
+plant /tmp/census-eye0.log "$(cur 'drew 900' 0 2563 0 2509 moved)" "$(cur0)"
+want "0x0 final -> borrows the earlier extent" /tmp/census-eye0.log cursor "using 2816x2816 from the last census"
+want "0x0 final -> reports real coverage"      /tmp/census-eye0.log cursor "91% of the eye in x and 89% in y"
+if python3 tools/score_run.py /tmp/census-eye0.log 2>&1 | grep -qE "^cursor.*(against a 0x0|across 0% of the eye)"; then
+    bad "0x0 final -> still reads a 0x0 eye"
+else
+    ok "0x0 final -> does not read a 0x0 eye"
 fi
 
 # The window/eye seam OUTRANKS the confinement verdict: if the pointer and the

@@ -1838,9 +1838,11 @@ def main(path):
             # answering a question they did not ask. That is the take-103
             # mistake — the fourth time in this file — and a scorer that FAILs
             # a correctly-designed run is one people stop reading.
-            print("pose  world-locked all run, and X4VR_HEADLOOK was not set — "
-                  "this run says nothing about head tracking, which is not a "
-                  "defect in it")
+            hl = re.search(r"\bX4VR_HEADLOOK=(\S*)", run or "")
+            said = (f"X4VR_HEADLOOK={hl.group(1)}" if hl
+                    else "X4VR_HEADLOOK was not set")
+            print(f"pose  world-locked all run, and {said} — this run says "
+                  f"nothing about head tracking, which is not a defect in it")
 
     # --- #59's per-frame pose channel, which is a DIFFERENT pose ------------
     #
@@ -3234,7 +3236,10 @@ def main(path):
                   f"{qmean:.2f} ms. The channel is not the defect either, and "
                   f"with the servo and the camera read already cleared, nothing "
                   f"proposed so far explains take 285b.")
-        if foreign > 1.0:
+        # Only a competitor when there was something to compete WITH: take
+        # 313 ran head-look off, pushed 0.0 Hz, and was a mouse take by
+        # design -- and this told it to keep its hands off the mouse.
+        if foreign > 1.0 and pm > 0.5:
             print(f"evflow     NOTE: {foreign:.1f} Hz of the player's OWN mouse "
                   f"motion crossed the same channel. Those compete with ours "
                   f"for X4's free-look, and the run should have had hands off "
@@ -3254,6 +3259,17 @@ def main(path):
     if cc:
         when, total, bins, xlo, xhi, ylo, yhi, ew, eh, moved = cc[-1]
         total, ew, eh = int(total), int(ew), int(eh)
+        # A final census written at teardown, after the swapchain chains were
+        # gone, read "against a 0x0 eye" (take 313) -- and every percentage
+        # below divides by it. Borrow the extent from the last line that had
+        # one and SAY so; the counts on the final line still stand.
+        if not ew or not eh:
+            known = [r for r in cc if int(r[7]) and int(r[8])]
+            if known:
+                ew, eh = int(known[-1][7]), int(known[-1][8])
+                print(f"cursor     NOTE: the {when} census had no eye extent "
+                      f"(written after teardown); using {ew}x{eh} from the "
+                      f"last census that had one.")
         xlo, xhi = float(xlo), float(xhi)
         ylo, yhi = float(ylo), float(yhi)
         drew = 0
@@ -3289,9 +3305,15 @@ def main(path):
             # announcing the prediction regardless.
             rx = (xhi - xlo) / ew if ew else 0.0
             ry = (yhi - ylo) / eh if eh else 0.0
-            print(f"cursor     => DREW. Pointer was SEEN across {100.0 * rx:.0f}% "
-                  f"of the eye in x and {100.0 * ry:.0f}% in y.")
-            if rx < 0.75 or ry < 0.75:
+            if not ew or not eh:
+                print(f"cursor     => DREW, but no census carried an eye "
+                      f"extent, so the pointer range cannot be read as a "
+                      f"fraction of anything.")
+            else:
+                print(f"cursor     => DREW. Pointer was SEEN across "
+                      f"{100.0 * rx:.0f}% of the eye in x and "
+                      f"{100.0 * ry:.0f}% in y.")
+            if ew and eh and (rx < 0.75 or ry < 0.75):
                 # "Was not seen there" is not "cannot go there". This range is
                 # where the player moved the pointer, and take 308 -- a
                 # cockpit-only run -- read 0..1408 in both axes purely because
@@ -3318,7 +3340,9 @@ def main(path):
             r"cursor drawn \((\w+)\) ARM (\w) \(canvas (\w+)\): ndc "
             r"x=(-?[\d.]+)\.\.(-?[\d.]+) y=(-?[\d.]+)\.\.(-?[\d.]+) = "
             r"(\d+)%x(\d+)% of the eye \| (\d+) frame\(s\) \| channel "
-            r"says the window is (\d+) wide against a (\d+) eye", text)
+            r"says the window is (\d+) wide against a (\d+) eye"
+            r"(?:[^|\n]*\| reachable x=(-?[\d.]+)\.\.(-?[\d.]+) "
+            r"y=(-?[\d.]+)\.\.(-?[\d.]+))?", text)
         # The A/B schedule, stamped by the code that took the branch.
         ph = re.findall(r"cursor canvas: phase (\d+) — ARM (\w) \(canvas (\w+)\)",
                         text)
@@ -3339,10 +3363,13 @@ def main(path):
             for rec in cd:
                 per_arm[rec[1]] = rec
             for a in sorted(per_arm):
-                _, _, st, dxl, dxh, dyl, dyh, fx, fy, nfr, cw_, ce_ = per_arm[a]
+                (_, _, st, dxl, dxh, dyl, dyh, fx, fy, nfr, cw_, ce_,
+                 rxl, rxh, ryl, ryh) = per_arm[a]
                 print(f"cursor     ARM {a} (canvas {st}): drawn over ndc "
                       f"x={dxl}..{dxh} y={dyl}..{dyh} = {fx}%x{fy}% of the "
-                      f"eye, {nfr} frame(s)")
+                      f"eye, {nfr} frame(s)" +
+                      (f"; the map can reach x={rxl}..{rxh} y={ryl}..{ryh}"
+                       if rxl else ""))
             if len(per_arm) == 2:
                 fa = int(per_arm["A"][7])
                 fb = int(per_arm["B"][7])
@@ -3357,8 +3384,20 @@ def main(path):
                           f"{fa}% vs ARM B {fb}% — the two arms drew over the "
                           f"same region, so whatever was observed is NOT the "
                           f"canvas map and nothing here is scorable.")
-            _, _, _, dxl, dxh, dyl, dyh, fx, fy, _, cw_, ce_ = cd[-1]
+            (_, _, _, dxl, dxh, dyl, dyh, fx, fy, _, cw_, ce_,
+             rxl, rxh, ryl, ryh) = cd[-1]
             fx, fy, cw_, ce_ = int(fx), int(fy), int(cw_), int(ce_)
+            # Drawn against REACHABLE, per axis: the share of the box the map
+            # allows that the cursor actually visited. Absent on logs before
+            # the layer printed the box, and then nothing is claimed about it.
+            have_reach = bool(rxl)
+            if have_reach:
+                spx = float(rxh) - float(rxl)
+                spy = float(ryh) - float(ryl)
+                cov_x = (float(dxh) - float(dxl)) / spx if spx > 0 else 0.0
+                cov_y = (float(dyh) - float(dyl)) / spy if spy > 0 else 0.0
+                reach_fx = round(50.0 * spx)
+                reach_fy = round(50.0 * spy)
             # The single-arm CONFINED reading below describes ONE geometry. In
             # an A/B there are two and `cd[-1]` is merely whichever logged
             # last: take 311 printed "can only ever occupy 100%x67% — a border
@@ -3377,18 +3416,35 @@ def main(path):
                       f"are in different coordinate spaces, and every "
                       f"placement number here is measured across that seam — "
                       f"settle it before reading anything else.")
+            elif single_arm and have_reach and (reach_fx < 90 or
+                                                 reach_fy < 90):
+                # The geometric statement, from the map's own edges. This is
+                # what the old verdict claimed to be and was not: it read the
+                # DRAWN extent, which depends on the protocol exactly as the
+                # pointer range does (take 313: 41%x43% drawn, 52.5% reachable).
+                print(f"cursor     => CONFINED BY THE MAP. The map can place "
+                      f"the cursor over at most {reach_fx}%x{reach_fy}% of the "
+                      f"eye, whatever the player does — "
+                      f"{100 - reach_fx * reach_fy / 100.0:.0f}% of the AREA "
+                      f"unreachable. That is the canvas affine, by design; the "
+                      f"question is whether it SHOULD apply here.")
+                if cov_x < 0.95 or cov_y < 0.95:
+                    print(f"cursor     => and the pointer was not swept to the "
+                          f"map's edge: it visited {100 * cov_x:.0f}% x "
+                          f"{100 * cov_y:.0f}% of the reachable box. The drawn "
+                          f"{fx}%x{fy}% is the PROTOCOL, not the limit.")
+            elif single_arm and have_reach:
+                print(f"cursor     => the map reaches {reach_fx}%x{reach_fy}% "
+                      f"of the eye, so nothing is confining it; drawn "
+                      f"{fx}%x{fy}% is where the pointer went.")
             elif single_arm and (fx < 90 or fy < 90):
-                border = (100 - fx) / 2.0
-                print(f"cursor     => CONFINED. The cursor can only ever "
-                      f"occupy {fx}%x{fy}% of the eye — a border of about "
-                      f"{border:.0f}% of the width on every side where no "
-                      f"cursor can appear whatever the player does, and "
-                      f"{100 - fx * fy / 100.0:.0f}% of the AREA unreachable. "
-                      f"This is geometry, not protocol: unlike the pointer "
-                      f"range above it does not depend on where the mouse was "
-                      f"moved. If it matches the canvas affine, the cursor is "
-                      f"following the UI canvas by design and the question is "
-                      f"whether it SHOULD.")
+                # Older log, no reachable box: the drawn extent is all there
+                # is, and it depends on where the pointer went.
+                print(f"cursor     => drawn over {fx}%x{fy}% of the eye. This "
+                      f"log predates the reachable box, so it cannot say how "
+                      f"much of that is the map and how much the protocol — "
+                      f"the drawn extent depends on where the mouse went, "
+                      f"exactly as the pointer range does.")
             elif single_arm:
                 print(f"cursor     => the cursor reaches {fx}%x{fy}% of the "
                       f"eye, so nothing is confining it.")

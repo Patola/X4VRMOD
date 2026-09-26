@@ -22,8 +22,12 @@
 #define X4VR_LOG_TAG "test"
 #include "../layer/x4vr_cursor_draw.hpp"
 
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
+#include <unistd.h>
 #include <vector>
 
 using namespace x4vr;
@@ -77,7 +81,29 @@ static const float kPosX = 40.f, kPosY = 20.f;
 static const int32_t kQuadX = (int32_t)kPosX - kHotX; // 39
 static const int32_t kQuadY = (int32_t)kPosY - kHotY; // 19
 
+// The overlay's census goes through X4VR_LOG. Pointed at a file of our own
+// before anything logs (the stream is chosen once, on first use), so the report
+// line can be read back and checked rather than scrolled past.
+static char g_log_path[] = "/tmp/x4vr-cursor-render-XXXXXX";
+
+static std::string read_log() {
+    std::string out;
+    if (FILE *f = fopen(g_log_path, "r")) {
+        char b[1024];
+        while (fgets(b, sizeof b, f))
+            out += b;
+        fclose(f);
+    }
+    return out;
+}
+
 int main() {
+    {
+        const int fd = mkstemp(g_log_path);
+        if (fd >= 0)
+            close(fd);
+        setenv("X4VR_LOG", g_log_path, 1);
+    }
     VkApplicationInfo app{};
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     app.apiVersion = VK_API_VERSION_1_2;
@@ -351,6 +377,36 @@ int main() {
     const bool drew = overlay.record(
         cb, {eye, 0, 1, fmt, {kW, kH}, kLayers}, &shared, canvas);
     ok("record() reports that it drew", drew);
+
+    // The census line #46 is scored from. Its REACHABLE box must be the map's
+    // images of the window edges, computed here independently of the overlay
+    // -- take 313's scorer called a protocol-limited 41% "geometry" because
+    // this box did not exist and the drawn extent was all it had.
+    {
+        overlay.report("test", kW, kH);
+        const std::string log = read_log();
+        const size_t at = log.find("| reachable x=");
+        ok("the drawn line reports the reachable box",
+           at != std::string::npos);
+        if (at != std::string::npos) {
+            float rxl = 0, rxh = 0, ryl = 0, ryh = 0;
+            const int n = sscanf(log.c_str() + at,
+                                 "| reachable x=%f..%f y=%f..%f", &rxl, &rxh,
+                                 &ryl, &ryh);
+            ok("the reachable box parses", n == 4);
+            const float ex0 = canvas[0].ax * -1.f + canvas[0].bx;
+            const float ex1 = canvas[0].ax * +1.f + canvas[0].bx;
+            const float ey0 = canvas[0].ay * -1.f + canvas[0].by;
+            const float ey1 = canvas[0].ay * +1.f + canvas[0].by;
+            auto near = [](float a, float b) { return fabsf(a - b) < 1e-3f; };
+            ok("reachable x is the map's image of the window's x edges",
+               near(rxl, fminf(ex0, ex1)) && near(rxh, fmaxf(ex0, ex1)));
+            ok("reachable y is the map's image of the window's y edges",
+               near(ryl, fminf(ey0, ey1)) && near(ryh, fmaxf(ey0, ey1)));
+            printf("      reachable x=%.4f..%.4f y=%.4f..%.4f\n", rxl, rxh,
+                   ryl, ryh);
+        }
+    }
 
     // The compositor's own barrier, verbatim: from COLOR_ATTACHMENT because the
     // overlay drew. If this pairing is wrong, validation says so here.

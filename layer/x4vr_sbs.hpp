@@ -301,6 +301,10 @@ public:
     // Reported even when nothing drew -- a silent overlay is the case this
     // exists for, and it is the case that produced identical logs in takes
     // 305 and 306.
+    //
+    // The LAST extent seen is kept, because the final report runs at teardown
+    // after the chains are gone: take 313's final census read "against a 0x0
+    // eye" and dropped its drawn lines, and the scorer reads the last line.
     void cursor_report(const char *when) {
         VkExtent2D eye{};
         {
@@ -310,6 +314,10 @@ public:
                     eye = kv.second.eye;
                     break;
                 }
+            if (eye.width)
+                cursor_eye_ = eye;
+            else
+                eye = cursor_eye_;
         }
         cursor_.report(when, eye.width, eye.height);
     }
@@ -903,6 +911,7 @@ private:
     VkPhysicalDeviceMemoryProperties mem_{};
     std::unordered_map<VkSwapchainKHR, Chain> chains_;
     CursorOverlay cursor_;
+    VkExtent2D cursor_eye_{}; // last non-zero eye cursor_report() saw
 };
 
 } // namespace x4vr
