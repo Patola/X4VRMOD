@@ -88,11 +88,23 @@ say "no runtime: says so, and refuses" "$ok" "logged"
 # --- a live runtime --------------------------------------------------------
 #
 # Skipped rather than failed when nothing is up, and SAID rather than passed
-# silently: active_runtime.json only exists while WiVRn or SteamVR is running,
-# so a green run on a machine with the headset off would otherwise be reporting
+# silently, so a green run on a machine with the headset off does not report
 # on a case it never executed.
-if [[ -e "$HOME/.config/openxr/1/active_runtime.json" ]] ||
-   [[ -n "${XR_RUNTIME_JSON:-}" && -e "${XR_RUNTIME_JSON:-}" ]]; then
+#
+# "Up" means a runtime PROCESS, not a manifest. This used to test for
+# active_runtime.json on the belief that it only exists while a runtime runs.
+# It does not: WiVRn points it at itself while running and RESTORES the
+# previous target on exit, which here is SteamVR's -- so with nothing running
+# the file still resolved, xrCreateInstance went looking for a SteamVR that was
+# not there, and three cases failed on a 5.3 s stall that was the harness's
+# premise, not the layer (found 2026-09-26, after take 313).
+live_runtime() {
+    pgrep -x wivrn-server >/dev/null 2>&1 && return 0
+    pgrep -x vrserver >/dev/null 2>&1 && return 0
+    pgrep -x monado-service >/dev/null 2>&1 && return 0
+    return 1
+}
+if live_runtime; then
     ms=$(drive "live runtime" rt.log)
     say "runtime source: does not stall" \
         "$([[ $ms -lt 2000 ]] && echo 1 || echo 0)" "${ms} ms"
@@ -120,7 +132,7 @@ if [[ -e "$HOME/.config/openxr/1/active_runtime.json" ]] ||
     say "explicit angles: canvas B_x mirrors per eye" "$ok" "+/-0.24251"
 else
     printf 'skip %-42s %s\n' "live runtime cases" \
-        "no active_runtime.json — start WiVRn/SteamVR to run these"
+        "no runtime process (wivrn-server/vrserver/monado-service) — start one to run these"
 fi
 
 # --- knob independence: #22/#39 must not ride on the bindless gate ----------
