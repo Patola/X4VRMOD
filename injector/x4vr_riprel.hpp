@@ -32,18 +32,25 @@
 
 namespace x4vr {
 
-// If `fn` begins with `mov disp32(%rip),%rdx` (REX.W 8B /r, ModRM 0x15), the
-// address of the 8-byte slot it loads; otherwise nullptr. RIP-relative
-// displacements count from the END of the instruction, which is 7 bytes long.
-inline const void *const *riprel_rdx_load_slot(const void *fn) {
-    if (!fn)
+// If `insn` is `mov disp32(%rip),%<reg>` for one of the eight legacy 64-bit
+// registers (REX.W 8B /r with ModRM mod=00 rm=101, reg field = `reg`, 0=rax
+// .. 7=rdi), the address of the 8-byte slot it loads; otherwise nullptr.
+// RIP-relative displacements count from the END of the instruction, which is
+// 7 bytes long.
+inline const void *const *riprel_mov_load_slot(const void *insn, int reg) {
+    if (!insn || reg < 0 || reg > 7)
         return nullptr;
-    const uint8_t *p = static_cast<const uint8_t *>(fn);
-    if (p[0] != 0x48 || p[1] != 0x8b || p[2] != 0x15)
+    const uint8_t *p = static_cast<const uint8_t *>(insn);
+    if (p[0] != 0x48 || p[1] != 0x8b || p[2] != (uint8_t)(0x05 | (reg << 3)))
         return nullptr;
     int32_t disp;
     memcpy(&disp, p + 3, sizeof disp);
     return reinterpret_cast<const void *const *>(p + 7 + disp);
+}
+
+// IsHUDActive's first instruction: the load into rdx (reg 2).
+inline const void *const *riprel_rdx_load_slot(const void *fn) {
+    return riprel_mov_load_slot(fn, 2);
 }
 
 } // namespace x4vr

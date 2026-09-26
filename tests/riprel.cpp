@@ -77,6 +77,15 @@ int main() {
     check(!x4vr::riprel_rdx_load_slot(buf + 64), "refuses a non-RIP base");
     check(!x4vr::riprel_rdx_load_slot(nullptr), "refuses a null function");
 
+    // The general form, for GetCameraRotation's `mov disp32(%rip),%rax`.
+    emit(buf, 64, 200, 0x48, 0x8b, 0x05);
+    check(x4vr::riprel_mov_load_slot(buf + 64, 0) ==
+              reinterpret_cast<const void *const *>(buf + 200),
+          "rax form decodes when asked for rax");
+    check(!x4vr::riprel_mov_load_slot(buf + 64, 2),
+          "rax form is refused when asked for rdx");
+    check(!x4vr::riprel_mov_load_slot(buf + 64, 8), "refuses reg 8 (needs REX.R)");
+
     // The real prologue, when the game and binutils are both here.
     const char *x4 = "/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4";
     FILE *f = fopen(x4, "rb");
@@ -127,6 +136,53 @@ int main() {
                     check(target == 0x3db6e48,
                           "real prologue decodes to the global the cores NULLed");
                 }
+            }
+        }
+    }
+
+    // GetCameraRotation+0xd: the load of the object the camera hangs off,
+    // which the camera-state scan starts from. gdb and objdump both put its
+    // global at 0x3db6948.
+    if (FILE *g = fopen(x4, "rb")) {
+        fclose(g);
+        const std::string nm2 =
+            run(std::string("nm -D --defined-only '") + x4 +
+                "' 2>/dev/null | awk '$3==\"GetCameraRotation\"{print $1}'");
+        const unsigned long a2 = strtoul(nm2.c_str(), nullptr, 16);
+        if (a2) {
+            char cmd[512];
+            snprintf(cmd, sizeof cmd,
+                     "objdump -d --start-address=0x%lx --stop-address=0x%lx "
+                     "'%s' 2>/dev/null | grep -E '^ +[0-9a-f]+:' | head -1",
+                     a2 + 0xd, a2 + 0xd + 7, x4);
+            const std::string line = run(cmd);
+            uint8_t code[7] = {};
+            int got = 0;
+            const char *p = strchr(line.c_str(), ':');
+            while (p && got < 7) {
+                while (*p == ':' || *p == ' ' || *p == '\t')
+                    p++;
+                char *end = nullptr;
+                const unsigned long v = strtoul(p, &end, 16);
+                if (end != p + 2)
+                    break;
+                code[got++] = (uint8_t)v;
+                p = end;
+            }
+            if (got == 7) {
+                const void *const *s = x4vr::riprel_mov_load_slot(code, 0);
+                check(s != nullptr,
+                      "real GetCameraRotation+0xd is mov disp32(%rip),%rax");
+                if (s) {
+                    const unsigned long target =
+                        a2 + 0xd + (unsigned long)((const uint8_t *)s - code);
+                    printf("      decoded global at 0x%lx\n", target);
+                    check(target == 0x3db6948,
+                          "GetCameraRotation's root global is 0x3db6948");
+                }
+            } else {
+                printf("skip  GetCameraRotation+0xd — objdump gave %d byte(s)\n",
+                       got);
             }
         }
     }

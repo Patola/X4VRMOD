@@ -20,6 +20,7 @@
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/uio.h>
 #include <stdarg.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -52,6 +53,7 @@ extern char **environ;
 #include "../common/x4vr_headlook.hpp"
 #include "../common/x4vr_plantid.hpp"
 #include "x4vr_riprel.hpp"
+#include "x4vr_camscan.hpp"
 #include "x4vr_lua.hpp"
 #include "../common/x4vr_shquote.hpp"
 
@@ -2263,6 +2265,185 @@ static bool x4_panel_mode() {
     return panel ? panel() : false;
 }
 
+// **X4VR_CAMSCAN=1 — where does X4 keep its free-look angle? Read-only.**
+//
+// Head-look holds MOUSELOOK because X4 exposes no camera SETTER, and holding
+// MOUSELOOK is what kills cockpit hover (takes 312/313). Patola asked for the
+// view to be moved "by our own means". The survey that closed the door looked
+// for setter functions; it never looked at the state. This finds the state:
+// see x4vr_camscan.hpp for the matching, and the reasoning.
+//
+// The objects scanned are the ones GetCameraRotation itself reads: its root
+// global (decoded from its own `mov disp32(%rip),%rax` at +0xd, refusing any
+// other form) and the camera node at root+0x3e8, plus every pointer-looking
+// slot in the first 1 KB of each, one level deep. Any of those can be freed or
+// moved under us, so NOTHING here dereferences X4's heap directly:
+// process_vm_readv on our own pid answers an unmapped address with EFAULT
+// instead of a fault, and a failed read is simply a region missing that sample.
+static bool camscan_enabled() {
+    static const bool on = x4vr::env_on("X4VR_CAMSCAN", false);
+    return on;
+}
+
+static bool self_read(uintptr_t addr, void *out, size_t n) {
+    if (!addr)
+        return false;
+    struct iovec local {out, n};
+    struct iovec remote {(void *)addr, n};
+    return process_vm_readv(getpid(), &local, 1, &remote, 1, 0) == (ssize_t)n;
+}
+
+namespace {
+struct CamScanState {
+    x4vr::camscan::Scanner scan;
+    // Region paths, fixed at the first sample so a candidate's index keeps its
+    // meaning: 0 = root, 1 = cam, then children as (parent index, offset).
+    struct Child {
+        int parent;
+        uint32_t off;
+    };
+    std::vector<Child> children;
+    bool mapped = false;
+    uint64_t reports = 0;
+    size_t last_survivors = (size_t)-1;
+    size_t bytes_last = 0;
+    int regions_last = 0;
+};
+CamScanState g_camscan;
+constexpr size_t kScanRootBytes = 0x2000, kScanChildBytes = 0x800;
+constexpr uint32_t kScanPtrWindow = 0x400;
+constexpr size_t kScanMaxChildren = 48;
+} // namespace
+
+static void camscan_tick() {
+    if (!camscan_enabled())
+        return;
+    // ~10 Hz: the answer needs many DISTINCT angles, not many samples.
+    static timespec last{};
+    timespec now{};
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    const double dt = (double)(now.tv_sec - last.tv_sec) +
+                      (double)(now.tv_nsec - last.tv_nsec) * 1e-9;
+    if (dt < 0.1)
+        return;
+    last = now;
+
+    using Fn = X4Rotation (*)();
+    static Fn get = (Fn)dlsym(RTLD_DEFAULT, "GetCameraRotation");
+    static const void *const *root_slot = [] {
+        const void *const *s =
+            get ? x4vr::riprel_mov_load_slot((const uint8_t *)(void *)get + 0xd,
+                                             0)
+                : nullptr;
+        X4VR_LOG("camscan: GetCameraRotation %s, root global %p — %s",
+                 get ? "resolved" : "NOT FOUND", (const void *)s,
+                 s ? "scanning the objects it reads (read-only, EFAULT-safe)"
+                   : "its +0xd did NOT decode as mov disp32(%rip),%rax, so "
+                     "the scan is OFF rather than aimed at a guess");
+        return s;
+    }();
+    if (!get || !root_slot)
+        return;
+
+    uintptr_t root = 0, cam = 0;
+    if (!self_read((uintptr_t)root_slot, &root, 8) || !root)
+        return; // X4 has not built it yet, or has torn it down
+    if (!self_read(root + 0x3e8, &cam, 8) || !cam)
+        return;
+    // Same order as GetCameraRotation: the angle, then the memory, both on
+    // X4's thread between frames, so they describe the same instant.
+    const X4Rotation r = get();
+
+    CamScanState &st = g_camscan;
+    const uintptr_t bases[2] = {root, cam};
+    if (!st.mapped) {
+        st.mapped = true;
+        for (int parent = 0; parent < 2; parent++) {
+            uint8_t win[kScanPtrWindow];
+            if (!self_read(bases[parent], win, sizeof win))
+                continue;
+            for (uint32_t off = 0; off + 8 <= kScanPtrWindow; off += 8) {
+                uintptr_t v;
+                memcpy(&v, win + off, 8);
+                // Pointer-looking: aligned, user-space, not a tiny integer,
+                // not the two roots, and actually readable right now.
+                if ((v & 7) || v < 0x10000 || v >= 0x800000000000ull ||
+                    v == root || v == cam)
+                    continue;
+                uint8_t probe[16];
+                if (!self_read(v, probe, sizeof probe))
+                    continue;
+                st.children.push_back({parent, off});
+                if (st.children.size() >= kScanMaxChildren)
+                    break;
+            }
+            if (st.children.size() >= kScanMaxChildren)
+                break;
+        }
+        X4VR_LOG("camscan: %zu child object(s) one pointer deep from root and "
+                 "cam (first %u bytes of each); scanning root and cam %zu "
+                 "bytes, children %zu bytes each. The state is found only if "
+                 "it lives inside this range",
+                 st.children.size(), kScanPtrWindow, kScanRootBytes,
+                 kScanChildBytes);
+    }
+
+    std::vector<x4vr::camscan::Region> regions(2 + st.children.size());
+    size_t bytes = 0;
+    int readable = 0;
+    auto grab = [&](x4vr::camscan::Region &rg, uintptr_t base, size_t n) {
+        rg.bytes.assign(n, 0);
+        if (base && self_read(base, rg.bytes.data(), n)) {
+            bytes += n;
+            readable++;
+        } else {
+            rg.bytes.clear();
+        }
+    };
+    regions[0].name = "root";
+    regions[1].name = "cam";
+    grab(regions[0], root, kScanRootBytes);
+    grab(regions[1], cam, kScanRootBytes);
+    for (size_t i = 0; i < st.children.size(); i++) {
+        const auto &c = st.children[i];
+        char nm[48];
+        snprintf(nm, sizeof nm, "%s->[0x%x]", c.parent ? "cam" : "root", c.off);
+        regions[2 + i].name = nm;
+        uintptr_t child = 0;
+        self_read(bases[c.parent] + c.off, &child, 8);
+        grab(regions[2 + i], child, kScanChildBytes);
+    }
+    st.bytes_last = bytes;
+    st.regions_last = readable;
+    st.scan.observe(regions, r.yaw, r.pitch);
+}
+
+// With the 2 s report block. A summary always; candidates when there are any,
+// and only when their number changed or every 10th report, so a long run
+// does not bury the log.
+static void camscan_report() {
+    if (!camscan_enabled())
+        return;
+    CamScanState &st = g_camscan;
+    const x4vr::camscan::Scanner &sc = st.scan;
+    const auto sv = sc.survivors();
+    X4VR_LOG("camscan: %llu sample(s), camera yaw span %.1f deg, pitch span "
+             "%.1f deg | %d region(s) %zu bytes readable | discoveries %llu, "
+             "alive %zu, eliminated %llu%s | SURVIVORS %zu",
+             (unsigned long long)sc.samples(), sc.yaw_span_deg(),
+             sc.pitch_span_deg(), st.regions_last, st.bytes_last,
+             (unsigned long long)sc.discoveries(), sc.alive(),
+             (unsigned long long)sc.eliminated(),
+             sc.capped() ? ", CAPPED at the candidate limit" : "", sv.size());
+    const bool say = sv.size() != st.last_survivors || (st.reports % 10) == 0;
+    st.reports++;
+    st.last_survivors = sv.size();
+    if (!say)
+        return;
+    for (size_t i = 0; i < sv.size() && i < 8; i++)
+        X4VR_LOG("camscan: CANDIDATE %s", sc.describe(sv[i]).c_str());
+}
+
 static bool camread_enabled() {
     static const bool on = [] {
         const char *e = getenv("X4VR_CAMREAD");
@@ -4001,6 +4182,7 @@ void pumprate_report() {
     pad_report();
     note_extent_report();
     cursor_sets_report();
+    camscan_report();
 
     g_pumprate.entered = g_pumprate.nopose = 0;
     g_pumprate.fresh = g_pumprate.skipped = 0;
@@ -4244,6 +4426,7 @@ void SDL_PumpEvents(void) {
         if (!tick_hz())
             headlook_tick();
         panprobe_tick();
+        camscan_tick();
         pumprate_report();
     }
     real_fn();
