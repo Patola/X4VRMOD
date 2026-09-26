@@ -225,6 +225,80 @@ plant /tmp/census-ab-onearm.log "$(cur 'drew 2000' 0 2816 0 2816 moved)" \
     "$(phase 0 A)" "$(drawn 0.5252 2816 2816 A)"
 want "one arm -> refuses the comparison" /tmp/census-ab-onearm.log cursor "DID NOT ALTERNATE"
 
+# The knob verdict reads the MAP's boxes, not the drawn extents. Take 314's
+# ARM B was swept over less of the eye than a full sweep would give; a run
+# that barely moved the pointer in ARM B would have read "did not act" off the
+# drawn extents while the map was genuinely different.
+plant /tmp/census-ab-unswept.log "$(cur 'drew 2000' 0 2816 0 2816 moved)" \
+    "$(phase 0 A)" "$(phase 1 B)" \
+    "$(drawn 0.4 2816 2816 A 0.5252)" "$(drawn 0.2 2816 2816 B 1.0)"
+want "unswept ARM B -> still says the knob acted" /tmp/census-ab-unswept.log cursor "THE KNOB ACTED. The map lets ARM A reach 53%"
+plant /tmp/census-ab-samebox.log "$(cur 'drew 2000' 0 2816 0 2816 moved)" \
+    "$(phase 0 A)" "$(phase 1 B)" \
+    "$(drawn 0.5 2816 2816 A 0.5252)" "$(drawn 0.3 2816 2816 B 0.5252)"
+want "equal boxes -> the knob did NOT act" /tmp/census-ab-samebox.log cursor "THE KNOB DID NOT ACT. Both arms' maps"
+
+# X4's hover rate per arm. The arm moves only our drawing, so the rate must
+# match; take 314 read 1.97 vs 1.89/s. Timestamped lines, because the split
+# is by the phase schedule.
+tphase() {  # tphase <t> <n> <A|B>
+    st="ON"; [ "$3" = B ] && st="OFF"
+    printf '[ %s] layer   cursor canvas: phase %s — ARM %s (canvas %s). x' "$1" "$2" "$3" "$st"
+}
+tsets() {  # tsets <t> <changes>
+    printf '[ %s] inject  cursor sets: %s set(s) — handle found %s, NOT found 0, null 0 | %s were a CHANGE (0 while head-look was STEERING, %s while it was NOT; %s in the COCKPIT, 0 elsewhere) | 3 mouse button press(es)' "$1" "$2" "$2" "$2" "$2" "$2"
+}
+plant /tmp/census-rate-same.log "$(tphase 224000.000 0 A)" "$(tsets 224001.000 0)" \
+    "$(tsets 224011.000 20)" "$(tphase 224020.000 1 B)" "$(tsets 224021.000 22)" \
+    "$(tsets 224031.000 41)"
+want "same rate -> per-arm line"  /tmp/census-rate-same.log cursor-set "per arm: ARM A 20 change(s)"
+want "same rate -> says it must match" /tmp/census-rate-same.log cursor-set "same rate in both arms"
+plant /tmp/census-rate-diff.log "$(tphase 224000.000 0 A)" "$(tsets 224001.000 0)" \
+    "$(tsets 224011.000 40)" "$(tphase 224020.000 1 B)" "$(tsets 224021.000 42)" \
+    "$(tsets 224031.000 45)"
+want "different rate -> flags it" /tmp/census-rate-diff.log cursor-set "HOVER RATE DEPENDS ON THE ARM"
+
+# The UI-vs-cursor shift check. It looked for a `canvas shift` line the
+# overlay stopped printing, and told take 314 -- 18135 draws -- that the
+# overlay never drew. The map is on the first-draw line; read that.
+fdraw() {  # fdraw <ax> <bx>
+    printf '[  223999.500] layer   cursor: drawing 32x32 hot=(15,15) into 2 layer(s) of the 2816x2816 eye — first at x=915.0 y=463.0 (channel says visible), texture B8G8R8A8_UNORM into an eye of B8G8R8A8_UNORM, canvas eye0 A=(%s,%s) B=(%s,+0.00000) -> hotspot moves +1.0,+1.0 px' "$1" "$1" "$2"
+}
+plant /tmp/census-shift-agree.log "$(fdraw 0.5252 +0.00002)"
+want "shift agrees -> says so" /tmp/census-shift-agree.log canvas "pointer and UI agree"
+absent "shift agrees -> no 'never drew'" /tmp/census-shift-agree.log "canvas  \(the cursor overlay never drew"
+plant /tmp/census-shift-bad.log "$(fdraw 0.5252 +0.01000)"
+want "shift disagrees -> FAIL" /tmp/census-shift-bad.log FAIL "the pointer sits off every button"
+plant /tmp/census-shift-raw.log "$(fdraw 1.0000 +0.00000)"
+want "raw-pointer first draw -> not comparable" /tmp/census-shift-raw.log canvas "NO canvas map (raw pointer arm)"
+if python3 tools/score_run.py /tmp/census-shift-raw.log 2>&1 | grep -qE "^FAIL.*pointer sits off"; then
+    bad "raw-pointer first draw -> FAILed for a shift it never carried"
+else
+    ok "raw-pointer first draw -> not failed for a shift it never carried"
+fi
+
+# #74 with the pose channel off: the layer refuses the shift, and the scorer
+# must FAIL it rather than read the zeros as a head that never leaned.
+plant /tmp/census-translate-off.log '[  223999.000] layer   head translate: ASKED FOR BUT INACTIVE — X4VR_POSE is off, so the shaders cannot shift the eye.'
+want "translate without pose -> FAIL names X4VR_POSE" /tmp/census-translate-off.log FAIL "Add X4VR_POSE=1 — it is not implied. This run says nothing about #74"
+
+# ------------------------------------------- the camera-state scan (camscan)
+csum() {  # csum <samples> <yawspan> <pitchspan> <survivors>
+    printf '[  224100.000] inject  camscan: %s sample(s), camera yaw span %s deg, pitch span %s deg | 50 region(s) 110592 bytes readable | discoveries 2, alive %s, eliminated 900 | SURVIVORS %s' "$1" "$2" "$3" "$4" "$4"
+}
+plant /tmp/census-camscan-still.log "$(csum 600 4.0 2.0 0)"
+want "camscan still camera -> NOT EXERCISED" /tmp/census-camscan-still.log camscan "NOT EXERCISED"
+absent "camscan still camera -> no bounded-null claim" /tmp/census-camscan-still.log "camscan  => NOTHING TRACKED"
+plant /tmp/census-camscan-null.log "$(csum 600 80.0 30.0 0)"
+want "camscan swept, none -> bounded null" /tmp/census-camscan-null.log camscan "A bounded null, not 'there is none'"
+plant /tmp/census-camscan-found.log "$(csum 600 80.0 30.0 2)" \
+    '[  224100.000] inject  camscan: CANDIDATE cam->[0x58]+0x40 yaw +deg float — 300 hit(s) at 61 distinct angle(s), 1 miss(es)'
+want "camscan found -> names the candidates" /tmp/census-camscan-found.log camscan "SLOT(S) TRACKED"
+want "camscan found -> lists the slot" /tmp/census-camscan-found.log camscan "cam->[0x58]+0x40 yaw +deg float"
+plant /tmp/census-camscan-off.log '[  224100.000] inject  camscan: GetCameraRotation resolved, root global (nil) — its +0xd did NOT decode as mov disp32(%rip),%rax, so the scan is OFF rather than aimed at a guess'
+want "camscan undecodable -> FAIL" /tmp/census-camscan-off.log FAIL "the scan never started"
+absent "camscan absent -> silent" "$BASE" camscan
+
 # NEGATIVE CONTROL: a log with no census line must stay silent, or "not
 # measured" and "measured zero" become the same reading -- the exact defect
 # this block was written to end.
@@ -263,11 +337,11 @@ fi
 
 plant /tmp/census-set-nohover.log "$(sets 400 400 0 0 1 0 1 1 0 0)"
 want "no change -> X4 never saw a hover" /tmp/census-set-nohover.log cursor-set "NEVER CHANGED THE CURSOR"
-want "no change -> exonerates the canvas" /tmp/census-set-nohover.log cursor-set "canvas map is not the cause"
+want "no change -> exonerates the canvas" /tmp/census-set-nohover.log cursor-set "expected reading, not a placement result"
 
 plant /tmp/census-set-hover.log "$(sets 400 400 0 0 37 5 32 30 7 2)"
 want "changes -> hover registered"   /tmp/census-set-hover.log cursor-set "DID CHANGE THE CURSOR 37 time(s)"
-want "changes -> flags the conflict" /tmp/census-set-hover.log cursor-set "contradicts takes 310/311"
+want "changes -> flags the conflict" /tmp/census-set-hover.log cursor-set "only the player can say whether it was on the object"
 
 # **Patola's first question made this case necessary.** Head-look holds
 # MOUSELOOK and #71 established that holding MOUSELOOK is how X4 suspends mouse

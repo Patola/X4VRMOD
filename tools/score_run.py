@@ -430,16 +430,42 @@ def main(path):
         # before it was published -- which would put the pointer a fixed
         # distance from every button it activates, in a frame where both
         # features report success.
+        #
+        # The overlay stopped printing a `canvas shift` line long ago, and this
+        # check then printed "the cursor overlay never drew" on every take --
+        # including 314, which drew 18135 times. The map it applies is on its
+        # first-draw line as `canvas eye0 A=(ax,ay) B=(bx,by)`; read that.
         cur = next((ln for ln in lines if "canvas shift" in ln), None)
-        if canvas_cfg and cur:
-            want = re.search(r" s=([\d.eE+-]+) NDC", canvas_cfg)
-            got = re.search(r"canvas shift ([\d.eE+-]+) NDC", cur)
-            if want and got and abs(float(want.group(1)) -
-                                    float(got.group(1))) > 1e-6:
+        first = next((ln for ln in lines if "cursor: drawing" in ln), None)
+        want = re.search(r" s=([\d.eE+-]+) NDC", canvas_cfg) if canvas_cfg \
+            else None
+        got = None
+        if cur:
+            m = re.search(r"canvas shift ([\d.eE+-]+) NDC", cur)
+            got = float(m.group(1)) if m else None
+        elif first:
+            m = re.search(r"canvas eye0 A=\(([\d.eE+-]+),([\d.eE+-]+)\) "
+                          r"B=\(([\d.eE+-]+),([\d.eE+-]+)\)", first)
+            if m:
+                ax, bx = float(m.group(1)), float(m.group(3))
+                # An arm with no canvas map (X4VR_CURSOR_CANVAS=0, or ARM B of
+                # the A/B) draws at the raw pointer: identity, and no shift to
+                # compare. Saying so beats failing it for a shift it was never
+                # meant to carry.
+                if abs(ax - 1.0) < 1e-4 and abs(bx) < 1e-9:
+                    print("canvas  cursor's first draw had NO canvas map (raw "
+                          "pointer arm), so its shift is not comparable")
+                else:
+                    got = bx
+        if canvas_cfg and want and got is not None:
+            if abs(float(want.group(1)) - got) > 1e-6:
                 fails.append(f"the UI was shifted by {want.group(1)} but the "
-                             f"cursor by {got.group(1)} — the pointer sits off "
+                             f"cursor by {got:+.5f} — the pointer sits off "
                              "every button it activates")
-        elif canvas_cfg and not cur:
+            else:
+                print(f"canvas  cursor carries the UI's shift ({got:+.5f} "
+                      f"NDC) — pointer and UI agree")
+        elif canvas_cfg and not cur and not first:
             print("canvas  (the cursor overlay never drew, so its shift is "
                   "unchecked)")
 
@@ -2121,7 +2147,16 @@ def main(path):
                     r"(-?\d+\.\d+)\) m in head axes -> published "
                     r"\((-?\d+\.\d+), (-?\d+\.\d+)\)([^\n]*)", text)
     asked = "X4VR_HEAD_TRANSLATE=1" in (run or "")
-    if tv:
+    if "head translate: ASKED FOR BUT INACTIVE" in text:
+        # Ranked first: every sample below would read a published 0.0000 and
+        # look like a head that never leaned, when the shift was REFUSED.
+        fails.append(
+            "X4VR_HEAD_TRANSLATE was asked for but the pose channel is off, so "
+            "the layer refused the shift (the shaders could not apply it, and "
+            "declaring it anyway makes the compositor warp a lean that is not "
+            "in the image). Add X4VR_POSE=1 — it is not implied. This run says "
+            "nothing about #74")
+    elif tv:
         txs = [abs(float(a[3])) for a in tv]
         tys = [abs(float(a[4])) for a in tv]
         raws = [max(abs(float(a[0])), abs(float(a[1]))) for a in tv]
@@ -3370,7 +3405,23 @@ def main(path):
                       f"eye, {nfr} frame(s)" +
                       (f"; the map can reach x={rxl}..{rxh} y={ryl}..{ryh}"
                        if rxl else ""))
-            if len(per_arm) == 2:
+            if len(per_arm) == 2 and per_arm["A"][12] and per_arm["B"][12]:
+                # The map's own boxes decide whether the arms differed. The
+                # drawn extents below depend on where the pointer went, so a
+                # run that never swept ARM B would have read "did not act".
+                ra = float(per_arm["A"][13]) - float(per_arm["A"][12])
+                rb = float(per_arm["B"][13]) - float(per_arm["B"][12])
+                if abs(ra - rb) > 0.02:
+                    print(f"cursor     => THE KNOB ACTED. The map lets ARM A "
+                          f"reach {50 * ra:.0f}% of the eye's width and ARM B "
+                          f"{50 * rb:.0f}%. Patola's report decides which arm "
+                          f"is BETTER; this line only says the two arms were "
+                          f"genuinely different.")
+                else:
+                    print(f"cursor     => THE KNOB DID NOT ACT. Both arms' "
+                          f"maps reach {50 * ra:.0f}% of the width — whatever "
+                          f"was observed is NOT the canvas map.")
+            elif len(per_arm) == 2:
                 fa = int(per_arm["A"][7])
                 fb = int(per_arm["B"][7])
                 if fb > fa + 10:
@@ -3489,11 +3540,17 @@ def main(path):
                   f"SDL_SetCursor and both are hooked, so this is OURS — a "
                   f"capture that missed, not an unhooked API.")
         elif chg <= 1:
+            hl_on = bool(re.search(r"\bX4VR_HEADLOOK=1\b", run or ""))
             print(f"cursor-set => X4 NEVER CHANGED THE CURSOR ({chg} change). "
                   f"It set one and kept it, so it never saw the pointer over "
-                  f"anything clickable. The canvas map is not the cause (take "
-                  f"311's ARM B drew at the raw pointer and hover still "
-                  f"failed), so the question is what position X4 hit-tests.")
+                  f"anything clickable. " +
+                  ("Head-look was ON, and takes 312/313 showed head-look ON "
+                   "suppresses cockpit hover (313, head-look off: 107 "
+                   "click-free changes) — so this is the expected reading, not "
+                   "a placement result." if hl_on else
+                   "Head-look was OFF, where takes 313/314 saw hover work — "
+                   "so this is NOT the known suppression and needs its own "
+                   "explanation."))
         elif view_unknown:
             print(f"cursor-set => THE VIEW WAS NEVER STAMPED, so the "
                   f"cockpit/elsewhere split is meaningless here — it reads "
@@ -3519,13 +3576,49 @@ def main(path):
         else:
             print(f"cursor-set => X4 DID CHANGE THE CURSOR {chg} time(s), and "
                   f"we published every one. So hover registered and the shape "
-                  f"changed on screen — which contradicts takes 310/311 and "
-                  f"means the earlier reading was of a different failure.")
+                  f"changed on screen. WHERE the drawn cursor sat when it "
+                  f"changed is not in this log — only the player can say "
+                  f"whether it was on the object.")
             if btn and chg <= btn + 1:
                 print(f"cursor-set    CAUTION: {btn} button press(es) against "
                       f"{chg} change(s). Clicking changes the shape too, so "
                       f"these changes may ALL be clicks and none of them a "
                       f"hover. Not attributable from this run.")
+        # Per A/B arm. The arm changes only where WE draw the cursor, never
+        # what X4 hit-tests, so X4's change rate must be the same in both:
+        # take 314 read 1.97 vs 1.89 changes/s. A large difference would mean
+        # the knob reached X4's picking -- something besides the drawing moved.
+        ph_t = [(float(t), a) for t, a in re.findall(
+            r"\[\s*([\d.]+)\] layer   cursor canvas: phase \d+ — ARM (\w)",
+            text)]
+        cs_t = [(float(t), float(c)) for t, c in re.findall(
+            r"\[\s*([\d.]+)\] inject  cursor sets: \d+ set\(s\).*?\| "
+            r"(\d+) were a CHANGE", text)]
+        if len({a for _, a in ph_t}) == 2 and len(cs_t) > 2:
+            acc = {"A": [0.0, 0.0], "B": [0.0, 0.0]}
+            for (t0, c0), (t1, c1) in zip(cs_t, cs_t[1:]):
+                arm = None
+                for tp, a in ph_t:
+                    if tp <= t1:
+                        arm = a
+                if arm in acc:
+                    acc[arm][0] += c1 - c0
+                    acc[arm][1] += t1 - t0
+            ra = acc["A"][0] / acc["A"][1] if acc["A"][1] else 0.0
+            rb = acc["B"][0] / acc["B"][1] if acc["B"][1] else 0.0
+            print(f"cursor-set per arm: ARM A {acc['A'][0]:.0f} change(s) in "
+                  f"{acc['A'][1]:.0f} s ({ra:.2f}/s), ARM B {acc['B'][0]:.0f} "
+                  f"in {acc['B'][1]:.0f} s ({rb:.2f}/s)")
+            lo, hi = min(ra, rb), max(ra, rb)
+            if hi > 0 and lo < 0.5 * hi:
+                print(f"cursor-set => X4's HOVER RATE DEPENDS ON THE ARM "
+                      f"({ra:.2f} vs {rb:.2f}/s). The arm only moves our "
+                      f"drawing, so X4's picking should not see it — either "
+                      f"the player hovered far less in one arm, or the knob "
+                      f"reached something it should not.")
+            elif hi > 0:
+                print(f"cursor-set => same rate in both arms, as it must be: "
+                      f"the arm moves only our drawing, not X4's picking.")
     elif cz:
         print(f"cursor-set 0 set(s) — X4 built {cz.group(1)} cursor(s) and set "
               f"none")
@@ -3534,6 +3627,54 @@ def main(path):
               f"anything clickable. Printed rather than inferred from silence: "
               f"this is the most informative of the three outcomes and an "
               f"early return here would have looked like an old build.")
+
+    # --- where does X4 keep its free-look angle? (X4VR_CAMSCAN) ------------
+    #
+    # Read-only. Silent unless the knob ran, so "not measured" never reads as
+    # "measured nothing". A null only counts if the camera actually swept:
+    # the scan discovers a slot only when the angle leaves +-5 degrees, and a
+    # run that never turned the view had nothing to find.
+    csum = re.findall(
+        r"camscan: (\d+) sample\(s\), camera yaw span ([\d.]+) deg, pitch "
+        r"span ([\d.]+) deg \| (\d+) region\(s\) (\d+) bytes readable \| "
+        r"discoveries (\d+), alive (\d+), eliminated (\d+)(, CAPPED[^|]*)? \| "
+        r"SURVIVORS (\d+)", text)
+    coff = "camscan: GetCameraRotation" in text and "the scan is OFF" in text
+    if coff:
+        fails.append("X4VR_CAMSCAN ran but GetCameraRotation's prologue did not "
+                     "decode — the scan never started (X4 build changed?)")
+    elif csum:
+        (n, ys, ps, nreg, nbytes, disc, alive, elim, capped,
+         surv) = csum[-1]
+        n, surv = int(n), int(surv)
+        ys, ps = float(ys), float(ps)
+        print(f"camscan  {n} sample(s) | camera swept yaw {ys:.1f} deg, pitch "
+              f"{ps:.1f} deg | {nreg} region(s), {nbytes} bytes | "
+              f"discoveries {disc}, alive {alive}, eliminated {elim}"
+              f"{' — CAPPED' if capped else ''} | SURVIVORS {surv}")
+        # Most recent first, de-duplicated: the list is re-printed as it runs.
+        cands = re.findall(r"camscan: CANDIDATE (.+)", text)
+        seen = []
+        for c in cands[::-1]:
+            if c not in seen:
+                seen.append(c)
+        if ys < 10.0 and ps < 10.0:
+            print(f"camscan  => NOT EXERCISED. The camera never swept more "
+                  f"than 10 degrees on either axis, so there was nothing to "
+                  f"find — this is not a null.")
+        elif surv == 0:
+            print(f"camscan  => NOTHING TRACKED THE ANGLE across a real sweep "
+                  f"({ys:.0f} deg yaw, {ps:.0f} deg pitch). The free-look "
+                  f"state is not stored as an angle inside the scanned range "
+                  f"(root, cam, and one pointer deep) — it may be a quaternion "
+                  f"or matrix, or live further away. A bounded null, not "
+                  f"'there is none'.")
+        else:
+            print(f"camscan  => {surv} SLOT(S) TRACKED X4's ANGLE across many "
+                  f"distinct values. These are the candidates for a direct "
+                  f"camera write; a WRITE test is the next step, not this run:")
+            for c in seen[:8]:
+                print(f"camscan     {c}")
 
     # --- #71: what controllers does X4 actually see? ------------------------
     #
