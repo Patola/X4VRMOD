@@ -164,6 +164,10 @@ add_executable(x4vr_test_lua_scan lua_scan.cpp)
 
 add_executable(x4vr_test_guard_budget guard_budget.cpp)
 
+# The IsHUDActive teardown guard's decoder (X4's exit crash was ours). Checks
+# the refusals and, when X4 is installed, the real prologue. Self-checking.
+add_executable(x4vr_test_riprel riprel.cpp)
+
 # Task #73's lag, and the lead that removes it. Drives the real head_look_step
 # against a model of X4's camera. Its claim to being more than a story is that
 # it independently reproduces take 136 -- kp 1.0 spinning too fast to read --

@@ -51,6 +51,7 @@ extern char **environ;
 #include "../common/x4vr_camring.hpp"
 #include "../common/x4vr_headlook.hpp"
 #include "../common/x4vr_plantid.hpp"
+#include "x4vr_riprel.hpp"
 #include "x4vr_lua.hpp"
 #include "../common/x4vr_shquote.hpp"
 
@@ -892,7 +893,7 @@ void log_startup_env() {
         int found = 0;
         while (fgets(line, sizeof(line), f)) {
             if (!strncmp(line, "N: Name=", 8)) {
-                snprintf(name, sizeof(name), "%s", line + 8);
+                snprintf(name, sizeof(name), "%.*s", (int)sizeof(name) - 1, line + 8);
                 char *nl = strpbrk(name, "\r\n");
                 if (nl)
                     *nl = '\0';
@@ -2206,6 +2207,16 @@ static bool x4_cockpit_view() {
 // only once X4 is in relative mouse mode -- a state X4 enters for mouselook and
 // cannot reach before the HUD exists. Being declared is necessary and it is not
 // sufficient; the disassembly is the other half.
+//
+// **And it must not be called LATE either.** X4 NULLs that same global during
+// shutdown and keeps pumping events, so the latch in headlook_tick ("once seen
+// alive it stays alive") held all through play and failed at exit: both
+// surviving cores fault at IsHUDActive+7 with rdx=0, called from here. That was
+// the "X4 segfaults on exit in every run" the docs carried as harmless. So the
+// pointer is read first, from the address decoded out of IsHUDActive's own
+// first instruction (x4vr_riprel.hpp), and a NULL answers like the
+// not-yet-built case does. If the prologue ever stops decoding, that is said
+// once and the call goes ahead as before -- the old behaviour, not a guess.
 static bool x4_hud_active() {
     using Fn = bool (*)();
     static Fn hud = [] {
@@ -2213,7 +2224,28 @@ static bool x4_hud_active() {
         X4VR_LOG("camread: IsHUDActive %s", f ? "resolved" : "NOT FOUND");
         return f;
     }();
-    return hud ? hud() : true;
+    static const void *const *slot = [] {
+        const void *const *s = x4vr::riprel_rdx_load_slot((const void *)hud);
+        if (hud)
+            X4VR_LOG("camread: IsHUDActive reads its global at %p — %s", s,
+                     s ? "guarded: a NULL global is not dereferenced"
+                       : "prologue did NOT decode as mov disp32(%rip),%rdx, "
+                         "so the teardown guard is OFF and exit may crash");
+        return s;
+    }();
+    if (!hud)
+        return true;
+    if (slot && !*slot) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            X4VR_LOG("camread: X4's HUD global is NULL — X4 is tearing the "
+                     "HUD down (exit or load); IsHUDActive is not called "
+                     "while it stays NULL");
+        }
+        return true;
+    }
+    return hud();
 }
 
 // Reported, never acted on. `bool IsInPanelMode(void);` is declared and null-
