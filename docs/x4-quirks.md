@@ -22120,3 +22120,239 @@ cleared X4 itself.
 A head-look-OFF run cannot say whether hover would **also** work with head-look
 ON. It can only say whether MOUSELOOK is what suppresses it. Those are
 different questions and only the second one is being asked.
+
+## Take 313 — SCORED: hover EXISTS with head-look off, and lands in the WRONG PLACE
+
+`X4VR_HEADLOOK=0`, otherwise take 312's line. WiVRn, configuration 1 (no
+controllers, real mouse and keyboard). The map was not opened.
+
+    cursor sets   166 set(s), handle found 166, NOT found 0, null 0
+                  160 change(s) | 62 mouse button press(es)
+    first SET     at the first button press (t=153204); the 0-set line at
+                  t=153080 says X4 had built 26 cursors and SET none
+    click-free    107 of the 156 changes after the first set fell in 2 s
+                  report windows with NO new button press
+
+Patola: *"The cursor was not appearing, it only appeared after I kept the left
+mouse button pressed to steer with it. After that, I have noticed that in some
+places of the screen it would change the shape to the circle with cross inside.
+But it was the wrong area of the screen for the objects, and I could not grasp
+the pattern."* The log and his eye agree on both halves: no cursor until the
+first press, and shape changes without clicks afterwards.
+
+### Scoreboard
+
+* **P313.1 HELD.** `VIEW NEVER STAMPED` printed; the scorer refused the split.
+* **P313.2 REFUTED as written.** No map visit was needed — but a CLICK was. The
+  trigger was never the map: it is X4's first `SDL_SetCursor`, which any
+  pointer interaction produces. #64 is still "seed a default cursor", and is
+  now known not to be a MOUSELOOK artifact.
+* **P313.3 HELD in its core, WRONG in its tail.** Hover exists in the cockpit
+  with head-look off: cross-in-circle seen, 107 click-free changes. But P313.3
+  also said #46's cockpit half *"cannot be fixed by moving the cursor"* — and
+  the cross appearing in the wrong area is exactly a placement defect. There
+  are TWO things: head-look suppresses hover, and once hover exists it is
+  misplaced.
+
+**One caveat on the attribution.** 312 -> 313 changed one KNOB and three
+mechanisms with it: the MOUSELOOK hold, the inputmap rewrite, and our
+`xrel`/`yrel` drop. "Head-look ON suppresses cockpit hover" is established;
+which of the three does it is not.
+
+### The misplacement is take 310's arithmetic, which take 311 could not test
+
+`cursor_canvas()`'s comment derived it at take 310: X4 hit-tests the world at
+the RAW pointer `n`, while the canvas draws the cursor at `A·n` with
+`A = 0.5252`. So the cross appears when the DRAWN cursor sits at about half the
+object's distance from the centre of view — right at the centre, increasingly
+wrong toward the edge. That is "the wrong area of the screen" with a pattern
+that is hard to see from inside.
+
+Take 311's A/B was built to test exactly this and read null in the cockpit —
+**because MOUSELOOK was held in both arms, so neither could show hover at
+all.** A test run where the quantity is zero ([[test-the-fix-where-it-can-act]]).
+Take 313 is the first run in which cockpit hover exists, so the A/B can now
+act. That is P314.
+
+### The design conflict this exposes
+
+Head-look drives X4's camera THROUGH MOUSELOOK (held key plus synthetic motion).
+Cockpit hover needs MOUSELOOK released. **In the cockpit, head-look and a
+hovering cursor cannot coexist through the current mechanism.** Whatever the
+shim does about placement, it will also need a way to hand the pointer over —
+e.g. a cursor mode that pauses head-look while the player interacts, the way
+vanilla X4 hands the mouse between steering and look. Not designed here; named
+so that P314's answer is read as half of the problem.
+
+## Found by the review after take 313
+
+### X4's crash on exit was OURS — fixed
+
+The docs carried *"X4 segfaults on exit in EVERY run... harmless to the data
+because it is teardown"*. Nobody had looked at a backtrace. Both X4 cores still
+on disk (2026-09-23 23:39, 2026-09-24 00:47) have the same stack:
+
+    #0 IsHUDActive     (X4 + 0x6431d7)
+    #1 headlook_tick   (libx4vr_inject.so)
+    #2 SDL_PumpEvents  (libx4vr_inject.so — our interposer)
+
+and gdb on the core: `rdx = 0` at `IsHUDActive+7: movzbl 0x418(%rdx),%eax`,
+loaded one instruction earlier from the global at `0x3db6e48`. **X4 NULLs its
+HUD global during shutdown and keeps pumping events**, while `headlook_tick`
+had latched *"once seen alive it stays alive"* — true throughout play, false at
+exit. Take 313 is the natural control: head-look off, the call never reached,
+and it is the one run with no X4 core (only gamescope's).
+
+Fix: `x4_hud_active()` reads the pointer IsHUDActive is about to dereference
+and does not call it while NULL. The address is decoded from IsHUDActive's own
+first instruction (`injector/x4vr_riprel.hpp`), refusing anything but the exact
+`mov disp32(%rip),%rdx`, so an X4 update that changes the prologue logs that the
+guard is off instead of reading a wild address. `tests/riprel.cpp` plants the
+refusals and decodes the REAL binary's prologue to `0x3db6e48` — the global the
+cores NULLed. **Not yet confirmed in a run**: take 314 runs head-look off and
+cannot exercise it; the first head-look-ON take after it can, and should end
+with no X4 core in `coredumpctl`.
+
+The lesson is older than this bug: a defect filed as harmless got no backtrace
+for weeks, and the backtrace named our code in one line.
+
+### Roll stereo has been OFF since take 260 — a withdrawn elimination's knob stayed in the line
+
+`v0.77-roll-stereo` was confirmed by take 221 with the pose channel on
+(`X4VR_POSE=1`, as in every take 243-256): Patola comfortable at every head
+tilt, the control arm comfortable only when level. Take 260 set `X4VR_POSE=0`
+as an elimination, which was **withdrawn the same session** (*"the pose channel
+was uploading IDENTITY in both runs... the test could only come out one way"*).
+The knob stayed. Every canonical line since carries `X4VR_POSE=0`, so
+`X4VR_ROLL_STEREO` has patched nothing for about 55 takes, and the scorer's FAIL
+saying so was read past every time.
+
+**Not restored here, deliberately.** Everything tagged since — `v0.76-ui-field`,
+`v0.57-canvas-far`, `v0.78-steamvr` — was established with `X4VR_POSE=0`, so
+`X4VR_POSE=1` has never run alongside #76's HUD fix, and the pose channel
+carried its own standing FAIL (falls back to identity once after being driven).
+Restoring it is a take of its own with one observable — tilt the head: does the
+stereo stay fused? — and it is Patola's call when. It must not ride on a cursor
+take.
+
+### Instrument and harness defects, all fixed
+
+* **"against a 0x0 eye".** The final cursor census runs at teardown after the
+  swapchain chains are gone; take 313's read 0x0, dropped its drawn lines, and
+  the scorer (which reads the last line) printed *"SEEN across 0% of the eye"*.
+  The layer now keeps the last non-zero extent; the scorer borrows the extent
+  from the last census that had one and says so.
+* **"CONFINED... This is geometry, not protocol" was false.** It read the DRAWN
+  extent, which depends on where the pointer went exactly as the pointer range
+  does — take 313 drew 41%x43% under a map whose edge is 52.5%. The layer now
+  prints the map's REACHABLE box (its images of the window edges) beside the
+  drawn extent; the scorer says CONFINED BY THE MAP only from that box, and
+  calls a drawn extent short of it the PROTOCOL. Driven on the GPU in
+  `tests/cursor_render.cpp` against an independent computation; the census
+  suite plants the swept, unswept, old-log and 0x0 cases.
+* **evflow told a mouse take to keep its hands off the mouse.** The note now
+  needs something of ours to compete with (pushed > 0.5 Hz).
+* **pose said "X4VR_HEADLOOK was not set" when it was set to 0.** Now quotes it.
+* **`tests/run-offaxis-bringup.sh` failed 3 cases on its own premise.** It took
+  `active_runtime.json` as proof a runtime was up. WiVRn points it at itself
+  while running and RESTORES the previous target on exit — here SteamVR's — so
+  with nothing running xrCreateInstance hunted a SteamVR that was not there and
+  stalled 5.3 s. It now asks for a runtime PROCESS. Its live-runtime cases are
+  therefore SKIPPED on an idle machine, not passed: they need WiVRn up to run.
+* **Dead code.** `vr_session_thread_started()` and `vr_awaiting_first_view()`
+  lost their only caller in `8a22bae` and still carried comments naming it.
+
+### Stale, noted for the modding work
+
+* `README.md`'s status said stereo was not implemented. Updated.
+* `injector/x4vr_lua.hpp` argued Route 1 because *"Patola's saves are clean and
+  must stay that way"* — superseded below.
+* The deployed extension's `content.xml` describes *"65/35 to 85/85"*; its diff
+  sets **180/75**. The extension is not in the repo at all, so its source of
+  truth is a directory in the game install.
+
+## DIRECTIVE CHANGE, 2026-09-26 — a modified game is allowed
+
+Patola: *"I want to be able to fully use X4's lua and modding capabilities with
+no reserves, so I am removing the need for avoidance of a 'modified' game... You
+are also free to modify our game's configuration (which use different files
+than the unmodified game) to enable our mod and deploy new versions when they
+appear."*
+
+What this retires: the `modified="0"` constraint on saves, and with it the
+reason `x4vr_lua.hpp` gave for Route 1. What it does NOT retire: the player's
+own files are still opened read-only and never written — "our game's
+configuration" is the forked profile (`config-x4vrmod.xml`,
+`inputmap-x4vrmod.xml`). **OpenTrack and X4's head-tracker path stay
+forbidden**; this directive says nothing about them.
+
+What it opens, from the files rather than from memory:
+
+* **Situational awareness.** X4 exports view-state queries the injector can
+  already call on X4's thread (`IsHUDActive`, `IsExternalViewActive`,
+  `IsFloatingViewActive`, `IsInPanelMode`, `IsFullscreenCutsceneActive`,
+  `IsMouseSteeringActive`, `IsMouseEmulationActive` …, all declared in X4's own
+  cdefs) — that part never needed a modified game. What modding adds is the Lua
+  side: X4's UI knows which menu is open and which mode the player is in, and a
+  Lua addon can hand that to us through `ffi.C` calling a symbol our
+  LD_PRELOADed injector exports. Not built; the bridge is the plan.
+* **Protected UI Mode.** X4 refuses non-whitelisted Lua modules while it is on
+  (`"Only whitelisted modules are allowed in Protected UI Mode."` in the
+  binary). The toggle is `GetUISafeModeOption`/`SetUISafeModeOption`, stored in
+  config as `uisafemode` — absent from Patola's `config.xml`, so at its default.
+  Our config fork can serve it OFF in memory, touching nothing of vanilla's.
+* **Enabling our extensions without touching vanilla.** `content.xml` (which
+  extensions are enabled) lives in the SAME profile directory both games read.
+  Enabling ours there would enable it for vanilla too. The injector already
+  forks `config.xml`; forking `content.xml` the same way — matched by directory,
+  since every extension also has a `content.xml` — keeps vanilla untouched.
+
+## Z translation — the state, since it was asked
+
+**Why Z could not be done the way X/Y was.** X4 renders camera-relative, so a
+lateral eye shift is exactly a projection shear on what X4 drew
+(`x_ndc = sx·(x-d)/z`) — that is how the stereo works. Moving along the view
+axis rescales every pixel by `z/(z-dz)`, which depends on each pixel's depth;
+there is no single matrix that does it (take 238's analysis).
+
+**And X/Y is off too.** #74's shear was declared at `neutral + R(C)·shift`, a
+17 cm lever arm swinging with the camera; take 245 found it was the cause of the
+cockpit being "pushed away", the load-screen drift and the wrong-feeling
+separation. It has been off since. **No head translation reaches X4 today**;
+only yaw and pitch cross the channel.
+
+**Routes, none built:** (1) submit X4's depth with
+`XR_KHR_composition_layer_depth` (WiVRn offers it) and let the compositor
+reproject with true parallax — costs disocclusion at large leans, plumbing and a
+per-frame copy; (2) write `M_view`'s translation so X4 renders from the moved
+eye — exact, but X4's CPU culling does not move with it and the block is shared
+by 500+ slots. The modding directive adds no third route that I have found:
+X4's `playercamera/maxpos` (0.1, 0.1, 0.02) is the G-force sway limit, not a
+controllable offset, and the MD camera actions are cutscene cameras. The
+head-tracker head-position setters exist and are the forbidden path.
+
+## P314 — where does X4 pick in the cockpit? A/B with head-look off
+
+Take 313's line plus **`X4VR_CURSOR_CANVAS_AB=45`**. Nothing else changes in
+the knobs. WiVRn, configuration 1. Code since 313: the exit-crash guard (not
+reached with head-look off), the reachable box (logging only), dead code
+removed.
+
+**One observable:** *when the cursor turns into the cross, is it ON the object,
+or SHORT of it — between the object and the centre of view?*
+
+* **P314.1** ARM B (canvas OFF, phases 1, 3, 5…): the cross appears with the
+  cursor ON the object, anywhere in the view.
+* **P314.2** ARM A (canvas ON, phases 0, 2, 4…): the cross appears with the
+  cursor SHORT of the object, at roughly half its distance from the centre;
+  near the centre the arms agree.
+* **P314.3** the scorer reads THE KNOB ACTED, and the ARM A reachable box is
+  x,y = ±0.5252 (CONFINED BY THE MAP) while ARM B's is ±1.0.
+
+**Refutation:** ARM A puts the cross on the object and ARM B does not. Then X4
+picks in UI coordinates, the canvas map is right for the cockpit too, and 313's
+"wrong area" has another cause — to be found, not assumed.
+
+**If P314.1/.2 hold**, the placement fix is a per-context mapping: raw pointer
+over the world, canvas map over UI. Which context the cursor is in is exactly
+the situational awareness the modding directive opens up.

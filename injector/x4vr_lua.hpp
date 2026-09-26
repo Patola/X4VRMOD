@@ -9,10 +9,13 @@
 // does not follow. A readback makes all three self-correcting; a direct camera
 // write skips the channel entirely. Either would come from here.
 //
-// **Route 1 only.** `ui/core/lualibs/` holds `.so` files with `.sig` companions
-// and `extensions/` registers a mod; both would flag a save as modified, and
-// Patola's saves are clean and must stay that way. Interposing LuaJIT touches no
-// game file at all.
+// **Route 1 was chosen because saves had to stay unmodified** -- `extensions/`
+// registers a mod and flags the save. **That constraint was lifted on
+// 2026-09-26** (Patola: "fully use X4's lua and modding capabilities with no
+// reserves"; see "DIRECTIVE CHANGE" in docs/x4-quirks.md), so an extension
+// with its own Lua is now an allowed route, subject to X4's Protected UI Mode
+// (`uisafemode`), which our config fork can serve off. Interposing LuaJIT
+// remains the route that touches no game file at all.
 //
 // The reconnaissance is cheap because X4 hands us the source. Every chunk it
 // loads passes through `luaL_loadbuffer` as a plain buffer, so the same hook

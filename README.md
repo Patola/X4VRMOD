@@ -11,11 +11,14 @@ Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
 **[docs/frame-analysis.md](docs/frame-analysis.md)**; the traps X4 sets for
 modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 
-> **Status: early development.** The rendering mechanism is proven but stereo
-> itself is not implemented yet — see *Where it stands* below. An earlier
-> proof of concept using OpenTrack head-tracking + vkShade/SuperDepth3D
-> depth-image reconstruction is preserved at tag `v0.1`; it was abandoned as a
-> dead end (wrong pivot, gimbal lock, fragile setup, DIBR artifacts).
+> **Status: runs in a headset; not yet released.** X4 runs in VR with
+> in-engine stereo (per-eye lighting), head tracking, and the UI on a canvas at
+> the angle X4 intended, over WiVRn or SteamVR. Open work is mostly the cursor
+> shim (the pointer in the cockpit), frame pacing at full resolution, and head
+> translation — see *Where it stands* below. An earlier proof of concept using
+> OpenTrack head-tracking + vkShade/SuperDepth3D depth-image reconstruction is
+> preserved at tag `v0.1`; it was abandoned as a dead end (wrong pivot, gimbal
+> lock, fragile setup, DIBR artifacts).
 
 ## How it works
 
@@ -25,7 +28,8 @@ lighting*, the mod intercepts the engine rather than post-processing it:
 - The **injector** gives X4 its own settings file. On first run it forks your
   `config.xml` into `config-x4vrmod.xml`; after that, every read is answered
   from the profile with the VR overrides applied **in memory** (2:1
-  side-by-side at 2816×1408, VR-hostile effects off), and every write X4 makes
+  side-by-side — 5632×2816 for two 2816² eyes in the current setup — with
+  VR-hostile effects off), and every write X4 makes
   is redirected into the profile. **Your `config.xml` is read once and never
   written**, so vanilla launches are untouched — and settings you change
   in-game while modded still persist. To uninstall, delete the profile.
@@ -34,7 +38,7 @@ lighting*, the mod intercepts the engine rather than post-processing it:
   not a convenience: X4 honours `res_width`/`res_height` only when
   `borderless` is off, and then loses the titlebar height (1408 → 1385);
   with `borderless` on it ignores them and sizes to the display. Setting the
-  display to exactly 2816×1408 is what makes the two agree, and the layer
+  display to exactly the requested size is what makes the two agree, and the layer
   warns if the swapchain comes up any other size.
 - The **Vulkan layer** patches X4's vertex shaders (SPIR-V) to apply a
   constant clip-space matrix per eye, and patches the per-view constants so
@@ -58,17 +62,27 @@ blocks every frame.
 
 ## Where it stands
 
-| Phase | State | Tag |
+| Milestone | State | Tag |
 |---|---|---|
-| Harness: layer + injector + launcher load into X4 | done | `harness_up` |
-| Frame mapped: 47-pass deferred pipeline, constant-buffer layouts | done | `frame_mapped` |
-| Resolution + effects forced in memory (2816×1408 exact) | done | `config_intercept_done` |
-| Clip-space injection proven live (136/140 shaders, `spirv-val` clean) | done | `clipspace_shift_proven` |
-| Shear is real `1/z` parallax, measured against a mono capture | done | `eye_shear_validated` |
-| Mod runs off its own `config-x4vrmod.xml`; yours is never written | done | `config_profile_done` |
-| SBS container: frame composited into both halves at present time | done | `sbs_container_done` |
-| **Stereo**: per-eye `K`, square eye views, per-eye lighting | next | `sbs_lighting_done` |
-| VR output via OpenXR/WiVRn, menu mode, VR cursor | planned | — |
+| Harness, frame mapped, config forked in memory (yours is never written) | done | `config_profile_done` |
+| Correct stereo with per-eye lighting; X4's own pointer in each eye | done | `stage2-stereo-shading-correct`, `stage3-cursor-in-eye` |
+| X4 in a headset: eye image submitted to an OpenXR runtime | done | `stage9-first-light` |
+| Head tracking, closed loop on X4's own camera read-back | done | `stage12-headtracking-working` |
+| Stereo stays horizontal under head roll | done — but see note | `v0.77-roll-stereo` |
+| UI at the angle X4 lays it out for (the sliding HUD fixed) | done | `v0.76-ui-field` |
+| UI fuses wherever there is a HUD | done | `v0.57-canvas-far` |
+| SteamVR as well as WiVRn | done | `v0.78-steamvr` |
+| Cursor shim: pointer usable in cockpit and menus | in progress | — |
+| Frame pacing at 2816² per eye (a 90 Hz display is starved) | open | — |
+| Head translation (lean) | open — X/Y built and switched off, Z needs depth | — |
+
+**Note on roll stereo:** it needs `X4VR_POSE=1`, and the working command line
+has carried `X4VR_POSE=0` since take 260, so it is currently inactive. See
+*"Roll stereo has been OFF since take 260"* in [docs/x4-quirks.md](docs/x4-quirks.md).
+
+The engineering record — every take, prediction, and wrong turn — is
+[docs/x4-quirks.md](docs/x4-quirks.md); the tagged states and their exact
+command lines are in [docs/known-good-runs.md](docs/known-good-runs.md).
 
 X4's UI shaders don't merely declare the same descriptor set as world
 geometry — they genuinely *read* it, so no static shader analysis can tell
@@ -94,7 +108,7 @@ shim, not the layer — see [docs/frame-analysis.md](docs/frame-analysis.md).
 ```sh
 cmake -S . -B build && cmake --build build
 ./launch/x4vr-launch.sh                 # launches X4 with layer + injector
-X4VR_GAMESCOPE=1 ./launch/x4vr-launch.sh   # …inside gamescope at 2816×1408
+X4VR_GAMESCOPE=1 ./launch/x4vr-launch.sh   # …inside gamescope at X4VR_W×X4VR_H
 ```
 
 The launcher sets `SteamAppId`, the usual dev flags
