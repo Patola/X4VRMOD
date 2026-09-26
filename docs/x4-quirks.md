@@ -22356,3 +22356,172 @@ picks in UI coordinates, the canvas map is right for the cockpit too, and 313's
 **If P314.1/.2 hold**, the placement fix is a per-context mapping: raw pointer
 over the world, canvas map over UI. Which context the cursor is in is exactly
 the situational awareness the modding directive opens up.
+
+## Take 314 — SCORED: X4 picks the world at the RAW pointer. P314.1-.3 held.
+
+`X4VR_CURSOR_CANVAS_AB=45` on take 313's line. WiVRn, configuration 1.
+
+    A/B        10 phases, ARM A x5 / ARM B x5, THE KNOB ACTED
+    reachable  ARM A x,y = +-0.5252 (CONFINED BY THE MAP), ARM B +-1.0
+    hover      570 sets, 560 changes, 13 button presses
+    per arm    ARM A 273 changes in 139 s (1.97/s), ARM B 285 in 151 s (1.89/s)
+
+Patola: *"two modes, in one of them the cursor correctly changes appearance and
+hovers correctly over all objects, in the other mode it's about halfway from the
+center as it seems."* The map is deterministic, so "halfway" can only be ARM A
+(`0.5252·n`): **P314.1 and P314.2 held, the refutation did not occur.**
+
+**X4's hover rate is the same in both arms**, which is what it must be: the arm
+changes where WE draw the cursor, never what X4 hit-tests. So in the cockpit X4
+picks world objects at the raw pointer, the canvas map is right for UI and wrong
+for the world, and ARM B (`X4VR_CURSOR_CANVAS=0`) is correct there.
+
+Two observations of his, recorded as data:
+
+* **Clicking does not summon the cursor; DRAGGING does** (mouse steering). The
+  log agrees: first cursor set 2 s after the first press-and-drag. #64 stands.
+* **Hover has a second signal**: the object's 4 bracket corners move slightly
+  outward. Brackets are UI drawn through the canvas, so they sit on the object in
+  both arms — a hover indicator independent of where we draw the cursor.
+
+**Still open for the per-context mapping:** cockpit HUD *panels* are UI, laid
+out in UI coordinates, so over them the canvas mapping (ARM A) should be the
+right one. Unmeasured.
+
+### Instrument defects found in 314's output, fixed
+
+* **"the cursor overlay never drew, so its shift is unchecked"** — printed on
+  every take: the check looked for a `canvas shift` line the overlay stopped
+  printing long ago, so the UI-vs-cursor shift check had been dead in every
+  take. It now reads the map from the overlay's first-draw line, and says so
+  when the first draw was in a raw-pointer arm.
+* **THE KNOB ACTED was decided from drawn extents**, which depend on where the
+  pointer went. Now from the map's reachable boxes.
+* **Per-arm hover rate** added: a large difference would mean the knob reached
+  X4's picking.
+* Two cursor-set verdicts still argued from takes 310/311 ("the canvas map is
+  not the cause", "contradicts takes 310/311"); rewritten against 313/314.
+
+## Head-look and MOUSELOOK — what Patola asked, and what is true
+
+*"Head-look still needs the mouse-look activation? I thought we developed our
+own head-look because we wanted to be independent from that."*
+
+**It does.** The servo, the pose read-back and the rendering are ours, but the
+actuator is X4's own free-look: we hold `INPUT_STATE_CAMERA_MOUSELOOK` (rebound
+to a key of ours) and feed synthetic mouse motion, closed-loop on
+`GetCameraRotation`. That was forced, not chosen:
+
+* **No camera setter**, in the C exports or in either Lua bridge — surveyed
+  twice ("The Lua route is closed for the camera", and its correction).
+* **No other analog look input.** X4's full range vocabulary has only
+  `INPUT_RANGE_MOUSELOOK_YAW/PITCH` for free-look (`FP_YAW/PITCH` are walking).
+* **The numpad states** (`INPUT_STATE_CAMERA_*`) turn the camera without
+  MOUSELOOK but are a **spring** — back to centre within 0.62 s of release, take
+  154 — so they cannot hold a pose.
+* **Our own viewport** exists — `X4VR_POSE_ROTATE`, takes 186-203 — but X4 culls
+  on the CPU against its own frustum, so a rotation of what X4 drew only reaches
+  as far as X4 rendered: the seam. To look 60 degrees left, X4's camera has to
+  point there.
+
+**His objection to a "cursor mode" is right and it is withdrawn.** The head
+moves continuously in VR, including during an interaction; a mode that pauses
+head-look to use the pointer would be unusable.
+
+### The door the old survey did not look behind: the camera STATE
+
+The survey looked for setter FUNCTIONS. `GetCameraRotation` itself shows where
+the answer lives: root global `0x3db6948` -> object -> camera node at `+0x3e8`
+-> an internal call fills the node's rotation matrix -> atan2/asin. So the
+free-look angle is state in X4's camera controller, rebuilt into that matrix
+each frame. **If the controller keeps it as numbers, writing them each frame is
+a camera setter** — no MOUSELOOK, no captured pointer, no input-channel lag, and
+possibly past the clamp (which lives in the free-look camera, take 154).
+
+Costs, stated up front:
+
+* **Tied to the X4 build.** Addresses and offsets move with an update. Every
+  anchor is decoded from X4's own code and refused if it does not match —
+  the same discipline as the IsHUDActive guard.
+* **The spring.** Without MOUSELOOK X4 pulls the view home; a write has to beat
+  it, either by writing the spring's target as well or by a `parameters.xml`
+  change through our extension — allowed now.
+* **Timing.** The write must land before X4 builds the frame's camera.
+
+**Step 1 is read-only and built: `X4VR_CAMSCAN=1`** (`injector/x4vr_camscan.hpp`).
+Every ~100 ms, on X4's thread, it takes the angle `GetCameraRotation` reports and
+the bytes of the objects that function reads — root, camera node, and every
+pointer one level deep from the first 1 KB of each — and keeps the slots that
+track the angle in radians or degrees, either sign, float or double, across many
+DISTINCT angles. All reads go through `process_vm_readv` on our own pid, which
+answers an unmapped address with EFAULT instead of a fault. `tests/camscan.cpp`
+plants the state, a constant, a `sin(yaw)` and a one-time coincidence, a still
+camera, and a state outside the range. It caught a real defect before any take:
+discovery was shared between the axes, so a player who turns before he nods
+never had pitch collected. Discovery is per axis now.
+
+**Step 0, the premise, is a protocol and costs nothing:** does hover survive a
+camera turned WITHOUT MOUSELOOK? Holding a numpad key puts X4 in exactly that
+state. If picking follows the turned camera, any non-MOUSELOOK drive keeps the
+cursor working. If it does not, a camera write alone would not fix the cursor.
+
+## Head translation — back on, and the combination that could not work
+
+Patola: *"just turn head translation back on. It's important to test with the
+cursor... it is a necessary confounding factor since it will be used in
+gameplay."* (He had believed our extension helped it; it does not — the
+extension only raises the free-look clamp.)
+
+**Found reading the code first: `X4VR_HEAD_TRANSLATE=1` with `X4VR_POSE=0` was a
+trap.** The shift reaches the shaders only through the pose channel —
+`pose_drive_residual()` returns at once when `!pose_active()` — while the
+declared position adds the shift regardless. So the compositor would have been
+told the image came from a leaned eye it was never rendered from, and warped a
+lean that is not in the picture. The layer now **refuses** the shift in that
+combination and logs `head translate: ASKED FOR BUT INACTIVE`; the scorer FAILs
+it. Translation therefore needs `X4VR_POSE=1`, which also brings roll stereo
+back (off since take 260).
+
+With `X4VR_POSE_ROTATE` unset, the pose channel's residual rotation is written
+but no shader reads it, so `X4VR_POSE=1` with head-look off changes exactly two
+things: roll stereo and the translation shear.
+
+**Why it was off, so a comfort report can be read:** take 245 removed it and
+three complaints improved at once (cockpit pushed away, load-screen drift, eye
+separation). Since then the UI quad is gone (the UI is in the eye image at
+1000 m), and the declared rotation changed (`DECLARE_RENDERED_ROT=2`). So this
+is a re-measurement under a changed configuration, not a known outcome.
+
+**One limit with head-look OFF:** the shift is computed in HEAD axes and applied
+in X4's camera axes. With head-look on those agree; with it off, X4's camera
+stays forward, so a lean made with the head turned is applied in the wrong
+direction. Face forward for this take. With head-look on, or once the camera is
+driven directly, the two agree again.
+
+## P315 — does hover survive a camera turned without MOUSELOOK? With translation on.
+
+Take 314's line with: `X4VR_CURSOR_CANVAS_AB` removed and
+**`X4VR_CURSOR_CANVAS=0`** (the arm 314 showed right in the cockpit — do not
+open the map), **`X4VR_POSE=1`**, **`X4VR_HEAD_TRANSLATE=1`**,
+**`X4VR_CAMSCAN=1`** (read-only instrument). Head-look stays OFF. WiVRn,
+configuration 1.
+
+**One observable, in two situations:** *is the cross ON the object?*
+
+1. View straight ahead, leaning gently left/right/up/down.
+2. View turned by HOLDING a numpad key (4/6 left/right, 8/2 up/down), hovering
+   while held.
+
+* **P315.1** leaning: the cross stays on distant objects. X4 picks unshifted,
+  and a lean moves only near geometry, which is not what is clickable.
+* **P315.2 — the premise.** Numpad-turned view: the cross is still on the
+  object. X4 picks through its current camera, so a camera turned without
+  MOUSELOOK keeps hover, and a direct camera write would too.
+* **P315.3** scorer: the roll-stereo FAIL is gone (`roll ON`), `translate`
+  reports samples (not refused), `camscan` reports a sweep and either
+  candidates or a BOUNDED null.
+
+**Refutation of P315.2:** the cross misses in the turned view. Then X4 picks
+along the un-turned camera, and a camera write would have to be paired with a
+cursor correction by the free-look angle — which we can read. Still solvable;
+different work.
