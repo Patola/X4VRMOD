@@ -282,6 +282,34 @@ fi
 plant /tmp/census-translate-off.log '[  223999.000] layer   head translate: ASKED FOR BUT INACTIVE — X4VR_POSE is off, so the shaders cannot shift the eye.'
 want "translate without pose -> FAIL names X4VR_POSE" /tmp/census-translate-off.log FAIL "Add X4VR_POSE=1 — it is not implied. This run says nothing about #74"
 
+# ------------------------------------ gate on intent: translate and roll
+# The base run carries X4VR_POSE=0 and no roll knob. These rewrite ITS env
+# line, because the verdicts below hinge on what the run asked for.
+plant_env() {  # plant_env <path> <sed-expr> <extra lines...>
+    local path=$1 expr=$2; shift 2
+    { sed "0,/env: run =/{/env: run =/$expr}" "$BASE"; printf '%s\n' "$@"; } > "$path"
+}
+refusal='[  224300.000] layer   head translate: ASKED FOR BUT INACTIVE — X4VR_POSE is off, so the shaders cannot shift the eye.'
+# Take 315's build printed this at TEARDOWN on a run with X4VR_POSE=1 that had
+# published real shifts; that is not a refused run.
+plant_env /tmp/census-translate-teardown.log 's/X4VR_POSE=0/X4VR_POSE=1 X4VR_HEAD_TRANSLATE=1/' "$refusal"
+want "refusal line with POSE=1 -> teardown note" /tmp/census-translate-teardown.log translate "not a refusal"
+if python3 tools/score_run.py /tmp/census-translate-teardown.log 2>&1 | grep -qE "^FAIL.*This run says nothing about #74"; then
+    bad "refusal line with POSE=1 -> still FAILs the run"
+else
+    ok "refusal line with POSE=1 -> does not FAIL the run"
+fi
+rollline='[  224300.000] layer   roll: head 1.20 deg, weight 1.000 -> published 1.20 deg as (cos,sin)=(0.9998,0.0209)'
+plant /tmp/census-roll-level.log "$rollline"
+want "level head, roll not asked -> note, not FAIL" /tmp/census-roll-level.log roll "not exercised"
+if python3 tools/score_run.py /tmp/census-roll-level.log 2>&1 | grep -qE "^FAIL.*never rolled"; then
+    bad "level head, roll not asked -> still FAILs"
+else
+    ok "level head, roll not asked -> no FAIL"
+fi
+plant_env /tmp/census-roll-asked.log 's/X4VR_POSE=0/X4VR_POSE=1 X4VR_ROLL_AB=20/' "$rollline"
+want "level head, roll ASKED -> FAIL" /tmp/census-roll-asked.log FAIL "never rolled more than 1.20 deg"
+
 # ------------------------------------------- hover by view (X4VR_HOVER_VIEW)
 hview() {  # hview <straight> <yaw> <pitch>
     printf '[  224200.000] inject  hover view: cursor changes with the view straight %s | turned left/right (|yaw|>=30) %s | turned up/down (|pitch|>=20) %s | in transit 3 | view unknown 0' "$1" "$2" "$3"

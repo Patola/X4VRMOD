@@ -2088,11 +2088,23 @@ def main(path):
         print(f"roll    {n} sample(s){'  FORCED, head ignored' if forced else ''}: "
               f"head |roll| median {heads[n//2]:.2f} max {heads[-1]:.2f} deg, "
               f"published median {pubs[n//2]:.2f} max {pubs[-1]:.2f} deg")
-        if not forced and heads[-1] < 5.0:
+        # Gate on INTENT. Roll stereo is back in the standing line (take 315),
+        # so a FAIL whenever the head stayed level would fire on every take
+        # that was about something else -- and a FAIL on every take is read
+        # past, which is how X4VR_POSE=0 hid for ~55 of them. A run asks about
+        # roll by its knobs or its name.
+        roll_asked = bool(re.search(r"\bX4VR_ROLL_(AB|FORCE)=", run or "") or
+                          re.search(r"\bX4VR_TAKE=\S*ROLL", run or "",
+                                    re.IGNORECASE))
+        if not forced and heads[-1] < 5.0 and roll_asked:
             fails.append(
                 f"the head never rolled more than {heads[-1]:.2f} deg, so this "
                 f"run does NOT exercise #77 whatever else it shows — tilt the "
                 f"head, or use X4VR_ROLL_FORCE to drive the shear directly")
+        elif not forced and heads[-1] < 5.0:
+            print(f"roll    not exercised (head |roll| max {heads[-1]:.2f} deg) "
+                  f"— fine for a take that was not about roll; it says nothing "
+                  f"about #77")
         elif pubs[-1] < 0.5 * heads[-1]:
             fails.append(
                 f"the head rolled to {heads[-1]:.2f} deg but only {pubs[-1]:.2f} "
@@ -2147,7 +2159,15 @@ def main(path):
                     r"(-?\d+\.\d+)\) m in head axes -> published "
                     r"\((-?\d+\.\d+), (-?\d+\.\d+)\)([^\n]*)", text)
     asked = "X4VR_HEAD_TRANSLATE=1" in (run or "")
-    if "head translate: ASKED FOR BUT INACTIVE" in text:
+    pose_asked = bool(re.search(r"\bX4VR_POSE=1\b", run or ""))
+    if "head translate: ASKED FOR BUT INACTIVE" in text and pose_asked:
+        # Take 315's build printed this once at TEARDOWN, after its final
+        # reports, on a run that had published 31 real shifts: the channel was
+        # already down and the line blamed the configuration. With X4VR_POSE=1
+        # asked for, it is that teardown frame, not a refused run.
+        print("translate  (one 'ASKED FOR BUT INACTIVE' line from a build that "
+              "printed it at teardown with X4VR_POSE=1 set — not a refusal)")
+    if "head translate: ASKED FOR BUT INACTIVE" in text and not pose_asked:
         # Ranked first: every sample below would read a published 0.0000 and
         # look like a head that never leaned, when the shift was REFUSED.
         fails.append(

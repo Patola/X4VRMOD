@@ -12801,18 +12801,35 @@ void vr_thread() {
                 // eye it was never rendered from, and it would warp a lean that
                 // is not in the picture: take 238's Z artifact, from the other
                 // side. Refused, loudly, rather than half-applied.
+                //
+                // Two different reasons it can be down, and only one is the
+                // run's fault. X4VR_POSE absent: every frame refused, said
+                // loudly. X4VR_POSE asked for but the channel not (yet, or no
+                // longer) up -- start-up, and TEARDOWN, where take 315 printed
+                // "X4VR_POSE is off" after its final reports on a run that had
+                // published 31 real shifts, and the scorer failed it: withheld
+                // quietly and counted, because that is the guard working.
                 const bool translate_can_act = pose_active();
                 if (head_translate_enabled() && !translate_can_act) {
                     static bool said = false;
-                    if (!said) {
-                        said = true;
-                        X4VR_LOG("head translate: ASKED FOR BUT INACTIVE — "
-                                 "X4VR_POSE is off, so the shaders cannot "
-                                 "shift the eye, and declaring a shift the "
-                                 "image does not contain would make the "
-                                 "compositor warp a lean that is not there. "
-                                 "Refused. Add X4VR_POSE=1; it is NOT implied "
-                                 "by X4VR_HEAD_TRANSLATE");
+                    if (!pose_wanted()) {
+                        if (!said) {
+                            said = true;
+                            X4VR_LOG("head translate: ASKED FOR BUT INACTIVE — "
+                                     "X4VR_POSE is off, so the shaders cannot "
+                                     "shift the eye, and declaring a shift the "
+                                     "image does not contain would make the "
+                                     "compositor warp a lean that is not "
+                                     "there. Refused. Add X4VR_POSE=1; it is "
+                                     "NOT implied by X4VR_HEAD_TRANSLATE");
+                        }
+                    } else {
+                        static uint64_t withheld = 0;
+                        if (withheld++ == 0)
+                            X4VR_LOG("head translate: withheld while the pose "
+                                     "channel is not up (start-up or "
+                                     "teardown) — not a fault, and not the "
+                                     "run's configuration");
                     }
                 }
                 if (head_translate_enabled() && translate_can_act) {

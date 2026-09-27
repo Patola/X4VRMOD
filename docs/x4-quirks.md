@@ -22557,3 +22557,71 @@ wants the camera turned without MOUSELOOK, and the largest angle is the
 strongest test: if picking ignored the turn, the miss would be ~65 degrees.
 His protocol: steer so a target sits off to the side, hold the numpad key
 toward it, hover it while the key is held.
+
+## Take 315 — SCORED (PASS after two scorer/layer fixes); P315.2 awaits Patola
+
+WiVRn, configuration 1, head-look off, `X4VR_POSE=1` for the first time since
+take 256, `X4VR_HEAD_TRANSLATE=1`, `X4VR_CURSOR_CANVAS=0`, protocol paced by
+milestones — all three fired in order.
+
+    pose channel  set 31, 6/6 layouts extended, 1182/1182 pipelines — OK
+    roll          ON (first time since 256); head never tilted past 2.46 deg
+    translate     31 published shifts, lean max 2.4 cm x / 2.0 cm y
+    hover view    straight 37 | turned left/right 13 | up/down 10 | transit 18
+    perf          GAMEPLAY 12.17 ms (82 fps)
+
+* **P315.3 held** once the scorer read the run correctly (below).
+* **X4 hovered 23 times with its camera turned and MOUSELOOK not held.** So
+  picking runs in a turned camera. Whether the cross sat ON the object — the
+  observable — is Patola's to report; P315.1/.2 are not scored until he does.
+* The leans were small (2.4 cm max), so P315.1 is exercised only weakly.
+
+### Two defects of mine, found by this take's own output
+
+* **The translation guard shipped last turn printed "X4VR_POSE is off" at
+  TEARDOWN** — after every final report, once the pose channel had been torn
+  down — on a run that had published 31 real shifts, and the scorer FAILED the
+  run on it. The guard withheld the right frame; its message blamed the
+  configuration. Now: "POSE is off" only when the run did not ask for it;
+  start-up/teardown frames are withheld with a neutral note; the scorer reads
+  the old line by intent (`X4VR_POSE=1` asked -> not a refusal).
+* **"the head never rolled more than 2.46 deg" FAILED a take that was not about
+  roll.** With roll stereo back in the standing line it would fail every take,
+  and a FAIL on every take is read past — the X4VR_POSE=0 story. Gated on
+  intent: `X4VR_ROLL_AB`, `X4VR_ROLL_FORCE`, or ROLL in the take name.
+
+Census suite 98 -> 103, including both.
+
+### camscan: a BOUNDED null, and the disassembly says why
+
+    1455 samples, yaw swept 128 deg, pitch 40 deg, 50 regions / 112 KB
+    discoveries 140, eliminated 119+, SURVIVORS 0
+
+Read the instrument before the null ([[state-the-instrument-range]]):
+
+* **The sweep happened only in the last ~35 s** (the numpad part), and in that
+  window candidates were discovered and eliminated 61 times. That is the
+  signature of slots that match at rest and at the stops but MISS during the
+  fast transit (92 deg/s): a stored TARGET angle (+-65 while the key is held,
+  0 when released), or a value one frame out of step with the matrix. The 0.05
+  degree tolerance discards both. So this refutes only "an angle stored in step
+  with the rendered camera, in these objects".
+* **The camera's orientation is a MATRIX in per-frame buffers.**
+  GetCameraRotation's internal call (`0x1925bf0`) picks a buffer index from a
+  THREAD-LOCAL flag (`%fs:...`, then one of two globals), walks a 0x50-byte-entry
+  list inside the camera object at `0x30 + idx*0x2c0`, and multiplies by the
+  entry's 3x3 rows at +0x20/+0x30/+0x40 plus translation at +0x10. So X4 keeps
+  the camera transform per thread/frame, as matrices; the free-look state that
+  produces them lives in the controller, elsewhere. Writing the matrices
+  directly would race X4's own buffering — not a route.
+
+### The next probe, not built: catch the WRITER
+
+`perf_event_paranoid` is 2, so a process may put a hardware WRITE watchpoint on
+its own memory (`perf_event_open`, `PERF_TYPE_BREAKPOINT`, user-space only),
+one event per X4 thread. Armed on the camera entry's rotation rows, it reports
+the instruction pointer of whatever writes them — the free-look controller's
+code — and that function's disassembly names where the state lives, in
+whatever representation. Read-only, and it survives the representation
+question that defeated the value scan. A lag-and-target-tolerant rescan of
+dumped snapshots is the fallback.
