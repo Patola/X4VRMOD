@@ -22525,3 +22525,35 @@ configuration 1.
 along the un-turned camera, and a camera write would have to be paired with a
 cursor correction by the free-look angle — which we can read. Still solvable;
 different work.
+
+### P315 REVISED before the run — paced by the log, not a clock
+
+Patola, before running it: *"I don't understand very well the 'view turned',
+how would I know? Is there any way for you to send notify-send messages during
+the right times of the gameplay... When in VR, my view is completely obstructed
+and I can't check a chronometer. Also... the numpad keys don't change the view
+smoothly, they're very fast and I would only be able to try and hover with the
+key pressed, which mean all the way up, down, left or right."*
+
+The "about 1 minute / about 2 minutes" in P315 above was a clock he cannot see.
+**Superseded:** the parts end when the log says they have enough.
+
+* **`X4VR_HOVER_VIEW=1`** bins every cursor change by the camera angle X4
+  reported that frame — straight (both under 3 deg), turned left/right
+  (|yaw| >= 30), turned up/down (|pitch| >= 20), in transit — and writes a
+  `milestone:` line when a part is done: 30 straight hovers; 5 turned hovers on
+  each axis, with a hint naming the axis still missing.
+* **`X4VR_WATCH=1`** now always relays every new `milestone:` line as a
+  notification, verbatim (`tools/watch_run.sh --relay`), the channel that
+  reaches him in VR. `tests/run-watch-relay.sh` checks once, in order, nothing
+  else, and a milestone written in X4's last second. That test found
+  `watch_run.sh` could not run without a `--want` at all (`set -u` on an empty
+  array), and its first inline version kept the watcher alive by matching the
+  X4 pattern in its own shell's argv.
+
+**The numpad snapping to the stops is fine, and better than fine.** "Turned"
+here means held at the stop — 65 degrees yaw, 35 pitch (take 154). The premise
+wants the camera turned without MOUSELOOK, and the largest angle is the
+strongest test: if picking ignored the turn, the miss would be ~65 degrees.
+His protocol: steer so a target sits off to the side, hold the numpad key
+toward it, hover it while the key is held.

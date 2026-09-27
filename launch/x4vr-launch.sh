@@ -549,13 +549,14 @@ if [[ "${X4VR_WATCH:-0}" == 1 && -n "${X4VR_LOG:-}" ]]; then
         WATCH+=(--want "$X4VR_WATCH_WANT" --by "${X4VR_WATCH_BY:-200}"
                 --say "${X4VR_WATCH_SAY:-what this take is for}")
     fi
-    if [[ ${#WATCH[@]} -gt 3 ]]; then
-        "$ROOT/tools/watch_run.sh" "${WATCH[@]}" >/dev/null 2>&1 &
-        echo "x4vr-launch: watchdog armed on $X4VR_LOG — it will notify-send" \
-             "if the run stops producing what it was started for" >&2
-    else
-        echo "x4vr-launch: X4VR_WATCH=1 but nothing to watch for" >&2
-    fi
+    # Protocol milestones, relayed verbatim (X4VR_HOVER_VIEW writes them).
+    # Always on under X4VR_WATCH, so the watchdog always has a job: a run that
+    # writes no milestone relays nothing.
+    WATCH+=(--relay 'milestone: ')
+    "$ROOT/tools/watch_run.sh" "${WATCH[@]}" >/dev/null 2>&1 &
+    echo "x4vr-launch: watchdog armed on $X4VR_LOG — it will notify-send" \
+         "protocol milestones, and if the run stops producing what it was" \
+         "started for" >&2
 fi
 
 if [[ "${X4VR_GAMESCOPE:-0}" == 1 ]]; then

@@ -2444,6 +2444,108 @@ static void camscan_report() {
         X4VR_LOG("camscan: CANDIDATE %s", sc.describe(sv[i]).c_str());
 }
 
+// **X4VR_HOVER_VIEW=1 — which way was X4's camera pointing when the cursor
+// changed? And tell the player, in the headset, when a part is done.**
+//
+// Take 315 asks whether hover survives a camera turned WITHOUT MOUSELOOK, and
+// the numpad is the only way to turn it so (a spring: it snaps to the stop in
+// under 2 s and back on release). Patola cannot keep time in a headset -- *"my
+// view is completely obstructed and I can't check a chronometer"* -- so the
+// protocol is paced by the log instead of a clock: each cursor change is
+// binned by the camera angle X4 reported at that frame, and when a part has
+// enough of them a `milestone:` line is written, which the launcher's watcher
+// relays as a desktop notification (the channel that reaches him in VR).
+//
+// The angle is read on X4's thread from SDL_PumpEvents, the same call path as
+// the head-look read-back; GetCameraRotation tests its own pointers.
+static bool hoverview_enabled() {
+    static const bool on = x4vr::env_on("X4VR_HOVER_VIEW", false);
+    return on;
+}
+
+namespace {
+// -1 unknown, 0 straight, 1 yaw-turned, 2 pitch-turned, 3 in transit.
+std::atomic<int> g_view_class{-1};
+struct HoverByView {
+    std::atomic<uint64_t> n[5]; // index = class + 1
+} g_hover_by_view;
+constexpr float kStraightDeg = 3.0f, kYawTurnedDeg = 30.0f,
+                kPitchTurnedDeg = 20.0f;
+constexpr uint64_t kPart1Hovers = 30, kPart2HoversPerAxis = 5;
+} // namespace
+
+static void hoverview_tick() {
+    if (!hoverview_enabled())
+        return;
+    using Fn = X4Rotation (*)();
+    static Fn get = (Fn)dlsym(RTLD_DEFAULT, "GetCameraRotation");
+    if (!get)
+        return;
+    const X4Rotation r = get();
+    const float y = std::fabs(r.yaw * kRad2Deg), p = std::fabs(r.pitch * kRad2Deg);
+    int cls;
+    if (y < kStraightDeg && p < kStraightDeg)
+        cls = 0;
+    else if (y >= kYawTurnedDeg)
+        cls = 1;
+    else if (p >= kPitchTurnedDeg)
+        cls = 2;
+    else
+        cls = 3;
+    g_view_class.store(cls, std::memory_order_relaxed);
+
+    // Milestones, each said once. Worded for the player, because the watcher
+    // relays the text verbatim.
+    const uint64_t straight = g_hover_by_view.n[1].load(std::memory_order_relaxed);
+    const uint64_t yawn = g_hover_by_view.n[2].load(std::memory_order_relaxed);
+    const uint64_t pitchn = g_hover_by_view.n[3].load(std::memory_order_relaxed);
+    static bool m1 = false, m2y = false, m2p = false, m2 = false;
+    if (!m1 && straight >= kPart1Hovers) {
+        m1 = true;
+        X4VR_LOG("milestone: PART 1 DONE (%llu hovers, view straight). Now "
+                 "HOLD a numpad key - 4 or 6 (left/right), 8 or 2 (up/down) - "
+                 "and hover objects while it is held.",
+                 (unsigned long long)straight);
+    }
+    if (!m2 && yawn >= kPart2HoversPerAxis && pitchn >= kPart2HoversPerAxis) {
+        m2 = true;
+        X4VR_LOG("milestone: PART 2 DONE (%llu hovers turned left/right, %llu "
+                 "up/down). You can quit X4 now.",
+                 (unsigned long long)yawn, (unsigned long long)pitchn);
+    } else if (!m2y && !m2 && yawn >= kPart2HoversPerAxis) {
+        m2y = true;
+        X4VR_LOG("milestone: left/right done (%llu hovers). Now hold 8 or 2 "
+                 "(up/down) and hover while it is held.",
+                 (unsigned long long)yawn);
+    } else if (!m2p && !m2 && pitchn >= kPart2HoversPerAxis) {
+        m2p = true;
+        X4VR_LOG("milestone: up/down done (%llu hovers). Now hold 4 or 6 "
+                 "(left/right) and hover while it is held.",
+                 (unsigned long long)pitchn);
+    }
+}
+
+// Cursor changes binned by view, with the cursor-set report. Printed only when
+// a count moved.
+static void hoverview_report() {
+    if (!hoverview_enabled())
+        return;
+    uint64_t v[5];
+    for (int i = 0; i < 5; i++)
+        v[i] = g_hover_by_view.n[i].load(std::memory_order_relaxed);
+    static uint64_t prev = UINT64_MAX;
+    const uint64_t sum = v[0] + v[1] + v[2] + v[3] + v[4];
+    if (sum == prev)
+        return;
+    prev = sum;
+    X4VR_LOG("hover view: cursor changes with the view straight %llu | turned "
+             "left/right (|yaw|>=%.0f) %llu | turned up/down (|pitch|>=%.0f) "
+             "%llu | in transit %llu | view unknown %llu",
+             (unsigned long long)v[1], kYawTurnedDeg, (unsigned long long)v[2],
+             kPitchTurnedDeg, (unsigned long long)v[3],
+             (unsigned long long)v[4], (unsigned long long)v[0]);
+}
+
 static bool camread_enabled() {
     static const bool on = [] {
         const char *e = getenv("X4VR_CAMREAD");
@@ -4183,6 +4285,7 @@ void pumprate_report() {
     note_extent_report();
     cursor_sets_report();
     camscan_report();
+    hoverview_report();
 
     g_pumprate.entered = g_pumprate.nopose = 0;
     g_pumprate.fresh = g_pumprate.skipped = 0;
@@ -4427,6 +4530,7 @@ void SDL_PumpEvents(void) {
             headlook_tick();
         panprobe_tick();
         camscan_tick();
+        hoverview_tick();
         pumprate_report();
     }
     real_fn();
@@ -4718,6 +4822,12 @@ bool SDL_SetCursor(void *cursor) {
                  ? g_cursor_sets.changed_cockpit
                  : g_cursor_sets.changed_elsewhere)
                 .fetch_add(1, std::memory_order_relaxed);
+            // The class stamped by the last pump on this same thread, not a
+            // fresh read: an instrument must bin by the state the frame had.
+            if (hoverview_enabled())
+                g_hover_by_view
+                    .n[g_view_class.load(std::memory_order_relaxed) + 1]
+                    .fetch_add(1, std::memory_order_relaxed);
         }
         bool hit = false;
         {

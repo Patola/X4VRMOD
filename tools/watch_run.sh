@@ -42,16 +42,21 @@
 # because ending a run he is in the middle of is his call and not mine.
 set -uo pipefail
 
-LOG=""; KILL=0; POLL=5; STARTUP=180
-declare -a WANT SAYS BY
+LOG=""; KILL=0; POLL=5; STARTUP=180; RELAY=""
+# Assigned, not just declared: under `set -u` a declared-but-empty array is
+# "unbound", which never showed while every caller passed a --want.
+WANT=(); SAYS=(); BY=()
 
 usage() {
     cat >&2 <<'USAGE'
-usage: watch_run.sh <logfile> [--kill] [--poll SEC]
-                    (--want PATTERN --by SECONDS --say LABEL)...
+usage: watch_run.sh <logfile> [--kill] [--poll SEC] [--relay PREFIX]
+                    [(--want PATTERN --by SECONDS --say LABEL)...]
 Sends a desktop notification when each pattern first appears, and a critical
 one if it has not appeared by its deadline. --kill also terminates X4 on a
 failed deadline. LABEL names the thing in the notification, e.g. 'UI dumps'.
+--relay sends every NEW log line containing PREFIX as its own notification,
+with the text after PREFIX as the message: protocol milestones, worded for
+the player by the code that decided them.
 USAGE
     exit 2
 }
@@ -66,10 +71,12 @@ while [[ $# -gt 0 ]]; do
         --want) WANT+=("$2"); shift 2 ;;
         --by)   BY+=("$2");   shift 2 ;;
         --say)  SAYS+=("$2"); shift 2 ;;
+        --relay) RELAY="$2"; shift 2 ;;
         *) usage ;;
     esac
 done
-[[ ${#WANT[@]} -gt 0 && ${#WANT[@]} -eq ${#BY[@]} && ${#WANT[@]} -eq ${#SAYS[@]} ]] || usage
+[[ ${#WANT[@]} -eq ${#BY[@]} && ${#WANT[@]} -eq ${#SAYS[@]} ]] || usage
+[[ ${#WANT[@]} -gt 0 || -n "$RELAY" ]] || usage
 
 # One desktop notification per event, and always a line on stdout so the
 # terminal transcript stands on its own afterwards.
@@ -99,8 +106,25 @@ declare -a done_flag
 for i in "${!WANT[@]}"; do done_flag[i]=0; done
 remaining=${#WANT[@]}
 seen_x4=0
+relayed=0
 
-while [[ $remaining -gt 0 ]]; do
+# **Why --relay exists.** Take 315's protocol has parts, and Patola cannot keep
+# time in a headset: *"my view is completely obstructed and I can't check a
+# chronometer."* So the injector decides when a part has enough data and
+# writes a `milestone:` line saying what to do next, and this relays it. The
+# wording lives where the condition is evaluated, so the two cannot drift.
+relay_new() {
+    [[ -n "$RELAY" && -f "$LOG" ]] || return 0
+    local lines n i
+    mapfile -t lines < <(grep -aF -- "$RELAY" "$LOG")
+    n=${#lines[@]}
+    for (( i = relayed; i < n; i++ )); do
+        notify normal "${lines[i]#*"$RELAY"}"
+    done
+    relayed=$n
+}
+
+while [[ $remaining -gt 0 || -n "$RELAY" ]]; do
     # **"X4 is not running" means two opposite things, and they must not be
     # confused.** Before it starts, it means wait; after it started, it means
     # the run is over. The first draft tested only the second, so launching the
@@ -110,6 +134,7 @@ while [[ $remaining -gt 0 ]]; do
     if x4_pids >/dev/null; then
         seen_x4=1
     elif [[ $seen_x4 == 1 ]]; then
+        relay_new   # a milestone written in X4's last seconds still counts
         notify normal "X4 exited"
         break
     elif [[ $((SECONDS - start)) -ge $STARTUP ]]; then
@@ -124,6 +149,7 @@ while [[ $remaining -gt 0 ]]; do
     # Waiting on the PIDs and not on a pattern that could match this script's
     # own argv: six waiters once idled about three hours because `pgrep -f`
     # found themselves.
+    relay_new
     elapsed=$((SECONDS - start))
     for i in "${!WANT[@]}"; do
         [[ ${done_flag[i]} == 1 ]] && continue

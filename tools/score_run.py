@@ -3628,6 +3628,33 @@ def main(path):
               f"this is the most informative of the three outcomes and an "
               f"early return here would have looked like an old build.")
 
+    # --- hover binned by X4's camera direction (X4VR_HOVER_VIEW) ----------
+    #
+    # Take 315's premise: does hover survive a camera turned WITHOUT
+    # MOUSELOOK? The log can say that hover FIRED with the view turned; only
+    # Patola can say whether the cross sat ON the object when it did.
+    hv = re.findall(
+        r"hover view: cursor changes with the view straight (\d+) \| turned "
+        r"left/right \(\|yaw\|>=\d+\) (\d+) \| turned up/down "
+        r"\(\|pitch\|>=\d+\) (\d+) \| in transit (\d+) \| view unknown "
+        r"(\d+)", text)
+    if hv:
+        st, yw, pt, tr, unk = (int(v) for v in hv[-1])
+        print(f"hoverview straight {st} | turned left/right {yw} | turned "
+              f"up/down {pt} | in transit {tr} | unknown {unk}")
+        for m in re.findall(r"milestone: (.+)", text):
+            print(f"hoverview milestone: {m}")
+        if yw + pt == 0:
+            print("hoverview => NO HOVER WITH THE VIEW TURNED. Either the "
+                  "numpad part was not done, or X4 does not hover while its "
+                  "camera is turned without MOUSELOOK — which would be the "
+                  "refutation of P315.2. Ask which before reading it.")
+        else:
+            print(f"hoverview => X4 HOVERED WITH ITS CAMERA TURNED "
+                  f"({yw + pt} change(s)) and MOUSELOOK not held: picking runs "
+                  f"in a turned camera. Whether the cross sat ON the object is "
+                  f"Patola's to say, not the log's.")
+
     # --- where does X4 keep its free-look angle? (X4VR_CAMSCAN) ------------
     #
     # Read-only. Silent unless the knob ran, so "not measured" never reads as

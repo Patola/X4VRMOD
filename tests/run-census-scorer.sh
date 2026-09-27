@@ -282,6 +282,19 @@ fi
 plant /tmp/census-translate-off.log '[  223999.000] layer   head translate: ASKED FOR BUT INACTIVE — X4VR_POSE is off, so the shaders cannot shift the eye.'
 want "translate without pose -> FAIL names X4VR_POSE" /tmp/census-translate-off.log FAIL "Add X4VR_POSE=1 — it is not implied. This run says nothing about #74"
 
+# ------------------------------------------- hover by view (X4VR_HOVER_VIEW)
+hview() {  # hview <straight> <yaw> <pitch>
+    printf '[  224200.000] inject  hover view: cursor changes with the view straight %s | turned left/right (|yaw|>=30) %s | turned up/down (|pitch|>=20) %s | in transit 3 | view unknown 0' "$1" "$2" "$3"
+}
+plant /tmp/census-hview-turned.log "$(hview 40 12 7)" \
+    '[  224150.000] inject  milestone: PART 1 DONE (30 hovers, view straight). Now HOLD a numpad key.'
+want "hover view turned -> hovered turned" /tmp/census-hview-turned.log hoverview "X4 HOVERED WITH ITS CAMERA TURNED (19 change(s))"
+want "hover view turned -> defers the ON-object call" /tmp/census-hview-turned.log hoverview "Patola's to say"
+want "hover view -> lists milestones" /tmp/census-hview-turned.log hoverview "milestone: PART 1 DONE"
+plant /tmp/census-hview-none.log "$(hview 40 0 0)"
+want "hover view none turned -> names both readings" /tmp/census-hview-none.log hoverview "NO HOVER WITH THE VIEW TURNED"
+absent "hover view absent -> silent" "$BASE" hoverview
+
 # ------------------------------------------- the camera-state scan (camscan)
 csum() {  # csum <samples> <yawspan> <pitchspan> <survivors>
     printf '[  224100.000] inject  camscan: %s sample(s), camera yaw span %s deg, pitch span %s deg | 50 region(s) 110592 bytes readable | discoveries 2, alive %s, eliminated 900 | SURVIVORS %s' "$1" "$2" "$3" "$4" "$4"
