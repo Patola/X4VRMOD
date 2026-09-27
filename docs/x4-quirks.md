@@ -22625,3 +22625,58 @@ code — and that function's disassembly names where the state lives, in
 whatever representation. Read-only, and it survives the representation
 question that defeated the value scan. A lag-and-target-tolerant rescan of
 dumped snapshots is the fallback.
+
+## X4VR_CAMWATCH — built, and what driving it for real caught first
+
+`injector/x4vr_camwatch.hpp`, `tests/camwatch.cpp`. Read-only hardware
+WRITE watchpoints (`perf_event_open`, `PERF_TYPE_BREAKPOINT`, user space) on
+the first rotation row of the key-0 transform entry GetCameraRotation reads,
+in every per-frame buffer that looks valid (up to the 4 debug registers a
+thread has). X4's thread works out WHERE, once a second, through anchors
+decoded from X4's code — the call at GetCameraRotation+0x5d must land on a
+function whose first 162 bytes match X4 9.00's byte for byte, or it REFUSES.
+OUR thread arms, drains and logs; nothing of ours runs in X4's threads.
+
+The test drives a real watchpoint on a writer, a decoy writer and a reader.
+Three defects, all caught before any take:
+
+* **Samples under-counted silently.** A 32 KB ring holds ~74 samples; 1000
+  stores produced 74 samples and "lost 0", because the kernel only writes a
+  LOST record when there is room for it. The exact number now comes from the
+  events' own counters (`read()`), samples are what fit.
+* **Locked memory.** Rings count against `perf_event_mlock_kb` (516 KB here)
+  per CPU plus `RLIMIT_MEMLOCK`; a ring per X4 thread per target would run out
+  partway and leave later threads silently unwatched. Every thread now gets a
+  COUNTING event (no ring); only threads whose counter moves are upgraded to
+  SAMPLING, the count carried across. The test checks only the writer is
+  upgraded and the total stays exact (2000 of 2000 across the upgrade).
+* **Only the two NAMED buffers were watched.** If X4 triple-buffers, the
+  writer fills one neither index global names yet — a clean null over a store
+  next door. Every valid buffer is watched now.
+
+## P316 — who writes the camera? And does X4 still crash on exit?
+
+Take 315's line with **head-look back ON** (the camera must move a lot, and
+the exit-crash guard is only reached with head-look on), **`X4VR_CAMWATCH=1`**,
+and the cursor knobs of 315 removed (`X4VR_CURSOR_CANVAS` back to its default,
+`X4VR_HOVER_VIEW` and `X4VR_CAMSCAN` dropped — no hover protocol this take).
+`X4VR_POSE=1` and `X4VR_HEAD_TRANSLATE=1` stay, as Patola asked. WiVRn,
+configuration 1. Paced by one milestone: "the camera probe has what it needs"
+after 300 samples and 60 degrees of yaw.
+
+* **P316.1** anchors OK; at least one valid buffer aimed.
+* **P316.2** stores counted while the camera turns, at least one thread
+  upgraded, WRITER lines logged. **I expect hop 1 of possibly 2:** the matrix
+  is most likely copied into the per-frame buffer by a generic transform
+  routine that runs every frame, not by free-look code itself. Its registers
+  at the store show where it copied FROM, and that source is the next address
+  to watch. Not predicting which thread.
+* **P316.3** no X4 core in `coredumpctl` after quitting through the menu —
+  the IsHUDActive guard's first run where it can act.
+* **Secondary, only if it happens:** head translation with head-look ON is the
+  regime take 245 switched off (cockpit pushed away / stretched on turning).
+  Patola reports it if he feels it; nothing to watch for deliberately.
+
+**Refutation of P316.2:** no store counted while the camera turns. Then the
+entry GetCameraRotation reads is not where the orientation is written — for
+example, computed at read time — and the watch moves up a level.

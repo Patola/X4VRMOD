@@ -3675,6 +3675,65 @@ def main(path):
                   f"in a turned camera. Whether the cross sat ON the object is "
                   f"Patola's to say, not the log's.")
 
+    # --- who WRITES the camera orientation? (X4VR_CAMWATCH) --------------
+    #
+    # Read-only hardware write-watchpoints on the matrix GetCameraRotation
+    # reads. Every branch below says what it can and cannot conclude; the
+    # WRITER lines are for offline disassembly, not a verdict in themselves.
+    if "camwatch: anchors REFUSED" in text:
+        m = re.search(r"camwatch: anchors REFUSED[^(]*\(([^)]*)\)", text)
+        fails.append("X4VR_CAMWATCH refused to arm: " +
+                     (m.group(1) if m else "anchors did not decode") +
+                     " — this X4 build is not the one the probe was written "
+                     "against")
+    cws = re.findall(
+        r"camwatch: (\d+) event\(s\), (\d+) sampling, (\d+) arm failure\(s\) "
+        r"\| (\d+) store\(s\) counted, (\d+) sampled, (\d+) LOST \| (\d+) "
+        r"distinct writer ip\(s\)(?:: ([^|]*))? \| camera yaw span (\d+) deg",
+        text)
+    if cws:
+        (ev, samp_ev, errs, stores, sampled, lost, nwr, top,
+         yspan) = cws[-1]
+        ev, stores, sampled, nwr, yspan = (int(ev), int(stores), int(sampled),
+                                           int(nwr), int(yspan))
+        aimed = re.findall(r"camwatch: aimed at (.+?) — (\d+) event", text)
+        print(f"camwatch {ev} event(s), {samp_ev} sampling, {errs} arm "
+              f"failure(s) | {stores} store(s) counted, {sampled} sampled, "
+              f"{lost} LOST | {nwr} distinct writer ip(s) | camera yaw span "
+              f"{yspan} deg")
+        if aimed:
+            print(f"camwatch aimed at {aimed[-1][0]}")
+        for m in re.findall(r"camwatch: camera \S+, (\d+) valid buffer\(s\)"
+                            r"[^;]*; the index globals name buffers (\d+) and "
+                            r"(\d+)", text)[-1:]:
+            print(f"camwatch {m[0]} valid buffer(s); index globals named "
+                  f"{m[1]} and {m[2]} when last aimed")
+        if ev == 0:
+            fails.append("X4VR_CAMWATCH armed NO event — see the 'arming "
+                         "thread ... failed' line for the errno")
+        elif stores == 0 and yspan < 20:
+            print("camwatch => NOT EXERCISED: no store counted, but the camera "
+                  "barely turned either — not a null")
+        elif stores == 0:
+            print(f"camwatch => NO STORE to the watched rows while the camera "
+                  f"turned {yspan} deg. The matrix GetCameraRotation reads is "
+                  f"not written at the entries watched — a BOUNDED null about "
+                  f"these addresses, not about the camera")
+        elif sampled == 0:
+            print(f"camwatch => {stores} store(s) counted but NONE sampled — "
+                  f"the upgrade to a sampling event failed; see the arm "
+                  f"failures")
+        else:
+            print(f"camwatch => {nwr} INSTRUCTION(S) WRITE the camera "
+                  f"orientation ({stores} stores counted, {sampled} sampled). "
+                  f"Disassemble each offline — the store is the instruction "
+                  f"just BEFORE the ip:")
+            for w in re.findall(r"camwatch: WRITER #(\d+) ip=(\w+) \(the store"
+                                r"[^)]*\) thread (\d+) '([^']*)' buf (\d+) \|"
+                                r".*?\| stack->X4 text:(.*)", text):
+                print(f"camwatch   #{w[0]} ip={w[1]} thread {w[2]} "
+                      f"'{w[3]}' buf {w[4]} | returns:{w[5][:160]}")
+
     # --- where does X4 keep its free-look angle? (X4VR_CAMSCAN) ------------
     #
     # Read-only. Silent unless the knob ran, so "not measured" never reads as

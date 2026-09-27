@@ -172,6 +172,12 @@ add_executable(x4vr_test_riprel riprel.cpp)
 # decoys, a still camera and a state outside the scan. Self-checking.
 add_executable(x4vr_test_camscan camscan.cpp)
 
+# The camera write-watch: record layout, anchors against the real binary, the
+# entry lookup, and a LIVE hardware watchpoint with decoy threads. Needs
+# perf_event_paranoid <= 2; says SKIP otherwise. Self-checking.
+add_executable(x4vr_test_camwatch camwatch.cpp)
+target_link_libraries(x4vr_test_camwatch PRIVATE Threads::Threads)
+
 # Task #73's lag, and the lead that removes it. Drives the real head_look_step
 # against a model of X4's camera. Its claim to being more than a story is that
 # it independently reproduces take 136 -- kp 1.0 spinning too fast to read --

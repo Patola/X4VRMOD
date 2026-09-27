@@ -323,6 +323,26 @@ plant /tmp/census-hview-none.log "$(hview 40 0 0)"
 want "hover view none turned -> names both readings" /tmp/census-hview-none.log hoverview "NO HOVER WITH THE VIEW TURNED"
 absent "hover view absent -> silent" "$BASE" hoverview
 
+# ------------------------------------------ the camera write-watch (camwatch)
+cwsum() {  # cwsum <events> <sampling> <stores> <sampled> <writers> <yawspan>
+    printf '[  224400.000] inject  camwatch: %s event(s), %s sampling, 0 arm failure(s) | %s store(s) counted, %s sampled, 0 LOST | %s distinct writer ip(s) | camera yaw span %s deg' "$@"
+}
+cwwriter='[  224399.000] inject  camwatch: WRITER #1 ip=1a2b3c4 (the store is the instruction BEFORE this address) thread 4242 '"'"'X4 Main'"'"' buf 1 | rax=0 rbx=1 | stack->X4 text: +0x18:1a2c000 +0x40:72f657'
+plant /tmp/census-cw-found.log "$(cwsum 300 1 12000 4000 1 90)" "$cwwriter"
+want "camwatch writers -> names them" /tmp/census-cw-found.log camwatch "1 INSTRUCTION(S) WRITE the camera orientation"
+want "camwatch writers -> lists ip, thread, returns" /tmp/census-cw-found.log camwatch "#1 ip=1a2b3c4 thread 4242 'X4 Main' buf 1 | returns: +0x18:1a2c000"
+plant /tmp/census-cw-null.log "$(cwsum 300 0 0 0 0 90)"
+want "camwatch no store, camera turned -> bounded null" /tmp/census-cw-null.log camwatch "a BOUNDED null about these addresses"
+plant /tmp/census-cw-still.log "$(cwsum 300 0 0 0 0 5)"
+want "camwatch no store, still camera -> not exercised" /tmp/census-cw-still.log camwatch "NOT EXERCISED"
+plant /tmp/census-cw-nosample.log "$(cwsum 300 0 500 0 0 90)"
+want "camwatch counted not sampled -> says the upgrade failed" /tmp/census-cw-nosample.log camwatch "NONE sampled"
+plant /tmp/census-cw-noarm.log "$(cwsum 0 0 0 0 0 90)"
+want "camwatch nothing armed -> FAIL" /tmp/census-cw-noarm.log FAIL "armed NO event"
+plant /tmp/census-cw-refused.log '[  224400.000] inject  camwatch: anchors REFUSED — fetch (nil), buffer-index globals (nil) (nil) (fetch prologue differs from X4 9.00'"'"'s — another build; refusing to aim at a guessed layout)'
+want "camwatch refused -> FAIL names the build" /tmp/census-cw-refused.log FAIL "not the one the probe was written against"
+absent "camwatch absent -> silent" "$BASE" camwatch
+
 # ------------------------------------------- the camera-state scan (camscan)
 csum() {  # csum <samples> <yawspan> <pitchspan> <survivors>
     printf '[  224100.000] inject  camscan: %s sample(s), camera yaw span %s deg, pitch span %s deg | 50 region(s) 110592 bytes readable | discoveries 2, alive %s, eliminated 900 | SURVIVORS %s' "$1" "$2" "$3" "$4" "$4"

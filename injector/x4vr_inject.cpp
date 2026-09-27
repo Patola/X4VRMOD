@@ -29,6 +29,7 @@
 #include <errno.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <cmath>
@@ -54,6 +55,7 @@ extern char **environ;
 #include "../common/x4vr_plantid.hpp"
 #include "x4vr_riprel.hpp"
 #include "x4vr_camscan.hpp"
+#include "x4vr_camwatch.hpp"
 #include "x4vr_lua.hpp"
 #include "../common/x4vr_shquote.hpp"
 
@@ -2444,6 +2446,276 @@ static void camscan_report() {
         X4VR_LOG("camscan: CANDIDATE %s", sc.describe(sv[i]).c_str());
 }
 
+// **X4VR_CAMWATCH=1 — WHO writes the camera orientation GetCameraRotation
+// reads? Read-only.** See x4vr_camwatch.hpp for the mechanism and why the
+// value scan was not enough.
+//
+// Split in two on purpose. X4's thread (SDL_PumpEvents) works out WHERE to
+// watch -- the key-0 entry's first rotation row in each per-frame buffer -- by
+// reading X4's own structures through the decoded anchors, once a second so a
+// new camera object (seat change, load) re-aims it. OUR thread arms one
+// hardware write-watchpoint per X4 thread and target, drains the rings and
+// logs. Nothing of ours runs inside X4's threads; each store costs X4 a debug
+// trap the kernel absorbs.
+static bool camwatch_enabled() {
+    static const bool on = x4vr::env_on("X4VR_CAMWATCH", false);
+    return on;
+}
+
+namespace {
+struct CamWatchShared {
+    std::mutex mu;
+    std::vector<x4vr::camwatch::Target> targets;
+    uint64_t generation = 0;
+    std::atomic<bool> started{false};
+    // Camera sweep seen on X4's thread, for the "enough" milestone.
+    std::atomic<float> yaw_lo{1e9f}, yaw_hi{-1e9f};
+} g_camwatch;
+} // namespace
+
+static bool self_read(uintptr_t addr, void *out, size_t n);
+
+// X4's executable text, for telling return addresses from stack noise.
+static void x4_text_ranges(std::vector<std::pair<uintptr_t, uintptr_t>> *out) {
+    out->clear();
+    if (FILE *f = fopen("/proc/self/maps", "re")) {
+        char line[512];
+        while (fgets(line, sizeof line, f)) {
+            unsigned long lo, hi;
+            char perms[8] = {};
+            if (sscanf(line, "%lx-%lx %7s", &lo, &hi, perms) == 3 &&
+                perms[2] == 'x' && strstr(line, "X4 Foundations/X4\n"))
+                out->push_back({(uintptr_t)lo, (uintptr_t)hi});
+        }
+        fclose(f);
+    }
+}
+
+static void camwatch_monitor() {
+    using namespace x4vr::camwatch;
+    WriteWatch w;
+    uint64_t gen_armed = ~0ull;
+    std::vector<Target> tg;
+    struct Agg {
+        uint64_t n = 0;
+        pid_t tid = 0;
+        uint32_t buf = 0;
+    };
+    std::map<uint64_t, Agg> writers;
+    std::map<int, uint64_t> arm_err;
+    uint64_t sampled = 0;
+    std::vector<std::pair<uintptr_t, uintptr_t>> text;
+    x4_text_ranges(&text);
+    const pid_t self = (pid_t)syscall(SYS_gettid);
+    timespec t_scan{}, t_report{};
+    bool said_enough = false, said_capped = false;
+    constexpr size_t kMaxEvents = 400;
+    auto secs_since = [](const timespec &t) {
+        timespec n{};
+        clock_gettime(CLOCK_MONOTONIC, &n);
+        return (double)(n.tv_sec - t.tv_sec) + (n.tv_nsec - t.tv_nsec) * 1e-9;
+    };
+    auto arm_threads = [&]() {
+        for (pid_t tid : threads_of_self()) {
+            if (tid == self || w.armed_on(tid))
+                continue;
+            for (const Target &t : tg) {
+                if (w.events() >= kMaxEvents) {
+                    if (!said_capped) {
+                        said_capped = true;
+                        X4VR_LOG("camwatch: event cap %zu reached — later "
+                                 "threads are NOT watched", kMaxEvents);
+                    }
+                    return;
+                }
+                if (int e = w.arm(tid, t, false)) {
+                    if (arm_err[e]++ == 0)
+                        X4VR_LOG("camwatch: arming thread %d failed: %s "
+                                 "(counted from here on)", (int)tid,
+                                 strerror(e));
+                }
+            }
+        }
+    };
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(g_camwatch.mu);
+            if (g_camwatch.generation != gen_armed) {
+                gen_armed = g_camwatch.generation;
+                tg = g_camwatch.targets;
+                w.disarm_all();
+                arm_threads();
+                char b[256];
+                int k = 0;
+                for (const Target &t : tg)
+                    k += snprintf(b + k, sizeof b - (size_t)k, "%sbuf %u @%p",
+                                  k ? ", " : "", t.buf, (void *)t.addr);
+                X4VR_LOG("camwatch: aimed at %s — %zu event(s) armed",
+                         k ? b : "(nothing)", w.events());
+                clock_gettime(CLOCK_MONOTONIC, &t_scan);
+            }
+        }
+        if (secs_since(t_scan) >= 1.0) {
+            arm_threads(); // threads X4 started since
+            // Threads whose counter moved WRITE the camera: give them a ring.
+            // Capped, because a ring is locked memory (x4vr_camwatch.hpp).
+            for (const auto &p : w.writers_to_upgrade()) {
+                if (w.sampling_events() >= 16)
+                    break;
+                if (int e = w.upgrade(p.first, p.second)) {
+                    if (arm_err[e]++ == 0)
+                        X4VR_LOG("camwatch: upgrading writer thread %d to "
+                                 "sampling failed: %s", (int)p.first,
+                                 strerror(e));
+                } else {
+                    X4VR_LOG("camwatch: thread %d WRITES buf %u — now "
+                             "sampling it", (int)p.first, p.second.buf);
+                }
+            }
+            clock_gettime(CLOCK_MONOTONIC, &t_scan);
+        }
+        w.poll([&](const Sample &s, const Target &t) {
+            sampled++;
+            Agg &a = writers[s.ip];
+            if (a.n++ == 0) {
+                a.tid = (pid_t)s.tid;
+                a.buf = t.buf;
+                char comm[32] = "?";
+                char path[64];
+                snprintf(path, sizeof path, "/proc/self/task/%u/comm", s.tid);
+                if (FILE *f = fopen(path, "re")) {
+                    if (fgets(comm, sizeof comm, f))
+                        comm[strcspn(comm, "\n")] = 0;
+                    fclose(f);
+                }
+                char regs[640];
+                int k = 0;
+                for (int i = 0; i < kNumRegs; i++)
+                    k += snprintf(regs + k, sizeof regs - (size_t)k,
+                                  "%s%s=%llx", i ? " " : "", reg_name(i),
+                                  (unsigned long long)s.regs[i]);
+                char rets[400];
+                int m = 0, found = 0;
+                for (uint32_t o = 0; o + 8 <= s.stack_len && found < 12; o += 8) {
+                    uint64_t v;
+                    memcpy(&v, s.stack + o, 8);
+                    for (const auto &r : text)
+                        if (v >= r.first && v < r.second) {
+                            m += snprintf(rets + m, sizeof rets - (size_t)m,
+                                          " +0x%x:%llx", o,
+                                          (unsigned long long)v);
+                            found++;
+                            break;
+                        }
+                }
+                if (!m)
+                    snprintf(rets, sizeof rets, " (none in %u bytes)",
+                             s.stack_len);
+                X4VR_LOG("camwatch: WRITER #%zu ip=%llx (the store is the "
+                         "instruction BEFORE this address) thread %u '%s' "
+                         "buf %u | %s | stack->X4 text:%s",
+                         writers.size(), (unsigned long long)s.ip, s.tid,
+                         comm, t.buf, regs, rets);
+            }
+        });
+        if (secs_since(t_report) >= 2.0) {
+            clock_gettime(CLOCK_MONOTONIC, &t_report);
+            const uint64_t stores = w.stores();
+            char top[512];
+            int k = 0;
+            std::vector<std::pair<uint64_t, uint64_t>> byn;
+            for (const auto &kv : writers)
+                byn.push_back({kv.second.n, kv.first});
+            std::sort(byn.rbegin(), byn.rend());
+            for (size_t i = 0; i < byn.size() && i < 6; i++)
+                k += snprintf(top + k, sizeof top - (size_t)k,
+                              "%s%llx x%llu", i ? ", " : "",
+                              (unsigned long long)byn[i].second,
+                              (unsigned long long)byn[i].first);
+            uint64_t errs = 0;
+            for (const auto &kv : arm_err)
+                errs += kv.second;
+            const float ys = g_camwatch.yaw_hi.load() - g_camwatch.yaw_lo.load();
+            X4VR_LOG("camwatch: %zu event(s), %zu sampling, %llu arm "
+                     "failure(s) | %llu store(s) counted, %llu sampled, %llu "
+                     "LOST | %zu distinct writer ip(s)%s%s | camera yaw span "
+                     "%.0f deg",
+                     w.events(), w.sampling_events(), (unsigned long long)errs,
+                     (unsigned long long)stores, (unsigned long long)sampled,
+                     (unsigned long long)w.lost(), writers.size(),
+                     k ? ": " : "", k ? top : "", ys > 0 ? ys : 0.0f);
+            if (!said_enough && sampled >= 300 && ys >= 60.0f) {
+                said_enough = true;
+                X4VR_LOG("milestone: the camera probe has what it needs "
+                         "(%llu writes sampled from %zu writer(s)). You can "
+                         "quit X4 now — through the menu, please.",
+                         (unsigned long long)sampled, writers.size());
+            }
+        }
+        usleep(20000);
+    }
+}
+
+static void camwatch_tick() {
+    if (!camwatch_enabled())
+        return;
+    static timespec last{};
+    timespec now{};
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    using Fn = X4Rotation (*)();
+    static Fn get = (Fn)dlsym(RTLD_DEFAULT, "GetCameraRotation");
+    if (!get)
+        return;
+    // The sweep, every tick: cheap, and it is what "enough" is judged on.
+    {
+        const X4Rotation r = get();
+        const float y = r.yaw * kRad2Deg;
+        if (y < g_camwatch.yaw_lo.load())
+            g_camwatch.yaw_lo.store(y);
+        if (y > g_camwatch.yaw_hi.load())
+            g_camwatch.yaw_hi.store(y);
+    }
+    const double dt = (double)(now.tv_sec - last.tv_sec) +
+                      (double)(now.tv_nsec - last.tv_nsec) * 1e-9;
+    if (dt < 1.0)
+        return;
+    last = now;
+
+    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    static const x4vr::camwatch::Anchors anc = [&] {
+        const x4vr::camwatch::Anchors a =
+            x4vr::camwatch::decode_anchors((uintptr_t)(void *)get, rd);
+        X4VR_LOG("camwatch: anchors %s — fetch %p, buffer-index globals %p %p "
+                 "(%s)",
+                 a.ok ? "OK" : "REFUSED", (void *)a.fetch, (void *)a.g0,
+                 (void *)a.g1, a.why);
+        return a;
+    }();
+    static const void *const *root_slot =
+        x4vr::riprel_mov_load_slot((const uint8_t *)(void *)get + 0xd, 0);
+    if (!anc.ok || !root_slot)
+        return;
+    uintptr_t root = 0, cam = 0;
+    if (!self_read((uintptr_t)root_slot, &root, 8) || !root ||
+        !self_read(root + 0x3e8, &cam, 8) || !cam)
+        return;
+    uint32_t n0 = 0, n1 = 0;
+    const auto t = x4vr::camwatch::targets(cam, anc, rd, &n0, &n1);
+    std::lock_guard<std::mutex> lock(g_camwatch.mu);
+    bool same = t.size() == g_camwatch.targets.size();
+    for (size_t i = 0; same && i < t.size(); i++)
+        same = t[i].addr == g_camwatch.targets[i].addr;
+    if (!same) {
+        g_camwatch.targets = t;
+        g_camwatch.generation++;
+        X4VR_LOG("camwatch: camera %p, %zu valid buffer(s) with a key-0 "
+                 "entry; the index globals name buffers %u and %u right now",
+                 (void *)cam, t.size(), n0, n1);
+    }
+    if (!t.empty() && !g_camwatch.started.exchange(true))
+        std::thread(camwatch_monitor).detach();
+}
+
 // **X4VR_HOVER_VIEW=1 — which way was X4's camera pointing when the cursor
 // changed? And tell the player, in the headset, when a part is done.**
 //
@@ -4530,6 +4802,7 @@ void SDL_PumpEvents(void) {
             headlook_tick();
         panprobe_tick();
         camscan_tick();
+        camwatch_tick();
         hoverview_tick();
         pumprate_report();
     }
