@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="utf-8"?>
+<content id="x4vrmod_lookaround" name="X4VRMOD look-around" description="Raises X4's cockpit free-look limits from 65/35 degrees to 180/75, so VR head tracking can turn the view all the way round. Part of X4VRMOD; deployed by its launcher (X4VR_EXTENSIONS=1). Remove by deleting this directory." author="X4VRMOD" version="2" date="2026-09-30" save="0"/>

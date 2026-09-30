@@ -483,6 +483,23 @@ if [[ $# -eq 0 ]]; then
     set -- "$GAME" -skipintro -nocputhrottle -nosoundthrottle
 fi
 
+# X4VR_EXTENSIONS=1: deploy OUR extensions (extension/ in the repo) into X4's
+# folder when the installed copy differs, and let the injector enable them for
+# this session only through its content.xml fork -- vanilla's content.xml is
+# never written. A modified game is allowed since 2026-09-26. Pair with
+# X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_HEADLOOK_PITCH_LIMIT=75, or head-look's own
+# servo stops at 65/35 whatever the extension allows.
+if [[ "${X4VR_EXTENSIONS:-0}" == 1 ]]; then
+    if ! "$ROOT/launch/deploy-extensions.sh" "$(dirname "$GAME")"; then
+        echo "x4vr-launch: WARNING extension deployment failed — X4 may load a" \
+             "stale copy or none" >&2
+    fi
+    if [[ -z "${X4VR_HEADLOOK_YAW_LIMIT:-}" && "${X4VR_HEADLOOK:-0}" == 1 ]]; then
+        echo "x4vr-launch: NOTE X4VR_EXTENSIONS=1 without X4VR_HEADLOOK_YAW_LIMIT —" \
+             "head-look will still stop at 65 deg" >&2
+    fi
+fi
+
 # X4 reads colour targets whose DCC (Delta Color Compression) metadata is
 # stale, which paints the frame with a grid of saturated RGB blocks. It only
 # bites when antialiasing is off -- which the mod forces -- so this is on by

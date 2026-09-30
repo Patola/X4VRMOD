@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<diff>
+  <replace sel="/parameters/playercamera/lookaround/internal/@maxyaw">180</replace>
+  <replace sel="/parameters/playercamera/lookaround/internal/@maxpitch">75</replace>
+</diff>
