@@ -36,6 +36,7 @@
 
 #include <cerrno>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -122,8 +123,9 @@ Anchors decode_anchors(uintptr_t get_camera_rotation, Reader read) {
 }
 
 struct Target {
-    uintptr_t addr = 0; // first rotation row of the key-0 entry
-    uint32_t buf = 0;   // which per-frame buffer
+    uintptr_t addr = 0; // the watched 8 bytes (a rotation row's x,y)
+    uint32_t buf = 0;   // hop 1: which per-frame buffer; hop 2: target index
+    char label[24] = {}; // hop 2: "controller", "child0".. -- empty in hop 1
 };
 
 // The key-0 entry's row 0, in EVERY buffer that looks valid (up to four, the
@@ -169,6 +171,125 @@ std::vector<Target> targets(uintptr_t cam, const Anchors &a, Reader read,
                 break;
             }
         }
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------- hop 2
+//
+// Take 316 found ONE writer of the matrix above: a per-frame snapshot
+// (0x192a310) that asks 0x1929f70 for the camera's transform. Read statically
+// from there: for the player's camera, 0x1929f70 takes the controller at
+// camera+0x18 and composes its local transform, which for the controller class
+// seen in take 316 (vtable 0x3b81fe0) is 0x191d0f0 at vtable+0x1b0. That
+// function starts from the controller's STORED matrix (+0x10..+0x40) and
+// composes a CHAIN of child controllers (pointer vector +0xa0..+0xa8), each
+// with its own stored matrix. The free-look is in one of those. Hop 2 watches
+// the controller's and the first children's stored row 0 and reports which
+// moves with the head, and who writes it.
+//
+// Every offset is tied to X4's bytes: the sites below must match exactly, and
+// the controller's vtable+0x1b0 must BE 0x191d0f0, or hop 2 refuses -- a
+// different controller class could lay its chain out differently.
+struct Site {
+    uintptr_t va;
+    uint8_t n;
+    uint8_t bytes[8];
+};
+inline constexpr Site kHop2Sites[] = {
+    // 0x1929f70: `mov 0x18(%rbx),%r12` -- the controller, both branches.
+    {0x1929ff6, 4, {0x4c, 0x8b, 0x63, 0x18}},
+    {0x192a2f9, 4, {0x4c, 0x8b, 0x63, 0x18}},
+    // 0x191d0f0: the chain's end and begin.
+    {0x191d17e, 7, {0x4c, 0x8b, 0xa5, 0xa8, 0x00, 0x00, 0x00}},
+    {0x191d185, 7, {0x4c, 0x8b, 0xbd, 0xa0, 0x00, 0x00, 0x00}},
+    // 0x191d0f0: the stored matrix, translation +0x10 then row 0 +0x20.
+    {0x191d158, 4, {0x0f, 0x28, 0x45, 0x10}},
+    {0x191d15f, 5, {0x66, 0x0f, 0x6f, 0x45, 0x20}},
+    // The base compose every child goes through: row 0 at +0x20 there too.
+    {0x19186ac, 5, {0x66, 0x0f, 0x6f, 0x47, 0x20}},
+};
+inline constexpr uintptr_t kControllerOff = 0x18;
+inline constexpr uintptr_t kChainBegin = 0xa0, kChainEnd = 0xa8;
+inline constexpr uintptr_t kStoredRow0 = 0x20;
+inline constexpr uintptr_t kVtLocal = 0x1b0, kVtCompose = 0x138;
+inline constexpr uintptr_t kLocalTransformFn = 0x191d0f0;
+
+template <class Reader> bool verify_hop2_sites(Reader read, uintptr_t *bad) {
+    for (const Site &st : kHop2Sites) {
+        uint8_t b[8];
+        if (!read(st.va, b, st.n) || memcmp(b, st.bytes, st.n) != 0) {
+            if (bad)
+                *bad = st.va;
+            return false;
+        }
+    }
+    return true;
+}
+
+struct Chain {
+    bool ok = false;
+    const char *why = "not read";
+    uintptr_t controller = 0, vtable = 0, local_fn = 0;
+    struct Child {
+        uintptr_t obj = 0, vtable = 0, compose = 0, local = 0;
+    };
+    std::vector<Child> children;
+};
+
+template <class Reader> Chain read_chain(uintptr_t cam, Reader read) {
+    Chain c;
+    if (!cam || !read(cam + kControllerOff, &c.controller, 8) || !c.controller) {
+        c.why = "no controller at camera+0x18";
+        return c;
+    }
+    if (!read(c.controller, &c.vtable, 8) || !c.vtable ||
+        !read(c.vtable + kVtLocal, &c.local_fn, 8)) {
+        c.why = "controller vtable unreadable";
+        return c;
+    }
+    if (c.local_fn != kLocalTransformFn) {
+        c.why = "controller class differs from take 316's (its vtable+0x1b0 is "
+                "not 0x191d0f0) — the chain layout is unverified, refusing";
+        return c;
+    }
+    uintptr_t b = 0, e = 0;
+    if (!read(c.controller + kChainBegin, &b, 8) ||
+        !read(c.controller + kChainEnd, &e, 8) || e < b || (e - b) % 8 ||
+        (e - b) / 8 > 32) {
+        c.why = "child vector unreadable or implausible";
+        return c;
+    }
+    for (uintptr_t p = b; p < e; p += 8) {
+        Chain::Child ch;
+        if (!read(p, &ch.obj, 8) || !ch.obj || !read(ch.obj, &ch.vtable, 8))
+            continue;
+        read(ch.vtable + kVtCompose, &ch.compose, 8);
+        read(ch.vtable + kVtLocal, &ch.local, 8);
+        c.children.push_back(ch);
+    }
+    c.ok = true;
+    c.why = "controller class verified, chain read";
+    return c;
+}
+
+// Row 0 of the controller's stored matrix, then of the first children, up to
+// the four debug registers a thread has.
+inline std::vector<Target> chain_targets(const Chain &c) {
+    std::vector<Target> out;
+    if (!c.ok)
+        return out;
+    Target t;
+    t.addr = c.controller + kStoredRow0;
+    t.buf = 0;
+    snprintf(t.label, sizeof t.label, "controller");
+    out.push_back(t);
+    for (size_t i = 0; i < c.children.size() && out.size() < 4; i++) {
+        Target u;
+        u.addr = c.children[i].obj + kStoredRow0;
+        u.buf = (uint32_t)(i + 1);
+        snprintf(u.label, sizeof u.label, "child%u", (unsigned)(i & 0xff));
+        out.push_back(u);
     }
     return out;
 }

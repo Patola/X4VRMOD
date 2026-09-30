@@ -3729,10 +3729,41 @@ def main(path):
                   f"Disassemble each offline — the store is the instruction "
                   f"just BEFORE the ip:")
             for w in re.findall(r"camwatch: WRITER #(\d+) ip=(\w+) \(the store"
-                                r"[^)]*\) thread (\d+) '([^']*)' buf (\d+) \|"
-                                r".*?\| stack->X4 text:(.*)", text):
+                                r"[^)]*\) thread (\d+) '([^']*)' buf (\d+)"
+                                r"(?: \[([^\]]*)\])? \|.*?\| stack->X4 "
+                                r"text:(.*)", text):
+                lab = f" [{w[5]}]" if w[5] else ""
                 print(f"camwatch   #{w[0]} ip={w[1]} thread {w[2]} "
-                      f"'{w[3]}' buf {w[4]} | returns:{w[5][:160]}")
+                      f"'{w[3]}' buf {w[4]}{lab} | returns:{w[6][:160]}")
+    # Hop 2: the camera controller's chain, and which stored matrix moves
+    # WITH the camera (free-look), stays still, or moves on its own.
+    if "camwatch hop2: REFUSED" in text:
+        m = re.search(r"camwatch hop2: REFUSED — (.*)", text)
+        fails.append("X4VR_CAMWATCH=2 refused: " + (m.group(1) if m else "?"))
+    ch = re.findall(r"camwatch hop2: (controller \S+ vtable .*)", text)
+    if ch:
+        print(f"camwatch hop2 {ch[-1][:400]}")
+    cm = {}
+    for rec in re.findall(
+            r"camwatch hop2 co-move \[([^\]]*)\] @(\S+): (\d+) tick\(s\), "
+            r"camera moved in (\d+), the matrix moved WITH it in (\d+), ALONE "
+            r"in (\d+)", text):
+        cm[rec[0]] = rec
+    for lab in sorted(cm, key=lambda x: (x != "controller", x)):
+        _, addr, t, c, w, a = cm[lab]
+        t, c, w, a = int(t), int(c), int(w), int(a)
+        if c < 30:
+            v = "NOT EXERCISED (the camera barely moved)"
+        elif w == 0 and a == 0:
+            v = "STATIC — never changed"
+        elif w >= 0.8 * c and a <= 0.1 * t:
+            v = "MOVES WITH THE CAMERA — the free-look candidate"
+        elif a > w:
+            v = "moves ON ITS OWN (shake / sway / something else)"
+        else:
+            v = "MIXED — moves with the camera and on its own"
+        print(f"camwatch hop2 [{lab}] {t} ticks, camera moved {c}, matrix WITH "
+              f"it {w}, ALONE {a} => {v}")
 
     # --- where does X4 keep its free-look angle? (X4VR_CAMSCAN) ------------
     #

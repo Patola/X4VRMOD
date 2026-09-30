@@ -22756,3 +22756,68 @@ colon-TAB), and a 0x40-byte window that cut GetCameraRotation's `test` in half
 and called a seen-but-unresolved load "no load" — now UNDECIDED, which fails.
 Limit: it checks the prologue's global loads, not what IsGamePaused's callee
 does inside.
+
+## Take 315 — P315.1 and P315.2 HELD (Patola, 2026-09-30)
+
+*"take 315 was perfect, when hovering an object even with the numpad keys at
+their extreme it would both highlight the object (spread the 4 colored
+brackets a bit apart) and change the cursor from an arrow to a target-circle,
+and then change it back to an arrow when it left the hover (and the brackets
+would revert too). This happened even with the effect of slight slanting the
+bracket when seen from the sides (which... looks good, this slant doesn't need
+to be fixed)."*
+
+**The premise holds: X4 picks through a camera turned WITHOUT MOUSELOOK,
+correctly, at the 65/35 degree stops.** So a direct camera write should give
+hover with no cursor correction at all — the refutation branch of P315.2
+(pair the write with a correction by the free-look angle) is not needed.
+Leaning with translation on did not disturb it either. The bracket slant seen
+from the sides is correct perspective, and is NOT to be "fixed".
+
+## X4VR_CAMWATCH=2 (hop 2) — built; P317
+
+`X4VR_CAMWATCH=1` stays take 316's hop 1, byte for byte. `=2` aims at the
+camera controller instead: seven analysed code sites must match X4 9.00 byte
+for byte (the controller at camera+0x18 in both branches of 0x1929f70, the
+chain's +0xa0/+0xa8 and the stored matrix +0x10/+0x20 in 0x191d0f0, and the
+base compose's row 0), and the controller's vtable+0x1b0 must BE 0x191d0f0, or
+it refuses. Each second it reads the chain and logs it whenever it changes —
+controller, and per child its object, vtable, compose (vt+0x138) and local
+(vt+0x1b0) targets, all build constants for offline disassembly. It watches
+stored row 0 of the controller and the first three children (four debug
+registers), with hop 1's counting-then-sampling machinery.
+
+**New: a co-movement census**, on X4's thread at 30 Hz: for each watched
+matrix, the ticks the CAMERA moved (GetCameraRotation, >0.01 deg — a
+"visible" threshold would have scored the free-look matrix as moving alone on
+every slow drift), the ticks the matrix moved WITH it, and ALONE. The scorer
+calls each MOVES WITH THE CAMERA (free-look candidate), STATIC, ON ITS OWN
+(shake/sway), MIXED, or NOT EXERCISED. Paced by its own milestone: every
+matrix 60 s of ticks with 10 s of camera motion (hop 1's 300-sample milestone
+fired within seconds in take 316, far too early for a census).
+
+`tests/camwatch.cpp`: sites verified against the real binary and a one-byte
+change refused and named; a synthetic controller with four children yields
+exactly the controller plus three; a foreign controller class and an
+end-before-begin vector refuse. Census suite 111 -> 117.
+
+### P317 — which link of the chain is free-look?
+
+Take 316's line with `X4VR_CAMWATCH=2`. Head-look ON. WiVRn, configuration 1.
+Nothing to judge by eye: look around widely and fly until the milestone, then
+quit through the menu.
+
+* **P317.1** sites OK; the controller verified (vtable 0x3b81fe0 again, or
+  another class whose +0x1b0 is 0x191d0f0); the chain logged.
+* **P317.2** exactly one watched matrix MOVES WITH THE CAMERA; the others
+  STATIC or ON THEIR OWN. Not predicting which — the controller's own stored
+  matrix is as likely as a child.
+* **P317.3** that matrix's WRITER is logged, and its function is the free-look
+  code — hop 3 is reading it statically, as hop 2 was.
+* **P317.4** no X4 core after quitting through the menu: the IsInPanelMode
+  guard's first run where it can act, with the call-guard test green.
+
+**Refutation of P317.2:** nothing moves with the camera. Then free-look is in a
+child beyond the first three (the log names them all), or it is applied in the
+Euler part of 0x191d0f0 rather than stored in any matrix — and the watch moves
+to the follow-camera/factor inputs instead.

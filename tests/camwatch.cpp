@@ -208,6 +208,79 @@ int main() {
               "targets: inline buffer, key 0 found past a non-zero key");
     }
 
+    // ---- hop 2: code sites against the real binary ---------------------
+    {
+        const char *x4 = "/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4";
+        Elf elf;
+        if (!elf.load(x4)) {
+            printf("skip  hop-2 sites — no X4 at %s\n", x4);
+        } else {
+            auto rd = [&](uintptr_t va, void *o, size_t n) {
+                return elf.read(va, o, n);
+            };
+            uintptr_t bad = 0;
+            check(verify_hop2_sites(rd, &bad),
+                  "hop 2: every analysed code site matches X4 9.00 byte for byte");
+            auto bent = [&](uintptr_t va, void *o, size_t n) {
+                if (!elf.read(va, o, n))
+                    return false;
+                if (va == 0x191d185)
+                    ((uint8_t *)o)[3] ^= 0x08; // +0xa0 -> +0xa8
+                return true;
+            };
+            bad = 0;
+            check(!verify_hop2_sites(bent, &bad) && bad == 0x191d185,
+                  "hop 2: one changed byte refuses, and names the site");
+        }
+    }
+
+    // ---- hop 2: the chain, on a synthetic controller --------------------
+    {
+        alignas(16) static uint8_t cam[0x100], ctl[0x200], vt_ctl[0x200];
+        alignas(16) static uint8_t kids[4][0x80], vt_kid[4][0x200];
+        alignas(16) static uint64_t vec[4];
+        memset(cam, 0, sizeof cam);
+        auto put64 = [](void *p, uint64_t v) { memcpy(p, &v, 8); };
+        put64(cam + kControllerOff, (uint64_t)(uintptr_t)ctl);
+        put64(ctl, (uint64_t)(uintptr_t)vt_ctl);
+        put64(vt_ctl + kVtLocal, kLocalTransformFn);
+        for (int i = 0; i < 4; i++) {
+            put64(kids[i], (uint64_t)(uintptr_t)vt_kid[i]);
+            put64(vt_kid[i] + kVtCompose, 0x1918640 + (uint64_t)i);
+            put64(vt_kid[i] + kVtLocal, 0x1920000 + (uint64_t)i);
+            vec[i] = (uint64_t)(uintptr_t)kids[i];
+        }
+        put64(ctl + kChainBegin, (uint64_t)(uintptr_t)&vec[0]);
+        put64(ctl + kChainEnd, (uint64_t)(uintptr_t)&vec[4]);
+        auto mem = [](uintptr_t va, void *o, size_t n) {
+            memcpy(o, (const void *)va, n);
+            return true;
+        };
+        const Chain c = read_chain((uintptr_t)cam, mem);
+        check(c.ok && c.children.size() == 4, "chain: four children read");
+        check(c.ok && c.children[2].compose == 0x1918642 &&
+                  c.children[2].local == 0x1920002,
+              "chain: each child's vtable targets recorded (build constants)");
+        const auto t = chain_targets(c);
+        check(t.size() == 4, "chain: controller + first THREE children (4 slots)");
+        check(t.size() == 4 && t[0].addr == (uintptr_t)ctl + kStoredRow0 &&
+                  !strcmp(t[0].label, "controller"),
+              "chain: target 0 is the controller's stored row 0");
+        check(t.size() == 4 && t[3].addr == (uintptr_t)kids[2] + kStoredRow0 &&
+                  !strcmp(t[3].label, "child2"),
+              "chain: target 3 is child2's stored row 0");
+        // A different controller class must refuse.
+        put64(vt_ctl + kVtLocal, 0x1234567);
+        const Chain d = read_chain((uintptr_t)cam, mem);
+        check(!d.ok && chain_targets(d).empty(),
+              "chain: a controller whose vtable+0x1b0 is not 0x191d0f0 REFUSES");
+        put64(vt_ctl + kVtLocal, kLocalTransformFn);
+        // An implausible vector (end before begin) must refuse.
+        put64(ctl + kChainEnd, (uint64_t)(uintptr_t)&vec[0] - 8);
+        const Chain e = read_chain((uintptr_t)cam, mem);
+        check(!e.ok, "chain: an end-before-begin vector REFUSES");
+    }
+
     // ---- live: the kernel, a real watchpoint, three threads ------------
     //
     // As the injector runs it: COUNTING events on every thread, then only the

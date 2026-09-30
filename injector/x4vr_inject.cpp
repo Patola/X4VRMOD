@@ -2482,10 +2482,17 @@ static void camscan_report() {
 // hardware write-watchpoint per X4 thread and target, drains the rings and
 // logs. Nothing of ours runs inside X4's threads; each store costs X4 a debug
 // trap the kernel absorbs.
-static bool camwatch_enabled() {
-    static const bool on = x4vr::env_on("X4VR_CAMWATCH", false);
-    return on;
+// X4VR_CAMWATCH=1 is hop 1 (the snapshot entries, take 316), =2 is hop 2 (the
+// camera controller and its chain of child controllers). Hop 1 is kept as it
+// was so take 316 stays reproducible.
+static int camwatch_mode() {
+    static const int m = [] {
+        const char *e = getenv("X4VR_CAMWATCH");
+        return e && *e ? atoi(e) : 0;
+    }();
+    return m;
 }
+static bool camwatch_enabled() { return camwatch_mode() > 0; }
 
 namespace {
 struct CamWatchShared {
@@ -2573,8 +2580,10 @@ static void camwatch_monitor() {
                 char b[256];
                 int k = 0;
                 for (const Target &t : tg)
-                    k += snprintf(b + k, sizeof b - (size_t)k, "%sbuf %u @%p",
-                                  k ? ", " : "", t.buf, (void *)t.addr);
+                    k += snprintf(b + k, sizeof b - (size_t)k, "%sbuf %u%s%s%s @%p",
+                                  k ? ", " : "", t.buf, t.label[0] ? " [" : "",
+                                  t.label, t.label[0] ? "]" : "",
+                                  (void *)t.addr);
                 X4VR_LOG("camwatch: aimed at %s — %zu event(s) armed",
                          k ? b : "(nothing)", w.events());
                 clock_gettime(CLOCK_MONOTONIC, &t_scan);
@@ -2638,9 +2647,10 @@ static void camwatch_monitor() {
                              s.stack_len);
                 X4VR_LOG("camwatch: WRITER #%zu ip=%llx (the store is the "
                          "instruction BEFORE this address) thread %u '%s' "
-                         "buf %u | %s | stack->X4 text:%s",
+                         "buf %u%s%s%s | %s | stack->X4 text:%s",
                          writers.size(), (unsigned long long)s.ip, s.tid,
-                         comm, t.buf, regs, rets);
+                         comm, t.buf, t.label[0] ? " [" : "", t.label,
+                         t.label[0] ? "]" : "", regs, rets);
             }
         });
         if (secs_since(t_report) >= 2.0) {
@@ -2669,7 +2679,10 @@ static void camwatch_monitor() {
                      (unsigned long long)stores, (unsigned long long)sampled,
                      (unsigned long long)w.lost(), writers.size(),
                      k ? ": " : "", k ? top : "", ys > 0 ? ys : 0.0f);
-            if (!said_enough && sampled >= 300 && ys >= 60.0f) {
+            // Hop 1 only: hop 2's "enough" is the co-move census, which needs
+            // far longer than 300 samples (they arrive in seconds).
+            if (camwatch_mode() == 1 && !said_enough && sampled >= 300 &&
+                ys >= 60.0f) {
                 said_enough = true;
                 X4VR_LOG("milestone: the camera probe has what it needs "
                          "(%llu writes sampled from %zu writer(s)). You can "
@@ -2678,6 +2691,183 @@ static void camwatch_monitor() {
             }
         }
         usleep(20000);
+    }
+}
+
+// Publish a new target set to the monitor thread (both hops).
+static void camwatch_publish(const std::vector<x4vr::camwatch::Target> &t,
+                             const char *why) {
+    std::lock_guard<std::mutex> lock(g_camwatch.mu);
+    bool same = t.size() == g_camwatch.targets.size();
+    for (size_t i = 0; same && i < t.size(); i++)
+        same = t[i].addr == g_camwatch.targets[i].addr;
+    if (same)
+        return;
+    g_camwatch.targets = t;
+    g_camwatch.generation++;
+    if (why)
+        X4VR_LOG("camwatch: re-aimed (%s)", why);
+    if (!t.empty() && !g_camwatch.started.exchange(true))
+        std::thread(camwatch_monitor).detach();
+}
+
+// Hop 2: verify the analysed code sites once, then read the controller and
+// its chain every second, log it whenever it changes (class identity is in
+// the vtables, which are build constants), and aim at the stored matrices.
+static void camwatch_aim_hop2(uintptr_t cam) {
+    using namespace x4vr::camwatch;
+    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    static int sites = -1;
+    if (sites < 0) {
+        uintptr_t bad = 0;
+        sites = verify_hop2_sites(rd, &bad) ? 1 : 0;
+        if (sites)
+            X4VR_LOG("camwatch hop2: all %zu analysed code sites match X4 9.00",
+                     sizeof kHop2Sites / sizeof kHop2Sites[0]);
+        else
+            X4VR_LOG("camwatch hop2: REFUSED — code at %p differs from the "
+                     "analysed build", (void *)bad);
+    }
+    if (!sites)
+        return;
+    const Chain c = read_chain(cam, rd);
+    char desc[1024];
+    int k = snprintf(desc, sizeof desc, "controller %p vtable %p local %p | %zu "
+                     "child(ren):", (void *)c.controller, (void *)c.vtable,
+                     (void *)c.local_fn, c.children.size());
+    for (size_t i = 0; i < c.children.size() && k < (int)sizeof desc - 96; i++)
+        k += snprintf(desc + k, sizeof desc - (size_t)k,
+                      " [%zu] %p vt %p compose %p local %p", i,
+                      (void *)c.children[i].obj, (void *)c.children[i].vtable,
+                      (void *)c.children[i].compose, (void *)c.children[i].local);
+    static std::string last;
+    if (last != desc) {
+        last = desc;
+        X4VR_LOG("camwatch hop2: %s — %s", c.ok ? "chain" : "REFUSED", c.why);
+        X4VR_LOG("camwatch hop2: %s", desc);
+    }
+    if (!c.ok)
+        return;
+    camwatch_publish(chain_targets(c), "hop 2 chain");
+}
+
+// Hop 2's co-movement census, on X4's thread at ~30 Hz: for each watched
+// stored matrix, does it change on the ticks the CAMERA changes? The free-look
+// matrix moves with the head and with nothing else; a static one never moves;
+// shake or sway moves on its own. Counts, not impressions.
+namespace {
+struct CoMove {
+    uint64_t ticks = 0, cam = 0, with = 0, alone = 0;
+    float prev[12] = {};
+    bool have = false;
+    float lo[9], hi[9];
+    char label[24] = {};
+    uintptr_t addr = 0;
+};
+std::vector<CoMove> g_comove;
+} // namespace
+
+static void camwatch_comove_tick() {
+    if (camwatch_mode() != 2)
+        return;
+    static timespec last{}, last_rep{};
+    timespec now{};
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    auto since = [&](const timespec &t) {
+        return (double)(now.tv_sec - t.tv_sec) + (now.tv_nsec - t.tv_nsec) * 1e-9;
+    };
+    if (since(last) < 1.0 / 30.0)
+        return;
+    last = now;
+    using Fn = X4Rotation (*)();
+    static Fn get = (Fn)dlsym(RTLD_DEFAULT, "GetCameraRotation");
+    if (!get)
+        return;
+    std::vector<x4vr::camwatch::Target> tg;
+    {
+        std::lock_guard<std::mutex> lock(g_camwatch.mu);
+        tg = g_camwatch.targets;
+    }
+    // A re-aim resets the census: the rows it compared belong to other objects.
+    bool same = tg.size() == g_comove.size();
+    for (size_t i = 0; same && i < tg.size(); i++)
+        same = g_comove[i].addr == tg[i].addr;
+    if (!same) {
+        g_comove.assign(tg.size(), CoMove{});
+        for (size_t i = 0; i < tg.size(); i++) {
+            g_comove[i].addr = tg[i].addr;
+            snprintf(g_comove[i].label, sizeof g_comove[i].label, "%s",
+                     tg[i].label[0] ? tg[i].label : "?");
+            for (int j = 0; j < 9; j++) {
+                g_comove[i].lo[j] = 1e9f;
+                g_comove[i].hi[j] = -1e9f;
+            }
+        }
+    }
+    static float pyaw = 0, ppitch = 0;
+    static bool phave = false;
+    const X4Rotation r = get();
+    const float yaw = r.yaw * kRad2Deg, pitch = r.pitch * kRad2Deg;
+    // 0.01 degree, not a "visible" threshold: a slow head drift must still
+    // count as the camera moving, or the free-look matrix -- the one being
+    // looked for -- would be scored as moving ALONE on every slow tick.
+    const bool cam_moved =
+        phave && (std::fabs(yaw - pyaw) + std::fabs(pitch - ppitch)) > 0.01f;
+    pyaw = yaw;
+    ppitch = pitch;
+    phave = true;
+    for (CoMove &m : g_comove) {
+        float rows[12];
+        if (!self_read(m.addr, rows, sizeof rows))
+            continue; // rows at +0x20,+0x30,+0x40 -> x,y,z,w each
+        float d = 0.f;
+        for (int j = 0; j < 12; j++)
+            d = std::fmax(d, std::fabs(rows[j] - m.prev[j]));
+        const bool mat_moved = m.have && d > 1e-5f;
+        if (m.have) {
+            m.ticks++;
+            m.cam += cam_moved;
+            m.with += cam_moved && mat_moved;
+            m.alone += !cam_moved && mat_moved;
+        }
+        memcpy(m.prev, rows, sizeof rows);
+        m.have = true;
+        for (int row = 0; row < 3; row++)
+            for (int col = 0; col < 3; col++) {
+                const float v = rows[row * 4 + col];
+                const int j = row * 3 + col;
+                m.lo[j] = std::fmin(m.lo[j], v);
+                m.hi[j] = std::fmax(m.hi[j], v);
+            }
+    }
+    if (since(last_rep) < 2.0)
+        return;
+    last_rep = now;
+    // Enough when every watched matrix has 60 s of ticks, with the camera
+    // moving in at least 10 s of them.
+    static bool said_enough = false;
+    if (!said_enough && !g_comove.empty()) {
+        bool enough = true;
+        for (const CoMove &m : g_comove)
+            enough = enough && m.ticks >= 1800 && m.cam >= 300;
+        if (enough) {
+            said_enough = true;
+            X4VR_LOG("milestone: the camera probe (hop 2) has what it needs. "
+                     "You can quit X4 now — through the menu, please.");
+        }
+    }
+    for (const CoMove &m : g_comove) {
+        char rng[400];
+        int k = 0;
+        for (int j = 0; j < 9; j++)
+            k += snprintf(rng + k, sizeof rng - (size_t)k, "%s%.3f..%.3f",
+                          j ? (j % 3 ? " " : " | ") : "", m.lo[j], m.hi[j]);
+        X4VR_LOG("camwatch hop2 co-move [%s] @%p: %llu tick(s), camera moved "
+                 "in %llu, the matrix moved WITH it in %llu, ALONE in %llu | "
+                 "3x3 ranges %s",
+                 m.label, (void *)m.addr, (unsigned long long)m.ticks,
+                 (unsigned long long)m.cam, (unsigned long long)m.with,
+                 (unsigned long long)m.alone, rng);
     }
 }
 
@@ -2724,6 +2914,10 @@ static void camwatch_tick() {
     if (!self_read((uintptr_t)root_slot, &root, 8) || !root ||
         !self_read(root + 0x3e8, &cam, 8) || !cam)
         return;
+    if (camwatch_mode() == 2) {
+        camwatch_aim_hop2(cam);
+        return;
+    }
     uint32_t n0 = 0, n1 = 0;
     const auto t = x4vr::camwatch::targets(cam, anc, rd, &n0, &n1);
     std::lock_guard<std::mutex> lock(g_camwatch.mu);
@@ -4828,6 +5022,7 @@ void SDL_PumpEvents(void) {
         panprobe_tick();
         camscan_tick();
         camwatch_tick();
+        camwatch_comove_tick();
         hoverview_tick();
         pumprate_report();
     }

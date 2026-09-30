@@ -342,6 +342,21 @@ want "camwatch nothing armed -> FAIL" /tmp/census-cw-noarm.log FAIL "armed NO ev
 plant /tmp/census-cw-refused.log '[  224400.000] inject  camwatch: anchors REFUSED — fetch (nil), buffer-index globals (nil) (nil) (fetch prologue differs from X4 9.00'"'"'s — another build; refusing to aim at a guessed layout)'
 want "camwatch refused -> FAIL names the build" /tmp/census-cw-refused.log FAIL "not the one the probe was written against"
 absent "camwatch absent -> silent" "$BASE" camwatch
+# Hop 2: the verdict per stored matrix.
+comove() {  # comove <label> <ticks> <cam> <with> <alone>
+    printf '[  224500.000] inject  camwatch hop2 co-move [%s] @0x7f0000001000: %s tick(s), camera moved in %s, the matrix moved WITH it in %s, ALONE in %s | 3x3 ranges 0..1' "$@"
+}
+plant /tmp/census-cw2.log "$(comove controller 3000 900 0 0)" "$(comove child0 3000 900 880 12)" \
+    "$(comove child1 3000 900 20 1500)" "$(comove child2 3000 900 500 400)"
+want "hop2 static controller" /tmp/census-cw2.log "camwatch hop2 \[controller\]" "STATIC"
+want "hop2 free-look child"   /tmp/census-cw2.log "camwatch hop2 \[child0\]" "MOVES WITH THE CAMERA"
+want "hop2 shaking child"     /tmp/census-cw2.log "camwatch hop2 \[child1\]" "moves ON ITS OWN"
+want "hop2 mixed child"       /tmp/census-cw2.log "camwatch hop2 \[child2\]" "MIXED"
+plant /tmp/census-cw2-still.log "$(comove child0 3000 10 10 0)"
+want "hop2 still camera -> not exercised" /tmp/census-cw2-still.log "camwatch hop2 \[child0\]" "NOT EXERCISED"
+plant /tmp/census-cw2-refused.log '[  224500.000] inject  camwatch hop2: REFUSED — code at 0x191d185 differs from the analysed build'
+want "hop2 refused -> FAIL" /tmp/census-cw2-refused.log FAIL "X4VR_CAMWATCH=2 refused"
+
 
 # ------------------------------------------- the camera-state scan (camscan)
 csum() {  # csum <samples> <yawspan> <pitchspan> <survivors>
