@@ -56,6 +56,7 @@ extern char **environ;
 #include "x4vr_riprel.hpp"
 #include "x4vr_camscan.hpp"
 #include "x4vr_camwatch.hpp"
+#include "x4vr_content.hpp"
 #include "x4vr_lua.hpp"
 #include "../common/x4vr_shquote.hpp"
 
@@ -786,6 +787,75 @@ FILE *open_patched_inputmap(const char *path) {
     return f;
 }
 
+// ------------------------------------------------------------- content.xml
+//
+// X4VR_EXTENSIONS=1: our extensions (extension/ in the repo, deployed by the
+// launcher) enabled for the modded session only. content.xml lives in the
+// profile directory vanilla X4 reads too, so it is forked like config.xml:
+// read once to seed content-x4vrmod.xml, served from the fork with our
+// extensions forced on IN MEMORY, writes redirected into the fork. Served on
+// BOTH the fopen and the open() read paths, because nothing on record says
+// which one X4 uses for this file -- the log line names the one it did.
+bool extensions_enabled() {
+    static const bool on = x4vr::env_on("X4VR_EXTENSIONS", false);
+    return on;
+}
+
+// The extensions we own. One today.
+const char *const kOurExtensions[] = {"x4vrmod_lookaround"};
+
+Profile load_content_profile(const char *path) {
+    Profile p;
+    p.path = x4vr::content_profile_path(path);
+    p.xml = x4vr::read_file(p.path.c_str());
+    if (!p.xml.empty())
+        return p;
+    p.xml = x4vr::read_file(path);
+    if (p.xml.empty()) {
+        X4VR_LOG("content: could not read %s — passing through", path);
+        return p;
+    }
+    if (!x4vr::write_file(p.path.c_str(), p.xml))
+        X4VR_LOG("content: WARNING could not create %s", p.path.c_str());
+    return p;
+}
+
+// A memfd holding the fork with our extensions on, or -1 to pass through.
+int content_memfd(const char *path, const char *how) {
+    Profile prof = load_content_profile(path);
+    if (prof.xml.empty())
+        return -1;
+    std::string xml = std::move(prof.xml);
+    char what[256];
+    int k = 0;
+    for (const char *id : kOurExtensions) {
+        const int r = x4vr::enable_extension(xml, id);
+        k += snprintf(what + k, sizeof what - (size_t)k, "%s%s %s", k ? ", " : "",
+                      id,
+                      r == 0   ? "already enabled"
+                      : r == 1 ? "ENABLED (was off)"
+                      : r == 2 ? "ENABLED (added)"
+                               : "COULD NOT be enabled — no </content>");
+    }
+    const int fd = memfd_create("x4vr-content", MFD_CLOEXEC);
+    if (fd < 0)
+        return -1;
+    size_t off = 0;
+    while (off < xml.size()) {
+        const ssize_t w = ::write(fd, xml.data() + off, xml.size() - off);
+        if (w <= 0) {
+            ::close(fd);
+            return -1;
+        }
+        off += (size_t)w;
+    }
+    ::lseek(fd, 0, SEEK_SET);
+    X4VR_LOG("content: serving %s in memory via %s — %s; your %s is not "
+             "touched",
+             prof.path.c_str(), how, what, path);
+    return fd;
+}
+
 // If this is a write-mode open of X4's config.xml, the path to use instead
 // (empty = leave the call alone). X4 saving its settings must never reach the
 // player's file. Absolute paths only: an *at() call with a relative path
@@ -799,6 +869,10 @@ std::string redirect_write(const char *path) {
     }
     if (headlook_enabled() && x4vr::is_x4_inputmap(path)) {
         Profile prof = load_inputmap_profile(path);
+        return prof.xml.empty() ? std::string{} : prof.path;
+    }
+    if (extensions_enabled() && x4vr::is_x4_profile_content(path)) {
+        Profile prof = load_content_profile(path);
         return prof.xml.empty() ? std::string{} : prof.path;
     }
     return {};
@@ -2748,7 +2822,39 @@ static void camwatch_aim_hop2(uintptr_t cam) {
     }
     if (!c.ok)
         return;
-    camwatch_publish(chain_targets(c), "hop 2 chain");
+    if (camwatch_mode() != 3) {
+        camwatch_publish(chain_targets(c), "hop 2 chain");
+        return;
+    }
+    // Hop 2b: the settings object's transform, with the controller's sway
+    // matrix as the reference. Its own sites verified once.
+    static int sites_b = -1;
+    if (sites_b < 0) {
+        uintptr_t bad = 0;
+        sites_b = verify_hop2b_sites(rd, &bad) ? 1 : 0;
+        if (sites_b)
+            X4VR_LOG("camwatch hop2b: settings-object sites match X4 9.00; the "
+                     "global is %p", (void *)settings_global());
+        else
+            X4VR_LOG("camwatch hop2b: REFUSED — code at %p differs from the "
+                     "analysed build", (void *)bad);
+    }
+    if (!sites_b)
+        return;
+    uintptr_t obj = 0;
+    if (!self_read(settings_global(), &obj, 8) || !obj)
+        return;
+    static uintptr_t last_obj = 0;
+    if (obj != last_obj) {
+        last_obj = obj;
+        float t[16] = {};
+        self_read(obj + kSettingsPos, t, sizeof t);
+        X4VR_LOG("camwatch hop2b: settings object %p — translation (%.3f, %.3f, "
+                 "%.3f) rows (%.3f %.3f %.3f | %.3f %.3f %.3f | %.3f %.3f %.3f)",
+                 (void *)obj, t[0], t[1], t[2], t[4], t[5], t[6], t[8], t[9],
+                 t[10], t[12], t[13], t[14]);
+    }
+    camwatch_publish(settings_targets(obj, c), "hop 2b settings");
 }
 
 // Hop 2's co-movement census, on X4's thread at ~30 Hz: for each watched
@@ -2760,6 +2866,13 @@ struct CoMove {
     uint64_t ticks = 0, cam = 0, with = 0, alone = 0;
     float prev[12] = {};
     bool have = false;
+    // How FAR it moves, not only when: take 317's census called the sway
+    // matrix "moves with the camera" because the camera moves on most ticks
+    // under head-look, while its rotation never passed ~9 deg against the
+    // camera's 131. A rotation's angle is acos((trace-1)/2); a translation's
+    // is its distance from the first sample.
+    bool is_pos = false;
+    float max_rot_deg = 0.f, max_disp = 0.f, first_t[3] = {};
     float lo[9], hi[9];
     char label[24] = {};
     uintptr_t addr = 0;
@@ -2768,7 +2881,7 @@ std::vector<CoMove> g_comove;
 } // namespace
 
 static void camwatch_comove_tick() {
-    if (camwatch_mode() != 2)
+    if (camwatch_mode() < 2)
         return;
     static timespec last{}, last_rep{};
     timespec now{};
@@ -2798,6 +2911,7 @@ static void camwatch_comove_tick() {
             g_comove[i].addr = tg[i].addr;
             snprintf(g_comove[i].label, sizeof g_comove[i].label, "%s",
                      tg[i].label[0] ? tg[i].label : "?");
+            g_comove[i].is_pos = strstr(g_comove[i].label, ".pos") != nullptr;
             for (int j = 0; j < 9; j++) {
                 g_comove[i].lo[j] = 1e9f;
                 g_comove[i].hi[j] = -1e9f;
@@ -2829,6 +2943,17 @@ static void camwatch_comove_tick() {
             m.cam += cam_moved;
             m.with += cam_moved && mat_moved;
             m.alone += !cam_moved && mat_moved;
+        }
+        if (m.is_pos) {
+            if (!m.have)
+                memcpy(m.first_t, rows, sizeof m.first_t);
+            const float dx = rows[0] - m.first_t[0], dy = rows[1] - m.first_t[1],
+                        dz = rows[2] - m.first_t[2];
+            m.max_disp = std::fmax(m.max_disp, std::sqrt(dx * dx + dy * dy + dz * dz));
+        } else {
+            const float tr = rows[0] + rows[5] + rows[10];
+            const float c = std::fmax(-1.f, std::fmin(1.f, (tr - 1.f) * 0.5f));
+            m.max_rot_deg = std::fmax(m.max_rot_deg, std::acos(c) * kRad2Deg);
         }
         memcpy(m.prev, rows, sizeof rows);
         m.have = true;
@@ -2862,12 +2987,17 @@ static void camwatch_comove_tick() {
         for (int j = 0; j < 9; j++)
             k += snprintf(rng + k, sizeof rng - (size_t)k, "%s%.3f..%.3f",
                           j ? (j % 3 ? " " : " | ") : "", m.lo[j], m.hi[j]);
+        char mag[64];
+        if (m.is_pos)
+            snprintf(mag, sizeof mag, "max displacement %.4f", m.max_disp);
+        else
+            snprintf(mag, sizeof mag, "max rotation %.2f deg", m.max_rot_deg);
         X4VR_LOG("camwatch hop2 co-move [%s] @%p: %llu tick(s), camera moved "
                  "in %llu, the matrix moved WITH it in %llu, ALONE in %llu | "
-                 "3x3 ranges %s",
+                 "%s | 3x3 ranges %s",
                  m.label, (void *)m.addr, (unsigned long long)m.ticks,
                  (unsigned long long)m.cam, (unsigned long long)m.with,
-                 (unsigned long long)m.alone, rng);
+                 (unsigned long long)m.alone, mag, rng);
     }
 }
 
@@ -2914,7 +3044,7 @@ static void camwatch_tick() {
     if (!self_read((uintptr_t)root_slot, &root, 8) || !root ||
         !self_read(root + 0x3e8, &cam, 8) || !cam)
         return;
-    if (camwatch_mode() == 2) {
+    if (camwatch_mode() >= 2) {
         camwatch_aim_hop2(cam);
         return;
     }
@@ -5725,6 +5855,12 @@ int open(const char *path, int flags, ...) {
         if (!to.empty())
             return real_open(to.c_str(), flags, mode);
     }
+    if (extensions_enabled() && path[0] == '/' &&
+        (flags & O_ACCMODE) == O_RDONLY && x4vr::is_x4_profile_content(path)) {
+        const int fd = content_memfd(path, "open");
+        if (fd >= 0)
+            return fd;
+    }
     {
         const int fd = real_open(path, flags, mode);
         catpatch_track(fd, path);
@@ -5749,6 +5885,12 @@ int open64(const char *path, int flags, ...) {
         const std::string to = redirect_write(path);
         if (!to.empty())
             return real_open64(to.c_str(), flags, mode);
+    }
+    if (extensions_enabled() && path[0] == '/' &&
+        (flags & O_ACCMODE) == O_RDONLY && x4vr::is_x4_profile_content(path)) {
+        const int fd = content_memfd(path, "open64");
+        if (fd >= 0)
+            return fd;
     }
     {
         const int fd = real_open64(path, flags, mode);
@@ -5775,6 +5917,12 @@ int openat(int dirfd, const char *path, int flags, ...) {
         if (!to.empty())
             return real_openat(dirfd, to.c_str(), flags, mode);
     }
+    if (extensions_enabled() && path[0] == '/' &&
+        (flags & O_ACCMODE) == O_RDONLY && x4vr::is_x4_profile_content(path)) {
+        const int fd = content_memfd(path, "openat");
+        if (fd >= 0)
+            return fd;
+    }
     {
         const int fd = real_openat(dirfd, path, flags, mode);
         catpatch_track(fd, path);
@@ -5798,6 +5946,12 @@ int openat64(int dirfd, const char *path, int flags, ...) {
         const std::string to = redirect_write(path);
         if (!to.empty())
             return real_openat64(dirfd, to.c_str(), flags, mode);
+    }
+    if (extensions_enabled() && path[0] == '/' &&
+        (flags & O_ACCMODE) == O_RDONLY && x4vr::is_x4_profile_content(path)) {
+        const int fd = content_memfd(path, "openat64");
+        if (fd >= 0)
+            return fd;
     }
     return real_openat64(dirfd, path, flags, mode);
 }
@@ -5836,6 +5990,15 @@ FILE *fopen(const char *path, const char *mode) {
                 return real_fopen(prof.path.c_str(), mode);
         }
     }
+    if (extensions_enabled() && x4vr::is_x4_profile_content(path) &&
+        is_read_only(mode)) {
+        const int fd = content_memfd(path, "fopen");
+        if (fd >= 0) {
+            if (FILE *f = fdopen(fd, "rb"))
+                return f;
+            ::close(fd);
+        }
+    }
     {
         FILE *f = real_fopen(path, mode);
         catpatch_track_file(f, path);
@@ -5867,6 +6030,15 @@ FILE *fopen64(const char *path, const char *mode) {
             Profile prof = load_inputmap_profile(path);
             if (!prof.xml.empty())
                 return real_fopen64(prof.path.c_str(), mode);
+        }
+    }
+    if (extensions_enabled() && x4vr::is_x4_profile_content(path) &&
+        is_read_only(mode)) {
+        const int fd = content_memfd(path, "fopen64");
+        if (fd >= 0) {
+            if (FILE *f = fdopen(fd, "rb"))
+                return f;
+            ::close(fd);
         }
     }
     {

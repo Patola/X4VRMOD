@@ -310,6 +310,14 @@ fi
 plant_env /tmp/census-roll-asked.log 's/X4VR_POSE=0/X4VR_POSE=1 X4VR_ROLL_AB=20/' "$rollline"
 want "level head, roll ASKED -> FAIL" /tmp/census-roll-asked.log FAIL "never rolled more than 1.20 deg"
 
+# ------------------------------------------------ our extensions (content.xml)
+srv='[  224600.000] inject  content: serving /h/.config/EgoSoft/X4/1/content-x4vrmod.xml in memory via fopen — x4vrmod_lookaround ENABLED (was off); your /h/.config/EgoSoft/X4/1/content.xml is not touched'
+plant_env /tmp/census-ext-ok.log 's/X4VR_POSE=0/X4VR_POSE=0 X4VR_EXTENSIONS=1/' "$srv"
+want "extensions served -> names the path and state" /tmp/census-ext-ok.log extensions "via fopen — x4vrmod_lookaround ENABLED (was off)"
+plant_env /tmp/census-ext-missing.log 's/X4VR_POSE=0/X4VR_POSE=0 X4VR_EXTENSIONS=1/'
+want "extensions asked, never served -> FAIL" /tmp/census-ext-missing.log FAIL "never read content.xml through the fork"
+absent "extensions not asked -> silent" "$BASE" extensions
+
 # ------------------------------------------- hover by view (X4VR_HOVER_VIEW)
 hview() {  # hview <straight> <yaw> <pitch>
     printf '[  224200.000] inject  hover view: cursor changes with the view straight %s | turned left/right (|yaw|>=30) %s | turned up/down (|pitch|>=20) %s | in transit 3 | view unknown 0' "$1" "$2" "$3"
@@ -355,7 +363,31 @@ want "hop2 mixed child"       /tmp/census-cw2.log "camwatch hop2 \[child2\]" "MI
 plant /tmp/census-cw2-still.log "$(comove child0 3000 10 10 0)"
 want "hop2 still camera -> not exercised" /tmp/census-cw2-still.log "camwatch hop2 \[child0\]" "NOT EXERCISED"
 plant /tmp/census-cw2-refused.log '[  224500.000] inject  camwatch hop2: REFUSED — code at 0x191d185 differs from the analysed build'
-want "hop2 refused -> FAIL" /tmp/census-cw2-refused.log FAIL "X4VR_CAMWATCH=2 refused"
+want "hop2 code refused -> FAIL" /tmp/census-cw2-refused.log FAIL "X4VR_CAMWATCH refused: code at 0x191d185"
+# A refused CAMERA CLASS then a verified one is take 317: transient, no FAIL.
+cls='[  224500.000] inject  camwatch hop2: REFUSED — controller class differs from take 316'"'"'s (its vtable+0x1b0 is not 0x191d0f0) — the chain layout is unverified, refusing'
+ver='[  224501.000] inject  camwatch hop2: chain — controller class verified, chain read'
+plant /tmp/census-cw2-transient.log "$cls" "$ver"
+want "hop2 transient class refusal -> noted" /tmp/census-cw2-transient.log "camwatch hop2 refused" "transient, expected"
+if python3 tools/score_run.py /tmp/census-cw2-transient.log 2>&1 | grep -qE "^FAIL.*CAMWATCH"; then
+    bad "hop2 transient class refusal -> still FAILs"
+else
+    ok "hop2 transient class refusal -> no FAIL"
+fi
+plant /tmp/census-cw2-never.log "$cls"
+want "hop2 never verified -> FAIL" /tmp/census-cw2-never.log FAIL "never verified the camera controller"
+# HOW FAR, not only when: take 317's sway matrix, and a real free-look.
+comovem() {  # comovem <label> <ticks> <cam> <with> <alone> <maxrot>
+    printf '[  224500.000] inject  camwatch hop2 co-move [%s] @0x7f0000001000: %s tick(s), camera moved in %s, the matrix moved WITH it in %s, ALONE in %s | max rotation %s deg | 3x3 ranges 0..1' "$@"
+}
+span='[  224502.000] inject  camwatch: 117 event(s), 1 sampling, 0 arm failure(s) | 6357 store(s) counted, 6277 sampled, 0 LOST | 1 distinct writer ip(s) | camera yaw span 131 deg'
+plant /tmp/census-cw2-mag.log "$span" "$(comovem controller 2348 1983 1342 26 9.30)" "$(comovem settings.rot 2348 1983 1900 10 64.00)"
+want "hop2 sway (9 deg vs +-66) -> TOO SMALL" /tmp/census-cw2-mag.log "camwatch hop2 \[controller\]" "TOO SMALL to be the free-look"
+want "hop2 64 deg, follows -> free-look candidate" /tmp/census-cw2-mag.log "camwatch hop2 \[settings.rot\]" "spans its range"
+# Take 317's own line shape: no magnitude, estimated from the ranges.
+old317='[  224500.000] inject  camwatch hop2 co-move [controller] @0x7ed0fd976ea0: 2348 tick(s), camera moved in 1983, the matrix moved WITH it in 1342, ALONE in 26 | 3x3 ranges 0.985..1.000 -0.037..0.054 -0.111..0.161 | -0.053..0.037 0.998..1.000 -0.070..0.052 | -0.161..0.111 -0.053..0.070 0.987..1.000'
+plant /tmp/census-cw2-317.log "$span" "$old317"
+want "hop2 older log -> magnitude estimated from ranges" /tmp/census-cw2-317.log "camwatch hop2 \[controller\]" "max rotation 9.3 deg"
 
 
 # ------------------------------------------- the camera-state scan (camscan)

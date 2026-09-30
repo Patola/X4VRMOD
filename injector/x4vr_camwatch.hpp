@@ -215,8 +215,10 @@ inline constexpr uintptr_t kStoredRow0 = 0x20;
 inline constexpr uintptr_t kVtLocal = 0x1b0, kVtCompose = 0x138;
 inline constexpr uintptr_t kLocalTransformFn = 0x191d0f0;
 
-template <class Reader> bool verify_hop2_sites(Reader read, uintptr_t *bad) {
-    for (const Site &st : kHop2Sites) {
+template <class Reader>
+bool verify_sites(const Site *sites, size_t n, Reader read, uintptr_t *bad) {
+    for (size_t i = 0; i < n; i++) {
+        const Site &st = sites[i];
         uint8_t b[8];
         if (!read(st.va, b, st.n) || memcmp(b, st.bytes, st.n) != 0) {
             if (bad)
@@ -225,6 +227,11 @@ template <class Reader> bool verify_hop2_sites(Reader read, uintptr_t *bad) {
         }
     }
     return true;
+}
+
+template <class Reader> bool verify_hop2_sites(Reader read, uintptr_t *bad) {
+    return verify_sites(kHop2Sites, sizeof kHop2Sites / sizeof kHop2Sites[0],
+                        read, bad);
 }
 
 struct Chain {
@@ -290,6 +297,64 @@ inline std::vector<Target> chain_targets(const Chain &c) {
         u.buf = (uint32_t)(i + 1);
         snprintf(u.label, sizeof u.label, "child%u", (unsigned)(i & 0xff));
         out.push_back(u);
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------- hop 2b
+//
+// Take 317: the controller's stored matrix is the camera's G-force SWAY, not
+// the free-look -- it never rotated more than ~9 degrees while the head swung
+// the camera through 131 -- and both children are fixed rotations. What 0x191d0f0
+// has left is a transform on the object at global 0x3db83c8 (translation
+// +0x5e0, rotation rows +0x5f0/+0x600/+0x610), whose Euler angles it extracts,
+// scales by a factor, and composes. Not the head tracker: none of X4's
+// head-tracker exports reads that global (they use 0x3db8938/0x3daab80); of
+// the camera exports only GetFollowCameraBasePos does. Hop 2b watches that
+// transform, with the sway matrix kept as the reference.
+inline constexpr Site kHop2bSites[] = {
+    // `mov 0x249b2b7(%rip),%r14` -- the settings global, 0x3db83c8.
+    {0x191d10a, 7, {0x4c, 0x8b, 0x35, 0xb7, 0xb2, 0x49, 0x02}},
+    // `movss 0x5f4(%r14)`, `movss 0x604(%r14)`: the rotation rows it reads.
+    {0x191d22f, 8, {0xf3, 0x41, 0x0f, 0x10, 0x86, 0xf4, 0x05, 0x00}},
+    {0x191d238, 8, {0xf3, 0x41, 0x0f, 0x10, 0x8e, 0x04, 0x06, 0x00}},
+    // `movaps 0x5e0(%r14)`: the translation it adds.
+    {0x191d39d, 8, {0x41, 0x0f, 0x28, 0x86, 0xe0, 0x05, 0x00, 0x00}},
+};
+inline constexpr uintptr_t kSettingsPos = 0x5e0, kSettingsRow0 = 0x5f0;
+
+template <class Reader> bool verify_hop2b_sites(Reader read, uintptr_t *bad) {
+    return verify_sites(kHop2bSites, sizeof kHop2bSites / sizeof kHop2bSites[0],
+                        read, bad);
+}
+
+// The global's address, from the displacement in the verified instruction.
+inline uintptr_t settings_global() {
+    int32_t d;
+    memcpy(&d, kHop2bSites[0].bytes + 3, 4);
+    return kHop2bSites[0].va + 7 + (intptr_t)d;
+}
+
+inline std::vector<Target> settings_targets(uintptr_t obj, const Chain &c) {
+    std::vector<Target> out;
+    if (!obj)
+        return out;
+    Target r;
+    r.addr = obj + kSettingsRow0;
+    r.buf = 0;
+    snprintf(r.label, sizeof r.label, "settings.rot");
+    out.push_back(r);
+    Target p;
+    p.addr = obj + kSettingsPos;
+    p.buf = 1;
+    snprintf(p.label, sizeof p.label, "settings.pos");
+    out.push_back(p);
+    if (c.ok) {
+        Target w;
+        w.addr = c.controller + kStoredRow0;
+        w.buf = 2;
+        snprintf(w.label, sizeof w.label, "controller"); // the sway, reference
+        out.push_back(w);
     }
     return out;
 }

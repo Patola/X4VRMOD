@@ -3675,6 +3675,26 @@ def main(path):
                   f"in a turned camera. Whether the cross sat ON the object is "
                   f"Patola's to say, not the log's.")
 
+    # --- our extensions (X4VR_EXTENSIONS) ---------------------------------
+    #
+    # Gate on intent: asked for and never served is a FAIL, because the take
+    # would read as "with the extension" while X4 ran without it. The clamp
+    # block above says whether X4's camera then went past 65/35.
+    ext_asked = bool(re.search(r"\bX4VR_EXTENSIONS=1\b", run or ""))
+    served = re.findall(r"content: serving (\S+) in memory via (\w+) — (.*?); "
+                        r"your", text)
+    if served:
+        via = sorted({v for _, v, _w in served})
+        print(f"extensions content.xml served from {served[-1][0]} via "
+              f"{'/'.join(via)} — {served[-1][2]}")
+        if any("COULD NOT" in w for _, _v, w in served):
+            fails.append("an extension of ours COULD NOT be enabled in the "
+                         "content.xml fork — see the 'content: serving' line")
+    elif ext_asked:
+        fails.append("X4VR_EXTENSIONS=1 but X4 never read content.xml through "
+                     "the fork — our extension was probably NOT loaded, and "
+                     "this run is not the 'with extension' configuration")
+
     # --- who WRITES the camera orientation? (X4VR_CAMWATCH) --------------
     #
     # Read-only hardware write-watchpoints on the matrix GetCameraRotation
@@ -3737,9 +3757,19 @@ def main(path):
                       f"'{w[3]}' buf {w[4]}{lab} | returns:{w[6][:160]}")
     # Hop 2: the camera controller's chain, and which stored matrix moves
     # WITH the camera (free-look), stays still, or moves on its own.
-    if "camwatch hop2: REFUSED" in text:
-        m = re.search(r"camwatch hop2: REFUSED — (.*)", text)
-        fails.append("X4VR_CAMWATCH=2 refused: " + (m.group(1) if m else "?"))
+    # A refused CAMERA CLASS is transient: take 317 refused the load-screen
+    # camera (another class) and verified the cockpit's 40 s later. Only a run
+    # that never verified a chain failed; a CODE mismatch always fails.
+    for m in re.finditer(r"camwatch hop2b?: REFUSED — (.*)", text):
+        if "code at" in m.group(1):
+            fails.append("X4VR_CAMWATCH refused: " + m.group(1))
+    if ("camwatch hop2: REFUSED — controller class" in text and
+            "controller class verified" not in text):
+        fails.append("X4VR_CAMWATCH=2 never verified the camera controller — "
+                     "every camera it saw was another class")
+    elif "camwatch hop2: REFUSED — controller class" in text:
+        print("camwatch hop2 refused another camera class first (load/menu "
+              "camera) and verified the cockpit's later — transient, expected")
     ch = re.findall(r"camwatch hop2: (controller \S+ vtable .*)", text)
     if ch:
         print(f"camwatch hop2 {ch[-1][:400]}")
@@ -3747,23 +3777,52 @@ def main(path):
     for rec in re.findall(
             r"camwatch hop2 co-move \[([^\]]*)\] @(\S+): (\d+) tick\(s\), "
             r"camera moved in (\d+), the matrix moved WITH it in (\d+), ALONE "
-            r"in (\d+)", text):
+            r"in (\d+) \|(.*)", text):
         cm[rec[0]] = rec
+    ysp = re.findall(r"camera yaw span (\d+) deg", text)
+    cam_half = int(ysp[-1]) / 2.0 if ysp else 0.0
     for lab in sorted(cm, key=lambda x: (x != "controller", x)):
-        _, addr, t, c, w, a = cm[lab]
+        _, addr, t, c, w, a, rest = cm[lab]
         t, c, w, a = int(t), int(c), int(w), int(a)
+        # HOW FAR, not only when. Under head-look the camera moves on most
+        # ticks, so anything that changes often "moves with" it -- take 317's
+        # sway matrix did, while never rotating past ~9 deg against 131.
+        rot = re.search(r"max rotation ([\d.]+) deg", rest)
+        disp = re.search(r"max displacement ([\d.]+)", rest)
+        mag = float(rot.group(1)) if rot else None
+        if mag is None and not disp:
+            # Older logs: estimate from the logged off-diagonal ranges.
+            rg = re.search(r"3x3 ranges (.*)", rest)
+            vals = re.findall(r"(-?[\d.]+)\.\.(-?[\d.]+)", rg.group(1)) \
+                if rg else []
+            if len(vals) == 9:
+                off = [abs(float(x)) for k, pair in enumerate(vals)
+                       if k not in (0, 4, 8) for x in pair]
+                mag = math.degrees(math.asin(min(1.0, max(off))))
+        magtxt = (f", max rotation {mag:.1f} deg" if mag is not None else "") + \
+                 (f", max displacement {float(disp.group(1)):.4f}" if disp else "")
         if c < 30:
             v = "NOT EXERCISED (the camera barely moved)"
         elif w == 0 and a == 0:
             v = "STATIC — never changed"
+        elif (mag is not None and cam_half > 0 and mag < 0.25 * cam_half):
+            v = (f"moves, but only up to {mag:.1f} deg against the camera's "
+                 f"+-{cam_half:.0f} — TOO SMALL to be the free-look (sway / "
+                 f"inertia / shake)")
+        elif (mag is not None and cam_half > 0 and mag >= 0.5 * cam_half and
+              a <= 0.02 * t):
+            v = (f"FOLLOWS THE CAMERA and spans its range ({mag:.1f} deg "
+                 f"against +-{cam_half:.0f}) — the free-look candidate")
+        elif disp and a <= 0.02 * t:
+            v = "a TRANSLATION that moves with the camera"
         elif w >= 0.8 * c and a <= 0.1 * t:
-            v = "MOVES WITH THE CAMERA — the free-look candidate"
+            v = "MOVES WITH THE CAMERA (magnitude unknown — older log)"
         elif a > w:
             v = "moves ON ITS OWN (shake / sway / something else)"
         else:
             v = "MIXED — moves with the camera and on its own"
         print(f"camwatch hop2 [{lab}] {t} ticks, camera moved {c}, matrix WITH "
-              f"it {w}, ALONE {a} => {v}")
+              f"it {w}, ALONE {a}{magtxt} => {v}")
 
     # --- where does X4 keep its free-look angle? (X4VR_CAMSCAN) ------------
     #

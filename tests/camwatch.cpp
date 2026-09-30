@@ -234,6 +234,27 @@ int main() {
         }
     }
 
+    // ---- hop 2b: the settings-object sites --------------------------------
+    {
+        const char *x4 = "/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4";
+        Elf elf;
+        if (elf.load(x4)) {
+            auto rd = [&](uintptr_t va, void *o, size_t n) {
+                return elf.read(va, o, n);
+            };
+            uintptr_t bad = 0;
+            check(verify_hop2b_sites(rd, &bad),
+                  "hop 2b: the settings-object sites match X4 9.00");
+            check(settings_global() == 0x3db83c8,
+                  "hop 2b: the global decodes to 0x3db83c8 from its instruction");
+            Chain none;
+            const auto t = settings_targets(0x10000, none);
+            check(t.size() == 2 && t[0].addr == 0x10000 + 0x5f0 &&
+                      t[1].addr == 0x10000 + 0x5e0,
+                  "hop 2b: rotation row 0 at +0x5f0, translation at +0x5e0");
+        }
+    }
+
     // ---- hop 2: the chain, on a synthetic controller --------------------
     {
         alignas(16) static uint8_t cam[0x100], ctl[0x200], vt_ctl[0x200];
