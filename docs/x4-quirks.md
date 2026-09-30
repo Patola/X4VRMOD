@@ -22680,3 +22680,79 @@ after 300 samples and 60 degrees of yaw.
 **Refutation of P316.2:** no store counted while the camera turns. Then the
 entry GetCameraRotation reads is not where the orientation is written — for
 example, computed at read time — and the watch moves up a level.
+
+## Take 316 — SCORED: one instruction writes the camera; the exit crash moved one call over
+
+Head-look ON, `X4VR_CAMWATCH=1`, translation and pose channel on. PASS. The
+milestone fired within seconds of reaching the cockpit (300 samples come fast
+at ~120 stores/s). Patola: *"Turning the head was comfortable and working as
+before"* — head translation with head-look ON, the regime take 245 had switched
+off, gave no complaint (leans to 5.2 cm published).
+
+    anchors        OK, signature-verified
+    aimed          2 valid buffers (0 and 1); the index globals both named 1
+    events         78 counting, 2 upgraded to sampling, 0 arm failures
+    stores         2582 counted, 2565 sampled, 0 LOST
+    writers        ONE: ip 0x192a3da, thread 'Movement worker', both buffers
+
+**P316.1 held. P316.2 held, including the prediction that hop 1 is a generic
+copy.** The store is `movaps %xmm0,0x20(%rax)` at 0x192a3d6 inside
+**0x192a310**, a per-frame snapshot: it clears the buffer's list, reads X4's
+current time, calls **0x1929f70(camera, &m, 0, time)** to evaluate the camera's
+transform, and appends it as entry key 0. `rbx` held the camera object.
+
+### Hop 2, read statically — where the orientation is built
+
+* **0x1929f70** — a mode switch on camera+0x880 (0 in the cockpit, from the
+  core). Evaluates the attached object (+0x780) at `time`, then — with a
+  special branch when the camera is the PLAYER's (root+0x3e8) — takes the
+  controller at **camera+0x18** and calls its virtual at vtable+0x138. The
+  writer's stack held 0x192a096, the return address of that call.
+* The controller's vtable is **0x3b81fe0** (read from take 316's core, and
+  confirmed against the file: X4 is non-PIE, so vtables are build constants).
+  +0x138 is a trampoline (0x1918640) to **+0x1b0 = 0x191d0f0**.
+* **0x191d0f0** builds the local transform: the controller's stored matrix
+  (+0x10..+0x40), then a CHAIN of child controllers (vector at +0xa0..+0xa8,
+  each composed through its own vtable+0x138), then angles extracted with
+  atan2/asin and scaled by a factor from this+0x78, plus a translation from a
+  global object at **0x3db83c8** (+0x5e0).
+* **0x3db83c8 is NOT the head tracker**, as far as the exports say: of every
+  exported camera, cockpit and head-tracker function, only
+  **GetFollowCameraBasePos** reads it. It is the follow-camera settings object
+  (`menu_followcamera.lua`). The forbidden path is not being approached.
+
+So the free-look state is in the controller or one of its children. **Next
+probe (hop 2), not built:** log the children's vtables (class identity, build
+constants) and watch each child's stored matrix row; the child whose matrix
+moves with the head is free-look, and its writer's code names the state.
+
+**A lead, recorded and NOT pursued:** `SetFollowCameraBasePos(Coord3D)` is an
+exported setter of a camera base POSITION that this very function adds into the
+camera's translation. The Lua cdefs define it (`menu_followcamera.lua`). If it
+applied in the cockpit it would be X4 rendering a head translation itself, Z
+included — but it is most likely the EXTERNAL follow camera's, scaled by a
+factor that is zero in the cockpit. One experiment decides it, later.
+
+### P316.3 FAILED — the exit crash moved to IsInPanelMode
+
+    #0 IsInPanelMode+7  mov 0x8(%rax),%rdx   rax=0
+    #1 headlook_tick
+    #2 SDL_PumpEvents (ours)
+
+The IsHUDActive guard held; the crash moved ONE CALL OVER. IsInPanelMode loads
+its global and dereferences it unchecked — it null-checks the second pointer
+only — and **this file's code comment had declared it safe**. The same rule at
+a second site ([[fixed-one-site-left-its-twin]]).
+
+Fixed: IsInPanelMode is guarded the same way. And the rule is now a test,
+`tests/run-x4-call-guards.sh`: it disassembles every X4 function the injector
+calls, follows each global it loads, and FAILS if one is dereferenced before
+being tested without an `X4GUARD:` tag in the injector. Of the six: IsHUDActive
+and IsInPanelMode unguarded (both tagged now), GetCameraRotation,
+IsExternalViewActive and IsFloatingViewActive guarded, IsGamePaused passes a
+static object. Its own controls caught two defects in it before it was
+trusted: a parser that classified everything as "no load" (objdump's
+colon-TAB), and a 0x40-byte window that cut GetCameraRotation's `test` in half
+and called a seen-but-unresolved load "no load" — now UNDECIDED, which fails.
+Limit: it checks the prologue's global loads, not what IsGamePaused's callee
+does inside.

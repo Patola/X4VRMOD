@@ -2205,8 +2205,10 @@ static bool x4_cockpit_view() {
 //     mov    0x3373c71(%rip),%rdx
 //     movzbl 0x418(%rdx),%eax        <- no test/je, unlike its neighbours
 //
-// IsExternalViewActive and IsInPanelMode both test their pointer before using
-// it; this one does not. Calling it before X4 has built the object is precisely
+// IsExternalViewActive tests its pointer before using it; this one does not.
+// (This comment used to say IsInPanelMode tests its pointer too. It tests the
+// SECOND-level pointer and dereferences the global unchecked -- take 316's
+// exit crash, the same class as this one. See x4_panel_mode.) Calling it before X4 has built the object is precisely
 // the crash we just removed, arriving by a different door. So the caller asks
 // only once X4 is in relative mouse mode -- a state X4 enters for mouselook and
 // cannot reach before the HUD exists. Being declared is necessary and it is not
@@ -2221,6 +2223,7 @@ static bool x4_cockpit_view() {
 // first instruction (x4vr_riprel.hpp), and a NULL answers like the
 // not-yet-built case does. If the prologue ever stops decoding, that is said
 // once and the call goes ahead as before -- the old behaviour, not a guess.
+// X4GUARD: IsHUDActive
 static bool x4_hud_active() {
     using Fn = bool (*)();
     static Fn hud = [] {
@@ -2257,6 +2260,15 @@ static bool x4_hud_active() {
 // mode" is a guess until a log says. If IsHUDActive turns out not to cover the
 // map, this is the next candidate and the run that shows it will already have
 // the evidence -- rather than costing another take to go and look.
+//
+// X4GUARD: IsInPanelMode. **Take 316 crashed here on exit**, one call over from
+// the IsHUDActive guard that had just held: `mov 0x3369551(%rip),%rax;
+// mov 0x8(%rax),%rdx` with rax=0. It null-checks the SECOND pointer, not the
+// global. Same rule as IsHUDActive, so the same guard: read the global its
+// first instruction loads (`mov disp32(%rip),%rax`) and do not call while it
+// is NULL. tests/run-x4-call-guards.sh disassembles every X4 function this
+// file calls and fails if one dereferences its global unchecked without an
+// X4GUARD tag -- a backtrace names a RULE, not a location.
 static bool x4_panel_mode() {
     using Fn = bool (*)();
     static Fn panel = [] {
@@ -2264,7 +2276,20 @@ static bool x4_panel_mode() {
         X4VR_LOG("camread: IsInPanelMode %s", f ? "resolved" : "NOT FOUND");
         return f;
     }();
-    return panel ? panel() : false;
+    static const void *const *slot = [] {
+        const void *const *s = x4vr::riprel_mov_load_slot((const void *)panel, 0);
+        if (panel)
+            X4VR_LOG("camread: IsInPanelMode reads its global at %p — %s", s,
+                     s ? "guarded: a NULL global is not dereferenced"
+                       : "prologue did NOT decode as mov disp32(%rip),%rax, "
+                         "so the teardown guard is OFF and exit may crash");
+        return s;
+    }();
+    if (!panel)
+        return false;
+    if (slot && !*slot)
+        return false; // X4 has torn its UI state down (exit or load)
+    return panel();
 }
 
 // **X4VR_CAMSCAN=1 — where does X4 keep its free-look angle? Read-only.**
