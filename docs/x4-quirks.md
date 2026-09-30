@@ -22821,3 +22821,107 @@ quit through the menu.
 child beyond the first three (the log names them all), or it is applied in the
 Euler part of 0x191d0f0 rather than stored in any matrix — and the watch moves
 to the follow-camera/factor inputs instead.
+
+## Take 317 — SCORED: the controller's matrix is the SWAY, not free-look; X4 exits clean
+
+`X4VR_CAMWATCH=2`, head-look ON. PASS (after the scorer fixes below).
+
+    chain       controller vtable 0x3b81fe0, local 0x191d0f0, 2 children
+                (both class vt 0x3b96650, local 0x191d790)
+    writer      ONE: ip 0x1e02395, 'Movement worker', writing the controller's
+                stored matrix; returns into 0x191d5c8 (0x191d0f0's update branch)
+    census      controller  WITH 1342 / camera 1983, ALONE 26, max 9.3 deg
+                child0/1    STATIC, a fixed 57.3 deg (1 rad) rotation each
+    camera      yaw span 131 deg
+
+* **P317.1 held.** A camera of ANOTHER class (vtable 0x3b59bc8, local
+  0x19186a0 — the load/menu camera) was refused first; the cockpit's verified
+  40 s later. Correct behaviour, and the scorer FAILED the run on it — fixed:
+  a refused CLASS is transient; only a run that never verified fails, and a
+  CODE mismatch always does.
+* **P317.2 did NOT hold as posed.** The census called the controller "MIXED" —
+  it co-moves with the camera — but its rotation never passed **9.3 degrees**
+  while the head swung the camera through **131**. It is X4's G-force
+  SWAY/inertia (`playercamera` in parameters.xml), not free-look. **My census
+  could not tell them apart**: under head-look the camera moves on 84% of
+  ticks, so anything that changes often "moves with" it. HOW FAR was missing.
+  The census now logs each matrix's maximum rotation (displacement for a
+  translation), and the scorer calls one "TOO SMALL to be the free-look" when
+  it stays under a quarter of the camera's half-span; take 317 rescored:
+  *"moves, but only up to 9.3 deg against the camera's +-66 — TOO SMALL"*.
+  Older logs get the angle estimated from the logged 3x3 ranges.
+* **P317.3, read statically, names the sway:** the update branch
+  (0x191d4f0, when time has advanced) asks the attached object for its motion
+  (vtable+0x260), computes dt, and calls **0x13f1970(settings+0x540,
+  &stored matrix, &state +0x80, &motion, dt, param)** — a physics step writing
+  the stored matrix. Consistent with sway, not look-around.
+* **P317.4 HELD: no X4 core.** First head-look-ON run to exit clean; only
+  gamescope's own teardown crash, present on every run and not ours.
+
+### Where free-look must be, and hop 2b
+
+Not the controller's stored matrix (sway), not the children (static). What
+0x191d0f0 has left: the transform on the object at global **0x3db83c8**
+(translation +0x5e0, rotation rows +0x5f0..), whose Euler angles it extracts,
+scales by a factor from this+0x78, and composes. **Not the head tracker**: all
+of X4's head-tracker exports use other globals (0x3db8938, 0x3daab80, ...); of
+the camera exports only GetFollowCameraBasePos reads 0x3db83c8.
+
+**`X4VR_CAMWATCH=3` (hop 2b), built:** four more code sites verified (the
+global's own `mov disp32(%rip),%r14`, whose displacement gives 0x3db83c8, and
+the +0x5f4/+0x604/+0x5e0 reads); watches and censuses `settings.rot`
+(+0x5f0), `settings.pos` (+0x5e0) and the controller's sway as reference.
+
+## Our extension enabled for the modded session — X4VR_EXTENSIONS=1
+
+Patola, before take 318: *"our X4 extension for adjustments (allowing 360°
+and fixing the shadows issue) is not activated. For the next runs I would
+prefer that the extension is activated."*
+
+* **The extension does ONE thing**: cockpit free-look limits 65/35 -> 180/75.
+  **Nothing addresses the shadows** — #70 is parked as X4's own wide-field
+  cascade defect (takes 224-228). Modding being allowed now could reopen it
+  through parameters.xml; nothing has been tried.
+* **Source of truth moved into the repo**: `extension/x4vrmod_lookaround/`,
+  with the stale "65/35 to 85/85" description corrected to 180/75.
+* **`launch/deploy-extensions.sh`**, called by the launcher under
+  `X4VR_EXTENSIONS=1`, copies our directories into X4's `extensions/` only when
+  they differ, touches nothing else, and says what it did.
+* **The injector forks `content.xml`** (`injector/x4vr_content.hpp`) exactly as
+  it forks config.xml: seeded once from the player's file, served with our
+  extension forced `enabled="true"` in memory, writes redirected to
+  `content-x4vrmod.xml`. Matched by directory, so extension manifests pass
+  through. Served on BOTH the fopen and open() read paths, since nothing on
+  record says which X4 uses; the log names it.
+* `tests/run-content-fork.sh` drives the REAL injector without X4 (`cat` via
+  open(), `sed` via fopen()): enabled on both paths, the player's file
+  byte-identical, writes landing in the fork, manifests untouched, nothing at
+  all with the knob off. Its first draft assumed `cat` used openat — the
+  injector's log said open(), and the test was wrong, not the hook.
+* **Head-look must be told too**: the servo clamps its own target at 65/35
+  unless `X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_HEADLOOK_PITCH_LIMIT=75` (take 211
+  reached 177.98/75.00 that way). The launcher warns when the extension is on
+  and the limit is not.
+* Scorer: `extensions` block, FAIL if asked for and X4 never read content.xml
+  through the fork; the existing `clamp` block judges whether X4 then went
+  past 65/35.
+
+## P318 — hop 2b with the extension on
+
+Take 317's line with `X4VR_CAMWATCH=3`, **`X4VR_EXTENSIONS=1`,
+`X4VR_HEADLOOK_YAW_LIMIT=180`, `X4VR_HEADLOOK_PITCH_LIMIT=75`**, and
+`X4VR_FILEPROBE=1` (logs X4 opening the extension's files — independent proof
+it loaded). WiVRn, configuration 1.
+
+* **P318.1** `extensions` served, via fopen or open (not predicting which);
+  fileprobe shows X4 opening `extensions/x4vrmod_lookaround/`.
+* **P318.2** `clamp` shows X4's yaw past 65 — the extension acting — when he
+  looks far to the side.
+* **P318.3** `settings.rot` FOLLOWS THE CAMERA and spans its range: the
+  free-look found. Refutation: TOO SMALL or STATIC, and free-look is applied
+  somewhere 0x191d0f0 does not store — the factor object at this+0x78 is next.
+* **P318.4** no X4 core on exit.
+
+**Behaviour changes, stated:** with the limits at 180/75 head-look can turn
+the view much further than in any take since 211, and saves made in this
+session become modified. Both asked for.
