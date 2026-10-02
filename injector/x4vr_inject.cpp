@@ -57,6 +57,7 @@ extern char **environ;
 #include "x4vr_camscan.hpp"
 #include "x4vr_camwatch.hpp"
 #include "x4vr_camwrite.hpp"
+#include "x4vr_shadowfov.hpp"
 #include "x4vr_content.hpp"
 #include "x4vr_lua.hpp"
 #include "../common/x4vr_shquote.hpp"
@@ -3805,6 +3806,148 @@ static void camwrite_report(bool final) {
     g_camwrite.sway_deg = g_camwrite.sway_m = 0.f;
 }
 
+// ------------------------------------------------ X4VR_SHADOWFOV_AB=<s>
+//
+// #70's suspect switched live: X4's camera keeps a BASE field (camera+0x890,
+// the 73.74 deg default) that several systems size by, while the picture uses
+// option x base (+0x874). FIX phases widen the base to the rendered field;
+// CONTROL phases put X4's default back. Patola watches the cockpit shadows
+// across the switches, announced by notification. See x4vr_shadowfov.hpp.
+static double shadowfov_period() {
+    static const double p = [] {
+        const char *e = getenv("X4VR_SHADOWFOV_AB");
+        return e && *e ? atof(e) : 0.0;
+    }();
+    return p;
+}
+
+namespace {
+struct ShadowFov {
+    bool armed = false;
+    uintptr_t cam = 0;
+    double t0 = 0.0;
+    long phase = -1;
+    uint64_t base_writes = 0, restores = 0, write_failed = 0;
+    char refusal[200] = "";
+};
+ShadowFov g_sfov;
+} // namespace
+
+static void shadowfov_refuse(const char *why) {
+    if (strcmp(g_sfov.refusal, why) != 0) {
+        snprintf(g_sfov.refusal, sizeof g_sfov.refusal, "%s", why);
+        X4VR_LOG("shadowfov: REFUSED — %s", why);
+    }
+}
+
+static void shadowfov_tick() {
+    using namespace x4vr::shadowfov;
+    const double period = shadowfov_period();
+    if (period <= 0.0)
+        return;
+    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    static int sites = -1;
+    if (sites < 0) {
+        uintptr_t bad = 0;
+        float def = 0.f;
+        const bool code = verify_sites(rd, &bad);
+        const bool cst = self_read(kDefaultAddr, &def, sizeof def) &&
+                         std::fabs(def - kDefault) < 1e-6f;
+        sites = code && cst ? 1 : 0;
+        if (sites)
+            X4VR_LOG("shadowfov: all %zu field sites match X4 9.00 and X4's "
+                     "default field reads %.7f rad (73.74 deg)",
+                     sizeof kSites / sizeof kSites[0], def);
+        else {
+            X4VR_LOG("shadowfov: REFUSED for the session — %s",
+                     !code ? "a field site differs from the analysed build"
+                           : "X4's default-field constant is not 1.2870022");
+            X4VR_LOG("milestone: shadow A/B REFUSED — this X4 is not the "
+                     "analysed build. Nothing will switch; quit and tell me.");
+        }
+    }
+    if (!sites)
+        return;
+    static const float option = [] {
+        const char *e = getenv("X4VR_FOV");
+        return e && *e ? strtof(e, nullptr) : 0.0f;
+    }();
+    if (option <= 0.0f) {
+        shadowfov_refuse("X4VR_FOV is unset — there is no widened field to "
+                         "match the base to");
+        return;
+    }
+    const uintptr_t cam = x4_player_camera();
+    Read r{};
+    if (!cam || !self_read(cam + kBase, &r.base, sizeof r.base) ||
+        !self_read(cam + kEffective, &r.effective, sizeof r.effective))
+        return;
+    if (cam != g_sfov.cam) {
+        // A new camera (load, seat change): its fields must read as the
+        // layout says before it is touched.
+        if (!layout_ok(r, option)) {
+            char why[200];
+            snprintf(why, sizeof why,
+                     "camera %p reads base %.5f effective %.5f, not X4's "
+                     "default %.5f and option %.4f x it",
+                     (void *)cam, r.base, r.effective, kDefault, option);
+            shadowfov_refuse(why);
+            return;
+        }
+        g_sfov.cam = cam;
+        g_sfov.refusal[0] = 0;
+        X4VR_LOG("shadowfov: ARMED on camera %p — base %.5f effective %.5f "
+                 "(rendered field %.5f rad = %.2f deg); phases of %.0f s, "
+                 "CONTROL first",
+                 (void *)cam, r.base, r.effective, rendered(option),
+                 rendered(option) * 57.2957795f, period);
+        if (!g_sfov.armed) {
+            g_sfov.armed = true;
+            g_sfov.t0 = mono_seconds();
+        }
+    }
+    const double el = mono_seconds() - g_sfov.t0;
+    const bool fix = fix_phase(el, period);
+    const long phase = (long)(el / period);
+    if (phase != g_sfov.phase) {
+        g_sfov.phase = phase;
+        X4VR_LOG("shadowfov: phase %ld %s", phase,
+                 fix ? "FIX — the base field widened to the rendered field"
+                     : "CONTROL — X4's default base field");
+        X4VR_LOG("milestone: shadows %s (phase %ld). Watch the cockpit "
+                 "shadows as you turn your head.",
+                 fix ? "FIX" : "CONTROL", phase);
+    }
+    const Action a = decide(r, option, fix);
+    if (a.write_base) {
+        if (self_write(cam + kBase, &a.base, sizeof a.base))
+            g_sfov.base_writes++;
+        else
+            g_sfov.write_failed++;
+    }
+    if (a.write_effective) {
+        if (self_write(cam + kEffective, &a.effective, sizeof a.effective)) {
+            if (g_sfov.restores++ < 5)
+                X4VR_LOG("shadowfov: X4 set the effective field to %.5f (its "
+                         "setter recomputing option x base?) — restored to "
+                         "%.5f", r.effective, a.effective);
+        } else {
+            g_sfov.write_failed++;
+        }
+    }
+    static double last = 0.0;
+    const double now = mono_seconds();
+    if (now - last >= 10.0) {
+        last = now;
+        X4VR_LOG("shadowfov: phase %ld %s | base %.5f effective %.5f | %llu "
+                 "base write(s), %llu effective restore(s), %llu failed",
+                 phase, fix ? "FIX" : "CONTROL", r.base, r.effective,
+                 (unsigned long long)g_sfov.base_writes,
+                 (unsigned long long)g_sfov.restores,
+                 (unsigned long long)g_sfov.write_failed);
+    }
+}
+
 // **Task #75's fix: where the tick's cadence comes from.**
 //
 // 0 = X4's event drain, exactly as every take so far. Anything else is a rate in
@@ -5621,6 +5764,7 @@ void SDL_PumpEvents(void) {
         camwatch_tick();
         camwatch_comove_tick();
         hoverview_tick();
+        shadowfov_tick();
         pumprate_report();
     }
     real_fn();

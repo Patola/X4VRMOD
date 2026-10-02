@@ -3902,6 +3902,73 @@ def main(path):
                       "held that is not the 312-320 suppression; ask Patola "
                       "whether the cursor appeared at all")
 
+    # --- #70: X4's base field switched live (X4VR_SHADOWFOV_AB) -------------
+    #
+    # FIX phases widen the camera's base field (camera+0x890, X4's 73.74 deg
+    # default) to the rendered one; CONTROL phases restore X4's. The verdict on
+    # the shadows is Patola's -- a switch within one run, announced by
+    # notification. This block says whether the switch actually happened, and
+    # what each phase cost in frame time (a wider base could make X4 draw more).
+    sf_asked = bool(re.search(r"\bX4VR_SHADOWFOV_AB=\S+", run or ""))
+    sf_armed = re.findall(r"shadowfov: ARMED on camera (\S+) — base (\S+) "
+                          r"effective (\S+) \(rendered field (\S+) rad = "
+                          r"(\S+) deg\)", text)
+    sf_sess = re.search(r"shadowfov: REFUSED for the session — (.*)", text)
+    sf_ref = []
+    for m in re.finditer(r"shadowfov: REFUSED — (.*)", text):
+        if m.group(1) not in sf_ref:
+            sf_ref.append(m.group(1))
+    sf_ph = [(float(t), int(n), k) for t, n, k in re.findall(
+        r"\[\s*([\d.]+)\]\s+inject\s+shadowfov: phase (\d+) (FIX|CONTROL) —",
+        text)]
+    sf_rep = re.findall(r"shadowfov: phase \d+ (?:FIX|CONTROL) \| base (\S+) "
+                        r"effective (\S+) \| (\d+) base write\(s\), (\d+) "
+                        r"effective restore\(s\), (\d+) failed", text)
+    if sf_asked or sf_armed or sf_sess:
+        if sf_sess:
+            fails.append("X4VR_SHADOWFOV_AB refused for the session: "
+                         + sf_sess.group(1))
+        for a in sf_armed[:3]:
+            print(f"shadowfov ARMED on camera {a[0]} — base {a[1]} effective "
+                  f"{a[2]}, rendered field {a[3]} rad ({a[4]} deg)")
+        for r_ in sf_ref[:4]:
+            print(f"shadowfov refused (said once): {r_[:220]}")
+        if sf_asked and not sf_armed:
+            fails.append("X4VR_SHADOWFOV_AB asked but never ARMED — nothing "
+                         "was switched; the refusal lines say why")
+        nfix = sum(1 for _t, _n, k in sf_ph if k == "FIX")
+        print(f"shadowfov {len(sf_ph)} phase(s), {nfix} FIX / "
+              f"{len(sf_ph) - nfix} CONTROL")
+        if sf_rep:
+            b_, e_, bw, rs, fl = sf_rep[-1]
+            print(f"shadowfov last: base {b_} effective {e_} | {bw} base "
+                  f"write(s), {rs} effective restore(s), {fl} failed")
+            if int(fl):
+                fails.append(f"shadowfov: {fl} write(s) into the camera failed")
+            if int(rs):
+                print(f"shadowfov NOTE: X4 recomputed the effective field "
+                      f"{rs} time(s) (option x a widened base) and it was "
+                      f"put back — a camera re-init during a FIX phase")
+        if sf_asked and sf_armed and nfix == 0:
+            fails.append("X4VR_SHADOWFOV_AB armed but the run ended before "
+                         "the first FIX phase — nothing was compared")
+        # Frame time by phase: the layer's `perf frame` windows, credited to
+        # the phase their timestamp falls in.
+        pf = [(float(t), float(ms)) for t, ms in re.findall(
+            r"\[\s*([\d.]+)\]\s+layer\s+perf frame \d+: median ([\d.]+) ms",
+            text)]
+        if sf_ph and pf:
+            by = {"FIX": [], "CONTROL": []}
+            for t, ms in pf:
+                cur = [k for t0, _n, k in sf_ph if t0 <= t]
+                if cur:
+                    by[cur[-1]].append(ms)
+            for k in ("CONTROL", "FIX"):
+                v = sorted(by[k])
+                if v:
+                    print(f"shadowfov perf {k:<7} median {v[len(v) // 2]:.2f} "
+                          f"ms over {len(v)} window(s)")
+
     # --- who WRITES the camera orientation? (X4VR_CAMWATCH) --------------
     #
     # Read-only hardware write-watchpoints on the matrix GetCameraRotation

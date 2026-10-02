@@ -519,6 +519,24 @@ want "nosway served, sway moving -> FAIL" /tmp/census-sw-on.log FAIL "still sway
 want "nosway not served -> sway reported, no FAIL" /tmp/census-sw-x4.log hwrite "x4vrmod_nosway NOT served"
 
 
+# ------------------------------------------ #70: the base-field A/B
+sed 's/env: run = /env: run = X4VR_SHADOWFOV_AB=45 /' "$BASE" > /tmp/census-sf-base.log
+sfarm='[  999990.000] inject  shadowfov: ARMED on camera 0x7f0000006000 — base 1.28700 effective 1.91982 (rendered field 1.91982 rad = 110.00 deg); phases of 45 s, CONTROL first'
+sfp() { printf '[  %s] inject  shadowfov: phase %s %s — x' "$1" "$2" "$3"; }
+sfr='[  999999.000] inject  shadowfov: phase 1 FIX | base 1.91982 effective 1.91982 | 3 base write(s), 0 effective restore(s), 0 failed'
+{ cat /tmp/census-sf-base.log; printf '%s\n' "$sfarm" "$(sfp 999990.100 0 CONTROL)" "$(sfp 999995.000 1 FIX)" "$sfr"; } > /tmp/census-sf-ok.log
+want "shadowfov switched -> phases counted" /tmp/census-sf-ok.log shadowfov "2 phase(s), 1 FIX / 1 CONTROL"
+if python3 tools/score_run.py /tmp/census-sf-ok.log 2>&1 | grep -q "^FAIL.*SHADOWFOV"; then
+    bad "shadowfov healthy -> still FAILs"
+else
+    ok "shadowfov healthy -> no FAIL"
+fi
+{ cat /tmp/census-sf-base.log; printf '%s\n' '[  999990.000] inject  shadowfov: REFUSED — camera 0x1 reads base 0.50000 effective 1.00000, not X4'"'"'s default 1.28700 and option 1.4917 x it'; } > /tmp/census-sf-never.log
+want "shadowfov never armed -> FAIL" /tmp/census-sf-never.log FAIL "never ARMED"
+{ cat /tmp/census-sf-base.log; printf '%s\n' "$sfarm" "$(sfp 999990.100 0 CONTROL)"; } > /tmp/census-sf-short.log
+want "shadowfov ended before FIX -> FAIL" /tmp/census-sf-short.log FAIL "before the first FIX phase"
+absent "shadowfov not asked -> silent" "$BASE" shadowfov
+
 # ------------------------------------------- the camera-state scan (camscan)
 csum() {  # csum <samples> <yawspan> <pitchspan> <survivors>
     printf '[  224100.000] inject  camscan: %s sample(s), camera yaw span %s deg, pitch span %s deg | 50 region(s) 110592 bytes readable | discoveries 2, alive %s, eliminated 900 | SURVIVORS %s' "$1" "$2" "$3" "$4" "$4"

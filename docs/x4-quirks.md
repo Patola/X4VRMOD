@@ -23430,3 +23430,78 @@ with `X4VR_EXTENSIONS=1`.
   recorded there was wrong.
 * **P322.3** Patola: flying and mouse-steering feel the same except that the
   view no longer leans into turns or shakes on boost.
+
+## #70, the field X4 sizes things by — read statically, and an A/B to switch it
+
+No run. Patola: *"switch the sway off in the extension, then the shadow hunt."*
+
+**X4's FOV option is a MULTIPLIER on a compiled-in default.** The Lua
+`GetFOVOption` (0xab4010, registered at 0xa6da51) reads key `fov` from the
+options object at [0x3daab80]+0x150 (getter 0x1fb90e0, default 1.0). Two
+camera set-up sites read it:
+
+    0x137340c / 0x138b9ca:  camera+0x874 = max(option, 0.01) x base
+                            (base = camera+0x890 at the second site)
+
+and the camera constructor (0x1dcca31/0x1dcca39) sets **both** +0x874 and
++0x890 from the constant at **0x2e2cbc4 = 1.2870022 rad = 73.74°**. Nothing
+else ever writes +0x890. So:
+
+    camera+0x874   EFFECTIVE   option x 73.74  = 110° at X4VR_FOV 1.4917
+    camera+0x890   BASE        73.74° always   = sx 1.33333
+
+**That is the pinned population's field exactly** (take 223: all 58
+shadow-configured slots at sx 1.33333, the rendering slots following
+`<fov>`). Readers of the BASE:
+
+* **0x19276fc**: camera+0x890 → a view's +0xcc8, then 0x21bc1b0, which builds
+  that view's projection from it (mode ≤ 4) — a view at 73.74° while the
+  picture is 110°;
+* **0x1164da3**: right after the camera-rotation fetch (0x1925bf0, the one
+  GetCameraRotation uses), tan(base/2) — a frustum extent at 73.74°;
+* 0x128f066 (another view, via 0x21bc990) and 0x2a3f45b (a copy of the
+  camera's fields).
+
+Readers of the EFFECTIVE: 0x1926f80/0x1927010 (returned to callers),
+0x17572fd, 0x175790b, 0xaec1f0.
+
+**Hypothesis, not established:** the cascade fit is sized by a BASE-field view,
+so at 110° the outer pixels fall outside the cascade boxes and their shadow
+weights fade — the take-228 knee (1.24 clean, 1.28 fading) being where the
+cascade boxes' margins run out. Widening the base to the rendered field should
+make the two agree.
+
+**`X4VR_SHADOWFOV_AB=<seconds>`** switches it live (injector/x4vr_shadowfov.hpp):
+CONTROL phases leave X4's default base, FIX phases write camera+0x890 =
+option × 73.74°, each switch announced by notification. Seven code sites and
+the constant verified byte for byte; the camera's fields must read as the
+layout says (default base, option × default effective) before anything is
+written. X4's setter recomputes the effective as option × base on a camera
+re-init, which from a widened base would compound to 164°; the effective is
+restored to the rendered field whenever it drifts. tests/shadowfov.cpp: 17
+checks. Scorer `shadowfov`: armed, phases, writes, restores, frame time per
+phase.
+
+**Side effects to watch, stated before the run:** if any system other than the
+shadows is sized by the base — the HUD layout (#45: X4 lays its UI out against
+the DEFAULT field), LOD, the cockpit displays (0x128f066's view) — it will
+change in FIX phases too. A HUD that resizes or slides in FIX would say the
+base is shared, and the fix must then target the shadow view alone.
+
+## P322 — the sway off, and the shadow A/B at the full field
+
+Take 321's line with **`X4VR_FOV=1.4917`** (back to the field that fills the
+headset) and **`X4VR_SHADOWFOV_AB=45`**. x4vrmod_nosway comes with the
+extensions. WiVRn, configuration 1.
+
+* **P322.1** (sway, as written above) the sway readout's run max under 1° and
+  5 mm; `hwrite` departures gone.
+* **P322.2** shadowfov ARMED (the camera reads base 1.28700, effective 1.91982),
+  phases switch every 45 s, no failed writes.
+* **P322.3** **the shadows: fading in CONTROL phases, stable in FIX phases** —
+  Patola, across the notifications. **Refutation:** they fade in both — the
+  base field is not what the cascades are fitted to; next, the views built from
+  it are watched for which one feeds the cascades.
+* **P322.4** no black edges (110° again) in either phase.
+* **P322.5** side effects in FIX phases, if any, named by Patola (HUD size or
+  position, cockpit displays, distant-object detail) — a predicted unknown.
