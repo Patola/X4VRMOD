@@ -3619,10 +3619,14 @@ static bool camwrite_ready(uintptr_t cam, float plim_deg, float ylim_deg) {
                      sizeof camwatch::kHop3Sites / sizeof camwatch::kHop3Sites[0],
                      sizeof camwrite::kWriteSites / sizeof camwrite::kWriteSites[0],
                      (void *)camwrite::params_global());
-        else
+        else {
             X4VR_LOG("headlook write: REFUSED for the session — code at %p "
                      "differs from the analysed build; nothing will be written",
                      (void *)bad);
+            X4VR_LOG("milestone: head-look write REFUSED — this X4 is not the "
+                     "analysed build. The view will not follow your head; quit "
+                     "and tell me.");
+        }
     }
     if (!sites) {
         g_camwrite.refused++;
@@ -3680,6 +3684,12 @@ static bool camwrite_ready(uintptr_t cam, float plim_deg, float ylim_deg) {
                  "be pressed",
                  (void *)cam, p[0], p[1], pc.radians ? "radians" : "degrees",
                  p[2], p[3], (void *)att[0], (void *)att[1]);
+        static bool said = false;
+        if (!said) {
+            said = true;
+            X4VR_LOG("milestone: head-look write ARMED — the view now follows "
+                     "your head without mouse-look.");
+        }
     }
     return true;
 }
