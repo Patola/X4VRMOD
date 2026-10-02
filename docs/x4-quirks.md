@@ -23200,3 +23200,78 @@ included, with its own culling and shadows following and nothing for the
 compositor to reconcile. X4 rewrites that field every frame (its writers are
 in 0x1933d00), so the write has to go into the state 0x1933d00 builds it from
 — the same reading the head-look write needs.
+
+## 0x1933d00, read: X4 keeps the free-look IN THE MATRIX, and a spring pulls it home
+
+Static reading only; no run. All addresses X4 9.00.
+
+**Caller.** The per-frame caller (0xfeaff0, call at 0xfeb806) passes the
+player's camera (root+0x3e8) and its inputs:
+* xmm0..xmm5: digital camera axes built from input-state bits at
+  [0x3daab80]+0x32c (±1.0 per held key — the numpad camera keys);
+* esi: a byte at [0x3daab80]+0x360, xmm6/xmm7: floats at +0x364/+0x368, read
+  under a mutex at +0x330 and **zeroed after reading** — accumulated mouse-look
+  deltas and their "mouse-look active" flag;
+* 0xfec0db, 0x1d7dde1, 0x1d7e3f3, 0x1d7e890 call it with all inputs zero
+  (resets on camera changes; 0x1d7e3f3 first stores +0x5a0..+0x5d0 itself).
+
+**0x1933d00, cockpit path (mode +0x880 == 0):**
+1. If the object at [0x3db8938]+0x148 reports itself active, it branches to
+   0x1935ac1, which reads `trackmaxpitch`/`trackmaxyaw` — **X4's head-tracker
+   path. Not used, not touched.**
+2. Otherwise it re-bases the camera's stored local transform (+0x5a0..+0x5d0)
+   against a base (+0x6f0..+0x720, composed with the attached object), and
+   **extracts yaw/pitch from the stored matrix** (call 0xb08290 at 0x19342f8).
+   The matrix IS the state; there is no separate angle variable.
+3. **Mouse-look flag set** (0x19344a4): yaw += mouse delta, pitch += mouse
+   delta, clamped to ±maxyaw/±maxpitch; no spring.
+   **Flag clear** (0x1935f03): target = numpad axis × max (zero with no key),
+   and **0x1e8c260 → 0x1a482d0**, a speed- and acceleration-limited follower
+   (`anglespeed`, `angleacc`), moves the angle toward it, velocities kept at
+   +0x750/+0x754. That is the numpad's snap to the extremes and its return
+   home (take 154's "spring", 0.62 s).
+4. **0x1e02200** rebuilds the rotation rows at +0x5b0 from the angles (its
+   store at 0x1e02395 is take 319's writer #2 — the same routine the sway
+   uses), then the base is composed back in and +0x5a0..+0x5d0 stored
+   (0x193462a, 0x1934653).
+
+**The parameters object 0x3db83c8** (called "follow-camera settings" above —
+it is the player-camera parameters) holds `<lookaround><internal>` in
+attribute order: maxpitch +0x688, maxyaw +0x68c, anglespeed +0x690, angleacc
++0x694, trackmaxpitch +0x698, trackmaxyaw +0x69c (each confirmed by the code
+that reads it).
+
+**The follower with `anglespeed` 0:** 0x1a482d0 treats |maxspeed| < 1e-4
+(constant at 0x2e25d80) as "desired velocity zero" — guarded, no division —
+so the angle STAYS where it is. Overshoot snapping cannot fire at zero
+velocity.
+
+**The convention**, fitted to take 319's raw samples (yaw ψ, pitch θ as
+GetCameraRotation reports them, radians; roll 0):
+
+    row0 = ( cos ψ,          0,      −sin ψ        )
+    row1 = (−sin ψ · sin θ,  cos θ,  −cos ψ · sin θ )
+    row2 = ( sin ψ · cos θ,  sin θ,   cos ψ · cos θ )
+
+Checked on three samples to 3 decimals (e.g. ψ −28.77, θ 9.8 → rows (0.8766 0
+0.4812 | 0.0819 0.9854 −0.1492 | −0.4742 0.1702 0.8638)).
+
+### The write this makes possible — head-look WITHOUT MOUSELOOK (proposed)
+
+* A second extension, enabled only for the write test, sets `<internal
+  anglespeed="0">`: the follower holds the angle, so a matrix written into
+  camera+0x5b0 stays. Side effect, stated: the numpad camera keys stop turning
+  the cockpit view in that mode (they only steer the follower's target).
+* The injector writes the head's yaw/pitch as the matrix above each tick —
+  absolute, no servo loop, no MOUSELOOK key, no synthetic mouse. X4 extracts it,
+  the follower leaves it, X4 rebuilds the same matrix. A write landing inside
+  X4's read-modify-write is lost for one frame, not accumulated.
+* Refuses unless: the sites verify; mode 0; the base transform is identity
+  (else compose with it); the parameters object reads anglespeed 0 and the
+  limits our extension set (75/180, which also confirms the layout live).
+* Take 315 proved hover works with the camera turned without MOUSELOOK, so the
+  cursor should need no correction.
+
+**The shadow side next**, by Patola's instruction not to defer it far: the
+shadow-configured camera slots pinned at sx 1.33333 (take 223) — find the
+code that sets them the same way: watch, catch the writer, read it.
