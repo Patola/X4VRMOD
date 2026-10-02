@@ -23396,3 +23396,37 @@ coefficients, and boost shake); (2) the cursor moving with the head — it is
 screen-fixed; holding it on the cockpit means moving the pointer against each
 head turn, but X4's mouse steering reads the pointer's offset from the view
 centre, so that could make looking around steer the ship.
+
+## x4vrmod_nosway — X4's camera sway off (Patola: "switch the sway off in the extension")
+
+* **`extension/x4vrmod_nosway`**: `<playercamera><input>` linear x/y/z and roll,
+  angular x/y/z and roll → 0 (the coefficients that turn the ship's
+  acceleration and turning into camera motion; the sway spring's limits are
+  left as they are, so nothing is divided by zero), and the boost shake's yaw
+  and pitch → 0. Enabled with `X4VR_EXTENSIONS=1`, like the look-around
+  limits. Other shakes in X4's file (`attackmarker`, `attackedobject`) are map
+  markers, not the camera — left alone.
+* **`tests/run-extension-selectors.sh`**: every `<replace sel>` in every
+  extension we ship must address exactly one attribute in X4's own library
+  (X4 ignores a selector that matches nothing, silently). 13 of 13, with a
+  negative control that fails on a one-letter typo.
+* **Checked by what it stops, not by its parameters:** write mode now reads the
+  camera controller's stored matrix every tick (class verified as hop 2 does)
+  and reports the sway's rotation and translation, per window and over the run.
+  Scorer: with x4vrmod_nosway served, a run max over 1° or 5 mm is a FAIL —
+  the diff did not reach the physics.
+
+### P322 — the sway off
+
+Take 321's line, unchanged except the take name and log: the extension comes
+with `X4VR_EXTENSIONS=1`.
+
+* **P322.1** the content fork serves x4vrmod_nosway ENABLED; the sway readout's
+  run max stays under 1° and 5 mm (take 318 saw 19.3°).
+* **P322.2** `hwrite` departures collapse: no stretch of 1 s+ with X4 more than
+  5° off the head while steering with the mouse; |X4 − head| p90 drops from
+  10.74° toward MOUSELOOK's ~1.6°. **Refutation:** departures remain with the
+  sway at rest — then take 321's tail was not the sway, and the inference
+  recorded there was wrong.
+* **P322.3** Patola: flying and mouse-steering feel the same except that the
+  view no longer leans into turns or shakes on boost.

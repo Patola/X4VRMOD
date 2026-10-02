@@ -79,6 +79,12 @@ cmp -s "$PROF/content.xml" "$T/original" && ok "a write does NOT reach the playe
 grep -q 'written' "$PROF/content-x4vrmod.xml" && ok "the write went into the fork" \
     || bad "the write went nowhere visible"
 
+# x4vrmod_nosway rides with X4VR_EXTENSIONS like the look-around limits.
+nson='<extension id="x4vrmod_nosway" enabled="true"/>'
+out=$(run cat "$PROF/content.xml")
+[[ "$out" == *"$nson"* ]] && ok "x4vrmod_nosway served ON with the extensions" \
+    || bad "x4vrmod_nosway not served on — got: $out"
+
 # x4vrmod_headlook rides with X4VR_HEADLOOK_WRITE only, and is forced OFF
 # otherwise -- including when an earlier write session left it on in the fork.
 hon='<extension id="x4vrmod_headlook" enabled="true"/>'

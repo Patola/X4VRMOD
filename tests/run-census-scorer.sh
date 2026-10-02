@@ -507,6 +507,16 @@ csets='[  999996.000] inject  cursor sets: 606 set(s) — handle found 606, NOT 
 want "write mode -> hover while steering is hover working" /tmp/census-hw-hover.log "cursor-set =>" "WHILE HEAD-LOOK WROTE THE CAMERA"
 plant /tmp/census-ml-hover.log "$csets"
 want "MOUSELOOK mode -> the old verdict stands" /tmp/census-ml-hover.log "cursor-set =>" "EVERY CHANGE CAME WHILE HEAD-LOOK WAS STEERING"
+# Take 322's sway readout, judged on intent: nosway served and the sway
+# still moving is a FAIL; at rest it is the extension working.
+nsx='[  999989.500] inject  content: serving /x/content-x4vrmod.xml in memory via fopen — x4vrmod_lookaround already enabled, x4vrmod_nosway ENABLED (added), x4vrmod_headlook ENABLED (was off); your /x/content.xml is not touched'
+swrep() { printf '[  999996.500] inject  headlook write: 4000 write(s), 0 failed, 12 refused tick(s) | last written yaw 1.00 pitch 2.00 | MOUSELOOK pressed 0 time(s) | sway max %s deg %s m this window, %s deg %s m run' "$1" "$2" "$1" "$2"; }
+{ cat /tmp/census-hw-base.log; printf '%s\n' "$nsx" "$hwarm" "$(swrep 0.00 0.000)"; } > /tmp/census-sw-off.log
+want "nosway served, sway at rest -> OFF" /tmp/census-sw-off.log hwrite "sway OFF"
+{ cat /tmp/census-hw-base.log; printf '%s\n' "$nsx" "$hwarm" "$(swrep 18.40 0.060)"; } > /tmp/census-sw-on.log
+want "nosway served, sway moving -> FAIL" /tmp/census-sw-on.log FAIL "still swayed 18.40 deg"
+{ cat /tmp/census-hw-base.log; printf '%s\n' "$hwext" "$hwarm" "$(swrep 18.40 0.060)"; } > /tmp/census-sw-x4.log
+want "nosway not served -> sway reported, no FAIL" /tmp/census-sw-x4.log hwrite "x4vrmod_nosway NOT served"
 
 
 # ------------------------------------------- the camera-state scan (camscan)

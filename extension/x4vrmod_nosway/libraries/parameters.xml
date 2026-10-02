@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<diff>
+  <!-- G-force sway: how the ship's acceleration and turning push the camera.
+       Zero input leaves the sway spring at rest; its limits are untouched. -->
+  <replace sel="/parameters/playercamera/input/linear/@x">0</replace>
+  <replace sel="/parameters/playercamera/input/linear/@y">0</replace>
+  <replace sel="/parameters/playercamera/input/linear/@z">0</replace>
+  <replace sel="/parameters/playercamera/input/linear/roll/@x">0</replace>
+  <replace sel="/parameters/playercamera/input/angular/@x">0</replace>
+  <replace sel="/parameters/playercamera/input/angular/@y">0</replace>
+  <replace sel="/parameters/playercamera/input/angular/@z">0</replace>
+  <replace sel="/parameters/playercamera/input/angular/roll/@y">0</replace>
+  <!-- Boost camera shake. -->
+  <replace sel="/parameters/playercamera/boost/shake/rotation/@yaw">0</replace>
+  <replace sel="/parameters/playercamera/boost/shake/rotation/@pitch">0</replace>
+</diff>

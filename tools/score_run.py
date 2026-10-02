@@ -3794,6 +3794,28 @@ def main(path):
         elif hw_asked:
             fails.append("X4VR_HEADLOOK_WRITE=1 asked, but no write report — "
                          "the mode never ran (head-look off, or no pose)")
+        # The G-force sway, read off the controller live (since take 322).
+        # Judged against intent: with x4vrmod_nosway served the sway must stay
+        # at rest; without it, a large one is just X4 being X4.
+        sw = re.findall(r"\| sway max [\d.]+ deg [\d.]+ m this window, "
+                        r"([\d.]+) deg ([\d.]+) m run", text)
+        nosway = bool(re.search(r"x4vrmod_nosway (already enabled|ENABLED)", text))
+        if sw:
+            sd, sm = float(sw[-1][0]), float(sw[-1][1])
+            print(f"hwrite  sway (camera controller, live): run max {sd:.2f} "
+                  f"deg, {sm * 100:.1f} cm"
+                  + ("; x4vrmod_nosway served" if nosway else
+                     "; x4vrmod_nosway NOT served"))
+            if nosway and (sd > 1.0 or sm > 0.005):
+                fails.append(f"x4vrmod_nosway was served but the camera still "
+                             f"swayed {sd:.2f} deg / {sm * 100:.1f} cm — the "
+                             f"diff did not reach the sway physics")
+            elif nosway:
+                print("hwrite  => sway OFF ✓ — the view moves only with the "
+                      "head")
+        elif hw_rep and nosway:
+            print("hwrite  sway: no readout (this build predates it, or the "
+                  "controller never verified)")
         if hw_asked:
             if not re.search(r"x4vrmod_headlook (already enabled|ENABLED)", text):
                 fails.append("X4VR_HEADLOOK_WRITE=1 but the content fork never "

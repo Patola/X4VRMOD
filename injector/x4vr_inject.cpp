@@ -818,6 +818,10 @@ struct OurExtension {
 bool always_wanted() { return true; }
 const OurExtension kOurExtensions[] = {
     {"x4vrmod_lookaround", always_wanted},
+    // X4's G-force camera sway and boost shake off: in VR the view moves only
+    // with the head. Take 321 saw the sway as 1-17 s stretches of up to 22 deg
+    // once a written head-look no longer cancelled it (MOUSELOOK's loop had).
+    {"x4vrmod_nosway", always_wanted},
     {"x4vrmod_headlook", headlook_write_enabled},
 };
 
@@ -3567,6 +3571,13 @@ static bool self_write(uintptr_t addr, const void *in, size_t n) {
 
 namespace {
 struct CamWrite {
+    // The G-force sway, read live from the camera controller's stored matrix
+    // (take 317: +0x10 translation, +0x20.. rotation, written by the physics
+    // step 0x13f1970). Max per report window and over the run, so the
+    // x4vrmod_nosway extension is checked by what it is meant to stop, not
+    // by its parameters.
+    float sway_deg = 0.f, sway_m = 0.f, sway_run_deg = 0.f, sway_run_m = 0.f;
+    bool sway_seen = false;
     uint64_t writes = 0, failed = 0, refused = 0, mouselook_downs = 0;
     float yaw = 0.f, pitch = 0.f;
     bool have = false;
@@ -3738,19 +3749,60 @@ static bool camwrite_apply(uintptr_t cam, float yaw_deg, float pitch_deg) {
     return true;
 }
 
+// One sample of the sway: the controller at camera+0x18, its class verified
+// the way hop 2 verifies it (the sites once, then vtable+0x1b0 == 0x191d0f0),
+// so a load camera's controller is never read as the cockpit's.
+static void camwrite_sway_sample(uintptr_t cam) {
+    using namespace x4vr::camwatch;
+    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    static int sites = -1;
+    if (sites < 0) {
+        uintptr_t bad = 0;
+        sites = verify_hop2_sites(rd, &bad) ? 1 : 0;
+        if (!sites)
+            X4VR_LOG("headlook write: sway readout OFF — controller code at %p "
+                     "differs from the analysed build", (void *)bad);
+    }
+    if (!sites || !cam)
+        return;
+    const Chain c = read_chain(cam, rd);
+    if (!c.ok)
+        return;
+    float m[16];
+    if (!self_read(c.controller + 0x10, m, sizeof m))
+        return;
+    if (!live_transform(m + 4, false))
+        return; // freed or mid-teardown: not a sway
+    const float deg = rotation_angle_deg(m + 4);
+    const float dist = std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
+    g_camwrite.sway_seen = true;
+    g_camwrite.sway_deg = std::fmax(g_camwrite.sway_deg, deg);
+    g_camwrite.sway_m = std::fmax(g_camwrite.sway_m, dist);
+    g_camwrite.sway_run_deg = std::fmax(g_camwrite.sway_run_deg, deg);
+    g_camwrite.sway_run_m = std::fmax(g_camwrite.sway_run_m, dist);
+}
+
 static void camwrite_report(bool final) {
     static double last = 0.0;
     const double now = mono_seconds();
     if (!final && now - last < 2.0)
         return;
     last = now;
+    char sway[160] = " | sway not read (no verified controller yet)";
+    if (g_camwrite.sway_seen)
+        snprintf(sway, sizeof sway,
+                 " | sway max %.2f deg %.3f m this window, %.2f deg %.3f m run",
+                 g_camwrite.sway_deg, g_camwrite.sway_m,
+                 g_camwrite.sway_run_deg, g_camwrite.sway_run_m);
     X4VR_LOG("headlook write%s: %llu write(s), %llu failed, %llu refused "
              "tick(s) | last written yaw %.2f pitch %.2f | MOUSELOOK pressed "
-             "%llu time(s)",
+             "%llu time(s)%s",
              final ? " (final)" : "", (unsigned long long)g_camwrite.writes,
              (unsigned long long)g_camwrite.failed,
              (unsigned long long)g_camwrite.refused, g_camwrite.yaw,
-             g_camwrite.pitch, (unsigned long long)g_camwrite.mouselook_downs);
+             g_camwrite.pitch, (unsigned long long)g_camwrite.mouselook_downs,
+             sway);
+    g_camwrite.sway_deg = g_camwrite.sway_m = 0.f;
 }
 
 // **Task #75's fix: where the tick's cadence comes from.**
@@ -4600,6 +4652,7 @@ void headlook_tick() {
                                          yaw, pitch, ha.yaw_weight,
                                          g_headlook.yaw_limit_deg,
                                          g_headlook.pitch_limit_deg, &ty, &tp);
+            camwrite_sway_sample(cam);
             if (camwrite_apply(cam, ty, tp)) {
                 g_camwrite.yaw = ty;
                 g_camwrite.pitch = tp;
