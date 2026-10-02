@@ -22948,6 +22948,16 @@ much"* — the log agrees: head roll max **13.9°**, and all 5 samples tilted pa
   of a camera moving over 360°. Free-look is not in the settings object.
 * **P318.4 HELD.** No X4 core; only gamescope's own SIGABRT at exit.
 
+**#70 still present, as expected.** Patola, from his recording of take 318:
+*"the shadows on the cockpit are wrong, that issue where the shadows would
+dark/lighten according to the head rotation is still there."* Nothing between
+takes 228 and 318 touched it: the line still renders `X4VR_FOV=1.4917`, past
+the knee (fov 1.20-1.28 at 1:1, take 228), and the extension changes only the
+free-look limits. None of the fixes made after take 318 concern shadows.
+Modding being allowed reopens routes that take 228 did not have; X4's
+`libraries/parameters.xml` has NO shadow or cascade entry (checked), so the
+extension's parameters file is not one of them.
+
 ### The scorer's headline was a freed object
 
 The scorer printed `[controller] ... max rotation 120.0 deg => FOLLOWS THE
