@@ -493,6 +493,20 @@ want "hwrite asked, mode never ran -> FAIL" /tmp/census-hw-silent.log FAIL "no w
 plant /tmp/census-hw-session.log '[  999990.000] inject  headlook write: REFUSED for the session — code at 0x1935f1e differs from the analysed build; nothing will be written'
 want "hwrite code mismatch -> FAIL" /tmp/census-hw-session.log FAIL "refused for the whole session"
 absent "hwrite not asked -> silent" "$BASE" hwrite
+# Take 321: the clamp block judged X4's stop on a written angle (which X4 does
+# not clamp), and the cursor census called 599 hover changes MOUSELOOK
+# suppression. Both are gated on intent now.
+want "write mode -> clamp says it measures no stop" /tmp/census-hw-ok.log "clamp" "write mode: the written angle bypasses X4's look clamp"
+if python3 tools/score_run.py /tmp/census-hw-ok.log 2>&1 | grep -q "clamp   DID NOT MOVE"; then
+    bad "write mode -> clamp still says DID NOT MOVE"
+else
+    ok "write mode -> no DID NOT MOVE verdict"
+fi
+csets='[  999996.000] inject  cursor sets: 606 set(s) — handle found 606, NOT found 0, null 0 | 599 were a CHANGE (599 while head-look was STEERING, 0 while it was NOT; 599 in the COCKPIT, 0 elsewhere) | 17 mouse button press(es)'
+{ cat /tmp/census-hw-ok.log; printf '%s\n' "$csets"; } > /tmp/census-hw-hover.log
+want "write mode -> hover while steering is hover working" /tmp/census-hw-hover.log "cursor-set =>" "WHILE HEAD-LOOK WROTE THE CAMERA"
+plant /tmp/census-ml-hover.log "$csets"
+want "MOUSELOOK mode -> the old verdict stands" /tmp/census-ml-hover.log "cursor-set =>" "EVERY CHANGE CAME WHILE HEAD-LOOK WAS STEERING"
 
 
 # ------------------------------------------- the camera-state scan (camscan)

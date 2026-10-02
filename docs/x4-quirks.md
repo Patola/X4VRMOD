@@ -23344,3 +23344,55 @@ on. WiVRn, configuration 1.
 **Behaviour changes, stated:** the numpad camera keys do not turn the cockpit
 view in this session; the mouse is never captured by head-look, so moving it
 moves X4's cursor (and steers the ship if X4 is in mouse steering).
+
+## Take 321 — SCORED: head-look WITHOUT MOUSELOOK works, and hover with it. Tagged `v0.321-headlook-write`
+
+PASS. 44 396 writes, 0 failed, MOUSELOOK pressed **0** times; x4vrmod_headlook
+served ENABLED; clean exit (gamescope's own SIGABRT only). Patola:
+
+> *"besides the narrower FOV everything was working. The mouse at all times
+> correctly matched the objects around, making the 4 bracket corners expand
+> when hovering, and I even selected some to tests. Mouse steering was also
+> working 100%... even with my head turned to the side, steering and hovering
+> worked... comfort was great"*
+
+* **P321.1 HELD.** ARMED; X4 stores the look-around parameters in **radians**:
+  maxpitch 1.3090 (75°), maxyaw 3.1416 (180°), anglespeed 0, angleacc 8.7266
+  (500°/s²) — the field layout confirmed live.
+* **P321.2 HELD on the median, with a tail it did not predict.** |X4 − head|
+  yaw median **0.53°** (MOUSELOOK 0.25–0.30), p90 **10.74°**. The tail is not
+  latency: with the head still (< 5°/s) the p90 is 8.6°. It is **13 stretches
+  of 1–17 s, 80 s in all, worst 22°, 79% of samples off in the head's own
+  direction** — the size of take 318's G-force sway (19.3° max), in the first
+  run where mouse steering was possible with the head turned (steering toward
+  where you look turns the ship that way, and the sway leans the camera into
+  the turn). MOUSELOOK's closed loop on GetCameraRotation had cancelled it; a
+  write does not. Inference, not yet measured: no sway readout ran.
+  Latency from the speed bins: median 19 ms, i.e. X4's own 1–2 frames.
+* **P321.3 HELD.** X4 changed the cursor **599 times, every one while head-look
+  was writing the camera** (takes 312–320: zero under MOUSELOOK). Hover,
+  bracket spread and selection all work with the head turned.
+* **P321.4 HELD** ("comfort was great"), with two caveats from Patola: the
+  narrow field, and *"the mouse cursor also moved with my head in a compound
+  motion (mouse + head movement)... maybe it's better to compensate for the
+  head motion."*
+* **P321.5 HELD.**
+* GAMEPLAY 9.33 ms (107 fps) against 320's 12.10 — no synthetic mouse events
+  now (evflow 0 Hz), but scenes differ; session-wide, not an A/B.
+
+**Defects found and fixed:** the "still REFUSED after 20 s in the cockpit"
+milestone fired on the LOAD SCREEN (X4's main menu reports the HUD up; no
+player camera yet; then the parameters read load-time defaults 2π/0 for
+12 s) — now only refusals with a cockpit camera count, the clock restarts on a
+new reason, the defaults pattern is its own non-alarming reason, and it waits
+30 s. Scorer: the cursor census called the 599 changes "MOUSELOOK suppression"
+and the clamp block "DID NOT MOVE … stopped at 65.00" (a 26.6° sway plateau,
+on an angle X4 does not clamp) — both gated on write mode now; `hwrite`
+prints the departure stretches.
+
+**Open, for Patola:** (1) the sway — cancel it in the write, or switch X4's
+camera sway off in our extension (`<playercamera><input>` angular/linear
+coefficients, and boost shake); (2) the cursor moving with the head — it is
+screen-fixed; holding it on the cockpit means moving the pointer against each
+head turn, but X4's mouse steering reads the pointer's offset from the view
+centre, so that could make looking around steer the ship.

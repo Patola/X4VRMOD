@@ -3591,27 +3591,32 @@ static uintptr_t x4_player_camera() {
     return cam;
 }
 
-// Said once per distinct reason, counted always. Called only from the cockpit
-// with the HUD up, so 20 s of refusals with no arming is not loading: the view
-// is not following his head, and he hears why rather than waiting it out.
-static void camwrite_refuse(const char *why) {
+// Said once per distinct reason, counted always.
+//
+// **When to tell Patola.** Take 321's first version said "still REFUSED after
+// 20 s in the cockpit" during the LOAD SCREEN: X4's main menu reports the HUD
+// up, so may_steer held while no player camera existed, and the parameters
+// read X4's load-time defaults (2*pi, 0) for 12 s more before arming. Neither
+// is a fault. So `alarm` is false for the states every session passes through
+// (no camera, wrong mode), and the clock restarts whenever the reason changes:
+// only the SAME reason, with a cockpit camera present, for 30 s is said.
+static void camwrite_refuse(const char *why, bool alarm) {
     g_camwrite.refused++;
+    static double since = 0.0;
+    const double now = mono_seconds();
     if (strcmp(g_camwrite.last_refusal, why) != 0) {
         snprintf(g_camwrite.last_refusal, sizeof g_camwrite.last_refusal, "%s",
                  why);
         X4VR_LOG("headlook write: REFUSED — %s", why);
+        since = now;
     }
-    static double first = 0.0;
     static bool said = false;
-    if (g_camwrite.armed_cam || said)
+    if (!alarm || g_camwrite.armed_cam || said)
         return;
-    const double now = mono_seconds();
-    if (first == 0.0)
-        first = now;
-    else if (now - first > 20.0) {
+    if (now - since > 30.0) {
         said = true;
-        X4VR_LOG("milestone: head-look write still REFUSED after 20 s in the "
-                 "cockpit — %.120s. Quit and tell me.", why);
+        X4VR_LOG("milestone: head-look write still REFUSED after 30 s with the "
+                 "cockpit camera up — %.120s. Quit and tell me.", why);
     }
 }
 
@@ -3647,7 +3652,7 @@ static bool camwrite_ready(uintptr_t cam, float plim_deg, float ylim_deg) {
         return false;
     }
     if (!cam) {
-        camwrite_refuse("no player camera yet (or X4 tore it down)");
+        camwrite_refuse("no player camera yet (or X4 tore it down)", false);
         return false;
     }
     int32_t mode = -1;
@@ -3655,14 +3660,22 @@ static bool camwrite_ready(uintptr_t cam, float plim_deg, float ylim_deg) {
         char why[128];
         snprintf(why, sizeof why, "the camera is in mode %d, not the cockpit's 0",
                  (int)mode);
-        camwrite_refuse(why);
+        camwrite_refuse(why, false);
         return false;
     }
     uintptr_t params = 0;
     float p[4] = {};
     if (!self_read(camwrite::params_global(), &params, 8) || !params ||
         !self_read(params + camwrite::kMaxPitch, p, sizeof p)) {
-        camwrite_refuse("X4's player-camera parameters are not readable");
+        camwrite_refuse("X4's player-camera parameters are not readable", true);
+        return false;
+    }
+    // Take 321's load screen read maxpitch = maxyaw = 2*pi with zero speed and
+    // acceleration for 12 s before the real values arrived: X4's defaults, not
+    // yet the library's. A state every load passes through, not a fault.
+    if (p[3] == 0.f && std::fabs(p[0] - p[1]) < 1e-6f) {
+        camwrite_refuse("X4's look-around parameters are not loaded yet "
+                        "(load-time defaults)", false);
         return false;
     }
     const camwrite::ParamCheck pc = camwrite::check_params(p, plim_deg, ylim_deg);
@@ -3672,7 +3685,7 @@ static bool camwrite_ready(uintptr_t cam, float plim_deg, float ylim_deg) {
                  "%s (X4 reads maxpitch %.4f maxyaw %.4f anglespeed %.4f "
                  "angleacc %.4f; the servo's limits are %.0f/%.0f)",
                  pc.why, p[0], p[1], p[2], p[3], plim_deg, ylim_deg);
-        camwrite_refuse(why);
+        camwrite_refuse(why, true);
         return false;
     }
     float b[16] = {};
@@ -3684,7 +3697,7 @@ static bool camwrite_ready(uintptr_t cam, float plim_deg, float ylim_deg) {
                  "%.3f %.3f %.3f, row0 %.3f %.3f %.3f) — a written angle would "
                  "be offset by it, and composing it is not built",
                  b[0], b[1], b[2], b[4], b[5], b[6]);
-        camwrite_refuse(why);
+        camwrite_refuse(why, true);
         return false;
     }
     if (cam != g_camwrite.armed_cam) {

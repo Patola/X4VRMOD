@@ -3625,6 +3625,17 @@ def main(path):
                   f"there, so in the cockpit X4 never saw the pointer over "
                   f"anything clickable. Changes elsewhere cannot answer the "
                   f"cockpit question and are not evidence for it.")
+        elif (re.search(r"\bX4VR_HEADLOOK_WRITE=1\b", run or "") and
+              chg_st > 0):
+            # Gate on intent. "Steering" meant MOUSELOOK held until take 321;
+            # in write mode it means the head's angle is being WRITTEN and the
+            # mouse is never captured, so a change while steering is hover
+            # working with head-look on -- the opposite of the branch below,
+            # which take 321 printed on its 599 changes.
+            print(f"cursor-set => X4 CHANGED THE CURSOR {chg_st} time(s) WHILE "
+                  f"HEAD-LOOK WROTE THE CAMERA (of {chg}). Write mode holds no "
+                  f"MOUSELOOK, so this is hover working with head-look on. "
+                  f"WHERE the drawn cursor sat is the player's to say.")
         elif chg_free == 0:
             print(f"cursor-set => EVERY CHANGE CAME WHILE HEAD-LOOK WAS "
                   f"STEERING ({chg_st} of {chg}), and none while it was free. "
@@ -3804,6 +3815,45 @@ def main(path):
                       f"{p90:.2f} deg, pitch median {dp[n_ // 2]:.2f} p90 "
                       f"{dp[int(0.9 * (n_ - 1))]:.2f} deg over {n_} cockpit "
                       f"tick(s) while writing (pitch under 60)")
+                # **The tail, as episodes.** Take 321 read median 0.53 but
+                # p90 10.74, and with the head STILL the p90 was 8.6: not
+                # latency. 76 stretches of 5-17 s where X4 sat 8-20 deg past
+                # the head, always in the head's direction -- the size of
+                # take 318's G-force sway (19.3 max), arriving the first time
+                # mouse steering was possible with the head turned. MOUSELOOK's
+                # closed loop had cancelled it; a write does not. Printed so
+                # the next take can be compared on the same terms.
+                ts_ = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+lagsample: arm=\d "
+                                 r"view=cockpit steer=1 cam=1 head=(-?[\d.]+),"
+                                 r"(-?[\d.]+) x4=(-?[\d.]+)", text)
+                eps, cur = [], None
+                for t_, h_, hp_, x_ in ts_:
+                    if abs(float(hp_)) >= 60.0:
+                        continue
+                    e_ = wrap180(float(x_) - float(h_))
+                    t_ = float(t_)
+                    if abs(e_) > 5.0:
+                        if cur and t_ - cur[1] < 0.3:
+                            cur[1] = t_
+                            cur[2] = max(cur[2], abs(e_))
+                            cur[3] += (e_ > 0) == (float(h_) > 0)
+                            cur[4] += 1
+                        else:
+                            if cur:
+                                eps.append(cur)
+                            cur = [t_, t_, abs(e_), int((e_ > 0) == (float(h_) > 0)), 1]
+                if cur:
+                    eps.append(cur)
+                long_ = [e for e in eps if e[1] - e[0] >= 1.0]
+                if long_:
+                    tot = sum(e[1] - e[0] for e in long_)
+                    same = sum(e[3] for e in long_) / max(1, sum(e[4] for e in long_))
+                    print(f"hwrite  departures: {len(long_)} stretch(es) of 1 s+ "
+                          f"with X4 more than 5 deg off the head, {tot:.0f} s in "
+                          f"all, longest {max(e[1] - e[0] for e in long_):.1f} s, "
+                          f"worst {max(e[2] for e in long_):.1f} deg; "
+                          f"{100 * same:.0f}% of their samples off in the "
+                          f"head's own direction")
                 if med <= 2.0:
                     print("hwrite  => X4's camera FOLLOWS the written angle — "
                           "head-look without MOUSELOOK works")
@@ -5705,99 +5755,109 @@ def main(path):
             xp = pp if pp is not None else 0.0
             print(f"clamp   max |X4| yaw={xy_max:.2f} pitch={xp_max:.2f} deg   "
                   f"(max |command| yaw={cy:.2f} pitch={cp:.2f})")
-            if wraps:
-                print(f"clamp   NO STOP — X4's cockpit yaw WRAPPED through "
-                      f"+-180 {wraps} time(s): a full circle, the extension's "
-                      f"maxyaw=180 in force. "
-                      + (f"The plateau finder's {py:.2f} is servo lag, not a "
-                         f"stop — there is none to find" if py is not None
-                         else "Nothing to plateau"))
-            elif py is not None:
-                print(f"clamp   PLATEAU yaw={py:.2f} deg from {src}, {ny} "
-                      f"sample(s) with the target 2+ deg past the camera"
-                      + (f"; pitch={pp:.2f} ({np_})" if pp is not None else
-                         "; pitch not measured on this stream"))
-                if xy_max > py + 5.0:
-                    print(f"clamp   !! the MAX is {xy_max - py:.1f} deg past the "
-                          f"plateau — that excursion is not a stop. Check the "
-                          f"`headlook: REFUSED` lines; take 294's 119.04 came "
-                          f"from a read-back fault, not from X4's clamp")
+            # **Write mode has no X4 stop to find.** A written angle goes
+            # through X4's follower path, which does not clamp; only the
+            # servo's own limits bound it. Take 321 printed "DID NOT MOVE ...
+            # stopped at 65.00" off a plateau of 26.60 that was G-force sway.
+            if re.search(r"\bX4VR_HEADLOOK_WRITE=1\b", run or ""):
+                print("clamp   write mode: the written angle bypasses X4's "
+                      "look clamp (the follower path does not clamp), so "
+                      "nothing here measures X4's stop; the servo's limits "
+                      "bound it, and `hwrite` says whether X4 followed")
             else:
-                print(f"clamp   no plateau — the command never asked past where "
-                      f"the camera already was, so nothing here measures a stop "
-                      f"however large the max is")
-            # Pitch gets the same guard as yaw, and take 209 is why it needed
-            # one. There the neck ran out at 34.49 deg of command against a 75
-            # deg limit, and X4 read 35.07 — barely past the stock 35.00, which
-            # every fixed-clamp take pins to exactly. Without this the pitch
-            # number reads as a measurement when the experiment never ran.
-            if cp <= 36.0:
-                print(f"clamp   pitch INCONCLUSIVE — the command only reached "
-                      f"{cp:.2f} deg, so nothing asked past the stock 35.00 "
-                      f"stop. X4 read {xp:.2f}"
-                      + (", which is past 35.00 and weakly suggests the limit "
-                         "did move, but a neck is not a measurement"
-                         if xp > 35.02 else
-                         ", and 35.00 is exactly where a stock clamp sits"))
-            # **X4's stop is NOT a constant, and assuming 65/35 cost take 293.**
-            #
-            #   285b-s2, 287b   X4 read exactly 65.00 / 35.00
-            #   292             76.79 / 38.39
-            #   293             78.79 / 48.87
-            #
-            # Same config file byte for byte (3822 bytes, 0 overrides), same
-            # DECLARE_RENDERED_ROT=2, and `residual` is 0.00 at p99 and max in
-            # both — so this is X4's own camera, not anything we add. Everything
-            # seen is bounded by the `trackmaxyaw="85" trackmaxpitch="85"` that
-            # `<internal>` declares next to maxyaw=65, and X4 lets individual
-            # cockpits override the defaults, so a different ship is the likely
-            # difference between the two pairs of takes.
-            #
-            # It has to be said loudly because a run that assumes 65 will place a
-            # manipulation nowhere near the real limit: take 293 capped the servo
-            # at 40 to keep the camera away from "the stop", and the stop was ~79.
-            if wraps:
-                pass  # said above: no stop at all
-            elif xy > 65.5 or xp > 35.5:
-                print(f"clamp   !! EXTENDED PATH — X4's stop is NOT the stock "
-                      f"65/35 here; it read yaw {xy:.2f}, pitch {xp:.2f}. An "
-                      f"extension or the ship's own cockpit sets it. Any knob "
-                      f"set relative to \"the stop\" is against the wrong "
-                      f"number.")
-            elif cy <= 65.5:
-                # **Asymmetric, and saying so is the point.** Exceeding 65.5
-                # PROVES the limit is raised; pinning at 65.00 proves nothing,
-                # because the servo's own yaw_limit_deg defaults to 65 and a
-                # camera stopped by US looks exactly like one stopped by X4.
-                # Separating them needs X4VR_HEADLOOK_YAW_LIMIT above 65.
-                print(f"clamp   path UNDETERMINED — "
-                      + (f"X4's stop was never measured (no plateau)"
-                         if py is None else
-                         f"X4's stop plateaus at {xy:.2f} yaw")
-                      + f", and the servo never asked past 65 either, so a "
-                      f"stock clamp and an extended one are indistinguishable "
-                      f"here. Do NOT record this run as unmodified; set "
-                      f"X4VR_HEADLOOK_YAW_LIMIT above 65 to tell them apart.")
-            asked = cy > 66.0
-            if not asked:
-                print("clamp   INCONCLUSIVE — the command never exceeded 66 "
-                      "deg, so the servo never asked to go past the old stop. "
-                      "Turn the head further, or raise "
-                      "X4VR_HEADLOOK_YAW_LIMIT; a 65.00 here is the servo's "
-                      "ceiling, not X4's")
-            elif wraps:
-                print(f"clamp   MOVED ✓ — X4 turned a full circle (max |yaw| "
-                      f"{xy_max:.2f} on the sparse stream, {wraps} wrap(s) "
-                      f"through +-180 on the full one)")
-            elif xy > 65.5:
-                print(f"clamp   MOVED ✓ — X4 reached {xy:.2f} deg of yaw, past "
-                      f"the 65.00 stop every stored take pins to. The override "
-                      f"reached X4 and the limit is data, confirmed live")
-            else:
-                print("clamp   DID NOT MOVE — the command asked past 66 deg "
-                      "and X4 still stopped at 65.00, so the override did not "
-                      "reach the camera. Check `fileprobe` for whether the "
-                      "file was even read before blaming the value")
+                if wraps:
+                    print(f"clamp   NO STOP — X4's cockpit yaw WRAPPED through "
+                          f"+-180 {wraps} time(s): a full circle, the extension's "
+                          f"maxyaw=180 in force. "
+                          + (f"The plateau finder's {py:.2f} is servo lag, not a "
+                             f"stop — there is none to find" if py is not None
+                             else "Nothing to plateau"))
+                elif py is not None:
+                    print(f"clamp   PLATEAU yaw={py:.2f} deg from {src}, {ny} "
+                          f"sample(s) with the target 2+ deg past the camera"
+                          + (f"; pitch={pp:.2f} ({np_})" if pp is not None else
+                             "; pitch not measured on this stream"))
+                    if xy_max > py + 5.0:
+                        print(f"clamp   !! the MAX is {xy_max - py:.1f} deg past the "
+                              f"plateau — that excursion is not a stop. Check the "
+                              f"`headlook: REFUSED` lines; take 294's 119.04 came "
+                              f"from a read-back fault, not from X4's clamp")
+                else:
+                    print(f"clamp   no plateau — the command never asked past where "
+                          f"the camera already was, so nothing here measures a stop "
+                          f"however large the max is")
+                # Pitch gets the same guard as yaw, and take 209 is why it needed
+                # one. There the neck ran out at 34.49 deg of command against a 75
+                # deg limit, and X4 read 35.07 — barely past the stock 35.00, which
+                # every fixed-clamp take pins to exactly. Without this the pitch
+                # number reads as a measurement when the experiment never ran.
+                if cp <= 36.0:
+                    print(f"clamp   pitch INCONCLUSIVE — the command only reached "
+                          f"{cp:.2f} deg, so nothing asked past the stock 35.00 "
+                          f"stop. X4 read {xp:.2f}"
+                          + (", which is past 35.00 and weakly suggests the limit "
+                             "did move, but a neck is not a measurement"
+                             if xp > 35.02 else
+                             ", and 35.00 is exactly where a stock clamp sits"))
+                # **X4's stop is NOT a constant, and assuming 65/35 cost take 293.**
+                #
+                #   285b-s2, 287b   X4 read exactly 65.00 / 35.00
+                #   292             76.79 / 38.39
+                #   293             78.79 / 48.87
+                #
+                # Same config file byte for byte (3822 bytes, 0 overrides), same
+                # DECLARE_RENDERED_ROT=2, and `residual` is 0.00 at p99 and max in
+                # both — so this is X4's own camera, not anything we add. Everything
+                # seen is bounded by the `trackmaxyaw="85" trackmaxpitch="85"` that
+                # `<internal>` declares next to maxyaw=65, and X4 lets individual
+                # cockpits override the defaults, so a different ship is the likely
+                # difference between the two pairs of takes.
+                #
+                # It has to be said loudly because a run that assumes 65 will place a
+                # manipulation nowhere near the real limit: take 293 capped the servo
+                # at 40 to keep the camera away from "the stop", and the stop was ~79.
+                if wraps:
+                    pass  # said above: no stop at all
+                elif xy > 65.5 or xp > 35.5:
+                    print(f"clamp   !! EXTENDED PATH — X4's stop is NOT the stock "
+                          f"65/35 here; it read yaw {xy:.2f}, pitch {xp:.2f}. An "
+                          f"extension or the ship's own cockpit sets it. Any knob "
+                          f"set relative to \"the stop\" is against the wrong "
+                          f"number.")
+                elif cy <= 65.5:
+                    # **Asymmetric, and saying so is the point.** Exceeding 65.5
+                    # PROVES the limit is raised; pinning at 65.00 proves nothing,
+                    # because the servo's own yaw_limit_deg defaults to 65 and a
+                    # camera stopped by US looks exactly like one stopped by X4.
+                    # Separating them needs X4VR_HEADLOOK_YAW_LIMIT above 65.
+                    print(f"clamp   path UNDETERMINED — "
+                          + (f"X4's stop was never measured (no plateau)"
+                             if py is None else
+                             f"X4's stop plateaus at {xy:.2f} yaw")
+                          + f", and the servo never asked past 65 either, so a "
+                          f"stock clamp and an extended one are indistinguishable "
+                          f"here. Do NOT record this run as unmodified; set "
+                          f"X4VR_HEADLOOK_YAW_LIMIT above 65 to tell them apart.")
+                asked = cy > 66.0
+                if not asked:
+                    print("clamp   INCONCLUSIVE — the command never exceeded 66 "
+                          "deg, so the servo never asked to go past the old stop. "
+                          "Turn the head further, or raise "
+                          "X4VR_HEADLOOK_YAW_LIMIT; a 65.00 here is the servo's "
+                          "ceiling, not X4's")
+                elif wraps:
+                    print(f"clamp   MOVED ✓ — X4 turned a full circle (max |yaw| "
+                          f"{xy_max:.2f} on the sparse stream, {wraps} wrap(s) "
+                          f"through +-180 on the full one)")
+                elif xy > 65.5:
+                    print(f"clamp   MOVED ✓ — X4 reached {xy:.2f} deg of yaw, past "
+                          f"the 65.00 stop every stored take pins to. The override "
+                          f"reached X4 and the limit is data, confirmed live")
+                else:
+                    print(f"clamp   DID NOT MOVE — the command asked past 66 deg "
+                          f"and X4 plateaued at {xy:.2f}, so the override did not "
+                          f"reach the camera. Check `fileprobe` for whether the "
+                          f"file was even read before blaming the value")
 
     # --- task #68: which door does X4 knock on for parameters.xml? ----------
     #
