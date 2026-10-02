@@ -23070,3 +23070,67 @@ configuration 1.
   have the camera's angle — the control.
 * **P319.5** at exit: no `HUD is now up` after the NULL line, no pose FAIL, no
   X4 core.
+
+## Take 319 — SCORED: THE FREE-LOOK IS FOUND, at camera+0x5b0
+
+`X4VR_CAMWATCH=4`. PASS. Three full turns through ±180.
+
+    camera.rot (+0x5b0)  HAS THE CAMERA'S ANGLE — |dtheta| median <2, p90 <5 deg
+                         over 1438 far ticks (81% within 3 deg); max 180 deg
+    camera.pos (+0x5a0)  STATIC at (0, 0, 0)
+    controller (sway)    does NOT have the angle — median <36 deg; max 10 deg
+    camera               mode 0 in the cockpit
+
+* **P319.1 HELD** (sites match, mode 0). **P319.2 HELD:** the camera object's
+  own rotation IS X4's free-look. **P319.3 HELD:** its translation is zero —
+  X4's free-look rotates about the camera's own origin, the cockpit eye point,
+  not about a neck or ship pivot. **P319.4 HELD:** the sway is written by
+  0x1e02395 and does not have the angle. **P319.5 HELD:** after the NULL HUD
+  global no "HUD is now up", no pose FAIL, no X4 core.
+* **Writers**, all on 'Movement worker': camera.rot by stores at **0x1934296**
+  and **0x1934653** (and 0x1e02395, a generic routine called from 0x1934530),
+  camera.pos by **0x1934262** / **0x193462a** — all inside the function at
+  **0x1933d00**, reached from 0x1144e71 (and via 0x114c2f7, a virtual
+  `call *0x90(%rax)`). Not yet read: that function holds the free-look STATE
+  (angles or a matrix) that a write must target.
+* The raw pairs give the convention: camera yaw −76.20, pitch 26.07 ->
+  row0 (0.2268, 0, 0.9739): row 0 is (cos ψ, 0, −sin ψ) with ψ the camera yaw
+  (signs to be fixed against the other samples before any write).
+* Scorer defect found and fixed: camera.pos never moved, but its move counts
+  included the rotation rows read after it, so it was called "a TRANSLATION
+  that moves with the camera". A translation target now moves only on its own
+  three floats; the scorer calls a zero displacement STATIC.
+
+**What it opens:** (1) head-look without MOUSELOOK — write the free-look state;
+(2) **head translation done by X4**: camera+0x5a0 is a local translation X4
+composes into the view, Z included. A head offset written there would be
+rendered from, rather than approximated by a shear and declared with a lever
+arm.
+
+## Patola after take 319: the pivot artefact is back, and the shadows
+
+*"I have just perceived another issue that I thought was resolved -- the wrong
+pivot on rotation, the small "distancing" from the sides when I turn there...
+Is this something that was fixed by an extension too?... Next we should
+immediately "refix" these two bugs, including the FOV adjustment we previously
+had to fix the shadowing bug."*
+
+From the stored run lines, not memory:
+
+    takes 245-314   X4VR_HEAD_TRANSLATE unset     (245A's fix: the 17 cm arm gone)
+    takes 315-319   X4VR_HEAD_TRANSLATE=1         (re-enabled 2026-09-26)
+    takes 258-319   X4VR_FOV=1.4917 throughout    (261 alone at 1.0)
+
+* **The pivot artefact returned because head translation was switched back
+  on**, at Patola's request on 2026-09-26. Take 245A's fix was exactly
+  switching it off; no extension was involved in either direction. My message
+  then said why it had been off, in one bullet ("cockpit pushed away"), and
+  called the re-enable "a fresh measurement" — it did not say plainly "this
+  undoes the pivot fix". Takes 316/317 felt comfortable with yaw held to ±65;
+  318/319 opened 180 and full chair turns (319: published shift 0.22 m x,
+  0.25 m y, clamped once — the arm grew with them).
+* **No FOV fix for the shadows was ever in place.** Take 223 (fov 1.0) fixed
+  them — *"this fixed the shadows issue"* — but rendered 20 deg per eye less
+  than the headset shows. Take 228 put the knee between 1.20 and 1.28; the
+  headset's canted views (eye0 l −54, r 40, u 44, d −55) need ±55 symmetric,
+  i.e. 1.4917. Patola chose 1.4917 then and parked #70.

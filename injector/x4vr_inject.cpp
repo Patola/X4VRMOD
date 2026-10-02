@@ -3032,8 +3032,12 @@ static void camwatch_comove_tick() {
                      r.roll * kRad2Deg, cam_angle, rows[0], rows[1], rows[2],
                      rows[4], rows[5], rows[6], rows[8], rows[9], rows[10],
                      x4vr::camwatch::rotation_angle_deg(rows));
+        // A translation target moves only if its OWN three floats do: the
+        // rows read after it are the object's rotation, and counting them made
+        // take 319's camera.pos -- zero, never moving -- "a translation that
+        // moves with the camera".
         float d = 0.f;
-        for (int j = 0; j < 12; j++)
+        for (int j = 0; j < (m.is_pos ? 3 : 12); j++)
             d = std::fmax(d, std::fabs(rows[j] - m.prev[j]));
         const bool mat_moved = m.have && d > 1e-5f;
         if (m.have) {

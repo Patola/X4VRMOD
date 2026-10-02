@@ -3905,8 +3905,16 @@ def main(path):
                 mag = math.degrees(math.asin(min(1.0, max(off))))
         magtxt = (f", max rotation {mag:.1f} deg" if mag is not None else "") + \
                  (f", max displacement {float(disp.group(1)):.4f}" if disp else "")
+        # A translation that never left its first value is static, whatever
+        # the move counts say: before take 320 they included the rotation rows
+        # read after it, and take 319 called a zero camera.pos "a TRANSLATION
+        # that moves with the camera".
         if c < 30:
             v = "NOT EXERCISED (the camera barely moved)"
+        elif disp and float(disp.group(1)) < 1e-4:
+            v = (f"STATIC — the translation never left its first value"
+                 + (" (the move counts are the rotation rows read after it)"
+                    if w or a else ""))
         elif w == 0 and a == 0:
             v = "STATIC — never changed"
         elif (mag is not None and cam_half > 0 and mag < 0.25 * cam_half):

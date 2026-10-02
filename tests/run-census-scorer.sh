@@ -416,6 +416,10 @@ plant /tmp/census-cw3-near.log "$span360" "$(comove3 camera.rot 40.0 0 120 100 2
 want "hop3 too few far ticks -> not exercised" /tmp/census-cw3-near.log "camwatch hop3 \[camera.rot\]" "angle match NOT EXERCISED"
 plant /tmp/census-cw3-mid.log "$span360" "$(comove3 camera.rot 90.0 0 900 300 6 20)"
 want "hop3 in between -> partly, read the samples" /tmp/census-cw3-mid.log "camwatch hop3 \[camera.rot\]" "PARTLY"
+# Take 319: camera.pos stayed at zero, but its move counts included the
+# rotation rows after it -- static, not "moves with the camera".
+plant /tmp/census-cw3-pos.log "$span360" '[  224500.000] inject  camwatch hop2 co-move [camera.pos] @0x7f0000003000: 2110 tick(s), camera moved in 1884, the matrix moved WITH it in 1854, ALONE in 18 | max displacement 0.0000 | 0 not-a-transform read(s) skipped | 3x3 ranges 0..1'
+want "hop3 zero translation with moving neighbours -> STATIC" /tmp/census-cw3-pos.log "camwatch hop2 \[camera.pos\]" "STATIC — the translation never left its first value"
 # Asked for hop 3 (the run line says so) and never censused -> FAIL.
 sed 's/env: run = /env: run = X4VR_CAMWATCH=4 /' "$BASE" > /tmp/census-cw3-asked.log
 want "hop3 asked, never censused -> FAIL" /tmp/census-cw3-asked.log FAIL "asked for hop 3"
