@@ -23134,3 +23134,26 @@ From the stored run lines, not memory:
   than the headset shows. Take 228 put the knee between 1.20 and 1.28; the
   headset's canted views (eye0 l −54, r 40, u 44, d −55) need ±55 symmetric,
   i.e. 1.4917. Patola chose 1.4917 then and parked #70.
+
+## P320 — the two refixes: translation off, and FOV 1.24 (Patola's choice)
+
+Patola chose to bisect the #70 knee rather than take the measured-clean 1.20
+or keep 1.4917: *"Try 1.24 first"*. Take 319's line with `X4VR_HEAD_TRANSLATE`
+removed (take 245A's fix), `X4VR_CAMWATCH` removed (hop 3 is done), and
+**`X4VR_FOV=1.24`**: 73.74 x 1.24 = **91.4 deg**, declared ±45.72 per eye.
+Against the headset's views (l −54, r 40, u 44, d −55) that leaves **~8.3 deg
+black at each eye's outer edge and ~9.3 deg at the bottom**; the top and the
+inner (overlap) edges are covered. The UI canvas is derived from the same knob
+(`x4_half_for_fov`), so the HUD keeps the angle X4 intended (A ≈ 0.731 here
+against 0.5252 at 1.4917). Two changes in one take, accepted because their
+symptoms are distinct and each was measured alone before (245A, 228).
+
+* **P320.1** the pivot artefact is gone: the cockpit's sides no longer recede
+  when he turns, including chair turns — as in 245A. **Refutation:** still
+  there with translation off, so it is not #74's arm, and a recording of a slow
+  turn is the next instrument.
+* **P320.2** shadows at 1.24 — **no prediction of which side of the knee.**
+  Clean: 1.24 is the widest field known to keep the shadows. Fading: the knee
+  lies between 1.20 and 1.24, and 1.20 is the value.
+* **P320.3** the log declares ±45.72 deg, reports no head translation, and the
+  scorer passes.
