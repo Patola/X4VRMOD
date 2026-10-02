@@ -3591,13 +3591,27 @@ static uintptr_t x4_player_camera() {
     return cam;
 }
 
-// Said once per distinct reason, counted always.
+// Said once per distinct reason, counted always. Called only from the cockpit
+// with the HUD up, so 20 s of refusals with no arming is not loading: the view
+// is not following his head, and he hears why rather than waiting it out.
 static void camwrite_refuse(const char *why) {
     g_camwrite.refused++;
     if (strcmp(g_camwrite.last_refusal, why) != 0) {
         snprintf(g_camwrite.last_refusal, sizeof g_camwrite.last_refusal, "%s",
                  why);
         X4VR_LOG("headlook write: REFUSED — %s", why);
+    }
+    static double first = 0.0;
+    static bool said = false;
+    if (g_camwrite.armed_cam || said)
+        return;
+    const double now = mono_seconds();
+    if (first == 0.0)
+        first = now;
+    else if (now - first > 20.0) {
+        said = true;
+        X4VR_LOG("milestone: head-look write still REFUSED after 20 s in the "
+                 "cockpit — %.120s. Quit and tell me.", why);
     }
 }
 
