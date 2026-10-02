@@ -23157,3 +23157,46 @@ symptoms are distinct and each was measured alone before (245A, 228).
   lies between 1.20 and 1.24, and 1.20 is the value.
 * **P320.3** the log declares ±45.72 deg, reports no head translation, and the
   scorer passes.
+
+## Take 320 — SCORED: both refixes hold. Tagged `v0.320-shadows-pivot`
+
+PASS. Field declared ±45.72 per eye (`X4VR_FOV=1.24`), no head translation,
+full circle again, roll to 50 deg with the compensation's sign right. Patola:
+
+1. *"Cockpit sides do not seem to recede anymore, this fixed it."*
+   **P320.1 HELD** — #74's arm, as in 245A.
+2. *"Shadows: fixed too, they remain completely stable, not changing."*
+   **P320.2: 1.24 is CLEAN** — the knee lies between 1.24 and 1.28 at 1:1.
+3. *"The black edges are intrusive."* The cost stated before the run (≈8.3 deg
+   at each eye's outer edge, ≈9.3 deg at the bottom).
+
+He recalls a run with *"my canvas completely filled with no black bars and the
+shadows were stable"*, possibly by "increase the FOV but get a smaller section
+of it". Searched, and not found in the record as one run:
+* takes 223 and 261 ran FOV 1.0 with stable shadows, and 261's log shows the
+  headset was told ±36.87 deg — the edges were black, larger than now
+  (223's log is gone; the declaration has followed `X4VR_FOV` since #38);
+* #35's off-axis affine (takes 163-166) DID render a wider field and keep only
+  the section the display shows — sharper, filled — but at FOV 1.4917, where
+  the shadows fade.
+Recorded as his memory against the record, not as settled: a run may exist
+that neither the logs nor this file kept.
+
+**What a full field with stable shadows needs** is the shadow side itself:
+take 223 found the shadow-configured camera slots pinned at sx 1.33333 (fov
+1.0) while `<fov>` moves the rendering camera, and listed (a) make the shadow
+side follow the wide field — "needs to know what pins it" — and (b) correct
+the shadow term in the shader. (a) is now the same kind of hunt as the
+free-look: find the code that sets the pinned slot (watch it, read the writer).
+
+**Translation and Z.** Re-enabling `X4VR_HEAD_TRANSLATE` as built brings the
+arm back. Compensating X and Y cannot fix it: the shear renders only the
+lateral part of the eye's motion (a pure head turn moves the eyes on an arc
+around the neck, forward/back included), Z is dropped, and the declaration
+rotates the rest. The route that renders all three axes is X4's own camera
+translation at camera+0x5a0 (take 319: a static zero, composed into the view
+right after the free-look rotation) — X4 would render from the moved eye, Z
+included, with its own culling and shadows following and nothing for the
+compositor to reconcile. X4 rewrites that field every frame (its writers are
+in 0x1933d00), so the write has to go into the state 0x1933d00 builds it from
+— the same reading the head-look write needs.
