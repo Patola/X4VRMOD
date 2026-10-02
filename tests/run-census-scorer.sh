@@ -465,6 +465,36 @@ else
 fi
 
 
+# ------------------------------------------ head-look without MOUSELOOK
+#
+# X4VR_HEADLOOK_WRITE gates on intent: asked and never armed, never written,
+# MOUSELOOK pressed, or x4vrmod_headlook not served -- each a FAIL. The base
+# run's own lagsamples stand in for tracking.
+sed 's/env: run = /env: run = X4VR_HEADLOOK_WRITE=1 /' "$BASE" > /tmp/census-hw-base.log
+hwarm='[  999990.000] inject  headlook write: ARMED on camera 0x7f0000005000 (mode 0) — X4 reads maxpitch 75.0000 maxyaw 180.0000 (degrees), anglespeed 0.0000 angleacc 500.0000; base identity; attached 0x1 ref 0x2. MOUSELOOK will not be pressed'
+hwext='[  999989.000] inject  content: serving /x/content-x4vrmod.xml in memory via fopen — x4vrmod_lookaround already enabled, x4vrmod_headlook ENABLED (was off); your /x/content.xml is not touched'
+hwrep() { printf '[  999995.000] inject  headlook write: %s write(s), 0 failed, 12 refused tick(s) | last written yaw 12.50 pitch -3.00 | MOUSELOOK pressed %s time(s)' "$1" "$2"; }
+{ cat /tmp/census-hw-base.log; printf '%s\n' "$hwext" "$hwarm" "$(hwrep 4000 0)"; } > /tmp/census-hw-ok.log
+want "hwrite armed and writing -> reported" /tmp/census-hw-ok.log hwrite "4000 write(s)"
+if python3 tools/score_run.py /tmp/census-hw-ok.log 2>&1 | grep -qE "^FAIL.*(HEADLOOK_WRITE|MOUSELOOK|write)"; then
+    bad "hwrite healthy -> still FAILs"
+else
+    ok "hwrite healthy -> no write FAIL"
+fi
+{ cat /tmp/census-hw-base.log; printf '%s\n' "$hwext" '[  999990.000] inject  headlook write: REFUSED — anglespeed is not zero -- x4vrmod_headlook is not in force' "$(hwrep 0 0)"; } > /tmp/census-hw-never.log
+want "hwrite never armed -> FAIL" /tmp/census-hw-never.log FAIL "never ARMED"
+want "hwrite never armed -> the reason is printed" /tmp/census-hw-never.log hwrite "anglespeed is not zero"
+{ cat /tmp/census-hw-base.log; printf '%s\n' "$hwext" "$hwarm" "$(hwrep 4000 3)"; } > /tmp/census-hw-ml.log
+want "hwrite pressed MOUSELOOK -> FAIL" /tmp/census-hw-ml.log FAIL "pressed MOUSELOOK 3 time(s)"
+{ cat /tmp/census-hw-base.log; printf '%s\n' "$hwarm" "$(hwrep 4000 0)"; } > /tmp/census-hw-noext.log
+want "hwrite without the extension served -> FAIL" /tmp/census-hw-noext.log FAIL "never served x4vrmod_headlook ENABLED"
+cp /tmp/census-hw-base.log /tmp/census-hw-silent.log
+want "hwrite asked, mode never ran -> FAIL" /tmp/census-hw-silent.log FAIL "no write report"
+plant /tmp/census-hw-session.log '[  999990.000] inject  headlook write: REFUSED for the session — code at 0x1935f1e differs from the analysed build; nothing will be written'
+want "hwrite code mismatch -> FAIL" /tmp/census-hw-session.log FAIL "refused for the whole session"
+absent "hwrite not asked -> silent" "$BASE" hwrite
+
+
 # ------------------------------------------- the camera-state scan (camscan)
 csum() {  # csum <samples> <yawspan> <pitchspan> <survivors>
     printf '[  224100.000] inject  camscan: %s sample(s), camera yaw span %s deg, pitch span %s deg | 50 region(s) 110592 bytes readable | discoveries 2, alive %s, eliminated 900 | SURVIVORS %s' "$1" "$2" "$3" "$4" "$4"

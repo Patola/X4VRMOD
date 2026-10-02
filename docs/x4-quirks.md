@@ -23275,3 +23275,72 @@ Checked on three samples to 3 decimals (e.g. ψ −28.77, θ 9.8 → rows (0.876
 **The shadow side next**, by Patola's instruction not to defer it far: the
 shadow-configured camera slots pinned at sx 1.33333 (take 223) — find the
 code that sets them the same way: watch, catch the writer, read it.
+
+## X4VR_HEADLOOK_WRITE=1 — head-look without MOUSELOOK, built
+
+Patola: *"Yes, build the write test."* The first WRITE into X4's memory.
+
+* **`injector/x4vr_camwrite.hpp`**: twelve code sites verified byte for byte
+  (the parameters global's load, the extract and rebuild calls, the mouse-look
+  branch, the four parameter loads, the follower's zero-speed guard, the base
+  loads) on top of hop 3's six; X4's loaded parameters checked live —
+  maxpitch/maxyaw must read our 75/180 (degrees or radians, said which), which
+  also confirms the field layout, and **anglespeed must read 0**; the camera's
+  base (+0x6f0..) must be identity; mode 0. Any miss: REFUSED, said once per
+  reason, counted.
+* **The convention, against X4's own matrices**: tests/camwrite.cpp rebuilds
+  all nine entries of all thirteen of take 319's stored matrices from their two
+  angles — worst entry error 0.00007 — and checks the yaw sign against
+  GetCameraRotation (within sway, 4.6 deg worst).
+* **The write**: every head-look tick in the cockpit (HUD up), the head's
+  yaw/pitch → rows → camera+0x5b0, w kept, through `process_vm_writev` (tested
+  here: it lands on ourselves, and a freed address is EFAULT, not a crash). No
+  servo, no lead, no MOUSELOOK key, no mouse delta. Yaw faded near the vertical
+  exactly as the servo's was; the 180 limit wraps, as X4 does.
+* **Steering** in write mode means "the write is allowed this tick", not
+  relative mouse mode (which never comes), so the layer's declared pose stays
+  live. The HUD gate asks IsHUDActive directly (its NULL guard decoded), since
+  the MOUSELOOK path's latch never sets.
+* **`extension/x4vrmod_headlook`**: `anglespeed` 200 → 0. `enabled="0"` in its
+  manifest; the launcher deploys it ONLY for a write session and removes our
+  copy otherwise (`deploy-extensions.sh --without`); the content fork forces it
+  on with the knob and OFF without it (X4 writes content.xml into the fork, so
+  one write session would otherwise leave it on). Tested both ways.
+* **Scorer `hwrite`**: armed/refusals, writes, MOUSELOOK presses (FAIL if any),
+  extension served (FAIL if not), **tracking** — |X4 − head| over cockpit
+  lagsamples while writing — and **hover** from the cursor census. Servo-rate
+  blocks carry a note that they describe a servo this run did not use. Census
+  suite +9.
+
+**The baseline**, the same tracking statistic on MOUSELOOK head-look:
+
+    take 320  |X4 - head| yaw median 0.25 p90 1.63 deg, pitch 0.17 / 0.87
+    take 318                          0.30      1.67           0.19 / 0.78
+
+## P321 — the write test
+
+Take 320's line with **`X4VR_HEADLOOK_WRITE=1`** and **`X4VR_CURSOR_CANVAS=0`**
+(the cursor drawn where X4 picks in the cockpit — take 315's setting, under
+which hover was "perfect"; under MOUSELOOK X4 set no cursor, so 320 never drew
+one and the knob had nothing to act on). FOV 1.24, translation off, extensions
+on. WiVRn, configuration 1.
+
+* **P321.1** ARMED on the cockpit camera: X4 reads maxpitch/maxyaw 75/180 and
+  anglespeed 0; no refusal after arming; MOUSELOOK pressed 0 times.
+* **P321.2** X4's camera FOLLOWS the write: |X4 − head| yaw median ≤ 2 deg
+  (MOUSELOOK's was 0.25–0.30; a write read back one tick later should be of
+  that order). **Refutation:** a constant offset (the base or the attached
+  transform is not what the refusals assume) or a decay toward centre (the
+  follower is not held).
+* **P321.3** hover works with the head turned: X4 sets the cursor while
+  head-look steers (cursor census `while head-look was STEERING` > 0), and
+  Patola sees the cross and the bracket spread over objects off to the side.
+  **Refutation:** no cursor while steering, with MOUSELOOK never pressed —
+  then something other than MOUSELOOK suppresses it.
+* **P321.4** comfort at least as good as MOUSELOOK head-look (Patola) — no
+  servo in the loop, so no lag of its own.
+* **P321.5** clean exit; the content fork reports x4vrmod_headlook ENABLED.
+
+**Behaviour changes, stated:** the numpad camera keys do not turn the cockpit
+view in this session; the mouse is never captured by head-look, so moving it
+moves X4's cursor (and steers the ship if X4 is in mouse steering).

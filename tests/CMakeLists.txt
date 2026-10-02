@@ -176,6 +176,10 @@ add_executable(x4vr_test_camscan camscan.cpp)
 # entry lookup, and a LIVE hardware watchpoint with decoy threads. Needs
 # perf_event_paranoid <= 2; says SKIP otherwise. Self-checking.
 add_executable(x4vr_test_camwatch camwatch.cpp)
+# X4VR_HEADLOOK_WRITE: X4's matrix convention against take 319's own stored
+# matrices, the parameter and base refusals, the target, and the code sites
+# against the real binary. Self-checking.
+add_executable(x4vr_test_camwrite camwrite.cpp)
 # The content.xml fork that enables our extensions for the modded session.
 add_executable(x4vr_test_content_fork content_fork.cpp)
 target_link_libraries(x4vr_test_camwatch PRIVATE Threads::Threads)

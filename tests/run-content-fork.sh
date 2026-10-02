@@ -79,6 +79,25 @@ cmp -s "$PROF/content.xml" "$T/original" && ok "a write does NOT reach the playe
 grep -q 'written' "$PROF/content-x4vrmod.xml" && ok "the write went into the fork" \
     || bad "the write went nowhere visible"
 
+# x4vrmod_headlook rides with X4VR_HEADLOOK_WRITE only, and is forced OFF
+# otherwise -- including when an earlier write session left it on in the fork.
+hon='<extension id="x4vrmod_headlook" enabled="true"/>'
+hoff='<extension id="x4vrmod_headlook" enabled="false"/>'
+out=$(run cat "$PROF/content.xml")
+[[ "$out" == *"$hoff"* ]] && ok "no write mode: x4vrmod_headlook served OFF" \
+    || bad "no write mode: x4vrmod_headlook not served off — got: $out"
+out=$(X4VR_HEADLOOK_WRITE=1 run cat "$PROF/content.xml")
+[[ "$out" == *"$hon"* && "$out" == *"$on"* ]] \
+    && ok "write mode: x4vrmod_headlook AND x4vrmod_lookaround served ON" \
+    || bad "write mode: not both on — got: $out"
+printf '<content>\n  %s\n  %s\n</content>\n' "$on" "$hon" > "$PROF/content-x4vrmod.xml"
+out=$(run cat "$PROF/content.xml")
+[[ "$out" == *"$hoff"* ]] \
+    && ok "a fork left with headlook ON by a write session is served OFF without it" \
+    || bad "headlook leaked into a non-write session — got: $out"
+cmp -s "$PROF/content.xml" "$T/original" && ok "player's content.xml still byte-identical" \
+    || bad "player's content.xml was MODIFIED"
+
 # An extension's own manifest is never claimed.
 out=$(run cat "$MANI")
 cmp -s <(printf '%s\n' "$out") "$T/manifest-original" \

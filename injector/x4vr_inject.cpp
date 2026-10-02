@@ -56,6 +56,7 @@ extern char **environ;
 #include "x4vr_riprel.hpp"
 #include "x4vr_camscan.hpp"
 #include "x4vr_camwatch.hpp"
+#include "x4vr_camwrite.hpp"
 #include "x4vr_content.hpp"
 #include "x4vr_lua.hpp"
 #include "../common/x4vr_shquote.hpp"
@@ -801,8 +802,24 @@ bool extensions_enabled() {
     return on;
 }
 
-// The extensions we own. One today.
-const char *const kOurExtensions[] = {"x4vrmod_lookaround"};
+// The extensions we own, and whether this session wants each. The look-around
+// limits ride with X4VR_EXTENSIONS; x4vrmod_headlook (anglespeed 0: X4's
+// cockpit look follower holds still) only with X4VR_HEADLOOK_WRITE, and is
+// forced OFF otherwise -- X4 writes content.xml into our fork, so a session
+// that enabled it would leave it enabled for every later one.
+bool headlook_write_enabled() {
+    static const bool on = x4vr::env_on("X4VR_HEADLOOK_WRITE", false);
+    return on;
+}
+struct OurExtension {
+    const char *id;
+    bool (*wanted)();
+};
+bool always_wanted() { return true; }
+const OurExtension kOurExtensions[] = {
+    {"x4vrmod_lookaround", always_wanted},
+    {"x4vrmod_headlook", headlook_write_enabled},
+};
 
 Profile load_content_profile(const char *path) {
     Profile p;
@@ -826,16 +843,19 @@ int content_memfd(const char *path, const char *how) {
     if (prof.xml.empty())
         return -1;
     std::string xml = std::move(prof.xml);
-    char what[256];
+    char what[512];
     int k = 0;
-    for (const char *id : kOurExtensions) {
-        const int r = x4vr::enable_extension(xml, id);
+    for (const OurExtension &ext : kOurExtensions) {
+        const bool on = ext.wanted();
+        const int r = x4vr::set_extension(xml, ext.id, on);
         k += snprintf(what + k, sizeof what - (size_t)k, "%s%s %s", k ? ", " : "",
-                      id,
-                      r == 0   ? "already enabled"
-                      : r == 1 ? "ENABLED (was off)"
-                      : r == 2 ? "ENABLED (added)"
-                               : "COULD NOT be enabled — no </content>");
+                      ext.id,
+                      r == 0   ? (on ? "already enabled" : "already disabled")
+                      : r == 1 ? (on ? "ENABLED (was off)" : "DISABLED (was on)")
+                      : r == 2 ? (on ? "ENABLED (added)" : "DISABLED (added)")
+                               : "COULD NOT be set — no </content>");
+        if (k >= (int)sizeof what)
+            k = (int)sizeof what - 1; // truncated: never index past the end
     }
     const int fd = memfd_create("x4vr-content", MFD_CLOEXEC);
     if (fd < 0)
@@ -2310,14 +2330,23 @@ static bool x4_cockpit_view() {
 // worse: the key pressed during loading is take 126's lost edge. With no HUD
 // object there is no HUD; head-look idles until the global comes back.
 // X4GUARD: IsHUDActive
-static bool x4_hud_active() {
-    using Fn = bool (*)();
-    static Fn hud = [] {
-        Fn f = (Fn)dlsym(RTLD_DEFAULT, "IsHUDActive");
+using X4HudFn = bool (*)();
+static X4HudFn x4_hud_fn() {
+    static X4HudFn hud = [] {
+        X4HudFn f = (X4HudFn)dlsym(RTLD_DEFAULT, "IsHUDActive");
         X4VR_LOG("camread: IsHUDActive %s", f ? "resolved" : "NOT FOUND");
         return f;
     }();
+    return hud;
+}
+// The global IsHUDActive dereferences, decoded from its first instruction, or
+// nullptr when the prologue does not decode -- in which case nothing guards a
+// call made before X4 built the object. Write-mode head-look asks this before
+// calling at all, because it never enters relative mouse mode and so never
+// sets the latch the MOUSELOOK path relies on.
+static const void *const *x4_hud_slot() {
     static const void *const *slot = [] {
+        const X4HudFn hud = x4_hud_fn();
         const void *const *s = x4vr::riprel_rdx_load_slot((const void *)hud);
         if (hud)
             X4VR_LOG("camread: IsHUDActive reads its global at %p — %s", s,
@@ -2326,6 +2355,11 @@ static bool x4_hud_active() {
                          "so the teardown guard is OFF and exit may crash");
         return s;
     }();
+    return slot;
+}
+static bool x4_hud_active() {
+    const X4HudFn hud = x4_hud_fn();
+    const void *const *slot = x4_hud_slot();
     if (!hud)
         return true;
     if (slot && !*slot) {
@@ -3513,6 +3547,175 @@ void send_key_down(int scancode);
 static void push_our_event(void *ev);
 void send_key(int scancode, bool down);
 
+// ------------------------------------------------ X4VR_HEADLOOK_WRITE=1
+//
+// Head-look WITHOUT MOUSELOOK: the head's yaw/pitch written straight into X4's
+// free-look state, the camera's own local matrix (camera+0x5b0..), every tick.
+// See injector/x4vr_camwrite.hpp for what 0x1933d00 does with it and why the
+// x4vrmod_headlook extension (anglespeed 0) makes a write stay. The first
+// WRITE into X4's memory in this project: through process_vm_writev, so a
+// freed camera is EFAULT, never a crash, and refused unless every site, the
+// camera mode, X4's loaded parameters and the base transform say the matrix
+// means what we think it means.
+static bool self_write(uintptr_t addr, const void *in, size_t n) {
+    if (!addr)
+        return false;
+    struct iovec local {const_cast<void *>(in), n};
+    struct iovec remote {(void *)addr, n};
+    return process_vm_writev(getpid(), &local, 1, &remote, 1, 0) == (ssize_t)n;
+}
+
+namespace {
+struct CamWrite {
+    uint64_t writes = 0, failed = 0, refused = 0, mouselook_downs = 0;
+    float yaw = 0.f, pitch = 0.f;
+    bool have = false;
+    uintptr_t armed_cam = 0;
+    char last_refusal[256] = "";
+};
+CamWrite g_camwrite;
+} // namespace
+
+// The player's camera object the way GetCameraRotation reaches it: its root
+// global, decoded from its own `mov disp32(%rip),%rax` at +0xd, then +0x3e8.
+static uintptr_t x4_player_camera() {
+    using Fn = X4Rotation (*)();
+    static Fn get = (Fn)dlsym(RTLD_DEFAULT, "GetCameraRotation");
+    static const void *const *root_slot =
+        get ? x4vr::riprel_mov_load_slot((const uint8_t *)(void *)get + 0xd, 0)
+            : nullptr;
+    uintptr_t root = 0, cam = 0;
+    if (!root_slot || !self_read((uintptr_t)root_slot, &root, 8) || !root ||
+        !self_read(root + 0x3e8, &cam, 8))
+        return 0;
+    return cam;
+}
+
+// Said once per distinct reason, counted always.
+static void camwrite_refuse(const char *why) {
+    g_camwrite.refused++;
+    if (strcmp(g_camwrite.last_refusal, why) != 0) {
+        snprintf(g_camwrite.last_refusal, sizeof g_camwrite.last_refusal, "%s",
+                 why);
+        X4VR_LOG("headlook write: REFUSED — %s", why);
+    }
+}
+
+// May we write into `cam` now? The code sites once per session; the rest per
+// tick, because a camera, its mode or X4's parameters can change under us.
+static bool camwrite_ready(uintptr_t cam, float plim_deg, float ylim_deg) {
+    using namespace x4vr;
+    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    static int sites = -1;
+    if (sites < 0) {
+        uintptr_t bad = 0;
+        sites = camwatch::verify_hop3_sites(rd, &bad) &&
+                        camwrite::verify_write_sites(rd, &bad)
+                    ? 1
+                    : 0;
+        if (sites)
+            X4VR_LOG("headlook write: all %zu camera and %zu write sites match "
+                     "X4 9.00; the parameters object is at global %p",
+                     sizeof camwatch::kHop3Sites / sizeof camwatch::kHop3Sites[0],
+                     sizeof camwrite::kWriteSites / sizeof camwrite::kWriteSites[0],
+                     (void *)camwrite::params_global());
+        else
+            X4VR_LOG("headlook write: REFUSED for the session — code at %p "
+                     "differs from the analysed build; nothing will be written",
+                     (void *)bad);
+    }
+    if (!sites) {
+        g_camwrite.refused++;
+        return false;
+    }
+    if (!cam) {
+        camwrite_refuse("no player camera yet (or X4 tore it down)");
+        return false;
+    }
+    int32_t mode = -1;
+    if (!self_read(cam + camwatch::kCamMode, &mode, sizeof mode) || mode != 0) {
+        char why[128];
+        snprintf(why, sizeof why, "the camera is in mode %d, not the cockpit's 0",
+                 (int)mode);
+        camwrite_refuse(why);
+        return false;
+    }
+    uintptr_t params = 0;
+    float p[4] = {};
+    if (!self_read(camwrite::params_global(), &params, 8) || !params ||
+        !self_read(params + camwrite::kMaxPitch, p, sizeof p)) {
+        camwrite_refuse("X4's player-camera parameters are not readable");
+        return false;
+    }
+    const camwrite::ParamCheck pc = camwrite::check_params(p, plim_deg, ylim_deg);
+    if (!pc.ok) {
+        char why[256];
+        snprintf(why, sizeof why,
+                 "%s (X4 reads maxpitch %.4f maxyaw %.4f anglespeed %.4f "
+                 "angleacc %.4f; the servo's limits are %.0f/%.0f)",
+                 pc.why, p[0], p[1], p[2], p[3], plim_deg, ylim_deg);
+        camwrite_refuse(why);
+        return false;
+    }
+    float b[16] = {};
+    if (!self_read(cam + camwrite::kBasePos, b, sizeof b) ||
+        !camwrite::base_is_identity(b, 1e-3f)) {
+        char why[256];
+        snprintf(why, sizeof why,
+                 "the camera's base transform is not identity (translation "
+                 "%.3f %.3f %.3f, row0 %.3f %.3f %.3f) — a written angle would "
+                 "be offset by it, and composing it is not built",
+                 b[0], b[1], b[2], b[4], b[5], b[6]);
+        camwrite_refuse(why);
+        return false;
+    }
+    if (cam != g_camwrite.armed_cam) {
+        g_camwrite.armed_cam = cam;
+        g_camwrite.last_refusal[0] = 0;
+        uintptr_t att[2] = {};
+        self_read(cam + 0x780, att, sizeof att);
+        X4VR_LOG("headlook write: ARMED on camera %p (mode 0) — X4 reads "
+                 "maxpitch %.4f maxyaw %.4f (%s), anglespeed %.4f angleacc "
+                 "%.4f; base identity; attached %p ref %p. MOUSELOOK will not "
+                 "be pressed",
+                 (void *)cam, p[0], p[1], pc.radians ? "radians" : "degrees",
+                 p[2], p[3], (void *)att[0], (void *)att[1]);
+    }
+    return true;
+}
+
+// One write of the head's angle: the rows rebuilt in X4's convention, w kept.
+static bool camwrite_apply(uintptr_t cam, float yaw_deg, float pitch_deg) {
+    float rows[12];
+    const uintptr_t at = cam + x4vr::camwatch::kCamRow0;
+    if (!self_read(at, rows, sizeof rows)) {
+        g_camwrite.failed++;
+        return false;
+    }
+    x4vr::camwrite::rows_for(yaw_deg, pitch_deg, rows);
+    if (!self_write(at, rows, sizeof rows)) {
+        g_camwrite.failed++;
+        return false;
+    }
+    g_camwrite.writes++;
+    return true;
+}
+
+static void camwrite_report(bool final) {
+    static double last = 0.0;
+    const double now = mono_seconds();
+    if (!final && now - last < 2.0)
+        return;
+    last = now;
+    X4VR_LOG("headlook write%s: %llu write(s), %llu failed, %llu refused "
+             "tick(s) | last written yaw %.2f pitch %.2f | MOUSELOOK pressed "
+             "%llu time(s)",
+             final ? " (final)" : "", (unsigned long long)g_camwrite.writes,
+             (unsigned long long)g_camwrite.failed,
+             (unsigned long long)g_camwrite.refused, g_camwrite.yaw,
+             g_camwrite.pitch, (unsigned long long)g_camwrite.mouselook_downs);
+}
+
 // **Task #75's fix: where the tick's cadence comes from.**
 //
 // 0 = X4's event drain, exactly as every take so far. Anything else is a rate in
@@ -4172,7 +4375,13 @@ void headlook_tick() {
             ? (float)std::min(0.200, std::max(0.001, now_step_s - last_step_s))
             : 0.0f;
     last_step_s = now_step_s;
-    x4vr::Delta d = x4vr::head_look_step(g_headlook, ha, step_dt);
+    // Write mode has no servo: the angle is written, not chased, so nothing
+    // here may push a mouse delta. `d` stays zero and every count below that
+    // derives from it reads "asked for nothing", which is the truth.
+    const bool write_mode = headlook_write_enabled();
+    x4vr::Delta d{};
+    if (!write_mode)
+        d = x4vr::head_look_step(g_headlook, ha, step_dt);
 
     if (have_last) {
         float step = std::fabs(g_headlook.cmd_yaw_deg - pre_cmd);
@@ -4254,7 +4463,13 @@ void headlook_tick() {
     static bool hud_object_exists = false;
     if (armed_now)
         hud_object_exists = true;
-    const bool hud = hud_object_exists ? x4_hud_active() : true;
+    // Write mode never enters relative mouse mode, so that latch never sets
+    // and the map would go unseen. It asks only when the NULL guard decoded:
+    // then a not-yet-built HUD reads as "down" and nothing is written before
+    // the cockpit exists.
+    const bool hud = write_mode
+                         ? (x4_hud_slot() ? x4_hud_active() : true)
+                         : (hud_object_exists ? x4_hud_active() : true);
 
     // What every site below actually means by "the cockpit".
     const bool may_steer = cockpit && hud;
@@ -4281,10 +4496,11 @@ void headlook_tick() {
     // we may steer, and keep letting go for as long as we may not.
     static uint64_t poses = 0;
     const bool cycle = (poses++ % 32) == 0;
-    if (may_steer && cycle) {
+    if (may_steer && cycle && !write_mode) {
         if (!armed_now)
             send_key(headlook_scancode(), false);
         send_key_down(headlook_scancode());
+        g_camwrite.mouselook_downs++;
     } else if (!may_steer && armed_now && cycle) {
         send_key(headlook_scancode(), false); // hand the mouse back, and again
     }
@@ -4331,9 +4547,40 @@ void headlook_tick() {
         X4VR_LOG("headlook: NOTE commanded with little camera response — "
                  "reported only, not acted on");
 
+    // **Write mode: the head's angle into X4's free-look matrix.** Steering
+    // means "X4's camera is ours this tick", which in write mode is the write
+    // being allowed -- not relative mouse mode, which never comes. A single
+    // failed write (EFAULT mid-teardown) does not drop it: the camera is
+    // still ours, and dropping it would publish an identity pose.
+    bool write_ready = false;
+    if (write_mode && may_steer) {
+        const uintptr_t cam = x4_player_camera();
+        write_ready = camwrite_ready(cam, g_headlook.pitch_limit_deg,
+                                     g_headlook.yaw_limit_deg);
+        if (write_ready) {
+            float ty = 0.f, tp = 0.f;
+            x4vr::camwrite::write_target(g_camwrite.have ? g_camwrite.yaw : yaw,
+                                         yaw, pitch, ha.yaw_weight,
+                                         g_headlook.yaw_limit_deg,
+                                         g_headlook.pitch_limit_deg, &ty, &tp);
+            if (camwrite_apply(cam, ty, tp)) {
+                g_camwrite.yaw = ty;
+                g_camwrite.pitch = tp;
+                g_camwrite.have = true;
+                // What was asked of X4, where every log line and the layer's
+                // declared pose expect the command to be.
+                g_headlook.cmd_yaw_deg = ty;
+                g_headlook.cmd_pitch_deg = tp;
+            }
+        }
+    }
+    if (write_mode)
+        camwrite_report(false);
+
     // may_steer, not a second spelling of it. This site having its own copy of
     // the test is what take 147 cost.
-    const bool steering = armed_now && may_steer;
+    const bool steering =
+        write_mode ? write_ready : (armed_now && may_steer);
     g_headlook_steering.store(steering, std::memory_order_relaxed);
     g_in_cockpit.store(cockpit, std::memory_order_relaxed);
     g_view_known.store(true, std::memory_order_relaxed);
@@ -4439,7 +4686,7 @@ void headlook_tick() {
                      kRad2Deg * -r.yaw);
     }
 
-    if (steering)
+    if (steering && !write_mode)
         send_mouse_delta(d.dx, d.dy);
 
     // Tell the layer where X4 is now looking, so the frame is submitted with

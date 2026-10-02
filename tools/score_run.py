@@ -2849,6 +2849,10 @@ def main(path):
                       "against — the dyaw number above stands alone and the "
                       "comparison that decides #75 cannot be made")
 
+    if re.search(r"\bX4VR_HEADLOOK_WRITE=1\b", run or ""):
+        print("inputrate  (write mode: no mouse delta is sent by design — the "
+              "servo-rate lines below count ticks of a servo this run did not "
+              "use; read `hwrite` instead)")
     # --- task #75: do WE send sparsely, or does X4 ignore what we send? -----
     #
     # X4's camera changes on a near-constant ~43% of RENDERED frames across
@@ -3730,6 +3734,101 @@ def main(path):
         fails.append("X4VR_EXTENSIONS=1 but X4 never read content.xml through "
                      "the fork — our extension was probably NOT loaded, and "
                      "this run is not the 'with extension' configuration")
+
+    # --- X4VR_HEADLOOK_WRITE: head-look WITHOUT MOUSELOOK -------------------
+    #
+    # The head's angle written into X4's free-look matrix (camera+0x5b0), with
+    # x4vrmod_headlook holding X4's follower still. Gate on intent: asked for
+    # and never armed, never written, or MOUSELOOK pressed even once is a FAIL.
+    # The two questions the take exists for, each from its own channel:
+    #   tracking -- does X4's camera follow the head? lagsample, full rate,
+    #               x4 against head in the cockpit while steering;
+    #   hover    -- does X4 now SET cursors while head-look steers? the cursor
+    #               census, which MOUSELOOK held at zero in takes 312-320.
+    hw_asked = bool(re.search(r"\bX4VR_HEADLOOK_WRITE=1\b", run or ""))
+    hw_rep = re.findall(
+        r"headlook write(?: \(final\))?: (\d+) write\(s\), (\d+) failed, "
+        r"(\d+) refused tick\(s\) \| last written yaw (-?[\d.]+) pitch "
+        r"(-?[\d.]+) \| MOUSELOOK pressed (\d+) time\(s\)", text)
+    hw_armed = re.findall(
+        r"headlook write: ARMED on camera (\S+) \(mode 0\) — X4 reads maxpitch "
+        r"(\S+) maxyaw (\S+) \((\w+)\), anglespeed (\S+) angleacc (\S+);", text)
+    hw_session = re.search(r"headlook write: REFUSED for the session — (.*)", text)
+    hw_refusals = []
+    for m in re.finditer(r"headlook write: REFUSED — (.*)", text):
+        if m.group(1) not in hw_refusals:
+            hw_refusals.append(m.group(1))
+    if hw_asked or hw_rep or hw_armed or hw_session:
+        if hw_session:
+            fails.append("X4VR_HEADLOOK_WRITE refused for the whole session: "
+                         + hw_session.group(1))
+        for a in hw_armed[-2:]:
+            print(f"hwrite  ARMED on camera {a[0]} — X4 reads maxpitch {a[1]} "
+                  f"maxyaw {a[2]} ({a[3]}), anglespeed {a[4]}, angleacc {a[5]}")
+        for r_ in hw_refusals[:6]:
+            print(f"hwrite  refused (counted, said once): {r_[:240]}")
+        if hw_rep:
+            w_, f_, rf_, ly, lp, ml = hw_rep[-1]
+            print(f"hwrite  {w_} write(s), {f_} failed, {rf_} refused tick(s) | "
+                  f"last written yaw {ly} pitch {lp} | MOUSELOOK pressed {ml} "
+                  f"time(s)")
+            if int(ml) > 0:
+                fails.append(f"write mode pressed MOUSELOOK {ml} time(s) — the "
+                             f"one thing it exists not to do")
+            if hw_asked and not hw_armed:
+                fails.append("X4VR_HEADLOOK_WRITE=1 never ARMED — every tick "
+                             "was refused; the hwrite lines say why")
+            elif hw_asked and int(w_) == 0:
+                fails.append("X4VR_HEADLOOK_WRITE=1 armed but wrote nothing")
+        elif hw_asked:
+            fails.append("X4VR_HEADLOOK_WRITE=1 asked, but no write report — "
+                         "the mode never ran (head-look off, or no pose)")
+        if hw_asked:
+            if not re.search(r"x4vrmod_headlook (already enabled|ENABLED)", text):
+                fails.append("X4VR_HEADLOOK_WRITE=1 but the content fork never "
+                             "served x4vrmod_headlook ENABLED — X4's follower "
+                             "was not held, so writes would be pulled home")
+            ls_ = re.findall(
+                r"lagsample: arm=\d view=(\w+) steer=(\d) cam=(\d) "
+                r"head=(-?[\d.]+),(-?[\d.]+) x4=(-?[\d.]+),(-?[\d.]+)", text)
+            use = [(float(h), float(hp), float(x), float(xp))
+                   for v, st, cm, h, hp, x, xp in ls_
+                   if v == "cockpit" and st == "1" and cm == "1"
+                   and abs(float(hp)) < 60.0]
+            if use:
+                dy = sorted(abs(wrap180(x - h)) for h, _hp, x, _xp in use)
+                dp = sorted(abs(xp - hp) for _h, hp, _x, xp in use)
+                n_ = len(dy)
+                med, p90 = dy[n_ // 2], dy[int(0.9 * (n_ - 1))]
+                print(f"hwrite  tracking: |X4 - head| yaw median {med:.2f} p90 "
+                      f"{p90:.2f} deg, pitch median {dp[n_ // 2]:.2f} p90 "
+                      f"{dp[int(0.9 * (n_ - 1))]:.2f} deg over {n_} cockpit "
+                      f"tick(s) while writing (pitch under 60)")
+                if med <= 2.0:
+                    print("hwrite  => X4's camera FOLLOWS the written angle — "
+                          "head-look without MOUSELOOK works")
+                else:
+                    fails.append(f"X4's camera does NOT follow the write: |X4 - "
+                                 f"head| yaw median {med:.2f} deg — the follower "
+                                 f"is not held, or the base is not identity")
+            else:
+                print("hwrite  tracking: no cockpit tick with the camera "
+                      "readable while writing — not measured")
+            cs_ = re.findall(r"cursor sets: (\d+) set\(s\) — handle found \d+, "
+                             r"NOT found \d+, null \d+ \| (\d+) were a CHANGE "
+                             r"\((\d+) while head-look was STEERING", text)
+            cz_ = re.search(r"cursor sets: 0 set\(s\) — X4 built", text)
+            if cs_:
+                sets_, chg_, chg_st_ = cs_[-1]
+                print(f"hwrite  hover: X4 set the cursor {sets_} time(s), "
+                      f"{chg_} change(s), {chg_st_} while head-look steered"
+                      + (" — MOUSELOOK no longer suppresses it"
+                         if int(chg_st_) > 0 else
+                         " — none while steering; ask Patola whether he hovered"))
+            elif cz_:
+                print("hwrite  hover: X4 NEVER set a cursor — with no MOUSELOOK "
+                      "held that is not the 312-320 suppression; ask Patola "
+                      "whether the cursor appeared at all")
 
     # --- who WRITES the camera orientation? (X4VR_CAMWATCH) --------------
     #

@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="utf-8"?>
+<content id="x4vrmod_headlook" name="X4VRMOD head-look write" description="Sets X4's cockpit look-around follower speed to zero, so the view holds whatever angle X4VRMOD writes instead of springing back to centre. Used only by X4VRMOD's X4VR_HEADLOOK_WRITE mode, which enables it for that session; disabled by default. While it is active the numpad camera keys do not turn the cockpit view. Remove by deleting this directory." author="X4VRMOD" version="1" date="2026-10-02" enabled="0" save="0"/>

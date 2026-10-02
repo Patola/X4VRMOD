@@ -39,10 +39,15 @@ inline std::string content_profile_path(const char *content_path) {
     return p;
 }
 
-// Force `<extension id="ID" ... enabled="true"/>` in `xml`. Returns what it
-// did: 0 already enabled, 1 flipped an existing entry, 2 inserted a new one,
-// -1 could not (no </content>). The rest of the file is left byte for byte.
-inline int enable_extension(std::string &xml, const char *id) {
+// Force `<extension id="ID" ... enabled="true|false"/>` in `xml`. Returns what
+// it did: 0 already so, 1 flipped an existing entry, 2 inserted a new one, -1
+// could not (no </content>). The rest of the file is left byte for byte.
+//
+// OFF is needed as much as ON: X4 writes its content.xml into our fork, so an
+// extension one session enabled would stay enabled in every later session
+// unless the knob that owns it says otherwise each time.
+inline int set_extension(std::string &xml, const char *id, bool on) {
+    const char *want = on ? "true" : "false";
     const std::string key = std::string("<extension id=\"") + id + "\"";
     const size_t at = xml.find(key);
     if (at != std::string::npos) {
@@ -56,13 +61,13 @@ inline int enable_extension(std::string &xml, const char *id) {
             const size_t q = el.find('"', v);
             if (q == std::string::npos)
                 return -1;
-            if (el.compare(v, q - v, "true") == 0)
+            if (el.compare(v, q - v, want) == 0)
                 return 0;
-            el.replace(v, q - v, "true");
+            el.replace(v, q - v, want);
         } else {
             // No attribute: X4's default is not ours to assume. Say it.
             const size_t ins = el.back() == '/' ? el.size() - 1 : el.size();
-            el.insert(ins, " enabled=\"true\"");
+            el.insert(ins, std::string(" enabled=\"") + want + "\"");
         }
         xml.replace(at, end - at, el);
         return 1;
@@ -70,9 +75,13 @@ inline int enable_extension(std::string &xml, const char *id) {
     const size_t close = xml.rfind("</content>");
     if (close == std::string::npos)
         return -1;
-    xml.insert(close, std::string("  <extension id=\"") + id +
-                          "\" enabled=\"true\"/>\n");
+    xml.insert(close, std::string("  <extension id=\"") + id + "\" enabled=\"" +
+                          want + "\"/>\n");
     return 2;
+}
+
+inline int enable_extension(std::string &xml, const char *id) {
+    return set_extension(xml, id, true);
 }
 
 } // namespace x4vr

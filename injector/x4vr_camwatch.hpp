@@ -195,7 +195,7 @@ std::vector<Target> targets(uintptr_t cam, const Anchors &a, Reader read,
 struct Site {
     uintptr_t va;
     uint8_t n;
-    uint8_t bytes[8];
+    uint8_t bytes[12]; // 12: a movss with SIB and disp32 is 10 bytes
 };
 inline constexpr Site kHop2Sites[] = {
     // 0x1929f70: `mov 0x18(%rbx),%r12` -- the controller, both branches.
@@ -220,8 +220,9 @@ template <class Reader>
 bool verify_sites(const Site *sites, size_t n, Reader read, uintptr_t *bad) {
     for (size_t i = 0; i < n; i++) {
         const Site &st = sites[i];
-        uint8_t b[8];
-        if (!read(st.va, b, st.n) || memcmp(b, st.bytes, st.n) != 0) {
+        uint8_t b[sizeof st.bytes];
+        if (st.n > sizeof st.bytes || !read(st.va, b, st.n) ||
+            memcmp(b, st.bytes, st.n) != 0) {
             if (bad)
                 *bad = st.va;
             return false;

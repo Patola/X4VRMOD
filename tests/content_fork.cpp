@@ -71,6 +71,22 @@ int main() {
               e.find("x4vrmod_lookaround_old\" enabled=\"false\"") != std::string::npos,
           "an id that merely starts with ours is not touched");
 
+    // OFF as well as on: X4 writes content.xml into our fork, so an extension
+    // a write-mode session enabled must be forced back off in the next one.
+    std::string g = "<content>\n  <extension id=\"x4vrmod_headlook\" enabled=\"true\"/>\n</content>\n";
+    check(set_extension(g, "x4vrmod_headlook", false) == 1 &&
+              g.find("<extension id=\"x4vrmod_headlook\" enabled=\"false\"/>") !=
+                  std::string::npos,
+          "set off: an enabled entry is flipped to false");
+    std::string h = g;
+    check(set_extension(h, "x4vrmod_headlook", false) == 0 && h == g,
+          "set off: already off, untouched");
+    std::string i = "<content>\n</content>\n";
+    check(set_extension(i, "x4vrmod_headlook", false) == 2 &&
+              i.find("<extension id=\"x4vrmod_headlook\" enabled=\"false\"/>") !=
+                  std::string::npos,
+          "set off: absent is inserted as false, not left to X4's default");
+
     std::string f = "garbage";
     check(enable_extension(f, "x4vrmod_lookaround") == -1 && f == "garbage",
           "no </content>: refused, file untouched");
