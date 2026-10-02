@@ -171,6 +171,16 @@ int main() {
                   std::fabs(nocmd.pitch + 0.5f) < 1e-4f,
               "with no valid command the head angle IS the residual");
 
+        // Across the back (take 318: X4 wraps at +-180 with the extension).
+        // Head -179 against command +179 is +2 deg the short way; unwrapped
+        // it was -358 and clamped to -budget, the wrong direction.
+        auto back = residual_of(-179.0f, 0.0f, 179.0f, 0.0f, true, 5.0f);
+        check(std::fabs(back.yaw - 2.0f) < 1e-3f && !back.clamped,
+              "crossing +-180 the residual takes the short way (+2, not -358)");
+        auto back2 = residual_of(179.0f, 0.0f, -179.0f, 0.0f, true, 5.0f);
+        check(std::fabs(back2.yaw + 2.0f) < 1e-3f && !back2.clamped,
+              "and the other way round (-2, not +358)");
+
         // And the zero-budget case, which is what the SHIPPED field gives:
         // nothing is applied, so nothing may be declared either.
         auto zero = residual_of(30.0f, 20.0f, 0.0f, 0.0f, true, 0.0f);

@@ -389,6 +389,77 @@ old317='[  224500.000] inject  camwatch hop2 co-move [controller] @0x7ed0fd976ea
 plant /tmp/census-cw2-317.log "$span" "$old317"
 want "hop2 older log -> magnitude estimated from ranges" /tmp/census-cw2-317.log "camwatch hop2 \[controller\]" "max rotation 9.3 deg"
 
+# Take 318: the census read the controller after X4 freed it at exit -- all
+# zeros, trace angle exactly 120 deg -- and the last line carried that. The
+# scorer must drop it and score the line before.
+span360='[  224502.000] inject  camwatch: 117 event(s), 1 sampling, 0 arm failure(s) | 9742 store(s) counted, 9695 sampled, 0 LOST | 1 distinct writer ip(s) | camera yaw span 360 deg'
+good318='[  224500.000] inject  camwatch hop2 co-move [controller] @0x7677803278a0: 3680 tick(s), camera moved in 3231, the matrix moved WITH it in 2188, ALONE in 21 | max rotation 19.26 deg | 3x3 ranges 0.944..1.000 -0.266..0.330 -0.059..0.304 | -0.330..0.266 0.944..1.000 -0.089..0.121 | -0.307..0.059 -0.121..0.088 0.952..1.000'
+freed318='[  224501.000] inject  camwatch hop2 co-move [controller] @0x7677803278a0: 3722 tick(s), camera moved in 3231, the matrix moved WITH it in 2188, ALONE in 22 | max rotation 120.00 deg | 3x3 ranges 0.000..1.000 -0.266..0.330 -0.059..0.304 | -0.330..0.266 0.000..1.000 -0.089..0.121 | -0.307..0.059 -0.121..0.088 0.000..1.000'
+plant /tmp/census-cw2-freed.log "$span360" "$good318" "$freed318"
+want "hop2 freed final read -> named" /tmp/census-cw2-freed.log "camwatch hop2 \[controller\]" "read a FREED object"
+want "hop2 freed final read -> scored on the line before (sway)" /tmp/census-cw2-freed.log "camwatch hop2 \[controller\] 3680" "TOO SMALL to be the free-look"
+if python3 tools/score_run.py /tmp/census-cw2-freed.log 2>&1 | grep -q "FOLLOWS THE CAMERA"; then
+    bad "hop2 freed final read -> still called the free-look"
+else
+    ok "hop2 freed final read -> not called the free-look"
+fi
+# Hop 3: does its angle EQUAL the camera's?
+comove3() {  # comove3 <label> <maxrot> <bad> <far> <within3> <med> <p90>
+    printf '[  224500.000] inject  camwatch hop2 co-move [%s] @0x7f0000002000: 3000 tick(s), camera moved in 2500, the matrix moved WITH it in 2400, ALONE in 5 | max rotation %s deg | %s not-a-transform read(s) skipped | match: far %s, within 3 deg %s, |dtheta| median <%s p90 <%s deg | 3x3 ranges 0..1' "$@"
+}
+plant /tmp/census-cw3.log "$span360" "$(comove3 camera.rot 178.0 0 1500 1300 2 5)" \
+    "$(comove3 controller 19.0 3 1500 10 31 58)"
+want "hop3 equal angle -> the free-look" /tmp/census-cw3.log "camwatch hop3 \[camera.rot\]" "HAS THE CAMERA'S ANGLE"
+want "hop3 sway -> does not have the angle" /tmp/census-cw3.log "camwatch hop3 \[controller\]" "does NOT have the camera's angle"
+want "hop3 freed reads counted -> shown" /tmp/census-cw3.log "camwatch hop2 \[controller\]" "3 freed/not-a-transform read(s) kept out"
+plant /tmp/census-cw3-near.log "$span360" "$(comove3 camera.rot 40.0 0 120 100 2 4)"
+want "hop3 too few far ticks -> not exercised" /tmp/census-cw3-near.log "camwatch hop3 \[camera.rot\]" "angle match NOT EXERCISED"
+plant /tmp/census-cw3-mid.log "$span360" "$(comove3 camera.rot 90.0 0 900 300 6 20)"
+want "hop3 in between -> partly, read the samples" /tmp/census-cw3-mid.log "camwatch hop3 \[camera.rot\]" "PARTLY"
+# Asked for hop 3 (the run line says so) and never censused -> FAIL.
+sed 's/env: run = /env: run = X4VR_CAMWATCH=4 /' "$BASE" > /tmp/census-cw3-asked.log
+want "hop3 asked, never censused -> FAIL" /tmp/census-cw3-asked.log FAIL "asked for hop 3"
+absent "hop3 not asked -> silent" "$BASE" "camwatch hop3"
+
+# ------------------------------------------ head-look's two idle predicates
+#
+# Take 318: menu opened (view AND HUD idle), then quit -- the view came back
+# "cockpit" during teardown while the HUD stayed down. An identity pose inside
+# a HUD-down window is head-look idle by design; one after the NULL guard
+# announced "HUD is now up" is the defect, and must say TEARDOWN.
+drv='[  999990.000] layer   vr pose: shared=1 cam_valid=1 declared yaw=1.63 pitch=13.87 deg (X4 1.63,13.87 + residual 0.00,0.00 applied, budget 0.00, 0/19280 clamped)'
+idn='[  999995.000] layer   vr pose: shared=1 cam_valid=0 declared yaw=0.00 pitch=0.00 deg (X4 0.00,0.00 + residual 0.00,0.00 applied, budget 0.00, 0/22880 clamped)  <- IDENTITY, the image is world-locked'
+vext='[  999991.000] inject  headlook: view is now external/floating — idle'
+hdn='[  999991.100] inject  headlook: HUD is now down (IsInPanelMode=0) — idle, mouse handed back'
+vck='[  999993.000] inject  headlook: view is now the cockpit — steering'
+nul='[  999993.100] inject  camread: X4'"'"'s HUD global is NULL — X4 is tearing the HUD down (exit or load); IsHUDActive is not called while it stays NULL'
+hup='[  999993.100] inject  headlook: HUD is now up (IsInPanelMode=0) — steering'
+plant /tmp/census-hud-idle.log "$drv" "$vext" "$hdn" "$vck" "$nul" "$idn"
+if python3 tools/score_run.py /tmp/census-hud-idle.log 2>&1 | grep -q "^FAIL  the pose fell back"; then
+    bad "identity inside a HUD-down window -> still FAILs"
+else
+    ok "identity inside a HUD-down window -> excused"
+fi
+plant /tmp/census-hud-teardown.log "$drv" "$vext" "$hdn" "$vck" "$nul" "$hup" "$idn"
+want "identity after the NULL guard said HUD up -> FAIL names TEARDOWN" /tmp/census-hud-teardown.log FAIL "at TEARDOWN"
+# (take 306, the base, ends with the HUD down: close both windows first.)
+vck0='[  999989.000] inject  headlook: view is now the cockpit — steering'
+hup0='[  999989.100] inject  headlook: HUD is now up (IsInPanelMode=0) — steering'
+plant /tmp/census-hud-midrun.log "$vck0" "$hup0" "$drv" "$idn"
+want "identity with no announcement -> FAIL says mid-run" /tmp/census-hud-midrun.log FAIL "mid-run: the gate dropped out"
+
+# ------------------------------------------------ yaw differences wrap at 180
+#
+# Take 318 turned a full circle; an unwrapped |declared - X4| read 359.656 for
+# a frame 0.344 off.
+pl='[  999990.500] layer   poselag: declared=-179.8280,3.3230 x4=179.8280,3.3230 d=-359.6560,0.0000 age=0.0050 valid=1 rawvalid=1 residual=0.0000,0.0000 cmd=-179.8000,3.3000 rot=2'
+plant /tmp/census-wrap.log "$pl" "$pl" "$pl"
+if python3 tools/score_run.py /tmp/census-wrap.log 2>&1 | grep -E "^poselag  \|declared - X4\| yaw" | grep -q "max 359"; then
+    bad "poselag across +-180 -> still reads ~360"
+else
+    ok "poselag across +-180 -> wrapped (no ~360 max)"
+fi
+
 
 # ------------------------------------------- the camera-state scan (camscan)
 csum() {  # csum <samples> <yawspan> <pitchspan> <survivors>

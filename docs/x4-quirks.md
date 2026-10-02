@@ -22925,3 +22925,138 @@ it loaded). WiVRn, configuration 1.
 **Behaviour changes, stated:** with the limits at 180/75 head-look can turn
 the view much further than in any take since 211, and saves made in this
 session become modified. Both asked for.
+
+## Take 318 — SCORED: the settings object is static, the "found it" was a freed read, X4 turns a full circle
+
+`X4VR_CAMWATCH=3`, extension ON, limits 180/75, head-look/pose/translation ON.
+Patola: *"It's working well and I could even do a 360° while seated in the
+chair."* He leaned a little; *"stereo separation looked ok, but it was not
+much"* — the log agrees: head roll max **13.9°**, and all 5 samples tilted past
+5° had the eye offset counter-rotated correctly (roll stereo is ON in this line,
+`X4VR_ROLL_STEREO=1` with `X4VR_POSE=1`).
+
+* **P318.1 HELD.** content.xml served from the fork via **fopen** with our
+  extension ENABLED; X4 then fopen'd
+  `./extensions/x4vrmod_lookaround/content.xml` and
+  `libraries/parameters.xml` (+ its `.sig` probe). The deploy ran first.
+* **P318.2 HELD, beyond the prediction: no stop at all.** X4's cockpit yaw
+  WRAPS at ±180 — 179.22 → 180.00 → −179.66 — and the servo's short-way error
+  (tests/headlook.cpp, "spin") took it across. One full turn in the log, the
+  one Patola made.
+* **P318.3 REFUTED.** `settings.rot` is STATIC: a constant 0.14° rotation (the
+  0.002 off-diagonals) and `settings.pos` a constant zero, through 3231 ticks
+  of a camera moving over 360°. Free-look is not in the settings object.
+* **P318.4 HELD.** No X4 core; only gamescope's own SIGABRT at exit.
+
+### The scorer's headline was a freed object
+
+The scorer printed `[controller] ... max rotation 120.0 deg => FOLLOWS THE
+CAMERA and spans its range — the free-look candidate`. The injector's own
+census said **19.26°** on every line but the last; the last read the controller
+**after X4 freed it at exit**: an all-zero matrix, whose trace angle is
+acos(−1/2) = **exactly 120°**, diagonal ranges down to 0.000. The scorer took
+the last line. True reading: the sway, 19.3° at most against a 360° camera —
+TOO SMALL, as in take 317.
+
+Fixed at both ends: the census now keeps any read that is not a live transform
+(orthonormal rows, det 1; for a translation target, the two rows after it) out
+of every statistic and counts it (`not-a-transform read(s) skipped`); the
+scorer recognises the old logs' exact signature (120.00 with a 0.000 diagonal)
+and scores the line before, saying so. Census cases for both.
+
+### One FAIL, real: head-look steered a quitting X4 for five seconds
+
+    345961.674  view is now external/floating — idle      (menu)
+    345961.739  HUD is now down — idle, mouse handed back
+    345971.874  view is now the cockpit — steering        (teardown)
+    345972.031  X4's HUD global is NULL — X4 is tearing the HUD down
+    345972.031  HUD is now up — steering                  <- same millisecond
+    345974.441  vr pose: cam_valid=0 ... IDENTITY
+
+The take-316 exit-crash guard answered a NULL HUD global with `true`, "like the
+not-yet-built case" — but the caller's not-yet-built `true` is a bootstrap
+(head-look must press the key once to reach relative mouse mode), never a
+statement that a HUD exists. So during teardown head-look held MOUSELOOK and
+pushed mouse deltas into a quitting X4, and claimed to be live while the pose
+went identity. A load that NULLs the global would press the key during
+loading — take 126's lost edge. **Fixed: a NULL global answers "HUD down".**
+The scorer's idle windows only read the VIEW announcements; head-look steers on
+`cockpit && hud`, so HUD-down windows now excuse identity too, and the FAIL
+names TEARDOWN when the NULL line precedes it (316/317 still PASS; 318 FAILs,
+correctly, on the old build's behaviour).
+
+### ±180 in three more places
+
+The servo wrapped since take 211; three yaw DIFFERENCES did not:
+* the scorer's poselag `|declared − X4|` read **359.656** max (now 9.0);
+* the layer's logged `d` and camstamp `dyaw` (logging only);
+* **`guard::residual_of`** — the reprojection residual. Unwrapped, head −179
+  against command +179 is −358, clamped to −budget: the WRONG direction. Inert
+  here (budget 0.00 at `X4VR_FOV=1.4917`), live the moment a budget is bought.
+  Wrapped, with tests both ways round.
+
+The clamp section called the 175.67 max "an excursion past the plateau" (its
+plateau finder read servo lag at 92.77 as a stop) and the extension "modified=1
+history". It now counts wraps in the cockpit stream first: one wrap = NO STOP,
+a full circle.
+
+## Hop 3 — the camera's own transform (`X4VR_CAMWATCH=4`), built
+
+Re-reading **0x1929f70** past the controller call: after composing the
+controller's local transform (0x192a096..0x192a15a), it composes **one more
+transform, the camera object's own**: `movaps 0x5a0/0x5b0/0x5c0/0x5d0(%rbx)` —
+translation then three rotation rows — on every mode's path, the cockpit's
+(mode 0) included. Then it returns. Nothing watched it:
+* hop 2/2b read the controller and the settings object only;
+* take 315's value scan read the camera's first KB; +0x5a0 is past it.
+
+Writers exist statically: 0x1935a25..0x1935a4b stores all four rows and then
+tests `0x880(%r15)` (the mode field — so r15 is a camera), 0x192edc3..
+0x192edd8 stores them beside +0x868. One of those, or neither, is free-look;
+the watch says which.
+
+What remains of 0x1929f70 after this: the attached object (camera+0x780,
+evaluated by **0x18a0090**) — composed FIRST. If the camera's own transform is
+static, that is the last link.
+
+**`X4VR_CAMWATCH=4`:** six sites verified against X4 9.00 (the player's-camera
+test, the mode load, the four row loads); it does NOT need the controller's
+class — the controller's sway is added as the reference when verified (the
+census's positive control: take 318 saw it written). Targets: `camera.rot`
+(+0x5b0), `camera.pos` (+0x5a0), `controller`. The camera's address, mode and
+starting transform are logged when it changes.
+
+**The sharper question: does its angle EQUAL the camera's?** On every census
+tick with GetCameraRotation at least 10° off centre ("far"), |angle(matrix) −
+angle(camera)| goes in a 1° histogram. The angle of a yaw-then-pitch rotation
+is the same in either composition order with roll zero, so no convention is
+guessed: cos θ = (cos y + cos p + cos y cos p − 1)/2 (tests/camwatch.cpp checks
+both orders against explicit matrices). The free-look has the camera's angle up
+to sway and a frame of lag; the sway does not. Every 5 s with the camera ≥30°
+off centre, one raw (yaw, pitch, roll | rows) pair is logged, so the convention
+for a WRITE can be read off offline. Milestone: the old 60 s/10 s, plus 10 s of
+"far" ticks.
+
+Scorer: `HAS THE CAMERA'S ANGLE` (median ≤3°, p90 ≤10°, ≥300 far ticks),
+`does NOT have` (median >10°), `PARTLY` (read the samples), `NOT EXERCISED`;
+FAIL if hop 3 was asked and the camera transform never censused. Census suite
+126 → 140.
+
+## P319 — hop 3: is the camera's own transform the free-look?
+
+Take 318's line with **`X4VR_CAMWATCH=4`**, `X4VR_FILEPROBE` dropped (318
+proved the extension loads; the `extensions` block keeps watching). WiVRn,
+configuration 1.
+
+* **P319.1** hop 3's sites match; the cockpit camera logs **mode 0**.
+* **P319.2** `camera.rot` HAS THE CAMERA'S ANGLE and spans its range — the
+  free-look — and a WRITER is named for it. **Refutation:** STATIC, or "does NOT
+  have the camera's angle": free-look is then in the attached object
+  (camera+0x780, 0x18a0090), the last unwatched link of 0x1929f70.
+* **P319.3** `camera.pos` is STATIC (a fixed eye point; its value is logged).
+  Not a prediction about free-look — a note for later: a writable local
+  translation composed into the view is the route to head translation in Z.
+* **P319.4** the controller (sway) is written by 0x1e02395 again and does NOT
+  have the camera's angle — the control.
+* **P319.5** at exit: no `HUD is now up` after the NULL line, no pose FAIL, no
+  X4 core.

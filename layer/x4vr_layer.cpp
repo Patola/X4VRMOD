@@ -13067,6 +13067,14 @@ void vr_thread() {
                     // `cmd_yaw`/`cmd_pitch` come from the snapshot taken above,
                     // beside the readback they are compared against. The second
                     // load that used to be here is the defect this fixes.
+                    // `d` yaw the short way round: since take 318 the
+                    // camera crosses +-180 and an unwrapped difference read
+                    // 359.7 deg there for a frame that was off by 0.3.
+                    float d_yaw = (decl_yaw - ay) - raw_yaw;
+                    while (d_yaw > 180.0f)
+                        d_yaw -= 360.0f;
+                    while (d_yaw < -180.0f)
+                        d_yaw += 360.0f;
                     X4VR_LOG("poselag: declared=%.4f,%.4f x4=%.4f,%.4f "
                              "d=%.4f,%.4f age=%.4f valid=%u rawvalid=%u "
                              "residual=%.4f,%.4f cmd=%.4f,%.4f rot=%u",
@@ -13077,7 +13085,7 @@ void vr_thread() {
                              // readback. It is 0.0 in every run so far, which
                              // is why this could have been wrong unnoticed.
                              decl_yaw, decl_pitch, raw_yaw, raw_pitch,
-                             (decl_yaw - ay) - raw_yaw,
+                             d_yaw,
                              (decl_pitch - ap) - raw_pitch, age, valid,
                              raw_valid, ay, ap, cmd_yaw, cmd_pitch, rot_used);
                     // **The two-timestamp line: the number take 278 assumed.**
@@ -13111,11 +13119,16 @@ void vr_thread() {
                         // as torn rather than averaged in.
                         const uint32_t sq2 =
                             g_camstamp.seq.load(std::memory_order_acquire);
+                        float dyaw = got ? ny - sy : 0.0f; // short way
+                        while (dyaw > 180.0f)
+                            dyaw -= 360.0f;
+                        while (dyaw < -180.0f)
+                            dyaw += 360.0f;
                         X4VR_LOG("camstamp: atdraw=%.4f,%.4f atsubmit=%.4f,%.4f "
                                  "dt=%.4f dyaw=%.4f dpitch=%.4f seq=%u "
                                  "torn=%u got=%u",
                                  sy, sp, ny, np, got ? mono_now() - st : -1.0,
-                                 got ? ny - sy : 0.0f, got ? np - sp : 0.0f, sq,
+                                 dyaw, got ? np - sp : 0.0f, sq,
                                  sq != sq2 ? 1u : 0u, got ? 1u : 0u);
                     }
                 }

@@ -149,7 +149,14 @@ inline Residual residual_of(float head_yaw_deg, float head_pitch_deg,
     Residual out;
     if (budget_deg <= 0.0f)
         return out;                       // no range bought, none applied
-    const float ry = head_yaw_deg - (cmd_valid ? cmd_yaw_deg : 0.0f);
+    // The SHORT way round, as the servo does: since take 318 the extension
+    // opens yaw to +-180 and X4 wraps there, so head -179 against command
+    // +179 is 2 deg, not -358 clamped to the budget in the wrong direction.
+    float ry = head_yaw_deg - (cmd_valid ? cmd_yaw_deg : 0.0f);
+    while (ry > 180.0f)
+        ry -= 360.0f;
+    while (ry < -180.0f)
+        ry += 360.0f;
     const float rp = head_pitch_deg - (cmd_valid ? cmd_pitch_deg : 0.0f);
     auto clamp = [budget_deg](float v) {
         return v < -budget_deg ? -budget_deg : (v > budget_deg ? budget_deg : v);

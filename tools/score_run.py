@@ -53,6 +53,14 @@ LAYER1_MIN_RATIO = 0.60
 QUIET_MIN = 10.0
 
 
+def wrap180(d):
+    """A yaw difference the short way round. Since take 318 the extension lets
+    the cockpit camera turn a full circle and X4 wraps at +-180, so an
+    unwrapped difference reads ~360 for a frame that is off by a fraction of a
+    degree (take 318's poselag max 359.656)."""
+    return (d + 180.0) % 360.0 - 180.0
+
+
 def sbs_default_eye():
     """The eye size a run gets when it sets no X4VR_RES.
 
@@ -1803,21 +1811,34 @@ def main(path):
         # Gating on the gate's own announcement, not on a branch re-derived
         # here: what makes a sample excusable is that head-look SAID it was
         # idle, never that the pose happened to come out identity.
-        idle_win, open_at = [], None
-        for ln in lines:
-            if "headlook: view is now" not in ln:
-                continue
-            m = re.search(r"\[\s*(\d+\.\d+)\]", ln)
-            if not m:
-                continue
-            t = float(m.group(1))
-            if "idle" in ln:
-                open_at = t if open_at is None else open_at
-            elif open_at is not None:
-                idle_win.append((open_at, t))
-                open_at = None
-        if open_at is not None:
-            idle_win.append((open_at, float("inf")))
+        #
+        # Head-look announces idleness through TWO predicates, and steers only
+        # when both allow it (`may_steer = cockpit && hud`): the view (`view
+        # is now external/floating — idle`) and the HUD (`HUD is now down —
+        # idle, mouse handed back`). Take 318 opened the menu (both went
+        # idle), then quit: the view came back "cockpit" during X4's teardown
+        # while the HUD stayed down, and the identity sample after that was
+        # counted as head-look live. Each predicate gets its own windows; a
+        # sample is excused inside EITHER.
+        def _windows(marker):
+            win, open_at = [], None
+            for ln in lines:
+                if marker not in ln:
+                    continue
+                m = re.search(r"\[\s*(\d+\.\d+)\]", ln)
+                if not m:
+                    continue
+                t = float(m.group(1))
+                if "idle" in ln:
+                    open_at = t if open_at is None else open_at
+                elif open_at is not None:
+                    win.append((open_at, t))
+                    open_at = None
+            if open_at is not None:
+                win.append((open_at, float("inf")))
+            return win
+        idle_win = _windows("headlook: view is now") + \
+            _windows("headlook: HUD is now")
 
         def _in_idle(ln):
             m = re.search(r"\[\s*(\d+\.\d+)\]", ln)
@@ -1834,8 +1855,9 @@ def main(path):
         if excused:
             print(f"pose  {len(excused)} further identity sample(s) fall inside "
                   f"{len(idle_win)} window(s) where head-look ANNOUNCED itself "
-                  f"idle (external/floating view) — identity is correct there, "
-                  f"and counting them was a false FAIL on takes 220 and 221")
+                  f"idle (external/floating view, or HUD down) — identity is "
+                  f"correct there, and counting them was a false FAIL on takes "
+                  f"220 and 221")
         if unlinked:
             fails.append(
                 f"the layer could not reach the injector's shared state on "
@@ -1844,14 +1866,28 @@ def main(path):
                 f"does. Check x4vr_shared_state is exported and the injector "
                 f"actually loaded")
         elif ident:
+            # WHERE it happened changes what to look at. Take 318's one sample
+            # came after X4's HUD global went NULL at exit, when the guard then
+            # answered "HUD up" and head-look resumed steering a quitting X4.
+            nul = re.search(r"\[\s*(\d+\.\d+)\][^\n]*X4's HUD global is NULL",
+                            text)
+            t_id = [float(m.group(1)) for m in
+                    (re.search(r"\[\s*(\d+\.\d+)\]", ln) for ln in ident) if m]
+            at_exit = bool(nul and t_id and min(t_id) >= float(nul.group(1)))
+            where = (f"at TEARDOWN: X4's HUD global had gone NULL at "
+                     f"{float(nul.group(1)):.3f}, and head-look announced "
+                     f"`HUD is now up — steering` instead of idling (the NULL "
+                     f"guard answered 'HUD up' — fixed after take 318)"
+                     if at_exit else
+                     "mid-run: the gate dropped out, so those frames were "
+                     "submitted world-locked with head-look live. cam_valid "
+                     "went back to 0 with no idle announcement before it, so "
+                     "this is not the by-design idle: check what cleared "
+                     "cam_valid, not X4's camera")
             fails.append(
                 f"the pose fell back to identity {len(ident)} time(s) AFTER it "
                 f"had been driven, while head-look had NOT announced itself "
-                f"idle — the gate dropped out mid-run, so those frames were "
-                f"submitted world-locked with head-look live. cam_valid went "
-                f"back to 0 with no `view is now external/floating` before it, "
-                f"so this is not the by-design idle: check what cleared "
-                f"cam_valid, not X4's camera")
+                f"idle — {where}")
         elif not driven and "X4VR_HEADLOOK=1" in (run or ""):
             fails.append(
                 "the pose was never driven — every frame went to the runtime "
@@ -2522,7 +2558,7 @@ def main(path):
         for g in pl:
             rows.append((
                 float(g[0]),                                   # 0 ts
-                float(g[5]), float(g[6]),                      # 1,2 d yaw/pitch
+                wrap180(float(g[5])), float(g[6]),             # 1,2 d yaw/pitch
                 float(g[7]),                                   # 3 age
                 g[8] == "1", g[9] == "1",                      # 4,5 valid flags
                 float(g[1]),                                   # 6 declared yaw
@@ -2636,7 +2672,7 @@ def main(path):
                 # it is the number the fix is supposed to drive to zero. It is
                 # computed the same way in both arms, which is the only reason
                 # the arms can be compared at all.
-                gain[:] = sorted(abs(r[8] - r[7]) for r in fresh
+                gain[:] = sorted(abs(wrap180(r[8] - r[7])) for r in fresh
                               if r[8] is not None)
                 if gain:
                     m = len(gain)
@@ -2675,7 +2711,7 @@ def main(path):
                     # SHOULD be non-zero and it should be about v*age; reading
                     # it as a lead here is the failure this split exists to
                     # prevent.
-                    dr = sorted(abs(r[6] - r[7]) for r in rot_on)
+                    dr = sorted(abs(wrap180(r[6] - r[7])) for r in rot_on)
                     m = len(dr)
                     print(f"poselag  fix ON: |declared - X4readback| median "
                           f"{dr[m//2]:.3f} deg p90 {dr[int(0.9*(m-1))]:.3f} — "
@@ -2729,7 +2765,7 @@ def main(path):
         # written, so every clean frame was discarded and every unusable one
         # kept — and the FAIL branch fired on all four synthetic cases, which
         # is the only reason it was caught before a run.
-        good = [(abs(float(g[5])), abs(float(g[6])), float(g[4]))
+        good = [(abs(wrap180(float(g[5]))), abs(float(g[6])), float(g[4]))
                 for g in cs if g[8] == "0" and g[9] == "1"]
         torn = sum(1 for g in cs if g[8] == "1")
         nogot = sum(1 for g in cs if g[9] == "0")
@@ -3760,10 +3796,26 @@ def main(path):
     # A refused CAMERA CLASS is transient: take 317 refused the load-screen
     # camera (another class) and verified the cockpit's 40 s later. Only a run
     # that never verified a chain failed; a CODE mismatch always fails.
-    for m in re.finditer(r"camwatch hop2b?: REFUSED — (.*)", text):
+    cwm = re.search(r"X4VR_CAMWATCH=(\d+)", run or "")
+    cw_mode = int(cwm.group(1)) if cwm else 0
+    for m in re.finditer(r"camwatch hop(?:2b?|3): REFUSED — (.*)", text):
         if "code at" in m.group(1):
             fails.append("X4VR_CAMWATCH refused: " + m.group(1))
-    if ("camwatch hop2: REFUSED — controller class" in text and
+    # Hop 3 watches the camera's own transform and does not need the
+    # controller's class; there the chain is only the reference.
+    if cw_mode == 4:
+        h3 = re.findall(r"camwatch hop3: camera (\S+) mode (-?\d+) — "
+                        r"translation \(([^)]*)\) rows \(([^)]*)\)", text)
+        for cam, mode, tr, rows in h3[-3:]:
+            print(f"camwatch hop3 camera {cam} mode {mode} — translation "
+                  f"({tr}) rows ({rows})")
+        if "co-move [camera.rot]" not in text:
+            fails.append("X4VR_CAMWATCH=4 asked for hop 3, but the camera's own "
+                         "transform was never censused — see the 'camwatch "
+                         "hop3' lines")
+    if cw_mode == 4:
+        pass
+    elif ("camwatch hop2: REFUSED — controller class" in text and
             "controller class verified" not in text):
         fails.append("X4VR_CAMWATCH=2 never verified the camera controller — "
                      "every camera it saw was another class")
@@ -3773,17 +3825,69 @@ def main(path):
     ch = re.findall(r"camwatch hop2: (controller \S+ vtable .*)", text)
     if ch:
         print(f"camwatch hop2 {ch[-1][:400]}")
-    cm = {}
+    cm_all = {}
     for rec in re.findall(
             r"camwatch hop2 co-move \[([^\]]*)\] @(\S+): (\d+) tick\(s\), "
             r"camera moved in (\d+), the matrix moved WITH it in (\d+), ALONE "
             r"in (\d+) \|(.*)", text):
-        cm[rec[0]] = rec
+        cm_all.setdefault(rec[0], []).append(rec)
+
+    # **A freed object is not a rotation.** Take 318's last census line read
+    # the controller after X4 freed it at exit: all zeros, whose trace angle is
+    # acos(-1/2) = exactly 120 deg, and the diagonal ranges dropped to 0.000.
+    # This scorer took the LAST line and called the sway "FOLLOWS THE CAMERA
+    # and spans its range (120.0 deg)". Logs since then count such reads and
+    # keep them out ("not-a-transform"); older ones are recognised by that
+    # exact signature and the last line before it is used instead.
+    def _freed_read(rec):
+        mr = re.search(r"max rotation ([\d.]+) deg", rec[6])
+        rg = re.search(r"3x3 ranges (.*)", rec[6])
+        vals = re.findall(r"(-?[\d.]+)\.\.(-?[\d.]+)", rg.group(1)) \
+            if rg else []
+        return bool(mr and abs(float(mr.group(1)) - 120.0) < 0.005 and
+                    len(vals) == 9 and
+                    any(float(vals[k][0]) == 0.0 for k in (0, 4, 8)))
+    cm = {}
+    for lab, recs in cm_all.items():
+        pick = recs[-1]
+        if "not-a-transform" not in pick[6] and _freed_read(pick):
+            clean = [r for r in recs if not _freed_read(r)]
+            if clean:
+                print(f"camwatch hop2 [{lab}] its last census line read a "
+                      f"FREED object (all zeros: trace angle exactly 120 deg, "
+                      f"diagonal down to 0.000 — X4 tearing down at exit); "
+                      f"scored on the line before it")
+                pick = clean[-1]
+        cm[lab] = pick
     ysp = re.findall(r"camera yaw span (\d+) deg", text)
     cam_half = int(ysp[-1]) / 2.0 if ysp else 0.0
     for lab in sorted(cm, key=lambda x: (x != "controller", x)):
         _, addr, t, c, w, a, rest = cm[lab]
         t, c, w, a = int(t), int(c), int(w), int(a)
+        nbad = re.search(r"(\d+) not-a-transform read\(s\) skipped", rest)
+        badtxt = (f", {nbad.group(1)} freed/not-a-transform read(s) kept out"
+                  if nbad and int(nbad.group(1)) else "")
+        # Hop 3's sharper question: does its angle EQUAL the camera's?
+        mt = re.search(r"match: far (\d+), within 3 deg (\d+), \|dtheta\| "
+                       r"median <(\d+) p90 <(\d+) deg", rest)
+        match_v = None
+        if mt:
+            far, w3, med, p90 = (int(x) for x in mt.groups())
+            if far < 300:
+                match_v = (f"angle match NOT EXERCISED — only {far} tick(s) "
+                           f"with the camera 10+ deg off centre (needs 300)")
+            elif med <= 3 and p90 <= 10:
+                match_v = (f"HAS THE CAMERA'S ANGLE — |dtheta| median <{med}, "
+                           f"p90 <{p90} deg over {far} far tick(s) "
+                           f"({100.0 * w3 / far:.0f}% within 3 deg): THE "
+                           f"FREE-LOOK")
+            elif med > 10:
+                match_v = (f"does NOT have the camera's angle — |dtheta| "
+                           f"median <{med} deg over {far} far tick(s)")
+            else:
+                match_v = (f"PARTLY has the camera's angle — |dtheta| median "
+                           f"<{med}, p90 <{p90} deg over {far} far tick(s); "
+                           f"read the hop3 samples before calling it")
         # HOW FAR, not only when. Under head-look the camera moves on most
         # ticks, so anything that changes often "moves with" it -- take 317's
         # sway matrix did, while never rotating past ~9 deg against 131.
@@ -3822,7 +3926,15 @@ def main(path):
         else:
             v = "MIXED — moves with the camera and on its own"
         print(f"camwatch hop2 [{lab}] {t} ticks, camera moved {c}, matrix WITH "
-              f"it {w}, ALONE {a}{magtxt} => {v}")
+              f"it {w}, ALONE {a}{magtxt}{badtxt} => {v}")
+        if match_v:
+            print(f"camwatch hop3 [{lab}] => {match_v}")
+    smp = re.findall(r"camwatch hop3 sample \[camera\.rot\]: (.*)", text)
+    if smp:
+        print(f"camwatch hop3 {len(smp)} raw camera/matrix pair(s) logged for "
+              f"the convention; the first ones:")
+        for x in smp[:4]:
+            print(f"camwatch hop3   {x[:220]}")
 
     # --- where does X4 keep its free-look angle? (X4VR_CAMSCAN) ------------
     #
@@ -5114,12 +5226,6 @@ def main(path):
         r"steer=(\d) cam=(\d) head=(-?\d+\.\d+),(-?\d+\.\d+) "
         r"x4=(-?\d+\.\d+),(-?\d+\.\d+)", text)
     if lag:
-        def wrap180(d):
-            while d > 180.0:
-                d -= 360.0
-            while d < -180.0:
-                d += 360.0
-            return d
 
         # Only samples where the question is even defined: the cockpit (the
         # external camera is a DIFFERENT camera -- task #72 -- and mixing them
@@ -5464,6 +5570,18 @@ def main(path):
                                    for i, c in enumerate(live)])
                 src = f"camread, {len(live)} sample(s)"
 
+            # **A full circle has no stop.** Since take 318 the extension sets
+            # maxyaw=180 and X4 WRAPS there (179.22 -> 180.00 -> -179.66), so
+            # the plateau finder -- built to find a stop -- found one at 92.77
+            # out of servo lag, and the verdicts below called the 175.67 max
+            # "an excursion past the plateau" and the extension "modified=1"
+            # history. Count the wraps in the cockpit stream first; with one,
+            # the stop question is answered: there is none.
+            wraps = 0
+            for a_, b_ in zip(lag_ck, lag_ck[1:]):
+                if (0.0 < b_[8] - a_[8] <= 0.5 and abs(a_[4]) > 170.0 and
+                        abs(b_[4]) > 170.0 and (a_[4] > 0) != (b_[4] > 0)):
+                    wraps += 1
             xy_max = max(abs(float(c[0])) for c in live)
             xp_max = max(abs(float(c[1])) for c in live)
             cy = max(abs(float(c[4])) for c in live)
@@ -5480,7 +5598,14 @@ def main(path):
             xp = pp if pp is not None else 0.0
             print(f"clamp   max |X4| yaw={xy_max:.2f} pitch={xp_max:.2f} deg   "
                   f"(max |command| yaw={cy:.2f} pitch={cp:.2f})")
-            if py is not None:
+            if wraps:
+                print(f"clamp   NO STOP — X4's cockpit yaw WRAPPED through "
+                      f"+-180 {wraps} time(s): a full circle, the extension's "
+                      f"maxyaw=180 in force. "
+                      + (f"The plateau finder's {py:.2f} is servo lag, not a "
+                         f"stop — there is none to find" if py is not None
+                         else "Nothing to plateau"))
+            elif py is not None:
                 print(f"clamp   PLATEAU yaw={py:.2f} deg from {src}, {ny} "
                       f"sample(s) with the target 2+ deg past the camera"
                       + (f"; pitch={pp:.2f} ({np_})" if pp is not None else
@@ -5524,11 +5649,14 @@ def main(path):
             # It has to be said loudly because a run that assumes 65 will place a
             # manipulation nowhere near the real limit: take 293 capped the servo
             # at 40 to keep the camera away from "the stop", and the stop was ~79.
-            if xy > 65.5 or xp > 35.5:
+            if wraps:
+                pass  # said above: no stop at all
+            elif xy > 65.5 or xp > 35.5:
                 print(f"clamp   !! EXTENDED PATH — X4's stop is NOT the stock "
-                      f"65/35 here; it read yaw {xy:.2f}, pitch {xp:.2f}. #68's "
-                      f"extension is loaded (modified=\"1\"). Any knob set "
-                      f"relative to \"the stop\" is against the wrong number.")
+                      f"65/35 here; it read yaw {xy:.2f}, pitch {xp:.2f}. An "
+                      f"extension or the ship's own cockpit sets it. Any knob "
+                      f"set relative to \"the stop\" is against the wrong "
+                      f"number.")
             elif cy <= 65.5:
                 # **Asymmetric, and saying so is the point.** Exceeding 65.5
                 # PROVES the limit is raised; pinning at 65.00 proves nothing,
@@ -5550,6 +5678,10 @@ def main(path):
                       "Turn the head further, or raise "
                       "X4VR_HEADLOOK_YAW_LIMIT; a 65.00 here is the servo's "
                       "ceiling, not X4's")
+            elif wraps:
+                print(f"clamp   MOVED ✓ — X4 turned a full circle (max |yaw| "
+                      f"{xy_max:.2f} on the sparse stream, {wraps} wrap(s) "
+                      f"through +-180 on the full one)")
             elif xy > 65.5:
                 print(f"clamp   MOVED ✓ — X4 reached {xy:.2f} deg of yaw, past "
                       f"the 65.00 stop every stored take pins to. The override "

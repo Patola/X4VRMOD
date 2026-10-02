@@ -35,6 +35,7 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -357,6 +358,108 @@ inline std::vector<Target> settings_targets(uintptr_t obj, const Chain &c) {
         out.push_back(w);
     }
     return out;
+}
+
+// ---------------------------------------------------------------- hop 3
+//
+// Take 318: the settings object is STATIC -- a constant 0.14 deg rotation and a
+// zero translation -- and the controller's matrix is the sway again, 19 deg at
+// most while the camera turned a full circle. Nothing 0x191d0f0 builds is the
+// free-look. But 0x1929f70 does not stop at the controller: after composing it
+// it composes ONE more transform, the camera object's OWN, at camera+0x5a0
+// (translation) and +0x5b0/+0x5c0/+0x5d0 (rotation rows), on every path
+// including the cockpit's (mode 0). Hop 2 read only the controller, and take
+// 315's value scan stopped at the camera's first KB -- 0x5a0 is past it.
+inline constexpr Site kHop3Sites[] = {
+    // 0x1929f70: the player's-camera test, camera == root+0x3e8.
+    {0x192a027, 7, {0x48, 0x3b, 0x98, 0xe8, 0x03, 0x00, 0x00}},
+    // 0x1929f70: the mode switch, camera+0x880.
+    {0x1929f9d, 6, {0x8b, 0x83, 0x80, 0x08, 0x00, 0x00}},
+    // 0x1929f70: the camera's own transform, composed last -- translation,
+    // then the three rotation rows.
+    {0x192a15e, 7, {0x0f, 0x28, 0x9b, 0xa0, 0x05, 0x00, 0x00}},
+    {0x192a165, 7, {0x0f, 0x28, 0x93, 0xb0, 0x05, 0x00, 0x00}},
+    {0x192a16c, 7, {0x0f, 0x28, 0x8b, 0xc0, 0x05, 0x00, 0x00}},
+    {0x192a173, 7, {0x0f, 0x28, 0x83, 0xd0, 0x05, 0x00, 0x00}},
+};
+inline constexpr uintptr_t kCamPos = 0x5a0, kCamRow0 = 0x5b0, kCamMode = 0x880;
+
+template <class Reader> bool verify_hop3_sites(Reader read, uintptr_t *bad) {
+    return verify_sites(kHop3Sites, sizeof kHop3Sites / sizeof kHop3Sites[0],
+                        read, bad);
+}
+
+// The camera's own rotation and translation; the controller's sway matrix as
+// the reference when its class is verified (it is the census's positive
+// control: take 318 saw it written and moving, so a silent census is the
+// instrument, not X4).
+inline std::vector<Target> camera_local_targets(uintptr_t cam, const Chain &c) {
+    std::vector<Target> out;
+    if (!cam)
+        return out;
+    Target r;
+    r.addr = cam + kCamRow0;
+    r.buf = 0;
+    snprintf(r.label, sizeof r.label, "camera.rot");
+    out.push_back(r);
+    Target p;
+    p.addr = cam + kCamPos;
+    p.buf = 1;
+    snprintf(p.label, sizeof p.label, "camera.pos");
+    out.push_back(p);
+    if (c.ok) {
+        Target w;
+        w.addr = c.controller + kStoredRow0;
+        w.buf = 2;
+        snprintf(w.label, sizeof w.label, "controller"); // the sway, reference
+        out.push_back(w);
+    }
+    return out;
+}
+
+// Is what was read a live transform? Twelve floats in the census's layout
+// (rows of x,y,z,w). For a rotation target all three rows are the matrix; for
+// a translation target (".pos") the translation comes first and the next two
+// rows are the object's first two rotation rows. Take 318's census read the
+// controller after X4 freed it at exit: an all-zero matrix, whose trace gives
+// acos(-1/2) = 120 deg, and the scorer called the sway "FOLLOWS THE CAMERA and
+// spans its range" on that one read.
+inline bool rows_orthonormal(const float *a, const float *b, float tol) {
+    const float na = a[0] * a[0] + a[1] * a[1] + a[2] * a[2];
+    const float nb = b[0] * b[0] + b[1] * b[1] + b[2] * b[2];
+    const float d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    return std::fabs(na - 1.f) < tol && std::fabs(nb - 1.f) < tol &&
+           std::fabs(d) < tol;
+}
+inline bool live_transform(const float *rows, bool is_pos) {
+    constexpr float tol = 0.05f;
+    if (is_pos)
+        return rows_orthonormal(rows + 4, rows + 8, tol);
+    if (!rows_orthonormal(rows, rows + 4, tol) ||
+        !rows_orthonormal(rows + 4, rows + 8, tol) ||
+        !rows_orthonormal(rows, rows + 8, tol))
+        return false;
+    const float det = rows[0] * (rows[5] * rows[10] - rows[6] * rows[9]) -
+                      rows[1] * (rows[4] * rows[10] - rows[6] * rows[8]) +
+                      rows[2] * (rows[4] * rows[9] - rows[5] * rows[8]);
+    return std::fabs(det - 1.f) < tol;
+}
+
+// The rotation angle of a 3x3 (rows of 4), and of X4's camera from its yaw and
+// pitch. With roll zero the angle of Ry*Rx and of Rx*Ry is the same, so no
+// convention has to be guessed: cos = (cos y + cos p + cos y cos p - 1) / 2.
+// The free-look matrix, if this is it, has the camera's angle; the sway and a
+// static matrix do not.
+inline float rotation_angle_deg(const float *rows) {
+    const float tr = rows[0] + rows[5] + rows[10];
+    const float c = std::fmax(-1.f, std::fmin(1.f, (tr - 1.f) * 0.5f));
+    return std::acos(c) * 57.2957795130823f;
+}
+inline float yaw_pitch_angle_deg(float yaw_rad, float pitch_rad) {
+    const float cy = std::cos(yaw_rad), cp = std::cos(pitch_rad);
+    const float c =
+        std::fmax(-1.f, std::fmin(1.f, (cy + cp + cy * cp - 1.f) * 0.5f));
+    return std::acos(c) * 57.2957795130823f;
 }
 
 // ---------------------------------------------------------------- samples

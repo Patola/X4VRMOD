@@ -9,6 +9,7 @@
 // only acceptable answer is exactly the writer's stores, at the writer's
 // instruction. Self-checking; says SKIP loudly if the kernel refuses perf.
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
@@ -253,6 +254,88 @@ int main() {
                       t[1].addr == 0x10000 + 0x5e0,
                   "hop 2b: rotation row 0 at +0x5f0, translation at +0x5e0");
         }
+    }
+
+    // ---- hop 3: the camera's own transform --------------------------------
+    {
+        const char *x4 = "/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4";
+        Elf elf;
+        if (elf.load(x4)) {
+            auto rd = [&](uintptr_t va, void *o, size_t n) {
+                return elf.read(va, o, n);
+            };
+            uintptr_t bad = 0;
+            check(verify_hop3_sites(rd, &bad),
+                  "hop 3: the camera-transform sites match X4 9.00");
+            auto bent = [&](uintptr_t va, void *o, size_t n) {
+                if (!elf.read(va, o, n))
+                    return false;
+                if (va == 0x192a165)
+                    ((uint8_t *)o)[3] ^= 0x10; // +0x5b0 -> +0x5a0
+                return true;
+            };
+            bad = 0;
+            check(!verify_hop3_sites(bent, &bad) && bad == 0x192a165,
+                  "hop 3: one changed byte refuses, and names the site");
+        } else {
+            printf("skip  hop-3 sites — no X4 at %s\n", x4);
+        }
+        Chain none;
+        auto t = camera_local_targets(0x20000, none);
+        check(t.size() == 2 && t[0].addr == 0x20000 + 0x5b0 &&
+                  !strcmp(t[0].label, "camera.rot") &&
+                  t[1].addr == 0x20000 + 0x5a0 && !strcmp(t[1].label, "camera.pos"),
+              "hop 3: rotation row 0 at camera+0x5b0, translation at +0x5a0");
+        Chain ok;
+        ok.ok = true;
+        ok.controller = 0x30000;
+        t = camera_local_targets(0x20000, ok);
+        check(t.size() == 3 && t[2].addr == 0x30000 + kStoredRow0 &&
+                  !strcmp(t[2].label, "controller"),
+              "hop 3: the controller's sway is the reference when verified");
+        check(camera_local_targets(0, ok).empty(), "hop 3: no camera, no targets");
+    }
+
+    // ---- the census's transform checks ------------------------------------
+    {
+        const float id[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+        const float zero[12] = {};
+        check(live_transform(id, false), "census: identity is a live rotation");
+        check(!live_transform(zero, false),
+              "census: an all-zero read (take 318's freed controller) is NOT");
+        check(std::fabs(rotation_angle_deg(zero) - 120.f) < 0.01f,
+              "census: and its trace angle is exactly the 120 deg that fooled "
+              "the scorer");
+        const float a = 0.5f, ca = std::cos(a), sa = std::sin(a);
+        const float yrot[12] = {ca, 0, -sa, 0, 0, 1, 0, 0, sa, 0, ca, 0};
+        check(live_transform(yrot, false) &&
+                  std::fabs(rotation_angle_deg(yrot) - a * 57.29578f) < 0.01f,
+              "census: a 28.6 deg yaw reads as 28.6 deg");
+        const float refl[12] = {-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+        check(!live_transform(refl, false), "census: a reflection (det -1) is NOT");
+        const float pos[12] = {12.f, -3.f, 400.f, 0, 1, 0, 0, 0, 0, 1, 0, 0};
+        check(live_transform(pos, true),
+              "census: a translation followed by two unit rows is live");
+        const float posz[12] = {12.f, -3.f, 400.f, 0};
+        check(!live_transform(posz, true),
+              "census: a translation followed by zeros is NOT (freed object)");
+        // The camera's angle from yaw/pitch, against the matrix it describes:
+        // Ry(y) * Rx(p) built explicitly, both orders give the same angle.
+        const float y = 1.1f, p = -0.4f;
+        const float cy = std::cos(y), sy = std::sin(y), cp = std::cos(p),
+                    sp = std::sin(p);
+        const float ry_rx[12] = {cy, sy * sp, sy * cp, 0, 0, cp, -sp, 0,
+                                 -sy, cy * sp, cy * cp, 0};
+        const float rx_ry[12] = {cy, 0, sy, 0, sp * sy, cp, -sp * cy, 0,
+                                 -cp * sy, sp, cp * cy, 0};
+        check(std::fabs(yaw_pitch_angle_deg(y, p) - rotation_angle_deg(ry_rx)) <
+                      0.01f &&
+                  std::fabs(yaw_pitch_angle_deg(y, p) -
+                            rotation_angle_deg(rx_ry)) < 0.01f,
+              "census: the camera's angle from yaw/pitch equals the matrix's, "
+              "in either composition order");
+        check(std::fabs(yaw_pitch_angle_deg(3.14159265f, 0.f) - 180.f) < 0.01f,
+              "census: looking straight back is 180 deg");
     }
 
     // ---- hop 2: the chain, on a synthetic controller --------------------

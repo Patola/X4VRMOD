@@ -2294,9 +2294,21 @@ static bool x4_cockpit_view() {
 // surviving cores fault at IsHUDActive+7 with rdx=0, called from here. That was
 // the "X4 segfaults on exit in every run" the docs carried as harmless. So the
 // pointer is read first, from the address decoded out of IsHUDActive's own
-// first instruction (x4vr_riprel.hpp), and a NULL answers like the
-// not-yet-built case does. If the prologue ever stops decoding, that is said
-// once and the call goes ahead as before -- the old behaviour, not a guess.
+// first instruction (x4vr_riprel.hpp), and a NULL is not dereferenced. If the
+// prologue ever stops decoding, that is said once and the call goes ahead as
+// before -- the old behaviour, not a guess.
+//
+// **A NULL answers "no HUD", not "HUD up".** This guard first answered true,
+// "like the not-yet-built case" -- but the caller's not-yet-built `true` is a
+// BOOTSTRAP (head-look must press the key once to reach relative mouse mode at
+// all), never a statement that a HUD exists, and this function is only called
+// after that latch. Take 318 showed the cost: quitting through the menu, the
+// global went NULL and in the same millisecond the log said "HUD is now up --
+// steering", so head-look held MOUSELOOK and pushed mouse deltas into a
+// quitting X4 for five seconds, and the pose went identity with head-look
+// claiming to be live -- the scorer's one FAIL. A load that NULLs it would be
+// worse: the key pressed during loading is take 126's lost edge. With no HUD
+// object there is no HUD; head-look idles until the global comes back.
 // X4GUARD: IsHUDActive
 static bool x4_hud_active() {
     using Fn = bool (*)();
@@ -2322,9 +2334,9 @@ static bool x4_hud_active() {
             said = true;
             X4VR_LOG("camread: X4's HUD global is NULL — X4 is tearing the "
                      "HUD down (exit or load); IsHUDActive is not called "
-                     "while it stays NULL");
+                     "while it stays NULL, and the HUD counts as DOWN");
         }
-        return true;
+        return false;
     }
     return hud();
 }
@@ -2557,8 +2569,9 @@ static void camscan_report() {
 // logs. Nothing of ours runs inside X4's threads; each store costs X4 a debug
 // trap the kernel absorbs.
 // X4VR_CAMWATCH=1 is hop 1 (the snapshot entries, take 316), =2 is hop 2 (the
-// camera controller and its chain of child controllers). Hop 1 is kept as it
-// was so take 316 stays reproducible.
+// camera controller and its chain of child controllers), =3 hop 2b (the
+// settings object, take 318), =4 hop 3 (the camera's own transform). Each is
+// kept as it was so its take stays reproducible.
 static int camwatch_mode() {
     static const int m = [] {
         const char *e = getenv("X4VR_CAMWATCH");
@@ -2567,6 +2580,15 @@ static int camwatch_mode() {
     return m;
 }
 static bool camwatch_enabled() { return camwatch_mode() > 0; }
+static const char *camwatch_hop_name() {
+    switch (camwatch_mode()) {
+    case 1: return "hop 1";
+    case 2: return "hop 2";
+    case 3: return "hop 2b";
+    case 4: return "hop 3";
+    default: return "hop ?";
+    }
+}
 
 namespace {
 struct CamWatchShared {
@@ -2785,6 +2807,43 @@ static void camwatch_publish(const std::vector<x4vr::camwatch::Target> &t,
         std::thread(camwatch_monitor).detach();
 }
 
+// Hop 3: the camera object's own transform (+0x5a0 translation, +0x5b0..
+// rotation), the last thing 0x1929f70 composes. Its sites are verified once;
+// it does not need the controller's class -- the controller is only the
+// reference, added when its class is verified. The transform and the mode
+// (+0x880) are logged whenever the camera object changes, so the census has
+// its starting values beside it.
+static void camwatch_aim_hop3(uintptr_t cam, const x4vr::camwatch::Chain &c) {
+    using namespace x4vr::camwatch;
+    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    static int sites = -1;
+    if (sites < 0) {
+        uintptr_t bad = 0;
+        sites = verify_hop3_sites(rd, &bad) ? 1 : 0;
+        if (sites)
+            X4VR_LOG("camwatch hop3: all %zu camera-transform sites match X4 "
+                     "9.00", sizeof kHop3Sites / sizeof kHop3Sites[0]);
+        else
+            X4VR_LOG("camwatch hop3: REFUSED — code at %p differs from the "
+                     "analysed build", (void *)bad);
+    }
+    if (!sites)
+        return;
+    static uintptr_t last_cam = 0;
+    if (cam != last_cam) {
+        last_cam = cam;
+        float t[16] = {};
+        int32_t mode = -1;
+        self_read(cam + kCamPos, t, sizeof t);
+        self_read(cam + kCamMode, &mode, sizeof mode);
+        X4VR_LOG("camwatch hop3: camera %p mode %d — translation (%.3f, %.3f, "
+                 "%.3f) rows (%.3f %.3f %.3f | %.3f %.3f %.3f | %.3f %.3f %.3f)",
+                 (void *)cam, (int)mode, t[0], t[1], t[2], t[4], t[5], t[6],
+                 t[8], t[9], t[10], t[12], t[13], t[14]);
+    }
+    camwatch_publish(camera_local_targets(cam, c), "hop 3 camera transform");
+}
+
 // Hop 2: verify the analysed code sites once, then read the controller and
 // its chain every second, log it whenever it changes (class identity is in
 // the vtables, which are build constants), and aim at the stored matrices.
@@ -2819,6 +2878,10 @@ static void camwatch_aim_hop2(uintptr_t cam) {
         last = desc;
         X4VR_LOG("camwatch hop2: %s — %s", c.ok ? "chain" : "REFUSED", c.why);
         X4VR_LOG("camwatch hop2: %s", desc);
+    }
+    if (camwatch_mode() == 4) {
+        camwatch_aim_hop3(cam, c);
+        return;
     }
     if (!c.ok)
         return;
@@ -2876,6 +2939,15 @@ struct CoMove {
     float lo[9], hi[9];
     char label[24] = {};
     uintptr_t addr = 0;
+    // Reads that were not a live transform (take 318: the controller read
+    // after X4 freed it, all zeros, 120 deg). Counted and kept out of every
+    // statistic below, so one teardown read cannot become the verdict.
+    uint64_t bad = 0;
+    // Hop 3: does its angle EQUAL the camera's? Over the ticks the camera is
+    // at least 10 deg off centre ("far"), |angle(matrix) - angle(camera)| in
+    // 1-deg bins (the last bin holds everything >= 60). How far was take
+    // 317's missing question; "the same angle" is the sharper one.
+    uint64_t far = 0, hist[61] = {};
 };
 std::vector<CoMove> g_comove;
 } // namespace
@@ -2930,10 +3002,36 @@ static void camwatch_comove_tick() {
     pyaw = yaw;
     ppitch = pitch;
     phave = true;
+    const float cam_angle = x4vr::camwatch::yaw_pitch_angle_deg(r.yaw, r.pitch);
+    static timespec last_sample{};
+    const bool sample_now = camwatch_mode() == 4 && cam_angle >= 30.f &&
+                            since(last_sample) >= 5.0;
+    if (sample_now)
+        last_sample = now;
     for (CoMove &m : g_comove) {
         float rows[12];
         if (!self_read(m.addr, rows, sizeof rows))
             continue; // rows at +0x20,+0x30,+0x40 -> x,y,z,w each
+        if (!x4vr::camwatch::live_transform(rows, m.is_pos)) {
+            m.bad++;
+            continue;
+        }
+        if (!m.is_pos && cam_angle >= 10.f) {
+            const float dth = std::fabs(
+                x4vr::camwatch::rotation_angle_deg(rows) - cam_angle);
+            m.far++;
+            m.hist[dth >= 60.f ? 60 : (int)dth]++;
+        }
+        // The raw pair, a few times a run, so the CONVENTION (which rows,
+        // which signs) can be read off offline -- the write test needs it.
+        if (sample_now && !m.is_pos)
+            X4VR_LOG("camwatch hop3 sample [%s]: camera yaw %.2f pitch %.2f "
+                     "roll %.2f deg (angle %.2f) | rows (%.4f %.4f %.4f | %.4f "
+                     "%.4f %.4f | %.4f %.4f %.4f) angle %.2f",
+                     m.label, r.yaw * kRad2Deg, r.pitch * kRad2Deg,
+                     r.roll * kRad2Deg, cam_angle, rows[0], rows[1], rows[2],
+                     rows[4], rows[5], rows[6], rows[8], rows[9], rows[10],
+                     x4vr::camwatch::rotation_angle_deg(rows));
         float d = 0.f;
         for (int j = 0; j < 12; j++)
             d = std::fmax(d, std::fabs(rows[j] - m.prev[j]));
@@ -2951,9 +3049,8 @@ static void camwatch_comove_tick() {
                         dz = rows[2] - m.first_t[2];
             m.max_disp = std::fmax(m.max_disp, std::sqrt(dx * dx + dy * dy + dz * dz));
         } else {
-            const float tr = rows[0] + rows[5] + rows[10];
-            const float c = std::fmax(-1.f, std::fmin(1.f, (tr - 1.f) * 0.5f));
-            m.max_rot_deg = std::fmax(m.max_rot_deg, std::acos(c) * kRad2Deg);
+            m.max_rot_deg = std::fmax(m.max_rot_deg,
+                                      x4vr::camwatch::rotation_angle_deg(rows));
         }
         memcpy(m.prev, rows, sizeof rows);
         m.have = true;
@@ -2970,15 +3067,23 @@ static void camwatch_comove_tick() {
     last_rep = now;
     // Enough when every watched matrix has 60 s of ticks, with the camera
     // moving in at least 10 s of them.
+    // Hop 3 also needs 10 s with the camera at least 10 deg off centre, or
+    // the angle match has nothing to compare.
     static bool said_enough = false;
     if (!said_enough && !g_comove.empty()) {
         bool enough = true;
-        for (const CoMove &m : g_comove)
+        uint64_t far = 0;
+        for (const CoMove &m : g_comove) {
             enough = enough && m.ticks >= 1800 && m.cam >= 300;
+            far = std::max(far, m.far);
+        }
+        if (camwatch_mode() == 4)
+            enough = enough && far >= 300;
         if (enough) {
             said_enough = true;
-            X4VR_LOG("milestone: the camera probe (hop 2) has what it needs. "
-                     "You can quit X4 now — through the menu, please.");
+            X4VR_LOG("milestone: the camera probe (%s) has what it needs. "
+                     "You can quit X4 now — through the menu, please.",
+                     camwatch_hop_name());
         }
     }
     for (const CoMove &m : g_comove) {
@@ -2992,12 +3097,33 @@ static void camwatch_comove_tick() {
             snprintf(mag, sizeof mag, "max displacement %.4f", m.max_disp);
         else
             snprintf(mag, sizeof mag, "max rotation %.2f deg", m.max_rot_deg);
+        // The angle match, as a median and p90 of |dtheta| over the far
+        // ticks, read off the 1-deg histogram (bin upper edges).
+        char match[160] = "";
+        if (!m.is_pos && camwatch_mode() == 4) {
+            int med = -1, p90 = -1, within3 = 0;
+            uint64_t acc = 0;
+            for (int b = 0; b <= 60; b++) {
+                acc += m.hist[b];
+                if (b < 3)
+                    within3 += (int)m.hist[b];
+                if (med < 0 && m.far && acc * 2 >= m.far)
+                    med = b;
+                if (p90 < 0 && m.far && acc * 10 >= m.far * 9)
+                    p90 = b;
+            }
+            snprintf(match, sizeof match,
+                     " | match: far %llu, within 3 deg %d, |dtheta| median <%d "
+                     "p90 <%d deg",
+                     (unsigned long long)m.far, within3, med + 1, p90 + 1);
+        }
         X4VR_LOG("camwatch hop2 co-move [%s] @%p: %llu tick(s), camera moved "
                  "in %llu, the matrix moved WITH it in %llu, ALONE in %llu | "
-                 "%s | 3x3 ranges %s",
+                 "%s | %llu not-a-transform read(s) skipped%s | 3x3 ranges %s",
                  m.label, (void *)m.addr, (unsigned long long)m.ticks,
                  (unsigned long long)m.cam, (unsigned long long)m.with,
-                 (unsigned long long)m.alone, mag, rng);
+                 (unsigned long long)m.alone, mag, (unsigned long long)m.bad,
+                 match, rng);
     }
 }
 
