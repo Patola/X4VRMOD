@@ -23505,3 +23505,48 @@ extensions. WiVRn, configuration 1.
 * **P322.4** no black edges (110° again) in either phase.
 * **P322.5** side effects in FIX phases, if any, named by Patola (HUD size or
   position, cockpit displays, distant-object detail) — a predicted unknown.
+
+## Take 322 — SCORED: the sway is gone; the shadow A/B collapsed, and the base field is not the fix
+
+Patola: *"it said ARMED when loading the savegame was about 45%... I went up to
+15 FIX phases and saw no improvement... The shadows are all over the place,
+and they change not only when I yaw but also when I pitch up and down, and
+looking at the corners immediately makes the shadow issue appear. This round
+was kind of botched... Mouse-steering and boosting seem good, though."*
+
+* **P322.1 HELD — the sway was take 321's tail.** Sway readout run max 0.00°,
+  0.0 cm with x4vrmod_nosway; |X4 − head| p90 3.59° (321: 10.74°);
+  departures 14 short ones, longest 1.7 s, 49% in the head's direction
+  (321: 13 of up to 17 s, 79%). Mouse steering and boost feel right.
+* **P322.2 FAILED as an instrument — the arms collapsed.** After the first FIX
+  write, X4 itself kept camera+0x890 at the widened 1.91982: every CONTROL
+  write of 1.28700 (~60 per second, 18 877 in all) was undone before the next
+  tick. Some copy of the camera's fields is written back each frame, and the
+  static search (stores of `xmm` to `0x890(`) cannot see a wider struct copy.
+  So phases 1–15 were all FIX. The scorer printed "8 FIX / 8 CONTROL" and
+  PASS; it now checks each phase report reads its own value and FAILs this
+  run (census case added).
+* **P322.3 REFUTED regardless of the collapse.** The base field sat at 110°
+  from phase 1 to the end and the shadows faded throughout. Widening the base
+  (and whatever X4 copies it into) does not stop #70.
+* **The arming came during the LOAD SCREEN** (45% loaded): the cockpit camera,
+  its parameters and the HUD all exist before play. A phase design needs a
+  "playing" signal — game time advancing (`GetCurrentGameTime`, declared in
+  X4's Lua cdefs; reads a thread-local clock, no global) is the candidate.
+* **New description of #70, from the headset:** pitch as well as yaw, and the
+  screen CORNERS immediately — a dependence on where a surface sits in the
+  view, strongest at the largest angles.
+
+### What X4's shaders say the shadow lookup uses
+
+`l_pass_globallight.frag.glsl` (re-extracted to /tmp/x4-shadersrc) lights with
+`view_pos = UnProject(...)` (M_invprojection) but looks up the cascades with
+`view_pos_uj = UnProjectUJ(clip − jitter)` (**M_invprojection_uj**), then
+`coords[i] = view_pos_uj × M_shadowCSMi` and the fade on `length(view_pos_uj)`
+(common_frag.glsl `global_lights`). So the shadows have their own inverse
+projection. Take 318's camdiff saw M_projection and M_projection_uj change on
+the same 1.2% of frames by the same maximum, which suggests the unjittered
+pair is the wide one — not yet compared by value. And take 266's
+`csm0-scale` read 0.154204 (≈6.5 m) in every view-space slot and frame: a
+constant cascade-0 box, suggesting a fixed-size (stable, sphere-fitted)
+cascade — whose size may come from a field other than the one rendered.

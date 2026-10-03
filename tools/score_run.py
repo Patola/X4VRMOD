@@ -3949,6 +3949,25 @@ def main(path):
                 print(f"shadowfov NOTE: X4 recomputed the effective field "
                       f"{rs} time(s) (option x a widened base) and it was "
                       f"put back — a camera re-init during a FIX phase")
+        # **Did each phase actually hold its own value?** Take 322 printed
+        # "8 FIX / 8 CONTROL" while every CONTROL phase after the first read
+        # the WIDENED base: X4 re-asserted the written value each frame and
+        # the CONTROL write (counted ~60/s) never stuck. Phases that never
+        # differed compared FIX with FIX, and this block called it healthy.
+        per = re.findall(r"shadowfov: phase \d+ (FIX|CONTROL) \| base (\S+) "
+                         r"effective", text)
+        if sf_armed and per:
+            want_fix = float(sf_armed[0][3])
+            want_ctl = 1.28700
+            bad = [(k, float(b)) for k, b in per
+                   if abs(float(b) - (want_fix if k == "FIX" else want_ctl)) > 1e-4]
+            if bad:
+                kinds = sorted({k for k, _b in bad})
+                fails.append(
+                    f"shadowfov: {len(bad)} of {len(per)} phase report(s) did "
+                    f"NOT read their own phase's base ({'/'.join(kinds)} read "
+                    f"{bad[0][1]:.5f}) — the arms collapsed, X4 kept the other "
+                    f"value, and this run did not compare what it claims to")
         if sf_asked and sf_armed and nfix == 0:
             fails.append("X4VR_SHADOWFOV_AB armed but the run ended before "
                          "the first FIX phase — nothing was compared")

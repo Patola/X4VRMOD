@@ -535,6 +535,9 @@ fi
 want "shadowfov never armed -> FAIL" /tmp/census-sf-never.log FAIL "never ARMED"
 { cat /tmp/census-sf-base.log; printf '%s\n' "$sfarm" "$(sfp 999990.100 0 CONTROL)"; } > /tmp/census-sf-short.log
 want "shadowfov ended before FIX -> FAIL" /tmp/census-sf-short.log FAIL "before the first FIX phase"
+sfbad='[  999999.500] inject  shadowfov: phase 2 CONTROL | base 1.91982 effective 1.91982 | 818 base write(s), 0 effective restore(s), 0 failed'
+{ cat /tmp/census-sf-base.log; printf '%s\n' "$sfarm" "$(sfp 999990.100 0 CONTROL)" "$(sfp 999995.000 1 FIX)" "$sfr" "$(sfp 999999.200 2 CONTROL)" "$sfbad"; } > /tmp/census-sf-collapse.log
+want "shadowfov CONTROL reading the FIX value -> FAIL (take 322)" /tmp/census-sf-collapse.log FAIL "the arms collapsed"
 absent "shadowfov not asked -> silent" "$BASE" shadowfov
 
 # ------------------------------------------- the camera-state scan (camscan)
