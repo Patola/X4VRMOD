@@ -11534,6 +11534,58 @@ static void camdiff_sample() {
     }
     memcpy(d.prev, cblk, sizeof(d.prev));
     d.have = true;
+
+    // **camuj — #70, take 323: does the shadow lookup see the field the picture
+    // was drawn with?** X4's global light looks its cascades up from
+    // `UnProjectUJ(clip - jitter)`, i.e. M_invprojection_uj, not the
+    // M_invprojection it lights with (l_pass_globallight / GetViewPosUJShad).
+    // Every 300 frames, across EVERY camera block drawn this frame: the set of
+    // (M_projection sx, M_projection_uj sx) pairs, and in how many of each the
+    // shadows' inverse fails to invert the projection actually drawn. Plus the
+    // main view's own numbers. A slot pairing 0.70024 with 1.33333 -- or an
+    // inverse that misses -- is the defect named; one pair moving together
+    // between X4VR_FIELD_AB phases is the camera following the switch.
+    static uint64_t uj_n = 0;
+    if ((++uj_n % 300) == 0) {
+        struct Pair {
+            uint32_t n = 0, inv_bad = 0;
+            float worst = 0.0f;
+        };
+        std::map<std::pair<long, long>, Pair> pairs;
+        for (auto &kv : g_track.credit) {
+            const float *b = slot_host_ptr(kv.first);
+            if (!b)
+                continue;
+            const float sx = b[16], sxu = b[48];
+            if (!std::isfinite(sx) || !std::isfinite(sxu) ||
+                std::fabs(sx) < 1e-4f || std::fabs(sxu) < 1e-4f)
+                continue;
+            Pair &pr = pairs[{std::lround(sx * 1e5f), std::lround(sxu * 1e5f)}];
+            pr.n++;
+            const float e = x4vr::inverse_error(b + 64, b + 16);
+            pr.worst = std::fmax(pr.worst, e);
+            if (e > 0.01f)
+                pr.inv_bad++;
+        }
+        char set[900];
+        int k = 0;
+        for (auto &[key, pr] : pairs) {
+            if (k >= (int)sizeof set - 96)
+                break;
+            k += snprintf(set + k, sizeof set - (size_t)k,
+                          "%s%.5f/%.5f x%u (inv_uj miss %u, worst %.1e)",
+                          k ? ", " : "", key.first * 1e-5, key.second * 1e-5,
+                          pr.n, pr.inv_bad, pr.worst);
+        }
+        X4VR_LOG("camuj: main cam@%llu draws=%u proj sx %.5f sy %.5f | proj_uj "
+                 "sx %.5f sy %.5f | inv*proj %.1e, inv_uj*proj_uj %.1e, "
+                 "inv_uj*proj %.1e | %zu slot pair(s): %s",
+                 (unsigned long long)best->offset, best_n, cblk[16], cblk[21],
+                 cblk[48], cblk[53], x4vr::inverse_error(cblk + 32, cblk + 16),
+                 x4vr::inverse_error(cblk + 64, cblk + 48),
+                 x4vr::inverse_error(cblk + 64, cblk + 16), pairs.size(),
+                 pairs.empty() ? "none" : set);
+    }
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(

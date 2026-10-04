@@ -58,6 +58,7 @@ extern char **environ;
 #include "x4vr_camwatch.hpp"
 #include "x4vr_camwrite.hpp"
 #include "x4vr_shadowfov.hpp"
+#include "x4vr_fieldab.hpp"
 #include "x4vr_content.hpp"
 #include "x4vr_lua.hpp"
 #include "../common/x4vr_shquote.hpp"
@@ -3948,6 +3949,219 @@ static void shadowfov_tick() {
     }
 }
 
+// ------------------------------------------------ X4VR_FIELD_AB=<s>
+//
+// #70's knee switched live, flatscreen: phase A renders at X4VR_FOV, phase B
+// at X4VR_FIELD_B (default 1.24), by writing X4's EFFECTIVE field
+// (camera+0x874). Phases start only once game time runs with the cockpit
+// camera up; each is announced. See x4vr_fieldab.hpp. The layer's `camuj`
+// lines say, per phase, what X4 actually drew with.
+static double fieldab_period() {
+    static const double p = [] {
+        const char *e = getenv("X4VR_FIELD_AB");
+        return e && *e ? atof(e) : 0.0;
+    }();
+    return p;
+}
+
+// X4's game clock. `double GetCurrentGameTime(void);` is declared in X4's
+// Lua cdefs; its body reads a thread-local clock (0xa41960: a TLS-init check,
+// then %fs:-0x2728) and dereferences no global. Called on X4's main thread.
+static bool x4_game_time(double *out) {
+    using Fn = double (*)();
+    static Fn fn = [] {
+        Fn f = (Fn)dlsym(RTLD_DEFAULT, "GetCurrentGameTime");
+        X4VR_LOG("gametime: GetCurrentGameTime %s",
+                 f ? "resolved" : "NOT FOUND — nothing can wait for play");
+        return f;
+    }();
+    if (!fn)
+        return false;
+    *out = fn();
+    return true;
+}
+
+namespace {
+struct FieldAb {
+    bool armed = false, started = false;
+    uintptr_t cam = 0;
+    double t0 = 0.0;
+    long phase = -1;
+    float last_written = 0.f;
+    uint64_t writes = 0, reverted = 0, failed = 0, ticks_a = 0, ticks_b = 0,
+             held_a = 0, held_b = 0;
+    char refusal[200] = "";
+    x4vr::fieldab::GameClock clock;
+};
+FieldAb g_fab;
+} // namespace
+
+static void fieldab_refuse(const char *why) {
+    if (strcmp(g_fab.refusal, why) != 0) {
+        snprintf(g_fab.refusal, sizeof g_fab.refusal, "%s", why);
+        X4VR_LOG("fieldab: REFUSED — %s", why);
+    }
+}
+
+static void fieldab_tick() {
+    using namespace x4vr::fieldab;
+    const double period = fieldab_period();
+    if (period <= 0.0)
+        return;
+    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    static int sites = -1;
+    if (sites < 0) {
+        uintptr_t bad = 0;
+        float def = 0.f;
+        const bool code = verify_sites(rd, &bad);
+        const bool cst =
+            self_read(x4vr::shadowfov::kDefaultAddr, &def, sizeof def) &&
+            std::fabs(def - kDefault) < 1e-6f;
+        sites = code && cst ? 1 : 0;
+        if (sites)
+            X4VR_LOG("fieldab: all %zu effective-field sites match X4 9.00; "
+                     "X4's default field reads %.7f rad",
+                     sizeof kSites / sizeof kSites[0], def);
+        else {
+            X4VR_LOG("fieldab: REFUSED for the session — %s",
+                     !code ? "an effective-field site differs from the "
+                             "analysed build"
+                           : "X4's default-field constant is not 1.2870022");
+            X4VR_LOG("milestone: field A/B REFUSED — this X4 is not the "
+                     "analysed build. Nothing will switch; quit and tell me.");
+        }
+    }
+    if (!sites)
+        return;
+    static const float opt_a = [] {
+        const char *e = getenv("X4VR_FOV");
+        return e && *e ? strtof(e, nullptr) : 0.0f;
+    }();
+    static const float opt_b = [] {
+        const char *e = getenv("X4VR_FIELD_B");
+        return e && *e ? strtof(e, nullptr) : 1.24f;
+    }();
+    if (opt_a <= 0.0f || opt_b <= 0.0f) {
+        fieldab_refuse("X4VR_FOV is unset — phase A has no field");
+        return;
+    }
+    // The game clock, every tick, logged when it starts or stops running.
+    double gt = 0.0;
+    const double wall = mono_seconds();
+    const bool have_gt = x4_game_time(&gt);
+    const bool was = g_fab.clock.running;
+    const bool running =
+        have_gt && game_clock_step(g_fab.clock, gt, wall, 5.0, 1.0);
+    if (running != was)
+        X4VR_LOG("gametime: %s (game time %.1f s)",
+                 running ? "RUNNING — 5 s of play counted" : "stopped",
+                 gt);
+    static double last_gt_log = 0.0;
+    if (wall - last_gt_log >= 10.0) {
+        last_gt_log = wall;
+        X4VR_LOG("gametime: %.2f s (running %d)", gt, running ? 1 : 0);
+    }
+    const uintptr_t cam = x4_player_camera();
+    float eff = 0.f;
+    int32_t mode = -1;
+    if (!cam || !self_read(cam + kEffective, &eff, sizeof eff) ||
+        !self_read(cam + x4vr::camwatch::kCamMode, &mode, sizeof mode))
+        return;
+    if (cam != g_fab.cam) {
+        // A camera seen for the first time must read X4's own A field.
+        if (!layout_ok(eff, opt_a)) {
+            char why[200];
+            snprintf(why, sizeof why,
+                     "camera %p reads effective field %.5f, not option %.4f x "
+                     "X4's default (%.5f)",
+                     (void *)cam, eff, opt_a, field_of(opt_a));
+            fieldab_refuse(why);
+            return;
+        }
+        g_fab.cam = cam;
+        g_fab.armed = true;
+        g_fab.refusal[0] = 0;
+        X4VR_LOG("fieldab: ARMED on camera %p — A %.4f (%.5f rad, %.2f deg, "
+                 "sx %.5f), B %.4f (%.5f rad, %.2f deg, sx %.5f); phases of "
+                 "%.0f s once game time runs",
+                 (void *)cam, opt_a, field_of(opt_a), field_of(opt_a) * 57.2957795f,
+                 sx_of(opt_a), opt_b, field_of(opt_b), field_of(opt_b) * 57.2957795f,
+                 sx_of(opt_b), period);
+    }
+    if (!g_fab.started) {
+        // The one unverified premise: that X4's clock runs on the thread we
+        // ask it from. If the cockpit camera has been up a minute and it never
+        // has, say so rather than let him wait for phases that cannot come.
+        static double cockpit_since = 0.0;
+        static bool said_stuck = false;
+        if (mode == 0 && cockpit_since == 0.0)
+            cockpit_since = wall;
+        if (mode == 0 && !running && !said_stuck && wall - cockpit_since > 60.0) {
+            said_stuck = true;
+            X4VR_LOG("fieldab: the cockpit camera has been up 60 s and game "
+                     "time never ran (it reads %.2f s) — no phase will start",
+                     gt);
+            X4VR_LOG("milestone: field A/B is waiting for game time that never "
+                     "runs. Quit and tell me.");
+        }
+        if (!(running && mode == 0))
+            return; // loading, a menu, or not the cockpit: no phase yet
+        g_fab.started = true;
+        g_fab.t0 = wall;
+        X4VR_LOG("fieldab: STARTED — game time %.1f s running, cockpit camera "
+                 "up", gt);
+    }
+    const double el = wall - g_fab.t0;
+    const bool b = phase_b(el, period);
+    const long phase = (long)(el / period);
+    if (phase != g_fab.phase) {
+        g_fab.phase = phase;
+        X4VR_LOG("fieldab: phase %ld %s", phase,
+                 b ? "B — the NARROW field" : "A — the WIDE field");
+        X4VR_LOG("milestone: field %s (phase %ld) — %s. Watch the cockpit "
+                 "shadows while you look around.",
+                 b ? "B" : "A", phase,
+                 b ? "narrow, shadows expected steady"
+                   : "wide, shadows expected to fade");
+        if (phase == 8)
+            X4VR_LOG("milestone: the field A/B has 4 of each phase — quit "
+                     "through the menu whenever you like.");
+    }
+    // Held? The value X4 has NOW, against this phase's field: a tick that
+    // finds it changed since our last write was X4 putting its own back.
+    const float want = field_of(b ? opt_b : opt_a);
+    const bool held = std::fabs(eff - want) <= 1e-5f;
+    (b ? g_fab.ticks_b : g_fab.ticks_a)++;
+    if (held)
+        (b ? g_fab.held_b : g_fab.held_a)++;
+    if (g_fab.writes && !held && std::fabs(eff - g_fab.last_written) > 1e-5f &&
+        std::fabs(g_fab.last_written - want) <= 1e-5f)
+        g_fab.reverted++;
+    const Action a = decide(eff, opt_a, opt_b, b);
+    if (a.write) {
+        if (self_write(cam + kEffective, &a.value, sizeof a.value)) {
+            g_fab.writes++;
+            g_fab.last_written = a.value;
+        } else {
+            g_fab.failed++;
+        }
+    }
+    static double last = 0.0;
+    if (wall - last >= 5.0) {
+        last = wall;
+        X4VR_LOG("fieldab: phase %ld %s | effective %.5f | held A %llu/%llu B "
+                 "%llu/%llu tick(s) | %llu write(s), %llu reverted by X4, %llu "
+                 "failed",
+                 phase, b ? "B" : "A", eff, (unsigned long long)g_fab.held_a,
+                 (unsigned long long)g_fab.ticks_a,
+                 (unsigned long long)g_fab.held_b,
+                 (unsigned long long)g_fab.ticks_b,
+                 (unsigned long long)g_fab.writes,
+                 (unsigned long long)g_fab.reverted,
+                 (unsigned long long)g_fab.failed);
+    }
+}
+
 // **Task #75's fix: where the tick's cadence comes from.**
 //
 // 0 = X4's event drain, exactly as every take so far. Anything else is a rate in
@@ -5765,6 +5979,7 @@ void SDL_PumpEvents(void) {
         camwatch_comove_tick();
         hoverview_tick();
         shadowfov_tick();
+        fieldab_tick();
         pumprate_report();
     }
     real_fn();

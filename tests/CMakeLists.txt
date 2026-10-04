@@ -183,6 +183,9 @@ add_executable(x4vr_test_camwrite camwrite.cpp)
 # X4VR_SHADOWFOV_AB: the field sites and X4's default-field constant against
 # the real binary, the layout check, and what each phase writes. Self-checking.
 add_executable(x4vr_test_shadowfov shadowfov.cpp)
+# X4VR_FIELD_AB: the effective-field sites, phase targets and sx, and the game
+# clock that keeps phases off the load screen. Self-checking.
+add_executable(x4vr_test_fieldab fieldab.cpp)
 # The content.xml fork that enables our extensions for the modded session.
 add_executable(x4vr_test_content_fork content_fork.cpp)
 target_link_libraries(x4vr_test_camwatch PRIVATE Threads::Threads)

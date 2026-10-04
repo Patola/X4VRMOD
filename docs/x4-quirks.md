@@ -23550,3 +23550,54 @@ pair is the wide one — not yet compared by value. And take 266's
 `csm0-scale` read 0.154204 (≈6.5 m) in every view-space slot and frame: a
 constant cascade-0 box, suggesting a fixed-size (stable, sphere-fitted)
 cascade — whose size may come from a field other than the one rendered.
+
+## Take 323 design — #70's knee switched live, flatscreen (X4VR_FIELD_AB)
+
+Patola: *"build take 323 as a flatscreen run."* The redo of 322 "in a better
+way": every way 322 was botched is now a refusal or a FAIL.
+
+* **The lever is X4's RENDERED field** — camera+0x874, the effective field
+  (option × 73.74°) that 0x1926f80 returns for the projection — not 322's
+  refuted base. Phase A: X4VR_FOV (1.4917, 110°, sx 0.70024); phase B:
+  X4VR_FIELD_B (1.24, 91.44°, sx 0.97522), alternating every 45 s, A first.
+  Flatscreen because in VR the headset is told one field at start and one
+  phase would show the world at the wrong size.
+* **Phases start only when the game is played**: `GetCurrentGameTime`
+  (declared in X4's Lua cdefs; a thread-local clock, no global — and
+  tests/run-x4-call-guards.sh now bounds its scan by the symbol's size, after a
+  fixed 0x100 window ran into the next function and called it unguarded) must
+  advance 5 s without a 1 s stall, with the cockpit camera (mode 0) up.
+  `gametime:` lines log it; a minute in the cockpit without it running is a
+  notification, not a silent wait.
+* **Each phase is judged by what X4 DREW.** The injector logs, per phase, the
+  ticks its value held (and writes X4 reverted); the layer's new **`camuj`**
+  line (every 300 frames, with `X4VR_CAMDIFF=1`) logs the main view's
+  M_projection sx beside M_projection_uj sx, how well M_invprojection_uj
+  inverts the projection actually drawn (`inverse_error`, tested: own inverse
+  ~0, jitter < 0.01, the 73.74° inverse against the 110° picture 0.475), and
+  the set of (sx, sx_uj) pairs over every camera block drawn. Scorer:
+  `fieldab` FAILs if a phase did not draw its own sx, if a phase held its field
+  on < 90% of ticks, or if the phases never started; `camuj` lists any slot
+  whose two projections disagree. tests/fieldab.cpp (15 checks, incl. a
+  simulated load screen, pause and reload for the clock), census +10.
+
+### P323
+
+`X4VR_FIELD_AB=45 X4VR_FIELD_B=1.24` at X4VR_FOV 1.4917, 1408×1408 (the
+aspect take 228 measured the knee at), extensions on, flatscreen.
+
+* **P323.1** STARTED only after game time ran in the cockpit; phases held
+  ≥ 90%; no failed writes.
+* **P323.2** X4 DREW sx 0.70024 in A and 0.97522 in B. **Refutation:** B still
+  draws 0.70024 — X4 does not take the effective field live (as it did not
+  take the base), and the live switch needs X4's own setter.
+* **P323.3** Patola: the cockpit shadows fade in A and hold in B — the knee,
+  inside one run. **Refutation** (fade in both, with P323.2 holding): the knee
+  is set at load, not by the live field.
+* **P323.4** the decisive reading, **no prediction of which**:
+  (a) in A the shadow lookup's inverse misses the drawn projection (sx_uj ≠ sx
+  or inv_uj·proj > 0.01) → a reconstruction error, fixable by giving the
+  global-light shader the drawn inverse; (b) consistent in both phases → the
+  reconstruction is sound and the cascades' fixed size (csm0 0.154, ~6.5 m) is
+  the next suspect.
+* **P323.5** no X4 core.

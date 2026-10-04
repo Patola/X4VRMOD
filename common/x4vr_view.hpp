@@ -268,6 +268,24 @@ struct ProjTerms {
     bool ok = false;
 };
 
+// **How far `inv` is from inverting `fwd`** -- max |inv * fwd - I| over the 16
+// entries, both read as row-major arrays. Storage order does not matter: two
+// column-major arrays multiply to the transpose of the same product, and the
+// identity is its own transpose. Take 323's question about X4's shadow
+// lookup: does M_invprojection_uj invert the projection the picture was drawn
+// with (M_projection), or a different field's? Jitter alone leaves ~1e-3.
+inline float inverse_error(const float *inv, const float *fwd) {
+    float worst = 0.0f;
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++) {
+            float c = 0.0f;
+            for (int k = 0; k < 4; k++)
+                c += inv[i * 4 + k] * fwd[k * 4 + j];
+            worst = std::fmax(worst, std::fabs(c - (i == j ? 1.0f : 0.0f)));
+        }
+    return worst;
+}
+
 inline ProjTerms read_proj_terms(const Mat4 &p, Major major) {
     ProjTerms t{};
     if (major == Major::Unknown)

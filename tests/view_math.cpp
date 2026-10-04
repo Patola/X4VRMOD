@@ -1409,6 +1409,46 @@ int main() {
               "which is why neither arm had a null and they felt different");
     }
 
+    // ---- inverse_error: take 323's camuj check -----------------------------
+    {
+        // A square perspective at sx/sy, near 0.1, far 1000 -- row-major.
+        auto persp = [](float sx, float *m) {
+            const float n = 0.1f, f = 1000.0f;
+            const float a = f / (n - f), b = n * f / (n - f);
+            const float r[16] = {sx, 0, 0, 0, 0, sx, 0, 0, 0, 0, a, b, 0, 0, -1, 0};
+            memcpy(m, r, sizeof r);
+        };
+        float wide[16], narrow[16], iw[16], in[16];
+        persp(0.70024f, wide);
+        persp(1.33333f, narrow);
+        x4vr::Mat4 tmp;
+        x4vr::invert(x4vr::load(wide), tmp);
+        x4vr::store(iw, tmp);
+        x4vr::invert(x4vr::load(narrow), tmp);
+        x4vr::store(in, tmp);
+        check(x4vr::inverse_error(iw, wide) < 1e-4f,
+              "inverse_error: a projection's own inverse reads ~0");
+        const float e = x4vr::inverse_error(in, wide);
+        printf("      narrow inverse against the wide projection: %.3f\n", e);
+        check(e > 0.4f,
+              "inverse_error: the 73.74 deg inverse against the 110 deg picture "
+              "is a gross miss (what camuj flags)");
+        float jit[16];
+        memcpy(jit, wide, sizeof jit);
+        jit[2] += 0.0007f; // a TAA jitter in clip x
+        const float ej = x4vr::inverse_error(iw, jit);
+        check(ej > 1e-5f && ej < 0.01f,
+              "inverse_error: jitter alone stays under camuj's 0.01 threshold");
+        float tw[16], ti[16];
+        for (int i = 0; i < 4; i++)
+            for (int j = 0; j < 4; j++) {
+                tw[i * 4 + j] = wide[j * 4 + i];
+                ti[i * 4 + j] = in[j * 4 + i];
+            }
+        check(std::fabs(x4vr::inverse_error(ti, tw) - e) < 1e-4f,
+              "inverse_error: column-major storage gives the same answer");
+    }
+
     printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n", g_fail);
     return g_fail ? 1 : 0;
 }

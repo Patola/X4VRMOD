@@ -540,6 +540,34 @@ sfbad='[  999999.500] inject  shadowfov: phase 2 CONTROL | base 1.91982 effectiv
 want "shadowfov CONTROL reading the FIX value -> FAIL (take 322)" /tmp/census-sf-collapse.log FAIL "the arms collapsed"
 absent "shadowfov not asked -> silent" "$BASE" shadowfov
 
+# ------------------------------------------ #70: the rendered-field A/B
+sed 's/env: run = /env: run = X4VR_FIELD_AB=45 /' "$BASE" > /tmp/census-fa-base.log
+faarm='[  999980.000] inject  fieldab: ARMED on camera 0x7f0000007000 — A 1.4917 (1.91982 rad, 110.00 deg, sx 0.70024), B 1.2400 (1.59588 rad, 91.44 deg, sx 0.97522); phases of 45 s once game time runs'
+fast='[  999985.000] inject  fieldab: STARTED — game time 812.0 s running, cockpit camera up'
+fap() { printf '[  %s] inject  fieldab: phase %s %s — x' "$1" "$2" "$3"; }
+farep='[  999999.000] inject  fieldab: phase 1 B | effective 1.59588 | held A 500/500 B 500/500 tick(s) | 2 write(s), 0 reverted by X4, 0 failed'
+cuj() { printf '[  %s] layer   camuj: main cam@0 draws=110 proj sx %s sy %s | proj_uj sx %s sy %s | inv*proj 1.0e-06, inv_uj*proj_uj 1.0e-06, inv_uj*proj %s | 3 slot pair(s): %s/%s x3 (inv_uj miss 0, worst 1.0e-06)' "$1" "$2" "$2" "$3" "$3" "$4" "$2" "$3"; }
+{ cat /tmp/census-fa-base.log; printf '%s\n' "$faarm" "$fast" "$(fap 999985.000 0 A)" "$(cuj 999987.000 0.70024 0.70024 2.0e-04)" "$(fap 999990.000 1 B)" "$(cuj 999993.000 0.97522 0.97522 2.0e-04)" "$farep"; } > /tmp/census-fa-ok.log
+want "fieldab followed -> A drew 0.70024" /tmp/census-fa-ok.log "fieldab A:" "X4 DREW with sx 0.70024"
+want "fieldab followed -> B drew 0.97522" /tmp/census-fa-ok.log "fieldab B:" "X4 DREW with sx 0.97522"
+want "fieldab consistent inverse -> not a reconstruction error" /tmp/census-fa-ok.log "fieldab A:" "not a reconstruction error"
+if python3 tools/score_run.py /tmp/census-fa-ok.log 2>&1 | grep -q "^FAIL.*fieldab"; then
+    bad "fieldab healthy -> still FAILs"
+else
+    ok "fieldab healthy -> no FAIL"
+fi
+{ cat /tmp/census-fa-base.log; printf '%s\n' "$faarm" "$fast" "$(fap 999985.000 0 A)" "$(cuj 999987.000 0.70024 0.70024 2.0e-04)" "$(fap 999990.000 1 B)" "$(cuj 999993.000 0.70024 0.70024 2.0e-04)" "$farep"; } > /tmp/census-fa-stuck.log
+want "fieldab B drew the wide field -> FAIL (the arms did not differ)" /tmp/census-fa-stuck.log FAIL "did not follow the switch"
+{ cat /tmp/census-fa-base.log; printf '%s\n' "$faarm" "$fast" "$(fap 999985.000 0 A)" "$(cuj 999987.000 0.70024 1.33333 4.7e-01)" "$(fap 999990.000 1 B)" "$(cuj 999993.000 0.97522 1.33333 2.6e-01)" "$farep"; } > /tmp/census-fa-mis.log
+want "fieldab shadow inverse on another field -> MISMATCH named" /tmp/census-fa-mis.log "fieldab A:" "MISMATCH"
+want "camuj disagreeing slot pair -> listed" /tmp/census-fa-mis.log camuj "DISAGREE: 0.70024/1.33333"
+{ cat /tmp/census-fa-base.log; printf '%s\n' "$faarm" '[  999990.000] inject  gametime: 0.00 s (running 0)'; } > /tmp/census-fa-never.log
+want "fieldab never started (load screen only) -> FAIL" /tmp/census-fa-never.log FAIL "phases never started"
+farev='[  999999.000] inject  fieldab: phase 1 B | effective 1.91982 | held A 500/500 B 100/500 tick(s) | 400 write(s), 399 reverted by X4, 0 failed'
+{ cat /tmp/census-fa-base.log; printf '%s\n' "$faarm" "$fast" "$(fap 999985.000 0 A)" "$(fap 999990.000 1 B)" "$farev"; } > /tmp/census-fa-rev.log
+want "fieldab X4 reverting the write -> FAIL" /tmp/census-fa-rev.log FAIL "phase B held its field on only 20%"
+absent "fieldab not asked -> silent" "$BASE" fieldab
+
 # ------------------------------------------- the camera-state scan (camscan)
 csum() {  # csum <samples> <yawspan> <pitchspan> <survivors>
     printf '[  224100.000] inject  camscan: %s sample(s), camera yaw span %s deg, pitch span %s deg | 50 region(s) 110592 bytes readable | discoveries 2, alive %s, eliminated 900 | SURVIVORS %s' "$1" "$2" "$3" "$4" "$4"

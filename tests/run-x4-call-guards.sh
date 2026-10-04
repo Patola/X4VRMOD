@@ -39,12 +39,19 @@ ok()  { printf 'ok    %s\n' "$1"; }
 bad() { printf 'FAIL  %s\n' "$1"; fail=1; }
 
 # classify <name> -> prints GUARDED, UNGUARDED:<reg>, or NOLOAD
+#
+# Scanned over the function's OWN bytes, from its symbol size. A fixed 0x100
+# window (widened from 0x40 for GetCameraRotation's late test) ran past the end
+# of GetCurrentGameTime -- 0x33 bytes -- into the next function's
+# `mov 0x3db6948(%rip),%rdx` and called it UNGUARDED. A window is a guess
+# about where a function ends; the symbol table knows.
 classify() {
-    local name=$1 addr
-    addr=$(nm -D --defined-only "$X4" | awk -v n="$name" '$3==n{print $1}')
-    [ -n "$addr" ] || { echo "MISSING"; return; }
+    local name=$1 addr size
+    read -r addr size < <(nm -D -S --defined-only "$X4" |
+        awk -v n="$name" '$4==n{print $1, $2}')
+    [ -n "$addr" ] && [ -n "$size" ] || { echo "MISSING"; return; }
     objdump -d --no-show-raw-insn --start-address=0x"$addr" \
-        --stop-address=$(printf '0x%x' $((0x$addr + 0x100))) "$X4" |
+        --stop-address=$(printf '0x%x' $((0x$addr + 0x$size))) "$X4" |
     awk '
         /:\t[a-z]/ {
             ins = $0
@@ -83,6 +90,12 @@ c=$(classify IsExternalViewActive)
 c=$(classify GetCameraRotation)
 [ "$c" = "GUARDED" ] && ok "control: GetCameraRotation (late load) is guarded" \
     || bad "control: GetCameraRotation classified '$c', expected GUARDED"
+
+# 0x33 bytes, and its neighbour loads 0x3db6948 into %rdx 0x12 bytes past its
+# last `ret`: the function that exposed the fixed window.
+c=$(classify GetCurrentGameTime)
+[ "$c" = "NOLOAD" ] && ok "control: GetCurrentGameTime ends before its neighbour's load" \
+    || bad "control: GetCurrentGameTime classified '$c', expected NOLOAD"
 
 names=$(grep -o -E 'dlsym\(RTLD_DEFAULT, "[A-Za-z0-9_]+"\)' "$SRC" |
         sed -E 's/.*"([^"]+)".*/\1/' | sort -u)

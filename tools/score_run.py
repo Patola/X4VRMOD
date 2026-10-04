@@ -3988,6 +3988,121 @@ def main(path):
                     print(f"shadowfov perf {k:<7} median {v[len(v) // 2]:.2f} "
                           f"ms over {len(v)} window(s)")
 
+    # --- #70: the rendered field switched live (X4VR_FIELD_AB), and camuj ----
+    #
+    # Phase A renders at X4VR_FOV, phase B at X4VR_FIELD_B (flatscreen). Take
+    # 322's lesson: a phase is judged by what X4 DREW, not by what was written
+    # -- the layer's `camuj` lines carry the main view's projection sx, which
+    # must read the phase's own value, or the arms did not differ. Then the
+    # question the take exists for: does the shadow lookup's inverse
+    # (M_invprojection_uj) invert the projection drawn, in each phase?
+    fa_asked = bool(re.search(r"\bX4VR_FIELD_AB=\S+", run or ""))
+    fa_arm = re.search(r"fieldab: ARMED on camera \S+ — A (\S+) \(\S+ rad, "
+                       r"(\S+) deg, sx (\S+)\), B (\S+) \(\S+ rad, (\S+) deg, "
+                       r"sx (\S+)\)", text)
+    fa_sess = re.search(r"fieldab: REFUSED for the session — (.*)", text)
+    fa_ref = []
+    for m in re.finditer(r"fieldab: REFUSED — (.*)", text):
+        if m.group(1) not in fa_ref:
+            fa_ref.append(m.group(1))
+    fa_start = re.search(r"\[\s*([\d.]+)\]\s+inject\s+fieldab: STARTED — "
+                         r"game time ([\d.]+)", text)
+    fa_ph = [(float(t), int(n), k) for t, n, k in re.findall(
+        r"\[\s*([\d.]+)\]\s+inject\s+fieldab: phase (\d+) (A|B) —", text)]
+    fa_rep = re.findall(r"fieldab: phase \d+ [AB] \| effective \S+ \| held A "
+                        r"(\d+)/(\d+) B (\d+)/(\d+) tick\(s\) \| (\d+) write\(s\), "
+                        r"(\d+) reverted by X4, (\d+) failed", text)
+    uj = [(float(t), int(dr), float(sx), float(ux), float(e1), float(e2),
+           float(e3), rest) for t, dr, sx, ux, e1, e2, e3, rest in re.findall(
+        r"\[\s*([\d.]+)\]\s+layer\s+camuj: main cam@\d+ draws=(\d+) proj sx "
+        r"(-?[\d.]+) sy \S+ \| proj_uj sx (-?[\d.]+) sy \S+ \| inv\*proj (\S+), "
+        r"inv_uj\*proj_uj (\S+), inv_uj\*proj (\S+) \| (.*)", text)]
+    if fa_asked or fa_arm or fa_sess:
+        if fa_sess:
+            fails.append("X4VR_FIELD_AB refused for the session: " + fa_sess.group(1))
+        if fa_arm:
+            print(f"fieldab ARMED — A {fa_arm.group(1)} ({fa_arm.group(2)} deg, "
+                  f"sx {fa_arm.group(3)}), B {fa_arm.group(4)} "
+                  f"({fa_arm.group(5)} deg, sx {fa_arm.group(6)})")
+        for r_ in fa_ref[:4]:
+            print(f"fieldab refused (said once): {r_[:220]}")
+        gtr = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+gametime: (RUNNING|stopped)",
+                         text)
+        print(f"fieldab game clock: {sum(1 for _t, k in gtr if k == 'RUNNING')} "
+              f"start(s), {sum(1 for _t, k in gtr if k == 'stopped')} stop(s)"
+              + (f"; phases STARTED at game time {fa_start.group(2)} s"
+                 if fa_start else "; phases NEVER started"))
+        if fa_asked and not fa_start:
+            fails.append("X4VR_FIELD_AB asked, but the phases never started — "
+                         "game time never ran with the cockpit camera up (see "
+                         "the gametime lines)")
+        nb = sum(1 for _t, _n, k in fa_ph if k == "B")
+        print(f"fieldab {len(fa_ph)} phase(s), {len(fa_ph) - nb} A / {nb} B")
+        if fa_rep:
+            ha, ta, hb, tb, wr, rv, fl = (int(x) for x in fa_rep[-1])
+            print(f"fieldab held A {ha}/{ta}, B {hb}/{tb} tick(s) | {wr} "
+                  f"write(s), {rv} reverted by X4, {fl} failed")
+            for nm, h, t in (("A", ha, ta), ("B", hb, tb)):
+                if t >= 50 and h < 0.9 * t:
+                    fails.append(f"fieldab: phase {nm} held its field on only "
+                                 f"{100 * h / t:.0f}% of ticks — X4 kept "
+                                 f"putting its own back")
+            if fl:
+                fails.append(f"fieldab: {fl} write(s) into the camera failed")
+        # Per phase, from the layer: what X4 drew, and whether the shadows'
+        # inverse inverts it.
+        if fa_arm and fa_ph and uj:
+            want = {"A": float(fa_arm.group(3)), "B": float(fa_arm.group(6))}
+            by = {"A": [], "B": []}
+            for row in uj:
+                cur = [k for t0, _n, k in fa_ph if t0 <= row[0] - 1.0]
+                if cur:
+                    by[cur[-1]].append(row)
+            for k in ("A", "B"):
+                rows = by[k]
+                if not rows:
+                    print(f"fieldab {k}: no camuj line inside a {k} phase")
+                    if fa_asked:
+                        fails.append(f"fieldab: no camuj reading inside any "
+                                     f"{k} phase — X4VR_CAMDIFF=1 missing?")
+                    continue
+                sxs = sorted(r_[2] for r_ in rows)
+                uxs = sorted(r_[3] for r_ in rows)
+                e3 = sorted(r_[6] for r_ in rows)
+                msx, mux, me3 = sxs[len(sxs) // 2], uxs[len(uxs) // 2], e3[len(e3) // 2]
+                print(f"fieldab {k}: X4 DREW with sx {msx:.5f} (phase wants "
+                      f"{want[k]:.5f}), the shadow lookup's projection sx "
+                      f"{mux:.5f}, inv_uj*proj miss {me3:.1e} over "
+                      f"{len(rows)} camuj line(s)")
+                if abs(msx - want[k]) > 0.01:
+                    fails.append(f"fieldab: in phase {k} X4 drew with sx "
+                                 f"{msx:.5f}, not the phase's {want[k]:.5f} — "
+                                 f"the rendered field did not follow the "
+                                 f"switch, so the phases did not differ")
+                if abs(mux - msx) > 0.01 * abs(msx) or me3 > 0.01:
+                    print(f"fieldab {k}: => MISMATCH — the shadow lookup "
+                          f"inverts a different projection than the one drawn "
+                          f"(sx {mux:.5f} against {msx:.5f}, miss {me3:.1e}): "
+                          f"#70's matrix, fixable by giving the shader the "
+                          f"drawn one")
+                else:
+                    print(f"fieldab {k}: => the shadow lookup inverts the "
+                          f"drawn projection (miss {me3:.1e}) — not a "
+                          f"reconstruction error in this phase")
+    if uj:
+        # Every run with camuj (X4VR_CAMDIFF=1): the slot pairs that disagree.
+        bad_pairs = set()
+        for row in uj:
+            for a_, b_ in re.findall(r"(-?[\d.]+)/(-?[\d.]+) x\d+", row[7]):
+                if abs(float(a_) - float(b_)) > 0.01 * max(abs(float(a_)), 1e-6):
+                    bad_pairs.add((a_, b_))
+        print(f"camuj   {len(uj)} reading(s); main view proj sx "
+              f"{sorted(r_[2] for r_ in uj)[len(uj) // 2]:.5f}, proj_uj sx "
+              f"{sorted(r_[3] for r_ in uj)[len(uj) // 2]:.5f}"
+              + (f"; slot pair(s) whose projection and unjittered projection "
+                 f"DISAGREE: {', '.join(f'{a_}/{b_}' for a_, b_ in sorted(bad_pairs))}"
+                 if bad_pairs else "; every slot's two projections agree"))
+
     # --- who WRITES the camera orientation? (X4VR_CAMWATCH) --------------
     #
     # Read-only hardware write-watchpoints on the matrix GetCameraRotation
