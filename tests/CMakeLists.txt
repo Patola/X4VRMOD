@@ -190,6 +190,9 @@ add_executable(x4vr_test_shadowfov shadowfov.cpp)
 # X4VR_FIELD_AB: the effective-field sites, phase targets and sx, and the game
 # clock that keeps phases off the load screen. Self-checking.
 add_executable(x4vr_test_fieldab fieldab.cpp)
+# X4VR_CSM_COVER: X4's cascade-fit formula against take 323, the divisors, the
+# four sites against the real binary, and the patch executed. Self-checking.
+add_executable(x4vr_test_csmfit csmfit.cpp)
 # The content.xml fork that enables our extensions for the modded session.
 add_executable(x4vr_test_content_fork content_fork.cpp)
 target_link_libraries(x4vr_test_camwatch PRIVATE Threads::Threads)

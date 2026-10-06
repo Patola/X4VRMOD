@@ -60,6 +60,7 @@ extern char **environ;
 #include "x4vr_camwrite.hpp"
 #include "x4vr_shadowfov.hpp"
 #include "x4vr_fieldab.hpp"
+#include "x4vr_csmfit.hpp"
 #include "x4vr_content.hpp"
 #include "x4vr_lua.hpp"
 #include "../common/x4vr_shquote.hpp"
@@ -1040,14 +1041,20 @@ T real(const char *name) {
 
 extern "C" {
 
+static void csmfit_patch_at_start(); // defined with csmfit_tick, below
+
 __attribute__((constructor)) static void x4vr_inject_init() {
     char exe[256] = "?";
     ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
     if (n > 0)
         exe[n] = 0;
     X4VR_LOG("injector loaded into pid %d (%s)", getpid(), exe);
-    if (exe_is_game(exe))
+    if (exe_is_game(exe)) {
         log_startup_env();
+        // #70's fix, X4VR_CSM_COVER: X4's code is patched here, before any of
+        // it has run, so no thread can be inside the four instructions.
+        csmfit_patch_at_start();
+    }
     // Task #68: the parsed clamp, once X4 has had time to parse it. A delay
     // rather than a hook, because the parse has no seam we can name -- and if
     // it turns out to have run too early, the log says "NOTHING found" and
@@ -4164,6 +4171,187 @@ static void fieldab_tick() {
     }
 }
 
+// ------------------------------------------------ X4VR_CSM_COVER=<rho>
+//
+// #70's fix. X4's cascade fit sizes each cascade by 1/tan of the half-field
+// where the frustum needs tan, so at 110 deg the cockpit's corners fall out of
+// cascade 0 and fade. The four instructions through which the fit reads X4's
+// aspect globals are pointed at a private pair (x4vr_csmfit.hpp); this tick
+// keeps that pair at X4's own values (CONTROL) or at the divisors that make
+// the fit reach `rho` of the slice (FIX). X4VR_CSM_AB=<s> alternates them,
+// CONTROL first, once game time runs in the cockpit; unset, it is FIX always.
+static double csmfit_cover() {
+    static const double r = [] {
+        const char *e = getenv("X4VR_CSM_COVER");
+        return e && *e ? atof(e) : 0.0;
+    }();
+    return r;
+}
+
+static double csmfit_period() {
+    static const double p = [] {
+        const char *e = getenv("X4VR_CSM_AB");
+        return e && *e ? atof(e) : 0.0;
+    }();
+    return p;
+}
+
+namespace {
+struct CsmFit {
+    volatile float *slots = nullptr; // [0] x, [1] y: what the fit reads now
+    bool patched = false, started = false;
+    double t0 = 0.0;
+    long phase = -1;
+    uint64_t ticks_fix = 0, ticks_ctl = 0;
+    x4vr::fieldab::GameClock clock;
+};
+CsmFit g_csm;
+} // namespace
+
+static void csmfit_patch_at_start() {
+    using namespace x4vr::csmfit;
+    const double rho = csmfit_cover();
+    if (rho <= 0.0)
+        return;
+    auto refuse = [](const char *why) {
+        X4VR_LOG("csmfit: REFUSED — %s. X4's cascade fit is untouched.", why);
+        X4VR_LOG("milestone: shadow fix REFUSED — %s. Quit and tell me.", why);
+    };
+    if (!(rho <= 2.0)) {
+        refuse("X4VR_CSM_COVER must be in (0, 2]");
+        return;
+    }
+    uintptr_t va[kNumSites];
+    for (size_t i = 0; i < kNumSites; i++) {
+        const Site &st = kSites[i].site;
+        uint8_t b[sizeof st.bytes];
+        if (!self_read(st.va, b, st.n) || memcmp(b, st.bytes, st.n) != 0 ||
+            rip_target(st.va, st.n, b) !=
+                (kSites[i].slot ? kAspectY : kAspectX)) {
+            char why[160];
+            snprintf(why, sizeof why,
+                     "the fit's read at %#lx differs from X4 9.00",
+                     (unsigned long)st.va);
+            refuse(why);
+            return;
+        }
+        va[i] = st.va;
+    }
+    float def[2] = {0.f, 0.f};
+    if (!self_read(kAspectDefaultAddr, def, sizeof def) || def[0] != 1.0f ||
+        def[1] != 1.0f) {
+        refuse("X4's default aspect constant is not (1, 1)");
+        return;
+    }
+    void *page = alloc_near(0x3f0000, 0x7c00000, va, kNumSites, 8);
+    if (!page) {
+        refuse("no free page within rel32 reach of the fit");
+        return;
+    }
+    volatile float *slots = (volatile float *)page;
+    slots[0] = def[0]; // X4's own values until the first tick
+    slots[1] = def[1];
+    Retarget r[kNumSites];
+    for (size_t i = 0; i < kNumSites; i++)
+        r[i] = {va[i], 8, (uintptr_t)&slots[kSites[i].slot]};
+    char err[200] = "";
+    if (!retarget(r, kNumSites, err, sizeof err)) {
+        refuse(err);
+        return;
+    }
+    g_csm.slots = slots;
+    g_csm.patched = true;
+    X4VR_LOG("csmfit: PATCHED — the cascade fit's %zu reads of X4's aspect "
+             "(0x4533b00/04) now read %p/%p; coverage %.3f%s",
+             kNumSites, (void *)&slots[0], (void *)&slots[1], rho,
+             csmfit_period() > 0.0 ? ", CONTROL/FIX phases once game time runs"
+                                   : ", FIX always");
+}
+
+static void csmfit_tick() {
+    using namespace x4vr::csmfit;
+    if (!g_csm.patched)
+        return;
+    const double rho = csmfit_cover(), period = csmfit_period();
+    float ax = 1.f, ay = 1.f;
+    if (!self_read(kAspectX, &ax, sizeof ax) || !(ax > 0.f) || !std::isfinite(ax))
+        ax = 1.f;
+    if (!self_read(kAspectY, &ay, sizeof ay) || !(ay > 0.f) || !std::isfinite(ay))
+        ay = 1.f;
+    const uintptr_t cam = x4_player_camera();
+    float field = 0.f;
+    int32_t mode = -1;
+    if (cam) {
+        self_read(cam + x4vr::shadowfov::kEffective, &field, sizeof field);
+        self_read(cam + x4vr::camwatch::kCamMode, &mode, sizeof mode);
+    }
+    if (!(field > 0.1f && field < 3.1f))
+        field = 0.f;
+    const double wall = mono_seconds();
+    bool fix = true;
+    long phase = 0;
+    if (period > 0.0) {
+        double gt = 0.0;
+        const bool running = x4_game_time(&gt) &&
+                             game_clock_step(g_csm.clock, gt, wall, 5.0, 1.0);
+        if (!g_csm.started && running && mode == 0 && field > 0.f) {
+            g_csm.started = true;
+            g_csm.t0 = wall;
+            X4VR_LOG("csmfit: STARTED — game time %.1f s running, cockpit "
+                     "camera up", gt);
+        }
+        if (!g_csm.started) {
+            fix = false; // X4's own sizing until the phases start
+            phase = -1;
+        } else {
+            const double el = wall - g_csm.t0;
+            fix = x4vr::fieldab::phase_b(el, period); // phase 0 = CONTROL
+            phase = (long)(el / period);
+        }
+    }
+    float dx = ax, dy = ay;
+    if (fix && field > 0.f) {
+        dx = (float)divisor(rho, field, ax);
+        dy = (float)divisor(rho, field, ay);
+    } else {
+        fix = false;
+    }
+    g_csm.slots[0] = dx;
+    g_csm.slots[1] = dy;
+    (fix ? g_csm.ticks_fix : g_csm.ticks_ctl)++;
+
+    float c0far = 0.f;
+    self_read(kCascade0Far, &c0far, sizeof c0far);
+    const double f = c0far * kFarScale;
+    const double r = field > 0.f && f > kNear
+                         ? radius(kNear, f, field, dx, dy) : 0.0;
+    if (period > 0.0 && phase != g_csm.phase && phase >= 0) {
+        g_csm.phase = phase;
+        X4VR_LOG("csmfit: phase %ld %s", phase,
+                 fix ? "FIX — cascades sized for the field"
+                     : "CONTROL — X4's own cascade sizing");
+        X4VR_LOG("milestone: shadows %s (phase %ld) — %s. Look around, "
+                 "especially the corners and up/down.",
+                 fix ? "FIX" : "CONTROL", phase,
+                 fix ? "expected steady" : "X4's own, expected to fade");
+        if (phase == 8)
+            X4VR_LOG("milestone: the shadow A/B has 4 of each phase — quit "
+                     "through the menu whenever you like.");
+    }
+    static double last = 0.0;
+    if (wall - last >= 5.0) {
+        last = wall;
+        X4VR_LOG("csmfit: phase %ld %s | field %.5f aspect %.4f/%.4f | "
+                 "divisors %.5f/%.5f | coverage %.3f | predicted cascade-0 sx "
+                 "%.5f (r %.3f m, far %.3f) | ticks FIX %llu CONTROL %llu",
+                 phase, fix ? "FIX" : "CONTROL", field, ax, ay, dx, dy,
+                 field > 0.f ? coverage(dx, field, ax) : 0.0,
+                 r > 0.0 ? 1.0 / r : 0.0, r, f,
+                 (unsigned long long)g_csm.ticks_fix,
+                 (unsigned long long)g_csm.ticks_ctl);
+    }
+}
+
 // **Task #75's fix: where the tick's cadence comes from.**
 //
 // 0 = X4's event drain, exactly as every take so far. Anything else is a rate in
@@ -5980,6 +6168,7 @@ void SDL_PumpEvents(void) {
         hoverview_tick();
         shadowfov_tick();
         fieldab_tick();
+        csmfit_tick();
         pumprate_report();
     }
     real_fn();

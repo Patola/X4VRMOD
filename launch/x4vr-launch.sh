@@ -512,6 +512,22 @@ if [[ "${X4VR_HEADLOOK_WRITE:-0}" == 1 ]]; then
         "X4VR_HEADLOOK_WRITE=1 without X4VR_HEADLOOK=1 — nothing will run" >&2
 fi
 
+# X4VR_CSM_COVER=<rho> (#70's fix): the injector retargets the four reads of
+# X4's aspect globals inside X4's cascade fit at a private pair and sizes the
+# shadow cascades to reach rho of each slice (vanilla's 81.9 deg gives 0.663;
+# 110 deg, unpatched, 0.245). The first write to X4's CODE, in memory, before
+# X4 runs; Patola's decision of 2026-10-06. X4VR_CSM_AB=<s> alternates
+# CONTROL (X4's own) and FIX phases; the scorer judges each arm by the cascade
+# X4 drew, which needs X4VR_CAMDIFF=1.
+if [[ -n "${X4VR_CSM_AB:-}" && -z "${X4VR_CSM_COVER:-}" ]]; then
+    echo "x4vr-launch: WARNING X4VR_CSM_AB without X4VR_CSM_COVER — nothing" \
+         "is patched and no phase will run" >&2
+fi
+if [[ -n "${X4VR_CSM_COVER:-}" && "${X4VR_CAMDIFF:-0}" != 1 ]]; then
+    echo "x4vr-launch: NOTE X4VR_CSM_COVER without X4VR_CAMDIFF=1 — the" \
+         "scorer cannot see the cascades X4 drew" >&2
+fi
+
 # X4 reads colour targets whose DCC (Delta Color Compression) metadata is
 # stale, which paints the frame with a grid of saturated RGB blocks. It only
 # bites when antialiasing is off -- which the mod forces -- so this is on by

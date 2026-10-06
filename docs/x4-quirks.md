@@ -23830,3 +23830,79 @@ ships with.
 
 The wider field costs sharpness, and that cost belongs to 110° itself. Vanilla
 pays 5.80 m for its 81.9°.
+
+## X4VR_CSM_COVER — #70's fix, built (Patola: "Patch the 4 reads", coverage "Vanilla's, 0.663")
+
+Patola chose lever (B) on 2026-10-06. This is the project's first write to
+X4's code.
+
+* **The patch.** `injector/x4vr_csmfit.hpp` holds the four sites
+  (0x209539f, 0x20953c8, 0x2095554, 0x2095577: `cvtss2sd xmmN,
+  [rip+disp32]`), each byte-verified and each required to point at its aspect
+  global. X4's default aspect constant (1, 1) at 0x2e24680 is checked too. A
+  private page is mapped below X4's image base (0x3f0000 by
+  `MAP_FIXED_NOREPLACE`) and the four displacements are rewritten to point at
+  it. The page is made writable for the copy, returned to r-x, and read back.
+* **When.** In the injector's constructor in X4's process, before any X4 code
+  has run, so no thread can be inside those instructions. Anything that does
+  not match refuses with a milestone, and X4's fit is left untouched.
+* **The tick.** Each tick (X4's event drain) sets the private pair to X4's own
+  aspect values (CONTROL) or to d = cot²/(2ρ·a) (FIX), with the field read
+  from camera+0x874. The tick logs the coverage and the cascade-0 sx X4's
+  formula predicts for the arm in force. `X4VR_CSM_AB=<s>` alternates the
+  arms, CONTROL first, gated on game time in the cockpit as in take 323.
+  Without it the arm is FIX always: that is the shipping form.
+* **Scorer `csmfit`.**
+  * PATCHED or REFUSED, and the phases.
+  * Per arm: the cascade 0 X4 **drew**, taken from camuj as the largest sx
+    among the orthographic blocks (the ones whose shadow inverse is never
+    maintained), against the arm's prediction.
+  * FAIL if fewer than half the readings sit within 1% (the arms did not
+    differ), if it was asked and not patched, or if the phases never started.
+* **Census:** 9 new cases (healthy, collapsed, refused, never patched, never
+  started, not asked).
+* **`tests/csmfit.cpp`, 27 checks.**
+  * X4's formula against take 323's three boxes and the logged thresholds.
+  * Divisors and coverage, including a non-square aspect.
+  * The sites against the real binary.
+  * The address the injector picks, which all four sites can reach.
+  * The patch run for real: X4's own instruction bytes, placed on an
+    executable page, return X4's values before the retarget and the private
+    pair after it. The private pair changes live, and only the displacement
+    changes. Refusals cover a target out of reach and sites on two pages.
+
+**Dry run in X4's own process.** gdb started X4 with the injector preloaded
+and `X4VR_CSM_COVER=0.663` and stopped at X4's entry point (0x9accb0), where
+our constructor has run and X4's code has not. Results:
+
+* The log said PATCHED.
+* gdb decodes the four instructions as `cvtss2sd ...(%rip) # 0x3f0004 /
+  0x3f0000 / 0x3f0000 / 0x3f0004`.
+* The page 0x2095000 is mapped r-x again.
+* The private page sits at 0x3f0000, rw, holding (1.0, 1.0).
+
+The process was killed there: no window, no file opened.
+
+### P324
+
+Take 323's flatscreen line with the field fixed at 110°, plus
+`X4VR_CSM_COVER=0.663 X4VR_CSM_AB=45`. Configuration 1, gamescope 1408×1408.
+
+* **P324.1** PATCHED at start, never REFUSED.
+* **P324.2** The phases start only once game time runs in the cockpit,
+  alternating CONTROL/FIX every 45 s.
+* **P324.3** X4 draws cascade 0 at **sx 0.47213 in CONTROL and 0.22954 in
+  FIX** (within 1%). The fit follows the private pair live, and cascades 1–4
+  grow by the same factor. **Refutation:** FIX reads 0.47213. Then the fit
+  does not use the instructions we retargeted (a second copy, or an inlined
+  twin), and the docs' reading is wrong somewhere.
+* **P324.4 (Patola)** CONTROL: the corners fade on yaw **and** pitch. FIX: the
+  shadows hold. FIX's shadows are also expected **softer**: cascade 0 is
+  8.71 m across against 4.24 m, about 1.5× softer than vanilla at 81.9°. Say
+  whether that softness is acceptable. **Refutation** (fade in both, with
+  P324.3 holding): coverage is not the whole mechanism. The next suspects are
+  cascade 0's depth (3.06 m) and caster culling.
+* **P324.5** No X4 core **and no gamescope core**: the exit fix's first real
+  gamescope session.
+* **P324.6** GAMEPLAY frame time in the range of take 323's 4.76 ms. Bigger
+  boxes take in more casters; any cost will be read per arm before VR.

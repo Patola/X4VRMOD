@@ -584,6 +584,32 @@ want "fieldab a block that moved with the field -> listed" /tmp/census-fa-323.lo
 want "fieldab the block that did not move -> not listed" /tmp/census-fa-323.log "fieldab   as 2/sx" "A 4.236 / B 5.155"
 want "fieldab consistent blocks -> the instrument's range stated" /tmp/census-fa-323.log "fieldab A:" "checked against ITSELF"
 
+# ------------------------------------------ #70's fix: the cascade fit's divisors
+sed 's/env: run = /env: run = X4VR_CSM_COVER=0.663 X4VR_CSM_AB=45 X4VR_CAMDIFF=1 /' "$BASE" > /tmp/census-cf-base.log
+cfpatch='[  999980.000] inject  csmfit: PATCHED — the cascade fit'"'"'s 4 reads of X4'"'"'s aspect (0x4533b00/04) now read 0x3f0000/0x3f0004; coverage 0.663, CONTROL/FIX phases once game time runs'
+cfstart='[  999985.000] inject  csmfit: STARTED — game time 812.0 s running, cockpit camera up'
+cfph() { printf '[  %s] inject  csmfit: phase %s %s — x' "$1" "$2" "$3"; }
+cfrep() {  # cfrep <t> <phase> <arm> <coverage> <predicted sx>
+    printf '[  %s] inject  csmfit: phase %s %s | field 1.91982 aspect 1.0000/1.0000 | divisors 1.00000/1.00000 | coverage %s | predicted cascade-0 sx %s (r 2.118 m, far 3.060) | ticks FIX 1 CONTROL 1' "$1" "$2" "$3" "$4" "$5"; }
+{ cat /tmp/census-cf-base.log; printf '%s\n' "$cfpatch" "$cfstart" "$(cfph 999985.000 0 CONTROL)" "$(cfrep 999986.500 0 CONTROL 0.245 0.47215)" "$(cuj323 999987.000 0.70024 0.47213)" "$(cfph 999990.000 1 FIX)" "$(cfrep 999991.500 1 FIX 0.663 0.22954)" "$(cuj323 999993.000 0.70024 0.22954)"; } > /tmp/census-cf-ok.log
+want "csmfit patched -> said" /tmp/census-cf-ok.log csmfit "PATCHED — the fit's 4 reads retargeted, coverage 0.663"
+want "csmfit FIX followed -> X4 drew 0.22954" /tmp/census-cf-ok.log "csmfit FIX" "X4 drew cascade 0 at sx 0.22954"
+want "csmfit CONTROL -> X4's own 0.47213" /tmp/census-cf-ok.log "csmfit CONTROL" "X4 drew cascade 0 at sx 0.47213"
+if python3 tools/score_run.py /tmp/census-cf-ok.log 2>&1 | grep -q "^FAIL.*csmfit"; then
+    bad "csmfit healthy -> still FAILs"
+else
+    ok "csmfit healthy -> no FAIL"
+fi
+{ cat /tmp/census-cf-base.log; printf '%s\n' "$cfpatch" "$cfstart" "$(cfph 999985.000 0 CONTROL)" "$(cfrep 999986.500 0 CONTROL 0.245 0.47215)" "$(cuj323 999987.000 0.70024 0.47213)" "$(cfph 999990.000 1 FIX)" "$(cfrep 999991.500 1 FIX 0.663 0.22954)" "$(cuj323 999993.000 0.70024 0.47213)"; } > /tmp/census-cf-collapse.log
+want "csmfit FIX drawing X4's own box -> FAIL (arms did not differ)" /tmp/census-cf-collapse.log FAIL "did not follow the divisors"
+{ cat /tmp/census-cf-base.log; printf '%s\n' '[  999980.000] inject  csmfit: REFUSED — the fit'"'"'s read at 0x209539f differs from X4 9.00. X4'"'"'s cascade fit is untouched.'; } > /tmp/census-cf-refused.log
+want "csmfit refused -> FAIL" /tmp/census-cf-refused.log FAIL "X4VR_CSM_COVER refused: the fit's read at 0x209539f"
+cp /tmp/census-cf-base.log /tmp/census-cf-nopatch.log
+want "csmfit asked, never patched -> FAIL" /tmp/census-cf-nopatch.log FAIL "no PATCHED line"
+{ cat /tmp/census-cf-base.log; printf '%s\n' "$cfpatch"; } > /tmp/census-cf-never.log
+want "csmfit phases never started -> FAIL" /tmp/census-cf-never.log FAIL "X4VR_CSM_AB asked, but the phases never started"
+absent "csmfit not asked -> silent" "$BASE" csmfit
+
 # ------------------------------------------ the session gate without X4VR_MV
 # The render-pass inventory is printed only under X4VR_MV, so a flatscreen run
 # (take 323) was refused as "stopped early" with its measurement in the file.

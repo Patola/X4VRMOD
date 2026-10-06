@@ -4176,6 +4176,102 @@ def main(path):
                  f"DISAGREE: {', '.join(f'{a_}/{b_}' for a_, b_ in sorted(bad_pairs))}"
                  if bad_pairs else "; every slot's two projections agree"))
 
+    # --- #70's fix: X4's cascade fit given its own divisors (X4VR_CSM_COVER) --
+    #
+    # The injector retargets the fit's four reads of X4's aspect globals at a
+    # private pair and logs, every 5 s, the cascade-0 sx X4's formula predicts
+    # for the arm in force. The layer's camuj lines carry what X4 DREW: cascade
+    # 0 is the largest sx among the orthographic blocks, which are the ones
+    # whose shadow inverse is never maintained (inv_uj miss > 0; the picture's
+    # blocks read miss 0). An arm is judged by that, not by what was written.
+    cf_asked = bool(re.search(r"\bX4VR_CSM_COVER=\S+", run or ""))
+    cf_patched = re.search(r"csmfit: PATCHED — .*?coverage ([\d.]+)", text)
+    cf_refused = re.search(r"csmfit: REFUSED — (.*?)\. X4's", text)
+    cf_ab = bool(re.search(r"\bX4VR_CSM_AB=[1-9]", run or ""))
+    if cf_asked or cf_patched or cf_refused:
+        if cf_refused:
+            fails.append("X4VR_CSM_COVER refused: " + cf_refused.group(1))
+            print(f"csmfit REFUSED — {cf_refused.group(1)}")
+        elif not cf_patched:
+            fails.append("X4VR_CSM_COVER asked, but no PATCHED line — the "
+                         "injector never touched the fit")
+            print("csmfit NOT PATCHED")
+        else:
+            print(f"csmfit PATCHED — the fit's 4 reads retargeted, coverage "
+                  f"{cf_patched.group(1)}"
+                  + (", CONTROL/FIX phases" if cf_ab else ", FIX always"))
+        cf_start = re.search(r"\[\s*([\d.]+)\]\s+inject\s+csmfit: STARTED", text)
+        cf_ph = [(float(t), int(n), k) for t, n, k in re.findall(
+            r"\[\s*([\d.]+)\]\s+inject\s+csmfit: phase (\d+) (FIX|CONTROL) —",
+            text)]
+        cf_rep = [(float(t), k, float(cov), float(psx)) for t, k, cov, psx in
+                  re.findall(r"\[\s*([\d.]+)\]\s+inject\s+csmfit: phase -?\d+ "
+                             r"(FIX|CONTROL) \| .*?\| coverage ([\d.]+) \| "
+                             r"predicted cascade-0 sx ([\d.]+)", text)]
+        if cf_ab:
+            nf = sum(1 for _t, _n, k in cf_ph if k == "FIX")
+            print(f"csmfit {len(cf_ph)} phase(s), {len(cf_ph) - nf} CONTROL / "
+                  f"{nf} FIX" + ("" if cf_start else "; phases NEVER started"))
+            if cf_patched and not cf_start:
+                fails.append("X4VR_CSM_AB asked, but the phases never started "
+                             "— game time never ran with the cockpit camera up")
+
+        def arm_at(t):
+            if not cf_ab:
+                return "FIX" if cf_patched else None
+            cur = [k for t0, _n, k in cf_ph if t0 <= t - 1.0]
+            return cur[-1] if cur else None
+
+        def cascade0(rest):
+            c = [float(a_) for a_, _b, _n, miss in re.findall(
+                r"(-?[\d.]+)/(-?[\d.]+) x(\d+) \(inv_uj miss (\d+)", rest)
+                 if int(miss) > 0 and 0.0 < float(a_) < 0.6]
+            return max(c) if c else None
+
+        for arm in ("CONTROL", "FIX"):
+            preds = sorted(p_ for t, k, _c, p_ in cf_rep
+                           if k == arm and arm_at(t) == arm and p_ > 0)
+            covs = sorted(c_ for t, k, c_, _p in cf_rep
+                          if k == arm and arm_at(t) == arm and c_ > 0)
+            meas = sorted(v for v in (cascade0(row[7]) for row in uj
+                                      if arm_at(row[0]) == arm) if v)
+            if not preds and not meas:
+                continue
+            pmed = preds[len(preds) // 2] if preds else None
+            mmed = meas[len(meas) // 2] if meas else None
+            hit = (sum(1 for v in meas if pmed and abs(v - pmed) <= 0.01 * pmed)
+                   if meas else 0)
+            print(f"csmfit {arm}: X4 drew cascade 0 at sx "
+                  + (f"{mmed:.5f}" if mmed else "?")
+                  + f" (median of {len(meas)} camuj reading(s)), its arm "
+                  + (f"predicts {pmed:.5f} at coverage {covs[len(covs) // 2]:.3f}"
+                     if pmed else "logged no prediction")
+                  + (f"; {hit}/{len(meas)} within 1%" if meas and pmed else ""))
+            if not meas:
+                fails.append(f"csmfit: no camuj reading inside a {arm} arm — "
+                             f"X4VR_CAMDIFF=1 missing?")
+            elif pmed and hit < 0.5 * len(meas):
+                fails.append(f"csmfit: in {arm} X4 drew cascade 0 at sx "
+                             f"{mmed:.5f}, not the arm's {pmed:.5f} — the fit "
+                             f"did not follow the divisors, so the arms did "
+                             f"not differ")
+        # What each arm costs: bigger boxes take in more shadow casters.
+        cf_pf = [(float(t), float(ms)) for t, ms in re.findall(
+            r"\[\s*([\d.]+)\]\s+layer\s+perf frame \d+: median ([\d.]+) ms",
+            text)]
+        if cf_ab and cf_pf:
+            by = {"CONTROL": [], "FIX": []}
+            for t, ms in cf_pf:
+                a_ = arm_at(t)
+                if a_ in by:
+                    by[a_].append(ms)
+            if by["CONTROL"] and by["FIX"]:
+                mc = sorted(by["CONTROL"])[len(by["CONTROL"]) // 2]
+                mf = sorted(by["FIX"])[len(by["FIX"]) // 2]
+                print(f"csmfit frame time: CONTROL {mc:.2f} ms "
+                      f"({len(by['CONTROL'])} window(s)), FIX {mf:.2f} ms "
+                      f"({len(by['FIX'])}) — FIX {100 * (mf - mc) / mc:+.1f}%")
+
     # --- who WRITES the camera orientation? (X4VR_CAMWATCH) --------------
     #
     # Read-only hardware write-watchpoints on the matrix GetCameraRotation
