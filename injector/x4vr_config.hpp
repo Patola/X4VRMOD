@@ -34,6 +34,7 @@
 #include <string>
 #include <vector>
 
+#include "../common/x4vr_immortal.hpp"
 #include "../common/x4vr_sbs.hpp"
 
 namespace x4vr {
@@ -65,7 +66,8 @@ inline bool sbs_split_render() {
 // no-trickery path: if the window and the render are the same size there is
 // no faked surface extent and nothing for Wayland's resize feedback to undo.
 inline bool res_override(std::string &w, std::string &h) {
-    static std::string ww, hh;
+    static std::string &ww = x4vr::immortal<std::string>(),
+                        &hh = x4vr::immortal<std::string>();
     static const bool ok = [] {
         const char *e = getenv("X4VR_RES");
         if (!e || !*e)
@@ -107,7 +109,7 @@ inline bool res_override(std::string &w, std::string &h) {
 // fall back to its defaults silently, which is the failure that looks like a
 // measurement.
 inline bool fov_override(std::string &v) {
-    static std::string vv;
+    static std::string &vv = x4vr::immortal<std::string>();
     static const bool ok = [] {
         const char *e = getenv("X4VR_FOV");
         if (!e || !*e)
@@ -158,7 +160,7 @@ inline bool fov_override(std::string &v) {
 // a malformed value would make X4 fall back silently, which is the trap
 // recorded above and reads exactly like a measurement.
 inline bool separate_radar_override(std::string &v) {
-    static std::string vv;
+    static std::string &vv = x4vr::immortal<std::string>();
     static const bool ok = [] {
         const char *e = getenv("X4VR_SEPARATE_RADAR");
         if (!e || !*e)
@@ -191,7 +193,7 @@ inline bool separate_radar_override(std::string &v) {
 // upscaling works. If it is ever wired it needs its own knob and its own
 // argument, not a value smuggled through this one.
 inline bool aa_override(std::string &v) {
-    static std::string vv;
+    static std::string &vv = x4vr::immortal<std::string>();
     static const bool ok = [] {
         const char *e = getenv("X4VR_AA");
         if (!e || !*e)
@@ -221,19 +223,22 @@ inline const std::vector<TagOverride> &default_overrides() {
     // res_width/res_height -- which makes the config the lever for the split
     // render there. (On X11 currentExtent wins and the layer halves that
     // instead; asking for the eye size here is then simply consistent.)
-    static std::string res_w, res_h;
+    static std::string &res_w = x4vr::immortal<std::string>(),
+                        &res_h = x4vr::immortal<std::string>();
     static const bool explicit_res = res_override(res_w, res_h);
-    static const std::string eye_w = std::to_string(X4VR_SBS_WIDTH / 2);
+    static const std::string &eye_w =
+        x4vr::immortal<std::string>(std::to_string(X4VR_SBS_WIDTH / 2));
     static const bool split = sbs_split_render();
-    static std::string fov_v;
+    static std::string &fov_v = x4vr::immortal<std::string>();
     static const bool have_fov = fov_override(fov_v);
     // Overrides the base entry rather than being appended after it: two entries
     // for one tag would leave which one wins to the order set_tag() is called
     // in, and "none" is load-bearing enough to be stated in exactly one place.
-    static std::string aa_v;
+    static std::string &aa_v = x4vr::immortal<std::string>();
     static const bool have_aa = aa_override(aa_v);
 
-    static const std::vector<TagOverride> base = {
+    static const std::vector<TagOverride> &base =
+        x4vr::immortal<std::vector<TagOverride>>(std::initializer_list<TagOverride>{
         // These two are necessary but NOT sufficient: X4 only honours them
         // when borderless is off, and then loses the window decoration from
         // the height (observed: 1408 -> 1385). With borderless on it ignores
@@ -302,21 +307,21 @@ inline const std::vector<TagOverride> &default_overrides() {
         // per-eye lighting lands.
         {"chromaticaberration", "false"},
         {"colorcorrection", "0"},
-    };
+    });
 
     // Appended rather than listed above, so that a run without X4VR_FOV serves
     // byte-for-byte the config every take before 104 served.
-    static std::string radar_v;
+    static std::string &radar_v = x4vr::immortal<std::string>();
     static const bool have_radar = separate_radar_override(radar_v);
 
-    static const std::vector<TagOverride> v = [] {
+    static const std::vector<TagOverride> &v = x4vr::immortal<std::vector<TagOverride>>([] {
         std::vector<TagOverride> t = base;
         if (have_fov)
             t.push_back({"fov", fov_v.c_str()});
         if (have_radar)
             t.push_back({"separateRadar", radar_v.c_str()});
         return t;
-    }();
+    }());
     return v;
 }
 

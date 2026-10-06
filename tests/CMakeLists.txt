@@ -2,6 +2,10 @@
 add_executable(x4vr_test_multiview_enable multiview_enable.cpp)
 target_link_libraries(x4vr_test_multiview_enable PRIVATE Vulkan::Vulkan)
 
+# gamescope's teardown: Vulkan objects destroyed after main() returns (take 323).
+add_executable(x4vr_test_exit_teardown exit_teardown.cpp)
+target_link_libraries(x4vr_test_exit_teardown PRIVATE Vulkan::Vulkan)
+
 add_executable(x4vr_test_multiview_double multiview_double.cpp)
 target_link_libraries(x4vr_test_multiview_double PRIVATE Vulkan::Vulkan)
 

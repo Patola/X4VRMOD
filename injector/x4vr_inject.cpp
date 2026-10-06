@@ -46,6 +46,7 @@ extern char **environ;
 
 #define X4VR_LOG_TAG "inject"
 #include "../common/x4vr_log.hpp"
+#include "../common/x4vr_immortal.hpp"
 #include "../common/x4vr_env.hpp"
 #include "../common/x4vr_share.hpp"
 #include "x4vr_config.hpp"
@@ -119,7 +120,7 @@ void file_probe(const char *how, const char *path) {
     if (!interesting)
         return;
     static std::mutex mu;
-    static std::set<std::string> seen;
+    static std::set<std::string> &seen = x4vr::immortal<std::set<std::string>>();
     std::lock_guard<std::mutex> lock(mu);
     if (seen.size() >= 400)
         return;
@@ -201,7 +202,7 @@ std::mutex &catfd_mu() {
     return m;
 }
 std::map<int, std::string> &catfds() {
-    static std::map<int, std::string> m;
+    static std::map<int, std::string> &m = x4vr::immortal<std::map<int, std::string>>();
     return m;
 }
 
@@ -245,7 +246,7 @@ void catpatch_untrack(int fd) {
 // reaches an LD_PRELOAD hook on it. The substitution has to happen at the
 // level X4 actually calls, which is fread.
 std::map<FILE *, std::string> &catfiles() {
-    static std::map<FILE *, std::string> m;
+    static std::map<FILE *, std::string> &m = x4vr::immortal<std::map<FILE *, std::string>>();
     return m;
 }
 
@@ -1649,7 +1650,7 @@ struct CapturedCursor {
     std::vector<uint8_t> px;
 };
 std::mutex g_cursor_mu;
-std::vector<CapturedCursor> g_cursors;
+std::vector<CapturedCursor> &g_cursors = x4vr::immortal<std::vector<CapturedCursor>>();
 
 void publish_cursor_image(const CapturedCursor &c) {
     x4vr::Shared *s = x4vr_shared_state();
@@ -2145,7 +2146,7 @@ static void note_lua_chunk(const char *buff, size_t sz, const char *name,
             continue;
         hits++;
         X4VR_LOG("lua HIT %-14s in %s  (%s)", probes[i].needle, n, probes[i].why);
-        static std::string last_dumped;
+        static std::string &last_dumped = x4vr::immortal<std::string>();
         if (last_dumped != n) { // one dump per chunk, not one per probe
             last_dumped = n;
             lua_dump_chunk(n, buff, sz);
@@ -2462,7 +2463,7 @@ struct CamScanState {
     size_t bytes_last = 0;
     int regions_last = 0;
 };
-CamScanState g_camscan;
+CamScanState &g_camscan = x4vr::immortal<CamScanState>();
 constexpr size_t kScanRootBytes = 0x2000, kScanChildBytes = 0x800;
 constexpr uint32_t kScanPtrWindow = 0x400;
 constexpr size_t kScanMaxChildren = 48;
@@ -2638,7 +2639,8 @@ struct CamWatchShared {
     std::atomic<bool> started{false};
     // Camera sweep seen on X4's thread, for the "enough" milestone.
     std::atomic<float> yaw_lo{1e9f}, yaw_hi{-1e9f};
-} g_camwatch;
+};
+CamWatchShared &g_camwatch = x4vr::immortal<CamWatchShared>();
 } // namespace
 
 static bool self_read(uintptr_t addr, void *out, size_t n);
@@ -2913,7 +2915,7 @@ static void camwatch_aim_hop2(uintptr_t cam) {
                       " [%zu] %p vt %p compose %p local %p", i,
                       (void *)c.children[i].obj, (void *)c.children[i].vtable,
                       (void *)c.children[i].compose, (void *)c.children[i].local);
-    static std::string last;
+    static std::string &last = x4vr::immortal<std::string>();
     if (last != desc) {
         last = desc;
         X4VR_LOG("camwatch hop2: %s — %s", c.ok ? "chain" : "REFUSED", c.why);
@@ -2989,7 +2991,7 @@ struct CoMove {
     // 317's missing question; "the same angle" is the sharper one.
     uint64_t far = 0, hist[61] = {};
 };
-std::vector<CoMove> g_comove;
+std::vector<CoMove> &g_comove = x4vr::immortal<std::vector<CoMove>>();
 } // namespace
 
 static void camwatch_comove_tick() {
@@ -5886,8 +5888,6 @@ const bool *SDL_GetKeyboardState(int *numkeys) {
     const int sc = headlook_scancode();
     if (sc < 0 || sc >= n)
         return src;
-    static std::vector<bool> dummy; // never used; keeps the intent obvious
-    (void)dummy;
     static bool *copy = nullptr;
     static int copy_n = 0;
     if (copy_n != n) {
@@ -6427,7 +6427,7 @@ void pad_note_axis(const Sdl3AxisEvent *a, bool gamepad) {
 // per frame in some menus and a per-call line would bury the log.
 void pad_note_name(const char *what, const char *name, uint32_t id) {
     static std::mutex mu;
-    static std::vector<std::string> seen;
+    static std::vector<std::string> &seen = x4vr::immortal<std::vector<std::string>>();
     if (!name || !*name)
         return;
     std::lock_guard<std::mutex> lock(mu);

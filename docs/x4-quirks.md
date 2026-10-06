@@ -23698,3 +23698,50 @@ field, M_shadowCSM0 constant). It did not move with the field. Candidates are
 take 202's "shadow-configured" slots or a caster-culling camera, and neither
 is established.
 
+## Our libraries have no exit-time destructors any more (the gamescope abort of take 323)
+
+The mechanism, reproduced before fixing:
+
+* gamescope destroys its image views from its **own** exit-time destructors.
+* Our layer is dlopen'ed during `vkCreateInstance`, after gamescope's globals
+  were built. Its static tables were therefore registered later and destroyed
+  **first**.
+* `x4vr_DestroyImageView` then ran `g_devices.at()` on a destroyed map. It
+  threw `std::out_of_range`, and an exception leaving a Vulkan entry point is
+  `std::terminate`.
+
+`tests/exit_teardown.cpp` repeats that pattern: a global built before main()
+destroys an image view, an image, its memory, the device and the instance from
+its destructor. Against 71fe6e7's layer it dies with *"terminate called after
+throwing an instance of 'std::out_of_range' / what(): unordered_map::at"*, as
+gamescope and as X4 alike (with no X4VR_LOG it segfaults instead). Against the
+fixed layer it exits 0.
+
+The rule is wider than one hook. Any call into our code after exit() begins
+reads freed tables. That includes the injector's interposed libc functions
+(close, fclose, mmap), whose function-local statics were registered at first
+use. Before the fix the layer registered 73 exit-time destructors and the
+injector 31. The fix is `common/x4vr_immortal.hpp`: `x4vr::immortal<T>()`
+builds each table on zeroed storage that is never freed, so it starts exactly
+as a static would and is never destroyed:
+
+* 44 namespace-scope tables and 7 structs (g_sbs, g_track, g_variants,
+  g_pose, g_probe, g_burst, g_vrs) in the layer;
+* 8 function-local statics in the layer (including the X4VR_TEST_HAMMER
+  thread);
+* 4 globals, 6 function-local statics and the config header's 11 strings and
+  2 tables in the injector;
+* one never-used `static std::vector<bool> dummy` in the injector's
+  SDL_GetKeyboardState hook, deleted.
+
+`tests/run-no-exit-destructors.sh` checks both libraries:
+
+* **Static:** no call or tail jump to `__cxa_atexit`. Its control is a
+  one-map library, which must count. That control caught my first counter,
+  which looked for `call` only and missed tail jumps.
+* **Runtime:** the teardown test with no layer, as gamescope, and as X4.
+* **Old-layer control:** `X4VR_OLD_LAYER=<old build>/layer` adds the case
+  that must fail.
+
+Why takes 314–322 escaped is not known. Whether gamescope exits through its
+destructors or through a signal likely depends on how X4 quits.

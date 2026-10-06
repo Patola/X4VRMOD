@@ -43,6 +43,7 @@
 #include "../common/x4vr_spirv.hpp"
 #include "../common/x4vr_guard.hpp"
 #include "../common/x4vr_view.hpp"
+#include "../common/x4vr_immortal.hpp"
 #include "x4vr_sbs.hpp"
 #include "../common/x4vr_env.hpp"
 #include "../common/x4vr_share.hpp"
@@ -176,12 +177,14 @@ struct DeviceData {
 };
 
 std::mutex g_mu;
-std::unordered_map<void *, InstanceData> g_instances;
-std::unordered_map<void *, DeviceData> g_devices;
+std::unordered_map<void *, InstanceData> &g_instances =
+    x4vr::immortal<std::unordered_map<void *, InstanceData>>();
+std::unordered_map<void *, DeviceData> &g_devices =
+    x4vr::immortal<std::unordered_map<void *, DeviceData>>();
 
 // Phase 4a scaffolding, opt-in while both halves are still the same eye.
 // Flip the default once the halves are rendered per eye.
-x4vr::SbsCompositor g_sbs;
+x4vr::SbsCompositor &g_sbs = x4vr::immortal<x4vr::SbsCompositor>();
 // Read through env_on because the injector mirrors this exact decision to
 // choose whether to hide the compositor's pointer. Two spellings of the same
 // rule is how they come to disagree.
@@ -706,7 +709,8 @@ bool g_active = false;
 // a queue of its pool's family -- X4 requests more than one family, so the
 // present queue's family has to be observed, not assumed.
 std::mutex g_queue_mu;
-std::unordered_map<VkQueue, uint32_t> g_queue_family;
+std::unordered_map<VkQueue, uint32_t> &g_queue_family =
+    x4vr::immortal<std::unordered_map<VkQueue, uint32_t>>();
 
 // Task #36. On a device with one graphics queue -- which is every AMD one --
 // X4 and the OpenXR runtime submit to the same VkQueue from two threads, and
@@ -766,7 +770,8 @@ struct VrQueueLock {
 // set for the log. Recorded because a set that no longer means what its name
 // says is how a stale invariant gets read as a live one.
 std::mutex g_surface_mu;
-std::unordered_map<VkSurfaceKHR, bool> g_halved_surfaces;
+std::unordered_map<VkSurfaceKHR, bool> &g_halved_surfaces =
+    x4vr::immortal<std::unordered_map<VkSurfaceKHR, bool>>();
 
 bool note_halved_surface(VkSurfaceKHR s) { // true the first time only
     std::lock_guard<std::mutex> lock(g_surface_mu);
@@ -792,7 +797,8 @@ void forget_halved_surface(VkSurfaceKHR s) {
 // "unknown" is a real answer and is printed as such: a surface can also come
 // from a WSI we do not hook (headless, display-plane, a platform added
 // later), and silence there would read as Wayland by elimination.
-std::unordered_map<VkSurfaceKHR, const char *> g_surface_wsi;
+std::unordered_map<VkSurfaceKHR, const char *> &g_surface_wsi =
+    x4vr::immortal<std::unordered_map<VkSurfaceKHR, const char *>>();
 
 void note_surface_wsi(VkSurfaceKHR s, const char *wsi) {
     std::lock_guard<std::mutex> lock(g_surface_mu);
@@ -803,7 +809,8 @@ void note_surface_wsi(VkSurfaceKHR s, const char *wsi) {
 // images were in take thirty. Forget on destroy so a later surface cannot
 // inherit this one's platform.
 // Surfaces whose capabilities have been reported once already.
-std::unordered_set<VkSurfaceKHR> g_surfaces_seen;
+std::unordered_set<VkSurfaceKHR> &g_surfaces_seen =
+    x4vr::immortal<std::unordered_set<VkSurfaceKHR>>();
 
 bool note_surface_seen(VkSurfaceKHR s) { // true the first time only
     std::lock_guard<std::mutex> lock(g_surface_mu);
@@ -1027,7 +1034,8 @@ struct Tracking {
     bool logged_matrices = false;
     bool logged_proj_fail = false;
     bool logged_view_fail = false;
-} g_track;
+};
+Tracking &g_track = x4vr::immortal<Tracking>();
 
 // ------------------------------------------------------- shadow exclusion
 // The per-eye shear K is derived from the *camera* projection, where clip z
@@ -1107,15 +1115,18 @@ struct ShaderVariants {
         bool has_canvas = false;
     };
     std::unordered_map<VkShaderModule, ModuleInfo> info;
-} g_variants;
+};
+ShaderVariants &g_variants = x4vr::immortal<ShaderVariants>();
 
 // render pass -> inventory serial, so the framebuffer log can name the pass
 // it belongs to. Inventory only; shares g_variants.mu.
-std::unordered_map<VkRenderPass, uint32_t> g_rp_serials;
+std::unordered_map<VkRenderPass, uint32_t> &g_rp_serials =
+    x4vr::immortal<std::unordered_map<VkRenderPass, uint32_t>>();
 
 // Passes we gave a view mask; the framebuffer hook needs to know so it can
 // supply array views. Shares g_variants.mu with g_rp_serials.
-std::unordered_set<VkRenderPass> g_masked_passes;
+std::unordered_set<VkRenderPass> &g_masked_passes =
+    x4vr::immortal<std::unordered_set<VkRenderPass>>();
 
 // The subset of those that are masked *only* because of the SRGB carve-out --
 // rp #40 and #52, both of which render into #103.
@@ -1126,7 +1137,8 @@ std::unordered_set<VkRenderPass> g_masked_passes;
 // LDR *composition* target, not a tonemap output. X4VR_MASK_TONEMAP keeps its
 // name because the tagged runs and the doc's launch command use it, but the
 // name is a misnomer -- see docs/frame-analysis.md.
-std::unordered_set<VkRenderPass> g_srgb_resolve_passes;
+std::unordered_set<VkRenderPass> &g_srgb_resolve_passes =
+    x4vr::immortal<std::unordered_set<VkRenderPass>>();
 
 // Image tracking, for the Phase 4b question the pass inventory could not
 // answer: how many *images* are behind those passes? The cost of doubling is
@@ -1164,7 +1176,8 @@ struct SwapchainInfo {
     std::vector<VkImage> images;
 };
 std::mutex g_sc_mu;
-std::unordered_map<VkSwapchainKHR, SwapchainInfo> g_swapchains;
+std::unordered_map<VkSwapchainKHR, SwapchainInfo> &g_swapchains =
+    x4vr::immortal<std::unordered_map<VkSwapchainKHR, SwapchainInfo>>();
 // Enough of a view's create info to rebuild it as an array view later.
 struct ViewInfo {
     VkImage image;
@@ -1174,12 +1187,16 @@ struct ViewInfo {
     VkImageViewType type;
 };
 std::mutex g_img_mu;
-std::unordered_map<VkImage, ImageInfo> g_images;
-std::unordered_map<VkImageView, ViewInfo> g_views;
+std::unordered_map<VkImage, ImageInfo> &g_images =
+    x4vr::immortal<std::unordered_map<VkImage, ImageInfo>>();
+std::unordered_map<VkImageView, ViewInfo> &g_views =
+    x4vr::immortal<std::unordered_map<VkImageView, ViewInfo>>();
 // original attachment view -> the 2-layer array view we substitute for it
-std::unordered_map<VkImageView, VkImageView> g_array_views;
+std::unordered_map<VkImageView, VkImageView> &g_array_views =
+    x4vr::immortal<std::unordered_map<VkImageView, VkImageView>>();
 // images actually written by a view-masked pass, learned at framebuffer time
-std::unordered_set<VkImage> g_per_eye_images;
+std::unordered_set<VkImage> &g_per_eye_images =
+    x4vr::immortal<std::unordered_set<VkImage>>();
 // sampled view -> the same view onto layer 1, made lazily for gate 2.
 //
 // The image is carried alongside on purpose. Vulkan recycles handles, and this
@@ -1196,7 +1213,8 @@ struct Layer1View {
     // and rebuilt, so the cache cannot quietly hand back the other caller's view.
     uint32_t layer;
 };
-std::unordered_map<VkImageView, Layer1View> g_layer1_views;
+std::unordered_map<VkImageView, Layer1View> &g_layer1_views =
+    x4vr::immortal<std::unordered_map<VkImageView, Layer1View>>();
 uint32_t g_img_serial = 0;
 
 // --- the bindless survey (X4VR_BINDLESS_SURVEY=1) -----------------------
@@ -1271,15 +1289,19 @@ std::mutex g_desc_mu;
 // Layouts carrying a descriptor array get a serial; everything else reports as
 // layout ?, which is how a stray binding announces itself instead of hiding.
 uint32_t g_dsl_serial = 0;
-std::unordered_map<VkDescriptorSetLayout, uint32_t> g_dsl_id;
-std::unordered_map<VkDescriptorSet, uint32_t> g_ds_layout;
+std::unordered_map<VkDescriptorSetLayout, uint32_t> &g_dsl_id =
+    x4vr::immortal<std::unordered_map<VkDescriptorSetLayout, uint32_t>>();
+std::unordered_map<VkDescriptorSet, uint32_t> &g_ds_layout =
+    x4vr::immortal<std::unordered_map<VkDescriptorSet, uint32_t>>();
 // layout serial -> binding -> declared descriptorCount. The mirror needs it to
 // refuse a twin write that would run off the end of the table X4 declared:
 // writing past the end is a validation error, not a stereo bug.
-std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>> g_dsl_counts;
+std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>> &g_dsl_counts =
+    x4vr::immortal<std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>>>();
 // P4: how many sets come from each table layout -- the mirror covers all of them,
 // and the survey never counted.
-std::unordered_map<uint32_t, uint32_t> g_dsl_sets;
+std::unordered_map<uint32_t, uint32_t> &g_dsl_sets =
+    x4vr::immortal<std::unordered_map<uint32_t, uint32_t>>();
 
 // Mirror accounting. `collided` is the one that matters: it means X4 itself wrote
 // into the twin region, so the offset is too small for this session and
@@ -1293,10 +1315,11 @@ struct XferEdge {
     uint64_t widened = 0;
 };
 std::mutex g_xfer_mu;
-std::map<std::pair<uint32_t, uint32_t>, std::map<const char *, XferEdge>>
-    g_xfer_edges;
+std::map<std::pair<uint32_t, uint32_t>, std::map<const char *, XferEdge>> &g_xfer_edges =
+    x4vr::immortal<std::map<std::pair<uint32_t, uint32_t>, std::map<const char *, XferEdge>>>();
 uint64_t g_xfer_uploads = 0;
-std::unordered_set<uint32_t> g_xfer_upload_targets;
+std::unordered_set<uint32_t> &g_xfer_upload_targets =
+    x4vr::immortal<std::unordered_set<uint32_t>>();
 
 // The passes that draw into a swapchain image -- the last ones in the frame,
 // and the only ones whose output the player ever sees.
@@ -1312,19 +1335,24 @@ std::unordered_set<uint32_t> g_xfer_upload_targets;
 // never have appeared there -- the list was structurally incapable of holding
 // the answer, and returned a confident no.
 std::mutex g_present_mu;
-std::unordered_set<uint32_t> g_present_rps; // rp serials
+std::unordered_set<uint32_t> &g_present_rps =
+    x4vr::immortal<std::unordered_set<uint32_t>>(); // rp serials
 struct PassFrag {
     uint32_t module = UINT32_MAX;
     bool patched = false;
     char samplers[224] = {0};
 };
 // rp serial -> the fragment shaders drawn through it, deduped by module.
-std::map<uint32_t, std::map<uint32_t, PassFrag>> g_rp_frag;
+std::map<uint32_t, std::map<uint32_t, PassFrag>> &g_rp_frag =
+    x4vr::immortal<std::map<uint32_t, std::map<uint32_t, PassFrag>>>();
 
 std::mutex g_comp_mu;
-std::unordered_map<VkPipeline, uint32_t> g_comp_module; // pipeline -> serial
-std::unordered_map<uint32_t, uint64_t> g_comp_dispatches; // serial -> count
-std::unordered_map<VkCommandBuffer, VkPipeline> g_comp_bound;
+std::unordered_map<VkPipeline, uint32_t> &g_comp_module =
+    x4vr::immortal<std::unordered_map<VkPipeline, uint32_t>>(); // pipeline -> serial
+std::unordered_map<uint32_t, uint64_t> &g_comp_dispatches =
+    x4vr::immortal<std::unordered_map<uint32_t, uint64_t>>(); // serial -> count
+std::unordered_map<VkCommandBuffer, VkPipeline> &g_comp_bound =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, VkPipeline>>();
 uint64_t g_comp_pipelines = 0;
 
 std::atomic<uint64_t> g_frag_patch_ok{0}, g_frag_patch_refused{0};
@@ -1407,11 +1435,13 @@ inline void desc_layout_label(uint64_t key, char *out, size_t n) {
 }
 
 // (layout, binding) -> the distinct array elements X4 has ever written
-std::unordered_map<uint64_t, std::unordered_set<uint32_t>> g_desc_slots;
+std::unordered_map<uint64_t, std::unordered_set<uint32_t>> &g_desc_slots =
+    x4vr::immortal<std::unordered_map<uint64_t, std::unordered_set<uint32_t>>>();
 // (layout, binding) -> slot -> image serial, for slots holding a *doubled*
 // image. This is what the twin region is designed around: which table, and which
 // elements, actually have to be mirrored.
-std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint32_t>> g_desc_pe;
+std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint32_t>> &g_desc_pe =
+    x4vr::immortal<std::unordered_map<uint64_t, std::unordered_map<uint32_t, uint32_t>>>();
 uint64_t g_desc_writes = 0, g_desc_late_writes = 0;
 bool g_desc_first_frame_done = false;
 
@@ -1426,15 +1456,16 @@ bool g_desc_first_frame_done = false;
 // the update call carries no type or binding information of its own -- if this
 // path turns out to be live, this is also exactly what mirroring it needs.
 uint64_t g_tmpl_updates = 0, g_tmpl_image_updates = 0;
-std::unordered_map<VkDescriptorUpdateTemplate, std::vector<uint32_t>>
-    g_tmpl_image_bindings;
+std::unordered_map<VkDescriptorUpdateTemplate, std::vector<uint32_t>> &g_tmpl_image_bindings =
+    x4vr::immortal<std::unordered_map<VkDescriptorUpdateTemplate, std::vector<uint32_t>>>();
 
 // A draw replicates to two views only if the *pass* carries the mask and the
 // *pipeline bound into it* was compiled knowing that. Those are two different
 // objects and Vulkan does not require them to agree, so the pair has to be
 // watched at the one moment both are known: vkCmdBindPipeline.
 std::mutex g_cb_mu;
-std::unordered_map<VkPipeline, bool> g_pipe_mv;      // built for multiview
+std::unordered_map<VkPipeline, bool> &g_pipe_mv =
+    x4vr::immortal<std::unordered_map<VkPipeline, bool>>();      // built for multiview
 // **Bind-time attribution.** A pipeline records the render pass it was CREATED
 // against, and Vulkan lets it be used with any COMPATIBLE pass. X4 creates
 // against rp #26/#28/#30 and draws through #27/#29/#31, so take 192's
@@ -1442,25 +1473,32 @@ std::unordered_map<VkPipeline, bool> g_pipe_mv;      // built for multiview
 // three that do. `pipe: rp #N` answers "which modules named this pass at
 // creation"; `bind rp #N` answers "which module did this pass actually bind".
 std::mutex g_bind_mu;
-std::unordered_map<VkPipeline, std::string> g_pipe_desc;
-std::set<std::pair<uint32_t, VkPipeline>> g_bind_seen;
-std::unordered_map<VkCommandBuffer, bool> g_cb_mask; // inside a masked pass
+std::unordered_map<VkPipeline, std::string> &g_pipe_desc =
+    x4vr::immortal<std::unordered_map<VkPipeline, std::string>>();
+std::set<std::pair<uint32_t, VkPipeline>> &g_bind_seen =
+    x4vr::immortal<std::set<std::pair<uint32_t, VkPipeline>>>();
+std::unordered_map<VkCommandBuffer, bool> &g_cb_mask =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, bool>>(); // inside a masked pass
 // Which framebuffer a command buffer is currently rendering into, so that
 // vkCmdEndRenderPass can name the images the pass just finished writing.
-std::unordered_map<VkCommandBuffer, VkFramebuffer> g_cb_fb;
+std::unordered_map<VkCommandBuffer, VkFramebuffer> &g_cb_fb =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, VkFramebuffer>>();
 // Which pass the buffer is inside, so a probe capture can name the pass whose
 // end it followed. #103 has two writers and they need not hold the same thing.
-std::unordered_map<VkCommandBuffer, VkRenderPass> g_cb_rp;
+std::unordered_map<VkCommandBuffer, VkRenderPass> &g_cb_rp =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, VkRenderPass>>();
 // **Task #82.** Which pipelines actually got a canvas-mapped vertex module,
 // and which command buffer is currently bound to one. Gating the #82
 // instrument on the PIPELINE rather than on (renderPass, subpass) is not a
 // shortcut: vkCmdNextSubpass is not hooked, so there is no per-command-buffer
 // subpass at draw time, and "the draw uses a module we scaled" is the question
 // anyway. Written under g_cb_mu with the rest of the per-cb tracking.
-std::unordered_map<VkPipeline, bool> g_pipe_canvas;
+std::unordered_map<VkPipeline, bool> &g_pipe_canvas =
+    x4vr::immortal<std::unordered_map<VkPipeline, bool>>();
 std::atomic<uint32_t> g_canvas_pipes{0};      // task #82
 std::atomic<uint64_t> g_canvas_draws{0};      // task #82
-std::unordered_map<VkCommandBuffer, bool> g_cb_canvas;
+std::unordered_map<VkCommandBuffer, bool> &g_cb_canvas =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, bool>>();
 
 // A doubled colour attachment of a masked pass, with the layout that pass
 // leaves it in. Collected at framebuffer creation, where the pass, the views
@@ -1472,7 +1510,8 @@ struct FbAtt {
     VkExtent3D extent;
     VkImageLayout final_layout;
 };
-std::unordered_map<VkFramebuffer, std::vector<FbAtt>> g_fb_atts;
+std::unordered_map<VkFramebuffer, std::vector<FbAtt>> &g_fb_atts =
+    x4vr::immortal<std::unordered_map<VkFramebuffer, std::vector<FbAtt>>>();
 
 // Which kinds of pass render into each doubled image.
 //
@@ -1526,7 +1565,8 @@ struct PassKinds {
     uint32_t width = 0, height = 0, img_layers = 0;
     bool doubled = false, is_swapchain = false;
 };
-std::unordered_map<uint32_t, PassKinds> g_img_writers; // by image serial
+std::unordered_map<uint32_t, PassKinds> &g_img_writers =
+    x4vr::immortal<std::unordered_map<uint32_t, PassKinds>>(); // by image serial
 
 // 8-bit UNORM/SRGB colour targets mean a screen-space (UI/blit) pass.
 inline bool is_ldr_format(VkFormat f) {
@@ -1724,7 +1764,7 @@ float *g_verify_ptr = nullptr;
 // another layer to the chain during a test whose premise is that nothing
 // should change.
 void frame_timing(uint64_t frame) {
-    static std::vector<float> ms;
+    static std::vector<float> &ms = x4vr::immortal<std::vector<float>>();
     static timespec prev{};
     timespec now{};
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -1979,7 +2019,8 @@ struct ProvisionalSlot {
     VkDescriptorImageInfo info; // the original, pre-substitution
 };
 std::mutex g_prov_mu;
-std::unordered_map<uint32_t, std::vector<ProvisionalSlot>> g_mirror_provisional;
+std::unordered_map<uint32_t, std::vector<ProvisionalSlot>> &g_mirror_provisional =
+    x4vr::immortal<std::unordered_map<uint32_t, std::vector<ProvisionalSlot>>>();
 uint64_t g_mirror_provisional_taken = 0, g_mirror_repaired = 0;
 // Undecided slots seen at all, counted before the per-eye gate rather than
 // after it. The two differ by every image that has no layer 1 to point at.
@@ -2878,8 +2919,8 @@ inline const std::vector<int64_t> &dump_after_rp_list() {
     // A LIST, round-robined one per cadence tick. #49 has to bisect five
     // present passes, and one target per run would be five runs of Patola's
     // time for a question one run can answer.
-    static const std::vector<int64_t> v = [] {
-        std::vector<int64_t> out;
+    static const std::vector<int64_t> &v = [] () -> const std::vector<int64_t> & {
+        auto &out = x4vr::immortal<std::vector<int64_t>>();
         const char *e = getenv("X4VR_MV_DUMP_AFTER_RP");
         for (const char *c = e; c && *c;) {
             char *end = nullptr;
@@ -2913,11 +2954,11 @@ inline int64_t dump_after_rp_current() {
 // six-target run, because it printed dump_after_rp() -- element [0] -- and
 // called it the whole list.
 inline std::set<int64_t> &after_rp_skipped() {
-    static std::set<int64_t> s;
+    static std::set<int64_t> &s = x4vr::immortal<std::set<int64_t>>();
     return s;
 }
 inline std::set<int64_t> &after_rp_captured() {
-    static std::set<int64_t> s;
+    static std::set<int64_t> &s = x4vr::immortal<std::set<int64_t>>();
     return s;
 }
 // Reached is NOT captured. A pass can end with the capture unarmed, or with
@@ -2925,7 +2966,7 @@ inline std::set<int64_t> &after_rp_captured() {
 // as "never reached" sends the reader to check serials that were correct all
 // along.
 inline std::set<int64_t> &after_rp_reached() {
-    static std::set<int64_t> s;
+    static std::set<int64_t> &s = x4vr::immortal<std::set<int64_t>>();
     return s;
 }
 // How many times a target may be reached with nothing to read before the
@@ -3114,7 +3155,8 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
 // contents, which is precisely what we are trying to read. Taken from the
 // render pass rather than tracked, because the render pass performs the
 // transition itself and therefore cannot be wrong about it.
-std::unordered_map<VkRenderPass, std::vector<VkImageLayout>> g_rp_final;
+std::unordered_map<VkRenderPass, std::vector<VkImageLayout>> &g_rp_final =
+    x4vr::immortal<std::unordered_map<VkRenderPass, std::vector<VkImageLayout>>>();
 
 template <class CreateInfo>
 void record_final_layouts(const CreateInfo *ci, VkRenderPass rp) {
@@ -4731,15 +4773,17 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyRenderPass(
 // built against the tonemap pass name the two serials worth disassembling.
 const char *g_dump_shaders = getenv("X4VR_DUMP_SHADERS");
 std::mutex g_mod_mu;
-std::unordered_map<VkShaderModule, uint32_t> g_mod_serial;
-std::unordered_map<VkShaderModule, std::vector<x4vr::spv::SampledTexture>>
-    g_mod_samplers;
+std::unordered_map<VkShaderModule, uint32_t> &g_mod_serial =
+    x4vr::immortal<std::unordered_map<VkShaderModule, uint32_t>>();
+std::unordered_map<VkShaderModule, std::vector<x4vr::spv::SampledTexture>> &g_mod_samplers =
+    x4vr::immortal<std::unordered_map<VkShaderModule, std::vector<x4vr::spv::SampledTexture>>>();
 uint32_t g_mod_next = 0;
 // Which modules took the index-offset edit. Take twenty-four: the log said
 // "patched fragment shader #300" and nothing about the ones that refused, so
 // when #103 stayed mono there was no way to ask whether its own shader was
 // among them. A running count is not an identity.
-std::unordered_set<VkShaderModule> g_mod_frag_patched;
+std::unordered_set<VkShaderModule> &g_mod_frag_patched =
+    x4vr::immortal<std::unordered_set<VkShaderModule>>();
 
 void record_module(const VkShaderModuleCreateInfo *ci, VkShaderModule mod) {
     if ((!g_dump_shaders || !*g_dump_shaders) && !g_mv_inventory)
@@ -6525,7 +6569,8 @@ struct PoseChannel {
     uint64_t layouts_seen = 0, layouts_extended = 0;
     uint64_t pipes_seen = 0, pipes_extended = 0, binds = 0;
     x4vr::PoseBlock value = x4vr::pose_identity();
-} g_pose;
+};
+PoseChannel &g_pose = x4vr::immortal<PoseChannel>();
 
 bool pose_wanted() {
     static const bool on = [] {
@@ -7752,7 +7797,7 @@ void patch_view_before_submit() {
             float shadow_scale = 0.0f;
             uint32_t shadow_changes = 0;
         };
-        static std::map<ViewSlot, ProjState> cams;
+        static std::map<ViewSlot, ProjState> &cams = x4vr::immortal<std::map<ViewSlot, ProjState>>();
         static uint32_t next_id = 0, total = 0;
         // Per-camera budget so one noisy block cannot blind the rest, plus a
         // global backstop. Both announce themselves when they bite: a silent
@@ -9823,7 +9868,8 @@ struct MvProbe {
     uint32_t w = 0, h = 0, bpp = 0;
     VkFormat format = VK_FORMAT_UNDEFINED;
     uint32_t captures = 0;
-} g_probe;
+};
+MvProbe &g_probe = x4vr::immortal<MvProbe>();
 std::mutex g_probe_mu;
 
 // A full frame is copied, not a corner.
@@ -10386,12 +10432,13 @@ struct BurstSlot {
     // unmeasurable.
     double t_capture = 0.0;
 };
-struct {
+struct Burst {
     std::vector<BurstSlot> slots;
     uint32_t idx = 0;
     bool capturing = false;
     double last_capture = 0.0;   // for X4VR_UI_DUMP's third field
-} g_burst;
+};
+Burst &g_burst = x4vr::immortal<Burst>();
 
 // Monotonic seconds. The same clock X4VR_LOG stamps lines with, so a capture
 // time can be lined up against everything else in the log.
@@ -11157,7 +11204,7 @@ void probe_collect(DeviceData *d, VkQueue queue, bool count_frame) {
         return v > 0 ? (uint32_t)v : 6u;
     }();
     static std::mutex dump_mu;
-    static std::unordered_map<uint32_t, uint32_t> dumps_by_img;
+    static std::unordered_map<uint32_t, uint32_t> &dumps_by_img = x4vr::immortal<std::unordered_map<uint32_t, uint32_t>>();
     uint32_t dumps = 0;
     {
         std::lock_guard<std::mutex> lock(dump_mu);
@@ -12340,7 +12387,7 @@ inline XrFovf vr_declared_fov() {
     return f;
 }
 const XrFovf g_vr_fov = vr_declared_fov();
-VrState g_vrs;
+VrState &g_vrs = x4vr::immortal<VrState>();
 
 bool vr_located_fov(float out[2][4]) {
     if (!g_vr || !g_vrs.fov_seen.load(std::memory_order_acquire))
@@ -14577,7 +14624,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
         }
     }
     if (const char *h = getenv("X4VR_TEST_HAMMER"); h && *h && *h != '0') {
-        static std::thread t(hammer_thread);
+        static std::thread &t = x4vr::immortal<std::thread>(hammer_thread);
         t.detach();
     }
 #ifdef X4VR_HAVE_OPENXR
