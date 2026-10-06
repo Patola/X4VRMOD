@@ -201,3 +201,16 @@ negating the angles, which is right for one axis and wrong for a composition,
 because `Ry(−y)·Rx(−p)` is not the inverse of `Ry(y)·Rx(p)`. The inverse is the
 transpose, and `ndc_map` now takes a matrix so it cannot be expressed any other
 way.
+
+## xref.py / xdisp.py
+
+Static reading of X4's binary (bytes only, nothing written).
+
+    tools/xref.py 0x4533b00 '"csmthresholds"' 0x2094fc0   # who references / calls it
+    tools/xdisp.py 0xcc8 [--mnemonic movss]                # every [reg + 0xcc8]
+
+Byte-pattern scans whose hits are attributed to an instruction by majority
+vote over 32 linear decodes started 32–64 bytes earlier. Decoding backwards
+from a displacement reads `f3 0f 11 83 ...` (movss) as `11 83 ...` (adc). The
+vote was validated on the known camera+0x874 sites. Found #70's cascade fit
+(0x2094fc0).

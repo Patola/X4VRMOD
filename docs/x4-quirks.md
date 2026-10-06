@@ -23745,3 +23745,88 @@ as a static would and is never destroyed:
 
 Why takes 314–322 escaped is not known. Whether gamescope exits through its
 destructors or through a signal likely depends on how X4 quits.
+
+## #70's cause, read from X4's code: the cascade fit sizes its spheres by 1/tan of the half-field
+
+No run. Patola: *"go ahead with the cascade fit read."* New tools:
+`tools/xref.py` (code and data references to an address or string, plus direct
+calls) and `tools/xdisp.py` (every `[reg + disp]` use of a displacement).
+Each byte-pattern hit is attributed to an instruction by majority vote over 32
+linear decodes. Both first versions decoded backwards from the displacement
+and read `f3 0f 11 83 74 08 00 00` (movss) as `11 83 ...` (adc), so the vote
+is validated against the known +0x874 sites. xdisp also found a reader the
+previous search missed (0x1939ef5, cvtss2sd).
+
+**Where.** The fit is 0x2094fc0, called once (0x20d203a) with the main
+rendering view. It reads that view's field at view+0xcc8, which is why take
+323's cascades followed the live switch. X4's shader-parameter name tables
+(.data.rel.ro 0x3bac400..) name what it feeds: `csmthresholds` (vector 14),
+`shadowmaxdistance`/`shadowmapsize` (scalars 14/16), `shadowCSM0..4`
+(matrices 6–10).
+
+**What.** For each cascade i, over a slice [n, f] of view depth:
+
+    sx, sy = (1 / tan(field/2)) / aspect      aspect = [0x4533b00], [0x4533b04], 1.0 for a square render
+    r^2    = ((f - n)/2)^2 + (f/2 * sx)^2 + (f/2 * sy)^2
+    centre = the slice's middle on the view axis (texel-snapped)
+    threshold_i = (n + f)/2 + sqrt(3) * r        -> csmthresholds
+    ortho box half-width = r
+
+* Cascade 0 is n = 0.1 to f = 3.0 × 1.02 ([0x45343ec] × 1.02).
+* Cascades 1–4 come from a log/linear blend (`powf`) between 3.0 and the
+  maximum distance.
+
+**Checked against every cascade number we have:**
+
+    field    cascade-0 1/r  predicted / measured     threshold 0  predicted / measured
+    73.74°   0.30841 / 0.30841 (take 323, menu)       7.20 / 7.2   (takes 190–202)
+    91.44°   0.38800 / 0.38799 (take 323, B)          —
+    110°     0.47215 / 0.47213 (take 323, A)          5.25 / 5.2   (takes 190–202)
+    129.0°   0.55441 / —                              4.70 / 4.7   (take 200)
+
+**Why the shadows fade.**
+
+* The slice's half-extent at its far end is f·tan(field/2) = f/sx. X4 uses
+  f·sx/2.
+* The two agree only at sx = √2 (70.5°). Call the coverage ratio
+  ρ = (sx/2)/tan(field/2) = sx²/2: 0.889 at X4's 73.74°, 0.663 at vanilla's
+  81.9°, 0.475 at 91.44° (take 320 VR and take 323 B: **clean**), 0.429 at
+  94.4° (take 228's 1.28: **fading**), and 0.245 at our 110° (**fading**).
+* The knee Patola located by eye is this ratio crossing ~0.45.
+* For a wide field the cockpit reach scales with ρ·f, independent of the
+  field. A corner surface leaves cascade 0's full-weight zone (the tent's inner
+  2/3) at roughly 2ρf/3 ≈ 0.5 m at 110°, against ≈ 1.35 m in vanilla. Hence
+  "the corners immediately", and yaw and pitch alike.
+
+The defect is X4's own (take 226, no layer) and invisible at the fields X4
+ships with.
+
+**Levers.**
+
+* **(A) Write X4's aspect globals** [0x4533b00/04]. They are also the default
+  x/y scale of every projection built without one of its own (0x21bbf80,
+  0x21bc7d7 and two more in the view class), so the picture or other views
+  could change. Not surgical, and which views rely on the default is unknown.
+* **(B) Give the fit its own divisors.** Four instructions read the aspect
+  globals inside the fit, at 0x209539f, 0x20953c8, 0x2095554 and 0x2095577
+  (`cvtss2sd xmmN, [rip+disp32]`). Retargeting their four displacements at a
+  private pair of floats, mapped within ±2 GB of X4's code, changes the fit
+  and nothing else. It would be patched once at injector start, before X4's
+  threads exist. The 21bbf80 call inside the fit keeps X4's own values: that
+  call builds the slice's perspective, which is correct. Divisor
+  d = sx²/(2ρ) gives any ρ; CONTROL is d = X4's own value. This is the first
+  write to X4's code rather than its data, so it is Patola's decision.
+* **(C) Rewrite the formula.** More bytes and no gain over (B).
+* **The shader cannot fix it.** A cascade has no shadow data outside its box.
+
+**What a ρ costs.** Cascade 0 at 110° covers more metres with the same
+2048-texel tile:
+
+    rho     divisor   box (m)   cascade-0 sx   reach (full weight, corners)
+    0.245   1.0       4.23      0.47229        ~0.5 m   (now)
+    0.475   0.516     6.58      0.30417        ~1.0 m   (= 91.44°, judged clean)
+    0.663   0.370     8.71      0.22954        ~1.35 m  (= vanilla 81.9°, whose box is 5.80 m)
+    1.0     0.245     12.71     0.15736        the whole slice
+
+The wider field costs sharpness, and that cost belongs to 110° itself. Vanilla
+pays 5.80 m for its 81.9°.
