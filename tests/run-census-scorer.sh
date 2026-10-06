@@ -567,6 +567,36 @@ farev='[  999999.000] inject  fieldab: phase 1 B | effective 1.91982 | held A 50
 { cat /tmp/census-fa-base.log; printf '%s\n' "$faarm" "$fast" "$(fap 999985.000 0 A)" "$(fap 999990.000 1 B)" "$farev"; } > /tmp/census-fa-rev.log
 want "fieldab X4 reverting the write -> FAIL" /tmp/census-fa-rev.log FAIL "phase B held its field on only 20%"
 absent "fieldab not asked -> silent" "$BASE" fieldab
+# Take 323: the most-drawn block sat at X4's default field (sx 1.33333) in both
+# phases while ~30 blocks per reading followed the switch. Judged by the
+# most-drawn block, the scorer FAILed a switch Patola saw happen.
+cuj323() {  # cuj323 <t> <sx> <ladder sx>
+    printf '[  %s] layer   camuj: main cam@84224 draws=117 proj sx 1.33333 sy -1.33333 | proj_uj sx 1.33333 sy -1.33333 | inv*proj 0.0e+00, inv_uj*proj_uj 0.0e+00, inv_uj*proj 0.0e+00 | 4 slot pair(s): %s/%s x1 (inv_uj miss 1, worst 4.6e+03), 0.00142/0.00142 x1 (inv_uj miss 0, worst 6.0e-08), %s/%s x30 (inv_uj miss 0, worst 0.0e+00), 1.33333/1.33333 x3 (inv_uj miss 0, worst 0.0e+00)' "$1" "$3" "$3" "$2" "$2"; }
+{ cat /tmp/census-fa-base.log; printf '%s\n' "$faarm" "$fast" "$(fap 999985.000 0 A)" "$(cuj323 999987.000 0.70024 0.47213)" "$(fap 999990.000 1 B)" "$(cuj323 999993.000 0.97522 0.38799)" "$farep"; } > /tmp/census-fa-323.log
+want "fieldab most-drawn block at 1.33333, blocks followed -> A drew 0.70024" /tmp/census-fa-323.log "fieldab A:" "X4 DREW with sx 0.70024 in 30"
+want "fieldab most-drawn block named as context only" /tmp/census-fa-323.log "fieldab B:" "most-drawn block read sx 1.33333"
+if python3 tools/score_run.py /tmp/census-fa-323.log 2>&1 | grep -q "^FAIL.*fieldab"; then
+    bad "fieldab take-323 shape -> still FAILs"
+else
+    ok "fieldab take-323 shape -> no FAIL"
+fi
+want "fieldab a block that moved with the field -> listed" /tmp/census-fa-323.log "fieldab other" "A 0.47213 / B 0.38799"
+want "fieldab the block that did not move -> not listed" /tmp/census-fa-323.log "fieldab   as 2/sx" "A 4.236 / B 5.155"
+want "fieldab consistent blocks -> the instrument's range stated" /tmp/census-fa-323.log "fieldab A:" "checked against ITSELF"
+
+# ------------------------------------------ the session gate without X4VR_MV
+# The render-pass inventory is printed only under X4VR_MV, so a flatscreen run
+# (take 323) was refused as "stopped early" with its measurement in the file.
+grep -v "mv: X4 uses" "$BASE" | sed 's/ X4VR_MV=1//' > /tmp/census-mono.log
+want "no X4VR_MV, one X4 instance -> scored as mono" /tmp/census-mono.log mono "a flatscreen run"
+if python3 tools/score_run.py /tmp/census-mono.log 2>&1 | grep -q "^UNSCORABLE"; then
+    bad "no X4VR_MV -> still UNSCORABLE"
+else
+    ok "no X4VR_MV -> not UNSCORABLE"
+fi
+grep -v "mv: X4 uses" "$BASE" > /tmp/census-mv-noinv.log
+want "X4VR_MV=1 but no inventory -> still stopped early" /tmp/census-mv-noinv.log UNSCORABLE "stopped early"
+absent "X4VR_MV=1 -> no mono line" "$BASE" mono
 
 # ------------------------------------------- the camera-state scan (camscan)
 csum() {  # csum <samples> <yawspan> <pitchspan> <survivors>

@@ -94,6 +94,17 @@ def main(path):
     # Gate: one session, or nothing below this means anything.
     sessions = sum("mv: X4 uses" in ln for ln in lines)
     starts = sum("instance created (app=X4)" in ln for ln in lines)
+    # The inventory line is printed only under X4VR_MV, so a run that never
+    # asked for stereo (take 323, flatscreen) has none and was refused as
+    # "stopped early" with 88 lines of its own measurement in the file. Gate
+    # on intent: without X4VR_MV the X4 instance is the session.
+    run0 = next((ln.split("env: run =", 1)[1] for ln in lines
+                 if "env: run =" in ln), "")
+    mono = bool(run0) and not re.search(r"\bX4VR_MV=[^0\s]", run0)
+    if mono and starts == 1 and sessions == 0:
+        sessions = 1
+        print("mono  X4VR_MV not set: a flatscreen run. The X4 instance is the "
+              "session; the stereo checks below have nothing to check.")
     if sessions > 1 or starts > 1:
         print(f"UNSCORABLE  {sessions} X4 render-pass inventories, "
               f"{starts} X4 instances in this file.")
@@ -4050,7 +4061,12 @@ def main(path):
             if fl:
                 fails.append(f"fieldab: {fl} write(s) into the camera failed")
         # Per phase, from the layer: what X4 drew, and whether the shadows'
-        # inverse inverts it.
+        # inverse inverts it. Judged over the camera blocks drawn, NOT the
+        # "main cam" (the most-drawn block): in take 323 that block sat at X4's
+        # default 73.74 deg (sx 1.33333) in both phases while ~30 blocks per
+        # reading followed the switch, and the scorer called the switch failed
+        # against what Patola saw. The census planted here had assumed the
+        # most-drawn block was the picture.
         if fa_arm and fa_ph and uj:
             want = {"A": float(fa_arm.group(3)), "B": float(fa_arm.group(6))}
             by = {"A": [], "B": []}
@@ -4058,6 +4074,7 @@ def main(path):
                 cur = [k for t0, _n, k in fa_ph if t0 <= row[0] - 1.0]
                 if cur:
                     by[cur[-1]].append(row)
+            steady = {}
             for k in ("A", "B"):
                 rows = by[k]
                 if not rows:
@@ -4066,29 +4083,85 @@ def main(path):
                         fails.append(f"fieldab: no camuj reading inside any "
                                      f"{k} phase — X4VR_CAMDIFF=1 missing?")
                     continue
-                sxs = sorted(r_[2] for r_ in rows)
-                uxs = sorted(r_[3] for r_ in rows)
-                e3 = sorted(r_[6] for r_ in rows)
-                msx, mux, me3 = sxs[len(sxs) // 2], uxs[len(uxs) // 2], e3[len(e3) // 2]
-                print(f"fieldab {k}: X4 DREW with sx {msx:.5f} (phase wants "
-                      f"{want[k]:.5f}), the shadow lookup's projection sx "
-                      f"{mux:.5f}, inv_uj*proj miss {me3:.1e} over "
-                      f"{len(rows)} camuj line(s)")
-                if abs(msx - want[k]) > 0.01:
-                    fails.append(f"fieldab: in phase {k} X4 drew with sx "
-                                 f"{msx:.5f}, not the phase's {want[k]:.5f} — "
-                                 f"the rendered field did not follow the "
-                                 f"switch, so the phases did not differ")
-                if abs(mux - msx) > 0.01 * abs(msx) or me3 > 0.01:
-                    print(f"fieldab {k}: => MISMATCH — the shadow lookup "
-                          f"inverts a different projection than the one drawn "
-                          f"(sx {mux:.5f} against {msx:.5f}, miss {me3:.1e}): "
-                          f"#70's matrix, fixable by giving the shader the "
-                          f"drawn one")
+                o = "B" if k == "A" else "A"
+                own = other = own_bad = 0
+                worst = 0.0
+                per_line = []
+                for row in rows:
+                    vals = set()
+                    for a_, b_, n_, miss_, w_ in re.findall(
+                            r"(-?[\d.]+)/(-?[\d.]+) x(\d+) \(inv_uj miss "
+                            r"(\d+), worst ([\d.e+-]+)\)", row[7]):
+                        a_, b_ = float(a_), float(b_)
+                        vals.add(a_)
+                        if abs(a_ - want[k]) < 2e-3:
+                            own += int(n_)
+                            if (abs(b_ - a_) > 0.01 * abs(a_)
+                                    or int(miss_)):
+                                own_bad += max(int(miss_), 1)
+                            worst = max(worst, float(w_))
+                        elif abs(a_ - want[o]) < 2e-3:
+                            other += int(n_)
+                    per_line.append(vals)
+                msx = sorted(r_[2] for r_ in rows)[len(rows) // 2]
+                print(f"fieldab {k}: X4 DREW with sx {want[k]:.5f} in {own} "
+                      f"block reading(s), the other phase's {want[o]:.5f} in "
+                      f"{other}, over {len(rows)} camuj line(s) (the most-drawn "
+                      f"block read sx {msx:.5f} — context, not the picture)"
+                      if own else
+                      f"fieldab {k}: NO block drew the phase's sx "
+                      f"{want[k]:.5f} ({other} at the other phase's "
+                      f"{want[o]:.5f}) over {len(rows)} camuj line(s)")
+                if not own or other > 0.05 * own:
+                    fails.append(f"fieldab: in phase {k} {own} block(s) drew "
+                                 f"the phase's sx {want[k]:.5f} and {other} "
+                                 f"the other phase's — the rendered field did "
+                                 f"not follow the switch, so the phases did "
+                                 f"not differ")
+                elif own_bad:
+                    print(f"fieldab {k}: => MISMATCH — {own_bad} of the "
+                          f"{own} block(s) drawn at sx {want[k]:.5f} carry a "
+                          f"shadow-lookup inverse that does not invert their "
+                          f"projection (worst {worst:.1e}): #70's matrix, "
+                          f"fixable by giving the shader the drawn one")
                 else:
-                    print(f"fieldab {k}: => the shadow lookup inverts the "
-                          f"drawn projection (miss {me3:.1e}) — not a "
-                          f"reconstruction error in this phase")
+                    print(f"fieldab {k}: => every block drawn at sx "
+                          f"{want[k]:.5f} carries a shadow-lookup inverse that "
+                          f"inverts it (worst {worst:.1e}) — not a "
+                          f"reconstruction error in this phase. Range: each "
+                          f"block is checked against ITSELF; a pass reading "
+                          f"another block's inverse would not show here")
+                # Values present in at least half the phase's readings,
+                # clustered at 5e-4 relative (0.47213 and 0.47216 are one).
+                cl = []
+                for v in sorted({v for vs in per_line for v in vs}):
+                    if cl and abs(v - cl[-1][0]) <= 5e-4 * max(abs(v), 1e-9):
+                        cl[-1][1].add(v)
+                    else:
+                        cl.append((v, {v}))
+                steady[k] = [c0 for c0, mem in cl
+                             if sum(1 for vs in per_line if vs & mem)
+                             >= 0.5 * len(per_line)]
+            if "A" in steady and "B" in steady:
+                def near(v, xs):
+                    return any(abs(v - x) <= 5e-4 * max(abs(v), 1e-9)
+                               for x in xs)
+                ma = sorted((v for v in steady["A"] if not near(v, steady["B"])
+                             and abs(v - want["A"]) >= 2e-3), reverse=True)
+                mb = sorted((v for v in steady["B"] if not near(v, steady["A"])
+                             and abs(v - want["B"]) >= 2e-3), reverse=True)
+                if ma or mb:
+                    print(f"fieldab other blocks that MOVED with the field: "
+                          f"A {' '.join(f'{v:.5f}' for v in ma) or '-'} / B "
+                          f"{' '.join(f'{v:.5f}' for v in mb) or '-'}")
+                    if len(ma) == len(mb) and ma:
+                        print("fieldab   as 2/sx (a width, IF orthographic): "
+                              f"A {' '.join(f'{2 / v:.4g}' for v in ma)} / B "
+                              f"{' '.join(f'{2 / v:.4g}' for v in mb)}; "
+                              f"A/B sx "
+                              f"{' '.join(f'{a_ / b_:.3f}' for a_, b_ in zip(ma, mb))}")
+                else:
+                    print("fieldab no other block moved with the field")
     if uj:
         # Every run with camuj (X4VR_CAMDIFF=1): the slot pairs that disagree.
         bad_pairs = set()
@@ -4096,7 +4169,7 @@ def main(path):
             for a_, b_ in re.findall(r"(-?[\d.]+)/(-?[\d.]+) x\d+", row[7]):
                 if abs(float(a_) - float(b_)) > 0.01 * max(abs(float(a_)), 1e-6):
                     bad_pairs.add((a_, b_))
-        print(f"camuj   {len(uj)} reading(s); main view proj sx "
+        print(f"camuj   {len(uj)} reading(s); most-drawn block proj sx "
               f"{sorted(r_[2] for r_ in uj)[len(uj) // 2]:.5f}, proj_uj sx "
               f"{sorted(r_[3] for r_ in uj)[len(uj) // 2]:.5f}"
               + (f"; slot pair(s) whose projection and unjittered projection "

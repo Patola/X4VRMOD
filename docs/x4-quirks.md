@@ -23601,3 +23601,100 @@ aspect take 228 measured the knee at), extensions on, flatscreen.
   reconstruction is sound and the cascades' fixed size (csm0 0.154, ~6.5 m) is
   the next suspect.
 * **P323.5** no X4 core.
+
+## Take 323 — SCORED: the knee is live, the reconstruction is sound, and the cascades SHRINK as the field widens
+
+Patola: *"As predicted, with "field B" the shadows were working, with "field A"
+they were fading."* Flatscreen, 1408×1408, configuration 1.
+
+**The scorer was wrong twice before it was right**, both times about the run,
+not the game:
+
+1. It refused the whole log as "started and then stopped early". Its
+   one-session gate counted the render-pass inventory line, which the layer
+   prints only under `X4VR_MV`, and a flatscreen run never asks for that.
+   Gate on intent: without `X4VR_MV`, the X4 instance is the session (`mono`
+   line). Census: mono log scored; `X4VR_MV=1` without the inventory still
+   "stopped early".
+2. It then FAILed P323.2: "X4 drew with sx 1.33333 in both phases". It judged
+   by the **most-drawn camera block**, which in the cockpit is a block at X4's
+   *default* 73.74° (117 draws a frame) that never moved. About 30 blocks per
+   reading did follow the switch. The planted census had made the most-drawn
+   block the picture, so it could only pass. The verdict now counts the block
+   readings at each phase's sx against the other phase's. Census: take 323's
+   shape (most-drawn block at 1.33333, population switching).
+
+Scored on that basis:
+
+* **P323.1 HELD.** STARTED at game time 2074274.3 s, in the cockpit. The game
+  clock also ran in the main menu's scene and during loading, and the phases
+  waited. Held A 46016/46020, B 47902/47906 ticks; 8 writes, 0 reverted, 0
+  failed. 9 phases, 5 A / 4 B.
+* **P323.2 HELD.** Block readings at the phase's own sx versus the other
+  phase's: A 4167 at 0.70024 and 93 at 0.97522; B 3824 at 0.97522 and 36 at
+  0.70024. The stray readings are phase boundaries. X4 takes the effective
+  field (camera+0x874) live; no setter path is needed.
+* **P323.3 HELD (Patola).** Fade in A, hold in B, inside one run. The knee
+  follows the field drawn this frame and is not set at load.
+* **P323.4 → (b).** Every block drawn at the phase's field carries an
+  `M_invprojection_uj` that inverts its own `M_projection` exactly (worst
+  0.0e+00 over 4167 and 3824 block readings). The shadow lookup's
+  reconstruction is sound **within each block**. Range: a pass that read
+  ANOTHER block's inverse would not show in this census. The global-light pass
+  has not been tied to a block.
+* **P323.5 HELD for X4: no X4 core. But our layer crashed gamescope at exit**
+  (SIGABRT, core 432584). In `x4vr_DestroyImageView`, `g_devices.at()` threw
+  during gamescope's own exit-time destructors. The layer's static tables
+  (registered after gamescope's, so destroyed before) were already gone, and
+  an exception escaping a Vulkan entry point is `std::terminate`. It is the
+  first gamescope core in a take: takes 314–322 have none, and a 2026-10-05
+  16:52 gamescope abort left no core. The class is wider than this hook. The
+  layer registers 73 exit-time destructors and the injector 31, and any hook
+  called after them touches freed tables. Fix next, with "no exit-time
+  destructor in either .so" as the acceptance check (an objdump count).
+
+### Not predicted: the blocks that moved with the field are the cascades
+
+Besides the picture's blocks, four blocks were steady within each phase and
+changed between them (`fieldab other blocks that MOVED`). The menu's scene,
+at 73.74° (the most-drawn block at sx 1.33333), had the same ladder. A fifth
+block sits at about 0.00195 (A) / 0.00157 (B) in under half the readings.
+Read as orthographic widths (2/sx):
+
+    field              sx ladder                                width 2/sx (m)
+    73.74° (menu)      0.30841 0.06984 0.00841 0.00123 0.00019   6.49  28.6  238  1626  10526
+    91.44° (B)         0.38799 0.08988 0.01070 0.00157 0.00024   5.16  22.3  187  1274   8333
+    110.0° (A)         0.47213 0.11285 0.01322 0.00195 0.00030   4.24  17.7  151  1026   6667
+
+These are the shadow cascades:
+
+* The ladder's steps (4.2, 8.5, 6.8, 6.5) match `V_csmthresholds`
+  [7.2 33.3 269.9 1856.4] (4.6, 8.1, 6.9).
+* The menu's first box, 2/0.30841 = 6.485 m, is take 266's `csm0-scale`
+  exactly (1/0.154204).
+* An old line in this file already said it: "Splits move NEARER as the field
+  widens".
+
+Their own `M_invprojection_uj` never inverts their projection. The
+shadow-map passes do not use it, so that is not a defect.
+
+**The cascades get SMALLER as the view gets WIDER.** From B to A the field
+grows by 20% and every box shrinks by 18–20% (A/B sx 1.217, 1.256, 1.236,
+1.250). A wider view covered by smaller boxes leaves the off-axis cockpit
+surfaces outside cascade 0. There `getCSMWeights`' tent hands them to cascade
+1, and the brightness moves as the view turns, corners first. That is the
+fade Patola has described since take 226. It is also why 1.24 holds: cascade
+0 is still wide enough there.
+
+**Hypothesis, not established:** the cascade split distances are scaled by
+the field, much like LOD distances, and nearer splits more than cancel the
+wider frustum. The fit is X4's CPU code and has not been read. It is the next
+static read: what sets the cascade boxes from the field (the
+effective-field readers 0x17572fd, 0x175790b, 0xaec1f0, and 0x1926f80's
+callers).
+
+**Also unexplained:** the most-drawn cockpit block at sx 1.33333 (X4's default
+field, M_shadowCSM0 constant). It did not move with the field. Candidates are
+take 202's "shadow-configured" slots or a caster-culling camera, and neither
+is established.
+
