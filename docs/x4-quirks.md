@@ -23960,3 +23960,27 @@ render, gives shadows that hold at 110°.
 * Fixed for both A/B tools (csmfit and fieldab): from phase 8 on, every phase
   notice itself ends "4 of each are DONE: quit through the menu whenever you
   like (phases go on until you do)."
+
+## P325 — the cascade fix in the headset
+
+Take 322's logged line, the last VR run, with three changes. X4VR_SHADOWFOV_AB
+is out (refuted). X4VR_CSM_COVER=0.663 and X4VR_CSM_AB=45 are in. The field
+stays at **X4VR_FOV 1.4917 (110°)**. Said plainly: **this undoes the take-320
+workaround for #70** (FOV 1.24 and its black edges). The cascade fix replaces
+it, and in CONTROL phases the fade comes back by design. WiVRn, configuration 1.
+
+* **P325.1** PATCHED, STARTED in the cockpit, CONTROL/FIX alternating.
+* **P325.2** X4 draws cascade 0 at sx 0.47213 (CONTROL) and 0.22954 (FIX). The
+  fit reads X4's CPU field, and the layer's per-eye projections do not touch
+  it. If the arms' predictions read a different aspect in VR, the per-axis
+  divisors already follow X4's live aspect globals.
+* **P325.3 (Patola)** In the headset, CONTROL fades at the corners on yaw and
+  pitch; FIX holds. Both eyes see the same cascades, so a shadow that differs
+  between the eyes in FIX would be a new defect: say so if you see one.
+* **P325.4** No black edges: 110° fills the view again.
+* **P325.5** No X4 core and no gamescope core. Frame time per arm within noise.
+* Regression check, not a prediction under test: head-look write, sway off,
+  hover and mouse steering as in take 322.
+
+If it holds, the shipping line is this one without X4VR_CSM_AB (FIX always),
+and it gets tagged.
