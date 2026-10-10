@@ -837,3 +837,51 @@ glancing around, but maybe that's on the telemetry, had it before too."* This
 run carries `X4VR_MV_DUMP` and `X4VR_UI_DUMP=1800:6:150`, and a dump burst
 stalls the frame — so the jitter is NOT attributable from this take. It needs a
 dumpless repeat before it is called a defect or dismissed as one.
+
+## Take 325 — `v0.325-shadows-fixed`: #70 fixed, 110° with stable shadows
+
+**#70 was X4's, not ours.** X4's cascade fit sized each cascade sideways by
+1/tan(field/2) where the frustum needs tan(field/2). The fix,
+`X4VR_CSM_COVER=0.663`, retargets the fit's four reads of X4's aspect globals
+at divisors that give vanilla's coverage at our field. It is the project's
+first write to X4's code, approved by Patola on 2026-10-06. The fix was
+proven by a CONTROL/FIX A/B flatscreen (take 324) and in the headset (take
+325): X4's own sizing fades with the head, ours holds, and both eyes agree.
+This state **undoes the take-320 workaround** (`X4VR_FOV=1.24` and its black
+edges); the field is back at 110°. Head translation stays OFF (take 320's
+pivot fix).
+
+The line, with the A/B knob removed (FIX always). Set X4VR_TAKE and X4VR_LOG
+per run:
+
+    X4VR_HEADLOOK_LAGLOG=1 X4VR_TAKE=<n> X4VR_CANVAS_M=1000 \
+    X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 \
+    X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 \
+    X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 \
+    X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 \
+    X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 \
+    X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 \
+    X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 \
+    X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take<n>.log \
+    X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 \
+    X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_CSM_COVER=0.663 \
+    X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=0 \
+    X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+WiVRn, configuration 1. `X4VR_CAMDIFF=1` stays: the scorer's `csmfit` block
+judges the cascade X4 drew from it.
+
+**Scored (take 325, A/B form of this line).**
+
+* csmfit: CONTROL cascade-0 sx 0.47211 (54/54), FIX 0.22954 (53/53).
+* Frame time per arm within noise (+1.5%); GAMEPLAY 13.83 ms (72 fps).
+* hwrite follows the head (yaw p90 3.44°), sway 0.00°, hover with head-look
+  on, roll 9/9.
+* No X4 or gamescope core.
+
+**Open, carried:**
+
+* The pace deficit (#33).
+* The cursor moves with the head.
+* Head translation via camera+0x5a0.
+* Black edges at 110° not explicitly confirmed gone (asked after take 325).

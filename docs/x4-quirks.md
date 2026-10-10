@@ -23984,3 +23984,44 @@ it, and in CONTROL phases the fade comes back by design. WiVRn, configuration 1.
 
 If it holds, the shipping line is this one without X4VR_CSM_AB (FIX always),
 and it gets tagged.
+
+## Take 325 — SCORED: #70 is fixed in the headset. Tagged `v0.325-shadows-fixed`
+
+Patola:
+
+> *"It was impeccable, same as the flatscreen run: every interval in which our
+> fix was active, the shadows were correct. Every interval in which it was
+> inactive, the shadows were wrong and changed according to the head position.
+> ... in both modes there were no disagreement between the eyes."*
+
+He started stopped, then approached a station for moving shadows, then stopped
+near it to check both arms again.
+
+* **P325.1 HELD:** PATCHED, STARTED in the cockpit, 11 phases (6 CONTROL / 5 FIX).
+* **P325.2 HELD:** X4 drew cascade 0 at sx 0.47211 in CONTROL (54/54 readings
+  within 1% of 0.47214) and 0.22954 in FIX (53/53). In VR the most-drawn block
+  is the picture itself (sx 0.70024); in flatscreen it was the 1.33333 one.
+  Judging by the block population (fixed in take 323) covers both.
+* **P325.3 HELD (Patola):** CONTROL fades with the head, FIX holds. Both eyes
+  agree in both arms.
+* **P325.4 NOT REPORTED:** black edges. The field is back at 110°, the field
+  that filled the panels before take 320. Asked for confirmation.
+* **P325.5 HELD:** no X4 core and no gamescope core. Frame time per arm:
+  CONTROL 13.83 ms against FIX 14.04 ms (+1.5%, within noise). GAMEPLAY 13.83 ms
+  against take 322's 16.49 ms is a scene difference. The pace report's
+  starvation (96% of windows) is the standing #33 deficit, not this change.
+* **Regression check passed:**
+  * head-look write follows: |X4 − head| yaw median 0.51°, p90 3.44°;
+  * sway 0.00°, 0.0 cm;
+  * 308 hover cursor changes while head-look steered;
+  * roll sign 9/9.
+* **wivrn-server segfaulted at 20:41:41,** seven seconds after X4 exited. It
+  is not ours. WiVRn has crashed 22 times since 2026-10-07, nearly all with no
+  take running, and never during takes 310–322. Both takes 322 and 325 closed
+  the OpenXR session the same explicit way (`vr_shutdown` from
+  vkDestroyDevice, final report logged). The exit-destructor change touched
+  only memory: the xr wrappers have no destructors.
+
+**The shipping line** is take 325's without `X4VR_CSM_AB`, so FIX applies
+always. It is recorded in docs/known-good-runs.md. This **undoes the take-320
+workaround** (FOV 1.24) for good: the cascade fix replaces it.
