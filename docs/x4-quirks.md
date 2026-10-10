@@ -23906,3 +23906,57 @@ Take 323's flatscreen line with the field fixed at 110°, plus
   gamescope session.
 * **P324.6** GAMEPLAY frame time in the range of take 323's 4.76 ms. Bigger
   boxes take in more casters; any cost will be read per arm before VR.
+
+## Take 324 — SCORED: the cascade fix holds; X4's own sizing fades, ours does not
+
+Patola:
+
+> *"In all occasions, our fixed shadows behaved properly, and X4's own shadows
+> had that wrong fade. Our shadows with an increased softness look even better
+> than X4's own shadows."*
+
+He started with the ship stopped, looking around the cockpit. After a few
+phases he flew next to a station "so that I could have moving lighting and
+shadows". He quit at phase 21, thinking the phase count might be a bug (below).
+
+* **P324.1 HELD:** PATCHED at start, never REFUSED.
+* **P324.2 HELD:** STARTED once game time ran in the cockpit. 22 phases,
+  11 CONTROL and 11 FIX.
+* **P324.3 HELD:** X4 drew cascade 0 at **sx 0.47213 in CONTROL** (246/252
+  readings within 1% of the predicted 0.47214) and **0.22954 in FIX**
+  (230/236; predicted 0.22954). The stray readings sit at phase boundaries.
+  The whole ladder grew:
+
+      CONTROL  0.47213 0.11285 0.01322 0.00195 0.00030   (4.2 / 17.7 / 151 / 1026 / 6667 m)
+      FIX      0.22954 0.05112 0.00621 0.00091 0.00014   (8.7 / 39.1 / 322 / 2198 / 14286 m)
+
+  The far cascades grew 2.1–2.2× and cascade 0 grew 2.06×. That is not "the
+  same factor", which I predicted too loosely: the depth term (f−n)/2 weighs
+  more in cascade 0's slice.
+* **P324.4 HELD (Patola):** fade in every CONTROL phase, steady in every FIX
+  phase. This held both at rest and under the moving light near a station. The
+  softer FIX shadows are not a cost by his eye: *"even better than X4's
+  own"*.
+* **P324.5 HELD:** no X4 core and **no gamescope core**. This is the exit
+  fix's first real gamescope session (2706d97). Unrelated to this take, a
+  wivrn-server segfault is logged at 12:15, before the take started and with
+  WiVRn not in use.
+* **P324.6 HELD:** frame time per arm, interleaved, CONTROL 5.87 ms against FIX
+  5.46 ms. The bigger boxes cost nothing measurable; the 7% gap is the scene,
+  not the arm. GAMEPLAY 5.69 ms is higher than take 323's 4.76 ms because of
+  the station.
+
+**#70 is fixed in flatscreen.** X4's cascade fit, sized for the field we
+render, gives shadows that hold at 110°.
+
+**The protocol flaw: the "enough" notice was lost.**
+
+* The phases never end; they run until he quits, which gives more data, as
+  the station flight did.
+* At phase 8 the injector sent "4 of each — quit whenever you like" as a
+  second notification in the same instant as the phase-8 notice itself, and
+  it was lost behind it. My hand-off sentence ("after … 4 of each phase …
+  quit") also read as "4 phases".
+* Fixed for both A/B tools (csmfit and fieldab): from phase 8 on, every phase
+  notice itself ends "4 of each are DONE: quit through the menu whenever you
+  like (phases go on until you do)."

@@ -4127,14 +4127,18 @@ static void fieldab_tick() {
         g_fab.phase = phase;
         X4VR_LOG("fieldab: phase %ld %s", phase,
                  b ? "B — the NARROW field" : "A — the WIDE field");
+        // The "enough" notice rides IN the phase notice, from phase 8 on:
+        // take 324 sent it as a second notification in the same instant, it
+        // was lost behind the first, and Patola flew to phase 21 wondering
+        // whether the count was a bug.
         X4VR_LOG("milestone: field %s (phase %ld) — %s. Watch the cockpit "
-                 "shadows while you look around.",
+                 "shadows while you look around.%s",
                  b ? "B" : "A", phase,
                  b ? "narrow, shadows expected steady"
-                   : "wide, shadows expected to fade");
-        if (phase == 8)
-            X4VR_LOG("milestone: the field A/B has 4 of each phase — quit "
-                     "through the menu whenever you like.");
+                   : "wide, shadows expected to fade",
+                 phase >= 8 ? " 4 of each are DONE: quit through the menu "
+                              "whenever you like (phases go on until you do)."
+                            : "");
     }
     // Held? The value X4 has NOW, against this phase's field: a tick that
     // finds it changed since our last write was X4 putting its own back.
@@ -4330,13 +4334,15 @@ static void csmfit_tick() {
         X4VR_LOG("csmfit: phase %ld %s", phase,
                  fix ? "FIX — cascades sized for the field"
                      : "CONTROL — X4's own cascade sizing");
+        // From phase 8 on the notice itself says the A/B is complete (see
+        // fieldab_tick: a separate notice in the same instant was lost).
         X4VR_LOG("milestone: shadows %s (phase %ld) — %s. Look around, "
-                 "especially the corners and up/down.",
+                 "especially the corners and up/down.%s",
                  fix ? "FIX" : "CONTROL", phase,
-                 fix ? "expected steady" : "X4's own, expected to fade");
-        if (phase == 8)
-            X4VR_LOG("milestone: the shadow A/B has 4 of each phase — quit "
-                     "through the menu whenever you like.");
+                 fix ? "expected steady" : "X4's own, expected to fade",
+                 phase >= 8 ? " 4 of each are DONE: quit through the menu "
+                              "whenever you like (phases go on until you do)."
+                            : "");
     }
     static double last = 0.0;
     if (wall - last >= 5.0) {
