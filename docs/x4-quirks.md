@@ -24058,3 +24058,96 @@ the same verdicts (240/246 and 226/232; 54/54 and 53/53). Census +5 (197).
     again (it has read NOT EXERCISED since take 314).
 * **P326.5** No X4 core and no gamescope core. GAMEPLAY frame time in take
   325's range (scene-dependent).
+
+## Take 326 — SCORED: the first "actually playable" flight
+
+Patola: *"This is our first 'actually playable' flight, because we can use the
+map, steer with the mouse and even shoot, so it is a significant milestone."*
+He recorded it.
+
+* **P326.1 HELD:** PATCHED, FIX always. X4 drew cascade 0 at sx 0.22954 in
+  69/69 judged readings.
+  * Five menu and loading readings are not judged (no field), by design.
+  * Twelve frames held only far cascades (cascade 0 not drawn that frame), so
+    the largest block was cascade 1, 3 or 4. The scorer read those as misses
+    (69/81). They are now set aside: a fit that ignored the divisors would
+    draw cascade 0 LARGER than predicted, never smaller. Takes 324 and 325
+    re-score cleaner (240/240 and 226/230; 54/54 and 53/53). Census +2.
+* **P326.2 HELD (Patola):** *"there were no black bars to the sides, up or
+  down."* Take 320's workaround is gone for good.
+* **P326.3 HELD (Patola):** *"Lighting worked great for the whole flight."* That
+  includes chase cam (F2) and the cockpit toggled off and on (Ctrl-H) several
+  times.
+* **P326.4 HELD:**
+  * hwrite tracking yaw p90 2.53°, sway 0.00;
+  * 239 hover changes while head-look steered;
+  * the map gate held over 8 openings, all 8 free of mouselook.
+  * Patola reports mouse steering and shooting working.
+* **P326.5 HELD:** no X4 core and no gamescope core. GAMEPLAY 14.74 ms (68 fps).
+* **Configuration difference: this take ran on SteamVR**
+  (`runtime "SteamVR/OpenXR in Meta compatibility mode"`), not WiVRn. SteamVR's
+  vrcompositor segfaulted 40 s after X4 exited. That is its 22nd crash since
+  2026-09-25, nearly all outside takes. Our OpenXR session closed the usual
+  way (final report logged at 363795.481).
+* The chase cam (F2) shows the ship in a quad, as before; Patola says that is
+  fine for now. Possible future work: fill the canvas.
+
+### Issue 1: the map's right-click menu closes, and its options are hard to hit
+
+Patola: *"I could not click the guidance menu option most of the time, and
+sometime I right-clicked and the small menu disappeared in 2 seconds."*
+
+**X4's rule, from its Lua.** `ego_interactmenu/menu_interactmenu.lua`,
+`menu.onUpdate`, runs every 0.1 s. With a mouse (not a gamepad) it closes the
+menu the moment `GetLocalMousePosition()` is more than `mouseOutRange = 100`
+px outside the menu's frame. So when the menu vanished, X4's own pointer had
+left it.
+
+**What our side did in the map** (the longest session, 363462–363509 s):
+
+* head-look idle ("HUD is now down — idle, mouse handed back"), no camera
+  writes;
+* evflow: `motion pushed 0.0 Hz` — no synthetic mouse motion;
+* the layer drew the cursor at X4's pointer (ARM B, canvas off).
+
+Nothing of ours is known to move the pointer there. Two candidates remain,
+neither established:
+
+* **(a) SteamVR's own window takes focus or the pointer.** It has a desktop
+  window; WiVRn does not. The map had never been exercised under head-look
+  write mode on WiVRn either (takes 321–325 did not open it).
+* **(b) Something of ours that only shows in the map**, such as where the drawn
+  cursor sits against where X4 hit-tests in a full-screen menu.
+
+**Next: the discriminating case.** The same map action on WiVRn: open the map,
+pick a place, right-click, choose "guidance". The injector does not log
+window focus or mouse enter/leave events; add that before the take, so a
+focus change answers (a) directly. Patola's recording is the other
+instrument: what the headset showed while the menu closed.
+
+### Issue 2: the mouse-steering line is anchored at the nose, the steering at the gaze
+
+Patola: *"when we look up, down, to the sides, the effective center is where
+our gaze is, so the mouse should be relative to that place ... maybe making
+the 'center' accompany our gaze alongside the line should be considered? But
+I'm afraid that it can break other elements of the interface."*
+
+**X4's Lua confirms it exactly.** `ui/core/lua/crosshair handling.lua`,
+`updateMouseSteeringLine()`, draws the line as a CHILD of the crosshair
+element, the ship's nose. The line runs from that origin to
+`GetLocalMousePosition()` × 10, the pointer's offset from the SCREEN centre.
+X4 steers by that same screen-centre offset. With the camera forward the two
+agree. With head-look, the nose sits at offset c on screen, and the line is
+drawn translated by c from where the steering is measured. Its direction and
+length are right; its anchor is wrong. In vanilla, free-look and mouse
+steering never coexist, so X4 never had to reconcile them.
+
+**Fix (Patola's suggestion, and it touches nothing else).** An override of
+`updateMouseSteeringLine` in our extension draws the same segment translated
+by −c: from the screen centre (gaze) to the pointer, in the crosshair's local
+frame. Steering itself, hover and the cursor are untouched: X4 already steers
+relative to the gaze, so this only makes the line tell the truth. c is the
+projection of the ship's forward axis under the head-look rotation that the
+injector writes. The Lua side needs it, through the planned FFI bridge (a
+Lua `ffi.C` declaration resolving a symbol the injector exports) or a Lua API
+that gives the crosshair's screen position, if one exists.

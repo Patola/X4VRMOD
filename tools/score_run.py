@@ -4240,7 +4240,7 @@ def main(path):
         reps = sorted(cf_rep)
         rep_t = [r_[0] for r_ in reps]
         judged = {"CONTROL": [], "FIX": []}
-        unjudged = 0
+        unjudged = absent = 0
         for row in uj:
             v = cascade0(row[7])
             if not v:
@@ -4252,6 +4252,14 @@ def main(path):
             _t, arm, cov, pred = reps[k_]
             if cf_ab and arm_at(row[0]) != arm:
                 unjudged += 1  # a phase switch between report and reading
+                continue
+            if v < 0.5 * pred:
+                # Cascade 0 was not drawn this frame (take 326: 12 frames held
+                # only cascades 3-4, or 1-4), so the largest block listed is a
+                # far cascade. A fit that ignored the divisors draws cascade 0
+                # LARGER than the prediction (X4's own 0.472 against 0.230),
+                # never smaller, so setting these aside cannot hide a failure.
+                absent += 1
                 continue
             judged[arm].append((v, pred, cov))
         for arm in ("CONTROL", "FIX"):
@@ -4277,6 +4285,9 @@ def main(path):
                              f"{mmed:.5f}, not the arm's {pmed:.5f} — the fit "
                              f"did not follow the divisors"
                              + (", so the arms did not differ" if cf_ab else ""))
+        if absent:
+            print(f"csmfit {absent} reading(s) without cascade 0 (X4 drew only "
+                  f"far cascades that frame) — set aside")
         if unjudged:
             print(f"csmfit {unjudged} reading(s) not judged — no field in "
                   f"force (menus, loading: X4's own sizing by design) or a "

@@ -626,6 +626,11 @@ else
 fi
 { cat /tmp/census-cf1-base.log; printf '%s\n' "$cf1patch" "$(cfrep 999990.000 0 FIX 0.663 0.22954)" "$(cuj323 999991.000 0.70024 0.47213)"; } > /tmp/census-cf1-bad.log
 want "csmfit FIX always, X4 drew its own box -> FAIL" /tmp/census-cf1-bad.log FAIL "did not follow the divisors"
+# Take 326: some frames draw only the far cascades. The largest block listed is
+# then cascade 3, far BELOW the prediction -- set aside, not a miss.
+{ cat /tmp/census-cf1-base.log; printf '%s\n' "$cf1patch" "$(cfrep 999990.000 0 FIX 0.663 0.22954)" "$(cuj323 999991.000 0.70024 0.22954)" "$(cuj323 999992.000 0.70024 0.00091)" "$(cuj323 999993.000 0.70024 0.00091)"; } > /tmp/census-cf1-far.log
+want "csmfit a frame with only far cascades -> set aside" /tmp/census-cf1-far.log "csmfit 2 reading" "without cascade 0"
+want "csmfit a frame with only far cascades -> not a miss" /tmp/census-cf1-far.log "csmfit FIX" "1/1 within 1%"
 
 # ------------------------------------------ the session gate without X4VR_MV
 # The render-pass inventory is printed only under X4VR_MV, so a flatscreen run
