@@ -609,6 +609,23 @@ want "csmfit asked, never patched -> FAIL" /tmp/census-cf-nopatch.log FAIL "no P
 { cat /tmp/census-cf-base.log; printf '%s\n' "$cfpatch"; } > /tmp/census-cf-never.log
 want "csmfit phases never started -> FAIL" /tmp/census-cf-never.log FAIL "X4VR_CSM_AB asked, but the phases never started"
 absent "csmfit not asked -> silent" "$BASE" csmfit
+# The FIX-always form (no X4VR_CSM_AB, take 326 on): menus and loading have no
+# player camera, the fit runs on X4's own values there, and the reports say so
+# (field 0, no prediction). Those readings must not count as FIX misses.
+sed 's/env: run = /env: run = X4VR_CSM_COVER=0.663 X4VR_CAMDIFF=1 /' "$BASE" > /tmp/census-cf1-base.log
+cf1patch='[  999980.000] inject  csmfit: PATCHED — the cascade fit'"'"'s 4 reads of X4'"'"'s aspect (0x4533b00/04) now read 0x3f0000/0x3f0004; coverage 0.663, FIX always'
+cfmenu='[  999981.000] inject  csmfit: phase 0 CONTROL | field 0.00000 aspect 1.0000/1.0000 | divisors 1.00000/1.00000 | coverage 0.000 | predicted cascade-0 sx 0.00000 (r 0.000 m, far 3.060) | ticks FIX 0 CONTROL 1'
+{ cat /tmp/census-cf1-base.log; printf '%s\n' "$cf1patch" "$cfmenu" "$(cuj323 999982.000 1.33333 0.30841)" "$(cfrep 999990.000 0 FIX 0.663 0.22954)" "$(cuj323 999991.000 0.70024 0.22954)"; } > /tmp/census-cf1-ok.log
+want "csmfit FIX always -> said" /tmp/census-cf1-ok.log csmfit "coverage 0.663, FIX always"
+want "csmfit FIX always -> the flight reading judged" /tmp/census-cf1-ok.log "csmfit FIX" "1/1 within 1%"
+want "csmfit FIX always -> the menu reading set aside" /tmp/census-cf1-ok.log "csmfit 1 reading" "not judged"
+if python3 tools/score_run.py /tmp/census-cf1-ok.log 2>&1 | grep -q "^FAIL.*csmfit"; then
+    bad "csmfit FIX always, healthy with a menu -> still FAILs"
+else
+    ok "csmfit FIX always, healthy with a menu -> no FAIL"
+fi
+{ cat /tmp/census-cf1-base.log; printf '%s\n' "$cf1patch" "$(cfrep 999990.000 0 FIX 0.663 0.22954)" "$(cuj323 999991.000 0.70024 0.47213)"; } > /tmp/census-cf1-bad.log
+want "csmfit FIX always, X4 drew its own box -> FAIL" /tmp/census-cf1-bad.log FAIL "did not follow the divisors"
 
 # ------------------------------------------ the session gate without X4VR_MV
 # The render-pass inventory is printed only under X4VR_MV, so a flatscreen run

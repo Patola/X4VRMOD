@@ -24025,3 +24025,36 @@ near it to check both arms again.
 **The shipping line** is take 325's without `X4VR_CSM_AB`, so FIX applies
 always. It is recorded in docs/known-good-runs.md. This **undoes the take-320
 workaround** (FOV 1.24) for good: the cascade fix replaces it.
+
+**P325.4, answered after the take:** *"I didn't mention the black edges
+because I haven't seen them in the previous test."* That is provisional: he
+was not looking for them. Take 326 checks it on purpose.
+
+## P326 — the shipping line, first run (FIX always)
+
+The tagged line (docs/known-good-runs.md, `v0.325-shadows-fixed`) with
+X4VR_TAKE=326. Its one untested path is `X4VR_CSM_AB` unset: FIX from the
+first player camera, X4's own sizing in menus and loading (no camera, no
+field). Takes 324 and 325 only ran the A/B form.
+
+**Scorer fixed before the run.** The `csmfit` block judged every camuj reading
+against the arm's MEDIAN prediction. In the FIX-always form the menu readings
+(X4's own boxes, by design) would have counted as FIX misses. Each reading is
+now judged against the injector's report just before it, and readings under a
+report with no field are set aside and counted. Takes 324 and 325 re-scored to
+the same verdicts (240/246 and 226/232; 54/54 and 53/53). Census +5 (197).
+
+* **P326.1** PATCHED, FIX always. In flight, X4 draws cascade 0 at sx 0.22954.
+  Menu and loading readings are reported as not judged.
+* **P326.2 (Patola)** No black edge on any side, including the outer and
+  bottom edges that 1.24 left black (take 320: ~8–9°).
+* **P326.3 (Patola)** Shadows steady with the head everywhere. There is no
+  CONTROL arm now, so any fade with head position means the fix is not acting.
+* **P326.4** The regression sweep holds:
+  * head-look write tracking and sway 0.00;
+  * hover and selection with the head turned;
+  * mouse steering and boost;
+  * **the map opened and closed once**, so the scorer's map gate is exercised
+    again (it has read NOT EXERCISED since take 314).
+* **P326.5** No X4 core and no gamescope core. GAMEPLAY frame time in take
+  325's range (scene-dependent).

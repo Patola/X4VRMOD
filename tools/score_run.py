@@ -17,6 +17,7 @@ Exit:   0 all checks pass, 1 a check failed, 2 the log cannot be scored
 """
 import math
 import os
+import bisect
 import re
 import sys
 
@@ -4228,33 +4229,58 @@ def main(path):
                  if int(miss) > 0 and 0.0 < float(a_) < 0.6]
             return max(c) if c else None
 
-        for arm in ("CONTROL", "FIX"):
-            preds = sorted(p_ for t, k, _c, p_ in cf_rep
-                           if k == arm and arm_at(t) == arm and p_ > 0)
-            covs = sorted(c_ for t, k, c_, _p in cf_rep
-                          if k == arm and arm_at(t) == arm and c_ > 0)
-            meas = sorted(v for v in (cascade0(row[7]) for row in uj
-                                      if arm_at(row[0]) == arm) if v)
-            if not preds and not meas:
+        # Each camuj reading is judged against the injector's own report just
+        # before it (within 6 s): the arm in force and the cascade 0 X4's
+        # formula predicts for the field in force. A report with no field
+        # (menus and loading have no player camera, so the fit runs on X4's
+        # own values) predicts nothing, and readings under it are not judged.
+        # In the FIX-always form those readings are X4's own boxes BY DESIGN;
+        # judged against the run's median FIX prediction they would have
+        # been counted as misses (take 326 is that form's first run).
+        reps = sorted(cf_rep)
+        rep_t = [r_[0] for r_ in reps]
+        judged = {"CONTROL": [], "FIX": []}
+        unjudged = 0
+        for row in uj:
+            v = cascade0(row[7])
+            if not v:
                 continue
-            pmed = preds[len(preds) // 2] if preds else None
-            mmed = meas[len(meas) // 2] if meas else None
-            hit = (sum(1 for v in meas if pmed and abs(v - pmed) <= 0.01 * pmed)
-                   if meas else 0)
-            print(f"csmfit {arm}: X4 drew cascade 0 at sx "
-                  + (f"{mmed:.5f}" if mmed else "?")
-                  + f" (median of {len(meas)} camuj reading(s)), its arm "
-                  + (f"predicts {pmed:.5f} at coverage {covs[len(covs) // 2]:.3f}"
-                     if pmed else "logged no prediction")
-                  + (f"; {hit}/{len(meas)} within 1%" if meas and pmed else ""))
-            if not meas:
-                fails.append(f"csmfit: no camuj reading inside a {arm} arm — "
-                             f"X4VR_CAMDIFF=1 missing?")
-            elif pmed and hit < 0.5 * len(meas):
+            k_ = bisect.bisect_right(rep_t, row[0]) - 1
+            if k_ < 0 or row[0] - rep_t[k_] > 6.0 or reps[k_][3] <= 0:
+                unjudged += 1
+                continue
+            _t, arm, cov, pred = reps[k_]
+            if cf_ab and arm_at(row[0]) != arm:
+                unjudged += 1  # a phase switch between report and reading
+                continue
+            judged[arm].append((v, pred, cov))
+        for arm in ("CONTROL", "FIX"):
+            rows = judged[arm]
+            expected = cf_patched and (cf_ab or arm == "FIX")
+            if not rows:
+                if expected and (cf_start or not cf_ab):
+                    print(f"csmfit {arm}: no camuj reading under a {arm} report")
+                    fails.append(f"csmfit: no camuj reading under a {arm} "
+                                 f"report — X4VR_CAMDIFF=1 missing?")
+                continue
+            ms = sorted(v for v, _p, _c in rows)
+            ps = sorted(p for _v, p, _c in rows)
+            cs = sorted(c for _v, _p, c in rows)
+            mmed, pmed, cmed = (x[len(x) // 2] for x in (ms, ps, cs))
+            hit = sum(1 for v, p, _c in rows if abs(v - p) <= 0.01 * p)
+            print(f"csmfit {arm}: X4 drew cascade 0 at sx {mmed:.5f} (median "
+                  f"of {len(rows)} camuj reading(s)), its arm predicts "
+                  f"{pmed:.5f} at coverage {cmed:.3f}; {hit}/{len(rows)} "
+                  f"within 1% of the report before them")
+            if hit < 0.5 * len(rows):
                 fails.append(f"csmfit: in {arm} X4 drew cascade 0 at sx "
                              f"{mmed:.5f}, not the arm's {pmed:.5f} — the fit "
-                             f"did not follow the divisors, so the arms did "
-                             f"not differ")
+                             f"did not follow the divisors"
+                             + (", so the arms did not differ" if cf_ab else ""))
+        if unjudged:
+            print(f"csmfit {unjudged} reading(s) not judged — no field in "
+                  f"force (menus, loading: X4's own sizing by design) or a "
+                  f"phase switch between report and reading")
         # What each arm costs: bigger boxes take in more shadow casters.
         cf_pf = [(float(t), float(ms)) for t, ms in re.findall(
             r"\[\s*([\d.]+)\]\s+layer\s+perf frame \d+: median ([\d.]+) ms",
