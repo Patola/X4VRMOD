@@ -10031,12 +10031,37 @@ const bool g_cursor_enabled = x4vr::env_on("X4VR_CURSOR", true);
 // ([[patola-senses-transitions-not-magnitudes]]). Transitions are logged so
 // his report can be correlated against the schedule rather than against his
 // recollection of which arm he was in.
+//
+// `X4VR_CURSOR_CANVAS=auto` (take 327) is the per-context choice those two
+// takes asked for: through the canvas while X4 reports a full-screen menu (the
+// injector polls IsFullscreenMenuDisplayed into the channel), at the raw
+// pointer otherwise. Take 326 drew raw in the map, and its right-click menu
+// closed under a cursor that sat on the row X4 was not testing.
 bool cursor_canvas() {
+    static const bool automatic = [] {
+        const char *e = getenv("X4VR_CURSOR_CANVAS");
+        return e && !strcmp(e, "auto");
+    }();
     static const bool on = x4vr::env_on("X4VR_CURSOR_CANVAS", true);
     static const double ab = [] {
         const char *e = getenv("X4VR_CURSOR_CANVAS_AB");
         return e && *e ? atof(e) : 0.0;
     }();
+    if (ab <= 0.0 && automatic) {
+        const x4vr::Shared *s = shared_state();
+        const bool want =
+            s && s->fullscreen_menu.load(std::memory_order_relaxed) != 0;
+        static int said = -1;
+        if (said != (int)want) {
+            said = (int)want;
+            X4VR_LOG("cursor canvas: AUTO — %s",
+                     want ? "ON (a full-screen menu is up: the cursor follows "
+                            "X4's UI)"
+                          : "OFF (no full-screen menu: the cursor at the raw "
+                            "pointer, where X4 picks the world)");
+        }
+        return want;
+    }
     if (ab <= 0.0)
         return on;
     // Same clock idiom as the A/B above, rather than a second one.

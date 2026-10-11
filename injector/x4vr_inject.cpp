@@ -4358,6 +4358,56 @@ static void csmfit_tick() {
     }
 }
 
+// ------------------------------------------------ X4VR_CURSOR_CANVAS=auto
+//
+// Take 326's map: the right-click menu closed within seconds and "Start
+// Guidance to Position" would not highlight under the cursor. The recording
+// shows the drawn cursor ON the row with X4's map-pan cursor shape: X4 was
+// hit-testing elsewhere. Take 311 had measured why: a full-screen menu
+// hit-tests in X4's UI, which the layer shows scaled by the canvas map, so the
+// cursor must be drawn through that map there; take 314 found the opposite in
+// flight (X4 picks the world at the raw pointer), and every take since 315
+// drew raw everywhere. `auto` draws through the canvas only while X4 reports a
+// full-screen menu.
+static bool cursor_canvas_auto() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_CURSOR_CANVAS");
+        return e && !strcmp(e, "auto");
+    }();
+    return on;
+}
+
+// `bool IsFullscreenMenuDisplayed(bool anymenu, const char* menuname);` is
+// declared in X4's own Lua cdefs (ego_helptext/helptext.lua). With anymenu
+// true it tail-calls 0x117f7c0, which walks X4's static table of open menus
+// (header 0x3dfc200, a std::map header: never NULL) and reads each entry's
+// flag. The table lives until X4's main() returns, after which no tick runs.
+// Called on X4's main thread, from its event drain.
+static void fullscreen_menu_tick() {
+    if (!cursor_canvas_auto())
+        return;
+    using Fn = bool (*)(bool, const char *);
+    static Fn fn = [] {
+        Fn f = (Fn)dlsym(RTLD_DEFAULT, "IsFullscreenMenuDisplayed");
+        X4VR_LOG("ui: IsFullscreenMenuDisplayed %s",
+                 f ? "resolved — X4VR_CURSOR_CANVAS=auto follows it"
+                   : "NOT FOUND — the cursor stays at the raw pointer");
+        return f;
+    }();
+    if (!fn)
+        return;
+    const bool up = fn(true, nullptr);
+    static int last = -1;
+    if ((int)up != last) {
+        last = up;
+        X4VR_LOG("ui: full-screen menu %s",
+                 up ? "UP — the cursor is drawn through the UI canvas"
+                    : "DOWN — the cursor is drawn at the raw pointer");
+    }
+    x4vr_shared_state()->fullscreen_menu.store(up ? 1u : 0u,
+                                               std::memory_order_relaxed);
+}
+
 // **Task #75's fix: where the tick's cadence comes from.**
 //
 // 0 = X4's event drain, exactly as every take so far. Anything else is a rate in
@@ -6175,6 +6225,7 @@ void SDL_PumpEvents(void) {
         shadowfov_tick();
         fieldab_tick();
         csmfit_tick();
+        fullscreen_menu_tick();
         pumprate_report();
     }
     real_fn();

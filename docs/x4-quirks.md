@@ -24151,3 +24151,73 @@ projection of the ship's forward axis under the head-look rotation that the
 injector writes. The Lua side needs it, through the planned FFI bridge (a
 Lua `ffi.C` declaration resolving a symbol the injector exports) or a Lua API
 that gives the crosshair's screen position, if one exists.
+
+## Take 326's map menu, from the recording: our cursor mapping, not SteamVR
+
+Patola's recording (`/jogos/videos/x4-foundations-vr-mod-voo-1.mp4`) is the
+headset view, one eye, 1920×1080, 554.4 s. It is synced to the log by the
+first map opening: video 169.0 s ↔ log 398.7 s, so **log = video + 363229.7
+s** (±0.25 s). Frames stay in the scratchpad; X4's rendered output is never
+committed.
+
+**What it shows** (video 237.6–242 s = log 467.3–471.7 s, in the long map
+session):
+
+* The right-click menu ("Avarice V Dead End": Show Encyclopedia Entry /
+  Actions / Start Guidance to Position) is open.
+* From 239.2 s to 241.2 s the drawn cursor sits ON "Start Guidance to
+  Position", and the row never highlights.
+* The cursor's shape is X4's four-arrow **map-pan** cursor. X4 picks the shape
+  from where IT thinks the pointer is, which was over the map, not the menu.
+* `menu_interactmenu.lua` closes the menu when that pointer is >100 px
+  outside it ("disappeared in 2 seconds").
+
+**The mechanism was measured in take 311 and then undone without noticing.**
+
+* Take 311: in the map and full-screen menus, X4 hit-tests in its UI, which
+  the layer shows scaled by the canvas map (0.5252). The cursor must be drawn
+  through that map there. Drawing it at the raw pointer puts it n/A from where
+  X4 tests: "the error grows with distance from the centre".
+* Take 314: in flight X4 picks the world at the raw pointer, so raw is right
+  there.
+* Take 315 and every take since shipped `X4VR_CURSOR_CANVAS=0`, raw
+  everywhere, and the map was not opened again until take 326.
+
+The per-context choice take 314 named as open is the fix. **SteamVR is not
+implicated.** The planned focus and enter/leave logging is not built: the
+recording answered the question it was for.
+
+**`X4VR_CURSOR_CANVAS=auto`.**
+
+* The injector polls X4's `IsFullscreenMenuDisplayed(true, NULL)` each tick
+  on X4's main thread and publishes it in the shared channel (`fullscreen_menu`,
+  share v4). The function is declared in X4's Lua cdefs. With anymenu true it
+  tail-calls 0x117f7c0, which walks X4's static open-menu table (a std::map
+  header at 0x3dfc200, never NULL, alive until main() returns).
+* The layer draws the cursor through the canvas while it reads 1 and at the
+  raw pointer otherwise.
+* Both ends log their changes: `ui: full-screen menu UP/DOWN` and
+  `cursor canvas: AUTO — ON/OFF`. Scorer `cursor-auto` counts both, and FAILs
+  a menu the injector saw that never switched the layer. Census +5.
+
+**Not covered: the cockpit right-click menu** (HUD up, no full-screen menu)
+still draws raw. If it misbehaves like the map did, the Lua link (the
+steering-line work) can report the interact menu's open/close.
+
+### P327
+
+The shipping line (take 326's) with `X4VR_CURSOR_CANVAS=auto` instead of 0.
+
+* **P327.1** `ui: IsFullscreenMenuDisplayed resolved`. Each map opening logs
+  UP, and the layer switches ON within 1 s; closing logs DOWN, then OFF.
+* **P327.2 (Patola)** In the map the cursor sits on what X4 highlights. A
+  right-click on a place opens a menu that stays open while the cursor is on
+  it, and "Start Guidance to Position" highlights and clicks. The cursor's
+  reach in the map is about half the eye, as in take 311's ARM A; that is
+  expected.
+* **P327.3** Flight unchanged from take 326: hover, selection, mouse steering,
+  shadows, no black bars.
+* **P327.4 (unknown, recorded)** A right-click on a target in the COCKPIT
+  still uses the raw pointer. If its menu closes or misses like the map's did,
+  that is the next case.
+* **P327.5** No X4 core and no gamescope core.

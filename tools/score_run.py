@@ -4309,6 +4309,51 @@ def main(path):
                       f"({len(by['CONTROL'])} window(s)), FIX {mf:.2f} ms "
                       f"({len(by['FIX'])}) — FIX {100 * (mf - mc) / mc:+.1f}%")
 
+    # --- X4VR_CURSOR_CANVAS=auto: the cursor through the canvas in menus ----
+    #
+    # Take 326's map menu closed under a cursor drawn at the raw pointer; take
+    # 311 had shown full-screen menus need the canvas map. The injector polls
+    # X4's IsFullscreenMenuDisplayed and logs each change; the layer logs each
+    # change of the mapping it actually used. Both ends are checked: a menu the
+    # injector saw that never reached the layer's choice is the switch failing.
+    ca_asked = bool(re.search(r"\bX4VR_CURSOR_CANVAS=auto\b", run or ""))
+    ui_up = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+ui: full-screen menu "
+                       r"(UP|DOWN)", text)
+    ca_sw = re.findall(r"\[\s*([\d.]+)\]\s+layer\s+cursor canvas: AUTO — "
+                       r"(ON|OFF)", text)
+    if ca_asked or ca_sw:
+        if "IsFullscreenMenuDisplayed NOT FOUND" in text:
+            fails.append("X4VR_CURSOR_CANVAS=auto: X4 does not export "
+                         "IsFullscreenMenuDisplayed — the cursor never left "
+                         "the raw pointer")
+        n_up = sum(1 for _t, k in ui_up if k == "UP")
+        n_on = sum(1 for _t, k in ca_sw if k == "ON")
+        print(f"cursor-auto  X4 reported a full-screen menu {n_up} time(s); "
+              f"the layer switched the cursor to the canvas {n_on} time(s), "
+              f"back to the raw pointer "
+              f"{sum(1 for _t, k in ca_sw if k == 'OFF')} time(s)")
+        if ca_asked and n_up and not n_on:
+            fails.append("X4VR_CURSOR_CANVAS=auto: X4 showed a full-screen "
+                         "menu but the layer never drew the cursor through "
+                         "the canvas — the switch did not reach the layer")
+        elif ca_asked and not n_up:
+            print("cursor-auto  no full-screen menu in this run (the map was "
+                  "never opened), so the switch was not exercised")
+        # Each injector UP followed by a layer ON within 1 s: the per-frame
+        # path, not just the totals.
+        late = 0
+        sw_on = [float(t) for t, k in ca_sw if k == "ON"]
+        for t, k in ui_up:
+            if k != "UP":
+                continue
+            t = float(t)
+            if not any(t - 0.05 <= x <= t + 1.0 for x in sw_on):
+                late += 1
+        if n_up and late:
+            print(f"cursor-auto  {late} of {n_up} menu opening(s) had no layer "
+                  f"switch within 1 s (a menu up for less than a frame, or "
+                  f"the channel lagging)")
+
     # --- who WRITES the camera orientation? (X4VR_CAMWATCH) --------------
     #
     # Read-only hardware write-watchpoints on the matrix GetCameraRotation

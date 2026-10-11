@@ -632,6 +632,24 @@ want "csmfit FIX always, X4 drew its own box -> FAIL" /tmp/census-cf1-bad.log FA
 want "csmfit a frame with only far cascades -> set aside" /tmp/census-cf1-far.log "csmfit 2 reading" "without cascade 0"
 want "csmfit a frame with only far cascades -> not a miss" /tmp/census-cf1-far.log "csmfit FIX" "1/1 within 1%"
 
+# ------------------------------------------ X4VR_CURSOR_CANVAS=auto
+sed 's/env: run = /env: run = X4VR_CURSOR_CANVAS=auto /' "$BASE" > /tmp/census-ca-base.log
+caup='[  999990.000] inject  ui: full-screen menu UP — the cursor is drawn through the UI canvas'
+caon='[  999990.020] layer   cursor canvas: AUTO — ON (a full-screen menu is up: the cursor follows X4'"'"'s UI)'
+cadown='[  999995.000] inject  ui: full-screen menu DOWN — the cursor is drawn at the raw pointer'
+caoff='[  999995.020] layer   cursor canvas: AUTO — OFF (no full-screen menu: the cursor at the raw pointer, where X4 picks the world)'
+{ cat /tmp/census-ca-base.log; printf '%s\n' "$caup" "$caon" "$cadown" "$caoff"; } > /tmp/census-ca-ok.log
+want "cursor auto: menu seen and switched -> counted" /tmp/census-ca-ok.log cursor-auto "full-screen menu 1 time(s); the layer switched the cursor to the canvas 1 time(s)"
+if python3 tools/score_run.py /tmp/census-ca-ok.log 2>&1 | grep -q "^FAIL.*CURSOR_CANVAS"; then
+    bad "cursor auto healthy -> still FAILs"
+else
+    ok "cursor auto healthy -> no FAIL"
+fi
+{ cat /tmp/census-ca-base.log; printf '%s\n' "$caup" "$cadown"; } > /tmp/census-ca-stuck.log
+want "cursor auto: menu seen, layer never switched -> FAIL" /tmp/census-ca-stuck.log FAIL "the switch did not reach the layer"
+want "cursor auto: no map opened -> said" /tmp/census-ca-base.log cursor-auto "the switch was not exercised"
+absent "cursor auto not asked -> silent" "$BASE" cursor-auto
+
 # ------------------------------------------ the session gate without X4VR_MV
 # The render-pass inventory is printed only under X4VR_MV, so a flatscreen run
 # (take 323) was refused as "stopped early" with its measurement in the file.

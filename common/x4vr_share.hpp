@@ -38,7 +38,9 @@ constexpr uint32_t kShareMagic = 0x52565834u;
 // injector's belief, so the declared pose and the pose X4 actually reports can
 // appear on one line instead of being paired across two logs after the fact.
 // 3: that block got the seqlock it should have had from the start (`cam_seq`).
-constexpr uint32_t kShareVersion = 3u;
+// 4: `fullscreen_menu`, so the layer can draw the cursor through the UI canvas
+// only while X4 shows a full-screen menu (X4VR_CURSOR_CANVAS=auto, take 327).
+constexpr uint32_t kShareVersion = 4u;
 
 struct Shared {
     uint32_t magic = kShareMagic;
@@ -166,6 +168,13 @@ struct Shared {
     // CLOCK_MONOTONIC nanoseconds when the readback was taken. Same clock the
     // log prefix uses, so a line's own timestamp minus this IS the age.
     std::atomic<uint64_t> cam_raw_ns{0};
+
+    // X4's `IsFullscreenMenuDisplayed(true, NULL)`, polled on X4's main thread
+    // each tick while X4VR_CURSOR_CANVAS=auto. Where the pointer is hit-tested
+    // depends on it: a full-screen menu (the map) hit-tests in X4's UI, which
+    // the layer shows scaled by the canvas map (take 311), while in flight X4
+    // picks the world at the raw pointer (take 314). 1 = a menu is up.
+    std::atomic<uint32_t> fullscreen_menu{0};
 };
 
 // ---- the camera block, as one consistent snapshot ------------------------
