@@ -650,6 +650,20 @@ want "cursor auto: menu seen, layer never switched -> FAIL" /tmp/census-ca-stuck
 want "cursor auto: no map opened -> said" /tmp/census-ca-base.log cursor-auto "the switch was not exercised"
 absent "cursor auto not asked -> silent" "$BASE" cursor-auto
 
+# ------------------------------------------ cursor stand-in and Lua reconnaissance
+cdlines='[  999980.000] inject  sdl: X4 has set no cursor yet — showing its first-built one (#0, 32x32 hot=(7,8)) until it picks one'
+{ cat "$BASE"; printf '%s\n' "$cdlines" '[  999990.000] inject  sdl: X4 set cursor #5' '[  999991.000] inject  sdl: X4 set cursor #0' '[  999992.000] inject  sdl: X4 set cursor #5'; } > /tmp/census-cd.log
+want "cursor stand-in shown -> said" /tmp/census-cd.log cursor-default "X4's cursor #0 (32x32, hot 7,8) shown until X4 set one"
+want "cursor stand-in not X4's first choice -> NOTE" /tmp/census-cd.log cursor-default "X4's own first choice was #5, not #0"
+lua1='[  999970.000] inject  lua[buf] ui/core/lua/crosshair handling.lua (51234 bytes, bytecode, L=0x1000)'
+lua2='[  999971.000] inject  lua[buf] ui/addons/ego_interactmenu/menu_interactmenu.lua (99999 bytes, bytecode, L=0x2000)'
+{ cat "$BASE"; printf '%s\n' "$lua1" "$lua2"; } > /tmp/census-lua.log
+want "lua: two states -> DIFFERENT named" /tmp/census-lua.log lua "DIFFERENT Lua states"
+want "lua: kinds counted" /tmp/census-lua.log lua "2 chunk(s): bytecode 2 | 2 Lua state(s)"
+absent "lua: no X4VR_LUA -> silent" "$BASE" "lua     "
+{ cat "$BASE"; printf '%s\n' '[  999990.000] inject  sdl: X4 set cursor #7 at pointer 400,700 [full-screen menu]' '[  999991.000] inject  sdl: X4 set cursor #0 at pointer 2400,2100 [full-screen menu]' '[  999992.000] inject  sdl: X4 set cursor #7 at pointer 1400,1400'; } > /tmp/census-edges.log
+want "cursor edges: menu changes bounded" /tmp/census-edges.log cursor-edges "2 shape change(s) inside full-screen menus: pointer x 400..2400, y 700..2100"
+
 # ------------------------------------------ the session gate without X4VR_MV
 # The render-pass inventory is printed only under X4VR_MV, so a flatscreen run
 # (take 323) was refused as "stopped early" with its measurement in the file.

@@ -2132,17 +2132,26 @@ static void lua_dump_chunk(const char *name, const char *buff, size_t sz) {
                  strerror(errno));
 }
 
-static void note_lua_chunk(const char *buff, size_t sz, const char *name,
-                           const char *via) {
+// For the Lua link (take 328 on): WHICH Lua state each chunk loads into --
+// the crosshair code and the right-click menu may live in different ones, and
+// an add-on reaches only "menus" -- and whether X4 hands over source or LuaJIT
+// bytecode ("\x1bLJ"), which decides whether a chunk can be patched as text.
+static void note_lua_chunk(void *L, const char *buff, size_t sz,
+                           const char *name, const char *via) {
     static int chunks = 0, hits = 0;
     const char *n = x4vr::lua_chunk_name(name);
-    if (chunks < 400) {
+    const char *kind = !buff ? "by path"
+                       : (sz >= 3 && buff[0] == '\x1b' && buff[1] == 'L' &&
+                          buff[2] == 'J')
+                           ? "bytecode"
+                           : "source";
+    if (chunks < 2000) {
         chunks++;
-        X4VR_LOG("lua[%s] %s (%zu bytes)", via, n, sz);
-    } else if (chunks == 400) {
+        X4VR_LOG("lua[%s] %s (%zu bytes, %s, L=%p)", via, n, sz, kind, L);
+    } else if (chunks == 2000) {
         chunks++;
-        X4VR_LOG("lua: 400 chunk names logged, capping — the keyword scan below "
-                 "keeps running");
+        X4VR_LOG("lua: 2000 chunk names logged, capping — the keyword scan "
+                 "below keeps running");
     }
     if (!buff || hits >= 60)
         return;
@@ -2176,7 +2185,7 @@ extern "C" int luaL_loadbuffer(void *L, const char *buff, size_t sz,
             X4VR_LOG("lua: luaL_loadbuffer IS called — X4's Lua is reachable "
                      "from here");
         }
-        note_lua_chunk(buff, sz, name, "buf");
+        note_lua_chunk(L, buff, sz, name, "buf");
     }
     return real_fn(L, buff, sz, name);
 }
@@ -2189,7 +2198,7 @@ extern "C" int luaL_loadfile(void *L, const char *filename) {
             said = true;
             X4VR_LOG("lua: luaL_loadfile IS called — chunks also arrive by path");
         }
-        note_lua_chunk(nullptr, 0, filename, "file");
+        note_lua_chunk(L, nullptr, 0, filename, "file");
     }
     return real_fn(L, filename);
 }
@@ -3644,6 +3653,8 @@ static void camwrite_refuse(const char *why, bool alarm) {
 
 // May we write into `cam` now? The code sites once per session; the rest per
 // tick, because a camera, its mode or X4's parameters can change under us.
+static bool x4_game_time(double *out); // with X4VR_FIELD_AB, below
+
 static bool camwrite_ready(uintptr_t cam, float plim_deg, float ylim_deg) {
     using namespace x4vr;
     auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
@@ -3733,8 +3744,17 @@ static bool camwrite_ready(uintptr_t cam, float plim_deg, float ylim_deg) {
                  "be pressed",
                  (void *)cam, p[0], p[1], pc.radians ? "radians" : "degrees",
                  p[2], p[3], (void *)att[0], (void *)att[1]);
-        static bool said = false;
-        if (!said) {
+    }
+    // The notice waits for play. Arming needs only the camera and X4's loaded
+    // look-around parameters, and take 327 met both at ~65% of the save's
+    // loading screen: writing then is harmless, announcing it then misleads.
+    // Two seconds of running game time, the same gate the A/Bs use.
+    static bool said = false;
+    static x4vr::fieldab::GameClock clock;
+    if (!said) {
+        double gt = 0.0;
+        if (x4_game_time(&gt) &&
+            x4vr::fieldab::game_clock_step(clock, gt, mono_seconds(), 2.0, 1.0)) {
             said = true;
             X4VR_LOG("milestone: head-look write ARMED — the view now follows "
                      "your head without mouse-look.");
@@ -6438,12 +6458,27 @@ void *SDL_CreateColorCursor(void *surface, int hot_x, int hot_y) {
         for (uint32_t b = 0; b < c.w * 4u; b++)
             c.px[(size_t)y * c.w * 4u + b] =
                 ((const uint8_t *)sf->pixels)[(size_t)y * c.pitch + b];
+    size_t idx;
     {
         std::lock_guard<std::mutex> lock(g_cursor_mu);
         g_cursors.push_back(c);
+        idx = g_cursors.size() - 1;
+        // Until X4 sets a cursor of its own it shows SDL's default system
+        // arrow, which is never captured, so the layer had nothing to draw:
+        // takes 326 and 327 had no cursor on the start screen while hover
+        // worked. X4's first-built cursor stands in (take 327: 32x32, hotspot
+        // (7,8), the hotspot six of its 26 cursors share). Its first own set
+        // replaces it, and the set log below says which one that was.
+        if (idx == 0 && !g_cursor_sets.sets.load(std::memory_order_relaxed)) {
+            publish_cursor_image(c);
+            X4VR_LOG("sdl: X4 has set no cursor yet — showing its first-built "
+                     "one (#0, %ux%u hot=(%d,%d)) until it picks one",
+                     c.w, c.h, hot_x, hot_y);
+        }
     }
-    X4VR_LOG("sdl: captured cursor %p — %ux%u fmt=0x%08x pitch=%u hot=(%d,%d)",
-             cur, c.w, c.h, c.format, c.pitch, hot_x, hot_y);
+    X4VR_LOG("sdl: captured cursor #%zu %p — %ux%u fmt=0x%08x pitch=%u "
+             "hot=(%d,%d)",
+             idx, cur, c.w, c.h, c.format, c.pitch, hot_x, hot_y);
     return cur;
 }
 
@@ -6525,14 +6560,46 @@ bool SDL_SetCursor(void *cursor) {
                     .fetch_add(1, std::memory_order_relaxed);
         }
         bool hit = false;
+        long which = -1;
         {
             std::lock_guard<std::mutex> lock(g_cursor_mu);
-            for (const CapturedCursor &c : g_cursors)
-                if (c.handle == cursor) {
-                    publish_cursor_image(c);
+            for (size_t i = 0; i < g_cursors.size(); i++)
+                if (g_cursors[i].handle == cursor) {
+                    publish_cursor_image(g_cursors[i]);
                     hit = true;
+                    which = (long)i;
                     break;
                 }
+        }
+        // Which cursor, by build order, for the first changes: whether the
+        // stand-in above (#0) is the arrow X4 uses in its menus is a fact
+        // about X4 this line establishes.
+        //
+        // With the pointer, while a full-screen menu is up: X4 switches shape
+        // exactly where its content starts and ends (the map's circled target
+        // becomes an arrow at the map's edge), so a sweep across the four
+        // edges measures X4's own layout in window pixels -- the question
+        // take 327's "the cursor does not fit the map" left open.
+        static long last_which = -2;
+        static int said_sets = 0, said_menu = 0;
+        if (which != last_which) {
+            const x4vr::Shared *sh = x4vr_shared_state();
+            const bool menu =
+                sh->fullscreen_menu.load(std::memory_order_relaxed) != 0;
+            if (said_sets < 40 || (menu && said_menu < 400)) {
+                said_sets++;
+                if (menu)
+                    said_menu++;
+                X4VR_LOG("sdl: X4 set cursor #%ld%s at pointer %.0f,%.0f%s",
+                         which,
+                         which < 0 ? " (not one it built through "
+                                     "SDL_CreateColorCursor)"
+                                   : "",
+                         sh->cursor_x.load(std::memory_order_relaxed),
+                         sh->cursor_y.load(std::memory_order_relaxed),
+                         menu ? " [full-screen menu]" : "");
+            }
+            last_which = which;
         }
         (hit ? g_cursor_sets.found : g_cursor_sets.missed)
             .fetch_add(1, std::memory_order_relaxed);

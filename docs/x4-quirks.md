@@ -24312,3 +24312,47 @@ frame's rectangle in window pixels. A UI dump of the map goes beside them, and
 the pointer's extents are already logged. The fix depends on the numbers. It
 may be clamping the pointer to the content while a full-screen menu is up,
 or serving a VR-appropriate uiscale.
+
+## Built for take 328: start-screen cursor, ARMED timing, map-edge and Lua measurements
+
+* **Start-screen cursor.** X4 builds 26 cursors at start (take 327: all
+  32×32; hotspot (7,8) six times, (0,0) once, the rest centred or offset) and
+  sets none until the cockpit. The start screen shows SDL's default system
+  arrow, never captured. Now X4's first-built cursor (#0, 32×32 hot (7,8))
+  is published as soon as it is built and stands in until X4's first own
+  set. The first 40 cursor changes log which build index X4 chose, so the
+  scorer's `cursor-default` says whether #0 is the arrow X4 itself uses.
+* **ARMED notice.** Arming is unchanged: it still happens when the camera and
+  X4's loaded look-around parameters exist. The milestone waits for 2 s of
+  running game time.
+* **The map's edges, measured by X4.** Every cursor change inside a
+  full-screen menu (up to 400) logs the pointer position. X4 switches shape
+  where its content starts and ends, so a sweep across the map's four edges
+  gives X4's layout in window pixels. Scorer: `cursor-edges`.
+* **Lua reconnaissance** (`X4VR_LUA=1`). Each chunk logs its Lua state pointer
+  and whether it arrived as source or LuaJIT bytecode. Scorer `lua` says
+  whether the crosshair code and the right-click menu share a state. The Lua
+  link's design depends on it: an add-on reaches only the "menus"
+  environment; the injector's `luaL_loadbuffer` hook reaches every state.
+* Census +6 (210).
+
+### P328
+
+Take 327's line with **`X4VR_LUA=1`**, the lost `X4VR_HEADLOOK_LAGLOG=1`
+restored, and `X4VR_TAKE` first.
+
+* **P328.1 (Patola)** A cursor is drawn on the start screen. The log shows
+  the stand-in, then X4's first own set. If that first set is not #0, the
+  stand-in should become the one X4 chose.
+* **P328.2 (Patola)** "head-look write ARMED" arrives after the loading
+  screen, once play begins.
+* **P328.3** The map sweep: in the map, move the cursor slowly out across each
+  of the four edges and back. `cursor-edges` gives the pointer range where X4
+  switched. **Prediction, from the 16:9 band:** the vertical edges at about
+  y ≈ 616 and 2200 (2816·(1−9/16)/2 and its mirror), horizontal close to the
+  window. Patola's asymmetry (no reach at the bottom or right) would show as
+  edges beyond the window's range on those sides.
+* **P328.4** `lua`: every chunk logged with state and kind. No prediction of
+  which; the answer picks the Lua link's route.
+* **P328.5** Flight unchanged, `cursor-auto` switches, no X4 core, no
+  gamescope core. Head-look tracking measured again (LAGLOG restored).

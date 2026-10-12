@@ -4354,6 +4354,76 @@ def main(path):
                   f"switch within 1 s (a menu up for less than a frame, or "
                   f"the channel lagging)")
 
+    # --- the start-screen cursor stand-in, and which cursors X4 picks ------
+    #
+    # Takes 326-327 drew no cursor on the start screen: X4 shows SDL's default
+    # system arrow until its first own SDL_SetCursor, and that is never
+    # captured. The injector now shows X4's first-built cursor (#0) until then,
+    # and logs which built cursor X4 sets on its first changes -- the check on
+    # whether #0 is the arrow X4 itself uses in its menus.
+    cd_said = re.search(r"sdl: X4 has set no cursor yet — showing its "
+                        r"first-built one \(#0, (\S+) hot=\((\d+),(\d+)\)\)",
+                        text)
+    cd_sets = re.findall(r"sdl: X4 set cursor #(-?\d+)", text)
+    if cd_said or cd_sets:
+        from collections import Counter as _C
+        cnt = _C(cd_sets)
+        print("cursor-default " + (
+            f"X4's cursor #0 ({cd_said.group(1)}, hot "
+            f"{cd_said.group(2)},{cd_said.group(3)}) shown until X4 set one"
+            if cd_said else "no stand-in shown (X4 set a cursor before "
+            "building #0, or an older build)"))
+        if cd_sets:
+            print(f"cursor-default X4's first set was #{cd_sets[0]}; the sets "
+                  f"logged ({len(cd_sets)}) by build index: "
+                  + ", ".join(f"#{k} x{v}" for k, v in cnt.most_common(8)))
+            if cd_said and cd_sets[0] != "0":
+                print(f"cursor-default NOTE: X4's own first choice was "
+                      f"#{cd_sets[0]}, not #0 — if #{cd_sets[0]} is its menu "
+                      f"arrow, the stand-in should be that one")
+
+    # Where X4 switched shape inside full-screen menus: the content's edges in
+    # window pixels, measured by X4 itself (take 327's map-fit question).
+    me = [(int(w), float(x), float(y)) for w, x, y in re.findall(
+        r"sdl: X4 set cursor #(-?\d+).*? at pointer (-?[\d.]+),(-?[\d.]+) "
+        r"\[full-screen menu\]", text)]
+    if me:
+        xs = sorted(x for _w, x, _y in me)
+        ys = sorted(y for _w, _x, y in me)
+        print(f"cursor-edges {len(me)} shape change(s) inside full-screen "
+              f"menus: pointer x {xs[0]:.0f}..{xs[-1]:.0f}, y {ys[0]:.0f}.."
+              f"{ys[-1]:.0f} (the window is 0..W-1). X4 switches shape where "
+              f"its content starts and ends, so a sweep across the map's four "
+              f"edges puts them here")
+
+    # --- the Lua reconnaissance (X4VR_LUA=1): which state, source or bytecode
+    lua_rows = re.findall(r"lua\[(buf|file)\] (.*?) \((\d+) bytes, "
+                          r"(source|bytecode|by path), L=(\S+)\)", text)
+    if lua_rows:
+        kinds = {}
+        states = {}
+        for _v, nm, _sz, kind, L in lua_rows:
+            kinds[kind] = kinds.get(kind, 0) + 1
+            states.setdefault(L, []).append(nm)
+        print(f"lua     {len(lua_rows)} chunk(s): "
+              + ", ".join(f"{k} {v}" for k, v in sorted(kinds.items()))
+              + f" | {len(states)} Lua state(s)")
+        for key in ("crosshair", "interactmenu", "helper", "widget_fullscreen"):
+            hit = [(nm, L, kind) for _v, nm, _sz, kind, L in lua_rows
+                   if key in nm.lower().replace(" ", "")]
+            if hit:
+                nm, L, kind = hit[0]
+                print(f"lua     {key}: {nm} -> state {L} ({kind}); that state "
+                      f"loaded {len(states.get(L, []))} chunk(s)")
+        same = [r for r in lua_rows if "crosshair" in r[1].lower()]
+        inter = [r for r in lua_rows if "interactmenu" in r[1].lower()]
+        if same and inter:
+            print("lua     => the crosshair code and the right-click menu share "
+                  "ONE Lua state" if same[0][4] == inter[0][4] else
+                  "lua     => the crosshair code and the right-click menu are in "
+                  "DIFFERENT Lua states: an add-on in 'menus' cannot reach the "
+                  "crosshair")
+
     # --- who WRITES the camera orientation? (X4VR_CAMWATCH) --------------
     #
     # Read-only hardware write-watchpoints on the matrix GetCameraRotation
