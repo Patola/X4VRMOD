@@ -24221,3 +24221,63 @@ The shipping line (take 326's) with `X4VR_CURSOR_CANVAS=auto` instead of 0.
   still uses the raw pointer. If its menu closes or misses like the map's did,
   that is the next case.
 * **P327.5** No X4 core and no gamescope core.
+
+## Take 327 — SCORED: the cursor switches with full-screen menus; four new observations
+
+WiVRn. The scorer passed:
+
+* `cursor-auto`: X4 reported a full-screen menu 9 times, and the layer drew
+  the cursor through the canvas 9 times and returned to raw 10 times. In the
+  canvas arm the cursor was drawn over exactly ±0.5252 (the map's reach); in
+  the raw arm, 76%×94% of the eye.
+* csmfit 257/257. Hover 278 changes with head-look steering. Sway 0.00.
+* The map gate held over 10 HUD-down intervals.
+* No X4 core and no gamescope core. wivrn-server segfaulted 16 s after X4
+  exited, as before: WiVRn's.
+* **`hwrite tracking: not measured`:** this run's line lacks
+  `X4VR_HEADLOOK_LAGLOG=1`, the FIRST token of the command, which was lost in
+  the copy. The diff against take 326's logged run is exactly that token,
+  the take, the log and the cursor knob. It is not a regression. From now on
+  commands start with `X4VR_TAKE=`, so a lost first token shows up as a
+  missing take name.
+
+**Patola's four observations, as data:**
+
+1. **The map cursor does not fit its quad**: *"It stays in 'circled target'
+   mode inside the map and it goes a bit after the map to the left and up
+   (when it transform into an arrow). And then it doesn't go all the way to
+   the left or the bottom."* The layer's canvas map is symmetric about the
+   eye's centre: drawn ±0.5252, equal to the reach. So the arithmetic does not
+   explain an up-left offset. He has a movie of it; the movie decides.
+2. **No cursor on the start screen, though hover works** (also in take 326).
+   X4 set no cursor of its own until the cockpit (first set at log 405930;
+   "X4 built 26 cursor(s) and has not SET one" before). On the start screen it
+   shows SDL's default system cursor, which our capture never sees, so the
+   layer has no image to draw.
+3. **"Head-look write ARMED" arrived at ~65% of the save's loading screen**
+   (log 405888). Arming waits for the camera and X4's loaded look-around
+   parameters, not for play. Harmless, but the notice misleads. It should
+   wait for game time, as fieldab and csmfit do.
+4. **Right-click on objects to the side gives a "slanted" (perspective) menu,
+   and far to the side it "either doesn't work or does something invisible".**
+   This is P327.4's unknown: the cockpit right-click menu is UI (canvas-scaled),
+   while the cursor in flight is raw. The mismatch grows with distance from
+   the centre, and X4 closes the menu once its pointer is 100 px out.
+   `NotifyInteractMenuShown/Hidden` only dispatch a script event (0xa474b0,
+   0xa473d0); there is no flag to poll. The menu's open state has to come from
+   Lua. He does not mind the slant.
+
+**Next, in order:**
+
+* **The Lua link**: a Lua add-on in our extension, with Protected UI Mode
+  served off by our config fork, calling into functions the injector exports
+  (`ffi.C`). The injector already sees every chunk X4 loads through
+  `luaL_loadbuffer`, but they may arrive as bytecode, so source patching is
+  not the route. Through the link:
+  * report the cockpit right-click menu, so the cursor uses the canvas while
+    it is open;
+  * measure, then fix, the steering line.
+* **The start screen's default cursor**: draw X4's own arrow when X4 has set
+  none.
+* **ARMED waits for game time.**
+* **The map-fit offset**, from his movie.
