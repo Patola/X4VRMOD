@@ -24417,3 +24417,55 @@ for the HUD, keep it fixed in space even when we look around."*
     different stack). **Not attributed to us on this evidence; a watch item**:
     a second one with this stack would call for a closer look.
   * WiVRn's server crashed after the session again.
+
+## Decisions after take 328 (Patola, 2026-10-12), and the plan
+
+**Steering target:** *"B looks like a better option, but A also feels
+interesting, so yes, I want a toggle to switch between the two behaviors if
+that's easy to do, maybe F8 or apostrophe?"*
+
+* **B (default): the cursor where you look, the line fixed.** Cursor, hover
+  and steering are unchanged. X4's `updateMouseSteeringLine` (in
+  `ui/core/lua/crosshair handling.lua`) is overridden to draw the same segment
+  translated by −c, so it starts at the screen centre (the gaze) instead of
+  the crosshair (the nose). c is the nose's screen offset under head-look.
+* **A: the target fixed to the cockpit while steering.** The layer draws the
+  cursor at nose + offset while X4 reports mouse steering active. X4's own
+  line then ends on it, and steering is in ship axes. Cost: hover and
+  click-select stay at the screen-fixed pointer, so they are off by the head
+  angle while steering. Weapons are unaffected (his `forceshootatcursor` is
+  false).
+* **The toggle:** a key the injector intercepts and swallows: F8 or
+  apostrophe, whichever his inputmap leaves free. It switches A/B live and
+  sends a notice.
+
+**The map's margins are a blocker, not cosmetic:** *"it makes some important
+sections of the map (or whatever info appears on this quad) unreachable ...
+there are many left menus on X4's map screen and other screens that will be
+non-functional with this shift/limitation."* The measured pointer reach is the
+whole window, so an unreachable menu means some UI is DISPLAYED outside where
+the pointer can map to.
+
+* **Leading hypothesis (#82's two populations):** not every UI element goes
+  through the 0.5252 UI scale (perspective-drawn UI does; orthographic
+  "markers" may not). Elements drawn unscaled would appear at up to ±1.0 of
+  the eye, while the canvas-mapped pointer reaches ±0.5252.
+* **Alternatively,** X4's layout at uiscale 0.6 places the left menus beyond
+  the window.
+* **To measure:**
+  * a UI dump of the map screen (`X4VR_UI_DUMP`), with the left menus' pixel
+    positions compared against the window and the canvas reach;
+  * Patola naming which menus he cannot reach.
+
+**Order of work:**
+
+1. Measure from Patola's steering recording (below): where the crosshair and
+   the line land in the headset against the drawn cursor, with the head
+   straight and turned. That decides whether the 0.5252 UI scale also
+   shortens the line, which both A and B must account for.
+2. The map's unreachable menus: dump, measure, fix (a pointer mapping that
+   covers everything displayed, or a layout X4 keeps inside the window).
+3. A/B steering with the toggle: injector Lua injection into the crosshair
+   state for B, layer cursor placement for A, and the key.
+4. Small items already built: start-screen stand-in #5, renamed watcher
+   notice. They ride in the next take.
