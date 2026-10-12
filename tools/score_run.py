@@ -4362,25 +4362,26 @@ def main(path):
     # and logs which built cursor X4 sets on its first changes -- the check on
     # whether #0 is the arrow X4 itself uses in its menus.
     cd_said = re.search(r"sdl: X4 has set no cursor yet — showing its "
-                        r"first-built one \(#0, (\S+) hot=\((\d+),(\d+)\)\)",
-                        text)
+                        r"(?:first-built one|arrow) \(#(\d+), (\S+) "
+                        r"hot=\((\d+),(\d+)\)\)", text)
     cd_sets = re.findall(r"sdl: X4 set cursor #(-?\d+)", text)
     if cd_said or cd_sets:
         from collections import Counter as _C
         cnt = _C(cd_sets)
         print("cursor-default " + (
-            f"X4's cursor #0 ({cd_said.group(1)}, hot "
-            f"{cd_said.group(2)},{cd_said.group(3)}) shown until X4 set one"
-            if cd_said else "no stand-in shown (X4 set a cursor before "
-            "building #0, or an older build)"))
+            f"X4's cursor #{cd_said.group(1)} ({cd_said.group(2)}, hot "
+            f"{cd_said.group(3)},{cd_said.group(4)}) shown until X4 set one"
+            if cd_said else "no stand-in shown (X4 set a cursor first, the "
+            "stand-in's hotspot did not match, or an older build)"))
         if cd_sets:
             print(f"cursor-default X4's first set was #{cd_sets[0]}; the sets "
                   f"logged ({len(cd_sets)}) by build index: "
                   + ", ".join(f"#{k} x{v}" for k, v in cnt.most_common(8)))
-            if cd_said and cd_sets[0] != "0":
+            if cd_said and cd_sets[0] != cd_said.group(1):
                 print(f"cursor-default NOTE: X4's own first choice was "
-                      f"#{cd_sets[0]}, not #0 — if #{cd_sets[0]} is its menu "
-                      f"arrow, the stand-in should be that one")
+                      f"#{cd_sets[0]}, not the stand-in #{cd_said.group(1)} "
+                      f"(take 328: X4's first set is its cockpit cursor; its "
+                      f"menu arrow is the one it sets at the map's edge)")
 
     # Where X4 switched shape inside full-screen menus: the content's edges in
     # window pixels, measured by X4 itself (take 327's map-fit question).

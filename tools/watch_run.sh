@@ -99,7 +99,9 @@ notify() {
 # X4's process is "Main()", so `pkill -x X4` never matches it.
 x4_pids() { pgrep -f 'X4 Foundations/X4' 2>/dev/null; }
 
-notify normal "watchdog armed"
+# Not "armed": take 328 read this start-up notice as head-look's own "ARMED"
+# milestone, which it had just been told to watch for.
+notify normal "log watcher started"
 
 start=$SECONDS
 declare -a done_flag

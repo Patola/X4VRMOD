@@ -24356,3 +24356,64 @@ restored, and `X4VR_TAKE` first.
   which; the answer picks the Lua link's route.
 * **P328.5** Flight unchanged, `cursor-auto` switches, no X4 core, no
   gamescope core. Head-look tracking measured again (LAGLOG restored).
+
+## Take 328 — SCORED
+
+Patola: two "ARMED" notices, the first at game start before the loading
+screen and the second 2 s after the save loaded. On the start screen, *"a
+weird cursor — a blue bracket square with two horizontal arrows below ... I
+could see it clearly and select with it."* In the map the limits were the same
+as before, but *"I could however click on every item on the map with accuracy,
+including the right menu which seemed to be working correctly."* In flight,
+*"the dislocation of the target with the headtracking was still off like
+before. I wonder if we can do something for this target + line like we did
+for the HUD, keep it fixed in space even when we look around."*
+
+* **P328.1 HELD in part.** A cursor was drawn on the start screen, so the
+  stand-in works. It was the wrong one: #0 is the bracket square.
+  * X4 sets no cursor of its own anywhere in the start menu. Its first own
+    set is #24, in the cockpit after loading; there it alternates #24 and #20.
+  * In the map, X4 sets **#5 where its circled target (#12) ends**, so #5 is
+    X4's own arrow (hotspot (11,6)).
+  * The stand-in is now #5, checked by hotspot: a mismatch stands in
+    nothing rather than the wrong image.
+* **P328.2 HELD.** The injector logged one head-look milestone, at 452808.9,
+  2 s after loading. The earlier "ARMED" was the log watcher's own
+  "watchdog armed" start notice, which reads like head-look's. Renamed "log
+  watcher started" (tests/run-watch-relay.sh updated).
+* **P328.3: the band prediction is REFUTED; the map's edges are measured.**
+  Transitions between the map's target (#12) and the arrow (#5):
+  * right edge: out at x = 2714, back in at x = 2634, so ≈ 2680;
+  * top edge: out at (334, 186), back in at (2534, 182), so ≈ 184;
+  * the bottom and left were not crossed cleanly (the changes there are other
+    cursors, #19 and #15, over interface elements).
+
+  A centred 16:9 band would put the top edge at y ≈ 616. X4 instead lays the
+  map out in a box inside the 2816² window with uneven margins (top ~184,
+  right ~136). The cursor reaches the whole window, so it can wander into the
+  margins. **Clicks land accurately**, so drawn and hit-tested positions
+  agree. What remains is that the cursor's invisible reach and the visible
+  map frame differ.
+* **P328.4 (Lua) answered.**
+  * 27 chunks logged through `luaL_loadbuffer`/`luaL_loadfile`, **all
+    bytecode, in 26 distinct Lua states**. `crosshair handling.lua` is alone
+    in its own state.
+  * The right-click menu and the other add-ons do not pass through these two
+    loaders, so X4 loads them another way (`lua_load` or `luaL_loadstring`,
+    both imported).
+  * Consequences: no source patching. An add-on (environment "menus") cannot
+    reach the crosshair's state. Changing the steering line needs the
+    injector to run our own Lua in that state after X4's chunk runs.
+* **P328.5 HELD, with one exception.**
+  * Flight unchanged; head-look tracking measured (yaw p90 2.98°, pitch
+    p90 3.42°); `cursor-auto` 3/3; csmfit 21/21; no X4 core.
+  * **gamescope segfaulted at 18:43:35**, in its own `main()` after its loop
+    had ended, inside libc's `fclose` (the frame above it is gamescope's own
+    code). It happened 3 s before X4's last log line: X4 had closed its window
+    and was still tearing down. Our `fclose` and `close` hooks only forward
+    (their bodies act only under X4VR_CATPATCH). Our `fopen` hook serves only
+    X4's own config, input map and content paths, which gamescope never
+    opens. gamescope also crashed on its own at take 313's end (SIGSEGV,
+    different stack). **Not attributed to us on this evidence; a watch item**:
+    a second one with this stack would call for a closer look.
+  * WiVRn's server crashed after the session again.

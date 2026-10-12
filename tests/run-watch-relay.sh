@@ -67,7 +67,7 @@ ok()  { printf 'ok    %s\n' "$1"; }
 bad() { printf 'FAIL  %s\n' "$1"; fail=1; }
 
 got=$(sed 's/^-u normal -t 8000 -a x4vr X4VR take //' "$T/notified" 2>/dev/null)
-want='watchdog armed
+want='log watcher started
 PART 1 DONE. Now HOLD a numpad key.
 left/right done.
 PART 2 DONE. You can quit X4 now.

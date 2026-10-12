@@ -654,7 +654,9 @@ absent "cursor auto not asked -> silent" "$BASE" cursor-auto
 cdlines='[  999980.000] inject  sdl: X4 has set no cursor yet — showing its first-built one (#0, 32x32 hot=(7,8)) until it picks one'
 { cat "$BASE"; printf '%s\n' "$cdlines" '[  999990.000] inject  sdl: X4 set cursor #5' '[  999991.000] inject  sdl: X4 set cursor #0' '[  999992.000] inject  sdl: X4 set cursor #5'; } > /tmp/census-cd.log
 want "cursor stand-in shown -> said" /tmp/census-cd.log cursor-default "X4's cursor #0 (32x32, hot 7,8) shown until X4 set one"
-want "cursor stand-in not X4's first choice -> NOTE" /tmp/census-cd.log cursor-default "X4's own first choice was #5, not #0"
+want "cursor stand-in not X4's first choice -> NOTE" /tmp/census-cd.log cursor-default "X4's own first choice was #5, not the stand-in #0"
+{ cat "$BASE"; printf '%s\n' '[  999980.000] inject  sdl: X4 has set no cursor yet — showing its arrow (#5, 32x32 hot=(11,6)) until it picks one' '[  999990.000] inject  sdl: X4 set cursor #24 at pointer 500,166'; } > /tmp/census-cd5.log
+want "cursor stand-in #5 -> said" /tmp/census-cd5.log cursor-default "X4's cursor #5 (32x32, hot 11,6) shown until X4 set one"
 lua1='[  999970.000] inject  lua[buf] ui/core/lua/crosshair handling.lua (51234 bytes, bytecode, L=0x1000)'
 lua2='[  999971.000] inject  lua[buf] ui/addons/ego_interactmenu/menu_interactmenu.lua (99999 bytes, bytecode, L=0x2000)'
 { cat "$BASE"; printf '%s\n' "$lua1" "$lua2"; } > /tmp/census-lua.log

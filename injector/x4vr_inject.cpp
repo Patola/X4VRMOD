@@ -6421,6 +6421,9 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
 // SDL's pitch, and the pixel format is passed through unconverted: one run will
 // say what it actually is, which beats a guessed conversion that silently
 // mangles the colours.
+// X4's own arrow, by build order (take 328's map sweep); see below.
+constexpr size_t kStandInCursor = 5;
+
 void *SDL_CreateColorCursor(void *surface, int hot_x, int hot_y) {
     static auto real_fn =
         real<void *(*)(void *, int, int)>("SDL_CreateColorCursor");
@@ -6466,14 +6469,23 @@ void *SDL_CreateColorCursor(void *surface, int hot_x, int hot_y) {
         // Until X4 sets a cursor of its own it shows SDL's default system
         // arrow, which is never captured, so the layer had nothing to draw:
         // takes 326 and 327 had no cursor on the start screen while hover
-        // worked. X4's first-built cursor stands in (take 327: 32x32, hotspot
-        // (7,8), the hotspot six of its 26 cursors share). Its first own set
-        // replaces it, and the set log below says which one that was.
-        if (idx == 0 && !g_cursor_sets.sets.load(std::memory_order_relaxed)) {
+        // worked. One of X4's own stands in. Take 328 chose #0 and Patola saw
+        // "a blue bracket square with two horizontal arrows"; the same take's
+        // map sweep showed X4's own arrow is #5 (hotspot (11,6)): X4 sets it
+        // where the map's circled target (#12) ends. Its hotspot is checked,
+        // so a build that orders its cursors differently stands nothing in
+        // rather than the wrong image.
+        if (idx == kStandInCursor && hot_x == 11 && hot_y == 6 &&
+            !g_cursor_sets.sets.load(std::memory_order_relaxed)) {
             publish_cursor_image(c);
-            X4VR_LOG("sdl: X4 has set no cursor yet — showing its first-built "
-                     "one (#0, %ux%u hot=(%d,%d)) until it picks one",
-                     c.w, c.h, hot_x, hot_y);
+            X4VR_LOG("sdl: X4 has set no cursor yet — showing its arrow "
+                     "(#%zu, %ux%u hot=(%d,%d)) until it picks one",
+                     idx, c.w, c.h, hot_x, hot_y);
+        } else if (idx == kStandInCursor) {
+            X4VR_LOG("sdl: cursor #%zu has hotspot (%d,%d), not X4's arrow's "
+                     "(11,6) — no stand-in; the start screen will have no "
+                     "cursor",
+                     idx, hot_x, hot_y);
         }
     }
     X4VR_LOG("sdl: captured cursor #%zu %p — %ux%u fmt=0x%08x pitch=%u "
