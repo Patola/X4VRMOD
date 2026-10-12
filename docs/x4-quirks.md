@@ -24281,3 +24281,34 @@ WiVRn. The scorer passed:
   none.
 * **ARMED waits for game time.**
 * **The map-fit offset**, from his movie.
+
+### The map cursor's fit, from Patola's movie (`/dados/x4-map-issue.mp4`)
+
+The clip was recorded in the headset (the system overlay shows in its first and
+last frames): 72.7 s, 1920×1080, with the map open from 5 s to 28 s.
+
+* **The cursor leaves the map at the top.** At 27.0 s the drawn cursor, an
+  arrow, sits at (883, 292), ~136 px above the panel's top edge (y≈428), over
+  the cockpit window. X4 chose the arrow, not the map's circled-target
+  cursor, so **X4 also placed its pointer outside the map there**. Drawn and
+  hit-tested position may agree, and the question becomes where X4 lays the
+  map out in our square window.
+* **X4 letterboxes full-screen content in a square window.** Take 274's UI
+  dumps (2816×2816, after the layer's 0.5252 scale) show the loading screen as
+  a centred **16:9 band**: 52% of the width and 30% of the height
+  (= 0.5252 × 9/16). The start screen's background fills the square. If the map
+  is laid out in a band too, the pointer's full-window range overshoots it
+  above and below.
+* **A confound we serve ourselves:** the player's config has
+  `<uiscale>0.6</uiscale>` (set for his 3400×1440 desktop), and our config
+  fork passes it through to the 2816×2816 VR window unchanged.
+* **Not explained:** Patola's "doesn't go all the way to the left or the
+  bottom" is an asymmetry. A centred band explains none of it. It is
+  recorded, not reasoned away.
+
+**To measure, not guess:** the first job of the Lua link is to report X4's own
+layout numbers: `Helper.viewWidth/viewHeight`, the UI scale, and the map
+frame's rectangle in window pixels. A UI dump of the map goes beside them, and
+the pointer's extents are already logged. The fix depends on the numbers. It
+may be clamping the pointer to the content while a full-screen menu is up,
+or serving a VR-appropriate uiscale.
