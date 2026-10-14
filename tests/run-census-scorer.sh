@@ -666,6 +666,41 @@ absent "lua: no X4VR_LUA -> silent" "$BASE" "lua     "
 { cat "$BASE"; printf '%s\n' '[  999990.000] inject  sdl: X4 set cursor #7 at pointer 400,700 [full-screen menu]' '[  999991.000] inject  sdl: X4 set cursor #0 at pointer 2400,2100 [full-screen menu]' '[  999992.000] inject  sdl: X4 set cursor #7 at pointer 1400,1400'; } > /tmp/census-edges.log
 want "cursor edges: menu changes bounded" /tmp/census-edges.log cursor-edges "2 shape change(s) inside full-screen menus: pointer x 400..2400, y 700..2100"
 
+# ------------------------------------------ menucam: X4's camera under a menu
+# Take 328B: the map opened under head-look write kept X4's camera at the
+# head's angle, and 13.6% of X4's UI projected outside the window.
+sed 's/env: run = /env: run = X4VR_HEADLOOK_WRITE=1 /' "$BASE" > /tmp/census-mc-base.log
+mcarm='[  999980.000] inject  headlook write: ARMED on camera 0x1234 (mode 0) — X4 reads maxpitch 1.3090 maxyaw 3.1416 (radians), anglespeed 0.0000 angleacc 8.7266; base identity; attached 0x1 ref 0x2. MOUSELOOK will not be pressed'
+mcdown='[  999989.900] inject  headlook: view is now the cockpit — steering
+[  999990.000] inject  headlook: HUD is now down (IsInPanelMode=0) — idle, mouse handed back'
+mcup='[  999995.000] inject  headlook: HUD is now up (IsInPanelMode=0) — steering'
+mcpose() {  # mcpose <t> <yaw> <pitch>
+    printf '[  %s] layer   poselag: declared=0.0000,0.0000 x4=%s,%s d=0,0 age=0.0085 valid=0 rawvalid=1 residual=0.0000,0.0000 cmd=0,0 rot=2' "$1" "$2" "$3"
+}
+mcrep='[  999996.000] inject  headlook write: 900 write(s), 0 failed, 0 refused tick(s) | last written yaw 0.00 pitch 0.00 | MOUSELOOK pressed 0 time(s) | menu centring 1 period(s) 300 write(s) | sway not read'
+mccen='[  999990.020] inject  headlook: HUD down in the cockpit — X4'"'"'s camera CENTRED from yaw -1.99 pitch 6.37 to 0,0, so X4'"'"'s menus fill the window'
+{ cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$(mcpose 999990.500 -1.9851 6.3677)" "$(mcpose 999991.500 -1.9851 6.3677)" "$(mcpose 999992.500 -1.9851 6.3677)" "$mcup"; } > /tmp/census-mc-frozen.log
+want "menucam 328B shape -> the share out of reach" /tmp/census-mc-frozen.log menucam "OFF-CENTRE  13.6% of X4's UI out of reach"
+want "menucam 328B shape -> FROZEN named" /tmp/census-mc-frozen.log "menucam =>" "FROZEN: in 1 cockpit period(s)"
+if python3 tools/score_run.py /tmp/census-mc-frozen.log 2>&1 | grep -q "^FAIL.*MENU_CENTRE"; then
+    bad "menucam on a build without the centring -> FAILs (gated on outcome)"
+else
+    ok "menucam on a build without the centring -> no FAIL"
+fi
+{ cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$mccen" "$(mcpose 999990.500 0.0000 0.0000)" "$(mcpose 999991.500 0.0000 0.0000)" "$mcup" "$mcrep"; } > /tmp/census-mc-centred.log
+want "menucam centred -> every period CENTRED" /tmp/census-mc-centred.log "menucam =>" "every cockpit menu period CENTRED"
+want "menucam centred -> the centring counted" /tmp/census-mc-centred.log menucam "1 period(s) centred by X4VR_HEADLOOK_MENU_CENTRE, from -1.99,+6.37"
+want "menucam centred -> 0.0% out of reach" /tmp/census-mc-centred.log menucam "CENTRED      0.0% of X4's UI out of reach"
+{ cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$(mcpose 999990.500 -1.9851 6.3677)" "$(mcpose 999991.500 -1.9851 6.3677)" "$mcup" "$mcrep"; } > /tmp/census-mc-stuck.log
+want "menucam asked, still frozen -> FAIL" /tmp/census-mc-stuck.log FAIL "the centring did not act"
+sed 's/env: run = /env: run = X4VR_HEADLOOK_MENU_CENTRE=0 /' /tmp/census-mc-stuck.log > /tmp/census-mc-off.log
+if python3 tools/score_run.py /tmp/census-mc-off.log 2>&1 | grep -q "^FAIL.*MENU_CENTRE"; then
+    bad "menucam switched off -> still FAILs"
+else
+    ok "menucam switched off -> no FAIL"
+fi
+absent "menucam: no write-mode arming -> silent" "$BASE" menucam
+
 # ------------------------------------------ the session gate without X4VR_MV
 # The render-pass inventory is printed only under X4VR_MV, so a flatscreen run
 # (take 323) was refused as "stopped early" with its measurement in the file.

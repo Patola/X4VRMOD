@@ -815,6 +815,24 @@ bool headlook_write_enabled() {
     static const bool on = x4vr::env_on("X4VR_HEADLOOK_WRITE", false);
     return on;
 }
+
+// X4VR_HEADLOOK_MENU_CENTRE -- X4's camera back to centre while the HUD is
+// down in the cockpit (the map and every full-screen menu). **ON by default
+// with X4VR_HEADLOOK_WRITE; =0 restores take 328B for a bisect.**
+//
+// X4 draws its UI on a plane fixed to the cockpit and seen through the
+// player camera, and hit-tests the pointer by the same projection, so a
+// rotated camera keystones and shifts the whole UI inside the window the
+// pointer is confined to. X4's own look follower recentres the camera when
+// look-around ends (take 311: every map opened at 0,0); x4vrmod_headlook
+// sets anglespeed 0 so a written angle STAYS, and that also stopped the
+// follower from recentring. Take 328B opened the map at -1.99,6.37 and kept
+// it there: 13.6% of X4's UI -- a left wedge widening downwards and the
+// bottom band -- was outside the window, unreachable while visible in VR.
+bool headlook_menu_centre() {
+    static const bool on = x4vr::env_on("X4VR_HEADLOOK_MENU_CENTRE", true);
+    return on;
+}
 struct OurExtension {
     const char *id;
     bool (*wanted)();
@@ -3599,6 +3617,10 @@ struct CamWrite {
     float sway_deg = 0.f, sway_m = 0.f, sway_run_deg = 0.f, sway_run_m = 0.f;
     bool sway_seen = false;
     uint64_t writes = 0, failed = 0, refused = 0, mouselook_downs = 0;
+    // X4VR_HEADLOOK_MENU_CENTRE: HUD-down periods in the cockpit that were
+    // centred, and the writes that did it -- kept apart from `writes`, which
+    // the scorer reads as the head's.
+    uint64_t centre_periods = 0, centre_writes = 0;
     float yaw = 0.f, pitch = 0.f;
     bool have = false;
     uintptr_t armed_cam = 0;
@@ -3764,7 +3786,9 @@ static bool camwrite_ready(uintptr_t cam, float plim_deg, float ylim_deg) {
 }
 
 // One write of the head's angle: the rows rebuilt in X4's convention, w kept.
-static bool camwrite_apply(uintptr_t cam, float yaw_deg, float pitch_deg) {
+// `counter` is the tally a successful write goes to: the head's by default.
+static bool camwrite_apply(uintptr_t cam, float yaw_deg, float pitch_deg,
+                           uint64_t *counter = &g_camwrite.writes) {
     float rows[12];
     const uintptr_t at = cam + x4vr::camwatch::kCamRow0;
     if (!self_read(at, rows, sizeof rows)) {
@@ -3776,7 +3800,7 @@ static bool camwrite_apply(uintptr_t cam, float yaw_deg, float pitch_deg) {
         g_camwrite.failed++;
         return false;
     }
-    g_camwrite.writes++;
+    (*counter)++;
     return true;
 }
 
@@ -3827,12 +3851,13 @@ static void camwrite_report(bool final) {
                  g_camwrite.sway_run_deg, g_camwrite.sway_run_m);
     X4VR_LOG("headlook write%s: %llu write(s), %llu failed, %llu refused "
              "tick(s) | last written yaw %.2f pitch %.2f | MOUSELOOK pressed "
-             "%llu time(s)%s",
+             "%llu time(s) | menu centring %llu period(s) %llu write(s)%s",
              final ? " (final)" : "", (unsigned long long)g_camwrite.writes,
              (unsigned long long)g_camwrite.failed,
              (unsigned long long)g_camwrite.refused, g_camwrite.yaw,
              g_camwrite.pitch, (unsigned long long)g_camwrite.mouselook_downs,
-             sway);
+             (unsigned long long)g_camwrite.centre_periods,
+             (unsigned long long)g_camwrite.centre_writes, sway);
     g_camwrite.sway_deg = g_camwrite.sway_m = 0.f;
 }
 
@@ -5284,6 +5309,39 @@ void headlook_tick() {
                 // declared pose expect the command to be.
                 g_headlook.cmd_yaw_deg = ty;
                 g_headlook.cmd_pitch_deg = tp;
+            }
+        }
+    }
+    // **X4VR_HEADLOOK_MENU_CENTRE: the spring-back X4VR_HEADLOOK_WRITE took
+    // away.** With the HUD down in the cockpit the head drives nothing, and
+    // X4 would have recentred its look-around here by itself (take 311);
+    // anglespeed 0 stops that, so the camera stayed at the head's angle and
+    // X4's menus were drawn -- and hit-tested -- through it (take 328B). The
+    // same guarded write, the angle 0,0, re-asserted every tick for as long
+    // as the HUD stays down; `steering` stays false, so nothing here is
+    // declared as head motion.
+    static bool centred_period = false;
+    if (hud || !cockpit)
+        centred_period = false;
+    if (write_mode && cockpit && !hud && headlook_menu_centre()) {
+        const uintptr_t cam = x4_player_camera();
+        if (camwrite_ready(cam, g_headlook.pitch_limit_deg,
+                           g_headlook.yaw_limit_deg)) {
+            const float was_yaw = g_camwrite.yaw, was_pitch = g_camwrite.pitch;
+            if (camwrite_apply(cam, 0.f, 0.f, &g_camwrite.centre_writes)) {
+                g_camwrite.yaw = g_camwrite.pitch = 0.f;
+                g_camwrite.have = true;
+                g_headlook.cmd_yaw_deg = g_headlook.cmd_pitch_deg = 0.f;
+                if (!centred_period) {
+                    centred_period = true;
+                    g_camwrite.centre_periods++;
+                    X4VR_LOG("headlook: HUD down in the cockpit — X4's camera "
+                             "CENTRED from yaw %.2f pitch %.2f to 0,0, so X4's "
+                             "menus fill the window the pointer is confined "
+                             "to (X4VR_HEADLOOK_MENU_CENTRE=0 leaves it where "
+                             "the head was, take 328B)",
+                             was_yaw, was_pitch);
+                }
             }
         }
     }

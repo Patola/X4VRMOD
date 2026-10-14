@@ -4397,6 +4397,130 @@ def main(path):
               f"its content starts and ends, so a sweep across the map's four "
               f"edges puts them here")
 
+    # --- X4's camera while the HUD is down: the map's unreachable menus -----
+    #
+    # Take 328B. X4 draws its UI on a plane fixed to the cockpit, seen through
+    # the player camera at its UI field (tan 0.75), and hit-tests the pointer
+    # through the same projection -- so a rotated camera keystones and shifts
+    # the whole UI inside the window the pointer is confined to. X4's own look
+    # follower recentred the camera when a menu opened (take 311: 0,0 every
+    # time); x4vrmod_headlook's anglespeed 0 stopped that, and 328B's map sat
+    # at -1.99,6.37 for 157 s with 13.7% of X4's UI out of reach. The model
+    # below reproduced X4's own hit-testing from the log alone: the arrow at
+    # pointer 2643 lands on UI x 2816.0, the UI's right edge.
+    def _ui_out_of_reach(yaw, pitch, w=2816, n=64):
+        """Share of X4's UI square whose projection leaves the window, for X4's
+        camera at (yaw, pitch) in GetCameraRotation's degrees."""
+        import math
+        t = 0.75
+        y, p_ = math.radians(-yaw), math.radians(-pitch)
+        cy, sy, cp, sp = math.cos(y), math.sin(y), math.cos(p_), math.sin(p_)
+        out = 0
+        for i in range(n):
+            for j in range(n):
+                nx = 2 * (i + 0.5) / n - 1
+                ny = 1 - 2 * (j + 0.5) / n
+                X, Y, Z = nx * t, ny * t, 1.0
+                # R = Ry(yaw) Rx(pitch); the camera sees R^T P
+                x1, y1, z1 = cy * X - sy * Z, Y, sy * X + cy * Z
+                x2, y2, z2 = x1, cp * y1 + sp * z1, -sp * y1 + cp * z1
+                if z2 <= 0:
+                    out += 1
+                    continue
+                sx, sy_ = x2 / z2 / t, y2 / z2 / t
+                if abs(sx) > 1 or abs(sy_) > 1:
+                    out += 1
+        return out / (n * n)
+
+    mc_hud = [(float(t), k) for t, k in re.findall(
+        r"\[\s*([\d.]+)\]\s+inject\s+headlook: HUD is now (up|down)", text)]
+    mc_view = [(float(t), k) for t, k in re.findall(
+        r"\[\s*([\d.]+)\]\s+inject\s+headlook: view is now "
+        r"(the cockpit|external/floating)", text)]
+    mc_cam = [(float(t), float(a), float(b)) for t, a, b in re.findall(
+        r"\[\s*([\d.]+)\]\s+layer\s+poselag: .*? x4=(-?[\d.]+),(-?[\d.]+)",
+        text)]
+    mc_armed = re.search(r"\[\s*([\d.]+)\]\s+inject\s+headlook write: "
+                         r"ARMED on camera", text)
+    mc_centred = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+headlook: HUD down "
+                            r"in the cockpit — X4's camera CENTRED from yaw "
+                            r"(-?[\d.]+) pitch (-?[\d.]+)", text)
+    # Intent: write mode, not switched off, and a build that HAS the centring
+    # (its write report carries the field) -- 328B asked for neither.
+    mc_asked = bool(re.search(r"\bX4VR_HEADLOOK_WRITE=1\b", run or "")) and \
+        not re.search(r"\bX4VR_HEADLOOK_MENU_CENTRE=0\b", run or "") and \
+        "| menu centring " in text
+    if mc_hud and mc_cam and mc_armed:
+        t_armed = float(mc_armed.group(1))
+        periods, start = [], None
+        for t, k in mc_hud:
+            # a second "down" restarts: the line prints on a transition, so
+            # two in a row means the first period's "up" was never logged
+            if k == "down":
+                start = t
+            elif k == "up" and start is not None:
+                periods.append((start, t))
+                start = None
+        if start is not None:
+            periods.append((start, mc_cam[-1][0]))
+
+        def _view_at(t):
+            v = "the cockpit"
+            for tv, k in mc_view:
+                if tv <= t + 0.05:
+                    v = k
+            return v
+
+        rows, frozen_cockpit = [], []
+        for a, b in periods:
+            if b < t_armed:
+                continue
+            # settled: from 0.3 s in, past the tick that switches
+            sel = [(y, p_) for t, y, p_ in mc_cam if a + 0.3 <= t <= b]
+            if not sel:
+                continue
+            ys = sorted(y for y, _p in sel)
+            ps = sorted(p_ for _y, p_ in sel)
+            my, mp = ys[len(ys) // 2], ps[len(ps) // 2]
+            view = _view_at(a)
+            share = _ui_out_of_reach(my, mp)
+            rows.append((a, b, view, my, mp, share))
+            if view == "the cockpit" and (abs(my) > 0.1 or abs(mp) > 0.1):
+                frozen_cockpit.append((a, b, my, mp, share))
+        if rows:
+            print(f"menucam {len(rows)} HUD-down period(s) after head-look "
+                  f"armed; X4's camera settled at (yaw, pitch), and the share "
+                  f"of X4's UI that projects outside the window the pointer is "
+                  f"confined to:")
+            for a, b, view, my, mp, share in rows[:12]:
+                tag = ("CENTRED" if abs(my) <= 0.1 and abs(mp) <= 0.1
+                       else "OFF-CENTRE")
+                print(f"menucam   t0+{a - t0:6.1f}s {b - a:6.1f}s in "
+                      f"{view:17s} {my:+6.2f},{mp:+6.2f} deg  {tag:10s} "
+                      f"{100 * share:5.1f}% of X4's UI out of reach")
+            if len(rows) > 12:
+                print(f"menucam   ... {len(rows) - 12} more")
+            if mc_centred:
+                print(f"menucam {len(mc_centred)} period(s) centred by "
+                      f"X4VR_HEADLOOK_MENU_CENTRE, from "
+                      + ", ".join(f"{float(y):+.2f},{float(p_):+.2f}"
+                                  for _t, y, p_ in mc_centred[:6]))
+            if frozen_cockpit:
+                worst = max(frozen_cockpit, key=lambda r: r[4])
+                print(f"menucam => FROZEN: in {len(frozen_cockpit)} cockpit "
+                      f"period(s) X4 drew and hit-tested its menus through a "
+                      f"camera left at the head's angle; worst "
+                      f"{worst[2]:+.2f},{worst[3]:+.2f} deg puts "
+                      f"{100 * worst[4]:.1f}% of X4's UI beyond the pointer's "
+                      f"reach (take 328B: the map's left wedge and bottom band)")
+                if mc_asked:
+                    fails.append("X4VR_HEADLOOK_MENU_CENTRE: a cockpit menu "
+                                 "stayed off-centre — the centring did not "
+                                 "act (look for 'headlook write: REFUSED')")
+            elif any(r[2] == "the cockpit" for r in rows):
+                print("menucam => every cockpit menu period CENTRED: X4's UI "
+                      "fills the window, so the pointer reaches all of it")
+
     # --- the Lua reconnaissance (X4VR_LUA=1): which state, source or bytecode
     lua_rows = re.findall(r"lua\[(buf|file)\] (.*?) \((\d+) bytes, "
                           r"(source|bytecode|by path), L=(\S+)\)", text)

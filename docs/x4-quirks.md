@@ -24469,3 +24469,218 @@ the pointer can map to.
    state for B, layer cursor placement for A, and the key.
 4. Small items already built: start-screen stand-in #5, renamed watcher
    notice. They ride in the next take.
+
+## Take 328B — the circles and the map's unreachable menus, read (2026-10-15)
+
+Material:
+* **The recording** `/dados/x4-circles.mp4`: the headset view, one eye,
+  1920×1080 at 90 fps, 352.5 s. Cockpit from 01:43. Steering circles with the
+  head centred (02:16), turned left (02:28), right (02:44) and up (02:54). The
+  map from 03:04, swept along its limits through the property list,
+  Encyclopedia, Diplomacy, Empire Overview and Tutorials until 05:40.
+* **The log** `/tmp/x4vr-take328b.log`: take 328's command line run again as
+  X4VR_TAKE=328B. `score_run.py`: PASS.
+
+Patola: *"I was wrong, they are mostly reachable. But I go through several
+menus and I show the regions that are unreachable. It is actually not a
+straight left margin compared to the map, it's a mostly vertical but slightly
+diagonal limit, which is close to the origin at the top but far from it at the
+bottom."*
+
+### The map: X4's camera is frozen at the head's angle
+
+**Cause.** X4 draws its UI on a plane fixed to the cockpit, seen through the
+player camera at the UI field (tan 0.75). It hit-tests the pointer through the
+same projection. The pointer is confined to the window, which is that camera's
+view. With the camera turned, the UI plane is keystoned and shifted inside the
+window, and part of it falls outside where the pointer can go.
+
+Why the camera is turned:
+* X4's look follower recentres the camera when look-around ends. Take 311,
+  the MOUSELOOK actuator: every one of its 14 HUD-down periods settled at
+  0,0 within a fraction of a second.
+* `x4vrmod_headlook` sets `anglespeed` 0 so a written head angle STAYS (take
+  321). That also stopped the recentring.
+* So since X4VR_HEADLOOK_WRITE, every menu opened at the head's angle and
+  stayed there:
+  * 328B: −1.99°, +6.37° for all 157 s of map and sub-menus (8144 readings).
+  * 328: −2.87°, +2.89°.
+  * 327: a different angle at every opening, pitch 5.4–14.4°, yaw −2.9 to
+    +1.4°. That is why the limits seemed to move between sessions.
+
+**The model, and X4's own hit-testing reproduced from the log alone.** The
+model is a flat UI plane filling the unrotated view at tan 0.75, seen by a
+camera rotated by X4's logged angle; in GetCameraRotation's convention both
+signs flip. Each cursor-shape change X4 logged was mapped into UI coordinates
+and compared with X4's layout from its own Lua (`helper.lua`: `frameBorder`
+18, `sidebarWidth` 40 × `uiScale` 1, right bar at `viewWidth − 40 − 18`).
+* 328B, arrow (#5) at pointer (2643, 557) → UI x **2816.0**: the UI's right
+  edge, to the pixel.
+* 328B, (2625, 562) #5 → 2795.5, inside the right bar [2758, 2798].
+  (2632, 566) #12 → 2803, the 18-px frame border where the map shows.
+* 328B, the top-left corner flips land within ~10 UI px of (0, 0).
+* 328, an independent angle: the model puts the top edge at window y 90–189,
+  and take 328 measured ~184. The flip at (2534, 182) → UI y −3.5. The flip
+  at (2664, 1072) → UI x 2819.
+
+**What was out of reach in 328B: 13.6% of X4's UI.**
+* A left wedge, from UI x ≈ 5 at the top (UI y 150) to x ≈ 195 at the
+  window's bottom: Patola's "close to the origin at the top, far at the
+  bottom".
+* The bottom band, UI y > ~2490–2540, across the full width.
+* Above and to the right, the pointer could go BEYOND the UI. That is take
+  327's *"it goes a bit after the map to the left and up"*.
+* All of 328B's menus shared the one frozen angle, so every screen he showed
+  had the same wedge and band.
+
+**The video agrees.**
+* With the pointer at x = 0 (log), the drawn arrow sits ~37–47 video px
+  inside the left edge of X4's view, more at the bottom.
+* At 192.2 s X4 shows the "Object List" tooltip exactly where the drawn
+  cursor overlaps the sidebar's second icon. So X4's hit-test follows the
+  drawing, and the cursor and the UI share one map.
+
+**A second defect, the same cause.** During menus the layer declared an
+identity pose (`poselag: declared=0,0 valid=0`), while X4 rendered from
+−1.99°, 6.37°. So the whole menu frame was displayed rotated by ~6.6°.
+
+**Wrong turns, recorded:**
+* Take 328's scoring said *"X4 lays the map out in a box ... with uneven
+  margins (top ~184, right ~136)"*. Wrong: the margins were the frozen
+  camera.
+* The persisted leading hypothesis (#82's two populations, some UI unscaled)
+  is **refuted**. The canvas is a diagonal scale-plus-shift
+  (`make_canvas_k`). The cursor applies the same `CanvasNdc`. X4's hit-test
+  agrees with the drawing.
+* The uiscale-0.6 alternative is **refuted**. X4's layout at uiScale 1
+  matches the hit-test boundaries.
+* The planned UI dump was not needed: the log reproduced X4's hit-testing.
+* Video handling:
+  * `ffmpeg -ss … -t … out_%03d.png` without `-fps_mode passthrough`
+    duplicated frames (a 0.6 s strip "frozen").
+  * Syncing on the map's first frame lags cursor events by ~0.5 s (the
+    holomap's first render). Sync on cursor-shape changes instead.
+* A `pkill -f` on the census script killed its own shell (the standing
+  self-match rule, broken again).
+
+### The steering circles, measured
+
+In each circle: the nose (crosshair), the end of X4's steering line, and our
+ring cursor (X4's #20/#24, drawn at the raw pointer).
+
+    circle (frame)         ring cursor     line end observed   G + 0.5252 (ring − G)   residual
+    centre 02:16 (141 s)   (975, 220)      (966, 310)          (966.9, 309.3)          1.2 px
+    left   02:28 (152 s)   (934, 517)      (947, 464)          (945.4, 465.2)          2.0 px
+    right  02:44 (165 s)   (934, 486.7)    (945.7, 449.3)      (945.4, 449.3)          0.3 px  (out of sample)
+    up     02:54 (177 s)   (1069, 288)     (1017, 348)         (1016.3, 345.0)         3.1 px  (out of sample)
+
+G = (958, 408) was fitted on the centre and left circles. It is the eye's
+centre, the gaze; this recording's crop puts it 133 px above the frame centre.
+
+**So:**
+* X4's line starts at the nose, which is fixed to the cockpit.
+* It ends at the pointer's position on the HUD plane: the gaze plus 0.5252 ×
+  the pointer's offset. This is `GetLocalMousePosition()`, read in
+  `updateMouseSteeringLine`.
+* Our ring cursor is drawn at the raw pointer, where X4 picks the WORLD
+  (take 314). That is 1.904× farther from the gaze than the line's end.
+* X4 steers by the pointer's offset from the gaze (Patola: *"the effective
+  center is where our gaze is"*).
+
+For the A/B design:
+* **B:** to run from the gaze to the drawn ring, X4's segment must be
+  translated by −c AND lengthened by 1/0.5252. c is the nose's offset from
+  the gaze on the HUD plane.
+* **A:** the ring placed relative to the nose must use the same 0.5252
+  relation, or the line and the ring disagree by the same factor.
+* c is the camera's axis meeting the HUD plane: the projection the map fix
+  rests on, validated above against X4's own hit-testing.
+
+### The fix: X4VR_HEADLOOK_MENU_CENTRE (built, default ON with X4VR_HEADLOOK_WRITE)
+
+* **What it does.** While the HUD is down in the cockpit, the injector writes
+  X4's camera to 0,0 every tick. It is the follower's spring-back that
+  `anglespeed` 0 took away.
+* **How.** Through the same guarded write as head-look:
+  * the same `camwrite_ready` (sites, camera mode 0, X4's parameters, base
+    identity);
+  * the same `process_vm_writev`.
+
+  It is not a new patch of X4.
+* **What it leaves alone.**
+  * `steering` stays false, so nothing is declared as head motion.
+  * Its writes are counted apart from the head's.
+* **Logging.** Once per period: `headlook: HUD down in the cockpit — X4's
+  camera CENTRED from yaw Y pitch P to 0,0`. The write report gains `menu
+  centring N period(s) M write(s)`.
+* **Bisect.** `X4VR_HEADLOOK_MENU_CENTRE=0` restores 328B: the camera stays
+  where the head was.
+* **Not covered.** Full-screen menus that switch the view to external
+  (327 ×2, 328B's last 13 s, at +0.96, +16.03: 27.5% of the UI out of
+  reach). The centring acts only while `x4_cockpit_view()` holds, so nothing
+  is written there. `menucam` reports them; whether X4 draws those menus
+  through the player camera is unmeasured.
+
+**Scorer: `menucam`** (census: frozen, centred, asked-but-frozen = FAIL,
+switched off = no FAIL, silent without write-mode arming). For each HUD-down
+period after arming it reports:
+* X4's settled camera angle;
+* the view;
+* the model's share of X4's UI outside the window.
+
+It FAILs a run that asked for the centring (write mode, not switched off, a
+build whose write report carries the field) if a cockpit period stays
+off-centre. On 328B it reports `-1.99,+6.37 OFF-CENTRE 13.6%`, with no FAIL,
+since that build had no centring.
+
+## Take 329 — PREDICTIONS (written before the run)
+
+One change from 328B: the build carries X4VR_HEADLOOK_MENU_CENTRE, stated
+explicitly. X4VR_LUA is dropped (its question is answered). **Primary
+observable: the map and its menus are reachable to every edge.**
+
+    X4VR_TAKE=329 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take329.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P329.1 `menucam`: every cockpit HUD-down period CENTRED.** That means
+  ±0.1° and 0.0% of X4's UI out of reach, with one `CENTRED from yaw …`
+  line per map opening naming the head's angle at that moment. No
+  `headlook write: REFUSED — the camera is in mode …` during the map.
+  * If that refusal appears, X4 changes the player camera's mode under a
+    menu. The centring then cannot act through this write, and P329.1–3
+    fail together. That is the prediction most likely to be wrong.
+* **P329.2 Patola: everything on the map and in its menus is reachable.**
+  This covers the left wedge and the bottom band of 328B: the property
+  list's lower rows, the sidebar's lower icons, Encyclopedia, Diplomacy,
+  Empire Overview.
+  * The cursor can no longer travel past the map's top and right edges into
+    nothing: the arrow over empty space beyond them is gone.
+  * In the log, the right sidebar's edge is crossed near x ≈ 2798 (it was
+    ~2630 in 328B).
+* **P329.3 The map no longer looks tilted.** The keystone up to the opening
+  angle is gone, and the cockpit around the quad stays in its place when the
+  menu opens. This is weaker than P329.1/2: it is a change in what he sees,
+  judged within the run, and only noticeable when the map is opened with the
+  head turned.
+* **P329.4 Flight unchanged.**
+  * `hwrite` tracking as in 328B. The head angle is resumed the tick the map
+    closes.
+  * No world jump at closing: the declared pose is X4's camera on both
+    sides.
+* **P329.5 Unchanged elsewhere:** csmfit FIX, cursor-auto, start-screen
+  arrow, no X4 core.
+
+Protocol (no timed phases; configuration 1, real mouse and keyboard;
+WiVRn):
+1. Start WiVRn and run the line. Load the save. Wait for the "head-look
+   write ARMED" notification.
+2. Turn the head clearly away from straight ahead (~20–30° to one side and
+   a little up or down) and press M.
+3. With the map open, sweep the cursor along all four edges. Go into the
+   left menus as in 328B, especially their lower parts.
+4. Close the map, fly a few seconds, then open it again with the head
+   turned the other way. Repeat the sweep.
+5. Quit.
+
+Cost: ~5 minutes. No extra instrumentation. One memory write per tick while
+a menu is up. A short recording of one sweep is welcome but not required:
+the scorer measures the camera, and his report judges reachability.
