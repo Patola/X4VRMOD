@@ -41,6 +41,7 @@
 
 #include "../common/x4vr_log.hpp"
 #include "../common/x4vr_share.hpp"
+#include "../common/x4vr_steer.hpp"
 #include "../common/x4vr_view.hpp"
 #include "cursor_shaders.hpp"
 
@@ -234,8 +235,13 @@ public:
     // COLOR_ATTACHMENT_OPTIMAL and the caller's own barrier must say so. On
     // false it has recorded nothing and the image is untouched -- so a failure
     // here costs the cursor, never the frame.
+    // `steer`, when non-null, is the mouse-steering target for this frame
+    // (x4vr_steer.hpp): the line is drawn under the cursor, and in A the ring
+    // moves to the nose. Ignored under a canvas map -- a full-screen menu is
+    // up, and X4 shows no steering line there.
     bool record(VkCommandBuffer cb, const Target &t, const Shared *shared,
-                const x4vr::CanvasNdc *canvas = nullptr) {
+                const x4vr::CanvasNdc *canvas = nullptr,
+                const x4vr::steer::Frame *steer = nullptr) {
         if (!ready() || !shared || t.image == VK_NULL_HANDLE || !t.extent.width ||
             !t.extent.height)
             return refuse(kCurNotReady);
@@ -311,22 +317,55 @@ public:
             s->tex_ready = true;
         }
 
-        const CursorRect q = cursor_rect(px, py, hot_x, hot_y, cw, ch,
+        const float w = (float)t.extent.width, h = (float)t.extent.height;
+        // The steering target (x4vr_steer.hpp). In A the ring is drawn at the
+        // nose plus the pointer's offset, so the pointer is moved by the
+        // nose's NDC before anything is placed; X4 still picks at the raw
+        // pointer -- A's stated cost.
+        x4vr::steer::Geometry sg;
+        if (steer && !canvas && steer->mode != x4vr::steer::kOff) {
+            sg = x4vr::steer::geometry(steer->mode, 2.f * px / w - 1.f,
+                                       2.f * py / h - 1.f, steer->nose_ok,
+                                       steer->nose_x, steer->nose_y, w, h,
+                                       x4vr::steer::kLineGapPx);
+            note_steer(sg, steer->mode);
+        }
+        const float rpx = px + sg.ring_dx * 0.5f * w;
+        const float rpy = py + sg.ring_dy * 0.5f * h;
+
+        const CursorRect q = cursor_rect(rpx, rpy, hot_x, hot_y, cw, ch,
                                          t.extent.width, t.extent.height);
         if (!q.onscreen)
             return refuse(kCurOffEye); // wholly outside the eye
 
+        // corner(t) = origin + t.x * e1 + t.y * e2 (cursor_quad.vert): the
+        // cursor is the axis-aligned case.
         struct Push {
-            float rect[4];
+            float oe1[4];
+            float e2[4];
             float uv[4];
-        } push{{q.x0, q.y0, q.x1, q.y1},
+            float tint[4];
+        } push{{q.x0, q.y0, q.x1 - q.x0, 0.f},
+               {0.f, q.y1 - q.y0, 0.f, 0.f},
                // Only the top-left cw x ch of the atlas holds this cursor; the
                // texture is allocated at the channel's maximum so a cursor
                // change never reallocates.
                {0.f, 0.f, (float)cw / (float)Shared::kCursorMax,
-                (float)ch / (float)Shared::kCursorMax}};
-
-        const float w = (float)t.extent.width, h = (float)t.extent.height;
+                (float)ch / (float)Shared::kCursorMax},
+               {1.f, 1.f, 1.f, 1.f}};
+        // The line: solid (u0 < 0), its feather in v0, X4's colour.
+        Push line{};
+        if (sg.line) {
+            float feather_t = 0.f;
+            const x4vr::steer::Quad lq = x4vr::steer::line_quad(
+                sg, w, h, x4vr::steer::kLineWidthPx,
+                x4vr::steer::kLineFeatherPx, &feather_t);
+            line = Push{{lq.ox, lq.oy, lq.e1x, lq.e1y},
+                        {lq.e2x, lq.e2y, 0.f, 0.f},
+                        {-1.f, feather_t, -1.f, feather_t},
+                        {x4vr::steer::kLineRGBA[0], x4vr::steer::kLineRGBA[1],
+                         x4vr::steer::kLineRGBA[2], x4vr::steer::kLineRGBA[3]}};
+        }
 
         VkImageMemoryBarrier b{};
         b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -349,7 +388,9 @@ public:
         VkRect2D sc{{0, 0}, t.extent};
         // Where the hotspot sits in NDC before any canvas -- the point X4
         // hit-tests at, and the only point the map has to agree about.
-        const float hx = 2.f * px / w - 1.f, hy = 2.f * py / h - 1.f;
+        // The DRAWN hotspot: in steering mode A that is the nose-relative ring,
+        // not the raw pointer.
+        const float hx = 2.f * rpx / w - 1.f, hy = 2.f * rpy / h - 1.f;
         const x4vr::CanvasNdc none[2];
         const x4vr::CanvasNdc *map = canvas ? canvas : none;
         // View 0's mapped hotspot -- the eye Patola judges from, and the two
@@ -387,10 +428,8 @@ public:
             Push p = push;
             const x4vr::CanvasNdc &m = map[l < 2 ? l : 1];
             const float dx = m.x(hx) - hx, dy = m.y(hy) - hy;
-            p.rect[0] += dx;
-            p.rect[2] += dx;
-            p.rect[1] += dy;
-            p.rect[3] += dy;
+            p.oe1[0] += dx;
+            p.oe1[1] += dy;
             VkRenderPassBeginInfo rp{};
             rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
             rp.renderPass = pass_;
@@ -402,6 +441,13 @@ public:
                                        layout_, 0, 1, &s->set, 0, nullptr);
             fns_.CmdSetViewport(cb, 0, 1, &vp);
             fns_.CmdSetScissor(cb, 0, 1, &sc);
+            // The steering line first, so the cursor sits on top of its end.
+            // Never under a canvas map, so no per-layer shift applies.
+            if (sg.line) {
+                fns_.CmdPushConstants(cb, layout_, VK_SHADER_STAGE_VERTEX_BIT,
+                                      0, sizeof(line), &line);
+                fns_.CmdDraw(cb, 4, 1, 0, 0);
+            }
             fns_.CmdPushConstants(cb, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0,
                                   sizeof(p), &p);
             fns_.CmdDraw(cb, 4, 1, 0, 0);
@@ -483,6 +529,16 @@ public:
                          : "",
                      rx_lo_[arm], rx_hi_[arm], ry_lo_[arm], ry_hi_[arm]);
         }
+        // The steering target: frames drawn per mode actually used, how many
+        // carried a line, and how often A fell back to B because the nose
+        // was off the eye. Silent when it never ran.
+        if (steer_frames_[1] || steer_frames_[2])
+            X4VR_LOG("steer drawn (%s): B %llu frame(s), A %llu frame(s) | "
+                     "line in %llu | A asked but nose off the eye -> B in %llu",
+                     when, (unsigned long long)steer_frames_[1],
+                     (unsigned long long)steer_frames_[2],
+                     (unsigned long long)steer_line_frames_,
+                     (unsigned long long)steer_fallback_);
     }
 
     // Drop everything hanging off one eye image, because the image is about to
@@ -622,7 +678,7 @@ private:
             VK_SUCCESS)
             return fail("descriptor set layout");
 
-        VkPushConstantRange pcr{VK_SHADER_STAGE_VERTEX_BIT, 0, 8 * sizeof(float)};
+        VkPushConstantRange pcr{VK_SHADER_STAGE_VERTEX_BIT, 0, 16 * sizeof(float)};
         VkPipelineLayoutCreateInfo pli{};
         pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         pli.setLayoutCount = 1;
@@ -1046,6 +1102,28 @@ private:
     float dx_lo_[2] = {1e9f, 1e9f}, dx_hi_[2] = {-1e9f, -1e9f};
     float dy_lo_[2] = {1e9f, 1e9f}, dy_hi_[2] = {-1e9f, -1e9f};
     uint64_t drew_arm_[2] = {0, 0};
+    // x4vr_steer.hpp's census: frames by the mode actually drawn (index =
+    // Mode), frames with a line, and A-to-B fallbacks.
+    uint64_t steer_frames_[3] = {0, 0, 0};
+    uint64_t steer_line_frames_ = 0, steer_fallback_ = 0;
+    uint32_t steer_said_ = 0, steer_changes_ = 0;
+    void note_steer(const x4vr::steer::Geometry &g, uint32_t asked) {
+        steer_frames_[(uint32_t)g.used < 3u ? (uint32_t)g.used : 0u]++;
+        if (g.line)
+            steer_line_frames_++;
+        if (asked == x4vr::steer::kNose && g.used != x4vr::steer::kNose)
+            steer_fallback_++;
+        // Every change for the first 40: in A the nose crossing the eye's
+        // edge flips the mode drawn, and that must not flood the log.
+        if (steer_said_ != (uint32_t)g.used + 1 && steer_changes_ < 40) {
+            steer_said_ = (uint32_t)g.used + 1;
+            steer_changes_++;
+            X4VR_LOG("steer: drawing %s%s", x4vr::steer::mode_name(g.used),
+                     asked == x4vr::steer::kNose && g.used != asked
+                         ? " — A asked, the nose is off the eye"
+                         : "");
+        }
+    }
     // Per arm, the union of the map's images of the window edges -- the box
     // the cursor could occupy had the pointer been swept into every corner.
     float rx_lo_[2] = {1e9f, 1e9f}, rx_hi_[2] = {-1e9f, -1e9f};

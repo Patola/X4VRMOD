@@ -40,7 +40,9 @@ constexpr uint32_t kShareMagic = 0x52565834u;
 // 3: that block got the seqlock it should have had from the start (`cam_seq`).
 // 4: `fullscreen_menu`, so the layer can draw the cursor through the UI canvas
 // only while X4 shows a full-screen menu (X4VR_CURSOR_CANVAS=auto, take 327).
-constexpr uint32_t kShareVersion = 4u;
+// 5: `steer_line` and `steer_mode`, the mouse-steering target A/B
+//    (x4vr_steer.hpp).
+constexpr uint32_t kShareVersion = 5u;
 
 struct Shared {
     uint32_t magic = kShareMagic;
@@ -175,6 +177,15 @@ struct Shared {
     // the layer shows scaled by the canvas map (take 311), while in flight X4
     // picks the world at the raw pointer (take 314). 1 = a menu is up.
     std::atomic<uint32_t> fullscreen_menu{0};
+
+    // The mouse-steering target (x4vr_steer.hpp), published by the injector
+    // on X4's main thread each tick. `steer_line`: 1 while X4 would show its
+    // own steering line, its option aside -- the bytes
+    // ShouldShowMouseSteeringHelperLine reads, with the cockpit view and the
+    // HUD up. `steer_mode`: steer::Mode, kOff unless X4VR_STEER asked for the
+    // overlay; the apostrophe key flips it between A and B.
+    std::atomic<uint32_t> steer_line{0};
+    std::atomic<uint32_t> steer_mode{0};
 };
 
 // ---- the camera block, as one consistent snapshot ------------------------

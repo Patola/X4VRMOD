@@ -4541,6 +4541,72 @@ def main(path):
                       "that also covered the ESC menu's PAUSE (take 329), so "
                       "those periods may be the ESC menu")
 
+    # --- X4VR_STEER: the mouse-steering target, A/B ----------------------
+    #
+    # Patola's choice after take 328: B (the line from where you look, the
+    # default) and A (the target fixed to the cockpit), the apostrophe key
+    # switching live. The injector hides X4's own line through the config
+    # fork and says when X4 WOULD show it; the layer draws ours and counts
+    # frames by the mode it actually drew (A falls back to B while the nose is
+    # off the eye). Intent is the run line; each link of the chain is checked
+    # separately, so a silent overlay names the link that broke.
+    st_m = re.search(r"\bX4VR_STEER=(\S+)", run or "")
+    st_asked = bool(st_m) and st_m.group(1) in ("a", "A", "nose", "b", "B",
+                                                "gaze")
+    st_ok = re.search(r"steer: all (\d+) ShouldShowMouseSteeringHelperLine "
+                      r"sites match", text)
+    st_ref = re.search(r"steer: REFUSED — (.*)", text)
+    st_cfg = re.search(r"config: mousesteeringline: (?:'([^']*)' -> 'false'|"
+                       r"already 'false')", text)
+    st_rest = re.search(r"config: mousesteeringline: '([^']*)' -> '([^']*)' "
+                        r"— restored", text)
+    st_on = re.search(r"steer: overlay ON, starting in (\S+)", text)
+    st_gate = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+steer: X4's steering "
+                         r"line would be (ON|OFF)", text)
+    st_tog = re.findall(r"milestone: steering target (A|B)", text)
+    st_drawn = re.findall(r"steer drawn \((?:periodic|final)\): B (\d+) "
+                          r"frame\(s\), A (\d+) frame\(s\) \| line in (\d+) \| "
+                          r"A asked but nose off the eye -> B in (\d+)", text)
+    if st_asked or st_ok or st_ref or st_drawn:
+        if st_ref:
+            print(f"steer   REFUSED by the site check — {st_ref.group(1)}")
+            if st_asked:
+                fails.append("X4VR_STEER: X4's code differs from the analysed "
+                             "build — no target drawn, X4's own line left")
+        elif st_ok:
+            print(f"steer   {st_ok.group(1)} code sites match; overlay "
+                  + (f"ON from {st_on.group(1)}" if st_on else "never started")
+                  + "; X4's own line "
+                  + ("hidden through the config fork" if st_cfg else
+                     "NOT hidden (no mousesteeringline line)"))
+            if st_asked and not st_cfg:
+                fails.append("X4VR_STEER: X4's own steering line was never "
+                             "hidden — the config fork did not serve "
+                             "mousesteeringline=false, so both lines show")
+        ons = sum(1 for _t, k in st_gate if k == "ON")
+        print(f"steer   X4 would have shown its line {ons} time(s) (mouse "
+              f"steering engaged in the cockpit); apostrophe toggles: "
+              f"{len(st_tog)}"
+              + (f" ({' -> '.join(st_tog[:12])})" if st_tog else ""))
+        if st_drawn:
+            b, a, ln, fb = (int(x) for x in st_drawn[-1])
+            print(f"steer   the layer drew the target in {b + a} frame(s): B "
+                  f"{b}, A {a} | with a line {ln} | A asked but the nose off "
+                  f"the eye -> B {fb}")
+            if st_tog and a == 0 and "A" in st_tog:
+                fails.append("X4VR_STEER: A was selected but the layer never "
+                             "drew A — the mode did not reach the layer")
+        elif st_asked and ons:
+            fails.append("X4VR_STEER: X4 showed its steering line but the layer "
+                         "never drew the target — the channel or the overlay "
+                         "is broken")
+        elif st_asked:
+            print("steer   no mouse steering in this run, so the target was "
+                  "never drawn — the overlay was not exercised")
+    elif st_rest:
+        print(f"steer   not asked; mousesteeringline restored to "
+              f"'{st_rest.group(2)}' from the overlay's earlier run")
+
     # --- the Lua reconnaissance (X4VR_LUA=1): which state, source or bytecode
     lua_rows = re.findall(r"lua\[(buf|file)\] (.*?) \((\d+) bytes, "
                           r"(source|bytecode|by path), L=(\S+)\)", text)

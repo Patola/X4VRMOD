@@ -67,6 +67,18 @@ run "overlay follows a scale-only canvas" \
     env X4VR_TEST_CANVAS_PX=0 X4VR_TEST_CANVAS_AX=1.2892 \
     X4VR_TEST_CANVAS_AY=1.1931 "$BUILD/tests/x4vr_test_cursor_render"
 
+# X4VR_STEER (x4vr_steer.hpp): the steering line on a real GPU, in both
+# modes. A 256x192 eye so the pointer sits ~116 px from the centre, well
+# outside the line's 16 px gap. In A the ring must move by the nose's 20,10
+# px -- every glyph check is posed there, so a ring that ignored the nose
+# fails them -- and in both the cursor must be drawn OVER the line's end.
+run "steering B: the line from the gaze" \
+    env X4VR_TEST_EYE=256x192 X4VR_TEST_STEER=b X4VR_TEST_CANVAS_PX=0 \
+    "$BUILD/tests/x4vr_test_cursor_render"
+run "steering A: ring and line at the nose" \
+    env X4VR_TEST_EYE=256x192 X4VR_TEST_STEER=a X4VR_TEST_NOSE_PX=20,10 \
+    X4VR_TEST_CANVAS_PX=0 "$BUILD/tests/x4vr_test_cursor_render"
+
 if [[ $fails -eq 0 ]]; then
     echo; echo "all cases passed"
 else

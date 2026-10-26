@@ -71,7 +71,10 @@ static uint32_t find_mem(const VkPhysicalDeviceMemoryProperties &mp,
 
 // The eye is deliberately small and not square: 1408x1408 is this machine's
 // convenience and nothing in the overlay may depend on it.
-static const uint32_t kW = 96, kH = 64, kLayers = 2;
+// X4VR_TEST_EYE=WxH overrides it for the steering cases, whose line needs
+// more than the 16 px gap between the eye's centre and the pointer.
+static uint32_t kW = 96, kH = 64;
+static const uint32_t kLayers = 2;
 // The cursor, and where it goes. Hot spot (1,1) so the quad's top-left is one
 // pixel up and left of the pointer -- a test that used (0,0) would pass whether
 // or not the hot spot were subtracted at all.
@@ -98,6 +101,19 @@ static std::string read_log() {
 }
 
 int main() {
+    if (const char *e = getenv("X4VR_TEST_EYE")) {
+        unsigned w = 0, h = 0;
+        if (sscanf(e, "%ux%u", &w, &h) == 2 && w >= 96 && h >= 64)
+            kW = w, kH = h;
+    }
+    // X4VR_STEER's target (x4vr_steer.hpp): X4VR_TEST_STEER=b|a, and for A the
+    // nose's offset from the eye's centre in pixels, X4VR_TEST_NOSE_PX=dx,dy.
+    // Drawn with no canvas, as in the cockpit, where X4 shows its line.
+    const x4vr::steer::Mode steer_mode =
+        x4vr::steer::mode_from_env(getenv("X4VR_TEST_STEER"));
+    int32_t nose_px = 0, nose_py = 0;
+    if (const char *e = getenv("X4VR_TEST_NOSE_PX"))
+        sscanf(e, "%d,%d", &nose_px, &nose_py);
     {
         const int fd = mkstemp(g_log_path);
         if (fd >= 0)
@@ -374,8 +390,18 @@ int main() {
         return (int32_t)lrintf((canvas[l].y(hy) - hy) * 0.5f * (float)kH);
     };
 
+    x4vr::steer::Frame sf;
+    sf.mode = steer_mode;
+    sf.nose_ok = true;
+    sf.nose_x = 2.f * (float)nose_px / (float)kW;
+    sf.nose_y = 2.f * (float)nose_py / (float)kH;
+    const bool steering = steer_mode != x4vr::steer::kOff;
+    // Where the ring goes: in A, by the nose; in B, nowhere.
+    const int32_t ring_dx = steer_mode == x4vr::steer::kNose ? nose_px : 0;
+    const int32_t ring_dy = steer_mode == x4vr::steer::kNose ? nose_py : 0;
     const bool drew = overlay.record(
-        cb, {eye, 0, 1, fmt, {kW, kH}, kLayers}, &shared, canvas);
+        cb, {eye, 0, 1, fmt, {kW, kH}, kLayers}, &shared,
+        steering ? nullptr : canvas, steering ? &sf : nullptr);
     ok("record() reports that it drew", drew);
 
     // The census line #46 is scored from. Its REACHABLE box must be the map's
@@ -445,6 +471,32 @@ int main() {
                ((size_t)y * kW + x) * 4;
     };
 
+    // What the steering line leaves under a pixel, from its definition: X4's
+    // white at 12% times the coverage at the pixel's centre -- full within
+    // 1 px of the segment, fading to 0 at 2 px. 0 when not steering, which
+    // keeps every assertion below exactly what it was.
+    auto under = [&](int32_t x, int32_t y) -> float {
+        if (!steering)
+            return 0.f;
+        const float ox = 0.5f * (float)kW + (float)ring_dx;
+        const float oy = 0.5f * (float)kH + (float)ring_dy;
+        const float ex = kPosX + (float)ring_dx, ey = kPosY + (float)ring_dy;
+        const float len = hypotf(ex - ox, ey - oy);
+        const float ux = (ex - ox) / len, uy = (ey - oy) / len;
+        const float sx = ox + ux * x4vr::steer::kLineGapPx;
+        const float sy = oy + uy * x4vr::steer::kLineGapPx;
+        const float seg = len - x4vr::steer::kLineGapPx;
+        const float cx = (float)x + 0.5f - sx, cy = (float)y + 0.5f - sy;
+        const float along = cx * ux + cy * uy;
+        const float perp = fabsf(cx * uy - cy * ux);
+        if (along < 0.f || along > seg)
+            return 0.f;
+        const float half = 0.5f * x4vr::steer::kLineWidthPx +
+                           x4vr::steer::kLineFeatherPx;
+        const float cov = fminf(1.f, fmaxf(0.f, (half - perp) /
+                                                    x4vr::steer::kLineFeatherPx));
+        return 255.f * x4vr::steer::kLineRGBA[3] * cov;
+    };
     for (uint32_t l = 0; l < kLayers; l++) {
         char what[128];
         // Where this layer's quad has to be. The sign is the claim: view 0 is
@@ -452,8 +504,8 @@ int main() {
         // module. Backwards here and the pointer would sit on the wrong side
         // of the button in both eyes -- symmetrically, so it would still look
         // deliberate.
-        const int32_t qx = kQuadX + quad_dx(l);
-        const int32_t qy = kQuadY + quad_dy(l);
+        const int32_t qx = kQuadX + quad_dx(l) + ring_dx;
+        const int32_t qy = kQuadY + quad_dy(l) + ring_dy;
         // Blue in a B8G8R8A8 readback is byte 0, which is also the byte SDL's
         // ARGB8888 puts blue in -- the mapping under test, end to end.
         snprintf(what, sizeof(what), "layer %u: opaque texel is fully blue", l);
@@ -461,23 +513,80 @@ int main() {
         snprintf(what, sizeof(what), "layer %u: opaque texel has no green", l);
         eq(what, px(l, qx, qy)[1], 0);
         // 255 * (128/255) = 128. If blending were off this would be 255, and if
-        // the alpha were applied twice it would be 64.
+        // the alpha were applied twice it would be 64. Over the steering line
+        // it is the glyph over the line: 128 + (1 - 128/255) * under.
+        const float a = 128.f / 255.f;
         snprintf(what, sizeof(what), "layer %u: half-alpha texel is blended", l);
-        eq(what, px(l, qx + 1, qy)[0], 128, 2);
+        eq(what, px(l, qx + 1, qy)[0],
+           (int)lrintf(255.f * a + (1.f - a) * under(qx + 1, qy)),
+           steering ? 3 : 2);
+        // Green tells the ORDER: the glyph has none, so glyph-over-line keeps
+        // half the line's green (~15) where line-over-glyph would show ~31.
+        if (steering && under(qx + 1, qy) > 20.f) {
+            snprintf(what, sizeof(what), "layer %u: the cursor is drawn OVER "
+                                         "the line", l);
+            eq(what, px(l, qx + 1, qy)[1],
+               (int)lrintf((1.f - a) * under(qx + 1, qy)), 3);
+        }
         snprintf(what, sizeof(what), "layer %u: transparent texel leaves the frame", l);
-        eq(what, px(l, qx + 2, qy)[0], 0);
+        eq(what, px(l, qx + 2, qy)[0], (int)lrintf(under(qx + 2, qy)), steering ? 3 : 0);
         snprintf(what, sizeof(what), "layer %u: the far corner of the quad is green", l);
         eq(what, px(l, qx + 3, qy)[1], 255);
         // One pixel outside the quad on every side: the draw must not bleed.
         snprintf(what, sizeof(what), "layer %u: one pixel left of the quad is untouched", l);
-        eq(what, px(l, qx - 1, qy)[0], 0);
+        eq(what, px(l, qx - 1, qy)[0], (int)lrintf(under(qx - 1, qy)), steering ? 3 : 0);
         snprintf(what, sizeof(what), "layer %u: one pixel above the quad is untouched", l);
-        eq(what, px(l, qx, qy - 1)[0], 0);
+        eq(what, px(l, qx, qy - 1)[0], (int)lrintf(under(qx, qy - 1)), steering ? 3 : 0);
         snprintf(what, sizeof(what), "layer %u: one row below the quad is untouched", l);
-        eq(what, px(l, qx, qy + (int32_t)kCH)[0], 0);
+        eq(what, px(l, qx, qy + (int32_t)kCH)[0],
+           (int)lrintf(under(qx, qy + (int32_t)kCH)), steering ? 3 : 0);
         snprintf(what, sizeof(what), "layer %u: the far corner of the eye is untouched", l);
         eq(what, px(l, (int32_t)kW - 1, (int32_t)kH - 1)[0], 0);
     }
+    // The steering line, computed here from the definition rather than with
+    // the overlay's own arithmetic: from the eye's centre (B) or the nose (A),
+    // starting 16 px out, ending at the ring's hotspot. X4's white at 12%
+    // over a cleared eye is 0.12 * 255 = 31 in every channel.
+    if (steering) {
+        const float ox = 0.5f * (float)kW + (float)ring_dx;
+        const float oy = 0.5f * (float)kH + (float)ring_dy;
+        const float ex = kPosX + (float)ring_dx, ey = kPosY + (float)ring_dy;
+        const float len = hypotf(ex - ox, ey - oy);
+        const float ux = (ex - ox) / len, uy = (ey - oy) / len;
+        const float sx = ox + ux * x4vr::steer::kLineGapPx;
+        const float sy = oy + uy * x4vr::steer::kLineGapPx;
+        const float mx = 0.5f * (sx + ex), my = 0.5f * (sy + ey);
+        for (uint32_t l = 0; l < kLayers; l++) {
+            char what[160];
+            const uint8_t *m = px(l, (int32_t)floorf(mx), (int32_t)floorf(my));
+            snprintf(what, sizeof what,
+                     "layer %u: the line's midpoint is X4's white at 12%%", l);
+            ok(what, abs((int)m[0] - 31) <= 3 && abs((int)m[1] - 31) <= 3 &&
+                         abs((int)m[2] - 31) <= 3);
+            // 4 px square to the line: outside the 2+1+1 px it covers.
+            const uint8_t *o = px(l, (int32_t)floorf(mx - uy * 4.f),
+                                  (int32_t)floorf(my + ux * 4.f));
+            snprintf(what, sizeof what, "layer %u: 4 px beside the line is "
+                                        "untouched", l);
+            ok(what, o[0] == 0 && o[1] == 0 && o[2] == 0);
+            // Inside the gap: X4 leaves its crosshair clear, and so do we.
+            const uint8_t *g = px(l, (int32_t)floorf(ox + ux * 6.f),
+                                  (int32_t)floorf(oy + uy * 6.f));
+            snprintf(what, sizeof what, "layer %u: 6 px from the origin (inside "
+                                        "the gap) is untouched", l);
+            ok(what, g[0] == 0 && g[1] == 0 && g[2] == 0);
+        }
+        overlay.report("steer-test", kW, kH);
+        const std::string log = read_log();
+        ok("the census names the mode drawn",
+           log.find(steer_mode == x4vr::steer::kNose
+                        ? "steer drawn (steer-test): B 0 frame(s), A 1 frame(s)"
+                        : "steer drawn (steer-test): B 1 frame(s), A 0 frame(s)") !=
+               std::string::npos);
+        printf("      line from (%.1f,%.1f) to (%.1f,%.1f), midpoint %.1f,%.1f\n",
+               sx, sy, ex, ey, mx, my);
+    }
+
     // The claim that matters most: both eyes got it, and -- with no canvas --
     // identically. A cursor in one half only is the failure this whole project
     // is shaped around.

@@ -193,6 +193,10 @@ add_executable(x4vr_test_fieldab fieldab.cpp)
 # X4VR_CSM_COVER: X4's cascade-fit formula against take 323, the divisors, the
 # four sites against the real binary, and the patch executed. Self-checking.
 add_executable(x4vr_test_csmfit csmfit.cpp)
+# X4VR_STEER: the knob, X4's line condition and its code sites against the
+# real binary, the nose against rows_for, the B/A geometry, the line quad and
+# the config fork's insert/restore. Self-checking.
+add_executable(x4vr_test_steer steer.cpp)
 # The content.xml fork that enables our extensions for the modded session.
 add_executable(x4vr_test_content_fork content_fork.cpp)
 target_link_libraries(x4vr_test_camwatch PRIVATE Threads::Threads)

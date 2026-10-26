@@ -49,6 +49,7 @@ extern char **environ;
 #include "../common/x4vr_immortal.hpp"
 #include "../common/x4vr_env.hpp"
 #include "../common/x4vr_share.hpp"
+#include "../common/x4vr_steer.hpp"
 #include "x4vr_config.hpp"
 #include "x4vr_inputmap.hpp"
 #include "../common/x4vr_camring.hpp"
@@ -634,9 +635,53 @@ Profile load_profile(const char *config_path) {
     return p;
 }
 
+// `mousesteeringline`: false while X4VR_STEER's overlay draws the line, and
+// the player's own value back otherwise. The value it replaced is kept in a
+// sidecar (x4vr_config.hpp, sidecar_path), because X4 saves the served false
+// into the profile and a run without the overlay must not inherit it.
+// `hide`: steer_hide_x4_line(), passed in by the fopen hooks below, where it
+// is defined.
+static void steer_config(std::string &xml, const std::string &profile,
+                         bool hide) {
+    const char *tag = "mousesteeringline";
+    const std::string side = x4vr::sidecar_path(profile, tag);
+    const std::string was = x4vr::read_file(side.c_str());
+    const bool have_side = !was.empty();
+    if (hide) {
+        std::string old;
+        if (x4vr::set_or_insert_tag(xml, tag, "false", &old)) {
+            if (!have_side)
+                x4vr::write_file(side.c_str(), old.empty() ? "absent" : old);
+            X4VR_LOG("config: %s: '%s' -> 'false' (X4VR_STEER: the layer draws "
+                     "the steering line; your value is kept in %s)",
+                     tag, old.empty() ? "absent" : old.c_str(), side.c_str());
+        } else {
+            // Already false in the profile -- X4 saved it last run. Said
+            // anyway: the scorer checks the line was hidden, not that it
+            // changed.
+            X4VR_LOG("config: %s: already 'false' (X4VR_STEER: the layer draws "
+                     "the steering line; your value is kept in %s)",
+                     tag, side.c_str());
+        }
+        return;
+    }
+    if (!have_side)
+        return;
+    // The player's value was "absent" (X4's default, true) or a literal.
+    const std::string v = (was == "absent" || was.empty()) ? "true" : was;
+    std::string old;
+    x4vr::set_or_insert_tag(xml, tag, v.c_str(), &old);
+    using unlink_fn = int (*)(const char *);
+    static unlink_fn real_unlink = (unlink_fn)dlsym(RTLD_NEXT, "unlink");
+    if (real_unlink)
+        real_unlink(side.c_str());
+    X4VR_LOG("config: %s: '%s' -> '%s' — restored (no X4VR_STEER this run)",
+             tag, old.c_str(), v.c_str());
+}
+
 // Build the rewritten config and return a stream over it, or nullptr to let
 // the caller fall back to the real file.
-FILE *open_patched_config(const char *path) {
+FILE *open_patched_config(const char *path, bool hide_steer_line) {
     Profile prof = load_profile(path);
     if (prof.xml.empty())
         return nullptr;
@@ -653,6 +698,7 @@ FILE *open_patched_config(const char *path) {
             changed++;
         }
     }
+    steer_config(xml, prof.path, hide_steer_line);
 
     // Back the stream with a memfd rather than fmemopen(): an fmemopen
     // stream has no real file descriptor, so any fileno()/fstat()/mmap() in
@@ -4459,6 +4505,136 @@ static void fullscreen_menu_tick() {
                                                std::memory_order_relaxed);
 }
 
+// ------------------------------------------------ X4VR_STEER=b|a
+//
+// The mouse-steering target, A/B with a live toggle (x4vr_steer.hpp; Patola,
+// after take 328). This side decides WHEN: X4's own condition for showing its
+// steering line, read rather than called -- ShouldShowMouseSteeringHelperLine
+// is the option AND four bytes off the input object IsMouseSteeringActive
+// reads with no NULL check -- plus the cockpit view with the HUD up, which is
+// the Lua side's crosshairActive. The layer decides WHERE.
+//
+// The code the predicate is read from is verified byte for byte once; a
+// different build refuses, and then X4's own line is NOT hidden either, so a
+// refusal leaves vanilla behaviour rather than no line at all.
+static x4vr::steer::Mode steer_asked_mode() {
+    static const x4vr::steer::Mode m =
+        x4vr::steer::mode_from_env(getenv("X4VR_STEER"));
+    return m;
+}
+static bool steer_sites_verified() {
+    static const bool ok = [] {
+        if (steer_asked_mode() == x4vr::steer::kOff)
+            return false;
+        auto rd = [](uintptr_t va, void *o, size_t n) {
+            return self_read(va, o, n);
+        };
+        uintptr_t bad = 0;
+        const bool v = x4vr::steer::verify_sites(rd, &bad);
+        if (v)
+            X4VR_LOG("steer: all %zu ShouldShowMouseSteeringHelperLine sites "
+                     "match X4 9.00 — the input object is at global %p; X4's "
+                     "own line is hidden and the layer draws the target",
+                     x4vr::steer::kNumSites,
+                     (void *)x4vr::steer::input_global_from_sites());
+        else
+            X4VR_LOG("steer: REFUSED — X4's code at %p differs from the "
+                     "analysed build; X4VR_STEER does nothing and X4's own "
+                     "line stays",
+                     (void *)bad);
+        return v;
+    }();
+    return ok;
+}
+static bool steer_hide_x4_line() {
+    return steer_asked_mode() != x4vr::steer::kOff && steer_sites_verified();
+}
+
+// The mode in force, flipped by the apostrophe; and whether the key is ours
+// right now (cockpit, HUD up -- anywhere else it is X4's).
+static std::atomic<uint32_t> g_steer_mode{0};
+static std::atomic<bool> g_steer_keys_live{false};
+
+// SDL3's scancode for the apostrophe key: a PHYSICAL key, so the keyboard
+// layout does not matter. Unbound in all six of Patola's input maps (F8, the
+// other candidate, is X4's compass-menu slot 2).
+constexpr uint32_t kSteerToggleScancode = 52; // SDL_SCANCODE_APOSTROPHE
+// Shift, Ctrl, Alt, GUI and AltGr (MODE): a chord is not the toggle. The lock
+// keys (NUM 0x1000, CAPS 0x2000, SCROLL 0x8000) are ignored.
+constexpr uint16_t kSteerChordMods = 0x0FFF | 0x4000;
+
+static void steer_tick() {
+    if (!steer_hide_x4_line())
+        return;
+    static bool said = false;
+    if (!said) {
+        said = true;
+        g_steer_mode.store(steer_asked_mode(), std::memory_order_relaxed);
+        X4VR_LOG("steer: overlay ON, starting in %s — the apostrophe key "
+                 "switches A/B in the cockpit",
+                 x4vr::steer::mode_name(steer_asked_mode()));
+    }
+    const bool cockpit = x4_view() == X4View::Cockpit;
+    // Not called unguarded: without a decoded slot the HUD counts as down.
+    const bool hud = x4_hud_slot() ? x4_hud_active() : false;
+    bool shown = false;
+    if (cockpit && hud) {
+        using namespace x4vr::steer;
+        uintptr_t in = 0;
+        uint8_t blk[kA010 - kActive + 1];
+        if (self_read(input_global_from_sites(), &in, sizeof in) && in &&
+            self_read(in + kActive, blk, sizeof blk)) {
+            Flags f;
+            f.active = blk[0];
+            f.active2 = blk[kActive2 - kActive];
+            f.f39 = blk[kF39 - kActive];
+            f.f42 = blk[kF42 - kActive];
+            f.a010 = blk[kA010 - kActive];
+            shown = line_shown(f);
+        }
+    }
+    g_steer_keys_live.store(cockpit && hud, std::memory_order_relaxed);
+    static int last = -1;
+    static unsigned changes = 0;
+    if ((int)shown != last && changes < 200) {
+        last = shown;
+        changes++;
+        X4VR_LOG("steer: X4's steering line would be %s",
+                 shown ? "ON — the layer draws the target" : "OFF");
+    }
+    if (x4vr::Shared *sh = x4vr_shared_state()) {
+        sh->steer_mode.store(g_steer_mode.load(std::memory_order_relaxed),
+                             std::memory_order_relaxed);
+        sh->steer_line.store(shown ? 1u : 0u, std::memory_order_relaxed);
+    }
+}
+
+// True when the key event is the toggle and must not reach X4. Flips the
+// mode on a fresh press when `consuming` (a GET, or SDL_WaitEvent): a peek
+// hands X4 a copy of an event that stays queued, so acting there would flip
+// twice. Its key-up is swallowed too, so X4 never sees the key at all.
+static bool steer_key_event(const Sdl3KeyEvent *k, bool consuming) {
+    if (k->scancode != kSteerToggleScancode || (k->mod & kSteerChordMods))
+        return false;
+    if (!steer_hide_x4_line() ||
+        !g_steer_keys_live.load(std::memory_order_relaxed))
+        return false;
+    if (consuming && k->type == SDL_EV_KEY_DOWN && k->down && !k->repeat) {
+        const uint32_t now =
+            g_steer_mode.load(std::memory_order_relaxed) == x4vr::steer::kNose
+                ? x4vr::steer::kGaze
+                : x4vr::steer::kNose;
+        g_steer_mode.store(now, std::memory_order_relaxed);
+        if (x4vr::Shared *sh = x4vr_shared_state())
+            sh->steer_mode.store(now, std::memory_order_relaxed);
+        X4VR_LOG("milestone: steering target %s",
+                 now == x4vr::steer::kNose
+                     ? "A — fixed to the cockpit (apostrophe for B)"
+                     : "B — the line from where you look (apostrophe for A)");
+    }
+    return true;
+}
+
 // **Task #75's fix: where the tick's cadence comes from.**
 //
 // 0 = X4's event drain, exactly as every take so far. Anything else is a rate in
@@ -6320,6 +6496,7 @@ void SDL_PumpEvents(void) {
         fieldab_tick();
         csmfit_tick();
         fullscreen_menu_tick();
+        steer_tick();
         pumprate_report();
     }
     real_fn();
@@ -6332,6 +6509,15 @@ bool SDL_WaitEvent(void *event) {
         g_pumprate.wait.fetch_add(1, std::memory_order_relaxed);
     if (r && event && this_is_the_game()) {
         auto *e = (Sdl3MouseEvent *)event;
+        // X4VR_STEER's toggle cannot be removed from a single-event wait, so it
+        // becomes a key X4 does not know (scancode 0) after it has acted.
+        if ((e->type == SDL_EV_KEY_DOWN || e->type == SDL_EV_KEY_UP) &&
+            steer_key_event((const Sdl3KeyEvent *)e, true)) {
+            auto *k = (Sdl3KeyEvent *)event;
+            k->scancode = 0;
+            k->key = 0;
+            k->raw = 0;
+        }
         if (e->type == SDL_EV_KEY_DOWN || e->type == SDL_EV_KEY_UP)
             note_key_event((const Sdl3KeyEvent *)e, "wait", -1);
         if (e->type >= SDL_EV_MOUSE_MOTION && e->type <= SDL_EV_MOUSE_UP) {
@@ -6357,7 +6543,7 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
                    uint32_t maxType) {
     static auto real_fn =
         real<int (*)(void *, int, int, uint32_t, uint32_t)>("SDL_PeepEvents");
-    const int n = real_fn(events, numevents, action, minType, maxType);
+    int n = real_fn(events, numevents, action, minType, maxType);
     // SDL_ADDEVENT=0, SDL_PEEKEVENT=1, SDL_GETEVENT=2. Fold only on GET.
     //
     // A peek leaves the event in the queue, so folding there and again when it
@@ -6387,6 +6573,23 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
         pumprate_report();
     }
     const bool consuming = action == 2;
+    // X4VR_STEER's toggle, removed from what X4 is handed -- on a peek as well
+    // as a get, so X4 never sees it either way; it acts only on the get.
+    if (n > 0 && events && action != 0 && this_is_the_game() &&
+        steer_hide_x4_line()) {
+        int kept = 0;
+        for (int i = 0; i < n; i++) {
+            unsigned char *src = (unsigned char *)events + 128 * i;
+            const auto *k = (const Sdl3KeyEvent *)src;
+            const bool key = k->type == SDL_EV_KEY_DOWN || k->type == SDL_EV_KEY_UP;
+            if (key && steer_key_event(k, consuming))
+                continue;
+            if (kept != i)
+                memmove((unsigned char *)events + 128 * kept, src, 128);
+            kept++;
+        }
+        n = kept;
+    }
     // Counted ONLY on GET. A peek leaves the event in the queue and X4 would be
     // credited with receiving it twice -- the same trap the fold below is
     // guarded against, one field over.
@@ -7197,7 +7400,7 @@ FILE *fopen(const char *path, const char *mode) {
         X4VR_LOG("fopen(%s, %s)", path, mode);
     if (!overrides_disabled() && x4vr::is_x4_config(path)) {
         if (is_read_only(mode)) {
-            if (FILE *f = open_patched_config(path))
+            if (FILE *f = open_patched_config(path, steer_hide_x4_line()))
                 return f;
         } else {
             Profile prof = load_profile(path);
@@ -7239,7 +7442,7 @@ FILE *fopen64(const char *path, const char *mode) {
         X4VR_LOG("fopen64(%s, %s)", path, mode);
     if (!overrides_disabled() && x4vr::is_x4_config(path)) {
         if (is_read_only(mode)) {
-            if (FILE *f = open_patched_config(path))
+            if (FILE *f = open_patched_config(path, steer_hide_x4_line()))
                 return f;
         } else {
             Profile prof = load_profile(path);

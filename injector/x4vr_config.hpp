@@ -347,6 +347,38 @@ inline bool set_tag(std::string &xml, const char *tag, const char *value,
     return true;
 }
 
+// set_tag, and when the tag is ABSENT, insert it before </root>. For the one
+// tag that needs it: X4 leaves options at their defaults out of config.xml
+// (Patola's has no <mousesteeringline> at all), so a value we must serve for
+// such an option has nothing to rewrite. `*old_value` is "" when it was
+// absent. Every other override keeps set_tag's never-invent rule.
+inline bool set_or_insert_tag(std::string &xml, const char *tag,
+                              const char *value,
+                              std::string *old_value = nullptr) {
+    const std::string open = std::string("<") + tag + ">";
+    if (xml.find(open) != std::string::npos)
+        return set_tag(xml, tag, value, old_value);
+    const size_t root = xml.rfind("</root>");
+    if (root == std::string::npos)
+        return false;
+    if (old_value)
+        old_value->clear();
+    xml.insert(root, std::string("  ") + open + value + "</" + tag + ">\n");
+    return true;
+}
+
+// The sidecar recording what an override replaced, beside the profile:
+// .../config-x4vrmod-<tag>.was. X4 saves its settings while it runs, so a
+// value served in memory ends up in the profile; the sidecar is how a later
+// run that does NOT ask for the override puts the player's own value back.
+inline std::string sidecar_path(const std::string &profile, const char *tag) {
+    std::string p = profile;
+    const size_t dot = p.rfind(".xml");
+    if (dot != std::string::npos)
+        p.erase(dot);
+    return p + "-" + tag + ".was";
+}
+
 // Read the text of <tag>...</tag>, or "" if it is not there.
 //
 // Exists so the log can state the *effective* value of a projection-defining

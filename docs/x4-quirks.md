@@ -24851,3 +24851,141 @@ reachable edge to edge with head-look on.** Tagged
 **Next, per "Decisions after take 328":** steering A/B with the live toggle
 (B default, F8 or apostrophe). Its geometry was measured on 328B's circles:
 X4's line ends at gaze + 0.5252 × (pointer offset).
+
+## The steering target, A/B with a toggle — built (2026-10-26)
+
+Patola, after take 328: B (the default) and A, switched live by a key.
+Geometry from take 328B's circles: X4's line runs from the nose to gaze +
+0.5252 × (the pointer's offset), and our ring sits at the raw pointer. So the
+line can neither start where steering is measured from nor end on the ring.
+
+**The design: X4's line off, ours drawn in eye space.** No Lua injection.
+* **Hiding X4's line.** X4 has an option for it: `IsMouseSteeringLineEnabled`
+  and `SetMouseSteeringLine`, config tag `mousesteeringline`, default true.
+  Patola's config omits it.
+  * With `X4VR_STEER` set, the config fork serves it as `false`, inserting
+    the tag (`set_or_insert_tag`, the one exception to "never invent a
+    tag").
+  * X4 saves settings while it runs, so the replaced value goes into a
+    sidecar (`config-x4vrmod-mousesteeringline.was`). A later run without
+    `X4VR_STEER` puts it back and deletes the sidecar. Patola's own
+    config.xml is never touched.
+* **When to draw: X4's own condition, read rather than called.**
+  * `ShouldShowMouseSteeringHelperLine` (0xa45cb0) is
+    `option && (in[0x9f36] || in[0x9f37]) && in[0x9f42] && (!in[0x9f39] ||
+    in[0xa010])`, with `in` = *0x3daaaf8.
+  * That is the object `IsMouseSteeringActive` (0xa45940) reads WITH NO NULL
+    CHECK. So the injector reads those five bytes through process_vm_readv
+    after verifying 16 code sites, plus the cockpit view with the HUD up (the
+    Lua side's crosshairActive).
+  * A changed build refuses, and then X4's own line is left alone too.
+* **Where to draw: the layer, in the eye image, both eyes alike (the target
+  is at infinity).**
+  * **B (`X4VR_STEER=b`):** the ring stays at the raw pointer, where X4
+    picks. The line runs from the eye's centre, which is X4's screen centre
+    and the reference X4 steers from, to the ring.
+  * **A (`a`):** the ring is drawn at the nose plus the same offset, and the
+    line from the nose to it. The nose is the cockpit's forward axis,
+    rotated by X4's camera as stamped at the frame's first render pass,
+    projected at the rendered field. That is
+    `(sin yaw, −cos yaw sin pitch, cos yaw cos pitch)`, which
+    `tests/steer.cpp` checks equals `rows_for`'s convention over 35 poses.
+    A frame where the nose is behind or off the eye falls back to B, so a
+    cursor stays.
+  * The line copies X4's: white at alpha 12% (`white_alpha_12`; measured
+    ~0.10 in the 328B recording), 2 px plus 1 px feathers, starting 16 px
+    out as X4 leaves 30 crosshair units. The cursor is drawn over its end.
+* **The toggle: apostrophe** (SDL scancode 52, a physical key).
+  * It is unbound in all six of Patola's input maps. F8 is X4's compass slot
+    2, its debug key and the cinematic letterbox.
+  * It is plain only: Shift/Ctrl/Alt/GUI/AltGr chords pass through. It acts
+    only in the cockpit with the HUD up; anywhere else it is X4's.
+  * It is removed from what `SDL_PeepEvents` hands X4, on peek and get, and
+    acts on the get. `SDL_WaitEvent` gets scancode 0.
+  * Each switch logs `milestone: steering target A|B`, which the watcher
+    relays as a notification.
+
+**Tests (pass):**
+* `tests/steer.cpp` (32 checks): the knob; the predicate's truth table; the
+  16 sites against the real binary, with a flipped byte that must refuse; the
+  option string; the nose; B/A/fallback/gap geometry; the line quad; the
+  config insert/replace/restore.
+* `tests/run-cursor.sh` (7 GPU runs, under validation):
+  * the five existing ones, unchanged by the generalised quad shader
+    (origin plus two edge vectors; solid when u0 < 0);
+  * two steering runs. In each, the midpoint pixel is X4's 31/255, 4 px
+    beside the line and inside the gap are untouched, and the cursor is
+    drawn OVER the line (green 15, where the line on top would read 31). In
+    A the ring moves by the nose's offset.
+* Census 236/236, with 9 `steer` cases.
+
+**Scorer `steer`.**
+* It reports: the site check; whether X4's line was hidden; how often X4
+  would have shown its line; the toggles in order; the frames drawn per mode,
+  with lines and A-to-B fallbacks.
+* It FAILs:
+  * a refusal;
+  * a line not hidden;
+  * X4 showing its line while the layer never drew;
+  * A chosen and never drawn.
+
+**Known limit:** an apostrophe typed into a text field that X4 opens in the
+cockpit with the HUD up would toggle instead of typing. No such field is in
+use.
+
+## Take 331 — PREDICTIONS (written before the run)
+
+Take 330's line plus `X4VR_STEER=b`. **Primary observable: in B, with the
+head turned, the line starts at the centre of the view and ends on the ring,
+and the ship turns the way the line points.** A and the toggle are the
+secondary observable: Patola's preference, judged within the run.
+
+    X4VR_TAKE=331 X4VR_STEER=b X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take331.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P331.1 The log.**
+  * `steer: all 16 … sites match`.
+  * `config: mousesteeringline: 'absent' -> 'false'`, and the sidecar
+    appears beside the profile.
+  * `steer: overlay ON, starting in B`.
+  * `steer: X4's steering line would be ON` whenever mouse steering engages.
+* **P331.2 B, the primary.**
+  * X4's own line is gone.
+  * A faint white line, like X4's, runs from the centre of view to the ring
+    cursor and ends exactly on it, with the head straight or turned
+    left/right/up.
+  * The ship turns toward the ring as seen from where he looks. That was
+    already so; it is the line that changes.
+  * **Most likely to be wrong:** the brightness. It copies X4's 12%, which
+    may read too faint over bright backgrounds in the headset. That would be
+    a tuning request, not a defect.
+* **P331.3 A, after the apostrophe.**
+  * The notification reads "steering target A".
+  * The ring moves to nose + offset, and a line runs from the crosshair to
+    it. Turning the head with the pointer still, the ring stays with the
+    cockpit.
+  * Hover and click-select do NOT follow the ring in A: X4 still picks at
+    the raw pointer (A's stated cost). Looking far enough that the nose
+    leaves the view drops the ring to B's position (counted as fallback).
+  * Apostrophe again: B.
+* **P331.4 No regressions:**
+  * the map and ESC menus centred (`menucam`);
+  * the menu cursor;
+  * head-look tracking;
+  * csmfit FIX;
+  * the apostrophe inside a menu does nothing (X4 has it unbound).
+* **P331.5 Scorer `steer`:** both modes drawn, the toggles in order, no
+  FAIL.
+
+Protocol (no timed phases; configuration 1, real mouse and keyboard;
+WiVRn):
+1. Start WiVRn and run the line. Load the save. Wait for the "head-look
+   write ARMED" notification.
+2. Mouse steering on (persistent, as usual). Head straight: move the pointer
+   in a slow circle and watch the line and the ring.
+3. Turn the head ~30° left and repeat the circle. Then right, then up.
+4. Press apostrophe and check the notification says A. Repeat steps 2–3.
+5. Press apostrophe again (B). Open the map once and the ESC menu once
+   (regression), then quit.
+
+Cost: ~10 minutes. A short recording of the circles is welcome, because it
+lets the line be measured against the ring as in 328B. It is not required.

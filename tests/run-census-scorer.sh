@@ -717,6 +717,40 @@ mcold='[  999989.950] inject  headlook: view is now external/floating — idle'
 { cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$mcold" "$(mcpose 999990.500 2.1700 9.2400)" "$mcup"; } > /tmp/census-mc-oldlabel.log
 want "menucam pre-329 label -> NOTE names the pause" /tmp/census-mc-oldlabel.log "menucam NOTE" "pre-329 label"
 
+# ------------------------------------------ X4VR_STEER: the steering target
+sed 's/env: run = /env: run = X4VR_STEER=b /' "$BASE" > /tmp/census-st-base.log
+stok='[  999970.000] inject  steer: all 16 ShouldShowMouseSteeringHelperLine sites match X4 9.00 — the input object is at global 0x3daaaf8; X4'"'"'s own line is hidden and the layer draws the target'
+stcfg='[  999970.100] inject  config: mousesteeringline: '"'"'absent'"'"' -> '"'"'false'"'"' (X4VR_STEER: the layer draws the steering line; your value is kept in /x/config-x4vrmod-mousesteeringline.was)'
+ston='[  999980.000] inject  steer: overlay ON, starting in B — the apostrophe key switches A/B in the cockpit'
+stgon='[  999990.000] inject  steer: X4'"'"'s steering line would be ON — the layer draws the target'
+stgoff='[  999995.000] inject  steer: X4'"'"'s steering line would be OFF'
+sttogA='[  999991.000] inject  milestone: steering target A — fixed to the cockpit (apostrophe for B)'
+sttogB='[  999993.000] inject  milestone: steering target B — the line from where you look (apostrophe for A)'
+stdrawn='[  999996.000] layer   steer drawn (final): B 300 frame(s), A 120 frame(s) | line in 400 | A asked but nose off the eye -> B in 7'
+stdrawnB='[  999996.000] layer   steer drawn (final): B 300 frame(s), A 0 frame(s) | line in 280 | A asked but nose off the eye -> B in 0'
+{ cat /tmp/census-st-base.log; printf '%s\n' "$stok" "$stcfg" "$ston" "$stgon" "$sttogA" "$sttogB" "$stgoff" "$stdrawn"; } > /tmp/census-st-ok.log
+want "steer healthy -> sites, start mode, line hidden" /tmp/census-st-ok.log steer "16 code sites match; overlay ON from B; X4's own line hidden through the config fork"
+want "steer healthy -> toggles counted in order" /tmp/census-st-ok.log steer "apostrophe toggles: 2 (A -> B)"
+want "steer healthy -> frames by mode" /tmp/census-st-ok.log steer "drew the target in 420 frame(s): B 300, A 120 | with a line 400 | A asked but the nose off the eye -> B 7"
+if python3 tools/score_run.py /tmp/census-st-ok.log 2>&1 | grep -q "^FAIL.*X4VR_STEER"; then
+    bad "steer healthy -> still FAILs"
+else
+    ok "steer healthy -> no FAIL"
+fi
+{ cat /tmp/census-st-base.log; printf '%s\n' '[  999970.000] inject  steer: REFUSED — X4'"'"'s code at 0xa45ce7 differs from the analysed build; X4VR_STEER does nothing and X4'"'"'s own line stays'; } > /tmp/census-st-ref.log
+want "steer refused -> FAIL" /tmp/census-st-ref.log FAIL "X4's code differs from the analysed build"
+{ cat /tmp/census-st-base.log; printf '%s\n' "$stok" "$ston" "$stgon" "$stdrawnB"; } > /tmp/census-st-nocfg.log
+want "steer, X4's line not hidden -> FAIL" /tmp/census-st-nocfg.log FAIL "X4's own steering line was never hidden"
+{ cat /tmp/census-st-base.log; printf '%s\n' "$stok" "$stcfg" "$ston" "$stgon" "$stgoff"; } > /tmp/census-st-nodraw.log
+want "steer, X4 showed its line, layer never drew -> FAIL" /tmp/census-st-nodraw.log FAIL "the layer never drew the target"
+{ cat /tmp/census-st-base.log; printf '%s\n' "$stok" "$stcfg" "$ston" "$stgon" "$sttogA" "$stgoff" "$stdrawnB"; } > /tmp/census-st-noA.log
+want "steer, A selected but never drawn -> FAIL" /tmp/census-st-noA.log FAIL "A was selected but the layer never drew A"
+{ cat /tmp/census-st-base.log; printf '%s\n' "$stok" "$stcfg" "$ston"; } > /tmp/census-st-idle.log
+want "steer asked, no mouse steering -> not exercised" /tmp/census-st-idle.log steer "the overlay was not exercised"
+{ cat "$BASE"; printf '%s\n' '[  999970.100] inject  config: mousesteeringline: '"'"'false'"'"' -> '"'"'true'"'"' — restored (no X4VR_STEER this run)'; } > /tmp/census-st-rest.log
+want "steer not asked, value restored -> said" /tmp/census-st-rest.log steer "not asked; mousesteeringline restored to 'true'"
+absent "steer not asked -> silent" "$BASE" "steer "
+
 # ------------------------------------------ the session gate without X4VR_MV
 # The render-pass inventory is printed only under X4VR_MV, so a flatscreen run
 # (take 323) was refused as "stopped early" with its measurement in the file.

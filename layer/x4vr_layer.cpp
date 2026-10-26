@@ -10082,6 +10082,38 @@ bool cursor_canvas() {
     return want;
 }
 
+// The mouse-steering target for this frame (x4vr_steer.hpp), or null to draw
+// nothing extra. Built only while the injector says X4 would show its own
+// steering line (`steer_line`) and a mode is in force; the nose comes from
+// X4's camera as stamped at this frame's first render pass -- the rotation
+// the frame was drawn with -- projected at the field the eye was rendered at.
+const x4vr::steer::Frame *steer_frame_now(x4vr::steer::Frame *out) {
+    const x4vr::Shared *s = shared_state();
+    if (!s || !out)
+        return nullptr;
+    const uint32_t mode = s->steer_mode.load(std::memory_order_relaxed);
+    if (mode == x4vr::steer::kOff ||
+        !s->steer_line.load(std::memory_order_relaxed))
+        return nullptr;
+    static const float tan_half = [] {
+        const char *fe = getenv("X4VR_FOV");
+        return std::tan(x4vr::x4_half_for_fov(fe ? strtof(fe, nullptr) : 0.0f));
+    }();
+    float yaw = 0.f, pitch = 0.f;
+    bool have = false;
+    if (g_camstamp.seq.load(std::memory_order_acquire)) {
+        yaw = g_camstamp.yaw.load(std::memory_order_relaxed);
+        pitch = g_camstamp.pitch.load(std::memory_order_relaxed);
+        have = true;
+    } else {
+        have = x4_camera_rotation_now(&yaw, &pitch);
+    }
+    out->mode = (x4vr::steer::Mode)mode;
+    out->nose_ok = have && x4vr::steer::nose_ndc(yaw, pitch, tan_half, tan_half,
+                                                 &out->nose_x, &out->nose_y);
+    return out;
+}
+
 const char *g_mv_dump = getenv("X4VR_MV_DUMP");
 // X4VR_MV_DUMP_PRESENT=N — write the finished eye image every N presents.
 // Distinct from X4VR_MV_DUMP_IMG, which names images to catch at end-of-pass
@@ -11930,6 +11962,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     // seen, so leave it alone rather than guess which image is the eye pair.
     VkSemaphore composited = VK_NULL_HANDLE;
     uint32_t family = 0;
+    x4vr::steer::Frame steer_frame;
     if (g_sbs_enabled && g_active && pi->swapchainCount == 1) {
         if (queue_family_of(queue, family)) {
             // SbsCompositor submits via fns_.QueueSubmit -- the dispatch table,
@@ -11940,7 +11973,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                 queue, family, pi->pSwapchains[0], pi->pImageIndices[0],
                 pi->pWaitSemaphores, pi->waitSemaphoreCount,
                 g_cursor_enabled ? shared_state() : nullptr,
-                cursor_canvas() ? g_canvas_map.get() : nullptr);
+                cursor_canvas() ? g_canvas_map.get() : nullptr,
+                g_cursor_enabled ? steer_frame_now(&steer_frame) : nullptr);
         } else {
             static bool warned = false;
             if (!warned) {
