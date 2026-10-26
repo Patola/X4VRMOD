@@ -179,18 +179,50 @@ struct Geometry {
 // 30 crosshair units (~16 eye px at the canvas scale) so the line never draws
 // across the crosshair, and hides it entirely inside that radius.
 //
-// A with the nose off the eye (behind, or beyond the edge) falls back to B for
-// that frame: a ring anchored to an invisible nose would leave no cursor at
-// all.
+// The part of the eye the headset actually shows, in eye NDC (y down). The
+// rendered eye is X4's symmetric field (110 deg); the runtime shows less --
+// take 331's Quest reported l=-54 r=40 u=44 d=-55 for the left eye, mirrored
+// for the right -- so a ring inside the render can still be out of sight.
+// Default: the whole eye.
+struct Box {
+    float x0 = -1.f, x1 = 1.f, y0 = -1.f, y1 = 1.f;
+    bool contains(float x, float y) const {
+        return x >= x0 && x <= x1 && y >= y0 && y <= y1;
+    }
+};
+
+// What BOTH eyes show, from the runtime's per-eye angles (radians: left and
+// down negative), mapped into an eye rendered at `tan_half`. The ring is
+// drawn alike in both eyes, so it is visible only where both are.
+inline Box binocular_box(const float fov_rad[2][4], float tan_half) {
+    Box b;
+    if (!(tan_half > 0.f))
+        return b;
+    auto clampu = [](float v) { return v < -1.f ? -1.f : (v > 1.f ? 1.f : v); };
+    const float l = std::fmax(std::tan(fov_rad[0][0]), std::tan(fov_rad[1][0]));
+    const float r = std::fmin(std::tan(fov_rad[0][1]), std::tan(fov_rad[1][1]));
+    const float u = std::fmin(std::tan(fov_rad[0][2]), std::tan(fov_rad[1][2]));
+    const float d = std::fmax(std::tan(fov_rad[0][3]), std::tan(fov_rad[1][3]));
+    b.x0 = clampu(l / tan_half);
+    b.x1 = clampu(r / tan_half);
+    b.y0 = clampu(-u / tan_half); // up is negative NDC y
+    b.y1 = clampu(-d / tan_half);
+    return b;
+}
+
+// A falls back to B for any frame in which its ring would be out of sight:
+// the nose behind the eye, or nose + offset outside what both eyes show
+// (take 331: looking right in A, the ring left the headset's view while the
+// nose was still inside the 110 deg render, and the cursor was lost).
 inline Geometry geometry(Mode mode, float hx, float hy, bool nose_ok,
                          float nose_x, float nose_y, float eye_w, float eye_h,
-                         float gap_px) {
+                         float gap_px, const Box &visible = Box{}) {
     Geometry g;
     if (mode == kOff)
         return g;
-    const bool nose_visible = nose_ok && std::fabs(nose_x) <= 1.f &&
-                              std::fabs(nose_y) <= 1.f;
-    g.used = (mode == kNose && nose_visible) ? kNose : kGaze;
+    const bool ring_visible =
+        nose_ok && visible.contains(nose_x + hx, nose_y + hy);
+    g.used = (mode == kNose && ring_visible) ? kNose : kGaze;
     const float ox = g.used == kNose ? nose_x : 0.f;
     const float oy = g.used == kNose ? nose_y : 0.f;
     g.ring_dx = ox;
@@ -247,6 +279,7 @@ struct Frame {
     Mode mode = kOff;
     bool nose_ok = false;
     float nose_x = 0.f, nose_y = 0.f;
+    Box visible; // what the headset shows; the whole eye until it is known
 };
 
 // X4's own colour for its line: `crosshair_mousesteering_line` ->

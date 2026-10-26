@@ -726,12 +726,19 @@ stgon='[  999990.000] inject  steer: X4'"'"'s steering line would be ON — the 
 stgoff='[  999995.000] inject  steer: X4'"'"'s steering line would be OFF'
 sttogA='[  999991.000] inject  milestone: steering target A — fixed to the cockpit (apostrophe for B)'
 sttogB='[  999993.000] inject  milestone: steering target B — the line from where you look (apostrophe for A)'
-stdrawn='[  999996.000] layer   steer drawn (final): B 300 frame(s), A 120 frame(s) | line in 400 | A asked but nose off the eye -> B in 7'
+stdrawn='[  999996.000] layer   steer drawn (final): B 300 frame(s), A 120 frame(s) | line in 400 | A asked but ring out of sight -> B in 7'
 stdrawnB='[  999996.000] layer   steer drawn (final): B 300 frame(s), A 0 frame(s) | line in 280 | A asked but nose off the eye -> B in 0'
 { cat /tmp/census-st-base.log; printf '%s\n' "$stok" "$stcfg" "$ston" "$stgon" "$sttogA" "$sttogB" "$stgoff" "$stdrawn"; } > /tmp/census-st-ok.log
 want "steer healthy -> sites, start mode, line hidden" /tmp/census-st-ok.log steer "16 code sites match; overlay ON from B; X4's own line hidden through the config fork"
 want "steer healthy -> toggles counted in order" /tmp/census-st-ok.log steer "apostrophe toggles: 2 (A -> B)"
-want "steer healthy -> frames by mode" /tmp/census-st-ok.log steer "drew the target in 420 frame(s): B 300, A 120 | with a line 400 | A asked but the nose off the eye -> B 7"
+want "steer healthy -> frames by mode" /tmp/census-st-ok.log steer "drew the target in 420 frame(s): B 300, A 120 | with a line 400 | A asked but its ring out of sight -> B 7"
+streclines='[  999989.000] layer   steer: both eyes show x -0.588..0.588 y -0.676..1.000 of the rendered eye — mode A falls back to B outside it
+[  999990.010] inject  steer: mouse steering engaged — pointer recentred from 125,62 to 1408,1408 so the ship starts straight'
+{ cat /tmp/census-st-ok.log; printf '%s\n' "$streclines"; } > /tmp/census-st-rec.log
+want "steer -> the sight box reported" /tmp/census-st-rec.log steer "both eyes show x -0.588..0.588 y -0.676..1.000"
+want "steer -> recentres counted with their origin" /tmp/census-st-rec.log steer "engaged 1 time(s) with the pointer recentred, from 125,62"
+{ cat /tmp/census-st-base.log; printf '%s\n' "$stok" "$stcfg" "$ston" "$stgon" "$stgoff" '[  999996.000] layer   steer drawn (final): B 7056 frame(s), A 3399 frame(s) | line in 10384 | A asked but nose off the eye -> B in 0'; } > /tmp/census-st-331.log
+want "steer, take 331's wording -> still read" /tmp/census-st-331.log steer "drew the target in 10455 frame(s): B 7056, A 3399"
 if python3 tools/score_run.py /tmp/census-st-ok.log 2>&1 | grep -q "^FAIL.*X4VR_STEER"; then
     bad "steer healthy -> still FAILs"
 else

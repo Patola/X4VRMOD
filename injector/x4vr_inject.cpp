@@ -4563,6 +4563,42 @@ constexpr uint32_t kSteerToggleScancode = 52; // SDL_SCANCODE_APOSTROPHE
 // keys (NUM 0x1000, CAPS 0x2000, SCROLL 0x8000) are ignored.
 constexpr uint16_t kSteerChordMods = 0x0FFF | 0x4000;
 
+// Mouse steering just engaged: put the pointer at the centre of X4's window,
+// so the ship starts straight. X4 itself never does -- its one
+// SDL_WarpMouseInWindow call (0xcefcd9) nudges the pointer by a delta -- and
+// in the headset the pointer sits wherever the load left it: take 331
+// engaged at (125,62) of 2816 and the ship turned hard up-left until Patola
+// found the centre. Routed through our own SDL_WarpMouseInWindow, so it is
+// folded exactly as one of X4's warps would be.
+void SDL_WarpMouseInWindow(void *win, float x, float y);
+static std::atomic<bool> g_steer_warping{false};
+static void steer_recentre() {
+    static auto from_id = real<void *(*)(uint32_t)>("SDL_GetWindowFromID");
+    static auto get_size = real<bool (*)(void *, int *, int *)>("SDL_GetWindowSize");
+    static unsigned said = 0;
+    const uint32_t id = g_motion_window.load(std::memory_order_relaxed);
+    void *win = (from_id && id) ? from_id(id) : nullptr;
+    int w = 0, h = 0;
+    if (!win || !get_size || !get_size(win, &w, &h) || w < 2 || h < 2) {
+        if (said++ < 3)
+            X4VR_LOG("steer: mouse steering engaged, but X4's window is not "
+                     "known yet — pointer NOT recentred");
+        return;
+    }
+    const int xw = g_x4_win_w.load(std::memory_order_relaxed);
+    const float cx = 0.5f * (float)(xw > 1 ? xw : w), cy = 0.5f * (float)h;
+    float px = 0.f, py = 0.f;
+    bool vis = false;
+    const bool have = x4vr::share_read(x4vr_shared_state(), &px, &py, &vis);
+    g_steer_warping.store(true, std::memory_order_relaxed);
+    SDL_WarpMouseInWindow(win, cx, cy);
+    g_steer_warping.store(false, std::memory_order_relaxed);
+    if (said++ < 40)
+        X4VR_LOG("steer: mouse steering engaged — pointer recentred from "
+                 "%s%.0f,%.0f to %.0f,%.0f so the ship starts straight",
+                 have ? "" : "(unknown) ", px, py, cx, cy);
+}
+
 static void steer_tick() {
     if (!steer_hide_x4_line())
         return;
@@ -4578,6 +4614,11 @@ static void steer_tick() {
     // Not called unguarded: without a decoded slot the HUD counts as down.
     const bool hud = x4_hud_slot() ? x4_hud_active() : false;
     bool shown = false;
+    // Steering ENGAGED: the steering bytes alone, in the cockpit with the HUD
+    // up. Not the full line predicate -- its other flags are not known to be
+    // steady during flight, and a recentre on their flicker would yank the
+    // pointer mid-turn.
+    bool engaged = false;
     if (cockpit && hud) {
         using namespace x4vr::steer;
         uintptr_t in = 0;
@@ -4591,8 +4632,13 @@ static void steer_tick() {
             f.f42 = blk[kF42 - kActive];
             f.a010 = blk[kA010 - kActive];
             shown = line_shown(f);
+            engaged = f.active || f.active2;
         }
     }
+    static bool was_engaged = false;
+    if (engaged && !was_engaged)
+        steer_recentre();
+    was_engaged = engaged;
     g_steer_keys_live.store(cockpit && hud, std::memory_order_relaxed);
     static int last = -1;
     static unsigned changes = 0;
@@ -6899,6 +6945,12 @@ bool SDL_SetCursor(void *cursor) {
 void SDL_WarpMouseInWindow(void *win, float x, float y) {
     static auto real_fn =
         real<void (*)(void *, float, float)>("SDL_WarpMouseInWindow");
+    // X4's own warps, the first 20: its single call site (0xcefcd9) nudges
+    // the pointer by a delta. Ours (steer_recentre) logs itself.
+    static std::atomic<unsigned> n{0};
+    if (this_is_the_game() && !g_steer_warping.load(std::memory_order_relaxed) &&
+        n.fetch_add(1, std::memory_order_relaxed) < 20)
+        X4VR_LOG("sdl: X4 warped the pointer to %.0f,%.0f", x, y);
     real_fn(win, this_is_the_game() ? fold_x(x) : x, y);
 }
 

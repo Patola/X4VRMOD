@@ -24989,3 +24989,118 @@ WiVRn):
 
 Cost: ~10 minutes. A short recording of the circles is welcome, because it
 lets the line be measured against the ring as in 328B. It is not required.
+
+## Take 331 — SCORED (2026-10-26)
+
+Material:
+* **The recording** `/dados/x4-a-and-b.mp4`: one eye at 1600×1600, 90 fps.
+  B circles at 02:12 (head straight), 02:22 (left), 02:32 (right), 02:41
+  (up). The apostrophe at 03:14. A circles at 03:18, 03:25, 03:32 (right,
+  looked too far: *"the cursor was offscreen"*) and 03:39.
+* **The log** `/tmp/x4vr-take331.log`.
+
+Patola also: *"we still have that issue of the mouse starting way top/left,
+so it automatically steers the ship this way and I spend some time centering
+it."* The map and menus *"worked perfectly, including the corners."*
+
+`score_run.py`: PASS.
+* **P331.1 HELD.**
+  * 16/16 sites matched, X4's own line was hidden through the fork, and the
+    overlay started in B.
+  * X4's line condition was ON 3 times. One apostrophe press: to A.
+  * The layer drew B in 7056 frames and A in 3399, with a line in 10384.
+* **P331.2 HELD (the primary), measured on the recording.**
+  * In every B frame examined, the line extended backwards meets ONE fixed
+    point, about (802, 692) of this recording, and ends on the ring. That
+    covers the head straight (02:13 down, 02:19 right), looking right (02:34,
+    02:37) and up (02:43, 02:46), from all sides.
+  * That point is the eye's centre, X4's steering reference. With the head
+    straight it sits about 60 px above the nose crosshair: Patola's usual
+    head pitch of a few degrees up.
+* **P331.3 HELD, with one defect.**
+  * In A the line starts at the nose crosshair. Straight ahead it runs down
+    to the ring; looking left it runs from the crosshair, at the right of the
+    view, to the ring beside it. The ring rides with the cockpit.
+  * **Defect:** looking right, the ring left the headset's view, and the
+    scorer counted **0** fallbacks to B. The fallback tested the nose
+    against the RENDERED eye (±55°), but the headset shows less: the runtime
+    reports eye0 l=−54 r=40 u=44 d=−55, eye1 mirrored, so both eyes see only
+    ±40° horizontally and 44° up. The nose and ring were in the render and
+    out of sight.
+* **P331.4 HELD.**
+  * menucam: 3/3 centred, two of them PAUSED.
+  * Tracking yaw p90 1.62°, pitch p90 1.02°; csmfit 47/47.
+* **The top-left start, explained.**
+  * When mouse steering engaged (Shift+Space, 274956.22), X4 set its cockpit
+    cursor with the pointer at **(125, 62)** of the 2816-px window, and the
+    ship steered hard up-left.
+  * X4 never centres the pointer. Its only `SDL_WarpMouseInWindow` call
+    (0xcefcd9) reads the pointer, adds a delta, clamps and warps: a nudge,
+    not a centring.
+  * In the headset the pointer sits wherever the load left it.
+
+**Fixes, built:**
+* **A's fallback tests the RING against what both eyes show.**
+  `steer::binocular_box` maps the runtime's per-eye angles into the eye,
+  published by the layer when it latches them (`steer: both eyes show x … y
+  …`). A frame whose ring (nose + offset) falls outside, or whose nose is
+  behind, is drawn as B.
+* **The pointer recentres when mouse steering engages.**
+  * The trigger is the steering bytes (0x9f36/0x9f37) going 0→1 in the
+    cockpit with the HUD up, or the cockpit/HUD returning while they are
+    set. Not the full line predicate, whose other flags are not known to be
+    steady in flight.
+  * The pointer is warped to the centre of X4's window through our own
+    `SDL_WarpMouseInWindow`, so it is folded exactly like one of X4's.
+  * Logged as `steer: mouse steering engaged — pointer recentred from x,y`.
+    X4's own warps are now logged too (the first 20).
+* **Scorer.**
+  * `steer` reads both fallback wordings (take 331's "nose off the eye", now
+    "ring out of sight"), reports the box, and counts recentres with their
+    origin.
+  * Census 239/239; tests/steer.cpp gained the box from take 331's numbers
+    and the out-of-sight fallback; GPU 7/7.
+
+## Take 332 — PREDICTIONS (written before the run)
+
+Take 331's line, unchanged except the take number and log. The build adds A's
+sight-box fallback and the recentre. **Primary observable: engaging mouse
+steering no longer turns the ship.** Secondary: A no longer loses the ring
+when looking far to the side.
+
+    X4VR_TAKE=332 X4VR_STEER=b X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take332.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P332.1 Engaging steering starts straight.**
+  * Shift+Space puts the ring at the centre of the view and the ship holds
+    its heading.
+  * The log shows `pointer recentred from` with the pre-engage position,
+    likely near the top-left as in 331.
+  * **Most likely to be wrong:** the warp could be ignored somewhere between
+    SDL and gamescope, leaving the pointer where it was. The log line would
+    then still appear, so Patola's eye decides.
+* **P332.2 Returning from a menu with steering on also starts straight.** The
+  HUD comes back up with the steering bytes set, and that recentres too.
+* **P332.3 A keeps the ring in sight.**
+  * Looking far to one side in A, the ring drops to B's position (the line
+    from the view's centre) instead of vanishing. Returning, it rides with
+    the nose again.
+  * The log has `steer: both eyes show x -0.588..0.588 y -0.676..1.000` and
+    nonzero "ring out of sight -> B" frames.
+* **P332.4 No regressions:** B as in 331, menus centred, tracking, csmfit.
+
+Protocol (configuration 1, real mouse and keyboard; WiVRn; no timed
+phases):
+1. Load the save and wait for the "head-look write ARMED" notification.
+2. Without touching the mouse, engage mouse steering. The ship should not
+   turn.
+3. Fly a circle with the pointer in B.
+4. Disengage, move the mouse to a corner, and engage again. The ship should
+   start straight.
+5. Open and close the map with steering on. The ship should start straight
+   again.
+6. Press apostrophe for A. Look far right (as at 331's 03:32) and far left:
+   the ring should stay visible.
+7. Apostrophe back to B, then quit.
+
+Cost: ~5–10 minutes. No recording needed (each check is see-it-or-not), but
+one is welcome.

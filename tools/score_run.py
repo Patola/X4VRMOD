@@ -4564,9 +4564,17 @@ def main(path):
     st_gate = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+steer: X4's steering "
                          r"line would be (ON|OFF)", text)
     st_tog = re.findall(r"milestone: steering target (A|B)", text)
+    # "nose off the eye" is take 331's wording; "ring out of sight" since the
+    # fallback tests the ring against what both eyes show.
     st_drawn = re.findall(r"steer drawn \((?:periodic|final)\): B (\d+) "
                           r"frame\(s\), A (\d+) frame\(s\) \| line in (\d+) \| "
-                          r"A asked but nose off the eye -> B in (\d+)", text)
+                          r"A asked but (?:nose off the eye|ring out of sight) "
+                          r"-> B in (\d+)", text)
+    st_box = re.search(r"steer: both eyes show x (\S+)\.\.(\S+) y (\S+)\.\.(\S+) "
+                       r"of the rendered eye", text)
+    st_rec = re.findall(r"steer: mouse steering engaged — pointer recentred "
+                        r"from (?:\(unknown\) )?(-?[\d.]+),(-?[\d.]+)", text)
+    st_norec = "pointer NOT recentred" in text
     if st_asked or st_ok or st_ref or st_drawn:
         if st_ref:
             print(f"steer   REFUSED by the site check — {st_ref.group(1)}")
@@ -4591,8 +4599,8 @@ def main(path):
         if st_drawn:
             b, a, ln, fb = (int(x) for x in st_drawn[-1])
             print(f"steer   the layer drew the target in {b + a} frame(s): B "
-                  f"{b}, A {a} | with a line {ln} | A asked but the nose off "
-                  f"the eye -> B {fb}")
+                  f"{b}, A {a} | with a line {ln} | A asked but its ring out "
+                  f"of sight -> B {fb}")
             if st_tog and a == 0 and "A" in st_tog:
                 fails.append("X4VR_STEER: A was selected but the layer never "
                              "drew A — the mode did not reach the layer")
@@ -4603,6 +4611,16 @@ def main(path):
         elif st_asked:
             print("steer   no mouse steering in this run, so the target was "
                   "never drawn — the overlay was not exercised")
+        if st_box:
+            print(f"steer   both eyes show x {st_box.group(1)}..{st_box.group(2)} "
+                  f"y {st_box.group(3)}..{st_box.group(4)} of the rendered eye "
+                  f"(A's fallback box)")
+        if st_rec or st_norec:
+            print(f"steer   mouse steering engaged {len(st_rec)} time(s) with the "
+                  f"pointer recentred, from "
+                  + (", ".join(f"{x},{y}" for x, y in st_rec[:6]) or "-")
+                  + (" | at least once NOT recentred (X4's window unknown)"
+                     if st_norec else ""))
     elif st_rest:
         print(f"steer   not asked; mousesteeringline restored to "
               f"'{st_rest.group(2)}' from the overlay's earlier run")

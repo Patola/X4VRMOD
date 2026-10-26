@@ -327,7 +327,8 @@ public:
             sg = x4vr::steer::geometry(steer->mode, 2.f * px / w - 1.f,
                                        2.f * py / h - 1.f, steer->nose_ok,
                                        steer->nose_x, steer->nose_y, w, h,
-                                       x4vr::steer::kLineGapPx);
+                                       x4vr::steer::kLineGapPx,
+                                       steer->visible);
             note_steer(sg, steer->mode);
         }
         const float rpx = px + sg.ring_dx * 0.5f * w;
@@ -530,11 +531,11 @@ public:
                      rx_lo_[arm], rx_hi_[arm], ry_lo_[arm], ry_hi_[arm]);
         }
         // The steering target: frames drawn per mode actually used, how many
-        // carried a line, and how often A fell back to B because the nose
-        // was off the eye. Silent when it never ran.
+        // carried a line, and how often A fell back to B because its ring
+        // would have been out of sight. Silent when it never ran.
         if (steer_frames_[1] || steer_frames_[2])
             X4VR_LOG("steer drawn (%s): B %llu frame(s), A %llu frame(s) | "
-                     "line in %llu | A asked but nose off the eye -> B in %llu",
+                     "line in %llu | A asked but ring out of sight -> B in %llu",
                      when, (unsigned long long)steer_frames_[1],
                      (unsigned long long)steer_frames_[2],
                      (unsigned long long)steer_line_frames_,
@@ -1120,7 +1121,7 @@ private:
             steer_changes_++;
             X4VR_LOG("steer: drawing %s%s", x4vr::steer::mode_name(g.used),
                      asked == x4vr::steer::kNose && g.used != asked
-                         ? " — A asked, the nose is off the eye"
+                         ? " — A asked, its ring would be out of sight"
                          : "");
         }
     }
