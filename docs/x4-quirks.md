@@ -25104,3 +25104,74 @@ phases):
 
 Cost: ~5–10 minutes. No recording needed (each check is see-it-or-not), but
 one is welcome.
+
+## Take 332 — SCORED (2026-10-27)
+
+Patola: *"I think I was misinterpreted, I did not find bad that the cursor
+disappeared when I turned too much left or right. Indeed, it was the correct
+behavior. Now when I turn left or right enough for the cursor to 'exit' the
+scene, it reappears in my view as if it were in mode B. I don't want that. I
+want mode A to stay within the cockpit in steering mode always, even if I'm
+e.g. 180° from the view."* And: *"the fix you made for the mouse appearing in
+the top left worked, calling the map and etc. and going back to steering
+again feels natural and centered."*
+
+`score_run.py`: PASS.
+* **P332.1 / P332.2 HELD.** Five engagements were all recentred, from (0,0),
+  (253,693), (701,300), (1143,0) and (1273,1344): the load's corner and the
+  positions menus left behind. *"natural and centered."*
+* **P332.3: the fallback did exactly what it was built to do, and that was
+  the wrong thing to build.**
+  * It fired in 1067 frames, putting the ring at B's position.
+  * **Wrong turn, mine:** take 331's *"I looked a bit too much to the right,
+    the cursor was offscreen"* explained why one circle was imperfect. I
+    read it as a defect report and "fixed" behaviour he considered correct.
+* **P332.4 HELD.**
+  * menucam: 4/4 centred, two of them PAUSED.
+  * Tracking yaw p90 1.84°, pitch p90 0.53°; csmfit 64/64; B unchanged.
+
+**The correction (built): A always rides with the cockpit.**
+* The ring is drawn at nose + offset wherever that lands. Off the eye it is
+  simply not seen. With the nose behind the eye there is no projection, so
+  nothing is drawn: `Geometry::hidden`, counted as "A with the nose behind
+  the eye -> hidden".
+* The sight box (`binocular_box`) and its publication are removed: nothing
+  else used them.
+* The scorer reads all three wordings of the last field and names the old
+  fallback as such.
+* tests/steer.cpp: a ring off the eye stays A, take 332's case stays A,
+  behind is hidden and never B, and B never hides.
+* Census 240/240, GPU 7/7.
+
+Not tagged: 332's A is the behaviour Patola rejected. The next good state is
+tagged.
+
+## Take 333 — PREDICTIONS (written before the run)
+
+Take 332's line with the take number and log changed. **Primary observable:
+in A the ring stays with the cockpit at any head angle**: it leaves the view
+with the cockpit and comes back with it, never at B's position. Regression:
+the recentre and B as in 332.
+
+    X4VR_TAKE=333 X4VR_STEER=b X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take333.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P333.1 A.**
+  * Turning the head far left or right, the ring and its line go out of view
+    with the cockpit and come back with it.
+  * Turned right round, nothing is drawn: the scorer's "A with the nose
+    behind the eye" is nonzero only if he turned that far.
+  * No frame shows the ring at B's position.
+* **P333.2 The recentre** as in 332.
+* **P333.3 B** as in 331/332.
+* **P333.4 No regressions:** menus centred, tracking, csmfit.
+
+Protocol (configuration 1, real mouse and keyboard; WiVRn; no timed
+phases):
+1. Load the save and wait for ARMED. Engage mouse steering and press
+   apostrophe for A.
+2. With the pointer held still, turn the head slowly left until the ring
+   leaves the view, keep turning, then come back. Do the same to the right.
+   If comfortable, turn right round and back.
+3. Apostrophe for B, a short circle, then quit.
+
+Cost: ~5 minutes. No recording needed.

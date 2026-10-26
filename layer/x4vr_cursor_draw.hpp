@@ -327,9 +327,12 @@ public:
             sg = x4vr::steer::geometry(steer->mode, 2.f * px / w - 1.f,
                                        2.f * py / h - 1.f, steer->nose_ok,
                                        steer->nose_x, steer->nose_y, w, h,
-                                       x4vr::steer::kLineGapPx,
-                                       steer->visible);
+                                       x4vr::steer::kLineGapPx);
             note_steer(sg, steer->mode);
+            // A with the nose behind the eye: the ring rides with the
+            // cockpit, which is behind you, so nothing is drawn.
+            if (sg.hidden)
+                return refuse(kCurOffEye);
         }
         const float rpx = px + sg.ring_dx * 0.5f * w;
         const float rpy = py + sg.ring_dy * 0.5f * h;
@@ -531,11 +534,12 @@ public:
                      rx_lo_[arm], rx_hi_[arm], ry_lo_[arm], ry_hi_[arm]);
         }
         // The steering target: frames drawn per mode actually used, how many
-        // carried a line, and how often A fell back to B because its ring
-        // would have been out of sight. Silent when it never ran.
+        // carried a line, and how often A drew nothing because the nose was
+        // behind the eye. Silent when it never ran.
         if (steer_frames_[1] || steer_frames_[2])
             X4VR_LOG("steer drawn (%s): B %llu frame(s), A %llu frame(s) | "
-                     "line in %llu | A asked but ring out of sight -> B in %llu",
+                     "line in %llu | A with the nose behind the eye -> hidden "
+                     "in %llu",
                      when, (unsigned long long)steer_frames_[1],
                      (unsigned long long)steer_frames_[2],
                      (unsigned long long)steer_line_frames_,
@@ -1112,18 +1116,19 @@ private:
         steer_frames_[(uint32_t)g.used < 3u ? (uint32_t)g.used : 0u]++;
         if (g.line)
             steer_line_frames_++;
-        if (asked == x4vr::steer::kNose && g.used != x4vr::steer::kNose)
+        if (g.hidden)
             steer_fallback_++;
-        // Every change for the first 40: in A the nose crossing the eye's
-        // edge flips the mode drawn, and that must not flood the log.
-        if (steer_said_ != (uint32_t)g.used + 1 && steer_changes_ < 40) {
-            steer_said_ = (uint32_t)g.used + 1;
+        // Every change for the first 40 (mode, or A's nose going behind the
+        // eye and back), so turning round in A does not flood the log.
+        const uint32_t key = (uint32_t)g.used * 2u + (g.hidden ? 1u : 0u) + 1u;
+        if (steer_said_ != key && steer_changes_ < 40) {
+            steer_said_ = key;
             steer_changes_++;
             X4VR_LOG("steer: drawing %s%s", x4vr::steer::mode_name(g.used),
-                     asked == x4vr::steer::kNose && g.used != asked
-                         ? " — A asked, its ring would be out of sight"
-                         : "");
+                     g.hidden ? " — the nose is behind the eye, nothing drawn"
+                              : "");
         }
+        (void)asked;
     }
     // Per arm, the union of the map's images of the window edges -- the box
     // the cursor could occupy had the pointer been swept into every corner.

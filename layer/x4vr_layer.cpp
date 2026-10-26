@@ -10087,12 +10087,6 @@ bool cursor_canvas() {
 // steering line (`steer_line`) and a mode is in force; the nose comes from
 // X4's camera as stamped at this frame's first render pass -- the rotation
 // the frame was drawn with -- projected at the field the eye was rendered at.
-// What both eyes of the headset show, in our eye's NDC: published once, when
-// the runtime's per-eye field is latched (the "vr fov" line), and read per
-// frame for steering mode A's fallback. The whole eye until then.
-std::atomic<bool> g_steer_box_ready{false};
-x4vr::steer::Box g_steer_box;
-
 const x4vr::steer::Frame *steer_frame_now(x4vr::steer::Frame *out) {
     const x4vr::Shared *s = shared_state();
     if (!s || !out)
@@ -10115,8 +10109,6 @@ const x4vr::steer::Frame *steer_frame_now(x4vr::steer::Frame *out) {
         have = x4_camera_rotation_now(&yaw, &pitch);
     }
     out->mode = (x4vr::steer::Mode)mode;
-    if (g_steer_box_ready.load(std::memory_order_acquire))
-        out->visible = g_steer_box;
     out->nose_ok = have && x4vr::steer::nose_ndc(yaw, pitch, tan_half, tan_half,
                                                  &out->nose_x, &out->nose_y);
     return out;
@@ -12761,18 +12753,6 @@ void vr_thread() {
                 g_vrs.fov_rad[e][3] = views[e].fov.angleDown;
             }
             g_vrs.fov_seen.store(true, std::memory_order_release);
-            // Steering mode A's sight box (x4vr_steer.hpp, binocular_box).
-            {
-                const char *fe = getenv("X4VR_FOV");
-                const float th = std::tan(
-                    x4vr::x4_half_for_fov(fe ? strtof(fe, nullptr) : 0.0f));
-                g_steer_box = x4vr::steer::binocular_box(g_vrs.fov_rad, th);
-                g_steer_box_ready.store(true, std::memory_order_release);
-                X4VR_LOG("steer: both eyes show x %.3f..%.3f y %.3f..%.3f of "
-                         "the rendered eye — mode A falls back to B outside it",
-                         g_steer_box.x0, g_steer_box.x1, g_steer_box.y0,
-                         g_steer_box.y1);
-            }
             // #33: both halves of the budget are known for the first time
             // here -- the runtime's field just arrived and X4's came from the
             // config we served it.

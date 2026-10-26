@@ -186,33 +186,20 @@ int main() {
         check(a.used == kNose && near(a.ring_dx, 0.3f) && near(a.ring_dy, 0.1f) &&
                   a.line && near(a.x1, 0.5f) && near(a.y1, 0.0f),
               "A: ring and line end at nose + offset");
-        // A with the nose off the eye falls back to B, so a cursor stays.
-        const Geometry off = geometry(kNose, 0.2f, -0.1f, true, 1.4f, 0.0f, W, H, gap);
+        // A ALWAYS rides with the cockpit (Patola after take 332): a ring off
+        // the eye stays in A -- simply not seen -- and with the nose behind
+        // the eye nothing is drawn. Never B.
+        const Geometry off = geometry(kNose, -0.1f, 0.f, true, -1.4f, 0.0f, W, H, gap);
+        check(off.used == kNose && !off.hidden && near(off.ring_dx, -1.4f),
+              "A, ring off the eye -> still A, at nose + offset (not seen)");
+        const Geometry far = geometry(kNose, 0.2f, 0.f, true, -0.7f, 0.f, W, H, gap);
+        check(far.used == kNose && near(far.ring_dx, -0.7f),
+              "A, ring beyond what the headset shows (take 332's case) -> A");
         const Geometry behind = geometry(kNose, 0.2f, -0.1f, false, 0, 0, W, H, gap);
-        check(off.used == kGaze && off.ring_dx == 0 && behind.used == kGaze,
-              "A with the nose off the eye or behind -> B for that frame");
-        // Take 331's Quest: eye0 l=-54 r=40 u=44 d=-55, eye1 l=-40 r=54 --
-        // both eyes see only +-40 deg horizontally and 44 deg up, inside a
-        // render of +-55.
-        constexpr float d2r = 0.01745329251994330f;
-        const float fov[2][4] = {{-54 * d2r, 40 * d2r, 44 * d2r, -55 * d2r},
-                                 {-40 * d2r, 54 * d2r, 44 * d2r, -55 * d2r}};
-        const Box vb = binocular_box(fov, t55);
-        const float x40 = std::tan(40 * d2r) / t55, u44 = std::tan(44 * d2r) / t55;
-        check(near(vb.x0, -x40) && near(vb.x1, x40) && near(vb.y0, -u44) &&
-                  near(vb.y1, 1.f),
-              "binocular box from take 331's frusta: x +-tan40/tan55, up "
-              "tan44/tan55, down the whole eye");
-        // Take 331 looking right in A: the nose inside the render (x -0.7)
-        // but the ring (nose + offset) outside what both eyes show.
-        const Geometry lost = geometry(kNose, -0.1f, 0.f, true, -0.7f, 0.f, W, H,
-                                       gap, vb);
-        const Geometry kept = geometry(kNose, 0.2f, 0.f, true, -0.4f, 0.f, W, H,
-                                       gap, vb);
-        check(lost.used == kGaze && lost.ring_dx == 0.f,
-              "A, nose in the render but ring out of sight -> B");
-        check(kept.used == kNose && near(kept.ring_dx, -0.4f),
-              "A, ring inside what both eyes show -> A");
+        check(behind.used == kNose && behind.hidden && !behind.line,
+              "A, nose behind the eye (180 deg round) -> nothing drawn, not B");
+        check(!geometry(kGaze, 0.2f, -0.1f, false, 0, 0, W, H, gap).hidden,
+              "B never hides: it does not depend on the nose");
         // Inside the gap: no line, as X4 hides its own inside 30 units.
         const Geometry in = geometry(kGaze, 0.004f, 0.f, true, 0, 0, W, H, gap);
         check(!in.line, "pointer inside the 16 px gap -> no line");

@@ -4566,10 +4566,15 @@ def main(path):
     st_tog = re.findall(r"milestone: steering target (A|B)", text)
     # "nose off the eye" is take 331's wording; "ring out of sight" since the
     # fallback tests the ring against what both eyes show.
+    # The last field changed meaning twice: take 331 "A asked but nose off the
+    # eye -> B", take 332 "A asked but ring out of sight -> B" (fallbacks to
+    # B), and since Patola rejected the fallback "A with the nose behind the
+    # eye -> hidden" (frames where A drew nothing). `st_fbkind` says which.
     st_drawn = re.findall(r"steer drawn \((?:periodic|final)\): B (\d+) "
                           r"frame\(s\), A (\d+) frame\(s\) \| line in (\d+) \| "
-                          r"A asked but (?:nose off the eye|ring out of sight) "
-                          r"-> B in (\d+)", text)
+                          r"(A asked but (?:nose off the eye|ring out of sight) "
+                          r"-> B|A with the nose behind the eye -> hidden) in "
+                          r"(\d+)", text)
     st_box = re.search(r"steer: both eyes show x (\S+)\.\.(\S+) y (\S+)\.\.(\S+) "
                        r"of the rendered eye", text)
     st_rec = re.findall(r"steer: mouse steering engaged — pointer recentred "
@@ -4597,10 +4602,13 @@ def main(path):
               f"{len(st_tog)}"
               + (f" ({' -> '.join(st_tog[:12])})" if st_tog else ""))
         if st_drawn:
-            b, a, ln, fb = (int(x) for x in st_drawn[-1])
+            b, a, ln, fbkind, fb = st_drawn[-1]
+            b, a, ln, fb = int(b), int(a), int(ln), int(fb)
+            what = ("A with the nose behind the eye, nothing drawn"
+                    if "hidden" in fbkind else
+                    "A fell back to B (the pre-333 fallback)")
             print(f"steer   the layer drew the target in {b + a} frame(s): B "
-                  f"{b}, A {a} | with a line {ln} | A asked but its ring out "
-                  f"of sight -> B {fb}")
+                  f"{b}, A {a} | with a line {ln} | {what}: {fb}")
             if st_tog and a == 0 and "A" in st_tog:
                 fails.append("X4VR_STEER: A was selected but the layer never "
                              "drew A — the mode did not reach the layer")
@@ -4614,7 +4622,7 @@ def main(path):
         if st_box:
             print(f"steer   both eyes show x {st_box.group(1)}..{st_box.group(2)} "
                   f"y {st_box.group(3)}..{st_box.group(4)} of the rendered eye "
-                  f"(A's fallback box)")
+                  f"(take 332's fallback box, since removed)")
         if st_rec or st_norec:
             print(f"steer   mouse steering engaged {len(st_rec)} time(s) with the "
                   f"pointer recentred, from "
