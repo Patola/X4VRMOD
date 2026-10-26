@@ -4434,9 +4434,11 @@ def main(path):
 
     mc_hud = [(float(t), k) for t, k in re.findall(
         r"\[\s*([\d.]+)\]\s+inject\s+headlook: HUD is now (up|down)", text)]
+    # "external/floating" is the pre-329 label, which also covered PAUSED: the
+    # ESC menu pauses, and take 329's ESC menu was this case.
     mc_view = [(float(t), k) for t, k in re.findall(
         r"\[\s*([\d.]+)\]\s+inject\s+headlook: view is now "
-        r"(the cockpit|external/floating)", text)]
+        r"(the cockpit|external/floating|external|floating|PAUSED)", text)]
     mc_cam = [(float(t), float(a), float(b)) for t, a, b in re.findall(
         r"\[\s*([\d.]+)\]\s+layer\s+poselag: .*? x4=(-?[\d.]+),(-?[\d.]+)",
         text)]
@@ -4485,8 +4487,17 @@ def main(path):
             view = _view_at(a)
             share = _ui_out_of_reach(my, mp)
             rows.append((a, b, view, my, mp, share))
-            if view == "the cockpit" and (abs(my) > 0.1 or abs(mp) > 0.1):
+            # the ESC menu (PAUSED) is drawn through the cockpit's camera too
+            if view in ("the cockpit", "PAUSED") and \
+                    (abs(my) > 0.1 or abs(mp) > 0.1):
                 frozen_cockpit.append((a, b, my, mp, share))
+        # `t0` exists only when the run logged perf windows; a short run has
+        # none, and reading it unbound crashed every block after this one.
+        try:
+            mc_ref = t0
+        except NameError:
+            _m0 = re.search(r"\[\s*([\d.]+)\]", text)
+            mc_ref = float(_m0.group(1)) if _m0 else 0.0
         if rows:
             print(f"menucam {len(rows)} HUD-down period(s) after head-look "
                   f"armed; X4's camera settled at (yaw, pitch), and the share "
@@ -4495,7 +4506,7 @@ def main(path):
             for a, b, view, my, mp, share in rows[:12]:
                 tag = ("CENTRED" if abs(my) <= 0.1 and abs(mp) <= 0.1
                        else "OFF-CENTRE")
-                print(f"menucam   t0+{a - t0:6.1f}s {b - a:6.1f}s in "
+                print(f"menucam   t0+{a - mc_ref:6.1f}s {b - a:6.1f}s in "
                       f"{view:17s} {my:+6.2f},{mp:+6.2f} deg  {tag:10s} "
                       f"{100 * share:5.1f}% of X4's UI out of reach")
             if len(rows) > 12:
@@ -4507,8 +4518,9 @@ def main(path):
                                   for _t, y, p_ in mc_centred[:6]))
             if frozen_cockpit:
                 worst = max(frozen_cockpit, key=lambda r: r[4])
-                print(f"menucam => FROZEN: in {len(frozen_cockpit)} cockpit "
-                      f"period(s) X4 drew and hit-tested its menus through a "
+                print(f"menucam => FROZEN: in {len(frozen_cockpit)} cockpit or "
+                      f"ESC-pause period(s) X4 drew and hit-tested its menus "
+                      f"through a "
                       f"camera left at the head's angle; worst "
                       f"{worst[2]:+.2f},{worst[3]:+.2f} deg puts "
                       f"{100 * worst[4]:.1f}% of X4's UI beyond the pointer's "
@@ -4517,9 +4529,14 @@ def main(path):
                     fails.append("X4VR_HEADLOOK_MENU_CENTRE: a cockpit menu "
                                  "stayed off-centre — the centring did not "
                                  "act (look for 'headlook write: REFUSED')")
-            elif any(r[2] == "the cockpit" for r in rows):
-                print("menucam => every cockpit menu period CENTRED: X4's UI "
-                      "fills the window, so the pointer reaches all of it")
+            elif any(r[2] in ("the cockpit", "PAUSED") for r in rows):
+                print("menucam => every cockpit and ESC-pause menu period "
+                      "CENTRED: X4's UI fills the window, so the pointer "
+                      "reaches all of it")
+            if any(r[2] == "external/floating" for r in rows):
+                print("menucam NOTE: 'external/floating' is a pre-329 label "
+                      "that also covered the ESC menu's PAUSE (take 329), so "
+                      "those periods may be the ESC menu")
 
     # --- the Lua reconnaissance (X4VR_LUA=1): which state, source or bytecode
     lua_rows = re.findall(r"lua\[(buf|file)\] (.*?) \((\d+) bytes, "
@@ -6294,7 +6311,8 @@ def main(path):
     for ln in lines:
         if "view is now the cockpit" in ln:
             view = "cockpit"; first_to = first_to or "cockpit"; continue
-        if "view is now external" in ln:
+        if ("view is now external" in ln or "view is now floating" in ln
+                or "view is now PAUSED" in ln):
             view = "external"; first_to = first_to or "external"; continue
         m = re.search(cam_pat, ln)
         if m:

@@ -15,10 +15,13 @@ LC_ALL=C          # pl_PL renders decimals with a comma and the patterns are C
 export LC_ALL
 cd "$(dirname "$0")/.." || exit 1
 
-BASE=/tmp/x4vr-take306.log
+# A committed base since take 329 (tests/make-census-base.sh): the old one,
+# /tmp/x4vr-take306.log, was cleaned out of /tmp by age, and this script then
+# SKIPped with exit 0 -- a suite that passes by testing nothing.
+BASE=${X4VR_CENSUS_BASE:-tests/data/census-base.log}
 if [ ! -f "$BASE" ]; then
-    echo "SKIP  $BASE absent — the planted logs are appended to a real run"
-    exit 0
+    echo "FAIL  $BASE absent — the planted logs are appended to a real run; rebuild it with tests/make-census-base.sh"
+    exit 1
 fi
 
 fail=0
@@ -681,14 +684,14 @@ mcrep='[  999996.000] inject  headlook write: 900 write(s), 0 failed, 0 refused 
 mccen='[  999990.020] inject  headlook: HUD down in the cockpit — X4'"'"'s camera CENTRED from yaw -1.99 pitch 6.37 to 0,0, so X4'"'"'s menus fill the window'
 { cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$(mcpose 999990.500 -1.9851 6.3677)" "$(mcpose 999991.500 -1.9851 6.3677)" "$(mcpose 999992.500 -1.9851 6.3677)" "$mcup"; } > /tmp/census-mc-frozen.log
 want "menucam 328B shape -> the share out of reach" /tmp/census-mc-frozen.log menucam "OFF-CENTRE  13.6% of X4's UI out of reach"
-want "menucam 328B shape -> FROZEN named" /tmp/census-mc-frozen.log "menucam =>" "FROZEN: in 1 cockpit period(s)"
+want "menucam 328B shape -> FROZEN named" /tmp/census-mc-frozen.log "menucam =>" "FROZEN: in 1 cockpit or ESC-pause period(s)"
 if python3 tools/score_run.py /tmp/census-mc-frozen.log 2>&1 | grep -q "^FAIL.*MENU_CENTRE"; then
     bad "menucam on a build without the centring -> FAILs (gated on outcome)"
 else
     ok "menucam on a build without the centring -> no FAIL"
 fi
 { cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$mccen" "$(mcpose 999990.500 0.0000 0.0000)" "$(mcpose 999991.500 0.0000 0.0000)" "$mcup" "$mcrep"; } > /tmp/census-mc-centred.log
-want "menucam centred -> every period CENTRED" /tmp/census-mc-centred.log "menucam =>" "every cockpit menu period CENTRED"
+want "menucam centred -> every period CENTRED" /tmp/census-mc-centred.log "menucam =>" "every cockpit and ESC-pause menu period CENTRED"
 want "menucam centred -> the centring counted" /tmp/census-mc-centred.log menucam "1 period(s) centred by X4VR_HEADLOOK_MENU_CENTRE, from -1.99,+6.37"
 want "menucam centred -> 0.0% out of reach" /tmp/census-mc-centred.log menucam "CENTRED      0.0% of X4's UI out of reach"
 { cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$(mcpose 999990.500 -1.9851 6.3677)" "$(mcpose 999991.500 -1.9851 6.3677)" "$mcup" "$mcrep"; } > /tmp/census-mc-stuck.log
@@ -700,6 +703,17 @@ else
     ok "menucam switched off -> no FAIL"
 fi
 absent "menucam: no write-mode arming -> silent" "$BASE" menucam
+# Take 329: the ESC menu PAUSES, and the pre-329 view line called that
+# "external/floating" -- the centring, gated on the cockpit, never acted.
+mcpaused='[  999989.950] inject  headlook: view is now PAUSED (IsGamePaused: the ESC menu) — idle'
+{ cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$mcpaused" "$(mcpose 999990.500 2.1700 9.2400)" "$(mcpose 999991.500 2.1700 9.2400)" "$mcup" "$mcrep"; } > /tmp/census-mc-esc-stuck.log
+want "menucam ESC pause frozen -> counted as a menu period" /tmp/census-mc-esc-stuck.log "menucam =>" "FROZEN: in 1 cockpit or ESC-pause period(s)"
+want "menucam ESC pause frozen, asked -> FAIL" /tmp/census-mc-esc-stuck.log FAIL "the centring did not act"
+{ cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$mcpaused" "$(mcpose 999990.500 0.0000 0.0000)" "$(mcpose 999991.500 0.0000 0.0000)" "$mcup" "$mcrep"; } > /tmp/census-mc-esc-ok.log
+want "menucam ESC pause centred -> CENTRED" /tmp/census-mc-esc-ok.log "menucam =>" "every cockpit and ESC-pause menu period CENTRED"
+mcold='[  999989.950] inject  headlook: view is now external/floating — idle'
+{ cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$mcold" "$(mcpose 999990.500 2.1700 9.2400)" "$mcup"; } > /tmp/census-mc-oldlabel.log
+want "menucam pre-329 label -> NOTE names the pause" /tmp/census-mc-oldlabel.log "menucam NOTE" "pre-329 label"
 
 # ------------------------------------------ the session gate without X4VR_MV
 # The render-pass inventory is printed only under X4VR_MV, so a flatscreen run

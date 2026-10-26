@@ -1442,7 +1442,7 @@ x4vr::CamRing g_camring;
 // drain to decide whether the player's own mouse motion should reach the view.
 std::atomic<bool> g_headlook_steering{false};
 // Which VIEW X4 is in, stamped by headlook_tick where it already asks
-// x4_cockpit_view(), and read by SDL_SetCursor.
+// x4_view(), and read by SDL_SetCursor.
 //
 // **Take 312 needed this and did not have it.** The cursor-set census split
 // changes by whether head-look was steering, and `steering = armed &&
@@ -1451,7 +1451,7 @@ std::atomic<bool> g_headlook_steering{false};
 // the two, while Patola reported the shape never changed in the cockpit at
 // all. The counter could not contradict him because it never named the axis.
 //
-// Stamped rather than queried here: x4_cockpit_view() is an X4 FFI call and
+// Stamped rather than queried here: x4_view() is an X4 FFI call and
 // SDL_SetCursor runs on whatever thread X4 sets a cursor from, at a moment
 // this file has never established is safe for one.
 std::atomic<bool> g_in_cockpit{false};
@@ -2274,7 +2274,13 @@ static const bool g_camloop = [] {
 // These three do **not** cover the map -- take 146 measured that directly -- so
 // x4_hud_active() below carries that case, and the reasoning for splitting it
 // out rather than adding it here is written there.
-static bool x4_cockpit_view() {
+// **Which of the three said "not the cockpit".** Take 329: the ESC menu
+// PAUSES the game (take 146 had already found that), and the one log line
+// "view is now external/floating" said otherwise for 13 takes -- so
+// X4VR_HEADLOOK_MENU_CENTRE, gated on the cockpit, never saw the ESC menu as a
+// menu in the cockpit, which it is. Named apart so a consumer can say which.
+enum class X4View { Cockpit, External, Floating, Paused };
+static X4View x4_view() {
     using Fn = bool (*)();
     static Fn ext = [] {
         Fn f = (Fn)dlsym(RTLD_DEFAULT, "IsExternalViewActive");
@@ -2292,7 +2298,7 @@ static bool x4_cockpit_view() {
     //
     // IsFullscreenMenuDisplayed was called here on the strength of its name in
     // `nm -D` alone, with a bool() signature I invented, and it segfaulted X4 --
-    // the core dump lands on it, one frame inside x4_cockpit_view. The other
+    // the core dump lands on it, one frame inside x4_cockpit_view (now x4_view). The other
     // three are declared verbatim in X4's own Lua bytecode:
     //
     //     bool IsExternalViewActive();
@@ -2310,19 +2316,19 @@ static bool x4_cockpit_view() {
         return f;
     }();
     if (ext && ext())
-        return false;
+        return X4View::External;
     if (flt && flt())
-        return false;
+        return X4View::Floating;
     if (paused && paused())
-        return false;
-    return true;
+        return X4View::Paused;
+    return X4View::Cockpit;
 }
 
 // **Is the cockpit HUD up?** The question the other three cannot answer.
 //
 // Take 146 settled it as a measurement rather than an assumption. The map was
 // open for 9.2 seconds -- M down at 25223.677, up at 25232.843 -- and
-// x4_cockpit_view() never once said anything but "the cockpit", so we kept
+// the view predicate (now x4_view()) never once said anything but "the cockpit", so we kept
 // steering and the map flew away. X4's map is not an external view, is not
 // floating, and -- the part that makes those three useless here -- does **not**
 // pause the game; it runs live. The two "view is now" transitions in that log
@@ -5182,7 +5188,11 @@ void headlook_tick() {
     // the map could not be dragged at all. Two sites, one meaning, one of them
     // updated: that is the entire defect, and it was introduced by the commit
     // that fixed the other half.
-    const bool cockpit = x4_cockpit_view();
+    const X4View view = x4_view();
+    const bool cockpit = view == X4View::Cockpit;
+    // Paused (the ESC menu) is still the cockpit's camera: X4 draws that menu
+    // through it exactly as it draws the map (take 329).
+    const bool cockpit_camera = cockpit || view == X4View::Paused;
     const bool armed_now = g_relative_mouse.load(std::memory_order_relaxed);
 
     // IsHUDActive dereferences its global with no null check, so it must not be
@@ -5211,11 +5221,17 @@ void headlook_tick() {
     // What every site below actually means by "the cockpit".
     const bool may_steer = cockpit && hud;
 
-    static bool was_cockpit = true;
-    if (cockpit != was_cockpit) {
-        was_cockpit = cockpit;
+    // "— idle" / "the cockpit" are what score_run.py keys on; take 329 split
+    // the old "external/floating" into the three cases it covered.
+    static X4View was_view = X4View::Cockpit;
+    if (view != was_view) {
+        was_view = view;
         X4VR_LOG("headlook: view is now %s",
-                 cockpit ? "the cockpit — steering" : "external/floating — idle");
+                 view == X4View::Cockpit    ? "the cockpit — steering"
+                 : view == X4View::External ? "external — idle"
+                 : view == X4View::Floating ? "floating — idle"
+                                            : "PAUSED (IsGamePaused: the ESC "
+                                              "menu) — idle");
     }
     static bool was_hud = true;
     if (hud != was_hud) {
@@ -5272,7 +5288,7 @@ void headlook_tick() {
     // exactly 0.0000 for the whole session. A guard that prevents the thing it
     // guards from starting is worse than the hazard it was added for.
     //
-    // The hazard was real -- the map accelerated away -- but x4_cockpit_view()
+    // The hazard was real -- the map accelerated away -- but x4_view()
     // asks X4 directly, which is the right shape of answer. If that turns out
     // not to cover the map, the fix is to find the query that does, not to
     // re-arm an inference that has failed in three different ways.
@@ -5321,9 +5337,9 @@ void headlook_tick() {
     // as the HUD stays down; `steering` stays false, so nothing here is
     // declared as head motion.
     static bool centred_period = false;
-    if (hud || !cockpit)
+    if (hud || !cockpit_camera)
         centred_period = false;
-    if (write_mode && cockpit && !hud && headlook_menu_centre()) {
+    if (write_mode && cockpit_camera && !hud && headlook_menu_centre()) {
         const uintptr_t cam = x4_player_camera();
         if (camwrite_ready(cam, g_headlook.pitch_limit_deg,
                            g_headlook.yaw_limit_deg)) {
@@ -5335,12 +5351,12 @@ void headlook_tick() {
                 if (!centred_period) {
                     centred_period = true;
                     g_camwrite.centre_periods++;
-                    X4VR_LOG("headlook: HUD down in the cockpit — X4's camera "
-                             "CENTRED from yaw %.2f pitch %.2f to 0,0, so X4's "
-                             "menus fill the window the pointer is confined "
-                             "to (X4VR_HEADLOOK_MENU_CENTRE=0 leaves it where "
-                             "the head was, take 328B)",
-                             was_yaw, was_pitch);
+                    X4VR_LOG("headlook: HUD down in the cockpit%s — X4's "
+                             "camera CENTRED from yaw %.2f pitch %.2f to 0,0, "
+                             "so X4's menus fill the window the pointer is "
+                             "confined to (X4VR_HEADLOOK_MENU_CENTRE=0 leaves "
+                             "it where the head was, take 328B)",
+                             cockpit ? "" : " (PAUSED)", was_yaw, was_pitch);
                 }
             }
         }

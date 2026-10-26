@@ -13,10 +13,12 @@ set -u
 CDPATH=
 cd "$(dirname "$0")/.." || exit 1
 
-BASE=/tmp/x4vr-take294.log
+# The committed census base since take 329 (/tmp/x4vr-take294.log was cleaned
+# out of /tmp by age).
+BASE=${X4VR_CENSUS_BASE:-tests/data/census-base.log}
 if [ ! -f "$BASE" ]; then
-    echo "SKIP  $BASE absent — the planted logs are appended to a real run"
-    exit 0
+    echo "FAIL  $BASE absent — rebuild it with tests/make-census-base.sh"
+    exit 1
 fi
 
 fail=0

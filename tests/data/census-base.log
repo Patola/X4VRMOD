@@ -1,0 +1,313 @@
+[ 207456.158] inject  injector loaded into pid 769792 (/usr/bin/dirname)
+[ 207456.159] inject  injector loaded into pid 769793 (/usr/bin/dirname)
+[ 207456.160] inject  injector loaded into pid 769794 (/usr/bin/env)
+[ 207456.161] inject  injector loaded into pid 769794 (/usr/bin/bash)
+[ 207456.162] inject  injector loaded into pid 769796 (/usr/bin/dirname)
+[ 207456.163] inject  injector loaded into pid 769797 (/usr/bin/basename)
+[ 207456.166] inject  injector loaded into pid 769798 (/usr/bin/diff)
+[ 207456.168] inject  injector loaded into pid 769799 (/usr/bin/basename)
+[ 207456.169] inject  injector loaded into pid 769800 (/usr/bin/diff)
+[ 207456.170] inject  injector loaded into pid 769801 (/usr/bin/basename)
+[ 207456.171] inject  injector loaded into pid 769802 (/usr/bin/diff)
+[ 207456.173] inject  injector loaded into pid 769805 (/usr/bin/env)
+[ 207456.173] inject  injector loaded into pid 769805 (/usr/bin/bash)
+[ 207456.178] inject  injector loaded into pid 769806 (/usr/bin/notify-send)
+[ 207456.181] inject  injector loaded into pid 769810 (/usr/bin/pgrep)
+[ 207456.188] inject  injector loaded into pid 769789 (/usr/bin/gamescope)
+[ 207456.195] inject  injector loaded into pid 769811 (/usr/bin/grep)
+[ 207456.197] inject  injector loaded into pid 769814 (/usr/bin/sleep)
+[ 207456.202] inject  net: connect(/run/user/1000/wayland-1) by pid 769789
+[ 207456.202] inject  env: setenv(SDL_VIDEODRIVER=wayland, overwrite=0) by pid 769789
+[ 207456.205] inject  net: connect(/run/user/1000/wayland-1) by pid 769789
+[ 207456.223] layer   instance created (app=gamescope) — not the game, layer inert in this process
+[ 207456.223] layer   wsi: instance enables VK_KHR_surface (pid 769789)
+[ 207456.223] layer   wsi: instance enables VK_KHR_wayland_surface (pid 769789)
+[ 207456.223] layer   wsi: surface 0x7b835c072e40 created via vkCreateWaylandSurfaceKHR (pid 769789)
+[ 207456.223] layer   wsi: SDL_GetCurrentVideoDriver()=wayland hint SDL_VIDEO_DRIVER=wayland (pid 769789)
+[ 207456.223] inject  net: connect(/run/user/1000/wayland-1) by pid 769789
+[ 207456.224] inject  net: connect(/run/user/1000/wayland-1) by pid 769789
+[ 207456.224] layer   wsi: present support? surface 0x7b835c072e40 (wayland) family 0 -> YES (pid 769789)
+[ 207456.224] layer   wsi: present support? surface 0x7b835c072e40 (wayland) family 1 -> YES (pid 769789)
+[ 207456.225] layer   device created
+[ 207456.225] layer   bindless: layout #0 binding 3 type=1 count=16 flags=0x0
+[ 207456.225] layer   bindless: layout #0 binding 4 type=1 count=16 flags=0x0
+[ 207456.225] layer   bindless: layout #0 binding 5 type=1 count=2 flags=0x0
+[ 207456.225] layer   bindless: layout #0 binding 6 type=1 count=2 flags=0x0
+[ 207456.225] layer   stereo: ipd=0.0640 sx=0.8890 near=0.100 -> shear m8 L=0.28448 R=-0.28448 (per-view, gl_ViewIndex selects)
+[ 207456.225] layer   offaxis: OFF by request (X4VR_OFFAXIS=off) — X4's symmetric field is rendered and declared, which is the behaviour of every VR take up to 163. Any located runtime frusta are ignored.
+[ 207456.225] layer   canvas: 1000.000 m -> s=0.00002 NDC (L=+s R=-s), 0.0 px on a 2816-wide eye
+[ 207456.225] layer   ui field: X4VR_UI_FOV=1.0000 -> X4 lays the UI out at half 36.87 deg (tan 0.7500) against a rendered half of 55.00 deg, so the UI pass is scaled by 0.5252. #45/#81: without this the HUD moves 1.904x the world.
+[ 207456.225] layer   clip-space enabled: K_world.x=0.000 K_nonworld.x=0.000
+[ 207456.230] layer   proj: camera walk OFF — needs X4VR_DUMP_MATRICES=1 (or an X4VR_TEST_EYE_* offset). No proj CAMERA/VIEW/SHADOW line can appear in this run, so nothing here speaks to the camera fields, the cascades, or #70
+[ 207456.231] inject  sdl: SDL_GetWindowSize -> 5632x2816 (pid 769789)
+[ 207456.232] layer   swapchain created: 5632x2816 images>=4 format=64 presentMode=2 surface 0x7b835c072e40 wsi=wayland (pid 769789) -> ok
+[ 207456.232] inject  env: unsetenv(WAYLAND_DISPLAY) by pid 769789
+[ 207456.248] inject  injector loaded into pid 769822 (/usr/bin/Xwayland)
+[ 207456.289] inject  injector loaded into pid 769830 (/usr/bin/bash)
+[ 207456.290] inject  injector loaded into pid 769830 (/usr/bin/xkbcomp)
+[ 207456.296] inject  net: connect(@/tmp/.X11-unix/X3) by pid 769789
+[ 207456.296] inject  env: setenv(DISPLAY=:3, overwrite=1) by pid 769789
+[ 207456.296] inject  env: setenv(XDG_SESSION_TYPE=x11, overwrite=1) by pid 769789
+[ 207456.300] inject  net: connect(@/tmp/.X11-unix/X1) by pid 769789
+[ 207456.304] inject  env: unsetenv(SDL_VIDEODRIVER) by pid 769789
+[ 207456.304] inject  env: unsetenv(SDL_VIDEO_DRIVER) by pid 769789
+[ 207456.307] inject  injector loaded into pid 769836 (/usr/bin/gamescopereaper)
+[ 207456.307] inject  injector loaded into pid 769838 (/usr/bin/env)
+[ 207456.307] inject  env: unsetenv(WAYLAND_DISPLAY) by pid 769838
+[ 207456.307] inject  env: putenv(SDL_VIDEODRIVER=x11) by pid 769838
+[ 207456.307] inject  env: putenv(SDL_VIDEO_DRIVER=x11) by pid 769838
+[ 207456.313] layer   swapchain created: 5632x2816 images>=4 format=64 presentMode=2 surface 0x7b835c072e40 wsi=wayland (pid 769789) -> ok
+[ 207456.324] inject  injector loaded into pid 769838 (/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4)
+[ 207456.324] inject  env: SDL_VIDEODRIVER=x11
+[ 207456.324] inject  env: SDL_VIDEO_DRIVER=x11
+[ 207456.324] inject  env: WAYLAND_DISPLAY=(unset)
+[ 207456.324] inject  env: DISPLAY=:3
+[ 207456.324] inject  env: XDG_SESSION_TYPE=x11
+[ 207456.324] inject  env: XDG_RUNTIME_DIR=/run/user/1000
+[ 207456.324] inject  env: run = X4VR_TAKE=census-base X4VR_CANVAS_M=1000 X4VR_STEREO=1 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=0 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-census-base.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+[ 207456.324] inject  pad present: "ASRock LED Controller" [kbd event2 js0 ]
+[ 207456.324] inject  pad present: "Microsoft X-Box 360 pad 0" [event6 js1 ]
+[ 207456.324] inject  pad present: "Microsoft X-Box 360 pad 1" [event7 js2 ]
+[ 207456.324] inject  pad present: "WayVR Mouse" [event9 mouse0 js3 ]
+[ 207456.324] inject  env: argv = /nvme/SteamLibrary/steamapps/common/X4 Foundations/X4 -skipintro -nocputhrottle -nosoundthrottle 
+[ 207456.347] inject  net: connect(@/tmp/.X11-unix/X3) by pid 769838
+[ 207456.347] inject  net: connect(@/tmp/.X11-unix/X3) by pid 769838
+[ 207458.343] inject  config: effective fov=1.4917 res=2816x2816 (fov from X4VR_FOV)
+[ 207458.343] inject  config: effective separateRadar=1 (from the profile, not this run) — 0 routes the radar to the cockpit target monitor, 1 to the flat element
+[ 207458.343] inject  config: effective antialiasing=none (our default, not the profile) — this tag also selects the upscaler; temporal/dlaa/fsr_* all jitter m[8]/m[9]
+[ 207458.432] layer   vr: X4VR_VR=1 — bringing the runtime up ahead of X4's instance
+[ 207458.433] layer   xr: runtime offers 61 instance extension(s): XR_KHR_binding_modification XR_KHR_composition_layer_color_scale_bias XR_KHR_composition_layer_cylinder XR_KHR_composition_layer_equirect2 XR_KHR_convert_timespec_time XR_KHR_extended_struct_name_lengths XR_KHR_locate_spaces XR_KHR_maintenance1 XR_KHR_opengl_enable XR_KHR_opengl_es_enable XR_KHR_swapchain_usage_input_attachment_bit XR_KHR_visibility_mask XR_KHR_vulkan_enable XR_KHR_vulkan_enable2 XR_KHR_vulkan_swapchain_format_list XR_EXT_active_action_set_priority XR_EXT_dpad_binding XR_EXT_eye_gaze_interaction XR_EXT_future XR_EXT_hand_interaction XR_EXT_hand_tracking XR_EXT_hand_tracking_data_source XR_EXT_hp_mixed_reality_controller XR_EXT_local_floor XR_EXT_palm_pose XR_EXT_samsung_odyssey_controller XR_EXT_user_presence XR_ANDROID_face_tracking XR_BD_controller_interaction XR_FB_body_tracking XR_FB_display_refresh_rate XR_FB_face_tracking2 XR_FB_haptic_pcm XR_FB_touch_controller_pro XR_FB_touch_controller_proximity XR_HTC_facial_tracking XR_HTC_vive_cosmos_c
+[ 207458.447] layer   xr: runtime "WiVRn 'v26.9-89-g75e2df57'" 26.9.0, instance at api 1.0
+[ 207458.447] layer   xr: system "Meta Quest 3 on WiVRn" — max swapchain 16384x16384, 128 layer(s), orientation=1 position=1
+[ 207458.447] layer   xr: view 0 — recommended 2889x3026 (max 5778x6052), samples 1 (max 1)
+[ 207458.447] layer   xr: view 1 — recommended 2889x3026 (max 5778x6052), samples 1 (max 1)
+[ 207458.447] layer   xr: wants Vulkan 1.0.0 .. 1023.1023.1023
+[ 207458.447] layer   vr: instance extensions — X4 asked for 6, the runtime needs 4, added 3: VK_KHR_external_fence_capabilities VK_KHR_external_memory_capabilities VK_KHR_external_semaphore_capabilities
+[ 207458.448] layer   instance created (app=X4) — with the OpenXR runtime's extensions merged in
+[ 207458.448] layer   wsi: instance enables VK_KHR_surface (pid 769838)
+[ 207458.448] layer   wsi: instance enables VK_KHR_xlib_surface (pid 769838)
+[ 207458.448] layer   wsi: instance enables VK_KHR_xcb_surface (pid 769838)
+[ 207458.448] layer   wsi: instance enables VK_KHR_wayland_surface (pid 769838)
+[ 207458.448] layer   wsi: instance enables VK_KHR_get_surface_capabilities2 (pid 769838)
+[ 207458.448] inject  net: connect(/run/user/1000/gamescope-0) by pid 769838
+[ 207458.531] layer   wsi: surface 0x1bf4f290 created via vkCreateWaylandSurfaceKHR (pid 769838)
+[ 207458.531] layer   wsi: SDL_GetCurrentVideoDriver()=x11 hint SDL_VIDEO_DRIVER=x11 (pid 769838)
+[ 207458.531] layer   wsi: surface 0x1bfdaa10 created via vkCreateXcbSurfaceKHR, window 0x40002e (pid 769838)
+[ 207458.531] inject  net: connect(@/tmp/.X11-unix/X3) by pid 769838
+[ 207458.532] inject  net: connect(@/tmp/.X11-unix/X3) by pid 769838
+[ 207458.532] layer   wsi: present support? surface 0x1bf4f290 (wayland) family 0 -> YES (pid 769838)
+[ 207458.532] layer   wsi: present support? surface 0x1bf4f290 (wayland) family 1 -> YES (pid 769838)
+[ 207458.532] layer   wsi: present support? surface 0x1bf4f290 (wayland) family 2 -> NO (pid 769838)
+[ 207458.532] layer   wsi: present support? surface 0x1bf4f290 (wayland) family 3 -> NO (pid 769838)
+[ 207458.532] layer   wsi: present support? surface 0x1bf4f290 (wayland) family 4 -> NO (pid 769838)
+[ 207458.532] layer   wsi: present support? surface 0x1bf4f290 (wayland) family 0 -> YES (pid 769838)
+[ 207458.532] layer   wsi: present support? surface 0x1bf4f290 (wayland) family 1 -> YES (pid 769838)
+[ 207458.532] layer   wsi: present support? surface 0x1bf4f290 (wayland) family 2 -> NO (pid 769838)
+[ 207458.532] layer   wsi: present support? surface 0x1bf4f290 (wayland) family 3 -> NO (pid 769838)
+[ 207458.532] layer   wsi: present support? surface 0x1bf4f290 (wayland) family 4 -> NO (pid 769838)
+[ 207458.535] layer   multiview: supported=1 maxViews=8 maxInstanceIndex=2147483647 geomShader=1 tessShader=1
+[ 207458.535] layer   multiview: X4 requests it? ext=0 feature=0 — device api 1.4, app api 1.2
+[ 207458.535] layer   multiview: enabled in X4's existing feature struct
+[ 207458.535] layer   vr: X4 created queue family 0 x1 graphics (the device offers 1)
+[ 207458.535] layer   vr: X4 created queue family 1 x1 (the device offers 4)
+[ 207458.535] layer   vr: this device has no spare graphics queue — the runtime shares X4's (family 0 index 0), serialised by the layer. Submissions from both sides take one lock.
+[ 207458.535] layer   vr: device extensions — X4 asked for 10, the runtime needs 9, added 7: VK_KHR_dedicated_allocation VK_KHR_external_fence VK_KHR_external_memory VK_KHR_external_semaphore VK_KHR_get_memory_requirements2 VK_KHR_image_format_list VK_KHR_external_fence_fd
+[ 207458.536] layer   device created
+[ 207458.536] layer   cursor: overlay armed (X4VR_CURSOR=1) — X4's own pointer will be blended into the eye image
+[ 207458.536] layer   stereo: ipd=0.0640 sx=0.8890 near=0.100 -> shear m8 L=0.28448 R=-0.28448 (per-view, gl_ViewIndex selects)
+[ 207458.536] layer   offaxis: OFF by request (X4VR_OFFAXIS=off) — X4's symmetric field is rendered and declared, which is the behaviour of every VR take up to 163. Any located runtime frusta are ignored.
+[ 207458.536] layer   canvas: 1000.000 m -> s=0.00002 NDC (L=+s R=-s), 0.0 px on a 2816-wide eye
+[ 207458.536] layer   ui field: X4VR_UI_FOV=1.0000 -> X4 lays the UI out at half 36.87 deg (tan 0.7500) against a rendered half of 55.00 deg, so the UI pass is scaled by 0.5252. #45/#81: without this the HUD moves 1.904x the world.
+[ 207458.536] layer   clip-space enabled: K_world.x=0.000 K_nonworld.x=0.000
+[ 207458.536] layer   pose: 1 module(s) read the pose block (set 31)
+[ 207458.537] layer   patched vertex shader #1 (nonworld) [world=0 nonworld=1 stereo=0 live-sx=0 mvp-sx=0 baked-sx=0 clip=1 cam-pos=0]
+[ 207458.537] layer   pose: 2 module(s) read the pose block (set 31)
+[ 207458.537] layer   patched vertex shader #2 (nonworld) [world=0 nonworld=2 stereo=0 live-sx=0 mvp-sx=0 baked-sx=0 clip=2 cam-pos=0]
+[ 207458.538] layer   pose: channel up — set 31 binding 0, 4 region(s) of 208 B, identity until #33 drives it
+[ 207458.538] inject  net: connect(@/tmp/.X11-unix/X3) by pid 769838
+[ 207458.538] inject  net: connect(@/tmp/.X11-unix/X3) by pid 769838
+[ 207458.538] layer   vr: physical device "AMD Radeon RX 7900 XTX (RADV NAVI31)" — this layer was handed 0x1bfa03c0, the loader's public handle is 0x1bf9d540 — not the same handle, which is what aborted take 111; the session gets the public one
+[ 207458.538] inject  net: connect(@/tmp/.X11-unix/X3) by pid 769838
+[ 207458.538] inject  net: connect(@/tmp/.X11-unix/X3) by pid 769838
+[ 207458.539] layer   vr: physical device handles — layer 0x1bfa03c0, loader public 0x1bf9d540, runtime asks for 0x1bf9d540
+[ 207458.539] layer   vr: session created on X4's own device — queue family 0 index 0 (reserved for the runtime), reference space STAGE
+[ 207458.539] layer   vr: session -> XR_SESSION_STATE_IDLE
+[ 207458.539] layer   vr: session -> XR_SESSION_STATE_READY
+[ 207458.543] layer   mv: X4 uses vkCreateRenderPass (v1)
+[ 207458.543] layer   sbs: surface 0x1bf4f290 caps currentExtent=4294967295x4294967295 min=1x1 max=16384x16384 wsi=wayland (pid 769838)
+[ 207458.543] layer   sbs: surface reports no preferred extent (currentExtent=0xFFFFFFFF), wsi=wayland. There is nothing to halve, so the layer's surface lever is inert and only the config's res_width sizes X4. On Wayland the buffer *is* the surface, so presenting a full-width image makes the surface full width while X4 still believes it owns the eye — that gap is the input offset measured in take thirty-three, not a thing to paper over here.
+[ 207458.543] layer   wsi: present support? surface 0x1bf4f290 (wayland) family 1 -> YES (pid 769838)
+[ 207458.543] layer   extents: X4 renders 2816x2816, this run's eye is 2816x2816 (from X4VR_RES), the composite presents 5632x2816 -- they agree
+[ 207458.543] layer   swapchain created: 2816x2816 images>=4 format=44 presentMode=1 surface 0x1bf4f290 wsi=wayland (pid 769838) -> ok
+[ 207458.543] layer   sbs: composite armed for 5632x2816 (4 images), each eye 2816x2816 (X4 renders one eye, we own its images), eye layers=2 right half from layer 1  <-- STEREO composite
+[ 207458.544] layer   unsheared pipeline: binding the no-shear twin (shadow + UI exclusion active) — vertex edit dropped, fragment edits KEPT: bindless offset and per-eye M_invprojection
+[ 207458.547] layer   pose residual: X4VR_FOV=1.4917 renders 110.0 deg, runtime wants 94.0 x 99.0 deg per eye -> budget 0.00 deg of head rotation. The servo's residual is median 0.22 / p90 2.27 deg below X4's clamp, so a budget under ~2.3 clamps the ordinary case — WHICH THIS ONE DOES
+[ 207458.547] layer   vr fov: runtime reports eye0 l=-54.00 r=40.00 u=44.00 d=-55.00, eye1 l=-40.00 r=54.00 u=44.00 d=-55.00 deg — latched as the off-axis target for this run
+[ 207458.547] layer   share: injector channel v4 connected
+[ 207458.547] layer   ipd: runtime reports 0.0631 m between the eyes; the scene is sheared with X4VR_IPD=0.0640 — -1.5%. The quad's stereo comes from the runtime's number and the scene's from the knob, so a difference here is a disagreement the canvas distance cannot fix
+[ 207458.547] layer   head translate: neutral point latched at (0.007, 1.112, 0.000) m — every shift below is measured from here, not from the stage origin. Neck pivot (0.000, 0.000, 0.000) m in head axes is subtracted first, so a pure rotation shifts NOTHING (take 231's defect)
+[ 207458.547] layer   geom: head=0.0068,1.1120,0.0003 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0000 d_scene=1.1121 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.547] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=0 frames=1 located=1 submitted=0 span=0.0000,0.0000,0.0000
+[ 207458.547] layer   vr copy (periodic): swapchain=0 blits=0 released=0 acquire_failed=0 refused=0
+[ 207458.547] layer   vr: session -> XR_SESSION_STATE_SYNCHRONIZED
+[ 207458.547] layer   vr: session -> XR_SESSION_STATE_VISIBLE
+[ 207458.547] layer   vr: session -> XR_SESSION_STATE_FOCUSED
+[ 207458.559] layer   geom: head=0.0067,1.1120,0.0001 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0002 d_scene=1.1120 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.570] layer   geom: head=0.0065,1.1119,0.0001 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0003 d_scene=1.1119 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.581] layer   geom: head=0.0064,1.1118,0.0001 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0004 d_scene=1.1118 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.592] layer   geom: head=0.0063,1.1117,-0.0001 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0007 d_scene=1.1117 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.595] layer   proj: camera walk OFF — needs X4VR_DUMP_MATRICES=1 (or an X4VR_TEST_EYE_* offset). No proj CAMERA/VIEW/SHADOW line can appear in this run, so nothing here speaks to the camera fields, the cascades, or #70
+[ 207458.595] layer   bindless: layout #0 binding 2 type=10 count=58 flags=0x7 PARTIALLY_BOUND UPDATE_AFTER_BIND
+[ 207458.595] layer   bindless: layout #0 binding 3 type=10 count=58 flags=0x7 PARTIALLY_BOUND UPDATE_AFTER_BIND
+[ 207458.595] layer   bindless: layout #0 binding 4 type=0 count=18 flags=0x0
+[ 207458.595] layer   bindless: layout #0 binding 5 type=2 count=53306 flags=0x7 PARTIALLY_BOUND UPDATE_AFTER_BIND
+[ 207458.595] layer   bindless: layout #0 binding 6 type=3 count=53306 flags=0x7 PARTIALLY_BOUND UPDATE_AFTER_BIND
+[ 207458.595] layer   bindless: layout #0 binding 7 type=2 count=53306 flags=0x7 PARTIALLY_BOUND UPDATE_AFTER_BIND
+[ 207458.595] layer   bindless: layout #0 binding 8 type=3 count=53306 flags=0x7 PARTIALLY_BOUND UPDATE_AFTER_BIND
+[ 207458.603] layer   geom: head=0.0062,1.1116,-0.0001 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0008 d_scene=1.1116 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.614] layer   geom: head=0.0060,1.1114,0.0000 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0010 d_scene=1.1115 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.625] layer   geom: head=0.0058,1.1114,0.0001 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0012 d_scene=1.1114 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.636] layer   geom: head=0.0056,1.1115,0.0001 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0013 d_scene=1.1115 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.647] layer   geom: head=0.0054,1.1117,0.0001 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0014 d_scene=1.1117 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.653] inject  headlook: window id 4 from SDL_GetWindowID — no mouse nudge needed to arm
+[ 207458.653] inject  sdl: SDL_GetWindowSize -> 2816x2816 (pid 769838)
+[ 207458.658] layer   geom: head=0.0052,1.1119,-0.0000 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0016 d_scene=1.1119 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.670] layer   geom: head=0.0051,1.1121,-0.0001 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0017 d_scene=1.1121 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.681] layer   geom: head=0.0050,1.1123,-0.0002 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0018 d_scene=1.1123 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.692] layer   geom: head=0.0050,1.1124,-0.0003 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0019 d_scene=1.1124 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.703] layer   geom: head=0.0049,1.1126,-0.0004 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0021 d_scene=1.1126 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.714] layer   geom: head=0.0047,1.1128,-0.0006 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0024 d_scene=1.1128 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.725] layer   geom: head=0.0045,1.1128,-0.0007 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0026 d_scene=1.1129 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.736] layer   geom: head=0.0042,1.1128,-0.0009 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0029 d_scene=1.1128 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.747] layer   geom: head=0.0041,1.1128,-0.0010 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0031 d_scene=1.1128 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.758] layer   geom: head=0.0039,1.1129,-0.0010 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0033 d_scene=1.1129 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.769] layer   geom: head=0.0038,1.1129,-0.0010 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0034 d_scene=1.1129 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.781] layer   geom: head=0.0037,1.1128,-0.0010 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0034 d_scene=1.1128 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.792] layer   geom: head=0.0036,1.1127,-0.0010 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0035 d_scene=1.1127 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.803] layer   geom: head=0.0035,1.1125,-0.0009 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0035 d_scene=1.1125 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.814] layer   geom: head=0.0034,1.1123,-0.0008 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0036 d_scene=1.1123 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.825] layer   geom: head=0.0034,1.1122,-0.0007 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0036 d_scene=1.1122 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.836] layer   geom: head=0.0033,1.1122,-0.0005 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0035 d_scene=1.1122 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.847] layer   geom: head=0.0033,1.1121,-0.0002 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0035 d_scene=1.1121 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.858] layer   geom: head=0.0033,1.1121,0.0001 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0035 d_scene=1.1121 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207458.869] layer   geom: head=0.0032,1.1121,0.0004 neutral=0.0068,1.1120,0.0003 declared=0.0000,0.0000,0.0000 quad=0.0000,0.0000,0.0000 zm=0.000 t_head=0.0036 d_scene=1.1121 d_quad=0.0000 hv=1 qv=0 yaw=0.00 pitch=0.00
+[ 207572.184] inject  camread: X4 -0.29,-4.02 deg (raw 0.0050,-0.0701) | cmd -0.30,-3.90 | head -0.30,-3.90 CLOSED
+[ 207572.519] inject  camread: X4 -0.05,-1.67 deg (raw 0.0008,-0.0291) | cmd 0.04,-1.43 | head 0.04,-1.43 CLOSED
+[ 207572.873] inject  camread: X4 1.68,2.25 deg (raw -0.0294,0.0393) | cmd 1.79,2.33 | head 1.79,2.33 CLOSED
+[ 207573.215] inject  camread: X4 2.46,3.40 deg (raw -0.0429,0.0594) | cmd 2.41,3.67 | head 2.41,3.67 CLOSED
+[ 207573.570] inject  camread: X4 2.41,5.88 deg (raw -0.0421,0.1026) | cmd 2.43,5.87 | head 2.43,5.87 CLOSED
+[ 207573.922] inject  camread: X4 2.16,5.95 deg (raw -0.0378,0.1039) | cmd 2.16,5.98 | head 2.16,5.98 CLOSED
+[ 207574.307] inject  camread: X4 2.32,6.07 deg (raw -0.0404,0.1060) | cmd 2.21,6.10 | head 2.21,6.10 CLOSED
+[ 207574.661] inject  camread: X4 2.16,6.47 deg (raw -0.0376,0.1130) | cmd 2.23,6.54 | head 2.23,6.54 CLOSED
+[ 207575.086] inject  camread: X4 2.15,6.52 deg (raw -0.0375,0.1137) | cmd 2.17,6.51 | head 2.17,6.51 CLOSED
+[ 207575.497] inject  camread: X4 1.64,5.67 deg (raw -0.0286,0.0990) | cmd 1.63,5.67 | head 1.63,5.67 CLOSED
+[ 207575.874] inject  camread: X4 1.46,5.10 deg (raw -0.0255,0.0891) | cmd 1.44,5.01 | head 1.44,5.01 CLOSED
+[ 207576.251] inject  camread: X4 1.36,4.82 deg (raw -0.0237,0.0840) | cmd 1.35,4.78 | head 1.35,4.78 CLOSED
+[ 207576.639] inject  camread: X4 1.19,4.73 deg (raw -0.0209,0.0825) | cmd 1.22,4.76 | head 1.22,4.76 CLOSED
+[ 207577.045] inject  camread: X4 2.01,4.95 deg (raw -0.0350,0.0864) | cmd 2.28,5.01 | head 2.28,5.01 CLOSED
+[ 207577.383] inject  camread: X4 7.69,6.11 deg (raw -0.1343,0.1067) | cmd 7.81,6.17 | head 7.81,6.17 CLOSED
+[ 207577.766] inject  camread: X4 8.41,6.24 deg (raw -0.1468,0.1088) | cmd 8.44,6.22 | head 8.44,6.22 CLOSED
+[ 207578.176] inject  camread: X4 17.12,7.44 deg (raw -0.2987,0.1299) | cmd 17.45,7.56 | head 17.45,7.56 CLOSED
+[ 207578.573] inject  camread: X4 19.74,8.59 deg (raw -0.3445,0.1499) | cmd 19.87,8.59 | head 19.87,8.59 CLOSED
+[ 207578.953] inject  camread: X4 23.57,9.54 deg (raw -0.4114,0.1665) | cmd 24.11,9.71 | head 24.11,9.71 CLOSED
+[ 207579.337] inject  camread: X4 28.74,11.63 deg (raw -0.5016,0.2031) | cmd 28.67,11.61 | head 28.67,11.61 CLOSED
+[ 207463.548] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=451 located=451 submitted=366 span=0.0145,0.0120,0.0190
+[ 207463.548] layer   vr copy (periodic): swapchain=1 blits=4 released=4 acquire_failed=0 refused=0
+[ 207468.549] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=901 located=901 submitted=816 span=0.0145,0.0154,0.0366
+[ 207468.549] layer   vr copy (periodic): swapchain=1 blits=4 released=4 acquire_failed=0 refused=0
+[ 207473.555] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=1349 located=1349 submitted=1264 span=0.0552,0.0549,0.0666
+[ 207473.555] layer   vr copy (periodic): swapchain=1 blits=880 released=880 acquire_failed=0 refused=0
+[ 207478.562] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=1777 located=1777 submitted=1692 span=0.0650,0.0549,0.0857
+[ 207478.562] layer   vr copy (periodic): swapchain=1 blits=1276 released=1276 acquire_failed=0 refused=0
+[ 207483.562] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=2207 located=2207 submitted=2122 span=0.1145,0.0628,0.0857
+[ 207483.562] layer   vr copy (periodic): swapchain=1 blits=1673 released=1673 acquire_failed=0 refused=0
+[ 207488.574] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=2653 located=2653 submitted=2568 span=0.1355,0.0628,0.0941
+[ 207488.574] layer   vr copy (periodic): swapchain=1 blits=2085 released=2085 acquire_failed=0 refused=0
+[ 207493.576] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=3103 located=3103 submitted=3018 span=0.1355,0.0629,0.0956
+[ 207493.576] layer   vr copy (periodic): swapchain=1 blits=2510 released=2510 acquire_failed=0 refused=0
+[ 207498.585] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=3553 located=3553 submitted=3468 span=0.1497,0.0717,0.1018
+[ 207498.585] layer   vr copy (periodic): swapchain=1 blits=2745 released=2745 acquire_failed=0 refused=0
+[ 207503.586] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=4003 located=4003 submitted=3918 span=0.1658,0.0717,0.1896
+[ 207503.586] layer   vr copy (periodic): swapchain=1 blits=3031 released=3031 acquire_failed=0 refused=0
+[ 207508.597] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=4454 located=4454 submitted=4369 span=0.1658,0.0776,0.1896
+[ 207508.597] layer   vr copy (periodic): swapchain=1 blits=3319 released=3319 acquire_failed=0 refused=0
+[ 207513.597] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=4904 located=4904 submitted=4819 span=0.1658,0.0776,0.1896
+[ 207513.597] layer   vr copy (periodic): swapchain=1 blits=3608 released=3608 acquire_failed=0 refused=0
+[ 207518.597] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=5346 located=5346 submitted=5261 span=0.1658,0.0776,0.1896
+[ 207518.597] layer   vr copy (periodic): swapchain=1 blits=3898 released=3898 acquire_failed=0 refused=0
+[ 207523.598] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=5796 located=5796 submitted=5711 span=0.1670,0.0881,0.1896
+[ 207523.598] layer   vr copy (periodic): swapchain=1 blits=4187 released=4187 acquire_failed=0 refused=0
+[ 207528.598] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=6246 located=6246 submitted=6161 span=0.1670,0.0916,0.1896
+[ 207528.598] layer   vr copy (periodic): swapchain=1 blits=4477 released=4477 acquire_failed=0 refused=0
+[ 207533.598] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=6696 located=6696 submitted=6611 span=0.1670,0.0930,0.1896
+[ 207533.598] layer   vr copy (periodic): swapchain=1 blits=4761 released=4761 acquire_failed=0 refused=0
+[ 207538.600] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=7146 located=7146 submitted=7061 span=0.1670,0.0930,0.1896
+[ 207538.600] layer   vr copy (periodic): swapchain=1 blits=5051 released=5051 acquire_failed=0 refused=0
+[ 207543.607] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=7596 located=7596 submitted=7511 span=0.1670,0.0930,0.1896
+[ 207543.607] layer   vr copy (periodic): swapchain=1 blits=5313 released=5313 acquire_failed=0 refused=0
+[ 207548.612] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=8046 located=8046 submitted=7961 span=0.1670,0.0930,0.1896
+[ 207548.612] layer   vr copy (periodic): swapchain=1 blits=5559 released=5559 acquire_failed=0 refused=0
+[ 207553.613] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=8496 located=8496 submitted=8411 span=0.1670,0.0930,0.1896
+[ 207553.613] layer   vr copy (periodic): swapchain=1 blits=5824 released=5824 acquire_failed=0 refused=0
+[ 207558.613] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=8946 located=8946 submitted=8861 span=0.1670,0.0930,0.1896
+[ 207558.613] layer   vr copy (periodic): swapchain=1 blits=6085 released=6085 acquire_failed=0 refused=0
+[ 207563.615] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=9395 located=9395 submitted=9310 span=0.1670,0.0930,0.2439
+[ 207563.615] layer   vr copy (periodic): swapchain=1 blits=6346 released=6346 acquire_failed=0 refused=0
+[ 207568.625] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=9846 located=9846 submitted=9761 span=0.1670,0.0930,0.2439
+[ 207568.625] layer   vr copy (periodic): swapchain=1 blits=6610 released=6610 acquire_failed=0 refused=0
+[ 207573.629] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=10297 located=10297 submitted=10212 span=0.1670,0.0930,0.2439
+[ 207573.629] layer   vr copy (periodic): swapchain=1 blits=6930 released=6930 acquire_failed=0 refused=0
+[ 207578.636] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=10746 located=10746 submitted=10661 span=0.1670,0.0930,0.2439
+[ 207578.636] layer   vr copy (periodic): swapchain=1 blits=7366 released=7366 acquire_failed=0 refused=0
+[ 207583.639] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=11193 located=11193 submitted=11108 span=0.1670,0.0930,0.2439
+[ 207583.639] layer   vr copy (periodic): swapchain=1 blits=7714 released=7714 acquire_failed=0 refused=0
+[ 207588.641] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=11643 located=11643 submitted=11558 span=0.1670,0.0930,0.2439
+[ 207588.641] layer   vr copy (periodic): swapchain=1 blits=7912 released=7912 acquire_failed=0 refused=0
+[ 207593.643] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=12093 located=12093 submitted=12008 span=0.1670,0.0959,0.2439
+[ 207593.643] layer   vr copy (periodic): swapchain=1 blits=8113 released=8113 acquire_failed=0 refused=0
+[ 207598.652] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=12544 located=12544 submitted=12459 span=0.1725,0.0959,0.2439
+[ 207598.652] layer   vr copy (periodic): swapchain=1 blits=8302 released=8302 acquire_failed=0 refused=0
+[ 207603.655] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=12994 located=12994 submitted=12909 span=0.1725,0.0959,0.2439
+[ 207603.655] layer   vr copy (periodic): swapchain=1 blits=8603 released=8603 acquire_failed=0 refused=0
+[ 207608.657] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=13444 located=13444 submitted=13359 span=0.1725,0.0959,0.2439
+[ 207608.657] layer   vr copy (periodic): swapchain=1 blits=9003 released=9003 acquire_failed=0 refused=0
+[ 207613.661] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=13893 located=13893 submitted=13808 span=0.1725,0.0959,0.2439
+[ 207613.661] layer   vr copy (periodic): swapchain=1 blits=9409 released=9409 acquire_failed=0 refused=0
+[ 207618.670] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=14342 located=14342 submitted=14257 span=0.1725,0.0959,0.2439
+[ 207618.670] layer   vr copy (periodic): swapchain=1 blits=9812 released=9812 acquire_failed=0 refused=0
+[ 207623.679] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=14787 located=14787 submitted=14702 span=0.1725,0.0959,0.2439
+[ 207623.679] layer   vr copy (periodic): swapchain=1 blits=10122 released=10122 acquire_failed=0 refused=0
+[ 207628.689] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=15234 located=15234 submitted=15149 span=0.1725,0.0959,0.2439
+[ 207628.689] layer   vr copy (periodic): swapchain=1 blits=10302 released=10302 acquire_failed=0 refused=0
+[ 207633.698] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=15685 located=15685 submitted=15600 span=0.1725,0.0959,0.2439
+[ 207633.698] layer   vr copy (periodic): swapchain=1 blits=10477 released=10477 acquire_failed=0 refused=0
+[ 207638.701] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=16136 located=16136 submitted=16051 span=0.1725,0.0959,0.2439
+[ 207638.701] layer   vr copy (periodic): swapchain=1 blits=10715 released=10715 acquire_failed=0 refused=0
+[ 207643.708] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=16584 located=16584 submitted=16499 span=0.1844,0.0959,0.2439
+[ 207643.708] layer   vr copy (periodic): swapchain=1 blits=11133 released=11133 acquire_failed=0 refused=0
+[ 207648.710] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=17034 located=17034 submitted=16949 span=0.1844,0.0959,0.2439
+[ 207648.710] layer   vr copy (periodic): swapchain=1 blits=11310 released=11310 acquire_failed=0 refused=0
+[ 207653.712] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=17482 located=17482 submitted=17397 span=0.1844,0.0959,0.2439
+[ 207653.712] layer   vr copy (periodic): swapchain=1 blits=11479 released=11479 acquire_failed=0 refused=0
+[ 207658.721] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=17932 located=17932 submitted=17847 span=0.1844,0.0959,0.2439
+[ 207658.721] layer   vr copy (periodic): swapchain=1 blits=11642 released=11642 acquire_failed=0 refused=0
+[ 207663.722] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=18381 located=18381 submitted=18296 span=0.1844,0.0959,0.2439
+[ 207663.722] layer   vr copy (periodic): swapchain=1 blits=11800 released=11800 acquire_failed=0 refused=0
+[ 207668.730] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=18831 located=18831 submitted=18746 span=0.1844,0.0973,0.2439
+[ 207668.730] layer   vr copy (periodic): swapchain=1 blits=11964 released=11964 acquire_failed=0 refused=0
+[ 207673.733] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=19281 located=19281 submitted=19196 span=0.1844,0.0973,0.2439
+[ 207673.733] layer   vr copy (periodic): swapchain=1 blits=12313 released=12313 acquire_failed=0 refused=0
+[ 207678.734] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=19730 located=19730 submitted=19645 span=0.1844,0.0973,0.2439
+[ 207678.734] layer   vr copy (periodic): swapchain=1 blits=12472 released=12472 acquire_failed=0 refused=0
+[ 207683.742] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=20180 located=20180 submitted=20095 span=0.1844,0.0973,0.2439
+[ 207683.742] layer   vr copy (periodic): swapchain=1 blits=12710 released=12710 acquire_failed=0 refused=0
+[ 207688.743] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=20624 located=20624 submitted=20539 span=0.1844,0.0973,0.2439
+[ 207688.743] layer   vr copy (periodic): swapchain=1 blits=13128 released=13128 acquire_failed=0 refused=0
+[ 207693.754] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=21075 located=21075 submitted=20990 span=0.1844,0.0973,0.2439
+[ 207693.754] layer   vr copy (periodic): swapchain=1 blits=13551 released=13551 acquire_failed=0 refused=0
+[ 207698.756] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=21525 located=21525 submitted=21440 span=0.1844,0.0973,0.2439
+[ 207698.756] layer   vr copy (periodic): swapchain=1 blits=13973 released=13973 acquire_failed=0 refused=0
+[ 207703.765] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=21976 located=21976 submitted=21891 span=0.1844,0.0973,0.2439
+[ 207703.765] layer   vr copy (periodic): swapchain=1 blits=14395 released=14395 acquire_failed=0 refused=0
+[ 207708.768] layer   vr summary (periodic): runtime=WiVRn 'v26.9-89-g75e2df57' session=1 focused=1 frames=22425 located=22425 submitted=22340 span=0.1844,0.0973,0.2439
+[ 207708.768] layer   vr copy (periodic): swapchain=1 blits=14552 released=14552 acquire_failed=0 refused=0

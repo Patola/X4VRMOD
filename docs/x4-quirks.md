@@ -24684,3 +24684,129 @@ WiVRn):
 Cost: ~5 minutes. No extra instrumentation. One memory write per tick while
 a menu is up. A short recording of one sweep is welcome but not required:
 the scorer measures the camera, and his report judges reachability.
+
+## Take 329 — SCORED (2026-10-26)
+
+Patola: *"Turned my head away to the left, pressed M. Swept all corners, this
+time the map was entirely reachable, clicked on many elements and changed to
+other menus, it was flawless, the cursor was contained perfectly to the quad.
+Closed the map, did the same after turning to the right, same thing,
+everything perfectly fitted. When I called the ESC menu to quit, the ESC menu
+quad had the cursor misaligned, it was not perfectly fitted into the quad. It
+went way further to the left and up and stopped way before the right and
+lower corners."*
+
+`score_run.py`: PASS. No X4 or gamescope core in the journal.
+
+* **P329.1 HELD for the map.** Both cockpit menu periods were CENTRED (0.0%
+  out of reach): from head yaw **+30.84** (left) and **−53.55** (right), both
+  at pitch ~+9.
+* **P329.2 HELD.** Everything was reachable and the cursor stayed inside the
+  quad, in both head directions.
+* **P329.4 HELD.** `hwrite` tracking: yaw p90 3.58°, pitch p90 4.76°. Head-look
+  resumed after each map.
+* **P329.5 HELD.** csmfit 26/26 FIX; cursor-auto 13/13; the start-screen
+  arrow #5 was shown.
+* **NEW, the ESC menu: the same defect, and a mislabel of mine hid it.**
+  * ESC at 207683.11: `view is now external/floating — idle`, a full-screen
+    menu UP, and the HUD down.
+  * X4's camera stayed at **+2.17, +9.24** for the whole 22 s menu. That is
+    the head's angle when ESC was pressed, and 18.2% of X4's UI was out of
+    reach.
+  * The model's direction matches his report exactly: the UI is shifted down
+    and right, so the cursor overshoots left and up and falls short right and
+    down.
+  * **Why the centring did not act.** `x4_cockpit_view()` returns false when
+    `IsGamePaused()` is true, and **the ESC menu pauses** (take 146 had
+    written this down). The single log label "external/floating" covered
+    external, floating AND paused, so a paused cockpit read as "not the
+    cockpit", and the centring is gated on the cockpit.
+  * It fired at 207705.6, when the view flipped back to "the cockpit"
+    during the quit itself.
+  * Take 328B's last period (+0.96, +16.03, "external/floating", 13 s)
+    and 327's two "external" periods were most likely the same ESC menu.
+
+**The fix:**
+* `x4_view()` names which predicate said "not the cockpit": cockpit,
+  external, floating, PAUSED. The log line now says which.
+* The centring acts in the cockpit OR paused with the HUD down (the cockpit's
+  camera either way).
+* Its CENTRED line says `(PAUSED)` when it centred under the pause.
+* `menucam` reads the new labels, judges PAUSED periods like cockpit ones,
+  and NOTEs the pre-329 label.
+
+**The open question the take must answer.** Does X4 apply a camera write
+while paused?
+* If it does not rebuild the view during a pause, the write lands in the
+  free-look matrix but the menu stays where it was drawn.
+* GetCameraRotation (`x4=`, `camstamp`) reads the state we write, not the
+  view X4 rendered, so the log cannot tell those apart. His eye on the ESC
+  menu decides.
+* The MOUSELOOK-era logs that could have answered it (take 311's pauses,
+  under X4's own follower) are gone: `/tmp` was cleaned by age.
+
+**Lost with them: the scorer suites' bases.** `/tmp/x4vr-take306.log`
+(census), `x4vr-take303.log` (pace) and `x4vr-take294.log` (rfab) were all
+cleaned out of `/tmp`. Each suite then printed SKIP and **exited 0**: suites
+that pass by testing nothing, a guard that cannot fail.
+* The base is now **committed**: `tests/data/census-base.log`, 313 lines,
+  built by `tests/make-census-base.sh` from a real take's log:
+  * the first 200 lines, for the render-pass inventory;
+  * its first 20 live camera reads;
+  * its periodic `vr copy`/`vr summary` series;
+  * take 303's run line, which asks for none of the later features;
+  * those features' own start-up lines removed (content fork, csmfit, cursor
+    stand-in, roll, `vr pace`);
+  * the profile ID scrubbed.
+* The three suites default to it (`X4VR_CENSUS_BASE` overrides). A missing
+  base now FAILs instead of SKIPping.
+* Results: census **224/224**, pace 21/21, rfab 13/13.
+
+**And a scorer bug that the small base exposed.** `menucam` printed
+`t0+…` with the perf block's `t0`, which exists only when a run logged perf
+windows. On a short log it raised UnboundLocalError, and every block after
+`menucam` was lost. It now falls back to the log's first timestamp.
+Two of the census's expected strings followed the verdicts' new wording ("…
+cockpit or ESC-pause period(s)").
+
+## Take 330 — PREDICTIONS (written before the run)
+
+The same line as 329. The build carries the paused view (`x4_view()`) and the
+centring under it. **Primary observable: the ESC menu's cursor stays inside
+its quad and reaches all four corners.**
+
+    X4VR_TAKE=330 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take330.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P330.1 The log.**
+  * Each ESC logs `view is now PAUSED (IsGamePaused: the ESC menu)` and
+    `CENTRED (PAUSED) from yaw …` with the head's angle at that moment.
+  * `menucam` lists those periods as PAUSED and CENTRED.
+  * No `external/floating` label anywhere (the label no longer exists).
+* **P330.2 Patola: in the ESC menu the cursor is contained in the quad and
+  reaches all four corners**, with the head turned either way when ESC is
+  pressed. **This is the decisive line, and the one most likely to fail.**
+  * If the log says CENTRED but the menu is misfit as in 329, X4 does not
+    rebuild its view while paused. The centring then has to land before the
+    pause takes effect (on the ESC key, before X4 sees it). That would be a
+    new input-side intervention, put to Patola first.
+  * If the log says REFUSED (camera mode) under the pause, the same
+    conclusion follows by another route.
+* **P330.3 The map stays fitted** (329's result, a regression check).
+* **P330.4 Resuming from ESC:** `view is now the cockpit — steering`, and
+  head-look writes the head's angle the next tick. There is no world jump,
+  because the declared pose is X4's camera on both sides.
+
+Protocol (no timed phases; configuration 1, real mouse and keyboard;
+WiVRn):
+1. Start WiVRn and run the line. Load the save. Wait for the "head-look
+   write ARMED" notification.
+2. Open the map once with the head turned and check it is still fitted.
+   Close it.
+3. Turn the head clearly to one side (~30°, a little up or down) and press
+   ESC. Sweep the cursor along all four edges of the ESC menu and into its
+   corners. Press ESC again to resume.
+4. Fly a few seconds. Turn the head to the other side and do step 3 again.
+5. Quit through the ESC menu.
+
+Cost: ~5 minutes. No recording needed: the question is categorical, fitted or
+not, judged within the run.

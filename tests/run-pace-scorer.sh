@@ -27,10 +27,12 @@ LC_ALL=C
 export LC_ALL
 cd "$(dirname "$0")/.." || exit 1
 
-BASE=/tmp/x4vr-take303.log
+# The committed census base since take 329: /tmp/x4vr-take303.log was cleaned
+# out of /tmp by age, and a SKIP with exit 0 passed by testing nothing.
+BASE=${X4VR_CENSUS_BASE:-tests/data/census-base.log}
 if [ ! -f "$BASE" ]; then
-    echo "SKIP  $BASE absent — the planted logs are appended to a real run"
-    exit 0
+    echo "FAIL  $BASE absent — rebuild it with tests/make-census-base.sh"
+    exit 1
 fi
 
 WORK=$(mktemp -d)
