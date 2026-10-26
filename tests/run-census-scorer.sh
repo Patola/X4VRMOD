@@ -709,8 +709,10 @@ mcpaused='[  999989.950] inject  headlook: view is now PAUSED (IsGamePaused: the
 { cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$mcpaused" "$(mcpose 999990.500 2.1700 9.2400)" "$(mcpose 999991.500 2.1700 9.2400)" "$mcup" "$mcrep"; } > /tmp/census-mc-esc-stuck.log
 want "menucam ESC pause frozen -> counted as a menu period" /tmp/census-mc-esc-stuck.log "menucam =>" "FROZEN: in 1 cockpit or ESC-pause period(s)"
 want "menucam ESC pause frozen, asked -> FAIL" /tmp/census-mc-esc-stuck.log FAIL "the centring did not act"
-{ cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$mcpaused" "$(mcpose 999990.500 0.0000 0.0000)" "$(mcpose 999991.500 0.0000 0.0000)" "$mcup" "$mcrep"; } > /tmp/census-mc-esc-ok.log
+mccenp='[  999990.020] inject  headlook: HUD down in the cockpit (PAUSED) — X4'"'"'s camera CENTRED from yaw 2.17 pitch 9.24 to 0,0, so X4'"'"'s menus fill the window'
+{ cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$mcpaused" "$mccenp" "$(mcpose 999990.500 0.0000 0.0000)" "$(mcpose 999991.500 0.0000 0.0000)" "$mcup" "$mcrep"; } > /tmp/census-mc-esc-ok.log
 want "menucam ESC pause centred -> CENTRED" /tmp/census-mc-esc-ok.log "menucam =>" "every cockpit and ESC-pause menu period CENTRED"
+want "menucam ESC pause centred -> its (PAUSED) line counted" /tmp/census-mc-esc-ok.log menucam "1 period(s) centred by X4VR_HEADLOOK_MENU_CENTRE, from +2.17,+9.24"
 mcold='[  999989.950] inject  headlook: view is now external/floating — idle'
 { cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$mcold" "$(mcpose 999990.500 2.1700 9.2400)" "$mcup"; } > /tmp/census-mc-oldlabel.log
 want "menucam pre-329 label -> NOTE names the pause" /tmp/census-mc-oldlabel.log "menucam NOTE" "pre-329 label"

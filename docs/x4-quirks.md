@@ -24810,3 +24810,44 @@ WiVRn):
 
 Cost: ~5 minutes. No recording needed: the question is categorical, fitted or
 not, judged within the run.
+
+## Take 330 — SCORED (2026-10-26)
+
+Patola: *"This time the ESC menu also worked perfectly. I've done several
+changes from map to exit menu and back and forth, pressed ESC and M and at all
+times it was behaving correctly. I think it's fixed now. The view also was
+correct and stable at all moments."*
+
+`score_run.py`: PASS.
+* No X4 or gamescope core in the journal.
+* plasmashell segfaulted twice, in `libKF6Service`, at 01:31. That was 9
+  minutes before the take started: the log was created 01:40:10 and last
+  written 01:44:14. It is outside the run and not attributed to it.
+
+* **P330.1 HELD.**
+  * Each ESC logged `view is now PAUSED (IsGamePaused: the ESC menu)`.
+  * `menucam`: 5 HUD-down periods, **3 of them PAUSED**, all CENTRED, 0.0%
+    out of reach.
+  * Five centrings, from head yaw **+36.72, −43.16, +46.49, −44.13 and
+    −119.26** (the last with the head turned far back).
+  * No `external/floating` label.
+* **P330.2 HELD, the decisive one.** The ESC menu fits with the head turned
+  either way. So **X4 does apply a camera write while paused**, and plan B
+  (intercepting ESC) is not needed.
+* **P330.3 HELD.** The map stayed fitted, through map↔ESC switches without
+  the HUD coming up in between.
+* **P330.4 HELD.** *"The view also was correct and stable at all moments."*
+  Tracking yaw p90 2.71°, pitch p90 3.92°. csmfit 27/27 FIX. cursor-auto 9/9.
+
+**A scorer slip, caught on the real log.** The `menucam` count of centrings
+read 2 where the log had 5: the pattern did not allow the ` (PAUSED)` that
+take 330's build adds to the ESC line. The verdict was right; the count was
+not. The pattern is fixed and the census has a case for it (225/225).
+
+**#46's menus are CLOSED: every full-screen menu, the map and the ESC menu,
+reachable edge to edge with head-look on.** Tagged
+`v0.330-menus-reachable` (a30569b, the code that ran).
+
+**Next, per "Decisions after take 328":** steering A/B with the live toggle
+(B default, F8 or apostrophe). Its geometry was measured on 328B's circles:
+X4's line ends at gaze + 0.5252 × (pointer offset).

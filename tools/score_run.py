@@ -4444,9 +4444,12 @@ def main(path):
         text)]
     mc_armed = re.search(r"\[\s*([\d.]+)\]\s+inject\s+headlook write: "
                          r"ARMED on camera", text)
+    # " (PAUSED)" since take 330: the ESC menu's centring (take 330 counted 2
+    # of its 5 until this matched it).
     mc_centred = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+headlook: HUD down "
-                            r"in the cockpit — X4's camera CENTRED from yaw "
-                            r"(-?[\d.]+) pitch (-?[\d.]+)", text)
+                            r"in the cockpit(?: \(PAUSED\))? — X4's camera "
+                            r"CENTRED from yaw (-?[\d.]+) pitch (-?[\d.]+)",
+                            text)
     # Intent: write mode, not switched off, and a build that HAS the centring
     # (its write report carries the field) -- 328B asked for neither.
     mc_asked = bool(re.search(r"\bX4VR_HEADLOOK_WRITE=1\b", run or "")) and \
