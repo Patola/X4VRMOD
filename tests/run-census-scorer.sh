@@ -454,6 +454,20 @@ vck0='[  999989.000] inject  headlook: view is now the cockpit — steering'
 hup0='[  999989.100] inject  headlook: HUD is now up (IsInPanelMode=0) — steering'
 plant /tmp/census-hud-midrun.log "$vck0" "$hup0" "$drv" "$idn"
 want "identity with no announcement -> FAIL says mid-run" /tmp/census-hud-midrun.log FAIL "mid-run: the gate dropped out"
+# Take 335: off the pilot seat the write stands down by design; identity
+# there is correct. And a NULL HUD at LOAD (before any driven pose) is not
+# teardown -- that run's FAIL said "at TEARDOWN" for frames 2 minutes later.
+sdn='[  999994.000] inject  headlook: out of the pilot seat — the write stands down (on foot X4 does not render through the cockpit'"'"'s free-look, take 334); the picture is a window fixed in front'
+sup='[  999996.000] inject  headlook: in the pilot seat — the write may act'
+plant /tmp/census-seat-idle.log "$vck0" "$hup0" "$drv" "$sdn" "$idn" "$sup"
+if python3 tools/score_run.py /tmp/census-seat-idle.log 2>&1 | grep -q "^FAIL  the pose fell back"; then
+    bad "identity off the pilot seat -> still FAILs (take 335)"
+else
+    ok "identity off the pilot seat -> excused (take 335)"
+fi
+nul0='[  999988.000] inject  camread: X4'"'"'s HUD global is NULL — X4 is tearing the HUD down (exit or load); IsHUDActive is not called while it stays NULL'
+plant /tmp/census-nul-load.log "$nul0" "$vck0" "$hup0" "$drv" "$idn"
+want "NULL at load, identity later -> mid-run, not TEARDOWN (take 335)" /tmp/census-nul-load.log FAIL "mid-run: the gate dropped out"
 
 # ------------------------------------------------ yaw differences wrap at 180
 #

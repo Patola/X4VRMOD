@@ -25398,3 +25398,38 @@ the body, which needs X4's first-person view state found and written like
 the cockpit's (the cockpit hunt took takes 315-321, and X4 may have no such
 state on foot). 335 measures the plant (A) needs and is the first look (B)
 needs.
+
+## Take 335 — SCORED: the mouse turns him again, and GetCameraRotation IS the walking view
+
+PASS. Patola: *"now using both the mouse and the arrows worked. They rotated
+the scene, not the window. However, headlook still rotated the window."*
+
+    off seat   79 s, 77 windows, relative mouse 77/77, nothing dropped
+    mouse-only (19)  GetCameraRotation yaw   FOLLOWS dx  r -1.00  -0.1088 deg/count
+                     GetCameraRotation pitch FOLLOWS dy  r -0.94  -0.1055 deg/count
+                     yaw travel 1994 deg -- no yaw limit on foot
+    head-only (16)   nothing follows the head
+    local / base     static off the seat (no write there now)
+    seat             stood down 2x, resumed 2x
+    cockpit          tracking |X4 - head| median 0.07/0.07, p90 2.45/2.52 deg;
+                     steering A 2574 frames; menus centred
+
+* **P335.1 HELD**: on foot GetCameraRotation is the first-person view, and
+  X4's mouse-look turns it about 0.11 deg per count on both axes, yaw
+  unbounded. That is the read-back any on-foot loop needs.
+* **P335.2, P335.3, P335.4, P335.5 HELD.** The window no longer swings with
+  the mouse or the arrows; the head still looks past its edge, as predicted.
+* **Two scorer defects, fixed.** (1) It FAILed the run for identity poses
+  that all lay off the pilot seat -- the stand-down this take introduced and
+  the scorer did not yet count as idle. (2) It called them "at TEARDOWN" on
+  the strength of a NULL HUD global logged at the LOAD screen, 50 s before
+  the cockpit; teardown now needs the NULL after the last driven pose.
+  Census suite +2.
+
+**Patola's decision:** *"B looks more natural to me so that would be my
+choice, but I would like to keep the A option open if after a few rounds of
+playing with B it feels weird."* So: the head looks independently of the
+body on foot; the mouse/arrows keep turning the body and the walking
+direction. A (the body follows the head through X4's mouse-look, closed on
+GetCameraRotation, gain ~0.11 deg/count) stays the fallback, and nothing
+built for B should close it off.

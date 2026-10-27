@@ -1851,6 +1851,21 @@ def main(path):
             return win
         idle_win = _windows("headlook: view is now") + \
             _windows("headlook: HUD is now")
+        # Since take 335: off the pilot seat the write stands down and
+        # `steering` is false by design, so identity is correct there too.
+        # Take 335's FAIL was exactly those frames, uncounted as idle.
+        seat_open = None
+        for ln in lines:
+            m = re.search(r"\[\s*(\d+\.\d+)\]", ln)
+            if not m:
+                continue
+            if "headlook: out of the pilot seat" in ln:
+                seat_open = float(m.group(1)) if seat_open is None else seat_open
+            elif "headlook: in the pilot seat" in ln and seat_open is not None:
+                idle_win.append((seat_open, float(m.group(1))))
+                seat_open = None
+        if seat_open is not None:
+            idle_win.append((seat_open, float("inf")))
 
         def _in_idle(ln):
             m = re.search(r"\[\s*(\d+\.\d+)\]", ln)
@@ -1867,7 +1882,8 @@ def main(path):
         if excused:
             print(f"pose  {len(excused)} further identity sample(s) fall inside "
                   f"{len(idle_win)} window(s) where head-look ANNOUNCED itself "
-                  f"idle (external/floating view, or HUD down) — identity is "
+                  f"idle (external/floating view, HUD down, or off the pilot seat) "
+                  f"— identity is "
                   f"correct there, and counting them was a false FAIL on takes "
                   f"220 and 221")
         if unlinked:
@@ -1885,6 +1901,19 @@ def main(path):
                             text)
             t_id = [float(m.group(1)) for m in
                     (re.search(r"\[\s*(\d+\.\d+)\]", ln) for ln in ident) if m]
+            # TEARDOWN means the NULL came after play. Take 335's NULL was
+            # the load screen's, 50 s before the cockpit, and every
+            # identity sample came after it -- so this called a mid-run
+            # gap "at TEARDOWN". The NULL must follow the last driven pose.
+            t_dr = [float(m.group(1)) for m in
+                    (re.search(r"\[\s*(\d+\.\d+)\]", ln) for ln in driven) if m]
+            nuls = [float(m.group(1)) for m in re.finditer(
+                r"\[\s*(\d+\.\d+)\][^\n]*X4's HUD global is NULL", text)]
+            late = [t for t in nuls if t_dr and t >= max(t_dr)]
+            nul = None
+            if late:
+                nul = re.search(r"\[\s*(%.3f)\][^\n]*X4's HUD global is NULL"
+                                % late[0], text)
             at_exit = bool(nul and t_id and min(t_id) >= float(nul.group(1)))
             where = (f"at TEARDOWN: X4's HUD global had gone NULL at "
                      f"{float(nul.group(1)):.3f}, and head-look announced "
