@@ -25546,3 +25546,65 @@ Take 335's line plus `X4VR_HEADLOOK_FOOT=1`. WiVRn, configuration 1.
 * **P336.9** scorer PASS.
 
     X4VR_TAKE=336 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take336.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+## Take 336 — SCORED FAIL: the patched branch is the COCKPIT's; on foot X4 exits earlier
+
+Patola: *"When in the cockpit, moving the head would rotate the window in the
+same direction that I turned my head ... by a bit more than I turn. And when
+I leave the cockpit, headlook doesn't work, only mouse turning."* He stopped
+the run there.
+
+    seated   GetCameraRotation yaw FOLLOWS the head with slope 2.020 (43
+             head-only windows; local, our write, slope 1.003)
+             tracking |X4 - head| yaw median 2.47 p90 39.19 -> FAIL
+             menucam: a menu period frozen at -159 deg -> FAIL
+    on foot  GetCameraRotation does NOT follow the head (r 0.00, 11 windows)
+             while the camera's own matrix held it (local r 0.98);
+             the mouse turned the body (r -0.99, -0.12 deg/count); its pitch
+             zeroed in 1098 events, as asked
+    patch    IN, at load
+
+* **P336.2 REFUTED, by exactly the refutation it named:** *"anything in the
+  cockpit differs -- the walking branch would then be taken in the cockpit
+  too."* It is. The retarget only changes what happens when the jne at
+  0x192a2f3 is taken, and the cockpit doubled, so the cockpit takes it.
+  Before the patch, then, X4 never composes the camera's own transform for
+  the player's camera in the cockpit either: the free-look reaches the view
+  through the PLAYER object, whose local transform (vt+0x1488 = 0x13142a0)
+  is built by the first component at player+0x200 (vt+0x68) -- the seat, in
+  the cockpit. Patched, the camera's own was composed on top: twice.
+* **P336.3 REFUTED** on foot. Every exit of 0x1929f70 that a non-NULL
+  controller can reach either composes the camera's own transform (which
+  334/335 refute: our write never showed) or ends at the patched branch
+  (which 336 refutes: it would have shown now). The reference (+0x788)
+  cannot be NULL, or `out` would never have been evaluated and
+  GetCameraRotation could not follow the mouse. **So on foot the camera's
+  controller (+0x18) is NULL and X4 returns at 0x1929ffd** -- deduced, not
+  yet read; the next take logs it.
+* **The wrong turn, recorded:** "B, read statically" named the 0x192a2f3
+  branch walking's because walking is where the write failed; it never
+  established which state takes it, and the resume memory even carried
+  "Unverified: controller NULL vs the branch on foot". A branch read in
+  isolation was given the meaning of the symptom.
+  [[hypothesis-and-fix-in-one-step]]
+* **Retired:** X4VR_HEADLOOK_FOOT now refuses ("the 0x192a2f3 retarget is
+  retired"), so the knob cannot double the cockpit again. The shipping line
+  never carried it.
+
+**The model now:**
+
+    cockpit  camera = player (seat component: carries the free-look)
+             -- 0x1929f70 returns at 0x192a2f3, camera's own NOT composed
+    on foot  camera = player (walking component: body yaw, look pitch)
+             -- 0x1929f70 returns at 0x1929ffd (controller NULL, deduced)
+
+**B, second attempt (proposed, needs Patola's approval as its own patch):**
+the controller-NULL exit at 0x1929ffd (`je 0x192a216`, 0f 84 13 02 00 00)
+retargeted to a stub of ours: if this camera is the player's
+(rbx == [[0x3db6948]+0x3e8]) jump to 0x192a284 -- compose the camera's own
+transform, our head -- else to 0x192a216, X4's return. Scratch register r11
+(unused in the function, dead after the call before it). The cockpit never
+reaches it (its controller exists: 336 proves it); other cameras with no
+controller return exactly as before. On foot: player (body) x head, once.
+Data-only alternative: A (the body follows the head through X4's
+mouse-look, gain ~0.11 deg/count measured in 335).

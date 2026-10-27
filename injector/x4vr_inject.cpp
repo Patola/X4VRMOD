@@ -4770,6 +4770,15 @@ static void foot_patch_at_start() {
         refuse("X4VR_HEADLOOK_FOOT needs X4VR_HEADLOOK_WRITE=1");
         return;
     }
+    // **RETIRED after take 336.** The branch at 0x192a2f3 is the COCKPIT's,
+    // not walking's: retargeted, X4's camera turned 2.02x the head in the
+    // cockpit (player x camera, and the player's seat already carries the
+    // free-look), and on foot nothing changed -- X4 returns earlier there,
+    // at the NULL controller (0x1929ffd). Kept refusing so the knob cannot
+    // double the cockpit again; the sites stay verified in tests/foot.cpp.
+    refuse("the 0x192a2f3 retarget is retired: take 336 doubled the "
+           "cockpit's head-look (that branch is the cockpit's)");
+    return;
     auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
     uintptr_t bad = 0;
     if (!verify_skip_sites(rd, &bad)) {
