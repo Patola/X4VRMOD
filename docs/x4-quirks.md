@@ -25175,3 +25175,55 @@ phases):
 3. Apostrophe for B, a short circle, then quit.
 
 Cost: ~5 minutes. No recording needed.
+
+## Take 333 — SCORED (2026-10-27): steering DONE — A is the target
+
+Patola: *"I tested it (mode A) extensively, it feels very natural this way,
+and the cursor when steering mode is off too. This was what I was achieving
+to get and now I am sure this is what is needed. We won't need mode B."*
+
+`score_run.py` PASS, 38 minutes.
+* **P333.1 HELD.** A drew 56,462 frames. 172 frames had the nose behind the
+  eye and drew nothing. The ring was never drawn at B's position.
+* **P333.2 HELD.** The pointer was recentred at 25/25 engagements.
+* **P333.3, P333.4 HELD.** Menus 20/20 centred; csmfit 615/615; tracking
+  p90 0.88°/0.28°. No crash in the journal.
+
+Tagged **v0.333-steering-a** (495db77). The shipping line is in
+docs/known-good-runs.md: take 333's line with `X4VR_STEER=a`.
+* B stays in the code but is not used.
+* The apostrophe still flips to B. Removing the toggle, or making it A-only,
+  is a small cleanup for when it gets in the way.
+
+## Roadmap after take 333 (Patola, 2026-10-27)
+
+**Next, Patola to choose: (1) mouse controls in walking mode, or (2) aiming
+gimbaled weapons.**
+* **Gimbaled weapons** aim independently at a far point in front of the ship,
+  where the cursor points. The logistics are hard: testing needs ships with
+  each weapon type, and changing ships needs walking, which does not work
+  yet.
+* **A's cost, which (2) runs straight into:** X4 picks and aims at the RAW
+  pointer (gaze + offset), while A draws the ring at nose + offset. So with
+  the head turned, gimbals would aim where the ring is NOT.
+  * Aiming work must either move X4's aim point to the ring's direction, or
+    show where X4 actually aims.
+  * Same family: the cockpit right-click interact menu on objects far to the
+    side (slanted, or closing); it is still drawn raw.
+* My recommendation: (1) walking first. It unblocks the ship-switching (2)
+  needs to test both weapon types, and walking already has known edges: the
+  HUD is head-locked only on foot, and gamescope's `--force-grab-cursor`
+  fix for the view pinned to the floor.
+
+**Later, when refining X4's many views (not now):**
+* **Numpad view rotation in third-person (chase) and target view.** Those
+  keys turn the view there and do nothing now, because head-look took the
+  numpad. They might be restored per view (X4 reports external/floating, see
+  `x4_view()`), by passing the keys through or driving that view's camera.
+  Station construction may use the numpad the same way: check.
+* **Immersive third-person and target views.** They show as a rectangle, not
+  the whole scene; the full field, if feasible.
+* **Menus that switch to the external view are not centred**
+  (X4VR_HEADLOOK_MENU_CENTRE acts in the cockpit and the ESC pause only).
+* **Watch item:** a gamescope SIGSEGV at exit in fclose (take 328; not seen
+  since).
