@@ -50,6 +50,7 @@ extern char **environ;
 #include "../common/x4vr_env.hpp"
 #include "../common/x4vr_share.hpp"
 #include "../common/x4vr_steer.hpp"
+#include "x4vr_foot.hpp"
 #include "x4vr_config.hpp"
 #include "x4vr_inputmap.hpp"
 #include "../common/x4vr_camring.hpp"
@@ -4681,6 +4682,161 @@ static bool steer_key_event(const Sdl3KeyEvent *k, bool consuming) {
     return true;
 }
 
+// ------------------------------------------------ X4VR_FOOTLOG=1
+//
+// What X4's player camera does out of the pilot seat -- read only. See
+// injector/x4vr_foot.hpp for why the walking view's state is not decidable
+// from 0x1933d00 alone. One sample per 50 ms on X4's thread, a transition line
+// whenever the camera, its mode, its attached object or the player's ship
+// status changes, and a window line each second. The player's own mouse motion
+// is summed in the SDL_PeepEvents(GET) walk, where X4 receives it.
+static bool footlog_on() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_FOOTLOG");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
+namespace {
+struct FootMouse {
+    std::atomic<int64_t> dx_milli{0}, dy_milli{0};
+    std::atomic<uint64_t> n{0};
+};
+FootMouse g_footmouse;
+} // namespace
+
+// `UniverseID GetPlayerControlledShipID(void);` and `UniverseID
+// GetPlayerOccupiedShipID(void);` (UniverseID is uint64_t), declared in X4's
+// own Lua. Both test their global before reading through it -- `lea
+// 0x238(%rdx)` first is arithmetic, then `test %rdx,%rdx` and a cmove to a
+// static fallback (tests/run-x4-call-guards.sh, which now tells a lea from a
+// read) -- and the helpers they call (0x1699f20, 0x169af50) read only the
+// player object and its parents.
+static bool x4_player_ship_ids(uint64_t *controlled, uint64_t *occupied) {
+    using Fn = uint64_t (*)();
+    static Fn ctl = [] {
+        Fn f = (Fn)dlsym(RTLD_DEFAULT, "GetPlayerControlledShipID");
+        X4VR_LOG("foot: GetPlayerControlledShipID %s", f ? "resolved" : "NOT FOUND");
+        return f;
+    }();
+    static Fn occ = [] {
+        Fn f = (Fn)dlsym(RTLD_DEFAULT, "GetPlayerOccupiedShipID");
+        X4VR_LOG("foot: GetPlayerOccupiedShipID %s", f ? "resolved" : "NOT FOUND");
+        return f;
+    }();
+    if (!ctl || !occ)
+        return false;
+    *controlled = ctl();
+    *occupied = occ();
+    return true;
+}
+
+static void foot_tick() {
+    if (!footlog_on())
+        return;
+    using namespace x4vr::foot;
+    static double last_sample = 0.0;
+    const double now = mono_seconds();
+    if (now - last_sample < 0.05)
+        return;
+    last_sample = now;
+    static bool said = false;
+    if (!said) {
+        said = true;
+        X4VR_LOG("foot: census ON — read only; a transition line per camera "
+                 "regime, a window line per second");
+    }
+
+    Sample sm;
+    sm.cam = x4_player_camera();
+    if (!sm.cam)
+        return; // the load screen, or X4 tearing down
+    self_read(sm.cam + kCamMode, &sm.mode, sizeof sm.mode);
+    uintptr_t att[2] = {};
+    if (self_read(sm.cam + kCamAttached, att, sizeof att)) {
+        sm.attached = att[0];
+        if (att[0])
+            self_read(att[0], &sm.attached_vt, sizeof sm.attached_vt);
+    }
+    uint64_t ctl = 0, occ = 0;
+    if (x4_player_ship_ids(&ctl, &occ)) {
+        sm.piloting = ctl != 0;
+        sm.occupied = occ != 0;
+    }
+    sm.view = (int)x4_view();
+    sm.hud = x4_hud_slot() ? x4_hud_active() : false;
+    sm.relative = g_relative_mouse.load(std::memory_order_relaxed);
+    X4Rotation r{};
+    if (x4_camera_rotation(&r)) {
+        sm.rot_ok = true;
+        sm.rot_yaw = kRad2Deg * -r.yaw; // head-look's convention, as camread
+        sm.rot_pitch = kRad2Deg * r.pitch;
+        sm.rot_roll = kRad2Deg * r.roll;
+    }
+    sm.local_ok = self_read(sm.cam + kCamLocal, sm.local, sizeof sm.local) &&
+                  x4vr::camwatch::live_transform(sm.local + 4, false);
+    sm.base_ok = self_read(sm.cam + kCamBase, sm.base, sizeof sm.base) &&
+                 x4vr::camwatch::live_transform(sm.base + 4, false);
+    static x4vr::HeadShared *hs = x4vr_head_state();
+    uint64_t updates = 0;
+    sm.head_ok = x4vr::head_share_read(hs, &sm.head_yaw, &sm.head_pitch, &updates);
+
+    static Sample prev;
+    static bool have_prev = false;
+    static Window w;
+    static unsigned transitions = 0;
+    if (!have_prev || !same_regime(prev, sm)) {
+        if (transitions++ < 400) {
+            char line[768];
+            format_regime(line, sizeof line, sm);
+            X4VR_LOG("%s", line);
+        }
+        if (have_prev && (prev.cam != sm.cam || prev.attached != sm.attached))
+            w.forget_matrices();
+    }
+    prev = sm;
+    have_prev = true;
+    w.add(now, sm);
+
+    if (now - w.t0 >= 1.0) {
+        w.mouse_dx = 1e-3 * (double)g_footmouse.dx_milli.exchange(0);
+        w.mouse_dy = 1e-3 * (double)g_footmouse.dy_milli.exchange(0);
+        w.mouse_n = g_footmouse.n.exchange(0);
+        char line[1024];
+        format_window(line, sizeof line, w, now - w.t0);
+        X4VR_LOG("%s", line);
+        // Paced by the log, never by time: the protocol's first step is
+        // leaving the seat, and the census has enough once the player has
+        // moved the mouse both ways off the seat and turned the head there.
+        // "Off the seat" only after the player has piloted: the load screen
+        // has a camera and no ship either.
+        static double off_seat_s = 0.0, mouse_x = 0.0, mouse_y = 0.0, head = 0.0;
+        static bool piloted = false, said_off = false, said_enough = false;
+        if (sm.piloting)
+            piloted = true;
+        if (piloted && !sm.piloting) {
+            off_seat_s += now - w.t0;
+            mouse_x += std::fabs(w.mouse_dx);
+            mouse_y += std::fabs(w.mouse_dy);
+            head += w.head.travel_yaw + w.head.travel_pitch;
+            if (!said_off) {
+                said_off = true;
+                X4VR_LOG("milestone: foot census — out of the seat (camera "
+                         "mode %d). Go ahead with the protocol.", (int)sm.mode);
+            }
+        }
+        if (said_off && !said_enough && off_seat_s >= 60.0 &&
+            mouse_x >= 1500.0 && mouse_y >= 600.0 && head >= 180.0) {
+            said_enough = true;
+            X4VR_LOG("milestone: foot census has enough (%.0f s off the seat, "
+                     "mouse %.0f/%.0f, head %.0f deg). Finish what you are "
+                     "doing, sit back down, quit.",
+                     off_seat_s, mouse_x, mouse_y, head);
+        }
+        w.restart(now);
+    }
+}
+
 // **Task #75's fix: where the tick's cadence comes from.**
 //
 // 0 = X4's event drain, exactly as every take so far. Anything else is a rate in
@@ -6543,6 +6699,7 @@ void SDL_PumpEvents(void) {
         csmfit_tick();
         fullscreen_menu_tick();
         steer_tick();
+        foot_tick();
         pumprate_report();
     }
     real_fn();
@@ -6678,6 +6835,13 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
                     // The player's own mouse, competing for the same channel.
                     g_evflow.got_foreign.fetch_add(1,
                                                    std::memory_order_relaxed);
+                    if (footlog_on()) {
+                        g_footmouse.dx_milli.fetch_add(
+                            (int64_t)(e->xrel * 1000.f), std::memory_order_relaxed);
+                        g_footmouse.dy_milli.fetch_add(
+                            (int64_t)(e->yrel * 1000.f), std::memory_order_relaxed);
+                        g_footmouse.n.fetch_add(1, std::memory_order_relaxed);
+                    }
                 }
             }
             if (e->type == SDL_EV_KEY_DOWN || e->type == SDL_EV_KEY_UP)

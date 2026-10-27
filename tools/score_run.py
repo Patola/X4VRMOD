@@ -4633,6 +4633,147 @@ def main(path):
         print(f"steer   not asked; mousesteeringline restored to "
               f"'{st_rest.group(2)}' from the overlay's earlier run")
 
+    # --- foot: X4VR_FOOTLOG=1, what X4's player camera does out of the seat
+    #
+    # Read-only census (injector/x4vr_foot.hpp). Each second: the player's
+    # mouse, the head, and per angle source -- GetCameraRotation (rot), the
+    # camera's local transform (+0x5a0, where head-look writes in the
+    # cockpit) and its base (+0x6f0) -- the net and travel of yaw and pitch.
+    # Grouped by regime (camera mode, piloting). What FOLLOWS the mouse is a
+    # correlation over mouse-only windows; what follows the head, over
+    # head-only windows. "Nothing we read" is an answer the block can give,
+    # and it means the walking view lives in the attached object.
+    ft_asked = bool(re.search(r"\bX4VR_FOOTLOG=[1-9]", run or ""))
+    ft_on = "foot: census ON" in text
+    ft_reg = re.findall(
+        r"\[\s*([\d.]+)\]\s+inject\s+foot: regime camera (\S+) mode (-?\d+) "
+        r"attached (\S+) \(vtable (\S+)\) \| piloting (\d) occupied (\d) \| "
+        r"view (\S+) hud (\d) rel (\d) \| rot (\S+) (\S+) (\S+)", text)
+    _ft_t = (r"(?:-|net (\S+) (\S+) travel (\S+) (\S+) at (\S+) (\S+))")
+    _ft_m = (r"(?:-|net (\S+) (\S+) travel (\S+) (\S+) at (\S+) (\S+) rot (\S+) "
+             r"moved (\d+) pos (\S+))")
+    ft_win = re.findall(
+        r"foot: window (\S+) s n (\d+) mode (-?\d+) piloting (\d) occupied (\d) "
+        r"view (\S+) hud (\d) rel (\d) \| mouse n (\d+) dx (\S+) dy (\S+) \| "
+        r"head " + _ft_t + r" \| rot " + _ft_t + r" \| local " + _ft_m +
+        r" \| base " + _ft_m, text)
+    if ft_asked and not ft_on:
+        fails.append("X4VR_FOOTLOG asked but the census never started")
+    if ft_on:
+        def _f(x):
+            try:
+                return float(x)
+            except (TypeError, ValueError):
+                return None
+        wins = []
+        for g in ft_win:
+            w = {"secs": _f(g[0]), "mode": int(g[2]), "pilot": g[3] == "1",
+                 "occ": g[4] == "1", "view": g[5], "hud": g[6] == "1",
+                 "rel": g[7] == "1", "mn": int(g[8]), "dx": _f(g[9]),
+                 "dy": _f(g[10])}
+            off = 11
+            for src, n in (("head", 6), ("rot", 6), ("local", 9), ("base", 9)):
+                v = g[off:off + n]
+                off += n
+                if v[0] == "":
+                    w[src] = None
+                    continue
+                d = {"ny": _f(v[0]), "np": _f(v[1]), "ty": _f(v[2]),
+                     "tp": _f(v[3]), "ay": _f(v[4]), "ap": _f(v[5])}
+                if n == 9:
+                    d.update(rot=_f(v[6]), moved=int(v[7]), pos=_f(v[8]))
+                w[src] = d
+            wins.append(w)
+        print(f"foot    census ON: {len(ft_reg)} regime line(s), {len(wins)} "
+              f"window(s)")
+        for t, cam, mode, att, vt, pil, occ, view, hud, rel, ry, rp, rr in ft_reg[:16]:
+            print(f"foot    t {float(t):9.1f}  mode {mode:>2}  piloting {pil} "
+                  f"occupied {occ}  view {view:<8} hud {hud} rel {rel}  "
+                  f"camera {cam} attached {att} vtable {vt}  rot {ry} {rp} {rr}")
+        if len(ft_reg) > 16:
+            print(f"foot    ... {len(ft_reg) - 16} more regime line(s)")
+
+        def _corr(xs, ys):
+            n = len(xs)
+            if n < 3:
+                return None, None
+            mx, my = sum(xs) / n, sum(ys) / n
+            sxx = sum((x - mx) ** 2 for x in xs)
+            syy = sum((y - my) ** 2 for y in ys)
+            sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+            if sxx <= 0 or syy <= 0:
+                return 0.0, 0.0
+            return sxy / (sxx * syy) ** 0.5, sxy / sxx
+
+        groups = {}
+        for w in wins:
+            groups.setdefault((w["mode"], w["pilot"]), []).append(w)
+        off_seat = [k for k in groups if not k[1]]
+        for (mode, pilot), ws in sorted(groups.items()):
+            secs = sum(w["secs"] or 0 for w in ws)
+            mx = sum(abs(w["dx"] or 0) for w in ws)
+            my = sum(abs(w["dy"] or 0) for w in ws)
+            rel = sum(1 for w in ws if w["rel"])
+            label = "PILOTING" if pilot else "OFF THE SEAT"
+            print(f"foot    mode {mode} {label}: {secs:.0f} s, mouse |dx| "
+                  f"{mx:.0f} |dy| {my:.0f}, relative mouse in {rel}/{len(ws)} "
+                  f"window(s)")
+            for src in ("head", "rot", "local", "base"):
+                ds = [w[src] for w in ws if w[src]]
+                if not ds:
+                    print(f"foot      {src:<5} never read")
+                    continue
+                ty = sum(d["ty"] or 0 for d in ds)
+                tp = sum(d["tp"] or 0 for d in ds)
+                extra = ""
+                if "rot" in ds[0]:
+                    extra = (f", any rotation {sum(d['rot'] or 0 for d in ds):.1f}"
+                             f" deg, translation moved up to "
+                             f"{max(d['pos'] or 0 for d in ds):.3f} m")
+                print(f"foot      {src:<5} yaw travel {ty:8.1f} pitch travel "
+                      f"{tp:7.1f} deg{extra}")
+            # Mouse-only: the mouse moved, the head nearly did not.
+            mo = [w for w in ws if w["head"] and abs(w["dx"] or 0) + abs(w["dy"] or 0) >= 30
+                  and (w["head"]["ty"] or 0) + (w["head"]["tp"] or 0) < 3.0]
+            ho = [w for w in ws if w["head"] and abs(w["dx"] or 0) + abs(w["dy"] or 0) < 5
+                  and (w["head"]["ty"] or 0) + (w["head"]["tp"] or 0) >= 5.0]
+            follows_mouse, follows_head = [], []
+            for src in ("rot", "local", "base"):
+                for axis, mk, ak in (("yaw", "dx", "ny"), ("pitch", "dy", "np")):
+                    pts = [(w[mk], w[src][ak]) for w in mo
+                           if w[src] and w[mk] is not None and w[src][ak] is not None]
+                    r, gain = _corr([a for a, _ in pts], [b for _, b in pts])
+                    if r is not None:
+                        tag = "FOLLOWS" if abs(r) >= 0.7 else "does not follow"
+                        print(f"foot      mouse-only ({len(pts)} windows): "
+                              f"{src} {axis} {tag} mouse {mk} (r {r:+.2f}, "
+                              f"{gain:+.4f} deg/count)")
+                        if abs(r) >= 0.7:
+                            follows_mouse.append(f"{src} {axis}")
+                    hk = "ny" if axis == "yaw" else "np"
+                    pts = [(w["head"][hk], w[src][ak]) for w in ho
+                           if w[src] and w["head"][hk] is not None
+                           and w[src][ak] is not None]
+                    r, gain = _corr([a for a, _ in pts], [b for _, b in pts])
+                    if r is not None:
+                        tag = "FOLLOWS" if abs(r) >= 0.7 else "does not follow"
+                        print(f"foot      head-only ({len(pts)} windows): "
+                              f"{src} {axis} {tag} the head (r {r:+.2f}, "
+                              f"slope {gain:+.3f})")
+                        if abs(r) >= 0.7:
+                            follows_head.append(f"{src} {axis}")
+            if not pilot:
+                print(f"foot => mode {mode} off the seat: the mouse turns "
+                      + (", ".join(follows_mouse) if follows_mouse else
+                         "NOTHING we read (the walking view lives elsewhere — "
+                         "the attached object)" if mo else
+                         "? (no mouse-only window)")
+                      + "; the head turns "
+                      + (", ".join(follows_head) if follows_head else
+                         "nothing" if ho else "? (no head-only window)"))
+        if not off_seat:
+            print("foot => NOT EXERCISED: no window off the pilot seat")
+
     # --- the Lua reconnaissance (X4VR_LUA=1): which state, source or bytecode
     lua_rows = re.findall(r"lua\[(buf|file)\] (.*?) \((\d+) bytes, "
                           r"(source|bytecode|by path), L=(\S+)\)", text)

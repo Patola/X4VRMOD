@@ -6,16 +6,48 @@
 # selector matches nothing without a word, so a typo would ship an extension
 # that silently does nothing -- the run would read as "with the extension".
 #
-# X4's libraries are Egosoft's and live in /tmp/x4-ui only (extracted by
-# tools/extract_glsl.py's walk); without them this SKIPS, loudly.
+# X4's libraries are Egosoft's: read from the game's own .cat/.dat (the last
+# archive that carries a file wins, as in X4), into a temporary directory that
+# is removed on exit -- never committed. It used to need a /tmp/x4-ui left by
+# an earlier extraction, and SKIPped with exit 0 once /tmp was cleaned by age:
+# a suite that passed by testing nothing. Now only a missing GAME skips.
 set -uo pipefail
 CDPATH=
 cd "$(dirname "$0")/.." || exit 1
-LIB=/tmp/x4-ui/libraries
-if [ ! -d "$LIB" ]; then
-    echo "SKIP  $LIB absent — extract X4's libraries to check the selectors"
+GAME=${X4VR_GAME_DIR:-"/nvme/SteamLibrary/steamapps/common/X4 Foundations"}
+if [ ! -f "$GAME/01.cat" ]; then
+    echo "SKIP  no X4 at $GAME — the selectors are unchecked"
     exit 0
 fi
+LIB=$(mktemp -d)
+trap 'rm -rf "$LIB"' EXIT
+python3 -I - "$GAME" "$LIB" extension/*/libraries/*.xml <<'PY' || { echo "FAIL  could not read X4's libraries from $GAME"; exit 1; }
+import os, sys
+game, out, diffs = sys.argv[1], sys.argv[2], sys.argv[3:]
+want = {"libraries/" + os.path.basename(d) for d in diffs}
+found = {}
+for i in range(1, 10):
+    cat = os.path.join(game, "%02d.cat" % i)
+    if not os.path.exists(cat):
+        continue
+    off = 0
+    with open(cat, encoding="utf-8", errors="replace") as c:
+        for line in c:
+            parts = line.rstrip("\n").rsplit(" ", 3)
+            if len(parts) != 4:
+                continue
+            size = int(parts[1])
+            if parts[0] in want:
+                found[parts[0]] = (cat[:-3] + "dat", off, size)
+            off += size
+for path, (dat, off, size) in found.items():
+    with open(dat, "rb") as d:
+        d.seek(off)
+        data = d.read(size)
+    with open(os.path.join(out, os.path.basename(path)), "wb") as o:
+        o.write(data)
+sys.exit(0 if found else 1)
+PY
 python3 - "$LIB" <<'PY'
 import glob, os, sys
 import xml.etree.ElementTree as ET

@@ -934,5 +934,28 @@ want "two families -> both axis lines print" /tmp/census-pad-both.log pad "joyst
 
 absent "no pad line -> silent" "$BASE" pad
 
+# ------------------------------------------ X4VR_FOOTLOG: the on-foot census
+# The logs come from x4vr_test_foot --emit, i.e. the injector's own
+# accumulation and formatters, so the regex is checked against what is
+# printed rather than a hand copy of it.
+FOOT=build/tests/x4vr_test_foot
+if [ ! -x "$FOOT" ]; then
+    bad "foot: $FOOT not built — the census cases cannot run"
+else
+    sed 's/env: run = /env: run = X4VR_FOOTLOG=1 /' "$BASE" > /tmp/census-ft-base.log
+    { cat /tmp/census-ft-base.log; "$FOOT" --emit follows; } > /tmp/census-ft-follows.log
+    want "foot follows -> census and regimes" /tmp/census-ft-follows.log "foot " "census ON: 2 regime line(s), 30 window(s)"
+    want "foot follows -> seated head-only: local follows the head (the write)" /tmp/census-ft-follows.log "foot " "head-only (6 windows): local yaw FOLLOWS the head"
+    want "foot follows -> seated pointer moves nothing" /tmp/census-ft-follows.log "foot " "mouse-only (4 windows): local yaw does not follow mouse dx"
+    want "foot follows -> off-seat verdict names the mouse's matrices" /tmp/census-ft-follows.log "foot =>" "mode 1 off the seat: the mouse turns rot yaw, rot pitch, local pitch, base yaw; the head turns nothing"
+    want "foot follows -> the gain is read with its sign" /tmp/census-ft-follows.log "foot " "base yaw FOLLOWS mouse dx (r -1.00, -0.1000 deg/count)"
+    { cat /tmp/census-ft-base.log; "$FOOT" --emit nothing; } > /tmp/census-ft-nothing.log
+    want "foot nothing -> says the view lives elsewhere" /tmp/census-ft-nothing.log "foot =>" "the mouse turns NOTHING we read (the walking view lives elsewhere — the attached object)"
+    { cat /tmp/census-ft-base.log; "$FOOT" --emit seated; } > /tmp/census-ft-seated.log
+    want "foot seated only -> NOT EXERCISED" /tmp/census-ft-seated.log "foot =>" "NOT EXERCISED: no window off the pilot seat"
+    want "foot asked, never started -> FAIL" /tmp/census-ft-base.log "FAIL|  - " "X4VR_FOOTLOG asked but the census never started"
+    absent "foot not asked, no census -> silent" "$BASE" "foot "
+fi
+
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

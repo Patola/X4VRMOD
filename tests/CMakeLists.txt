@@ -197,6 +197,10 @@ add_executable(x4vr_test_csmfit csmfit.cpp)
 # real binary, the nose against rows_for, the B/A geometry, the line quad and
 # the config fork's insert/restore. Self-checking.
 add_executable(x4vr_test_steer steer.cpp)
+# X4VR_FOOTLOG: angles from X4's matrix convention, the roll yaw/pitch miss,
+# the window across the +-180 seam, a camera change, the line's shape.
+# Self-checking.
+add_executable(x4vr_test_foot foot.cpp)
 # The content.xml fork that enables our extensions for the modded session.
 add_executable(x4vr_test_content_fork content_fork.cpp)
 target_link_libraries(x4vr_test_camwatch PRIVATE Threads::Threads)

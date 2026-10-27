@@ -25227,3 +25227,88 @@ gimbaled weapons.**
   (X4VR_HEADLOOK_MENU_CENTRE acts in the cockpit and the ESC pause only).
 * **Watch item:** a gamescope SIGSEGV at exit in fclose (take 328; not seen
   since).
+
+## Walking mode, step 1: what X4's camera does out of the seat (P334)
+
+Patola, 2026-10-27: *"go ahead with walking mode first"*.
+
+**What is known, from the code and the record (no on-foot run since take 321):**
+* Head-look's write refuses any camera mode but 0 (`camwrite_ready`: "the
+  camera is in mode N, not the cockpit's 0"), so on foot it writes nothing.
+  `steering` is then false and the layer declares identity: the picture is a
+  window fixed in front of the play space (take 116's "a quad put at my
+  front"). That is what "walking doesn't work" is, as far as the code says.
+  None of takes 329-333 left the seat; older logs are gone from /tmp.
+* 0x1933d00 dispatches on camera+0x880: **0** the cockpit (free-look in the
+  matrix, read 2026-10-02); **1** jumps straight to the compose -- NO angle
+  update at all, the stored transform is only re-based and written back;
+  **2/3** and **4** orbit with the mouse on the external parameters
+  (+0x6ac/+0x6b0 limits, +0x6b8/+0x6bc speeds); >4 elsewhere. Which one
+  walking uses is not decidable statically; `<playercamera>` has no
+  first-person look parameters at all.
+* X4's UI receives a `gameplanchange` event naming `cockpit`, `external`,
+  `firstperson` and `externalfirstperson`; on `firstperson` the HUD drops the
+  radar and `firstperson_crosshair` takes over. That is Lua-side only.
+* Picking on foot goes through the frame centre (the crosshair): X4 hides
+  the pointer there (docs/frame-analysis.md, "The three cursor quirks are one
+  bug", quirk 3).
+
+**The target (Patola's spec where he gave one, mine where marked):**
+the head turns the view freely on foot; the mouse keeps turning the body as
+X4 does (*mine*); the minimal HUD is head-locked on foot (Patola,
+2026-09-02: *"When in walking mode it makes sense for the minimal HUD to stay
+headlocked"*); X4 picks through the frame centre, so with the view on the
+head the pick follows the gaze (*mine, to confirm*).
+
+**Built: `X4VR_FOOTLOG=1`** (`injector/x4vr_foot.hpp`, read only). Every
+50 ms on X4's thread: the camera, its mode, its attached object (+0x780) and
+that object's vtable, `GetPlayerControlledShipID`/`GetPlayerOccupiedShipID`
+(declared in X4's Lua as `UniverseID f(void)`; both test their global -- the
+guard checker now tells a `lea` from a read and has controls for both),
+`GetCameraRotation`, the camera's local (+0x5a0..) and base (+0x6f0..)
+transforms, the head, and the player's own mouse motion summed where X4
+receives it. A `foot: regime` line on every change of camera / mode /
+attached / piloting / occupied; a `foot: window` line each second with the
+net and travel of yaw and pitch per source, any rotation (geodesic, so a roll
+is not missed) and the translation's displacement. Milestones: "out of the
+seat" (only after the player has piloted, so the load screen cannot fire it)
+and "has enough" (60 s off the seat, mouse both ways, head turned). Scorer
+block `foot`: per regime, which source FOLLOWS the mouse (correlation over
+mouse-only windows, with the gain's sign) and which follows the head
+(head-only windows); "NOTHING we read" is a verdict it can give. Tests:
+tests/foot.cpp (angles against rows_for, the seam, a roll, a camera change,
+the line); its `--emit` feeds the census suite the real formatter's output
+(249 cases).
+
+**Predictions, before the take:**
+* **P334.1** out of the seat the camera reports a mode other than 0 -- my
+  guess **1**, the path with no angle update -- with another attached object
+  (the character), `piloting 0` and `occupied 1` inside the ship; back in the
+  seat, mode 0 and `piloting 1` again. Refutation: mode 0 on foot, which
+  would make the refusal not the reason nothing follows the head.
+* **P334.2** on foot **the head turns nothing** (head-only windows: no source
+  follows), and the log carries "REFUSED — the camera is in mode N". In the
+  headset: a fixed window in front, black past its edge when the head turns.
+  Refutation: something follows the head -- then something already carries
+  it and the census names it.
+* **P334.3** the mouse on foot: **its X turns nothing we read** (the body
+  turns, in the attached object), **its Y turns the local matrix's pitch**
+  and GetCameraRotation's. Medium confidence. Refutation: local yaw follows
+  mouse X -- the walking view then lives in the camera's own matrix and the
+  cockpit's write route applies almost as is; or nothing follows either axis
+  -- both live in the character.
+* **P334.4** the control: seated, head-only windows show the local matrix
+  following the head (head-look's own write), and the cockpit pointer moves
+  no matrix. Relative mouse is ON off the seat (X4's mouse-look) and off in
+  the cockpit.
+* **P334.5** nothing else changes -- the census writes nothing: menus
+  centred, steering A, csmfit, tracking as in 333; scorer PASS.
+
+**Take 334's line** = the shipping line (take 333's, `X4VR_STEER=a`) plus `X4VR_FOOTLOG=1`; nothing else differs. WiVRn, configuration 1.
+
+    X4VR_TAKE=334 X4VR_FOOTLOG=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take334.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+**What comes after** depends on P334.3, and each route is put to Patola
+before it is built: a write into the state the census names (a new write
+target, the cockpit write's sibling), or, if the walking view lives in the
+character, a read of that object first.

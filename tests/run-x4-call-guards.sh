@@ -45,13 +45,17 @@ bad() { printf 'FAIL  %s\n' "$1"; fail=1; }
 # of GetCurrentGameTime -- 0x33 bytes -- into the next function's
 # `mov 0x3db6948(%rip),%rdx` and called it UNGUARDED. A window is a guess
 # about where a function ends; the symbol table knows.
-classify() {
-    local name=$1 addr size
-    read -r addr size < <(nm -D -S --defined-only "$X4" |
-        awk -v n="$name" '$4==n{print $1, $2}')
-    [ -n "$addr" ] && [ -n "$size" ] || { echo "MISSING"; return; }
-    objdump -d --no-show-raw-insn --start-address=0x"$addr" \
-        --stop-address=$(printf '0x%x' $((0x$addr + 0x$size))) "$X4" |
+# classify_listing reads an objdump listing on stdin, so the controls below can
+# feed it listings X4 does not happen to contain.
+#
+# **`lea` is arithmetic, not a read.** GetPlayerControlledShipID (and its
+# siblings) open with `mov <global>(%rip),%rdx; lea 0x238(%rdx),%rax; test
+# %rdx,%rdx; ...; cmove <fallback>,%rax`: the lea only forms an address and the
+# cmove replaces it when the global is NULL. The first version read the lea's
+# `(%rdx)` as a dereference and called it UNGUARDED. But a register FORMED from
+# the global is as dangerous as the global itself, so a lea's destination is
+# tracked, and reading through it before the test is UNGUARDED too.
+classify_listing() {
     awk '
         /:\t[a-z]/ {
             ins = $0
@@ -59,13 +63,28 @@ classify() {
             sub(/ *#.*/, "", ins);          # drop objdump'"'"'s "# addr <sym>"
             if (reg == "" && match(ins, /^mov +0x[0-9a-f]+\(%rip\),%r[a-z0-9]+/)) {
                 reg = ins; sub(/.*,%/, "", reg); sub(/[ \t].*/, "", reg)
+                nd = 0
                 next
             }
             if (reg != "") {
                 t = "test +%" reg ",%" reg
                 if (ins ~ t) { print "GUARDED"; done = 1; exit }
+                if (ins ~ /^lea /) {
+                    m = "\\(%" reg "[,)]"
+                    if (ins ~ m) {
+                        d = ins; sub(/.*,%/, "", d); sub(/[ \t].*/, "", d)
+                        der[++nd] = d
+                    }
+                    next
+                }
                 m = "\\(%" reg "[,)]"
                 if (ins ~ m) { print "UNGUARDED:" reg; done = 1; exit }
+                for (i = 1; i <= nd; i++) {
+                    if (der[i] == "") continue
+                    m = "\\(%" der[i] "[,)]"
+                    if (ins ~ m) { print "UNGUARDED:" reg; done = 1; exit }
+                    if (ins ~ (",%" der[i] "$")) der[i] = ""
+                }
                 w = ",%" reg "$"
                 if (ins ~ w) reg = ""       # overwritten before any use
             }
@@ -76,6 +95,16 @@ classify() {
             # window cut its `test %rax,%rax` in half. Unknown is unsafe.
             if (!done) print (reg != "" ? "UNDECIDED:" reg : "NOLOAD")
         }'
+}
+
+classify() {
+    local name=$1 addr size
+    read -r addr size < <(nm -D -S --defined-only "$X4" |
+        awk -v n="$name" '$4==n{print $1, $2}')
+    [ -n "$addr" ] && [ -n "$size" ] || { echo "MISSING"; return; }
+    objdump -d --no-show-raw-insn --start-address=0x"$addr" \
+        --stop-address=$(printf '0x%x' $((0x$addr + 0x$size))) "$X4" |
+    classify_listing
 }
 
 # Controls first: the classifier must see both kinds.
@@ -90,6 +119,21 @@ c=$(classify IsExternalViewActive)
 c=$(classify GetCameraRotation)
 [ "$c" = "GUARDED" ] && ok "control: GetCameraRotation (late load) is guarded" \
     || bad "control: GetCameraRotation classified '$c', expected GUARDED"
+
+# A lea off the global before its test: arithmetic, then the test -- guarded.
+c=$(classify GetPlayerControlledShipID)
+[ "$c" = "GUARDED" ] && ok "control: GetPlayerControlledShipID (lea, then test) is guarded" \
+    || bad "control: GetPlayerControlledShipID classified '$c', expected GUARDED"
+# The same shape with a READ through the lea's register before the test. X4
+# has no such function to point at, so it is fed a listing.
+c=$(printf '  1:\tmov    0x10(%%rip),%%rdx\n  2:\tlea    0x238(%%rdx),%%rax\n  3:\tmov    (%%rax),%%rdi\n  4:\ttest   %%rdx,%%rdx\n' |
+    classify_listing)
+[ "$c" = "UNGUARDED:rdx" ] && ok "control: a read through a lea of the global before its test is UNGUARDED" \
+    || bad "control: lea-then-read classified '$c', expected UNGUARDED:rdx"
+c=$(printf '  1:\tmov    0x10(%%rip),%%rdx\n  2:\tlea    0x238(%%rdx),%%rax\n  3:\tmov    0x8(%%rsp),%%rax\n  4:\tmov    (%%rax),%%rdi\n  5:\ttest   %%rdx,%%rdx\n' |
+    classify_listing)
+[ "$c" = "GUARDED" ] && ok "control: a lea register overwritten before the read is no longer the global's" \
+    || bad "control: lea-overwritten classified '$c', expected GUARDED"
 
 # 0x33 bytes, and its neighbour loads 0x3db6948 into %rdx 0x12 bytes past its
 # last `ret`: the function that exposed the fixed window.
