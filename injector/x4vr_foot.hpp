@@ -29,6 +29,10 @@
 #include <cstdio>
 #include <cstring>
 
+#include <cerrno>
+#include <sys/mman.h>
+#include <unistd.h>
+
 namespace x4vr::foot {
 
 constexpr uintptr_t kCamAttached = 0x780; // what the camera hangs from
@@ -434,6 +438,46 @@ template <class Reader> bool verify_null_exit_sites(Reader read, uintptr_t *bad)
     memcpy(&r, kLocalTail.bytes + 18, 4); // the tail's jmp: the compose
     if (kLocalTail.va + 22 + (intptr_t)r != kLocalCompose.va) {
         *bad = kLocalTail.va + 17;
+        return false;
+    }
+    return true;
+}
+
+// The pages a write of `len` bytes at `addr` touches. Take 337 refused the
+// second patch because the je's rel32 (0x1929fff..0x192a002) crosses
+// 0x192a000; both pages are made writable for the copy instead.
+inline void pages_of(uintptr_t addr, size_t len, uintptr_t page,
+                     uintptr_t *first, size_t *count) {
+    *first = addr & ~(page - 1);
+    const uintptr_t last = (addr + len - 1) & ~(page - 1);
+    *count = (size_t)((last - *first) / page) + 1;
+}
+
+// Copy `n` bytes over code at `at`: every page it touches made writable,
+// the copy, the pages given back read+execute, the bytes read back. `err`
+// says which step failed. tests/foot.cpp runs it across a page boundary in a
+// read+execute mapping of its own.
+inline bool patch_code(uintptr_t at, const void *src, size_t n, char *err,
+                       size_t errlen) {
+    const long page = sysconf(_SC_PAGESIZE);
+    uintptr_t pg = 0;
+    size_t npg = 0;
+    pages_of(at, n, (uintptr_t)page, &pg, &npg);
+    const size_t span = npg * (size_t)page;
+    if (mprotect((void *)pg, span, PROT_READ | PROT_WRITE | PROT_EXEC) != 0 &&
+        mprotect((void *)pg, span, PROT_READ | PROT_WRITE) != 0) {
+        snprintf(err, errlen, "mprotect(rw) %#lx+%zu page(s): %s",
+                 (unsigned long)pg, npg, strerror(errno));
+        return false;
+    }
+    memcpy((void *)at, src, n);
+    if (mprotect((void *)pg, span, PROT_READ | PROT_EXEC) != 0) {
+        snprintf(err, errlen, "mprotect(rx) %#lx+%zu page(s): %s",
+                 (unsigned long)pg, npg, strerror(errno));
+        return false;
+    }
+    if (memcmp((const void *)at, src, n) != 0) {
+        snprintf(err, errlen, "read-back of %#lx differs", (unsigned long)at);
         return false;
     }
     return true;

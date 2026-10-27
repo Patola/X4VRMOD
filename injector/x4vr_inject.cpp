@@ -4805,25 +4805,12 @@ static void foot_patch_at_start() {
         refuse("the stub is out of rel32 reach of 0x1929ffd");
         return;
     }
-    const uintptr_t pg = kNullRel32 & ~(uintptr_t)(page - 1);
-    if (((kNullRel32 + 3) & ~(uintptr_t)(page - 1)) != pg) {
-        refuse("the je's rel32 straddles a page");
-        return;
-    }
-    if (mprotect((void *)pg, (size_t)page, PROT_READ | PROT_WRITE | PROT_EXEC) != 0 &&
-        mprotect((void *)pg, (size_t)page, PROT_READ | PROT_WRITE) != 0) {
-        char why[160];
-        snprintf(why, sizeof why, "mprotect(rw) %#lx: %s", (unsigned long)pg,
-                 strerror(errno));
-        refuse(why);
-        return;
-    }
-    memcpy((void *)kNullRel32, &want, 4);
-    if (mprotect((void *)pg, (size_t)page, PROT_READ | PROT_EXEC) != 0) {
-        char why[160];
-        snprintf(why, sizeof why, "mprotect(rx) %#lx: %s", (unsigned long)pg,
-                 strerror(errno));
-        refuse(why);
+    // Take 337: the rel32 (0x1929fff..0x192a002) crosses a page boundary,
+    // and the first version refused on that. patch_code makes every page it
+    // touches writable.
+    char err[200] = "";
+    if (!patch_code(kNullRel32, &want, 4, err, sizeof err)) {
+        refuse(err);
         return;
     }
     int32_t got = 0;

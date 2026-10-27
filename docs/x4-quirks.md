@@ -25653,3 +25653,69 @@ WiVRn, configuration 1.
 * **P337.9** scorer PASS.
 
     X4VR_TAKE=337 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take337.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+## Take 337 — SCORED FAIL: the second patch REFUSED itself (its four bytes cross a page); the deduction HELD
+
+Patola: *"a bit better now ... The cockpit however behaves well. When I
+leave the cockpit ... moving the mouse moves the scene, but turning the head
+reveals the scene to be in a window ... it's the invisible mouse cursor (the
+center of the window where the scene is) that determines if the object is
+highlighted."* Also: *"The start menu ... seems to appear and be contained in
+a smaller area than before, and the cursor is limited to that area. The
+savegame loading screen seems to be a huge window, now with a mouse cursor
+that goes far away (but not infinitely)."*
+
+    patch     REFUSED at load: "the je's rel32 straddles a page"
+              (0x1929fff..0x192a002 crosses 0x192a000)
+    census    seated: controller non-NULL (three different ones over the
+              run); on foot: controller (nil)
+    seated    head-only slope 0.98 yaw / 0.96 pitch; tracking median
+              0.17/0.09, p90 2.01/1.27 -- the cockpit as in 335
+    on foot   = take 335: the mouse turns the body, nothing follows the head
+
+* **P337.1 REFUTED -- by my own guard.** The rel32 the patch writes crosses a
+  page boundary, the injector refused (correctly: it would have made only one
+  of the two pages writable), and nothing was patched. I never checked the
+  address against a page before the handoff, and no test covered it. So on
+  foot this take repeated 335, which is exactly what Patola saw, the
+  highlight following the window's centre included.
+* **P337.2 HELD: on foot the camera's controller is NULL** -- take 336's
+  deduction, now read. Seated it is not (and it changes identity over a run).
+* **P337.3 HELD:** the cockpit is back to 335's behaviour.
+* **The menucam FAIL was the scorer's:** the only off-centre period was the
+  ESC menu opened ON FOOT, where X4's camera is the body's (+60.9 deg from the
+  mouse) and head-look does nothing. Off-seat periods are now set apart: not
+  judged without X4VR_HEADLOOK_FOOT, judged by head-look's centring line
+  with it (take 336's "-159 deg FROZEN" was the same mistake). Suite +4.
+* **The start menu and the loading screen:** nothing the mod decides before
+  the cockpit differs from 335 or 336 -- extents, canvas, UI image, share
+  channel, the cursor's census all the same; the differences in the log are
+  the census, the refused patch, and cursor lines from Patola moving the
+  pointer there (335 had none). Not explained, and not "fixed" blind: asked
+  to look again in 338 and say whether it persists, with a screenshot if so.
+  ([[dont-explain-away-a-contrary-report]])
+
+**Fixed:** `patch_code` (x4vr_foot.hpp) makes every page a write touches
+writable, copies, gives them back read+execute and reads the bytes back.
+tests/foot.cpp runs it across a page boundary of a read+execute mapping of
+its own (the bytes around untouched; /proc/self/maps reads r-xp after) and
+checks `pages_of` on the patch's own address (two pages) and controls.
+
+## P338 — B, the second patch, actually applied
+
+Take 337's line, new name. WiVRn, configuration 1.
+
+* **P338.1** "foot: PATCHED — 0x1929f70's walking exit ... stub"; no REFUSED.
+* **P338.2** seated unchanged (slope near 1, tracking, menus) -- the
+  cockpit's camera has a controller and never reaches the stub.
+* **P338.3** on foot, head-only windows: GetCameraRotation follows the head,
+  yaw and pitch, slope near 1; Patola looks around freely; the mouse and
+  arrows turn the body; W walks where the body points.
+* **P338.4** the mouse's up/down does nothing on foot.
+* **P338.5 / P338.6 -- no prediction:** the interaction highlight and the
+  on-foot crosshair follow the gaze or the body (337, unpatched: the body).
+* **P338.7** standing and sitting without a jump; a menu on foot reachable
+  and logged centred.
+* **P338.8** scorer PASS.
+
+    X4VR_TAKE=338 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take338.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh

@@ -264,6 +264,21 @@ int main(int argc, char **argv) {
                          (unsigned long)flip);
                 check(!foot::verify_null_exit_sites(rd2, &bad) && bad == flip, what);
             }
+            // The pages the patch writes: take 337 refused because the rel32
+            // crosses a page; both must be made writable.
+            {
+                uintptr_t first = 0;
+                size_t count = 0;
+                foot::pages_of(foot::kNullRel32, 4, 4096, &first, &count);
+                check(first == 0x1929000 && count == 2,
+                      "v2: the je's rel32 crosses 0x192a000 -> two pages");
+                foot::pages_of(foot::kSkipRel32, 4, 4096, &first, &count);
+                check(first == 0x192a000 && count == 1,
+                      "control: a rel32 inside one page -> one page");
+                foot::pages_of(0x1fff, 1, 4096, &first, &count);
+                check(first == 0x1000 && count == 1,
+                      "control: the last byte of a page -> that page alone");
+            }
             int32_t null_rel = 0;
             elf.read(foot::kNullRel32, &null_rel, 4);
             check(foot::kNullJeEnd + (intptr_t)null_rel == foot::kReturn.va,
@@ -296,6 +311,47 @@ int main(int argc, char **argv) {
             check(run_stub(page, player_cam) == 2,
                   "stub: no root (teardown) -> X4's own return");
             munmap(page, 4096);
+        }
+    }
+
+    // 0c. patch_code across a page boundary in a read+execute mapping -- the
+    // shape of take 337's refusal (0x1929fff..0x192a002).
+    {
+        const long pg = sysconf(_SC_PAGESIZE);
+        uint8_t *two = (uint8_t *)mmap(nullptr, 2 * (size_t)pg,
+                                       PROT_READ | PROT_WRITE,
+                                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (two == MAP_FAILED) {
+            check(false, "two pages for patch_code");
+        } else {
+            memset(two, 0xcc, 2 * (size_t)pg);
+            mprotect(two, 2 * (size_t)pg, PROT_READ | PROT_EXEC);
+            const int32_t v = (int32_t)0x8bffffff;
+            char err[200] = "";
+            const bool ok = foot::patch_code((uintptr_t)two + (uintptr_t)pg - 1,
+                                             &v, 4, err, sizeof err);
+            int32_t got = 0;
+            memcpy(&got, two + pg - 1, 4);
+            check(ok && got == v && two[pg - 2] == 0xcc && two[pg + 3] == 0xcc,
+                  "patch_code writes 4 bytes across a page boundary of a "
+                  "read+execute mapping, and nothing around them");
+            // Given back read+execute: a write now would fault, so ask the
+            // kernel -- /proc/self/maps -- instead of trying.
+            bool rx = false;
+            if (FILE *f = fopen("/proc/self/maps", "r")) {
+                char ln[512];
+                while (fgets(ln, sizeof ln, f)) {
+                    unsigned long lo = 0, hi = 0;
+                    char perm[8] = "";
+                    if (sscanf(ln, "%lx-%lx %7s", &lo, &hi, perm) == 3 &&
+                        lo <= (unsigned long)two &&
+                        (unsigned long)two + 2 * (unsigned long)pg <= hi)
+                        rx = !strcmp(perm, "r-xp");
+                }
+                fclose(f);
+            }
+            check(rx, "both pages left read+execute (/proc/self/maps: r-xp)");
+            munmap(two, 2 * (size_t)pg);
         }
     }
 

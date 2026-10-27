@@ -717,6 +717,23 @@ else
     ok "menucam switched off -> no FAIL"
 fi
 absent "menucam: no write-mode arming -> silent" "$BASE" menucam
+# Take 337: an ESC menu ON FOOT read X4's camera at the BODY's +60.9 deg
+# (the mouse turns the body there) and FAILed as "frozen" with no head-look
+# on foot at all. Off the seat: not judged without X4VR_HEADLOOK_FOOT; judged
+# by head-look's centring line with it.
+mcsdn='[  999985.000] inject  headlook: out of the pilot seat — the write stands down (on foot X4 does not render through the cockpit'"'"'s free-look, take 334); the picture is a window fixed in front'
+mcscont='[  999985.000] inject  headlook: out of the pilot seat — head-look continues on foot (X4VR_HEADLOOK_FOOT): the head looks, the mouse and arrows turn the body, the mouse'"'"'s pitch is zeroed'
+{ cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcsdn" "$mcdown" "$(mcpose 999990.500 60.9000 8.1400)" "$(mcpose 999991.500 60.9000 8.1400)" "$mcup" "$mcrep"; } > /tmp/census-mc-foot.log
+want "menucam on foot, no head-look there -> not judged (take 337)" /tmp/census-mc-foot.log menucam "off the pilot seat — X4's own camera (no head-look on foot), not judged"
+if python3 tools/score_run.py /tmp/census-mc-foot.log 2>&1 | grep -q "^FAIL.*MENU_CENTRE"; then
+    bad "menucam on foot, no head-look there -> still FAILs (take 337)"
+else
+    ok "menucam on foot, no head-look there -> no FAIL (take 337)"
+fi
+{ cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcscont" "$mcdown" "$mccen" "$(mcpose 999990.500 60.9000 8.1400)" "$mcup" "$mcrep"; } > /tmp/census-mc-foot-cen.log
+want "menucam on foot with head-look, centred -> judged by the centring line" /tmp/census-mc-foot-cen.log menucam "off the pilot seat — head-look CENTRED it"
+{ cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcscont" "$mcdown" "$(mcpose 999990.500 60.9000 8.1400)" "$mcup" "$mcrep"; } > /tmp/census-mc-foot-stuck.log
+want "menucam on foot with head-look, not centred -> FAIL" /tmp/census-mc-foot-stuck.log FAIL "the centring did not act"
 # Take 329: the ESC menu PAUSES, and the pre-329 view line called that
 # "external/floating" -- the centring, gated on the cockpit, never acted.
 mcpaused='[  999989.950] inject  headlook: view is now PAUSED (IsGamePaused: the ESC menu) — idle'

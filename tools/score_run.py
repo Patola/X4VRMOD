@@ -4513,9 +4513,46 @@ def main(path):
                     v = k
             return v
 
+        # Off the pilot seat (since take 335) X4's camera is the player
+        # object's -- the BODY's yaw from the mouse and arrows -- so its angle
+        # is not head-look's. Take 337 FAILed an ESC menu on foot at +60.9 deg
+        # with no head-look on foot at all. Off the seat: shown, and judged
+        # only where head-look acts there (X4VR_HEADLOOK_FOOT), by whether it
+        # logged the centring.
+        seat_off = []  # (from, to, head-look acts on foot)
+        so_open = None
+        for m_ in re.finditer(r"\[\s*([\d.]+)\]\s+inject\s+headlook: (out of|in) "
+                              r"the pilot seat — (head-look continues|the write)",
+                              text):
+            t_ = float(m_.group(1))
+            if m_.group(2) == "out of" and so_open is None:
+                so_open = (t_, m_.group(3) == "head-look continues")
+            elif m_.group(2) == "in" and so_open is not None:
+                seat_off.append((so_open[0], t_, so_open[1]))
+                so_open = None
+        if so_open is not None:
+            seat_off.append((so_open[0], float("inf"), so_open[1]))
+
+        def _off_seat(t):
+            for f_, t2_, acts in seat_off:
+                if f_ <= t <= t2_:
+                    return True, acts
+            return False, False
+
         rows, frozen_cockpit = [], []
         for a, b in periods:
             if b < t_armed:
+                continue
+            off, acts = _off_seat(a)
+            if off:
+                cen = any(a - 0.5 <= float(t_) <= b + 0.5
+                          for t_, _y, _p in mc_centred)
+                # share None: not judged (X4's own camera on foot)
+                rows.append((a, b, "off the seat", float("nan"), float("nan"),
+                             None if not acts else (0.0 if cen else 1.0)))
+                if acts and not cen:
+                    frozen_cockpit.append((a, b, float("nan"), float("nan"),
+                                           1.0))
                 continue
             # settled: from 0.3 s in, past the tick that switches
             sel = [(y, p_) for t, y, p_ in mc_cam if a + 0.3 <= t <= b]
@@ -4544,6 +4581,14 @@ def main(path):
                   f"of X4's UI that projects outside the window the pointer is "
                   f"confined to:")
             for a, b, view, my, mp, share in rows[:12]:
+                if view == "off the seat":
+                    what = ("X4's own camera (no head-look on foot), not judged"
+                            if share is None else
+                            "head-look CENTRED it" if share == 0.0 else
+                            "head-look did NOT centre it")
+                    print(f"menucam   t0+{a - mc_ref:6.1f}s {b - a:6.1f}s off "
+                          f"the pilot seat — {what}")
+                    continue
                 tag = ("CENTRED" if abs(my) <= 0.1 and abs(mp) <= 0.1
                        else "OFF-CENTRE")
                 print(f"menucam   t0+{a - mc_ref:6.1f}s {b - a:6.1f}s in "
@@ -4558,13 +4603,18 @@ def main(path):
                                   for _t, y, p_ in mc_centred[:6]))
             if frozen_cockpit:
                 worst = max(frozen_cockpit, key=lambda r: r[4])
-                print(f"menucam => FROZEN: in {len(frozen_cockpit)} cockpit or "
-                      f"ESC-pause period(s) X4 drew and hit-tested its menus "
-                      f"through a "
-                      f"camera left at the head's angle; worst "
-                      f"{worst[2]:+.2f},{worst[3]:+.2f} deg puts "
-                      f"{100 * worst[4]:.1f}% of X4's UI beyond the pointer's "
-                      f"reach (take 328B: the map's left wedge and bottom band)")
+                if worst[2] != worst[2]:  # NaN: an off-seat period
+                    print(f"menucam => NOT CENTRED off the pilot seat: head-look "
+                          f"acts on foot (X4VR_HEADLOOK_FOOT) but logged no "
+                          f"centring in {len(frozen_cockpit)} menu period(s)")
+                else:
+                  print(f"menucam => FROZEN: in {len(frozen_cockpit)} cockpit or "
+                        f"ESC-pause period(s) X4 drew and hit-tested its menus "
+                        f"through a "
+                        f"camera left at the head's angle; worst "
+                        f"{worst[2]:+.2f},{worst[3]:+.2f} deg puts "
+                        f"{100 * worst[4]:.1f}% of X4's UI beyond the pointer's "
+                        f"reach (take 328B: the map's left wedge and bottom band)")
                 if mc_asked:
                     fails.append("X4VR_HEADLOOK_MENU_CENTRE: a cockpit menu "
                                  "stayed off-centre — the centring did not "
