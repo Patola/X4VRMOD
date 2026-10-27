@@ -25433,3 +25433,55 @@ body on foot; the mouse/arrows keep turning the body and the walking
 direction. A (the body follows the head through X4's mouse-look, closed on
 GetCameraRotation, gain ~0.11 deg/count) stays the fallback, and nothing
 built for B should close it off.
+
+## B, read statically: on foot X4 SKIPS the camera's own rotation (0x1929f70)
+
+No run; X4 9.00. 0x1929f70(camera, &out, ref, time) is the per-frame
+evaluation every camera snapshot goes through (take 316's hop 1). Mode 0:
+
+1. `out` = the attached object's (+0x780) transform at `time` (0x18a0090).
+2. The controller at camera+0x18; NULL -> return with `out` as it is.
+3. If the attached object is the PLAYER (root+0x238, the object GetPlayerID
+   reads) or the camera is the player's (root+0x3e8): `0x1de5df0()` -- the
+   player's component chain from player+0x200, the first element of type
+   0x16 -- and, if there is one, `0x1628210()`; **if that returns true,
+   RETURN at 0x192a2f3 (`jne 192a216`): neither the controller nor the
+   camera's own transform (+0x5a0..+0x5d0, the free-look) is composed.**
+4. Otherwise compose the controller (vt+0x138) and then +0x5a0..+0x5d0.
+
+`0x1628210()` takes no argument: with the player camera attached to the
+player, true when the controller's chain at +0x58 has an element of type 6
+(0x1de5eb0); else a compare of player+0x6aa8 with the global 0x3daa6f0
+(and a byte at 0x3dab2dd on one path). The type numbers are not named
+anywhere we have read.
+
+**This fits takes 334/335 exactly:** the attached object is the same seated
+and standing (it is the player, carried into the cockpit), the mode stays 0,
+and our write to +0x5b0 never reached GetCameraRotation on foot -- the
+branch drops it. On foot X4's view is the player object's own transform, so
+GetCameraRotation follows the mouse and arrows (they turn the player).
+(Not yet observed: which of step 2's NULL controller or step 3's branch it
+is on foot; a read-only check of camera+0x18 and the predicate's data inputs
+separates them.)
+
+**What B needs, then:** the camera's own rotation composed on foot too --
+the branch at 0x192a2f3 not taken -- and head-look's write active there.
+X4's walking view (the player: mouse/arrow yaw, X4's pitch) times our head
+rotation, exactly the cockpit's arrangement with the player in place of the
+seat. That is a **code patch** (two bytes, in memory, verified first,
+reverted at exit like X4VR_CSM_COVER's), and by the standing rule it is
+Patola's decision. The data-only alternative is A (no patch: turn the body
+with the head through X4's mouse-look).
+
+Consequences, stated before anything is built:
+* The layer must declare only the HEAD part on foot: GetCameraRotation there
+  includes the body, and declaring it is what made the window swing in 334.
+  Body = GetCameraRotation with our written rotation taken back out.
+* Whatever else the branch covers (other states where the player object is
+  the camera's parent: elevators, conversations, transporters?) gets the
+  head rotation too -- probably right, to be seen.
+* Picking on foot: if X4 aims the crosshair's interaction from the camera
+  (as the cockpit's hover does), it follows the gaze; if from the player
+  object, the highlight follows the body. The take will show which.
+* +0x5b0 must be ours on foot whenever the patch is in: the head's angle, or
+  identity -- never a stale cockpit angle.
