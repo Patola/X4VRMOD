@@ -25608,3 +25608,48 @@ reaches it (its controller exists: 336 proves it); other cameras with no
 controller return exactly as before. On foot: player (body) x head, once.
 Data-only alternative: A (the body follows the head through X4's
 mouse-look, gain ~0.11 deg/count measured in 335).
+
+## B, second patch — built (Patola: "Yes, second patch for B approved")
+
+* `X4VR_HEADLOOK_FOOT=1` now applies the second patch (the first refuses as
+  retired): the NULL-controller exit's `je` at 0x1929ffd is retargeted to a
+  53-byte stub in a page of ours within rel32 reach (`make_stub`): root
+  global -> player camera -> compose (0x192a284) or X4's return (0x192a216),
+  absolute jumps through r11. Verified first: the function head (rbx =
+  camera, rbp = out), the exit, X4's own player-camera test (+0x3e8), the
+  return, the tail and the compose, plus the decoded targets (the je ->
+  return, the root global, the tail -> compose); the stub page made
+  read+execute; the je read back pointing at it.
+* tests/foot.cpp EXECUTES the stub's bytes in an executable page against a
+  fake root: the player's camera -> compose, another camera -> return, no
+  root -> return. Sites against the real binary, a one-byte change in each
+  refused and named.
+* The census regime line now carries the camera's controller (+0x18), so
+  the deduction is read, not assumed. Scorer names which patch a log carries
+  (take 336's retired branch, or the stub).
+
+## P337 — B, second patch
+
+Take 336's line, new take name; the knob now means the second patch.
+WiVRn, configuration 1.
+
+* **P337.1** at load "foot: PATCHED — 0x1929f70's walking exit ... stub";
+  no REFUSED.
+* **P337.2** the census: seated, the camera's controller non-NULL; on foot,
+  **NULL** -- the deduction of take 336, read. Refutation: non-NULL on foot;
+  then X4 leaves on foot by yet another exit, the stub is never reached, and
+  head-look does nothing on foot.
+* **P337.3** seated, nothing changes: head-only slope near 1.0 (not 2), the
+  scorer's cockpit tracking and menu checks pass. The cockpit never reaches
+  the stub.
+* **P337.4** on foot GetCameraRotation follows the head (head-only windows,
+  slope near 1, yaw and pitch); Patola looks around freely; the mouse and
+  arrows turn the body; W walks where the body points.
+* **P337.5** the mouse's up/down does nothing on foot.
+* **P337.6 / P337.7 -- no prediction:** whether the interaction highlight
+  and X4's on-foot crosshair follow the gaze or the body.
+* **P337.8** standing up and sitting down without a jump or spin; a menu on
+  foot reachable.
+* **P337.9** scorer PASS.
+
+    X4VR_TAKE=337 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take337.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh

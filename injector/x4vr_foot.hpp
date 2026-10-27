@@ -36,6 +36,7 @@ constexpr uintptr_t kCamAttachedRef = 0x788;
 constexpr uintptr_t kCamLocal = 0x5a0; // translation; rows from +0x5b0
 constexpr uintptr_t kCamBase = 0x6f0;  // translation; rows from +0x700
 constexpr uintptr_t kCamMode = 0x880;
+constexpr uintptr_t kCamController = 0x18;
 
 inline float wrap180(float d) {
     while (d > 180.f)
@@ -78,6 +79,7 @@ inline float delta_angle_deg(const float *a, const float *b) {
 // One sample, taken on X4's thread.
 struct Sample {
     uintptr_t cam = 0, attached = 0, attached_vt = 0;
+    uintptr_t controller = 0; // camera+0x18: NULL on foot (take 336, deduced)
     int32_t mode = -1;
     bool piloting = false, occupied = false; // GetPlayer{Controlled,Occupied}ShipID != 0
     int view = 0;                            // X4View as an int
@@ -91,6 +93,7 @@ struct Sample {
 // What a transition line is keyed on.
 inline bool same_regime(const Sample &a, const Sample &b) {
     return a.cam == b.cam && a.mode == b.mode && a.attached == b.attached &&
+           a.controller == b.controller &&
            a.piloting == b.piloting && a.occupied == b.occupied;
 }
 
@@ -254,13 +257,14 @@ inline int format_regime(char *out, size_t cap, const Sample &s) {
     const bool ba = head_angles_of_rows(s.base + 4, &by, &bp);
     return snprintf(
         out, cap,
-        "foot: regime camera %p mode %d attached %p (vtable %p) | piloting %d "
+        "foot: regime camera %p mode %d attached %p (vtable %p) controller %p "
+        "| piloting %d "
         "occupied %d | view %s hud %d rel %d | rot %.2f %.2f %.2f | local pos "
         "%.3f %.3f %.3f yaw/pitch %s%.2f %.2f | base pos %.3f %.3f %.3f "
         "yaw/pitch %s%.2f %.2f rows (%.3f %.3f %.3f | %.3f %.3f %.3f | %.3f "
         "%.3f %.3f)",
         (void *)s.cam, (int)s.mode, (void *)s.attached, (void *)s.attached_vt,
-        (int)s.piloting, (int)s.occupied, view_name(s.view), (int)s.hud,
+        (void *)s.controller, (int)s.piloting, (int)s.occupied, view_name(s.view), (int)s.hud,
         (int)s.relative, s.rot_yaw, s.rot_pitch, s.rot_roll, s.local[0],
         s.local[1], s.local[2], la ? "" : "(not a rotation) ", ly, lp, s.base[0],
         s.base[1], s.base[2], ba ? "" : "(not a rotation) ", by, bp, s.base[4],
@@ -347,6 +351,118 @@ template <class Reader> bool verify_skip_sites(Reader read, uintptr_t *bad) {
         return false;
     }
     return true;
+}
+
+// ---- B, second patch (Patola, 2026-10-27: "Yes, second patch for B
+// approved") ----------------------------------------------------------------
+//
+// Take 336 showed the branch above is the COCKPIT's, and that on foot X4
+// leaves 0x1929f70 earlier: the camera has no controller (+0x18 NULL,
+// deduced from every exit against takes 334-336) and `je 0x192a216` at
+// 0x1929ffd returns with the player object's transform alone. This patch
+// retargets THAT je to a stub of ours:
+//
+//     mov  r11, 0x3db6948          ; X4's root global (GetCameraRotation's)
+//     mov  r11, [r11]
+//     test r11, r11
+//     je   ret                     ; no root: X4's own return
+//     cmp  rbx, [r11+0x3e8]        ; the player's camera?
+//     jne  ret                     ; any other camera: X4's own return
+//     mov  r11, 0x192a284 ; jmp r11  ; compose the camera's own transform
+//   ret:
+//     mov  r11, 0x192a216 ; jmp r11  ; X4's return
+//
+// r11 is never used in 0x1929f70 and is dead after the call just before the
+// je. Only the je's rel32 changes in X4; the cockpit never takes it (its
+// camera has a controller -- take 336 doubled through it), and a camera
+// that is not the player's returns exactly as before.
+inline constexpr CodeBytes kFnHead = {
+    // mov 0x880(%rbx),%eax; mov %rsi,%rbp; mov %rdx,%r12 -- rbx is the
+    // camera and rbp `out` for the rest of the function.
+    0x1929f9d, 12,
+    {0x8b, 0x83, 0x80, 0x08, 0x00, 0x00, 0x48, 0x89, 0xf5, 0x49, 0x89, 0xd4}};
+inline constexpr CodeBytes kNullExit = {
+    // call 0x18a0090; mov 0x18(%rbx),%r12; test %r12,%r12; je 0x192a216;
+    // mov 0x3db6948(%rip),%rax
+    0x1929ff1, 25,
+    {0xe8, 0x9a, 0x60, 0xf7, 0xff, 0x4c, 0x8b, 0x63, 0x18, 0x4d, 0x85, 0xe4,
+     0x0f, 0x84, 0x13, 0x02, 0x00, 0x00, 0x48, 0x8b, 0x05, 0x3e, 0xc9, 0x48,
+     0x02}};
+inline constexpr CodeBytes kPlayerCamCmp = {
+    // cmp %rdx,0x238(%rax); je; cmp 0x3e8(%rax),%rbx; je -- X4's own test
+    // that this camera is the player's, the one the stub repeats.
+    0x192a01a, 26,
+    {0x48, 0x39, 0x90, 0x38, 0x02, 0x00, 0x00, 0x0f, 0x84, 0xb6, 0x02, 0x00,
+     0x00, 0x48, 0x3b, 0x98, 0xe8, 0x03, 0x00, 0x00, 0x0f, 0x84, 0xa9, 0x02,
+     0x00, 0x00}};
+inline constexpr CodeBytes kReturn = {
+    // add $0x58,%rsp; pop rbx; pop rbp; pop r12; pop r13; ret
+    0x192a216, 11,
+    {0x48, 0x83, 0xc4, 0x58, 0x5b, 0x5d, 0x41, 0x5c, 0x41, 0x5d, 0xc3}};
+constexpr uintptr_t kNullJe = 0x1929ffd;   // 0f 84 <rel32>
+constexpr uintptr_t kNullJeEnd = 0x192a003;
+constexpr uintptr_t kNullRel32 = kNullJe + 2;
+constexpr uintptr_t kRootGlobal = 0x3db6948;
+constexpr uintptr_t kPlayerCamOff = 0x3e8;
+
+template <class Reader> bool verify_null_exit_sites(Reader read, uintptr_t *bad) {
+    const CodeBytes *sites[] = {&kFnHead, &kNullExit, &kPlayerCamCmp, &kReturn,
+                                &kLocalTail, &kLocalCompose};
+    for (const CodeBytes *c : sites) {
+        uint8_t b[40];
+        if (!read(c->va, b, c->n)) {
+            *bad = c->va;
+            return false;
+        }
+        for (uint8_t i = 0; i < c->n; i++)
+            if (b[i] != c->bytes[i]) {
+                *bad = c->va + i;
+                return false;
+            }
+    }
+    int32_t r = 0;
+    memcpy(&r, kNullExit.bytes + (kNullRel32 - kNullExit.va), 4);
+    if (kNullJeEnd + (intptr_t)r != kReturn.va) { // the je returns
+        *bad = kNullJe;
+        return false;
+    }
+    memcpy(&r, kNullExit.bytes + 21, 4); // mov root(%rip): the global
+    if (kNullExit.va + 25 + (intptr_t)r != kRootGlobal) {
+        *bad = kNullExit.va + 18;
+        return false;
+    }
+    memcpy(&r, kLocalTail.bytes + 18, 4); // the tail's jmp: the compose
+    if (kLocalTail.va + 22 + (intptr_t)r != kLocalCompose.va) {
+        *bad = kLocalTail.va + 17;
+        return false;
+    }
+    return true;
+}
+
+// The stub's bytes. `root_slot`, `compose` and `ret` are parameters so
+// tests/foot.cpp can execute the very bytes against a fake root and two
+// return thunks; the injector passes kRootGlobal, kLocalTailVa, kReturn.va.
+constexpr size_t kStubLen = 53;
+inline void make_stub(uint8_t out[kStubLen], uintptr_t root_slot,
+                      uintptr_t compose, uintptr_t ret, uint32_t cam_off) {
+    size_t i = 0;
+    auto b = [&](uint8_t v) { out[i++] = v; };
+    auto q = [&](uint64_t v) {
+        memcpy(out + i, &v, 8);
+        i += 8;
+    };
+    b(0x49), b(0xbb), q(root_slot);           //  0 mov r11, imm64
+    b(0x4d), b(0x8b), b(0x1b);                // 10 mov r11, [r11]
+    b(0x4d), b(0x85), b(0xdb);                // 13 test r11, r11
+    b(0x74), b(40 - 18);                      // 16 je ret
+    b(0x49), b(0x3b), b(0x9b);                // 18 cmp rbx, [r11+disp32]
+    memcpy(out + i, &cam_off, 4);
+    i += 4;
+    b(0x75), b(40 - 27);                      // 25 jne ret
+    b(0x49), b(0xbb), q(compose);             // 27 mov r11, compose
+    b(0x41), b(0xff), b(0xe3);                // 37 jmp r11
+    b(0x49), b(0xbb), q(ret);                 // 40 ret: mov r11, ret
+    b(0x41), b(0xff), b(0xe3);                // 50 jmp r11
 }
 
 } // namespace x4vr::foot

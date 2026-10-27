@@ -4685,7 +4685,8 @@ def main(path):
     ft_before = "sampled BEFORE head-look's write" in text
     ft_reg = re.findall(
         r"\[\s*([\d.]+)\]\s+inject\s+foot: regime camera (\S+) mode (-?\d+) "
-        r"attached (\S+) \(vtable (\S+)\) \| piloting (\d) occupied (\d) \| "
+        r"attached (\S+) \(vtable (\S+)\)(?: controller (\S+))? \| piloting "
+        r"(\d) occupied (\d) \| "
         r"view (\S+) hud (\d) rel (\d) \| rot (\S+) (\S+) (\S+)", text)
     _ft_t = (r"(?:-|net (\S+) (\S+) travel (\S+) (\S+) at (\S+) (\S+))")
     _ft_m = (r"(?:-|net (\S+) (\S+) travel (\S+) (\S+) at (\S+) (\S+) rot (\S+) "
@@ -4700,11 +4701,19 @@ def main(path):
     # X4VR_HEADLOOK_FOOT: B's patch (0x1929f70's walking branch). Intent is
     # the run line; the patch reports itself once, at load.
     fp_asked = bool(re.search(r"\bX4VR_HEADLOOK_FOOT=1", run or ""))
-    fp_ok = re.search(r"foot: PATCHED — 0x1929f70's walking branch", text)
+    # "branch" is take 336's retarget (retired: the cockpit's branch);
+    # "exit" the second patch, the NULL-controller exit through a stub.
+    fp_ok = re.search(r"foot: PATCHED — 0x1929f70's walking (branch|exit)", text)
     fp_ref = re.search(r"foot: patch REFUSED — (.*?)\. Walking stays", text)
     if fp_ok:
-        print("foot    patch IN: walking composes the camera's own rotation "
-              "(head-look) after the player's")
+        if fp_ok.group(1) == "branch":
+            print("foot    patch IN (take 336's retarget of the COCKPIT's "
+                  "branch — retired): it composed the camera's own rotation "
+                  "on top of the seat's, doubling the cockpit's head-look")
+        else:
+            print("foot    patch IN (the NULL-controller exit, through the "
+                  "stub): walking composes the camera's own rotation "
+                  "(head-look) after the player's")
     elif fp_ref:
         print(f"foot    patch REFUSED — {fp_ref.group(1)}")
     if fp_asked and not fp_ok:
@@ -4742,10 +4751,13 @@ def main(path):
             wins.append(w)
         print(f"foot    census ON: {len(ft_reg)} regime line(s), {len(wins)} "
               f"window(s)")
-        for t, cam, mode, att, vt, pil, occ, view, hud, rel, ry, rp, rr in ft_reg[:16]:
+        for (t, cam, mode, att, vt, ctl, pil, occ, view, hud, rel, ry, rp,
+             rr) in ft_reg[:16]:
             print(f"foot    t {float(t):9.1f}  mode {mode:>2}  piloting {pil} "
                   f"occupied {occ}  view {view:<8} hud {hud} rel {rel}  "
-                  f"camera {cam} attached {att} vtable {vt}  rot {ry} {rp} {rr}")
+                  f"camera {cam} attached {att} vtable {vt}"
+                  + (f" controller {ctl}" if ctl else "")
+                  + f"  rot {ry} {rp} {rr}")
         if len(ft_reg) > 16:
             print(f"foot    ... {len(ft_reg) - 16} more regime line(s)")
 

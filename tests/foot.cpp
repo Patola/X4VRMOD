@@ -10,6 +10,8 @@
 #include <cstring>
 #include <vector>
 
+#include <sys/mman.h>
+
 #include "../injector/x4vr_camwrite.hpp"
 #include "../injector/x4vr_foot.hpp"
 
@@ -137,6 +139,26 @@ static int emit(const char *scenario) {
     return 0;
 }
 
+// The stub's two exits, as thunks that say which one was taken. Reached by a
+// jmp from inside the stub, so their `ret` returns to run_stub's call.
+extern "C" int foot_compose_thunk();
+extern "C" int foot_ret_thunk();
+asm(".text\n"
+    ".globl foot_compose_thunk\nfoot_compose_thunk:\n  mov $1, %eax\n  ret\n"
+    ".globl foot_ret_thunk\nfoot_ret_thunk:\n  mov $2, %eax\n  ret\n");
+
+// Call the stub with rbx = `camera`, as X4's 0x1929f70 has it. Below the red
+// zone, since the call pushes a return address.
+static int run_stub(void *stub, uintptr_t camera) {
+    int r;
+    asm volatile("sub $128, %%rsp\n\tcall *%1\n\tadd $128, %%rsp"
+                 : "=a"(r)
+                 : "r"(stub), "b"(camera)
+                 : "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11",
+                   "memory", "cc");
+    return r;
+}
+
 // The ELF reader of tests/steer.cpp: X4 is non-PIE, a VA maps through the
 // PT_LOAD headers.
 struct Elf {
@@ -218,8 +240,65 @@ int main(int argc, char **argv) {
             elf.read(foot::kSkipRel32, &old_rel, 4);
             check(foot::kSkipJneEnd + (intptr_t)old_rel == foot::kSkipTarget,
                   "control: X4's own rel32 lands on the return 0x192a216");
+            // B's second patch: the controller-NULL exit and what the stub
+            // relies on.
+            bad = 0;
+            check(foot::verify_null_exit_sites(rd, &bad),
+                  "v2: the NULL-controller exit, the player-camera test, the "
+                  "return, the tail and the compose match X4 9.00");
+            for (const foot::CodeBytes *c :
+                 {&foot::kFnHead, &foot::kNullExit, &foot::kPlayerCamCmp,
+                  &foot::kReturn}) {
+                const uintptr_t flip = c->va + c->n / 2;
+                auto rd2 = [flip](uintptr_t va, void *o, size_t n) {
+                    if (!elf.read(va, o, n))
+                        return false;
+                    if (flip >= va && flip < va + n)
+                        ((uint8_t *)o)[flip - va] ^= 0x01;
+                    return true;
+                };
+                bad = 0;
+                char what[96];
+                snprintf(what, sizeof what,
+                         "v2: one byte changed at %#lx -> refused there",
+                         (unsigned long)flip);
+                check(!foot::verify_null_exit_sites(rd2, &bad) && bad == flip, what);
+            }
+            int32_t null_rel = 0;
+            elf.read(foot::kNullRel32, &null_rel, 4);
+            check(foot::kNullJeEnd + (intptr_t)null_rel == foot::kReturn.va,
+                  "control: X4's NULL-controller je lands on the return");
         }
     }
+    // 0b. B's second patch: the stub's own bytes, EXECUTED.
+    {
+        void *page = mmap(nullptr, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (page == MAP_FAILED) {
+            check(false, "an executable page for the stub");
+        } else {
+            static uint8_t fake_root[0x400];
+            static uintptr_t root_slot = 0;
+            const uintptr_t player_cam = 0x7f00dead1000;
+            memcpy(fake_root + foot::kPlayerCamOff, &player_cam, 8);
+            uint8_t stub[foot::kStubLen];
+            foot::make_stub(stub, (uintptr_t)&root_slot,
+                            (uintptr_t)&foot_compose_thunk,
+                            (uintptr_t)&foot_ret_thunk,
+                            (uint32_t)foot::kPlayerCamOff);
+            memcpy(page, stub, sizeof stub);
+            root_slot = (uintptr_t)fake_root;
+            check(run_stub(page, player_cam) == 1,
+                  "stub: the player's camera -> compose its own transform");
+            check(run_stub(page, player_cam + 0x80) == 2,
+                  "stub: any other camera -> X4's own return");
+            root_slot = 0;
+            check(run_stub(page, player_cam) == 2,
+                  "stub: no root (teardown) -> X4's own return");
+            munmap(page, 4096);
+        }
+    }
+
     // 1. The inverse of rows_for, over the range head-look writes.
     {
         float worst = 0.f;

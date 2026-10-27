@@ -977,10 +977,13 @@ else
     # B: X4VR_HEADLOOK_FOOT. The patch line, the seat line, and the head now
     # turning X4's camera on foot.
     sed 's/env: run = /env: run = X4VR_HEADLOOK_WRITE=1 X4VR_HEADLOOK_FOOT=1 /' "$BASE" > /tmp/census-fp-base.log
-    fpok='[  999000.000] inject  foot: PATCHED — 0x1929f70'"'"'s walking branch (jne at 0x192a2f3) now composes the camera'"'"'s own rotation (0x192a284) instead of returning (0x192a216); head-look writes off the pilot seat, the mouse'"'"'s pitch is zeroed there'
+    fpok='[  999000.000] inject  foot: PATCHED — 0x1929f70'"'"'s walking exit (je at 0x1929ffd, the camera with no controller) now goes through a stub at 0x7c00000: the player'"'"'s camera composes its own rotation (0x192a284), any other returns (0x192a216); head-look writes off the pilot seat, the mouse'"'"'s pitch is zeroed there'
+    fpv1='[  999000.000] inject  foot: PATCHED — 0x1929f70'"'"'s walking branch (jne at 0x192a2f3) now composes the camera'"'"'s own rotation (0x192a284) instead of returning (0x192a216); head-look writes off the pilot seat, the mouse'"'"'s pitch is zeroed there'
     fpcont='[  999010.040] inject  headlook: out of the pilot seat — head-look continues on foot (X4VR_HEADLOOK_FOOT): the head looks, the mouse and arrows turn the body, the mouse'"'"'s pitch is zeroed'
     { cat /tmp/census-fp-base.log; echo "$fpok"; echo "$fpcont"; "$FOOT" --emit patched; } > /tmp/census-fp-ok.log
-    want "foot patched -> the patch is reported" /tmp/census-fp-ok.log "foot " "patch IN: walking composes the camera's own rotation"
+    want "foot patched -> the patch is reported" /tmp/census-fp-ok.log "foot " "patch IN (the NULL-controller exit, through the stub): walking composes"
+    { cat /tmp/census-fp-base.log; echo "$fpv1"; echo "$fpcont"; "$FOOT" --emit patched; } > /tmp/census-fp-v1.log
+    want "foot take-336 patch line -> named the retired cockpit branch" /tmp/census-fp-v1.log "foot " "take 336's retarget of the COCKPIT's branch — retired"
     want "foot patched -> the head turns X4's camera on foot" /tmp/census-fp-ok.log "foot =>" "the mouse turns rot yaw; the head turns rot yaw, rot pitch, local yaw, local pitch"
     want "foot patched -> the mouse's pitch zeroing is counted" /tmp/census-fp-ok.log "foot " "the mouse's pitch zeroed in 96 motion event(s) off the seat"
     want "foot patched -> continued on foot counted" /tmp/census-fp-ok.log "foot " "continued on foot 1 time(s)"

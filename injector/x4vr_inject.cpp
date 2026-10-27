@@ -4770,18 +4770,14 @@ static void foot_patch_at_start() {
         refuse("X4VR_HEADLOOK_FOOT needs X4VR_HEADLOOK_WRITE=1");
         return;
     }
-    // **RETIRED after take 336.** The branch at 0x192a2f3 is the COCKPIT's,
-    // not walking's: retargeted, X4's camera turned 2.02x the head in the
-    // cockpit (player x camera, and the player's seat already carries the
-    // free-look), and on foot nothing changed -- X4 returns earlier there,
-    // at the NULL controller (0x1929ffd). Kept refusing so the knob cannot
-    // double the cockpit again; the sites stay verified in tests/foot.cpp.
-    refuse("the 0x192a2f3 retarget is retired: take 336 doubled the "
-           "cockpit's head-look (that branch is the cockpit's)");
-    return;
+    // Take 336's retarget of the jne at 0x192a2f3 is RETIRED: that branch is
+    // the cockpit's (head-look doubled there). This is the second patch,
+    // Patola's approval of 2026-10-27: the NULL-controller exit at 0x1929ffd,
+    // through a stub that composes the camera's own transform for the
+    // player's camera only (x4vr_foot.hpp).
     auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
     uintptr_t bad = 0;
-    if (!verify_skip_sites(rd, &bad)) {
+    if (!verify_null_exit_sites(rd, &bad)) {
         char why[160];
         snprintf(why, sizeof why,
                  "0x1929f70's code at %#lx differs from X4 9.00",
@@ -4789,11 +4785,29 @@ static void foot_patch_at_start() {
         refuse(why);
         return;
     }
-    const int32_t want = rel32_to(kSkipJneEnd, kLocalTailVa);
+    const uintptr_t site = kNullJe;
+    void *stub = x4vr::csmfit::alloc_near(0x3f0000, 0x7c00000, &site, 1, 6);
+    if (!stub) {
+        refuse("no free page within rel32 reach of 0x1929ffd");
+        return;
+    }
+    uint8_t code[kStubLen];
+    make_stub(code, kRootGlobal, kLocalTailVa, kReturn.va,
+              (uint32_t)kPlayerCamOff);
+    memcpy(stub, code, sizeof code);
     const long page = sysconf(_SC_PAGESIZE);
-    const uintptr_t pg = kSkipRel32 & ~(uintptr_t)(page - 1);
-    if (((kSkipRel32 + 3) & ~(uintptr_t)(page - 1)) != pg) {
-        refuse("the jne's rel32 straddles a page");
+    if (mprotect(stub, (size_t)page, PROT_READ | PROT_EXEC) != 0) {
+        refuse("mprotect(rx) of the stub failed");
+        return;
+    }
+    int32_t want = 0;
+    if (!x4vr::csmfit::disp_for(kNullJe, 6, (uintptr_t)stub, &want)) {
+        refuse("the stub is out of rel32 reach of 0x1929ffd");
+        return;
+    }
+    const uintptr_t pg = kNullRel32 & ~(uintptr_t)(page - 1);
+    if (((kNullRel32 + 3) & ~(uintptr_t)(page - 1)) != pg) {
+        refuse("the je's rel32 straddles a page");
         return;
     }
     if (mprotect((void *)pg, (size_t)page, PROT_READ | PROT_WRITE | PROT_EXEC) != 0 &&
@@ -4804,7 +4818,7 @@ static void foot_patch_at_start() {
         refuse(why);
         return;
     }
-    memcpy((void *)kSkipRel32, &want, 4);
+    memcpy((void *)kNullRel32, &want, 4);
     if (mprotect((void *)pg, (size_t)page, PROT_READ | PROT_EXEC) != 0) {
         char why[160];
         snprintf(why, sizeof why, "mprotect(rx) %#lx: %s", (unsigned long)pg,
@@ -4813,16 +4827,18 @@ static void foot_patch_at_start() {
         return;
     }
     int32_t got = 0;
-    if (!self_read(kSkipRel32, &got, 4) || got != want) {
-        refuse("the read-back of the patched jne does not point at 0x192a284");
+    if (!self_read(kNullRel32, &got, 4) || got != want ||
+        kNullJeEnd + (intptr_t)got != (uintptr_t)stub) {
+        refuse("the read-back of the patched je does not point at the stub");
         return;
     }
     g_footpatch.patched = true;
-    X4VR_LOG("foot: PATCHED — 0x1929f70's walking branch (jne at %#lx) now "
-             "composes the camera's own rotation (0x192a284) instead of "
-             "returning (0x192a216); head-look writes off the pilot seat, the "
-             "mouse's pitch is zeroed there",
-             (unsigned long)kSkipJne);
+    X4VR_LOG("foot: PATCHED — 0x1929f70's walking exit (je at %#lx, the camera "
+             "with no controller) now goes through a stub at %p: the player's "
+             "camera composes its own rotation (0x192a284), any other returns "
+             "(0x192a216); head-look writes off the pilot seat, the mouse's "
+             "pitch is zeroed there",
+             (unsigned long)kNullJe, stub);
 }
 
 // The player pilots a ship: GetPlayerControlledShipID != 0. Take 334: 1 in
@@ -4857,6 +4873,7 @@ static void foot_tick() {
     if (!sm.cam)
         return; // the load screen, or X4 tearing down
     self_read(sm.cam + kCamMode, &sm.mode, sizeof sm.mode);
+    self_read(sm.cam + kCamController, &sm.controller, sizeof sm.controller);
     uintptr_t att[2] = {};
     if (self_read(sm.cam + kCamAttached, att, sizeof att)) {
         sm.attached = att[0];
