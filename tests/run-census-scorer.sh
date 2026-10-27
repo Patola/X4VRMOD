@@ -951,6 +951,15 @@ else
     want "foot follows -> the gain is read with its sign" /tmp/census-ft-follows.log "foot " "base yaw FOLLOWS mouse dx (r -1.00, -0.1000 deg/count)"
     { cat /tmp/census-ft-base.log; "$FOOT" --emit nothing; } > /tmp/census-ft-nothing.log
     want "foot nothing -> says the view lives elsewhere" /tmp/census-ft-nothing.log "foot =>" "the mouse turns NOTHING we read (the walking view lives elsewhere — the attached object)"
+    { cat /tmp/census-ft-base.log; "$FOOT" --emit dropped; } > /tmp/census-ft-dropped.log
+    want "foot mouse zeroed by head-look -> no verdict on the mouse (take 334)" /tmp/census-ft-dropped.log "foot =>" "the mouse turns ? (head-look ZEROED 200 mouse motion event(s) before X4 saw them)"
+    sed 's/; sampled BEFORE head-look.s write//' /tmp/census-ft-follows.log | sed 's/env: run = /env: run = X4VR_HEADLOOK_WRITE=1 /' > /tmp/census-ft-after.log
+    want "foot sampled after the write -> local column flagged as our own" /tmp/census-ft-after.log "foot " "the local column is our own write read back"
+    sed 's/env: run = /env: run = X4VR_HEADLOOK_WRITE=1 /' /tmp/census-ft-follows.log > /tmp/census-ft-nostand.log
+    want "foot off the seat, write never stood down -> FAIL" /tmp/census-ft-nostand.log "FAIL|  - " "the write never stood down"
+    { cat /tmp/census-ft-nostand.log
+      echo '[  999010.040] inject  headlook: out of the pilot seat — the write stands down (on foot X4 does not render through the cockpit'"'"'s free-look, take 334); the picture is a window fixed in front'; } > /tmp/census-ft-stand.log
+    want "foot stood down -> counted" /tmp/census-ft-stand.log "foot " "seat: the write stood down 1 time(s) off the seat, resumed 0 time(s)"
     { cat /tmp/census-ft-base.log; "$FOOT" --emit seated; } > /tmp/census-ft-seated.log
     want "foot seated only -> NOT EXERCISED" /tmp/census-ft-seated.log "foot =>" "NOT EXERCISED: no window off the pilot seat"
     want "foot asked, never started -> FAIL" /tmp/census-ft-base.log "FAIL|  - " "X4VR_FOOTLOG asked but the census never started"

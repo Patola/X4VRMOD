@@ -79,7 +79,7 @@ struct Sim {
 static int emit(const char *scenario) {
     Sim m;
     m.line("foot: census ON — read only; a transition line per camera regime, "
-           "a window line per second");
+           "a window line per second; sampled BEFORE head-look's write");
     // Seated: the head turns and head-look's write carries the local matrix
     // and GetCameraRotation with it; the cockpit pointer moves nothing.
     m.s.cam = 0x7f0000001000;
@@ -103,10 +103,12 @@ static int emit(const char *scenario) {
     m.s.attached_vt = 0x3c00000;
     m.s.relative = true;
     const bool moves = !strcmp(scenario, "follows");
+    const bool dropped = !strcmp(scenario, "dropped");
     const double dx[] = {300, -500, 150, -200, 400, -100, 250, -350};
     for (double d : dx) {
         const float yaw = moves ? (float)(-0.1 * d) : 0.f;
-        m.second(d, 0, 0, 0, 0, 0, yaw, 0, yaw, 0);
+        m.w.mouse_dropped = dropped ? 25 : 0;
+        m.second(dropped ? 0 : d, 0, 0, 0, 0, 0, yaw, 0, yaw, 0);
     }
     const double dy[] = {100, -200, 150, -50, 80, -120};
     for (double d : dy) {
@@ -210,7 +212,7 @@ int main(int argc, char **argv) {
         foot::format_window(line, sizeof line, w, 1.0);
         printf("       %s\n", line);
         check(strstr(line, "foot: window 1.00 s n 21 mode 1 piloting 0 occupied 0 "
-                           "view cockpit hud 0 rel 0 | mouse n 42 dx -350 dy 12 |") != nullptr,
+                           "view cockpit hud 0 rel 0 | mouse n 42 dx -350 dy 12 dropped 0 |") != nullptr,
               "window line head (mode, flags, mouse)");
         check(strstr(line, "| local net 20.00 0.00 travel 20.00 0.00 at -170.0 5.0 rot ") != nullptr,
               "window line's local column");

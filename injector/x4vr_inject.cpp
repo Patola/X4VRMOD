@@ -4700,7 +4700,7 @@ static bool footlog_on() {
 namespace {
 struct FootMouse {
     std::atomic<int64_t> dx_milli{0}, dy_milli{0};
-    std::atomic<uint64_t> n{0};
+    std::atomic<uint64_t> n{0}, dropped{0};
 };
 FootMouse g_footmouse;
 } // namespace
@@ -4731,6 +4731,16 @@ static bool x4_player_ship_ids(uint64_t *controlled, uint64_t *occupied) {
     return true;
 }
 
+// The player pilots a ship: GetPlayerControlledShipID != 0. Take 334: 1 in
+// the pilot seat (docked included), 0 from the moment he stands up. Absent
+// symbols mean "seated", the behaviour before the gate.
+static bool x4_seated() {
+    uint64_t ctl = 0, occ = 0;
+    if (!x4_player_ship_ids(&ctl, &occ))
+        return true;
+    return ctl != 0;
+}
+
 static void foot_tick() {
     if (!footlog_on())
         return;
@@ -4744,7 +4754,8 @@ static void foot_tick() {
     if (!said) {
         said = true;
         X4VR_LOG("foot: census ON — read only; a transition line per camera "
-                 "regime, a window line per second");
+                 "regime, a window line per second; sampled BEFORE head-look's "
+                 "write");
     }
 
     Sample sm;
@@ -4802,6 +4813,7 @@ static void foot_tick() {
         w.mouse_dx = 1e-3 * (double)g_footmouse.dx_milli.exchange(0);
         w.mouse_dy = 1e-3 * (double)g_footmouse.dy_milli.exchange(0);
         w.mouse_n = g_footmouse.n.exchange(0);
+        w.mouse_dropped = g_footmouse.dropped.exchange(0);
         char line[1024];
         format_window(line, sizeof line, w, now - w.t0);
         X4VR_LOG("%s", line);
@@ -5599,6 +5611,30 @@ void headlook_tick() {
     // What every site below actually means by "the cockpit".
     const bool may_steer = cockpit && hud;
 
+    // **In the pilot seat** -- write mode only. Take 334: out of the seat
+    // X4's camera stays in mode 0 with the same attached object, so the
+    // write armed on foot -- and reached nothing. GetCameraRotation ignored
+    // it there (r 0.00 against the head over 29 windows) and Patola saw the
+    // view stay put. Writing on regardless made `steering` true, so the
+    // layer declared X4's rendered rotation and the picture swung away
+    // whenever the arrow keys turned him, and the player's mouse was zeroed
+    // (below, before this fix). Off the seat nothing is written; the layer
+    // declares identity, as in a menu.
+    // Quiet until he has first sat: the load screen has no ship either.
+    const bool seated = !write_mode || x4_seated();
+    static bool was_seated = false, ever_seated = false;
+    if (seated != was_seated) {
+        was_seated = seated;
+        if (seated || ever_seated)
+            X4VR_LOG("headlook: %s",
+                     seated ? "in the pilot seat — the write may act"
+                            : "out of the pilot seat — the write stands down "
+                              "(on foot X4 does not render through the "
+                              "cockpit's free-look, take 334); the picture is "
+                              "a window fixed in front");
+        ever_seated = ever_seated || seated;
+    }
+
     // "— idle" / "the cockpit" are what score_run.py keys on; take 329 split
     // the old "external/floating" into the three cases it covered.
     static X4View was_view = X4View::Cockpit;
@@ -5684,7 +5720,7 @@ void headlook_tick() {
     // failed write (EFAULT mid-teardown) does not drop it: the camera is
     // still ours, and dropping it would publish an identity pose.
     bool write_ready = false;
-    if (write_mode && may_steer) {
+    if (write_mode && may_steer && seated) {
         const uintptr_t cam = x4_player_camera();
         write_ready = camwrite_ready(cam, g_headlook.pitch_limit_deg,
                                      g_headlook.yaw_limit_deg);
@@ -5717,7 +5753,7 @@ void headlook_tick() {
     static bool centred_period = false;
     if (hud || !cockpit_camera)
         centred_period = false;
-    if (write_mode && cockpit_camera && !hud && headlook_menu_centre()) {
+    if (write_mode && cockpit_camera && !hud && seated && headlook_menu_centre()) {
         const uintptr_t cam = x4_player_camera();
         if (camwrite_ready(cam, g_headlook.pitch_limit_deg,
                            g_headlook.yaw_limit_deg)) {
@@ -6686,6 +6722,10 @@ void SDL_PumpEvents(void) {
         camprobe_start();
         // X4's OWN thread, which is what makes this the control.
         camring_tick_on_x4_thread();
+        // Before head-look's write: the census reads what X4 left in its
+        // camera since the last tick, not our own write back (take 334's
+        // "local follows the head" was exactly that).
+        foot_tick();
         // MOVED, not duplicated — see the two-thread guard in headlook_tick.
         if (!tick_hz())
             headlook_tick();
@@ -6699,7 +6739,6 @@ void SDL_PumpEvents(void) {
         csmfit_tick();
         fullscreen_menu_tick();
         steer_tick();
-        foot_tick();
         pumprate_report();
     }
     real_fn();
@@ -6835,13 +6874,6 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
                     // The player's own mouse, competing for the same channel.
                     g_evflow.got_foreign.fetch_add(1,
                                                    std::memory_order_relaxed);
-                    if (footlog_on()) {
-                        g_footmouse.dx_milli.fetch_add(
-                            (int64_t)(e->xrel * 1000.f), std::memory_order_relaxed);
-                        g_footmouse.dy_milli.fetch_add(
-                            (int64_t)(e->yrel * 1000.f), std::memory_order_relaxed);
-                        g_footmouse.n.fetch_add(1, std::memory_order_relaxed);
-                    }
                 }
             }
             if (e->type == SDL_EV_KEY_DOWN || e->type == SDL_EV_KEY_UP)
@@ -6870,11 +6902,36 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
                 // pointer position the cursor shim composites, so targeting and
                 // menus are untouched -- and our own synthetic motion is spared
                 // by its marker, which is what that marker was for.
+                //
+                // **Take 334: on foot this zeroed every motion** -- the write
+                // armed there (X4's camera stays in mode 0), so `steering`
+                // was true and the mouse could not turn him. Fixed where it
+                // started: off the pilot seat the write stands down and
+                // `steering` is false (headlook_tick, `seated`). In the
+                // cockpit this stays exactly as it was.
+                bool dropped = false;
                 if (consuming && e->type == SDL_EV_MOUSE_MOTION &&
                     e->reserved != kOurEventMagic &&
                     g_headlook_steering.load(std::memory_order_relaxed)) {
                     e->xrel = 0.0f;
                     e->yrel = 0.0f;
+                    dropped = true;
+                }
+                // X4VR_FOOTLOG: what X4 RECEIVES, after the line above. Take
+                // 334 summed it before, so the census credited X4 with motion
+                // it never got and called the result "the mouse turns
+                // nothing".
+                if (consuming && e->type == SDL_EV_MOUSE_MOTION &&
+                    e->reserved != kOurEventMagic && footlog_on()) {
+                    if (dropped) {
+                        g_footmouse.dropped.fetch_add(1, std::memory_order_relaxed);
+                    } else {
+                        g_footmouse.dx_milli.fetch_add(
+                            (int64_t)(e->xrel * 1000.f), std::memory_order_relaxed);
+                        g_footmouse.dy_milli.fetch_add(
+                            (int64_t)(e->yrel * 1000.f), std::memory_order_relaxed);
+                        g_footmouse.n.fetch_add(1, std::memory_order_relaxed);
+                    }
                 }
             }
         }

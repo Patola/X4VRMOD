@@ -25312,3 +25312,89 @@ the line); its `--emit` feeds the census suite the real formatter's output
 before it is built: a write into the state the census names (a new write
 target, the cockpit write's sibling), or, if the walking view lives in the
 character, a read of that object first.
+
+## Take 334 — SCORED: on foot the camera is still mode 0, the write armed there, and it zeroed the mouse
+
+PASS (no regression: menus centred 3/3, steering A drawn 3416 frames,
+pointer recentred 2/2, the write armed). Patola went to a station, stood up,
+waited for the notice, tried the mouse: *"It didn't turn with the mouse."*
+Out of the ship the arrow keys turned him, *"but instead of my camera
+turning and looking around, the quad where the scene is rotated from my
+view"*; turning the head, *"it was the quad that was going out of view"*.
+
+    regimes   seated: mode 0, piloting 1 occupied 1
+              stood up: mode 0, piloting 0 occupied 0 -- SAME camera, SAME
+              attached object (vtable 0x3b5f7a0), relative mouse ON
+    off seat  92 s, 89 windows; GetCameraRotation 0,0 except one 9-s burst
+              (-15, -34, +74, 11, -6, then parked at 3.99 until he sat);
+              pitch 0 throughout; it ignored the head (r 0.00, 29 windows)
+
+* **P334.1 REFUTED.** No mode change: walking keeps the cockpit's camera in
+  mode 0, attached to the same object. So `camwrite_ready` passed on foot
+  and head-look WROTE there all along -- and nothing followed: GetCameraRotation
+  never moved with the head, and Patola saw no turn. On foot X4 does not
+  render through the cockpit's free-look matrix, though it is mode 0.
+* **The mouse: our defect, not X4's.** Writing on foot made `steering` true,
+  and the event walk zeroes the player's relative mouse while steering (the
+  rule from the MOUSELOOK actuator, where the mouse fought the servo). So X4
+  received no mouse motion on foot. **P334.3 was not tested at all.**
+* **The swinging quad, also ours.** `steering` true means the layer declares
+  X4's rendered rotation (atdraw = GetCameraRotation); it moved during the
+  arrow-key burst, so the picture was placed where X4 claimed to look.
+* **P334.2 HELD in substance** (nothing X4 renders follows the head), for a
+  different reason than predicted (not a refusal: a write that reaches
+  nothing).
+
+**Two wrong turns in the instrument, recorded:**
+* The census summed the player's mouse BEFORE head-look zeroed it, credited
+  X4 with 2851 counts it never received, and its verdict said *"the mouse
+  turns NOTHING we read (the walking view lives elsewhere — the attached
+  object)"*. A verdict about X4 built on an input that never reached X4
+  ([[test-the-fix-where-it-can-act]]: the quantity was zero where it acted).
+* It sampled after head-look's write in the same pump, so "local yaw/pitch
+  FOLLOWS the head (r 1.00, slope 1.000)" was our own write read back
+  ([[a-watcher-must-not-observe-itself]]).
+Both fixed: it counts what X4 receives (and what was dropped), samples
+before the write and says so in its banner; the scorer refuses a mouse
+verdict when motion was dropped or counted the old way, and marks the local
+column of a pre-335 census as our own write. Census suite +4.
+
+**Fixed (P335):** in write mode head-look writes only **in the pilot seat**
+(`GetPlayerControlledShipID != 0`: 1 seated, docked included; 0 from the
+moment he stands, take 334). Off the seat nothing is written, MENU_CENTRE
+included, `steering` is false, so (a) the mouse is no longer zeroed -- the
+cockpit's handling is byte for byte unchanged -- and (b) the layer declares
+identity: a window fixed in front, the scene turning inside it. Logged once
+per transition ("out of the pilot seat — the write stands down" / "in the
+pilot seat — the write may act"); the scorer FAILs a write-mode census that
+saw the player off the seat without a stand-down.
+
+## P335 — the mouse back on foot: what does X4's view do with it?
+
+Take 334's line with the fixes; nothing else differs. WiVRn, configuration 1.
+
+* **P335.1** the mouse turns him on foot again, and mouse-only windows show
+  **GetCameraRotation's yaw following mouse dx** (negative gain in head-look's
+  convention) and its pitch following dy. Low-medium confidence: in 334 it
+  sat at 0,0 for most of the time off the seat. Refutation: he turns but it
+  does not move -- GetCameraRotation is not the walking view, and any
+  closed loop on foot needs another read-back.
+* **P335.2** each stand-up logs the stand-down, each sit the resume; no
+  write off the seat; no FAIL.
+* **P335.3** in the headset off the seat: a window fixed in front, the
+  mouse and arrow keys turning the scene inside it, the window itself not
+  swinging. Turning the head still looks past its edge (unchanged -- the
+  next step's job).
+* **P335.4** the cockpit's local matrix off the seat, sampled before any
+  write: static -- X4 leaves the cockpit free-look alone on foot.
+* **P335.5** seated, nothing changes: steering A, menus centred, tracking.
+
+**The decision after 335 (Patola's):** on foot X4 turns the body; it has no
+separate head that we know of. Either (A) the body follows the head --
+X4's own on-foot mouse-look driven closed-loop from the head, the old
+servo's machinery without the MOUSELOOK key; walking goes where he looks,
+the mouse/arrows add a turn on top -- or (B) the head looks independently of
+the body, which needs X4's first-person view state found and written like
+the cockpit's (the cockpit hunt took takes 315-321, and X4 may have no such
+state on foot). 335 measures the plant (A) needs and is the first look (B)
+needs.

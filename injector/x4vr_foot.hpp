@@ -162,8 +162,8 @@ struct Window {
     Sample last;
     Track rot, head;
     MatTrack local, base;
-    double mouse_dx = 0.0, mouse_dy = 0.0;
-    uint64_t mouse_n = 0;
+    double mouse_dx = 0.0, mouse_dy = 0.0; // what X4 received
+    uint64_t mouse_n = 0, mouse_dropped = 0; // motion events: received, zeroed by us
 
     void add(double now, const Sample &s) {
         if (t0 < 0.0)
@@ -193,7 +193,7 @@ struct Window {
         local.restart();
         base.restart();
         mouse_dx = mouse_dy = 0.0;
-        mouse_n = 0;
+        mouse_n = mouse_dropped = 0;
     }
 };
 
@@ -234,11 +234,12 @@ inline int format_window(char *out, size_t cap, const Window &w, double secs) {
     m(w.base, bas, sizeof bas);
     return snprintf(out, cap,
                     "foot: window %.2f s n %d mode %d piloting %d occupied %d "
-                    "view %s hud %d rel %d | mouse n %llu dx %.0f dy %.0f | "
-                    "head %s | rot %s | local %s | base %s",
+                    "view %s hud %d rel %d | mouse n %llu dx %.0f dy %.0f "
+                    "dropped %llu | head %s | rot %s | local %s | base %s",
                     secs, w.n, (int)s.mode, (int)s.piloting, (int)s.occupied,
                     view_name(s.view), (int)s.hud, (int)s.relative,
-                    (unsigned long long)w.mouse_n, w.mouse_dx, w.mouse_dy, head,
+                    (unsigned long long)w.mouse_n, w.mouse_dx, w.mouse_dy,
+                    (unsigned long long)w.mouse_dropped, head,
                     rot, loc, bas);
 }
 

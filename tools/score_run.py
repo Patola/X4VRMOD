@@ -4645,6 +4645,7 @@ def main(path):
     # and it means the walking view lives in the attached object.
     ft_asked = bool(re.search(r"\bX4VR_FOOTLOG=[1-9]", run or ""))
     ft_on = "foot: census ON" in text
+    ft_before = "sampled BEFORE head-look's write" in text
     ft_reg = re.findall(
         r"\[\s*([\d.]+)\]\s+inject\s+foot: regime camera (\S+) mode (-?\d+) "
         r"attached (\S+) \(vtable (\S+)\) \| piloting (\d) occupied (\d) \| "
@@ -4654,8 +4655,8 @@ def main(path):
              r"moved (\d+) pos (\S+))")
     ft_win = re.findall(
         r"foot: window (\S+) s n (\d+) mode (-?\d+) piloting (\d) occupied (\d) "
-        r"view (\S+) hud (\d) rel (\d) \| mouse n (\d+) dx (\S+) dy (\S+) \| "
-        r"head " + _ft_t + r" \| rot " + _ft_t + r" \| local " + _ft_m +
+        r"view (\S+) hud (\d) rel (\d) \| mouse n (\d+) dx (\S+) dy (\S+)"
+        r"(?: dropped (\d+))? \| head " + _ft_t + r" \| rot " + _ft_t + r" \| local " + _ft_m +
         r" \| base " + _ft_m, text)
     if ft_asked and not ft_on:
         fails.append("X4VR_FOOTLOG asked but the census never started")
@@ -4670,8 +4671,11 @@ def main(path):
             w = {"secs": _f(g[0]), "mode": int(g[2]), "pilot": g[3] == "1",
                  "occ": g[4] == "1", "view": g[5], "hud": g[6] == "1",
                  "rel": g[7] == "1", "mn": int(g[8]), "dx": _f(g[9]),
-                 "dy": _f(g[10])}
-            off = 11
+                 "dy": _f(g[10]),
+                 # None: a take-334 line, which summed the mouse BEFORE
+                 # head-look zeroed it -- so its dx/dy are not what X4 got.
+                 "drop": int(g[11]) if g[11] else None}
+            off = 12
             for src, n in (("head", 6), ("rot", 6), ("local", 9), ("base", 9)):
                 v = g[off:off + n]
                 off += n
@@ -4718,6 +4722,28 @@ def main(path):
             print(f"foot    mode {mode} {label}: {secs:.0f} s, mouse |dx| "
                   f"{mx:.0f} |dy| {my:.0f}, relative mouse in {rel}/{len(ws)} "
                   f"window(s)")
+            # The mouse column is only evidence about X4 if X4 received it.
+            unknown = sum(1 for w in ws if w["drop"] is None)
+            dropped = sum(w["drop"] or 0 for w in ws)
+            mouse_unsure = None
+            if unknown:
+                mouse_unsure = (f"the mouse was counted BEFORE head-look's drop "
+                                f"in {unknown} window(s) (a take-334 line), so "
+                                f"what X4 received is unknown")
+            elif dropped:
+                mouse_unsure = (f"head-look ZEROED {dropped} mouse motion "
+                                f"event(s) before X4 saw them")
+            if mouse_unsure:
+                print(f"foot      NOTE {mouse_unsure} — the mouse-only rows "
+                      f"below are not a test of X4")
+            # Take 334 sampled AFTER head-look's write in the same pump, so
+            # under X4VR_HEADLOOK_WRITE its local column is our own write.
+            own_write = (not ft_before and
+                         bool(re.search(r"\bX4VR_HEADLOOK_WRITE=1", run or "")))
+            if own_write:
+                print("foot      NOTE sampled AFTER head-look's write (a "
+                      "take-334 census): the local column is our own write "
+                      "read back, not what X4 kept")
             for src in ("head", "rot", "local", "base"):
                 ds = [w[src] for w in ws if w[src]]
                 if not ds:
@@ -4764,15 +4790,35 @@ def main(path):
                             follows_head.append(f"{src} {axis}")
             if not pilot:
                 print(f"foot => mode {mode} off the seat: the mouse turns "
-                      + (", ".join(follows_mouse) if follows_mouse else
+                      + ("? (" + mouse_unsure + ")" if mouse_unsure else
+                         ", ".join(follows_mouse) if follows_mouse else
                          "NOTHING we read (the walking view lives elsewhere — "
                          "the attached object)" if mo else
                          "? (no mouse-only window)")
                       + "; the head turns "
-                      + (", ".join(follows_head) if follows_head else
+                      + (", ".join(f for f in follows_head
+                                   if not (own_write and f.startswith("local")))
+                         + (" (local: our own write, read back)" if own_write
+                            and any(f.startswith("local") for f in follows_head)
+                            else "")
+                         if follows_head else
                          "nothing" if ho else "? (no head-only window)"))
         if not off_seat:
             print("foot => NOT EXERCISED: no window off the pilot seat")
+        # Since take 335 the write stands down off the seat. Intent: write
+        # mode + a census that saw the player off the seat must show it.
+        downs = len(re.findall(r"headlook: out of the pilot seat — the write "
+                               r"stands down", text))
+        ups = len(re.findall(r"headlook: in the pilot seat — the write may act",
+                             text))
+        if downs or ups:
+            print(f"foot    seat: the write stood down {downs} time(s) off the "
+                  f"seat, resumed {ups} time(s)")
+        elif off_seat and ft_before and re.search(r"\bX4VR_HEADLOOK_WRITE=1",
+                                                  run or ""):
+            fails.append("foot: off the pilot seat with X4VR_HEADLOOK_WRITE, "
+                         "but the write never stood down — it writes on foot, "
+                         "where take 334 found it reaches nothing")
 
     # --- the Lua reconnaissance (X4VR_LUA=1): which state, source or bytecode
     lua_rows = re.findall(r"lua\[(buf|file)\] (.*?) \((\d+) bytes, "
