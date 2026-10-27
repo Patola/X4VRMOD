@@ -2589,7 +2589,15 @@ def main(path):
         r"x4=(-?\d+\.\d+),(-?\d+\.\d+) d=(-?\d+\.\d+),(-?\d+\.\d+) "
         r"age=(-?\d+\.\d+) valid=(\d) rawvalid=(\d)"
         r"(?: residual=-?\d+\.\d+,-?\d+\.\d+"
-        r"(?: cmd=(-?\d+\.\d+),(-?\d+\.\d+) rot=(\d))?)?", text)
+        r"(?: cmd=(-?\d+\.\d+),(-?\d+\.\d+) rot=(\d)(?: foot=(\d))?)?)?", text)
+    # Off the seat under X4VR_HEADLOOK_FOOT the declaration is the head part
+    # and `x4` includes the body, so `d` there is the body's angle, not an
+    # error. Stamped by the layer (`foot=1`) and set apart here.
+    pl_foot = [g for g in pl if g[13] == "1"]
+    pl = [g for g in pl if g[13] != "1"]
+    if pl_foot:
+        print(f"poselag  {len(pl_foot)} frame(s) ON FOOT set apart — declared "
+              f"head-look's written angle; X4's camera there includes the body")
     if pl:
         # Groups, in order: ts, decl_y, decl_p, x4_y, x4_p, d_y, d_p, age,
         # valid, rawvalid, cmd_y, cmd_p, rot. The last three are absent in logs
@@ -4685,10 +4693,24 @@ def main(path):
     ft_win = re.findall(
         r"foot: window (\S+) s n (\d+) mode (-?\d+) piloting (\d) occupied (\d) "
         r"view (\S+) hud (\d) rel (\d) \| mouse n (\d+) dx (\S+) dy (\S+)"
-        r"(?: dropped (\d+))? \| head " + _ft_t + r" \| rot " + _ft_t + r" \| local " + _ft_m +
+        r"(?: dropped (\d+))?(?: pitchzero (\d+))? \| head " + _ft_t + r" \| rot " + _ft_t + r" \| local " + _ft_m +
         r" \| base " + _ft_m, text)
     if ft_asked and not ft_on:
         fails.append("X4VR_FOOTLOG asked but the census never started")
+    # X4VR_HEADLOOK_FOOT: B's patch (0x1929f70's walking branch). Intent is
+    # the run line; the patch reports itself once, at load.
+    fp_asked = bool(re.search(r"\bX4VR_HEADLOOK_FOOT=1", run or ""))
+    fp_ok = re.search(r"foot: PATCHED — 0x1929f70's walking branch", text)
+    fp_ref = re.search(r"foot: patch REFUSED — (.*?)\. Walking stays", text)
+    if fp_ok:
+        print("foot    patch IN: walking composes the camera's own rotation "
+              "(head-look) after the player's")
+    elif fp_ref:
+        print(f"foot    patch REFUSED — {fp_ref.group(1)}")
+    if fp_asked and not fp_ok:
+        fails.append("X4VR_HEADLOOK_FOOT asked but 0x1929f70 was never patched"
+                     + (f" — {fp_ref.group(1)}" if fp_ref else
+                        " (no foot: line at all)"))
     if ft_on:
         def _f(x):
             try:
@@ -4703,8 +4725,9 @@ def main(path):
                  "dy": _f(g[10]),
                  # None: a take-334 line, which summed the mouse BEFORE
                  # head-look zeroed it -- so its dx/dy are not what X4 got.
-                 "drop": int(g[11]) if g[11] else None}
-            off = 12
+                 "drop": int(g[11]) if g[11] else None,
+                 "pz": int(g[12]) if g[12] else 0}
+            off = 13
             for src, n in (("head", 6), ("rot", 6), ("local", 9), ("base", 9)):
                 v = g[off:off + n]
                 off += n
@@ -4838,16 +4861,26 @@ def main(path):
         # mode + a census that saw the player off the seat must show it.
         downs = len(re.findall(r"headlook: out of the pilot seat — the write "
                                r"stands down", text))
+        conts = len(re.findall(r"headlook: out of the pilot seat — head-look "
+                               r"continues on foot", text))
         ups = len(re.findall(r"headlook: in the pilot seat — the write may act",
                              text))
-        if downs or ups:
+        if downs or ups or conts:
             print(f"foot    seat: the write stood down {downs} time(s) off the "
-                  f"seat, resumed {ups} time(s)")
-        elif off_seat and ft_before and re.search(r"\bX4VR_HEADLOOK_WRITE=1",
-                                                  run or ""):
+                  f"seat, continued on foot {conts} time(s), resumed {ups} "
+                  f"time(s)")
+        hw = re.search(r"\bX4VR_HEADLOOK_WRITE=1", run or "")
+        if off_seat and ft_before and hw and fp_ok and not conts:
+            fails.append("foot: patched and off the pilot seat, but head-look "
+                         "never said it continues on foot")
+        elif off_seat and ft_before and hw and not fp_ok and not downs:
             fails.append("foot: off the pilot seat with X4VR_HEADLOOK_WRITE, "
                          "but the write never stood down — it writes on foot, "
                          "where take 334 found it reaches nothing")
+        pz = sum(w["pz"] for w in wins if not w["pilot"])
+        if pz:
+            print(f"foot    the mouse's pitch zeroed in {pz} motion event(s) "
+                  f"off the seat (head alone for pitch)")
 
     # --- the Lua reconnaissance (X4VR_LUA=1): which state, source or bytecode
     lua_rows = re.findall(r"lua\[(buf|file)\] (.*?) \((\d+) bytes, "

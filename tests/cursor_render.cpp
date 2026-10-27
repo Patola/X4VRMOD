@@ -631,5 +631,11 @@ int main() {
     if (validated)
         eq("validation errors", g_validation_errors, 0);
     printf("\n%s\n", g_bad ? "SOME CASES FAILED" : "all cases passed");
+    // The census log is kept only when it explains a failure: every passing
+    // run used to leave one in /tmp (69 by take 335).
+    if (g_bad)
+        printf("census log kept: %s\n", g_log_path);
+    else
+        unlink(g_log_path);
     return g_bad ? 1 : 0;
 }

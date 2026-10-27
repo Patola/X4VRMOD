@@ -1107,6 +1107,7 @@ T real(const char *name) {
 extern "C" {
 
 static void csmfit_patch_at_start(); // defined with csmfit_tick, below
+static void foot_patch_at_start();   // X4VR_HEADLOOK_FOOT, with foot_tick
 
 __attribute__((constructor)) static void x4vr_inject_init() {
     char exe[256] = "?";
@@ -1119,6 +1120,8 @@ __attribute__((constructor)) static void x4vr_inject_init() {
         // #70's fix, X4VR_CSM_COVER: X4's code is patched here, before any of
         // it has run, so no thread can be inside the four instructions.
         csmfit_patch_at_start();
+        // B (walking): the same rule -- before X4 runs a single frame.
+        foot_patch_at_start();
     }
     // Task #68: the parsed clamp, once X4 has had time to parse it. A delay
     // rather than a hook, because the parse has no seam we can name -- and if
@@ -4700,7 +4703,7 @@ static bool footlog_on() {
 namespace {
 struct FootMouse {
     std::atomic<int64_t> dx_milli{0}, dy_milli{0};
-    std::atomic<uint64_t> n{0}, dropped{0};
+    std::atomic<uint64_t> n{0}, dropped{0}, pitch_zeroed{0};
 };
 FootMouse g_footmouse;
 } // namespace
@@ -4729,6 +4732,88 @@ static bool x4_player_ship_ids(uint64_t *controlled, uint64_t *occupied) {
     *controlled = ctl();
     *occupied = occ();
     return true;
+}
+
+// ------------------------------------------------ X4VR_HEADLOOK_FOOT=1
+//
+// Head-look off the pilot seat (Patola's B: the head looks, the body walks).
+// On foot 0x1929f70 drops the camera's own transform, so the write reached
+// nothing (takes 334/335); the patch retargets that one jne so walking
+// composes the player and then the camera's own rotation -- ours -- and
+// nothing else (x4vr_foot.hpp). Patched at load, before X4 has run a frame,
+// as X4VR_CSM_COVER is; it lives in memory only. Needs X4VR_HEADLOOK_WRITE:
+// without the write nothing owns +0x5b0 on foot, and a stale cockpit angle
+// would be composed into the walking view.
+static bool headlook_foot_asked() {
+    static const bool on = x4vr::env_on("X4VR_HEADLOOK_FOOT", false);
+    return on;
+}
+namespace {
+struct FootPatch {
+    bool patched = false;
+};
+FootPatch g_footpatch;
+std::atomic<bool> g_on_foot{false};
+} // namespace
+
+static void foot_patch_at_start() {
+    using namespace x4vr::foot;
+    if (!headlook_foot_asked())
+        return;
+    auto refuse = [](const char *why) {
+        X4VR_LOG("foot: patch REFUSED — %s. Walking stays as it was: a "
+                 "window fixed in front.", why);
+        X4VR_LOG("milestone: head-look on foot REFUSED — %s. Quit and tell me.",
+                 why);
+    };
+    if (!headlook_write_enabled()) {
+        refuse("X4VR_HEADLOOK_FOOT needs X4VR_HEADLOOK_WRITE=1");
+        return;
+    }
+    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    uintptr_t bad = 0;
+    if (!verify_skip_sites(rd, &bad)) {
+        char why[160];
+        snprintf(why, sizeof why,
+                 "0x1929f70's code at %#lx differs from X4 9.00",
+                 (unsigned long)bad);
+        refuse(why);
+        return;
+    }
+    const int32_t want = rel32_to(kSkipJneEnd, kLocalTailVa);
+    const long page = sysconf(_SC_PAGESIZE);
+    const uintptr_t pg = kSkipRel32 & ~(uintptr_t)(page - 1);
+    if (((kSkipRel32 + 3) & ~(uintptr_t)(page - 1)) != pg) {
+        refuse("the jne's rel32 straddles a page");
+        return;
+    }
+    if (mprotect((void *)pg, (size_t)page, PROT_READ | PROT_WRITE | PROT_EXEC) != 0 &&
+        mprotect((void *)pg, (size_t)page, PROT_READ | PROT_WRITE) != 0) {
+        char why[160];
+        snprintf(why, sizeof why, "mprotect(rw) %#lx: %s", (unsigned long)pg,
+                 strerror(errno));
+        refuse(why);
+        return;
+    }
+    memcpy((void *)kSkipRel32, &want, 4);
+    if (mprotect((void *)pg, (size_t)page, PROT_READ | PROT_EXEC) != 0) {
+        char why[160];
+        snprintf(why, sizeof why, "mprotect(rx) %#lx: %s", (unsigned long)pg,
+                 strerror(errno));
+        refuse(why);
+        return;
+    }
+    int32_t got = 0;
+    if (!self_read(kSkipRel32, &got, 4) || got != want) {
+        refuse("the read-back of the patched jne does not point at 0x192a284");
+        return;
+    }
+    g_footpatch.patched = true;
+    X4VR_LOG("foot: PATCHED — 0x1929f70's walking branch (jne at %#lx) now "
+             "composes the camera's own rotation (0x192a284) instead of "
+             "returning (0x192a216); head-look writes off the pilot seat, the "
+             "mouse's pitch is zeroed there",
+             (unsigned long)kSkipJne);
 }
 
 // The player pilots a ship: GetPlayerControlledShipID != 0. Take 334: 1 in
@@ -4814,6 +4899,7 @@ static void foot_tick() {
         w.mouse_dy = 1e-3 * (double)g_footmouse.dy_milli.exchange(0);
         w.mouse_n = g_footmouse.n.exchange(0);
         w.mouse_dropped = g_footmouse.dropped.exchange(0);
+        w.mouse_pitch_zeroed = g_footmouse.pitch_zeroed.exchange(0);
         char line[1024];
         format_window(line, sizeof line, w, now - w.t0);
         X4VR_LOG("%s", line);
@@ -5621,17 +5707,28 @@ void headlook_tick() {
     // (below, before this fix). Off the seat nothing is written; the layer
     // declares identity, as in a menu.
     // Quiet until he has first sat: the load screen has no ship either.
+    //
+    // X4VR_HEADLOOK_FOOT: with 0x1929f70 patched, off the seat X4 composes
+    // the camera's own rotation after the player's, so the write acts there
+    // too (`write_here`) -- B, the head looking while the body walks.
     const bool seated = !write_mode || x4_seated();
+    const bool write_here = seated || g_footpatch.patched;
+    const bool on_foot = write_mode && !seated && g_footpatch.patched;
     static bool was_seated = false, ever_seated = false;
     if (seated != was_seated) {
         was_seated = seated;
         if (seated || ever_seated)
             X4VR_LOG("headlook: %s",
                      seated ? "in the pilot seat — the write may act"
-                            : "out of the pilot seat — the write stands down "
-                              "(on foot X4 does not render through the "
-                              "cockpit's free-look, take 334); the picture is "
-                              "a window fixed in front");
+                     : g_footpatch.patched
+                         ? "out of the pilot seat — head-look continues on "
+                           "foot (X4VR_HEADLOOK_FOOT): the head looks, the "
+                           "mouse and arrows turn the body, the mouse's pitch "
+                           "is zeroed"
+                         : "out of the pilot seat — the write stands down "
+                           "(on foot X4 does not render through the "
+                           "cockpit's free-look, take 334); the picture is "
+                           "a window fixed in front");
         ever_seated = ever_seated || seated;
     }
 
@@ -5720,7 +5817,7 @@ void headlook_tick() {
     // failed write (EFAULT mid-teardown) does not drop it: the camera is
     // still ours, and dropping it would publish an identity pose.
     bool write_ready = false;
-    if (write_mode && may_steer && seated) {
+    if (write_mode && may_steer && write_here) {
         const uintptr_t cam = x4_player_camera();
         write_ready = camwrite_ready(cam, g_headlook.pitch_limit_deg,
                                      g_headlook.yaw_limit_deg);
@@ -5753,7 +5850,7 @@ void headlook_tick() {
     static bool centred_period = false;
     if (hud || !cockpit_camera)
         centred_period = false;
-    if (write_mode && cockpit_camera && !hud && seated && headlook_menu_centre()) {
+    if (write_mode && cockpit_camera && !hud && write_here && headlook_menu_centre()) {
         const uintptr_t cam = x4_player_camera();
         if (camwrite_ready(cam, g_headlook.pitch_limit_deg,
                            g_headlook.yaw_limit_deg)) {
@@ -5783,6 +5880,12 @@ void headlook_tick() {
     const bool steering =
         write_mode ? write_ready : (armed_now && may_steer);
     g_headlook_steering.store(steering, std::memory_order_relaxed);
+    // On foot only while the write is actually ours this tick: that is when
+    // the mouse's pitch is zeroed and the layer declares the head part.
+    const bool foot_now = on_foot && steering;
+    g_on_foot.store(foot_now, std::memory_order_relaxed);
+    if (x4vr::Shared *sh = x4vr_shared_state())
+        sh->on_foot.store(foot_now ? 1u : 0u, std::memory_order_relaxed);
     g_in_cockpit.store(cockpit, std::memory_order_relaxed);
     g_view_known.store(true, std::memory_order_relaxed);
 
@@ -5986,7 +6089,12 @@ void headlook_tick() {
     if (lag_log_enabled()) {
         X4VR_LOG("lagsample: arm=%d view=%s steer=%d cam=%d head=%.3f,%.3f "
                  "x4=%.3f,%.3f kparm=%d kp=%.3f ylim=%.1f rfarm=%d rftau=%.0f ugarm=%d",
-                 lead_armed ? 1 : 0, cockpit ? "cockpit" : "external",
+                 lead_armed ? 1 : 0,
+                 // "foot": off the seat under X4VR_HEADLOOK_FOOT, where x4=
+                 // includes the body -- stamped, never re-derived.
+                 !cockpit ? "external"
+                 : g_on_foot.load(std::memory_order_relaxed) ? "foot"
+                                                             : "cockpit",
                  steering ? 1 : 0, have_cam ? 1 : 0, yaw, pitch,
                  have_cam ? kRad2Deg * -r.yaw : 0.0f,
                  have_cam ? kRad2Deg * r.pitch : 0.0f,
@@ -6909,13 +7017,22 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
                 // started: off the pilot seat the write stands down and
                 // `steering` is false (headlook_tick, `seated`). In the
                 // cockpit this stays exactly as it was.
-                bool dropped = false;
+                //
+                // On foot under X4VR_HEADLOOK_FOOT the mouse turns the body,
+                // so only its PITCH is zeroed: Patola, 2026-10-27, "head
+                // alone for pitch on foot".
+                bool dropped = false, pitch_zeroed = false;
                 if (consuming && e->type == SDL_EV_MOUSE_MOTION &&
                     e->reserved != kOurEventMagic &&
                     g_headlook_steering.load(std::memory_order_relaxed)) {
-                    e->xrel = 0.0f;
-                    e->yrel = 0.0f;
-                    dropped = true;
+                    if (g_on_foot.load(std::memory_order_relaxed)) {
+                        pitch_zeroed = e->yrel != 0.0f;
+                        e->yrel = 0.0f;
+                    } else {
+                        e->xrel = 0.0f;
+                        e->yrel = 0.0f;
+                        dropped = true;
+                    }
                 }
                 // X4VR_FOOTLOG: what X4 RECEIVES, after the line above. Take
                 // 334 summed it before, so the census credited X4 with motion
@@ -6923,6 +7040,8 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
                 // nothing".
                 if (consuming && e->type == SDL_EV_MOUSE_MOTION &&
                     e->reserved != kOurEventMagic && footlog_on()) {
+                    if (pitch_zeroed)
+                        g_footmouse.pitch_zeroed.fetch_add(1, std::memory_order_relaxed);
                     if (dropped) {
                         g_footmouse.dropped.fetch_add(1, std::memory_order_relaxed);
                     } else {

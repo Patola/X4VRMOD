@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 #include "../injector/x4vr_camwrite.hpp"
 #include "../injector/x4vr_foot.hpp"
@@ -102,6 +103,21 @@ static int emit(const char *scenario) {
     m.s.attached = 0x7f0000003000;
     m.s.attached_vt = 0x3c00000;
     m.s.relative = true;
+    if (!strcmp(scenario, "patched")) {
+        // B: X4VR_HEADLOOK_FOOT. The mouse turns the body (GetCameraRotation's
+        // yaw); its pitch never reaches X4 (zeroed); the head turns
+        // GetCameraRotation and the written local matrix.
+        const double bx[] = {300, -500, 150, -200, 400, -100, 250, -350};
+        for (double d : bx) {
+            const float yaw = (float)(-0.1 * d);
+            m.w.mouse_pitch_zeroed = 12;
+            m.second(d, 0, 0, 0, 0, 0, 0, 0, yaw, 0);
+        }
+        const float turn[] = {10, -14, 9, -11, 12, -8};
+        for (float d : turn)
+            m.second(0, 0, d, d / 3, d, d / 3, 0, 0, d, d / 3);
+        return 0;
+    }
     const bool moves = !strcmp(scenario, "follows");
     const bool dropped = !strcmp(scenario, "dropped");
     const double dx[] = {300, -500, 150, -200, 400, -100, 250, -350};
@@ -121,9 +137,89 @@ static int emit(const char *scenario) {
     return 0;
 }
 
+// The ELF reader of tests/steer.cpp: X4 is non-PIE, a VA maps through the
+// PT_LOAD headers.
+struct Elf {
+    std::vector<uint8_t> d;
+    bool load(const char *path) {
+        FILE *f = fopen(path, "rb");
+        if (!f)
+            return false;
+        fseek(f, 0, SEEK_END);
+        d.resize((size_t)ftell(f));
+        fseek(f, 0, SEEK_SET);
+        const bool ok = fread(d.data(), 1, d.size(), f) == d.size();
+        fclose(f);
+        return ok && d.size() > 64;
+    }
+    bool read(uintptr_t va, void *out, size_t n) const {
+        uint64_t phoff;
+        uint16_t phentsize, phnum;
+        memcpy(&phoff, &d[0x20], 8);
+        memcpy(&phentsize, &d[0x36], 2);
+        memcpy(&phnum, &d[0x38], 2);
+        for (uint16_t i = 0; i < phnum; i++) {
+            const uint8_t *p = &d[phoff + (size_t)i * phentsize];
+            uint32_t type;
+            uint64_t off, vaddr, filesz;
+            memcpy(&type, p, 4);
+            memcpy(&off, p + 8, 8);
+            memcpy(&vaddr, p + 16, 8);
+            memcpy(&filesz, p + 32, 8);
+            if (type == 1 && va >= vaddr && va + n <= vaddr + filesz) {
+                memcpy(out, &d[off + (va - vaddr)], n);
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
 int main(int argc, char **argv) {
     if (argc == 3 && !strcmp(argv[1], "--emit"))
         return emit(argv[2]);
+
+    // 0. X4VR_HEADLOOK_FOOT's sites, against the real binary.
+    {
+        static Elf elf;
+        const char *x4 = "/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4";
+        if (!elf.load(x4)) {
+            printf("SKIP   no X4 binary at %s — the patch sites are unchecked\n", x4);
+        } else {
+            auto rd = [](uintptr_t va, void *o, size_t n) { return elf.read(va, o, n); };
+            uintptr_t bad = 0;
+            check(foot::verify_skip_sites(rd, &bad),
+                  "the walking branch, the local tail and the compose match X4 9.00");
+            // One byte changed in each site: refused, and named.
+            for (const foot::CodeBytes *c :
+                 {&foot::kSkipBranch, &foot::kLocalTail, &foot::kLocalCompose}) {
+                const uintptr_t flip = c->va + c->n / 2;
+                auto rd2 = [flip](uintptr_t va, void *o, size_t n) {
+                    if (!elf.read(va, o, n))
+                        return false;
+                    if (flip >= va && flip < va + n)
+                        ((uint8_t *)o)[flip - va] ^= 0x01;
+                    return true;
+                };
+                bad = 0;
+                char what[96];
+                snprintf(what, sizeof what,
+                         "one byte changed at %#lx -> refused there",
+                         (unsigned long)flip);
+                check(!foot::verify_skip_sites(rd2, &bad) && bad == flip, what);
+            }
+            // The patch's arithmetic: the new rel32, decoded from the jne's end,
+            // lands on the tail; the old one on the return.
+            const int32_t want = foot::rel32_to(foot::kSkipJneEnd, foot::kLocalTailVa);
+            check((uint32_t)want == 0xffffff8bu &&
+                      foot::kSkipJneEnd + (intptr_t)want == foot::kLocalTailVa,
+                  "the patched rel32 is 0xffffff8b and lands on 0x192a284");
+            int32_t old_rel = 0;
+            elf.read(foot::kSkipRel32, &old_rel, 4);
+            check(foot::kSkipJneEnd + (intptr_t)old_rel == foot::kSkipTarget,
+                  "control: X4's own rel32 lands on the return 0x192a216");
+        }
+    }
     // 1. The inverse of rows_for, over the range head-look writes.
     {
         float worst = 0.f;
@@ -212,7 +308,7 @@ int main(int argc, char **argv) {
         foot::format_window(line, sizeof line, w, 1.0);
         printf("       %s\n", line);
         check(strstr(line, "foot: window 1.00 s n 21 mode 1 piloting 0 occupied 0 "
-                           "view cockpit hud 0 rel 0 | mouse n 42 dx -350 dy 12 dropped 0 |") != nullptr,
+                           "view cockpit hud 0 rel 0 | mouse n 42 dx -350 dy 12 dropped 0 pitchzero 0 |") != nullptr,
               "window line head (mode, flags, mouse)");
         check(strstr(line, "| local net 20.00 0.00 travel 20.00 0.00 at -170.0 5.0 rot ") != nullptr,
               "window line's local column");

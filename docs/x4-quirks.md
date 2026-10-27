@@ -25485,3 +25485,64 @@ Consequences, stated before anything is built:
   object, the highlight follows the body. The take will show which.
 * +0x5b0 must be ours on foot whenever the patch is in: the head's angle, or
   identity -- never a stale cockpit angle.
+
+## X4VR_HEADLOOK_FOOT — B built (Patola: "Yes, patch for B approved — and head alone for pitch on foot")
+
+* **The patch** (`injector/x4vr_foot.hpp`, applied at load like
+  X4VR_CSM_COVER, memory only): the walking branch's `jne 0x192a216` at
+  0x192a2f3 is RETARGETED to 0x192a284 -- X4's own tail (the path modes 1
+  and 6 take) that reloads the attached object's transform and composes only
+  the camera's own (+0x5a0..+0x5d0). Walking renders player x head; the
+  controller (the cockpit's sway chain) stays out; in the cockpit the branch
+  is not taken. Four bytes (the rel32: 0xffffff1d -> 0xffffff8b); 37 bytes
+  around the jne, the tail's 22 and the compose's 28 verified first, and the
+  decoded targets too; read back after. Refuses without X4VR_HEADLOOK_WRITE
+  (nothing would own +0x5b0 on foot). tests/foot.cpp checks the sites against
+  the real binary, a one-byte change in each refused and named, the rel32.
+* **Head-look on foot:** with the patch in, the write acts off the seat too
+  (and MENU_CENTRE), logged "out of the pilot seat — head-look continues on
+  foot".
+* **Pitch:** on foot while head-look writes, the player's mouse PITCH is
+  zeroed (yaw passes: it turns the body); the cockpit's handling is
+  unchanged. Counted (`pitchzero`).
+* **The declaration:** on foot (shared `on_foot`, version 6) the layer
+  declares head-look's written angle -- the head part X4 composes --
+  instead of GetCameraRotation, which there includes the body ("declrot:
+  ON FOOT"). Stamped: lagsample `view=foot`, poselag `foot=1`; the scorer's
+  cockpit tracking and pose-lag checks set those frames apart.
+* Scorer: the patch reported; FAIL if asked and not patched, or patched and
+  off the seat without "continues on foot". Census suite +7.
+* Also: tests/cursor_render.cpp no longer leaves its census log in /tmp on
+  a passing run.
+
+## P336 — B: does the head look around on foot while the body walks?
+
+Take 335's line plus `X4VR_HEADLOOK_FOOT=1`. WiVRn, configuration 1.
+
+* **P336.1** at load "foot: PATCHED"; no REFUSED.
+* **P336.2** seated, nothing changes: steering A, menus centred, tracking as
+  in 335. Refutation: anything in the cockpit differs -- the walking branch
+  would then be taken in the cockpit too.
+* **P336.3** on foot the head turns X4's view: head-only windows show
+  GetCameraRotation's yaw AND pitch following the head (slope near 1).
+  Patola looks around freely, behind included; the mouse and arrows still
+  turn the body, and W walks where the body points, not where he looks.
+  Refutation: GetCameraRotation does not follow the head -- the patched
+  branch is never reached on foot (step 2's NULL controller instead: read
+  camera+0x18 next).
+* **P336.4** the mouse's up/down does nothing on foot (`pitchzero` > 0);
+  left/right turns.
+* **P336.5** no black edge when he turns his head on foot, and body turns
+  rotate the scene, not the window ("declrot: ON FOOT").
+* **P336.6 -- no prediction, two branches:** looking (head only) at a chair,
+  door or console either highlights it -- X4 aims the interaction from the
+  camera, the gaze -- or the highlight stays where the body faces (from the
+  player object). Patola reports which.
+* **P336.7 -- no prediction:** X4's minimal on-foot HUD (the crosshair)
+  either stays at the centre of the view (head-locked, his spec) or stays
+  where the body faces. He reports which.
+* **P336.8** standing up and sitting down: no jump or spin; a menu opened on
+  foot with the head turned is reachable (MENU_CENTRE acts there now).
+* **P336.9** scorer PASS.
+
+    X4VR_TAKE=336 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take336.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh

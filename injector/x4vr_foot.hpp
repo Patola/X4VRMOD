@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 namespace x4vr::foot {
 
@@ -164,6 +165,7 @@ struct Window {
     MatTrack local, base;
     double mouse_dx = 0.0, mouse_dy = 0.0; // what X4 received
     uint64_t mouse_n = 0, mouse_dropped = 0; // motion events: received, zeroed by us
+    uint64_t mouse_pitch_zeroed = 0;         // events whose pitch alone we zeroed
 
     void add(double now, const Sample &s) {
         if (t0 < 0.0)
@@ -193,7 +195,7 @@ struct Window {
         local.restart();
         base.restart();
         mouse_dx = mouse_dy = 0.0;
-        mouse_n = mouse_dropped = 0;
+        mouse_n = mouse_dropped = mouse_pitch_zeroed = 0;
     }
 };
 
@@ -235,11 +237,13 @@ inline int format_window(char *out, size_t cap, const Window &w, double secs) {
     return snprintf(out, cap,
                     "foot: window %.2f s n %d mode %d piloting %d occupied %d "
                     "view %s hud %d rel %d | mouse n %llu dx %.0f dy %.0f "
-                    "dropped %llu | head %s | rot %s | local %s | base %s",
+                    "dropped %llu pitchzero %llu | head %s | rot %s | local %s | "
+                    "base %s",
                     secs, w.n, (int)s.mode, (int)s.piloting, (int)s.occupied,
                     view_name(s.view), (int)s.hud, (int)s.relative,
                     (unsigned long long)w.mouse_n, w.mouse_dx, w.mouse_dy,
-                    (unsigned long long)w.mouse_dropped, head,
+                    (unsigned long long)w.mouse_dropped,
+                    (unsigned long long)w.mouse_pitch_zeroed, head,
                     rot, loc, bas);
 }
 
@@ -262,6 +266,87 @@ inline int format_regime(char *out, size_t cap, const Sample &s) {
         s.base[1], s.base[2], ba ? "" : "(not a rotation) ", by, bp, s.base[4],
         s.base[5], s.base[6], s.base[8], s.base[9], s.base[10], s.base[12],
         s.base[13], s.base[14]);
+}
+
+// ---- X4VR_HEADLOOK_FOOT: the patch B needs (Patola, 2026-10-27: "Yes,
+// patch for B approved") ----------------------------------------------------
+//
+// 0x1929f70, the per-frame evaluation of a camera, composes the attached
+// object, then the controller (+0x18), then the camera's own transform
+// (+0x5a0..+0x5d0, head-look's free-look). For the PLAYER's camera, when the
+// player's chain has a type-0x16 element and 0x1628210() is true -- walking --
+// it returns at 0x192a2f3 (`jne 0x192a216`) before either: our write is
+// dropped there (takes 334/335). The patch retargets that ONE jne to
+// 0x192a284, X4's own tail that reloads the attached object's transform and
+// composes ONLY the camera's own (the path modes 1 and 6 take). Walking then
+// renders player x head; the controller (the cockpit's sway chain) stays out,
+// and in the cockpit, where the branch is not taken, nothing changes.
+// Four bytes, the jne's rel32; every byte around them verified first.
+struct CodeBytes {
+    uintptr_t va;
+    uint8_t n;
+    uint8_t bytes[40];
+};
+// 0x192a2dd..0x192a302: call 0x1de5df0; test; je; call 0x1de5df0;
+// call 0x1628210; test %al,%al; jne 0x192a216; mov 0x18(%rbx),%r12; jmp.
+inline constexpr CodeBytes kSkipBranch = {
+    0x192a2dd, 37,
+    {0xe8, 0x0e, 0xbb, 0x4b, 0x00, 0x48, 0x85, 0xc0, 0x74, 0x12, 0xe8, 0x04,
+     0xbb, 0x4b, 0x00, 0xe8, 0x1f, 0xdf, 0xcf, 0xff, 0x84, 0xc0, 0x0f, 0x85,
+     0x1d, 0xff, 0xff, 0xff, 0x4c, 0x8b, 0x63, 0x18, 0xe9, 0x32, 0xfd, 0xff,
+     0xff}};
+// 0x192a284: movaps 0x10/0x20/0x30/0x0(%rbp) -> xmm6/7/5/8; jmp 0x192a15e.
+inline constexpr CodeBytes kLocalTail = {
+    0x192a284, 22,
+    {0x0f, 0x28, 0x75, 0x10, 0x0f, 0x28, 0x7d, 0x20, 0x0f, 0x28, 0x6d, 0x30,
+     0x44, 0x0f, 0x28, 0x45, 0x00, 0xe9, 0xc4, 0xfe, 0xff, 0xff}};
+// 0x192a15e: movaps 0x5a0/0x5b0/0x5c0/0x5d0(%rbx) -- the camera's own
+// transform, composed onto the attached object's.
+inline constexpr CodeBytes kLocalCompose = {
+    0x192a15e, 28,
+    {0x0f, 0x28, 0x9b, 0xa0, 0x05, 0x00, 0x00, 0x0f, 0x28, 0x93, 0xb0, 0x05,
+     0x00, 0x00, 0x0f, 0x28, 0x8b, 0xc0, 0x05, 0x00, 0x00, 0x0f, 0x28, 0x83,
+     0xd0, 0x05, 0x00, 0x00}};
+constexpr uintptr_t kSkipJne = 0x192a2f3;   // 0f 85 <rel32>
+constexpr uintptr_t kSkipJneEnd = 0x192a2f9;
+constexpr uintptr_t kSkipRel32 = kSkipJne + 2;
+constexpr uintptr_t kSkipTarget = 0x192a216; // return: nothing composed
+constexpr uintptr_t kLocalTailVa = 0x192a284;
+
+inline int32_t rel32_to(uintptr_t insn_end, uintptr_t target) {
+    return (int32_t)(int64_t)(target - insn_end);
+}
+
+// Every byte the patch depends on, as X4 9.00 has them. `*bad` names the
+// first site that differs.
+template <class Reader> bool verify_skip_sites(Reader read, uintptr_t *bad) {
+    const CodeBytes *sites[] = {&kSkipBranch, &kLocalTail, &kLocalCompose};
+    for (const CodeBytes *c : sites) {
+        uint8_t b[40];
+        if (!read(c->va, b, c->n)) {
+            *bad = c->va;
+            return false;
+        }
+        for (uint8_t i = 0; i < c->n; i++)
+            if (b[i] != c->bytes[i]) {
+                *bad = c->va + i;
+                return false;
+            }
+    }
+    // The decoded targets, not just the bytes: the jne must land on the
+    // return, the tail's jmp on the compose.
+    int32_t r = 0;
+    memcpy(&r, kSkipBranch.bytes + (kSkipRel32 - kSkipBranch.va), 4);
+    if (kSkipJneEnd + (intptr_t)r != kSkipTarget) {
+        *bad = kSkipJne;
+        return false;
+    }
+    memcpy(&r, kLocalTail.bytes + 18, 4);
+    if (kLocalTail.va + 22 + (intptr_t)r != kLocalCompose.va) {
+        *bad = kLocalTail.va + 17;
+        return false;
+    }
+    return true;
 }
 
 } // namespace x4vr::foot

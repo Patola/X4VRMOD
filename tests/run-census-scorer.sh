@@ -973,7 +973,26 @@ else
     want "foot off the seat, write never stood down -> FAIL" /tmp/census-ft-nostand.log "FAIL|  - " "the write never stood down"
     { cat /tmp/census-ft-nostand.log
       echo '[  999010.040] inject  headlook: out of the pilot seat — the write stands down (on foot X4 does not render through the cockpit'"'"'s free-look, take 334); the picture is a window fixed in front'; } > /tmp/census-ft-stand.log
-    want "foot stood down -> counted" /tmp/census-ft-stand.log "foot " "seat: the write stood down 1 time(s) off the seat, resumed 0 time(s)"
+    want "foot stood down -> counted" /tmp/census-ft-stand.log "foot " "seat: the write stood down 1 time(s) off the seat, continued on foot 0 time(s), resumed 0 time(s)"
+    # B: X4VR_HEADLOOK_FOOT. The patch line, the seat line, and the head now
+    # turning X4's camera on foot.
+    sed 's/env: run = /env: run = X4VR_HEADLOOK_WRITE=1 X4VR_HEADLOOK_FOOT=1 /' "$BASE" > /tmp/census-fp-base.log
+    fpok='[  999000.000] inject  foot: PATCHED — 0x1929f70'"'"'s walking branch (jne at 0x192a2f3) now composes the camera'"'"'s own rotation (0x192a284) instead of returning (0x192a216); head-look writes off the pilot seat, the mouse'"'"'s pitch is zeroed there'
+    fpcont='[  999010.040] inject  headlook: out of the pilot seat — head-look continues on foot (X4VR_HEADLOOK_FOOT): the head looks, the mouse and arrows turn the body, the mouse'"'"'s pitch is zeroed'
+    { cat /tmp/census-fp-base.log; echo "$fpok"; echo "$fpcont"; "$FOOT" --emit patched; } > /tmp/census-fp-ok.log
+    want "foot patched -> the patch is reported" /tmp/census-fp-ok.log "foot " "patch IN: walking composes the camera's own rotation"
+    want "foot patched -> the head turns X4's camera on foot" /tmp/census-fp-ok.log "foot =>" "the mouse turns rot yaw; the head turns rot yaw, rot pitch, local yaw, local pitch"
+    want "foot patched -> the mouse's pitch zeroing is counted" /tmp/census-fp-ok.log "foot " "the mouse's pitch zeroed in 96 motion event(s) off the seat"
+    want "foot patched -> continued on foot counted" /tmp/census-fp-ok.log "foot " "continued on foot 1 time(s)"
+    if python3 tools/score_run.py /tmp/census-fp-ok.log 2>&1 | grep -q -E "^FAIL  (foot|X4VR_HEADLOOK_FOOT)"; then
+        bad "foot patched healthy -> a foot FAIL"
+    else
+        ok "foot patched healthy -> no foot FAIL"
+    fi
+    { cat /tmp/census-fp-base.log; "$FOOT" --emit patched; } > /tmp/census-fp-nopatch.log
+    want "foot asked, never patched -> FAIL" /tmp/census-fp-nopatch.log "FAIL|  - " "X4VR_HEADLOOK_FOOT asked but 0x1929f70 was never patched"
+    { cat /tmp/census-fp-base.log; echo "$fpok"; "$FOOT" --emit patched; } > /tmp/census-fp-nocont.log
+    want "foot patched, off seat, never continued -> FAIL" /tmp/census-fp-nocont.log "FAIL|  - " "never said it continues on foot"
     { cat /tmp/census-ft-base.log; "$FOOT" --emit seated; } > /tmp/census-ft-seated.log
     want "foot seated only -> NOT EXERCISED" /tmp/census-ft-seated.log "foot =>" "NOT EXERCISED: no window off the pilot seat"
     want "foot asked, never started -> FAIL" /tmp/census-ft-base.log "FAIL|  - " "X4VR_FOOTLOG asked but the census never started"

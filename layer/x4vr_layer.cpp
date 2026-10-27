@@ -13041,7 +13041,28 @@ void vr_thread() {
             float now_yaw = 0.0f, now_pitch = 0.0f;
             bool now_ok = false;
             unsigned rot_used = 0;
-            if (declare_rendered_rot()) {
+            // X4VR_HEADLOOK_FOOT: off the pilot seat GetCameraRotation is the
+            // player's body times the head, and declaring the body is what
+            // swung the window with the mouse in take 334. There the
+            // declaration is head-look's written angle -- the head part X4
+            // composes -- which is the `snap.yaw_deg` fallback below.
+            bool on_foot = false;
+            if (const x4vr::Shared *sh = shared_state())
+                on_foot = sh->on_foot.load(std::memory_order_relaxed) != 0;
+            {
+                static int was = -1;
+                if ((int)on_foot != was) {
+                    if (was != -1 || on_foot)
+                        X4VR_LOG("declrot: %s",
+                                 on_foot ? "ON FOOT — declaring head-look's "
+                                           "written angle (X4's camera there "
+                                           "includes the body)"
+                                         : "off foot — declaring X4's own "
+                                           "camera again");
+                    was = on_foot;
+                }
+            }
+            if (declare_rendered_rot() && !on_foot) {
                 if (declare_rendered_rot_mode() == 2) {
                     // The camera the draws were actually recorded against.
                     // Only usable once a frame has been stamped -- before the
@@ -13235,7 +13256,7 @@ void vr_thread() {
                         d_yaw += 360.0f;
                     X4VR_LOG("poselag: declared=%.4f,%.4f x4=%.4f,%.4f "
                              "d=%.4f,%.4f age=%.4f valid=%u rawvalid=%u "
-                             "residual=%.4f,%.4f cmd=%.4f,%.4f rot=%u",
+                             "residual=%.4f,%.4f cmd=%.4f,%.4f rot=%u foot=%u",
                              // `d` subtracts the residual back out on purpose:
                              // the shader rotated the pixels by it, so the pose
                              // they came from is (X4's camera + residual) and
@@ -13245,7 +13266,12 @@ void vr_thread() {
                              decl_yaw, decl_pitch, raw_yaw, raw_pitch,
                              d_yaw,
                              (decl_pitch - ap) - raw_pitch, age, valid,
-                             raw_valid, ay, ap, cmd_yaw, cmd_pitch, rot_used);
+                             raw_valid, ay, ap, cmd_yaw, cmd_pitch, rot_used,
+                             // Off the seat X4's camera includes the body
+                             // and the declaration is the head part, so `d`
+                             // there is the body's angle: stamped, so the
+                             // scorer sets these frames apart.
+                             on_foot ? 1u : 0u);
                     // **The two-timestamp line: the number take 278 assumed.**
                     //
                     // `atdraw` is X4's camera sampled at the first render pass

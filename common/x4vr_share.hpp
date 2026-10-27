@@ -42,7 +42,8 @@ constexpr uint32_t kShareMagic = 0x52565834u;
 // only while X4 shows a full-screen menu (X4VR_CURSOR_CANVAS=auto, take 327).
 // 5: `steer_line` and `steer_mode`, the mouse-steering target A/B
 //    (x4vr_steer.hpp).
-constexpr uint32_t kShareVersion = 5u;
+// 6: `on_foot`, head-look writing off the pilot seat (X4VR_HEADLOOK_FOOT).
+constexpr uint32_t kShareVersion = 6u;
 
 struct Shared {
     uint32_t magic = kShareMagic;
@@ -186,6 +187,13 @@ struct Shared {
     // overlay; the apostrophe key flips it between A and B.
     std::atomic<uint32_t> steer_line{0};
     std::atomic<uint32_t> steer_mode{0};
+
+    // 1 while head-look writes OFF the pilot seat (X4VR_HEADLOOK_FOOT, the
+    // patched 0x1929f70). There GetCameraRotation is the player's body times
+    // the head, so the layer declares head-look's written angle -- the head
+    // part X4 composes -- instead of the camera it samples at the first pass:
+    // declaring the body too is what swung the window in take 334.
+    std::atomic<uint32_t> on_foot{0};
 };
 
 // ---- the camera block, as one consistent snapshot ------------------------
