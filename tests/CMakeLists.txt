@@ -202,6 +202,9 @@ add_executable(x4vr_test_steer steer.cpp)
 # the window across the +-180 seam, a camera change, the line's shape.
 # Self-checking.
 add_executable(x4vr_test_foot foot.cpp)
+# X4VR_HEADLOOK_EXTERNAL: the sites against the real binary, the stub
+# executed with X4's own compose behind it, the period. Self-checking.
+add_executable(x4vr_test_extview extview.cpp)
 # x4vr_menus.hpp: X4's open-menu table and conversation state, read not called.
 add_executable(x4vr_test_menus menus.cpp)
 # declares_member_name: the fog ray march found by its property name (take 348).

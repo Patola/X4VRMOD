@@ -26786,3 +26786,62 @@ before it is enabled.
   flattens the archive paths.
 * X4 content lives in /tmp only (shader sources, dumps, Lua), and /tmp is
   wiped at reboot.
+
+## Designed: head-look in the external views (X4VR_HEADLOOK_EXTERNAL) — awaiting Patola's go-ahead
+
+Route 1 of the previous section, built and tested offline; **not enabled
+until Patola approves the patch** (the knob is off by default).
+
+**The site.** 0x1929f70, modes 2–5 (F2/F3 = mode 2, F4/F6 = mode 4): the
+tail at 0x192a284 reloads the pivot's rows into xmm6/7/5/8 and
+`jmp 0x192a15e` (e9 c4 fe ff ff at **0x192a295**) composes the camera's own
+transform, X4's orbit. Only that jmp's rel32 changes (0x192a296..0x192a299,
+one page). Every jump into the region was enumerated over all of .text
+(e8/e9/0f8x/eb/7x): 0x192a24c → 0x192a284, and 0x192a295/0x192a2c7 →
+0x192a15e. Nothing jumps into the middle of the compose.
+
+**The stub (269 bytes, x4vr_extview.hpp).**
+* Gates: the root global non-NULL; `rbx == [root+0x3e8]` (the player's
+  camera, X4's own test); `[rbx+0x880] != 0` (never mode 0: the walking
+  stub reaches this jmp too, and there head-look already writes the
+  camera); head rows published (a pointer the injector sets, NULL otherwise).
+  Any gate failing → `jmp 0x192a15e`, X4's compose unchanged.
+* Otherwise it computes own'.R = H.R × own.R from the camera's own rows
+  (+0x5b0/+0x5c0/+0x5d0) and the head's rows (broadcast, 9 vectors), loads
+  own.t (+0x5a0) into xmm3 and the three rows into xmm2/xmm1/xmm0 — exactly
+  what X4's four loads leave — bumps a counter, and jumps to **0x192a17a**,
+  X4's product right after those loads.
+* X4's memory is never written; the orbit (+0x5a0..) stays X4's, so the
+  numpad keeps orbiting. The head turns about the eye: the camera's position
+  is the orbit's.
+
+**Declared only once composed.** The injector publishes the head's rows
+while an external view is up (IsExternalViewActive) with the player's
+camera outside mode 0 and no full-screen menu, through a double buffer.
+The layer is told to declare head-look's angle (`external_head`, share v10,
+and the camera snapshot valid) only after the stub's counter has moved in
+that period. A view the stub never reaches (mode 1/6, or a pivot X4 returns
+early for) stays a window and is logged ("the stub has NOT composed").
+`steering` stays false, so the mouse is X4's in the external views as
+before. The read-back is not compared with the command there (X4's camera
+is orbit × head), as on foot.
+
+**Offline (tests/extview.cpp, all pass):**
+* The four sites against the real binary, each with a flipped byte refused
+  where it is; X4's jmp lands on 0x192a15e.
+* The stub EXECUTED with X4's own compose bytes behind it, in a frame built
+  like 0x1929f70's, so X4's epilogue returns to the test:
+  * modes 2 and 4: (H × own) × pivot within 1.5e-5;
+  * mode 0, another camera, rows withdrawn, no root: X4's product, nothing
+    counted;
+  * head centred: bit-identical to X4's own compose;
+  * with the orbit factored out the camera looks at exactly the head's
+    yaw/pitch (the declared angle is the composed one), and H composed after
+    the orbit instead would differ (the test discriminates).
+* The double buffer and the period bookkeeping.
+* The scorer's `extview` block: 19 planted cases in run-census-scorer.sh.
+
+**What the take checks.** F2/F3/F4/F6 are the whole scene (the head looks
+around inside them); the numpad still orbits F2/F3/F4 with no drift; the
+cockpit and walking are unchanged; X4's orbit (`local` in the foot census)
+does not move with the head alone.

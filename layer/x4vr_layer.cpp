@@ -13140,8 +13140,14 @@ void vr_thread() {
             // declaration is head-look's written angle -- the head part X4
             // composes -- which is the `snap.yaw_deg` fallback below.
             bool on_foot = false;
-            if (const x4vr::Shared *sh = shared_state())
+            // X4VR_HEADLOOK_EXTERNAL: likewise in an external view the head
+            // turns, where X4's camera is its orbit times the head.
+            bool ext_head = false;
+            if (const x4vr::Shared *sh = shared_state()) {
                 on_foot = sh->on_foot.load(std::memory_order_relaxed) != 0;
+                ext_head =
+                    sh->external_head.load(std::memory_order_relaxed) != 0;
+            }
             {
                 static int was = -1;
                 if ((int)on_foot != was) {
@@ -13155,7 +13161,21 @@ void vr_thread() {
                     was = on_foot;
                 }
             }
-            if (declare_rendered_rot() && !on_foot) {
+            {
+                static int was = -1;
+                if ((int)ext_head != was) {
+                    if (was != -1 || ext_head)
+                        X4VR_LOG("declrot: %s",
+                                 ext_head
+                                     ? "EXTERNAL VIEW — declaring head-look's "
+                                       "angle, the stub's composition (X4's "
+                                       "camera there includes its orbit)"
+                                     : "external view's head off — declaring "
+                                       "X4's own camera again");
+                    was = ext_head;
+                }
+            }
+            if (declare_rendered_rot() && !on_foot && !ext_head) {
                 if (declare_rendered_rot_mode() == 2) {
                     // The camera the draws were actually recorded against.
                     // Only usable once a frame has been stamped -- before the
@@ -13349,7 +13369,8 @@ void vr_thread() {
                         d_yaw += 360.0f;
                     X4VR_LOG("poselag: declared=%.4f,%.4f x4=%.4f,%.4f "
                              "d=%.4f,%.4f age=%.4f valid=%u rawvalid=%u "
-                             "residual=%.4f,%.4f cmd=%.4f,%.4f rot=%u foot=%u",
+                             "residual=%.4f,%.4f cmd=%.4f,%.4f rot=%u foot=%u "
+                             "ext=%u",
                              // `d` subtracts the residual back out on purpose:
                              // the shader rotated the pixels by it, so the pose
                              // they came from is (X4's camera + residual) and
@@ -13363,8 +13384,10 @@ void vr_thread() {
                              // Off the seat X4's camera includes the body
                              // and the declaration is the head part, so `d`
                              // there is the body's angle: stamped, so the
-                             // scorer sets these frames apart.
-                             on_foot ? 1u : 0u);
+                             // scorer sets these frames apart. Likewise an
+                             // external view the head turns: `x4` there is
+                             // the orbit times the head.
+                             on_foot ? 1u : 0u, ext_head ? 1u : 0u);
                     // **The two-timestamp line: the number take 278 assumed.**
                     //
                     // `atdraw` is X4's camera sampled at the first render pass

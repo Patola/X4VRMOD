@@ -1256,5 +1256,66 @@ fmrec2='[  999990.030] inject  ui: on-foot menu 2 — pointer recentred from 227
 want "foot-menu recentre kinds counted" /tmp/census-fm-rec2.log foot-menu "to a conversation's options 1, the centre 0 (no conversation) + 0 (unknown)"
 want "foot-menu resumed opening -> listed and marked" /tmp/census-fm-res.log foot-menu "#3   t   999995.0  arm A    open at exit  head-look   +1.0   -5.0  pointer   1400,  1400  canvas ON  (resumed after a HUD-down menu)"
 
+# ------------------------------------ X4VR_HEADLOOK_EXTERNAL (extview)
+# The lines the injector and layer write, planted; every branch of the block.
+for f in 'extview: PATCHED — 0x1929f70'"'"'s external-view compose (jmp at ' \
+         'extview: period %llu ON — external view, camera mode %d: ' \
+         'extview: period %llu — the stub composed the head after ' \
+         'extview: period %llu OFF — %s; the stub composed the head ' \
+         'extview: period %llu — the stub has NOT composed in %.1f s ' \
+         'extview: period %llu — camera mode %d -> %d' \
+         'extview: patch REFUSED — %s. The external views stay as '; do
+    if grep -qF "$f" injector/x4vr_inject.cpp; then
+        ok "extview: the planted line matches the injector's format ($f)"
+    else
+        bad "extview: the injector no longer writes '$f'"
+    fi
+done
+if grep -qF '"EXTERNAL VIEW — declaring head-look'"'"'s "' layer/x4vr_layer.cpp &&
+   grep -qF '"ext=%u",' layer/x4vr_layer.cpp; then
+    ok "extview: the layer's declrot and poselag ext= formats are the planted ones"
+else
+    bad "extview: the layer's declrot or poselag ext= format moved"
+fi
+sed 's/env: run = /env: run = X4VR_HEADLOOK_EXTERNAL=1 /' "$BASE" > /tmp/census-ev-base.log
+evpat='[  999960.000] inject  extview: PATCHED — 0x1929f70'"'"'s external-view compose (jmp at 0x192a295, camera modes 2-5) now goes through a 269-byte stub at 0x3e0000: for the player'"'"'s camera'
+evref='[  999960.000] inject  extview: patch REFUSED — 0x1929f70'"'"'s code at 0x192a1bf differs from X4 9.00. The external views stay as they were: a window fixed in front.'
+evview='[  999961.000] inject  headlook: view is now external — idle'
+evon='[  999961.010] inject  extview: period 1 ON — external view, camera mode 2: the head'"'"'s rows published for the stub; the layer declares the head once the stub has composed them'
+evdecl='[  999961.030] inject  extview: period 1 — the stub composed the head after 0.02 s: the layer declares head-look'"'"'s angle, the external view is the whole scene'
+evlay='[  999961.040] layer   declrot: EXTERNAL VIEW — declaring head-look'"'"'s angle, the stub'"'"'s composition (X4'"'"'s camera there includes its orbit)'
+evmode='[  999965.000] inject  extview: period 1 — camera mode 2 -> 4'
+evoff='[  999970.000] inject  extview: period 1 OFF — the external view was left; the stub composed the head 812 time(s) in 9.0 s'
+{ cat /tmp/census-ev-base.log; printf '%s\n' "$evpat" "$evview" "$evon" "$evdecl" "$evlay" "$evmode" "$evoff"; } > /tmp/census-ev-ok.log
+want "extview: a period composed and declared -> listed" /tmp/census-ev-ok.log extview "#1   t   999961.0  mode 2->4    9.0 s  composed    812x  declared after 0.02 s  ended: the external view was left"
+want "extview: the totals" /tmp/census-ev-ok.log extview "1 period(s) over 1 external-view entry; 1 declared; the layer switched 1 time(s)"
+if python3 tools/score_run.py /tmp/census-ev-ok.log 2>&1 | grep -qE "^  - .*(external|stub|X4VR_HEADLOOK_EXTERNAL)"; then
+    bad "extview: a healthy period -> FAILs"
+else
+    ok "extview: a healthy period -> no FAIL"
+fi
+{ cat /tmp/census-ev-base.log; printf '%s\n' "$evref" "$evview"; } > /tmp/census-ev-refused.log
+want "extview: asked, refused -> FAIL with the reason" /tmp/census-ev-refused.log "FAIL|  - " "X4VR_HEADLOOK_EXTERNAL=1 but the patch was REFUSED — 0x1929f70's code at 0x192a1bf differs from X4 9.00"
+{ cat /tmp/census-ev-base.log; printf '%s\n' "$evpat" "$evview"; } > /tmp/census-ev-noperiod.log
+want "extview: an external view with no period -> FAIL" /tmp/census-ev-noperiod.log "FAIL|  - " "1 external view(s) shown and the head turned none of them"
+evon6='[  999961.010] inject  extview: period 1 ON — external view, camera mode 6: the head'"'"'s rows published for the stub; the layer declares the head once the stub has composed them'
+evnever='[  999963.100] inject  extview: period 1 — the stub has NOT composed in 2.1 s (camera mode 6): X4 evaluates this camera by a path the patch does not cover; the picture stays a window in front'
+evoff0='[  999966.000] inject  extview: period 1 OFF — the external view was left; the stub composed the head 0 time(s) in 5.0 s'
+{ cat /tmp/census-ev-base.log; printf '%s\n' "$evpat" "$evview" "$evon6" "$evnever" "$evoff0"; } > /tmp/census-ev-never.log
+want "extview: never composed -> FAIL naming the mode" /tmp/census-ev-never.log "FAIL|  - " "external view 1 (camera mode 6): the stub never composed the head"
+want "extview: never composed -> listed as never declared" /tmp/census-ev-never.log extview "NEVER declared"
+evoffq='[  999961.200] inject  extview: period 1 OFF — the external view was left; the stub composed the head 0 time(s) in 0.2 s'
+{ cat /tmp/census-ev-base.log; printf '%s\n' "$evpat" "$evview" "$evon" "$evoffq"; } > /tmp/census-ev-brief.log
+if python3 tools/score_run.py /tmp/census-ev-brief.log 2>&1 | grep -q "the stub never composed"; then
+    bad "extview: a 0.2 s period (F2 tapped through) -> FAILs"
+else
+    ok "extview: a 0.2 s period never composed -> no FAIL"
+fi
+{ cat /tmp/census-ev-base.log; printf '%s\n' "$evpat" "$evview" "$evon" "$evdecl" "$evoff"; } > /tmp/census-ev-nolayer.log
+want "extview: composed but the layer never declared -> FAIL" /tmp/census-ev-nolayer.log "FAIL|  - " "the layer never declared it"
+{ cat "$BASE"; printf '%s\n' "$evpat" "$evview" "$evon"; } > /tmp/census-ev-unasked.log
+want "extview: acted without being asked -> FAIL" /tmp/census-ev-unasked.log "FAIL|  - " "the external-view patch acted in a run that did not ask for it"
+absent "extview: not asked, nothing -> silent" "$BASE" extview
+
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

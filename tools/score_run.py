@@ -2589,15 +2589,22 @@ def main(path):
         r"x4=(-?\d+\.\d+),(-?\d+\.\d+) d=(-?\d+\.\d+),(-?\d+\.\d+) "
         r"age=(-?\d+\.\d+) valid=(\d) rawvalid=(\d)"
         r"(?: residual=-?\d+\.\d+,-?\d+\.\d+"
-        r"(?: cmd=(-?\d+\.\d+),(-?\d+\.\d+) rot=(\d)(?: foot=(\d))?)?)?", text)
+        r"(?: cmd=(-?\d+\.\d+),(-?\d+\.\d+) rot=(\d)(?: foot=(\d))?"
+        r"(?: ext=(\d))?)?)?", text)
     # Off the seat under X4VR_HEADLOOK_FOOT the declaration is the head part
     # and `x4` includes the body, so `d` there is the body's angle, not an
-    # error. Stamped by the layer (`foot=1`) and set apart here.
+    # error. Stamped by the layer (`foot=1`) and set apart here. Likewise an
+    # external view the head turns (`ext=1`): `x4` is the orbit times it.
     pl_foot = [g for g in pl if g[13] == "1"]
-    pl = [g for g in pl if g[13] != "1"]
+    pl_ext = [g for g in pl if g[14] == "1" and g[13] != "1"]
+    pl = [g for g in pl if g[13] != "1" and g[14] != "1"]
     if pl_foot:
         print(f"poselag  {len(pl_foot)} frame(s) ON FOOT set apart — declared "
               f"head-look's written angle; X4's camera there includes the body")
+    if pl_ext:
+        print(f"poselag  {len(pl_ext)} frame(s) in a HEAD-TURNED EXTERNAL VIEW "
+              f"set apart — declared head-look's angle; X4's camera there "
+              f"includes its orbit")
     if pl:
         # Groups, in order: ts, decl_y, decl_p, x4_y, x4_p, d_y, d_p, age,
         # valid, rawvalid, cmd_y, cmd_p, rot. The last three are absent in logs
@@ -4510,6 +4517,81 @@ def main(path):
               f"X4's own inverse projections"
               + (" — X4VR_FOG_RAY_PER_EYE=1, so patched per eye as before"
                  if "X4VR_FOG_RAY_PER_EYE=1" in tail else ""))
+
+    # --- X4VR_HEADLOOK_EXTERNAL: the head in the external views -------------
+    #
+    # A stub at 0x192a295 composes head-look's angle before X4's orbit in
+    # camera modes 2-5 (F2/F3 = 2, F4/F6 = 4). Gate on intent: asked means the
+    # patch must say PATCHED, every external view must open a period, and
+    # every period that lasted must have been composed and reach the layer.
+    ev_asked = bool(re.search(r"\bX4VR_HEADLOOK_EXTERNAL=1\b", run or ""))
+    ev_patched = "extview: PATCHED" in text
+    ev_refused = re.search(r"extview: patch REFUSED — (.*?)\. The external",
+                           text)
+    ev_on = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+extview: period (\d+) "
+                       r"ON — external view, camera mode (-?\d+)", text)
+    ev_decl = {int(n): float(d) for n, d in re.findall(
+        r"extview: period (\d+) — the stub composed the head after "
+        r"([\d.]+) s", text)}
+    ev_off = {int(n): (why, int(k), float(s)) for n, why, k, s in re.findall(
+        r"extview: period (\d+) OFF — (.*?); the stub composed the head "
+        r"(\d+) time\(s\) in ([\d.]+) s", text)}
+    ev_never = {int(n): m for n, m in re.findall(
+        r"extview: period (\d+) — the stub has NOT composed in [\d.]+ s "
+        r"\(camera mode (-?\d+)\)", text)}
+    ev_modes = {}
+    for n, a, b in re.findall(r"extview: period (\d+) — camera mode (-?\d+) "
+                              r"-> (-?\d+)", text):
+        ev_modes.setdefault(int(n), []).append(b)
+    ext_views = len(re.findall(r"inject\s+headlook: view is now external",
+                               text))
+    ev_layer = len(re.findall(r"layer\s+declrot: EXTERNAL VIEW", text))
+    if ev_asked or ev_patched or ev_on:
+        if ev_asked and not ev_patched:
+            fails.append("X4VR_HEADLOOK_EXTERNAL=1 but the patch was "
+                         + ("REFUSED — " + ev_refused.group(1) if ev_refused
+                            else "never reported PATCHED"))
+        if not ev_asked and (ev_patched or ev_on):
+            fails.append("the external-view patch acted in a run that did "
+                         "not ask for it (X4VR_HEADLOOK_EXTERNAL)")
+        for t, n, mode in ev_on:
+            n = int(n)
+            off = ev_off.get(n)
+            dur = (f"{off[2]:5.1f} s" if off else "  open at exit")
+            comp = (f"composed {off[1]:6d}x" if off else "")
+            decl = (f"declared after {ev_decl[n]:.2f} s" if n in ev_decl
+                    else "NEVER declared")
+            modes = "->".join([mode] + ev_modes.get(n, []))
+            print(f"extview  #{n:<3d} t {float(t):10.1f}  mode {modes:<5s} "
+                  f"{dur}  {comp}  {decl}"
+                  + (f"  ended: {off[0]}" if off else ""))
+            # A period that lasted half a second and was never composed is
+            # a view the patch does not cover: a window, not the scene.
+            lasted = off[2] if off else 1e9
+            if (n not in ev_decl) and lasted >= 0.5:
+                fails.append(
+                    f"external view {n} (camera mode "
+                    f"{ev_never.get(n, mode)}): the stub never composed the "
+                    f"head — X4 took a path the patch does not cover")
+        if ev_patched:
+            print(f"extview  {len(ev_on)} period(s) over {ext_views} "
+                  f"external-view entr{'y' if ext_views == 1 else 'ies'}; "
+                  f"{len(ev_decl)} declared; the layer switched "
+                  f"{ev_layer} time(s)")
+        if ev_asked and ev_patched and ext_views and not ev_on:
+            fails.append(f"X4VR_HEADLOOK_EXTERNAL=1: {ext_views} external "
+                         f"view(s) shown and the head turned none of them")
+        if ev_decl and not ev_layer:
+            fails.append("the stub composed the head in an external view but "
+                         "the layer never declared it — the picture stayed "
+                         "a window")
+        if ev_patched and not ext_views:
+            print("extview  no external view was shown (F2/F3/F4/F6 never "
+                  "pressed), so the head there was not exercised")
+        if ev_on:
+            print("extview  whether the external views are the whole scene "
+                  "and the numpad still orbits is Patola's to say; this says "
+                  "the stub composed and the layer declared")
 
     # --- X4VR_DUMP_SHADERS: the modules were written (take 346) -------------
     #

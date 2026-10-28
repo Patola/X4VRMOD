@@ -51,6 +51,7 @@ extern char **environ;
 #include "../common/x4vr_share.hpp"
 #include "../common/x4vr_steer.hpp"
 #include "x4vr_foot.hpp"
+#include "x4vr_extview.hpp"
 #include "x4vr_menus.hpp"
 #include "x4vr_config.hpp"
 #include "x4vr_inputmap.hpp"
@@ -1120,6 +1121,7 @@ extern "C" {
 
 static void csmfit_patch_at_start(); // defined with csmfit_tick, below
 static void foot_patch_at_start();   // X4VR_HEADLOOK_FOOT, with foot_tick
+static void extview_patch_at_start(); // X4VR_HEADLOOK_EXTERNAL
 
 __attribute__((constructor)) static void x4vr_inject_init() {
     char exe[256] = "?";
@@ -1134,6 +1136,8 @@ __attribute__((constructor)) static void x4vr_inject_init() {
         csmfit_patch_at_start();
         // B (walking): the same rule -- before X4 runs a single frame.
         foot_patch_at_start();
+        // The external views: the same rule.
+        extview_patch_at_start();
     }
     // Task #68: the parsed clamp, once X4 has had time to parse it. A delay
     // rather than a hook, because the parse has no seam we can name -- and if
@@ -4532,8 +4536,12 @@ static bool cursor_canvas_auto() {
 // (header 0x3dfc200, a std::map header: never NULL) and reads each entry's
 // flag. The table lives until X4's main() returns, after which no tick runs.
 // Called on X4's main thread, from its event drain.
+static bool headlook_external_asked(); // X4VR_HEADLOOK_EXTERNAL, below
+// X4's answer, kept for X4VR_HEADLOOK_EXTERNAL too: a full-screen menu over
+// an external view is X4's UI, and the head stands down for it.
+static std::atomic<bool> g_fullscreen_up{false};
 static void fullscreen_menu_tick() {
-    if (!cursor_canvas_auto())
+    if (!cursor_canvas_auto() && !headlook_external_asked())
         return;
     using Fn = bool (*)(bool, const char *);
     static Fn fn = [] {
@@ -4553,8 +4561,10 @@ static void fullscreen_menu_tick() {
                  up ? "UP — the cursor is drawn through the UI canvas"
                     : "DOWN — the cursor is drawn at the raw pointer");
     }
-    x4vr_shared_state()->fullscreen_menu.store(up ? 1u : 0u,
-                                               std::memory_order_relaxed);
+    g_fullscreen_up.store(up, std::memory_order_relaxed);
+    if (cursor_canvas_auto())
+        x4vr_shared_state()->fullscreen_menu.store(up ? 1u : 0u,
+                                                   std::memory_order_relaxed);
 }
 
 // ------------------------------------------------ X4VR_STEER=b|a
@@ -5052,6 +5062,198 @@ static void foot_patch_at_start() {
              "(0x192a216); head-look writes off the pilot seat, the mouse's "
              "pitch is zeroed there",
              (unsigned long)kNullJe, stub);
+}
+
+// ------------------------------------------------ X4VR_HEADLOOK_EXTERNAL=1
+//
+// The head turns the external views (F2/F3/F4/F6): 0x1929f70's modes 2-5
+// compose the camera's own transform (X4's orbit) through `jmp 0x192a15e`
+// at 0x192a295; that rel32 goes to a stub that multiplies the head's
+// rotation in first, for the player's camera only (x4vr_extview.hpp).
+// X4's orbit state is never written, so the numpad keeps orbiting.
+static bool headlook_external_asked() {
+    static const bool on = x4vr::env_on("X4VR_HEADLOOK_EXTERNAL", false);
+    return on;
+}
+namespace {
+struct ExtPatch {
+    bool patched = false;
+};
+ExtPatch g_extpatch;
+x4vr::extview::Slot g_extslot;
+// A period is on: X4's camera there is its orbit times the head, so the
+// read-back is not compared with our command (headlook_tick).
+std::atomic<bool> g_ext_on{false};
+} // namespace
+
+static void extview_patch_at_start() {
+    using namespace x4vr::extview;
+    if (!headlook_external_asked())
+        return;
+    auto refuse = [](const char *why) {
+        X4VR_LOG("extview: patch REFUSED — %s. The external views stay as "
+                 "they were: a window fixed in front.", why);
+        X4VR_LOG("milestone: head-look in the external views REFUSED — %s. "
+                 "Quit and tell me.", why);
+    };
+    if (!headlook_write_enabled()) {
+        refuse("X4VR_HEADLOOK_EXTERNAL needs X4VR_HEADLOOK_WRITE=1");
+        return;
+    }
+    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    uintptr_t bad = 0;
+    if (!verify_sites(rd, &bad)) {
+        char why[160];
+        snprintf(why, sizeof why,
+                 "0x1929f70's code at %#lx differs from X4 9.00",
+                 (unsigned long)bad);
+        refuse(why);
+        return;
+    }
+    const uintptr_t site = kTailJmp;
+    void *stub = x4vr::csmfit::alloc_near(0x3f0000, 0x7c00000, &site, 1, 5);
+    if (!stub) {
+        refuse("no free page within rel32 reach of 0x192a295");
+        return;
+    }
+    StubAddrs a{};
+    a.root_slot = kRootGlobal;
+    a.player_cam = kPlayerCamOff;
+    a.mode = kCamMode;
+    a.own = kCamOwn;
+    a.rows_slot = (uintptr_t)&g_extslot.cur;
+    a.applied = (uintptr_t)&g_extslot.applied;
+    a.after_loads = kAfterLoads;
+    a.x4_compose = kComposeVa;
+    uint8_t code[kStubMax];
+    const size_t len = make_stub(code, a);
+    memcpy(stub, code, len);
+    const long page = sysconf(_SC_PAGESIZE);
+    if (mprotect(stub, (size_t)page, PROT_READ | PROT_EXEC) != 0) {
+        refuse("mprotect(rx) of the stub failed");
+        return;
+    }
+    int32_t want = 0;
+    if (!x4vr::csmfit::disp_for(kTailJmp, 5, (uintptr_t)stub, &want)) {
+        refuse("the stub is out of rel32 reach of 0x192a295");
+        return;
+    }
+    char err[200] = "";
+    if (!x4vr::foot::patch_code(kTailRel32, &want, 4, err, sizeof err)) {
+        refuse(err);
+        return;
+    }
+    int32_t got = 0;
+    if (!self_read(kTailRel32, &got, 4) || got != want ||
+        kTailJmpEnd + (intptr_t)got != (uintptr_t)stub) {
+        refuse("the read-back of the patched jmp does not point at the stub");
+        return;
+    }
+    g_extpatch.patched = true;
+    X4VR_LOG("extview: PATCHED — 0x1929f70's external-view compose (jmp at "
+             "%#lx, camera modes 2-5) now goes through a %zu-byte stub at %p: "
+             "for the player's camera, outside mode 0, with head rows "
+             "published, the head's rotation is multiplied in before X4's "
+             "orbit; anything else composes as X4 does (0x192a15e)",
+             (unsigned long)kTailJmp, len, stub);
+}
+
+// Each head-look tick in write mode: the head's rows published for the stub
+// while an external view is up with the player's camera outside mode 0 and
+// no full-screen menu, withdrawn otherwise. True while the head is DECLARED
+// -- the stub has composed this period's rows -- and then `*yaw`/`*pitch`
+// are the angle it composed, which the layer declares.
+static bool extview_tick(bool external, float head_yaw, float head_pitch,
+                         float yaw_weight, float *yaw_out, float *pitch_out) {
+    using namespace x4vr;
+    static extview::Period per;
+    static float ext_yaw = 0.f, ext_pitch = 0.f;
+    static double since = 0.0, last_line = 0.0;
+    static int32_t last_mode = -1;
+    static bool warned = false, told = false;
+    if (!g_extpatch.patched)
+        return false;
+    const uintptr_t cam = external ? x4_player_camera() : 0;
+    int32_t mode = -1;
+    if (cam && !self_read(cam + extview::kCamMode, &mode, sizeof mode))
+        mode = -1;
+    const bool menu = g_fullscreen_up.load(std::memory_order_relaxed);
+    const bool want = external && cam && mode > 0 && !menu;
+    const uint64_t applied = g_extslot.applied.load(std::memory_order_relaxed);
+    const extview::Period::Event ev = per.step(want, applied);
+    if (want) {
+        camwrite::write_target(ev == extview::Period::kStarted ? head_yaw
+                                                               : ext_yaw,
+                               head_yaw, head_pitch, yaw_weight,
+                               g_headlook.yaw_limit_deg,
+                               g_headlook.pitch_limit_deg, &ext_yaw,
+                               &ext_pitch);
+        float rows[12] = {};
+        camwrite::rows_for(ext_yaw, ext_pitch, rows);
+        g_extslot.publish(rows);
+    } else {
+        g_extslot.withdraw();
+    }
+    g_ext_on.store(per.on, std::memory_order_relaxed);
+    const double now = mono_seconds();
+    const unsigned long long n = (unsigned long long)per.periods;
+    switch (ev) {
+    case extview::Period::kStarted:
+        since = last_line = now;
+        warned = false;
+        last_mode = mode;
+        X4VR_LOG("extview: period %llu ON — external view, camera mode %d: "
+                 "the head's rows published for the stub; the layer declares "
+                 "the head once the stub has composed them",
+                 n, (int)mode);
+        break;
+    case extview::Period::kDeclared:
+        X4VR_LOG("extview: period %llu — the stub composed the head after "
+                 "%.2f s: the layer declares head-look's angle, the external "
+                 "view is the whole scene",
+                 n, now - since);
+        if (!told) {
+            told = true;
+            X4VR_LOG("milestone: external view — your head turns it now (the "
+                     "whole scene).");
+        }
+        break;
+    case extview::Period::kEnded:
+        X4VR_LOG("extview: period %llu OFF — %s; the stub composed the head "
+                 "%llu time(s) in %.1f s",
+                 n,
+                 !external ? "the external view was left"
+                 : !cam    ? "no player camera"
+                 : mode <= 0
+                     ? "the camera is back in mode 0"
+                     : "a full-screen menu is up (X4's UI: the window in front)",
+                 (unsigned long long)per.composed, now - since);
+        break;
+    case extview::Period::kNone:
+        break;
+    }
+    if (per.on && mode != last_mode) {
+        X4VR_LOG("extview: period %llu — camera mode %d -> %d", n,
+                 (int)last_mode, (int)mode);
+        last_mode = mode;
+    }
+    if (per.on && !per.declared && !warned && now - since > 2.0) {
+        warned = true;
+        X4VR_LOG("extview: period %llu — the stub has NOT composed in %.1f s "
+                 "(camera mode %d): X4 evaluates this camera by a path the "
+                 "patch does not cover; the picture stays a window in front",
+                 n, now - since, (int)mode);
+    }
+    if (per.on && now - last_line >= 5.0) {
+        last_line = now;
+        X4VR_LOG("extview: period %llu on — composed %llu time(s), head "
+                 "yaw %.2f pitch %.2f, camera mode %d%s",
+                 n, (unsigned long long)per.composed, ext_yaw, ext_pitch,
+                 (int)mode, per.declared ? "" : " (NOT declared yet)");
+    }
+    *yaw_out = ext_yaw;
+    *pitch_out = ext_pitch;
+    return per.declared;
 }
 
 // The player pilots a ship: GetPlayerControlledShipID != 0. Take 334: 1 in
@@ -5758,7 +5960,10 @@ void headlook_tick() {
     // g_off_seat, not g_on_foot: the latter is false while the HUD is down,
     // and take 349 logged ~60 more against his body (-90 deg) in the second
     // between a teleport and the HUD's return.
-    if (have_cam && g_camloop && !g_off_seat.load(std::memory_order_relaxed)) {
+    // Nor in an external view the head turns (X4VR_HEADLOOK_EXTERNAL): there
+    // it is X4's orbit times the head.
+    if (have_cam && g_camloop && !g_off_seat.load(std::memory_order_relaxed) &&
+        !g_ext_on.load(std::memory_order_relaxed)) {
         const float obs_y = kRad2Deg * -r.yaw, obs_p = kRad2Deg * r.pitch;
         const float was_y = g_headlook.cmd_yaw_deg;
         const uint64_t was_resyncs = g_headlook.observe_resyncs;
@@ -6087,6 +6292,22 @@ void headlook_tick() {
             }
         }
     }
+    // **X4VR_HEADLOOK_EXTERNAL: the head in the external views.** Nothing is
+    // written into X4's camera: the rows go to the stub at 0x192a295, which
+    // composes them before X4's orbit. Once it has, the angle is what the
+    // layer declares -- `steering` stays false, so the mouse is X4's as
+    // before (x4vr_extview.hpp).
+    float ext_yaw = 0.f, ext_pitch = 0.f;
+    const bool ext_declared =
+        write_mode && extview_tick(view == X4View::External, yaw, pitch,
+                                   ha.yaw_weight, &ext_yaw, &ext_pitch);
+    if (ext_declared) {
+        g_headlook.cmd_yaw_deg = ext_yaw;
+        g_headlook.cmd_pitch_deg = ext_pitch;
+    }
+    if (x4vr::Shared *sh = x4vr_shared_state())
+        sh->external_head.store(ext_declared ? 1u : 0u,
+                                std::memory_order_relaxed);
     // **X4VR_HEADLOOK_MENU_CENTRE: the spring-back X4VR_HEADLOOK_WRITE took
     // away.** With the HUD down in the cockpit the head drives nothing, and
     // X4 would have recentred its look-around here by itself (take 311);
@@ -6292,7 +6513,9 @@ void headlook_tick() {
         x4vr::CamSnap snap;
         snap.yaw_deg = g_headlook.cmd_yaw_deg;
         snap.pitch_deg = g_headlook.cmd_pitch_deg;
-        snap.valid = steering;
+        // In an external view the head turns, the stub's composition is
+        // the frame's pose too (X4VR_HEADLOOK_EXTERNAL).
+        snap.valid = steering || ext_declared;
         // **Task #75: what X4 actually said, beside what we believe.**
         //
         // `r` was read at the TOP of this tick, before the servo stepped, so it

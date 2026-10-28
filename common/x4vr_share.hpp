@@ -46,7 +46,9 @@ constexpr uint32_t kShareMagic = 0x52565834u;
 // 7: `foot_menu`, an on-foot menu holding the pointer (take 338).
 // 8: `centred_menu`, a HUD-down menu head-look centred for (take 339).
 // 9: `interact_menu`, X4's right-click menu open (take 342).
-constexpr uint32_t kShareVersion = 9u;
+// 10: `external_head`, the head turning an external view
+//     (X4VR_HEADLOOK_EXTERNAL).
+constexpr uint32_t kShareVersion = 10u;
 
 struct Shared {
     uint32_t magic = kShareMagic;
@@ -221,6 +223,14 @@ struct Shared {
     // appear 70-100 ms after each right-click and leave when the HUD's
     // TopLevelMenu came back.
     std::atomic<uint32_t> interact_menu{0};
+
+    // 1 while the stub at 0x192a295 composes head-look's angle into an
+    // external view (X4VR_HEADLOOK_EXTERNAL, x4vr_extview.hpp). There
+    // GetCameraRotation is X4's orbit times the head, so -- as on foot --
+    // the layer declares head-look's angle (the camera snapshot, valid) and
+    // not the camera it samples: declaring the orbit too would swing the
+    // picture with the numpad.
+    std::atomic<uint32_t> external_head{0};
 };
 
 // ---- the camera block, as one consistent snapshot ------------------------
