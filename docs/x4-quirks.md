@@ -26179,3 +26179,54 @@ Take 341's line. WiVRn, configuration 1, no recording.
 * **P342.3** Everything else as in 341. Scorer PASS.
 
     X4VR_TAKE=342 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take342.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+## Take 342 — SCORED PASS: X4's table holds the right-click menu
+
+Patola: the dialogue start is *"great, perfect"*. He right-clicked in the
+cockpit several times and tested the compass menus (F10, F8) there, which
+*"work perfectly and are aligned, differently from the right-click menu"*.
+He asked whether the fix could also make that menu smaller.
+
+* **P342.1 answered: yes.** `menus`: 34 changes.
+  * In the seat `InteractMenu` appeared six times, 70–100 ms after a mouse
+    press each time, and left when the HUD's `TopLevelMenu` returned
+    (3.7–24 s).
+  * On foot it appeared at terminals.
+  * Other names: TransporterMenu (the teleporter, not full-screen),
+    InventoryTraderMenu, MapMenu, DockedMenu and OptionsMenu (full-screen).
+  * The compass menus never changed the set, so a fix keyed on InteractMenu
+    leaves them raw, where they line up.
+  * The conversations are not in this table; IsConversationActive covers
+    them.
+* **P342.2 HELD.** 6 fresh openings: 4 conversations sent to the options, 2
+  terminals to the centre.
+* **P342.3 HELD.** Cockpit tracking median 0.01°/0.02°, p90 0.53°/0.57°.
+  PASS.
+
+**Smaller:** his `uiscale` is already 0.6 (passed through by the fork), and
+X4's slider stops at 0.5 (`GetUIScaleFactorRange`). The other lever, the UI
+canvas size, moves the whole UI and was withdrawn once already for
+regressing the cockpit HUD's alignment (#76). Neither is specific to this
+menu. Once the cursor tracks the highlight 1:1 the "too big for the cursor"
+part should go; a 0.5 A/B stays on offer.
+
+## Built for take 343: the canvas while X4's right-click menu is open
+
+* `menus_tick` now publishes `interact_menu` (share v9) while the table holds
+  "InteractMenu", polled at 30 Hz. A failed walk leaves the state as it was.
+* The layer draws through the canvas for it, a fourth reason.
+* The injector logs "ui: X4's right-click menu OPEN / closed".
+* Scorer `rclick` lists each period with the canvas state 0.2 s in, and FAILs
+  one without it. Planted cases with a format guard.
+
+### P343 — the right-click menu lined up
+
+Take 342's line, new number. WiVRn, configuration 1, no recording.
+
+* **P343.1 (Patola)** In the cockpit the right-click menu's highlight is
+  under the cursor all the way down a long menu.
+* **P343.2** The compass menus stay as they were (aligned), and flight
+  targeting at the raw pointer is unchanged.
+* **P343.3** `rclick`: every period with the canvas ON. Scorer PASS.
+
+    X4VR_TAKE=343 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take343.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh

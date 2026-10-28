@@ -4361,7 +4361,7 @@ def main(path):
     # down that head-look centred. Only the first answers `ui_up`.
     ca_all = re.findall(r"\[\s*([\d.]+)\]\s+layer\s+cursor canvas: AUTO — "
                         r"(ON|OFF)(?: \((an on-foot menu|a menu with the HUD "
-                        r"down))?", text)
+                        r"down|X4's right-click menu))?", text)
     ca_sw = [(t, k) for t, k, why in ca_all if not why]
     ca_foot_on = [float(t) for t, k, why in ca_all if why == "an on-foot menu"]
     ca_cen_on = [float(t) for t, k, why in ca_all if why.startswith("a menu")]
@@ -4555,6 +4555,41 @@ def main(path):
             else:
                 break
         return st
+    # --- X4's right-click menu, followed from its table (take 343) ---------
+    #
+    # The injector logs the table holding "InteractMenu" (OPEN) and losing it
+    # (closed); the layer must be drawing through the canvas -- for this or
+    # any other reason -- within 0.2 s of every opening.
+    rc_ev = [(float(t), k) for t, k in re.findall(
+        r"\[\s*([\d.]+)\]\s+inject\s+ui: X4's right-click menu (OPEN|closed)",
+        text)]
+    if rc_ev:
+        periods, start = [], None
+        for t, k in rc_ev:
+            if k == "OPEN":
+                start = t
+            elif start is not None:
+                periods.append((start, t))
+                start = None
+        if start is not None:
+            periods.append((start, None))
+        late = 0
+        for t0, t1 in periods:
+            k, why = _canvas_at(t0 + 0.2)
+            ok_ = k == "ON"
+            if not ok_ and (t1 is None or t1 - t0 > 0.5):
+                late += 1
+            print(f"rclick  t {t0:10.1f}  "
+                  + (f"{t1 - t0:5.1f} s" if t1 is not None else "open at exit")
+                  + ("  canvas ON" + (f" ({why})" if why else " (full-screen)")
+                     if ok_ else "  canvas OFF"))
+        print(f"rclick  {len(periods)} right-click menu period(s) from X4's "
+              f"table; Patola's eye says whether the cursor sat on the "
+              f"highlighted option")
+        if late:
+            fails.append(f"X4's right-click menu: {late} period(s) without the "
+                         f"canvas 0.2 s after X4's table showed it")
+
     if hm_open:
         arms = {"A": 0, "B": 0}
         late_a = 0

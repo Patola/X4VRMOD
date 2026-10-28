@@ -4788,17 +4788,21 @@ static int x4_conversation() {
     return x4vr::menus::conversation_active(st) ? 1 : 0;
 }
 
-// **Reconnaissance for the cockpit's right-click menu** (take 342): every
-// change of X4's open-menu set, logged. Whether "InteractMenu" is in the
-// table while that menu is open -- it is not full-screen, which is all
-// IsFullscreenMenuDisplayed can say -- decides whether this table is the
-// signal. 10 Hz on X4's main thread, between its own calls into the table.
+// X4's table of open menus, every change logged, and **the cockpit's
+// right-click menu followed from it**. Take 342 found "InteractMenu" in the
+// table 70-100 ms after each right-click and gone when the HUD's
+// TopLevelMenu came back; IsFullscreenMenuDisplayed could not say so -- the
+// menu is not full-screen, which is all it reports. While it is there the
+// cursor is drawn through the UI canvas (share `interact_menu`). The compass
+// menus never entered the table and stay raw, where they already line up.
+// 30 Hz on X4's main thread, between its own calls into the table; a walk
+// that fails leaves the published state as it was.
 static void menus_tick() {
     if (!cursor_canvas_auto() || !menus_sites_verified())
         return;
     static double last = 0.0;
     const double now = mono_seconds();
-    if (now - last < 0.100)
+    if (now - last < 0.033)
         return;
     last = now;
     auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
@@ -4812,6 +4816,18 @@ static void menus_tick() {
                      "or the tree was mid-change) — skipped");
         return;
     }
+    const bool interact = x4vr::menus::has(e, n < 24 ? n : 24, "InteractMenu");
+    static int interact_was = -1;
+    if ((int)interact != interact_was) {
+        if (interact_was != -1 || interact)
+            X4VR_LOG("ui: X4's right-click menu %s",
+                     interact ? "OPEN — the cursor is drawn through the UI "
+                                "canvas"
+                              : "closed");
+        interact_was = interact;
+    }
+    if (x4vr::Shared *sh = x4vr_shared_state())
+        sh->interact_menu.store(interact ? 1u : 0u, std::memory_order_relaxed);
     char line[512];
     x4vr::menus::describe(e, n < 24 ? n : 24, line, sizeof line);
     if (strcmp(line, was) != 0 && changes < 2000) {

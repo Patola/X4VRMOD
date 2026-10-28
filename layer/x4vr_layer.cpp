@@ -10060,7 +10060,10 @@ bool cursor_canvas() {
         // off the seat, the station teleporters.
         const bool centred =
             s && s->centred_menu.load(std::memory_order_relaxed) != 0;
-        const int want = full ? 1 : foot ? 2 : centred ? 3 : 0;
+        // Take 342: X4's right-click menu, from X4's own table of open menus.
+        const bool interact =
+            s && s->interact_menu.load(std::memory_order_relaxed) != 0;
+        const int want = full ? 1 : foot ? 2 : centred ? 3 : interact ? 4 : 0;
         static int said = -1;
         if (said != want) {
             said = want;
@@ -10073,6 +10076,9 @@ bool cursor_canvas() {
                      : want == 3
                          ? "ON (a menu with the HUD down, X4's camera centred: "
                            "the cursor follows X4's UI)"
+                     : want == 4
+                         ? "ON (X4's right-click menu is open: the cursor "
+                           "follows X4's UI)"
                          : "OFF (no full-screen menu: the cursor at the raw "
                            "pointer, where X4 picks the world)");
         }

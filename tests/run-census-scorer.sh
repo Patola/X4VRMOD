@@ -1137,6 +1137,33 @@ want "menus -> InteractMenu found" /tmp/census-mn-yes.log "menus   =>" "Interact
 { cat "$BASE"; printf '%s\n' "$mnok" "$mnseat" "$mn1" "$mn3"; } > /tmp/census-mn-no.log
 want "menus -> InteractMenu absent said" /tmp/census-mn-no.log "menus   =>" "InteractMenu never appeared"
 absent "menus: not read -> silent" "$BASE" "menus "
+# ------------------------------------------ rclick: X4's right-click menu (take 343)
+rcfmt=1
+for frag in 'X4VR_LOG("ui: X4'"'"'s right-click menu %s",' \
+            'interact ? "OPEN — the cursor is drawn through the UI "' \
+            '"canvas"'; do
+    grep -qF -- "$frag" injector/x4vr_inject.cpp || { rcfmt=0; echo "        missing: $frag"; }
+done
+grep -qF -- '? "ON (X4'"'"'s right-click menu is open: the cursor "' layer/x4vr_layer.cpp ||
+    { rcfmt=0; echo "        missing: the layer's right-click ON"; }
+if [ $rcfmt -eq 1 ]; then ok "rclick: the planted lines match the injector's and the layer's formats"
+else bad "rclick: a format changed — replant the lines below"; fi
+rco='[  999972.000] inject  ui: X4'"'"'s right-click menu OPEN — the cursor is drawn through the UI canvas'
+rcl='[  999972.040] layer   cursor canvas: AUTO — ON (X4'"'"'s right-click menu is open: the cursor follows X4'"'"'s UI)'
+rcc='[  999980.000] inject  ui: X4'"'"'s right-click menu closed'
+rcoff='[  999980.020] layer   cursor canvas: AUTO — OFF (no full-screen menu: the cursor at the raw pointer, where X4 picks the world)'
+{ cat "$BASE"; printf '%s\n' "$rco" "$rcl" "$rcc" "$rcoff"; } > /tmp/census-rc-ok.log
+want "rclick -> period with the canvas" /tmp/census-rc-ok.log rclick "t   999972.0    8.0 s  canvas ON (X4's right-click menu)"
+want "rclick -> counted" /tmp/census-rc-ok.log rclick "1 right-click menu period(s)"
+want "rclick -> not a full-screen switch" /tmp/census-rc-ok.log cursor-auto "the layer switched the cursor to the canvas 0 time(s)"
+if python3 tools/score_run.py /tmp/census-rc-ok.log 2>&1 | grep -q "right-click menu: "; then
+    bad "rclick healthy -> FAILs"
+else
+    ok "rclick healthy -> no FAIL"
+fi
+{ cat "$BASE"; printf '%s\n' "$rco" "$rcc"; } > /tmp/census-rc-late.log
+want "rclick without the canvas -> FAIL" /tmp/census-rc-late.log "FAIL|  - " "1 period(s) without the canvas 0.2 s after X4's table showed it"
+absent "rclick: none -> silent" "$BASE" rclick
 absent "hud-menu: nothing off the seat -> silent" "$BASE" hud-menu
 # Take 340's map and crafting bench: full-screen, so the layer's canvas was
 # already ON (no HUD-down ON line). That FAILed them; it must not.

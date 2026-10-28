@@ -45,7 +45,8 @@ constexpr uint32_t kShareMagic = 0x52565834u;
 // 6: `on_foot`, head-look writing off the pilot seat (X4VR_HEADLOOK_FOOT).
 // 7: `foot_menu`, an on-foot menu holding the pointer (take 338).
 // 8: `centred_menu`, a HUD-down menu head-look centred for (take 339).
-constexpr uint32_t kShareVersion = 8u;
+// 9: `interact_menu`, X4's right-click menu open (take 342).
+constexpr uint32_t kShareVersion = 9u;
 
 struct Shared {
     uint32_t magic = kShareMagic;
@@ -212,6 +213,14 @@ struct Shared {
     // them. Under X4VR_CURSOR_CENTRED_AB only the canvas arm's periods off
     // the seat set it.
     std::atomic<uint32_t> centred_menu{0};
+
+    // 1 while X4's table of open menus holds "InteractMenu" -- the cockpit's
+    // right-click menu, which X4 does not call full-screen, so the cursor
+    // stayed raw over it and moved 1.9x as far as its highlight (take 340's
+    // video). The table is READ (x4vr_menus.hpp); take 342 found the entry
+    // appear 70-100 ms after each right-click and leave when the HUD's
+    // TopLevelMenu came back.
+    std::atomic<uint32_t> interact_menu{0};
 };
 
 // ---- the camera block, as one consistent snapshot ------------------------
