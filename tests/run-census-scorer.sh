@@ -1026,7 +1026,8 @@ fi
 # cursor_canvas; this guard fails the case set if either format moved.
 # Each fragment on its own: grep -F with a multi-line pattern matches ANY line.
 fmfmt=1
-for frag in '"ui: on-foot menu %llu OPEN — X4 freed the pointer; the "' \
+for frag in '"ui: on-foot menu %llu OPEN — X4 freed the pointer%s; the "' \
+            'fm.resumed ? " (still free after a HUD-down menu)" : "",' \
             '"cursor is drawn %s | head-look yaw %.1f pitch %.1f | "' \
             '"pointer %.0f,%.0f",' \
             '"through the UI canvas (arm A)"' \
@@ -1113,6 +1114,21 @@ fi
 want "hud-menu arm A never reached the layer -> FAIL" /tmp/census-hm-nolayer.log "FAIL|  - " "1 canvas-arm period(s) never reached the layer"
 want "hud-menu one arm only -> said" /tmp/census-hm-nolayer.log hud-menu "ONLY ONE ARM"
 absent "hud-menu: nothing off the seat -> silent" "$BASE" hud-menu
+# Take 340's map and crafting bench: full-screen, so the layer's canvas was
+# already ON (no HUD-down ON line). That FAILed them; it must not.
+hmfs='[  999975.000] layer   cursor canvas: AUTO — ON (a full-screen menu is up: the cursor follows X4'"'"'s UI)'
+{ cat /tmp/census-hm-base.log; printf '%s\n' "$hmarm" "$fmout" "$hmfs" "$hmdown" "$hmcen" "$hmoA" "$hmcA" "$hmup"; } > /tmp/census-hm-full.log
+want "hud-menu full-screen under A -> canvas held, either arm" /tmp/census-hm-full.log hud-menu "#1   t   999975.0  arm A    7.0 s  canvas ON (full-screen: either arm)"
+want "hud-menu full-screen -> said it tests neither arm" /tmp/census-hm-full.log hud-menu "1 of them were full-screen"
+if python3 tools/score_run.py /tmp/census-hm-full.log 2>&1 | grep -q "canvas-arm period"; then
+    bad "hud-menu full-screen under A -> FAILs (take 340's false FAIL)"
+else
+    ok "hud-menu full-screen under A -> no FAIL"
+fi
+# Take 340's vendor: back from the purchase list with the pointer free.
+fmres='[  999995.000] inject  ui: on-foot menu 3 OPEN — X4 freed the pointer (still free after a HUD-down menu); the cursor is drawn through the UI canvas (arm A) | head-look yaw 1.0 pitch -5.0 | pointer 1400,1400'
+{ cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" "$fmoA" "$fmlA" "$fmcA" "$fmoff" "$fmres" '[  999995.020] layer   cursor canvas: AUTO — ON (an on-foot menu has the pointer: the cursor follows X4'"'"'s UI)'; } > /tmp/census-fm-res.log
+want "foot-menu resumed opening -> listed and marked" /tmp/census-fm-res.log foot-menu "#3   t   999995.0  arm A    open at exit  head-look   +1.0   -5.0  pointer   1400,  1400  canvas ON  (resumed after a HUD-down menu)"
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

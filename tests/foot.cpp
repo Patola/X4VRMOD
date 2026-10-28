@@ -491,66 +491,108 @@ int main(int argc, char **argv) {
         b.mode = 1;
         check(!foot::same_regime(a, b), "a mode change is a new regime");
     }
-    // 7. On-foot menus (take 338): when X4 freeing the pointer counts.
+    // 7. On-foot menus (takes 338, 340): when X4 freeing the pointer counts.
     {
         using M = foot::FootMenu;
+        // step(off_seat, foot, rel, t, ab)
         // Stand-up: on foot with the pointer already free, then X4 takes it.
         M m;
         bool any = false;
         for (int i = 0; i < 20; i++)
-            any |= m.step(true, false, 1.0 + 0.01 * i, true) != M::kNone;
-        any |= m.step(true, true, 1.3, true) != M::kNone;
+            any |= m.step(true, true, false, 1.0 + 0.01 * i, true) != M::kNone;
+        any |= m.step(true, true, true, 1.3, true) != M::kNone;
         check(!any && m.openings == 0,
               "menus: standing up with the pointer free is no opening");
 
         // A real opening: ON -> off, held 50 ms.
-        m.step(true, true, 2.000, true);
-        check(m.step(true, false, 2.010, true) == M::kNone,
+        m.step(true, true, true, 2.000, true);
+        check(m.step(true, true, false, 2.010, true) == M::kNone,
               "menus: the edge alone does not open");
-        check(m.step(true, false, 2.040, true) == M::kNone && !m.open,
+        check(m.step(true, true, false, 2.040, true) == M::kNone && !m.open,
               "menus: 30 ms after the edge, still not open");
-        check(m.step(true, false, 2.061, true) == M::kOpened && m.openings == 1 &&
-                  m.canvas && m.draw_canvas(),
+        check(m.step(true, true, false, 2.061, true) == M::kOpened && m.openings == 1 &&
+                  m.canvas && m.draw_canvas() && !m.resumed,
               "menus: 51 ms after the edge it opens, opening 1 = arm A (canvas)");
-        check(m.step(true, false, 3.0, true) == M::kNone && m.open,
+        check(m.step(true, true, false, 3.0, true) == M::kNone && m.open,
               "menus: stays open while the pointer is free");
-        check(m.step(true, true, 4.0, true) == M::kClosed && !m.draw_canvas(),
+        check(m.step(true, true, true, 4.0, true) == M::kClosed && !m.draw_canvas(),
               "menus: X4 taking the pointer back closes it");
 
-        // Take 338's HUD-down: pointer freed, HUD down 6 ms later.
-        m.step(true, true, 5.000, true);
-        m.step(true, false, 5.010, true);
-        m.step(false, false, 5.016, true);
+        // Take 338's HUD-down: pointer freed, HUD down 6 ms later, and X4
+        // takes the pointer back before the HUD comes up again.
+        m.step(true, true, true, 5.000, true);
+        m.step(true, true, false, 5.010, true);
+        m.step(true, false, false, 5.016, true);
         bool opened = false;
         for (int i = 0; i < 100; i++)
-            opened |= m.step(false, false, 5.02 + 0.01 * i, true) == M::kOpened;
-        // The HUD comes back up with the pointer still free: no edge.
+            opened |= m.step(true, false, false, 5.02 + 0.01 * i, true) == M::kOpened;
+        opened |= m.step(true, false, true, 6.05, true) == M::kOpened;
         for (int i = 0; i < 20; i++)
-            opened |= m.step(true, false, 6.1 + 0.01 * i, true) == M::kOpened;
+            opened |= m.step(true, true, true, 6.1 + 0.01 * i, true) == M::kOpened;
         check(!opened && m.openings == 1,
               "menus: a pointer freed 6 ms before the HUD goes down is no opening");
 
         // The A/B alternates; without it every opening is canvas.
-        m.step(true, true, 7.0, true);
-        m.step(true, false, 7.01, true);
-        m.step(true, false, 7.07, true);
+        m.step(true, true, true, 7.0, true);
+        m.step(true, true, false, 7.01, true);
+        m.step(true, true, false, 7.07, true);
         check(m.openings == 2 && m.open && !m.canvas && !m.draw_canvas(),
               "menus: opening 2 = arm B (raw)");
-        m.step(true, true, 8.0, true);
-        m.step(true, false, 8.01, true);
-        m.step(true, false, 8.07, true);
+        m.step(true, true, true, 8.0, true);
+        m.step(true, true, false, 8.01, true);
+        m.step(true, true, false, 8.07, true);
         check(m.openings == 3 && m.canvas, "menus: opening 3 = arm A again");
+
+        // Take 340's vendor: the dialog, then the purchase list (full-screen,
+        // HUD down), then Cancel back to the dialog with the pointer free.
+        M v;
+        v.step(true, true, true, 10.0, false);
+        v.step(true, true, false, 10.01, false);
+        check(v.step(true, true, false, 10.07, false) == M::kOpened && !v.resumed,
+              "menus: the vendor's dialog opens");
+        check(v.step(true, false, false, 11.0, false) == M::kClosed,
+              "menus: the purchase list (HUD down) closes it");
+        v.step(true, false, false, 20.0, false);
+        check(v.step(true, true, false, 20.01, false) == M::kNone,
+              "menus: back from the list, not before the hold");
+        check(v.step(true, true, false, 20.07, false) == M::kOpened &&
+                  v.resumed && v.draw_canvas() && v.openings == 2,
+              "menus: back at the dialog with the pointer free it opens again (resumed)");
+
+        // Take 339's map on foot: opened while walking (no menu open), and
+        // the HUD came up 0.9 s before X4 took the pointer back.
+        M w;
+        w.step(true, true, true, 50.0, false);
+        w.step(true, false, false, 51.0, false);     // the map: HUD down
+        bool map_opened = false;
+        for (int i = 0; i < 90; i++)
+            map_opened |= w.step(true, true, false, 60.0 + 0.01 * i, false) == M::kOpened;
+        map_opened |= w.step(true, true, true, 60.9, false) == M::kOpened;
+        check(!map_opened && w.openings == 0,
+              "menus: the HUD back up after the map, pointer free 0.9 s, is no opening");
+
+        // Sitting down forgets an interrupted menu, and standing up is still
+        // no opening.
+        v.step(false, false, false, 30.0, false);
+        bool again = false;
+        for (int i = 0; i < 20; i++)
+            again |= v.step(true, true, false, 31.0 + 0.01 * i, false) == M::kOpened;
+        check(!again && !v.open,
+              "menus: after sitting down, standing up again is no opening");
+        check(v.step(true, true, true, 32.0, false) == M::kNone &&
+                  v.step(true, true, false, 32.01, false) == M::kNone &&
+                  v.step(true, true, false, 32.07, false) == M::kOpened,
+              "menus: and the first menu after it opens as before");
+
         M n;
         for (int k = 0; k < 2; k++) {
-            n.step(true, true, 10.0 + k, false);
-            n.step(true, false, 10.01 + k, false);
-            n.step(true, false, 10.07 + k, false);
+            n.step(true, true, true, 40.0 + k, false);
+            n.step(true, true, false, 40.01 + k, false);
+            n.step(true, true, false, 40.07 + k, false);
         }
         check(n.openings == 2 && n.draw_canvas(),
               "menus: without the A/B the second opening is canvas too");
-
-        // Leaving the foot (sitting down) closes an open menu.
-        check(n.step(false, false, 13.0, false) == M::kClosed,
+        check(n.step(false, false, false, 43.0, false) == M::kClosed,
               "menus: leaving the foot closes it");
     }
 

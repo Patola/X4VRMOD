@@ -4723,6 +4723,9 @@ struct FootPatch {
 };
 FootPatch g_footpatch;
 std::atomic<bool> g_on_foot{false};
+// Out of the pilot seat at all, HUD up or down: FootMenu forgets a menu the
+// HUD interrupted only when he sits down (or X4 takes the pointer back).
+std::atomic<bool> g_off_seat{false};
 } // namespace
 
 // X4VR_CURSOR_FOOT_AB=1 — alternate the on-foot menu cursor per opening: odd
@@ -4752,7 +4755,8 @@ static void foot_menu_tick() {
     if (!cursor_canvas_auto())
         return;
     static x4vr::foot::FootMenu fm;
-    const auto ev = fm.step(g_on_foot.load(std::memory_order_relaxed),
+    const auto ev = fm.step(g_off_seat.load(std::memory_order_relaxed),
+                            g_on_foot.load(std::memory_order_relaxed),
                             g_relative_mouse.load(std::memory_order_relaxed),
                             mono_seconds(), cursor_foot_ab());
     x4vr::Shared *sh = x4vr_shared_state();
@@ -4761,10 +4765,11 @@ static void foot_menu_tick() {
         // can be set against the two things the offset could depend on: the
         // pointer's distance from the centre (the canvas) or the head's angle
         // off the body.
-        X4VR_LOG("ui: on-foot menu %llu OPEN — X4 freed the pointer; the "
+        X4VR_LOG("ui: on-foot menu %llu OPEN — X4 freed the pointer%s; the "
                  "cursor is drawn %s | head-look yaw %.1f pitch %.1f | "
                  "pointer %.0f,%.0f",
                  (unsigned long long)fm.openings,
+                 fm.resumed ? " (still free after a HUD-down menu)" : "",
                  fm.canvas ? "through the UI canvas (arm A)"
                            : "at the raw pointer (arm B, take 338's)",
                  g_camwrite.yaw, g_camwrite.pitch,
@@ -5967,6 +5972,7 @@ void headlook_tick() {
     // the mouse's pitch is zeroed and the layer declares the head part.
     const bool foot_now = on_foot && steering;
     g_on_foot.store(foot_now, std::memory_order_relaxed);
+    g_off_seat.store(on_foot, std::memory_order_relaxed);
     if (x4vr::Shared *sh = x4vr_shared_state())
         sh->on_foot.store(foot_now ? 1u : 0u, std::memory_order_relaxed);
     g_in_cockpit.store(cockpit, std::memory_order_relaxed);

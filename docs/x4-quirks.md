@@ -25967,3 +25967,113 @@ cursor sits against the highlighted option, per kind of menu.
 * **P340.5** Steering: A only, the apostrophe does nothing. Scorer PASS.
 
     X4VR_TAKE=340 X4VR_CURSOR_CENTRED_AB=1 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take340.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+## Take 340 — SCORED PASS (after a scorer fix): the teleporters line up on the canvas; the vendor's Cancel did not
+
+Patola recorded the take (`/dados/x4-cursor-alignment.mp4`, 1600×1600 HEVC,
+the headset view of one eye, 494 s). His notes, by video time:
+* 01:49 and 01:57: the cockpit right-click menu, misaligned.
+* 03:23 / 03:36 (terminal), 03:49 (NPC), 05:32 (vendor), 07:06 (NPC):
+  *"the cursor appears far from the menu"*, but the highlights and choices
+  are right.
+* 04:28–04:34, teleporter under B: misaligned.
+* 06:35, teleporter under A: all good.
+* 04:59–05:23, crafting bench under A: all good.
+* 05:39, the vendor's purchase list under B: good. After Cancel at 05:59,
+  *"the cursor appears way below and to the right of the choices and this
+  time when it hovers the choices they are not highlighted"*.
+* 04:08 and 07:21, the map: good.
+* 07:43, cockpit right-click on a freighter: misaligned.
+
+Video to log: the milestones put log ≈ video + 53768.5 s (±1 s of relay
+delay).
+
+* **P340.1 HELD, by one pair.** Teleporter #5 (A) was the canvas through the
+  new HUD-down path and lined up; #2 (B) was raw and did not.
+  * The other four HUD-down periods were full-screen: the map twice, the
+    crafting bench, and the vendor's purchase list. A full-screen menu holds
+    the canvas whatever the arm, so the crafting bench "working in A" and the
+    purchase list "working in B" test neither arm.
+* **The scorer's FAIL was mine.** It wanted a HUD-down ON line for every A
+  period, and under a full-screen menu the layer is already ON and logs
+  nothing new. It now reads the canvas state over time, any reason, and says
+  "full-screen: either arm".
+* **P340.2 HELD: the raw-cursor model is right for the cockpit right-click
+  menu.** Read off the frames (cursor y against the highlighted row's y,
+  video px):
+  * First right-click, two frames: cursor 228 / highlight 212, and
+    528 / 372 → slope 0.53.
+  * Second right-click: (745, 713), (890, 782), (1020, 873), (1117, 914) →
+    least-squares slope 0.56.
+  * Predicted A = 0.525. The cursor travels ~1.9× the highlight, so when it
+    reaches the window's edge the highlight is only halfway down a tall
+    menu. That is his "only goes halfway up and down".
+  * The second ring in those frames drifts 180 px with no change of
+    highlight, so it is not the pointer.
+* **P340.3: the vendor is three menus.**
+  * Its dialog is an on-foot menu: canvas, right.
+  * The purchase list is full-screen: canvas, right.
+  * Cancel brings the dialog back with the pointer still free. FootMenu had
+    closed the menu when the HUD went down and needed a new relative ON→off
+    edge to open one; there was none, so the cursor was raw. I named this
+    case when building FootMenu and called it rare.
+* **P340.4 HELD.** Five on-foot openings, all canvas, all right.
+  * "The cursor appears far from the menu" is where it STARTS. X4 frees the
+    pointer wherever it drifted in relative mode: opening #1 at (2621, 1026),
+    #4 at (1758, 569).
+  * The conversation menus are drawn low in the view (video y ≈ 1060 at the
+    NPC and the vendor).
+  * Patola marked these working, so moving the pointer on opening is put to
+    him, not done.
+* **P340.5 HELD.** A only, apostrophe toggles 0. Cockpit tracking p90
+  1.49°/1.35°; the body −0.115°/count.
+* **X4's cursor shape is no menu signal.** Over the right-click menu it
+  alternated its flight rings (#20/#24) and set the arrow (#5) once. The
+  cockpit right-click menu needs X4 to report it.
+
+## Built for take 341: the vendor's Cancel; canvas under the centring by default
+
+* **FootMenu resumes a menu the HUD interrupted.** A menu that was open when
+  the HUD went down opens again (held 50 ms) when the HUD comes back up with
+  the pointer free. It is logged "(still free after a HUD-down menu)".
+* **Replayed through the real FootMenu** (`step` driven by takes 338–340's
+  relative/HUD/seat events at 10 ms):
+  * 340 gains exactly one opening, at 54131.27: the vendor after Cancel,
+    50 ms after the HUD came up.
+  * 339 gains one false one, at 50996.84. There the map was opened FROM an
+    on-foot menu that X4 does not bring back, and the pointer stayed free
+    0.9 s before X4 took it. Recorded in the code as the known false case:
+    a soon-hidden cursor drawn at the canvas scale for 0.9 s.
+  * An earlier version (any free pointer on foot, once X4 had held it)
+    would also have fired after a map opened while walking. The test
+    covers it.
+* **Canvas under the menu centring is the behaviour**: the next line drops
+  X4VR_CURSOR_CENTRED_AB. A won where it was tested.
+* Scorer: `hud-menu` reads the canvas state over time and names the
+  full-screen periods; `foot-menu` marks resumed openings. Planted cases for
+  both; take 340's false FAIL is a case.
+
+### P341 — play, with the fixes
+
+Take 340's line without X4VR_CURSOR_CENTRED_AB. WiVRn, configuration 1.
+No recording.
+
+* **P341.1** The vendor: dialog → purchase list → Cancel → the dialog's
+  options highlight under the cursor. The log shows a resumed opening.
+* **P341.2** Every teleporter use lines up, from any angle.
+* **P341.3** Everything else as in 340: on-foot menus, map, cockpit.
+  Scorer PASS.
+
+    X4VR_TAKE=341 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take341.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+**Put to Patola, not done:**
+1. **The cockpit right-click menu.** X4 has to say when it is open.
+   * X4's Lua calls its own `NotifyInteractMenuShown`, which we cannot
+     interpose: the executable's symbol wins the lookup.
+   * The route is a Lua add-on in our extension that reports the menu's
+     open/close to a function the injector exports.
+   * It needs Protected UI Mode off in our forked config (his own config is
+     untouched). It is a new mechanism and his decision.
+2. **Where the cursor starts in on-foot menus.** It could be moved to the
+   view's centre when X4 frees the pointer. That is nearer the menus seen,
+   though not on them.

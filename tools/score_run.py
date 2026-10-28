@@ -4404,7 +4404,8 @@ def main(path):
     # option. The injector logs each opening (X4 freeing the pointer on foot)
     # with the arm it chose; arm A must reach the layer as a canvas switch.
     fm_open = re.findall(
-        r"\[\s*([\d.]+)\]\s+inject\s+ui: on-foot menu (\d+) OPEN — .*?"
+        r"\[\s*([\d.]+)\]\s+inject\s+ui: on-foot menu (\d+) OPEN — X4 freed "
+        r"the pointer( \(still free after a HUD-down menu\))?; .*?"
         r"\(arm (A|B)[^)]*\) \| head-look yaw (-?[\d.]+) pitch (-?[\d.]+) "
         r"\| pointer (-?[\d.]+),(-?[\d.]+)", text)
     fm_close = {int(n): float(t) for t, n in re.findall(
@@ -4434,7 +4435,7 @@ def main(path):
                       "exercised")
         arms = {"A": 0, "B": 0}
         late_a = 0
-        for t, n, arm, hy, hp, px, py in fm_open:
+        for t, n, res, arm, hy, hp, px, py in fm_open:
             t = float(t)
             arms[arm] += 1
             end = fm_close.get(int(n))
@@ -4445,7 +4446,8 @@ def main(path):
             print(f"foot-menu  #{int(n):<3d} t {t:10.1f}  arm {arm}  {dur}  "
                   f"head-look {float(hy):+6.1f} {float(hp):+6.1f}  "
                   f"pointer {float(px):6.0f},{float(py):6.0f}"
-                  + ("  canvas ON" if reached else ""))
+                  + ("  canvas ON" if reached else "")
+                  + ("  (resumed after a HUD-down menu)" if res else ""))
         if fm_open:
             print(f"foot-menu  {len(fm_open)} opening(s): arm A (canvas) "
                   f"{arms['A']}, arm B (raw) {arms['B']}"
@@ -4473,22 +4475,45 @@ def main(path):
         r"\[\s*([\d.]+)\]\s+inject\s+ui: menu with the HUD down (\d+) "
         r"closed", text)}
     hm_ab = bool(re.search(r"\bX4VR_CURSOR_CENTRED_AB=1\b", run or ""))
+    # The layer's canvas state over time, any reason: a full-screen menu
+    # outranks the centring, so take 340's map and crafting bench (A) never
+    # logged a HUD-down ON -- the canvas was already on -- and this FAILed
+    # them; and its vendor list under B was the canvas all the same.
+    ca_state = [(float(t), k, why) for t, k, why in ca_all]
+
+    def _canvas_at(t):
+        st = ("OFF", "")
+        for tc, k, why in ca_state:
+            if tc <= t:
+                st = (k, why)
+            else:
+                break
+        return st
     if hm_open:
         arms = {"A": 0, "B": 0}
         late_a = 0
+        moot = 0
         for t, n, arm in hm_open:
             t = float(t)
             arms[arm] += 1
             end = hm_close.get(int(n))
             dur = f"{end - t:5.1f} s" if end is not None else "  open at exit"
             reached = any(t - 0.05 <= x <= t + 1.0 for x in ca_cen_on)
-            if arm == "A" and not reached:
+            k, why = _canvas_at(t + 1.0)
+            full = k == "ON" and not why
+            if arm == "A" and not (reached or k == "ON"):
                 late_a += 1
+            if full:
+                moot += 1
             print(f"hud-menu   #{int(n):<3d} t {t:10.1f}  arm {arm}  {dur}"
-                  + ("  canvas ON" if reached else ""))
+                  + ("  canvas ON (full-screen: either arm)" if full else
+                     "  canvas ON" if reached or k == "ON" else ""))
         print(f"hud-menu   {len(hm_open)} period(s) off the seat: arm A "
               f"(canvas) {arms['A']}, arm B (raw) {arms['B']}"
               + (" — alternating, X4VR_CURSOR_CENTRED_AB" if hm_ab else ""))
+        if moot:
+            print(f"hud-menu   {moot} of them were full-screen, so the canvas "
+                  f"held whatever the arm — only the others test it")
         if late_a:
             fails.append(f"HUD-down menus off the seat: {late_a} canvas-arm "
                          f"period(s) never reached the layer as a canvas "

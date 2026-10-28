@@ -513,34 +513,59 @@ inline void make_stub(uint8_t out[kStubLen], uintptr_t root_slot,
 //
 // An on-foot menu holding the pointer (take 338: the interact menu and NPC
 // dialogs, drawn raw, sat off the highlighted option). On foot X4 keeps the
-// pointer in relative mode and frees it only for these, so an opening is a
-// relative ON->off edge while head-look is on foot. The stand-up arrives with
-// the pointer already free and is no opening.
+// pointer in relative mode to walk and look, and frees it only for these, so
+// an opening is that ON->off edge with head-look on foot. The stand-up
+// arrives with the pointer already free and is no opening.
+//
+// **Or a menu the HUD going down interrupted.** Take 340: the vendor's
+// purchase list is a full-screen menu (HUD down, which ends `foot`). Cancel
+// brought back the vendor's dialog with the pointer still free and no new
+// edge, so the cursor went raw over it and missed the options. A menu that
+// was open when the HUD went down is open again when it comes back up with
+// the pointer free (`resumed`). Only that one: a menu-less HUD-down (the
+// map or a teleporter opened while walking) gives the pointer back with no
+// menu, and X4 can take 0.9 s to retake it.
+//
+// **Its known false case** (replayed from take 339's log): the map opened
+// FROM an on-foot menu, which X4 does not bring back. The HUD came up, the
+// pointer stayed free 0.9 s, and this counts it as a resumed opening until
+// X4 takes the pointer. The cost is a cursor about to be hidden drawn at the
+// canvas scale for those 0.9 s, and one extra opening in an A/B's count.
 //
 // **Held kHoldS before it counts.** Take 338's on-foot HUD-down freed the
 // pointer 6 ms before X4 reported the HUD down; counted at once, that would
-// have shifted the A/B's parity and announced a menu that was not one. The
+// have shifted an A/B's parity and announced a menu that was not one. The
 // HUD going down ends `foot` (steering stops), which cancels it.
 struct FootMenu {
     static constexpr double kHoldS = 0.050;
     bool open = false;
     bool canvas = false;      // this opening's arm: through the UI canvas
+    bool resumed = false;     // this opening was an interrupted menu's return
     uint64_t openings = 0;
+    bool interrupted = false; // open when the HUD went down
     bool was_rel = false;
-    bool waiting = false;     // an edge seen, not yet held kHoldS
+    bool waiting = false;     // a reason seen, not yet held kHoldS
+    bool waiting_resume = false;
     double since = 0.0;
 
     enum Event { kNone, kOpened, kClosed };
 
+    // `off_seat`: out of the pilot seat at all; `foot`: on foot with
+    // head-look's write ours this tick (false while the HUD is down).
     // `ab`: alternate per opening, odd openings canvas (arm A), even raw.
-    Event step(bool foot, bool rel, double t, bool ab) {
+    Event step(bool off_seat, bool foot, bool rel, double t, bool ab) {
+        if (!off_seat || (foot && rel))
+            interrupted = false;  // sat down, or X4 has the pointer again
+        if (open && !foot && off_seat)
+            interrupted = true;   // the HUD went down over an open menu
         bool now = open;
         if (!foot || rel) {
             now = false;
             waiting = false;
         } else if (!open) {
-            if (was_rel) {
+            if (!waiting && (was_rel || interrupted)) {
                 waiting = true;
+                waiting_resume = !was_rel;
                 since = t;
             }
             if (waiting && t - since >= kHoldS)
@@ -553,6 +578,8 @@ struct FootMenu {
         if (!open)
             return kClosed;
         openings++;
+        resumed = waiting_resume;
+        interrupted = false;
         canvas = !ab || (openings % 2) == 1;
         return kOpened;
     }
