@@ -26708,3 +26708,37 @@ Patola: *"1-6 all worked. F2, F3, F4 with no drift. So, it's fixed."*
   Walking: the body follows the mouse (−0.0985°/count).
 * **P352.3 HELD** (Patola): F2 orbits his ship and F3 the target; F4 as
   before; no drift.
+
+## Whole-scene external views: what the code says so far
+
+**How X4 builds the external camera (0x1929f70, modes 2–5).**
+* `cmp $1; jg 0x192a228` leads to `0x189d8f0(cam, 0x57, 1)`, a component of
+  the camera: the pivot, which is his ship in F2 and the target in F3.
+* It is evaluated through 0x18a0090 into `out`.
+* Unless it is the root's +0x448 object, it continues at 0x192a284, which
+  reloads `out` and jumps to **0x192a15e**, composing the camera's own
+  transform (+0x5a0..+0x5d0).
+* So the final camera = pivot × own (the orbit offset and its rotation).
+  It is the same compose block the walking stub uses.
+
+**How X4 updates it (0x1933d00, modes ≠ 0).**
+* The orbit's angles look like a state of their own: +0x6a0/+0x6a4/+0x6a8
+  are read at 0x193525f..0x1935281, eased by the follower (0x1e8c260, the
+  internal speed pair) and stored back at 0x193536d.
+* The full own matrix is stored at 0x1935a25..0x1935a4b, but it is also READ
+  in between (0x1935605..0x193565a).
+* So "the own matrix is X4's output, rebuilt from the angles" is likely but
+  not established.
+
+**Two routes for a head turn that X4 renders and culls with:**
+1. **A code patch at evaluation**, like walking's: compose the head's
+   rotation after the camera's own transform for the external modes. X4's
+   orbit state is never touched. This needs Patola's approval as its own
+   decision.
+2. **Data-only**: write own × R_head into +0x5a0.. after X4's update and
+   before evaluation. This works only if the matrix is output (not read back
+   as orbit state) and our tick falls between the two. Unknown: the order of
+   X4's update, its evaluation and our SDL_PumpEvents tick.
+
+Next: read the 0x1935605 block (what the read of the matrix feeds), and
+establish the order of update, evaluation and our tick.
