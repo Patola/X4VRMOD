@@ -26929,3 +26929,25 @@ the cockpit.)
   orbit and cache while the HUD is down with no menu).
 * Then extend the stubs' "player camera" gate to it, with its own predicate
   for when the head may turn it.
+
+## Built for take 355: the camera census for F6 (X4VR_CAMSURVEY)
+
+Patola, after v0.9.3: F6 is low priority (*"since it's a 'cinematic' camera
+-- it moves and changes targets all the time -- it might be that it's not
+entirely possible or awkward"*). The order he set: this F6 logging, then the
+start menu as the whole scene, then full 6DOF in the cockpit (*"better doing
+that in sequence rather than completely changing focus"*).
+
+**X4VR_CAMSURVEY=1, read only** (injector/x4vr_camsurvey.hpp):
+* Every object of the player camera's class (or root+0x3e0's) that X4's
+  root (0x3db6948, first 4 KB) and its render-side object (0x3daa888, the
+  one SetSceneCameraActive hands root+0x3e0 to; first 2 KB) hold. Found
+  again at start, at each HUD or view change and every 5 s.
+* Each second, per camera: mode, +0x780, +0x788, the own transform's and the
+  cached world pose's rotation travel, moves and position travel. The cached
+  pose is the "relative to nothing" entry GetCameraRotation reads through
+  0x1925bf0; that lookup and SetSceneCameraActive are checked byte for byte
+  first (tests/camsurvey.cpp).
+* `score_run.py` `camsurvey` block: per camera, how far its cached pose
+  turned with the HUD down outside the external views (F6) against
+  elsewhere.

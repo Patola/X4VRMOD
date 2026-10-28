@@ -4607,6 +4607,61 @@ def main(path):
                   "and the numpad still orbits is Patola's to say; this says "
                   "the stub composed and the layer declared")
 
+    # --- X4VR_CAMSURVEY: which camera X4 draws F6 through ---------------------
+    #
+    # Each second, per camera-class object X4's root and render-side object
+    # hold: mode, and how its own transform and its cached world pose turned.
+    # The camera whose cached pose turns while the HUD is down outside the
+    # external views (F6, take 354) is the candidate; which windows were F6
+    # is read against X4's open-menu lines, so this only totals.
+    cs_asked = bool(re.search(r"\bX4VR_CAMSURVEY=1\b", run or ""))
+    cs_ref = re.search(r"camsurvey: REFUSED — (.*?);", text)
+    cs_sets = re.findall(r"camsurvey: (\d+) camera\(s\) — (.*)", text)
+    cs_win = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+camsurvey: window "
+                        r"[\d.]+ s view (\w+) hud ([01])((?: \| .*)?)$",
+                        text, re.M)
+    if cs_asked or cs_win or cs_ref:
+        if cs_ref:
+            fails.append("X4VR_CAMSURVEY=1 but the census REFUSED — "
+                         + cs_ref.group(1))
+        elif cs_asked and not cs_win:
+            fails.append("X4VR_CAMSURVEY=1 but no census window was written")
+        for n_, desc in cs_sets[:6]:
+            print(f"camsurvey  {n_} camera(s): {desc[:200]}")
+        if len(cs_sets) > 6:
+            print(f"camsurvey  ({len(cs_sets) - 6} more set change(s))")
+        # Per camera label: cached rotation travel, HUD down outside the
+        # external views vs everything else.
+        tot = {}
+        for _t, view, hud, segs in cs_win:
+            down = hud == "0" and view != "external"
+            for seg in segs.split(" | ")[1:]:
+                m = re.match(r"(\S+) (0x[0-9a-f]+|\(nil\)) mode (-?\d+) .*? "
+                             r"cache (?:rot ([\d.]+) moved (\d+)|-)", seg)
+                if not m:
+                    continue
+                key = (m.group(1), m.group(2))
+                d = tot.setdefault(key, {"down": 0.0, "up": 0.0, "wd": 0,
+                                         "wu": 0, "modes": set()})
+                d["modes"].add(m.group(3))
+                rot = float(m.group(4)) if m.group(4) else 0.0
+                if down:
+                    d["down"] += rot
+                    d["wd"] += 1
+                else:
+                    d["up"] += rot
+                    d["wu"] += 1
+        for (label, ptr), d in sorted(tot.items(),
+                                      key=lambda kv: -kv[1]["down"]):
+            print(f"camsurvey  {label:<14s} {ptr}  modes "
+                  f"{','.join(sorted(d['modes']))}  cached pose turned "
+                  f"{d['down']:8.1f} deg over {d['wd']} HUD-down window(s) "
+                  f"outside the external views, {d['up']:8.1f} over "
+                  f"{d['wu']} other(s)")
+        if cs_win:
+            print(f"camsurvey  {len(cs_win)} window(s); which ones were F6 is "
+                  f"read against X4's open-menu lines")
+
     # --- X4VR_DUMP_SHADERS: the modules were written (take 346) -------------
     #
     # Take 346 asked for the dumps; the directory did not exist, the layer
