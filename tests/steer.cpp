@@ -70,9 +70,14 @@ int main() {
     check(mode_from_env(nullptr) == kOff && mode_from_env("") == kOff &&
               mode_from_env("0") == kOff && mode_from_env("off") == kOff,
           "X4VR_STEER unset/empty/0/off -> X4's own line (every take before 331)");
-    check(mode_from_env("b") == kGaze && mode_from_env("B") == kGaze &&
-              mode_from_env("gaze") == kGaze,
-          "b / B / gaze -> B");
+    {
+        // B was removed after take 339 (Patola): a b line gets A, and says so.
+        bool b1 = false, b2 = false, b3 = false, a1 = true;
+        check(mode_from_env("b", &b1) == kNose && mode_from_env("B", &b2) == kNose &&
+                  mode_from_env("gaze", &b3) == kNose && b1 && b2 && b3 &&
+                  mode_from_env("a", &a1) == kNose && !a1,
+              "b / B / gaze -> A, flagged as a request for the removed B");
+    }
     check(mode_from_env("a") == kNose && mode_from_env("A") == kNose &&
               mode_from_env("nose") == kNose,
           "a / A / nose -> A");
@@ -174,13 +179,14 @@ int main() {
     // ---- the geometry ------------------------------------------------------
     const float W = 2816, H = 2816, gap = kLineGapPx;
     {
-        // B: from the eye's centre (plus the gap) to the pointer; ring stays.
-        const Geometry g = geometry(kGaze, 0.2f, -0.1f, true, 0.3f, 0.1f, W, H, gap);
+        // A with the nose at the eye's centre: from there (plus the gap) to
+        // the pointer, the ring unmoved.
+        const Geometry g = geometry(kNose, 0.2f, -0.1f, true, 0.f, 0.f, W, H, gap);
         const float len = std::hypot(0.2f, 0.1f) * 0.5f * W;
-        check(g.used == kGaze && g.ring_dx == 0 && g.ring_dy == 0 && g.line &&
+        check(g.used == kNose && g.ring_dx == 0 && g.ring_dy == 0 && g.line &&
                   near(g.x1, 0.2f) && near(g.y1, -0.1f) &&
                   near(g.x0, 0.2f * gap / len) && near(g.y0, -0.1f * gap / len),
-              "B: line from the gaze (gap 16 px) to the ring, ring unmoved");
+              "A, nose at the centre: line from it (gap 16 px) to the ring");
         // A: from the nose to nose + offset; the ring moves with the nose.
         const Geometry a = geometry(kNose, 0.2f, -0.1f, true, 0.3f, 0.1f, W, H, gap);
         check(a.used == kNose && near(a.ring_dx, 0.3f) && near(a.ring_dy, 0.1f) &&
@@ -198,10 +204,8 @@ int main() {
         const Geometry behind = geometry(kNose, 0.2f, -0.1f, false, 0, 0, W, H, gap);
         check(behind.used == kNose && behind.hidden && !behind.line,
               "A, nose behind the eye (180 deg round) -> nothing drawn, not B");
-        check(!geometry(kGaze, 0.2f, -0.1f, false, 0, 0, W, H, gap).hidden,
-              "B never hides: it does not depend on the nose");
         // Inside the gap: no line, as X4 hides its own inside 30 units.
-        const Geometry in = geometry(kGaze, 0.004f, 0.f, true, 0, 0, W, H, gap);
+        const Geometry in = geometry(kNose, 0.004f, 0.f, true, 0, 0, W, H, gap);
         check(!in.line, "pointer inside the 16 px gap -> no line");
         check(geometry(kOff, 0.2f, 0.f, true, 0, 0, W, H, gap).used == kOff &&
                   !geometry(kOff, 0.2f, 0.f, true, 0, 0, W, H, gap).line,

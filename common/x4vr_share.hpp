@@ -44,7 +44,8 @@ constexpr uint32_t kShareMagic = 0x52565834u;
 //    (x4vr_steer.hpp).
 // 6: `on_foot`, head-look writing off the pilot seat (X4VR_HEADLOOK_FOOT).
 // 7: `foot_menu`, an on-foot menu holding the pointer (take 338).
-constexpr uint32_t kShareVersion = 7u;
+// 8: `centred_menu`, a HUD-down menu head-look centred for (take 339).
+constexpr uint32_t kShareVersion = 8u;
 
 struct Shared {
     uint32_t magic = kShareMagic;
@@ -203,6 +204,14 @@ struct Shared {
     // cursor raw over them and it sat off the highlighted option. Under
     // X4VR_CURSOR_FOOT_AB only the canvas arm's openings set it.
     std::atomic<uint32_t> foot_menu{0};
+
+    // 1 while X4VR_HEADLOOK_MENU_CENTRE holds X4's camera at 0,0 for a menu
+    // shown with the HUD down, and the cursor is to be drawn through the UI
+    // canvas. Take 339: off the seat the station teleporters are such menus
+    // and X4 calls none of them full-screen, so the cursor stayed raw over
+    // them. Under X4VR_CURSOR_CENTRED_AB only the canvas arm's periods off
+    // the seat set it.
+    std::atomic<uint32_t> centred_menu{0};
 };
 
 // ---- the camera block, as one consistent snapshot ------------------------

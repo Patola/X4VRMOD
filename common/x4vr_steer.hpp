@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH x4vrmod-linking-exception
 //
-// x4vr_steer.hpp — the mouse-steering target in VR, A/B with a live toggle
-// (Patola, after take 328: "B looks like a better option, but A also feels
-// interesting, so yes, I want a toggle").
+// x4vr_steer.hpp — the mouse-steering target in VR. It was an A/B with a live
+// toggle (Patola, after take 328: "B looks like a better option, but A also
+// feels interesting, so yes, I want a toggle"); A won (take 333), and after
+// take 339 he asked for B to go: "A ... should be the only option in the
+// cockpit. The option of the cursor following our glance in steering mode can
+// be removed." B, its apostrophe toggle and its drawing are gone.
 //
 // X4 has ONE pointer. It steers by the pointer's offset from its screen centre
 // -- the gaze, under head-look -- and picks the world at the raw pointer (take
@@ -17,13 +20,12 @@
 // So X4's line is switched off (its own `mousesteeringline` option, served by
 // the config fork) and the layer draws one in eye space instead:
 //
-//   B (kGaze, the default): the ring stays at the raw pointer, where X4 picks;
-//     the line runs from the eye's centre -- the gaze, the centre X4 steers
-//     from -- to the ring. It draws exactly the vector X4 steers by.
-//   A (kNose): the ring is drawn at the nose plus the same offset, and the
-//     line from the nose to it: the target rides with the cockpit. Hover and
-//     click-select stay at the raw pointer, off by the head angle while
+//   A (kNose): the ring is drawn at the nose plus the pointer's offset, and
+//     the line from the nose to it: the target rides with the cockpit. Hover
+//     and click-select stay at the raw pointer, off by the head angle while
 //     steering -- the stated cost of A.
+//   (B, removed: the ring at the raw pointer and the line from the eye's
+//     centre, the gaze, which is exactly the vector X4 steers by.)
 //
 // Everything here is arithmetic on numbers the caller supplies, so
 // tests/steer.cpp checks it without X4.
@@ -36,23 +38,29 @@
 namespace x4vr {
 namespace steer {
 
-enum Mode : uint32_t { kOff = 0, kGaze = 1, kNose = 2 };
+// 1 was B (kGaze), removed after take 339. The value stays unused so the
+// layer's per-mode frame census keeps its index, and the scorer's "B 0".
+enum Mode : uint32_t { kOff = 0, kNose = 2 };
 
 inline const char *mode_name(uint32_t m) {
-    return m == kGaze ? "B (the line from where you look)"
-           : m == kNose ? "A (the target fixed to the cockpit)"
-                        : "off (X4's own line)";
+    return m == kNose ? "A (the target fixed to the cockpit)"
+                      : "off (X4's own line)";
 }
 
 // X4VR_STEER: unset, empty, "0" or "off" -> kOff (X4's own line, every take
-// before 331); "b"/"gaze" -> kGaze; "a"/"nose" -> kNose. The apostrophe key
-// flips between A and B live; it never turns the overlay off, so a run
-// without the knob is exactly the previous behaviour.
-inline Mode mode_from_env(const char *e) {
+// before 331); "a"/"nose" -> kNose. "b"/"gaze" -> kNose too: B is removed,
+// and a replayed take-331 line gets the target that remains rather than
+// X4's own line. `*was_b` says so, for the caller's log.
+inline Mode mode_from_env(const char *e, bool *was_b = nullptr) {
+    if (was_b)
+        *was_b = false;
     if (!e || !*e)
         return kOff;
-    if (!strcmp(e, "b") || !strcmp(e, "B") || !strcmp(e, "gaze"))
-        return kGaze;
+    if (!strcmp(e, "b") || !strcmp(e, "B") || !strcmp(e, "gaze")) {
+        if (was_b)
+            *was_b = true;
+        return kNose;
+    }
     if (!strcmp(e, "a") || !strcmp(e, "A") || !strcmp(e, "nose"))
         return kNose;
     return kOff;
@@ -193,13 +201,13 @@ inline Geometry geometry(Mode mode, float hx, float hy, bool nose_ok,
     Geometry g;
     if (mode == kOff)
         return g;
-    g.used = mode == kNose ? kNose : kGaze;
-    if (g.used == kNose && !nose_ok) {
+    g.used = kNose;
+    if (!nose_ok) {
         g.hidden = true; // the nose is behind the eye: no ring, no line
         return g;
     }
-    const float ox = g.used == kNose ? nose_x : 0.f;
-    const float oy = g.used == kNose ? nose_y : 0.f;
+    const float ox = nose_x;
+    const float oy = nose_y;
     g.ring_dx = ox;
     g.ring_dy = oy;
     const float ex = ox + hx, ey = oy + hy;

@@ -25858,3 +25858,112 @@ Take 338's line, with **`X4VR_CURSOR_FOOT_AB=1`**. WiVRn, configuration 1.
   `REFUSED read-back` on foot; in the cockpit they stay as rare as before.
 
     X4VR_TAKE=339 X4VR_CURSOR_FOOT_AB=1 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take339.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+## Take 339 — SCORED PASS: the canvas works for on-foot menus, except the teleporters
+
+Patola:
+* *"I used the opportunity to test the map both in the cockpit and when on
+  foot, and it still behaves correctly."* (The scorer's `map` block says NOT
+  EXERCISED: it waits for an M press, and he opened it another way. Its
+  silence is about the key, not the map.)
+* **The cockpit right-click menu:** *"the menu is too big for the mouse
+  cursor, which only goes halfway up and down the menu"*. He takes it to be
+  the canvas mismatch.
+  * Not settled. Drawn raw, the cursor should travel about 1.9× as far as the
+    highlight, which reads as the opposite of "only halfway".
+  * Recorded as an open discrepancy for his video to decide.
+* **On foot:** *"option A is the one that seems to work for most
+  interactions, with the exception of the interaction with the station
+  teleporters, because they center the view and neither A nor B seem to be
+  aligned with its options."*
+* **Steering:** *"A ... should be the only option in the cockpit. The option
+  of the cursor following our glance in steering mode can be removed."*
+
+The run: 11 on-foot openings, A 6 / B 5, every A reaching the layer.
+
+* **P339.1 HELD.**
+* **P339.2 HELD** for the interact submenus and NPC dialogs: A on the
+  highlight, B off it.
+* **P339.3: mechanism 2 is not supported.** A held at head-look angles up to
+  +22° yaw and −22° pitch off the body (openings #1–#11, A's).
+  * Not the 45° body turn the protocol asked for; whether he did it is not
+    in his report.
+  * So "not supported", not "ruled out".
+* **P339.4 HELD.**
+  * Cockpit tracking: yaw median 0.04° p90 0.91, pitch 0.05° p90 1.87, over
+    9245 ticks.
+  * No `REFUSED read-back` on foot.
+  * Menus 16/16 centred.
+
+**The teleporters are not on-foot menus.** Each use was a HUD-down period off
+the seat (8 in all), and X4 reported none of them as full-screen.
+* So neither A nor B applied: the cursor was raw, and our own
+  X4VR_HEADLOOK_MENU_CENTRE centred the view, from head yaw as far as 77–80°.
+  "They center the view" is that centring.
+* In the seat, the only HUD-down period that was not full-screen (one each in
+  333 and 339) is the save loading, before head-look arms. So drawing through
+  the canvas whenever the centring holds changes nothing in the cockpit.
+
+**The census's body gain read −0.089°/count (r −0.80) here against 338's
+−0.106, and neither number was clean.**
+* 52 of 201 windows had the pointer free (a menu open, where the mouse moves
+  the cursor).
+* Two turned him ~175° within 4 s after a teleport (X4 sets the facing on
+  arrival).
+* Mouse-look windows only, 5 s clear of a HUD-up: 338 −0.1146 and 339
+  −0.1154°/count, both r −0.99. The scorer's body row now uses exactly those.
+
+## Built for take 340: canvas under the menu centring; steering B removed
+
+* **Canvas while head-look holds a HUD-down menu centred**
+  (`X4VR_CURSOR_CANVAS=auto`).
+  * Share v8 `centred_menu`. The layer names it as the third reason for
+    drawing through the canvas.
+* **`X4VR_CURSOR_CENTRED_AB=1`** alternates per HUD-down period off the seat:
+  odd canvas (A), even raw (B, take 339's).
+  * Each period is a relayed milestone ("menu with the HUD down N — cursor
+    A (canvas)") and an OPEN/closed line.
+  * In the seat it is always the canvas, and those menus are full-screen
+    anyway.
+* **The centring line says where it was.** "HUD down off the pilot seat"
+  instead of "in the cockpit". `menucam` reads both forms; a mutation back to
+  the old pattern fails its case.
+* **On-foot menus: the canvas always.** X4VR_CURSOR_FOOT_AB stays available
+  for a later A/B.
+* **Steering B removed** (Patola, above).
+  * The apostrophe toggle is gone and the key goes to X4. It is unbound in
+    all seven of his input maps, the fork included.
+  * `X4VR_STEER=b` now gives A, and the start line says B was asked for and
+    removed.
+  * geometry() draws A only; Mode value 1 stays unused so the frame census
+    keeps its "B 0".
+  * tests/steer.cpp and run-cursor.sh lost their B cases. A at the nose
+    (0,0) covers the line-from-the-centre geometry B used to test.
+* **Scorer `hud-menu`**: each HUD-down period off the seat with its arm and
+  whether the canvas reached the layer. It FAILs a canvas period that never
+  did. Planted cases with a format guard.
+* All suites pass; takes 333/335/338/339 PASS.
+
+### P340 — the menus on video
+
+Take 339's line: X4VR_CURSOR_FOOT_AB removed (A won), **X4VR_CURSOR_CENTRED_AB=1**
+added. WiVRn, configuration 1. **Patola records it** as he did
+`/dados/x4-a-and-b.mp4`. The recording is the instrument: where the drawn
+cursor sits against the highlighted option, per kind of menu.
+
+* **P340.1** Teleporters: in A the cursor sits on the highlighted option, as
+  in the map. In B it is off as in take 339.
+* **P340.2** The cockpit right-click menu is unchanged, and measured on the
+  video.
+  * The raw-cursor prediction: the drawn cursor sits about 1.9× as far from
+    the eye's centre as the highlighted option, moving farther than the
+    highlight does.
+  * If instead it moves about half as far ("only halfway"), the mapping is
+    inverted from the canvas model and the model is wrong for this menu.
+* **P340.3** Station vendor: no prediction. Whichever path it takes (on-foot
+  menu, HUD-down, full-screen) is in the log, and the video shows the fit.
+* **P340.4** On-foot submenus and NPC dialogs (canvas always): on the
+  highlight, as A in 339.
+* **P340.5** Steering: A only, the apostrophe does nothing. Scorer PASS.
+
+    X4VR_TAKE=340 X4VR_CURSOR_CENTRED_AB=1 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take340.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh

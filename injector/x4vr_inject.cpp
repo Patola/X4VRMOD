@@ -4554,18 +4554,10 @@ static bool steer_hide_x4_line() {
     return steer_asked_mode() != x4vr::steer::kOff && steer_sites_verified();
 }
 
-// The mode in force, flipped by the apostrophe; and whether the key is ours
-// right now (cockpit, HUD up -- anywhere else it is X4's).
+// The mode in force. The apostrophe used to flip it between A and B; B and
+// the toggle were removed after take 339 (x4vr_steer.hpp), so the key is
+// X4's again -- unbound in all six of Patola's input maps.
 static std::atomic<uint32_t> g_steer_mode{0};
-static std::atomic<bool> g_steer_keys_live{false};
-
-// SDL3's scancode for the apostrophe key: a PHYSICAL key, so the keyboard
-// layout does not matter. Unbound in all six of Patola's input maps (F8, the
-// other candidate, is X4's compass-menu slot 2).
-constexpr uint32_t kSteerToggleScancode = 52; // SDL_SCANCODE_APOSTROPHE
-// Shift, Ctrl, Alt, GUI and AltGr (MODE): a chord is not the toggle. The lock
-// keys (NUM 0x1000, CAPS 0x2000, SCROLL 0x8000) are ignored.
-constexpr uint16_t kSteerChordMods = 0x0FFF | 0x4000;
 
 // Mouse steering just engaged: put the pointer at the centre of X4's window,
 // so the ship starts straight. X4 itself never does -- its one
@@ -4610,9 +4602,13 @@ static void steer_tick() {
     if (!said) {
         said = true;
         g_steer_mode.store(steer_asked_mode(), std::memory_order_relaxed);
-        X4VR_LOG("steer: overlay ON, starting in %s — the apostrophe key "
-                 "switches A/B in the cockpit",
-                 x4vr::steer::mode_name(steer_asked_mode()));
+        bool was_b = false;
+        x4vr::steer::mode_from_env(getenv("X4VR_STEER"), &was_b);
+        X4VR_LOG("steer: overlay ON, starting in %s%s",
+                 x4vr::steer::mode_name(steer_asked_mode()),
+                 was_b ? " — X4VR_STEER=b asked for B, which was removed "
+                         "after take 339: A is the only target"
+                       : "");
     }
     const bool cockpit = x4_view() == X4View::Cockpit;
     // Not called unguarded: without a decoded slot the HUD counts as down.
@@ -4643,7 +4639,6 @@ static void steer_tick() {
     if (engaged && !was_engaged)
         steer_recentre();
     was_engaged = engaged;
-    g_steer_keys_live.store(cockpit && hud, std::memory_order_relaxed);
     static int last = -1;
     static unsigned changes = 0;
     if ((int)shown != last && changes < 200) {
@@ -4657,32 +4652,6 @@ static void steer_tick() {
                              std::memory_order_relaxed);
         sh->steer_line.store(shown ? 1u : 0u, std::memory_order_relaxed);
     }
-}
-
-// True when the key event is the toggle and must not reach X4. Flips the
-// mode on a fresh press when `consuming` (a GET, or SDL_WaitEvent): a peek
-// hands X4 a copy of an event that stays queued, so acting there would flip
-// twice. Its key-up is swallowed too, so X4 never sees the key at all.
-static bool steer_key_event(const Sdl3KeyEvent *k, bool consuming) {
-    if (k->scancode != kSteerToggleScancode || (k->mod & kSteerChordMods))
-        return false;
-    if (!steer_hide_x4_line() ||
-        !g_steer_keys_live.load(std::memory_order_relaxed))
-        return false;
-    if (consuming && k->type == SDL_EV_KEY_DOWN && k->down && !k->repeat) {
-        const uint32_t now =
-            g_steer_mode.load(std::memory_order_relaxed) == x4vr::steer::kNose
-                ? x4vr::steer::kGaze
-                : x4vr::steer::kNose;
-        g_steer_mode.store(now, std::memory_order_relaxed);
-        if (x4vr::Shared *sh = x4vr_shared_state())
-            sh->steer_mode.store(now, std::memory_order_relaxed);
-        X4VR_LOG("milestone: steering target %s",
-                 now == x4vr::steer::kNose
-                     ? "A — fixed to the cockpit (apostrophe for B)"
-                     : "B — the line from where you look (apostrophe for A)");
-    }
-    return true;
 }
 
 // ------------------------------------------------ X4VR_FOOTLOG=1
@@ -4760,6 +4729,13 @@ std::atomic<bool> g_on_foot{false};
 // openings through the UI canvas (arm A), even ones raw (arm B, take 338's).
 static bool cursor_foot_ab() {
     static const bool on = x4vr::env_on("X4VR_CURSOR_FOOT_AB", false);
+    return on;
+}
+
+// X4VR_CURSOR_CENTRED_AB=1 — the same for HUD-down menus off the seat (the
+// station teleporters, take 339): odd periods canvas (A), even ones raw (B).
+static bool cursor_centred_ab() {
+    static const bool on = x4vr::env_on("X4VR_CURSOR_CENTRED_AB", false);
     return on;
 }
 
@@ -5917,6 +5893,21 @@ void headlook_tick() {
     // as the HUD stays down; `steering` stays false, so nothing here is
     // declared as head motion.
     static bool centred_period = false;
+    // Take 339: a HUD-down menu is X4's UI as much as a full-screen one --
+    // the camera is centred precisely so that UI fills the window -- but off
+    // the seat X4 calls the teleporters' menus none of the latter, so the
+    // cursor stayed raw over them. Each period's arm is chosen as it starts:
+    // the canvas, or under X4VR_CURSOR_CENTRED_AB alternately raw for the
+    // periods off the seat. In the seat every period so far was full-screen
+    // too (333: 19 of 20, the 20th the save loading, before ARMED).
+    static bool centred_canvas = false, centred_logged = false;
+    static uint64_t centred_off_seat = 0;
+    if ((hud || !cockpit_camera) && centred_logged) {
+        centred_logged = false;
+        X4VR_LOG("ui: menu with the HUD down %llu closed — the cursor is "
+                 "drawn at the raw pointer",
+                 (unsigned long long)centred_off_seat);
+    }
     if (hud || !cockpit_camera)
         centred_period = false;
     if (write_mode && cockpit_camera && !hud && write_here && headlook_menu_centre()) {
@@ -5931,16 +5922,39 @@ void headlook_tick() {
                 if (!centred_period) {
                     centred_period = true;
                     g_camwrite.centre_periods++;
-                    X4VR_LOG("headlook: HUD down in the cockpit%s — X4's "
+                    X4VR_LOG("headlook: HUD down %s%s — X4's "
                              "camera CENTRED from yaw %.2f pitch %.2f to 0,0, "
                              "so X4's menus fill the window the pointer is "
                              "confined to (X4VR_HEADLOOK_MENU_CENTRE=0 leaves "
                              "it where the head was, take 328B)",
+                             seated ? "in the cockpit" : "off the pilot seat",
                              cockpit ? "" : " (PAUSED)", was_yaw, was_pitch);
+                    centred_canvas = true;
+                    if (!seated && cursor_canvas_auto()) {
+                        centred_off_seat++;
+                        centred_logged = true;
+                        centred_canvas = !cursor_centred_ab() ||
+                                         (centred_off_seat % 2) == 1;
+                        X4VR_LOG("ui: menu with the HUD down %llu OPEN off "
+                                 "the pilot seat — the cursor is drawn %s",
+                                 (unsigned long long)centred_off_seat,
+                                 centred_canvas
+                                     ? "through the UI canvas (arm A)"
+                                     : "at the raw pointer (arm B, take 339's)");
+                        if (cursor_centred_ab())
+                            X4VR_LOG("milestone: menu with the HUD down %llu "
+                                     "— cursor %s",
+                                     (unsigned long long)centred_off_seat,
+                                     centred_canvas ? "A (canvas)" : "B (raw)");
+                    }
                 }
             }
         }
     }
+    if (x4vr::Shared *sh = x4vr_shared_state())
+        sh->centred_menu.store(
+            centred_period && centred_canvas && cursor_canvas_auto() ? 1u : 0u,
+            std::memory_order_relaxed);
     if (write_mode)
         camwrite_report(false);
 
@@ -6929,15 +6943,6 @@ bool SDL_WaitEvent(void *event) {
         g_pumprate.wait.fetch_add(1, std::memory_order_relaxed);
     if (r && event && this_is_the_game()) {
         auto *e = (Sdl3MouseEvent *)event;
-        // X4VR_STEER's toggle cannot be removed from a single-event wait, so it
-        // becomes a key X4 does not know (scancode 0) after it has acted.
-        if ((e->type == SDL_EV_KEY_DOWN || e->type == SDL_EV_KEY_UP) &&
-            steer_key_event((const Sdl3KeyEvent *)e, true)) {
-            auto *k = (Sdl3KeyEvent *)event;
-            k->scancode = 0;
-            k->key = 0;
-            k->raw = 0;
-        }
         if (e->type == SDL_EV_KEY_DOWN || e->type == SDL_EV_KEY_UP)
             note_key_event((const Sdl3KeyEvent *)e, "wait", -1);
         if (e->type >= SDL_EV_MOUSE_MOTION && e->type <= SDL_EV_MOUSE_UP) {
@@ -6993,23 +6998,6 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
         pumprate_report();
     }
     const bool consuming = action == 2;
-    // X4VR_STEER's toggle, removed from what X4 is handed -- on a peek as well
-    // as a get, so X4 never sees it either way; it acts only on the get.
-    if (n > 0 && events && action != 0 && this_is_the_game() &&
-        steer_hide_x4_line()) {
-        int kept = 0;
-        for (int i = 0; i < n; i++) {
-            unsigned char *src = (unsigned char *)events + 128 * i;
-            const auto *k = (const Sdl3KeyEvent *)src;
-            const bool key = k->type == SDL_EV_KEY_DOWN || k->type == SDL_EV_KEY_UP;
-            if (key && steer_key_event(k, consuming))
-                continue;
-            if (kept != i)
-                memmove((unsigned char *)events + 128 * kept, src, 128);
-            kept++;
-        }
-        n = kept;
-    }
     // Counted ONLY on GET. A peek leaves the event in the queue and X4 would be
     // credited with receiving it twice -- the same trap the fold below is
     // guarded against, one field over.

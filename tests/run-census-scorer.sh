@@ -1069,5 +1069,50 @@ want "foot-menu pointer freed, nothing logged -> an older build" /tmp/census-fm-
 want "foot-menu pointer freed only in the seat -> not exercised" /tmp/census-fm-none.log foot-menu "no on-foot menu opened"
 absent "foot-menu: no canvas auto, no foot patch -> silent" "$BASE" foot-menu
 
+# ------------------------------------------ hud-menu: HUD-down menus off the seat
+# Take 339's station teleporters: head-look centred the camera, X4 called no
+# menu full-screen, and the cursor stayed raw. Same guard on the formats.
+hmfmt=1
+for frag in '"ui: menu with the HUD down %llu OPEN off "' \
+            '"the pilot seat — the cursor is drawn %s",' \
+            '"ui: menu with the HUD down %llu closed — the cursor is "' \
+            '? "through the UI canvas (arm A)"' \
+            ': "at the raw pointer (arm B, take 339'"'"'s)");' \
+            'seated ? "in the cockpit" : "off the pilot seat",'; do
+    grep -qF -- "$frag" injector/x4vr_inject.cpp || { hmfmt=0; echo "        missing: $frag"; }
+done
+grep -qF -- '? "ON (a menu with the HUD down, X4'"'"'s camera centred: "' layer/x4vr_layer.cpp ||
+    { hmfmt=0; echo "        missing: the layer's HUD-down ON"; }
+if [ $hmfmt -eq 1 ]; then
+    ok "hud-menu: the planted lines match the injector's and the layer's formats"
+else
+    bad "hud-menu: the injector's or the layer's format changed — replant the lines below"
+fi
+sed 's/env: run = /env: run = X4VR_CURSOR_CANVAS=auto X4VR_CURSOR_CENTRED_AB=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_WRITE=1 /' "$BASE" > /tmp/census-hm-base.log
+hmcen='[  999975.000] inject  headlook: HUD down off the pilot seat — X4'"'"'s camera CENTRED from yaw 77.17 pitch -23.32 to 0,0, so X4'"'"'s menus fill the window the pointer is confined to'
+hmoA='[  999975.001] inject  ui: menu with the HUD down 1 OPEN off the pilot seat — the cursor is drawn through the UI canvas (arm A)'
+hmlA='[  999975.020] layer   cursor canvas: AUTO — ON (a menu with the HUD down, X4'"'"'s camera centred: the cursor follows X4'"'"'s UI)'
+hmcA='[  999982.000] inject  ui: menu with the HUD down 1 closed — the cursor is drawn at the raw pointer'
+hmoB='[  999990.001] inject  ui: menu with the HUD down 2 OPEN off the pilot seat — the cursor is drawn at the raw pointer (arm B, take 339'"'"'s)'
+hmcB='[  999994.000] inject  ui: menu with the HUD down 2 closed — the cursor is drawn at the raw pointer'
+hmarm=$(printf '%s' "$mcarm" | sed 's/999980\.000/999970.500/')
+hmdown='[  999974.990] inject  headlook: HUD is now down (IsInPanelMode=0) — idle, mouse handed back'
+hmup='[  999982.000] inject  headlook: HUD is now up (IsInPanelMode=0) — steering'
+{ cat /tmp/census-hm-base.log; printf '%s\n' "$hmarm" "$fmout" "$hmdown" "$hmcen" "$hmoA" "$hmlA" "$(mcpose 999976.000 0.0000 0.0000)" "$hmcA" "$hmup" "$fmoff" "$hmoB" "$hmcB"; } > /tmp/census-hm-ab.log
+want "hud-menu A/B -> arm A reached the layer" /tmp/census-hm-ab.log hud-menu "#1   t   999975.0  arm A    7.0 s  canvas ON"
+want "hud-menu A/B -> arm B drawn raw" /tmp/census-hm-ab.log hud-menu "#2   t   999990.0  arm B    4.0 s"
+want "hud-menu A/B -> both arms counted" /tmp/census-hm-ab.log hud-menu "2 period(s) off the seat: arm A (canvas) 1, arm B (raw) 1 — alternating"
+want "hud-menu -> a HUD-down ON is not a full-screen switch" /tmp/census-hm-ab.log cursor-auto "the layer switched the cursor to the canvas 0 time(s)"
+want "hud-menu -> the off-seat centring line counts for menucam" /tmp/census-hm-ab.log menucam "1 period(s) centred by X4VR_HEADLOOK_MENU_CENTRE, from +77.17,-23.32"
+if python3 tools/score_run.py /tmp/census-hm-ab.log 2>&1 | grep -q "canvas-arm period"; then
+    bad "hud-menu A/B healthy -> FAILs"
+else
+    ok "hud-menu A/B healthy -> no FAIL"
+fi
+{ cat /tmp/census-hm-base.log; printf '%s\n' "$mcarm" "$fmout" "$hmcen" "$hmoA" "$hmcA"; } > /tmp/census-hm-nolayer.log
+want "hud-menu arm A never reached the layer -> FAIL" /tmp/census-hm-nolayer.log "FAIL|  - " "1 canvas-arm period(s) never reached the layer"
+want "hud-menu one arm only -> said" /tmp/census-hm-nolayer.log hud-menu "ONLY ONE ARM"
+absent "hud-menu: nothing off the seat -> silent" "$BASE" hud-menu
+
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

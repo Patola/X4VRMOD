@@ -10056,7 +10056,11 @@ bool cursor_canvas() {
             s && s->fullscreen_menu.load(std::memory_order_relaxed) != 0;
         const bool foot =
             s && s->foot_menu.load(std::memory_order_relaxed) != 0;
-        const int want = full ? 1 : foot ? 2 : 0;
+        // Take 339: a menu head-look centred X4's camera for, HUD down --
+        // off the seat, the station teleporters.
+        const bool centred =
+            s && s->centred_menu.load(std::memory_order_relaxed) != 0;
+        const int want = full ? 1 : foot ? 2 : centred ? 3 : 0;
         static int said = -1;
         if (said != want) {
             said = want;
@@ -10066,6 +10070,9 @@ bool cursor_canvas() {
                      : want == 2
                          ? "ON (an on-foot menu has the pointer: the cursor "
                            "follows X4's UI)"
+                     : want == 3
+                         ? "ON (a menu with the HUD down, X4's camera centred: "
+                           "the cursor follows X4's UI)"
                          : "OFF (no full-screen menu: the cursor at the raw "
                            "pointer, where X4 picks the world)");
         }

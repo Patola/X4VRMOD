@@ -106,8 +106,8 @@ int main() {
         if (sscanf(e, "%ux%u", &w, &h) == 2 && w >= 96 && h >= 64)
             kW = w, kH = h;
     }
-    // X4VR_STEER's target (x4vr_steer.hpp): X4VR_TEST_STEER=b|a, and for A the
-    // nose's offset from the eye's centre in pixels, X4VR_TEST_NOSE_PX=dx,dy.
+    // X4VR_STEER's target (x4vr_steer.hpp): X4VR_TEST_STEER=a, and the nose's
+    // offset from the eye's centre in pixels, X4VR_TEST_NOSE_PX=dx,dy.
     // Drawn with no canvas, as in the cockpit, where X4 shows its line.
     const x4vr::steer::Mode steer_mode =
         x4vr::steer::mode_from_env(getenv("X4VR_TEST_STEER"));

@@ -4356,12 +4356,15 @@ def main(path):
     ca_asked = bool(re.search(r"\bX4VR_CURSOR_CANVAS=auto\b", run or ""))
     ui_up = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+ui: full-screen menu "
                        r"(UP|DOWN)", text)
-    # The layer's ON names its reason since take 339: a full-screen menu, or
-    # an on-foot menu holding the pointer. Only the first answers `ui_up`.
+    # The layer's ON names its reason since take 339: a full-screen menu, an
+    # on-foot menu holding the pointer, or (take 340) a menu with the HUD
+    # down that head-look centred. Only the first answers `ui_up`.
     ca_all = re.findall(r"\[\s*([\d.]+)\]\s+layer\s+cursor canvas: AUTO — "
-                        r"(ON|OFF)( \(an on-foot menu)?", text)
-    ca_sw = [(t, k) for t, k, foot in ca_all if not foot]
-    ca_foot_on = [float(t) for t, k, foot in ca_all if foot]
+                        r"(ON|OFF)(?: \((an on-foot menu|a menu with the HUD "
+                        r"down))?", text)
+    ca_sw = [(t, k) for t, k, why in ca_all if not why]
+    ca_foot_on = [float(t) for t, k, why in ca_all if why == "an on-foot menu"]
+    ca_cen_on = [float(t) for t, k, why in ca_all if why.startswith("a menu")]
     if ca_asked or ca_sw:
         if "IsFullscreenMenuDisplayed NOT FOUND" in text:
             fails.append("X4VR_CURSOR_CANVAS=auto: X4 does not export "
@@ -4457,6 +4460,43 @@ def main(path):
             print("foot-menu  ONLY ONE ARM opened — the A/B needs at least "
                   "one opening of each")
 
+    # --- HUD-down menus off the seat: the station teleporters (take 339) ----
+    #
+    # Head-look centres X4's camera for them, but X4 calls none of them
+    # full-screen, so take 339 drew the cursor raw and Patola found neither
+    # of the on-foot arms aligned there (neither applied). The injector logs
+    # each period off the seat with its arm; arm A must reach the layer.
+    hm_open = re.findall(
+        r"\[\s*([\d.]+)\]\s+inject\s+ui: menu with the HUD down (\d+) OPEN "
+        r"off the pilot seat — .*?\(arm (A|B)", text)
+    hm_close = {int(n): float(t) for t, n in re.findall(
+        r"\[\s*([\d.]+)\]\s+inject\s+ui: menu with the HUD down (\d+) "
+        r"closed", text)}
+    hm_ab = bool(re.search(r"\bX4VR_CURSOR_CENTRED_AB=1\b", run or ""))
+    if hm_open:
+        arms = {"A": 0, "B": 0}
+        late_a = 0
+        for t, n, arm in hm_open:
+            t = float(t)
+            arms[arm] += 1
+            end = hm_close.get(int(n))
+            dur = f"{end - t:5.1f} s" if end is not None else "  open at exit"
+            reached = any(t - 0.05 <= x <= t + 1.0 for x in ca_cen_on)
+            if arm == "A" and not reached:
+                late_a += 1
+            print(f"hud-menu   #{int(n):<3d} t {t:10.1f}  arm {arm}  {dur}"
+                  + ("  canvas ON" if reached else ""))
+        print(f"hud-menu   {len(hm_open)} period(s) off the seat: arm A "
+              f"(canvas) {arms['A']}, arm B (raw) {arms['B']}"
+              + (" — alternating, X4VR_CURSOR_CENTRED_AB" if hm_ab else ""))
+        if late_a:
+            fails.append(f"HUD-down menus off the seat: {late_a} canvas-arm "
+                         f"period(s) never reached the layer as a canvas "
+                         f"switch")
+        if hm_ab and not (arms["A"] and arms["B"]):
+            print("hud-menu   ONLY ONE ARM — the A/B needs at least one "
+                  "period of each")
+
     # --- the start-screen cursor stand-in, and which cursors X4 picks ------
     #
     # Takes 326-327 drew no cursor on the start screen: X4 shows SDL's default
@@ -4549,8 +4589,11 @@ def main(path):
                          r"ARMED on camera", text)
     # " (PAUSED)" since take 330: the ESC menu's centring (take 330 counted 2
     # of its 5 until this matched it).
+    # "off the pilot seat" since take 340: the same centring on foot, which
+    # until then was logged as "in the cockpit".
     mc_centred = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+headlook: HUD down "
-                            r"in the cockpit(?: \(PAUSED\))? — X4's camera "
+                            r"(?:in the cockpit|off the pilot seat)"
+                            r"(?: \(PAUSED\))? — X4's camera "
                             r"CENTRED from yaw (-?[\d.]+) pitch (-?[\d.]+)",
                             text)
     # Intent: write mode, not switched off, and a build that HAS the centring
@@ -5019,16 +5062,25 @@ def main(path):
                     while a < -180.0:
                         a += 360.0
                     return a
+                # Mouse-look only: with the pointer free (an on-foot menu,
+                # rel 0) the mouse moves the cursor, and for 5 s after the
+                # HUD comes back up X4 may set the facing itself (take 339's
+                # teleports turned him ~175 deg). Those took 339's fit from
+                # -0.115 to -0.090 deg/count; 338 and 339 agree without them.
+                hud_up_t = [float(t) for t in re.findall(
+                    r"\[\s*([\d.]+)\]\s+inject\s+headlook: HUD is now up",
+                    text)]
                 pts = [(w["dx"], _wrap(w["rot"]["ny"] - w["local"]["ny"]))
-                       for w in ws_fit if w["rot"] and w["local"]
+                       for w in ws_fit if w["rot"] and w["local"] and w["rel"]
                        and w["dx"] is not None and abs(w["dx"]) >= 30
                        and w["rot"]["ny"] is not None
-                       and w["local"]["ny"] is not None]
+                       and w["local"]["ny"] is not None
+                       and not any(0.0 <= w["t"] - u <= 5.0 for u in hud_up_t)]
                 r, gain = _corr([a for a, _ in pts], [b for _, b in pts])
                 if r is not None:
                     tag = "FOLLOWS" if abs(r) >= 0.7 else "does not follow"
-                    print(f"foot      body = rot - local ({len(pts)} windows, "
-                          f"dx 30+): body yaw {tag} mouse dx (r {r:+.2f}, "
+                    print(f"foot      body = rot - local ({len(pts)} mouse-look "
+                          f"windows, dx 30+): body yaw {tag} mouse dx (r {r:+.2f}, "
                           f"{gain:+.4f} deg/count)")
                     if abs(r) >= 0.7:
                         follows_mouse.append("the body's yaw (rot - local)")

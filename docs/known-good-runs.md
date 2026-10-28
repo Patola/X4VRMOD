@@ -886,7 +886,7 @@ judges the cascade X4 drew from it.
 * Head translation via camera+0x5a0.
 * Black edges at 110° not explicitly confirmed gone (asked after take 325).
 
-## Take 333 (2026-10-27) — tag v0.333-steering-a — THE SHIPPING LINE
+## Take 333 (2026-10-27) — tag v0.333-steering-a — the shipping line until take 339
 
 Patola: *"it feels very natural this way, and the cursor when steering mode
 is off too. This was what I was achieving to get and now I am sure this is
@@ -901,3 +901,28 @@ The shipping line is take 333's with **X4VR_STEER=a**. Take 333 itself ran
 `b` and toggled once to A. X4VR_TAKE goes first:
 
     X4VR_TAKE=<n> X4VR_STEER=a X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take<n>.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+## Take 339 (2026-10-28) — tag v0.339-foot-menus — THE SHIPPING LINE
+
+Walking mode B joins the shipping line. Patola chose B after take 335 (*"B
+looks more natural to me so that would be my choice"*). Take 338 confirmed it:
+*"head turning seems to work perfectly, and I can use W and walk in the
+direction of the body while looking sideways"*. Take 339 found the on-foot
+submenus and NPC dialogs right with the cursor through the canvas (A).
+
+* **What it is:** off the pilot seat the head looks around independently and
+  the mouse and arrows turn the body. It is the code patch Patola approved
+  for B, and walking needs X4VR_HEADLOOK_FOOT=1.
+* **Without the knob**, walking falls back to take 335's behaviour: a window
+  fixed in front, turned by the mouse.
+* **A stays open** as his fallback (the body follows the head) if B feels
+  wrong after more play.
+
+`score_run.py` PASS (takes 338 and 339). Cockpit tracking p90 0.91°/1.87°.
+Body −0.115°/count on mouse-look windows in both takes.
+
+The shipping line is take 333's with **X4VR_HEADLOOK_FOOT=1** added. The
+take-only instruments (X4VR_FOOTLOG, the cursor A/Bs) stay off it:
+
+    X4VR_TAKE=<n> X4VR_HEADLOOK_FOOT=1 X4VR_STEER=a X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take<n>.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
