@@ -5704,11 +5704,14 @@ void headlook_tick() {
     // It used to run after, which cost a frame of lag for no reason.
     X4Rotation r{};
     const bool have_cam = camread_enabled() && x4_camera_rotation(&r);
-    // Not on foot: there GetCameraRotation is the body times the head, so
-    // against our command it is "off" by however far the mouse has turned
+    // Not off the seat: there GetCameraRotation is the body times the head,
+    // so against our command it is "off" by however far the mouse has turned
     // him. Take 338 logged 9839 refusals and resyncs, every one of them the
     // body; the write then put cmd back to the head, so only the log paid.
-    if (have_cam && g_camloop && !g_on_foot.load(std::memory_order_relaxed)) {
+    // g_off_seat, not g_on_foot: the latter is false while the HUD is down,
+    // and take 349 logged ~60 more against his body (-90 deg) in the second
+    // between a teleport and the HUD's return.
+    if (have_cam && g_camloop && !g_off_seat.load(std::memory_order_relaxed)) {
         const float obs_y = kRad2Deg * -r.yaw, obs_p = kRad2Deg * r.pitch;
         const float was_y = g_headlook.cmd_yaw_deg;
         const uint64_t was_resyncs = g_headlook.observe_resyncs;
