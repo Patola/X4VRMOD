@@ -3000,6 +3000,62 @@ else
         X4VR_POSE=1 X4VR_POSE_ROTATE=1 X4VR_TEST_PAD_SETS=6 X4VR_POSE_SET=5
 fi
 
+# --- take 357: the cinematic view's twin pipelines ------------------------
+#
+# In F6 the layer binds each canvas pipeline's twin (built with the module
+# the non-canvas path gives) so X4's overlay is drawn as X4 laid it out.
+# ui_attr.vert has one (unfed) vertex input, so the layer calls it UI and
+# builds its canvas variant -- fullscreen.vert is procedural and gets none.
+# X4VR_TEST_CINEMATIC=1 stands in for the injector's flag. Asserted: the
+# twin is built in both arms, BOUND only in the cinematic one, and adds no
+# validation error against the control arm (the unfed input costs both arms
+# the same VUIDs). With the pose channel on, as in the shipping line.
+UIVS="$BUILD/tests/ui_attr.vert.spv"
+CV_ERRS=0
+CV_LOG=""
+cv_run() {
+    CV_LOG="$(mktemp)"
+    CV_ERRS=$(env X4VR_LOG="$CV_LOG" X4VR_MV=1 X4VR_STEREO=1 X4VR_CANVAS_M=8 \
+        X4VR_MV_INVENTORY=1 X4VR_POSE=1 "$@" \
+        "VK_ADD_LAYER_PATH=$BUILD/layer" \
+        "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+        VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation \
+        timeout 120 "$BIN" "$UIVS" "$FS" "$SF" 2>&1 |
+        grep -c 'Validation Error' || true)
+}
+cv_run
+cv_off=$CV_ERRS
+cv_off_built=$(grep -c 'ui twin: 1 built' "$CV_LOG" || true)
+cv_off_bound=$(grep -c 'ui twin: first twin BOUND' "$CV_LOG" || true)
+rm -f "$CV_LOG"
+cv_run X4VR_TEST_CINEMATIC=1
+cv_on=$CV_ERRS
+cv_on_built=$(grep -c 'ui twin: 1 built' "$CV_LOG" || true)
+cv_on_bound=$(grep -c 'ui twin: first twin BOUND' "$CV_LOG" || true)
+rm -f "$CV_LOG"
+if [[ "$cv_off_built" == 1 && "$cv_on_built" == 1 ]]; then
+    printf 'ok   %-38s one twin per canvas pipeline, both arms\n' "cinematic: twin built"
+else
+    printf 'FAIL %-38s want 1/1 built, got %s/%s\n' "cinematic: twin built" \
+        "$cv_off_built" "$cv_on_built"
+    fails=$((fails + 1))
+fi
+if [[ "$cv_off_bound" == 0 && "$cv_on_bound" == 1 ]]; then
+    printf 'ok   %-38s bound only while cinematic\n' "cinematic: twin bound"
+else
+    printf 'FAIL %-38s want 0 bound off, 1 on; got %s/%s\n' \
+        "cinematic: twin bound" "$cv_off_bound" "$cv_on_bound"
+    fails=$((fails + 1))
+fi
+if [[ "$cv_on" == "$cv_off" ]]; then
+    printf 'ok   %-38s %s VUID(s) with, %s without — adds none\n' \
+        "cinematic: validation-clean" "$cv_on" "$cv_off"
+else
+    printf 'FAIL %-38s %s VUID(s) cinematic, %s control\n' \
+        "cinematic: validation-clean" "$cv_on" "$cv_off"
+    fails=$((fails + 1))
+fi
+
 # **The guard was at line 1441 and three case groups ran after it**, counting
 # failures into a variable nothing looked at again before the unconditional
 # "all cases passed" below. Those cases could not fail. Checked here, at the

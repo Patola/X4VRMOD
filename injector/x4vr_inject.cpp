@@ -4854,6 +4854,9 @@ static int x4_conversation() {
 // menus never entered the table and stay raw, where they already line up.
 // 30 Hz on X4's main thread, between its own calls into the table; a walk
 // that fails leaves the published state as it was.
+// X4's open-menu table holds TopLevelMenu and nothing else: normal flight,
+// or -- with the HUD down -- the cinematic view (headlook_tick).
+static std::atomic<bool> g_menus_only_toplevel{false};
 static void menus_tick() {
     if (!cursor_canvas_auto() || !menus_sites_verified())
         return;
@@ -4865,6 +4868,8 @@ static void menus_tick() {
     auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
     x4vr::menus::Entry e[24];
     const int n = x4vr::menus::walk(rd, x4vr::menus::kMenuRootSlot, e, 24);
+    g_menus_only_toplevel.store(n == 1 && x4vr::menus::has(e, n, "TopLevelMenu"),
+                                std::memory_order_relaxed);
     static char was[512] = "";
     static unsigned changes = 0, failed = 0;
     if (n < 0) {
@@ -6371,6 +6376,36 @@ void headlook_tick() {
     if (x4vr::Shared *sh = x4vr_shared_state())
         sh->external_head.store(ext_declared ? 1u : 0u,
                                 std::memory_order_relaxed);
+    // **The cinematic view (F6): its overlay at the full window** (take
+    // 357). F6 hides the HUD and opens no menu of X4's own. Held 0.3 s before
+    // it counts: take 358 closed the ESC menu into the cockpit with the HUD
+    // still down and only TopLevelMenu open for 0.14 s.
+    bool cinematic = false;
+    {
+        const bool cond = write_mode && seated && !hud &&
+                          view != X4View::Paused &&
+                          g_menus_only_toplevel.load(std::memory_order_relaxed) &&
+                          x4_conversation() != 1;
+        static double since = -1.0;
+        const double now_s = mono_seconds();
+        if (!cond)
+            since = -1.0;
+        else if (since < 0.0)
+            since = now_s;
+        cinematic = cond && now_s - since >= 0.3;
+        static bool was_cinematic = false;
+        if (cinematic != was_cinematic) {
+            was_cinematic = cinematic;
+            X4VR_LOG("ui: cinematic view %s",
+                     cinematic ? "ON — the HUD down with only X4's TopLevelMenu "
+                                 "open in the pilot seat: X4's UI drawn as X4 "
+                                 "laid it out, so its overlay fills the window"
+                               : "off — X4's UI back on the HUD's canvas");
+        }
+        if (x4vr::Shared *sh = x4vr_shared_state())
+            sh->cinematic_ui.store(cinematic ? 1u : 0u,
+                                   std::memory_order_relaxed);
+    }
     // **X4VR_HEADLOOK_MENU_CENTRE: the spring-back X4VR_HEADLOOK_WRITE took
     // away.** With the HUD down in the cockpit the head drives nothing, and
     // X4 would have recentred its look-around here by itself (take 311);
@@ -6440,7 +6475,10 @@ void headlook_tick() {
     }
     if (x4vr::Shared *sh = x4vr_shared_state())
         sh->centred_menu.store(
-            centred_period && centred_canvas && cursor_canvas_auto() ? 1u : 0u,
+            centred_period && centred_canvas && cursor_canvas_auto() &&
+                    !cinematic // F6: X4's UI is not on the canvas there
+                ? 1u
+                : 0u,
             std::memory_order_relaxed);
     if (write_mode)
         camwrite_report(false);

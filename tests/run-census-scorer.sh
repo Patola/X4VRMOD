@@ -1366,5 +1366,27 @@ else
     bad "extview: the injector's HUD-down reason moved"
 fi
 
+# Take 357: the cinematic view's overlay -- twins switched and BOUND.
+if grep -qF '"ui: cinematic view %s",' injector/x4vr_inject.cpp && grep -qF '"ON — the HUD down with only X4' injector/x4vr_inject.cpp && grep -qF '"ui twin: first twin BOUND — the cinematic view' layer/x4vr_layer.cpp && grep -qF '"CINEMATIC — X4' layer/x4vr_layer.cpp; then
+    ok "cinematic: the planted lines match the injector's and the layer's formats"
+else
+    bad "cinematic: a format moved"
+fi
+cvon='[  999970.000] inject  ui: cinematic view ON — the HUD down with only X4'"'"'s TopLevelMenu open in the pilot seat: X4'"'"'s UI drawn as X4 laid it out, so its overlay fills the window'
+cvsw='[  999970.020] layer   ui twin: CINEMATIC — X4'"'"'s UI pipelines bound as X4 built them, the overlay at the full window (12 twin(s) built, 0 failed, 0 twin bind(s) so far)'
+cvbd='[  999970.021] layer   ui twin: first twin BOUND — the cinematic view'"'"'s UI drawn by X4'"'"'s own vertex stage'
+{ cat "$BASE"; printf '%s\n' "$cvon" "$cvsw" "$cvbd"; } > /tmp/census-cv-ok.log
+want "cinematic: switched and bound -> said" /tmp/census-cv-ok.log cinematic "1 cinematic-view period(s); the layer switched to the twins 1 time(s); twins BOUND"
+if python3 tools/score_run.py /tmp/census-cv-ok.log 2>&1 | grep -qE "^  - .*(cinematic|twin)"; then
+    bad "cinematic: switched and bound -> FAILs"
+else
+    ok "cinematic: switched and bound -> no FAIL"
+fi
+{ cat "$BASE"; printf '%s\n' "$cvon" "$cvsw"; } > /tmp/census-cv-unbound.log
+want "cinematic: switched but never bound -> FAIL" /tmp/census-cv-unbound.log "FAIL|  - " "no twin pipeline was ever bound"
+{ cat "$BASE"; printf '%s\n' "$cvon"; } > /tmp/census-cv-late.log
+want "cinematic: never reached the layer -> FAIL" /tmp/census-cv-late.log "FAIL|  - " "the cinematic view: 1 period(s) never reached the layer"
+absent "cinematic: none -> silent" "$BASE" cinematic
+
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

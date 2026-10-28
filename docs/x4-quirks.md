@@ -27132,3 +27132,31 @@ fixing before the 6DOF."*
 * No shader changes: in F6, X4's UI is drawn by X4's own shaders exactly as
   X4 laid it out. The other route (u in the pose block, read inside
   patch_vertex_clip) would add code to every UI vertex shader.
+
+## Built for take 359: F6's overlay through twin pipelines
+
+* **The injector's F6 signal** is a1f681a's (seated, HUD down, not paused,
+  no conversation, X4's menu table = {TopLevelMenu}), now held 0.3 s
+  before ON. Share v11 `cinematic_ui`.
+* **The layer:**
+  * Every pipeline that took a canvas vertex module gets a twin, built
+    right after it with the module the non-canvas path gives
+    (`g_variants.original`, else X4's own). It is built singly (a
+    derivative's batch index is dropped), on the pose-extended layout, and
+    destroyed with its pipeline.
+  * x4vr_CmdBindPipeline binds the twin while the flag is up and registers
+    its pose layout, so set 31 is bound for it too.
+* **The cursor:** the HUD-down canvas cursor (centred_menu) is suppressed
+  while cinematic.
+* **GPU harness** (run-multiview-render.sh, new arm): `ui_attr.vert` has one
+  unfed vertex input, so the layer calls it UI and builds a canvas variant
+  (fullscreen.vert is procedural and gets none). X4VR_TEST_CINEMATIC=1
+  stands in for the injector. Results:
+  * the twin is built in both arms and BOUND only in the cinematic one;
+  * 4 VUIDs in both arms (the unfed input costs each the same), so the twin
+    adds none;
+  * the pose set is bound for it.
+* **Scorer `cinematic` block:**
+  * FAILs when an F6 period never reaches the layer, when no twin was ever
+    bound, or when a twin failed to build;
+  * take 358 re-scores FAIL on it, which agrees with Patola's report.

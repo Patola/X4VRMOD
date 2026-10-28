@@ -4638,6 +4638,35 @@ def main(path):
                   "and the numpad still orbits is Patola's to say; this says "
                   "the stub composed and the layer declared")
 
+    # --- the cinematic view's overlay at the full window (take 357) ---------
+    #
+    # The injector says when F6 is up (the HUD down in the pilot seat with
+    # only TopLevelMenu open, held 0.3 s); the layer then binds each canvas
+    # pipeline's twin. Bound, not built: take 358's first attempt worked on a
+    # quad the shipping line never submits.
+    cv_on = [float(t) for t in re.findall(
+        r"\[\s*([\d.]+)\]\s+inject\s+ui: cinematic view ON", text)]
+    cv_sw = [float(t) for t in re.findall(
+        r"\[\s*([\d.]+)\]\s+layer\s+ui twin: CINEMATIC", text)]
+    cv_built = len(re.findall(r"layer\s+ui twin: \d+ built", text))
+    cv_failed = re.findall(r"ui twin: FAILED to build (\d+)", text)
+    cv_bound = "ui twin: first twin BOUND" in text
+    if cv_on or cv_sw:
+        print(f"cinematic  {len(cv_on)} cinematic-view period(s); the layer "
+              f"switched to the twins {len(cv_sw)} time(s); twins "
+              f"{'BOUND' if cv_bound else 'never bound'}"
+              + (f", {cv_failed[-1]} FAILED to build" if cv_failed else ""))
+        late = [t for t in cv_on
+                if not any(t - 0.05 <= q <= t + 1.0 for q in cv_sw)]
+        if late:
+            fails.append(f"the cinematic view: {len(late)} period(s) never "
+                         f"reached the layer (first t={late[0]:.1f})")
+        if cv_on and not cv_bound:
+            fails.append("the cinematic view was up but no twin pipeline was "
+                         "ever bound — the overlay stayed on the canvas")
+        if cv_failed:
+            fails.append(f"{cv_failed[-1]} twin pipeline(s) failed to build")
+
     # --- X4VR_DUMP_SHADERS: the modules were written (take 346) -------------
     #
     # Take 346 asked for the dumps; the directory did not exist, the layer

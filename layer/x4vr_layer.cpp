@@ -1508,6 +1508,15 @@ std::unordered_map<VkCommandBuffer, VkRenderPass> &g_cb_rp =
 std::unordered_map<VkPipeline, bool> &g_pipe_canvas =
     x4vr::immortal<std::unordered_map<VkPipeline, bool>>();
 std::atomic<uint32_t> g_canvas_pipes{0};      // task #82
+// **The cinematic view (F6), take 357.** Its overlay is laid out for the
+// whole flat screen, and the canvas map shrank it to half its window. The
+// map is chosen at pipeline creation, so each pipeline that took a canvas
+// module gets a twin built from the modules the non-canvas path gives, and
+// x4vr_CmdBindPipeline binds the twin while F6 is up: X4's UI drawn exactly
+// as X4 laid it out. Under g_cb_mu.
+std::unordered_map<VkPipeline, VkPipeline> &g_canvas_twin =
+    x4vr::immortal<std::unordered_map<VkPipeline, VkPipeline>>();
+std::atomic<uint64_t> g_twins_built{0}, g_twins_failed{0}, g_twin_binds{0};
 std::atomic<uint64_t> g_canvas_draws{0};      // task #82
 std::unordered_map<VkCommandBuffer, bool> &g_cb_canvas =
     x4vr::immortal<std::unordered_map<VkCommandBuffer, bool>>();
@@ -7261,6 +7270,18 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatchBase(VkCommandBuffer cb, uint32_t bx,
     d->CmdDispatchBase(cb, bx, by, bz, x, y, z);
 }
 
+const x4vr::Shared *shared_state(); // the injector's channel, below
+
+// F6 is up (the injector's `cinematic_ui`). X4VR_TEST_CINEMATIC=1 forces it
+// for tests/run-multiview-render.sh, which has no injector.
+static bool cinematic_ui_now() {
+    static const bool forced = getenv("X4VR_TEST_CINEMATIC") != nullptr;
+    if (forced)
+        return true;
+    const x4vr::Shared *s = shared_state();
+    return s && s->cinematic_ui.load(std::memory_order_relaxed) != 0;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
     VkDevice device, VkPipelineCache cache, uint32_t count,
     const VkGraphicsPipelineCreateInfo *ci, const VkAllocationCallbacks *ac,
@@ -7634,6 +7655,59 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
     publish_descs(r);
     publish_canvas(r);
     record_provenance(r);
+    // The cinematic view's twins: the same create-info, the canvas stage put
+    // back to what the non-canvas path gives (the `original` variant, else
+    // the module X4 asked for). Built one by one, so a derivative's index
+    // into this batch is dropped; the layout is already the pose-extended one.
+    if (r == VK_SUCCESS) {
+        for (uint32_t i = 0; i < count; i++) {
+            if (!took_canvas[i] || out[i] == VK_NULL_HANDLE)
+                continue;
+            std::vector<VkPipelineShaderStageCreateInfo> ts = stages[i];
+            {
+                std::lock_guard<std::mutex> lock(g_variants.mu);
+                for (uint32_t j = 0; j < ts.size(); j++) {
+                    const VkShaderModule asked = ci[i].pStages[j].module;
+                    auto cv = g_variants.canvas.find(asked);
+                    if (cv == g_variants.canvas.end() || ts[j].module != cv->second)
+                        continue;
+                    auto it = g_variants.original.find(asked);
+                    ts[j].module =
+                        it != g_variants.original.end() ? it->second : asked;
+                }
+            }
+            VkGraphicsPipelineCreateInfo tci = infos[i];
+            tci.pStages = ts.data();
+            tci.flags &= ~(VkPipelineCreateFlags)VK_PIPELINE_CREATE_DERIVATIVE_BIT;
+            tci.basePipelineHandle = VK_NULL_HANDLE;
+            tci.basePipelineIndex = -1;
+            VkPipeline tw = VK_NULL_HANDLE;
+            if (d->CreateGraphicsPipelines(device, cache, 1, &tci, ac, &tw) ==
+                    VK_SUCCESS &&
+                tw != VK_NULL_HANDLE) {
+                {
+                    std::lock_guard<std::mutex> lock(g_cb_mu);
+                    g_canvas_twin[out[i]] = tw;
+                }
+                if (pose_active()) {
+                    std::lock_guard<std::mutex> lock(g_pose.mu);
+                    g_pose.pipe_layout[tw] = tci.layout;
+                }
+                const uint64_t n = ++g_twins_built;
+                if (n <= 3 || (n % 20) == 0)
+                    X4VR_LOG("ui twin: %llu built — a canvas pipeline's twin "
+                             "with X4's own UI vertex stage, bound while the "
+                             "cinematic view (F6) is up",
+                             (unsigned long long)n);
+            } else {
+                const uint64_t n = ++g_twins_failed;
+                if (n <= 3)
+                    X4VR_LOG("ui twin: FAILED to build %llu — that pipeline "
+                             "keeps the canvas map in F6",
+                             (unsigned long long)n);
+            }
+        }
+    }
     return r;
 }
 
@@ -7651,6 +7725,22 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyPipeline(
     {
         std::lock_guard<std::mutex> lock(g_comp_mu);
         g_comp_module.erase(p);
+    }
+    VkPipeline twin = VK_NULL_HANDLE;
+    {
+        std::lock_guard<std::mutex> lock(g_cb_mu);
+        auto tw = g_canvas_twin.find(p);
+        if (tw != g_canvas_twin.end()) {
+            twin = tw->second;
+            g_canvas_twin.erase(tw);
+        }
+    }
+    if (twin != VK_NULL_HANDLE) {
+        if (pose_active()) {
+            std::lock_guard<std::mutex> lock(g_pose.mu);
+            g_pose.pipe_layout.erase(twin);
+        }
+        d->DestroyPipeline(device, twin, ac);
     }
     d->DestroyPipeline(device, p, ac);
 }
@@ -11520,7 +11610,34 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
                                                 VkPipeline p) {
     // Task #82, before anything else so an early return cannot skip it.
     if (bp == VK_PIPELINE_BIND_POINT_GRAPHICS) {
+        // The cinematic view (F6): a canvas pipeline's twin instead, so X4's
+        // UI is drawn as X4 laid it out (take 357). Decided per recording,
+        // like every other binding X4 makes.
+        const bool cine = cinematic_ui_now();
+        static std::atomic<int> was{-1};
+        int prev = (int)cine;
+        if (was.load(std::memory_order_relaxed) != (int)cine)
+            prev = was.exchange((int)cine);
+        if (prev != (int)cine && (prev != -1 || cine))
+            X4VR_LOG("ui twin: %s (%llu twin(s) built, %llu failed, %llu "
+                     "twin bind(s) so far)",
+                     cine ? "CINEMATIC — X4's UI pipelines bound as X4 built "
+                            "them, the overlay at the full window"
+                          : "off — the canvas pipelines again",
+                     (unsigned long long)g_twins_built.load(),
+                     (unsigned long long)g_twins_failed.load(),
+                     (unsigned long long)g_twin_binds.load());
         std::lock_guard<std::mutex> lock(g_cb_mu);
+        if (cine) {
+            auto tw = g_canvas_twin.find(p);
+            if (tw != g_canvas_twin.end()) {
+                p = tw->second;
+                // Bound, not just built: said once per run.
+                if (g_twin_binds.fetch_add(1, std::memory_order_relaxed) == 0)
+                    X4VR_LOG("ui twin: first twin BOUND — the cinematic view's "
+                             "UI drawn by X4's own vertex stage");
+            }
+        }
         g_cb_canvas[cb] = g_pipe_canvas.count(p) != 0;
     }
     // The bind-time record. Keyed on the pass CURRENTLY BEING RECORDED rather
