@@ -26305,3 +26305,58 @@ mechanically; the table is in docs/releases.md.
 
 I first suggested `v0.9.0` without checking how it sorts against the old
 tags, which defeated the reason he wanted a bigger number. Now recorded.
+
+## Take 345 — the volumetric nebula differs between the eyes
+
+Patola: in Matrix #79B (dumps n16–n23) *"a background nebula is shifted by
+at least 60° in one of the eyes compared to the other"*; in CEO's Doubt
+(n33–n41), from inside a station and from the external view, *"a nebula
+that's shifted / occupying different parts of the sky"*.
+
+**What the dumps show** (`/tmp/x4vr-t345-present-nNN-layer{0,1}.png`, the
+eye images as submitted):
+* **Only the nebula differs.** The cockpit, the station, ships, stars and
+  the sun agree between the eyes. In Matrix #79B the left eye has a bright
+  cloud across the middle of the sky; the right eye has it displaced left,
+  mostly out of view. In CEO's Doubt the green fog's dark gap sits in a
+  different place in each eye.
+* **Not head-look.** n36/n37 are the external view, where head-look does
+  not act (X4's camera reads 0,0), and they split the same way.
+* **Not every nebula.** n12, a grey nebula in another sector, agrees
+  between the eyes.
+
+**What draws it.** These two sectors have X4's volumetric fog:
+`volume_raymarch3.frag.glsl` with `volume_*.comp`, `volume_apply`,
+`volume_blend` (`p1_sector_fog`, `p1_fog_volume`).
+* The ray march builds its ray as
+  `Ray(V_cameraposition, view2world_rot(UnProjectUJ(clip)))`, that is
+  `M_viewinverse · M_invproj_uj`, and intersects a box of
+  `U_volume_box_position`/`U_volume_box_dimensions` in sector space,
+  thousands of metres across.
+* **The hypothesis, not yet measured:** in the right eye this pass reads
+  the wrong camera data, through the per-eye index offset or the mirrored
+  camera block.
+  * A wrong camera POSITION would show the sector-space box from somewhere
+    else, while camera-relative geometry stays right. That is the pattern
+    in the dumps.
+  * A wrong rotation would do it too. Which one is the next question.
+
+### P346 — identify the fog's passes (measurement, no fix)
+
+Take 345's line without the eye dumps, plus `X4VR_DUMP_SHADERS`,
+`X4VR_PIPE_INVENTORY` and `X4VR_MV_INVENTORY`.
+
+* **P346.1** `name_module.py` names the ray-march module from its property
+  list (U_volume_box_position, U_volume_steps …).
+* **P346.2 (no prediction)** Its pipeline's inventory line gives its pass
+  and the patch path the mod applied. Two answers lead to different fixes:
+  * the pass is per-eye and took the index offset: then eye 1's camera
+    data for this shader is what is wrong;
+  * or it is not per-eye, and eye 1 gets the fog some other way.
+* Compute stages (`volume_*.comp`) are not in the pipeline inventory; if the
+  ray march is clean, they are next.
+
+    X4VR_TAKE=346 X4VR_DUMP_SHADERS=/tmp/x4vr-shaders X4VR_PIPE_INVENTORY=1 X4VR_MV_INVENTORY=1 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take346.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+**Also queued:** the numpad must turn the F2/F3/F4 views again once they are
+whole-scene (Patola). Head-look took those keys.
