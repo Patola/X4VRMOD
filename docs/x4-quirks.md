@@ -26230,3 +26230,39 @@ Take 342's line, new number. WiVRn, configuration 1, no recording.
 * **P343.3** `rclick`: every period with the canvas ON. Scorer PASS.
 
     X4VR_TAKE=343 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take343.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+## Take 343 — SCORED PASS: the right-click menu lines up. A known-good state.
+
+Patola: *"tried the menus several times, every time it worked flawlessly.
+All the menus, interactions and movement are good now."*
+
+He compared gimbaled and non-gimbaled weapons in the vanilla game: *"seems to
+be working the same as with our VR version ... for now I don't think we need
+to do any change regarding this part."* The note above about A's ring and
+the raw aim point stays recorded but is not acted on.
+
+* **P343.1 HELD.** 7 right-click periods in the seat, each drawn through the
+  canvas (`rclick`), plus 3 on foot (on-foot menus).
+* **P343.2 HELD.** Compass menus as before; targeting raw.
+* **P343.3 HELD after two scorer fixes.** Both FAILs were the scorer's.
+  * **map:** X4 resumes walking mouselook a few ms BEFORE it reports the HUD
+    up (11 ms standing up out of the docked menu, 23 ms leaving a station
+    menu). The check had counted those as take 147's mouselook-in-the-map.
+    It now ignores the last 0.1 s of an interval.
+    * It never ran in 338–342: those logs have no M press, its gate.
+  * **menucam:** he sat down into the docked menu, and X4 eased the seat's
+    camera 23° → 0° over 1.07 s (halving every ~0.1 s). The median from
+    0.3 s in read +0.11° and called it FROZEN. It now judges the period's
+    last 0.4 s, which a camera left at the head's angle still fails.
+  * Planted cases for both. Takes 333–343 PASS.
+* Cockpit tracking median 0.02°/0.03°.
+* Body −0.113°/count.
+
+**First data on the external view** (take 342's census, one regime line):
+* Camera mode 2, the same camera object, attached to another object
+  (vtable 0x3d21748), with a controller.
+* The camera's own transform carries the chase offset (local pos −2.0,
+  15.2, −59.6 m) and a rotation.
+* So the external view is not the cockpit's path, and the window there is
+  head-look not acting (outside the cockpit the layer declares a fixed
+  window in front).

@@ -4789,8 +4789,18 @@ def main(path):
                     frozen_cockpit.append((a, b, float("nan"), float("nan"),
                                            1.0))
                 continue
-            # settled: from 0.3 s in, past the tick that switches
-            sel = [(y, p_) for t, y, p_ in mc_cam if a + 0.3 <= t <= b]
+            # settled: the period's last 0.4 s (and at least 0.3 s in, past
+            # the tick that switches). Take 343 sat down into the docked menu
+            # and X4 eased the seat's camera 23 -> 0 deg over 1.07 s; the
+            # median from 0.3 s in read +0.11 and called it FROZEN. A camera
+            # left at the head's angle is still off at the END, which is
+            # what this judges.
+            # Readings arrive at the frame rate; a sparse log (or a short
+            # period) falls back to its latest reading.
+            late_ = [(t, y, p_) for t, y, p_ in mc_cam if a + 0.3 <= t <= b]
+            sel = [(y, p_) for t, y, p_ in late_ if t >= b - 0.4]
+            if not sel and late_:
+                sel = [(late_[-1][1], late_[-1][2])]
             if not sel:
                 continue
             ys = sorted(y for y, _p in sel)
@@ -7538,7 +7548,13 @@ def main(path):
         # interval. Mouselook is not a proxy for the defect, it IS the defect --
         # it is what makes the mouse rotate the view instead of driving the
         # cursor, which is why the map could not be dragged in take 147.
-        relapsed = [(a, [t for t in rel_on if a < t < b]) for a, b in intervals]
+        # **Except the hand-back.** On foot X4 resumes walking mouse-look a
+        # few ms BEFORE it reports the HUD up: take 343 stood up out of the
+        # docked menu (11 ms) and left a station menu (23 ms), and this
+        # FAILed both. Take 147's defect was mouselook in the middle of the
+        # map; the last 0.1 s of an interval is X4 handing control back.
+        relapsed = [(a, [t for t in rel_on if a < t < b - 0.1])
+                    for a, b in intervals]
         relapsed = [(a, hits) for a, hits in relapsed if hits]
         print(f"map   {len(m_down)} M press(es), {len(intervals)} HUD-down "
               f"interval(s), {len(intervals) - len(relapsed)} of them free of "

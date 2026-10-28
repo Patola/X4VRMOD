@@ -1137,6 +1137,25 @@ want "menus -> InteractMenu found" /tmp/census-mn-yes.log "menus   =>" "Interact
 { cat "$BASE"; printf '%s\n' "$mnok" "$mnseat" "$mn1" "$mn3"; } > /tmp/census-mn-no.log
 want "menus -> InteractMenu absent said" /tmp/census-mn-no.log "menus   =>" "InteractMenu never appeared"
 absent "menus: not read -> silent" "$BASE" "menus "
+# ------------------------------------------ take 343's two false FAILs
+# The map check: X4 resumes walking mouselook a few ms before the HUD comes
+# back (the hand-back) -- not take 147's mouselook in the middle of the map.
+mpkey='[  999970.000] inject  key[peep] type=0x300 scancode=16 keycode=0x6d mod=0x0 which=0 window=2 down=1 repeat=0 raw=58 ts=1 action=2'
+mpdn='[  999971.000] inject  headlook: HUD is now down (IsInPanelMode=0) — idle, mouse handed back'
+mpup='[  999975.000] inject  headlook: HUD is now up (IsInPanelMode=0) — steering'
+{ cat "$BASE"; printf '%s\n' "$mpkey" "$mpdn" '[  999974.989] inject  sdl: relative mouse mode ON (fold stands down)' "$mpup"; } > /tmp/census-map-handback.log
+want "map: mouselook 11 ms before the HUD returns is the hand-back" /tmp/census-map-handback.log "map   " "1 HUD-down interval(s), 1 of them free of mouselook"
+{ cat "$BASE"; printf '%s\n' "$mpkey" "$mpdn" '[  999973.000] inject  sdl: relative mouse mode ON (fold stands down)' "$mpup"; } > /tmp/census-map-relapse.log
+want "map: mouselook in the middle of the menu still FAILs" /tmp/census-map-relapse.log "FAIL|  - " "X4 re-entered mouselook inside 1 HUD-down"
+# menucam: X4 easing the seat's camera to 0 after he sits down is centred at
+# the end; a camera left at the head's angle is still off there.
+{ cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$mccen" "$(mcpose 999990.300 -2.3650 23.1370)" "$(mcpose 999990.500 -1.0620 10.7140)" "$(mcpose 999990.700 -0.5290 5.3140)" "$(mcpose 999990.900 -0.0730 0.7310)" "$(mcpose 999991.000 -0.0160 0.1630)" "$(mcpose 999994.700 0.0000 0.0000)" "$(mcpose 999994.900 0.0000 0.0000)" "$mcup" "$mcrep"; } > /tmp/census-mc-ease.log
+want "menucam: an easing camera that reaches 0 is CENTRED" /tmp/census-mc-ease.log menucam "CENTRED      0.0% of X4's UI out of reach"
+if python3 tools/score_run.py /tmp/census-mc-ease.log 2>&1 | grep -q "the centring did not act"; then
+    bad "menucam: an easing camera FAILs (take 343's false FAIL)"
+else
+    ok "menucam: an easing camera does not FAIL"
+fi
 # ------------------------------------------ rclick: X4's right-click menu (take 343)
 rcfmt=1
 for frag in 'X4VR_LOG("ui: X4'"'"'s right-click menu %s",' \
