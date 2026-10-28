@@ -11,13 +11,14 @@ Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
 **[docs/frame-analysis.md](docs/frame-analysis.md)**; the traps X4 sets for
 modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 
-> **Status: v0.9.2 — playable in VR** ([release notes](docs/releases.md)).
+> **Status: v0.9.3 — playable in VR** ([release notes](docs/releases.md)).
 > X4 runs in VR with in-engine stereo (per-eye lighting), head-look in the
 > cockpit and on foot, the UI on a canvas at the angle X4 intended, and every
-> menu reachable and lined up with the cursor, over WiVRn or SteamVR. Open
-> work: the external, target and cinematic views and the start menu still show
-> as a window rather than the whole scene. An earlier proof of concept using OpenTrack
-> head-tracking + vkShade/SuperDepth3D depth-image reconstruction is preserved
+> menu reachable and lined up with the cursor, over WiVRn or SteamVR. The
+> external views (F2/F3/F4) are the whole scene too. Open work: the cinematic
+> view (F6) and the start menu still show as a window. An earlier proof of
+> concept using OpenTrack head-tracking + vkShade/SuperDepth3D depth-image
+> reconstruction is preserved
 > at tag `v0.1`; it was abandoned as a dead end (wrong pivot, gimbal lock,
 > fragile setup, DIBR artifacts).
 
@@ -80,9 +81,10 @@ blocks every frame.
 | Walking: the head looks, the mouse and arrows turn the body | done | `take-338-walking-b` |
 | On-foot menus, dialogues, teleporters and vendors lined up | done | `take-341-foot-menu-start` |
 | **Playable in VR** | **release** | **`v0.9.0`** |
-| External / target / cinematic views and the start menu as the whole scene | open | — |
+| Cinematic view (F6) and the start menu as the whole scene | open | — |
 | Volumetric nebula in stereo (Matrix #79B, CEO's Doubt) | done | **`v0.9.1`** |
 | The numpad orbits the external (F2) and target (F3) views again | done | **`v0.9.2`** |
+| F2/F3/F4 as the whole scene: the head turns X4's camera inside them | done | **`v0.9.3`** |
 | Frame pacing at 2816² per eye (a 90 Hz display is starved) | open | — |
 | Head translation (lean) | open — X/Y built and switched off, Z needs depth | — |
 
