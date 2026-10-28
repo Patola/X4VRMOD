@@ -13638,32 +13638,6 @@ void vr_thread() {
                     zm * (std::tan(f.angleRight) - std::tan(f.angleLeft));
                 quad_ui.size.height =
                     zm * (std::tan(f.angleUp) - std::tan(f.angleDown));
-                // **The cinematic view (F6): X4's UI at the full window**
-                // (take 357). Its overlay is laid out for the whole flat
-                // screen, and the canvas scale that puts the HUD at the angle
-                // X4 meant shrank it to about half of the TV picture. The
-                // quad is enlarged by 1/A around its centre, which undoes
-                // that scale exactly in tan space; the shaders are untouched.
-                {
-                    const x4vr::Shared *sh = shared_state();
-                    const x4vr::CanvasNdc *cm = g_canvas_map.get();
-                    const bool cine =
-                        sh && sh->cinematic_ui.load(std::memory_order_relaxed) &&
-                        cm && cm[0].ax > 0.05f && std::fabs(cm[0].ay) > 0.05f;
-                    static int was = -1;
-                    if ((int)cine != was) {
-                        if (was != -1 || cine)
-                            X4VR_LOG("ui quad: %s", cine
-                                     ? "CINEMATIC — X4's UI shown at the full "
-                                       "window (the canvas scale undone)"
-                                     : "back at the HUD's canvas scale");
-                        was = cine;
-                    }
-                    if (cine) {
-                        quad_ui.size.width /= cm[0].ax;
-                        quad_ui.size.height /= std::fabs(cm[0].ay);
-                    }
-                }
                 layers[1] = (const XrCompositionLayerBaseHeader *)&quad_ui;
                 layer_count = 2;
                 // The quad's geometry, PUBLISHED not logged. The line itself

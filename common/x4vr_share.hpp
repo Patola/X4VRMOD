@@ -48,9 +48,7 @@ constexpr uint32_t kShareMagic = 0x52565834u;
 // 9: `interact_menu`, X4's right-click menu open (take 342).
 // 10: `external_head`, the head turning an external view
 //     (X4VR_HEADLOOK_EXTERNAL).
-// 11: `cinematic_ui`, the cinematic view's overlay to be shown at the full
-//     window (take 357).
-constexpr uint32_t kShareVersion = 11u;
+constexpr uint32_t kShareVersion = 10u;
 
 struct Shared {
     uint32_t magic = kShareMagic;
@@ -233,14 +231,6 @@ struct Shared {
     // not the camera it samples: declaring the orbit too would swing the
     // picture with the numpad.
     std::atomic<uint32_t> external_head{0};
-
-    // 1 while the cinematic view (F6) is up: in the pilot seat, the HUD
-    // down, not paused, no conversation and nothing in X4's open-menu table
-    // but TopLevelMenu (takes 354-357: every F6 stretch, and no other). Its
-    // overlay is laid out for the whole flat screen, so the layer shows X4's
-    // UI at the full window instead of the HUD's canvas scale (Patola, take
-    // 357: "It should be bigger and cover the entire window").
-    std::atomic<uint32_t> cinematic_ui{0};
 };
 
 // ---- the camera block, as one consistent snapshot ------------------------

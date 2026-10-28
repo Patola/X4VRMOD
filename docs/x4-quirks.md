@@ -27059,3 +27059,26 @@ under a read-only census and showed the F4→F6 glue.)
     every F6 stretch matches, and nothing else (load-time stretches have no
     menu or OptionsMenu and come before head-look arms).
   * Share v11 `cinematic_ui`; scorer `cinematic` block.
+
+## Take 358 — the F4→F6 fix works; the F6 overlay change was inert (reverted)
+
+Patola: *"F2, F3, F4 are now behaving as expected, including the HUD
+appearing in F2 and F4 and following my head -- I saw that this is the
+expected behavior, and the HUD disappears in F3."* F6 from F4 (ESC returns
+there) and from the cockpit worked, *"but in the two F6 invocations the
+overlay did not fill the window."*
+
+* **679e52c confirmed:** three external periods, each declared within
+  0.01 s. Period 1 ended at F6's HUD-down, period 2 at the ESC menu; none
+  ran on with the HUD down.
+* **a1f681a was inert, and is reverted.** The injector's F6 signal fired on
+  both F6 visits (ON at 127583.98 and 127636.9; the ESC menu turned it off,
+  as designed). But the UI quad it enlarges exists only with
+  `X4VR_UI_LAYER=1`, which the shipping line does not set: 24,232 `geom`
+  lines in take 358, `qv=0` in all of them. In the shipping configuration
+  X4's UI is drawn into the eye image through the canvas affine baked into
+  the UI vertex shaders. "The UI has its own quad layer" was never checked
+  against the configuration that runs.
+* **Doing it for real** means making the UI shaders' canvas scale a runtime
+  value instead of a baked constant, for every UI draw. Not attempted; F6 is
+  low priority (Patola).
