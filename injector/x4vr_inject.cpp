@@ -5386,13 +5386,26 @@ static bool extview_tick(bool external, float head_yaw, float head_pitch,
     // (root+0x3e0), not the player's. Take 355: F6 entered from F4 left the
     // player's camera in mode 4, so the head was composed into a camera X4
     // was not drawing and declared to a picture it never turned -- the
-    // window followed the face. The slot is non-NULL exactly while F6 is up.
+    // window followed the face. The slot holds a camera OBJECT exactly while
+    // F6 is up -- not "is non-zero": take 356 stood the head down in every
+    // external view because the slot is not zero outside F6 either, and the
+    // census had only ever listed it when it held a heap object (plausible).
     uintptr_t root = 0, scene = 0;
-    const bool cinematic = external &&
-                           self_read(extview::kRootGlobal, &root, 8) && root &&
-                           self_read(root + x4vr::camsurvey::kSceneCamOff,
-                                     &scene, 8) &&
-                           scene;
+    const bool scene_read = self_read(extview::kRootGlobal, &root, 8) && root &&
+                            self_read(root + x4vr::camsurvey::kSceneCamOff,
+                                      &scene, 8);
+    const bool cinematic =
+        external && scene_read && x4vr::camsurvey::plausible(scene);
+    static uintptr_t scene_was = 1; // never a real value: the first is logged
+    if (scene_read && scene != scene_was) {
+        scene_was = scene;
+        X4VR_LOG("extview: scene camera slot root+0x3e0 = %#lx — %s",
+                 (unsigned long)scene,
+                 x4vr::camsurvey::plausible(scene)
+                     ? "a camera object: the cinematic view (F6), the head "
+                       "stands down"
+                     : "no camera object: the head may turn the external views");
+    }
     const bool want = external && cam && mode > 0 && !menu && !cinematic;
     const uint64_t applied = g_extslot.applied.load(std::memory_order_relaxed);
     const extview::Period::Event ev = per.step(want, applied);

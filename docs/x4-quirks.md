@@ -26998,3 +26998,30 @@ and counter-turns it with its own free-look, so it stays put (take 242). In
 the external views X4 does not know the head turned its camera, so anything
 it draws at a fixed screen place rides with the head. Whether take 354 had
 it too is asked; the fix depends on what X4 anchors that HUD to.
+
+## Take 356 — the F6 fix works, and its gate turned F2/F3/F4 back into windows (my error)
+
+Patola: *"now F4 followed by F6 did not glue the view into my face. Then
+cockpit → F6 was good too. Then I do F2/F3/F4 and see the HUD on all of
+them, even F3. And they return to being windows instead of being
+immersive."* He checked vanilla: *"It has the HUD on F2 and F4 but not F3."*
+
+Scorer: FAIL, *"5 external view(s) shown and the head turned none of
+them"*. The patch was installed, no full-screen menu was up, and not one
+period opened.
+
+**Cause.** The gate stood the head down whenever `root+0x3e0` was
+**non-zero**. The census only ever listed that slot when it held a heap
+object (`plausible`). Outside F6 the slot holds some other non-zero value,
+which the census filtered out, and "non-NULL exactly while F6 is up" was
+read off that filtered output. The instrument assumed what the gate then
+tested.
+
+**Fix:** the gate tests `plausible(scene)`, the predicate the census
+timeline was actually made with. The injector now logs the slot's raw value
+at every change, so the next take shows what X4 keeps there outside F6.
+
+**F6 decision.** Patola: F6 is *"supposed to be like in a television"*;
+leave it as a window. The HUD on F2/F4 is X4's own (vanilla shows it);
+with the head turning the camera it rides with the head. Left as is for
+now.

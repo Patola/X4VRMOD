@@ -1360,6 +1360,11 @@ if python3 tools/score_run.py /tmp/census-ev-nof6.log 2>&1 | grep -q "scene came
 else
     ok "extview: no scene camera during the period -> no FAIL"
 fi
+if grep -qF '"extview: scene camera slot root+0x3e0 = %#lx — %s"' injector/x4vr_inject.cpp; then
+    ok "extview: the injector logs the scene camera slot's value"
+else
+    bad "extview: the scene camera slot line moved"
+fi
 if grep -qF '"the cinematic view (F6) is up: X4 draws through its "' injector/x4vr_inject.cpp; then
     ok "extview: the injector ends a period for F6's scene camera"
 else
