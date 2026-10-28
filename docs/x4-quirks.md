@@ -26898,3 +26898,34 @@ mouse 0.5 s before landing him in the pilot seat. Off the seat relative mode
 is X4's walking, never our free-look key (write mode presses none); the
 check now sets those aside and says so. A planted case keeps the seated
 relapse a FAIL.
+
+## Take 354 — SCORED PASS: F2/F3/F4 are the whole scene (patch v2); F6 is not
+
+Patola: *"F2, F3 and F4 now worked perfectly, I could even click elements
+inside the cameras. F6 didn't -- it's still inside a window."*
+
+**The scorer:** PASS. Two external periods (61.8 s mode 2; 89.1 s mode
+2→4), each declared 0.01 s after it started. The path counters settle take
+353's question: the player's camera took **X4's early return every time**
+(747,225 and 1,321,422) and the orbit compose **never** (0 and 0). So the
+reading of 0x192a27f was right: in the external views 0x1929f70 returns the
+pose of the object in the camera's pivot slot, orbit included. 13,576
+head-turned frames were set apart in poselag.
+
+**F6 is another camera.** No external period was open during F6. The only
+long HUD-down stretch with no menu open is 123032–123118 (86 s, X4's menu
+table empty). Through it the player's camera (`root+0x3e8`) stayed in
+**mode 0**, X4's view said "cockpit", and the camera's rotation never moved
+(head-look's HUD-down centring held it at 0,0). So X4 drew F6 through a
+camera other than the player's. (In take 350, F6 pressed from F4 left the
+player's camera in mode 4 with the HUD down; this time it was entered from
+the cockpit.)
+* Candidate: the scene camera at `root+0x3e0` (SetSceneCameraActive toggles
+  it). SetPlayerCameraCinematicView goes through X4's event machinery, not
+  straight to a camera field. Not yet established.
+
+**Next for F6:**
+* Find which camera X4 renders in F6 (read-only: `root+0x3e0` and its mode,
+  orbit and cache while the HUD is down with no menu).
+* Then extend the stubs' "player camera" gate to it, with its own predicate
+  for when the head may turn it.
