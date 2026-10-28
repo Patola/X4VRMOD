@@ -504,7 +504,22 @@ want "hwrite never armed -> the reason is printed" /tmp/census-hw-never.log hwri
 { cat /tmp/census-hw-base.log; printf '%s\n' "$hwext" "$hwarm" "$(hwrep 4000 3)"; } > /tmp/census-hw-ml.log
 want "hwrite pressed MOUSELOOK -> FAIL" /tmp/census-hw-ml.log FAIL "pressed MOUSELOOK 3 time(s)"
 { cat /tmp/census-hw-base.log; printf '%s\n' "$hwarm" "$(hwrep 4000 0)"; } > /tmp/census-hw-noext.log
-want "hwrite without the extension served -> FAIL" /tmp/census-hw-noext.log FAIL "never served x4vrmod_headlook ENABLED"
+want "hwrite with neither the speed owner nor the extension -> FAIL" /tmp/census-hw-noext.log FAIL "neither the injector's per-mode speed (headlook speed) nor x4vrmod_headlook held X4's follower"
+# Take 351: the injector holds the speed per camera mode instead.
+hwspd='[  999985.500] inject  headlook speed: X4'"'"'s own <lookaround><internal> anglespeed 3.4907 (angleacc 8.7266) — held at 0 while the camera is in mode 0 (cockpit, walking) so a written angle stays, given back in every other mode so the external views orbit'
+hwsp0='[  999985.600] inject  headlook speed: camera mode 0 — anglespeed held at 0 (0.0000)'
+hwsp2='[  999988.000] inject  headlook speed: camera mode 2 — anglespeed given back to X4 (3.4907)'
+{ cat /tmp/census-hw-base.log; printf '%s\n' "$hwspd" "$hwsp0" "$hwarm" "$hwsp2" "$(hwrep 4000 0)"; } > /tmp/census-hw-speed.log
+want "hwrite with the per-mode speed -> reported" /tmp/census-hw-speed.log hwrite "follower speed: X4's own 3.4907, held at 0 in mode 0 (1 time(s)), given back in other modes (1 time(s))"
+if python3 tools/score_run.py /tmp/census-hw-speed.log 2>&1 | grep -q "held X4's follower, so writes"; then
+    bad "hwrite with the per-mode speed -> FAILs"
+else
+    ok "hwrite with the per-mode speed -> no follower FAIL"
+fi
+grep -qF '"headlook speed: X4'"'"'s own <lookaround><internal> anglespeed "' injector/x4vr_inject.cpp &&
+grep -qF 'X4VR_LOG("headlook speed: camera mode %d — anglespeed %s (%.4f)",' injector/x4vr_inject.cpp &&
+    ok "hwrite speed: the planted lines match the injector's formats" ||
+    bad "hwrite speed: the injector's format changed — replant the lines above"
 cp /tmp/census-hw-base.log /tmp/census-hw-silent.log
 want "hwrite asked, mode never ran -> FAIL" /tmp/census-hw-silent.log FAIL "no write report"
 plant /tmp/census-hw-session.log '[  999990.000] inject  headlook write: REFUSED for the session — code at 0x1935f1e differs from the analysed build; nothing will be written'

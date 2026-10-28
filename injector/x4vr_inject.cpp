@@ -881,6 +881,14 @@ bool headlook_menu_centre() {
     static const bool on = x4vr::env_on("X4VR_HEADLOOK_MENU_CENTRE", true);
     return on;
 }
+// X4VR_HEADLOOK_SPEED_EXT=1 serves x4vrmod_headlook again (anglespeed 0 for
+// the whole session, as takes 321-350 ran): the numpad orbit of F2/F3 is then
+// frozen (take 350).
+bool headlook_speed_extension() {
+    static const bool on = headlook_write_enabled() &&
+                           x4vr::env_on("X4VR_HEADLOOK_SPEED_EXT", false);
+    return on;
+}
 struct OurExtension {
     const char *id;
     bool (*wanted)();
@@ -892,7 +900,10 @@ const OurExtension kOurExtensions[] = {
     // with the head. Take 321 saw the sway as 1-17 s stretches of up to 22 deg
     // once a written head-look no longer cancelled it (MOUSELOOK's loop had).
     {"x4vrmod_nosway", always_wanted},
-    {"x4vrmod_headlook", headlook_write_enabled},
+    // Since take 351 only on request: the injector holds the speed at zero
+    // per camera mode instead (headlook_speed_tick), so the external views'
+    // orbit is not frozen with it.
+    {"x4vrmod_headlook", headlook_speed_extension},
 };
 
 Profile load_content_profile(const char *path) {
@@ -3734,6 +3745,42 @@ static void camwrite_refuse(const char *why, bool alarm) {
 // tick, because a camera, its mode or X4's parameters can change under us.
 static bool x4_game_time(double *out); // with X4VR_FIELD_AB, below
 
+// x4vr::camwrite::SpeedOwner, applied: X4's follower speed at zero while the
+// camera is in mode 0, X4's own value in every other mode (take 351). Runs
+// every head-look tick in write mode, before anything checks the speed.
+static void headlook_speed_tick(uintptr_t cam) {
+    using namespace x4vr;
+    static camwrite::SpeedOwner owner;
+    if (headlook_speed_extension() || !cam)
+        return;
+    uintptr_t params = 0;
+    float p[4] = {};
+    if (!self_read(camwrite::params_global(), &params, 8) || !params ||
+        !self_read(params + camwrite::kMaxPitch, p, sizeof p))
+        return;
+    if (p[3] == 0.f && std::fabs(p[0] - p[1]) < 1e-6f)
+        return; // the load's defaults, not X4's library values yet
+    if (owner.learn(p[2]))
+        X4VR_LOG("headlook speed: X4's own <lookaround><internal> anglespeed "
+                 "%.4f (angleacc %.4f) — held at 0 while the camera is in "
+                 "mode 0 (cockpit, walking) so a written angle stays, given "
+                 "back in every other mode so the external views orbit",
+                 p[2], p[3]);
+    int32_t mode = -1;
+    if (!self_read(cam + camwatch::kCamMode, &mode, sizeof mode))
+        return;
+    const float want = owner.wanted(mode);
+    if (want < 0.f || std::fabs(p[2] - want) < 1e-6f)
+        return;
+    if (!self_write(params + camwrite::kAngleSpeed, &want, sizeof want))
+        return;
+    uint64_t &n = want == 0.f ? owner.to_zero : owner.to_x4;
+    if (n++ < 40)
+        X4VR_LOG("headlook speed: camera mode %d — anglespeed %s (%.4f)",
+                 (int)mode, want == 0.f ? "held at 0" : "given back to X4",
+                 want);
+}
+
 static bool camwrite_ready(uintptr_t cam, float plim_deg, float ylim_deg) {
     using namespace x4vr;
     auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
@@ -6016,6 +6063,8 @@ void headlook_tick() {
     // failed write (EFAULT mid-teardown) does not drop it: the camera is
     // still ours, and dropping it would publish an identity pose.
     bool write_ready = false;
+    if (write_mode)
+        headlook_speed_tick(x4_player_camera());
     if (write_mode && may_steer && write_here) {
         const uintptr_t cam = x4_player_camera();
         write_ready = camwrite_ready(cam, g_headlook.pitch_limit_deg,

@@ -3866,10 +3866,24 @@ def main(path):
             print("hwrite  sway: no readout (this build predates it, or the "
                   "controller never verified)")
         if hw_asked:
-            if not re.search(r"x4vrmod_headlook (already enabled|ENABLED)", text):
-                fails.append("X4VR_HEADLOOK_WRITE=1 but the content fork never "
-                             "served x4vrmod_headlook ENABLED — X4's follower "
-                             "was not held, so writes would be pulled home")
+            # Since take 351 the injector holds the follower's speed at zero
+            # per camera mode (headlook speed lines); the extension that did
+            # it for the whole session is served only on request.
+            spd = re.search(r"headlook speed: X4's own <lookaround><internal> "
+                            r"anglespeed ([\d.]+)", text)
+            to_x4 = len(re.findall(r"headlook speed: camera mode -?\d+ — "
+                                   r"anglespeed given back to X4", text))
+            to_0 = len(re.findall(r"headlook speed: camera mode -?\d+ — "
+                                  r"anglespeed held at 0", text))
+            if spd:
+                print(f"hwrite  follower speed: X4's own {spd.group(1)}, held at "
+                      f"0 in mode 0 ({to_0} time(s)), given back in other "
+                      f"modes ({to_x4} time(s))")
+            elif not re.search(r"x4vrmod_headlook (already enabled|ENABLED)", text):
+                fails.append("X4VR_HEADLOOK_WRITE=1 but neither the injector's "
+                             "per-mode speed (headlook speed) nor "
+                             "x4vrmod_headlook held X4's follower, so writes "
+                             "would be pulled home")
             ls_ = re.findall(
                 r"lagsample: arm=\d view=(\w+) steer=(\d) cam=(\d) "
                 r"head=(-?[\d.]+),(-?[\d.]+) x4=(-?[\d.]+),(-?[\d.]+)", text)

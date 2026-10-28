@@ -92,10 +92,20 @@ hoff='<extension id="x4vrmod_headlook" enabled="false"/>'
 out=$(run cat "$PROF/content.xml")
 [[ "$out" == *"$hoff"* ]] && ok "no write mode: x4vrmod_headlook served OFF" \
     || bad "no write mode: x4vrmod_headlook not served off — got: $out"
+# Since take 351 the injector holds the follower's speed per camera mode, so
+# write mode no longer serves x4vrmod_headlook unless asked for.
 out=$(X4VR_HEADLOOK_WRITE=1 run cat "$PROF/content.xml")
+[[ "$out" == *"$hoff"* && "$out" == *"$on"* ]] \
+    && ok "write mode: x4vrmod_lookaround ON, x4vrmod_headlook OFF (take 351)" \
+    || bad "write mode: not lookaround on / headlook off — got: $out"
+out=$(X4VR_HEADLOOK_WRITE=1 X4VR_HEADLOOK_SPEED_EXT=1 run cat "$PROF/content.xml")
 [[ "$out" == *"$hon"* && "$out" == *"$on"* ]] \
-    && ok "write mode: x4vrmod_headlook AND x4vrmod_lookaround served ON" \
-    || bad "write mode: not both on — got: $out"
+    && ok "write mode + X4VR_HEADLOOK_SPEED_EXT=1: both served ON" \
+    || bad "write mode + X4VR_HEADLOOK_SPEED_EXT=1: not both on — got: $out"
+out=$(X4VR_HEADLOOK_SPEED_EXT=1 run cat "$PROF/content.xml")
+[[ "$out" == *"$hoff"* ]] \
+    && ok "X4VR_HEADLOOK_SPEED_EXT=1 without write mode: headlook stays OFF" \
+    || bad "X4VR_HEADLOOK_SPEED_EXT=1 without write mode served headlook — got: $out"
 printf '<content>\n  %s\n  %s\n</content>\n' "$on" "$hon" > "$PROF/content-x4vrmod.xml"
 out=$(run cat "$PROF/content.xml")
 [[ "$out" == *"$hoff"* ]] \

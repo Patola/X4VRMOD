@@ -109,14 +109,47 @@ inline ParamCheck check_params(const float p[4], float plim_deg, float ylim_deg)
     }
     c.radians = rad && !deg;
     if (!(std::fabs(p[2]) < 1e-4f)) {
-        c.why = "anglespeed is not zero -- x4vrmod_headlook is not in force, so "
-                "X4's follower would pull every write back toward centre";
+        c.why = "anglespeed is not zero -- neither the injector's per-mode "
+                "speed nor x4vrmod_headlook holds it, so X4's follower would "
+                "pull every write back toward centre";
         return c;
     }
     c.ok = true;
     c.why = "limits match the servo's and anglespeed is zero";
     return c;
 }
+
+// **The follower's speed, per camera mode** (take 351). x4vrmod_headlook
+// used to zero `<lookaround><internal> anglespeed` for the whole session so a
+// written angle stays. The same pair also drives the external views' orbit
+// (read at 0x19352b3/0x19352bd into the follower wrapper 0x1e8c260): take 350
+// had the numpad pitch F2/F3 once and then freeze, and take 351, with the
+// extension not served, had them orbit again. So X4 now loads its own value,
+// and the injector holds it at zero only while the camera is in mode 0 -- the
+// cockpit and walking, where the write acts -- and gives X4 its value back in
+// every other mode.
+struct SpeedOwner {
+    bool have = false;    // X4's own value has been read
+    float x4_value = 0.f; // ...and is this
+    uint64_t to_zero = 0, to_x4 = 0;
+    // The speed to hold for camera mode `mode`, or a negative value when
+    // nothing is to be written yet (X4's own value not read).
+    float wanted(int32_t mode) const {
+        if (!have)
+            return -1.f;
+        return mode == 0 ? 0.f : x4_value;
+    }
+    // Remember X4's own value from the first reading that is X4's: the load
+    // passes through all-zero defaults, and a zero after that is ours (or a
+    // mod's), which cannot be given back as "X4's".
+    bool learn(float anglespeed) {
+        if (have || !(std::fabs(anglespeed) >= 1e-4f))
+            return false;
+        have = true;
+        x4_value = anglespeed;
+        return true;
+    }
+};
 
 // The base the stored matrix is relative to must be identity for a written
 // R(yaw, pitch) to mean that angle: X4 extracts from stored x base^-1. `b` is

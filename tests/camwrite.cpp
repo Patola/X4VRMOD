@@ -230,6 +230,24 @@ int main() {
         }
     }
 
+    // ---- the follower's speed per camera mode (take 351) -------------------
+    {
+        camwrite::SpeedOwner o;
+        check(o.wanted(0) < 0.f && o.wanted(2) < 0.f,
+              "speed: nothing to write before X4's own value is read");
+        check(!o.learn(0.f) && !o.have,
+              "speed: a zero (the load's defaults, or ours) is not X4's value");
+        check(o.learn(3.4906585f) && o.have && o.x4_value == 3.4906585f,
+              "speed: X4's own value is learnt from its first non-zero reading");
+        check(!o.learn(0.f) && !o.learn(1.0f) && o.x4_value == 3.4906585f,
+              "speed: and kept -- a later zero (ours) or value does not replace it");
+        check(o.wanted(0) == 0.f,
+              "speed: mode 0 (cockpit, walking) holds it at zero for the write");
+        check(o.wanted(2) == 3.4906585f && o.wanted(4) == 3.4906585f &&
+                  o.wanted(1) == 3.4906585f,
+              "speed: any other mode (external, target, world) gets X4's back");
+    }
+
     if (g_fail) {
         printf("%d check(s) failed\n", g_fail);
         return 1;

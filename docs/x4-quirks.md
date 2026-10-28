@@ -26643,3 +26643,57 @@ x4vrmod_headlook, so X4's internal anglespeed 200 is in force.
   x4vrmod_nosway.
 
     X4VR_TAKE=351 X4VR_HEADLOOK_WRITE=0 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take351.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+## Take 351 — the elimination: x4vrmod_headlook froze the F2/F3 orbit
+
+Patola: *"the numpad keys are working now in F2 and F3, but it looks like
+there is another thing pulling each of these view to some random direction
+constantly … Even in the F4 view the slowly going up movement was present.
+And when I left the cockpit I couldn't turn with the mouse."*
+
+* **P351.1 HELD: the extension is the cause.** With x4vrmod_headlook not
+  served (`X4VR_HEADLOOK_WRITE=0`), X4's own internal anglespeed was in
+  force and the numpad orbited F2 and F3.
+* **The drift belongs to the test's mode, not to X4.**
+  * `X4VR_HEADLOOK_WRITE=0` falls back to the pre-321 MOUSELOOK servo, which
+    pushes synthetic mouse motion when X4's camera reads 0,0. That is what
+    it does outside the cockpit (the map's "accelerate away" of take 146).
+  * evflow: motion pushed up to 20.9 Hz in external windows.
+  * Write mode pushes nothing: in take 350 F2's camera held at exactly
+    −15.9° between keys.
+* **No turning on foot, and the one FAIL:** the walking patch needs
+  `X4VR_HEADLOOK_WRITE=1` (scorer: "never patched — needs …"). The servo
+  then dropped mouse motion while steering, take 334's state. Expected for
+  this test.
+
+## Built for take 352: the follower's speed held per camera mode
+
+* **x4vrmod_headlook is no longer served by default.** X4 loads its own
+  `<lookaround><internal> anglespeed`.
+  * The injector reads it once (the first non-zero reading after the load's
+    defaults) and holds it at **0 while the camera is in mode 0** (cockpit,
+    walking, their menus), where the write and the menu centring need it.
+  * It gives **X4's value back in every other mode** (external, target,
+    world-placed).
+  * A guarded write (process_vm_writev) to X4's camera-parameters object
+    (+0x690), whose address the write already verifies (site 0x1933dd4).
+  * Logged as `headlook speed: …`.
+* `X4VR_HEADLOOK_SPEED_EXT=1` serves the extension again (takes 321–350).
+* `x4vr::camwrite::SpeedOwner` is the rule, tested in tests/camwrite.cpp:
+  nothing written before X4's value is read; zeros are never learnt as X4's;
+  mode 0 → 0; any other mode → X4's.
+* Scorer `hwrite` accepts the per-mode speed in place of the extension and
+  reports it. Content-fork suite: write mode serves lookaround ON and
+  headlook OFF, and ON again with the knob.
+* **Unchanged by design:** the numpad still does not turn the cockpit view
+  (take 321's stated side effect).
+
+### P352 — the shipping line, with the per-mode speed
+
+* **P352.1** The log learns X4's speed, holds it at 0 in the cockpit and
+  gives it back in F2/F3/F4/F6. Scorer PASS (hwrite reports it).
+* **P352.2** Cockpit head-look, menus and walking unchanged.
+* **P352.3 (Patola)** In F2 the numpad orbits around his ship, in F3 around
+  the target, with no drift. F4 as before; F6 untouched.
+
+    X4VR_TAKE=352 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take352.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
