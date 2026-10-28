@@ -26549,3 +26549,48 @@ many views, from all of them the nebula looked right. It didn't distort.
   false while the HUD is down. Harmless; fixed after the tag.
 
 Released as **v0.9.1** (code identical to 46ae135, take 349's build).
+
+## Next: the views (F2/F3/F4/F6, the start menu) and the numpad — what the code says first
+
+**The numpad in F2/F3/F4.** The roadmap (after take 333) said those keys "do
+nothing now, because head-look took the numpad". That was my claim, not
+measured in those views.
+* The input map fork changes one binding (MOUSELOOK → F13); every numpad
+  binding is identical. (Also there: his F10 compass binding, written by X4
+  into the fork at take 342.)
+* X4's per-frame camera function (0x1933d00…) eases the look angle with one
+  follower, handed a (speed, acceleration) pair:
+  * the cockpit path reads +0x690/+0x694 of the camera-parameters object,
+    `<lookaround><internal>`, which x4vrmod_headlook zeroes;
+  * the other paths read +0x6b8/+0x6bc (1934c59/1934c6b, 19363aa/19363bc),
+    which are not internal's (presumably `<external>` anglespeed 180 /
+    angleacc 360, untouched by us).
+* So the code says the numpad should still turn the external views. **To be
+  checked by Patola before anything is changed.**
+
+**Whole-scene views.** Take 344's census: mode 2 (a rig attached to an
+object, the offset in the camera's own transform) and mode 4 (placed in the
+world). In both, X4 owns the camera's own rotation (orbit, cinematic
+motion).
+* In the cockpit path X4 extracts its angles FROM the stored matrix each
+  frame (the matrix is the state).
+* If modes 2/4 work the same way, a head rotation written there would be
+  read back as X4's own orbit and move the camera around the ship, not turn
+  the view from where it is.
+* So the head turn has to be composed with X4's rotation at a point X4 does
+  not read back. Where that is needs the mode-2/4 paths read, and one census
+  take of what X4 does to that matrix per frame under mouse and numpad
+  input.
+
+### P350 — the numpad and the external camera, measured
+
+Take 349's line without the eye dumps. The census (X4VR_FOOTLOG) logs each
+camera regime and, per second, the camera's own rotation and position; the
+injector logs key events (scancodes), so numpad presses can be set against
+the camera's motion.
+* **P350.1 (Patola)** In F2/F3/F4, holding numpad 4/6/8/2 turns the view (the
+  code says it should).
+* **P350.2** Census windows in modes 2/4: the camera's own rotation changes
+  with numpad/mouse input and holds still without it. If it holds while
+  idle, a write might persist; if X4 re-derives it every frame regardless,
+  it cannot.
