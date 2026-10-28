@@ -4482,6 +4482,21 @@ def main(path):
             print("foot-menu  ONLY ONE ARM opened — the A/B needs at least "
                   "one opening of each")
 
+    # --- the volumetric fog's ray march (take 349) ---------------------------
+    #
+    # Its ray direction is un-projected at the near plane, so the per-eye
+    # inverse projection turned it ~18 deg per eye (takes 345-348). The layer
+    # keeps X4's own inverses for it; this says how many modules took that,
+    # which is 0 in any run that never met volumetric fog.
+    fog_kept = re.findall(r"invproj \S+: fog ray march — (\d+) module\(s\) "
+                          r"kept on X4's own inverse projections(.*)", text)
+    if fog_kept:
+        n_, tail = fog_kept[-1]
+        print(f"fog     the volumetric fog's ray march: {n_} module(s) kept on "
+              f"X4's own inverse projections"
+              + (" — X4VR_FOG_RAY_PER_EYE=1, so patched per eye as before"
+                 if "X4VR_FOG_RAY_PER_EYE=1" in tail else ""))
+
     # --- X4VR_DUMP_SHADERS: the modules were written (take 346) -------------
     #
     # Take 346 asked for the dumps; the directory did not exist, the layer

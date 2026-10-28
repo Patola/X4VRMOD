@@ -26444,3 +26444,83 @@ after-rp cases).
   names any target never reached.
 
     X4VR_TAKE=348 X4VR_MV_DUMP=/tmp/x4vr-t348 X4VR_MV_DUMP_AFTER_RP=71,73,33 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take348.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+## Take 348 — SCORED PASS, but the fog was not captured; the mechanism found anyway
+
+Patola: *"if I roll my head, the nebula gets distorted in an odd way, like a
+square turning into a parallelogram."* He timed freezes at a roll right and
+a roll left.
+
+**The capture missed.**
+* Passes #71/#73 were never reached: creation-order serials shifted this
+  run (the 97H MONO+MASKED passes were #24/25, #36–39, #44–47, #63–66,
+  #71–76). I had dropped the inventories that would have named them.
+* #33 was captured seven times, and it holds no fog and no sky (black behind
+  the geometry). It is the opaque scene pass. The compositing pipeline is
+  *built against* #33 and draws in a later compatible pass. I chose #33 from
+  where it was built, not where it draws.
+
+**The mechanism, from X4's own shader source:**
+* `GetRay()` = `Ray(V_cameraposition, normalize(view2world_rot(
+  UnProjectUJ(GetFragClip()))))`, where `GetFragClip()` = `uv2clipZ(uv,
+  gl_FragCoord.z)`.
+* The ray march is drawn by `drawfs.vert`, whose `gl_Position.z = 1.0`. Under
+  X4's reversed-Z infinite-far projection (near 0.1 m) that is **the near
+  plane**: the direction is the vector from the centre camera to a point
+  0.1 m out.
+* `X4VR_PROJ_INVPROJ` (on since take 83) corrects `M_invprojection` and
+  `M_invprojection_uj` per eye. That is right for the deferred lights, which
+  rebuild a POSITION from the eye's depth. Here it moves the 0.1 m point by
+  half the IPD and turns the direction by atan(0.032/0.1) ≈ 17.7°, opposite
+  in each eye (~35° between them, more at the field's edge).
+* With roll stereo the shear vector turns with head roll, so the error turns
+  with it: the parallelogram.
+* Its scene-depth lookup, `RetrieveZBufferViewPos`, uses `M_invprojection`
+  (a position), which the correction serves correctly.
+* **The premise, checked on X4's real module:** the mod's own patcher
+  accepts mod-0474 for member 2 AND member 4 (`PATCHED=1`) and refuses
+  copy_gamma (mod-0012), the control. The shipped build did bend this shader
+  per eye.
+* The design comment at the patch site said "exactly 2 of 385 fragment
+  modules take member 4: the shadow cascades". Written before the fog shaders
+  were ever loaded, it did not anticipate a module using the inverse for a
+  direction.
+
+## Built for take 349: the fog ray march keeps X4's own inverse projections
+
+* A fragment module declaring `U_volume_box_position` (only mod-0473/0474
+  among take 347's 519) gets **neither** per-eye inverse:
+  * Member 4 is the direction: the defect.
+  * Member 2 is the depth where fog meets geometry; the centre camera costs
+    3.2 cm there, invisible.
+  * The older `volume_raymarch` takes its direction from member 2.
+* X4's own inverse gives each pixel's direction at infinity, the same in
+  both eyes, which is right for a fog box kilometres away. **The cost:** the
+  fog carries no per-eye disparity, so a wisp right in front of the ship has
+  no depth.
+* `X4VR_FOG_RAY_PER_EYE=1` restores the old patch (takes ≤ 348).
+* `x4vr::spv::declares_member_name` (common/x4vr_spirv.hpp), tested in
+  tests/spirv_names.cpp:
+  * a committed fixture shaped like the ray march is recognised;
+  * prefixes, longer names, empty names and the plain invproj fixture are
+    not;
+  * the census over take 347's dumps finds exactly mod-0473/0474.
+  * The GPU harness cannot run this fixture (it binds only its own shaders;
+    the previous build crashes on it identically), so the layer's gate is
+    proven in-game by its log line.
+* Scorer `fog` reports the kept count.
+
+### P349 — the nebula in both eyes
+
+Take 345's line (eye dumps), new number, same route: the usual save, then the
+map's teleport to Matrix #79B.
+
+* **P349.1** `fog: … 1+ module(s) kept on X4's own inverse projections`
+  (only once the fog is met).
+* **P349.2** In the eye dumps the nebula is in the same place in both eyes.
+* **P349.3 (Patola)** The nebula looks the same in both eyes, and rolling
+  the head no longer distorts it.
+* **P349.4** Everything else unchanged: shadows in both eyes (the deferred
+  lights keep their per-eye inverse). Scorer PASS.
+
+    X4VR_TAKE=349 X4VR_MV_DUMP=/tmp/x4vr-t349 X4VR_MV_DUMP_PRESENT=900 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take349.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh

@@ -1397,6 +1397,16 @@ extern std::atomic<bool> g_offaxis_on;
 extern std::atomic<bool> g_offaxis_latched;
 // ...and M_invprojection_uj, the one the shadow cascades actually read.
 std::atomic<uint64_t> g_invproj_uj_patched{0};
+// Fragment modules of X4's volumetric fog ray march that kept X4's own
+// inverse projections (take 348; see the patch site).
+std::atomic<uint64_t> g_fog_ray_kept{0};
+inline bool fog_ray_per_eye() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_FOG_RAY_PER_EYE");
+        return e && *e && *e != '0';
+    }();
+    return on;
+}
 // Task #22 measurement only. Counts modules whose volumetric fog composite was
 // forced to a passthrough, to separate "the fog produces the difference between
 // the eyes" from "the fog carries a difference made upstream".
@@ -3894,6 +3904,14 @@ void bindless_report(const char *when) {
                  "corrected (offline: 2 of 385 fragment modules take it; these "
                  "are the shadow cascades)",
                  when, (unsigned long long)g_invproj_uj_patched.load());
+        // Take 348: the fog ray march, kept on X4's own inverses on purpose.
+        if (g_fog_ray_kept.load() || fog_ray_per_eye())
+            X4VR_LOG("invproj %s: fog ray march — %llu module(s) kept on X4's "
+                     "own inverse projections%s",
+                     when, (unsigned long long)g_fog_ray_kept.load(),
+                     fog_ray_per_eye() ? " (X4VR_FOG_RAY_PER_EYE=1: none, "
+                                         "patched per eye as before take 349)"
+                                       : "");
         // Task #39. The affine on gl_Position and its undoing in the deferred
         // reconstruction are one change in two places, and the state where the
         // first happened and the second did not is a DEFECT, not a partial
@@ -5899,7 +5917,38 @@ VkResult create_shader_module_inner(
         // undone here cannot drift apart again.
         const uint32_t rset =
             roll_active(oa) ? pose_set_index() : 0xffffffffu;
-        if (x4vr::spv::patch_fragment_invproj_eye(
+        // **Not X4's volumetric fog ray march** (takes 345-348). Its
+        // GetRay() takes the ray's DIRECTION from UnProjectUJ(GetFragClip())
+        // at gl_FragCoord.z of X4's full-screen triangle -- 1.0, which under
+        // reversed-Z is the near plane, 0.1 m out -- and starts the ray at
+        // the centre camera. The per-eye inverse moves that near-plane point
+        // by half the IPD, which is right for a position and turns this
+        // direction by atan(0.032/0.1) ~ 18 deg, opposite in each eye; with
+        // roll stereo the turn follows head roll ("like a square turning
+        // into a parallelogram", Patola, take 348). X4's own inverse gives
+        // the pixel's direction at infinity, the same in both eyes, which is
+        // what a fog box kilometres away needs. Its scene-depth lookup
+        // (member 2) loses 3.2 cm against the eye's depth -- invisible where
+        // fog meets a hull -- and the older volume_raymarch takes its
+        // direction from member 2, so both are kept. Found by name:
+        // U_volume_box_position is only in this program's modules.
+        // X4VR_FOG_RAY_PER_EYE=1 restores the per-eye patch (takes <= 348).
+        const bool fog_ray =
+            !fog_ray_per_eye() &&
+            x4vr::spv::declares_member_name(code, "U_volume_box_position");
+        if (fog_ray) {
+            g_fog_ray_kept++;
+            static uint32_t said = 0;
+            if (said++ < 8)
+                X4VR_LOG("invproj: X4's volumetric fog ray march "
+                         "(U_volume_box_position), fragment module %llu of "
+                         "this kind — X4's own inverse projections KEPT: it "
+                         "un-projects the near plane for a ray direction, "
+                         "which the per-eye shear would turn by ~18 deg "
+                         "(X4VR_FOG_RAY_PER_EYE=1 restores it)",
+                         (unsigned long long)g_fog_ray_kept.load());
+        }
+        if (!fog_ray && x4vr::spv::patch_fragment_invproj_eye(
                 code, kCameraSet, kCameraBinding, kCameraInvProjMember, dl,
                 dr, oal, oar, pset, 0, rset, kPoseBinding)) {
             frag_patched = true;
@@ -5909,7 +5958,7 @@ VkResult create_shader_module_inner(
         // two are wildly different populations -- 236 modules take member 2
         // and exactly 2 take member 4 -- so a single total would let a
         // healthy-looking 236 hide a 0 here, which is the whole defect.
-        if (x4vr::spv::patch_fragment_invproj_eye(
+        if (!fog_ray && x4vr::spv::patch_fragment_invproj_eye(
                 code, kCameraSet, kCameraBinding, kCameraInvProjUjMember,
                 dl, dr, oal, oar, pset, 0, rset, kPoseBinding)) {
             frag_patched = true;

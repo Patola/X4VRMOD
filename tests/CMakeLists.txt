@@ -112,6 +112,7 @@ configure_file(sample_alias_binding.frag.spv sample_alias_binding.frag.spv COPYO
 configure_file(sample_camera_block.vert.spv sample_camera_block.vert.spv COPYONLY)
 configure_file(sample_light_volume.vert.spv sample_light_volume.vert.spv COPYONLY)
 configure_file(sample_invproj.frag.spv sample_invproj.frag.spv COPYONLY)
+configure_file(sample_volume_ray.frag.spv sample_volume_ray.frag.spv COPYONLY)
 configure_file(sample_combined.spv sample_combined.spv COPYONLY)
 # Task #76's pair: the copy_gamma shape, and the collider that must be refused.
 configure_file(sample_uiswitch.frag.spv sample_uiswitch.frag.spv COPYONLY)
@@ -203,6 +204,8 @@ add_executable(x4vr_test_steer steer.cpp)
 add_executable(x4vr_test_foot foot.cpp)
 # x4vr_menus.hpp: X4's open-menu table and conversation state, read not called.
 add_executable(x4vr_test_menus menus.cpp)
+# declares_member_name: the fog ray march found by its property name (take 348).
+add_executable(x4vr_test_spirv_names spirv_names.cpp)
 # The content.xml fork that enables our extensions for the modded session.
 add_executable(x4vr_test_content_fork content_fork.cpp)
 target_link_libraries(x4vr_test_camwatch PRIVATE Threads::Threads)

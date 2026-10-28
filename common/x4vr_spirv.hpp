@@ -4693,6 +4693,42 @@ inline bool patch_fragment_disable_fog(std::vector<uint32_t> &code) {
     return true;
 }
 
+/// Whether any block in the module has a member called `name` (its
+/// `OpMemberName`). X4's runtime GLSL compile keeps the names, and a
+/// shader's uniform property names are a fingerprint of which X4 shader it
+/// is (`tools/name_module.py` rests on the same fact). Take 348's use:
+/// `U_volume_box_position` marks the volumetric fog's ray march. A module
+/// without names answers false, which leaves it to the default path.
+inline bool declares_member_name(const std::vector<uint32_t> &code,
+                                 const char *name) {
+    std::vector<Inst> insts;
+    if (!name || !*name || !iterate(code, insts))
+        return false;
+    for (const auto &in : insts) {
+        if (in.op != OpMemberName || in.len < 4)
+            continue;
+        const uint32_t *w = &code[in.start];
+        const char *p = name;
+        bool stop = false, eq = false;
+        for (uint32_t i = 3; i < in.len && !stop; i++)
+            for (int b = 0; b < 4; b++) {
+                const char c = (char)((w[i] >> (8 * b)) & 0xff);
+                if (c != *p) {
+                    stop = true;
+                    break;
+                }
+                if (!c) {
+                    eq = stop = true;
+                    break;
+                }
+                p++;
+            }
+        if (eq)
+            return true;
+    }
+    return false;
+}
+
 /// Replaces every load of one `uint` member of one uniform block with a
 /// constant, so the branch it feeds becomes statically known.
 ///

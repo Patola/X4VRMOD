@@ -1149,6 +1149,15 @@ else
     ok "shader dumps written -> no FAIL"
 fi
 absent "shader dumps not asked -> silent" "$BASE" shaders
+# The fog ray march kept on X4's own inverses (take 349).
+if grep -qF '"invproj %s: fog ray march — %llu module(s) kept on X4'"'"'s "' layer/x4vr_layer.cpp; then
+    ok "fog: the planted line matches the layer's format"
+else
+    bad "fog: the layer's format changed — replant the line below"
+fi
+{ cat "$BASE"; echo '[  999970.000] layer   invproj final: fog ray march — 1 module(s) kept on X4'"'"'s own inverse projections'; } > /tmp/census-fog.log
+want "fog: the kept module counted" /tmp/census-fog.log fog "1 module(s) kept on X4's own inverse projections"
+absent "fog: none -> silent" "$BASE" "fog "
 # ------------------------------------------ take 343's two false FAILs
 # The map check: X4 resumes walking mouselook a few ms before the HUD comes
 # back (the hand-back) -- not take 147's mouselook in the middle of the map.
