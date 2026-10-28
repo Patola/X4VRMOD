@@ -559,7 +559,7 @@ static void camstamp_at_first_pass() {
 // has judged it". Take 221 judged it on two independent channels -- the
 // scorer read the sign off the log (17 of 17 tilted samples) and Patola
 // reported the compensated arm comfortable at every tilt in both directions.
-// Tagged as v0.77-roll-stereo with the default still OFF, so the validated
+// Tagged as take-221-roll-stereo with the default still OFF, so the validated
 // state reproduces exactly at that tag.
 //
 // Default-ON rather than opt-in because the defect it removes is invisible to

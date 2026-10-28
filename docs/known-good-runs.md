@@ -780,7 +780,7 @@ the **fraction of rows** carrying a sign-consistent column-to-column step, not
 the median over rows — the median needs the seam to span >50% of the height and
 returns a false ABSENT when a station covers part of the view.
 
-## Take 274 — `v0.57-canvas-far`: the UI fuses everywhere it has a HUD
+## Take 274 — `take-274-canvas-far`: the UI fuses everywhere it has a HUD
 
 **A state is code and knobs**, and this one is knobs: no code changed between
 take 273 and take 274. The single variable is `X4VR_CANVAS_M`, 0.7 -> 1000.
@@ -838,7 +838,7 @@ run carries `X4VR_MV_DUMP` and `X4VR_UI_DUMP=1800:6:150`, and a dump burst
 stalls the frame — so the jitter is NOT attributable from this take. It needs a
 dumpless repeat before it is called a defect or dismissed as one.
 
-## Take 325 — `v0.325-shadows-fixed`: #70 fixed, 110° with stable shadows
+## Take 325 — `take-325-shadows-fixed`: #70 fixed, 110° with stable shadows
 
 **#70 was X4's, not ours.** X4's cascade fit sized each cascade sideways by
 1/tan(field/2) where the frustum needs tan(field/2). The fix,
@@ -886,7 +886,7 @@ judges the cascade X4 drew from it.
 * Head translation via camera+0x5a0.
 * Black edges at 110° not explicitly confirmed gone (asked after take 325).
 
-## Take 333 (2026-10-27) — tag v0.333-steering-a — the shipping line until take 339
+## Take 333 (2026-10-27) — tag take-333-steering-a — the shipping line until take 339
 
 Patola: *"it feels very natural this way, and the cursor when steering mode
 is off too. This was what I was achieving to get and now I am sure this is
@@ -902,7 +902,7 @@ The shipping line is take 333's with **X4VR_STEER=a**. Take 333 itself ran
 
     X4VR_TAKE=<n> X4VR_STEER=a X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take<n>.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
 
-## Take 339 (2026-10-28) — tag v0.339-foot-menus — THE SHIPPING LINE
+## Take 339 (2026-10-28) — tag take-339-foot-menus — THE SHIPPING LINE
 
 Walking mode B joins the shipping line. Patola chose B after take 335 (*"B
 looks more natural to me so that would be my choice"*). Take 338 confirmed it:

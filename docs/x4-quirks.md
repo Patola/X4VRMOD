@@ -10207,7 +10207,7 @@ across the pair, so they do not confound the A/B.
 
 ## CLOSED TODAY, with tags
 
-* **#76 CLOSED**, tagged `v0.76-ui-field`. `X4VR_UI_FOV` now defaults **ON**
+* **#76 CLOSED**, tagged `take-268-ui-field`. `X4VR_UI_FOV` now defaults **ON**
   (`=0` disables; omitting no longer does). The default lives in
   `x4vr::ui_fov_from_env()` and is pinned by `view_math`.
 * **#83 ANSWERED.** The HUD reads at 2816x2816. Price, matched on draws=117:
@@ -11814,7 +11814,7 @@ reach teardown — `score_run.py` says so about the pose channel — so:
   (1/kp - 1)*(head - head_at_last_pose)`), no clock, no dt. Take 214: tau 35.6
   -> 10.7 ms, 0.30x, about 1T. `X4VR_HEADLOOK_LEAD=1.0`.
 * **#77 head roll turning the disparity VERTICAL — CLOSED**, tagged
-  `v0.77-roll-stereo`, and `X4VR_ROLL_STEREO` now defaults ON. Take 221 agreed
+  `take-221-roll-stereo`, and `X4VR_ROLL_STEREO` now defaults ON. Take 221 agreed
   on two independent channels: the scorer read the sign off the log (17 of 17)
   and Patola reported the compensated arm comfortable at every tilt.
   A **regression** in it was found later by reading code, not from a run: the
@@ -20531,7 +20531,7 @@ because it is teardown, but it is a defect and not folklore.
 
 Four takes on 2026-09-19, command line byte-identical apart from `X4VR_TAKE`
 and `X4VR_LOG`, so the only variables are the runtime and the headset's
-refresh setting. Tagged `v0.78-steamvr`.
+refresh setting. Tagged `take-303-steamvr`.
 
 ### The deadlock is gone, and this is the first SteamVR run
 
@@ -22218,7 +22218,7 @@ for weeks, and the backtrace named our code in one line.
 
 ### Roll stereo has been OFF since take 260 — a withdrawn elimination's knob stayed in the line
 
-`v0.77-roll-stereo` was confirmed by take 221 with the pose channel on
+`take-221-roll-stereo` was confirmed by take 221 with the pose channel on
 (`X4VR_POSE=1`, as in every take 243-256): Patola comfortable at every head
 tilt, the control arm comfortable only when level. Take 260 set `X4VR_POSE=0`
 as an elimination, which was **withdrawn the same session** (*"the pose channel
@@ -22227,8 +22227,8 @@ The knob stayed. Every canonical line since carries `X4VR_POSE=0`, so
 `X4VR_ROLL_STEREO` has patched nothing for about 55 takes, and the scorer's FAIL
 saying so was read past every time.
 
-**Not restored here, deliberately.** Everything tagged since — `v0.76-ui-field`,
-`v0.57-canvas-far`, `v0.78-steamvr` — was established with `X4VR_POSE=0`, so
+**Not restored here, deliberately.** Everything tagged since — `take-268-ui-field`,
+`take-274-canvas-far`, `take-303-steamvr` — was established with `X4VR_POSE=0`, so
 `X4VR_POSE=1` has never run alongside #76's HUD fix, and the pose channel
 carried its own standing FAIL (falls back to identity once after being driven).
 Restoring it is a take of its own with one observable — tilt the head: does the
@@ -23158,7 +23158,7 @@ symptoms are distinct and each was measured alone before (245A, 228).
 * **P320.3** the log declares ±45.72 deg, reports no head translation, and the
   scorer passes.
 
-## Take 320 — SCORED: both refixes hold. Tagged `v0.320-shadows-pivot`
+## Take 320 — SCORED: both refixes hold. Tagged `take-320-shadows-pivot`
 
 PASS. Field declared ±45.72 per eye (`X4VR_FOV=1.24`), no head translation,
 full circle again, roll to 50 deg with the compensation's sign right. Patola:
@@ -23345,7 +23345,7 @@ on. WiVRn, configuration 1.
 view in this session; the mouse is never captured by head-look, so moving it
 moves X4's cursor (and steers the ship if X4 is in mouse steering).
 
-## Take 321 — SCORED: head-look WITHOUT MOUSELOOK works, and hover with it. Tagged `v0.321-headlook-write`
+## Take 321 — SCORED: head-look WITHOUT MOUSELOOK works, and hover with it. Tagged `take-321-headlook-write`
 
 PASS. 44 396 writes, 0 failed, MOUSELOOK pressed **0** times; x4vrmod_headlook
 served ENABLED; clean exit (gamescope's own SIGABRT only). Patola:
@@ -23985,7 +23985,7 @@ it, and in CONTROL phases the fade comes back by design. WiVRn, configuration 1.
 If it holds, the shipping line is this one without X4VR_CSM_AB (FIX always),
 and it gets tagged.
 
-## Take 325 — SCORED: #70 is fixed in the headset. Tagged `v0.325-shadows-fixed`
+## Take 325 — SCORED: #70 is fixed in the headset. Tagged `take-325-shadows-fixed`
 
 Patola:
 
@@ -24032,7 +24032,7 @@ was not looking for them. Take 326 checks it on purpose.
 
 ## P326 — the shipping line, first run (FIX always)
 
-The tagged line (docs/known-good-runs.md, `v0.325-shadows-fixed`) with
+The tagged line (docs/known-good-runs.md, `take-325-shadows-fixed`) with
 X4VR_TAKE=326. Its one untested path is `X4VR_CSM_AB` unset: FIX from the
 first player camera, X4's own sizing in menus and loading (no camera, no
 field). Takes 324 and 325 only ran the A/B form.
@@ -24846,7 +24846,7 @@ not. The pattern is fixed and the census has a case for it (225/225).
 
 **#46's menus are CLOSED: every full-screen menu, the map and the ESC menu,
 reachable edge to edge with head-look on.** Tagged
-`v0.330-menus-reachable` (a30569b, the code that ran).
+`take-330-menus-reachable` (a30569b, the code that ran).
 
 **Next, per "Decisions after take 328":** steering A/B with the live toggle
 (B default, F8 or apostrophe). Its geometry was measured on 328B's circles:
@@ -25189,7 +25189,7 @@ to get and now I am sure this is what is needed. We won't need mode B."*
 * **P333.3, P333.4 HELD.** Menus 20/20 centred; csmfit 615/615; tracking
   p90 0.88°/0.28°. No crash in the journal.
 
-Tagged **v0.333-steering-a** (495db77). The shipping line is in
+Tagged **take-333-steering-a** (495db77). The shipping line is in
 docs/known-good-runs.md: take 333's line with `X4VR_STEER=a`.
 * B stays in the code but is not used.
 * The apostrophe still flips to B. Removing the toggle, or making it A-only,
@@ -25720,7 +25720,7 @@ Take 337's line, new name. WiVRn, configuration 1.
 
     X4VR_TAKE=338 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take338.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
 
-## Take 338 — SCORED PASS: B works (tag v0.338-walking-b, bda8794)
+## Take 338 — SCORED PASS: B works (tag take-338-walking-b, bda8794)
 
 Patola: *"When I get in the cockpit, headlook is still working perfectly.
 When I leave the cockpit, head turning seems to work perfectly, and I can use
@@ -26294,3 +26294,14 @@ in Matrix #79B and CEO's Doubt.
     frame, not written over it.
 * Menus seen: StationConfigurationMenu (seat), ShipConfigurationMenu (foot),
   TransporterMenu, MapMenu, OptionsMenu, TopLevelMenu. No glitch reported.
+
+## 2026-10-28 — v0.9.0, and the tags renamed
+
+Patola chose `v0.9.0` for the release. The earlier bookmarks
+(`v0.57`/`v0.76`/`v0.77`/`v0.78`, named by task, and `v0.320` … `v0.343`,
+named by take) sorted above it, so they became `take-NNN-name` on the same
+commits with the same messages. This document's references were renamed
+mechanically; the table is in docs/releases.md.
+
+I first suggested `v0.9.0` without checking how it sorts against the old
+tags, which defeated the reason he wanted a bigger number. Now recorded.

@@ -11,14 +11,16 @@ Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
 **[docs/frame-analysis.md](docs/frame-analysis.md)**; the traps X4 sets for
 modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 
-> **Status: runs in a headset; not yet released.** X4 runs in VR with
-> in-engine stereo (per-eye lighting), head tracking, and the UI on a canvas at
-> the angle X4 intended, over WiVRn or SteamVR. Open work is mostly the cursor
-> shim (the pointer in the cockpit), frame pacing at full resolution, and head
-> translation — see *Where it stands* below. An earlier proof of concept using
-> OpenTrack head-tracking + vkShade/SuperDepth3D depth-image reconstruction is
-> preserved at tag `v0.1`; it was abandoned as a dead end (wrong pivot, gimbal
-> lock, fragile setup, DIBR artifacts).
+> **Status: v0.9.0 — playable in VR** ([release notes](docs/releases.md)).
+> X4 runs in VR with in-engine stereo (per-eye lighting), head-look in the
+> cockpit and on foot, the UI on a canvas at the angle X4 intended, and every
+> menu reachable and lined up with the cursor, over WiVRn or SteamVR. Open
+> work: the external, target and cinematic views and the start menu still show
+> as a window rather than the whole scene, and the skybox differs between the
+> eyes in some sectors. An earlier proof of concept using OpenTrack
+> head-tracking + vkShade/SuperDepth3D depth-image reconstruction is preserved
+> at tag `v0.1`; it was abandoned as a dead end (wrong pivot, gimbal lock,
+> fragile setup, DIBR artifacts).
 
 ## How it works
 
@@ -68,17 +70,26 @@ blocks every frame.
 | Correct stereo with per-eye lighting; X4's own pointer in each eye | done | `stage2-stereo-shading-correct`, `stage3-cursor-in-eye` |
 | X4 in a headset: eye image submitted to an OpenXR runtime | done | `stage9-first-light` |
 | Head tracking, closed loop on X4's own camera read-back | done | `stage12-headtracking-working` |
-| Stereo stays horizontal under head roll | done — but see note | `v0.77-roll-stereo` |
-| UI at the angle X4 lays it out for (the sliding HUD fixed) | done | `v0.76-ui-field` |
-| UI fuses wherever there is a HUD | done | `v0.57-canvas-far` |
-| SteamVR as well as WiVRn | done | `v0.78-steamvr` |
-| Cursor shim: pointer usable in cockpit and menus | in progress | — |
+| Stereo stays horizontal under head roll | done — but see note | `take-221-roll-stereo` |
+| UI at the angle X4 lays it out for (the sliding HUD fixed) | done | `take-268-ui-field` |
+| UI fuses wherever there is a HUD | done | `take-274-canvas-far` |
+| SteamVR as well as WiVRn | done | `take-303-steamvr` |
+| Shadows stable at 110° (X4 sizes its cascades by 1/tan) | done | `take-325-shadows-fixed` |
+| Head-look by writing X4's free-look (hover works with it) | done | `take-321-headlook-write` |
+| Cursor shim: pointer usable in cockpit and menus | done | `take-330-menus-reachable`, `take-343-right-click` |
+| Mouse-steering target fixed to the cockpit | done | `take-333-steering-a` |
+| Walking: the head looks, the mouse and arrows turn the body | done | `take-338-walking-b` |
+| On-foot menus, dialogues, teleporters and vendors lined up | done | `take-341-foot-menu-start` |
+| **Playable in VR** | **release** | **`v0.9.0`** |
+| External / target / cinematic views and the start menu as the whole scene | open | — |
+| Skybox stereo in some sectors (Matrix #79B, CEO's Doubt) | open | — |
 | Frame pacing at 2816² per eye (a 90 Hz display is starved) | open | — |
 | Head translation (lean) | open — X/Y built and switched off, Z needs depth | — |
 
-**Note on roll stereo:** it needs `X4VR_POSE=1`, and the working command line
-has carried `X4VR_POSE=0` since take 260, so it is currently inactive. See
-*"Roll stereo has been OFF since take 260"* in [docs/x4-quirks.md](docs/x4-quirks.md).
+**Note on roll stereo:** it needs `X4VR_POSE=1`. Between takes 260 and 315
+the working command line carried `X4VR_POSE=0`, so it was inactive (see *"Roll
+stereo has been OFF since take 260"* in [docs/x4-quirks.md](docs/x4-quirks.md));
+the v0.9.0 command line carries `X4VR_POSE=1` and `X4VR_ROLL_STEREO=1`.
 
 The engineering record — every take, prediction, and wrong turn — is
 [docs/x4-quirks.md](docs/x4-quirks.md); the tagged states and their exact
