@@ -124,10 +124,23 @@ asm(".text\n"
     "  movaps 0x30(%rcx), %xmm5\n  movaps 0x00(%rcx), %xmm8\n"
     "  jmp *%rdi\n");
 
+// The frame at 0x192a27f, X4's early return: the same pushes, rbx = the
+// camera, rbp = `out` (the pivot's pose, already evaluated), rax = the slot
+// X4 compares with, r13 = the pivot.
+extern "C" void ext_enter_b(const void *stub, uintptr_t camera, float *out,
+                            const uintptr_t *slot, uintptr_t pivot);
+asm(".text\n"
+    ".globl ext_enter_b\n"
+    "ext_enter_b:\n"
+    "  push %r13\n  push %r12\n  push %rbp\n  push %rbx\n"
+    "  sub $0x58, %rsp\n"
+    "  mov %rsi, %rbx\n  mov %rdx, %rbp\n  mov %rcx, %rax\n  mov %r8, %r13\n"
+    "  jmp *%rdi\n");
+
 int main(int argc, char **argv) {
-    // --emit <path>: the stub's bytes, placeholders for the injector's own
+    // --emit A|B <path>: a stub's bytes, placeholders for the injector's own
     // addresses, for objdump -D -b binary -mi386:x86-64.
-    if (argc == 3 && !strcmp(argv[1], "--emit")) {
+    if (argc == 4 && !strcmp(argv[1], "--emit")) {
         extview::StubAddrs a{};
         a.root_slot = extview::kRootGlobal;
         a.player_cam = extview::kPlayerCamOff;
@@ -135,10 +148,15 @@ int main(int argc, char **argv) {
         a.own = extview::kCamOwn;
         a.rows_slot = 0x1111111111111111ull;
         a.applied = 0x2222222222222222ull;
+        a.seen = 0x3333333333333333ull;
         a.after_loads = extview::kAfterLoads;
         a.x4_compose = extview::kComposeVa;
+        a.ret = extview::kReturnVa;
+        a.cont = extview::kEarlyEnd;
         uint8_t code[extview::kStubMax];
-        const size_t n = extview::make_stub(code, a);
+        const size_t n = argv[2][0] == 'B' ? extview::make_early_stub(code, a)
+                                           : extview::make_stub(code, a);
+        argv[2] = argv[3];
         FILE *f = fopen(argv[2], "wb");
         if (!f || fwrite(code, 1, n, f) != n)
             return 1;
@@ -196,6 +214,15 @@ int main(int argc, char **argv) {
             check(csmfit::disp_for(extview::kTailJmp, 5, near_stub, &d) &&
                       extview::kTailJmpEnd + (intptr_t)d == near_stub,
                   "a stub below X4's image is in rel32 reach of the jmp");
+            // Site B: the early return's five bytes, as X4 has them.
+            uint8_t eb[5] = {};
+            elf.read(extview::kEarlyCmp, eb, 5);
+            check(!memcmp(eb, extview::kEarlyBytes, 5) && extview::early_site_ok(&bad),
+                  "site B: cmp %r13,(%rax); je 0x192a216 at 0x192a27f, the je "
+                  "landing on X4's return");
+            foot::pages_of(extview::kEarlyCmp, 5, 4096, &first, &count);
+            check(first == 0x192a000 && count == 1,
+                  "site B (0x192a27f..0x192a283) lies in one page");
         }
     }
 
@@ -224,11 +251,12 @@ int main(int argc, char **argv) {
         a.own = extview::kCamOwn;
         a.rows_slot = (uintptr_t)&slot.cur;
         a.applied = (uintptr_t)&slot.applied;
+        a.seen = (uintptr_t)&slot.orbit_seen;
         a.after_loads = (uintptr_t)page + (extview::kAfterLoads - extview::kComposeVa);
         a.x4_compose = (uintptr_t)page;
         uint8_t code[extview::kStubMax];
         const size_t len = extview::make_stub(code, a);
-        check(len == 269, "the stub is 269 bytes");
+        check(len <= extview::kStubMax && len < 1024, "stub A fits its buffer");
         memcpy(page + 1024, code, len);
         const void *stub = page + 1024;
 
@@ -282,6 +310,7 @@ int main(int argc, char **argv) {
                   std::fabs(out.m[2] - want_x4.m[2]) < 1e-3f,
               "the camera stays where X4's orbit put it (only its rows turn)");
 
+        const uint64_t seen0 = slot.orbit_seen.load();
         n0 = slot.applied.load();
         set_cam(camera, 0, own);
         out = run(camera);
@@ -297,6 +326,9 @@ int main(int argc, char **argv) {
         out = run(camera);
         check(max_diff(out, want_x4) < 1e-3f && slot.applied.load() == n0,
               "rows withdrawn: X4's own compose");
+        check(slot.orbit_seen.load() == seen0 + 1,
+              "stub A counts the player's camera outside mode 0 reaching it, "
+              "rows or not (only the withdrawn case of the three)");
         const Mat x4_out = out; // X4's own compose, executed
         slot.publish(rows);
         root_slot = 0;
@@ -368,6 +400,92 @@ int main(int argc, char **argv) {
         // X4's state is untouched: the camera's own transform as it was.
         check(!memcmp(camera + extview::kCamOwn, own.m, sizeof own.m),
               "the camera's own transform (X4's orbit) is never written");
+
+        // 1b. Stub B, X4's early return (take 353), executed: its `ret` is
+        // X4's epilogue, its `cont` X4's tail loads followed by the compose
+        // (both position-independent, copied).
+        static const uint8_t kTailLoads[] = {0x0f, 0x28, 0x75, 0x10, 0x0f, 0x28,
+                                             0x7d, 0x20, 0x0f, 0x28, 0x6d, 0x30,
+                                             0x44, 0x0f, 0x28, 0x45, 0x00};
+        check(!memcmp(kTailLoads, extview::kModesBytes + (0x192a284 - extview::kModes.va),
+                      sizeof kTailLoads),
+              "the copied tail loads are X4's (0x192a284)");
+        uint8_t *const epi = page + 2048;
+        memcpy(epi, extview::kComposeBytes + (extview::kReturnVa - extview::kComposeVa),
+               sizeof extview::kComposeBytes - (extview::kReturnVa - extview::kComposeVa));
+        uint8_t *const cont = page + 2304;
+        memcpy(cont, kTailLoads, sizeof kTailLoads);
+        memcpy(cont + sizeof kTailLoads, extview::kComposeBytes,
+               sizeof extview::kComposeBytes);
+        a.seen = (uintptr_t)&slot.early_seen;
+        a.ret = (uintptr_t)epi;
+        a.cont = (uintptr_t)cont;
+        const size_t len_b = extview::make_early_stub(code, a);
+        check(len_b <= extview::kStubMax, "stub B fits its buffer");
+        memcpy(page + 1536, code, len_b);
+        const void *stub_b = page + 1536;
+        static uintptr_t x4slot = 0; // what X4 compares the pivot with
+        const uintptr_t piv = 0x7f00cafe0000;
+        auto run_b = [&](uint8_t *c, uintptr_t slot_val, const Mat &in) {
+            Mat o = in; // `out` holds the pivot's pose on entry
+            x4slot = slot_val;
+            ext_enter_b(stub_b, (uintptr_t)c, o.m, &x4slot, piv);
+            return o;
+        };
+        slot.publish(rows);
+        set_cam(camera, 2, own);
+        uint64_t a0 = slot.applied.load(), e0 = slot.early_seen.load();
+        Mat ob = run_b(camera, piv, pivot);
+        const Mat want_b = compose(head, pivot);
+        snprintf(what, sizeof what,
+                 "B: the early return, the player's camera in mode 2: out = H x "
+                 "out, in place (max diff %.2g), counted",
+                 max_diff(ob, want_b));
+        check(max_diff(ob, want_b) < 1e-3f && slot.applied.load() == a0 + 1 &&
+                  slot.early_seen.load() == e0 + 1,
+              what);
+        check(std::fabs(ob.m[0] - pivot.m[0]) < 1e-6f &&
+                  std::fabs(ob.m[1] - pivot.m[1]) < 1e-6f &&
+                  std::fabs(ob.m[2] - pivot.m[2]) < 1e-6f,
+              "B: the position is X4's (the head turns about the eye)");
+        {
+            float y = 0.f, p = 0.f;
+            Mat r0 = run_b(camera, piv, unit);
+            check(foot::head_angles_of_rows(r0.m + 4, &y, &p) &&
+                      std::fabs(y - head_yaw) < 1e-3f &&
+                      std::fabs(p - head_pitch) < 1e-3f,
+                  "B: from a level pose the camera looks at the head's angle");
+        }
+        a0 = slot.applied.load(), e0 = slot.early_seen.load();
+        set_cam(camera, 0, own);
+        ob = run_b(camera, piv, pivot);
+        check(max_diff(ob, pivot) == 0.f && slot.applied.load() == a0 &&
+                  slot.early_seen.load() == e0,
+              "B: mode 0: X4's return, out untouched, nothing counted");
+        set_cam(other, 2, own);
+        ob = run_b(other, piv, pivot);
+        check(max_diff(ob, pivot) == 0.f && slot.applied.load() == a0,
+              "B: another camera: X4's return, out untouched");
+        set_cam(camera, 2, own);
+        slot.withdraw();
+        ob = run_b(camera, piv, pivot);
+        check(max_diff(ob, pivot) == 0.f && slot.applied.load() == a0 &&
+                  slot.early_seen.load() == e0 + 1,
+              "B: rows withdrawn: out untouched, the early return still counted");
+        slot.publish(rows);
+        e0 = slot.early_seen.load();
+        ob = run_b(camera, piv + 0x40, pivot);
+        snprintf(what, sizeof what,
+                 "B: not the early return (X4's slot holds another object): "
+                 "X4's continuation, own x out (max diff %.2g), nothing counted",
+                 max_diff(ob, want_x4));
+        check(max_diff(ob, want_x4) < 1e-3f && slot.applied.load() == a0 &&
+                  slot.early_seen.load() == e0,
+              what);
+        slot.publish(ident);
+        ob = run_b(camera, piv, pivot);
+        check(max_diff(ob, pivot) < 1e-6f,
+              "B: head centred: X4's pose unchanged");
         munmap(page, 4096);
     }
 

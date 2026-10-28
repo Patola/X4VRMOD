@@ -1183,6 +1183,25 @@ mpup='[  999975.000] inject  headlook: HUD is now up (IsInPanelMode=0) — steer
 want "map: mouselook 11 ms before the HUD returns is the hand-back" /tmp/census-map-handback.log "map   " "1 HUD-down interval(s), 1 of them free of mouselook"
 { cat "$BASE"; printf '%s\n' "$mpkey" "$mpdn" '[  999973.000] inject  sdl: relative mouse mode ON (fold stands down)' "$mpup"; } > /tmp/census-map-relapse.log
 want "map: mouselook in the middle of the menu still FAILs" /tmp/census-map-relapse.log "FAIL|  - " "X4 re-entered mouselook inside 1 HUD-down"
+# Take 353: off the pilot seat relative mode is X4's walking -- a teleporter
+# closed, X4 resumed walking 0.5 s before landing him in the seat.
+mpout='[  999969.000] inject  headlook: out of the pilot seat — head-look continues on foot (X4VR_HEADLOOK_FOOT): the head looks'
+mpin='[  999974.900] inject  headlook: in the pilot seat — the write may act'
+{ cat "$BASE"; printf '%s\n' "$mpout" "$mpkey" "$mpdn" '[  999974.400] inject  sdl: relative mouse mode ON (fold stands down)' "$mpin" "$mpup"; } > /tmp/census-map-walk.log
+want "map: walking resumed off the seat -> set aside" /tmp/census-map-walk.log "map   " "1 relative-mode entry off the pilot seat set aside (X4's walking)"
+if python3 tools/score_run.py /tmp/census-map-walk.log 2>&1 | grep -q "re-entered mouselook"; then
+    bad "map: walking resumed off the seat -> FAILs (take 353's false FAIL)"
+else
+    ok "map: walking resumed off the seat -> no FAIL"
+fi
+mpin0='[  999969.500] inject  headlook: in the pilot seat — the write may act'
+{ cat "$BASE"; printf '%s\n' "$mpout" "$mpin0" "$mpkey" "$mpdn" '[  999973.000] inject  sdl: relative mouse mode ON (fold stands down)' "$mpup"; } > /tmp/census-map-seated.log
+want "map: back in the seat, mouselook mid-menu still FAILs" /tmp/census-map-seated.log "FAIL|  - " "X4 re-entered mouselook inside 1 HUD-down"
+if grep -qF '"headlook: %s",' injector/x4vr_inject.cpp && grep -qF '"in the pilot seat — the write may act"' injector/x4vr_inject.cpp && grep -qF '"out of the pilot seat — head-look continues on "' injector/x4vr_inject.cpp; then
+    ok "map: the planted seat lines match the injector's format"
+else
+    bad "map: the injector's seat lines moved"
+fi
 # menucam: X4 easing the seat's camera to 0 after he sits down is centred at
 # the end; a camera left at the head's angle is still off there.
 { cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$mccen" "$(mcpose 999990.300 -2.3650 23.1370)" "$(mcpose 999990.500 -1.0620 10.7140)" "$(mcpose 999990.700 -0.5290 5.3140)" "$(mcpose 999990.900 -0.0730 0.7310)" "$(mcpose 999991.000 -0.0160 0.1630)" "$(mcpose 999994.700 0.0000 0.0000)" "$(mcpose 999994.900 0.0000 0.0000)" "$mcup" "$mcrep"; } > /tmp/census-mc-ease.log
@@ -1316,6 +1335,18 @@ want "extview: composed but the layer never declared -> FAIL" /tmp/census-ev-nol
 { cat "$BASE"; printf '%s\n' "$evpat" "$evview" "$evon"; } > /tmp/census-ev-unasked.log
 want "extview: acted without being asked -> FAIL" /tmp/census-ev-unasked.log "FAIL|  - " "the external-view patch acted in a run that did not ask for it"
 absent "extview: not asked, nothing -> silent" "$BASE" extview
+# Take 354 on: the OFF line says which path the player's camera took.
+evoffp='[  999970.000] inject  extview: period 1 OFF — the external view was left; the stub composed the head 812 time(s) in 9.0 s | the player'"'"'s camera reached the orbit compose 0 time(s), X4'"'"'s early return 812 time(s)'
+{ cat /tmp/census-ev-base.log; printf '%s\n' "$evpat" "$evview" "$evon" "$evdecl" "$evlay" "$evoffp"; } > /tmp/census-ev-path.log
+want "extview: the path the camera took -> listed" /tmp/census-ev-path.log extview "| path: orbit compose 0, early return 812"
+evoffn='[  999966.000] inject  extview: period 1 OFF — the external view was left; the stub composed the head 0 time(s) in 5.0 s | the player'"'"'s camera reached the orbit compose 0 time(s), X4'"'"'s early return 0 time(s)'
+{ cat /tmp/census-ev-base.log; printf '%s\n' "$evpat" "$evview" "$evon6" "$evnever" "$evoffn"; } > /tmp/census-ev-neither.log
+want "extview: neither site reached -> FAIL says so" /tmp/census-ev-neither.log "FAIL|  - " "the stub never composed the head — X4 took a path the patch does not cover"
+if grep -qF '"%llu time(s) in %.1f s | the player'"'"'s camera reached the "' injector/x4vr_inject.cpp; then
+    ok "extview: the planted path counts match the injector's format"
+else
+    bad "extview: the injector's path-count format moved"
+fi
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

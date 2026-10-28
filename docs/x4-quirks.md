@@ -26845,3 +26845,56 @@ is orbit × head), as on foot.
 around inside them); the numpad still orbits F2/F3/F4 with no drift; the
 cockpit and walking are unchanged; X4's orbit (`local` in the foot census)
 does not move with the head alone.
+
+## Take 353 — the external-view stub never ran; X4 leaves by its early return (patch v2)
+
+Patola: *"The numpads worked well as per the last fix. However, all of the
+modes were still in a window: F2, F3, F4 and F6."* Scorer: two FAILs, one
+per external period (23.2 s mode 2; 33.8 s mode 2→4): **the stub composed
+0 times**, so nothing was declared. A third FAIL was the scorer's own (below).
+
+**What the log says.**
+* Patched cleanly (stub at 0x3d0000; the walking stub is at 0x3e0000, a
+  separate page). Rows were published all 57 s.
+* `GetCameraRotation` followed the orbit exactly: F2 numpad, `rot` net
+  −17.70/−14.80 against the camera's own `local` −18.07/−14.83. So X4's
+  cached camera includes the orbit.
+* That cache is read by 0x1925bf0 (`GetCameraRotation` → 0x1925bf0, entry
+  "relative to nothing") and filled only by 0x192a310, which calls 0x1929f70
+  for the camera itself (callers 0x1026525, 0x1dcc445 pass the same object
+  as camera and cache owner). So 0x1929f70 runs for the player's camera, and
+  for it never reached the jmp at 0x192a295 with the gates passing.
+* The one exit of modes 2–5 before that jmp is at 0x192a27f:
+  `cmp %r13,(%rax); je 0x192a216` — return with `out` = the pivot alone when
+  the pivot (class-0x57 ancestor-or-self of the camera's +0x788, via
+  0x189d8f0) is `[root+0x448]`. X4's external-view switches (0x1d7dd51 for
+  F2/F3, 0x1d7e373 for F4) call 0x1938b30(camera, target, [root+0x448]),
+  which stores that third argument in **+0x788**. So in the external views
+  the pivot slot holds `[root+0x448]` itself.
+* Reading: `[root+0x448]` is an object that carries the camera's pose, orbit
+  included, and 0x1929f70 returns it as is. **Not yet proven** — patch v2
+  measures it.
+
+**Patch v2 (designed and tested offline; awaiting approval).**
+* Site A unchanged (0x192a295), plus a counter: the player's camera outside
+  mode 0 reached it (`orbit_seen`).
+* **Site B, 0x192a27f:** the five bytes `4c 39 28 74 92` (cmp; je return)
+  become `e9 <rel32>` to stub B (288 bytes). Nothing in .text jumps into
+  0x192a27f..0x192a283 (all e8/e9/0f8x/eb/7x scanned). Stub B repeats X4's
+  `cmp [rax],r13`; not equal → 0x192a284 (X4's continuation). Equal → for
+  the player's camera outside mode 0 it counts (`early_seen`), and with rows
+  published it turns `out`'s rows in place (H × out) → X4's return.
+* The period lines now say which path the camera took, and at the start
+  print +0x780, +0x788 and `root+0x448` with their vtables.
+* tests/extview.cpp runs stub B on both branches with X4's own epilogue and
+  continuation behind it (copied, position-independent): the early return
+  turned in place, position unchanged; mode 0, other camera and no rows leave
+  `out` untouched; the continuation gives X4's own × out; head centred
+  leaves the pose unchanged.
+
+**The scorer's false FAIL.** "X4 re-entered mouselook inside a HUD-down
+interval": a station teleporter closed on foot and X4 resumed its walking
+mouse 0.5 s before landing him in the pilot seat. Off the seat relative mode
+is X4's walking, never our free-look key (write mode presses none); the
+check now sets those aside and says so. A planted case keeps the seated
+relapse a FAIL.

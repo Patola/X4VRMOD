@@ -5102,7 +5102,7 @@ static void extview_patch_at_start() {
     }
     auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
     uintptr_t bad = 0;
-    if (!verify_sites(rd, &bad)) {
+    if (!verify_sites(rd, &bad) || !early_site_ok(&bad)) {
         char why[160];
         snprintf(why, sizeof why,
                  "0x1929f70's code at %#lx differs from X4 9.00",
@@ -5110,10 +5110,12 @@ static void extview_patch_at_start() {
         refuse(why);
         return;
     }
-    const uintptr_t site = kTailJmp;
-    void *stub = x4vr::csmfit::alloc_near(0x3f0000, 0x7c00000, &site, 1, 5);
-    if (!stub) {
-        refuse("no free page within rel32 reach of 0x192a295");
+    // One page for both stubs, within rel32 reach of both sites.
+    const uintptr_t sites[2] = {kTailJmp, kEarlyCmp};
+    uint8_t *page = (uint8_t *)x4vr::csmfit::alloc_near(0x3f0000, 0x7c00000,
+                                                        sites, 2, 5);
+    if (!page) {
+        refuse("no free page within rel32 reach of 0x192a27f and 0x192a295");
         return;
     }
     StubAddrs a{};
@@ -5125,37 +5127,54 @@ static void extview_patch_at_start() {
     a.applied = (uintptr_t)&g_extslot.applied;
     a.after_loads = kAfterLoads;
     a.x4_compose = kComposeVa;
+    a.ret = kReturnVa;
+    a.cont = kEarlyEnd;
     uint8_t code[kStubMax];
-    const size_t len = make_stub(code, a);
-    memcpy(stub, code, len);
-    const long page = sysconf(_SC_PAGESIZE);
-    if (mprotect(stub, (size_t)page, PROT_READ | PROT_EXEC) != 0) {
-        refuse("mprotect(rx) of the stub failed");
+    a.seen = (uintptr_t)&g_extslot.orbit_seen;
+    const size_t len_a = make_stub(code, a);
+    memcpy(page, code, len_a);
+    uint8_t *const stub_b = page + 512;
+    a.seen = (uintptr_t)&g_extslot.early_seen;
+    const size_t len_b = make_early_stub(code, a);
+    memcpy(stub_b, code, len_b);
+    const long pgsz = sysconf(_SC_PAGESIZE);
+    if (mprotect(page, (size_t)pgsz, PROT_READ | PROT_EXEC) != 0) {
+        refuse("mprotect(rx) of the stubs failed");
         return;
     }
-    int32_t want = 0;
-    if (!x4vr::csmfit::disp_for(kTailJmp, 5, (uintptr_t)stub, &want)) {
-        refuse("the stub is out of rel32 reach of 0x192a295");
+    int32_t want_a = 0, want_b = 0;
+    if (!x4vr::csmfit::disp_for(kTailJmp, 5, (uintptr_t)page, &want_a) ||
+        !x4vr::csmfit::disp_for(kEarlyCmp, 5, (uintptr_t)stub_b, &want_b)) {
+        refuse("a stub is out of rel32 reach of its site");
         return;
     }
+    // A: the jmp's rel32. B: the five bytes `cmp %r13,(%rax); je` become
+    // `jmp stub B`. Both in the page 0x192a000; X4 has run no frame yet.
+    uint8_t jmp_b[5] = {0xe9};
+    memcpy(jmp_b + 1, &want_b, 4);
     char err[200] = "";
-    if (!x4vr::foot::patch_code(kTailRel32, &want, 4, err, sizeof err)) {
+    if (!x4vr::foot::patch_code(kTailRel32, &want_a, 4, err, sizeof err) ||
+        !x4vr::foot::patch_code(kEarlyCmp, jmp_b, 5, err, sizeof err)) {
         refuse(err);
         return;
     }
     int32_t got = 0;
-    if (!self_read(kTailRel32, &got, 4) || got != want ||
-        kTailJmpEnd + (intptr_t)got != (uintptr_t)stub) {
-        refuse("the read-back of the patched jmp does not point at the stub");
+    uint8_t got_b[5] = {};
+    if (!self_read(kTailRel32, &got, 4) || got != want_a ||
+        kTailJmpEnd + (intptr_t)got != (uintptr_t)page ||
+        !self_read(kEarlyCmp, got_b, 5) || memcmp(got_b, jmp_b, 5) != 0) {
+        refuse("the read-back of a patched site does not point at its stub");
         return;
     }
     g_extpatch.patched = true;
     X4VR_LOG("extview: PATCHED — 0x1929f70's external-view compose (jmp at "
-             "%#lx, camera modes 2-5) now goes through a %zu-byte stub at %p: "
-             "for the player's camera, outside mode 0, with head rows "
+             "%#lx, camera modes 2-5) now goes through a %zu-byte stub at %p, "
+             "and its early return (%#lx, take 353) through a %zu-byte stub "
+             "at %p: for the player's camera, outside mode 0, with head rows "
              "published, the head's rotation is multiplied in before X4's "
-             "orbit; anything else composes as X4 does (0x192a15e)",
-             (unsigned long)kTailJmp, len, stub);
+             "orbit; anything else runs as X4 wrote it",
+             (unsigned long)kTailJmp, len_a, (void *)page,
+             (unsigned long)kEarlyCmp, len_b, (void *)stub_b);
 }
 
 // Each head-look tick in write mode: the head's rows published for the stub
@@ -5171,6 +5190,7 @@ static bool extview_tick(bool external, float head_yaw, float head_pitch,
     static double since = 0.0, last_line = 0.0;
     static int32_t last_mode = -1;
     static bool warned = false, told = false;
+    static uint64_t orbit0 = 0, early0 = 0;
     if (!g_extpatch.patched)
         return false;
     const uintptr_t cam = external ? x4_player_camera() : 0;
@@ -5197,16 +5217,45 @@ static bool extview_tick(bool external, float head_yaw, float head_pitch,
     g_ext_on.store(per.on, std::memory_order_relaxed);
     const double now = mono_seconds();
     const unsigned long long n = (unsigned long long)per.periods;
+    // Which path X4 took for the player's camera this period: the orbit
+    // compose (stub A) or the early return (stub B).
+    const uint64_t orbit_now = g_extslot.orbit_seen.load(std::memory_order_relaxed);
+    const uint64_t early_now = g_extslot.early_seen.load(std::memory_order_relaxed);
+    if (ev == extview::Period::kStarted) {
+        orbit0 = orbit_now;
+        early0 = early_now;
+    }
+    const unsigned long long d_orbit = (unsigned long long)(orbit_now - orbit0);
+    const unsigned long long d_early = (unsigned long long)(early_now - early0);
     switch (ev) {
-    case extview::Period::kStarted:
+    case extview::Period::kStarted: {
         since = last_line = now;
         warned = false;
         last_mode = mode;
+        // What the early return compares, read (take 353): the camera's
+        // pivot slot +0x788 and the root's +0x448, with their vtables.
+        uintptr_t root = 0, p448 = 0, p788 = 0, p780 = 0;
+        uintptr_t vt448 = 0, vt788 = 0, vt780 = 0;
+        if (self_read(extview::kRootGlobal, &root, 8) && root)
+            self_read(root + 0x448, &p448, 8);
+        self_read(cam + 0x788, &p788, 8);
+        self_read(cam + 0x780, &p780, 8);
+        if (p448)
+            self_read(p448, &vt448, 8);
+        if (p788)
+            self_read(p788, &vt788, 8);
+        if (p780)
+            self_read(p780, &vt780, 8);
         X4VR_LOG("extview: period %llu ON — external view, camera mode %d: "
                  "the head's rows published for the stub; the layer declares "
-                 "the head once the stub has composed them",
-                 n, (int)mode);
+                 "the head once the stub has composed them | attached +0x780 "
+                 "%p (vtable %p), pivot slot +0x788 %p (vtable %p), root+0x448 "
+                 "%p (vtable %p)%s",
+                 n, (int)mode, (void *)p780, (void *)vt780, (void *)p788,
+                 (void *)vt788, (void *)p448, (void *)vt448,
+                 p788 && p788 == p448 ? " — the pivot slot IS root+0x448" : "");
         break;
+    }
     case extview::Period::kDeclared:
         X4VR_LOG("extview: period %llu — the stub composed the head after "
                  "%.2f s: the layer declares head-look's angle, the external "
@@ -5220,14 +5269,16 @@ static bool extview_tick(bool external, float head_yaw, float head_pitch,
         break;
     case extview::Period::kEnded:
         X4VR_LOG("extview: period %llu OFF — %s; the stub composed the head "
-                 "%llu time(s) in %.1f s",
+                 "%llu time(s) in %.1f s | the player's camera reached the "
+                 "orbit compose %llu time(s), X4's early return %llu time(s)",
                  n,
                  !external ? "the external view was left"
                  : !cam    ? "no player camera"
                  : mode <= 0
                      ? "the camera is back in mode 0"
                      : "a full-screen menu is up (X4's UI: the window in front)",
-                 (unsigned long long)per.composed, now - since);
+                 (unsigned long long)per.composed, now - since, d_orbit,
+                 d_early);
         break;
     case extview::Period::kNone:
         break;
@@ -5241,15 +5292,18 @@ static bool extview_tick(bool external, float head_yaw, float head_pitch,
         warned = true;
         X4VR_LOG("extview: period %llu — the stub has NOT composed in %.1f s "
                  "(camera mode %d): X4 evaluates this camera by a path the "
-                 "patch does not cover; the picture stays a window in front",
-                 n, now - since, (int)mode);
+                 "patch does not cover; the picture stays a window in front "
+                 "| orbit compose reached %llu time(s), early return %llu",
+                 n, now - since, (int)mode, d_orbit, d_early);
     }
     if (per.on && now - last_line >= 5.0) {
         last_line = now;
         X4VR_LOG("extview: period %llu on — composed %llu time(s), head "
-                 "yaw %.2f pitch %.2f, camera mode %d%s",
+                 "yaw %.2f pitch %.2f, camera mode %d%s | orbit compose %llu, "
+                 "early return %llu",
                  n, (unsigned long long)per.composed, ext_yaw, ext_pitch,
-                 (int)mode, per.declared ? "" : " (NOT declared yet)");
+                 (int)mode, per.declared ? "" : " (NOT declared yet)", d_orbit,
+                 d_early);
     }
     *yaw_out = ext_yaw;
     *pitch_out = ext_pitch;

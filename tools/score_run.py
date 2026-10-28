@@ -4539,6 +4539,12 @@ def main(path):
     ev_never = {int(n): m for n, m in re.findall(
         r"extview: period (\d+) — the stub has NOT composed in [\d.]+ s "
         r"\(camera mode (-?\d+)\)", text)}
+    # Which path X4 took for the player's camera (take 354 on): the orbit
+    # compose (stub A) or the early return (stub B).
+    ev_path = {int(n): (int(a), int(b)) for n, a, b in re.findall(
+        r"extview: period (\d+) OFF — .*? \| the player's camera reached the "
+        r"orbit compose (\d+) time\(s\), X4's early return (\d+) time\(s\)",
+        text)}
     ev_modes = {}
     for n, a, b in re.findall(r"extview: period (\d+) — camera mode (-?\d+) "
                               r"-> (-?\d+)", text):
@@ -4562,17 +4568,25 @@ def main(path):
             decl = (f"declared after {ev_decl[n]:.2f} s" if n in ev_decl
                     else "NEVER declared")
             modes = "->".join([mode] + ev_modes.get(n, []))
+            path = ev_path.get(n)
             print(f"extview  #{n:<3d} t {float(t):10.1f}  mode {modes:<5s} "
                   f"{dur}  {comp}  {decl}"
-                  + (f"  ended: {off[0]}" if off else ""))
+                  + (f"  ended: {off[0]}" if off else "")
+                  + (f"  | path: orbit compose {path[0]}, early return "
+                     f"{path[1]}" if path else ""))
             # A period that lasted half a second and was never composed is
             # a view the patch does not cover: a window, not the scene.
             lasted = off[2] if off else 1e9
             if (n not in ev_decl) and lasted >= 0.5:
+                where = ("X4 took a path the patch does not cover"
+                         if not path or not any(path) else
+                         f"the player's camera reached the orbit compose "
+                         f"{path[0]} and the early return {path[1]} time(s) "
+                         f"with no rows composed")
                 fails.append(
                     f"external view {n} (camera mode "
                     f"{ev_never.get(n, mode)}): the stub never composed the "
-                    f"head — X4 took a path the patch does not cover")
+                    f"head — {where}")
         if ev_patched:
             print(f"extview  {len(ev_on)} period(s) over {ext_views} "
                   f"external-view entr{'y' if ext_views == 1 else 'ies'}; "
@@ -7691,12 +7705,29 @@ def main(path):
         # docked menu (11 ms) and left a station menu (23 ms), and this
         # FAILed both. Take 147's defect was mouselook in the middle of the
         # map; the last 0.1 s of an interval is X4 handing control back.
-        relapsed = [(a, [t for t in rel_on if a < t < b - 0.1])
+        # **And off the pilot seat altogether.** There relative mode is X4's
+        # walking control, never our free-look key: take 353 closed a
+        # station teleporter on foot, X4 resumed walking 0.5 s before the
+        # HUD came back (the teleport into the seat), and this FAILed it.
+        seat = [(ts(ln), "out" not in ln.split("headlook: ", 1)[1][:8])
+                for ln in lines
+                if re.search(r"headlook: (in|out of) the pilot seat — ", ln)]
+
+        def off_seat(t):
+            before = [s for ts_, s in seat if ts_ is not None and ts_ <= t]
+            return bool(before) and not before[-1]
+        rel_seat = [t for t in rel_on if not off_seat(t)]
+        walk_set_aside = sum(1 for a, b in intervals for t in rel_on
+                             if a < t < b - 0.1 and off_seat(t))
+        relapsed = [(a, [t for t in rel_seat if a < t < b - 0.1])
                     for a, b in intervals]
         relapsed = [(a, hits) for a, hits in relapsed if hits]
         print(f"map   {len(m_down)} M press(es), {len(intervals)} HUD-down "
               f"interval(s), {len(intervals) - len(relapsed)} of them free of "
-              f"mouselook ({len(hud_up)} re-acquire(s) after)")
+              f"mouselook ({len(hud_up)} re-acquire(s) after)"
+              + (f"; {walk_set_aside} relative-mode entr"
+                 f"{'y' if walk_set_aside == 1 else 'ies'} off the pilot seat "
+                 f"set aside (X4's walking)" if walk_set_aside else ""))
         if relapsed:
             a, hits = relapsed[0]
             fails.append(

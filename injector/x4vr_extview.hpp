@@ -31,6 +31,10 @@
 // (x4vr_foot.hpp) reaches 0x192a284 too, in mode 0, where head-look already
 // writes the camera's own transform; a second H there would double it.
 //
+// **Take 353: never reached.** For the player's camera X4 left before that
+// jmp, through the early return at 0x192a27f, so a second site covers it
+// (stub B, below); both count which path the camera takes.
+//
 // **Declared only once composed.** The stub counts every composition
 // (`applied`). The injector publishes the rows at the start of a period and
 // tells the layer to declare the head's angle only after the count has
@@ -185,14 +189,19 @@ inline void broadcast_rows(const float rows[12], HeadRows *out) {
                 out->v[3 * i + j][l] = rows[4 * i + j];
 }
 
-// What the stub reads: `cur`, the rows in effect or NULL (nothing composed),
-// and `applied`, bumped by the stub at every composition. Two buffers, so
-// the injector never writes the rows the stub may be reading: it fills the
-// other one and then swaps the pointer.
+// What the stubs read: `cur`, the rows in effect or NULL (nothing composed),
+// and their counters: `applied`, bumped at every composition; `orbit_seen`
+// and `early_seen`, bumped whenever the player's camera outside mode 0
+// reaches stub A (the orbit compose) or takes X4's early return (stub B),
+// rows or not -- which path X4 takes is the measurement take 353 lacked.
+// Two buffers, so the injector never writes the rows a stub may be
+// reading: it fills the other one and then swaps the pointer.
 struct Slot {
     HeadRows buf[2];
     std::atomic<HeadRows *> cur{nullptr};
     std::atomic<uint64_t> applied{0};
+    std::atomic<uint64_t> orbit_seen{0};
+    std::atomic<uint64_t> early_seen{0};
     int next = 0;
     void publish(const float rows[12]) {
         broadcast_rows(rows, &buf[next]);
@@ -201,8 +210,8 @@ struct Slot {
     }
     void withdraw() { cur.store(nullptr, std::memory_order_release); }
 };
-static_assert(sizeof(std::atomic<HeadRows *>) == 8, "the stub loads 8 bytes");
-static_assert(sizeof(std::atomic<uint64_t>) == 8, "the stub increments 8 bytes");
+static_assert(sizeof(std::atomic<HeadRows *>) == 8, "the stubs load 8 bytes");
+static_assert(sizeof(std::atomic<uint64_t>) == 8, "the stubs increment 8 bytes");
 
 struct StubAddrs {
     uintptr_t root_slot;   // kRootGlobal
@@ -211,88 +220,190 @@ struct StubAddrs {
     uint32_t own;          // kCamOwn
     uintptr_t rows_slot;   // &Slot::cur
     uintptr_t applied;     // &Slot::applied
-    uintptr_t after_loads; // kAfterLoads
-    uintptr_t x4_compose;  // kComposeVa
+    uintptr_t seen;        // &Slot::orbit_seen (A) / &Slot::early_seen (B)
+    uintptr_t after_loads; // A: kAfterLoads
+    uintptr_t x4_compose;  // A: kComposeVa
+    uintptr_t ret;         // B: kReturnVa
+    uintptr_t cont;        // B: kEarlyEnd
 };
 
-// The stub. Entered with rbx = the camera, rbp = `out`, xmm6/7/5/8 = the
-// pivot's rows and translation (live: X4's product reads them). Uses r11
-// (never used in 0x1929f70) and xmm0-xmm4, xmm10-xmm12 (X4's product writes
-// xmm4 and xmm9 before reading them and never reads xmm10+); flags are dead.
-//
-//     mov  r11, root_slot ; mov r11, [r11] ; test r11, r11 ; je x4
-//     cmp  rbx, [r11+0x3e8] ; jne x4            ; the player's camera
-//     cmp  dword [rbx+0x880], 0 ; je x4         ; never mode 0
-//     mov  r11, &cur ; mov r11, [r11] ; test r11, r11 ; je x4
-//     movaps xmm4/xmm10/xmm11, own rows 0/1/2
-//     xmm2/xmm1/xmm0 = h[i][0]*row0 + h[i][1]*row1 + h[i][2]*row2, i = 0/1/2
-//     movaps xmm3, own translation
-//     mov  r11, &applied ; lock inc qword [r11]
-//     mov  r11, after_loads ; jmp r11            ; X4's product, our rows
-//   x4:
-//     mov  r11, x4_compose ; jmp r11             ; X4's compose, untouched
-// 269 bytes as written; the buffer has room, and the stub page is 4096.
-constexpr size_t kStubMax = 320;
-inline size_t make_stub(uint8_t out[kStubMax], const StubAddrs &a) {
+// The byte emitter both stubs are written with; forward jumps are recorded
+// and fixed up to a label once it is known.
+struct Emit {
+    uint8_t *out;
     size_t i = 0;
-    auto b = [&](uint8_t v) { out[i++] = v; };
-    auto d32 = [&](uint32_t v) {
+    size_t fix[8] = {};
+    int target[8] = {};
+    int nfix = 0;
+    size_t label[4] = {0, 0, 0, 0};
+    explicit Emit(uint8_t *o) : out(o) {}
+    void b(uint8_t v) { out[i++] = v; }
+    void d32(uint32_t v) {
         memcpy(out + i, &v, 4);
         i += 4;
-    };
-    auto q = [&](uint64_t v) {
+    }
+    void q(uint64_t v) {
         memcpy(out + i, &v, 8);
         i += 8;
-    };
-    size_t to_x4[4];
-    int nj = 0;
-    auto jcc_x4 = [&](uint8_t cc) { // 0f 8x rel32, fixed up below
+    }
+    void jcc(uint8_t cc, int to) { // 0f 8x rel32 to label `to`
         b(0x0f), b(cc);
-        to_x4[nj++] = i;
+        fix[nfix] = i;
+        target[nfix++] = to;
         d32(0);
-    };
-    b(0x49), b(0xbb), q(a.root_slot); //    mov r11, imm64
-    b(0x4d), b(0x8b), b(0x1b);        //    mov r11, [r11]
-    b(0x4d), b(0x85), b(0xdb);        //    test r11, r11
-    jcc_x4(0x84);                     //    je x4
-    b(0x49), b(0x3b), b(0x9b), d32(a.player_cam); // cmp rbx, [r11+d32]
-    jcc_x4(0x85);                                 // jne x4
-    b(0x83), b(0xbb), d32(a.mode), b(0x00);       // cmp dword [rbx+d32], 0
-    jcc_x4(0x84);                                 // je x4
-    b(0x49), b(0xbb), q(a.rows_slot); //    mov r11, imm64
-    b(0x4d), b(0x8b), b(0x1b);        //    mov r11, [r11]
-    b(0x4d), b(0x85), b(0xdb);        //    test r11, r11
-    jcc_x4(0x84);                     //    je x4
-    b(0x0f), b(0x28), b(0xa3), d32(a.own + 0x10);            // movaps xmm4
-    b(0x44), b(0x0f), b(0x28), b(0x93), d32(a.own + 0x20);   // movaps xmm10
-    b(0x44), b(0x0f), b(0x28), b(0x9b), d32(a.own + 0x30);   // movaps xmm11
-    const uint8_t dst[3] = {2, 1, 0}; // X4's registers for own's rows 0/1/2
-    for (uint32_t r = 0; r < 3; r++) {
-        const uint8_t d = dst[r];
-        b(0x41), b(0x0f), b(0x10), b((uint8_t)(0x83 | d << 3)),
-            d32(48 * r);                                  // movups xmmd, [r11+]
-        b(0x0f), b(0x59), b((uint8_t)(0xc4 | d << 3));    // mulps xmmd, xmm4
-        b(0x45), b(0x0f), b(0x10), b(0xa3), d32(48 * r + 16); // movups xmm12
-        b(0x45), b(0x0f), b(0x59), b(0xe2);               // mulps xmm12, xmm10
-        b(0x41), b(0x0f), b(0x58), b((uint8_t)(0xc4 | d << 3)); // addps xmmd, xmm12
-        b(0x45), b(0x0f), b(0x10), b(0xa3), d32(48 * r + 32); // movups xmm12
-        b(0x45), b(0x0f), b(0x59), b(0xe3);               // mulps xmm12, xmm11
-        b(0x41), b(0x0f), b(0x58), b((uint8_t)(0xc4 | d << 3)); // addps xmmd, xmm12
     }
-    b(0x0f), b(0x28), b(0x9b), d32(a.own);  // movaps xmm3, own translation
-    b(0x49), b(0xbb), q(a.applied);         // mov r11, imm64
-    b(0xf0), b(0x49), b(0xff), b(0x03);     // lock inc qword [r11]
-    b(0x49), b(0xbb), q(a.after_loads);     // mov r11, imm64
-    b(0x41), b(0xff), b(0xe3);              // jmp r11
-    const size_t x4 = i;
-    b(0x49), b(0xbb), q(a.x4_compose);      // x4: mov r11, imm64
-    b(0x41), b(0xff), b(0xe3);              //     jmp r11
-    for (int k = 0; k < nj; k++) {
-        const int32_t rel = (int32_t)(x4 - (to_x4[k] + 4));
-        memcpy(out + to_x4[k], &rel, 4);
+    void mov_r11(uint64_t v) { b(0x49), b(0xbb), q(v); }
+    void jmp_abs(uint64_t v) { mov_r11(v), b(0x41), b(0xff), b(0xe3); }
+    void lock_inc(uint64_t at) { mov_r11(at), b(0xf0), b(0x49), b(0xff), b(0x03); }
+    // The player's camera, outside mode 0; else jump to label `no`.
+    void player_gates(const StubAddrs &a, int no) {
+        mov_r11(a.root_slot);
+        b(0x4d), b(0x8b), b(0x1b); // mov r11, [r11]
+        b(0x4d), b(0x85), b(0xdb); // test r11, r11
+        jcc(0x84, no);             // je no
+        b(0x49), b(0x3b), b(0x9b), d32(a.player_cam); // cmp rbx, [r11+d32]
+        jcc(0x85, no);                                 // jne no
+        b(0x83), b(0xbb), d32(a.mode), b(0x00);        // cmp dword [rbx+d32], 0
+        jcc(0x84, no);                                 // je no
     }
-    static_assert(kStubMax >= 269, "the stub is 269 bytes");
-    return i;
+    // r11 = the rows in effect; NULL -> label `no`.
+    void rows_gate(const StubAddrs &a, int no) {
+        mov_r11(a.rows_slot);
+        b(0x4d), b(0x8b), b(0x1b); // mov r11, [r11]
+        b(0x4d), b(0x85), b(0xdb); // test r11, r11
+        jcc(0x84, no);             // je no
+    }
+    // xmm2/xmm1/xmm0 = H x (xmm4, xmm10, xmm11): row i of the product is
+    // h[i][0]*row0 + h[i][1]*row1 + h[i][2]*row2, with r11 at the rows.
+    void head_times_rows() {
+        const uint8_t dst[3] = {2, 1, 0}; // X4's registers for rows 0/1/2
+        for (uint32_t r = 0; r < 3; r++) {
+            const uint8_t d = dst[r];
+            b(0x41), b(0x0f), b(0x10), b((uint8_t)(0x83 | d << 3)),
+                d32(48 * r);                                   // movups xmmd, [r11+]
+            b(0x0f), b(0x59), b((uint8_t)(0xc4 | d << 3));     // mulps xmmd, xmm4
+            b(0x45), b(0x0f), b(0x10), b(0xa3), d32(48 * r + 16); // movups xmm12
+            b(0x45), b(0x0f), b(0x59), b(0xe2);                // mulps xmm12, xmm10
+            b(0x41), b(0x0f), b(0x58), b((uint8_t)(0xc4 | d << 3)); // addps xmmd, xmm12
+            b(0x45), b(0x0f), b(0x10), b(0xa3), d32(48 * r + 32); // movups xmm12
+            b(0x45), b(0x0f), b(0x59), b(0xe3);                // mulps xmm12, xmm11
+            b(0x41), b(0x0f), b(0x58), b((uint8_t)(0xc4 | d << 3)); // addps xmmd, xmm12
+        }
+    }
+    void here(int l) { label[l] = i; }
+    size_t finish() {
+        for (int k = 0; k < nfix; k++) {
+            const int32_t rel = (int32_t)(label[target[k]] - (fix[k] + 4));
+            memcpy(out + fix[k], &rel, 4);
+        }
+        return i;
+    }
+};
+
+// Stub A, at the orbit compose (0x192a295's jmp). Entered with rbx = the
+// camera, rbp = `out`, xmm6/7/5/8 = the pivot's rows and translation (live:
+// X4's product reads them). Uses r11 (never used in 0x1929f70) and
+// xmm0-xmm4, xmm10-xmm12 (X4's product writes xmm4 and xmm9 before reading
+// them and never reads xmm10+); flags are dead.
+//
+//     player gates (root, rbx == [root+0x3e8], [rbx+0x880] != 0) else x4
+//     lock inc orbit_seen
+//     rows gate (r11 = rows) else x4
+//     movaps xmm4/xmm10/xmm11, own rows 0/1/2
+//     xmm2/xmm1/xmm0 = H x own's rows
+//     movaps xmm3, own translation
+//     lock inc applied ; jmp after_loads   ; X4's product, our rows
+//   x4:
+//     jmp x4_compose                       ; X4's compose, untouched
+constexpr size_t kStubMax = 320;
+inline size_t make_stub(uint8_t out[kStubMax], const StubAddrs &a) {
+    Emit e{out};
+    enum { X4 = 0 };
+    e.player_gates(a, X4);
+    e.lock_inc(a.seen);
+    e.rows_gate(a, X4);
+    e.b(0x0f), e.b(0x28), e.b(0xa3), e.d32(a.own + 0x10);          // movaps xmm4
+    e.b(0x44), e.b(0x0f), e.b(0x28), e.b(0x93), e.d32(a.own + 0x20); // xmm10
+    e.b(0x44), e.b(0x0f), e.b(0x28), e.b(0x9b), e.d32(a.own + 0x30); // xmm11
+    e.head_times_rows();
+    e.b(0x0f), e.b(0x28), e.b(0x9b), e.d32(a.own); // movaps xmm3, own.t
+    e.lock_inc(a.applied);
+    e.jmp_abs(a.after_loads);
+    e.here(X4);
+    e.jmp_abs(a.x4_compose);
+    return e.finish();
+}
+
+// ---- Site B: X4's early return (take 353) ---------------------------------
+//
+// Take 353: two external periods, 57 s, the stub above composed nothing,
+// while GetCameraRotation followed the orbit exactly (net -17.70/-14.80
+// against the camera's own -18.07/-14.83). So X4 composes the orbit for
+// the player's camera somewhere other than 0x192a15e. The one exit of the
+// modes 2-5 path before that jmp is at 0x192a27f: `cmp %r13,(%rax); je
+// 0x192a216` -- return with `out` = the pivot alone when the pivot is
+// [root+0x448], the object X4's external-view switch (0x1d7dd51, 0x1d7e373
+// via 0x1938b30) stores in the camera's +0x788. The reading: that object
+// carries the camera's pose, orbit included, and X4 returns it as is.
+//
+// Those five bytes become `jmp stub B` (nothing jumps into them, all of
+// .text scanned). Stub B repeats X4's comparison; not equal -> 0x192a284,
+// X4's own continuation. Equal -> for the player's camera outside mode 0
+// with rows published, `out`'s rows become H x out's rows, in place; then
+// X4's return either way. The early return's `out` is the camera's pose
+// relative to the caller's frame, so H turns it about the eye, as stub A
+// does with the orbit.
+inline constexpr uint8_t kEarlyBytes[] = {0x4c, 0x39, 0x28, 0x74, 0x92};
+constexpr uintptr_t kEarlyCmp = 0x192a27f; // cmp %r13,(%rax); je 0x192a216
+constexpr uintptr_t kEarlyEnd = 0x192a284;
+constexpr uintptr_t kReturnVa = 0x192a216;
+
+inline bool early_site_ok(uintptr_t *bad) {
+    // Inside kModes, so verify_sites has checked the bytes; here what they
+    // mean: the je lands on the return, the next instruction is the tail.
+    if (memcmp(kModesBytes + (kEarlyCmp - kModes.va), kEarlyBytes, 5) != 0) {
+        *bad = kEarlyCmp;
+        return false;
+    }
+    const int8_t rel = (int8_t)kEarlyBytes[4];
+    if (kEarlyEnd + rel != kReturnVa || kEarlyEnd != kEarlyCmp + 5) {
+        *bad = kEarlyCmp + 3;
+        return false;
+    }
+    return true;
+}
+
+//     cmp  [rax], r13 ; jne cont           ; X4's comparison, verbatim
+//     player gates else ret
+//     lock inc early_seen
+//     rows gate (r11 = rows) else ret
+//     movaps xmm4/xmm10/xmm11, out rows 0/1/2 ([rbp+0x10/0x20/0x30])
+//     xmm2/xmm1/xmm0 = H x out's rows
+//     movaps [rbp+0x10/0x20/0x30], xmm2/xmm1/xmm0
+//     lock inc applied
+//   ret:  jmp 0x192a216                     ; X4's return
+//   cont: jmp 0x192a284                     ; X4's continuation
+inline size_t make_early_stub(uint8_t out[kStubMax], const StubAddrs &a) {
+    Emit e{out};
+    enum { RET = 0, CONT = 1 };
+    e.b(0x4c), e.b(0x39), e.b(0x28); // cmp [rax], r13
+    e.jcc(0x85, CONT);               // jne cont
+    e.player_gates(a, RET);
+    e.lock_inc(a.seen);
+    e.rows_gate(a, RET);
+    e.b(0x0f), e.b(0x28), e.b(0x65), e.b(0x10);         // movaps xmm4, [rbp+0x10]
+    e.b(0x44), e.b(0x0f), e.b(0x28), e.b(0x55), e.b(0x20); // movaps xmm10, [rbp+0x20]
+    e.b(0x44), e.b(0x0f), e.b(0x28), e.b(0x5d), e.b(0x30); // movaps xmm11, [rbp+0x30]
+    e.head_times_rows();
+    e.b(0x0f), e.b(0x29), e.b(0x55), e.b(0x10); // movaps [rbp+0x10], xmm2
+    e.b(0x0f), e.b(0x29), e.b(0x4d), e.b(0x20); // movaps [rbp+0x20], xmm1
+    e.b(0x0f), e.b(0x29), e.b(0x45), e.b(0x30); // movaps [rbp+0x30], xmm0
+    e.lock_inc(a.applied);
+    e.here(RET);
+    e.jmp_abs(a.ret);
+    e.here(CONT);
+    e.jmp_abs(a.cont);
+    return e.finish();
 }
 
 // One external period: the rows are published while `want` holds; the
