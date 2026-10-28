@@ -4592,6 +4592,32 @@ def main(path):
                   f"external-view entr{'y' if ext_views == 1 else 'ies'}; "
                   f"{len(ev_decl)} declared; the layer switched "
                   f"{ev_layer} time(s)")
+        # Take 355: F6 entered from F4 kept the player's camera in mode 4,
+        # so the head was declared while X4 drew through its scene camera
+        # (root+0x3e0) -- a window glued to the face. The census (when on)
+        # says when that camera existed.
+        cs_scene = []
+        for t, desc in re.findall(r"\[\s*([\d.]+)\]\s+inject\s+camsurvey: "
+                                  r"\d+ camera\(s\) — (.*)", text):
+            cs_scene.append((float(t), "root+0x3e0 " in desc))
+        if cs_scene:
+            for t, n, mode in ev_on:
+                n = int(n)
+                if n not in ev_decl:
+                    continue
+                a = float(t) + ev_decl[n]
+                b = a + (ev_off[n][2] - ev_decl[n] if n in ev_off else 1e9)
+                up = 0.0
+                for i, (ts_, present) in enumerate(cs_scene):
+                    nxt = cs_scene[i + 1][0] if i + 1 < len(cs_scene) else 1e18
+                    if present:
+                        up += max(0.0, min(b, nxt) - max(a, ts_))
+                if up > 0.5:
+                    fails.append(
+                        f"external view {n}: the head was declared for "
+                        f"{up:.1f} s while X4's scene camera (root+0x3e0, "
+                        f"F6) existed — X4 was not drawing the camera the "
+                        f"head turned, so the window followed the face")
         if ev_asked and ev_patched and ext_views and not ev_on:
             fails.append(f"X4VR_HEADLOOK_EXTERNAL=1: {ext_views} external "
                          f"view(s) shown and the head turned none of them")

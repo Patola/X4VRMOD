@@ -5103,7 +5103,10 @@ static void extview_patch_at_start() {
     }
     auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
     uintptr_t bad = 0;
-    if (!verify_sites(rd, &bad) || !early_site_ok(&bad)) {
+    // SetSceneCameraActive too: the scene camera at root+0x3e0 is read each
+    // tick, and the head stands down while it exists (F6, take 355).
+    if (!verify_sites(rd, &bad) || !early_site_ok(&bad) ||
+        !x4vr::camsurvey::verify_scene_site(rd, &bad)) {
         char why[160];
         snprintf(why, sizeof why,
                  "0x1929f70's code at %#lx differs from X4 9.00",
@@ -5379,7 +5382,18 @@ static bool extview_tick(bool external, float head_yaw, float head_pitch,
     if (cam && !self_read(cam + extview::kCamMode, &mode, sizeof mode))
         mode = -1;
     const bool menu = g_fullscreen_up.load(std::memory_order_relaxed);
-    const bool want = external && cam && mode > 0 && !menu;
+    // **The cinematic view (F6) is drawn through X4's scene camera**
+    // (root+0x3e0), not the player's. Take 355: F6 entered from F4 left the
+    // player's camera in mode 4, so the head was composed into a camera X4
+    // was not drawing and declared to a picture it never turned -- the
+    // window followed the face. The slot is non-NULL exactly while F6 is up.
+    uintptr_t root = 0, scene = 0;
+    const bool cinematic = external &&
+                           self_read(extview::kRootGlobal, &root, 8) && root &&
+                           self_read(root + x4vr::camsurvey::kSceneCamOff,
+                                     &scene, 8) &&
+                           scene;
+    const bool want = external && cam && mode > 0 && !menu && !cinematic;
     const uint64_t applied = g_extslot.applied.load(std::memory_order_relaxed);
     const extview::Period::Event ev = per.step(want, applied);
     if (want) {
@@ -5457,6 +5471,9 @@ static bool extview_tick(bool external, float head_yaw, float head_pitch,
                  : !cam    ? "no player camera"
                  : mode <= 0
                      ? "the camera is back in mode 0"
+                 : cinematic
+                     ? "the cinematic view (F6) is up: X4 draws through its "
+                       "scene camera, a window in front"
                      : "a full-screen menu is up (X4's UI: the window in front)",
                  (unsigned long long)per.composed, now - since, d_orbit,
                  d_early);

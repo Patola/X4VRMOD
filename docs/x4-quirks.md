@@ -26951,3 +26951,50 @@ that in sequence rather than completely changing focus"*).
 * `score_run.py` `camsurvey` block: per camera, how far its cached pose
   turned with the HUD down outside the external views (F6) against
   elsewhere.
+
+## Take 355 — F6 is X4's scene camera; v0.9.3 glued F6-from-F4 to the face (fixed); the HUD in F2/F4
+
+Patola:
+* *"When I was doing 2, ok, as F6 was a window, I could turn my head away
+  from it. In 3, though, after doing F4 and then F6, the window was 'glued'
+  to my face and would follow it (without changing the scene)."*
+* *"Additionally, the F2 and F4 views now still have the cockpit HUD on it,
+  glued to my face -- F3 doesn't."*
+
+The scorer said PASS. It was wrong about the first point; re-scored with the
+new check below, it FAILs (83.8 s and 5.7 s).
+
+**What the census found.**
+* **F6 is drawn through X4's scene camera, `root+0x3e0`.** It has another
+  class (vtable 0x3b99e18, not the player camera's 0x3b99f78). The slot is
+  non-NULL **exactly** while F6 is up: set by the F6 press (within one HUD
+  change), a new object every 5–15 s (the cinematic cuts), NULL again at F1.
+  Its cached pose pans slowly between cuts.
+* `root+0x2f8` holds a second camera of the player's class, mode 0, turning
+  continuously in every view (not F6-specific; its role is unknown).
+* **F6 entered from F4 keeps the player's camera in mode 4 with the HUD
+  down.** X4's view still says external, so v0.9.3 composed the head into
+  that camera and declared it, while X4 drew the scene camera. The picture
+  never turned and the compositor carried it with the head: the glued
+  window. F6 entered from the cockpit leaves the player's camera in mode 0,
+  so nothing was declared and the window stayed world-locked.
+
+**Fixed (no change to the approved patch bytes):**
+* The injector stands the head down while `root+0x3e0` is non-NULL. It
+  withdraws the rows, so the stubs compose nothing, and the layer is back
+  to the window.
+* The read is gated on SetSceneCameraActive's bytes, verified at install
+  (the patch refuses otherwise).
+* `score_run.py` FAILs a declared period overlapping the scene camera's
+  presence, when the census is on.
+
+**F6 as the whole scene** would mean patching the scene camera's evaluation,
+for a camera that changes object at every cut. That stops here per Patola's
+priority.
+
+**The HUD in F2/F4 (open, asked).** The UI image is declared at the same
+pose as the scene. In the cockpit X4 draws its HUD anchored to the cockpit
+and counter-turns it with its own free-look, so it stays put (take 242). In
+the external views X4 does not know the head turned its camera, so anything
+it draws at a fixed screen place rides with the head. Whether take 354 had
+it too is asked; the fix depends on what X4 anchors that HUD to.

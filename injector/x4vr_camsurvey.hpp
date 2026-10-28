@@ -100,6 +100,25 @@ inline uintptr_t riprel(const Site &s, size_t at, size_t len) {
     return s.va + at + len + (intptr_t)d;
 }
 
+// SetSceneCameraActive alone: the root global and its scene camera at
+// +0x3e0. X4VR_HEADLOOK_EXTERNAL reads that slot (take 355: non-NULL exactly
+// while F6, the cinematic view, is up).
+template <class Reader> bool verify_scene_site(Reader read, uintptr_t *bad) {
+    if (!same_bytes(read, kScene, bad))
+        return false;
+    if (riprel(kScene, 0, 7) != kRootGlobal) {
+        *bad = kScene.va;
+        return false;
+    }
+    uint32_t off = 0;
+    memcpy(&off, kSceneBytes + 15, 4);
+    if (off != kSceneCamOff) {
+        *bad = kScene.va + 12;
+        return false;
+    }
+    return true;
+}
+
 // The bytes, and what they decode to: the two index globals, the root
 // global, root+0x3e0 and the render-side global.
 template <class Reader> bool verify_sites(Reader read, uintptr_t *bad) {

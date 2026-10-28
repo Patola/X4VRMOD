@@ -114,6 +114,23 @@ int main() {
                          (unsigned long)flip);
                 check(!camsurvey::verify_sites(rd2, &bad) && bad == flip, what);
             }
+            bad = 0;
+            check(camsurvey::verify_scene_site(rd, &bad),
+                  "SetSceneCameraActive alone (the external head's F6 test): "
+                  "the root and its scene camera at +0x3e0");
+            {
+                const uintptr_t flip = camsurvey::kScene.va + 15; // the 0x3e0
+                auto rd3 = [flip](uintptr_t va, void *o, size_t n) {
+                    if (!elf.read(va, o, n))
+                        return false;
+                    if (flip >= va && flip < va + n)
+                        ((uint8_t *)o)[flip - va] ^= 0x08;
+                    return true;
+                };
+                bad = 0;
+                check(!camsurvey::verify_scene_site(rd3, &bad) && bad == flip,
+                      "another offset than +0x3e0 -> refused there");
+            }
             check(elf.in_data(camsurvey::kIndexMain, 4) &&
                       elf.in_data(camsurvey::kIndexOther, 4) &&
                       elf.in_data(camsurvey::kRenderGlobal, 8) &&

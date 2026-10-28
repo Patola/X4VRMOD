@@ -1348,6 +1348,24 @@ else
     bad "extview: the injector's path-count format moved"
 fi
 
+# Take 355: the head declared while F6's scene camera existed (F6 from F4).
+csf6a='[  999962.000] inject  camsurvey: 2 camera(s) — root+0x3e8 0x7d6de7b3f080 (vtable 0x3d0aaa0, the player camera'"'"'s class), root+0x3e0 0x7d6de7b40000 (vtable 0x3d0bbb0)'
+csf6b='[  999968.000] inject  camsurvey: 1 camera(s) — root+0x3e8 0x7d6de7b3f080 (vtable 0x3d0aaa0, the player camera'"'"'s class)'
+csnoscene='[  999960.500] inject  camsurvey: 1 camera(s) — root+0x3e8 0x7d6de7b3f080 (vtable 0x3d0aaa0, the player camera'"'"'s class)'
+{ cat /tmp/census-ev-base.log; printf '%s\n' "$evpat" "$csnoscene" "$evview" "$evon" "$evdecl" "$evlay" "$csf6a" "$csf6b" "$evoff"; } > /tmp/census-ev-f6.log
+want "extview: head declared while F6's camera existed -> FAIL" /tmp/census-ev-f6.log "FAIL|  - " "external view 1: the head was declared for 6.0 s while X4's scene camera (root+0x3e0, F6) existed"
+{ cat /tmp/census-ev-base.log; printf '%s\n' "$evpat" "$csnoscene" "$evview" "$evon" "$evdecl" "$evlay" "$evoff"; } > /tmp/census-ev-nof6.log
+if python3 tools/score_run.py /tmp/census-ev-nof6.log 2>&1 | grep -q "scene camera (root+0x3e0, F6) existed"; then
+    bad "extview: no scene camera during the period -> FAILs"
+else
+    ok "extview: no scene camera during the period -> no FAIL"
+fi
+if grep -qF '"the cinematic view (F6) is up: X4 draws through its "' injector/x4vr_inject.cpp; then
+    ok "extview: the injector ends a period for F6's scene camera"
+else
+    bad "extview: the injector's F6 reason moved"
+fi
+
 # ------------------------------------ X4VR_CAMSURVEY (camsurvey)
 for f in 'camsurvey: window %.2f s view %s hud %d%s' \
          ' | %s %p mode %d att %p piv %p own %s cache %s' \
