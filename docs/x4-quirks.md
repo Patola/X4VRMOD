@@ -27082,3 +27082,33 @@ overlay did not fill the window."*
 * **Doing it for real** means making the UI shaders' canvas scale a runtime
   value instead of a baked constant, for every UI draw. Not attempted; F6 is
   low priority (Patola).
+
+## Next: F6's overlay at the full window, for real (before the start menu and 6DOF)
+
+Patola, after v0.9.4: *"the F6 overlay is different, it makes important
+things unreadable for starters, and the way it is now, it changes the game
+design, because this overlay should represent elements in that fictional
+screen it is being presented on. So this is actually important and needs
+fixing before the 6DOF."*
+
+**Design:**
+* The canvas map is `res = p + t·(K·p − p)` in every UI vertex shader
+  (patch_vertex_clip). K is baked; `t` selects screen-space vertices
+  (w ≈ 1).
+* Multiply `t` by a per-frame scalar `u`, read from the layer's pose
+  channel block (task #59, set 5, X4VR_POSE=1 in the shipping line), the
+  way the roll slot is read (a one-member view of PoseBlock at its own
+  offset).
+* `u` is 1 normally, 0 while the cinematic view is up, so F6's overlay is
+  laid out over the whole window. Nothing else changes.
+* **F6 signal:** the injector's (seated, HUD down, not paused, no
+  conversation, X4's menu table = {TopLevelMenu}), shared as before. It
+  needs a hold of about 0.3 s before ON: take 358 showed a 0.14 s false ON
+  as the ESC menu closed into the cockpit.
+* **The cursor:** in F6 the canvas cursor must be off too. With the HUD down
+  in the cockpit the menu-centring arm turns it on today.
+* **Tests:** spirv_patch offline (the slot read, u = 1 bit-identical to
+  today, u = 0 identity); the GPU harness (multiview_render) before a take.
+* **Before building:** confirm from a log that UI pipelines take the pose
+  set (pose `pipes_extended == pipes_seen`, and UI modules patched with the
+  pose view) in the shipping line. Take 358's lesson.
