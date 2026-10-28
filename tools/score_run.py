@@ -4638,6 +4638,24 @@ def main(path):
                   "and the numpad still orbits is Patola's to say; this says "
                   "the stub composed and the layer declared")
 
+    # --- the cinematic view's overlay at the full window (take 357) ---------
+    #
+    # The injector says when F6 is up (the HUD down in the pilot seat with
+    # only TopLevelMenu open); each such period must reach the layer as the
+    # UI quad enlarged, within a second.
+    cv_on = [float(t) for t in re.findall(
+        r"\[\s*([\d.]+)\]\s+inject\s+ui: cinematic view ON", text)]
+    cv_q = [float(t) for t in re.findall(
+        r"\[\s*([\d.]+)\]\s+layer\s+ui quad: CINEMATIC", text)]
+    if cv_on or cv_q:
+        late = [t for t in cv_on if not any(t - 0.05 <= q <= t + 1.0 for q in cv_q)]
+        print(f"cinematic  {len(cv_on)} cinematic-view period(s); the layer "
+              f"enlarged X4's UI {len(cv_q)} time(s)")
+        if late:
+            fails.append(f"the cinematic view: {len(late)} period(s) never "
+                         f"reached the layer as the UI at the full window "
+                         f"(first t={late[0]:.1f})")
+
     # --- X4VR_DUMP_SHADERS: the modules were written (take 346) -------------
     #
     # Take 346 asked for the dumps; the directory did not exist, the layer

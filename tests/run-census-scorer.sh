@@ -1366,5 +1366,19 @@ else
     bad "extview: the injector's HUD-down reason moved"
 fi
 
+# Take 357: the cinematic view's overlay at the full window.
+if grep -qF '"ui: cinematic view %s",' injector/x4vr_inject.cpp && grep -qF '"ON — the HUD down with only X4' injector/x4vr_inject.cpp && grep -qF '"CINEMATIC — X4' layer/x4vr_layer.cpp; then
+    ok "cinematic: the planted lines match the injector's and the layer's formats"
+else
+    bad "cinematic: a format moved"
+fi
+cvon='[  999970.000] inject  ui: cinematic view ON — the HUD down with only X4'"'"'s TopLevelMenu open in the pilot seat: X4'"'"'s UI is shown at the full window, so its overlay frames the picture'
+cvq='[  999970.020] layer   ui quad: CINEMATIC — X4'"'"'s UI shown at the full window (the canvas scale undone)'
+{ cat "$BASE"; printf '%s\n' "$cvon" "$cvq"; } > /tmp/census-cv-ok.log
+want "cinematic: reached the layer -> counted" /tmp/census-cv-ok.log cinematic "1 cinematic-view period(s); the layer enlarged X4's UI 1 time(s)"
+{ cat "$BASE"; printf '%s\n' "$cvon"; } > /tmp/census-cv-late.log
+want "cinematic: never reached the layer -> FAIL" /tmp/census-cv-late.log "FAIL|  - " "the cinematic view: 1 period(s) never reached the layer"
+absent "cinematic: none -> silent" "$BASE" cinematic
+
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

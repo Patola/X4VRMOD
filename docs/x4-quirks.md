@@ -27039,3 +27039,23 @@ again."* The code (injector, tests, scorer) is restored to v0.9.3 exactly;
 the camera census (X4VR_CAMSURVEY) and the scene-camera gate are gone. This
 file keeps the history. (Take 355 ran v0.9.3's head-turn code unchanged
 under a read-only census and showed the F4→F6 glue.)
+
+## Built for take 358: v0.9.3 + the HUD-down stand-down + F6's overlay at the full window
+
+* **F4→F6 (679e52c):** the external-view head stands down while the HUD is
+  down. F6 hides the HUD 20–30 ms after its key (takes 350, 355); F2/F3/F4
+  keep it. The scorer FAILs a declared period running on with the HUD down
+  (take 355 re-scores FAIL, 83.7 s and 5.7 s).
+* **F6's overlay** (Patola: *"It covers only about half of the area of the
+  window. It should be bigger and cover the entire window"*):
+  * It is X4's UI, laid out for the whole flat screen and shrunk by the
+    canvas scale (A = 0.5252) that puts the HUD at the angle X4 meant.
+  * The scale is baked into the UI shaders, but the UI has its own quad
+    layer. While F6 is up the layer enlarges that quad by 1/A, undoing the
+    scale exactly in tan space. No shader changes.
+  * **F6 signal:** in the pilot seat, the HUD down, not paused, no
+    conversation, and X4's open-menu table holding TopLevelMenu only. Checked
+    against every HUD-down stretch of takes 354–357 before it was built:
+    every F6 stretch matches, and nothing else (load-time stretches have no
+    menu or OptionsMenu and come before head-look arms).
+  * Share v11 `cinematic_ui`; scorer `cinematic` block.
