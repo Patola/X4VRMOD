@@ -4756,6 +4756,58 @@ FootPatch g_footpatch;
 std::atomic<bool> g_on_foot{false};
 } // namespace
 
+// X4VR_CURSOR_FOOT_AB=1 — alternate the on-foot menu cursor per opening: odd
+// openings through the UI canvas (arm A), even ones raw (arm B, take 338's).
+static bool cursor_foot_ab() {
+    static const bool on = x4vr::env_on("X4VR_CURSOR_FOOT_AB", false);
+    return on;
+}
+
+// **On-foot menus are UI too.** Take 338: after clicking an interactable
+// with a submenu, or an NPC, *"the cursor appears off the selected sections
+// of the submenu, depending on where I am looking"*. Neither is a full-screen
+// menu, so `auto` drew the cursor raw over them -- take 327's cockpit
+// right-click menu again: X4 lays its UI out scaled by the canvas map and
+// hit-tests it there, so the item under X4's pointer n is drawn at A*n while
+// the raw cursor sits at n, off by (1-A)*n -- nothing at the centre, growing
+// outward. When an opening counts is x4vr::foot::FootMenu's (tests/foot.cpp).
+// Called after headlook_tick on X4's main thread.
+static void foot_menu_tick() {
+    if (!cursor_canvas_auto())
+        return;
+    static x4vr::foot::FootMenu fm;
+    const auto ev = fm.step(g_on_foot.load(std::memory_order_relaxed),
+                            g_relative_mouse.load(std::memory_order_relaxed),
+                            mono_seconds(), cursor_foot_ab());
+    x4vr::Shared *sh = x4vr_shared_state();
+    if (ev == x4vr::foot::FootMenu::kOpened) {
+        // Where the head and the pointer were, so a report about one opening
+        // can be set against the two things the offset could depend on: the
+        // pointer's distance from the centre (the canvas) or the head's angle
+        // off the body.
+        X4VR_LOG("ui: on-foot menu %llu OPEN — X4 freed the pointer; the "
+                 "cursor is drawn %s | head-look yaw %.1f pitch %.1f | "
+                 "pointer %.0f,%.0f",
+                 (unsigned long long)fm.openings,
+                 fm.canvas ? "through the UI canvas (arm A)"
+                           : "at the raw pointer (arm B, take 338's)",
+                 g_camwrite.yaw, g_camwrite.pitch,
+                 sh ? sh->cursor_x.load(std::memory_order_relaxed) : -1.f,
+                 sh ? sh->cursor_y.load(std::memory_order_relaxed) : -1.f);
+        if (cursor_foot_ab())
+            X4VR_LOG("milestone: on-foot menu %llu — cursor %s",
+                     (unsigned long long)fm.openings,
+                     fm.canvas ? "A (canvas)" : "B (raw)");
+    } else if (ev == x4vr::foot::FootMenu::kClosed) {
+        X4VR_LOG("ui: on-foot menu %llu closed — the cursor is drawn at "
+                 "the raw pointer",
+                 (unsigned long long)fm.openings);
+    }
+    if (sh)
+        sh->foot_menu.store(fm.draw_canvas() ? 1u : 0u,
+                            std::memory_order_relaxed);
+}
+
 static void foot_patch_at_start() {
     using namespace x4vr::foot;
     if (!headlook_foot_asked())
@@ -5525,7 +5577,11 @@ void headlook_tick() {
     // It used to run after, which cost a frame of lag for no reason.
     X4Rotation r{};
     const bool have_cam = camread_enabled() && x4_camera_rotation(&r);
-    if (have_cam && g_camloop) {
+    // Not on foot: there GetCameraRotation is the body times the head, so
+    // against our command it is "off" by however far the mouse has turned
+    // him. Take 338 logged 9839 refusals and resyncs, every one of them the
+    // body; the write then put cmd back to the head, so only the log paid.
+    if (have_cam && g_camloop && !g_on_foot.load(std::memory_order_relaxed)) {
         const float obs_y = kRad2Deg * -r.yaw, obs_p = kRad2Deg * r.pitch;
         const float was_y = g_headlook.cmd_yaw_deg;
         const uint64_t was_resyncs = g_headlook.observe_resyncs;
@@ -6859,6 +6915,7 @@ void SDL_PumpEvents(void) {
         fieldab_tick();
         csmfit_tick();
         fullscreen_menu_tick();
+        foot_menu_tick();
         steer_tick();
         pumprate_report();
     }

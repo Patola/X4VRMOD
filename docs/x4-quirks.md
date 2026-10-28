@@ -25719,3 +25719,142 @@ Take 337's line, new name. WiVRn, configuration 1.
 * **P338.8** scorer PASS.
 
     X4VR_TAKE=338 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take338.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+## Take 338 — SCORED PASS: B works (tag v0.338-walking-b, bda8794)
+
+Patola: *"When I get in the cockpit, headlook is still working perfectly.
+When I leave the cockpit, head turning seems to work perfectly, and I can use
+W and walk in the direction of the body while looking sideways, just like
+expected ... I could also highlight interactables with my gaze ... In walking
+mode, mouse only turns left and right, not up and down."* The start menu and
+the loading screen look right to him now: his earlier report was his own bias
+from not using the cursor there as thoroughly before. Closed.
+
+The run: 470 s, 126 s seated, 277 s on foot, stood up at 46041.9 and sat back
+down at 46318.5. `score_run.py` PASS.
+
+* **P338.1 HELD.** `foot: PATCHED` at load, stub at 0x3e0000, no REFUSED.
+* **P338.2 HELD.** Cockpit tracking `|X4 - head|`: yaw median 0.07° p90 2.14,
+  pitch 0.06° p90 2.61, over 5900 ticks. Menus 4/4 centred, csmfit 79/79.
+  Seated census slopes: yaw 0.99, pitch 0.98.
+  * **The first reading said pitch 0.79**, and I tried to explain it before
+    reading it. My explanation (the menu-centred windows) was wrong: leaving
+    them out made it 0.56. The low windows are the loading period (before
+    the ARMED milestone, the write cannot act) and the sit-down animation.
+    The census now sets aside windows before ARMED, with the HUD down, or
+    within 2 s of a seat change. With that, 335/337/338 read 1.03/1.00/0.99
+    yaw, and 336's doubling still shows (2.03).
+* **P338.3 HELD.** On foot, head-only windows: X4's camera yaw slope 1.02,
+  pitch 0.99; the camera's own part (local) 0.99/1.00.
+  * The body is X4's camera minus head-look's part (rot − local). It follows
+    the mouse at −0.106°/count (r −0.95, 171 windows), which is 335's
+    −0.109/−0.106 unchanged.
+  * **The census had said "the mouse turns NOTHING we read" there.** It looks
+    for mouse-only windows (head still), and with head-look on foot the head
+    is almost never still. The body is now its own row, read as rot − local,
+    for runs with the patch.
+  * Also fixed: the mouse-only rows now need that axis's own motion. On foot
+    the mouse's pitch is zeroed, so the dy column was nearly all zeros, and
+    two windows had made "local pitch FOLLOWS mouse dy" (r −0.89 of 47).
+* **P338.4 HELD.** The mouse's pitch was zeroed in 11326 motion events off the
+  seat, and he saw no up/down.
+* **P338.5 answered: the highlight follows the gaze.** P338.6 (the crosshair)
+  was not reported.
+* **P338.7 HELD.** He reported no jump standing up or sitting down. The
+  on-foot HUD-down at 46099.85 was centred (from +23.88, −29.59), and he
+  found the exit menu's limits right. The map on foot was not tried.
+* **P338.8 HELD.** PASS.
+
+**Log cost found on the way:** 9839 `REFUSED read-back` / `RESYNC` lines on
+foot. There GetCameraRotation is the body times the head, so against our
+command it is "off" by however far the mouse has turned him. The write puts
+the command back to the head each tick, so only the log paid, at ~50 lines/s.
+The read-back is now skipped on foot.
+
+### The defect he flagged: on-foot submenus
+
+*"after clicking in an interactable that has a submenu, the cursor appears
+off the selected sections of the submenu, depending on where I am looking.
+This is worse for submenus that are a dialog, when clicking on an NPC,
+because choosing the options has less of a hover indication and that turns
+the interaction very slow."*
+
+**What the log shows.** On foot X4 freed the pointer four times with the HUD
+up: 46075.4 (6.3 s), 46168.7 (17.6 s), 46195.3 (48.8 s, the long one) and
+46307.4 (8.2 s). The HUD-down at 46099.8 also freed it.
+
+* X4 reported no full-screen menu for any of them, so `X4VR_CURSOR_CANVAS=auto`
+  drew the cursor raw.
+* Head-look kept writing throughout (HUD up). The head sat at about
+  (−49°, −20°), (+7°, −21°), (+5°, −26°) and (−10°, −21°) yaw/pitch, and
+  moved at most 2.4° yaw and 6° pitch within any one opening.
+* On foot the head carries all the pitch (the mouse's is zeroed), so in every
+  opening the head was about 20° below the body's horizon.
+
+**Two mechanisms fit "depending on where I am looking":**
+
+1. **The canvas (known since take 327).** This is the cockpit right-click
+   menu's defect, recorded in "Take 327 — SCORED", item 4, and never fixed.
+   * X4 lays its UI out scaled by the canvas map A = 0.5252 and hit-tests it
+     at the raw pointer n. So the option under X4's pointer is drawn at A·n.
+   * The raw cursor therefore sits 1/A ≈ 1.9 times as far from the window's
+     centre as the option it selects: nothing at the centre, growing outward.
+   * "Where I am looking" is then where in the window the cursor is.
+2. **The head.** On foot, X4 might draw its UI through one camera and
+   hit-test through another: one including head-look's part (our stub
+   composes it), the other not.
+   * The offset would then grow with the head's angle off the body, which on
+     foot is at least the ~20° of pitch.
+   * No evidence for this beyond his phrase. Recorded as the alternative to
+     rule out, not reasoned away.
+
+(1) is a measured mechanism with a known fix. (2) predicts that (1)'s fix
+leaves an offset, larger the more the head is turned from the body.
+
+## On-foot menus: the cursor through the UI canvas — built for take 339
+
+* **`X4VR_CURSOR_CANVAS=auto` now covers on-foot menus.**
+  * An opening is X4 freeing the pointer (relative mode ON→off) while
+    head-look is on foot, held 50 ms. Take 338's HUD-down freed the pointer
+    6 ms before X4 reported the HUD down; the HUD going down ends "on foot"
+    and cancels the pending opening.
+  * The stand-up arrives with the pointer already free and is no opening.
+  * The state machine is `x4vr::foot::FootMenu` in `injector/x4vr_foot.hpp`,
+    tested in `tests/foot.cpp`. A mutation (hold = 0) fails 6 of its 11
+    cases.
+  * The injector publishes `foot_menu` (share v7); the layer draws through
+    the canvas while it or `fullscreen_menu` is up, and says which.
+* **`X4VR_CURSOR_FOOT_AB=1`** alternates per opening: odd openings canvas
+  (A), even ones raw (B, take 338's).
+  * Each opening is a relayed milestone, "on-foot menu N — cursor A (canvas)",
+    so he knows the arm without counting.
+  * Each OPEN line logs head-look's angle and the pointer, the two quantities
+    the mechanisms above disagree on.
+* **Scorer `foot-menu`.** It lists every opening with its arm, duration, head
+  angle, pointer and whether the canvas reached the layer. It FAILs a canvas
+  opening that never reached the layer.
+  * A build before this one shows only the pointer releases: "a build before
+    take 339, which drew them all raw".
+  * `cursor-auto` no longer counts on-foot switches as full-screen ones.
+  * Planted cases: tests/run-census-scorer.sh, with a guard on the injector's
+    and the layer's format strings.
+* **Read-back skipped on foot**, see above. The cockpit is unchanged.
+
+### P339 — on-foot menus, canvas against raw
+
+Take 338's line, with **`X4VR_CURSOR_FOOT_AB=1`**. WiVRn, configuration 1.
+
+* **P339.1** Every on-foot opening is logged with its arm, odd = A. Every
+  A opening reaches the layer (`canvas ON`), and the ESC menu on foot is not
+  counted as one. The scorer PASSes.
+* **P339.2 (Patola, the observable)** In A the cursor sits on the option X4
+  highlights, wherever in the window it is. In B it sits off it as in
+  take 338, more the farther it is from the window's centre.
+* **P339.3 (the alternative)** If mechanism 2 holds, A is off too, by more
+  when the head is turned away from where the body faces. The menu would
+  then stay put in the room as the head turns. If A is right with the head
+  far off the body, mechanism 2 is ruled out.
+* **P339.4** Walking and the cockpit are unchanged (338's slopes). No
+  `REFUSED read-back` on foot; in the cockpit they stay as rare as before.
+
+    X4VR_TAKE=339 X4VR_CURSOR_FOOT_AB=1 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take339.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh

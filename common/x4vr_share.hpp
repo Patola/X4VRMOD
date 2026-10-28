@@ -43,7 +43,8 @@ constexpr uint32_t kShareMagic = 0x52565834u;
 // 5: `steer_line` and `steer_mode`, the mouse-steering target A/B
 //    (x4vr_steer.hpp).
 // 6: `on_foot`, head-look writing off the pilot seat (X4VR_HEADLOOK_FOOT).
-constexpr uint32_t kShareVersion = 6u;
+// 7: `foot_menu`, an on-foot menu holding the pointer (take 338).
+constexpr uint32_t kShareVersion = 7u;
 
 struct Shared {
     uint32_t magic = kShareMagic;
@@ -194,6 +195,14 @@ struct Shared {
     // part X4 composes -- instead of the camera it samples at the first pass:
     // declaring the body too is what swung the window in take 334.
     std::atomic<uint32_t> on_foot{0};
+
+    // 1 while an on-foot menu has the pointer and the cursor is to be drawn
+    // through the UI canvas (X4VR_CURSOR_CANVAS=auto). On foot X4 holds the
+    // pointer in relative mode and frees it only for its interact menu and
+    // NPC dialogs, which are UI and hit-test there -- take 338 drew the
+    // cursor raw over them and it sat off the highlighted option. Under
+    // X4VR_CURSOR_FOOT_AB only the canvas arm's openings set it.
+    std::atomic<uint32_t> foot_menu{0};
 };
 
 // ---- the camera block, as one consistent snapshot ------------------------

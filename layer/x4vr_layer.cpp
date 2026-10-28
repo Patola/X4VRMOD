@@ -10048,19 +10048,28 @@ bool cursor_canvas() {
         return e && *e ? atof(e) : 0.0;
     }();
     if (ab <= 0.0 && automatic) {
+        // Take 338: an on-foot menu holding the pointer (the interact menu,
+        // an NPC dialog) is UI as much as a full-screen one; the injector
+        // says which (foot_menu_tick).
         const x4vr::Shared *s = shared_state();
-        const bool want =
+        const bool full =
             s && s->fullscreen_menu.load(std::memory_order_relaxed) != 0;
+        const bool foot =
+            s && s->foot_menu.load(std::memory_order_relaxed) != 0;
+        const int want = full ? 1 : foot ? 2 : 0;
         static int said = -1;
-        if (said != (int)want) {
-            said = (int)want;
+        if (said != want) {
+            said = want;
             X4VR_LOG("cursor canvas: AUTO — %s",
-                     want ? "ON (a full-screen menu is up: the cursor follows "
-                            "X4's UI)"
-                          : "OFF (no full-screen menu: the cursor at the raw "
-                            "pointer, where X4 picks the world)");
+                     want == 1 ? "ON (a full-screen menu is up: the cursor "
+                                 "follows X4's UI)"
+                     : want == 2
+                         ? "ON (an on-foot menu has the pointer: the cursor "
+                           "follows X4's UI)"
+                         : "OFF (no full-screen menu: the cursor at the raw "
+                           "pointer, where X4 picks the world)");
         }
-        return want;
+        return want != 0;
     }
     if (ab <= 0.0)
         return on;

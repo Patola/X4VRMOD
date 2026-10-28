@@ -4356,8 +4356,12 @@ def main(path):
     ca_asked = bool(re.search(r"\bX4VR_CURSOR_CANVAS=auto\b", run or ""))
     ui_up = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+ui: full-screen menu "
                        r"(UP|DOWN)", text)
-    ca_sw = re.findall(r"\[\s*([\d.]+)\]\s+layer\s+cursor canvas: AUTO — "
-                       r"(ON|OFF)", text)
+    # The layer's ON names its reason since take 339: a full-screen menu, or
+    # an on-foot menu holding the pointer. Only the first answers `ui_up`.
+    ca_all = re.findall(r"\[\s*([\d.]+)\]\s+layer\s+cursor canvas: AUTO — "
+                        r"(ON|OFF)( \(an on-foot menu)?", text)
+    ca_sw = [(t, k) for t, k, foot in ca_all if not foot]
+    ca_foot_on = [float(t) for t, k, foot in ca_all if foot]
     if ca_asked or ca_sw:
         if "IsFullscreenMenuDisplayed NOT FOUND" in text:
             fails.append("X4VR_CURSOR_CANVAS=auto: X4 does not export "
@@ -4390,6 +4394,68 @@ def main(path):
             print(f"cursor-auto  {late} of {n_up} menu opening(s) had no layer "
                   f"switch within 1 s (a menu up for less than a frame, or "
                   f"the channel lagging)")
+
+    # --- on-foot menus: the interact menu and NPC dialogs (take 338) --------
+    #
+    # Take 338 drew the cursor raw over them and it sat off the highlighted
+    # option. The injector logs each opening (X4 freeing the pointer on foot)
+    # with the arm it chose; arm A must reach the layer as a canvas switch.
+    fm_open = re.findall(
+        r"\[\s*([\d.]+)\]\s+inject\s+ui: on-foot menu (\d+) OPEN — .*?"
+        r"\(arm (A|B)[^)]*\) \| head-look yaw (-?[\d.]+) pitch (-?[\d.]+) "
+        r"\| pointer (-?[\d.]+),(-?[\d.]+)", text)
+    fm_close = {int(n): float(t) for t, n in re.findall(
+        r"\[\s*([\d.]+)\]\s+inject\s+ui: on-foot menu (\d+) closed", text)}
+    fm_ab = bool(re.search(r"\bX4VR_CURSOR_FOOT_AB=1\b", run or ""))
+    if fm_open or (ca_asked and "foot: PATCHED" in text):
+        if not fm_open:
+            # Silence proves "never" only for a build that logs openings:
+            # count the pointer releases off the seat from the SDL lines,
+            # which every build writes.
+            seat = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+headlook: "
+                              r"(in|out of) the pilot seat — ", text)
+            freed = 0
+            for t, k in re.findall(r"\[\s*([\d.]+)\]\s+inject\s+sdl: "
+                                   r"relative mouse mode (ON|off)", text):
+                t = float(t)
+                before = [w for ts, w in seat if float(ts) <= t]
+                if k == "off" and before and before[-1] == "out of":
+                    freed += 1
+            if freed:
+                print(f"foot-menu  X4 freed the pointer {freed} time(s) off "
+                      f"the seat and no on-foot menu was logged — a build "
+                      f"before take 339, which drew them all raw")
+            else:
+                print("foot-menu  no on-foot menu opened (X4 never freed the "
+                      "pointer off the seat), so the canvas there was not "
+                      "exercised")
+        arms = {"A": 0, "B": 0}
+        late_a = 0
+        for t, n, arm, hy, hp, px, py in fm_open:
+            t = float(t)
+            arms[arm] += 1
+            end = fm_close.get(int(n))
+            dur = f"{end - t:5.1f} s" if end is not None else "  open at exit"
+            reached = any(t - 0.05 <= x <= t + 1.0 for x in ca_foot_on)
+            if arm == "A" and not reached:
+                late_a += 1
+            print(f"foot-menu  #{int(n):<3d} t {t:10.1f}  arm {arm}  {dur}  "
+                  f"head-look {float(hy):+6.1f} {float(hp):+6.1f}  "
+                  f"pointer {float(px):6.0f},{float(py):6.0f}"
+                  + ("  canvas ON" if reached else ""))
+        if fm_open:
+            print(f"foot-menu  {len(fm_open)} opening(s): arm A (canvas) "
+                  f"{arms['A']}, arm B (raw) {arms['B']}"
+                  + (" — alternating, X4VR_CURSOR_FOOT_AB" if fm_ab else ""))
+            print("foot-menu  which arm put the cursor ON the highlighted "
+                  "option is Patola's to say; this only says each arm was "
+                  "drawn as asked")
+        if late_a:
+            fails.append(f"on-foot menus: {late_a} canvas-arm opening(s) "
+                         f"never reached the layer as a canvas switch")
+        if fm_ab and fm_open and not (arms["A"] and arms["B"]):
+            print("foot-menu  ONLY ONE ARM opened — the A/B needs at least "
+                  "one opening of each")
 
     # --- the start-screen cursor stand-in, and which cursors X4 picks ------
     #
@@ -4741,11 +4807,16 @@ def main(path):
     _ft_t = (r"(?:-|net (\S+) (\S+) travel (\S+) (\S+) at (\S+) (\S+))")
     _ft_m = (r"(?:-|net (\S+) (\S+) travel (\S+) (\S+) at (\S+) (\S+) rot (\S+) "
              r"moved (\d+) pos (\S+))")
-    ft_win = re.findall(
+    # Each window with its own timestamp, from the same match: a second
+    # findall for the times would pair them by position, and one line that
+    # failed the long pattern would shift every pairing after it.
+    ft_win_t = [(float(m.group(1)), m.groups()[1:]) for m in re.finditer(
+        r"\[\s*([\d.]+)\]\s+inject\s+"
         r"foot: window (\S+) s n (\d+) mode (-?\d+) piloting (\d) occupied (\d) "
         r"view (\S+) hud (\d) rel (\d) \| mouse n (\d+) dx (\S+) dy (\S+)"
         r"(?: dropped (\d+))?(?: pitchzero (\d+))? \| head " + _ft_t + r" \| rot " + _ft_t + r" \| local " + _ft_m +
-        r" \| base " + _ft_m, text)
+        r" \| base " + _ft_m, text)]
+    ft_win = [g for _t, g in ft_win_t]
     if ft_asked and not ft_on:
         fails.append("X4VR_FOOTLOG asked but the census never started")
     # X4VR_HEADLOOK_FOOT: B's patch (0x1929f70's walking branch). Intent is
@@ -4777,8 +4848,8 @@ def main(path):
             except (TypeError, ValueError):
                 return None
         wins = []
-        for g in ft_win:
-            w = {"secs": _f(g[0]), "mode": int(g[2]), "pilot": g[3] == "1",
+        for t_w, g in ft_win_t:
+            w = {"t": t_w, "secs": _f(g[0]), "mode": int(g[2]), "pilot": g[3] == "1",
                  "occ": g[4] == "1", "view": g[5], "hud": g[6] == "1",
                  "rel": g[7] == "1", "mn": int(g[8]), "dx": _f(g[9]),
                  "dy": _f(g[10]),
@@ -4823,6 +4894,12 @@ def main(path):
                 return 0.0, 0.0
             return sxy / (sxx * syy) ** 0.5, sxy / sxx
 
+        hw_armed = re.search(r"\[\s*([\d.]+)\]\s+inject\s+milestone: "
+                             r"head-look write ARMED", text)
+        hw_armed_t = float(hw_armed.group(1)) if hw_armed else None
+        seat_t = [float(t) for t in re.findall(
+            r"\[\s*([\d.]+)\]\s+inject\s+headlook: (?:in|out of) the "
+            r"pilot seat — ", text)]
         groups = {}
         for w in wins:
             groups.setdefault((w["mode"], w["pilot"]), []).append(w)
@@ -4872,17 +4949,44 @@ def main(path):
                              f"{max(d['pos'] or 0 for d in ds):.3f} m")
                 print(f"foot      {src:<5} yaw travel {ty:8.1f} pitch travel "
                       f"{tp:7.1f} deg{extra}")
+            # Under the write, a window is only a test of whether X4 follows
+            # the head where the write was asked to act: after its ARMED
+            # milestone (game time running), with the HUD up, and not
+            # spanning a seat change -- take 338's seated pitch slope read
+            # 0.79 from the loading windows and the sit-down's animation,
+            # while per-tick tracking was 0.06 deg.
+            if hw_armed_t is not None:
+                kept = [w for w in ws if w["t"] >= hw_armed_t and w["hud"]
+                        and not any(0.0 <= w["t"] - ts <= 2.0
+                                    for ts in seat_t)]
+                if len(kept) != len(ws):
+                    print(f"foot      {len(ws) - len(kept)} window(s) set "
+                          f"aside from the rows below: before head-look's "
+                          f"ARMED milestone, HUD down, or within 2 s of a "
+                          f"seat change")
+                ws_fit = kept
+            else:
+                ws_fit = ws
             # Mouse-only: the mouse moved, the head nearly did not.
-            mo = [w for w in ws if w["head"] and abs(w["dx"] or 0) + abs(w["dy"] or 0) >= 30
+            mo = [w for w in ws_fit if w["head"] and abs(w["dx"] or 0) + abs(w["dy"] or 0) >= 30
                   and (w["head"]["ty"] or 0) + (w["head"]["tp"] or 0) < 3.0]
-            ho = [w for w in ws if w["head"] and abs(w["dx"] or 0) + abs(w["dy"] or 0) < 5
+            ho = [w for w in ws_fit if w["head"] and abs(w["dx"] or 0) + abs(w["dy"] or 0) < 5
                   and (w["head"]["ty"] or 0) + (w["head"]["tp"] or 0) >= 5.0]
             follows_mouse, follows_head = [], []
             for src in ("rot", "local", "base"):
                 for axis, mk, ak in (("yaw", "dx", "ny"), ("pitch", "dy", "np")):
+                    # That axis's own motion: `mo` admits a window on dx + dy,
+                    # so with the mouse's pitch zeroed on foot the dy column
+                    # is nearly all zeros and a couple of windows made take
+                    # 338's "local pitch FOLLOWS mouse dy" (r -0.89 of 47).
                     pts = [(w[mk], w[src][ak]) for w in mo
-                           if w[src] and w[mk] is not None and w[src][ak] is not None]
+                           if w[src] and w[mk] is not None and w[src][ak] is not None
+                           and abs(w[mk]) >= 30]
                     r, gain = _corr([a for a, _ in pts], [b for _, b in pts])
+                    if r is None and src == "rot":
+                        print(f"foot      mouse-only: mouse {mk} moved 30+ "
+                              f"counts in {len(pts)} window(s) — too few to "
+                              f"test the {axis} axis")
                     if r is not None:
                         tag = "FOLLOWS" if abs(r) >= 0.7 else "does not follow"
                         print(f"foot      mouse-only ({len(pts)} windows): "
@@ -4902,6 +5006,32 @@ def main(path):
                               f"slope {gain:+.3f})")
                         if abs(r) >= 0.7:
                             follows_head.append(f"{src} {axis}")
+            # **With the walking patch, X4's camera on foot is the body times
+            # the head**, so the head moves in nearly every window and a
+            # mouse-only window (head still) barely exists: take 338's census
+            # said "the mouse turns NOTHING" while Patola turned with it. The
+            # body is what the camera has beyond head-look's own part, so it
+            # is read directly as rot - local and needs no head filter.
+            if not pilot and fp_ok and fp_ok.group(1) == "exit":
+                def _wrap(a):
+                    while a > 180.0:
+                        a -= 360.0
+                    while a < -180.0:
+                        a += 360.0
+                    return a
+                pts = [(w["dx"], _wrap(w["rot"]["ny"] - w["local"]["ny"]))
+                       for w in ws_fit if w["rot"] and w["local"]
+                       and w["dx"] is not None and abs(w["dx"]) >= 30
+                       and w["rot"]["ny"] is not None
+                       and w["local"]["ny"] is not None]
+                r, gain = _corr([a for a, _ in pts], [b for _, b in pts])
+                if r is not None:
+                    tag = "FOLLOWS" if abs(r) >= 0.7 else "does not follow"
+                    print(f"foot      body = rot - local ({len(pts)} windows, "
+                          f"dx 30+): body yaw {tag} mouse dx (r {r:+.2f}, "
+                          f"{gain:+.4f} deg/count)")
+                    if abs(r) >= 0.7:
+                        follows_mouse.append("the body's yaw (rot - local)")
             if not pilot:
                 print(f"foot => mode {mode} off the seat: the mouse turns "
                       + ("? (" + mouse_unsure + ")" if mouse_unsure else

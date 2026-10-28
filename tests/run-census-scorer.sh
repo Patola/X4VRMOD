@@ -1001,7 +1001,8 @@ else
     want "foot patched -> the patch is reported" /tmp/census-fp-ok.log "foot " "patch IN (the NULL-controller exit, through the stub): walking composes"
     { cat /tmp/census-fp-base.log; echo "$fpv1"; echo "$fpcont"; "$FOOT" --emit patched; } > /tmp/census-fp-v1.log
     want "foot take-336 patch line -> named the retired cockpit branch" /tmp/census-fp-v1.log "foot " "take 336's retarget of the COCKPIT's branch — retired"
-    want "foot patched -> the head turns X4's camera on foot" /tmp/census-fp-ok.log "foot =>" "the mouse turns rot yaw; the head turns rot yaw, rot pitch, local yaw, local pitch"
+    want "foot patched -> the head turns X4's camera on foot" /tmp/census-fp-ok.log "foot =>" "the mouse turns rot yaw, the body's yaw (rot - local); the head turns rot yaw, rot pitch, local yaw, local pitch"
+    want "foot patched -> the body read as rot - local follows the mouse" /tmp/census-fp-ok.log "foot " "body yaw FOLLOWS mouse dx"
     want "foot patched -> the mouse's pitch zeroing is counted" /tmp/census-fp-ok.log "foot " "the mouse's pitch zeroed in 96 motion event(s) off the seat"
     want "foot patched -> continued on foot counted" /tmp/census-fp-ok.log "foot " "continued on foot 1 time(s)"
     if python3 tools/score_run.py /tmp/census-fp-ok.log 2>&1 | grep -q -E "^FAIL  (foot|X4VR_HEADLOOK_FOOT)"; then
@@ -1018,6 +1019,55 @@ else
     want "foot asked, never started -> FAIL" /tmp/census-ft-base.log "FAIL|  - " "X4VR_FOOTLOG asked but the census never started"
     absent "foot not asked, no census -> silent" "$BASE" "foot "
 fi
+
+# ------------------------------------------ foot-menu: on-foot menus (take 338)
+# The interact menu and NPC dialogs on foot hit-test in X4's UI; take 338 drew
+# the cursor raw over them. The lines are written by foot_menu_tick and
+# cursor_canvas; this guard fails the case set if either format moved.
+# Each fragment on its own: grep -F with a multi-line pattern matches ANY line.
+fmfmt=1
+for frag in '"ui: on-foot menu %llu OPEN — X4 freed the pointer; the "' \
+            '"cursor is drawn %s | head-look yaw %.1f pitch %.1f | "' \
+            '"pointer %.0f,%.0f",' \
+            '"through the UI canvas (arm A)"' \
+            ': "at the raw pointer (arm B, take 338'"'"'s)",' \
+            '"ui: on-foot menu %llu closed — the cursor is drawn at "'; do
+    grep -qF -- "$frag" injector/x4vr_inject.cpp || { fmfmt=0; echo "        missing: $frag"; }
+done
+grep -qF -- '? "ON (an on-foot menu has the pointer: the cursor "' layer/x4vr_layer.cpp ||
+    { fmfmt=0; echo "        missing: the layer's on-foot ON"; }
+if [ $fmfmt -eq 1 ]; then
+    ok "foot-menu: the planted lines match the injector's and the layer's formats"
+else
+    bad "foot-menu: the injector's or the layer's format changed — replant the lines below"
+fi
+sed 's/env: run = /env: run = X4VR_CURSOR_CANVAS=auto X4VR_CURSOR_FOOT_AB=1 X4VR_HEADLOOK_FOOT=1 /' "$BASE" > /tmp/census-fm-base.log
+fmpat='[  999970.000] inject  foot: PATCHED — 0x1929f70'"'"'s walking exit (je at 0x1929ffd, the camera with no controller) now goes through a stub at 0x3e0000'
+fmout='[  999971.000] inject  headlook: out of the pilot seat — head-look continues on foot (X4VR_HEADLOOK_FOOT): the head looks, the mouse and arrows turn the body, the mouse'"'"'s pitch is zeroed'
+fmoA='[  999975.000] inject  ui: on-foot menu 1 OPEN — X4 freed the pointer; the cursor is drawn through the UI canvas (arm A) | head-look yaw -49.2 pitch -20.1 | pointer 2255,1621'
+fmlA='[  999975.020] layer   cursor canvas: AUTO — ON (an on-foot menu has the pointer: the cursor follows X4'"'"'s UI)'
+fmcA='[  999981.000] inject  ui: on-foot menu 1 closed — the cursor is drawn at the raw pointer'
+fmoff='[  999981.020] layer   cursor canvas: AUTO — OFF (no full-screen menu: the cursor at the raw pointer, where X4 picks the world)'
+fmoB='[  999990.000] inject  ui: on-foot menu 2 OPEN — X4 freed the pointer; the cursor is drawn at the raw pointer (arm B, take 338'"'"'s) | head-look yaw 7.3 pitch -20.4 | pointer 2276,1698'
+fmcB='[  999998.000] inject  ui: on-foot menu 2 closed — the cursor is drawn at the raw pointer'
+{ cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" "$fmoA" "$fmlA" "$fmcA" "$fmoff" "$fmoB" "$fmcB"; } > /tmp/census-fm-ab.log
+want "foot-menu A/B -> arm A opening reached the layer" /tmp/census-fm-ab.log foot-menu "#1   t   999975.0  arm A    6.0 s  head-look  -49.2  -20.1  pointer   2255,  1621  canvas ON"
+want "foot-menu A/B -> arm B opening drawn raw" /tmp/census-fm-ab.log foot-menu "#2   t   999990.0  arm B    8.0 s  head-look   +7.3  -20.4  pointer   2276,  1698"
+want "foot-menu A/B -> both arms counted" /tmp/census-fm-ab.log foot-menu "2 opening(s): arm A (canvas) 1, arm B (raw) 1 — alternating, X4VR_CURSOR_FOOT_AB"
+want "foot-menu A/B -> a foot ON is not a full-screen switch" /tmp/census-fm-ab.log cursor-auto "the layer switched the cursor to the canvas 0 time(s)"
+if python3 tools/score_run.py /tmp/census-fm-ab.log 2>&1 | grep -q "canvas-arm opening"; then
+    bad "foot-menu A/B healthy -> FAILs"
+else
+    ok "foot-menu A/B healthy -> no FAIL"
+fi
+{ cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" "$fmoA" "$fmcA"; } > /tmp/census-fm-nolayer.log
+want "foot-menu arm A never reached the layer -> FAIL" /tmp/census-fm-nolayer.log "FAIL|  - " "1 canvas-arm opening(s) never reached the layer"
+want "foot-menu one arm only -> said" /tmp/census-fm-nolayer.log foot-menu "ONLY ONE ARM opened"
+{ cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" '[  999975.000] inject  sdl: relative mouse mode ON (fold stands down)' '[  999976.000] inject  sdl: relative mouse mode off (fold applies)'; } > /tmp/census-fm-old.log
+want "foot-menu pointer freed, nothing logged -> an older build" /tmp/census-fm-old.log foot-menu "X4 freed the pointer 1 time(s) off the seat and no on-foot menu was logged"
+{ cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" '[  999969.000] inject  sdl: relative mouse mode off (fold applies)' "$fmout"; } > /tmp/census-fm-none.log
+want "foot-menu pointer freed only in the seat -> not exercised" /tmp/census-fm-none.log foot-menu "no on-foot menu opened"
+absent "foot-menu: no canvas auto, no foot patch -> silent" "$BASE" foot-menu
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

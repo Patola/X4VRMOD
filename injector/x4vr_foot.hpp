@@ -509,4 +509,54 @@ inline void make_stub(uint8_t out[kStubLen], uintptr_t root_slot,
     b(0x41), b(0xff), b(0xe3);                // 50 jmp r11
 }
 
+// ---------------------------------------------------------------- menus
+//
+// An on-foot menu holding the pointer (take 338: the interact menu and NPC
+// dialogs, drawn raw, sat off the highlighted option). On foot X4 keeps the
+// pointer in relative mode and frees it only for these, so an opening is a
+// relative ON->off edge while head-look is on foot. The stand-up arrives with
+// the pointer already free and is no opening.
+//
+// **Held kHoldS before it counts.** Take 338's on-foot HUD-down freed the
+// pointer 6 ms before X4 reported the HUD down; counted at once, that would
+// have shifted the A/B's parity and announced a menu that was not one. The
+// HUD going down ends `foot` (steering stops), which cancels it.
+struct FootMenu {
+    static constexpr double kHoldS = 0.050;
+    bool open = false;
+    bool canvas = false;      // this opening's arm: through the UI canvas
+    uint64_t openings = 0;
+    bool was_rel = false;
+    bool waiting = false;     // an edge seen, not yet held kHoldS
+    double since = 0.0;
+
+    enum Event { kNone, kOpened, kClosed };
+
+    // `ab`: alternate per opening, odd openings canvas (arm A), even raw.
+    Event step(bool foot, bool rel, double t, bool ab) {
+        bool now = open;
+        if (!foot || rel) {
+            now = false;
+            waiting = false;
+        } else if (!open) {
+            if (was_rel) {
+                waiting = true;
+                since = t;
+            }
+            if (waiting && t - since >= kHoldS)
+                now = true;
+        }
+        was_rel = foot && rel;
+        if (now == open)
+            return kNone;
+        open = now;
+        if (!open)
+            return kClosed;
+        openings++;
+        canvas = !ab || (openings % 2) == 1;
+        return kOpened;
+    }
+    bool draw_canvas() const { return open && canvas; }
+};
+
 } // namespace x4vr::foot
