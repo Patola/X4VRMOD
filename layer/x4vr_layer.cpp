@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <set>
 #include <atomic>
+#include <cerrno>
 #include <cmath>
 #include <ctime>
 #include <cstring>
@@ -31,6 +32,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <thread>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
 
@@ -4803,9 +4805,26 @@ void record_module(const VkShaderModuleCreateInfo *ci, VkShaderModule mod) {
     }
     if (!g_dump_shaders || !*g_dump_shaders)
         return;
+    // **Only the game dumps.** gamescope loads this layer too (inert there)
+    // and creates modules of its own; its serials start at 0 like X4's, so
+    // both would write mod-0000.. into one directory and overwrite each
+    // other. Take 346 showed the warning below twice: once per process.
+    if (!g_active)
+        return;
+    // **The directory is made, not assumed.** Take 346 asked for the dumps,
+    // the directory did not exist, and the run wrote nothing but this
+    // warning -- the identification it was for could not be done.
+    static const bool dir_ok = [] {
+        if (mkdir(g_dump_shaders, 0755) == 0) {
+            X4VR_LOG("modules: created X4VR_DUMP_SHADERS=%s", g_dump_shaders);
+            return true;
+        }
+        return errno == EEXIST;
+    }();
+    static std::atomic<uint32_t> dumped{0};
     char path[512];
     snprintf(path, sizeof path, "%s/mod-%04u.spv", g_dump_shaders, serial);
-    FILE *f = fopen(path, "wb");
+    FILE *f = dir_ok ? fopen(path, "wb") : nullptr;
     if (!f) {
         // Once, not per module: a missing directory would otherwise produce
         // one line per shader and bury the run.
@@ -4817,6 +4836,9 @@ void record_module(const VkShaderModuleCreateInfo *ci, VkShaderModule mod) {
         }
         return;
     }
+    if (dumped.fetch_add(1, std::memory_order_relaxed) == 0)
+        X4VR_LOG("modules: dumping X4's shader modules to %s/mod-NNNN.spv",
+                 g_dump_shaders);
     fwrite(ci->pCode, 1, ci->codeSize, f);
     fclose(f);
 }

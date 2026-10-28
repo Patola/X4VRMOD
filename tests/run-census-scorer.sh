@@ -1137,6 +1137,18 @@ want "menus -> InteractMenu found" /tmp/census-mn-yes.log "menus   =>" "Interact
 { cat "$BASE"; printf '%s\n' "$mnok" "$mnseat" "$mn1" "$mn3"; } > /tmp/census-mn-no.log
 want "menus -> InteractMenu absent said" /tmp/census-mn-no.log "menus   =>" "InteractMenu never appeared"
 absent "menus: not read -> silent" "$BASE" "menus "
+# X4VR_DUMP_SHADERS: take 346 asked, wrote nothing, and PASSed.
+sed 's/env: run = /env: run = X4VR_DUMP_SHADERS=\/tmp\/x4vr-shaders /' "$BASE" > /tmp/census-sd-base.log
+{ cat /tmp/census-sd-base.log; echo '[  999970.000] layer   WARNING: X4VR_DUMP_SHADERS=/tmp/x4vr-shaders is not writable'; } > /tmp/census-sd-none.log
+want "shader dumps asked, none written -> FAIL" /tmp/census-sd-none.log "FAIL|  - " "X4VR_DUMP_SHADERS=/tmp/x4vr-shaders asked but no module was written (the layer said it is not writable)"
+{ cat /tmp/census-sd-base.log; echo '[  999970.000] layer   modules: dumping X4'"'"'s shader modules to /tmp/x4vr-shaders/mod-NNNN.spv'; } > /tmp/census-sd-ok.log
+want "shader dumps written -> said" /tmp/census-sd-ok.log shaders "shaders dumped to /tmp/x4vr-shaders/mod-NNNN.spv"
+if python3 tools/score_run.py /tmp/census-sd-ok.log 2>&1 | grep -q "asked but no module"; then
+    bad "shader dumps written -> FAILs"
+else
+    ok "shader dumps written -> no FAIL"
+fi
+absent "shader dumps not asked -> silent" "$BASE" shaders
 # ------------------------------------------ take 343's two false FAILs
 # The map check: X4 resumes walking mouselook a few ms before the HUD comes
 # back (the hand-back) -- not take 147's mouselook in the middle of the map.

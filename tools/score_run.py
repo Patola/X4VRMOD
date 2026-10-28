@@ -4482,6 +4482,22 @@ def main(path):
             print("foot-menu  ONLY ONE ARM opened — the A/B needs at least "
                   "one opening of each")
 
+    # --- X4VR_DUMP_SHADERS: the modules were written (take 346) -------------
+    #
+    # Take 346 asked for the dumps; the directory did not exist, the layer
+    # warned and wrote nothing, and the run scored PASS -- the shader
+    # identification it existed for could not be done. Gate on intent: asked
+    # means the layer must say it dumped.
+    sd_m = re.search(r"\bX4VR_DUMP_SHADERS=(\S+)", run or "")
+    if sd_m:
+        if re.search(r"modules: dumping X4's shader modules to ", text):
+            print(f"shaders dumped to {sd_m.group(1)}/mod-NNNN.spv")
+        else:
+            fails.append(f"X4VR_DUMP_SHADERS={sd_m.group(1)} asked but no "
+                         f"module was written"
+                         + (" (the layer said it is not writable)"
+                            if "is not writable" in text else ""))
+
     # --- X4's open-menu table, read (take 342) -----------------------------
     #
     # Reconnaissance for the cockpit's right-click menu: is X4's "InteractMenu"

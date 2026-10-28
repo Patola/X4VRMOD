@@ -26360,3 +26360,45 @@ Take 345's line without the eye dumps, plus `X4VR_DUMP_SHADERS`,
 
 **Also queued:** the numpad must turn the F2/F3/F4 views again once they are
 whole-scene (Patola). Head-look took those keys.
+
+## Take 346 — SCORED FAIL (after the fix below): the shader dumps were never written
+
+Patola teleported to Matrix #79B and looked at the nebula for well over 30 s,
+including the external and target views.
+
+**The dumps did not happen, and the run scored PASS.**
+* The layer opens `$X4VR_DUMP_SHADERS/mod-NNNN.spv` and does not create the
+  directory. `/tmp/x4vr-shaders` did not exist, so it warned once and wrote
+  nothing. I had not checked that precondition before the hand-off, and the
+  scorer did not look.
+* **A second defect behind it:** the warning appeared twice because gamescope
+  loads the layer as well (inert there) and dumped its own modules. Its
+  serials start at 0 like X4's, so with the directory present the two
+  processes would have overwritten each other's `mod-NNNN.spv`.
+* **Fixed:**
+  * only the game dumps;
+  * the layer makes the directory;
+  * a `modules: dumping` line says it is writing.
+  * Proven through the layer on a real GPU (tests/multiview_render, app
+    "X4"): the missing directory was created and 3 modules written.
+  * The scorer FAILs a run that asked and wrote none (planted cases). Take
+    346 now scores FAIL.
+
+**What the run still gives, from the pipeline and render-pass inventories:**
+* Five full-screen pipelines were first built after the arrival (the map
+  closed at 101692.7):
+  * four drawn once (`MONO`, `original`) in their own passes: #40, #71 (two)
+    and #73;
+  * one in the main scene pass #33, which the mod patched for the second eye.
+* Passes #71 and #73 are `1 colour [97H] (R16G16B16A16) → MONO (fullscreen
+  post) +MASKED(fullscreen)`, i.e. drawn into both layers.
+* Some fragment modules in #40 sample the bindless table with
+  `index-offset APPLIED`, so in view 1 they read the layer-1 twin of a
+  doubled image.
+* That is the shape of a volumetric pipeline (ray march into its own target,
+  then composite). Which module is the fog's ray march needs the dumps.
+
+### P347 — take 346 again, with the dumps written
+
+Same line and protocol. **P347.1** `shaders dumped to …`; `name_module.py`
+names the volume modules; the pipe lines give their passes and patches.
