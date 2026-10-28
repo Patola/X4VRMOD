@@ -26266,3 +26266,31 @@ the raw aim point stays recorded but is not acted on.
 * So the external view is not the cockpit's path, and the window there is
   head-look not acting (outside the cockpit the layer declares a fixed
   window in front).
+
+## Take 344 — SCORED PASS: exploring the other views
+
+Patola went through station construction, the external view (F2), the
+external static view (F3), the target view (F4), the cinematic view (F6) and
+ship fitting: *"they look all right but for at least the F2/F3/F4/F6 views
+should not be in a window but the whole scene. Could we do the whole scene for
+the start menu too?"* He also saw the skybox's stereo differ between the eyes
+in Matrix #79B and CEO's Doubt.
+
+**The census, every regime outside the cockpit:**
+* **Mode 2: a camera rig attached to an object, with the offset in the
+  camera's own transform.** The chase view (attached vtable 0x3d21748): local
+  pos (0, 16.6, −59.6) m, pitch −4.75°. Other targets (vtables 0x3d23cd0,
+  0x3d41418, 0x3d3ee90): offsets from (63.8, 56.4, −185.2) to
+  (0, 420, −2117) m.
+* **Mode 4: a camera placed in the world** (attached vtable 0x3c6ca30). The
+  local and base positions are world coordinates (e.g. 18311, 3402,
+  21918), and the rotation is a world heading (yaw 137.3°, pitch −9.9°).
+* **In every one the camera's total rotation equals its own transform's
+  rotation.** The view's direction lives in the same matrix head-look writes
+  in the cockpit.
+  * In the cockpit X4 leaves that matrix to us (x4vrmod_headlook stops its
+    spring-back). Here X4 owns it: the orbit, the cinematic camera's motion.
+  * So a head turn has to be COMPOSED with X4's own rotation of the same
+    frame, not written over it.
+* Menus seen: StationConfigurationMenu (seat), ShipConfigurationMenu (foot),
+  TransporterMenu, MapMenu, OptionsMenu, TopLevelMenu. No glitch reported.
