@@ -4592,32 +4592,6 @@ def main(path):
                   f"external-view entr{'y' if ext_views == 1 else 'ies'}; "
                   f"{len(ev_decl)} declared; the layer switched "
                   f"{ev_layer} time(s)")
-        # Take 355: F6 entered from F4 kept the player's camera in mode 4,
-        # so the head was declared while X4 drew through its scene camera
-        # (root+0x3e0) -- a window glued to the face. The census (when on)
-        # says when that camera existed.
-        cs_scene = []
-        for t, desc in re.findall(r"\[\s*([\d.]+)\]\s+inject\s+camsurvey: "
-                                  r"\d+ camera\(s\) — (.*)", text):
-            cs_scene.append((float(t), "root+0x3e0 " in desc))
-        if cs_scene:
-            for t, n, mode in ev_on:
-                n = int(n)
-                if n not in ev_decl:
-                    continue
-                a = float(t) + ev_decl[n]
-                b = a + (ev_off[n][2] - ev_decl[n] if n in ev_off else 1e9)
-                up = 0.0
-                for i, (ts_, present) in enumerate(cs_scene):
-                    nxt = cs_scene[i + 1][0] if i + 1 < len(cs_scene) else 1e18
-                    if present:
-                        up += max(0.0, min(b, nxt) - max(a, ts_))
-                if up > 0.5:
-                    fails.append(
-                        f"external view {n}: the head was declared for "
-                        f"{up:.1f} s while X4's scene camera (root+0x3e0, "
-                        f"F6) existed — X4 was not drawing the camera the "
-                        f"head turned, so the window followed the face")
         if ev_asked and ev_patched and ext_views and not ev_on:
             fails.append(f"X4VR_HEADLOOK_EXTERNAL=1: {ext_views} external "
                          f"view(s) shown and the head turned none of them")
@@ -4632,61 +4606,6 @@ def main(path):
             print("extview  whether the external views are the whole scene "
                   "and the numpad still orbits is Patola's to say; this says "
                   "the stub composed and the layer declared")
-
-    # --- X4VR_CAMSURVEY: which camera X4 draws F6 through ---------------------
-    #
-    # Each second, per camera-class object X4's root and render-side object
-    # hold: mode, and how its own transform and its cached world pose turned.
-    # The camera whose cached pose turns while the HUD is down outside the
-    # external views (F6, take 354) is the candidate; which windows were F6
-    # is read against X4's open-menu lines, so this only totals.
-    cs_asked = bool(re.search(r"\bX4VR_CAMSURVEY=1\b", run or ""))
-    cs_ref = re.search(r"camsurvey: REFUSED — (.*?);", text)
-    cs_sets = re.findall(r"camsurvey: (\d+) camera\(s\) — (.*)", text)
-    cs_win = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+camsurvey: window "
-                        r"[\d.]+ s view (\w+) hud ([01])((?: \| .*)?)$",
-                        text, re.M)
-    if cs_asked or cs_win or cs_ref:
-        if cs_ref:
-            fails.append("X4VR_CAMSURVEY=1 but the census REFUSED — "
-                         + cs_ref.group(1))
-        elif cs_asked and not cs_win:
-            fails.append("X4VR_CAMSURVEY=1 but no census window was written")
-        for n_, desc in cs_sets[:6]:
-            print(f"camsurvey  {n_} camera(s): {desc[:200]}")
-        if len(cs_sets) > 6:
-            print(f"camsurvey  ({len(cs_sets) - 6} more set change(s))")
-        # Per camera label: cached rotation travel, HUD down outside the
-        # external views vs everything else.
-        tot = {}
-        for _t, view, hud, segs in cs_win:
-            down = hud == "0" and view != "external"
-            for seg in segs.split(" | ")[1:]:
-                m = re.match(r"(\S+) (0x[0-9a-f]+|\(nil\)) mode (-?\d+) .*? "
-                             r"cache (?:rot ([\d.]+) moved (\d+)|-)", seg)
-                if not m:
-                    continue
-                key = (m.group(1), m.group(2))
-                d = tot.setdefault(key, {"down": 0.0, "up": 0.0, "wd": 0,
-                                         "wu": 0, "modes": set()})
-                d["modes"].add(m.group(3))
-                rot = float(m.group(4)) if m.group(4) else 0.0
-                if down:
-                    d["down"] += rot
-                    d["wd"] += 1
-                else:
-                    d["up"] += rot
-                    d["wu"] += 1
-        for (label, ptr), d in sorted(tot.items(),
-                                      key=lambda kv: -kv[1]["down"]):
-            print(f"camsurvey  {label:<14s} {ptr}  modes "
-                  f"{','.join(sorted(d['modes']))}  cached pose turned "
-                  f"{d['down']:8.1f} deg over {d['wd']} HUD-down window(s) "
-                  f"outside the external views, {d['up']:8.1f} over "
-                  f"{d['wu']} other(s)")
-        if cs_win:
-            print(f"camsurvey  {len(cs_win)} window(s); which ones were F6 is "
-                  f"read against X4's open-menu lines")
 
     # --- X4VR_DUMP_SHADERS: the modules were written (take 346) -------------
     #

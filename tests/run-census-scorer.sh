@@ -1348,53 +1348,5 @@ else
     bad "extview: the injector's path-count format moved"
 fi
 
-# Take 355: the head declared while F6's scene camera existed (F6 from F4).
-csf6a='[  999962.000] inject  camsurvey: 2 camera(s) — root+0x3e8 0x7d6de7b3f080 (vtable 0x3d0aaa0, the player camera'"'"'s class), root+0x3e0 0x7d6de7b40000 (vtable 0x3d0bbb0)'
-csf6b='[  999968.000] inject  camsurvey: 1 camera(s) — root+0x3e8 0x7d6de7b3f080 (vtable 0x3d0aaa0, the player camera'"'"'s class)'
-csnoscene='[  999960.500] inject  camsurvey: 1 camera(s) — root+0x3e8 0x7d6de7b3f080 (vtable 0x3d0aaa0, the player camera'"'"'s class)'
-{ cat /tmp/census-ev-base.log; printf '%s\n' "$evpat" "$csnoscene" "$evview" "$evon" "$evdecl" "$evlay" "$csf6a" "$csf6b" "$evoff"; } > /tmp/census-ev-f6.log
-want "extview: head declared while F6's camera existed -> FAIL" /tmp/census-ev-f6.log "FAIL|  - " "external view 1: the head was declared for 6.0 s while X4's scene camera (root+0x3e0, F6) existed"
-{ cat /tmp/census-ev-base.log; printf '%s\n' "$evpat" "$csnoscene" "$evview" "$evon" "$evdecl" "$evlay" "$evoff"; } > /tmp/census-ev-nof6.log
-if python3 tools/score_run.py /tmp/census-ev-nof6.log 2>&1 | grep -q "scene camera (root+0x3e0, F6) existed"; then
-    bad "extview: no scene camera during the period -> FAILs"
-else
-    ok "extview: no scene camera during the period -> no FAIL"
-fi
-if grep -qF '"extview: scene camera slot root+0x3e0 = %#lx — %s"' injector/x4vr_inject.cpp; then
-    ok "extview: the injector logs the scene camera slot's value"
-else
-    bad "extview: the scene camera slot line moved"
-fi
-if grep -qF '"the cinematic view (F6) is up: X4 draws through its "' injector/x4vr_inject.cpp; then
-    ok "extview: the injector ends a period for F6's scene camera"
-else
-    bad "extview: the injector's F6 reason moved"
-fi
-
-# ------------------------------------ X4VR_CAMSURVEY (camsurvey)
-for f in 'camsurvey: window %.2f s view %s hud %d%s' \
-         ' | %s %p mode %d att %p piv %p own %s cache %s' \
-         'rot %.2f moved %d pos %.3f at %.1f %.1f' \
-         'camsurvey: %d camera(s) — %s' \
-         'camsurvey: REFUSED — X4'"'"'s code at %#lx differs from '; do
-    if grep -qF "$f" injector/x4vr_inject.cpp; then
-        ok "camsurvey: the planted line matches the injector's format ($f)"
-    else
-        bad "camsurvey: the injector no longer writes '$f'"
-    fi
-done
-sed 's/env: run = /env: run = X4VR_CAMSURVEY=1 /' "$BASE" > /tmp/census-cs-base.log
-csset='[  999960.000] inject  camsurvey: 3 camera(s) — root+0x3e8 0x7d6de7b3f080 (vtable 0x3d0aaa0, the player camera'"'"'s class), root+0x3e0 0x7d6de7b40000 (vtable 0x3d0bbb0), render+0x40 0x7d6de7b41000 (vtable 0x3d0bbb0)'
-csw1='[  999961.000] inject  camsurvey: window 1.00 s view cockpit hud 1 | root+0x3e8 0x7d6de7b3f080 mode 0 att 0x1 piv 0x2 own rot 3.00 moved 9 pos 0.000 at 1.0 2.0 cache rot 3.00 moved 9 pos 0.000 at 1.0 2.0 | root+0x3e0 0x7d6de7b40000 mode 4 att 0x3 piv 0x4 own - cache -'
-csw2='[  999962.000] inject  camsurvey: window 1.00 s view cockpit hud 0 | root+0x3e8 0x7d6de7b3f080 mode 0 att 0x1 piv 0x2 own rot 0.00 moved 0 pos 0.000 at 0.0 0.0 cache rot 0.00 moved 0 pos 0.000 at 0.0 0.0 | root+0x3e0 0x7d6de7b40000 mode 4 att 0x3 piv 0x4 own rot 12.50 moved 18 pos 4.000 at 30.0 -5.0 cache rot 12.50 moved 18 pos 4.000 at 30.0 -5.0'
-{ cat /tmp/census-cs-base.log; printf '%s\n' "$csset" "$csw1" "$csw2"; } > /tmp/census-cs-ok.log
-want "camsurvey: the set listed" /tmp/census-cs-ok.log camsurvey "3 camera(s): root+0x3e8 0x7d6de7b3f080"
-want "camsurvey: the moving camera with the HUD down ranks first" /tmp/census-cs-ok.log camsurvey "root+0x3e0     0x7d6de7b40000  modes 4  cached pose turned     12.5 deg over 1 HUD-down window(s) outside the external views,      0.0 over 1 other(s)"
-want "camsurvey: the player camera's travel is the HUD-up one" /tmp/census-cs-ok.log camsurvey "root+0x3e8     0x7d6de7b3f080  modes 0  cached pose turned      0.0 deg over 1 HUD-down window(s) outside the external views,      3.0 over 1 other(s)"
-{ cat /tmp/census-cs-base.log; echo '[  999960.000] inject  camsurvey: REFUSED — X4'"'"'s code at 0x1925c3b differs from X4 9.00; nothing is read'; } > /tmp/census-cs-ref.log
-want "camsurvey: refused -> FAIL" /tmp/census-cs-ref.log "FAIL|  - " "X4VR_CAMSURVEY=1 but the census REFUSED — X4's code at 0x1925c3b differs from X4 9.00"
-want "camsurvey: asked, nothing written -> FAIL" /tmp/census-cs-base.log "FAIL|  - " "X4VR_CAMSURVEY=1 but no census window was written"
-absent "camsurvey: not asked -> silent" "$BASE" camsurvey
-
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

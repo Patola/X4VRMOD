@@ -52,7 +52,6 @@ extern char **environ;
 #include "../common/x4vr_steer.hpp"
 #include "x4vr_foot.hpp"
 #include "x4vr_extview.hpp"
-#include "x4vr_camsurvey.hpp"
 #include "x4vr_menus.hpp"
 #include "x4vr_config.hpp"
 #include "x4vr_inputmap.hpp"
@@ -5103,10 +5102,7 @@ static void extview_patch_at_start() {
     }
     auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
     uintptr_t bad = 0;
-    // SetSceneCameraActive too: the scene camera at root+0x3e0 is read each
-    // tick, and the head stands down while it exists (F6, take 355).
-    if (!verify_sites(rd, &bad) || !early_site_ok(&bad) ||
-        !x4vr::camsurvey::verify_scene_site(rd, &bad)) {
+    if (!verify_sites(rd, &bad) || !early_site_ok(&bad)) {
         char why[160];
         snprintf(why, sizeof why,
                  "0x1929f70's code at %#lx differs from X4 9.00",
@@ -5181,186 +5177,6 @@ static void extview_patch_at_start() {
              (unsigned long)kEarlyCmp, len_b, (void *)stub_b);
 }
 
-// ------------------------------------------------ X4VR_CAMSURVEY=1
-//
-// Which camera X4 draws F6 through (x4vr_camsurvey.hpp). READ only. Every
-// camera-class object the game root and the render-side object hold,
-// re-found at start, at each HUD or view change and every 5 s; each second,
-// per camera, its mode, attachment and pivot slot, and how its own
-// transform and its cached world pose moved (the walking census's track).
-static bool camsurvey_on() {
-    static const bool on = x4vr::env_on("X4VR_CAMSURVEY", false);
-    return on;
-}
-namespace {
-struct SurveyCam {
-    char label[24] = "";
-    uintptr_t cam = 0, vt = 0;
-    int32_t mode = -1;
-    uintptr_t att = 0, piv = 0;
-    bool own_ok = false, cache_ok = false;
-    x4vr::foot::MatTrack own, cache;
-};
-} // namespace
-
-static void camsurvey_tick(X4View view, bool hud) {
-    using namespace x4vr::camsurvey;
-    if (!camsurvey_on())
-        return;
-    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
-    static int sites = -1;
-    if (sites < 0) {
-        uintptr_t bad = 0;
-        sites = verify_sites(rd, &bad) ? 1 : 0;
-        if (sites)
-            X4VR_LOG("camsurvey: the cache lookup (0x1925bf0) and "
-                     "SetSceneCameraActive match X4 9.00 — surveying the "
-                     "cameras root %#lx and render-side %#lx hold",
-                     (unsigned long)kRootGlobal, (unsigned long)kRenderGlobal);
-        else
-            X4VR_LOG("camsurvey: REFUSED — X4's code at %#lx differs from "
-                     "X4 9.00; nothing is read",
-                     (unsigned long)bad);
-    }
-    if (!sites)
-        return;
-    uintptr_t root = 0, player = 0;
-    if (!rd(kRootGlobal, &root, 8) || !root || !rd(root + kPlayerCamOff, &player, 8) ||
-        !player)
-        return;
-    constexpr int kMax = 10;
-    static SurveyCam cams[kMax];
-    static int ncam = 0;
-    static double last_survey = -1.0, win_t0 = -1.0;
-    static int was_view = -1, was_hud = -1;
-    const double now = mono_seconds();
-    if (last_survey < 0.0 || (int)view != was_view || (int)hud != was_hud ||
-        now - last_survey > 5.0) {
-        last_survey = now;
-        was_view = (int)view;
-        was_hud = (int)hud;
-        uintptr_t vts[2] = {0, 0}, scene = 0;
-        rd(player, &vts[0], 8);
-        if (rd(root + kSceneCamOff, &scene, 8) && plausible(scene))
-            rd(scene, &vts[1], 8);
-        SurveyCam next[kMax];
-        int nn = 0;
-        auto add = [&](const char *holder, uint32_t off, uintptr_t cam) {
-            for (int i = 0; i < nn; i++)
-                if (next[i].cam == cam)
-                    return;
-            if (nn == kMax)
-                return;
-            SurveyCam &c = next[nn++];
-            snprintf(c.label, sizeof c.label, "%s+%#x", holder, off);
-            c.cam = cam;
-            for (int i = 0; i < ncam; i++) // keep a camera's window running
-                if (cams[i].cam == cam) {
-                    c.own = cams[i].own;
-                    c.cache = cams[i].cache;
-                }
-        };
-        add("root", (uint32_t)kPlayerCamOff, player);
-        if (plausible(scene))
-            add("root", (uint32_t)kSceneCamOff, scene);
-        uint32_t offs[kMax];
-        static uint8_t blob[0x1000];
-        if (rd(root, blob, 0x1000)) {
-            const int k = find_objects(rd, blob, 0x1000, vts, 2, offs, kMax);
-            for (int i = 0; i < k; i++) {
-                uintptr_t c = 0;
-                memcpy(&c, blob + offs[i], 8);
-                add("root", offs[i], c);
-            }
-        }
-        uintptr_t render = 0;
-        if (rd(kRenderGlobal, &render, 8) && plausible(render) &&
-            rd(render, blob, 0x800)) {
-            const int k = find_objects(rd, blob, 0x800, vts, 2, offs, kMax);
-            for (int i = 0; i < k; i++) {
-                uintptr_t c = 0;
-                memcpy(&c, blob + offs[i], 8);
-                add("render", offs[i], c);
-            }
-        }
-        bool changed = nn != ncam;
-        for (int i = 0; i < nn && !changed; i++)
-            changed = next[i].cam != cams[i].cam;
-        for (int i = 0; i < nn; i++)
-            cams[i] = next[i];
-        ncam = nn;
-        if (changed) {
-            char line[1024];
-            size_t at = 0;
-            for (int i = 0; i < ncam && at < sizeof line; i++) {
-                uintptr_t vt = 0;
-                rd(cams[i].cam, &vt, 8);
-                const int w = snprintf(line + at, sizeof line - at,
-                                       "%s%s %p (vtable %p%s)", i ? ", " : "",
-                                       cams[i].label, (void *)cams[i].cam,
-                                       (void *)vt,
-                                       vt == vts[0] ? ", the player camera's class"
-                                                    : "");
-                if (w > 0)
-                    at += (size_t)w;
-            }
-            X4VR_LOG("camsurvey: %d camera(s) — %s", ncam, line);
-        }
-    }
-    uint32_t idx = 0;
-    const bool idx_ok = rd(kIndexMain, &idx, 4);
-    for (int i = 0; i < ncam; i++) {
-        SurveyCam &c = cams[i];
-        rd(c.cam, &c.vt, 8);
-        rd(c.cam + kCamMode, &c.mode, 4);
-        rd(c.cam + kCamAttached, &c.att, 8);
-        rd(c.cam + kCamPivotSlot, &c.piv, 8);
-        alignas(16) float m[16];
-        c.own_ok = rd(c.cam + kCamOwn, m, sizeof m);
-        if (c.own_ok)
-            c.own.step(m);
-        c.cache_ok = idx_ok && cached_pose(rd, c.cam, idx, 0, m);
-        if (c.cache_ok)
-            c.cache.step(m);
-    }
-    if (win_t0 < 0.0)
-        win_t0 = now;
-    if (now - win_t0 < 1.0)
-        return;
-    char line[2048];
-    size_t at = 0;
-    for (int i = 0; i < ncam && at < sizeof line; i++) {
-        const SurveyCam &c = cams[i];
-        auto tr = [](const x4vr::foot::MatTrack &t, bool ok, char *o, size_t n) {
-            if (!ok || !t.have)
-                return snprintf(o, n, "-");
-            return snprintf(o, n, "rot %.2f moved %d pos %.3f at %.1f %.1f",
-                            t.rot_travel, t.moved, t.pos_max, t.ang.yaw,
-                            t.ang.pitch);
-        };
-        char own[96], cache[96];
-        tr(c.own, c.own_ok, own, sizeof own);
-        tr(c.cache, c.cache_ok, cache, sizeof cache);
-        const int w = snprintf(line + at, sizeof line - at,
-                               " | %s %p mode %d att %p piv %p own %s cache %s",
-                               c.label, (void *)c.cam, (int)c.mode, (void *)c.att,
-                               (void *)c.piv, own, cache);
-        if (w > 0)
-            at += (size_t)w;
-    }
-    X4VR_LOG("camsurvey: window %.2f s view %s hud %d%s", now - win_t0,
-             view == X4View::Cockpit    ? "cockpit"
-             : view == X4View::External ? "external"
-             : view == X4View::Floating ? "floating"
-                                        : "paused",
-             (int)hud, line);
-    win_t0 = now;
-    for (int i = 0; i < ncam; i++) {
-        cams[i].own.restart();
-        cams[i].cache.restart();
-    }
-}
-
 // Each head-look tick in write mode: the head's rows published for the stub
 // while an external view is up with the player's camera outside mode 0 and
 // no full-screen menu, withdrawn otherwise. True while the head is DECLARED
@@ -5382,31 +5198,7 @@ static bool extview_tick(bool external, float head_yaw, float head_pitch,
     if (cam && !self_read(cam + extview::kCamMode, &mode, sizeof mode))
         mode = -1;
     const bool menu = g_fullscreen_up.load(std::memory_order_relaxed);
-    // **The cinematic view (F6) is drawn through X4's scene camera**
-    // (root+0x3e0), not the player's. Take 355: F6 entered from F4 left the
-    // player's camera in mode 4, so the head was composed into a camera X4
-    // was not drawing and declared to a picture it never turned -- the
-    // window followed the face. The slot holds a camera OBJECT exactly while
-    // F6 is up -- not "is non-zero": take 356 stood the head down in every
-    // external view because the slot is not zero outside F6 either, and the
-    // census had only ever listed it when it held a heap object (plausible).
-    uintptr_t root = 0, scene = 0;
-    const bool scene_read = self_read(extview::kRootGlobal, &root, 8) && root &&
-                            self_read(root + x4vr::camsurvey::kSceneCamOff,
-                                      &scene, 8);
-    const bool cinematic =
-        external && scene_read && x4vr::camsurvey::plausible(scene);
-    static uintptr_t scene_was = 1; // never a real value: the first is logged
-    if (scene_read && scene != scene_was) {
-        scene_was = scene;
-        X4VR_LOG("extview: scene camera slot root+0x3e0 = %#lx — %s",
-                 (unsigned long)scene,
-                 x4vr::camsurvey::plausible(scene)
-                     ? "a camera object: the cinematic view (F6), the head "
-                       "stands down"
-                     : "no camera object: the head may turn the external views");
-    }
-    const bool want = external && cam && mode > 0 && !menu && !cinematic;
+    const bool want = external && cam && mode > 0 && !menu;
     const uint64_t applied = g_extslot.applied.load(std::memory_order_relaxed);
     const extview::Period::Event ev = per.step(want, applied);
     if (want) {
@@ -5484,9 +5276,6 @@ static bool extview_tick(bool external, float head_yaw, float head_pitch,
                  : !cam    ? "no player camera"
                  : mode <= 0
                      ? "the camera is back in mode 0"
-                 : cinematic
-                     ? "the cinematic view (F6) is up: X4 draws through its "
-                       "scene camera, a window in front"
                      : "a full-screen menu is up (X4's UI: the window in front)",
                  (unsigned long long)per.composed, now - since, d_orbit,
                  d_early);
@@ -6573,7 +6362,6 @@ void headlook_tick() {
     if (x4vr::Shared *sh = x4vr_shared_state())
         sh->external_head.store(ext_declared ? 1u : 0u,
                                 std::memory_order_relaxed);
-    camsurvey_tick(view, hud); // X4VR_CAMSURVEY: which camera F6 uses
     // **X4VR_HEADLOOK_MENU_CENTRE: the spring-back X4VR_HEADLOOK_WRITE took
     // away.** With the HUD down in the cockpit the head drives nothing, and
     // X4 would have recentred its look-around here by itself (take 311);

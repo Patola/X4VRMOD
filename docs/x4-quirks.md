@@ -27025,3 +27025,17 @@ at every change, so the next take shows what X4 keeps there outside F6.
 leave it as a window. The HUD on F2/F4 is X4's own (vanilla shows it);
 with the head turning the camera it rides with the head. Left as is for
 now.
+
+## Take 357 — the scene camera slot is not an F6 signal; code reverted to v0.9.3
+
+Take 357 (gate = "root+0x3e0 holds a camera object"): F2/F3/F4 still
+windows; scorer FAIL, 0 periods over 4 external views. The slot's raw value,
+logged at last, held a camera object **before any F6** (126475) and went
+back to it after F6 ended. The slot is not an F6 signal.
+
+Patola: *"We added unnecessary entropy to the code. We should revert to
+v0.9.3, check if the F4→F6 bug is there and add a specific fix for it
+again."* The code (injector, tests, scorer) is restored to v0.9.3 exactly;
+the camera census (X4VR_CAMSURVEY) and the scene-camera gate are gone. This
+file keeps the history. (Take 355 ran v0.9.3's head-turn code unchanged
+under a read-only census and showed the F4→F6 glue.)
