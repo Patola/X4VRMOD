@@ -1029,7 +1029,8 @@ fmfmt=1
 for frag in '"ui: on-foot menu %llu OPEN — X4 freed the pointer%s; the "' \
             'fm.resumed ? " (still free after a HUD-down menu)" : "",' \
             '"ui: on-foot menu %llu — pointer recentred from "' \
-            '"%s%.0f,%.0f to %.0f,%.0f",' \
+            '"%s%.0f,%.0f to %.0f,%.0f (%s)",' \
+            '? "a conversation: where its options are"' \
             '"cursor is drawn %s | head-look yaw %.1f pitch %.1f | "' \
             '"pointer %.0f,%.0f",' \
             '"through the UI canvas (arm A)"' \
@@ -1115,6 +1116,27 @@ fi
 { cat /tmp/census-hm-base.log; printf '%s\n' "$mcarm" "$fmout" "$hmcen" "$hmoA" "$hmcA"; } > /tmp/census-hm-nolayer.log
 want "hud-menu arm A never reached the layer -> FAIL" /tmp/census-hm-nolayer.log "FAIL|  - " "1 canvas-arm period(s) never reached the layer"
 want "hud-menu one arm only -> said" /tmp/census-hm-nolayer.log hud-menu "ONLY ONE ARM"
+# ------------------------------------------ menus: X4's open-menu table (take 342)
+mnfmt=1
+for frag in '"menus: IsConversationActive and the open-menu lookup "' \
+            'X4VR_LOG("ui: X4'"'"'s open menus: %s%s", line,' \
+            '"menus: REFUSED — X4'"'"'s code at %p differs from the "'; do
+    grep -qF -- "$frag" injector/x4vr_inject.cpp || { mnfmt=0; echo "        missing: $frag"; }
+done
+if [ $mnfmt -eq 1 ]; then ok "menus: the planted lines match the injector's formats"
+else bad "menus: the injector's format changed — replant the lines below"; fi
+mnok='[  999970.000] inject  menus: IsConversationActive and the open-menu lookup match X4 9.00 — the table'"'"'s root at 0x3dfc208 and the conversation at 0x3db8300 are READ, never called'
+mnseat='[  999970.500] inject  headlook: in the pilot seat — the write may act'
+mn1='[  999971.000] inject  ui: X4'"'"'s open menus: none'
+mn2='[  999972.000] inject  ui: X4'"'"'s open menus: InteractMenu'
+mn3='[  999975.000] inject  ui: X4'"'"'s open menus: MapMenu[full]'
+{ cat "$BASE"; printf '%s\n' "$mnok" "$mnseat" "$mn1" "$mn2" "$mn3"; } > /tmp/census-mn-yes.log
+want "menus -> changes listed with the seat" /tmp/census-mn-yes.log menus "t   999972.0  seat  InteractMenu"
+want "menus -> names seen" /tmp/census-mn-yes.log "menus   names" "InteractMenu (seat), MapMenu (seat)"
+want "menus -> InteractMenu found" /tmp/census-mn-yes.log "menus   =>" "InteractMenu IS in X4's table"
+{ cat "$BASE"; printf '%s\n' "$mnok" "$mnseat" "$mn1" "$mn3"; } > /tmp/census-mn-no.log
+want "menus -> InteractMenu absent said" /tmp/census-mn-no.log "menus   =>" "InteractMenu never appeared"
+absent "menus: not read -> silent" "$BASE" "menus "
 absent "hud-menu: nothing off the seat -> silent" "$BASE" hud-menu
 # Take 340's map and crafting bench: full-screen, so the layer's canvas was
 # already ON (no HUD-down ON line). That FAILed them; it must not.
@@ -1134,6 +1156,9 @@ fmrec='[  999975.030] inject  ui: on-foot menu 1 — pointer recentred from 2255
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" "$fmoA" "$fmrec" "$fmlA" "$fmcA" "$fmoff" "$fmoB" "$fmcB"; } > /tmp/census-fm-rec.log
 want "foot-menu recentred opening -> marked" /tmp/census-fm-rec.log foot-menu "pointer   2255,  1621  canvas ON  recentred"
 want "foot-menu recentres counted against fresh openings" /tmp/census-fm-rec.log foot-menu "pointer recentred at 1 of 2 fresh opening(s)"
+fmrec2='[  999990.030] inject  ui: on-foot menu 2 — pointer recentred from 2276,1698 to 1408,2070 (a conversation: where its options are)'
+{ cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" "$fmoA" "$fmrec" "$fmlA" "$fmcA" "$fmoff" "$fmoB" "$fmrec2" "$fmcB"; } > /tmp/census-fm-rec2.log
+want "foot-menu recentre kinds counted" /tmp/census-fm-rec2.log foot-menu "to a conversation's options 1, the centre 0 (no conversation) + 0 (unknown)"
 want "foot-menu resumed opening -> listed and marked" /tmp/census-fm-res.log foot-menu "#3   t   999995.0  arm A    open at exit  head-look   +1.0   -5.0  pointer   1400,  1400  canvas ON  (resumed after a HUD-down menu)"
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi

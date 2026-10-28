@@ -26111,3 +26111,71 @@ No recording.
 2. **Where the cursor starts in on-foot menus.** It could be moved to the
    view's centre when X4 frees the pointer. That is nearer the menus seen,
    though not on them.
+
+## Take 341 — SCORED PASS: the fixes held; the dialogue start too high
+
+Patola: *"I liked the new position of the cursor on dialogues, but I think it
+appears too high, if it appeared lower it would be faster to get to the
+dialogue menus. Apart from that and the misalignment of right-click in
+cockpit mode, the run was good, everything worked as expected."* On the
+cockpit right-click menu: *"Go with the no-setting option first."*
+
+* **P341.1 HELD.** Opening #8 resumed after a HUD-down menu (the vendor's
+  Cancel) on the canvas, and he found it right.
+* **P341.2 HELD.** Teleporters right.
+* **P341.3 HELD, but too high.** 13 of 13 fresh openings recentred.
+* **P341.4 HELD.** 14 on-foot openings, all canvas. Cockpit tracking median
+  0.04°/0.05°. Scorer PASS.
+
+**Where dialogue options are, from his own clicks.** The log keeps a press
+when it widens the running extent. Every one that fell inside an on-foot
+menu in 339–341 (8 presses, in conversations) is at y 2040–2105 and
+x 1333–1530 of the 2816² window. The centre start (y 1408) was ~650 px above
+them.
+
+## Built for take 342: dialogue start from X4's conversation state; X4's open-menu table read
+
+* **IsConversationActive is read, not called** (`injector/x4vr_menus.hpp`).
+  * Declared in ego_detailmonitorhelper/helper.lua as
+    `bool IsConversationActive(void)`.
+  * At 0xc02dc0 it is `*(int *)(*(void **)0x3db8300 + 0x1a0) != 1` with no
+    NULL check on the global, so the injector reads those bytes through
+    self_read instead.
+  * On a fresh on-foot opening the pointer goes to x centre, y 2070/2816
+    during a conversation, else to the centre. The log says which.
+* **X4's table of open menus, read: the no-setting route for the cockpit
+  right-click menu.**
+  * IsFullscreenMenuDisplayed (already polled) looks a menu up by name in a
+    tree rooted at 0x3dfc208 and returns the found node's full-screen flag.
+    Lua's right-click menu is "InteractMenu", not full-screen, so asking the
+    function says nothing about it.
+  * Node layout, from the lookup (0xbb0860..) and the in-order walk at
+    0x117f7c0: left child +0x08, right +0x10, the name's std::string at
+    +0x20/+0x28, the flag at +0x40. It is not libstdc++'s map layout.
+  * The injector walks it at 10 Hz on X4's main thread, bounded at 64 nodes;
+    a cycle, a failed read or a non-text name refuses the walk. It logs every
+    change of the set: "ui: X4's open menus: InteractMenu, MapMenu[full]".
+  * Sites: 5 instruction runs (85 bytes) plus both RIP targets, checked
+    against the real binary in tests/menus.cpp; a one-byte flip at either
+    end of each is refused and named. 17 cases, including the walk's
+    refusals on fakes laid out as the disassembly says.
+* **Scorer:** `menus` lists every change with seat/foot and the names seen,
+  and says whether InteractMenu was ever in the table. `foot-menu` counts
+  recentres by kind. Planted cases with format guards.
+
+### P342 — is the right-click menu in X4's table? And the dialogue start
+
+Take 341's line. WiVRn, configuration 1, no recording.
+
+* **P342.1 (the reconnaissance, no prediction).** `menus` lists the sets.
+  * If "InteractMenu" appears exactly while the cockpit right-click menu is
+    open, the table is the signal and the fix is the canvas while it is
+    there.
+  * If not, this table holds only some menus, and the next step is asking
+    X4's menu Lua state (still no setting).
+* **P342.2** A conversation's opening sends the pointer to its options
+  (logged "a conversation"); he finds it at the options or nearly. A
+  terminal's goes to the centre.
+* **P342.3** Everything else as in 341. Scorer PASS.
+
+    X4VR_TAKE=342 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take342.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh

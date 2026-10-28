@@ -4464,16 +4464,69 @@ def main(path):
                   "drawn as asked")
             fresh = sum(1 for _t, _n, res, *_ in fm_open if not res)
             if fm_rec or fm_norec:
+                kinds = re.findall(r"ui: on-foot menu \d+ — pointer recentred "
+                                   r"from .*? \((a conversation|no "
+                                   r"conversation|conversation unknown)", text)
                 print(f"foot-menu  pointer recentred at {len(fm_rec)} of "
                       f"{fresh} fresh opening(s)"
                       + (f", NOT at {len(fm_norec)} (X4's window unknown)"
-                         if fm_norec else ""))
+                         if fm_norec else "")
+                      + (f" — to a conversation's options {kinds.count('a conversation')}, "
+                         f"the centre {kinds.count('no conversation')} (no "
+                         f"conversation) + {kinds.count('conversation unknown')} "
+                         f"(unknown)" if kinds else ""))
         if late_a:
             fails.append(f"on-foot menus: {late_a} canvas-arm opening(s) "
                          f"never reached the layer as a canvas switch")
         if fm_ab and fm_open and not (arms["A"] and arms["B"]):
             print("foot-menu  ONLY ONE ARM opened — the A/B needs at least "
                   "one opening of each")
+
+    # --- X4's open-menu table, read (take 342) -----------------------------
+    #
+    # Reconnaissance for the cockpit's right-click menu: is X4's "InteractMenu"
+    # in the table IsFullscreenMenuDisplayed looks names up in while that menu
+    # is open? The injector logs every change of the set; this lists them with
+    # where he was, and the names it ever saw.
+    mn_ok = re.search(r"menus: IsConversationActive and the open-menu lookup "
+                      r"match", text)
+    mn_ref = re.search(r"menus: REFUSED — (.*)", text)
+    mn_sets = [(float(t), v) for t, v in re.findall(
+        r"\[\s*([\d.]+)\]\s+inject\s+ui: X4's open menus: (.*)", text)]
+    mn_fail = len(re.findall(r"ui: X4's open menus could not be read", text))
+    if mn_ok or mn_ref or mn_sets:
+        if mn_ref:
+            print(f"menus   REFUSED — {mn_ref.group(1)}")
+        seat_ev = [(float(t), k) for t, k in re.findall(
+            r"\[\s*([\d.]+)\]\s+inject\s+headlook: (in|out of) the pilot "
+            r"seat — ", text)]
+
+        def _seat_at(t):
+            k = "in"
+            for ts, kk in seat_ev:
+                if ts <= t:
+                    k = kk
+            return "seat" if k == "in" else "foot"
+        names = {}
+        for t, v in mn_sets:
+            for nm in v.split(", "):
+                nm = nm.replace("[full]", "").replace(" (and more)", "")
+                if nm and nm != "none":
+                    names.setdefault(nm, set()).add(_seat_at(t))
+        print(f"menus   {len(mn_sets)} change(s) of X4's open-menu set"
+              + (f", {mn_fail} unreadable walk(s) skipped" if mn_fail else ""))
+        for t, v in mn_sets[:40]:
+            print(f"menus     t {t:10.1f}  {_seat_at(t):4s}  {v}")
+        if len(mn_sets) > 40:
+            print(f"menus     ... {len(mn_sets) - 40} more")
+        if names:
+            print("menus   names seen: " + ", ".join(
+                f"{k} ({'/'.join(sorted(v))})" for k, v in sorted(names.items())))
+        print("menus   => " + (
+            "InteractMenu IS in X4's table — the cockpit right-click menu can "
+            "be followed from it" if "InteractMenu" in names else
+            "InteractMenu never appeared — if Patola right-clicked in the "
+            "cockpit, this table does not hold that menu"))
 
     # --- HUD-down menus off the seat: the station teleporters (take 339) ----
     #

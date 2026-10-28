@@ -51,6 +51,7 @@ extern char **environ;
 #include "../common/x4vr_share.hpp"
 #include "../common/x4vr_steer.hpp"
 #include "x4vr_foot.hpp"
+#include "x4vr_menus.hpp"
 #include "x4vr_config.hpp"
 #include "x4vr_inputmap.hpp"
 #include "../common/x4vr_camring.hpp"
@@ -4573,7 +4574,7 @@ static std::atomic<bool> g_steer_warping{false};
 // False when X4's window is not known yet. `*from_*` is where it was (if
 // `*have`), `*to_*` where it went.
 static bool recentre_pointer(float *from_x, float *from_y, bool *have,
-                             float *to_x, float *to_y) {
+                             float *to_x, float *to_y, float y_frac = 0.5f) {
     static auto from_id = real<void *(*)(uint32_t)>("SDL_GetWindowFromID");
     static auto get_size = real<bool (*)(void *, int *, int *)>("SDL_GetWindowSize");
     const uint32_t id = g_motion_window.load(std::memory_order_relaxed);
@@ -4583,7 +4584,7 @@ static bool recentre_pointer(float *from_x, float *from_y, bool *have,
         return false;
     const int xw = g_x4_win_w.load(std::memory_order_relaxed);
     *to_x = 0.5f * (float)(xw > 1 ? xw : w);
-    *to_y = 0.5f * (float)h;
+    *to_y = y_frac * (float)h;
     bool vis = false;
     *have = x4vr::share_read(x4vr_shared_state(), from_x, from_y, &vis);
     g_steer_warping.store(true, std::memory_order_relaxed);
@@ -4748,6 +4749,86 @@ static bool cursor_foot_ab() {
     return on;
 }
 
+// ------------------------------------------------ X4's menus, read
+//
+// x4vr_menus.hpp: X4's table of open menus and its conversation state, read
+// through self_read after every instruction they come from has been checked.
+// Patola after take 341: "Go with the no-setting option first" -- for the
+// cockpit's right-click menu, which X4 does not call full-screen.
+static bool menus_sites_verified() {
+    static const bool ok = [] {
+        auto rd = [](uintptr_t va, void *o, size_t n) {
+            return self_read(va, o, n);
+        };
+        uintptr_t bad = 0;
+        const bool v = x4vr::menus::verify_sites(rd, &bad);
+        if (v)
+            X4VR_LOG("menus: IsConversationActive and the open-menu lookup "
+                     "match X4 9.00 — the table's root at %p and the "
+                     "conversation at %p are READ, never called",
+                     (void *)x4vr::menus::kMenuRootSlot,
+                     (void *)x4vr::menus::kConvGlobal);
+        else
+            X4VR_LOG("menus: REFUSED — X4's code at %p differs from the "
+                     "analysed build; nothing of X4's menus is read",
+                     (void *)bad);
+        return v;
+    }();
+    return ok;
+}
+
+// A conversation is on (X4's IsConversationActive, read): -1 unknown.
+static int x4_conversation() {
+    if (!menus_sites_verified())
+        return -1;
+    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    int32_t st = 0;
+    if (!x4vr::menus::conversation_state(rd, &st))
+        return -1;
+    return x4vr::menus::conversation_active(st) ? 1 : 0;
+}
+
+// **Reconnaissance for the cockpit's right-click menu** (take 342): every
+// change of X4's open-menu set, logged. Whether "InteractMenu" is in the
+// table while that menu is open -- it is not full-screen, which is all
+// IsFullscreenMenuDisplayed can say -- decides whether this table is the
+// signal. 10 Hz on X4's main thread, between its own calls into the table.
+static void menus_tick() {
+    if (!cursor_canvas_auto() || !menus_sites_verified())
+        return;
+    static double last = 0.0;
+    const double now = mono_seconds();
+    if (now - last < 0.100)
+        return;
+    last = now;
+    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    x4vr::menus::Entry e[24];
+    const int n = x4vr::menus::walk(rd, x4vr::menus::kMenuRootSlot, e, 24);
+    static char was[512] = "";
+    static unsigned changes = 0, failed = 0;
+    if (n < 0) {
+        if (failed++ < 20)
+            X4VR_LOG("ui: X4's open menus could not be read (a read failed "
+                     "or the tree was mid-change) — skipped");
+        return;
+    }
+    char line[512];
+    x4vr::menus::describe(e, n < 24 ? n : 24, line, sizeof line);
+    if (strcmp(line, was) != 0 && changes < 2000) {
+        changes++;
+        snprintf(was, sizeof was, "%s", line);
+        X4VR_LOG("ui: X4's open menus: %s%s", line,
+                 n > 24 ? " (and more)" : "");
+    }
+}
+
+// Where a conversation's options are, as a fraction of the window's height:
+// take 339-341's clicks on dialogue options landed at y 2040..2105 of 2816
+// (x 1333..1530), so 2070/2816. Patola after 341: the centre start "appears
+// too high, if it appeared lower it would be faster to get to the dialogue
+// menus".
+constexpr float kDialogueY = 2070.0f / 2816.0f;
+
 // X4VR_FOOT_MENU_RECENTRE=0 — leave the pointer where X4 freed it when an
 // on-foot menu opens (every take before 341). On by default.
 static bool foot_menu_recentre() {
@@ -4807,14 +4888,22 @@ static void foot_menu_tick() {
         // X4's menus (Patola: "I definitely want the cursor closer to the
         // menus"). Not on a resumed opening: there the pointer is where he
         // last saw and moved it.
+        // A conversation's options sit below the centre (kDialogueY); a
+        // terminal's menu near it. X4's conversation state is read, so
+        // which one this is decides where the pointer goes.
         if (!fm.resumed && foot_menu_recentre()) {
             float px = 0.f, py = 0.f, cx = 0.f, cy = 0.f;
             bool have = false;
-            if (recentre_pointer(&px, &py, &have, &cx, &cy))
+            const int conv = x4_conversation();
+            if (recentre_pointer(&px, &py, &have, &cx, &cy,
+                                 conv == 1 ? kDialogueY : 0.5f))
                 X4VR_LOG("ui: on-foot menu %llu — pointer recentred from "
-                         "%s%.0f,%.0f to %.0f,%.0f",
+                         "%s%.0f,%.0f to %.0f,%.0f (%s)",
                          (unsigned long long)fm.openings,
-                         have ? "" : "(unknown) ", px, py, cx, cy);
+                         have ? "" : "(unknown) ", px, py, cx, cy,
+                         conv == 1 ? "a conversation: where its options are"
+                         : conv == 0 ? "no conversation: the centre"
+                                     : "conversation unknown: the centre");
             else
                 X4VR_LOG("ui: on-foot menu %llu — X4's window is not known "
                          "yet, pointer NOT recentred",
@@ -6977,6 +7066,7 @@ void SDL_PumpEvents(void) {
         csmfit_tick();
         fullscreen_menu_tick();
         foot_menu_tick();
+        menus_tick();
         steer_tick();
         pumprate_report();
     }

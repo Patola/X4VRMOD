@@ -201,6 +201,8 @@ add_executable(x4vr_test_steer steer.cpp)
 # the window across the +-180 seam, a camera change, the line's shape.
 # Self-checking.
 add_executable(x4vr_test_foot foot.cpp)
+# x4vr_menus.hpp: X4's open-menu table and conversation state, read not called.
+add_executable(x4vr_test_menus menus.cpp)
 # The content.xml fork that enables our extensions for the modded session.
 add_executable(x4vr_test_content_fork content_fork.cpp)
 target_link_libraries(x4vr_test_camwatch PRIVATE Threads::Threads)
