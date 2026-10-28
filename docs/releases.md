@@ -18,6 +18,25 @@ the same message:
 
 Nothing here is published until the repository is pushed.
 
+## v0.9.2 — 2026-10-28 — the numpad orbits the external views again
+
+The state of take 352 (code identical to commit 1db94d7). Patola: *"F2, F3,
+F4 with no drift. So, it's fixed."*
+
+* **Fixed:** in F2 (external) and F3 (target) the numpad no longer orbited
+  the view around the ship or the target; it pitched once and froze.
+  * The `x4vrmod_headlook` extension zeroed X4's `<lookaround><internal>`
+    anglespeed for the whole session, so head-look's written angle would
+    stay. The same speed drives those views' orbit.
+  * Now X4 keeps its own value. The injector holds it at 0 only while the
+    camera is in its cockpit/walking mode, and gives it back in every other
+    view.
+  * `X4VR_HEADLOOK_SPEED_EXT=1` restores the old extension.
+* The play command is unchanged.
+
+**Known limitations:** the external, external-static, target and cinematic
+views (F2/F3/F4/F6) and the start menu show as a window.
+
 ## v0.9.1 — 2026-10-28 — the volumetric nebula in stereo
 
 The state of take 349 (code identical to commit 46ae135). Patola:

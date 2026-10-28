@@ -11,7 +11,7 @@ Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
 **[docs/frame-analysis.md](docs/frame-analysis.md)**; the traps X4 sets for
 modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 
-> **Status: v0.9.1 — playable in VR** ([release notes](docs/releases.md)).
+> **Status: v0.9.2 — playable in VR** ([release notes](docs/releases.md)).
 > X4 runs in VR with in-engine stereo (per-eye lighting), head-look in the
 > cockpit and on foot, the UI on a canvas at the angle X4 intended, and every
 > menu reachable and lined up with the cursor, over WiVRn or SteamVR. Open
@@ -82,6 +82,7 @@ blocks every frame.
 | **Playable in VR** | **release** | **`v0.9.0`** |
 | External / target / cinematic views and the start menu as the whole scene | open | — |
 | Volumetric nebula in stereo (Matrix #79B, CEO's Doubt) | done | **`v0.9.1`** |
+| The numpad orbits the external (F2) and target (F3) views again | done | **`v0.9.2`** |
 | Frame pacing at 2816² per eye (a 90 Hz display is starved) | open | — |
 | Head translation (lean) | open — X/Y built and switched off, Z needs depth | — |
 
