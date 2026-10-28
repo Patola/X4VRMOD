@@ -1348,5 +1348,23 @@ else
     bad "extview: the injector's path-count format moved"
 fi
 
+# Take 355: F6 from F4 -- the head declared on with the HUD down.
+evhd='[  999963.000] inject  headlook: HUD is now down (IsInPanelMode=0) — idle, mouse handed back'
+evhu='[  999969.000] inject  headlook: HUD is now up (IsInPanelMode=0) — steering'
+{ cat /tmp/census-ev-base.log; printf '%s\n' "$evpat" "$evview" "$evon" "$evdecl" "$evlay" "$evhd" "$evhu" "$evoff"; } > /tmp/census-ev-hud.log
+want "extview: declared on with the HUD down -> FAIL" /tmp/census-ev-hud.log "FAIL|  - " "external view 1: the head was declared for 6.0 s with the HUD down"
+evoffh='[  999963.010] inject  extview: period 1 OFF — the HUD is down (the cinematic view F6, or a menu): a window in front; the stub composed the head 100 time(s) in 2.0 s | the player'"'"'s camera reached the orbit compose 0 time(s), X4'"'"'s early return 100 time(s)'
+{ cat /tmp/census-ev-base.log; printf '%s\n' "$evpat" "$evview" "$evon" "$evdecl" "$evlay" "$evhd" "$evoffh" "$evhu"; } > /tmp/census-ev-hudok.log
+if python3 tools/score_run.py /tmp/census-ev-hudok.log 2>&1 | grep -q "with the HUD down"; then
+    bad "extview: the period ended at the HUD going down -> FAILs"
+else
+    ok "extview: the period ended at the HUD going down -> no FAIL"
+fi
+if grep -qF '"the HUD is down (the cinematic view F6, or a menu): a "' injector/x4vr_inject.cpp; then
+    ok "extview: the injector ends a period when the HUD goes down"
+else
+    bad "extview: the injector's HUD-down reason moved"
+fi
+
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

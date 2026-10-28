@@ -5182,8 +5182,9 @@ static void extview_patch_at_start() {
 // no full-screen menu, withdrawn otherwise. True while the head is DECLARED
 // -- the stub has composed this period's rows -- and then `*yaw`/`*pitch`
 // are the angle it composed, which the layer declares.
-static bool extview_tick(bool external, float head_yaw, float head_pitch,
-                         float yaw_weight, float *yaw_out, float *pitch_out) {
+static bool extview_tick(bool external, bool hud, float head_yaw,
+                         float head_pitch, float yaw_weight, float *yaw_out,
+                         float *pitch_out) {
     using namespace x4vr;
     static extview::Period per;
     static float ext_yaw = 0.f, ext_pitch = 0.f;
@@ -5198,7 +5199,12 @@ static bool extview_tick(bool external, float head_yaw, float head_pitch,
     if (cam && !self_read(cam + extview::kCamMode, &mode, sizeof mode))
         mode = -1;
     const bool menu = g_fullscreen_up.load(std::memory_order_relaxed);
-    const bool want = external && cam && mode > 0 && !menu;
+    // **The HUD up, too.** F6 (the cinematic view) is drawn through another
+    // camera, and entered from F4 it leaves the player's in mode 4: take 355
+    // turned a camera X4 was not drawing and declared it, and the window
+    // followed the face. F6 hides the HUD (20-30 ms after the key, takes 350
+    // and 355); F2/F3/F4 keep it.
+    const bool want = external && hud && cam && mode > 0 && !menu;
     const uint64_t applied = g_extslot.applied.load(std::memory_order_relaxed);
     const extview::Period::Event ev = per.step(want, applied);
     if (want) {
@@ -5276,6 +5282,9 @@ static bool extview_tick(bool external, float head_yaw, float head_pitch,
                  : !cam    ? "no player camera"
                  : mode <= 0
                      ? "the camera is back in mode 0"
+                 : !hud
+                     ? "the HUD is down (the cinematic view F6, or a menu): a "
+                       "window in front"
                      : "a full-screen menu is up (X4's UI: the window in front)",
                  (unsigned long long)per.composed, now - since, d_orbit,
                  d_early);
@@ -6353,7 +6362,7 @@ void headlook_tick() {
     // before (x4vr_extview.hpp).
     float ext_yaw = 0.f, ext_pitch = 0.f;
     const bool ext_declared =
-        write_mode && extview_tick(view == X4View::External, yaw, pitch,
+        write_mode && extview_tick(view == X4View::External, hud, yaw, pitch,
                                    ha.yaw_weight, &ext_yaw, &ext_pitch);
     if (ext_declared) {
         g_headlook.cmd_yaw_deg = ext_yaw;

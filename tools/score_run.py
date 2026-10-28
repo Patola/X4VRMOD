@@ -4592,6 +4592,37 @@ def main(path):
                   f"external-view entr{'y' if ext_views == 1 else 'ies'}; "
                   f"{len(ev_decl)} declared; the layer switched "
                   f"{ev_layer} time(s)")
+        # Take 355: F6 entered from F4 kept the player's camera in mode 4 with
+        # the HUD down, and the head was declared while X4 drew another
+        # camera -- a window glued to the face. F6 hides the HUD, so a
+        # declared period running on with the HUD down is that bug.
+        hd = [(float(t), k) for t, k in re.findall(
+            r"\[\s*([\d.]+)\]\s+inject\s+headlook: HUD is now (down|up)",
+            text)]
+        for t, n, mode in ev_on:
+            n = int(n)
+            if n not in ev_decl:
+                continue
+            a = float(t) + ev_decl[n]
+            b = float(t) + (ev_off[n][2] if n in ev_off else 1e9)
+            down_for, state, since = 0.0, None, a
+            for ts_, k in hd:
+                if ts_ <= a:
+                    state = k
+                    continue
+                if ts_ >= b:
+                    break
+                if state == "down":
+                    down_for += ts_ - since
+                state, since = k, ts_
+            if state == "down":
+                down_for += max(0.0, min(b, 1e9) - since) if b < 1e9 else 0.0
+            if down_for > 0.5:
+                fails.append(
+                    f"external view {n}: the head was declared for "
+                    f"{down_for:.1f} s with the HUD down (F6, the cinematic "
+                    f"view, is drawn through another camera) — the window "
+                    f"followed the face")
         if ev_asked and ev_patched and ext_views and not ev_on:
             fails.append(f"X4VR_HEADLOOK_EXTERNAL=1: {ext_views} external "
                          f"view(s) shown and the head turned none of them")
