@@ -4411,6 +4411,12 @@ def main(path):
     fm_close = {int(n): float(t) for t, n in re.findall(
         r"\[\s*([\d.]+)\]\s+inject\s+ui: on-foot menu (\d+) closed", text)}
     fm_ab = bool(re.search(r"\bX4VR_CURSOR_FOOT_AB=1\b", run or ""))
+    # Take 341: a fresh opening moves the pointer to the window's centre.
+    fm_rec = {int(n): (x, y) for n, x, y in re.findall(
+        r"ui: on-foot menu (\d+) — pointer recentred from (?:\(unknown\) )?"
+        r"(-?[\d.]+),(-?[\d.]+) to ", text)}
+    fm_norec = re.findall(r"ui: on-foot menu (\d+) — X4's window is not "
+                          r"known yet, pointer NOT recentred", text)
     if fm_open or (ca_asked and "foot: PATCHED" in text):
         if not fm_open:
             # Silence proves "never" only for a build that logs openings:
@@ -4447,7 +4453,8 @@ def main(path):
                   f"head-look {float(hy):+6.1f} {float(hp):+6.1f}  "
                   f"pointer {float(px):6.0f},{float(py):6.0f}"
                   + ("  canvas ON" if reached else "")
-                  + ("  (resumed after a HUD-down menu)" if res else ""))
+                  + ("  (resumed after a HUD-down menu)" if res else "")
+                  + ("  recentred" if int(n) in fm_rec else ""))
         if fm_open:
             print(f"foot-menu  {len(fm_open)} opening(s): arm A (canvas) "
                   f"{arms['A']}, arm B (raw) {arms['B']}"
@@ -4455,6 +4462,12 @@ def main(path):
             print("foot-menu  which arm put the cursor ON the highlighted "
                   "option is Patola's to say; this only says each arm was "
                   "drawn as asked")
+            fresh = sum(1 for _t, _n, res, *_ in fm_open if not res)
+            if fm_rec or fm_norec:
+                print(f"foot-menu  pointer recentred at {len(fm_rec)} of "
+                      f"{fresh} fresh opening(s)"
+                      + (f", NOT at {len(fm_norec)} (X4's window unknown)"
+                         if fm_norec else ""))
         if late_a:
             fails.append(f"on-foot menus: {late_a} canvas-arm opening(s) "
                          f"never reached the layer as a canvas switch")

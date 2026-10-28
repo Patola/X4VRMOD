@@ -26053,6 +26053,38 @@ delay).
   full-screen periods; `foot-menu` marks resumed openings. Planted cases for
   both; take 340's false FAIL is a case.
 
+* **The pointer to the window's centre on a fresh on-foot opening**
+  (Patola, on the second question: *"Yes, I definitely want the cursor closer
+  to the menus"*).
+  * On by default; `X4VR_FOOT_MENU_RECENTRE=0` leaves it where X4 freed it.
+  * Through the same warp as the steering recentre: `recentre_pointer`,
+    split out of `steer_recentre`, whose log lines are unchanged.
+  * Not on a resumed opening: there the pointer is where he last saw and
+    moved it.
+  * The scorer counts recentres against fresh openings.
+
+**Protected UI Mode, answered (his first question, before deciding):**
+* **The shadow fix is not an extension.** It is the injector's code patch
+  (X4VR_CSM_COVER, csmfit).
+* **Our three extensions are XML diffs of `libraries/parameters.xml`**
+  (look-around limits, sway off, the head-look follower). There is no Lua,
+  so Protected UI Mode does not touch them.
+* **Neither his `config.xml` nor our fork sets `uisafemode`**, so X4's
+  default is in force.
+* **What it restricts**, per X4's binary: `require()` takes only
+  whitelisted modules, and native libraries must be signed. X4's own text
+  for the option: protects the system "against malicious actions by third
+  party modifications".
+* **Off would apply to the mod's sessions only**, through our config fork.
+  It would lift that protection for every enabled UI mod in those sessions,
+  not just ours: he has one Workshop extension enabled (ws_1666869624).
+* **An alternative that needs no setting**: the injector, already native
+  code in X4's process, asks X4's own menu Lua state whether the interact
+  menu is open, each tick, between X4's Lua calls.
+  * X4's interact menu source is readable (`menu_interactmenu.lua`).
+  * Riskier to build (the right `lua_State`, the right moment on X4's
+    thread), but nothing is lowered and nothing installed.
+
 ### P341 — play, with the fixes
 
 Take 340's line without X4VR_CURSOR_CENTRED_AB. WiVRn, configuration 1.
@@ -26061,7 +26093,9 @@ No recording.
 * **P341.1** The vendor: dialog → purchase list → Cancel → the dialog's
   options highlight under the cursor. The log shows a resumed opening.
 * **P341.2** Every teleporter use lines up, from any angle.
-* **P341.3** Everything else as in 340: on-foot menus, map, cockpit.
+* **P341.3** On every fresh on-foot opening the cursor starts at the view's
+  centre (logged "pointer recentred"), nearer the menu than in 340.
+* **P341.4** Everything else as in 340: on-foot menus, map, cockpit.
   Scorer PASS.
 
     X4VR_TAKE=341 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take341.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh

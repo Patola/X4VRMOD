@@ -1028,6 +1028,8 @@ fi
 fmfmt=1
 for frag in '"ui: on-foot menu %llu OPEN — X4 freed the pointer%s; the "' \
             'fm.resumed ? " (still free after a HUD-down menu)" : "",' \
+            '"ui: on-foot menu %llu — pointer recentred from "' \
+            '"%s%.0f,%.0f to %.0f,%.0f",' \
             '"cursor is drawn %s | head-look yaw %.1f pitch %.1f | "' \
             '"pointer %.0f,%.0f",' \
             '"through the UI canvas (arm A)"' \
@@ -1128,6 +1130,10 @@ fi
 # Take 340's vendor: back from the purchase list with the pointer free.
 fmres='[  999995.000] inject  ui: on-foot menu 3 OPEN — X4 freed the pointer (still free after a HUD-down menu); the cursor is drawn through the UI canvas (arm A) | head-look yaw 1.0 pitch -5.0 | pointer 1400,1400'
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" "$fmoA" "$fmlA" "$fmcA" "$fmoff" "$fmres" '[  999995.020] layer   cursor canvas: AUTO — ON (an on-foot menu has the pointer: the cursor follows X4'"'"'s UI)'; } > /tmp/census-fm-res.log
+fmrec='[  999975.030] inject  ui: on-foot menu 1 — pointer recentred from 2255,1621 to 1408,1408'
+{ cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" "$fmoA" "$fmrec" "$fmlA" "$fmcA" "$fmoff" "$fmoB" "$fmcB"; } > /tmp/census-fm-rec.log
+want "foot-menu recentred opening -> marked" /tmp/census-fm-rec.log foot-menu "pointer   2255,  1621  canvas ON  recentred"
+want "foot-menu recentres counted against fresh openings" /tmp/census-fm-rec.log foot-menu "pointer recentred at 1 of 2 fresh opening(s)"
 want "foot-menu resumed opening -> listed and marked" /tmp/census-fm-res.log foot-menu "#3   t   999995.0  arm A    open at exit  head-look   +1.0   -5.0  pointer   1400,  1400  canvas ON  (resumed after a HUD-down menu)"
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi

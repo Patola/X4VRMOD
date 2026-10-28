@@ -4568,27 +4568,40 @@ static std::atomic<uint32_t> g_steer_mode{0};
 // folded exactly as one of X4's warps would be.
 void SDL_WarpMouseInWindow(void *win, float x, float y);
 static std::atomic<bool> g_steer_warping{false};
-static void steer_recentre() {
+// The pointer to the centre of X4's window, through our own
+// SDL_WarpMouseInWindow so it is folded exactly as one of X4's warps would be.
+// False when X4's window is not known yet. `*from_*` is where it was (if
+// `*have`), `*to_*` where it went.
+static bool recentre_pointer(float *from_x, float *from_y, bool *have,
+                             float *to_x, float *to_y) {
     static auto from_id = real<void *(*)(uint32_t)>("SDL_GetWindowFromID");
     static auto get_size = real<bool (*)(void *, int *, int *)>("SDL_GetWindowSize");
-    static unsigned said = 0;
     const uint32_t id = g_motion_window.load(std::memory_order_relaxed);
     void *win = (from_id && id) ? from_id(id) : nullptr;
     int w = 0, h = 0;
-    if (!win || !get_size || !get_size(win, &w, &h) || w < 2 || h < 2) {
+    if (!win || !get_size || !get_size(win, &w, &h) || w < 2 || h < 2)
+        return false;
+    const int xw = g_x4_win_w.load(std::memory_order_relaxed);
+    *to_x = 0.5f * (float)(xw > 1 ? xw : w);
+    *to_y = 0.5f * (float)h;
+    bool vis = false;
+    *have = x4vr::share_read(x4vr_shared_state(), from_x, from_y, &vis);
+    g_steer_warping.store(true, std::memory_order_relaxed);
+    SDL_WarpMouseInWindow(win, *to_x, *to_y);
+    g_steer_warping.store(false, std::memory_order_relaxed);
+    return true;
+}
+
+static void steer_recentre() {
+    static unsigned said = 0;
+    float px = 0.f, py = 0.f, cx = 0.f, cy = 0.f;
+    bool have = false;
+    if (!recentre_pointer(&px, &py, &have, &cx, &cy)) {
         if (said++ < 3)
             X4VR_LOG("steer: mouse steering engaged, but X4's window is not "
                      "known yet — pointer NOT recentred");
         return;
     }
-    const int xw = g_x4_win_w.load(std::memory_order_relaxed);
-    const float cx = 0.5f * (float)(xw > 1 ? xw : w), cy = 0.5f * (float)h;
-    float px = 0.f, py = 0.f;
-    bool vis = false;
-    const bool have = x4vr::share_read(x4vr_shared_state(), &px, &py, &vis);
-    g_steer_warping.store(true, std::memory_order_relaxed);
-    SDL_WarpMouseInWindow(win, cx, cy);
-    g_steer_warping.store(false, std::memory_order_relaxed);
     if (said++ < 40)
         X4VR_LOG("steer: mouse steering engaged — pointer recentred from "
                  "%s%.0f,%.0f to %.0f,%.0f so the ship starts straight",
@@ -4735,6 +4748,13 @@ static bool cursor_foot_ab() {
     return on;
 }
 
+// X4VR_FOOT_MENU_RECENTRE=0 — leave the pointer where X4 freed it when an
+// on-foot menu opens (every take before 341). On by default.
+static bool foot_menu_recentre() {
+    static const bool on = x4vr::env_on("X4VR_FOOT_MENU_RECENTRE", true);
+    return on;
+}
+
 // X4VR_CURSOR_CENTRED_AB=1 — the same for HUD-down menus off the seat (the
 // station teleporters, take 339): odd periods canvas (A), even ones raw (B).
 static bool cursor_centred_ab() {
@@ -4779,6 +4799,27 @@ static void foot_menu_tick() {
             X4VR_LOG("milestone: on-foot menu %llu — cursor %s",
                      (unsigned long long)fm.openings,
                      fm.canvas ? "A (canvas)" : "B (raw)");
+        // **The pointer to the centre on a fresh opening.** Take 340's video:
+        // the cursor appeared "far from the menu" at every terminal, NPC and
+        // the vendor, because X4 frees the pointer wherever it drifted,
+        // unseen, while he walked and turned (opening #1 at 2621,1026). The
+        // centre is where the crosshair was when he clicked, and nearer
+        // X4's menus (Patola: "I definitely want the cursor closer to the
+        // menus"). Not on a resumed opening: there the pointer is where he
+        // last saw and moved it.
+        if (!fm.resumed && foot_menu_recentre()) {
+            float px = 0.f, py = 0.f, cx = 0.f, cy = 0.f;
+            bool have = false;
+            if (recentre_pointer(&px, &py, &have, &cx, &cy))
+                X4VR_LOG("ui: on-foot menu %llu — pointer recentred from "
+                         "%s%.0f,%.0f to %.0f,%.0f",
+                         (unsigned long long)fm.openings,
+                         have ? "" : "(unknown) ", px, py, cx, cy);
+            else
+                X4VR_LOG("ui: on-foot menu %llu — X4's window is not known "
+                         "yet, pointer NOT recentred",
+                         (unsigned long long)fm.openings);
+        }
     } else if (ev == x4vr::foot::FootMenu::kClosed) {
         X4VR_LOG("ui: on-foot menu %llu closed — the cursor is drawn at "
                  "the raw pointer",
