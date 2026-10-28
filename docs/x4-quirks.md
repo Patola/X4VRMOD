@@ -26742,3 +26742,47 @@ Patola: *"1-6 all worked. F2, F3, F4 with no drift. So, it's fixed."*
 
 Next: read the 0x1935605 block (what the read of the matrix feeds), and
 establish the order of update, evaluation and our tick.
+
+## v0.9.2 released; the route for whole-scene external views chosen
+
+**Released v0.9.2** (b1890d5; code = 1db94d7, take 352): the numpad orbits
+F2/F3 again.
+
+**Patola's decision (2026-10-28):** *"I will prefer the code patch, like
+walking's. If that doesn't work we can try (2)."* Route 1, a code patch at
+the camera's evaluation, comes first; route 2 (data-only) is the fallback.
+As with walking's v2, the concrete patch (site, bytes, stub) is put to him
+before it is enabled.
+
+**Next steps, in order:**
+1. **Design the eval-time patch for the external modes.**
+   * 0x1929f70, modes 2–5: 0x192a228 → component 0x57 (the pivot) →
+     0x18a0090 → `cmp [root+0x448]` → 0x192a284 → 0x192a15e (composes
+     camera-own +0x5a0..+0x5d0).
+   * Read 0x192a15e's compose and find where a head rotation can be
+     multiplied in after the camera's own transform, for the player camera
+     only (`rbx == [[0x3db6948]+0x3e8]`, as walking's stub checks) and modes
+     2–5.
+   * Mode 6 takes 0x192a2a9; check which F-view is which mode. Census so
+     far: F2 = mode 2 (pivot vtable 0x3d21748, his ship), F3 = mode 2
+     (0x3d23cd0, the target), a world-placed mode 4 (0x3c6ca30) seen in the
+     F4/F6 runs.
+   * The stub reads R_head from a global the injector writes each tick:
+     head-look in external views writes there, not into the camera, so X4's
+     orbit state is untouched and the numpad orbit (take 352) keeps working.
+2. **The layer declares the head's angle in those modes,** as it does on
+   foot, instead of a fixed window in front.
+3. **Tests first, offline:** site bytes against the real binary, the stub
+   executed (as tests/foot.cpp does), patch_code across pages.
+4. **Then a take.** F2/F3/F4/F6 whole scene; the numpad orbit still works;
+   the cockpit unchanged.
+5. **Later:** the start menu as the whole scene (its menu panel must stay
+   fixed in front); menus that switch to the external view are not centred.
+
+**Practical notes for whoever picks this up:**
+* Render-pass serials are creation-order and shift between runs (take 348).
+  Any per-pass dump needs X4VR_MV_INVENTORY/X4VR_PIPE_INVENTORY on.
+* `tools/name_module.py --ogl /tmp/x4-shadersrc`, because extract_glsl
+  flattens the archive paths.
+* X4 content lives in /tmp only (shader sources, dumps, Lua), and /tmp is
+  wiped at reboot.
