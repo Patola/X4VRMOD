@@ -18,6 +18,29 @@ the same message:
 
 Nothing here is published until the repository is pushed.
 
+## v0.9.4 — 2026-10-29 — F6 is a steady window again
+
+The state of take 358 (code: v0.9.3 plus commit 679e52c). Patola: *"F2, F3,
+F4 are now behaving as expected, including the HUD appearing in F2 and F4
+and following my head"*; F6 entered from F4 and from the cockpit both
+worked.
+
+* **Fixed:** in v0.9.3, the cinematic view (F6) entered from F4 was a window
+  glued to the face that followed the head. F6 is drawn through another
+  camera; entered from F4, X4 left the player's camera in its external mode,
+  so the head was turned into a camera X4 was not drawing. Now the head
+  stands down whenever the HUD is down in an external view (F6 hides it), so
+  F6 is a steady window, *"like in a television"*.
+* The HUD in F2 and F4 follows the head; that HUD is X4's own (vanilla shows
+  it in F2/F4, not in F3).
+* The play command is unchanged from v0.9.3.
+
+**Known limitations:**
+* F6's information overlay covers only about half of its window. It is X4's
+  UI laid out for the whole flat screen, shrunk by the canvas scale that puts
+  the HUD at the angle X4 meant. Next to be fixed.
+* The start menu shows as a window.
+
 ## v0.9.3 — 2026-10-28 — the external views are the whole scene
 
 The state of take 354 (`take-354-external-head`, code identical to commit
