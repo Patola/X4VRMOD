@@ -1171,6 +1171,19 @@ want "map: mouselook in the middle of the menu still FAILs" /tmp/census-map-rela
 # menucam: X4 easing the seat's camera to 0 after he sits down is centred at
 # the end; a camera left at the head's angle is still off there.
 { cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$mccen" "$(mcpose 999990.300 -2.3650 23.1370)" "$(mcpose 999990.500 -1.0620 10.7140)" "$(mcpose 999990.700 -0.5290 5.3140)" "$(mcpose 999990.900 -0.0730 0.7310)" "$(mcpose 999991.000 -0.0160 0.1630)" "$(mcpose 999994.700 0.0000 0.0000)" "$(mcpose 999994.900 0.0000 0.0000)" "$mcup" "$mcrep"; } > /tmp/census-mc-ease.log
+# Take 349: centred in the map, then teleported out of it -- on foot 1.2 s
+# before the HUD came back, X4's camera reading his body at -90 deg.
+mcsout='[  999993.800] inject  headlook: out of the pilot seat — head-look continues on foot (X4VR_HEADLOOK_FOOT): the head looks, the mouse and arrows turn the body, the mouse'"'"'s pitch is zeroed'
+{ cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$mccen" "$(mcpose 999990.500 0.0000 0.0000)" "$(mcpose 999993.000 0.0000 0.0000)" "$(mcpose 999993.500 0.0000 0.0000)" "$mcsout" "$(mcpose 999994.200 -90.0000 0.0000)" "$(mcpose 999994.800 -90.0000 0.0000)" "$mcup" "$mcrep"; } > /tmp/census-mc-teleport.log
+want "menucam: a seat change inside the period ends what is judged" /tmp/census-mc-teleport.log menucam "CENTRED      0.0% of X4's UI out of reach"
+if python3 tools/score_run.py /tmp/census-mc-teleport.log 2>&1 | grep -q "the centring did not act"; then
+    bad "menucam: the on-foot tail of a cockpit period FAILs (take 349's false FAIL)"
+else
+    ok "menucam: the on-foot tail of a cockpit period does not FAIL"
+fi
+# ...and a camera still frozen BEFORE the seat change still FAILs.
+{ cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$(mcpose 999990.500 -1.9851 6.3677)" "$(mcpose 999993.500 -1.9851 6.3677)" "$mcsout" "$(mcpose 999994.800 0.0000 0.0000)" "$mcup" "$mcrep"; } > /tmp/census-mc-frozen-then-out.log
+want "menucam: frozen before the seat change still FAILs" /tmp/census-mc-frozen-then-out.log FAIL "the centring did not act"
 want "menucam: an easing camera that reaches 0 is CENTRED" /tmp/census-mc-ease.log menucam "CENTRED      0.0% of X4's UI out of reach"
 if python3 tools/score_run.py /tmp/census-mc-ease.log 2>&1 | grep -q "the centring did not act"; then
     bad "menucam: an easing camera FAILs (take 343's false FAIL)"

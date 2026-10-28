@@ -4799,6 +4799,10 @@ def main(path):
         if so_open is not None:
             seat_off.append((so_open[0], float("inf"), so_open[1]))
 
+        mc_seat = [(float(t), k) for t, k in re.findall(
+            r"\[\s*([\d.]+)\]\s+inject\s+headlook: (in|out of) the pilot "
+            r"seat — ", text)]
+
         def _off_seat(t):
             for f_, t2_, acts in seat_off:
                 if f_ <= t <= t2_:
@@ -4828,7 +4832,14 @@ def main(path):
             # what this judges.
             # Readings arrive at the frame rate; a sparse log (or a short
             # period) falls back to its latest reading.
-            late_ = [(t, y, p_) for t, y, p_ in mc_cam if a + 0.3 <= t <= b]
+            # **Only while he is still in the seat.** Take 349 teleported out
+            # of the map: the period began in the cockpit, he was on foot
+            # 1.2 s before it ended, and X4's camera there is his body (-90
+            # deg) -- the last 0.4 s judged an on-foot camera by the cockpit's
+            # rule. Cut the period at the first seat change inside it.
+            b_ = min([b] + [t for t, k in mc_seat if a < t < b])
+            late_ = [(t, y, p_) for t, y, p_ in mc_cam if a + 0.3 <= t <= b_]
+            b = b_
             sel = [(y, p_) for t, y, p_ in late_ if t >= b - 0.4]
             if not sel and late_:
                 sel = [(late_[-1][1], late_[-1][2])]

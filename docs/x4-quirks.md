@@ -26524,3 +26524,28 @@ map's teleport to Matrix #79B.
   lights keep their per-eye inverse). Scorer PASS.
 
     X4VR_TAKE=349 X4VR_MV_DUMP=/tmp/x4vr-t349 X4VR_MV_DUMP_PRESENT=900 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take349.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+## Take 349 — SCORED PASS (after a scorer fix): the nebula is fixed
+
+Patola, in Matrix #79B and CEO's Doubt: *"Looked from many directions and in
+many views, from all of them the nebula looked right. It didn't distort.
+... This bug is fixed."*
+
+* **P349.1 HELD.** `fog: 2 module(s) kept on X4's own inverse projections`.
+* **P349.2/P349.3 HELD** by his eye, from many directions and views, both
+  sectors, rolling included.
+* **P349.4 HELD** after a scorer fix.
+  * menucam called the map period OFF-CENTRE at −90°. The map was centred
+    within a frame and held at 0,0 for 21 s.
+  * He then teleported out of it: on foot at +21.1 s, 1.2 s before the HUD
+    came back, X4's camera reading his body (−90°).
+  * My take-343 rule judges a period's last 0.4 s, which landed after the
+    seat change.
+  * The period is now cut at the first seat change inside it. Planted with
+    a control: a camera frozen before the seat change still FAILs.
+* **Log noise in the same second:** with the HUD down off the seat, the
+  head-look read-back ran and logged ~60 refusals against his body's yaw.
+  The take-339 skip keyed on "on foot with head-look steering", which is
+  false while the HUD is down. Harmless; fixed after the tag.
+
+Released as **v0.9.1** (code identical to 46ae135, take 349's build).

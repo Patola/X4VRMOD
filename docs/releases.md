@@ -18,6 +18,29 @@ the same message:
 
 Nothing here is published until the repository is pushed.
 
+## v0.9.1 — 2026-10-28 — the volumetric nebula in stereo
+
+The state of take 349 (code identical to commit 46ae135). Patola:
+*"Looked from many directions and in many views, from all of them the nebula
+looked right. It didn't distort."*
+
+* **Fixed:** in sectors with X4's volumetric fog (Matrix #79B, CEO's Doubt)
+  the nebula sat in different parts of the sky in each eye and sheared when
+  the head rolled.
+  * The fog's ray march takes each pixel's direction by un-projecting the
+    near plane.
+  * The mod's per-eye inverse projection, right for every shader that
+    rebuilds a position, turned that direction by ~18° in opposite senses
+    per eye.
+  * That module now keeps X4's own inverse projections. The fog has no
+    stereo depth of its own, which suits a cloud kilometres away.
+  * `X4VR_FOG_RAY_PER_EYE=1` restores the old behaviour.
+* The play command is unchanged.
+
+**Known limitations:** the external, external-static, target and cinematic
+views (F2/F3/F4/F6) and the start menu show as a window, and the numpad does
+not turn the F2/F3/F4 views.
+
 ## v0.9.0 — 2026-10-28 — playable in VR
 
 The state of take 343 (`take-343-right-click`, code identical to commit
