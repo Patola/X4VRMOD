@@ -26594,3 +26594,52 @@ the camera's motion.
   with numpad/mouse input and holds still without it. If it holds while
   idle, a write might persist; if X4 re-derives it every frame regardless,
   it cannot.
+
+## Take 350 — SCORED PASS: the numpad does NOT orbit F2/F3 (my reading was incomplete)
+
+Patola:
+* *"F2 and F3: … Any numpad key will work, but only for slightly rotating
+  the head down then pausing. Even if I press left, right or up. And in any
+  fashion, they should not rotate the camera, they should rotate the scene
+  from the selected view (the pivot would be our current ship/station in F2,
+  and the target for F3)."*
+* *"F4: the numpad keys work. F6: the numpad keys aren't even supposed to
+  work … We just need the whole scene instead of the window."*
+
+**The census agrees with him.**
+* F2 = mode 2 attached to his ship (vtable 0x3d21748, 58 m back); F3 = mode 2
+  attached to the target (vtable 0x3d23cd0, 167 m back).
+* In F2, numpad 4 took the camera's own pitch from −4.8° to −15.9° over
+  ~2 s, then nothing. Numpad 6, 8 and 2 changed neither its rotation nor its
+  position. F3 is the same (−3.3° → −17.0°). It never orbited.
+
+**Why my reading said it should work, and why it was incomplete.** The
+parameter scan found the internal pair +0x690/+0x694 (zeroed by
+x4vrmod_headlook) read in TWO places:
+* 0x1935f0c/1935f1e, the cockpit's numpad follower (documented at take
+  321);
+* 0x19352b3/19352bd, which I had not placed. It feeds the same follower
+  wrapper (0x1e8c260) after reading camera fields +0x6a0/+0x6a4/+0x6a8, a
+  three-angle state that looks like an orbit.
+
+If that is the external orbit, the extension that lets head-look's write
+stick is what freezes it.
+
+### P351 — eliminate x4vrmod_headlook (measurement)
+
+Take 350's line with **X4VR_HEADLOOK_WRITE=0**, which stops serving
+x4vrmod_headlook, so X4's internal anglespeed 200 is in force.
+* Cockpit head-look falls back to the MOUSELOOK servo (hover dead there),
+  irrelevant to the test.
+* The walking patch stays applied but has nothing to compose; the protocol
+  stays in the seat.
+* **P351.1** In F2/F3 the numpad orbits the camera around the ship/target:
+  the census shows its own position moving with numpad 4/6/8/2. → the
+  extension is the cause. The fix is to zero anglespeed only while in the
+  cockpit (a runtime data write to X4's camera-parameters object, which the
+  write already reads) rather than for every view.
+* **P351.2** If it still does not orbit, the extension is innocent; next
+  suspects are x4vrmod_lookaround (internal maxyaw 180/maxpitch 75) and
+  x4vrmod_nosway.
+
+    X4VR_TAKE=351 X4VR_HEADLOOK_WRITE=0 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take351.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
