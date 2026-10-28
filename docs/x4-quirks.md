@@ -26402,3 +26402,45 @@ including the external and target views.
 
 Same line and protocol. **P347.1** `shaders dumped to …`; `name_module.py`
 names the volume modules; the pipe lines give their passes and patches.
+
+## Take 347 — SCORED PASS: the fog's shaders, named
+
+519 modules dumped. `name_module.py` (pointed at the flattened XMLs with
+`--ogl /tmp/x4-shadersrc`) named only `xu_fog_screen`, so the volume shaders
+were found by their own strings:
+* **The ray march** (`volume_raymarch.xml`: `drawfs.vert` +
+  `volume_raymarch3.frag`) is **mod-0473/0474**, the only modules carrying
+  `U_volume_box_position`. It draws in **render pass #71**: `mv final: rp #71
+  <- frag module #474 … [index-offset APPLIED]`. Its four bindless reads
+  (binding 5 ×3, binding 7) take the right-eye redirect.
+* **Pass #71 is `R16G16B16A16 → MONO (fullscreen post) +MASKED`:** drawn once,
+  into both layers. It also holds `#476`; pass #73 holds `#472`. Both sample
+  only `S_input_rt` (blend/apply-shaped).
+* **The composite into the eye** is the patched full-screen pipeline
+  mod#457/458 in the scene pass **#33**.
+* **The mirror covers binding 5 as well as 7** (both 53306-entry
+  sampled-image tables; every write to a big table is twinned at +26653).
+  A 3D density field cannot have layers, so its twin is a verbatim copy.
+  "Binding 5 is not mirrored" is ruled out by the code.
+* The pipeline lines list the passes a pipeline was built against (#44–#52,
+  #23/#26/#33 for the ray march), not where it draws; any compatible pass
+  uses it.
+
+### P348 — where do the eyes split?
+
+`X4VR_MV_DUMP_AFTER_RP=71,73,33` saves the first two-layer colour target of
+each pass, both layers, one per cadence tick (600 presents): the fog target
+after the ray march, after pass #73, and the eye's scene image after the
+composite. The test suite covers this capture (run-multiview-render.sh,
+after-rp cases).
+* **P348.1** If the fog target's layers already differ after #71 beyond a
+  small horizontal disparity, the ray march computes different fog per eye,
+  and its right-eye inputs (the redirected reads, the vertex variant) are the
+  cause.
+* **P348.2** If they agree after #71 and #73 and the scene differs after #33,
+  the composite reads the wrong image for the right eye.
+* Pass numbers are creation-order serials: 346 and 347 matched along the same
+  route (the usual save, then the map's teleport to Matrix #79B). The log
+  names any target never reached.
+
+    X4VR_TAKE=348 X4VR_MV_DUMP=/tmp/x4vr-t348 X4VR_MV_DUMP_AFTER_RP=71,73,33 X4VR_FOOTLOG=1 X4VR_HEADLOOK_FOOT=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take348.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
