@@ -27112,3 +27112,23 @@ fixing before the 6DOF."*
 * **Before building:** confirm from a log that UI pipelines take the pose
   set (pose `pipes_extended == pipes_seen`, and UI modules patched with the
   pose view) in the shipping line. Take 358's lesson.
+
+**Checked before building (take 358's log):**
+* The pose block reaches every pipeline in the shipping line: *"6/6
+  pipeline layout(s) extended, 1584/1584 pipeline(s) got it — OK"*, at
+  set 31, not 5.
+* But the canvas map is chosen at **pipeline creation**:
+  vkCreateGraphicsPipelines swaps a UI stage's module for its canvas variant
+  (`g_variants.canvas`), one pipeline per X4 pipeline. No unscaled twin
+  exists to switch to.
+
+**Chosen: twin pipelines, switched at bind.**
+* For each pipeline that took a canvas module, a second one is built from
+  the module the non-canvas path would give (`g_variants.original`, else
+  X4's own).
+* x4vr_CmdBindPipeline binds the twin while the cinematic flag is up.
+  Register its pose layout too, and clear `g_cb_canvas` for it.
+* Destroy twins with their pipeline.
+* No shader changes: in F6, X4's UI is drawn by X4's own shaders exactly as
+  X4 laid it out. The other route (u in the pose block, read inside
+  patch_vertex_clip) would add code to every UI vertex shader.
