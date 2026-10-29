@@ -27299,3 +27299,33 @@ picture is declared without it); x, y and z are this.
 * **Tests:** head6.cpp (axes, limit, NaN → zero), camwrite.cpp
   (base_is_ours), the GPU harness unchanged and passing (6DOF runs only in a
   VR session), scorer `head6` block with planted cases.
+
+## Take 361 — 6DOF through X4's camera base: the world is right, X4's HUD is not
+
+Scorer PASS. The neutral latched; 2 periods ON; the largest offset was 0.35 m
+(the limit). Patola:
+* *"All the 6 axes seem to work very well. There is no effect of shifting
+  cockpit."*
+* *"The HUD does not work well with the head tracking. It does exaggerated
+  motions like if it was 3cm from my nose. I shift a bit to the right, it
+  goes way over to the left. I go up, it goes way down. I bring my head back
+  a bit, it shrinks from view. I bring my head to the front a bit, it
+  enlarges quickly. Instead it should remain fixed to the cockpit and should
+  not change size."*
+* *"The clicking targets (be it left or right-clicking) stops lining up with
+  the head movement."*
+* *"In F2 mode, the HUD works as expected."* (6DOF is off there.)
+
+**Reading.** X4 draws the cockpit HUD as a 3D object a few centimetres in
+front of its eye: the parallax he describes is that of something about
+3 cm away. Since take 242 the HUD has been world-anchored: it
+counter-turns with X4's look-around and looks like a screen overlay while
+the eye only rotates. Moving X4's eye moves it against that tiny HUD. The
+click targets come from the same moved eye.
+
+**What would fit.** Leave X4's eye where it is (HUD, picking and culling
+all from the neutral eye) and translate only the 3D world in the layer's
+world shaders. The pose channel's `eye_ofs` already carries a head x/y
+shift there (#74); z would be new. Declare the offset in the room's axes,
+unrotated. The cost: picking and brackets are off by parallax t/d for near
+objects (0.35 m at 50 m ≈ 0.4°).
