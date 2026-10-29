@@ -5105,7 +5105,14 @@ def main(path):
             # 1.2 s before it ended, and X4's camera there is his body (-90
             # deg) -- the last 0.4 s judged an on-foot camera by the cockpit's
             # rule. Cut the period at the first seat change inside it.
-            b_ = min([b] + [t for t, k in mc_seat if a < t < b])
+            # **Or at the first switch to an external view** (take 368: the
+            # map, opened by mistake, was centred to 0,0 for 4.3 s; X4 then
+            # switched to an external view with the map still up, and the
+            # last 0.4 s judged the orbit camera's -68.44 deg by the cockpit's
+            # rule -- a FAIL for a menu that was centred).
+            b_ = min([b] + [t for t, k in mc_seat if a < t < b]
+                     + [t for t, k in mc_view
+                        if a < t < b and k not in ("the cockpit", "PAUSED")])
             late_ = [(t, y, p_) for t, y, p_ in mc_cam if a + 0.3 <= t <= b_]
             b = b_
             sel = [(y, p_) for t, y, p_ in late_ if t >= b - 0.4]
@@ -5301,6 +5308,27 @@ def main(path):
     elif st_rest:
         print(f"steer   not asked; mousesteeringline restored to "
               f"'{st_rest.group(2)}' from the overlay's earlier run")
+
+    # --- the pointer after a load (take 368) ---------------------------------
+    #
+    # X4's start leaves the pointer at the window's top-left edge, outside
+    # what the headset shows; once per load the injector recentres it after
+    # head-look's write arms. A run that armed and never recentred is the
+    # dead cursor of takes 366-368.
+    lr = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+pointer: recentred after the "
+                    r"load from (?:\(unknown\) )?(-?\d+),(-?\d+) to", text)
+    lr_arm = re.search(r"\[\s*([\d.]+)\]\s+inject\s+milestone: head-look write "
+                       r"ARMED", text)
+    if lr:
+        print(f"pointer recentred after {len(lr)} load(s): "
+              + ", ".join(f"from {x},{y}" for _t, x, y in lr[:6])
+              + (f" ({float(lr[0][0]) - float(lr_arm.group(1)):+.1f} s from "
+                 f"head-look ARMED)" if lr_arm else ""))
+    elif lr_arm and re.search(r"\bX4VR_HEADLOOK_WRITE=1\b", run or "") and \
+            int((re.search(r"X4VR_TAKE=(\d+)", run or "") or
+                 re.match(r"(0)", "0")).group(1)) >= 369:
+        fails.append("head-look armed but the pointer was never recentred "
+                     "after the load — the cursor starts outside the view")
 
     # --- X4VR_STEER_PICK: X4's targeting at the steering ring ---------------
     #

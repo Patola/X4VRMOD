@@ -4837,6 +4837,45 @@ static void aimpick_tick(bool want) {
     was_on = on;
 }
 
+// **The pointer after a load (take 368).** It sits where X4's start left
+// it: X4's start puts it at the window's top-left corner (take 368, 208470.8:
+// motion to 0,0 with xrel -1408), and the first steering toggle of takes
+// 366/367/368 recentred it from 19,21 / 1503,274 / 1756,311. In the headset
+// that band is outside what the eye shows and over nothing to hover, so the
+// cursor seemed dead until a steering toggle recentred it (Patola, take 367:
+// "the cursor is not activated by default, I had to engage in steering mode
+// and back for it to work"; take 368: forty seconds of clicks, all 1100-1400
+// px above the centre). Once per player camera -- a load makes a new one --
+// when head-look's write has armed on it, the game has run 2 s, and no
+// full-screen menu holds the pointer: to the window's centre, through the
+// same warp mouse steering's engage uses.
+static void load_recentre_tick() {
+    static uintptr_t done_cam = 0, clock_cam = 0;
+    static x4vr::fieldab::GameClock clock;
+    const uintptr_t cam = g_camwrite.armed_cam;
+    if (!cam || cam == done_cam)
+        return;
+    if (clock_cam != cam) {
+        clock_cam = cam;
+        clock = x4vr::fieldab::GameClock{};
+    }
+    double gt = 0.0;
+    if (!x4_game_time(&gt) ||
+        !x4vr::fieldab::game_clock_step(clock, gt, mono_seconds(), 2.0, 1.0))
+        return;
+    if (g_fullscreen_up.load(std::memory_order_relaxed))
+        return; // a full-screen menu holds the pointer; after it closes
+    float px = 0.f, py = 0.f, cx = 0.f, cy = 0.f;
+    bool have = false;
+    if (!recentre_pointer(&px, &py, &have, &cx, &cy))
+        return; // X4's window not known yet: the next tick tries again
+    done_cam = cam;
+    X4VR_LOG("pointer: recentred after the load from %s%.0f,%.0f to %.0f,%.0f "
+             "— X4's start leaves it at the window's edge, outside what the "
+             "headset shows",
+             have ? "" : "(unknown) ", px, py, cx, cy);
+}
+
 static void steer_tick() {
     if (!steer_hide_x4_line())
         return;
@@ -7689,6 +7728,7 @@ void SDL_PumpEvents(void) {
         fullscreen_menu_tick();
         foot_menu_tick();
         menus_tick();
+        load_recentre_tick();
         steer_tick();
         pumprate_report();
     }

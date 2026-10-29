@@ -731,6 +731,19 @@ if python3 tools/score_run.py /tmp/census-mc-off.log 2>&1 | grep -q "^FAIL.*MENU
 else
     ok "menucam switched off -> no FAIL"
 fi
+# Take 368: a centred map, then X4 switched to an external view with the
+# map still up; the period's last 0.4 s read the orbit camera (-68.44). Cut
+# at the view change: no FAIL. The negative control keeps the same off-centre
+# angle in the cockpit and must still FAIL.
+mcext='[  999993.000] inject  headlook: view is now external — idle'
+{ cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$mccen" "$(mcpose 999990.500 0.0000 0.0000)" "$(mcpose 999991.500 0.0000 0.0000)" "$(mcpose 999992.500 0.0000 0.0000)" "$mcext" "$(mcpose 999993.500 -68.4390 -0.5800)" "$(mcpose 999994.700 -68.4390 -0.5800)" "$mcup" "$mcrep"; } > /tmp/census-mc-ext.log
+if python3 tools/score_run.py /tmp/census-mc-ext.log 2>&1 | grep -q "the centring did not act"; then
+    bad "menucam: centred, then an external view -> FAILs (judged the orbit camera)"
+else
+    ok "menucam: centred, then an external view -> no FAIL"
+fi
+{ cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$mccen" "$(mcpose 999990.500 0.0000 0.0000)" "$(mcpose 999991.500 0.0000 0.0000)" "$(mcpose 999993.500 -68.4390 -0.5800)" "$(mcpose 999994.700 -68.4390 -0.5800)" "$mcup" "$mcrep"; } > /tmp/census-mc-extctl.log
+want "menucam: the same angle in the cockpit -> still FAIL" /tmp/census-mc-extctl.log FAIL "the centring did not act"
 absent "menucam: no write-mode arming -> silent" "$BASE" menucam
 # Take 337: an ESC menu ON FOOT read X4's camera at the BODY's +60.9 deg
 # (the mouse turns the body there) and FAILed as "frozen" with no head-look
@@ -1496,6 +1509,26 @@ else
 fi
 { cat /tmp/census-cp-base.log; printf '%s\n' "$cpa" "$cpe" '[  999970.000] inject  steer: X4'"'"'s mouse capture (in[0x9f33]) is now OFF: its centred pointer reads 0 (hover at the view'"'"'s centre, no cursor set) — cockpit, HUD up'; } > /tmp/census-cp-never.log
 want "capture: only OFF -> never captured" /tmp/census-cp-never.log steer "X4 never captured the mouse after head-look ARMED"
+# Take 368: the pointer recentred once per load.
+if grep -qF '"pointer: recentred after the load from %s%.0f,%.0f to %.0f,%.0f "' injector/x4vr_inject.cpp; then
+    ok "load-recentre: the injector's line is the planted one"
+else
+    bad "load-recentre: the injector's format moved"
+fi
+sed 's/env: run = /env: run = X4VR_TAKE=369 X4VR_HEADLOOK_WRITE=1 /' "$BASE" > /tmp/census-lr-base.log
+lra='[  999950.000] inject  milestone: head-look write ARMED — the view now follows your head without mouse-look.'
+lrr='[  999950.100] inject  pointer: recentred after the load from 1756,311 to 1408,1408 — X4'"'"'s start leaves it at the window'"'"'s edge, outside what the headset shows'
+{ cat /tmp/census-lr-base.log; printf '%s\n' "$lra" "$lrr"; } > /tmp/census-lr-ok.log
+want "load-recentre: recentred -> reported" /tmp/census-lr-ok.log pointer "pointer recentred after 1 load(s): from 1756,311 (+0.1 s from head-look ARMED)"
+{ cat /tmp/census-lr-base.log; printf '%s\n' "$lra"; } > /tmp/census-lr-no.log
+want "load-recentre: armed, never recentred -> FAIL" /tmp/census-lr-no.log "FAIL|  - " "the pointer was never recentred after the load"
+sed 's/env: run = /env: run = X4VR_TAKE=368 X4VR_HEADLOOK_WRITE=1 /' "$BASE" > /tmp/census-lr-old.log
+{ cat /tmp/census-lr-old.log; printf '%s\n' "$lra"; } > /tmp/census-lr-old2.log
+if python3 tools/score_run.py /tmp/census-lr-old2.log 2>&1 | grep -qF "never recentred after the load"; then
+    bad "load-recentre: a take before 369 -> not failed"
+else
+    ok "load-recentre: a take before 369 -> not failed"
+fi
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

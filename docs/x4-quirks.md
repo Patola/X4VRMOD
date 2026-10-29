@@ -27771,3 +27771,69 @@ such a wait would spend:
   receives it (after the fold), with its offset from the window's centre
   (`sdl: mouse button N DOWN at x,y (...; dx,dy from its centre)`), so a
   press that did nothing can be placed against where the element was drawn.
+
+## Take 368 — SCORED PASS (2026-10-30): the dead cursor is the pointer's start; HUD clicks need 1.9x
+
+Configuration 5 (sc-controller-cc, keyboard and mouse only). Patola played
+49:32 with a recording (`/dados/x4-gameplay-hud-clicking.mp4`, 1600x1600,
+100 fps, a central crop of the eye).
+* *"the weapons ... worked perfectly"*.
+* Comms with a ship puts the pilot on the right monitor (not interactable,
+  by X4's design) and choices at the centre of the view.
+* His timestamps: 0:19–1:00 nothing interactable until a right-click on his
+  Cobra; 12:51–13:51 comms choices not found; ~14:30 some highlighted in
+  steering mode; 15:31 options highlighted *"although the cursor was
+  offscreen"*; 15:38 goodbye; 30:18 an alert on the monitor, clicked at
+  30:22, Escape at 31:08; 31:16 another, clicked at 31:21, Escape at 31:45.
+
+**Sync.**
+* Video 0:00 = log 208554.7. The first MapMenu (209434.74, his *"accidentally
+  pressed the Map key at 14:40"*) falls at 14:40.
+* Checked against the logged clicks:
+  * goodbye at 15:39.07;
+  * Escape at 31:09.22 and 31:45.97;
+  * the alert clicks ending 30:23.07 and 31:21.46.
+  The video ends 21 s before the log.
+
+**Scorer: one false FAIL, fixed.** `menucam` FAILed a period at
+-68.44,-0.58 deg.
+* The map (opened by mistake) was CENTRED: X4's camera read 0,0 from
+  210299.42 to 210303.32.
+* At 210303.38 X4 switched to an external view with the map still up. The
+  period's last 0.4 s then judged the orbit camera by the cockpit's rule.
+* menucam now cuts a period at the first switch to a non-cockpit view, as it
+  already did at a seat change (take 349). Planted: that shape gives no FAIL,
+  and the same angle in the cockpit still FAILs.
+* Rescored: 366, 367 and 368 all PASS.
+
+**The dead cursor after a load is the pointer's START, not X4's capture.**
+* The new read-only line shows X4 captured the mouse at 208470.2, during the
+  load (cockpit, HUD down), 103 s before ARMED.
+* X4's start puts the pointer at the top-left corner (208470.8: motion to
+  0,0 with xrel -1408).
+* From ARMED to the first steering toggle (+41.5 s), all of his clicks were
+  at y 0–277 of 2816, 1100–1400 px above the centre.
+* The first toggle recentred it from 1756,311. Takes 366 and 367: from 19,21
+  and 1503,274.
+* **Fix (built):** `load_recentre_tick` recentres once per player camera,
+  i.e. once per load:
+  * when head-look's write has armed on it;
+  * after 2 s of running game time;
+  * with no full-screen menu up;
+  * through the warp mouse steering's engage uses.
+  It logs `pointer: recentred after the load from x,y`. The scorer reports
+  it and FAILs an armed run without it from take 369 on (3 planted cases).
+
+**HUD and conversation clicks: the 1.9x is confirmed.**
+* The alert monitor ignored his clicks at (+212..+267, +260..+359) from the
+  centre, where he saw it, and took one at (+489, +583). Halved, that is
+  (+257, +306).
+* Escape took (-103, +674) and (-105, +713); goodbye took (+775, +759). The
+  frame at 31:07.5 shows "Resist/Escape" drawn just below and left of the
+  centre.
+* At the successful clicks the drawn cursor sits past the monitor's
+  lower-right corner (30:23.1) and near the bottom of the view (31:09.1).
+* The recording is lens-warped, so no exact ratio is read from it. The
+  direction and the factor of about 2 match the 0.5252 canvas map that
+  `ui_wgate_perspective` gives X4's perspective HUD, while X4 hit-tests at
+  its own scale.
