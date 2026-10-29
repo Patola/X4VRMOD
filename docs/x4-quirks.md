@@ -27387,3 +27387,23 @@ distortion but could not see it."*
   bands the view depth (m15 of M_worldviewprojection) of X4's perspective UI
   draws every ~10 s. No kept log had it (take 265's are gone). B is safe if
   the HUD (expected ~3 cm) is the only thing near the eye.
+
+## Take 363 — the depth check was inconclusive; a right-click hold; both built for take 364
+
+* **The check failed as an instrument.** It read each canvas-credited
+  slot's matrix seconds after the draws it counted. X4 reuses those slots
+  within a frame, so the bands mixed unrelated draws: depths from 0 m to
+  360,000 km, impossible for UI. Rebuilt: ui_depth_sample bins each canvas
+  draw from its OWN M_worldviewprojection at record time (at the credit
+  site, under g_track.mu), and the bins are reported and reset every ~10 s,
+  with the first depths under 2 m listed.
+* **Patola's new observation:** *"When I have the right-click menu open,
+  my gaze leads the cursor (as a compound movement to the mouse). I can
+  hover by moving my head."* X4 keeps the HUD up with InteractMenu, so
+  head-look kept turning X4's camera, and X4's pointer is a screen position
+  over a menu that stays put. **Fix:** while X4's table holds InteractMenu,
+  head-look holds X4's camera (the cockpit write skips; `steering` stays
+  true with the held angle, so the declaration matches the picture). In an
+  external view the rows keep their angle. Released when the menu closes.
+* **Scorer:** `ui-depth` parses the per-draw line; `rclick-hold` FAILs a
+  right-click opening without a HELD line (from take 364).

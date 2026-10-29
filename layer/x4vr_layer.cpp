@@ -1681,6 +1681,47 @@ void canvas_refuse(const char *why) {
 // borrowing the camera block's constant here would either reject every valid
 // slot or read past a smaller buffer. The range came from the descriptor
 // write, so this is the size X4 actually bound.
+float *obj_slot_host_ptr(const Tracking::ObjSlot &s);
+
+// **6DOF option B's check, per draw** (take 363's version read each slot
+// seconds after the draws it counted, and X4 reuses those slots within a
+// frame, so its bands mixed unrelated draws: 0 m to 360,000 km). Here each
+// canvas draw is binned from ITS OWN M_worldviewprojection at record time:
+// for a perspective matrix m15 is the clip w of the draw's origin, its view
+// depth. Under g_track.mu, like the credit it rides on; reported and reset
+// every ~10 s.
+struct UiDepth {
+    uint64_t bins[6] = {0, 0, 0, 0, 0, 0};
+    uint64_t ortho = 0, unread = 0;
+    float dmin = 1e30f, dmax = 0.0f;
+    float near_samples[8] = {};
+    int nnear = 0;
+} g_ui_depth;
+static void ui_depth_sample(const Tracking::ObjSlot &slot) {
+    float *p = obj_slot_host_ptr(slot);
+    if (!p) {
+        g_ui_depth.unread++;
+        return;
+    }
+    const float *m = p; // M_worldviewprojection is member 0 (kObjectMvpMember)
+    const float row3 = std::fabs(m[3]) + std::fabs(m[7]) + std::fabs(m[11]);
+    const float w15 = std::fmax(std::fabs(m[15]), 1e-6f);
+    if (row3 / w15 <= 1e-3f) {
+        g_ui_depth.ortho++;
+        return;
+    }
+    const float dep = std::fabs(m[15]);
+    static const float edges[5] = {0.1f, 0.5f, 2.0f, 20.0f, 200.0f};
+    int b = 0;
+    while (b < 5 && dep >= edges[b])
+        b++;
+    g_ui_depth.bins[b]++;
+    g_ui_depth.dmin = std::fmin(g_ui_depth.dmin, dep);
+    g_ui_depth.dmax = std::fmax(g_ui_depth.dmax, dep);
+    if (dep < 2.0f && g_ui_depth.nnear < 8)
+        g_ui_depth.near_samples[g_ui_depth.nnear++] = dep;
+}
+
 float *obj_slot_host_ptr(const Tracking::ObjSlot &s) {
     auto b = g_track.buf_binding.find(s.buffer);
     if (b == g_track.buf_binding.end())
@@ -1768,8 +1809,10 @@ void credit_draw(VkCommandBuffer cb) {
         if (on_canvas) {
             g_canvas_draws++;
             if (ob != g_track.obj_bound.end())
-                for (const Tracking::ObjSlot &s : ob->second)
+                for (const Tracking::ObjSlot &s : ob->second) {
                     g_track.obj_credit_ui[s]++;
+                    ui_depth_sample(s); // 6DOF option B's check, per draw
+                }
         }
     }
     // Task #67, credited on the SAME draws as `credit` so the two counts are
@@ -8229,55 +8272,40 @@ void patch_view_before_submit() {
                              "signal. This is a real answer, not a null: do "
                              "not go looking for a predicate that is not there");
             }
-            // **6DOF option B's check (after take 362): how near the eye do
-            // X4's perspective UI draws sit?** Take 361 moved X4's eye and the
-            // cockpit HUD swung like something ~3 cm away. B moves X4's eye
-            // again and shifts back only UI geometry that near; that is safe
-            // only if nothing else X4 draws through its UI is that near. For a
-            // perspective M_worldviewprojection, m15 is the clip w of the
-            // draw's origin -- its view depth. Banded, every ~10 s, never
-            // latched, so the cockpit, menus and targets are all covered.
+            // 6DOF option B's check: the per-draw bands (ui_depth_sample),
+            // reported and reset every ~10 s.
             static uint32_t depth_evals = 0;
-            if (!g_track.obj_credit_ui.empty() && (++depth_evals % 600) == 0) {
-                static const float edges[5] = {0.1f, 0.5f, 2.0f, 20.0f, 200.0f};
-                uint64_t bins[6] = {0, 0, 0, 0, 0, 0};
-                float dmin = 1e30f, dmax = 0.0f;
-                uint32_t nslots = 0;
-                for (auto &[oslot, on] : g_track.obj_credit_ui) {
-                    float *p = obj_slot_host_ptr(oslot);
-                    if (!p)
-                        continue;
-                    const x4vr::Mat4 m = x4vr::load(p + kObjectMvpMember * 16);
-                    const float row3 = std::fabs(m.m[3]) + std::fabs(m.m[7]) +
-                                       std::fabs(m.m[11]);
-                    const float w15 = std::fmax(std::fabs(m.m[15]), 1e-6f);
-                    if (row3 / w15 <= 1e-3f)
-                        continue; // orthographic: screen chrome, no depth
-                    const float dep = std::fabs(m.m[15]);
-                    int b = 0;
-                    while (b < 5 && dep >= edges[b])
-                        b++;
-                    bins[b] += on;
-                    nslots++;
-                    dmin = std::fmin(dmin, dep);
-                    dmax = std::fmax(dmax, dep);
+            if ((++depth_evals % 600) == 0) {
+                UiDepth &u = g_ui_depth;
+                const uint64_t persp = u.bins[0] + u.bins[1] + u.bins[2] +
+                                       u.bins[3] + u.bins[4] + u.bins[5];
+                char nears[96] = "";
+                size_t at = 0;
+                for (int i = 0; i < u.nnear && at < sizeof nears; i++) {
+                    const int w = snprintf(nears + at, sizeof nears - at,
+                                           "%s%.3f", i ? " " : "",
+                                           u.near_samples[i]);
+                    if (w > 0)
+                        at += (size_t)w;
                 }
-                if (nslots)
-                    X4VR_LOG("ui depth (6dof B): %u perspective UI slot(s), "
-                             "draws by the view depth of their origin — "
-                             "<0.1 m %llu | 0.1-0.5 %llu | 0.5-2 %llu | 2-20 "
-                             "%llu | 20-200 %llu | >200 %llu; nearest %.4f m, "
-                             "farthest %.1f m",
-                             nslots, (unsigned long long)bins[0],
-                             (unsigned long long)bins[1],
-                             (unsigned long long)bins[2],
-                             (unsigned long long)bins[3],
-                             (unsigned long long)bins[4],
-                             (unsigned long long)bins[5], dmin, dmax);
-                else
-                    X4VR_LOG("ui depth (6dof B): no perspective UI draw in "
-                             "the %zu canvas-credited slot(s) right now",
-                             g_track.obj_credit_ui.size());
+                X4VR_LOG("ui depth (6dof B, per draw): %llu perspective UI "
+                         "draw(s) by the view depth of their origin — <0.1 m "
+                         "%llu | 0.1-0.5 %llu | 0.5-2 %llu | 2-20 %llu | "
+                         "20-200 %llu | >200 %llu; nearest %.4f m, farthest "
+                         "%.1f m; %llu orthographic, %llu unreadable; first "
+                         "depths under 2 m: %s",
+                         (unsigned long long)persp,
+                         (unsigned long long)u.bins[0],
+                         (unsigned long long)u.bins[1],
+                         (unsigned long long)u.bins[2],
+                         (unsigned long long)u.bins[3],
+                         (unsigned long long)u.bins[4],
+                         (unsigned long long)u.bins[5],
+                         persp ? u.dmin : 0.0f, u.dmax,
+                         (unsigned long long)u.ortho,
+                         (unsigned long long)u.unread,
+                         u.nnear ? nears : "none");
+                u = UiDepth{};
             }
             if (!obj_logged && (obj_slots || !g_track.obj_ranges.empty())) {
                 obj_logged = true;

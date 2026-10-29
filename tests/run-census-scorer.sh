@@ -1415,18 +1415,32 @@ want "head6: never latched -> FAIL" /tmp/census-h6-base.log "FAIL|  - " "the lay
 want "head6: refused -> FAIL" /tmp/census-h6-ref.log "FAIL|  - " "X4VR_HEAD_6DOF REFUSED — it needs X4VR_POSE=1"
 absent "head6: not asked -> silent" "$BASE" head6
 
-# 6DOF option B's check: UI depths.
-if grep -qF '"ui depth (6dof B): %u perspective UI slot(s), "' layer/x4vr_layer.cpp; then
+# 6DOF option B's check: UI depths, per draw (take 364).
+if grep -qF '"ui depth (6dof B, per draw): %llu perspective UI "' layer/x4vr_layer.cpp; then
     ok "ui-depth: the planted line matches the layer's format"
 else
     bad "ui-depth: the layer's format moved"
 fi
 sed 's/env: run = /env: run = X4VR_DUMP_MATRICES=1 /' "$BASE" > /tmp/census-ud-base.log
-udl='[  999960.000] layer   ui depth (6dof B): 12 perspective UI slot(s), draws by the view depth of their origin — <0.1 m 40 | 0.1-0.5 0 | 0.5-2 0 | 2-20 3 | 20-200 9 | >200 30; nearest 0.0310 m, farthest 5400.0 m'
+udl='[  999960.000] layer   ui depth (6dof B, per draw): 90 perspective UI draw(s) by the view depth of their origin — <0.1 m 40 | 0.1-0.5 0 | 0.5-2 0 | 2-20 10 | 20-200 10 | >200 30; nearest 0.0310 m, farthest 5400.0 m; 300 orthographic, 0 unreadable; first depths under 2 m: 0.031 0.032'
 { cat /tmp/census-ud-base.log; printf '%s\n' "$udl" "$udl"; } > /tmp/census-ud-ok.log
-want "ui-depth: samples summed" /tmp/census-ud-ok.log ui-depth "2 sample(s); perspective UI draws by depth <0.1 m 80 | 0.1-0.5 0 | 0.5-2 0 | 2-20 6 | 20-200 18 | >200 60; nearest 0.0310 m, farthest 5400.0 m"
+want "ui-depth: samples summed" /tmp/census-ud-ok.log ui-depth "2 sample(s); perspective UI draws by depth <0.1 m 80 | 0.1-0.5 0 | 0.5-2 0 | 2-20 20 | 20-200 20 | >200 60; nearest 0.0310 m, farthest 5400.0 m; 600 orthographic, 0 unreadable"
+want "ui-depth: near depths listed" /tmp/census-ud-ok.log ui-depth "depths under 2 m seen: 0.031 0.032 0.031 0.032"
 want "ui-depth: asked, nothing -> FAIL" /tmp/census-ud-base.log "FAIL|  - " "X4VR_DUMP_MATRICES=1 but no UI depth was measured"
 absent "ui-depth: not asked -> silent" "$BASE" ui-depth
+# Take 363: the right-click menu holds head-look.
+if grep -qF '"HELD — X4' injector/x4vr_inject.cpp; then
+    ok "rclick-hold: the injector's HELD line is the planted one"
+else
+    bad "rclick-hold: the injector's HELD line moved"
+fi
+sed 's/env: run = /env: run = X4VR_TAKE=364 X4VR_HEADLOOK_WRITE=1 /' "$BASE" > /tmp/census-rh-base.log
+rho='[  999970.000] inject  ui: X4'"'"'s right-click menu OPEN — the cursor is drawn through the UI canvas'
+rhh='[  999970.030] inject  headlook: HELD — X4'"'"'s right-click menu is open: X4'"'"'s camera stays where it was, the cursor moves only with the mouse'
+{ cat /tmp/census-rh-base.log; printf '%s\n' "$rho" "$rhh"; } > /tmp/census-rh-ok.log
+want "rclick-hold: held -> counted" /tmp/census-rh-ok.log rclick-hold "1 right-click menu opening(s), head-look held for 1"
+{ cat /tmp/census-rh-base.log; printf '%s\n' "$rho"; } > /tmp/census-rh-no.log
+want "rclick-hold: not held -> FAIL" /tmp/census-rh-no.log "FAIL|  - " "1 right-click menu opening(s) without head-look held"
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

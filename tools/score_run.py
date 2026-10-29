@@ -4703,29 +4703,63 @@ def main(path):
     # Banded view depths of the perspective UI draws (X4VR_DUMP_MATRICES).
     # B shifts back only UI geometry near the eye; that is safe only if the
     # cockpit HUD is the only thing that near.
-    ud = re.findall(r"ui depth \(6dof B\): (\d+) perspective UI slot\(s\), "
-                    r"draws by the view depth of their origin — <0\.1 m (\d+) "
-                    r"\| 0\.1-0\.5 (\d+) \| 0\.5-2 (\d+) \| 2-20 (\d+) \| "
-                    r"20-200 (\d+) \| >200 (\d+); nearest ([\d.]+) m, "
-                    r"farthest ([\d.]+) m", text)
+    # Per draw since take 364: take 363's version read each slot after the
+    # draws it counted, and X4 reuses those slots, so it mixed unrelated
+    # draws (0 m to 360,000 km). Its lines are no longer parsed.
+    ud = re.findall(r"ui depth \(6dof B, per draw\): (\d+) perspective UI "
+                    r"draw\(s\) by the view depth of their origin — <0\.1 m "
+                    r"(\d+) \| 0\.1-0\.5 (\d+) \| 0\.5-2 (\d+) \| 2-20 (\d+) "
+                    r"\| 20-200 (\d+) \| >200 (\d+); nearest ([\d.]+) m, "
+                    r"farthest ([\d.]+) m; (\d+) orthographic, (\d+) "
+                    r"unreadable; first depths under 2 m: (.*)$", text, re.M)
     ud_asked = bool(re.search(r"\bX4VR_DUMP_MATRICES=1\b", run or ""))
     if ud:
         tot = [0] * 6
         for g in ud:
             for i in range(6):
                 tot[i] += int(g[1 + i])
-        near = min(float(g[7]) for g in ud)
+        live = [g for g in ud if int(g[0])]
+        near = min(float(g[7]) for g in live) if live else 0.0
         far = max(float(g[8]) for g in ud)
+        ortho = sum(int(g[9]) for g in ud)
+        unread = sum(int(g[10]) for g in ud)
+        nears = [x for g in ud if g[11].strip() != "none"
+                 for x in g[11].split()]
         print(f"ui-depth  {len(ud)} sample(s); perspective UI draws by depth "
               f"<0.1 m {tot[0]} | 0.1-0.5 {tot[1]} | 0.5-2 {tot[2]} | 2-20 "
               f"{tot[3]} | 20-200 {tot[4]} | >200 {tot[5]}; nearest "
-              f"{near:.4f} m, farthest {far:.1f} m")
+              f"{near:.4f} m, farthest {far:.1f} m; {ortho} orthographic, "
+              f"{unread} unreadable")
+        if nears:
+            print(f"ui-depth  depths under 2 m seen: {' '.join(nears[:24])}")
     elif ud_asked and "ui mvp #82" in text:
         print("ui-depth  the #82 instrument ran but no depth sample was "
               "logged (no perspective UI draw was credited)")
     elif ud_asked:
         fails.append("X4VR_DUMP_MATRICES=1 but no UI depth was measured — the "
                      "matrix instrument never credited a UI draw")
+
+    # --- the right-click menu holds head-look (take 363) --------------------
+    #
+    # Patola: with the menu open his head swept X4's screen-space cursor across
+    # it. From take 364 head-look holds X4's camera while X4's table holds
+    # InteractMenu; each opening must be matched by a HELD line.
+    rc_open = [float(t) for t in re.findall(
+        r"\[\s*([\d.]+)\]\s+inject\s+ui: X4's right-click menu OPEN", text)]
+    rc_held = [float(t) for t in re.findall(
+        r"\[\s*([\d.]+)\]\s+inject\s+headlook: HELD — X4's right-click", text)]
+    tk = re.search(r"\bX4VR_TAKE=(\d+)\b", run or "")
+    rc_built = tk is not None and int(tk.group(1)) >= 364
+    if rc_open and rc_built and re.search(r"\bX4VR_HEADLOOK_WRITE=1\b",
+                                          run or ""):
+        unheld = [t for t in rc_open
+                  if not any(t - 0.1 <= h <= t + 0.5 for h in rc_held)]
+        print(f"rclick-hold  {len(rc_open)} right-click menu opening(s), "
+              f"head-look held for {len(rc_open) - len(unheld)}")
+        if unheld:
+            fails.append(f"{len(unheld)} right-click menu opening(s) without "
+                         f"head-look held (first t={unheld[0]:.1f}) — the head "
+                         f"would sweep the cursor across the menu")
 
     # --- X4VR_DUMP_SHADERS: the modules were written (take 346) -------------
     #

@@ -4857,6 +4857,9 @@ static int x4_conversation() {
 // X4's open-menu table holds TopLevelMenu and nothing else: normal flight,
 // or -- with the HUD down -- the cinematic view (headlook_tick).
 static std::atomic<bool> g_menus_only_toplevel{false};
+// X4's right-click menu is open (its table holds InteractMenu). Head-look
+// holds X4's camera while it is (headlook_tick, take 363).
+static std::atomic<bool> g_interact_open{false};
 static void menus_tick() {
     if (!cursor_canvas_auto() || !menus_sites_verified())
         return;
@@ -4888,6 +4891,7 @@ static void menus_tick() {
                               : "closed");
         interact_was = interact;
     }
+    g_interact_open.store(interact, std::memory_order_relaxed);
     if (x4vr::Shared *sh = x4vr_shared_state())
         sh->interact_menu.store(interact ? 1u : 0u, std::memory_order_relaxed);
     char line[512];
@@ -5212,13 +5216,18 @@ static bool extview_tick(bool external, bool hud, float head_yaw,
     const bool want = external && hud && cam && mode > 0 && !menu;
     const uint64_t applied = g_extslot.applied.load(std::memory_order_relaxed);
     const extview::Period::Event ev = per.step(want, applied);
+    // Held while X4's right-click menu is open, as in the cockpit (take 363):
+    // the rows keep the angle they had, so the cursor moves only with the
+    // mouse. A period that starts held starts at the head.
+    const bool hold_menu = g_interact_open.load(std::memory_order_relaxed);
     if (want) {
-        camwrite::write_target(ev == extview::Period::kStarted ? head_yaw
-                                                               : ext_yaw,
-                               head_yaw, head_pitch, yaw_weight,
-                               g_headlook.yaw_limit_deg,
-                               g_headlook.pitch_limit_deg, &ext_yaw,
-                               &ext_pitch);
+        if (!hold_menu || ev == extview::Period::kStarted)
+            camwrite::write_target(ev == extview::Period::kStarted ? head_yaw
+                                                                   : ext_yaw,
+                                   head_yaw, head_pitch, yaw_weight,
+                                   g_headlook.yaw_limit_deg,
+                                   g_headlook.pitch_limit_deg, &ext_yaw,
+                                   &ext_pitch);
         float rows[12] = {};
         camwrite::rows_for(ext_yaw, ext_pitch, rows);
         g_extslot.publish(rows);
@@ -6338,11 +6347,30 @@ void headlook_tick() {
     bool write_ready = false;
     if (write_mode)
         headlook_speed_tick(x4_player_camera());
+    // **Held while X4's right-click menu is open** (take 363, Patola: "my gaze
+    // leads the cursor ... I can hover by moving my head"). X4's pointer is a
+    // screen position and the menu stays put, so turning the camera with the
+    // head swept the cursor across the menu. The camera stays where it was;
+    // `steering` stays true with the held angle, so the layer keeps declaring
+    // what was rendered. When the menu closes the write resumes at the head.
+    const bool hold_menu = g_interact_open.load(std::memory_order_relaxed);
+    {
+        static bool was_hold = false;
+        if (write_mode && hold_menu != was_hold) {
+            was_hold = hold_menu;
+            X4VR_LOG("headlook: %s", hold_menu
+                     ? "HELD — X4's right-click menu is open: X4's camera "
+                       "stays where it was, the cursor moves only with the "
+                       "mouse"
+                     : "released — the right-click menu closed, the head "
+                       "turns X4's camera again");
+        }
+    }
     if (write_mode && may_steer && write_here) {
         const uintptr_t cam = x4_player_camera();
         write_ready = camwrite_ready(cam, g_headlook.pitch_limit_deg,
                                      g_headlook.yaw_limit_deg);
-        if (write_ready) {
+        if (write_ready && !hold_menu) {
             float ty = 0.f, tp = 0.f;
             x4vr::camwrite::write_target(g_camwrite.have ? g_camwrite.yaw : yaw,
                                          yaw, pitch, ha.yaw_weight,
