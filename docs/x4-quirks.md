@@ -27234,3 +27234,40 @@ feature for the future, we're not doing it right now. Let's go straight to
 the 6DOF."* The goal, confirmed: the start menu at its usual size fixed in
 front, the 3D scene all around, looked around with the head. Points 1 and 2
 above are what it will need.
+
+## Full 6DOF in the cockpit: what X4's code says (design, not built)
+
+The plan noted after take 319 was to move the eye through X4's own camera
+translation, not through the shader shear (#74, whose declared lever arm
+made the sides recede as he turned: takes 244, 319). The code settles where
+that translation can live.
+
+* **Mode 0 rebuilds the camera's own transform every frame** (0x1933d00 →
+  0x1934490). It updates the look-around rows (0x1e02200 on +0x5b0), zeroes
+  the translation (`pxor xmm3,xmm3`, 0x1934530), multiplies by the camera's
+  **base** transform (+0x6f0..+0x720) and stores the product
+  (0x193462a..0x193469b). So own.t = base.t every frame. A write to +0x5a0
+  would be wiped by the next frame; the rotation write survives only because
+  X4 reads it back as its look-around state.
+* **The base is written only by X4's camera set-up routines**
+  (0x192e769, 0x192e988, 0x192ec7c, 0x192ee11, 0x192f1a2/0x192f1d8:
+  attach, view switch, seat), never by the per-frame update. In the cockpit
+  it is identity (head-look checks that before every write).
+
+**Design: data only, no code patch.**
+* The head's offset from its neutral point, in the cockpit's axes (OpenXR
+  x, y, −z → X4 x, y, z) and clamped, is written into the base's
+  translation (+0x6f0, 3 floats) each tick, seated in the cockpit with
+  head-look writing.
+* X4 then composes it into the eye every frame. The picture, culling, hover
+  and the world-anchored HUD all come from the moved eye. Z is included, and
+  nothing rotates the offset (no lever arm).
+* camwrite_ready's base check becomes "rotation identity, translation ours".
+* Standing up, or X4's own set-up rewriting the base, ends it; the
+  injector's last write is 0.
+* **The layer:** the shader shear stays off. The declared position
+  becomes neutral + the applied offset (+ the eyes' ±IPD/2), so the
+  compositor is told the eye the pixels came from. The offset reaches the
+  injector through the share (head position, neutral).
+* **To verify first:** the other readers of +0x6f0 (0x190862f, 0x19a3668)
+  — what else takes the base as the eye position.
