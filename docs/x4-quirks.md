@@ -27460,3 +27460,28 @@ of the mouse."*
   swing, less.
 * **F2's cursor** follows the head as well as the mouse (Patola: the first
   case). Left for after B.
+
+## Take 365 — option B regresses the cockpit HUD; the click problem is steering mode only (Patola's re-diagnosis)
+
+Scorer PASS (base written in 6 periods; 440 UI modules took the near-HUD
+shift, 17 without X4's camera block). Patola:
+* *"I might be giving some false diagnostic in the last 2 runs, because I
+  was conflating steering mode with mouse mode ... In mouse mode (no
+  steering), leaning or shifting my head does not harm the
+  clicking/hovering: it's only under the steering mode that it becomes very
+  shifted."*
+* *"Also tried F2 now and this time both in mouse mode and steering mode
+  click/hovering was perfect."*
+* *"However, in the cockpit, the HUD is now shifting with my headlook, so
+  it's a regression."*
+
+**Reading.**
+* The near-HUD correction is not exact. The likeliest cause is the unknown
+  named before the take: X4 draws the HUD with a projection other than the
+  UI pass camera block's. The correction then changes with the head angle
+  (it is the applied offset turned into the view's axes) and the HUD moves.
+* Take 362's world-shader route had the HUD right and, by this
+  re-diagnosis, mouse-mode clicks right. The open defect is mouse-STEERING
+  mode with a lean, which involves the steering target the layer draws
+  (X4VR_STEER=a, fixed to the cockpit) and where X4 picks in that mode. To
+  be looked at.
