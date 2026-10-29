@@ -432,9 +432,18 @@ struct PoseBlock {
     // the offset at the ORIGIN and collapse the stereo, so the layer writes the
     // identity at init rather than relying on the caller.
     float eye_ofs[4];
+    // **X4VR_HEAD_6DOF: the head's FORWARD offset**, metres along the view
+    // axis, in x; y, z and w are slack. eye_ofs carries the lateral and
+    // vertical ones. Moving the eye forward by f brings every point f closer,
+    // which in clip space is linear: w -= P23^2 * f, z -= P22 * P23 * f (P23
+    // is +-1 for a perspective projection, 0 for an orthographic one, which
+    // then moves nothing). Zero is the identity.
+    float head_fwd[4];
 };
-static_assert(sizeof(PoseBlock) == 208,
-              "std140: three mat4 at 0, 64, 128 and a vec4 at 192");
+static_assert(sizeof(PoseBlock) == 224,
+              "std140: three mat4 at 0, 64, 128 and vec4s at 192 and 208");
+// Where head_fwd sits, for the SPIR-V patch's second member.
+constexpr uint32_t kPoseHeadFwdOffset = 208;
 // The offset the SPIR-V patch decorates its one-member view with. Named here so
 // the shader-side constant and the struct cannot drift apart silently.
 constexpr uint32_t kPoseEyeOfsOffset = 192;
@@ -486,13 +495,17 @@ inline void pose_set_roll(PoseBlock &p, float roll_deg, float weight = 1.0f) {
 // turns. Not scaled, not clamped, not recentred -- the layer owns all three,
 // and doing any of them twice is how two spellings of one number begin.
 //
-// There is no z. A lateral eye shift is EXACTLY a projection shear
-// (x_ndc = sx*(x-d)/z), which is why this rides #77's machinery for free;
-// moving along the view axis rescales by z/(z-dz), which is depth-dependent
-// and not expressible in a projection matrix at all.
-inline void pose_set_head_shift(PoseBlock &p, float tx, float ty) {
+// The forward offset `tf` (X4VR_HEAD_6DOF) goes to head_fwd. It is NOT a
+// projection shear, but it is linear in clip space before the divide --
+// P * (v - t) -- so the shader moves w and z by constants per vertex and the
+// perspective comes out of the divide (take 361 showed the world right this
+// way; the earlier note here called it inexpressible, which is true of a
+// projection matrix alone and not of the per-vertex edit).
+inline void pose_set_head_shift(PoseBlock &p, float tx, float ty,
+                                float tf = 0.0f) {
     p.eye_ofs[2] = tx;
     p.eye_ofs[3] = ty;
+    p.head_fwd[0] = tf;
 }
 
 

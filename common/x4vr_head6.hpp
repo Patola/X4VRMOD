@@ -1,37 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH x4vrmod-linking-exception
 //
-// x4vr_head6.hpp -- X4VR_HEAD_6DOF: the head's position in the cockpit,
-// through X4's own camera (Patola, 2026-10-29: "a great solution, better
-// than the one we had previously").
+// x4vr_head6.hpp -- X4VR_HEAD_6DOF: the head's position in the cockpit.
 //
-// In camera mode 0 X4 rebuilds the camera's own transform every frame as the
-// look-around rotation times the camera's BASE transform (+0x6f0), so the
-// eye's position in the cockpit is the base's translation, and only X4's
-// camera set-up routines ever write the base (docs/x4-quirks.md, "Full 6DOF
-// in the cockpit"). The layer measures the head's offset from its neutral
-// point (the neck pivot taken out, so a pure rotation moves nothing), in the
-// tracking space's axes; the injector writes it, in X4's axes, into the
-// base's translation. Nothing rotates it: the cockpit and the room share
-// their axes, which is what the shader shift of #74 got wrong (take 244's
-// lever arm).
+// The layer measures the head's offset from a neutral point (the neck pivot
+// taken out, so a pure rotation moves nothing) in the room's axes, which are
+// the cockpit's, and moves the eye in the world shaders (x4vr_view.hpp's
+// PoseBlock: eye_ofs z/w and head_fwd). X4's own eye stays put: take 361
+// moved it through the camera's base and X4's HUD, a 3D object a few cm in
+// front of that eye, swung with every lean. The offset is declared unrotated
+// -- the lever arm of take 244 was a head-axes shift rotated by the camera
+// angle.
 #pragma once
 
 #include <cmath>
 
 namespace x4vr::head6 {
-
-// OpenXR's reference spaces are right-handed with -z forward; X4's camera
-// rows put +z forward (camwrite::rows_for: yaw 0 looks along row 2 = +z).
-inline void to_x4(const float t[3], float out[3]) {
-    out[0] = t[0];
-    out[1] = t[1];
-    out[2] = -t[2];
-}
-inline void from_x4(const float x[3], float out[3]) {
-    out[0] = x[0];
-    out[1] = x[1];
-    out[2] = -x[2];
-}
 
 // The offset limited to a sphere of radius `max` m: a lean far enough to put
 // the eye through the canopy is held at the limit, in the same direction.

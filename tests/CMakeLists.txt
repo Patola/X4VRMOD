@@ -206,7 +206,7 @@ add_executable(x4vr_test_foot foot.cpp)
 # X4VR_HEADLOOK_EXTERNAL: the sites against the real binary, the stub
 # executed with X4's own compose behind it, the period. Self-checking.
 add_executable(x4vr_test_extview extview.cpp)
-# X4VR_HEAD_6DOF: the room's axes to X4's, the limit. Self-checking.
+# X4VR_HEAD_6DOF: the limit. Self-checking.
 add_executable(x4vr_test_head6 head6.cpp)
 # x4vr_menus.hpp: X4's open-menu table and conversation state, read not called.
 add_executable(x4vr_test_menus menus.cpp)

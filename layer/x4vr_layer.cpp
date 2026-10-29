@@ -343,6 +343,13 @@ static float head6_max() {
     }();
     return m;
 }
+// This frame's offset: in the view axes X4 rendered with, for the shaders
+// (tx right, ty up, tf forward), and in the room, for the declaration.
+struct Head6Now {
+    std::atomic<float> tx{0.f}, ty{0.f}, tf{0.f}, rx{0.f}, ry{0.f}, rz{0.f};
+    std::atomic<uint32_t> on{0};
+};
+static Head6Now g_head6;
 
 static bool declare_rendered_pos() {
     static const bool on = x4vr::env_on("X4VR_DECLARE_RENDERED_POS", false);
@@ -6975,7 +6982,8 @@ void pose_budget_establish(const float fov_rad[2][4]) {
 // Called once per located VR frame, from the session thread.
 void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
                          float cmd_pitch, bool cmd_valid, float head_roll,
-                         float roll_weight, float shift_x, float shift_y) {
+                         float roll_weight, float shift_x, float shift_y,
+                         float shift_fwd) {
     if (!pose_active())
         return;
     const float budget = g_residual.budget_deg.load();
@@ -7083,7 +7091,7 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
         // Task #74, written AFTER the roll so the ordering is stated rather
         // than inherited: pose_set_roll no longer clears z/w, but a reader
         // should not have to know that to see that both survive.
-        x4vr::pose_set_head_shift(g_pose.value, shift_x, shift_y);
+        x4vr::pose_set_head_shift(g_pose.value, shift_x, shift_y, shift_fwd);
 
         // The value, at the same cadence as the rest of the periodic block.
         // What goes in the buffer, not what we believe went in.
@@ -13171,46 +13179,86 @@ void vr_thread() {
                 }
                 const x4vr::HeadShift hs = x4vr::head_shift(
                     o.x, o.y, o.z, o.w, cx - ox, cyp - oy, cz - oz);
-                // **X4VR_HEAD_6DOF: the head's offset, for X4's camera base.**
-                // The pivot-corrected centre (a pure rotation moves nothing),
-                // in the room's axes -- the cockpit's -- and never rotated by
-                // the camera angle (take 244's lever arm). Measured from a
-                // neutral latched the first frame head-look steers, seated with
-                // the headset on: the latch above may be the headset on a desk.
-                if (head6_enabled()) {
-                    static auto head6_fn = (x4vr::HeadShared * (*)())dlsym(
-                        RTLD_DEFAULT, "x4vr_head_state");
+                // **X4VR_HEAD_6DOF: the head's position, in the world shaders.**
+                // The pivot-corrected centre's offset from a neutral latched the
+                // first frame head-look steers in the cockpit (seated, headset
+                // on), in the room's axes -- the cockpit's. It goes to the
+                // shaders in the axes X4 RENDERED with (the command, cy/cp),
+                // and is declared unrotated. X4's own eye stays put: take 361
+                // moved it and X4's HUD, a 3D object ~3 cm in front of that
+                // eye, swung with every lean.
+                // It reaches the shaders only through the pose channel and the
+                // roll-stereo patch's slot; without both it would be declared
+                // but never drawn. Refused, loudly, once.
+                if (head6_enabled() && (!pose_active() || !roll_stereo_enabled())) {
+                    static bool said6 = false;
+                    if (!said6) {
+                        said6 = true;
+                        X4VR_LOG("head 6dof: REFUSED — it needs X4VR_POSE=1 and "
+                                 "X4VR_ROLL_STEREO (the world shaders' head "
+                                 "slot); pose %s, roll stereo %s. Nothing is "
+                                 "moved or declared",
+                                 pose_active() ? "on" : "OFF",
+                                 roll_stereo_enabled() ? "on" : "OFF");
+                    }
+                }
+                if (head6_enabled() && pose_active() && roll_stereo_enabled()) {
+                    const x4vr::Shared *s6 = shared_state();
+                    const bool cockpit6 =
+                        cv && s6 &&
+                        s6->on_foot.load(std::memory_order_relaxed) == 0 &&
+                        s6->external_head.load(std::memory_order_relaxed) == 0;
                     static bool n6_set = false;
                     static float n6[3] = {0.f, 0.f, 0.f};
-                    if (!n6_set && cv) {
+                    if (!n6_set && cockpit6) {
                         n6_set = true;
                         n6[0] = cx, n6[1] = cyp, n6[2] = cz;
                         X4VR_LOG("head 6dof: neutral latched at (%.3f, %.3f, "
-                                 "%.3f) m, the first frame head-look steered; "
-                                 "the offset from here goes into X4's camera "
-                                 "base, held to %.2f m",
+                                 "%.3f) m, the first frame head-look steered "
+                                 "in the cockpit; the world shaders move the "
+                                 "eye from here, held to %.2f m",
                                  cx, cyp, cz, head6_max());
                     }
-                    if (x4vr::HeadShared *h = head6_fn ? head6_fn() : nullptr) {
-                        const float t[3] = {cx - n6[0], cyp - n6[1], cz - n6[2]};
-                        float x[3];
-                        x4vr::head6::to_x4(t, x);
-                        x4vr::head6::clamp_len(x, head6_max());
-                        for (int i = 0; i < 3; i++)
-                            h->head6_want[i].store(n6_set ? x[i] : 0.f,
-                                                   std::memory_order_relaxed);
-                        h->head6_want_on.store(n6_set ? 1u : 0u,
-                                               std::memory_order_release);
-                        static uint64_t n = 0;
-                        if (n6_set && (n++ % 600) == 0)
-                            X4VR_LOG("head 6dof: offset (%.3f, %.3f, %.3f) m "
-                                     "in the room -> X4 (%.3f, %.3f, %.3f)%s",
-                                     t[0], t[1], t[2], x[0], x[1], x[2],
-                                     std::sqrt(t[0] * t[0] + t[1] * t[1] +
-                                               t[2] * t[2]) > head6_max()
-                                         ? " — HELD at the limit"
-                                         : "");
+                    float room[3] = {0.f, 0.f, 0.f};
+                    if (n6_set && cockpit6) {
+                        room[0] = cx - n6[0];
+                        room[1] = cyp - n6[1];
+                        room[2] = cz - n6[2];
+                        x4vr::head6::clamp_len(room, head6_max());
                     }
+                    // Into the view axes of the camera X4 drew: the command.
+                    float qc[4];
+                    x4vr::quat_of_angles(cy, cp, qc);
+                    const x4vr::HeadShift v6 = x4vr::head_shift(
+                        qc[0], qc[1], qc[2], qc[3], room[0], room[1], room[2]);
+                    g_head6.tx.store(v6.x, std::memory_order_relaxed);
+                    g_head6.ty.store(v6.y, std::memory_order_relaxed);
+                    g_head6.tf.store(-v6.z, std::memory_order_relaxed); // OpenXR -z is forward
+                    g_head6.rx.store(room[0], std::memory_order_relaxed);
+                    g_head6.ry.store(room[1], std::memory_order_relaxed);
+                    g_head6.rz.store(room[2], std::memory_order_relaxed);
+                    g_head6.on.store(n6_set && cockpit6 ? 1u : 0u,
+                                     std::memory_order_release);
+                    static bool was6 = false;
+                    if ((n6_set && cockpit6) != was6) {
+                        was6 = n6_set && cockpit6;
+                        X4VR_LOG("head 6dof: %s", was6
+                                 ? "ON — the world drawn from the head's "
+                                   "position in the cockpit"
+                                 : "off — not steering in the cockpit (a menu, "
+                                   "an external view, on foot): the eye at "
+                                   "neutral");
+                    }
+                    static uint64_t n6log = 0;
+                    if (was6 && (n6log++ % 600) == 0)
+                        X4VR_LOG("head 6dof: offset (%.3f, %.3f, %.3f) m in the "
+                                 "room -> view right %.3f up %.3f forward %.3f%s",
+                                 room[0], room[1], room[2], v6.x, v6.y, -v6.z,
+                                 std::sqrt(room[0] * room[0] + room[1] * room[1] +
+                                           room[2] * room[2]) >=
+                                         head6_max() - 1e-4f
+                                     ? " — HELD at the limit"
+                                     : "");
                 }
                 // Clamped because X4 culls on the CPU against its own frustum
                 // and that culling does NOT move with the shear. The IPD
@@ -13284,8 +13332,15 @@ void vr_thread() {
                                  ? " — CLAMPED"
                                  : "");
             }
-            pose_drive_residual(ha.yaw_deg, ha.pitch_deg, cy, cp, cv,
-                                ha.roll_deg, ha.yaw_weight, tx, ty);
+            {
+                const bool on6 = g_head6.on.load(std::memory_order_acquire) != 0;
+                pose_drive_residual(
+                    ha.yaw_deg, ha.pitch_deg, cy, cp, cv, ha.roll_deg,
+                    ha.yaw_weight,
+                    tx + (on6 ? g_head6.tx.load(std::memory_order_relaxed) : 0.f),
+                    ty + (on6 ? g_head6.ty.load(std::memory_order_relaxed) : 0.f),
+                    on6 ? g_head6.tf.load(std::memory_order_relaxed) : 0.f);
+            }
         }
         // Task #38: submit the eye image, once X4's present thread has put one
         // in the swapchain. Until then this is still a zero-layer frame, which
@@ -13641,18 +13696,14 @@ void vr_thread() {
                         (e == 0 ? -half : half) +
                             g_reye.sx.load(std::memory_order_relaxed),
                         g_reye.sy.load(std::memory_order_relaxed), 0.0f);
-                    // X4VR_HEAD_6DOF: plus the offset the injector wrote into
-                    // X4's camera base -- the eye these pixels came from.
+                    // X4VR_HEAD_6DOF: plus the head's offset in the room, the
+                    // eye the world shaders drew from (unrotated: no lever arm).
                     float a6[3] = {0.f, 0.f, 0.f};
-                    if (const x4vr::Shared *sh6 = shared_state())
-                        if (sh6->head6_applied_on.load(
-                                std::memory_order_acquire)) {
-                            const float xa[3] = {
-                                sh6->head6_applied[0].load(std::memory_order_relaxed),
-                                sh6->head6_applied[1].load(std::memory_order_relaxed),
-                                sh6->head6_applied[2].load(std::memory_order_relaxed)};
-                            x4vr::head6::from_x4(xa, a6);
-                        }
+                    if (g_head6.on.load(std::memory_order_acquire)) {
+                        a6[0] = g_head6.rx.load(std::memory_order_relaxed);
+                        a6[1] = g_head6.ry.load(std::memory_order_relaxed);
+                        a6[2] = g_head6.rz.load(std::memory_order_relaxed);
+                    }
                     pv[e].pose.position.x =
                         g_reye.nx.load(std::memory_order_relaxed) + off.x + a6[0];
                     pv[e].pose.position.y =

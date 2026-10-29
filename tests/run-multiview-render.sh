@@ -1073,14 +1073,17 @@ if command -v spirv-dis >/dev/null; then
     rins=$(spirv-dis "$PATCHDIR/roll_on.spv" 2>/dev/null | grep -c 'OpCompositeInsert')
     rset=$(spirv-dis "$PATCHDIR/roll_on.spv" 2>/dev/null | grep -c 'DescriptorSet 7')
     roff=$(spirv-dis "$PATCHDIR/roll_on.spv" 2>/dev/null | grep -c '0 Offset 192')
+    # X4VR_HEAD_6DOF: the second member, head_fwd, at 208.
+    rfwd=$(spirv-dis "$PATCHDIR/roll_on.spv" 2>/dev/null | grep -c '1 Offset 208')
     rval=BAD
     spirv-val --target-env vulkan1.2 "$PATCHDIR/roll_on.spv" >/dev/null 2>&1 && rval=OK
-    if [[ "$rins" == 2 && "$rset" == 1 && "$roff" == 1 && "$rval" == OK ]]; then
-        printf 'ok   %-38s inserts=%s set7=%s off192=%s val=%s\n' \
-            "...roll adds the y term" "$rins" "$rset" "$roff" "$rval"
+    # x and y (roll), then z and w (X4VR_HEAD_6DOF's forward offset): four.
+    if [[ "$rins" == 4 && "$rset" == 1 && "$roff" == 1 && "$rfwd" == 1 && "$rval" == OK ]]; then
+        printf 'ok   %-38s inserts=%s set7=%s off192=%s off208=%s val=%s\n' \
+            "...roll adds the y and forward terms" "$rins" "$rset" "$roff" "$rfwd" "$rval"
     else
-        printf 'FAIL %-38s want 2/1/1/OK, got %s/%s/%s/%s\n' \
-            "...roll adds the y term" "$rins" "$rset" "$roff" "$rval"
+        printf 'FAIL %-38s want 4/1/1/1/OK, got %s/%s/%s/%s/%s\n' \
+            "...roll adds the y and forward terms" "$rins" "$rset" "$roff" "$rfwd" "$rval"
         fails=$((fails + 1))
     fi
     # Refused in combination with the off-axis affine, which rewrites x and y

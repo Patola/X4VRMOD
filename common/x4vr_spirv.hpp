@@ -2147,9 +2147,14 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
     // whole patch exists to avoid, arriving through the back door.
     const bool roll_on = roll_set != 0xffffffffu;
     uint32_t roll_var = 0, ptr_uniform_v4 = 0, c_rollmem = 0, t_rollblock = 0;
+    uint32_t c_two = 0, c_three = 0;
     if (roll_on) {
         t_rollblock = new_id();
-        emit(decls, OpTypeStruct, {t_rollblock, t_v4});
+        // Two members since X4VR_HEAD_6DOF: eye_ofs at 192 and head_fwd at
+        // 208 (x4vr_view.hpp's PoseBlock).
+        emit(decls, OpTypeStruct, {t_rollblock, t_v4, t_v4});
+        c_two = iconst(2);
+        c_three = iconst(3);
         const uint32_t ptr_rollblock = new_id();
         emit(decls, OpTypePointer,
              {ptr_rollblock, StorageClassUniform, t_rollblock});
@@ -2254,6 +2259,8 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
             emit(out, OpDecorate, {t_rollblock, DecorationBlock});
             emit(out, OpMemberDecorate,
                  {t_rollblock, 0u, DecorationOffset, x4vr::kPoseEyeOfsOffset});
+            emit(out, OpMemberDecorate,
+                 {t_rollblock, 1u, DecorationOffset, x4vr::kPoseHeadFwdOffset});
             emit(out, OpDecorate, {roll_var, DecorationDescriptorSet, roll_set});
             emit(out, OpDecorate, {roll_var, DecorationBinding, roll_binding});
         }
@@ -2419,6 +2426,48 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
                     emit(out, OpCompositeInsert, {t_v4, np2, ny, np, 1});
                     np = np2;
                 }
+            }
+            // **X4VR_HEAD_6DOF: the forward offset f** (PoseBlock::head_fwd.x).
+            // Linear before the divide: z -= P22*P23*f, w -= P23*P23*f, with
+            // P23 = +-1 for a perspective projection (the eye moved f along the
+            // view axis), 0 for an orthographic one (nothing moves). With f = 0
+            // both are exact no-ops.
+            if (roll_on) {
+                const uint32_t p_fw = new_id();
+                emit(out, OpAccessChain, {ptr_uniform_v4, p_fw, roll_var, c_one});
+                const uint32_t fw4 = new_id();
+                emit(out, OpLoad, {t_v4, fw4, p_fw});
+                const uint32_t f = new_id();
+                emit(out, OpCompositeExtract, {t_float, f, fw4, 0});
+                const uint32_t p22p = new_id();
+                emit(out, OpAccessChain, {ptr_uniform_float, p22p, cam_var,
+                                          c_member, c_two, c_two});
+                const uint32_t p22 = new_id();
+                emit(out, OpLoad, {t_float, p22, p22p});
+                const uint32_t p23p = new_id();
+                emit(out, OpAccessChain, {ptr_uniform_float, p23p, cam_var,
+                                          c_member, c_two, c_three});
+                const uint32_t p23 = new_id();
+                emit(out, OpLoad, {t_float, p23, p23p});
+                const uint32_t f23 = new_id();
+                emit(out, OpFMul, {t_float, f23, p23, f});
+                const uint32_t dz = new_id();
+                emit(out, OpFMul, {t_float, dz, p22, f23});
+                const uint32_t dw = new_id();
+                emit(out, OpFMul, {t_float, dw, p23, f23});
+                const uint32_t z0 = new_id();
+                emit(out, OpCompositeExtract, {t_float, z0, np, 2});
+                const uint32_t w0 = new_id();
+                emit(out, OpCompositeExtract, {t_float, w0, np, 3});
+                const uint32_t nz = new_id();
+                emit(out, OpFSub, {t_float, nz, z0, dz});
+                const uint32_t nw = new_id();
+                emit(out, OpFSub, {t_float, nw, w0, dw});
+                const uint32_t np3 = new_id();
+                emit(out, OpCompositeInsert, {t_v4, np3, nz, np, 2});
+                const uint32_t np4 = new_id();
+                emit(out, OpCompositeInsert, {t_v4, np4, nw, np3, 3});
+                np = np4;
             }
             emit(out, OpStore, {ptr, np});
         }

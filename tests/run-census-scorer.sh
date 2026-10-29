@@ -1389,31 +1389,30 @@ want "cinematic: never reached the layer -> FAIL" /tmp/census-cv-late.log "FAIL|
 absent "cinematic: none -> silent" "$BASE" cinematic
 
 # ------------------------------------ X4VR_HEAD_6DOF (head6)
-for f in '"head 6dof: neutral latched at (%.3f, %.3f, "' '"head 6dof: ON — the head' '"head 6dof: applied (%.3f, %.3f, %.3f) m, %llu write(s), "' '"head 6dof: off — %s; the base' '"head 6dof: base write FAILED at %p"'; do
-    if grep -qF "$f" injector/x4vr_inject.cpp layer/x4vr_layer.cpp; then
+for f in '"head 6dof: neutral latched at (%.3f, %.3f, "' '"head 6dof: offset (%.3f, %.3f, %.3f) m in the "' '"head 6dof: REFUSED — it needs X4VR_POSE=1 and "' '"ON — the world drawn from the head' '"off — not steering in the cockpit (a menu, "'; do
+    if grep -qF "$f" layer/x4vr_layer.cpp; then
         ok "head6: the planted line matches a format ($f)"
     else
         bad "head6: a format moved ($f)"
     fi
 done
 sed 's/env: run = /env: run = X4VR_HEAD_6DOF=1 /' "$BASE" > /tmp/census-h6-base.log
-h6l='[  999960.000] layer   head 6dof: neutral latched at (0.010, 1.100, -0.020) m, the first frame head-look steered; the offset from here goes into X4'"'"'s camera base, held to 0.35 m'
-h6on='[  999960.100] inject  head 6dof: ON — the head'"'"'s offset goes into X4'"'"'s camera base (0.001, 0.000, 0.002) m; X4 composes it into the eye'
-h6ap='[  999965.100] inject  head 6dof: applied (0.050, -0.010, 0.120) m, 450 write(s), max 0.180 m so far'
-h6off='[  999970.000] inject  head 6dof: off — head-look is not writing in the pilot seat; the base'"'"'s translation is zero again (1 restore(s))'
-{ cat /tmp/census-h6-base.log; printf '%s\n' "$h6l" "$h6on" "$h6ap" "$h6off"; } > /tmp/census-h6-ok.log
-want "head6: a healthy run -> summarised" /tmp/census-h6-ok.log head6 "neutral latched; 1 period(s) ON, 1 off; largest offset 0.180 m"
-want "head6: the off reason counted" /tmp/census-h6-ok.log head6 "off x1: head-look is not writing in the pilot seat"
+h6l='[  999960.000] layer   head 6dof: neutral latched at (0.010, 1.100, -0.020) m, the first frame head-look steered in the cockpit; the world shaders move the eye from here, held to 0.35 m'
+h6on='[  999960.010] layer   head 6dof: ON — the world drawn from the head'"'"'s position in the cockpit'
+h6of='[  999962.000] layer   head 6dof: offset (0.060, -0.080, 0.000) m in the room -> view right 0.060 up -0.080 forward 0.000'
+h6off='[  999970.000] layer   head 6dof: off — not steering in the cockpit (a menu, an external view, on foot): the eye at neutral'
+{ cat /tmp/census-h6-base.log; printf '%s\n' "$h6l" "$h6on" "$h6of" "$h6off"; } > /tmp/census-h6-ok.log
+want "head6: a healthy run -> summarised" /tmp/census-h6-ok.log head6 "neutral latched; 1 period(s) ON, 1 off; largest sampled offset 0.100 m"
 if python3 tools/score_run.py /tmp/census-h6-ok.log 2>&1 | grep -qE "^  - .*6DOF"; then
     bad "head6: a healthy run -> FAILs"
 else
     ok "head6: a healthy run -> no FAIL"
 fi
 { cat /tmp/census-h6-base.log; printf '%s\n' "$h6l"; } > /tmp/census-h6-never.log
-want "head6: latched but never ON -> FAIL" /tmp/census-h6-never.log "FAIL|  - " "the head's offset never went into X4's camera"
+want "head6: latched but never ON -> FAIL" /tmp/census-h6-never.log "FAIL|  - " "the eye was never moved"
 want "head6: never latched -> FAIL" /tmp/census-h6-base.log "FAIL|  - " "the layer never latched a neutral"
-{ cat /tmp/census-h6-base.log; printf '%s\n' "$h6l" "$h6on" '[  999961.000] inject  head 6dof: base write FAILED at 0x7f00'; } > /tmp/census-h6-fail.log
-want "head6: a failed write -> FAIL" /tmp/census-h6-fail.log "FAIL|  - " "a write to X4's camera base failed"
+{ cat /tmp/census-h6-base.log; echo '[  999960.000] layer   head 6dof: REFUSED — it needs X4VR_POSE=1 and X4VR_ROLL_STEREO (the world shaders'"'"' head slot); pose OFF, roll stereo on. Nothing is moved or declared'; } > /tmp/census-h6-ref.log
+want "head6: refused -> FAIL" /tmp/census-h6-ref.log "FAIL|  - " "X4VR_HEAD_6DOF REFUSED — it needs X4VR_POSE=1"
 absent "head6: not asked -> silent" "$BASE" head6
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi

@@ -4669,40 +4669,34 @@ def main(path):
 
     # --- X4VR_HEAD_6DOF: the head's position in the cockpit ------------------
     #
-    # The layer latches a neutral the first frame head-look steers and
-    # publishes the offset; the injector writes it into X4's camera base while
-    # head-look writes in the pilot seat. Gate on intent: asked means ON at
-    # least once, and no failed write.
+    # The layer latches a neutral the first frame head-look steers in the
+    # cockpit and moves the eye in the world shaders (X4's own eye stays put:
+    # take 361's HUD). Gate on intent: asked means not refused, latched, ON.
     h6_asked = bool(re.search(r"\bX4VR_HEAD_6DOF=1\b", run or ""))
-    h6_latch = re.search(r"head 6dof: neutral latched at \((-?[\d.]+), "
-                         r"(-?[\d.]+), (-?[\d.]+)\)", text)
-    h6_on = len(re.findall(r"inject\s+head 6dof: ON", text))
-    h6_off = re.findall(r"inject\s+head 6dof: off — (.*?);", text)
-    h6_max = [float(m) for m in re.findall(r"head 6dof: applied .*? max "
-                                           r"([\d.]+) m so far", text)]
+    h6_ref = re.search(r"head 6dof: REFUSED — (.*?)\. Nothing", text)
+    h6_latch = "head 6dof: neutral latched at" in text
+    h6_on = len(re.findall(r"layer\s+head 6dof: ON", text))
+    h6_off = len(re.findall(r"layer\s+head 6dof: off —", text))
+    h6_off_mag = [math.sqrt(float(a)**2 + float(b)**2 + float(c)**2)
+                  for a, b, c in re.findall(
+                      r"head 6dof: offset \((-?[\d.]+), (-?[\d.]+), "
+                      r"(-?[\d.]+)\) m in the room", text)]
     h6_held = len(re.findall(r"head 6dof: offset .*HELD at the limit", text))
-    h6_fail = "head 6dof: base write FAILED" in text
-    if h6_asked or h6_on or h6_latch:
+    if h6_asked or h6_on or h6_latch or h6_ref:
         print(f"head6  neutral {'latched' if h6_latch else 'NEVER latched'}; "
-              f"{h6_on} period(s) ON, {len(h6_off)} off; largest offset "
-              f"{max(h6_max) if h6_max else 0.0:.3f} m"
+              f"{h6_on} period(s) ON, {h6_off} off; largest sampled offset "
+              f"{max(h6_off_mag) if h6_off_mag else 0.0:.3f} m"
               + (f"; {h6_held} sample(s) held at the limit" if h6_held else ""))
-        reasons = {}
-        for r in h6_off:
-            reasons[r] = reasons.get(r, 0) + 1
-        for r, k in sorted(reasons.items(), key=lambda kv: -kv[1]):
-            print(f"head6  off x{k}: {r}")
-        if h6_asked and not h6_latch:
+        if h6_ref:
+            fails.append("X4VR_HEAD_6DOF REFUSED — " + h6_ref.group(1))
+        elif h6_asked and not h6_latch:
             fails.append("X4VR_HEAD_6DOF=1 but the layer never latched a "
-                         "neutral (head-look never steered)")
+                         "neutral (head-look never steered in the cockpit)")
         elif h6_asked and not h6_on:
-            fails.append("X4VR_HEAD_6DOF=1 but the head's offset never went "
-                         "into X4's camera")
-        if h6_fail:
-            fails.append("X4VR_HEAD_6DOF: a write to X4's camera base failed")
+            fails.append("X4VR_HEAD_6DOF=1 but the eye was never moved")
         if h6_on:
-            print("head6  whether leaning moves the eye in the cockpit, "
-                  "without the sides receding on a turn, is Patola's to say")
+            print("head6  whether leaning moves the eye with the HUD staying "
+                  "put, and clicks still lining up, is Patola's to say")
 
     # --- X4VR_DUMP_SHADERS: the modules were written (take 346) -------------
     #

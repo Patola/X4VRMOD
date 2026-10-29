@@ -27329,3 +27329,35 @@ world shaders. The pose channel's `eye_ofs` already carries a head x/y
 shift there (#74); z would be new. Declare the offset in the room's axes,
 unrotated. The cost: picking and brackets are off by parallax t/d for near
 objects (0.35 m at 50 m ≈ 0.4°).
+
+## Built for take 362: 6DOF in the world shaders (Patola: "go ahead with the shader approach")
+
+* **Take 361's camera-base write is gone.** The injector, head-look's base
+  check and the share are v0.9.5's again. X4's eye stays at neutral, so the
+  HUD, click targets and X4's culling are as before.
+* **The layer:**
+  * latches a neutral the first frame head-look steers in the cockpit (not
+    on foot, not in an external view);
+  * takes the pivot-corrected head centre's offset in the room, held to
+    0.35 m;
+  * turns it into the view axes X4 rendered with (the command, cy/cp) and
+    sends right/up through the pose channel's eye_ofs z/w (#74's slot) and
+    forward through the new PoseBlock::head_fwd (offset 208, 224-byte block);
+  * declares neutral + the room offset, unrotated;
+  * refuses loudly without X4VR_POSE or X4VR_ROLL_STEREO.
+* **The world shaders** (patch_vertex_eye_offset under roll): the pose view
+  is now {vec4 @192, vec4 @208}. After the x/y edits, `z -= P22·P23·f` and
+  `w -= P23²·f`, linear before the divide; f = 0 is an exact no-op and an
+  orthographic projection (P23 = 0) moves nothing. The old note that a
+  forward offset "is not expressible" was true of a projection matrix alone,
+  not of the per-vertex edit.
+* **Not covered** (as #74 was not):
+  * the 16 modules on the MVP path (no head shift there);
+  * the deferred lighting's inverse-projection reconstruction, which carries
+    roll but not the head offset. Near lights may sit up to the lean off;
+    to watch.
+* **Tests:**
+  * the GPU harness: the roll case now expects 4 inserts and the member at
+    208, spirv-val OK; all cases pass;
+  * head6.cpp (the limit);
+  * the scorer `head6` block (layer lines) with planted cases.
