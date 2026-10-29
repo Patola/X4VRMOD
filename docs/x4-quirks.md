@@ -27160,3 +27160,17 @@ fixing before the 6DOF."*
   * FAILs when an F6 period never reaches the layer, when no twin was ever
     bound, or when a twin failed to build;
   * take 358 re-scores FAIL on it, which agrees with Patola's report.
+
+## Take 359 — SCORED PASS: F6's overlay fills its window (v0.9.5)
+
+Patola: *"it worked perfectly well, now the overlay covers the whole F6
+window, and no glitch for using F4→F6, and right-click behavior is still
+working as before."*
+* 16 twins built, 0 failed. The cinematic flag went ON three times and the
+  layer switched within 2 ms each time, with 80,944 twin binds.
+* The right-click menu stayed on the canvas (rclick: 3 periods, canvas ON).
+* Tagged `v0.9.5` (Patola: *"due to the involved changes"*), with the take
+  bookmark `take-359-f6-overlay`.
+
+Next: the start menu as the whole scene, then full 6DOF in the cockpit.
+

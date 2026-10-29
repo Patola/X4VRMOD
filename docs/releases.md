@@ -18,6 +18,33 @@ the same message:
 
 Nothing here is published until the repository is pushed.
 
+## v0.9.5 — 2026-10-29 — F6's overlay fills its window
+
+The state of take 359 (`take-359-f6-overlay`, code identical to commit
+b4197a8). Patola: *"now the overlay covers the whole F6 window, and no
+glitch for using F4→F6, and right-click behavior is still working as
+before."*
+
+* **Fixed:** the cinematic view's (F6) information overlay covered only
+  about half of its window, unreadable and out of keeping with X4's design
+  (it represents the fictional screen the scene is shown on).
+  * The overlay is X4's UI laid out for the whole flat screen. The canvas
+    map that puts the HUD at the angle X4 meant is baked into the UI
+    pipelines when they are created.
+  * Each such pipeline now has a twin built with X4's own UI vertex stage,
+    and the layer binds the twins while F6 is up. In F6, X4's UI is drawn
+    exactly as X4 laid it out; everywhere else nothing changes. No shader
+    changes.
+  * F6 is recognised from X4's state: in the pilot seat, the HUD down, not
+    paused, no conversation, and only X4's TopLevelMenu open, held 0.3 s.
+  * The canvas cursor is off in F6.
+* Tested on the GPU harness under validation (a twin built, bound only in
+  F6, no added validation errors) before the take.
+* The play command is unchanged.
+
+**Known limitations:** the start menu shows as a window. F6 entered on foot
+keeps the small overlay (the signal requires the pilot seat).
+
 ## v0.9.4 — 2026-10-29 — F6 is a steady window again
 
 The state of take 358 (code: v0.9.3 plus commit 679e52c). Patola: *"F2, F3,

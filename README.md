@@ -11,13 +11,13 @@ Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
 **[docs/frame-analysis.md](docs/frame-analysis.md)**; the traps X4 sets for
 modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 
-> **Status: v0.9.4 — playable in VR** ([release notes](docs/releases.md)).
+> **Status: v0.9.5 — playable in VR** ([release notes](docs/releases.md)).
 > X4 runs in VR with in-engine stereo (per-eye lighting), head-look in the
 > cockpit and on foot, the UI on a canvas at the angle X4 intended, and every
 > menu reachable and lined up with the cursor, over WiVRn or SteamVR. The
 > external views (F2/F3/F4) are the whole scene too, and the cinematic view
-> (F6) a steady window. Open work: F6's overlay is half-size, and the start
-> menu still shows as a window. An earlier proof of
+> (F6) a steady window with its overlay filling it. Open work: the start menu
+> still shows as a window. An earlier proof of
 > concept using OpenTrack head-tracking + vkShade/SuperDepth3D depth-image
 > reconstruction is preserved
 > at tag `v0.1`; it was abandoned as a dead end (wrong pivot, gimbal lock,
@@ -83,7 +83,7 @@ blocks every frame.
 | On-foot menus, dialogues, teleporters and vendors lined up | done | `take-341-foot-menu-start` |
 | **Playable in VR** | **release** | **`v0.9.0`** |
 | F6 (cinematic) a steady window, as X4 intends | done | **`v0.9.4`** |
-| F6's overlay fills its window | open | — |
+| F6's overlay fills its window | done | **`v0.9.5`** |
 | The start menu as the whole scene | open | — |
 | Volumetric nebula in stereo (Matrix #79B, CEO's Doubt) | done | **`v0.9.1`** |
 | The numpad orbits the external (F2) and target (F3) views again | done | **`v0.9.2`** |
