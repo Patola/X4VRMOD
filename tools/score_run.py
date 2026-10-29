@@ -5265,6 +5265,33 @@ def main(path):
             print(f"steer   both eyes show x {st_box.group(1)}..{st_box.group(2)} "
                   f"y {st_box.group(3)}..{st_box.group(4)} of the rendered eye "
                   f"(take 332's fallback box, since removed)")
+        # Take 367: X4's own "mouse captured" flag, against head-look's
+        # ARMED milestone and the first steering engagement.
+        st_cap = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+steer: X4's mouse "
+                            r"capture \(in\[0x9f33\]\) is now (ON|OFF)\b.* — "
+                            r"(.*)$", text, re.M)
+        st_arm = re.search(r"\[\s*([\d.]+)\]\s+inject\s+milestone: head-look "
+                           r"write ARMED", text)
+        st_eng = re.search(r"\[\s*([\d.]+)\]\s+inject\s+steer: mouse steering "
+                           r"engaged", text)
+        if st_cap:
+            first_on = next((float(t) for t, k, _ in st_cap if k == "ON"), None)
+            for t, k, rest in st_cap[:12]:
+                print(f"steer   t {float(t):10.1f}  X4's mouse capture {k:<3s} "
+                      f"({rest})")
+            if st_arm and first_on is not None:
+                arm = float(st_arm.group(1))
+                eng = float(st_eng.group(1)) if st_eng else None
+                print(f"steer   X4 captured the mouse {first_on - arm:+.1f} s "
+                      f"from head-look ARMED"
+                      + (f"; the first mouse steering was at "
+                         f"{eng - arm:+.1f} s" if eng is not None else "")
+                      + (" — capture came WITH the steering toggle, not "
+                         "with the load" if eng is not None and
+                         abs(first_on - eng) < 0.5 else ""))
+            elif st_arm:
+                print("steer   X4 never captured the mouse after head-look "
+                      "ARMED")
         if st_rec or st_norec:
             print(f"steer   mouse steering engaged {len(st_rec)} time(s) with the "
                   f"pointer recentred, from "

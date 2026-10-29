@@ -4836,6 +4836,31 @@ static void steer_tick() {
     const bool cockpit = x4_view() == X4View::Cockpit;
     // Not called unguarded: without a decoded slot the HUD counts as down.
     const bool hud = x4_hud_slot() ? x4_hud_active() : false;
+    // **X4's "mouse captured" flag, read only (take 367).** in[0x9f33], set
+    // by 0xcec160 (callers: ToggleMouseSteeringMode, the input manager's
+    // pending-event path, RestoreMiscOptions...). Until it is set, the
+    // mouse object's centred position reads 0, so X4 hovers the centre of
+    // the view and sets no cursor: Patola, take 367, "when the game loads,
+    // the cursor is not activated by default, I had to engage in steering
+    // mode and back for it to work". Logged on change, with the view.
+    {
+        uintptr_t in = 0;
+        uint8_t cap = 0;
+        static int last_cap = -1;
+        static unsigned cap_lines = 0;
+        if (self_read(x4vr::steer::input_global_from_sites(), &in, sizeof in) &&
+            in && self_read(in + 0x9f33, &cap, 1) && (int)(cap != 0) != last_cap) {
+            last_cap = cap != 0;
+            if (cap_lines++ < 100)
+                X4VR_LOG("steer: X4's mouse capture (in[0x9f33]) is now %s — "
+                         "%s, HUD %s",
+                         cap ? "ON: its centred pointer follows the mouse"
+                             : "OFF: its centred pointer reads 0 (hover at the "
+                               "view's centre, no cursor set)",
+                         cockpit ? "cockpit" : "not the cockpit",
+                         hud ? "up" : "down");
+        }
+    }
     bool shown = false;
     // Steering ENGAGED: the steering bytes alone, in the cockpit with the HUD
     // up. Not the full line predicate -- its other flags are not known to be

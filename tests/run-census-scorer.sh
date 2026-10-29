@@ -1475,6 +1475,27 @@ want "aimpick: asked, no PATCHED line -> FAIL" /tmp/census-ap-base.log "FAIL|  -
 { cat "$BASE"; printf '%s\n' "$app"; } > /tmp/census-ap-unasked.log
 want "aimpick: patched unasked -> FAIL" /tmp/census-ap-unasked.log "FAIL|  - " "the targeting patch acted in a run that did not ask for it"
 absent "aimpick: not asked -> silent" "$BASE" aimpick
+# Take 367: X4's mouse-capture flag against ARMED and the first steering.
+if grep -qF '"steer: X4'"'"'s mouse capture (in[0x9f33]) is now %s — "' injector/x4vr_inject.cpp; then
+    ok "capture: the injector's line is the planted one"
+else
+    bad "capture: the injector's format moved"
+fi
+cpa='[  999950.000] inject  milestone: head-look write ARMED — the view now follows your head without mouse-look.'
+cpe='[  999961.000] inject  steer: mouse steering engaged — pointer recentred from 19,21 to 1408,1408 so the ship starts straight'
+cpon='[  999961.010] inject  steer: X4'"'"'s mouse capture (in[0x9f33]) is now ON: its centred pointer follows the mouse — cockpit, HUD up'
+sed 's/env: run = /env: run = X4VR_STEER=a /' "$BASE" > /tmp/census-cp-base.log
+{ cat /tmp/census-cp-base.log; printf '%s\n' "$cpa" "$cpe" "$cpon"; } > /tmp/census-cp-steer.log
+want "capture: with the steering toggle -> said so" /tmp/census-cp-steer.log steer "X4 captured the mouse +11.0 s from head-look ARMED; the first mouse steering was at +11.0 s — capture came WITH the steering toggle"
+cpon2='[  999951.000] inject  steer: X4'"'"'s mouse capture (in[0x9f33]) is now ON: its centred pointer follows the mouse — cockpit, HUD up'
+{ cat /tmp/census-cp-base.log; printf '%s\n' "$cpa" "$cpon2" "$cpe"; } > /tmp/census-cp-load.log
+if python3 tools/score_run.py /tmp/census-cp-load.log 2>&1 | grep -qF "capture came WITH the steering toggle"; then
+    bad "capture: at load -> not blamed on the toggle"
+else
+    ok "capture: at load -> not blamed on the toggle"
+fi
+{ cat /tmp/census-cp-base.log; printf '%s\n' "$cpa" "$cpe" '[  999970.000] inject  steer: X4'"'"'s mouse capture (in[0x9f33]) is now OFF: its centred pointer reads 0 (hover at the view'"'"'s centre, no cursor set) — cockpit, HUD up'; } > /tmp/census-cp-never.log
+want "capture: only OFF -> never captured" /tmp/census-cp-never.log steer "X4 never captured the mouse after head-look ARMED"
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

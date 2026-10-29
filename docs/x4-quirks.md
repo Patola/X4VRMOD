@@ -27676,3 +27676,77 @@ Take 366's line plus `X4VR_STEER_PICK=1`:
     line would show it.
 * Scorer: `aimpick` PATCHED, an ON period per steering engagement, each one
   shifting the ray.
+
+## Take 367 — SCORED PASS (2026-10-29): X4 targets at the ring
+
+Patola: *"I did a real stress test with various leanings, rotations and
+whatnot to test clicking on objects and it was entirely consistent, both in
+steering and mouse mode."* Also:
+* in steering mode X4 draws a second cursor (two semicircles) that slowly
+  catches up with the ring: the direction the ship is turning to;
+* *"The three dots follow our gaze, but they don't seem to interfere"* (to
+  be judged in combat);
+* F2/F3/F4 fine.
+
+**Reported defects:**
+* *"when the game loads, the cursor is not activated by default, I had to
+  engage in steering mode and back for it to work."*
+* *"there are elements on the HUD which were meant to be clickable and are
+  not"*: the right monitor's fleet emergency notification, and its
+  (1) Attack / (2) Escape choices after F. Only the hotkeys worked (twice).
+
+`score_run.py` PASS:
+* aimpick: 31 periods, each one a steering engagement. The ray ran 46793
+  times in them and 46788 were shifted; the other 5 were shifts of (0,0),
+  head straight to within half a pixel.
+* rclick-hold 42/42; extview 2/2 declared.
+* **P367.1–P367.4 HELD** (his report).
+
+**The cursor at load is X4's mouse capture, and not the new patch.**
+* X4 set no cursor shape until the first steering toggle: 203201.89 in take
+  367, 180791.18 in take 366, the same pattern before the patch.
+* The mouse object's centred position reads 0 unless `in[0x9f33]`, X4's
+  "mouse captured" flag. Until then X4 hovers the view's centre and sets no
+  cursor.
+* `in[0x9f33]` is written only by 0xcec160. Its capture-on path 0xcec280 is
+  called by:
+  * ToggleMouseSteeringMode (0xc04468);
+  * the input manager when its pending list `in+0x6510` is non-empty
+    (0xcec694);
+  * timer paths 0xced627 / 0xced65b / 0xced987 / 0xced9a6;
+  * 0xfea89b / 0xfea8a5.
+  The direct setters are 0xac185b, RestoreMiscOptions and 0xfcab8c.
+* What vanilla does at load is not established. A read-only log line now
+  records each change of `in[0x9f33]` (`steer: X4's mouse capture ...`), and
+  the scorer places the first capture against ARMED and the first steering.
+  3 planted cases.
+
+**HUD clicks: the leading hypothesis is the canvas scale.**
+* X4's cockpit HUD is perspective UI. With the default gate polarity
+  (`ui_wgate_perspective`), its draws take the canvas map, A = 0.5252 about
+  the view's centre.
+* X4 hit-tests its UI in its own layout, at the raw pointer. The cockpit
+  cursor is drawn raw, which is right for the world (take 314).
+* So a HUD element drawn at offset d reacts to the pointer at d / 0.5252 =
+  1.9 d. That is take 314's open item ("cockpit HUD panels ... unmeasured").
+* The alternative: X4's HUD hit-test ignores head-look, which would put the
+  error at the head angle instead.
+
+## Take 368 — PREDICTIONS (written before the run): capture at load, HUD clicks
+
+Take 367's line with the take number and log changed (and the capture log
+line built in).
+
+    X4VR_HEADLOOK_LAGLOG=1 X4VR_TAKE=368 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take368.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_STEER_PICK=1 X4VR_FOOTLOG=1 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P368.1:** after the load, before any steering, the log shows the capture
+  OFF and nothing highlights under the cursor. If a left click captures (the
+  pending-event path), the log shows ON at the click and highlighting starts.
+  Either outcome decides the fix.
+* **P368.2:** head straight, mouse mode: a clickable HUD element does not
+  react with the cursor on it. It reacts with the cursor about twice as far
+  from the view's centre, in the same direction.
+* **P368.3:** turning the head toward it does not change that.
+* **Refutations:**
+  * The element reacts with the cursor on it: the scale is not the cause.
+  * It works head straight but fails head turned: the cause is head-look.
