@@ -27271,3 +27271,31 @@ that translation can live.
   injector through the share (head position, neutral).
 * **To verify first:** the other readers of +0x6f0 (0x190862f, 0x19a3668)
   — what else takes the base as the eye position.
+
+## Built for take 361: X4VR_HEAD_6DOF (the head's position in the cockpit)
+
+Patola: *"Yes, build it. That seems a great solution, better than the one we
+had previously. I hope this one will also allows us to use all the 6 axes."*
+Yaw and pitch are head-look's (X4's camera); roll is the compositor's (the
+picture is declared without it); x, y and z are this.
+
+* **The layer** (x4vr_head6.hpp):
+  * Latches a neutral the first frame head-look steers (seated, headset on;
+    the old #74 latch is the session's first frame, possibly a headset on a
+    desk).
+  * Each frame it publishes the pivot-corrected head centre's offset from
+    that neutral in X4's axes (OpenXR z flipped), held to a 0.35 m sphere
+    (X4VR_HEAD_6DOF_MAX). The channel is HeadShared, layer → injector.
+* **The injector** (head6_tick):
+  * While head-look writes in the pilot seat with the HUD up, it writes the
+    offset into the camera's base translation (+0x6f0).
+  * Otherwise it takes it back out, if the base still holds it.
+  * Head-look's base check is now camwrite::base_is_ours: rotation
+    identity, translation zero or ours.
+  * What it wrote goes to Shared::head6_applied (share v12).
+* **The layer declares** neutral + the applied offset (+ the eyes'
+  ±IPD/2 rotated by the declared orientation). The shader shift (#74,
+  X4VR_HEAD_TRANSLATE) stays off.
+* **Tests:** head6.cpp (axes, limit, NaN → zero), camwrite.cpp
+  (base_is_ours), the GPU harness unchanged and passing (6DOF runs only in a
+  VR session), scorer `head6` block with planted cases.

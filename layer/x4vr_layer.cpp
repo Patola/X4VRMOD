@@ -49,6 +49,7 @@
 #include "x4vr_sbs.hpp"
 #include "../common/x4vr_env.hpp"
 #include "../common/x4vr_share.hpp"
+#include "../common/x4vr_head6.hpp"
 #include "../common/x4vr_headlook.hpp"
 #ifdef X4VR_HAVE_OPENXR
 #include "../common/x4vr_xr.hpp"
@@ -327,6 +328,22 @@ static RenderedEye g_reye;
 // X4VR_DECLARE_RENDERED_POS=1 — declare the position we rendered from instead
 // of the one the headset is at. Off by default: it changes what the compositor
 // is told on every frame, and no take has judged it.
+// X4VR_HEAD_6DOF=1 -- the head's position in the cockpit through X4's own
+// camera (x4vr_head6.hpp): the layer publishes the offset, the injector
+// writes it, the layer declares what was written. X4VR_HEAD_6DOF_MAX is the
+// radius it is held to, 0.35 m by default.
+static bool head6_enabled() {
+    static const bool on = x4vr::env_on("X4VR_HEAD_6DOF", false);
+    return on;
+}
+static float head6_max() {
+    static const float m = [] {
+        const char *e = getenv("X4VR_HEAD_6DOF_MAX");
+        return e && *e ? (float)atof(e) : 0.35f;
+    }();
+    return m;
+}
+
 static bool declare_rendered_pos() {
     static const bool on = x4vr::env_on("X4VR_DECLARE_RENDERED_POS", false);
     return on;
@@ -13154,6 +13171,47 @@ void vr_thread() {
                 }
                 const x4vr::HeadShift hs = x4vr::head_shift(
                     o.x, o.y, o.z, o.w, cx - ox, cyp - oy, cz - oz);
+                // **X4VR_HEAD_6DOF: the head's offset, for X4's camera base.**
+                // The pivot-corrected centre (a pure rotation moves nothing),
+                // in the room's axes -- the cockpit's -- and never rotated by
+                // the camera angle (take 244's lever arm). Measured from a
+                // neutral latched the first frame head-look steers, seated with
+                // the headset on: the latch above may be the headset on a desk.
+                if (head6_enabled()) {
+                    static auto head6_fn = (x4vr::HeadShared * (*)())dlsym(
+                        RTLD_DEFAULT, "x4vr_head_state");
+                    static bool n6_set = false;
+                    static float n6[3] = {0.f, 0.f, 0.f};
+                    if (!n6_set && cv) {
+                        n6_set = true;
+                        n6[0] = cx, n6[1] = cyp, n6[2] = cz;
+                        X4VR_LOG("head 6dof: neutral latched at (%.3f, %.3f, "
+                                 "%.3f) m, the first frame head-look steered; "
+                                 "the offset from here goes into X4's camera "
+                                 "base, held to %.2f m",
+                                 cx, cyp, cz, head6_max());
+                    }
+                    if (x4vr::HeadShared *h = head6_fn ? head6_fn() : nullptr) {
+                        const float t[3] = {cx - n6[0], cyp - n6[1], cz - n6[2]};
+                        float x[3];
+                        x4vr::head6::to_x4(t, x);
+                        x4vr::head6::clamp_len(x, head6_max());
+                        for (int i = 0; i < 3; i++)
+                            h->head6_want[i].store(n6_set ? x[i] : 0.f,
+                                                   std::memory_order_relaxed);
+                        h->head6_want_on.store(n6_set ? 1u : 0u,
+                                               std::memory_order_release);
+                        static uint64_t n = 0;
+                        if (n6_set && (n++ % 600) == 0)
+                            X4VR_LOG("head 6dof: offset (%.3f, %.3f, %.3f) m "
+                                     "in the room -> X4 (%.3f, %.3f, %.3f)%s",
+                                     t[0], t[1], t[2], x[0], x[1], x[2],
+                                     std::sqrt(t[0] * t[0] + t[1] * t[1] +
+                                               t[2] * t[2]) > head6_max()
+                                         ? " — HELD at the limit"
+                                         : "");
+                    }
+                }
                 // Clamped because X4 culls on the CPU against its own frustum
                 // and that culling does NOT move with the shear. The IPD
                 // already offsets 6.4 cm and nothing has fallen off the edge,
@@ -13583,12 +13641,24 @@ void vr_thread() {
                         (e == 0 ? -half : half) +
                             g_reye.sx.load(std::memory_order_relaxed),
                         g_reye.sy.load(std::memory_order_relaxed), 0.0f);
+                    // X4VR_HEAD_6DOF: plus the offset the injector wrote into
+                    // X4's camera base -- the eye these pixels came from.
+                    float a6[3] = {0.f, 0.f, 0.f};
+                    if (const x4vr::Shared *sh6 = shared_state())
+                        if (sh6->head6_applied_on.load(
+                                std::memory_order_acquire)) {
+                            const float xa[3] = {
+                                sh6->head6_applied[0].load(std::memory_order_relaxed),
+                                sh6->head6_applied[1].load(std::memory_order_relaxed),
+                                sh6->head6_applied[2].load(std::memory_order_relaxed)};
+                            x4vr::head6::from_x4(xa, a6);
+                        }
                     pv[e].pose.position.x =
-                        g_reye.nx.load(std::memory_order_relaxed) + off.x;
+                        g_reye.nx.load(std::memory_order_relaxed) + off.x + a6[0];
                     pv[e].pose.position.y =
-                        g_reye.ny.load(std::memory_order_relaxed) + off.y;
+                        g_reye.ny.load(std::memory_order_relaxed) + off.y + a6[1];
                     pv[e].pose.position.z =
-                        g_reye.nz.load(std::memory_order_relaxed) + off.z;
+                        g_reye.nz.load(std::memory_order_relaxed) + off.z + a6[2];
                     static bool said_rp = false;
                     if (!said_rp) {
                         said_rp = true;
