@@ -27750,3 +27750,24 @@ line built in).
 * **Refutations:**
   * The element reacts with the cursor on it: the scale is not the cause.
   * It works head straight but fails head turned: the cause is head-look.
+
+**Before take 368 (Patola):**
+* He will drive with **configuration 5**: sc-controller-cc with Xbox
+  emulation off, the Steam Controller hidden from Steam and the system,
+  keyboard and mouse events only. That is one change from take 367's
+  configuration 1, recorded here, and it does not touch what the take
+  measures.
+* *"Having an interactable HUD element is very sporadic ... it can take
+  several minutes for an alarm to appear."*
+
+The log has no overall time cap, but three instruments had budgets that
+such a wait would spend:
+* key presses: 200, spent 7 minutes into take 367 before the F and 1/2
+  presses. Now 4000.
+* X4's cursor shape outside full-screen menus: 40, spent within two minutes
+  of steering. Now 4000. The shape is X4's only hover signal for HUD
+  elements.
+* button presses were only counted. Each press is now logged where X4
+  receives it (after the fold), with its offset from the window's centre
+  (`sdl: mouse button N DOWN at x,y (...; dx,dy from its centre)`), so a
+  press that did nothing can be placed against where the element was drawn.

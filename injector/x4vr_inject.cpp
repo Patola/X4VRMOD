@@ -2056,8 +2056,10 @@ void note_key_event(const Sdl3KeyEvent *k, const char *via, int action) {
     } else {
         // 40 was sized for the two-minute takes of #33's bring-up. Sessions
         // now run six minutes through several menus; the cap exists to stop a
-        // flood, not to ration a whole run.
-        if (seen_other >= 200)
+        // flood, not to ration a whole run. Take 367 spent 200 by 7 minutes of
+        // a 16-minute run, and the F and 1/2 presses it needed came later;
+        // take 368 waits minutes for a HUD alert. ~200 bytes a line.
+        if (seen_other >= 4000)
             return;
         seen_other++;
     }
@@ -2073,6 +2075,23 @@ void note_key_event(const Sdl3KeyEvent *k, const char *via, int action) {
              (unsigned long long)k->timestamp,
              action);
     (void)ours;
+}
+
+// Take 368: each button press where X4 receives it (after the fold, so in
+// X4's window pixels) and its offset from the window's centre -- the centred
+// pointer X4's pick and its HUD hit-test read -- so a press that did nothing
+// can be placed against where the element was drawn.
+void note_button_press(const Sdl3MouseEvent *e) {
+    static unsigned said = 0;
+    if (said >= 4000)
+        return;
+    said++;
+    const int w = g_x4_win_w.load(std::memory_order_relaxed);
+    const int h = g_x4_win_h.load(std::memory_order_relaxed);
+    X4VR_LOG("sdl: mouse button %u DOWN at %.0f,%.0f (X4's window; %+.0f,%+.0f "
+             "from its centre)",
+             (unsigned)(e->state_or_buttons & 0xffu), e->x, e->y,
+             e->x - 0.5f * (float)w, e->y - 0.5f * (float)h);
 }
 
 void note_mouse_event(const Sdl3MouseEvent *e) {
@@ -7690,6 +7709,8 @@ bool SDL_WaitEvent(void *event) {
             // Position only. xrel/yrel are deltas and a fold of a delta is
             // meaningless -- it is also what X4 steers the camera by.
             e->x = fold_x(e->x);
+            if (e->type == SDL_EV_MOUSE_DOWN)
+                note_button_press(e);
         }
         // Counted at BOTH drains. This file has already shipped a fix to one
         // of two symmetric sites and had the defect come back through the
@@ -7798,6 +7819,8 @@ int SDL_PeepEvents(void *events, int numevents, int action, uint32_t minType,
                 note_mouse_event(e);
                 if (consuming)
                     e->x = fold_x(e->x);
+                if (consuming && e->type == SDL_EV_MOUSE_DOWN)
+                    note_button_press(e);
                 // While head-look is steering, X4 is in mouselook and reads
                 // every motion event as LOOK. So the player's own mouse fought
                 // the head: Patola saw the view jitter toward the mouse and get
@@ -8059,7 +8082,10 @@ bool SDL_SetCursor(void *cursor) {
             const x4vr::Shared *sh = x4vr_shared_state();
             const bool menu =
                 sh->fullscreen_menu.load(std::memory_order_relaxed) != 0;
-            if (said_sets < 40 || (menu && said_menu < 400)) {
+            // Take 368: X4's shape is its only hover signal for the HUD's
+            // own elements, and an alert can take minutes to come; 40 was
+            // spent within two minutes of steering in take 367.
+            if (said_sets < 4000 || (menu && said_menu < 400)) {
                 said_sets++;
                 if (menu)
                     said_menu++;
