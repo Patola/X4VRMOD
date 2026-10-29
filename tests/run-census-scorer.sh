@@ -1376,7 +1376,18 @@ cvon='[  999970.000] inject  ui: cinematic view ON — the HUD down with only X4
 cvsw='[  999970.020] layer   ui twin: CINEMATIC — X4'"'"'s UI pipelines bound as X4 built them, the overlay at the full window (12 twin(s) built, 0 failed, 0 twin bind(s) so far)'
 cvbd='[  999970.021] layer   ui twin: first twin BOUND — the cinematic view'"'"'s UI drawn by X4'"'"'s own vertex stage'
 { cat "$BASE"; printf '%s\n' "$cvon" "$cvsw" "$cvbd"; } > /tmp/census-cv-ok.log
-want "cinematic: switched and bound -> said" /tmp/census-cv-ok.log cinematic "1 cinematic-view period(s); the layer switched to the twins 1 time(s); twins BOUND"
+want "cinematic: switched and bound -> said" /tmp/census-cv-ok.log cinematic "1 period(s) with X4's UI as laid out (0 of them the start menu); the layer switched to the twins 1 time(s); twins BOUND"
+smon='[  999960.000] inject  ui: start menu ON — X4'"'"'s OptionsMenu with no player camera: X4'"'"'s UI drawn as X4 laid it out, the cursor at the raw pointer'
+smsw='[  999960.010] layer   ui twin: CINEMATIC — X4'"'"'s UI pipelines bound as X4 built them, the overlay at the full window (16 twin(s) built, 0 failed, 0 twin bind(s) so far)'
+{ cat "$BASE"; printf '%s\n' "$smon" "$smsw" "$cvbd"; } > /tmp/census-sm-ok.log
+want "cinematic: the start menu counted" /tmp/census-sm-ok.log cinematic "1 period(s) with X4's UI as laid out (1 of them the start menu)"
+{ cat "$BASE"; printf '%s\n' "$smon"; } > /tmp/census-sm-late.log
+want "cinematic: a start menu that never reached the layer -> FAIL" /tmp/census-sm-late.log "FAIL|  - " "1 period(s) never reached the layer"
+if grep -qF '"ui: start menu %s",' injector/x4vr_inject.cpp && grep -qF '"OFF (X4'"'"'s UI drawn as X4 laid it out — the "' layer/x4vr_layer.cpp; then
+    ok "cinematic: the start-menu and cursor formats are the planted ones"
+else
+    bad "cinematic: the start-menu or cursor format moved"
+fi
 if python3 tools/score_run.py /tmp/census-cv-ok.log 2>&1 | grep -qE "^  - .*(cinematic|twin)"; then
     bad "cinematic: switched and bound -> FAILs"
 else

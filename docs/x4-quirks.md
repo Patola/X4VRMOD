@@ -27174,3 +27174,27 @@ working as before."*
 
 Next: the start menu as the whole scene, then full 6DOF in the cockpit.
 
+
+## Built for take 360: the start menu's menu at the full window
+
+Patola, after v0.9.5: *"I think it will be similar to the F6 menu because
+it also has the interactable menu (load game, settings, etc.) overlayed on
+it and it's shrinked the same way the F6 overlay was. So if we end up
+hitting on the same walls we did when doing F6, no problem, we revert to
+v0.9.5."*
+
+* **The start menu, from take 359's log:** X4's `OptionsMenu[full]` at
+  129315.8–129321.1, with "no player camera yet" until 129355.9 (mid-load).
+  The in-game ESC menu is the same OptionsMenu, and always has a player
+  camera.
+* **Signal:** OptionsMenu open and full-screen, no player camera, held
+  0.3 s. It sets the same `cinematic_ui`, so the same twin pipelines
+  (v0.9.5) draw X4's UI as X4 laid it out.
+* **The cursor:** unlike F6 the start menu is interactive. The layer's
+  automatic cursor canvas now has a first reason, "X4's UI as laid out",
+  that keeps the cursor at the raw pointer (where X4 hit-tests) over the
+  full-screen reason. Logged "OFF (X4's UI drawn as X4 laid it out …)".
+* **Not done: the start menu's 3D background as the whole scene.** Its
+  window is world-locked (no head-look before a game is loaded). Turning
+  it with the head would mean the camera X4 draws it through, which is
+  likely the same wall as F6's (a camera other than the player's).

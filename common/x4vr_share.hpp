@@ -240,7 +240,8 @@ struct Shared {
     // other). Its overlay is laid out for the whole flat screen, so the layer
     // binds each canvas pipeline's twin and X4's UI is drawn as X4 laid it
     // out (Patola, take 357: "It should be bigger and cover the entire
-    // window").
+    // window"). Also while the START MENU is up (X4's OptionsMenu, full
+    // screen, with no player camera), whose menu was shrunk the same way.
     std::atomic<uint32_t> cinematic_ui{0};
 };
 

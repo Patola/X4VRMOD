@@ -4644,15 +4644,20 @@ def main(path):
     # only TopLevelMenu open, held 0.3 s); the layer then binds each canvas
     # pipeline's twin. Bound, not built: take 358's first attempt worked on a
     # quad the shipping line never submits.
+    # The start menu too (X4's OptionsMenu with no player camera), whose
+    # menu was shrunk the same way: same twins, same check.
     cv_on = [float(t) for t in re.findall(
-        r"\[\s*([\d.]+)\]\s+inject\s+ui: cinematic view ON", text)]
+        r"\[\s*([\d.]+)\]\s+inject\s+ui: (?:cinematic view|start menu) ON",
+        text)]
+    cv_start = len(re.findall(r"inject\s+ui: start menu ON", text))
     cv_sw = [float(t) for t in re.findall(
         r"\[\s*([\d.]+)\]\s+layer\s+ui twin: CINEMATIC", text)]
     cv_built = len(re.findall(r"layer\s+ui twin: \d+ built", text))
     cv_failed = re.findall(r"ui twin: FAILED to build (\d+)", text)
     cv_bound = "ui twin: first twin BOUND" in text
     if cv_on or cv_sw:
-        print(f"cinematic  {len(cv_on)} cinematic-view period(s); the layer "
+        print(f"cinematic  {len(cv_on)} period(s) with X4's UI as laid out "
+              f"({cv_start} of them the start menu); the layer "
               f"switched to the twins {len(cv_sw)} time(s); twins "
               f"{'BOUND' if cv_bound else 'never bound'}"
               + (f", {cv_failed[-1]} FAILED to build" if cv_failed else ""))
