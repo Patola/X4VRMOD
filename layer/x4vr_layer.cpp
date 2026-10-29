@@ -12293,6 +12293,20 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     VkSemaphore composited = VK_NULL_HANDLE;
     uint32_t family = 0;
     x4vr::steer::Frame steer_frame;
+    // X4VR_HUD_PICK: the canvas map's factors for X4's UI pointer, while the
+    // cursor is drawn at the raw pointer and X4's perspective UI through the
+    // map (x4vr_uipick.hpp). Off under a canvas menu, or with no canvas.
+    {
+        static auto head_fn =
+            (x4vr::HeadShared * (*)())dlsym(RTLD_DEFAULT, "x4vr_head_state");
+        const x4vr::CanvasNdc *cm = g_canvas_map.get();
+        if (head_fn) {
+            const bool raw = cm && g_cursor_enabled && !cursor_canvas();
+            x4vr::ui_canvas_write(head_fn(), raw,
+                                  cm ? 0.5f * (cm[0].ax + cm[1].ax) : 1.0f,
+                                  cm ? 0.5f * (cm[0].ay + cm[1].ay) : 1.0f);
+        }
+    }
     if (g_sbs_enabled && g_active && pi->swapchainCount == 1) {
         if (queue_family_of(queue, family)) {
             // SbsCompositor submits via fns_.QueueSubmit -- the dispatch table,

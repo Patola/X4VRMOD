@@ -5330,6 +5330,67 @@ def main(path):
         fails.append("head-look armed but the pointer was never recentred "
                      "after the load — the cursor starts outside the view")
 
+    # --- X4VR_HUD_PICK: X4's UI pointer at the drawn HUD (take 369) --------
+    #
+    # A stub at 0xa40af3 divides the pointer X4 hands its perspective UI
+    # presentations by the canvas map's factor while the cursor is drawn raw
+    # (injector/x4vr_uipick.hpp). Gate on intent: asked means PATCHED; a
+    # period that lasted must show presentation updates, and some of them
+    # SCALED -- a period whose updates were all flat reached no HUD panel.
+    up_asked = bool(re.search(r"\bX4VR_HUD_PICK=1\b", run or ""))
+    up_patched = "uipick: PATCHED" in text
+    up_refused = re.search(r"uipick: patch REFUSED — (.*?)\. X4's HUD", text)
+    up_on = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+uipick: ON #(\d+) — X4's "
+                       r"perspective UI takes the pointer x([\d.]+),([\d.]+)",
+                       text)
+    up_off = {int(n): (float(d), why, int(c), int(k), int(f))
+              for n, d, why, c, k, f in re.findall(
+                  r"uipick: OFF #(\d+) after ([\d.]+) s — (.*?); X4's own UI "
+                  r"pointer\. The pointer went to (\d+) presentation "
+                  r"update\(s\): (\d+) scaled, (\d+) flat", text)}
+    up_per = {}
+    for n, d, c, k, f in re.findall(
+            r"uipick: ON #(\d+) (\d+) s — (\d+) presentation update\(s\): "
+            r"(\d+) scaled, (\d+) flat", text):
+        up_per[int(n)] = (float(d), int(c), int(k), int(f))
+    if up_asked or up_patched or up_on:
+        if up_asked and not up_patched:
+            fails.append("X4VR_HUD_PICK=1 but the patch was "
+                         + ("REFUSED — " + up_refused.group(1) if up_refused
+                            else "never reported PATCHED"))
+        if not up_asked and (up_patched or up_on):
+            fails.append("the UI pointer patch acted in a run that did not "
+                         "ask for it (X4VR_HUD_PICK)")
+        tc = tk = tf = 0
+        for i, (t, n, sx, sy) in enumerate(up_on):
+            n = int(n)
+            if n in up_off:
+                dur, why, c, k, f = up_off[n]
+            elif n in up_per:
+                dur, c, k, f = up_per[n]
+                why = "open at exit"
+            else:
+                dur, c, k, f, why = None, 0, 0, 0, "open at exit"
+            tc, tk, tf = tc + c, tk + k, tf + f
+            if i < 12:
+                print(f"uipick  #{n:<3d} t {float(t):10.1f}  x{sx},{sy}  "
+                      + (f"{dur:6.1f} s" if dur is not None else "     ? s")
+                      + f"  updates {c}: scaled {k}, flat {f}  ended: {why}")
+            if dur is not None and dur >= 2.0 and c == 0:
+                fails.append(f"uipick period {n}: {dur:.1f} s on and X4 handed "
+                             f"its UI no pointer — patched, not executed")
+        if up_patched:
+            print(f"uipick  {len(up_on)} period(s) with the HUD answering where "
+                  f"it is drawn; {tc} presentation update(s): {tk} scaled, "
+                  f"{tf} flat")
+        if up_asked and up_patched and up_on and tc and not tk:
+            fails.append("X4VR_HUD_PICK=1: every presentation update was flat "
+                         "— the scale reached no perspective UI, so no HUD "
+                         "panel moved")
+        if up_on:
+            print("uipick  whether the HUD and the conversation choices take "
+                  "clicks where they are drawn is Patola's to say")
+
     # --- X4VR_STEER_PICK: X4's targeting at the steering ring ---------------
     #
     # A stub at 0x1d6e0e1 adds the ring's nose (X4's window pixels) to the

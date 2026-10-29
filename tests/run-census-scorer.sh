@@ -1529,6 +1529,37 @@ if python3 tools/score_run.py /tmp/census-lr-old2.log 2>&1 | grep -qF "never rec
 else
     ok "load-recentre: a take before 369 -> not failed"
 fi
+# X4VR_HUD_PICK: X4's UI pointer at the drawn HUD (take 369).
+for f in '"uipick: PATCHED — X4' '"uipick: ON #%u — X4' '"uipick: OFF #%u after %.1f s — %s; X4' '"uipick: patch REFUSED — %s. X4' '"scaled, %llu flat",'; do
+    if grep -qF "$f" injector/x4vr_inject.cpp; then
+        ok "uipick: the injector still prints $f"
+    else
+        bad "uipick: the injector's format moved: $f"
+    fi
+done
+sed 's/env: run = /env: run = X4VR_HUD_PICK=1 /' "$BASE" > /tmp/census-up-base.log
+upp='[  999950.000] inject  uipick: PATCHED — X4'"'"'s UI pointer (0xa40ad0, fed to every presentation from 0xa2ba18) goes through a 99-byte stub at 0x3d0000'
+upon='[  999960.000] inject  uipick: ON #1 — X4'"'"'s perspective UI takes the pointer x1.9040,1.9040 (canvas map 0.5252,0.5252)'
+upoff='[  999970.000] inject  uipick: OFF #1 after 10.0 s — the cursor is drawn through the canvas (a menu); X4'"'"'s own UI pointer. The pointer went to 2400 presentation update(s): 800 scaled, 1600 flat'
+upoffflat='[  999970.000] inject  uipick: OFF #1 after 10.0 s — the cursor is drawn through the canvas (a menu); X4'"'"'s own UI pointer. The pointer went to 2400 presentation update(s): 0 scaled, 2400 flat'
+upoff0='[  999970.000] inject  uipick: OFF #1 after 10.0 s — the cursor is drawn through the canvas (a menu); X4'"'"'s own UI pointer. The pointer went to 0 presentation update(s): 0 scaled, 0 flat'
+{ cat /tmp/census-up-base.log; printf '%s\n' "$upp" "$upon" "$upoff"; } > /tmp/census-up-ok.log
+want "uipick: a healthy period -> summarised" /tmp/census-up-ok.log uipick "1 period(s) with the HUD answering where it is drawn; 2400 presentation update(s): 800 scaled, 1600 flat"
+if python3 tools/score_run.py /tmp/census-up-ok.log 2>&1 | grep -qE "^  - .*(uipick|HUD_PICK|UI pointer)"; then
+    bad "uipick: a healthy period -> FAILs"
+else
+    ok "uipick: a healthy period -> no FAIL"
+fi
+{ cat /tmp/census-up-base.log; printf '%s\n' "$upp" "$upon" "$upoffflat"; } > /tmp/census-up-flat.log
+want "uipick: all flat -> FAIL" /tmp/census-up-flat.log "FAIL|  - " "every presentation update was flat"
+{ cat /tmp/census-up-base.log; printf '%s\n' "$upp" "$upon" "$upoff0"; } > /tmp/census-up-zero.log
+want "uipick: on, no updates -> FAIL" /tmp/census-up-zero.log "FAIL|  - " "X4 handed its UI no pointer — patched, not executed"
+want "uipick: asked, no PATCHED line -> FAIL" /tmp/census-up-base.log "FAIL|  - " "X4VR_HUD_PICK=1 but the patch was never reported PATCHED"
+{ cat /tmp/census-up-base.log; echo '[  999950.000] inject  uipick: patch REFUSED — the UI pointer'"'"'s code at 0xa40aef differs from X4 9.00. X4'"'"'s HUD keeps answering at its own scale, about twice as far out as it is drawn.'; } > /tmp/census-up-ref.log
+want "uipick: refused -> FAIL" /tmp/census-up-ref.log "FAIL|  - " "X4VR_HUD_PICK=1 but the patch was REFUSED — the UI pointer's code at 0xa40aef differs from X4 9.00"
+{ cat "$BASE"; printf '%s\n' "$upp"; } > /tmp/census-up-unasked.log
+want "uipick: patched unasked -> FAIL" /tmp/census-up-unasked.log "FAIL|  - " "the UI pointer patch acted in a run that did not ask for it"
+absent "uipick: not asked -> silent" "$BASE" uipick
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

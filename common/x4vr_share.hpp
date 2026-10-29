@@ -53,7 +53,9 @@ constexpr uint32_t kShareMagic = 0x52565834u;
 //     (take 357).
 // 12: HeadShared's `steer_nose`, the steering ring's nose for X4's pick ray
 //     (X4VR_STEER_PICK).
-constexpr uint32_t kShareVersion = 12u;
+// 13: HeadShared's `ui_canvas`, the canvas map's factors while the cursor is
+//     drawn raw, for X4's UI pointer (X4VR_HUD_PICK).
+constexpr uint32_t kShareVersion = 13u;
 
 struct Shared {
     uint32_t magic = kShareMagic;
@@ -427,7 +429,45 @@ struct HeadShared {
     std::atomic<uint64_t> steer_nose{0};
     std::atomic<uint32_t> steer_nose_on{0};
     std::atomic<uint64_t> steer_nose_frames{0};
+
+    // X4VR_HUD_PICK: the canvas map's x and y factors (A, both eyes
+    // averaged) as two floats in one word, and `ui_raw_on` = the cursor is
+    // drawn at the raw pointer this frame while X4's perspective UI is drawn
+    // through the map -- the case where a HUD element answers at 1/A of where
+    // it is drawn. 0 under a canvas menu, where cursor and UI share the map.
+    std::atomic<uint64_t> ui_canvas{0};
+    std::atomic<uint32_t> ui_raw_on{0};
+    std::atomic<uint64_t> ui_frames{0};
 };
+
+inline void ui_canvas_write(HeadShared *s, bool raw_on, float ax, float ay) {
+    if (!s)
+        return;
+    uint32_t bx = 0, by = 0;
+    memcpy(&bx, &ax, 4);
+    memcpy(&by, &ay, 4);
+    s->ui_canvas.store((uint64_t)bx | ((uint64_t)by << 32),
+                       std::memory_order_relaxed);
+    s->ui_raw_on.store(raw_on ? 1u : 0u, std::memory_order_release);
+    s->ui_frames.fetch_add(1, std::memory_order_release);
+}
+
+// False when the cursor was not drawn raw over a canvas-mapped UI at the
+// last publication; `*frames` is the publication count either way.
+inline bool ui_canvas_read(const HeadShared *s, float *ax, float *ay,
+                           uint64_t *frames) {
+    if (!s || s->magic != kShareMagic || s->version != kShareVersion)
+        return false;
+    if (frames)
+        *frames = s->ui_frames.load(std::memory_order_acquire);
+    if (!s->ui_raw_on.load(std::memory_order_acquire))
+        return false;
+    const uint64_t v = s->ui_canvas.load(std::memory_order_relaxed);
+    const uint32_t bx = (uint32_t)(v & 0xffffffffu), by = (uint32_t)(v >> 32);
+    memcpy(ax, &bx, 4);
+    memcpy(ay, &by, 4);
+    return true;
+}
 
 inline void steer_nose_write(HeadShared *s, bool on, float x, float y) {
     if (!s)

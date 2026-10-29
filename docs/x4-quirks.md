@@ -27837,3 +27837,76 @@ Configuration 5 (sc-controller-cc, keyboard and mouse only). Patola played
   direction and the factor of about 2 match the 0.5252 canvas map that
   `ui_wgate_perspective` gives X4's perspective HUD, while X4 hit-tests at
   its own scale.
+
+## HUD clicks (option A, Patola 2026-10-30): read-only search and the patch
+
+Patola: *"Go for A"*. Also: *"Combat is working very well"* (the end of take
+368's video), so the gimbal dots need no further take for now.
+
+**X4's UI pointer.**
+* 0xa2ba18 hands X4's centred pointer (mouse object +0x30/+0x38) to every
+  UI presentation: `0xa40ad0(obj, cx, cy)` at 0xa2bab8 and 0xa2bb47, its
+  only two callers. They are reached when 0x23168b0 returns 0 at 0xa2b509.
+* 0xa40ad0 stores the pointer as floats at obj+0xdd8 (read by 65 sites:
+  every hover and click of the UI), then maps it by kind:
+  * obj+0x83 == 5: from the player's look, ignoring the pointer;
+  * obj+0xd78: its own perspective camera, tan of its field at obj+0x8;
+  * obj+0xde3: placed in 3D, a ray from X4's camera (the same
+    0x4533ae0+0x20/+0x24 factors as the world pick) against the
+    presentation's rows at +0x90..+0xb0;
+  * neither: flat.
+* The two perspective kinds are what the canvas map scales (perspective
+  polarity, `ui_wgate_perspective`); the flat kind is what it leaves. The
+  stub's census per kind will show which kinds the cockpit uses.
+
+**The patch (`X4VR_HUD_PICK=1`, injector/x4vr_uipick.hpp):**
+* The 21 bytes at 0xa40af3 (`movq %xmm1,%xmm1; cmpb $0,0xd78(%rdi);
+  cvtdq2ps; movlps %xmm1,0xdd8(%rbx)`) become `jmp stub` + 16 int3s.
+* The 99-byte stub:
+  * replays the movq and cvtdq2ps;
+  * while its slot is on, adds the steering ring's nose (the
+    X4VR_STEER_PICK shift);
+  * for the two perspective kinds, multiplies by 1/A;
+  * counts calls, scaled updates and flat ones;
+  * stores to obj+0xdd8, repeats the cmpb for X4's flags, and jumps to X4's
+    `je` at 0xa40b08.
+* Nothing in .text jumps into the 21 bytes. xmm0 is free (no float argument;
+  every path overwrites it before reading it). r11 is saved.
+* The layer publishes the canvas map's factors (both eyes averaged) and
+  whether the cursor is drawn raw this frame (`ui_canvas`, share version 13).
+  Under a canvas menu the stub stores what X4 would.
+* tests/uipick.cpp:
+  * checks the sites against the real binary and that a flipped byte is
+    refused where it is;
+  * EXECUTES the stub per kind, with ZF, xmm1, obj+0xdd8 and r11 checked;
+  * take 368's monitor: the pointer at its drawn (+257, +306) reaches X4's
+    (489, 583), where it took the click.
+* Scorer block `uipick` (10 planted cases):
+  * FAIL if asked and not PATCHED;
+  * FAIL for a period of 2 s or more with no presentation update;
+  * FAIL if every update was flat.
+
+## Take 369 — PREDICTIONS (written before the run): the HUD where it is drawn, the cursor at load
+
+Take 368's line plus `X4VR_HUD_PICK=1`; configuration 5 as in take 368.
+
+    X4VR_HEADLOOK_LAGLOG=1 X4VR_TAKE=369 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take369.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_STEER_PICK=1 X4VR_HUD_PICK=1 X4VR_FOOTLOG=1 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P369.1 The cursor at load:** in the middle of the view right after the
+  load, no steering toggle needed. The log has `pointer: recentred after the
+  load`.
+* **P369.2 Mouse mode:** the conversation choices and the alert monitor
+  highlight and take clicks with the cursor ON them.
+* **P369.3 Steering mode:** the same under the ring.
+* **P369.4 No regressions:**
+  * world targeting in both modes;
+  * the right-click menu (a canvas menu: the patch is off there);
+  * the map.
+* **Open:**
+  * which kinds the HUD panels are (the scorer's scaled/flat split);
+  * whether leaning (6DOF) offsets HUD clicks. The HUD is near and X4's hit
+    ray starts at its un-translated eye.
+* **Refutations:**
+  * the choices still answer only at about 2x: the scaled kinds are not the
+    HUD's, or the factor is not the drawn one;
+  * clicks near the centre work and far ones do not: a factor mismatch.

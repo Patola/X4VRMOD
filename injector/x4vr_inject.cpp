@@ -53,6 +53,7 @@ extern char **environ;
 #include "x4vr_foot.hpp"
 #include "x4vr_extview.hpp"
 #include "x4vr_aimpick.hpp"
+#include "x4vr_uipick.hpp"
 #include "x4vr_menus.hpp"
 #include "x4vr_config.hpp"
 #include "x4vr_inputmap.hpp"
@@ -1124,6 +1125,7 @@ static void csmfit_patch_at_start(); // defined with csmfit_tick, below
 static void foot_patch_at_start();   // X4VR_HEADLOOK_FOOT, with foot_tick
 static void extview_patch_at_start(); // X4VR_HEADLOOK_EXTERNAL
 static void aimpick_patch_at_start(); // X4VR_STEER_PICK
+static void uipick_patch_at_start();  // X4VR_HUD_PICK
 
 __attribute__((constructor)) static void x4vr_inject_init() {
     char exe[256] = "?";
@@ -1142,6 +1144,8 @@ __attribute__((constructor)) static void x4vr_inject_init() {
         extview_patch_at_start();
         // X4's targeting at the steering ring: the same rule.
         aimpick_patch_at_start();
+        // X4's UI pointer at the drawn HUD: the same rule.
+        uipick_patch_at_start();
     }
     // Task #68: the parsed clamp, once X4 has had time to parse it. A delay
     // rather than a hook, because the parse has no seam we can name -- and if
@@ -4876,6 +4880,158 @@ static void load_recentre_tick() {
              have ? "" : "(unknown) ", px, py, cx, cy);
 }
 
+// ------------------------------------------------ X4VR_HUD_PICK=1
+//
+// X4's HUD and its other perspective UI answer where they are DRAWN
+// (x4vr_uipick.hpp; Patola chose it after take 368, option A). The canvas map
+// draws them at A about the view's centre while X4 hit-tests at its own
+// scale; with the cursor drawn raw (the cockpit), the UI pointer X4 hands its
+// perspective presentations is divided by A -- and, while X4VR_STEER_PICK
+// shifts the world's ray to the steering ring, shifted by the same nose.
+// Patched at start; the slot is published each pump and is off under a canvas
+// menu, where cursor and UI already share the map.
+static bool uipick_asked() {
+    static const bool on = x4vr::env_on("X4VR_HUD_PICK", false);
+    return on;
+}
+namespace {
+struct UiPatch {
+    bool patched = false;
+};
+UiPatch g_uipatch;
+x4vr::uipick::Slot g_uislot;
+} // namespace
+
+static void uipick_patch_at_start() {
+    using namespace x4vr::uipick;
+    if (!uipick_asked())
+        return;
+    auto refuse = [](const char *why) {
+        X4VR_LOG("uipick: patch REFUSED — %s. X4's HUD keeps answering at its "
+                 "own scale, about twice as far out as it is drawn.", why);
+        X4VR_LOG("milestone: HUD clicks at the drawn HUD REFUSED — %s. Quit "
+                 "and tell me.", why);
+    };
+    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    uintptr_t bad = 0;
+    if (!verify_sites(rd, &bad)) {
+        char why[160];
+        snprintf(why, sizeof why,
+                 "the UI pointer's code at %#lx differs from X4 9.00",
+                 (unsigned long)bad);
+        refuse(why);
+        return;
+    }
+    const uintptr_t site = kPatch;
+    uint8_t *page = (uint8_t *)x4vr::csmfit::alloc_near(0x3f0000, 0x7c00000,
+                                                        &site, 1, 5);
+    if (!page) {
+        refuse("no free page within rel32 reach of 0xa40af3");
+        return;
+    }
+    uint8_t code[kStubMax];
+    const size_t len = make_stub(code, (uintptr_t)page, (uintptr_t)&g_uislot, kCont);
+    uint8_t jmp[kPatchLen];
+    if (!len || !patch_bytes((uintptr_t)page, jmp)) {
+        refuse("the stub is out of rel32 reach of 0xa40af3");
+        return;
+    }
+    memcpy(page, code, len);
+    const long pgsz = sysconf(_SC_PAGESIZE);
+    if (mprotect(page, (size_t)pgsz, PROT_READ | PROT_EXEC) != 0) {
+        refuse("mprotect(rx) of the stub failed");
+        return;
+    }
+    // X4 has run no frame yet, so no thread is inside the 21 bytes.
+    char err[200] = "";
+    if (!x4vr::foot::patch_code(kPatch, jmp, kPatchLen, err, sizeof err)) {
+        refuse(err);
+        return;
+    }
+    g_uipatch.patched = true;
+    X4VR_LOG("uipick: PATCHED — X4's UI pointer (0xa40ad0, fed to every "
+             "presentation from 0xa2ba18) goes through a %zu-byte stub at %p "
+             "at 0xa40af3: while the cursor is drawn raw, the pointer handed "
+             "to X4's perspective presentations (own camera 0xd78, placed in "
+             "3D 0xde3) is divided by the canvas map's factor, so the HUD "
+             "answers where it is drawn; flat presentations keep the pointer. "
+             "Under a canvas menu the stub stores what X4 would",
+             len, (void *)page);
+}
+
+// Each pump: the slot the stub reads -- 1/A while the layer says the cursor
+// is drawn raw over a canvas-mapped UI, plus the steering ring's nose while
+// X4VR_STEER_PICK shifts the world's ray; off otherwise.
+static void uipick_tick() {
+    using namespace x4vr::uipick;
+    if (!g_uipatch.patched)
+        return;
+    static x4vr::HeadShared *hs = x4vr_head_state();
+    float ax = 1.f, ay = 1.f;
+    uint64_t frames = 0;
+    const bool raw = x4vr::ui_canvas_read(hs, &ax, &ay, &frames);
+    static uint64_t last_frames = 0;
+    static double moved_at = 0.0;
+    const double now = mono_seconds();
+    if (frames != last_frames) {
+        last_frames = frames;
+        moved_at = now;
+    }
+    const bool fresh = frames != 0 && now - moved_at < 0.25;
+    const float sx = unscale_of(ax), sy = unscale_of(ay);
+    const bool on = raw && fresh && (sx != 1.f || sy != 1.f);
+    int32_t dx = 0, dy = 0;
+    if (g_aimpatch.patched)
+        x4vr::aimpick::unpack(g_aimslot.shift.load(std::memory_order_relaxed),
+                              &dx, &dy);
+    if (on) {
+        g_uislot.add.store(pack2((float)dx, (float)dy), std::memory_order_relaxed);
+        g_uislot.scale.store(pack2(sx, sy), std::memory_order_relaxed);
+        g_uislot.on.store(1, std::memory_order_release);
+    } else {
+        g_uislot.on.store(0, std::memory_order_release);
+    }
+
+    static bool was_on = false;
+    static unsigned periods = 0;
+    static uint64_t c0 = 0, s0 = 0, f0 = 0;
+    static double t0 = 0.0, last_line = 0.0;
+    const uint64_t calls = g_uislot.calls.load(std::memory_order_relaxed);
+    const uint64_t scaled = g_uislot.scaled.load(std::memory_order_relaxed);
+    const uint64_t flat = g_uislot.flat.load(std::memory_order_relaxed);
+    if (on && !was_on) {
+        periods++;
+        c0 = calls;
+        s0 = scaled;
+        f0 = flat;
+        t0 = last_line = now;
+        if (periods <= 300)
+            X4VR_LOG("uipick: ON #%u — X4's perspective UI takes the pointer "
+                     "x%.4f,%.4f (canvas map %.4f,%.4f)%s",
+                     periods, sx, sy, ax, ay,
+                     (dx || dy) ? ", shifted to the steering ring" : "");
+    } else if (!on && was_on) {
+        const char *why = !fresh ? "the layer stopped publishing"
+                          : !raw ? "the cursor is drawn through the canvas (a menu)"
+                                 : "no canvas map";
+        if (periods <= 300)
+            X4VR_LOG("uipick: OFF #%u after %.1f s — %s; X4's own UI pointer. "
+                     "The pointer went to %llu presentation update(s): %llu "
+                     "scaled, %llu flat",
+                     periods, now - t0, why, (unsigned long long)(calls - c0),
+                     (unsigned long long)(scaled - s0),
+                     (unsigned long long)(flat - f0));
+    } else if (on && now - last_line >= 10.0 && periods <= 300) {
+        last_line = now;
+        X4VR_LOG("uipick: ON #%u %.0f s — %llu presentation update(s): %llu "
+                 "scaled, %llu flat",
+                 periods, now - t0, (unsigned long long)(calls - c0),
+                 (unsigned long long)(scaled - s0),
+                 (unsigned long long)(flat - f0));
+    }
+    was_on = on;
+}
+
 static void steer_tick() {
     if (!steer_hide_x4_line())
         return;
@@ -7730,6 +7886,7 @@ void SDL_PumpEvents(void) {
         menus_tick();
         load_recentre_tick();
         steer_tick();
+        uipick_tick();
         pumprate_report();
     }
     real_fn();
