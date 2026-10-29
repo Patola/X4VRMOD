@@ -27522,3 +27522,51 @@ Take 365's line with the take number and log changed. The code is take
 * **Refutation:** P366.2 failing (leaning alone shifts hover visibly on far
   objects) would make 6DOF a cause after all. P366.3 failing (hover follows
   the ring with the head turned) would refute the "A's cost" reading.
+
+## Take 366 — SCORED PASS (2026-10-29): the steering-mode offset is the head ROTATION; no lean happened without one
+
+Patola:
+* (2) *"HUD stayed with the cockpit, as in take 362."*
+* (3) Steering on, head straight and centred: *"it highlights."*
+* (4) *"leaning: it stops highlighting the object on cursor. It shifts
+  according to the leaning. The same thing happens if I yaw."* And: *"although
+  the circle follows the mouse, the three or four little dots that would
+  represent the target of gimbaled weapons follow my gaze."*
+* (5) *"it is my gaze that makes the object brackets highlight, like if I was
+  hovering the cursor. But at the time the ring cursor was centered on the
+  screen, far from the highlighted objects."*
+
+`score_run.py` PASS. head6: neutral latched, largest offset 0.330 m. Steering
+engaged 3 times (180791–180845, 180853–180979, 180994–181038), recentred each
+time; A drew 12869 frames.
+
+* **P366.1 HELD** (his eye).
+* **P366.3 HELD**: the pick is at gaze + pointer offset.
+* **X4's gimbal dots are X4's own marker of that point.** X4 draws them at the
+  raw pointer through its head-turned camera. So hover, click-select AND
+  gimballed aim are all at gaze + offset, and the dots show where.
+* **P366.2 was not exercised, and step 4's shift is the rotation that came
+  with each lean.**
+  * The layer's per-frame `geom: head=` position, minus the 6DOF neutral, was
+    joined with the nearest `lagsample` head angle, inside the three steering
+    windows (16512 samples).
+  * Of 2899 samples with a lean over 8 cm, exactly 1 had the head within 3°
+    of straight.
+  * Leaning forward (~12 cm) came with the head pitched down 28–34°.
+  * Leaning left or right (10–17 cm) came with 11–18° of yaw and up to 15° of
+    pitch.
+  * `x4=` matched `head=` throughout, so X4's camera, and with it the pick,
+    turned by those angles.
+  * The instrument sees the head, not the hover; the hover is his eye.
+* **Reading:** everything he saw is A's stated cost: one pointer, steering
+  measured from the gaze, a ring drawn from the nose. 6DOF adds nothing
+  visible on far objects.
+
+**The decision is Patola's** (A's consequence now includes gimballed aim):
+* (a) keep it;
+* (b) make the ring do everything, as X4's single cursor does in vanilla:
+  * show X4 the pointer at the ring, so hover, click, dots and gimbal aim
+    follow it;
+  * patch X4's steering to take the head angle back out.
+  This needs read-only reverse engineering of X4's steering computation
+  first, then one code patch for approval.
