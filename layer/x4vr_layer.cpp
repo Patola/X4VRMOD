@@ -13190,7 +13190,11 @@ void vr_thread() {
                 // It reaches the shaders only through the pose channel and the
                 // roll-stereo patch's slot; without both it would be declared
                 // but never drawn. Refused, loudly, once.
-                if (head6_enabled() && (!pose_active() || !roll_stereo_enabled())) {
+                // Refused only when the run did not ASK for the pose channel
+                // or roll stereo. Asked but not up yet (start-up, teardown) is
+                // not a fault -- take 362 printed this once at start-up and
+                // the scorer failed a run that worked; it is simply skipped.
+                if (head6_enabled() && (!pose_wanted() || !roll_stereo_enabled())) {
                     static bool said6 = false;
                     if (!said6) {
                         said6 = true;
@@ -13198,7 +13202,7 @@ void vr_thread() {
                                  "X4VR_ROLL_STEREO (the world shaders' head "
                                  "slot); pose %s, roll stereo %s. Nothing is "
                                  "moved or declared",
-                                 pose_active() ? "on" : "OFF",
+                                 pose_wanted() ? "asked" : "NOT ASKED",
                                  roll_stereo_enabled() ? "on" : "OFF");
                     }
                 }
