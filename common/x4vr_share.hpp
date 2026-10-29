@@ -50,7 +50,9 @@ constexpr uint32_t kShareMagic = 0x52565834u;
 //     (X4VR_HEADLOOK_EXTERNAL).
 // 11: `cinematic_ui`, the cinematic view's overlay at the full window
 //     (take 357).
-constexpr uint32_t kShareVersion = 11u;
+// 12: the head's position in the cockpit (X4VR_HEAD_6DOF): HeadShared's
+//     `head6_want` from the layer, Shared's `head6_applied` back.
+constexpr uint32_t kShareVersion = 12u;
 
 struct Shared {
     uint32_t magic = kShareMagic;
@@ -242,6 +244,13 @@ struct Shared {
     // out (Patola, take 357: "It should be bigger and cover the entire
     // window").
     std::atomic<uint32_t> cinematic_ui{0};
+
+    // X4VR_HEAD_6DOF (x4vr_head6.hpp): the head offset the injector wrote
+    // into the camera's base translation, in X4's axes (on while
+    // `head6_applied_on`). It is the eye the picture comes from, so it is
+    // what the layer declares. The layer's side is HeadShared::head6_want.
+    std::atomic<float> head6_applied[3] = {};
+    std::atomic<uint32_t> head6_applied_on{0};
 };
 
 // ---- the camera block, as one consistent snapshot ------------------------
@@ -413,6 +422,12 @@ struct HeadShared {
     // "the layer stopped publishing". Those look identical in the angles and
     // want opposite responses.
     std::atomic<uint64_t> updates{0};
+
+    // X4VR_HEAD_6DOF: the head's offset from its neutral point, X4's axes,
+    // clamped (x4vr_head6.hpp), valid while `head6_want_on`. Written each
+    // frame by the layer; the injector writes it into the camera's base.
+    std::atomic<float> head6_want[3] = {};
+    std::atomic<uint32_t> head6_want_on{0};
 };
 
 inline void head_share_write(HeadShared *s, float yaw, float pitch, bool valid) {

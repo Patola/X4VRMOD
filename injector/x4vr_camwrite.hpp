@@ -154,6 +154,21 @@ struct SpeedOwner {
 // The base the stored matrix is relative to must be identity for a written
 // R(yaw, pitch) to mean that angle: X4 extracts from stored x base^-1. `b` is
 // 16 floats from camera+0x6f0: translation, then rows 0..2 (x, y, z, w each).
+// X4VR_HEAD_6DOF writes the head's offset into the base's translation, so
+// the base is "ours" when its rotation is identity and its translation is
+// either zero (X4's, after a set-up) or the offset we last wrote.
+inline bool base_is_ours(const float b[16], const float ours[3], float tol) {
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++)
+            if (std::fabs(b[4 + 4 * r + c] - (r == c ? 1.f : 0.f)) > tol)
+                return false;
+    bool zero = true, mine = true;
+    for (int i = 0; i < 3; i++) {
+        zero = zero && std::fabs(b[i]) <= tol;
+        mine = mine && std::fabs(b[i] - ours[i]) <= tol;
+    }
+    return zero || mine;
+}
 inline bool base_is_identity(const float b[16], float tol) {
     for (int i = 0; i < 3; i++)
         if (std::fabs(b[i]) > tol)

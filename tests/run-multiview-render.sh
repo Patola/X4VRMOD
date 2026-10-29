@@ -1077,6 +1077,23 @@ if command -v spirv-dis >/dev/null; then
     rfwd=$(spirv-dis "$PATCHDIR/roll_on.spv" 2>/dev/null | grep -c '1 Offset 208')
     rval=BAD
     spirv-val --target-env vulkan1.2 "$PATCHDIR/roll_on.spv" >/dev/null 2>&1 && rval=OK
+    # X4VR_HEAD_6DOF option B: the same patch on a UI-like module, the view at
+    # PoseBlock::ui_ofs (224/240), no stereo term (d = 0), the near gate on.
+    "$PATCHER" vert-eye-offset "$BUILD/tests/sample_camera_block.vert.spv" \
+        "$PATCHDIR/ui_unshift.spv" 1 0 1 0 - - - 7 224 0.9 >/dev/null 2>&1
+    uival=BAD
+    spirv-val --target-env vulkan1.2 "$PATCHDIR/ui_unshift.spv" >/dev/null 2>&1 && uival=OK
+    uioff=$(spirv-dis "$PATCHDIR/ui_unshift.spv" 2>/dev/null | grep -c '0 Offset 224')
+    uifwd=$(spirv-dis "$PATCHDIR/ui_unshift.spv" 2>/dev/null | grep -c '1 Offset 240')
+    uisel=$(spirv-dis "$PATCHDIR/ui_unshift.spv" 2>/dev/null | grep -c 'OpSelect')
+    if [[ "$uival" == OK && "$uioff" == 1 && "$uifwd" == 1 && "$uisel" -ge 1 ]]; then
+        printf 'ok   %-38s off224=%s off240=%s select=%s val=%s\n' \
+            "6dof B: UI unshift with the near gate" "$uioff" "$uifwd" "$uisel" "$uival"
+    else
+        printf 'FAIL %-38s want 1/1/>=1/OK, got %s/%s/%s/%s\n' \
+            "6dof B: UI unshift with the near gate" "$uioff" "$uifwd" "$uisel" "$uival"
+        fails=$((fails + 1))
+    fi
     # x and y (roll), then z and w (X4VR_HEAD_6DOF's forward offset): four.
     if [[ "$rins" == 4 && "$rset" == 1 && "$roff" == 1 && "$rfwd" == 1 && "$rval" == OK ]]; then
         printf 'ok   %-38s inserts=%s set7=%s off192=%s off208=%s val=%s\n' \

@@ -27431,3 +27431,32 @@ of the mouse."*
 * **F2:** the mouse did reach X4 (69–205 motion events/s, none dropped) and
   X4's pointer moved (x 0..2201). In F2 the screen-space pointer sits in a
   head-turned view, so it moves with the head as well. Asked what he saw.
+
+## Built for take 365: 6DOF option B (Patola: "yes, build B — in F2 it was the first case")
+
+* **X4's own eye moves again,** as in take 361: the injector writes the
+  head's offset into the camera's base translation (f3d42ea's head6_tick,
+  base_is_ours, share v12). So X4's picking and its right-click menu
+  placement follow the lean.
+* **The near HUD is shifted back.**
+  * Every UI canvas variant also takes patch_vertex_eye_offset, pointed at
+    PoseBlock::ui_ofs/ui_fwd (224/240, the block now 256 bytes), with d = 0
+    (no stereo term) and a near-vertex gate: kept only where
+    0 < w < 0.9 m and w ≠ 1 (X4's orthographic chrome leaves at w = 1), as a
+    0/1 float blend, core SPIR-V 1.0.
+  * The layer writes the NEGATED eye displacement X4 applied, in its view
+    axes, so the patch's subtraction adds it back.
+  * Modules without X4's camera block are refused and counted.
+* **The world is not shifted in mode B,** since X4 renders from the moved
+  eye. The declaration is neutral + what the injector applied.
+* **Fallback:** X4VR_HEAD_6DOF_MODE=shader is take 362's route.
+* **Tests:**
+  * the GPU harness checks the UI patch at 224/240 with the gate, spirv-val
+    OK, and all cases pass;
+  * the scorer FAILs mode B when the base was never written or no UI module
+    took the shift.
+* **Unknown until the take:** whether the HUD is drawn with the same
+  projection as the UI pass's camera block. If not, the HUD would still
+  swing, less.
+* **F2's cursor** follows the head as well as the mouse (Patola: the first
+  case). Left for after B.

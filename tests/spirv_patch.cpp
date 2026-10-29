@@ -178,9 +178,18 @@ int main(int argc, char **argv) {
         // refused in combination, deliberately). Presence is not intent.
         const bool have_oal = argc > 9 && strcmp(argv[9], "-") != 0;
         const bool have_oar = argc > 10 && strcmp(argv[10], "-") != 0;
+        // X4VR_HEAD_6DOF option B: argv[12] is the pose view's base offset
+        // (224 for ui_ofs), argv[13] the near-vertex gate's w limit.
+        const uint32_t roll_base =
+            arg_given(argc, argv, 12)
+                ? (uint32_t)strtoul(argv[12], nullptr, 0)
+                : x4vr::kPoseEyeOfsOffset;
+        const float gate =
+            arg_given(argc, argv, 13) ? strtof(argv[13], nullptr) : 0.0f;
         const bool ok = x4vr::spv::patch_vertex_eye_offset(
             code, set, binding, member, dl, have_dr ? &dr : nullptr,
-            have_oal ? &oal : nullptr, have_oar ? &oar : nullptr, roll_set, 0);
+            have_oal ? &oal : nullptr, have_oar ? &oar : nullptr, roll_set, 0,
+            roll_base, gate);
         printf("PATCHED=%d\n", ok ? 1 : 0);
         if (!ok && code != before) {
             printf("FAIL=refusal_modified_code\n");
