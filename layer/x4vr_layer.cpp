@@ -10224,17 +10224,7 @@ bool cursor_canvas() {
         // Take 342: X4's right-click menu, from X4's own table of open menus.
         const bool interact =
             s && s->interact_menu.load(std::memory_order_relaxed) != 0;
-        // The cinematic view and the start menu: X4's UI drawn as X4 laid it
-        // out (the twin pipelines), so X4 hit-tests where the pointer is and
-        // the cursor belongs there -- whatever else is up.
-        const bool as_x4 =
-            s && s->cinematic_ui.load(std::memory_order_relaxed) != 0;
-        const int want = as_x4      ? 5
-                         : full     ? 1
-                         : foot     ? 2
-                         : centred  ? 3
-                         : interact ? 4
-                                    : 0;
+        const int want = full ? 1 : foot ? 2 : centred ? 3 : interact ? 4 : 0;
         static int said = -1;
         if (said != want) {
             said = want;
@@ -10250,14 +10240,10 @@ bool cursor_canvas() {
                      : want == 4
                          ? "ON (X4's right-click menu is open: the cursor "
                            "follows X4's UI)"
-                     : want == 5
-                         ? "OFF (X4's UI drawn as X4 laid it out — the "
-                           "cinematic view or the start menu: the cursor at "
-                           "the raw pointer, where X4 hit-tests)"
                          : "OFF (no full-screen menu: the cursor at the raw "
                            "pointer, where X4 picks the world)");
         }
-        return want != 0 && want != 5;
+        return want != 0;
     }
     if (ab <= 0.0)
         return on;

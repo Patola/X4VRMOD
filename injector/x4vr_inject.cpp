@@ -4857,9 +4857,6 @@ static int x4_conversation() {
 // X4's open-menu table holds TopLevelMenu and nothing else: normal flight,
 // or -- with the HUD down -- the cinematic view (headlook_tick).
 static std::atomic<bool> g_menus_only_toplevel{false};
-// OptionsMenu open and full-screen: the ESC menu in game, or -- with no
-// player camera yet -- the start menu (headlook_tick).
-static std::atomic<bool> g_menus_options_full{false};
 static void menus_tick() {
     if (!cursor_canvas_auto() || !menus_sites_verified())
         return;
@@ -4873,13 +4870,6 @@ static void menus_tick() {
     const int n = x4vr::menus::walk(rd, x4vr::menus::kMenuRootSlot, e, 24);
     g_menus_only_toplevel.store(n == 1 && x4vr::menus::has(e, n, "TopLevelMenu"),
                                 std::memory_order_relaxed);
-    {
-        bool full = false;
-        for (int i = 0; i < n && i < 24; i++)
-            if (!strcmp(e[i].name, "OptionsMenu") && e[i].full)
-                full = true;
-        g_menus_options_full.store(full, std::memory_order_relaxed);
-    }
     static char was[512] = "";
     static unsigned changes = 0, failed = 0;
     if (n < 0) {
@@ -6403,29 +6393,6 @@ void headlook_tick() {
         else if (since < 0.0)
             since = now_s;
         cinematic = cond && now_s - since >= 0.3;
-        // **The start menu, too** (Patola, after v0.9.5: its menu is shrunk
-        // the way F6's overlay was). X4's OptionsMenu, full-screen, with no
-        // player camera: take 359's start menu (129315.8-129321.1) ran with
-        // "no player camera yet" until 129355.9; the in-game ESC menu, the
-        // same OptionsMenu, always has one.
-        const bool start_cond =
-            write_mode && !x4_player_camera() &&
-            g_menus_options_full.load(std::memory_order_relaxed);
-        static double start_since = -1.0;
-        if (!start_cond)
-            start_since = -1.0;
-        else if (start_since < 0.0)
-            start_since = now_s;
-        const bool start_menu = start_cond && now_s - start_since >= 0.3;
-        static bool was_start = false;
-        if (start_menu != was_start) {
-            was_start = start_menu;
-            X4VR_LOG("ui: start menu %s",
-                     start_menu ? "ON — X4's OptionsMenu with no player camera: "
-                                  "X4's UI drawn as X4 laid it out, the cursor "
-                                  "at the raw pointer"
-                                : "off — X4's UI back on the canvas");
-        }
         static bool was_cinematic = false;
         if (cinematic != was_cinematic) {
             was_cinematic = cinematic;
@@ -6436,7 +6403,7 @@ void headlook_tick() {
                                : "off — X4's UI back on the HUD's canvas");
         }
         if (x4vr::Shared *sh = x4vr_shared_state())
-            sh->cinematic_ui.store(cinematic || start_menu ? 1u : 0u,
+            sh->cinematic_ui.store(cinematic ? 1u : 0u,
                                    std::memory_order_relaxed);
     }
     // **X4VR_HEADLOOK_MENU_CENTRE: the spring-back X4VR_HEADLOOK_WRITE took

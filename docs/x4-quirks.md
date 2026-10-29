@@ -27198,3 +27198,33 @@ v0.9.5."*
   window is world-locked (no head-look before a game is loaded). Turning
   it with the head would mean the camera X4 draws it through, which is
   likely the same wall as F6's (a camera other than the player's).
+
+## Take 360 — the start menu resized: not what was asked (reverted)
+
+Patola: *"Please revert this change. That is not what I was asking for. Yes,
+the start menu now fills the whole window like in the F6 mode, but that was
+not what I wanted -- I wanted it with its regular size and the 3D scene being
+all around, not in a window. The F6 overlay being sized to the whole window
+makes sense and it more comfortable this way. The start menu overlay is a
+whole different matter, it gets really uncomfortable when it is resized this
+way."*
+
+Reverted (the code is v0.9.5's again). My error: I read "it's shrinked the
+same way the F6 overlay was" as the request, when the goal stated since take
+344 (and in this file's roadmap) was the start menu **as the whole scene**:
+the menu at its regular size, the 3D scene all around.
+
+**What that needs, as known so far:**
+1. **The camera.** No player camera exists at the start menu. The scene is
+   drawn through another camera, most likely the scene camera at
+   `root+0x3e0` (take 357: the slot held a camera object early in the take,
+   before any F6). Its class (vtable 0x3b99e18) is not the player camera's,
+   and 0x1929f70's mode field read garbage for it, so it has its own
+   evaluation. The head's rotation has to be composed there: a new site, put
+   to Patola before it is enabled.
+2. **The menu at its regular size, fixed in front.** The menu and the scene
+   share one eye image, and the picture is declared at the head's pose.
+   Turning the scene with the head would carry the menu with it (as the
+   HUD rides in F2/F4) unless the menu is counter-rotated, or put on its own
+   composition layer (task #57's X4VR_UI_LAYER machinery, not on the
+   shipping line).
