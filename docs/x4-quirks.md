@@ -27361,3 +27361,29 @@ objects (0.35 m at 50 m ≈ 0.4°).
     208, spirv-val OK; all cases pass;
   * head6.cpp (the limit);
   * the scorer `head6` block (layer lines) with planted cases.
+
+## Take 362 — 6DOF in the world shaders: world and HUD right, clicks off when leaning; option B's check built
+
+Patola: *"The HUD now is working well and fixed to the right position in all
+angles and head positions. The left and right clicking not yet ...
+right-clicking creating the right-click menu with an odd origin (far from
+the object). The world moves correct in all three rotation and translation
+axes. I even got close to a station to see if I could notice the slight
+distortion but could not see it."*
+
+* **Scorer FAIL:** the 6DOF refusal fired once at start-up, before the pose
+  channel was up, although 6DOF then worked. The fix (ed6feb3) refuses only
+  when the pose channel or roll stereo was not asked for.
+* **The neutral was sensible** (offsets near zero). During the right-click
+  tests he leaned ~0.22 m right and ~0.12 m down: the expected trade-off at
+  its strongest, since X4 picks and anchors its menu from the neutral eye.
+* **Options weighed:** A (keep), B (move X4's eye as in take 361 and shift
+  back only UI geometry near the eye, the HUD), C (correct the pointer by
+  the parallax at the cursor's depth). C needs a per-frame depth readback
+  inside X4's command stream plus a pointer remap that must switch off over
+  every UI element, so it carries more risk than it first appeared. Patola
+  chose B, with a read-only check first.
+* **The check (86c2e8c):** under X4VR_DUMP_MATRICES=1 the #82 instrument now
+  bands the view depth (m15 of M_worldviewprojection) of X4's perspective UI
+  draws every ~10 s. No kept log had it (take 265's are gone). B is safe if
+  the HUD (expected ~3 cm) is the only thing near the eye.
