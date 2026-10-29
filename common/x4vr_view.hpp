@@ -439,23 +439,11 @@ struct PoseBlock {
     // is +-1 for a perspective projection, 0 for an orthographic one, which
     // then moves nothing). Zero is the identity.
     float head_fwd[4];
-    // **X4VR_HEAD_6DOF option B: X4's near-eye HUD shifted back.** X4's own
-    // eye moves (its base translation), and X4 draws the cockpit HUD as a 3D
-    // object a few cm in front of that eye, so it swings with every lean
-    // (take 361). The UI shaders read these two vec4 the way the world
-    // shaders read eye_ofs/head_fwd -- (0, 0, -ux, -uy) and (-uf, 0, 0, 0),
-    // the NEGATED eye displacement in X4's view axes, so the patch's
-    // subtraction adds it back -- on near perspective vertices only. Zero is
-    // the identity.
-    float ui_ofs[4];
-    float ui_fwd[4];
 };
-static_assert(sizeof(PoseBlock) == 256,
-              "std140: three mat4 at 0, 64, 128 and vec4s at 192..240");
+static_assert(sizeof(PoseBlock) == 224,
+              "std140: three mat4 at 0, 64, 128 and vec4s at 192 and 208");
 // Where head_fwd sits, for the SPIR-V patch's second member.
 constexpr uint32_t kPoseHeadFwdOffset = 208;
-// Option B's UI slots (ui_ofs, then ui_fwd 16 bytes on).
-constexpr uint32_t kPoseUiOfsOffset = 224;
 // The offset the SPIR-V patch decorates its one-member view with. Named here so
 // the shader-side constant and the struct cannot drift apart silently.
 constexpr uint32_t kPoseEyeOfsOffset = 192;
@@ -518,15 +506,6 @@ inline void pose_set_head_shift(PoseBlock &p, float tx, float ty,
     p.eye_ofs[2] = tx;
     p.eye_ofs[3] = ty;
     p.head_fwd[0] = tf;
-}
-// Option B: the eye displacement X4 applied, in its view axes; stored
-// negated (see ui_ofs). Zeros switch it off.
-inline void pose_set_ui_unshift(PoseBlock &p, float ux, float uy, float uf) {
-    p.ui_ofs[0] = 0.0f;
-    p.ui_ofs[1] = 0.0f;
-    p.ui_ofs[2] = -ux;
-    p.ui_ofs[3] = -uy;
-    p.ui_fwd[0] = -uf;
 }
 
 

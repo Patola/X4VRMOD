@@ -156,26 +156,6 @@ int main() {
         b[5] = 0.9f;
         check(!camwrite::base_is_identity(b, 1e-3f), "a rotated base -> REFUSED");
     }
-    // X4VR_HEAD_6DOF: the base's translation may be ours.
-    {
-        float b[16] = {0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
-        const float ours[3] = {0.05f, -0.02f, 0.10f};
-        const float none[3] = {0.f, 0.f, 0.f};
-        check(camwrite::base_is_ours(b, ours, 1e-3f),
-              "6dof: a zero translation (X4's, after a set-up) -> ours");
-        b[0] = 0.05f, b[1] = -0.02f, b[2] = 0.10f;
-        check(camwrite::base_is_ours(b, ours, 1e-3f),
-              "6dof: the translation we wrote -> ours");
-        check(!camwrite::base_is_ours(b, none, 1e-3f),
-              "6dof: a translation we did not write -> REFUSED");
-        b[2] = 0.30f;
-        check(!camwrite::base_is_ours(b, ours, 1e-3f),
-              "6dof: a different translation -> REFUSED");
-        b[2] = 0.10f;
-        b[5] = 0.9f;
-        check(!camwrite::base_is_ours(b, ours, 1e-3f),
-              "6dof: our translation on a rotated base -> REFUSED");
-    }
 
     // ---- the target ------------------------------------------------------
     {

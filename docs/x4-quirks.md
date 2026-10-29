@@ -27485,3 +27485,40 @@ shift, 17 without X4's camera block). Patola:
   mode with a lean, which involves the steering target the layer draws
   (X4VR_STEER=a, fixed to the cockpit) and where X4 picks in that mode. To
   be looked at.
+
+**Option B reverted (code only; its design notes above stay as history).**
+The code is byte-for-byte that of 2822d2e: X4VR_HEAD_6DOF=1 is take 362's
+world-shader route again, where the HUD was right.
+
+**The steering-mode offset is A's stated cost, not 6DOF.**
+* x4vr_steer.hpp, since take 331: in steering mode A draws the ring at
+  *nose + pointer offset* (fixed to the cockpit), while X4 picks the world at
+  the *raw* pointer, i.e. *gaze + pointer offset*.
+* So with the head turned by θ, X4 hovers what lies θ away from the ring,
+  toward where he is looking. Head straight, the two coincide.
+* Take 331's prediction P331.3 said so ("Hover and click-select do NOT
+  follow the ring in A"). Take 333 accepted A on its feel.
+* Mouse mode has no such gap: our ring sits at the raw pointer, which is
+  where X4 picks. This is why it was fine with the head turned and leaning.
+* Translation alone (leaning, head straight) moves the pick only by
+  lean/distance: ~0.2 m at a station 1 km away is 0.01°.
+
+## Take 366 — PREDICTIONS (written before the run)
+
+Take 365's line with the take number and log changed. The code is take
+362's again.
+
+    X4VR_HEADLOOK_LAGLOG=1 X4VR_TAKE=366 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take366.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_FOOTLOG=1 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P366.1 The HUD regression is gone.** As in take 362, the cockpit HUD
+  stays with the cockpit when he turns his head or leans.
+* **P366.2 Steering mode, head straight, leaning:** hover lands on the ring.
+  Any offset is too small to see on objects more than a few hundred metres
+  away.
+* **P366.3 Steering mode, head turned ~30° (no lean):** the ring on an
+  object does NOT hover it. What hovers is the object about 30° from the
+  ring toward where he looks, near the middle of his view plus the same
+  offset.
+* **Refutation:** P366.2 failing (leaning alone shifts hover visibly on far
+  objects) would make 6DOF a cause after all. P366.3 failing (hover follows
+  the ring with the head turned) would refute the "A's cost" reading.

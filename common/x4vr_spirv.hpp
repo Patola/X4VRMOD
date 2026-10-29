@@ -1891,18 +1891,10 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
                                     const OffAxis *oa_left = nullptr,
                                     const OffAxis *oa_right = nullptr,
                                     uint32_t roll_set = 0xffffffffu,
-                                    uint32_t roll_binding = 0,
-                                    uint32_t roll_base = x4vr::kPoseEyeOfsOffset,
-                                    float gate_wmax = 0.0f) {
+                                    uint32_t roll_binding = 0) {
     std::vector<Inst> insts;
     if (!iterate(code, insts))
         return false;
-    // **X4VR_HEAD_6DOF option B** reuses this patch on X4's UI modules:
-    // `roll_base` points the pose view at PoseBlock::ui_ofs instead of
-    // eye_ofs (with d = 0 there is no stereo term, only the shift), and
-    // `gate_wmax` > 0 keeps the result only on NEAR perspective vertices --
-    // 0 < w < gate_wmax and w not 1 (X4's orthographic screen chrome leaves
-    // with w exactly 1) -- through a 0/1 float blend, core SPIR-V 1.0.
     // **Refused rather than emitted untested.** The off-axis affine rewrites x
     // AND y from the sheared x, so a roll term added before it would flow
     // through arithmetic that was derived assuming the offset is horizontal.
@@ -2163,20 +2155,6 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
         emit(decls, OpTypeStruct, {t_rollblock, t_v4, t_v4});
         c_two = iconst(2);
         c_three = iconst(3);
-    }
-    const bool gate_on = gate_wmax > 0.0f;
-    uint32_t g_wmax = 0, g_one = 0, g_zero = 0, g_eps2 = 0;
-    if (gate_on) {
-        if (!t_bool) {
-            t_bool = new_id();
-            emit(decls, OpTypeBool, {t_bool});
-        }
-        g_wmax = fconst(gate_wmax);
-        g_one = fconst(1.0f);
-        g_zero = fconst(0.0f);
-        g_eps2 = fconst(0.02f * 0.02f);
-    }
-    if (roll_on) {
         const uint32_t ptr_rollblock = new_id();
         emit(decls, OpTypePointer,
              {ptr_rollblock, StorageClassUniform, t_rollblock});
@@ -2280,9 +2258,9 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
             // needs no mat4 type, no ColMajor and no MatrixStride.
             emit(out, OpDecorate, {t_rollblock, DecorationBlock});
             emit(out, OpMemberDecorate,
-                 {t_rollblock, 0u, DecorationOffset, roll_base});
+                 {t_rollblock, 0u, DecorationOffset, x4vr::kPoseEyeOfsOffset});
             emit(out, OpMemberDecorate,
-                 {t_rollblock, 1u, DecorationOffset, roll_base + 16u});
+                 {t_rollblock, 1u, DecorationOffset, x4vr::kPoseHeadFwdOffset});
             emit(out, OpDecorate, {roll_var, DecorationDescriptorSet, roll_set});
             emit(out, OpDecorate, {roll_var, DecorationBinding, roll_binding});
         }
@@ -2490,35 +2468,6 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
                 const uint32_t np4 = new_id();
                 emit(out, OpCompositeInsert, {t_v4, np4, nw, np3, 3});
                 np = np4;
-            }
-            // Option B's gate: keep the shifted position only on near
-            // perspective vertices; everything else leaves as it came.
-            if (gate_on) {
-                const uint32_t w_in = new_id();
-                emit(out, OpCompositeExtract, {t_float, w_in, loaded, 3});
-                const uint32_t near = new_id();
-                emit(out, OpFOrdLessThan, {t_bool, near, w_in, g_wmax});
-                const uint32_t wm1 = new_id();
-                emit(out, OpFSub, {t_float, wm1, w_in, g_one});
-                const uint32_t sq = new_id();
-                emit(out, OpFMul, {t_float, sq, wm1, wm1});
-                const uint32_t notone = new_id();
-                emit(out, OpFOrdGreaterThan, {t_bool, notone, sq, g_eps2});
-                const uint32_t pos = new_id();
-                emit(out, OpFOrdGreaterThan, {t_bool, pos, w_in, g_zero});
-                const uint32_t c1 = new_id();
-                emit(out, OpLogicalAnd, {t_bool, c1, near, notone});
-                const uint32_t cond = new_id();
-                emit(out, OpLogicalAnd, {t_bool, cond, c1, pos});
-                const uint32_t tsel = new_id();
-                emit(out, OpSelect, {t_float, tsel, cond, g_one, g_zero});
-                const uint32_t diff = new_id();
-                emit(out, OpFSub, {t_v4, diff, np, loaded});
-                const uint32_t scaled = new_id();
-                emit(out, OpVectorTimesScalar, {t_v4, scaled, diff, tsel});
-                const uint32_t blended = new_id();
-                emit(out, OpFAdd, {t_v4, blended, loaded, scaled});
-                np = blended;
             }
             emit(out, OpStore, {ptr, np});
         }

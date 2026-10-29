@@ -4694,26 +4694,6 @@ def main(path):
                          "neutral (head-look never steered in the cockpit)")
         elif h6_asked and not h6_on:
             fails.append("X4VR_HEAD_6DOF=1 but the eye was never moved")
-        # Option B (take 365 on, the default): X4's eye moves (the injector
-        # writes its camera base) and the UI shaders shift the near HUD back.
-        h6_b = not re.search(r"\bX4VR_HEAD_6DOF_MODE=shader\b", run or "")
-        h6_inj = len(re.findall(r"inject\s+head 6dof: ON — the head's offset "
-                                r"goes into X4's camera base", text))
-        h6_ui = re.findall(r"head 6dof: (\d+) UI module\(s\) shift the near "
-                           r"HUD back \(option B\), (\d+) without", text)
-        tk6 = re.search(r"\bX4VR_TAKE=(\d+)\b", run or "")
-        if h6_asked and h6_b and tk6 and int(tk6.group(1)) >= 365:
-            print(f"head6  option B: X4's camera base written in {h6_inj} "
-                  f"period(s); "
-                  + (f"{h6_ui[-1][0]} UI module(s) shift the near HUD back, "
-                     f"{h6_ui[-1][1]} without X4's camera block"
-                     if h6_ui else "NO UI module shifts the HUD back"))
-            if h6_on and not h6_inj:
-                fails.append("6DOF option B: the layer moved but X4's camera "
-                             "base was never written")
-            if not h6_ui:
-                fails.append("6DOF option B: no UI module took the near-HUD "
-                             "shift — the HUD would swing as in take 361")
         if h6_on:
             print("head6  whether leaning moves the eye with the HUD staying "
                   "put, and clicks still lining up, is Patola's to say")

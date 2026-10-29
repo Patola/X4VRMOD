@@ -343,28 +343,13 @@ static float head6_max() {
     }();
     return m;
 }
-// Option B (the default): X4's own eye moves -- the injector writes the
-// offset into X4's camera base -- and the UI shaders shift X4's near-eye HUD
-// back. X4VR_HEAD_6DOF_MODE=shader is take 362's route: only the world moves,
-// in the world shaders, and X4's eye stays at neutral.
-static bool head6_mode_b() {
-    static const bool b = [] {
-        const char *m = getenv("X4VR_HEAD_6DOF_MODE");
-        return !(m && !strcmp(m, "shader"));
-    }();
-    return b;
-}
 // This frame's offset: in the view axes X4 rendered with, for the shaders
 // (tx right, ty up, tf forward), and in the room, for the declaration.
-// Option B: u* is the eye displacement X4 applied, in its view axes, which
-// the UI shaders add back to the near HUD.
 struct Head6Now {
     std::atomic<float> tx{0.f}, ty{0.f}, tf{0.f}, rx{0.f}, ry{0.f}, rz{0.f};
-    std::atomic<float> ux{0.f}, uy{0.f}, uf{0.f};
-    std::atomic<uint32_t> on{0}, ui_on{0};
+    std::atomic<uint32_t> on{0};
 };
 static Head6Now g_head6;
-static std::atomic<uint32_t> g_head6_ui_patched{0}, g_head6_ui_refused{0};
 
 static bool declare_rendered_pos() {
     static const bool on = x4vr::env_on("X4VR_DECLARE_RENDERED_POS", false);
@@ -6478,32 +6463,6 @@ VkResult create_shader_module_inner(
                                                   ui_wgate_perspective())) {
                     canvas_refuse("patch_vertex_clip declined the module");
                 } else {
-                    // **X4VR_HEAD_6DOF option B: the near HUD shifted back.**
-                    // X4's eye moves with the head, and X4 draws the cockpit
-                    // HUD a few cm in front of it (take 361). The world eye-
-                    // offset patch, pointed at PoseBlock::ui_ofs with no
-                    // stereo term and a near-vertex gate (0 < w < 0.9, not the
-                    // w = 1 chrome), adds the displacement back there only.
-                    // A module without X4's camera block is refused and keeps
-                    // the canvas alone.
-                    if (head6_enabled() && head6_mode_b() && pose_wanted()) {
-                        std::vector<uint32_t> cu = cv;
-                        if (x4vr::spv::patch_vertex_eye_offset(
-                                cu, kCameraSet, kCameraBinding,
-                                kCameraProjMember, 0.0f, nullptr, nullptr,
-                                nullptr, pose_set_index(), 0,
-                                x4vr::kPoseUiOfsOffset, 0.9f)) {
-                            cv.swap(cu);
-                            const uint32_t n = ++g_head6_ui_patched;
-                            if (n <= 3 || (n % 20) == 0)
-                                X4VR_LOG("head 6dof: %u UI module(s) shift the "
-                                         "near HUD back (option B), %u "
-                                         "without X4's camera block left alone",
-                                         n, g_head6_ui_refused.load());
-                        } else {
-                            g_head6_ui_refused++;
-                        }
-                    }
                     VkShaderModuleCreateInfo cci = *ci;
                     cci.codeSize = cv.size() * 4;
                     cci.pCode = cv.data();
@@ -7176,12 +7135,6 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
         // than inherited: pose_set_roll no longer clears z/w, but a reader
         // should not have to know that to see that both survive.
         x4vr::pose_set_head_shift(g_pose.value, shift_x, shift_y, shift_fwd);
-        // X4VR_HEAD_6DOF option B: the near HUD shifted back (zeros = off).
-        const bool ui6 = g_head6.ui_on.load(std::memory_order_acquire) != 0;
-        x4vr::pose_set_ui_unshift(
-            g_pose.value, ui6 ? g_head6.ux.load(std::memory_order_relaxed) : 0.f,
-            ui6 ? g_head6.uy.load(std::memory_order_relaxed) : 0.f,
-            ui6 ? g_head6.uf.load(std::memory_order_relaxed) : 0.f);
 
         // The value, at the same cadence as the rest of the periodic block.
         // What goes in the buffer, not what we believe went in.
@@ -13360,71 +13313,20 @@ void vr_thread() {
                     x4vr::quat_of_angles(cy, cp, qc);
                     const x4vr::HeadShift v6 = x4vr::head_shift(
                         qc[0], qc[1], qc[2], qc[3], room[0], room[1], room[2]);
-                    if (!head6_mode_b()) {
-                        // Take 362's route: the world shaders move the eye.
-                        g_head6.tx.store(v6.x, std::memory_order_relaxed);
-                        g_head6.ty.store(v6.y, std::memory_order_relaxed);
-                        g_head6.tf.store(-v6.z, std::memory_order_relaxed); // OpenXR -z is forward
-                        g_head6.rx.store(room[0], std::memory_order_relaxed);
-                        g_head6.ry.store(room[1], std::memory_order_relaxed);
-                        g_head6.rz.store(room[2], std::memory_order_relaxed);
-                        g_head6.on.store(n6_set && cockpit6 ? 1u : 0u,
-                                         std::memory_order_release);
-                    } else {
-                        // Option B: the offset goes to the injector, which
-                        // writes it into X4's camera base (X4's axes: OpenXR
-                        // z flipped); what it APPLIED comes back through the
-                        // share and is declared, and added back to the HUD.
-                        static auto head6_fn = (x4vr::HeadShared * (*)())dlsym(
-                            RTLD_DEFAULT, "x4vr_head_state");
-                        if (x4vr::HeadShared *h = head6_fn ? head6_fn() : nullptr) {
-                            const bool w6 = n6_set && cockpit6;
-                            h->head6_want[0].store(w6 ? room[0] : 0.f,
-                                                   std::memory_order_relaxed);
-                            h->head6_want[1].store(w6 ? room[1] : 0.f,
-                                                   std::memory_order_relaxed);
-                            h->head6_want[2].store(w6 ? -room[2] : 0.f,
-                                                   std::memory_order_relaxed);
-                            h->head6_want_on.store(w6 ? 1u : 0u,
-                                                   std::memory_order_release);
-                        }
-                        float ap[3] = {0.f, 0.f, 0.f};
-                        const bool applied =
-                            s6 && s6->head6_applied_on.load(
-                                      std::memory_order_acquire) != 0;
-                        if (applied) {
-                            ap[0] = s6->head6_applied[0].load(std::memory_order_relaxed);
-                            ap[1] = s6->head6_applied[1].load(std::memory_order_relaxed);
-                            ap[2] = -s6->head6_applied[2].load(std::memory_order_relaxed);
-                        }
-                        const x4vr::HeadShift va = x4vr::head_shift(
-                            qc[0], qc[1], qc[2], qc[3], ap[0], ap[1], ap[2]);
-                        g_head6.tx.store(0.f, std::memory_order_relaxed);
-                        g_head6.ty.store(0.f, std::memory_order_relaxed);
-                        g_head6.tf.store(0.f, std::memory_order_relaxed);
-                        g_head6.ux.store(va.x, std::memory_order_relaxed);
-                        g_head6.uy.store(va.y, std::memory_order_relaxed);
-                        g_head6.uf.store(-va.z, std::memory_order_relaxed);
-                        g_head6.rx.store(ap[0], std::memory_order_relaxed);
-                        g_head6.ry.store(ap[1], std::memory_order_relaxed);
-                        g_head6.rz.store(ap[2], std::memory_order_relaxed);
-                        g_head6.ui_on.store(applied ? 1u : 0u,
-                                            std::memory_order_release);
-                        // `on` gates the declaration (rx/ry/rz) and the world
-                        // shift (zero here).
-                        g_head6.on.store(applied ? 1u : 0u,
-                                         std::memory_order_release);
-                    }
+                    g_head6.tx.store(v6.x, std::memory_order_relaxed);
+                    g_head6.ty.store(v6.y, std::memory_order_relaxed);
+                    g_head6.tf.store(-v6.z, std::memory_order_relaxed); // OpenXR -z is forward
+                    g_head6.rx.store(room[0], std::memory_order_relaxed);
+                    g_head6.ry.store(room[1], std::memory_order_relaxed);
+                    g_head6.rz.store(room[2], std::memory_order_relaxed);
+                    g_head6.on.store(n6_set && cockpit6 ? 1u : 0u,
+                                     std::memory_order_release);
                     static bool was6 = false;
                     if ((n6_set && cockpit6) != was6) {
                         was6 = n6_set && cockpit6;
                         X4VR_LOG("head 6dof: %s", was6
-                                 ? (head6_mode_b()
-                                        ? "ON — option B: X4's eye moves with "
-                                          "the head, the near HUD is shifted "
-                                          "back"
-                                        : "ON — the world drawn from the "
-                                          "head's position in the cockpit")
+                                 ? "ON — the world drawn from the head's "
+                                   "position in the cockpit"
                                  : "off — not steering in the cockpit (a menu, "
                                    "an external view, on foot): the eye at "
                                    "neutral");

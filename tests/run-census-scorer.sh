@@ -1389,7 +1389,7 @@ want "cinematic: never reached the layer -> FAIL" /tmp/census-cv-late.log "FAIL|
 absent "cinematic: none -> silent" "$BASE" cinematic
 
 # ------------------------------------ X4VR_HEAD_6DOF (head6)
-for f in '"head 6dof: neutral latched at (%.3f, %.3f, "' '"head 6dof: offset (%.3f, %.3f, %.3f) m in the "' '"head 6dof: REFUSED — it needs X4VR_POSE=1 and "' '"ON — the world drawn from the "' '"ON — option B: X4'"'"'s eye moves with "' '"off — not steering in the cockpit (a menu, "'; do
+for f in '"head 6dof: neutral latched at (%.3f, %.3f, "' '"head 6dof: offset (%.3f, %.3f, %.3f) m in the "' '"head 6dof: REFUSED — it needs X4VR_POSE=1 and "' '"ON — the world drawn from the head' '"off — not steering in the cockpit (a menu, "'; do
     if grep -qF "$f" layer/x4vr_layer.cpp; then
         ok "head6: the planted line matches a format ($f)"
     else

@@ -3699,15 +3699,6 @@ struct CamWrite {
     char last_refusal[256] = "";
 };
 CamWrite g_camwrite;
-// X4VR_HEAD_6DOF: what this process last wrote into the camera's base
-// translation (X4's axes), so head-look's base check can tell ours from X4's.
-struct Head6 {
-    float applied[3] = {0.f, 0.f, 0.f};
-    bool on = false;
-    uint64_t writes = 0, failed = 0, restored = 0;
-    float max_len = 0.f;
-};
-Head6 g_head6;
 } // namespace
 
 // The player's camera object the way GetCameraRotation reaches it: its root
@@ -3861,10 +3852,8 @@ static bool camwrite_ready(uintptr_t cam, float plim_deg, float ylim_deg) {
         return false;
     }
     float b[16] = {};
-    // X4VR_HEAD_6DOF puts the head's offset in the base's translation; that
-    // translation is ours, not X4's, and the rotation must still be identity.
     if (!self_read(cam + camwrite::kBasePos, b, sizeof b) ||
-        !camwrite::base_is_ours(b, g_head6.applied, 1e-3f)) {
+        !camwrite::base_is_identity(b, 1e-3f)) {
         char why[256];
         snprintf(why, sizeof why,
                  "the camera's base transform is not identity (translation "
@@ -5545,94 +5534,6 @@ static int tick_hz() {
     return hz;
 }
 
-// X4VR_HEAD_6DOF=1 -- the head's position in the cockpit (x4vr_head6.hpp).
-// Each head-look tick: while head-look writes in the pilot seat with the HUD
-// up, the layer's offset goes into the camera's base translation, which X4
-// composes into the eye every frame (0x1934490..0x193462a); otherwise our
-// last offset is taken back out, but only if the base still holds it.
-// Option B (take 364, the default): X4's own eye moves, so its picking and
-// its right-click menu follow the lean; the layer shifts X4's near-eye HUD
-// back. X4VR_HEAD_6DOF_MODE=shader is take 362's route instead (only the
-// world moves, in the layer's shaders; nothing is written here).
-static bool head6_asked() {
-    static const bool on = [] {
-        const char *m = getenv("X4VR_HEAD_6DOF_MODE");
-        return x4vr::env_on("X4VR_HEAD_6DOF", false) &&
-               !(m && !strcmp(m, "shader"));
-    }();
-    return on;
-}
-static void head6_tick(bool active, uintptr_t cam) {
-    if (!head6_asked())
-        return;
-    static double last_line = 0.0;
-    const double now = mono_seconds();
-    x4vr::HeadShared *h = x4vr_head_state();
-    const bool want_on =
-        h && h->head6_want_on.load(std::memory_order_acquire) != 0;
-    float b[16] = {};
-    const bool base_ok = cam && self_read(cam + x4vr::camwrite::kBasePos, b,
-                                          sizeof b) &&
-                         x4vr::camwrite::base_is_ours(b, g_head6.applied, 1e-3f);
-    auto publish = [](bool on) {
-        if (x4vr::Shared *sh = x4vr_shared_state()) {
-            for (int i = 0; i < 3; i++)
-                sh->head6_applied[i].store(g_head6.applied[i],
-                                           std::memory_order_relaxed);
-            sh->head6_applied_on.store(on ? 1u : 0u, std::memory_order_release);
-        }
-    };
-    if (active && want_on && base_ok) {
-        float v[3];
-        for (int i = 0; i < 3; i++)
-            v[i] = h->head6_want[i].load(std::memory_order_relaxed);
-        if (!self_write(cam + x4vr::camwrite::kBasePos, v, sizeof v)) {
-            if (g_head6.failed++ < 3)
-                X4VR_LOG("head 6dof: base write FAILED at %p", (void *)cam);
-            return;
-        }
-        for (int i = 0; i < 3; i++)
-            g_head6.applied[i] = v[i];
-        g_head6.writes++;
-        const float l = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-        if (l > g_head6.max_len)
-            g_head6.max_len = l;
-        if (!g_head6.on)
-            X4VR_LOG("head 6dof: ON — the head's offset goes into X4's camera "
-                     "base (%.3f, %.3f, %.3f) m; X4 composes it into the eye",
-                     v[0], v[1], v[2]);
-        g_head6.on = true;
-        publish(true);
-        if (now - last_line >= 5.0) {
-            last_line = now;
-            X4VR_LOG("head 6dof: applied (%.3f, %.3f, %.3f) m, %llu write(s), "
-                     "max %.3f m so far",
-                     v[0], v[1], v[2], (unsigned long long)g_head6.writes,
-                     g_head6.max_len);
-        }
-        return;
-    }
-    if (!g_head6.on)
-        return;
-    // Stood down: take our offset back out of the base, if it is still there
-    // (X4's own set-up may have rewritten the base already).
-    const float zero[3] = {0.f, 0.f, 0.f};
-    if (base_ok && (std::fabs(b[0]) > 1e-6f || std::fabs(b[1]) > 1e-6f ||
-                    std::fabs(b[2]) > 1e-6f) &&
-        self_write(cam + x4vr::camwrite::kBasePos, zero, sizeof zero))
-        g_head6.restored++;
-    for (int i = 0; i < 3; i++)
-        g_head6.applied[i] = 0.f;
-    g_head6.on = false;
-    publish(false);
-    X4VR_LOG("head 6dof: off — %s; the base's translation is zero again "
-             "(%llu restore(s))",
-             !active ? "head-look is not writing in the pilot seat"
-             : !want_on ? "the layer has no offset"
-                        : "the base is not ours (X4 set the camera up again)",
-             (unsigned long long)g_head6.restored);
-}
-
 void headlook_tick() {
     static const bool armed = [] {
         const char *e = getenv("X4VR_HEADLOOK");
@@ -6487,9 +6388,6 @@ void headlook_tick() {
             }
         }
     }
-    // X4VR_HEAD_6DOF: in the pilot seat only, while head-look writes there.
-    if (write_mode)
-        head6_tick(write_ready && seated && may_steer, x4_player_camera());
     // **X4VR_HEADLOOK_EXTERNAL: the head in the external views.** Nothing is
     // written into X4's camera: the rows go to the stub at 0x192a295, which
     // composes them before X4's orbit. Once it has, the angle is what the
