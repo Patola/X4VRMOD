@@ -27407,3 +27407,27 @@ distortion but could not see it."*
   external view the rows keep their angle. Released when the menu closes.
 * **Scorer:** `ui-depth` parses the per-draw line; `rclick-hold` FAILs a
   right-click opening without a HELD line (from take 364).
+
+## Take 364 — the right-click hold works; the depth check still cannot see vertices; F2 cursor asked
+
+Patola: *"this time headlook did not move the cursor on the right-click
+menu."* Remaining: the right-click menu appears far from the object, and,
+the main one, *"when headlook is leaned, the hitboxes for clicking are
+shifted"*. New: *"In F2 mode, only the headlook moved the cursor, instead
+of the mouse."*
+
+* **Hold:** all 6 right-click openings were held (rclick-hold 6/6).
+* **Scorer FAIL, an instrument artefact:** two right-click periods reached
+  the canvas at 0.21 and 0.25 s, just past the 0.2 s window. Under
+  X4VR_DUMP_MATRICES X4's frames are slower and each step waits for a frame
+  (the HELD lines landed at the same moments). Earlier takes stayed under
+  0.2 s. The window is 0.4 s for matrix-instrument runs only; re-scored
+  PASS.
+* **The depth check, per draw:** m15 is the depth of each draw's ORIGIN,
+  not of its vertices. Many UI draws have their origin at the eye
+  (0.000 m) with geometry in front, and others have origins at 0.1–2 m and
+  at 20 m+. It cannot say what lies within a few cm. Only the shader sees
+  vertex depth, so B's real test is a per-vertex gate in the UI shader.
+* **F2:** the mouse did reach X4 (69–205 motion events/s, none dropped) and
+  X4's pointer moved (x 0..2201). In F2 the screen-space pointer sits in a
+  head-turned view, so it moves with the head as well. Asked what he saw.

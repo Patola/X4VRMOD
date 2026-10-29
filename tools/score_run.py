@@ -4868,9 +4868,13 @@ def main(path):
                 start = None
         if start is not None:
             periods.append((start, None))
+        # Take 364: under X4VR_DUMP_MATRICES (the matrix instrument, which
+        # slows X4's frames) the switch came at 0.21 and 0.25 s -- each step
+        # waits for a frame. The window widens for such runs only.
+        rc_win = 0.4 if re.search(r"\bX4VR_DUMP_MATRICES=1\b", run or "") else 0.2
         late = 0
         for t0, t1 in periods:
-            k, why = _canvas_at(t0 + 0.2)
+            k, why = _canvas_at(t0 + rc_win)
             ok_ = k == "ON"
             if not ok_ and (t1 is None or t1 - t0 > 0.5):
                 late += 1
@@ -4883,7 +4887,7 @@ def main(path):
               f"highlighted option")
         if late:
             fails.append(f"X4's right-click menu: {late} period(s) without the "
-                         f"canvas 0.2 s after X4's table showed it")
+                         f"canvas {rc_win} s after X4's table showed it")
 
     if hm_open:
         arms = {"A": 0, "B": 0}
