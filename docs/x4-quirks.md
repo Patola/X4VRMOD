@@ -27228,3 +27228,9 @@ the menu at its regular size, the 3D scene all around.
    HUD rides in F2/F4) unless the menu is counter-rotated, or put on its own
    composition layer (task #57's X4VR_UI_LAYER machinery, not on the
    shipping line).
+
+**Decision (Patola, 2026-10-29):** the immersive start menu is *"an optional
+feature for the future, we're not doing it right now. Let's go straight to
+the 6DOF."* The goal, confirmed: the start menu at its usual size fixed in
+front, the 3D scene all around, looked around with the head. Points 1 and 2
+above are what it will need.

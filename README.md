@@ -16,8 +16,8 @@ modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 > cockpit and on foot, the UI on a canvas at the angle X4 intended, and every
 > menu reachable and lined up with the cursor, over WiVRn or SteamVR. The
 > external views (F2/F3/F4) are the whole scene too, and the cinematic view
-> (F6) a steady window with its overlay filling it. Open work: the start menu
-> still shows as a window. An earlier proof of
+> (F6) a steady window with its overlay filling it. Next: full 6DOF in the
+> cockpit. The start menu as the whole scene is an optional future feature. An earlier proof of
 > concept using OpenTrack head-tracking + vkShade/SuperDepth3D depth-image
 > reconstruction is preserved
 > at tag `v0.1`; it was abandoned as a dead end (wrong pivot, gimbal lock,
@@ -84,7 +84,7 @@ blocks every frame.
 | **Playable in VR** | **release** | **`v0.9.0`** |
 | F6 (cinematic) a steady window, as X4 intends | done | **`v0.9.4`** |
 | F6's overlay fills its window | done | **`v0.9.5`** |
-| The start menu as the whole scene | open | — |
+| The start menu as the whole scene (menu at its size in front, the 3D scene all around) | optional, future — not scheduled | — |
 | Volumetric nebula in stereo (Matrix #79B, CEO's Doubt) | done | **`v0.9.1`** |
 | The numpad orbits the external (F2) and target (F3) views again | done | **`v0.9.2`** |
 | F2/F3/F4 as the whole scene: the head turns X4's camera inside them | done | **`v0.9.3`** |
