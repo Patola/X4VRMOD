@@ -1415,5 +1415,18 @@ want "head6: never latched -> FAIL" /tmp/census-h6-base.log "FAIL|  - " "the lay
 want "head6: refused -> FAIL" /tmp/census-h6-ref.log "FAIL|  - " "X4VR_HEAD_6DOF REFUSED — it needs X4VR_POSE=1"
 absent "head6: not asked -> silent" "$BASE" head6
 
+# 6DOF option B's check: UI depths.
+if grep -qF '"ui depth (6dof B): %u perspective UI slot(s), "' layer/x4vr_layer.cpp; then
+    ok "ui-depth: the planted line matches the layer's format"
+else
+    bad "ui-depth: the layer's format moved"
+fi
+sed 's/env: run = /env: run = X4VR_DUMP_MATRICES=1 /' "$BASE" > /tmp/census-ud-base.log
+udl='[  999960.000] layer   ui depth (6dof B): 12 perspective UI slot(s), draws by the view depth of their origin — <0.1 m 40 | 0.1-0.5 0 | 0.5-2 0 | 2-20 3 | 20-200 9 | >200 30; nearest 0.0310 m, farthest 5400.0 m'
+{ cat /tmp/census-ud-base.log; printf '%s\n' "$udl" "$udl"; } > /tmp/census-ud-ok.log
+want "ui-depth: samples summed" /tmp/census-ud-ok.log ui-depth "2 sample(s); perspective UI draws by depth <0.1 m 80 | 0.1-0.5 0 | 0.5-2 0 | 2-20 6 | 20-200 18 | >200 60; nearest 0.0310 m, farthest 5400.0 m"
+want "ui-depth: asked, nothing -> FAIL" /tmp/census-ud-base.log "FAIL|  - " "X4VR_DUMP_MATRICES=1 but no UI depth was measured"
+absent "ui-depth: not asked -> silent" "$BASE" ui-depth
+
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

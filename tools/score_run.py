@@ -4698,6 +4698,35 @@ def main(path):
             print("head6  whether leaning moves the eye with the HUD staying "
                   "put, and clicks still lining up, is Patola's to say")
 
+    # --- 6DOF option B's check: how near the eye X4's UI draws sit ---------
+    #
+    # Banded view depths of the perspective UI draws (X4VR_DUMP_MATRICES).
+    # B shifts back only UI geometry near the eye; that is safe only if the
+    # cockpit HUD is the only thing that near.
+    ud = re.findall(r"ui depth \(6dof B\): (\d+) perspective UI slot\(s\), "
+                    r"draws by the view depth of their origin — <0\.1 m (\d+) "
+                    r"\| 0\.1-0\.5 (\d+) \| 0\.5-2 (\d+) \| 2-20 (\d+) \| "
+                    r"20-200 (\d+) \| >200 (\d+); nearest ([\d.]+) m, "
+                    r"farthest ([\d.]+) m", text)
+    ud_asked = bool(re.search(r"\bX4VR_DUMP_MATRICES=1\b", run or ""))
+    if ud:
+        tot = [0] * 6
+        for g in ud:
+            for i in range(6):
+                tot[i] += int(g[1 + i])
+        near = min(float(g[7]) for g in ud)
+        far = max(float(g[8]) for g in ud)
+        print(f"ui-depth  {len(ud)} sample(s); perspective UI draws by depth "
+              f"<0.1 m {tot[0]} | 0.1-0.5 {tot[1]} | 0.5-2 {tot[2]} | 2-20 "
+              f"{tot[3]} | 20-200 {tot[4]} | >200 {tot[5]}; nearest "
+              f"{near:.4f} m, farthest {far:.1f} m")
+    elif ud_asked and "ui mvp #82" in text:
+        print("ui-depth  the #82 instrument ran but no depth sample was "
+              "logged (no perspective UI draw was credited)")
+    elif ud_asked:
+        fails.append("X4VR_DUMP_MATRICES=1 but no UI depth was measured — the "
+                     "matrix instrument never credited a UI draw")
+
     # --- X4VR_DUMP_SHADERS: the modules were written (take 346) -------------
     #
     # Take 346 asked for the dumps; the directory did not exist, the layer

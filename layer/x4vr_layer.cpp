@@ -8229,6 +8229,56 @@ void patch_view_before_submit() {
                              "signal. This is a real answer, not a null: do "
                              "not go looking for a predicate that is not there");
             }
+            // **6DOF option B's check (after take 362): how near the eye do
+            // X4's perspective UI draws sit?** Take 361 moved X4's eye and the
+            // cockpit HUD swung like something ~3 cm away. B moves X4's eye
+            // again and shifts back only UI geometry that near; that is safe
+            // only if nothing else X4 draws through its UI is that near. For a
+            // perspective M_worldviewprojection, m15 is the clip w of the
+            // draw's origin -- its view depth. Banded, every ~10 s, never
+            // latched, so the cockpit, menus and targets are all covered.
+            static uint32_t depth_evals = 0;
+            if (!g_track.obj_credit_ui.empty() && (++depth_evals % 600) == 0) {
+                static const float edges[5] = {0.1f, 0.5f, 2.0f, 20.0f, 200.0f};
+                uint64_t bins[6] = {0, 0, 0, 0, 0, 0};
+                float dmin = 1e30f, dmax = 0.0f;
+                uint32_t nslots = 0;
+                for (auto &[oslot, on] : g_track.obj_credit_ui) {
+                    float *p = obj_slot_host_ptr(oslot);
+                    if (!p)
+                        continue;
+                    const x4vr::Mat4 m = x4vr::load(p + kObjectMvpMember * 16);
+                    const float row3 = std::fabs(m.m[3]) + std::fabs(m.m[7]) +
+                                       std::fabs(m.m[11]);
+                    const float w15 = std::fmax(std::fabs(m.m[15]), 1e-6f);
+                    if (row3 / w15 <= 1e-3f)
+                        continue; // orthographic: screen chrome, no depth
+                    const float dep = std::fabs(m.m[15]);
+                    int b = 0;
+                    while (b < 5 && dep >= edges[b])
+                        b++;
+                    bins[b] += on;
+                    nslots++;
+                    dmin = std::fmin(dmin, dep);
+                    dmax = std::fmax(dmax, dep);
+                }
+                if (nslots)
+                    X4VR_LOG("ui depth (6dof B): %u perspective UI slot(s), "
+                             "draws by the view depth of their origin — "
+                             "<0.1 m %llu | 0.1-0.5 %llu | 0.5-2 %llu | 2-20 "
+                             "%llu | 20-200 %llu | >200 %llu; nearest %.4f m, "
+                             "farthest %.1f m",
+                             nslots, (unsigned long long)bins[0],
+                             (unsigned long long)bins[1],
+                             (unsigned long long)bins[2],
+                             (unsigned long long)bins[3],
+                             (unsigned long long)bins[4],
+                             (unsigned long long)bins[5], dmin, dmax);
+                else
+                    X4VR_LOG("ui depth (6dof B): no perspective UI draw in "
+                             "the %zu canvas-credited slot(s) right now",
+                             g_track.obj_credit_ui.size());
+            }
             if (!obj_logged && (obj_slots || !g_track.obj_ranges.empty())) {
                 obj_logged = true;
                 // The observed (set, range) inventory. The camera block proves
