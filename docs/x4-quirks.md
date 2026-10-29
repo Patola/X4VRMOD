@@ -27570,3 +27570,71 @@ time; A drew 12869 frames.
   * patch X4's steering to take the head angle back out.
   This needs read-only reverse engineering of X4's steering computation
   first, then one code patch for approval.
+
+## Steering mode (b): read-only search of X4's pointer path (2026-10-29)
+
+Patola chose (b): "the ring does everything". Read from X4 9.00's binary;
+the disassembly is in /tmp/x4-re only.
+
+**X4's mouse object.**
+* The object is `in+0x64b8`, where `in` = *0x3daaaf8. `in+0x64b0` points to
+  it, or to the gamepad-emulation object at `in+0x6770` while
+  `in[0x9f41]` is set. Its vtable is 0x3aad678.
+* X4's own debug dump at 0xa81c40 names the accessors ("Dumping mouse
+  information: Mouse position / Centered mouse position / Centered mouse
+  position of last click"):
+  * +0x20/+0x28: position;
+  * +0x30/+0x38: centred position, `pointer(+0x260) − reference(+0x27c)`,
+    returning 0 unless `in[0x9f33]` or `in[0x9f41]`;
+  * +0x40/+0x48: centred position of the last click.
+* The pointer is written only by X4's event loop: motion event x/y at
+  0x72fbaf, converted to int, into `in+0x6718`. That is the channel our SDL
+  shim folds.
+* The reference is set to window/2 by 0xcebd70, which 15 callers invoke on
+  state changes, not every frame.
+
+**Who reads the centred position:**
+* `0x166d236`: ship steering (radius from half the window's smaller side,
+  response curve, invert flags);
+* `0x1934b09` / `0x1934f58`: the cockpit camera's nudge toward the mouse
+  while steering;
+* `0x1d6e080`: **the world pick ray**, built from X4's camera through the
+  centred pointer (window size, camera +0x878/+0x87c/+0x894). Its callers:
+  * two live-pointer callers, hover (0x1257ade, 0x1379ba7);
+  * one last-click caller, click-select (0x13724e9, `cl=1`);
+  * `IsPointingWithinAimingRange`.
+* Others: GetCenteredMousePos (Lua compass), 0xa2ba18 (UI elements), and
+  0x1ef6250 (map pan/rotate).
+
+**So a data-only design fails.** Steering and the pick read the SAME centred
+value. Shifting the pointer and the reference together leaves both
+unchanged; shifting one moves both. One of the two consumers has to be
+patched, and the pick is the one with a single site.
+
+**The patch (proposed, NOT built):** all three paths into the ray (live
+pointer, last click, no mouse) converge at 0x1d6e0e1. There r13d = centred
+x and ebx = centred y, in X4 window pixels.
+* Original 11 bytes: `66 0f ef c0` (pxor xmm0,xmm0) and
+  `0f 28 15 f4 64 0b 01` (movaps xmm2,[0x2e245e0]).
+* New: `e9 rel32` to a stub near the binary, then 6 × `cc`. Only
+  0x1d6e0e1 is a jump target (from 0x1d6e370 and 0x1d6e3b2), so those bytes
+  are never reached.
+* Stub:
+  * `add r13d,[nx]` and `add ebx,[ny]`;
+  * count the calls;
+  * replay the two instructions (the movaps re-encoded rip-relative);
+  * `jmp 0x1d6e0ec`.
+  * Flags are dead (`test rax,rax` at 0x1d6e10f sets them before any use);
+    rax is untouched.
+* `nx, ny` = the nose's position in X4's window pixels: the layer's ring
+  numbers (`nose_ndc`) × (window/2), one 64-bit store per frame on X4's
+  thread.
+* The shift is zero (X4's own behaviour, byte for byte) unless: cockpit, HUD
+  up, mouse steering engaged, target A, real mouse (not pad emulation), and
+  the nose in front of the eye.
+
+**Unknown until a take:**
+* whether gimballed aim and its dots use this ray;
+* whether the layer's field (X4VR_FOV) matches X4's camera +0x878/+0x894
+  exactly. A mismatch would show as hover drifting from the ring as the head
+  turns further.
