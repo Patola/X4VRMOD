@@ -208,6 +208,9 @@ add_executable(x4vr_test_foot foot.cpp)
 add_executable(x4vr_test_extview extview.cpp)
 # X4VR_HEAD_6DOF: the limit. Self-checking.
 add_executable(x4vr_test_head6 head6.cpp)
+# X4VR_STEER_PICK: the pick ray's sites against the real binary, the stub
+# executed, the pixel arithmetic. Self-checking.
+add_executable(x4vr_test_aimpick aimpick.cpp)
 # x4vr_menus.hpp: X4's open-menu table and conversation state, read not called.
 add_executable(x4vr_test_menus menus.cpp)
 # declares_member_name: the fog ray march found by its property name (take 348).

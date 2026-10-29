@@ -1441,6 +1441,40 @@ rhh='[  999970.030] inject  headlook: HELD — X4'"'"'s right-click menu is open
 want "rclick-hold: held -> counted" /tmp/census-rh-ok.log rclick-hold "1 right-click menu opening(s), head-look held for 1"
 { cat /tmp/census-rh-base.log; printf '%s\n' "$rho"; } > /tmp/census-rh-no.log
 want "rclick-hold: not held -> FAIL" /tmp/census-rh-no.log "FAIL|  - " "1 right-click menu opening(s) without head-look held"
+# X4VR_STEER_PICK: X4's targeting at the steering ring (take 367).
+for f in '"aimpick: PATCHED — X4' '"aimpick: ON #%u — X4' '"aimpick: OFF #%u after %.1f s — %s; X4' "time(s) in the period, %llu shifted\"" '"aimpick: patch REFUSED — %s. X4 targets'; do
+    if grep -qF "$f" injector/x4vr_inject.cpp; then
+        ok "aimpick: the injector still prints $f"
+    else
+        bad "aimpick: the injector's format moved: $f"
+    fi
+done
+sed 's/env: run = /env: run = X4VR_STEER_PICK=1 /' "$BASE" > /tmp/census-ap-base.log
+app='[  999950.000] inject  aimpick: PATCHED — X4'"'"'s pick ray (0x1d6e080: hover, click-select, IsPointingWithinAimingRange) goes through a 60-byte stub at 0x3e0000'
+apr='[  999960.000] inject  steer: mouse steering engaged — pointer recentred from 1,2 to 1408,1408 so the ship starts straight'
+apon='[  999960.050] inject  aimpick: ON #1 — X4'"'"'s targeting follows the ring: shift -731,+418 px (nose -0.519,0.297 NDC)'
+apmid='[  999965.050] inject  aimpick: ON #1 5 s — shift -700,+400 px; the ray ran 200 time(s), 199 shifted'
+apoff='[  999967.050] inject  aimpick: OFF #1 after 7.0 s — mouse steering off, or not the cockpit with the HUD; X4'"'"'s own targeting. The ray ran 280 time(s) in the period, 279 shifted'
+apoff0='[  999967.050] inject  aimpick: OFF #1 after 7.0 s — mouse steering off, or not the cockpit with the HUD; X4'"'"'s own targeting. The ray ran 280 time(s) in the period, 0 shifted'
+{ cat /tmp/census-ap-base.log; printf '%s\n' "$app" "$apr" "$apon" "$apmid" "$apoff"; } > /tmp/census-ap-ok.log
+want "aimpick: a healthy period -> summarised" /tmp/census-ap-ok.log aimpick "1 period(s) with X4's targeting at the ring; the ray ran 280 time(s) in them, 279 shifted"
+if python3 tools/score_run.py /tmp/census-ap-ok.log 2>&1 | grep -qE "^  - .*(aimpick|STEER_PICK|targeting)"; then
+    bad "aimpick: a healthy period -> FAILs"
+else
+    ok "aimpick: a healthy period -> no FAIL"
+fi
+{ cat /tmp/census-ap-base.log; printf '%s\n' "$app" "$apr" "$apon"; } > /tmp/census-ap-open.log
+want "aimpick: a period open at exit -> listed, not failed" /tmp/census-ap-open.log aimpick "ended: open at exit"
+{ cat /tmp/census-ap-base.log; printf '%s\n' "$app" "$apr" "$apon" "$apoff0"; } > /tmp/census-ap-zero.log
+want "aimpick: on 7 s, never shifted -> FAIL" /tmp/census-ap-zero.log "FAIL|  - " "the stub never shifted X4's ray — patched, not executed"
+{ cat /tmp/census-ap-base.log; printf '%s\n' "$app" "$apr"; } > /tmp/census-ap-never.log
+want "aimpick: steering but never ON -> FAIL" /tmp/census-ap-never.log "FAIL|  - " "X4's targeting never moved to the ring"
+{ cat /tmp/census-ap-base.log; echo '[  999950.000] inject  aimpick: patch REFUSED — the pick ray'"'"'s code at 0x1d6e0c2 differs from X4 9.00. X4 targets as it always has: at the gaze plus the pointer'"'"'s offset.'; } > /tmp/census-ap-ref.log
+want "aimpick: refused -> FAIL" /tmp/census-ap-ref.log "FAIL|  - " "X4VR_STEER_PICK=1 but the patch was REFUSED — the pick ray's code at 0x1d6e0c2 differs from X4 9.00"
+want "aimpick: asked, no PATCHED line -> FAIL" /tmp/census-ap-base.log "FAIL|  - " "X4VR_STEER_PICK=1 but the patch was never reported PATCHED"
+{ cat "$BASE"; printf '%s\n' "$app"; } > /tmp/census-ap-unasked.log
+want "aimpick: patched unasked -> FAIL" /tmp/census-ap-unasked.log "FAIL|  - " "the targeting patch acted in a run that did not ask for it"
+absent "aimpick: not asked -> silent" "$BASE" aimpick
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

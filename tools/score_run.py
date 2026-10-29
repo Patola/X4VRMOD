@@ -5275,6 +5275,78 @@ def main(path):
         print(f"steer   not asked; mousesteeringline restored to "
               f"'{st_rest.group(2)}' from the overlay's earlier run")
 
+    # --- X4VR_STEER_PICK: X4's targeting at the steering ring ---------------
+    #
+    # A stub at 0x1d6e0e1 adds the ring's nose (X4's window pixels) to the
+    # centred pointer X4's pick ray reads -- hover, click-select -- while
+    # mouse steering is engaged in the cockpit (injector/x4vr_aimpick.hpp).
+    # Gate on intent: asked means PATCHED, a steering run must switch the
+    # shift on, and a period that lasted must show the stub SHIFTING the ray:
+    # patched is not executed.
+    ap_asked = bool(re.search(r"\bX4VR_STEER_PICK=1\b", run or ""))
+    ap_patched = "aimpick: PATCHED" in text
+    ap_refused = re.search(r"aimpick: patch REFUSED — (.*?)\. X4 targets",
+                           text)
+    ap_on = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+aimpick: ON #(\d+) — "
+                       r"X4's targeting follows the ring: shift ([+-]\d+),"
+                       r"([+-]\d+) px", text)
+    ap_off = {int(n): (float(d), why, int(c), int(k))
+              for n, d, why, c, k in re.findall(
+                  r"aimpick: OFF #(\d+) after ([\d.]+) s — (.*?); X4's own "
+                  r"targeting\. The ray ran (\d+) time\(s\) in the period, "
+                  r"(\d+) shifted", text)}
+    ap_per = {}
+    for n, d, c, k in re.findall(
+            r"aimpick: ON #(\d+) (\d+) s — shift [+-]\d+,[+-]\d+ px; the ray "
+            r"ran (\d+) time\(s\), (\d+) shifted", text):
+        ap_per[int(n)] = (float(d), int(c), int(k))
+    if ap_asked or ap_patched or ap_on:
+        if ap_asked and not ap_patched:
+            fails.append("X4VR_STEER_PICK=1 but the patch was "
+                         + ("REFUSED — " + ap_refused.group(1) if ap_refused
+                            else "never reported PATCHED"))
+        if not ap_asked and (ap_patched or ap_on):
+            fails.append("the targeting patch acted in a run that did not "
+                         "ask for it (X4VR_STEER_PICK)")
+        tot_c = tot_k = 0
+        for i, (t, n, dx, dy) in enumerate(ap_on):
+            n = int(n)
+            if n in ap_off:
+                dur, why, c, k = ap_off[n]
+            elif n in ap_per:
+                dur, c, k = ap_per[n]
+                why = "open at exit"
+            else:
+                dur, c, k, why = None, 0, 0, "open at exit"
+            tot_c += c
+            tot_k += k
+            if i < 20:
+                print(f"aimpick  #{n:<3d} t {float(t):10.1f}  first shift "
+                      f"{dx},{dy} px  "
+                      + (f"{dur:6.1f} s" if dur is not None else "     ? s")
+                      + f"  ray {c} / shifted {k}  ended: {why}")
+            # Two seconds: a head held within half a pixel of straight
+            # shifts by (0,0), which the stub rightly does not count.
+            if dur is not None and dur >= 2.0 and k == 0:
+                fails.append(f"aimpick period {n}: {dur:.1f} s with the "
+                             f"shift on and the stub never shifted X4's ray "
+                             f"— patched, not executed")
+        if ap_patched:
+            print(f"aimpick  {len(ap_on)} period(s) with X4's targeting at "
+                  f"the ring; the ray ran {tot_c} time(s) in them, {tot_k} "
+                  f"shifted")
+        if ap_asked and ap_patched and st_rec and not ap_on:
+            fails.append(f"X4VR_STEER_PICK=1: mouse steering engaged "
+                         f"{len(st_rec)} time(s) and X4's targeting never "
+                         f"moved to the ring")
+        if ap_patched and not st_rec:
+            print("aimpick  no mouse steering in this run, so targeting at "
+                  "the ring was not exercised")
+        if ap_on:
+            print("aimpick  whether highlight and click-select land on the "
+                  "ring is Patola's to say; this says the stub shifted X4's "
+                  "ray")
+
     # --- foot: X4VR_FOOTLOG=1, what X4's player camera does out of the seat
     #
     # Read-only census (injector/x4vr_foot.hpp). Each second: the player's

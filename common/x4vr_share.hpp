@@ -27,6 +27,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 
 namespace x4vr {
 
@@ -50,7 +51,9 @@ constexpr uint32_t kShareMagic = 0x52565834u;
 //     (X4VR_HEADLOOK_EXTERNAL).
 // 11: `cinematic_ui`, the cinematic view's overlay at the full window
 //     (take 357).
-constexpr uint32_t kShareVersion = 11u;
+// 12: HeadShared's `steer_nose`, the steering ring's nose for X4's pick ray
+//     (X4VR_STEER_PICK).
+constexpr uint32_t kShareVersion = 12u;
 
 struct Shared {
     uint32_t magic = kShareMagic;
@@ -413,7 +416,49 @@ struct HeadShared {
     // "the layer stopped publishing". Those look identical in the angles and
     // want opposite responses.
     std::atomic<uint64_t> updates{0};
+
+    // X4VR_STEER_PICK: where the layer put the steering ring's nose this
+    // frame, in eye NDC (x right, y down) -- the numbers the ring is drawn
+    // with -- as two floats in one word, so a reader never pairs an x with
+    // another frame's y. `steer_nose_on` is 0 whenever the ring was not
+    // drawn as A (no steering line, a canvas menu, the nose behind the eye).
+    // `steer_nose_frames` counts publications, so a layer that stopped
+    // publishing reads as stale rather than as a nose held still.
+    std::atomic<uint64_t> steer_nose{0};
+    std::atomic<uint32_t> steer_nose_on{0};
+    std::atomic<uint64_t> steer_nose_frames{0};
 };
+
+inline void steer_nose_write(HeadShared *s, bool on, float x, float y) {
+    if (!s)
+        return;
+    uint32_t bx = 0, by = 0;
+    if (on) {
+        memcpy(&bx, &x, 4);
+        memcpy(&by, &y, 4);
+    }
+    s->steer_nose.store((uint64_t)bx | ((uint64_t)by << 32),
+                        std::memory_order_relaxed);
+    s->steer_nose_on.store(on ? 1u : 0u, std::memory_order_release);
+    s->steer_nose_frames.fetch_add(1, std::memory_order_release);
+}
+
+// False when the layer drew no A ring at its last publication; `*frames` is
+// the publication count either way.
+inline bool steer_nose_read(const HeadShared *s, float *x, float *y,
+                            uint64_t *frames) {
+    if (!s || s->magic != kShareMagic || s->version != kShareVersion)
+        return false;
+    if (frames)
+        *frames = s->steer_nose_frames.load(std::memory_order_acquire);
+    if (!s->steer_nose_on.load(std::memory_order_acquire))
+        return false;
+    const uint64_t v = s->steer_nose.load(std::memory_order_relaxed);
+    const uint32_t bx = (uint32_t)(v & 0xffffffffu), by = (uint32_t)(v >> 32);
+    memcpy(x, &bx, 4);
+    memcpy(y, &by, 4);
+    return true;
+}
 
 inline void head_share_write(HeadShared *s, float yaw, float pitch, bool valid) {
     if (!s)

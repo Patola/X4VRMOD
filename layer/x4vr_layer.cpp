@@ -10373,14 +10373,30 @@ bool cursor_canvas() {
 // steering line (`steer_line`) and a mode is in force; the nose comes from
 // X4's camera as stamped at this frame's first render pass -- the rotation
 // the frame was drawn with -- projected at the field the eye was rendered at.
+//
+// X4VR_STEER_PICK: the nose is also published to the injector (HeadShared's
+// `steer_nose`), so X4's pick ray goes through the ring as drawn; "off"
+// whenever no A ring is drawn this frame, a canvas menu included -- the
+// overlay ignores the target under a canvas map.
+static void steer_nose_publish(bool on, float x, float y) {
+    static auto head_fn =
+        (x4vr::HeadShared * (*)())dlsym(RTLD_DEFAULT, "x4vr_head_state");
+    if (head_fn)
+        x4vr::steer_nose_write(head_fn(), on, x, y);
+}
+
 const x4vr::steer::Frame *steer_frame_now(x4vr::steer::Frame *out) {
     const x4vr::Shared *s = shared_state();
-    if (!s || !out)
+    if (!s || !out) {
+        steer_nose_publish(false, 0.f, 0.f);
         return nullptr;
+    }
     const uint32_t mode = s->steer_mode.load(std::memory_order_relaxed);
     if (mode == x4vr::steer::kOff ||
-        !s->steer_line.load(std::memory_order_relaxed))
+        !s->steer_line.load(std::memory_order_relaxed)) {
+        steer_nose_publish(false, 0.f, 0.f);
         return nullptr;
+    }
     static const float tan_half = [] {
         const char *fe = getenv("X4VR_FOV");
         return std::tan(x4vr::x4_half_for_fov(fe ? strtof(fe, nullptr) : 0.0f));
@@ -10397,6 +10413,7 @@ const x4vr::steer::Frame *steer_frame_now(x4vr::steer::Frame *out) {
     out->mode = (x4vr::steer::Mode)mode;
     out->nose_ok = have && x4vr::steer::nose_ndc(yaw, pitch, tan_half, tan_half,
                                                  &out->nose_x, &out->nose_y);
+    steer_nose_publish(out->nose_ok && !cursor_canvas(), out->nose_x, out->nose_y);
     return out;
 }
 

@@ -52,6 +52,7 @@ extern char **environ;
 #include "../common/x4vr_steer.hpp"
 #include "x4vr_foot.hpp"
 #include "x4vr_extview.hpp"
+#include "x4vr_aimpick.hpp"
 #include "x4vr_menus.hpp"
 #include "x4vr_config.hpp"
 #include "x4vr_inputmap.hpp"
@@ -1122,6 +1123,7 @@ extern "C" {
 static void csmfit_patch_at_start(); // defined with csmfit_tick, below
 static void foot_patch_at_start();   // X4VR_HEADLOOK_FOOT, with foot_tick
 static void extview_patch_at_start(); // X4VR_HEADLOOK_EXTERNAL
+static void aimpick_patch_at_start(); // X4VR_STEER_PICK
 
 __attribute__((constructor)) static void x4vr_inject_init() {
     char exe[256] = "?";
@@ -1138,6 +1140,8 @@ __attribute__((constructor)) static void x4vr_inject_init() {
         foot_patch_at_start();
         // The external views: the same rule.
         extview_patch_at_start();
+        // X4's targeting at the steering ring: the same rule.
+        aimpick_patch_at_start();
     }
     // Task #68: the parsed clamp, once X4 has had time to parse it. A delay
     // rather than a hook, because the parse has no seam we can name -- and if
@@ -1596,6 +1600,8 @@ bool input_fold() {
 // gamescope asks for the same information about its own 2816-wide surface, so
 // this is recorded only when the caller is the game.
 std::atomic<int> g_x4_win_w{0};
+// Its height, which the halving leaves alone (X4VR_STEER_PICK's pixels).
+std::atomic<int> g_x4_win_h{0};
 
 // Mouse-look. X4 switches the pointer to relative mode when it takes the
 // camera, and in that mode positions are not what it steers by -- it integrates
@@ -4666,6 +4672,152 @@ static void steer_recentre() {
                  have ? "" : "(unknown) ", px, py, cx, cy);
 }
 
+// ------------------------------------------------ X4VR_STEER_PICK=1
+//
+// In mouse steering, X4 targets where the ring is drawn (x4vr_aimpick.hpp;
+// Patola chose it after take 366, "the ring does everything"). X4's pick ray
+// (0x1d6e080) and its steering read the same centred pointer, so the ray --
+// hover and click-select -- is given the nose's position on top of it while
+// the steering is left exactly as X4 wrote it. Patched at start like the
+// others; the shift is published each steering tick and is zero otherwise.
+static bool aimpick_asked() {
+    static const bool on = x4vr::env_on("X4VR_STEER_PICK", false);
+    return on;
+}
+namespace {
+struct AimPatch {
+    bool patched = false;
+};
+AimPatch g_aimpatch;
+x4vr::aimpick::Slot g_aimslot;
+} // namespace
+
+static void aimpick_patch_at_start() {
+    using namespace x4vr::aimpick;
+    if (!aimpick_asked())
+        return;
+    auto refuse = [](const char *why) {
+        X4VR_LOG("aimpick: patch REFUSED — %s. X4 targets as it always has: "
+                 "at the gaze plus the pointer's offset.", why);
+        X4VR_LOG("milestone: targeting at the ring REFUSED — %s. Quit and "
+                 "tell me.", why);
+    };
+    if (steer_asked_mode() == x4vr::steer::kOff) {
+        refuse("X4VR_STEER_PICK needs the steering ring, X4VR_STEER=a");
+        return;
+    }
+    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    uintptr_t bad = 0;
+    if (!verify_sites(rd, &bad)) {
+        char why[160];
+        snprintf(why, sizeof why,
+                 "the pick ray's code at %#lx differs from X4 9.00",
+                 (unsigned long)bad);
+        refuse(why);
+        return;
+    }
+    const uintptr_t site = kPatch;
+    uint8_t *page = (uint8_t *)x4vr::csmfit::alloc_near(0x3f0000, 0x7c00000,
+                                                        &site, 1, 5);
+    if (!page) {
+        refuse("no free page within rel32 reach of 0x1d6e0e1");
+        return;
+    }
+    uint8_t code[kStubMax];
+    const size_t len = make_stub(code, (uintptr_t)page, (uintptr_t)&g_aimslot,
+                                 kConst, kCont);
+    uint8_t jmp[kPatchLen];
+    if (!len || !patch_bytes((uintptr_t)page, jmp)) {
+        refuse("the stub is out of rel32 reach of 0x1d6e0e1");
+        return;
+    }
+    memcpy(page, code, len);
+    const long pgsz = sysconf(_SC_PAGESIZE);
+    if (mprotect(page, (size_t)pgsz, PROT_READ | PROT_EXEC) != 0) {
+        refuse("mprotect(rx) of the stub failed");
+        return;
+    }
+    // X4 has run no frame yet, so no thread is inside the 11 bytes.
+    char err[200] = "";
+    if (!x4vr::foot::patch_code(kPatch, jmp, kPatchLen, err, sizeof err)) {
+        refuse(err);
+        return;
+    }
+    g_aimpatch.patched = true;
+    X4VR_LOG("aimpick: PATCHED — X4's pick ray (0x1d6e080: hover, click-select, "
+             "IsPointingWithinAimingRange) goes through a %zu-byte stub at %p "
+             "at 0x1d6e0e1, which adds the published shift to the centred "
+             "pointer; the shift is the steering ring's nose while mouse "
+             "steering is engaged in the cockpit, zero otherwise (X4's own "
+             "targeting). X4's steering reads the pointer elsewhere and is "
+             "untouched",
+             len, (void *)page);
+}
+
+// Each steering tick: the shift the stub adds -- the nose the layer drew the
+// ring from, in X4's window pixels -- while `want` (mouse steering engaged in
+// the cockpit with the HUD up, X4's real mouse rather than the pad's
+// emulated one) and the layer drew an A ring this frame; zero otherwise.
+static void aimpick_tick(bool want) {
+    using namespace x4vr::aimpick;
+    if (!g_aimpatch.patched)
+        return;
+    static x4vr::HeadShared *hs = x4vr_head_state();
+    float nx = 0.f, ny = 0.f;
+    uint64_t frames = 0;
+    const bool nose = x4vr::steer_nose_read(hs, &nx, &ny, &frames);
+    // A layer that stopped publishing is not a nose held still.
+    static uint64_t last_frames = 0;
+    static double moved_at = 0.0;
+    const double now = mono_seconds();
+    if (frames != last_frames) {
+        last_frames = frames;
+        moved_at = now;
+    }
+    const bool fresh = frames != 0 && now - moved_at < 0.25;
+    int32_t dx = 0, dy = 0;
+    const bool px = shift_px(nx, ny, g_x4_win_w.load(std::memory_order_relaxed),
+                             g_x4_win_h.load(std::memory_order_relaxed), &dx, &dy);
+    const bool on = want && nose && fresh && px;
+    g_aimslot.shift.store(on ? pack(dx, dy) : 0, std::memory_order_relaxed);
+
+    static bool was_on = false;
+    static unsigned periods = 0;
+    static uint64_t calls0 = 0, shifted0 = 0;
+    static double t0 = 0.0, last_line = 0.0;
+    const uint64_t calls = g_aimslot.calls.load(std::memory_order_relaxed);
+    const uint64_t shifted = g_aimslot.shifted.load(std::memory_order_relaxed);
+    if (on && !was_on) {
+        periods++;
+        calls0 = calls;
+        shifted0 = shifted;
+        t0 = last_line = now;
+        if (periods <= 200)
+            X4VR_LOG("aimpick: ON #%u — X4's targeting follows the ring: shift "
+                     "%+d,%+d px (nose %.3f,%.3f NDC)",
+                     periods, dx, dy, nx, ny);
+    } else if (!on && was_on) {
+        const char *why = !want    ? "mouse steering off, or not the cockpit with the HUD"
+                          : !fresh ? "the layer stopped publishing the nose"
+                          : !nose  ? "no ring drawn as A: the nose behind the eye, or a menu"
+                                   : "X4's window size unknown";
+        if (periods <= 200)
+            X4VR_LOG("aimpick: OFF #%u after %.1f s — %s; X4's own targeting. "
+                     "The ray ran %llu time(s) in the period, %llu shifted",
+                     periods, now - t0, why,
+                     (unsigned long long)(calls - calls0),
+                     (unsigned long long)(shifted - shifted0));
+    } else if (on && now - last_line >= 5.0 && periods <= 200) {
+        last_line = now;
+        X4VR_LOG("aimpick: ON #%u %.0f s — shift %+d,%+d px; the ray ran %llu "
+                 "time(s), %llu shifted",
+                 periods, now - t0, dx, dy,
+                 (unsigned long long)(calls - calls0),
+                 (unsigned long long)(shifted - shifted0));
+    }
+    was_on = on;
+}
+
 static void steer_tick() {
     if (!steer_hide_x4_line())
         return;
@@ -4689,7 +4841,7 @@ static void steer_tick() {
     // up. Not the full line predicate -- its other flags are not known to be
     // steady during flight, and a recentre on their flicker would yank the
     // pointer mid-turn.
-    bool engaged = false;
+    bool engaged = false, real_mouse = false;
     if (cockpit && hud) {
         using namespace x4vr::steer;
         uintptr_t in = 0;
@@ -4704,8 +4856,12 @@ static void steer_tick() {
             f.a010 = blk[kA010 - kActive];
             shown = line_shown(f);
             engaged = f.active || f.active2;
+            // X4's own mouse, not the pad's emulated one: under emulation
+            // the pointer object is another (in+0x6770), unanalysed.
+            real_mouse = blk[0x9f41 - kActive] == 0;
         }
     }
+    aimpick_tick(engaged && real_mouse);
     static bool was_engaged = false;
     if (engaged && !was_engaged)
         steer_recentre();
@@ -7434,6 +7590,8 @@ int SDL_GetWindowSize(void *win, int *w, int *h) {
         note_window_size("SDL_GetWindowSize", *w, *h, cut);
     if (w && *w > 1 && this_is_the_game())
         g_x4_win_w.store(*w, std::memory_order_relaxed);
+    if (h && *h > 1 && this_is_the_game())
+        g_x4_win_h.store(*h, std::memory_order_relaxed);
     return r;
 }
 

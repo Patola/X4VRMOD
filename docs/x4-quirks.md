@@ -27638,3 +27638,41 @@ x and ebx = centred y, in X4 window pixels.
 * whether the layer's field (X4VR_FOV) matches X4's camera +0x878/+0x894
   exactly. A mismatch would show as hover drifting from the ring as the head
   turns further.
+
+## Take 367 — PREDICTIONS (written before the run): X4's targeting at the ring
+
+Patola approved the patch proposed above (2026-10-29), built as
+`X4VR_STEER_PICK=1` (injector/x4vr_aimpick.hpp):
+* The site check covers X4's live path, merge point, last-click path,
+  no-mouse path and the use of r13d/ebx. Each jump decodes to 0x1d6e0e1.
+* The 60-byte stub's disassembly was checked. tests/aimpick.cpp EXECUTES it,
+  with and without a shift, and checks xmm0, xmm2 and r11 against what X4
+  leaves.
+* The layer publishes the ring's nose each frame (HeadShared `steer_nose`,
+  share version 12), "off" when no A ring is drawn (a canvas menu, the nose
+  behind the eye).
+* Each steering tick, the injector turns it into X4's window pixels.
+* Scorer block `aimpick`; 10 planted cases.
+
+Take 366's line plus `X4VR_STEER_PICK=1`:
+
+    X4VR_HEADLOOK_LAGLOG=1 X4VR_TAKE=367 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take367.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_STEER_PICK=1 X4VR_FOOTLOG=1 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P367.1 Highlight at the ring.** Steering, head turned ~30°, the ring on
+  an object highlights it (its brackets' corners move out). Nothing
+  highlights where he looks.
+* **P367.2 Click at the ring.** A left click there selects that object. A
+  right click opens its menu for that object.
+* **P367.3 Steering unchanged.** The ship turns the way the ring's line
+  points, as before. The pick is the only consumer patched.
+* **P367.4 Mouse mode unchanged** (the shift is zero there).
+* **Open, observation only:** whether the gimbal dots and gimballed aim move
+  to the ring. If they keep following the gaze, they do not use 0x1d6e080,
+  and their source is the next search.
+* **Most likely to be wrong:**
+  * a hover path that does not go through 0x1d6e080. The scorer would then
+    show the stub shifting while he sees no change.
+  * a crash at start, from the patch itself. The journal and the log's last
+    line would show it.
+* Scorer: `aimpick` PATCHED, an ON period per steering engagement, each one
+  shifting the ray.
