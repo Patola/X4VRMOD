@@ -53,6 +53,7 @@ extern char **environ;
 #include "x4vr_foot.hpp"
 #include "x4vr_extview.hpp"
 #include "x4vr_aimpick.hpp"
+#include "x4vr_uiray.hpp"
 #include "x4vr_menus.hpp"
 #include "x4vr_config.hpp"
 #include "x4vr_inputmap.hpp"
@@ -1124,6 +1125,7 @@ static void csmfit_patch_at_start(); // defined with csmfit_tick, below
 static void foot_patch_at_start();   // X4VR_HEADLOOK_FOOT, with foot_tick
 static void extview_patch_at_start(); // X4VR_HEADLOOK_EXTERNAL
 static void aimpick_patch_at_start(); // X4VR_STEER_PICK
+static void uiray_patch_at_start();   // X4VR_HUD_RAY
 
 __attribute__((constructor)) static void x4vr_inject_init() {
     char exe[256] = "?";
@@ -1142,6 +1144,8 @@ __attribute__((constructor)) static void x4vr_inject_init() {
         extview_patch_at_start();
         // X4's targeting at the steering ring: the same rule.
         aimpick_patch_at_start();
+        // X4's UI casts at the drawn HUD: the same rule.
+        uiray_patch_at_start();
     }
     // Task #68: the parsed clamp, once X4 has had time to parse it. A delay
     // rather than a hook, because the parse has no seam we can name -- and if
@@ -4952,6 +4956,164 @@ static void load_recentre_tick() {
              have ? "" : "(unknown) ", px, py, cx, cy);
 }
 
+// ------------------------------------------------ X4VR_HUD_RAY=1
+//
+// X4's HUD and its other perspective UI take hover and clicks where they are
+// DRAWN (x4vr_uiray.hpp; option A, the route take 370 found). X4 casts its
+// world pick ray twice per hover and per click -- filter 0x18 for the world,
+// 0x17 for its UI. While the cursor is drawn raw over a canvas-mapped UI,
+// the two UI casts get the same ray through the pointer divided by the
+// canvas factors; the world casts keep X4's ray. Patched at start; the slot
+// is published each pump and is off under a canvas menu.
+static bool uiray_asked() {
+    static const bool on = x4vr::env_on("X4VR_HUD_RAY", false);
+    return on;
+}
+namespace {
+struct UiRayPatch {
+    bool patched = false;
+};
+UiRayPatch g_uiraypatch;
+x4vr::uiray::Slot g_uirayslot;
+} // namespace
+
+static void uiray_patch_at_start() {
+    using namespace x4vr::uiray;
+    if (!uiray_asked())
+        return;
+    auto refuse = [](const char *why) {
+        X4VR_LOG("uiray: patch REFUSED — %s. X4's HUD keeps answering at its "
+                 "own scale, about twice as far out as it is drawn.", why);
+        X4VR_LOG("milestone: HUD clicks at the drawn HUD REFUSED — %s. Quit "
+                 "and tell me.", why);
+    };
+    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    uintptr_t bad = 0;
+    if (!verify_sites(rd, &bad)) {
+        char why[160];
+        snprintf(why, sizeof why,
+                 "the pick ray's or a UI cast's code at %#lx differs from X4 9.00",
+                 (unsigned long)bad);
+        refuse(why);
+        return;
+    }
+    float k = 0.f;
+    if (!self_read(kRayLength, &k, 4) || !(k > 0.f)) {
+        refuse("X4's ray length at 0x2d67c18 is unreadable");
+        return;
+    }
+    g_uirayslot.k = k;
+    const uintptr_t sites[3] = {kPatchA, kPatchHover, kPatchClick};
+    uint8_t *page = (uint8_t *)x4vr::csmfit::alloc_near(0x3f0000, 0x7c00000,
+                                                        sites, 3, 5);
+    if (!page) {
+        refuse("no free page within rel32 reach of the three sites");
+        return;
+    }
+    uint8_t a[kStubMax], b1[kStubMax], b2[kStubMax];
+    uint8_t *const sa = page, *const sh = page + 512, *const sc = page + 1024;
+    const size_t la = make_stub_a(a, (uintptr_t)sa, (uintptr_t)&g_uirayslot, kContA);
+    const size_t lh = make_stub_b(b1, (uintptr_t)sh, (uintptr_t)&g_uirayslot,
+                                  kPatchHover + kPatchBLen);
+    const size_t lc = make_stub_b(b2, (uintptr_t)sc, (uintptr_t)&g_uirayslot,
+                                  kPatchClick + kPatchBLen);
+    uint8_t pa[kPatchALen], ph[kPatchBLen], pc[kPatchBLen];
+    if (!la || !lh || !lc || !patch_bytes(kPatchA, kPatchALen, (uintptr_t)sa, pa) ||
+        !patch_bytes(kPatchHover, kPatchBLen, (uintptr_t)sh, ph) ||
+        !patch_bytes(kPatchClick, kPatchBLen, (uintptr_t)sc, pc)) {
+        refuse("a stub is out of rel32 reach of its site");
+        return;
+    }
+    memcpy(sa, a, la);
+    memcpy(sh, b1, lh);
+    memcpy(sc, b2, lc);
+    const long pgsz = sysconf(_SC_PAGESIZE);
+    if (mprotect(page, (size_t)pgsz, PROT_READ | PROT_EXEC) != 0) {
+        refuse("mprotect(rx) of the stubs failed");
+        return;
+    }
+    // X4 has run no frame yet, so no thread is inside the patched bytes.
+    char err[200] = "";
+    if (!x4vr::foot::patch_code(kPatchA, pa, kPatchALen, err, sizeof err) ||
+        !x4vr::foot::patch_code(kPatchHover, ph, kPatchBLen, err, sizeof err) ||
+        !x4vr::foot::patch_code(kPatchClick, pc, kPatchBLen, err, sizeof err)) {
+        refuse(err);
+        return;
+    }
+    g_uiraypatch.patched = true;
+    X4VR_LOG("uiray: PATCHED — X4's pick ray (0x1d6e080) also builds a UI ray "
+             "through the pointer divided by the canvas factors (a %zu-byte "
+             "stub at 0x1d6e2b8, K %.0f), and its two UI casts (filter 0x17: "
+             "hover 0x137a1d0, click 0x1372a0b, %zu-byte stubs) take it while "
+             "the cursor is drawn raw; the world casts (0x18) keep X4's ray",
+             la, (double)k, lh);
+}
+
+// Each pump: 1/A while the layer says the cursor is drawn raw over a
+// canvas-mapped UI, off otherwise (X4's own ray for every cast).
+static void uiray_tick() {
+    using namespace x4vr::uiray;
+    if (!g_uiraypatch.patched)
+        return;
+    static x4vr::HeadShared *hs = x4vr_head_state();
+    float ax = 1.f, ay = 1.f;
+    uint64_t frames = 0;
+    const bool raw = x4vr::ui_canvas_read(hs, &ax, &ay, &frames);
+    static uint64_t last_frames = 0;
+    static double moved_at = 0.0;
+    const double now = mono_seconds();
+    if (frames != last_frames) {
+        last_frames = frames;
+        moved_at = now;
+    }
+    const bool fresh = frames != 0 && now - moved_at < 0.25;
+    const float sx = unscale_of(ax), sy = unscale_of(ay);
+    const bool on = raw && fresh && (sx != 1.f || sy != 1.f);
+    if (on) {
+        g_uirayslot.scale.store(pack2(sx, sy), std::memory_order_relaxed);
+        g_uirayslot.on.store(1, std::memory_order_release);
+    } else {
+        g_uirayslot.on.store(0, std::memory_order_release);
+    }
+
+    static bool was_on = false;
+    static unsigned periods = 0;
+    static uint64_t b0 = 0, s0 = 0, p0 = 0;
+    static double t0 = 0.0, last_line = 0.0;
+    const uint64_t built = g_uirayslot.built.load(std::memory_order_relaxed);
+    const uint64_t swapped = g_uirayslot.swapped.load(std::memory_order_relaxed);
+    const uint64_t passed = g_uirayslot.passed.load(std::memory_order_relaxed);
+    if (on && !was_on) {
+        periods++;
+        b0 = built;
+        s0 = swapped;
+        p0 = passed;
+        t0 = last_line = now;
+        if (periods <= 300)
+            X4VR_LOG("uiray: ON #%u — X4's UI casts take the ray through the "
+                     "pointer x%.4f,%.4f (canvas map %.4f,%.4f)",
+                     periods, sx, sy, ax, ay);
+    } else if (!on && was_on) {
+        const char *why = !fresh ? "the layer stopped publishing"
+                          : !raw ? "the cursor is drawn through the canvas (a menu)"
+                                 : "no canvas map";
+        if (periods <= 300)
+            X4VR_LOG("uiray: OFF #%u after %.1f s — %s; X4's own ray. UI rays "
+                     "built %llu, UI casts on them %llu, on X4's ray %llu",
+                     periods, now - t0, why, (unsigned long long)(built - b0),
+                     (unsigned long long)(swapped - s0),
+                     (unsigned long long)(passed - p0));
+    } else if (on && now - last_line >= 10.0 && periods <= 300) {
+        last_line = now;
+        X4VR_LOG("uiray: ON #%u %.0f s — UI rays built %llu, UI casts on them "
+                 "%llu, on X4's ray %llu",
+                 periods, now - t0, (unsigned long long)(built - b0),
+                 (unsigned long long)(swapped - s0),
+                 (unsigned long long)(passed - p0));
+    }
+    was_on = on;
+}
+
 static void steer_tick() {
     if (!steer_hide_x4_line())
         return;
@@ -7807,6 +7969,7 @@ void SDL_PumpEvents(void) {
         load_recentre_tick();
         hoverlog_tick();
         steer_tick();
+        uiray_tick();
         pumprate_report();
     }
     real_fn();

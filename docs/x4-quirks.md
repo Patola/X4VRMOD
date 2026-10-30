@@ -27977,3 +27977,97 @@ with the pointer's offset from the centre. Take 369's line, with
   raw pointer to list every instruction that reads it.
 * Control: hovering a ship fills a record with that ship's component at its
   distance.
+
+## Take 370 — SCORED PASS (2026-10-30): a HUD highlight IS a raycast hit, in X4's UI cast
+
+WiVRn, configuration 5. Patola hovered the five comms choices with his
+Cobra, first where they are drawn and then where they highlight. Then he
+hovered the Cobra, clicked it, deselected, and did it again.
+
+`score_run.py` PASS:
+* `pointer recentred after 1 load(s): from 1374,1636`;
+* `hover 61 change line(s); 1 distinct record-A component(s), 3 record-B`.
+
+**P370.1 HELD.**
+* Hovering the Cobra (232551–232556) filled hit record **B** (+0x6c50) with
+  its component at d 0.63, then with one at d 0.022.
+* During comms (232570–232661), record **A** (+0x6bd0) switched between
+  component 0x7e20ac691c80 at **d 0.000** and empty. It was set only with the
+  pointer at (-35..-205, +431..+705), the 2x band where choices highlight,
+  and empty between rows. Over the drawn choices (232561–232570) it stayed
+  empty, so no line was logged.
+* Control: the ESC menu's buttons set the same component at d 0.
+* +0x6d30 (type 5) stayed 0, so the type-5 route is not this.
+
+**The mechanism.**
+* The hover (0x1379ba7) and the click (0x13724e9) each build X4's pick ray,
+  0x1d6e080 with its output in r15. Each casts it twice through 0x1143b60:
+  * filter 0x18 = the world, into +0x6c50 (hover) and +0x6c90 (click);
+  * filter 0x17 = the UI, into +0x6bd0 (hover) and +0x6c10 (click).
+* The UI cast tests X4's UI geometry at X4's own, unscaled positions, while
+  the canvas map draws that UI at A. That is the 1.9x.
+* In menus the cursor is drawn through the same map, so drawn cursor and
+  cast agree.
+
+## The patch: X4VR_HUD_RAY (built; injector/x4vr_uiray.hpp)
+
+**Stub A** (0x1d6e2b8, X4's two `addps` that sum the ray; 6 bytes → jmp +
+int3):
+* There xmm0 = sx·row0, xmm4 = sy·row1, xmm1 = (1,1,1,0)·row2.
+* While on, it also builds d = Sx·xmm0 + Sy·xmm4 + xmm1, the ray through the
+  pointer divided by the canvas factors. It zeroes w, normalises by the
+  x,y,z length, scales by X4's K (100000, read at 0x2d67c18), and stores the
+  result with rbp, the ray's output, as its key.
+* Then X4's two addps; back at 0x1d6e2be.
+* Uses xmm5–xmm7, dead from there on every path. xmm2 is read at 0x1d6e463
+  and is left alone.
+
+**Stub B** (both UI casts, `mov %r15,%rcx; push $0x17` at 0x137a1d0 and
+0x1372a0b; 5 bytes → jmp):
+* While on and the key equals r15, rcx points at the UI direction.
+* It pushes $0x17 as X4 does and keeps rax (pushed afterwards).
+* The world casts are not touched.
+
+**Paths and tests.**
+* Every path of 0x1d6e080 except "no camera" passes 0x1d6e2b8. That includes
+  the per-frame branch at 0x1d6e3c0, so each hover and each click builds its
+  own UI ray.
+* X4VR_STEER_PICK's shift is already in sx, sy, so in steering mode the UI
+  ray goes through the ring / A.
+* The layer again publishes the canvas factors and "cursor drawn raw"
+  (HeadShared `ui_canvas`, share version 13).
+* tests/uiray.cpp:
+  * the 7 sites against the binary, with a flipped byte refused where it is;
+  * stub A EXECUTED: X4's ray unchanged, xmm2/r11/rbp kept, and the UI ray's
+    camera-frame slope 1/A times the pointer's (0.5903 = 1.904 × 0.31);
+  * stub B EXECUTED: swaps only on a matching key and only while on; $0x17
+    pushed; rax/r11 kept.
+* Scorer block `uiray` (8 planted cases):
+  * FAIL if asked and not PATCHED;
+  * FAIL for a period after ARMED of 2 s or more with no UI ray built;
+  * FAIL if UI rays were built but none taken;
+  * periods before the load are not judged (take 369's artefact).
+
+## Take 371 — PREDICTIONS (written before the run)
+
+Take 370's line plus `X4VR_HUD_RAY=1`. The read-only hover log stays, so
+record A can be read against where the pointer is.
+
+    X4VR_HEADLOOK_LAGLOG=1 X4VR_TAKE=371 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take371.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_STEER_PICK=1 X4VR_HUD_RAY=1 X4VR_HOVERLOG=1 X4VR_FOOTLOG=1 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P371.1:** the comms choices highlight with the cursor ON them (mouse
+  mode, head straight). Record A is set with the pointer at about half take
+  370's offsets (y about +215..+350).
+* **P371.2:** a click there selects the choice. The minimap's elements and an
+  alert on the right monitor answer where drawn.
+* **P371.3:** in steering mode the same under the ring.
+* **P371.4 No regressions:**
+  * ships and stations hover, click and right-click as before (record B,
+    X4's ray);
+  * the right-click menu, the map and the ESC menu (canvas menus, patch
+    off).
+* **Refutations:**
+  * still 2x: the UI cast takes its ray from elsewhere. The scorer's "casts
+    on them" will say whether stub B swapped.
+  * world clicks broken: the world cast took the UI ray (the key matched
+    the wrong cast).

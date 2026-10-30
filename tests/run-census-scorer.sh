@@ -1542,6 +1542,44 @@ hl2='[  999960.050] inject  hover: pointer +257,+306 | A d -1.000 comp (nil)/(ni
 want "hover: lines -> summarised" /tmp/census-hl-ok.log hover "2 change line(s); 1 distinct record-A component(s), 0 record-B"
 want "hover: asked, none -> FAIL" /tmp/census-hl-base.log "FAIL|  - " "X4VR_HOVERLOG=1 but no hover line was logged"
 absent "hover: not asked -> silent" "$BASE" hover
+# X4VR_HUD_RAY: X4's UI casts at the drawn HUD (take 371).
+for f in '"uiray: PATCHED — X4' '"uiray: ON #%u — X4' '"uiray: OFF #%u after %.1f s — %s; X4' '"uiray: patch REFUSED — %s. X4' '"built %llu, UI casts on them %llu, on X4'; do
+    if grep -qF "$f" injector/x4vr_inject.cpp; then
+        ok "uiray: the injector still prints $f"
+    else
+        bad "uiray: the injector's format moved: $f"
+    fi
+done
+sed 's/env: run = /env: run = X4VR_HUD_RAY=1 /' "$BASE" > /tmp/census-ur-base.log
+urp='[  999950.000] inject  uiray: PATCHED — X4'"'"'s pick ray (0x1d6e080) also builds a UI ray'
+urarm='[  999955.000] inject  milestone: head-look write ARMED — the view now follows your head without mouse-look.'
+uron='[  999960.000] inject  uiray: ON #1 — X4'"'"'s UI casts take the ray through the pointer x1.9040,1.9040 (canvas map 0.5252,0.5252)'
+uroff='[  999970.000] inject  uiray: OFF #1 after 10.0 s — the cursor is drawn through the canvas (a menu); X4'"'"'s own ray. UI rays built 1200, UI casts on them 1190, on X4'"'"'s ray 10'
+uroffnone='[  999970.000] inject  uiray: OFF #1 after 10.0 s — the cursor is drawn through the canvas (a menu); X4'"'"'s own ray. UI rays built 1200, UI casts on them 0, on X4'"'"'s ray 1200'
+uroff0='[  999970.000] inject  uiray: OFF #1 after 10.0 s — the cursor is drawn through the canvas (a menu); X4'"'"'s own ray. UI rays built 0, UI casts on them 0, on X4'"'"'s ray 0'
+uronearly='[  999951.000] inject  uiray: ON #1 — X4'"'"'s UI casts take the ray through the pointer x1.9040,1.9040 (canvas map 0.5252,0.5252)'
+uroffearly='[  999954.000] inject  uiray: OFF #1 after 3.0 s — the layer stopped publishing; X4'"'"'s own ray. UI rays built 0, UI casts on them 0, on X4'"'"'s ray 0'
+{ cat /tmp/census-ur-base.log; printf '%s\n' "$urp" "$urarm" "$uron" "$uroff"; } > /tmp/census-ur-ok.log
+want "uiray: a healthy period -> summarised" /tmp/census-ur-ok.log uiray "1 period(s); UI rays built 1200, UI casts on them 1190, on X4's ray 10"
+if python3 tools/score_run.py /tmp/census-ur-ok.log 2>&1 | grep -qE "^  - .*(uiray|HUD_RAY|UI-ray)"; then
+    bad "uiray: a healthy period -> FAILs"
+else
+    ok "uiray: a healthy period -> no FAIL"
+fi
+{ cat /tmp/census-ur-base.log; printf '%s\n' "$urp" "$urarm" "$uron" "$uroffnone"; } > /tmp/census-ur-none.log
+want "uiray: built, never taken -> FAIL" /tmp/census-ur-none.log "FAIL|  - " "UI rays were built but no UI cast took one"
+{ cat /tmp/census-ur-base.log; printf '%s\n' "$urp" "$urarm" "$uron" "$uroff0"; } > /tmp/census-ur-zero.log
+want "uiray: on after the load, nothing built -> FAIL" /tmp/census-ur-zero.log "FAIL|  - " "X4's pick ray built no UI ray — patched, not executed"
+{ cat /tmp/census-ur-base.log; printf '%s\n' "$urp" "$uronearly" "$uroffearly" "$urarm"; } > /tmp/census-ur-early.log
+if python3 tools/score_run.py /tmp/census-ur-early.log 2>&1 | grep -qF "patched, not executed"; then
+    bad "uiray: a period before the load -> not judged (take 369's artefact)"
+else
+    ok "uiray: a period before the load -> not judged (take 369's artefact)"
+fi
+want "uiray: asked, no PATCHED line -> FAIL" /tmp/census-ur-base.log "FAIL|  - " "X4VR_HUD_RAY=1 but the patch was never reported PATCHED"
+{ cat "$BASE"; printf '%s\n' "$urp"; } > /tmp/census-ur-unasked.log
+want "uiray: patched unasked -> FAIL" /tmp/census-ur-unasked.log "FAIL|  - " "the UI-ray patch acted in a run that did not ask for it"
+absent "uiray: not asked -> silent" "$BASE" uiray
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

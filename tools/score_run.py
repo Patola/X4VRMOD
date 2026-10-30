@@ -5330,6 +5330,72 @@ def main(path):
         fails.append("head-look armed but the pointer was never recentred "
                      "after the load — the cursor starts outside the view")
 
+    # --- X4VR_HUD_RAY: X4's UI casts at the drawn HUD (take 371) ----------
+    #
+    # Stub A in X4's pick ray builds a UI ray through the pointer / A; stub B
+    # hands it to the two UI casts (filter 0x17) while the cursor is drawn
+    # raw (injector/x4vr_uiray.hpp). Gate on intent: asked means PATCHED; a
+    # period after head-look armed that lasted must show UI rays built AND
+    # UI casts that took them -- built but never taken is a key that never
+    # matched, a patch that changed nothing.
+    ur_asked = bool(re.search(r"\bX4VR_HUD_RAY=1\b", run or ""))
+    ur_patched = "uiray: PATCHED" in text
+    ur_refused = re.search(r"uiray: patch REFUSED — (.*?)\. X4's HUD", text)
+    ur_arm = re.search(r"\[\s*([\d.]+)\]\s+inject\s+milestone: head-look write "
+                       r"ARMED", text)
+    ur_t_arm = float(ur_arm.group(1)) if ur_arm else None
+    ur_on = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+uiray: ON #(\d+) — X4's UI "
+                       r"casts take the ray through the pointer x([\d.]+),"
+                       r"([\d.]+)", text)
+    ur_off = {int(n): (float(d), why, int(b), int(k), int(p))
+              for n, d, why, b, k, p in re.findall(
+                  r"uiray: OFF #(\d+) after ([\d.]+) s — (.*?); X4's own ray\. "
+                  r"UI rays built (\d+), UI casts on them (\d+), on X4's ray "
+                  r"(\d+)", text)}
+    ur_per = {}
+    for n, d, b, k, p in re.findall(
+            r"uiray: ON #(\d+) (\d+) s — UI rays built (\d+), UI casts on them "
+            r"(\d+), on X4's ray (\d+)", text):
+        ur_per[int(n)] = (float(d), int(b), int(k), int(p))
+    if ur_asked or ur_patched or ur_on:
+        if ur_asked and not ur_patched:
+            fails.append("X4VR_HUD_RAY=1 but the patch was "
+                         + ("REFUSED — " + ur_refused.group(1) if ur_refused
+                            else "never reported PATCHED"))
+        if not ur_asked and (ur_patched or ur_on):
+            fails.append("the UI-ray patch acted in a run that did not ask for "
+                         "it (X4VR_HUD_RAY)")
+        tb = tk = tp = 0
+        for i, (t, n, sx, sy) in enumerate(ur_on):
+            n = int(n)
+            if n in ur_off:
+                dur, why, b, k, p = ur_off[n]
+            elif n in ur_per:
+                dur, b, k, p = ur_per[n]
+                why = "open at exit"
+            else:
+                dur, b, k, p, why = None, 0, 0, 0, "open at exit"
+            tb, tk, tp = tb + b, tk + k, tp + p
+            if i < 12:
+                print(f"uiray   #{n:<3d} t {float(t):10.1f}  x{sx},{sy}  "
+                      + (f"{dur:6.1f} s" if dur is not None else "     ? s")
+                      + f"  UI rays {b}, casts on them {k}, on X4's ray {p}"
+                      f"  ended: {why}")
+            # Before the load X4 runs no pick at all (take 369's artefact).
+            judged = ur_t_arm is not None and float(t) >= ur_t_arm
+            if judged and dur is not None and dur >= 2.0 and b == 0:
+                fails.append(f"uiray period {n}: {dur:.1f} s on and X4's pick "
+                             f"ray built no UI ray — patched, not executed")
+        if ur_patched:
+            print(f"uiray   {len(ur_on)} period(s); UI rays built {tb}, UI casts "
+                  f"on them {tk}, on X4's ray {tp}")
+        if ur_asked and ur_patched and tb and not tk:
+            fails.append("X4VR_HUD_RAY=1: UI rays were built but no UI cast "
+                         "took one — the key never matched, nothing moved")
+        if ur_on:
+            print("uiray   whether the HUD, the minimap and the comms choices "
+                  "answer where they are drawn is Patola's to say")
+
     # --- X4VR_HOVERLOG: X4's hover hit records, read only (take 370) ------
     hl_asked = bool(re.search(r"\bX4VR_HOVERLOG=1\b", run or ""))
     hl = re.findall(r"inject\s+hover: pointer ([+-]\d+),([+-]\d+) \| A d (-?[\d.e+]+) "
