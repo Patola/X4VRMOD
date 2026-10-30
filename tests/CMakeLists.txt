@@ -214,6 +214,9 @@ add_executable(x4vr_test_aimpick aimpick.cpp)
 # X4VR_HUD_RAY: the UI casts' sites against the real binary, both stubs
 # executed. Self-checking.
 add_executable(x4vr_test_uiray uiray.cpp)
+# X4VR_HUD_PICK: the UI pointer's sites against the real binary, the stub
+# executed per presentation kind. Self-checking.
+add_executable(x4vr_test_uipick uipick.cpp)
 # x4vr_menus.hpp: X4's open-menu table and conversation state, read not called.
 add_executable(x4vr_test_menus menus.cpp)
 # declares_member_name: the fog ray march found by its property name (take 348).

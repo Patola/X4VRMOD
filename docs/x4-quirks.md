@@ -28127,3 +28127,42 @@ Configuration 5. Patola:
 
 `X4VR_HUD_RAY` stays in the code, off by default and out of every shipping
 line, until the next step decides whether it is half of the fix or reverted.
+
+## Take 372 — PREDICTIONS (written before the run): the panel test and the element test together
+
+Patola: *"go ahead with (1), give me the take. This is not optional, we have
+to fix this interaction."*
+
+**The hypothesis (H1).** X4 picks a HUD element in two steps:
+1. its UI cast (filter 0x17) finds the panel;
+2. the panel's local pointer (obj+0xdd8, from 0xa40ad0) finds the element.
+
+Take 369 corrected step 2 alone and take 371 step 1 alone. Each alone left
+the highlight at 2x:
+* in 369 the raw cast never reached the panel over the drawn element;
+* in 371 the raw local pointer picked the element at the pushed-out layout.
+
+H1 also explains take 371's selecting click at +564: the panel is big enough
+for the scaled cast to hit it, and the raw local pointer picked the row at
+layout +564, drawn at about +296.
+
+**Built.**
+* `X4VR_HUD_PICK` restored (0xa40af3, x4vr_uipick.hpp; its scorer block now
+  judges only periods after head-look armed). It runs beside `X4VR_HUD_RAY`.
+* The read-only hover log now also carries the click's records (C, UI,
+  +0x6c10; D, world, +0x6c90), and each record's first component's vtable,
+  to tell a HUD panel from a marker. That is the data take 371's portal
+  needs.
+* All suites pass; takes 369–371 rescore PASS.
+
+    X4VR_HEADLOOK_LAGLOG=1 X4VR_TAKE=372 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take372.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_STEER_PICK=1 X4VR_HUD_RAY=1 X4VR_HUD_PICK=1 X4VR_HOVERLOG=1 X4VR_FOOTLOG=1 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P372.1 (H1):** the comms choices highlight and take the click with the
+  cursor ON them.
+* **P372.2:** right-clicks can still land on another object's marker (the
+  UI ray is still swapped for markers). The log's vtables will separate
+  marker hits from HUD hits, and that is the design input for leaving
+  markers on X4's ray.
+* **Refutation:** still 2x. Then H1 is wrong, and the next instrument is a
+  hardware read-watchpoint (perf_event_open, read only) on the comms panel's
+  local pointer, to name the code that picks the element.
