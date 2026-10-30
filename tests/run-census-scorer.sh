@@ -1635,6 +1635,33 @@ want "ptrwatch: asked, never armed -> FAIL" /tmp/census-pw-base.log "FAIL|  - " 
 { cat /tmp/census-pw-base.log; echo '[  999960.000] inject  ptrwatch: REFUSED — no watch could be opened on 60 thread(s): Permission denied'; } > /tmp/census-pw-ref.log
 want "ptrwatch: refused -> FAIL" /tmp/census-pw-ref.log "FAIL|  - " "X4VR_PTRWATCH=1 but the watch was REFUSED — no watch could be opened on 60 thread(s): Permission denied"
 absent "ptrwatch: not asked -> silent" "$BASE" ptrwatch
+# X4VR_HUD_MOUSE: X4's UI library's mouse at the drawn HUD (take 374).
+for f in '"uimouse: PATCHED — the mouse X4 hands its UI library each frame "' '"uimouse: ON #%u — X4' '"uimouse: OFF #%u after %.1f s — %s; X4' '"UI library was fed %llu time(s), %llu moved",' '"uimouse: patch REFUSED — %s. X4'; do
+    if grep -qF "$f" injector/x4vr_inject.cpp; then
+        ok "uimouse: the injector still prints $f"
+    else
+        bad "uimouse: the injector's format moved: $f"
+    fi
+done
+sed 's/env: run = /env: run = X4VR_HUD_MOUSE=1 /' "$BASE" > /tmp/census-um-base.log
+ump='[  999950.000] inject  uimouse: PATCHED — the mouse X4 hands its UI library each frame (0xa704a0 -> 0x2317e00) goes through a 60-byte stub'
+umarm='[  999955.000] inject  milestone: head-look write ARMED — the view now follows your head without mouse-look.'
+umon='[  999960.000] inject  uimouse: ON #1 — X4'"'"'s UI library takes the mouse x1.9040,1.9040 (canvas map 0.5252,0.5252)'
+umoff='[  999970.000] inject  uimouse: OFF #1 after 10.0 s — the cursor is drawn through the canvas (a menu); X4'"'"'s own mouse. The UI library was fed 600 time(s), 600 moved'
+umoff0='[  999970.000] inject  uimouse: OFF #1 after 10.0 s — the cursor is drawn through the canvas (a menu); X4'"'"'s own mouse. The UI library was fed 600 time(s), 0 moved'
+{ cat /tmp/census-um-base.log; printf '%s\n' "$ump" "$umarm" "$umon" "$umoff"; } > /tmp/census-um-ok.log
+want "uimouse: a healthy period -> summarised" /tmp/census-um-ok.log uimouse "1 period(s); the UI library was fed 600 time(s), 600 moved"
+if python3 tools/score_run.py /tmp/census-um-ok.log 2>&1 | grep -qE "^  - .*(uimouse|HUD_MOUSE|UI-mouse)"; then
+    bad "uimouse: a healthy period -> FAILs"
+else
+    ok "uimouse: a healthy period -> no FAIL"
+fi
+{ cat /tmp/census-um-base.log; printf '%s\n' "$ump" "$umarm" "$umon" "$umoff0"; } > /tmp/census-um-zero.log
+want "uimouse: on, never moved -> FAIL" /tmp/census-um-zero.log "FAIL|  - " "the UI library's mouse was never moved — patched, not executed"
+want "uimouse: asked, no PATCHED line -> FAIL" /tmp/census-um-base.log "FAIL|  - " "X4VR_HUD_MOUSE=1 but the patch was never reported PATCHED"
+{ cat "$BASE"; printf '%s\n' "$ump"; } > /tmp/census-um-unasked.log
+want "uimouse: patched unasked -> FAIL" /tmp/census-um-unasked.log "FAIL|  - " "the UI-mouse patch acted in a run that did not ask for it"
+absent "uimouse: not asked -> silent" "$BASE" uimouse
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

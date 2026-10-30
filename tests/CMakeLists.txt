@@ -214,6 +214,9 @@ add_executable(x4vr_test_aimpick aimpick.cpp)
 # X4VR_HUD_RAY: the UI casts' sites against the real binary, both stubs
 # executed. Self-checking.
 add_executable(x4vr_test_uiray uiray.cpp)
+# X4VR_HUD_MOUSE: the UI library's mouse feed against the real binary, the
+# stub executed with X4's own setter behind it. Self-checking.
+add_executable(x4vr_test_uimouse uimouse.cpp)
 # X4VR_PTRWATCH: a real hardware watchpoint on this process, opened per
 # thread and drained by the injector's parser. Self-checking.
 add_executable(x4vr_test_ptrwatch ptrwatch.cpp)

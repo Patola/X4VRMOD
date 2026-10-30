@@ -5395,6 +5395,63 @@ def main(path):
             print("uipick  whether the HUD and the conversation choices take "
                   "clicks where they are drawn is Patola's to say")
 
+    # --- X4VR_HUD_MOUSE: X4's UI library's mouse at the drawn HUD (374) ---
+    #
+    # A stub at 0xa70725 shifts and scales the mouse 0xa704a0 hands the UI
+    # library each frame (injector/x4vr_uimouse.hpp). Gate on intent: asked
+    # means PATCHED; a period after head-look armed that lasted must show the
+    # library fed and the mouse moved.
+    um_asked = bool(re.search(r"\bX4VR_HUD_MOUSE=1\b", run or ""))
+    um_patched = "uimouse: PATCHED" in text
+    um_refused = re.search(r"uimouse: patch REFUSED — (.*?)\. X4's HUD", text)
+    um_arm = re.search(r"\[\s*([\d.]+)\]\s+inject\s+milestone: head-look write "
+                       r"ARMED", text)
+    um_on = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+uimouse: ON #(\d+) — X4's UI "
+                       r"library takes the mouse x([\d.]+),([\d.]+)", text)
+    um_off = {int(n): (float(d), why, int(c), int(k))
+              for n, d, why, c, k in re.findall(
+                  r"uimouse: OFF #(\d+) after ([\d.]+) s — (.*?); X4's own mouse\. "
+                  r"The UI library was fed (\d+) time\(s\), (\d+) moved", text)}
+    um_per = {}
+    for n, d, c, k in re.findall(
+            r"uimouse: ON #(\d+) (\d+) s — the UI library was fed (\d+) "
+            r"time\(s\), (\d+) moved", text):
+        um_per[int(n)] = (float(d), int(c), int(k))
+    if um_asked or um_patched or um_on:
+        if um_asked and not um_patched:
+            fails.append("X4VR_HUD_MOUSE=1 but the patch was "
+                         + ("REFUSED — " + um_refused.group(1) if um_refused
+                            else "never reported PATCHED"))
+        if not um_asked and (um_patched or um_on):
+            fails.append("the UI-mouse patch acted in a run that did not ask "
+                         "for it (X4VR_HUD_MOUSE)")
+        tc = tk = 0
+        for i, (t, n, sx, sy) in enumerate(um_on):
+            n = int(n)
+            if n in um_off:
+                dur, why, c, k = um_off[n]
+            elif n in um_per:
+                dur, c, k = um_per[n]
+                why = "open at exit"
+            else:
+                dur, c, k, why = None, 0, 0, "open at exit"
+            tc, tk = tc + c, tk + k
+            if i < 12:
+                print(f"uimouse #{n:<3d} t {float(t):10.1f}  x{sx},{sy}  "
+                      + (f"{dur:6.1f} s" if dur is not None else "     ? s")
+                      + f"  fed {c}, moved {k}  ended: {why}")
+            judged = um_arm is not None and float(t) >= float(um_arm.group(1))
+            if judged and dur is not None and dur >= 2.0 and k == 0:
+                fails.append(f"uimouse period {n}: {dur:.1f} s on and the UI "
+                             f"library's mouse was never moved — patched, not "
+                             f"executed")
+        if um_patched:
+            print(f"uimouse {len(um_on)} period(s); the UI library was fed {tc} "
+                  f"time(s), {tk} moved")
+        if um_on:
+            print("uimouse whether the HUD, the minimap and the comms choices "
+                  "answer where they are drawn is Patola's to say")
+
     # --- X4VR_HUD_RAY: X4's UI casts at the drawn HUD (take 371) ----------
     #
     # Stub A in X4's pick ray builds a UI ray through the pointer / A; stub B

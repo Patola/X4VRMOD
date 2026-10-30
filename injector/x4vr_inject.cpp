@@ -57,6 +57,7 @@ extern char **environ;
 #include "x4vr_uiray.hpp"
 #include "x4vr_uipick.hpp"
 #include "x4vr_ptrwatch.hpp"
+#include "x4vr_uimouse.hpp"
 #include "x4vr_menus.hpp"
 #include "x4vr_config.hpp"
 #include "x4vr_inputmap.hpp"
@@ -1130,6 +1131,7 @@ static void extview_patch_at_start(); // X4VR_HEADLOOK_EXTERNAL
 static void aimpick_patch_at_start(); // X4VR_STEER_PICK
 static void uiray_patch_at_start();   // X4VR_HUD_RAY
 static void uipick_patch_at_start();  // X4VR_HUD_PICK
+static void uimouse_patch_at_start(); // X4VR_HUD_MOUSE
 
 __attribute__((constructor)) static void x4vr_inject_init() {
     char exe[256] = "?";
@@ -1152,6 +1154,8 @@ __attribute__((constructor)) static void x4vr_inject_init() {
         uiray_patch_at_start();
         // X4's UI presentations' pointer at the drawn HUD: the same rule.
         uipick_patch_at_start();
+        // X4's UI library's mouse at the drawn HUD: the same rule.
+        uimouse_patch_at_start();
     }
     // Task #68: the parsed clamp, once X4 has had time to parse it. A delay
     // rather than a hook, because the parse has no seam we can name -- and if
@@ -5030,7 +5034,9 @@ static void ptrwatch_tick() {
                 PtrRing r;
                 r.which = w;
                 r.tid = t;
-                r.fd = open_watch(t, in + (w ? 0x6734 : 0x6718), 8);
+                // in+0x6734 is only 4-byte aligned (take 373: EINVAL at 8), so the
+                // reference is watched on its x alone.
+                r.fd = open_watch(t, in + (w ? 0x6734 : 0x6718), w ? 4 : 8);
                 if (r.fd < 0) {
                     failed++;
                     last_err = -r.fd;
@@ -5283,6 +5289,146 @@ static void uipick_tick() {
                  periods, now - t0, (unsigned long long)(calls - c0),
                  (unsigned long long)(scaled - s0),
                  (unsigned long long)(flat - f0));
+    }
+    was_on = on;
+}
+
+// ------------------------------------------------ X4VR_HUD_MOUSE=1
+//
+// X4's UI library takes the mouse where the HUD is DRAWN (x4vr_uimouse.hpp;
+// option A, the route take 373's hardware watch found: 0xa704a0 feeds the
+// centred pointer to the UI library's setter every frame). While the cursor
+// is drawn raw over a canvas-mapped UI, the floats it hands over are shifted
+// by the steering ring (X4VR_STEER_PICK) and divided by the canvas factors;
+// off under a canvas menu, where cursor and UI already share the map.
+static bool uimouse_asked() {
+    static const bool on = x4vr::env_on("X4VR_HUD_MOUSE", false);
+    return on;
+}
+namespace {
+struct UiMousePatch {
+    bool patched = false;
+};
+UiMousePatch g_uimousepatch;
+x4vr::uimouse::Slot g_uimouseslot;
+} // namespace
+
+static void uimouse_patch_at_start() {
+    using namespace x4vr::uimouse;
+    if (!uimouse_asked())
+        return;
+    auto refuse = [](const char *why) {
+        X4VR_LOG("uimouse: patch REFUSED — %s. X4's HUD keeps answering at its "
+                 "own scale, about twice as far out as it is drawn.", why);
+        X4VR_LOG("milestone: HUD clicks at the drawn HUD REFUSED — %s. Quit "
+                 "and tell me.", why);
+    };
+    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    uintptr_t bad = 0;
+    if (!verify_sites(rd, &bad)) {
+        char why[160];
+        snprintf(why, sizeof why,
+                 "the UI mouse feed's code at %#lx differs from X4 9.00",
+                 (unsigned long)bad);
+        refuse(why);
+        return;
+    }
+    const uintptr_t site = kPatch;
+    uint8_t *page = (uint8_t *)x4vr::csmfit::alloc_near(0x3f0000, 0x7c00000,
+                                                        &site, 1, 5);
+    if (!page) {
+        refuse("no free page within rel32 reach of 0xa70725");
+        return;
+    }
+    uint8_t code[kStubMax];
+    const size_t len = make_stub(code, (uintptr_t)page, (uintptr_t)&g_uimouseslot,
+                                 kCont);
+    uint8_t jmp[kPatchLen];
+    if (!len || !patch_bytes((uintptr_t)page, jmp)) {
+        refuse("the stub is out of rel32 reach of 0xa70725");
+        return;
+    }
+    memcpy(page, code, len);
+    const long pgsz = sysconf(_SC_PAGESIZE);
+    if (mprotect(page, (size_t)pgsz, PROT_READ | PROT_EXEC) != 0) {
+        refuse("mprotect(rx) of the stub failed");
+        return;
+    }
+    // X4 has run no frame yet, so no thread is inside the 8 bytes.
+    char err[200] = "";
+    if (!x4vr::foot::patch_code(kPatch, jmp, kPatchLen, err, sizeof err)) {
+        refuse(err);
+        return;
+    }
+    g_uimousepatch.patched = true;
+    X4VR_LOG("uimouse: PATCHED — the mouse X4 hands its UI library each frame "
+             "(0xa704a0 -> 0x2317e00) goes through a %zu-byte stub at %p at "
+             "0xa70725: while the cursor is drawn raw it is shifted by the "
+             "steering ring and divided by the canvas factors, so the HUD "
+             "answers where it is drawn; under a canvas menu it is X4's",
+             len, (void *)page);
+}
+
+static void uimouse_tick() {
+    using namespace x4vr::uimouse;
+    if (!g_uimousepatch.patched)
+        return;
+    static x4vr::HeadShared *hs = x4vr_head_state();
+    float ax = 1.f, ay = 1.f;
+    uint64_t frames = 0;
+    const bool raw = x4vr::ui_canvas_read(hs, &ax, &ay, &frames);
+    static uint64_t last_frames = 0;
+    static double moved_at = 0.0;
+    const double now = mono_seconds();
+    if (frames != last_frames) {
+        last_frames = frames;
+        moved_at = now;
+    }
+    const bool fresh = frames != 0 && now - moved_at < 0.25;
+    const float sx = unscale_of(ax), sy = unscale_of(ay);
+    const bool on = raw && fresh && (sx != 1.f || sy != 1.f);
+    int32_t dx = 0, dy = 0;
+    if (g_aimpatch.patched)
+        x4vr::aimpick::unpack(g_aimslot.shift.load(std::memory_order_relaxed),
+                              &dx, &dy);
+    if (on) {
+        g_uimouseslot.add.store(pack2((float)dx, (float)dy), std::memory_order_relaxed);
+        g_uimouseslot.scale.store(pack2(sx, sy), std::memory_order_relaxed);
+        g_uimouseslot.on.store(1, std::memory_order_release);
+    } else {
+        g_uimouseslot.on.store(0, std::memory_order_release);
+    }
+    static bool was_on = false;
+    static unsigned periods = 0;
+    static uint64_t c0 = 0, s0 = 0;
+    static double t0 = 0.0, last_line = 0.0;
+    const uint64_t calls = g_uimouseslot.calls.load(std::memory_order_relaxed);
+    const uint64_t scaled = g_uimouseslot.scaled.load(std::memory_order_relaxed);
+    if (on && !was_on) {
+        periods++;
+        c0 = calls;
+        s0 = scaled;
+        t0 = last_line = now;
+        if (periods <= 300)
+            X4VR_LOG("uimouse: ON #%u — X4's UI library takes the mouse x%.4f,%.4f "
+                     "(canvas map %.4f,%.4f)%s",
+                     periods, sx, sy, ax, ay,
+                     (dx || dy) ? ", shifted to the steering ring" : "");
+    } else if (!on && was_on) {
+        const char *why = !fresh ? "the layer stopped publishing"
+                          : !raw ? "the cursor is drawn through the canvas (a menu)"
+                                 : "no canvas map";
+        if (periods <= 300)
+            X4VR_LOG("uimouse: OFF #%u after %.1f s — %s; X4's own mouse. The "
+                     "UI library was fed %llu time(s), %llu moved",
+                     periods, now - t0, why, (unsigned long long)(calls - c0),
+                     (unsigned long long)(scaled - s0));
+    } else if (on && now - last_line >= 10.0 && periods <= 300) {
+        last_line = now;
+        X4VR_LOG("uimouse: ON #%u %.0f s — the UI library was fed %llu time(s), "
+                 "%llu moved",
+                 periods, now - t0, (unsigned long long)(calls - c0),
+                 (unsigned long long)(scaled - s0));
     }
     was_on = on;
 }
@@ -8303,6 +8449,7 @@ void SDL_PumpEvents(void) {
         steer_tick();
         uiray_tick();
         uipick_tick();
+        uimouse_tick();
         pumprate_report();
     }
     real_fn();

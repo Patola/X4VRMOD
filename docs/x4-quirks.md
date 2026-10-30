@@ -28226,3 +28226,84 @@ effect); the hover log stays.
 * **P373.2 (the alternative):** no new site appears during the comms hover.
   The UI then takes the pointer from SDL's event copy and never reads X4's
   pointer, and the fix moves to the events.
+
+## Take 373 — SCORED PASS (2026-10-30): the hardware watch names the UI library's mouse feed
+
+Configuration 5. Patola followed the protocol: a still baseline, the comms
+choices where they highlight, then where drawn, and steering-mode clicks.
+He recorded `/dados/x4vr-take-373.mp4` (1024x1024, 229 s) *"to be able to
+measure the shift, in steering mode, from the cursor vs the position of the
+highlight"*.
+
+`score_run.py` PASS:
+* `ptrwatch 39 watch(es) on 39 thread(s)`. Each thread's reference watch
+  failed: in+0x6734 is only 4-byte aligned, so an 8-byte watch is EINVAL.
+  Fixed: the reference is now watched on its x, 4 bytes.
+* The pointer watch held on all 39 threads, lost 0. 12 sites.
+
+**The readers of X4's pointer, by window.**
+* Still baseline (261213–261238), main thread, about 50 Hz each:
+  * 0xa2ba64/0xa2ba3e: the presentation feed, known;
+  * **0xa7084b/0xa70834: new.**
+* In flight, on the "Movement worker" thread:
+  * 0x1d6e0cc/0x1d6e0d8: the pick ray, about 630 Hz;
+  * 0xcec7f1: the mouse delta.
+* Main thread, on events: 0x72fbb6/0x72fdf9/0x72fd6c (the event loop).
+* While steering: 0x166d24c/0x166d25c.
+
+**0xa704a0 is the UI library's mouse feed.**
+* It is slot 2 of the vtable at 0x3c4f690. It loads the mouse object from
+  in+0x64b0 at 0xa704b8, the site the static survey had set aside after
+  reading only 40 lines past it.
+* Every frame it reads the centred pointer: the last click's +0x48/+0x40
+  while a button is held, the live +0x38/+0x30 otherwise. It converts it to
+  floats xmm0 (x) and xmm1 (y).
+* At 0xa70725 it calls slot 3 = **0x2317e00**:
+  `unpcklps %xmm1,%xmm0; mov %sil,0xa9(%rdi); movq $0,0x10(%rdi); movlps
+  %xmm0,8(%rdi)`. That is the UI library's mouse, which every widget hover
+  and click is tested against.
+* None of takes 369/371/372 touched it.
+
+## The patch: X4VR_HUD_MOUSE (built; injector/x4vr_uimouse.hpp)
+
+* The 8 bytes at 0xa70725 (`mov %ebp,%esi; mov %rbx,%rdi; call *%r12`)
+  become `jmp stub` + int3s. Only 0xa70725 is a jump target (from the live
+  path's jmp at 0xa70859).
+* While on, the stub:
+  * adds the steering ring's shift (X4VR_STEER_PICK's) to xmm0/xmm1;
+  * multiplies by the canvas map's inverse factors;
+  * makes X4's call itself on X4's stack (r11 pushed and popped before it);
+  * jumps to 0xa7072d.
+* Off, the floats pass untouched. The gate is the layer's "cursor drawn raw
+  over a canvas-mapped UI" (HeadShared `ui_canvas`).
+* tests/uimouse.cpp:
+  * the function, both paths, the setter and the vtable's slots 2/3 against
+    the binary;
+  * the stub EXECUTED with X4's own setter bytes (0x2317e00,
+    position-independent) as the callee;
+  * take 368's monitor: drawn at (+257, +306), it reaches X4's UI library at
+    (489, 583), where it took the click;
+  * steering: (pointer + shift) / A.
+* Scorer block `uimouse`, 9 planted cases.
+* X4VR_HUD_RAY and X4VR_HUD_PICK stay in the code, off. To be removed once
+  this one is confirmed, unless the UI cast is found to matter too.
+
+## Take 374 — PREDICTIONS (written before the run)
+
+Take 373's line with `X4VR_PTRWATCH` removed and `X4VR_HUD_MOUSE=1` added.
+
+    X4VR_HEADLOOK_LAGLOG=1 X4VR_TAKE=374 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take374.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_STEER_PICK=1 X4VR_HUD_MOUSE=1 X4VR_HOVERLOG=1 X4VR_FOOTLOG=1 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P374.1:** mouse mode, the comms choices highlight and take the click
+  with the cursor ON them; the minimap's elements too.
+* **P374.2:** steering mode, the same under the ring.
+* **P374.3 No regressions:**
+  * ships and stations hover, click and right-click (X4's world pick,
+    untouched);
+  * menus (the patch is off under a canvas menu).
+* **Possible:** UI drawn at full size (orthographic, e.g. marker labels) now
+  answers at about half its offset, if the UI library hit-tests it. That
+  would show as a marker-related click landing off, and would need the
+  per-element split.
+* **Refutation:** still 2x. The UI library's mouse is not what the widgets
+  test.
