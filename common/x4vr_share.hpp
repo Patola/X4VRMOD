@@ -54,7 +54,8 @@ constexpr uint32_t kShareMagic = 0x52565834u;
 // 12: HeadShared's `steer_nose`, the steering ring's nose for X4's pick ray
 //     (X4VR_STEER_PICK).
 // 13: HeadShared's `ui_canvas`, the canvas map's factors while the cursor is
-//     drawn raw, for X4's UI casts (X4VR_HUD_RAY).
+//     drawn raw, for X4's UI mouse (X4VR_HUD_MOUSE; first added for the
+//     since-removed X4VR_HUD_RAY).
 constexpr uint32_t kShareVersion = 13u;
 
 struct Shared {
@@ -430,7 +431,7 @@ struct HeadShared {
     std::atomic<uint32_t> steer_nose_on{0};
     std::atomic<uint64_t> steer_nose_frames{0};
 
-    // X4VR_HUD_RAY: the canvas map's x and y factors (A, both eyes averaged)
+    // X4VR_HUD_MOUSE: the canvas map's x and y factors (A, both eyes averaged)
     // as two floats in one word, and `ui_raw_on` = the cursor is drawn at the
     // raw pointer this frame while X4's perspective UI is drawn through the
     // map -- the case where a HUD element answers at 1/A of where it is

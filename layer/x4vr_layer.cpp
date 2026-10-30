@@ -12293,9 +12293,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     VkSemaphore composited = VK_NULL_HANDLE;
     uint32_t family = 0;
     x4vr::steer::Frame steer_frame;
-    // X4VR_HUD_RAY: the canvas map's factors for X4's UI casts, while the
-    // cursor is drawn at the raw pointer and X4's perspective UI through the
-    // map (x4vr_uiray.hpp). Off under a canvas menu, or with no canvas.
+    // X4VR_HUD_MOUSE: the canvas map's factors for X4's perspective layer
+    // pick, while the cursor is drawn at the raw pointer and X4's perspective
+    // UI through the map (x4vr_uimouse.hpp). Off under a canvas menu, or with
+    // no canvas.
     {
         static auto head_fn =
             (x4vr::HeadShared * (*)())dlsym(RTLD_DEFAULT, "x4vr_head_state");

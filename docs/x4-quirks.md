@@ -28489,3 +28489,10 @@ Take 374's line, take number and log changed, nothing else:
     read as. The scorer's "S scaled" stays near 0 while he hovers it.
   * Markers still at half: the markers go through the perspective branch
     too. A finer split, by the presentation's flags, is next.
+
+**Removed with this take (planned in the 374 handoff):** X4VR_HUD_RAY (UI
+cast, takes 371/372) and X4VR_HUD_PICK (the presentations' local pointer,
+takes 369/372). Neither moved the highlight, and take 374 showed the HUD
+answering without either. Their headers, tests, scorer blocks and census
+cases are gone; the sections above stay as history. HeadShared's
+`ui_canvas` (share version 13) now serves X4VR_HUD_MOUSE alone.

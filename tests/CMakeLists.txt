@@ -211,19 +211,13 @@ add_executable(x4vr_test_head6 head6.cpp)
 # X4VR_STEER_PICK: the pick ray's sites against the real binary, the stub
 # executed, the pixel arithmetic. Self-checking.
 add_executable(x4vr_test_aimpick aimpick.cpp)
-# X4VR_HUD_RAY: the UI casts' sites against the real binary, both stubs
-# executed. Self-checking.
-add_executable(x4vr_test_uiray uiray.cpp)
-# X4VR_HUD_MOUSE: the UI library's mouse feed against the real binary, the
-# stub executed with X4's own setter behind it. Self-checking.
+# X4VR_HUD_MOUSE: the UI mouse feed and X4's layer pick against the real
+# binary, both stubs executed (the feed with X4's own setter). Self-checking.
 add_executable(x4vr_test_uimouse uimouse.cpp)
 # X4VR_PTRWATCH: a real hardware watchpoint on this process, opened per
 # thread and drained by the injector's parser. Self-checking.
 add_executable(x4vr_test_ptrwatch ptrwatch.cpp)
 target_link_libraries(x4vr_test_ptrwatch PRIVATE pthread)
-# X4VR_HUD_PICK: the UI pointer's sites against the real binary, the stub
-# executed per presentation kind. Self-checking.
-add_executable(x4vr_test_uipick uipick.cpp)
 # x4vr_menus.hpp: X4's open-menu table and conversation state, read not called.
 add_executable(x4vr_test_menus menus.cpp)
 # declares_member_name: the fog ray march found by its property name (take 348).
