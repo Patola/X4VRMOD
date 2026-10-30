@@ -27910,3 +27910,70 @@ Take 368's line plus `X4VR_HUD_PICK=1`; configuration 5 as in take 368.
   * the choices still answer only at about 2x: the scaled kinds are not the
     HUD's, or the factor is not the drawn one;
   * clicks near the centre work and far ones do not: a factor mismatch.
+
+## Take 369 — SCORED (2026-10-30): the load fix works; the UI-pointer patch was inert for the HUD (reverted)
+
+Configuration 5, **SteamVR** this time (Patola: *"just to change conditions
+a little bit"*). Patola:
+* *"Solved: at the start, the cursor appears normally and it clicks stuff."*
+* The lower HUD (left panel; minimap plus dialog choices; right
+  monitor/panel) is not fixed: comms choices, a pirate-encounter choice on
+  the right monitor, and all three minimap modes still answer at double the
+  distance.
+* *"Left and right clicks still work as normal."*
+* No leaning, on purpose: the hitbox is hard to find even head-centred.
+
+`score_run.py` at the time:
+* `pointer recentred after 1 load(s): from 2298,2329 (+0.0 s from head-look
+  ARMED)`. **P369.1 HELD.**
+* `uipick`: 10 periods, 434314 presentation updates, **all scaled, 0 flat**.
+* One FAIL: uipick period 2, 3.1 s on with no update. It was at the start
+  menu, before the load (ARMED at 214950.9), where X4 feeds no
+  presentation. A scorer artefact.
+
+**P369.2/.3 FAILED: the patch reached every presentation X4 feeds and moved
+no HUD element.**
+* The field it scaled, obj+0xdd8, is what Lua's `GetLocalMousePosition`
+  returns (0xa60530). It is written only by 0xa40ad0, and read for
+  steering-line and tooltip placement, not for hover and click.
+* The HUD's hover therefore does not read that pointer.
+* The patch is **reverted** (code only; this record stays), per Patola's rule
+  for an approach that failed. The load fix stays.
+
+**By elimination, the HUD's hover rides on the world pick ray.**
+* Every reader of X4's mouse object is accounted for:
+  * presentations (0xa2ba18, ruled out by this take);
+  * steering 0x166d236;
+  * the camera nudge 0x1934b09/0x1934f58;
+  * the world ray 0x1d6e080;
+  * the map 0x1ef6250;
+  * GetCenteredMousePos (Lua);
+  * the input manager's own bookkeeping and the debug dump.
+* The world ray's hover caller (0x1379ba7) feeds a raycast (0x1de5eb0). Its
+  hit records sit on the player object P = *(root+0x238): +0x6bd0..+0x6c00
+  and +0x6c50..+0x6c80.
+* A third field, +0x6d30, is computed by 0x137a2e6 as the hit point in a
+  component's frame. It is what 0xa40ad0's type-5 presentations take as
+  their pointer, branching away before the reverted patch.
+* If the lower HUD is type 5, a HUD element is picked where the raw ray hits
+  its surface at X4's unscaled position. That would explain the 1.9x, and
+  why steering mode (the ray shifted by X4VR_STEER_PICK) moved it.
+
+## Take 370 — PREDICTIONS (written before the run): is a HUD highlight a raycast hit?
+
+Read only: `X4VR_HOVERLOG=1` logs those records on change (20 Hz at most),
+with the pointer's offset from the centre. Take 369's line, with
+`X4VR_HUD_PICK=1` removed (the code is gone) and `X4VR_HOVERLOG=1` added.
+
+    X4VR_HEADLOOK_LAGLOG=1 X4VR_TAKE=370 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take370.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_STEER_PICK=1 X4VR_HOVERLOG=1 X4VR_FOOTLOG=1 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P370.1 (the hypothesis):** with a comms choice highlighted (the cursor at
+  about 2x its drawn offset), a hit record holds a component and +0x6d30
+  follows the mouse. With the cursor on the drawn choice (no highlight), the
+  record is empty or holds something else.
+* **Refutation:** the records stay empty, or unchanged, while a choice
+  highlights. Then the HUD's hit test is on yet another route, and the next
+  instrument is a hardware watchpoint (perf_event_open, read-only) on X4's
+  raw pointer to list every instruction that reads it.
+* Control: hovering a ship fills a record with that ship's component at its
+  distance.
