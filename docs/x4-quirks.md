@@ -28496,3 +28496,23 @@ takes 369/372). Neither moved the highlight, and take 374 showed the HUD
 answering without either. Their headers, tests, scorer blocks and census
 cases are gone; the sections above stay as history. HeadShared's
 `ui_canvas` (share version 13) now serves X4VR_HUD_MOUSE alone.
+
+## Take 375 — SCORED PASS (2026-10-30): the per-layer scale — HUD and markers both where drawn. v0.9.6
+
+Configuration 5, WiVRn. `score_run.py` PASS:
+* `uimouse`: 15 periods. The UI was fed 13167 times, all through the shift.
+  **26236 perspective layer picks, all scaled.** The branch at 0xa24e79 is
+  the HUD's, as read.
+* aimpick: 6 periods, 11457 of 11471 rays shifted.
+* The load recentre ran. GAMEPLAY 11.67 ms (86 fps).
+
+Patola: *"It worked. Used the lower HUD successfully with highlights and
+clicking (the four elements -- left panel, radar in the center, right panel,
+and dialogue choices in the center), mouse mode worked both when looking
+straight and looking to the side, steering mode too. Map still perfect."*
+
+* **P375.1, P375.2, P375.3, P375.4 all held.**
+* **HUD clicking is CLOSED.** Released as **v0.9.6** on this code (16ad52d).
+* **Still open, not blocking:** steering-mode selection against the
+  unmodified game's behaviour (cursor or crosshair). He reports steering-mode
+  clicks working.

@@ -16,7 +16,61 @@ the same message:
 | `v0.78-steamvr` | `take-303-steamvr` |
 | `v0.320-shadows-pivot` … `v0.343-right-click` | `take-320-shadows-pivot` … `take-343-right-click` (same names) |
 
-Nothing here is published until the repository is pushed.
+v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
+(2026-10-30). The three old `v0.<n>-name` tags were already public and stay
+on the remote beside their `take-NNN-name` twins.
+
+## v0.9.6 — 2026-10-30 — the HUD clicks where it is drawn; lean; steering targets the ring
+
+The state of take 375 (`take-375-hud-split`, code identical to commit
+16ad52d). Patola: *"It worked. Used the lower HUD successfully with highlights
+and clicking (the four elements -- left panel, radar in the center, right
+panel, and dialogue choices in the center), mouse mode worked both when
+looking straight and looking to the side, steering mode too. Map still
+perfect."*
+
+* **Fixed: the cockpit HUD answers where it is drawn** (`X4VR_HUD_MOUSE`).
+  * Affected: the left panel, the radar/minimap, the right panel's alerts
+    and the dialogue choices.
+  * Before, they answered only at about twice their drawn distance from the
+    centre. In VR the canvas map draws X4's perspective UI at the angle X4
+    meant (#76), but X4 kept hit-testing it at its own scale.
+  * The object markers, drawn at full size, keep the pointer as it is.
+* **New: steering mode targets at the steering ring** (`X4VR_STEER_PICK`).
+  Hover, click-select and the gimballed weapons' aim follow the ring, not
+  the centre of the view, with the head turned or leaning.
+* **New: lean in the cockpit** (`X4VR_HEAD_6DOF`). The head's position moves
+  the eye in the world shaders, forward included. X4's own eye stays put, so
+  the HUD stays with the cockpit and clicks stay lined up.
+* **Fixed: the cursor works right after a load.** X4 left the pointer at the
+  window's corner, outside the headset's view, until a steering toggle. It
+  is now recentred once per load.
+* **Fixed:** while the cockpit right-click menu is open, head-look holds the
+  view, so turning the head no longer sweeps the cursor across the menu.
+* **Three more approved code patches**, applied in memory to X4 9.00 and
+  checked byte for byte first (refused on any other build):
+  * X4's pick ray at 0x1d6e0e1 (steering);
+  * the UI's mouse feed at 0xa70725 (the ring's shift);
+  * X4's layer pick at 0xa24e79 (the perspective branch's scale).
+* **The play command adds** `X4VR_HEAD_6DOF=1 X4VR_STEER_PICK=1
+  X4VR_HUD_MOUSE=1`.
+* Removed: `X4VR_HUD_RAY` and `X4VR_HUD_PICK`, the two attempts that did not
+  move the HUD (takes 369–372).
+
+**Known limitations:**
+* The start menu shows as a window.
+* F6 entered on foot keeps the small overlay.
+* Frame pacing at 2816² per eye: a 90 Hz display is starved of about 10–20%
+  of its frames (WiVRn shows it as ghosting).
+
+**How to run.** For scored takes, the shipping line (docs/known-good-runs.md,
+"Take 375"):
+
+    X4VR_TAKE=<n> X4VR_HEAD_6DOF=1 X4VR_STEER_PICK=1 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_FOOT=1 X4VR_STEER=a X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_LOG=/tmp/x4vr-take<n>.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+For play, the same without the per-frame logging and the instruments:
+
+    X4VR_HEAD_6DOF=1 X4VR_STEER_PICK=1 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_FOOT=1 X4VR_STEER=a X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_LOG=/tmp/x4vr-play.log X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
 
 ## v0.9.5 — 2026-10-29 — F6's overlay fills its window
 

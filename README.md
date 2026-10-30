@@ -11,13 +11,15 @@ Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
 **[docs/frame-analysis.md](docs/frame-analysis.md)**; the traps X4 sets for
 modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 
-> **Status: v0.9.5 — playable in VR** ([release notes](docs/releases.md)).
-> X4 runs in VR with in-engine stereo (per-eye lighting), head-look in the
-> cockpit and on foot, the UI on a canvas at the angle X4 intended, and every
-> menu reachable and lined up with the cursor, over WiVRn or SteamVR. The
-> external views (F2/F3/F4) are the whole scene too, and the cinematic view
-> (F6) a steady window with its overlay filling it. Next: full 6DOF in the
-> cockpit. The start menu as the whole scene is an optional future feature. An earlier proof of
+> **Status: v0.9.6 — playable in VR** ([release notes](docs/releases.md)).
+> X4 runs in VR with in-engine stereo (per-eye lighting), head-look and lean
+> in the cockpit, head-look on foot, the UI on a canvas at the angle X4
+> intended, every menu reachable and lined up with the cursor, and the
+> cockpit HUD clickable where it is drawn, over WiVRn or SteamVR. Mouse
+> steering targets at its ring. The external views (F2/F3/F4) are the whole
+> scene too, and the cinematic view (F6) a steady window with its overlay
+> filling it. Next: packaging and a launcher. The start menu as the whole
+> scene is an optional future feature. An earlier proof of
 > concept using OpenTrack head-tracking + vkShade/SuperDepth3D depth-image
 > reconstruction is preserved
 > at tag `v0.1`; it was abandoned as a dead end (wrong pivot, gimbal lock,
@@ -84,12 +86,13 @@ blocks every frame.
 | **Playable in VR** | **release** | **`v0.9.0`** |
 | F6 (cinematic) a steady window, as X4 intends | done | **`v0.9.4`** |
 | F6's overlay fills its window | done | **`v0.9.5`** |
+| The cockpit HUD clicks where it is drawn; steering targets at the ring; lean in the cockpit | done | **`v0.9.6`** |
 | The start menu as the whole scene (menu at its size in front, the 3D scene all around) | optional, future — not scheduled | — |
 | Volumetric nebula in stereo (Matrix #79B, CEO's Doubt) | done | **`v0.9.1`** |
 | The numpad orbits the external (F2) and target (F3) views again | done | **`v0.9.2`** |
 | F2/F3/F4 as the whole scene: the head turns X4's camera inside them | done | **`v0.9.3`** |
 | Frame pacing at 2816² per eye (a 90 Hz display is starved) | open | — |
-| Head translation (lean) | open — X/Y built and switched off, Z needs depth | — |
+| Head translation (lean) | done — in the world shaders, X4's eye stays put (`X4VR_HEAD_6DOF`) | **`v0.9.6`** |
 
 **Note on roll stereo:** it needs `X4VR_POSE=1`. Between takes 260 and 315
 the working command line carried `X4VR_POSE=0`, so it was inactive (see *"Roll
