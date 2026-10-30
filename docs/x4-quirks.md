@@ -28307,3 +28307,31 @@ Take 373's line with `X4VR_PTRWATCH` removed and `X4VR_HUD_MOUSE=1` added.
   per-element split.
 * **Refutation:** still 2x. The UI library's mouse is not what the widgets
   test.
+
+**Steering-mode selection (Patola, after take 373, with timestamps in
+`/dados/x4vr-take-373.mp4`).**
+* *"the cursor in steering mode is the far end of the line that comes from
+  the center. Two grey semicircles."*
+* 3:16: cursor far down, the jumpgate at the centre gets selected.
+* 3:22: cursor off the bottom, the Cobra halfway to the centre gets
+  selected.
+* 3:26: cursor on the Cobra, no selection, no highlight.
+* 3:29: the Cobra at the centre takes the right-click, with the cursor near
+  the bottom.
+* The frames agree: the selection follows the centre of X4's view, the
+  gaze. He was looking up throughout; aimpick's shift was (-56..-71,
+  +439..+509) px, so the nose was about 480 px below the centre.
+
+**Hypothesis.**
+* 0x1d6e080's per-frame branch (`[P+0x6aa8] == frame` → 0x1d6e3c0) aims
+  through the screen centre in camera mode 0. It skips the aimpick merge
+  point (it jumps to 0x1d6e128).
+* In vanilla the screen centre is the crosshair, so steering-mode selection
+  would be at the crosshair.
+* The marker is written at 0x13856b8/0x1386118/0x1386e23/0x1395de3/0x1397063;
+  whether steering sets it is not yet read.
+
+**Open for Patola:** in vanilla flat X4, does a steering-mode click select
+under the steering cursor or at the crosshair? Crosshair → the faithful VR
+pick is the nose (that branch + the nose shift). Cursor → that branch through
+the ring.
