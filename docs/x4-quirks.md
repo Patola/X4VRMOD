@@ -28335,3 +28335,47 @@ Take 373's line with `X4VR_PTRWATCH` removed and `X4VR_HUD_MOUSE=1` added.
 under the steering cursor or at the crosshair? Crosshair → the faithful VR
 pick is the nose (that branch + the nose shift). Cursor → that branch through
 the ring.
+
+## HANDOFF before take 374 (2026-10-30, context compaction)
+
+**State of the code (HEAD, nothing pushed).**
+* Shipping line = take 367's line plus the load recentre (always on with
+  head-look write).
+* Knobs, all off by default:
+  * `X4VR_STEER_PICK=1`: world pick at the steering ring, 0x1d6e0e1. Works
+    (take 367).
+  * `X4VR_HUD_MOUSE=1`: **the candidate HUD fix** (x4vr_uimouse.hpp,
+    0xa70725). It shifts and scales the mouse X4 feeds its UI library
+    (0xa704a0 → 0x2317e00) by (ptr + steering shift) / A while the cursor is
+    drawn raw.
+  * `X4VR_HUD_RAY=1` (UI cast, 0x1d6e2b8 + 0x137a1d0/0x1372a0b) and
+    `X4VR_HUD_PICK=1` (presentation pointer, 0xa40af3). Both ineffective for
+    the highlight (takes 369/371/372). **Remove both** (code, tests, scorer
+    blocks, census cases) once HUD_MOUSE is confirmed; keep HUD_RAY only if
+    clicks need the cast too.
+  * Instruments: `X4VR_HOVERLOG=1` (hit records A/B/C/D with vtables) and
+    `X4VR_PTRWATCH=1` (hardware watch on X4's pointer; the reference is
+    watched on 4 bytes since take 373).
+* Load recentre (`load_recentre_tick`): confirmed by Patola in take 369.
+
+**Take 374** (command above, under "Take 374 — PREDICTIONS"): configuration
+5, HUD_MOUSE on, hover log on.
+* Score with `LC_ALL=C python3 tools/score_run.py /tmp/x4vr-take374.log`.
+  The `uimouse` block must show PATCHED and periods with "moved" > 0.
+* **Success:**
+  * comms choices, minimap and alerts highlight and click where drawn, in
+    mouse mode;
+  * in steering mode, under the ring;
+  * world clicks unchanged.
+* **If still 2x:** the UI library's mouse is not what the widgets test.
+  Next, a PTRWATCH on the setter's target (UI object +0x8, x4vr_uimouse.hpp)
+  to find its readers.
+* **If full-size UI (marker labels) now answers at half offset:** the UI
+  library hit-tests both kinds and needs a per-element split.
+
+**Separate open item: steering-mode selection follows the gaze**, not the
+steering cursor (take 373's video; hypothesis in the note just above).
+Waiting on Patola: in vanilla, does steering mode select under the cursor or
+at the crosshair? Fix after that: 0x1d6e080's centre-only branch
+(0x1d6e3c0 → 0x1d6e128) given the nose shift (crosshair) or the ring shift
+(cursor).
