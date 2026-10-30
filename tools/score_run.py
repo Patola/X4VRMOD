@@ -5395,28 +5395,45 @@ def main(path):
             print("uipick  whether the HUD and the conversation choices take "
                   "clicks where they are drawn is Patola's to say")
 
-    # --- X4VR_HUD_MOUSE: X4's UI library's mouse at the drawn HUD (374) ---
+    # --- X4VR_HUD_MOUSE: X4's UI takes the mouse where it is drawn (374) ---
     #
-    # A stub at 0xa70725 shifts and scales the mouse 0xa704a0 hands the UI
-    # library each frame (injector/x4vr_uimouse.hpp). Gate on intent: asked
-    # means PATCHED; a period after head-look armed that lasted must show the
-    # library fed and the mouse moved.
+    # Take 374: a stub at 0xa70725 shifted and scaled the mouse 0xa704a0 hands
+    # the UI each frame. Since take 375 that stub only shifts (the steering
+    # ring) and a second one at 0xa24e79 scales X4's perspective layer pick
+    # alone (injector/x4vr_uimouse.hpp). Both log formats are read. Gate on
+    # intent: asked means PATCHED; a period after head-look armed that lasted
+    # must show the feed passing the stub, and a run with 30 s of it on must
+    # show perspective layer picks scaled (the split stub on its branch).
     um_asked = bool(re.search(r"\bX4VR_HUD_MOUSE=1\b", run or ""))
     um_patched = "uimouse: PATCHED" in text
     um_refused = re.search(r"uimouse: patch REFUSED — (.*?)\. X4's HUD", text)
     um_arm = re.search(r"\[\s*([\d.]+)\]\s+inject\s+milestone: head-look write "
                        r"ARMED", text)
-    um_on = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+uimouse: ON #(\d+) — X4's UI "
-                       r"library takes the mouse x([\d.]+),([\d.]+)", text)
-    um_off = {int(n): (float(d), why, int(c), int(k))
-              for n, d, why, c, k in re.findall(
-                  r"uimouse: OFF #(\d+) after ([\d.]+) s — (.*?); X4's own mouse\. "
-                  r"The UI library was fed (\d+) time\(s\), (\d+) moved", text)}
+    um_on = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+uimouse: ON #(\d+) — X4's "
+                       r"(?:UI library|perspective UI) takes the mouse "
+                       r"x([\d.]+),([\d.]+)", text)
+    # n -> (duration, why, fed, shifted, perspective picks, scaled); the
+    # last two are None in take 374's format, where "moved" was the feed's.
+    um_off = {}
+    for n, d, why, c, k in re.findall(
+            r"uimouse: OFF #(\d+) after ([\d.]+) s — (.*?); X4's own mouse\. "
+            r"The UI library was fed (\d+) time\(s\), (\d+) moved", text):
+        um_off[int(n)] = (float(d), why, int(c), int(k), None, None)
+    for n, d, why, c, k, pp, sc in re.findall(
+            r"uimouse: OFF #(\d+) after ([\d.]+) s — (.*?); X4's own mouse\. "
+            r"the UI was fed (\d+) time\(s\), (\d+) through the shift; (\d+) "
+            r"perspective layer pick\(s\), (\d+) scaled", text):
+        um_off[int(n)] = (float(d), why, int(c), int(k), int(pp), int(sc))
     um_per = {}
     for n, d, c, k in re.findall(
             r"uimouse: ON #(\d+) (\d+) s — the UI library was fed (\d+) "
             r"time\(s\), (\d+) moved", text):
-        um_per[int(n)] = (float(d), int(c), int(k))
+        um_per[int(n)] = (float(d), int(c), int(k), None, None)
+    for n, d, c, k, pp, sc in re.findall(
+            r"uimouse: ON #(\d+) (\d+) s — the UI was fed (\d+) time\(s\), "
+            r"(\d+) through the shift; (\d+) perspective layer pick\(s\), "
+            r"(\d+) scaled", text):
+        um_per[int(n)] = (float(d), int(c), int(k), int(pp), int(sc))
     if um_asked or um_patched or um_on:
         if um_asked and not um_patched:
             fails.append("X4VR_HUD_MOUSE=1 but the patch was "
@@ -5425,32 +5442,51 @@ def main(path):
         if not um_asked and (um_patched or um_on):
             fails.append("the UI-mouse patch acted in a run that did not ask "
                          "for it (X4VR_HUD_MOUSE)")
-        tc = tk = 0
+        split = "perspective layer pick" in text
+        tc = tk = tp = ts = 0
+        judged_on = 0.0
         for i, (t, n, sx, sy) in enumerate(um_on):
             n = int(n)
             if n in um_off:
-                dur, why, c, k = um_off[n]
+                dur, why, c, k, pp, sc = um_off[n]
             elif n in um_per:
-                dur, c, k = um_per[n]
+                dur, c, k, pp, sc = um_per[n]
                 why = "open at exit"
             else:
-                dur, c, k, why = None, 0, 0, "open at exit"
+                dur, c, k, pp, sc, why = None, 0, 0, None, None, "open at exit"
             tc, tk = tc + c, tk + k
+            tp, ts = tp + (pp or 0), ts + (sc or 0)
             if i < 12:
                 print(f"uimouse #{n:<3d} t {float(t):10.1f}  x{sx},{sy}  "
                       + (f"{dur:6.1f} s" if dur is not None else "     ? s")
-                      + f"  fed {c}, moved {k}  ended: {why}")
+                      + (f"  fed {c}, {k} shifted; perspective picks {pp}, "
+                         f"{sc} scaled" if pp is not None
+                         else f"  fed {c}, moved {k}")
+                      + f"  ended: {why}")
             judged = um_arm is not None and float(t) >= float(um_arm.group(1))
+            if judged and dur is not None:
+                judged_on += dur
             if judged and dur is not None and dur >= 2.0 and k == 0:
-                fails.append(f"uimouse period {n}: {dur:.1f} s on and the UI "
-                             f"library's mouse was never moved — patched, not "
+                fails.append(f"uimouse period {n}: {dur:.1f} s on and the UI's "
+                             f"mouse never passed the stub — patched, not "
                              f"executed")
+        if split and judged_on >= 30.0 and ts == 0:
+            fails.append(f"uimouse: {judged_on:.0f} s on and X4's perspective "
+                         f"layer pick never ran through the scale — the HUD is "
+                         f"not on the branch 0xa24e79 was read as")
         if um_patched:
-            print(f"uimouse {len(um_on)} period(s); the UI library was fed {tc} "
-                  f"time(s), {tk} moved")
+            if split:
+                print(f"uimouse {len(um_on)} period(s); the UI was fed {tc} "
+                      f"time(s), {tk} through the shift; {tp} perspective "
+                      f"layer pick(s), {ts} scaled")
+            else:
+                print(f"uimouse {len(um_on)} period(s); the UI library was fed "
+                      f"{tc} time(s), {tk} moved")
         if um_on:
             print("uimouse whether the HUD, the minimap and the comms choices "
-                  "answer where they are drawn is Patola's to say")
+                  "answer where they are drawn"
+                  + (", and the markers where THEY are drawn," if split else "")
+                  + " is Patola's to say")
 
     # --- X4VR_HUD_RAY: X4's UI casts at the drawn HUD (take 371) ----------
     #

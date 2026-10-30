@@ -28379,3 +28379,113 @@ Waiting on Patola: in vanilla, does steering mode select under the cursor or
 at the crosshair? Fix after that: 0x1d6e080's centre-only branch
 (0x1d6e3c0 → 0x1d6e128) given the nose shift (crosshair) or the ring shift
 (cursor).
+
+## Take 374 — SCORED PASS (2026-10-30): the HUD answers where drawn; the markers moved
+
+Configuration 5, WiVRn. `score_run.py` PASS:
+* `uimouse` PATCHED; 9 periods, the UI library fed 13581 times, all moved
+  (x1.9041 = 1/0.5252).
+* aimpick 4 periods, 11841 of 11848 rays shifted; the load recentre ran.
+
+**Patola:**
+* *"Now the lower HUD is working completely fine"*: a notification on the
+  right panel took the click, its options highlighted and selected
+  correctly, and the mail symbol on the left panel opened mail.
+  **P374.1 and P374.2 confirmed.**
+* *"However, this created a regression in both mouse mode and steering
+  mode. If I have the head straight and centered, the clicks go to the
+  correct place. If I move my head, both cursors ... only register
+  clicks/highlights when shifted relative to the distance from the
+  center."* **P374.3 refuted.**
+* Map, ESC menu: fine (the patch is off under a canvas menu).
+
+**Reading.** This is the "possible" branch written before the run. Anark has
+ONE mouse per frame (0xa704a0 is X4's override of Anark::CInputEngine's
+slot 2, GetMouseState, which returns &this+8), and every scene picks against
+it. Scaling it by 1/A is right for the perspective HUD and wrong by 1.904x
+for what is drawn at full size, the orthographic object markers.
+* In steering mode the error is 0.904 x the ring's offset, and the ring
+  moves with the head: correct with the head straight, worse the further it
+  turns. That matches his report exactly.
+* In mouse mode the same reading predicts dependence on the CURSOR's
+  distance from the centre, not on the head. In the hover log his WORLD hovers
+  with the head near straight were within ~150 px of the centre (B records at
+  0,0 / +10,+89 / +138,+56 / +41,+64). With the head turned they were at
+  -651,+76 (yaw -36 deg), +617,+72 (+28) and +543,+82 (+26). His clicks at
+  +220..+430 px below the centre with the head straight were the comms
+  choices, which worked. So the two variables moved together in this take;
+  take 375's protocol separates them.
+
+## The split (read 2026-10-30): X4's layer pick has a perspective branch
+
+The mouse's path, read statically from the binary (Anark is the UI library,
+RTTI `N5Anark...`, code 0x2314000–0x2340000; X4's glue `N2UI6XAnark...` at
+0xa0e000–0xa80000):
+* Anark::CGameface's update (0x2314bd0) calls the input engine's slot 2
+  (0xa704a0, the feed) and hands the state to the scene manager's slot 8
+  (X4's 0xa37870), which copies it to sm+0x60 (x, y at state+0x10).
+* X4's scene manager slot 5 (0xa583a0) calls each scene's pick (CScene
+  slot 7, 0x2322dc0) with the state. That walks the scene's layers
+  (0x2322350) and calls the render engine's slot 14 for each:
+  **0xa24b50, X4's layer pick** (vtable 0x3c4f588).
+* 0xa24b50 takes the presentation (r14), reads the mouse into its locals at
+  0xa24d3f ([rsp] = x, y), asks the presentation for its viewport and
+  projection mode (slot 0xa8, mode in edx), and builds the pick ray:
+  * **mode 1 → 0xa25000:** an orthographic ray whose origin moves with the
+    mouse.
+  * **otherwise → 0xa24e79:** a perspective ray whose direction is the mouse
+    times tan(half of the presentation's field, obj+0x8 = X4's default
+    1.287 rad, the constant 0x2e2cbc4).
+  * **obj+0x83 == 5** (the player's look) branches away earlier and uses
+    X4's own aim point (P+0x6d30/+0x6d60), not the mouse.
+* The canvas map scales exactly the draws that leave with w != 1
+  (perspective) and leaves w == 1 (orthographic). So the 1/A belongs on the
+  perspective branch alone.
+
+**Root-cause note (not taken).** UICameraBridge::GetFOV (0x191c1e0), the
+presentation constructor (0xa2f590), GetUIAnchorScreenPosition and 13 other
+sites read the default-field constant 0x2e2cbc4 directly. Making X4's UI
+field the world's at its source would remove the canvas scale and the mouse
+patches together. But several of those sites initialise cameras generally
+(+0x874 in 0x138b6f5, 0x1dcc99f), and whether X4's HUD layout depends on the
+field is unknown. Too wide for one take; recorded for later.
+
+## Take 375 — PREDICTIONS (written before the run): the per-layer scale
+
+X4VR_HUD_MOUSE changed (injector/x4vr_uimouse.hpp, tests/uimouse.cpp):
+* **The feed stub (0xa70725)** now only adds the steering ring's shift. Every
+  layer gets the pointer as drawn, at the ring in steering mode.
+* **A layer stub at 0xa24e79** (16 bytes: `pxor %xmm0,%xmm0; mov
+  0xda8(%r14),%edx; movq (%rsp),%xmm7` → jmp + 11 int3s) replays the three
+  instructions and, while on, multiplies xmm7, the mouse the perspective ray
+  is built from, by 1/A. Then 0xa24e89.
+  * Nothing jumps inside the 16 bytes.
+  * xmm6 is the scratch; X4 overwrites it at 0xa24eb5.
+  * The locals other code reads ([rsp], [rsp+0x20/0x24]) stay X4's.
+* verify_sites covers the mouse load at 0xa24d2f, the mode test and its je
+  to 0xa25000, and the render engine's slot 14.
+* The test executes both stubs. Feed: off = X4's floats; on = shifted,
+  unscaled. Layer: entered as 0xa24e79 with the mouse at (%rsp): xmm0 zero,
+  edx the viewport height, r11 kept; on, take 368's monitor (+257, +306)
+  gives (489, 583).
+* Log: periods report "fed N, K through the shift; P perspective layer
+  pick(s), S scaled". The scorer reads both formats. FAIL when a period of
+  2 s or more never passes the feed stub, or when 30 s on scale no
+  perspective pick at all.
+
+Take 374's line, take number and log changed, nothing else:
+
+    X4VR_HEADLOOK_LAGLOG=1 X4VR_TAKE=375 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_STEER_PICK=1 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take375.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_HOVERLOG=1 X4VR_STEER=a X4VR_FOOTLOG=1 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P375.1 (markers back):** mouse mode, a ship or station far from the
+  centre highlights and takes the click with the cursor ON it: head
+  straight, head turned, leaning. Take 367's behaviour.
+* **P375.2 (HUD kept):** the alerts, the comms choices, the mail icon and the
+  minimap still answer where drawn (take 374).
+* **P375.3 (steering):** both, under the steering cursor.
+* **P375.4:** menus unchanged.
+* **Refutations:**
+  * HUD back at 2x, markers fine: the HUD is not on the branch 0xa24e79 was
+    read as. The scorer's "S scaled" stays near 0 while he hovers it.
+  * Markers still at half: the markers go through the perspective branch
+    too. A finer split, by the presentation's flags, is next.

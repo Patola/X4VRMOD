@@ -5295,12 +5295,14 @@ static void uipick_tick() {
 
 // ------------------------------------------------ X4VR_HUD_MOUSE=1
 //
-// X4's UI library takes the mouse where the HUD is DRAWN (x4vr_uimouse.hpp;
-// option A, the route take 373's hardware watch found: 0xa704a0 feeds the
-// centred pointer to the UI library's setter every frame). While the cursor
-// is drawn raw over a canvas-mapped UI, the floats it hands over are shifted
-// by the steering ring (X4VR_STEER_PICK) and divided by the canvas factors;
-// off under a canvas menu, where cursor and UI already share the map.
+// X4's UI takes the mouse where it is DRAWN (x4vr_uimouse.hpp). Take 373's
+// hardware watch found the one mouse Anark has (0xa704a0 -> the setter,
+// every frame); take 374 scaled it and fixed the HUD but moved the markers,
+// which the canvas map draws at full size. So the feed now only shifts the
+// mouse to the steering ring (X4VR_STEER_PICK), and the 1/A scale goes into
+// X4's layer pick (0xa24b50), on its perspective branch alone. Both act
+// while the cursor is drawn raw over a canvas-mapped UI; under a canvas menu
+// cursor and UI already share the map.
 static bool uimouse_asked() {
     static const bool on = x4vr::env_on("X4VR_HUD_MOUSE", false);
     return on;
@@ -5328,45 +5330,54 @@ static void uimouse_patch_at_start() {
     if (!verify_sites(rd, &bad)) {
         char why[160];
         snprintf(why, sizeof why,
-                 "the UI mouse feed's code at %#lx differs from X4 9.00",
+                 "the UI mouse code at %#lx differs from X4 9.00",
                  (unsigned long)bad);
         refuse(why);
         return;
     }
-    const uintptr_t site = kPatch;
+    // One page for both stubs: the feed's at 0, the layer pick's at 128.
+    const uintptr_t sites[2] = {kPatch, kLayerPatch};
     uint8_t *page = (uint8_t *)x4vr::csmfit::alloc_near(0x3f0000, 0x7c00000,
-                                                        &site, 1, 5);
+                                                        sites, 2, 5);
     if (!page) {
-        refuse("no free page within rel32 reach of 0xa70725");
+        refuse("no free page within rel32 reach of 0xa70725 and 0xa24e79");
         return;
     }
-    uint8_t code[kStubMax];
+    uint8_t code[kStubMax], lcode[kStubMax];
     const size_t len = make_stub(code, (uintptr_t)page, (uintptr_t)&g_uimouseslot,
                                  kCont);
-    uint8_t jmp[kPatchLen];
-    if (!len || !patch_bytes((uintptr_t)page, jmp)) {
-        refuse("the stub is out of rel32 reach of 0xa70725");
+    const size_t llen = make_layer_stub(lcode, (uintptr_t)(page + 128),
+                                        (uintptr_t)&g_uimouseslot, kLayerCont);
+    uint8_t jmp[kPatchLen], ljmp[kLayerPatchLen];
+    if (!len || !llen || !patch_bytes((uintptr_t)page, jmp) ||
+        !layer_patch_bytes((uintptr_t)(page + 128), ljmp)) {
+        refuse("a stub is out of rel32 reach of its site");
         return;
     }
     memcpy(page, code, len);
+    memcpy(page + 128, lcode, llen);
     const long pgsz = sysconf(_SC_PAGESIZE);
     if (mprotect(page, (size_t)pgsz, PROT_READ | PROT_EXEC) != 0) {
-        refuse("mprotect(rx) of the stub failed");
+        refuse("mprotect(rx) of the stubs failed");
         return;
     }
-    // X4 has run no frame yet, so no thread is inside the 8 bytes.
+    // X4 has run no frame yet, so no thread is inside either range. The
+    // layer pick first: with `on` still 0 its stub is X4's three
+    // instructions, so a feed patch that then failed would leave X4 as it was.
     char err[200] = "";
-    if (!x4vr::foot::patch_code(kPatch, jmp, kPatchLen, err, sizeof err)) {
+    if (!x4vr::foot::patch_code(kLayerPatch, ljmp, kLayerPatchLen, err, sizeof err) ||
+        !x4vr::foot::patch_code(kPatch, jmp, kPatchLen, err, sizeof err)) {
         refuse(err);
         return;
     }
     g_uimousepatch.patched = true;
-    X4VR_LOG("uimouse: PATCHED — the mouse X4 hands its UI library each frame "
-             "(0xa704a0 -> 0x2317e00) goes through a %zu-byte stub at %p at "
-             "0xa70725: while the cursor is drawn raw it is shifted by the "
-             "steering ring and divided by the canvas factors, so the HUD "
-             "answers where it is drawn; under a canvas menu it is X4's",
-             len, (void *)page);
+    X4VR_LOG("uimouse: PATCHED — the mouse X4 hands its UI each frame (0xa704a0 "
+             "-> 0x2317e00) goes through a %zu-byte stub at 0xa70725 that "
+             "shifts it to the steering ring, and X4's perspective layer pick "
+             "through a %zu-byte stub at 0xa24e79 that divides it by the "
+             "canvas factors; stubs at %p. The orthographic layers (markers) "
+             "keep the pointer as drawn. Under a canvas menu both are X4's",
+             len, llen, (void *)page);
 }
 
 static void uimouse_tick() {
@@ -5400,35 +5411,45 @@ static void uimouse_tick() {
     }
     static bool was_on = false;
     static unsigned periods = 0;
-    static uint64_t c0 = 0, s0 = 0;
+    static uint64_t c0 = 0, f0 = 0, p0 = 0, s0 = 0;
     static double t0 = 0.0, last_line = 0.0;
     const uint64_t calls = g_uimouseslot.calls.load(std::memory_order_relaxed);
+    const uint64_t fed = g_uimouseslot.fed.load(std::memory_order_relaxed);
+    const uint64_t persp = g_uimouseslot.persp.load(std::memory_order_relaxed);
     const uint64_t scaled = g_uimouseslot.scaled.load(std::memory_order_relaxed);
+    auto counts = [&](char *buf, size_t n) {
+        snprintf(buf, n,
+                 "the UI was fed %llu time(s), %llu through the shift; %llu "
+                 "perspective layer pick(s), %llu scaled",
+                 (unsigned long long)(calls - c0), (unsigned long long)(fed - f0),
+                 (unsigned long long)(persp - p0),
+                 (unsigned long long)(scaled - s0));
+    };
+    char cbuf[200];
     if (on && !was_on) {
         periods++;
         c0 = calls;
+        f0 = fed;
+        p0 = persp;
         s0 = scaled;
         t0 = last_line = now;
         if (periods <= 300)
-            X4VR_LOG("uimouse: ON #%u — X4's UI library takes the mouse x%.4f,%.4f "
-                     "(canvas map %.4f,%.4f)%s",
+            X4VR_LOG("uimouse: ON #%u — X4's perspective UI takes the mouse "
+                     "x%.4f,%.4f (canvas map %.4f,%.4f), the markers as drawn%s",
                      periods, sx, sy, ax, ay,
-                     (dx || dy) ? ", shifted to the steering ring" : "");
+                     (dx || dy) ? ", both shifted to the steering ring" : "");
     } else if (!on && was_on) {
         const char *why = !fresh ? "the layer stopped publishing"
                           : !raw ? "the cursor is drawn through the canvas (a menu)"
                                  : "no canvas map";
+        counts(cbuf, sizeof cbuf);
         if (periods <= 300)
-            X4VR_LOG("uimouse: OFF #%u after %.1f s — %s; X4's own mouse. The "
-                     "UI library was fed %llu time(s), %llu moved",
-                     periods, now - t0, why, (unsigned long long)(calls - c0),
-                     (unsigned long long)(scaled - s0));
+            X4VR_LOG("uimouse: OFF #%u after %.1f s — %s; X4's own mouse. %s",
+                     periods, now - t0, why, cbuf);
     } else if (on && now - last_line >= 10.0 && periods <= 300) {
         last_line = now;
-        X4VR_LOG("uimouse: ON #%u %.0f s — the UI library was fed %llu time(s), "
-                 "%llu moved",
-                 periods, now - t0, (unsigned long long)(calls - c0),
-                 (unsigned long long)(scaled - s0));
+        counts(cbuf, sizeof cbuf);
+        X4VR_LOG("uimouse: ON #%u %.0f s — %s", periods, now - t0, cbuf);
     }
     was_on = on;
 }

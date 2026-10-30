@@ -1635,8 +1635,8 @@ want "ptrwatch: asked, never armed -> FAIL" /tmp/census-pw-base.log "FAIL|  - " 
 { cat /tmp/census-pw-base.log; echo '[  999960.000] inject  ptrwatch: REFUSED — no watch could be opened on 60 thread(s): Permission denied'; } > /tmp/census-pw-ref.log
 want "ptrwatch: refused -> FAIL" /tmp/census-pw-ref.log "FAIL|  - " "X4VR_PTRWATCH=1 but the watch was REFUSED — no watch could be opened on 60 thread(s): Permission denied"
 absent "ptrwatch: not asked -> silent" "$BASE" ptrwatch
-# X4VR_HUD_MOUSE: X4's UI library's mouse at the drawn HUD (take 374).
-for f in '"uimouse: PATCHED — the mouse X4 hands its UI library each frame "' '"uimouse: ON #%u — X4' '"uimouse: OFF #%u after %.1f s — %s; X4' '"UI library was fed %llu time(s), %llu moved",' '"uimouse: patch REFUSED — %s. X4'; do
+# X4VR_HUD_MOUSE: X4's UI takes the mouse where it is drawn (takes 374/375).
+for f in '"uimouse: PATCHED — the mouse X4 hands its UI each frame (0xa704a0 "' '"uimouse: ON #%u — X4' '"uimouse: OFF #%u after %.1f s — %s; X4' '"the UI was fed %llu time(s), %llu through the shift; %llu "' '"perspective layer pick(s), %llu scaled",' '"uimouse: patch REFUSED — %s. X4'; do
     if grep -qF "$f" injector/x4vr_inject.cpp; then
         ok "uimouse: the injector still prints $f"
     else
@@ -1644,20 +1644,28 @@ for f in '"uimouse: PATCHED — the mouse X4 hands its UI library each frame "' 
     fi
 done
 sed 's/env: run = /env: run = X4VR_HUD_MOUSE=1 /' "$BASE" > /tmp/census-um-base.log
-ump='[  999950.000] inject  uimouse: PATCHED — the mouse X4 hands its UI library each frame (0xa704a0 -> 0x2317e00) goes through a 60-byte stub'
+ump='[  999950.000] inject  uimouse: PATCHED — the mouse X4 hands its UI each frame (0xa704a0 -> 0x2317e00) goes through a 41-byte stub at 0xa70725'
 umarm='[  999955.000] inject  milestone: head-look write ARMED — the view now follows your head without mouse-look.'
-umon='[  999960.000] inject  uimouse: ON #1 — X4'"'"'s UI library takes the mouse x1.9040,1.9040 (canvas map 0.5252,0.5252)'
-umoff='[  999970.000] inject  uimouse: OFF #1 after 10.0 s — the cursor is drawn through the canvas (a menu); X4'"'"'s own mouse. The UI library was fed 600 time(s), 600 moved'
-umoff0='[  999970.000] inject  uimouse: OFF #1 after 10.0 s — the cursor is drawn through the canvas (a menu); X4'"'"'s own mouse. The UI library was fed 600 time(s), 0 moved'
+umon='[  999960.000] inject  uimouse: ON #1 — X4'"'"'s perspective UI takes the mouse x1.9040,1.9040 (canvas map 0.5252,0.5252), the markers as drawn'
+umoff='[  999970.000] inject  uimouse: OFF #1 after 10.0 s — the cursor is drawn through the canvas (a menu); X4'"'"'s own mouse. the UI was fed 600 time(s), 600 through the shift; 300 perspective layer pick(s), 300 scaled'
+umoff0='[  999970.000] inject  uimouse: OFF #1 after 10.0 s — the cursor is drawn through the canvas (a menu); X4'"'"'s own mouse. the UI was fed 600 time(s), 0 through the shift; 300 perspective layer pick(s), 300 scaled'
+umoffns='[  1000000.000] inject  uimouse: OFF #1 after 40.0 s — the cursor is drawn through the canvas (a menu); X4'"'"'s own mouse. the UI was fed 2400 time(s), 2400 through the shift; 0 perspective layer pick(s), 0 scaled'
 { cat /tmp/census-um-base.log; printf '%s\n' "$ump" "$umarm" "$umon" "$umoff"; } > /tmp/census-um-ok.log
-want "uimouse: a healthy period -> summarised" /tmp/census-um-ok.log uimouse "1 period(s); the UI library was fed 600 time(s), 600 moved"
+want "uimouse: a healthy period -> summarised" /tmp/census-um-ok.log uimouse "1 period(s); the UI was fed 600 time(s), 600 through the shift; 300 perspective layer pick(s), 300 scaled"
+want "uimouse: a healthy period -> the markers are Patola's to judge too" /tmp/census-um-ok.log uimouse "and the markers where THEY are drawn"
 if python3 tools/score_run.py /tmp/census-um-ok.log 2>&1 | grep -qE "^  - .*(uimouse|HUD_MOUSE|UI-mouse)"; then
     bad "uimouse: a healthy period -> FAILs"
 else
     ok "uimouse: a healthy period -> no FAIL"
 fi
 { cat /tmp/census-um-base.log; printf '%s\n' "$ump" "$umarm" "$umon" "$umoff0"; } > /tmp/census-um-zero.log
-want "uimouse: on, never moved -> FAIL" /tmp/census-um-zero.log "FAIL|  - " "the UI library's mouse was never moved — patched, not executed"
+want "uimouse: on, the feed never passed -> FAIL" /tmp/census-um-zero.log "FAIL|  - " "the UI's mouse never passed the stub — patched, not executed"
+{ cat /tmp/census-um-base.log; printf '%s\n' "$ump" "$umarm" "$umon" "$umoffns"; } > /tmp/census-um-nosplit.log
+want "uimouse: 40 s on, no perspective pick scaled -> FAIL" /tmp/census-um-nosplit.log "FAIL|  - " "40 s on and X4's perspective layer pick never ran through the scale"
+umon374='[  999960.000] inject  uimouse: ON #1 — X4'"'"'s UI library takes the mouse x1.9040,1.9040 (canvas map 0.5252,0.5252)'
+umoff374='[  999970.000] inject  uimouse: OFF #1 after 10.0 s — the cursor is drawn through the canvas (a menu); X4'"'"'s own mouse. The UI library was fed 600 time(s), 600 moved'
+{ cat /tmp/census-um-base.log; printf '%s\n' "$ump" "$umarm" "$umon374" "$umoff374"; } > /tmp/census-um-374.log
+want "uimouse: take 374's format -> still summarised" /tmp/census-um-374.log uimouse "1 period(s); the UI library was fed 600 time(s), 600 moved"
 want "uimouse: asked, no PATCHED line -> FAIL" /tmp/census-um-base.log "FAIL|  - " "X4VR_HUD_MOUSE=1 but the patch was never reported PATCHED"
 { cat "$BASE"; printf '%s\n' "$ump"; } > /tmp/census-um-unasked.log
 want "uimouse: patched unasked -> FAIL" /tmp/census-um-unasked.log "FAIL|  - " "the UI-mouse patch acted in a run that did not ask for it"
