@@ -28166,3 +28166,63 @@ layout +564, drawn at about +296.
 * **Refutation:** still 2x. Then H1 is wrong, and the next instrument is a
   hardware read-watchpoint (perf_event_open, read only) on the comms panel's
   local pointer, to name the code that picks the element.
+
+## Take 372 — SCORED PASS (2026-10-30): H1 refuted, the cast follows and the highlight does not
+
+Configuration 5. Patola:
+* On the right-click: *"in my previous run I conflated the mouse mode and
+  steering mode. It's in the steering mode that the place I am looking at
+  make my selection appear shifted -- it's not the right click ... in
+  steering mode the click was shifted by how much I was far from the
+  center."*
+* For each of the 5 comms choices (3 left, 2 right) he hovered first where it
+  appears, then where it highlights. They still differ.
+
+`score_run.py` PASS:
+* uipick: 13 periods, 61406 updates, all scaled;
+* uiray: UI rays 104964, UI casts on them 15294, on X4's ray 0;
+* hover: 108 lines, UI hits on 1 component type (vtable 0x3d21748).
+
+**P372.1 REFUTED.**
+* X4's UI cast hit the choices where drawn, with the pointer at (-78, +272),
+  (+101, +203) ... (+85, +255).
+* The highlight did not follow, with the presentations' local pointer also
+  corrected.
+* X4's UI shaders carry no mouse uniform (grep of /tmp/x4-shadersrc), so the
+  highlight is decided on the CPU by code none of the three patches reached.
+
+**Markers:** every UI hit in this take was the one HUD component (vtable
+0x3d21748). The world hits were the Cobra (0x3d23cd0, 49 m) and two others
+(0x3cc4df8, 0x3cd0d88). Take 371's portal belongs to the steering-mode
+question above, not to the cast. Open; to clarify with Patola which marker
+he aimed with.
+
+## Take 373 — PREDICTIONS (written before the run): name the code that reads the pointer
+
+`X4VR_PTRWATCH=1` (x4vr_ptrwatch.hpp), read only.
+* A hardware read/write watchpoint (perf_event_open, PERF_TYPE_BREAKPOINT,
+  user space only) goes on X4's pointer (in+0x6718) and its reference
+  (in+0x6734), on every thread that exists 5 s after head-look armed.
+* Every access is sampled with its instruction and 128 bytes of user stack,
+  so a leaf accessor's caller ([sp]) is named.
+* Each new (address, instruction, [sp]) is logged once; every 5 s the
+  window's busiest sites are logged.
+* tests/ptrwatch.cpp runs a real watchpoint on its own memory:
+  * 5 leaf reads named with their caller;
+  * the write seen;
+  * an unwatched variable silent;
+  * another thread's reads on its own watch with its tid.
+* `perf_event_paranoid` is 2 here, which allows it.
+
+The HUD patches are OFF for this take (X4's own behaviour, no portal side
+effect); the hover log stays.
+
+    X4VR_HEADLOOK_LAGLOG=1 X4VR_TAKE=373 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take373.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_STEER_PICK=1 X4VR_PTRWATCH=1 X4VR_HOVERLOG=1 X4VR_FOOTLOG=1 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P373.1:** the 5 s windows while he moves across highlighted comms choices
+  show access sites that a quiet window (no UI, mouse still) lacks. Those
+  are the candidates for the code that decides the highlight, to be read
+  and then patched.
+* **P373.2 (the alternative):** no new site appears during the comms hover.
+  The UI then takes the pointer from SDL's event copy and never reads X4's
+  pointer, and the fix moves to the events.

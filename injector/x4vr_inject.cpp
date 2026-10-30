@@ -16,6 +16,7 @@
 // Later phases add LuaJIT FFI and SDL hooks.
 
 #define _GNU_SOURCE 1
+#include <dirent.h>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -55,6 +56,7 @@ extern char **environ;
 #include "x4vr_aimpick.hpp"
 #include "x4vr_uiray.hpp"
 #include "x4vr_uipick.hpp"
+#include "x4vr_ptrwatch.hpp"
 #include "x4vr_menus.hpp"
 #include "x4vr_config.hpp"
 #include "x4vr_inputmap.hpp"
@@ -4952,6 +4954,160 @@ static void hoverlog_tick() {
              rec[3], r.id, r.t5[0], r.t5[1], r.t5[2]);
 }
 
+// ------------------------------------------------ X4VR_PTRWATCH=1 (read only)
+//
+// Every instruction that touches X4's mouse pointer (in+0x6718) or its
+// reference (in+0x6734), on every thread, from a hardware watchpoint
+// (x4vr_ptrwatch.hpp). Take 372: with X4's UI cast and its presentations'
+// local pointer both corrected, the comms highlight still sat at 2x, so the
+// code that decides it was reached by none of them; this names it. Armed 5 s
+// after head-look's write armed (the game running), on the threads that
+// exist then. Each NEW (address, instruction, [sp]) is logged once; every
+// 5 s, the window's busiest.
+static bool ptrwatch_on() {
+    static const bool on = x4vr::env_on("X4VR_PTRWATCH", false);
+    return on;
+}
+namespace {
+struct PtrRing {
+    int fd = -1;
+    void *base = nullptr;
+    int which = 0; // 0 pointer, 1 reference
+    pid_t tid = 0;
+};
+struct PtrKey {
+    int which;
+    uint64_t ip, top;
+    bool operator<(const PtrKey &o) const {
+        return which != o.which ? which < o.which
+               : ip != o.ip     ? ip < o.ip
+                                : top < o.top;
+    }
+};
+} // namespace
+static void ptrwatch_tick() {
+    using namespace x4vr::ptrwatch;
+    if (!ptrwatch_on())
+        return;
+    static bool armed = false, refused = false;
+    static double seen_at = 0.0;
+    static std::vector<PtrRing> rings;
+    static std::map<pid_t, std::string> names;
+    static size_t page = 0, data = 0;
+    const double now = mono_seconds();
+    constexpr uint64_t kTextLo = 0x65a000, kTextHi = 0x2c74000;
+    if (!armed) {
+        if (refused || !g_camwrite.armed_cam)
+            return;
+        if (seen_at == 0.0)
+            seen_at = now;
+        if (now - seen_at < 5.0)
+            return;
+        uintptr_t in = 0;
+        if (!self_read(0x3daaaf8, &in, sizeof in) || !in)
+            return;
+        armed = true;
+        page = (size_t)sysconf(_SC_PAGESIZE);
+        data = page * 8;
+        std::vector<pid_t> tids;
+        if (DIR *d = opendir("/proc/self/task")) {
+            while (dirent *e = readdir(d))
+                if (e->d_name[0] != '.')
+                    tids.push_back((pid_t)atoi(e->d_name));
+            closedir(d);
+        }
+        int opened = 0, failed = 0, last_err = 0;
+        for (pid_t t : tids) {
+            char path[64], comm[32] = "?";
+            snprintf(path, sizeof path, "/proc/self/task/%d/comm", (int)t);
+            if (FILE *f = fopen(path, "r")) {
+                if (fgets(comm, sizeof comm, f))
+                    comm[strcspn(comm, "\n")] = 0;
+                fclose(f);
+            }
+            names[t] = comm;
+            for (int w = 0; w < 2; w++) {
+                PtrRing r;
+                r.which = w;
+                r.tid = t;
+                r.fd = open_watch(t, in + (w ? 0x6734 : 0x6718), 8);
+                if (r.fd < 0) {
+                    failed++;
+                    last_err = -r.fd;
+                    continue;
+                }
+                r.base = mmap(nullptr, page + data, PROT_READ | PROT_WRITE,
+                              MAP_SHARED, r.fd, 0);
+                if (r.base == MAP_FAILED) {
+                    close(r.fd);
+                    failed++;
+                    last_err = errno;
+                    continue;
+                }
+                rings.push_back(r);
+                opened++;
+            }
+        }
+        if (!opened) {
+            refused = true;
+            X4VR_LOG("ptrwatch: REFUSED — no watch could be opened on %zu "
+                     "thread(s): %s", tids.size(), strerror(last_err));
+            return;
+        }
+        X4VR_LOG("ptrwatch: ARMED — %d watch(es) on %zu thread(s) (%d failed%s%s): "
+                 "X4's pointer %#lx and its reference %#lx, every access sampled",
+                 opened, tids.size(), failed, failed ? ", last: " : "",
+                 failed ? strerror(last_err) : "", (unsigned long)(in + 0x6718),
+                 (unsigned long)(in + 0x6734));
+    }
+    static std::map<PtrKey, uint64_t> total, window;
+    static uint64_t lost = 0, w_acc = 0, lines = 0;
+    static double w_start = now;
+    for (PtrRing &r : rings)
+        drain(r.base, page, data, kTextLo, kTextHi, &lost, [&](const Sample &smp) {
+            const PtrKey k{r.which, smp.ip, smp.top};
+            w_acc++;
+            window[k]++;
+            if (total[k]++ == 0 && lines < 600) {
+                lines++;
+                X4VR_LOG("ptrwatch: NEW %s access at %#lx, [sp] %#lx, caller "
+                         "%#lx, thread %u (%s)",
+                         r.which ? "reference" : "pointer",
+                         (unsigned long)smp.ip, (unsigned long)smp.top,
+                         (unsigned long)smp.caller, smp.tid,
+                         names.count((pid_t)smp.tid) ? names[(pid_t)smp.tid].c_str()
+                                                     : "?");
+            }
+        });
+    if (now - w_start >= 5.0) {
+        std::vector<std::pair<uint64_t, PtrKey>> top;
+        for (const auto &kv : window)
+            top.push_back({kv.second, kv.first});
+        std::sort(top.begin(), top.end(),
+                  [](const auto &x, const auto &y) { return x.first > y.first; });
+        std::string list;
+        for (size_t i = 0; i < top.size() && i < 15; i++) {
+            char one[96];
+            snprintf(one, sizeof one, "%s%s %#lx<-%#lx x%llu", i ? "; " : "",
+                     top[i].second.which ? "R" : "P",
+                     (unsigned long)top[i].second.ip,
+                     (unsigned long)top[i].second.top,
+                     (unsigned long long)top[i].first);
+            list += one;
+        }
+        if (lines < 5000) {
+            lines++;
+            X4VR_LOG("ptrwatch: %.0f s: %llu access(es), %zu site(s), lost %llu "
+                     "| %s",
+                     now - w_start, (unsigned long long)w_acc, window.size(),
+                     (unsigned long long)lost, list.c_str());
+        }
+        window.clear();
+        w_acc = 0;
+        w_start = now;
+    }
+}
+
 static void load_recentre_tick() {
     static uintptr_t done_cam = 0, clock_cam = 0;
     static x4vr::fieldab::GameClock clock;
@@ -8143,6 +8299,7 @@ void SDL_PumpEvents(void) {
         menus_tick();
         load_recentre_tick();
         hoverlog_tick();
+        ptrwatch_tick();
         steer_tick();
         uiray_tick();
         uipick_tick();

@@ -5461,6 +5461,30 @@ def main(path):
             print("uiray   whether the HUD, the minimap and the comms choices "
                   "answer where they are drawn is Patola's to say")
 
+    # --- X4VR_PTRWATCH: who touches X4's mouse pointer, read only (373) ---
+    pw_asked = bool(re.search(r"\bX4VR_PTRWATCH=1\b", run or ""))
+    pw_arm = re.search(r"inject\s+ptrwatch: ARMED — (\d+) watch\(es\) on (\d+) "
+                       r"thread\(s\)", text)
+    pw_ref = re.search(r"inject\s+ptrwatch: REFUSED — (.*)", text)
+    pw_new = re.findall(r"inject\s+ptrwatch: NEW (pointer|reference) access at "
+                        r"(0x[0-9a-f]+), \[sp\] (0x[0-9a-f]+)", text)
+    pw_lost = [int(x) for x in re.findall(r"inject\s+ptrwatch: \d+ s: \d+ "
+                                          r"access\(es\), \d+ site\(s\), lost (\d+)",
+                                          text)]
+    if pw_asked or pw_arm or pw_ref:
+        if pw_asked and not pw_arm:
+            fails.append("X4VR_PTRWATCH=1 but the watch was "
+                         + ("REFUSED — " + pw_ref.group(1) if pw_ref
+                            else "never ARMED"))
+        if pw_arm:
+            ips = sorted({ip for _w, ip, _t in pw_new})
+            print(f"ptrwatch {pw_arm.group(1)} watch(es) on {pw_arm.group(2)} "
+                  f"thread(s); {len(pw_new)} distinct access site(s) at "
+                  f"{len(ips)} instruction(s)"
+                  + (f"; lost {max(pw_lost)} sample(s) at worst" if pw_lost and
+                     max(pw_lost) else "")
+                  + " — the NEW lines are the data")
+
     # --- X4VR_HOVERLOG: X4's hover hit records, read only (take 370) ------
     hl_asked = bool(re.search(r"\bX4VR_HOVERLOG=1\b", run or ""))
     # Since take 372 the line carries C (click UI) and D (click world) and

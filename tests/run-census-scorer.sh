@@ -1615,6 +1615,26 @@ want "uipick: refused -> FAIL" /tmp/census-up-ref.log "FAIL|  - " "X4VR_HUD_PICK
 { cat "$BASE"; printf '%s\n' "$upp"; } > /tmp/census-up-unasked.log
 want "uipick: patched unasked -> FAIL" /tmp/census-up-unasked.log "FAIL|  - " "the UI pointer patch acted in a run that did not ask for it"
 absent "uipick: not asked -> silent" "$BASE" uipick
+# X4VR_PTRWATCH: who touches X4's mouse pointer (take 373).
+for f in '"ptrwatch: ARMED — %d watch(es) on %zu thread(s) (%d failed%s%s): "' '"ptrwatch: NEW %s access at %#lx, [sp] %#lx, caller "' '"ptrwatch: REFUSED — no watch could be opened on %zu "'; do
+    if grep -qF "$f" injector/x4vr_inject.cpp; then
+        ok "ptrwatch: the injector still prints $f"
+    else
+        bad "ptrwatch: the injector's format moved: $f"
+    fi
+done
+sed 's/env: run = /env: run = X4VR_PTRWATCH=1 /' "$BASE" > /tmp/census-pw-base.log
+pwa='[  999960.000] inject  ptrwatch: ARMED — 120 watch(es) on 60 thread(s) (0 failed): X4'"'"'s pointer 0x7f0000006718 and its reference 0x7f0000006734, every access sampled'
+pwn1='[  999960.100] inject  ptrwatch: NEW pointer access at 0xcdfcaa, [sp] 0xa2ba64, caller 0xa2ba64, thread 4242 (X4)'
+pwn2='[  999960.200] inject  ptrwatch: NEW pointer access at 0x72fbaf, [sp] 0x1, caller 0x72f7f0, thread 4242 (X4)'
+pwn3='[  999960.300] inject  ptrwatch: NEW reference access at 0xcdfcb0, [sp] 0xa2ba64, caller 0xa2ba64, thread 4242 (X4)'
+pww='[  999965.000] inject  ptrwatch: 5 s: 900 access(es), 3 site(s), lost 12 | P 0xcdfcaa<-0xa2ba64 x600; P 0x72fbaf<-0x1 x200; R 0xcdfcb0<-0xa2ba64 x100'
+{ cat /tmp/census-pw-base.log; printf '%s\n' "$pwa" "$pwn1" "$pwn2" "$pwn3" "$pww"; } > /tmp/census-pw-ok.log
+want "ptrwatch: armed -> summarised" /tmp/census-pw-ok.log ptrwatch "120 watch(es) on 60 thread(s); 3 distinct access site(s) at 3 instruction(s); lost 12 sample(s) at worst"
+want "ptrwatch: asked, never armed -> FAIL" /tmp/census-pw-base.log "FAIL|  - " "X4VR_PTRWATCH=1 but the watch was never ARMED"
+{ cat /tmp/census-pw-base.log; echo '[  999960.000] inject  ptrwatch: REFUSED — no watch could be opened on 60 thread(s): Permission denied'; } > /tmp/census-pw-ref.log
+want "ptrwatch: refused -> FAIL" /tmp/census-pw-ref.log "FAIL|  - " "X4VR_PTRWATCH=1 but the watch was REFUSED — no watch could be opened on 60 thread(s): Permission denied"
+absent "ptrwatch: not asked -> silent" "$BASE" ptrwatch
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail
