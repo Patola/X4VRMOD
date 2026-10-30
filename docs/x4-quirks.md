@@ -28071,3 +28071,59 @@ record A can be read against where the pointer is.
     on them" will say whether stub B swapped.
   * world clicks broken: the world cast took the UI ray (the key matched
     the wrong cast).
+
+## Take 371 — SCORED PASS (2026-10-30): X4's UI cast follows the drawn HUD, but the highlight does not; markers share the cast
+
+Configuration 5. Patola:
+* The first check failed: *"I right-clicked my Cobra and selected comms, and
+  the highlighted was still shifted, just like the previous time."*
+* *"trying to right-click the cobra it was selecting the portal instead ...
+  the right click was shifted, whereas the left-click/hover was not."*
+
+`score_run.py` PASS:
+* `uiray`: 11 periods, UI rays built 40945, UI casts on them 5929, on X4's
+  ray 0. Stub B swapped every UI cast it saw.
+* pointer recentred after the load, from 412,164.
+
+**What moved.**
+* X4's UI hit record (+0x6bd0) now fires with the pointer at
+  (-15..-114, +267..+366) during comms. In take 370 it fired at
+  +430..+705, so the drawn positions now hit.
+* Its hit point is at the camera (d 0.000 in km; pt within 1 unit of the
+  ship), i.e. X4's near HUD plane.
+* So the UI cast did what the patch asked.
+
+**What did not.**
+* The highlight, by Patola's eye.
+* The selecting click: the comms choice was taken at 256639.856 with a left
+  click at (-34, +564), the 2x band. The scaled ray would put that at about
+  +1074, outside the rows, so the choice was not decided by the patched UI
+  cast either.
+* Hover highlight and click selection therefore come from a further step
+  that still sees the unscaled pointer.
+* Take 369 scaled the presentations' local pointer (obj+0xdd8) alone, and
+  that did not move them either. The step is one of:
+  * both together (the cast picks the panel, the local pointer picks the
+    element);
+  * a path neither patch reached.
+  Not decided from the code.
+
+**The portal: markers ride in the same UI cast.**
+* Object markers are UI, but orthographic and drawn unscaled (the w-gate
+  leaves them). Scaling the cast's ray moves it off them, so a right-click
+  can take another object's marker.
+* Whatever the HUD fix becomes, markers must keep X4's ray. The cast cannot
+  be scaled wholesale.
+
+**Why 1.904, from #76 (take 260–268).**
+* X4 lays its UI out against its default field (half-tan 0.75) and draws it
+  with the world's (`X4VR_FOV=1.4917`). Elements land tan(half)/0.75 =
+  1.904 times out: the sliding HUD.
+* The canvas map pulls them back. X4's hit tests stay at the pushed-out
+  positions.
+* Markers are projected from the world, so they never needed the fix.
+* So option B (no shrink) would reintroduce #76's sliding HUD. It is not a
+  real alternative.
+
+`X4VR_HUD_RAY` stays in the code, off by default and out of every shipping
+line, until the next step decides whether it is half of the fix or reverted.
