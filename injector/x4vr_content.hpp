@@ -4,8 +4,8 @@
 // for the modded session only.
 //
 // content.xml (which extensions are enabled) lives in the SAME profile
-// directory vanilla X4 reads. Enabling x4vrmod_lookaround there would enable
-// it for vanilla too. So, like config.xml: the player's file is read once to
+// directory vanilla X4 reads. Enabling x4vrmod there would enable it for
+// vanilla too. So, like config.xml: the player's file is read once to
 // seed content-x4vrmod.xml, every read X4 makes is answered from the fork with
 // our extensions forced on in memory, and every write goes to the fork.
 //
@@ -82,6 +82,16 @@ inline int set_extension(std::string &xml, const char *id, bool on) {
 
 inline int enable_extension(std::string &xml, const char *id) {
     return set_extension(xml, id, true);
+}
+
+// An id of ours that no longer exists (the three merged into x4vrmod): an
+// entry the fork still has is forced off, an absent one is NOT added -- X4
+// writes content.xml into the fork, so an added name would stay there for
+// good. Returns set_extension's 0, 1 or -1, or 3: no entry, nothing done.
+inline int retire_extension(std::string &xml, const char *id) {
+    if (xml.find(std::string("<extension id=\"") + id + "\"") == std::string::npos)
+        return 3;
+    return set_extension(xml, id, false);
 }
 
 } // namespace x4vr

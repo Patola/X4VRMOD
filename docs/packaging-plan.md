@@ -67,14 +67,13 @@ script will serve the core and the packages too.
   above. The GPU harness drives the layer directly and its control cases
   rely on "unset = off"; moving ~45 defaults in the code would have changed
   every one of them. The behaviour Patola sees is the same.
-* **Derived values:** `X4VR_W` = 2 × `X4VR_H`, `X4VR_RES` = `X4VR_H`×`X4VR_H`,
-  and `X4VR_UPSCALE` by decision 6.
+* **Derived values:** `X4VR_W` = 2 × `X4VR_H`, `X4VR_RES` = `X4VR_H`×`X4VR_H`.
+  `X4VR_UPSCALE` is a plain row, `none` (decision 6).
 * **What a run records.** The injector's `env: run =` line carries every
   value, defaulted or not, so the scorer's intent gates read them unchanged.
   Replaying an old run line reproduces it whatever the table says later.
   `env: defaults: N from launch/defaults.conf: …` says which came from the
-  table, and when the upscaler was chosen by the eye size, a second line
-  says so.
+  table.
 * **The escape hatch.** `X4VR_DEFAULTS=0` applies nothing: the code's own
   defaults, as every take before Phase 0 ran.
 * **Tests:** tests/run-launch-defaults.sh (14 cases); scorer `env` line and
@@ -92,7 +91,7 @@ script will serve the core and the packages too.
 | Layer manifest `VK_LAYER_X4VR_core.json` | `/usr/share/vulkan/explicit_layer.d/` | **Explicit**: loaded only when our launcher names it, never in another program. |
 | Injector `libx4vr_inject.so` | `/usr/lib/x4vrmod/` | Preloaded by our launcher only. |
 | Launcher `x4vrmod` (CLI), `x4vrmod-config` (GUI) | `/usr/bin/` | Phases 2 and 3. Until then, `x4vr-launch.sh` as `/usr/bin/x4vrmod-launch`. |
-| Extensions (lookaround, nosway, headlook) | `/usr/share/x4vrmod/extensions/` | Copied into place per user by the launcher, never by the package. |
+| Extension `x4vrmod` | `/usr/share/x4vrmod/extensions/` | Copied into place per user by the launcher, never by the package. |
 | OpenXR probe (today `x4vr_test_xr_probe`) | `/usr/lib/x4vrmod/` | The launcher's "is the headset answering" check. |
 | Docs, licence | `/usr/share/doc/x4vrmod/`, `/usr/share/licenses/x4vrmod/` | GPL-3.0 with the linking exception. |
 
@@ -392,6 +391,31 @@ level with the mark key, instead of a take's full command line.
 * **Location:** wherever "extensions in the user folder" (Phase 1, to
   verify) decides.
 
+**As built (2026-10-31).**
+* `extension/x4vrmod/`: `content.xml` with `enabled="0" save="0"`, and one
+  `libraries/parameters.xml` holding the same twelve replaces as the two old
+  diffs (the look-around limits, then the sway and the boost shake).
+  `tests/run-extension-selectors.sh` checks each against X4's archives.
+* **Version: not the mod's.** The manifest's `version="1"` is the
+  extension's own revision. X4's manifests write that attribute as an
+  integer in hundredths (its 9.00 DLCs say `900`), which a `vX.Y.Z` does
+  not map onto cleanly. "Current" is decided by comparing files, as
+  `launch/deploy-extensions.sh` already does.
+* **Migration, today's launcher:** `deploy-extensions.sh` removes the three
+  old directories from X4's `extensions/` by exact name and says
+  `REMOVED (retired after v0.9.8)`. Its `--without` option went with
+  `x4vrmod_headlook`, its only user.
+* **The content fork:** `x4vrmod` is forced on. An old id the fork still
+  lists is forced off and named in the `content: serving` line
+  (`x4vrmod_nosway retired, DISABLED (was on)`); one it does not list is
+  never added, since X4 writes content.xml back into the fork. So the old
+  names are switched off, not deleted from the fork.
+* **Tests:** `tests/run-deploy-extensions.sh` (new; a foreign directory
+  named like an old id plus a suffix is the negative control),
+  `tests/run-content-fork.sh` and `x4vr_test_content_fork` (old ids off when
+  listed, never added; `x4vrmod` is a prefix of the old ids and must not
+  match them), census cases for the scorer reading old and new log lines.
+
 ## Not planned (now)
 * An in-game panel drawn by the layer (decision 3).
 * A launcher window in VR, or SteamVR/OpenXR overlays.
@@ -403,6 +427,9 @@ level with the mark key, instead of a take's full command line.
 1. Phase 0: defaults flip, the `effective:` line, the scorer reading it.
    Accepted by a take with almost no variables.
 2. Version embedding and static runtime; the single `x4vrmod` extension.
+   **Done 2026-10-31** (below, and Phase 1's build choices: both libraries
+   print `[X4VRMOD v…]` on their first log line and export 4 and 39
+   symbols).
 3. Phase 2's core and CLI: `doctor` first (it answers the "to verify" items
    on real machines), then `run`, `install`/`uninstall`, `report` with the
    flight recorder. **The Arch PKGBUILD comes here** (decision 7): a package

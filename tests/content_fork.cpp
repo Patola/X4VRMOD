@@ -20,7 +20,7 @@ int main() {
     check(is_x4_profile_content("/home/p/.config/EgoSoft/X4/96679891/content.xml"),
           "claims the profile's content.xml");
     check(!is_x4_profile_content("/nvme/SteamLibrary/steamapps/common/X4 Foundations/"
-                                 "extensions/x4vrmod_lookaround/content.xml"),
+                                 "extensions/x4vrmod/content.xml"),
           "does NOT claim an extension's own manifest");
     check(!is_x4_profile_content("/home/p/.config/EgoSoft/X4/96679891/extensions/"
                                  "foo/content.xml"),
@@ -38,11 +38,11 @@ int main() {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<content>\n"
         "  <extension id=\"ws_1666869624\" enabled=\"true\"/>\n"
         "  <extension id=\"SectorSatellites\" enabled=\"false\"/>\n"
-        "  <extension id=\"x4vrmod_lookaround\" enabled=\"false\"/>\n"
+        "  <extension id=\"x4vrmod\" enabled=\"false\"/>\n"
         "</content>\n";
     std::string a = real;
-    check(enable_extension(a, "x4vrmod_lookaround") == 1, "flips a disabled entry");
-    check(a.find("<extension id=\"x4vrmod_lookaround\" enabled=\"true\"/>") !=
+    check(enable_extension(a, "x4vrmod") == 1, "flips a disabled entry");
+    check(a.find("<extension id=\"x4vrmod\" enabled=\"true\"/>") !=
               std::string::npos,
           "our entry now reads enabled=\"true\"");
     check(a.find("<extension id=\"SectorSatellites\" enabled=\"false\"/>") !=
@@ -50,29 +50,30 @@ int main() {
           "another extension's disabled state is left alone");
     check(a.size() == real.size() - 1, "only 'false' -> 'true' changed (one byte shorter)");
     std::string b = a;
-    check(enable_extension(b, "x4vrmod_lookaround") == 0 && b == a,
+    check(enable_extension(b, "x4vrmod") == 0 && b == a,
           "already enabled: untouched");
 
     std::string c = "<content>\n  <extension id=\"other\" enabled=\"true\"/>\n</content>\n";
-    check(enable_extension(c, "x4vrmod_lookaround") == 2 &&
-              c.find("<extension id=\"x4vrmod_lookaround\" enabled=\"true\"/>\n</content>") !=
+    check(enable_extension(c, "x4vrmod") == 2 &&
+              c.find("<extension id=\"x4vrmod\" enabled=\"true\"/>\n</content>") !=
                   std::string::npos,
           "absent: inserted before </content>");
 
-    std::string d = "<content><extension id=\"x4vrmod_lookaround\"/></content>";
-    check(enable_extension(d, "x4vrmod_lookaround") == 1 &&
-              d.find("<extension id=\"x4vrmod_lookaround\" enabled=\"true\"/>") !=
+    std::string d = "<content><extension id=\"x4vrmod\"/></content>";
+    check(enable_extension(d, "x4vrmod") == 1 &&
+              d.find("<extension id=\"x4vrmod\" enabled=\"true\"/>") !=
                   std::string::npos,
           "entry without the attribute gains enabled=\"true\"");
 
-    // A prefix must not be mistaken for our id.
-    std::string e = "<content>\n  <extension id=\"x4vrmod_lookaround_old\" enabled=\"false\"/>\n</content>\n";
-    check(enable_extension(e, "x4vrmod_lookaround") == 2 &&
-              e.find("x4vrmod_lookaround_old\" enabled=\"false\"") != std::string::npos,
+    // A prefix must not be mistaken for our id -- and ours is a prefix of the
+    // ids it replaced, which a player's fork may still list.
+    std::string e = "<content>\n  <extension id=\"x4vrmod_lookaround\" enabled=\"false\"/>\n</content>\n";
+    check(enable_extension(e, "x4vrmod") == 2 &&
+              e.find("x4vrmod_lookaround\" enabled=\"false\"") != std::string::npos,
           "an id that merely starts with ours is not touched");
 
     // OFF as well as on: X4 writes content.xml into our fork, so an extension
-    // a write-mode session enabled must be forced back off in the next one.
+    // a session enabled must be forced back off in the next one.
     std::string g = "<content>\n  <extension id=\"x4vrmod_headlook\" enabled=\"true\"/>\n</content>\n";
     check(set_extension(g, "x4vrmod_headlook", false) == 1 &&
               g.find("<extension id=\"x4vrmod_headlook\" enabled=\"false\"/>") !=
@@ -87,8 +88,21 @@ int main() {
                   std::string::npos,
           "set off: absent is inserted as false, not left to X4's default");
 
+    // Retired ids (merged into x4vrmod): off when listed, never added.
+    std::string j = g;
+    j.replace(j.find("false"), 5, "true");
+    check(retire_extension(j, "x4vrmod_headlook") == 1 && j == g,
+          "retire: a listed, enabled id is flipped to false");
+    check(retire_extension(j, "x4vrmod_headlook") == 0 && j == g,
+          "retire: a listed, disabled id is untouched");
+    std::string m = "<content>\n  <extension id=\"x4vrmod\" enabled=\"true\"/>\n"
+                    "  <extension id=\"x4vrmod_nosway_x\" enabled=\"true\"/>\n</content>\n";
+    const std::string m0 = m;
+    check(retire_extension(m, "x4vrmod_nosway") == 3 && m == m0,
+          "retire: an absent id is NOT added (nor a longer id touched)");
+
     std::string f = "garbage";
-    check(enable_extension(f, "x4vrmod_lookaround") == -1 && f == "garbage",
+    check(enable_extension(f, "x4vrmod") == -1 && f == "garbage",
           "no </content>: refused, file untouched");
 
     if (g_fail) {

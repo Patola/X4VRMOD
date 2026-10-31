@@ -1,4 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<diff>
-  <replace sel="/parameters/playercamera/lookaround/internal/@anglespeed">0</replace>
-</diff>

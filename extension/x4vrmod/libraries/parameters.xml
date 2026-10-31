@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <diff>
+  <!-- Cockpit free-look limits, 65/35 -> 180/75 degrees: head tracking turns
+       the view all the way round. X4VR_HEADLOOK_YAW_LIMIT/_PITCH_LIMIT (the
+       servo's own limits) are 180/75 to match. -->
+  <replace sel="/parameters/playercamera/lookaround/internal/@maxyaw">180</replace>
+  <replace sel="/parameters/playercamera/lookaround/internal/@maxpitch">75</replace>
   <!-- G-force sway: how the ship's acceleration and turning push the camera.
        Zero input leaves the sway spring at rest; its limits are untouched. -->
   <replace sel="/parameters/playercamera/input/linear/@x">0</replace>

@@ -498,20 +498,20 @@ if python3 tools/score_run.py /tmp/census-hw-ok.log 2>&1 | grep -qE "^FAIL.*(HEA
 else
     ok "hwrite healthy -> no write FAIL"
 fi
-{ cat /tmp/census-hw-base.log; printf '%s\n' "$hwext" '[  999990.000] inject  headlook write: REFUSED — anglespeed is not zero -- x4vrmod_headlook is not in force' "$(hwrep 0 0)"; } > /tmp/census-hw-never.log
+{ cat /tmp/census-hw-base.log; printf '%s\n' "$hwext" '[  999990.000] inject  headlook write: REFUSED — anglespeed is not zero -- the injector'"'"'s per-mode speed does not hold it, so X4'"'"'s follower would pull every write back toward centre' "$(hwrep 0 0)"; } > /tmp/census-hw-never.log
 want "hwrite never armed -> FAIL" /tmp/census-hw-never.log FAIL "never ARMED"
 want "hwrite never armed -> the reason is printed" /tmp/census-hw-never.log hwrite "anglespeed is not zero"
 { cat /tmp/census-hw-base.log; printf '%s\n' "$hwext" "$hwarm" "$(hwrep 4000 3)"; } > /tmp/census-hw-ml.log
 want "hwrite pressed MOUSELOOK -> FAIL" /tmp/census-hw-ml.log FAIL "pressed MOUSELOOK 3 time(s)"
 { cat /tmp/census-hw-base.log; printf '%s\n' "$hwarm" "$(hwrep 4000 0)"; } > /tmp/census-hw-noext.log
-want "hwrite with neither the speed owner nor the extension -> FAIL" /tmp/census-hw-noext.log FAIL "neither the injector's per-mode speed (headlook speed) nor x4vrmod_headlook held X4's follower"
+want "hwrite with neither the speed owner nor the extension -> FAIL" /tmp/census-hw-noext.log FAIL "the injector's per-mode speed (headlook speed) never held X4's follower"
 # Take 351: the injector holds the speed per camera mode instead.
 hwspd='[  999985.500] inject  headlook speed: X4'"'"'s own <lookaround><internal> anglespeed 3.4907 (angleacc 8.7266) — held at 0 while the camera is in mode 0 (cockpit, walking) so a written angle stays, given back in every other mode so the external views orbit'
 hwsp0='[  999985.600] inject  headlook speed: camera mode 0 — anglespeed held at 0 (0.0000)'
 hwsp2='[  999988.000] inject  headlook speed: camera mode 2 — anglespeed given back to X4 (3.4907)'
 { cat /tmp/census-hw-base.log; printf '%s\n' "$hwspd" "$hwsp0" "$hwarm" "$hwsp2" "$(hwrep 4000 0)"; } > /tmp/census-hw-speed.log
 want "hwrite with the per-mode speed -> reported" /tmp/census-hw-speed.log hwrite "follower speed: X4's own 3.4907, held at 0 in mode 0 (1 time(s)), given back in other modes (1 time(s))"
-if python3 tools/score_run.py /tmp/census-hw-speed.log 2>&1 | grep -q "held X4's follower, so writes"; then
+if python3 tools/score_run.py /tmp/census-hw-speed.log 2>&1 | grep -q "never held X4's follower"; then
     bad "hwrite with the per-mode speed -> FAILs"
 else
     ok "hwrite with the per-mode speed -> no follower FAIL"
@@ -547,8 +547,23 @@ swrep() { printf '[  999996.500] inject  headlook write: 4000 write(s), 0 failed
 want "nosway served, sway at rest -> OFF" /tmp/census-sw-off.log hwrite "sway OFF"
 { cat /tmp/census-hw-base.log; printf '%s\n' "$nsx" "$hwarm" "$(swrep 18.40 0.060)"; } > /tmp/census-sw-on.log
 want "nosway served, sway moving -> FAIL" /tmp/census-sw-on.log FAIL "still swayed 18.40 deg"
+want "nosway served (old log) -> names x4vrmod_nosway" /tmp/census-sw-on.log hwrite "sway removal served (x4vrmod_nosway)"
+# Since the merge: one extension, x4vrmod; the retired ids appear only when a
+# fork still listed them, and served off they must not count as the removal.
+nsx1='[  999989.500] inject  content: serving /x/content-x4vrmod.xml in memory via fopen — x4vrmod ENABLED (was off), x4vrmod_nosway retired, DISABLED (was on); your /x/content.xml is not touched'
+{ cat /tmp/census-hw-base.log; printf '%s\n' "$nsx1" "$hwarm" "$(swrep 0.00 0.000)"; } > /tmp/census-sw1-off.log
+want "x4vrmod served, sway at rest -> OFF" /tmp/census-sw1-off.log hwrite "sway removal served (x4vrmod)"
+{ cat /tmp/census-hw-base.log; printf '%s\n' "$nsx1" "$hwarm" "$(swrep 18.40 0.060)"; } > /tmp/census-sw1-on.log
+want "x4vrmod served, sway moving -> FAIL names x4vrmod" /tmp/census-sw1-on.log FAIL "x4vrmod was served but the camera still swayed 18.40 deg"
+nsx0='[  999989.500] inject  content: serving /x/content-x4vrmod.xml in memory via fopen — x4vrmod COULD NOT be set — no </content>, x4vrmod_nosway retired, DISABLED (was on); your /x/content.xml is not touched'
+{ cat /tmp/census-hw-base.log; printf '%s\n' "$nsx0" "$hwarm" "$(swrep 18.40 0.060)"; } > /tmp/census-sw0.log
+want "retired nosway served OFF is not the sway removal -> NOT served" /tmp/census-sw0.log hwrite "sway removal (x4vrmod) NOT served"
+grep -qF '"retired, DISABLED (was on)"' injector/x4vr_inject.cpp &&
+grep -qF '? "ENABLED (was off)"' injector/x4vr_inject.cpp &&
+    ok "extensions: the planted lines match the injector's formats" ||
+    bad "extensions: the injector's format changed — replant the lines above"
 { cat /tmp/census-hw-base.log; printf '%s\n' "$hwext" "$hwarm" "$(swrep 18.40 0.060)"; } > /tmp/census-sw-x4.log
-want "nosway not served -> sway reported, no FAIL" /tmp/census-sw-x4.log hwrite "x4vrmod_nosway NOT served"
+want "nosway not served -> sway reported, no FAIL" /tmp/census-sw-x4.log hwrite "sway removal (x4vrmod) NOT served"
 
 
 # ------------------------------------------ #70: the base-field A/B

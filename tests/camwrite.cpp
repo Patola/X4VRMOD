@@ -138,9 +138,9 @@ int main() {
         c = camwrite::check_params(rad, 75.f, 180.f);
         check(c.ok && c.radians, "params in radians -> ok, and says radians");
         check(!camwrite::check_params(spring, 75.f, 180.f).ok,
-              "anglespeed 200 (x4vrmod_headlook not in force) -> REFUSED");
+              "anglespeed 200 (the per-mode speed not holding it) -> REFUSED");
         check(!camwrite::check_params(stock, 75.f, 180.f).ok,
-              "stock 35/65 limits (x4vrmod_lookaround not in force) -> REFUSED");
+              "stock 35/65 limits (the x4vrmod extension not in force) -> REFUSED");
         check(!camwrite::check_params(shifted, 75.f, 180.f).ok,
               "a field layout off by one float -> REFUSED");
     }

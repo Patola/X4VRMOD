@@ -887,11 +887,11 @@ FILE *open_patched_inputmap(const char *path) {
 
 // ------------------------------------------------------------- content.xml
 //
-// X4VR_EXTENSIONS=1: our extensions (extension/ in the repo, deployed by the
-// launcher) enabled for the modded session only. content.xml lives in the
-// profile directory vanilla X4 reads too, so it is forked like config.xml:
-// read once to seed content-x4vrmod.xml, served from the fork with our
-// extensions forced on IN MEMORY, writes redirected into the fork. Served on
+// X4VR_EXTENSIONS=1: our extension (extension/x4vrmod in the repo, deployed
+// by the launcher) enabled for the modded session only. content.xml lives in
+// the profile directory vanilla X4 reads too, so it is forked like
+// config.xml: read once to seed content-x4vrmod.xml, served from the fork
+// with our extension forced on IN MEMORY, writes redirected into the fork. Served on
 // BOTH the fopen and the open() read paths, because nothing on record says
 // which one X4 uses for this file -- the log line names the one it did.
 bool extensions_enabled() {
@@ -899,11 +899,8 @@ bool extensions_enabled() {
     return on;
 }
 
-// The extensions we own, and whether this session wants each. The look-around
-// limits ride with X4VR_EXTENSIONS; x4vrmod_headlook (anglespeed 0: X4's
-// cockpit look follower holds still) only with X4VR_HEADLOOK_WRITE, and is
-// forced OFF otherwise -- X4 writes content.xml into our fork, so a session
-// that enabled it would leave it enabled for every later one.
+// X4VR_HEADLOOK_WRITE=1: head-look written into X4's free-look matrix
+// instead of MOUSELOOK (x4vr_camwrite.hpp).
 bool headlook_write_enabled() {
     static const bool on = x4vr::env_on("X4VR_HEADLOOK_WRITE", false);
     return on;
@@ -917,39 +914,26 @@ bool headlook_write_enabled() {
 // player camera, and hit-tests the pointer by the same projection, so a
 // rotated camera keystones and shifts the whole UI inside the window the
 // pointer is confined to. X4's own look follower recentres the camera when
-// look-around ends (take 311: every map opened at 0,0); x4vrmod_headlook
-// sets anglespeed 0 so a written angle STAYS, and that also stopped the
-// follower from recentring. Take 328B opened the map at -1.99,6.37 and kept
+// look-around ends (take 311: every map opened at 0,0); anglespeed 0 (then
+// the x4vrmod_headlook extension, since take 351 headlook_speed_tick) makes
+// a written angle STAY, and that also stops the follower from recentring. Take 328B opened the map at -1.99,6.37 and kept
 // it there: 13.6% of X4's UI -- a left wedge widening downwards and the
 // bottom band -- was outside the window, unreachable while visible in VR.
 bool headlook_menu_centre() {
     static const bool on = x4vr::env_on("X4VR_HEADLOOK_MENU_CENTRE", true);
     return on;
 }
-// X4VR_HEADLOOK_SPEED_EXT=1 serves x4vrmod_headlook again (anglespeed 0 for
-// the whole session, as takes 321-350 ran): the numpad orbit of F2/F3 is then
-// frozen (take 350).
-bool headlook_speed_extension() {
-    static const bool on = headlook_write_enabled() &&
-                           x4vr::env_on("X4VR_HEADLOOK_SPEED_EXT", false);
-    return on;
-}
-struct OurExtension {
-    const char *id;
-    bool (*wanted)();
-};
-bool always_wanted() { return true; }
-const OurExtension kOurExtensions[] = {
-    {"x4vrmod_lookaround", always_wanted},
-    // X4's G-force camera sway and boost shake off: in VR the view moves only
-    // with the head. Take 321 saw the sway as 1-17 s stretches of up to 22 deg
-    // once a written head-look no longer cancelled it (MOUSELOOK's loop had).
-    {"x4vrmod_nosway", always_wanted},
-    // Since take 351 only on request: the injector holds the speed at zero
-    // per camera mode instead (headlook_speed_tick), so the external views'
-    // orbit is not frozen with it.
-    {"x4vrmod_headlook", headlook_speed_extension},
-};
+// The extension we own (extension/x4vrmod: the look-around limits 180/75
+// and the camera sway off), on in every mod session. Take 321 saw the sway as
+// 1-17 s stretches of up to 22 deg once a written head-look no longer
+// cancelled it (MOUSELOOK's loop had).
+const char *const kOurExtensions[] = {"x4vrmod"};
+// Our ids until v0.9.8, merged into x4vrmod; x4vrmod_headlook was dropped
+// (the injector holds the follower's speed per camera mode since take 351).
+// The launcher removes their directories; an entry the fork still has is
+// served off, so a copy left behind cannot load.
+const char *const kRetiredExtensions[] = {"x4vrmod_lookaround", "x4vrmod_nosway",
+                                          "x4vrmod_headlook"};
 
 Profile load_content_profile(const char *path) {
     Profile p;
@@ -975,17 +959,28 @@ int content_memfd(const char *path, const char *how) {
     std::string xml = std::move(prof.xml);
     char what[512];
     int k = 0;
-    for (const OurExtension &ext : kOurExtensions) {
-        const bool on = ext.wanted();
-        const int r = x4vr::set_extension(xml, ext.id, on);
+    for (const char *id : kOurExtensions) {
+        const int r = x4vr::set_extension(xml, id, true);
         k += snprintf(what + k, sizeof what - (size_t)k, "%s%s %s", k ? ", " : "",
-                      ext.id,
-                      r == 0   ? (on ? "already enabled" : "already disabled")
-                      : r == 1 ? (on ? "ENABLED (was off)" : "DISABLED (was on)")
-                      : r == 2 ? (on ? "ENABLED (added)" : "DISABLED (added)")
+                      id,
+                      r == 0   ? "already enabled"
+                      : r == 1 ? "ENABLED (was off)"
+                      : r == 2 ? "ENABLED (added)"
                                : "COULD NOT be set — no </content>");
         if (k >= (int)sizeof what)
             k = (int)sizeof what - 1; // truncated: never index past the end
+    }
+    for (const char *id : kRetiredExtensions) {
+        const int r = x4vr::retire_extension(xml, id);
+        if (r == 3)
+            continue; // never listed: nothing to say
+        k += snprintf(what + k, sizeof what - (size_t)k, "%s%s %s", k ? ", " : "",
+                      id,
+                      r == 0   ? "retired, already disabled"
+                      : r == 1 ? "retired, DISABLED (was on)"
+                               : "retired, COULD NOT be set — no </content>");
+        if (k >= (int)sizeof what)
+            k = (int)sizeof what - 1;
     }
     const int fd = memfd_create("x4vr-content", MFD_CLOEXEC);
     if (fd < 0)
@@ -3785,8 +3780,8 @@ void send_key(int scancode, bool down);
 //
 // Head-look WITHOUT MOUSELOOK: the head's yaw/pitch written straight into X4's
 // free-look state, the camera's own local matrix (camera+0x5b0..), every tick.
-// See injector/x4vr_camwrite.hpp for what 0x1933d00 does with it and why the
-// x4vrmod_headlook extension (anglespeed 0) makes a write stay. The first
+// See injector/x4vr_camwrite.hpp for what 0x1933d00 does with it and why
+// anglespeed 0 (headlook_speed_tick) makes a write stay. The first
 // WRITE into X4's memory in this project: through process_vm_writev, so a
 // freed camera is EFAULT, never a crash, and refused unless every site, the
 // camera mode, X4's loaded parameters and the base transform say the matrix
@@ -3804,8 +3799,8 @@ struct CamWrite {
     // The G-force sway, read live from the camera controller's stored matrix
     // (take 317: +0x10 translation, +0x20.. rotation, written by the physics
     // step 0x13f1970). Max per report window and over the run, so the
-    // x4vrmod_nosway extension is checked by what it is meant to stop, not
-    // by its parameters.
+    // x4vrmod extension's sway removal is checked by what it is meant to
+    // stop, not by its parameters.
     float sway_deg = 0.f, sway_m = 0.f, sway_run_deg = 0.f, sway_run_m = 0.f;
     bool sway_seen = false;
     uint64_t writes = 0, failed = 0, refused = 0, mouselook_downs = 0;
@@ -3875,7 +3870,7 @@ static bool x4_game_time(double *out); // with X4VR_FIELD_AB, below
 static void headlook_speed_tick(uintptr_t cam) {
     using namespace x4vr;
     static camwrite::SpeedOwner owner;
-    if (headlook_speed_extension() || !cam)
+    if (!cam)
         return;
     uintptr_t params = 0;
     float p[4] = {};

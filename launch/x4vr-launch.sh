@@ -498,16 +498,14 @@ if [[ $# -eq 0 ]]; then
     set -- "$GAME" -skipintro -nocputhrottle -nosoundthrottle
 fi
 
-# X4VR_EXTENSIONS=1: deploy OUR extensions (extension/ in the repo) into X4's
-# folder when the installed copy differs, and let the injector enable them for
-# this session only through its content.xml fork -- vanilla's content.xml is
-# never written. A modified game is allowed since 2026-09-26. Pair with
+# X4VR_EXTENSIONS=1: deploy OUR extension (extension/x4vrmod in the repo) into
+# X4's folder when the installed copy differs, and let the injector enable it
+# for this session only through its content.xml fork -- vanilla's content.xml
+# is never written. A modified game is allowed since 2026-09-26. Pair with
 # X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_HEADLOOK_PITCH_LIMIT=75, or head-look's own
 # servo stops at 65/35 whatever the extension allows.
 if [[ "${X4VR_EXTENSIONS:-0}" == 1 ]]; then
-    DEPLOY_ARGS=()
-    [[ "${X4VR_HEADLOOK_WRITE:-0}" == 1 ]] || DEPLOY_ARGS+=(--without x4vrmod_headlook)
-    if ! "$ROOT/launch/deploy-extensions.sh" "$(dirname "$GAME")" "${DEPLOY_ARGS[@]}"; then
+    if ! "$ROOT/launch/deploy-extensions.sh" "$(dirname "$GAME")"; then
         echo "x4vr-launch: WARNING extension deployment failed — X4 may load a" \
              "stale copy or none" >&2
     fi
@@ -516,13 +514,13 @@ if [[ "${X4VR_EXTENSIONS:-0}" == 1 ]]; then
              "head-look will still stop at 65 deg" >&2
     fi
 fi
-# X4VR_HEADLOOK_WRITE=1 (head-look without MOUSELOOK) needs both extensions in
-# force -- the injector refuses to write unless X4 reads anglespeed 0 and the
-# 180/75 limits -- and head-look itself on. Said here, before a take is spent.
+# X4VR_HEADLOOK_WRITE=1 (head-look without MOUSELOOK) needs the extension in
+# force -- the injector refuses to write unless X4 reads the 180/75 limits --
+# and head-look itself on. Said here, before a take is spent.
 if [[ "${X4VR_HEADLOOK_WRITE:-0}" == 1 ]]; then
     [[ "${X4VR_EXTENSIONS:-0}" == 1 ]] || echo "x4vr-launch: WARNING" \
-        "X4VR_HEADLOOK_WRITE=1 without X4VR_EXTENSIONS=1 — x4vrmod_headlook" \
-        "will not be enabled and every write will be REFUSED" >&2
+        "X4VR_HEADLOOK_WRITE=1 without X4VR_EXTENSIONS=1 — x4vrmod (the" \
+        "180/75 limits) will not be enabled and every write will be REFUSED" >&2
     [[ "${X4VR_HEADLOOK:-0}" == 1 ]] || echo "x4vr-launch: WARNING" \
         "X4VR_HEADLOOK_WRITE=1 without X4VR_HEADLOOK=1 — nothing will run" >&2
 fi

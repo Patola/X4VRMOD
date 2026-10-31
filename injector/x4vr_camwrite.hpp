@@ -17,8 +17,8 @@
 //     moves the angle toward numpad x max, limited by `anglespeed` -- which
 //     treats |anglespeed| < 1e-4 as "desired velocity zero": the angle holds.
 //
-// So with the x4vrmod_headlook extension (anglespeed 0), a matrix written here
-// stays: X4 extracts it, the follower leaves it, X4 rebuilds the same matrix.
+// So with anglespeed 0 (SpeedOwner below), a matrix written here stays: X4
+// extracts it, the follower leaves it, X4 rebuilds the same matrix.
 // Absolute, no servo loop, no key, no synthetic mouse -- and take 315 showed X4
 // picks correctly through a camera turned without MOUSELOOK.
 //
@@ -86,9 +86,9 @@ inline uintptr_t params_global() {
 
 // Is what X4 loaded what our extensions asked for? `p` is maxpitch, maxyaw,
 // anglespeed, angleacc as read. The limits must equal the servo's (75/180 with
-// x4vrmod_lookaround), in degrees or radians -- whichever X4 stores, said in
-// `radians`; that match is also what confirms the field layout live. The speed
-// must be zero (x4vrmod_headlook), or X4's follower pulls every write home.
+// the x4vrmod extension), in degrees or radians -- whichever X4 stores, said
+// in `radians`; that match is also what confirms the field layout live. The
+// speed must be zero (SpeedOwner), or X4's follower pulls every write home.
 struct ParamCheck {
     bool ok = false;
     bool radians = false;
@@ -104,14 +104,14 @@ inline ParamCheck check_params(const float p[4], float plim_deg, float ylim_deg)
     if (!deg && !rad) {
         c.why = "maxpitch/maxyaw do not read as the limits our extension set "
                 "(neither degrees nor radians) -- the layout is unverified or "
-                "x4vrmod_lookaround is not in force";
+                "the x4vrmod extension is not in force";
         return c;
     }
     c.radians = rad && !deg;
     if (!(std::fabs(p[2]) < 1e-4f)) {
-        c.why = "anglespeed is not zero -- neither the injector's per-mode "
-                "speed nor x4vrmod_headlook holds it, so X4's follower would "
-                "pull every write back toward centre";
+        c.why = "anglespeed is not zero -- the injector's per-mode speed "
+                "does not hold it, so X4's follower would pull every write "
+                "back toward centre";
         return c;
     }
     c.ok = true;
@@ -119,9 +119,9 @@ inline ParamCheck check_params(const float p[4], float plim_deg, float ylim_deg)
     return c;
 }
 
-// **The follower's speed, per camera mode** (take 351). x4vrmod_headlook
-// used to zero `<lookaround><internal> anglespeed` for the whole session so a
-// written angle stays. The same pair also drives the external views' orbit
+// **The follower's speed, per camera mode** (take 351). The x4vrmod_headlook
+// extension (dropped after v0.9.8) used to zero `<lookaround><internal>
+// anglespeed` for the whole session so a written angle stays. The same pair also drives the external views' orbit
 // (read at 0x19352b3/0x19352bd into the follower wrapper 0x1e8c260): take 350
 // had the numpad pitch F2/F3 once and then freeze, and take 351, with the
 // extension not served, had them orbit again. So X4 now loads its own value,

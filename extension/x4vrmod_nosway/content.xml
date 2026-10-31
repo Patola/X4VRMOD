@@ -1,2 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<content id="x4vrmod_nosway" name="X4VRMOD no camera sway" description="Turns off X4's cockpit camera sway (the G-force lean and drift of the view when the ship turns or accelerates) and the boost camera shake. In VR the view must move only with your head. Part of X4VRMOD; deployed by its launcher (X4VR_EXTENSIONS=1). Remove by deleting this directory." author="X4VRMOD" version="1" date="2026-10-02" save="0"/>

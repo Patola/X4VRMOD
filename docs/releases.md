@@ -38,7 +38,7 @@ on the remote beside their `take-NNN-name` twins.
   | Variable | New default | Code default (`X4VR_DEFAULTS=0`) |
   |---|---|---|
   | `X4VR_H` / `X4VR_W` / `X4VR_RES` | 2816 / 2×H / H×H | from the config's SBS size |
-  | `X4VR_UPSCALE` | by eye size | none |
+  | `X4VR_UPSCALE` | none | none |
   | `X4VR_FOV` | 1.4917 | the profile's |
   | `X4VR_IPD` | 0.064 | 0.064 |
   | `X4VR_HEAD_6DOF`, `X4VR_VR` | 1 | off |
@@ -56,6 +56,28 @@ on the remote beside their `take-NNN-name` twins.
   | `X4VR_HEADLOOK_GAIN` / `_KP` / `_LEAD` | 0.115 / 0.25 / 1.0 | 0 / 0 / 0 |
   | `X4VR_HEADLOOK_YAW_LIMIT` / `_PITCH_LIMIT` | 180 / 75 | X4's 65 / 35 |
   | `X4VR_HEADLOOK_RAW` | 191 (F13) | none |
+* **One extension, `x4vrmod`,** replaces three (packaging plan, decision 5):
+  the look-around limits (180/75) and the camera sway removal in one
+  settings diff, the same twelve settings as before.
+  * `x4vrmod_lookaround` and `x4vrmod_nosway` are merged into it;
+    `x4vrmod_headlook` is dropped, with its switch `X4VR_HEADLOOK_SPEED_EXT`
+    (unused since take 351: the injector holds X4's look follower still per
+    camera mode).
+  * Its manifest says `enabled="0"`: a vanilla session that finds it leaves
+    it off. Mod sessions enable it through the content.xml fork, as before.
+  * Migration: with `X4VR_EXTENSIONS=1` (a default) the launcher removes the
+    three old directories from X4's `extensions/` folder and says so, and
+    the injector serves an old id still listed in your fork as disabled. A
+    vanilla `content.xml` is still never written.
+* **Both libraries carry their version** (`git describe`) and print it on
+  their first log line: `instance created (app=X4) … [X4VRMOD v…]` and
+  `injector loaded into pid … [X4VRMOD v…]`. The scorer prints a `build`
+  line and FAILs a run whose layer and injector differ.
+* **The C++ runtime is linked in.** The layer and the injector link
+  libstdc++ and libgcc statically and export only their entry points (4 and
+  39 symbols), so a different C++ runtime in X4's process, Steam's for
+  instance, cannot clash with ours. `tests/check-exports.sh` checks both
+  after every build.
 
 ## v0.9.8 — 2026-10-31 — FSR 1 and FSR 3 in both eyes; the Pause key stays immersive
 

@@ -22,17 +22,17 @@ SO=$PWD/$SO
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 PROF="$T/home/.config/EgoSoft/X4/123"
-mkdir -p "$PROF" "$T/game/extensions/x4vrmod_lookaround"
+mkdir -p "$PROF" "$T/game/extensions/x4vrmod"
 cat > "$PROF/content.xml" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <content>
   <extension id="ws_1666869624" enabled="true"/>
-  <extension id="x4vrmod_lookaround" enabled="false"/>
+  <extension id="x4vrmod" enabled="false"/>
 </content>
 EOF
 cp "$PROF/content.xml" "$T/original"
-MANI="$T/game/extensions/x4vrmod_lookaround/content.xml"
-echo '<content id="x4vrmod_lookaround" name="n"/>' > "$MANI"
+MANI="$T/game/extensions/x4vrmod/content.xml"
+echo '<content id="x4vrmod" name="n"/>' > "$MANI"
 cp "$MANI" "$T/manifest-original"
 
 fail=0
@@ -40,8 +40,8 @@ ok()  { printf 'ok    %s\n' "$1"; }
 bad() { printf 'FAIL  %s\n' "$1"; fail=1; }
 run() { env X4VR_LOG="$T/log" LD_PRELOAD="$SO" "$@" 2>/dev/null; }
 
-on='<extension id="x4vrmod_lookaround" enabled="true"/>'
-off='<extension id="x4vrmod_lookaround" enabled="false"/>'
+on='<extension id="x4vrmod" enabled="true"/>'
+off='<extension id="x4vrmod" enabled="false"/>'
 
 # Knob off: nothing changes, nothing is forked.
 out=$(run cat "$PROF/content.xml")
@@ -79,38 +79,37 @@ cmp -s "$PROF/content.xml" "$T/original" && ok "a write does NOT reach the playe
 grep -q 'written' "$PROF/content-x4vrmod.xml" && ok "the write went into the fork" \
     || bad "the write went nowhere visible"
 
-# x4vrmod_nosway rides with X4VR_EXTENSIONS like the look-around limits.
-nson='<extension id="x4vrmod_nosway" enabled="true"/>'
+# Our ids until v0.9.8 (merged into x4vrmod; headlook dropped): never added
+# to a fork that does not list them...
 out=$(run cat "$PROF/content.xml")
-[[ "$out" == *"$nson"* ]] && ok "x4vrmod_nosway served ON with the extensions" \
-    || bad "x4vrmod_nosway not served on — got: $out"
-
-# x4vrmod_headlook rides with X4VR_HEADLOOK_WRITE only, and is forced OFF
-# otherwise -- including when an earlier write session left it on in the fork.
-hon='<extension id="x4vrmod_headlook" enabled="true"/>'
-hoff='<extension id="x4vrmod_headlook" enabled="false"/>'
-out=$(run cat "$PROF/content.xml")
-[[ "$out" == *"$hoff"* ]] && ok "no write mode: x4vrmod_headlook served OFF" \
-    || bad "no write mode: x4vrmod_headlook not served off — got: $out"
-# Since take 351 the injector holds the follower's speed per camera mode, so
-# write mode no longer serves x4vrmod_headlook unless asked for.
+[[ "$out" != *x4vrmod_* ]] && ok "retired ids: not added to a fork without them" \
+    || bad "retired ids were added — got: $out"
 out=$(X4VR_HEADLOOK_WRITE=1 run cat "$PROF/content.xml")
-[[ "$out" == *"$hoff"* && "$out" == *"$on"* ]] \
-    && ok "write mode: x4vrmod_lookaround ON, x4vrmod_headlook OFF (take 351)" \
-    || bad "write mode: not lookaround on / headlook off — got: $out"
-out=$(X4VR_HEADLOOK_WRITE=1 X4VR_HEADLOOK_SPEED_EXT=1 run cat "$PROF/content.xml")
-[[ "$out" == *"$hon"* && "$out" == *"$on"* ]] \
-    && ok "write mode + X4VR_HEADLOOK_SPEED_EXT=1: both served ON" \
-    || bad "write mode + X4VR_HEADLOOK_SPEED_EXT=1: not both on — got: $out"
-out=$(X4VR_HEADLOOK_SPEED_EXT=1 run cat "$PROF/content.xml")
-[[ "$out" == *"$hoff"* ]] \
-    && ok "X4VR_HEADLOOK_SPEED_EXT=1 without write mode: headlook stays OFF" \
-    || bad "X4VR_HEADLOOK_SPEED_EXT=1 without write mode served headlook — got: $out"
-printf '<content>\n  %s\n  %s\n</content>\n' "$on" "$hon" > "$PROF/content-x4vrmod.xml"
-out=$(run cat "$PROF/content.xml")
-[[ "$out" == *"$hoff"* ]] \
-    && ok "a fork left with headlook ON by a write session is served OFF without it" \
-    || bad "headlook leaked into a non-write session — got: $out"
+[[ "$out" == *"$on"* && "$out" != *x4vrmod_* ]] \
+    && ok "write mode: x4vrmod ON, nothing else of ours" \
+    || bad "write mode: not x4vrmod alone — got: $out"
+# ...and served OFF when an earlier session left them in the fork, ON or OFF.
+printf '<content>\n  %s\n  %s\n  %s\n  %s\n</content>\n' \
+    '<extension id="x4vrmod_lookaround" enabled="true"/>' \
+    '<extension id="x4vrmod_nosway" enabled="true"/>' \
+    '<extension id="x4vrmod_headlook" enabled="false"/>' \
+    '<extension id="x4vrmod_lookaround_old" enabled="true"/>' > "$PROF/content-x4vrmod.xml"
+: > "$T/log"
+for spd in "" 1; do
+    out=$(X4VR_HEADLOOK_WRITE=1 X4VR_HEADLOOK_SPEED_EXT=$spd run cat "$PROF/content.xml")
+    [[ "$out" == *'<extension id="x4vrmod_lookaround" enabled="false"/>'* &&
+       "$out" == *'<extension id="x4vrmod_nosway" enabled="false"/>'* &&
+       "$out" == *'<extension id="x4vrmod_headlook" enabled="false"/>'* &&
+       "$out" == *"$on"* ]] \
+        && ok "retired ids left in the fork: served OFF, x4vrmod ON (write mode, X4VR_HEADLOOK_SPEED_EXT='$spd')" \
+        || bad "retired ids not all served off (X4VR_HEADLOOK_SPEED_EXT='$spd') — got: $out"
+done
+[[ "$out" == *'<extension id="x4vrmod_lookaround_old" enabled="true"/>'* ]] \
+    && ok "an id that merely starts with a retired one is left alone" \
+    || bad "a foreign id sharing our prefix was changed — got: $out"
+grep -q 'x4vrmod ENABLED (added), x4vrmod_lookaround retired, DISABLED (was on), x4vrmod_nosway retired, DISABLED (was on), x4vrmod_headlook retired, already disabled;' "$T/log" \
+    && ok "log names each retired id and what was done" \
+    || bad "log does not name the retired ids — got: $(grep -m1 'content: serving' "$T/log")"
 cmp -s "$PROF/content.xml" "$T/original" && ok "player's content.xml still byte-identical" \
     || bad "player's content.xml was MODIFIED"
 

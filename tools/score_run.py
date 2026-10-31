@@ -3806,7 +3806,8 @@ def main(path):
     # --- X4VR_HEADLOOK_WRITE: head-look WITHOUT MOUSELOOK -------------------
     #
     # The head's angle written into X4's free-look matrix (camera+0x5b0), with
-    # x4vrmod_headlook holding X4's follower still. Gate on intent: asked for
+    # X4's follower held still (the injector's per-mode speed since take 351;
+    # the x4vrmod_headlook extension before). Gate on intent: asked for
     # and never armed, never written, or MOUSELOOK pressed even once is a FAIL.
     # The two questions the take exists for, each from its own channel:
     #   tracking -- does X4's camera follow the head? lagsample, full rate,
@@ -3852,19 +3853,21 @@ def main(path):
             fails.append("X4VR_HEADLOOK_WRITE=1 asked, but no write report — "
                          "the mode never ran (head-look off, or no pose)")
         # The G-force sway, read off the controller live (since take 322).
-        # Judged against intent: with x4vrmod_nosway served the sway must stay
-        # at rest; without it, a large one is just X4 being X4.
+        # Judged against intent: with the sway removal served (x4vrmod, or
+        # x4vrmod_nosway until v0.9.8) the sway must stay at rest; without
+        # it, a large one is just X4 being X4.
         sw = re.findall(r"\| sway max [\d.]+ deg [\d.]+ m this window, "
                         r"([\d.]+) deg ([\d.]+) m run", text)
-        nosway = bool(re.search(r"x4vrmod_nosway (already enabled|ENABLED)", text))
+        ns = re.search(r"\b(x4vrmod(?:_nosway)?) (already enabled|ENABLED)", text)
+        nosway = bool(ns)
         if sw:
             sd, sm = float(sw[-1][0]), float(sw[-1][1])
             print(f"hwrite  sway (camera controller, live): run max {sd:.2f} "
                   f"deg, {sm * 100:.1f} cm"
-                  + ("; x4vrmod_nosway served" if nosway else
-                     "; x4vrmod_nosway NOT served"))
+                  + (f"; sway removal served ({ns.group(1)})" if nosway else
+                     "; sway removal (x4vrmod) NOT served"))
             if nosway and (sd > 1.0 or sm > 0.005):
-                fails.append(f"x4vrmod_nosway was served but the camera still "
+                fails.append(f"{ns.group(1)} was served but the camera still "
                              f"swayed {sd:.2f} deg / {sm * 100:.1f} cm — the "
                              f"diff did not reach the sway physics")
             elif nosway:
@@ -3876,7 +3879,8 @@ def main(path):
         if hw_asked:
             # Since take 351 the injector holds the follower's speed at zero
             # per camera mode (headlook speed lines); the extension that did
-            # it for the whole session is served only on request.
+            # it for the whole session (x4vrmod_headlook) was dropped after
+            # v0.9.8, and is read here for older logs only.
             spd = re.search(r"headlook speed: X4's own <lookaround><internal> "
                             r"anglespeed ([\d.]+)", text)
             to_x4 = len(re.findall(r"headlook speed: camera mode -?\d+ — "
@@ -3888,9 +3892,10 @@ def main(path):
                       f"0 in mode 0 ({to_0} time(s)), given back in other "
                       f"modes ({to_x4} time(s))")
             elif not re.search(r"x4vrmod_headlook (already enabled|ENABLED)", text):
-                fails.append("X4VR_HEADLOOK_WRITE=1 but neither the injector's "
-                             "per-mode speed (headlook speed) nor "
-                             "x4vrmod_headlook held X4's follower, so writes "
+                fails.append("X4VR_HEADLOOK_WRITE=1 but the injector's "
+                             "per-mode speed (headlook speed) never held X4's "
+                             "follower (nor, in a log until v0.9.8, "
+                             "x4vrmod_headlook), so writes "
                              "would be pulled home")
             ls_ = re.findall(
                 r"lagsample: arm=\d view=(\w+) steer=(\d) cam=(\d) "
