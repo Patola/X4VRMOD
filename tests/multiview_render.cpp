@@ -138,6 +138,18 @@ int main(int argc, char **argv) {
     dci.pNext = &fdi;
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &q;
+    // X4VR_TEST_COMPUTE=fsrbindless indexes image tables with a non-constant
+    // (X4 does, and the FSR fix adds WorkGroupID.z * offset), which needs the
+    // two dynamic-indexing features. Only that case asks, so every other case
+    // creates exactly the device it always did.
+    const char *fsrb_env = getenv("X4VR_TEST_COMPUTE");
+    const bool want_fsrb = fsrb_env && !strcmp(fsrb_env, "fsrbindless");
+    VkPhysicalDeviceFeatures feats{};
+    if (want_fsrb) {
+        feats.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
+        feats.shaderStorageImageArrayDynamicIndexing = VK_TRUE;
+        dci.pEnabledFeatures = &feats;
+    }
     VkDevice dev;
     CHECK(vkCreateDevice(phys[0], &dci, nullptr, &dev));
 
@@ -500,6 +512,265 @@ int main(int argc, char **argv) {
         printf("LAYERS_IDENTICAL=absent\n");
     }
     vkUnmapMemory(dev, bmem);
+
+    // ---- X4VR_TEST_COMPUTE=fsrbindless: X4's FSR pass, both eyes (take 380)
+    //
+    // tests/fsr_bindless.comp has the resources of X4's compiled FSR pass, read
+    // through the tables and indexed from the dynamic block. The input is the
+    // doubled target drawn above (both layers drawn); the output a 64x64
+    // rgba16f storage target the layer doubles (colour-attachment usage, like
+    // X4's). Run with X4VR_RES=64x64 so the 4x4x1 dispatch covers the "eye"
+    // and X4VR_MIRROR_OFFSET=32 so the twins land inside the 64-entry tables.
+    // The test names layer 0 in every barrier, as X4 does; the layer widens
+    // them. With the fix both output layers are written; with
+    // X4VR_FSR_STEREO=0 layer 1 stays zero.
+    if (want_fsrb) {
+        const uint32_t FW = 64, FH = 64;
+        const VkDeviceSize FBYTES = (VkDeviceSize)FW * FH * 8;
+        VkDescriptorSetLayoutBinding b0[3]{};
+        b0[0] = {4, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+        b0[1] = {5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 64, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+        b0[2] = {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 64, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+        const VkDescriptorBindingFlags bfl[3] = {
+            0, VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
+            VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT};
+        VkDescriptorSetLayoutBindingFlagsCreateInfo bfci{};
+        bfci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+        bfci.bindingCount = 3;
+        bfci.pBindingFlags = bfl;
+        VkDescriptorSetLayoutCreateInfo l0ci{};
+        l0ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        l0ci.pNext = &bfci;
+        l0ci.bindingCount = 3;
+        l0ci.pBindings = b0;
+        VkDescriptorSetLayout sl[5]{};
+        CHECK(vkCreateDescriptorSetLayout(dev, &l0ci, nullptr, &sl[0]));
+        VkDescriptorSetLayoutCreateInfo emci{};
+        emci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        for (int i = 1; i <= 3; i++)
+            CHECK(vkCreateDescriptorSetLayout(dev, &emci, nullptr, &sl[i]));
+        VkDescriptorSetLayoutBinding b4{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
+                                        VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+        VkDescriptorSetLayoutCreateInfo l4ci{};
+        l4ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        l4ci.bindingCount = 1;
+        l4ci.pBindings = &b4;
+        CHECK(vkCreateDescriptorSetLayout(dev, &l4ci, nullptr, &sl[4]));
+        VkPipelineLayoutCreateInfo plci{};
+        plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        plci.setLayoutCount = 5;
+        plci.pSetLayouts = sl;
+        VkPipelineLayout fpl;
+        CHECK(vkCreatePipelineLayout(dev, &plci, nullptr, &fpl));
+        std::vector<uint32_t> fc = load_spv("tests/fsr_bindless.comp.spv");
+        if (fc.empty()) { printf("FAIL=no_fsr_bindless:0\n"); return 1; }
+        VkShaderModuleCreateInfo fsci{};
+        fsci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        fsci.codeSize = fc.size() * 4;
+        fsci.pCode = fc.data();
+        VkShaderModule fsm;
+        CHECK(vkCreateShaderModule(dev, &fsci, nullptr, &fsm));
+        VkComputePipelineCreateInfo fpci{};
+        fpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        fpci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fpci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        fpci.stage.module = fsm;
+        fpci.stage.pName = "main";
+        fpci.layout = fpl;
+        VkPipeline fpipe;
+        CHECK(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &fpci, nullptr, &fpipe));
+
+        VkImageCreateInfo oci{};
+        oci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        oci.imageType = VK_IMAGE_TYPE_2D;
+        oci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        oci.extent = {FW, FH, 1};
+        oci.mipLevels = 1;
+        oci.arrayLayers = 1;
+        oci.samples = VK_SAMPLE_COUNT_1_BIT;
+        oci.tiling = VK_IMAGE_TILING_OPTIMAL;
+        oci.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        VkImage oimg;
+        CHECK(vkCreateImage(dev, &oci, nullptr, &oimg));
+        VkMemoryRequirements oreq{};
+        vkGetImageMemoryRequirements(dev, oimg, &oreq);
+        const uint32_t olay = oreq.size >= FBYTES * 2 ? 2 : 1;
+        printf("FSRB_OUT_LAYERS=%u\n", olay);
+        VkMemoryAllocateInfo omai{};
+        omai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        omai.allocationSize = oreq.size;
+        omai.memoryTypeIndex = pick(oreq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        VkDeviceMemory omem;
+        CHECK(vkAllocateMemory(dev, &omai, nullptr, &omem));
+        CHECK(vkBindImageMemory(dev, oimg, omem, 0));
+        VkImageViewCreateInfo ovci{};
+        ovci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        ovci.image = oimg;
+        ovci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        ovci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        ovci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VkImageView oview;
+        CHECK(vkCreateImageView(dev, &ovci, nullptr, &oview));
+
+        VkBufferCreateInfo ubci{};
+        ubci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        ubci.size = 16;
+        ubci.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        VkBuffer ubuf;
+        CHECK(vkCreateBuffer(dev, &ubci, nullptr, &ubuf));
+        VkMemoryRequirements ureq{};
+        vkGetBufferMemoryRequirements(dev, ubuf, &ureq);
+        VkMemoryAllocateInfo umai{};
+        umai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        umai.allocationSize = ureq.size;
+        umai.memoryTypeIndex = pick(ureq.memoryTypeBits,
+                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        VkDeviceMemory umem;
+        CHECK(vkAllocateMemory(dev, &umai, nullptr, &umem));
+        CHECK(vkBindBufferMemory(dev, ubuf, umem, 0));
+        void *up = nullptr;
+        CHECK(vkMapMemory(dev, umem, 0, 16, 0, &up));
+        memset(up, 0, 16); // input slot 0, output slot 0
+        vkUnmapMemory(dev, umem);
+
+        VkSamplerCreateInfo fsc{};
+        fsc.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        VkSampler fsamp;
+        CHECK(vkCreateSampler(dev, &fsc, nullptr, &fsamp));
+        VkDescriptorPoolSize ps[4] = {{VK_DESCRIPTOR_TYPE_SAMPLER, 1},
+                                      {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 64},
+                                      {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 64},
+                                      {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}};
+        VkDescriptorPoolCreateInfo dpci{};
+        dpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        dpci.maxSets = 2;
+        dpci.poolSizeCount = 4;
+        dpci.pPoolSizes = ps;
+        VkDescriptorPool fdp;
+        CHECK(vkCreateDescriptorPool(dev, &dpci, nullptr, &fdp));
+        VkDescriptorSetLayout two[2] = {sl[0], sl[4]};
+        VkDescriptorSetAllocateInfo dsai{};
+        dsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dsai.descriptorPool = fdp;
+        dsai.descriptorSetCount = 2;
+        dsai.pSetLayouts = two;
+        VkDescriptorSet ds[2];
+        CHECK(vkAllocateDescriptorSets(dev, &dsai, ds));
+        VkDescriptorImageInfo isamp{fsamp, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+        VkDescriptorImageInfo iin{VK_NULL_HANDLE, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkDescriptorImageInfo iout{VK_NULL_HANDLE, oview, VK_IMAGE_LAYOUT_GENERAL};
+        VkDescriptorBufferInfo ubi{ubuf, 0, 16};
+        VkWriteDescriptorSet dw[4]{};
+        for (auto &w : dw) {
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.descriptorCount = 1;
+        }
+        dw[0].dstSet = ds[0]; dw[0].dstBinding = 4; dw[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER; dw[0].pImageInfo = &isamp;
+        dw[1].dstSet = ds[0]; dw[1].dstBinding = 5; dw[1].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE; dw[1].pImageInfo = &iin;
+        dw[2].dstSet = ds[0]; dw[2].dstBinding = 6; dw[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE; dw[2].pImageInfo = &iout;
+        dw[3].dstSet = ds[1]; dw[3].dstBinding = 0; dw[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; dw[3].pBufferInfo = &ubi;
+        vkUpdateDescriptorSets(dev, 4, dw, 0, nullptr);
+
+        VkBufferCreateInfo rbci{};
+        rbci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        rbci.size = FBYTES * 2;
+        rbci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        VkBuffer rbuf;
+        CHECK(vkCreateBuffer(dev, &rbci, nullptr, &rbuf));
+        VkMemoryRequirements rreq{};
+        vkGetBufferMemoryRequirements(dev, rbuf, &rreq);
+        VkMemoryAllocateInfo rmai{};
+        rmai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        rmai.allocationSize = rreq.size;
+        rmai.memoryTypeIndex = pick(rreq.memoryTypeBits,
+                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                        VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        VkDeviceMemory rmem;
+        CHECK(vkAllocateMemory(dev, &rmai, nullptr, &rmem));
+        CHECK(vkBindBufferMemory(dev, rbuf, rmem, 0));
+        void *rp0 = nullptr;
+        CHECK(vkMapMemory(dev, rmem, 0, FBYTES * 2, 0, &rp0));
+        memset(rp0, 0, (size_t)(FBYTES * 2));
+
+        CHECK(vkResetCommandBuffer(cmd, 0));
+        CHECK(vkBeginCommandBuffer(cmd, &cbbi));
+        // The input: both of its layers to shader-read (the test knows it
+        // was doubled, as the layer's render pass left both in TRANSFER_SRC).
+        VkImageMemoryBarrier inb{};
+        inb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        inb.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        inb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        inb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        inb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        inb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        inb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        inb.image = img;
+        inb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
+        // The output: layer 0 named only, as X4 names it.
+        VkImageMemoryBarrier outb = inb;
+        outb.srcAccessMask = 0;
+        outb.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        outb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        outb.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        outb.image = oimg;
+        outb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VkImageMemoryBarrier pre[2] = {inb, outb};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 2, pre);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, fpipe);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, fpl, 0, 1, &ds[0], 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, fpl, 4, 1, &ds[1], 0, nullptr);
+        vkCmdDispatch(cmd, FW / 16, FH / 16, 1);
+        VkImageMemoryBarrier post = outb;
+        post.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        post.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        post.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        post.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+                             1, &post);
+        for (uint32_t layer = 0; layer < olay; layer++) {
+            VkBufferImageCopy c{};
+            c.bufferOffset = FBYTES * layer;
+            c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, layer, 1};
+            c.imageExtent = {FW, FH, 1};
+            vkCmdCopyImageToBuffer(cmd, oimg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                   rbuf, 1, &c);
+        }
+        CHECK(vkEndCommandBuffer(cmd));
+        CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
+        CHECK(vkQueueWaitIdle(queue));
+        const uint16_t *o0 = (const uint16_t *)rp0;
+        const uint16_t *o1 = (const uint16_t *)((const char *)rp0 + FBYTES);
+        const size_t fwords = (size_t)FBYTES / 2;
+        printf("FSRB_L0_WRITTEN=%d\n", nonzero(o0, fwords) ? 1 : 0);
+        if (olay >= 2) {
+            printf("FSRB_L1_WRITTEN=%d\n", nonzero(o1, fwords) ? 1 : 0);
+            printf("FSRB_IDENTICAL=%d\n",
+                   memcmp(o0, o1, (size_t)FBYTES) == 0 ? 1 : 0);
+        } else {
+            printf("FSRB_L1_WRITTEN=absent\n");
+        }
+        vkUnmapMemory(dev, rmem);
+        vkDestroyBuffer(dev, rbuf, nullptr);
+        vkFreeMemory(dev, rmem, nullptr);
+        vkDestroyDescriptorPool(dev, fdp, nullptr);
+        vkDestroySampler(dev, fsamp, nullptr);
+        vkDestroyBuffer(dev, ubuf, nullptr);
+        vkFreeMemory(dev, umem, nullptr);
+        vkDestroyImageView(dev, oview, nullptr);
+        vkDestroyImage(dev, oimg, nullptr);
+        vkFreeMemory(dev, omem, nullptr);
+        vkDestroyPipeline(dev, fpipe, nullptr);
+        vkDestroyShaderModule(dev, fsm, nullptr);
+        vkDestroyPipelineLayout(dev, fpl, nullptr);
+        for (auto &l : sl)
+            vkDestroyDescriptorSetLayout(dev, l, nullptr);
+        return 0;
+    }
 
     // ---- stage 2: read the target back the way X4 does -------------------
     //

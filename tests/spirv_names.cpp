@@ -106,6 +106,53 @@ int main(int argc, char **argv) {
               "a fragment module is not compute");
     }
 
+    // patch_compute_index_offset (take 380): the X4-shaped FSR fixture's two
+    // table accesses get + WorkGroupID.z * offset, it reuses the module's own
+    // WorkGroupId input, the result validates, and the signature matcher the
+    // layer uses accepts the fixture and refuses the plain FSR shape.
+    {
+        std::vector<uint32_t> code;
+        const bool have = load(dir + "/fsr_bindless.comp.spv", code);
+        const x4vr::spv::ComputeInfo ci = x4vr::spv::compute_info(code);
+        check(have && x4vr::spv::is_x4_fsr_pass(ci),
+              "fsr_bindless.comp: the layer's FSR signature matches it");
+        std::vector<uint32_t> plain;
+        check(load(dir + "/fsr_shape.comp.spv", plain) &&
+                  !x4vr::spv::is_x4_fsr_pass(x4vr::spv::compute_info(plain)),
+              "fsr_shape.comp (no bindless tables): the signature refuses it");
+        std::vector<uint32_t> before = code;
+        const uint32_t n = x4vr::spv::patch_compute_index_offset(
+            code, {{0, 5}, {0, 6}}, 26653);
+        check(n == 2, ("two table accesses rewritten: " + std::to_string(n)).c_str());
+        size_t wg = 0;
+        for (size_t i = 5; i + 3 < code.size();) {
+            const uint32_t len = code[i] >> 16, op = code[i] & 0xffffu;
+            if (op == 71 && len >= 4 && code[i + 2] == 11 && code[i + 3] == 26)
+                wg++;
+            if (!len)
+                break;
+            i += len;
+        }
+        check(wg == 1, "one WorkGroupId input, the module's own (none added)");
+        const std::string out = "/tmp/x4vr-test-fsr-patched.spv";
+        FILE *f = fopen(out.c_str(), "wb");
+        if (f) {
+            fwrite(code.data(), 4, code.size(), f);
+            fclose(f);
+        }
+        const int rc = system(("spirv-val " + out + " >/dev/null 2>&1").c_str());
+        if (system("command -v spirv-val >/dev/null 2>&1") == 0)
+            check(rc == 0, "the patched module passes spirv-val");
+        else
+            printf("SKIP   spirv-val not installed — the patched module is unvalidated\n");
+        check(x4vr::spv::patch_compute_index_offset(before, {{1, 9}}, 26653) == 0,
+              "no table at the pairs -> untouched");
+        std::vector<uint32_t> frag;
+        check(load(dir + "/sample_volume_ray.frag.spv", frag) &&
+                  x4vr::spv::patch_compute_index_offset(frag, {{0, 5}}, 26653) == 0,
+              "a fragment module -> untouched");
+    }
+
     printf("\n%s\n", g_fail ? "SOME CASES FAILED" : "all cases passed");
     return g_fail ? 1 : 0;
 }

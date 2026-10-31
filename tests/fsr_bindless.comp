@@ -1,0 +1,26 @@
+#version 450
+// The shape of X4's compiled FSR 1 passes as take 379 found them (EASU c10,
+// RCAS c5): 64 threads per group, a sampler at set 0 binding 4, the sampled
+// table S_sampler2D at 0.5, the storage table U_output_rt_decl at 0.6, both
+// indexed from the dynamic block at set 4, and the pixel from WorkGroupID.xy
+// alone (16x16 per group). Written for the tests, not X4's code. The layer's
+// FSR fix (take 380) recognises this signature, offsets both tables by
+// WorkGroupID.z * offset, and dispatches eye-sized passes with z = 2.
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 4) uniform sampler S_sampler;
+layout(set = 0, binding = 5) uniform texture2D S_sampler2D[64];
+layout(set = 0, binding = 6, rgba16f) uniform writeonly image2D U_output_rt_decl[64];
+layout(set = 4, binding = 0) uniform BLOCK_BUFFER_BINDING_SLOT_DYNAMIC {
+    uvec4 U_index; // x: input slot, y: output slot
+};
+
+void main() {
+    ivec2 base = ivec2(gl_WorkGroupID.xy) * 16 +
+                 ivec2(gl_LocalInvocationID.x % 8u, gl_LocalInvocationID.x / 8u) * 2;
+    for (int dy = 0; dy < 2; dy++)
+        for (int dx = 0; dx < 2; dx++) {
+            ivec2 p = base + ivec2(dx, dy);
+            vec4 c = texelFetch(sampler2D(S_sampler2D[U_index.x], S_sampler), p, 0);
+            imageStore(U_output_rt_decl[U_index.y], p, c + vec4(0.25, 0.0, 0.0, 0.0));
+        }
+}

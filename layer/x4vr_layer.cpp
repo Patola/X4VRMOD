@@ -1290,6 +1290,19 @@ const uint32_t g_mirror_offset = [] {
     return v > 0 ? (uint32_t)v : 26653u;
 }();
 
+// **The FSR fix (take 380), on by default; X4VR_FSR_STEREO=0 turns it off.**
+// X4's FSR 1 runs as compute (EASU, then RCAS) and reads and writes through
+// the bindless tables, so it upscaled the left eye only and the right eye's
+// scene was black (take 379). With this on: the storage table is mirrored
+// like the sampled one, X4's FSR modules get `index + WorkGroupID.z * offset`
+// on both tables, eye-sized FSR dispatches run with z = 2, and barriers on
+// doubled storage images cover both layers. It needs the mirror.
+const bool g_fsr_stereo_knob = x4vr::env_on("X4VR_FSR_STEREO", true);
+bool fsr_stereo_enabled() {
+    return g_fsr_stereo_knob && g_mv && g_bindless_mirror;
+}
+VkExtent2D expected_eye(); // defined with the SBS split, further down
+
 // The layout/set bookkeeping below serves both knobs, and the mirror cannot work
 // without it: attributing a write to a table is how it knows a twin region
 // exists at all. Gating that on the survey alone made X4VR_BINDLESS_MIRROR=1
@@ -2338,8 +2351,12 @@ void bindless_mirror_writes(
     mpool.reserve(writeCount); // no reallocation, so pImageInfo stays valid
     for (uint32_t i = 0; i < writeCount; i++) {
         const VkWriteDescriptorSet &w = writes[i];
+        // Storage images too while the FSR fix is on: the second half of an
+        // FSR dispatch writes through slot + offset (take 380).
         if (w.descriptorType != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
-            w.descriptorType != VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
+            w.descriptorType != VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE &&
+            !(w.descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE &&
+              fsr_stereo_enabled()))
             continue;
         if (!w.pImageInfo || !w.descriptorCount)
             continue;
@@ -4354,8 +4371,21 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImage(
     info.usage = ci->usage;
     info.doubled = dbl;
     info.pool_single = pool_single;
+    // The FSR fix writes both layers of X4's FSR outputs from compute (take
+    // 380), and no render pass ever does, so nothing else would mark them
+    // per-eye and the mirror would point their twins at layer 0. Eye-sized
+    // doubled storage images are those outputs: the dispatches the fix doubles
+    // are exactly the eye-covering ones. Smaller storage images (a 1x1) keep
+    // the default, their twin at layer 0.
+    const VkExtent2D fsr_eye = expected_eye();
+    const bool fsr_out = dbl && fsr_stereo_enabled() &&
+                         (ci->usage & VK_IMAGE_USAGE_STORAGE_BIT) &&
+                         ci->extent.width == fsr_eye.width &&
+                         ci->extent.height == fsr_eye.height;
     {
         std::lock_guard<std::mutex> lock(g_img_mu);
+        if (fsr_out)
+            g_per_eye_images.insert(*out);
         info.serial = g_img_serial++;
         g_images[*out] = info;
         // Seed here, not at framebuffer creation: an image that no framebuffer
@@ -6836,12 +6866,113 @@ void count_module_stage(const VkShaderModuleCreateInfo *ci) {
     g_modules_other.fetch_add(1);
 }
 
+// ------------------------------------------------ the FSR fix (take 380)
+//
+// See g_fsr_stereo_knob. X4's FSR pass is recognised by its resource
+// signature (x4vr::spv::is_x4_fsr_pass: 64x1x1, exactly S_sampler,
+// S_sampler2D, U_output_rt_decl and the dynamic block) when X4 creates the
+// module, and created patched; every other module is untouched.
+namespace {
+std::mutex g_fsr_mu;
+std::unordered_set<VkShaderModule> &g_fsr_modules =
+    x4vr::immortal<std::unordered_set<VkShaderModule>>();
+std::unordered_set<VkPipeline> &g_fsr_pipes =
+    x4vr::immortal<std::unordered_set<VkPipeline>>();
+std::unordered_map<VkCommandBuffer, bool> &g_fsr_cb =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, bool>>();
+std::atomic<uint64_t> g_fsr_doubled{0}, g_fsr_left{0}, g_fsr_barriers{0};
+
+// The patched code for an FSR module, or empty to create it as X4 wrote it.
+std::vector<uint32_t> fsr_patch_module(const VkShaderModuleCreateInfo *ci) {
+    std::vector<uint32_t> code;
+    if (!g_active || !fsr_stereo_enabled() || !ci || ci->codeSize < 20)
+        return code;
+    code.resize(ci->codeSize / 4);
+    memcpy(code.data(), ci->pCode, ci->codeSize);
+    const x4vr::spv::ComputeInfo info = x4vr::spv::compute_info(code);
+    if (!x4vr::spv::is_x4_fsr_pass(info)) {
+        code.clear();
+        return code;
+    }
+    std::vector<std::pair<uint32_t, uint32_t>> tables;
+    for (const auto &b : info.bindings)
+        if (b.name == "S_sampler2D" || b.name == "U_output_rt_decl")
+            tables.push_back({b.set, b.binding});
+    const uint32_t n =
+        x4vr::spv::patch_compute_index_offset(code, tables, g_mirror_offset);
+    if (!n) {
+        X4VR_LOG("fsr: X4's FSR pass (%zu bytes) REFUSED by the patch — it stays "
+                 "one-eyed; the right eye's scene will be black with an upscaler",
+                 (size_t)ci->codeSize);
+        code.clear();
+        return code;
+    }
+    X4VR_LOG("fsr: X4's FSR pass (%zu bytes) patched for both eyes — %u table "
+             "access(es) + WorkGroupID.z * %u (sampled and storage tables)",
+             (size_t)ci->codeSize, n, g_mirror_offset);
+    return code;
+}
+
+// The z group count for a dispatch: 2 for an eye-sized dispatch of a patched
+// FSR pipeline (its 16x16 tiles cover the eye), as asked otherwise. Smaller
+// FSR passes (a 768x512 target) stay one-eyed: their output may be a single
+// image, and two halves writing it would race.
+uint32_t fsr_dispatch_z(VkCommandBuffer cb, uint32_t x, uint32_t y, uint32_t z) {
+    if (!g_active || !fsr_stereo_enabled())
+        return z;
+    {
+        std::lock_guard<std::mutex> lock(g_fsr_mu);
+        auto c = g_fsr_cb.find(cb);
+        if (c == g_fsr_cb.end() || !c->second)
+            return z;
+    }
+    const VkExtent2D eye = expected_eye();
+    const bool covers = z == 1 && x * 16 >= eye.width && x * 16 < eye.width + 16 &&
+                        y * 16 >= eye.height && y * 16 < eye.height + 16;
+    if (covers) {
+        const uint64_t n = ++g_fsr_doubled;
+        if (n == 1 || n % 10000 == 0)
+            X4VR_LOG("fsr: dispatch %ux%ux1 covers the %ux%u eye — run as "
+                     "%ux%ux2, the second half the right eye (%llu so far)",
+                     x, y, eye.width, eye.height, x, y, (unsigned long long)n);
+        return 2;
+    }
+    const uint64_t n = ++g_fsr_left;
+    if (n == 1 || n % 10000 == 0)
+        X4VR_LOG("fsr: dispatch %ux%ux%u does not cover the %ux%u eye — left as "
+                 "X4 asked, one-eyed (%llu so far)",
+                 x, y, z, eye.width, eye.height, (unsigned long long)n);
+    return z;
+}
+
+// A doubled image the FSR fix may write per layer: STORAGE usage.
+bool img_doubled_storage(VkImage im) {
+    std::lock_guard<std::mutex> lock(g_img_mu);
+    auto it = g_images.find(im);
+    return it != g_images.end() && it->second.doubled &&
+           (it->second.usage & VK_IMAGE_USAGE_STORAGE_BIT);
+}
+} // namespace
+
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     VkDevice device, const VkShaderModuleCreateInfo *ci,
     const VkAllocationCallbacks *ac, VkShaderModule *out) {
     count_module_stage(ci);
     bool frag_patched = false;
-    VkResult r = create_shader_module_inner(device, ci, ac, out, &frag_patched);
+    // X4's FSR pass, created with per-eye table access (take 380).
+    const std::vector<uint32_t> fsr_code = fsr_patch_module(ci);
+    VkShaderModuleCreateInfo fsr_ci{};
+    if (!fsr_code.empty()) {
+        fsr_ci = *ci;
+        fsr_ci.codeSize = fsr_code.size() * 4;
+        fsr_ci.pCode = fsr_code.data();
+    }
+    VkResult r = create_shader_module_inner(device, fsr_code.empty() ? ci : &fsr_ci,
+                                            ac, out, &frag_patched);
+    if (r == VK_SUCCESS && !fsr_code.empty()) {
+        std::lock_guard<std::mutex> lock(g_fsr_mu);
+        g_fsr_modules.insert(*out);
+    }
     // X4's bytes, not ours: the handle is whatever the game will bind, but the
     // code written out is what it supplied. A dump that quietly contained our
     // own edits would be worse than no dump.
@@ -7736,6 +7867,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
     }
     if (r == VK_SUCCESS)
         complog_pipelines(count, ci, out);
+    if (r == VK_SUCCESS && fsr_stereo_enabled()) {
+        std::lock_guard<std::mutex> lock(g_fsr_mu);
+        for (uint32_t i = 0; i < count; i++)
+            if (out[i] != VK_NULL_HANDLE && g_fsr_modules.count(ci[i].stage.module))
+                g_fsr_pipes.insert(out[i]);
+    }
     if (r != VK_SUCCESS || !g_mv_inventory || !g_active)
         return r;
     for (uint32_t i = 0; i < count; i++) {
@@ -7775,7 +7912,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatch(VkCommandBuffer cb, uint32_t x,
     }
     note_dispatch(cb);
     complog_dispatch(cb, x, y, z, "direct");
-    d->CmdDispatch(cb, x, y, z);
+    d->CmdDispatch(cb, x, y, fsr_dispatch_z(cb, x, y, z));
 }
 
 VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatchIndirect(VkCommandBuffer cb,
@@ -12306,6 +12443,10 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
         g_comp_bound[cb] = p;
     }
     complog_bind_pipeline(cb, bp, p);
+    if (bp == VK_PIPELINE_BIND_POINT_COMPUTE && g_active && fsr_stereo_enabled()) {
+        std::lock_guard<std::mutex> lock(g_fsr_mu);
+        g_fsr_cb[cb] = g_fsr_pipes.count(p) != 0;
+    }
     if (g_mv && g_active && bp == VK_PIPELINE_BIND_POINT_GRAPHICS) {
         bool in_masked = false, pipe_mv = false, known = false;
         {
@@ -12362,7 +12503,30 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdPipelineBarrier(
             g_mv_stats.barrier_wide += wide;
         }
     }
-    d->CmdPipelineBarrier(cb, src, dst, flags, mbc, mb, bbc, bb, ibc, ib);
+    // The FSR fix writes layer 1 of doubled storage images, so their layer 1
+    // must follow layer 0's layout. X4 names layer 0 only; widened here, for
+    // those images alone. Render-pass images are left as they were.
+    std::vector<VkImageMemoryBarrier> wide_ib;
+    if (g_mv && g_active && ibc && fsr_stereo_enabled()) {
+        for (uint32_t i = 0; i < ibc; i++) {
+            const VkImageSubresourceRange &r = ib[i].subresourceRange;
+            if (r.baseArrayLayer != 0 || r.layerCount != 1 ||
+                !img_doubled_storage(ib[i].image))
+                continue;
+            if (wide_ib.empty())
+                wide_ib.assign(ib, ib + ibc);
+            wide_ib[i].subresourceRange.layerCount = 2;
+        }
+        if (!wide_ib.empty()) {
+            const uint64_t n = ++g_fsr_barriers;
+            if (n == 1)
+                X4VR_LOG("fsr: a barrier on a doubled storage image widened to "
+                         "both layers (the right eye's FSR output follows the "
+                         "left's layout)");
+        }
+    }
+    d->CmdPipelineBarrier(cb, src, dst, flags, mbc, mb, bbc, bb, ibc,
+                          wide_ib.empty() ? ib : wide_ib.data());
 }
 
 // Task #38, defined with the rest of the VR section further down. Declared

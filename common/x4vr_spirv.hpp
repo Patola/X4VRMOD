@@ -4600,6 +4600,276 @@ inline bool patch_fragment_index_offset(std::vector<uint32_t> &code,
     return true;
 }
 
+/// Per-eye bindless access for a compute pass: `element = index +
+/// WorkGroupID.z * offset` on every access to the tables at the given
+/// (set, binding) pairs (take 380).
+///
+/// The compute analogue of `patch_fragment_index_offset`. A dispatch has no
+/// ViewIndex, so the layer dispatches the pass with twice the groups in z and
+/// the second half reads and writes the mirror's twins (`slot + offset`,
+/// layer-1 views of doubled images, the same descriptor otherwise). X4's FSR 1
+/// (EASU and RCAS) reads `S_sampler2D` and imageStores into
+/// `U_output_rt_decl`, both bindless tables, and computes its pixel from
+/// WorkGroupID.xy only, so z selects the eye and nothing else changes. A
+/// dispatch left at z = 1 runs exactly as before (z is 0).
+///
+/// Reuses the module's own uint, uvec3, Input pointer and WorkGroupId
+/// variable where it has them (duplicate scalar types are invalid SPIR-V).
+/// Returns the number of accesses rewritten; 0 leaves `code` untouched, which
+/// it does if there is no GLCompute entry point, no table at the pairs, an
+/// index that is not a 32-bit integer of known type, or a table indexed from
+/// a function other than the entry point's own.
+inline uint32_t patch_compute_index_offset(
+    std::vector<uint32_t> &code,
+    const std::vector<std::pair<uint32_t, uint32_t>> &tables, uint32_t offset) {
+    constexpr uint32_t kOpTypeVector = 23, kBuiltInWorkgroupId = 26;
+    if (!offset || tables.empty())
+        return 0;
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return 0;
+    uint32_t entry_fn = 0, bound = code[3], wg_var = 0;
+    uint32_t t_uint = 0, t_v3u = 0, p_in_v3u = 0;
+    size_t first_fn = 0, last_annotation_end = 0, first_global = 0;
+    bool have_first_global = false;
+    std::unordered_map<uint32_t, uint32_t> set_of, bind_of, ptr_to, arr_elem,
+        res_type, int_width;
+    std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> ptr_sc; // ptr -> {class, pointee}
+    std::unordered_set<uint32_t> img_types, si_types;
+    struct KnownConst {
+        uint32_t type, value;
+    };
+    std::unordered_map<uint32_t, KnownConst> consts;
+    std::vector<size_t> var_starts;
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        switch (in.op) {
+        case OpEntryPoint:
+            if (in.len >= 3 && w[1] == ExecutionModelGLCompute)
+                entry_fn = w[2];
+            break;
+        case OpDecorate:
+            last_annotation_end = in.start + in.len;
+            if (in.len >= 4 && w[2] == DecorationDescriptorSet)
+                set_of[w[1]] = w[3];
+            if (in.len >= 4 && w[2] == DecorationBinding)
+                bind_of[w[1]] = w[3];
+            if (in.len >= 4 && w[2] == DecorationBuiltIn &&
+                w[3] == kBuiltInWorkgroupId)
+                wg_var = w[1];
+            break;
+        case OpMemberDecorate:
+            last_annotation_end = in.start + in.len;
+            break;
+        case OpTypeInt:
+            if (in.len >= 4) {
+                int_width[w[1]] = w[2];
+                if (w[2] == 32 && w[3] == 0)
+                    t_uint = w[1];
+            }
+            break;
+        case kOpTypeVector:
+            if (in.len >= 4 && w[3] == 3 && w[2] && w[2] == t_uint)
+                t_v3u = w[1];
+            break;
+        case OpTypeImage:
+            if (in.len >= 2)
+                img_types.insert(w[1]);
+            break;
+        case OpTypeSampledImage:
+            if (in.len >= 3)
+                si_types.insert(w[1]);
+            break;
+        case OpTypeArray:
+        case OpTypeRuntimeArray:
+            if (in.len >= 3)
+                arr_elem[w[1]] = w[2];
+            break;
+        case OpTypePointer:
+            if (in.len >= 4) {
+                ptr_to[w[1]] = w[3];
+                ptr_sc[w[1]] = {w[2], w[3]};
+            }
+            break;
+        case OpConstant:
+            if (in.len >= 4)
+                consts[w[2]] = {w[1], w[3]};
+            break;
+        case OpVariable:
+            var_starts.push_back(in.start);
+            break;
+        case OpFunction:
+            if (!first_fn)
+                first_fn = in.start;
+            break;
+        default:
+            break;
+        }
+        if (!have_first_global && in.op >= OpTypeInt && in.op <= OpTypePointer) {
+            have_first_global = true;
+            first_global = in.start;
+        }
+        switch (in.op) {
+        case OpLoad:
+        case OpAccessChain:
+        case OpIAdd:
+        case OpIMul:
+        case OpBitcast:
+        case 66:  // OpInBoundsAccessChain
+        case 81:  // OpCompositeExtract
+        case 113: // OpUConvert
+        case 114: // OpSConvert
+        case 169: // OpSelect
+        case 194: // OpShiftRightLogical
+        case 199: // OpBitwiseAnd
+            if (in.len >= 3)
+                res_type[w[2]] = w[1];
+            break;
+        default:
+            break;
+        }
+    }
+    if (!entry_fn || !first_fn)
+        return 0;
+    for (const auto &e : ptr_sc)
+        if (e.second.first == StorageClassInput && t_v3u && e.second.second == t_v3u)
+            p_in_v3u = e.first;
+
+    std::vector<uint32_t> target_vars;
+    for (size_t st : var_starts) {
+        const uint32_t *w = &code[st];
+        auto si = set_of.find(w[2]), bi = bind_of.find(w[2]);
+        if (si == set_of.end() || bi == bind_of.end())
+            continue;
+        if (std::find(tables.begin(), tables.end(),
+                      std::make_pair(si->second, bi->second)) == tables.end())
+            continue;
+        auto p = ptr_to.find(w[1]);
+        if (p == ptr_to.end())
+            continue;
+        auto a = arr_elem.find(p->second);
+        if (a == arr_elem.end())
+            continue;
+        if (!img_types.count(a->second) && !si_types.count(a->second))
+            continue;
+        target_vars.push_back(w[2]);
+    }
+    if (target_vars.empty())
+        return 0;
+
+    std::vector<std::pair<size_t, uint32_t>> chains;
+    uint32_t cur_fn = 0;
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (in.op == OpFunction && in.len >= 3)
+            cur_fn = w[2];
+        if ((in.op != OpAccessChain && in.op != 66) || in.len < 5)
+            continue;
+        if (std::find(target_vars.begin(), target_vars.end(), w[3]) ==
+            target_vars.end())
+            continue;
+        if (cur_fn != entry_fn)
+            return 0;
+        uint32_t t = 0;
+        auto r = res_type.find(w[4]);
+        if (r != res_type.end())
+            t = r->second;
+        else {
+            auto c = consts.find(w[4]);
+            if (c != consts.end())
+                t = c->second.type;
+        }
+        if (!t || !int_width.count(t) || int_width[t] != 32)
+            return 0;
+        chains.push_back({in.start, t});
+    }
+    if (chains.empty())
+        return 0;
+
+    auto new_id = [&]() { return bound++; };
+    std::vector<uint32_t> decls;
+    if (!t_uint) {
+        t_uint = new_id();
+        emit(decls, OpTypeInt, {t_uint, 32, 0});
+    }
+    if (!t_v3u) {
+        t_v3u = new_id();
+        emit(decls, kOpTypeVector, {t_v3u, t_uint, 3});
+    }
+    const bool new_wg = !wg_var;
+    if (new_wg) {
+        if (!p_in_v3u) {
+            p_in_v3u = new_id();
+            emit(decls, OpTypePointer, {p_in_v3u, StorageClassInput, t_v3u});
+        }
+        wg_var = new_id();
+        emit(decls, OpVariable, {p_in_v3u, wg_var, StorageClassInput});
+    }
+    std::unordered_map<uint32_t, uint32_t> off_of;
+    for (const auto &ch : chains) {
+        if (off_of.count(ch.second))
+            continue;
+        uint32_t k = 0;
+        for (const auto &c : consts)
+            if (c.second.type == ch.second && c.second.value == offset)
+                k = c.first;
+        if (!k) {
+            k = new_id();
+            emit(decls, OpConstant, {ch.second, k, offset});
+        }
+        off_of[ch.second] = k;
+    }
+    const size_t anno_at = last_annotation_end
+                               ? last_annotation_end
+                               : (have_first_global ? first_global : first_fn);
+    std::unordered_map<size_t, uint32_t> chain_type(chains.begin(), chains.end());
+
+    std::vector<uint32_t> out;
+    out.reserve(code.size() + decls.size() + chains.size() * 20 + 16);
+    out.insert(out.end(), code.begin(), code.begin() + 5);
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (new_wg && in.start == anno_at)
+            emit(out, OpDecorate, {wg_var, DecorationBuiltIn, kBuiltInWorkgroupId});
+        if (in.start == first_fn)
+            out.insert(out.end(), decls.begin(), decls.end());
+        if (new_wg && in.op == OpEntryPoint && in.len >= 3 &&
+            w[1] == ExecutionModelGLCompute) {
+            out.push_back((uint32_t)((in.len + 1) << 16) | OpEntryPoint);
+            for (uint32_t j = 1; j < in.len; j++)
+                out.push_back(w[j]);
+            out.push_back(wg_var);
+            continue;
+        }
+        auto ct = chain_type.find(in.start);
+        if (ct != chain_type.end()) {
+            const uint32_t idx_type = ct->second;
+            const uint32_t v3 = new_id();
+            emit(out, OpLoad, {t_v3u, v3, wg_var});
+            const uint32_t z = new_id();
+            emit(out, 81, {t_uint, z, v3, 2}); // OpCompositeExtract .z
+            uint32_t zt = z;
+            if (idx_type != t_uint) {
+                zt = new_id();
+                emit(out, OpBitcast, {idx_type, zt, z});
+            }
+            const uint32_t scaled = new_id();
+            emit(out, OpIMul, {idx_type, scaled, zt, off_of[idx_type]});
+            const uint32_t sum = new_id();
+            emit(out, OpIAdd, {idx_type, sum, w[4], scaled});
+            out.push_back(w[0]);
+            for (uint32_t j = 1; j < in.len; j++)
+                out.push_back(j == 4 ? sum : w[j]);
+            continue;
+        }
+        out.insert(out.end(), code.begin() + in.start,
+                   code.begin() + in.start + in.len);
+    }
+    out[3] = bound;
+    code.swap(out);
+    return (uint32_t)chains.size();
+}
+
 /// Turns X4's volumetric fog composite into a passthrough. **Diagnostic only.**
 ///
 /// **KNOWN TOO COARSE — take 63. Do not reuse without tightening it first.**
@@ -4845,6 +5115,24 @@ inline ComputeInfo compute_info(const std::vector<uint32_t> &code) {
                   return a.set != b.set ? a.set < b.set : a.binding < b.binding;
               });
     return ci;
+}
+
+/// X4's FSR 1 pass as compiled (take 379: EASU c10 and RCAS c5): a compute
+/// module of 64x1x1 whose named resources are exactly the sampler
+/// S_sampler, the sampled table S_sampler2D, the storage table
+/// U_output_rt_decl and the dynamic block. X4's compiled modules keep no
+/// "Fsr" names, so the signature is the identification; no other of X4's 14
+/// compute modules has it.
+inline bool is_x4_fsr_pass(const ComputeInfo &ci) {
+    if (!ci.compute || ci.local[0] != 64 || ci.local[1] != 1 || ci.local[2] != 1)
+        return false;
+    std::vector<std::string> names;
+    for (const auto &b : ci.bindings)
+        names.push_back(b.name);
+    std::sort(names.begin(), names.end());
+    return names == std::vector<std::string>{"BLOCK_BUFFER_BINDING_SLOT_DYNAMIC",
+                                             "S_sampler", "S_sampler2D",
+                                             "U_output_rt_decl"};
 }
 
 /// Whether any block in the module has a member called `name` (its

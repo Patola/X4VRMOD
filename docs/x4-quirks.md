@@ -28989,3 +28989,32 @@ quality, against 29.1 ms native (take 378): FSR is on.
 **Instrument notes:** the FSR name match is useless on X4's modules (use the
 resource signature). The dispatch signature includes the heap's high-water
 count, which multiplies "distinct" lines (367).
+
+## Take 380 — PREDICTIONS (written before the run): FSR 1 in both eyes
+
+Built (X4VR_FSR_STEREO, on by default, `=0` to compare):
+* the storage table is mirrored like the sampled one (+26653);
+* X4's FSR modules are recognised by their resource signature
+  (`is_x4_fsr_pass`) and created patched (`patch_compute_index_offset`:
+  table index += WorkGroupID.z * 26653; spirv-val clean in
+  tests/spirv_names.cpp);
+* eye-covering FSR dispatches run with z = 2;
+* barriers on doubled storage images are widened to both layers;
+* eye-sized doubled storage images are registered per-eye, so their twins
+  are layer-1 views.
+
+GPU harness (`X4VR_TEST_COMPUTE=fsrbindless X4VR_RES=64x64
+X4VR_MIRROR_OFFSET=32 X4VR_BINDLESS_MIRROR=1`):
+* fix on: both output layers written, identical, no VUID;
+* `X4VR_FSR_STEREO=0`: layer 1 empty.
+
+**Not yet done:** the harness assertions are not added to
+run-multiview-render.sh, and the full harness was not re-run after the last
+change.
+
+    X4VR_TAKE=380 X4VR_HEAD_6DOF=1 X4VR_STEER_PICK=1 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_FOOT=1 X4VR_STEER=a X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=4224 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=8448 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=4224x4224 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_UPSCALE=fsr_quality X4VR_COMPLOG=1 X4VR_MV_INVENTORY=1 X4VR_LOG=/tmp/x4vr-take380.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P380.1:** the 3D scene in both eyes with FSR quality, correct depth.
+* **P380.2:** `fsr: ... patched` twice (EASU, RCAS); `fsr: dispatch 264x264x1
+  ... run as 264x264x2`.
+* **P380.3:** GAMEPLAY a little above take 379's 15.2 ms.
