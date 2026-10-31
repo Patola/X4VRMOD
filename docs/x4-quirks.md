@@ -28695,3 +28695,46 @@ X4VR_AA no longer serves it). Then two problems, and a request.
     notes say so.
   * **Map shows:** the layer is at fault. A take with the image census
     finds which render target the map uses at 4224².
+
+**2026-10-31: the map shows at 4224² with the layer off** (Patola, flat,
+`/tmp/x4vr-map4224-nolayer.log`). The layer is at fault.
+
+**The clue: X4 keeps creating render targets at the large sizes.** The
+layer's `mv final` line counts every image it doubled:
+
+    run              eye          doubled   never in a framebuffer   map
+    fsr5             3200²          116            75                shows
+    fsr5x            3200²           77            46                shows
+    nofsr (04:16)    4224²         1253          1222                ?
+    fsr6x            4000x4900      535           504                invisible
+    fsr8.prev1       4224²         1802          1725                invisible
+    fsr8             4224²         3422          3195                invisible
+
+At 3200² X4 creates its targets once. At 4224² it creates attachment images
+by the thousand, nearly all never attached to a framebuffer: a retry loop.
+
+**Hypothesis (to test, not to fix yet):** video memory is exhausted.
+* The layer doubles every 2D single-sample attachment image
+  (mv_double_candidate: permissive, "memory cost only"). At 4224² an
+  RGBA16F eye target costs ~285 MB doubled.
+* With X4's textures, the runtime's swapchains and our 8448x4224 composite,
+  the 24 GB card fills.
+* The map's targets then fail to allocate, X4 retries every frame, and the
+  map is drawn into nothing.
+* Without the layer the same targets cost half, and the map shows.
+
+## Take 376 — PREDICTIONS (written before the run): memory at 4224² with the map
+
+The play line at 4224², plus X4VR_MV_INVENTORY=1 (each image the layer sees
+is logged, with its size, format and usage, and its destruction), plus
+a sysfs sampler of the card's VRAM and GTT every 0.5 s on CLOCK_MONOTONIC
+(the log's clock). Load, open the map ~15 s, close, quit. Control: the same
+at 3200².
+
+* **P376.1 (memory):** at 4224², VRAM use is at or near 24 GiB before or when
+  the map opens, and GTT grows. At 3200² it peaks well below.
+* **P376.2:** the inventory shows the retry: the same sizes and formats
+  created and destroyed repeatedly while the map is open, at 4224² only.
+* **Refutation:** VRAM well below 24 GiB at 4224² while the map is invisible.
+  Memory is then not the cause, and the inventory says which targets X4
+  keeps re-creating, to read what it does with them.
