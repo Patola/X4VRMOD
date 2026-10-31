@@ -5384,6 +5384,44 @@ def main(path):
                 fails.append(f"X4VR_UPSCALE={fs_up.group(1)}: FSR passes patched but "
                              f"no eye-covering dispatch was doubled")
 
+    # --- the Pause key stays immersive (take 384) -------------------------
+    #
+    # injector/x4vr_inject.cpp, x4_view(): X4 paused with no full-screen menu
+    # up (the Pause key) keeps the view it had; only the ESC menu, a
+    # full-screen menu, reads as PAUSED and puts the window in front. Take 383
+    # had three Pause-key pauses read as PAUSED: the cockpit and walking
+    # turned into a window. A PAUSED with no full-screen menu up within 0.5 s
+    # is that defect.
+    pz_key = re.findall(r"\[\s*([\d.]+)\]\s+inject\s+headlook: paused with no "
+                        r"menu up \(the Pause key\)", text)
+    pz_esc = [float(t) for t in re.findall(
+        r"\[\s*([\d.]+)\]\s+inject\s+headlook: view is now PAUSED", text)]
+    fs_ev = [(float(t), w == "UP") for t, w in re.findall(
+        r"\[\s*([\d.]+)\]\s+inject\s+ui: full-screen menu (UP|DOWN)", text)]
+    if pz_key or pz_esc:
+        def _menu_up_near(t):
+            up = False
+            for ft, u in fs_ev:
+                if ft <= t + 0.5:
+                    up = u
+                else:
+                    break
+            return up
+        bare = [t for t in pz_esc if not _menu_up_near(t)]
+        built = "headlook: paused with no menu up" in text or bool(
+            re.search(r"no longer paused without a menu", text))
+        print(f"pause   {len(pz_key)} pause(s) with no menu kept immersive (the "
+              f"Pause key); {len(pz_esc)} with the ESC menu (the window in front)")
+        if bare:
+            msg = (f"{len(bare)} pause(s) read as PAUSED with no full-screen menu "
+                   f"up (first at {bare[0]:.3f}) — the Pause key put the window "
+                   f"in front")
+            if built or pz_key:
+                fails.append(msg)
+            else:
+                print(f"pause   NOTE {msg}; this log predates the fix (take 383 "
+                      f"and earlier)")
+
     # --- FSR 3 in both eyes: AMD FidelityFX (take 382) ---------------------
     #
     # layer/x4vr_layer.cpp, X4VR_FFX_STEREO (on by default). With an fsr3_*

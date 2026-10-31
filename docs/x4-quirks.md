@@ -29295,3 +29295,69 @@ Take 382's command with the take number and log changed.
 * If it still jumps: the cause is elsewhere, and a capture of consecutive
   frames of both layers is next.
 * If the cockpit smears in both eyes: the motion vectors above.
+
+## Take 383 — SCORED PASS (2026-10-31): FSR 3 in both eyes
+
+Patola: "FSR3 seems to be working well now, I saw no smearing, no jittering,
+no artifacts. It seems to be as good as FSR1."
+
+* **P383.1 — held.**
+  * 111,312 dispatches run again for the right eye; 0 one-eyed.
+  * Views: 1 kept as the left eye's (the Lanczos LUT); 2 read before
+    written, decided again. The fix acted exactly where take 382 failed.
+  * 556,563 barriers and 41,744 clears repeated on copies.
+* **P383.2 — held.**
+* GAMEPLAY 16.72 ms (60 fps), over 19 windows and 210 s, range
+  14.76–27.15 ms, at 4224² per eye with FSR 3 Balanced in both eyes. Not an
+  A/B: native at that size measured 29.1 ms, FSR 1 Quality 13.24 ms.
+* The motion vectors' half-separation error (take 382 above) shows no
+  visible effect.
+
+## The Pause key turned the cockpit and walking into a window (take 383)
+
+Patola: "in F2 and F4 mode it correctly keeps the scene immersive. But when I
+use pause in cockpit mode or walking mode, it temporarily makes the scene a
+window."
+
+`x4_view()` checks `IsExternalViewActive` and `IsFloatingViewActive` before
+`IsGamePaused`, so a paused F2/F4 view stays external. In the cockpit and on
+foot, a pause read as PAUSED. Head-look then stood down, the layer declared
+identity, and the scene became the window in front.
+
+PAUSED was added in take 329 for the ESC menu, which pauses X4 and is a
+full-screen menu. The Pause key pauses with no menu at all. Take 383 shows
+both kinds (the scorer's `pause` block):
+* the Pause key at 3686.7 in the cockpit and at 3722.9 on foot, with no
+  full-screen menu;
+* the ESC menu at 3673.8 and 3731.4, with OptionsMenu[full];
+* one more pause at 3691.7, over the open map (a full-screen menu).
+
+**Fix:** a pause with no full-screen menu up is the view under it.
+`IsFullscreenMenuDisplayed`, which fullscreen_menu_tick already asks, tells the
+two kinds apart.
+* **Timing.** A fresh pause is decided only after that tick has run twice:
+  head-look's tick reads the pause in the same pump as the ESC menu opens,
+  before the menu is read. Until then the view is what it was.
+* **Without the query** (X4VR_CURSOR_CANVAS=auto and X4VR_HEADLOOK_EXTERNAL
+  both off), every pause reads as before.
+
+Logged as "headlook: paused with no menu up (the Pause key) — the view stays
+as it was, immersive". The scorer's `pause` block FAILs a PAUSED with no
+full-screen menu up within 0.5 s; on logs before the fix it is a note.
+
+## Take 384 — PREDICTIONS (written before the run): the Pause key
+
+    X4VR_HEADLOOK_LAGLOG=1 X4VR_TAKE=384 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=4224 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=8448 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=4224x4224 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_UPSCALE=fsr3_balanced X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_STEER_PICK=1 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_COMPLOG=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take384.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+Take 383's command with the take number and log changed. FSR 3 Balanced
+stays as it was.
+
+* **P384.1 (Patola's eye):** the Pause key keeps the scene immersive, in
+  the cockpit and on foot, as in F2/F4.
+* **P384.2:** the ESC menu is still the window in front, as before.
+* **P384.3:** the scorer's `pause` block counts both kinds and FAILs
+  nothing.
+* **Unknown:** whether X4 applies head-look's free-look write while
+  paused. F2/F4 compose the head while paused, so most likely yes. If not,
+  the picture stays where it was while the head turns: the rendered frame
+  reprojected, with its edges showing.

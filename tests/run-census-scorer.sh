@@ -1733,6 +1733,38 @@ else
     ok "fsr: an FSR 3 run, no FSR 1 pass -> no FAIL"
 fi
 
+# The Pause key stays immersive (take 384).
+for f in '"paused with no menu up (the Pause key) — the view "' '"PAUSED (IsGamePaused: the ESC "' '"no longer paused without a menu"'; do
+    if grep -qF "$f" injector/x4vr_inject.cpp; then
+        ok "pause: the injector still prints $f"
+    else
+        bad "pause: the injector's format moved: $f"
+    fi
+done
+pzk='[  999960.000] inject  headlook: paused with no menu up (the Pause key) — the view stays as it was, immersive'
+pzk2='[  999965.000] inject  headlook: no longer paused without a menu'
+pze='[  999970.000] inject  headlook: view is now PAUSED (IsGamePaused: the ESC menu) — idle'
+pzu='[  999970.001] inject  ui: full-screen menu UP — the cursor is drawn through the UI canvas'
+pzd='[  999975.000] inject  ui: full-screen menu DOWN — the cursor is drawn at the raw pointer'
+pzb='[  999980.000] inject  headlook: view is now PAUSED (IsGamePaused: the ESC menu) — idle'
+plant /tmp/census-pz-ok.log "$pzk" "$pzk2" "$pze" "$pzu" "$pzd"
+want "pause: counted" /tmp/census-pz-ok.log "pause " "1 pause(s) with no menu kept immersive (the Pause key); 1 with the ESC menu (the window in front)"
+if python3 tools/score_run.py /tmp/census-pz-ok.log 2>&1 | grep -qE "^  - .*pause"; then
+    bad "pause: Pause key immersive, ESC with its menu -> FAILs"
+else
+    ok "pause: Pause key immersive, ESC with its menu -> no FAIL"
+fi
+plant /tmp/census-pz-bare.log "$pzk" "$pzk2" "$pzb"
+want "pause: PAUSED with no menu -> FAIL" /tmp/census-pz-bare.log "FAIL|  - " "1 pause(s) read as PAUSED with no full-screen menu up (first at 999980.000)"
+plant /tmp/census-pz-old.log "$pzb"
+want "pause: before the fix -> a note" /tmp/census-pz-old.log "pause " "NOTE 1 pause(s) read as PAUSED with no full-screen menu up"
+if python3 tools/score_run.py /tmp/census-pz-old.log 2>&1 | grep -qE "^  - .*pause"; then
+    bad "pause: before the fix -> FAILs"
+else
+    ok "pause: before the fix -> no FAIL"
+fi
+absent "pause: no pause -> silent" "$BASE" "pause "
+
 # FSR 3 in both eyes: AMD FidelityFX (take 382).
 for f in '"ffx: module (%zu bytes, writes%s%s) is a FidelityFX pass — its "' '"ffx: img #%u %ux%u mips=%u fmt=%u usage=0x%x: a right-eye copy "' '"(%.1f MiB; %llu so far, %.1f MiB)",' '"ffx: dispatch %ux%ux%u of a FidelityFX pass run again for the "' '"right eye through %zu twin set binding(s) (%llu so far)",' '"ffx %s: FSR 3 in both eyes %s — %llu FidelityFX module(s), %llu "' '"ffx: a FidelityFX dispatch %s — left one-eyed",'; do
     if grep -qF "$f" layer/x4vr_layer.cpp; then
