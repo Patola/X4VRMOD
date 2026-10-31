@@ -28516,3 +28516,29 @@ straight and looking to the side, steering mode too. Map still perfect."*
 * **Still open, not blocking:** steering-mode selection against the
   unmodified game's behaviour (cursor or crosshair). He reports steering-mode
   clicks working.
+
+## After v0.9.6 — reported in play (2026-10-31), waiting for data
+
+Patola's first play sessions on v0.9.6. Recorded as reported; nothing is
+diagnosed yet. Packaging is planned separately (docs/packaging-plan.md).
+
+1. **SteamVR, the FSR play line at 4224² per eye:** *"a jumbled mess of
+   graphics"*. Stepping the resolution down and relaunching each time
+   improved it, *"until I had perfect graphics again."*
+   * **Wanted:** the command lines he ran (he will send them), the
+     resolutions tried, the first one that looked right, logs if any.
+   * **Facts so far:** 4224² ran under WiVRn in take 163 (FSR quality), and
+     never under SteamVR. This was also the first FSR run on the current
+     build. SBS width 8448.
+   * **Candidates, to separate rather than assume:** a size limit on SteamVR's
+     side; FSR on the current build; video memory. Discriminating runs: the
+     same line under WiVRn; the same size with FSR off.
+2. **Sporadic flickering of shadows and lights.** Patola will try to
+   reproduce it on its own before reporting more.
+3. **One of the X-Shuttle's six weapons fires diagonally to the left; the
+   other five fire straight.** Recent: it is not in take 368's long video.
+   Video coming, both not aiming and aiming at an asteroid.
+   * **Changed since take 368:** the pointer recentre after a load (369) and
+     X4VR_HUD_MOUSE (374/375). X4VR_STEER_PICK was already in 367/368.
+   * **Wanted:** which weapon slot and type; mouse or steering mode; whether
+     the same ship does it in unmodified X4.

@@ -18,7 +18,8 @@ modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 > cockpit HUD clickable where it is drawn, over WiVRn or SteamVR. Mouse
 > steering targets at its ring. The external views (F2/F3/F4) are the whole
 > scene too, and the cinematic view (F6) a steady window with its overlay
-> filling it. Next: packaging and a launcher. The start menu as the whole
+> filling it. Next: packaging and a launcher
+> ([plan](docs/packaging-plan.md)). The start menu as the whole
 > scene is an optional future feature. An earlier proof of
 > concept using OpenTrack head-tracking + vkShade/SuperDepth3D depth-image
 > reconstruction is preserved
