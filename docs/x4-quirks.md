@@ -29433,3 +29433,81 @@ X4VR_LOG=/tmp/x4vr-take385.log ./launch/x4vr-launch.sh`.
   does not act; the flip is in the labels only. That is why the scorer's
   `pause` block counted 38 Pause-key and 29 ESC pauses. A ~0.1 s hold before
   a paused, menu-less state counts would remove it.
+
+## Decision 6 revised, the pause settle (2026-10-31)
+
+* **Decision 6 revised.** Above 2816² per eye the automatic upscaler is
+  `fsr_quality` (FSR 1). Patola, after the numbers: FSR 1 Quality 13.24 ms
+  against FSR 3 Balanced 16.72 at 4224², and he judged them equal to look
+  at.
+* **The pause settle.** The decision is now `injector/x4vr_pause.hpp`. A
+  paused state with no full-screen menu counts as the Pause key only after
+  8 checks (~0.1 s) with none up. tests/pause.cpp replays takes 383–385's
+  sequences, including menu to menu while paused.
+
+## Why menus look blurry and the cockpit does not (examined 2026-10-31)
+
+Patola: "In the cockpit and when walking, everything you read is already
+readable and crisp … But in menus, the map or anything that's reachable on
+the map, it's different … the map by itself is crisp clear — but when you
+click on an item … the information panel appears blurry. Or when you select
+the tabs at the left … these all look blurry."
+
+**Is FSR applied to the writing? No.** X4 draws its UI into an image of its
+own at the output size. Its last pass (`copy_gamma.frag.glsl`) composes that
+image over the upscaled scene pixel for pixel (`texelFetch` at
+gl_FragCoord). Text is a signed-distance-field font (`ui_unlit_sdf`: edge =
+`smoothstep(0.4, 0.6)` of the glyph texture), so its sharpness depends only
+on how many pixels a glyph is drawn with.
+
+**How many pixels the writing gets — two factors, multiplied:**
+1. **The mod's canvas: 0.5252.** X4 lays its UI out against its default
+   field (fov 1.0 = 73.7°). The eye spans 110° (X4VR_FOV 1.4917). So that
+   the HUD sits at the angles X4 drew it for (#45/#81), the layer scales the
+   whole UI pass by tan 36.87° / tan 55° = 0.5252 (logged: "ui field: … the
+   UI pass is scaled by 0.5252"). Every UI pipeline goes through it, the
+   full-screen menus included. At 2816² per eye a menu laid out for 2816
+   pixels is drawn into about 1479.
+2. **X4's UI scale: 0.6 in Patola's profile.** `config-x4vrmod.xml` has
+   `<uiscale>0.6</uiscale>`, forked from his desktop `config.xml`, which has
+   the same. Menu fonts are `fontsize * uiscale` (widget_fullscreen.lua).
+   The HUD has not used it since v0.9.7 serves `<hudscale>off</hudscale>`:
+   that is the cockpit/menu difference.
+
+So menu text is drawn at about 0.6 × 0.525 ≈ 0.32 of X4's size for the
+resolution. HUD text is drawn at 0.525.
+
+**Why the map itself is crisp:** its 3D view is a separate image X4 renders
+at the screen size (take 378: 4224x4149 at 4224² eyes), which the UI then
+draws shrunk. Shrinking a full-size image keeps it sharp. The panels and
+their text are rasterized directly at the shrunk size.
+
+**Downstream, not measured:**
+* In a full-screen menu the head does not drive X4's camera, so the
+  compositor reprojects a fixed window as the head moves, resampling it;
+* WiVRn's video encoding.
+
+Both blur fine text a little, and the menus more than the cockpit.
+
+**Levers, cheapest first:**
+* **(a) A larger UI scale.** It can be changed live, under Options → Game,
+  and only changes the VR profile.
+* **(b) A larger eye with FSR 1.** X4VR_H=4224 draws the UI at 4224, 1.5×
+  the pixels; the 3D stays near 2816's cost (take 380: 76 fps).
+* **(c) In the mod:** draw full-screen menus with less of the canvas
+  shrink. They need no world angles, but they would also look bigger.
+  Postponed until (a) and (b) are judged.
+
+## Take 386 — PREDICTIONS (written before the run): menus at 4224², then UI scale 1.0
+
+    X4VR_TAKE=386 X4VR_LOG=/tmp/x4vr-take386.log X4VR_H=4224 ./launch/x4vr-launch.sh
+
+* **P386.1:** `env: X4VR_UPSCALE=fsr_quality chosen by the eye size
+  (X4VR_H=4224 …)`; FSR 1 patched in both eyes (the `fsr` block); GAMEPLAY
+  near take 380's 13.24 ms.
+* **P386.2 (Patola's eye, across runs):** menu text crisper than at 2816²,
+  from 1.5× the pixels.
+* **P386.3 (Patola's eye, within the run):** with a station's information
+  panel open, raising X4's UI scale from 0.6 to 1.0 makes its text clearly
+  crisper and bigger. Moving between menus while paused no longer flips
+  anything (not visible before either).
