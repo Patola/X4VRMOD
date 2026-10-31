@@ -20,6 +20,72 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
+## v0.9.8 — 2026-10-31 — FSR 1 and FSR 3 in both eyes; the Pause key stays immersive
+
+The state of take 384 (`take-384-pause-key`, code identical to commit
+ca8e364). Patola:
+* take 380: *"It worked phenomenally well… I saw images in each eye every time
+  with correct depth"*;
+* take 383: *"FSR3 seems to be working well now, I saw no smearing, no
+  jittering, no artifacts. It seems to be as good as FSR1"*;
+* take 384: *"It worked! We have the pause fix and FSR3 implemented"*.
+
+* **New: X4's upscalers in VR.** `X4VR_UPSCALE=<mode>` picks one; the README
+  section *Resolution and upscaling* lists every mode and its render size.
+  Frame generation stays off.
+  * **FSR 1** (`fsr_*`, `X4VR_FSR_STEREO`, on by default). X4's own FSR 1
+    pass (EASU then RCAS) reads and writes through X4's bindless tables,
+    so it wrote the left eye only and the right eye's scene was black.
+    The layer now creates those two shaders patched to add
+    WorkGroupID.z × offset to their table indices, and runs each eye-sized
+    dispatch twice over, the second half for the right eye's layer.
+  * **FSR 3** (`fsr3_*`, `X4VR_FFX_STEREO`, on by default). FSR 3 is AMD's
+    FidelityFX SDK linked into X4: 11 compute passes with their own
+    descriptor sets and their own history images. The layer records every
+    FidelityFX dispatch a second time for the right eye, through twin
+    descriptor sets:
+    * images already doubled are used at layer 1;
+    * each single-layer image FidelityFX writes gets a right-eye copy, and
+      every barrier and clear reaches the copy too.
+
+    No shader is changed.
+  * Measured at 4224² per eye on an RX 7900 XTX (different scenes, so rough):
+
+    | Mode | Frame time |
+    |---|---|
+    | none | 29.1 ms |
+    | FSR 1 Quality | 13.24 ms |
+    | FSR 3 Balanced | 16.72 ms (60 fps) |
+  * FSR 3's right-eye copies take about 730 MiB of video memory per
+    FidelityFX context. X4 creates two, so 1548 MiB in all.
+* **Fixed: the Pause key no longer turns the cockpit and walking into a
+  window.** A pause with no full-screen menu up keeps the view, as F2/F4
+  always did; the ESC menu is still the window in front.
+* **Fixed:** `tests/run-no-exit-destructors.sh` had failed since take 372;
+  both binaries registered exit-time destructors again.
+* **Instruments:**
+  * `X4VR_COMPLOG=1` logs compute modules and dispatches with the images
+    bound. It survives the driver reusing a destroyed module's handle,
+    which FidelityFX causes.
+  * The scorer gains `fsr`, `ffx` and `pause` blocks.
+
+**Known limitations:**
+* **Motion vectors.** X4 computes its motion vectors before the per-eye
+  offset, so each eye's carry half the eye separation as motion. It is
+  invisible in takes 383–384 (most likely the cockpit writes none); if FSR 3
+  ever smears in both eyes, this is the cause.
+* **SteamVR at high resolution:** at 4224² per eye the image is garbled
+  under SteamVR, clean under WiVRn.
+* **The map** has depth up to about 4068² per eye and is flat above.
+* The start menu shows as a window. F6 entered on foot keeps the small
+  overlay.
+
+**How to run.** The play command is unchanged from v0.9.6 (2816² per eye, no
+upscaler; see v0.9.7 below). To upscale, add `X4VR_UPSCALE=<mode>`. For
+larger eyes, change `X4VR_H`, `X4VR_W` and `X4VR_RES` together. Take 384's
+line in docs/known-good-runs.md is 4224² with FSR 3 Balanced, with two
+instruments on.
+
 ## v0.9.7 — 2026-10-31 — larger eyes: the HUD stays put and the map draws
 
 The state of take 378 (`take-378-map-pool`, code identical to commit

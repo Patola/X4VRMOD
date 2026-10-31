@@ -11,14 +11,15 @@ Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
 **[docs/frame-analysis.md](docs/frame-analysis.md)**; the traps X4 sets for
 modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 
-> **Status: v0.9.7 — playable in VR** ([release notes](docs/releases.md)).
+> **Status: v0.9.8 — playable in VR** ([release notes](docs/releases.md)).
 > X4 runs in VR with in-engine stereo (per-eye lighting), head-look and lean
 > in the cockpit, head-look on foot, the UI on a canvas at the angle X4
 > intended, every menu reachable and lined up with the cursor, and the
 > cockpit HUD clickable where it is drawn, over WiVRn or SteamVR. Mouse
 > steering targets at its ring. The external views (F2/F3/F4) are the whole
 > scene too, and the cinematic view (F6) a steady window with its overlay
-> filling it. Next: packaging and a launcher
+> filling it. X4's upscalers, FSR 1 and FSR 3, work in both eyes
+> ([how to choose](#resolution-and-upscaling)). Next: packaging and a launcher
 > ([plan](docs/packaging-plan.md)). The start menu as the whole
 > scene is an optional future feature. An earlier proof of
 > concept using OpenTrack head-tracking + vkShade/SuperDepth3D depth-image
@@ -89,8 +90,9 @@ blocks every frame.
 | F6's overlay fills its window | done | **`v0.9.5`** |
 | The cockpit HUD clicks where it is drawn; steering targets at the ring; lean in the cockpit | done | **`v0.9.6`** |
 | Larger eyes: the HUD stays put; the map draws (flat above ~4068² per eye, X4's 255.8 MiB pool block) | done | **`v0.9.7`** |
-| FSR 1 in both eyes (`X4VR_UPSCALE=fsr_*`) | done, take 380 | not yet released |
-| FSR 3 in both eyes (`X4VR_UPSCALE=fsr3_*`) | done, take 383 | not yet released |
+| FSR 1 in both eyes (`X4VR_UPSCALE=fsr_*`) | done | **`v0.9.8`** |
+| FSR 3 in both eyes (`X4VR_UPSCALE=fsr3_*`) | done | **`v0.9.8`** |
+| The Pause key keeps the cockpit and walking immersive | done | **`v0.9.8`** |
 | The start menu as the whole scene (menu at its size in front, the 3D scene all around) | optional, future — not scheduled | — |
 | Volumetric nebula in stereo (Matrix #79B, CEO's Doubt) | done | **`v0.9.1`** |
 | The numpad orbits the external (F2) and target (F3) views again | done | **`v0.9.2`** |
