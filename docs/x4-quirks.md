@@ -29634,3 +29634,29 @@ Not built; Patola decides.
 
 Comparison images: the scratchpad's dumps/compare_text.png (3×) and
 dumps/compare_pixels.png (8×).
+
+## Take 389 — FAILED and reverted (2026-10-31): the UI drawn at 2x
+
+An attempt at Patola's proposal after takes 387/388: X4's UI pass drawn into
+a 2x image of the layer's own and blitted down. It was reverted (Patola:
+"Lots of artifacts, the 3D behind the start menu wouldn't appear, when in
+the cockpit also nothing in 3D appeared … it was not more readable"). The
+code is back to `take-388-before-ui-ss`.
+
+The layer's own guards named both causes within 30 ms of the first 2x pass,
+and the scorer failed the take on them:
+* **X4 clears its UI image with `vkCmdClearColorImage`, outside the render
+  pass.** The 2x image never received the clear, kept old content and
+  turned opaque, and the composite then hid the 3D scene behind it.
+* **X4 binds UI pipelines whose viewport is baked in** (281,042 binds in the
+  session). They drew into a quarter of the 2x image.
+
+The GPU harness had passed, because its X4-shaped pass reproduced neither.
+The "dynamic viewport" premise came from the names `vkCmdSetViewport` and
+`vkCmdSetScissor` in X4's binary, which prove that X4 uses them somewhere,
+not that every UI pipeline does. Before any return to this, a read-only take
+should census what X4's real UI pass does: its pipelines' dynamic state, the
+clears and copies into the UI image, and the load ops.
+
+Takes 387/388 still stand: the menu text in the rendered frame is crisp; a
+filtered version only smooths its edges.
