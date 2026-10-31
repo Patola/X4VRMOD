@@ -1667,6 +1667,14 @@ clm3='[  999960.002] layer   comp: module c5 local 64x1x1, 13576 bytes | resourc
 cld3='[  999961.002] layer   comp: dispatch module c5 groups 264x264x1 direct | S_sampler2D@0.5: array of 10843 (bindless, not resolved)'
 cld4='[  999962.002] layer   comp: dispatch module c5 groups 264x264x1 direct | S_sampler2D@0.5: array of 10846 (bindless, not resolved)'
 { cat /tmp/census-cl-base.log; printf '%s\n' "$clm3" "$cld3" "$cld4"; } > /tmp/census-cl-sig.log
+# FSR 3 (take 381): other modules' dispatches are listed, and a DOUBLED image
+# reached through a one-layer view is named -- one eye only.
+clm4='[  999960.003] layer   comp: module c6 local 8x8x1, 30000 bytes | resources: r_input_color_jittered@0.0 rw_upscaled_output@0.1 cbFSR3Upscaler@1.0'
+cld5='[  999961.003] layer   comp: dispatch module c6 groups 528x528x1 direct | r_input_color_jittered@0.0: sampled img #40 2485x2485 fmt=97 usage=0x9f DOUBLED, view 2D from layer 0, 1 layer(s) | rw_upscaled_output@0.1: storage img #77 4224x4224 fmt=97 usage=0x9f single, view 2D from layer 0, 1 layer(s)'
+{ cat /tmp/census-cl-base.log; printf '%s\n' "$clm4" "$cld5"; } > /tmp/census-cl-ffx.log
+want "complog: FidelityFX-style names counted" /tmp/census-cl-ffx.log complog "1 other dispatch shape(s); 1 module(s) with FidelityFX-style resource names"
+want "complog: the other dispatch listed" /tmp/census-cl-ffx.log complog "c6 (local 8x8x1, 30000 bytes) 528x528x1 direct (1 logged) | r_input_color_jittered@0.0: sampled img #N 2485x2485"
+want "complog: one-eyed view of a doubled image named" /tmp/census-cl-ffx.log complog "r_input_color_jittered@0.0: sampled img #N 2485x2485 fmt=97 usage=0x9f DOUBLED, view 2D from layer 0, 1 layer(s)"
 want "complog: X4's FSR module by signature" /tmp/census-cl-sig.log complog "FSR c5: by signature | local 64x1x1, 13576 bytes"
 want "complog: array growth folded into one line" /tmp/census-cl-sig.log complog "dispatch c5 264x264x1 direct (2 logged) | S_sampler2D@0.5: array of N"
 { cat /tmp/census-cl-base.log; printf '%s\n' "$clm2" "$cld2"; } > /tmp/census-cl-nofsr.log
@@ -1717,6 +1725,13 @@ else
 fi
 want "fsr: a log from before the fix -> not checked" /tmp/census-fs-base.log "fsr " "not checked: X4VR_UPSCALE=fsr_quality, but this log predates the FSR fix"
 absent "fsr: not asked, no lines -> silent" "$BASE" "fsr "
+sed 's/env: run = /env: run = X4VR_UPSCALE=fsr3_balanced /' "$BASE" > /tmp/census-fs-fsr3.log
+printf '%s\n' "$fsa" >> /tmp/census-fs-fsr3.log
+if python3 tools/score_run.py /tmp/census-fs-fsr3.log 2>&1 | grep -qE "^  - .*(FSR|X4VR_UPSCALE)"; then
+    bad "fsr: an FSR 3 run, no FSR 1 pass -> FAILs"
+else
+    ok "fsr: an FSR 3 run, no FSR 1 pass -> no FAIL"
+fi
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

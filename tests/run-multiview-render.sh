@@ -1648,6 +1648,16 @@ inv_case "complog resolves the sampled input" \
 inv_case "complog resolves the storage output" \
     "U_output_rt@0.2: storage img #2 64x64 fmt=97 usage=0xc single, view 2D from layer 0, 1 layer(s)" \
     X4VR_TEST_COMPUTE=fsr X4VR_COMPLOG=1
+# FidelityFX (X4's FSR 3) destroys each module once its pipeline exists, and
+# the driver can hand the freed handle to the next module: the dispatch must
+# still be described by the module its pipeline was built from (the layer at
+# 409148f named the decoy, c1, with no resources). The first case says the
+# second can fail: the driver did reuse the handle.
+inv_case "complog: module handle reused" \
+    "MODULE_HANDLE_REUSED=1" X4VR_TEST_COMPUTE=fsr X4VR_COMPLOG=1 X4VR_TEST_REUSE=1
+inv_case "...the dispatch keeps its own module" \
+    "comp: dispatch module c0 groups 4x4x1 direct | Pass@0.0" \
+    X4VR_TEST_COMPUTE=fsr X4VR_COMPLOG=1 X4VR_TEST_REUSE=1
 # The FSR fix (take 380): tests/fsr_bindless.comp has the resources of X4's
 # compiled FSR pass, read and written through the bindless tables. With the
 # fix both layers of the doubled output are written (from identical input

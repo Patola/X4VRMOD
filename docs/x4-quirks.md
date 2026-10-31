@@ -29061,3 +29061,53 @@ graphics. I saw images in each eye every time with correct depth."
   * fix on: `2 1 1 1` (layers, layer 0 written, layer 1 written,
     identical), the pass patched by signature, and the dispatch doubled;
   * `X4VR_FSR_STEREO=0`: `2 1 0 0`.
+
+## Take 381 — PREDICTIONS (written before the run): what X4's FSR 3 touches
+
+FSR 3 is not X4's `fsr.comp`. X4 links AMD's FidelityFX SDK into its binary,
+with strings such as `ffxFsr3ContextDispatchUpscale`,
+`ffxFsr3UpscalerContextCreate`, `cbFSR3Upscaler`, and "Cannot initialize FFX;
+ffxGetDeviceVK…". The SDK's Vulkan backend:
+* builds its own compute pipelines and destroys each module right after;
+* binds through its own descriptor sets, not X4's bindless tables;
+* keeps temporal history in images it creates itself.
+
+So the FSR 1 fix (WorkGroupID.z + the mirror) does not apply as it is.
+
+Before this take:
+* complog copies a module's description onto its pipeline when the pipeline
+  is created. The FSR-module set and complog's own table forget a destroyed
+  module or pipeline.
+  * Harness: `X4VR_TEST_REUSE=1` destroys the module and creates a decoy of
+    the same size. RADV hands back the same handle, and the dispatch still
+    names c0.
+  * Negative control: the layer at 409148f named the decoy, c1, with no
+    resources.
+* complog's dispatch signature no longer carries the bindless array size.
+  Take 380 hit the 400-signature cap that way. The cap now says so once.
+* Scorer:
+  * every non-FSR-1 dispatch is listed, folded;
+  * it counts modules with FidelityFX-style names (r_*, rw_*, cbFSR3*);
+  * it lists the DOUBLED images reached through one-layer views;
+  * the `fsr` block checks FSR 1 modes (`fsr_*`) only.
+
+    X4VR_HEADLOOK_LAGLOG=1 X4VR_TAKE=381 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=4224 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=8448 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=4224x4224 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_UPSCALE=fsr3_balanced X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_STEER_PICK=1 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_COMPLOG=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take381.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P381.1:** `config: effective upmode=fsr3_balanced (from X4VR_UPSCALE)`.
+* **P381.2:** complog describes more compute modules than take 380's 14:
+  FidelityFX's FSR 3 passes (luminance pyramid, reconstruct and dilate,
+  depth clip, lock, accumulate, RCAS). Mostly local 8x8x1. They are named
+  r_*/rw_* if the SDK's SPIR-V kept its names; that is not known.
+* **P381.3:** FidelityFX's dispatches resolve to real images:
+  * X4's colour input at the render size: 4224 / 1.7 ≈ 2485²;
+  * depth and motion vectors;
+  * the output at 4224²;
+  * history images FidelityFX created, single-layer.
+
+  X4's images are DOUBLED and reached through one-layer views (layer 0).
+* **P381.4 (Patola's eye):** the left eye is correct. The right eye's 3D
+  scene is black or stale, as in take 379; the HUD is fine in both eyes. If
+  instead both eyes show the same flat image, the output is a single-layer
+  image and P381.3 is wrong about it.
+* Not predicted: whether X4 still creates its FSR 1 modules under fsr3 (the
+  `fsr first present` line will say), and the frame time.

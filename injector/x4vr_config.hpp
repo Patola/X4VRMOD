@@ -395,9 +395,10 @@ inline bool set_or_insert_tag(std::string &xml, const char *tag,
 // Frame generation is served off with it (<fsr3g>, <dlssg>): an interpolated
 // frame carries no head pose and adds latency, harmful in VR.
 //
-// **Not working in VR yet (2026-10-31):** with any mode on, the right eye is
-// not drawn. X4's upscaler runs as compute, and the layer does not yet run
-// compute passes once per eye.
+// **FSR 1 works in VR since take 380:** X4's FSR pass runs once per eye
+// (X4VR_FSR_STEREO, layer/x4vr_layer.cpp). **FSR3 is not handled per eye
+// yet:** it is AMD's FidelityFX SDK linked into X4, with its own descriptor
+// sets and history images, and take 381 measures what it touches.
 inline bool is_upscale_mode(const char *s) {
     static const char *const modes[] = {
         "none",           "fsr3_native",       "fsr3_quality", "fsr3_balanced",

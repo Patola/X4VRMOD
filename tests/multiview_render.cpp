@@ -1605,6 +1605,39 @@ int main(int argc, char **argv) {
         cpci.layout = cpl;
         CHECK(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &cpci, nullptr,
                                        &cpipe));
+        // X4VR_TEST_REUSE=1: destroy the module once its pipeline exists and
+        // create another, as AMD's FidelityFX backend (X4's FSR 3) does. If
+        // the driver hands the freed handle back, a layer that looks the
+        // module up at dispatch time describes the dispatch with the wrong
+        // resources.
+        const char *reuse_env = getenv("X4VR_TEST_REUSE");
+        if (want_fsr && reuse_env && !strcmp(reuse_env, "1")) {
+            const VkShaderModule old_csm = csm;
+            vkDestroyShaderModule(dev, csm, nullptr);
+            std::vector<uint32_t> dc = load_spv("tests/noop.comp.spv");
+            // Padded to the first module's size with one OpSourceExtension
+            // (a debug instruction, no semantic effect): drivers allocate a
+            // module by its code size, and only an equal size is likely to
+            // get the freed handle back.
+            const size_t want_words = cs_code.size();
+            if (dc.size() + 2 <= want_words) {
+                size_t at = 5;
+                while (at < dc.size() && (dc[at] & 0xffff) != 3 && // OpSource
+                       (dc[at] & 0xffff) != 4 && (dc[at] & 0xffff) != 5)
+                    at += dc[at] >> 16;
+                const uint32_t n = (uint32_t)(want_words - dc.size());
+                std::vector<uint32_t> pad(n, 0x61616161u); // "aaaa"
+                pad[0] = (n << 16) | 4u;                    // OpSourceExtension
+                pad[n - 1] = 0;                             // the string's nul
+                dc.insert(dc.begin() + (long)at, pad.begin(), pad.end());
+            }
+            VkShaderModuleCreateInfo dci{};
+            dci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            dci.codeSize = dc.size() * 4;
+            dci.pCode = dc.data();
+            CHECK(vkCreateShaderModule(dev, &dci, nullptr, &csm));
+            printf("MODULE_HANDLE_REUSED=%d\n", csm == old_csm ? 1 : 0);
+        }
     }
 
     // **X4VR_TEST_FRAMES: RE-RECORD and re-submit N times.**

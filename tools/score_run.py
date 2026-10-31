@@ -5338,7 +5338,9 @@ def main(path):
     # eye-covering dispatches run with z = 2; otherwise the right eye's scene
     # is black (take 379). Gate on intent: an fsr* X4VR_UPSCALE without the
     # knob set to 0.
-    fs_up = re.search(r"\bX4VR_UPSCALE=(fsr\S*)", run or "")
+    # FSR 1 modes only (fsr_*): FSR 3 (fsr3_*) is AMD's FidelityFX, a
+    # different pass the fix does not touch.
+    fs_up = re.search(r"\bX4VR_UPSCALE=(fsr_\S*)", run or "")
     fs_off = re.search(r"\bX4VR_FSR_STEREO=0\b", run or "")
     fs_patched = re.findall(r"fsr: X4's FSR pass \((\d+) bytes\) patched for both "
                             r"eyes — (\d+) table access", text)
@@ -5422,6 +5424,36 @@ def main(path):
                           re.sub(r"array of \d+", "array of N", rest))] += 1
         for (c, groups, how, rest), k in sorted(fsr_disp.items()):
             print(f"complog   dispatch c{c} {groups} {how} ({k} logged){rest}")
+        # Every other module's dispatches, folded the same way plus image
+        # serials (X4 re-creates targets), for FSR 3 (take 381): AMD's
+        # FidelityFX binds through its own descriptor sets, so these lines
+        # resolve its images. A DOUBLED image reached through a one-layer view
+        # is read or written for one eye only.
+        mods = {m[0]: m for m in cl_mods}
+        other = collections.Counter()
+        for whole, c, groups, how, rest in cl_disp:
+            if c not in fsr:
+                other[(int(c), groups, how,
+                       re.sub(r"img #\d+", "img #N",
+                              re.sub(r"array of \d+", "array of N", rest)))] += 1
+        ffx = [c for c, m in mods.items()
+               if re.search(r"(^|\s)(r_|rw_|cbFSR3)", m[3])]
+        if other:
+            print(f"complog {len(other)} other dispatch shape(s); "
+                  f"{len(ffx)} module(s) with FidelityFX-style resource names "
+                  f"(r_*, rw_*, cbFSR3*)")
+            for (c, groups, how, rest), k in sorted(other.items()):
+                m = mods.get(str(c))
+                tag = f"local {m[1]}, {m[2]} bytes" if m else "module not described"
+                print(f"complog   c{c} ({tag}) {groups} {how} ({k} logged){rest}")
+            one = sorted({re.sub(r"img #\d+", "img #N", r.strip())
+                          for (_c, _g, _h, rest) in other
+                          for r in rest.split(" | ")
+                          if "DOUBLED" in r and "from layer 0, 1 layer(s)" in r})
+            print(f"complog {len(one)} resource(s) reach a DOUBLED image through "
+                  f"a one-layer view (one eye only):")
+            for r in one:
+                print(f"complog   {r}")
         up = re.search(r"\bX4VR_UPSCALE=(\S+)", run or "")
         if cl_mods and up and up.group(1) != "none" and not fsr:
             print(f"complog   NOTE X4VR_UPSCALE={up.group(1)} but no FSR compute "

@@ -2498,6 +2498,8 @@ void complog_module(const VkShaderModuleCreateInfo *ci, VkShaderModule mod);
 void complog_bind_pipeline(VkCommandBuffer cb, VkPipelineBindPoint bp, VkPipeline p);
 void complog_bind_sets(VkCommandBuffer cb, VkPipelineBindPoint bp, uint32_t first,
                        uint32_t n, const VkDescriptorSet *sets);
+void complog_forget_module(VkShaderModule mod);
+void complog_forget_pipeline(VkPipeline p);
 } // namespace
 
 VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSets(
@@ -7031,6 +7033,15 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyShaderModule(
         g_mod_serial.erase(mod);
         g_mod_samplers.erase(mod);
     }
+    {
+        // Same reason. AMD's FidelityFX backend (X4's FSR 3) destroys each
+        // module right after building its pipeline, so a reused handle would
+        // otherwise be taken for X4's FSR 1 pass, or complog would describe
+        // the next module with the last one's resources.
+        std::lock_guard<std::mutex> lock(g_fsr_mu);
+        g_fsr_modules.erase(mod);
+    }
+    complog_forget_module(mod);
     if (twin != VK_NULL_HANDLE)
         d->DestroyShaderModule(device, twin, ac);
     d->DestroyShaderModule(device, mod, ac);
@@ -7654,8 +7665,11 @@ struct ClCb {
 std::mutex g_cl_mu;
 std::unordered_map<VkShaderModule, ClModule> &g_cl_modules =
     x4vr::immortal<std::unordered_map<VkShaderModule, ClModule>>();
-std::unordered_map<VkPipeline, VkShaderModule> &g_cl_pipe =
-    x4vr::immortal<std::unordered_map<VkPipeline, VkShaderModule>>();
+// The module's description is copied onto the pipeline when the pipeline is
+// created: the module may be destroyed straight after (FidelityFX does) and
+// its handle handed to the next one.
+std::unordered_map<VkPipeline, ClModule> &g_cl_pipe =
+    x4vr::immortal<std::unordered_map<VkPipeline, ClModule>>();
 std::unordered_map<VkDescriptorSet, std::map<uint32_t, ClSlot>> &g_cl_sets =
     x4vr::immortal<std::unordered_map<VkDescriptorSet, std::map<uint32_t, ClSlot>>>();
 std::unordered_set<VkDescriptorSet> &g_cl_tmpl =
@@ -7698,9 +7712,25 @@ void complog_pipelines(uint32_t n, const VkComputePipelineCreateInfo *ci,
     if (!complog_enabled() || !g_active)
         return;
     std::lock_guard<std::mutex> lock(g_cl_mu);
-    for (uint32_t i = 0; i < n; i++)
-        if (out[i] != VK_NULL_HANDLE)
-            g_cl_pipe[out[i]] = ci[i].stage.module;
+    for (uint32_t i = 0; i < n; i++) {
+        if (out[i] == VK_NULL_HANDLE)
+            continue;
+        auto m = g_cl_modules.find(ci[i].stage.module);
+        if (m != g_cl_modules.end())
+            g_cl_pipe[out[i]] = m->second;
+        else
+            g_cl_pipe.erase(out[i]);
+    }
+}
+
+void complog_forget_module(VkShaderModule mod) {
+    std::lock_guard<std::mutex> lock(g_cl_mu);
+    g_cl_modules.erase(mod);
+}
+
+void complog_forget_pipeline(VkPipeline p) {
+    std::lock_guard<std::mutex> lock(g_cl_mu);
+    g_cl_pipe.erase(p);
 }
 
 void complog_writes(uint32_t n, const VkWriteDescriptorSet *w) {
@@ -7783,11 +7813,9 @@ void complog_dispatch(VkCommandBuffer cb, uint32_t x, uint32_t y, uint32_t z,
         auto c = g_cl_cb.find(cb);
         if (c == g_cl_cb.end())
             return;
-        auto pm = g_cl_pipe.find(c->second.pipe);
-        auto m = pm == g_cl_pipe.end() ? g_cl_modules.end()
-                                       : g_cl_modules.find(pm->second);
+        auto m = g_cl_pipe.find(c->second.pipe);
         char head[96];
-        if (m == g_cl_modules.end()) {
+        if (m == g_cl_pipe.end()) {
             snprintf(head, sizeof head, "module ? groups %ux%ux%u %s", x, y, z, how);
             sig = head;
         } else {
@@ -7811,9 +7839,11 @@ void complog_dispatch(VkCommandBuffer cb, uint32_t x, uint32_t y, uint32_t z,
                                          : "no image recorded");
                     continue;
                 }
+                // Without the array's size: it grows as X4 streams textures
+                // in, and each new size made a new signature until the cap
+                // below silenced the log (take 380 reached it).
                 if (sl->second.count > 4) {
-                    sig += label + "array of " + std::to_string(sl->second.count) +
-                           " (bindless, not resolved)";
+                    sig += label + "bindless array (not resolved)";
                     continue;
                 }
                 want.push_back({label + (sl->second.type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
@@ -7829,8 +7859,18 @@ void complog_dispatch(VkCommandBuffer cb, uint32_t x, uint32_t y, uint32_t z,
     {
         std::lock_guard<std::mutex> lock(g_cl_mu);
         n = ++g_cl_sigs[sig];
-        if (n == 1 && g_cl_sigs.size() > 400)
+        if (n == 1 && g_cl_sigs.size() > 400) {
+            // Said once: a log that stops without saying so reads as "X4
+            // dispatched nothing new".
+            static bool told = false;
+            if (!told) {
+                told = true;
+                X4VR_LOG("comp: 400 distinct dispatches logged — later new ones "
+                         "are NOT logged (first unlogged: %s)",
+                         sig.substr(0, 60).c_str());
+            }
             return;
+        }
     }
     if (n == 1)
         X4VR_LOG("comp: dispatch %s", sig.c_str());
@@ -8418,6 +8458,11 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyPipeline(
         std::lock_guard<std::mutex> lock(g_comp_mu);
         g_comp_module.erase(p);
     }
+    {
+        std::lock_guard<std::mutex> lock(g_fsr_mu);
+        g_fsr_pipes.erase(p);
+    }
+    complog_forget_pipeline(p);
     VkPipeline twin = VK_NULL_HANDLE;
     {
         std::lock_guard<std::mutex> lock(g_cb_mu);
