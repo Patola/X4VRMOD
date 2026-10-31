@@ -715,6 +715,20 @@ FILE *open_patched_config(const char *path, bool hide_steer_line) {
         else
             X4VR_LOG("config: hudscale: already 'off'");
     }
+    {
+        int src = 0;
+        const char *up = x4vr::upscale_value(&src);
+        std::string old;
+        x4vr::serve_upscaler(xml, up, &old);
+        if (src < 0)
+            X4VR_LOG("config: X4VR_UPSCALE=%s REJECTED — not one of X4 9.00's "
+                     "upscaler values; serving 'none'",
+                     getenv("X4VR_UPSCALE"));
+        X4VR_LOG("config: upmode: '%s' -> '%s' (%s); frame generation off "
+                 "(fsr3g, dlssg)",
+                 old.empty() ? "absent" : old.c_str(), up,
+                 src > 0 ? "X4VR_UPSCALE" : "our default, no upscaler");
+    }
 
     // Back the stream with a memfd rather than fmemopen(): an fmemopen
     // stream has no real file descriptor, so any fileno()/fstat()/mmap() in
@@ -770,13 +784,15 @@ FILE *open_patched_config(const char *path, bool hide_steer_line) {
              x4vr::aa_override(aa_unused) ? "from X4VR_AA"
              : getenv("X4VR_AA")
                  ? "X4VR_AA REJECTED: not an X4 9.00 anti-aliasing value; "
-                   "the upscaler is <upmode>, set in X4's graphics options"
+                   "the upscaler is <upmode>, set by X4VR_UPSCALE"
                  : "our default, not the profile");
     {
-        const std::string up = x4vr::get_tag(xml, "upmode");
-        X4VR_LOG("config: effective upmode=%s (from the profile) — X4's "
-                 "upscaler; fsr3_* are temporal",
-                 up.empty() ? "absent (X4's default, none)" : up.c_str());
+        int src = 0;
+        x4vr::upscale_value(&src);
+        X4VR_LOG("config: effective upmode=%s (%s) — X4's upscaler; fsr3_* "
+                 "are temporal",
+                 x4vr::get_tag(xml, "upmode").c_str(),
+                 src > 0 ? "from X4VR_UPSCALE" : "our default");
     }
     X4VR_LOG("config: serving %s in memory (%zu bytes, %d overrides applied); "
              "your %s is not touched",

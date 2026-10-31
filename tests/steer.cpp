@@ -276,6 +276,38 @@ int main() {
               "X4VR_AA=fsr_quality -> rejected (the upscaler is <upmode> in 9.00)");
     }
 
+    // X4VR_UPSCALE: X4 9.00's ten <upmode> values, nothing else; the mod
+    // serves it on every read, inserting it when absent, frame generation off.
+    {
+        int n = 0;
+        for (const char *m : {"none", "fsr3_native", "fsr3_quality", "fsr3_balanced",
+                              "fsr3_performance", "fsr3_ultra_performance",
+                              "fsr_ultra_quality", "fsr_quality", "fsr_balanced",
+                              "fsr_performance"})
+            n += is_upscale_mode(m);
+        check(n == 10, "the ten upmode values are accepted");
+        check(!is_upscale_mode("fsr") && !is_upscale_mode("fsr_easu") &&
+                  !is_upscale_mode("FSR3_QUALITY") && !is_upscale_mode("") &&
+                  !is_upscale_mode(nullptr),
+              "anything else is refused (the old 'fsr', a shader name, case, empty)");
+        std::string xml = "<root>\n  <antialiasing>none</antialiasing>\n  "
+                          "<fsr3g>on</fsr3g>\n</root>\n";
+        std::string old = "x";
+        check(serve_upscaler(xml, "fsr3_quality", &old) && old.empty() &&
+                  get_tag(xml, "upmode") == "fsr3_quality" &&
+                  get_tag(xml, "fsr3g") == "off" && get_tag(xml, "dlssg") == "off",
+              "upmode absent -> inserted; frame generation forced off");
+        check(!serve_upscaler(xml, "fsr3_quality", &old) && old == "fsr3_quality",
+              "already served -> no change");
+        check(serve_upscaler(xml, "none", &old) && old == "fsr3_quality" &&
+                  get_tag(xml, "upmode") == "none",
+              "an in-game choice is replaced by the served value");
+        setenv("X4VR_UPSCALE", "fsr_quality", 1);
+        int src = 0;
+        check(!strcmp(upscale_value(&src), "fsr_quality") && src == 1,
+              "X4VR_UPSCALE=fsr_quality -> served, from the variable");
+    }
+
     printf("\n%s\n", g_fail ? "SOME CHECKS FAILED" : "all checks passed");
     return g_fail ? 1 : 0;
 }

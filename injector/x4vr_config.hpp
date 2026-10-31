@@ -375,6 +375,71 @@ inline bool set_or_insert_tag(std::string &xml, const char *tag,
     return true;
 }
 
+// X4VR_UPSCALE: X4's upscaler, <upmode> since X4 9.00 (GetUpscalingOption,
+// 0xb7f1f0, reads "upmode"). The accepted values are exactly the ten X4's
+// binary and its graphics options know:
+//
+//   none
+//   fsr3_native  fsr3_quality  fsr3_balanced  fsr3_performance
+//   fsr3_ultra_performance                       FSR3, temporal
+//   fsr_ultra_quality  fsr_quality  fsr_balanced  fsr_performance   FSR 1
+//
+// **The mod owns this setting** (Patola, 2026-10-31): it is tied to the
+// resolution the launcher sets, so it is served on every read, "none" when
+// X4VR_UPSCALE is unset, and an in-game change lasts only until the next
+// launch. A value outside the list is REJECTED and "none" served, rather than
+// a value X4 would ignore silently (the X4VR_AA lesson). The output size is
+// the eye (X4VR_W/2 x X4VR_H); X4 renders the scene smaller and upscales,
+// quality = output / 1.5 per axis.
+//
+// Frame generation is served off with it (<fsr3g>, <dlssg>): an interpolated
+// frame carries no head pose and adds latency, harmful in VR.
+//
+// **Not working in VR yet (2026-10-31):** with any mode on, the right eye is
+// not drawn. X4's upscaler runs as compute, and the layer does not yet run
+// compute passes once per eye.
+inline bool is_upscale_mode(const char *s) {
+    static const char *const modes[] = {
+        "none",           "fsr3_native",       "fsr3_quality", "fsr3_balanced",
+        "fsr3_performance", "fsr3_ultra_performance", "fsr_ultra_quality",
+        "fsr_quality",    "fsr_balanced",      "fsr_performance",
+    };
+    if (!s)
+        return false;
+    for (const char *m : modes)
+        if (!strcmp(s, m))
+            return true;
+    return false;
+}
+// The <upmode> value to serve, and how it was chosen: 0 our default (unset),
+// 1 from X4VR_UPSCALE, -1 X4VR_UPSCALE rejected (served "none").
+inline const char *upscale_value(int *source = nullptr) {
+    static int src = 0;
+    static const char *v = [] {
+        const char *e = getenv("X4VR_UPSCALE");
+        if (!e || !*e)
+            return "none";
+        if (is_upscale_mode(e)) {
+            src = 1;
+            return e;
+        }
+        src = -1;
+        return "none";
+    }();
+    if (source)
+        *source = src;
+    return v;
+}
+// Serve the upscaler and frame generation off. True when anything changed;
+// `old_up` gets <upmode>'s previous value ("" when absent).
+inline bool serve_upscaler(std::string &xml, const char *upmode,
+                           std::string *old_up = nullptr) {
+    bool changed = set_or_insert_tag(xml, "upmode", upmode, old_up);
+    changed |= set_or_insert_tag(xml, "fsr3g", "off");
+    changed |= set_or_insert_tag(xml, "dlssg", "off");
+    return changed;
+}
+
 // <hudscale>: "off" on every read of the mod's config (2026-10-31). X4 places
 // its lower HUD (left panel, radar, right panel) in ui/core/lua/monitors.lua's
 // initScale. Below a 4:3 aspect -- our square eye always is -- it shifts each

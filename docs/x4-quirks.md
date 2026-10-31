@@ -28632,3 +28632,43 @@ X4VR_W x X4VR_H is the window both eyes share, and each eye is X4VR_W/2 x
 X4VR_H. The launcher sets X4VR_RES to that itself and ignores any other value
 (with a warning on stderr). Patola's line with W 8448, H 4224 and RES
 2816x2816 rendered 4224² per eye (`extents: X4 renders 4224x4224`).
+
+## X4VR_UPSCALE; FSR loses the right eye; the map invisible at 4224² (2026-10-31)
+
+Patola, with the corrected 4224² line: FSR showed off at the menu (expected,
+X4VR_AA no longer serves it). Then two problems, and a request.
+
+* **`X4VR_UPSCALE` (built, Patola's request):** X4's `<upmode>`, validated
+  against the ten values X4's binary knows (`none`, `fsr3_native`,
+  `fsr3_quality`, `fsr3_balanced`, `fsr3_performance`,
+  `fsr3_ultra_performance`, `fsr_ultra_quality`, `fsr_quality`,
+  `fsr_balanced`, `fsr_performance`).
+  * Served on every read, `none` when unset, so the mod owns it like the
+    resolution. A rejected value is logged and `none` served.
+  * `<fsr3g>` and `<dlssg>` (frame generation) are served off with it.
+  * x4vr_config.hpp (`is_upscale_mode`, `upscale_value`, `serve_upscaler`),
+    tests/steer.cpp. Each run logs `config: upmode: ... -> ...`.
+  * The extra rows Patola saw in X4's FSR options are the on/off switch and
+    frame generation, not more modes.
+* **FSR (any mode, enabled in game) does not draw the right eye.**
+  * Leading suspect, not yet measured: X4's upscaler is compute (FSR 1's EASU
+    and RCAS, FSR3's passes). The layer doubles render targets and runs
+    render passes per view with multiview, but a compute dispatch has no
+    view index ("0 of those are compute: no gl_ViewIndex exists there"). The
+    upscaled output then holds one eye.
+  * Fixing it means running X4's upscaler dispatches once per eye (layer 0,
+    then layer 1). That is layer work with its own takes; until then
+    `X4VR_UPSCALE` stays unset.
+* **The map's content is invisible at 4224²** (sectors, ships, routes; the
+  corner interface is drawn).
+  * Take 375 at 2816² with the same features: "Map still perfect". Two
+    things changed: the resolution, and `<hudscale>` off. X4's map Lua does
+    not read the HUD scale (no GetHUDScaleOption/GetHUDUIScale in
+    menu_map.lua), so the resolution is the suspect.
+  * The log shows the map's 3D draws happening (381 to 409 draws per frame
+    while it was open), so it is drawn and not seen.
+  * **Asked of Patola:** did the map show at 3200² (the `fsr5` sessions
+    opened it 17 times) and at 4224² before hudscale was served (`nofsr`,
+    04:16)? And the map at 2816² on the current build. Together these
+    separate the resolution from hudscale and bracket a size threshold
+    (4096 would be the obvious one).

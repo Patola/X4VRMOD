@@ -226,9 +226,14 @@ is acceptable for this; nothing is drawn in VR for the launcher.
     (spatial) `fsr_ultra_quality`, `fsr_quality`, `fsr_balanced`,
     `fsr_performance`. X4 greys out what the GPU does not support
     (IsUpscalingOptionSupported).
-  * Until the launcher serves it, the setting is X4's own: graphics options,
-    FSR on and a mode. X4 saves it in the mod's config copy, so it persists
-    for mod sessions only.
+  * **`X4VR_UPSCALE`** (2026-10-31) serves it: one of the ten values, `none`
+    when unset, so the mod owns the setting and an in-game change lasts one
+    session. Frame generation is served off with it. The launcher's
+    upscaler setting maps to this variable.
+  * **Blocked in VR:** with any mode on, the right eye is not drawn
+    (Patola, 2026-10-31). The upscaler runs as compute, and the layer does
+    not yet run compute passes per eye. The launcher offers no upscaler
+    until that is fixed.
 * **The launcher offers:** off, and the FSR modes X4 reports as supported,
   temporal and spatial separately. With an upscaler, the resolution setting
   is the output; the internal render is X4's (quality = output / 1.5 per
