@@ -28672,3 +28672,26 @@ X4VR_AA no longer serves it). Then two problems, and a request.
     04:16)? And the map at 2816² on the current build. Together these
     separate the resolution from hudscale and bracket a size threshold
     (4096 would be the obvious one).
+
+**2026-10-31, more data (Patola):**
+
+    eye (W x H)    map content   hudscale   log
+    3200 x 3200    shows         off        /tmp/x4vr-play-fsr5x.log
+    4224 x 4224    invisible     off        /tmp/x4vr-play-fsr8.log
+    4000 x 4900    invisible     off        /tmp/x4vr-play-fsr6x.log  (H mistyped)
+
+* **hudscale is cleared:** the map shows at 3200² with it off.
+* **The failure is size-dependent:** either the height over a limit between
+  3200 and 4224, or the area over one between 10.2 and 17.8 Mpx. 4096 and
+  4096² fit both readings; these points cannot tell them apart.
+* **No such limit in the mod:** no 4096/8192/maxImageDimension in layer/,
+  injector/ or common/. The layer doubles every attachment image whatever its
+  size (mv_double_candidate).
+* **Next, establish which side is correct:** X4 at 4224² inside gamescope
+  with the layer off (the injector still serves the size), no VR, the map
+  opened on the monitor.
+  * **Map invisible there:** X4's own limit (a render target capped at 4096
+    would be typical). The launcher caps the eye below it and the release
+    notes say so.
+  * **Map shows:** the layer is at fault. A take with the image census
+    finds which render target the map uses at 4224².
