@@ -89,6 +89,8 @@ blocks every frame.
 | F6's overlay fills its window | done | **`v0.9.5`** |
 | The cockpit HUD clicks where it is drawn; steering targets at the ring; lean in the cockpit | done | **`v0.9.6`** |
 | Larger eyes: the HUD stays put; the map draws (flat above ~4068² per eye, X4's 255.8 MiB pool block) | done | **`v0.9.7`** |
+| FSR 1 in both eyes (`X4VR_UPSCALE=fsr_*`) | done, take 380 | not yet released |
+| FSR 3 in both eyes (`X4VR_UPSCALE=fsr3_*`) | done, take 383 | not yet released |
 | The start menu as the whole scene (menu at its size in front, the 3D scene all around) | optional, future — not scheduled | — |
 | Volumetric nebula in stereo (Matrix #79B, CEO's Doubt) | done | **`v0.9.1`** |
 | The numpad orbits the external (F2) and target (F3) views again | done | **`v0.9.2`** |
@@ -160,6 +162,63 @@ they shear by a constant that is only right at one zoom level),
 `X4VR_VR=1` (bring an OpenXR session up on X4's own device — off by default,
 needs a runtime *running*; submits nothing yet, so the headset shows the
 runtime's idle scene while X4 renders to the monitor as usual).
+
+## Resolution and upscaling
+
+**Eye size.** Three variables, always changed together. The eyes are square:
+
+| Variable | Meaning | Example (2816² eyes) | Example (4224² eyes) |
+|---|---|---|---|
+| `X4VR_H` | one eye's height and width | `2816` | `4224` |
+| `X4VR_W` | the side-by-side window: 2 × `X4VR_H` | `5632` | `8448` |
+| `X4VR_RES` | X4's resolution: `X4VR_H`x`X4VR_H` | `2816x2816` | `4224x4224` |
+
+The shipping line (take 375 in [docs/known-good-runs.md](docs/known-good-runs.md))
+uses 2816² per eye. Two limits are known at larger sizes:
+* Above about 4068² per eye the map is drawn flat, the same image in both
+  eyes. It is too big, doubled, for X4's 255.8 MiB memory block.
+* SteamVR garbles the image at 4224² per eye; WiVRn does not.
+
+**Upscaling.** `X4VR_UPSCALE=<mode>` chooses X4's upscaler, which renders the
+scene smaller and scales it up to the eye size. Unset, it is `none`: X4
+renders every pixel. The mod owns this setting and serves it on every launch,
+so a change in X4's graphics menu lasts only until the next launch. Frame
+generation is always served off: an interpolated frame carries no head pose
+and adds latency.
+
+| `X4VR_UPSCALE` | Upscaler | Renders at (eye ÷) |
+|---|---|---|
+| `none` (or unset) | none | 1 |
+| `fsr_ultra_quality` | FSR 1 (spatial) | 1.3 ¹ |
+| `fsr_quality` | FSR 1 | 1.5 (measured: 2816² for a 4224² eye) |
+| `fsr_balanced` | FSR 1 | 1.7 ¹ |
+| `fsr_performance` | FSR 1 | 2 ¹ |
+| `fsr3_native` | FSR 3 (temporal), anti-aliasing only | 1 ¹ |
+| `fsr3_quality` | FSR 3 | 1.5 ¹ |
+| `fsr3_balanced` | FSR 3 | 1.7 (measured: 2484² for a 4224² eye) |
+| `fsr3_performance` | FSR 3 | 2 ¹ |
+| `fsr3_ultra_performance` | FSR 3 | 3 ¹ |
+
+¹ AMD's standard ratio, not measured here.
+
+A value outside the list is rejected and `none` is served; the log says
+which (`config: upmode: …`). Both upscalers run in both eyes:
+* FSR 1 since take 380, through `X4VR_FSR_STEREO`;
+* FSR 3 (AMD FidelityFX) since take 383, through `X4VR_FFX_STEREO`.
+
+Both are on by default; set either to `0` only to compare.
+
+Measured at 4224² per eye on an RX 7900 XTX (different scenes, so rough):
+
+| Mode | Frame time |
+|---|---|
+| none | 29.1 ms |
+| `fsr_quality` | 13.24 ms (take 380) |
+| `fsr3_balanced` | 16.72 ms (take 383) |
+
+For example, 4224² eyes with FSR 3 Balanced: take the shipping line, set
+`X4VR_H=4224 X4VR_W=8448 X4VR_RES=4224x4224`, and add
+`X4VR_UPSCALE=fsr3_balanced`.
 
 ## Repository layout
 
