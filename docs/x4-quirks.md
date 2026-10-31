@@ -28943,3 +28943,49 @@ left eye's picture, garbage, a lower resolution...). Then quit.
   content, which says why the right eye fails.
 * **Refutation:** no FSR compute module (X4 runs FSR another way), or the
   FSR images doubled and both layers written.
+
+## Take 379 — SCORED PASS (2026-10-31): FSR writes only layer 0 of a doubled output
+
+Patola: *"the HUD appears correctly in both eyes, including the cursor. Any
+3D of the scene doesn't appear in the right eye... cockpit, skybox, ships,
+objects in the universe, it's all black, in only appears in the left eye."*
+The same on the start menu. GAMEPLAY 15.2 ms (66 fps) at 4224² with FSR
+quality, against 29.1 ms native (take 378): FSR is on.
+
+* **The FSR passes are c10 and c5.**
+  * `complog` found 14 compute modules and named none FSR: X4's compiled
+    modules keep no "Fsr" names (the functions are gone), so the name match
+    missed them.
+  * Two modules, both 64x1x1 with exactly S_sampler@0.4, S_sampler2D@0.5,
+    U_output_rt_decl@0.6 and BLOCK_BUFFER_BINDING_SLOT_DYNAMIC@4.0, are
+    dispatched 264x264x1 (4224/16), 26 and 34 distinct times. c10 (55.5 KB)
+    is EASU, c5 (13.6 KB) RCAS. Both also run 48x32x1 (a 768x512 target).
+  * No other module has that signature.
+* **Both read and write through X4's bindless tables.** S_sampler2D is the
+  sampled heap (binding 5, 53306 declared, ~11100 used) and U_output_rt_decl
+  the storage heap (binding 6, type 3, 53306 declared, ~11100 used). The
+  entry used comes from the dynamic block, so the instrument reports arrays.
+* **The outputs are doubled:** four 4224² fmt 97 images with usage 0x9f
+  (storage, colour and input attachment, sampled, transfer), DOUBLED, and
+  "NO RENDER PASS WROTE IT". The compute passes write them through the
+  storage heap's 2D views of layer 0, so **layer 1 is never written.** The
+  passes after FSR run per view, and view 1 reads that black layer. The HUD
+  and cursor are drawn afterwards, per view, so both eyes have them.
+* **The layer's bindless mirror** (+26653, layer-1 views of doubled images)
+  covers sampled descriptors only, and refuses compute ("9 of those are
+  compute: no gl_ViewIndex exists there").
+
+**Proposed fix (not built):**
+1. Mirror the storage heap like the sampled one: twin at +26653, a layer-1
+   view of each doubled image.
+2. Patch the two FSR modules, recognised by their resource signature: each
+   S_sampler2D and U_output_rt_decl index += gl_WorkGroupID.z * 26653.
+3. Dispatch them with groupCountZ doubled, only when the dispatch covers the
+   eye (the 264x264 passes). The 768x512 ones stay as they are, since
+   their output may be single-layer and two groups writing it would race.
+4. A GPU harness case with bindless tables, a doubled input with different
+   layers, and a doubled storage output, read back per layer.
+
+**Instrument notes:** the FSR name match is useless on X4's modules (use the
+resource signature). The dispatch signature includes the heap's high-water
+count, which multiplies "distinct" lines (367).
