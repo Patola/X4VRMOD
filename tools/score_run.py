@@ -5384,6 +5384,62 @@ def main(path):
                 fails.append(f"X4VR_UPSCALE={fs_up.group(1)}: FSR passes patched but "
                              f"no eye-covering dispatch was doubled")
 
+    # --- FSR 3 in both eyes: AMD FidelityFX (take 382) ---------------------
+    #
+    # layer/x4vr_layer.cpp, X4VR_FFX_STEREO (on by default). With an fsr3_*
+    # upscaler every FidelityFX dispatch must run again for the right eye
+    # through twin sets; anything left one-eyed blacks or corrupts that eye
+    # (take 381: black). Gate on intent: fsr3_* asked, the knob not 0. A log
+    # with no ffx line predates the fix.
+    f3_up = re.search(r"\bX4VR_UPSCALE=(fsr3_\S*)", run or "")
+    f3_off = re.search(r"\bX4VR_FFX_STEREO=0\b", run or "")
+    f3_state = re.findall(r"ffx (?:first present|final): FSR 3 in both eyes "
+                          r"(armed|OFF \([^)]*\))", text)
+    f3_mods = re.findall(r"ffx: module \((\d+) bytes, writes([^)]*)\) is a "
+                         r"FidelityFX pass", text)
+    f3_twins = re.findall(r"ffx: img #\d+ (\d+x\d+) mips=\d+ fmt=(\d+) "
+                          r"usage=0x[0-9a-f]+: a right-eye copy \(([\d.]+) MiB; "
+                          r"(\d+) so far, ([\d.]+) MiB\)", text)
+    f3_runs = [int(n) for n in re.findall(r"ffx: dispatch \S+ of a FidelityFX "
+                                          r"pass run again for the right eye "
+                                          r"through \d+ twin set binding\(s\) "
+                                          r"\((\d+) so far\)", text)]
+    f3_bad = re.findall(r"ffx: ((?:a FidelityFX dispatch .*left one-eyed|a "
+                        r"FidelityFX pass dispatched indirectly.*|img #\d+ .*could "
+                        r"NOT be made.*|a twin descriptor set could not be "
+                        r"allocated.*|a FidelityFX pipeline's layout was never "
+                        r"seen created.*|vkCmdCopyImage touches an image with a "
+                        r"right-eye copy.*))", text)
+    f3_built = bool(f3_state or f3_mods or f3_twins or f3_runs or f3_bad)
+    if f3_up and not f3_built:
+        print(f"ffx     not checked: X4VR_UPSCALE={f3_up.group(1)}, but this log "
+              f"predates the FSR 3 fix (no ffx lines; take 381 and earlier)")
+    elif f3_up or f3_built:
+        if f3_state:
+            print(f"ffx     FSR 3 in both eyes: {f3_state[-1]}")
+        last = f3_twins[-1] if f3_twins else None
+        print(f"ffx     {len(f3_mods)} FidelityFX module(s); "
+              f"{len(f3_twins)} right-eye image copies"
+              + (f" ({last[4]} MiB in all)" if last else "")
+              + f"; dispatches run again for the right eye: "
+              f"{max(f3_runs, default=0)}+ (the log counts in steps of 10000)")
+        for b in f3_bad:
+            print(f"ffx     {b}")
+        if f3_up and not f3_off:
+            if f3_state and f3_state[-1].startswith("OFF"):
+                fails.append(f"X4VR_UPSCALE={f3_up.group(1)} but the FSR 3 fix is "
+                             f"{f3_state[-1]} — the right eye's scene is black")
+            elif not f3_mods:
+                fails.append(f"X4VR_UPSCALE={f3_up.group(1)} but no FidelityFX "
+                             f"module was recognised — X4 did not take FSR 3, or "
+                             f"its modules no longer match is_ffx_pass")
+            elif not f3_runs:
+                fails.append(f"X4VR_UPSCALE={f3_up.group(1)}: FidelityFX modules "
+                             f"recognised but no dispatch ran again for the right "
+                             f"eye")
+            for b in f3_bad:
+                fails.append(f"FSR 3: {b}")
+
     # --- X4VR_COMPLOG: what each compute dispatch touches (take 379) -------
     #
     # Read only (layer/x4vr_layer.cpp). X4's FSR loses the right eye; its FSR 1
@@ -5455,7 +5511,11 @@ def main(path):
             for r in one:
                 print(f"complog   {r}")
         up = re.search(r"\bX4VR_UPSCALE=(\S+)", run or "")
-        if cl_mods and up and up.group(1) != "none" and not fsr:
+        if cl_mods and up and up.group(1).startswith("fsr3"):
+            if not ffx:
+                print(f"complog   NOTE X4VR_UPSCALE={up.group(1)} but no FidelityFX "
+                      f"module was compiled — X4 did not take FSR 3")
+        elif cl_mods and up and up.group(1) != "none" and not fsr:
             print(f"complog   NOTE X4VR_UPSCALE={up.group(1)} but no FSR compute "
                   f"module was compiled — X4 did not take the upscaler")
 

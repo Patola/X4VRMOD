@@ -5135,6 +5135,27 @@ inline bool is_x4_fsr_pass(const ComputeInfo &ci) {
                                              "U_output_rt_decl"};
 }
 
+/// A pass of AMD's FidelityFX SDK, which X4 links for FSR 3 (take 381): a
+/// compute module whose resources follow the SDK's naming, at least one
+/// written image `rw_*`, and none of X4's own names (S_*, U_*, the
+/// BLOCK_BUFFER_* blocks). Take 381's 22 FidelityFX modules all have rw_*
+/// resources; X4's 7 compute modules and the 5 other modules in its process
+/// (outImage, g_t*) have none.
+inline bool is_ffx_pass(const ComputeInfo &ci) {
+    if (!ci.compute)
+        return false;
+    bool rw = false;
+    for (const auto &b : ci.bindings) {
+        const std::string &n = b.name;
+        if (n.rfind("S_", 0) == 0 || n.rfind("U_", 0) == 0 ||
+            n.rfind("BLOCK_BUFFER", 0) == 0)
+            return false;
+        if (n.rfind("rw_", 0) == 0)
+            rw = true;
+    }
+    return rw;
+}
+
 /// Whether any block in the module has a member called `name` (its
 /// `OpMemberName`). X4's runtime GLSL compile keeps the names, and a
 /// shader's uniform property names are a fingerprint of which X4 shader it

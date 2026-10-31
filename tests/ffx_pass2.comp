@@ -1,0 +1,20 @@
+#version 450
+// Pass 2 of the FidelityFX-shaped pair (see ffx_pass1.comp): reads the
+// history pass 1 wrote and writes the output, X4's doubled image, plus 0.125
+// on red so a pass that did not run reads differently from one that did.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform texture2D r_history;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D rw_upscaled_output;
+layout(set = 0, binding = 2) uniform cbFSR3Upscaler {
+    uvec4 iRenderSize;
+};
+layout(set = 0, binding = 3) uniform sampler s_PointClamp;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(uvec2(p), iRenderSize.xy)))
+        return;
+    imageStore(rw_upscaled_output, p,
+               texelFetch(sampler2D(r_history, s_PointClamp), p, 0) +
+                   vec4(0.125, 0.0, 0.0, 0.0));
+}

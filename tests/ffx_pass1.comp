@@ -1,0 +1,21 @@
+#version 450
+// The shape of AMD FidelityFX's FSR 3 passes as take 381 found them in X4:
+// 8x8 groups, resources named r_* (read) and rw_* (written) in set 0, a
+// constant block cbFSR3Upscaler and a sampler. Written for the tests, not
+// AMD's code. Pass 1 copies the input into a history image that is
+// single-layer (storage, no attachment usage), as FidelityFX's own are.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform texture2D r_input_color_jittered;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D rw_history;
+layout(set = 0, binding = 2) uniform cbFSR3Upscaler {
+    uvec4 iRenderSize;
+};
+layout(set = 0, binding = 3) uniform sampler s_PointClamp;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(uvec2(p), iRenderSize.xy)))
+        return;
+    imageStore(rw_history, p,
+               texelFetch(sampler2D(r_input_color_jittered, s_PointClamp), p, 0));
+}

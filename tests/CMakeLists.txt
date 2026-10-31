@@ -122,6 +122,12 @@ configure_file(skybox_cube.comp.spv skybox_cube.comp.spv COPYONLY)
 configure_file(noop.comp.spv noop.comp.spv COPYONLY)
 configure_file(fsr_shape.comp.spv fsr_shape.comp.spv COPYONLY)
 configure_file(fsr_bindless.comp.spv fsr_bindless.comp.spv COPYONLY)
+# Take 382: FidelityFX-shaped passes (two passes, a single-layer history
+# between them) and a fragment colour per view, so a test can tell the eyes
+# apart.
+configure_file(ffx_pass1.comp.spv ffx_pass1.comp.spv COPYONLY)
+configure_file(ffx_pass2.comp.spv ffx_pass2.comp.spv COPYONLY)
+configure_file(view_color.frag.spv view_color.frag.spv COPYONLY)
 
 # The inputmap rewrite that gives head-look a binding of its own. Pure string
 # work on a fixture shaped like the real file, so it needs neither X4 nor a

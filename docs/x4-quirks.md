@@ -29111,3 +29111,114 @@ Before this take:
   image and P381.3 is wrong about it.
 * Not predicted: whether X4 still creates its FSR 1 modules under fsr3 (the
   `fsr first present` line will say), and the frame time.
+
+## Take 381 — SCORED (2026-10-31): FidelityFX writes the left eye only
+
+Patola: "The left eye seems correct all the time with HUD, 3D graphics,
+lighting, etc., even when I turn my head inside the cockpit. There was some
+stutter but I could notice no smearing or ghosting. The right eye
+consistently shows only the HUD, the map (when it's called) and in the 3D
+scenes it's all black except for the sun, which it draws."
+
+* **P381.1 — held.** `config: upmode: 'none' -> 'fsr3_balanced'`.
+* **P381.2 — held.** 34 compute modules in all:
+  * 22 FidelityFX modules (c5–c26, named r_*/rw_*/cb*): 11 passes, created
+    twice (two contexts);
+  * X4's 7;
+  * 5 others in the process (outImage, g_t*).
+
+  X4 did not create its FSR 1 modules (`fsr first present: armed`, 0
+  patched).
+* **P381.3 — held, with one surprise.** Each frame runs these second-context
+  passes in order:
+
+  | module | dispatch | pass |
+  |---|---|---|
+  | c19 | 311x311 | reconstruct and dilate, at the 2484² render size |
+  | c16 | 39x39 | luma pyramid (SPD) |
+  | c24 | 39x39 | shading-change pyramid |
+  | c21 | 156x156 | shading change |
+  | c20 | 311x311 | reactivity |
+  | c25 | 311x311 | luma instability |
+  | c23 | 528x528 | accumulate, 4224² |
+  | c17 | 264x264 | RCAS into `rw_upscaled_output` |
+
+  X4's inputs (colour, depth, motion vectors, reactive and transparency
+  masks, all 2484²) and the output (4224²) are DOUBLED, read through layer-0
+  views.
+
+  The surprise is FidelityFX's own images, which split two ways:
+  * **Doubled** (their usage includes colour attachment, 0x1f): dilated depth
+    and motion vectors, current and previous luma, accumulation.
+  * **Single-layer** (storage only, 0xf): farthest depth and its mip,
+    reconstructed previous depth, dilated reactive masks, new locks, luma
+    instability, the SPD mips, shading change, the SPD atomic counter, and
+    frame info (= `r_input_exposure`, img #99).
+  * **Single-layer by the pool rule** (4224² RGBA16F, 0x1f): the internal
+    upscaled colour and the luma history, each a ping-pong pair.
+
+  Every single-layer storage image FidelityFX binds, it also writes.
+* **P381.4 — held.** The right eye's scene is black (the output's layer 1
+  is never written); the HUD is fine. The sun is drawn after the upscale, in
+  X4's per-eye passes.
+* GAMEPLAY 16.13 ms over 5 windows (49 s). The left eye only is upscaled.
+
+### The fix (X4VR_FFX_STEREO, on by default)
+
+No shader is changed. After each FidelityFX dispatch, the layer records it
+again for the right eye, with every FidelityFX descriptor set swapped for a
+twin set:
+* **Twin sets** are kept by repeating each write into a FidelityFX set,
+  with the right eye's views:
+  * layer 1 of a doubled image, unless X4 draws that image with unmasked
+    passes only;
+  * the same view on the image's right-eye copy, for a single-layer storage
+    image FidelityFX writes;
+  * the original view, otherwise (FidelityFX's read-only LUT).
+* **Right-eye copies.** Every single-layer 2D storage image gets one when it
+  is created. In take 380 X4 created none of those, because its storage
+  images are cube maps. Every barrier and clear on the original is repeated
+  on the copy.
+* **Classification and lifetime.** FidelityFX passes are recognised by name
+  (`is_ffx_pass`: a `rw_*` resource and none of X4's S_*/U_*/BLOCK_BUFFER*).
+  Pipelines, layouts and sets are tracked by handle and dropped on destroy,
+  free and reset; four new pass-through hooks cover the free and reset paths.
+* **Not handled, and counted, never silent:** indirect FidelityFX
+  dispatches, and image copy commands touching a right-eye copy.
+
+**GPU harness** (`X4VR_TEST_COMPUTE=ffx`, with `view_color.frag` so the two
+layers differ: red 0.25 in layer 0, 0.75 in layer 1). The test runs two
+FidelityFX-shaped passes with a single-layer history between them.
+* Fix on: red 0.375 in layer 0 and 0.875 in layer 1.
+* `X4VR_FFX_STEREO=0`: layer 1 is 0 (take 381).
+* Negative control, by hand: without the right-eye copies, layer 0 reads
+  0.875. The right eye's pass 1 overwrote the shared history.
+* Validation is clean. Validation sits below the layer here; without the
+  repeated barriers it reports VUID-vkCmdDispatch-imageLayout-00344.
+
+Found on the way: tests/run-no-exit-destructors.sh had been failing since
+take 372 (four containers in the injector's `ptrwatch_tick`) and take 377
+(the pool rule's `said`). They now live in immortal storage.
+
+## Take 382 — PREDICTIONS (written before the run): FSR 3 in both eyes
+
+    X4VR_HEADLOOK_LAGLOG=1 X4VR_TAKE=382 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=4224 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=8448 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=4224x4224 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_UPSCALE=fsr3_balanced X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_STEER_PICK=1 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_COMPLOG=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take382.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+Take 381's command with the take number and log changed; the code is the
+only other difference.
+
+* **P382.1:** 22 `ffx: module … is a FidelityFX pass` lines.
+* **P382.2:** right-eye copies of FidelityFX's single-layer images:
+  * 13 per context, 26 over the run;
+  * about 730 MiB per context; the first context's copies are freed with
+    it.
+* **P382.3:** `ffx: dispatch … run again for the right eye` counting up.
+  No "left one-eyed", "NOT run again", "could NOT", or "NOT repeated" line.
+* **P382.4 (Patola's eye):** the right eye shows the 3D scene, at the
+  correct depth, as FSR 1 did in take 380.
+* **The risk I can name: smearing in the right eye only, when moving.**
+  FidelityFX reprojects history along X4's motion vectors. This is the
+  first take in which the right eye's vectors (layer 1) are used, and
+  nothing has checked them. If smearing appears in that eye alone, the
+  vectors are the suspect, not the right-eye pass.
+* Frame time: not predicted; FidelityFX's work doubles.

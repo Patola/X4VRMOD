@@ -120,6 +120,19 @@ int main(int argc, char **argv) {
         check(load(dir + "/fsr_shape.comp.spv", plain) &&
                   !x4vr::spv::is_x4_fsr_pass(x4vr::spv::compute_info(plain)),
               "fsr_shape.comp (no bindless tables): the signature refuses it");
+        // is_ffx_pass (take 382): the FidelityFX-shaped fixtures match; X4's
+        // FSR shapes and a module with no resources do not.
+        std::vector<uint32_t> f1, f2, noop;
+        check(load(dir + "/ffx_pass1.comp.spv", f1) &&
+                  x4vr::spv::is_ffx_pass(x4vr::spv::compute_info(f1)) &&
+                  load(dir + "/ffx_pass2.comp.spv", f2) &&
+                  x4vr::spv::is_ffx_pass(x4vr::spv::compute_info(f2)),
+              "ffx_pass1/2.comp: recognised as FidelityFX passes");
+        check(!x4vr::spv::is_ffx_pass(ci) &&
+                  !x4vr::spv::is_ffx_pass(x4vr::spv::compute_info(plain)) &&
+                  load(dir + "/noop.comp.spv", noop) &&
+                  !x4vr::spv::is_ffx_pass(x4vr::spv::compute_info(noop)),
+              "X4's FSR shapes and a resource-less module: not FidelityFX");
         std::vector<uint32_t> before = code;
         const uint32_t n = x4vr::spv::patch_compute_index_offset(
             code, {{0, 5}, {0, 6}}, 26653);

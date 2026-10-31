@@ -1691,6 +1691,66 @@ inv_case "...the pass patched by signature" \
 inv_case "...the eye-sized dispatch doubled" \
     "fsr: dispatch 4x4x1 covers the 64x64 eye — run as 4x4x2" \
     X4VR_BINDLESS_MIRROR=1 X4VR_RES=64x64 X4VR_MIRROR_OFFSET=32 X4VR_TEST_COMPUTE=fsrbindless
+# FSR 3 in both eyes (take 382): two FidelityFX-shaped passes with a
+# single-layer history between them (tests/ffx_pass1/2.comp), the input drawn
+# with tests/view_color.frag so its layers differ (red 0.25 / 0.75). Red of
+# the output: 0.375 in layer 0 and 0.875 in layer 1 with the fix; layer 1 at
+# 0 with X4VR_FFX_STEREO=0, take 381's black right eye. Checked by hand once
+# (no permanent knob for it): without the history's right-eye copy, layer 0
+# reads 0.875 -- the right eye's pass 1 overwrote the shared history.
+VCF="$BUILD/tests/view_color.frag.spv"
+ffx_case() {
+    local label="$1" knob="$2" want="$3"
+    local out got
+    out=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \
+        "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+        X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=3 X4VR_BINDLESS_MIRROR=1 \
+        X4VR_RES=64x64 X4VR_TEST_COMPUTE=ffx "X4VR_FFX_STEREO=$knob" \
+        "$BIN" "$VS" "$VCF" "$SF" 2>&1)
+    got="$(sed -n 's/^FFX_OUT_LAYERS=//p' <<<"$out")"
+    got="$got $(sed -n 's/^FFX_R0=//p' <<<"$out")"
+    got="$got $(sed -n 's/^FFX_R1=//p' <<<"$out")"
+    if [[ "$got" == "$want" ]]; then
+        printf 'ok   %-38s layers/red0/red1=%s\n' "$label" "$got"
+    else
+        printf 'FAIL %-38s layers/red0/red1=%s, wanted %s\n' "$label" "$got" "$want"
+        fails=$((fails + 1))
+    fi
+}
+ffx_case "FSR 3: each eye from its own layer" 1 "2 0.375 0.875"
+ffx_case "...and without the fix layer 1 is 0" 0 "2 0.375 0.000"
+ffx_log_case() {
+    local label="$1" want="$2" out
+    out=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \
+        "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+        X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=3 X4VR_BINDLESS_MIRROR=1 \
+        X4VR_RES=64x64 X4VR_TEST_COMPUTE=ffx "$BIN" "$VS" "$VCF" "$SF" 2>&1)
+    if grep -qF -- "$want" <<<"$out"; then
+        printf 'ok   %-38s %s\n' "$label" "$want"
+    else
+        printf 'FAIL %-38s no line containing "%s"\n' "$label" "$want"
+        fails=$((fails + 1))
+    fi
+}
+ffx_log_case "...both passes recognised" \
+    "ffx: module (1688 bytes, writes rw_upscaled_output) is a FidelityFX pass"
+ffx_log_case "...the history gets a right-eye copy" \
+    "ffx: img #1 64x64 mips=1 fmt=97 usage=0xc: a right-eye copy"
+ffx_log_case "...dispatches run again" \
+    "ffx: dispatch 8x8x1 of a FidelityFX pass run again for the right eye through 1 twin set binding(s) (1 so far)"
+# The test exits without tearing the device down, so no `ffx final` line:
+# the failure lines must be absent instead.
+out=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \
+    "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+    X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=3 X4VR_BINDLESS_MIRROR=1 \
+    X4VR_RES=64x64 X4VR_TEST_COMPUTE=ffx "$BIN" "$VS" "$VCF" "$SF" 2>&1)
+if grep -qE "ffx: .*(one-eyed|NOT|could NOT|never seen)" <<<"$out"; then
+    printf 'FAIL %-38s %s\n' "...nothing left one-eyed" \
+        "$(grep -m1 -E 'ffx: .*(one-eyed|NOT|never seen)' <<<"$out")"
+    fails=$((fails + 1))
+else
+    printf 'ok   %-38s %s\n' "...nothing left one-eyed" "no ffx failure line"
+fi
 # Zero has to be a reading, not an absence: "no dispatches" and "compute is
 # unhooked again" produced identical logs for this project's whole history.
 inv_case "...and reports zero as a number" \
@@ -3056,6 +3116,15 @@ else
         X4VR_POSE=1 X4VR_POSE_ROTATE=1 X4VR_TEST_PAD_SETS=6
     vuid_case "validation: pose collision"  X4VR_MV=1 X4VR_TEST_VIEW_ARENA=1 \
         X4VR_POSE=1 X4VR_POSE_ROTATE=1 X4VR_TEST_PAD_SETS=6 X4VR_POSE_SET=5
+    # FSR 3's right-eye pass (take 382): twin sets, layer-1 views, the
+    # history's copy and the barriers repeated on it. Checked by hand that this
+    # catches a missing one: without the repeated barriers it reports
+    # VUID-vkCmdDispatch-imageLayout-00344.
+    FS="$VCF" vuid_case "validation: FSR 3 both eyes" X4VR_MV=1 X4VR_MV_MASK=3 \
+        X4VR_BINDLESS_MIRROR=1 X4VR_RES=64x64 X4VR_TEST_COMPUTE=ffx
+    vuid_case "validation: FSR 1 both eyes" X4VR_MV=1 X4VR_MV_MASK=3 \
+        X4VR_BINDLESS_MIRROR=1 X4VR_RES=64x64 X4VR_MIRROR_OFFSET=32 \
+        X4VR_TEST_COMPUTE=fsrbindless
 fi
 
 # --- take 357: the cinematic view's twin pipelines ------------------------

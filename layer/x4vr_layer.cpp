@@ -149,6 +149,9 @@ struct DeviceData {
     PFN_vkDestroyPipelineLayout DestroyPipelineLayout = nullptr;
     PFN_vkCreateDescriptorPool CreateDescriptorPool = nullptr;
     PFN_vkDestroyDescriptorPool DestroyDescriptorPool = nullptr;
+    // FSR 3 in both eyes (take 382): twin sets are freed with the originals.
+    PFN_vkFreeDescriptorSets FreeDescriptorSets = nullptr;
+    PFN_vkResetDescriptorPool ResetDescriptorPool = nullptr;
     PFN_vkDestroyDescriptorSetLayout DestroyDescriptorSetLayout = nullptr;
     PFN_vkCreateRenderPass2 CreateRenderPass2 = nullptr;
     PFN_vkDestroyRenderPass DestroyRenderPass = nullptr;
@@ -1305,6 +1308,54 @@ VkExtent2D expected_eye(); // defined with the SBS split, further down
 // Counted here, printed by shader_knob_report() and by the fsr: lines.
 std::atomic<uint64_t> g_fsr_patched{0}, g_fsr_refused{0}, g_fsr_doubled{0},
     g_fsr_left{0}, g_fsr_barriers{0};
+
+// **FSR 3 in both eyes (take 382), on by default; X4VR_FFX_STEREO=0 turns it
+// off.** X4's FSR 3 is AMD's FidelityFX SDK linked into X4 (take 381): its
+// passes bind through their own descriptor sets, not X4's tables, and keep
+// history in images FidelityFX creates. The left eye was right and the right
+// eye's scene black. With this on, every FidelityFX dispatch runs a second
+// time for the right eye, through twin descriptor sets: a doubled image is
+// read and written at layer 1; a single-layer storage image FidelityFX writes
+// has a right-eye copy of its own ("twin"), which every barrier and clear on
+// the original also reaches. No shader is changed. It needs the mirror, which
+// is what makes X4's later passes read layer 1 of the output.
+const bool g_ffx_stereo_knob = x4vr::env_on("X4VR_FFX_STEREO", true);
+bool ffx_stereo_enabled() {
+    return g_ffx_stereo_knob && g_mv && g_bindless_mirror;
+}
+std::atomic<uint64_t> g_ffx_modules_seen{0}, g_ffx_pipes_seen{0}, g_ffx_twins{0},
+    g_ffx_twin_bytes{0}, g_ffx_twin_failed{0}, g_ffx_twin_sets{0},
+    g_ffx_set_failed{0}, g_ffx_doubled{0}, g_ffx_unpaired{0}, g_ffx_indirect{0},
+    g_ffx_barriers{0}, g_ffx_clears{0}, g_ffx_copies{0}, g_ffx_copy_writes{0},
+    g_ffx_view_l1{0}, g_ffx_view_twin{0}, g_ffx_view_kept{0};
+namespace {
+void ffx_note_module(const VkShaderModuleCreateInfo *ci, VkShaderModule mod);
+void ffx_forget_module(VkShaderModule mod);
+void ffx_note_pipelines(uint32_t n, const VkComputePipelineCreateInfo *ci,
+                        const VkPipeline *out);
+void ffx_forget_pipeline(VkPipeline p);
+void ffx_note_pipeline_layout(const VkPipelineLayoutCreateInfo *ci,
+                              VkPipelineLayout pl);
+void ffx_forget_set_layout(VkDescriptorSetLayout l);
+void ffx_note_sets(const VkDescriptorSetAllocateInfo *ai, const VkDescriptorSet *out);
+void ffx_forget_sets(DeviceData *d, VkDevice device, VkDescriptorPool pool,
+                     uint32_t n, const VkDescriptorSet *sets);
+void ffx_mirror_writes(DeviceData *d, VkDevice device, uint32_t n,
+                       const VkWriteDescriptorSet *w, uint32_t nc,
+                       const VkCopyDescriptorSet *c);
+void ffx_note_image(DeviceData *d, VkDevice device, const VkImageCreateInfo *ci,
+                    VkImage img, bool doubled, uint32_t serial);
+void ffx_forget_image(DeviceData *d, VkDevice device, VkImage img);
+void ffx_forget_view(DeviceData *d, VkDevice device, VkImageView v);
+void ffx_bind_pipeline(VkCommandBuffer cb, VkPipelineBindPoint bp, VkPipeline p);
+void ffx_bind_sets(VkCommandBuffer cb, VkPipelineBindPoint bp,
+                   VkPipelineLayout layout, uint32_t first, uint32_t n,
+                   const VkDescriptorSet *sets, uint32_t dc, const uint32_t *dyn);
+void ffx_dispatch_right(DeviceData *d, VkCommandBuffer cb, uint32_t x, uint32_t y,
+                        uint32_t z);
+bool ffx_cb_bound(VkCommandBuffer cb);
+VkImage ffx_twin_of(VkImage img);
+} // namespace
 
 // The layout/set bookkeeping below serves both knobs, and the mirror cannot work
 // without it: attributing a write to a table is how it knows a twin region
@@ -2533,6 +2584,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSets(
     } else {
         d->UpdateDescriptorSets(device, writeCount, writes, copyCount, copies);
     }
+    // FSR 3's twin sets, from X4's (FidelityFX's) own writes.
+    ffx_mirror_writes(d, device, writeCount, writes, copyCount, copies);
 
     std::lock_guard<std::mutex> lock(g_track.mu);
     for (uint32_t i = 0; i < writeCount; i++) {
@@ -2587,6 +2640,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindDescriptorSets(
     d->CmdBindDescriptorSets(cb, bindPoint, layout, firstSet, setCount, sets,
                              dynCount, dyn);
     complog_bind_sets(cb, bindPoint, firstSet, setCount, sets);
+    ffx_bind_sets(cb, bindPoint, layout, firstSet, setCount, sets, dynCount, dyn);
     // Only descriptor set 1 carries the per-view camera block for the main
     // geometry (established from the renderdoc capture: the range-1792 UBO
     // is bound at set 1 in 84% of the G-buffer pass's draws). Crediting any
@@ -3940,6 +3994,37 @@ void shader_knob_report(const char *when) {
              (unsigned long long)g_fsr_doubled.load(),
              (unsigned long long)g_fsr_left.load(),
              (unsigned long long)g_fsr_barriers.load());
+    // FSR 3 in both eyes (take 382), the same rule. Its modules, pipelines
+    // and images are created after the first present, so that line's counts
+    // are a snapshot; the ffx: lines are the record.
+    X4VR_LOG("ffx %s: FSR 3 in both eyes %s — %llu FidelityFX module(s), %llu "
+             "pipeline(s); %llu right-eye image copies (%.1f MiB), %llu failed; "
+             "%llu twin set(s), %llu failed; %llu dispatch(es) run again for the "
+             "right eye, %llu left one-eyed, %llu indirect not repeated; views: "
+             "%llu layer 1, %llu copy, %llu kept; %llu barrier(s) and %llu "
+             "clear(s) repeated on copies; %llu image copy command(s) touching a "
+             "copy NOT repeated; %llu descriptor copies repeated",
+             when,
+             ffx_stereo_enabled() ? "armed"
+             : !g_ffx_stereo_knob ? "OFF (X4VR_FFX_STEREO=0)"
+                                  : "OFF (needs X4VR_MV and the bindless mirror)",
+             (unsigned long long)g_ffx_modules_seen.load(),
+             (unsigned long long)g_ffx_pipes_seen.load(),
+             (unsigned long long)g_ffx_twins.load(),
+             g_ffx_twin_bytes.load() / 1048576.0,
+             (unsigned long long)g_ffx_twin_failed.load(),
+             (unsigned long long)g_ffx_twin_sets.load(),
+             (unsigned long long)g_ffx_set_failed.load(),
+             (unsigned long long)g_ffx_doubled.load(),
+             (unsigned long long)g_ffx_unpaired.load(),
+             (unsigned long long)g_ffx_indirect.load(),
+             (unsigned long long)g_ffx_view_l1.load(),
+             (unsigned long long)g_ffx_view_twin.load(),
+             (unsigned long long)g_ffx_view_kept.load(),
+             (unsigned long long)g_ffx_barriers.load(),
+             (unsigned long long)g_ffx_clears.load(),
+             (unsigned long long)g_ffx_copies.load(),
+             (unsigned long long)g_ffx_copy_writes.load());
     // Task #76. The offline census says exactly four modules carry a uint named
     // U_fsr3g_useuitexture at byte 512 of set 4 binding 0 -- the four
     // copy_gamma permutations -- and tests/run-multiview-render.sh asserts that
@@ -4402,7 +4487,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImage(
     // are exactly the eye-covering ones. Smaller storage images (a 1x1) keep
     // the default, their twin at layer 0.
     const VkExtent2D fsr_eye = expected_eye();
-    const bool fsr_out = dbl && fsr_stereo_enabled() &&
+    const bool fsr_out = dbl && (fsr_stereo_enabled() || ffx_stereo_enabled()) &&
                          (ci->usage & VK_IMAGE_USAGE_STORAGE_BIT) &&
                          ci->extent.width == fsr_eye.width &&
                          ci->extent.height == fsr_eye.height;
@@ -4422,6 +4507,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImage(
         std::lock_guard<std::mutex> lock(g_mv_mu);
         g_mv_stats.doubled++;
     }
+    ffx_note_image(d, device, ci, *out, dbl, info.serial);
     if (g_mv_inventory)
         X4VR_LOG("img #%u: %ux%ux%u layers=%u mips=%u samples=%u fmt=%u "
                  "usage=0x%x%s",
@@ -4451,6 +4537,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyImage(VkDevice device, VkImage img,
         if (it != g_images.end())
             g_images.erase(it);
     }
+    ffx_forget_image(d, device, img);
     d->DestroyImage(device, img, ac);
 }
 
@@ -4672,6 +4759,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_AllocateDescriptorSets(
             }
     }
     const VkResult r = d->AllocateDescriptorSets(device, ai, out);
+    if (r == VK_SUCCESS)
+        ffx_note_sets(ai, out);
     // Bind each new set to the layout it came from, so a write can be attributed
     // to a table rather than to a bare binding number.
     if (r == VK_SUCCESS && g_desc_track && ai && out) {
@@ -4685,6 +4774,54 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_AllocateDescriptorSets(
         }
     }
     return r;
+}
+
+// FSR 3 in both eyes (take 382): a twin set dies with its original, and a
+// layout FidelityFX destroys is no longer taken for one of its own (its handle
+// may come back for one of X4's tables).
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_FreeDescriptorSets(
+    VkDevice device, VkDescriptorPool pool, uint32_t n, const VkDescriptorSet *sets) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    if (n && sets)
+        ffx_forget_sets(d, device, pool, n, sets);
+    return d->FreeDescriptorSets(device, pool, n, sets);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_ResetDescriptorPool(
+    VkDevice device, VkDescriptorPool pool, VkDescriptorPoolResetFlags flags) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    ffx_forget_sets(d, device, pool, 0, nullptr);
+    return d->ResetDescriptorPool(device, pool, flags);
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_DestroyDescriptorPool(
+    VkDevice device, VkDescriptorPool pool, const VkAllocationCallbacks *ac) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    ffx_forget_sets(d, device, pool, 0, nullptr);
+    d->DestroyDescriptorPool(device, pool, ac);
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_DestroyDescriptorSetLayout(
+    VkDevice device, VkDescriptorSetLayout l, const VkAllocationCallbacks *ac) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    ffx_forget_set_layout(l);
+    d->DestroyDescriptorSetLayout(device, l, ac);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDescriptorUpdateTemplate(
@@ -4828,6 +4965,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyImageView(
         d->DestroyImageView(device, sub, ac);
     if (l1 != VK_NULL_HANDLE)
         d->DestroyImageView(device, l1, ac);
+    ffx_forget_view(d, device, view);
     d->DestroyImageView(device, view, ac);
 }
 
@@ -6978,6 +7116,588 @@ bool img_doubled_storage(VkImage im) {
 }
 } // namespace
 
+// ------------------------------------------- FSR 3 in both eyes (take 382)
+//
+// See g_ffx_stereo_knob. Every record below is keyed on a handle FidelityFX
+// (or X4) creates and destroys, and is dropped when that handle is: Vulkan
+// hands freed handles straight back (cbda71f).
+namespace {
+struct FfxTwin {
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+};
+// The right eye's view for one of FidelityFX's views: layer 1 of a doubled
+// image, the same view of the twin, or the original kept.
+struct FfxView {
+    VkImageView view = VK_NULL_HANDLE;
+    VkImage image = VK_NULL_HANDLE; // the original view's image
+    bool ours = false;
+};
+struct FfxSet {
+    VkDescriptorSetLayout layout = VK_NULL_HANDLE;
+    VkDescriptorPool pool = VK_NULL_HANDLE;
+    VkDescriptorSet twin = VK_NULL_HANDLE;
+    VkDescriptorPool twin_pool = VK_NULL_HANDLE;
+};
+struct FfxBind {
+    VkPipelineLayout layout = VK_NULL_HANDLE;
+    uint32_t first = 0;
+    std::vector<VkDescriptorSet> sets;
+    std::vector<uint32_t> dyn;
+};
+// Per command buffer: whether the bound compute pipeline is FidelityFX's, and
+// the set bindings made since it was bound -- replayed with twins.
+struct FfxCb {
+    bool ffx = false;
+    std::vector<FfxBind> binds;
+};
+std::mutex g_ffx_mu;
+std::unordered_set<VkShaderModule> &g_ffx_mods =
+    x4vr::immortal<std::unordered_set<VkShaderModule>>();
+std::unordered_set<VkPipeline> &g_ffx_pipes =
+    x4vr::immortal<std::unordered_set<VkPipeline>>();
+std::unordered_map<VkPipelineLayout, std::vector<VkDescriptorSetLayout>> &g_ffx_pl =
+    x4vr::immortal<
+        std::unordered_map<VkPipelineLayout, std::vector<VkDescriptorSetLayout>>>();
+std::unordered_set<VkDescriptorSetLayout> &g_ffx_layouts =
+    x4vr::immortal<std::unordered_set<VkDescriptorSetLayout>>();
+std::unordered_map<VkDescriptorSet, FfxSet> &g_ffx_sets =
+    x4vr::immortal<std::unordered_map<VkDescriptorSet, FfxSet>>();
+std::unordered_map<VkImage, FfxTwin> &g_ffx_twin =
+    x4vr::immortal<std::unordered_map<VkImage, FfxTwin>>();
+// Images bound as storage in a FidelityFX set: FidelityFX writes them, so the
+// right eye uses their twin. A twinned image only ever read (X4's own input)
+// keeps the original, which is the image X4 actually wrote.
+std::unordered_set<VkImage> &g_ffx_written =
+    x4vr::immortal<std::unordered_set<VkImage>>();
+std::unordered_map<VkImageView, FfxView> &g_ffx_views =
+    x4vr::immortal<std::unordered_map<VkImageView, FfxView>>();
+std::unordered_map<VkCommandBuffer, FfxCb> &g_ffx_cb =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, FfxCb>>();
+std::vector<VkDescriptorPool> &g_ffx_pools =
+    x4vr::immortal<std::vector<VkDescriptorPool>>();
+
+void ffx_note_module(const VkShaderModuleCreateInfo *ci, VkShaderModule mod) {
+    if (!g_active || !ffx_stereo_enabled() || !ci || ci->codeSize < 20)
+        return;
+    std::vector<uint32_t> code(ci->codeSize / 4);
+    memcpy(code.data(), ci->pCode, ci->codeSize);
+    const x4vr::spv::ComputeInfo info = x4vr::spv::compute_info(code);
+    if (!x4vr::spv::is_ffx_pass(info))
+        return;
+    std::string names;
+    uint32_t k = 0;
+    for (const auto &b : info.bindings)
+        if (b.name.rfind("rw_", 0) == 0 && k++ < 3)
+            names += " " + b.name;
+    {
+        std::lock_guard<std::mutex> lock(g_ffx_mu);
+        g_ffx_mods.insert(mod);
+    }
+    const uint64_t n = ++g_ffx_modules_seen;
+    X4VR_LOG("ffx: module (%zu bytes, writes%s%s) is a FidelityFX pass — its "
+             "dispatches run again for the right eye (%llu so far)",
+             (size_t)ci->codeSize, names.c_str(), k > 3 ? " …" : "",
+             (unsigned long long)n);
+}
+
+void ffx_forget_module(VkShaderModule mod) {
+    std::lock_guard<std::mutex> lock(g_ffx_mu);
+    g_ffx_mods.erase(mod);
+}
+
+void ffx_note_pipeline_layout(const VkPipelineLayoutCreateInfo *ci,
+                              VkPipelineLayout pl) {
+    if (!g_active || !ffx_stereo_enabled() || !ci)
+        return;
+    std::lock_guard<std::mutex> lock(g_ffx_mu);
+    g_ffx_pl[pl].assign(ci->pSetLayouts, ci->pSetLayouts + ci->setLayoutCount);
+}
+
+void ffx_forget_set_layout(VkDescriptorSetLayout l) {
+    std::lock_guard<std::mutex> lock(g_ffx_mu);
+    g_ffx_layouts.erase(l);
+}
+
+// `ci` as the app passed it: the pose channel substitutes its own extended
+// layout, and the set layouts that matter are the app's.
+void ffx_note_pipelines(uint32_t n, const VkComputePipelineCreateInfo *ci,
+                        const VkPipeline *out) {
+    if (!g_active || !ffx_stereo_enabled())
+        return;
+    bool unknown_layout = false;
+    {
+        std::lock_guard<std::mutex> lock(g_ffx_mu);
+        for (uint32_t i = 0; i < n; i++) {
+            if (out[i] == VK_NULL_HANDLE || !g_ffx_mods.count(ci[i].stage.module))
+                continue;
+            g_ffx_pipes.insert(out[i]);
+            ++g_ffx_pipes_seen;
+            auto pl = g_ffx_pl.find(ci[i].layout);
+            if (pl == g_ffx_pl.end()) {
+                unknown_layout = true;
+                continue;
+            }
+            for (VkDescriptorSetLayout l : pl->second)
+                g_ffx_layouts.insert(l);
+        }
+    }
+    static std::atomic<bool> told{false};
+    if (unknown_layout && !told.exchange(true))
+        X4VR_LOG("ffx: a FidelityFX pipeline's layout was never seen created — "
+                 "its sets get no twins and its dispatches stay one-eyed");
+}
+
+void ffx_forget_pipeline(VkPipeline p) {
+    std::lock_guard<std::mutex> lock(g_ffx_mu);
+    g_ffx_pipes.erase(p);
+}
+
+void ffx_note_sets(const VkDescriptorSetAllocateInfo *ai, const VkDescriptorSet *out) {
+    if (!g_active || !ffx_stereo_enabled() || !ai || !out)
+        return;
+    std::lock_guard<std::mutex> lock(g_ffx_mu);
+    for (uint32_t i = 0; i < ai->descriptorSetCount; i++)
+        g_ffx_sets[out[i]] = FfxSet{ai->pSetLayouts[i], ai->descriptorPool,
+                                    VK_NULL_HANDLE, VK_NULL_HANDLE};
+}
+
+// n == 0: every set of `pool` (reset or destroyed).
+void ffx_forget_sets(DeviceData *d, VkDevice device, VkDescriptorPool pool,
+                     uint32_t n, const VkDescriptorSet *sets) {
+    std::vector<std::pair<VkDescriptorPool, VkDescriptorSet>> free_twins;
+    {
+        std::lock_guard<std::mutex> lock(g_ffx_mu);
+        if (g_ffx_sets.empty())
+            return;
+        auto drop = [&](std::unordered_map<VkDescriptorSet, FfxSet>::iterator it) {
+            if (it->second.twin != VK_NULL_HANDLE)
+                free_twins.push_back({it->second.twin_pool, it->second.twin});
+            return g_ffx_sets.erase(it);
+        };
+        if (n) {
+            for (uint32_t i = 0; i < n; i++) {
+                auto it = g_ffx_sets.find(sets[i]);
+                if (it != g_ffx_sets.end())
+                    drop(it);
+            }
+        } else {
+            for (auto it = g_ffx_sets.begin(); it != g_ffx_sets.end();)
+                it = it->second.pool == pool ? drop(it) : std::next(it);
+        }
+    }
+    for (const auto &t : free_twins)
+        d->FreeDescriptorSets(device, t.first, 1, &t.second);
+}
+
+// Called with g_ffx_mu held. Our own pools, never X4's or FidelityFX's.
+VkDescriptorSet ffx_twin_set_locked(DeviceData *d, VkDevice device, FfxSet &fs) {
+    if (fs.twin != VK_NULL_HANDLE)
+        return fs.twin;
+    static const VkDescriptorPoolSize kSizes[] = {
+        {VK_DESCRIPTOR_TYPE_SAMPLER, 512},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 512},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 4096},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4096},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 256},
+        {VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 256},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1024},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1024},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 512},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 512}};
+    VkDescriptorSetAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &fs.layout;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        if (g_ffx_pools.empty() || attempt == 1) {
+            VkDescriptorPoolCreateInfo pci{};
+            pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            pci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+            pci.maxSets = 512;
+            pci.poolSizeCount = (uint32_t)(sizeof kSizes / sizeof kSizes[0]);
+            pci.pPoolSizes = kSizes;
+            VkDescriptorPool p = VK_NULL_HANDLE;
+            if (d->CreateDescriptorPool(device, &pci, nullptr, &p) != VK_SUCCESS)
+                break;
+            g_ffx_pools.push_back(p);
+        }
+        ai.descriptorPool = g_ffx_pools.back();
+        VkDescriptorSet t = VK_NULL_HANDLE;
+        if (d->AllocateDescriptorSets(device, &ai, &t) == VK_SUCCESS) {
+            fs.twin = t;
+            fs.twin_pool = ai.descriptorPool;
+            ++g_ffx_twin_sets;
+            return t;
+        }
+    }
+    if (++g_ffx_set_failed == 1)
+        X4VR_LOG("ffx: a twin descriptor set could not be allocated — that "
+                 "FidelityFX pass stays one-eyed");
+    return VK_NULL_HANDLE;
+}
+
+VkImage ffx_twin_of(VkImage img) {
+    if (!g_ffx_twins.load(std::memory_order_relaxed))
+        return VK_NULL_HANDLE;
+    std::lock_guard<std::mutex> lock(g_ffx_mu);
+    auto it = g_ffx_twin.find(img);
+    return it == g_ffx_twin.end() ? VK_NULL_HANDLE : it->second.image;
+}
+
+VkImage ffx_view_image(VkImageView v) {
+    std::lock_guard<std::mutex> lock(g_img_mu);
+    auto it = g_views.find(v);
+    return it == g_views.end() ? VK_NULL_HANDLE : it->second.image;
+}
+
+// The right eye's view for one of FidelityFX's: see FfxView.
+VkImageView ffx_right_view(DeviceData *d, VkDevice device, VkImageView v) {
+    if (v == VK_NULL_HANDLE)
+        return v;
+    ViewInfo vi{};
+    bool doubled = false;
+    {
+        std::lock_guard<std::mutex> lock(g_img_mu);
+        auto it = g_views.find(v);
+        if (it == g_views.end())
+            return v;
+        vi = it->second;
+        auto im = g_images.find(vi.image);
+        if (im == g_images.end())
+            return v;
+        doubled = im->second.doubled;
+    }
+    VkImage twin = VK_NULL_HANDLE;
+    {
+        std::lock_guard<std::mutex> lock(g_ffx_mu);
+        auto c = g_ffx_views.find(v);
+        if (c != g_ffx_views.end() && c->second.image == vi.image)
+            return c->second.view;
+        auto t = g_ffx_twin.find(vi.image);
+        if (t != g_ffx_twin.end() && g_ffx_written.count(vi.image))
+            twin = t->second.image;
+    }
+    VkImageViewCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    ci.image = vi.image;
+    ci.viewType = vi.type;
+    ci.format = vi.format;
+    ci.components = vi.components;
+    ci.subresourceRange = vi.range;
+    bool make = false;
+    if (doubled) {
+        // Layer 1, unless X4 never draws it (an image written by unmasked
+        // passes only keeps both eyes on layer 0, as the mirror does).
+        const bool one = vi.range.baseArrayLayer == 0 &&
+                         (vi.range.layerCount == 1 ||
+                          vi.range.layerCount == VK_REMAINING_ARRAY_LAYERS);
+        if (one && layer1_state(v, nullptr) != Layer1State::Shared) {
+            ci.subresourceRange.baseArrayLayer = 1;
+            ci.subresourceRange.layerCount = 1;
+            make = true;
+        }
+    } else if (twin != VK_NULL_HANDLE) {
+        ci.image = twin;
+        make = true;
+    }
+    VkImageView out = v;
+    if (make && d->CreateImageView(device, &ci, nullptr, &out) != VK_SUCCESS) {
+        out = v;
+        make = false;
+    }
+    (make ? (doubled ? g_ffx_view_l1 : g_ffx_view_twin) : g_ffx_view_kept)++;
+    std::lock_guard<std::mutex> lock(g_ffx_mu);
+    g_ffx_views[v] = FfxView{out, vi.image, make};
+    return out;
+}
+
+void ffx_forget_view(DeviceData *d, VkDevice device, VkImageView v) {
+    VkImageView ours = VK_NULL_HANDLE;
+    {
+        std::lock_guard<std::mutex> lock(g_ffx_mu);
+        auto it = g_ffx_views.find(v);
+        if (it == g_ffx_views.end())
+            return;
+        if (it->second.ours)
+            ours = it->second.view;
+        g_ffx_views.erase(it);
+    }
+    if (ours != VK_NULL_HANDLE)
+        d->DestroyImageView(device, ours, nullptr);
+}
+
+// The twin: same create info (and format list), its own memory, made at
+// creation so it sees the original's first barrier. Single-layer 2D storage
+// images only; in take 380 (no FidelityFX) X4 created none (its storage
+// images are cube maps), in take 381 every one was FidelityFX's.
+void ffx_note_image(DeviceData *d, VkDevice device, const VkImageCreateInfo *ci,
+                    VkImage img, bool doubled, uint32_t serial) {
+    if (!g_active || !ffx_stereo_enabled() || doubled || !ci)
+        return;
+    if (ci->imageType != VK_IMAGE_TYPE_2D || ci->arrayLayers != 1 ||
+        ci->samples != VK_SAMPLE_COUNT_1_BIT || ci->extent.depth != 1 ||
+        !(ci->usage & VK_IMAGE_USAGE_STORAGE_BIT) ||
+        (ci->flags & (VK_IMAGE_CREATE_SPARSE_BINDING_BIT |
+                      VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT |
+                      VK_IMAGE_CREATE_ALIAS_BIT | VK_IMAGE_CREATE_DISJOINT_BIT)))
+        return;
+    VkImageCreateInfo tci = *ci;
+    tci.pNext = nullptr;
+    VkImageFormatListCreateInfo fl{};
+    for (const VkBaseInStructure *p = (const VkBaseInStructure *)ci->pNext; p;
+         p = p->pNext)
+        if (p->sType == VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO) {
+            fl = *(const VkImageFormatListCreateInfo *)p;
+            fl.pNext = nullptr;
+            tci.pNext = &fl;
+        }
+    VkImage t = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    VkMemoryRequirements req{};
+    bool ok = d->CreateImage(device, &tci, nullptr, &t) == VK_SUCCESS;
+    if (ok) {
+        d->GetImageMemoryRequirements(device, t, &req);
+        uint32_t type = UINT32_MAX;
+        for (uint32_t i = 0; i < d->memprops.memoryTypeCount; i++)
+            if ((req.memoryTypeBits & (1u << i)) &&
+                (d->memprops.memoryTypes[i].propertyFlags &
+                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+                type = i;
+                break;
+            }
+        VkMemoryAllocateInfo mai{};
+        mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        mai.allocationSize = req.size;
+        mai.memoryTypeIndex = type;
+        ok = type != UINT32_MAX &&
+             d->AllocateMemory(device, &mai, nullptr, &mem) == VK_SUCCESS &&
+             d->BindImageMemory(device, t, mem, 0) == VK_SUCCESS;
+    }
+    if (!ok) {
+        if (t != VK_NULL_HANDLE)
+            d->DestroyImage(device, t, nullptr);
+        if (mem != VK_NULL_HANDLE)
+            d->FreeMemory(device, mem, nullptr);
+        if (++g_ffx_twin_failed <= 3)
+            X4VR_LOG("ffx: img #%u %ux%u fmt=%u: the right-eye copy could NOT be "
+                     "made — a FidelityFX pass writing it shares it between eyes",
+                     serial, ci->extent.width, ci->extent.height, ci->format);
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_ffx_mu);
+        g_ffx_twin[img] = FfxTwin{t, mem};
+    }
+    const uint64_t n = ++g_ffx_twins;
+    const uint64_t total = g_ffx_twin_bytes += req.size;
+    X4VR_LOG("ffx: img #%u %ux%u mips=%u fmt=%u usage=0x%x: a right-eye copy "
+             "(%.1f MiB; %llu so far, %.1f MiB)",
+             serial, ci->extent.width, ci->extent.height, ci->mipLevels,
+             ci->format, ci->usage, req.size / 1048576.0, (unsigned long long)n,
+             total / 1048576.0);
+}
+
+void ffx_forget_image(DeviceData *d, VkDevice device, VkImage img) {
+    FfxTwin tw{};
+    std::vector<VkImageView> views;
+    {
+        std::lock_guard<std::mutex> lock(g_ffx_mu);
+        g_ffx_written.erase(img);
+        auto it = g_ffx_twin.find(img);
+        if (it != g_ffx_twin.end()) {
+            tw = it->second;
+            g_ffx_twin.erase(it);
+        }
+        // Views X4 or FidelityFX did not destroy first.
+        for (auto v = g_ffx_views.begin(); v != g_ffx_views.end();) {
+            if (v->second.image == img) {
+                if (v->second.ours)
+                    views.push_back(v->second.view);
+                v = g_ffx_views.erase(v);
+            } else {
+                ++v;
+            }
+        }
+    }
+    for (VkImageView v : views)
+        d->DestroyImageView(device, v, nullptr);
+    if (tw.image != VK_NULL_HANDLE) {
+        d->DestroyImage(device, tw.image, nullptr);
+        d->FreeMemory(device, tw.mem, nullptr);
+    }
+}
+
+// Every write into a FidelityFX set is repeated into its twin, with the right
+// eye's views. Copies into one are repeated twin to twin (counted: FidelityFX
+// was not seen to copy).
+void ffx_mirror_writes(DeviceData *d, VkDevice device, uint32_t n,
+                       const VkWriteDescriptorSet *w, uint32_t nc,
+                       const VkCopyDescriptorSet *c) {
+    if (!g_active || !ffx_stereo_enabled())
+        return;
+    std::vector<uint32_t> idx;
+    std::vector<uint32_t> cidx;
+    {
+        std::lock_guard<std::mutex> lock(g_ffx_mu);
+        if (g_ffx_layouts.empty())
+            return;
+        auto is_ffx = [](VkDescriptorSet s) {
+            auto it = g_ffx_sets.find(s);
+            return it != g_ffx_sets.end() && g_ffx_layouts.count(it->second.layout);
+        };
+        for (uint32_t i = 0; i < n; i++)
+            if (is_ffx(w[i].dstSet))
+                idx.push_back(i);
+        for (uint32_t i = 0; i < nc; i++)
+            if (is_ffx(c[i].dstSet))
+                cidx.push_back(i);
+    }
+    if (idx.empty() && cidx.empty())
+        return;
+    // Storage first: an image written in this batch is written for the
+    // right eye even when a read of it comes earlier in the batch.
+    for (uint32_t i : idx)
+        if (w[i].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE && w[i].pImageInfo)
+            for (uint32_t j = 0; j < w[i].descriptorCount; j++) {
+                const VkImage im = ffx_view_image(w[i].pImageInfo[j].imageView);
+                if (im == VK_NULL_HANDLE)
+                    continue;
+                std::lock_guard<std::mutex> lock(g_ffx_mu);
+                g_ffx_written.insert(im);
+            }
+    std::vector<VkWriteDescriptorSet> tw;
+    std::vector<std::vector<VkDescriptorImageInfo>> infos;
+    infos.reserve(idx.size());
+    for (uint32_t i : idx) {
+        VkDescriptorSet twin;
+        {
+            std::lock_guard<std::mutex> lock(g_ffx_mu);
+            twin = ffx_twin_set_locked(d, device, g_ffx_sets[w[i].dstSet]);
+        }
+        if (twin == VK_NULL_HANDLE)
+            continue;
+        VkWriteDescriptorSet x = w[i];
+        x.dstSet = twin;
+        const VkDescriptorType t = x.descriptorType;
+        if (x.pImageInfo && (t == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE ||
+                             t == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE ||
+                             t == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)) {
+            infos.emplace_back(x.pImageInfo, x.pImageInfo + x.descriptorCount);
+            for (auto &ii : infos.back())
+                ii.imageView = ffx_right_view(d, device, ii.imageView);
+            x.pImageInfo = infos.back().data();
+        }
+        tw.push_back(x);
+    }
+    std::vector<VkCopyDescriptorSet> tc;
+    {
+        std::lock_guard<std::mutex> lock(g_ffx_mu);
+        for (uint32_t i : cidx) {
+            VkCopyDescriptorSet x = c[i];
+            x.dstSet = ffx_twin_set_locked(d, device, g_ffx_sets[c[i].dstSet]);
+            auto s = g_ffx_sets.find(c[i].srcSet);
+            if (s != g_ffx_sets.end() && s->second.twin != VK_NULL_HANDLE)
+                x.srcSet = s->second.twin;
+            if (x.dstSet != VK_NULL_HANDLE)
+                tc.push_back(x);
+        }
+    }
+    g_ffx_copy_writes += tc.size();
+    if (!tw.empty() || !tc.empty())
+        d->UpdateDescriptorSets(device, (uint32_t)tw.size(), tw.data(),
+                                (uint32_t)tc.size(), tc.data());
+}
+
+void ffx_bind_pipeline(VkCommandBuffer cb, VkPipelineBindPoint bp, VkPipeline p) {
+    if (bp != VK_PIPELINE_BIND_POINT_COMPUTE || !g_active || !ffx_stereo_enabled())
+        return;
+    std::lock_guard<std::mutex> lock(g_ffx_mu);
+    FfxCb &c = g_ffx_cb[cb];
+    c.ffx = g_ffx_pipes.count(p) != 0;
+    c.binds.clear();
+}
+
+void ffx_bind_sets(VkCommandBuffer cb, VkPipelineBindPoint bp,
+                   VkPipelineLayout layout, uint32_t first, uint32_t n,
+                   const VkDescriptorSet *sets, uint32_t dc, const uint32_t *dyn) {
+    if (bp != VK_PIPELINE_BIND_POINT_COMPUTE || !g_active || !ffx_stereo_enabled())
+        return;
+    std::lock_guard<std::mutex> lock(g_ffx_mu);
+    auto it = g_ffx_cb.find(cb);
+    if (it == g_ffx_cb.end() || !it->second.ffx)
+        return;
+    auto &b = it->second.binds;
+    if (b.size() >= 8)
+        b.erase(b.begin());
+    b.push_back(FfxBind{layout, first, std::vector<VkDescriptorSet>(sets, sets + n),
+                        std::vector<uint32_t>(dyn, dyn + dc)});
+}
+
+bool ffx_cb_bound(VkCommandBuffer cb) {
+    if (!g_active || !ffx_stereo_enabled())
+        return false;
+    std::lock_guard<std::mutex> lock(g_ffx_mu);
+    auto it = g_ffx_cb.find(cb);
+    return it != g_ffx_cb.end() && it->second.ffx;
+}
+
+// After X4's (FidelityFX's) dispatch: the same dispatch again with every
+// FidelityFX set swapped for its twin, then the app's sets bound back. The
+// two dispatches touch disjoint images (layer 0 / layer 1, original / twin),
+// so no barrier is needed between them.
+void ffx_dispatch_right(DeviceData *d, VkCommandBuffer cb, uint32_t x, uint32_t y,
+                        uint32_t z) {
+    if (!g_active || !ffx_stereo_enabled())
+        return;
+    std::vector<FfxBind> binds;
+    std::vector<std::vector<VkDescriptorSet>> twins;
+    bool missing = false;
+    {
+        std::lock_guard<std::mutex> lock(g_ffx_mu);
+        auto it = g_ffx_cb.find(cb);
+        if (it == g_ffx_cb.end() || !it->second.ffx)
+            return;
+        binds = it->second.binds;
+        for (const auto &b : binds) {
+            twins.emplace_back();
+            for (VkDescriptorSet s : b.sets) {
+                auto f = g_ffx_sets.find(s);
+                const bool ffx_set =
+                    f != g_ffx_sets.end() && g_ffx_layouts.count(f->second.layout);
+                if (ffx_set && f->second.twin == VK_NULL_HANDLE)
+                    missing = true;
+                twins.back().push_back(ffx_set ? f->second.twin : s);
+            }
+        }
+    }
+    if (binds.empty() || missing) {
+        if (++g_ffx_unpaired == 1)
+            X4VR_LOG("ffx: a FidelityFX dispatch %s — left one-eyed",
+                     binds.empty() ? "with no descriptor sets bound since its "
+                                     "pipeline"
+                                   : "whose set has no twin (never written "
+                                     "through vkUpdateDescriptorSets)");
+        return;
+    }
+    for (size_t k = 0; k < binds.size(); k++)
+        d->CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, binds[k].layout,
+                                 binds[k].first, (uint32_t)twins[k].size(),
+                                 twins[k].data(), (uint32_t)binds[k].dyn.size(),
+                                 binds[k].dyn.data());
+    d->CmdDispatch(cb, x, y, z);
+    for (const auto &b : binds)
+        d->CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, b.layout,
+                                 b.first, (uint32_t)b.sets.size(), b.sets.data(),
+                                 (uint32_t)b.dyn.size(), b.dyn.data());
+    const uint64_t n = ++g_ffx_doubled;
+    if (n == 1 || n % 10000 == 0)
+        X4VR_LOG("ffx: dispatch %ux%ux%u of a FidelityFX pass run again for the "
+                 "right eye through %zu twin set binding(s) (%llu so far)",
+                 x, y, z, binds.size(), (unsigned long long)n);
+}
+} // namespace
+
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     VkDevice device, const VkShaderModuleCreateInfo *ci,
     const VkAllocationCallbacks *ac, VkShaderModule *out) {
@@ -7003,6 +7723,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     if (r == VK_SUCCESS) {
         record_module(ci, *out);
         complog_module(ci, *out);
+        ffx_note_module(ci, *out);
         if (frag_patched) {
             std::lock_guard<std::mutex> lock(g_mod_mu);
             g_mod_frag_patched.insert(*out);
@@ -7044,6 +7765,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyShaderModule(
         g_fsr_modules.erase(mod);
     }
     complog_forget_module(mod);
+    ffx_forget_module(mod);
     if (twin != VK_NULL_HANDLE)
         d->DestroyShaderModule(device, twin, ac);
     d->DestroyShaderModule(device, mod, ac);
@@ -7596,6 +8318,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreatePipelineLayout(
         d = &g_devices.at(dispatch_key(device));
     }
     const VkResult r = d->CreatePipelineLayout(device, ci, ac, out);
+    if (r == VK_SUCCESS)
+        ffx_note_pipeline_layout(ci, *out);
     if (r != VK_SUCCESS || !pose_wanted() || !g_active)
         return r;
     if (!pose_init(d, device))
@@ -7905,6 +8629,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
     // head rotation is EYE-INDEPENDENT -- unlike every per-eye correction it
     // is not blocked by compute having no gl_ViewIndex -- and the froxel
     // volume is filled by compute.
+    const VkComputePipelineCreateInfo *ci_app = ci;
     std::vector<VkComputePipelineCreateInfo> csubs;
     if (pose_active()) {
         std::lock_guard<std::mutex> lock(g_pose.mu);
@@ -7927,8 +8652,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
             if (out[i] != VK_NULL_HANDLE)
                 g_pose.pipe_layout[out[i]] = ci[i].layout;
     }
-    if (r == VK_SUCCESS)
+    if (r == VK_SUCCESS) {
         complog_pipelines(count, ci, out);
+        ffx_note_pipelines(count, ci_app, out);
+    }
     if (r == VK_SUCCESS && fsr_stereo_enabled()) {
         std::lock_guard<std::mutex> lock(g_fsr_mu);
         for (uint32_t i = 0; i < count; i++)
@@ -7975,6 +8702,15 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatch(VkCommandBuffer cb, uint32_t x,
     note_dispatch(cb);
     complog_dispatch(cb, x, y, z, "direct");
     d->CmdDispatch(cb, x, y, fsr_dispatch_z(cb, x, y, z));
+    ffx_dispatch_right(d, cb, x, y, z);
+}
+
+// FidelityFX was seen dispatching directly only (take 381). An indirect or
+// based dispatch of one of its pipelines is not repeated, and is counted.
+static void ffx_note_unrepeated(VkCommandBuffer cb) {
+    if (ffx_cb_bound(cb) && ++g_ffx_indirect == 1)
+        X4VR_LOG("ffx: a FidelityFX pass dispatched indirectly or with a base — "
+                 "NOT run again for the right eye");
 }
 
 VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatchIndirect(VkCommandBuffer cb,
@@ -7987,6 +8723,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatchIndirect(VkCommandBuffer cb,
     }
     note_dispatch(cb);
     complog_dispatch(cb, 0, 0, 0, "indirect");
+    ffx_note_unrepeated(cb);
     d->CmdDispatchIndirect(cb, buf, off);
 }
 
@@ -8001,6 +8738,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatchBase(VkCommandBuffer cb, uint32_t bx,
     }
     note_dispatch(cb);
     complog_dispatch(cb, x, y, z, "base");
+    ffx_note_unrepeated(cb);
     d->CmdDispatchBase(cb, bx, by, bz, x, y, z);
 }
 
@@ -8465,6 +9203,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyPipeline(
         g_fsr_pipes.erase(p);
     }
     complog_forget_pipeline(p);
+    ffx_forget_pipeline(p);
     VkPipeline twin = VK_NULL_HANDLE;
     {
         std::lock_guard<std::mutex> lock(g_cb_mu);
@@ -10505,6 +11244,9 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdCopyImage(
     if (w < n)
         note_layer0_only(dst, "vkCmdCopyImage");
     note_transfer(src, dst, "vkCmdCopyImage", n, w);
+    if ((ffx_twin_of(src) || ffx_twin_of(dst)) && ++g_ffx_copies == 1)
+        X4VR_LOG("ffx: vkCmdCopyImage touches an image with a right-eye copy — "
+                 "NOT repeated on the copy");
     d->CmdCopyImage(cb, src, sl, dst, dl, n, w ? mod.data() : regions);
 }
 
@@ -10580,6 +11322,11 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdClearColorImage(
     if (w < n)
         note_layer0_only(img, "vkCmdClearColorImage");
     d->CmdClearColorImage(cb, img, l, colour, n, w ? mod.data() : ranges);
+    // FSR 3: the right eye's copy is cleared with it (FidelityFX's reset).
+    if (const VkImage t = ffx_twin_of(img)) {
+        d->CmdClearColorImage(cb, t, l, colour, n, ranges);
+        ++g_ffx_clears;
+    }
 }
 
 // The paths the transfer fix missed. Two kinds, and they need opposite
@@ -12510,6 +13257,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
         g_comp_bound[cb] = p;
     }
     complog_bind_pipeline(cb, bp, p);
+    ffx_bind_pipeline(cb, bp, p);
     if (bp == VK_PIPELINE_BIND_POINT_COMPUTE && g_active && fsr_stereo_enabled()) {
         std::lock_guard<std::mutex> lock(g_fsr_mu);
         g_fsr_cb[cb] = g_fsr_pipes.count(p) != 0;
@@ -12574,7 +13322,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdPipelineBarrier(
     // must follow layer 0's layout. X4 names layer 0 only; widened here, for
     // those images alone. Render-pass images are left as they were.
     std::vector<VkImageMemoryBarrier> wide_ib;
-    if (g_mv && g_active && ibc && fsr_stereo_enabled()) {
+    if (g_mv && g_active && ibc && (fsr_stereo_enabled() || ffx_stereo_enabled())) {
         for (uint32_t i = 0; i < ibc; i++) {
             const VkImageSubresourceRange &r = ib[i].subresourceRange;
             if (r.baseArrayLayer != 0 || r.layerCount != 1 ||
@@ -12592,8 +13340,22 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdPipelineBarrier(
                          "left's layout)");
         }
     }
-    d->CmdPipelineBarrier(cb, src, dst, flags, mbc, mb, bbc, bb, ibc,
-                          wide_ib.empty() ? ib : wide_ib.data());
+    // FSR 3: every barrier on an image with a right-eye copy is repeated on
+    // the copy, so the copy follows the original's layouts from its first one.
+    const VkImageMemoryBarrier *use = wide_ib.empty() ? ib : wide_ib.data();
+    std::vector<VkImageMemoryBarrier> twin_ib;
+    if (ibc && g_ffx_twins.load(std::memory_order_relaxed))
+        for (uint32_t i = 0; i < ibc; i++)
+            if (const VkImage t = ffx_twin_of(use[i].image)) {
+                if (twin_ib.empty())
+                    twin_ib.assign(use, use + ibc);
+                twin_ib.push_back(use[i]);
+                twin_ib.back().image = t;
+                ++g_ffx_barriers;
+            }
+    d->CmdPipelineBarrier(cb, src, dst, flags, mbc, mb, bbc, bb,
+                          twin_ib.empty() ? ibc : (uint32_t)twin_ib.size(),
+                          twin_ib.empty() ? use : twin_ib.data());
 }
 
 // Task #38, defined with the rest of the VR section further down. Declared
@@ -15765,6 +16527,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(DestroyPipelineLayout);
     RESOLVE(CreateDescriptorPool);
     RESOLVE(DestroyDescriptorPool);
+    RESOLVE(FreeDescriptorSets);
+    RESOLVE(ResetDescriptorPool);
     RESOLVE(DestroyDescriptorSetLayout);
     RESOLVE(DestroyImageView);
     RESOLVE(CreateRenderPass2);
@@ -16116,6 +16880,11 @@ const NameFunc kHooks[] = {
      (PFN_vkVoidFunction)x4vr_CreateDescriptorSetLayout},
     {"vkAllocateDescriptorSets",
      (PFN_vkVoidFunction)x4vr_AllocateDescriptorSets},
+    {"vkFreeDescriptorSets", (PFN_vkVoidFunction)x4vr_FreeDescriptorSets},
+    {"vkResetDescriptorPool", (PFN_vkVoidFunction)x4vr_ResetDescriptorPool},
+    {"vkDestroyDescriptorPool", (PFN_vkVoidFunction)x4vr_DestroyDescriptorPool},
+    {"vkDestroyDescriptorSetLayout",
+     (PFN_vkVoidFunction)x4vr_DestroyDescriptorSetLayout},
     {"vkDestroyImageView", (PFN_vkVoidFunction)x4vr_DestroyImageView},
     {"vkCreateRenderPass2", (PFN_vkVoidFunction)x4vr_CreateRenderPass2},
     {"vkDestroyRenderPass", (PFN_vkVoidFunction)x4vr_DestroyRenderPass},

@@ -1733,5 +1733,50 @@ else
     ok "fsr: an FSR 3 run, no FSR 1 pass -> no FAIL"
 fi
 
+# FSR 3 in both eyes: AMD FidelityFX (take 382).
+for f in '"ffx: module (%zu bytes, writes%s%s) is a FidelityFX pass — its "' '"ffx: img #%u %ux%u mips=%u fmt=%u usage=0x%x: a right-eye copy "' '"(%.1f MiB; %llu so far, %.1f MiB)",' '"ffx: dispatch %ux%ux%u of a FidelityFX pass run again for the "' '"right eye through %zu twin set binding(s) (%llu so far)",' '"ffx %s: FSR 3 in both eyes %s — %llu FidelityFX module(s), %llu "' '"ffx: a FidelityFX dispatch %s — left one-eyed",'; do
+    if grep -qF "$f" layer/x4vr_layer.cpp; then
+        ok "ffx: the layer still prints $f"
+    else
+        bad "ffx: the layer's format moved: $f"
+    fi
+done
+sed 's/env: run = /env: run = X4VR_UPSCALE=fsr3_balanced /' "$BASE" > /tmp/census-f3-base.log
+f3a='[  999960.000] layer   ffx first present: FSR 3 in both eyes armed — 0 FidelityFX module(s), 0 pipeline(s); 0 right-eye image copies (0.0 MiB), 0 failed; 0 twin set(s), 0 failed; 0 dispatch(es) run again for the right eye, 0 left one-eyed, 0 indirect not repeated; views: 0 layer 1, 0 copy, 0 kept; 0 barrier(s) and 0 clear(s) repeated on copies; 0 image copy command(s) touching a copy NOT repeated; 0 descriptor copies repeated'
+f3o='[  999960.000] layer   ffx first present: FSR 3 in both eyes OFF (needs X4VR_MV and the bindless mirror) — 0 FidelityFX module(s), 0 pipeline(s); 0 right-eye image copies (0.0 MiB), 0 failed; 0 twin set(s), 0 failed; 0 dispatch(es) run again for the right eye, 0 left one-eyed, 0 indirect not repeated; views: 0 layer 1, 0 copy, 0 kept; 0 barrier(s) and 0 clear(s) repeated on copies; 0 image copy command(s) touching a copy NOT repeated; 0 descriptor copies repeated'
+f3k='[  999960.000] layer   ffx first present: FSR 3 in both eyes OFF (X4VR_FFX_STEREO=0) — 0 FidelityFX module(s), 0 pipeline(s); 0 right-eye image copies (0.0 MiB), 0 failed; 0 twin set(s), 0 failed; 0 dispatch(es) run again for the right eye, 0 left one-eyed, 0 indirect not repeated; views: 0 layer 1, 0 copy, 0 kept; 0 barrier(s) and 0 clear(s) repeated on copies; 0 image copy command(s) touching a copy NOT repeated; 0 descriptor copies repeated'
+f3m1='[  999961.000] layer   ffx: module (7316 bytes, writes rw_dilated_motion_vectors rw_dilated_depth rw_reconstructed_previous_nearest_depth …) is a FidelityFX pass — its dispatches run again for the right eye (1 so far)'
+f3m2='[  999961.001] layer   ffx: module (18988 bytes, writes rw_upscaled_output) is a FidelityFX pass — its dispatches run again for the right eye (2 so far)'
+f3t='[  999961.002] layer   ffx: img #94 1x1 mips=1 fmt=98 usage=0xf: a right-eye copy (0.0 MiB; 1 so far, 0.0 MiB)'
+f3t2='[  999961.003] layer   ffx: img #88 4224x4224 mips=1 fmt=97 usage=0x1f: a right-eye copy (136.1 MiB; 2 so far, 136.1 MiB)'
+f3d='[  999962.000] layer   ffx: dispatch 311x311x1 of a FidelityFX pass run again for the right eye through 1 twin set binding(s) (20000 so far)'
+f3u='[  999962.001] layer   ffx: a FidelityFX dispatch whose set has no twin (never written through vkUpdateDescriptorSets) — left one-eyed'
+{ cat /tmp/census-f3-base.log; printf '%s\n' "$f3a" "$f3m1" "$f3m2" "$f3t" "$f3t2" "$f3d"; } > /tmp/census-f3-ok.log
+want "ffx: armed" /tmp/census-f3-ok.log "ffx " "FSR 3 in both eyes: armed"
+want "ffx: summarised" /tmp/census-f3-ok.log "ffx " "2 FidelityFX module(s); 2 right-eye image copies (136.1 MiB in all); dispatches run again for the right eye: 20000+"
+if python3 tools/score_run.py /tmp/census-f3-ok.log 2>&1 | grep -qE "^  - .*(FSR 3|FidelityFX|fsr3)"; then
+    bad "ffx: modules, copies, dispatches run again -> FAILs"
+else
+    ok "ffx: modules, copies, dispatches run again -> no FAIL"
+fi
+{ cat /tmp/census-f3-base.log; printf '%s\n' "$f3a"; } > /tmp/census-f3-none.log
+want "ffx: armed, no module -> FAIL" /tmp/census-f3-none.log "FAIL|  - " "X4VR_UPSCALE=fsr3_balanced but no FidelityFX module was recognised"
+{ cat /tmp/census-f3-base.log; printf '%s\n' "$f3a" "$f3m1" "$f3m2"; } > /tmp/census-f3-norun.log
+want "ffx: modules, nothing run again -> FAIL" /tmp/census-f3-norun.log "FAIL|  - " "FidelityFX modules recognised but no dispatch ran again for the right eye"
+{ cat /tmp/census-f3-base.log; printf '%s\n' "$f3a" "$f3m1" "$f3d" "$f3u"; } > /tmp/census-f3-unp.log
+want "ffx: a pass left one-eyed -> FAIL" /tmp/census-f3-unp.log "FAIL|  - " "FSR 3: a FidelityFX dispatch whose set has no twin"
+want "ffx: ...and named" /tmp/census-f3-unp.log "ffx " "a FidelityFX dispatch whose set has no twin (never written through vkUpdateDescriptorSets) — left one-eyed"
+{ cat /tmp/census-f3-base.log; printf '%s\n' "$f3o"; } > /tmp/census-f3-off.log
+want "ffx: off for want of the mirror -> FAIL" /tmp/census-f3-off.log "FAIL|  - " "the FSR 3 fix is OFF (needs X4VR_MV and the bindless mirror)"
+sed 's/env: run = /env: run = X4VR_FFX_STEREO=0 /' /tmp/census-f3-base.log > /tmp/census-f3-knob.log
+printf '%s\n' "$f3k" >> /tmp/census-f3-knob.log
+if python3 tools/score_run.py /tmp/census-f3-knob.log 2>&1 | grep -qE "^  - .*(FSR 3|FidelityFX|fsr3)"; then
+    bad "ffx: knob off on purpose -> FAILs"
+else
+    ok "ffx: knob off on purpose -> no FAIL"
+fi
+want "ffx: a log from before the fix -> not checked" /tmp/census-f3-base.log "ffx " "not checked: X4VR_UPSCALE=fsr3_balanced, but this log predates the FSR 3 fix"
+absent "ffx: not asked, no lines -> silent" "$BASE" "ffx "
+
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail
