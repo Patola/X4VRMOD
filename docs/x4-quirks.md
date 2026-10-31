@@ -29410,3 +29410,26 @@ notifications this take.
 * **P385.3 (Patola's eye):** no difference in play from v0.9.8's command
   line. That covers head-look, lean, the HUD clicks, the map, F2/F4 and
   walking.
+
+## Take 385 — SCORED PASS (2026-10-31): Phase 0 accepted
+
+Patola: "Done. All working." The command was only `X4VR_TAKE=385
+X4VR_LOG=/tmp/x4vr-take385.log ./launch/x4vr-launch.sh`.
+
+* **P385.1 — held.** `env: defaults: 47 from launch/defaults.conf`; the
+  upscaler was `none`, chosen by the eye size (2816).
+* **P385.2 — held after a scorer fix.** GAMEPLAY 11.79 ms (85 fps) over 95
+  windows and 713 s; take 375 had 11.67 ms. The first scoring FAILed on
+  "csmfit: no camuj reading under a FIX report — X4VR_CAMDIFF=1 missing?".
+  The shadow fix is a default now and X4VR_CAMDIFF (an instrument) is not,
+  so a play run has no readings by design. That was the acceptance rule
+  failing a healthy run, again. The check now judges only when X4VR_CAMDIFF
+  is asked, with census cases both ways.
+* **P385.3 — held.**
+* **Seen in the log, not reported by Patola.** Moving from one full-screen
+  menu to another while the game is paused, X4 has no full-screen menu up
+  for one tick (~26 ms). The Pause-key logic labels that tick "the cockpit"
+  and then "PAUSED" again. The HUD stays down between menus, so head-look
+  does not act; the flip is in the labels only. That is why the scorer's
+  `pause` block counted 38 Pause-key and 29 ESC pauses. A ~0.1 s hold before
+  a paused, menu-less state counts would remove it.

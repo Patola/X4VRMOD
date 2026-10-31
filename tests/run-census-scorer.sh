@@ -1733,6 +1733,24 @@ else
     ok "fsr: an FSR 3 run, no FSR 1 pass -> no FAIL"
 fi
 
+# Phase 0 (take 385): the shadow fix is a default, X4VR_CAMDIFF an
+# instrument. FIX always, no camuj readings: not judged without the
+# instrument, FAIL with it.
+cfp0='[  999960.000] inject  csmfit: PATCHED — the cascade fit'"'"'s 4 reads of X4'"'"'s aspect (0x4533b00/04) now read 0x3f0000/0x3f0004; coverage 0.663, FIX always'
+cfr0='[  999961.000] inject  csmfit: phase 1 FIX | field 1.91982 aspect 1.0000/1.0000 | divisors 1.00000/1.00000 | coverage 0.663 | predicted cascade-0 sx 0.22954 (r 2.118 m, far 3.060) | ticks FIX 1 CONTROL 0'
+# The base's run line carries X4VR_CAMDIFF=1: removed for the play run.
+sed -e 's/env: run = /env: run = X4VR_CSM_COVER=0.663 /' -e 's/ X4VR_CAMDIFF=1//' \
+    "$BASE" > /tmp/census-cf0.log
+printf '%s\n' "$cfp0" "$cfr0" >> /tmp/census-cf0.log
+want "csmfit without X4VR_CAMDIFF -> not judged" /tmp/census-cf0.log "csmfit FIX" "not judged — X4VR_CAMDIFF is off"
+if python3 tools/score_run.py /tmp/census-cf0.log 2>&1 | grep -qE "^(FAIL|  -) +csmfit"; then
+    bad "csmfit without X4VR_CAMDIFF -> FAILs"
+else
+    ok "csmfit without X4VR_CAMDIFF -> no FAIL"
+fi
+sed 's/env: run = /env: run = X4VR_CAMDIFF=1 /' /tmp/census-cf0.log > /tmp/census-cf1.log
+want "csmfit with X4VR_CAMDIFF, no reading -> FAIL" /tmp/census-cf1.log "FAIL|  - " "csmfit: no camuj reading under a FIX report"
+
 # The shipping line as defaults (Phase 0, take 385).
 for f in '"env: defaults: %zu from launch/defaults.conf%s%s"' '"env: X4VR_UPSCALE=%s chosen by the eye size (X4VR_H=%s; "'; do
     if grep -qF "$f" injector/x4vr_inject.cpp; then

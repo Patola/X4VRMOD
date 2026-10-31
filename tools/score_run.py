@@ -4326,9 +4326,18 @@ def main(path):
             expected = cf_patched and (cf_ab or arm == "FIX")
             if not rows:
                 if expected and (cf_start or not cf_ab):
-                    print(f"csmfit {arm}: no camuj reading under a {arm} report")
-                    fails.append(f"csmfit: no camuj reading under a {arm} "
-                                 f"report — X4VR_CAMDIFF=1 missing?")
+                    # The readings come from X4VR_CAMDIFF, an instrument. Since
+                    # Phase 0 (take 385) the shadow fix is a default and the
+                    # instrument is not, so a play run has no readings by
+                    # design: not judged rather than failed.
+                    if re.search(r"\bX4VR_CAMDIFF=1\b", run or ""):
+                        print(f"csmfit {arm}: no camuj reading under a {arm} "
+                              f"report")
+                        fails.append(f"csmfit: no camuj reading under a {arm} "
+                                     f"report — the camera blocks were not read")
+                    else:
+                        print(f"csmfit {arm}: not judged — X4VR_CAMDIFF is off "
+                              f"(an instrument), so no camuj readings")
                 continue
             ms = sorted(v for v, _p, _c in rows)
             ps = sorted(p for _v, p, _c in rows)

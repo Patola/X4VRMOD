@@ -1081,3 +1081,15 @@ Patola: *"It worked! We have the pause fix and FSR3 implemented."*
 To play without the instruments, drop X4VR_COMPLOG=1 and X4VR_MV_INVENTORY=1.
 For the shipping size, set X4VR_H=2816 X4VR_W=5632 X4VR_RES=2816x2816, and
 choose or drop X4VR_UPSCALE (README, *Resolution and upscaling*).
+
+## Take 385 (2026-10-31) — Phase 0: the shipping line is the default
+
+    X4VR_TAKE=385 X4VR_LOG=/tmp/x4vr-take385.log ./launch/x4vr-launch.sh
+
+That is the whole command, at 2816² per eye, native. launch/defaults.conf
+supplies the other 47 values; the log's `env: run =` line lists them all.
+`score_run.py` PASS (after the csmfit gate fix), GAMEPLAY 11.79 ms (85 fps).
+Patola: *"All working."*
+
+For larger eyes, set X4VR_H alone (e.g. `X4VR_H=4224`, FSR 3 Balanced by
+default).
