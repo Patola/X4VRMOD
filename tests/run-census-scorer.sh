@@ -1601,5 +1601,26 @@ want "uimouse: asked, no PATCHED line -> FAIL" /tmp/census-um-base.log "FAIL|  -
 want "uimouse: patched unasked -> FAIL" /tmp/census-um-unasked.log "FAIL|  - " "the UI-mouse patch acted in a run that did not ask for it"
 absent "uimouse: not asked -> silent" "$BASE" uimouse
 
+# X4VR_MEMLOG: X4's memory path for doubled and large images (take 377).
+for f in '"mem: req %s size=%.1f MiB align=%llu types=0x%x%s"' '"mem: alloc %.1f MiB type %u%s%s -> %s (%d) memory %p"' '"mem: bind %s memory %p offset %.1f MiB -> %s (%d)"'; do
+    if grep -qF "$f" layer/x4vr_layer.cpp; then
+        ok "memlog: the layer still prints $f"
+    else
+        bad "memlog: the layer's format moved: $f"
+    fi
+done
+sed 's/env: run = /env: run = X4VR_MEMLOG=1 /' "$BASE" > /tmp/census-ml-base.log
+mlr1='[  999960.000] layer   mem: req img #12 4224x4149 fmt=97 DOUBLED size=267.5 MiB align=65536 types=0x7ad'
+mla1='[  999960.001] layer   mem: alloc 512.0 MiB type 1 -> ok (0) memory 0x55'
+mlr2='[  999960.002] layer   mem: req img #13 4224x4149 fmt=97 DOUBLED size=267.5 MiB align=65536 types=0x7ad dedicated preferred'
+mla2='[  999960.003] layer   mem: alloc 267.5 MiB type 1, dedicated to img #13 4224x4149 fmt=97 DOUBLED -> FAILED (-2) memory (nil)'
+mlb1='[  999960.004] layer   mem: bind img #12 4224x4149 fmt=97 DOUBLED memory 0x55 offset 0.0 MiB -> ok (0)'
+{ cat /tmp/census-ml-base.log; printf '%s\n' "$mlr1" "$mla1" "$mlr2" "$mla2" "$mlb1"; } > /tmp/census-ml-ok.log
+want "memlog: summarised" /tmp/census-ml-ok.log memlog "2 requirement(s), 2 logged allocation(s), 1 bind(s)"
+want "memlog: the repeated signature counted" /tmp/census-ml-ok.log memlog "2 x 4224x4149 fmt=97 DOUBLED 267.5 MiB  (dedicated preferred in 1)"
+want "memlog: the failed allocation named" /tmp/census-ml-ok.log memlog "FAILED: 1 allocation(s), 0 bind(s) — first: alloc 267.5 MiB type 1 result -2"
+want "memlog: asked, no line -> FAIL" /tmp/census-ml-base.log "FAIL|  - " "X4VR_MEMLOG=1 but no mem: line"
+absent "memlog: not asked -> silent" "$BASE" memlog
+
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

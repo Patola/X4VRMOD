@@ -18,6 +18,7 @@ Exit:   0 all checks pass, 1 a check failed, 2 the log cannot be scored
 import math
 import os
 import bisect
+import collections
 import re
 import sys
 
@@ -5329,6 +5330,53 @@ def main(path):
                  re.match(r"(0)", "0")).group(1)) >= 369:
         fails.append("head-look armed but the pointer was never recentred "
                      "after the load — the cursor starts outside the view")
+
+    # --- X4VR_MEMLOG: X4's memory path for doubled and large images (377) ---
+    #
+    # Read only (layer/x4vr_layer.cpp, X4VR_MEMLOG). Take 376: at 4224² X4
+    # created its map target ~40 times a second and destroyed each at once.
+    # This summarises the requirement, allocation and bind lines: which image
+    # signatures repeat, what the driver says about dedicated allocation, and
+    # every failure. Gate on intent: asked means lines; doubled images exist
+    # from the first frame, so none means the hooks were not handed out.
+    ml_asked = bool(re.search(r"\bX4VR_MEMLOG=1\b", run or ""))
+    ml_req = re.findall(r"mem: req (img (?:#\d+ (\d+x\d+ fmt=\d+(?: DOUBLED)?)|\?)) "
+                        r"size=([\d.]+) MiB align=(\d+) types=(0x[0-9a-f]+)"
+                        r"( dedicated (?:REQUIRED|preferred))?", text)
+    ml_alloc = re.findall(r"mem: alloc ([\d.]+) MiB type (\d+)(?:, dedicated to "
+                          r"(img [^-]*?))? -> (ok|FAILED) \((-?\d+)\)", text)
+    ml_bind = re.findall(r"mem: bind (img .*?) memory \S+ offset ([\d.]+) MiB -> "
+                         r"(ok|FAILED) \((-?\d+)\)", text)
+    if ml_asked or ml_req or ml_alloc or ml_bind:
+        if ml_asked and not (ml_req or ml_alloc or ml_bind):
+            fails.append("X4VR_MEMLOG=1 but no mem: line — the memory hooks "
+                         "were not handed out")
+        sig = collections.Counter()
+        ded = collections.defaultdict(collections.Counter)
+        for _whole, s_, size, align, types, dd in ml_req:
+            key = f"{s_ or '?'} {size} MiB"
+            sig[key] += 1
+            if dd:
+                ded[key][dd.strip()] += 1
+        print(f"memlog  {len(ml_req)} requirement(s), {len(ml_alloc)} logged "
+              f"allocation(s), {len(ml_bind)} bind(s)")
+        for key, n in sig.most_common(6):
+            print(f"memlog    {n:5d} x {key}" + "".join(
+                f"  ({k} in {c})" for k, c in ded[key].items()))
+        af = [a for a in ml_alloc if a[3] == "FAILED"]
+        bf = [b for b in ml_bind if b[2] == "FAILED"]
+        big = [a for a in ml_alloc if a[3] == "ok"]
+        if big:
+            sizes = collections.Counter(f"{a[0]} MiB type {a[1]}"
+                                        + (" dedicated" if a[2] else "")
+                                        for a in big)
+            print("memlog  allocations: " + "; ".join(
+                f"{k} x{n}" for k, n in sizes.most_common(5)))
+        print(f"memlog  FAILED: {len(af)} allocation(s), {len(bf)} bind(s)"
+              + (f" — first: alloc {af[0][0]} MiB type {af[0][1]} result "
+                 f"{af[0][4]}" if af else "")
+              + (f" — first: bind {bf[0][0].strip()} result {bf[0][3]}"
+                 if bf else ""))
 
     # --- X4VR_HUD_MOUSE: X4's UI takes the mouse where it is drawn (374) ---
     #

@@ -28738,3 +28738,63 @@ at 3200².
 * **Refutation:** VRAM well below 24 GiB at 4224² while the map is invisible.
   Memory is then not the cause, and the inventory says which targets X4
   keeps re-creating, to read what it does with them.
+
+## Take 376 — SCORED (2026-10-31): not video memory; X4 re-creates the map target every frame
+
+Patola ran both, WiVRn.
+* **P376.1 REFUTED.** Peak VRAM 10.9 GiB at 4224² and 9.2 GiB at 3200² (of
+  24 GiB); GTT under 0.9 GiB in both.
+* **P376.2 HELD, and more precisely:**
+  * at 4224², 1256 of the 2245 images created were one signature: 4224x4149,
+    fmt 97 (R16G16B16A16_SFLOAT), usage 0x17 (colour + sampled + transfer),
+    doubled;
+  * about 38–40 a second from the map opening (318966), once per frame. It
+    went on at ~10 a second after the map closed, until exit;
+  * each was destroyed within 1 ms of its creation, nothing logged in
+    between, and never attached to a framebuffer;
+  * at 3200² its counterpart, 3200x3143, was created once. The height is
+    0.982 of the eye's in both: the map's 3D view.
+* **A plain size limit does not fit.** The 4224² eye targets (fmt 97, usage
+  0x97), ~272 MiB doubled, larger than the map target's ~267 MiB, were
+  created 8 times and work.
+* The scorer FAILs both runs on csmfit (the play line has no X4VR_CAMDIFF, so
+  no camuj readings; take 377 runs the shipping line). 376a also FAILs the
+  load recentre: the map opened 6.5 s after head-look armed, and the ESC
+  menu followed it, so no 2 s of game time without a full-screen menu came
+  before the exit. The take 377 protocol waits in the cockpit first.
+
+**X4VR_MEMLOG=1 (built, read only, layer/x4vr_layer.cpp).**
+* For images the layer doubled and anything of 64 MiB or more, it logs:
+  * the memory requirement: size, alignment, types, dedicated
+    preferred/required (vkGetImageMemoryRequirements and its 2/KHR forms);
+  * allocations of 64 MiB or more, for a doubled image, or that failed:
+    size, type, the dedicated image, the result;
+  * binds: memory, offset, result.
+* The hooks are handed out only when it is on.
+* Driven on the GPU harness: the doubled 128x128 RGBA16F target reports
+  0.25 MiB, its doubled size, and binds ok. Off, nothing is logged, and the
+  harness's 33 cases pass.
+* Scorer block `memlog`: requirement signatures by count, the allocations,
+  every failure; FAIL if asked and no line. Census: 8 cases.
+
+## Take 377 — PREDICTIONS (written before the run): X4's memory path for the map target
+
+The shipping line at 4224² with X4VR_MEMLOG=1 and X4VR_MV_INVENTORY=1. Load,
+**wait ~5 s in the cockpit**, open the map ~15 s, close it, quit.
+
+    X4VR_TAKE=377 X4VR_HEAD_6DOF=1 X4VR_STEER_PICK=1 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_FOOT=1 X4VR_STEER=a X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=4224 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=8448 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=4224x4224 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_MEMLOG=1 X4VR_MV_INVENTORY=1 X4VR_LOG=/tmp/x4vr-take377.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P377.1:** the map target's requirement is ~267.5 MiB (doubled), logged
+  ~40 times a second while the map is open.
+* **P377.2: what follows each requirement**, one of:
+  * (a) an allocation FAILED with a Vulkan result;
+  * (b) nothing: X4 destroys the image after reading the requirement,
+    without trying to allocate. X4 then judges the size or alignment itself,
+    and the doubled size crosses a limit of X4's own (a pool or block size);
+  * (c) a bind that FAILED.
+* **P377.3:** the eye targets' ~272 MiB requirements succeed, and the log
+  shows how: a dedicated allocation, or a sub-allocation from a larger block.
+  The difference from the map target is the lead.
+* **Refutation:** the map target allocates and binds fine. X4 then gives up
+  for a reason outside the memory path, and the instrument moves to image
+  views and framebuffers.

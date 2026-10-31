@@ -136,6 +136,8 @@ struct DeviceData {
     // Layer B needs a staging image of its own.
     PFN_vkGetImageMemoryRequirements GetImageMemoryRequirements = nullptr;
     PFN_vkBindImageMemory BindImageMemory = nullptr;
+    PFN_vkGetImageMemoryRequirements2 GetImageMemoryRequirements2 = nullptr;
+    PFN_vkBindImageMemory2 BindImageMemory2 = nullptr;
     PFN_vkCreateImageView CreateImageView = nullptr;
     PFN_vkDestroyImageView DestroyImageView = nullptr;
     PFN_vkCreateDescriptorSetLayout CreateDescriptorSetLayout = nullptr;
@@ -4315,6 +4317,146 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyImage(VkDevice device, VkImage img,
             g_images.erase(it);
     }
     d->DestroyImage(device, img, ac);
+}
+
+// ------------------------------------------------ X4VR_MEMLOG=1 (read only)
+//
+// Take 376: at 4224² X4 creates its map target (4224x4149, RGBA16F, colour +
+// sampled + transfer) ~40 times a second while the map is open and destroys
+// each within a millisecond, never attaching it, so the map is drawn into
+// nothing. At 3200² (3200x3143) it is created once. Not video memory: the
+// card peaked at 10.9 of 24 GiB. Between vkCreateImage and the framebuffer
+// lies X4's memory path, so this logs it, for the images the layer doubled
+// and anything of 64 MiB or more:
+//   * the requirement: size, alignment, memory types, and whether the driver
+//     prefers or requires a dedicated allocation;
+//   * every allocation of 64 MiB or more, for a doubled image, or that
+//     failed: size, type, the dedicated image, the result;
+//   * every bind of those images: memory, offset, result.
+// Off, the hooks are not handed out at all. Capped at 12000 lines.
+static bool memlog_enabled() {
+    static const bool on = x4vr::env_on("X4VR_MEMLOG", false);
+    return on;
+}
+namespace {
+struct MemLogImg {
+    bool known = false;
+    ImageInfo info{};
+};
+MemLogImg memlog_img(VkImage img) {
+    MemLogImg m;
+    std::lock_guard<std::mutex> lock(g_img_mu);
+    auto it = g_images.find(img);
+    if (it != g_images.end()) {
+        m.known = true;
+        m.info = it->second;
+    }
+    return m;
+}
+constexpr VkDeviceSize kMemLogBig = 64ull << 20;
+bool memlog_wants(const MemLogImg &m, VkDeviceSize size) {
+    return (m.known && m.info.doubled) || size >= kMemLogBig;
+}
+std::atomic<unsigned> g_memlog_lines{0};
+bool memlog_budget() {
+    return g_memlog_lines.fetch_add(1, std::memory_order_relaxed) < 12000;
+}
+// "img #12 4224x4149 fmt=97 DOUBLED" or "img ?" for an image we never saw.
+std::string memlog_desc(const MemLogImg &m) {
+    char b[96];
+    if (!m.known)
+        return "img ?";
+    snprintf(b, sizeof b, "img #%u %ux%u fmt=%u%s", m.info.serial,
+             m.info.extent.width, m.info.extent.height, (unsigned)m.info.format,
+             m.info.doubled ? " DOUBLED" : "");
+    return b;
+}
+DeviceData *memlog_device(VkDevice device) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    return &g_devices.at(dispatch_key(device));
+}
+void memlog_req(VkImage image, const VkMemoryRequirements &r, int dedicated) {
+    const MemLogImg m = memlog_img(image);
+    if (!memlog_wants(m, r.size) || !memlog_budget())
+        return;
+    X4VR_LOG("mem: req %s size=%.1f MiB align=%llu types=0x%x%s",
+             memlog_desc(m).c_str(), (double)r.size / (1 << 20),
+             (unsigned long long)r.alignment, r.memoryTypeBits,
+             dedicated == 2   ? " dedicated REQUIRED"
+             : dedicated == 1 ? " dedicated preferred"
+                              : "");
+}
+void memlog_bind(VkImage image, VkDeviceMemory mem, VkDeviceSize off, VkResult r) {
+    const MemLogImg m = memlog_img(image);
+    if (!(r != VK_SUCCESS || (m.known && m.info.doubled)) || !memlog_budget())
+        return;
+    X4VR_LOG("mem: bind %s memory %p offset %.1f MiB -> %s (%d)",
+             memlog_desc(m).c_str(), (void *)mem, (double)off / (1 << 20),
+             r == VK_SUCCESS ? "ok" : "FAILED", (int)r);
+}
+} // namespace
+
+VKAPI_ATTR void VKAPI_CALL x4vr_GetImageMemoryRequirements(
+    VkDevice device, VkImage image, VkMemoryRequirements *req) {
+    DeviceData *d = memlog_device(device);
+    d->GetImageMemoryRequirements(device, image, req);
+    memlog_req(image, *req, 0);
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_GetImageMemoryRequirements2(
+    VkDevice device, const VkImageMemoryRequirementsInfo2 *info,
+    VkMemoryRequirements2 *req) {
+    DeviceData *d = memlog_device(device);
+    d->GetImageMemoryRequirements2(device, info, req);
+    int dedicated = 0;
+    for (auto *p = (const VkBaseOutStructure *)req->pNext; p; p = p->pNext)
+        if (p->sType == VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS) {
+            auto *dr = (const VkMemoryDedicatedRequirements *)p;
+            dedicated = dr->requiresDedicatedAllocation  ? 2
+                        : dr->prefersDedicatedAllocation ? 1
+                                                         : 0;
+        }
+    memlog_req(info->image, req->memoryRequirements, dedicated);
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_AllocateMemory(
+    VkDevice device, const VkMemoryAllocateInfo *ai,
+    const VkAllocationCallbacks *ac, VkDeviceMemory *mem) {
+    DeviceData *d = memlog_device(device);
+    const VkResult r = d->AllocateMemory(device, ai, ac, mem);
+    VkImage dimg = VK_NULL_HANDLE;
+    for (auto *p = (const VkBaseInStructure *)ai->pNext; p; p = p->pNext)
+        if (p->sType == VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO)
+            dimg = ((const VkMemoryDedicatedAllocateInfo *)p)->image;
+    const MemLogImg m = dimg ? memlog_img(dimg) : MemLogImg{};
+    if ((r != VK_SUCCESS || ai->allocationSize >= kMemLogBig ||
+         (m.known && m.info.doubled)) &&
+        memlog_budget())
+        X4VR_LOG("mem: alloc %.1f MiB type %u%s%s -> %s (%d) memory %p",
+                 (double)ai->allocationSize / (1 << 20), ai->memoryTypeIndex,
+                 dimg ? ", dedicated to " : "",
+                 dimg ? memlog_desc(m).c_str() : "",
+                 r == VK_SUCCESS ? "ok" : "FAILED", (int)r,
+                 r == VK_SUCCESS ? (void *)*mem : nullptr);
+    return r;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_BindImageMemory(VkDevice device, VkImage image,
+                                                   VkDeviceMemory mem,
+                                                   VkDeviceSize off) {
+    DeviceData *d = memlog_device(device);
+    const VkResult r = d->BindImageMemory(device, image, mem, off);
+    memlog_bind(image, mem, off, r);
+    return r;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_BindImageMemory2(
+    VkDevice device, uint32_t n, const VkBindImageMemoryInfo *infos) {
+    DeviceData *d = memlog_device(device);
+    const VkResult r = d->BindImageMemory2(device, n, infos);
+    for (uint32_t i = 0; i < n; i++)
+        memlog_bind(infos[i].image, infos[i].memory, infos[i].memoryOffset, r);
+    return r;
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDescriptorSetLayout(
@@ -15128,6 +15270,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE2(CmdBlitImage2);
     RESOLVE2(CmdResolveImage2);
     RESOLVE2(CmdCopyBufferToImage2);
+    RESOLVE2(GetImageMemoryRequirements2);
+    RESOLVE2(BindImageMemory2);
 #undef RESOLVE2
 #undef RESOLVE
     {
@@ -15431,6 +15575,30 @@ PFN_vkVoidFunction find_hook(const char *name) {
     return nullptr;
 }
 
+// X4VR_MEMLOG's hooks, handed out only when it is on, so an ordinary run's
+// memory calls go straight to the driver.
+const NameFunc kMemLogHooks[] = {
+    {"vkGetImageMemoryRequirements",
+     (PFN_vkVoidFunction)x4vr_GetImageMemoryRequirements},
+    {"vkGetImageMemoryRequirements2",
+     (PFN_vkVoidFunction)x4vr_GetImageMemoryRequirements2},
+    {"vkGetImageMemoryRequirements2KHR",
+     (PFN_vkVoidFunction)x4vr_GetImageMemoryRequirements2},
+    {"vkAllocateMemory", (PFN_vkVoidFunction)x4vr_AllocateMemory},
+    {"vkBindImageMemory", (PFN_vkVoidFunction)x4vr_BindImageMemory},
+    {"vkBindImageMemory2", (PFN_vkVoidFunction)x4vr_BindImageMemory2},
+    {"vkBindImageMemory2KHR", (PFN_vkVoidFunction)x4vr_BindImageMemory2},
+};
+
+PFN_vkVoidFunction find_memlog_hook(const char *name) {
+    if (!memlog_enabled())
+        return nullptr;
+    for (const auto &h : kMemLogHooks)
+        if (!strcmp(name, h.name))
+            return h.fn;
+    return nullptr;
+}
+
 // Hooked only when the chain below really has them.
 //
 // An app is entitled to pick its backend by asking for
@@ -15499,6 +15667,8 @@ x4vr_GetDeviceProcAddr(VkDevice device, const char *name) {
     if (!strcmp(name, "vkGetDeviceProcAddr"))
         return (PFN_vkVoidFunction)x4vr_GetDeviceProcAddr;
     if (PFN_vkVoidFunction fn = find_hook(name))
+        return fn;
+    if (PFN_vkVoidFunction fn = find_memlog_hook(name))
         return fn;
     std::lock_guard<std::mutex> lock(g_mu);
     auto it = g_devices.find(dispatch_key(device));
