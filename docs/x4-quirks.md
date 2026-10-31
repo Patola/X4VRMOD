@@ -29511,3 +29511,65 @@ Both blur fine text a little, and the menus more than the cockpit.
   panel open, raising X4's UI scale from 0.6 to 1.0 makes its text clearly
   crisper and bigger. Moving between menus while paused no longer flips
   anything (not visible before either).
+
+## Take 386 — SCORED PASS (2026-10-31): 4224² with FSR 1, and the UI scale
+
+* GAMEPLAY 13.89 ms (72 fps) at 4224² with FSR 1 Quality chosen by the eye
+  size; FSR 1 patched in both eyes.
+* **P386.3 — partly.** Patola already knew his UI scale was 0.6 and had
+  tried 0.8: "It gets a bit more readable but also decreases the amount of
+  information on screen at any one time. It also changes the size of the
+  letters in the cockpit HUD which makes it a bit more cartoonish." His
+  point is a different one: "these menus/writings seem to be in a lower
+  resolution than they should, their blurring looks wrong compared to the
+  rest of the scene."
+* **Decision 6 revised again:** no automatic upscaler in the defaults (it
+  made 3072² native impossible); the graphical launcher pairs resolution and
+  upscaler visibly.
+
+**His observation holds, in pixels.** The canvas draws X4's UI pass at 0.5252
+of its laid-out size (above), straight into X4's UI image. The frame
+analysis found no offscreen stage between X4's UI quads and that image.
+* At 2816² per eye, a menu X4 lays out for 2816 pixels is drawn with about
+  1479 across, while the 3D around it has the full density.
+* Every texture in it is sampled at half its intended size: glyph distance
+  fields (whose `smoothstep(0.4, 0.6)` edge band shrinks with them) and icon
+  and panel art (`texture()` with implicit LOD, so a mipmapped one is read
+  about one level coarser).
+
+What is not known yet is whether that is merely smaller, or worse than a
+correct rendering at that size. That decides whether drawing the UI
+differently would help. **The design that would** keeps the menu's size and
+information:
+* draw X4's UI pass unshrunk, into its full-size UI image;
+* move the 0.5252 into X4's composite (`copy_gamma`, which the layer already
+  patches for #76) as a filtered downsample of that image.
+
+Not built.
+
+## Takes 387 and 388 — PREDICTIONS (written before the runs): the menu's text, captured
+
+The same protocol both times: the map, a station's information panel held
+open and still for ~30 s, then a left-hand tab's list held ~30 s. The
+present frame is dumped as PNG every 900 presents (~10 s). That is the
+frame before the compositor and WiVRn, so the render stage is separated from
+the stages after it.
+
+    X4VR_TAKE=387 X4VR_LOG=/tmp/x4vr-take387.log X4VR_MV_DUMP=/tmp/x4vr-t387 X4VR_MV_DUMP_PRESENT=900 X4VR_WATCH=1 ./launch/x4vr-launch.sh
+
+    X4VR_TAKE=388 X4VR_LOG=/tmp/x4vr-take388.log X4VR_MV_DUMP=/tmp/x4vr-t388 X4VR_MV_DUMP_PRESENT=900 X4VR_WATCH=1 X4VR_UI_FOV=1.4917 ./launch/x4vr-launch.sh
+
+Take 388 turns the canvas shrink off (`X4VR_UI_FOV` equal to the eye's field
+gives a scale of 1.0). The menus fill the whole 110° field, and the cockpit
+HUD is misplaced (#45/#81): it is for measurement only.
+
+* **P387.1:** text in take 387's dumps looks as soft as Patola sees it in
+  the headset. If it looks crisp in the dump, the blur is added after the
+  render (the compositor's resampling of a fixed window, WiVRn's encoding),
+  and the canvas is not the cause.
+* **P388.1:** take 388's text, downsampled offline by 0.5252 with a proper
+  (area or Lanczos) filter, is visibly sharper than take 387's at the same
+  size. That would mean the shrink-at-draw path loses detail a filtered
+  downsample keeps, and the design above would help without changing what
+  fits on screen. If the two match, only more pixels help (a larger eye, or
+  a larger UI scale).
