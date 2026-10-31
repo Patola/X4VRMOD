@@ -8,17 +8,14 @@
 #   * exports every variable of the table that is not set (an explicit
 #     setting always wins, empty included);
 #   * derives X4VR_W = 2 x X4VR_H and X4VR_RES = X4VR_H x X4VR_H when unset;
-#   * picks the upscaler when X4VR_UPSCALE is unset (decision 6, Patola
-#     2026-10-31): fsr_quality (FSR 1) above 2816 per eye, none otherwise.
-#     First FSR 3 Balanced; changed after take 385, because FSR 1 Quality
-#     was faster at 4224² (13.24 ms against 16.72) and looked as good;
+#   * no upscaler unless asked (decision 6, after take 386): a rule here
+#     that switched FSR on above 2816 per eye made 3072² native impossible
+#     without knowing to override it. Pairing a resolution with an upscaler
+#     is the graphical launcher's job, where the user sees it;
 #   * lists the variables it set in X4VR_DEFAULTED, which the injector logs
 #     beside the run line.
 # X4VR_DEFAULTS=0 applies none of it: the code's own defaults, as every take
 # before Phase 0 ran.
-
-# Above this eye size the default upscaler is FSR 1 Quality (decision 6).
-X4VR_NATIVE_MAX=2816
 
 _x4vr_default() {
     if [[ -z "${!1+x}" ]]; then
@@ -46,10 +43,5 @@ x4vr_apply_defaults() {
     fi
     _x4vr_default X4VR_W "$((2 * X4VR_H))"
     _x4vr_default X4VR_RES "${X4VR_H}x${X4VR_H}"
-    if (( X4VR_H > X4VR_NATIVE_MAX )); then
-        _x4vr_default X4VR_UPSCALE fsr_quality
-    else
-        _x4vr_default X4VR_UPSCALE none
-    fi
     return 0
 }

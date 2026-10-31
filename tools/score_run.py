@@ -5397,8 +5397,9 @@ def main(path):
     #
     # launch/x4vr-defaults.sh exports launch/defaults.conf for every variable
     # not set, so the run line above carries every value and the intent gates
-    # read it as before. This only says how many came from the table, and
-    # whether the upscaler was chosen by the eye size (decision 6).
+    # read it as before. This only says how many came from the table, and,
+    # in takes 385-386 only, the upscaler the eye size chose (decision 6's
+    # first form, removed after take 386).
     df = re.search(r"env: defaults: (\d+) from launch/defaults\.conf", text)
     df_up = re.search(r"env: X4VR_UPSCALE=(\S+) chosen by the eye size "
                       r"\(X4VR_H=(\S+);", text)

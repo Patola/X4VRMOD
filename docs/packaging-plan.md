@@ -13,7 +13,7 @@ test or a reading of X4 settles them.
 | 3 | Using it with the headset on | **Desktop setup, and a Play button that waits for the headset.** No in-game panel for now. No launcher window in VR. |
 | 4 | Resolution | **Only the launcher sets it.** X4's in-game resolution menu is not the control in VR. |
 | 5 | X4 extensions | **One extension, `x4vrmod`**: the look-around limits and the sway removal in one settings diff. **`x4vrmod_headlook` is dropped**, with its bisect switch `X4VR_HEADLOOK_SPEED_EXT`. |
-| 6 | Default upscaler (2026-10-31, after v0.9.8) | **By eye size:** above 2816² per eye FSR 1 Quality, otherwise native. An explicit `X4VR_UPSCALE` always wins. First FSR 3 Balanced; changed after take 385 for speed (at 4224²: FSR 1 Quality 13.24 ms, FSR 3 Balanced 16.72 ms, judged equal to look at). |
+| 6 | Default upscaler (2026-10-31; revised twice) | **No automatic upscaler in the defaults:** `none` at every eye size unless `X4VR_UPSCALE` asks. **The graphical launcher pairs them visibly** (Phase 3, *Settings*). The history: a defaults rule switched FSR on above 2816² per eye, first FSR 3 Balanced, then FSR 1 Quality (take 385: 13.24 ms against 16.72 at 4224², judged equal to look at). After take 386 Patola dropped it, because it made 3072² native impossible without knowing to override it. |
 | 7 | When to package (2026-10-31) | **The packages come with the core and its CLI (Phase 2),** which installs into system directories and activates the mod (extensions, Vulkan layer). Version embedding and the single extension stay early: they are easy. |
 
 Clarifications from Patola:
@@ -198,6 +198,17 @@ A small window (about 640×480), three areas:
 * **Settings:** resolution, upscaler, field of view, IPD (auto/manual), lean,
   VR runtime (auto/WiVRn/SteamVR), debug mode. Each with a one-line
   explanation of what it does, by behaviour.
+  * **Resolution and upscaler, together** (decision 6). Two forms, to choose
+    when the window is built:
+    * the resolution list carries each larger size twice, native and with
+      FSR 1 Quality (e.g. "4224² — native" and "4224² — FSR 1 Quality,
+      renders 2816²");
+    * or choosing a size above the headset's recommended one preselects FSR
+      1 Quality in the upscaler control, which the user can change while
+      keeping the size.
+
+    Either way, each choice shows the render size and the last measured
+    frame time.
 * **Play:** a large button, enabled only when every required check is green.
   * Pressed, it waits for the headset: it shows "put on the headset" and
     starts X4 when the runtime reports the headset worn (OpenXR session state,

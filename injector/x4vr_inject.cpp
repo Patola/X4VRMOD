@@ -1124,12 +1124,6 @@ void log_startup_env() {
             X4VR_LOG("env: defaults: %zu from launch/defaults.conf%s%s", n,
                      n ? ": " : " (every setting explicit, or X4VR_DEFAULTS=0)",
                      dflt);
-        const char *up = getenv("X4VR_UPSCALE");
-        const char *h = getenv("X4VR_H");
-        if (dflt && up && strstr(dflt, "X4VR_UPSCALE"))
-            X4VR_LOG("env: X4VR_UPSCALE=%s chosen by the eye size (X4VR_H=%s; "
-                     "fsr_quality above 2816, none otherwise)",
-                     up, h ? h : "?");
     }
 
     // **The controller configuration, read from the KERNEL rather than from
