@@ -94,6 +94,7 @@ blocks every frame.
 | FSR 3 in both eyes (`X4VR_UPSCALE=fsr3_*`) | done | **`v0.9.8`** |
 | The Pause key keeps the cockpit and walking immersive | done | **`v0.9.8`** |
 | The start menu as the whole scene (menu at its size in front, the 3D scene all around) | optional, future — not scheduled | — |
+| The desktop view optional while in the headset (est. 3–5% fps; [DESIGN.md](DESIGN.md#late-features-postponed-not-scheduled)) | late feature, postponed | — |
 | Volumetric nebula in stereo (Matrix #79B, CEO's Doubt) | done | **`v0.9.1`** |
 | The numpad orbits the external (F2) and target (F3) views again | done | **`v0.9.2`** |
 | F2/F3/F4 as the whole scene: the head turns X4's camera inside them | done | **`v0.9.3`** |

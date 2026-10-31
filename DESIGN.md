@@ -174,6 +174,34 @@ distortion. Re-enabled later only where they are VR-safe.
 
 Phase 4 is the real project; 0–3 de-risk it; 5–8 are the VR/UX layer on top.
 
+### Late features (postponed, not scheduled)
+
+Agreed with Patola and parked until the current plan
+(docs/packaging-plan.md, *Order of work*) is done.
+
+* **The desktop view optional while in the headset** (2026-10-31, after
+  v0.9.8).
+  * **What it costs now.** Every frame, the layer composes both eyes into an
+    8448×4224 side-by-side image for gamescope, in the same command buffer
+    that copies them into the headset's swapchain. gamescope then scales it
+    into the desktop window. X4 presents MAILBOX, so the monitor does not
+    cap the frame rate; the cost is GPU time only.
+  * **Estimated gain:** about 0.5–0.8 ms of ~17 ms (3–5%) at 4224² per eye
+    with FSR 3 Balanced. This is arithmetic on memory traffic, not a
+    measurement, and too small to do now.
+  * **The plan when it is picked up:** a switch that updates the desktop
+    window only every Nth frame, or never. On skipped frames the layer
+    copies to the headset only. A hotkey toggles it during a run, so one
+    take measures the real gain against itself.
+  * **Kept:** the side-by-side view stays the default and a first-class
+    debug view (see *Suggestions* below). gamescope stays: X4 renders at
+    the requested size, with the mouse confined, only under it.
+  * **Further, only if the measurement shows more:** render X4's final
+    image straight into the headset's images, which saves the eye copy too
+    (about 0.3 ms more). Much more invasive.
+* **The start menu as the whole scene** (the menu at its size in front, the
+  3D scene all around; take 360). Optional, not scheduled.
+
 ## Test plan
 
 **Standing harness (built in Phase 0, used throughout):**

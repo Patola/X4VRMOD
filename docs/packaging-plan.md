@@ -235,17 +235,21 @@ is acceptable for this; nothing is drawn in VR for the launcher.
     when unset, so the mod owns the setting and an in-game change lasts one
     session. Frame generation is served off with it. The launcher's
     upscaler setting maps to this variable.
-  * **Blocked in VR:** with any mode on, the right eye is not drawn
-    (Patola, 2026-10-31). The upscaler runs as compute, and the layer does
-    not yet run compute passes per eye. The launcher offers no upscaler
-    until that is fixed.
+  * **Works in VR since v0.9.8** (takes 380, 383 and 384). FSR 1 is X4's
+    own compute pass, patched to write both eyes (`X4VR_FSR_STEREO`). FSR 3
+    is AMD FidelityFX, and every one of its dispatches runs again for the
+    right eye (`X4VR_FFX_STEREO`). Both are on by default. Before that
+    (take 379, take 381) the right eye's scene was black.
 * **The launcher offers:** off, and the FSR modes X4 reports as supported,
   temporal and spatial separately. With an upscaler, the resolution setting
   is the output; the internal render is X4's (quality = output / 1.5 per
   axis).
-* **Not yet tested in VR on 9.00:** FSR3 (temporal) and FSR 1 (spatial).
-  Spatial has no history, so it cannot mix the eyes; temporal is what take
-  163 judged good on the older build.
+* **Tested in VR on 9.00:**
+  * FSR 1 Quality (take 380): 13.24 ms at 4224² per eye.
+  * FSR 3 Balanced (takes 383–384): 16.72 ms at 4224² per eye. Patola: "as
+    good as FSR1", no smearing.
+  * Native at 4224²: 29.1 ms.
+  * The other modes use the same code and differ only in X4's render size.
 * **DLSS — to verify, then to test on an RTX card:**
   * X4's config has `<dlss>`, `<dlssmode>` and `<dlssg>` (frame
     generation). Which of them selects DLSS upscaling, and its values, have
@@ -256,8 +260,8 @@ is acceptable for this; nothing is drawn in VR for the launcher.
     protocol, scored like a take.
 * **Frame generation stays off,** for FSR and DLSS alike. An interpolated
   frame has no head pose and adds latency, which is harmful in VR.
-* Before the launcher offers FSR, it needs a take on the current build: both
-  eyes' lighting identical, no smearing, and the frame rate at each mode.
+* The launcher can offer FSR. Still open: a frame-rate figure for each mode
+  at the sizes the launcher lists, measured in one scene so they compare.
 
 ## Debug mode and bug reports
 
