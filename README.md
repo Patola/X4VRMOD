@@ -11,7 +11,7 @@ Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
 **[docs/frame-analysis.md](docs/frame-analysis.md)**; the traps X4 sets for
 modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 
-> **Status: v0.9.6 — playable in VR** ([release notes](docs/releases.md)).
+> **Status: v0.9.7 — playable in VR** ([release notes](docs/releases.md)).
 > X4 runs in VR with in-engine stereo (per-eye lighting), head-look and lean
 > in the cockpit, head-look on foot, the UI on a canvas at the angle X4
 > intended, every menu reachable and lined up with the cursor, and the
@@ -88,6 +88,7 @@ blocks every frame.
 | F6 (cinematic) a steady window, as X4 intends | done | **`v0.9.4`** |
 | F6's overlay fills its window | done | **`v0.9.5`** |
 | The cockpit HUD clicks where it is drawn; steering targets at the ring; lean in the cockpit | done | **`v0.9.6`** |
+| Larger eyes: the HUD stays put; the map draws (flat above ~4068² per eye, X4's 255.8 MiB pool block) | done | **`v0.9.7`** |
 | The start menu as the whole scene (menu at its size in front, the 3D scene all around) | optional, future — not scheduled | — |
 | Volumetric nebula in stereo (Matrix #79B, CEO's Doubt) | done | **`v0.9.1`** |
 | The numpad orbits the external (F2) and target (F3) views again | done | **`v0.9.2`** |

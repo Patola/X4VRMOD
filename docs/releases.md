@@ -20,6 +20,71 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
+## v0.9.7 — 2026-10-31 — larger eyes: the HUD stays put and the map draws
+
+The state of take 378 (`take-378-map-pool`, code identical to commit
+4936e46). Patola: *"It worked! The map was presented perfectly. I scroll
+through it, did zoom in and out, and I put it in perspective to check if
+everything was working and it was."*
+
+* **Fixed: the lower HUD no longer moves with the resolution.**
+  * X4 places the left panel, the radar and the right panel with a
+    correction for screens narrower than 4:3, which our square eyes always
+    are. With a UI scale below 1 it grows without bound as the height grows:
+    at 4224² per eye it threw the left panel across to the right.
+  * The mod now serves X4's "HUD scale" option off in every mod session, and
+    the placement no longer depends on the height. Menus keep your UI scale.
+* **Fixed: the map at large eye sizes** (sectors, ships and routes were
+  invisible above about 4060² per eye).
+  * **The memory threshold.** X4 takes the memory for images it creates
+    after start-up from blocks of 255.8 MiB, and has no other way to place
+    them. An image that needs more is thrown away and created again on the
+    next frame, forever.
+  * The layer gives the right eye its own layer in X4's render targets, which
+    doubles their memory. The map's 3D view (screen-sized, 16-bit
+    floating-point colour) then needs 268 MiB at 4224² per eye. X4 never
+    allocated it, re-created it about 40 times a second, and drew the map
+    into nothing. It is not the card's memory: 10.9 of 24 GiB were in use.
+  * **The fix:** an image that, doubled, would need more than 248 MiB keeps
+    the single layer X4 asked for. X4's main eye targets are exempt; they
+    live in 512 MiB blocks. The map's view then fits, and both eyes see the
+    left eye's copy of it.
+  * **So the map has depth up to about 4068² per eye (4000² does, 4096²
+    does not) and is flat above.** Nothing changes below that size.
+  * If an image kept single-layer this way were ever drawn per eye, the layer
+    says so (`mv: POOL-SINGLE ...`) and the scorer fails the run.
+* **New: `X4VR_UPSCALE`** selects X4's upscaler (`<upmode>`, one of the ten
+  values X4 9.00 knows); `none` when unset, and frame generation always off.
+  **Not usable in VR yet:** with any FSR mode the right eye is not drawn,
+  because X4's upscaler runs as compute and the layer does not yet run
+  compute once per eye.
+* **Fixed:** `X4VR_AA` accepts X4 9.00's anti-aliasing values only. Since
+  9.00 the upscaler has its own setting, so `X4VR_AA=fsr_quality` was
+  silently ignored, and every "FSR" run so far rendered natively.
+* **Fixed:** an image the driver refused to double was still recorded as
+  doubled.
+* **New instrument:** `X4VR_MEMLOG=1` logs memory requirements, allocations
+  and binds for doubled and large images.
+* **Plan:** docs/packaging-plan.md (packages, the `x4vrmod-config`
+  launcher, debug mode and bug reports).
+
+**Known limitations:**
+* **FSR:** see above.
+* **SteamVR at high resolution:** at 4224² per eye the image is garbled
+  under SteamVR, clean under WiVRn. Lower resolutions are fine on both.
+* **Cost:** 4224² per eye ran at ~34 fps on an RX 7900 XTX (take 378);
+  2816² stays the default.
+* The start menu shows as a window. F6 entered on foot keeps the small
+  overlay.
+
+**How to run.** The play command is unchanged from v0.9.6 (2816² per eye):
+
+    X4VR_HEAD_6DOF=1 X4VR_STEER_PICK=1 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_FOOT=1 X4VR_STEER=a X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_LOG=/tmp/x4vr-play.log X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+For a larger eye, change X4VR_W, X4VR_H and X4VR_RES together (for 4000²:
+`X4VR_W=8000 X4VR_H=4000 X4VR_RES=4000x4000`). The scored shipping line is
+in docs/known-good-runs.md, "Take 375".
+
 ## v0.9.6 — 2026-10-30 — the HUD clicks where it is drawn; lean; steering targets the ring
 
 The state of take 375 (`take-375-hud-split`, code identical to commit

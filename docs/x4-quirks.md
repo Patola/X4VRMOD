@@ -28832,7 +28832,7 @@ The shipping line at 4224² with X4VR_MEMLOG=1 and X4VR_MV_INVENTORY=1. Load,
   (the eye targets, in the 512 MiB blocks) are exempt.
 * Copies are widened only when both images are doubled, so the map target
   receives the left eye's view and both eyes sample it. **The map is flat
-  above ~3900² per eye, and drawn.** Unchanged below.
+  above ~4068² per eye (4000² keeps depth, 4096² is flat), and drawn.** Unchanged below.
 * **Guard:** if such an image is ever attached to a view-masked pass, the
   framebuffer is invalid (VUID-VkFramebufferCreateInfo-renderPass-04536).
   The layer logs `mv: POOL-SINGLE ...` and the scorer FAILs.
@@ -28862,3 +28862,32 @@ cockpit, open the map ~15 s (look at it), close it, quit.
   4224².
 * **Refutation:** the map still invisible, or still re-created every frame.
   The pool block is then not the whole reason.
+
+## Take 378 — SCORED PASS (2026-10-31): the map at 4224², flat and drawn. v0.9.7
+
+Patola: *"It worked! The map was presented perfectly. I scroll through it,
+did zoom in and out, and I put it in perspective to check if everything was
+working and it was."*
+
+* **P378.1 held** (his eye).
+* **P378.2 held:**
+  * `mvpool`: one signature kept single-layer, 4224x4149 fmt 97 usage 0x17
+    (268.1 MiB doubled), one image;
+  * the map target was created **once** (img #730), not ~40 a second. Its
+    requirement is 134.1 MiB.
+* **P378.3 held:** no POOL-SINGLE line; `memlog` FAILED 0/0; PASS.
+* **P378.4 held:** the requirement list is take 377's minus the map target.
+  The eye targets (272.2 MiB doubled) still bind in the 512 MiB blocks.
+* **Where it turns flat:** for square eyes, about 4068² per eye.
+
+      eye      map doubled
+      3200²    153.5 MiB   stereo
+      3840²    221.0 MiB   stereo
+      4000²    239.8 MiB   stereo
+      4096²    251.4 MiB   flat
+      4224²    267.4 MiB   flat
+
+* GAMEPLAY 29.1 ms (34 fps) at 4224² native on the RX 7900 XTX, only 3
+  windows. The resolution's cost, not the rule's.
+
+Released as **v0.9.7** (code 4936e46).

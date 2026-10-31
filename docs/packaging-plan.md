@@ -205,7 +205,7 @@ is acceptable for this; nothing is drawn in VR for the launcher.
   down fixed it under SteamVR. The launcher shows a warning when SteamVR is
   the runtime and the resolution is above the last size known to work there
   (to be measured). The release notes say the same for players.
-* **Above ~3900² per eye the map is flat.** X4 places images it creates
+* **Above ~4068² per eye the map is flat** (4000² keeps depth, 4096² does not). X4 places images it creates
   after start-up in 255.8 MiB blocks; the map's 3D view, doubled for two
   eyes, outgrows them there, so the layer keeps it single-layer (takes
   376–378). The launcher says so next to the resolution choices that cross

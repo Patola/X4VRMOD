@@ -5335,7 +5335,7 @@ def main(path):
     #
     # layer/x4vr_layer.cpp, mv_exceeds_x4_pool. An image that, doubled, would
     # not fit X4's 255.8 MiB pool block keeps one layer (the map's 3D view
-    # above ~3900² per eye). The rule bets X4 fills it by copies; a
+    # above ~4068² per eye). The rule bets X4 fills it by copies; a
     # POOL-SINGLE line is the bet lost (an invalid framebuffer) and FAILs.
     mp_kept = re.findall(r"mv: (\d+x\d+) fmt=(\d+) usage=(0x[0-9a-f]+) kept "
                          r"SINGLE-LAYER — doubled it needs ([\d.]+) MiB.*?"
