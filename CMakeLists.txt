@@ -29,6 +29,18 @@ endif()
 
 include_directories(${Vulkan_INCLUDE_DIRS})
 
+# The version both libraries carry and print on their first log line (bug
+# reports need it). Regenerated at every build, rewritten only when changed.
+set(X4VR_VERSION_FILE "${CMAKE_BINARY_DIR}/generated/x4vr_version.cpp")
+add_custom_target(x4vr_version ALL
+    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR}
+            -DOUT=${X4VR_VERSION_FILE}
+            "-DX4VR_VERSION_FALLBACK=unknown (built without git)"
+            -P ${CMAKE_SOURCE_DIR}/cmake/x4vr_version.cmake
+    BYPRODUCTS ${X4VR_VERSION_FILE}
+    COMMENT "x4vr version"
+    VERBATIM)
+
 add_subdirectory(layer)
 add_subdirectory(injector)
 add_subdirectory(tests)

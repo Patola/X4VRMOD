@@ -74,6 +74,9 @@ extern char **environ;
 #include "x4vr_lua.hpp"
 #include "../common/x4vr_shquote.hpp"
 
+// The build's version (generated/x4vr_version.cpp, from git describe).
+const char *x4vr_build_version();
+
 namespace {
 
 bool is_config_xml(const char *path) {
@@ -1195,7 +1198,8 @@ __attribute__((constructor)) static void x4vr_inject_init() {
     ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
     if (n > 0)
         exe[n] = 0;
-    X4VR_LOG("injector loaded into pid %d (%s)", getpid(), exe);
+    X4VR_LOG("injector loaded into pid %d (%s) [X4VRMOD %s]", getpid(), exe,
+             x4vr_build_version());
     if (exe_is_game(exe)) {
         log_startup_env();
         // #70's fix, X4VR_CSM_COVER: X4's code is patched here, before any of

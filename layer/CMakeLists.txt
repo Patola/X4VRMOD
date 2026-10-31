@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later WITH x4vrmod-linking-exception
-add_library(x4vr_layer SHARED x4vr_layer.cpp)
+add_library(x4vr_layer SHARED x4vr_layer.cpp ${X4VR_VERSION_FILE})
+add_dependencies(x4vr_layer x4vr_version)
 set_target_properties(x4vr_layer PROPERTIES
     OUTPUT_NAME "VkLayer_X4VR_core"
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/layer")

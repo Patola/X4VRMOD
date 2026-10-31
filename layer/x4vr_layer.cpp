@@ -54,6 +54,9 @@
 #include "../common/x4vr_headlook.hpp"
 #ifdef X4VR_HAVE_OPENXR
 #include "../common/x4vr_xr.hpp"
+
+// The build's version (generated/x4vr_version.cpp, from git describe).
+const char *x4vr_build_version();
 #endif
 
 namespace {
@@ -16204,10 +16207,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateInstance(
         g_instances[dispatch_key(*out)] = data;
     }
     g_active = target;
-    X4VR_LOG("instance created (app=%s)%s%s", app_name ? app_name : "?",
+    X4VR_LOG("instance created (app=%s)%s%s [X4VRMOD %s]",
+             app_name ? app_name : "?",
              g_active ? "" : " — not the game, layer inert in this process",
              via_runtime ? " — with the OpenXR runtime's extensions merged in"
-                         : "");
+                         : "",
+             x4vr_build_version());
     // Which WSIs this process could possibly use. If a surface later reports
     // no preferred extent and only one *_surface extension is enabled, the
     // platform follows without any inference at all.

@@ -5393,6 +5393,25 @@ def main(path):
                 fails.append(f"X4VR_UPSCALE={fs_up.group(1)}: FSR passes patched but "
                              f"no eye-covering dispatch was doubled")
 
+    # --- the build: X4VRMOD's version in both libraries (step 2) ----------
+    #
+    # The layer's "instance created (app=X4)" and the injector's "injector
+    # loaded into pid N (…X4)" lines end with "[X4VRMOD <git describe>]".
+    # Two different versions in one game process is a mixed install, and a
+    # take run on one says nothing about either build.
+    bv_layer = set(re.findall(r"instance created \(app=X4\).*\[X4VRMOD ([^\]]+)\]",
+                              text))
+    bv_inj = set(re.findall(r"injector loaded into pid \d+ \([^)]*/X4\) "
+                            r"\[X4VRMOD ([^\]]+)\]", text))
+    if bv_layer or bv_inj:
+        both = bv_layer | bv_inj
+        print(f"build   X4VRMOD {', '.join(sorted(both))} (layer "
+              f"{', '.join(sorted(bv_layer)) or 'not logged'}; injector "
+              f"{', '.join(sorted(bv_inj)) or 'not logged'})")
+        if len(both) > 1:
+            fails.append(f"mixed build: the layer is {sorted(bv_layer)} and the "
+                         f"injector {sorted(bv_inj)} — reinstall or rebuild both")
+
     # --- the shipping line as defaults (Phase 0, take 385) -----------------
     #
     # launch/x4vr-defaults.sh exports launch/defaults.conf for every variable

@@ -1751,6 +1751,31 @@ fi
 sed 's/env: run = /env: run = X4VR_CAMDIFF=1 /' /tmp/census-cf0.log > /tmp/census-cf1.log
 want "csmfit with X4VR_CAMDIFF, no reading -> FAIL" /tmp/census-cf1.log "FAIL|  - " "csmfit: no camuj reading under a FIX report"
 
+# The build's version in both libraries (step 2).
+for f in '"instance created (app=%s)%s%s [X4VRMOD %s]",' '"injector loaded into pid %d (%s) [X4VRMOD %s]", getpid(), exe,'; do
+    if grep -qF "$f" layer/x4vr_layer.cpp injector/x4vr_inject.cpp; then
+        ok "build: the libraries still print $f"
+    else
+        bad "build: the format moved: $f"
+    fi
+done
+# The base's own instance line gets the version (a second one would make the
+# log two sessions, which the scorer refuses).
+bvi='[  999950.000] inject  injector loaded into pid 42 (/g/X4 Foundations/X4) [X4VRMOD v0.9.8-12-gabcdef0]'
+bvx='[  999950.000] inject  injector loaded into pid 42 (/g/X4 Foundations/X4) [X4VRMOD v0.9.8-11-g7608c25]'
+sed 's/instance created (app=X4)\(.*\)$/instance created (app=X4)\1 [X4VRMOD v0.9.8-12-gabcdef0]/' \
+    "$BASE" > /tmp/census-bv-base.log
+{ cat /tmp/census-bv-base.log; printf '%s\n' "$bvi"; } > /tmp/census-bv.log
+want "build: one version, said" /tmp/census-bv.log "build " "X4VRMOD v0.9.8-12-gabcdef0 (layer v0.9.8-12-gabcdef0; injector v0.9.8-12-gabcdef0)"
+if python3 tools/score_run.py /tmp/census-bv.log 2>&1 | grep -qE "^(FAIL|  -) +mixed build"; then
+    bad "build: one version -> FAILs"
+else
+    ok "build: one version -> no FAIL"
+fi
+{ cat /tmp/census-bv-base.log; printf '%s\n' "$bvx"; } > /tmp/census-bvx.log
+want "build: two versions -> FAIL" /tmp/census-bvx.log "FAIL|  - " "mixed build: the layer is ['v0.9.8-12-gabcdef0'] and the injector ['v0.9.8-11-g7608c25']"
+absent "build: a log from before the version -> silent" "$BASE" "build "
+
 # The shipping line as defaults (Phase 0, take 385).
 for f in '"env: defaults: %zu from launch/defaults.conf%s%s"'; do
     if grep -qF "$f" injector/x4vr_inject.cpp; then
