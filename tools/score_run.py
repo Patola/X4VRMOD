@@ -5384,6 +5384,23 @@ def main(path):
                 fails.append(f"X4VR_UPSCALE={fs_up.group(1)}: FSR passes patched but "
                              f"no eye-covering dispatch was doubled")
 
+    # --- the shipping line as defaults (Phase 0, take 385) -----------------
+    #
+    # launch/x4vr-defaults.sh exports launch/defaults.conf for every variable
+    # not set, so the run line above carries every value and the intent gates
+    # read it as before. This only says how many came from the table, and
+    # whether the upscaler was chosen by the eye size (decision 6).
+    df = re.search(r"env: defaults: (\d+) from launch/defaults\.conf", text)
+    df_up = re.search(r"env: X4VR_UPSCALE=(\S+) chosen by the eye size "
+                      r"\(X4VR_H=(\S+);", text)
+    if df:
+        print(f"env     {df.group(1)} setting(s) from launch/defaults.conf"
+              + (f"; upscaler {df_up.group(1)} chosen by the eye size "
+                 f"({df_up.group(2)} per eye)" if df_up else ""))
+    elif "env: defaults: none recorded" in text:
+        print("env     no defaults recorded: every value is in the run line "
+              "(a launcher from before Phase 0, or not started through it)")
+
     # --- the Pause key stays immersive (take 384) -------------------------
     #
     # injector/x4vr_inject.cpp, x4_view(): X4 paused with no full-screen menu

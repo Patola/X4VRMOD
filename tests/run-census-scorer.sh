@@ -1733,6 +1733,22 @@ else
     ok "fsr: an FSR 3 run, no FSR 1 pass -> no FAIL"
 fi
 
+# The shipping line as defaults (Phase 0, take 385).
+for f in '"env: defaults: %zu from launch/defaults.conf%s%s"' '"env: X4VR_UPSCALE=%s chosen by the eye size (X4VR_H=%s; "'; do
+    if grep -qF "$f" injector/x4vr_inject.cpp; then
+        ok "env: the injector still prints $f"
+    else
+        bad "env: the injector's format moved: $f"
+    fi
+done
+dfl='[  999960.000] inject  env: defaults: 47 from launch/defaults.conf: X4VR_H X4VR_FOV X4VR_W X4VR_RES X4VR_UPSCALE'
+dfu='[  999960.000] inject  env: X4VR_UPSCALE=fsr3_balanced chosen by the eye size (X4VR_H=4224; fsr3_balanced above 2816, none otherwise)'
+plant /tmp/census-df.log "$dfl" "$dfu"
+want "env: defaults counted, upscaler by eye size" /tmp/census-df.log "env " "47 setting(s) from launch/defaults.conf; upscaler fsr3_balanced chosen by the eye size (4224 per eye)"
+plant /tmp/census-df0.log '[  999960.000] inject  env: defaults: none recorded — not started through launch/x4vr-launch.sh, or a launcher from before Phase 0'
+want "env: no defaults recorded -> said" /tmp/census-df0.log "env " "no defaults recorded"
+absent "env: a log from before Phase 0 -> silent" "$BASE" "env "
+
 # The Pause key stays immersive (take 384).
 for f in '"paused with no menu up (the Pause key) — the view "' '"PAUSED (IsGamePaused: the ESC "' '"no longer paused without a menu"'; do
     if grep -qF "$f" injector/x4vr_inject.cpp; then

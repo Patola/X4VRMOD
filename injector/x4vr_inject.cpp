@@ -1094,12 +1094,42 @@ void log_startup_env() {
             run += ' ';
             run += x4vr::sh_quote_assignment(assign.c_str());
         }
+    // X4VR_DEFAULTED is the launcher's note of which values came from its
+    // table (Phase 0), logged on its own line below rather than replayed:
+    // the run line already carries every value, defaulted or not, so it
+    // reproduces the run whatever the table says later.
     for (char **e = environ; e && *e; e++)
-        if (!strncmp(*e, "X4VR_", 5)) {
+        if (!strncmp(*e, "X4VR_", 5) && strncmp(*e, "X4VR_DEFAULTED=", 15)) {
             run += ' ';
             run += x4vr::sh_quote_assignment(*e);
         }
     X4VR_LOG("env: run =%s ./launch/x4vr-launch.sh", run.c_str());
+    {
+        const char *dflt = getenv("X4VR_DEFAULTED");
+        size_t n = 0;
+        for (const char *p = dflt; p && *p;) {
+            while (*p == ' ')
+                p++;
+            if (!*p)
+                break;
+            n++;
+            while (*p && *p != ' ')
+                p++;
+        }
+        if (!dflt)
+            X4VR_LOG("env: defaults: none recorded — not started through "
+                     "launch/x4vr-launch.sh, or a launcher from before Phase 0");
+        else
+            X4VR_LOG("env: defaults: %zu from launch/defaults.conf%s%s", n,
+                     n ? ": " : " (every setting explicit, or X4VR_DEFAULTS=0)",
+                     dflt);
+        const char *up = getenv("X4VR_UPSCALE");
+        const char *h = getenv("X4VR_H");
+        if (dflt && up && strstr(dflt, "X4VR_UPSCALE"))
+            X4VR_LOG("env: X4VR_UPSCALE=%s chosen by the eye size (X4VR_H=%s; "
+                     "fsr3_balanced above 2816, none otherwise)",
+                     up, h ? h : "?");
+    }
 
     // **The controller configuration, read from the KERNEL rather than from
     // the handover text.** Take 308 was specified as "X52 Pro connected" and

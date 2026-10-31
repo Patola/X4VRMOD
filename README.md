@@ -133,9 +133,14 @@ shim, not the layer — see [docs/frame-analysis.md](docs/frame-analysis.md).
 
 ```sh
 cmake -S . -B build && cmake --build build
-./launch/x4vr-launch.sh                 # launches X4 with layer + injector
-X4VR_GAMESCOPE=1 ./launch/x4vr-launch.sh   # …inside gamescope at X4VR_W×X4VR_H
+./launch/x4vr-launch.sh                 # X4 in VR, 2816² per eye, native
+X4VR_H=4224 ./launch/x4vr-launch.sh     # 4224² per eye, FSR 3 Balanced
 ```
+
+**The shipping settings are the defaults.** The launcher applies
+`launch/defaults.conf` (the take 375 line) to every variable you have not
+set. An explicit setting always wins (`X4VR_MV=0` turns one off), and
+`X4VR_DEFAULTS=0` applies none of them, which is how takes before 385 ran.
 
 The launcher sets `SteamAppId`, the usual dev flags
 (`-skipintro -nocputhrottle -nosoundthrottle`), core dumps, and the layer /
@@ -168,11 +173,12 @@ runtime's idle scene while X4 renders to the monitor as usual).
 
 ## Resolution and upscaling
 
-**Eye size.** Three variables, always changed together. The eyes are square:
+**Eye size.** Set `X4VR_H`; the other two follow it unless you set them
+yourself. The eyes are square:
 
 | Variable | Meaning | Example (2816² eyes) | Example (4224² eyes) |
 |---|---|---|---|
-| `X4VR_H` | one eye's height and width | `2816` | `4224` |
+| `X4VR_H` | one eye's height and width (default 2816) | `2816` | `4224` |
 | `X4VR_W` | the side-by-side window: 2 × `X4VR_H` | `5632` | `8448` |
 | `X4VR_RES` | X4's resolution: `X4VR_H`x`X4VR_H` | `2816x2816` | `4224x4224` |
 
@@ -183,8 +189,9 @@ uses 2816² per eye. Two limits are known at larger sizes:
 * SteamVR garbles the image at 4224² per eye; WiVRn does not.
 
 **Upscaling.** `X4VR_UPSCALE=<mode>` chooses X4's upscaler, which renders the
-scene smaller and scales it up to the eye size. Unset, it is `none`: X4
-renders every pixel. The mod owns this setting and serves it on every launch,
+scene smaller and scales it up to the eye size. Unset, it follows the eye
+size: `fsr3_balanced` above 2816² per eye, `none` (every pixel rendered) at
+2816² and below. The mod owns this setting and serves it on every launch,
 so a change in X4's graphics menu lasts only until the next launch. Frame
 generation is always served off: an interpolated frame carries no head pose
 and adds latency.
@@ -219,9 +226,9 @@ Measured at 4224² per eye on an RX 7900 XTX (different scenes, so rough):
 | `fsr_quality` | 13.24 ms (take 380) |
 | `fsr3_balanced` | 16.72 ms (take 383) |
 
-For example, 4224² eyes with FSR 3 Balanced: take the shipping line, set
-`X4VR_H=4224 X4VR_W=8448 X4VR_RES=4224x4224`, and add
-`X4VR_UPSCALE=fsr3_balanced`.
+For example, `X4VR_H=4224 ./launch/x4vr-launch.sh` is 4224² eyes with FSR 3
+Balanced, and `X4VR_H=4224 X4VR_UPSCALE=fsr_quality ./launch/x4vr-launch.sh`
+the same eyes with FSR 1 Quality.
 
 ## Repository layout
 

@@ -29361,3 +29361,52 @@ stays as it was.
   paused. F2/F4 compose the head while paused, so most likely yes. If not,
   the picture stays where it was while the head turns: the rendered frame
   reprojected, with its edges showing.
+
+## Take 384 — SCORED PASS (2026-10-31): the Pause key; v0.9.8
+
+Patola: "It worked! We have the pause fix and FSR3 implemented."
+* `pause`: 2 Pause-key pauses kept immersive; 1 ESC-menu pause as the
+  window.
+* `ffx`: 1 view kept as the left eye's.
+* GAMEPLAY 17.31 ms.
+
+Released as v0.9.8 and pushed (tags `v0.9.8`, `take-384-pause-key`). The
+desktop view while in the headset is parked as a late feature (DESIGN.md).
+
+## Phase 0: the shipping line as defaults (2026-10-31)
+
+Decisions 6 (the upscaler by eye size) and 7 (the packages come with the
+CLI) are recorded in docs/packaging-plan.md, with the mechanism as built.
+In short:
+* The launcher exports `launch/defaults.conf` for every variable that is
+  not set. The C++ defaults stay as they were, so the GPU harness's
+  "unset = off" controls still hold.
+* The run line carries every value.
+* `env: defaults: N from launch/defaults.conf` says which ones came from the
+  table.
+* `X4VR_DEFAULTS=0` applies none.
+
+Checked offline:
+* With nothing set, the exported environment is take 375's run line minus
+  its seven instruments, plus `X4VR_UPSCALE=none`. Unset served `none`
+  already, so that is the same setting.
+* tests/run-launch-defaults.sh: 14 cases.
+* The launcher in wrapper mode, `X4VR_H=4224`: 43 defaults, 8448 / 4224x4224
+  / fsr3_balanced.
+
+## Take 385 — PREDICTIONS (written before the run): the acceptance take
+
+    X4VR_TAKE=385 X4VR_LOG=/tmp/x4vr-take385.log ./launch/x4vr-launch.sh
+
+Nothing else is set: no instruments, and no X4VR_WATCH, so there are no
+notifications this take.
+
+* **P385.1:** the launcher says "47 setting(s) from launch/defaults.conf —
+  eye 2816, upscaler none". The log has `env: defaults: 47 from
+  launch/defaults.conf`, and its run line is take 375's minus the seven
+  instruments, plus `X4VR_UPSCALE=none`.
+* **P385.2:** the scorer PASSes, like take 375. Take 375's GAMEPLAY was
+  11.67 ms (86 fps) at 2816² native; another scene will differ.
+* **P385.3 (Patola's eye):** no difference in play from v0.9.8's command
+  line. That covers head-look, lean, the HUD clicks, the map, F2/F4 and
+  walking.

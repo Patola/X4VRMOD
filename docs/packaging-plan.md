@@ -13,6 +13,8 @@ test or a reading of X4 settles them.
 | 3 | Using it with the headset on | **Desktop setup, and a Play button that waits for the headset.** No in-game panel for now. No launcher window in VR. |
 | 4 | Resolution | **Only the launcher sets it.** X4's in-game resolution menu is not the control in VR. |
 | 5 | X4 extensions | **One extension, `x4vrmod`**: the look-around limits and the sway removal in one settings diff. **`x4vrmod_headlook` is dropped**, with its bisect switch `X4VR_HEADLOOK_SPEED_EXT`. |
+| 6 | Default upscaler (2026-10-31, after v0.9.8) | **By eye size:** above 2816² per eye FSR 3 Balanced, otherwise native. An explicit `X4VR_UPSCALE` always wins. |
+| 7 | When to package (2026-10-31) | **The packages come with the core and its CLI (Phase 2),** which installs into system directories and activates the mod (extensions, Vulkan layer). Version embedding and the single extension stay early: they are easy. |
 
 Clarifications from Patola:
 * **DLSS:** the development PC has an AMD GPU, so no DLSS here. A friend with
@@ -54,6 +56,31 @@ launcher should not have to know it.
   gets cases for each source.
 * **Acceptance:** a take run with only `X4VR_TAKE` and `X4VR_LOG` set scores
   like take 375, and Patola sees no difference in play.
+
+**As built (2026-10-31; take 385 is the acceptance).** The defaults live in
+one table, `launch/defaults.conf`: 44 rows generated from take 375's logged
+run line minus its instruments, each marked `setting` or `internal`.
+`launch/x4vr-defaults.sh` applies it at the top of the launcher. That one
+script will serve the core and the packages too.
+* **Where the defaults live.** The launcher exports every variable in the
+  table that is not set. The C++ defaults do **not** move, unlike the plan
+  above. The GPU harness drives the layer directly and its control cases
+  rely on "unset = off"; moving ~45 defaults in the code would have changed
+  every one of them. The behaviour Patola sees is the same.
+* **Derived values:** `X4VR_W` = 2 × `X4VR_H`, `X4VR_RES` = `X4VR_H`×`X4VR_H`,
+  and `X4VR_UPSCALE` by decision 6.
+* **What a run records.** The injector's `env: run =` line carries every
+  value, defaulted or not, so the scorer's intent gates read them unchanged.
+  Replaying an old run line reproduces it whatever the table says later.
+  `env: defaults: N from launch/defaults.conf: …` says which came from the
+  table, and when the upscaler was chosen by the eye size, a second line
+  says so.
+* **The escape hatch.** `X4VR_DEFAULTS=0` applies nothing: the code's own
+  defaults, as every take before Phase 0 ran.
+* **Tests:** tests/run-launch-defaults.sh (14 cases); scorer `env` line and
+  census.
+* **Not done yet:** the "three kinds" are only marked in the table, and the
+  X4 path is still this PC's (Phase 2).
 
 ## Phase 1 — packages
 
@@ -364,11 +391,11 @@ level with the mark key, instead of a take's full command line.
 ## Order of work
 1. Phase 0: defaults flip, the `effective:` line, the scorer reading it.
    Accepted by a take with almost no variables.
-2. Version embedding and static runtime; the single `x4vrmod` extension; the
-   Arch PKGBUILD from the current launcher script.
+2. Version embedding and static runtime; the single `x4vrmod` extension.
 3. Phase 2's core and CLI: `doctor` first (it answers the "to verify" items
    on real machines), then `run`, `install`/`uninstall`, `report` with the
-   flight recorder.
+   flight recorder. **The Arch PKGBUILD comes here** (decision 7): a package
+   installs into system directories, and the CLI is what activates the mod.
 4. CI: tests, census, deb/rpm/tarball/Arch packages on tags.
 5. Phase 3's Qt6/QML window over the core.
 6. DLSS: read the tag, wire it, the RTX 5090 test.

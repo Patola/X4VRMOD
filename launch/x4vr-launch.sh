@@ -393,6 +393,21 @@ set -euo pipefail
 ROOT="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="${X4VR_BUILD:-$ROOT/build}"
 
+# **The shipping line is the default** (docs/packaging-plan.md, Phase 0):
+# every variable in launch/defaults.conf that is not set gets the shipping
+# value, before anything below reads one, and the upscaler follows the eye
+# size (decision 6). An explicit setting wins; X4VR_DEFAULTS=0 applies none.
+# The "(default ...)" notes in the knob list above are the code's own
+# defaults, which is what X4VR_DEFAULTS=0 gives.
+# shellcheck source=x4vr-defaults.sh
+source "$ROOT/launch/x4vr-defaults.sh"
+x4vr_apply_defaults "$ROOT/launch/defaults.conf" || exit 1
+_n_default=0
+[[ -n "$X4VR_DEFAULTED" ]] && _n_default=$(wc -w <<<"$X4VR_DEFAULTED")
+echo "x4vr-launch: $_n_default setting(s) from launch/defaults.conf" \
+     "$([[ ${X4VR_DEFAULTS:-1} == 0 ]] && echo '(X4VR_DEFAULTS=0: none applied)')" \
+     "— eye ${X4VR_H:-?}, upscaler ${X4VR_UPSCALE:-unset}" >&2
+
 DEFAULT_GAME="/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4"
 GAME="${X4VR_GAME:-$DEFAULT_GAME}"
 
@@ -523,7 +538,8 @@ if [[ -n "${X4VR_CSM_AB:-}" && -z "${X4VR_CSM_COVER:-}" ]]; then
     echo "x4vr-launch: WARNING X4VR_CSM_AB without X4VR_CSM_COVER — nothing" \
          "is patched and no phase will run" >&2
 fi
-if [[ -n "${X4VR_CSM_COVER:-}" && "${X4VR_CAMDIFF:-0}" != 1 ]]; then
+if [[ -n "${X4VR_CSM_COVER:-}" && "${X4VR_CAMDIFF:-0}" != 1 &&
+      " $X4VR_DEFAULTED " != *" X4VR_CSM_COVER "* ]]; then
     echo "x4vr-launch: NOTE X4VR_CSM_COVER without X4VR_CAMDIFF=1 — the" \
          "scorer cannot see the cascades X4 drew" >&2
 fi

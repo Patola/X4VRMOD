@@ -20,6 +20,41 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
+## Unreleased
+
+* **The shipping settings are the defaults** (packaging plan, Phase 0).
+  `./launch/x4vr-launch.sh` with nothing set plays like v0.9.8's command
+  line, at 2816² per eye. The table is `launch/defaults.conf`.
+  * An explicit setting wins; `X4VR_DEFAULTS=0` applies none.
+  * `X4VR_H` alone sets the eye size: `X4VR_W` and `X4VR_RES` follow.
+  * The upscaler follows the eye size unless set: FSR 3 Balanced above
+    2816² per eye, native otherwise.
+  * Every run's log line records all values, so old take lines still replay
+    exactly; to replay one from before take 385 as it ran, add
+    `X4VR_DEFAULTS=0`.
+
+  | Variable | New default | Code default (`X4VR_DEFAULTS=0`) |
+  |---|---|---|
+  | `X4VR_H` / `X4VR_W` / `X4VR_RES` | 2816 / 2×H / H×H | from the config's SBS size |
+  | `X4VR_UPSCALE` | by eye size | none |
+  | `X4VR_FOV` | 1.4917 | the profile's |
+  | `X4VR_IPD` | 0.064 | 0.064 |
+  | `X4VR_HEAD_6DOF`, `X4VR_VR` | 1 | off |
+  | `X4VR_GAMESCOPE`, `X4VR_EXTENSIONS`, `X4VR_SBS`, `X4VR_MV`, `X4VR_STEREO`, `X4VR_POSE`, `X4VR_PROJ_LIVE`, `X4VR_BINDLESS_PATCH`, `X4VR_BINDLESS_MIRROR`, `X4VR_MASK_PRESENT`, `X4VR_CAMREAD`, `X4VR_CAMLOOP`, `X4VR_HEADLOOK`, `X4VR_HEADLOOK_WRITE`, `X4VR_HEADLOOK_EXTERNAL`, `X4VR_HEADLOOK_FOOT`, `X4VR_HUD_MOUSE`, `X4VR_STEER_PICK`, `X4VR_DECLARE_RENDERED_POS` | 1 | off |
+  | `X4VR_PROJ_INVPROJ`, `X4VR_ROLL_STEREO`, `X4VR_HEADLOOK_MENU_CENTRE` | 1 | on (unchanged) |
+  | `X4VR_SBS_LAYERS` / `X4VR_SBS_RIGHT_LAYER` | 2 / 1 | 1 / 0 |
+  | `X4VR_DECLARE_RENDERED_ROT` | 2 | 0 |
+  | `X4VR_CURSOR_CANVAS` | auto | off |
+  | `X4VR_STEER` | a | off |
+  | `X4VR_OFFAXIS` | off | the compiled canting |
+  | `X4VR_CSM_COVER` | 0.663 | unpatched |
+  | `X4VR_CANVAS_M` | 1000 | 0.7 |
+  | `X4VR_UI_FOV` | 1.0 | 1.0 |
+  | `X4VR_UI_WGATE` / `X4VR_UI_WGATE_W1` | 0.02 / 0 | 0.02 / on |
+  | `X4VR_HEADLOOK_GAIN` / `_KP` / `_LEAD` | 0.115 / 0.25 / 1.0 | 0 / 0 / 0 |
+  | `X4VR_HEADLOOK_YAW_LIMIT` / `_PITCH_LIMIT` | 180 / 75 | X4's 65 / 35 |
+  | `X4VR_HEADLOOK_RAW` | 191 (F13) | none |
+
 ## v0.9.8 — 2026-10-31 — FSR 1 and FSR 3 in both eyes; the Pause key stays immersive
 
 The state of take 384 (`take-384-pause-key`, code identical to commit
