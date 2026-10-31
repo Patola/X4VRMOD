@@ -1766,32 +1766,6 @@ plant /tmp/census-df0.log '[  999960.000] inject  env: defaults: none recorded �
 want "env: no defaults recorded -> said" /tmp/census-df0.log "env " "no defaults recorded"
 absent "env: a log from before Phase 0 -> silent" "$BASE" "env "
 
-# X4VR_UI_SS=2: the UI drawn at twice the resolution (take 389).
-for f in '"ui ss: img #%u %ux%u (%u layer(s)) is drawn at %ux%u — %.1f "' '"ui ss: img #%u %ux%u — the UI stays at 1x: %s",' '"ui ss: a pipeline with its viewport or scissor baked in is "' '"ui ss %s: the UI at %s — %llu pass(es) drawn at 2x and blitted "'; do
-    if grep -qF "$f" layer/x4vr_layer.cpp; then
-        ok "uiss: the layer still prints $f"
-    else
-        bad "uiss: the layer's format moved: $f"
-    fi
-done
-sed 's/env: run = /env: run = X4VR_UI_SS=2 /' "$BASE" > /tmp/census-ss-base.log
-sson='[  999960.000] layer   ui ss: img #65 2816x2816 (2 layer(s)) is drawn at 5632x5632 — 242.0 MiB of ours — and blitted down with a linear filter at the end of each UI pass (X4VR_UI_SS=2)'
-ssrf='[  999960.000] layer   ui ss: img #65 2816x2816 — the UI stays at 1x: the format cannot be blitted with a linear filter'
-ssbk='[  999961.000] layer   ui ss: a pipeline with its viewport or scissor baked in is bound inside a 2x UI pass — it draws into a quarter of it'
-{ cat /tmp/census-ss-base.log; printf '%s\n' "$sson"; } > /tmp/census-ss-ok.log
-want "uiss: drawn at 2x, said" /tmp/census-ss-ok.log "uiss " "img #65 2816x2816 drawn at 5632x5632 (242.0 MiB of ours)"
-if python3 tools/score_run.py /tmp/census-ss-ok.log 2>&1 | grep -qE "^(FAIL|  -) +(UI 2x|X4VR_UI_SS)"; then
-    bad "uiss: drawn at 2x -> FAILs"
-else
-    ok "uiss: drawn at 2x -> no FAIL"
-fi
-want "uiss: asked, never drawn -> FAIL" /tmp/census-ss-base.log "FAIL|  - " "X4VR_UI_SS=2 but no UI pass was drawn at 2x"
-{ cat /tmp/census-ss-base.log; printf '%s\n' "$ssrf"; } > /tmp/census-ss-rf.log
-want "uiss: refused -> FAIL" /tmp/census-ss-rf.log "FAIL|  - " "X4VR_UI_SS=2 but the UI stays at 1x: the format cannot be blitted"
-{ cat /tmp/census-ss-base.log; printf '%s\n' "$sson" "$ssbk"; } > /tmp/census-ss-bk.log
-want "uiss: a baked viewport inside -> FAIL" /tmp/census-ss-bk.log "FAIL|  - " "UI 2x: a pipeline with its viewport or scissor baked in"
-absent "uiss: not asked -> silent" "$BASE" "uiss "
-
 # The Pause key stays immersive (take 384).
 for f in '"paused with no menu up (the Pause key) — the view "' '"PAUSED (IsGamePaused: the ESC "' '"no longer paused without a menu"'; do
     if grep -qF "$f" injector/x4vr_inject.cpp; then

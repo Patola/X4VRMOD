@@ -5411,45 +5411,6 @@ def main(path):
         print("env     no defaults recorded: every value is in the run line "
               "(a launcher from before Phase 0, or not started through it)")
 
-    # --- X4VR_UI_SS=2: the UI drawn at twice the resolution (take 389) -----
-    #
-    # layer/x4vr_layer.cpp: every pass into X4's UI image is begun against a
-    # 2x image of ours and blitted down at its end. Gate on intent: asked
-    # means a UI pass must have been drawn at 2x, and anything that left one
-    # at 1x, or drew wrongly, fails the run.
-    ss_asked = re.search(r"\bX4VR_UI_SS=2\b", run or "")
-    ss_on = re.search(r"ui ss: img #(\d+) (\d+x\d+) \((\d+) layer\(s\)\) is "
-                      r"drawn at (\d+x\d+) — ([\d.]+) MiB", text)
-    ss_refused = re.findall(r"ui ss: img #\d+ \d+x\d+ — the UI stays at 1x: "
-                            r"(.*)$", text, re.M)
-    ss_bad = re.findall(r"ui ss: (a pass into the UI image .*|a pipeline with "
-                        r"its viewport or scissor baked in .*|.*writes X4's UI "
-                        r"image outside a render pass.*|a 2x framebuffer could "
-                        r"not be created.*|X4VR_UI_SS=.* REJECTED.*)$", text, re.M)
-    ss_rep = re.findall(r"ui ss (?:first present|final): the UI at ([^—]*)— "
-                        r"(\d+) pass\(es\) drawn at 2x", text)
-    if ss_asked or ss_on or ss_refused or ss_bad:
-        if ss_on:
-            print(f"uiss    img #{ss_on.group(1)} {ss_on.group(2)} drawn at "
-                  f"{ss_on.group(4)} ({ss_on.group(5)} MiB of ours), blitted down "
-                  f"at the end of each UI pass")
-        for r_ in ss_refused:
-            print(f"uiss    NOT at 2x: {r_}")
-        for b_ in ss_bad:
-            print(f"uiss    {b_}")
-        if ss_rep:
-            print(f"uiss    last report: the UI at {ss_rep[-1][0].strip()}, "
-                  f"{ss_rep[-1][1]} pass(es) drawn at 2x so far")
-        if ss_asked:
-            if ss_refused:
-                fails.append(f"X4VR_UI_SS=2 but the UI stays at 1x: "
-                             f"{ss_refused[0]}")
-            elif not ss_on:
-                fails.append("X4VR_UI_SS=2 but no UI pass was drawn at 2x (no UI "
-                             "image named, or none begun)")
-            for b_ in ss_bad:
-                fails.append(f"UI 2x: {b_}")
-
     # --- the Pause key stays immersive (take 384) -------------------------
     #
     # injector/x4vr_inject.cpp, x4_view(): X4 paused with no full-screen menu

@@ -128,10 +128,6 @@ configure_file(fsr_bindless.comp.spv fsr_bindless.comp.spv COPYONLY)
 configure_file(ffx_pass1.comp.spv ffx_pass1.comp.spv COPYONLY)
 configure_file(ffx_pass2.comp.spv ffx_pass2.comp.spv COPYONLY)
 configure_file(view_color.frag.spv view_color.frag.spv COPYONLY)
-# X4VR_UI_SS (take 389): a pattern from an interpolated coordinate, so its
-# edges stay put at any render size.
-configure_file(fullscreen_uv.vert.spv fullscreen_uv.vert.spv COPYONLY)
-configure_file(ui_edges.frag.spv ui_edges.frag.spv COPYONLY)
 
 # The inputmap rewrite that gives head-look a binding of its own. Pure string
 # work on a fixture shaped like the real file, so it needs neither X4 nor a

@@ -152,12 +152,6 @@ struct DeviceData {
     // FSR 3 in both eyes (take 382): twin sets are freed with the originals.
     PFN_vkFreeDescriptorSets FreeDescriptorSets = nullptr;
     PFN_vkResetDescriptorPool ResetDescriptorPool = nullptr;
-    // X4VR_UI_SS (take 389).
-    PFN_vkCmdSetViewport CmdSetViewport = nullptr;
-    PFN_vkCmdSetScissor CmdSetScissor = nullptr;
-    PFN_vkDestroyFramebuffer DestroyFramebuffer = nullptr;
-    PFN_vkGetPhysicalDeviceFormatProperties GetPhysicalDeviceFormatProperties =
-        nullptr;
     PFN_vkDestroyDescriptorSetLayout DestroyDescriptorSetLayout = nullptr;
     PFN_vkCreateRenderPass2 CreateRenderPass2 = nullptr;
     PFN_vkDestroyRenderPass DestroyRenderPass = nullptr;
@@ -1363,16 +1357,6 @@ bool ffx_cb_bound(VkCommandBuffer cb);
 VkImage ffx_twin_of(VkImage img);
 } // namespace
 
-// X4VR_UI_SS (take 389), defined with the UI capture further down.
-namespace {
-void ui_ss_forget_image(DeviceData *d, VkDevice device, VkImage img);
-void ui_ss_outside_write(VkImage dst, const char *what);
-void ui_ss_note_pipelines(uint32_t n, const VkGraphicsPipelineCreateInfo *ci,
-                          const VkPipeline *out);
-void ui_ss_forget_pipeline(VkPipeline p);
-void ui_ss_report(const char *when);
-} // namespace
-
 // The layout/set bookkeeping below serves both knobs, and the mirror cannot work
 // without it: attributing a write to a table is how it knows a twin region
 // exists at all. Gating that on the survey alone made X4VR_BINDLESS_MIRROR=1
@@ -1643,18 +1627,9 @@ struct FbAtt {
     VkFormat format;
     VkExtent3D extent;
     VkImageLayout final_layout;
-    // X4VR_UI_SS: the layout the pass expects the image in at its start.
-    VkImageLayout initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 };
 std::unordered_map<VkFramebuffer, std::vector<FbAtt>> &g_fb_atts =
     x4vr::immortal<std::unordered_map<VkFramebuffer, std::vector<FbAtt>>>();
-// X4VR_UI_SS: what a masked framebuffer was created with, all attachments
-// counted (g_fb_atts keeps the doubled colour ones only).
-struct FbMeta {
-    uint32_t natt = 0, layers = 0, width = 0, height = 0;
-};
-std::unordered_map<VkFramebuffer, FbMeta> &g_fb_meta =
-    x4vr::immortal<std::unordered_map<VkFramebuffer, FbMeta>>();
 
 // Which kinds of pass render into each doubled image.
 //
@@ -3364,21 +3339,14 @@ void record_render_pass(const CreateInfo *ci, VkRenderPass rp) {
 // transition itself and therefore cannot be wrong about it.
 std::unordered_map<VkRenderPass, std::vector<VkImageLayout>> &g_rp_final =
     x4vr::immortal<std::unordered_map<VkRenderPass, std::vector<VkImageLayout>>>();
-// And the initial layouts, for X4VR_UI_SS: its image has to be in the layout
-// the pass expects at the start.
-std::unordered_map<VkRenderPass, std::vector<VkImageLayout>> &g_rp_initial =
-    x4vr::immortal<std::unordered_map<VkRenderPass, std::vector<VkImageLayout>>>();
 
 template <class CreateInfo>
 void record_final_layouts(const CreateInfo *ci, VkRenderPass rp) {
-    std::vector<VkImageLayout> f(ci->attachmentCount), in(ci->attachmentCount);
-    for (uint32_t i = 0; i < ci->attachmentCount; i++) {
+    std::vector<VkImageLayout> f(ci->attachmentCount);
+    for (uint32_t i = 0; i < ci->attachmentCount; i++)
         f[i] = ci->pAttachments[i].finalLayout;
-        in[i] = ci->pAttachments[i].initialLayout;
-    }
     std::lock_guard<std::mutex> lock(g_variants.mu);
     g_rp_final[rp] = std::move(f);
-    g_rp_initial[rp] = std::move(in);
 }
 
 void mark_masked(VkRenderPass rp) {
@@ -4059,7 +4027,6 @@ void shader_knob_report(const char *when) {
              (unsigned long long)g_ffx_clears.load(),
              (unsigned long long)g_ffx_copies.load(),
              (unsigned long long)g_ffx_copy_writes.load());
-    ui_ss_report(when);
     // Task #76. The offline census says exactly four modules carry a uint named
     // U_fsr3g_useuitexture at byte 512 of set 4 binding 0 -- the four
     // copy_gamma permutations -- and tests/run-multiview-render.sh asserts that
@@ -4573,7 +4540,6 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyImage(VkDevice device, VkImage img,
             g_images.erase(it);
     }
     ffx_forget_image(d, device, img);
-    ui_ss_forget_image(d, device, img);
     d->DestroyImage(device, img, ac);
 }
 
@@ -5026,7 +4992,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
     }
     uint32_t serial = UINT32_MAX;
     bool masked = false;
-    std::vector<VkImageLayout> finals, initials;
+    std::vector<VkImageLayout> finals;
     // Task #57: is every subpass of this render pass one the canvas predicate
     // calls UI? Read here, under the lock this block already holds, and read
     // DIRECTLY rather than through is_canvas_pass() -- that helper takes
@@ -5048,9 +5014,6 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
         auto f = g_rp_final.find(ci->renderPass);
         if (f != g_rp_final.end())
             finals = f->second;
-        auto in = g_rp_initial.find(ci->renderPass);
-        if (in != g_rp_initial.end())
-            initials = in->second;
         auto c = g_variants.canvas_pass.find(ci->renderPass);
         if (c != g_variants.canvas_pass.end() && !c->second.empty())
             all_canvas = std::all_of(c->second.begin(), c->second.end(),
@@ -5244,17 +5207,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
                     continue;
                 atts.push_back(FbAtt{v->second.image, im->second.serial,
                                      im->second.format, im->second.extent,
-                                     finals[i],
-                                     i < initials.size()
-                                         ? initials[i]
-                                         : VK_IMAGE_LAYOUT_UNDEFINED});
+                                     finals[i]});
             }
         }
         if (!atts.empty()) {
             std::lock_guard<std::mutex> lock(g_cb_mu);
             g_fb_atts[*out] = std::move(atts);
-            // Created with one layer: a masked pass is multiview (above).
-            g_fb_meta[*out] = FbMeta{ci->attachmentCount, 1, ci->width, ci->height};
         }
     }
 
@@ -9159,8 +9117,6 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
         publish_descs(r);
         publish_canvas(r);
         record_provenance(r);
-        if (r == VK_SUCCESS)
-            ui_ss_note_pipelines(count, ci, out);
         return r;
     }
 
@@ -9188,8 +9144,6 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
     publish_descs(r);
     publish_canvas(r);
     record_provenance(r);
-    if (r == VK_SUCCESS)
-        ui_ss_note_pipelines(count, ci, out);
     // The cinematic view's twins: the same create-info, the canvas stage put
     // back to what the non-canvas path gives (the `original` variant, else
     // the module X4 asked for). Built one by one, so a derivative's index
@@ -9267,7 +9221,6 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyPipeline(
     }
     complog_forget_pipeline(p);
     ffx_forget_pipeline(p);
-    ui_ss_forget_pipeline(p);
     VkPipeline twin = VK_NULL_HANDLE;
     {
         std::lock_guard<std::mutex> lock(g_cb_mu);
@@ -11308,7 +11261,6 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdCopyImage(
     if (w < n)
         note_layer0_only(dst, "vkCmdCopyImage");
     note_transfer(src, dst, "vkCmdCopyImage", n, w);
-    ui_ss_outside_write(dst, "vkCmdCopyImage");
     if ((ffx_twin_of(src) || ffx_twin_of(dst)) && ++g_ffx_copies == 1)
         X4VR_LOG("ffx: vkCmdCopyImage touches an image with a right-eye copy — "
                  "NOT repeated on the copy");
@@ -11324,7 +11276,6 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBlitImage(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(cb));
     }
-    ui_ss_outside_write(dst, "vkCmdBlitImage");
     std::vector<VkImageBlit> mod;
     uint32_t w = 0;
     if (g_mv && g_mv_fix_copies && g_active && img_doubled(src) &&
@@ -11387,7 +11338,6 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdClearColorImage(
     count_widened(w);
     if (w < n)
         note_layer0_only(img, "vkCmdClearColorImage");
-    ui_ss_outside_write(img, "vkCmdClearColorImage");
     d->CmdClearColorImage(cb, img, l, colour, n, w ? mod.data() : ranges);
     // FSR 3: the right eye's copy is cleared with it (FidelityFX's reset).
     if (const VkImage t = ffx_twin_of(img)) {
@@ -11425,7 +11375,6 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdCopyImage2(VkCommandBuffer cb,
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(cb));
     }
-    ui_ss_outside_write(info->dstImage, "vkCmdCopyImage2");
     std::vector<VkImageCopy2> mod;
     const uint32_t w = widen2(info, mod);
     count_widened(w);
@@ -11446,7 +11395,6 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBlitImage2(VkCommandBuffer cb,
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(cb));
     }
-    ui_ss_outside_write(info->dstImage, "vkCmdBlitImage2");
     std::vector<VkImageBlit2> mod;
     const uint32_t w = widen2(info, mod);
     count_widened(w);
@@ -11488,7 +11436,6 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdCopyBufferToImage(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(cb));
     }
-    ui_ss_outside_write(dst, "vkCmdCopyBufferToImage");
     note_transfer(VK_NULL_HANDLE, dst, "vkCmdCopyBufferToImage", n, 0);
     note_layer0_only(dst, "vkCmdCopyBufferToImage");
     d->CmdCopyBufferToImage(cb, src, dst, l, n, regions);
@@ -11501,7 +11448,6 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdCopyBufferToImage2(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(cb));
     }
-    ui_ss_outside_write(info->dstImage, "vkCmdCopyBufferToImage2");
     note_transfer(VK_NULL_HANDLE, info->dstImage,
                   "vkCmdCopyBufferToImage2", info->regionCount, 0);
     note_layer0_only(info->dstImage, "vkCmdCopyBufferToImage2");
@@ -12368,551 +12314,6 @@ bool ui_read_ready(DeviceData *d, VkDevice dev, VkDeviceSize layer_bytes,
 
 // The capture, emitted straight after vkCmdEndRenderPass into X4's own command
 // buffer. `a` is the UI target as the pass declared it.
-// ------------------------------------------------ X4VR_UI_SS=2 (take 389)
-//
-// X4's UI drawn at twice the resolution. The canvas (#81) draws X4's UI pass
-// at 0.5252 of its laid-out size straight into X4's UI image, so a menu gets
-// about half the pixels X4 laid it out for (takes 387/388: crisp but
-// hard-edged; Patola: "these menus/writings seem to be in a lower resolution
-// than they should"). With this on, every render pass X4 begins against that
-// image is begun against an image of ours at 2x per axis instead (same
-// format, both layers), with the render area, viewports and scissors scaled
-// to match. At the end of the pass ours is blitted into X4's with a linear
-// filter, which at exactly half size averages each 2x2 block, in linear light
-// (the format is sRGB). X4's composite reads its own image as before: no
-// shader changes. Menus are drawn at 2 x 0.5252 = 1.05 of X4's own size and
-// shrunk with a filter; the canvas is unchanged, so the object brackets (#82)
-// keep their places.
-//
-// Not done, and counted: a pass begun for secondary command buffers, a
-// framebuffer with more than the one attachment, a pipeline without a
-// dynamic viewport and scissor bound inside, and any write X4 makes into its
-// UI image outside a render pass (the next blit would cover it).
-namespace {
-const uint32_t g_ui_ss = [] {
-    const char *e = getenv("X4VR_UI_SS");
-    if (!e || !*e || !strcmp(e, "0") || !strcmp(e, "1"))
-        return 1u;
-    if (!strcmp(e, "2"))
-        return 2u;
-    X4VR_LOG("ui ss: X4VR_UI_SS=\"%s\" REJECTED — 2 is the only factor (a "
-             "linear blit at exactly half size is a 2x2 average); the UI is "
-             "drawn at 1x", e);
-    return 1u;
-}();
-bool ui_ss_on() { return g_ui_ss == 2 && g_mv && g_active; }
-
-struct UiSsTarget {
-    VkImage x4 = VK_NULL_HANDLE; // X4's UI image
-    uint32_t serial = UINT32_MAX;
-    VkImage big = VK_NULL_HANDLE;
-    VkDeviceMemory mem = VK_NULL_HANDLE;
-    VkImageView view = VK_NULL_HANDLE;
-    VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED; // ours, between passes
-    bool failed = false;
-    std::unordered_map<VkFramebuffer, VkFramebuffer> fbs; // X4's -> ours
-};
-// Per command buffer: inside a substituted pass, and the viewports and
-// scissors X4 last set in this recording (dynamic state outlives a pass, so
-// they are re-issued scaled at the start and as X4 set them at the end).
-struct UiSsCb {
-    bool active = false;
-    VkImage x4 = VK_NULL_HANDLE, big = VK_NULL_HANDLE;
-    VkImageLayout initial = VK_IMAGE_LAYOUT_UNDEFINED,
-                  final_ = VK_IMAGE_LAYOUT_UNDEFINED;
-    VkRect2D area{};
-    uint32_t layers = 2;
-    uint32_t vp_first = 0, sc_first = 0;
-    std::vector<VkViewport> vp;
-    std::vector<VkRect2D> sc;
-};
-std::mutex g_ss_mu;
-UiSsTarget &g_ss = x4vr::immortal<UiSsTarget>();
-std::unordered_map<VkCommandBuffer, UiSsCb> &g_ss_cb =
-    x4vr::immortal<std::unordered_map<VkCommandBuffer, UiSsCb>>();
-std::unordered_set<VkPipeline> &g_ss_static_pipes =
-    x4vr::immortal<std::unordered_set<VkPipeline>>();
-std::atomic<VkImage> g_ss_x4_image{VK_NULL_HANDLE};
-std::atomic<uint64_t> g_ss_passes{0}, g_ss_vp_scaled{0}, g_ss_sc_scaled{0},
-    g_ss_secondary{0}, g_ss_other_atts{0}, g_ss_static_bound{0},
-    g_ss_outside{0}, g_ss_bytes{0};
-
-VkViewport ui_ss_scale(VkViewport v) {
-    v.x *= 2.0f;
-    v.y *= 2.0f;
-    v.width *= 2.0f;
-    v.height *= 2.0f;
-    return v;
-}
-VkRect2D ui_ss_scale(VkRect2D r) {
-    r.offset.x *= 2;
-    r.offset.y *= 2;
-    r.extent.width = r.extent.width > 0x3fffffffu ? 0x7fffffffu : r.extent.width * 2;
-    r.extent.height =
-        r.extent.height > 0x3fffffffu ? 0x7fffffffu : r.extent.height * 2;
-    return r;
-}
-
-// Our image, view and the framebuffer for `fb`; called with g_ss_mu held.
-VkFramebuffer ui_ss_framebuffer_locked(DeviceData *d, VkDevice device,
-                                       const FbAtt &a, const FbMeta &m,
-                                       VkFramebuffer fb, VkRenderPass rp,
-                                       uint32_t layers) {
-    if (g_ss.x4 != a.image) {
-        // A new UI image (or the first): what we made for the old one goes.
-        for (auto &e : g_ss.fbs)
-            d->DestroyFramebuffer(device, e.second, nullptr);
-        if (g_ss.view)
-            d->DestroyImageView(device, g_ss.view, nullptr);
-        if (g_ss.big)
-            d->DestroyImage(device, g_ss.big, nullptr);
-        if (g_ss.mem)
-            d->FreeMemory(device, g_ss.mem, nullptr);
-        g_ss = UiSsTarget{};
-        g_ss.x4 = a.image;
-        g_ss.serial = a.serial;
-        g_ss_x4_image.store(a.image);
-    }
-    if (g_ss.failed)
-        return VK_NULL_HANDLE;
-    if (g_ss.big == VK_NULL_HANDLE) {
-        const uint32_t W = a.extent.width * 2, H = a.extent.height * 2;
-        const char *why = nullptr;
-        VkFormatProperties fp{};
-        if (d->GetPhysicalDeviceFormatProperties && d->phys)
-            d->GetPhysicalDeviceFormatProperties(d->phys, a.format, &fp);
-        const VkFormatFeatureFlags need =
-            VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT |
-            VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
-            VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
-        uint32_t usage = 0;
-        {
-            std::lock_guard<std::mutex> il(g_img_mu);
-            auto im = g_images.find(a.image);
-            if (im != g_images.end())
-                usage = im->second.usage;
-        }
-        if ((fp.optimalTilingFeatures & need) != need)
-            why = "the format cannot be blitted with a linear filter";
-        else if (W > d->limits.maxImageDimension2D ||
-                 W > d->limits.maxFramebufferWidth ||
-                 H > d->limits.maxFramebufferHeight)
-            why = "twice the size is over the device's limits";
-        else if (!(usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT))
-            why = "X4's UI image is not a transfer destination";
-        VkImageCreateInfo ci{};
-        ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        ci.imageType = VK_IMAGE_TYPE_2D;
-        ci.format = a.format;
-        ci.extent = {W, H, 1};
-        ci.mipLevels = 1;
-        ci.arrayLayers = layers;
-        ci.samples = VK_SAMPLE_COUNT_1_BIT;
-        ci.tiling = VK_IMAGE_TILING_OPTIMAL;
-        ci.usage = usage | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                   VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        VkMemoryRequirements req{};
-        if (!why && d->CreateImage(device, &ci, nullptr, &g_ss.big) != VK_SUCCESS)
-            why = "vkCreateImage refused it";
-        if (!why) {
-            d->GetImageMemoryRequirements(device, g_ss.big, &req);
-            uint32_t type = UINT32_MAX;
-            for (uint32_t i = 0; i < d->memprops.memoryTypeCount; i++)
-                if ((req.memoryTypeBits & (1u << i)) &&
-                    (d->memprops.memoryTypes[i].propertyFlags &
-                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
-                    type = i;
-                    break;
-                }
-            VkMemoryAllocateInfo mai{};
-            mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-            mai.allocationSize = req.size;
-            mai.memoryTypeIndex = type;
-            if (type == UINT32_MAX ||
-                d->AllocateMemory(device, &mai, nullptr, &g_ss.mem) != VK_SUCCESS ||
-                d->BindImageMemory(device, g_ss.big, g_ss.mem, 0) != VK_SUCCESS)
-                why = "its memory could not be allocated";
-        }
-        if (!why) {
-            VkImageViewCreateInfo vci{};
-            vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-            vci.image = g_ss.big;
-            vci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-            vci.format = a.format;
-            vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
-            if (d->CreateImageView(device, &vci, nullptr, &g_ss.view) != VK_SUCCESS)
-                why = "its view could not be created";
-        }
-        if (why) {
-            g_ss.failed = true;
-            X4VR_LOG("ui ss: img #%u %ux%u — the UI stays at 1x: %s",
-                     a.serial, a.extent.width, a.extent.height, why);
-            return VK_NULL_HANDLE;
-        }
-        g_ss_bytes.store(req.size);
-        X4VR_LOG("ui ss: img #%u %ux%u (%u layer(s)) is drawn at %ux%u — %.1f "
-                 "MiB of ours — and blitted down with a linear filter at the "
-                 "end of each UI pass (X4VR_UI_SS=2)",
-                 a.serial, a.extent.width, a.extent.height, layers, W, H,
-                 req.size / 1048576.0);
-    }
-    auto it = g_ss.fbs.find(fb);
-    if (it != g_ss.fbs.end())
-        return it->second;
-    VkFramebufferCreateInfo fci{};
-    fci.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    fci.renderPass = rp;
-    fci.attachmentCount = 1;
-    fci.pAttachments = &g_ss.view;
-    fci.width = m.width * 2;
-    fci.height = m.height * 2;
-    fci.layers = m.layers;
-    VkFramebuffer big_fb = VK_NULL_HANDLE;
-    if (d->CreateFramebuffer(device, &fci, nullptr, &big_fb) != VK_SUCCESS) {
-        static bool said = false;
-        if (!said) {
-            said = true;
-            X4VR_LOG("ui ss: a 2x framebuffer could not be created — that UI "
-                     "pass stays at 1x");
-        }
-        return VK_NULL_HANDLE;
-    }
-    g_ss.fbs[fb] = big_fb;
-    return big_fb;
-}
-
-// Before X4's vkCmdBeginRenderPass: true and `out` filled when the pass is to
-// be begun against our image.
-bool ui_ss_begin(DeviceData *d, VkCommandBuffer cb, const VkRenderPassBeginInfo *bi,
-                 VkSubpassContents contents, VkRenderPassBeginInfo *out) {
-    if (!ui_ss_on())
-        return false;
-    const uint32_t ui = g_ui_serial.load(std::memory_order_relaxed);
-    if (ui == UINT32_MAX)
-        return false;
-    FbAtt a{};
-    FbMeta m{};
-    bool hit = false;
-    {
-        std::lock_guard<std::mutex> lock(g_cb_mu);
-        auto f = g_fb_atts.find(bi->framebuffer);
-        if (f != g_fb_atts.end())
-            for (const auto &at : f->second)
-                if (at.serial == ui) {
-                    a = at;
-                    hit = true;
-                }
-        auto mm = g_fb_meta.find(bi->framebuffer);
-        if (mm != g_fb_meta.end())
-            m = mm->second;
-    }
-    if (!hit)
-        return false;
-    if (m.natt != 1) {
-        if (++g_ss_other_atts == 1)
-            X4VR_LOG("ui ss: a pass into the UI image has %u attachment(s) — "
-                     "left at 1x", m.natt);
-        return false;
-    }
-    if (contents != VK_SUBPASS_CONTENTS_INLINE) {
-        if (++g_ss_secondary == 1)
-            X4VR_LOG("ui ss: a pass into the UI image records secondary command "
-                     "buffers — left at 1x");
-        return false;
-    }
-    uint32_t layers = 1;
-    {
-        std::lock_guard<std::mutex> il(g_img_mu);
-        auto im = g_images.find(a.image);
-        if (im != g_images.end())
-            layers = im->second.doubled ? 2 : im->second.layers;
-    }
-    VkDevice device = d->device;
-    std::lock_guard<std::mutex> lock(g_ss_mu);
-    const VkFramebuffer big_fb =
-        ui_ss_framebuffer_locked(d, device, a, m, bi->framebuffer, bi->renderPass,
-                                 layers);
-    if (big_fb == VK_NULL_HANDLE)
-        return false;
-    // Our image into the layout the pass starts from, when that is not
-    // "whatever" (an UNDEFINED initial layout discards; nothing to do).
-    if (a.initial_layout != VK_IMAGE_LAYOUT_UNDEFINED &&
-        g_ss.layout != a.initial_layout) {
-        VkImageMemoryBarrier b{};
-        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        b.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-        b.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-                          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        b.oldLayout = g_ss.layout;
-        b.newLayout = a.initial_layout;
-        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.image = g_ss.big;
-        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
-        d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                              VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
-                              nullptr, 0, nullptr, 1, &b);
-    }
-    *out = *bi;
-    out->framebuffer = big_fb;
-    out->renderArea = ui_ss_scale(bi->renderArea);
-    UiSsCb &c = g_ss_cb[cb];
-    c.active = true;
-    c.x4 = a.image;
-    c.big = g_ss.big;
-    c.initial = a.initial_layout;
-    c.final_ = a.final_layout;
-    c.area = bi->renderArea;
-    c.layers = layers;
-    ++g_ss_passes;
-    return true;
-}
-
-// After the substituted begin: X4's last viewports and scissors, scaled.
-void ui_ss_after_begin(DeviceData *d, VkCommandBuffer cb) {
-    std::vector<VkViewport> vp;
-    std::vector<VkRect2D> sc;
-    uint32_t vf = 0, sf = 0;
-    {
-        std::lock_guard<std::mutex> lock(g_ss_mu);
-        auto it = g_ss_cb.find(cb);
-        if (it == g_ss_cb.end() || !it->second.active)
-            return;
-        for (const auto &v : it->second.vp)
-            vp.push_back(ui_ss_scale(v));
-        for (const auto &r : it->second.sc)
-            sc.push_back(ui_ss_scale(r));
-        vf = it->second.vp_first;
-        sf = it->second.sc_first;
-    }
-    if (!vp.empty())
-        d->CmdSetViewport(cb, vf, (uint32_t)vp.size(), vp.data());
-    if (!sc.empty())
-        d->CmdSetScissor(cb, sf, (uint32_t)sc.size(), sc.data());
-}
-
-// After X4's vkCmdEndRenderPass: ours blitted down into X4's image, both left
-// in the layout the pass ends in, and X4's own viewports and scissors back.
-void ui_ss_end(DeviceData *d, VkCommandBuffer cb) {
-    if (g_ui_ss != 2)
-        return;
-    UiSsCb c;
-    {
-        std::lock_guard<std::mutex> lock(g_ss_mu);
-        auto it = g_ss_cb.find(cb);
-        if (it == g_ss_cb.end() || !it->second.active)
-            return;
-        c = it->second;
-        it->second.active = false;
-        g_ss.layout = c.final_;
-    }
-    const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, c.layers};
-    VkImageMemoryBarrier pre[2]{};
-    for (auto &b : pre) {
-        b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.subresourceRange = all;
-    }
-    pre[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    pre[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    pre[0].oldLayout = c.final_;
-    pre[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    pre[0].image = c.big;
-    // X4's image is where X4 left it for the pass: its initial layout.
-    pre[1].srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-    pre[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    pre[1].oldLayout = c.initial;
-    pre[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    pre[1].image = c.x4;
-    d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
-                          nullptr, 2, pre);
-    VkImageBlit r{};
-    r.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, c.layers};
-    r.dstSubresource = r.srcSubresource;
-    const VkRect2D big = ui_ss_scale(c.area);
-    r.srcOffsets[0] = {big.offset.x, big.offset.y, 0};
-    r.srcOffsets[1] = {big.offset.x + (int32_t)big.extent.width,
-                       big.offset.y + (int32_t)big.extent.height, 1};
-    r.dstOffsets[0] = {c.area.offset.x, c.area.offset.y, 0};
-    r.dstOffsets[1] = {c.area.offset.x + (int32_t)c.area.extent.width,
-                       c.area.offset.y + (int32_t)c.area.extent.height, 1};
-    d->CmdBlitImage(cb, c.big, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, c.x4,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r, VK_FILTER_LINEAR);
-    VkImageMemoryBarrier post[2] = {pre[0], pre[1]};
-    post[0].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-    post[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    post[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    post[0].newLayout = c.final_;
-    post[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    post[1].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    post[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    post[1].newLayout = c.final_;
-    d->CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                          VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
-                          nullptr, 2, post);
-    if (!c.vp.empty())
-        d->CmdSetViewport(cb, c.vp_first, (uint32_t)c.vp.size(), c.vp.data());
-    if (!c.sc.empty())
-        d->CmdSetScissor(cb, c.sc_first, (uint32_t)c.sc.size(), c.sc.data());
-}
-
-// X4's vkCmdSetViewport / vkCmdSetScissor: remembered for the recording, and
-// true with `out` scaled when inside a substituted pass.
-bool ui_ss_viewports(VkCommandBuffer cb, uint32_t first, uint32_t n,
-                     const VkViewport *v, std::vector<VkViewport> &out) {
-    if (!ui_ss_on())
-        return false;
-    std::lock_guard<std::mutex> lock(g_ss_mu);
-    UiSsCb &c = g_ss_cb[cb];
-    c.vp_first = first;
-    c.vp.assign(v, v + n);
-    if (!c.active)
-        return false;
-    for (uint32_t i = 0; i < n; i++)
-        out.push_back(ui_ss_scale(v[i]));
-    g_ss_vp_scaled += n;
-    return true;
-}
-bool ui_ss_scissors(VkCommandBuffer cb, uint32_t first, uint32_t n,
-                    const VkRect2D *r, std::vector<VkRect2D> &out) {
-    if (!ui_ss_on())
-        return false;
-    std::lock_guard<std::mutex> lock(g_ss_mu);
-    UiSsCb &c = g_ss_cb[cb];
-    c.sc_first = first;
-    c.sc.assign(r, r + n);
-    if (!c.active)
-        return false;
-    for (uint32_t i = 0; i < n; i++)
-        out.push_back(ui_ss_scale(r[i]));
-    g_ss_sc_scaled += n;
-    return true;
-}
-
-// A new recording: nothing X4 set in the last one carries over.
-void ui_ss_reset_cb(VkCommandBuffer cb) {
-    if (!ui_ss_on())
-        return;
-    std::lock_guard<std::mutex> lock(g_ss_mu);
-    auto it = g_ss_cb.find(cb);
-    if (it != g_ss_cb.end())
-        it->second = UiSsCb{};
-}
-
-// Pipelines whose viewport or scissor is baked in: drawn inside a
-// substituted pass they would cover a quarter of it.
-void ui_ss_note_pipelines(uint32_t n, const VkGraphicsPipelineCreateInfo *ci,
-                          const VkPipeline *out) {
-    if (!ui_ss_on())
-        return;
-    for (uint32_t i = 0; i < n; i++) {
-        if (out[i] == VK_NULL_HANDLE || !ci[i].pViewportState)
-            continue;
-        bool dv = false, ds = false;
-        if (const VkPipelineDynamicStateCreateInfo *dy = ci[i].pDynamicState)
-            for (uint32_t k = 0; k < dy->dynamicStateCount; k++) {
-                dv |= dy->pDynamicStates[k] == VK_DYNAMIC_STATE_VIEWPORT;
-                ds |= dy->pDynamicStates[k] == VK_DYNAMIC_STATE_SCISSOR;
-            }
-        if (!dv || !ds) {
-            std::lock_guard<std::mutex> lock(g_ss_mu);
-            g_ss_static_pipes.insert(out[i]);
-        }
-    }
-}
-void ui_ss_bind(VkCommandBuffer cb, VkPipeline p) {
-    if (!ui_ss_on())
-        return;
-    std::lock_guard<std::mutex> lock(g_ss_mu);
-    auto it = g_ss_cb.find(cb);
-    if (it == g_ss_cb.end() || !it->second.active || !g_ss_static_pipes.count(p))
-        return;
-    if (++g_ss_static_bound == 1)
-        X4VR_LOG("ui ss: a pipeline with its viewport or scissor baked in is "
-                 "bound inside a 2x UI pass — it draws into a quarter of it");
-}
-void ui_ss_forget_pipeline(VkPipeline p) {
-    if (g_ui_ss != 2)
-        return;
-    std::lock_guard<std::mutex> lock(g_ss_mu);
-    g_ss_static_pipes.erase(p);
-}
-
-void ui_ss_outside_write(VkImage dst, const char *what) {
-    if (g_ui_ss != 2 || dst == VK_NULL_HANDLE ||
-        dst != g_ss_x4_image.load(std::memory_order_relaxed))
-        return;
-    if (++g_ss_outside == 1)
-        X4VR_LOG("ui ss: %s writes X4's UI image outside a render pass — the "
-                 "next 2x blit covers it", what);
-}
-
-void ui_ss_forget_fb(DeviceData *d, VkDevice device, VkFramebuffer fb) {
-    VkFramebuffer ours = VK_NULL_HANDLE;
-    {
-        // The attachment records too: a framebuffer created later with this
-        // handle must not inherit them (and be taken for the UI pass).
-        std::lock_guard<std::mutex> lock(g_cb_mu);
-        g_fb_meta.erase(fb);
-        g_fb_atts.erase(fb);
-    }
-    if (g_ui_ss != 2)
-        return;
-    {
-        std::lock_guard<std::mutex> lock(g_ss_mu);
-        auto it = g_ss.fbs.find(fb);
-        if (it == g_ss.fbs.end())
-            return;
-        ours = it->second;
-        g_ss.fbs.erase(it);
-    }
-    d->DestroyFramebuffer(device, ours, nullptr);
-}
-
-void ui_ss_forget_image(DeviceData *d, VkDevice device, VkImage img) {
-    if (g_ui_ss != 2 || img == VK_NULL_HANDLE)
-        return;
-    UiSsTarget old;
-    {
-        std::lock_guard<std::mutex> lock(g_ss_mu);
-        if (g_ss.x4 != img)
-            return;
-        old = std::move(g_ss);
-        g_ss = UiSsTarget{};
-        g_ss_x4_image.store(VK_NULL_HANDLE);
-    }
-    for (auto &e : old.fbs)
-        d->DestroyFramebuffer(device, e.second, nullptr);
-    if (old.view)
-        d->DestroyImageView(device, old.view, nullptr);
-    if (old.big)
-        d->DestroyImage(device, old.big, nullptr);
-    if (old.mem)
-        d->FreeMemory(device, old.mem, nullptr);
-}
-
-// Unconditional, zeros included (the shader_knob_report rule).
-void ui_ss_report(const char *when) {
-    X4VR_LOG("ui ss %s: the UI at %s — %llu pass(es) drawn at 2x and blitted "
-             "down (%.1f MiB of ours); %llu viewport(s) and %llu scissor(s) "
-             "scaled; left at 1x: %llu with secondary command buffers, %llu "
-             "with other attachments; %llu bind(s) of a baked-viewport "
-             "pipeline inside; %llu write(s) to X4's UI image outside a pass",
-             when,
-             g_ui_ss != 2 ? "1x (X4VR_UI_SS unset)"
-             : ui_ss_on() ? "2x (X4VR_UI_SS=2)"
-                          : "1x (X4VR_UI_SS=2 needs X4VR_MV)",
-             (unsigned long long)g_ss_passes.load(),
-             g_ss_bytes.load() / 1048576.0,
-             (unsigned long long)g_ss_vp_scaled.load(),
-             (unsigned long long)g_ss_sc_scaled.load(),
-             (unsigned long long)g_ss_secondary.load(),
-             (unsigned long long)g_ss_other_atts.load(),
-             (unsigned long long)g_ss_static_bound.load(),
-             (unsigned long long)g_ss_outside.load());
-}
-} // namespace
-
 void ui_capture(DeviceData *d, VkCommandBuffer cb, const FbAtt &a) {
     std::lock_guard<std::mutex> lock(g_ui_stage.mu);
     VkExtent2D ext{a.extent.width, a.extent.height};
@@ -13147,12 +12548,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBeginRenderPass(
             }
         }
     }
-    // X4VR_UI_SS: the UI pass begun against our 2x image instead.
-    VkRenderPassBeginInfo ss_bi;
-    const bool ss = ui_ss_begin(d, cb, bi, contents, &ss_bi);
-    d->CmdBeginRenderPass(cb, ss ? &ss_bi : bi, contents);
-    if (ss)
-        ui_ss_after_begin(d, cb);
+    d->CmdBeginRenderPass(cb, bi, contents);
 }
 
 VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
@@ -13162,9 +12558,6 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdEndRenderPass(VkCommandBuffer cb) {
         d = &g_devices.at(dispatch_key(cb));
     }
     d->CmdEndRenderPass(cb);
-    // X4VR_UI_SS: ours blitted down into X4's image, before anything below
-    // (the UI capture) reads X4's.
-    ui_ss_end(d, cb);
 
     // ---- task #57: copy the UI target out, while its layout is not a guess --
     //
@@ -13713,50 +13106,6 @@ void probe_collect(DeviceData *d, VkQueue queue, bool count_frame) {
 // A secondary command buffer is recorded outside any vkCmdBeginRenderPass but
 // still executes inside one, named here. Without this its draws would look
 // like they belong to no pass and the mismatch would go uncounted.
-
-// X4VR_UI_SS: X4's viewports and scissors, scaled inside a 2x UI pass and
-// remembered everywhere else (they outlive a pass).
-VKAPI_ATTR void VKAPI_CALL x4vr_CmdSetViewport(VkCommandBuffer cb, uint32_t first,
-                                               uint32_t n, const VkViewport *v) {
-    DeviceData *d;
-    {
-        std::lock_guard<std::mutex> lock(g_mu);
-        d = &g_devices.at(dispatch_key(cb));
-    }
-    std::vector<VkViewport> scaled;
-    if (ui_ss_viewports(cb, first, n, v, scaled))
-        d->CmdSetViewport(cb, first, n, scaled.data());
-    else
-        d->CmdSetViewport(cb, first, n, v);
-}
-
-VKAPI_ATTR void VKAPI_CALL x4vr_CmdSetScissor(VkCommandBuffer cb, uint32_t first,
-                                              uint32_t n, const VkRect2D *r) {
-    DeviceData *d;
-    {
-        std::lock_guard<std::mutex> lock(g_mu);
-        d = &g_devices.at(dispatch_key(cb));
-    }
-    std::vector<VkRect2D> scaled;
-    if (ui_ss_scissors(cb, first, n, r, scaled))
-        d->CmdSetScissor(cb, first, n, scaled.data());
-    else
-        d->CmdSetScissor(cb, first, n, r);
-}
-
-// A framebuffer's records, and our 2x twin of it, die with it: Vulkan hands
-// the handle straight back.
-VKAPI_ATTR void VKAPI_CALL x4vr_DestroyFramebuffer(VkDevice device, VkFramebuffer fb,
-                                                   const VkAllocationCallbacks *ac) {
-    DeviceData *d;
-    {
-        std::lock_guard<std::mutex> lock(g_mu);
-        d = &g_devices.at(dispatch_key(device));
-    }
-    ui_ss_forget_fb(d, device, fb);
-    d->DestroyFramebuffer(device, fb, ac);
-}
-
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
     VkCommandBuffer cb, const VkCommandBufferBeginInfo *bi) {
     DeviceData *d;
@@ -13770,7 +13119,6 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
         cb_enter_pass(cb, bi->pInheritanceInfo->renderPass);
     else
         cb_leave_pass(cb);
-    ui_ss_reset_cb(cb);
     // Task #59: this command buffer's region of the pose ring. Vulkan forbids
     // re-recording a command buffer that is still executing, so a region keyed
     // to the recording epoch is free by exactly the same rule that lets X4
@@ -13927,8 +13275,6 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
     }
     complog_bind_pipeline(cb, bp, p);
     ffx_bind_pipeline(cb, bp, p);
-    if (bp == VK_PIPELINE_BIND_POINT_GRAPHICS)
-        ui_ss_bind(cb, p);
     if (bp == VK_PIPELINE_BIND_POINT_COMPUTE && g_active && fsr_stereo_enabled()) {
         std::lock_guard<std::mutex> lock(g_fsr_mu);
         g_fsr_cb[cb] = g_fsr_pipes.count(p) != 0;
@@ -17200,9 +16546,6 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(DestroyDescriptorPool);
     RESOLVE(FreeDescriptorSets);
     RESOLVE(ResetDescriptorPool);
-    RESOLVE(CmdSetViewport);
-    RESOLVE(CmdSetScissor);
-    RESOLVE(DestroyFramebuffer);
     RESOLVE(DestroyDescriptorSetLayout);
     RESOLVE(DestroyImageView);
     RESOLVE(CreateRenderPass2);
@@ -17238,9 +16581,6 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
         if (auto gpmp = (PFN_vkGetPhysicalDeviceMemoryProperties)gipa(
                 inst, "vkGetPhysicalDeviceMemoryProperties"))
             gpmp(phys, &d.memprops);
-        d.GetPhysicalDeviceFormatProperties =
-            (PFN_vkGetPhysicalDeviceFormatProperties)gipa(
-                inst, "vkGetPhysicalDeviceFormatProperties");
         // Task #59 needs maxBoundDescriptorSets and the uniform-buffer offset
         // alignment. Cached here for the same reason memprops is: the physical
         // device is in scope only during creation.
@@ -17558,9 +16898,6 @@ const NameFunc kHooks[] = {
     {"vkAllocateDescriptorSets",
      (PFN_vkVoidFunction)x4vr_AllocateDescriptorSets},
     {"vkFreeDescriptorSets", (PFN_vkVoidFunction)x4vr_FreeDescriptorSets},
-    {"vkCmdSetViewport", (PFN_vkVoidFunction)x4vr_CmdSetViewport},
-    {"vkCmdSetScissor", (PFN_vkVoidFunction)x4vr_CmdSetScissor},
-    {"vkDestroyFramebuffer", (PFN_vkVoidFunction)x4vr_DestroyFramebuffer},
     {"vkResetDescriptorPool", (PFN_vkVoidFunction)x4vr_ResetDescriptorPool},
     {"vkDestroyDescriptorPool", (PFN_vkVoidFunction)x4vr_DestroyDescriptorPool},
     {"vkDestroyDescriptorSetLayout",
