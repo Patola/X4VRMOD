@@ -1700,13 +1700,13 @@ inv_case "...the eye-sized dispatch doubled" \
 # reads 0.875 -- the right eye's pass 1 overwrote the shared history.
 VCF="$BUILD/tests/view_color.frag.spv"
 ffx_case() {
-    local label="$1" knob="$2" want="$3"
+    local label="$1" knob="$2" want="$3" order="${4:-}"
     local out got
     out=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \
         "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
         X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=3 X4VR_BINDLESS_MIRROR=1 \
         X4VR_RES=64x64 X4VR_TEST_COMPUTE=ffx "X4VR_FFX_STEREO=$knob" \
-        "$BIN" "$VS" "$VCF" "$SF" 2>&1)
+        "X4VR_TEST_FFX_ORDER=$order" "$BIN" "$VS" "$VCF" "$SF" 2>&1)
     got="$(sed -n 's/^FFX_OUT_LAYERS=//p' <<<"$out")"
     got="$got $(sed -n 's/^FFX_R0=//p' <<<"$out")"
     got="$got $(sed -n 's/^FFX_R1=//p' <<<"$out")"
@@ -1719,6 +1719,11 @@ ffx_case() {
 }
 ffx_case "FSR 3: each eye from its own layer" 1 "2 0.375 0.875"
 ffx_case "...and without the fix layer 1 is 0" 0 "2 0.375 0.000"
+# Take 382: FidelityFX's ping-pong history is read before it is first
+# written. The layer at 6160a37 cached "keep the left eye's" for that view and
+# gave 0.875 0.875 here (the right eye jumped between its picture and the
+# left's in VR).
+ffx_case "...history read before it is written" 1 "2 0.375 0.875" reader-first
 ffx_log_case() {
     local label="$1" want="$2" out
     out=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \

@@ -5423,6 +5423,18 @@ def main(path):
               + (f" ({last[4]} MiB in all)" if last else "")
               + f"; dispatches run again for the right eye: "
               f"{max(f3_runs, default=0)}+ (the log counts in steps of 10000)")
+        # The right eye's views, from the last report line. "read before
+        # written" is a few on the first frames (FidelityFX's ping-pong reads
+        # one half before writing it, take 382); a count that keeps growing is
+        # an image FidelityFX reads and never writes, shared between the eyes.
+        f3_views = re.findall(r"views: (\d+) layer 1, (\d+) copy, (\d+) kept"
+                              r"(?:, (\d+) read before written)?", text)
+        if f3_views:
+            l1, cp, kept, early = f3_views[-1]
+            print(f"ffx     right-eye views: {l1} layer 1, {cp} on copies, {kept} "
+                  f"kept as the left eye's"
+                  + (f", {early} read before written (decided again)" if early
+                     else ""))
         for b in f3_bad:
             print(f"ffx     {b}")
         if f3_up and not f3_off:

@@ -1327,7 +1327,7 @@ std::atomic<uint64_t> g_ffx_modules_seen{0}, g_ffx_pipes_seen{0}, g_ffx_twins{0}
     g_ffx_twin_bytes{0}, g_ffx_twin_failed{0}, g_ffx_twin_sets{0},
     g_ffx_set_failed{0}, g_ffx_doubled{0}, g_ffx_unpaired{0}, g_ffx_indirect{0},
     g_ffx_barriers{0}, g_ffx_clears{0}, g_ffx_copies{0}, g_ffx_copy_writes{0},
-    g_ffx_view_l1{0}, g_ffx_view_twin{0}, g_ffx_view_kept{0};
+    g_ffx_view_l1{0}, g_ffx_view_twin{0}, g_ffx_view_kept{0}, g_ffx_view_early{0};
 namespace {
 void ffx_note_module(const VkShaderModuleCreateInfo *ci, VkShaderModule mod);
 void ffx_forget_module(VkShaderModule mod);
@@ -4001,7 +4001,8 @@ void shader_knob_report(const char *when) {
              "pipeline(s); %llu right-eye image copies (%.1f MiB), %llu failed; "
              "%llu twin set(s), %llu failed; %llu dispatch(es) run again for the "
              "right eye, %llu left one-eyed, %llu indirect not repeated; views: "
-             "%llu layer 1, %llu copy, %llu kept; %llu barrier(s) and %llu "
+             "%llu layer 1, %llu copy, %llu kept, %llu read before written (not "
+             "cached); %llu barrier(s) and %llu "
              "clear(s) repeated on copies; %llu image copy command(s) touching a "
              "copy NOT repeated; %llu descriptor copies repeated",
              when,
@@ -4021,6 +4022,7 @@ void shader_knob_report(const char *when) {
              (unsigned long long)g_ffx_view_l1.load(),
              (unsigned long long)g_ffx_view_twin.load(),
              (unsigned long long)g_ffx_view_kept.load(),
+             (unsigned long long)g_ffx_view_early.load(),
              (unsigned long long)g_ffx_barriers.load(),
              (unsigned long long)g_ffx_clears.load(),
              (unsigned long long)g_ffx_copies.load(),
@@ -7369,14 +7371,29 @@ VkImageView ffx_right_view(DeviceData *d, VkDevice device, VkImageView v) {
         doubled = im->second.doubled;
     }
     VkImage twin = VK_NULL_HANDLE;
+    bool early = false;
     {
         std::lock_guard<std::mutex> lock(g_ffx_mu);
         auto c = g_ffx_views.find(v);
         if (c != g_ffx_views.end() && c->second.image == vi.image)
             return c->second.view;
         auto t = g_ffx_twin.find(vi.image);
-        if (t != g_ffx_twin.end() && g_ffx_written.count(vi.image))
-            twin = t->second.image;
+        if (t != g_ffx_twin.end()) {
+            if (g_ffx_written.count(vi.image))
+                twin = t->second.image;
+            else
+                early = true;
+        }
+    }
+    // **Not cached** (take 382): an image with a right-eye copy that
+    // FidelityFX has not written YET. Its ping-pong history reads image A on
+    // its first frame before ever writing it; caching "keep the original"
+    // then sent the right eye to the left eye's history, and its output, on
+    // every other frame -- the right eye jumped between two positions. Decided
+    // again at the next write of the set, which FidelityFX makes every frame.
+    if (early) {
+        ++g_ffx_view_early;
+        return v;
     }
     VkImageViewCreateInfo ci{};
     ci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;

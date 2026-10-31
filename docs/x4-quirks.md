@@ -29222,3 +29222,76 @@ only other difference.
   nothing has checked them. If smearing appears in that eye alone, the
   vectors are the suspect, not the right-eye pass.
 * Frame time: not predicted; FidelityFX's work doubles.
+
+## Take 382 — SCORED (2026-10-31): the right eye jumps between two positions
+
+Patola: "the right eye is not good. Not because of smearing, but because it
+keeps jittering between two positions all the time for the 3D scene".
+
+* **P382.1–P382.3 — held.** The scorer PASSes (`ffx`):
+  * 22 FidelityFX modules;
+  * 26 right-eye copies (1548 MiB over two contexts);
+  * 31,248 dispatches run again for the right eye, about 8 a frame;
+  * 0 left one-eyed, 0 indirect, 0 copies NOT repeated;
+  * 156,243 barriers and 11,720 clears repeated on copies;
+  * 320 twin sets.
+* **P382.4 — failed.**
+* GAMEPLAY 18.38 ms (54 fps), 4 windows, 37 s.
+
+**The cause was my own code, in ffx_right_view, and the final report line
+showed it: "3 kept".** The function caches its answer per view. For a
+single-layer image it used the right-eye copy only once FidelityFX had been
+seen writing the image, and otherwise kept the original, the left eye's.
+That "keep" was cached for good.
+
+FidelityFX's ping-pong history images (internal upscaled colour #88/#89,
+luma history #92/#93) are read before they are first written: frame 1 reads
+A and writes B. So A's view was cached as "keep the left eye's".
+* On every frame whose output lands in A, the right eye's RCAS read the left
+  eye's upscaled image.
+* On every frame in B, it read its own.
+
+The right eye alternated between the two eyes' pictures: two positions,
+depth-dependent, every frame. The three kept views were the read-only Lanczos
+LUT and the first-read halves of the two pairs.
+
+**Fix:** a "keep" for an image that has a right-eye copy but has not been
+written yet is not cached. It is decided again at the next write of the set,
+and FidelityFX rewrites every set every frame. The report counts these
+("read before written (not cached)"), and the scorer prints the view counts.
+
+The harness reproduces the take with `X4VR_TEST_FFX_ORDER=reader-first`:
+the reader's set is written before the writer's, then rewritten.
+* The layer at 6160a37 gives 0.875 / 0.875. The test's history uses one view
+  for reading and writing, so the cached keep also sent the right eye's
+  write into the left eye's history.
+* Fixed: 0.375 / 0.875, with validation below the layer clean.
+
+**Not the cause, but the next suspect if anything is left: X4's motion
+vectors.** `common.vert.glsl` writes `IO_mv = M_prevworldviewprojection *
+Pos` and the G-buffer stores `uv(IO_mv) − fragment uv`.
+* The per-eye offset (`gl_Position.x −= sx·d`, d = ±IPD/2) moves the
+  fragment but not `IO_mv`, so each eye's motion carries half the eye
+  separation as fake motion: about 74 px at 1 m at 4224², under 1 px beyond
+  ~100 m.
+* It is symmetric between the eyes, so it cannot explain a right-eye-only
+  symptom.
+* Neither eye has shown smearing yet (the left eye in take 381), most
+  likely because the cockpit writes no motion or is masked as reactive.
+* If the cockpit smears in both eyes, the fix is to apply the same offset
+  to `IO_mv` in the vertex patch.
+
+## Take 383 — PREDICTIONS (written before the run): FSR 3, the history fixed
+
+    X4VR_HEADLOOK_LAGLOG=1 X4VR_TAKE=383 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=4224 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=8448 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=4224x4224 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_UPSCALE=fsr3_balanced X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_STEER_PICK=1 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_COMPLOG=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take383.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_MV_INVENTORY=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+Take 382's command with the take number and log changed.
+
+* **P383.1:** the scorer's `ffx` block as in take 382, with "kept as the
+  left eye's" at 1 (the LUT) and "read before written" a handful, not
+  growing.
+* **P383.2 (Patola's eye):** the right eye's 3D scene is steady, at the
+  correct depth, matching the left.
+* If it still jumps: the cause is elsewhere, and a capture of consecutive
+  frames of both layers is next.
+* If the cockpit smears in both eyes: the motion vectors above.

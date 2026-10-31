@@ -944,7 +944,21 @@ int main(int argc, char **argv) {
             w[2].pBufferInfo = &xubi;
             w[3].pImageInfo = &xsi;
         }
-        vkUpdateDescriptorSets(dev, 8, xw, 0, nullptr);
+        // X4VR_TEST_FFX_ORDER=reader-first: the reader's set (pass 2) is
+        // written BEFORE the writer's (pass 1), then written again, as
+        // FidelityFX does with its ping-pong history: on its first frame it
+        // reads image A before it has ever written it, and rewrites every set
+        // each frame. Take 382: the layer cached "not yet written, keep the
+        // left eye's" for A's view and never decided again, so the right eye
+        // read the left eye's history on every other frame.
+        const char *xorder = getenv("X4VR_TEST_FFX_ORDER");
+        if (xorder && !strcmp(xorder, "reader-first")) {
+            vkUpdateDescriptorSets(dev, 4, xw + 4, 0, nullptr);
+            vkUpdateDescriptorSets(dev, 4, xw, 0, nullptr);
+            vkUpdateDescriptorSets(dev, 4, xw + 4, 0, nullptr);
+        } else {
+            vkUpdateDescriptorSets(dev, 8, xw, 0, nullptr);
+        }
 
         VkBufferCreateInfo rbci{};
         rbci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
