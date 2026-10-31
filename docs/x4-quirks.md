@@ -28891,3 +28891,55 @@ working and it was."*
   windows. The resolution's cost, not the rule's.
 
 Released as **v0.9.7** (code 4936e46).
+
+## Take 379 — PREDICTIONS (written before the run): what X4's FSR 1 touches
+
+**X4's FSR 1** (X4's shader sources, read 2026-10-31):
+* One compute shader, `fsr.comp.glsl`, run twice: `fsr_easu` (upscale), then
+  `fsr_rcas` (sharpen).
+* Each pass samples `S_input_rt` with 2D coordinates and `imageStore`s into
+  `U_output_rt`, an rgba16f 2D storage image, with constants `U_pass[4]`.
+* 64 threads per group, each group covering a 16x16 tile.
+* Neither side knows an eye layer, and the layer runs compute as written.
+
+**X4VR_COMPLOG=1 (built, read only, layer/x4vr_layer.cpp):**
+* **Each compute module once:** workgroup size, named resources with set
+  and binding, FSR names (`x4vr::spv::compute_info`, common/x4vr_spirv.hpp;
+  tests/spirv_names.cpp on tests/fsr_shape.comp, a fixture with FSR's
+  shape).
+* **Each distinct dispatch once,** then a count every 1000:
+  * the module and the group counts;
+  * for each resource the module declares, the image bound there: size,
+    format, usage, DOUBLED or single, and the view (type, first layer,
+    layer count).
+  * Descriptors come from vkUpdateDescriptorSets; a template-written set is
+    named, not decoded; a large array is reported as bindless.
+* **GPU harness:** `X4VR_TEST_COMPUTE=fsr` runs the fixture with a uniform
+  buffer, the doubled target sampled and a 64x64 rgba16f storage image
+  written. Three new cases: the module named FSR with its bindings, the
+  input resolved to the doubled image through a 1-layer 2D view, the output
+  to its single image. The harness passes.
+* **Scorer block `complog`** (FSR modules, their dispatches with images;
+  FAIL if asked and no module); census: 9 cases.
+
+The shipping line at 4224² per eye with `X4VR_UPSCALE=fsr_quality` (X4
+renders 2816² and upscales), plus X4VR_COMPLOG and X4VR_MV_INVENTORY:
+
+    X4VR_TAKE=379 X4VR_HEAD_6DOF=1 X4VR_STEER_PICK=1 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_FOOT=1 X4VR_STEER=a X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=4224 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=8448 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=4224x4224 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_UPSCALE=fsr_quality X4VR_COMPLOG=1 X4VR_MV_INVENTORY=1 X4VR_LOG=/tmp/x4vr-take379.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+Load, wait in the cockpit ~15 s with your head still, close one eye then
+the other, and **describe what the right eye shows** (black, frozen, the
+left eye's picture, garbage, a lower resolution...). Then quit.
+
+* **P379.1:** two FSR modules (`FsrEasu*`, `FsrRcas*`), 64x1x1, each with
+  `S_input_rt` and `U_output_rt`.
+* **P379.2:** EASU dispatches 264x264x1 (4224/16). Its `S_input_rt` is a
+  DOUBLED 2816² scene target through a 2D view of layer 0; its `U_output_rt`
+  is a 4224² rgba16f image, single (storage, no colour attachment, so never
+  a doubling candidate). RCAS reads that and writes another single 4224²
+  image.
+* **P379.3:** downstream, the present/UI pass samples RCAS's output. The
+  inventory shows its writer as no render pass, and how view 1 gets its
+  content, which says why the right eye fails.
+* **Refutation:** no FSR compute module (X4 runs FSR another way), or the
+  FSR images doubled and both layers written.

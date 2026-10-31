@@ -2470,6 +2470,16 @@ void bindless_survey_writes(uint32_t writeCount,
     }
 }
 
+// X4VR_COMPLOG's recorders, defined with the compute hooks further down.
+namespace {
+void complog_writes(uint32_t n, const VkWriteDescriptorSet *w);
+void complog_template(VkDescriptorSet set);
+void complog_module(const VkShaderModuleCreateInfo *ci, VkShaderModule mod);
+void complog_bind_pipeline(VkCommandBuffer cb, VkPipelineBindPoint bp, VkPipeline p);
+void complog_bind_sets(VkCommandBuffer cb, VkPipelineBindPoint bp, uint32_t first,
+                       uint32_t n, const VkDescriptorSet *sets);
+} // namespace
+
 VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSets(
     VkDevice device, uint32_t writeCount,
     const VkWriteDescriptorSet *writes, uint32_t copyCount,
@@ -2481,6 +2491,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSets(
     }
     if (g_bindless_survey && g_active)
         bindless_survey_writes(writeCount, writes);
+    complog_writes(writeCount, writes);
     std::vector<VkWriteDescriptorSet> redirected;
     std::vector<std::vector<VkDescriptorImageInfo>> pool, mpool;
     if (g_mv && g_active) {
@@ -2553,6 +2564,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindDescriptorSets(
     }
     d->CmdBindDescriptorSets(cb, bindPoint, layout, firstSet, setCount, sets,
                              dynCount, dyn);
+    complog_bind_sets(cb, bindPoint, firstSet, setCount, sets);
     // Only descriptor set 1 carries the per-view camera block for the main
     // geometry (established from the renderdoc capture: the range-1792 UBO
     // is bound at set 1 in 84% of the G-buffer pass's draws). Crediting any
@@ -4666,6 +4678,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSetWithTemplate(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
+    complog_template(set);
     if (g_bindless_survey) {
         std::lock_guard<std::mutex> dlock(g_desc_mu);
         g_tmpl_updates++;
@@ -6834,6 +6847,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     // own edits would be worse than no dump.
     if (r == VK_SUCCESS) {
         record_module(ci, *out);
+        complog_module(ci, *out);
         if (frag_patched) {
             std::lock_guard<std::mutex> lock(g_mod_mu);
             g_mod_frag_patched.insert(*out);
@@ -7452,6 +7466,229 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreatePipelineLayout(
     return r;
 }
 
+// ------------------------------------------------ X4VR_COMPLOG=1 (read only)
+//
+// Take 379: X4's FSR loses the right eye. X4 9.00's FSR 1 is one compute
+// shader (fsr.comp.glsl) run twice, EASU then RCAS: it samples S_input_rt and
+// imageStores into U_output_rt, an rgba16f 2D storage image, in 16x16 tiles
+// of 64 threads. Neither side knows an eye layer, and the layer runs compute
+// as X4 wrote it. This logs what each compute dispatch touches, so the
+// fix (both eyes per dispatch) is designed on the frame and not on a guess:
+//   * each compute module once: workgroup size, its named resources with set
+//     and binding, any FSR names (x4vr::spv::compute_info);
+//   * each distinct dispatch once (module, group counts, and for every
+//     resource the module declares, the image bound there: size, format,
+//     layers, DOUBLED or not, and the view's layers), then a count every
+//     1000 repeats.
+// Descriptors come from vkUpdateDescriptorSets; a set written by a template
+// is named as such, not decoded. Nothing is changed.
+static bool complog_enabled() {
+    static const bool on = x4vr::env_on("X4VR_COMPLOG", false);
+    return on;
+}
+namespace {
+struct ClModule {
+    uint32_t serial = 0;
+    x4vr::spv::ComputeInfo info;
+};
+struct ClSlot {
+    VkDescriptorType type = VK_DESCRIPTOR_TYPE_MAX_ENUM;
+    VkImageView view = VK_NULL_HANDLE;
+    uint32_t count = 0; // descriptors written at this binding by one write
+};
+struct ClCb {
+    VkPipeline pipe = VK_NULL_HANDLE;
+    std::map<uint32_t, VkDescriptorSet> sets;
+};
+std::mutex g_cl_mu;
+std::unordered_map<VkShaderModule, ClModule> &g_cl_modules =
+    x4vr::immortal<std::unordered_map<VkShaderModule, ClModule>>();
+std::unordered_map<VkPipeline, VkShaderModule> &g_cl_pipe =
+    x4vr::immortal<std::unordered_map<VkPipeline, VkShaderModule>>();
+std::unordered_map<VkDescriptorSet, std::map<uint32_t, ClSlot>> &g_cl_sets =
+    x4vr::immortal<std::unordered_map<VkDescriptorSet, std::map<uint32_t, ClSlot>>>();
+std::unordered_set<VkDescriptorSet> &g_cl_tmpl =
+    x4vr::immortal<std::unordered_set<VkDescriptorSet>>();
+std::unordered_map<VkCommandBuffer, ClCb> &g_cl_cb =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, ClCb>>();
+std::unordered_map<std::string, uint64_t> &g_cl_sigs =
+    x4vr::immortal<std::unordered_map<std::string, uint64_t>>();
+uint32_t g_cl_next = 0;
+
+void complog_module(const VkShaderModuleCreateInfo *ci, VkShaderModule mod) {
+    if (!complog_enabled() || !g_active)
+        return;
+    std::vector<uint32_t> code(ci->codeSize / 4);
+    memcpy(code.data(), ci->pCode, ci->codeSize);
+    x4vr::spv::ComputeInfo info = x4vr::spv::compute_info(code);
+    if (!info.compute)
+        return;
+    std::string b, f;
+    for (const auto &nb : info.bindings)
+        b += " " + nb.name + "@" + std::to_string(nb.set) + "." +
+             std::to_string(nb.binding);
+    for (const auto &n : info.fsr_names)
+        f += " " + n;
+    const uint32_t lx = info.local[0], ly = info.local[1], lz = info.local[2];
+    uint32_t serial;
+    {
+        std::lock_guard<std::mutex> lock(g_cl_mu);
+        serial = g_cl_next++;
+        g_cl_modules[mod] = ClModule{serial, std::move(info)};
+    }
+    X4VR_LOG("comp: module c%u local %ux%ux%u, %zu bytes | resources:%s%s%s",
+             serial, lx, ly, lz, (size_t)ci->codeSize,
+             b.empty() ? " none named" : b.c_str(), f.empty() ? "" : " | FSR:",
+             f.c_str());
+}
+
+void complog_pipelines(uint32_t n, const VkComputePipelineCreateInfo *ci,
+                       const VkPipeline *out) {
+    if (!complog_enabled() || !g_active)
+        return;
+    std::lock_guard<std::mutex> lock(g_cl_mu);
+    for (uint32_t i = 0; i < n; i++)
+        if (out[i] != VK_NULL_HANDLE)
+            g_cl_pipe[out[i]] = ci[i].stage.module;
+}
+
+void complog_writes(uint32_t n, const VkWriteDescriptorSet *w) {
+    if (!complog_enabled() || !g_active)
+        return;
+    std::lock_guard<std::mutex> lock(g_cl_mu);
+    for (uint32_t i = 0; i < n; i++) {
+        const VkDescriptorType t = w[i].descriptorType;
+        if ((t != VK_DESCRIPTOR_TYPE_STORAGE_IMAGE &&
+             t != VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE &&
+             t != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) ||
+            !w[i].pImageInfo || !w[i].descriptorCount)
+            continue;
+        // The first element names the slot; a large array (the bindless heap)
+        // is reported by its size, not resolved.
+        ClSlot &sl = g_cl_sets[w[i].dstSet][w[i].dstBinding];
+        if (w[i].dstArrayElement == 0) {
+            sl.type = t;
+            sl.view = w[i].pImageInfo[0].imageView;
+        }
+        sl.count = std::max(sl.count, w[i].dstArrayElement + w[i].descriptorCount);
+    }
+}
+
+void complog_template(VkDescriptorSet set) {
+    if (!complog_enabled() || !g_active)
+        return;
+    std::lock_guard<std::mutex> lock(g_cl_mu);
+    g_cl_tmpl.insert(set);
+}
+
+void complog_bind_pipeline(VkCommandBuffer cb, VkPipelineBindPoint bp, VkPipeline p) {
+    if (!complog_enabled() || !g_active || bp != VK_PIPELINE_BIND_POINT_COMPUTE)
+        return;
+    std::lock_guard<std::mutex> lock(g_cl_mu);
+    g_cl_cb[cb].pipe = p;
+}
+
+void complog_bind_sets(VkCommandBuffer cb, VkPipelineBindPoint bp, uint32_t first,
+                       uint32_t n, const VkDescriptorSet *sets) {
+    if (!complog_enabled() || !g_active || bp != VK_PIPELINE_BIND_POINT_COMPUTE)
+        return;
+    std::lock_guard<std::mutex> lock(g_cl_mu);
+    for (uint32_t i = 0; i < n; i++)
+        g_cl_cb[cb].sets[first + i] = sets[i];
+}
+
+// "img #12 4224x4224 fmt=97 usage=0x.. single, view 2D from layer 0, 1 layer(s)"
+std::string complog_view(VkImageView v) {
+    std::lock_guard<std::mutex> lock(g_img_mu);
+    auto it = g_views.find(v);
+    if (it == g_views.end())
+        return "view not tracked";
+    const ViewInfo &vi = it->second;
+    auto im = g_images.find(vi.image);
+    char b[160];
+    if (im == g_images.end()) {
+        snprintf(b, sizeof b, "image not tracked, view type %d from layer %u, %u layer(s)",
+                 (int)vi.type, vi.range.baseArrayLayer, vi.range.layerCount);
+        return b;
+    }
+    const ImageInfo &ii = im->second;
+    snprintf(b, sizeof b,
+             "img #%u %ux%u fmt=%u usage=0x%x %s, view %s from layer %u, %u layer(s)",
+             ii.serial, ii.extent.width, ii.extent.height, (unsigned)ii.format,
+             ii.usage, ii.doubled ? "DOUBLED" : (ii.pool_single ? "single (pool rule)" : "single"),
+             vi.type == VK_IMAGE_VIEW_TYPE_2D_ARRAY ? "2D-array" : "2D",
+             vi.range.baseArrayLayer, vi.range.layerCount);
+    return b;
+}
+
+void complog_dispatch(VkCommandBuffer cb, uint32_t x, uint32_t y, uint32_t z,
+                      const char *how) {
+    if (!complog_enabled() || !g_active)
+        return;
+    std::string sig;
+    std::vector<std::pair<std::string, VkImageView>> want; // label, view
+    {
+        std::lock_guard<std::mutex> lock(g_cl_mu);
+        auto c = g_cl_cb.find(cb);
+        if (c == g_cl_cb.end())
+            return;
+        auto pm = g_cl_pipe.find(c->second.pipe);
+        auto m = pm == g_cl_pipe.end() ? g_cl_modules.end()
+                                       : g_cl_modules.find(pm->second);
+        char head[96];
+        if (m == g_cl_modules.end()) {
+            snprintf(head, sizeof head, "module ? groups %ux%ux%u %s", x, y, z, how);
+            sig = head;
+        } else {
+            snprintf(head, sizeof head, "module c%u groups %ux%ux%u %s",
+                     m->second.serial, x, y, z, how);
+            sig = head;
+            for (const auto &nb : m->second.info.bindings) {
+                std::string label = " | " + nb.name + "@" + std::to_string(nb.set) +
+                                    "." + std::to_string(nb.binding) + ": ";
+                auto bs = c->second.sets.find(nb.set);
+                if (bs == c->second.sets.end()) {
+                    sig += label + "no set bound";
+                    continue;
+                }
+                auto ss = g_cl_sets.find(bs->second);
+                const bool tmpl = g_cl_tmpl.count(bs->second) != 0;
+                auto sl = ss == g_cl_sets.end() ? std::map<uint32_t, ClSlot>::iterator()
+                                                : ss->second.find(nb.binding);
+                if (ss == g_cl_sets.end() || sl == ss->second.end()) {
+                    sig += label + (tmpl ? "set written by a template (not decoded)"
+                                         : "no image recorded");
+                    continue;
+                }
+                if (sl->second.count > 4) {
+                    sig += label + "array of " + std::to_string(sl->second.count) +
+                           " (bindless, not resolved)";
+                    continue;
+                }
+                want.push_back({label + (sl->second.type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
+                                             ? "storage "
+                                             : "sampled "),
+                                sl->second.view});
+            }
+        }
+    }
+    for (const auto &w : want)
+        sig += w.first + complog_view(w.second);
+    uint64_t n;
+    {
+        std::lock_guard<std::mutex> lock(g_cl_mu);
+        n = ++g_cl_sigs[sig];
+        if (n == 1 && g_cl_sigs.size() > 400)
+            return;
+    }
+    if (n == 1)
+        X4VR_LOG("comp: dispatch %s", sig.c_str());
+    else if (n % 1000 == 0)
+        X4VR_LOG("comp: dispatch seen %llu times: %s", (unsigned long long)n,
+                 sig.substr(0, 60).c_str());
+}
+} // namespace
+
 // Every instrument here -- the writer lists, the masked/unmasked split, the
 // pipeline provenance, the probe -- is built around render passes, so a frame
 // stage performed by a dispatch is not merely unhandled but *invisible*: it
@@ -7497,6 +7734,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
             if (out[i] != VK_NULL_HANDLE)
                 g_pose.pipe_layout[out[i]] = ci[i].layout;
     }
+    if (r == VK_SUCCESS)
+        complog_pipelines(count, ci, out);
     if (r != VK_SUCCESS || !g_mv_inventory || !g_active)
         return r;
     for (uint32_t i = 0; i < count; i++) {
@@ -7535,6 +7774,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatch(VkCommandBuffer cb, uint32_t x,
         d = &g_devices.at(dispatch_key(cb));
     }
     note_dispatch(cb);
+    complog_dispatch(cb, x, y, z, "direct");
     d->CmdDispatch(cb, x, y, z);
 }
 
@@ -7547,6 +7787,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatchIndirect(VkCommandBuffer cb,
         d = &g_devices.at(dispatch_key(cb));
     }
     note_dispatch(cb);
+    complog_dispatch(cb, 0, 0, 0, "indirect");
     d->CmdDispatchIndirect(cb, buf, off);
 }
 
@@ -7560,6 +7801,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatchBase(VkCommandBuffer cb, uint32_t bx,
         d = &g_devices.at(dispatch_key(cb));
     }
     note_dispatch(cb);
+    complog_dispatch(cb, x, y, z, "base");
     d->CmdDispatchBase(cb, bx, by, bz, x, y, z);
 }
 
@@ -12063,6 +12305,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
         std::lock_guard<std::mutex> lock(g_comp_mu);
         g_comp_bound[cb] = p;
     }
+    complog_bind_pipeline(cb, bp, p);
     if (g_mv && g_active && bp == VK_PIPELINE_BIND_POINT_GRAPHICS) {
         bool in_masked = false, pipe_mv = false, known = false;
         {

@@ -42,6 +42,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <string>
 
 namespace x4vr {
 namespace spv {
@@ -4740,6 +4741,110 @@ inline bool patch_fragment_disable_fog(std::vector<uint32_t> &code) {
     out[3] = bound;
     code.swap(out);
     return true;
+}
+
+/// What a compute module is, for the layer's compute instrument
+/// (X4VR_COMPLOG, take 379): its workgroup size, every named resource with
+/// its descriptor set and binding (the variable's OpName, or its block's when
+/// the variable is anonymous), and the names that say it is FSR (anything
+/// containing "Fsr", "Easu" or "Rcas"). X4 compiles its shaders at run time
+/// and keeps the names, so X4's FSR 1 pass (fsr.comp.glsl) shows up as
+/// U_output_rt / S_input_rt / U_pass and FsrEasu* or FsrRcas*.
+struct NamedBinding {
+    std::string name;
+    uint32_t set = UINT32_MAX, binding = UINT32_MAX;
+};
+struct ComputeInfo {
+    bool compute = false;
+    uint32_t local[3] = {0, 0, 0};
+    std::vector<NamedBinding> bindings;
+    std::vector<std::string> fsr_names;
+};
+inline ComputeInfo compute_info(const std::vector<uint32_t> &code) {
+    ComputeInfo ci;
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return ci;
+    auto str = [&](const Inst &in, uint32_t from) {
+        std::string s;
+        for (uint32_t i = from; i < in.len; i++)
+            for (int b = 0; b < 4; b++) {
+                const char c = (char)((code[in.start + i] >> (8 * b)) & 0xff);
+                if (!c)
+                    return s;
+                s += c;
+            }
+        return s;
+    };
+    std::unordered_map<uint32_t, std::string> names;
+    std::unordered_map<uint32_t, uint32_t> set_of, binding_of, var_type;
+    std::unordered_map<uint32_t, uint32_t> ptr_pointee;
+    for (const auto &in : insts) {
+        const uint32_t *w = &code[in.start];
+        switch (in.op) {
+        case 15: // OpEntryPoint
+            if (in.len >= 3 && w[1] == ExecutionModelGLCompute)
+                ci.compute = true;
+            break;
+        case 16: // OpExecutionMode, LocalSize = 17
+            if (in.len >= 6 && w[2] == 17) {
+                ci.local[0] = w[3];
+                ci.local[1] = w[4];
+                ci.local[2] = w[5];
+            }
+            break;
+        case OpName:
+            if (in.len >= 3) {
+                std::string n = str(in, 2);
+                names[w[1]] = n;
+                if ((n.find("Fsr") != std::string::npos ||
+                     n.find("Easu") != std::string::npos ||
+                     n.find("Rcas") != std::string::npos) &&
+                    ci.fsr_names.size() < 6)
+                    ci.fsr_names.push_back(n.substr(0, n.find('(')));
+            }
+            break;
+        case OpDecorate:
+            if (in.len >= 4 && w[2] == DecorationDescriptorSet)
+                set_of[w[1]] = w[3];
+            else if (in.len >= 4 && w[2] == DecorationBinding)
+                binding_of[w[1]] = w[3];
+            break;
+        case OpTypePointer:
+            if (in.len >= 4)
+                ptr_pointee[w[1]] = w[3];
+            break;
+        case OpVariable:
+            if (in.len >= 4)
+                var_type[w[2]] = w[1];
+            break;
+        default:
+            break;
+        }
+    }
+    for (const auto &kv : binding_of) {
+        NamedBinding nb;
+        nb.binding = kv.second;
+        auto s = set_of.find(kv.first);
+        nb.set = s == set_of.end() ? 0 : s->second;
+        auto n = names.find(kv.first);
+        if (n != names.end() && !n->second.empty()) {
+            nb.name = n->second;
+        } else {
+            // An anonymous block: name it after its block type.
+            auto t = var_type.find(kv.first);
+            auto pt = t == var_type.end() ? ptr_pointee.end()
+                                          : ptr_pointee.find(t->second);
+            auto bn = pt == ptr_pointee.end() ? names.end() : names.find(pt->second);
+            nb.name = bn == names.end() ? "?" : bn->second;
+        }
+        ci.bindings.push_back(nb);
+    }
+    std::sort(ci.bindings.begin(), ci.bindings.end(),
+              [](const NamedBinding &a, const NamedBinding &b) {
+                  return a.set != b.set ? a.set < b.set : a.binding < b.binding;
+              });
+    return ci;
 }
 
 /// Whether any block in the module has a member called `name` (its

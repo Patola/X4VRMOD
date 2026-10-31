@@ -5331,6 +5331,35 @@ def main(path):
         fails.append("head-look armed but the pointer was never recentred "
                      "after the load — the cursor starts outside the view")
 
+    # --- X4VR_COMPLOG: what each compute dispatch touches (take 379) -------
+    #
+    # Read only (layer/x4vr_layer.cpp). X4's FSR loses the right eye; its FSR 1
+    # is a compute shader (fsr.comp.glsl, EASU then RCAS). This lists the
+    # compute modules, the FSR ones by name, and every distinct dispatch of an
+    # FSR module with the images bound at each resource. Gate on intent:
+    # asked means module lines (X4 compiles compute shaders at start-up).
+    cl_asked = bool(re.search(r"\bX4VR_COMPLOG=1\b", run or ""))
+    cl_mods = re.findall(r"comp: module c(\d+) local (\S+), (\d+) bytes \| "
+                         r"resources:(.*?)(?: \| FSR: (.*))?$", text, re.M)
+    cl_disp = re.findall(r"comp: dispatch (module c(\d+) groups (\S+) (\w+)(.*))$",
+                         text, re.M)
+    if cl_asked or cl_mods or cl_disp:
+        if cl_asked and not cl_mods:
+            fails.append("X4VR_COMPLOG=1 but no compute module was described — "
+                         "the instrument did not run")
+        fsr = {m[0]: m for m in cl_mods if m[4]}
+        print(f"complog {len(cl_mods)} compute module(s), {len(fsr)} FSR; "
+              f"{len(cl_disp)} distinct dispatch(es)")
+        for c, (n, local, size, res, names) in sorted(fsr.items(), key=lambda x: int(x[0])):
+            print(f"complog   FSR c{n}: {names.strip()} | local {local} |{res}")
+        for whole, c, groups, how, rest in cl_disp:
+            if c in fsr:
+                print(f"complog   dispatch c{c} {groups} {how}{rest}")
+        up = re.search(r"\bX4VR_UPSCALE=(\S+)", run or "")
+        if cl_mods and up and up.group(1) != "none" and not fsr:
+            print(f"complog   NOTE X4VR_UPSCALE={up.group(1)} but no FSR compute "
+                  f"module was compiled — X4 did not take the upscaler")
+
     # --- the pool rule: images kept single-layer for X4's pool block (378) --
     #
     # layer/x4vr_layer.cpp, mv_exceeds_x4_pool. An image that, doubled, would

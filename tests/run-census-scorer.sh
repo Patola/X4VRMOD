@@ -1644,5 +1644,27 @@ plant /tmp/census-mp-lost.log "$mpk1" "$mpl"
 want "mvpool: attached to a masked pass -> FAIL" /tmp/census-mp-lost.log "FAIL|  - " "the pool rule kept 1 image(s) single-layer that a view-masked pass then attached (first img #693, rp #12)"
 absent "mvpool: no rule fired -> silent" "$BASE" mvpool
 
+# X4VR_COMPLOG: what each compute dispatch touches (take 379).
+for f in '"comp: module c%u local %ux%ux%u, %zu bytes | resources:%s%s%s"' '"comp: dispatch %s"' '"img #%u %ux%u fmt=%u usage=0x%x %s, view %s from layer %u, %u layer(s)"'; do
+    if grep -qF "$f" layer/x4vr_layer.cpp; then
+        ok "complog: the layer still prints $f"
+    else
+        bad "complog: the layer's format moved: $f"
+    fi
+done
+sed 's/env: run = /env: run = X4VR_COMPLOG=1 X4VR_UPSCALE=fsr_quality /' "$BASE" > /tmp/census-cl-base.log
+clm1='[  999960.000] layer   comp: module c3 local 64x1x1, 9000 bytes | resources: S_input_rt@0.1 U_output_rt@0.2 | FSR: FsrEasuH'
+clm2='[  999960.001] layer   comp: module c4 local 8x8x1, 4000 bytes | resources: U_froxels@0.0'
+cld1='[  999961.000] layer   comp: dispatch module c3 groups 264x264x1 direct | S_input_rt@0.1: sampled img #40 2816x2816 fmt=97 usage=0x97 DOUBLED, view 2D from layer 0, 1 layer(s) | U_output_rt@0.2: storage img #90 4224x4224 fmt=97 usage=0xd single, view 2D from layer 0, 1 layer(s)'
+cld2='[  999961.001] layer   comp: dispatch module c4 groups 20x20x1 direct | U_froxels@0.0: no image recorded'
+{ cat /tmp/census-cl-base.log; printf '%s\n' "$clm1" "$clm2" "$cld1" "$cld2"; } > /tmp/census-cl-ok.log
+want "complog: summarised" /tmp/census-cl-ok.log complog "2 compute module(s), 1 FSR; 2 distinct dispatch(es)"
+want "complog: the FSR module named" /tmp/census-cl-ok.log complog "FSR c3: FsrEasuH | local 64x1x1 | S_input_rt@0.1 U_output_rt@0.2"
+want "complog: the FSR dispatch with its images" /tmp/census-cl-ok.log complog "dispatch c3 264x264x1 direct | S_input_rt@0.1: sampled img #40 2816x2816"
+{ cat /tmp/census-cl-base.log; printf '%s\n' "$clm2" "$cld2"; } > /tmp/census-cl-nofsr.log
+want "complog: upscaler asked, no FSR module -> note" /tmp/census-cl-nofsr.log complog "NOTE X4VR_UPSCALE=fsr_quality but no FSR compute module was compiled"
+want "complog: asked, no module -> FAIL" /tmp/census-cl-base.log "FAIL|  - " "X4VR_COMPLOG=1 but no compute module was described"
+absent "complog: not asked -> silent" "$BASE" complog
+
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

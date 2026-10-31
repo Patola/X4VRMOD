@@ -1636,6 +1636,18 @@ inv_case "transfer inventory names the edge" \
     "xfer #0 -> #2 via vkCmdBlitImage" X4VR_TEST_BLIT=1
 inv_case "compute inventory counts a dispatch" \
     "compute — 1 pipeline(s), 1 shader(s) dispatched" X4VR_TEST_COMPUTE=1
+# X4VR_COMPLOG (take 379): an FSR-shaped compute pass with real resources --
+# the module recognised as FSR with its bindings, and the dispatch resolving
+# the sampled input to the doubled target and the storage output to its image.
+inv_case "complog names the FSR module" \
+    "resources: Pass@0.0 S_input_rt@0.1 U_output_rt@0.2 | FSR: FsrEasuH" \
+    X4VR_TEST_COMPUTE=fsr X4VR_COMPLOG=1
+inv_case "complog resolves the sampled input" \
+    "S_input_rt@0.1: sampled img #0 128x128 fmt=97 usage=0x15 DOUBLED, view 2D from layer 0, 1 layer(s)" \
+    X4VR_TEST_COMPUTE=fsr X4VR_COMPLOG=1
+inv_case "complog resolves the storage output" \
+    "U_output_rt@0.2: storage img #2 64x64 fmt=97 usage=0xc single, view 2D from layer 0, 1 layer(s)" \
+    X4VR_TEST_COMPUTE=fsr X4VR_COMPLOG=1
 # Zero has to be a reading, not an absence: "no dispatches" and "compute is
 # unhooked again" produced identical logs for this project's whole history.
 inv_case "...and reports zero as a number" \

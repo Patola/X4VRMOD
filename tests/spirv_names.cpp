@@ -83,6 +83,29 @@ int main(int argc, char **argv) {
         check(only_fog || n != 519,
               "take 347's 519 modules: only mod-0473/0474 (the ray march)");
     }
+    // compute_info (take 379): the FSR-shaped fixture's workgroup, its three
+    // resources by name with their set and binding, and its FSR name.
+    {
+        std::vector<uint32_t> code;
+        const bool have = load(dir + "/fsr_shape.comp.spv", code);
+        const x4vr::spv::ComputeInfo ci = x4vr::spv::compute_info(code);
+        std::string b;
+        for (const auto &nb : ci.bindings)
+            b += nb.name + "@" + std::to_string(nb.set) + "." +
+                 std::to_string(nb.binding) + " ";
+        check(have && ci.compute && ci.local[0] == 64 && ci.local[1] == 1 &&
+                  ci.local[2] == 1,
+              "fsr_shape.comp: a compute module, 64x1x1");
+        check(b == "Pass@0.0 S_input_rt@0.1 U_output_rt@0.2 ",
+              ("its resources by name, set and binding: " + b).c_str());
+        check(ci.fsr_names.size() == 1 && ci.fsr_names[0] == "FsrEasuH",
+              "its FSR name, without the mangled signature");
+        std::vector<uint32_t> frag;
+        check(load(dir + "/sample_volume_ray.frag.spv", frag) &&
+                  !x4vr::spv::compute_info(frag).compute,
+              "a fragment module is not compute");
+    }
+
     printf("\n%s\n", g_fail ? "SOME CASES FAILED" : "all cases passed");
     return g_fail ? 1 : 0;
 }

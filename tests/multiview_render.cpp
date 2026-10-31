@@ -1210,8 +1210,21 @@ int main(int argc, char **argv) {
     VkShaderModule csm = VK_NULL_HANDLE;
     const char *comp_env = getenv("X4VR_TEST_COMPUTE");
     const bool want_compute = comp_env && *comp_env && *comp_env != '0';
+    // X4VR_TEST_COMPUTE=fsr: tests/fsr_shape.comp, the shape of X4's FSR 1
+    // pass, with real resources -- a uniform buffer, the doubled target
+    // sampled, a 64x64 rgba16f storage image written -- so X4VR_COMPLOG's
+    // descriptor tracking and dispatch report run on a GPU (take 379).
+    const bool want_fsr = want_compute && !strcmp(comp_env, "fsr");
+    VkDescriptorSetLayout fdsl = VK_NULL_HANDLE;
+    VkDescriptorPool fpool = VK_NULL_HANDLE;
+    VkDescriptorSet fset = VK_NULL_HANDLE;
+    VkImage fimg = VK_NULL_HANDLE;
+    VkImageView fview = VK_NULL_HANDLE;
+    VkDeviceMemory fmem = VK_NULL_HANDLE, fbmem = VK_NULL_HANDLE;
+    VkBuffer fbuf = VK_NULL_HANDLE;
     if (want_compute) {
-        std::vector<uint32_t> cs_code = load_spv("tests/noop.comp.spv");
+        std::vector<uint32_t> cs_code =
+            load_spv(want_fsr ? "tests/fsr_shape.comp.spv" : "tests/noop.comp.spv");
         if (cs_code.empty()) { printf("FAIL=no_noop_comp:0\n"); return 1; }
         VkShaderModuleCreateInfo csci{};
         csci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -1220,6 +1233,97 @@ int main(int argc, char **argv) {
         CHECK(vkCreateShaderModule(dev, &csci, nullptr, &csm));
         VkPipelineLayoutCreateInfo cplci{};
         cplci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        if (want_fsr) {
+            VkDescriptorSetLayoutBinding fb[3]{};
+            const VkDescriptorType ft[3] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                            VK_DESCRIPTOR_TYPE_STORAGE_IMAGE};
+            for (uint32_t i = 0; i < 3; i++) {
+                fb[i].binding = i;
+                fb[i].descriptorType = ft[i];
+                fb[i].descriptorCount = 1;
+                fb[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            }
+            VkDescriptorSetLayoutCreateInfo fdci{};
+            fdci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            fdci.bindingCount = 3;
+            fdci.pBindings = fb;
+            CHECK(vkCreateDescriptorSetLayout(dev, &fdci, nullptr, &fdsl));
+            cplci.setLayoutCount = 1;
+            cplci.pSetLayouts = &fdsl;
+
+            VkImageCreateInfo fci{};
+            fci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            fci.imageType = VK_IMAGE_TYPE_2D;
+            fci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+            fci.extent = {64, 64, 1};
+            fci.mipLevels = 1;
+            fci.arrayLayers = 1;
+            fci.samples = VK_SAMPLE_COUNT_1_BIT;
+            fci.tiling = VK_IMAGE_TILING_OPTIMAL;
+            fci.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            CHECK(vkCreateImage(dev, &fci, nullptr, &fimg));
+            VkMemoryRequirements freq{};
+            vkGetImageMemoryRequirements(dev, fimg, &freq);
+            VkMemoryAllocateInfo fmai{};
+            fmai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            fmai.allocationSize = freq.size;
+            fmai.memoryTypeIndex =
+                pick(freq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            CHECK(vkAllocateMemory(dev, &fmai, nullptr, &fmem));
+            CHECK(vkBindImageMemory(dev, fimg, fmem, 0));
+            VkImageViewCreateInfo fvci{};
+            fvci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            fvci.image = fimg;
+            fvci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            fvci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+            fvci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            CHECK(vkCreateImageView(dev, &fvci, nullptr, &fview));
+
+            VkBufferCreateInfo fbci{};
+            fbci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            fbci.size = 64;
+            fbci.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+            CHECK(vkCreateBuffer(dev, &fbci, nullptr, &fbuf));
+            VkMemoryRequirements fbreq{};
+            vkGetBufferMemoryRequirements(dev, fbuf, &fbreq);
+            VkMemoryAllocateInfo fbmai{};
+            fbmai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            fbmai.allocationSize = fbreq.size;
+            fbmai.memoryTypeIndex =
+                pick(fbreq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            CHECK(vkAllocateMemory(dev, &fbmai, nullptr, &fbmem));
+            CHECK(vkBindBufferMemory(dev, fbuf, fbmem, 0));
+
+            VkDescriptorPoolSize fps[3] = {{ft[0], 1}, {ft[1], 1}, {ft[2], 1}};
+            VkDescriptorPoolCreateInfo fpci{};
+            fpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            fpci.maxSets = 1;
+            fpci.poolSizeCount = 3;
+            fpci.pPoolSizes = fps;
+            CHECK(vkCreateDescriptorPool(dev, &fpci, nullptr, &fpool));
+            VkDescriptorSetAllocateInfo fsai{};
+            fsai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            fsai.descriptorPool = fpool;
+            fsai.descriptorSetCount = 1;
+            fsai.pSetLayouts = &fdsl;
+            CHECK(vkAllocateDescriptorSets(dev, &fsai, &fset));
+            VkDescriptorBufferInfo fbi{fbuf, 0, 64};
+            VkDescriptorImageInfo fin{samp, view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            VkDescriptorImageInfo fout{VK_NULL_HANDLE, fview, VK_IMAGE_LAYOUT_GENERAL};
+            VkWriteDescriptorSet fw[3]{};
+            for (uint32_t i = 0; i < 3; i++) {
+                fw[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                fw[i].dstSet = fset;
+                fw[i].dstBinding = i;
+                fw[i].descriptorCount = 1;
+                fw[i].descriptorType = ft[i];
+            }
+            fw[0].pBufferInfo = &fbi;
+            fw[1].pImageInfo = &fin;
+            fw[2].pImageInfo = &fout;
+            vkUpdateDescriptorSets(dev, 3, fw, 0, nullptr);
+        }
         CHECK(vkCreatePipelineLayout(dev, &cplci, nullptr, &cpl));
         VkComputePipelineCreateInfo cpci{};
         cpci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -1267,7 +1371,25 @@ int main(int argc, char **argv) {
 
     if (want_compute) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cpipe);
-        vkCmdDispatch(cmd, 1, 1, 1);
+        if (want_fsr) {
+            VkImageMemoryBarrier fbar{};
+            fbar.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            fbar.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            fbar.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            fbar.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            fbar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            fbar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            fbar.image = fimg;
+            fbar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0,
+                                 nullptr, 0, nullptr, 1, &fbar);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cpl, 0, 1,
+                                    &fset, 0, nullptr);
+            vkCmdDispatch(cmd, 4, 4, 1);
+        } else {
+            vkCmdDispatch(cmd, 1, 1, 1);
+        }
     }
 
     VkRenderPassBeginInfo orpbi = rpbi;
@@ -1500,6 +1622,15 @@ int main(int argc, char **argv) {
         vkDestroyImage(dev, orphan, nullptr);
     }
 
+    if (want_fsr) {
+        vkDestroyDescriptorPool(dev, fpool, nullptr);
+        vkDestroyDescriptorSetLayout(dev, fdsl, nullptr);
+        vkDestroyImageView(dev, fview, nullptr);
+        vkDestroyImage(dev, fimg, nullptr);
+        vkFreeMemory(dev, fmem, nullptr);
+        vkDestroyBuffer(dev, fbuf, nullptr);
+        vkFreeMemory(dev, fbmem, nullptr);
+    }
     vkDestroyDevice(dev, nullptr);
     vkDestroyInstance(inst, nullptr);
     return 0;
