@@ -1756,6 +1756,73 @@ if grep -qE "ffx: .*(one-eyed|NOT|could NOT|never seen)" <<<"$out"; then
 else
     printf 'ok   %-38s %s\n' "...nothing left one-eyed" "no ffx failure line"
 fi
+# X4VR_UI_SS=2 (take 389): the UI drawn at 2x and blitted down. The harness's
+# output pass is X4-shaped here (X4VR_TEST_DYNAMIC_VP=1: X4's UI image usage,
+# a dynamic viewport set before the pass and a scissor set inside it) and
+# draws tests/ui_edges.frag from fullscreen_uv.vert's coordinate: two flat
+# halves and a stripe 2.56 px wide whose left edge cuts pixel 38 in half. At
+# 2x the halves and the stripe must come out identical except that one edge
+# pixel, which becomes the gamma-correct average (0xcc between 0x7c and 0xff).
+UEV="$BUILD/tests/fullscreen_uv.vert.spv"
+UEF="$BUILD/tests/ui_edges.frag.spv"
+ss_run() {
+    env "VK_ADD_LAYER_PATH=$BUILD/layer" \
+        "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+        X4VR_LOG= X4VR_MV=1 X4VR_STEREO=1 X4VR_CANVAS_M=8 X4VR_MV_INVENTORY=1 \
+        X4VR_TEST_OUT_SRGB=1 X4VR_TEST_OUT_ROW=1 "X4VR_TEST_OUT_VS=$UEV" "$@" \
+        "$BIN" "$VS" "$FS" "$UEF" 2>&1
+}
+ss_off=$(ss_run X4VR_TEST_DYNAMIC_VP=1)
+ss_on=$(ss_run X4VR_TEST_DYNAMIC_VP=1 X4VR_UI_SS=2)
+if grep -q "ui ss: img #1 128x128 (2 layer(s)) is drawn at 256x256" <<<"$ss_on" &&
+   grep -q "1 pass(es) drawn at 2x and blitted down" <<<"$ss_on"; then
+    printf 'ok   %-38s %s\n' "UI 2x: drawn at 256x256, blitted" "1 pass"
+else
+    printf 'FAIL %-38s %s\n' "UI 2x: drawn at 256x256, blitted" \
+        "$(grep -m1 'ui ss' <<<"$ss_on")"
+    fails=$((fails + 1))
+fi
+if grep -q "0 pass(es) drawn at 2x" <<<"$ss_off"; then
+    printf 'ok   %-38s %s\n' "...off without the switch" "0 passes"
+else
+    printf 'FAIL %-38s %s\n' "...off without the switch" "$(grep -m1 'ui ss' <<<"$ss_off")"
+    fails=$((fails + 1))
+fi
+ss_cmp=$(python3 - "$(sed -n 's/^OUT_ROW=//p' <<<"$ss_off")" \
+                   "$(sed -n 's/^OUT_ROW=//p' <<<"$ss_on")" <<'PY'
+import sys
+a, b = sys.argv[1], sys.argv[2]
+if len(a) != 256 or len(b) != 256:
+    print("BAD rows missing"); sys.exit()
+a = [int(a[i:i+2], 16) for i in range(0, 256, 2)]
+b = [int(b[i:i+2], 16) for i in range(0, 256, 2)]
+d = [(i, a[i], b[i]) for i in range(128) if a[i] != b[i]]
+ok = (len(d) == 1 and d[0][0] == 38 and 0x7c < d[0][2] < 0xff)
+print(("OK " if ok else "BAD ") + " ".join("%d:%02x->%02x" % x for x in d))
+PY
+)
+if [[ "$ss_cmp" == OK* ]]; then
+    printf 'ok   %-38s %s\n' "...same picture, edge anti-aliased" "${ss_cmp#OK }"
+else
+    printf 'FAIL %-38s %s\n' "...same picture, edge anti-aliased" "$ss_cmp"
+    fails=$((fails + 1))
+fi
+ss_static=$(ss_run X4VR_TEST_DYNAMIC_VP=static X4VR_UI_SS=2)
+if grep -q "baked in is bound inside a 2x UI pass" <<<"$ss_static" &&
+   grep -q "1 bind(s) of a baked-viewport pipeline inside" <<<"$ss_static"; then
+    printf 'ok   %-38s %s\n' "...a baked viewport is reported" "1 bind"
+else
+    printf 'FAIL %-38s %s\n' "...a baked viewport is reported" \
+        "$(grep -m1 'ui ss final' <<<"$ss_static" | cut -c1-120)"
+    fails=$((fails + 1))
+fi
+ss_nodst=$(ss_run X4VR_UI_SS=2)
+if grep -q "the UI stays at 1x: X4's UI image is not a transfer destination" <<<"$ss_nodst"; then
+    printf 'ok   %-38s %s\n' "...refused without a transfer dst" "stays at 1x"
+else
+    printf 'FAIL %-38s %s\n' "...refused without a transfer dst" "$(grep -m1 'ui ss' <<<"$ss_nodst")"
+    fails=$((fails + 1))
+fi
 # Zero has to be a reading, not an absence: "no dispatches" and "compute is
 # unhooked again" produced identical logs for this project's whole history.
 inv_case "...and reports zero as a number" \
@@ -3130,6 +3197,11 @@ else
     vuid_case "validation: FSR 1 both eyes" X4VR_MV=1 X4VR_MV_MASK=3 \
         X4VR_BINDLESS_MIRROR=1 X4VR_RES=64x64 X4VR_MIRROR_OFFSET=32 \
         X4VR_TEST_COMPUTE=fsrbindless
+    # The UI drawn at 2x (take 389): our image, framebuffer, the layouts
+    # around the blit, the scaled viewport and scissor.
+    SF="$UEF" vuid_case "validation: UI at 2x" X4VR_MV=1 X4VR_STEREO=1 \
+        X4VR_CANVAS_M=8 X4VR_MV_INVENTORY=1 X4VR_TEST_OUT_SRGB=1 \
+        X4VR_TEST_DYNAMIC_VP=1 "X4VR_TEST_OUT_VS=$UEV" X4VR_UI_SS=2
 fi
 
 # --- take 357: the cinematic view's twin pipelines ------------------------

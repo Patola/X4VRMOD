@@ -20,6 +20,8 @@
 #include <cstdlib>
 #include <cmath>
 #include <cstring>
+#include <string>
+#include <algorithm>
 #include <vector>
 
 #define CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { \
@@ -1112,6 +1114,11 @@ int main(int argc, char **argv) {
     oci.format = OFMT;
     oci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    // X4VR_TEST_DYNAMIC_VP (1, or `static`) is the X4-shaped UI pass (take
+    // 389): the target then carries X4's own UI image usage, 0x97 (a transfer
+    // destination among it, which X4VR_UI_SS's blit needs).
+    if (const char *e = getenv("X4VR_TEST_DYNAMIC_VP"); e && *e && *e != '0')
+        oci.usage = 0x97;
     VkImage oimg;
     CHECK(vkCreateImage(dev, &oci, nullptr, &oimg));
     VkMemoryRequirements oreq{};
@@ -1743,6 +1750,18 @@ int main(int argc, char **argv) {
     // to. The first pass keeps the plain fullscreen shader -- it binds no set
     // 1, so a shader reading one there would be reading an unbound descriptor.
     VkShaderModule vsm2 = vsm;
+    // X4VR_TEST_OUT_VS=<spv>: the output pass's own vertex stage (take 389:
+    // fullscreen_uv.vert, whose coordinate tests/ui_edges.frag draws from).
+    const char *out_vs = getenv("X4VR_TEST_OUT_VS");
+    if (!view_arena && out_vs && *out_vs) {
+        std::vector<uint32_t> vc2 = load_spv(out_vs);
+        if (vc2.empty()) { printf("FAIL=no_out_vs\n"); return 1; }
+        VkShaderModuleCreateInfo s2{};
+        s2.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        s2.codeSize = vc2.size() * 4;
+        s2.pCode = vc2.data();
+        CHECK(vkCreateShaderModule(dev, &s2, nullptr, &vsm2));
+    }
     if (view_arena) {
         std::vector<uint32_t> vc2 = load_spv("tests/fullscreen_camera.vert.spv");
         if (vc2.empty()) { printf("FAIL=no_fullscreen_camera_vert\n"); return 1; }
@@ -1764,6 +1783,23 @@ int main(int argc, char **argv) {
     gpci2.pStages = st2;
     gpci2.layout = pl2;
     gpci2.renderPass = orp;
+    // X4VR_TEST_DYNAMIC_VP=1: the output pass's viewport and scissor are
+    // dynamic, as X4's are (it names vkCmdSetViewport/vkCmdSetScissor): the
+    // viewport set BEFORE the pass begins, the scissor inside it, so
+    // X4VR_UI_SS's two paths -- re-issue at the start, scale on the call --
+    // both run.
+    // `static` keeps X4's usage and the baked viewport: the case X4VR_UI_SS
+    // must report rather than draw into a quarter of its target unnoticed.
+    const char *dvp_env = getenv("X4VR_TEST_DYNAMIC_VP");
+    const bool dynamic_vp = dvp_env && !strcmp(dvp_env, "1");
+    const VkDynamicState dyn_states[2] = {VK_DYNAMIC_STATE_VIEWPORT,
+                                          VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn2{};
+    dyn2.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dyn2.dynamicStateCount = 2;
+    dyn2.pDynamicStates = dyn_states;
+    if (dynamic_vp)
+        gpci2.pDynamicState = &dyn2;
     VkPipeline pipe2;
     CHECK(vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &gpci2, nullptr,
                                     &pipe2));
@@ -1998,8 +2034,12 @@ int main(int argc, char **argv) {
     VkRenderPassBeginInfo orpbi = rpbi;
     orpbi.renderPass = orp;
     orpbi.framebuffer = ofb;
+    if (dynamic_vp)
+        vkCmdSetViewport(cmd, 0, 1, &vp);
     vkCmdBeginRenderPass(cmd, &orpbi, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe2);
+    if (dynamic_vp)
+        vkCmdSetScissor(cmd, 0, 1, &sc);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pl2, 0, 1,
                             &dset, 0, nullptr);
     // Before the FIRST draw, not just before the credit loop: the output pass's
@@ -2136,6 +2176,20 @@ int main(int argc, char **argv) {
         return false;
     };
     printf("SAMPLED_NONZERO=%d\n", drawn(o) ? 1 : 0);
+    // X4VR_TEST_OUT_ROW=1: the middle row of the output's layer 0, one byte
+    // per pixel (the largest colour channel), for a run-to-run comparison.
+    if (const char *row_env = getenv("X4VR_TEST_OUT_ROW"); row_env && *row_env) {
+        std::string row;
+        const uint8_t *r = o + (size_t)(H / 2) * W * 4;
+        char hx[3];
+        for (uint32_t x = 0; x < W; x++) {
+            const uint8_t *px = r + (size_t)x * 4;
+            snprintf(hx, sizeof hx, "%02x",
+                     std::max(px[0], std::max(px[1], px[2])));
+            row += hx;
+        }
+        printf("OUT_ROW=%s\n", row.c_str());
+    }
     // The gate for the fragment patch. Both layers of the output hold the
     // result of a sample, and what the second one holds says which layer that
     // sample reached -- which is the one thing multiview does not decide for
