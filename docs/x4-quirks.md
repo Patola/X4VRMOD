@@ -28533,6 +28533,9 @@ diagnosed yet. Packaging is planned separately (docs/packaging-plan.md).
    * **Candidates, to separate rather than assume:** a size limit on SteamVR's
      side; FSR on the current build; video memory. Discriminating runs: the
      same line under WiVRn; the same size with FSR off.
+   * **2026-10-31: SteamVR only.** The same line is clean under WiVRn. Not
+     addressed for now; recorded for players and as a launcher warning
+     (docs/packaging-plan.md, Resolution).
 2. **Sporadic flickering of shadows and lights.** Patola will try to
    reproduce it on its own before reporting more.
 3. **One of the X-Shuttle's six weapons fires diagonally to the left; the
@@ -28545,3 +28548,55 @@ diagnosed yet. Packaging is planned separately (docs/packaging-plan.md).
    * **2026-10-31: not reproduced.** Patola tried under WiVRn and SteamVR and
      could not make it happen again; possibly X4's own. Set aside unless it
      returns.
+
+## The lower HUD moves with the resolution — X4's own placement (2026-10-31)
+
+Patola, at 4224² per eye (FSR on and off alike): *"the higher resolution
+configuration changes the positioning of the lower HUD elements, the left
+panel for example appears way up to the right, and this is valid for the F2
+and F4 modes too."*
+
+**Not our code.** The mod has no resolution-specific number in the UI path.
+The only one (`kDialogueY`, the dialogue start) is a fraction of the window
+height. The canvas map, the w-gate and the cursor maps are all in NDC.
+
+**X4's placement** (ui/core/lua/monitors.lua, `initScale`, read 2026-10-31):
+* It places the right panel (target monitor, direction +1), the radar
+  (direction 0) and the left panel (message ticker, direction -1):
+  * `s = GetHUDUIScale(true)` (per element, capped at 1.15 for the radar);
+  * `screenfactor = 1080 / screenheight * 0.907`;
+  * `factor = (1 - s) / (2 * screenfactor)`;
+  * `correction = width * factor / 2`;
+  * below a 4:3 aspect (our square eye always is),
+    `aspectcorrection = 112.5 / (1 - factor)`, then divided by
+    `(1 - factor)` again;
+  * `x = direction * (correction - aspectcorrection)`, `y = y - correction`,
+    all times `s`.
+* **`GetHUDUIScale(true)`** (0xa41a70 -> 0xa98e60), when the `hudscale`
+  option is not "off":
+  `max(max(round(960 / height, 0.1), 0.5), min(1.2, uiscale))`, with
+  `uiscale` the config's `<uiscale>` (Patola: **0.6**). With `hudscale` off
+  it returns **1.0**.
+* **So with `s` = 0.6, `factor = height / 4898`,** and the shift grows as
+  `112.5 / (1 - factor)^2`:
+
+      height   factor   shift (presentation units)
+      2816     0.575       623
+      3200     0.653       936
+      4224     0.862      5920   <- the panels thrown across the screen
+
+  The left panel goes right, the right panel left, the radar vertically. The
+  formula has a pole at 4898 px tall for uiscale 0.6. Ordinary monitors are
+  never that tall or that narrow.
+* **With `s` = 1 (`hudscale` off, or uiscale 1.0), `factor` is 0** and the
+  placement does not depend on the height at all.
+
+**Zero-code test proposed:** X4's game options, HUD scale -> Off, then restart
+(the monitors are placed at UI start). Predictions:
+* the left panel is back in place at 4224²;
+* the lower HUD is the same at every resolution;
+* it is larger than now (100% instead of 0.6), the menus unchanged.
+* **If his HUD scale is already Off,** this reading is wrong.
+
+If it holds, the config fork can serve `<hudscale>off</hudscale>` in VR (the
+same settings object X4 reads `uiscale` from, 0xa98e60).

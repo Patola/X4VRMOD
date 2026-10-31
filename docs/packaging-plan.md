@@ -199,6 +199,16 @@ is acceptable for this; nothing is drawn in VR for the launcher.
 * **Limits are checked, not discovered:** the launcher refuses a size the GPU
   or the runtime cannot take (Vulkan `maxImageDimension2D`; whatever limit
   explains the SteamVR report below, once it is known).
+* **Warn about SteamVR at high resolution.** Patola, 2026-10-31: the
+  4224²-per-eye line with FSR gave "a jumbled mess of graphics" under
+  SteamVR. The same line is clean under WiVRn, and stepping the resolution
+  down fixed it under SteamVR. The launcher shows a warning when SteamVR is
+  the runtime and the resolution is above the last size known to work there
+  (to be measured). The release notes say the same for players.
+* **The lower HUD's placement depends on the height** through X4's own
+  formula, unless X4's HUD scale is off (docs/x4-quirks.md, "The lower HUD
+  moves with the resolution"). If the HUD-scale test holds, the mod serves it
+  off in VR, and every resolution the launcher offers keeps the same HUD.
 * **X4's in-game menu:** left alone for now. Narrowing its list to the current
   mode (the injector already sits on SDL) is a possible later polish.
 
