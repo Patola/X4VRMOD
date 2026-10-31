@@ -5023,8 +5023,9 @@ static void ptrwatch_tick() {
         return;
     static bool armed = false, refused = false;
     static double seen_at = 0.0;
-    static std::vector<PtrRing> rings;
-    static std::map<pid_t, std::string> names;
+    // Never destroyed (tests/run-no-exit-destructors.sh).
+    static auto &rings = x4vr::immortal<std::vector<PtrRing>>();
+    static auto &names = x4vr::immortal<std::map<pid_t, std::string>>();
     static size_t page = 0, data = 0;
     const double now = mono_seconds();
     constexpr uint64_t kTextLo = 0x65a000, kTextHi = 0x2c74000;
@@ -5094,7 +5095,8 @@ static void ptrwatch_tick() {
                  failed ? strerror(last_err) : "", (unsigned long)(in + 0x6718),
                  (unsigned long)(in + 0x6734));
     }
-    static std::map<PtrKey, uint64_t> total, window;
+    static auto &total = x4vr::immortal<std::map<PtrKey, uint64_t>>();
+    static auto &window = x4vr::immortal<std::map<PtrKey, uint64_t>>();
     static uint64_t lost = 0, w_acc = 0, lines = 0;
     static double w_start = now;
     for (PtrRing &r : rings)

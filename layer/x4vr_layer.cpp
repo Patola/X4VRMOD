@@ -4312,7 +4312,9 @@ bool mv_exceeds_x4_pool(DeviceData *d, VkDevice device, VkImage doubled,
     if (mib <= mv_pool_limit_mib())
         return false;
     static std::mutex mu;
-    static std::set<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> said;
+    // Never destroyed (tests/run-no-exit-destructors.sh).
+    static auto &said =
+        x4vr::immortal<std::set<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>>>();
     static uint64_t n = 0;
     std::lock_guard<std::mutex> lock(mu);
     ++n;
