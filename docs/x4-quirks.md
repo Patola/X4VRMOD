@@ -29018,3 +29018,46 @@ change.
 * **P380.2:** `fsr: ... patched` twice (EASU, RCAS); `fsr: dispatch 264x264x1
   ... run as 264x264x2`.
 * **P380.3:** GAMEPLAY a little above take 379's 15.2 ms.
+
+## Take 380 — SCORED PASS (2026-10-31): FSR 1 in both eyes
+
+Patola: "It worked phenomenally well. Smooth gameplay… Crystal clear
+graphics. I saw images in each eye every time with correct depth."
+
+* **P380.1 — held.** The 3D scene is in both eyes with FSR quality, at the
+  correct depth.
+* **P380.2 — held.** Two passes were patched: 13576 bytes (RCAS) and 55500
+  bytes (EASU), each with 2 table accesses + WorkGroupID.z * 26653. None
+  refused. The `264x264x1` dispatches ran as `264x264x2`, more than 90,000 of
+  them. One barrier on a doubled storage image was widened.
+* **P380.3 — wrong, in the good direction.** GAMEPLAY was 13.24 ms (76 fps)
+  over 76 windows and 708 s, range 10.91–35.53 ms; the prediction was "a
+  little above 15.2". This is no A/B: take 379's 15.19 ms came from 4
+  windows over 31 s in another scene, and timings across runs don't compare.
+  At 4224² per eye, native measured 29.1 ms.
+
+**Dispatches left one-eyed** (more than 80,000, all by the size test in
+`fsr_dispatch_z`):
+* `48x32x1`, a 768x512 target that is not eye-sized;
+* `264x260x1`, only while the map is open. That is 4224x4160, X4's FSR on
+  the map's 4224x4149 target, which the pool rule keeps single-layer (take
+  378: the map is flat above ~4068² per eye). One eye is correct for a
+  single-layer target. Patola opened the map 4 times and reported nothing
+  wrong, but nobody asked him about the map in particular.
+
+**Since the take:**
+* The layer prints `fsr first present: FSR in both eyes armed|OFF (…)` along
+  with the counts. It prints unconditionally, in `shader_knob_report`.
+* The scorer's `fsr` block:
+  * skips a log with no fsr lines as predating the fix (take 379 and
+    earlier);
+  * FAILs if the fix is OFF for want of X4VR_MV or the mirror, if a pass is
+    REFUSED, if nothing is patched, or if no dispatch is doubled, whenever
+    an fsr* upscaler is asked for;
+  * gets 16 census cases.
+* complog folds dispatches that differ only in bindless array sizes into one
+  line.
+* The GPU harness asserts fsrbindless:
+  * fix on: `2 1 1 1` (layers, layer 0 written, layer 1 written,
+    identical), the pass patched by signature, and the dispatch doubled;
+  * `X4VR_FSR_STEREO=0`: `2 1 0 0`.

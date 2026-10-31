@@ -1659,12 +1659,64 @@ cld1='[  999961.000] layer   comp: dispatch module c3 groups 264x264x1 direct | 
 cld2='[  999961.001] layer   comp: dispatch module c4 groups 20x20x1 direct | U_froxels@0.0: no image recorded'
 { cat /tmp/census-cl-base.log; printf '%s\n' "$clm1" "$clm2" "$cld1" "$cld2"; } > /tmp/census-cl-ok.log
 want "complog: summarised" /tmp/census-cl-ok.log complog "2 compute module(s), 1 FSR; 2 distinct dispatch(es)"
-want "complog: the FSR module named" /tmp/census-cl-ok.log complog "FSR c3: FsrEasuH | local 64x1x1 | S_input_rt@0.1 U_output_rt@0.2"
-want "complog: the FSR dispatch with its images" /tmp/census-cl-ok.log complog "dispatch c3 264x264x1 direct | S_input_rt@0.1: sampled img #40 2816x2816"
+want "complog: the FSR module named" /tmp/census-cl-ok.log complog "FSR c3: FsrEasuH | local 64x1x1, 9000 bytes | S_input_rt@0.1 U_output_rt@0.2"
+want "complog: the FSR dispatch with its images" /tmp/census-cl-ok.log complog "dispatch c3 264x264x1 direct (1 logged) | S_input_rt@0.1: sampled img #40 2816x2816"
+# X4's own FSR modules keep no names (take 379): recognised by signature, and
+# a dispatch logged again only because a bindless array grew is one line.
+clm3='[  999960.002] layer   comp: module c5 local 64x1x1, 13576 bytes | resources: S_sampler@0.4 S_sampler2D@0.5 U_output_rt_decl@0.6 BLOCK_BUFFER_BINDING_SLOT_DYNAMIC@4.0'
+cld3='[  999961.002] layer   comp: dispatch module c5 groups 264x264x1 direct | S_sampler2D@0.5: array of 10843 (bindless, not resolved)'
+cld4='[  999962.002] layer   comp: dispatch module c5 groups 264x264x1 direct | S_sampler2D@0.5: array of 10846 (bindless, not resolved)'
+{ cat /tmp/census-cl-base.log; printf '%s\n' "$clm3" "$cld3" "$cld4"; } > /tmp/census-cl-sig.log
+want "complog: X4's FSR module by signature" /tmp/census-cl-sig.log complog "FSR c5: by signature | local 64x1x1, 13576 bytes"
+want "complog: array growth folded into one line" /tmp/census-cl-sig.log complog "dispatch c5 264x264x1 direct (2 logged) | S_sampler2D@0.5: array of N"
 { cat /tmp/census-cl-base.log; printf '%s\n' "$clm2" "$cld2"; } > /tmp/census-cl-nofsr.log
 want "complog: upscaler asked, no FSR module -> note" /tmp/census-cl-nofsr.log complog "NOTE X4VR_UPSCALE=fsr_quality but no FSR compute module was compiled"
 want "complog: asked, no module -> FAIL" /tmp/census-cl-base.log "FAIL|  - " "X4VR_COMPLOG=1 but no compute module was described"
 absent "complog: not asked -> silent" "$BASE" complog
+
+# The FSR fix: X4's FSR in both eyes (take 380).
+for f in '"fsr: X4'"'"'s FSR pass (%zu bytes) patched for both eyes — %u table "' '"fsr: X4'"'"'s FSR pass (%zu bytes) REFUSED by the patch — it stays "' '"%ux%ux2, the second half the right eye (%llu so far)",' '"X4 asked, one-eyed (%llu so far)",' '"fsr %s: FSR in both eyes %s — %llu FSR pass(es) patched, %llu "'; do
+    if grep -qF "$f" layer/x4vr_layer.cpp; then
+        ok "fsr: the layer still prints $f"
+    else
+        bad "fsr: the layer's format moved: $f"
+    fi
+done
+sed 's/env: run = /env: run = X4VR_UPSCALE=fsr_quality /' "$BASE" > /tmp/census-fs-base.log
+fsa='[  999960.000] layer   fsr first present: FSR in both eyes armed — 0 FSR pass(es) patched, 0 REFUSED; 0 eye-covering dispatch(es) doubled, 0 smaller left one-eyed, 0 barrier(s) widened'
+fso='[  999960.000] layer   fsr first present: FSR in both eyes OFF (needs X4VR_MV and the bindless mirror) — 0 FSR pass(es) patched, 0 REFUSED; 0 eye-covering dispatch(es) doubled, 0 smaller left one-eyed, 0 barrier(s) widened'
+fsk='[  999960.000] layer   fsr first present: FSR in both eyes OFF (X4VR_FSR_STEREO=0) — 0 FSR pass(es) patched, 0 REFUSED; 0 eye-covering dispatch(es) doubled, 0 smaller left one-eyed, 0 barrier(s) widened'
+fsp1='[  999961.000] layer   fsr: X4'"'"'s FSR pass (13576 bytes) patched for both eyes — 2 table access(es) + WorkGroupID.z * 26653 (sampled and storage tables)'
+fsp2='[  999961.001] layer   fsr: X4'"'"'s FSR pass (55500 bytes) patched for both eyes — 2 table access(es) + WorkGroupID.z * 26653 (sampled and storage tables)'
+fsr1='[  999961.001] layer   fsr: X4'"'"'s FSR pass (55500 bytes) REFUSED by the patch — it stays one-eyed; the right eye'"'"'s scene will be black with an upscaler'
+fsd='[  999962.000] layer   fsr: dispatch 264x264x1 covers the 4224x4224 eye — run as 264x264x2, the second half the right eye (20000 so far)'
+fsl='[  999962.001] layer   fsr: dispatch 48x32x1 does not cover the 4224x4224 eye — left as X4 asked, one-eyed (10000 so far)'
+{ cat /tmp/census-fs-base.log; printf '%s\n' "$fsa" "$fsp1" "$fsp2" "$fsd" "$fsl"; } > /tmp/census-fs-ok.log
+want "fsr: armed" /tmp/census-fs-ok.log "fsr " "FSR in both eyes: armed"
+want "fsr: summarised" /tmp/census-fs-ok.log "fsr " "2 FSR pass(es) patched (13576 bytes, 55500 bytes), 0 refused; eye-covering dispatches doubled: 20000+; smaller ones left one-eyed: 10000+"
+if python3 tools/score_run.py /tmp/census-fs-ok.log 2>&1 | grep -qE "^  - .*(FSR|X4VR_UPSCALE)"; then
+    bad "fsr: patched and doubled -> FAILs"
+else
+    ok "fsr: patched and doubled -> no FAIL"
+fi
+{ cat /tmp/census-fs-base.log; printf '%s\n' "$fsa"; } > /tmp/census-fs-none.log
+want "fsr: armed, nothing patched -> FAIL" /tmp/census-fs-none.log "FAIL|  - " "X4VR_UPSCALE=fsr_quality but no FSR pass was patched"
+{ cat /tmp/census-fs-base.log; printf '%s\n' "$fsa" "$fsp1" "$fsr1" "$fsd"; } > /tmp/census-fs-ref.log
+want "fsr: a refused pass -> FAIL" /tmp/census-fs-ref.log "FAIL|  - " "X4VR_UPSCALE=fsr_quality: 1 FSR pass(es) REFUSED by the patch"
+{ cat /tmp/census-fs-base.log; printf '%s\n' "$fsa" "$fsp1" "$fsp2"; } > /tmp/census-fs-nodbl.log
+want "fsr: patched, nothing doubled -> FAIL" /tmp/census-fs-nodbl.log "FAIL|  - " "FSR passes patched but no eye-covering dispatch was doubled"
+{ cat /tmp/census-fs-base.log; printf '%s\n' "$fso"; } > /tmp/census-fs-off.log
+want "fsr: off for want of the mirror -> FAIL" /tmp/census-fs-off.log "FAIL|  - " "the FSR fix is OFF (needs X4VR_MV and the bindless mirror)"
+sed 's/env: run = /env: run = X4VR_FSR_STEREO=0 /' /tmp/census-fs-base.log > /tmp/census-fs-knob.log
+printf '%s\n' "$fsk" >> /tmp/census-fs-knob.log
+want "fsr: knob off -> reported" /tmp/census-fs-knob.log "fsr " "FSR in both eyes: OFF (X4VR_FSR_STEREO=0)"
+if python3 tools/score_run.py /tmp/census-fs-knob.log 2>&1 | grep -qE "^  - .*(FSR|X4VR_UPSCALE)"; then
+    bad "fsr: knob off on purpose -> FAILs"
+else
+    ok "fsr: knob off on purpose -> no FAIL"
+fi
+want "fsr: a log from before the fix -> not checked" /tmp/census-fs-base.log "fsr " "not checked: X4VR_UPSCALE=fsr_quality, but this log predates the FSR fix"
+absent "fsr: not asked, no lines -> silent" "$BASE" "fsr "
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

@@ -1022,3 +1022,22 @@ A larger eye is the shipping line with X4VR_W, X4VR_H and X4VR_RES changed
 together (X4VR_W = 2 x X4VR_H, X4VR_RES = X4VR_H x X4VR_H). Above ~4068² the
 map is flat; at 4224² SteamVR garbles the image (WiVRn does not).
 
+
+## Take 380 (2026-10-31) — FSR 1 in both eyes, on the take 375 shipping line
+
+The shipping line is unchanged. Take 380 ran it at 4224² per eye with FSR
+quality and two instruments, to confirm a962731 (X4VR_FSR_STEREO, on by
+default).
+
+Patola: *"It worked phenomenally well. Smooth gameplay… Crystal clear
+graphics. I saw images in each eye every time with correct depth."*
+
+`score_run.py` PASS:
+* `fsr`: 2 passes patched and 0 refused; eye-covering dispatches doubled;
+* GAMEPLAY 13.24 ms (76 fps). Native at the same size measured 29.1 ms.
+
+    X4VR_TAKE=380 X4VR_HEAD_6DOF=1 X4VR_STEER_PICK=1 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_FOOT=1 X4VR_STEER=a X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=4224 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=8448 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=4224x4224 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_UPSCALE=fsr_quality X4VR_COMPLOG=1 X4VR_MV_INVENTORY=1 X4VR_LOG=/tmp/x4vr-take380.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+To play without the instruments, drop X4VR_COMPLOG=1 and X4VR_MV_INVENTORY=1.
+X4VR_UPSCALE takes X4's FSR 1 modes: fsr_ultra_quality, fsr_quality,
+fsr_balanced and fsr_performance. FSR 3 (fsr3_*) is not yet handled per eye.

@@ -1302,6 +1302,9 @@ bool fsr_stereo_enabled() {
     return g_fsr_stereo_knob && g_mv && g_bindless_mirror;
 }
 VkExtent2D expected_eye(); // defined with the SBS split, further down
+// Counted here, printed by shader_knob_report() and by the fsr: lines.
+std::atomic<uint64_t> g_fsr_patched{0}, g_fsr_refused{0}, g_fsr_doubled{0},
+    g_fsr_left{0}, g_fsr_barriers{0};
 
 // The layout/set bookkeeping below serves both knobs, and the mirror cannot work
 // without it: attributing a write to a table is how it knows a twin region
@@ -3918,6 +3921,23 @@ void shader_knob_report(const char *when) {
     X4VR_LOG("fog %s: volumetric composite forced to passthrough in %llu "
              "module(s) (offline: 8 of 409 match the fog signature)",
              when, (unsigned long long)g_fog_disabled.load());
+    // The FSR fix (take 380), same rule: a log without this line predates the
+    // fix, and "armed" with 0 patched means X4 created no FSR pass (no FSR
+    // upscaler) or the signature no longer matches. X4 creates the passes
+    // after the first present, so that line's counts are a snapshot; the
+    // per-module fsr: lines are the record.
+    X4VR_LOG("fsr %s: FSR in both eyes %s — %llu FSR pass(es) patched, %llu "
+             "REFUSED; %llu eye-covering dispatch(es) doubled, %llu smaller "
+             "left one-eyed, %llu barrier(s) widened",
+             when,
+             fsr_stereo_enabled() ? "armed"
+             : !g_fsr_stereo_knob ? "OFF (X4VR_FSR_STEREO=0)"
+                                  : "OFF (needs X4VR_MV and the bindless mirror)",
+             (unsigned long long)g_fsr_patched.load(),
+             (unsigned long long)g_fsr_refused.load(),
+             (unsigned long long)g_fsr_doubled.load(),
+             (unsigned long long)g_fsr_left.load(),
+             (unsigned long long)g_fsr_barriers.load());
     // Task #76. The offline census says exactly four modules carry a uint named
     // U_fsr3g_useuitexture at byte 512 of set 4 binding 0 -- the four
     // copy_gamma permutations -- and tests/run-multiview-render.sh asserts that
@@ -6880,8 +6900,6 @@ std::unordered_set<VkPipeline> &g_fsr_pipes =
     x4vr::immortal<std::unordered_set<VkPipeline>>();
 std::unordered_map<VkCommandBuffer, bool> &g_fsr_cb =
     x4vr::immortal<std::unordered_map<VkCommandBuffer, bool>>();
-std::atomic<uint64_t> g_fsr_doubled{0}, g_fsr_left{0}, g_fsr_barriers{0};
-
 // The patched code for an FSR module, or empty to create it as X4 wrote it.
 std::vector<uint32_t> fsr_patch_module(const VkShaderModuleCreateInfo *ci) {
     std::vector<uint32_t> code;
@@ -6901,12 +6919,14 @@ std::vector<uint32_t> fsr_patch_module(const VkShaderModuleCreateInfo *ci) {
     const uint32_t n =
         x4vr::spv::patch_compute_index_offset(code, tables, g_mirror_offset);
     if (!n) {
+        ++g_fsr_refused;
         X4VR_LOG("fsr: X4's FSR pass (%zu bytes) REFUSED by the patch — it stays "
                  "one-eyed; the right eye's scene will be black with an upscaler",
                  (size_t)ci->codeSize);
         code.clear();
         return code;
     }
+    ++g_fsr_patched;
     X4VR_LOG("fsr: X4's FSR pass (%zu bytes) patched for both eyes — %u table "
              "access(es) + WorkGroupID.z * %u (sampled and storage tables)",
              (size_t)ci->codeSize, n, g_mirror_offset);

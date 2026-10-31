@@ -5331,6 +5331,57 @@ def main(path):
         fails.append("head-look armed but the pointer was never recentred "
                      "after the load — the cursor starts outside the view")
 
+    # --- the FSR fix: X4's FSR in both eyes (take 380) ----------------------
+    #
+    # layer/x4vr_layer.cpp, X4VR_FSR_STEREO (on by default). With an FSR
+    # upscaler asked for, X4's FSR passes must be created patched and the
+    # eye-covering dispatches run with z = 2; otherwise the right eye's scene
+    # is black (take 379). Gate on intent: an fsr* X4VR_UPSCALE without the
+    # knob set to 0.
+    fs_up = re.search(r"\bX4VR_UPSCALE=(fsr\S*)", run or "")
+    fs_off = re.search(r"\bX4VR_FSR_STEREO=0\b", run or "")
+    fs_patched = re.findall(r"fsr: X4's FSR pass \((\d+) bytes\) patched for both "
+                            r"eyes — (\d+) table access", text)
+    fs_refused = re.findall(r"fsr: X4's FSR pass \((\d+) bytes\) REFUSED", text)
+    fs_dbl = [int(n) for n in re.findall(r"fsr: dispatch \S+ covers the \S+ eye — "
+                                         r"run as \S+, the second half the right "
+                                         r"eye \((\d+) so far\)", text)]
+    fs_left = [int(n) for n in re.findall(r"fsr: dispatch \S+ does not cover the "
+                                          r"\S+ eye — left as X4 asked, one-eyed "
+                                          r"\((\d+) so far\)", text)]
+    # "fsr first present: FSR in both eyes armed|OFF (...)" is printed
+    # unconditionally since the fix; a log with neither it nor any fsr: line
+    # predates the fix (take 379 and earlier) and is not checked.
+    fs_state = re.findall(r"fsr (?:first present|final): FSR in both eyes "
+                          r"(armed|OFF \([^)]*\))", text)
+    fs_built = bool(fs_state or fs_patched or fs_refused or fs_dbl or fs_left)
+    if fs_up and not fs_built:
+        print(f"fsr     not checked: X4VR_UPSCALE={fs_up.group(1)}, but this log "
+              f"predates the FSR fix (no fsr lines; take 379 and earlier)")
+    elif fs_up or fs_built:
+        if fs_state:
+            print(f"fsr     FSR in both eyes: {fs_state[-1]}")
+        print(f"fsr     {len(fs_patched)} FSR pass(es) patched ("
+              + ", ".join(f"{b} bytes" for b, _n in fs_patched) + f"), "
+              f"{len(fs_refused)} refused; eye-covering dispatches doubled: "
+              f"{max(fs_dbl, default=0)}+; smaller ones left one-eyed: "
+              f"{max(fs_left, default=0)}+ (the log counts in steps of 10000)")
+        if fs_up and not fs_off:
+            if fs_state and fs_state[-1].startswith("OFF"):
+                fails.append(f"X4VR_UPSCALE={fs_up.group(1)} but the FSR fix is "
+                             f"{fs_state[-1]} — the right eye's scene is black")
+            elif fs_refused:
+                fails.append(f"X4VR_UPSCALE={fs_up.group(1)}: {len(fs_refused)} FSR "
+                             f"pass(es) REFUSED by the patch — the right eye's "
+                             f"scene is black")
+            elif not fs_patched:
+                fails.append(f"X4VR_UPSCALE={fs_up.group(1)} but no FSR pass was "
+                             f"patched — X4 did not take the upscaler, or the fix "
+                             f"is off (X4VR_BINDLESS_MIRROR / X4VR_MV)")
+            elif not fs_dbl:
+                fails.append(f"X4VR_UPSCALE={fs_up.group(1)}: FSR passes patched but "
+                             f"no eye-covering dispatch was doubled")
+
     # --- X4VR_COMPLOG: what each compute dispatch touches (take 379) -------
     #
     # Read only (layer/x4vr_layer.cpp). X4's FSR loses the right eye; its FSR 1
@@ -5347,14 +5398,30 @@ def main(path):
         if cl_asked and not cl_mods:
             fails.append("X4VR_COMPLOG=1 but no compute module was described — "
                          "the instrument did not run")
-        fsr = {m[0]: m for m in cl_mods if m[4]}
+        # X4's compiled FSR modules keep no "Fsr" names (take 379), so they
+        # are recognised as the layer recognises them: 64x1x1 and exactly
+        # these four resources (x4vr::spv::is_x4_fsr_pass).
+        fsr_sig = ["BLOCK_BUFFER_BINDING_SLOT_DYNAMIC", "S_sampler", "S_sampler2D",
+                   "U_output_rt_decl"]
+        def _is_fsr(m):
+            names = sorted(r.split("@")[0] for r in m[3].split())
+            return bool(m[4]) or (m[1] == "64x1x1" and names == fsr_sig)
+        fsr = {m[0]: m for m in cl_mods if _is_fsr(m)}
         print(f"complog {len(cl_mods)} compute module(s), {len(fsr)} FSR; "
               f"{len(cl_disp)} distinct dispatch(es)")
         for c, (n, local, size, res, names) in sorted(fsr.items(), key=lambda x: int(x[0])):
-            print(f"complog   FSR c{n}: {names.strip()} | local {local} |{res}")
+            print(f"complog   FSR c{n}: {(names or 'by signature').strip()} | "
+                  f"local {local}, {size} bytes |{res}")
+        # One line per module, group count and resource shape: the bindless
+        # array sizes grow as X4 streams textures in, so the layer logs the
+        # same dispatch again whenever one of them moves (take 380: ~100 lines).
+        fsr_disp = collections.Counter()
         for whole, c, groups, how, rest in cl_disp:
             if c in fsr:
-                print(f"complog   dispatch c{c} {groups} {how}{rest}")
+                fsr_disp[(int(c), groups, how,
+                          re.sub(r"array of \d+", "array of N", rest))] += 1
+        for (c, groups, how, rest), k in sorted(fsr_disp.items()):
+            print(f"complog   dispatch c{c} {groups} {how} ({k} logged){rest}")
         up = re.search(r"\bX4VR_UPSCALE=(\S+)", run or "")
         if cl_mods and up and up.group(1) != "none" and not fsr:
             print(f"complog   NOTE X4VR_UPSCALE={up.group(1)} but no FSR compute "

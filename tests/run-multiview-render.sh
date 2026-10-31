@@ -1648,6 +1648,39 @@ inv_case "complog resolves the sampled input" \
 inv_case "complog resolves the storage output" \
     "U_output_rt@0.2: storage img #2 64x64 fmt=97 usage=0xc single, view 2D from layer 0, 1 layer(s)" \
     X4VR_TEST_COMPUTE=fsr X4VR_COMPLOG=1
+# The FSR fix (take 380): tests/fsr_bindless.comp has the resources of X4's
+# compiled FSR pass, read and written through the bindless tables. With the
+# fix both layers of the doubled output are written (from identical input
+# layers, so identical); with X4VR_FSR_STEREO=0 layer 1 stays zero, which is
+# take 379's black right eye.
+fsrb_case() {
+    local label="$1" knob="$2" want="$3"
+    local out got
+    out=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" \
+        "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+        X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=3 X4VR_BINDLESS_MIRROR=1 \
+        X4VR_RES=64x64 X4VR_MIRROR_OFFSET=32 X4VR_TEST_COMPUTE=fsrbindless \
+        "X4VR_FSR_STEREO=$knob" "$BIN" "$VS" "$FS" "$SF" 2>&1)
+    got="$(sed -n 's/^FSRB_OUT_LAYERS=//p' <<<"$out")"
+    got="$got $(sed -n 's/^FSRB_L0_WRITTEN=//p' <<<"$out")"
+    got="$got $(sed -n 's/^FSRB_L1_WRITTEN=//p' <<<"$out")"
+    got="$got $(sed -n 's/^FSRB_IDENTICAL=//p' <<<"$out")"
+    if [[ "$got" == "$want" ]]; then
+        printf 'ok   %-38s layers/l0/l1/identical=%s\n' "$label" "$got"
+    else
+        printf 'FAIL %-38s layers/l0/l1/identical=%s, wanted %s\n' \
+            "$label" "$got" "$want"
+        fails=$((fails + 1))
+    fi
+}
+fsrb_case "FSR fix writes both eyes" 1 "2 1 1 1"
+fsrb_case "...and without it layer 1 is black" 0 "2 1 0 0"
+inv_case "...the pass patched by signature" \
+    "fsr: X4's FSR pass (2696 bytes) patched for both eyes — 2 table access(es) + WorkGroupID.z" \
+    X4VR_BINDLESS_MIRROR=1 X4VR_RES=64x64 X4VR_MIRROR_OFFSET=32 X4VR_TEST_COMPUTE=fsrbindless
+inv_case "...the eye-sized dispatch doubled" \
+    "fsr: dispatch 4x4x1 covers the 64x64 eye — run as 4x4x2" \
+    X4VR_BINDLESS_MIRROR=1 X4VR_RES=64x64 X4VR_MIRROR_OFFSET=32 X4VR_TEST_COMPUTE=fsrbindless
 # Zero has to be a reading, not an absence: "no dispatches" and "compute is
 # unhooked again" produced identical logs for this project's whole history.
 inv_case "...and reports zero as a number" \
