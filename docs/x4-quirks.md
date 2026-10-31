@@ -29573,3 +29573,64 @@ HUD is misplaced (#45/#81): it is for measurement only.
   downsample keeps, and the design above would help without changing what
   fits on screen. If the two match, only more pixels help (a larger eye, or
   a larger UI scale).
+
+## Takes 387 and 388 — SCORED PASS (2026-10-31): the menu text, captured
+
+Both PASS (83 and 84 fps at 2816² native). Patola held the same panels in
+both: a station's information (third tab), the property-owned list, and
+Player Information → Account Management, which is mostly text. He doubted the
+comparison ("the larger map also has writings more distant") and holds that
+drawing the UI full size and shrinking the result "will offer superior
+results without spending extra screen space".
+
+The comparison is offline:
+* Take 388's frame n11 (canvas off, the panel filling the eye) was shrunk by
+  0.5252 about the centre with Lanczos and with a box filter.
+* It was set beside take 387's frame n11 (canvas as now), the central 1479²
+  crop, same panel, same text ("Expected construction bud…", "Argon Prime
+  High Tech Factory I (SNL-882)").
+
+* **P387.1 — refuted.** The text in the rendered frame is not blurry. It is
+  legible and crisp, with hard, slightly jagged edges. The blur Patola sees
+  in the headset is added after the render, or is how hard-edged text that
+  small comes through the compositor.
+* **P388.1 — half.** The filtered downsample carries the same detail, but
+  its edges are smooth (anti-aliased). Mean luminance gradient over the text
+  block: 15.9 drawn small, against 14.7 (Lanczos) and 14.1 (box). Drawing
+  small is the harder-edged of the two, not the softer.
+
+**What that means for Patola's proposal.**
+* **It cannot add detail:** at the same pixel count, both paths hold the
+  same.
+* **It can change the edges:** anti-aliased instead of jagged.
+* **That may matter in a headset.** A full-screen menu is a window that does
+  not follow the head, so the compositor resamples it at a new sub-pixel
+  offset every frame. Hard-edged text crawls under that; anti-aliased text
+  holds still.
+
+Only the headset can judge it.
+
+**The literal form does not work: the UI pass is not all one scale.** The
+w-gate (#82) shrinks the perspective draws (menus, the HUD) and leaves the
+w = 1 draws (the object brackets, placed on the world across the full 110°).
+Shrinking the finished UI image would shrink the brackets too, and those
+outside the central 52.5% would be lost.
+
+**The equivalent that works for everything: a supersampled UI image.**
+* The layer creates X4's UI target at 2× per axis and scales the UI pass's
+  viewport, scissor and render area to match. The canvas stays as it is, so
+  menus are drawn at 2 × 0.5252 ≈ 1.05 of X4's own size.
+* `copy_gamma` fetches the four texels under each output pixel and averages
+  them.
+
+Costs:
+* the UI image's memory ×4 (2816² eyes: ~127 MB per layer; 4224²: ~285 MB,
+  which may meet X4's 255.8 MiB block);
+* identifying the UI target at creation (today it is named only after the
+  first frames);
+* every other reader of that image.
+
+Not built; Patola decides.
+
+Comparison images: the scratchpad's dumps/compare_text.png (3×) and
+dumps/compare_pixels.png (8×).
