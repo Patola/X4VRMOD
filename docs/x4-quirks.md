@@ -28542,3 +28542,6 @@ diagnosed yet. Packaging is planned separately (docs/packaging-plan.md).
      X4VR_HUD_MOUSE (374/375). X4VR_STEER_PICK was already in 367/368.
    * **Wanted:** which weapon slot and type; mouse or steering mode; whether
      the same ship does it in unmodified X4.
+   * **2026-10-31: not reproduced.** Patola tried under WiVRn and SteamVR and
+     could not make it happen again; possibly X4's own. Set aside unless it
+     returns.

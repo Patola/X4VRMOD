@@ -12,6 +12,7 @@ test or a reading of X4 settles them.
 | 2 | Launcher architecture | **A core plus a command-line tool, with the Qt6/QML window on top.** |
 | 3 | Using it with the headset on | **Desktop setup, and a Play button that waits for the headset.** No in-game panel for now. No launcher window in VR. |
 | 4 | Resolution | **Only the launcher sets it.** X4's in-game resolution menu is not the control in VR. |
+| 5 | X4 extensions | **One extension, `x4vrmod`**: the look-around limits and the sway removal in one settings diff. **`x4vrmod_headlook` is dropped**, with its bisect switch `X4VR_HEADLOOK_SPEED_EXT`. |
 
 Clarifications from Patola:
 * **DLSS:** the development PC has an AMD GPU, so no DLSS here. A friend with
@@ -282,6 +283,38 @@ The same bundle serves takes: a take is a debug-level run plus a protocol,
 and the scorer is the same one. Patola's play sessions can run at normal
 level with the mark key, instead of a take's full command line.
 
+## One extension, `x4vrmod` (decision 5)
+
+* **Today there are three** (`extension/`):
+  * `x4vrmod_lookaround`: cockpit look-around limits 65/35 -> 180/75 degrees.
+    Always enabled in a mod session.
+  * `x4vrmod_nosway`: the camera's G-force sway and boost shake off. Always
+    enabled.
+  * `x4vrmod_headlook`: look-around return speed (`anglespeed`) 0 for the
+    whole session. Obsolete since take 351: the injector holds that speed at
+    zero only in camera mode 0 (cockpit, walking) and gives X4 its value back
+    elsewhere, because the extension froze the numpad orbit of F2/F3 (take
+    350). Served only with `X4VR_HEADLOOK_SPEED_EXT=1`.
+* **For release: one extension, `x4vrmod`,** with both remaining diffs in one
+  `libraries/parameters.xml`. `x4vrmod_headlook` and its switch are removed,
+  not merged: folding them in would bring the frozen orbit back.
+* **Its manifest:**
+  * `enabled="0"`, so a vanilla session that finds it leaves it off. The
+    injector's content fork turns it on for mod sessions only.
+  * `save="0"`, so no save depends on it.
+  * Its `version` is the mod's, and the launcher's "extensions current" check
+    compares the two.
+* **Lost:** turning the look-around and the sway on and off separately. Both
+  are always wanted in VR; a bisect can edit the file in a dev build.
+* **Migration:** `x4vrmod install` and `uninstall` also remove the three old
+  directories from X4's `extensions/` (where `X4VR_EXTENSIONS=1` deployed them
+  until now) and drop the three names from the content fork.
+* **Changes together:** the injector's extension table (`kOurExtensions`),
+  the head-look write's checks that name `x4vrmod_lookaround`, the scorer's
+  `extensions` and `hwrite` lines, the census, `launch/deploy-extensions.sh`.
+* **Location:** wherever "extensions in the user folder" (Phase 1, to
+  verify) decides.
+
 ## Not planned (now)
 * An in-game panel drawn by the layer (decision 3).
 * A launcher window in VR, or SteamVR/OpenXR overlays.
@@ -292,8 +325,8 @@ level with the mark key, instead of a take's full command line.
 ## Order of work
 1. Phase 0: defaults flip, the `effective:` line, the scorer reading it.
    Accepted by a take with almost no variables.
-2. Version embedding and static runtime; the Arch PKGBUILD from the current
-   launcher script.
+2. Version embedding and static runtime; the single `x4vrmod` extension; the
+   Arch PKGBUILD from the current launcher script.
 3. Phase 2's core and CLI: `doctor` first (it answers the "to verify" items
    on real machines), then `run`, `install`/`uninstall`, `report` with the
    flight recorder.
