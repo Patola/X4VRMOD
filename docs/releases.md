@@ -27,7 +27,7 @@ on the remote beside their `take-NNN-name` twins.
   line, at 2816² per eye. The table is `launch/defaults.conf`.
   * An explicit setting wins; `X4VR_DEFAULTS=0` applies none.
   * `X4VR_H` alone sets the eye size: `X4VR_W` and `X4VR_RES` follow.
-  * The upscaler follows the eye size unless set: FSR 3 Balanced above
+  * The upscaler follows the eye size unless set: FSR 1 Quality above
     2816² per eye, native otherwise.
   * Every run's log line records all values, so old take lines still replay
     exactly; to replay one from before take 385 as it ran, add

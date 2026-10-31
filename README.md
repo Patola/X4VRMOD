@@ -134,7 +134,7 @@ shim, not the layer — see [docs/frame-analysis.md](docs/frame-analysis.md).
 ```sh
 cmake -S . -B build && cmake --build build
 ./launch/x4vr-launch.sh                 # X4 in VR, 2816² per eye, native
-X4VR_H=4224 ./launch/x4vr-launch.sh     # 4224² per eye, FSR 3 Balanced
+X4VR_H=4224 ./launch/x4vr-launch.sh     # 4224² per eye, FSR 1 Quality
 ```
 
 **The shipping settings are the defaults.** The launcher applies
@@ -190,7 +190,7 @@ uses 2816² per eye. Two limits are known at larger sizes:
 
 **Upscaling.** `X4VR_UPSCALE=<mode>` chooses X4's upscaler, which renders the
 scene smaller and scales it up to the eye size. Unset, it follows the eye
-size: `fsr3_balanced` above 2816² per eye, `none` (every pixel rendered) at
+size: `fsr_quality` (FSR 1) above 2816² per eye, `none` (every pixel rendered) at
 2816² and below. The mod owns this setting and serves it on every launch,
 so a change in X4's graphics menu lasts only until the next launch. Frame
 generation is always served off: an interpolated frame carries no head pose
@@ -226,9 +226,10 @@ Measured at 4224² per eye on an RX 7900 XTX (different scenes, so rough):
 | `fsr_quality` | 13.24 ms (take 380) |
 | `fsr3_balanced` | 16.72 ms (take 383) |
 
-For example, `X4VR_H=4224 ./launch/x4vr-launch.sh` is 4224² eyes with FSR 3
-Balanced, and `X4VR_H=4224 X4VR_UPSCALE=fsr_quality ./launch/x4vr-launch.sh`
-the same eyes with FSR 1 Quality.
+For example, `X4VR_H=4224 ./launch/x4vr-launch.sh` is 4224² eyes with FSR 1
+Quality, and `X4VR_H=4224 X4VR_UPSCALE=fsr3_balanced ./launch/x4vr-launch.sh`
+the same eyes with FSR 3 Balanced. FSR 1 is the faster of the two by about
+3.5 ms a frame at 4224²; FSR 3 adds temporal anti-aliasing (steadier edges).
 
 ## Repository layout
 

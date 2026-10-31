@@ -54,6 +54,7 @@ extern char **environ;
 #include "x4vr_foot.hpp"
 #include "x4vr_extview.hpp"
 #include "x4vr_aimpick.hpp"
+#include "x4vr_pause.hpp"
 #include "x4vr_ptrwatch.hpp"
 #include "x4vr_uimouse.hpp"
 #include "x4vr_menus.hpp"
@@ -1127,7 +1128,7 @@ void log_startup_env() {
         const char *h = getenv("X4VR_H");
         if (dflt && up && strstr(dflt, "X4VR_UPSCALE"))
             X4VR_LOG("env: X4VR_UPSCALE=%s chosen by the eye size (X4VR_H=%s; "
-                     "fsr3_balanced above 2816, none otherwise)",
+                     "fsr_quality above 2816, none otherwise)",
                      up, h ? h : "?");
     }
 
@@ -2446,7 +2447,9 @@ enum class X4View { Cockpit, External, Floating, Paused };
 // X4's IsFullscreenMenuDisplayed, kept by fullscreen_menu_tick() below;
 // `known` once that tick has asked X4 at least once, `seq` its run count.
 static std::atomic<bool> g_fullscreen_up{false}, g_fullscreen_known{false};
-static std::atomic<uint64_t> g_fullscreen_seq{0};
+// `seq` counts the checks; `down_seq` is the check at which the last
+// full-screen menu went down.
+static std::atomic<uint64_t> g_fullscreen_seq{0}, g_fullscreen_down_seq{0};
 static X4View x4_view() {
     using Fn = bool (*)();
     static Fn ext = [] {
@@ -2486,32 +2489,16 @@ static X4View x4_view() {
         return X4View::External;
     if (flt && flt())
         return X4View::Floating;
-    // **The Pause key is not the ESC menu** (take 383). Both pause X4; only
-    // the ESC menu is a full-screen menu. Paused with none up, the view is the
-    // one under the pause -- the cockpit, or the player on foot -- and stays
-    // immersive, as F2/F4 already did (their checks come first). Patola saw
-    // the cockpit and walking turn into a window on the Pause key. Without
-    // the full-screen query (X4VR_CURSOR_CANVAS=auto and
-    // X4VR_HEADLOOK_EXTERNAL both off) every pause reads as before.
-    //
-    // A pause is decided once X4 has been asked twice since it began: the ESC
-    // menu opens in the pump that pauses, and head-look's tick reads the pause
-    // before fullscreen_menu_tick reads the menu (take 383: both logged in
-    // the same millisecond, the pause first). Until then the view is what it
-    // was, so the Pause key never shows the window and the ESC menu reaches it
-    // a frame or two later.
-    const bool is_paused = paused && paused();
-    const bool known = g_fullscreen_known.load(std::memory_order_relaxed);
-    const uint64_t seq = g_fullscreen_seq.load(std::memory_order_relaxed);
-    static bool was_paused = false;
-    static uint64_t seq0 = 0;
-    if (is_paused && !was_paused)
-        seq0 = seq;
-    was_paused = is_paused;
-    const bool decided = seq >= seq0 + 2;
-    const bool undecided = is_paused && known && !decided;
-    const bool key_pause = is_paused && known && decided &&
-                           !g_fullscreen_up.load(std::memory_order_relaxed);
+    // **The Pause key is not the ESC menu** (takes 383–385): see
+    // x4vr_pause.hpp. Patola saw the cockpit and walking turn into a window
+    // on the Pause key; F2/F4 never did (their checks come first).
+    static x4vr::pause::Decider decider;
+    const x4vr::pause::Kind kind = decider.step(
+        paused && paused(), g_fullscreen_known.load(std::memory_order_relaxed),
+        g_fullscreen_up.load(std::memory_order_relaxed),
+        g_fullscreen_seq.load(std::memory_order_relaxed),
+        g_fullscreen_down_seq.load(std::memory_order_relaxed));
+    const bool key_pause = kind == x4vr::pause::Kind::KeyPause;
     static bool was_key_pause = false;
     if (key_pause != was_key_pause) {
         was_key_pause = key_pause;
@@ -2520,7 +2507,7 @@ static X4View x4_view() {
                              "stays as it was, immersive"
                            : "no longer paused without a menu");
     }
-    if (is_paused && !key_pause && !undecided)
+    if (kind == x4vr::pause::Kind::MenuPause)
         return X4View::Paused;
     return X4View::Cockpit;
 }
@@ -4697,9 +4684,11 @@ static void fullscreen_menu_tick() {
                  up ? "UP — the cursor is drawn through the UI canvas"
                     : "DOWN — the cursor is drawn at the raw pointer");
     }
-    g_fullscreen_up.store(up, std::memory_order_relaxed);
+    const bool was_up = g_fullscreen_up.exchange(up, std::memory_order_relaxed);
     g_fullscreen_known.store(true, std::memory_order_relaxed);
-    g_fullscreen_seq.fetch_add(1, std::memory_order_relaxed);
+    const uint64_t s = g_fullscreen_seq.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (was_up && !up)
+        g_fullscreen_down_seq.store(s, std::memory_order_relaxed);
     if (cursor_canvas_auto())
         x4vr_shared_state()->fullscreen_menu.store(up ? 1u : 0u,
                                                    std::memory_order_relaxed);

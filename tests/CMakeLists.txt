@@ -207,6 +207,9 @@ add_executable(x4vr_test_csmfit csmfit.cpp)
 # real binary, the nose against rows_for, the B/A geometry, the line quad and
 # the config fork's insert/restore. Self-checking.
 add_executable(x4vr_test_steer steer.cpp)
+# What a pause reads as: the Pause key, the ESC menu, menu to menu while
+# paused, the settle (takes 383-385). Self-checking.
+add_executable(x4vr_test_pause pause.cpp)
 # X4VR_FOOTLOG: angles from X4's matrix convention, the roll yaw/pitch miss,
 # the window across the +-180 seam, a camera change, the line's shape.
 # Self-checking.

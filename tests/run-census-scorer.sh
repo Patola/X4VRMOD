@@ -1760,9 +1760,9 @@ for f in '"env: defaults: %zu from launch/defaults.conf%s%s"' '"env: X4VR_UPSCAL
     fi
 done
 dfl='[  999960.000] inject  env: defaults: 47 from launch/defaults.conf: X4VR_H X4VR_FOV X4VR_W X4VR_RES X4VR_UPSCALE'
-dfu='[  999960.000] inject  env: X4VR_UPSCALE=fsr3_balanced chosen by the eye size (X4VR_H=4224; fsr3_balanced above 2816, none otherwise)'
+dfu='[  999960.000] inject  env: X4VR_UPSCALE=fsr_quality chosen by the eye size (X4VR_H=4224; fsr_quality above 2816, none otherwise)'
 plant /tmp/census-df.log "$dfl" "$dfu"
-want "env: defaults counted, upscaler by eye size" /tmp/census-df.log "env " "47 setting(s) from launch/defaults.conf; upscaler fsr3_balanced chosen by the eye size (4224 per eye)"
+want "env: defaults counted, upscaler by eye size" /tmp/census-df.log "env " "47 setting(s) from launch/defaults.conf; upscaler fsr_quality chosen by the eye size (4224 per eye)"
 plant /tmp/census-df0.log '[  999960.000] inject  env: defaults: none recorded — not started through launch/x4vr-launch.sh, or a launcher from before Phase 0'
 want "env: no defaults recorded -> said" /tmp/census-df0.log "env " "no defaults recorded"
 absent "env: a log from before Phase 0 -> silent" "$BASE" "env "
