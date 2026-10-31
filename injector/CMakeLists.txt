@@ -5,6 +5,13 @@ set_target_properties(x4vr_inject PROPERTIES
     OUTPUT_NAME "x4vr_inject"
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/injector")
 target_link_libraries(x4vr_inject PRIVATE dl Threads::Threads)
+# The C++ runtime linked in, and only the interposers exported (step 2 of
+# docs/packaging-plan.md): the injector is preloaded into X4 and every
+# process the launcher starts.
+target_link_options(x4vr_inject PRIVATE -static-libstdc++ -static-libgcc
+    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/x4vr_inject.map")
+set_property(TARGET x4vr_inject APPEND PROPERTY LINK_DEPENDS
+             ${CMAKE_CURRENT_SOURCE_DIR}/x4vr_inject.map)
 
 # An LD_PRELOAD library that stops EXPORTING a symbol stops interposing it, in
 # total silence: the library still loads, its constructor still runs, its

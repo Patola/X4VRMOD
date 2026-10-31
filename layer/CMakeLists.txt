@@ -9,6 +9,18 @@ set_target_properties(x4vr_layer PROPERTIES
 find_package(ZLIB REQUIRED)   # lossless PNG for the image dumps (task #49)
 target_link_libraries(x4vr_layer PRIVATE Threads::Threads ${CMAKE_DL_LIBS}
                       ZLIB::ZLIB)
+# The C++ runtime linked in, and only the entry points exported (step 2 of
+# docs/packaging-plan.md): the layer runs inside X4's process, possibly next
+# to Steam's runtime libraries, where a mismatched libstdc++ is a classic
+# crash. tests/check-exports.sh checks the result after every build.
+target_link_options(x4vr_layer PRIVATE -static-libstdc++ -static-libgcc
+    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/x4vr_layer.map")
+set_property(TARGET x4vr_layer APPEND PROPERTY LINK_DEPENDS
+             ${CMAKE_CURRENT_SOURCE_DIR}/x4vr_layer.map)
+add_custom_command(TARGET x4vr_layer POST_BUILD
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/../tests/check-exports.sh
+            --layer $<TARGET_FILE:x4vr_layer>
+    VERBATIM)
 
 # OpenXR: headers at build time, loader dlopen'd at run time. The layer is
 # injected into X4's process, so a DT_NEEDED on libopenxr_loader would be X4

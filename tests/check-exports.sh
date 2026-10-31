@@ -20,13 +20,30 @@
 # braces were balanced, the compiler was happy, and only the symbol table knew.
 set -eu
 
-SO="${1:?usage: check-exports.sh <libx4vr_inject.so>}"
+# --layer <lib>: the layer exports exactly its two entry points and their vk*
+# aliases (layer/x4vr_layer.map). Otherwise <lib> is the injector.
+MODE=injector
+if [ "${1:-}" = "--layer" ]; then
+    MODE=layer
+    shift
+fi
+SO="${1:?usage: check-exports.sh [--layer] <lib.so>}"
 
-# Every symbol here is an interposition contract with something outside this
-# repo. Adding a hook means adding it here, and that is the point.
-REQUIRED="
-fopen fopen64 open open64 openat openat64
-setenv putenv unsetenv
+if [ "$MODE" = layer ]; then
+    REQUIRED="
+vkGetInstanceProcAddr vkGetDeviceProcAddr
+x4vr_GetInstanceProcAddr x4vr_GetDeviceProcAddr
+"
+else
+    # injector/x4vr_inject.map is the other copy of this list; keep the two in
+    # step. The read family (read pread pread64 close mmap fread
+    # fread_unlocked fclose) and connect were interposed for years without
+    # being checked here.
+    REQUIRED="
+fopen fopen64 fclose fread fread_unlocked
+open open64 openat openat64
+read pread pread64 close mmap
+setenv putenv unsetenv connect
 SDL_GetWindowSize SDL_GetWindowSizeInPixels
 SDL_PeepEvents SDL_WaitEvent SDL_PumpEvents
 SDL_GetMouseState SDL_WarpMouseInWindow SDL_SetWindowRelativeMouseMode
@@ -36,19 +53,46 @@ SDL_IsGamepad SDL_GetJoystickAxis SDL_AddGamepadMappingsFromFile
 luaL_loadbuffer luaL_loadfile
 x4vr_shared_state x4vr_head_state
 "
+fi
+NAME=$(basename "$SO")
 
 have=$(nm -D --defined-only "$SO" | awk '$2 == "T" { print $3 }')
 missing=""
 for sym in $REQUIRED; do
     echo "$have" | grep -qx "$sym" || missing="$missing $sym"
 done
-
 if [ -n "$missing" ]; then
     echo "FAIL  $SO does not export:$missing" >&2
     echo "      An interposer that is not exported hooks NOTHING, silently." >&2
-    echo "      Check for an anonymous namespace or a 'static' around it." >&2
+    echo "      Check for an anonymous namespace or a 'static' around it, and" >&2
+    echo "      the library's version script (*.map)." >&2
     exit 1
 fi
 
+# Nothing else: every other defined dynamic symbol (code, data, weak, unique)
+# is a leak -- an internal helper the game could bind to, or the statically
+# linked C++ runtime showing through.
+extra=$(nm -D --defined-only "$SO" | awk '{ print $3 }' | while read -r sym; do
+    case " $(echo $REQUIRED) " in
+        *" $sym "*) ;;
+        *) printf ' %s' "$sym" ;;
+    esac
+done)
+if [ -n "$extra" ]; then
+    echo "FAIL  $SO exports more than it must:$(echo "$extra" | cut -c1-300)" >&2
+    exit 1
+fi
+
+# And no dynamic C++ runtime: linked in statically (-static-libstdc++
+# -static-libgcc), so a mismatched libstdc++ in X4's process cannot reach it.
+needed=$(readelf -d "$SO" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')
+for lib in $needed; do
+    case "$lib" in
+        libstdc++.so*|libgcc_s.so*)
+            echo "FAIL  $SO needs $lib — the C++ runtime is not linked in" >&2
+            exit 1 ;;
+    esac
+done
+
 n=$(echo "$REQUIRED" | wc -w)
-echo "ok    libx4vr_inject.so exports all $n interposed symbols"
+echo "ok    $NAME exports exactly its $n symbols, C++ runtime linked in"

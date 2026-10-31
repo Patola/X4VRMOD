@@ -1,0 +1,15 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later WITH x4vrmod-linking-exception
+ *
+ * What the layer exports: its two entry points, under the names the manifest
+ * gives the loader and their vk* aliases. Everything else is local, the
+ * statically linked C++ runtime included (it lives inside X4's process, next
+ * to whatever C++ runtime Steam's libraries brought). tests/check-exports.sh
+ * checks the built library against this. */
+{
+  global:
+    vkGetInstanceProcAddr;
+    vkGetDeviceProcAddr;
+    x4vr_GetInstanceProcAddr;
+    x4vr_GetDeviceProcAddr;
+  local: *;
+};
