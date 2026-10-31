@@ -706,6 +706,15 @@ FILE *open_patched_config(const char *path, bool hide_steer_line) {
         }
     }
     steer_config(xml, prof.path, hide_steer_line);
+    {
+        std::string old;
+        if (x4vr::serve_hud_scale_off(xml, &old))
+            X4VR_LOG("config: hudscale: '%s' -> 'off' (VR: X4 places the lower "
+                     "HUD by the height unless HUD scale is off)",
+                     old.empty() ? "absent" : old.c_str());
+        else
+            X4VR_LOG("config: hudscale: already 'off'");
+    }
 
     // Back the stream with a memfd rather than fmemopen(): an fmemopen
     // stream has no real file descriptor, so any fileno()/fstat()/mmap() in
@@ -749,15 +758,26 @@ FILE *open_patched_config(const char *path, bool hide_steer_line) {
              getenv("X4VR_SEPARATE_RADAR")
                  ? "from X4VR_SEPARATE_RADAR"
                  : "from the profile, not this run");
-    // This tag also selects X4's upscaler, so it is not a cosmetic setting: the
-    // temporal modes jitter the projection into the eye shear's own slots. A run
-    // that changed it must say so, or a broken stereo pair looks like a
-    // regression in the shear rather than the knob that caused it.
-    X4VR_LOG("config: effective antialiasing=%s (%s) — this tag also selects "
-             "the upscaler; temporal/dlaa/fsr_* all jitter m[8]/m[9]",
+    // Anti-aliasing and, since X4 9.00, the upscaler in its own tag. Neither is
+    // cosmetic: the temporal modes jitter the projection into the eye shear's
+    // own slots. A run that changed either must say so, or a broken stereo
+    // pair looks like a regression in the shear rather than the setting that
+    // caused it.
+    std::string aa_unused;
+    X4VR_LOG("config: effective antialiasing=%s (%s) — temporal jitters "
+             "m[8]/m[9]",
              x4vr::get_tag(xml, "antialiasing").c_str(),
-             getenv("X4VR_AA") ? "from X4VR_AA"
-                               : "our default, not the profile");
+             x4vr::aa_override(aa_unused) ? "from X4VR_AA"
+             : getenv("X4VR_AA")
+                 ? "X4VR_AA REJECTED: not an X4 9.00 anti-aliasing value; "
+                   "the upscaler is <upmode>, set in X4's graphics options"
+                 : "our default, not the profile");
+    {
+        const std::string up = x4vr::get_tag(xml, "upmode");
+        X4VR_LOG("config: effective upmode=%s (from the profile) — X4's "
+                 "upscaler; fsr3_* are temporal",
+                 up.empty() ? "absent (X4's default, none)" : up.c_str());
+    }
     X4VR_LOG("config: serving %s in memory (%zu bytes, %d overrides applied); "
              "your %s is not touched",
              prof.path.c_str(), xml.size(), changed, path);

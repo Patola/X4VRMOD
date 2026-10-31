@@ -214,17 +214,32 @@ is acceptable for this; nothing is drawn in VR for the launcher.
 
 ## Upscaling: FSR and DLSS
 
-* X4 selects its upscaler through `<antialiasing>`, which the mod serves
-  (`X4VR_AA`). The FSR modes are known: `fsr`, `fsr_ultra_quality`,
-  `fsr_quality`, `fsr_balanced`, `fsr_performance`. FSR3 worked in VR in
-  take 163, an old build.
-* **The launcher offers:** off, FSR quality, FSR balanced, FSR performance.
-  With an upscaler, the resolution setting is the output; the internal render
-  is X4's (quality = output / 1.5 per axis).
+* **X4 9.00 selects its upscaler with `<upmode>`** (GetUpscalingOption).
+  `<antialiasing>` is anti-aliasing only: none, FXAA, MSAA, SSAA 2x/4x,
+  temporal.
+  * Before 9.00, the anti-aliasing tag carried the FSR modes. Take 163's
+    FSR3 used that route; the 2026-10-31 runs with `X4VR_AA=fsr_quality`
+    rendered natively because 9.00 ignores it. `X4VR_AA` now rejects those
+    values, and every run logs its effective `upmode`.
+  * `<upmode>` values: `none`; FSR3 (temporal) `fsr3_native`, `fsr3_quality`,
+    `fsr3_balanced`, `fsr3_performance`, `fsr3_ultra_performance`; FSR 1
+    (spatial) `fsr_ultra_quality`, `fsr_quality`, `fsr_balanced`,
+    `fsr_performance`. X4 greys out what the GPU does not support
+    (IsUpscalingOptionSupported).
+  * Until the launcher serves it, the setting is X4's own: graphics options,
+    FSR on and a mode. X4 saves it in the mod's config copy, so it persists
+    for mod sessions only.
+* **The launcher offers:** off, and the FSR modes X4 reports as supported,
+  temporal and spatial separately. With an upscaler, the resolution setting
+  is the output; the internal render is X4's (quality = output / 1.5 per
+  axis).
+* **Not yet tested in VR on 9.00:** FSR3 (temporal) and FSR 1 (spatial).
+  Spatial has no history, so it cannot mix the eyes; temporal is what take
+  163 judged good on the older build.
 * **DLSS — to verify, then to test on an RTX card:**
-  * X4's binary carries DLSS, but the `<antialiasing>` list read from X4's
-    Lua has only `dlaa` (anti-aliasing, no upscaling). The tag that selects
-    DLSS upscaling has to be read from X4's Lua first.
+  * X4's config has `<dlss>`, `<dlssmode>` and `<dlssg>` (frame
+    generation). Which of them selects DLSS upscaling, and its values, have
+    to be read from X4's Lua first.
   * Offered only when the GPU is NVIDIA RTX (Vulkan vendor ID 0x10de and the
     DLSS requirements met).
   * Tested by Patola's friend with an RTX 5090: the debug build and a

@@ -176,19 +176,28 @@ inline bool separate_radar_override(std::string &v) {
     return ok;
 }
 
-// X4VR_AA: X4's own <antialiasing> config tag, which is also how X4 selects its
-// upscaler. The accepted strings, read out of X4's Lua:
+// X4VR_AA: X4's own <antialiasing> config tag. The accepted strings, read out
+// of X4 9.00's Lua (gameoptions.lua, valueGfxAA):
 //
-//   none  temporal  dlaa  msaa_2x  msaa_4x  msaa_8x  msaa_16x
-//   fsr   fsr_ultra_quality  fsr_quality  fsr_balanced  fsr_performance
+//   none  fxaa_low  fxaa_medium  fxaa_high  msaa_2x  msaa_4x  msaa_8x
+//   msaa_16x  ssaa_2x  ssaa_4x  temporal
 //
-// We serve "none" by default and have since the beginning. This exists so the
-// FSR3 question can be tested without editing that default, and it is unset by
-// default like X4VR_FOV: setting it is the experiment, omitting it is the
+// **The upscaler is NOT here any more.** Before 9.00 this tag also selected
+// FSR (take 163 read `fsr`, `fsr_quality`, ... in the same list). X4 9.00
+// moved the upscaler to its own tag, <upmode> (GetUpscalingOption reads
+// "upmode": none, fsr3_native, fsr3_quality, fsr3_balanced,
+// fsr3_performance, fsr3_ultra_performance, fsr_ultra_quality, fsr_quality,
+// fsr_balanced, fsr_performance). Patola's 4224-per-eye runs with
+// X4VR_AA=fsr_quality (2026-10-31) served a value 9.00 does not know, so they
+// rendered natively and the options showed "FSR off". This list rejects the
+// old values instead of serving them.
+//
+// We serve "none" by default and have since the beginning; X4VR_AA is unset
+// by default like X4VR_FOV: setting it is the experiment, omitting it is the
 // control.
 //
 // Frame generation is deliberately NOT reachable from here. X4 keeps it in its
-// own tags (dlssg, fsrframegen), and an interpolated frame carries no valid head
+// own tags (dlssg, fsr3g), and an interpolated frame carries no valid head
 // pose while adding latency, so it is harmful in VR regardless of whether
 // upscaling works. If it is ever wired it needs its own knob and its own
 // argument, not a value smuggled through this one.
@@ -199,9 +208,8 @@ inline bool aa_override(std::string &v) {
         if (!e || !*e)
             return false;
         static const char *const modes[] = {
-            "none", "temporal", "dlaa", "msaa_2x", "msaa_4x", "msaa_8x",
-            "msaa_16x", "fsr", "fsr_ultra_quality", "fsr_quality",
-            "fsr_balanced", "fsr_performance",
+            "none", "fxaa_low", "fxaa_medium", "fxaa_high", "msaa_2x",
+            "msaa_4x", "msaa_8x", "msaa_16x", "ssaa_2x", "ssaa_4x", "temporal",
         };
         const std::string s(e);
         for (const char *m : modes)
@@ -365,6 +373,22 @@ inline bool set_or_insert_tag(std::string &xml, const char *tag,
         old_value->clear();
     xml.insert(root, std::string("  ") + open + value + "</" + tag + ">\n");
     return true;
+}
+
+// <hudscale>: "off" on every read of the mod's config (2026-10-31). X4 places
+// its lower HUD (left panel, radar, right panel) in ui/core/lua/monitors.lua's
+// initScale. Below a 4:3 aspect -- our square eye always is -- it shifts each
+// panel by 112.5 / (1 - factor)^2, factor = (1 - s) * height / 1959, where s
+// is the HUD's UI scale: the player's <uiscale> (Patola: 0.6) unless HUD
+// scale is "off", when s is 1 (GetHUDUIScale, 0xa41a70 -> 0xa98e60). At s
+// 0.6 the formula has a pole at 4898 px tall: at 4224 per eye it threw the
+// left panel across to the right (Patola). With "off", factor is 0 and the
+// placement does not depend on the height; Patola set it in game and the HUD
+// came back. X4 leaves the option out of config.xml at its default, so the
+// tag is inserted when absent. The fork is read by mod sessions only, so
+// nothing needs restoring for vanilla. True when the text changed.
+inline bool serve_hud_scale_off(std::string &xml, std::string *old_value = nullptr) {
+    return set_or_insert_tag(xml, "hudscale", "off", old_value);
 }
 
 // The sidecar recording what an override replaced, beside the profile:

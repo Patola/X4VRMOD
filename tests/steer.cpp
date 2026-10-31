@@ -251,6 +251,31 @@ int main() {
               "the sidecar sits beside the profile");
     }
 
+    // <hudscale> off in VR (2026-10-31): absent in Patola's config.xml until
+    // he set it in game, so it must be inserted, and any other value replaced.
+    {
+        std::string xml = "<root>\n  <uiscale>0.6</uiscale>\n</root>\n";
+        std::string old = "x";
+        check(serve_hud_scale_off(xml, &old) && old.empty() &&
+                  get_tag(xml, "hudscale") == "off",
+              "hudscale absent -> inserted as off");
+        check(!serve_hud_scale_off(xml, &old), "hudscale already off -> no change");
+        std::string all = "<root>\n  <hudscale>all</hudscale>\n</root>\n";
+        check(serve_hud_scale_off(all, &old) && old == "all" &&
+                  get_tag(all, "hudscale") == "off",
+              "hudscale all -> off, the old value reported");
+        check(get_tag(xml, "uiscale") == "0.6", "the player's uiscale is untouched");
+    }
+
+    // X4VR_AA takes X4 9.00's anti-aliasing values only: fsr_quality moved to
+    // <upmode> in 9.00 and is rejected rather than served.
+    {
+        setenv("X4VR_AA", "fsr_quality", 1);
+        std::string v = "unchanged";
+        check(!aa_override(v) && v == "unchanged",
+              "X4VR_AA=fsr_quality -> rejected (the upscaler is <upmode> in 9.00)");
+    }
+
     printf("\n%s\n", g_fail ? "SOME CHECKS FAILED" : "all checks passed");
     return g_fail ? 1 : 0;
 }

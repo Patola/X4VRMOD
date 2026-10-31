@@ -28600,3 +28600,35 @@ height. The canvas map, the w-gate and the cursor maps are all in NDC.
 
 If it holds, the config fork can serve `<hudscale>off</hudscale>` in VR (the
 same settings object X4 reads `uiscale` from, 0xa98e60).
+
+**2026-10-31: CONFIRMED.** Patola set HUD scale Off in game: *"It was indeed
+HUD scaling!"* The mod now serves `<hudscale>off</hudscale>` on every read of
+its config copy, inserting the tag when X4 left it out
+(`serve_hud_scale_off`, x4vr_config.hpp; tests/steer.cpp). Each run logs
+`config: hudscale: ...`.
+
+## FSR was never on in X4 9.00 runs: the upscaler is `<upmode>` (2026-10-31)
+
+Patola: with `X4VR_AA=fsr_quality` at 4224² per eye, X4's settings showed
+"FSR off".
+* **X4 9.00's options** (gameoptions.lua): `<antialiasing>` is none,
+  fxaa_low/medium/high, msaa_2x..16x, ssaa_2x/4x, temporal. The upscaler is
+  a separate setting, GetUpscalingOption, which reads the config key
+  **`upmode`** (0xb7f1f0). Its values: none, fsr3_native, fsr3_quality,
+  fsr3_balanced, fsr3_performance, fsr3_ultra_performance (temporal),
+  fsr_ultra_quality, fsr_quality, fsr_balanced, fsr_performance (FSR 1).
+* **`X4VR_AA`'s list was from the older build** (take 163, where the
+  anti-aliasing tag carried FSR). It served `fsr_quality`, which 9.00 does not
+  know, so those runs rendered natively at 4224², and the "effective
+  antialiasing=fsr_quality" log line was false comfort.
+* **Fixed:** `X4VR_AA` accepts 9.00's anti-aliasing values only and logs
+  REJECTED otherwise. Every run logs `config: effective upmode=...`. The
+  upscaler itself is left to X4's graphics options for now (it persists in
+  the mod's config copy); the launcher will serve it.
+* **So the SteamVR "jumbled mess" was at native 4224²,** not under FSR.
+
+**X4VR_W, X4VR_H, X4VR_RES.** In the side-by-side split (gamescope + SBS),
+X4VR_W x X4VR_H is the window both eyes share, and each eye is X4VR_W/2 x
+X4VR_H. The launcher sets X4VR_RES to that itself and ignores any other value
+(with a warning on stderr). Patola's line with W 8448, H 4224 and RES
+2816x2816 rendered 4224² per eye (`extents: X4 renders 4224x4224`).
