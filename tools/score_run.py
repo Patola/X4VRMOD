@@ -5331,6 +5331,32 @@ def main(path):
         fails.append("head-look armed but the pointer was never recentred "
                      "after the load — the cursor starts outside the view")
 
+    # --- the pool rule: images kept single-layer for X4's pool block (378) --
+    #
+    # layer/x4vr_layer.cpp, mv_exceeds_x4_pool. An image that, doubled, would
+    # not fit X4's 255.8 MiB pool block keeps one layer (the map's 3D view
+    # above ~3900² per eye). The rule bets X4 fills it by copies; a
+    # POOL-SINGLE line is the bet lost (an invalid framebuffer) and FAILs.
+    mp_kept = re.findall(r"mv: (\d+x\d+) fmt=(\d+) usage=(0x[0-9a-f]+) kept "
+                         r"SINGLE-LAYER — doubled it needs ([\d.]+) MiB.*?"
+                         r"\((\d+) image\(s\) so far\)", text)
+    mp_lost = re.findall(r"mv: POOL-SINGLE img #(\d+) is attachment (\d+) of a "
+                         r"view-masked pass \(rp #(\d+)\)", text)
+    if mp_kept or mp_lost:
+        sigs = {}
+        for wh, f, u, mib, n in mp_kept:
+            sigs[(wh, f, u, mib)] = max(int(n), sigs.get((wh, f, u, mib), 0))
+        total = max((int(n) for *_x, n in mp_kept), default=0)
+        print(f"mvpool  {len(sigs)} signature(s) kept single-layer for X4's "
+              f"pool block, {total} image(s): " + "; ".join(
+                  f"{wh} fmt={f} usage={u} ({mib} MiB doubled)"
+                  for (wh, f, u, mib) in sigs))
+        if mp_lost:
+            fails.append(f"the pool rule kept {len(mp_lost)} image(s) "
+                         f"single-layer that a view-masked pass then attached "
+                         f"(first img #{mp_lost[0][0]}, rp #{mp_lost[0][2]}) — "
+                         f"invalid framebuffer")
+
     # --- X4VR_MEMLOG: X4's memory path for doubled and large images (377) ---
     #
     # Read only (layer/x4vr_layer.cpp, X4VR_MEMLOG). Take 376: at 4224² X4

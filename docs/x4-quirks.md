@@ -28798,3 +28798,67 @@ The shipping line at 4224² with X4VR_MEMLOG=1 and X4VR_MV_INVENTORY=1. Load,
 * **Refutation:** the map target allocates and binds fine. X4 then gives up
   for a reason outside the memory path, and the instrument moves to image
   views and framebuffers.
+
+## Take 377 — SCORED PASS (2026-10-31): X4 gives up on the map target before allocating it
+
+`memlog`: 1390 requirements, 24 logged allocations, 63 binds, **0 failed**.
+* **The map target:** 1309 requirements of 268.1 MiB (4224x4149 RGBA16F,
+  doubled), and **not one allocation or bind for it.** P377.2 case (b): X4
+  reads the requirement and destroys the image without trying.
+* **X4's allocations:**
+  * 512 MiB blocks of type 0 (six, at start-up);
+  * 255.8 MiB blocks (types 0 and 2), more of them over time;
+  * a few dedicated ones (136.1 MiB for 4224² fmt 50; 140.2 MiB for images
+    we never saw, likely the runtime's swapchain).
+* **The eye targets** (4224² RGBA16F, usage 0x97, 272.2 MiB doubled) bind
+  at offset 0 of the 512 MiB blocks. Others share blocks at 70.1, 272.2 and
+  409.2 MiB offsets.
+* **Reading:** X4 places images created after start-up in its 255.8 MiB
+  blocks and has no larger path for them. 268.1 does not fit, so X4 destroys
+  the image and tries again next frame. It fits every point:
+  * 3200²: 153 MiB doubled;
+  * 4224²: 268 MiB;
+  * 4000x4900: ~293 MiB;
+  * no layer at 4224²: 134 MiB.
+* **How the map is made (take 376b, 3200²):** img #693 (3200x3143) was never
+  written by a render pass (`masked rp [] unmasked rp []`). X4 filled it from
+  img #54, a doubled target, with `vkCmdCopyImage` (1215 regions, all
+  widened to both layers). So the map is stereo through a copy.
+
+**The fix: the pool rule** (layer/x4vr_layer.cpp, `mv_exceeds_x4_pool`).
+* The layer creates a candidate image doubled, reads its real memory
+  requirement, and keeps the one layer X4 asked for when, doubled, it would
+  exceed 248 MiB, below X4's 255.8 MiB block. Images with INPUT_ATTACHMENT
+  (the eye targets, in the 512 MiB blocks) are exempt.
+* Copies are widened only when both images are doubled, so the map target
+  receives the left eye's view and both eyes sample it. **The map is flat
+  above ~3900² per eye, and drawn.** Unchanged below.
+* **Guard:** if such an image is ever attached to a view-masked pass, the
+  framebuffer is invalid (VUID-VkFramebufferCreateInfo-renderPass-04536).
+  The layer logs `mv: POOL-SINGLE ...` and the scorer FAILs.
+* **Fixed beside it:** after a refused doubled vkCreateImage fell back to one
+  layer, the image was still recorded as doubled. Copies into it would have
+  been widened into a layer it does not have.
+* **GPU harness:**
+  * at the default limit, all cases pass;
+  * forced (`X4VR_MV_POOL_MIB=0`), the rule fires and the guard names the
+    harness's masked attachment.
+* **Scorer block `mvpool`;** census: 8 cases.
+
+## Take 378 — PREDICTIONS (written before the run): the map at 4224² with the pool rule
+
+Take 377's line, take number and log changed. Load, wait ~5 s in the
+cockpit, open the map ~15 s (look at it), close it, quit.
+
+    X4VR_TAKE=378 X4VR_HEAD_6DOF=1 X4VR_STEER_PICK=1 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_FOOT=1 X4VR_STEER=a X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_LAGLOG=1 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=4224 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=8448 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_WRITE=1 X4VR_RES=4224x4224 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_POSELOG=1 X4VR_WATCH=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_PROJ_INVPROJ=1 X4VR_CAMDIFF=1 X4VR_MEMLOG=1 X4VR_MV_INVENTORY=1 X4VR_LOG=/tmp/x4vr-take378.log X4VR_CAMSTAMP=1 X4VR_DECLARE_RENDERED_ROT=2 X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_IPD=0.064 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+
+* **P378.1 (Patola):** the map's sectors, ships and routes show at 4224²,
+  flat (no depth).
+* **P378.2:** one `kept SINGLE-LAYER` signature, 4224x4149 fmt 97 usage 0x17
+  (268.1 MiB doubled). It is created once per map opening, not ~40 a second;
+  memlog shows its requirement at ~134 MiB and a bind that succeeds.
+* **P378.3:** no POOL-SINGLE line; the scorer passes.
+* **P378.4:** nothing else changes. The rule fires on no other image at
+  4224².
+* **Refutation:** the map still invisible, or still re-created every frame.
+  The pool block is then not the whole reason.

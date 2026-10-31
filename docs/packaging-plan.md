@@ -205,6 +205,11 @@ is acceptable for this; nothing is drawn in VR for the launcher.
   down fixed it under SteamVR. The launcher shows a warning when SteamVR is
   the runtime and the resolution is above the last size known to work there
   (to be measured). The release notes say the same for players.
+* **Above ~3900² per eye the map is flat.** X4 places images it creates
+  after start-up in 255.8 MiB blocks; the map's 3D view, doubled for two
+  eyes, outgrows them there, so the layer keeps it single-layer (takes
+  376–378). The launcher says so next to the resolution choices that cross
+  it.
 * **The lower HUD's placement depends on the height** through X4's own
   formula, unless X4's HUD scale is off (docs/x4-quirks.md, "The lower HUD
   moves with the resolution"). If the HUD-scale test holds, the mod serves it

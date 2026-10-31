@@ -1622,5 +1622,27 @@ want "memlog: the failed allocation named" /tmp/census-ml-ok.log memlog "FAILED:
 want "memlog: asked, no line -> FAIL" /tmp/census-ml-base.log "FAIL|  - " "X4VR_MEMLOG=1 but no mem: line"
 absent "memlog: not asked -> silent" "$BASE" memlog
 
+# The pool rule: images kept single-layer for X4's pool block (take 378).
+for f in '"mv: %ux%u fmt=%u usage=0x%x kept SINGLE-LAYER — doubled it "' '"MiB): X4 would re-create it every frame and draw nothing. "' '"(%llu image(s) so far)",' '"mv: POOL-SINGLE img #%u is attachment %u of a "'; do
+    if grep -qF "$f" layer/x4vr_layer.cpp; then
+        ok "mvpool: the layer still prints $f"
+    else
+        bad "mvpool: the layer's format moved: $f"
+    fi
+done
+mpk1='[  999960.000] layer   mv: 4224x4149 fmt=97 usage=0x17 kept SINGLE-LAYER — doubled it needs 268.1 MiB, more than X4'"'"'s pool block holds (limit 248 MiB): X4 would re-create it every frame and draw nothing. Copies into it keep the left eye'"'"'s view, so it is flat in VR (1 image(s) so far)'
+mpk2='[  999970.000] layer   mv: 4224x4149 fmt=97 usage=0x17 kept SINGLE-LAYER — doubled it needs 268.1 MiB, more than X4'"'"'s pool block holds (limit 248 MiB): X4 would re-create it every frame and draw nothing. Copies into it keep the left eye'"'"'s view, so it is flat in VR (1000 image(s) so far)'
+mpl='[  999975.000] layer   mv: POOL-SINGLE img #693 is attachment 0 of a view-masked pass (rp #12) — the pool rule kept it single-layer and this framebuffer is invalid'
+plant /tmp/census-mp-ok.log "$mpk1" "$mpk2"
+want "mvpool: summarised" /tmp/census-mp-ok.log mvpool "1 signature(s) kept single-layer for X4's pool block, 1000 image(s): 4224x4149 fmt=97 usage=0x17 (268.1 MiB doubled)"
+if python3 tools/score_run.py /tmp/census-mp-ok.log 2>&1 | grep -qE "^  - .*pool rule"; then
+    bad "mvpool: kept, never attached -> FAILs"
+else
+    ok "mvpool: kept, never attached -> no FAIL"
+fi
+plant /tmp/census-mp-lost.log "$mpk1" "$mpl"
+want "mvpool: attached to a masked pass -> FAIL" /tmp/census-mp-lost.log "FAIL|  - " "the pool rule kept 1 image(s) single-layer that a view-masked pass then attached (first img #693, rp #12)"
+absent "mvpool: no rule fired -> silent" "$BASE" mvpool
+
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

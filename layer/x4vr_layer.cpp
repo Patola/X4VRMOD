@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <set>
+#include <tuple>
 #include <atomic>
 #include <cerrno>
 #include <cmath>
@@ -1185,6 +1186,9 @@ struct ImageInfo {
     uint32_t layers, mips, samples;
     VkImageUsageFlags usage;
     bool doubled = false;
+    // Kept single-layer by the pool rule (mv_exceeds_x4_pool), not by
+    // mv_double_candidate: such an image must never back a view-masked pass.
+    bool pool_single = false;
     // Came from vkGetSwapchainImagesKHR, not vkCreateImage. Worth carrying
     // because the usage and layer count here are what the swapchain
     // guarantees, not what a create info said.
@@ -4222,6 +4226,60 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass2(
 // avoid for no gain at all. If you are about to narrow this rule, the question
 // to answer first is not "is layer 1 empty" but "does anything sample it", and
 // that answer lives at layer1_state(), not here.
+// **X4's pool block (take 377).** X4 sub-allocates the images it creates
+// after start-up from blocks of 255.8 MiB, and has no other path for them: an
+// image whose memory requirement exceeds the block is destroyed and created
+// again the next frame, forever. Doubled, the map's 3D view at 4224x4224 per
+// eye (4224x4149 RGBA16F) needs 268.1 MiB, so X4 re-created it ~40 times a
+// second and the map drew into nothing (takes 376/377: 1309 requirements, no
+// allocation, no bind). At 3200 it needs 153 MiB and works; without the layer
+// 134 MiB.
+//
+// So such an image keeps the one layer X4 asked for when, doubled, it would
+// not fit. X4 fills the map's from a doubled render target by vkCmdCopyImage,
+// which is widened only when BOTH images are doubled, so it receives the left
+// eye's view and both eyes sample it: the map is flat above that size, and
+// drawn. The eye targets carry INPUT_ATTACHMENT and live in X4's 512 MiB
+// blocks (the 4224x4224 RGBA16F ones, 272 MiB doubled, bind at offset 0 of
+// one), so they are left alone. The limit sits below the block for margin;
+// X4VR_MV_POOL_MIB overrides it (0 = every candidate, for the GPU harness).
+float mv_pool_limit_mib() {
+    static const float v = [] {
+        const char *e = getenv("X4VR_MV_POOL_MIB");
+        return e && *e ? (float)atof(e) : 248.0f;
+    }();
+    return v;
+}
+
+bool mv_exceeds_x4_pool(DeviceData *d, VkDevice device, VkImage doubled,
+                        const VkImageCreateInfo *ci) {
+    if ((ci->usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) || !d->GetImageMemoryRequirements)
+        return false;
+    VkMemoryRequirements req{};
+    d->GetImageMemoryRequirements(device, doubled, &req);
+    const double mib = (double)req.size / (1 << 20);
+    if (mib <= mv_pool_limit_mib())
+        return false;
+    static std::mutex mu;
+    static std::set<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>> said;
+    static uint64_t n = 0;
+    std::lock_guard<std::mutex> lock(mu);
+    ++n;
+    if (said.insert({ci->extent.width, ci->extent.height, (uint32_t)ci->format,
+                     (uint32_t)ci->usage})
+            .second ||
+        n % 1000 == 0)
+        X4VR_LOG("mv: %ux%u fmt=%u usage=0x%x kept SINGLE-LAYER — doubled it "
+                 "needs %.1f MiB, more than X4's pool block holds (limit %.0f "
+                 "MiB): X4 would re-create it every frame and draw nothing. "
+                 "Copies into it keep the left eye's view, so it is flat in VR "
+                 "(%llu image(s) so far)",
+                 ci->extent.width, ci->extent.height, (uint32_t)ci->format,
+                 (uint32_t)ci->usage, mib, mv_pool_limit_mib(),
+                 (unsigned long long)n);
+    return true;
+}
+
 bool mv_double_candidate(const VkImageCreateInfo *ci) {
     if (!g_mv || !g_multiview_supported)
         return false;
@@ -4245,23 +4303,33 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImage(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
-    const bool dbl = g_active && mv_double_candidate(ci);
+    bool dbl = g_active && mv_double_candidate(ci);
     VkImageCreateInfo mod = *ci;
     if (dbl)
         mod.arrayLayers = 2;
     VkResult r = d->CreateImage(device, dbl ? &mod : ci, ac, out);
     // A driver that refuses the doubled image must not take the game down
     // with it: fall back to exactly what X4 asked for and let the render pass
-    // stage report the resulting fallback.
+    // stage report the resulting fallback. The image is then NOT doubled, and
+    // is recorded so: a copy widened into its missing layer 1 is invalid.
     if (r != VK_SUCCESS && dbl) {
         X4VR_LOG("mv: vkCreateImage refused arrayLayers=2 for %ux%u fmt=%u "
                  "(%d) — falling back to single layer",
                  ci->extent.width, ci->extent.height, ci->format, r);
+        dbl = false;
         r = d->CreateImage(device, ci, ac, out);
         if (r == VK_SUCCESS) {
             std::lock_guard<std::mutex> lock(g_mv_mu);
             g_mv_stats.fallbacks++;
         }
+    }
+    bool pool_single = false;
+    if (r == VK_SUCCESS && dbl && mv_exceeds_x4_pool(d, device, *out, ci)) {
+        // Too big, doubled, for X4's pool: one layer, as X4 asked.
+        d->DestroyImage(device, *out, ac);
+        dbl = false;
+        pool_single = true;
+        r = d->CreateImage(device, ci, ac, out);
     }
     if (r != VK_SUCCESS || !g_active)
         return r;
@@ -4273,6 +4341,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImage(
     info.samples = (uint32_t)ci->samples;
     info.usage = ci->usage;
     info.doubled = dbl;
+    info.pool_single = pool_single;
     {
         std::lock_guard<std::mutex> lock(g_img_mu);
         info.serial = g_img_serial++;
@@ -4755,7 +4824,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
         for (uint32_t i = 0; i < ci->attachmentCount; i++) {
             VkImageView orig = ci->pAttachments[i];
             ViewInfo vi{};
-            bool have = false, doubled = false, cached = false;
+            bool have = false, doubled = false, cached = false, pool_single = false;
+            uint32_t img_serial = 0;
             {
                 std::lock_guard<std::mutex> lock(g_img_mu);
                 auto v = g_views.find(orig);
@@ -4764,6 +4834,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
                     have = true;
                     auto im = g_images.find(vi.image);
                     doubled = im != g_images.end() && im->second.doubled;
+                    if (im != g_images.end()) {
+                        pool_single = im->second.pool_single;
+                        img_serial = im->second.serial;
+                    }
                 }
                 auto c = g_array_views.find(orig);
                 if (c != g_array_views.end()) {
@@ -4782,6 +4856,15 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
                          serial, i,
                          !have ? "view not tracked (swapchain image?)"
                                : "backing image is single-layer");
+                // The pool rule's bet is that X4 fills such an image by copies
+                // (the map's 3D view, takes 376/377). This is the bet lost: the
+                // framebuffer is invalid (VUID-VkFramebufferCreateInfo-
+                // renderPass-04536). Named for the scorer.
+                if (pool_single)
+                    X4VR_LOG("mv: POOL-SINGLE img #%u is attachment %u of a "
+                             "view-masked pass (rp #%u) — the pool rule kept it "
+                             "single-layer and this framebuffer is invalid",
+                             img_serial, i, serial);
                 std::lock_guard<std::mutex> lock(g_mv_mu);
                 g_mv_stats.fallbacks++;
                 continue;
