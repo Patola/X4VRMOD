@@ -22,7 +22,18 @@ on the remote beside their `take-NNN-name` twins.
 
 ## Unreleased
 
-* **The shipping settings are the defaults** (packaging plan, Phase 0).
+## v0.9.9 — 2026-11-01 — the shipping line is the default; interior lights no longer flicker
+
+The state of take 399 (`take-399-pose-ring`, code identical to commit
+0b2fe36), plus one change take 399's own measurement asked for and that has
+not yet run in the game: the pose ring raised from 256 to 1024 regions
+(e036a65; see below). Patola:
+* take 385: *"All working."* (the bare launcher, 47 defaults);
+* take 399: *"this bug seems to have been fixed for good"* — standing still,
+  leaning, walking, seated glancing back, and in a Hyperion as well as the
+  Manticore.
+
+* **New: the shipping settings are the default.**
   `./launch/x4vr-launch.sh` with nothing set plays like v0.9.8's command
   line, at 2816² per eye. The table is `launch/defaults.conf`.
   * An explicit setting wins; `X4VR_DEFAULTS=0` applies none.
@@ -56,9 +67,34 @@ on the remote beside their `take-NNN-name` twins.
   | `X4VR_HEADLOOK_GAIN` / `_KP` / `_LEAD` | 0.115 / 0.25 / 1.0 | 0 / 0 / 0 |
   | `X4VR_HEADLOOK_YAW_LIMIT` / `_PITCH_LIMIT` | 180 / 75 | X4's 65 / 35 |
   | `X4VR_HEADLOOK_RAW` | 191 (F13) | none |
-* **One extension, `x4vrmod`,** replaces three (packaging plan, decision 5):
-  the look-around limits (180/75) and the camera sway removal in one
-  settings diff, the same twelve settings as before.
+* **Fixed: interior lights flickered in VR** (takes 391–399). Inside ships
+  such as the Manticore and the Hyperion, whole lights switched on and off
+  many times a second, pink nebula light against white interior light.
+  * **The cause.** The per-frame head values (the eye offset turned with head
+    tilt, the seated head's shift and forward offset) reach X4's shaders
+    through a small buffer. It had 4 regions shared by every command buffer
+    X4 records (up to 94 per frame), so a region could be rewritten while a
+    queued buffer still read it: its lighting saw a newer head pose than its
+    depth pass, and shadow tests on grazing surfaces flipped.
+  * **The fix.** One set of head values per X4 frame, and a ring of 1024
+    regions. Each run logs how soon a region comes back (`pose ring`); the
+    scorer fails a reuse 1–2 frames old. `X4VR_POSE_FRAME=0` restores the old
+    ring. Take 399 ran it with 256 regions; its log showed up to 94 command
+    buffers per frame, so 1024 is the released size.
+  * **Also fixed on the way:**
+    * the lighting passes' position reconstruction now undoes the seated
+      forward offset. It ignored a seated lean and placed lit pixels up to
+      20 cm off;
+    * X4's depth-only passes and a few others drew through a second
+      eye-offset route that ignored head tilt and head position (take 397;
+      `X4VR_MVP_ROLL=0` restores it). They now follow both, like every other
+      world pass.
+* **Fixed: going from one menu to another while paused** no longer flips the
+  view to the window for a moment. A paused state with no full-screen menu
+  counts as the Pause key only after about 0.1 s with none up.
+* **Changed: one extension, `x4vrmod`,** replaces three (packaging plan,
+  decision 5): the look-around limits (180/75) and the camera sway removal
+  in one settings diff, the same twelve settings as before.
   * `x4vrmod_lookaround` and `x4vrmod_nosway` are merged into it;
     `x4vrmod_headlook` is dropped, with its switch `X4VR_HEADLOOK_SPEED_EXT`
     (unused since take 351: the injector holds X4's look follower still per
@@ -69,32 +105,41 @@ on the remote beside their `take-NNN-name` twins.
     three old directories from X4's `extensions/` folder and says so, and
     the injector serves an old id still listed in your fork as disabled. A
     vanilla `content.xml` is still never written.
-* **Interior lights no longer flicker in VR** (takes 391–399; confirmed in
-  the Manticore and the Hyperion). The values
-  that turn the eye offset with head tilt and move it with the seated head
-  were written into a ring of only 4 buffer regions shared by every command
-  buffer X4 records, so a pass could read a newer frame's values than the
-  pass before it, and lighting flickered on grazing surfaces. The ring is now
-  1024 regions (X4 records up to 94 command buffers per frame) with one set
-  of values per X4 frame, and the lighting passes'
-  position reconstruction also undoes the seated forward offset, which it
-  ignored. `X4VR_POSE_FRAME=0` restores the old ring.
-* **Every world pass follows head tilt and head position** (take 397). Inside ships
-  such as the Manticore, whole lights switched on and off many times a
-  second, but only with roll compensation on. X4's depth-only passes and a
-  few others draw through a second eye-offset route that ignored head tilt
-  and head position, so under any tilt they drew slightly off every other
-  pass. That route now applies both, like the rest. `X4VR_MVP_ROLL=0`
-  restores the old behaviour for comparison.
-* **Both libraries carry their version** (`git describe`) and print it on
-  their first log line: `instance created (app=X4) … [X4VRMOD v…]` and
+* **New: both libraries carry their version** (`git describe`) and print
+  it on their first log line: `instance created (app=X4) … [X4VRMOD v…]` and
   `injector loaded into pid … [X4VRMOD v…]`. The scorer prints a `build`
   line and FAILs a run whose layer and injector differ.
-* **The C++ runtime is linked in.** The layer and the injector link
+* **Changed: the C++ runtime is linked in.** The layer and the injector link
   libstdc++ and libgcc statically and export only their entry points (4 and
   39 symbols), so a different C++ runtime in X4's process, Steam's for
   instance, cannot clash with ours. `tests/check-exports.sh` checks both
   after every build.
+* **Instruments:**
+  * scorer blocks `build`, `env`, `pose-ring`, and the `mvp route` line under
+    `roll`;
+  * `tests/spirv_interp.hpp`, a float32 interpreter for patched shader code.
+    `vert-eye-check` runs both eye-offset routes on the same inputs;
+    `eye-roundtrip-check` runs the vertex stage and the lighting
+    reconstruction back to back;
+  * `tests/run-deploy-extensions.sh`.
+
+**Known limitations:**
+* **Motion vectors.** X4 computes its motion vectors before the per-eye
+  offset, so each eye carries half the eye separation as motion. If FSR 3 ever
+  smears in both eyes, this is the cause.
+* **SteamVR at high resolution:** at 4224² per eye the image is garbled
+  under SteamVR, clean under WiVRn.
+* **The map** has depth up to about 4068² per eye and is flat above.
+* The start menu shows as a window. F6 entered on foot keeps the small
+  overlay.
+* **Menu text** is small at the default UI scale. A 2x UI was tried (take 389)
+  and reverted.
+
+**How to run.** `./launch/x4vr-launch.sh` — 2816² per eye, no upscaler. For
+larger eyes set `X4VR_H` alone (e.g. `X4VR_H=4224`) and add
+`X4VR_UPSCALE=<mode>` to upscale (README, *Resolution and upscaling*). To
+replay a take line from before take 385 exactly as it ran, add
+`X4VR_DEFAULTS=0`.
 
 ## v0.9.8 — 2026-10-31 — FSR 1 and FSR 3 in both eyes; the Pause key stays immersive
 

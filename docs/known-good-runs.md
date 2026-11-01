@@ -1091,5 +1091,18 @@ supplies the other 47 values; the log's `env: run =` line lists them all.
 `score_run.py` PASS (after the csmfit gate fix), GAMEPLAY 11.79 ms (85 fps).
 Patola: *"All working."*
 
-For larger eyes, set X4VR_H alone (e.g. `X4VR_H=4224`, FSR 3 Balanced by
-default).
+For larger eyes, set X4VR_H alone (e.g. `X4VR_H=4224`) and add
+`X4VR_UPSCALE=<mode>` to upscale (no upscaler by default since decision 6's
+second revision, 8c6813f).
+
+## Take 399 (2026-11-01) — tag take-399-pose-ring — v0.9.9
+
+    X4VR_TAKE=399 X4VR_LOG=/tmp/x4vr-take399.log ./launch/x4vr-launch.sh
+
+The bare launcher, as take 385. Code 0b2fe36: one pose per X4 frame and a
+pose ring of 256, the fragment reconstruction undoing the seated forward
+offset, the mvp route rolled. Patola: no flicker standing, leaning, walking,
+seated, in the Manticore and the Hyperion. The scorer's `pose-ring` line
+measured up to 94 command buffers per frame and failed the 256-region ring
+on 1289 early reuses; v0.9.9 ships 1024 regions (e036a65), not yet run in
+the game — the next session's `pose-ring` line is its check.
