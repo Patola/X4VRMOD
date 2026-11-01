@@ -343,18 +343,22 @@ grep -qF '"roll stereo: ON — the eye offset turns with the "' layer/x4vr_layer
     bad "mvp roll: the layer's format changed — replant the lines above"
 
 # ------------------------------------------------ take 399: the pose ring
-ringline() { printf '[  224600.000] layer   pose ring (final): %s region(s)%s, up to %s command buffer(s) recorded per X4 frame, %s reuse(s), youngest %s frame(s), %s younger than 3 — x' "$1" "$2" "$3" "$4" "$5" "$6"; }
-plant /tmp/census-ring-ok.log "$(ringline 256 ', one pose per frame' 37 90000 6 0)"
-want "pose ring healthy -> reported" /tmp/census-ring-ok.log pose-ring "256 region(s), one pose per frame; up to 37 command buffer(s) per X4 frame"
-if python3 tools/score_run.py /tmp/census-ring-ok.log 2>&1 | grep -q "reused a region"; then
-    bad "pose ring healthy -> FAILs"
+ringline() { printf '[  224600.000] layer   pose ring (final): %s region(s)%s, up to %s command buffer(s) recorded per X4 frame, %s reuse(s), youngest %s frame(s), %s within the same frame (same pose), %s from 1-2 frames before — x' "$1" "$2" "$3" "$4" "$5" "$6" "$7"; }
+plant /tmp/census-ring-ok.log "$(ringline 1024 ', one pose per frame' 94 90000 0 1200 0)"
+want "pose ring healthy -> reported" /tmp/census-ring-ok.log pose-ring "1024 region(s), one pose per frame; up to 94 command buffer(s) per X4 frame; 90000 reuse(s), youngest 0 frame(s), 1200 within the same frame (same pose), 0 from 1-2 frames before"
+if python3 tools/score_run.py /tmp/census-ring-ok.log 2>&1 | grep -q "pose ring handed"; then
+    bad "pose ring: same-frame reuses only -> FAILs"
 else
-    ok "pose ring healthy -> no FAIL"
+    ok "pose ring: same-frame reuses only -> no FAIL"
 fi
-plant /tmp/census-ring-young.log "$(ringline 256 ', one pose per frame' 120 90000 2 14)"
-want "pose ring reused young -> FAIL" /tmp/census-ring-young.log FAIL "reused a region 14 time(s) within 3 frames (youngest 2)"
-plant_env /tmp/census-ring-old.log 's/X4VR_POSE=0/X4VR_POSE=0 X4VR_POSE_FRAME=0/' "$(ringline 4 ' (X4VR_POSE_FRAME=0: takes <= 398)' 37 90000 0 80000)"
-if python3 tools/score_run.py /tmp/census-ring-old.log 2>&1 | grep -q "reused a region"; then
+plant /tmp/census-ring-young.log "$(ringline 256 ', one pose per frame' 120 90000 1 300 14)"
+want "pose ring reused 1-2 frames old -> FAIL" /tmp/census-ring-young.log FAIL "handed 14 region(s) to a new buffer 1-2 frames after"
+# Take 399's build printed a single count, every reuse under 3 frames.
+take399='[  66453.471] layer   pose ring (final): 256 region(s), one pose per frame, up to 94 command buffer(s) recorded per X4 frame, 54871 reuse(s), youngest 0 frame(s), 1289 younger than 3 — a region came back while a buffer may still read it'
+plant /tmp/census-ring-399.log "$take399"
+want "take 399's format -> read as risky" /tmp/census-ring-399.log FAIL "handed 1289 region(s)"
+plant_env /tmp/census-ring-old.log 's/X4VR_POSE=0/X4VR_POSE=0 X4VR_POSE_FRAME=0/' "$(ringline 4 ' (X4VR_POSE_FRAME=0: takes <= 398)' 37 90000 0 0 80000)"
+if python3 tools/score_run.py /tmp/census-ring-old.log 2>&1 | grep -q "pose ring handed"; then
     bad "X4VR_POSE_FRAME=0 -> FAILs on the ring it asked for"
 else
     ok "X4VR_POSE_FRAME=0 -> reported, not failed"
@@ -362,7 +366,8 @@ fi
 absent "no pose ring line -> silent" "$BASE" pose-ring
 grep -qF '"pose ring (%s): %u region(s)%s, up to %llu command buffer(s) "' layer/x4vr_layer.cpp &&
 grep -qF '"recorded per X4 frame, %llu reuse(s), youngest %lld frame(s), "' layer/x4vr_layer.cpp &&
-grep -qF '"%llu younger than 3 — %s",' layer/x4vr_layer.cpp &&
+grep -qF '"%llu within the same frame (same pose), %llu from 1-2 frames "' layer/x4vr_layer.cpp &&
+grep -qF '"before — %s",' layer/x4vr_layer.cpp &&
     ok "pose ring: the planted line matches the layer's format" ||
     bad "pose ring: the layer's format changed — replant the line above"
 

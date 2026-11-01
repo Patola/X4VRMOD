@@ -7851,10 +7851,15 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyShaderModule(
 // newer pose than its earlier ones (depth, G-buffer). With the pose constant
 // that is invisible; with the tracked roll or a seated lean changing it every
 // frame, shadow tests on grazing surfaces flipped and whole interior lights
-// flickered (takes 391-398; X4VR_ROLL_FORCE=0 standing removed it). 256
-// regions of 256 bytes is 64 KB; the reuse age is measured and logged, and
-// the scorer fails a run that reuses a region within 3 frames.
-constexpr uint32_t kPoseRegions = 256;
+// flickered (takes 391-398; X4VR_ROLL_FORCE=0 standing removed it).
+//
+// **1024, measured.** Take 399 ran 256 and recorded up to 94 command buffers
+// per X4 frame -- under 3 frames of ring -- with 1289 of 54871 reuses inside
+// 3 frames; the one-pose-per-frame latch kept those invisible (no flicker),
+// but a reuse 1-2 frames old still hands a buffer in flight the next frame's
+// pose. 1024 regions of 256 bytes is 256 KB and covers ~10 such frames. The
+// reuse age is logged and the scorer fails a risky one.
+constexpr uint32_t kPoseRegions = 1024;
 
 // X4VR_POSE_FRAME=0 restores takes <= 398: a ring of 4 and the live value at
 // every submit. On, the ring is kPoseRegions and every command buffer of one
@@ -7906,7 +7911,8 @@ struct PoseChannel {
     // youngest reuse in frames, and reuses younger than 3 frames -- a region
     // that may still be in flight.
     uint64_t begins_frame = 0, begins_frame_at = UINT64_MAX, begins_frame_max = 0;
-    uint64_t reuses = 0, young_reuses = 0, min_age = UINT64_MAX;
+    uint64_t reuses = 0, young_reuses = 0, same_frame_reuses = 0,
+             min_age = UINT64_MAX;
     PoseChannel() { std::fill(std::begin(region_frame), std::end(region_frame), UINT64_MAX); }
     // The counters the acceptance check reads. `pipes_seen` against
     // `pipes_extended` must be EQUAL: a pipeline that missed the substitution
@@ -8090,18 +8096,18 @@ bool pose_init(DeviceData *d, VkDevice dev) {
         return false;
     g_pose.host = (uint8_t *)ptr;
 
-    VkDescriptorSetLayout dsls[kPoseRegions];
-    for (uint32_t i = 0; i < kPoseRegions; i++)
-        dsls[i] = g_pose.dsl;
+    // Vectors, not arrays: at 1024 regions the three would be ~100 KB of
+    // stack on whichever X4 thread creates the first pipeline layout.
+    std::vector<VkDescriptorSetLayout> dsls(kPoseRegions, g_pose.dsl);
     VkDescriptorSetAllocateInfo dai{};
     dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     dai.descriptorPool = g_pose.pool;
     dai.descriptorSetCount = kPoseRegions;
-    dai.pSetLayouts = dsls;
+    dai.pSetLayouts = dsls.data();
     if (d->AllocateDescriptorSets(dev, &dai, g_pose.set) != VK_SUCCESS)
         return false;
-    VkDescriptorBufferInfo dbi[kPoseRegions]{};
-    VkWriteDescriptorSet w[kPoseRegions]{};
+    std::vector<VkDescriptorBufferInfo> dbi(kPoseRegions);
+    std::vector<VkWriteDescriptorSet> w(kPoseRegions);
     for (uint32_t i = 0; i < kPoseRegions; i++) {
         dbi[i].buffer = g_pose.buf;
         dbi[i].offset = g_pose.stride * i;
@@ -8113,7 +8119,7 @@ bool pose_init(DeviceData *d, VkDevice dev) {
         w[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         w[i].pBufferInfo = &dbi[i];
     }
-    d->UpdateDescriptorSets(dev, kPoseRegions, w, 0, nullptr);
+    d->UpdateDescriptorSets(dev, kPoseRegions, w.data(), 0, nullptr);
     // X4VR_POSE_TEST_DX exists so the channel can be PROVEN, not just built.
     // Identity is indistinguishable from a channel that never arrives -- the
     // frame looks right either way -- so the acceptance test needs a value
@@ -8385,13 +8391,15 @@ void pose_ring_report(const char *when) {
     std::lock_guard<std::mutex> lock(g_pose.mu);
     X4VR_LOG("pose ring (%s): %u region(s)%s, up to %llu command buffer(s) "
              "recorded per X4 frame, %llu reuse(s), youngest %lld frame(s), "
-             "%llu younger than 3 — %s",
+             "%llu within the same frame (same pose), %llu from 1-2 frames "
+             "before — %s",
              when, pose_ring(),
              pose_frame_fix() ? ", one pose per frame"
                               : " (X4VR_POSE_FRAME=0: takes <= 398)",
              (unsigned long long)g_pose.begins_frame_max,
              (unsigned long long)g_pose.reuses,
              g_pose.min_age == UINT64_MAX ? -1LL : (long long)g_pose.min_age,
+             (unsigned long long)g_pose.same_frame_reuses,
              (unsigned long long)g_pose.young_reuses,
              g_pose.young_reuses
                  ? "a region came back while a buffer may still read it"
@@ -13235,7 +13243,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
             const uint64_t age = now - g_pose.region_frame[r];
             g_pose.reuses++;
             g_pose.min_age = std::min(g_pose.min_age, age);
-            if (age < 3)
+            // Under 3 frames a buffer that read this region may still run.
+            // Within the SAME frame it is harmless with one pose per frame:
+            // the new owner publishes the very value the old one read.
+            if (age == 0 && pose_frame_fix())
+                g_pose.same_frame_reuses++;
+            else if (age < 3)
                 g_pose.young_reuses++;
         }
     }

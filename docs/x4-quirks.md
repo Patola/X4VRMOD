@@ -29829,3 +29829,24 @@ without the roll, all validate with it. GPU harness 236/236, census.
 * **P399.3** the `pose ring` line reports 0 reuses younger than 3 frames and
   a number of command buffers per X4 frame — the first measurement of it.
   If it is above ~85, 256 is too small and the scorer says so.
+
+## Take 399 — SCORED (2026-11-01): P399.1 and P399.2 CONFIRMED — the flicker is gone
+
+Patola: "this bug seems to have been fixed for good" — standing still, leaning
+left and right, walking, seated glancing back at various angles, and in a
+Hyperion, whose milder flicker is gone too.
+
+**P399.3 refuted in part, by the instrument built for it.** X4 recorded up to
+94 command buffers per frame, so 256 regions covered under 3 frames: 1289 of
+54871 reuses came within 3 frames (youngest 0), and the scorer failed the
+run. The one-pose-per-frame latch is what kept that invisible: a reuse within
+the same frame publishes the very value the old owner read. A reuse 1-2
+frames old still hands a buffer in flight the next frame's pose, so:
+
+* the ring is **1024** regions (256 KB, ~10 such frames);
+* the instrument counts reuses within the same frame (harmless, reported)
+  apart from those 1-2 frames old (risky, failed); take 399's single count is
+  still read, as risky.
+
+Not yet run in the game: the next session's `pose-ring` line is its check
+(expected: 0 from 1-2 frames before).

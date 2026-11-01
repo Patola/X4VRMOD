@@ -69,13 +69,14 @@ on the remote beside their `take-NNN-name` twins.
     three old directories from X4's `extensions/` folder and says so, and
     the injector serves an old id still listed in your fork as disabled. A
     vanilla `content.xml` is still never written.
-* **The per-frame head values reach X4's shaders consistently** (for the
-  interior-light flicker of takes 391–398; take 399 checks it). The values
+* **Interior lights no longer flicker in VR** (takes 391–399; confirmed in
+  the Manticore and the Hyperion). The values
   that turn the eye offset with head tilt and move it with the seated head
   were written into a ring of only 4 buffer regions shared by every command
   buffer X4 records, so a pass could read a newer frame's values than the
   pass before it, and lighting flickered on grazing surfaces. The ring is now
-  256 regions with one set of values per X4 frame, and the lighting passes'
+  1024 regions (X4 records up to 94 command buffers per frame) with one set
+  of values per X4 frame, and the lighting passes'
   position reconstruction also undoes the seated forward offset, which it
   ignored. `X4VR_POSE_FRAME=0` restores the old ring.
 * **Every world pass follows head tilt and head position** (take 397). Inside ships

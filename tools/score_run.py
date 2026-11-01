@@ -2565,24 +2565,33 @@ def main(path):
         elif re.search(r"mvp-sx=\d+", text):
             print("roll    mvp route: this build does not report whether it "
                   "takes the roll (before take 397, when it did not)")
-    # Take 399: the pose ring. A region reused within 3 X4 frames may be read
-    # by a buffer still in flight -- the interior-light flicker of takes
-    # 391-398. Gate on intent: X4VR_POSE_FRAME=0 asks for the old ring of 4.
+    # Take 399: the pose ring. A region reused 1-2 X4 frames after it was
+    # published may be read by a buffer still in flight with the next frame's
+    # pose -- the interior-light flicker of takes 391-398. A reuse within the
+    # same frame is harmless with one pose per frame and is only counted.
+    # Take 399's own build (256 regions) printed one "younger than 3" count;
+    # it is read too, as the risky count it then was. Gate on intent:
+    # X4VR_POSE_FRAME=0 asks for the old ring of 4.
     ring = re.findall(r"pose ring \((final|periodic)\): (\d+) region\(s\)(.*?), "
                       r"up to (\d+) command buffer\(s\) recorded per X4 frame, "
-                      r"(\d+) reuse\(s\), youngest (-?\d+) frame\(s\), (\d+) "
-                      r"younger than 3", text)
+                      r"(\d+) reuse\(s\), youngest (-?\d+) frame\(s\), "
+                      r"(?:(\d+) within the same frame \(same pose\), "
+                      r"(\d+) from 1-2 frames before|(\d+) younger than 3)", text)
     if ring:
-        _w, n_reg, how, per_frame, reuses, youngest, young = ring[-1]
+        _w, n_reg, how, per_frame, reuses, youngest, same, risky, old_young = ring[-1]
+        risky = int(risky or old_young or 0)
         old = bool(re.search(r"\bX4VR_POSE_FRAME=0\b", run or ""))
         print(f"pose-ring  {n_reg} region(s){how}; up to {per_frame} command "
               f"buffer(s) per X4 frame; {reuses} reuse(s), youngest "
-              f"{youngest} frame(s), {young} younger than 3")
-        if int(young) > 0 and not old:
-            fails.append(f"the pose ring reused a region {young} time(s) within "
-                         f"3 frames (youngest {youngest}): a buffer may still have "
-                         f"been reading it, the interior-light flicker of takes "
-                         f"391-398. The ring ({n_reg}) is too small for "
+              f"{youngest} frame(s)"
+              + (f", {same} within the same frame (same pose)" if same else "")
+              + f", {risky} from 1-2 frames before")
+        if risky > 0 and not old:
+            fails.append(f"the pose ring handed {risky} region(s) to a new "
+                         f"buffer 1-2 frames after a buffer that may still be "
+                         f"in flight read them (youngest {youngest}): it reads "
+                         f"the next frame's pose, the interior-light flicker of "
+                         f"takes 391-398. The ring ({n_reg}) is too small for "
                          f"{per_frame} buffers per frame")
     elif "roll stereo: ASKED FOR BUT INACTIVE" in text:
         fails.append(
