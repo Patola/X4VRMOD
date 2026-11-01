@@ -3526,14 +3526,18 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
     // kPoseEyeOfsOffset. One buffer, one spelling: a second constant here is how
     // the two stages would come to disagree about where the roll lives, which
     // is the whole class of defect this change is repairing.
+    //
+    // Two members since take 399: head_fwd at 208 as well, so the seated
+    // forward offset the vertex stage applies is undone here too.
     uint32_t roll_var = 0, ptr_roll_v4 = 0, c_zero_i = 0, t_roll_block = 0;
+    uint32_t c_fwd_i = 0;
     if (roll_set != 0xffffffffu) {
         if (!t_int) {
             t_int = new_id();
             emit(decls, OpTypeInt, {t_int, 32, 1});
         }
         t_roll_block = new_id();
-        emit(decls, OpTypeStruct, {t_roll_block, t_v4});
+        emit(decls, OpTypeStruct, {t_roll_block, t_v4, t_v4});
         const uint32_t ptr_rblock = new_id();
         emit(decls, OpTypePointer,
              {ptr_rblock, StorageClassUniform, t_roll_block});
@@ -3543,6 +3547,8 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
         emit(decls, OpVariable, {ptr_rblock, roll_var, StorageClassUniform});
         c_zero_i = new_id();
         emit(decls, OpConstant, {t_int, c_zero_i, 0});
+        c_fwd_i = new_id();
+        emit(decls, OpConstant, {t_int, c_fwd_i, 1});
     }
 
     const size_t anno_at = last_annotation_end
@@ -3605,6 +3611,8 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
             emit(out, OpDecorate, {t_roll_block, DecorationBlock});
             emit(out, OpMemberDecorate,
                  {t_roll_block, 0u, DecorationOffset, x4vr::kPoseEyeOfsOffset});
+            emit(out, OpMemberDecorate,
+                 {t_roll_block, 1u, DecorationOffset, x4vr::kPoseHeadFwdOffset});
             emit(out, OpDecorate,
                  {roll_var, DecorationDescriptorSet, roll_set});
             emit(out, OpDecorate, {roll_var, DecorationBinding, roll_binding});
@@ -3653,7 +3661,7 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
             // With roll off this reduces to one row and the emitted words are
             // unchanged, ids included, which is what keeps every pre-#77 tag
             // byte-identical. The harness asserts that rather than trusting it.
-            uint32_t d_row[2] = {d, 0};
+            uint32_t d_row[3] = {d, 0, 0};
             if (roll_var) {
                 const uint32_t rp = new_id();
                 emit(out, OpAccessChain,
@@ -3680,13 +3688,25 @@ inline bool patch_fragment_invproj_eye(std::vector<uint32_t> &code, uint32_t set
                 emit(out, OpFAdd, {t_float, d_row[0], dc, tx});
                 d_row[1] = new_id();
                 emit(out, OpFAdd, {t_float, d_row[1], ds, ty});
+                // **X4VR_HEAD_6DOF's forward offset f** (head_fwd.x), missing
+                // here until take 399: the vertex stage moves the eye f along
+                // the view axis (w -= P23*P23*f), so the reconstruction must
+                // add P23*f to view z -- row 2 += f * row 3 with X4's P23 = 1,
+                // the convention the mvp route also rests on. Without it a
+                // seated lean reconstructed every lit pixel up to 20 cm off.
+                const uint32_t fp = new_id();
+                emit(out, OpAccessChain, {ptr_roll_v4, fp, roll_var, c_fwd_i});
+                const uint32_t fw4 = new_id();
+                emit(out, OpLoad, {t_v4, fw4, fp});
+                d_row[2] = new_id();
+                emit(out, OpCompositeExtract, {t_float, d_row[2], fw4, 0});
             }
 
             // row r += d_row[r] * row 3, one column at a time. Both rows read
-            // `src`, never `acc`: rows 0 and 1 are independent components and
+            // `src`, never `acc`: rows 0-2 are independent components and
             // chaining them would make row 1 depend on row 0's rewrite.
             uint32_t acc = src;
-            const int nrows = roll_var ? 2 : 1;
+            const int nrows = roll_var ? 3 : 1;
             for (int r = 0; r < nrows; r++) {
                 for (uint32_t c = 0; c < 4; c++) {
                     const uint32_t x = new_id();

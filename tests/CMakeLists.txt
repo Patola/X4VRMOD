@@ -113,6 +113,7 @@ configure_file(sample_alias_binding.frag.spv sample_alias_binding.frag.spv COPYO
 configure_file(sample_camera_block.vert.spv sample_camera_block.vert.spv COPYONLY)
 configure_file(sample_light_volume.vert.spv sample_light_volume.vert.spv COPYONLY)
 configure_file(sample_invproj.frag.spv sample_invproj.frag.spv COPYONLY)
+configure_file(sample_invproj_clip.frag.spv sample_invproj_clip.frag.spv COPYONLY)
 configure_file(sample_volume_ray.frag.spv sample_volume_ray.frag.spv COPYONLY)
 configure_file(sample_combined.spv sample_combined.spv COPYONLY)
 # Task #76's pair: the copy_gamma shape, and the collider that must be refused.

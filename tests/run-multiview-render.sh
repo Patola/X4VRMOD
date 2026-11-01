@@ -1302,6 +1302,31 @@ if command -v spirv-dis >/dev/null; then
     fi
 fi
 
+# Take 399: the fragment reconstruction undoes the vertex stage, slot and all
+# -- roll, head shift AND the seated forward offset, which it ignored until
+# take 399. Two negative controls (no slot; head_fwd withheld) must miss.
+out=$("$PATCHER" eye-roundtrip-check "$BUILD/tests/sample_camera_block.vert.spv" \
+    "$BUILD/tests/sample_invproj_clip.frag.spv" 2>&1)
+if grep -qx PASS <<<"$out"; then
+    printf 'ok   %-38s %s\n' "inv: vertex -> fragment round trip" "$(head -1 <<<"$out")"
+else
+    printf 'FAIL %-38s %s\n' "inv: vertex -> fragment round trip" "$(tr '\n' ' ' <<<"$out")"
+    fails=$((fails + 1))
+fi
+if command -v spirv-dis >/dev/null; then
+    "$PATCHER" frag-invproj "$BUILD/tests/sample_invproj.frag.spv" "$PATCHDIR/inv_roll.spv" \
+        1 0 2 -0.032 0.032 - - 7 >/dev/null 2>&1
+    ffwd=$(spirv-dis "$PATCHDIR/inv_roll.spv" 2>/dev/null | grep -c '1 Offset 208')
+    fval=BAD
+    spirv-val --target-env vulkan1.2 "$PATCHDIR/inv_roll.spv" >/dev/null 2>&1 && fval=OK
+    if [[ "$ffwd" == 1 && "$fval" == OK ]]; then
+        printf 'ok   %-38s off208=%s val=%s\n' "inv: roll reads head_fwd too" "$ffwd" "$fval"
+    else
+        printf 'FAIL %-38s want 1/OK, got %s/%s\n' "inv: roll reads head_fwd too" "$ffwd" "$fval"
+        fails=$((fails + 1))
+    fi
+fi
+
 # Take 397: the two routes put the same vertex in the same place. One module
 # carries both blocks, so it is patched by both routes and RUN (a float32
 # interpreter, tests/spirv_interp.hpp) on X4-shaped inputs across rolls, head

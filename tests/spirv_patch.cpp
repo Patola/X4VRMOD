@@ -404,6 +404,164 @@ int main(int argc, char **argv) {
         return ok ? 0 : 1;
     }
 
+    // Take 399: does the fragment reconstruction undo what the vertex stage
+    // did, slot and all?
+    //
+    //     eye-roundtrip-check <vert.spv> <frag.spv> [roll_set]
+    //
+    // A view-space point goes through the patched vertex stage (camera-block
+    // route, sample_camera_block.vert.spv with M_worldviewprojection = P) to
+    // the eye's clip position, then through the patched M_invprojection
+    // (sample_invproj_clip.frag.spv) back to view space; it must come back to
+    // where it started, for rolls, head shifts, forward offsets and both eyes.
+    // Two negative controls: the fragment patched with no slot at all, and the
+    // fragment fed head_fwd = 0 while the vertex stage had it -- the
+    // reconstruction as it was until take 399. Both must miss.
+    if (strcmp(argv[1], "eye-roundtrip-check") == 0 && argc >= 4) {
+        const std::vector<uint32_t> vorig = load_spv(argv[2]);
+        const std::vector<uint32_t> forig = load_spv(argv[3]);
+        if (vorig.empty() || forig.empty()) {
+            printf("FAIL=load\n");
+            return 1;
+        }
+        const uint32_t rset = arg_given(argc, argv, 4)
+                                  ? (uint32_t)strtoul(argv[4], nullptr, 0)
+                                  : 31u;
+        const float dl = -0.032f, dr = 0.032f;
+        std::vector<uint32_t> vert = vorig, frag = forig, frag_plain = forig;
+        if (!x4vr::spv::patch_vertex_eye_offset(vert, 1, 0, 1, dl, &dr, nullptr,
+                                                nullptr, rset, 0) ||
+            !x4vr::spv::patch_fragment_invproj_eye(frag, 1, 0, 2, dl, dr,
+                                                   nullptr, nullptr, 0xffffffffu,
+                                                   0, rset, 0) ||
+            !x4vr::spv::patch_fragment_invproj_eye(frag_plain, 1, 0, 2, dl, dr)) {
+            printf("FAIL=patch_refused\n");
+            return 1;
+        }
+        // 4x4 inverse, Gauss-Jordan in double, column-major in and out.
+        auto invert = [](const float *m, float *o) {
+            double a[4][8];
+            for (int r = 0; r < 4; r++)
+                for (int c = 0; c < 4; c++) {
+                    a[r][c] = m[c * 4 + r];
+                    a[r][c + 4] = r == c;
+                }
+            for (int c = 0; c < 4; c++) {
+                int piv = c;
+                for (int r = c + 1; r < 4; r++)
+                    if (fabs(a[r][c]) > fabs(a[piv][c]))
+                        piv = r;
+                for (int k = 0; k < 8; k++)
+                    std::swap(a[c][k], a[piv][k]);
+                const double div = a[c][c];
+                for (int k = 0; k < 8; k++)
+                    a[c][k] /= div;
+                for (int r = 0; r < 4; r++)
+                    if (r != c) {
+                        const double f = a[r][c];
+                        for (int k = 0; k < 8; k++)
+                            a[r][k] -= f * a[c][k];
+                    }
+            }
+            for (int r = 0; r < 4; r++)
+                for (int c = 0; c < 4; c++)
+                    o[c * 4 + r] = (float)a[r][c + 4];
+        };
+        const float sxy[][2] = {{0.7404f, -0.7404f}, {1.4917f, -1.2003f}};
+        const float rolls[] = {0.0f, 2.3f, -15.0f, 45.0f};
+        const float shifts[][2] = {{0.f, 0.f}, {0.021f, -0.013f}};
+        const float fwds[] = {0.0f, 0.11f};
+        const float pts[][3] = {{0.3f, -0.2f, 0.9f}, {-1.1f, 0.7f, 4.0f},
+                                {2.5f, 1.5f, 12.0f}};
+        int checked = 0, failed_runs = 0;
+        double worst = 0, ctrl_plain = 0, ctrl_nofwd = 0;
+        std::string why;
+        for (const auto &s : sxy)
+            for (float roll : rolls)
+                for (const auto &sh : shifts)
+                    for (float f : fwds)
+                        for (const auto &v : pts)
+                            for (int view = 0; view < 2; view++) {
+            float P[16] = {}, Pinv[16];
+            P[0] = s[0];
+            P[5] = s[1];
+            P[2 * 4 + 3] = 1.0f; // row3(P) = [0 0 1 0]
+            P[3 * 4 + 2] = 0.1f; // reversed-Z near
+            invert(P, Pinv);
+            const float I[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+            x4vr::PoseBlock pb = x4vr::pose_identity();
+            const float phi = roll * 0.0174533f;
+            pb.eye_ofs[0] = cosf(phi);
+            pb.eye_ofs[1] = sinf(phi);
+            pb.eye_ofs[2] = sh[0];
+            pb.eye_ofs[3] = sh[1];
+            pb.head_fwd[0] = f;
+            auto buffers = [&](x4vr::interp::Machine &m, const x4vr::PoseBlock &q) {
+                std::vector<uint8_t> cam(256), world(64), pose(sizeof q);
+                memcpy(&cam[0], I, 64);
+                memcpy(&cam[64], P, 64);
+                memcpy(&cam[128], Pinv, 64);
+                memcpy(&cam[192], I, 64);
+                memcpy(world.data(), P, 64); // M_worldviewprojection = P
+                memcpy(pose.data(), &q, sizeof q);
+                m.buffers[{1, 0}] = cam;
+                m.buffers[{3, 0}] = world;
+                m.buffers[{rset, 0}] = pose;
+                m.view_index = view;
+            };
+            x4vr::interp::Machine mv;
+            buffers(mv, pb);
+            mv.input_location[0] = {v[0], v[1], v[2]};
+            if (!mv.run(vert, 0)) {
+                why = mv.error;
+                failed_runs++;
+                continue;
+            }
+            const std::vector<float> clip(mv.position, mv.position + 4);
+            auto back = [&](const std::vector<uint32_t> &code,
+                            const x4vr::PoseBlock &q, float out[3]) {
+                x4vr::interp::Machine mf;
+                buffers(mf, q);
+                mf.input_location[0] = clip;
+                if (!mf.run(code, 4 /* Fragment */) || !mf.outputs.count(0)) {
+                    why = mf.error.empty() ? "no output 0" : mf.error;
+                    return false;
+                }
+                for (int k = 0; k < 3; k++)
+                    out[k] = mf.outputs[0][k];
+                return true;
+            };
+            x4vr::PoseBlock nofwd = pb;
+            nofwd.head_fwd[0] = 0.0f;
+            float r_fix[3], r_plain[3], r_nofwd[3];
+            if (!back(frag, pb, r_fix) || !back(frag_plain, pb, r_plain) ||
+                !back(frag, nofwd, r_nofwd)) {
+                failed_runs++;
+                continue;
+            }
+            const double mag = std::max(1.0, (double)sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]));
+            double e = 0, ep = 0, en = 0;
+            for (int k = 0; k < 3; k++) {
+                e = std::max(e, (double)fabsf(r_fix[k] - v[k]) / mag);
+                ep = std::max(ep, (double)fabsf(r_plain[k] - v[k]));
+                if (f != 0.0f)
+                    en = std::max(en, (double)fabsf(r_nofwd[k] - v[k]));
+            }
+            worst = std::max(worst, e);
+            if (roll != 0.0f || sh[0] != 0.0f || f != 0.0f)
+                ctrl_plain = std::max(ctrl_plain, ep);
+            ctrl_nofwd = std::max(ctrl_nofwd, en);
+            checked++;
+        }
+        const bool ok = !failed_runs && checked > 0 && worst <= 2e-5 &&
+                        ctrl_plain > 1e-3 && ctrl_nofwd > 1e-3;
+        printf("CHECKED=%d WORST=%.3g CONTROL_NO_SLOT=%.3g m CONTROL_NO_FWD=%.3g m%s%s\n",
+               checked, worst, ctrl_plain, ctrl_nofwd,
+               failed_runs ? " RUN_FAILED=" : "", failed_runs ? why.c_str() : "");
+        printf("%s\n", ok ? "PASS" : "FAIL");
+        return ok ? 0 : 1;
+    }
+
     // Does the emitted SPIR-V compute what common/x4vr_view.hpp says it does?
     //
     // spirv-val proves the module is well formed, and a well-formed module

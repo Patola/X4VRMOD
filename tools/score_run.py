@@ -2183,6 +2183,12 @@ def main(path):
             print(f"roll    not exercised (head |roll| max {heads[-1]:.2f} deg) "
                   f"— fine for a take that was not about roll; it says nothing "
                   f"about #77")
+        elif forced and pubs[-1] < 0.5 * heads[-1]:
+            # Take 398: X4VR_ROLL_FORCE publishes its constant, not the head,
+            # so a small published roll is the run doing what it was asked.
+            print(f"roll    FORCED: {pubs[-1]:.2f} deg published while the head "
+                  f"rolled up to {heads[-1]:.2f} — the constant asked for, not "
+                  f"a loss")
         elif pubs[-1] < 0.5 * heads[-1]:
             fails.append(
                 f"the head rolled to {heads[-1]:.2f} deg but only {pubs[-1]:.2f} "
@@ -2559,6 +2565,25 @@ def main(path):
         elif re.search(r"mvp-sx=\d+", text):
             print("roll    mvp route: this build does not report whether it "
                   "takes the roll (before take 397, when it did not)")
+    # Take 399: the pose ring. A region reused within 3 X4 frames may be read
+    # by a buffer still in flight -- the interior-light flicker of takes
+    # 391-398. Gate on intent: X4VR_POSE_FRAME=0 asks for the old ring of 4.
+    ring = re.findall(r"pose ring \((final|periodic)\): (\d+) region\(s\)(.*?), "
+                      r"up to (\d+) command buffer\(s\) recorded per X4 frame, "
+                      r"(\d+) reuse\(s\), youngest (-?\d+) frame\(s\), (\d+) "
+                      r"younger than 3", text)
+    if ring:
+        _w, n_reg, how, per_frame, reuses, youngest, young = ring[-1]
+        old = bool(re.search(r"\bX4VR_POSE_FRAME=0\b", run or ""))
+        print(f"pose-ring  {n_reg} region(s){how}; up to {per_frame} command "
+              f"buffer(s) per X4 frame; {reuses} reuse(s), youngest "
+              f"{youngest} frame(s), {young} younger than 3")
+        if int(young) > 0 and not old:
+            fails.append(f"the pose ring reused a region {young} time(s) within "
+                         f"3 frames (youngest {youngest}): a buffer may still have "
+                         f"been reading it, the interior-light flicker of takes "
+                         f"391-398. The ring ({n_reg}) is too small for "
+                         f"{per_frame} buffers per frame")
     elif "roll stereo: ASKED FOR BUT INACTIVE" in text:
         fails.append(
             "X4VR_ROLL_STEREO was set but the pose channel is down, so nothing "

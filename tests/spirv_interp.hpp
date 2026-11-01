@@ -72,8 +72,10 @@ struct Machine {
     std::map<std::pair<uint32_t, uint32_t>, std::vector<uint8_t>> buffers; // (set,binding)
     std::map<uint32_t, std::vector<float>> input_location; // location -> value
     int view_index = 0;
-    // The result.
+    // The result: gl_Position for a vertex entry, and every output by its
+    // location for either stage.
     float position[4] = {0, 0, 0, 0};
+    std::map<uint32_t, std::vector<float>> outputs;
 
     bool run(const std::vector<uint32_t> &code, uint32_t model) {
         if (code.size() < 5 || code[0] != 0x07230203u)
@@ -205,7 +207,10 @@ struct Machine {
             if (!step(o, w, len))
                 return false;
         }
-        return read_position();
+        for (auto &[id, l] : location_)
+            if (var_storage_[id] == kSCOutput)
+                outputs[l] = store_[id];
+        return model != 0 || read_position(); // 0 = Vertex
     }
 
 private:

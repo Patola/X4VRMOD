@@ -29771,3 +29771,61 @@ are zero too, so the slot does not change from frame to frame.
   shader reacts to the slot's frame-to-frame change.
 * **P398.2 (reading hypothesis):** standing, **flicker** as in 397. Then it
   is the reading itself (binding, region or compilation), not the values.
+
+## Take 398 — SCORED (2026-11-01): P398.1 CONFIRMED — the slot's changes, not the reading
+
+Standing with the slot held constant (`X4VR_ROLL_FORCE=0`): no flicker, also
+while walking. Seated, where X4VR_HEAD_6DOF changes the slot every frame: the
+flicker returned "at certain slanted angles", not at others. (The scorer's
+FAIL "only 0.00 was published" was the forced constant; it is now gated on
+X4VR_ROLL_FORCE.)
+
+Two candidates read and dropped before building, each by one fact: SSR
+(`a*SSR + (1-a)*envmap` would explain pink-versus-white, and its ray march
+projects with the uncorrected `M_projection_uj`) — but the injector serves
+`ssr=false` and `ssao=0`, so it never runs in a mod session; X4's volumetric
+fog — computed in compute, mono, with its own history, untouched by the slot.
+
+**The cause found: the pose ring.** The slot's value is copied into a
+command buffer's region at submit and read by the GPU while that buffer
+executes. The ring had 4 regions shared by every command buffer X4 records,
+so the next submit of a *different* buffer could rewrite a region that a
+queued or running buffer was still reading: its later draws (lighting) then
+used a newer pose than its earlier ones (depth, G-buffer). Shadow tests on
+grazing surfaces flip on that disagreement. The comment that designed it
+argued the safety of ONE buffer ("X4 may not re-record a command buffer that
+is still executing") and not of the ring. Also, the session thread updates
+the value at the runtime's rate, so two submits of one X4 frame could carry
+two poses.
+
+**And a second defect, found on the way:** the fragment reconstruction
+(`patch_fragment_invproj_eye` with the roll) read only `eye_ofs` — not
+`head_fwd` — so a seated lean reconstructed every lit pixel up to 20 cm off.
+
+## Take 399 — PREDICTIONS (written before the run): one pose per frame, a ring of 256
+
+**Built.**
+* The ring is 256 regions (64 KB); every command buffer of one X4 frame
+  publishes the same pose, latched at that frame's first submit (the frame
+  is counted at X4's present). Each reuse records its age in frames; `pose
+  ring (periodic|final)` reports buffers per frame, reuses and the youngest;
+  the scorer FAILs any reuse under 3 frames. `X4VR_POSE_FRAME=0` restores
+  takes <= 398.
+* The fragment reconstruction adds `head_fwd` (row 2 += f * row 3, X4's
+  P23 = 1).
+
+**Checked before the take:** `eye-roundtrip-check` (new): a view point
+through the patched vertex stage and back through the patched fragment
+reconstruction, 192 cases (rolls, shifts, forward offsets, zooms, both eyes)
+return within 3e-8; withholding the slot or only head_fwd (the pre-399
+fragment) misses by 11 cm. X4's 316 invproj fragment modules: byte-identical
+without the roll, all validate with it. GPU harness 236/236, census.
+
+**Predictions (the shipping line, nothing added):**
+* **P399.1** standing in the Manticore, head still, tilted or moving: no
+  flicker. **P399.2** seated, glancing back at the slanted angles that
+  flickered in 398: no flicker. Refuted if either flickers — then the slot's
+  frame-to-frame change reaches a pass by some way other than these two.
+* **P399.3** the `pose ring` line reports 0 reuses younger than 3 frames and
+  a number of command buffers per X4 frame — the first measurement of it.
+  If it is above ~85, 256 is too small and the scorer says so.

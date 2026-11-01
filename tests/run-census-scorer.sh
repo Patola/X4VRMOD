@@ -342,6 +342,30 @@ grep -qF '"roll stereo: ON — the eye offset turns with the "' layer/x4vr_layer
     ok "mvp roll: the planted lines match the layer's formats" ||
     bad "mvp roll: the layer's format changed — replant the lines above"
 
+# ------------------------------------------------ take 399: the pose ring
+ringline() { printf '[  224600.000] layer   pose ring (final): %s region(s)%s, up to %s command buffer(s) recorded per X4 frame, %s reuse(s), youngest %s frame(s), %s younger than 3 — x' "$1" "$2" "$3" "$4" "$5" "$6"; }
+plant /tmp/census-ring-ok.log "$(ringline 256 ', one pose per frame' 37 90000 6 0)"
+want "pose ring healthy -> reported" /tmp/census-ring-ok.log pose-ring "256 region(s), one pose per frame; up to 37 command buffer(s) per X4 frame"
+if python3 tools/score_run.py /tmp/census-ring-ok.log 2>&1 | grep -q "reused a region"; then
+    bad "pose ring healthy -> FAILs"
+else
+    ok "pose ring healthy -> no FAIL"
+fi
+plant /tmp/census-ring-young.log "$(ringline 256 ', one pose per frame' 120 90000 2 14)"
+want "pose ring reused young -> FAIL" /tmp/census-ring-young.log FAIL "reused a region 14 time(s) within 3 frames (youngest 2)"
+plant_env /tmp/census-ring-old.log 's/X4VR_POSE=0/X4VR_POSE=0 X4VR_POSE_FRAME=0/' "$(ringline 4 ' (X4VR_POSE_FRAME=0: takes <= 398)' 37 90000 0 80000)"
+if python3 tools/score_run.py /tmp/census-ring-old.log 2>&1 | grep -q "reused a region"; then
+    bad "X4VR_POSE_FRAME=0 -> FAILs on the ring it asked for"
+else
+    ok "X4VR_POSE_FRAME=0 -> reported, not failed"
+fi
+absent "no pose ring line -> silent" "$BASE" pose-ring
+grep -qF '"pose ring (%s): %u region(s)%s, up to %llu command buffer(s) "' layer/x4vr_layer.cpp &&
+grep -qF '"recorded per X4 frame, %llu reuse(s), youngest %lld frame(s), "' layer/x4vr_layer.cpp &&
+grep -qF '"%llu younger than 3 — %s",' layer/x4vr_layer.cpp &&
+    ok "pose ring: the planted line matches the layer's format" ||
+    bad "pose ring: the layer's format changed — replant the line above"
+
 # ------------------------------------------------ our extensions (content.xml)
 srv='[  224600.000] inject  content: serving /h/.config/EgoSoft/X4/1/content-x4vrmod.xml in memory via fopen — x4vrmod_lookaround ENABLED (was off); your /h/.config/EgoSoft/X4/1/content.xml is not touched'
 plant_env /tmp/census-ext-ok.log 's/X4VR_POSE=0/X4VR_POSE=0 X4VR_EXTENSIONS=1/' "$srv"

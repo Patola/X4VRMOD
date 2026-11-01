@@ -7841,11 +7841,29 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyShaderModule(
 // compatibility for set N depends only on sets 0..N, so adding sets ABOVE
 // everything X4 uses leaves its bind-once-use-many intact. Appending anywhere
 // else would break it silently.
-// Regions cycled per command-buffer recording, not per frame. X4 may not
-// re-record a command buffer that is still executing -- Vulkan forbids it --
-// so keying a region to the recording epoch is exactly as safe as X4's own
-// command-buffer reuse, and needs no fence of ours.
-constexpr uint32_t kPoseRegions = 4;
+// Regions cycled per command-buffer recording. **The ring is 256, not 4,
+// since take 399.** The old argument -- "X4 may not re-record a command
+// buffer that is still executing, so a region keyed to the recording epoch is
+// as safe as X4's own reuse" -- held for ONE command buffer and not for the
+// ring: with 4 regions shared by every command buffer X4 records, a region was
+// rewritten at the next submit of a DIFFERENT command buffer while the GPU
+// could still be reading it, so one buffer's later draws (lighting) saw a
+// newer pose than its earlier ones (depth, G-buffer). With the pose constant
+// that is invisible; with the tracked roll or a seated lean changing it every
+// frame, shadow tests on grazing surfaces flipped and whole interior lights
+// flickered (takes 391-398; X4VR_ROLL_FORCE=0 standing removed it). 256
+// regions of 256 bytes is 64 KB; the reuse age is measured and logged, and
+// the scorer fails a run that reuses a region within 3 frames.
+constexpr uint32_t kPoseRegions = 256;
+
+// X4VR_POSE_FRAME=0 restores takes <= 398: a ring of 4 and the live value at
+// every submit. On, the ring is kPoseRegions and every command buffer of one
+// X4 frame publishes the same pose, latched at that frame's first submit.
+bool pose_frame_fix() {
+    static const bool on = x4vr::env_on("X4VR_POSE_FRAME", true);
+    return on;
+}
+uint32_t pose_ring() { return pose_frame_fix() ? kPoseRegions : 4u; }
 
 // maxBoundDescriptorSets, captured at device creation. A global and not a
 // DeviceData field because pose_set_index() must answer with no device in hand:
@@ -7878,6 +7896,18 @@ struct PoseChannel {
     std::unordered_map<VkPipeline, VkPipelineLayout> pipe_layout;
     std::unordered_map<VkCommandBuffer, uint32_t> cb_region;
     uint64_t next_region = 0;
+    // Take 399. X4's frame count (bumped at its present), the frame each
+    // region was last published in, and the one pose latched for a frame.
+    std::atomic<uint64_t> frame{0};
+    uint64_t region_frame[kPoseRegions];
+    uint64_t latched_frame = UINT64_MAX;
+    x4vr::PoseBlock frame_value = x4vr::pose_identity();
+    // How soon a region comes back: recordings per frame (max), reuses, the
+    // youngest reuse in frames, and reuses younger than 3 frames -- a region
+    // that may still be in flight.
+    uint64_t begins_frame = 0, begins_frame_at = UINT64_MAX, begins_frame_max = 0;
+    uint64_t reuses = 0, young_reuses = 0, min_age = UINT64_MAX;
+    PoseChannel() { std::fill(std::begin(region_frame), std::end(region_frame), UINT64_MAX); }
     // The counters the acceptance check reads. `pipes_seen` against
     // `pipes_extended` must be EQUAL: a pipeline that missed the substitution
     // runs with our set unbound, which is undefined behaviour rather than a
@@ -8130,7 +8160,7 @@ bool pose_init(DeviceData *d, VkDevice dev) {
     g_pose.ready = true;
     X4VR_LOG("pose: channel up — set %u binding %u, %u region(s) of %llu B, "
              "identity until #33 drives it",
-             pose_set_index(), kPoseBinding, kPoseRegions,
+             pose_set_index(), kPoseBinding, pose_ring(),
              (unsigned long long)g_pose.stride);
     return true;
 }
@@ -8329,8 +8359,43 @@ void pose_publish(VkCommandBuffer cb) {
     auto it = g_pose.cb_region.find(cb);
     if (it == g_pose.cb_region.end())
         return;
-    memcpy(g_pose.host + g_pose.stride * it->second, &g_pose.value,
-           sizeof(g_pose.value));
+    // Take 399: one pose per X4 frame. The session thread updates `value` at
+    // the runtime's rate, independently of X4, so two submits of one frame
+    // could carry two poses -- a depth pass and the lighting that reads it
+    // disagreeing by whatever the head did in between. Latched at the frame's
+    // first submit, so it is as fresh as before for the first buffer and the
+    // same for the rest.
+    const uint64_t now = g_pose.frame.load(std::memory_order_relaxed);
+    const x4vr::PoseBlock *src = &g_pose.value;
+    if (pose_frame_fix()) {
+        if (g_pose.latched_frame != now) {
+            g_pose.latched_frame = now;
+            g_pose.frame_value = g_pose.value;
+        }
+        src = &g_pose.frame_value;
+    }
+    memcpy(g_pose.host + g_pose.stride * it->second, src, sizeof(*src));
+    g_pose.region_frame[it->second] = now;
+}
+
+// How soon the pose ring comes back to a region. A reuse younger than 3 X4
+// frames may hit a region a submitted command buffer is still reading, which
+// is the take 391-398 flicker; the scorer fails the run on it.
+void pose_ring_report(const char *when) {
+    std::lock_guard<std::mutex> lock(g_pose.mu);
+    X4VR_LOG("pose ring (%s): %u region(s)%s, up to %llu command buffer(s) "
+             "recorded per X4 frame, %llu reuse(s), youngest %lld frame(s), "
+             "%llu younger than 3 — %s",
+             when, pose_ring(),
+             pose_frame_fix() ? ", one pose per frame"
+                              : " (X4VR_POSE_FRAME=0: takes <= 398)",
+             (unsigned long long)g_pose.begins_frame_max,
+             (unsigned long long)g_pose.reuses,
+             g_pose.min_age == UINT64_MAX ? -1LL : (long long)g_pose.min_age,
+             (unsigned long long)g_pose.young_reuses,
+             g_pose.young_reuses
+                 ? "a region came back while a buffer may still read it"
+                 : "no region came back while a buffer could still read it");
 }
 
 // X4's layout plus ours, or X4's unchanged if anything refuses.
@@ -13151,10 +13216,28 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
     // to the recording epoch is free by exactly the same rule that lets X4
     // reuse the buffer -- no fence of ours, and no frame counter that could
     // disagree with X4's own pacing.
+    //
+    // Take 399: the ring is the reason this is safe, and it is MEASURED, not
+    // argued: each reuse records how many frames ago the region was last
+    // published. Under 3 a submitted buffer may still be reading it.
     if (pose_active()) {
         std::lock_guard<std::mutex> lock(g_pose.mu);
-        g_pose.cb_region[cb] =
-            (uint32_t)(g_pose.next_region++ % kPoseRegions);
+        const uint32_t r = (uint32_t)(g_pose.next_region++ % pose_ring());
+        g_pose.cb_region[cb] = r;
+        const uint64_t now = g_pose.frame.load(std::memory_order_relaxed);
+        if (g_pose.begins_frame_at != now) {
+            g_pose.begins_frame_at = now;
+            g_pose.begins_frame = 0;
+        }
+        g_pose.begins_frame_max =
+            std::max(g_pose.begins_frame_max, ++g_pose.begins_frame);
+        if (g_pose.region_frame[r] != UINT64_MAX) {
+            const uint64_t age = now - g_pose.region_frame[r];
+            g_pose.reuses++;
+            g_pose.min_age = std::min(g_pose.min_age, age);
+            if (age < 3)
+                g_pose.young_reuses++;
+        }
     }
     // Task #56/#66: this command buffer's object-block binds die here.
     //
@@ -13537,6 +13620,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     // #75: the frame boundary the camstamp counts against. Bumped here so the
     // NEXT frame's first render pass takes a fresh sample.
     g_camstamp.frame.fetch_add(1, std::memory_order_relaxed);
+    // Take 399: the pose channel's frame -- the next submit latches a new pose.
+    {
+        const uint64_t pf = g_pose.frame.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (pose_active() && (pf == 600 || pf % 18000 == 0))
+            pose_ring_report("periodic");
+    }
     camdiff_sample();
     // #36: everything below that touches the queue -- the SBS composite, the
     // cursor overlay, the readback's QueueWaitIdle, and the present itself --
@@ -16732,6 +16821,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyDevice(
                              "being the whole set but does not prove it for "
                              "scenes this run never entered");
     }
+    if (pose_wanted() && g_pose.ready)
+        pose_ring_report("final");
     if (pose_wanted() && g_pose.ready) {
         std::lock_guard<std::mutex> lock(g_pose.mu);
         const bool collided = g_pose.collided.load();
