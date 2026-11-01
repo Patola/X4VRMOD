@@ -1111,4 +1111,13 @@ age rule: skip regions published within 3 frames): no flicker, 0 young
 reuses, 26936 resubmits without re-recording, but 5138 publishes into a
 region the ring had handed on (buffers resubmitted every few frames).
 v0.9.9's ring holds each region until its buffer is recorded again or
-freed; take 402 checks it.
+freed.
+
+## Take 402 (2026-11-01) — v0.9.9 (code 963fb64)
+
+    X4VR_TAKE=402 X4VR_LOG=/tmp/x4vr-take402.log ./launch/x4vr-launch.sh
+
+Patola: *"no issues whatsoever"* (Manticore, Hyperion, cockpit, map, Pause,
+ESC). `score_run.py` PASS: build v0.9.9 in both libraries; `pose-ring` 1024
+regions, up to 75 command buffers per frame, 207 regions held at most,
+33,720 resubmits without re-recording, 0 forced, 0 shared.

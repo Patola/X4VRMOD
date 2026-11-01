@@ -24,14 +24,16 @@ on the remote beside their `take-NNN-name` twins.
 
 ## v0.9.9 — 2026-11-01 — the shipping line is the default; interior lights no longer flicker
 
-The state of take 402: take 399's fix (`take-399-pose-ring`, commit 0b2fe36)
-with the pose ring at 1024 regions, each held until its command buffer is
-recorded again or freed, which the ring's own measurements in takes 399–401
-asked for. Patola:
+The state of take 402 (code identical to commit 963fb64): take 399's fix
+(`take-399-pose-ring`, commit 0b2fe36) with the pose ring at 1024 regions,
+each held until its command buffer is recorded again or freed, which the
+ring's own measurements in takes 399–401 asked for. Take 402: up to 75
+command buffers per frame, at most 207 regions held, 0 shared. Patola:
 * take 385: *"All working."* (the bare launcher, 47 defaults);
 * take 399: *"this bug seems to have been fixed for good"* — standing still,
   leaning, walking, seated glancing back, and in a Hyperion as well as the
   Manticore.
+* take 402: *"no issues whatsoever."*
 
 * **New: the shipping settings are the default.**
   `./launch/x4vr-launch.sh` with nothing set plays like v0.9.8's command

@@ -29890,3 +29890,11 @@ the scorer fails forced or shared. Harness: one buffer recorded 16 times
 held 1 region at most (released on each re-record), 0 forced, 0 shared.
 Predictions: no flicker; 0 forced, 0 shared; regions held at most well under
 1024 (the first measure of X4's live buffers).
+
+## Take 402 — SCORED PASS (2026-11-01): v0.9.9 accepted
+
+Patola: "no issues whatsoever". Scorer PASS, build v0.9.9 in both libraries.
+`pose-ring`: up to 75 command buffers per X4 frame, **207 regions held at
+most** (the first count of X4's live buffers; 1024 leaves room), 33,720
+resubmits without re-recording, **0 forced, 0 shared**. All three
+predictions hold.
