@@ -2746,6 +2746,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDrawIndexed(VkCommandBuffer cb,
 // every module's real path, 1007 pipeline lines all said the same thing, and
 // nothing in the run objected -- while the summary line four lines away was
 // reporting live-sx=288. Two numbers for one fact, and no code comparing them.
+// g_path_mvp_roll: of g_path_mvp, those patched with the roll (take 397).
+std::atomic<uint32_t> g_path_mvp_roll{0};
 std::atomic<uint32_t> g_path_live{0}, g_path_mvp{0}, g_path_baked{0},
     g_path_clip{0};
 
@@ -5439,6 +5441,17 @@ bool proj_mvp() {
     return on;
 }
 
+// Take 397: the mvp route turns the eye offset with the head's roll and moves
+// it with the head's shift and forward offset, as the camera-block route does.
+// Until take 396 it did neither, so under any tilt its modules -- X4's
+// depth-only technique among them -- drew a hair off every other pass, and the
+// lights in ship interiors flickered with the tracked roll's jitter.
+// X4VR_MVP_ROLL=0 restores that, for a bisect.
+bool mvp_roll() {
+    static const bool on = x4vr::env_on("X4VR_MVP_ROLL", true);
+    return on;
+}
+
 // Task #35. THE frustum pair — the one the affine is baked for and the one the
 // compositor is told about. Those two must be the same object, and that is the
 // whole content of piece 2.
@@ -6805,14 +6818,23 @@ VkResult create_shader_module_inner(
             // see. On by default since takes 109/110; X4VR_PROJ_MVP=0 puts
             // these twelve back on the baked constant, which is the
             // stage5-wide-field behaviour exactly.
+            //
+            // The roll and the head slot as on the camera-block route (take
+            // 397); roll_on is already false whenever the off-axis map is on,
+            // which this route also refuses to combine with it.
+            const bool mvp_rolled = roll_on && mvp_roll();
             const bool mvp = proj_mvp() &&
                              x4vr::spv::patch_vertex_eye_offset_mvp(
                                  code, kObjectSet, kObjectBinding,
                                  kObjectMvpMember, dl, KR ? &dr : nullptr,
-                                 oal, oar);
+                                 oal, oar,
+                                 mvp_rolled ? pose_set_index() : 0xffffffffu,
+                                 kPoseBinding);
             (mvp ? n_mvp : n_baked)++;
             patch_path = mvp ? "mvp-sx" : "baked-sx";
             (mvp ? g_path_mvp : g_path_baked)++;
+            if (mvp && mvp_rolled)
+                g_path_mvp_roll++;
             vert_patched = mvp;
         }
     }
@@ -6960,10 +6982,12 @@ VkResult create_shader_module_inner(
             if (++patched <= 3 || (patched % 50) == 0)
                 X4VR_LOG("patched vertex shader #%u (%s%s) "
                          "[world=%u nonworld=%u stereo=%u live-sx=%u "
-                         "mvp-sx=%u baked-sx=%u clip=%u cam-pos=%u]%s",
+                         "mvp-sx=%u baked-sx=%u clip=%u cam-pos=%u "
+                         "mvp-roll=%u]%s",
                          patched, world ? "world" : "nonworld",
                          KR ? ", per-view" : "", n_world, n_nonworld, n_stereo,
                          n_live, n_mvp, n_baked, n_clip, n_cam_pos,
+                         g_path_mvp_roll.load(),
                          // This line used to name baked-sx as "exactly the set
                          // of world modules left in X4's frustum", and that was
                          // wrong in the way that matters: `clip` is a SECOND

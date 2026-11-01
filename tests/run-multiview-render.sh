@@ -1254,6 +1254,65 @@ if command -v spirv-dis >/dev/null; then
             "...mvp recovers sy as -|sy|" "$neg" "$sqrt"
         fails=$((fails + 1))
     fi
+
+    # ---- take 397: the mvp route takes the roll and the head slot ------
+    #
+    # Until take 396 it did not, so its passes (X4's depth-only technique
+    # among them) drew off every other pass under head tilt and interior
+    # lights flickered. Roll absent must leave the words exactly as before;
+    # roll present must validate, read the slot at 192/208, and refuse the
+    # off-axis map as the camera-block route does.
+    "$PATCHER" vert-eye-offset-mvp "$BUILD/tests/sample_light_volume.vert.spv" \
+        "$PATCHDIR/mvp_plain.spv" 1 0 7 -0.032 0.032 >/dev/null 2>&1
+    "$PATCHER" vert-eye-offset-mvp "$BUILD/tests/sample_light_volume.vert.spv" \
+        "$PATCHDIR/mvp_dash.spv" 1 0 7 -0.032 0.032 - - >/dev/null 2>&1
+    if cmp -s "$PATCHDIR/mvp_plain.spv" "$PATCHDIR/mvp_dash.spv"; then
+        printf 'ok   %-38s\n' "...mvp: roll absent emits the old words"
+    else
+        printf 'FAIL %-38s "-" for the maps changed the output\n' \
+            "...mvp: roll absent emits the old words"
+        fails=$((fails + 1))
+    fi
+    "$PATCHER" vert-eye-offset-mvp "$BUILD/tests/sample_light_volume.vert.spv" \
+        "$PATCHDIR/mvp_roll.spv" 1 0 7 -0.032 0.032 - - 7 >/dev/null 2>&1
+    mins=$(spirv-dis "$PATCHDIR/mvp_roll.spv" 2>/dev/null | grep -c 'OpCompositeInsert')
+    mset=$(spirv-dis "$PATCHDIR/mvp_roll.spv" 2>/dev/null | grep -c 'DescriptorSet 7')
+    moff=$(spirv-dis "$PATCHDIR/mvp_roll.spv" 2>/dev/null | grep -c '0 Offset 192')
+    mfwd=$(spirv-dis "$PATCHDIR/mvp_roll.spv" 2>/dev/null | grep -c '1 Offset 208')
+    mval=BAD
+    spirv-val --target-env vulkan1.2 "$PATCHDIR/mvp_roll.spv" >/dev/null 2>&1 && mval=OK
+    # x, y and w: X4's projection makes the forward offset's z term zero.
+    if [[ "$mins" == 3 && "$mset" == 1 && "$moff" == 1 && "$mfwd" == 1 && "$mval" == OK ]]; then
+        printf 'ok   %-38s inserts=%s set7=%s off192=%s off208=%s val=%s\n' \
+            "...mvp: roll adds the y and w terms" "$mins" "$mset" "$moff" "$mfwd" "$mval"
+    else
+        printf 'FAIL %-38s want 3/1/1/1/OK, got %s/%s/%s/%s/%s\n' \
+            "...mvp: roll adds the y and w terms" "$mins" "$mset" "$moff" "$mfwd" "$mval"
+        fails=$((fails + 1))
+    fi
+    rc=$("$PATCHER" vert-eye-offset-mvp "$BUILD/tests/sample_light_volume.vert.spv" \
+        "$PATCHDIR/mvp_roll_oa.spv" 1 0 7 -0.032 0.032 "$OA_L" - 7 2>&1 \
+        | sed -n 's/^PATCHED=//p')
+    if [[ "$rc" == 0 ]]; then
+        printf 'ok   %-38s patched=%s\n' "...mvp: roll+offaxis is refused" "$rc"
+    else
+        printf 'FAIL %-38s want patched=0, got %s\n' \
+            "...mvp: roll+offaxis is refused" "${rc:-?}"
+        fails=$((fails + 1))
+    fi
+fi
+
+# Take 397: the two routes put the same vertex in the same place. One module
+# carries both blocks, so it is patched by both routes and RUN (a float32
+# interpreter, tests/spirv_interp.hpp) on X4-shaped inputs across rolls, head
+# shifts, forward offsets, scales, zooms and both eyes. The roll-less mvp
+# route is the negative control and must disagree.
+out=$("$PATCHER" vert-eye-check "$BUILD/tests/sample_camera_block.vert.spv" 2>&1)
+if grep -qx PASS <<<"$out"; then
+    printf 'ok   %-38s %s\n' "eye: both routes compute the same vertex" "$(head -1 <<<"$out")"
+else
+    printf 'FAIL %-38s %s\n' "eye: both routes compute the same vertex" "$(tr '\n' ' ' <<<"$out")"
+    fails=$((fails + 1))
 fi
 
 # The per-eye M_invprojection correction (task #22). The deferred passes

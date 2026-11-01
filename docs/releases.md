@@ -69,6 +69,14 @@ on the remote beside their `take-NNN-name` twins.
     three old directories from X4's `extensions/` folder and says so, and
     the injector serves an old id still listed in your fork as disabled. A
     vanilla `content.xml` is still never written.
+* **Every world pass follows head tilt and head position** (for the
+  interior-light flicker of takes 391–396; take 397 checks it). Inside ships
+  such as the Manticore, whole lights switched on and off many times a
+  second, but only with roll compensation on. X4's depth-only passes and a
+  few others draw through a second eye-offset route that ignored head tilt
+  and head position, so under any tilt they drew slightly off every other
+  pass. That route now applies both, like the rest. `X4VR_MVP_ROLL=0`
+  restores the old behaviour for comparison.
 * **Both libraries carry their version** (`git describe`) and print it on
   their first log line: `instance created (app=X4) … [X4VRMOD v…]` and
   `injector loaded into pid … [X4VRMOD v…]`. The scorer prints a `build`

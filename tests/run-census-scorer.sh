@@ -313,6 +313,35 @@ fi
 plant_env /tmp/census-roll-asked.log 's/X4VR_POSE=0/X4VR_POSE=1 X4VR_ROLL_AB=20/' "$rollline"
 want "level head, roll ASKED -> FAIL" /tmp/census-roll-asked.log FAIL "never rolled more than 1.20 deg"
 
+# ------------------------------------------------ take 397: the mvp route takes the roll
+# With roll stereo on, every mvp-route module must turn the offset too; until
+# take 396 none did, and interior lights flickered with the tracked roll.
+rollon='[  224500.000] layer   roll stereo: ON — the eye offset turns with the head, reading (cos,sin) from pose set 31 binding 0. sin(phi) of the disparity would otherwise be VERTICAL and unfusable (task #77)'
+vline() { printf '[  224501.000] layer   patched vertex shader #350 (world, per-view) [world=306 nonworld=44 stereo=306 live-sx=292 mvp-sx=%s baked-sx=0 clip=44 cam-pos=0%s]' "$1" "$2"; }
+plant /tmp/census-mvproll-ok.log "$rollon" "$(vline 14 ' mvp-roll=14')"
+want "mvp route rolled -> reported" /tmp/census-mvproll-ok.log roll "mvp route: 14 of 14 module(s) turn the offset"
+if python3 tools/score_run.py /tmp/census-mvproll-ok.log 2>&1 | grep -q "drew WITHOUT the roll"; then
+    bad "mvp route rolled -> still FAILs"
+else
+    ok "mvp route rolled -> no FAIL"
+fi
+plant /tmp/census-mvproll-none.log "$rollon" "$(vline 14 ' mvp-roll=0')"
+want "mvp route not rolled -> FAIL" /tmp/census-mvproll-none.log FAIL "14 of 14 mvp-route module(s) drew WITHOUT the roll"
+plant_env /tmp/census-mvproll-asked.log 's/X4VR_POSE=0/X4VR_POSE=0 X4VR_MVP_ROLL=0/' "$rollon" "$(vline 14 ' mvp-roll=0')"
+want "X4VR_MVP_ROLL=0 -> said, not failed" /tmp/census-mvproll-asked.log roll "X4VR_MVP_ROLL=0, the pre-397 behaviour"
+if python3 tools/score_run.py /tmp/census-mvproll-asked.log 2>&1 | grep -q "drew WITHOUT the roll"; then
+    bad "X4VR_MVP_ROLL=0 -> FAILs"
+else
+    ok "X4VR_MVP_ROLL=0 -> no FAIL"
+fi
+plant /tmp/census-mvproll-old.log "$rollon" "$(vline 14 '')"
+want "pre-397 build -> says it cannot tell" /tmp/census-mvproll-old.log roll "does not report whether it takes the roll"
+grep -qF '"mvp-roll=%u]%s"' layer/x4vr_layer.cpp &&
+grep -qF '"mvp-sx=%u baked-sx=%u clip=%u cam-pos=%u "' layer/x4vr_layer.cpp &&
+grep -qF '"roll stereo: ON — the eye offset turns with the "' layer/x4vr_layer.cpp &&
+    ok "mvp roll: the planted lines match the layer's formats" ||
+    bad "mvp roll: the layer's format changed — replant the lines above"
+
 # ------------------------------------------------ our extensions (content.xml)
 srv='[  224600.000] inject  content: serving /h/.config/EgoSoft/X4/1/content-x4vrmod.xml in memory via fopen — x4vrmod_lookaround ENABLED (was off); your /h/.config/EgoSoft/X4/1/content.xml is not touched'
 plant_env /tmp/census-ext-ok.log 's/X4VR_POSE=0/X4VR_POSE=0 X4VR_EXTENSIONS=1/' "$srv"

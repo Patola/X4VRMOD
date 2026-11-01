@@ -16,6 +16,7 @@
 // this suite's cases are shaders the patch is *supposed* to leave alone -- so
 // the exit status is 0 either way and the runner reads the key.
 #include "../common/x4vr_spirv.hpp"
+#include "spirv_interp.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -218,9 +219,17 @@ int main(int argc, char **argv) {
                                            : x4vr::OffAxis{};
         const x4vr::OffAxis oar = argc > 10 ? parse_off_axis(argv[10])
                                             : x4vr::OffAxis{};
+        // Take 397: argv[11] is the roll set, as for vert-eye-offset, and "-"
+        // at 9 or 10 means absent so the roll case can be reached at all.
+        const uint32_t roll_set =
+            arg_given(argc, argv, 11)
+                ? (uint32_t)strtoul(argv[11], nullptr, 0)
+                : 0xffffffffu;
+        const bool have_oal = argc > 9 && strcmp(argv[9], "-") != 0;
+        const bool have_oar = argc > 10 && strcmp(argv[10], "-") != 0;
         const bool ok = x4vr::spv::patch_vertex_eye_offset_mvp(
             code, set, binding, member, dl, have_dr ? &dr : nullptr,
-            argc > 9 ? &oal : nullptr, argc > 10 ? &oar : nullptr);
+            have_oal ? &oal : nullptr, have_oar ? &oar : nullptr, roll_set, 0);
         printf("PATCHED=%d\n", ok ? 1 : 0);
         // A refusal that has already edited the module is worse than a wrong
         // patch: the caller falls back believing the code is untouched.
@@ -236,6 +245,163 @@ int main(int argc, char **argv) {
         fwrite(code.data(), 4, code.size(), f);
         fclose(f);
         return 0;
+    }
+
+    // Take 397: do the two vertex routes put the same vertex in the same place?
+    //
+    //     vert-eye-check <in.spv> [roll_set]
+    //
+    // <in.spv> must carry both a camera block at (1, 0) with M_projection as
+    // member 1 and a set-3 block with M_worldviewprojection as member 0 --
+    // sample_camera_block.vert.spv does -- so ONE module can be patched by
+    // both routes and run on the same inputs: X4's projection convention
+    // (row3 = [0 0 1 0], m[10] = 0, sy < 0), a rigid view, a uniform object
+    // scale. Rolls, head shifts and forward offsets are swept for both eyes.
+    //
+    //   live    patch_vertex_eye_offset,     roll on  (the camera-block route)
+    //   mvp     patch_vertex_eye_offset_mvp, roll on  (the fix)
+    //   control patch_vertex_eye_offset_mvp, roll OFF (takes <= 396)
+    //
+    // Passes when live and mvp agree with each other and with the formula,
+    // and the control DISAGREES with live -- the negative control that shows
+    // the check can see the defect it was written for.
+    if (strcmp(argv[1], "vert-eye-check") == 0) {
+        const std::vector<uint32_t> orig = load_spv(argv[2]);
+        if (orig.empty()) {
+            printf("FAIL=load\n");
+            return 1;
+        }
+        const uint32_t rset = arg_given(argc, argv, 3)
+                                  ? (uint32_t)strtoul(argv[3], nullptr, 0)
+                                  : 31u;
+        const float dl = -0.032f, dr = 0.032f;
+        std::vector<uint32_t> live = orig, mvp = orig, ctrl = orig;
+        if (!x4vr::spv::patch_vertex_eye_offset(live, 1, 0, 1, dl, &dr, nullptr,
+                                                nullptr, rset, 0) ||
+            !x4vr::spv::patch_vertex_eye_offset_mvp(mvp, 3, 0, 0, dl, &dr,
+                                                    nullptr, nullptr, rset, 0) ||
+            !x4vr::spv::patch_vertex_eye_offset_mvp(ctrl, 3, 0, 0, dl, &dr)) {
+            printf("FAIL=patch_refused\n");
+            return 1;
+        }
+        auto mat_mul = [](const float *a, const float *b, float *o) {
+            for (int c = 0; c < 4; c++)
+                for (int r = 0; r < 4; r++) {
+                    float s = 0.f;
+                    for (int k = 0; k < 4; k++)
+                        s += a[k * 4 + r] * b[c * 4 + k];
+                    o[c * 4 + r] = s;
+                }
+        };
+        auto put_mat = [](std::vector<uint8_t> &buf, size_t off, const float *m) {
+            memcpy(&buf[off], m, 64);
+        };
+        const float sxy[][2] = {{0.7404f, -0.7404f}, {1.4917f, -1.2003f},
+                                {29.18f, -29.18f}};
+        const float rolls[] = {0.0f, 2.3f, -15.0f, 45.0f};
+        const float shifts[][2] = {{0.f, 0.f}, {0.021f, -0.013f}};
+        const float fwds[] = {0.0f, 0.11f};
+        const float scales[] = {1.0f, 3.5f};
+        const float poss[][3] = {{0.3f, -0.2f, 0.5f}, {-1.1f, 0.7f, 2.0f}};
+        int checked = 0, failed_runs = 0;
+        double worst = 0, worst_ref = 0, ctrl_worst = 0;
+        std::string why;
+        for (const auto &s : sxy)
+            for (float roll : rolls)
+                for (const auto &sh : shifts)
+                    for (float f : fwds)
+                        for (float sc : scales)
+                            for (const auto &p : poss)
+                                for (int view = 0; view < 2; view++) {
+            // P: X4's convention. VW: a rigid view, here yaw 20 pitch -10
+            // roll 5 and a translation. S: uniform object scale.
+            float P[16] = {}, VW[16] = {}, S[16] = {}, VWS[16], MVP[16];
+            P[0] = s[0];
+            P[5] = s[1];
+            P[2 * 4 + 3] = 1.0f;
+            P[3 * 4 + 2] = 0.1f;
+            const float y = 20.f * 0.0174533f, x = -10.f * 0.0174533f,
+                        z = 5.f * 0.0174533f;
+            const float cy = cosf(y), sy = sinf(y), cx = cosf(x), sx_ = sinf(x),
+                        cz = cosf(z), sz = sinf(z);
+            // R = Ry * Rx * Rz, column-major.
+            const float R[9] = {cy * cz + sy * sx_ * sz, cx * sz, -sy * cz + cy * sx_ * sz,
+                                -cy * sz + sy * sx_ * cz, cx * cz, sy * sz + cy * sx_ * cz,
+                                sy * cx, -sx_, cy * cx};
+            for (int c = 0; c < 3; c++)
+                for (int r = 0; r < 3; r++)
+                    VW[c * 4 + r] = R[c * 3 + r];
+            VW[12] = 0.4f, VW[13] = -0.25f, VW[14] = 3.0f, VW[15] = 1.0f;
+            S[0] = S[5] = S[10] = sc;
+            S[15] = 1.0f;
+            mat_mul(VW, S, VWS);
+            mat_mul(P, VWS, MVP);
+            const float I[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+            x4vr::PoseBlock pb = x4vr::pose_identity();
+            const float phi = roll * 0.0174533f;
+            pb.eye_ofs[0] = cosf(phi);
+            pb.eye_ofs[1] = sinf(phi);
+            pb.eye_ofs[2] = sh[0];
+            pb.eye_ofs[3] = sh[1];
+            pb.head_fwd[0] = f;
+
+            auto run = [&](const std::vector<uint32_t> &code, float out[4]) {
+                x4vr::interp::Machine m;
+                std::vector<uint8_t> cam(256), world(64), pose(sizeof pb);
+                put_mat(cam, 0, I);
+                put_mat(cam, 64, P);
+                put_mat(cam, 128, I);
+                put_mat(cam, 192, I);
+                put_mat(world, 0, MVP);
+                memcpy(pose.data(), &pb, sizeof pb);
+                m.buffers[{1, 0}] = cam;
+                m.buffers[{3, 0}] = world;
+                m.buffers[{rset, 0}] = pose;
+                m.input_location[0] = {p[0], p[1], p[2]};
+                m.view_index = view;
+                if (!m.run(code, 0 /* Vertex */)) {
+                    why = m.error;
+                    return false;
+                }
+                memcpy(out, m.position, sizeof m.position);
+                return true;
+            };
+            float a[4], b[4], c[4];
+            if (!run(live, a) || !run(mvp, b) || !run(ctrl, c)) {
+                failed_runs++;
+                continue;
+            }
+            // The formula, from the inputs alone.
+            float ref[4];
+            for (int r = 0; r < 4; r++)
+                ref[r] = MVP[0 * 4 + r] * p[0] + MVP[1 * 4 + r] * p[1] +
+                         MVP[2 * 4 + r] * p[2] + MVP[3 * 4 + r];
+            const float d = view ? dr : dl;
+            ref[0] -= s[0] * d * cosf(phi) + s[0] * sh[0];
+            ref[1] -= s[1] * d * sinf(phi) + s[1] * sh[1];
+            ref[3] -= f;
+            double mag = 1.0;
+            for (float v : ref)
+                mag = std::max(mag, (double)fabsf(v));
+            double e_ab = 0, e_ref = 0, e_ctrl = 0;
+            for (int k = 0; k < 4; k++) {
+                e_ab = std::max(e_ab, (double)fabsf(a[k] - b[k]) / mag);
+                e_ref = std::max(e_ref, (double)std::max(fabsf(a[k] - ref[k]),
+                                                         fabsf(b[k] - ref[k])) / mag);
+                e_ctrl = std::max(e_ctrl, (double)fabsf(a[k] - c[k]) / mag);
+            }
+            worst = std::max(worst, e_ab);
+            worst_ref = std::max(worst_ref, e_ref);
+            ctrl_worst = std::max(ctrl_worst, e_ctrl);
+            checked++;
+        }
+        const bool ok = !failed_runs && checked > 0 && worst <= 2e-5 &&
+                        worst_ref <= 2e-5 && ctrl_worst > 1e-3;
+        printf("CHECKED=%d WORST=%.3g WORST_REF=%.3g CONTROL_WORST=%.3g%s%s\n",
+               checked, worst, worst_ref, ctrl_worst,
+               failed_runs ? " RUN_FAILED=" : "", failed_runs ? why.c_str() : "");
+        printf("%s\n", ok ? "PASS" : "FAIL");
+        return ok ? 0 : 1;
     }
 
     // Does the emitted SPIR-V compute what common/x4vr_view.hpp says it does?

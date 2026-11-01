@@ -29660,3 +29660,85 @@ clears and copies into the UI image, and the load ops.
 
 Takes 387/388 still stand: the menu text in the rendered frame is crisp; a
 filtered version only smooths its edges.
+
+## Takes 390–396 (2026-10-31/11-01): step 2 accepted, then the Manticore flicker bisected
+
+**Take 390, step 2 (version, static runtime, one `x4vrmod` extension):
+accepted.** Both libraries logged `v0.9.8-14-g68a9c38`; the fork served
+`x4vrmod ENABLED (added), x4vrmod_lookaround retired, already disabled`; the
+write armed with X4 reading 180/75; sway 0.00 deg. Two unrelated FAILs, left
+alone: a 1.2 s HUD-down period after Shift+H read as the cinematic view (no
+overlay to bind), and a 0.7 s off-seat menu period whose canvas never
+switched before it closed. **Take 391** settled Patola's F2 report as X4's own
+rule: off the pilot seat the interact menu adds the ship he stands in to the
+selection (`menu_interactmenu.lua`, onShowMenu; teleport shows only when
+piloting). He keeps X4's behaviour.
+
+**The flicker.** Inside a Manticore in Windfall III (less in a Hyperion) the
+interior lighting flickered; vanilla is stable. His headset recording (one
+eye, 90 Hz) showed whole lights switching between three discrete states about
+13 times a second **with the head still** (under half a degree of image
+motion from 4 to 7 s) — pink nebula light on a surface in one frame, a white
+interior light on it in the next. Ruled out on the way, each by one run or by
+reading X4's code:
+
+| run | what was off | flicker |
+|---|---|---|
+| 392 | the headset (`X4VR_VR=0`; everything else on, desktop) | no |
+| 393 | everything but X4's field and eye shape (`X4VR_DEFAULTS=0 X4VR_FOV=1.4917 X4VR_RES=2816x2816`) | no |
+| kim | nothing (the shipping line in VR) | **yes** |
+| 394 | head-look on foot (`X4VR_HEADLOOK_FOOT=0`) | **yes**, standing and seated |
+| 395 | everything that reacts to the head (`X4VR_HEADLOOK=0 X4VR_HEADLOOK_WRITE=0 X4VR_ROLL_STEREO=0 X4VR_HEAD_6DOF=0`) | no |
+| 396 | roll compensation (`X4VR_ROLL_STEREO=0`; the head-position offset refuses with it) | no |
+
+Also ruled out: GPU queries (X4 names none), `GetCameraRotation` on the
+present thread (a pure read of a per-thread transform buffer, 0x1925bf0),
+the pose declared to WiVRn and the IPD (they move the finished image only),
+uneven VR frame pacing (395 alternated 16/30 ms frames and did not flicker),
+and the pose channel's regions (every region holds identity or the current
+pose; 1245/1245 pipelines bound).
+
+**The cause: two vertex routes, only one of them rolled.** World vertex
+modules get the eye offset by one of two patches. 292 read `sx` from the
+camera block (`patch_vertex_eye_offset`, "live-sx"), and since task #77 turn
+the offset with the head's roll and add the head's shift and forward offset
+from the pose slot. 14 (24 in the 10-28 dump) have no camera block and
+recover `sx` from `M_worldviewprojection` (`patch_vertex_eye_offset_mvp`,
+"mvp-sx"): those took **no** roll and no head slot. X4's depth-only technique
+(`depth.vert`: `gl_Position = M_worldviewprojection * pos`) and a
+position-only constant-colour pass (mod-0020) are among them. Under any head
+tilt they drew `d*sin(roll)` off every other pass in y, and with the tracked
+roll jittering from frame to frame the passes that compare depth over the
+same surfaces disagreed differently every frame.
+
+## Take 397 — PREDICTIONS (written before the run): the mvp route takes the roll
+
+**Built.** `patch_vertex_eye_offset_mvp` takes a `roll_set` and emits the
+twin's arithmetic operation for operation: `x -= sx*d*cos + sx*head_x`,
+`y -= sy*d*sin + sy*head_y` with `sy` recovered as #35 recovers it, and the
+forward offset as `w -= f` (X4's `row3(P) = [0 0 1 0]`, `m[10] = 0` make the
+twin's z term zero and its w term exactly `f`). Refused with the off-axis map,
+as the twin is. `X4VR_MVP_ROLL=0` restores takes ≤ 396. The patched-vertex
+line gains `mvp-roll=N`; the scorer FAILs a roll-stereo run where it is below
+`mvp-sx`.
+
+**Checked before the take:**
+* roll absent: byte-identical output on all 24 of X4's mvp modules and on
+  both fixtures, against the pre-change build;
+* roll present: all 24 of X4's mvp modules validate;
+* `vert-eye-check` (new, `tests/spirv_interp.hpp`): one fixture patched by
+  both routes and **run** on X4-shaped inputs — 384 cases (three zooms, rolls
+  0/2.3/−15/45 deg, head shifts, forward offsets, object scales 1 and 3.5,
+  both eyes): the routes agree to 3e-9 and both match the formula; the
+  roll-less mvp route (the negative control) is off by up to 4.9 %;
+* GPU harness 234/234, census and every suite.
+
+**Predictions (the shipping line, nothing added):**
+* **P397.1** standing in the Manticore, head still or moving: **no flicker**.
+  Refuted if it flickers as in kim — then the mvp route was not the only
+  pass off the rolled geometry.
+* **P397.2** the log's last patched-vertex line reads `mvp-roll` equal to
+  `mvp-sx` (about 14); the scorer prints `mvp route: N of N`.
+* **P397.3** nothing else changes: scorer as take 390 (the two unrelated
+  FAILs may recur only if the same moments recur), stereo comfortable under
+  tilt.

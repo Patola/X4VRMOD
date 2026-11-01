@@ -2537,6 +2537,28 @@ def main(path):
               "disparity should stay HORIZONTAL: close one eye, then the "
               "other, and the two images must differ side-to-side, never one "
               "above the other")
+        # Take 397: the mvp route (X4's depth-only technique among it) must
+        # take the roll too, or its passes draw a hair off every other pass
+        # under tilt and interior lights flicker (takes 391-396). Builds
+        # before take 397 print no mvp-roll count and are said to, not failed.
+        mr = re.findall(r"mvp-sx=(\d+) baked-sx=\d+ clip=\d+ cam-pos=\d+ "
+                        r"mvp-roll=(\d+)\]", text)
+        mvp_off = bool(re.search(r"\bX4VR_MVP_ROLL=0\b", run or ""))
+        if mr:
+            n_mvp, n_rolled = (int(x) for x in mr[-1])
+            print(f"roll    mvp route: {n_rolled} of {n_mvp} module(s) turn the "
+                  f"offset with the roll"
+                  + (" — X4VR_MVP_ROLL=0, the pre-397 behaviour, asked for"
+                     if mvp_off else ""))
+            if not mvp_off and n_rolled < n_mvp:
+                fails.append(
+                    f"roll stereo is on but {n_mvp - n_rolled} of {n_mvp} "
+                    f"mvp-route module(s) drew WITHOUT the roll: their passes "
+                    f"sit off every other pass under head tilt, the cause of "
+                    f"the interior-light flicker of takes 391-396")
+        elif re.search(r"mvp-sx=\d+", text):
+            print("roll    mvp route: this build does not report whether it "
+                  "takes the roll (before take 397, when it did not)")
     elif "roll stereo: ASKED FOR BUT INACTIVE" in text:
         fails.append(
             "X4VR_ROLL_STEREO was set but the pose channel is down, so nothing "

@@ -2567,14 +2567,37 @@ inline bool patch_vertex_eye_offset(std::vector<uint32_t> &code, uint32_t set,
 ///
 /// Without #35 requested, the emitted words are byte-identical to the pre-#35
 /// ones, as in `patch_vertex_eye_offset`.
+///
+/// **Task #77 and X4VR_HEAD_6DOF, the same terms as the twin** (take 397).
+/// Until take 396 this route took no `roll_set`, so under any head tilt its
+/// modules drew with the offset along image-x while every camera-block module
+/// turned it, and they ignored the head's shift and forward offset too. X4's
+/// depth-only technique (`depth.vert`: M_worldviewprojection and nothing else)
+/// is one of these modules, so two passes over the same surfaces disagreed by
+/// d*sin(roll) in y, and with the tracked roll jittering frame to frame whole
+/// lights in a ship's interior flickered on and off (Patola's Manticore,
+/// takes 391-396; X4VR_ROLL_STEREO=0 alone removed it).
+///
+/// The arithmetic is the twin's, operation for operation, with `sx` and `sy`
+/// recovered rather than read: `sy` exactly as #35 recovers it. The forward
+/// offset needs P22 and P23, which the block does not carry; X4's projection
+/// (`row3(P) = [0 0 1 0]`, `m[10] = 0`, the same convention the `sx` recovery
+/// rests on) makes the twin's `z -= P22*P23*f` zero and its `w -= P23*P23*f`
+/// exactly `w -= f`, so that is what is emitted. Refused with the off-axis
+/// affine, as in the twin. With no `roll_set` not one word changes.
 inline bool patch_vertex_eye_offset_mvp(std::vector<uint32_t> &code,
                                         uint32_t set, uint32_t binding,
                                         uint32_t member, float d_left,
                                         const float *d_right = nullptr,
                                         const OffAxis *oa_left = nullptr,
-                                        const OffAxis *oa_right = nullptr) {
+                                        const OffAxis *oa_right = nullptr,
+                                        uint32_t roll_set = 0xffffffffu,
+                                        uint32_t roll_binding = 0) {
     std::vector<Inst> insts;
     if (!iterate(code, insts))
+        return false;
+    // The twin's refusal, for the twin's reason.
+    if (roll_set != 0xffffffffu && oa_left != nullptr)
         return false;
 
     uint32_t bound = code[3];
@@ -2849,6 +2872,21 @@ inline bool patch_vertex_eye_offset_mvp(std::vector<uint32_t> &code,
                 c_oad[i] = fconst(r[i] - l[i]);
         }
     }
+    // The twin's PoseBlock view -- eye_ofs at 192, head_fwd at 208 -- declared
+    // after everything above so the roll-off words stay what they were.
+    const bool roll_on = roll_set != 0xffffffffu;
+    uint32_t roll_var = 0, ptr_uniform_v4 = 0, t_rollblock = 0;
+    if (roll_on) {
+        t_rollblock = new_id();
+        emit(decls, OpTypeStruct, {t_rollblock, t_v4, t_v4});
+        const uint32_t ptr_rollblock = new_id();
+        emit(decls, OpTypePointer,
+             {ptr_rollblock, StorageClassUniform, t_rollblock});
+        roll_var = new_id();
+        emit(decls, OpVariable, {ptr_rollblock, roll_var, StorageClassUniform});
+        ptr_uniform_v4 = new_id();
+        emit(decls, OpTypePointer, {ptr_uniform_v4, StorageClassUniform, t_v4});
+    }
 
     const size_t anno_at = last_annotation_end
                                ? last_annotation_end
@@ -2878,6 +2916,15 @@ inline bool patch_vertex_eye_offset_mvp(std::vector<uint32_t> &code,
         if (need_view && in.start == anno_at)
             emit(out, OpDecorate,
                  {view_var, DecorationBuiltIn, BuiltInViewIndex});
+        if (roll_on && in.start == anno_at) {
+            emit(out, OpDecorate, {t_rollblock, DecorationBlock});
+            emit(out, OpMemberDecorate,
+                 {t_rollblock, 0u, DecorationOffset, x4vr::kPoseEyeOfsOffset});
+            emit(out, OpMemberDecorate,
+                 {t_rollblock, 1u, DecorationOffset, x4vr::kPoseHeadFwdOffset});
+            emit(out, OpDecorate, {roll_var, DecorationDescriptorSet, roll_set});
+            emit(out, OpDecorate, {roll_var, DecorationBinding, roll_binding});
+        }
         if (in.start == first_fn)
             out.insert(out.end(), decls.begin(), decls.end());
 
@@ -2923,8 +2970,9 @@ inline bool patch_vertex_eye_offset_mvp(std::vector<uint32_t> &code,
             const uint32_t n3 = sq_len3(c_row3);
             // row 1 for |sy|, by the same argument that gives |sx| from row 0.
             // Emitted after n3 so that with #35 unrequested the instruction
-            // stream is exactly what it was before.
-            const uint32_t n1 = oa_on ? sq_len3(c_col[1]) : 0;
+            // stream is exactly what it was before. The roll needs sy too.
+            const bool need_sy = oa_on || roll_on;
+            const uint32_t n1 = need_sy ? sq_len3(c_col[1]) : 0;
 
             // sx = n3 > 0 ? sqrt(n0/n3) : 0, written exactly as the host-side
             // `recover` in tests/view_math.cpp so the two cannot drift. The
@@ -2949,7 +2997,7 @@ inline bool patch_vertex_eye_offset_mvp(std::vector<uint32_t> &code,
             // measured Y-flip -- see this function's doc comment, which is
             // where the 35,783 samples behind that minus are recorded.
             uint32_t sy = 0;
-            if (oa_on) {
+            if (need_sy) {
                 const uint32_t qy = new_id();
                 emit(out, OpFDiv, {t_float, qy, n1, den});
                 const uint32_t rooty = new_id();
@@ -2979,8 +3027,35 @@ inline bool patch_vertex_eye_offset_mvp(std::vector<uint32_t> &code,
                 emit(out, OpFAdd, {t_float, d, c_dl, scaled});
             }
 
-            const uint32_t delta = new_id();
-            emit(out, OpFMul, {t_float, delta, sx, d});
+            // (cos roll, sin roll, head_x, head_y), loaded as the twin does.
+            uint32_t roll_c = 0, roll_s = 0, shift_x = 0, shift_y = 0;
+            if (roll_on) {
+                const uint32_t p_rc = new_id();
+                emit(out, OpAccessChain,
+                     {ptr_uniform_v4, p_rc, roll_var, c_col[0]});
+                const uint32_t rcs = new_id();
+                emit(out, OpLoad, {t_v4, rcs, p_rc});
+                roll_c = new_id();
+                emit(out, OpCompositeExtract, {t_float, roll_c, rcs, 0});
+                roll_s = new_id();
+                emit(out, OpCompositeExtract, {t_float, roll_s, rcs, 1});
+                shift_x = new_id();
+                emit(out, OpCompositeExtract, {t_float, shift_x, rcs, 2});
+                shift_y = new_id();
+                emit(out, OpCompositeExtract, {t_float, shift_y, rcs, 3});
+            }
+
+            const uint32_t delta_base = new_id();
+            emit(out, OpFMul, {t_float, delta_base, sx, d});
+            uint32_t delta = delta_base;
+            if (roll_on) {
+                const uint32_t dcos = new_id();
+                emit(out, OpFMul, {t_float, dcos, delta_base, roll_c});
+                const uint32_t tsx = new_id();
+                emit(out, OpFMul, {t_float, tsx, sx, shift_x});
+                delta = new_id();
+                emit(out, OpFAdd, {t_float, delta, dcos, tsx});
+            }
 
             const uint32_t ptr = via_struct ? new_id() : pos_var;
             if (via_struct)
@@ -2993,6 +3068,23 @@ inline bool patch_vertex_eye_offset_mvp(std::vector<uint32_t> &code,
             const uint32_t nx = new_id();
             emit(out, OpFSub, {t_float, nx, x, delta});
 
+            // y -= sy*d*sin + sy*head_y, the twin's y half.
+            uint32_t ny = 0;
+            if (roll_on) {
+                const uint32_t dy0 = new_id();
+                emit(out, OpFMul, {t_float, dy0, sy, d});
+                const uint32_t dsin = new_id();
+                emit(out, OpFMul, {t_float, dsin, dy0, roll_s});
+                const uint32_t tsy = new_id();
+                emit(out, OpFMul, {t_float, tsy, sy, shift_y});
+                const uint32_t dy = new_id();
+                emit(out, OpFAdd, {t_float, dy, dsin, tsy});
+                const uint32_t y = new_id();
+                emit(out, OpCompositeExtract, {t_float, y, loaded, 1});
+                ny = new_id();
+                emit(out, OpFSub, {t_float, ny, y, dy});
+            }
+
             uint32_t np;
             if (oa_on) {
                 OffAxisIds t = oa;
@@ -3004,6 +3096,29 @@ inline bool patch_vertex_eye_offset_mvp(std::vector<uint32_t> &code,
             } else {
                 np = new_id();
                 emit(out, OpCompositeInsert, {t_v4, np, nx, loaded, 0});
+                if (roll_on) {
+                    const uint32_t np2 = new_id();
+                    emit(out, OpCompositeInsert, {t_v4, np2, ny, np, 1});
+                    np = np2;
+                }
+            }
+            // The forward offset f (head_fwd.x): w -= f, the twin's
+            // w -= P23*P23*f with X4's P23 = 1; its z term is P22 = 0.
+            if (roll_on) {
+                const uint32_t p_fw = new_id();
+                emit(out, OpAccessChain,
+                     {ptr_uniform_v4, p_fw, roll_var, c_col[1]});
+                const uint32_t fw4 = new_id();
+                emit(out, OpLoad, {t_v4, fw4, p_fw});
+                const uint32_t f = new_id();
+                emit(out, OpCompositeExtract, {t_float, f, fw4, 0});
+                const uint32_t w0 = new_id();
+                emit(out, OpCompositeExtract, {t_float, w0, np, 3});
+                const uint32_t nw = new_id();
+                emit(out, OpFSub, {t_float, nw, w0, f});
+                const uint32_t np3 = new_id();
+                emit(out, OpCompositeInsert, {t_v4, np3, nw, np, 3});
+                np = np3;
             }
             emit(out, OpStore, {ptr, np});
         }
