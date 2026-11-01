@@ -2576,23 +2576,38 @@ def main(path):
                       r"up to (\d+) command buffer\(s\) recorded per X4 frame, "
                       r"(\d+) reuse\(s\), youngest (-?\d+) frame\(s\), "
                       r"(?:(\d+) within the same frame \(same pose\), "
-                      r"(\d+) from 1-2 frames before|(\d+) younger than 3)", text)
+                      r"(\d+) from 1-2 frames before|(\d+) younger than 3)"
+                      r"(?:, (\d+) skipped as recently published, (\d+) "
+                      r"resubmit\(s\) without re-recording, (\d+) "
+                      r"publish\(es\) into a region another buffer holds)?",
+                      text)
     if ring:
-        _w, n_reg, how, per_frame, reuses, youngest, same, risky, old_young = ring[-1]
+        (_w, n_reg, how, per_frame, reuses, youngest, same, risky, old_young,
+         skipped, resub, stolen) = ring[-1]
         risky = int(risky or old_young or 0)
+        stolen = int(stolen or 0)
         old = bool(re.search(r"\bX4VR_POSE_FRAME=0\b", run or ""))
         print(f"pose-ring  {n_reg} region(s){how}; up to {per_frame} command "
               f"buffer(s) per X4 frame; {reuses} reuse(s), youngest "
               f"{youngest} frame(s)"
               + (f", {same} within the same frame (same pose)" if same else "")
-              + f", {risky} from 1-2 frames before")
+              + f", {risky} from 1-2 frames before"
+              + (f"; {skipped} skipped as recently published, {resub} "
+                 f"resubmit(s) without re-recording, {stolen} publish(es) "
+                 f"into a region another buffer holds" if skipped else ""))
         if risky > 0 and not old:
             fails.append(f"the pose ring handed {risky} region(s) to a new "
                          f"buffer 1-2 frames after a buffer that may still be "
                          f"in flight read them (youngest {youngest}): it reads "
                          f"the next frame's pose, the interior-light flicker of "
                          f"takes 391-398. The ring ({n_reg}) is too small for "
-                         f"{per_frame} buffers per frame")
+                         f"{per_frame} buffers per frame, or a holder kept "
+                         f"publishing")
+        if stolen > 0 and not old:
+            fails.append(f"{stolen} publish(es) went into a pose region the "
+                         f"ring had handed to another buffer: two buffers in "
+                         f"flight shared one region, the interior-light "
+                         f"flicker of takes 391-398")
     elif "roll stereo: ASKED FOR BUT INACTIVE" in text:
         fails.append(
             "X4VR_ROLL_STEREO was set but the pose channel is down, so nothing "

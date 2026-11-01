@@ -7913,6 +7913,16 @@ struct PoseChannel {
     uint64_t begins_frame = 0, begins_frame_at = UINT64_MAX, begins_frame_max = 0;
     uint64_t reuses = 0, young_reuses = 0, same_frame_reuses = 0,
              min_age = UINT64_MAX;
+    // Take 401. Who holds each region now; a region published within 3
+    // frames is skipped when the ring comes round (take 400 still saw 202
+    // young reuses at 1024 regions and 93 buffers per frame -- a wrap needs
+    // ~11 frames, so the young ones were regions their holder kept
+    // publishing: a buffer X4 submits again without re-recording, or long
+    // after recording). Counted: the skips, those resubmits, and publishes
+    // into a region the ring has since handed to another buffer.
+    VkCommandBuffer region_owner[kPoseRegions] = {};
+    std::unordered_map<VkCommandBuffer, uint32_t> cb_pubs;
+    uint64_t skipped = 0, resubmits = 0, stolen = 0;
     PoseChannel() { std::fill(std::begin(region_frame), std::end(region_frame), UINT64_MAX); }
     // The counters the acceptance check reads. `pipes_seen` against
     // `pipes_extended` must be EQUAL: a pipeline that missed the substitution
@@ -8372,6 +8382,10 @@ void pose_publish(VkCommandBuffer cb) {
     // first submit, so it is as fresh as before for the first buffer and the
     // same for the rest.
     const uint64_t now = g_pose.frame.load(std::memory_order_relaxed);
+    if (g_pose.cb_pubs[cb]++ > 0)
+        g_pose.resubmits++;
+    if (g_pose.region_owner[it->second] != cb)
+        g_pose.stolen++;
     const x4vr::PoseBlock *src = &g_pose.value;
     if (pose_frame_fix()) {
         if (g_pose.latched_frame != now) {
@@ -8392,7 +8406,9 @@ void pose_ring_report(const char *when) {
     X4VR_LOG("pose ring (%s): %u region(s)%s, up to %llu command buffer(s) "
              "recorded per X4 frame, %llu reuse(s), youngest %lld frame(s), "
              "%llu within the same frame (same pose), %llu from 1-2 frames "
-             "before — %s",
+             "before, %llu skipped as recently published, %llu resubmit(s) "
+             "without re-recording, %llu publish(es) into a region another "
+             "buffer holds — %s",
              when, pose_ring(),
              pose_frame_fix() ? ", one pose per frame"
                               : " (X4VR_POSE_FRAME=0: takes <= 398)",
@@ -8401,7 +8417,10 @@ void pose_ring_report(const char *when) {
              g_pose.min_age == UINT64_MAX ? -1LL : (long long)g_pose.min_age,
              (unsigned long long)g_pose.same_frame_reuses,
              (unsigned long long)g_pose.young_reuses,
-             g_pose.young_reuses
+             (unsigned long long)g_pose.skipped,
+             (unsigned long long)g_pose.resubmits,
+             (unsigned long long)g_pose.stolen,
+             g_pose.young_reuses || g_pose.stolen
                  ? "a region came back while a buffer may still read it"
                  : "no region came back while a buffer could still read it");
 }
@@ -13230,9 +13249,22 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
     // published. Under 3 a submitted buffer may still be reading it.
     if (pose_active()) {
         std::lock_guard<std::mutex> lock(g_pose.mu);
-        const uint32_t r = (uint32_t)(g_pose.next_region++ % pose_ring());
-        g_pose.cb_region[cb] = r;
         const uint64_t now = g_pose.frame.load(std::memory_order_relaxed);
+        uint32_t r = (uint32_t)(g_pose.next_region++ % pose_ring());
+        // Take 401: go round regions their holder published in the last 3
+        // frames. Bounded by the ring; if every region is young (it never
+        // should be) the last one is taken and counted below as young.
+        if (pose_frame_fix())
+            for (uint32_t tries = 1; tries < pose_ring(); tries++) {
+                const uint64_t pf = g_pose.region_frame[r];
+                if (pf == UINT64_MAX || now - pf >= 3)
+                    break;
+                g_pose.skipped++;
+                r = (uint32_t)(g_pose.next_region++ % pose_ring());
+            }
+        g_pose.cb_region[cb] = r;
+        g_pose.region_owner[r] = cb;
+        g_pose.cb_pubs[cb] = 0;
         if (g_pose.begins_frame_at != now) {
             g_pose.begins_frame_at = now;
             g_pose.begins_frame = 0;
@@ -16898,6 +16930,9 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyDevice(
         g_pose.host = nullptr;
         g_pose.pipe_layout.clear();
         g_pose.cb_region.clear();
+        g_pose.cb_pubs.clear();
+        std::fill(std::begin(g_pose.region_owner), std::end(g_pose.region_owner),
+                  VkCommandBuffer{});
     }
     if (probe_hooks_wanted() && g_mv && g_active) {
         std::lock_guard<std::mutex> lock(g_mu);

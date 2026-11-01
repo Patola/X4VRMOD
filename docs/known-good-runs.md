@@ -1104,5 +1104,7 @@ pose ring of 256, the fragment reconstruction undoing the seated forward
 offset, the mvp route rolled. Patola: no flicker standing, leaning, walking,
 seated, in the Manticore and the Hyperion. The scorer's `pose-ring` line
 measured up to 94 command buffers per frame and failed the 256-region ring
-on 1289 early reuses; v0.9.9 ships 1024 regions (e036a65), not yet run in
-the game — the next session's `pose-ring` line is its check.
+on 1289 early reuses. Take 400 (1024 regions, e036a65): no flicker anywhere
+by Patola's eye, but 202 reuses 1-2 frames old — regions whose holder kept
+publishing (a buffer submitted again without re-recording). v0.9.9's ring
+skips any region published in the last 3 frames; take 401 checks it.

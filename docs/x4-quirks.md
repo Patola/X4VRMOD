@@ -29850,3 +29850,21 @@ frames old still hands a buffer in flight the next frame's pose, so:
 
 Not yet run in the game: the next session's `pose-ring` line is its check
 (expected: 0 from 1-2 frames before).
+
+## Take 400 — the v0.9.9 build (2026-11-01): no flicker by eye, 202 young reuses by the instrument
+
+Patola: "Everything is perfect right now, no flicker anywhere" (Manticore,
+Hyperion, cockpit, map, Pause and ESC). Scorer: build v0.9.9 both libraries,
+x4vrmod served, 18/18 mvp modules rolled, but `pose-ring` FAILED: 1024
+regions, up to 93 buffers per frame, **202 reuses 1–2 frames old**. A wrap of
+1024 needs ~11 such frames, so these are not the ring coming round too fast:
+they are regions whose holder kept publishing after the ring passed it — a
+command buffer X4 submits again without re-recording (or submits long after
+recording). Not pushed.
+
+**Take 401's build:** the ring skips any region published within the last 3
+frames (a holder that publishes every frame keeps its region), and counts
+skips, resubmits without re-recording, and publishes into a region the ring
+has handed to another buffer (failed by the scorer). Predictions: 0 from
+1–2 frames before, 0 shared-region publishes, resubmits > 0 (the
+explanation above), and still no flicker.
