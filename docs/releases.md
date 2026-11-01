@@ -24,10 +24,10 @@ on the remote beside their `take-NNN-name` twins.
 
 ## v0.9.9 — 2026-11-01 — the shipping line is the default; interior lights no longer flicker
 
-The state of take 401: take 399's fix (`take-399-pose-ring`, commit 0b2fe36)
-with the pose ring at 1024 regions that go round any region published in
-the last 3 frames, which takes 399 and 400's own measurements asked for.
-Patola:
+The state of take 402: take 399's fix (`take-399-pose-ring`, commit 0b2fe36)
+with the pose ring at 1024 regions, each held until its command buffer is
+recorded again or freed, which the ring's own measurements in takes 399–401
+asked for. Patola:
 * take 385: *"All working."* (the bare launcher, 47 defaults);
 * take 399: *"this bug seems to have been fixed for good"* — standing still,
   leaning, walking, seated glancing back, and in a Hyperion as well as the
@@ -77,14 +77,16 @@ Patola:
     queued buffer still read it: its lighting saw a newer head pose than its
     depth pass, and shadow tests on grazing surfaces flipped.
   * **The fix.** One set of head values per X4 frame, and a ring of 1024
-    regions that skips any region a buffer published in the last 3 frames:
-    X4 submits some command buffers again without re-recording them, and
-    those keep their region. Each run logs how soon regions come back
-    (`pose ring`); the scorer fails a reuse 1–2 frames old and a buffer
-    publishing into a region another one holds. `X4VR_POSE_FRAME=0` restores
-    the old ring. Take 399 ran 256 regions and logged up to 94 command buffers
-    per frame; take 400 ran 1024 and still logged 202 young reuses, from
-    those resubmitted buffers.
+    regions in which each region stays with its command buffer until X4
+    records that buffer again or frees it. Vulkan forbids either while the
+    buffer may still run, so a released region is free by the API's own
+    rule. X4 submits many buffers again without re-recording them (26,936
+    times in take 401), and those keep their region. Each run logs the ring
+    (`pose ring`); the scorer fails any two buffers sharing a region.
+    `X4VR_POSE_FRAME=0` restores the old ring. The ring's own measurements
+    drove each step: take 399 (256 regions, up to 94 buffers per frame),
+    take 400 (1024, still 202 early reuses) and take 401 (an age rule that
+    handed on the region of a buffer resubmitted every few frames).
   * **Also fixed on the way:**
     * the lighting passes' position reconstruction now undoes the seated
       forward offset. It ignored a seated lean and placed lit pixels up to

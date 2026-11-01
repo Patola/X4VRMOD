@@ -2572,7 +2572,28 @@ def main(path):
     # Take 399's own build (256 regions) printed one "younger than 3" count;
     # it is read too, as the risky count it then was. Gate on intent:
     # X4VR_POSE_FRAME=0 asks for the old ring of 4.
-    ring = re.findall(r"pose ring \((final|periodic)\): (\d+) region\(s\)(.*?), "
+    # Take 402: regions are held until their buffer is recorded again or
+    # freed, so age no longer decides; two buffers sharing a region does.
+    ring402 = re.findall(r"pose ring \((final|periodic)\): (\d+) region\(s\)(.*?), "
+                         r"up to (\d+) command buffer\(s\) recorded per X4 "
+                         r"frame, (\d+) region\(s\) held at most, (\d+) "
+                         r"resubmit\(s\) without re-recording, (\d+) forced "
+                         r"\(no free region\), (\d+) publish\(es\) into a "
+                         r"region another buffer holds", text)
+    if ring402:
+        _w, n_reg, how, per_frame, held, resub, forced, stolen = ring402[-1]
+        old = bool(re.search(r"\bX4VR_POSE_FRAME=0\b", run or ""))
+        print(f"pose-ring  {n_reg} region(s){how}; up to {per_frame} command "
+              f"buffer(s) per X4 frame, {held} region(s) held at most, "
+              f"{resub} resubmit(s) without re-recording, {forced} forced, "
+              f"{stolen} publish(es) into a region another buffer holds")
+        if not old and (int(forced) or int(stolen)):
+            fails.append(f"the pose ring had two buffers share a region "
+                         f"({forced} forced with no free region, {stolen} "
+                         f"publish(es) into a region another buffer holds): "
+                         f"one of them reads the other's frame, the "
+                         f"interior-light flicker of takes 391-398")
+    ring = [] if ring402 else re.findall(r"pose ring \((final|periodic)\): (\d+) region\(s\)(.*?), "
                       r"up to (\d+) command buffer\(s\) recorded per X4 frame, "
                       r"(\d+) reuse\(s\), youngest (-?\d+) frame\(s\), "
                       r"(?:(\d+) within the same frame \(same pose\), "

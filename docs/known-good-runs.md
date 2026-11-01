@@ -1106,5 +1106,9 @@ seated, in the Manticore and the Hyperion. The scorer's `pose-ring` line
 measured up to 94 command buffers per frame and failed the 256-region ring
 on 1289 early reuses. Take 400 (1024 regions, e036a65): no flicker anywhere
 by Patola's eye, but 202 reuses 1-2 frames old — regions whose holder kept
-publishing (a buffer submitted again without re-recording). v0.9.9's ring
-skips any region published in the last 3 frames; take 401 checks it.
+publishing (a buffer submitted again without re-recording). Take 401 (an
+age rule: skip regions published within 3 frames): no flicker, 0 young
+reuses, 26936 resubmits without re-recording, but 5138 publishes into a
+region the ring had handed on (buffers resubmitted every few frames).
+v0.9.9's ring holds each region until its buffer is recorded again or
+freed; take 402 checks it.

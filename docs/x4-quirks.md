@@ -29868,3 +29868,25 @@ skips, resubmits without re-recording, and publishes into a region the ring
 has handed to another buffer (failed by the scorer). Predictions: 0 from
 1–2 frames before, 0 shared-region publishes, resubmits > 0 (the
 explanation above), and still no flicker.
+
+## Take 401 (2026-11-01): no flicker; the age rule measured wrong
+
+Patola: "everything was perfect. No issues, no flicker." Ring: 1024 regions,
+up to 94 buffers per frame, **0 reuses 1–2 frames old** and **26,936
+resubmits without re-recording** (take 400's explanation confirmed), but
+**5,138 publishes into a region another buffer held**: a buffer X4 submits
+every few frames lost its region after 3 frames without publishing and then
+published into it again. Age is the wrong criterion.
+
+**Take 402's build:** a region is HELD by its buffer until the buffer is
+recorded again (vkBeginCommandBuffer), freed (vkFreeCommandBuffers) or its
+pool destroyed (vkDestroyCommandPool) — the three lifecycle calls X4 names;
+it names neither reset call. Vulkan forbids each of them while the buffer may
+still execute, so a released region is free by the API's rule, whatever its
+age. The ring hands out only unheld regions; with none free it takes the
+oldest and counts it `forced`. The line reports buffers per frame, regions
+held at most, resubmits, forced, and publishes into another buffer's region;
+the scorer fails forced or shared. Harness: one buffer recorded 16 times
+held 1 region at most (released on each re-record), 0 forced, 0 shared.
+Predictions: no flicker; 0 forced, 0 shared; regions held at most well under
+1024 (the first measure of X4's live buffers).

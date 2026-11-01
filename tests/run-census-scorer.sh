@@ -362,6 +362,19 @@ else
 fi
 plant /tmp/census-ring401-stolen.log "$(ring401 4000 3900 7)"
 want "pose ring shared-region publishes -> FAIL" /tmp/census-ring401-stolen.log FAIL "7 publish(es) went into a pose region"
+# Take 402: held until re-recorded or freed.
+ring402() { printf '[  224600.000] layer   pose ring (final): 1024 region(s), one pose per frame, each held until its buffer is recorded again or freed, up to 94 command buffer(s) recorded per X4 frame, %s region(s) held at most, %s resubmit(s) without re-recording, %s forced (no free region), %s publish(es) into a region another buffer holds — x' "$1" "$2" "$3" "$4"; }
+plant /tmp/census-ring402-ok.log "$(ring402 310 26000 0 0)"
+want "pose ring 402 healthy -> reported" /tmp/census-ring402-ok.log pose-ring "310 region(s) held at most, 26000 resubmit(s) without re-recording, 0 forced, 0 publish(es)"
+if python3 tools/score_run.py /tmp/census-ring402-ok.log 2>&1 | grep -q "^FAIL.*pose"; then
+    bad "pose ring 402 healthy -> FAILs"
+else
+    ok "pose ring 402 healthy -> no FAIL"
+fi
+plant /tmp/census-ring402-forced.log "$(ring402 1024 26000 5 0)"
+want "pose ring 402 forced -> FAIL" /tmp/census-ring402-forced.log FAIL "two buffers share a region (5 forced"
+plant /tmp/census-ring402-stolen.log "$(ring402 1000 26000 0 9)"
+want "pose ring 402 shared publishes -> FAIL" /tmp/census-ring402-stolen.log FAIL "9 publish(es) into a region another buffer holds"
 plant /tmp/census-ring-young.log "$(ringline 256 ', one pose per frame' 120 90000 1 300 14)"
 want "pose ring reused 1-2 frames old -> FAIL" /tmp/census-ring-young.log FAIL "handed 14 region(s) to a new buffer 1-2 frames after"
 # Take 399's build printed a single count, every reuse under 3 frames.
@@ -376,11 +389,10 @@ else
 fi
 absent "no pose ring line -> silent" "$BASE" pose-ring
 grep -qF '"pose ring (%s): %u region(s)%s, up to %llu command buffer(s) "' layer/x4vr_layer.cpp &&
-grep -qF '"recorded per X4 frame, %llu reuse(s), youngest %lld frame(s), "' layer/x4vr_layer.cpp &&
-grep -qF '"%llu within the same frame (same pose), %llu from 1-2 frames "' layer/x4vr_layer.cpp &&
-grep -qF '"before, %llu skipped as recently published, %llu resubmit(s) "' layer/x4vr_layer.cpp &&
-grep -qF '"without re-recording, %llu publish(es) into a region another "' layer/x4vr_layer.cpp &&
-grep -qF '"buffer holds — %s",' layer/x4vr_layer.cpp &&
+grep -qF '"recorded per X4 frame, %llu region(s) held at most, %llu "' layer/x4vr_layer.cpp &&
+grep -qF '"resubmit(s) without re-recording, %llu forced (no free region), "' layer/x4vr_layer.cpp &&
+grep -qF '"%llu publish(es) into a region another buffer holds — %s",' layer/x4vr_layer.cpp &&
+grep -qF '", one pose per frame, each held until its buffer is "' layer/x4vr_layer.cpp &&
     ok "pose ring: the planted line matches the layer's format" ||
     bad "pose ring: the layer's format changed — replant the line above"
 

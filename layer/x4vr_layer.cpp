@@ -165,6 +165,11 @@ struct DeviceData {
     PFN_vkCmdDispatchBase CmdDispatchBase = nullptr;
     PFN_vkDestroyPipeline DestroyPipeline = nullptr;
     PFN_vkBeginCommandBuffer BeginCommandBuffer = nullptr;
+    // Take 402: the pose ring holds a region until its buffer is recorded
+    // again, freed, or its pool destroyed.
+    PFN_vkAllocateCommandBuffers AllocateCommandBuffers = nullptr;
+    PFN_vkFreeCommandBuffers FreeCommandBuffers = nullptr;
+    PFN_vkDestroyCommandPool DestroyCommandPool = nullptr;
     PFN_vkCmdBeginRenderPass CmdBeginRenderPass = nullptr;
     PFN_vkCmdEndRenderPass CmdEndRenderPass = nullptr;
     PFN_vkCmdBindPipeline CmdBindPipeline = nullptr;
@@ -7923,6 +7928,15 @@ struct PoseChannel {
     VkCommandBuffer region_owner[kPoseRegions] = {};
     std::unordered_map<VkCommandBuffer, uint32_t> cb_pubs;
     uint64_t skipped = 0, resubmits = 0, stolen = 0;
+    // Take 402, superseding take 401's age rule: a region is HELD by the
+    // buffer it was given to until that buffer is recorded again, freed, or
+    // its pool destroyed -- Vulkan forbids each of those while the buffer may
+    // still execute, so a released region is free by the API's own rule,
+    // whatever its age. Take 401's age rule handed on the region of a buffer
+    // X4 resubmits every few frames (5138 publishes into a region another
+    // buffer held). `forced`: no free region, the oldest taken (a failure).
+    std::unordered_map<VkCommandBuffer, VkCommandPool> cb_pool;
+    uint64_t held = 0, held_max = 0, forced = 0;
     PoseChannel() { std::fill(std::begin(region_frame), std::end(region_frame), UINT64_MAX); }
     // The counters the acceptance check reads. `pipes_seen` against
     // `pipes_extended` must be EQUAL: a pipeline that missed the substitution
@@ -8398,31 +8412,43 @@ void pose_publish(VkCommandBuffer cb) {
     g_pose.region_frame[it->second] = now;
 }
 
+// Take 402: `cb` gives up the region it holds, if it still holds one.
+// Caller holds g_pose.mu.
+static void pose_release_locked(VkCommandBuffer cb) {
+    auto it = g_pose.cb_region.find(cb);
+    if (it == g_pose.cb_region.end())
+        return;
+    if (g_pose.region_owner[it->second] == cb) {
+        g_pose.region_owner[it->second] = VK_NULL_HANDLE;
+        if (g_pose.held)
+            g_pose.held--;
+    }
+    g_pose.cb_region.erase(it);
+    g_pose.cb_pubs.erase(cb);
+}
+
 // How soon the pose ring comes back to a region. A reuse younger than 3 X4
 // frames may hit a region a submitted command buffer is still reading, which
 // is the take 391-398 flicker; the scorer fails the run on it.
 void pose_ring_report(const char *when) {
     std::lock_guard<std::mutex> lock(g_pose.mu);
     X4VR_LOG("pose ring (%s): %u region(s)%s, up to %llu command buffer(s) "
-             "recorded per X4 frame, %llu reuse(s), youngest %lld frame(s), "
-             "%llu within the same frame (same pose), %llu from 1-2 frames "
-             "before, %llu skipped as recently published, %llu resubmit(s) "
-             "without re-recording, %llu publish(es) into a region another "
-             "buffer holds — %s",
+             "recorded per X4 frame, %llu region(s) held at most, %llu "
+             "resubmit(s) without re-recording, %llu forced (no free region), "
+             "%llu publish(es) into a region another buffer holds — %s",
              when, pose_ring(),
-             pose_frame_fix() ? ", one pose per frame"
-                              : " (X4VR_POSE_FRAME=0: takes <= 398)",
+             pose_frame_fix()
+                 ? ", one pose per frame, each held until its buffer is "
+                   "recorded again or freed"
+                 : " (X4VR_POSE_FRAME=0: takes <= 398)",
              (unsigned long long)g_pose.begins_frame_max,
-             (unsigned long long)g_pose.reuses,
-             g_pose.min_age == UINT64_MAX ? -1LL : (long long)g_pose.min_age,
-             (unsigned long long)g_pose.same_frame_reuses,
-             (unsigned long long)g_pose.young_reuses,
-             (unsigned long long)g_pose.skipped,
+             (unsigned long long)g_pose.held_max,
              (unsigned long long)g_pose.resubmits,
+             (unsigned long long)g_pose.forced,
              (unsigned long long)g_pose.stolen,
-             g_pose.young_reuses || g_pose.stolen
-                 ? "a region came back while a buffer may still read it"
-                 : "no region came back while a buffer could still read it");
+             g_pose.forced || g_pose.stolen
+                 ? "two buffers shared a region"
+                 : "no two buffers shared a region");
 }
 
 // X4's layout plus ours, or X4's unchanged if anything refuses.
@@ -13225,6 +13251,68 @@ void probe_collect(DeviceData *d, VkQueue queue, bool count_frame) {
 // A secondary command buffer is recorded outside any vkCmdBeginRenderPass but
 // still executes inside one, named here. Without this its draws would look
 // like they belong to no pass and the mismatch would go uncounted.
+// Take 402: which pool each buffer came from, so a destroyed pool releases
+// the pose regions its buffers held.
+VKAPI_ATTR VkResult VKAPI_CALL x4vr_AllocateCommandBuffers(
+    VkDevice device, const VkCommandBufferAllocateInfo *ai,
+    VkCommandBuffer *cbs) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    const VkResult r = d->AllocateCommandBuffers(device, ai, cbs);
+    if (r == VK_SUCCESS && ai) {
+        std::lock_guard<std::mutex> lock(g_pose.mu);
+        for (uint32_t i = 0; i < ai->commandBufferCount; i++) {
+            // A handle the driver hands out again is a new buffer.
+            pose_release_locked(cbs[i]);
+            g_pose.cb_pool[cbs[i]] = ai->commandPool;
+        }
+    }
+    return r;
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_FreeCommandBuffers(
+    VkDevice device, VkCommandPool pool, uint32_t n,
+    const VkCommandBuffer *cbs) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_pose.mu);
+        for (uint32_t i = 0; i < n; i++)
+            if (cbs[i]) {
+                pose_release_locked(cbs[i]);
+                g_pose.cb_pool.erase(cbs[i]);
+            }
+    }
+    d->FreeCommandBuffers(device, pool, n, cbs);
+}
+
+VKAPI_ATTR void VKAPI_CALL x4vr_DestroyCommandPool(
+    VkDevice device, VkCommandPool pool, const VkAllocationCallbacks *ac) {
+    DeviceData *d;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        d = &g_devices.at(dispatch_key(device));
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_pose.mu);
+        for (auto it = g_pose.cb_pool.begin(); it != g_pose.cb_pool.end();) {
+            if (it->second == pool) {
+                pose_release_locked(it->first);
+                it = g_pose.cb_pool.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    d->DestroyCommandPool(device, pool, ac);
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
     VkCommandBuffer cb, const VkCommandBufferBeginInfo *bi) {
     DeviceData *d;
@@ -13244,24 +13332,35 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
     // reuse the buffer -- no fence of ours, and no frame counter that could
     // disagree with X4's own pacing.
     //
-    // Take 399: the ring is the reason this is safe, and it is MEASURED, not
-    // argued: each reuse records how many frames ago the region was last
-    // published. Under 3 a submitted buffer may still be reading it.
+    // Take 402: the region this buffer held is released (recording again
+    // means its last execution finished -- Vulkan's rule), and it takes one
+    // no other buffer holds. Ages are still recorded, for the report only.
     if (pose_active()) {
         std::lock_guard<std::mutex> lock(g_pose.mu);
         const uint64_t now = g_pose.frame.load(std::memory_order_relaxed);
-        uint32_t r = (uint32_t)(g_pose.next_region++ % pose_ring());
-        // Take 401: go round regions their holder published in the last 3
-        // frames. Bounded by the ring; if every region is young (it never
-        // should be) the last one is taken and counted below as young.
-        if (pose_frame_fix())
-            for (uint32_t tries = 1; tries < pose_ring(); tries++) {
-                const uint64_t pf = g_pose.region_frame[r];
-                if (pf == UINT64_MAX || now - pf >= 3)
-                    break;
+        const uint32_t ring = pose_ring();
+        uint32_t r = (uint32_t)(g_pose.next_region++ % ring);
+        if (pose_frame_fix()) {
+            pose_release_locked(cb);
+            bool found = g_pose.region_owner[r] == VK_NULL_HANDLE;
+            for (uint32_t tries = 1; !found && tries < ring; tries++) {
                 g_pose.skipped++;
-                r = (uint32_t)(g_pose.next_region++ % pose_ring());
+                r = (uint32_t)(g_pose.next_region++ % ring);
+                found = g_pose.region_owner[r] == VK_NULL_HANDLE;
             }
+            if (!found) {
+                // Every region held: take the one published longest ago.
+                uint32_t oldest = 0;
+                for (uint32_t i = 1; i < ring; i++)
+                    if (g_pose.region_frame[i] < g_pose.region_frame[oldest])
+                        oldest = i;
+                r = oldest;
+                g_pose.forced++;
+            } else {
+                g_pose.held++;
+                g_pose.held_max = std::max(g_pose.held_max, g_pose.held);
+            }
+        }
         g_pose.cb_region[cb] = r;
         g_pose.region_owner[r] = cb;
         g_pose.cb_pubs[cb] = 0;
@@ -13275,9 +13374,6 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
             const uint64_t age = now - g_pose.region_frame[r];
             g_pose.reuses++;
             g_pose.min_age = std::min(g_pose.min_age, age);
-            // Under 3 frames a buffer that read this region may still run.
-            // Within the SAME frame it is harmless with one pose per frame:
-            // the new owner publishes the very value the old one read.
             if (age == 0 && pose_frame_fix())
                 g_pose.same_frame_reuses++;
             else if (age < 3)
@@ -16720,6 +16816,9 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
     RESOLVE(CmdDispatchBase);
     RESOLVE(DestroyPipeline);
     RESOLVE(BeginCommandBuffer);
+    RESOLVE(AllocateCommandBuffers);
+    RESOLVE(FreeCommandBuffers);
+    RESOLVE(DestroyCommandPool);
     RESOLVE(CmdBeginRenderPass);
     RESOLVE(CmdEndRenderPass);
     RESOLVE(CmdBindPipeline);
@@ -16933,6 +17032,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyDevice(
         g_pose.cb_pubs.clear();
         std::fill(std::begin(g_pose.region_owner), std::end(g_pose.region_owner),
                   VkCommandBuffer{});
+        g_pose.cb_pool.clear();
+        g_pose.held = 0;
     }
     if (probe_hooks_wanted() && g_mv && g_active) {
         std::lock_guard<std::mutex> lock(g_mu);
@@ -17035,6 +17136,9 @@ const NameFunc kHooks[] = {
     {"vkCmdBeginRenderPass", (PFN_vkVoidFunction)x4vr_CmdBeginRenderPass},
     {"vkCmdEndRenderPass", (PFN_vkVoidFunction)x4vr_CmdEndRenderPass},
     {"vkBeginCommandBuffer", (PFN_vkVoidFunction)x4vr_BeginCommandBuffer},
+    {"vkAllocateCommandBuffers", (PFN_vkVoidFunction)x4vr_AllocateCommandBuffers},
+    {"vkFreeCommandBuffers", (PFN_vkVoidFunction)x4vr_FreeCommandBuffers},
+    {"vkDestroyCommandPool", (PFN_vkVoidFunction)x4vr_DestroyCommandPool},
     {"vkCmdBindPipeline", (PFN_vkVoidFunction)x4vr_CmdBindPipeline},
     {"vkCreateComputePipelines",
      (PFN_vkVoidFunction)x4vr_CreateComputePipelines},
