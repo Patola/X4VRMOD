@@ -29742,3 +29742,32 @@ line gains `mvp-roll=N`; the scorer FAILs a roll-stereo run where it is below
 * **P397.3** nothing else changes: scorer as take 390 (the two unrelated
   FAILs may recur only if the same moments recur), stereo comfortable under
   tilt.
+
+## Take 397 — SCORED (2026-11-01): PASS by the scorer, P397.1 REFUTED — still flickers
+
+* **P397.2 confirmed:** `mvp-roll=20` against `mvp-sx=20`; scorer PASS, build
+  `v0.9.8-15-gf2ad93c`.
+* **P397.1 refuted.** Patola: it still flickers, and "looking at the scene
+  straight and still versus leaned doesn't seem to change anything". His
+  second recording (/dados/x4-flicker2.mp4, 65 s) has lighting jumps while
+  the picture is still in every segment: standing (10–30 per second), in the
+  pilot seat, and looking back at the cockpit.
+* So the second route was a real inconsistency but not the cause. What roll
+  stereo switches on is three things only (all in shaders): the vertex eye
+  offset reading `(cos, sin, head_x, head_y)` and `head_fwd` from the pose
+  slot instead of a baked `d`, the fragment `M_invprojection` correction
+  reading the same, and X4VR_HEAD_6DOF (which needs that slot). Not the
+  cause: X4 declares no `Invariant` on any of its 496 vertex modules; the
+  pose memory is HOST_COHERENT.
+
+## Take 398 — PREDICTIONS (written before the run): the roll value held at zero
+
+`X4VR_ROLL_FORCE=0` keeps every roll-patched module reading the slot but
+publishes a constant `(1, 0)`; standing, the head shift and forward offset
+are zero too, so the slot does not change from frame to frame.
+
+* **P398.1 (value hypothesis):** standing, **no flicker**; seated, where
+  X4VR_HEAD_6DOF changes the slot every frame, flicker returns. Then a
+  shader reacts to the slot's frame-to-frame change.
+* **P398.2 (reading hypothesis):** standing, **flicker** as in 397. Then it
+  is the reading itself (binding, region or compilation), not the values.
