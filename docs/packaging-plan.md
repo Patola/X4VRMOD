@@ -1,20 +1,25 @@
 # Packaging and launcher plan
 
-A plan, not code. Decisions recorded 2026-10-31 with Patola, after v0.9.6.
-Nothing here is built yet. Items marked **to verify** are assumptions until a
-test or a reading of X4 settles them.
+Decisions recorded with Patola from 2026-10-31 (after v0.9.6), the launcher's
+design on 2026-11-05 (after v0.9.9). Items marked **to verify** are assumptions
+until a test or a reading of X4 settles them. Built so far: Phase 0, the version
+in every log, the static runtime, the single extension.
 
 ## Decisions
 
 | # | Question | Decision |
 |---|---|---|
 | 1 | What comes first | **The shipping line becomes the default.** It is the first wrap-up task, before any package or launcher. |
-| 2 | Launcher architecture | **A core plus a command-line tool, with the Qt6/QML window on top.** |
+| 2 | Launcher architecture (Widgets since 2026-11-05) | **A core plus a command-line tool, with a Qt 6 Widgets window on top.** Widgets follow the desktop theme by default, where QML only matches on KDE; help needs only `QTextBrowser`, so `qt6-base` is the only dependency. |
 | 3 | Using it with the headset on | **Desktop setup, and a Play button that waits for the headset.** No in-game panel for now. No launcher window in VR. |
 | 4 | Resolution | **Only the launcher sets it.** X4's in-game resolution menu is not the control in VR. |
 | 5 | X4 extensions | **One extension, `x4vrmod`**: the look-around limits and the sway removal in one settings diff. **`x4vrmod_headlook` is dropped**, with its bisect switch `X4VR_HEADLOOK_SPEED_EXT`. |
-| 6 | Default upscaler (2026-10-31; revised twice) | **No automatic upscaler in the defaults:** `none` at every eye size unless `X4VR_UPSCALE` asks. **The graphical launcher pairs them visibly** (Phase 3, *Settings*). The history: a defaults rule switched FSR on above 2816² per eye, first FSR 3 Balanced, then FSR 1 Quality (take 385: 13.24 ms against 16.72 at 4224², judged equal to look at). After take 386 Patola dropped it, because it made 3072² native impossible without knowing to override it. |
+| 6 | Default upscaler (2026-10-31; revised twice) | **No automatic upscaler in the defaults:** `none` at every eye size unless `X4VR_UPSCALE` asks. **The graphical launcher pairs them visibly** (Phase 3, *Settings*). The history: a defaults rule switched FSR on above 2816² per eye, first FSR 3 Balanced, then FSR 1 Quality (take 385: 13.24 ms against 16.72 at 4224², judged equal to look at). After take 386 Patola dropped it, because it made 3072² native impossible without knowing to override it. **In the launcher (2026-11-05):** going above 3200² per eye with no upscaler selects FSR 1 Quality, and the player can change it back. |
 | 7 | When to package (2026-10-31) | **The packages come with the core and its CLI (Phase 2),** which installs into system directories and activates the mod (extensions, Vulkan layer). Version embedding and the single extension stay early: they are easy. |
+| 8 | Is X4 compatible? (2026-11-05) | **No checksum.** The launcher runs the mod's own byte checks against the X4 file and reports per feature, so a hotfix that leaves the code in place stays green with no mod release. See *The X4 build is part of compatibility*. |
+| 9 | An unknown X4 build (2026-11-05) | **Amber "Play anyway",** naming what turns off. Play is green only when everything is met, and grey only when it can't launch. |
+| 10 | Who creates the custom config files? (2026-11-05) | **The mod, as today; the launcher never does.** Steam launch options and the command line bypass the launcher, so the mod must do it anyway, and it learns the real profile path when X4 opens it. Settings reach the mod as environment variables, served in memory. The launcher only reports and deletes the files. |
+| 11 | Distribution and names (2026-11-05) | **Packages and a zip.** CLI `x4vrmod`, window `x4vrmod-launcher`, zip data directory `x4vrmod-data/`. |
 
 Clarifications from Patola:
 * **DLSS:** the development PC has an AMD GPU, so no DLSS here. A friend with
@@ -90,7 +95,7 @@ script will serve the core and the packages too.
 | Vulkan layer `libVkLayer_X4VR_core.so` | `/usr/lib/x4vrmod/` | |
 | Layer manifest `VK_LAYER_X4VR_core.json` | `/usr/share/vulkan/explicit_layer.d/` | **Explicit**: loaded only when our launcher names it, never in another program. |
 | Injector `libx4vr_inject.so` | `/usr/lib/x4vrmod/` | Preloaded by our launcher only. |
-| Launcher `x4vrmod` (CLI), `x4vrmod-config` (GUI) | `/usr/bin/` | Phases 2 and 3. Until then, `x4vr-launch.sh` as `/usr/bin/x4vrmod-launch`. |
+| Launcher `x4vrmod` (CLI), `x4vrmod-launcher` (GUI) | `/usr/bin/` | Phases 2 and 3. Until then, `x4vr-launch.sh` as `/usr/bin/x4vrmod-launch`. |
 | Extension `x4vrmod` | `/usr/share/x4vrmod/extensions/` | Copied into place per user by the launcher, never by the package. |
 | OpenXR probe (today `x4vr_test_xr_probe`) | `/usr/lib/x4vrmod/` | The launcher's "is the headset answering" check. |
 | Docs, licence | `/usr/share/doc/x4vrmod/`, `/usr/share/licenses/x4vrmod/` | GPL-3.0 with the linking exception. |
@@ -113,11 +118,11 @@ bug-report feature needs `score_run.py`, so it ships under
 1. **Arch first:** a PKGBUILD on the AUR, `x4vrmod` (release tags) and
    `x4vrmod-git`. Dependencies: `vulkan-icd-loader`, `gamescope`, `openxr`
    (the loader is dlopen'd, so it is optional at build time), `libnotify`
-   optional, `qt6-declarative` for the GUI (a split package, so the CLI
-   installs without Qt).
+   optional, `qt6-base` for the GUI (a split package, so the CLI installs
+   without Qt).
 2. **deb and rpm in GitHub Actions:** CPack's DEB and RPM generators from the
-   same CMake build, in Ubuntu, Debian and Fedora containers. Also a plain
-   `.tar.zst` with an install script for everything else.
+   same CMake build, in Ubuntu, Debian and Fedora containers. Also a **zip** for
+   everything else (*Phase 3*, *Install and uninstall*).
 3. **The Arch package in CI too,** in an archlinux container with makepkg,
    so the AUR PKGBUILD is tested on every tag.
 4. **Releases:** a tag `vX.Y.Z` triggers the workflow, which attaches all
@@ -134,9 +139,23 @@ binary is missing.
 * Every code patch checks X4's bytes and refuses on any other build. After an
   X4 update the mod still starts, but HUD clicks, the steering pick, walking,
   the shadow fix and the external-view head turn off.
-* So each release states the X4 builds it supports, by binary hash. The
-  launcher checks the hash and says which features are off on an unsupported
-  build, rather than letting the player find out in the cockpit.
+* **The version can be read, but it can't decide this.** `version.dat` beside
+  the binary holds `900`, and Steam's appmanifest gives the `buildid`; the
+  launcher shows both. But the binary is non-relocatable (`EXEC`) and about 330
+  references in the injector are fixed addresses, so a recompiling hotfix would
+  most likely move them while still saying 9.00 (to verify on a second binary).
+* **So the launcher asks the bytes, with no checksum** (decision 8). It runs the
+  mod's own site checks (the `verify_sites` templates, over a file reader that
+  maps addresses through the ELF LOAD segments) and reports per feature:
+  head-look, walking, external views, HUD clicks, steering, menus, shadows.
+  All match: green. Some don't: amber, naming them. A different major version
+  in `version.dat`: amber, "not tested".
+* **Later, to survive hotfixes and GOG: signature search.** Each site found by a
+  unique byte pattern with its displacements wildcarded, requiring exactly one
+  match or refusing. As safe as today, and it may make GOG work without separate
+  tables. Real work (~330 references, plus stubs that hard-code addresses), and it
+  needs a second binary to prove it: a GOG copy (Patola can get one) or a past
+  Steam build.
 * **To verify — GOG:** whether GOG's X4 binary is byte-identical to Steam's
   9.00. Every patch was checked against Steam's. If not, GOG needs its own
   signatures or stays unsupported.
@@ -172,7 +191,7 @@ check and action exists once, in the core; the GUI only displays it.
 * **Checks** (`doctor`), each with a status, a one-line reason and, where
   possible, a fix:
   * X4 found: Steam's `libraryfolders.vdf`, GOG and Heroic paths, X4VR_GAME.
-  * X4 build supported (the hash).
+  * X4 patches match (the bytes, per feature; decision 8).
   * X4 profile folder found; the mod's forks present or created on first run.
   * gamescope installed (version); a Wayland session.
   * Vulkan: the GPU, driver version, Vulkan 1.3, multiview, at least 32
@@ -188,48 +207,119 @@ check and action exists once, in the core; the GUI only displays it.
 * **IPD from the headset** where the runtime reports the eye poses, instead of
   the fixed 0.064 m. The setting stays as an override.
 
-## Phase 3 — `x4vrmod-config`, the Qt6/QML window
+## Phase 3 — `x4vrmod-launcher`, the Qt 6 Widgets window
 
-A small window (about 640×480), three areas:
-* **Status:** the `doctor` checks, green/amber/red, a fix button where the
-  core has one. A refresh every few seconds while open, so starting WiVRn or
-  SteamVR turns its row green without a click.
-* **Settings:** resolution, upscaler, field of view, IPD (auto/manual), lean,
-  VR runtime (auto/WiVRn/SteamVR), debug mode. Each with a one-line
-  explanation of what it does, by behaviour.
-  * **Resolution and upscaler, together** (decision 6). Two forms, to choose
-    when the window is built:
-    * the resolution list carries each larger size twice, native and with
-      FSR 1 Quality (e.g. "4224² — native" and "4224² — FSR 1 Quality,
-      renders 2816²");
-    * or choosing a size above the headset's recommended one preselects FSR
-      1 Quality in the upscaler control, which the user can change while
-      keeping the size.
+About 800 wide, under an 800×200 banner of our own art (no Egosoft logos or
+screenshots; the About box says unofficial, not affiliated with Egosoft):
 
-    Either way, each choice shows the render size and the last measured
-    frame time.
-* **Play:** a large button, enabled only when every required check is green.
-  * Pressed, it waits for the headset: it shows "put on the headset" and
-    starts X4 when the runtime reports the headset worn (OpenXR session state,
-    or the proximity sensor where the runtime exposes it), with a "start
-    now" override.
-  * Beside it: "Copy Steam launch options" (`x4vrmod run %command%`),
-    "Install/repair", "Uninstall".
+    +----------------------------------------------------------------------+
+    |                 [ banner 800x200: "X4 VR Mod" artwork ]              |
+    +----------------------------------------------------------------------+
+    | Game  [Steam - /nvme/SteamLibrary/.../X4 Foundations        v] [Browse]
+    |                                                                      |
+    | Eye resolution                 | Ready to play                       |
+    | [2816 x 2816 (default)     v]  | (ok) X4 found    9.00, build 23660954|
+    | Upscaler                       | (ok) Steam running                  |
+    | [None (full resolution)    v]  | (ok) gamescope installed     3.17.0 |
+    | Renders 2816 x 2816.           | (x)  Headset not connected  [Retry] |
+    | Eye distance                   | (ok) Vulkan layer installed  v0.9.9 |
+    | [Automatic, from headset   v]  | (ok) Mod installed                  |
+    | [x] Lean in the cockpit        |                                     |
+    |----------------------------------------------------------------------|
+    | [Help] [Launch options] [More v]     1 thing to fix first  [  PLAY  ]|
+    | v0.9.9 - supports X4 9.00                                            |
+    +----------------------------------------------------------------------+
 
-The window is not needed once the game runs. SteamVR's choppy desktop view
-is acceptable for this; nothing is drawn in VR for the launcher.
+* **Play:** green "Play" when every condition is met; amber "Play anyway" when it
+  can launch with features off; grey "Play" when it can't, with the reason beside
+  it. While running, "X4 is running"; afterwards, a line about the last session.
+* **Ready to play:** the core's checks. A failed row carries its fix: Install,
+  Start Steam, Start WiVRn or SteamVR, Retry, Browse. Rows refresh while the window
+  is open, so starting WiVRn turns its row green without a click (see *The VR
+  probe*).
+* **More:** Uninstall, Open logs, Create bug report, Add to application menu (zip
+  only), Advanced (field of view, debug level, extra environment variables), Reset
+  to defaults, About. Uninstall is here so it can't be hit by accident.
+* **Launch options:** copyable Steam line (`x4vrmod run %command%`) and terminal
+  line, with a picture of where they go in Steam.
+* **Help:** `QTextBrowser` over HTML and PNGs in the data directory. Each section
+  says what and why; each checklist row links to its section.
+* Later, not in the first version: waiting until the headset is worn (it needs an
+  OpenXR session), update checks, translations.
+
+### Finding X4
+* **Steam:** `~/.steam/root/steamapps/libraryfolders.vdf` lists the libraries and
+  marks which holds `392160`; `appmanifest_392160.acf` gives `installdir` and
+  `buildid`. No mount scanning. Also the Flatpak Steam path.
+* **GOG:** `~/GOG Games/*` and Heroic's `gog_store/installed.json`; otherwise
+  Browse, which takes a folder or a file and looks for `X4`, then `game/X4` (layout
+  to verify).
+* **Proton:** picking `X4.exe`, or a folder holding only that (Steam with forced
+  Proton), explains that the mod is native Linux and can't work there.
+* **Steam running** (Steam copy only): `~/.steam/steam.pid` and a live
+  `/proc/<pid>/exe`, because the file outlives Steam. `SteamAppId` is set for the
+  Steam copy only.
+
+### The VR probe
+`x4vrmod probe xr --json` runs in a child process with a timeout, so a broken
+runtime can't hang or crash the window. Instance, `xrGetSystem`, view sizes,
+destroy; no session. It reuses `common/x4vr_xr.hpp` and tells apart: loader
+missing; no runtime; runtime up but no headset
+(`XR_ERROR_FORM_FACTOR_UNAVAILABLE`); ready, with the headset's name and
+recommended size. `~/.config/openxr/1/active_runtime.json` is a cheap first step:
+here it exists only while WiVRn runs.
+
+**To verify:** creating an instance may start SteamVR when it's the active runtime.
+If so, a SteamVR probe runs only on a click or on Play, never by polling.
+
+### Install and uninstall
+**Which layout:** `x4vrmod-data/manifest` beside `/proc/self/exe` means the zip;
+otherwise the compiled-in prefix means a package. `X4VRMOD_DATA` overrides, for
+development.
+
+| | Package | Zip |
+|---|---|---|
+| Libraries | `/usr/lib/x4vrmod/` | `x4vrmod-data/lib/`, copied to `~/.local/share/x4vrmod/` |
+| Layer manifest | `/usr/share/vulkan/explicit_layer.d/` | `~/.local/share/vulkan/explicit_layer.d/` |
+| Data, help, extension | `/usr/share/x4vrmod/` | `x4vrmod-data/` |
+| Install does | Extension only | Copy, manifest, extension |
+
+* The zip copies because Steam launch options and the layer manifest need stable
+  paths, even if the unpacked folder moves.
+* `~/.local/share/x4vrmod/installed.json` records every file written, so uninstall
+  removes exactly those. The layer stays explicit: it never loads into other programs.
+* The Install dialog discloses that X4 marks saves made with a non-Egosoft
+  extension as modified.
+* **Uninstall** lists what goes, with a checkbox off by default: "Also delete my VR
+  settings: this can't be undone". That covers `config-x4vrmod.xml`,
+  `content-x4vrmod.xml`, `inputmap-x4vrmod.xml` and `*-x4vrmod-*.was` in every
+  profile folder. Saves, `config.xml` and anything else are never touched. A package
+  install also shows the package-manager command.
+* **The zip and Qt:** built against the oldest Qt 6 in CI (6.2). The zip uses the
+  system Qt when present, for the native theme, and falls back to a bundled copy
+  (Fusion style). The CLI has no Qt dependency.
+
+### Launching
+`x4vrmod run [%command%]` builds the environment from the profile and execs
+`x4vr-launch.sh`: one proven launch path, not a C++ rewrite of it. The script gets
+its paths parameterised (`BUILD`, `ROOT`, the `/nvme` default, `SteamAppId`).
 
 ## Resolution
 
 * **The launcher owns it** (decision 4). The layer, the eye images and
   gamescope's virtual screen are all sized at launch, and X4 applies its own
   menu's choice immediately, so an in-game change breaks the session.
-* **Offered relative to the headset,** not as monitor sizes:
-  * the probe reads the runtime's recommended per-eye size
-    (`xrEnumerateViewConfigurationViews`); WiVRn asked for 3096×3243 here;
-  * the setting is a scale of it: 75 / 100 / 125 / 150 %;
-  * the launcher derives X4VR_W, X4VR_H (two eyes side by side) and
-    X4VR_RES.
+* **Offered as absolute sizes** (2816 default, 3072, 3200, 3600, 4000, 4224,
+  custom), marking the one nearest the headset's request: the probe reads the
+  runtime's recommended per-eye size (`xrEnumerateViewConfigurationViews`); WiVRn
+  asked for 3096×3243 here. The launcher sets `X4VR_H`, which derives the rest.
+* **With the upscaler** (decision 6):
+  * going from ≤3200² to >3200² with upscaler None selects FSR 1 Quality (DLSS once
+    it exists), with a note saying why and how to undo it;
+  * a manual upscaler choice is respected, and moving between larger sizes changes
+    nothing;
+  * going back to ≤3200² returns to None only if the selection was automatic;
+  * the render size is always shown.
 * **Square eyes for now.** The pipeline renders a square, symmetric field.
   Non-square eyes (the headset's own aspect) are possible in principle, and
   no take has run one. That is a later test, not a launcher feature.
@@ -430,10 +520,11 @@ level with the mark key, instead of a take's full command line.
    **Done 2026-10-31** (below, and Phase 1's build choices: both libraries
    print `[X4VRMOD v…]` on their first log line and export 4 and 39
    symbols).
-3. Phase 2's core and CLI: `doctor` first (it answers the "to verify" items
-   on real machines), then `run`, `install`/`uninstall`, `report` with the
-   flight recorder. **The Arch PKGBUILD comes here** (decision 7): a package
-   installs into system directories, and the CLI is what activates the mod.
-4. CI: tests, census, deb/rpm/tarball/Arch packages on tags.
-5. Phase 3's Qt6/QML window over the core.
-6. DLSS: read the tag, wire it, the RTX 5090 test.
+3. Phase 2's core and CLI: discovery, the patch check, the probe and `doctor`
+   first (they answer the "to verify" items on real machines).
+4. `install`, `uninstall`, `run`; the script's paths parameterised; the zip layout
+   and **the Arch PKGBUILD** (decision 7).
+5. Phase 3's Qt 6 Widgets window over the core, with its art and help.
+6. CI: tests, census, deb/rpm/zip/Arch packages on tags.
+7. Signature search, for hotfixes and GOG, once a second binary is available.
+8. `report` and the flight recorder; DLSS: read the tag, wire it, the RTX 5090 test.
