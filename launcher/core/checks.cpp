@@ -194,8 +194,7 @@ static Check check_vr_row(const std::string &home, XrProbe *xr_out) {
         // WiVRn is what we suggest, so with it installed that's the button.
         if (!wivrn_program().empty()) {
             c.title = "No VR runtime running";
-            c.detail = "Start WiVRn, which we suggest, and which takes over from SteamVR while "
-                       "it runs. To use SteamVR instead, start it from Steam.";
+            c.detail = "Start WiVRn, which we suggest. It takes over from SteamVR while it runs.";
             c.fix = "start-vr";
         } else {
             c.title = "SteamVR isn't running";
