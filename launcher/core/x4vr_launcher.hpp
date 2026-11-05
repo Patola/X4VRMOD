@@ -1,0 +1,220 @@
+// SPDX-License-Identifier: GPL-3.0-or-later WITH x4vrmod-linking-exception
+//
+// x4vr_launcher.hpp -- the launcher's core: everything the command-line tool
+// and the window share. Finding X4, asking its file whether the mod's patches
+// fit, probing VR, and the checks behind the Play button. No Qt here: the CLI
+// must work without it, and every check exists once.
+// See docs/packaging-plan.md, Phases 2 and 3.
+#pragma once
+
+#include <cstdint>
+#include <functional>
+#include <string>
+#include <vector>
+
+namespace x4vr::launcher {
+
+// What this release was built and tested against (version.dat's value).
+constexpr int kTestedX4Version = 900;
+constexpr const char *kSteamAppId = "392160";
+
+// ---------------------------------------------------------------- small tools
+std::string read_text_file(const std::string &path, size_t max = 16 * 1024 * 1024);
+bool is_file(const std::string &path);
+bool is_dir(const std::string &path);
+std::string real_path(const std::string &path);
+std::string dir_name(const std::string &path);
+std::string base_name(const std::string &path);
+std::string home_dir();
+// The first program called `name` on PATH, or "".
+std::string find_on_path(const std::string &name);
+// Every value of `"key": "..."` in a JSON text. A scan, not a parser: enough for
+// the few small files the launcher reads.
+std::vector<std::string> json_strings(const std::string &text, const std::string &key);
+
+// A child process with a timeout, in its own process group so a timeout kills
+// everything it started. A broken VR runtime can hang or crash whatever loads
+// it, so probes never run in the caller's process.
+struct ChildResult {
+    bool started = false;
+    bool timed_out = false;
+    int exit_code = -1;
+    std::string out;
+};
+ChildResult run_child(const std::vector<std::string> &argv, int timeout_ms,
+                      bool merge_stderr = false,
+                      const std::vector<std::string> &extra_env = {});
+
+// ---------------------------------------------------------------- Valve's VDF
+// The text format of libraryfolders.vdf and appmanifest_*.acf.
+struct VdfNode {
+    std::string key, value;
+    bool block = false;
+    std::vector<VdfNode> children;
+    // Keys compare without case, as Steam's own do; nullptr when absent.
+    const VdfNode *find(const std::string &k) const;
+    std::string get(const std::string &k) const;
+};
+bool parse_vdf(const std::string &text, VdfNode *root);
+
+// ------------------------------------------------------------ finding the game
+enum class PathKind { Linux, Windows, NotX4, Missing };
+struct GamePath {
+    PathKind kind = PathKind::Missing;
+    std::string exe; // the program, when one was found
+    std::string dir; // the folder that holds it
+    std::string why; // for NotX4 and Missing
+};
+// A folder or a file, as Browse may hand it over. In a folder: X4, then game/X4
+// (GOG's layout, to verify), then X4.exe. Decided by the file's magic, not only
+// its name.
+GamePath classify_game_path(const std::string &path);
+// Why a Windows copy can't work, in words for the player.
+const char *proton_explanation();
+
+enum class Store { Steam, Gog, Unknown };
+const char *store_name(Store s);
+struct Install {
+    Store store = Store::Unknown;
+    PathKind kind = PathKind::Missing;
+    std::string exe, dir;
+    std::string buildid; // Steam only
+    std::string source;  // where this came from, for the report
+};
+std::vector<Install> discover_steam(const std::string &home);
+std::vector<Install> discover_gog(const std::string &home);
+// X4VR_GAME first, then Steam, then GOG, without duplicates.
+std::vector<Install> discover_all(const std::string &home);
+// The install to use by default: the first Linux one, else the first found.
+// nullptr when there is none.
+const Install *preferred_install(const std::vector<Install> &all);
+Install install_from_path(const std::string &path);
+
+// version.dat beside the binary: 900 means 9.00. -1 when absent or unreadable.
+int read_x4_version(const std::string &dir);
+std::string format_x4_version(int v);
+
+// ------------------------------------------------------------------ X4's file
+// A read-only view of an ELF file. X4 is non-relocatable, so a virtual address
+// maps through the PT_LOAD headers to a file offset.
+class ElfFile {
+public:
+    ElfFile() = default;
+    ~ElfFile();
+    ElfFile(const ElfFile &) = delete;
+    ElfFile &operator=(const ElfFile &) = delete;
+    bool open(const std::string &path);
+    bool is_x86_64() const;
+    // False unless all n bytes are in one segment's file contents.
+    bool read(uintptr_t va, void *out, size_t n) const;
+    // The DT_NEEDED libraries.
+    std::vector<std::string> needed() const;
+
+private:
+    const uint8_t *data_ = nullptr;
+    size_t size_ = 0;
+};
+
+// True when the binary links libsteam_api: it asks the binary, not the path,
+// because that is what makes Steam necessary.
+bool binary_needs_steam(const std::string &exe);
+
+using VaReader = std::function<bool(uintptr_t, void *, size_t)>;
+// One feature whose patches depend on X4's exact code. The same checks the mod
+// makes in X4's memory at load, so the two can't disagree.
+struct PatchResult {
+    const char *id;      // short, stable
+    const char *feature; // what the player loses when it doesn't match
+    bool ok = false;
+    uintptr_t bad = 0;
+};
+std::vector<PatchResult> check_patches(const VaReader &read);
+
+// ----------------------------------------------------------------- the probes
+// Which OpenXR runtime is active, by the loader's search order. It is only a
+// file: nothing is loaded. WiVRn's exists only while WiVRn runs.
+struct ActiveRuntime {
+    std::string path; // "" when there is none
+    std::string name, library;
+    bool steamvr = false;
+};
+ActiveRuntime active_runtime(const std::string &home);
+
+enum class XrStatus { Ready, NoLoader, NoRuntime, NoHeadset, Failed, TimedOut, NotRun };
+const char *xr_status_name(XrStatus s);
+struct XrProbe {
+    XrStatus status = XrStatus::NotRun;
+    std::string runtime, system, detail;
+    unsigned eye_w = 0, eye_h = 0;
+};
+// In this process: what `x4vrmod probe xr` runs. Instance, xrGetSystem, view
+// sizes, destroy. No session.
+XrProbe xr_probe_here(bool verbose);
+// As a child, through the x4vrmod next to this program.
+XrProbe xr_probe_child(int timeout_ms);
+std::string xr_probe_format(const XrProbe &p);
+XrProbe xr_probe_parse(const std::string &text);
+
+struct GpuInfo {
+    std::string name;
+    unsigned api_major = 0, api_minor = 0;
+    uint32_t max_sets = 0;
+    bool multiview = false, discrete = false;
+    // The layer binds its set at the top of the device's range, above X4's 6.
+    bool capable() const;
+};
+struct VulkanProbe {
+    bool ok = false; // an instance came up
+    std::string detail;
+    std::vector<GpuInfo> gpus;
+};
+VulkanProbe vulkan_probe_here();
+VulkanProbe vulkan_probe_child(int timeout_ms);
+std::string vulkan_probe_format(const VulkanProbe &p);
+VulkanProbe vulkan_probe_parse(const std::string &text);
+
+// ---------------------------------------------------------------- how we're run
+enum class LayoutKind { Dev, Zip, Package };
+const char *layout_name(LayoutKind k);
+struct Layout {
+    LayoutKind kind = LayoutKind::Package;
+    std::string data_dir;       // what ships: extension/, launch/, help
+    std::string extension_dir;  // the x4vrmod extension to deploy
+    std::string layer_manifest; // where the manifest must be for X4 to find it
+    std::string injector;       // the preload library
+};
+Layout detect_layout(const std::string &home);
+// The directory of this program, from /proc/self/exe.
+std::string self_dir();
+// The version a library or manifest's library carries, read from the file,
+// never by loading it. "" when it has none.
+std::string library_version(const std::string &path);
+// This program's own version.
+const char *own_version();
+
+// ----------------------------------------------------------------- is it running
+bool steam_is_running(const std::string &home);
+bool steamvr_is_running();
+// Any process whose program is this file, or is called X4.
+bool x4_is_running(const std::string &exe);
+
+// ------------------------------------------------------------------ the checks
+// Ok, or Warn (can launch with something lost), or Block (can't launch).
+enum class Status { Ok, Warn, Block };
+struct Check {
+    std::string id;
+    Status status = Status::Ok;
+    std::string title;
+    std::string detail;
+    std::string fix; // an action the caller can offer: "" for none
+};
+struct CheckOptions {
+    std::string home;
+    std::string game; // a path chosen by the player; "" to discover
+    bool skip_vr = false;
+};
+std::vector<Check> run_checks(const CheckOptions &o);
+// The worst status of a set of checks: what the Play button shows.
+Status worst(const std::vector<Check> &checks);
+
+} // namespace x4vr::launcher

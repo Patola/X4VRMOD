@@ -43,5 +43,6 @@ add_custom_target(x4vr_version ALL
 
 add_subdirectory(layer)
 add_subdirectory(injector)
+add_subdirectory(launcher)
 add_subdirectory(tests)
 # add_subdirectory(cursor)   # later phase

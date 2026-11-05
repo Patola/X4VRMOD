@@ -4493,28 +4493,24 @@ static void csmfit_patch_at_start() {
         refuse("X4VR_CSM_COVER must be in (0, 2]");
         return;
     }
-    uintptr_t va[kNumSites];
-    for (size_t i = 0; i < kNumSites; i++) {
-        const Site &st = kSites[i].site;
-        uint8_t b[sizeof st.bytes];
-        if (!self_read(st.va, b, st.n) || memcmp(b, st.bytes, st.n) != 0 ||
-            rip_target(st.va, st.n, b) !=
-                (kSites[i].slot ? kAspectY : kAspectX)) {
-            char why[160];
+    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    uintptr_t bad = 0;
+    if (!verify_sites(rd, &bad)) {
+        char why[160];
+        if (bad == kAspectDefaultAddr)
+            snprintf(why, sizeof why,
+                     "X4's default aspect constant is not (1, 1)");
+        else
             snprintf(why, sizeof why,
                      "the fit's read at %#lx differs from X4 9.00",
-                     (unsigned long)st.va);
-            refuse(why);
-            return;
-        }
-        va[i] = st.va;
-    }
-    float def[2] = {0.f, 0.f};
-    if (!self_read(kAspectDefaultAddr, def, sizeof def) || def[0] != 1.0f ||
-        def[1] != 1.0f) {
-        refuse("X4's default aspect constant is not (1, 1)");
+                     (unsigned long)bad);
+        refuse(why);
         return;
     }
+    uintptr_t va[kNumSites];
+    for (size_t i = 0; i < kNumSites; i++)
+        va[i] = kSites[i].site.va;
+    float def[2] = {1.0f, 1.0f}; // verify_sites read it from kAspectDefaultAddr
     void *page = alloc_near(0x3f0000, 0x7c00000, va, kNumSites, 8);
     if (!page) {
         refuse("no free page within rel32 reach of the fit");

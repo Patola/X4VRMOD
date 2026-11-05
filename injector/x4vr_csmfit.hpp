@@ -75,6 +75,29 @@ inline uintptr_t rip_target(uintptr_t insn, size_t len, const uint8_t *bytes) {
     return insn + len + (intptr_t)d;
 }
 
+// Every read of the fit, by its bytes and by the global it reads, and X4's
+// default aspect constant. Used by the patch and by the launcher, which runs it
+// over the X4 file.
+template <class Reader> bool verify_sites(Reader read, uintptr_t *bad) {
+    for (size_t i = 0; i < kNumSites; i++) {
+        const Site &st = kSites[i].site;
+        uint8_t b[sizeof st.bytes];
+        if (!read(st.va, b, st.n) || memcmp(b, st.bytes, st.n) != 0 ||
+            rip_target(st.va, st.n, b) !=
+                (kSites[i].slot ? kAspectY : kAspectX)) {
+            *bad = st.va;
+            return false;
+        }
+    }
+    float def[2] = {0.f, 0.f};
+    if (!read(kAspectDefaultAddr, def, sizeof def) || def[0] != 1.0f ||
+        def[1] != 1.0f) {
+        *bad = kAspectDefaultAddr;
+        return false;
+    }
+    return true;
+}
+
 // The disp32 that makes that instruction point at `target`, if it can.
 inline bool disp_for(uintptr_t insn, size_t len, uintptr_t target, int32_t *out) {
     const long long d = (long long)target - (long long)(insn + len);

@@ -211,6 +211,10 @@ add_executable(x4vr_test_steer steer.cpp)
 # What a pause reads as: the Pause key, the ESC menu, menu to menu while
 # paused, the settle (takes 383-385). Self-checking.
 add_executable(x4vr_test_pause pause.cpp)
+# The launcher's core: paths, discovery, the ELF reader, children that hang, and
+# each patch group against bent bytes. Self-checking.
+add_executable(x4vr_test_launcher launcher_core.cpp)
+target_link_libraries(x4vr_test_launcher PRIVATE x4vrmod_core)
 # X4VR_FOOTLOG: angles from X4's matrix convention, the roll yaw/pitch miss,
 # the window across the +-180 seam, a camera change, the line's shape.
 # Self-checking.

@@ -261,7 +261,7 @@ screenshots; the About box says unofficial, not affiliated with Egosoft):
   Steam copy only.
 
 ### The VR probe
-`x4vrmod probe xr --json` runs in a child process with a timeout, so a broken
+`x4vrmod probe xr` runs in a child process with a timeout, so a broken
 runtime can't hang or crash the window. Instance, `xrGetSystem`, view sizes,
 destroy; no session. It reuses `common/x4vr_xr.hpp` and tells apart: loader
 missing; no runtime; runtime up but no headset
