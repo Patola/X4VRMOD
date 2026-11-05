@@ -616,11 +616,13 @@ struct Profile {
     std::string xml;
 };
 
-// Load config-x4vrmod.xml, forking it verbatim from the player's config.xml
-// the first time. The fork is a plain copy: the overrides are applied in
-// memory on every read (see open_patched_config), so baking them into the
-// file would be redundant — and keeping the copy verbatim means the profile
-// starts out as an honest snapshot of the player's own preferences.
+// Load config-x4vrmod.xml, forking it from the player's config.xml the first
+// time. The fork is a copy but for the font scale (new_config_fork): the overrides
+// are applied in memory on every read (see open_patched_config), so baking them into
+// the file would be redundant, and the profile starts out as an honest snapshot of
+// the player's own preferences. On a new profile there's nothing to copy and the fork
+// starts almost empty, so X4's first run gets the overrides too and its first save
+// lands in the fork, not in a config.xml vanilla would then read.
 Profile load_profile(const char *config_path) {
     Profile p;
     p.path = x4vr::profile_path(config_path);
@@ -630,15 +632,17 @@ Profile load_profile(const char *config_path) {
     if (!p.xml.empty())
         return p; // already forked (also re-forks if it was left empty)
 
-    p.xml = x4vr::read_file(config_path);
-    if (p.xml.empty()) {
+    const std::string player = x4vr::read_file(config_path);
+    if (player.empty() && !x4vr::new_profile_file(config_path)) {
         X4VR_LOG("config: could not read %s — passing through", config_path);
         return p;
     }
+    p.xml = x4vr::new_config_fork(player);
     if (x4vr::write_file(p.path.c_str(), p.xml))
-        X4VR_LOG("config: created %s from your config.xml — X4's settings go "
+        X4VR_LOG("config: created %s from %s, font scale %s — X4's settings go "
                  "there while modded; delete it to reset",
-                 p.path.c_str());
+                 p.path.c_str(), player.empty() ? "nothing (a new profile)" : "your config.xml",
+                 x4vr::kVrUiScale);
     else
         X4VR_LOG("config: WARNING could not create %s — settings changed this "
                  "session will not persist",
@@ -829,6 +833,13 @@ Profile load_inputmap_profile(const char *path) {
         return p;
     p.xml = x4vr::read_file(path);
     if (p.xml.empty()) {
+        // A new profile: nothing to bind, so reads fall through and X4 keeps its
+        // defaults, but what it saves must still land in the fork. Not written out,
+        // because X4's own save is the first real content.
+        if (x4vr::new_profile_file(path)) {
+            p.xml = "<!-- no inputmap yet -->";
+            return p;
+        }
         X4VR_LOG("inputmap: could not read %s — passing through", path);
         return p;
     }
@@ -943,8 +954,12 @@ Profile load_content_profile(const char *path) {
         return p;
     p.xml = x4vr::read_file(path);
     if (p.xml.empty()) {
-        X4VR_LOG("content: could not read %s — passing through", path);
-        return p;
+        if (!x4vr::new_profile_file(path)) {
+            X4VR_LOG("content: could not read %s — passing through", path);
+            return p;
+        }
+        // A new profile: our extension still has to be on for its first run.
+        p.xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<content>\n</content>\n";
     }
     if (!x4vr::write_file(p.path.c_str(), p.xml))
         X4VR_LOG("content: WARNING could not create %s", p.path.c_str());

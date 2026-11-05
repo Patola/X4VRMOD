@@ -76,6 +76,42 @@ QPixmap statusIcon(Status s, qreal ratio) {
     return pm;
 }
 
+// Rich text, so Qt wraps a long one.
+QString tip(const QString &text) { return "<p>" + text.toHtmlEscaped() + "</p>"; }
+
+// What each row is for, on hover.
+QString rowTip(const std::string &id) {
+    if (id == "x4")
+        return "The Linux copy of X4 chosen above, and its version.";
+    if (id == "patches")
+        return "Some features change X4's code in memory, so each needs the exact code it was "
+               "written for. Any that doesn't find it turns off by itself, and the game still runs.";
+    if (id == "steam")
+        return "The Steam version of X4 needs Steam open. A GOG copy doesn't.";
+    if (id == "running")
+        return "We won't start the game again if it's already running.";
+    if (id == "gamescope")
+        return "gamescope gives X4 a virtual screen sized for both eyes, whatever your desktop's "
+               "resolution is.";
+    if (id == "vr")
+        return "Asked through OpenXR, without starting a VR session: is a runtime up, and is a "
+               "headset connected?";
+    if (id == "layer")
+        return "The part of the mod between X4 and your GPU, which makes the two eye images. It "
+               "only loads for this game.";
+    if (id == "mod")
+        return "The mod's X4 extension: your head can turn further, and the camera sway is gone. "
+               "It's on only in VR sessions.";
+    if (id == "gpu")
+        return "The mod draws both eyes in one pass, which needs Vulkan 1.2 and multiview.";
+    return "";
+}
+
+// Flatscreen only needs a copy of X4 that can start. The rest is the mod's.
+bool neededFlat(const std::string &id) {
+    return id == "x4" || id == "steam" || id == "running";
+}
+
 QString fixLabel(const std::string &fix) {
     if (fix == "install")
         return "Install...";
@@ -87,10 +123,9 @@ QString fixLabel(const std::string &fix) {
         return "Details";
     if (fix == "start-steam")
         return "Start Steam";
-    if (fix == "start-steamvr")
-        return "Start SteamVR";
+    // Only with neither WiVRn nor Steam to start: updateVrStart has the rest.
     if (fix == "start-vr")
-        return wivrn_program().empty() ? "Help" : "Start WiVRn";
+        return "Help";
     return "";
 }
 
@@ -121,45 +156,34 @@ Window::~Window() {
         m_worker->wait();
 }
 
-QToolButton *Window::helpButton(const QString &anchor) {
-    auto *b = new QToolButton(this);
-    b->setText("?");
-    b->setAutoRaise(true);
-    b->setFocusPolicy(Qt::NoFocus);
-    b->setToolTip("What this is, and why");
-    connect(b, &QToolButton::clicked, this, [this, anchor] { openHelp(anchor); });
-    return b;
-}
-
-QWidget *Window::labelled(const QString &text, const QString &anchor) {
-    auto *w = new QWidget(this);
-    auto *h = new QHBoxLayout(w);
-    h->setContentsMargins(0, 0, 0, 0);
-    h->addWidget(new QLabel(text, w));
-    h->addWidget(helpButton(anchor));
-    h->addStretch(1);
-    return w;
-}
-
 QWidget *Window::buildSettings() {
     auto *w = new QWidget(this);
     w->setFixedWidth(280);
     auto *v = new QVBoxLayout(w);
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(4);
+    auto setting = [v, w](const QString &name, QWidget *field, const QString &why) {
+        auto *label = new QLabel(name, w);
+        label->setToolTip(tip(why));
+        field->setToolTip(tip(why));
+        v->addWidget(label);
+        v->addWidget(field);
+    };
 
-    v->addWidget(labelled("Eye resolution", "eye"));
     m_eyeBox = new QComboBox(w);
     m_eyeBox->setObjectName("eye");
-    v->addWidget(m_eyeBox);
+    setting("Eye resolution", m_eyeBox,
+            "The size of the image made for each eye. Larger is sharper, and your GPU draws it "
+            "twice. It's chosen here because X4's own menu would break a running session.");
     connect(m_eyeBox, &QComboBox::currentIndexChanged, this, [this] { eyeChosen(); });
 
-    v->addWidget(labelled("Upscaler", "upscaler"));
     m_upBox = new QComboBox(w);
     m_upBox->setObjectName("upscaler");
     for (const Upscaler &u : upscalers())
         m_upBox->addItem(u.label, QString(u.mode));
-    v->addWidget(m_upBox);
+    setting("Upscaler", m_upBox,
+            "X4 draws a smaller image and enlarges it: faster, and a little less sharp. Above "
+            "3200 per eye, FSR 1 Quality is chosen for you, and you can choose None to undo that.");
     connect(m_upBox, &QComboBox::currentIndexChanged, this, [this] { upscalerChosen(); });
 
     m_renders = new QLabel(w);
@@ -168,25 +192,16 @@ QWidget *Window::buildSettings() {
     v->addWidget(m_renders);
 
     v->addSpacing(4);
-    v->addWidget(labelled("Eye distance", "ipd"));
     m_ipd = new QDoubleSpinBox(w);
     m_ipd->setObjectName("ipd");
     m_ipd->setRange(50.0, 80.0);
     m_ipd->setDecimals(1);
     m_ipd->setSingleStep(0.5);
     m_ipd->setSuffix(" mm");
-    v->addWidget(m_ipd);
+    setting("Eye distance", m_ipd,
+            "How far apart the two eye images are taken, which sets how big the world feels. 64 "
+            "mm suits most people. It isn't read from the headset yet.");
     connect(m_ipd, &QDoubleSpinBox::valueChanged, this, [this](double mm) { ipdChanged(mm); });
-
-    v->addSpacing(4);
-    auto *leanRow = new QHBoxLayout;
-    m_lean = new QCheckBox("Lean in the cockpit", w);
-    m_lean->setObjectName("lean");
-    leanRow->addWidget(m_lean);
-    leanRow->addWidget(helpButton("lean"));
-    leanRow->addStretch(1);
-    v->addLayout(leanRow);
-    connect(m_lean, &QCheckBox::toggled, this, [this](bool on) { leanToggled(on); });
     v->addStretch(1);
     return w;
 }
@@ -213,8 +228,10 @@ QWidget *Window::buildChecks() {
         row.text->setTextFormat(Qt::RichText);
         row.fix = new QPushButton(w);
         row.fix->setObjectName(QString("fix-") + id);
-        row.help = helpButton(QString("row-") + id);
         const std::string sid = id;
+        const QString why = tip(rowTip(sid));
+        row.icon->setToolTip(why);
+        row.text->setToolTip(why);
         connect(row.fix, &QPushButton::clicked, this, [this, sid] {
             const auto it = m_checks.find(sid);
             if (it != m_checks.end())
@@ -223,12 +240,24 @@ QWidget *Window::buildChecks() {
         grid->addWidget(row.icon, r, 0, Qt::AlignTop);
         grid->addWidget(row.text, r, 1);
         grid->addWidget(row.fix, r, 2, Qt::AlignTop);
-        grid->addWidget(row.help, r, 3, Qt::AlignTop);
+        // Starting a runtime is a choice, with WiVRn first, so that row's button is a pull-down.
+        if (sid == "vr") {
+            m_vrStart = new QToolButton(w);
+            m_vrStart->setObjectName("start-vr");
+            m_vrStart->setPopupMode(QToolButton::MenuButtonPopup);
+            m_vrStart->setMenu(new QMenu(m_vrStart));
+            m_vrStart->hide();
+            connect(m_vrStart, &QToolButton::clicked, this, [this] {
+                const QList<QAction *> choices = m_vrStart->menu()->actions();
+                if (!choices.isEmpty())
+                    choices.first()->trigger();
+            });
+            grid->addWidget(m_vrStart, r, 2, Qt::AlignTop);
+        }
         m_rows[sid] = row;
         row.icon->hide();
         row.text->hide();
         row.fix->hide();
-        row.help->hide();
         r++;
     }
     v->addLayout(grid);
@@ -261,15 +290,20 @@ void Window::buildUi() {
     v->setSpacing(8);
 
     auto *gameRow = new QHBoxLayout;
-    gameRow->addWidget(new QLabel("Game", content));
-    gameRow->addWidget(helpButton("game"));
+    auto *gameLabel = new QLabel("Game", content);
+    const QString gameTip = tip("Which copy of X4 to play. It must be the Linux version: the mod "
+                                "can't work with the Windows one under Proton.");
+    gameLabel->setToolTip(gameTip);
+    gameRow->addWidget(gameLabel);
     m_gameBox = new QComboBox(content);
     m_gameBox->setObjectName("game");
+    m_gameBox->setToolTip(gameTip);
     m_gameBox->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_gameBox->setMinimumContentsLength(30);
     gameRow->addWidget(m_gameBox, 1);
     auto *browseBtn = new QPushButton("Browse...", content);
     browseBtn->setObjectName("browse");
+    browseBtn->setToolTip(tip("Find X4's program yourself, if it isn't in the list."));
     gameRow->addWidget(browseBtn);
     v->addLayout(gameRow);
     connect(m_gameBox, &QComboBox::currentIndexChanged, this, [this] { gameChosen(); });
@@ -293,14 +327,17 @@ void Window::buildUi() {
     auto *bottom = new QHBoxLayout;
     auto *helpBtn = new QPushButton("Help", content);
     helpBtn->setObjectName("help");
+    helpBtn->setToolTip(tip("The whole guide, with troubleshooting."));
     connect(helpBtn, &QPushButton::clicked, this, [this] { openHelp(""); });
     bottom->addWidget(helpBtn, 0, Qt::AlignVCenter);
     auto *launch = new QPushButton("Launch options", content);
     launch->setObjectName("launch-options");
+    launch->setToolTip(tip("How to start the game with the mod from Steam or a terminal."));
     connect(launch, &QPushButton::clicked, this, [this] { launchOptions(); });
     bottom->addWidget(launch, 0, Qt::AlignVCenter);
     auto *bug = new QPushButton("Report a bug", content);
     bug->setObjectName("report");
+    bug->setToolTip(tip("Make a report to attach to a GitHub issue. Nothing is sent by itself."));
     connect(bug, &QPushButton::clicked, this, [this] { report(); });
     bottom->addWidget(bug, 0, Qt::AlignVCenter);
 
@@ -312,7 +349,6 @@ void Window::buildUi() {
         connect(a, &QAction::triggered, this, fn);
         return a;
     };
-    item("Play with debug log", [this] { play(true); });
     item("Open logs", [this] { openLogs(); });
     if (m_layout.kind == LayoutKind::Zip)
         m_menuAction = item("Add to application menu", [this] { addToMenu(); });
@@ -325,11 +361,22 @@ void Window::buildUi() {
     more->setMenu(menu);
     bottom->addWidget(more, 0, Qt::AlignVCenter);
 
-    m_status = new QLabel(content);
-    m_status->setObjectName("status");
-    m_status->setWordWrap(true);
-    m_status->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    bottom->addWidget(m_status, 1);
+    bottom->addStretch(1);
+
+    auto *options = new QVBoxLayout;
+    options->setSpacing(2);
+    m_debug = new QCheckBox("Debug log", content);
+    m_debug->setObjectName("debug");
+    m_debug->setToolTip(tip("This run also logs what the mod is doing, for Report a bug. The game "
+                            "plays the same, and the log runs to tens of MB."));
+    m_flat = new QCheckBox("Flatscreen", content);
+    m_flat->setObjectName("flatscreen");
+    m_flat->setToolTip(tip("Start X4 by itself, on your screen, without the mod, even with VR "
+                           "running. If something also goes wrong there, it isn't the mod."));
+    connect(m_flat, &QCheckBox::toggled, this, [this] { flatToggled(); });
+    options->addWidget(m_debug);
+    options->addWidget(m_flat);
+    bottom->addLayout(options);
 
     m_play = new QPushButton("Play", content);
     m_play->setObjectName("play");
@@ -350,7 +397,14 @@ void Window::buildUi() {
     QFont small = version->font();
     small.setPointSizeF(small.pointSizeF() * 0.85);
     version->setFont(small);
-    v->addWidget(version);
+    m_status = new QLabel(content);
+    m_status->setObjectName("status");
+    m_status->setWordWrap(true);
+    m_status->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    auto *foot = new QHBoxLayout;
+    foot->addWidget(version);
+    foot->addWidget(m_status, 1);
+    v->addLayout(foot);
     root->addWidget(content);
 }
 
@@ -457,18 +511,21 @@ void Window::syncSettings() {
     m_eyeBox->setCurrentIndex(m_eyeBox->findData(m_eye.eye));
     m_upBox->setCurrentIndex(m_upBox->findData(q(m_eye.upscaler)));
 
+    // Only when an upscaler makes it differ: the eye size is in the list above.
     const int size = render_size(m_eye.eye, m_eye.upscaler);
-    QString text = QString("Renders %1 x %1.").arg(size);
+    QStringList lines;
+    if (size != m_eye.eye)
+        lines << QString("Renders %1 x %1.").arg(size);
     if (!m_note.isEmpty())
-        text += " " + m_note;
+        lines << m_note;
     const std::string en = eye_note(m_eye.eye, m_steamvr);
     if (!en.empty())
-        text += " " + q(en);
-    m_renders->setText(text);
+        lines << q(en);
+    m_renders->setText(lines.join(' '));
+    m_renders->setVisible(!lines.isEmpty());
 
     const std::string ipd = m_profile.get("ipd");
     m_ipd->setValue(ipd.empty() ? 64.0 : atof(ipd.c_str()) * 1000.0);
-    m_lean->setChecked(m_profile.get("lean", "1") != "0");
     m_syncing = false;
 }
 
@@ -522,14 +579,17 @@ void Window::ipdChanged(double mm) {
     saveProfile();
 }
 
-void Window::leanToggled(bool on) {
-    if (m_syncing)
-        return;
-    if (on)
-        m_profile.values.erase("lean");
-    else
-        profile_set(m_profile, "lean", "0");
-    saveProfile();
+void Window::flatToggled() {
+    // Nothing of the mod's applies to a flat game, so none of it looks as if it does.
+    const bool flat = m_flat->isChecked();
+    m_debug->setEnabled(!flat);
+    m_eyeBox->setEnabled(!flat);
+    m_upBox->setEnabled(!flat);
+    m_ipd->setEnabled(!flat);
+    for (const char *id : kRowIds)
+        updateRow(id);
+    updatePlay();
+    fitHeight();
 }
 
 // ---------------------------------------------------------------------- checks
@@ -618,16 +678,23 @@ void Window::updateRow(const std::string &id) {
     const bool shown = it != m_checks.end();
     row.icon->setVisible(shown);
     row.text->setVisible(shown);
-    row.help->setVisible(shown);
+    if (id == "vr")
+        updateVrStart(false);
     if (!shown) {
         row.fix->hide();
         return;
     }
     const Check &c = it->second;
     row.icon->setPixmap(statusIcon(c.status, devicePixelRatioF()));
-    row.icon->setToolTip(c.status == Status::Ok     ? "Good"
-                         : c.status == Status::Warn ? "It can start, with something off"
-                                                    : "This has to be fixed first");
+    // In a flat game this row doesn't count: greyed, with nothing to fix.
+    const bool counts = !m_flat->isChecked() || neededFlat(id);
+    row.icon->setEnabled(counts);
+    row.text->setEnabled(counts);
+    if (!counts) {
+        row.text->setText("<b>" + q(c.title).toHtmlEscaped() + "</b>");
+        row.fix->hide();
+        return;
+    }
     QString detail = q(c.detail);
     // The Game box already shows the folder.
     if (id == "x4" && c.status == Status::Ok) {
@@ -648,19 +715,54 @@ void Window::updateRow(const std::string &id) {
         html += "<br>" + detail.toHtmlEscaped();
     }
     row.text->setText(html);
-    row.text->setToolTip(q(c.detail));
+    if (id == "vr" && c.fix == "start-vr")
+        updateVrStart(true);
     const QString label = fixLabel(c.fix);
     row.fix->setText(label);
-    row.fix->setVisible(!label.isEmpty());
+    row.fix->setVisible(!label.isEmpty() && !(m_vrStart->isVisibleTo(this) && id == "vr"));
+}
+
+void Window::updateVrStart(bool wanted) {
+    const QString wivrn = q(wivrn_program()), steam = q(find_on_path("steam"));
+    m_vrStart->setVisible(wanted && (!wivrn.isEmpty() || !steam.isEmpty()));
+    // Rebuilt only when it differs, because this runs on every check and could close an
+    // open menu.
+    const QString choices = wivrn + "|" + steam;
+    if (choices == m_vrChoices)
+        return;
+    m_vrChoices = choices;
+    QMenu *menu = m_vrStart->menu();
+    menu->clear();
+    auto choice = [this, menu](const QString &label, const QString &program, const QStringList &args) {
+        connect(menu->addAction(label), &QAction::triggered, this,
+                [this, program, args] { startProgram(program, args); });
+    };
+    if (!wivrn.isEmpty())
+        choice("Start WiVRn", wivrn, {});
+    if (!steam.isEmpty())
+        choice("Start SteamVR", steam, {"steam://run/250820"});
+    if (!menu->actions().isEmpty())
+        m_vrStart->setText(menu->actions().first()->text());
+}
+
+void Window::startProgram(const QString &program, const QStringList &args) {
+    if (!m_opt.live) {
+        m_lastLaunch = QStringList{program} + args;
+        return;
+    }
+    if (!QProcess::startDetached(program, args))
+        message("Couldn't start", "Couldn't run " + program, true);
+    requestChecks(true);
 }
 
 void Window::updatePlay() {
     int blockers = 0;
     std::string first;
     std::vector<Check> rows;
+    const bool flat = m_flat->isChecked();
     for (const char *id : kRowIds) {
         const auto it = m_checks.find(id);
-        if (it == m_checks.end())
+        if (it == m_checks.end() || (flat && !neededFlat(id)))
             continue;
         rows.push_back(it->second);
         if (it->second.status == Status::Block) {
@@ -687,6 +789,8 @@ void Window::updatePlay() {
     } else {
         colour = "#2e9e4f";
         enabled = true;
+        if (flat)
+            status = "X4 by itself, without the mod.";
     }
     if (status.isEmpty())
         status = m_lastSession;
@@ -731,13 +835,12 @@ void Window::tick() {
 }
 
 // ------------------------------------------------------------------------- play
-void Window::play(bool debug) {
-    // The debug run comes from a menu, which doesn't grey out with the button.
-    if (!m_play->isEnabled()) {
-        message("Not yet", "The checklist has something to fix first.", true);
-        return;
-    }
+void Window::play() {
+    const bool flat = m_flat->isChecked();
+    const bool debug = m_debug->isChecked() && !flat;
     m_lastLaunch = {"run"};
+    if (flat)
+        m_lastLaunch << "--flat";
     if (debug)
         m_lastLaunch << "--debug";
     m_lastLaunch << "--game" << q(m_game);
@@ -799,15 +902,9 @@ void Window::runFix(const std::string &id, const std::string &fix) {
     } else if (fix == "details") {
         showDetails(id);
     } else if (fix == "start-steam") {
-        QProcess::startDetached("steam", {});
-    } else if (fix == "start-steamvr") {
-        QProcess::startDetached("steam", {"steam://run/250820"});
+        startProgram("steam", {});
     } else if (fix == "start-vr") {
-        const std::string wivrn = wivrn_program();
-        if (!wivrn.empty())
-            QProcess::startDetached(q(wivrn), {});
-        else
-            openHelp("wivrn");
+        openHelp("wivrn");
     }
 }
 
@@ -918,8 +1015,6 @@ void Window::openLogs() {
 void Window::report() {
     ReportDialog d(m_home, m_game, this);
     d.exec();
-    if (d.wantsDebugRun())
-        play(true);
 }
 
 void Window::openHelp(const QString &anchor) {

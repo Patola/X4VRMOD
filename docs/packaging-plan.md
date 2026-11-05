@@ -20,7 +20,8 @@ in every log, the static runtime, the single extension.
 | 9 | An unknown X4 build (2026-11-05) | **Amber "Play anyway",** naming what turns off. Play is green only when everything is met, and grey only when it can't launch. |
 | 10 | Who creates the custom config files? (2026-11-05) | **The mod, as today; the launcher never does.** Steam launch options and the command line bypass the launcher, so the mod must do it anyway, and it learns the real profile path when X4 opens it. Settings reach the mod as environment variables, served in memory. The launcher only reports and deletes the files. |
 | 11 | Distribution and names (2026-11-05) | **Packages and a zip.** CLI `x4vrmod`, window `x4vrmod-launcher`, zip data directory `x4vrmod-data/`. |
-| 12 | Which VR runtime to suggest (2026-11-05) | **WiVRn.** The window's button and text put it first whenever it's installed; SteamVR is offered first only when there's no WiVRn, as for a headset wired to the PC. |
+| 12 | Which VR runtime to suggest (2026-11-05) | **WiVRn, by making it the first choice,** not by saying so in the window: first in the pull-down, and the help gives the reasons. SteamVR is offered alone only when there's no WiVRn, as for a headset wired to the PC. |
+| 13 | The font scale (2026-11-05) | **`<uiscale>` starts at 0.6 in the mod's fork,** because X4's 1.0 is too big in VR. Only at the fork's creation, so a later choice in X4's options stays; vanilla's `config.xml` is never written. |
 
 Clarifications from Patola:
 * **DLSS:** the development PC has an AMD GPU, so no DLSS here. A friend with
@@ -47,7 +48,7 @@ launcher should not have to know it.
     command lines before (X4VR_PROJ_INVPROJ, X4VR_UI_FOV).
 * **Three kinds of variables**, after the move:
   * **Settings a user changes:** resolution, upscaler, field of view, IPD,
-    VR runtime, lean on/off. The launcher's settings map to these.
+    VR runtime. The launcher's settings map to these.
   * **Internals:** shear, canvas, w-gate, servo gains, patch switches. They
     keep their variables for development and do not appear in the launcher.
   * **Instruments:** LAGLOG, POSELOG, CAMSTAMP, CAMDIFF, HOVERLOG, FOOTLOG,
@@ -238,13 +239,13 @@ Egosoft):
     | [2816 x 2816 (default)     v]  | (ok) X4 found    9.00, build 23660954|
     | Upscaler                       | (ok) Steam running                  |
     | [None (full resolution)    v]  | (ok) gamescope installed     3.17.0 |
-    | Renders 2816 x 2816.           | (x)  Headset not connected  [Retry] |
+    |                                | (x)  Headset not connected  [Retry] |
     | Eye distance                   | (ok) Vulkan layer installed  v0.9.9 |
     | [64.0 mm                   ^]  | (ok) Mod installed                  |
-    | [x] Lean in the cockpit        |                                     |
     |----------------------------------------------------------------------|
-    | [Help] [Launch options] [Report a bug] [More v]  1 to fix  [  PLAY  ]|
-    | v0.9.9 - supports X4 9.00                                            |
+    | [Help] [Launch options] [Report a bug] [More v]  [ ] Debug log [PLAY]|
+    |                                                  [ ] Flatscreen      |
+    | v0.9.9 - supports X4 9.00 - unofficial...      1 thing to fix first  |
     +----------------------------------------------------------------------+
 
 * **Play:** green "Play" when every condition is met; amber "Play anyway" when it
@@ -254,14 +255,28 @@ Egosoft):
   Start Steam, Start WiVRn or SteamVR, Retry, Browse. Rows refresh while the window
   is open, so starting WiVRn turns its row green without a click (see *The VR
   probe*).
-* **More:** Play with debug log, Open logs, Add to application menu (zip only),
-  Advanced (field of view, extra environment variables), Reset to defaults, Uninstall,
-  About. Uninstall is here so it can't be hit by accident.
-* **WiVRn is what we suggest** (Patola, 2026-11-05), and the window says so: with WiVRn
-  installed the VR row's button is Start WiVRn, even when SteamVR is the active runtime.
-  Start SteamVR appears only without WiVRn, because a headset wired to the PC has no other
-  way. His reasons, in the help: a clearer picture than SteamVR's on the same headset, a
-  codec to choose, and no jumbled picture at 4224.
+* **More:** Open logs, Add to application menu (zip only), Advanced (field of view, extra
+  environment variables), Reset to defaults, Uninstall, About. Uninstall is here so it
+  can't be hit by accident.
+* **Explanations are on hover** (Patola, 2026-11-05): each row and setting has its own
+  tooltip, in place of the `?` buttons that opened the whole help. Help has the rest.
+* **"Renders" appears only when an upscaler makes it differ:** otherwise the eye list
+  already says it.
+* **No lean checkbox** (Patola, 2026-11-05): no player has a reason to turn it off. For
+  isolating a bug, Advanced's `X4VR_HEAD_6DOF=0` does it.
+* **WiVRn is the first choice** (Patola, 2026-11-05), shown by order rather than said: the
+  VR row's button is a pull-down that starts WiVRn, and offers SteamVR on its arrow, with no
+  text under the row. SteamVR alone is offered without WiVRn. Why, in the help: a clearer
+  picture than SteamVR's on the same headset, a codec to choose, and no jumbled picture at
+  4224.
+* **Debug log and Flatscreen,** checkboxes beside Play. Neither is saved: both start off
+  when the window opens.
+  * **Debug log:** below, under Debug mode and bug reports.
+  * **Flatscreen** (`x4vrmod run --flat`): X4 by itself, as a baseline, even with VR
+    running. It runs X4's own `testandlaunch`, with the three flags a mod session gets, so
+    the mod is the only difference: no script of ours, no preload, no layer, and the
+    extension stays off by its manifest's `enabled="0"`. Play goes green with only X4,
+    Steam and "not running" counted; the other rows grey out.
 * **Eye distance is manual for now:** the mock's "Automatic, from headset" needs layer work.
   `configured_ipd()` goes into shear constants while pipelines are built, and OpenXR only
   reports it with a session.
@@ -457,9 +472,9 @@ its paths parameterised (`BUILD`, `ROOT`, the `/nvme` default, `SteamAppId`).
   includes systemd-coredump's backtrace when one exists for X4.
 
 ### What's built (2026-11-05)
-* **Debug runs:** `x4vrmod run --debug`, and Play with debug log in the window, set
+* **Debug runs:** `x4vrmod run --debug`, and the Debug log checkbox in the window, set
   `X4VR_DEBUG=1`, which applies the `debug` rows of `launch/defaults.conf`: take 375's
-  instruments, logging only, in a log named `*-debug.log`. For that run only.
+  instruments, logging only, in a log named `*-debug.log`.
 * **The report:** below, as a `.tar.gz` (GitHub doesn't take `.tar.zst`), without the
   scorer (the log reaches us, and we run it), and with the launch's output, the settings
   and a crash's backtrace from `coredumpctl`. The issue form is

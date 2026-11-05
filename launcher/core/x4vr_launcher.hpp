@@ -280,6 +280,9 @@ ActionReport uninstall_apply(const UninstallPlan &p);
 // failure. `command` is Steam's %command%, when there is one.
 int run_mod(const std::string &home, const std::string &game,
             const std::vector<std::string> &command);
+// X4 by itself, on the screen, the way X4 starts itself: a baseline with nothing of
+// ours in it, whatever VR is doing. Returns only on failure.
+int run_flat(const std::string &home, const std::string &game);
 std::string steam_launch_line(const std::string &home);
 std::string terminal_line(const std::string &home);
 std::string log_dir(const std::string &home);
@@ -310,8 +313,8 @@ std::vector<Check> run_checks(const CheckOptions &o);
 Check vr_row(const ActiveRuntime &rt, const XrProbe &p);
 // The checks as text, one line each.
 std::string checks_text(const std::vector<Check> &checks);
-// WiVRn's program to start, the dashboard if there is one, or "". It's what we suggest:
-// a sharper picture than SteamVR on the same headset (docs/packaging-plan.md).
+// WiVRn's program to start, the dashboard if there is one, or "". It's the first choice
+// wherever one is offered (docs/packaging-plan.md, decision 12).
 std::string wivrn_program();
 
 // ------------------------------------------------------------------ bug reports

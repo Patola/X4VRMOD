@@ -149,10 +149,39 @@ grep -q 'log=/tmp/mine.log ' <<<"$out" && ok "run: an explicit X4VR_LOG is kept"
 out=$(env -u X4VR_LOG X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 $I run --game "$G" 2>/dev/null)
 grep -q 'poselog=unset' <<<"$out" && ok "run: no instruments in a normal run" || bad "normal: $out"
 out=$(env -u X4VR_LOG X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 $I run --debug --game "$G" 2>/dev/null)
+debugrun=$out
 grep -q 'poselog=1' <<<"$out" && ok "run --debug: the instruments are on" || bad "debug: $out"
 grep -qE "log=[^ ]*-debug\.log " <<<"$out" && ok "run --debug: its log says so" || bad "debug log: $out"
+# Flatscreen: X4's own way in, with nothing of ours, whatever the environment asks for.
+cat > "$G/testandlaunch" <<'SH'
+#!/bin/sh
+echo "THROUGH testandlaunch"
+exec ./X4 "$@"
+SH
+chmod +x "$G/testandlaunch"
+out=$(env X4VR_H=9999 $I run --flat --game "$G" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "run --flat: starts" || bad "flat: rc=$rc $out"
+grep -q '^THROUGH testandlaunch' <<<"$out" && ok "run --flat: by X4's own testandlaunch" || bad "flat: $out"
+grep -q '^FAKE args=3 steam=unset ' <<<"$out" && ok "run --flat: the usual flags, no Steam for a non-Steam X4" || bad "flat: $out"
+grep -q 'poselog=unset' <<<"$out" && ok "run --flat: no instruments" || bad "flat: $out"
+grep -q 'x4vr-launch' <<<"$out" && bad "run --flat: went through the launch script" || ok "run --flat: not through the launch script"
+out=$(env LD_PRELOAD= $I run --flat --debug --game "$G" 2>&1)
+grep -q 'poselog=unset' <<<"$out" && ok "run --flat --debug: flat wins" || bad "flat debug: $out"
+out=$($I run --flat --game "$G" -- /bin/true 2>&1); rc=$?
+[ "$rc" != 0 ] && ok "run --flat: refuses a command" || bad "flat with a command: $out"
+rm -f "$G/testandlaunch"
+out=$($I run --flat --game "$G" 2>&1)
+grep -q '^FAKE args=3 ' <<<"$out" && ok "run --flat: without testandlaunch, X4 itself" || bad "flat bare: $out"
+# A copy that links Steam gets its app id, as X4 needs outside Steam.
+SG="$T/game-steam"
+mkdir -p "$SG"
+cc -shared -o "$SG/libsteam_api.so" -x c /dev/null
+cc -o "$SG/X4" "$T/fake.c" -L"$SG" -Wl,--no-as-needed -lsteam_api -Wl,-rpath,"$SG"
+echo 900 > "$SG/version.dat"
+out=$($I run --flat --game "$SG" 2>&1)
+grep -q '^FAKE args=3 steam=392160 ' <<<"$out" && ok "run --flat: Steam's copy gets its app id" || bad "flat steam: $out"
 # A report from the installed copy, with a real log: nothing private, and it's an archive.
-dbg=$(sed -E 's/.* log=([^ ]*) .*/\1/' <<<"$out")
+dbg=$(sed -E 's/.* log=([^ ]*) .*/\1/' <<<"$debugrun")
 mkdir -p "$(dirname "$dbg")"
 echo "session in $H on $(hostname)" > "$dbg"
 out=$($I report --note "It broke" 2>&1); rc=$?

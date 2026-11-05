@@ -22,12 +22,12 @@ static void usage(FILE *f) {
             "      be undone. X4's saves and its own settings are never touched.\n"
             "  x4vrmod report [--log FILE] [--note TEXT]\n"
             "      make a bug report to read and attach to an issue; nothing is sent\n"
-            "  x4vrmod run [--debug] [--game PATH] [COMMAND...]\n"
+            "  x4vrmod run [--debug | --flat] [--game PATH] [COMMAND...]\n"
             "      play. With COMMAND it wraps it: Steam's launch options use\n"
             "      `x4vrmod run %%command%%`.\n"
             "  x4vrmod launch-options           the lines for Steam and a terminal\n"
             "  x4vrmod config [list | get KEY | set KEY VALUE]\n"
-            "      eye, upscaler, ipd, lean, fov, game, env.NAME\n"
+            "      eye, upscaler, ipd, fov, game, env.NAME\n"
             "  x4vrmod locate [--all]           the X4 program that would run; --all: every copy found\n"
             "  x4vrmod probe xr [--verbose]     ask the VR runtime (always asks)\n"
             "  x4vrmod probe vulkan             what the GPUs offer\n"
@@ -160,10 +160,13 @@ static int cmd_uninstall(int argc, char **argv) {
 
 static int cmd_run(int argc, char **argv) {
     std::string game;
+    bool flat = false;
     int i = 2;
     for (; i < argc; i++) {
         if (!strcmp(argv[i], "--debug")) {
             setenv("X4VR_DEBUG", "1", 1);
+        } else if (!strcmp(argv[i], "--flat")) {
+            flat = true;
         } else if (i + 1 < argc && !strcmp(argv[i], "--game")) {
             game = argv[++i];
         } else {
@@ -173,6 +176,13 @@ static int cmd_run(int argc, char **argv) {
     if (i < argc && !strcmp(argv[i], "--"))
         i++;
     std::vector<std::string> command(argv + i, argv + argc);
+    if (flat) {
+        if (!command.empty()) {
+            fprintf(stderr, "x4vrmod run: --flat starts X4 itself, and takes no command\n");
+            return 2;
+        }
+        return run_flat(home_dir(), game);
+    }
     return run_mod(home_dir(), game, command);
 }
 

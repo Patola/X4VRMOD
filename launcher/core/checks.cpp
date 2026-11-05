@@ -168,12 +168,9 @@ std::string wivrn_program() {
     return "";
 }
 
+// The window's button says the rest: WiVRn first, then SteamVR.
 static void no_runtime(Check &c) {
     c.title = "No VR runtime running";
-    c.detail = wivrn_program().empty()
-                   ? "For a standalone headset we suggest WiVRn: install it. A headset wired to "
-                     "the PC uses SteamVR: start that from Steam."
-                   : "Start WiVRn, which we suggest. SteamVR works too.";
     c.fix = "start-vr";
 }
 
@@ -191,17 +188,7 @@ static Check check_vr_row(const std::string &home, XrProbe *xr_out) {
     // killed 5 s later, so no window showed). A check that runs by itself mustn't do
     // that. `x4vrmod probe xr` always asks.
     if (rt.steamvr && !steamvr_is_running()) {
-        // WiVRn is what we suggest, so with it installed that's the button.
-        if (!wivrn_program().empty()) {
-            c.title = "No VR runtime running";
-            c.detail = "Start WiVRn, which we suggest. It takes over from SteamVR while it runs.";
-            c.fix = "start-vr";
-        } else {
-            c.title = "SteamVR isn't running";
-            c.detail = "It's the active VR runtime. Start it from Steam. For a standalone "
-                       "headset, we suggest WiVRn instead.";
-            c.fix = "start-steamvr";
-        }
+        no_runtime(c);
         return c;
     }
     const XrProbe p = xr_probe_child(5000);
@@ -226,7 +213,7 @@ Check vr_row(const ActiveRuntime &rt, const XrProbe &p) {
         break;
     case XrStatus::NoHeadset:
         c.title = "Headset not connected";
-        c.detail = who + " is running, but no headset has joined it.";
+        c.detail = who + " is running, with no headset connected.";
         c.fix = "retry";
         break;
     case XrStatus::NoRuntime:
@@ -241,8 +228,7 @@ Check vr_row(const ActiveRuntime &rt, const XrProbe &p) {
         // (2026-11-05: 5 s of silence without, at once with).
         if (who.find("WiVRn") != std::string::npos) {
             c.title = "Headset not connected";
-            c.detail = "WiVRn is running but gives no answer, as it does until a headset "
-                       "connects. Connect from the WiVRn app in the headset.";
+            c.detail = "Connect from the WiVRn app in the headset.";
         } else {
             c.title = "VR runtime not answering";
             c.detail = who + " didn't answer in time.";

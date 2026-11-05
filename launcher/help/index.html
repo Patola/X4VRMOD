@@ -2,16 +2,16 @@
 <a name="top"></a>
 <h1>X4 VR Mod</h1>
 <p>This window finds X4: Foundations, puts the mod in place, tells you whether
-everything is ready, and starts the game in VR. Each <b>?</b> in the window brings
-you to the part of this page that explains that item, and why it's there.</p>
+everything is ready, and starts the game in VR. Hold the pointer over anything in the
+window for a short explanation. This page has the rest.</p>
 <p><a href="#start">Getting started</a> |
 <a href="#game">Game</a> |
 <a href="#eye">Eye resolution</a> |
 <a href="#headsets">Settings by headset</a> |
 <a href="#upscaler">Upscaler</a> |
 <a href="#ipd">Eye distance</a> |
-<a href="#lean">Lean</a> |
 <a href="#play">Play</a> |
+<a href="#flatscreen">Flatscreen</a> |
 <a href="#checklist">The checklist</a> |
 <a href="#launch">Launch options</a> |
 <a href="#install">Install</a> |
@@ -85,7 +85,7 @@ welcome in a bug report.</p>
 <a name="upscaler"></a>
 <h2>Upscaler</h2>
 <p>An upscaler lets X4 draw a smaller image and enlarges it, in exchange for some
-sharpness. "Renders" under the list always tells you the size X4 really draws.</p>
+sharpness. With one on, "Renders" under the list tells you the size X4 really draws.</p>
 <ul>
 <li><b>None</b> draws at full size. The sharpest, and the most work.</li>
 <li><b>FSR 1</b> enlarges each frame on its own. It's the faster of the two, by about
@@ -107,12 +107,6 @@ eye distance, which an optician or a phone app can measure.</p>
 shaders as it starts, before the headset would report it. Changing it needs a new start
 of the game.</p>
 
-<a name="lean"></a>
-<h2>Lean in the cockpit</h2>
-<p>When on, moving your head moves your view in the cockpit, so you can lean in to read a
-panel or look past a strut. Turning your head works either way. Turn it off if you
-prefer the view fixed to the seat, or if movement in the cockpit bothers you.</p>
-
 <a name="play"></a>
 <h2>The Play button</h2>
 <p><b>Green "Play":</b> everything is ready.</p>
@@ -124,6 +118,15 @@ fixes it.</p>
 <p><img src="window-fix.png"></p>
 <p>While the game runs, the button says "X4 is running" and the launcher stays out of the
 way. Afterwards a line tells you how the session went.</p>
+
+<a name="flatscreen"></a>
+<h3>Flatscreen</h3>
+<p>Tick <b>Flatscreen</b> to start X4 by itself, on your screen, the way it starts without the
+mod, even with VR running. Nothing of the mod's is loaded and its extension stays off, so your
+own settings and saves are in play, and the lines that only matter to the mod grey out.</p>
+<p><img src="window-flat.png"></p>
+<p>It's a baseline: if something also goes wrong there, it isn't the mod, and that's very useful
+to say in a bug report.</p>
 
 <a name="checklist"></a>
 <h2>The checklist</h2>
@@ -162,13 +165,11 @@ resolution is. It's a separate program; install it from your distribution's pack
 <p>The launcher briefly asks your VR runtime through OpenXR whether a headset is there,
 without starting a VR session, which is more reliable than looking for running programs.</p>
 <ul>
-<li><b>No VR runtime running:</b> start WiVRn, which <a href="#wivrn">we suggest</a>, or
-SteamVR.</li>
+<li><b>No VR runtime running:</b> the button starts WiVRn, which <a href="#wivrn">we suggest</a>,
+and its arrow offers SteamVR. The launcher doesn't ask a SteamVR that isn't running, because
+asking starts part of it.</li>
 <li><b>Headset not connected:</b> the runtime is up and has no headset. With WiVRn, open
 the WiVRn app in the headset and connect.</li>
-<li><b>SteamVR is your active runtime and isn't running:</b> start WiVRn, which takes over
-while it runs, or start SteamVR from Steam. The launcher doesn't ask a SteamVR that isn't
-running, because asking starts part of it.</li>
 </ul>
 
 <a name="row-layer"></a>
@@ -211,7 +212,9 @@ modified. The mod's extension is enabled only in VR sessions, so playing flat is
 affected.</p>
 <p><b>Your settings:</b> X4's own <tt>config.xml</tt> is never written. In VR the mod keeps
 its own copies beside it, named <tt>config-x4vrmod.xml</tt> and so on, so what you change
-in VR stays in VR and your flat game keeps its settings.</p>
+in VR stays in VR and your flat game keeps its settings. The one thing it doesn't copy is
+X4's interface scale, which it starts at 0.6, because X4's own 1.0 is too big in a headset.
+You can still change it in X4's options.</p>
 
 <a name="uninstall"></a>
 <h2>Uninstall</h2>
@@ -236,7 +239,6 @@ bug report asks for. You don't need these to play.</p>
 the game you chose.</p>
 <p><b>About:</b> the version, and the licence. This is an unofficial mod, not affiliated
 with or endorsed by Egosoft.</p>
-<p><b>Play with debug log:</b> see <a href="#report">Reporting a bug</a>.</p>
 
 <a name="wivrn"></a>
 <h2>WiVRn or SteamVR?</h2>
@@ -289,10 +291,10 @@ The newer 64-bit Steam that's on its way may eventually resolve it.</p>
 into the page. A short video helps with anything visual.</li>
 </ol>
 <p><img src="report.png"></p>
-<p><b>If you can make it happen again, do it with a debug log.</b> Press <b>Play with debug
-log</b>, in that window or under More, make it happen, quit, and report that session. The game
-plays the same, and the log records much more of what the mod was doing. It runs to tens of MB
-for a session, so it's only for that one run; the next Play is a normal one again.</p>
+<p><b>If you can make it happen again, do it with a debug log.</b> Tick <b>Debug log</b> beside
+Play, make it happen, quit, and report that session. The game plays the same, and the log records
+much more of what the mod was doing. It runs to tens of MB for a session, so leave it off
+otherwise; it's off again next time you open this window.</p>
 <p><b>What's in a report:</b> the mod's and X4's versions, your system, GPU and headset, the
 checklist, your settings, the session's log, and a crash's backtrace if the system kept one.
 They're plain text, and <b>Show the files</b> lets you read them.</p>

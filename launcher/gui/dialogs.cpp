@@ -211,20 +211,13 @@ ReportDialog::ReportDialog(const std::string &home, const std::string &game, QWi
     m_note->setFixedHeight(90);
     box->addWidget(m_note);
 
-    auto *debugRow = new QHBoxLayout;
-    auto *hint = new QLabel("Can you make it happen again? A debug session logs much more, which "
-                            "often makes the difference.",
+    auto *hint = new QLabel("Can you make it happen again? Tick <b>Debug log</b> beside Play, make "
+                            "it happen, then report that session. It logs much more, which often "
+                            "makes the difference.",
                             this);
+    hint->setObjectName("debug-hint");
     hint->setWordWrap(true);
-    auto *debug = new QPushButton("Play with debug log", this);
-    debug->setObjectName("debug-run");
-    connect(debug, &QPushButton::clicked, this, [this] {
-        m_wantsDebug = true;
-        accept();
-    });
-    debugRow->addWidget(hint, 1);
-    debugRow->addWidget(debug);
-    box->addLayout(debugRow);
+    box->addWidget(hint);
 
     m_outcome->setObjectName("outcome");
     m_outcome->setWordWrap(true);

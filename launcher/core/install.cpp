@@ -313,6 +313,37 @@ ActionReport uninstall_apply(const UninstallPlan &p) {
     return r;
 }
 
+int run_flat(const std::string &home, const std::string &game) {
+    bool found = false;
+    const Install in = choose_install(home, game, &found);
+    if (in.kind == PathKind::Windows) {
+        fprintf(stderr, "x4vrmod: %s\n", proton_explanation());
+        return 2;
+    }
+    if (!found || in.kind != PathKind::Linux) {
+        fprintf(stderr, "x4vrmod: X4 wasn't found. Use: x4vrmod config set game PATH\n");
+        return 2;
+    }
+    if (chdir(in.dir.c_str()) != 0) {
+        perror("x4vrmod: couldn't enter X4's folder");
+        return 2;
+    }
+    if (binary_needs_steam(in.exe)) {
+        setenv("SteamAppId", kSteamAppId, 1);
+        setenv("SteamGameId", kSteamAppId, 1);
+    }
+    // testandlaunch is how X4 starts itself; the flags are the ones a mod session gets,
+    // so the mod is the only difference between the two.
+    const std::string own = is_file("testandlaunch") ? "./testandlaunch" : "./" + base_name(in.exe);
+    std::vector<char *> argv = {const_cast<char *>(own.c_str()), const_cast<char *>("-skipintro"),
+                                const_cast<char *>("-nocputhrottle"),
+                                const_cast<char *>("-nosoundthrottle"), nullptr};
+    fflush(nullptr);
+    execv(own.c_str(), argv.data());
+    perror("x4vrmod: couldn't start X4");
+    return 2;
+}
+
 std::string steam_launch_line(const std::string &home) {
     const Layout l = detect_layout(home);
     if (l.kind == LayoutKind::Package)

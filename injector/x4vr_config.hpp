@@ -4,8 +4,8 @@
 //
 // Non-intrusive by design, in two parts:
 //
-//   1. The mod runs off its own file, config-x4vrmod.xml, forked verbatim
-//      from the player's config.xml the first time it is needed. Every read
+//   1. The mod runs off its own file, config-x4vrmod.xml, forked from the
+//      player's config.xml the first time it is needed (new_config_fork). Every read
 //      X4 makes of config.xml is answered from the profile, and every write
 //      is redirected into it. The player's file is opened read-only, once,
 //      and never again — which matters because X4 saves its settings while
@@ -23,6 +23,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE 1
 #endif
+#include <cerrno>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -498,6 +499,27 @@ inline std::string get_tag(const std::string &xml, const char *tag) {
 // fopen() itself (that would re-enter the interposer and recurse forever).
 // We use open()/read() via syscall-level libc entry points obtained from
 // RTLD_NEXT, which our interposers only observe, never redirect.
+// A file of the player's profile that simply isn't there yet: a copy of X4 that has
+// never run. Unreadable is different, and is left alone. Only under EgoSoft/X4, because
+// is_x4_config matches any file called config.xml.
+inline bool new_profile_file(const char *path) {
+    return path && strstr(path, "/EgoSoft/X4/") && access(path, F_OK) != 0 && errno == ENOENT;
+}
+
+// What the fork starts as: the player's config.xml, or nothing but the root on a new
+// profile, because the overrides below still have to reach X4 on its first run. The
+// font scale is the one thing we choose rather than copy: X4's own 1.0 is too big in VR
+// and 0.6 is right (Patola, 2026-11-05). Only here, at creation, so a later choice in
+// X4's options stays.
+inline constexpr const char *kVrUiScale = "0.6";
+inline std::string new_config_fork(const std::string &player) {
+    std::string xml =
+        player.empty() ? std::string("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<root>\n</root>\n")
+                       : player;
+    set_or_insert_tag(xml, "uiscale", kVrUiScale);
+    return xml;
+}
+
 inline std::string read_file(const char *path) {
     std::string out;
     using open_fn = int (*)(const char *, int, ...);

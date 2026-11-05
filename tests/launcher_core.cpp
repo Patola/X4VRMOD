@@ -540,6 +540,7 @@ static void test_profile() {
     check(p.get("eye") == "3072", "a refusal changes nothing");
     check(profile_set(p, "upscaler", "dlss").rfind("error: ", 0) == 0, "an unknown upscaler is refused");
     check(profile_set(p, "nonsense", "1").rfind("error: ", 0) == 0, "an unknown setting is refused");
+    check(profile_set(p, "lean", "0").rfind("error: ", 0) == 0, "lean is no longer a setting");
     check(profile_set(p, "env.NOT A NAME", "1").rfind("error: ", 0) == 0, "a bad variable name is refused");
     check(profile_set(p, "env.1A", "1").rfind("error: ", 0) == 0, "a name can't start with a digit");
     check(profile_set(p, "env.A=B", "1").rfind("error: ", 0) == 0, "a name can't hold an =");
@@ -837,18 +838,16 @@ static void test_suggests_wivrn() {
     setenv("PATH", (bin + ":" + keepPath).c_str(), 1);
     check(wivrn_program() == bin + "/wivrn-dashboard", "the dashboard is what starts WiVRn");
     Check c = vr();
-    check(c.fix == "start-vr", "SteamVR active but stopped, WiVRn installed: the button is WiVRn");
-    check(c.title.find("SteamVR") == std::string::npos, "...the title doesn't send you to SteamVR");
-    check(c.detail.find("Start WiVRn, which we suggest") == 0, "...and the text says so first");
+    check(c.fix == "start-vr", "SteamVR active but stopped: the row offers to start a runtime");
+    check(c.title == "No VR runtime running", "...the title doesn't send you to SteamVR");
+    check(c.detail.empty(), "...and the row has nothing more to say");
     setenv("PATH", "/nonexistent", 1);
     check(wivrn_program().empty(), "no WiVRn installed");
     c = vr();
-    check(c.fix == "start-steamvr", "...then SteamVR is the only thing to offer");
-    check(c.detail.find("we suggest WiVRn") != std::string::npos, "...and it still says what we suggest");
+    check(c.fix == "start-vr" && c.detail.empty(), "...the same row: the window offers what's there");
     remove((home + "/.config/openxr/1/active_runtime.json").c_str());
     c = vr();
-    check(c.fix == "start-vr" && c.detail.find("we suggest WiVRn") != std::string::npos,
-          "no runtime and no WiVRn: it says to install it");
+    check(c.fix == "start-vr" && c.detail.empty(), "no runtime at all: the same row");
     setenv("PATH", keepPath.c_str(), 1);
     if (xr)
         setenv("XR_RUNTIME_JSON", keepXr.c_str(), 1);

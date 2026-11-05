@@ -11,10 +11,11 @@ the window come from `x4vr_test_launcher_gui --shots launcher/help`, the rest fr
     x4vrmod doctor            every condition for playing, one line each
     x4vrmod install           put the mod in place; says what it does to saves
     x4vrmod run [%command%]   launch X4 with the mod, from a terminal or from Steam;
-                              --debug also logs the instruments, for a bug report
+                              --debug also logs the instruments, for a bug report;
+                              --flat starts X4 by itself, a baseline with nothing of ours
     x4vrmod report            make a bug report to read and attach; nothing is sent
     x4vrmod launch-options    the lines to use for that
-    x4vrmod config set K V    eye, upscaler, ipd, lean, fov, game, env.NAME
+    x4vrmod config set K V    eye, upscaler, ipd, fov, game, env.NAME
     x4vrmod uninstall         takes the mod out; --all also deletes the VR settings
     x4vrmod probe x4 [PATH]   X4's version and which of the mod's patches fit
     x4vrmod probe xr          ask the VR runtime
@@ -54,4 +55,5 @@ their code.
 Tests: `build/tests/x4vr_test_launcher`, `build/tests/x4vr_test_launcher_gui` (the window on
 Qt's offscreen platform), `tests/run-launcher-x4-bytes.sh` (a temp copy of X4 with bytes
 bent), `tests/run-launcher-install.sh` (a real zip, a fake home and a fake game) and
-`tests/run-launcher-package.sh` (a real `cmake --install`).
+`tests/run-launcher-package.sh` (a real `cmake --install`). `tests/run-config-fork.sh` covers
+how the mod's config fork is created, through the real injector.

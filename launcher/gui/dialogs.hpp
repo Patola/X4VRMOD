@@ -56,7 +56,6 @@ public:
     void create();
     bool hasResult() const { return m_hasResult; }
     const ReportResult &result() const { return m_result; }
-    bool wantsDebugRun() const { return m_wantsDebug; }
 
 private:
     std::string m_home, m_game;
@@ -66,7 +65,7 @@ private:
     QLabel *m_outcome;
     QPointer<QThread> m_worker;
     ReportResult m_result;
-    bool m_hasResult = false, m_wantsDebug = false;
+    bool m_hasResult = false;
 };
 
 class AdvancedDialog : public QDialog {

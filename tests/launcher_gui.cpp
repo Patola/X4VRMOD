@@ -16,9 +16,11 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QMenu>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QTest>
+#include <QToolButton>
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -92,7 +94,20 @@ static void test_play(Window &w, const QString &shots) {
     auto *x4 = w.findChild<QLabel *>("row-x4");
     check(x4 && x4->text().contains("build 23660954") && !x4->text().contains("/games"),
           "the X4 row leaves the folder to the Game box");
-    check(x4 && x4->toolTip().contains("/games"), "...and has it in its tooltip");
+    for (const char *id : {"x4", "patches", "steam", "running", "gamescope", "vr", "layer", "mod", "gpu"}) {
+        auto *r = w.findChild<QLabel *>(QString("row-") + id);
+        check(r && r->toolTip().size() > 20, std::string("the ") + id + " row explains itself on hover");
+    }
+    auto *running = w.findChild<QLabel *>("row-running");
+    check(running && running->toolTip().contains("already running"), "...each its own");
+    for (const char *name : {"game", "eye", "upscaler", "ipd", "debug", "flatscreen", "report"}) {
+        auto *field = w.findChild<QWidget *>(name);
+        check(field && !field->toolTip().isEmpty(), std::string(name) + " explains itself on hover");
+    }
+    bool noQuestionMarks = true;
+    for (QToolButton *b : w.findChildren<QToolButton *>())
+        noQuestionMarks = noQuestionMarks && b->text() != "?";
+    check(noQuestionMarks, "no ? buttons");
     if (!shots.isEmpty())
         shot(w, shots + "/window-ready.png");
 
@@ -143,24 +158,58 @@ static void test_play(Window &w, const QString &shots) {
     w.play();
     check(w.lastLaunch() == QStringList({"run", "--game", QString::fromStdString(w.gameExe())}),
           "Play runs `x4vrmod run --game` for the chosen copy");
-    w.play(true);
-    check(w.lastLaunch() == QStringList({"run", "--debug", "--game", QString::fromStdString(w.gameExe())}),
-          "the debug run asks for it");
+    auto *debug = w.findChild<QCheckBox *>("debug");
+    auto *flat = w.findChild<QCheckBox *>("flatscreen");
+    check(debug && !debug->isChecked() && flat && !flat->isChecked(), "both checkboxes start off");
+    debug->setChecked(true);
     w.play();
-    check(!w.lastLaunch().contains("--debug"), "...and the next Play is a normal one");
+    check(w.lastLaunch() == QStringList({"run", "--debug", "--game", QString::fromStdString(w.gameExe())}),
+          "Debug log asks for it");
+    debug->setChecked(false);
+    w.play();
+    check(!w.lastLaunch().contains("--debug"), "...and off, it doesn't");
     auto *bug = w.findChild<QPushButton *>("report");
     check(bug && bug->isVisibleTo(&w) && bug->text() == "Report a bug", "Report a bug is in plain sight");
     auto *version = w.findChild<QLabel *>("version");
     check(version && version->text().contains("unofficial"), "the window says it's unofficial");
 
-    // With something to fix, the menu's debug run says so instead of starting anyway.
-    auto blocked = good_rows();
-    replace(blocked, row("mod", Status::Block, "Mod not installed", "", "install"));
-    w.showChecks(blocked);
-    w.lastLaunch();
-    const QStringList before = w.lastLaunch();
-    w.play(true);
-    check(w.lastLaunch() == before && w.lastMessage().contains("fix first"), "a debug run waits for the checklist too");
+    // Flatscreen only needs a copy of X4 that can start, whatever VR and the mod are doing.
+    auto modless = good_rows();
+    replace(modless, row("vr", Status::Block, "No VR runtime running", "", "start-vr"));
+    replace(modless, row("mod", Status::Block, "Mod not installed", "", "install"));
+    replace(modless, row("layer", Status::Block, "Vulkan layer not installed", "", "install"));
+    replace(modless, row("gamescope", Status::Block, "gamescope isn't installed"));
+    replace(modless, row("patches", Status::Warn, "X4 build not supported yet", "", "details"));
+    w.showChecks(modless);
+    check(!play->isEnabled(), "without VR and the mod, Play waits");
+    flat->setChecked(true);
+    check(play->isEnabled() && play->text() == "Play" && play->styleSheet().contains("#2e9e4f"),
+          "Flatscreen: green all the same");
+    check(status->text().contains("without the mod"), "...and it says what it's about to do");
+    auto *modRow = w.findChild<QLabel *>("row-mod");
+    auto *modFix = w.findChild<QPushButton *>("fix-mod");
+    check(modRow && !modRow->isEnabled() && modFix && !modFix->isVisibleTo(&w),
+          "...the mod's rows grey out, with nothing to fix");
+    check(!w.findChild<QToolButton *>("start-vr")->isVisibleTo(&w), "...the VR row offers nothing");
+    check(!debug->isEnabled() && !w.findChild<QComboBox *>("eye")->isEnabled(),
+          "...and Debug log and the VR settings grey out");
+    debug->setChecked(true);
+    w.play();
+    check(w.lastLaunch() == QStringList({"run", "--flat", "--game", QString::fromStdString(w.gameExe())}),
+          "...Play starts it flat, without a debug log");
+    debug->setChecked(false);
+    if (!shots.isEmpty())
+        shot(w, shots + "/window-flat.png");
+    replace(modless, row("running", Status::Block, "X4 is already running", "Close it first."));
+    w.showChecks(modless);
+    check(!play->isEnabled() && status->text().contains("already running"), "...but X4 already running still stops it");
+    auto steamDown = good_rows();
+    replace(steamDown, row("steam", Status::Block, "Steam isn't running", "", "start-steam"));
+    w.showChecks(steamDown);
+    check(!play->isEnabled(), "...and so does Steam being closed");
+    flat->setChecked(false);
+    check(modRow->isEnabled() && debug->isEnabled() && w.findChild<QComboBox *>("eye")->isEnabled(),
+          "off again, everything's back");
     w.showChecks(good_rows());
 }
 
@@ -173,7 +222,7 @@ static void test_eye_rule(Window &w, const std::string &home) {
     check(eye->currentData().toInt() == 2816 && eye->currentText().contains("default"),
           "2816 is the default, and says so");
     check(up->currentData().toString() == "none", "no upscaler by default");
-    check(renders->text().contains("2816 x 2816"), "the render size is shown");
+    check(renders->isHidden(), "no upscaler: no render line, since the eye list already says");
 
     eye->setCurrentIndex(eye->findData(3200));
     check(up->currentData().toString() == "none", "3200 stays native");
@@ -186,11 +235,12 @@ static void test_eye_rule(Window &w, const std::string &home) {
     check(load_profile(profile_path(home)).get("upscaler") == kAutoUpscaler, "...the upscaler too");
 
     up->setCurrentIndex(up->findData("none"));
-    check(renders->text().contains("4224 x 4224") && !renders->text().contains("chosen"),
-          "unselected: full size, and the note goes");
+    check(!renders->text().contains("Renders") && !renders->text().contains("chosen"),
+          "unselected: no render line, and the note goes");
+    check(!renders->isHidden() && renders->text().contains("flat"), "...the map's warning stays");
     eye->setCurrentIndex(eye->findData(4000));
     check(up->currentData().toString() == "none", "moving between large sizes respects that");
-    check(!renders->text().contains("flat"), "4000 keeps the map in depth");
+    check(renders->isHidden(), "4000 keeps the map in depth, so there's nothing to say");
     eye->setCurrentIndex(eye->findData(2816));
     eye->setCurrentIndex(eye->findData(3600));
     check(up->currentData().toString() == kAutoUpscaler, "crossing again selects it again");
@@ -214,15 +264,7 @@ static void test_eye_rule(Window &w, const std::string &home) {
     check(load_profile(profile_path(home)).get("ipd") == "0.0635", "63.5 mm is saved in metres");
     ipd->setValue(64.0);
     check(load_profile(profile_path(home)).get("ipd").empty(), "the default isn't written down");
-    auto *lean = w.findChild<QCheckBox *>("lean");
-    check(lean && lean->isChecked(), "lean starts on, as the shipping line");
-    lean->setChecked(false);
-    check(load_profile(profile_path(home)).get("lean") == "0", "off is saved");
-    bool leanOff = false;
-    for (const auto &[k, v] : profile_env(load_profile(profile_path(home))))
-        leanOff = leanOff || (k == "X4VR_HEAD_6DOF" && v == "0");
-    check(leanOff, "...and reaches the launch script's variable");
-    lean->setChecked(true);
+    check(!w.findChild<QCheckBox *>("lean"), "lean isn't a choice any more");
 }
 
 static void test_browse(Window &w, const std::string &tmp) {
@@ -294,10 +336,8 @@ static void test_report(const std::string &home, const QString &shots) {
     auto *outcome = d.findChild<QLabel *>("outcome");
     check(outcome && outcome->text().contains(".tar.gz"), "it says where the file is");
     check(d.result().issue_url.find("Manticore") != std::string::npos, "the note goes in the issue");
-    check(!d.wantsDebugRun(), "no debug run unless asked");
-    auto *debug = d.findChild<QPushButton *>("debug-run");
-    debug->click();
-    check(d.wantsDebugRun(), "the button asks for a debug run");
+    auto *hint = d.findChild<QLabel *>("debug-hint");
+    check(hint && hint->text().contains("Debug log"), "it points at the Debug log checkbox");
     gui::ReportDialog none(home + "/nobody", "", nullptr);
     auto *ns = none.findChild<QComboBox *>("session");
     check(ns && ns->count() == 1 && ns->currentData().toString().isEmpty(), "no logs: it says so, and still works");
@@ -340,15 +380,35 @@ static void test_suggests_wivrn(Window &w) {
         f.write("#!/bin/sh\n");
     f.close();
     f.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    QFile st(QString::fromStdString(bin + "/steam"));
+    if (st.open(QIODevice::WriteOnly))
+        st.write("#!/bin/sh\n");
+    st.close();
+    st.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
     auto rows = good_rows();
     replace(rows, row("vr", Status::Block, "No VR runtime running", "", "start-vr"));
     setenv("PATH", bin.c_str(), 1);
     w.showChecks(rows);
+    auto *start = w.findChild<QToolButton *>("start-vr");
     auto *fix = w.findChild<QPushButton *>("fix-vr");
-    check(fix && fix->text() == "Start WiVRn", "the VR row's button starts WiVRn");
+    check(start && start->isVisibleTo(&w) && !fix->isVisibleTo(&w), "the VR row's button is a pull-down");
+    check(start->text() == "Start WiVRn", "...and pressing it starts WiVRn");
+    const QList<QAction *> choices = start->menu()->actions();
+    check(choices.size() == 2 && choices[0]->text() == "Start WiVRn" && choices[1]->text() == "Start SteamVR",
+          "...with WiVRn first, then SteamVR");
+    start->click();
+    check(w.lastLaunch().size() == 1 && w.lastLaunch()[0].endsWith("/wivrn-server"), "...it runs WiVRn");
+    choices[1]->trigger();
+    check(w.lastLaunch().size() == 2 && w.lastLaunch()[0].endsWith("/steam") &&
+              w.lastLaunch()[1] == "steam://run/250820", "...and the arrow's second choice, SteamVR");
+    QFile::remove(QString::fromStdString(bin + "/wivrn-server"));
+    w.showChecks(rows);
+    check(start->text() == "Start SteamVR" && start->menu()->actions().size() == 1,
+          "no WiVRn: SteamVR is what's offered");
     setenv("PATH", "/nonexistent", 1);
     w.showChecks(rows);
-    check(fix && fix->text() == "Help", "with no WiVRn it opens the help that recommends it");
+    check(!start->isVisibleTo(&w) && fix->isVisibleTo(&w) && fix->text() == "Help",
+          "neither: it opens the help");
     setenv("PATH", keep.c_str(), 1);
     QDir(QString::fromStdString(bin)).removeRecursively();
     w.showChecks(good_rows());
@@ -389,7 +449,7 @@ static void test_help(const std::string &helpDir) {
     check(pics && picCount >= 3, "every picture in the help exists");
     for (const char *id : {"x4", "patches", "steam", "running", "gamescope", "vr", "layer", "mod", "gpu"})
         check(anchors.count(QString("row-") + id) > 0, std::string("the ") + id + " row has a section");
-    for (const char *a : {"game", "eye", "headsets", "upscaler", "ipd", "lean", "play", "launch",
+    for (const char *a : {"game", "eye", "headsets", "upscaler", "ipd", "play", "flatscreen", "launch",
                           "install", "uninstall", "more", "wivrn", "troubleshooting", "codec", "input",
                           "report"})
         check(anchors.count(a) > 0, std::string("help has a section on ") + a);
@@ -401,7 +461,9 @@ static void test_help(const std::string &helpDir) {
     check(html.contains("We suggest WiVRn"), "the help says WiVRn is what we suggest");
     for (const char *c : {"AV1", "H.265", "H.264", "Steam Input", "Wayland"})
         check(html.contains(c), std::string("troubleshooting covers ") + c);
-    check(html.contains("Play with debug"), "the help explains the debug run");
+    check(html.contains("Debug log"), "the help explains the debug run");
+    check(!html.contains("Lean in"), "the help doesn't mention the lean checkbox");
+    check(!html.contains("<b>?</b>"), "or the ? buttons");
 }
 
 // A real worker thread and real checks, against the fake home.

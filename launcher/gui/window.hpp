@@ -45,8 +45,8 @@ public:
     // A folder or a file, as Browse hands it over. Says why if it can't be used.
     void chooseGame(const QString &path);
     void openHelp(const QString &anchor);
-    // `debug`: this one run also writes the instruments to its log, for a bug report.
-    void play(bool debug = false);
+    // As the two checkboxes beside it say: with a debug log, or X4 by itself.
+    void play();
 
     QString lastMessage() const { return m_lastMessage; }
     QStringList lastLaunch() const { return m_lastLaunch; }
@@ -60,14 +60,11 @@ private:
     struct Row {
         QLabel *icon = nullptr, *text = nullptr;
         QPushButton *fix = nullptr;
-        QToolButton *help = nullptr;
     };
 
     void buildUi();
     QWidget *buildSettings();
     QWidget *buildChecks();
-    QToolButton *helpButton(const QString &anchor);
-    QWidget *labelled(const QString &text, const QString &anchor);
 
     void reloadGames();
     void syncSettings();
@@ -76,12 +73,14 @@ private:
     void eyeChosen();
     void upscalerChosen();
     void ipdChanged(double mm);
-    void leanToggled(bool on);
+    void flatToggled();
     void browse();
 
     void requestChecks(bool forceVr);
     void applyChecks(const std::vector<Check> &rows, bool keepVr, bool keepGpu);
     void updateRow(const std::string &id);
+    void updateVrStart(bool wanted);
+    void startProgram(const QString &program, const QStringList &args);
     void updatePlay();
     void fitHeight();
     void tick();
@@ -115,8 +114,10 @@ private:
     QComboBox *m_gameBox = nullptr, *m_eyeBox = nullptr, *m_upBox = nullptr;
     QLabel *m_renders = nullptr, *m_status = nullptr;
     QDoubleSpinBox *m_ipd = nullptr;
-    QCheckBox *m_lean = nullptr;
+    QCheckBox *m_debug = nullptr, *m_flat = nullptr;
     QPushButton *m_play = nullptr;
+    QToolButton *m_vrStart = nullptr;
+    QString m_vrChoices;
     QAction *m_menuAction = nullptr;
     std::map<std::string, Row> m_rows;
     std::map<std::string, Check> m_checks;
