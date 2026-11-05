@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "../injector/x4vr_fieldab.hpp"
+#include "x4_path.hpp"
 
 using namespace x4vr::fieldab;
 
@@ -115,7 +116,7 @@ int main() {
     }
 
     // ---- the binary -------------------------------------------------------
-    const char *x4 = "/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4";
+    const char *x4 = x4_test_binary();
     Elf elf;
     if (!elf.load(x4)) {
         printf("skip  effective-field sites — no X4 at %s\n", x4);

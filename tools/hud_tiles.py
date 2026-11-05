@@ -40,11 +40,12 @@ would then be wider than the tile and the correlation core would vanish. That
 is a stated limit of this tool, not a silent filter -- the count is printed.
 """
 import argparse
+import os
 import sys
 
 import numpy as np
 
-sys.path.insert(0, '/home/patola/workspace/claude/X4VRMOD/tools')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ui_disparity import decode_rgba, ncc_shift, tiles   # noqa: E402
 from hud_vs_camera import decode                         # noqa: E402
 from hud_slide import burst_groups, shift2, COARSE, ds   # noqa: E402

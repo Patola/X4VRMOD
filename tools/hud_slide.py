@@ -58,11 +58,12 @@ and what gap would land in it. A diagnosis carried over from another take is
 worse than none, because the two failures need opposite fixes.
 """
 import re
+import os
 import sys
 
 import numpy as np
 
-sys.path.insert(0, '/home/patola/workspace/claude/X4VRMOD/tools')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ui_disparity import decode_rgba, ncc_shift          # noqa: E402
 from hud_vs_camera import decode                         # noqa: E402
 

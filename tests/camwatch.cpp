@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "../injector/x4vr_camwatch.hpp"
+#include "x4_path.hpp"
 
 using namespace x4vr::camwatch;
 
@@ -139,7 +140,7 @@ int main() {
 
     // ---- anchors, against the real binary ----------------------------
     {
-        const char *x4 = "/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4";
+        const char *x4 = x4_test_binary();
         Elf elf;
         if (!elf.load(x4)) {
             printf("skip  anchors — no X4 at %s\n", x4);
@@ -211,7 +212,7 @@ int main() {
 
     // ---- hop 2: code sites against the real binary ---------------------
     {
-        const char *x4 = "/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4";
+        const char *x4 = x4_test_binary();
         Elf elf;
         if (!elf.load(x4)) {
             printf("skip  hop-2 sites — no X4 at %s\n", x4);
@@ -237,7 +238,7 @@ int main() {
 
     // ---- hop 2b: the settings-object sites --------------------------------
     {
-        const char *x4 = "/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4";
+        const char *x4 = x4_test_binary();
         Elf elf;
         if (elf.load(x4)) {
             auto rd = [&](uintptr_t va, void *o, size_t n) {
@@ -258,7 +259,7 @@ int main() {
 
     // ---- hop 3: the camera's own transform --------------------------------
     {
-        const char *x4 = "/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4";
+        const char *x4 = x4_test_binary();
         Elf elf;
         if (elf.load(x4)) {
             auto rd = [&](uintptr_t va, void *o, size_t n) {

@@ -26,7 +26,7 @@ static void usage(FILE *f) {
             "  x4vrmod launch-options           the lines for Steam and a terminal\n"
             "  x4vrmod config [list | get KEY | set KEY VALUE]\n"
             "      eye, upscaler, ipd, lean, fov, game, env.NAME\n"
-            "  x4vrmod locate                   the X4 program that would run\n"
+            "  x4vrmod locate [--all]           the X4 program that would run; --all: every copy found\n"
             "  x4vrmod probe xr [--verbose]     ask the VR runtime (always asks)\n"
             "  x4vrmod probe vulkan             what the GPUs offer\n"
             "  x4vrmod probe x4 [PATH]          X4's version and which patches fit\n"
@@ -272,6 +272,12 @@ int main(int argc, char **argv) {
     if (cmd == "config")
         return cmd_config(argc, argv);
     if (cmd == "locate") {
+        if (argc > 2 && !strcmp(argv[2], "--all")) {
+            for (const Install &in : discover_all(home_dir()))
+                printf("%s\t%s\t%s\n", store_name(in.store),
+                       in.kind == PathKind::Windows ? "windows" : "linux", in.exe.c_str());
+            return 0;
+        }
         bool found = false;
         const Install in = choose_install(home_dir(), "", &found);
         if (!found || in.kind != PathKind::Linux)

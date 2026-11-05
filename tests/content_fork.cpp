@@ -19,7 +19,14 @@ int main() {
     using namespace x4vr;
     check(is_x4_profile_content("/home/p/.config/EgoSoft/X4/96679891/content.xml"),
           "claims the profile's content.xml");
-    check(!is_x4_profile_content("/nvme/SteamLibrary/steamapps/common/X4 Foundations/"
+    // The folder under X4/ is the player's own: Steam's is their account number.
+    check(is_x4_profile_content("/home/q/.config/EgoSoft/X4/1234567/content.xml"),
+          "claims it under someone else's number");
+    check(is_x4_profile_content("/data/xdg/EgoSoft/X4/1234567/content.xml"),
+          "claims it under XDG_CONFIG_HOME");
+    check(is_x4_profile_content("/home/q/.config/EgoSoft/X4/content.xml"),
+          "claims it with no folder for the player");
+    check(!is_x4_profile_content("/some/library/X4 Foundations/"
                                  "extensions/x4vrmod/content.xml"),
           "does NOT claim an extension's own manifest");
     check(!is_x4_profile_content("/home/p/.config/EgoSoft/X4/96679891/extensions/"

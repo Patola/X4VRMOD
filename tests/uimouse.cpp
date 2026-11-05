@@ -23,6 +23,7 @@
 #include <sys/mman.h>
 
 #include "../injector/x4vr_uimouse.hpp"
+#include "x4_path.hpp"
 
 using namespace x4vr;
 
@@ -117,7 +118,7 @@ static const uint8_t kLayerCont[] = {
 
 int main() {
     static Elf elf;
-    const char *x4 = "/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4";
+    const char *x4 = x4_test_binary();
     const bool have = elf.load(x4);
     if (!have) {
         printf("SKIP   no X4 binary at %s — the patch sites are unchecked\n", x4);

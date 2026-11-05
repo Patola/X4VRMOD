@@ -371,7 +371,7 @@ X4-shaped `VkInstanceCreateInfo`, a 2-layer swapchain at the runtime's own
 recommended extent, and a projection layer with per-view pose and FOV accepted
 by the compositor and displayed correctly in a Quest 3 over WiVRn.
 
-    cd /home/patola/workspace/claude/X4VRMOD && cmake --build build -j8
+    cmake --build build -j8
     ./tests/run-xr-probe.sh 20
 
 with WiVRn running and the headset connected. Output tees to
@@ -1121,3 +1121,15 @@ Patola: *"no issues whatsoever"* (Manticore, Hyperion, cockpit, map, Pause,
 ESC). `score_run.py` PASS: build v0.9.9 in both libraries; `pose-ring` 1024
 regions, up to 75 command buffers per frame, 207 regions held at most,
 33,720 resubmits without re-recording, 0 forced, 0 shared.
+
+## Takes 403 and 404 (2026-11-05) — the launcher's launch path (code 8b650cb)
+
+    X4VR_TAKE=403 X4VR_LOG=/tmp/x4vr-take403.log build/launcher/x4vrmod run
+
+Take 404: Steam's launch options set to `<build>/launcher/x4vrmod run %command%`.
+The settings are take 402's: a dry run with a stub gamescope differed only in the take
+number, the log path and the launcher's two new variables (`X4VR_GAME`,
+`X4VR_NEEDS_STEAM`). Patola: both worked perfectly. `score_run.py` PASS on both. Take
+404's log went to `~/.local/state/x4vrmod/logs/`. One difference from Steam: a brief
+Egosoft logo at the start, because `%command%` is a plain `./X4` without our
+`-skipintro -nocputhrottle -nosoundthrottle` (`docs/packaging-plan.md`).

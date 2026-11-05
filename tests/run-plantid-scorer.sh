@@ -20,7 +20,7 @@
 # take was spent on.
 set -u
 # **`CDPATH=`, and it is a fix rather than a precaution.** Patola's environment
-# has CDPATH=.:/home/patola:/dados, and `cd` PRINTS the directory whenever it
+# has a CDPATH, and `cd` PRINTS the directory whenever it
 # resolves through CDPATH -- so `$(cd ... && pwd)` captures that echo as well as
 # the pwd and `$root` becomes two lines. This script reported "SKIP  not built"
 # with the binary sitting right there. Six other scripts in this project stayed

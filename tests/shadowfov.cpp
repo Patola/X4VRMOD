@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "../injector/x4vr_shadowfov.hpp"
+#include "x4_path.hpp"
 
 using namespace x4vr::shadowfov;
 
@@ -93,7 +94,7 @@ int main() {
     check(!fix_phase(1000.0, 0.0), "no period: never FIX");
 
     // ---- the binary -------------------------------------------------------
-    const char *x4 = "/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4";
+    const char *x4 = x4_test_binary();
     Elf elf;
     if (!elf.load(x4)) {
         printf("skip  field sites — no X4 at %s\n", x4);

@@ -20,6 +20,7 @@
 #include <sys/mman.h>
 
 #include "../injector/x4vr_aimpick.hpp"
+#include "x4_path.hpp"
 
 using namespace x4vr;
 
@@ -121,7 +122,7 @@ int main(int argc, char **argv) {
     // 0. The sites, against the real binary.
     {
         static Elf elf;
-        const char *x4 = "/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4";
+        const char *x4 = x4_test_binary();
         if (!elf.load(x4)) {
             printf("SKIP   no X4 binary at %s — the patch sites are unchecked\n", x4);
         } else {

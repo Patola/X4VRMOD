@@ -25,7 +25,7 @@ import sys, os, glob, re, argparse, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..',
                                 '..', '..', 'home', 'patola', 'workspace',
                                 'claude', 'X4VRMOD', 'tools'))
-sys.path.insert(0, '/home/patola/workspace/claude/X4VRMOD/tools')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 import ui_disparity as U
 

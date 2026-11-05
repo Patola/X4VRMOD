@@ -570,6 +570,69 @@ static void test_profile() {
     check(load_profile(path).get("eye") == "2816", "a stray line doesn't lose the rest");
 }
 
+// The row each answer gives. WiVRn's silence means no headset, anyone else's doesn't.
+static void test_vr_row() {
+    ActiveRuntime wivrn;
+    wivrn.name = "WiVRn";
+    XrProbe p;
+    p.status = XrStatus::TimedOut;
+    Check c = vr_row(wivrn, p);
+    check(c.title == "Headset not connected" && c.status == Status::Block && c.fix == "retry",
+          "WiVRn's silence reads as no headset");
+    ActiveRuntime other;
+    other.name = "Monado";
+    c = vr_row(other, p);
+    check(c.title == "VR runtime not answering", "another runtime's silence doesn't");
+    p.status = XrStatus::NoHeadset;
+    p.runtime = "Monado";
+    c = vr_row(other, p);
+    check(c.title == "Headset not connected", "the runtime saying so reads the same");
+    p.status = XrStatus::Ready;
+    p.system = "A Headset";
+    p.eye_w = 2889;
+    p.eye_h = 3026;
+    c = vr_row(other, p);
+    check(c.status == Status::Ok && c.detail.find("2889 x 3026") != std::string::npos,
+          "ready names what the headset asks for");
+}
+
+// X4 asks XDG_CONFIG_HOME, then HOME. The folder inside is the player's own.
+static void test_profile_dirs() {
+    const std::string home = g_tmp + "/pd/home", xdg = g_tmp + "/pd/xdg";
+    put(home + "/.config/EgoSoft/X4/1234567/config.xml", "x");
+    put(home + "/.config/EgoSoft/X4/gog-someone/config.xml", "x");
+    put(home + "/.config/EgoSoft/X4/.hidden/config.xml", "x");
+    put(xdg + "/EgoSoft/X4/7654321/config.xml", "x");
+    auto has = [](const std::vector<std::string> &v, const std::string &s) {
+        for (const std::string &e : v)
+            if (e == s)
+                return true;
+        return false;
+    };
+    const char *saved = getenv("XDG_CONFIG_HOME");
+    const std::string keep = saved ? saved : "";
+    unsetenv("XDG_CONFIG_HOME");
+    std::vector<std::string> d = x4_profile_dirs(home);
+    check(has(d, home + "/.config/EgoSoft/X4/1234567"), "any number counts");
+    check(has(d, home + "/.config/EgoSoft/X4/gog-someone"), "any name counts");
+    check(has(d, home + "/.config/EgoSoft/X4"), "X4's own folder counts");
+    check(!has(d, home + "/.config/EgoSoft/X4/.hidden"), "a hidden folder doesn't");
+    setenv("XDG_CONFIG_HOME", xdg.c_str(), 1);
+    d = x4_profile_dirs(home);
+    check(has(d, xdg + "/EgoSoft/X4/7654321"), "XDG_CONFIG_HOME's folders count");
+    check(has(d, home + "/.config/EgoSoft/X4/1234567"), "...and HOME's still do");
+    setenv("XDG_CONFIG_HOME", (home + "/.config").c_str(), 1);
+    size_t n = 0;
+    for (const std::string &e : x4_profile_dirs(home))
+        n += e == home + "/.config/EgoSoft/X4/1234567";
+    check(n == 1, "the same folder by both routes is listed once");
+    if (saved)
+        setenv("XDG_CONFIG_HOME", keep.c_str(), 1);
+    else
+        unsetenv("XDG_CONFIG_HOME");
+    check(x4_profile_dirs(g_tmp + "/pd/nobody").empty(), "no X4 folder, no list");
+}
+
 static void test_real_x4() {
     const char *e = getenv("X4VR_GAME");
     const auto all = discover_all(home_dir());
@@ -650,6 +713,8 @@ int main() {
     test_checks();
     test_eye_rule();
     test_profile();
+    test_vr_row();
+    test_profile_dirs();
     test_real_x4();
     run_child({"rm", "-rf", g_tmp}, 10000);
     if (g_fail) {

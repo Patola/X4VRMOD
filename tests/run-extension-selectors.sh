@@ -14,7 +14,7 @@
 set -uo pipefail
 CDPATH=
 cd "$(dirname "$0")/.." || exit 1
-GAME=${X4VR_GAME_DIR:-"/nvme/SteamLibrary/steamapps/common/X4 Foundations"}
+GAME=${X4VR_GAME_DIR:-$(dirname "$(build/launcher/x4vrmod locate 2>/dev/null)")}
 if [ ! -f "$GAME/01.cat" ]; then
     echo "SKIP  no X4 at $GAME — the selectors are unchecked"
     exit 0

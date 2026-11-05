@@ -167,16 +167,22 @@ static Check check_vr_row(const std::string &home) {
         c.fix = "start-vr";
         return c;
     }
-    // Creating an instance may start SteamVR when it's the active runtime (to
-    // verify; docs/packaging-plan.md). Until that's known, a check that runs by
-    // itself must not launch it. `x4vrmod probe xr` always asks.
+    // Asking a SteamVR that isn't running starts nothing and only fails
+    // (XR_ERROR_RUNTIME_FAILURE, 2026-11-05), so "not running" is the better answer
+    // and comes without its console noise. `x4vrmod probe xr` always asks.
     if (rt.steamvr && !steamvr_is_running()) {
         c.title = "SteamVR isn't running";
         c.detail = "It's the active VR runtime. Start it from Steam.";
         c.fix = "start-steamvr";
         return c;
     }
-    const XrProbe p = xr_probe_child(5000);
+    return vr_row(rt, xr_probe_child(5000));
+}
+
+Check vr_row(const ActiveRuntime &rt, const XrProbe &p) {
+    Check c;
+    c.id = "vr";
+    c.status = Status::Block;
     const std::string who = !p.runtime.empty() ? p.runtime
                             : !rt.name.empty() ? rt.name
                                                : "The VR runtime";
@@ -202,8 +208,16 @@ static Check check_vr_row(const std::string &home) {
         c.detail = "Install the OpenXR loader from your package manager.";
         break;
     case XrStatus::TimedOut:
-        c.title = "VR runtime not answering";
-        c.detail = who + " didn't answer in time.";
+        // WiVRn doesn't say "no headset": it answers nothing until one connects
+        // (2026-11-05: 5 s of silence without, at once with).
+        if (who.find("WiVRn") != std::string::npos) {
+            c.title = "Headset not connected";
+            c.detail = "WiVRn is running but gives no answer, as it does until a headset "
+                       "connects. Connect from the WiVRn app in the headset.";
+        } else {
+            c.title = "VR runtime not answering";
+            c.detail = who + " didn't answer in time.";
+        }
         c.fix = "retry";
         break;
     default:

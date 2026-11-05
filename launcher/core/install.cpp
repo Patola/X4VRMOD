@@ -203,33 +203,54 @@ UninstallPlan uninstall_plan(const std::string &home, bool with_settings) {
 
     // The mod's forks in every X4 profile folder, and nothing else there: saves,
     // config.xml and the rest are the player's.
-    const std::string x4cfg = home + "/.config/EgoSoft/X4";
-    if (DIR *d = opendir(x4cfg.c_str())) {
-        while (const dirent *e = readdir(d)) {
-            const std::string prof = x4cfg + "/" + e->d_name;
-            if (e->d_name[0] == '.' || !is_dir(prof))
-                continue;
-            if (DIR *f = opendir(prof.c_str())) {
-                while (const dirent *g = readdir(f)) {
-                    const std::string n = g->d_name;
-                    const bool fork = n == "config-x4vrmod.xml" ||
-                                      n == "content-x4vrmod.xml" ||
-                                      n == "inputmap-x4vrmod.xml";
-                    const bool side = n.find("-x4vrmod-") != std::string::npos &&
-                                      n.size() > 4 && n.compare(n.size() - 4, 4, ".was") == 0;
-                    if (fork || side)
-                        p.settings.push_back(prof + "/" + n);
-                }
-                closedir(f);
-            }
+    for (const std::string &prof : x4_profile_dirs(home)) {
+        DIR *f = opendir(prof.c_str());
+        if (!f)
+            continue;
+        while (const dirent *g = readdir(f)) {
+            const std::string n = g->d_name;
+            const bool fork = n == "config-x4vrmod.xml" || n == "content-x4vrmod.xml" ||
+                              n == "inputmap-x4vrmod.xml";
+            const bool side = n.find("-x4vrmod-") != std::string::npos && n.size() > 4 &&
+                              n.compare(n.size() - 4, 4, ".was") == 0;
+            if ((fork || side) && is_file(prof + "/" + n))
+                p.settings.push_back(prof + "/" + n);
         }
-        closedir(d);
+        closedir(f);
     }
     const std::string pf = profile_path(home);
     if (is_file(pf))
         p.settings.push_back(pf);
     std::sort(p.settings.begin(), p.settings.end());
     return p;
+}
+
+std::vector<std::string> x4_profile_dirs(const std::string &home) {
+    std::vector<std::string> roots;
+    const char *x = getenv("XDG_CONFIG_HOME");
+    if (x && *x)
+        roots.push_back(std::string(x) + "/EgoSoft/X4");
+    roots.push_back(home + "/.config/EgoSoft/X4");
+    std::vector<std::string> out;
+    auto add = [&out](const std::string &dir) {
+        for (const std::string &have : out)
+            if (real_path(have) == real_path(dir))
+                return;
+        out.push_back(dir);
+    };
+    for (const std::string &root : roots) {
+        if (!is_dir(root))
+            continue;
+        add(root);
+        DIR *d = opendir(root.c_str());
+        if (!d)
+            continue;
+        while (const dirent *e = readdir(d))
+            if (e->d_name[0] != '.' && is_dir(root + "/" + e->d_name))
+                add(root + "/" + e->d_name);
+        closedir(d);
+    }
+    return out;
 }
 
 ActionReport uninstall_apply(const UninstallPlan &p) {

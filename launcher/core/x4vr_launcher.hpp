@@ -263,6 +263,10 @@ int run_mod(const std::string &home, const std::string &game,
 std::string steam_launch_line(const std::string &home);
 std::string terminal_line(const std::string &home);
 std::string log_dir(const std::string &home);
+// Everywhere X4 may keep a player's files. X4 asks XDG_CONFIG_HOME, then HOME, and
+// the folder inside is the player's own (Steam's is their account number), so no
+// name is assumed: EgoSoft/X4 itself and every folder in it.
+std::vector<std::string> x4_profile_dirs(const std::string &home);
 
 // ------------------------------------------------------------------ the checks
 // Ok, or Warn (can launch with something lost), or Block (can't launch).
@@ -280,6 +284,8 @@ struct CheckOptions {
     bool skip_vr = false;
 };
 std::vector<Check> run_checks(const CheckOptions &o);
+// The VR row, from what the runtime answered.
+Check vr_row(const ActiveRuntime &rt, const XrProbe &p);
 // The worst status of a set of checks: what the Play button shows.
 Status worst(const std::vector<Check> &checks);
 

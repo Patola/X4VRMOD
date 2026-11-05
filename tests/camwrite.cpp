@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "../injector/x4vr_camwrite.hpp"
+#include "x4_path.hpp"
 
 using namespace x4vr;
 
@@ -202,7 +203,7 @@ int main() {
 
     // ---- the code sites, against the real binary --------------------------
     {
-        const char *x4 = "/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4";
+        const char *x4 = x4_test_binary();
         Elf elf;
         if (!elf.load(x4)) {
             printf("skip  write sites — no X4 at %s\n", x4);

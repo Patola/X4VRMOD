@@ -14,6 +14,7 @@
 #include "../common/x4vr_steer.hpp"
 #include "../injector/x4vr_camwrite.hpp"
 #include "../injector/x4vr_config.hpp"
+#include "x4_path.hpp"
 
 using namespace x4vr;
 
@@ -103,9 +104,7 @@ int main() {
     }
 
     // ---- the sites, against the real binary --------------------------------
-    const char *path = getenv("X4_BINARY");
-    if (!path)
-        path = "/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4";
+    const char *path = x4_test_binary();
     Elf elf;
     if (elf.load(path)) {
         auto rd = [&](uintptr_t va, void *o, size_t n) { return elf.read(va, o, n); };

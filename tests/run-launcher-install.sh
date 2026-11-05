@@ -192,6 +192,26 @@ Z="env HOME=$H XDG_CONFIG_HOME= XDG_STATE_HOME= X4VR_GAME= $T/moved/x4vrmod"
 $Z install --game "$G" >/dev/null 2>&1 && ok "installs again from a moved folder" || bad "reinstall"
 list=$($Z uninstall --all --dry-run 2>&1)
 grep -q "can't be undone" <<<"$list" && ok "--all warns it can't be undone" || bad "no warning: $list"
+# Another player's number, XDG_CONFIG_HOME, and no folder for the player at all.
+XD="$T/xdg/EgoSoft/X4"
+mkdir -p "$XD/7654321" "$P/../gogname"
+echo fork > "$XD/7654321/config-x4vrmod.xml"
+echo mine > "$XD/7654321/config.xml"
+echo fork > "$XD/content-x4vrmod.xml"
+echo fork > "$P/../gogname/inputmap-x4vrmod.xml"
+echo mine > "$P/../gogname/inputmap.xml"
+list=$(env XDG_CONFIG_HOME="$T/xdg" HOME="$H" XDG_STATE_HOME= X4VR_GAME= "$T/moved/x4vrmod" uninstall --all --dry-run 2>&1)
+for f in "$XD/7654321/config-x4vrmod.xml" "$XD/content-x4vrmod.xml"; do
+    grep -qF "$f" <<<"$list" && ok "--all finds $(basename "$f") under XDG_CONFIG_HOME" || bad "not listed: $f"
+done
+grep -qF "gogname/inputmap-x4vrmod.xml" <<<"$list" && ok "--all finds it under any folder name" || bad "gogname: $list"
+env XDG_CONFIG_HOME="$T/xdg" HOME="$H" XDG_STATE_HOME= X4VR_GAME= "$T/moved/x4vrmod" uninstall --all --yes >/dev/null 2>&1
+want "--all removes XDG_CONFIG_HOME's forks" "[ ! -e '$XD/7654321/config-x4vrmod.xml' ] && [ ! -e '$XD/content-x4vrmod.xml' ]"
+want "...and the player's own there stay" "[ -f '$XD/7654321/config.xml' ] && [ -f '$P/../gogname/inputmap.xml' ]"
+$Z install --game "$G" >/dev/null 2>&1
+for f in config-x4vrmod.xml content-x4vrmod.xml inputmap-x4vrmod.xml config-x4vrmod-mousesteeringline.was; do
+    echo "fork $f" > "$P/$f"
+done
 out=$($Z uninstall --all --yes 2>&1); rc=$?
 [ "$rc" = 0 ] && ok "uninstall --all succeeds" || bad "uninstall --all: $out"
 for f in config-x4vrmod.xml content-x4vrmod.xml inputmap-x4vrmod.xml config-x4vrmod-mousesteeringline.was; do

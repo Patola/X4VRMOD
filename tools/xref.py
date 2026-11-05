@@ -17,7 +17,9 @@ import sys
 import capstone
 from elftools.elf.elffile import ELFFile
 
-X4 = "/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4"
+from x4path import x4_binary
+
+X4 = x4_binary()
 
 
 def sections(path):

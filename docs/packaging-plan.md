@@ -142,8 +142,8 @@ binary is missing.
 * **The version can be read, but it can't decide this.** `version.dat` beside
   the binary holds `900`, and Steam's appmanifest gives the `buildid`; the
   launcher shows both. But the binary is non-relocatable (`EXEC`) and about 330
-  references in the injector are fixed addresses, so a recompiling hotfix would
-  most likely move them while still saying 9.00 (to verify on a second binary).
+  references in the injector are fixed addresses, and a second build of the same
+  9.00 does move them (GOG's, below).
 * **So the launcher asks the bytes, with no checksum** (decision 8). It runs the
   mod's own site checks (the `verify_sites` templates, over a file reader that
   maps addresses through the ELF LOAD segments) and reports per feature:
@@ -152,16 +152,30 @@ binary is missing.
   in `version.dat`: amber, "not tested".
 * **Later, to survive hotfixes and GOG: signature search.** Each site found by a
   unique byte pattern with its displacements wildcarded, requiring exactly one
-  match or refusing. As safe as today, and it may make GOG work without separate
-  tables. Real work (~330 references, plus stubs that hard-code addresses), and it
-  needs a second binary to prove it: a GOG copy (Patola can get one) or a past
-  Steam build.
-* **To verify — GOG:** whether GOG's X4 binary is byte-identical to Steam's
-  9.00. Every patch was checked against Steam's. If not, GOG needs its own
-  signatures or stays unsupported.
-* **To verify — Steam's container:** whether Steam runs native X4 inside a
-  Steam Linux Runtime container. That decides whether `x4vrmod run %command%`
-  works from Steam's launch options as it does from a terminal.
+  match or refusing. As safe as today, and it makes GOG work without separate
+  tables. Real work (~330 references, plus stubs that hard-code addresses).
+* **GOG's X4 9.00, measured 2026-11-05 (never launched, binary only).** Heroic puts
+  it at `<install_path>/game/X4`, and it doesn't link `libsteam_api`.
+  * Not byte-identical: the same 28,644 exports, 53 KB less code, and all 8 feature
+    groups differ. So today it's amber with every feature off.
+  * It looks like the same compile with the Steam code taken out. Of the 164 code
+    addresses in our sources, 159 are found by their surrounding bytes, with 20 or
+    more unique 8-byte windows agreeing, at 26 different offsets (functions are in a
+    different order in places, so no single shift maps one onto the other). Of those
+    159, 109 start with the same 16 bytes. In the 10 of the other 50 inspected, only
+    addresses inside instructions differ. That's what signature search wildcards.
+  * Not strongly found: `0xb7f1f0`, `0xbb0860`, `0xc02dc0` (a menus site),
+    `0x1de5df0`, `0x65a000`. To look at; they may just be short functions.
+  * It starts the same way: `testandlaunch` is the same file in both copies, ending
+    in `./X4 "$@"` with `lib` on `LD_LIBRARY_PATH`. Nothing GOG-specific.
+  * **Still to verify, after one vanilla launch:** where its profile folder is.
+* **Steam's container: `x4vrmod run %command%` works** (take 404: PASS, its log in
+  `~/.local/state/x4vrmod/logs/`).
+* **To check later (Patola, take 404):** started from Steam, a brief Egosoft logo
+  plays, which our direct launch doesn't show. Steam's `%command%` is a plain `./X4`
+  (`env: argv = ./X4` in the log), and wrapper mode doesn't add the
+  `-skipintro -nocputhrottle -nosoundthrottle` that direct mode does. The two throttle
+  flags are missing with it; the take scored PASS and Patola saw nothing else wrong.
 * **To verify — extensions in the user folder:** whether X4 9.00 loads
   extensions from `~/.config/EgoSoft/X4/<id>/extensions/`. If it does, the
   launcher puts them there and never writes into Steam's game folder (today
@@ -243,7 +257,11 @@ screenshots; the About box says unofficial, not affiliated with Egosoft):
 * **Launch options:** copyable Steam line (`x4vrmod run %command%`) and terminal
   line, with a picture of where they go in Steam.
 * **Help:** `QTextBrowser` over HTML and PNGs in the data directory. Each section
-  says what and why; each checklist row links to its section.
+  says what and why; each checklist row links to its section. Patola's suggestion: a
+  table of the common headsets (Quest 3, Quest 3S, Quest 2, Valve Index, Steam Frame,
+  HTC Vive and others) with low, mid and high settings for each, from their
+  resolutions. Their numbers to be checked when it's written; the probe reports what
+  the connected headset asks for (a Quest 3 on WiVRn: 2889 x 3026 per eye).
 * Later, not in the first version: waiting until the headset is worn (it needs an
   OpenXR session), update checks, translations.
 
@@ -252,8 +270,12 @@ screenshots; the About box says unofficial, not affiliated with Egosoft):
   marks which holds `392160`; `appmanifest_392160.acf` gives `installdir` and
   `buildid`. No mount scanning. Also the Flatpak Steam path.
 * **GOG:** `~/GOG Games/*` and Heroic's `gog_store/installed.json`; otherwise
-  Browse, which takes a folder or a file and looks for `X4`, then `game/X4` (layout
-  to verify).
+  Browse, which takes a folder or a file and looks for `X4`, then `game/X4` (Heroic's
+  layout, confirmed 2026-11-05).
+* **The profile folder** is never named in the code: X4 asks `XDG_CONFIG_HOME`, then
+  `HOME`, and the folder in `EgoSoft/X4/` is the player's own (Steam's is their account
+  number). The mod puts its forks beside whatever file X4 opens, and uninstall looks in
+  `EgoSoft/X4/` and every folder in it, under both.
 * **Proton:** picking `X4.exe`, or a folder holding only that (Steam with forced
   Proton), explains that the mod is native Linux and can't work there.
 * **Steam running** (Steam copy only): `~/.steam/steam.pid` and a live
@@ -264,13 +286,18 @@ screenshots; the About box says unofficial, not affiliated with Egosoft):
 `x4vrmod probe xr` runs in a child process with a timeout, so a broken
 runtime can't hang or crash the window. Instance, `xrGetSystem`, view sizes,
 destroy; no session. It reuses `common/x4vr_xr.hpp` and tells apart: loader
-missing; no runtime; runtime up but no headset
-(`XR_ERROR_FORM_FACTOR_UNAVAILABLE`); ready, with the headset's name and
+missing; no runtime; runtime up but no headset; ready, with the headset's name and
 recommended size. `~/.config/openxr/1/active_runtime.json` is a cheap first step:
 here it exists only while WiVRn runs.
 
-**To verify:** creating an instance may start SteamVR when it's the active runtime.
-If so, a SteamVR probe runs only on a click or on Play, never by polling.
+**WiVRn with no headset gives no answer at all** rather than
+`XR_ERROR_FORM_FACTOR_UNAVAILABLE`: the probe times out at 5 s, and answers at once
+with a headset connected (2026-11-05). So a timeout from WiVRn reads as "Headset not
+connected", and a timeout from anything else keeps its generic wording.
+
+**Asking a SteamVR that isn't running starts nothing** (2026-11-05): no window, no
+`vrserver` left behind, `XR_ERROR_RUNTIME_FAILURE`, and console noise. So `doctor`
+says "SteamVR isn't running" without asking. Not yet tried with SteamVR running.
 
 ### Install and uninstall
 **Which layout:** `x4vrmod-data/manifest` beside `/proc/self/exe` means the zip;
@@ -524,9 +551,9 @@ level with the mark key, instead of a take's full command line.
    first (they answer the "to verify" items on real machines).
    **Done 2026-11-05** (`launcher/`).
 4. `install`, `uninstall`, `run`; the script's paths parameterised; the zip layout
-   and **the Arch PKGBUILD** (decision 7). **Code done 2026-11-05**; not yet played
-   through (`x4vrmod run` from a terminal and from Steam).
+   and **the Arch PKGBUILD** (decision 7). **Done 2026-11-05**: takes 403 (terminal)
+   and 404 (Steam's launch options) scored PASS.
 5. Phase 3's Qt 6 Widgets window over the core, with its art and help.
 6. CI: tests, census, deb/rpm/zip/Arch packages on tags.
-7. Signature search, for hotfixes and GOG, once a second binary is available.
+7. Signature search, for hotfixes and GOG. The second binary is here (GOG's, above).
 8. `report` and the flight recorder; DLSS: read the tag, wire it, the RTX 5090 test.

@@ -25,7 +25,6 @@ import argparse
 import os
 import sys
 
-GAME = '/nvme/SteamLibrary/steamapps/common/X4 Foundations'
 OUT = '/tmp/x4-shadersrc'
 
 
@@ -48,13 +47,16 @@ def entries(cat):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--game', default=GAME)
+    ap.add_argument('--game', help="X4's folder (default: the one `x4vrmod locate` finds)")
     ap.add_argument('--out', default=OUT)
     ap.add_argument('--prefix', default='shadergl/',
                     help='archive path prefix to extract (default shadergl/)')
     ap.add_argument('--grep', default=None,
                     help='only paths containing this substring')
     a = ap.parse_args()
+    if not a.game:
+        from x4path import x4_binary
+        a.game = os.path.dirname(x4_binary())
 
     if not os.path.isdir(a.game):
         sys.exit(f'no X4 install at {a.game!r}')

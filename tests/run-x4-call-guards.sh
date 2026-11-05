@@ -27,7 +27,7 @@ LC_ALL=C
 export LC_ALL
 cd "$(dirname "$0")/.." || exit 1
 
-X4="/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4"
+X4="${X4VR_GAME:-$(build/launcher/x4vrmod locate 2>/dev/null)}"
 SRC=injector/x4vr_inject.cpp
 if [ ! -f "$X4" ] || ! command -v objdump >/dev/null; then
     echo "SKIP  no X4 binary or no objdump — the rule is unchecked"

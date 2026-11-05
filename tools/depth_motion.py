@@ -53,11 +53,12 @@ difference between this measurement and a plausible-looking division.
 import argparse
 import math
 import re
+import os
 import sys
 
 import numpy as np
 
-sys.path.insert(0, '/home/patola/workspace/claude/X4VRMOD/tools')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ui_disparity import decode_rgba, ncc_shift, mask_window   # noqa: E402
 from hud_vs_camera import decode                               # noqa: E402
 from hud_slide import burst_groups, shift2                     # noqa: E402

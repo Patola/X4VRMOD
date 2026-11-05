@@ -15,6 +15,7 @@
 #include <string>
 
 #include "../injector/x4vr_riprel.hpp"
+#include "x4_path.hpp"
 
 static int g_fail = 0;
 
@@ -87,7 +88,7 @@ int main() {
     check(!x4vr::riprel_mov_load_slot(buf + 64, 8), "refuses reg 8 (needs REX.R)");
 
     // The real prologue, when the game and binutils are both here.
-    const char *x4 = "/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4";
+    const char *x4 = x4_test_binary();
     FILE *f = fopen(x4, "rb");
     if (!f) {
         printf("skip  real IsHUDActive prologue — no X4 at %s\n", x4);

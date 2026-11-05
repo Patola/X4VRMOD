@@ -35,11 +35,12 @@ to 1 in pixels -- a correlation over both at once locks onto the chrome and
 reports the chrome's answer. That mistake was made on these very frames.
 """
 import argparse
+import os
 import sys
 
 import numpy as np
 
-sys.path.insert(0, '/home/patola/workspace/claude/X4VRMOD/tools')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ui_disparity import decode_rgba, ncc_shift           # noqa: E402
 from hud_vs_camera import decode                          # noqa: E402
 from hud_slide import burst_groups                        # noqa: E402

@@ -23,10 +23,11 @@ Depth from disparity, using only logged quantities:
     => z = 31.556 / |disparity_px|
 which returns 1.40 m at 22.5 px -- the canvas distance, as it must.
 """
+import os
 import sys
 import numpy as np
 
-sys.path.insert(0, '/home/patola/workspace/claude/X4VRMOD/tools')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ui_disparity import decode_rgba, ncc_shift, mask_window     # noqa: E402
 from hud_vs_camera import decode                                 # noqa: E402
 
