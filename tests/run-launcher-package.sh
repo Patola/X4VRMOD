@@ -33,6 +33,19 @@ for f in bin/x4vrmod lib/x4vrmod/libVkLayer_X4VR_core.so lib/x4vrmod/libx4vr_inj
     want "ships $f" "[ -f '$U/$f' ]"
 done
 want "the launch script is executable" "[ -x '$U/share/x4vrmod/launch/x4vr-launch.sh' ]"
+if [ -x build/launcher/x4vrmod-launcher ]; then
+    for f in share/x4vrmod/help/index.html share/x4vrmod/help/banner.png \
+             share/applications/x4vrmod-launcher.desktop \
+             share/icons/hicolor/256x256/apps/x4vrmod-launcher.png; do
+        want "ships $f" "[ -f '$U/$f' ]"
+    done
+    want "ships the window" "[ -x '$U/bin/x4vrmod-launcher' ]"
+    want "the package's window finds its own help" \
+         "strings '$U/bin/x4vrmod-launcher' | grep -cF '$U' >/dev/null"
+    if command -v desktop-file-validate >/dev/null; then
+        want "the menu entry is valid" "desktop-file-validate '$U/share/applications/x4vrmod-launcher.desktop'"
+    fi
+fi
 want "the manifest names the absolute library" \
      "grep -qF '\"library_path\": \"$U/lib/x4vrmod/libVkLayer_X4VR_core.so\"' '$U/share/vulkan/explicit_layer.d/VK_LAYER_X4VR_core.json'"
 n=$(find "$U" -type f \( -name '*.cat' -o -name '*.dat' -o -name '*.xpl' \) | wc -l)

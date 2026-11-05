@@ -63,6 +63,7 @@ install(PROGRAMS launch/x4vr-launch.sh launch/deploy-extensions.sh
 install(FILES launch/x4vr-defaults.sh launch/defaults.conf
         DESTINATION share/x4vrmod/launch)
 install(DIRECTORY extension/x4vrmod DESTINATION share/x4vrmod/extension)
+install(DIRECTORY launcher/help DESTINATION share/x4vrmod)
 install(FILES LICENSE LICENSE.exception DESTINATION share/licenses/x4vrmod)
 install(FILES README.md docs/releases.md DESTINATION share/doc/x4vrmod)
 # add_subdirectory(cursor)   # later phase

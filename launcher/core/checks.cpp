@@ -36,6 +36,7 @@ Layout detect_layout(const std::string &home) {
             home + "/.local/share/vulkan/explicit_layer.d/VK_LAYER_X4VR_core.json";
         l.injector = in + "/lib/libx4vr_inject.so";
         l.launch_script = in + "/launch/x4vr-launch.sh";
+        l.help_dir = zip + "/help";
         return l;
     }
     if (here == X4VRMOD_BUILD_DIR "/launcher" || here == X4VRMOD_BUILD_DIR "/tests") {
@@ -46,6 +47,7 @@ Layout detect_layout(const std::string &home) {
         l.injector = X4VRMOD_BUILD_DIR "/injector/libx4vr_inject.so";
         l.launch_script = X4VRMOD_SOURCE_DIR "/launch/x4vr-launch.sh";
         l.deploy_script = X4VRMOD_SOURCE_DIR "/launch/deploy-extensions.sh";
+        l.help_dir = X4VRMOD_SOURCE_DIR "/launcher/help";
         return l;
     }
     l.kind = LayoutKind::Package;
@@ -56,6 +58,7 @@ Layout detect_layout(const std::string &home) {
     l.injector = X4VRMOD_PREFIX "/lib/x4vrmod/libx4vr_inject.so";
     l.launch_script = l.data_dir + "/launch/x4vr-launch.sh";
     l.deploy_script = l.data_dir + "/launch/deploy-extensions.sh";
+    l.help_dir = l.data_dir + "/help";
     return l;
 }
 
@@ -156,27 +159,56 @@ static Check check_patches_row(const Install &in) {
     return c;
 }
 
-static Check check_vr_row(const std::string &home) {
+std::string wivrn_program() {
+    for (const char *name : {"wivrn-dashboard", "wivrn-server"}) {
+        const std::string p = find_on_path(name);
+        if (!p.empty())
+            return p;
+    }
+    return "";
+}
+
+static void no_runtime(Check &c) {
+    c.title = "No VR runtime running";
+    c.detail = wivrn_program().empty()
+                   ? "For a standalone headset we suggest WiVRn: install it. A headset wired to "
+                     "the PC uses SteamVR: start that from Steam."
+                   : "Start WiVRn, which we suggest. SteamVR works too.";
+    c.fix = "start-vr";
+}
+
+static Check check_vr_row(const std::string &home, XrProbe *xr_out) {
     Check c;
     c.id = "vr";
     c.status = Status::Block;
     const ActiveRuntime rt = active_runtime(home);
     if (rt.path.empty()) {
-        c.title = "No VR runtime running";
-        c.detail = "Start WiVRn or SteamVR.";
-        c.fix = "start-vr";
+        no_runtime(c);
         return c;
     }
-    // Asking a SteamVR that isn't running starts nothing and only fails
-    // (XR_ERROR_RUNTIME_FAILURE, 2026-11-05), so "not running" is the better answer
-    // and comes without its console noise. `x4vrmod probe xr` always asks.
+    // Asking a SteamVR that isn't running starts its vrserver (SteamVR's log,
+    // 2026-11-05: "Starting vrserver process"; with no headset it refused us and was
+    // killed 5 s later, so no window showed). A check that runs by itself mustn't do
+    // that. `x4vrmod probe xr` always asks.
     if (rt.steamvr && !steamvr_is_running()) {
-        c.title = "SteamVR isn't running";
-        c.detail = "It's the active VR runtime. Start it from Steam.";
-        c.fix = "start-steamvr";
+        // WiVRn is what we suggest, so with it installed that's the button.
+        if (!wivrn_program().empty()) {
+            c.title = "No VR runtime running";
+            c.detail = "Start WiVRn, which we suggest, and which takes over from SteamVR while "
+                       "it runs. To use SteamVR instead, start it from Steam.";
+            c.fix = "start-vr";
+        } else {
+            c.title = "SteamVR isn't running";
+            c.detail = "It's the active VR runtime. Start it from Steam. For a standalone "
+                       "headset, we suggest WiVRn instead.";
+            c.fix = "start-steamvr";
+        }
         return c;
     }
-    return vr_row(rt, xr_probe_child(5000));
+    const XrProbe p = xr_probe_child(5000);
+    if (xr_out)
+        *xr_out = p;
+    return vr_row(rt, p);
 }
 
 Check vr_row(const ActiveRuntime &rt, const XrProbe &p) {
@@ -199,9 +231,7 @@ Check vr_row(const ActiveRuntime &rt, const XrProbe &p) {
         c.fix = "retry";
         break;
     case XrStatus::NoRuntime:
-        c.title = "No VR runtime running";
-        c.detail = "Start WiVRn or SteamVR.";
-        c.fix = "start-vr";
+        no_runtime(c);
         break;
     case XrStatus::NoLoader:
         c.title = "OpenXR isn't installed";
@@ -354,8 +384,11 @@ std::vector<Check> run_checks(const CheckOptions &o) {
     x4.status = Status::Block;
     x4.fix = "browse";
     if (!have) {
-        const std::string want =
-            !o.game.empty() ? o.game : load_profile(profile_path(home)).get("game");
+        std::string want = o.game;
+        if (const char *e = getenv("X4VR_GAME"); want.empty() && e)
+            want = e;
+        if (want.empty())
+            want = load_profile(profile_path(home)).get("game");
         if (!want.empty()) {
             x4.title = "X4 not found there";
             x4.detail = classify_game_path(want).why;
@@ -412,13 +445,14 @@ std::vector<Check> run_checks(const CheckOptions &o) {
 
     out.push_back(check_gamescope_row());
     if (!o.skip_vr)
-        out.push_back(check_vr_row(home));
+        out.push_back(check_vr_row(home, o.xr_out));
 
     const Layout l = detect_layout(home);
     out.push_back(check_layer_row(l));
     if (usable)
         out.push_back(check_mod_row(l, in));
-    out.push_back(check_gpu_row());
+    if (!o.skip_gpu)
+        out.push_back(check_gpu_row());
     return out;
 }
 

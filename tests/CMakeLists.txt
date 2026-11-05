@@ -215,6 +215,14 @@ add_executable(x4vr_test_pause pause.cpp)
 # each patch group against bent bytes. Self-checking.
 add_executable(x4vr_test_launcher launcher_core.cpp)
 target_link_libraries(x4vr_test_launcher PRIVATE x4vrmod_core)
+# The window on Qt's offscreen platform, when there's a Qt to build it. Self-checking.
+if(TARGET x4vrmod_gui)
+    find_package(Qt6 QUIET COMPONENTS Test)
+    if(Qt6Test_FOUND)
+        add_executable(x4vr_test_launcher_gui launcher_gui.cpp)
+        target_link_libraries(x4vr_test_launcher_gui PRIVATE x4vrmod_gui Qt6::Test)
+    endif()
+endif()
 # X4VR_FOOTLOG: angles from X4's matrix convention, the roll yaw/pitch miss,
 # the window across the +-180 seam, a camera change, the line's shape.
 # Self-checking.

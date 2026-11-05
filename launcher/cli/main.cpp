@@ -20,7 +20,9 @@ static void usage(FILE *f) {
             "  x4vrmod uninstall [--all] [--yes] [--dry-run]\n"
             "      take it away. --all also deletes your VR settings, which can't\n"
             "      be undone. X4's saves and its own settings are never touched.\n"
-            "  x4vrmod run [--game PATH] [COMMAND...]\n"
+            "  x4vrmod report [--log FILE] [--note TEXT]\n"
+            "      make a bug report to read and attach to an issue; nothing is sent\n"
+            "  x4vrmod run [--debug] [--game PATH] [COMMAND...]\n"
             "      play. With COMMAND it wraps it: Steam's launch options use\n"
             "      `x4vrmod run %%command%%`.\n"
             "  x4vrmod launch-options           the lines for Steam and a terminal\n"
@@ -51,8 +53,7 @@ static int cmd_doctor(int argc, char **argv) {
     const std::vector<Check> checks = run_checks(o);
     int blocked = 0;
     for (const Check &c : checks) {
-        const char *tag = c.status == Status::Ok ? "ok   " : c.status == Status::Warn ? "warn " : "block";
-        printf("%s %s%s%s\n", tag, c.title.c_str(), c.detail.empty() ? "" : ": ", c.detail.c_str());
+        fputs(checks_text({c}).c_str(), stdout);
         if (!c.fix.empty())
             printf("      fix: %s\n", c.fix.c_str());
         if (c.status == Status::Block)
@@ -91,8 +92,7 @@ static int cmd_install(int argc, char **argv) {
     const std::string home = home_dir();
     bool found = false;
     const Install in = choose_install(home, game, &found);
-    printf("X4 marks saves made with a non-Egosoft extension as modified; the mod's "
-           "extension is enabled only in VR sessions.\n");
+    printf("%s\n", install_disclosure());
     const ActionReport r = install_mod(in, home);
     for (const std::string &l : r.log)
         printf("%s\n", l.c_str());
@@ -161,14 +161,55 @@ static int cmd_uninstall(int argc, char **argv) {
 static int cmd_run(int argc, char **argv) {
     std::string game;
     int i = 2;
-    if (i + 1 < argc && !strcmp(argv[i], "--game")) {
-        game = argv[i + 1];
-        i += 2;
+    for (; i < argc; i++) {
+        if (!strcmp(argv[i], "--debug")) {
+            setenv("X4VR_DEBUG", "1", 1);
+        } else if (i + 1 < argc && !strcmp(argv[i], "--game")) {
+            game = argv[++i];
+        } else {
+            break;
+        }
     }
     if (i < argc && !strcmp(argv[i], "--"))
         i++;
     std::vector<std::string> command(argv + i, argv + argc);
     return run_mod(home_dir(), game, command);
+}
+
+static int cmd_report(int argc, char **argv) {
+    ReportOptions o;
+    o.home = home_dir();
+    bool logGiven = false;
+    for (int i = 2; i < argc; i++) {
+        if (!strcmp(argv[i], "--log") && i + 1 < argc) {
+            o.log = argv[++i];
+            logGiven = true;
+        } else if (!strcmp(argv[i], "--note") && i + 1 < argc) {
+            o.note = argv[++i];
+        } else if (!strcmp(argv[i], "--game") && i + 1 < argc) {
+            o.game = argv[++i];
+        } else {
+            fprintf(stderr, "x4vrmod report: unknown argument '%s'\n", argv[i]);
+            return 2;
+        }
+    }
+    if (!logGiven) {
+        const std::vector<SessionLog> logs = session_logs(o.home);
+        if (!logs.empty())
+            o.log = logs[0].path;
+    }
+    const ReportResult r = make_report(o);
+    if (!r.ok) {
+        fprintf(stderr, "x4vrmod report: %s\n", r.error.c_str());
+        return 2;
+    }
+    printf("Report saved. Read it first, if you like, nothing has been sent:\n  %s\n\n", r.dir.c_str());
+    printf("Attach this file to a new issue:\n  %s\n\n", r.archive.c_str());
+    if (r.too_big)
+        printf("It's over GitHub's 25 MB limit for an attachment. Share it another way and "
+               "put the link in the issue.\n\n");
+    printf("New issue, with your system filled in:\n  %s\n", r.issue_url.c_str());
+    return 0;
 }
 
 static int cmd_config(int argc, char **argv) {
@@ -269,6 +310,8 @@ int main(int argc, char **argv) {
         return cmd_uninstall(argc, argv);
     if (cmd == "run")
         return cmd_run(argc, argv);
+    if (cmd == "report")
+        return cmd_report(argc, argv);
     if (cmd == "config")
         return cmd_config(argc, argv);
     if (cmd == "locate") {

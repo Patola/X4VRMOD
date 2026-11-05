@@ -14,7 +14,7 @@ bad() { printf 'FAIL  %s\n' "$1"; fail=1; }
 
 # run <assignments...> -- prints "VAR=value" for the queried variables, and
 # DEFAULTED=<list>, after applying the defaults in a clean environment.
-q='X4VR_H X4VR_W X4VR_RES X4VR_UPSCALE X4VR_MV X4VR_POSE X4VR_OFFAXIS X4VR_FOV'
+q='X4VR_H X4VR_W X4VR_RES X4VR_UPSCALE X4VR_MV X4VR_POSE X4VR_OFFAXIS X4VR_FOV X4VR_POSELOG X4VR_FOOTLOG'
 run() {
     env -i HOME="$HOME" PATH="$PATH" "$@" bash -c '
         source "$0/launch/x4vr-defaults.sh"
@@ -79,6 +79,24 @@ if [[ "$n" == "$((rows + 2))" ]]; then
     ok "every table row applied ($rows rows + W, RES)"
 else
     bad "table rows $rows + 2 derived, but $n applied"
+fi
+
+# The debug level is on only when asked for, and is only instruments.
+out=$(run)
+want "a normal run has no instruments" "$out" 'X4VR_POSELOG=<unset>' 'X4VR_FOOTLOG=<unset>'
+out=$(run X4VR_DEBUG=1)
+debugs=$(grep -cE '^debug ' "$ROOT/launch/defaults.conf")
+want "a debug run has them" "$out" X4VR_POSELOG=1 X4VR_FOOTLOG=1 "N=$((rows + 2 + debugs))"
+out=$(run X4VR_DEBUG=0)
+want "X4VR_DEBUG=0 is off" "$out" 'X4VR_POSELOG=<unset>'
+out=$(run X4VR_DEBUG=1 X4VR_POSELOG=0)
+want "an explicit setting still wins" "$out" X4VR_POSELOG=0
+out=$(run X4VR_DEBUG=1 X4VR_H=4224)
+want "a debug run changes no setting" "$out" X4VR_H=4224 X4VR_W=8448 X4VR_UPSCALE=none X4VR_FOV=1.4917
+if grep -E '^debug ' "$ROOT/launch/defaults.conf" | awk '{print $2}' | grep -qvE 'LOG$|CAMDIFF$|CAMSTAMP$'; then
+    bad "the debug level holds something other than a log"
+else
+    ok "the debug level is logging only"
 fi
 
 if [[ $fail -eq 0 ]]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi

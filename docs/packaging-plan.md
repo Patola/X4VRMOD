@@ -20,6 +20,7 @@ in every log, the static runtime, the single extension.
 | 9 | An unknown X4 build (2026-11-05) | **Amber "Play anyway",** naming what turns off. Play is green only when everything is met, and grey only when it can't launch. |
 | 10 | Who creates the custom config files? (2026-11-05) | **The mod, as today; the launcher never does.** Steam launch options and the command line bypass the launcher, so the mod must do it anyway, and it learns the real profile path when X4 opens it. Settings reach the mod as environment variables, served in memory. The launcher only reports and deletes the files. |
 | 11 | Distribution and names (2026-11-05) | **Packages and a zip.** CLI `x4vrmod`, window `x4vrmod-launcher`, zip data directory `x4vrmod-data/`. |
+| 12 | Which VR runtime to suggest (2026-11-05) | **WiVRn.** The window's button and text put it first whenever it's installed; SteamVR is offered first only when there's no WiVRn, as for a headset wired to the PC. |
 
 Clarifications from Patola:
 * **DLSS:** the development PC has an AMD GPU, so no DLSS here. A friend with
@@ -223,8 +224,10 @@ check and action exists once, in the core; the GUI only displays it.
 
 ## Phase 3 — `x4vrmod-launcher`, the Qt 6 Widgets window
 
-About 800 wide, under an 800×200 banner of our own art (no Egosoft logos or
-screenshots; the About box says unofficial, not affiliated with Egosoft):
+About 800 wide, under an 800×250 banner cut from Patola's picture (he chose it on
+2026-11-05, replacing a banner drawn here; its stylised X⁴ resembles Egosoft's logo, so the
+window's version line, the About box and the help all say unofficial, not affiliated with
+Egosoft):
 
     +----------------------------------------------------------------------+
     |                 [ banner 800x200: "X4 VR Mod" artwork ]              |
@@ -237,10 +240,10 @@ screenshots; the About box says unofficial, not affiliated with Egosoft):
     | [None (full resolution)    v]  | (ok) gamescope installed     3.17.0 |
     | Renders 2816 x 2816.           | (x)  Headset not connected  [Retry] |
     | Eye distance                   | (ok) Vulkan layer installed  v0.9.9 |
-    | [Automatic, from headset   v]  | (ok) Mod installed                  |
+    | [64.0 mm                   ^]  | (ok) Mod installed                  |
     | [x] Lean in the cockpit        |                                     |
     |----------------------------------------------------------------------|
-    | [Help] [Launch options] [More v]     1 thing to fix first  [  PLAY  ]|
+    | [Help] [Launch options] [Report a bug] [More v]  1 to fix  [  PLAY  ]|
     | v0.9.9 - supports X4 9.00                                            |
     +----------------------------------------------------------------------+
 
@@ -251,9 +254,17 @@ screenshots; the About box says unofficial, not affiliated with Egosoft):
   Start Steam, Start WiVRn or SteamVR, Retry, Browse. Rows refresh while the window
   is open, so starting WiVRn turns its row green without a click (see *The VR
   probe*).
-* **More:** Uninstall, Open logs, Create bug report, Add to application menu (zip
-  only), Advanced (field of view, debug level, extra environment variables), Reset
-  to defaults, About. Uninstall is here so it can't be hit by accident.
+* **More:** Play with debug log, Open logs, Add to application menu (zip only),
+  Advanced (field of view, extra environment variables), Reset to defaults, Uninstall,
+  About. Uninstall is here so it can't be hit by accident.
+* **WiVRn is what we suggest** (Patola, 2026-11-05), and the window says so: with WiVRn
+  installed the VR row's button is Start WiVRn, even when SteamVR is the active runtime.
+  Start SteamVR appears only without WiVRn, because a headset wired to the PC has no other
+  way. His reasons, in the help: a clearer picture than SteamVR's on the same headset, a
+  codec to choose, and no jumbled picture at 4224.
+* **Eye distance is manual for now:** the mock's "Automatic, from headset" needs layer work.
+  `configured_ipd()` goes into shear constants while pipelines are built, and OpenXR only
+  reports it with a session.
 * **Launch options:** copyable Steam line (`x4vrmod run %command%`) and terminal
   line, with a picture of where they go in Steam.
 * **Help:** `QTextBrowser` over HTML and PNGs in the data directory. Each section
@@ -295,9 +306,13 @@ here it exists only while WiVRn runs.
 with a headset connected (2026-11-05). So a timeout from WiVRn reads as "Headset not
 connected", and a timeout from anything else keeps its generic wording.
 
-**Asking a SteamVR that isn't running starts nothing** (2026-11-05): no window, no
-`vrserver` left behind, `XR_ERROR_RUNTIME_FAILURE`, and console noise. So `doctor`
-says "SteamVR isn't running" without asking. Not yet tried with SteamVR running.
+**Asking a SteamVR that isn't running starts its `vrserver`** (2026-11-05, SteamVR's
+own `xrclient_x4vrmod.txt`: "Starting vrserver process"). With no headset connected it
+refused the client (`VRInitError_Driver_WirelessHmdNotConnected`, which reaches us as
+`XR_ERROR_RUNTIME_FAILURE`) and was killed 5 s later, so no window appeared and nothing
+stayed. With a headset it may well stay up. So `doctor` and the window never ask a
+SteamVR that isn't running: they say "SteamVR isn't running" from the runtime file.
+Not yet tried with SteamVR running.
 
 ### Install and uninstall
 **Which layout:** `x4vrmod-data/manifest` beside `/proc/self/exe` means the zip;
@@ -441,6 +456,21 @@ its paths parameterised (`BUILD`, `ROOT`, the `/nvme` default, `SteamAppId`).
 * Core dumps: the launcher keeps them on (`ulimit -c`), and the report
   includes systemd-coredump's backtrace when one exists for X4.
 
+### What's built (2026-11-05)
+* **Debug runs:** `x4vrmod run --debug`, and Play with debug log in the window, set
+  `X4VR_DEBUG=1`, which applies the `debug` rows of `launch/defaults.conf`: take 375's
+  instruments, logging only, in a log named `*-debug.log`. For that run only.
+* **The report:** below, as a `.tar.gz` (GitHub doesn't take `.tar.zst`), without the
+  scorer (the log reaches us, and we run it), and with the launch's output, the settings
+  and a crash's backtrace from `coredumpctl`. The issue form is
+  `.github/ISSUE_TEMPLATE/bug_report.yml`; "Open a GitHub issue" fills it in, once that
+  file is on the default branch.
+* **Scrubbing, checked on real logs:** in take 380's 46 MB log, the user name, home path
+  and profile number appeared 10 times each and in the report 0 times. It packed to 5 MB
+  in about a second. Longer logs keep their first 20 MB and last 100 MB.
+* **Not built yet:** the flight recorder and its mark key, the scorer's first diagnosis
+  in the report, "this is known" answers, and creating the issue through `gh`.
+
 ### The report bundle (`x4vrmod report`, or the GUI's button)
 * **What goes in:**
   * the X4VRMOD version (embedded), the X4 build hash, Steam or GOG;
@@ -458,7 +488,7 @@ its paths parameterised (`BUILD`, `ROOT`, the `/nvme` default, `SteamAppId`).
   number (a Steam account ID) and the user and host names are replaced.
   **The player sees the whole bundle before it goes anywhere.**
 * **Delivery, never automatic:**
-  * the bundle is a `.tar.zst` in `~/x4vrmod-reports/`;
+  * the bundle is a `.tar.gz` in `~/x4vrmod-reports/`;
   * "Report on GitHub" opens a new issue in the browser, with the scrubbed
     summary (versions, settings, the scorer's FAIL lines) in the body. The
     player drags the bundle in. With `gh` installed and logged in, the core
@@ -553,7 +583,8 @@ level with the mark key, instead of a take's full command line.
 4. `install`, `uninstall`, `run`; the script's paths parameterised; the zip layout
    and **the Arch PKGBUILD** (decision 7). **Done 2026-11-05**: takes 403 (terminal)
    and 404 (Steam's launch options) scored PASS.
-5. Phase 3's Qt 6 Widgets window over the core, with its art and help.
+5. Phase 3's Qt 6 Widgets window over the core, with its art and help. **Code done
+   2026-11-05**, with debug runs and bug reports from step 8; not yet played from.
 6. CI: tests, census, deb/rpm/zip/Arch packages on tags.
 7. Signature search, for hotfixes and GOG. The second binary is here (GOG's, above).
 8. `report` and the flight recorder; DLSS: read the tag, wire it, the RTX 5090 test.

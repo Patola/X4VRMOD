@@ -35,6 +35,7 @@ x4vr_apply_defaults() {
     fi
     while read -r kind var val rest; do
         [[ -z "${kind:-}" || "$kind" == \#* ]] && continue
+        [[ "$kind" == debug && "${X4VR_DEBUG:-0}" != 1 ]] && continue
         _x4vr_default "$var" "$val"
     done < "$conf"
     if [[ ! "$X4VR_H" =~ ^[0-9]+$ ]]; then

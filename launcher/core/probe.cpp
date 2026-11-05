@@ -32,7 +32,7 @@ std::string self_dir() {
 }
 
 // The x4vrmod next to this program: the window ships beside it.
-static std::string cli_path() {
+std::string cli_path() {
     const std::string s = self_dir() + "/x4vrmod";
     if (is_file(s))
         return s;

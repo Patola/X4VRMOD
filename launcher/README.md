@@ -1,12 +1,18 @@
 # launcher
 
 The X4 VR Mod launcher: a Qt-free core (`core/`) with the `x4vrmod` command line
-(`cli/`) over it; the window comes later, over the same core. The design is in
-[docs/packaging-plan.md](../docs/packaging-plan.md), Phases 2 and 3.
+(`cli/`) and the `x4vrmod-launcher` window (`gui/`, Qt 6 Widgets, `qt6-base` alone) over
+it. The design is in [docs/packaging-plan.md](../docs/packaging-plan.md), Phases 2 and 3.
+The window only shows what the core decides, so it and `doctor` can't disagree. Without
+Qt 6 the command line still builds. Its help and artwork are in `help/`; the pictures of
+the window come from `x4vr_test_launcher_gui --shots launcher/help`, the rest from
+`tools/make_launcher_art.py`.
 
     x4vrmod doctor            every condition for playing, one line each
     x4vrmod install           put the mod in place; says what it does to saves
-    x4vrmod run [%command%]   launch X4 with the mod, from a terminal or from Steam
+    x4vrmod run [%command%]   launch X4 with the mod, from a terminal or from Steam;
+                              --debug also logs the instruments, for a bug report
+    x4vrmod report            make a bug report to read and attach; nothing is sent
     x4vrmod launch-options    the lines to use for that
     x4vrmod config set K V    eye, upscaler, ipd, lean, fov, game, env.NAME
     x4vrmod uninstall         takes the mod out; --all also deletes the VR settings
@@ -36,11 +42,16 @@ deletes them.
 Uninstall only removes names it knows as its own, so a damaged install record can't
 point it at something else. X4's own files are only ever read.
 
+**Bug reports.** `report` writes plain text to `~/x4vrmod-reports/`, with a `.tar.gz` beside
+it to attach to a GitHub issue. The home folder, user name, computer name and Steam account
+number are taken out of everything first, and nothing is sent: the player attaches it.
+
 **Probes** run in a child process with a timeout, so a broken VR runtime can't hang or
 crash the launcher. The layer and the injector are never loaded: their version is read
 from the file (`cmake/x4vr_version.cmake`'s marker), because loading them would run
 their code.
 
-Tests: `build/tests/x4vr_test_launcher`, `tests/run-launcher-x4-bytes.sh` (a temp copy
-of X4 with bytes bent), `tests/run-launcher-install.sh` (a real zip, a fake home and a
-fake game) and `tests/run-launcher-package.sh` (a real `cmake --install`).
+Tests: `build/tests/x4vr_test_launcher`, `build/tests/x4vr_test_launcher_gui` (the window on
+Qt's offscreen platform), `tests/run-launcher-x4-bytes.sh` (a temp copy of X4 with bytes
+bent), `tests/run-launcher-install.sh` (a real zip, a fake home and a fake game) and
+`tests/run-launcher-package.sh` (a real `cmake --install`).

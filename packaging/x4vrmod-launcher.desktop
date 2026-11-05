@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=X4 VR Mod
+Comment=Install and launch the VR mod for X4: Foundations
+Exec=x4vrmod-launcher
+Icon=x4vrmod-launcher
+Categories=Game;
+Terminal=false

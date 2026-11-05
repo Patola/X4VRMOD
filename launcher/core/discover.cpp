@@ -91,6 +91,28 @@ ChildResult run_child(const std::vector<std::string> &argv, int timeout_ms,
     int fds[2];
     if (argv.empty() || pipe(fds) != 0)
         return r;
+    // The window calls this from a worker thread, and after fork in a threaded
+    // process only async-signal-safe calls are allowed. So everything the child
+    // needs is built here, before it exists.
+    std::vector<std::string> env;
+    for (char **e = environ; e && *e; e++) {
+        const std::string kv = *e;
+        const std::string name = kv.substr(0, kv.find('=') + 1);
+        bool replaced = false;
+        for (const std::string &x : extra_env)
+            replaced = replaced || x.rfind(name, 0) == 0;
+        if (!replaced)
+            env.push_back(kv);
+    }
+    env.insert(env.end(), extra_env.begin(), extra_env.end());
+    std::vector<char *> envp;
+    for (const std::string &s : env)
+        envp.push_back(const_cast<char *>(s.c_str()));
+    envp.push_back(nullptr);
+    std::vector<char *> a;
+    for (const std::string &s : argv)
+        a.push_back(const_cast<char *>(s.c_str()));
+    a.push_back(nullptr);
     const pid_t pid = fork();
     if (pid < 0) {
         close(fds[0]);
@@ -100,24 +122,16 @@ ChildResult run_child(const std::vector<std::string> &argv, int timeout_ms,
     if (pid == 0) {
         setpgid(0, 0);
         dup2(fds[1], 1);
-        const int null = ::open("/dev/null", 0 /* O_RDONLY */);
+        const int null = ::open("/dev/null", O_RDWR);
         if (null >= 0)
             dup2(null, 0);
-        if (merge_stderr) {
+        if (merge_stderr)
             dup2(fds[1], 2);
-        } else {
-            FILE *e = freopen("/dev/null", "w", stderr);
-            (void)e;
-        }
+        else if (null >= 0)
+            dup2(null, 2);
         close(fds[0]);
         close(fds[1]);
-        for (const std::string &kv : extra_env)
-            putenv(strdup(kv.c_str()));
-        std::vector<char *> a;
-        for (const std::string &s : argv)
-            a.push_back(const_cast<char *>(s.c_str()));
-        a.push_back(nullptr);
-        execvp(a[0], a.data());
+        execvpe(a[0], a.data(), envp.data());
         _exit(127);
     }
     close(fds[1]);

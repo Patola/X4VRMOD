@@ -4,9 +4,11 @@
 // telling paths apart, discovery under a fake home, the ELF reader on a built
 // file, children that hang, the probes' lines. Against the real X4 when there is
 // one, every feature's check must fail when its own bytes are bent. Self-checking.
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -633,6 +635,225 @@ static void test_profile_dirs() {
     check(x4_profile_dirs(g_tmp + "/pd/nobody").empty(), "no X4 folder, no list");
 }
 
+// The child's environment is built before fork now: both halves must still arrive.
+static void test_child_env() {
+    setenv("X4VR_TEST_KEEP", "kept", 1);
+    setenv("X4VR_TEST_OVER", "old", 1);
+    const ChildResult r = run_child({"sh", "-c", "echo $X4VR_TEST_KEEP $X4VR_TEST_OVER $X4VR_TEST_NEW"},
+                                    5000, false, {"X4VR_TEST_OVER=new", "X4VR_TEST_NEW=added"});
+    check(r.out == "kept new added\n", "a child gets the environment, replaced and added: " + r.out);
+    const ChildResult e = run_child({"sh", "-c", "echo out; echo err >&2"}, 5000, false);
+    check(e.out == "out\n", "stderr goes nowhere unless asked: " + e.out);
+    const ChildResult m = run_child({"sh", "-c", "echo out; echo err >&2"}, 5000, true);
+    check(m.out == "out\nerr\n", "...and comes along when asked: " + m.out);
+    unsetenv("X4VR_TEST_KEEP");
+    unsetenv("X4VR_TEST_OVER");
+}
+
+static void test_offered() {
+    check(!eye_note(4000, false).empty() == false, "4000 keeps the map in depth");
+    check(eye_note(4096, false).find("flat") != std::string::npos, "4096 says the map is flat");
+    check(eye_note(3200, true).empty(), "SteamVR at 3200 has no warning");
+    check(eye_note(3600, true).find("SteamVR") != std::string::npos, "SteamVR above 3200 has one");
+    check(eye_note(3600, false).empty(), "WiVRn at 3600 doesn't");
+    bool have_default = false, sorted = true;
+    int last = 0;
+    for (int e : eye_sizes()) {
+        have_default = have_default || e == EyeSettings{}.eye;
+        sorted = sorted && e > last;
+        last = e;
+    }
+    check(have_default && sorted, "the sizes offered include the default, in order");
+    bool all_valid = !upscalers().empty();
+    for (const Upscaler &u : upscalers())
+        all_valid = all_valid && valid_upscaler(u.mode) && u.label && *u.label;
+    check(all_valid && upscalers()[0].mode == std::string("none"), "None comes first, all labelled");
+    check(valid_upscaler(kAutoUpscaler), "the rule's choice is on the list");
+}
+
+static void test_menu_entry() {
+    const std::string home = g_tmp + "/menu";
+    mkdirs(home);
+    check(!menu_entry_possible(home), "no menu entry outside the zip");
+    check(!add_menu_entry(home).ok, "...and asking for one says so");
+    put(menu_entry_path(home), "x");
+    bool listed = false;
+    for (const std::string &p : uninstall_plan(home, false).mod)
+        listed = listed || p == menu_entry_path(home);
+    check(listed, "uninstall takes the menu entry with it");
+
+    // As the zip: the entry is for the copy that stays, so only once that's there.
+    const std::string data = g_tmp + "/menu-zip/x4vrmod-data";
+    put(data + "/manifest", "version=1\n");
+    setenv("X4VRMOD_DATA", data.c_str(), 1);
+    remove(menu_entry_path(home).c_str());
+    check(!menu_entry_possible(home), "the zip, not installed yet: no entry");
+    put(home + "/.local/share/x4vrmod/x4vrmod-launcher", "x");
+    check(menu_entry_possible(home), "installed: it can have one");
+    const ActionReport made = add_menu_entry(home);
+    check(made.ok, "...and it's written");
+    const std::string entry = read_text_file(menu_entry_path(home));
+    check(entry.find("Exec=\"" + home + "/.local/share/x4vrmod/x4vrmod-launcher\"") !=
+              std::string::npos, "...naming the installed copy, quoted");
+    check(entry.find("Name=X4 VR Mod") != std::string::npos, "...and the mod's name");
+    unsetenv("X4VRMOD_DATA");
+}
+
+// What must not leave the machine, and what must survive being scrubbed.
+static void test_scrub() {
+    ScrubNames n;
+    n.home = "/home/pat";
+    n.user = "pat";
+    n.host = "mybox";
+    n.profile_ids = {"1234567"};
+    auto s = [&n](const std::string &t) { return scrub_text(t, n); };
+    check(s("open /home/pat/.config/x") == "open ~/.config/x", "the home folder becomes ~");
+    check(s("/home/pat") == "~", "...at the very end of a line too");
+    check(s("/home/pat2/x") == "/home/pat2/x", "another user's folder isn't ours");
+    check(s("user pat on mybox") == "user <user> on <host>", "user and computer names go");
+    check(s("a pattern in myboxes") == "a pattern in myboxes", "words that merely hold them stay");
+    check(s("/x/EgoSoft/X4/96679891/config.xml") == "/x/EgoSoft/X4/<profile>/config.xml",
+          "a numbered profile folder goes, whichever account");
+    check(s("/x/EgoSoft/X4/gog/config.xml") == "/x/EgoSoft/X4/gog/config.xml", "a named one stays");
+    check(s("account 1234567 here") == "account <profile> here", "a known account number goes alone");
+    check(s("id 76561198056945619 ok") == "id <steamid> ok", "a SteamID64 goes");
+    check(s("id 7656119805694561900 ok") == "id 7656119805694561900 ok", "a longer number stays");
+    check(s("frame 1234568 at 0x1234567a") == "frame 1234568 at 0x1234567a", "other numbers stay");
+    ScrubNames shortName = n;
+    shortName.user = "me";
+    check(scrub_text("the frame", shortName) == "the frame", "a very short name isn't hunted");
+}
+
+static void test_log_excerpt() {
+    const std::string p = g_tmp + "/excerpt.log";
+    std::string big(1000, 'a');
+    std::fill(big.begin() + 900, big.end(), 'z');
+    put(p, big);
+    check(log_excerpt(p, 2000, 0) == big, "a short log is kept whole");
+    const std::string e = log_excerpt(p, 10, 20);
+    check(e.rfind(std::string(10, 'a'), 0) == 0, "a long one keeps its start");
+    check(e.size() >= 20 && e.compare(e.size() - 20, 20, std::string(20, 'z')) == 0, "...and its end");
+    check(e.find("left out") != std::string::npos, "...and says so");
+    check(log_excerpt(g_tmp + "/nothing.log", 10, 10).empty(), "no log, nothing");
+}
+
+static void test_report() {
+    const std::string home = g_tmp + "/report";
+    const char *saved = getenv("XDG_STATE_HOME");
+    const std::string keep = saved ? saved : "";
+    unsetenv("XDG_STATE_HOME");
+    check(session_logs(home).empty(), "no sessions yet");
+    const ScrubNames names = scrub_names(home);
+    const std::string logs = home + "/.local/state/x4vrmod/logs";
+    const std::string normal = logs + "/x4vrmod-20260101-100000.log";
+    const std::string debug = logs + "/x4vrmod-20260102-100000-debug.log";
+    const std::string secret = home + "/.config/EgoSoft/X4/96679891/config.xml";
+    put(normal, "old\n");
+    put(debug, "opened " + secret + " on " + names.host + " as " + names.user +
+                   " id 76561198056945619\n");
+    put(logs + "/launch-output.txt", "x4vr-launch: said " + home + "\n");
+    put(logs + "/other.log", "not ours\n");
+    {
+        const std::string t1 = normal;
+        struct stat st;
+        check(stat(t1.c_str(), &st) == 0, "the logs are there");
+        struct timespec ts[2] = {{1000000, 0}, {1000000, 0}};
+        utimensat(AT_FDCWD, t1.c_str(), ts, 0);
+    }
+    const std::vector<SessionLog> ls = session_logs(home);
+    check(ls.size() == 2 && ls[0].path == debug && ls[0].debug && !ls[1].debug,
+          "sessions: newest first, debug ones marked, nothing else listed");
+
+    ReportOptions o;
+    o.home = home;
+    o.log = debug;
+    o.note = "It broke at " + home + "\nSecond line";
+    const ReportResult r = make_report(o);
+    check(r.ok, "a report is made: " + r.error);
+    auto file = [&r](const char *n) { return read_text_file(r.dir + "/" + n); };
+    check(file("session.log").find("opened ~/.config/EgoSoft/X4/<profile>/config.xml") !=
+              std::string::npos, "the log is there, scrubbed");
+    for (const char *f : {"session.log", "summary.txt", "what-happened.txt", "launch-output.txt"}) {
+        const std::string t = file(f);
+        check(!t.empty(), std::string(f) + " is in it");
+        check(t.find(home) == std::string::npos && t.find("96679891") == std::string::npos &&
+                  t.find("76561198056945619") == std::string::npos &&
+                  (names.host.size() < 3 || t.find(names.host + " ") == std::string::npos),
+              std::string(f) + " holds nothing private");
+    }
+    check(file("summary.txt").find(own_version()) != std::string::npos, "the summary has the version");
+    check(file("summary.txt").find("debug session") != std::string::npos, "...and says it's a debug log");
+    check(file("summary.txt").find("not during the session") != std::string::npos,
+          "...and that its checklist is from now");
+    check(is_file(r.archive) && r.archive_size > 0 && !r.too_big, "the archive is there, and fits");
+    check(r.archive.size() > 7 && r.archive.compare(r.archive.size() - 7, 7, ".tar.gz") == 0,
+          "...in a format GitHub takes");
+    const ChildResult l = run_child({"tar", "tzf", r.archive}, 20000);
+    check(l.out.find("session.log") != std::string::npos && l.out.find("summary.txt") != std::string::npos,
+          "...holding the files");
+    check(r.issue_url.find("template=bug_report.yml") != std::string::npos, "the issue uses the form");
+    check(r.issue_url.find("title=It%20broke") != std::string::npos, "...titled from the note's first line");
+    check(r.issue_url.find("Second") == r.issue_url.find("what=") + 5 + r.issue_url.substr(r.issue_url.find("what=") + 5).find("Second"),
+          "...with the whole note in its field");
+    check(r.issue_url.find("report/.local") == std::string::npos && r.issue_url.size() < 8000,
+          "...with nothing private, and short enough for a URL");
+
+    ReportOptions none;
+    none.home = home;
+    none.log = "";
+    const ReportResult nr = make_report(none);
+    check(nr.ok && !is_file(nr.dir + "/session.log"), "no log yet: a report can still be made");
+    check(read_text_file(nr.dir + "/summary.txt").find("Log: none") != std::string::npos, "...and says so");
+    if (saved)
+        setenv("XDG_STATE_HOME", keep.c_str(), 1);
+}
+
+// WiVRn is what we suggest: with it installed, nothing should point at SteamVR first.
+static void test_suggests_wivrn() {
+    if (steamvr_is_running()) {
+        printf("skip   SteamVR is running here: the row can't be told apart\n");
+        return;
+    }
+    const std::string home = g_tmp + "/suggest";
+    const std::string bin = g_tmp + "/suggest-bin";
+    put(home + "/.config/openxr/1/active_runtime.json",
+        "{\"file_format_version\":\"1.0.0\",\"runtime\":{\"name\":\"SteamVR\","
+        "\"VALVE_runtime_is_steamvr\":true,\"library_path\":\"x\"}}");
+    put(bin + "/wivrn-dashboard", "#!/bin/sh\n");
+    chmod((bin + "/wivrn-dashboard").c_str(), 0755);
+    const std::string keepPath = getenv("PATH") ? getenv("PATH") : "";
+    const char *xr = getenv("XR_RUNTIME_JSON");
+    const std::string keepXr = xr ? xr : "";
+    unsetenv("XR_RUNTIME_JSON");
+    auto vr = [&home] {
+        CheckOptions o;
+        o.home = home;
+        o.skip_gpu = true;
+        for (const Check &c : run_checks(o))
+            if (c.id == "vr")
+                return c;
+        return Check{};
+    };
+    setenv("PATH", (bin + ":" + keepPath).c_str(), 1);
+    check(wivrn_program() == bin + "/wivrn-dashboard", "the dashboard is what starts WiVRn");
+    Check c = vr();
+    check(c.fix == "start-vr", "SteamVR active but stopped, WiVRn installed: the button is WiVRn");
+    check(c.title.find("SteamVR") == std::string::npos, "...the title doesn't send you to SteamVR");
+    check(c.detail.find("Start WiVRn, which we suggest") == 0, "...and the text says so first");
+    setenv("PATH", "/nonexistent", 1);
+    check(wivrn_program().empty(), "no WiVRn installed");
+    c = vr();
+    check(c.fix == "start-steamvr", "...then SteamVR is the only thing to offer");
+    check(c.detail.find("we suggest WiVRn") != std::string::npos, "...and it still says what we suggest");
+    remove((home + "/.config/openxr/1/active_runtime.json").c_str());
+    c = vr();
+    check(c.fix == "start-vr" && c.detail.find("we suggest WiVRn") != std::string::npos,
+          "no runtime and no WiVRn: it says to install it");
+    setenv("PATH", keepPath.c_str(), 1);
+    if (xr)
+        setenv("XR_RUNTIME_JSON", keepXr.c_str(), 1);
+}
+
 static void test_real_x4() {
     const char *e = getenv("X4VR_GAME");
     const auto all = discover_all(home_dir());
@@ -715,6 +936,13 @@ int main() {
     test_profile();
     test_vr_row();
     test_profile_dirs();
+    test_child_env();
+    test_offered();
+    test_menu_entry();
+    test_scrub();
+    test_log_excerpt();
+    test_report();
+    test_suggests_wivrn();
     test_real_x4();
     run_child({"rm", "-rf", g_tmp}, 10000);
     if (g_fail) {

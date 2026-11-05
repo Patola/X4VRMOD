@@ -186,6 +186,7 @@ struct Layout {
     std::string injector;       // the preload library
     std::string launch_script;  // x4vr-launch.sh, what `run` execs
     std::string deploy_script;  // deploy-extensions.sh, from what ships
+    std::string help_dir;       // the window's help and artwork
 };
 Layout detect_layout(const std::string &home);
 // The directory of this program, from /proc/self/exe.
@@ -195,6 +196,8 @@ std::string self_dir();
 std::string library_version(const std::string &path);
 // This program's own version.
 const char *own_version();
+// The x4vrmod command line: beside this program, else on PATH.
+std::string cli_path();
 
 // ----------------------------------------------------------------- is it running
 bool steam_is_running(const std::string &home);
@@ -235,6 +238,16 @@ void set_upscaler(EyeSettings &s, const std::string &mode);
 bool valid_upscaler(const std::string &mode);
 // What X4 renders for this eye size and upscaler.
 int render_size(int eye, const std::string &mode);
+// What's offered, in order. DLSS joins these when it exists.
+struct Upscaler {
+    const char *mode;
+    const char *label;
+    double ratio;
+};
+const std::vector<Upscaler> &upscalers();
+const std::vector<int> &eye_sizes();
+// What the player should know about this size, or "".
+std::string eye_note(int eye, bool steamvr);
 
 // -------------------------------------------------- install, uninstall and run
 // The one given, then X4VR_GAME, then the profile's, else the best one discovered.
@@ -248,6 +261,13 @@ struct ActionReport {
     std::vector<std::string> log;
 };
 ActionReport install_mod(const Install &x4, const std::string &home);
+// What installing does to the player's saves, said before they agree to it.
+const char *install_disclosure();
+// The zip's entry in the application menu: only once it's installed, because that's
+// the copy whose path stays. A package ships its own.
+std::string menu_entry_path(const std::string &home);
+bool menu_entry_possible(const std::string &home);
+ActionReport add_menu_entry(const std::string &home);
 // What uninstalling would remove. `settings` is what can't be undone, and is
 // only filled when asked for.
 struct UninstallPlan {
@@ -282,10 +302,55 @@ struct CheckOptions {
     std::string home;
     std::string game; // a path chosen by the player; "" to discover
     bool skip_vr = false;
+    bool skip_gpu = false; // it won't change while a window stays open
+    XrProbe *xr_out = nullptr; // what the VR runtime answered, when it was asked
 };
 std::vector<Check> run_checks(const CheckOptions &o);
 // The VR row, from what the runtime answered.
 Check vr_row(const ActiveRuntime &rt, const XrProbe &p);
+// The checks as text, one line each.
+std::string checks_text(const std::vector<Check> &checks);
+// WiVRn's program to start, the dashboard if there is one, or "". It's what we suggest:
+// a sharper picture than SteamVR on the same headset (docs/packaging-plan.md).
+std::string wivrn_program();
+
+// ------------------------------------------------------------------ bug reports
+// Taken out of everything a report holds. The player reads it before it goes anywhere.
+struct ScrubNames {
+    std::string home, user, host;
+    std::vector<std::string> profile_ids; // X4's numbered profile folders: Steam accounts
+};
+ScrubNames scrub_names(const std::string &home);
+std::string scrub_text(const std::string &text, const ScrubNames &names);
+
+// The logs `x4vrmod run` kept, newest first.
+struct SessionLog {
+    std::string path;
+    long long when = 0;
+    uint64_t size = 0;
+    bool debug = false;
+};
+std::vector<SessionLog> session_logs(const std::string &home);
+// A log, keeping `head` and `tail` bytes of one that's longer than both.
+std::string log_excerpt(const std::string &path, size_t head, size_t tail);
+
+struct ReportOptions {
+    std::string home;
+    std::string game; // "" as `run` would choose
+    std::string log;  // "" when no session got that far
+    std::string note; // what the player says happened
+};
+struct ReportResult {
+    bool ok = false;
+    std::string error;
+    std::string dir, archive; // the files, and the same packed for GitHub
+    std::string summary;      // scrubbed, for the issue
+    std::string issue_url;    // a new issue with the note and the summary filled in
+    uint64_t archive_size = 0;
+    bool too_big = false;     // over GitHub's limit for an attachment
+};
+ReportResult make_report(const ReportOptions &o);
+std::string issue_url(const std::string &note, const std::string &summary);
 // The worst status of a set of checks: what the Play button shows.
 Status worst(const std::vector<Check> &checks);
 

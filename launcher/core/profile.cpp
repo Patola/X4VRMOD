@@ -18,22 +18,47 @@ namespace x4vr::launcher {
 
 // README, "Resolution and upscaling". Measured for fsr_quality and fsr3_balanced,
 // AMD's standard ratios for the others.
-static const struct { const char *mode; double ratio; } kUpscalers[] = {
-    {"none", 1.0},          {"fsr_ultra_quality", 1.3}, {"fsr_quality", 1.5},
-    {"fsr_balanced", 1.7},  {"fsr_performance", 2.0},   {"fsr3_native", 1.0},
-    {"fsr3_quality", 1.5},  {"fsr3_balanced", 1.7},     {"fsr3_performance", 2.0},
-    {"fsr3_ultra_performance", 3.0},
-};
+const std::vector<Upscaler> &upscalers() {
+    static const std::vector<Upscaler> v = {
+        {"none", "None (full resolution)", 1.0},
+        {"fsr_ultra_quality", "FSR 1 Ultra Quality", 1.3},
+        {"fsr_quality", "FSR 1 Quality", 1.5},
+        {"fsr_balanced", "FSR 1 Balanced", 1.7},
+        {"fsr_performance", "FSR 1 Performance", 2.0},
+        {"fsr3_native", "FSR 3 Native (anti-aliasing only)", 1.0},
+        {"fsr3_quality", "FSR 3 Quality", 1.5},
+        {"fsr3_balanced", "FSR 3 Balanced", 1.7},
+        {"fsr3_performance", "FSR 3 Performance", 2.0},
+        {"fsr3_ultra_performance", "FSR 3 Ultra Performance", 3.0},
+    };
+    return v;
+}
+
+const std::vector<int> &eye_sizes() {
+    static const std::vector<int> v = {1600, 2048, 2400, 2816, 3072, 3200, 3600, 4000, 4224};
+    return v;
+}
+
+std::string eye_note(int eye, bool steamvr) {
+    std::string note;
+    // docs/packaging-plan.md, Resolution: takes 376-378 and Patola, 2026-10-31.
+    if (eye > 4068)
+        note = "Above 4068 the map's 3D view is flat, not in depth.";
+    if (steamvr && eye > kAutoUpscaleAbove)
+        note += std::string(note.empty() ? "" : " ") +
+                "At 4224 SteamVR has shown a jumbled picture. If you see that, go lower.";
+    return note;
+}
 
 bool valid_upscaler(const std::string &mode) {
-    for (const auto &u : kUpscalers)
+    for (const Upscaler &u : upscalers())
         if (mode == u.mode)
             return true;
     return false;
 }
 
 int render_size(int eye, const std::string &mode) {
-    for (const auto &u : kUpscalers)
+    for (const Upscaler &u : upscalers())
         if (mode == u.mode)
             return (int)(eye / u.ratio + 0.5);
     return eye;

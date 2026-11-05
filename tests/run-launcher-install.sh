@@ -27,6 +27,10 @@ U="$T/x4vrmod-$ver"
 want "the zip holds the launcher" "[ -x '$U/x4vrmod' ]"
 want "the zip holds its data folder" "[ -f '$U/x4vrmod-data/manifest' ]"
 want "the launch script keeps its exec bit" "[ -x '$U/x4vrmod-data/launch/x4vr-launch.sh' ]"
+if [ -x build/launcher/x4vrmod-launcher ]; then
+    want "the zip holds the window" "[ -x '$U/x4vrmod-launcher' ]"
+    want "the zip holds its help" "[ -f '$U/x4vrmod-data/help/index.html' ] && [ -f '$U/x4vrmod-data/help/banner.png' ]"
+fi
 if unzip -l "$zip" | grep -qE '\.(cat|dat|xpl)$|x4-shadersrc|x4-ui'; then
     bad "the zip holds X4 content"
 else
@@ -47,8 +51,9 @@ cat > "$T/fake.c" <<'SRC'
 int main(int c, char **v) {
     const char *s = getenv("SteamAppId");
     const char *l = getenv("X4VR_LOG");
-    printf("FAKE args=%d steam=%s x4vr_h=%s log=%s self=%s\n", c - 1, s ? s : "unset",
-           getenv("X4VR_H"), l ? l : "unset", v[0]);
+    const char *p = getenv("X4VR_POSELOG");
+    printf("FAKE args=%d steam=%s x4vr_h=%s log=%s poselog=%s self=%s\n", c - 1, s ? s : "unset",
+           getenv("X4VR_H"), l ? l : "unset", p ? p : "unset", v[0]);
     return 0;
 }
 SRC
@@ -92,6 +97,10 @@ want "no placeholder is left" "! grep -q '@' '$M'"
 want "the extension is in X4's folder" "[ -f '$G/extensions/x4vrmod/content.xml' ]"
 want "the retired extension is gone" "[ ! -e '$G/extensions/x4vrmod_lookaround' ]"
 want "a record is kept" "[ -f '$H/.local/share/x4vrmod/installed.json' ]"
+if [ -x build/launcher/x4vrmod-launcher ]; then
+    want "the window is installed too" "[ -x '$H/.local/share/x4vrmod/x4vrmod-launcher' ]"
+    want "...with its help" "[ -f '$H/.local/share/x4vrmod/x4vrmod-data/help/index.html' ]"
+fi
 [ "$before" = "$(snapshot)" ] && ok "install: the player's files are untouched" \
     || bad "install changed the player's files"
 
@@ -136,6 +145,24 @@ grep -qE "log=$H/\.local/state/x4vrmod/logs/x4vrmod-[0-9]{8}-[0-9]{6}\.log " <<<
     && ok "run: a log of its own, under the state folder" || bad "run: $out"
 out=$(env X4VR_LOG=/tmp/mine.log X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 $I run --game "$G" 2>/dev/null)
 grep -q 'log=/tmp/mine.log ' <<<"$out" && ok "run: an explicit X4VR_LOG is kept" || bad "run: $out"
+# Debug runs: more in the log, marked in its name, and only when asked for.
+out=$(env -u X4VR_LOG X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 $I run --game "$G" 2>/dev/null)
+grep -q 'poselog=unset' <<<"$out" && ok "run: no instruments in a normal run" || bad "normal: $out"
+out=$(env -u X4VR_LOG X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 $I run --debug --game "$G" 2>/dev/null)
+grep -q 'poselog=1' <<<"$out" && ok "run --debug: the instruments are on" || bad "debug: $out"
+grep -qE "log=[^ ]*-debug\.log " <<<"$out" && ok "run --debug: its log says so" || bad "debug log: $out"
+# A report from the installed copy, with a real log: nothing private, and it's an archive.
+dbg=$(sed -E 's/.* log=([^ ]*) .*/\1/' <<<"$out")
+mkdir -p "$(dirname "$dbg")"
+echo "session in $H on $(hostname)" > "$dbg"
+out=$($I report --note "It broke" 2>&1); rc=$?
+[ "$rc" = 0 ] && ok "report: made" || bad "report: $out"
+arch=$(grep -E '\.tar\.gz$' <<<"$out" | tr -d ' ')
+want "report: the archive is there" "[ -f '$arch' ]"
+tar tzf "$arch" | grep -q 'session.log' && ok "report: it holds the session" || bad "report: no session.log"
+if tar xzOf "$arch" 2>/dev/null | grep -qF "$H"; then bad "report: the home folder is in it"; else ok "report: the home folder isn't in it"; fi
+grep -q 'issues/new?template=bug_report.yml' <<<"$out" && ok "report: it gives the issue's address" || bad "report: no address"
+if [ -d "$H/x4vrmod-reports" ]; then mv "$H/x4vrmod-reports" "$T/reports-kept"; fi
 
 # The shipping path itself, up to gamescope: everything a real run is given, with
 # no switch turned off. The stub stands in for gamescope, so nothing starts.

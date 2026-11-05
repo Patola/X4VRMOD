@@ -1,0 +1,28 @@
+name: Bug report
+description: Something's wrong in VR, or the mod won't start
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The launcher can fill most of this in: press **Report a bug** in its window, or run
+        `x4vrmod report`. Then attach the `.tar.gz` it makes, by dragging it into this page.
+        Your home folder, user name, computer name and Steam account number are already taken
+        out of it, and you can read every file in it first.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you saw, and what you expected instead. A video helps with anything visual.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen again
+      description: If you can. Where you were in the game, and what you pressed.
+  - type: textarea
+    id: system
+    attributes:
+      label: Your system
+      description: The launcher's report fills this in. Otherwise, the output of `x4vrmod doctor`.
+      render: text

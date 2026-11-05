@@ -6,7 +6,7 @@ pkgdesc="VR mod for X4: Foundations on native Linux (unofficial, not affiliated 
 arch=('x86_64')
 url="https://github.com/Patola/X4VRMOD"
 license=('GPL-3.0-or-later')
-depends=('bash' 'gamescope' 'glibc' 'openxr' 'vulkan-icd-loader' 'zlib')
+depends=('bash' 'gamescope' 'glibc' 'openxr' 'qt6-base' 'vulkan-icd-loader' 'zlib')
 makedepends=('cmake' 'git' 'vulkan-headers')
 source=("x4vrmod::git+https://github.com/Patola/X4VRMOD.git#tag=v${pkgver}")
 sha256sums=('SKIP')

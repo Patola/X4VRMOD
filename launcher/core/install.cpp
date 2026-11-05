@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 
@@ -67,6 +68,46 @@ Install choose_install(const std::string &home, const std::string &game, bool *f
         return *p;
     }
     return Install{};
+}
+
+const char *install_disclosure() {
+    return "X4 marks saves made with a non-Egosoft extension as modified; the mod's "
+           "extension is enabled only in VR sessions.";
+}
+
+std::string menu_entry_path(const std::string &home) {
+    return home + "/.local/share/applications/x4vrmod-launcher.desktop";
+}
+
+bool menu_entry_possible(const std::string &home) {
+    return detect_layout(home).kind == LayoutKind::Zip &&
+           is_file(install_root_user(home) + "/x4vrmod-launcher");
+}
+
+ActionReport add_menu_entry(const std::string &home) {
+    ActionReport r;
+    if (!menu_entry_possible(home)) {
+        r.error = "Install the mod first: the menu needs the copy whose path stays.";
+        return r;
+    }
+    const std::string root = install_root_user(home), path = menu_entry_path(home);
+    std::error_code ec;
+    fs::create_directories(dir_name(path), ec);
+    FILE *f = fopen(path.c_str(), "w");
+    if (!f) {
+        r.error = "Couldn't write " + path;
+        return r;
+    }
+    fprintf(f,
+            "[Desktop Entry]\nType=Application\nName=X4 VR Mod\n"
+            "Comment=Install and launch the VR mod for X4: Foundations\n"
+            "Exec=\"%s/x4vrmod-launcher\"\nIcon=%s/x4vrmod-data/help/icon.png\n"
+            "Categories=Game;\nTerminal=false\n",
+            root.c_str(), root.c_str());
+    fclose(f);
+    r.ok = true;
+    r.log.push_back("Added to the application menu: " + path);
+    return r;
 }
 
 ActionReport install_mod(const Install &x4, const std::string &home) {
@@ -163,7 +204,8 @@ ActionReport install_mod(const Install &x4, const std::string &home) {
 
 // Only what we put there, by exact name: a record that says otherwise is ignored.
 static bool is_ours(const std::string &path, const std::string &home) {
-    if (path == install_root_user(home) || path == layer_manifest_user(home))
+    if (path == install_root_user(home) || path == layer_manifest_user(home) ||
+        path == menu_entry_path(home))
         return true;
     const std::string parent = base_name(dir_name(path));
     if (parent != "extensions")
@@ -195,6 +237,7 @@ UninstallPlan uninstall_plan(const std::string &home, bool with_settings) {
         add(r);
     add(layer_manifest_user(home));
     add(install_root_user(home));
+    add(menu_entry_path(home));
 
     if (l.kind == LayoutKind::Package)
         p.note = "The package itself stays. Remove it with your package manager.";
@@ -290,7 +333,7 @@ std::string terminal_line(const std::string &home) {
 
 // One log per run, because the scorer refuses a file holding two sessions; the
 // newest twenty stay.
-static std::string new_log_path(const std::string &home) {
+static std::string new_log_path(const std::string &home, bool debug) {
     const char *x = getenv("XDG_STATE_HOME");
     const std::string dir = (x && *x ? std::string(x) : home + "/.local/state") + "/x4vrmod/logs";
     std::error_code ec;
@@ -315,7 +358,7 @@ static std::string new_log_path(const std::string &home) {
     struct tm tmv;
     localtime_r(&now, &tmv);
     strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tmv);
-    return dir + "/x4vrmod-" + stamp + ".log";
+    return dir + "/x4vrmod-" + stamp + (debug ? "-debug.log" : ".log");
 }
 
 std::string log_dir(const std::string &home) {
@@ -360,8 +403,10 @@ int run_mod(const std::string &home, const std::string &game,
         setenv("X4VR_LAYER_MANIFEST", l.layer_manifest.c_str(), 0);
         setenv("X4VR_INJECTOR", l.injector.c_str(), 0);
     }
-    if (!getenv("X4VR_LOG"))
-        setenv("X4VR_LOG", new_log_path(home).c_str(), 1);
+    if (!getenv("X4VR_LOG")) {
+        const char *d = getenv("X4VR_DEBUG");
+        setenv("X4VR_LOG", new_log_path(home, d && !strcmp(d, "1")).c_str(), 1);
+    }
 
     std::vector<char *> argv;
     argv.push_back(const_cast<char *>(l.launch_script.c_str()));
