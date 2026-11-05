@@ -20,7 +20,9 @@ ROOT="$(cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GAME_DIR="${1:?usage: deploy-extensions.sh <X4 install dir>}"
 [ $# -eq 1 ] || { echo "deploy-extensions: unknown argument '$2'" >&2; exit 2; }
 DEST="$GAME_DIR/extensions"
-[ -d "$DEST" ] || { echo "deploy-extensions: no extensions/ in '$GAME_DIR'" >&2; exit 1; }
+[ -d "$GAME_DIR" ] || { echo "deploy-extensions: no folder '$GAME_DIR'" >&2; exit 1; }
+# A copy with no DLC may have no extensions/ yet.
+mkdir -p "$DEST" || { echo "deploy-extensions: can't create '$DEST'" >&2; exit 1; }
 RETIRED=(x4vrmod_lookaround x4vrmod_nosway x4vrmod_headlook)
 
 rc=0

@@ -9,7 +9,9 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace x4vr::launcher {
@@ -182,6 +184,8 @@ struct Layout {
     std::string extension_dir;  // the x4vrmod extension to deploy
     std::string layer_manifest; // where the manifest must be for X4 to find it
     std::string injector;       // the preload library
+    std::string launch_script;  // x4vr-launch.sh, what `run` execs
+    std::string deploy_script;  // deploy-extensions.sh, from what ships
 };
 Layout detect_layout(const std::string &home);
 // The directory of this program, from /proc/self/exe.
@@ -197,6 +201,68 @@ bool steam_is_running(const std::string &home);
 bool steamvr_is_running();
 // Any process whose program is this file, or is called X4.
 bool x4_is_running(const std::string &exe);
+
+// ------------------------------------------------------------------ the profile
+// ~/.config/x4vrmod/profile.toml: the player's settings, nothing derived. A flat
+// "key = value" subset of TOML.
+struct Profile {
+    std::map<std::string, std::string> values;
+    std::string get(const std::string &k, const std::string &fallback = "") const;
+};
+std::string profile_path(const std::string &home);
+Profile load_profile(const std::string &path);
+bool save_profile(const std::string &path, const Profile &p);
+// Validates, and applies the eye-size rule. Returns "" or a note for the player;
+// a refusal starts with "error: " and changes nothing.
+std::string profile_set(Profile &p, const std::string &key, const std::string &value);
+// The profile as environment variables for the launch script.
+std::vector<std::pair<std::string, std::string>> profile_env(const Profile &p);
+
+// Eye size and upscaler (decision 6). Going above 3200 per eye with no upscaler
+// selects FSR 1 Quality; a choice the player made is never overridden.
+constexpr int kAutoUpscaleAbove = 3200;
+constexpr const char *kAutoUpscaler = "fsr_quality";
+struct EyeSettings {
+    int eye = 2816;
+    std::string upscaler = "none";
+    bool upscaler_auto = false; // the rule chose it, not the player
+};
+EyeSettings eye_settings(const Profile &p);
+void store_eye_settings(Profile &p, const EyeSettings &s);
+// Returns a note when the rule changed the upscaler, else "".
+std::string set_eye(EyeSettings &s, int eye);
+void set_upscaler(EyeSettings &s, const std::string &mode);
+bool valid_upscaler(const std::string &mode);
+// What X4 renders for this eye size and upscaler.
+int render_size(int eye, const std::string &mode);
+
+// -------------------------------------------------- install, uninstall and run
+// The one given, then X4VR_GAME, then the profile's, else the best one discovered.
+// *found says whether the result names a program (it may still be the Windows
+// version).
+Install choose_install(const std::string &home, const std::string &game, bool *found);
+
+struct ActionReport {
+    bool ok = false;
+    std::string error;
+    std::vector<std::string> log;
+};
+ActionReport install_mod(const Install &x4, const std::string &home);
+// What uninstalling would remove. `settings` is what can't be undone, and is
+// only filled when asked for.
+struct UninstallPlan {
+    std::vector<std::string> mod, settings;
+    std::string note;
+};
+UninstallPlan uninstall_plan(const std::string &home, bool with_settings);
+ActionReport uninstall_apply(const UninstallPlan &p);
+// Execs the launch script with the profile in its environment; returns only on
+// failure. `command` is Steam's %command%, when there is one.
+int run_mod(const std::string &home, const std::string &game,
+            const std::vector<std::string> &command);
+std::string steam_launch_line(const std::string &home);
+std::string terminal_line(const std::string &home);
+std::string log_dir(const std::string &home);
 
 // ------------------------------------------------------------------ the checks
 // Ok, or Warn (can launch with something lost), or Block (can't launch).

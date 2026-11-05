@@ -44,5 +44,25 @@ add_custom_target(x4vr_version ALL
 add_subdirectory(layer)
 add_subdirectory(injector)
 add_subdirectory(launcher)
-add_subdirectory(tests)
+option(X4VR_BUILD_TESTS "Build the test programs" ON)
+if(X4VR_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()
+
+# A package's layout (docs/packaging-plan.md, Install and uninstall). The zip is
+# tools/make-zip.sh. Fixed lib/x4vrmod, because the core looks there.
+set(X4VR_LAYER_LIB "${CMAKE_INSTALL_PREFIX}/lib/x4vrmod/libVkLayer_X4VR_core.so")
+configure_file(layer/VK_LAYER_X4VR_core.json.in
+               "${CMAKE_BINARY_DIR}/package/VK_LAYER_X4VR_core.json" @ONLY)
+install(TARGETS x4vr_layer x4vr_inject LIBRARY DESTINATION lib/x4vrmod)
+install(TARGETS x4vrmod RUNTIME DESTINATION bin)
+install(FILES "${CMAKE_BINARY_DIR}/package/VK_LAYER_X4VR_core.json"
+        DESTINATION share/vulkan/explicit_layer.d)
+install(PROGRAMS launch/x4vr-launch.sh launch/deploy-extensions.sh
+        DESTINATION share/x4vrmod/launch)
+install(FILES launch/x4vr-defaults.sh launch/defaults.conf
+        DESTINATION share/x4vrmod/launch)
+install(DIRECTORY extension/x4vrmod DESTINATION share/x4vrmod/extension)
+install(FILES LICENSE LICENSE.exception DESTINATION share/licenses/x4vrmod)
+install(FILES README.md docs/releases.md DESTINATION share/doc/x4vrmod)
 # add_subdirectory(cursor)   # later phase

@@ -29,10 +29,13 @@ Layout detect_layout(const std::string &home) {
         l.kind = LayoutKind::Zip;
         l.data_dir = zip;
         l.extension_dir = zip + "/extension/x4vrmod";
+        l.deploy_script = zip + "/launch/deploy-extensions.sh";
         // What the zip installs into, so paths survive the folder moving.
+        const std::string in = home + "/.local/share/x4vrmod/x4vrmod-data";
         l.layer_manifest =
             home + "/.local/share/vulkan/explicit_layer.d/VK_LAYER_X4VR_core.json";
-        l.injector = home + "/.local/share/x4vrmod/libx4vr_inject.so";
+        l.injector = in + "/lib/libx4vr_inject.so";
+        l.launch_script = in + "/launch/x4vr-launch.sh";
         return l;
     }
     if (here == X4VRMOD_BUILD_DIR "/launcher" || here == X4VRMOD_BUILD_DIR "/tests") {
@@ -41,6 +44,8 @@ Layout detect_layout(const std::string &home) {
         l.extension_dir = X4VRMOD_SOURCE_DIR "/extension/x4vrmod";
         l.layer_manifest = X4VRMOD_BUILD_DIR "/layer/VK_LAYER_X4VR_core.json";
         l.injector = X4VRMOD_BUILD_DIR "/injector/libx4vr_inject.so";
+        l.launch_script = X4VRMOD_SOURCE_DIR "/launch/x4vr-launch.sh";
+        l.deploy_script = X4VRMOD_SOURCE_DIR "/launch/deploy-extensions.sh";
         return l;
     }
     l.kind = LayoutKind::Package;
@@ -49,6 +54,8 @@ Layout detect_layout(const std::string &home) {
     l.layer_manifest =
         X4VRMOD_PREFIX "/share/vulkan/explicit_layer.d/VK_LAYER_X4VR_core.json";
     l.injector = X4VRMOD_PREFIX "/lib/x4vrmod/libx4vr_inject.so";
+    l.launch_script = l.data_dir + "/launch/x4vr-launch.sh";
+    l.deploy_script = l.data_dir + "/launch/deploy-extensions.sh";
     return l;
 }
 
@@ -326,28 +333,18 @@ std::vector<Check> run_checks(const CheckOptions &o) {
     const std::string home = o.home.empty() ? home_dir() : o.home;
     std::vector<Check> out;
 
-    Install in;
     bool have = false;
+    const Install in = choose_install(home, o.game, &have);
     Check x4;
     x4.id = "x4";
     x4.status = Status::Block;
     x4.fix = "browse";
-    if (!o.game.empty()) {
-        in = install_from_path(o.game);
-        have = in.kind == PathKind::Linux || in.kind == PathKind::Windows;
-        if (!have) {
+    if (!have) {
+        const std::string want =
+            !o.game.empty() ? o.game : load_profile(profile_path(home)).get("game");
+        if (!want.empty()) {
             x4.title = "X4 not found there";
-            x4.detail = classify_game_path(o.game).why;
-        }
-        if (have)
-            for (const Install &d : discover_all(home))
-                if (real_path(d.exe) == real_path(in.exe) && !d.buildid.empty())
-                    in.buildid = d.buildid;
-    } else {
-        const std::vector<Install> all = discover_all(home);
-        if (const Install *p = preferred_install(all)) {
-            in = *p;
-            have = true;
+            x4.detail = classify_game_path(want).why;
         } else {
             x4.title = "X4 not found";
             x4.detail = "It isn't in Steam's libraries or the usual GOG folders. "

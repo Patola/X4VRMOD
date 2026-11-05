@@ -5,14 +5,15 @@ add_library(x4vrmod_core STATIC
     core/patches.cpp
     core/probe.cpp
     core/checks.cpp
+    core/profile.cpp
+    core/install.cpp
     ${X4VR_VERSION_FILE})
 add_dependencies(x4vrmod_core x4vr_version)
 target_include_directories(x4vrmod_core PUBLIC core)
-set(X4VRMOD_PREFIX "${CMAKE_INSTALL_PREFIX}" CACHE STRING "Where a package installs the mod")
 target_compile_definitions(x4vrmod_core PRIVATE
     X4VRMOD_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
     X4VRMOD_BUILD_DIR="${CMAKE_BINARY_DIR}"
-    X4VRMOD_PREFIX="${X4VRMOD_PREFIX}")
+    X4VRMOD_PREFIX="${CMAKE_INSTALL_PREFIX}")
 target_link_libraries(x4vrmod_core PUBLIC ${CMAKE_DL_LIBS})
 # OpenXR: headers at build time, loader dlopen'd at run time, as in the layer.
 if(TARGET OpenXR::headers OR OPENXR_HEADER_DIR)

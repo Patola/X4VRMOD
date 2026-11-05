@@ -16,6 +16,17 @@ static void usage(FILE *f) {
             "  x4vrmod doctor [--game PATH] [--no-vr]\n"
             "      every condition for playing, one line each. Exit code: 0 ready,\n"
             "      1 can play with something lost, 2 can't play yet.\n"
+            "  x4vrmod install [--game PATH]    put the mod in place\n"
+            "  x4vrmod uninstall [--all] [--yes] [--dry-run]\n"
+            "      take it away. --all also deletes your VR settings, which can't\n"
+            "      be undone. X4's saves and its own settings are never touched.\n"
+            "  x4vrmod run [--game PATH] [COMMAND...]\n"
+            "      play. With COMMAND it wraps it: Steam's launch options use\n"
+            "      `x4vrmod run %%command%%`.\n"
+            "  x4vrmod launch-options           the lines for Steam and a terminal\n"
+            "  x4vrmod config [list | get KEY | set KEY VALUE]\n"
+            "      eye, upscaler, ipd, lean, fov, game, env.NAME\n"
+            "  x4vrmod locate                   the X4 program that would run\n"
             "  x4vrmod probe xr [--verbose]     ask the VR runtime (always asks)\n"
             "  x4vrmod probe vulkan             what the GPUs offer\n"
             "  x4vrmod probe x4 [PATH]          X4's version and which patches fit\n"
@@ -56,6 +67,142 @@ static int cmd_doctor(int argc, char **argv) {
     else
         printf("Play: grey, %d thing%s to fix first.\n", blocked, blocked == 1 ? "" : "s");
     return w == Status::Ok ? 0 : w == Status::Warn ? 1 : 2;
+}
+
+static bool confirm(const char *question) {
+    printf("%s ", question);
+    fflush(stdout);
+    char line[64];
+    if (!fgets(line, sizeof line, stdin))
+        return false;
+    return !strcmp(line, "y\n") || !strcmp(line, "yes\n");
+}
+
+static int cmd_install(int argc, char **argv) {
+    std::string game;
+    for (int i = 2; i < argc; i++) {
+        if (!strcmp(argv[i], "--game") && i + 1 < argc) {
+            game = argv[++i];
+        } else {
+            fprintf(stderr, "x4vrmod install: unknown argument '%s'\n", argv[i]);
+            return 2;
+        }
+    }
+    const std::string home = home_dir();
+    bool found = false;
+    const Install in = choose_install(home, game, &found);
+    printf("X4 marks saves made with a non-Egosoft extension as modified; the mod's "
+           "extension is enabled only in VR sessions.\n");
+    const ActionReport r = install_mod(in, home);
+    for (const std::string &l : r.log)
+        printf("%s\n", l.c_str());
+    if (!r.ok) {
+        fprintf(stderr, "x4vrmod install: %s\n", r.error.c_str());
+        return 2;
+    }
+    printf("Installed. Check with: x4vrmod doctor\n");
+    return 0;
+}
+
+static int cmd_uninstall(int argc, char **argv) {
+    bool all = false, yes = false, dry = false;
+    for (int i = 2; i < argc; i++) {
+        if (!strcmp(argv[i], "--all"))
+            all = true;
+        else if (!strcmp(argv[i], "--yes"))
+            yes = true;
+        else if (!strcmp(argv[i], "--dry-run"))
+            dry = true;
+        else {
+            fprintf(stderr, "x4vrmod uninstall: unknown argument '%s'\n", argv[i]);
+            return 2;
+        }
+    }
+    const std::string home = home_dir();
+    if (!dry && x4_is_running("")) {
+        fprintf(stderr, "x4vrmod uninstall: X4 is running. Close it first.\n");
+        return 2;
+    }
+    const UninstallPlan p = uninstall_plan(home, all);
+    if (p.mod.empty() && p.settings.empty()) {
+        printf("Nothing of the mod's is installed.\n");
+        if (!p.note.empty())
+            printf("%s\n", p.note.c_str());
+        return 0;
+    }
+    if (!p.mod.empty())
+        printf("The mod:\n");
+    for (const std::string &m : p.mod)
+        printf("  %s\n", m.c_str());
+    if (!p.settings.empty()) {
+        printf("Your VR settings. This can't be undone:\n");
+        for (const std::string &m : p.settings)
+            printf("  %s\n", m.c_str());
+    }
+    printf("X4's saves and its own settings are not touched.\n");
+    if (!p.note.empty())
+        printf("%s\n", p.note.c_str());
+    if (dry)
+        return 0;
+    if (!yes && !confirm(all ? "Remove all of this, for good? [y/N]" : "Remove these? [y/N]")) {
+        printf("Nothing removed.\n");
+        return 1;
+    }
+    const ActionReport r = uninstall_apply(p);
+    for (const std::string &l : r.log)
+        printf("%s\n", l.c_str());
+    if (!r.ok) {
+        fprintf(stderr, "x4vrmod uninstall: %s\n", r.error.c_str());
+        return 2;
+    }
+    return 0;
+}
+
+static int cmd_run(int argc, char **argv) {
+    std::string game;
+    int i = 2;
+    if (i + 1 < argc && !strcmp(argv[i], "--game")) {
+        game = argv[i + 1];
+        i += 2;
+    }
+    if (i < argc && !strcmp(argv[i], "--"))
+        i++;
+    std::vector<std::string> command(argv + i, argv + argc);
+    return run_mod(home_dir(), game, command);
+}
+
+static int cmd_config(int argc, char **argv) {
+    const std::string path = profile_path(home_dir());
+    Profile p = load_profile(path);
+    const std::string what = argc > 2 ? argv[2] : "list";
+    if (what == "list") {
+        for (const auto &[k, v] : p.values)
+            printf("%s = %s\n", k.c_str(), v.c_str());
+        return 0;
+    }
+    if (what == "get" && argc == 4) {
+        const auto it = p.values.find(argv[3]);
+        if (it == p.values.end())
+            return 1;
+        printf("%s\n", it->second.c_str());
+        return 0;
+    }
+    if (what == "set" && argc == 5) {
+        const std::string note = profile_set(p, argv[3], argv[4]);
+        if (note.rfind("error: ", 0) == 0) {
+            fprintf(stderr, "x4vrmod config: %s\n", note.c_str() + 7);
+            return 2;
+        }
+        if (!save_profile(path, p)) {
+            fprintf(stderr, "x4vrmod config: couldn't write %s\n", path.c_str());
+            return 2;
+        }
+        if (!note.empty())
+            printf("%s\n", note.c_str());
+        return 0;
+    }
+    usage(stderr);
+    return 2;
 }
 
 static int cmd_probe_x4(int argc, char **argv) {
@@ -116,6 +263,27 @@ int main(int argc, char **argv) {
     }
     if (cmd == "doctor")
         return cmd_doctor(argc, argv);
+    if (cmd == "install")
+        return cmd_install(argc, argv);
+    if (cmd == "uninstall")
+        return cmd_uninstall(argc, argv);
+    if (cmd == "run")
+        return cmd_run(argc, argv);
+    if (cmd == "config")
+        return cmd_config(argc, argv);
+    if (cmd == "locate") {
+        bool found = false;
+        const Install in = choose_install(home_dir(), "", &found);
+        if (!found || in.kind != PathKind::Linux)
+            return 1;
+        printf("%s\n", in.exe.c_str());
+        return 0;
+    }
+    if (cmd == "launch-options") {
+        printf("Steam launch options:  %s\n", steam_launch_line(home_dir()).c_str());
+        printf("In a terminal:         %s\n", terminal_line(home_dir()).c_str());
+        return 0;
+    }
     if (cmd == "probe" && argc >= 3) {
         const std::string what = argv[2];
         if (what == "xr") {

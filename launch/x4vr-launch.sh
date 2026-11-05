@@ -11,7 +11,14 @@
 #                         launch options:  .../x4vr-launch.sh %command%)
 #
 # Env knobs:
-#   X4VR_GAME=<path>      X4 binary (default: the /nvme SteamLibrary install)
+#   X4VR_GAME=<path>      X4 binary (default: in wrapper mode the X4 among the
+#                         arguments; otherwise whatever `x4vrmod locate` finds)
+#   X4VR_NEEDS_STEAM=0    this X4 doesn't link Steam (GOG): don't set SteamAppId
+#                         (the launcher sets it; default 1)
+#   X4VR_LAYER_MANIFEST=<path>  the Vulkan layer's manifest; X4VR_INJECTOR=<path>
+#                         the preload library. `x4vrmod run` sets both for an
+#                         installed mod; from a source tree they default to the
+#                         build directory
 #   X4VR_BUILD=<dir>      build dir (default: <repo>/build)
 #   X4VR_LOG=<file>       log destination; empty/unset in wrapper mode keeps
 #                         the default /tmp/x4vr.log; set X4VR_LOG= (empty) to
@@ -395,8 +402,9 @@ BUILD="${X4VR_BUILD:-$ROOT/build}"
 
 # **The shipping line is the default** (docs/packaging-plan.md, Phase 0):
 # every variable in launch/defaults.conf that is not set gets the shipping
-# value, before anything below reads one, and the upscaler follows the eye
-# size (decision 6). An explicit setting wins; X4VR_DEFAULTS=0 applies none.
+# value, before anything below reads one. An explicit setting wins;
+# X4VR_DEFAULTS=0 applies none. The upscaler following the eye size (decision 6)
+# is the launcher's rule, not this script's.
 # The "(default ...)" notes in the knob list above are the code's own
 # defaults, which is what X4VR_DEFAULTS=0 gives.
 # shellcheck source=x4vr-defaults.sh
@@ -408,8 +416,17 @@ echo "x4vr-launch: $_n_default setting(s) from launch/defaults.conf" \
      "$([[ ${X4VR_DEFAULTS:-1} == 0 ]] && echo '(X4VR_DEFAULTS=0: none applied)')" \
      "— eye ${X4VR_H:-?}, upscaler ${X4VR_UPSCALE:-unset}" >&2
 
-DEFAULT_GAME="/nvme/SteamLibrary/steamapps/common/X4 Foundations/X4"
-GAME="${X4VR_GAME:-$DEFAULT_GAME}"
+GAME="${X4VR_GAME:-}"
+if [[ -z "$GAME" ]]; then
+    # Wrapper mode: Steam's %command% may be a chain (reaper, a runtime) with X4
+    # somewhere in it.
+    for _a in "$@"; do
+        [[ "${_a##*/}" == X4 ]] && GAME="$_a"
+    done
+fi
+if [[ -z "$GAME" && $# -eq 0 && -x "$BUILD/launcher/x4vrmod" ]]; then
+    GAME="$("$BUILD/launcher/x4vrmod" locate 2>/dev/null)"
+fi
 
 # X4VR_LOG: respect an explicitly-set value, including empty (=stderr).
 if [[ -z "${X4VR_LOG+x}" ]]; then
@@ -451,11 +468,13 @@ if [[ -n "${X4VR_TAKE:-}" && -n "${X4VR_LOG:-}" ]]; then
 fi
 
 if [[ "${X4VR_NO_LAYER:-0}" != 1 ]]; then
-    if [[ ! -f "$BUILD/layer/VK_LAYER_X4VR_core.json" ]]; then
-        echo "x4vr-launch: layer manifest not found in $BUILD/layer — build first" >&2
+    LAYER_MANIFEST="${X4VR_LAYER_MANIFEST:-$BUILD/layer/VK_LAYER_X4VR_core.json}"
+    if [[ ! -f "$LAYER_MANIFEST" ]]; then
+        echo "x4vr-launch: layer manifest not found at $LAYER_MANIFEST — build first" \
+             "or run: x4vrmod install" >&2
         exit 1
     fi
-    export VK_ADD_LAYER_PATH="$BUILD/layer${VK_ADD_LAYER_PATH:+:$VK_ADD_LAYER_PATH}"
+    export VK_ADD_LAYER_PATH="$(dirname "$LAYER_MANIFEST")${VK_ADD_LAYER_PATH:+:$VK_ADD_LAYER_PATH}"
     export VK_INSTANCE_LAYERS="VK_LAYER_X4VR_core${VK_INSTANCE_LAYERS:+:$VK_INSTANCE_LAYERS}"
     export VK_LOADER_LAYERS_ENABLE="VK_LAYER_X4VR_core${VK_LOADER_LAYERS_ENABLE:+,$VK_LOADER_LAYERS_ENABLE}"
 fi
@@ -473,11 +492,13 @@ if [[ "${X4VR_VALIDATE:-0}" == 1 ]]; then
 fi
 
 if [[ "${X4VR_NO_INJECT:-0}" != 1 ]]; then
-    if [[ ! -f "$BUILD/injector/libx4vr_inject.so" ]]; then
-        echo "x4vr-launch: injector not found in $BUILD/injector — build first" >&2
+    INJECTOR="${X4VR_INJECTOR:-$BUILD/injector/libx4vr_inject.so}"
+    if [[ ! -f "$INJECTOR" ]]; then
+        echo "x4vr-launch: injector not found at $INJECTOR — build first" \
+             "or run: x4vrmod install" >&2
         exit 1
     fi
-    export LD_PRELOAD="$BUILD/injector/libx4vr_inject.so${LD_PRELOAD:+:$LD_PRELOAD}"
+    export LD_PRELOAD="$INJECTOR${LD_PRELOAD:+:$LD_PRELOAD}"
 fi
 
 # Keep the Vulkan layer chain clean during dev unless explicitly kept.
@@ -487,12 +508,14 @@ fi
 
 if [[ $# -eq 0 ]]; then
     # ---- direct mode: launch X4 ourselves ----
-    if [[ ! -x "$GAME" ]]; then
+    if [[ -z "$GAME" || ! -x "$GAME" ]]; then
         echo "x4vr-launch: X4 binary not found at '$GAME' (set X4VR_GAME)" >&2
         exit 1
     fi
-    export SteamAppId=392160
-    export SteamGameId=392160
+    if [[ "${X4VR_NEEDS_STEAM:-1}" == 1 ]]; then
+        export SteamAppId=392160
+        export SteamGameId=392160
+    fi
     ulimit -c unlimited || true
     CDPATH= cd -- "$(dirname "$GAME")"
     set -- "$GAME" -skipintro -nocputhrottle -nosoundthrottle
@@ -505,7 +528,10 @@ fi
 # X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_HEADLOOK_PITCH_LIMIT=75, or head-look's own
 # servo stops at 65/35 whatever the extension allows.
 if [[ "${X4VR_EXTENSIONS:-0}" == 1 ]]; then
-    if ! "$ROOT/launch/deploy-extensions.sh" "$(dirname "$GAME")"; then
+    if [[ -z "$GAME" ]]; then
+        echo "x4vr-launch: WARNING no X4 among the arguments — extension not" \
+             "deployed (set X4VR_GAME)" >&2
+    elif ! "$ROOT/launch/deploy-extensions.sh" "$(dirname "$GAME")"; then
         echo "x4vr-launch: WARNING extension deployment failed — X4 may load a" \
              "stale copy or none" >&2
     fi

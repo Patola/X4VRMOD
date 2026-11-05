@@ -522,8 +522,10 @@ level with the mark key, instead of a take's full command line.
    symbols).
 3. Phase 2's core and CLI: discovery, the patch check, the probe and `doctor`
    first (they answer the "to verify" items on real machines).
+   **Done 2026-11-05** (`launcher/`).
 4. `install`, `uninstall`, `run`; the script's paths parameterised; the zip layout
-   and **the Arch PKGBUILD** (decision 7).
+   and **the Arch PKGBUILD** (decision 7). **Code done 2026-11-05**; not yet played
+   through (`x4vrmod run` from a terminal and from Steam).
 5. Phase 3's Qt 6 Widgets window over the core, with its art and help.
 6. CI: tests, census, deb/rpm/zip/Arch packages on tags.
 7. Signature search, for hotfixes and GOG, once a second binary is available.

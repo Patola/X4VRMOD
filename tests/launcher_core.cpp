@@ -485,6 +485,91 @@ static void test_checks() {
 
 // Each feature's check must see its own bytes bent. A group that kept passing
 // would turn a broken patch into a green Play button.
+// Decision 6: the rule only acts on crossing 3200, and never undoes a choice the
+// player made.
+static void test_eye_rule() {
+    EyeSettings s;
+    check(s.eye == 2816 && s.upscaler == "none" && !s.upscaler_auto, "the default: 2816, no upscaler");
+    check(set_eye(s, 3200).empty() && s.upscaler == "none", "3200 is still native");
+    std::string note = set_eye(s, 3201);
+    check(!note.empty() && s.upscaler == kAutoUpscaler && s.upscaler_auto,
+          "3201 selects FSR 1 Quality and says so");
+    check(set_eye(s, 4224).empty() && s.upscaler == kAutoUpscaler && s.upscaler_auto,
+          "between larger sizes nothing changes");
+    set_eye(s, 3000);
+    check(s.upscaler == "none" && !s.upscaler_auto, "back under 3200 an automatic choice returns to None");
+
+    EyeSettings m;
+    set_upscaler(m, "fsr3_balanced");
+    set_eye(m, 4224);
+    check(m.upscaler == "fsr3_balanced" && !m.upscaler_auto, "a chosen upscaler survives going large");
+    set_eye(m, 2816);
+    check(m.upscaler == "fsr3_balanced", "...and coming back");
+
+    EyeSettings u;
+    set_eye(u, 4224);
+    set_upscaler(u, "none");
+    check(u.upscaler == "none" && !u.upscaler_auto, "the player can unselect it");
+    check(set_eye(u, 4000).empty() && u.upscaler == "none", "...and moving between larger sizes respects that");
+    set_eye(u, 2816);
+    check(u.upscaler == "none", "...and coming back");
+
+    check(render_size(4224, "fsr_quality") == 2816, "FSR 1 Quality at 4224 renders 2816 (measured)");
+    check(render_size(4224, "fsr3_balanced") == 2485, "FSR 3 Balanced at 4224 renders about 2484 (measured)");
+    check(render_size(2816, "none") == 2816, "None renders the eye size");
+    check(kAutoUpscaleAbove == 3200, "the threshold is Patola's 3200");
+}
+
+static void test_profile() {
+    const std::string path = g_tmp + "/profile/x4vrmod/profile.toml";
+    Profile p;
+    check(load_profile(path).values.empty(), "no profile file reads as empty");
+    check(profile_set(p, "eye", "3072").empty(), "eye 3072 is accepted");
+    const std::string game = g_tmp + "/profile/where with spaces/X4";
+    put(game, make_elf("libc.so.6"));
+    check(profile_set(p, "game", game).empty(), "a path with spaces is accepted");
+    check(profile_set(p, "game", g_tmp + "/nowhere/X4").rfind("error: ", 0) == 0,
+          "a game that isn't there is refused");
+    check(p.get("game") == game, "...and the one set stays");
+    check(profile_set(p, "env.X4VR_FOO", "bar baz").empty(), "an extra variable is accepted");
+    check(profile_set(p, "eye", "12").rfind("error: ", 0) == 0, "eye 12 is refused");
+    check(profile_set(p, "eye", "4224x").rfind("error: ", 0) == 0, "eye 4224x is refused");
+    check(profile_set(p, "eye", "3e3").rfind("error: ", 0) == 0, "eye 3e3 is refused");
+    check(p.get("eye") == "3072", "a refusal changes nothing");
+    check(profile_set(p, "upscaler", "dlss").rfind("error: ", 0) == 0, "an unknown upscaler is refused");
+    check(profile_set(p, "nonsense", "1").rfind("error: ", 0) == 0, "an unknown setting is refused");
+    check(profile_set(p, "env.NOT A NAME", "1").rfind("error: ", 0) == 0, "a bad variable name is refused");
+    check(profile_set(p, "env.1A", "1").rfind("error: ", 0) == 0, "a name can't start with a digit");
+    check(profile_set(p, "env.A=B", "1").rfind("error: ", 0) == 0, "a name can't hold an =");
+    check(p.get("env.A=B").empty(), "a refused variable isn't kept");
+
+    check(save_profile(path, p), "saving makes the folder");
+    const Profile back = load_profile(path);
+    check(back.get("eye") == "3072", "the eye reads back");
+    check(back.get("game") == game, "a path with spaces reads back");
+    check(back.get("env.X4VR_FOO") == "bar baz", "the variable reads back");
+
+    bool h = false, foo = false, named = false;
+    for (const auto &[k, v] : profile_env(back)) {
+        h = h || (k == "X4VR_H" && v == "3072");
+        foo = foo || (k == "X4VR_FOO" && v == "bar baz");
+        named = named || k == "game" || k == "X4VR_GAME";
+    }
+    check(h && foo, "the profile becomes the launch script's variables");
+    check(!named, "the game isn't a variable: run decides it");
+
+    Profile q;
+    profile_set(q, "eye", "4224");
+    check(q.get("upscaler") == kAutoUpscaler, "through the profile, the rule applies");
+    profile_set(q, "upscaler", "none");
+    check(q.get("upscaler") == "none", "through the profile, it can be unselected");
+    profile_set(q, "eye", "4000");
+    check(q.get("upscaler") == "none", "through the profile, that choice stays");
+
+    put(path, "# a comment\n\neye = 2816\nnot a setting\n");
+    check(load_profile(path).get("eye") == "2816", "a stray line doesn't lose the rest");
+}
+
 static void test_real_x4() {
     const char *e = getenv("X4VR_GAME");
     const auto all = discover_all(home_dir());
@@ -563,6 +648,8 @@ int main() {
     test_library_version();
     test_layout();
     test_checks();
+    test_eye_rule();
+    test_profile();
     test_real_x4();
     run_child({"rm", "-rf", g_tmp}, 10000);
     if (g_fail) {
