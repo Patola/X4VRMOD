@@ -170,7 +170,13 @@ binary is missing.
     `0x1de5df0`, `0x65a000`. To look at; they may just be short functions.
   * It starts the same way: `testandlaunch` is the same file in both copies, ending
     in `./X4 "$@"` with `lib` on `LD_LIBRARY_PATH`. Nothing GOG-specific.
-  * **Still to verify, after one vanilla launch:** where its profile folder is.
+  * **Its profile folder is `EgoSoft/X4` itself** (one vanilla launch, 2026-11-05), where
+    Steam's is the numbered folder inside it. So GOG's forks are
+    `~/.config/EgoSoft/X4/config-x4vrmod.xml` and so on, beside its own files and
+    independent of Steam's. The mod puts them beside whatever file X4 opens, so this
+    needed no change; `tests/run-config-fork.sh` holds both on one machine.
+  * A vanilla run leaves no `content.xml` or `inputmap.xml` there, so a modded run after
+    one still starts those two forks from nothing.
 * **Steam's container: `x4vrmod run %command%` works** (take 404: PASS, its log in
   `~/.local/state/x4vrmod/logs/`).
 * **To check later (Patola, take 404):** started from Steam, a brief Egosoft logo
@@ -299,9 +305,9 @@ Egosoft):
   Browse, which takes a folder or a file and looks for `X4`, then `game/X4` (Heroic's
   layout, confirmed 2026-11-05).
 * **The profile folder** is never named in the code: X4 asks `XDG_CONFIG_HOME`, then
-  `HOME`, and the folder in `EgoSoft/X4/` is the player's own (Steam's is their account
-  number). The mod puts its forks beside whatever file X4 opens, and uninstall looks in
-  `EgoSoft/X4/` and every folder in it, under both.
+  `HOME`. Steam's copy uses a folder named for the account inside `EgoSoft/X4/`, and GOG's
+  uses `EgoSoft/X4/` itself. The mod puts its forks beside whatever file X4 opens, and
+  uninstall looks in `EgoSoft/X4/` and every folder in it, under both.
 * **Proton:** picking `X4.exe`, or a folder holding only that (Steam with forced
   Proton), explains that the mod is native Linux and can't work there.
 * **Steam running** (Steam copy only): `~/.steam/steam.pid` and a live
@@ -484,7 +490,7 @@ its paths parameterised (`BUILD`, `ROOT`, the `/nvme` default, `SteamAppId`).
   and profile number appeared 10 times each and in the report 0 times. It packed to 5 MB
   in about a second. Longer logs keep their first 20 MB and last 100 MB.
 * **Not built yet:** the flight recorder and its mark key, the scorer's first diagnosis
-  in the report, "this is known" answers, and creating the issue through `gh`.
+  in the report, and "this is known" answers.
 
 ### The report bundle (`x4vrmod report`, or the GUI's button)
 * **What goes in:**
@@ -504,10 +510,10 @@ its paths parameterised (`BUILD`, `ROOT`, the `/nvme` default, `SteamAppId`).
   **The player sees the whole bundle before it goes anywhere.**
 * **Delivery, never automatic:**
   * the bundle is a `.tar.gz` in `~/x4vrmod-reports/`;
-  * "Report on GitHub" opens a new issue in the browser, with the scrubbed
-    summary (versions, settings, the scorer's FAIL lines) in the body. The
-    player drags the bundle in. With `gh` installed and logged in, the core
-    can create the issue and attach it, after confirming;
+  * "Open a GitHub issue" opens a new issue in the browser, with the scrubbed
+    summary in the form, and selects the bundle in the file manager. The player drags
+    it in, because GitHub has no way for a program to attach a file to an issue, `gh`
+    included;
   * no telemetry, no upload server.
 * **A GitHub issue form** (`.github/ISSUE_TEMPLATE/bug_report.yml`) with the
   same fields, for reports made without the tool.

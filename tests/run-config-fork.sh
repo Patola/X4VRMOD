@@ -74,6 +74,28 @@ env X4VR_HEADLOOK=1 X4VR_LOG="$T/log" LD_PRELOAD="$SO" sh -c "echo saved > '$N/i
 [ ! -e "$N/inputmap.xml" ] && grep -q saved "$N/inputmap-x4vrmod.xml" \
     && ok "...and X4's save lands in the fork" || bad "inputmap save"
 
+# Both stores on one machine: Steam keeps a player's files in a numbered folder, and GOG
+# in X4's folder itself (seen 2026-11-05). Each gets its own forks, beside its own files.
+B="$T/both/EgoSoft/X4"
+mkdir -p "$B/96679891"
+printf '<root>\n  <who>gog</who>\n</root>\n' > "$B/config.xml"
+printf '<root>\n  <who>steam</who>\n  <uiscale>0.8</uiscale>\n</root>\n' > "$B/96679891/config.xml"
+printf '<root>\n  <who>steam</who>\n  <uiscale>0.7</uiscale>\n</root>\n' > "$B/96679891/config-x4vrmod.xml"
+cp "$B/96679891/config-x4vrmod.xml" "$T/steam-fork"
+cp "$B/config.xml" "$T/gog-config"
+out=$(run sed -n p "$B/config.xml")
+grep -q '<who>gog</who>' <<<"$out" && grep -qF "$scale" <<<"$out" && ok "GOG: served its own config, at 0.6" || bad "GOG: $out"
+grep -q '<who>gog</who>' "$B/config-x4vrmod.xml" && ok "GOG: its fork is beside its config.xml" || bad "GOG's fork"
+cmp -s "$B/config.xml" "$T/gog-config" && ok "GOG: config.xml is byte-identical" || bad "GOG's config.xml changed"
+cmp -s "$B/96679891/config-x4vrmod.xml" "$T/steam-fork" && ok "...and Steam's fork isn't touched" || bad "Steam's fork changed"
+out=$(run sed -n p "$B/96679891/config.xml")
+grep -q '<who>steam</who>' <<<"$out" && grep -q '<uiscale>0.7</uiscale>' <<<"$out" \
+    && ok "Steam: served its own fork, with its own scale" || bad "Steam: $out"
+grep -q '<who>gog</who>' "$B/config-x4vrmod.xml" && ok "...and GOG's fork is still GOG's" || bad "GOG's fork changed"
+run sh -c "echo saved-by-gog > '$B/config.xml'"
+grep -q saved-by-gog "$B/config-x4vrmod.xml" && cmp -s "$B/96679891/config-x4vrmod.xml" "$T/steam-fork" \
+    && cmp -s "$B/config.xml" "$T/gog-config" && ok "GOG's save lands in GOG's fork alone" || bad "GOG's save"
+
 # Something else called config.xml, missing, isn't ours to invent.
 O="$T/other/thing"
 mkdir -p "$O"

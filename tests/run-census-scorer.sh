@@ -1488,13 +1488,31 @@ cvsw='[  999970.020] layer   ui twin: CINEMATIC — X4'"'"'s UI pipelines bound 
 cvbd='[  999970.021] layer   ui twin: first twin BOUND — the cinematic view'"'"'s UI drawn by X4'"'"'s own vertex stage'
 { cat "$BASE"; printf '%s\n' "$cvon" "$cvsw" "$cvbd"; } > /tmp/census-cv-ok.log
 want "cinematic: switched and bound -> said" /tmp/census-cv-ok.log cinematic "1 cinematic-view period(s); the layer switched to the twins 1 time(s); twins BOUND"
-if python3 tools/score_run.py /tmp/census-cv-ok.log 2>&1 | grep -qE "^  - .*(cinematic|twin)"; then
+if python3 tools/score_run.py /tmp/census-cv-ok.log 2>&1 | grep -qE "^(FAIL|  - ).*(cinematic|twin)"; then
     bad "cinematic: switched and bound -> FAILs"
 else
     ok "cinematic: switched and bound -> no FAIL"
 fi
 { cat "$BASE"; printf '%s\n' "$cvon" "$cvsw"; } > /tmp/census-cv-unbound.log
 want "cinematic: switched but never bound -> FAIL" /tmp/census-cv-unbound.log "FAIL|  - " "no twin pipeline was ever bound"
+# How long it stayed up decides: a moment with the HUD down isn't F6 (0.71 s and 1.23 s on
+# real logs, with nothing to bind), and take 358's bug stayed 39.74 s.
+cvoffs='[  999970.710] inject  ui: cinematic view off — X4'"'"'s UI back on the HUD'"'"'s canvas'
+cvoffl='[  1000009.740] inject  ui: cinematic view off — X4'"'"'s UI back on the HUD'"'"'s canvas'
+if grep -qF '"ui: cinematic view %s"' injector/x4vr_inject.cpp && grep -qF 'off — X4'"'"'s UI back on the HUD'"'"'s canvas' injector/x4vr_inject.cpp; then
+    ok "cinematic: the planted off line matches the injector's format"
+else
+    bad "cinematic: the off line's format moved"
+fi
+{ cat "$BASE"; printf '%s\n' "$cvon" "$cvsw" "$cvoffs"; } > /tmp/census-cv-short.log
+want "cinematic: a moment, never bound -> said" /tmp/census-cv-short.log cinematic "its longest period was 0.71 s"
+if python3 tools/score_run.py /tmp/census-cv-short.log 2>&1 | grep -qE "^(FAIL|  - ).*no twin pipeline"; then
+    bad "cinematic: a moment, never bound -> FAILs"
+else
+    ok "cinematic: a moment, never bound -> no FAIL"
+fi
+{ cat "$BASE"; printf '%s\n' "$cvon" "$cvsw" "$cvoffl"; } > /tmp/census-cv-long.log
+want "cinematic: 39 s, never bound -> FAIL" /tmp/census-cv-long.log "FAIL|  - " "no twin pipeline was ever bound"
 { cat "$BASE"; printf '%s\n' "$cvon"; } > /tmp/census-cv-late.log
 want "cinematic: never reached the layer -> FAIL" /tmp/census-cv-late.log "FAIL|  - " "the cinematic view: 1 period(s) never reached the layer"
 absent "cinematic: none -> silent" "$BASE" cinematic

@@ -286,9 +286,9 @@ int run_flat(const std::string &home, const std::string &game);
 std::string steam_launch_line(const std::string &home);
 std::string terminal_line(const std::string &home);
 std::string log_dir(const std::string &home);
-// Everywhere X4 may keep a player's files. X4 asks XDG_CONFIG_HOME, then HOME, and
-// the folder inside is the player's own (Steam's is their account number), so no
-// name is assumed: EgoSoft/X4 itself and every folder in it.
+// Everywhere X4 may keep a player's files. X4 asks XDG_CONFIG_HOME, then HOME. Steam's
+// copy keeps them in a folder named for the account, and GOG's in EgoSoft/X4 itself, so
+// no name is assumed: EgoSoft/X4 and every folder in it.
 std::vector<std::string> x4_profile_dirs(const std::string &home);
 
 // ------------------------------------------------------------------ the checks

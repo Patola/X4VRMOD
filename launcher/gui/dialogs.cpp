@@ -5,6 +5,8 @@
 #include <QCheckBox>
 #include <QClipboard>
 #include <QComboBox>
+#include <QDBusConnection>
+#include <QDBusMessage>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDialogButtonBox>
@@ -175,6 +177,17 @@ LaunchOptionsDialog::LaunchOptionsDialog(const QString &steamLine, const QString
 }
 
 // ----------------------------------------------------------------- bug reports
+// Selected in the file manager, ready to drag, or else its folder opened.
+static void showFile(const std::string &path) {
+    QDBusMessage call = QDBusMessage::createMethodCall(
+        "org.freedesktop.FileManager1", "/org/freedesktop/FileManager1",
+        "org.freedesktop.FileManager1", "ShowItems");
+    call << QStringList{QUrl::fromLocalFile(q(path)).toString()} << QString();
+    const QDBusMessage reply = QDBusConnection::sessionBus().call(call, QDBus::Block, 3000);
+    if (reply.type() != QDBusMessage::ReplyMessage)
+        QDesktopServices::openUrl(QUrl::fromLocalFile(q(dir_name(path))));
+}
+
 ReportDialog::ReportDialog(const std::string &home, const std::string &game, QWidget *parent)
     : QDialog(parent), m_home(home), m_game(game), m_session(new QComboBox(this)),
       m_note(new QPlainTextEdit(this)), m_create(new QPushButton("Create report", this)),
@@ -232,10 +245,11 @@ ReportDialog::ReportDialog(const std::string &home, const std::string &game, QWi
     m_issue->setObjectName("issue");
     m_issue->setEnabled(false);
     connect(m_create, &QPushButton::clicked, this, [this] { create(); });
-    connect(m_files, &QPushButton::clicked, this, [this] {
-        QDesktopServices::openUrl(QUrl::fromLocalFile(q(dir_name(m_result.dir))));
-    });
+    connect(m_files, &QPushButton::clicked, this, [this] { showFile(m_result.dir); });
+    // GitHub takes attachments only from the person at the page, so the file comes along
+    // ready to drag.
     connect(m_issue, &QPushButton::clicked, this, [this] {
+        showFile(m_result.archive);
         QDesktopServices::openUrl(QUrl::fromEncoded(QByteArray::fromStdString(m_result.issue_url)));
     });
     auto *buttons = new QDialogButtonBox(this);
@@ -276,9 +290,10 @@ void ReportDialog::create() {
                     return;
                 }
                 QString text = QString("<b>Saved:</b> %1<br>Read it first if you like, with "
-                                       "<b>Show the files</b>. Then <b>Open a GitHub issue</b> and "
-                                       "drag that file into the page. A short video helps with "
-                                       "anything visual.")
+                                       "<b>Show the files</b>. <b>Open a GitHub issue</b> opens the "
+                                       "page and selects this file in your file manager: drag it "
+                                       "into the page, because GitHub doesn't let a program attach "
+                                       "it. A short video helps with anything visual.")
                                    .arg(q(r.archive).toHtmlEscaped());
                 if (r.too_big)
                     text += "<br><b>It's over GitHub's 25 MB limit for an attachment.</b> Share it "

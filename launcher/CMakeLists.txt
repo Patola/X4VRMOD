@@ -33,11 +33,11 @@ target_link_options(x4vrmod PRIVATE -static-libstdc++ -static-libgcc)
 
 # The window, in qt6-base alone. Without Qt 6 the command line still builds. No
 # moc: nothing here declares a signal, so none of it needs Q_OBJECT.
-find_package(Qt6 6.2 QUIET COMPONENTS Widgets)
-if(Qt6Widgets_FOUND)
+find_package(Qt6 6.2 QUIET COMPONENTS Widgets DBus)
+if(Qt6Widgets_FOUND AND Qt6DBus_FOUND)
     add_library(x4vrmod_gui STATIC gui/window.cpp gui/dialogs.cpp)
     target_include_directories(x4vrmod_gui PUBLIC gui)
-    target_link_libraries(x4vrmod_gui PUBLIC x4vrmod_core Qt6::Widgets)
+    target_link_libraries(x4vrmod_gui PUBLIC x4vrmod_core Qt6::Widgets Qt6::DBus)
     add_executable(x4vrmod-launcher gui/main.cpp)
     target_link_libraries(x4vrmod-launcher PRIVATE x4vrmod_gui)
     install(TARGETS x4vrmod-launcher RUNTIME DESTINATION bin)

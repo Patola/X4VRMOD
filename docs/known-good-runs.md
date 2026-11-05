@@ -1133,3 +1133,16 @@ number, the log path and the launcher's two new variables (`X4VR_GAME`,
 404's log went to `~/.local/state/x4vrmod/logs/`. One difference from Steam: a brief
 Egosoft logo at the start, because `%command%` is a plain `./X4` without our
 `-skipintro -nocputhrottle -nosoundthrottle` (`docs/packaging-plan.md`).
+
+## Takes 405 and 406 (2026-11-05) — from the window (code bf7baf6)
+
+Started with Play in `x4vrmod-launcher`, with the settings of take 402. Take 405 is two
+normal sessions; take 406 ticks Debug log, in a session with take 375's six instruments, and
+Report a bug made a report from it: 5.5 MB of log in a 454 KB archive, with the user name,
+computer name, home path and Steam number appearing 0 times. Patola: all worked, with a
+report made as he'd make one for real. `score_run.py` PASS on the second normal session and
+on the debug one. The first normal session failed one rule, which was the rule's fault: a
+0.71 s moment with the HUD down on leaving an external view read as F6, the same as take
+390's 1.23 s. A real F6 binds within 3 ms and stays up for tens of seconds, so the rule now
+needs 2 s; take 358, the bug it was written for, stayed 39.74 s and still fails.
+

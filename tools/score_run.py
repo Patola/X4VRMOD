@@ -4768,9 +4768,24 @@ def main(path):
         if late:
             fails.append(f"the cinematic view: {len(late)} period(s) never "
                          f"reached the layer (first t={late[0]:.1f})")
+        # Only a period long enough to say. A real F6 binds within 3 ms (takes
+        # 359, 391) and stays up for tens of seconds; the bug this catches stayed
+        # 39.74 s (take 358). The HUD going down for about a second on leaving an
+        # external view reads as F6 too (0.71 s, 2026-11-05; 1.23 s, take 390), and X4
+        # draws no overlay in it, so there is nothing to bind.
+        cv_off = [float(t) for t in re.findall(
+            r"\[\s*([\d.]+)\]\s+inject\s+ui: cinematic view off", text)]
+        def cv_held(t):
+            later = [x for x in cv_off if x > t]
+            return later[0] - t if later else float("inf")
         if cv_on and not cv_bound:
-            fails.append("the cinematic view was up but no twin pipeline was "
-                         "ever bound — the overlay stayed on the canvas")
+            longest = max(cv_held(t) for t in cv_on)
+            if longest >= 2.0:
+                fails.append("the cinematic view was up but no twin pipeline was "
+                             "ever bound — the overlay stayed on the canvas")
+            else:
+                print(f"cinematic  never bound, and its longest period was "
+                      f"{longest:.2f} s: the HUD down for a moment, not F6")
         if cv_failed:
             fails.append(f"{cv_failed[-1]} twin pipeline(s) failed to build")
 
