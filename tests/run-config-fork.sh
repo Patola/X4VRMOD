@@ -96,6 +96,109 @@ run sh -c "echo saved-by-gog > '$B/config.xml'"
 grep -q saved-by-gog "$B/config-x4vrmod.xml" && cmp -s "$B/96679891/config-x4vrmod.xml" "$T/steam-fork" \
     && cmp -s "$B/config.xml" "$T/gog-config" && ok "GOG's save lands in GOG's fork alone" || bad "GOG's save"
 
+# What X4 really does, which `sed` and `sh` don't: it asks whether config.xml exists before
+# opening it, through the calls its binary imports, and it saves with fopen. A real first
+# run (2026-11-06) was told no, never opened it, and rendered with none of the overrides;
+# and its fopen save of content.xml reached the player's file.
+cat > "$T/x4like.c" <<'SRC'
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+/* Imported as X4's binary imports them, so the dynamic linker binds them as it binds X4's.
+ * dlvsym wouldn't do: it matches the version strictly and skips an interposer. */
+__asm__(".symver x_xstat, __xstat@GLIBC_2.2.5");
+__asm__(".symver x_xstat64, __xstat64@GLIBC_2.2.5");
+__asm__(".symver x_lxstat, __lxstat@GLIBC_2.2.5");
+extern int x_xstat(int, const char *, struct stat *);
+extern int x_xstat64(int, const char *, struct stat *);
+extern int x_lxstat(int, const char *, struct stat *);
+int main(int c, char **v) {
+    const char *op = v[1], *p = v[2];
+    if (!strcmp(op, "access"))
+        return access(p, F_OK) == 0 ? 0 : 1;
+    if (!strcmp(op, "__xstat") || !strcmp(op, "__xstat64") || !strcmp(op, "__lxstat")) {
+        int (*fn)(int, const char *, struct stat *) =
+            !strcmp(op, "__xstat") ? x_xstat : !strcmp(op, "__xstat64") ? x_xstat64 : x_lxstat;
+        struct stat st;
+        if (fn(1, p, &st) != 0)
+            return 1;
+        printf("%lld\n", (long long)st.st_size);
+        return 0;
+    }
+    if (!strcmp(op, "fopen-wb") || !strcmp(op, "fopen64-wb")) {
+        FILE *f = !strcmp(op, "fopen-wb") ? fopen(p, "wb") : fopen64(p, "wb");
+        if (!f)
+            return 1;
+        fputs(v[3], f);
+        fclose(f);
+        return 0;
+    }
+    return 2;
+}
+SRC
+cc -o "$T/x4like" "$T/x4like.c" || { echo "no compiler"; exit 1; }
+XL="$T/x4like"
+A="$T/asked/EgoSoft/X4/333"
+mkdir -p "$A"
+for how in access __xstat __xstat64 __lxstat; do
+    "$XL" "$how" "$A/config.xml" >/dev/null && bad "control: no mod, but $how finds it" \
+        || ok "control: with no mod, $how finds no config.xml on a new profile"
+done
+for how in access __xstat __xstat64 __lxstat; do
+    rm -f "$A/config-x4vrmod.xml"
+    if run "$XL" "$how" "$A/config.xml" >/dev/null; then
+        ok "new profile: X4's $how says config.xml is there"
+    else
+        bad "new profile: X4's $how says it isn't, so X4 would never open it"
+    fi
+    grep -qF "$scale" "$A/config-x4vrmod.xml" 2>/dev/null && ok "...the fork exists, at 0.6" || bad "...$how: no fork"
+    [ ! -e "$A/config.xml" ] && ok "...and config.xml is still absent" || bad "...$how made a config.xml"
+done
+size=$(run "$XL" __xstat "$A/config.xml")
+[ -n "$size" ] && [ "$size" = "$(stat -c %s "$A/config-x4vrmod.xml")" ] && ok "...its size is the fork's" || bad "...size '$size'"
+out=$(run sed -n p "$A/config.xml")
+grep -qF "$scale" <<<"$out" && ok "...and X4's next step, opening it, gets the config" || bad "open after asking: $out"
+
+# It only ever lies about this one thing.
+E="$T/existing/EgoSoft/X4/444"
+mkdir -p "$E"
+printf '<root>\n  <who>player</who>\n</root>\n' > "$E/config.xml"
+size=$(run "$XL" __xstat "$E/config.xml")
+[ -n "$size" ] && [ "$size" = "$(stat -c %s "$E/config.xml")" ] && ok "a real config.xml is answered as itself" || bad "existing: size '$size'"
+[ ! -e "$E/config-x4vrmod.xml" ] && ok "...and asking doesn't fork it" || bad "asking forked it"
+run "$XL" __xstat "$E/nothing.xml" >/dev/null && bad "another missing file in the profile exists?" || ok "another missing file stays missing"
+run "$XL" access "$T/other/config.xml" && bad "a config.xml elsewhere exists?" || ok "a config.xml elsewhere stays missing"
+for how in access __xstat __xstat64 __lxstat; do
+    run "$XL" "$how" "$E" >/dev/null && ok "ordinary paths still answer ($how)" || bad "the real $how doesn't work through the hook"
+done
+Z="$T/noconfig/EgoSoft/X4/555"
+mkdir -p "$Z"
+if env X4VR_NO_CONFIG=1 X4VR_LOG="$T/log" LD_PRELOAD="$SO" "$XL" access "$Z/config.xml"; then
+    bad "X4VR_NO_CONFIG=1: it was still answered"
+else
+    ok "X4VR_NO_CONFIG=1: left alone"
+fi
+
+# X4's save of content.xml, through fopen and fopen64.
+C="$T/save/EgoSoft/X4/666"
+mkdir -p "$C"
+ext() { env X4VR_EXTENSIONS=1 X4VR_LOG="$T/log" LD_PRELOAD="$SO" "$@" 2>/dev/null; }
+ext cat "$C/content.xml" >/dev/null
+for how in fopen-wb fopen64-wb; do
+    ext "$XL" "$how" "$C/content.xml" "<content><!-- $how --></content>"
+    [ ! -e "$C/content.xml" ] && ok "$how: a save doesn't create the player's content.xml" || bad "$how: it reached content.xml"
+    grep -q -- "$how" "$C/content-x4vrmod.xml" && ok "...it lands in the fork" || bad "...$how: not in the fork"
+    rm -f "$C/content.xml"
+done
+printf '<content>\n  <extension id="mine" enabled="true"/>\n</content>\n' > "$C/content.xml"
+cp "$C/content.xml" "$T/content-original"
+ext "$XL" fopen-wb "$C/content.xml" "<content><!-- saved --></content>"
+cmp -s "$C/content.xml" "$T/content-original" && ok "an existing content.xml stays byte-identical" || bad "content.xml was overwritten"
+run "$XL" fopen-wb "$E/plain.xml" "plain"
+grep -q plain "$E/plain.xml" && ok "other files save as usual" || bad "another file's save was lost"
+
 # Something else called config.xml, missing, isn't ours to invent.
 O="$T/other/thing"
 mkdir -p "$O"

@@ -1193,6 +1193,16 @@ T real(const char *name) {
     return fn;
 }
 
+// Compat-only since glibc 2.33, which plain dlsym won't return; X4 binds this version.
+template <typename T>
+T real_compat(const char *name) {
+    static_assert(sizeof(T) == sizeof(void *), "fn ptr size");
+    void *p = dlvsym(RTLD_NEXT, name, "GLIBC_2.2.5");
+    T fn;
+    memcpy(&fn, &p, sizeof(fn));
+    return fn;
+}
+
 } // namespace
 
 extern "C" {
@@ -9172,6 +9182,55 @@ static bool is_read_only(const char *mode) {
     return mode && mode[0] == 'r' && !strchr(mode, '+');
 }
 
+// X4 asks whether config.xml exists before it opens it. On a new profile the answer
+// would be no, so it never opens it and none of the overrides reach it: a first run at
+// 5632x2816 with no stereo (2026-11-06). So it's told about the fork, which is what it
+// will be served. The path to ask about instead, or "" to leave the call alone.
+static std::string config_existence_path(const char *path, const char *how) {
+    if (!path || !x4vr::is_x4_config(path) || overrides_disabled() ||
+        !x4vr::new_profile_file(path))
+        return {};
+    Profile prof = load_profile(path);
+    if (prof.xml.empty())
+        return {};
+    X4VR_LOG("config: %s(%s): a new profile, so answered from %s", how, path,
+             prof.path.c_str());
+    return prof.path;
+}
+
+using xstat_fn = int (*)(int, const char *, struct stat *);
+static int answer_xstat(xstat_fn real_fn, const char *how, int ver, const char *path,
+                        struct stat *st) {
+    const std::string to = config_existence_path(path, how);
+    return real_fn(ver, to.empty() ? path : to.c_str(), st);
+}
+
+// Named by asm, because older glibc headers declare these with their own signature.
+extern "C" int x4vr_hook_xstat(int, const char *, struct stat *) __asm__("__xstat");
+extern "C" int x4vr_hook_xstat64(int, const char *, struct stat *) __asm__("__xstat64");
+extern "C" int x4vr_hook_lxstat(int, const char *, struct stat *) __asm__("__lxstat");
+
+int x4vr_hook_xstat(int ver, const char *path, struct stat *st) {
+    static const xstat_fn real_fn = real_compat<xstat_fn>("__xstat");
+    return answer_xstat(real_fn, "__xstat", ver, path, st);
+}
+
+int x4vr_hook_xstat64(int ver, const char *path, struct stat *st) {
+    static const xstat_fn real_fn = real_compat<xstat_fn>("__xstat64");
+    return answer_xstat(real_fn, "__xstat64", ver, path, st);
+}
+
+int x4vr_hook_lxstat(int ver, const char *path, struct stat *st) {
+    static const xstat_fn real_fn = real_compat<xstat_fn>("__lxstat");
+    return answer_xstat(real_fn, "__lxstat", ver, path, st);
+}
+
+int access(const char *path, int mode) {
+    static auto real_access = real<int (*)(const char *, int)>("access");
+    const std::string to = config_existence_path(path, "access");
+    return real_access(to.empty() ? path : to.c_str(), mode);
+}
+
 FILE *fopen(const char *path, const char *mode) {
     static auto real_fopen = real<FILE *(*)(const char *, const char *)>("fopen");
     file_probe("fopen", path);
@@ -9197,13 +9256,23 @@ FILE *fopen(const char *path, const char *mode) {
                 return real_fopen(prof.path.c_str(), mode);
         }
     }
-    if (extensions_enabled() && x4vr::is_x4_profile_content(path) &&
-        is_read_only(mode)) {
-        const int fd = content_memfd(path, "fopen");
-        if (fd >= 0) {
-            if (FILE *f = fdopen(fd, "rb"))
-                return f;
-            ::close(fd);
+    if (extensions_enabled() && x4vr::is_x4_profile_content(path)) {
+        if (is_read_only(mode)) {
+            const int fd = content_memfd(path, "fopen");
+            if (fd >= 0) {
+                if (FILE *f = fdopen(fd, "rb"))
+                    return f;
+                ::close(fd);
+            }
+        } else {
+            // X4 saves this with fopen too: a first run's save reached the player's
+            // file, with our extension on in it (2026-11-06).
+            Profile prof = load_content_profile(path);
+            if (!prof.xml.empty()) {
+                X4VR_LOG("content: X4's save goes to %s, not your content.xml",
+                         prof.path.c_str());
+                return real_fopen(prof.path.c_str(), mode);
+            }
         }
     }
     {
@@ -9239,13 +9308,23 @@ FILE *fopen64(const char *path, const char *mode) {
                 return real_fopen64(prof.path.c_str(), mode);
         }
     }
-    if (extensions_enabled() && x4vr::is_x4_profile_content(path) &&
-        is_read_only(mode)) {
-        const int fd = content_memfd(path, "fopen64");
-        if (fd >= 0) {
-            if (FILE *f = fdopen(fd, "rb"))
-                return f;
-            ::close(fd);
+    if (extensions_enabled() && x4vr::is_x4_profile_content(path)) {
+        if (is_read_only(mode)) {
+            const int fd = content_memfd(path, "fopen64");
+            if (fd >= 0) {
+                if (FILE *f = fdopen(fd, "rb"))
+                    return f;
+                ::close(fd);
+            }
+        } else {
+            // X4 saves this with fopen too: a first run's save reached the player's
+            // file, with our extension on in it (2026-11-06).
+            Profile prof = load_content_profile(path);
+            if (!prof.xml.empty()) {
+                X4VR_LOG("content: X4's save goes to %s, not your content.xml",
+                         prof.path.c_str());
+                return real_fopen64(prof.path.c_str(), mode);
+            }
         }
     }
     {

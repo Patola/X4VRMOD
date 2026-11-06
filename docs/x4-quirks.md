@@ -29898,3 +29898,25 @@ Patola: "no issues whatsoever". Scorer PASS, build v0.9.9 in both libraries.
 most** (the first count of X4's live buffers; 1024 leaves room), 33,720
 resubmits without re-recording, **0 forced, 0 shared**. All three
 predictions hold.
+
+## X4 asks before it opens config.xml (2026-11-06)
+
+A first run on a new profile, by a fresh `XDG_CONFIG_HOME` on the Steam copy, had no line
+about `config.xml` in its log at all: no `fopen`, read or write. X4 rendered 5632x2816 with no
+stereo and no swapchain, because none of the overrides reached it. So X4 checks for the file
+first and, told it's missing, never opens it. A fork on disk doesn't help: X4 asks about
+`config.xml`. Its binary imports `access`, `__xstat`, `__xstat64` and `__lxstat` for this
+kind of question, and the injector now answers all four from the fork, only for a
+`config.xml` missing under `EgoSoft/X4`. Each logs `config: <call>(...)`, so the next run
+says which one X4 uses. `__xstat` and friends are compat-only since glibc 2.33: plain `dlsym`
+won't return them, hence `dlvsym` with `GLIBC_2.2.5`, and a test has to import them with
+`.symver` as X4 does, because `dlvsym` from a test matches the version strictly and skips the
+interposer.
+
+**Same run: X4 saves `content.xml` with `fopen`.** The fopen hooks only served reads of that
+file, so the save went to the player's own, with `x4vrmod enabled="true"` in it, which would
+turn the extension on in vanilla. An existing `content.xml` was overwritten the same way,
+whenever X4 had a reason to rewrite it (a new extension, as here). That's in every release up to
+v0.9.9. Writes to it now go to the fork in both hooks. It had looked covered because
+`redirect_write` handled it in the open family, and the test wrote with `sh`, which uses that.
+

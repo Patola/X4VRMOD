@@ -177,6 +177,13 @@ binary is missing.
     needed no change; `tests/run-config-fork.sh` holds both on one machine.
   * A vanilla run leaves no `content.xml` or `inputmap.xml` there, so a modded run after
     one still starts those two forks from nothing.
+* **A first run on a new profile** (2026-11-06, a fresh `XDG_CONFIG_HOME`) showed two things
+  a test with ordinary tools couldn't: X4 asks whether `config.xml` exists before opening
+  it, so a fork alone never gets read, and it saves `content.xml` with `fopen`, which went
+  to the player's file with our extension on. The first is answered by hooks on the
+  four calls its binary imports for this (`access`, `__xstat`, `__xstat64`, `__lxstat`),
+  from the fork, for that one missing file; the second now goes to the fork.
+  `tests/run-config-fork.sh` imports those calls as X4 does.
 * **Steam's container: `x4vrmod run %command%` works** (take 404: PASS, its log in
   `~/.local/state/x4vrmod/logs/`).
 * **To check later (Patola, take 404):** started from Steam, a brief Egosoft logo

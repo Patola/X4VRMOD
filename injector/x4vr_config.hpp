@@ -26,6 +26,7 @@
 #include <cerrno>
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -502,8 +503,10 @@ inline std::string get_tag(const std::string &xml, const char *tag) {
 // A file of the player's profile that simply isn't there yet: a copy of X4 that has
 // never run. Unreadable is different, and is left alone. Only under EgoSoft/X4, because
 // is_x4_config matches any file called config.xml.
+// By syscall, because the injector interposes access() and this runs from inside that.
 inline bool new_profile_file(const char *path) {
-    return path && strstr(path, "/EgoSoft/X4/") && access(path, F_OK) != 0 && errno == ENOENT;
+    return path && strstr(path, "/EgoSoft/X4/") &&
+           syscall(SYS_faccessat, AT_FDCWD, path, F_OK) != 0 && errno == ENOENT;
 }
 
 // What the fork starts as: the player's config.xml, or nothing but the root on a new

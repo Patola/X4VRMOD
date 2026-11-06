@@ -41,6 +41,7 @@ else
     # being checked here.
     REQUIRED="
 fopen fopen64 fclose fread fread_unlocked
+access __xstat __xstat64 __lxstat
 open open64 openat openat64
 read pread pread64 close mmap
 setenv putenv unsetenv connect
