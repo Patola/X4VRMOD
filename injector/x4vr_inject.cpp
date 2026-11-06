@@ -708,8 +708,12 @@ FILE *open_patched_config(const char *path, bool hide_steer_line) {
     int changed = 0;
     for (const auto &ov : x4vr::default_overrides()) {
         std::string old;
-        if (x4vr::set_tag(xml, ov.tag, ov.value, &old)) {
-            X4VR_LOG("config: %s: '%s' -> '%s'", ov.tag, old.c_str(), ov.value);
+        // Inserted if absent: on a new profile none of these are there, and served
+        // without them X4 sized itself to the window, with black in the headset
+        // (2026-11-06). A config that has them, as every older one does, is unaffected.
+        if (x4vr::set_or_insert_tag(xml, ov.tag, ov.value, &old)) {
+            X4VR_LOG("config: %s: '%s' -> '%s'", ov.tag, old.empty() ? "absent" : old.c_str(),
+                     ov.value);
             changed++;
         }
     }

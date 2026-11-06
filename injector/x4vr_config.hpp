@@ -336,8 +336,8 @@ inline const std::vector<TagOverride> &default_overrides() {
 }
 
 // Replace the text of <tag>...</tag> in `xml`. Returns true if a change was
-// made. Only rewrites existing tags (X4 writes a full config, so every tag
-// we care about is present; we deliberately do not invent new ones).
+// made. Only rewrites a tag that's there: for one we must serve whatever the file holds,
+// use set_or_insert_tag, because X4 leaves defaults out of what it saves.
 inline bool set_tag(std::string &xml, const char *tag, const char *value,
                     std::string *old_value = nullptr) {
     const std::string open = std::string("<") + tag + ">";
@@ -357,10 +357,10 @@ inline bool set_tag(std::string &xml, const char *tag, const char *value,
     return true;
 }
 
-// set_tag, and when the tag is ABSENT, insert it before </root>. For the one
-// tag that needs it: X4 leaves options at their defaults out of config.xml
-// (Patola's has no <mousesteeringline> at all), so a value we must serve for
-// such an option has nothing to rewrite. `*old_value` is "" when it was
+// set_tag, and when the tag is ABSENT, insert it before </root>. X4 leaves options
+// at their defaults out of config.xml (Patola's has no <mousesteeringline> at all, and
+// a new profile's first save has none of res_width, borderless, fov...), so a value we
+// must serve for such an option has nothing to rewrite. `*old_value` is "" when it was
 // absent. Every other override keeps set_tag's never-invent rule.
 inline bool set_or_insert_tag(std::string &xml, const char *tag,
                               const char *value,

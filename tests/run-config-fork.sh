@@ -199,6 +199,48 @@ cmp -s "$C/content.xml" "$T/content-original" && ok "an existing content.xml sta
 run "$XL" fopen-wb "$E/plain.xml" "plain"
 grep -q plain "$E/plain.xml" && ok "other files save as usual" || bad "another file's save was lost"
 
+# The shipping line's overrides reach X4 whatever the file holds. Served without them, a new
+# profile's X4 sized itself to the window and the headset stayed black (2026-11-06). The
+# values are what the known-good runs log.
+shipping() {
+    ( source launch/x4vr-defaults.sh; x4vr_apply_defaults launch/defaults.conf >/dev/null
+      export X4VR_LOG="$T/log" LD_PRELOAD="$SO"; "$@" ) 2>/dev/null
+}
+served_has() { # served_has <label> <served text> <tag=value>...
+    local label=$1 text=$2 kv miss=""
+    shift 2
+    for kv in "$@"; do
+        grep -qF "<${kv%%=*}>${kv#*=}</${kv%%=*}>" <<<"$text" || miss+=" $kv"
+    done
+    [ -z "$miss" ] && ok "$label" || bad "$label: missing$miss"
+}
+want_tags=(res_width=2816 res_height=2816 borderless=false fullscreen=false fov=1.4917 ssr=false
+           antialiasing=none ssao=0 glow=0 uiglow=0 distortion=false chromaticaberration=false
+           colorcorrection=0 uiscale=0.6)
+S1="$T/ship1/EgoSoft/X4/777"
+mkdir -p "$S1"
+out=$(shipping sed -n p "$S1/config.xml")
+served_has "new profile: X4 is served the whole shipping line" "$out" "${want_tags[@]}"
+if grep -qE '<(res_width|borderless|fov)>' "$S1/config-x4vrmod.xml"; then
+    bad "...and they were baked into the fork"
+else
+    ok "...in memory: the fork on disk stays the player's"
+fi
+# X4's own first save, which leaves out what's at its default. The next run has to work too.
+printf '<?xml version="1.0"?>\n<root>\n  <uiscale>0.6</uiscale>\n  <ssao>3</ssao>\n  <glow>3</glow>\n</root>\n' > "$S1/config-x4vrmod.xml"
+out=$(shipping sed -n p "$S1/config.xml")
+served_has "a sparse fork, as X4 saves it: the same line" "$out" "${want_tags[@]}"
+# A config with everything is served each tag once, as before.
+S2="$T/ship2/EgoSoft/X4/888"
+mkdir -p "$S2"
+{ echo '<root>'; for kv in res_width=3440 res_height=1440 borderless=true fullscreen=true fov=1.0000 ssr=true \
+      antialiasing=temporal ssao=3 glow=3 uiglow=3 distortion=true chromaticaberration=true \
+      colorcorrection=1 uiscale=1.0; do echo "  <${kv%%=*}>${kv#*=}</${kv%%=*}>"; done; echo '</root>'; } > "$S2/config.xml"
+out=$(shipping sed -n p "$S2/config.xml")
+served_has "a full config (GOG's, say): each overridden" "$out" "${want_tags[@]}"
+dups=$(grep -oE '<[a-z_A-Z]+>' <<<"$out" | sort | uniq -d | grep -v '<root>' | tr '\n' ' ')
+[ -z "$dups" ] && ok "...each tag once" || bad "...twice: $dups"
+
 # Something else called config.xml, missing, isn't ours to invent.
 O="$T/other/thing"
 mkdir -p "$O"

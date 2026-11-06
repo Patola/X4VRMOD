@@ -29920,3 +29920,13 @@ whenever X4 had a reason to rewrite it (a new extension, as here). That's in eve
 v0.9.9. Writes to it now go to the fork in both hooks. It had looked covered because
 `redirect_write` handled it in the open family, and the test wrote with `sh`, which uses that.
 
+**And X4 saves only what differs from its defaults.** With the fork being read, the rerun was
+still black in the headset, with the picture on the flat screen: "serving ... 0 overrides
+applied", `effective fov= res=x`, then SPLIT OFF at 5632x2816. The overrides went through
+`set_tag`, which only rewrites a tag that's there, under a comment of mine saying "X4 writes a
+full config, so every tag we care about is present". That's only true of a config that's
+been through X4's options: its first save on a new profile had 16 of the tags, and none of
+`res_width`, `res_height`, `borderless`, `fullscreen`, `fov`, `ssr`, `antialiasing`. The overrides now
+insert a missing tag. All 14 were already in Patola's fork and config, and in GOG's vanilla
+config, so nothing that worked before is served differently.
+
