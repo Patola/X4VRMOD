@@ -161,6 +161,44 @@ size=$(run "$XL" __xstat "$A/config.xml")
 out=$(run sed -n p "$A/config.xml")
 grep -qF "$scale" <<<"$out" && ok "...and X4's next step, opening it, gets the config" || bad "open after asking: $out"
 
+# content.xml and inputmap.xml the same way: X4 asks first for those too. With saves in the
+# fork the player's file never appears, so without an answer X4 never reads the fork, and our
+# extension stays off for good on any profile with no content.xml (2026-11-06).
+Q="$T/asked2/EgoSoft/X4/999"
+mkdir -p "$Q"
+withext() { env X4VR_EXTENSIONS=1 X4VR_HEADLOOK=1 X4VR_LOG="$T/log" LD_PRELOAD="$SO" "$@" 2>/dev/null; }
+for how in access __xstat __xstat64 __lxstat; do
+    "$XL" "$how" "$Q/content.xml" >/dev/null && bad "control: no mod, but $how finds content.xml" \
+        || ok "control: with no mod, $how finds no content.xml"
+    rm -f "$Q/content-x4vrmod.xml"
+    withext "$XL" "$how" "$Q/content.xml" >/dev/null && ok "new profile: X4's $how says content.xml is there" \
+        || bad "new profile: X4's $how says it isn't, so our extension never loads"
+    [ ! -e "$Q/content.xml" ] && ok "...and it's still absent" || bad "...$how made a content.xml"
+done
+out=$(withext sed -n p "$Q/content.xml")
+grep -qF '<extension id="x4vrmod" enabled="true"/>' <<<"$out" && ok "...and opening it, our extension is on" || bad "content after asking: $out"
+withext "$XL" fopen-wb "$Q/content.xml" '<content>
+  <extension id="x4vrmod" enabled="true"/>
+  <extension id="theirs" enabled="true"/>
+</content>'
+withext "$XL" __xstat "$Q/content.xml" >/dev/null && ok "after X4's save, it still says so" || bad "after a save, no content.xml"
+out=$(withext sed -n p "$Q/content.xml")
+grep -q 'theirs' <<<"$out" && ok "...and the next run reads what X4 saved" || bad "the save wasn't read: $out"
+[ ! -e "$Q/content.xml" ] && ok "...with no content.xml made along the way" || bad "a content.xml appeared"
+# inputmap: nothing to answer until X4 has saved one, then the fork.
+withext "$XL" __xstat "$Q/inputmap.xml" >/dev/null && bad "no inputmap yet, but it says there is" \
+    || ok "new profile: no inputmap yet, so X4 is told so and keeps its defaults"
+[ ! -e "$Q/inputmap-x4vrmod.xml" ] && ok "...and none is made up" || bad "an inputmap fork appeared"
+withext "$XL" fopen-wb "$Q/inputmap.xml" "<inputmap/>"
+withext "$XL" __xstat "$Q/inputmap.xml" >/dev/null && ok "after X4 saves one, it's answered from the fork" \
+    || bad "X4 would never read back the bindings it saved"
+[ ! -e "$Q/inputmap.xml" ] && ok "...with no inputmap.xml made" || bad "an inputmap.xml appeared"
+# With the mod's switches off, these are left alone.
+Y="$T/asked3/EgoSoft/X4/1000"
+mkdir -p "$Y"
+run "$XL" __xstat "$Y/content.xml" >/dev/null && bad "X4VR_EXTENSIONS off: it was answered" || ok "extensions off: content.xml is left alone"
+run "$XL" __xstat "$Y/inputmap.xml" >/dev/null && bad "head-look off: it was answered" || ok "head-look off: inputmap.xml is left alone"
+
 # It only ever lies about this one thing.
 E="$T/existing/EgoSoft/X4/444"
 mkdir -p "$E"

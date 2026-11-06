@@ -475,8 +475,9 @@ void Window::chooseGame(const QString &path) {
 
 void Window::browse() {
     const QString start = m_game.empty() ? q(m_home) : q(dir_name(m_game));
-    const QString f = QFileDialog::getOpenFileName(this, "Find X4's program", start,
-                                                   "X4 (X4 X4.exe);;All files (*)");
+    // No filter: a name with no wildcard isn't a pattern to the desktop's file dialogs, so
+    // "X4 (X4 X4.exe)" hid the very file. A Windows copy is explained by chooseGame.
+    const QString f = QFileDialog::getOpenFileName(this, "Find the program called X4", start);
     if (!f.isEmpty())
         chooseGame(f);
 }

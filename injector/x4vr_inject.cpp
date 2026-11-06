@@ -9186,26 +9186,34 @@ static bool is_read_only(const char *mode) {
     return mode && mode[0] == 'r' && !strchr(mode, '+');
 }
 
-// X4 asks whether config.xml exists before it opens it. On a new profile the answer
-// would be no, so it never opens it and none of the overrides reach it: a first run at
-// 5632x2816 with no stereo (2026-11-06). So it's told about the fork, which is what it
-// will be served. The path to ask about instead, or "" to leave the call alone.
-static std::string config_existence_path(const char *path, const char *how) {
-    if (!path || !x4vr::is_x4_config(path) || overrides_disabled() ||
-        !x4vr::new_profile_file(path))
+// X4 asks whether its files exist before it opens them. On a new profile the answer would
+// be no, and it would never open them: for config.xml a first run at 5632x2816 with no
+// stereo, and for content.xml our extension off for good, since its saves go to the fork and
+// the player's file never appears (both 2026-11-06). So it's told about the fork, which is
+// what it will be served. An inputmap fork exists only once X4 has saved one, so until then
+// the honest answer is still no. The path to ask about instead, or "" to leave it alone.
+static std::string fork_existence_path(const char *path, const char *how) {
+    if (!path)
         return {};
-    Profile prof = load_profile(path);
+    const bool config = x4vr::is_x4_config(path) && !overrides_disabled();
+    const bool content = !config && extensions_enabled() && x4vr::is_x4_profile_content(path);
+    const bool inputmap = !config && !content && headlook_enabled() && x4vr::is_x4_inputmap(path);
+    if ((!config && !content && !inputmap) || !x4vr::new_profile_file(path))
+        return {};
+    const Profile prof = config    ? load_profile(path)
+                         : content ? load_content_profile(path)
+                                   : load_inputmap_profile(path);
     if (prof.xml.empty())
         return {};
-    X4VR_LOG("config: %s(%s): a new profile, so answered from %s", how, path,
-             prof.path.c_str());
+    X4VR_LOG("%s: %s(%s): a new profile, so answered from %s",
+             config ? "config" : content ? "content" : "inputmap", how, path, prof.path.c_str());
     return prof.path;
 }
 
 using xstat_fn = int (*)(int, const char *, struct stat *);
 static int answer_xstat(xstat_fn real_fn, const char *how, int ver, const char *path,
                         struct stat *st) {
-    const std::string to = config_existence_path(path, how);
+    const std::string to = fork_existence_path(path, how);
     return real_fn(ver, to.empty() ? path : to.c_str(), st);
 }
 
@@ -9231,7 +9239,7 @@ int x4vr_hook_lxstat(int ver, const char *path, struct stat *st) {
 
 int access(const char *path, int mode) {
     static auto real_access = real<int (*)(const char *, int)>("access");
-    const std::string to = config_existence_path(path, "access");
+    const std::string to = fork_existence_path(path, "access");
     return real_access(to.empty() ? path : to.c_str(), mode);
 }
 

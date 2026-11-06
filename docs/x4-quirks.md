@@ -29930,3 +29930,10 @@ been through X4's options: its first save on a new profile had 16 of the tags, a
 insert a missing tag. All 14 were already in Patola's fork and config, and in GOG's vanilla
 config, so nothing that worked before is served differently.
 
+**And it asks before opening `content.xml` and `inputmap.xml` too.** With the saves in the fork,
+the player's `content.xml` never appears, so X4 never read the fork and our extension stayed off
+for good on any profile with no `content.xml`, GOG's included: "X4VR_EXTENSIONS=1 but X4 never
+read content.xml", which the scorer said and a menu-only run couldn't show by eye. Before the
+save was redirected this hid itself, because X4's own save made the file a later read found. The
+existence answers now cover all three files; `inputmap.xml` is answered only once a fork exists.
+
