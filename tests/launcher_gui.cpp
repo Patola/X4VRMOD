@@ -118,6 +118,12 @@ static void test_play(Window &w, const QString &shots) {
     check(play->styleSheet().contains("#c67d00"), "...and amber");
     auto *fix = w.findChild<QPushButton *>("fix-patches");
     check(fix && fix->isVisibleTo(&w) && fix->text() == "Details", "the amber row offers Details");
+    auto *amber = w.findChild<QLabel *>("row-patches");
+    check(amber && amber->text().contains("not supported") && !amber->text().contains("turn off"),
+          "...so the row itself is only its title");
+    fix->click();
+    check(w.lastMessage().contains("Clicking the cockpit HUD") && w.lastMessage().contains("still runs"),
+          "...and Details says what turns off");
     if (!shots.isEmpty())
         shot(w, shots + "/window-amber.png");
 
@@ -174,6 +180,17 @@ static void test_play(Window &w, const QString &shots) {
     check(version && version->text().contains("unofficial"), "the window says it's unofficial");
 
     // Flatscreen only needs a copy of X4 that can start, whatever VR and the mod are doing.
+    // Red beats amber: features off can still start, with no VR runtime nothing can.
+    auto both = good_rows();
+    replace(both, row("patches", Status::Warn, "X4 build not supported yet", "These turn off: X.", "details"));
+    replace(both, row("vr", Status::Block, "No VR runtime running", "", "start-vr"));
+    w.showChecks(both);
+    check(!play->isEnabled() && play->text() == "Play" && status->text().contains("No VR runtime running"),
+          "amber and red together: greyed, naming what to fix");
+    replace(both, good_rows()[5]);
+    w.showChecks(both);
+    check(play->isEnabled() && play->text() == "Play anyway", "...and once VR is up, Play anyway");
+
     auto modless = good_rows();
     replace(modless, row("vr", Status::Block, "No VR runtime running", "", "start-vr"));
     replace(modless, row("mod", Status::Block, "Mod not installed", "", "install"));

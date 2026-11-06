@@ -697,6 +697,9 @@ void Window::updateRow(const std::string &id) {
         return;
     }
     QString detail = q(c.detail);
+    // The Details button shows this, so the row doesn't say it twice.
+    if (c.fix == "details")
+        detail.clear();
     // The Game box already shows the folder.
     if (id == "x4" && c.status == Status::Ok) {
         const int at = detail.indexOf(", /");
