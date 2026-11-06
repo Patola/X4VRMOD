@@ -47,6 +47,10 @@ point it at something else. X4's own files are only ever read.
 it to attach to a GitHub issue. The home folder, user name, computer name and Steam account
 number are taken out of everything first, and nothing is sent: the player attaches it.
 
+**Other builds of X4.** `probe x4` and `doctor` find the code wherever this build keeps it
+(`common/x4vr_reloc.hpp`) before checking it. `x4vrmod probe x4 PATH --map` shows how far
+each block moved.
+
 **Probes** run in a child process with a timeout, so a broken VR runtime can't hang or
 crash the launcher. The layer and the injector are never loaded: their version is read
 from the file (`cmake/x4vr_version.cmake`'s marker), because loading them would run

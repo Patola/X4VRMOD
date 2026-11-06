@@ -83,6 +83,59 @@ out=$("$CLI" doctor --game "$G" --no-vr)
 grep -q '^ok    The mod fits this X4' <<<"$out" \
     && ok "a hotfix that keeps the code stays green (no checksum)" || bad "hotfix row: $out"
 
+# GOG's build, where the code is elsewhere: every feature fits, and the checks stay as strict.
+GOGX=$("$CLI" locate --all | awk -F'\t' '$1 == "GOG" && $2 == "linux" { print $3; exit }')
+if [ -z "$GOGX" ]; then
+    echo "skip  no GOG copy of X4: the other build's cases are unchecked"
+else
+    out=$("$CLI" probe x4 "$GOGX"); rc=$?
+    [ "$rc" = 0 ] && [ "$(grep -c '^ok ' <<<"$out")" = 8 ] && ok "GOG: all 8 features fit" || bad "GOG: $out"
+    "$CLI" probe x4 "$GOGX" --map | grep -q '^found [0-9]* missing 0$' && ok "GOG: every block is found" || bad "GOG: a block is missing"
+    "$CLI" probe x4 "$X4" --map | awk '$1 == "code" || $1 == "data" { if ($3 != 0) m = 1 } END { exit m }' \
+        && ok "Steam: nothing is moved" || bad "Steam: something moved"
+    H="$T/gog"
+    mkdir -p "$H"
+    cp "$(dirname "$GOGX")/version.dat" "$H/"
+    # Flips one byte of a copy, at Steam's address VA plus what the map says that block moved.
+    flip() { # flip <steam address> <offset>
+        cp "$GOGX" "$H/X4"
+        "$CLI" probe x4 "$GOGX" --map > "$H/map"
+        python3 - "$H/X4" "$H/map" "$1" "$2" <<'PY'
+import struct, sys
+path, mapf, steam, extra = sys.argv[1], sys.argv[2], int(sys.argv[3], 16), int(sys.argv[4])
+blocks = sorted((int(l.split()[1], 16), int(l.split()[2])) for l in open(mapf) if l.startswith("code"))
+delta = [d for lo, d in blocks if lo <= steam][-1]
+va_new = steam + delta + extra
+with open(path, "r+b") as f:
+    h = f.read(64)
+    phoff = struct.unpack_from("<Q", h, 0x20)[0]
+    ent, num = struct.unpack_from("<HH", h, 0x36)
+    for i in range(num):
+        f.seek(phoff + i * ent)
+        p = f.read(56)
+        t = struct.unpack_from("<I", p, 0)[0]
+        off, va = struct.unpack_from("<QQ", p, 8)
+        fsz = struct.unpack_from("<Q", p, 32)[0]
+        if t == 1 and va <= va_new < va + fsz:
+            f.seek(off + va_new - va)
+            b = f.read(1)
+            f.seek(off + va_new - va)
+            f.write(bytes([b[0] ^ 0xff]))
+            break
+PY
+    }
+    # An instruction's opcode: a real difference.
+    flip 0x1933dd4 0
+    out=$("$CLI" probe x4 "$H")
+    grep -q '^differs  headlook' <<<"$out" && [ "$(grep -c '^differs' <<<"$out")" = 1 ] \
+        && ok "GOG, one opcode changed: head-look off, nothing else" || bad "GOG opcode: $out"
+    # The address inside that instruction: it no longer points at the same thing.
+    flip 0x1933dd4 4
+    out=$("$CLI" probe x4 "$H")
+    grep -q '^differs  headlook' <<<"$out" && [ "$(grep -c '^differs' <<<"$out")" = 1 ] \
+        && ok "GOG, an address aimed elsewhere: head-look off, nothing else" || bad "GOG address: $out"
+fi
+
 echo
 if [ "$fail" = 0 ]; then echo "all cases passed"; else echo "SOME CASES FAILED"; fi
 exit "$fail"

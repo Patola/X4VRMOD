@@ -48,7 +48,7 @@ if [ -x build/launcher/x4vrmod-launcher ]; then
 fi
 want "the manifest names the absolute library" \
      "grep -qF '\"library_path\": \"$U/lib/x4vrmod/libVkLayer_X4VR_core.so\"' '$U/share/vulkan/explicit_layer.d/VK_LAYER_X4VR_core.json'"
-n=$(find "$U" -type f \( -name '*.cat' -o -name '*.dat' -o -name '*.xpl' \) | wc -l)
+n=$(find "$U" -type f \( -name '*.cat' -o -name '*.dat' -o -name '*.xpl' \) ! -path '*/extension/x4vrmod/ext_01.*' | wc -l)
 [ "$n" = 0 ] && ok "no X4 content" || bad "$n files of X4 content"
 
 G="$T/game"

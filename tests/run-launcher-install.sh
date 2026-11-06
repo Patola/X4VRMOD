@@ -31,10 +31,16 @@ if [ -x build/launcher/x4vrmod-launcher ]; then
     want "the zip holds the window" "[ -x '$U/x4vrmod-launcher' ]"
     want "the zip holds its help" "[ -f '$U/x4vrmod-data/help/index.html' ] && [ -f '$U/x4vrmod-data/help/banner.png' ]"
 fi
-if unzip -l "$zip" | grep -qE '\.(cat|dat|xpl)$|x4-shadersrc|x4-ui'; then
+# Our own catalog is the one allowed, and it holds only our pictures.
+if unzip -l "$zip" | grep -E '\.(cat|dat|xpl)$|x4-shadersrc|x4-ui' | grep -qvE 'extension/x4vrmod/ext_01\.(cat|dat)$'; then
     bad "the zip holds X4 content"
 else
     ok "no X4 content in the zip"
+fi
+CAT="$U/x4vrmod-data/extension/x4vrmod/ext_01.cat"
+if [ -f "$CAT" ]; then
+    grep -qv '^assets/textures/ui/loadingscreens/x4_[0-9_]*\.jpg ' "$CAT" && bad "our catalog holds something else" \
+        || ok "our catalog holds only the loading screen"
 fi
 
 # A fake X4 that says what it was started with.

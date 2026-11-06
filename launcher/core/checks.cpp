@@ -128,8 +128,7 @@ static Check check_patches_row(const Install &in) {
         c.detail = in.exe;
         return c;
     }
-    const auto rd = [&elf](uintptr_t va, void *o, size_t n) { return elf.read(va, o, n); };
-    const std::vector<PatchResult> res = check_patches(rd);
+    const std::vector<PatchResult> res = check_patches(elf);
     std::string off;
     size_t good = 0;
     for (const PatchResult &r : res) {

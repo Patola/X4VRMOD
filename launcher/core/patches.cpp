@@ -12,8 +12,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <cstdio>
 #include <cstring>
 
+#include "../../common/x4vr_reloc.hpp"
 #include "../../common/x4vr_steer.hpp"
 #include "../../injector/x4vr_aimpick.hpp"
 #include "../../injector/x4vr_camwatch.hpp"
@@ -58,6 +60,7 @@ bool ElfFile::is_x86_64() const {
 namespace {
 struct Phdr {
     uint32_t type;
+    bool exec;
     uint64_t offset, vaddr, filesz;
 };
 // The n'th program header, or false if the file doesn't hold it. The file may be
@@ -72,7 +75,10 @@ bool phdr_at(const uint8_t *d, size_t size, uint16_t i, Phdr *out) {
         (size - phoff) / phentsize <= i)
         return false;
     const uint8_t *p = d + phoff + (size_t)i * phentsize;
+    uint32_t flags = 0;
     memcpy(&out->type, p, 4);
+    memcpy(&flags, p + 4, 4);
+    out->exec = (flags & 1) != 0;
     memcpy(&out->offset, p + 8, 8);
     memcpy(&out->vaddr, p + 16, 8);
     memcpy(&out->filesz, p + 32, 8);
@@ -94,6 +100,21 @@ bool ElfFile::read(uintptr_t va, void *out, size_t n) const {
             n > size_ - (p.offset + off))
             return false;
         memcpy(out, data_ + p.offset + off, n);
+        return true;
+    }
+    return false;
+}
+
+bool ElfFile::text(const uint8_t **bytes, size_t *size, uintptr_t *va) const {
+    if (!data_)
+        return false;
+    Phdr p;
+    for (uint16_t i = 0; phdr_at(data_, size_, i, &p); i++) {
+        if (p.type != kPtLoad || !p.exec || p.offset > size_ || p.filesz > size_ - p.offset)
+            continue;
+        *bytes = data_ + p.offset;
+        *size = (size_t)p.filesz;
+        *va = (uintptr_t)p.vaddr;
         return true;
     }
     return false;
@@ -142,6 +163,40 @@ bool binary_needs_steam(const std::string &exe) {
         if (n.rfind("libsteam_api", 0) == 0)
             return true;
     return false;
+}
+
+static reloc::Map map_of(const ElfFile &x4) {
+    reloc::Map m;
+    const uint8_t *bytes = nullptr;
+    size_t size = 0;
+    uintptr_t va = 0;
+    if (x4.text(&bytes, &size, &va))
+        m.build(bytes, size, va,
+                [&x4](uintptr_t a, void *o, size_t n) { return x4.read(a, o, n); });
+    return m;
+}
+
+std::vector<PatchResult> check_patches(const ElfFile &x4) {
+    const reloc::Map m = map_of(x4);
+    auto raw = [&x4](uintptr_t a, void *o, size_t n) { return x4.read(a, o, n); };
+    return check_patches(VaReader(
+        [&m, raw](uintptr_t a, void *o, size_t n) { return m.read(raw, a, o, n); }));
+}
+
+std::string reloc_report(const ElfFile &x4) {
+    const reloc::Map m = map_of(x4);
+    std::string out;
+    char line[64];
+    for (const reloc::CodeBlock &b : reloc::kCodeBlocks) {
+        snprintf(line, sizeof line, "code %#x %lld\n", b.lo, (long long)m.va(b.lo) - (long long)b.lo);
+        out += line;
+    }
+    for (const reloc::DataBlock &d : reloc::kDataBlocks) {
+        snprintf(line, sizeof line, "data %#x %lld\n", d.lo, (long long)m.va(d.lo) - (long long)d.lo);
+        out += line;
+    }
+    snprintf(line, sizeof line, "found %zu missing %zu\n", m.blocks(), m.missing());
+    return out + line;
 }
 
 // ------------------------------------------------------------------- the groups

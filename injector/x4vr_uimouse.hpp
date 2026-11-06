@@ -67,6 +67,8 @@
 #include <cstring>
 #include <initializer_list>
 
+#include "../common/x4vr_reloc.hpp"
+
 namespace x4vr::uimouse {
 
 struct Site {
@@ -309,10 +311,10 @@ inline bool jmp_bytes(uintptr_t site, size_t len, uintptr_t stub_va, uint8_t *ou
     return true;
 }
 inline bool patch_bytes(uintptr_t stub_va, uint8_t out[kPatchLen]) {
-    return jmp_bytes(kPatch, kPatchLen, stub_va, out);
+    return jmp_bytes(reloc::va(kPatch), kPatchLen, stub_va, out);
 }
 inline bool layer_patch_bytes(uintptr_t stub_va, uint8_t out[kLayerPatchLen]) {
-    return jmp_bytes(kLayerPatch, kLayerPatchLen, stub_va, out);
+    return jmp_bytes(reloc::va(kLayerPatch), kLayerPatchLen, stub_va, out);
 }
 
 } // namespace x4vr::uimouse

@@ -111,6 +111,8 @@ public:
     bool read(uintptr_t va, void *out, size_t n) const;
     // The DT_NEEDED libraries.
     std::vector<std::string> needed() const;
+    // The code segment: its bytes, length and address. False if there's none.
+    bool text(const uint8_t **bytes, size_t *size, uintptr_t *va) const;
 
 private:
     const uint8_t *data_ = nullptr;
@@ -131,6 +133,10 @@ struct PatchResult {
     uintptr_t bad = 0;
 };
 std::vector<PatchResult> check_patches(const VaReader &read);
+// The same on a whole file, wherever that build keeps the code (common/x4vr_reloc.hpp).
+std::vector<PatchResult> check_patches(const ElfFile &x4);
+// For each block of code and data the mod names: "code|data steam-address offset".
+std::string reloc_report(const ElfFile &x4);
 
 // ----------------------------------------------------------------- the probes
 // Which OpenXR runtime is active, by the loader's search order. It is only a

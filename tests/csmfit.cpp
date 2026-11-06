@@ -227,11 +227,24 @@ int main() {
     Retarget far_r[] = {{(uintptr_t)f0, 8, (uintptr_t)f0 + 0x90000000UL}};
     check(!retarget(far_r, 1, err, sizeof err) && fn0() == 1.0,
           "a target out of rel32 reach refuses, and changes nothing");
-    Retarget two_pages[] = {{(uintptr_t)f0, 8, (uintptr_t)&slots[0]},
-                            {(uintptr_t)f0 + (uintptr_t)page, 8,
-                             (uintptr_t)&slots[0]}};
-    check(!retarget(two_pages, 2, err, sizeof err),
-          "sites on different pages refuse");
+    // Sites on two pages, as another build can have them: both are retargeted, and both
+    // pages end read-and-execute. They share one on Steam's, which proves nothing about this.
+    uint8_t *span = (uint8_t *)mmap(nullptr, 2 * (size_t)page, PROT_READ | PROT_WRITE,
+                                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    check(span != (uint8_t *)MAP_FAILED, "two pages for the straddling sites");
+    const uint8_t cvt[8] = {0xf3, 0x0f, 0x5a, 0x0d, 0, 0, 0, 0};
+    memcpy(span + (size_t)page - 8, cvt, 8);
+    memcpy(span + (size_t)page, cvt, 8);
+    Retarget two_pages[] = {{(uintptr_t)(span + page - 8), 8, (uintptr_t)&slots[0]},
+                            {(uintptr_t)(span + page), 8, (uintptr_t)&slots[1]}};
+    check(retarget(two_pages, 2, err, sizeof err), "sites on two pages are both retargeted");
+    check(rip_target(two_pages[0].insn, 8, (const uint8_t *)two_pages[0].insn) == two_pages[0].target &&
+              rip_target(two_pages[1].insn, 8, (const uint8_t *)two_pages[1].insn) == two_pages[1].target,
+          "...each pointing at its slot");
+    // The refusal that still matters: pages that can't be made writable.
+    munmap(span + page, (size_t)page);
+    Retarget gone[] = {{(uintptr_t)(span + page), 8, (uintptr_t)&slots[1]}};
+    check(!retarget(gone, 1, err, sizeof err), "a page that isn't there refuses");
 
     printf("\n%s\n", g_fail ? "SOME CHECKS FAILED" : "all checks passed");
     return g_fail ? 1 : 0;

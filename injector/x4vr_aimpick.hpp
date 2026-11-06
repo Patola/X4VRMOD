@@ -43,6 +43,8 @@
 #include <cstdint>
 #include <cstring>
 
+#include "../common/x4vr_reloc.hpp"
+
 namespace x4vr::aimpick {
 
 struct Site {
@@ -237,7 +239,7 @@ inline size_t make_stub(uint8_t out[kStubMax], uintptr_t stub_va,
 
 // The 11 bytes written at 0x1d6e0e1: jmp stub, then int3s.
 inline bool patch_bytes(uintptr_t stub_va, uint8_t out[kPatchLen]) {
-    const int64_t rel = (int64_t)stub_va - (int64_t)(kPatch + 5);
+    const int64_t rel = (int64_t)stub_va - (int64_t)(reloc::va(kPatch) + 5);
     if (rel != (int64_t)(int32_t)rel)
         return false;
     const int32_t r32 = (int32_t)rel;

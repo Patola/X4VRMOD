@@ -67,6 +67,9 @@ extern char **environ;
 #include "x4vr_camscan.hpp"
 #include "x4vr_camwatch.hpp"
 #include "x4vr_camwrite.hpp"
+#include <link.h>
+
+#include "../common/x4vr_reloc.hpp"
 #include "x4vr_shadowfov.hpp"
 #include "x4vr_fieldab.hpp"
 #include "x4vr_csmfit.hpp"
@@ -1211,6 +1214,7 @@ T real_compat(const char *name) {
 
 extern "C" {
 
+static void reloc_init();            // defined with self_read, below
 static void csmfit_patch_at_start(); // defined with csmfit_tick, below
 static void foot_patch_at_start();   // X4VR_HEADLOOK_FOOT, with foot_tick
 static void extview_patch_at_start(); // X4VR_HEADLOOK_EXTERNAL
@@ -1226,6 +1230,9 @@ __attribute__((constructor)) static void x4vr_inject_init() {
              x4vr_build_version());
     if (exe_is_game(exe)) {
         log_startup_env();
+        // Before anything that reads or patches X4: where this build keeps what the
+        // mod names by Steam's addresses.
+        reloc_init();
         // #70's fix, X4VR_CSM_COVER: X4's code is patched here, before any of
         // it has run, so no thread can be inside the four instructions.
         csmfit_patch_at_start();
@@ -2697,6 +2704,44 @@ static bool self_read(uintptr_t addr, void *out, size_t n) {
     return process_vm_readv(getpid(), &local, 1, &remote, 1, 0) == (ssize_t)n;
 }
 
+// X4's memory at an address in Steam's terms, as the checks and the fixed globals name it
+// (common/x4vr_reloc.hpp). An address that's already this build's, from an object or an
+// exported function, goes to self_read.
+static bool x4_read(uintptr_t steam, void *out, size_t n) {
+    return x4vr::reloc::map().read(self_read, steam, out, n);
+}
+
+static void reloc_init() {
+    struct Text {
+        uintptr_t va = 0;
+        size_t size = 0;
+    } text;
+    // The first object is the program itself, and X4's is mapped at its own addresses.
+    dl_iterate_phdr(
+        [](dl_phdr_info *info, size_t, void *data) {
+            Text *t = (Text *)data;
+            for (int i = 0; i < info->dlpi_phnum; i++) {
+                const ElfW(Phdr) &ph = info->dlpi_phdr[i];
+                if (ph.p_type == PT_LOAD && (ph.p_flags & PF_X)) {
+                    t->va = info->dlpi_addr + ph.p_vaddr;
+                    t->size = ph.p_filesz;
+                    break;
+                }
+            }
+            return 1;
+        },
+        &text);
+    if (!text.va)
+        return;
+    x4vr::reloc::Map &m = x4vr::reloc::map();
+    m.build((const uint8_t *)text.va, text.size, text.va, self_read);
+    if (m.identity())
+        X4VR_LOG("reloc: X4's code is where the mod's addresses name it");
+    else
+        X4VR_LOG("reloc: this X4 keeps its code elsewhere: %zu block(s) found, %zu not",
+                 m.blocks(), m.missing());
+}
+
 namespace {
 struct CamScanState {
     x4vr::camscan::Scanner scan;
@@ -3107,7 +3152,7 @@ static void camwatch_publish(const std::vector<x4vr::camwatch::Target> &t,
 // its starting values beside it.
 static void camwatch_aim_hop3(uintptr_t cam, const x4vr::camwatch::Chain &c) {
     using namespace x4vr::camwatch;
-    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    auto rd = [](uintptr_t va, void *o, size_t n) { return x4_read(va, o, n); };
     static int sites = -1;
     if (sites < 0) {
         uintptr_t bad = 0;
@@ -3141,7 +3186,7 @@ static void camwatch_aim_hop3(uintptr_t cam, const x4vr::camwatch::Chain &c) {
 // the vtables, which are build constants), and aim at the stored matrices.
 static void camwatch_aim_hop2(uintptr_t cam) {
     using namespace x4vr::camwatch;
-    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    auto rd = [](uintptr_t va, void *o, size_t n) { return x4_read(va, o, n); };
     static int sites = -1;
     if (sites < 0) {
         uintptr_t bad = 0;
@@ -3155,7 +3200,7 @@ static void camwatch_aim_hop2(uintptr_t cam) {
     }
     if (!sites)
         return;
-    const Chain c = read_chain(cam, rd);
+    const Chain c = read_chain(cam, self_read);
     char desc[1024];
     int k = snprintf(desc, sizeof desc, "controller %p vtable %p local %p | %zu "
                      "child(ren):", (void *)c.controller, (void *)c.vtable,
@@ -3197,7 +3242,7 @@ static void camwatch_aim_hop2(uintptr_t cam) {
     if (!sites_b)
         return;
     uintptr_t obj = 0;
-    if (!self_read(settings_global(), &obj, 8) || !obj)
+    if (!x4_read(settings_global(), &obj, 8) || !obj)
         return;
     static uintptr_t last_obj = 0;
     if (obj != last_obj) {
@@ -3903,7 +3948,7 @@ static void headlook_speed_tick(uintptr_t cam) {
         return;
     uintptr_t params = 0;
     float p[4] = {};
-    if (!self_read(camwrite::params_global(), &params, 8) || !params ||
+    if (!x4_read(camwrite::params_global(), &params, 8) || !params ||
         !self_read(params + camwrite::kMaxPitch, p, sizeof p))
         return;
     if (p[3] == 0.f && std::fabs(p[0] - p[1]) < 1e-6f)
@@ -3931,7 +3976,7 @@ static void headlook_speed_tick(uintptr_t cam) {
 
 static bool camwrite_ready(uintptr_t cam, float plim_deg, float ylim_deg) {
     using namespace x4vr;
-    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    auto rd = [](uintptr_t va, void *o, size_t n) { return x4_read(va, o, n); };
     static int sites = -1;
     if (sites < 0) {
         uintptr_t bad = 0;
@@ -3972,7 +4017,7 @@ static bool camwrite_ready(uintptr_t cam, float plim_deg, float ylim_deg) {
     }
     uintptr_t params = 0;
     float p[4] = {};
-    if (!self_read(camwrite::params_global(), &params, 8) || !params ||
+    if (!x4_read(camwrite::params_global(), &params, 8) || !params ||
         !self_read(params + camwrite::kMaxPitch, p, sizeof p)) {
         camwrite_refuse("X4's player-camera parameters are not readable", true);
         return false;
@@ -4061,7 +4106,7 @@ static bool camwrite_apply(uintptr_t cam, float yaw_deg, float pitch_deg,
 // so a load camera's controller is never read as the cockpit's.
 static void camwrite_sway_sample(uintptr_t cam) {
     using namespace x4vr::camwatch;
-    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    auto rd = [](uintptr_t va, void *o, size_t n) { return x4_read(va, o, n); };
     static int sites = -1;
     if (sites < 0) {
         uintptr_t bad = 0;
@@ -4072,7 +4117,7 @@ static void camwrite_sway_sample(uintptr_t cam) {
     }
     if (!sites || !cam)
         return;
-    const Chain c = read_chain(cam, rd);
+    const Chain c = read_chain(cam, self_read);
     if (!c.ok)
         return;
     float m[16];
@@ -4152,13 +4197,13 @@ static void shadowfov_tick() {
     const double period = shadowfov_period();
     if (period <= 0.0)
         return;
-    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    auto rd = [](uintptr_t va, void *o, size_t n) { return x4_read(va, o, n); };
     static int sites = -1;
     if (sites < 0) {
         uintptr_t bad = 0;
         float def = 0.f;
         const bool code = verify_sites(rd, &bad);
-        const bool cst = self_read(kDefaultAddr, &def, sizeof def) &&
+        const bool cst = x4_read(kDefaultAddr, &def, sizeof def) &&
                          std::fabs(def - kDefault) < 1e-6f;
         sites = code && cst ? 1 : 0;
         if (sites)
@@ -4314,14 +4359,14 @@ static void fieldab_tick() {
     const double period = fieldab_period();
     if (period <= 0.0)
         return;
-    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    auto rd = [](uintptr_t va, void *o, size_t n) { return x4_read(va, o, n); };
     static int sites = -1;
     if (sites < 0) {
         uintptr_t bad = 0;
         float def = 0.f;
         const bool code = verify_sites(rd, &bad);
         const bool cst =
-            self_read(x4vr::shadowfov::kDefaultAddr, &def, sizeof def) &&
+            x4_read(x4vr::shadowfov::kDefaultAddr, &def, sizeof def) &&
             std::fabs(def - kDefault) < 1e-6f;
         sites = code && cst ? 1 : 0;
         if (sites)
@@ -4522,7 +4567,7 @@ static void csmfit_patch_at_start() {
         refuse("X4VR_CSM_COVER must be in (0, 2]");
         return;
     }
-    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    auto rd = [](uintptr_t va, void *o, size_t n) { return x4_read(va, o, n); };
     uintptr_t bad = 0;
     if (!verify_sites(rd, &bad)) {
         char why[160];
@@ -4550,7 +4595,7 @@ static void csmfit_patch_at_start() {
     slots[1] = def[1];
     Retarget r[kNumSites];
     for (size_t i = 0; i < kNumSites; i++)
-        r[i] = {va[i], 8, (uintptr_t)&slots[kSites[i].slot]};
+        r[i] = {x4vr::reloc::va(va[i]), 8, (uintptr_t)&slots[kSites[i].slot]};
     char err[200] = "";
     if (!retarget(r, kNumSites, err, sizeof err)) {
         refuse(err);
@@ -4571,9 +4616,9 @@ static void csmfit_tick() {
         return;
     const double rho = csmfit_cover(), period = csmfit_period();
     float ax = 1.f, ay = 1.f;
-    if (!self_read(kAspectX, &ax, sizeof ax) || !(ax > 0.f) || !std::isfinite(ax))
+    if (!x4_read(kAspectX, &ax, sizeof ax) || !(ax > 0.f) || !std::isfinite(ax))
         ax = 1.f;
-    if (!self_read(kAspectY, &ay, sizeof ay) || !(ay > 0.f) || !std::isfinite(ay))
+    if (!x4_read(kAspectY, &ay, sizeof ay) || !(ay > 0.f) || !std::isfinite(ay))
         ay = 1.f;
     const uintptr_t cam = x4_player_camera();
     float field = 0.f;
@@ -4618,7 +4663,7 @@ static void csmfit_tick() {
     (fix ? g_csm.ticks_fix : g_csm.ticks_ctl)++;
 
     float c0far = 0.f;
-    self_read(kCascade0Far, &c0far, sizeof c0far);
+    x4_read(kCascade0Far, &c0far, sizeof c0far);
     const double f = c0far * kFarScale;
     const double r = field > 0.f && f > kNear
                          ? radius(kNear, f, field, dx, dy) : 0.0;
@@ -4734,7 +4779,7 @@ static bool steer_sites_verified() {
         if (steer_asked_mode() == x4vr::steer::kOff)
             return false;
         auto rd = [](uintptr_t va, void *o, size_t n) {
-            return self_read(va, o, n);
+            return x4_read(va, o, n);
         };
         uintptr_t bad = 0;
         const bool v = x4vr::steer::verify_sites(rd, &bad);
@@ -4845,7 +4890,7 @@ static void aimpick_patch_at_start() {
         refuse("X4VR_STEER_PICK needs the steering ring, X4VR_STEER=a");
         return;
     }
-    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    auto rd = [](uintptr_t va, void *o, size_t n) { return x4_read(va, o, n); };
     uintptr_t bad = 0;
     if (!verify_sites(rd, &bad)) {
         char why[160];
@@ -4864,7 +4909,7 @@ static void aimpick_patch_at_start() {
     }
     uint8_t code[kStubMax];
     const size_t len = make_stub(code, (uintptr_t)page, (uintptr_t)&g_aimslot,
-                                 kConst, kCont);
+                                 x4vr::reloc::va(kConst), x4vr::reloc::va(kCont));
     uint8_t jmp[kPatchLen];
     if (!len || !patch_bytes((uintptr_t)page, jmp)) {
         refuse("the stub is out of rel32 reach of 0x1d6e0e1");
@@ -4878,7 +4923,7 @@ static void aimpick_patch_at_start() {
     }
     // X4 has run no frame yet, so no thread is inside the 11 bytes.
     char err[200] = "";
-    if (!x4vr::foot::patch_code(kPatch, jmp, kPatchLen, err, sizeof err)) {
+    if (!x4vr::foot::patch_code(x4vr::reloc::va(kPatch), jmp, kPatchLen, err, sizeof err)) {
         refuse(err);
         return;
     }
@@ -4995,12 +5040,12 @@ static void hoverlog_tick() {
         return;
     last_t = now;
     uintptr_t root = 0, p = 0;
-    if (!self_read(0x3db6948, &root, sizeof root))
+    if (!x4_read(0x3db6948, &root, sizeof root))
         return;
     if (root) {
         if (!self_read(root + 0x238, &p, sizeof p))
             return;
-    } else if (!self_read(0x3db6c00, &p, sizeof p)) {
+    } else if (!x4_read(0x3db6c00, &p, sizeof p)) {
         return;
     }
     if (!p)
@@ -5115,7 +5160,7 @@ static void ptrwatch_tick() {
         if (now - seen_at < 5.0)
             return;
         uintptr_t in = 0;
-        if (!self_read(0x3daaaf8, &in, sizeof in) || !in)
+        if (!x4_read(0x3daaaf8, &in, sizeof in) || !in)
             return;
         armed = true;
         page = (size_t)sysconf(_SC_PAGESIZE);
@@ -5281,7 +5326,7 @@ static void uimouse_patch_at_start() {
         X4VR_LOG("milestone: HUD clicks at the drawn HUD REFUSED — %s. Quit "
                  "and tell me.", why);
     };
-    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    auto rd = [](uintptr_t va, void *o, size_t n) { return x4_read(va, o, n); };
     uintptr_t bad = 0;
     if (!verify_sites(rd, &bad)) {
         char why[160];
@@ -5301,9 +5346,9 @@ static void uimouse_patch_at_start() {
     }
     uint8_t code[kStubMax], lcode[kStubMax];
     const size_t len = make_stub(code, (uintptr_t)page, (uintptr_t)&g_uimouseslot,
-                                 kCont);
+                                 x4vr::reloc::va(kCont));
     const size_t llen = make_layer_stub(lcode, (uintptr_t)(page + 128),
-                                        (uintptr_t)&g_uimouseslot, kLayerCont);
+                                        (uintptr_t)&g_uimouseslot, x4vr::reloc::va(kLayerCont));
     uint8_t jmp[kPatchLen], ljmp[kLayerPatchLen];
     if (!len || !llen || !patch_bytes((uintptr_t)page, jmp) ||
         !layer_patch_bytes((uintptr_t)(page + 128), ljmp)) {
@@ -5321,8 +5366,8 @@ static void uimouse_patch_at_start() {
     // layer pick first: with `on` still 0 its stub is X4's three
     // instructions, so a feed patch that then failed would leave X4 as it was.
     char err[200] = "";
-    if (!x4vr::foot::patch_code(kLayerPatch, ljmp, kLayerPatchLen, err, sizeof err) ||
-        !x4vr::foot::patch_code(kPatch, jmp, kPatchLen, err, sizeof err)) {
+    if (!x4vr::foot::patch_code(x4vr::reloc::va(kLayerPatch), ljmp, kLayerPatchLen, err, sizeof err) ||
+        !x4vr::foot::patch_code(x4vr::reloc::va(kPatch), jmp, kPatchLen, err, sizeof err)) {
         refuse(err);
         return;
     }
@@ -5440,7 +5485,7 @@ static void steer_tick() {
         uint8_t cap = 0;
         static int last_cap = -1;
         static unsigned cap_lines = 0;
-        if (self_read(x4vr::steer::input_global_from_sites(), &in, sizeof in) &&
+        if (x4_read(x4vr::steer::input_global_from_sites(), &in, sizeof in) &&
             in && self_read(in + 0x9f33, &cap, 1) && (int)(cap != 0) != last_cap) {
             last_cap = cap != 0;
             if (cap_lines++ < 100)
@@ -5463,7 +5508,7 @@ static void steer_tick() {
         using namespace x4vr::steer;
         uintptr_t in = 0;
         uint8_t blk[kA010 - kActive + 1];
-        if (self_read(input_global_from_sites(), &in, sizeof in) && in &&
+        if (x4_read(input_global_from_sites(), &in, sizeof in) && in &&
             self_read(in + kActive, blk, sizeof blk)) {
             Flags f;
             f.active = blk[0];
@@ -5588,7 +5633,7 @@ static bool cursor_foot_ab() {
 static bool menus_sites_verified() {
     static const bool ok = [] {
         auto rd = [](uintptr_t va, void *o, size_t n) {
-            return self_read(va, o, n);
+            return x4_read(va, o, n);
         };
         uintptr_t bad = 0;
         const bool v = x4vr::menus::verify_sites(rd, &bad);
@@ -5611,7 +5656,7 @@ static bool menus_sites_verified() {
 static int x4_conversation() {
     if (!menus_sites_verified())
         return -1;
-    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    auto rd = [](uintptr_t va, void *o, size_t n) { return x4_read(va, o, n); };
     int32_t st = 0;
     if (!x4vr::menus::conversation_state(rd, &st))
         return -1;
@@ -5641,7 +5686,7 @@ static void menus_tick() {
     if (now - last < 0.033)
         return;
     last = now;
-    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    auto rd = [](uintptr_t va, void *o, size_t n) { return x4_read(va, o, n); };
     x4vr::menus::Entry e[24];
     const int n = x4vr::menus::walk(rd, x4vr::menus::kMenuRootSlot, e, 24);
     g_menus_only_toplevel.store(n == 1 && x4vr::menus::has(e, n, "TopLevelMenu"),
@@ -5793,7 +5838,7 @@ static void foot_patch_at_start() {
     // Patola's approval of 2026-10-27: the NULL-controller exit at 0x1929ffd,
     // through a stub that composes the camera's own transform for the
     // player's camera only (x4vr_foot.hpp).
-    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    auto rd = [](uintptr_t va, void *o, size_t n) { return x4_read(va, o, n); };
     uintptr_t bad = 0;
     if (!verify_null_exit_sites(rd, &bad)) {
         char why[160];
@@ -5810,7 +5855,7 @@ static void foot_patch_at_start() {
         return;
     }
     uint8_t code[kStubLen];
-    make_stub(code, kRootGlobal, kLocalTailVa, kReturn.va,
+    make_stub(code, x4vr::reloc::va(kRootGlobal), x4vr::reloc::va(kLocalTailVa), x4vr::reloc::va(kReturn.va),
               (uint32_t)kPlayerCamOff);
     memcpy(stub, code, sizeof code);
     const long page = sysconf(_SC_PAGESIZE);
@@ -5819,7 +5864,7 @@ static void foot_patch_at_start() {
         return;
     }
     int32_t want = 0;
-    if (!x4vr::csmfit::disp_for(kNullJe, 6, (uintptr_t)stub, &want)) {
+    if (!x4vr::csmfit::disp_for(x4vr::reloc::va(kNullJe), 6, (uintptr_t)stub, &want)) {
         refuse("the stub is out of rel32 reach of 0x1929ffd");
         return;
     }
@@ -5827,13 +5872,13 @@ static void foot_patch_at_start() {
     // and the first version refused on that. patch_code makes every page it
     // touches writable.
     char err[200] = "";
-    if (!patch_code(kNullRel32, &want, 4, err, sizeof err)) {
+    if (!patch_code(x4vr::reloc::va(kNullRel32), &want, 4, err, sizeof err)) {
         refuse(err);
         return;
     }
     int32_t got = 0;
-    if (!self_read(kNullRel32, &got, 4) || got != want ||
-        kNullJeEnd + (intptr_t)got != (uintptr_t)stub) {
+    if (!x4_read(kNullRel32, &got, 4) || got != want ||
+        x4vr::reloc::va(kNullJeEnd) + (intptr_t)got != (uintptr_t)stub) {
         refuse("the read-back of the patched je does not point at the stub");
         return;
     }
@@ -5882,7 +5927,7 @@ static void extview_patch_at_start() {
         refuse("X4VR_HEADLOOK_EXTERNAL needs X4VR_HEADLOOK_WRITE=1");
         return;
     }
-    auto rd = [](uintptr_t va, void *o, size_t n) { return self_read(va, o, n); };
+    auto rd = [](uintptr_t va, void *o, size_t n) { return x4_read(va, o, n); };
     uintptr_t bad = 0;
     if (!verify_sites(rd, &bad) || !early_site_ok(&bad)) {
         char why[160];
@@ -5901,16 +5946,16 @@ static void extview_patch_at_start() {
         return;
     }
     StubAddrs a{};
-    a.root_slot = kRootGlobal;
+    a.root_slot = x4vr::reloc::va(kRootGlobal);
     a.player_cam = kPlayerCamOff;
     a.mode = kCamMode;
     a.own = kCamOwn;
     a.rows_slot = (uintptr_t)&g_extslot.cur;
     a.applied = (uintptr_t)&g_extslot.applied;
-    a.after_loads = kAfterLoads;
-    a.x4_compose = kComposeVa;
-    a.ret = kReturnVa;
-    a.cont = kEarlyEnd;
+    a.after_loads = x4vr::reloc::va(kAfterLoads);
+    a.x4_compose = x4vr::reloc::va(kComposeVa);
+    a.ret = x4vr::reloc::va(kReturnVa);
+    a.cont = x4vr::reloc::va(kEarlyEnd);
     uint8_t code[kStubMax];
     a.seen = (uintptr_t)&g_extslot.orbit_seen;
     const size_t len_a = make_stub(code, a);
@@ -5925,8 +5970,8 @@ static void extview_patch_at_start() {
         return;
     }
     int32_t want_a = 0, want_b = 0;
-    if (!x4vr::csmfit::disp_for(kTailJmp, 5, (uintptr_t)page, &want_a) ||
-        !x4vr::csmfit::disp_for(kEarlyCmp, 5, (uintptr_t)stub_b, &want_b)) {
+    if (!x4vr::csmfit::disp_for(x4vr::reloc::va(kTailJmp), 5, (uintptr_t)page, &want_a) ||
+        !x4vr::csmfit::disp_for(x4vr::reloc::va(kEarlyCmp), 5, (uintptr_t)stub_b, &want_b)) {
         refuse("a stub is out of rel32 reach of its site");
         return;
     }
@@ -5935,16 +5980,16 @@ static void extview_patch_at_start() {
     uint8_t jmp_b[5] = {0xe9};
     memcpy(jmp_b + 1, &want_b, 4);
     char err[200] = "";
-    if (!x4vr::foot::patch_code(kTailRel32, &want_a, 4, err, sizeof err) ||
-        !x4vr::foot::patch_code(kEarlyCmp, jmp_b, 5, err, sizeof err)) {
+    if (!x4vr::foot::patch_code(x4vr::reloc::va(kTailRel32), &want_a, 4, err, sizeof err) ||
+        !x4vr::foot::patch_code(x4vr::reloc::va(kEarlyCmp), jmp_b, 5, err, sizeof err)) {
         refuse(err);
         return;
     }
     int32_t got = 0;
     uint8_t got_b[5] = {};
-    if (!self_read(kTailRel32, &got, 4) || got != want_a ||
-        kTailJmpEnd + (intptr_t)got != (uintptr_t)page ||
-        !self_read(kEarlyCmp, got_b, 5) || memcmp(got_b, jmp_b, 5) != 0) {
+    if (!x4_read(kTailRel32, &got, 4) || got != want_a ||
+        x4vr::reloc::va(kTailJmpEnd) + (intptr_t)got != (uintptr_t)page ||
+        !x4_read(kEarlyCmp, got_b, 5) || memcmp(got_b, jmp_b, 5) != 0) {
         refuse("the read-back of a patched site does not point at its stub");
         return;
     }
@@ -6029,7 +6074,7 @@ static bool extview_tick(bool external, bool hud, float head_yaw,
         // pivot slot +0x788 and the root's +0x448, with their vtables.
         uintptr_t root = 0, p448 = 0, p788 = 0, p780 = 0;
         uintptr_t vt448 = 0, vt788 = 0, vt780 = 0;
-        if (self_read(extview::kRootGlobal, &root, 8) && root)
+        if (x4_read(extview::kRootGlobal, &root, 8) && root)
             self_read(root + 0x448, &p448, 8);
         self_read(cam + 0x788, &p788, 8);
         self_read(cam + 0x780, &p780, 8);

@@ -43,6 +43,8 @@
 #include <string>
 #include <vector>
 
+#include "../common/x4vr_reloc.hpp"
+
 namespace x4vr {
 namespace camwatch {
 
@@ -257,7 +259,8 @@ template <class Reader> Chain read_chain(uintptr_t cam, Reader read) {
         c.why = "controller vtable unreadable";
         return c;
     }
-    if (c.local_fn != kLocalTransformFn) {
+    // local_fn is this build's own address, read from the object.
+    if (c.local_fn != reloc::va(kLocalTransformFn)) {
         c.why = "controller class differs from take 316's (its vtable+0x1b0 is "
                 "not 0x191d0f0) — the chain layout is unverified, refusing";
         return c;

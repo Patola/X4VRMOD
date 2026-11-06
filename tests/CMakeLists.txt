@@ -215,6 +215,11 @@ add_executable(x4vr_test_pause pause.cpp)
 # each patch group against bent bytes. Self-checking.
 add_executable(x4vr_test_launcher launcher_core.cpp)
 target_link_libraries(x4vr_test_launcher PRIVATE x4vrmod_core)
+# common/x4vr_reloc.hpp on a made-up X4. Self-checking, with no game installed.
+add_executable(x4vr_test_reloc reloc.cpp)
+# Not a test: what tools/make_reloc_table.py is fed, which of X4's bytes the checks read.
+add_executable(x4vr_record_reads record_reads.cpp)
+target_link_libraries(x4vr_record_reads PRIVATE x4vrmod_core)
 # The window on Qt's offscreen platform, when there's a Qt to build it. Self-checking.
 if(TARGET x4vrmod_gui)
     find_package(Qt6 QUIET COMPONENTS Test)

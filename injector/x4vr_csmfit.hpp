@@ -28,6 +28,7 @@
 // nothing is written.
 #pragma once
 
+#include <algorithm>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -178,34 +179,33 @@ struct Retarget {
 };
 inline bool retarget(const Retarget *r, size_t n, char *err, size_t errlen) {
     const long page = sysconf(_SC_PAGESIZE);
-    const uintptr_t pg = r[0].insn & ~(uintptr_t)(page - 1);
     int32_t disp[8];
     if (n > 8) {
         snprintf(err, errlen, "too many sites");
         return false;
     }
+    // Every page the sites touch: they share one on Steam's build, not on every build.
+    uintptr_t lo = UINTPTR_MAX, hi = 0;
     for (size_t i = 0; i < n; i++) {
-        if (((r[i].insn & ~(uintptr_t)(page - 1)) != pg) ||
-            (((r[i].insn + r[i].len - 1) & ~(uintptr_t)(page - 1)) != pg)) {
-            snprintf(err, errlen, "site %#lx is not on page %#lx",
-                     (unsigned long)r[i].insn, (unsigned long)pg);
-            return false;
-        }
+        lo = std::min(lo, r[i].insn);
+        hi = std::max(hi, r[i].insn + r[i].len);
         if (!disp_for(r[i].insn, r[i].len, r[i].target, &disp[i])) {
             snprintf(err, errlen, "%#lx out of rel32 reach of %#lx",
                      (unsigned long)r[i].target, (unsigned long)r[i].insn);
             return false;
         }
     }
-    if (mprotect((void *)pg, (size_t)page, PROT_READ | PROT_WRITE | PROT_EXEC) != 0 &&
-        mprotect((void *)pg, (size_t)page, PROT_READ | PROT_WRITE) != 0) {
+    const uintptr_t pg = lo & ~(uintptr_t)(page - 1);
+    const size_t span = ((hi + (uintptr_t)page - 1) & ~(uintptr_t)(page - 1)) - pg;
+    if (mprotect((void *)pg, span, PROT_READ | PROT_WRITE | PROT_EXEC) != 0 &&
+        mprotect((void *)pg, span, PROT_READ | PROT_WRITE) != 0) {
         snprintf(err, errlen, "mprotect(rw) %#lx: %s", (unsigned long)pg,
                  strerror(errno));
         return false;
     }
     for (size_t i = 0; i < n; i++)
         memcpy((void *)(r[i].insn + r[i].len - 4), &disp[i], 4);
-    if (mprotect((void *)pg, (size_t)page, PROT_READ | PROT_EXEC) != 0) {
+    if (mprotect((void *)pg, span, PROT_READ | PROT_EXEC) != 0) {
         snprintf(err, errlen, "mprotect(rx) %#lx: %s", (unsigned long)pg,
                  strerror(errno));
         return false;

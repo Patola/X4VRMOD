@@ -29937,3 +29937,29 @@ read content.xml", which the scorer said and a menu-only run couldn't show by ey
 save was redirected this hid itself, because X4's own save made the file a later read found. The
 existence answers now cover all three files; `inputmap.xml` is answered only once a fork exists.
 
+## GOG's X4 is Steam's, moved (2026-11-06)
+
+Measured, not assumed. `tools/make_reloc_table.py` takes every byte the mod's checks read (85
+places, 1457 bytes, recorded by running the checks) and compares the builds. They match but for
+54 addresses inside instructions, each pointing at the same thing in its own build, and read-only
+data reads the same at its new place. The code moved by 23 different offsets, data by others, so
+functions are in a different order in places and nothing maps by one shift. Nothing in the
+code the mod touches differs. `common/x4vr_reloc.hpp` is built on that.
+
+Traps it left in the code:
+* **An address may already be this build's.** `self_read` takes real addresses (an object's
+  vtable, or a global decoded from an exported function); `x4_read` takes Steam's. Put a real one
+  through `x4_read` and it can land in a block and move twice, which is why `read_chain` and
+  `decode_anchors` read raw, and why `va()` is applied at each call site, not inside `patch_code`
+  or `disp_for`.
+* **A signature must not hold an address.** Three first ones held the top bytes of a
+  displacement, equal in both builds by luck; a hotfix moving things further would have lost them
+  for no reason. The synthetic test caught it, by moving everything further than GOG does.
+* **A test that reads a vtable slot** sees this build's address: `read()` puts abs64 values back too.
+* X4's four cascade reads share a page on Steam's and needn't elsewhere, so `retarget` takes any
+  number of pages.
+
+**X4's loading screen** is `assets/textures/ui/loadingscreens/x4_<shape>.jpg`, one per screen
+shape, and the last extension in load order wins, as Timelines' art beats the base game's. `logo.bmp`
+is something else: the small splash window SDL opens first.
+

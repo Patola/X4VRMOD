@@ -289,9 +289,13 @@ static int cmd_probe_x4(int argc, char **argv) {
            format_x4_version(kTestedX4Version).c_str());
     printf("steam    %s\n", binary_needs_steam(g.exe) ? "links libsteam_api: needs Steam running"
                                                       : "doesn't link libsteam_api");
+    // How far this build moved what the mod names.
+    if (argc > 4 && !strcmp(argv[4], "--map")) {
+        fputs(reloc_report(elf).c_str(), stdout);
+        return 0;
+    }
     int bad = 0;
-    const auto rd = [&elf](uintptr_t va, void *o, size_t n) { return elf.read(va, o, n); };
-    for (const PatchResult &r : check_patches(rd)) {
+    for (const PatchResult &r : check_patches(elf)) {
         if (r.ok) {
             printf("ok       %-9s %s\n", r.id, r.feature);
         } else {

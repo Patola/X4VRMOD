@@ -152,22 +152,32 @@ binary is missing.
   head-look, walking, external views, HUD clicks, steering, menus, shadows.
   All match: green. Some don't: amber, naming them. A different major version
   in `version.dat`: amber, "not tested".
-* **Later, to survive hotfixes and GOG: signature search.** Each site found by a
-  unique byte pattern with its displacements wildcarded, requiring exactly one
-  match or refusing. As safe as today, and it makes GOG work without separate
-  tables. Real work (~330 references, plus stubs that hard-code addresses).
+* **Hotfixes and GOG: built 2026-11-06** (`common/x4vr_reloc.hpp`). The mod stays written
+  in Steam's addresses, which act as names. At start-up 23 short signatures find where each
+  block of code is, and data's places are read from the instructions that use them. Then
+  one translation sits under everything: `va()` for patch sites, stub operands and
+  read-backs, and a reader for the checks that shows this build's bytes in Steam's terms,
+  each address inside an instruction put back only if it points at the same thing. So the
+  checks didn't change and are as strict as ever: any real difference still turns that
+  feature off. It found 44 blocks on GOG's build in about 4 ms, and on Steam's it does
+  nothing at all.
+  * **The table is generated** by `tools/make_reloc_table.py`, from what the checks really
+    read (`x4vr_record_reads`) and the addresses in the sources. It holds short signatures,
+    like the checks' own bytes.
+  * **Regenerate it** when the mod adds an address or a check, or for a new X4 whose code
+    has changed: `build/tests/x4vr_record_reads <Steam's X4> > reads`, then
+    `tools/make_reloc_table.py reads <Steam's X4> <the other X4>`. Its verdict must say 0
+    problems.
 * **GOG's X4 9.00, measured 2026-11-05 (never launched, binary only).** Heroic puts
   it at `<install_path>/game/X4`, and it doesn't link `libsteam_api`.
   * Not byte-identical: the same 28,644 exports, 53 KB less code, and all 8 feature
     groups differ. So today it's amber with every feature off.
-  * It looks like the same compile with the Steam code taken out. Of the 164 code
-    addresses in our sources, 159 are found by their surrounding bytes, with 20 or
-    more unique 8-byte windows agreeing, at 26 different offsets (functions are in a
-    different order in places, so no single shift maps one onto the other). Of those
-    159, 109 start with the same 16 bytes. In the 10 of the other 50 inspected, only
-    addresses inside instructions differ. That's what signature search wildcards.
-  * Not strongly found: `0xb7f1f0`, `0xbb0860`, `0xc02dc0` (a menus site),
-    `0x1de5df0`, `0x65a000`. To look at; they may just be short functions.
+  * It's the same compile with the Steam code taken out. **Of the 1457 bytes the checks
+    read, at 85 places, all match apart from the 54 addresses inside instructions**, each of
+    which points at the same thing; one of those is a call into the program's stubs for
+    library functions, reordered because GOG's doesn't link Steam. The code moved by 23
+    different offsets, so no single shift maps one build onto the other. Read-only data
+    reads the same at its new place.
   * It starts the same way: `testandlaunch` is the same file in both copies, ending
     in `./X4 "$@"` with `lib` on `LD_LIBRARY_PATH`. Nothing GOG-specific.
   * **Its profile folder is `EgoSoft/X4` itself** (one vanilla launch, 2026-11-05), where
@@ -614,5 +624,6 @@ level with the mark key, instead of a take's full command line.
 5. Phase 3's Qt 6 Widgets window over the core, with its art and help. **Code done
    2026-11-05**, with debug runs and bug reports from step 8; not yet played from.
 6. CI: tests, census, deb/rpm/zip/Arch packages on tags.
-7. Signature search, for hotfixes and GOG. The second binary is here (GOG's, above).
+7. Signature search, for hotfixes and GOG. **Code done 2026-11-06**, and required for the
+   next release (Patola: it must work fully on GOG). The features on GOG not yet played.
 8. `report` and the flight recorder; DLSS: read the tag, wire it, the RTX 5090 test.
