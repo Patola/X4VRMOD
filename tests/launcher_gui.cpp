@@ -11,7 +11,6 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
-#include <QDoubleSpinBox>
 #include <QFile>
 #include <QLabel>
 #include <QLineEdit>
@@ -61,7 +60,7 @@ static void shot(QWidget &w, const QString &path) {
 
 static std::vector<Check> good_rows() {
     return {row("x4", Status::Ok, "X4 found", "Steam, X4 9.00, build 23660954, /games/X4 Foundations"),
-            row("patches", Status::Ok, "The mod fits this X4", "all 8 features match its code"),
+            row("patches", Status::Ok, "The mod fits this X4", "all 9 features match its code"),
             row("steam", Status::Ok, "Steam running"),
             row("running", Status::Ok, "X4 not running yet"),
             row("gamescope", Status::Ok, "gamescope installed", "3.17.0"),
@@ -100,7 +99,7 @@ static void test_play(Window &w, const QString &shots) {
     }
     auto *running = w.findChild<QLabel *>("row-running");
     check(running && running->toolTip().contains("already running"), "...each its own");
-    for (const char *name : {"game", "eye", "upscaler", "ipd", "debug", "flatscreen", "report"}) {
+    for (const char *name : {"game", "eye", "upscaler", "debug", "flatscreen", "report"}) {
         auto *field = w.findChild<QWidget *>(name);
         check(field && !field->toolTip().isEmpty(), std::string(name) + " explains itself on hover");
     }
@@ -275,12 +274,7 @@ static void test_eye_rule(Window &w, const std::string &home) {
     eye->setCurrentIndex(eye->findData(0));
     check(eye->currentData().toInt() == 2816, "Custom with no answer goes back");
 
-    auto *ipd = w.findChild<QDoubleSpinBox *>("ipd");
-    check(ipd && ipd->value() == 64.0, "eye distance starts at the mod's 64 mm");
-    ipd->setValue(63.5);
-    check(load_profile(profile_path(home)).get("ipd") == "0.0635", "63.5 mm is saved in metres");
-    ipd->setValue(64.0);
-    check(load_profile(profile_path(home)).get("ipd").empty(), "the default isn't written down");
+    check(!w.findChild<QWidget *>("ipd"), "eye distance isn't asked for: it comes from the headset");
     check(!w.findChild<QCheckBox *>("lean"), "lean isn't a choice any more");
 }
 

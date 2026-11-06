@@ -13,6 +13,7 @@
 #include "../injector/x4vr_extview.hpp"
 #include "../injector/x4vr_fieldab.hpp"
 #include "../injector/x4vr_foot.hpp"
+#include "../injector/x4vr_loadart.hpp"
 #include "../injector/x4vr_menus.hpp"
 #include "../injector/x4vr_shadowfov.hpp"
 #include "../injector/x4vr_uimouse.hpp"
@@ -52,6 +53,7 @@ int main(int argc, char **argv) {
     all(aimpick::verify_sites(rd, &bad), "aimpick");
     all(menus::verify_sites(rd, &bad), "menus");
     all(csmfit::verify_sites(rd, &bad), "csmfit");
+    all(loadart::verify_sites(rd, &bad), "loadart");
     all(shadowfov::verify_sites(rd, &bad), "shadowfov");
     all(fieldab::verify_sites(rd, &bad), "fieldab");
     for (const auto &[va, n] : reads)

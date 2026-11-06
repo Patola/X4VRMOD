@@ -26,8 +26,9 @@ static void usage(FILE *f) {
             "      play. With COMMAND it wraps it: Steam's launch options use\n"
             "      `x4vrmod run %%command%%`.\n"
             "  x4vrmod launch-options           the lines for Steam and a terminal\n"
-            "  x4vrmod config [list | get KEY | set KEY VALUE]\n"
-            "      eye, upscaler, ipd, fov, game, env.NAME\n"
+            "  x4vrmod config [list | get KEY | set KEY VALUE | unset KEY]\n"
+            "      eye, upscaler, ipd, fov, game, env.NAME. ipd overrides the headset's\n"
+            "      eye distance, in metres: 0.0635 is 63.5 mm\n"
             "  x4vrmod locate [--all]           the X4 program that would run; --all: every copy found\n"
             "  x4vrmod probe xr [--verbose]     ask the VR runtime (always asks)\n"
             "  x4vrmod probe vulkan             what the GPUs offer\n"
@@ -236,6 +237,14 @@ static int cmd_config(int argc, char **argv) {
         if (it == p.values.end())
             return 1;
         printf("%s\n", it->second.c_str());
+        return 0;
+    }
+    if (what == "unset" && argc == 4) {
+        // Back to what it is when never set: for ipd, the headset's.
+        if (p.values.erase(argv[3]) && !save_profile(path, p)) {
+            fprintf(stderr, "x4vrmod config: couldn't write %s\n", path.c_str());
+            return 2;
+        }
         return 0;
     }
     if (what == "set" && argc == 5) {

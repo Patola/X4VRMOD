@@ -5402,14 +5402,20 @@ float assumed_proj_near() {
     return v;
 }
 
-// The interpupillary distance in metres. Ours, not X4's -- this is the one
-// number in the shear that is a choice rather than a measurement, which is
-// exactly why it stays a baked constant when sx no longer can.
+// The interpupillary distance baked into the modules, in metres. Ours, not X4's:
+// X4VR_IPD if it's set by hand, else a fixed number the headset's own then scales
+// (scene_ipd). Fixed, not remembered from the last run, so the patched modules stay
+// byte for byte the same and X4's pipeline cache stays good when the dial moves.
 float configured_ipd() {
-    static const float v =
-        getenv("X4VR_IPD") ? strtof(getenv("X4VR_IPD"), nullptr) : 0.064f;
+    static const float v = [] {
+        const char *e = getenv("X4VR_IPD");
+        return e && *e ? strtof(e, nullptr) : 0.064f;
+    }();
     return v;
 }
+
+// The headset's eye distance over the baked one, once it has reported one.
+std::atomic<float> g_ipd_scale{1.0f};
 
 // X4VR_PROJ_LIVE: read sx from X4's camera block in the shader instead of
 // baking it. Off by default until a run proves it, so the tagged state is one
@@ -8359,7 +8365,8 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
                       : (force_on ? forced
                                   : x4vr::roll_compensation_deg(head_roll));
         const float weight_used = !ab_armed ? 1.0f : (force_on ? 1.0f : roll_weight);
-        x4vr::pose_set_roll(g_pose.value, roll_used, weight_used);
+        x4vr::pose_set_roll(g_pose.value, roll_used, weight_used,
+                            g_ipd_scale.load(std::memory_order_relaxed));
         // Task #74, written AFTER the roll so the ordering is stated rather
         // than inherited: pose_set_roll no longer clears z/w, but a reader
         // should not have to know that to see that both survive.
@@ -14794,6 +14801,79 @@ void vr_finish_blit() {
     }
 }
 
+// The distance the world is drawn with this frame. The baked number alone is right
+// only for what doesn't read the pose block: a module that fell back to the baked
+// matrix (baked-sx, none in X4 9.00) and the canvas, whose offset at 1000 m is under
+// a thousandth of a pixel whichever it is.
+static float scene_ipd() {
+    return configured_ipd() * g_ipd_scale.load(std::memory_order_relaxed);
+}
+
+// Each located frame: the world takes the distance between the headset's eyes, so
+// it's right from the first frame and follows the headset's dial. X4VR_IPD set by hand
+// outranks it. The pose channel comes up around the first frames, and asked but not
+// up yet is not a fault: the next frame tries again.
+static void ipd_from_headset(float meas) {
+    static bool said = false;
+    const float baked = configured_ipd();
+    const char *hand = getenv("X4VR_IPD");
+    if (hand && *hand) {
+        if (!said) {
+            said = true;
+            X4VR_LOG("ipd: runtime reports %.4f m between the eyes; the scene is "
+                     "sheared with X4VR_IPD=%.4f, set by hand — %+.1f%%. The quad's "
+                     "stereo comes from the runtime's number and the scene's from "
+                     "the knob, so a difference here is a disagreement the canvas "
+                     "distance cannot fix",
+                     meas, baked,
+                     baked > 0.0f ? 100.0f * (meas - baked) / baked : 0.0f);
+        }
+        return;
+    }
+    if (!roll_stereo_enabled() || !pose_wanted() ||
+        g_offaxis_on.load(std::memory_order_relaxed)) {
+        if (!said) {
+            said = true;
+            X4VR_LOG("ipd: runtime reports %.4f m between the eyes, and the scene "
+                     "stays at %.4f: only the pose block's roll slot can carry it "
+                     "to the shaders, and this run has %s",
+                     meas, baked,
+                     g_offaxis_on.load(std::memory_order_relaxed)
+                         ? "the off-axis affine on"
+                         : "X4VR_POSE or X4VR_ROLL_STEREO off");
+        }
+        return;
+    }
+    if (!pose_active())
+        return;
+    if (!x4vr::ipd_plausible(meas)) {
+        if (!said) {
+            said = true;
+            X4VR_LOG("ipd: runtime reports %.4f m between the eyes, which no eyes "
+                     "are; not believed, the scene stays at %.4f",
+                     meas, scene_ipd());
+        }
+        return;
+    }
+    static float cur = 0.0f, logged = 0.0f;
+    static double logged_at = -1.0;
+    if (!(std::fabs(meas - cur) < x4vr::kIpdStep)) {
+        cur = meas;
+        g_ipd_scale.store(meas / baked, std::memory_order_relaxed);
+    }
+    // At most once a second: a dial goes through many values on its way.
+    struct timespec ts {};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    const double now = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+    if (cur != logged && (logged_at < 0.0 || now - logged_at >= 1.0)) {
+        logged = cur;
+        logged_at = now;
+        X4VR_LOG("ipd: the scene follows the headset: %.4f m between the eyes (the "
+                 "shaders' %.4f scaled by %.4f through the pose block)",
+                 cur, baked, cur / baked);
+    }
+}
+
 void vr_thread() {
     double last = 0.0;
     auto now = [] {
@@ -14948,38 +15028,17 @@ void vr_thread() {
                 g_vrs.head_z.store(0.5f * (p0.z + p1.z),
                                    std::memory_order_relaxed);
                 g_vrs.head_valid.store(1, std::memory_order_release);
-                // **The runtime's OWN eye separation, against the one we baked
-                // the scene with. Nothing has ever compared these.**
-                //
-                // X4VR_IPD sets the shear that gives the SCENE its stereo. The
-                // UI quad has no shear: the runtime derives its stereo from
-                // these two positions. So the two layers are separated by two
-                // different numbers, and if they disagree the UI can never sit
-                // convincingly in front of the scene at any distance -- which
-                // is what "the eye separation still feels wrong, slightly
-                // better further away" describes in takes 243a and 243b.
-                //
-                // This is a real comparison and not a guard that can only
-                // agree: one side is a pose the runtime measured from the
-                // headset, the other is a number from the environment. They
-                // have no common ancestor.
-                static bool said_ipd = false;
-                if (!said_ipd) {
-                    said_ipd = true;
-                    const float ex = p1.x - p0.x, ey = p1.y - p0.y,
-                                ez = p1.z - p0.z;
-                    const float meas =
-                        std::sqrt(ex * ex + ey * ey + ez * ez);
-                    const float cfg = configured_ipd();
-                    X4VR_LOG("ipd: runtime reports %.4f m between the eyes; "
-                             "the scene is sheared with X4VR_IPD=%.4f — "
-                             "%+.1f%%. The quad's stereo comes from the "
-                             "runtime's number and the scene's from the knob, "
-                             "so a difference here is a disagreement the "
-                             "canvas distance cannot fix",
-                             meas, cfg,
-                             cfg > 0.0f ? 100.0f * (meas - cfg) / cfg : 0.0f);
-                }
+                // **The runtime's OWN eye separation.** The UI quad has no
+                // shear: the runtime derives its stereo from these two
+                // positions. So the scene follows them too (X4VR_IPD set by
+                // hand aside), or the two layers are separated by two different
+                // numbers and the UI can never sit convincingly in front of the
+                // scene at any distance -- which is what "the eye separation
+                // still feels wrong, slightly better further away" describes in
+                // takes 243a and 243b.
+                ipd_from_headset(std::sqrt((p1.x - p0.x) * (p1.x - p0.x) +
+                                           (p1.y - p0.y) * (p1.y - p0.y) +
+                                           (p1.z - p0.z) * (p1.z - p0.z)));
                 // **The inverse neck model, and take 231 is why it exists.**
                 //
                 // The eye midpoint is not the head's rotation centre: it sits
@@ -15539,7 +15598,7 @@ void vr_thread() {
                 // compositor to correct a difference that is not in the image.
                 if (declare_rendered_pos() &&
                     g_reye.valid.load(std::memory_order_acquire)) {
-                    const float half = 0.5f * configured_ipd();
+                    const float half = 0.5f * scene_ipd();
                     const x4vr::HeadShift off = x4vr::head_to_world(
                         q[0], q[1], q[2], q[3],
                         (e == 0 ? -half : half) +

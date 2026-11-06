@@ -220,7 +220,8 @@ std::string profile_set(Profile &p, const std::string &key, const std::string &v
     }
     if (key == "ipd") {
         if (!number(0.04, 0.09))
-            return "error: ipd is in metres, like 0.064";
+            return "error: ipd is in metres, like 0.0635. `x4vrmod config unset ipd` goes "
+                   "back to the headset's";
     } else if (key == "fov") {
         if (!number(0.5, 2.5))
             return "error: fov is X4's field of view, like 1.4917";

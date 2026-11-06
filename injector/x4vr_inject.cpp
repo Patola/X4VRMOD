@@ -54,6 +54,7 @@ extern char **environ;
 #include "x4vr_foot.hpp"
 #include "x4vr_extview.hpp"
 #include "x4vr_aimpick.hpp"
+#include "x4vr_loadart.hpp"
 #include "x4vr_pause.hpp"
 #include "x4vr_ptrwatch.hpp"
 #include "x4vr_uimouse.hpp"
@@ -1220,6 +1221,7 @@ static void foot_patch_at_start();   // X4VR_HEADLOOK_FOOT, with foot_tick
 static void extview_patch_at_start(); // X4VR_HEADLOOK_EXTERNAL
 static void aimpick_patch_at_start(); // X4VR_STEER_PICK
 static void uimouse_patch_at_start(); // X4VR_HUD_MOUSE
+static void loadart_patch_at_start(); // X4VR_LOADING_ART
 
 __attribute__((constructor)) static void x4vr_inject_init() {
     char exe[256] = "?";
@@ -1244,6 +1246,8 @@ __attribute__((constructor)) static void x4vr_inject_init() {
         aimpick_patch_at_start();
         // X4's UI mouse at the drawn HUD: the same rule.
         uimouse_patch_at_start();
+        // The mod's loading screen: before X4 picks its picture.
+        loadart_patch_at_start();
     }
     // Task #68: the parsed clamp, once X4 has had time to parse it. A delay
     // rather than a hook, because the parse has no seam we can name -- and if
@@ -3882,6 +3886,9 @@ struct CamWrite {
     // centred, and the writes that did it -- kept apart from `writes`, which
     // the scorer reads as the head's.
     uint64_t centre_periods = 0, centre_writes = 0;
+    // Ticks head-look steered in the pilot seat, in the cockpit view. The scorer
+    // can't tell a run that never sat down from a lean that never started without it.
+    uint64_t seated_ticks = 0;
     float yaw = 0.f, pitch = 0.f;
     bool have = false;
     uintptr_t armed_cam = 0;
@@ -4148,13 +4155,15 @@ static void camwrite_report(bool final) {
                  g_camwrite.sway_run_deg, g_camwrite.sway_run_m);
     X4VR_LOG("headlook write%s: %llu write(s), %llu failed, %llu refused "
              "tick(s) | last written yaw %.2f pitch %.2f | MOUSELOOK pressed "
-             "%llu time(s) | menu centring %llu period(s) %llu write(s)%s",
+             "%llu time(s) | menu centring %llu period(s) %llu write(s) | seated "
+             "steering %llu tick(s)%s",
              final ? " (final)" : "", (unsigned long long)g_camwrite.writes,
              (unsigned long long)g_camwrite.failed,
              (unsigned long long)g_camwrite.refused, g_camwrite.yaw,
              g_camwrite.pitch, (unsigned long long)g_camwrite.mouselook_downs,
              (unsigned long long)g_camwrite.centre_periods,
-             (unsigned long long)g_camwrite.centre_writes, sway);
+             (unsigned long long)g_camwrite.centre_writes,
+             (unsigned long long)g_camwrite.seated_ticks, sway);
     g_camwrite.sway_deg = g_camwrite.sway_m = 0.f;
 }
 
@@ -4875,6 +4884,28 @@ struct AimPatch {
 AimPatch g_aimpatch;
 x4vr::aimpick::Slot g_aimslot;
 } // namespace
+
+static void loadart_patch_at_start() {
+    using namespace x4vr::loadart;
+    if (!x4vr::env_on("X4VR_LOADING_ART", false))
+        return;
+    auto rd = [](uintptr_t va, void *o, size_t n) { return x4_read(va, o, n); };
+    uintptr_t bad = 0;
+    char err[200] = "";
+    if (!verify_sites(rd, &bad))
+        snprintf(err, sizeof err, "the picture lookup's code at %#lx differs from X4 9.00",
+                 (unsigned long)bad);
+    else if (x4vr::foot::patch_code(x4vr::reloc::va(kPatch), &kPatched, 1, err, sizeof err))
+        err[0] = 0;
+    else if (!err[0])
+        snprintf(err, sizeof err, "the byte couldn't be written");
+    if (err[0]) {
+        X4VR_LOG("loadart: patch REFUSED — %s. X4 shows its own loading screen.", err);
+        return;
+    }
+    X4VR_LOG("loadart: PATCHED — X4's loading screen (0x202317b) may come from any extension "
+             "in load order, not only Egosoft's; ours loads after the DLCs");
+}
 
 static void aimpick_patch_at_start() {
     using namespace x4vr::aimpick;
@@ -7337,6 +7368,8 @@ void headlook_tick() {
     // On foot only while the write is actually ours this tick: that is when
     // the mouse's pitch is zeroed and the layer declares the head part.
     const bool foot_now = on_foot && steering;
+    if (write_mode && steering && cockpit && !on_foot && !ext_declared)
+        g_camwrite.seated_ticks++;
     g_on_foot.store(foot_now, std::memory_order_relaxed);
     g_off_seat.store(on_foot, std::memory_order_relaxed);
     if (x4vr::Shared *sh = x4vr_shared_state())

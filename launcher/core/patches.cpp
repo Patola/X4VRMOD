@@ -23,6 +23,7 @@
 #include "../../injector/x4vr_csmfit.hpp"
 #include "../../injector/x4vr_extview.hpp"
 #include "../../injector/x4vr_foot.hpp"
+#include "../../injector/x4vr_loadart.hpp"
 #include "../../injector/x4vr_menus.hpp"
 #include "../../injector/x4vr_uimouse.hpp"
 
@@ -234,6 +235,9 @@ std::vector<PatchResult> check_patches(const VaReader &read) {
 
     ok = csmfit::verify_sites(rd, &bad);
     group("shadows", "The shadow fix", ok, bad);
+
+    ok = loadart::verify_sites(rd, &bad);
+    group("loadart", "The mod's loading screen", ok, bad);
 
     return out;
 }

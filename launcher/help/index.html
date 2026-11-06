@@ -100,12 +100,18 @@ and coming back to 3200 or less returns to None only if the launcher chose it.</
 
 <a name="ipd"></a>
 <h2>Eye distance</h2>
-<p>How far apart the two eye images are taken, which sets how big the world feels. The
-default of 64 mm suits most people. If things feel too small or too large, try your own
-eye distance, which an optician or a phone app can measure.</p>
-<p><b>It isn't read from the headset yet.</b> The mod builds this distance into the game's
-shaders as it starts, before the headset would report it. Changing it needs a new start
-of the game.</p>
+<p>There's nothing to set: the mod takes the distance between your eyes from the headset,
+from the first frame on. Turn your headset's own IPD adjustment and the world follows it
+while you play.</p>
+<p><b>To override it,</b> if the world feels too small or too large, give your own distance
+in metres. An optician or a phone app can measure it. It takes effect the next time you
+start the game, and stays until you take it off:</p>
+<pre>x4vrmod config set ipd 0.0635</pre>
+<p>That one is 63.5 mm. To go back to the headset's:</p>
+<pre>x4vrmod config unset ipd</pre>
+<p>While an override is set, the world no longer follows the headset's adjustment. If the
+headset ever reports a distance no eyes could be (outside 50 to 80 mm), the mod doesn't believe
+it, keeps the last good one or else 64 mm, and says so in its log.</p>
 
 <a name="play"></a>
 <h2>The Play button</h2>

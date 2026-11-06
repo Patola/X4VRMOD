@@ -23,6 +23,7 @@
 #include "../injector/x4vr_csmfit.hpp"
 #include "../injector/x4vr_extview.hpp"
 #include "../injector/x4vr_foot.hpp"
+#include "../injector/x4vr_loadart.hpp"
 #include "../injector/x4vr_menus.hpp"
 #include "../injector/x4vr_uimouse.hpp"
 #include "x4vr_launcher.hpp"
@@ -884,6 +885,7 @@ static void test_real_x4() {
         {"aimpick", aimpick::kLive.va},
         {"menus", menus::kConversation.va},
         {"shadows", csmfit::kSites[0].site.va},
+        {"loadart", loadart::kCall.va},
     };
     check(sites.size() == base.size(), "patches: this test covers every group");
     for (const PatchResult &r : base) {

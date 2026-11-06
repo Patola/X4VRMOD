@@ -89,7 +89,7 @@ if [ -z "$GOGX" ]; then
     echo "skip  no GOG copy of X4: the other build's cases are unchecked"
 else
     out=$("$CLI" probe x4 "$GOGX"); rc=$?
-    [ "$rc" = 0 ] && [ "$(grep -c '^ok ' <<<"$out")" = 8 ] && ok "GOG: all 8 features fit" || bad "GOG: $out"
+    [ "$rc" = 0 ] && [ "$(grep -c '^ok ' <<<"$out")" = 9 ] && ok "GOG: all 9 features fit" || bad "GOG: $out"
     "$CLI" probe x4 "$GOGX" --map | grep -q '^found [0-9]* missing 0$' && ok "GOG: every block is found" || bad "GOG: a block is missing"
     "$CLI" probe x4 "$X4" --map | awk '$1 == "code" || $1 == "data" { if ($3 != 0) m = 1 } END { exit m }' \
         && ok "Steam: nothing is moved" || bad "Steam: something moved"

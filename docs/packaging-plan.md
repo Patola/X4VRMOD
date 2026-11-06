@@ -171,7 +171,7 @@ binary is missing.
 * **GOG's X4 9.00, measured 2026-11-05 (never launched, binary only).** Heroic puts
   it at `<install_path>/game/X4`, and it doesn't link `libsteam_api`.
   * Not byte-identical: the same 28,644 exports, 53 KB less code, and all 8 feature
-    groups differ. So today it's amber with every feature off.
+    groups of that day differ, so without common/x4vr_reloc.hpp every feature is off.
   * It's the same compile with the Steam code taken out. **Of the 1457 bytes the checks
     read, at 85 places, all match apart from the 54 addresses inside instructions**, each of
     which points at the same thing; one of those is a call into the program's stubs for
@@ -243,8 +243,9 @@ check and action exists once, in the core; the GUI only displays it.
     instance that will not create (no runtime running) versus a system that
     is not available (runtime up, no headset).
   * Free space for logs, in debug mode only.
-* **IPD from the headset** where the runtime reports the eye poses, instead of
-  the fixed 0.064 m. The setting stays as an override.
+* **IPD from the headset,** done 2026-11-06. `X4VR_IPD` unset: the world takes the distance
+  between the eyes the runtime locates, each frame, through the pose block's roll slot. The
+  setting stays as an override, baked as before.
 
 ## Phase 3 — `x4vrmod-launcher`, the Qt 6 Widgets window
 
@@ -263,8 +264,8 @@ Egosoft):
     | Upscaler                       | (ok) Steam running                  |
     | [None (full resolution)    v]  | (ok) gamescope installed     3.17.0 |
     |                                | (x)  Headset not connected  [Retry] |
-    | Eye distance                   | (ok) Vulkan layer installed  v0.9.9 |
-    | [64.0 mm                   ^]  | (ok) Mod installed                  |
+    |                                | (ok) Vulkan layer installed  v0.9.9 |
+    |                                | (ok) Mod installed                  |
     |----------------------------------------------------------------------|
     | [Help] [Launch options] [Report a bug] [More v]  [ ] Debug log [PLAY]|
     |                                                  [ ] Flatscreen      |
@@ -300,9 +301,13 @@ Egosoft):
     the mod is the only difference: no script of ours, no preload, no layer, and the
     extension stays off by its manifest's `enabled="0"`. Play goes green with only X4,
     Steam and "not running" counted; the other rows grey out.
-* **Eye distance is manual for now:** the mock's "Automatic, from headset" needs layer work.
-  `configured_ipd()` goes into shear constants while pipelines are built, and OpenXR only
-  reports it with a session.
+* **Eye distance isn't asked for** (Patola, 2026-11-06): it comes from the headset.
+  `configured_ipd()` goes into the shaders while X4 creates them, about 8 ms before a session
+  can report it, and that race can't be waited out from inside the loader (takes 166b-168b). So
+  the number baked stays fixed, which also keeps X4's pipeline cache good when the dial moves,
+  and every world shader multiplies its eye offset by the pose block's roll slot anyway: the
+  layer scales that pair by headset / baked, and the deferred passes undo the same pair. No
+  module changes. `x4vrmod config set ipd` overrides it, baked as before, and `unset` clears it.
 * **Launch options:** copyable Steam line (`x4vrmod run %command%`) and terminal
   line, with a picture of where they go in Steam.
 * **Help:** `QTextBrowser` over HTML and PNGs in the data directory. Each section

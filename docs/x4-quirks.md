@@ -29960,6 +29960,17 @@ Traps it left in the code:
   number of pages.
 
 **X4's loading screen** is `assets/textures/ui/loadingscreens/x4_<shape>.jpg`, one per screen
-shape, and the last extension in load order wins, as Timelines' art beats the base game's. `logo.bmp`
-is something else: the small splash window SDL opens first.
+shape, and the last extension in load order wins, as Timelines' art beats the base game's, **but
+only among Egosoft's**: the picker's call asks the lookup to skip any extension whose record has
+`egosoftextension` clear (+0xc8, named by X4's own Lua export). So a mod's copy is ignored however
+it's ordered, which takes 408 and 409 showed and I had assumed away. `injector/x4vr_loadart.hpp`
+lifts that with one byte. In VR X4's own window is 2816x2816, so it picks `x4_1_1`. `logo.bmp` is
+something else: the small splash window SDL opens first.
+
+**The eye distance can't be baked from the headset, and doesn't need to be.** Modules are patched
+from about a millisecond after X4's device and the runtime needs about 8 ms, and takes 166b-168b
+proved it can't be waited for from inside the loader. But every world shader computes its eye offset
+as `d * (x, y)` of the pose block's roll slot, and the deferred passes undo the same `d * (x, y)`,
+all linear, so the pair's length is a live scale on the eye distance with no module changed. Takes
+408 and 409 read 62.9 and 63.8 mm from one headset with its dial moved between them.
 

@@ -19,7 +19,6 @@
 
 class QCheckBox;
 class QComboBox;
-class QDoubleSpinBox;
 class QLabel;
 class QPushButton;
 class QThread;
@@ -72,7 +71,6 @@ private:
     void gameChosen();
     void eyeChosen();
     void upscalerChosen();
-    void ipdChanged(double mm);
     void flatToggled();
     void browse();
 
@@ -113,7 +111,6 @@ private:
 
     QComboBox *m_gameBox = nullptr, *m_eyeBox = nullptr, *m_upBox = nullptr;
     QLabel *m_renders = nullptr, *m_status = nullptr;
-    QDoubleSpinBox *m_ipd = nullptr;
     QCheckBox *m_debug = nullptr, *m_flat = nullptr;
     QPushButton *m_play = nullptr;
     QToolButton *m_vrStart = nullptr;

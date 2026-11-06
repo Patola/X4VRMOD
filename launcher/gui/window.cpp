@@ -7,7 +7,6 @@
 #include <QComboBox>
 #include <QDesktopServices>
 #include <QDir>
-#include <QDoubleSpinBox>
 #include <QEvent>
 #include <QFile>
 #include <QFileDialog>
@@ -191,17 +190,6 @@ QWidget *Window::buildSettings() {
     m_renders->setWordWrap(true);
     v->addWidget(m_renders);
 
-    v->addSpacing(4);
-    m_ipd = new QDoubleSpinBox(w);
-    m_ipd->setObjectName("ipd");
-    m_ipd->setRange(50.0, 80.0);
-    m_ipd->setDecimals(1);
-    m_ipd->setSingleStep(0.5);
-    m_ipd->setSuffix(" mm");
-    setting("Eye distance", m_ipd,
-            "How far apart the two eye images are taken, which sets how big the world feels. 64 "
-            "mm suits most people. It isn't read from the headset yet.");
-    connect(m_ipd, &QDoubleSpinBox::valueChanged, this, [this](double mm) { ipdChanged(mm); });
     v->addStretch(1);
     return w;
 }
@@ -524,9 +512,6 @@ void Window::syncSettings() {
         lines << q(en);
     m_renders->setText(lines.join(' '));
     m_renders->setVisible(!lines.isEmpty());
-
-    const std::string ipd = m_profile.get("ipd");
-    m_ipd->setValue(ipd.empty() ? 64.0 : atof(ipd.c_str()) * 1000.0);
     m_syncing = false;
 }
 
@@ -570,23 +555,12 @@ void Window::upscalerChosen() {
     fitHeight();
 }
 
-void Window::ipdChanged(double mm) {
-    if (m_syncing)
-        return;
-    if (std::abs(mm - 64.0) < 0.05)
-        m_profile.values.erase("ipd");
-    else
-        profile_set(m_profile, "ipd", QString::number(mm / 1000.0, 'f', 4).toStdString());
-    saveProfile();
-}
-
 void Window::flatToggled() {
     // Nothing of the mod's applies to a flat game, so none of it looks as if it does.
     const bool flat = m_flat->isChecked();
     m_debug->setEnabled(!flat);
     m_eyeBox->setEnabled(!flat);
     m_upBox->setEnabled(!flat);
-    m_ipd->setEnabled(!flat);
     for (const char *id : kRowIds)
         updateRow(id);
     updatePlay();

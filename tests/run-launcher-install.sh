@@ -58,8 +58,9 @@ int main(int c, char **v) {
     const char *s = getenv("SteamAppId");
     const char *l = getenv("X4VR_LOG");
     const char *p = getenv("X4VR_POSELOG");
-    printf("FAKE args=%d steam=%s x4vr_h=%s log=%s poselog=%s self=%s\n", c - 1, s ? s : "unset",
-           getenv("X4VR_H"), l ? l : "unset", p ? p : "unset", v[0]);
+    printf("FAKE args=%d steam=%s x4vr_h=%s x4vr_ipd=%s log=%s poselog=%s self=%s\n", c - 1, s ? s : "unset",
+           getenv("X4VR_H"), getenv("X4VR_IPD") ? getenv("X4VR_IPD") : "unset",
+           l ? l : "unset", p ? p : "unset", v[0]);
     return 0;
 }
 SRC
@@ -136,6 +137,16 @@ $I config set upscaler none >/dev/null
 out=$(env X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $I run --game "$G" 2>&1 | grep 'x4vr-launch: .* setting')
 grep -q 'eye 4224, upscaler none' <<<"$out" && ok "run: unselected, it stays off" || bad "unselected: $out"
 $I config set eye 3072 >/dev/null
+# The eye distance is the headset's unless it's overridden, so nothing may set it on its way.
+out=$(env -u X4VR_IPD X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $I run --game "$G" 2>/dev/null)
+grep -q 'x4vr_ipd=unset ' <<<"$out" && ok "run: eye distance left to the headset" || bad "ipd default: $out"
+$I config set ipd 0.0635 >/dev/null
+out=$(env -u X4VR_IPD X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $I run --game "$G" 2>/dev/null)
+grep -q 'x4vr_ipd=0.0635 ' <<<"$out" && ok "run: config set ipd overrides it" || bad "ipd set: $out"
+$I config unset ipd || bad "config unset failed"
+out=$(env -u X4VR_IPD X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $I run --game "$G" 2>/dev/null)
+grep -q 'x4vr_ipd=unset ' <<<"$out" && ok "run: config unset ipd goes back to the headset's" || bad "ipd unset: $out"
+$I config unset ipd && ok "config unset: nothing to unset is fine" || bad "config unset twice"
 # Two copies: what's asked for must be what runs, whatever the environment says.
 cp -r "$G" "$T/game2"
 E="env HOME=$H XDG_CONFIG_HOME= XDG_STATE_HOME= X4VR_GAME=$T/game2/X4 $H/.local/share/x4vrmod/x4vrmod"

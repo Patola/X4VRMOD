@@ -476,11 +476,17 @@ inline float roll_compensation_deg(float head_roll_deg) {
 // guard yaw uses -- at the pole yaw and roll are one rotation and the split
 // between them is arbitrary, so fading roll there with a second predicate would
 // be a second place to get it wrong. Weight 0 leaves (1, 0): no rotation.
-inline void pose_set_roll(PoseBlock &p, float roll_deg, float weight = 1.0f) {
+//
+// `ipd_scale` is the headset's eye distance over the one the shaders were built
+// with. The vertex stage displaces the eye by d * (x, y) of this slot and the
+// deferred passes undo the same d * (x, y), so scaling the pair changes the eye
+// distance everywhere at once, with no module changed: see ipd_plausible.
+inline void pose_set_roll(PoseBlock &p, float roll_deg, float weight = 1.0f,
+                          float ipd_scale = 1.0f) {
     const float w = weight < 0.0f ? 0.0f : (weight > 1.0f ? 1.0f : weight);
     const float r = roll_deg * w * 0.01745329251994330f;
-    p.eye_ofs[0] = std::cos(r);
-    p.eye_ofs[1] = std::sin(r);
+    p.eye_ofs[0] = ipd_scale * std::cos(r);
+    p.eye_ofs[1] = ipd_scale * std::sin(r);
     // z and w are #74's, and this function no longer clears them. It used to,
     // when they were reserved -- and leaving that in would have made the head
     // shift vanish or survive depending on which of the two setters the layer
@@ -508,6 +514,19 @@ inline void pose_set_head_shift(PoseBlock &p, float tx, float ty,
     p.head_fwd[0] = tf;
 }
 
+
+// **The eye distance the headset reports, metres.** It reaches the world through
+// pose_set_roll's scale because it can't reach it any other way: the distance is
+// baked into each module as X4 creates it, a millisecond after its device, and the
+// runtime needs ~8 ms from a standing start and can't be waited for from inside the
+// loader (offaxis_target's note, takes 166b-168b). A number no eyes can be apart by,
+// from a runtime that hasn't tracked anything yet or simply says something odd, is
+// not believed: the world keeps the last good one, or the baked one if none came.
+inline bool ipd_plausible(float metres) {
+    return metres >= 0.050f && metres <= 0.080f;
+}
+// Below this a change is the runtime's float noise, not the headset's dial.
+constexpr float kIpdStep = 0.00005f;
 
 // Fill a PoseBlock from Euler angles in degrees, yaw about +y, pitch about
 // +x, roll about +z -- the same composition tools/headlook_clip.py uses, so

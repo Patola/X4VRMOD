@@ -302,6 +302,8 @@ int main(int argc, char **argv) {
         const float shifts[][2] = {{0.f, 0.f}, {0.021f, -0.013f}};
         const float fwds[] = {0.0f, 0.11f};
         const float scales[] = {1.0f, 3.5f};
+        // The headset's eye distance over the baked one (x4vr_view.hpp, pose_set_roll).
+        const float ipds[] = {1.0f, 0.9828f, 1.1f};
         const float poss[][3] = {{0.3f, -0.2f, 0.5f}, {-1.1f, 0.7f, 2.0f}};
         int checked = 0, failed_runs = 0;
         double worst = 0, worst_ref = 0, ctrl_worst = 0;
@@ -311,6 +313,7 @@ int main(int argc, char **argv) {
                 for (const auto &sh : shifts)
                     for (float f : fwds)
                         for (float sc : scales)
+                            for (float ipd : ipds)
                             for (const auto &p : poss)
                                 for (int view = 0; view < 2; view++) {
             // P: X4's convention. VW: a rigid view, here yaw 20 pitch -10
@@ -339,8 +342,7 @@ int main(int argc, char **argv) {
             const float I[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
             x4vr::PoseBlock pb = x4vr::pose_identity();
             const float phi = roll * 0.0174533f;
-            pb.eye_ofs[0] = cosf(phi);
-            pb.eye_ofs[1] = sinf(phi);
+            x4vr::pose_set_roll(pb, roll, 1.0f, ipd);
             pb.eye_ofs[2] = sh[0];
             pb.eye_ofs[3] = sh[1];
             pb.head_fwd[0] = f;
@@ -377,8 +379,8 @@ int main(int argc, char **argv) {
                 ref[r] = MVP[0 * 4 + r] * p[0] + MVP[1 * 4 + r] * p[1] +
                          MVP[2 * 4 + r] * p[2] + MVP[3 * 4 + r];
             const float d = view ? dr : dl;
-            ref[0] -= s[0] * d * cosf(phi) + s[0] * sh[0];
-            ref[1] -= s[1] * d * sinf(phi) + s[1] * sh[1];
+            ref[0] -= s[0] * d * ipd * cosf(phi) + s[0] * sh[0];
+            ref[1] -= s[1] * d * ipd * sinf(phi) + s[1] * sh[1];
             ref[3] -= f;
             double mag = 1.0;
             for (float v : ref)
@@ -480,6 +482,7 @@ int main(int argc, char **argv) {
             for (float roll : rolls)
                 for (const auto &sh : shifts)
                     for (float f : fwds)
+                        for (float ipd : {1.0f, 0.9828f, 1.1f})
                         for (const auto &v : pts)
                             for (int view = 0; view < 2; view++) {
             float P[16] = {}, Pinv[16];
@@ -490,9 +493,7 @@ int main(int argc, char **argv) {
             invert(P, Pinv);
             const float I[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
             x4vr::PoseBlock pb = x4vr::pose_identity();
-            const float phi = roll * 0.0174533f;
-            pb.eye_ofs[0] = cosf(phi);
-            pb.eye_ofs[1] = sinf(phi);
+            x4vr::pose_set_roll(pb, roll, 1.0f, ipd);
             pb.eye_ofs[2] = sh[0];
             pb.eye_ofs[3] = sh[1];
             pb.head_fwd[0] = f;
@@ -548,7 +549,7 @@ int main(int argc, char **argv) {
                     en = std::max(en, (double)fabsf(r_nofwd[k] - v[k]));
             }
             worst = std::max(worst, e);
-            if (roll != 0.0f || sh[0] != 0.0f || f != 0.0f)
+            if (roll != 0.0f || sh[0] != 0.0f || f != 0.0f || ipd != 1.0f)
                 ctrl_plain = std::max(ctrl_plain, ep);
             ctrl_nofwd = std::max(ctrl_nofwd, en);
             checked++;

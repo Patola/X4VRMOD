@@ -319,7 +319,8 @@ def main(path):
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import eye_stereo
         m_w = re.search(r"X4VR_RES=(\d+)x\d+", run or "")
-        m_i = re.search(r"X4VR_IPD=([\d.]+)", run or "")
+        m_i = (re.search(r"X4VR_IPD=([\d.]+)", run or "") or
+               re.search(r"ipd: the scene follows the headset: ([\d.]+) m", text))
         m_s = re.search(r"X4VR_PROJ_SX=([\d.]+)", run or "")
         # PROJ_SX rather than the measured scene sx: the dumps show what the
         # shear actually did, and for the modules that bake it that IS the
@@ -1266,7 +1267,9 @@ def main(path):
                 # at all: cam#0 is whichever camera drew first, and pricing
                 # stereo off the wrong camera is what put 1.3333 in the launcher
                 # for fifty takes.
-                m_ipd = re.search(r"X4VR_IPD=([\d.]+)", run or "")
+                m_ipd = (re.search(r"X4VR_IPD=([\d.]+)", run or "") or
+                         re.search(r"ipd: the scene follows the headset: ([\d.]+) m",
+                                   text))
                 mr = re.search(r"X4VR_RES=(\d+)x(\d+)", run or "")
                 if eye and m_ipd and mr:
                     ipd, w = float(m_ipd.group(1)), int(mr.group(1))
@@ -4804,6 +4807,9 @@ def main(path):
                       r"head 6dof: offset \((-?[\d.]+), (-?[\d.]+), "
                       r"(-?[\d.]+)\) m in the room", text)]
     h6_held = len(re.findall(r"head 6dof: offset .*HELD at the limit", text))
+    # The injector's count, not the layer's: None in a log from before it.
+    h6_seat = re.findall(r"\| seated steering (\d+) tick\(s\)", text)
+    h6_seated = int(h6_seat[-1]) if h6_seat else None
     if h6_asked or h6_on or h6_latch or h6_ref:
         print(f"head6  neutral {'latched' if h6_latch else 'NEVER latched'}; "
               f"{h6_on} period(s) ON, {h6_off} off; largest sampled offset "
@@ -4811,6 +4817,11 @@ def main(path):
               + (f"; {h6_held} sample(s) held at the limit" if h6_held else ""))
         if h6_ref:
             fails.append("X4VR_HEAD_6DOF REFUSED — " + h6_ref.group(1))
+        elif h6_asked and not h6_latch and h6_seated == 0:
+            # Take 408 played GOG's X4 on foot from start to end: nothing was
+            # asked of the lean, so its absence says nothing about it.
+            print("head6  head-look never steered in the pilot seat, so this "
+                  "run says nothing about leaning")
         elif h6_asked and not h6_latch:
             fails.append("X4VR_HEAD_6DOF=1 but the layer never latched a "
                          "neutral (head-look never steered in the cockpit)")
@@ -4819,6 +4830,48 @@ def main(path):
         if h6_on:
             print("head6  whether leaning moves the eye with the HUD staying "
                   "put, and clicks still lining up, is Patola's to say")
+
+    # **The eye distance** (the layer's ipd_from_headset). X4VR_IPD unset means
+    # the world takes the headset's, through the pose block; set, it's baked.
+    ipd_hand = re.search(r"\bX4VR_IPD=([\d.]+)", run or "")
+    ipd_follow = re.findall(r"ipd: the scene follows the headset: ([\d.]+) m", text)
+    ipd_fixed = re.search(r"ipd: runtime reports ([\d.]+) m between the eyes; the "
+                          r"scene is sheared with X4VR_IPD=([\d.]+)", text)
+    ipd_stays = re.search(r"ipd: runtime reports ([\d.]+) m between the eyes, "
+                          r"(and the scene stays at [\d.]+: .*|which no eyes are; "
+                          r"not believed, the scene stays at [\d.]+)", text)
+    if ipd_follow:
+        print(f"ipd     the scene follows the headset: {ipd_follow[0]} m"
+              + (f", then {len(ipd_follow) - 1} change(s), last {ipd_follow[-1]} m"
+                 if len(ipd_follow) > 1 else ""))
+        if ipd_hand:
+            fails.append(f"X4VR_IPD={ipd_hand.group(1)} was set by hand and the "
+                         "scene followed the headset anyway")
+    elif ipd_fixed:
+        print(f"ipd     set by hand: the scene at {ipd_fixed.group(2)} m, the "
+              f"headset says {ipd_fixed.group(1)} m")
+    elif ipd_stays:
+        print(f"ipd     the headset says {ipd_stays.group(1)} m, "
+              f"{ipd_stays.group(2)[:160]}")
+    elif not ipd_hand and "vr fov: runtime reports" in text:
+        fails.append("the headset was located and the scene never took its eye "
+                     "distance: the ipd line is missing")
+
+    # **The mod's loading screen** (injector/x4vr_loadart.hpp): one byte lets X4
+    # take the picture from a mod's extension. Gate on intent: asked means PATCHED.
+    # The log can't see which picture X4 then showed.
+    la_asked = bool(re.search(r"\bX4VR_LOADING_ART=1\b", run or ""))
+    la_patched = "loadart: PATCHED" in text
+    la_refused = re.search(r"loadart: patch REFUSED — (.*?)\. X4 shows", text)
+    if la_refused:
+        fails.append("X4VR_LOADING_ART=1 but the patch was refused: "
+                     + la_refused.group(1))
+    elif la_patched and not la_asked:
+        fails.append("the loading screen's patch went in with X4VR_LOADING_ART unset")
+    elif la_asked and not la_patched:
+        fails.append("X4VR_LOADING_ART=1 but no PATCHED line")
+    elif la_patched:
+        print("loadart  patched; whether the picture is ours is Patola's to say")
 
     # --- 6DOF option B's check: how near the eye X4's UI draws sit ---------
     #

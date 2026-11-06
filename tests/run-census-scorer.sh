@@ -1542,7 +1542,68 @@ want "head6: latched but never ON -> FAIL" /tmp/census-h6-never.log "FAIL|  - " 
 want "head6: never latched -> FAIL" /tmp/census-h6-base.log "FAIL|  - " "the layer never latched a neutral"
 { cat /tmp/census-h6-base.log; echo '[  999960.000] layer   head 6dof: REFUSED — it needs X4VR_POSE=1 and X4VR_ROLL_STEREO (the world shaders'"'"' head slot); pose OFF, roll stereo on. Nothing is moved or declared'; } > /tmp/census-h6-ref.log
 want "head6: refused -> FAIL" /tmp/census-h6-ref.log "FAIL|  - " "X4VR_HEAD_6DOF REFUSED — it needs X4VR_POSE=1"
+# Take 408: on foot from start to end. The injector's count tells it from a lean that broke.
+{ cat /tmp/census-h6-base.log; echo '[  999960.000] inject  headlook write (final): 900 write(s), 0 failed, 0 refused tick(s) | last written yaw 0.00 pitch 0.00 | MOUSELOOK pressed 0 time(s) | menu centring 0 period(s) 0 write(s) | seated steering 0 tick(s) | sway not read (no verified controller yet)'; } > /tmp/census-h6-foot.log
+want "head6: never sat down -> said" /tmp/census-h6-foot.log head6 "never steered in the pilot seat"
+if python3 tools/score_run.py /tmp/census-h6-foot.log 2>&1 | grep -qE "^  - .*6DOF"; then
+    bad "head6: never sat down -> FAILs"
+else
+    ok "head6: never sat down -> no FAIL"
+fi
+{ cat /tmp/census-h6-base.log; echo '[  999960.000] inject  headlook write (final): 900 write(s), 0 failed, 0 refused tick(s) | last written yaw 0.00 pitch 0.00 | MOUSELOOK pressed 0 time(s) | menu centring 0 period(s) 0 write(s) | seated steering 120 tick(s) | sway not read (no verified controller yet)'; } > /tmp/census-h6-sat.log
+want "head6: sat down, never latched -> FAIL" /tmp/census-h6-sat.log "FAIL|  - " "the layer never latched a neutral"
+if grep -qF '| seated "' injector/x4vr_inject.cpp && grep -qF '"steering %llu tick(s)%s"' injector/x4vr_inject.cpp; then
+    ok "head6: the seated count matches the injector's format"
+else
+    bad "head6: the seated count's format moved"
+fi
 absent "head6: not asked -> silent" "$BASE" head6
+
+# The eye distance (the layer's ipd_from_headset).
+for f in '"ipd: the scene follows the headset: %.4f m between the eyes (the "' '"ipd: runtime reports %.4f m between the eyes; the scene is "' '"ipd: runtime reports %.4f m between the eyes, and the scene "' '"ipd: runtime reports %.4f m between the eyes, which no eyes "'; do
+    if grep -qF "$f" layer/x4vr_layer.cpp; then
+        ok "ipd: the layer still prints $f"
+    else
+        bad "ipd: the layer's format moved: $f"
+    fi
+done
+ipdvr='[  999950.000] layer   vr fov: runtime reports eye0 l=-54.00 r=40.00 u=44.00 d=-55.00, eye1 l=-40.00 r=54.00 u=44.00 d=-55.00 deg'
+ipdf1='[  999950.100] layer   ipd: the scene follows the headset: 0.0629 m between the eyes (the shaders'"'"' 0.0640 scaled by 0.9828 through the pose block)'
+ipdf2='[  999960.100] layer   ipd: the scene follows the headset: 0.0638 m between the eyes (the shaders'"'"' 0.0640 scaled by 0.9969 through the pose block)'
+sed 's/ X4VR_IPD=[0-9.]*//' "$BASE" > /tmp/census-ipd-base.log
+{ cat /tmp/census-ipd-base.log; printf '%s\n' "$ipdvr" "$ipdf1"; } > /tmp/census-ipd-ok.log
+want "ipd: followed -> said" /tmp/census-ipd-ok.log ipd "the scene follows the headset: 0.0629 m"
+{ cat /tmp/census-ipd-base.log; printf '%s\n' "$ipdvr" "$ipdf1" "$ipdf2"; } > /tmp/census-ipd-dial.log
+want "ipd: the dial moved -> said" /tmp/census-ipd-dial.log ipd "then 1 change(s), last 0.0638 m"
+{ cat /tmp/census-ipd-base.log; printf '%s\n' "$ipdvr"; } > /tmp/census-ipd-never.log
+want "ipd: located, never followed -> FAIL" /tmp/census-ipd-never.log "FAIL|  - " "the scene never took its eye distance"
+{ cat /tmp/census-ipd-base.log; printf '%s\n' "$ipdvr" '[  999950.100] layer   ipd: runtime reports 0.0000 m between the eyes, which no eyes are; not believed, the scene stays at 0.0640'; } > /tmp/census-ipd-odd.log
+want "ipd: an odd number -> said" /tmp/census-ipd-odd.log ipd "which no eyes are"
+sed 's/env: run = /env: run = X4VR_IPD=0.0655 /' /tmp/census-ipd-base.log > /tmp/census-ipd-hand.log
+{ cat /tmp/census-ipd-hand.log; printf '%s\n' "$ipdvr" "$ipdf1"; } > /tmp/census-ipd-both.log
+want "ipd: by hand, followed anyway -> FAIL" /tmp/census-ipd-both.log "FAIL|  - " "set by hand and the scene followed"
+{ cat /tmp/census-ipd-hand.log; printf '%s\n' "$ipdvr" '[  999950.100] layer   ipd: runtime reports 0.0629 m between the eyes; the scene is sheared with X4VR_IPD=0.0655, set by hand — -4.0%.'; } > /tmp/census-ipd-fixed.log
+want "ipd: by hand -> said" /tmp/census-ipd-fixed.log ipd "set by hand: the scene at 0.0655 m, the headset says 0.0629 m"
+absent "ipd: no headset located -> silent" /tmp/census-ipd-base.log ipd
+
+# The mod's loading screen (x4vr_loadart.hpp).
+for f in '"loadart: PATCHED — X4'"'"'s loading screen' '"loadart: patch REFUSED — %s. X4 shows'; do
+    if grep -qF "$f" injector/x4vr_inject.cpp; then
+        ok "loadart: the injector still prints $f"
+    else
+        bad "loadart: the injector's format moved: $f"
+    fi
+done
+sed 's/env: run = /env: run = X4VR_LOADING_ART=1 /' "$BASE" > /tmp/census-la-base.log
+lapat='[  999950.000] inject  loadart: PATCHED — X4'"'"'s loading screen (0x202317b) may come from any extension in load order, not only Egosoft'"'"'s; ours loads after the DLCs'
+{ cat /tmp/census-la-base.log; echo "$lapat"; } > /tmp/census-la-ok.log
+want "loadart: patched -> said" /tmp/census-la-ok.log loadart "patched; whether the picture is ours"
+want "loadart: asked, no PATCHED line -> FAIL" /tmp/census-la-base.log "FAIL|  - " "X4VR_LOADING_ART=1 but no PATCHED line"
+{ cat /tmp/census-la-base.log; echo '[  999950.000] inject  loadart: patch REFUSED — the picture lookup'"'"'s code at 0x202317b differs from X4 9.00. X4 shows its own loading screen.'; } > /tmp/census-la-ref.log
+want "loadart: refused -> FAIL" /tmp/census-la-ref.log "FAIL|  - " "the patch was refused"
+{ cat "$BASE"; echo "$lapat"; } > /tmp/census-la-unasked.log
+want "loadart: patched unasked -> FAIL" /tmp/census-la-unasked.log "FAIL|  - " "patch went in with X4VR_LOADING_ART unset"
+absent "loadart: not asked -> silent" "$BASE" loadart
 
 # 6DOF option B's check: UI depths, per draw (take 364).
 if grep -qF '"ui depth (6dof B, per draw): %llu perspective UI "' layer/x4vr_layer.cpp; then

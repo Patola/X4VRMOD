@@ -15,7 +15,7 @@ the window come from `x4vr_test_launcher_gui --shots launcher/help`, the rest fr
                               --flat starts X4 by itself, a baseline with nothing of ours
     x4vrmod report            make a bug report to read and attach; nothing is sent
     x4vrmod launch-options    the lines to use for that
-    x4vrmod config set K V    eye, upscaler, ipd, fov, game, env.NAME
+    x4vrmod config set K V    eye, upscaler, ipd, fov, game, env.NAME; `unset K` clears one
     x4vrmod uninstall         takes the mod out; --all also deletes the VR settings
     x4vrmod probe x4 [PATH]   X4's version and which of the mod's patches fit
     x4vrmod probe xr          ask the VR runtime
@@ -38,6 +38,10 @@ under anything set explicitly, gives the run its own log, and execs
 `launch/x4vr-launch.sh`: one launch path, whichever way it was started. The mod remains
 the only creator of its `*-x4vrmod*` config files; the launcher only reports and
 deletes them.
+
+**Eye distance** comes from the headset, so the window doesn't ask for it.
+`x4vrmod config set ipd 0.0635` overrides it, in metres, and `x4vrmod config unset ipd` goes
+back to the headset's. The help says what each does.
 
 **What it won't touch.** X4's saves, `config.xml` and anything else of the player's.
 Uninstall only removes names it knows as its own, so a damaged install record can't

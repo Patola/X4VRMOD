@@ -1293,6 +1293,26 @@ int main() {
 
         // ---- #77's REGRESSION: the two stages must undo one another --------
         //
+        // The headset's eye distance rides the same two numbers: their length, with
+        // the angle left alone, and nothing at all when it's the baked one.
+        {
+            x4vr::PoseBlock p = x4vr::pose_identity();
+            x4vr::pose_set_roll(p, 30.0f);
+            check(std::fabs(std::hypot(p.eye_ofs[0], p.eye_ofs[1]) - 1.0f) < 1e-6f,
+                  "ipd: no scale leaves the unit vector every earlier run wrote");
+            const float a = std::atan2(p.eye_ofs[1], p.eye_ofs[0]);
+            x4vr::pose_set_roll(p, 30.0f, 1.0f, 0.9828f);
+            check(std::fabs(std::hypot(p.eye_ofs[0], p.eye_ofs[1]) - 0.9828f) < 1e-6f,
+                  "ipd: the scale is the pair's length");
+            check(std::fabs(std::atan2(p.eye_ofs[1], p.eye_ofs[0]) - a) < 1e-6f,
+                  "ipd: the scale doesn't turn the offset");
+            check(!x4vr::ipd_plausible(0.0f) && !x4vr::ipd_plausible(0.049f) &&
+                      !x4vr::ipd_plausible(0.081f) && !x4vr::ipd_plausible(NAN),
+                  "ipd: an untracked headset's or an odd number isn't believed");
+            check(x4vr::ipd_plausible(0.0629f) && x4vr::ipd_plausible(0.050f) &&
+                      x4vr::ipd_plausible(0.080f),
+                  "ipd: the numbers real headsets report are believed");
+        }
         // The vertex stage displaces the eye by `eye_offset_for_roll`; the
         // fragment stage undoes it with `compose_eye_untranslate`. Until this
         // case existed the second took a SCALAR, so when #77 taught the first

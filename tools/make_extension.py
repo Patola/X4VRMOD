@@ -6,9 +6,11 @@ holding X4's loading screen, redrawn with the mod's art and its version, build a
     tools/make_extension.py --src extension/x4vrmod --art launcher/art/loading-screen.png \\
         --version v0.9.9-12-g1f80757 --date 2026-11-06 --out build/extension/x4vrmod
 
-X4 stacks its extensions in load order and a later one's file wins, as Timelines' art
-beats the base game's. content.xml's optional dependencies put x4vrmod after the DLCs that
-ship these files. The extension is on only in VR sessions, so a flat game keeps X4's own.
+X4 goes through its extensions in load order and a later one's file wins, as Timelines' art
+beats the base game's, but for this picture it looks only at Egosoft's: the injector's
+X4VR_LOADING_ART lifts that (injector/x4vr_loadart.hpp). content.xml's optional dependencies
+put x4vrmod after the DLCs that ship these files. The extension is on only in VR sessions, so
+a flat game keeps X4's own.
 Sizes are X4's, one per screen shape. Without Pillow the pictures are left out and the rest
 is copied: nothing else in the mod needs them.
 """
