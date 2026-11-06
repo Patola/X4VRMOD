@@ -210,6 +210,7 @@ VulkanProbe vulkan_probe_here() {
         vkGetPhysicalDeviceFeatures2(d, &f2);
         GpuInfo g;
         g.name = p.deviceName;
+        g.vendor = p.vendorID;
         g.api_major = VK_API_VERSION_MAJOR(p.apiVersion);
         g.api_minor = VK_API_VERSION_MINOR(p.apiVersion);
         g.max_sets = p.limits.maxBoundDescriptorSets;
@@ -226,8 +227,8 @@ std::string vulkan_probe_format(const VulkanProbe &p) {
     s += "X4VRMOD_VK_DETAIL=" + one_line(p.detail) + "\n";
     for (const GpuInfo &g : p.gpus) {
         char b[96];
-        snprintf(b, sizeof b, "X4VRMOD_VK_GPU=%u %u %u %d %d ", g.api_major,
-                 g.api_minor, g.max_sets, g.multiview ? 1 : 0, g.discrete ? 1 : 0);
+        snprintf(b, sizeof b, "X4VRMOD_VK_GPU=%u %u %u %d %d %u ", g.api_major,
+                 g.api_minor, g.max_sets, g.multiview ? 1 : 0, g.discrete ? 1 : 0, g.vendor);
         s += b + one_line(g.name) + "\n";
     }
     return s;
@@ -240,8 +241,8 @@ VulkanProbe vulkan_probe_parse(const std::string &text) {
     for (const std::string &v : values_of(text, "X4VRMOD_VK_GPU")) {
         GpuInfo g;
         int mv = 0, disc = 0, used = 0;
-        if (sscanf(v.c_str(), "%u %u %u %d %d %n", &g.api_major, &g.api_minor,
-                   &g.max_sets, &mv, &disc, &used) < 5)
+        if (sscanf(v.c_str(), "%u %u %u %d %d %u %n", &g.api_major, &g.api_minor,
+                   &g.max_sets, &mv, &disc, &g.vendor, &used) < 6)
             continue;
         g.multiview = mv != 0;
         g.discrete = disc != 0;

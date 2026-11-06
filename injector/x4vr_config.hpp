@@ -406,6 +406,8 @@ inline bool is_upscale_mode(const char *s) {
         "none",           "fsr3_native",       "fsr3_quality", "fsr3_balanced",
         "fsr3_performance", "fsr3_ultra_performance", "fsr_ultra_quality",
         "fsr_quality",    "fsr_balanced",      "fsr_performance",
+        "dlss_auto",      "dlss_dlaa",         "dlss_quality",  "dlss_balanced",
+        "dlss_performance", "dlss_ultra_performance",
     };
     if (!s)
         return false;
@@ -433,11 +435,22 @@ inline const char *upscale_value(int *source = nullptr) {
         *source = src;
     return v;
 }
+// X4's <dlssmode> for one of our dlss_* values, or nullptr for anything else. X4's own
+// list: gameoptions.lua, config.DLSSmodes.
+inline const char *dlss_mode_of(const char *mode) {
+    return mode && !strncmp(mode, "dlss_", 5) ? mode + 5 : nullptr;
+}
+
 // Serve the upscaler and frame generation off. True when anything changed;
-// `old_up` gets <upmode>'s previous value ("" when absent).
+// `old_up` gets <upmode>'s previous value ("" when absent). DLSS is two tags of its own, and
+// they're served off too unless it's asked for: a player's flat DLSS setting copied into the
+// fork would upscale the left eye only.
 inline bool serve_upscaler(std::string &xml, const char *upmode,
                            std::string *old_up = nullptr) {
-    bool changed = set_or_insert_tag(xml, "upmode", upmode, old_up);
+    const char *dlss = dlss_mode_of(upmode);
+    bool changed = set_or_insert_tag(xml, "upmode", dlss ? "none" : upmode, old_up);
+    changed |= set_or_insert_tag(xml, "dlss", dlss ? "true" : "false");
+    changed |= set_or_insert_tag(xml, "dlssmode", dlss ? dlss : "off");
     changed |= set_or_insert_tag(xml, "fsr3g", "off");
     changed |= set_or_insert_tag(xml, "dlssg", "off");
     return changed;

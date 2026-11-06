@@ -22,7 +22,7 @@ static void check(bool ok, const std::string &what) {
 }
 
 namespace {
-constexpr uintptr_t kText = 0x600000, kTextEnd = 0x2d00000;
+constexpr uintptr_t kText = 0x600000, kTextEnd = 0x3200000;
 constexpr size_t kMem = 0x4800000;
 
 struct Fake {

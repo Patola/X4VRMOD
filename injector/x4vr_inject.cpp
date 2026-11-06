@@ -55,6 +55,7 @@ extern char **environ;
 #include "x4vr_extview.hpp"
 #include "x4vr_aimpick.hpp"
 #include "x4vr_loadart.hpp"
+#include "x4vr_ngx.hpp"
 #include "x4vr_pause.hpp"
 #include "x4vr_ptrwatch.hpp"
 #include "x4vr_uimouse.hpp"
@@ -806,9 +807,11 @@ FILE *open_patched_config(const char *path, bool hide_steer_line) {
         int src = 0;
         x4vr::upscale_value(&src);
         X4VR_LOG("config: effective upmode=%s (%s) — X4's upscaler; fsr3_* "
-                 "are temporal",
+                 "are temporal; dlss=%s dlssmode=%s",
                  x4vr::get_tag(xml, "upmode").c_str(),
-                 src > 0 ? "from X4VR_UPSCALE" : "our default");
+                 src > 0 ? "from X4VR_UPSCALE" : "our default",
+                 x4vr::get_tag(xml, "dlss").c_str(),
+                 x4vr::get_tag(xml, "dlssmode").c_str());
     }
     X4VR_LOG("config: serving %s in memory (%zu bytes, %d overrides applied); "
              "your %s is not touched",
@@ -1222,6 +1225,7 @@ static void extview_patch_at_start(); // X4VR_HEADLOOK_EXTERNAL
 static void aimpick_patch_at_start(); // X4VR_STEER_PICK
 static void uimouse_patch_at_start(); // X4VR_HUD_MOUSE
 static void loadart_patch_at_start(); // X4VR_LOADING_ART
+static void dlss_patch_at_start();    // X4VR_UPSCALE=dlss_*
 
 __attribute__((constructor)) static void x4vr_inject_init() {
     char exe[256] = "?";
@@ -1248,6 +1252,8 @@ __attribute__((constructor)) static void x4vr_inject_init() {
         uimouse_patch_at_start();
         // The mod's loading screen: before X4 picks its picture.
         loadart_patch_at_start();
+        // DLSS in both eyes, only when it's asked for: before X4 creates a feature.
+        dlss_patch_at_start();
     }
     // Task #68: the parsed clamp, once X4 has had time to parse it. A delay
     // rather than a hook, because the parse has no seam we can name -- and if
@@ -4907,6 +4913,155 @@ static void loadart_patch_at_start() {
              "in load order, not only Egosoft's; ours loads after the DLCs");
 }
 
+// ---------------------------------------------- X4VR_UPSCALE=dlss_* (x4vr_ngx.hpp)
+namespace {
+x4vr::ngx::Stereo g_ngx;
+bool g_ngx_patched = false;
+
+// What NVIDIA's own message says, or nothing if X4 doesn't export the function.
+const wchar_t *ngx_error_text(uint32_t code) {
+    static auto fn = (const wchar_t *(*)(uint32_t))dlsym(RTLD_DEFAULT, "GetNGXResultAsString");
+    return fn ? fn(code) : L"";
+}
+uint32_t ngx_on_create(void *cmd, int feature, void *params, void **out) {
+    const uint64_t before = g_ngx.stats.right_refused.load();
+    const uint32_t r = g_ngx.create(cmd, feature, params, out);
+    if (x4vr::ngx::failed(r)) {
+        X4VR_LOG("dlss: X4's feature was REFUSED: %#x %ls", r, ngx_error_text(r));
+    } else if (g_ngx.stats.right_refused.load() != before) {
+        const uint32_t e = g_ngx.stats.last_error.load();
+        X4VR_LOG("dlss: the right eye's feature was REFUSED: %#x %ls. That eye's scene stays "
+                 "black", e, ngx_error_text(e));
+    } else {
+        X4VR_LOG("dlss: a feature for each eye (feature %d, X4's %p)", feature,
+                 out ? *out : nullptr);
+    }
+    return r;
+}
+uint32_t ngx_on_evaluate(void *cmd, const void *feature, const void *params, void *progress) {
+    if (!g_ngx.api.right_view)
+        if (const x4vr::Shared *sh = x4vr_shared_state())
+            g_ngx.api.right_view =
+                (uint64_t (*)(void *, uint64_t))sh->ngx_right_view.load(std::memory_order_acquire);
+    const uint64_t bad = g_ngx.stats.right_failed.load();
+    const uint32_t r = g_ngx.evaluate(cmd, feature, params, progress);
+    static bool said_left = false, said_right = false;
+    if (x4vr::ngx::failed(r) && !said_left) {
+        said_left = true;
+        X4VR_LOG("dlss: X4's evaluation failed: %#x %ls (said once)", r, ngx_error_text(r));
+    }
+    if (g_ngx.stats.right_failed.load() != bad && !said_right) {
+        said_right = true;
+        const uint32_t e = g_ngx.stats.last_error.load();
+        X4VR_LOG("dlss: the right eye's evaluation failed: %#x %ls (said once)", e,
+                 ngx_error_text(e));
+    }
+    return r;
+}
+uint32_t ngx_on_release(void *feature) { return g_ngx.release(feature); }
+} // namespace
+
+static void dlss_patch_at_start() {
+    using namespace x4vr::ngx;
+    if (!x4vr::dlss_asked())
+        return;
+    auto refuse = [](const char *why) {
+        X4VR_LOG("dlss: patch REFUSED — %s. X4 upscales the left eye only, and the right eye's "
+                 "scene is black.", why);
+        X4VR_LOG("milestone: DLSS in both eyes REFUSED — %s. Quit and tell me.", why);
+    };
+    auto rd = [](uintptr_t va, void *o, size_t n) { return x4_read(va, o, n); };
+    uintptr_t bad = 0;
+    if (!verify_sites(rd, &bad)) {
+        char why[160];
+        snprintf(why, sizeof why, "the DLSS calls' code at %#lx differs from X4 9.00",
+                 (unsigned long)bad);
+        refuse(why);
+        return;
+    }
+    Api api{};
+    api.create = (decltype(api.create))dlsym(RTLD_DEFAULT, "NVSDK_NGX_VULKAN_CreateFeature");
+    api.evaluate = (decltype(api.evaluate))dlsym(RTLD_DEFAULT, "NVSDK_NGX_VULKAN_EvaluateFeature_C");
+    api.release = (decltype(api.release))dlsym(RTLD_DEFAULT, "NVSDK_NGX_VULKAN_ReleaseFeature");
+    api.get_pointer =
+        (decltype(api.get_pointer))dlsym(RTLD_DEFAULT, "NVSDK_NGX_Parameter_GetVoidPointer");
+    api.set_pointer =
+        (decltype(api.set_pointer))dlsym(RTLD_DEFAULT, "NVSDK_NGX_Parameter_SetVoidPointer");
+    if (!api.create || !api.evaluate || !api.release || !api.get_pointer || !api.set_pointer) {
+        refuse("X4 doesn't export NGX's functions");
+        return;
+    }
+    // Two sources that have nothing in common: the export table, and the signature search.
+    if ((uintptr_t)api.create != x4vr::reloc::va(kCreateFn) ||
+        (uintptr_t)api.evaluate != x4vr::reloc::va(kEvaluateFn) ||
+        (uintptr_t)api.release != x4vr::reloc::va(kReleaseFn)) {
+        refuse("X4's exported NGX functions aren't where its calls go");
+        return;
+    }
+    g_ngx.api = api;
+    const uintptr_t sites[3] = {x4vr::reloc::va(kCreateCall), x4vr::reloc::va(kEvaluateCall),
+                                x4vr::reloc::va(kReleaseCall)};
+    uint8_t *page =
+        (uint8_t *)x4vr::csmfit::alloc_near(0x3f0000, 0x7c00000, sites, 3, 5);
+    if (!page) {
+        refuse("no free page within rel32 reach of the DLSS calls");
+        return;
+    }
+    // `jmp *0(%rip)` and where to: the arguments and the return are X4's call's own.
+    const uintptr_t fns[3] = {(uintptr_t)&ngx_on_create, (uintptr_t)&ngx_on_evaluate,
+                              (uintptr_t)&ngx_on_release};
+    constexpr size_t kThunk = 14;
+    for (size_t i = 0; i < 3; i++) {
+        uint8_t *t = page + i * kThunk;
+        t[0] = 0xff, t[1] = 0x25, t[2] = t[3] = t[4] = t[5] = 0;
+        memcpy(t + 6, &fns[i], 8);
+    }
+    if (mprotect(page, (size_t)sysconf(_SC_PAGESIZE), PROT_READ | PROT_EXEC) != 0) {
+        refuse("mprotect(rx) of the stubs failed");
+        return;
+    }
+    for (size_t i = 0; i < 3; i++) {
+        uint8_t call[5] = {0xe8};
+        const int32_t rel = (int32_t)((intptr_t)(page + i * kThunk) - (intptr_t)(sites[i] + 5));
+        memcpy(call + 1, &rel, 4);
+        char err[200] = "";
+        // X4 has run no frame yet, so no thread is inside these.
+        if (!x4vr::foot::patch_code(sites[i], call, sizeof call, err, sizeof err)) {
+            refuse(err);
+            return;
+        }
+    }
+    g_ngx_patched = true;
+    X4VR_LOG("dlss: PATCHED — X4's three NGX calls (create, evaluate, release) go through stubs "
+             "at %p, which do the same for the right eye: a feature of its own, and layer 1 of "
+             "the same four images", page);
+}
+
+// Every few seconds while DLSS is asked for: what X4 says, and how many ran.
+static void dlss_report() {
+    if (!g_ngx_patched)
+        return;
+    static double last = -100.0;
+    const double now = mono_seconds();
+    if (now - last < 10.0)
+        return;
+    last = now;
+    // Asked on X4's own thread, as its menus do.
+    static auto supported = (bool (*)())dlsym(RTLD_DEFAULT, "IsDLSSSupported");
+    static auto on = (bool (*)(bool))dlsym(RTLD_DEFAULT, "GetDLSSOption");
+    static auto mode = (const char *(*)(bool))dlsym(RTLD_DEFAULT, "GetDLSSModeOption");
+    static auto automode = (const char *(*)())dlsym(RTLD_DEFAULT, "GetDLSSAutoMode");
+    const x4vr::ngx::Stats &s = g_ngx.stats;
+    X4VR_LOG("dlss: X4 says supported=%d on=%d mode=%s auto=%s; features %llu, evaluated left "
+             "%llu right %llu, right skipped %llu, right failed %llu",
+             supported && supported() ? 1 : 0, on && on(false) ? 1 : 0,
+             mode ? mode(false) : "?", automode ? automode() : "?",
+             (unsigned long long)s.features.load(), (unsigned long long)s.left.load(),
+             (unsigned long long)s.right.load(),
+             (unsigned long long)(s.no_feature.load() + s.no_view.load()),
+             (unsigned long long)s.right_failed.load());
+}
+
 static void aimpick_patch_at_start() {
     using namespace x4vr::aimpick;
     if (!aimpick_asked())
@@ -6390,6 +6545,7 @@ void headlook_tick() {
     }();
     if (!armed || !this_is_the_game())
         return;
+    dlss_report();
     // A guard that can actually fail: it compares the thread now inside the tick
     // against the one that was, and names both. Had this merely set a flag and
     // returned, it could not distinguish "moved the tick" from "called it from

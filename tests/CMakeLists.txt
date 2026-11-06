@@ -240,6 +240,9 @@ add_executable(x4vr_test_head6 head6.cpp)
 # X4VR_STEER_PICK: the pick ray's sites against the real binary, the stub
 # executed, the pixel arithmetic. Self-checking.
 add_executable(x4vr_test_aimpick aimpick.cpp)
+# X4VR_UPSCALE=dlss_*: what the stubs ask of NGX, against a fake. Self-checking.
+add_executable(x4vr_test_ngx_stereo ngx_stereo.cpp)
+target_link_libraries(x4vr_test_ngx_stereo PRIVATE pthread)
 # X4VR_HUD_MOUSE: the UI mouse feed and X4's layer pick against the real
 # binary, both stubs executed (the feed with X4's own setter). Self-checking.
 add_executable(x4vr_test_uimouse uimouse.cpp)

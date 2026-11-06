@@ -210,8 +210,14 @@ and adds latency.
 | `fsr3_balanced` | FSR 3 | 1.7 (measured: 2484² for a 4224² eye) |
 | `fsr3_performance` | FSR 3 | 2 ¹ |
 | `fsr3_ultra_performance` | FSR 3 | 3 ¹ |
+| `dlss_auto` | DLSS, X4 chooses the mode | depends on the size |
+| `dlss_dlaa` | DLSS, anti-aliasing only | 1 |
+| `dlss_quality` | DLSS | 1.5 ¹ |
+| `dlss_balanced` | DLSS | 1.72 ¹ |
+| `dlss_performance` | DLSS | 2 ¹ |
+| `dlss_ultra_performance` | DLSS | 3 ¹ |
 
-¹ AMD's standard ratio, not measured here.
+¹ AMD's or NVIDIA's standard ratio, not measured here.
 
 A value outside the list is rejected and `none` is served; the log says
 which (`config: upmode: …`). Both upscalers run in both eyes:
@@ -219,6 +225,12 @@ which (`config: upmode: …`). Both upscalers run in both eyes:
 * FSR 3 (AMD FidelityFX) since take 383, through `X4VR_FFX_STEREO`.
 
 Both are on by default; set either to `0` only to compare.
+
+**DLSS needs an NVIDIA RTX card, and is best effort: it hasn't been played in a headset.**
+The launcher offers it only with such a card. X4 calls NVIDIA's code directly, so when a
+`dlss_*` mode is asked for, the mod patches those three calls to run it again for the right
+eye, with its own history (`injector/x4vr_ngx.hpp`). No other session is patched. X4 9.00
+ships DLSS 3.7.20 in its own `lib/` folder.
 
 Measured at 4224² per eye on an RX 7900 XTX (different scenes, so rough):
 

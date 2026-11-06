@@ -23,6 +23,7 @@
 #pragma once
 
 #include <cstdlib>
+#include <cstring>
 
 namespace x4vr {
 
@@ -31,6 +32,12 @@ inline bool env_on(const char *name, bool dflt) {
     if (!e || !*e)
         return dflt;
     return *e != '0';
+}
+
+// X4VR_UPSCALE=dlss_*: the injector serves it, patches for it, the layer gets ready for it.
+inline bool dlss_asked() {
+    const char *e = getenv("X4VR_UPSCALE");
+    return e && !strncmp(e, "dlss_", 5);
 }
 
 } // namespace x4vr

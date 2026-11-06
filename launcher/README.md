@@ -51,6 +51,9 @@ point it at something else. X4's own files are only ever read.
 it to attach to a GitHub issue. The home folder, user name, computer name and Steam account
 number are taken out of everything first, and nothing is sent: the player attaches it.
 
+**DLSS** is offered only when the GPU the mod would run on is an NVIDIA RTX one, and the
+gpu row says so. It hasn't been played in a headset, and the window says that too.
+
 **Other builds of X4.** `probe x4` and `doctor` find the code wherever this build keeps it
 (`common/x4vr_reloc.hpp`) before checking it. `x4vrmod probe x4 PATH --map` shows how far
 each block moved.

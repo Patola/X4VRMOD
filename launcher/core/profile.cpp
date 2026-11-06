@@ -17,10 +17,17 @@ namespace fs = std::filesystem;
 namespace x4vr::launcher {
 
 // README, "Resolution and upscaling". Measured for fsr_quality and fsr3_balanced,
-// AMD's standard ratios for the others.
+// AMD's and NVIDIA's standard ratios for the others. DLSS's Auto is X4's choice for the
+// size: nothing here can say what it renders.
 const std::vector<Upscaler> &upscalers() {
     static const std::vector<Upscaler> v = {
         {"none", "None (full resolution)", 1.0},
+        {"dlss_auto", "DLSS Auto", 1.0, true},
+        {"dlss_dlaa", "DLSS DLAA (anti-aliasing only)", 1.0, true},
+        {"dlss_quality", "DLSS Quality", 1.5, true},
+        {"dlss_balanced", "DLSS Balanced", 1.72, true},
+        {"dlss_performance", "DLSS Performance", 2.0, true},
+        {"dlss_ultra_performance", "DLSS Ultra Performance", 3.0, true},
         {"fsr_ultra_quality", "FSR 1 Ultra Quality", 1.3},
         {"fsr_quality", "FSR 1 Quality", 1.5},
         {"fsr_balanced", "FSR 1 Balanced", 1.7},
@@ -32,6 +39,14 @@ const std::vector<Upscaler> &upscalers() {
         {"fsr3_ultra_performance", "FSR 3 Ultra Performance", 3.0},
     };
     return v;
+}
+
+bool is_dlss(const std::string &mode) { return mode.rfind("dlss_", 0) == 0; }
+
+std::string upscaler_note(const std::string &mode) {
+    return is_dlss(mode) ? "DLSS hasn't been played in a headset yet. If an eye looks wrong, "
+                           "please report it."
+                         : "";
 }
 
 const std::vector<int> &eye_sizes() {
@@ -216,7 +231,7 @@ std::string profile_set(Profile &p, const std::string &key, const std::string &v
         EyeSettings s = eye_settings(p);
         set_upscaler(s, value);
         store_eye_settings(p, s);
-        return "";
+        return upscaler_note(value);
     }
     if (key == "ipd") {
         if (!number(0.04, 0.09))

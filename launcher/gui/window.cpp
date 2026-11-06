@@ -178,11 +178,10 @@ QWidget *Window::buildSettings() {
 
     m_upBox = new QComboBox(w);
     m_upBox->setObjectName("upscaler");
-    for (const Upscaler &u : upscalers())
-        m_upBox->addItem(u.label, QString(u.mode));
     setting("Upscaler", m_upBox,
             "X4 draws a smaller image and enlarges it: faster, and a little less sharp. Above "
-            "3200 per eye, FSR 1 Quality is chosen for you, and you can choose None to undo that.");
+            "3200 per eye, FSR 1 Quality is chosen for you, and you can choose None to undo that. "
+            "DLSS is offered with an NVIDIA RTX graphics card.");
     connect(m_upBox, &QComboBox::currentIndexChanged, this, [this] { upscalerChosen(); });
 
     m_renders = new QLabel(w);
@@ -498,7 +497,7 @@ void Window::syncSettings() {
         m_eyeBox->addItem(label(e), e);
     m_eyeBox->addItem("Custom...", 0);
     m_eyeBox->setCurrentIndex(m_eyeBox->findData(m_eye.eye));
-    m_upBox->setCurrentIndex(m_upBox->findData(q(m_eye.upscaler)));
+    fillUpscalers();
 
     // Only when an upscaler makes it differ: the eye size is in the list above.
     const int size = render_size(m_eye.eye, m_eye.upscaler);
@@ -510,9 +509,26 @@ void Window::syncSettings() {
     const std::string en = eye_note(m_eye.eye, m_steamvr);
     if (!en.empty())
         lines << q(en);
+    const std::string un = upscaler_note(m_eye.upscaler);
+    if (!un.empty())
+        lines << q(un);
     m_renders->setText(lines.join(' '));
     m_renders->setVisible(!lines.isEmpty());
     m_syncing = false;
+}
+
+// DLSS only with an RTX card. Until the GPU has been asked, a choice already saved stays on
+// the list; once it says otherwise, the choice goes back to None.
+void Window::fillUpscalers() {
+    const bool was = m_syncing;
+    m_syncing = true;
+    const bool offer = m_gpuAsked ? m_rtx : is_dlss(m_eye.upscaler);
+    m_upBox->clear();
+    for (const Upscaler &u : upscalers())
+        if (!u.dlss || offer)
+            m_upBox->addItem(u.label, QString(u.mode));
+    m_upBox->setCurrentIndex(m_upBox->findData(q(m_eye.upscaler)));
+    m_syncing = was;
 }
 
 void Window::saveProfile() {
@@ -641,6 +657,18 @@ void Window::applyChecks(const std::vector<Check> &rows, bool keepVr, bool keepG
     if (keepGpu && m_checks.count("gpu"))
         next["gpu"] = m_checks["gpu"];
     m_checks = std::move(next);
+    const auto gpu = m_checks.find("gpu");
+    if (gpu != m_checks.end() && (!m_gpuAsked || gpu->second.dlss != m_rtx)) {
+        m_gpuAsked = true;
+        m_rtx = gpu->second.dlss;
+        if (!m_rtx && is_dlss(m_eye.upscaler)) {
+            m_note = "DLSS needs an NVIDIA RTX graphics card, so the upscaler is back to None.";
+            set_upscaler(m_eye, "none");
+            store_eye_settings(m_profile, m_eye);
+            saveProfile();
+        }
+        syncSettings();
+    }
     for (const char *id : kRowIds)
         updateRow(id);
     updatePlay();

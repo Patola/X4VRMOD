@@ -25,6 +25,7 @@
 #include "../../injector/x4vr_foot.hpp"
 #include "../../injector/x4vr_loadart.hpp"
 #include "../../injector/x4vr_menus.hpp"
+#include "../../injector/x4vr_ngx.hpp"
 #include "../../injector/x4vr_uimouse.hpp"
 
 namespace x4vr::launcher {
@@ -238,6 +239,9 @@ std::vector<PatchResult> check_patches(const VaReader &read) {
 
     ok = loadart::verify_sites(rd, &bad);
     group("loadart", "The mod's loading screen", ok, bad);
+
+    ok = ngx::verify_sites(rd, &bad);
+    group("dlss", "DLSS in both eyes", ok, bad);
 
     return out;
 }

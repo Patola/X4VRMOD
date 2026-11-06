@@ -7467,6 +7467,23 @@ VkImageView ffx_right_view(DeviceData *d, VkDevice device, VkImageView v) {
     return out;
 }
 
+// For the injector's DLSS stubs (injector/x4vr_ngx.hpp): layer 1 of the image a view of X4's
+// names, or the same view if there's none. DLSS reads and writes doubled images through
+// layer-0 views just as FidelityFX does, and these views live and die the same way.
+uint64_t ngx_right_view(void *cmd, uint64_t view) {
+    if (!g_active || !ffx_stereo_enabled())
+        return view;
+    DeviceData *d = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        auto it = g_devices.find(dispatch_key(cmd));
+        if (it == g_devices.end())
+            return view;
+        d = &it->second;
+    }
+    return (uint64_t)(uintptr_t)ffx_right_view(d, d->device, (VkImageView)(uintptr_t)view);
+}
+
 void ffx_forget_view(DeviceData *d, VkDevice device, VkImageView v) {
     VkImageView ours = VK_NULL_HANDLE;
     {
@@ -7488,7 +7505,8 @@ void ffx_forget_view(DeviceData *d, VkDevice device, VkImageView v) {
 // images are cube maps), in take 381 every one was FidelityFX's.
 void ffx_note_image(DeviceData *d, VkDevice device, const VkImageCreateInfo *ci,
                     VkImage img, bool doubled, uint32_t serial) {
-    if (!g_active || !ffx_stereo_enabled() || doubled || !ci)
+    // Not with DLSS: there's no FidelityFX, and these would be copies of NGX's own images.
+    if (!g_active || !ffx_stereo_enabled() || doubled || !ci || x4vr::dlss_asked())
         return;
     if (ci->imageType != VK_IMAGE_TYPE_2D || ci->arrayLayers != 1 ||
         ci->samples != VK_SAMPLE_COUNT_1_BIT || ci->extent.depth != 1 ||
@@ -16938,6 +16956,9 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
         g_devices[dispatch_key(*out)] = d;
     }
     X4VR_LOG("device created");
+    if (x4vr::dlss_asked())
+        if (const x4vr::Shared *sh = shared_state())
+            sh->ngx_right_view.store((uintptr_t)&ngx_right_view, std::memory_order_release);
 
     if (g_sbs_enabled && g_active) {
         x4vr::SbsFns f;

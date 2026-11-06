@@ -29974,3 +29974,16 @@ as `d * (x, y)` of the pose block's roll slot, and the deferred passes undo the 
 all linear, so the pair's length is a live scale on the eye distance with no module changed. Takes
 408 and 409 read 62.9 and 63.8 mm from one headset with its dial moved between them.
 
+**DLSS is NGX linked into X4, called from one place each** (read 2026-11-06, no NVIDIA card
+here). Create at 0x20e3788, evaluate at 0x20e35b7 (the wrapper 0x20e2fd0, called from the render
+graph at 0x20d73f9), release at 0x20e28a5, init at 0x20e271e. The NGX functions are in X4's export
+table on both builds, and `lib/libnvidia-ngx-dlss.so.3.7.20` ships with both. X4 fills four
+`NVSDK_NGX_Resource_VK` at 0x20e2f40 (view, image, range, format, size, type at +0x30) and sets them
+by name: `Color`, `Output`, `Depth`, `MotionVectors`. Its config is `<dlss>` and `<dlssmode>`, with
+`<upmode>` separate; the mode's values are in `gameoptions.lua`, `config.DLSSmodes`. `IsDLSSSupported`
+is the byte at 0x4533ae0+0x1ad. `injector/x4vr_ngx.hpp` is built on all of this and hasn't run.
+
+**X4 says nothing about the seat until the player first sits,** so a new game's first menus fall
+outside the scorer's off-seat windows, and X4's camera there includes the body. Take 410's run
+read as "a cockpit menu stayed off-centre" at 66.49 degrees. The injector's centring line already
+says "off the pilot seat", and the scorer now reads it.

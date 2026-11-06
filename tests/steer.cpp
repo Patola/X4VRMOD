@@ -282,9 +282,10 @@ int main() {
         for (const char *m : {"none", "fsr3_native", "fsr3_quality", "fsr3_balanced",
                               "fsr3_performance", "fsr3_ultra_performance",
                               "fsr_ultra_quality", "fsr_quality", "fsr_balanced",
-                              "fsr_performance"})
+                              "fsr_performance", "dlss_auto", "dlss_dlaa", "dlss_quality",
+                              "dlss_balanced", "dlss_performance", "dlss_ultra_performance"})
             n += is_upscale_mode(m);
-        check(n == 10, "the ten upmode values are accepted");
+        check(n == 16, "the ten upmode values and six of DLSS are accepted");
         check(!is_upscale_mode("fsr") && !is_upscale_mode("fsr_easu") &&
                   !is_upscale_mode("FSR3_QUALITY") && !is_upscale_mode("") &&
                   !is_upscale_mode(nullptr),
@@ -301,6 +302,24 @@ int main() {
         check(serve_upscaler(xml, "none", &old) && old == "fsr3_quality" &&
                   get_tag(xml, "upmode") == "none",
               "an in-game choice is replaced by the served value");
+        // DLSS is two tags of X4's, and they follow the variable both ways: a player's flat
+        // DLSS copied into the fork would upscale the left eye only.
+        check(!is_upscale_mode("dlss") && !is_upscale_mode("dlss_") &&
+                  !is_upscale_mode("dlss_off") && !dlss_mode_of("fsr_quality"),
+              "only DLSS's own modes, and nothing else is one");
+        std::string nv = "<root>\n  <dlss>true</dlss>\n  <dlssmode>dlaa</dlssmode>\n"
+                         "  <upmode>fsr_quality</upmode>\n</root>\n";
+        check(serve_upscaler(nv, "dlss_ultra_performance") && get_tag(nv, "dlss") == "true" &&
+                  get_tag(nv, "dlssmode") == "ultra_performance" &&
+                  get_tag(nv, "upmode") == "none" && get_tag(nv, "dlssg") == "off",
+              "dlss_ultra_performance -> DLSS on in that mode, FSR off");
+        check(serve_upscaler(nv, "none") && get_tag(nv, "dlss") == "false" &&
+                  get_tag(nv, "dlssmode") == "off",
+              "no DLSS asked for -> served off");
+        std::string bare = "<root>\n</root>\n";
+        check(serve_upscaler(bare, "fsr_quality") && get_tag(bare, "dlss") == "false" &&
+                  get_tag(bare, "dlssmode") == "off" && get_tag(bare, "upmode") == "fsr_quality",
+              "a sparse config gets all of it inserted");
         setenv("X4VR_UPSCALE", "fsr_quality", 1);
         int src = 0;
         check(!strcmp(upscale_value(&src), "fsr_quality") && src == 1,

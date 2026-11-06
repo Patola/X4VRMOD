@@ -1146,3 +1146,19 @@ on the debug one. The first normal session failed one rule, which was the rule's
 390's 1.23 s. A real F6 binds within 3 ms and stays up for tens of seconds, so the rule now
 needs 2 s; take 358, the bug it was written for, stayed 39.74 s and still fails.
 
+## Takes 407 to 411 (2026-11-06) — GOG, the loading screen, the headset's eye distance
+
+Each started with Play in `x4vrmod-launcher`, setup 5 with WiVRn.
+
+* **Take 409, Steam (code 344237d):** PASS. Our loading screen didn't show, which led to
+  `x4vr_loadart.hpp`.
+* **Take 408, GOG (code 344237d):** on foot from start to end, because a new game's keys were
+  different and Patola didn't board. One FAIL, the scorer's: no seat, so no lean to latch. It
+  now reads the injector's count of ticks in the seat.
+* **Take 410, GOG, debug (code a9a14c6), `x4vrmod-20261106-192958-debug.log`:** the first flight on GOG's
+  X4. 8774 seated ticks; X4 within 0.06 deg of the head at the median, 0.67 at p90 (yaw); lean on;
+  three external views; IPD dial followed from 63.8 down to 62.6 mm and back. One FAIL, the scorer's
+  again: a menu on foot before the first seat read as a cockpit menu. Patola: flew, all worked.
+* **Take 411, Steam (code a9a14c6), `x4vrmod-20261106-193605.log`:** PASS, dial 63.3 to 63.9 mm.
+* **Patola, on both builds:** our picture loads, and not in the vanilla games. In VR X4's window is
+  square, so `x4_1_1` shows the whole art with a blurred copy above and below it.

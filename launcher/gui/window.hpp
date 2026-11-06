@@ -76,6 +76,7 @@ private:
 
     void requestChecks(bool forceVr);
     void applyChecks(const std::vector<Check> &rows, bool keepVr, bool keepGpu);
+    void fillUpscalers();
     void updateRow(const std::string &id);
     void updateVrStart(bool wanted);
     void startProgram(const QString &program, const QStringList &args);
@@ -121,6 +122,7 @@ private:
     QPointer<HelpWindow> m_help;
 
     QPointer<QThread> m_worker;
+    bool m_gpuAsked = false, m_rtx = false;
     QTimer *m_timer = nullptr;
     int m_checksDone = 0, m_ticks = 0;
     bool m_again = false, m_againForce = false;

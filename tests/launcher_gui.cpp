@@ -60,7 +60,7 @@ static void shot(QWidget &w, const QString &path) {
 
 static std::vector<Check> good_rows() {
     return {row("x4", Status::Ok, "X4 found", "Steam, X4 9.00, build 23660954, /games/X4 Foundations"),
-            row("patches", Status::Ok, "The mod fits this X4", "all 9 features match its code"),
+            row("patches", Status::Ok, "The mod fits this X4", "all 10 features match its code"),
             row("steam", Status::Ok, "Steam running"),
             row("running", Status::Ok, "X4 not running yet"),
             row("gamescope", Status::Ok, "gamescope installed", "3.17.0"),
@@ -275,6 +275,30 @@ static void test_eye_rule(Window &w, const std::string &home) {
     check(eye->currentData().toInt() == 2816, "Custom with no answer goes back");
 
     check(!w.findChild<QWidget *>("ipd"), "eye distance isn't asked for: it comes from the headset");
+
+    // DLSS: on the list only with an RTX card, as the GPU row says.
+    check(up->findData("dlss_quality") < 0, "a Radeon: DLSS isn't offered");
+    auto rtx = good_rows();
+    Check rtxRow = row("gpu", Status::Ok, "GPU capable", "NVIDIA GeForce RTX 3070, Vulkan 1.4, DLSS available");
+    rtxRow.dlss = true;
+    replace(rtx, rtxRow);
+    w.showChecks(rtx);
+    check(up->count() == (int)upscalers().size(), "an RTX card: every upscaler is offered");
+    for (const char *m : {"dlss_auto", "dlss_dlaa", "dlss_quality", "dlss_balanced", "dlss_performance",
+                          "dlss_ultra_performance"})
+        check(up->findData(m) >= 0, std::string(m) + " is offered");
+    check(up->currentData().toString() == "none", "offering it doesn't choose it");
+    up->setCurrentIndex(up->findData("dlss_quality"));
+    check(load_profile(profile_path(home)).get("upscaler") == "dlss_quality", "DLSS Quality is saved");
+    check(!renders->isHidden() && renders->text().contains("hasn't been played"),
+          "...and the window says it's untried in a headset");
+    w.showChecks(good_rows());
+    check(up->findData("dlss_quality") < 0, "the GPU row changes: it's off the list");
+    check(up->currentData().toString() == "none" &&
+              load_profile(profile_path(home)).get("upscaler") == "none",
+          "...and a saved DLSS goes back to None");
+    check(renders->text().contains("back to None"), "...saying why");
+    w.showChecks({});
     check(!w.findChild<QCheckBox *>("lean"), "lean isn't a choice any more");
 }
 

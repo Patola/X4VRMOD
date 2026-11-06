@@ -25,6 +25,7 @@
 #include "../injector/x4vr_foot.hpp"
 #include "../injector/x4vr_loadart.hpp"
 #include "../injector/x4vr_menus.hpp"
+#include "../injector/x4vr_ngx.hpp"
 #include "../injector/x4vr_uimouse.hpp"
 #include "x4vr_launcher.hpp"
 
@@ -671,6 +672,47 @@ static void test_offered() {
         all_valid = all_valid && valid_upscaler(u.mode) && u.label && *u.label;
     check(all_valid && upscalers()[0].mode == std::string("none"), "None comes first, all labelled");
     check(valid_upscaler(kAutoUpscaler), "the rule's choice is on the list");
+    check(!is_dlss(kAutoUpscaler), "the rule never chooses what hasn't been played in VR");
+    int dlss = 0;
+    for (const Upscaler &u : upscalers())
+        if (u.dlss) {
+            dlss++;
+            check(is_dlss(u.mode) && !upscaler_note(u.mode).empty(),
+                  std::string(u.mode) + " says it hasn't been played in a headset");
+        } else {
+            check(!is_dlss(u.mode) && upscaler_note(u.mode).empty(),
+                  std::string(u.mode) + " isn't DLSS");
+        }
+    check(dlss == 6, "DLSS's six modes are listed");
+    check(render_size(3000, "dlss_quality") == 2000 && render_size(3000, "dlss_dlaa") == 3000,
+          "DLSS Quality renders at 1/1.5, DLAA at full size");
+
+    // Who's offered DLSS: an NVIDIA card named RTX.
+    auto gpu = [](uint32_t vendor, const char *name) {
+        GpuInfo g;
+        g.vendor = vendor;
+        g.name = name;
+        return g;
+    };
+    check(gpu(0x10de, "NVIDIA GeForce RTX 3070 Laptop GPU").rtx(), "an RTX 3070 is");
+    check(gpu(0x10de, "NVIDIA GeForce RTX 5090").rtx(), "an RTX 5090 is");
+    check(gpu(0x10de, "NVIDIA RTX A4000").rtx(), "a workstation RTX is");
+    check(!gpu(0x10de, "NVIDIA GeForce GTX 1660 SUPER").rtx(), "a GTX isn't");
+    check(!gpu(0x1002, "AMD Radeon RX 7900 XTX (RADV NAVI31)").rtx(), "an AMD card isn't");
+    check(!gpu(0x1002, "RTX lookalike").rtx(), "...whatever it's called");
+    VulkanProbe vp;
+    vp.ok = true;
+    GpuInfo a = gpu(0x8086, "Intel(R) UHD Graphics");
+    a.api_major = 1, a.api_minor = 3, a.max_sets = 8, a.multiview = true;
+    GpuInfo b = gpu(0x10de, "NVIDIA GeForce RTX 3070 Laptop GPU");
+    b.api_major = 1, b.api_minor = 4, b.max_sets = 32, b.multiview = b.discrete = true;
+    vp.gpus = {a, b};
+    const VulkanProbe back = vulkan_probe_parse(vulkan_probe_format(vp));
+    check(back.gpus.size() == 2 && back.gpus[1].vendor == 0x10de &&
+              back.gpus[1].name == b.name && back.gpus[1].discrete,
+          "the vendor and the name survive the child process's output");
+    const GpuInfo *best = best_gpu(back);
+    check(best && best->rtx(), "a laptop's discrete RTX is the one chosen over its Intel");
 }
 
 static void test_menu_entry() {
@@ -886,6 +928,7 @@ static void test_real_x4() {
         {"menus", menus::kConversation.va},
         {"shadows", csmfit::kSites[0].site.va},
         {"loadart", loadart::kCall.va},
+        {"dlss", ngx::kEvaluate.va},
     };
     check(sites.size() == base.size(), "patches: this test covers every group");
     for (const PatchResult &r : base) {

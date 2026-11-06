@@ -166,10 +166,12 @@ XrProbe xr_probe_parse(const std::string &text);
 struct GpuInfo {
     std::string name;
     unsigned api_major = 0, api_minor = 0;
-    uint32_t max_sets = 0;
+    uint32_t max_sets = 0, vendor = 0;
     bool multiview = false, discrete = false;
     // The layer binds its set at the top of the device's range, above X4's 6.
     bool capable() const;
+    // What DLSS is offered on: an NVIDIA card named RTX.
+    bool rtx() const;
 };
 struct VulkanProbe {
     bool ok = false; // an instance came up
@@ -179,6 +181,8 @@ struct VulkanProbe {
 VulkanProbe vulkan_probe_here();
 VulkanProbe vulkan_probe_child(int timeout_ms);
 std::string vulkan_probe_format(const VulkanProbe &p);
+// The GPU the mod would run on: capable, a discrete one first. nullptr if there's none.
+const GpuInfo *best_gpu(const VulkanProbe &p);
 VulkanProbe vulkan_probe_parse(const std::string &text);
 
 // ---------------------------------------------------------------- how we're run
@@ -244,12 +248,16 @@ void set_upscaler(EyeSettings &s, const std::string &mode);
 bool valid_upscaler(const std::string &mode);
 // What X4 renders for this eye size and upscaler.
 int render_size(int eye, const std::string &mode);
-// What's offered, in order. DLSS joins these when it exists.
+// What's offered, in order; the DLSS ones only with an NVIDIA RTX GPU.
 struct Upscaler {
     const char *mode;
     const char *label;
     double ratio;
+    bool dlss = false;
 };
+bool is_dlss(const std::string &mode);
+// What the player should know about this upscaler, or "".
+std::string upscaler_note(const std::string &mode);
 const std::vector<Upscaler> &upscalers();
 const std::vector<int> &eye_sizes();
 // What the player should know about this size, or "".
@@ -306,6 +314,7 @@ struct Check {
     std::string title;
     std::string detail;
     std::string fix; // an action the caller can offer: "" for none
+    bool dlss = false; // the gpu row: DLSS can be offered
 };
 struct CheckOptions {
     std::string home;

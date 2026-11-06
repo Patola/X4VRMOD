@@ -43,9 +43,8 @@ and hooks its Vulkan renderer through Linux's own mechanisms. The Windows versio
 running under Proton is a different program, so if you pick <tt>X4.exe</tt> the
 launcher tells you it can't work. If Steam is set to force Proton for X4, turn that
 off in X4's Properties, under Compatibility, and let Steam download the Linux version.</p>
-<p><b>GOG:</b> the launcher finds it, but this release only knows the exact code of the
-Steam version, so the features that patch X4 turn off and Play says "Play anyway".
-Supporting GOG properly is planned.</p>
+<p><b>GOG:</b> the launcher finds it, and everything works as it does on Steam's. Choose
+it in the Game box if you have both.</p>
 
 <a name="eye"></a>
 <h2>Eye resolution</h2>
@@ -92,6 +91,11 @@ sharpness. With one on, "Renders" under the list tells you the size X4 really dr
 3.5 ms a frame at 4224, which is why it's the choice made for you.</li>
 <li><b>FSR 3</b> also uses earlier frames, which makes edges steadier, at that extra
 cost.</li>
+<li><b>DLSS</b> is NVIDIA's, and is on the list only with an NVIDIA RTX graphics card. Auto
+lets X4 choose the mode for your size, DLAA draws at full size and only smooths edges, and
+Quality, Balanced, Performance and Ultra Performance draw at 1/1.5, 1/1.72, 1/2 and 1/3.
+<b>It hasn't been played in a headset yet.</b> If one eye is black or the two don't match,
+choose another upscaler and please <a href="#report">report it</a> with Debug log ticked.</li>
 </ul>
 <p><b>The automatic choice:</b> going above 3200 per eye with None selects FSR 1 Quality,
 because drawing that many pixels twice is more than most GPUs can do smoothly. A note says

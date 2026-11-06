@@ -56,7 +56,9 @@ constexpr uint32_t kShareMagic = 0x52565834u;
 // 13: HeadShared's `ui_canvas`, the canvas map's factors while the cursor is
 //     drawn raw, for X4's UI mouse (X4VR_HUD_MOUSE; first added for the
 //     since-removed X4VR_HUD_RAY).
-constexpr uint32_t kShareVersion = 13u;
+// 14: `ngx_right_view`, how the injector's DLSS stubs ask the layer for the
+//     right eye's views (x4vr_ngx.hpp).
+constexpr uint32_t kShareVersion = 14u;
 
 struct Shared {
     uint32_t magic = kShareMagic;
@@ -248,6 +250,11 @@ struct Shared {
     // out (Patola, take 357: "It should be bigger and cover the entire
     // window").
     std::atomic<uint32_t> cinematic_ui{0};
+
+    // X4VR_UPSCALE=dlss_*: the layer's `uint64_t (*)(void *cmd, uint64_t view)`, layer 1 of the
+    // image a view names (injector/x4vr_ngx.hpp). The one thing here the layer writes, which
+    // is why it's mutable: its handle on this struct is const.
+    mutable std::atomic<uintptr_t> ngx_right_view{0};
 };
 
 // ---- the camera block, as one consistent snapshot ------------------------

@@ -15,6 +15,7 @@
 #include "../injector/x4vr_foot.hpp"
 #include "../injector/x4vr_loadart.hpp"
 #include "../injector/x4vr_menus.hpp"
+#include "../injector/x4vr_ngx.hpp"
 #include "../injector/x4vr_shadowfov.hpp"
 #include "../injector/x4vr_uimouse.hpp"
 #include "x4vr_launcher.hpp"
@@ -54,6 +55,7 @@ int main(int argc, char **argv) {
     all(menus::verify_sites(rd, &bad), "menus");
     all(csmfit::verify_sites(rd, &bad), "csmfit");
     all(loadart::verify_sites(rd, &bad), "loadart");
+    all(ngx::verify_sites(rd, &bad), "dlss");
     all(shadowfov::verify_sites(rd, &bad), "shadowfov");
     all(fieldab::verify_sites(rd, &bad), "fieldab");
     for (const auto &[va, n] : reads)

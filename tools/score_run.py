@@ -4857,6 +4857,48 @@ def main(path):
         fails.append("the headset was located and the scene never took its eye "
                      "distance: the ipd line is missing")
 
+    # **DLSS in both eyes** (injector/x4vr_ngx.hpp). Asked means patched, X4 says it
+    # can, each eye has a feature, and every evaluation ran for the right eye too:
+    # patched is not executed.
+    dl_mode = re.search(r"\bX4VR_UPSCALE=(dlss_\w+)", run or "")
+    dl_patched = "dlss: PATCHED" in text
+    dl_refused = re.search(r"dlss: patch REFUSED — (.*?)\. X4 upscales", text)
+    dl_rep = re.findall(r"dlss: X4 says supported=(\d) on=(\d) mode=(\S+) auto=(\S*); "
+                        r"features (\d+), evaluated left (\d+) right (\d+), right "
+                        r"skipped (\d+), right failed (\d+)", text)
+    if dl_mode or dl_patched or dl_refused:
+        for m_ in re.findall(r"dlss: ((?:X4's feature|the right eye's feature|X4's "
+                             r"evaluation|the right eye's evaluation)[^\n]*)", text)[:4]:
+            print(f"dlss    {m_[:200]}")
+        if dl_refused:
+            fails.append("DLSS was asked for and its patch was refused: "
+                         + dl_refused.group(1))
+        elif dl_patched and not dl_mode:
+            fails.append("the DLSS patch went in with X4VR_UPSCALE not asking for it")
+        elif dl_mode and not dl_patched:
+            fails.append(f"X4VR_UPSCALE={dl_mode.group(1)} but no PATCHED line")
+        if dl_rep:
+            sup, on_, mode_, auto_, feats, left, right, skip, bad_ = dl_rep[-1]
+            print(f"dlss    X4 says supported={sup} on={on_} mode={mode_} auto={auto_}; "
+                  f"{feats} feature pair(s), evaluated {left} left {right} right, "
+                  f"{skip} right skipped, {bad_} right failed")
+            if dl_mode and sup != "1":
+                fails.append("DLSS was asked for and X4 says this machine can't: no "
+                             "NVIDIA RTX GPU, or NGX refused it")
+            elif dl_mode and on_ != "1":
+                fails.append(f"X4VR_UPSCALE={dl_mode.group(1)} but X4 reports DLSS off")
+            elif dl_mode and int(left) == 0:
+                fails.append("DLSS is on and X4 never evaluated it")
+            # One apart is a report landing between the two evaluations.
+            elif dl_mode and (int(left) - int(right) > 1 or int(bad_) > 0):
+                fails.append(f"the right eye missed DLSS: {left} left, {right} right, "
+                             f"{skip} skipped, {bad_} failed")
+            elif int(left) > 0:
+                print("dlss    whether both eyes look right is for the player to say")
+        elif dl_patched:
+            fails.append("DLSS was patched and never reported: the run ended before "
+                         "the first report, or the report's format moved")
+
     # **The mod's loading screen** (injector/x4vr_loadart.hpp): one byte lets X4
     # take the picture from a mod's extension. Gate on intent: asked means PATCHED.
     # The log can't see which picture X4 then showed.
@@ -5246,7 +5288,16 @@ def main(path):
             r"\[\s*([\d.]+)\]\s+inject\s+headlook: (in|out of) the pilot "
             r"seat — ", text)]
 
+        # The injector stays quiet about the seat until the player has first sat, so
+        # a new game's first menus are in no seat_off window. Its centring line still
+        # says where it was (take 410).
+        mc_off_lines = [float(t_) for t_ in re.findall(
+            r"\[\s*([\d.]+)\]\s+inject\s+headlook: HUD down off the pilot seat",
+            text)]
+
         def _off_seat(t):
+            if any(abs(t - x_) <= 0.5 for x_ in mc_off_lines):
+                return True, True
             for f_, t2_, acts in seat_off:
                 if f_ <= t <= t2_:
                     return True, acts

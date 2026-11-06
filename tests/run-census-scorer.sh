@@ -823,6 +823,16 @@ want "menucam centred -> the centring counted" /tmp/census-mc-centred.log menuca
 want "menucam centred -> 0.0% out of reach" /tmp/census-mc-centred.log menucam "CENTRED      0.0% of X4's UI out of reach"
 { cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$(mcpose 999990.500 -1.9851 6.3677)" "$(mcpose 999991.500 -1.9851 6.3677)" "$mcup" "$mcrep"; } > /tmp/census-mc-stuck.log
 want "menucam asked, still frozen -> FAIL" /tmp/census-mc-stuck.log FAIL "the centring did not act"
+# Take 410: a new game's first menu, on foot before the first seat, where the injector hasn't
+# started saying which seat it's in. Its centring line says, and that camera includes the body.
+mcfoot='[  999990.020] inject  headlook: HUD down off the pilot seat — X4'"'"'s camera CENTRED from yaw -5.71 pitch -14.35 to 0,0, so X4'"'"'s menus fill the window'
+{ cat /tmp/census-mc-base.log; printf '%s\n' "$mcarm" "$mcdown" "$mcfoot" "$(mcpose 999990.500 66.49 0.0)" "$(mcpose 999991.500 66.49 0.0)" "$mcup" "$mcrep"; } > /tmp/census-mc-foot.log
+if python3 tools/score_run.py /tmp/census-mc-foot.log 2>&1 | grep -q "the centring did not act"; then
+    bad "menucam: on foot before the first seat -> FAILs"
+else
+    ok "menucam: on foot before the first seat -> no FAIL"
+fi
+want "menucam: on foot before the first seat -> filed as on foot" /tmp/census-mc-foot.log menucam "off the pilot seat"
 sed 's/env: run = /env: run = X4VR_HEADLOOK_MENU_CENTRE=0 /' /tmp/census-mc-stuck.log > /tmp/census-mc-off.log
 if python3 tools/score_run.py /tmp/census-mc-off.log 2>&1 | grep -q "^FAIL.*MENU_CENTRE"; then
     bad "menucam switched off -> still FAILs"
@@ -1585,6 +1595,39 @@ want "ipd: by hand, followed anyway -> FAIL" /tmp/census-ipd-both.log "FAIL|  - 
 { cat /tmp/census-ipd-hand.log; printf '%s\n' "$ipdvr" '[  999950.100] layer   ipd: runtime reports 0.0629 m between the eyes; the scene is sheared with X4VR_IPD=0.0655, set by hand — -4.0%.'; } > /tmp/census-ipd-fixed.log
 want "ipd: by hand -> said" /tmp/census-ipd-fixed.log ipd "set by hand: the scene at 0.0655 m, the headset says 0.0629 m"
 absent "ipd: no headset located -> silent" /tmp/census-ipd-base.log ipd
+
+# DLSS in both eyes (x4vr_ngx.hpp).
+for f in '"dlss: PATCHED — X4'"'"'s three NGX calls' '"dlss: patch REFUSED — %s. X4 upscales' '"dlss: X4 says supported=%d on=%d mode=%s auto=%s; features %llu, evaluated left "'; do
+    if grep -qF "$f" injector/x4vr_inject.cpp; then
+        ok "dlss: the injector still prints $f"
+    else
+        bad "dlss: the injector's format moved: $f"
+    fi
+done
+sed 's/env: run = /env: run = X4VR_UPSCALE=dlss_quality /' "$BASE" > /tmp/census-dl-base.log
+dlpat='[  999950.000] inject  dlss: PATCHED — X4'"'"'s three NGX calls (create, evaluate, release) go through stubs at 0x3f0000, which do the same for the right eye: a feature of its own, and layer 1 of the same four images'
+dlrep() { printf '[  999960.000] inject  dlss: X4 says supported=%s on=%s mode=quality auto=dlaa; features %s, evaluated left %s right %s, right skipped %s, right failed %s' "$@"; }
+{ cat /tmp/census-dl-base.log; echo "$dlpat"; dlrep 1 1 1 900 900 0 0; echo; } > /tmp/census-dl-ok.log
+want "dlss: both eyes -> said" /tmp/census-dl-ok.log dlss "1 feature pair(s), evaluated 900 left 900 right"
+if python3 tools/score_run.py /tmp/census-dl-ok.log 2>&1 | grep -qE "^  - .*(DLSS|right eye)"; then
+    bad "dlss: both eyes -> FAILs"
+else
+    ok "dlss: both eyes -> no FAIL"
+fi
+want "dlss: asked, no PATCHED line -> FAIL" /tmp/census-dl-base.log "FAIL|  - " "but no PATCHED line"
+{ cat /tmp/census-dl-base.log; echo '[  999950.000] inject  dlss: patch REFUSED — no free page within rel32 reach of the DLSS calls. X4 upscales the left eye only, and the right eye'"'"'s scene is black.'; } > /tmp/census-dl-ref.log
+want "dlss: refused -> FAIL" /tmp/census-dl-ref.log "FAIL|  - " "its patch was refused"
+{ cat /tmp/census-dl-base.log; echo "$dlpat"; } > /tmp/census-dl-silent.log
+want "dlss: patched, never reported -> FAIL" /tmp/census-dl-silent.log "FAIL|  - " "patched and never reported"
+{ cat /tmp/census-dl-base.log; echo "$dlpat"; dlrep 0 0 0 0 0 0 0; echo; } > /tmp/census-dl-amd.log
+want "dlss: X4 says it can't -> FAIL" /tmp/census-dl-amd.log "FAIL|  - " "X4 says this machine can't"
+{ cat /tmp/census-dl-base.log; echo "$dlpat"; dlrep 1 1 1 0 0 0 0; echo; } > /tmp/census-dl-never.log
+want "dlss: never evaluated -> FAIL" /tmp/census-dl-never.log "FAIL|  - " "X4 never evaluated it"
+{ cat /tmp/census-dl-base.log; echo "$dlpat"; dlrep 1 1 0 900 0 900 0; echo; } > /tmp/census-dl-left.log
+want "dlss: left eye only -> FAIL" /tmp/census-dl-left.log "FAIL|  - " "the right eye missed DLSS: 900 left, 0 right, 900 skipped"
+{ cat "$BASE"; echo "$dlpat"; } > /tmp/census-dl-unasked.log
+want "dlss: patched unasked -> FAIL" /tmp/census-dl-unasked.log "FAIL|  - " "the DLSS patch went in with X4VR_UPSCALE not asking"
+absent "dlss: not asked -> silent" "$BASE" dlss
 
 # The mod's loading screen (x4vr_loadart.hpp).
 for f in '"loadart: PATCHED — X4'"'"'s loading screen' '"loadart: patch REFUSED — %s. X4 shows'; do

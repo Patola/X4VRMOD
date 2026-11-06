@@ -325,6 +325,16 @@ static Check check_gamescope_row() {
     return c;
 }
 
+const GpuInfo *best_gpu(const VulkanProbe &p) {
+    const GpuInfo *best = nullptr;
+    for (const GpuInfo &g : p.gpus)
+        if (g.capable() && (!best || (g.discrete && !best->discrete)))
+            best = &g;
+    return best;
+}
+
+bool GpuInfo::rtx() const { return vendor == 0x10de && name.find("RTX") != std::string::npos; }
+
 static Check check_gpu_row() {
     Check c;
     c.id = "gpu";
@@ -335,10 +345,7 @@ static Check check_gpu_row() {
         c.detail = p.detail;
         return c;
     }
-    const GpuInfo *best = nullptr;
-    for (const GpuInfo &g : p.gpus)
-        if (g.capable() && (!best || (g.discrete && !best->discrete)))
-            best = &g;
+    const GpuInfo *best = best_gpu(p);
     if (!best) {
         c.status = Status::Block;
         c.title = "No GPU can run the mod";
@@ -348,6 +355,9 @@ static Check check_gpu_row() {
     c.title = "GPU capable";
     c.detail = best->name + ", Vulkan " + std::to_string(best->api_major) + "." +
                std::to_string(best->api_minor);
+    c.dlss = best->rtx();
+    if (c.dlss)
+        c.detail += ", DLSS available";
     return c;
 }
 

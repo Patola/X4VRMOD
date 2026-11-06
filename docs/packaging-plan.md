@@ -168,7 +168,7 @@ binary is missing.
     has changed: `build/tests/x4vr_record_reads <Steam's X4> > reads`, then
     `tools/make_reloc_table.py reads <Steam's X4> <the other X4>`. Its verdict must say 0
     problems.
-* **GOG's X4 9.00, measured 2026-11-05 (never launched, binary only).** Heroic puts
+* **GOG's X4 9.00, measured 2026-11-05 (binary only; played since, take 410).** Heroic puts
   it at `<install_path>/game/X4`, and it doesn't link `libsteam_api`.
   * Not byte-identical: the same 28,644 exports, 53 KB less code, and all 8 feature
     groups of that day differ, so without common/x4vr_reloc.hpp every feature is off.
@@ -462,14 +462,26 @@ its paths parameterised (`BUILD`, `ROOT`, the `/nvme` default, `SteamAppId`).
     good as FSR1", no smearing.
   * Native at 4224²: 29.1 ms.
   * The other modes use the same code and differ only in X4's render size.
-* **DLSS — to verify, then to test on an RTX card:**
-  * X4's config has `<dlss>`, `<dlssmode>` and `<dlssg>` (frame
-    generation). Which of them selects DLSS upscaling, and its values, have
-    to be read from X4's Lua first.
-  * Offered only when the GPU is NVIDIA RTX (Vulkan vendor ID 0x10de and the
-    DLSS requirements met).
-  * Tested by Patola's friend with an RTX 5090: the debug build and a
-    protocol, scored like a take.
+* **DLSS: built for the RTX 5090's test, never run on an NVIDIA card** (2026-11-06; the
+  development PC is AMD).
+  * **X4's tags:** `<dlss>true</dlss>` and `<dlssmode>`, one of `auto`, `dlaa`, `quality`,
+    `balanced`, `performance`, `ultra_performance`, with `<upmode>none</upmode>`. The mod
+    serves them from `X4VR_UPSCALE=dlss_<mode>`, and off otherwise, so a player's flat DLSS
+    copied into the fork can't upscale one eye.
+  * **Both eyes** (`injector/x4vr_ngx.hpp`). X4 links NGX statically, and evaluating records
+    an opaque launch the layer can't repeat as it does FidelityFX's dispatches. So X4's three
+    calls (create, evaluate, release) go through stubs, patched only when DLSS is asked for:
+    a second feature for the right eye's history, and a second evaluation with X4's four
+    images swapped for layer 1. Without it the right eye's scene would be black, as with FSR
+    3 before take 383. **No data-only alternative was found.**
+  * **Offered only with an NVIDIA RTX GPU:** vendor 0x10de and "RTX" in the name of the GPU
+    the mod would run on, a discrete one first. A saved DLSS choice goes back to None if the
+    GPU row says otherwise. Above 3200 per eye the rule still chooses FSR 1 Quality: DLSS
+    takes that over once it's been played.
+  * **Tested so far:** the logic against a fake NGX (`tests/ngx_stereo.cpp`) and the sites on
+    both X4s. **To test:** on Patola's RTX 3070 laptop, no VR, the list and then
+    `X4VR_VR=0`'s side-by-side window, which shows both eyes. Then an RTX 5090 with a Steam
+    Frame: the debug build and a protocol, scored like a take; issues go to a later release.
 * **Frame generation stays off,** for FSR and DLSS alike. An interpolated
   frame has no head pose and adds latency, which is harmful in VR.
 * The launcher can offer FSR. Still open: a frame-rate figure for each mode
