@@ -41,6 +41,15 @@ add_custom_target(x4vr_version ALL
     COMMENT "x4vr version"
     VERBATIM)
 
+# The extension as it ships: extension/x4vrmod plus its loading screen, drawn with this
+# build's version. Regenerated at every build, rewritten only when something changed.
+find_package(Python3 QUIET COMPONENTS Interpreter)
+add_custom_target(x4vr_extension ALL
+    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DBIN=${CMAKE_BINARY_DIR}
+            -DPYTHON=${Python3_EXECUTABLE} -P ${CMAKE_SOURCE_DIR}/cmake/x4vr_extension.cmake
+    COMMENT "x4vr extension"
+    VERBATIM)
+
 add_subdirectory(layer)
 add_subdirectory(injector)
 add_subdirectory(launcher)
@@ -62,7 +71,7 @@ install(PROGRAMS launch/x4vr-launch.sh launch/deploy-extensions.sh
         DESTINATION share/x4vrmod/launch)
 install(FILES launch/x4vr-defaults.sh launch/defaults.conf
         DESTINATION share/x4vrmod/launch)
-install(DIRECTORY extension/x4vrmod DESTINATION share/x4vrmod/extension)
+install(DIRECTORY ${CMAKE_BINARY_DIR}/extension/x4vrmod DESTINATION share/x4vrmod/extension)
 install(DIRECTORY launcher/help DESTINATION share/x4vrmod)
 install(FILES LICENSE LICENSE.exception DESTINATION share/licenses/x4vrmod)
 install(FILES README.md docs/releases.md DESTINATION share/doc/x4vrmod)

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later WITH x4vrmod-linking-exception
 #
-# Copy X4VRMOD's own extension (extension/x4vrmod/ in this repo) into X4's
-# extensions folder, when -- and only when -- the installed copy differs.
+# Copy X4VRMOD's own extension into X4's extensions folder, when -- and only when
+# -- the installed copy differs.
 #
 #   launch/deploy-extensions.sh <X4 install dir>
 #
@@ -26,7 +26,10 @@ mkdir -p "$DEST" || { echo "deploy-extensions: can't create '$DEST'" >&2; exit 1
 RETIRED=(x4vrmod_lookaround x4vrmod_nosway x4vrmod_headlook)
 
 rc=0
-for src in "$ROOT"/extension/*/; do
+# What ships: a build's copy holds the loading screen. A zip or a package has only this one.
+SHIPPED="$ROOT/extension"
+[ -d "${X4VR_BUILD:-$ROOT/build}/extension" ] && SHIPPED="${X4VR_BUILD:-$ROOT/build}/extension"
+for src in "$SHIPPED"/*/; do
     [ -f "$src/content.xml" ] || continue
     name=$(basename "$src")
     dst="$DEST/$name"

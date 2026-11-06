@@ -25,7 +25,8 @@ done
 fail=0
 ok()  { printf 'ok    %s\n' "$1"; }
 bad() { printf 'FAIL  %s\n' "$1"; fail=1; }
-deploy() { launch/deploy-extensions.sh "$G" 2>&1; }
+# With no build's copy, what ships is the repo's.
+deploy() { X4VR_BUILD="$T/nobuild" launch/deploy-extensions.sh "$G" 2>&1; }
 
 out=$(deploy); rc=$?
 [ "$rc" = 0 ] && ok "first deploy exits 0" || bad "first deploy exited $rc: $out"

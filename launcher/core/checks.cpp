@@ -42,7 +42,7 @@ Layout detect_layout(const std::string &home) {
     if (here == X4VRMOD_BUILD_DIR "/launcher" || here == X4VRMOD_BUILD_DIR "/tests") {
         l.kind = LayoutKind::Dev;
         l.data_dir = X4VRMOD_SOURCE_DIR;
-        l.extension_dir = X4VRMOD_SOURCE_DIR "/extension/x4vrmod";
+        l.extension_dir = X4VRMOD_BUILD_DIR "/extension/x4vrmod";
         l.layer_manifest = X4VRMOD_BUILD_DIR "/layer/VK_LAYER_X4VR_core.json";
         l.injector = X4VRMOD_BUILD_DIR "/injector/libx4vr_inject.so";
         l.launch_script = X4VRMOD_SOURCE_DIR "/launch/x4vr-launch.sh";
@@ -293,21 +293,15 @@ static Check check_mod_row(const Layout &l, const Install &in) {
         c.detail = "The x4vrmod extension isn't in X4's folder.";
         return c;
     }
-    if (!same_tree(l.extension_dir, dest)) {
-        c.title = "Mod out of date";
-        c.detail = "The x4vrmod extension differs from this release's.";
-        return c;
-    }
-    for (const char *old : {"x4vrmod_lookaround", "x4vrmod_nosway", "x4vrmod_headlook"})
-        if (is_dir(in.dir + "/extensions/" + old)) {
-            c.title = "Old mod files present";
-            c.detail = std::string("The retired extension ") + old + " is still in X4's folder.";
-            return c;
-        }
+    // Installed once, the launch itself brings it up to date and removes the retired names,
+    // so neither is something to stop for. Every build differs, by its loading screen.
     c.status = Status::Ok;
     c.fix.clear();
     c.title = "Mod installed";
-    c.detail = "x4vrmod extension, up to date";
+    bool current = same_tree(l.extension_dir, dest);
+    for (const char *old : {"x4vrmod_lookaround", "x4vrmod_nosway", "x4vrmod_headlook"})
+        current = current && !is_dir(in.dir + "/extensions/" + old);
+    c.detail = current ? "x4vrmod extension, up to date" : "x4vrmod extension, updates when you play";
     return c;
 }
 

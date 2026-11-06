@@ -27,7 +27,7 @@ cp "$BUILD/layer/libVkLayer_X4VR_core.so" "$BUILD/injector/libx4vr_inject.so" "$
 cp "$ROOT/layer/VK_LAYER_X4VR_core.json.in" "$D/lib/"
 cp "$ROOT/launch/x4vr-launch.sh" "$ROOT/launch/x4vr-defaults.sh" \
    "$ROOT/launch/deploy-extensions.sh" "$ROOT/launch/defaults.conf" "$D/launch/"
-cp -r "$ROOT/extension/x4vrmod" "$D/extension/"
+cp -r "$BUILD/extension/x4vrmod" "$D/extension/"
 [ -d "$ROOT/launcher/help" ] && cp -r "$ROOT/launcher/help" "$D/"
 cp "$ROOT/LICENSE" "$ROOT/LICENSE.exception" "$ROOT/README.md" "$ROOT/docs/releases.md" "$S/"
 printf 'version=%s\n' "$ver" > "$D/manifest"

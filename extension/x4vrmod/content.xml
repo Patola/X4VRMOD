@@ -1,2 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<content id="x4vrmod" name="X4VRMOD" description="X4VRMOD's settings for VR: the cockpit free-look limits raised from 65/35 degrees to 180/75, so head tracking can turn the view all the way round, and the cockpit camera sway (the G-force lean and drift as the ship turns and accelerates) and the boost shake turned off, so the view moves only with your head. Enabled only in X4VRMOD sessions, by its launcher; off in vanilla X4. Remove by deleting this directory." author="X4VRMOD" version="1" date="2026-10-31" enabled="0" save="0"/>
+<content id="x4vrmod" name="X4VRMOD" description="X4VRMOD's settings for VR: the cockpit free-look limits raised from 65/35 degrees to 180/75, so head tracking can turn the view all the way round, and the cockpit camera sway (the G-force lean and drift as the ship turns and accelerates) and the boost shake turned off, so the view moves only with your head. Enabled only in X4VRMOD sessions, by its launcher; off in vanilla X4. Remove by deleting this directory." author="X4VRMOD" version="1" date="2026-10-31" enabled="0" save="0">
+  <!-- Only the load order: after the DLCs, so this extension's loading screen wins. -->
+  <dependency id="ego_dlc_split" optional="true"/>
+  <dependency id="ego_dlc_terran" optional="true"/>
+  <dependency id="ego_dlc_pirate" optional="true"/>
+  <dependency id="ego_dlc_boron" optional="true"/>
+  <dependency id="ego_dlc_timelines" optional="true"/>
+</content>
