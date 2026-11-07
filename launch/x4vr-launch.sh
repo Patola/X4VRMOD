@@ -600,6 +600,21 @@ if [[ "${X4VR_X11:-0}" == 1 ]]; then
     fi
 fi
 
+# Feral GameMode (X4VR_GAMEMODE=1, the launcher's checkbox). Its wrapper keeps the injector in
+# LD_PRELOAD and puts its own library first, for gamescope and for X4 under it.
+GAMEMODE=()
+case "${X4VR_GAMEMODE:-0}" in
+    0*) ;;
+    *)
+        if _gm="$(command -v gamemoderun)"; then
+            GAMEMODE=("$_gm")
+        else
+            echo "x4vr-launch: X4VR_GAMEMODE asks for GameMode, and gamemoderun isn't" \
+                 "installed: starting without it" >&2
+        fi
+        ;;
+esac
+
 echo "x4vr-launch: log=${X4VR_LOG:-stderr} layer=$([[ ${X4VR_NO_LAYER:-0} != 1 ]] && echo on || echo off) inject=$([[ ${X4VR_NO_INJECT:-0} != 1 ]] && echo on || echo off) gamescope=${X4VR_GAMESCOPE:-0} sbs=${X4VR_SBS:-0} x11=${X4VR_X11:-0}" >&2
 
 if [[ "${X4VR_SBS:-0}" == 1 && "${X4VR_GAMESCOPE:-0}" != 1 ]]; then
@@ -739,10 +754,10 @@ if [[ "${X4VR_GAMESCOPE:-0}" == 1 ]]; then
     # window; if that is wrong, the split test fails and SPLIT OFF says so.
     [[ "${X4VR_WINDOWS_FULLSCREEN:-0}" == 1 ]] &&
         GS_DECOR+=(--force-windows-fullscreen)
-    exec gamescope "${GS_DECOR[@]}" -w "$W" -h "$H" -W "$W" -H "$H" \
+    exec "${GAMEMODE[@]}" gamescope "${GS_DECOR[@]}" -w "$W" -h "$H" -W "$W" -H "$H" \
         --backend sdl -- \
         env -u WAYLAND_DISPLAY "SDL_VIDEODRIVER=${X4VR_SDL_DRIVER:-x11}" \
             "SDL_VIDEO_DRIVER=${X4VR_SDL_DRIVER:-x11}" "$@"
 else
-    exec "$@"
+    exec "${GAMEMODE[@]}" "$@"
 fi

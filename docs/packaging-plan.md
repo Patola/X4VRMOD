@@ -264,8 +264,7 @@ Egosoft):
     | Upscaler                       | (ok) Steam running                  |
     | [None (full resolution)    v]  | (ok) gamescope installed     3.17.0 |
     |                                | (x)  Headset not connected  [Retry] |
-    |                                | (ok) Vulkan layer installed  v0.9.9 |
-    |                                | (ok) Mod installed                  |
+    | [ ] GameMode (only if installed)| (ok) Mod installed                  |
     |----------------------------------------------------------------------|
     | [Help] [Launch options] [Report a bug] [More v]  [ ] Debug log [PLAY]|
     |                                                  [ ] Flatscreen      |
@@ -429,6 +428,35 @@ its paths parameterised (`BUILD`, `ROOT`, the `/nvme` default, `SteamAppId`).
 * **X4's in-game menu:** left alone for now. Narrowing its list to the current
   mode (the injector already sits on SDL) is a possible later polish.
 
+## CI and releases
+
+`.github/workflows/build.yml`, Patola's choice over building packages locally (2026-11-07). Each
+package is built on the distribution it's for, because it links that distribution's Qt:
+
+| Job | Image | Makes |
+|---|---|---|
+| `test` | `archlinux:latest` | Nothing: `packaging/ci/run-tests.sh` |
+| `arch` | `archlinux:latest` | `.pkg.tar.zst`, from the real PKGBUILD |
+| `debian` | `ubuntu:24.04`, `debian:13` | `.deb`, one per distribution, through CPack |
+| `fedora` | `fedora:latest` | `.rpm`, through CPack |
+| `zip` | `ubuntu:22.04` | The zip, on the oldest Qt 6 and an older glibc so it runs on the most systems |
+| `release` | runner | On a tag: a **draft** release with all of them, to read and publish by hand |
+
+* **Each package is installed and started** in its own container
+  (`packaging/ci/check-installed.sh`, `check-zip.sh`): everything is there, nothing is missing
+  from what it links, it knows its layout, and the loading screen's catalog is in it.
+* **Tests:** no X4 and no GPU there. What checks X4's bytes skips itself, so **a patch site that
+  moved is only caught on a machine with X4.** What drives the layer runs on Mesa's software
+  Vulkan, lavapipe. `run-xr-probe` needs a VR runtime and doesn't run.
+* **Versions:** a tag's own, between tags `0.9.9+16.ge052f4e` (`0.9.9.r16.ge052f4e` on Arch), so
+  they sort after the last tag.
+* **To release:** write the version's section in `docs/releases.md`, set `pkgver` in the PKGBUILD,
+  tag `vX.Y.Z` and push the tag. `tools/release-notes.py` fails the release if the section is
+  missing. Staying on 0.9.x for now (Patola, 2026-11-07).
+* **What each package expects:** gamescope and the OpenXR and Vulkan loaders aren't linked, so
+  they're listed by hand: recommended on `.deb` because not every Debian has gamescope, required
+  on `.rpm` and Arch. GameMode is only suggested.
+
 ## Upscaling: FSR and DLSS
 
 * **X4 9.00 selects its upscaler with `<upmode>`** (GetUpscalingOption).
@@ -478,10 +506,10 @@ its paths parameterised (`BUILD`, `ROOT`, the `/nvme` default, `SteamAppId`).
     the mod would run on, a discrete one first. A saved DLSS choice goes back to None if the
     GPU row says otherwise. Above 3200 per eye the rule still chooses FSR 1 Quality: DLSS
     takes that over once it's been played.
-  * **Tested so far:** the logic against a fake NGX (`tests/ngx_stereo.cpp`) and the sites on
-    both X4s. **To test:** on Patola's RTX 3070 laptop, no VR, the list and then
-    `X4VR_VR=0`'s side-by-side window, which shows both eyes. Then an RTX 5090 with a Steam
-    Frame: the debug build and a protocol, scored like a take; issues go to a later release.
+  * **Tested on an RTX 3070 with no headset (2026-11-07, `X4VR_VR=0`'s side-by-side window at
+    1408 per eye):** X4 reports it supported and on, a feature for each eye, 12379 evaluations
+    in each with none skipped or failed. Patola: both eyes correct all the time. **To test:** in
+    a headset, an RTX 5090 with a Steam Frame, scored like a take; issues go to a later release.
 * **Frame generation stays off,** for FSR and DLSS alike. An interpolated
   frame has no head pose and adds latency, which is harmful in VR.
 * The launcher can offer FSR. Still open: a frame-rate figure for each mode

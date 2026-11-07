@@ -9,6 +9,7 @@ window for a short explanation. This page has the rest.</p>
 <a href="#eye">Eye resolution</a> |
 <a href="#headsets">Settings by headset</a> |
 <a href="#upscaler">Upscaler</a> |
+<a href="#gamemode">GameMode</a> |
 <a href="#ipd">Eye distance</a> |
 <a href="#play">Play</a> |
 <a href="#flatscreen">Flatscreen</a> |
@@ -102,6 +103,14 @@ because drawing that many pixels twice is more than most GPUs can do smoothly. A
 so, and you can choose None again to undo it. A choice you made yourself is never changed,
 and coming back to 3200 or less returns to None only if the launcher chose it.</p>
 
+<a name="gamemode"></a>
+<h2>GameMode</h2>
+<p>If <a href="https://github.com/FeralInteractive/gamemode">Feral GameMode</a> is installed,
+this box appears. Ticked, it gives the game priority over the rest of your system while it
+runs, which usually means a few more frames per second. It applies however you start the game:
+Play, Flatscreen, Steam's launch line or a terminal. If it isn't installed, the box doesn't
+appear and nothing changes.</p>
+
 <a name="ipd"></a>
 <h2>Eye distance</h2>
 <p>There's nothing to set: the mod takes the distance between your eyes from the headset,
@@ -182,17 +191,13 @@ asking starts part of it.</li>
 the WiVRn app in the headset and connect.</li>
 </ul>
 
-<a name="row-layer"></a>
-<h3>Vulkan layer installed</h3>
-<p>The layer is the part of the mod that sits between X4 and your GPU and makes the two
-eye images. It only loads when the mod asks for it, so no other program is affected.
-"Out of date" means it's from a different release than this launcher; <b>Install</b>
-replaces it.</p>
-
 <a name="row-mod"></a>
 <h3>Mod installed</h3>
-<p>The mod's small X4 extension, which lets your head turn further than X4 normally
-allows and removes the camera sway. It sits in X4's <tt>extensions</tt> folder.</p>
+<p>The mod's parts, which <b>Install</b> puts in place together. One sits between X4 and your
+GPU and makes the two eye images, and only loads when the mod asks for it, so no other program
+is affected. The other is a small X4 extension in X4's <tt>extensions</tt> folder, which lets
+your head turn further than X4 normally allows and removes the camera sway. "Out of date"
+means they're from a different release than this launcher; <b>Install</b> replaces them.</p>
 
 <a name="row-gpu"></a>
 <h3>GPU capable</h3>
@@ -206,7 +211,9 @@ this line is red, update your graphics driver first.</p>
 Play is the simplest way in, and these are for when you'd rather start from Steam or a
 terminal. Both run the mod the same way as Play, with the settings in this window.</p>
 <p><img src="steam-launch-options.png" width="640"></p>
-<p>With that line set, Steam always starts X4 in VR, so clear it to play flat again.</p>
+<p>Steam replaces <tt>%command%</tt> with its own command for X4, and <tt>x4vrmod run</tt>
+starts X4 with that command, so it has to be there. With that line set, Steam always starts X4
+in VR, so clear it to play flat again.</p>
 <p>Started from Steam, a short logo plays first, because Steam's command doesn't include
 the options Play adds to skip it.</p>
 

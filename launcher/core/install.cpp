@@ -338,8 +338,14 @@ int run_flat(const std::string &home, const std::string &game) {
     std::vector<char *> argv = {const_cast<char *>(own.c_str()), const_cast<char *>("-skipintro"),
                                 const_cast<char *>("-nocputhrottle"),
                                 const_cast<char *>("-nosoundthrottle"), nullptr};
+    // GameMode isn't the mod's: a baseline with it off wouldn't compare with a session with it on.
+    const char *gm_env = getenv("X4VR_GAMEMODE");
+    const std::string gm = gm_env ? gm_env : load_profile(profile_path(home)).get("gamemode");
+    const std::string wrap = !gm.empty() && gm[0] != '0' ? find_on_path("gamemoderun") : "";
+    if (!wrap.empty())
+        argv.insert(argv.begin(), const_cast<char *>(wrap.c_str()));
     fflush(nullptr);
-    execv(own.c_str(), argv.data());
+    execv(argv[0], argv.data());
     perror("x4vrmod: couldn't start X4");
     return 2;
 }

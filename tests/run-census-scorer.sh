@@ -1596,6 +1596,20 @@ want "ipd: by hand, followed anyway -> FAIL" /tmp/census-ipd-both.log "FAIL|  - 
 want "ipd: by hand -> said" /tmp/census-ipd-fixed.log ipd "set by hand: the scene at 0.0655 m, the headset says 0.0629 m"
 absent "ipd: no headset located -> silent" /tmp/census-ipd-base.log ipd
 
+# GameMode (the launch script).
+if grep -qF '"gamemode: libgamemodeauto %s in X4"' injector/x4vr_inject.cpp; then
+    ok "gamemode: the injector still prints its line"
+else
+    bad "gamemode: the injector's format moved"
+fi
+sed 's/env: run = /env: run = X4VR_GAMEMODE=1 /' "$BASE" > /tmp/census-gm-base.log
+{ cat /tmp/census-gm-base.log; echo '[  999950.000] inject  gamemode: libgamemodeauto is loaded in X4'; } > /tmp/census-gm-ok.log
+want "gamemode: in X4 -> said" /tmp/census-gm-ok.log gamemode "its library is in X4"
+{ cat /tmp/census-gm-base.log; echo '[  999950.000] inject  gamemode: libgamemodeauto is NOT loaded in X4'; } > /tmp/census-gm-no.log
+want "gamemode: not in X4 -> FAIL" /tmp/census-gm-no.log "FAIL|  - " "GameMode's library isn't in X4"
+want "gamemode: nothing said -> FAIL" /tmp/census-gm-base.log "FAIL|  - " "didn't say whether GameMode reached X4"
+absent "gamemode: not asked -> silent" "$BASE" gamemode
+
 # DLSS in both eyes (x4vr_ngx.hpp).
 for f in '"dlss: PATCHED — X4'"'"'s three NGX calls' '"dlss: patch REFUSED — %s. X4 upscales' '"dlss: X4 says supported=%d on=%d mode=%s auto=%s; features %llu, evaluated left "'; do
     if grep -qF "$f" injector/x4vr_inject.cpp; then

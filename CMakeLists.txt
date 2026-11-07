@@ -76,3 +76,44 @@ install(DIRECTORY launcher/help DESTINATION share/x4vrmod)
 install(FILES LICENSE LICENSE.exception DESTINATION share/licenses/x4vrmod)
 install(FILES README.md docs/releases.md DESTINATION share/doc/x4vrmod)
 # add_subdirectory(cursor)   # later phase
+
+# The .deb and .rpm (packaging/ci/package-cpack.sh; the zip and Arch's package have their own
+# ways). Each lists what it can't find by looking at what the programs link: gamescope, and the
+# OpenXR and Vulkan loaders, which are only dlopen'd. A tag's version is its own; between tags
+# it sorts after the last tag, like 0.9.9+16.ge052f4e.
+execute_process(
+    COMMAND git describe --tags --always --match "v[0-9]*"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE X4VR_DESCRIBE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+string(REGEX REPLACE "^v" "" X4VR_PACKAGE_VERSION "${X4VR_DESCRIBE}")
+string(REGEX REPLACE "-([0-9]+)-g" "+\\1.g" X4VR_PACKAGE_VERSION "${X4VR_PACKAGE_VERSION}")
+if(NOT X4VR_PACKAGE_VERSION MATCHES "^[0-9]")
+    set(X4VR_PACKAGE_VERSION "0.0.0+${X4VR_PACKAGE_VERSION}")
+endif()
+set(CPACK_PACKAGE_NAME x4vrmod)
+set(CPACK_PACKAGE_VERSION "${X4VR_PACKAGE_VERSION}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+    "VR mod for X4: Foundations on native Linux (unofficial, not affiliated with Egosoft)")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/Patola/X4VRMOD")
+set(CPACK_PACKAGE_CONTACT "Cláudio Sampaio <patola at gmail dot com>")
+set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+set(CPACK_DEBIAN_PACKAGE_SECTION games)
+if(NOT DEFINED CPACK_DEBIAN_PACKAGE_SHLIBDEPS)
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+endif()
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "bash")
+set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "gamescope, libopenxr-loader1, libvulkan1, qt6-qpa-plugins")
+set(CPACK_DEBIAN_PACKAGE_SUGGESTS "gamemode")
+set(CPACK_RPM_FILE_NAME RPM-DEFAULT)
+set(CPACK_RPM_PACKAGE_LICENSE "GPL-3.0-or-later WITH x4vrmod-linking-exception")
+set(CPACK_RPM_PACKAGE_REQUIRES "bash, gamescope, openxr-libs, vulkan-loader")
+set(CPACK_RPM_PACKAGE_SUGGESTS "gamemode")
+# Not ours to claim: these directories belong to the system's own packages.
+set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
+    /usr/share/applications /usr/share/icons /usr/share/icons/hicolor
+    /usr/share/icons/hicolor/256x256 /usr/share/icons/hicolor/256x256/apps
+    /usr/share/licenses /usr/share/doc /usr/share/vulkan
+    /usr/share/vulkan/explicit_layer.d)
+include(CPack)

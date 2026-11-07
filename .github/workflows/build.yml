@@ -1,0 +1,165 @@
+# SPDX-License-Identifier: GPL-3.0-or-later WITH x4vrmod-linking-exception
+#
+# Tests, and builds every package on the distribution it's for, because each links that
+# distribution's Qt. A tag vX.Y.Z also makes a draft release with all of them, to read and
+# publish by hand. Nothing here has X4 or a GPU: what needs X4 skips, and what drives the layer
+# runs on Mesa's software Vulkan (packaging/ci/run-tests.sh).
+name: Build
+
+on:
+  push:
+    branches: [main, "ci-**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install the tools
+        run: >
+          pacman -Syu --noconfirm --needed base-devel cmake git qt6-base vulkan-headers
+          vulkan-icd-loader openxr python python-numpy python-pillow zlib zip unzip binutils
+          vulkan-swrast vulkan-validation-layers spirv-tools
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Build
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j"$(nproc)"
+      - name: Test
+        run: packaging/ci/run-tests.sh build
+
+  arch:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install the tools
+        run: >
+          pacman -Syu --noconfirm --needed base-devel cmake git qt6-base vulkan-headers
+          vulkan-icd-loader openxr python python-pillow zlib gamescope hicolor-icon-theme
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Package
+        run: packaging/ci/package-arch.sh dist
+      - name: Install it and start it
+        run: |
+          pacman -U --noconfirm dist/*.pkg.tar.zst
+          packaging/ci/check-installed.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: arch
+          path: dist/*
+          if-no-files-found: error
+
+  debian:
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:24.04", "debian:13"]
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      - name: Install the tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential cmake git file dpkg-dev \
+            qt6-base-dev libgl-dev libopengl-dev libvulkan-dev libopenxr-dev zlib1g-dev python3 \
+            python3-pil ca-certificates
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Package
+        run: packaging/ci/package-cpack.sh DEB "${{ matrix.image }}" dist
+      - name: Install it and start it
+        run: |
+          apt-get install -y --no-install-recommends ./dist/*.deb
+          packaging/ci/check-installed.sh
+      - name: Artifact name
+        id: name
+        run: echo "label=$(echo '${{ matrix.image }}' | tr -d ':.')" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deb-${{ steps.name.outputs.label }}
+          path: dist/*
+          if-no-files-found: error
+
+  fedora:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Install the tools
+        run: >
+          dnf install -y --setopt=install_weak_deps=False gcc-c++ cmake git rpm-build
+          qt6-qtbase-devel vulkan-headers vulkan-loader-devel openxr-devel zlib-devel python3
+          python3-pillow findutils which
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Package
+        run: packaging/ci/package-cpack.sh RPM fedora dist
+      - name: Install it and start it
+        run: |
+          dnf install -y --setopt=install_weak_deps=False ./dist/*.rpm
+          packaging/ci/check-installed.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rpm-fedora
+          path: dist/*
+          if-no-files-found: error
+
+  # The oldest Qt 6 the window builds against, and an older glibc, so the zip runs on the most
+  # systems: its programs carry their own libstdc++ and libgcc and use the system's Qt.
+  zip:
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    steps:
+      - name: Install the tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential cmake git zip \
+            qt6-base-dev libgl-dev libopengl-dev libvulkan-dev libopenxr-dev zlib1g-dev python3 \
+            python3-pil ca-certificates
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Package
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DX4VR_BUILD_TESTS=OFF
+          cmake --build build -j"$(nproc)"
+          mkdir -p dist
+          tools/make-zip.sh "$PWD/dist"
+          packaging/ci/check-zip.sh dist/*.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zip
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, arch, debian, fedora, zip]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tools/release-notes.py "$GITHUB_REF_NAME" > notes.md
+          gh release create "$GITHUB_REF_NAME" --draft --title "$GITHUB_REF_NAME" \
+            --notes-file notes.md $(find artifacts -type f)

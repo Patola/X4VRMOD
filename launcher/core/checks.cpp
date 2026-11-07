@@ -243,15 +243,20 @@ Check vr_row(const ActiveRuntime &rt, const XrProbe &p) {
     return c;
 }
 
-static Check check_layer_row(const Layout &l) {
+// One row, because to the player it's one thing with one button: Install puts all of it in
+// place.
+static Check check_mod_row(const Layout &l, const Install &in) {
     Check c;
-    c.id = "layer";
+    c.id = "mod";
     c.status = Status::Block;
     c.fix = "install";
-    c.title = "Vulkan layer not installed";
+    c.title = "Mod not installed";
+    const std::string dest = in.dir + "/extensions/x4vrmod";
     const std::string t = read_text_file(l.layer_manifest, 64 * 1024);
     if (t.empty()) {
-        c.detail = "No manifest at " + l.layer_manifest;
+        // Nothing yet is the usual first start, and needs no explaining.
+        if (is_dir(dest))
+            c.detail = "No Vulkan layer manifest at " + l.layer_manifest;
         return c;
     }
     const auto libs = json_strings(t, "library_path");
@@ -259,7 +264,7 @@ static Check check_layer_row(const Layout &l) {
     if (!lib.empty() && lib[0] != '/')
         lib = dir_name(l.layer_manifest) + "/" + lib;
     if (lib.empty() || !is_file(lib)) {
-        c.detail = "The manifest names a library that isn't there: " + lib;
+        c.detail = "The Vulkan layer's manifest names a library that isn't there: " + lib;
         return c;
     }
     if (!is_file(l.injector)) {
@@ -268,39 +273,26 @@ static Check check_layer_row(const Layout &l) {
     }
     const std::string lv = library_version(lib), iv = library_version(l.injector);
     if (lv != own_version() || iv != own_version()) {
-        c.title = "Vulkan layer out of date";
+        c.title = "Mod out of date";
         c.detail = "Layer " + (lv.empty() ? std::string("unknown") : lv) + ", injector " +
                    (iv.empty() ? std::string("unknown") : iv) + ", this launcher " +
                    own_version() + ".";
         return c;
     }
-    c.status = Status::Ok;
-    c.fix.clear();
-    c.title = "Vulkan layer installed";
-    c.detail = lv;
-    return c;
-}
-
-static Check check_mod_row(const Layout &l, const Install &in) {
-    Check c;
-    c.id = "mod";
-    c.status = Status::Block;
-    c.fix = "install";
-    const std::string dest = in.dir + "/extensions/x4vrmod";
     if (!is_dir(dest)) {
-        c.title = "Mod not installed";
         c.detail = "The x4vrmod extension isn't in X4's folder.";
         return c;
     }
-    // Installed once, the launch itself brings it up to date and removes the retired names,
-    // so neither is something to stop for. Every build differs, by its loading screen.
+    // Installed once, the launch itself brings the extension up to date and removes the
+    // retired names, so neither is something to stop for. Every build differs, by its
+    // loading screen.
     c.status = Status::Ok;
     c.fix.clear();
     c.title = "Mod installed";
     bool current = same_tree(l.extension_dir, dest);
     for (const char *old : {"x4vrmod_lookaround", "x4vrmod_nosway", "x4vrmod_headlook"})
         current = current && !is_dir(in.dir + "/extensions/" + old);
-    c.detail = current ? "x4vrmod extension, up to date" : "x4vrmod extension, updates when you play";
+    c.detail = lv + (current ? ", up to date" : ", updates when you play");
     return c;
 }
 
@@ -436,7 +428,6 @@ std::vector<Check> run_checks(const CheckOptions &o) {
         out.push_back(check_vr_row(home, o.xr_out));
 
     const Layout l = detect_layout(home);
-    out.push_back(check_layer_row(l));
     if (usable)
         out.push_back(check_mod_row(l, in));
     if (!o.skip_gpu)

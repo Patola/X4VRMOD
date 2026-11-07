@@ -4857,6 +4857,16 @@ def main(path):
         fails.append("the headset was located and the scene never took its eye "
                      "distance: the ipd line is missing")
 
+    # **GameMode** (the launch script's X4VR_GAMEMODE). What reaches X4 is its library.
+    gm_asked = bool(re.search(r"\bX4VR_GAMEMODE=[1-9]", run or ""))
+    gm_line = re.search(r"gamemode: libgamemodeauto (is loaded|is NOT loaded) in X4", text)
+    if gm_asked and not gm_line:
+        fails.append("X4VR_GAMEMODE=1 but the injector didn't say whether GameMode reached X4")
+    elif gm_asked and gm_line.group(1) != "is loaded":
+        fails.append("X4VR_GAMEMODE=1 and GameMode's library isn't in X4")
+    elif gm_asked:
+        print("gamemode  its library is in X4")
+
     # **DLSS in both eyes** (injector/x4vr_ngx.hpp). Asked means patched, X4 says it
     # can, each eye has a feature, and every evaluation ran for the right eye too:
     # patched is not executed.

@@ -30,6 +30,8 @@ std::string base_name(const std::string &path);
 std::string home_dir();
 // The first program called `name` on PATH, or "".
 std::string find_on_path(const std::string &name);
+// Feral GameMode's wrapper: `gamemoderun` on the PATH.
+bool have_gamemode();
 // Every value of `"key": "..."` in a JSON text. A scan, not a parser: enough for
 // the few small files the launcher reads.
 std::vector<std::string> json_strings(const std::string &text, const std::string &key);

@@ -65,8 +65,7 @@ static std::vector<Check> good_rows() {
             row("running", Status::Ok, "X4 not running yet"),
             row("gamescope", Status::Ok, "gamescope installed", "3.17.0"),
             row("vr", Status::Ok, "VR ready", "WiVRn, Meta Quest 3 on WiVRn, asks 2889 x 3026 per eye"),
-            row("layer", Status::Ok, "Vulkan layer installed", "the same version as this launcher"),
-            row("mod", Status::Ok, "Mod installed", "x4vrmod extension, up to date"),
+            row("mod", Status::Ok, "Mod installed", "v0.9.10, up to date"),
             row("gpu", Status::Ok, "GPU capable", "Radeon RX 7900 XTX, Vulkan 1.4")};
 }
 
@@ -93,7 +92,7 @@ static void test_play(Window &w, const QString &shots) {
     auto *x4 = w.findChild<QLabel *>("row-x4");
     check(x4 && x4->text().contains("build 23660954") && !x4->text().contains("/games"),
           "the X4 row leaves the folder to the Game box");
-    for (const char *id : {"x4", "patches", "steam", "running", "gamescope", "vr", "layer", "mod", "gpu"}) {
+    for (const char *id : {"x4", "patches", "steam", "running", "gamescope", "vr", "mod", "gpu"}) {
         auto *r = w.findChild<QLabel *>(QString("row-") + id);
         check(r && r->toolTip().size() > 20, std::string("the ") + id + " row explains itself on hover");
     }
@@ -193,11 +192,17 @@ static void test_play(Window &w, const QString &shots) {
     auto modless = good_rows();
     replace(modless, row("vr", Status::Block, "No VR runtime running", "", "start-vr"));
     replace(modless, row("mod", Status::Block, "Mod not installed", "", "install"));
-    replace(modless, row("layer", Status::Block, "Vulkan layer not installed", "", "install"));
     replace(modless, row("gamescope", Status::Block, "gamescope isn't installed"));
     replace(modless, row("patches", Status::Warn, "X4 build not supported yet", "", "details"));
     w.showChecks(modless);
     check(!play->isEnabled(), "without VR and the mod, Play waits");
+    {
+        int installs = 0;
+        for (QPushButton *b : w.findChildren<QPushButton *>())
+            if (b->isVisibleTo(&w) && b->text().startsWith("Install"))
+                installs++;
+        check(installs == 1, "the mod's parts missing: one Install button");
+    }
     flat->setChecked(true);
     check(play->isEnabled() && play->text() == "Play" && play->styleSheet().contains("#2e9e4f"),
           "Flatscreen: green all the same");
@@ -276,6 +281,37 @@ static void test_eye_rule(Window &w, const std::string &home) {
 
     check(!w.findChild<QWidget *>("ipd"), "eye distance isn't asked for: it comes from the headset");
 
+    // GameMode: only there to choose when it's installed, and the choice is kept.
+    auto *gm = w.findChild<QCheckBox *>("gamemode");
+    const QByteArray path_was = qgetenv("PATH");
+    const std::string fake_bin = home + "/fake-bin";
+    qputenv("PATH", QByteArray::fromStdString(home + "/nothing"));
+    eye->setCurrentIndex(eye->findData(3200)); // anything that syncs the settings
+    eye->setCurrentIndex(eye->findData(2816));
+    check(gm && gm->isHidden(), "no gamemoderun: no GameMode box");
+    QDir().mkpath(QString::fromStdString(fake_bin));
+    {
+        QFile f(QString::fromStdString(fake_bin + "/gamemoderun"));
+        f.open(QIODevice::WriteOnly);
+        f.write("#!/bin/sh\nexec \"$@\"\n");
+        f.close();
+        f.setPermissions(f.permissions() | QFileDevice::ExeOwner);
+    }
+    qputenv("PATH", QByteArray::fromStdString(fake_bin));
+    eye->setCurrentIndex(eye->findData(3200));
+    eye->setCurrentIndex(eye->findData(2816));
+    check(gm && !gm->isHidden() && !gm->isChecked(), "gamemoderun found: the box is there, off");
+    check(!gm->toolTip().isEmpty(), "...and it explains itself on hover");
+    gm->setChecked(true);
+    check(load_profile(profile_path(home)).get("gamemode") == "1", "ticked, it's saved");
+    gm->setChecked(false);
+    check(load_profile(profile_path(home)).get("gamemode").empty(), "unticked, it's gone");
+    qputenv("PATH", QByteArray::fromStdString(home + "/nothing"));
+    eye->setCurrentIndex(eye->findData(3200));
+    eye->setCurrentIndex(eye->findData(2816));
+    check(gm && gm->isHidden(), "gamemoderun gone: so is the box");
+    qputenv("PATH", path_was);
+
     // DLSS: on the list only with an RTX card, as the GPU row says.
     check(up->findData("dlss_quality") < 0, "a Radeon: DLSS isn't offered");
     auto rtx = good_rows();
@@ -298,6 +334,8 @@ static void test_eye_rule(Window &w, const std::string &home) {
               load_profile(profile_path(home)).get("upscaler") == "none",
           "...and a saved DLSS goes back to None");
     check(renders->text().contains("back to None"), "...saying why");
+    up->setCurrentIndex(up->findData("fsr_quality")); // takes the note with it
+    up->setCurrentIndex(up->findData("none"));
     w.showChecks({});
     check(!w.findChild<QCheckBox *>("lean"), "lean isn't a choice any more");
 }
@@ -482,9 +520,9 @@ static void test_help(const std::string &helpDir) {
         }
     }
     check(pics && picCount >= 3, "every picture in the help exists");
-    for (const char *id : {"x4", "patches", "steam", "running", "gamescope", "vr", "layer", "mod", "gpu"})
+    for (const char *id : {"x4", "patches", "steam", "running", "gamescope", "vr", "mod", "gpu"})
         check(anchors.count(QString("row-") + id) > 0, std::string("the ") + id + " row has a section");
-    for (const char *a : {"game", "eye", "headsets", "upscaler", "ipd", "play", "flatscreen", "launch",
+    for (const char *a : {"game", "eye", "headsets", "upscaler", "gamemode", "ipd", "play", "flatscreen", "launch",
                           "install", "uninstall", "more", "wivrn", "troubleshooting", "codec", "input",
                           "report"})
         check(anchors.count(a) > 0, std::string("help has a section on ") + a);

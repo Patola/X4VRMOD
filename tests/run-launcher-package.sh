@@ -63,8 +63,7 @@ X="env HOME=$H XDG_CONFIG_HOME= XDG_STATE_HOME= X4VR_GAME= $U/bin/x4vrmod"
 
 out=$($X doctor --game "$G" --no-vr 2>&1)
 grep -q '(package)' <<<"$out" && ok "doctor knows it's the package" || bad "layout: $out"
-grep -q '^ok    Vulkan layer installed' <<<"$out" && ok "the package's layer counts as installed" || bad "layer: $out"
-grep -q '^block Mod not installed' <<<"$out" && ok "the extension still needs installing" || bad "mod: $out"
+grep -q "^block Mod not installed: The x4vrmod extension isn't" <<<"$out" && ok "the package's layer counts, and the extension still needs installing" || bad "mod: $out"
 
 out=$($X install --game "$G" 2>&1); rc=$?
 [ "$rc" = 0 ] && ok "install succeeds" || bad "install: $out"

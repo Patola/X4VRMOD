@@ -1236,6 +1236,11 @@ __attribute__((constructor)) static void x4vr_inject_init() {
              x4vr_build_version());
     if (exe_is_game(exe)) {
         log_startup_env();
+        // GameMode's own library, preloaded ahead of this one, or the wrapper didn't reach X4.
+        if (x4vr::env_on("X4VR_GAMEMODE", false))
+            X4VR_LOG("gamemode: libgamemodeauto %s in X4",
+                     dlopen("libgamemodeauto.so.0", RTLD_LAZY | RTLD_NOLOAD) ? "is loaded"
+                                                                            : "is NOT loaded");
         // Before anything that reads or patches X4: where this build keeps what the
         // mod names by Steam's addresses.
         reloc_init();

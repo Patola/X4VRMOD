@@ -195,7 +195,7 @@ std::vector<std::pair<std::string, std::string>> profile_env(const Profile &p) {
     std::vector<std::pair<std::string, std::string>> out;
     static const struct { const char *key, *env; } kMap[] = {
         {"eye", "X4VR_H"},        {"upscaler", "X4VR_UPSCALE"}, {"ipd", "X4VR_IPD"},
-        {"fov", "X4VR_FOV"},
+        {"fov", "X4VR_FOV"},      {"gamemode", "X4VR_GAMEMODE"},
     };
     for (const auto &m : kMap) {
         const auto it = p.values.find(m.key);
@@ -240,6 +240,9 @@ std::string profile_set(Profile &p, const std::string &key, const std::string &v
     } else if (key == "fov") {
         if (!number(0.5, 2.5))
             return "error: fov is X4's field of view, like 1.4917";
+    } else if (key == "gamemode") {
+        if (value != "0" && value != "1")
+            return "error: gamemode is 1 to use it, 0 not to";
     } else if (key == "game") {
         const GamePath g = classify_game_path(value);
         if (g.kind == PathKind::Windows)
@@ -249,7 +252,7 @@ std::string profile_set(Profile &p, const std::string &key, const std::string &v
         p.values[key] = g.exe;
         return "";
     } else if (key.rfind("env.", 0) != 0 || key.size() <= 4) {
-        return "error: unknown setting (eye, upscaler, ipd, fov, game, env.NAME)";
+        return "error: unknown setting (eye, upscaler, ipd, fov, gamemode, game, env.NAME)";
     } else if (key[4] >= '0' && key[4] <= '9') {
         return "error: not a variable name: " + key.substr(4);
     } else if (key.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"

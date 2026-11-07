@@ -163,8 +163,9 @@ LaunchOptionsDialog::LaunchOptionsDialog(const QString &steamLine, const QString
         l->setPixmap(s);
         box->addWidget(l);
     }
-    auto *clear = new QLabel("With that line set, Steam always starts X4 in VR. Clear it to play "
-                             "flat again.",
+    auto *clear = new QLabel("Steam replaces %command% with its own command for X4, and the mod "
+                             "starts X4 with that. With the line set, Steam always starts X4 in "
+                             "VR. Clear it to play flat again.",
                              this);
     clear->setWordWrap(true);
     box->addWidget(clear);

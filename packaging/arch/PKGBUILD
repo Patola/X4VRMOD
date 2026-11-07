@@ -8,7 +8,8 @@ url="https://github.com/Patola/X4VRMOD"
 license=('GPL-3.0-or-later')
 depends=('bash' 'gamescope' 'glibc' 'hicolor-icon-theme' 'libgcc' 'libstdc++' 'openxr'
          'qt6-base' 'vulkan-icd-loader' 'zlib')
-makedepends=('cmake' 'git' 'vulkan-headers')
+makedepends=('cmake' 'git' 'python' 'python-pillow' 'vulkan-headers')
+optdepends=('gamemode: the launcher offers it, for a few more frames per second')
 source=("x4vrmod::git+https://github.com/Patola/X4VRMOD.git#tag=v${pkgver}")
 sha256sums=('SKIP')
 

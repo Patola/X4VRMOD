@@ -77,6 +77,7 @@ private:
     void requestChecks(bool forceVr);
     void applyChecks(const std::vector<Check> &rows, bool keepVr, bool keepGpu);
     void fillUpscalers();
+    void gamemodeToggled();
     void updateRow(const std::string &id);
     void updateVrStart(bool wanted);
     void startProgram(const QString &program, const QStringList &args);
@@ -113,6 +114,7 @@ private:
     QComboBox *m_gameBox = nullptr, *m_eyeBox = nullptr, *m_upBox = nullptr;
     QLabel *m_renders = nullptr, *m_status = nullptr;
     QCheckBox *m_debug = nullptr, *m_flat = nullptr;
+    QCheckBox *m_gamemode = nullptr;
     QPushButton *m_play = nullptr;
     QToolButton *m_vrStart = nullptr;
     QString m_vrChoices;

@@ -22,6 +22,27 @@ on the remote beside their `take-NNN-name` twins.
 
 ## Unreleased
 
+Written for the next 0.9.x. Rename this section to the version before tagging: CI takes the
+release notes from it.
+
+* **New: GOG's X4 works, all of it.** The mod's patches find X4's code wherever a build keeps
+  it, so a hotfix that only moves things is fine too. Played on GOG's X4, flying (take 410).
+* **New: a launcher window** (`x4vrmod-launcher`): finds X4, shows what's ready and what isn't,
+  installs and uninstalls, and has Play, Flatscreen, Debug log and Report a bug. The command line
+  is `x4vrmod`.
+* **New: DLSS,** with an NVIDIA RTX card. Tried on an RTX 3070 with no headset, both eyes correct.
+  **Not yet played in a headset.**
+* **New: GameMode,** a checkbox when Feral GameMode is installed.
+* **New: packages** for Arch, Ubuntu, Debian and Fedora, and a zip for anything else.
+* **Changed: the eye distance comes from your headset** and follows its dial while you play. The
+  stereo differs slightly from earlier releases if your eyes aren't 64 mm apart. `x4vrmod config
+  set ipd 0.064` gives the old behaviour.
+* **Changed: X4's loading screen in VR is the mod's,** with its version, build and date.
+* **Fixed: X4 could overwrite your `content.xml` with the mod's extensions on.** Saving went to
+  your file, in every release up to v0.9.9. It now goes to the mod's own copy.
+* **Fixed: a profile X4 had never started** got a black headset and the picture on the flat
+  screen, and the extension stayed off.
+
 ## v0.9.9 — 2026-11-01 — the shipping line is the default; interior lights no longer flicker
 
 The state of take 402 (code identical to commit 963fb64): take 399's fix

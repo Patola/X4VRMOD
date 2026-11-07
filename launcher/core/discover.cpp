@@ -72,6 +72,8 @@ std::string home_dir() {
     return pw && pw->pw_dir ? pw->pw_dir : "";
 }
 
+bool have_gamemode() { return !find_on_path("gamemoderun").empty(); }
+
 std::string find_on_path(const std::string &name) {
     const char *p = getenv("PATH");
     std::stringstream ss(p ? p : "/usr/local/bin:/usr/bin:/bin");

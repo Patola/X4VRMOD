@@ -687,6 +687,17 @@ static void test_offered() {
     check(render_size(3000, "dlss_quality") == 2000 && render_size(3000, "dlss_dlaa") == 3000,
           "DLSS Quality renders at 1/1.5, DLAA at full size");
 
+    // GameMode's setting, and that it reaches the launch script.
+    {
+        Profile g;
+        check(profile_set(g, "gamemode", "2").rfind("error: ", 0) == 0, "gamemode is 0 or 1");
+        check(profile_set(g, "gamemode", "1").empty(), "gamemode 1 is accepted");
+        bool passed = false;
+        for (const auto &[k, v] : profile_env(g))
+            passed = passed || (k == "X4VR_GAMEMODE" && v == "1");
+        check(passed, "...and reaches the launch script");
+    }
+
     // Who's offered DLSS: an NVIDIA card named RTX.
     auto gpu = [](uint32_t vendor, const char *name) {
         GpuInfo g;

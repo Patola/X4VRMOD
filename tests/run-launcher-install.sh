@@ -84,10 +84,10 @@ before=$(snapshot)
 X="env HOME=$H XDG_CONFIG_HOME= XDG_STATE_HOME= X4VR_GAME= $U/x4vrmod"
 mode=$($X doctor --game "$G" --no-vr 2>&1)
 grep -q '(zip)' <<<"$mode" && ok "doctor knows it's the zip" || bad "not the zip: $mode"
-grep -q '^block Vulkan layer not installed' <<<"$mode" && ok "before: the layer isn't installed" \
-    || bad "layer row: $mode"
 grep -q '^block Mod not installed' <<<"$mode" && ok "before: the mod isn't installed" \
     || bad "mod row: $mode"
+[ "$(grep -ci 'layer\|^block Mod' <<<"$mode")" = 1 ] && ok "...in one row, with no second one for the layer" \
+    || bad "more than one row: $mode"
 
 out=$($X run --game "$G" 2>&1); rc=$?
 [ "$rc" != 0 ] && grep -q "isn't installed" <<<"$out" && ok "run before install says so" \
@@ -114,9 +114,8 @@ fi
 mv "$U" "$T/moved"
 I="env HOME=$H XDG_CONFIG_HOME= XDG_STATE_HOME= X4VR_GAME= $H/.local/share/x4vrmod/x4vrmod"
 after=$($I doctor --game "$G" --no-vr 2>&1)
-grep -q '^ok    Vulkan layer installed' <<<"$after" && ok "after: the layer, with the zip's folder moved away" \
-    || bad "layer row: $after"
-grep -q '^ok    Mod installed' <<<"$after" && ok "after: the mod" || bad "mod row: $after"
+grep -q '^ok    Mod installed' <<<"$after" && ok "after: installed, with the zip's folder moved away" \
+    || bad "mod row: $after"
 grep -qF "$H/.local/share/x4vrmod/x4vrmod run %command%" <<<"$($I launch-options)" \
     && ok "Steam's line uses the stable path" || bad "launch-options: $($I launch-options)"
 
@@ -147,6 +146,29 @@ $I config unset ipd || bad "config unset failed"
 out=$(env -u X4VR_IPD X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $I run --game "$G" 2>/dev/null)
 grep -q 'x4vr_ipd=unset ' <<<"$out" && ok "run: config unset ipd goes back to the headset's" || bad "ipd unset: $out"
 $I config unset ipd && ok "config unset: nothing to unset is fine" || bad "config unset twice"
+# GameMode wraps the game when it's asked for and installed, and only then.
+mkdir -p "$T/gm"
+printf '#!/bin/sh\necho GAMEMODERUN\nexec "$@"\n' > "$T/gm/gamemoderun"
+chmod +x "$T/gm/gamemoderun"
+GMRUN="env -u X4VR_GAMEMODE X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG="
+out=$(env PATH="$T/gm:$PATH" $GMRUN $I run --game "$G" 2>/dev/null)
+grep -q '^GAMEMODERUN$' <<<"$out" && bad "GameMode unasked: wrapped anyway" || ok "GameMode unasked: not wrapped, though it's installed"
+$I config set gamemode 1 >/dev/null
+out=$(env PATH="$T/gm:$PATH" $GMRUN $I run --game "$G" 2>/dev/null)
+grep -q '^GAMEMODERUN$' <<<"$out" && grep -q '^FAKE ' <<<"$out" && ok "GameMode asked: it wraps the game" || bad "GameMode: $out"
+out=$(env PATH="$T/gm:$PATH" $GMRUN X4VR_GAMEMODE=0 $I run --game "$G" 2>/dev/null)
+grep -q '^GAMEMODERUN$' <<<"$out" && bad "X4VR_GAMEMODE=0: wrapped anyway" || ok "an explicit 0 beats the profile"
+if command -v gamemoderun >/dev/null; then
+    echo "skip  gamemoderun is installed here: asked and not installed is unchecked"
+else
+    out=$(env $GMRUN $I run --game "$G" 2>&1)
+    grep -q '^FAKE ' <<<"$out" && grep -q "gamemoderun isn't" <<<"$out" && ok "asked, not installed: X4 starts, and it says so" || bad "no gamemode: $out"
+fi
+out=$(env PATH="$T/gm:$PATH" $I run --flat --game "$G" 2>/dev/null)
+grep -q '^GAMEMODERUN$' <<<"$out" && ok "Flatscreen too: the baseline compares with the session" || bad "flat: $out"
+$I config unset gamemode
+out=$(env PATH="$T/gm:$PATH" $I run --flat --game "$G" 2>/dev/null)
+grep -q '^GAMEMODERUN$' <<<"$out" && bad "flat unasked: wrapped" || ok "Flatscreen unasked: not wrapped"
 # Two copies: what's asked for must be what runs, whatever the environment says.
 cp -r "$G" "$T/game2"
 E="env HOME=$H XDG_CONFIG_HOME= XDG_STATE_HOME= X4VR_GAME=$T/game2/X4 $H/.local/share/x4vrmod/x4vrmod"

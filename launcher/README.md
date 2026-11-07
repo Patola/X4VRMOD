@@ -15,7 +15,7 @@ the window come from `x4vr_test_launcher_gui --shots launcher/help`, the rest fr
                               --flat starts X4 by itself, a baseline with nothing of ours
     x4vrmod report            make a bug report to read and attach; nothing is sent
     x4vrmod launch-options    the lines to use for that
-    x4vrmod config set K V    eye, upscaler, ipd, fov, game, env.NAME; `unset K` clears one
+    x4vrmod config set K V    eye, upscaler, ipd, fov, gamemode, game, env.NAME; `unset K` clears one
     x4vrmod uninstall         takes the mod out; --all also deletes the VR settings
     x4vrmod probe x4 [PATH]   X4's version and which of the mod's patches fit
     x4vrmod probe xr          ask the VR runtime
@@ -50,6 +50,11 @@ point it at something else. X4's own files are only ever read.
 **Bug reports.** `report` writes plain text to `~/x4vrmod-reports/`, with a `.tar.gz` beside
 it to attach to a GitHub issue. The home folder, user name, computer name and Steam account
 number are taken out of everything first, and nothing is sent: the player attaches it.
+
+**GameMode** is offered when `gamemoderun` is on the PATH. The launch script puts it in front
+of the whole command, keeping the injector in `LD_PRELOAD`, and Flatscreen gets it too so the
+baseline stays comparable. `run` passes everything after its own options on as the command to
+start, which is how Steam's `%command%` reaches X4.
 
 **DLSS** is offered only when the GPU the mod would run on is an NVIDIA RTX one, and the
 gpu row says so. It hasn't been played in a headset, and the window says that too.

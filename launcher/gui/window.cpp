@@ -40,8 +40,8 @@ namespace {
 
 constexpr int kWidth = 800;
 // The rows' order: what a player fixes first comes first.
-const char *const kRowIds[] = {"x4",  "patches", "steam", "running", "gamescope",
-                               "vr",  "layer",   "mod",   "gpu"};
+const char *const kRowIds[] = {"x4", "patches", "steam", "running", "gamescope",
+                               "vr", "mod",     "gpu"};
 
 QString q(const std::string &s) { return QString::fromStdString(s); }
 
@@ -95,12 +95,10 @@ QString rowTip(const std::string &id) {
     if (id == "vr")
         return "Asked through OpenXR, without starting a VR session: is a runtime up, and is a "
                "headset connected?";
-    if (id == "layer")
-        return "The part of the mod between X4 and your GPU, which makes the two eye images. It "
-               "only loads for this game.";
     if (id == "mod")
-        return "The mod's X4 extension: your head can turn further, and the camera sway is gone. "
-               "It's on only in VR sessions.";
+        return "The mod's parts: what sits between X4 and your GPU to make the two eye images, "
+               "loaded only for this game, and its X4 extension, which lets your head turn "
+               "further and removes the camera sway.";
     if (id == "gpu")
         return "The mod draws both eyes in one pass, which needs Vulkan 1.2 and multiview.";
     return "";
@@ -189,6 +187,14 @@ QWidget *Window::buildSettings() {
     m_renders->setWordWrap(true);
     v->addWidget(m_renders);
 
+    v->addSpacing(4);
+    m_gamemode = new QCheckBox("GameMode", w);
+    m_gamemode->setObjectName("gamemode");
+    m_gamemode->setToolTip(tip("Feral GameMode gives the game priority over the rest of your "
+                               "system while it runs, which usually means a few more frames per "
+                               "second."));
+    connect(m_gamemode, &QCheckBox::toggled, this, [this] { gamemodeToggled(); });
+    v->addWidget(m_gamemode);
     v->addStretch(1);
     return w;
 }
@@ -514,6 +520,10 @@ void Window::syncSettings() {
         lines << q(un);
     m_renders->setText(lines.join(' '));
     m_renders->setVisible(!lines.isEmpty());
+
+    // Not there to choose unless it's installed. A saved choice stays for when it is.
+    m_gamemode->setVisible(have_gamemode());
+    m_gamemode->setChecked(m_profile.get("gamemode") == "1");
     m_syncing = false;
 }
 
@@ -569,6 +579,16 @@ void Window::upscalerChosen() {
     saveProfile();
     syncSettings();
     fitHeight();
+}
+
+void Window::gamemodeToggled() {
+    if (m_syncing)
+        return;
+    if (m_gamemode->isChecked())
+        m_profile.values["gamemode"] = "1";
+    else
+        m_profile.values.erase("gamemode");
+    saveProfile();
 }
 
 void Window::flatToggled() {
