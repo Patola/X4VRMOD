@@ -38,6 +38,15 @@
 #include <openxr/openxr_platform.h>
 #include <openxr/openxr_reflection.h>
 
+// Ubuntu's headers are still OpenXR 1.0. These are only numbers for the runtime to read, so the
+// request is the same whichever headers built this.
+#ifndef XR_API_VERSION_1_0
+#define XR_API_VERSION_1_0 XR_MAKE_VERSION(1, 0, XR_VERSION_PATCH(XR_CURRENT_API_VERSION))
+#endif
+#ifndef XR_API_VERSION_1_1
+#define XR_API_VERSION_1_1 XR_MAKE_VERSION(1, 1, XR_VERSION_PATCH(XR_CURRENT_API_VERSION))
+#endif
+
 #include <dlfcn.h>
 
 #include <cmath>
