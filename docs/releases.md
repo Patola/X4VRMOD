@@ -22,8 +22,7 @@ on the remote beside their `take-NNN-name` twins.
 
 ## Unreleased
 
-Written for the next 0.9.x. Rename this section to the version before tagging: CI takes the
-release notes from it.
+## v0.9.10 — 2026-11-07 — GOG, a launcher window, DLSS, packages
 
 * **New: GOG's X4 works, all of it.** The mod's patches find X4's code wherever a build keeps
   it, so a hotfix that only moves things is fine too. Played on GOG's X4, flying (take 410).

@@ -11,7 +11,7 @@ Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
 **[docs/frame-analysis.md](docs/frame-analysis.md)**; the traps X4 sets for
 modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 
-> **Status: v0.9.9 — playable in VR** ([release notes](docs/releases.md)).
+> **Status: v0.9.10 — playable in VR** ([release notes](docs/releases.md)).
 > X4 runs in VR with in-engine stereo (per-eye lighting), head-look and lean
 > in the cockpit, head-look on foot, the UI on a canvas at the angle X4
 > intended, every menu reachable and lined up with the cursor, and the
@@ -96,6 +96,11 @@ blocks every frame.
 | The shipping line is the default: `./launch/x4vr-launch.sh` with nothing set | done | **`v0.9.9`** |
 | Interior lights steady in VR (no flicker in ship interiors) | done | **`v0.9.9`** |
 | One X4 extension, `x4vrmod`; version in every log; C++ runtime linked in | done | **`v0.9.9`** |
+| GOG's X4, and hotfixes that only move code | done | **`v0.9.10`** |
+| The launcher window, packages and a zip | done | **`v0.9.10`** |
+| The eye distance from the headset, following its dial | done | **`v0.9.10`** |
+| DLSS in both eyes (`X4VR_UPSCALE=dlss_*`) | not yet played in a headset | **`v0.9.10`** |
+| GameMode | done | **`v0.9.10`** |
 | The start menu as the whole scene (menu at its size in front, the 3D scene all around) | optional, future — not scheduled | — |
 | The desktop view optional while in the headset (est. 3–5% fps; [DESIGN.md](DESIGN.md#late-features-postponed-not-scheduled)) | late feature, postponed | — |
 | Volumetric nebula in stereo (Matrix #79B, CEO's Doubt) | done | **`v0.9.1`** |
@@ -131,6 +136,13 @@ shim, not the layer — see [docs/frame-analysis.md](docs/frame-analysis.md).
   (optional — without them the VR paths are skipped, and the OpenXR *loader* is
   never linked in any case: it is `dlopen`'d, so a machine with no runtime
   installed still runs the mod flatscreen)
+
+## Install
+
+Download a package or the zip from the
+[releases page](https://github.com/Patola/X4VRMOD/releases): Arch, Ubuntu, Debian and Fedora have
+their own, and the zip is for anything else. Then start `x4vrmod-launcher`, which shows what's
+ready and what isn't. For the zip, unpack it and start it from that folder.
 
 ## Build & run
 
