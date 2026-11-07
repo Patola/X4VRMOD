@@ -418,10 +418,13 @@ echo "x4vr-launch: $_n_default setting(s) from launch/defaults.conf" \
 
 GAME="${X4VR_GAME:-}"
 if [[ -z "$GAME" ]]; then
-    # Wrapper mode: Steam's %command% may be a chain (reaper, a runtime) with X4
-    # somewhere in it.
+    # Wrapper mode: Steam's %command% is a chain (reaper, a runtime) with X4 or its
+    # start script somewhere in it.
     for _a in "$@"; do
-        [[ "${_a##*/}" == X4 ]] && GAME="$_a"
+        case "${_a##*/}" in
+            X4) GAME="$_a" ;;
+            testandlaunch) GAME="$(dirname -- "$_a")/X4" ;;
+        esac
     done
 fi
 if [[ -z "$GAME" && $# -eq 0 && -x "$BUILD/launcher/x4vrmod" ]]; then

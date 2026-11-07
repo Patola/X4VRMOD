@@ -178,6 +178,59 @@ out=$(env X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $E run 2>/
 grep -qF "self=$T/game2/X4" <<<"$out" && ok "run: X4VR_GAME is used when nothing is asked for" || bad "env: $out"
 out=$(env X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $I run "$G/X4" a b 2>/dev/null)
 grep -q '^FAKE args=2 ' <<<"$out" && ok "run: wrapper mode passes %command% through" || bad "wrapper: $out"
+# Steam's real %command%, as Patola's X4 gets it: a chain ending in X4's own start script, with
+# spaces in the path, and with the profile set to another copy. The chain must arrive whole, and
+# the copy it names is the one to update.
+CH="$T/steam chain"
+mkdir -p "$CH/rt"
+cat > "$CH/steam-launch-wrapper" <<'SH'
+#!/bin/sh
+[ "$1" = -- ] && shift
+exec "$@"
+SH
+cat > "$CH/reaper" <<'SH'
+#!/bin/sh
+while [ "$1" != -- ]; do shift; done
+shift
+exec "$@"
+SH
+cat > "$CH/rt/_v2-entry-point" <<'SH'
+#!/bin/sh
+while [ "$1" != -- ]; do shift; done
+shift
+printf 'ENTRY %s|' "$@"
+echo
+exec "$@"
+SH
+chmod +x "$CH/steam-launch-wrapper" "$CH/reaper" "$CH/rt/_v2-entry-point"
+S1="$T/Steam Library/X4 Foundations"
+mkdir -p "$S1"
+cp "$G/X4" "$G/version.dat" "$S1/"
+cat > "$S1/testandlaunch" <<'SH'
+#!/bin/sh
+exec "$(dirname "$0")/X4" "$@"
+SH
+chmod +x "$S1/testandlaunch"
+CHAIN=("$CH/steam-launch-wrapper" -- "$CH/reaper" SteamLaunch AppId=392160 -- "$CH/rt/_v2-entry-point" --verb=waitforexitandrun -- "$S1/testandlaunch")
+$I config set game "$G/X4" >/dev/null
+rm -rf "$S1/extensions"
+before_other=$(ls -la --time-style=full-iso "$G/extensions/x4vrmod" 2>/dev/null | md5sum)
+out=$(env -u X4VR_GAME X4VR_EXTENSIONS=1 X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $I run "${CHAIN[@]}" 2>&1)
+grep -qF "ENTRY $S1/testandlaunch|" <<<"$out" && ok "Steam's chain: every link runs, spaces and all" || bad "chain: $out"
+grep -qF "self=$S1/testandlaunch" <<<"$out" || grep -qF "self=$S1/X4" <<<"$out" \
+    && ok "Steam's chain: its X4 starts" || bad "chain's X4: $out"
+[ -f "$S1/extensions/x4vrmod/content.xml" ] && ok "Steam's chain: the copy it names gets the extension, whatever the profile says" \
+    || bad "the extension went elsewhere: $(ls "$S1" | tr '\n' ' '): $out"
+[ "$before_other" = "$(ls -la --time-style=full-iso "$G/extensions/x4vrmod" 2>/dev/null | md5sum)" ] \
+    && ok "...and the profile's copy is left alone" || bad "the profile's copy was touched"
+# Steam forcing Proton: the mod can't work, so nothing starts and it says why.
+PT=("$CH/steam-launch-wrapper" -- "$CH/reaper" SteamLaunch AppId=392160 -- "$CH/rt/_v2-entry-point" --verb=waitforexitandrun -- "$CH/proton" waitforexitandrun "$S1/X4.exe")
+out=$(env -u X4VR_GAME X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $I run "${PT[@]}" 2>&1); rc=$?
+[ "$rc" != 0 ] && grep -qi 'proton\|linux version' <<<"$out" && ! grep -q '^ENTRY' <<<"$out" \
+    && ok "Steam forcing Proton: refused, and it says why" || bad "proton chain, rc=$rc: $out"
+# A chain that names no X4: the profile's copy is assumed, and that's said.
+out=$(env -u X4VR_GAME X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $I run "$CH/steam-launch-wrapper" -- /bin/true 2>&1); rc=$?
+[ "$rc" = 0 ] && grep -qF "doesn't name an X4" <<<"$out" && ok "a command naming no X4: run, and the assumption is said" || bad "no X4 named, rc=$rc: $out"
 # Nothing writes the log with the layer and injector off, so ask what X4 was told.
 out=$(env -u X4VR_LOG X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 $I run --game "$G" 2>/dev/null)
 grep -qE "log=$H/\.local/state/x4vrmod/logs/x4vrmod-[0-9]{8}-[0-9]{6}\.log " <<<"$out" \

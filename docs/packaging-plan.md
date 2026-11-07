@@ -195,12 +195,30 @@ binary is missing.
   from the fork, for that one missing file; the second now goes to the fork.
   `tests/run-config-fork.sh` imports those calls as X4 does.
 * **Steam's container: `x4vrmod run %command%` works** (take 404: PASS, its log in
-  `~/.local/state/x4vrmod/logs/`).
-* **To check later (Patola, take 404):** started from Steam, a brief Egosoft logo
-  plays, which our direct launch doesn't show. Steam's `%command%` is a plain `./X4`
-  (`env: argv = ./X4` in the log), and wrapper mode doesn't add the
-  `-skipintro -nocputhrottle -nosoundthrottle` that direct mode does. The two throttle
-  flags are missing with it; the take scored PASS and Patola saw nothing else wrong.
+  `~/.local/state/x4vrmod/logs/`), from a build under the home folder. **From a package under
+  `/usr` it hasn't been tried:** see the table.
+* **What `%command%` is.** Patola's, 2026-11-07:
+  `steam-launch-wrapper -- reaper SteamLaunch AppId=392160 -- SteamLinuxRuntime_sniper/_v2-entry-point
+  --verb=waitforexitandrun -- <X4's folder>/testandlaunch`. `run` hands all of it to gamescope as it
+  is, which is why it runs outside Steam's container and X4 inside it. Take 404's log shows each
+  link: gamescope, gamescopereaper, steam-launch-wrapper, pressure-vessel, testandlaunch's shell,
+  then X4. `run` takes the copy from the chain, `X4` or `testandlaunch` in it. Until 2026-11-07 it
+  looked for `X4` alone, so with another copy in the profile the extension went to that copy.
+
+  | `%command%` | What happens |
+  |---|---|
+  | Linux X4 in the Steam Linux Runtime (Patola's) | Works, take 404, from the home folder |
+  | The same, from a package under `/usr` | **Not tried.** In the container `/usr` is the runtime's, and it rests on Steam's container mapping the preload and the layer's manifest |
+  | Linux X4 with no runtime | Same code, not tried |
+  | Proton forced | Refused with the reason, and a notification, as there's no terminal |
+  | Other wrappers in the line (`mangohud x4vrmod run %command%`) | Same code, not tried |
+  | No X4 in the command | Run, taking the profile's copy, and it says so |
+  | Flatpak Steam | Not expected to work: gamescope and the mod's files aren't in its sandbox |
+
+* **Started from Steam, X4 doesn't get Play's options** (Patola, take 404): a brief Egosoft logo
+  plays, and `-nocputhrottle -nosoundthrottle` are missing, because `-skipintro` and those two are
+  only added in direct mode. Take 404 scored PASS and Patola saw nothing else wrong. `testandlaunch`
+  passes its arguments on to X4, so they could go at the end of the chain.
 * **To verify — extensions in the user folder:** whether X4 9.00 loads
   extensions from `~/.config/EgoSoft/X4/<id>/extensions/`. If it does, the
   launcher puts them there and never writes into Steam's game folder (today

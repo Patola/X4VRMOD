@@ -1131,8 +1131,9 @@ The settings are take 402's: a dry run with a stub gamescope differed only in th
 number, the log path and the launcher's two new variables (`X4VR_GAME`,
 `X4VR_NEEDS_STEAM`). Patola: both worked perfectly. `score_run.py` PASS on both. Take
 404's log went to `~/.local/state/x4vrmod/logs/`. One difference from Steam: a brief
-Egosoft logo at the start, because `%command%` is a plain `./X4` without our
-`-skipintro -nocputhrottle -nosoundthrottle` (`docs/packaging-plan.md`).
+Egosoft logo at the start, because Steam's command doesn't carry our
+`-skipintro -nocputhrottle -nosoundthrottle` (`docs/packaging-plan.md`, which also has what the
+command really is).
 
 ## Takes 405 and 406 (2026-11-05) — from the window (code bf7baf6)
 
@@ -1162,3 +1163,9 @@ Each started with Play in `x4vrmod-launcher`, setup 5 with WiVRn.
 * **Take 411, Steam (code a9a14c6), `x4vrmod-20261106-193605.log`:** PASS, dial 63.3 to 63.9 mm.
 * **Patola, on both builds:** our picture loads, and not in the vanilla games. In VR X4's window is
   square, so `x4_1_1` shows the whole art with a blurred copy above and below it.
+
+## Take 412 (2026-11-07) — GameMode (code c50fbb1)
+
+Play in `x4vrmod-launcher`, Steam's copy, setup 5 with WiVRn, GameMode ticked. `score_run.py` PASS:
+libgamemodeauto is in X4, 1966 seated ticks, lean on, 63.9 mm from the headset.
+`x4vrmod-20261107-053934.log`.

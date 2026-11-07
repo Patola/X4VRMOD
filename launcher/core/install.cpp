@@ -403,20 +403,41 @@ std::string log_dir(const std::string &home) {
     return (x && *x ? std::string(x) : home + "/.local/state") + "/x4vrmod/logs";
 }
 
+// Started from Steam there's no terminal to read: a notification too, if it can.
+static void tell_player(const std::string &what, bool from_steam) {
+    fprintf(stderr, "x4vrmod: %s\n", what.c_str());
+    const std::string ns = from_steam ? find_on_path("notify-send") : "";
+    if (!ns.empty())
+        run_child({ns, "X4 VR Mod", what}, 2000, false);
+}
+
 int run_mod(const std::string &home, const std::string &game,
             const std::vector<std::string> &command) {
     const Layout l = detect_layout(home);
     if (!is_file(l.launch_script)) {
-        fprintf(stderr, "x4vrmod: the mod isn't installed. Run: x4vrmod install\n");
+        tell_player("the mod isn't installed. Run: x4vrmod install", !command.empty());
         return 2;
     }
-    // Steam's %command% names the X4 it means.
+    // Which copy Steam's %command% means. It's a chain of wrappers, with X4 or its start script
+    // at the end: steam-launch-wrapper, reaper, the runtime's entry point, testandlaunch.
     std::string named = game;
-    for (const std::string &a : command)
-        if (base_name(a) == "X4")
-            named = a;
+    bool from_chain = false;
+    for (const std::string &a : command) {
+        const std::string b = base_name(a);
+        if (b == "X4.exe" || b == "proton") {
+            tell_player(proton_explanation(), true);
+            return 2;
+        }
+        if (b == "X4" || b == "testandlaunch") {
+            named = b == "X4" ? a : dir_name(a) + "/X4";
+            from_chain = true;
+        }
+    }
     bool found = false;
     const Install in = choose_install(home, named, &found);
+    if (!command.empty() && !from_chain && found)
+        fprintf(stderr, "x4vrmod: this command doesn't name an X4, so the mod takes it to be %s\n",
+                in.exe.c_str());
     if (in.kind == PathKind::Windows) {
         fprintf(stderr, "x4vrmod: %s\n", proton_explanation());
         return 2;
