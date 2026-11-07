@@ -12,6 +12,8 @@ makedepends=('cmake' 'git' 'python' 'python-pillow' 'vulkan-headers')
 optdepends=('gamemode: the launcher offers it, for a few more frames per second')
 source=("x4vrmod::git+https://github.com/Patola/X4VRMOD.git#tag=v${pkgver}")
 sha256sums=('SKIP')
+# A debug package for a game mod nobody debugs from a package, 12 MB beside 7.
+options=('!debug')
 
 build() {
     cmake -S x4vrmod -B build \

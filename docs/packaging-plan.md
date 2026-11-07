@@ -461,7 +461,8 @@ package is built on the distribution it's for, because it links that distributio
 
 * **Each package is installed and started** in its own container
   (`packaging/ci/check-installed.sh`, `check-zip.sh`): everything is there, nothing is missing
-  from what it links, it knows its layout, and the loading screen's catalog is in it.
+  from what it links, it knows its layout, the loading screen's catalog is in it, and the window
+  stays up on Qt's offscreen platform.
 * **Tests:** no X4 and no GPU there. What checks X4's bytes skips itself, so **a patch site that
   moved is only caught on a machine with X4.** What drives the layer runs on Mesa's software
   Vulkan, lavapipe. `run-xr-probe` needs a VR runtime and doesn't run.

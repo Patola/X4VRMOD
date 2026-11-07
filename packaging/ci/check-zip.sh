@@ -19,3 +19,9 @@ done
 out=$("$U/x4vrmod" doctor --no-vr 2>&1 || true)
 echo "$out"
 grep -q '(zip)' <<<"$out" || { echo "doctor doesn't know it's the zip"; exit 1; }
+# The window, on the oldest Qt 6 it's built for: still up after a few seconds is a pass.
+chmod +x "$U/x4vrmod-launcher"
+rc=0
+HOME="$T/home" QT_QPA_PLATFORM=offscreen timeout 5 "$U/x4vrmod-launcher" || rc=$?
+[ "$rc" = 124 ] || { echo "the window didn't stay up: exit $rc"; exit 1; }
+echo "the window starts"

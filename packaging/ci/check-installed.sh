@@ -18,3 +18,8 @@ x4vrmod version
 out=$(x4vrmod doctor --no-vr 2>&1 || true)
 echo "$out"
 grep -q '(package)' <<<"$out" || { echo "doctor doesn't know it's a package"; exit 1; }
+# The window, which is what players use: still up after a few seconds is a pass.
+rc=0
+QT_QPA_PLATFORM=offscreen timeout 5 x4vrmod-launcher || rc=$?
+[ "$rc" = 124 ] || { echo "the window didn't stay up: exit $rc"; exit 1; }
+echo "the window starts"
