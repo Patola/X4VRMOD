@@ -194,9 +194,9 @@ binary is missing.
   four calls its binary imports for this (`access`, `__xstat`, `__xstat64`, `__lxstat`),
   from the fork, for that one missing file; the second now goes to the fork.
   `tests/run-config-fork.sh` imports those calls as X4 does.
-* **Steam's container: `x4vrmod run %command%` works** (take 404: PASS, its log in
-  `~/.local/state/x4vrmod/logs/`), from a build under the home folder. **From a package under
-  `/usr` it hasn't been tried:** see the table.
+* **Steam's container: `x4vrmod run %command%` works,** from a build under the home folder (take
+  404) and from Arch's package under `/usr` (take 413). `.deb` and `.rpm` use the same paths and
+  haven't been played.
 * **What `%command%` is.** Patola's, 2026-11-07:
   `steam-launch-wrapper -- reaper SteamLaunch AppId=392160 -- SteamLinuxRuntime_sniper/_v2-entry-point
   --verb=waitforexitandrun -- <X4's folder>/testandlaunch`. `run` hands all of it to gamescope as it
@@ -208,7 +208,7 @@ binary is missing.
   | `%command%` | What happens |
   |---|---|
   | Linux X4 in the Steam Linux Runtime (Patola's) | Works, take 404, from the home folder |
-  | The same, from a package under `/usr` | **Not tried.** In the container `/usr` is the runtime's, and it rests on Steam's container mapping the preload and the layer's manifest |
+  | The same, from a package under `/usr` | Works, take 413, Arch's package with GameMode: Steam's container reaches the preload and the layer's manifest, though `/usr` in there is the runtime's |
   | Linux X4 with no runtime | Same code, not tried |
   | Proton forced | Refused with the reason, and a notification, as there's no terminal |
   | Other wrappers in the line (`mangohud x4vrmod run %command%`) | Same code, not tried |

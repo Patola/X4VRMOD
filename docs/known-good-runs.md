@@ -1169,3 +1169,12 @@ Each started with Play in `x4vrmod-launcher`, setup 5 with WiVRn.
 Play in `x4vrmod-launcher`, Steam's copy, setup 5 with WiVRn, GameMode ticked. `score_run.py` PASS:
 libgamemodeauto is in X4, 1966 seated ticks, lean on, 63.9 mm from the headset.
 `x4vrmod-20261107-053934.log`.
+
+## Take 413 (2026-11-07) — Arch's package, started from Steam (code 0aabb8f)
+
+CI's `.pkg.tar.zst` from run 42340791566 installed under `/usr`, Steam's launch options
+`x4vrmod run %command%`, GameMode on, setup 5 with WiVRn, 4000 per eye. `score_run.py` PASS,
+`x4vrmod-20261107-060732.log`; Patola: "worked perfectly". The log shows the chain to X4 inside the
+Steam Linux Runtime, the injector from `/usr/lib/x4vrmod` loaded there and the layer active on X4,
+a VR session on its device, 2646 seated ticks, lean on, 63.9 mm from the headset, libgamemodeauto in
+X4, and `env: argv = ./X4 -skipintro -nocputhrottle -nosoundthrottle`.
