@@ -177,7 +177,9 @@ grep -qF "self=$G/X4" <<<"$out" && ok "run: --game beats X4VR_GAME" || bad "--ga
 out=$(env X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $E run 2>/dev/null)
 grep -qF "self=$T/game2/X4" <<<"$out" && ok "run: X4VR_GAME is used when nothing is asked for" || bad "env: $out"
 out=$(env X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $I run "$G/X4" a b 2>/dev/null)
-grep -q '^FAKE args=2 ' <<<"$out" && ok "run: wrapper mode passes %command% through" || bad "wrapper: $out"
+grep -q '^FAKE args=5 ' <<<"$out" && ok "run: wrapper mode passes %command% through, with Play's three options" || bad "wrapper: $out"
+out=$(env X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $I run "$G/X4" -skipintro -nosoundthrottle 2>/dev/null)
+grep -q '^FAKE args=3 ' <<<"$out" && ok "run: an option already on the line isn't added twice" || bad "twice: $out"
 # Steam's real %command%, as Patola's X4 gets it: a chain ending in X4's own start script, with
 # spaces in the path, and with the profile set to another copy. The chain must arrive whole, and
 # the copy it names is the one to update.
@@ -219,6 +221,7 @@ out=$(env -u X4VR_GAME X4VR_EXTENSIONS=1 X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_
 grep -qF "ENTRY $S1/testandlaunch|" <<<"$out" && ok "Steam's chain: every link runs, spaces and all" || bad "chain: $out"
 grep -qF "self=$S1/testandlaunch" <<<"$out" || grep -qF "self=$S1/X4" <<<"$out" \
     && ok "Steam's chain: its X4 starts" || bad "chain's X4: $out"
+grep -q '^FAKE args=3 ' <<<"$out" && ok "Steam's chain: X4 gets Play's three options, through testandlaunch" || bad "chain's options: $out"
 [ -f "$S1/extensions/x4vrmod/content.xml" ] && ok "Steam's chain: the copy it names gets the extension, whatever the profile says" \
     || bad "the extension went elsewhere: $(ls "$S1" | tr '\n' ' '): $out"
 [ "$before_other" = "$(ls -la --time-style=full-iso "$G/extensions/x4vrmod" 2>/dev/null | md5sum)" ] \
@@ -231,6 +234,10 @@ out=$(env -u X4VR_GAME X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LO
 # A chain that names no X4: the profile's copy is assumed, and that's said.
 out=$(env -u X4VR_GAME X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $I run "$CH/steam-launch-wrapper" -- /bin/true 2>&1); rc=$?
 [ "$rc" = 0 ] && grep -qF "doesn't name an X4" <<<"$out" && ok "a command naming no X4: run, and the assumption is said" || bad "no X4 named, rc=$rc: $out"
+printf '#!/bin/sh\necho OTHER args=$#\n' > "$CH/other"
+chmod +x "$CH/other"
+out=$(env -u X4VR_GAME X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $I run "$CH/other" 2>&1)
+grep -q '^OTHER args=0' <<<"$out" && ok "...and another program isn't given X4's options" || bad "other: $out"
 # Nothing writes the log with the layer and injector off, so ask what X4 was told.
 out=$(env -u X4VR_LOG X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 $I run --game "$G" 2>/dev/null)
 grep -qE "log=$H/\.local/state/x4vrmod/logs/x4vrmod-[0-9]{8}-[0-9]{6}\.log " <<<"$out" \

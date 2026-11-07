@@ -215,10 +215,9 @@ binary is missing.
   | No X4 in the command | Run, taking the profile's copy, and it says so |
   | Flatpak Steam | Not expected to work: gamescope and the mod's files aren't in its sandbox |
 
-* **Started from Steam, X4 doesn't get Play's options** (Patola, take 404): a brief Egosoft logo
-  plays, and `-nocputhrottle -nosoundthrottle` are missing, because `-skipintro` and those two are
-  only added in direct mode. Take 404 scored PASS and Patola saw nothing else wrong. `testandlaunch`
-  passes its arguments on to X4, so they could go at the end of the chain.
+* **Started from Steam, X4 gets Play's options too** (Patola, 2026-11-07, after the logo in take
+  404). `-skipintro -nocputhrottle -nosoundthrottle` go at the end of the chain, where
+  `testandlaunch` passes them on to X4; only when the chain names X4, and not twice.
 * **To verify — extensions in the user folder:** whether X4 9.00 loads
   extensions from `~/.config/EgoSoft/X4/<id>/extensions/`. If it does, the
   launcher puts them there and never writes into Steam's game folder (today

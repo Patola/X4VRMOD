@@ -522,6 +522,23 @@ if [[ $# -eq 0 ]]; then
     ulimit -c unlimited || true
     CDPATH= cd -- "$(dirname "$GAME")"
     set -- "$GAME" -skipintro -nocputhrottle -nosoundthrottle
+else
+    # Wrapper mode: the same options, so a Steam start plays like Play. Last on the line, where
+    # they reach X4: testandlaunch passes its arguments on. Only when the chain names X4, or
+    # they'd go to some other program, and not twice if the player's line already has one.
+    _names_x4=0
+    for _a in "$@"; do
+        case "${_a##*/}" in X4 | testandlaunch) _names_x4=1 ;; esac
+    done
+    if [[ $_names_x4 == 1 ]]; then
+        for _o in -skipintro -nocputhrottle -nosoundthrottle; do
+            _have=0
+            for _a in "$@"; do
+                [[ "$_a" == "$_o" ]] && _have=1
+            done
+            [[ $_have == 1 ]] || set -- "$@" "$_o"
+        done
+    fi
 fi
 
 # X4VR_EXTENSIONS=1: deploy OUR extension (extension/x4vrmod in the repo) into

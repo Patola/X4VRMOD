@@ -1131,9 +1131,9 @@ The settings are take 402's: a dry run with a stub gamescope differed only in th
 number, the log path and the launcher's two new variables (`X4VR_GAME`,
 `X4VR_NEEDS_STEAM`). Patola: both worked perfectly. `score_run.py` PASS on both. Take
 404's log went to `~/.local/state/x4vrmod/logs/`. One difference from Steam: a brief
-Egosoft logo at the start, because Steam's command doesn't carry our
-`-skipintro -nocputhrottle -nosoundthrottle` (`docs/packaging-plan.md`, which also has what the
-command really is).
+Egosoft logo at the start, because Steam's command didn't carry our
+`-skipintro -nocputhrottle -nosoundthrottle`. Since 2026-11-07 it does (`docs/packaging-plan.md`,
+which also has what the command really is).
 
 ## Takes 405 and 406 (2026-11-05) — from the window (code bf7baf6)
 
