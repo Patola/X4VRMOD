@@ -6471,6 +6471,33 @@ static void foot_tick() {
     }
 }
 
+// Is X4 drawing through its cinematic camera? 1 yes, 0 no, -1 can't say.
+//
+// F6 draws through X4's scene camera (root+0x3e0, take 355) as an object of a
+// class of its own; the rest of the time that slot holds a camera of the player
+// camera's class (root+0x3e8). Take 423 read it at every change: the classes
+// differ in F6 flying, docked and on foot, and nowhere else in game -- not in
+// F2 or F3, the docked menu, walking, or a teleporter's menu. The start menu
+// draws through the cinematic class too, with no player camera at all, which
+// is why that one has to be there. Compared, not matched to an address, so a
+// build where the classes moved needs nothing new; read where the external-view
+// patch checked X4's root and its player camera slot, or not at all.
+static int x4_cinematic_camera() {
+    if (!g_extpatch.patched)
+        return -1;
+    uintptr_t root = 0, scene = 0, player = 0, scene_vt = 0, player_vt = 0;
+    if (!x4_read(x4vr::extview::kRootGlobal, &root, sizeof root) || !root ||
+        !self_read(root + 0x3e0, &scene, sizeof scene) ||
+        !self_read(root + x4vr::extview::kPlayerCamOff, &player, sizeof player))
+        return -1;
+    if (!scene || !player)
+        return 0;
+    if (!self_read(scene, &scene_vt, sizeof scene_vt) ||
+        !self_read(player, &player_vt, sizeof player_vt))
+        return -1;
+    return scene_vt != player_vt ? 1 : 0;
+}
+
 // **Task #75's fix: where the tick's cadence comes from.**
 //
 // 0 = X4's event drain, exactly as every take so far. Anything else is a rate in
@@ -7424,15 +7451,22 @@ void headlook_tick() {
         sh->external_head.store(ext_declared ? 1u : 0u,
                                 std::memory_order_relaxed);
     // **The cinematic view (F6): its overlay at the full window** (take
-    // 357). F6 hides the HUD and opens no menu of X4's own. Held 0.3 s before
-    // it counts: take 358 closed the ESC menu into the cockpit with the HUD
-    // still down and only TopLevelMenu open for 0.14 s.
+    // 357). X4 drawing through its cinematic camera, with the HUD down and not
+    // paused (take 423: in the pilot seat, docked and on foot alike). Without
+    // the external-view patch to read that camera by, take 357's rule: in the
+    // pilot seat with only X4's TopLevelMenu open, which misses F6 docked (the
+    // DockedMenu stays open) and on foot (take 421). Held 0.3 s before it
+    // counts: take 358 closed the ESC menu into the cockpit with the HUD still
+    // down and only TopLevelMenu open for 0.14 s.
     bool cinematic = false;
     {
-        const bool cond = write_mode && seated && !hud &&
-                          view != X4View::Paused &&
-                          g_menus_only_toplevel.load(std::memory_order_relaxed) &&
-                          x4_conversation() != 1;
+        const int cine_cam = x4_cinematic_camera();
+        const bool scene_says =
+            cine_cam >= 0
+                ? cine_cam == 1
+                : seated && g_menus_only_toplevel.load(std::memory_order_relaxed);
+        const bool cond = write_mode && !hud && view != X4View::Paused &&
+                          scene_says && x4_conversation() != 1;
         static double since = -1.0;
         const double now_s = mono_seconds();
         if (!cond)
@@ -7444,9 +7478,13 @@ void headlook_tick() {
         if (cinematic != was_cinematic) {
             was_cinematic = cinematic;
             X4VR_LOG("ui: cinematic view %s",
-                     cinematic ? "ON — the HUD down with only X4's TopLevelMenu "
-                                 "open in the pilot seat: X4's UI drawn as X4 "
-                                 "laid it out, so its overlay fills the window"
+                     cinematic ? (cine_cam >= 0
+                                      ? "ON — X4 draws through its cinematic camera, "
+                                        "the HUD down: X4's UI drawn as X4 laid it "
+                                        "out, so its overlay fills the window"
+                                      : "ON — the HUD down with only X4's TopLevelMenu "
+                                        "open in the pilot seat: X4's UI drawn as X4 "
+                                        "laid it out, so its overlay fills the window")
                                : "off — X4's UI back on the HUD's canvas");
         }
         if (x4vr::Shared *sh = x4vr_shared_state())

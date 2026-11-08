@@ -30163,3 +30163,35 @@ SteamVR/OpenXR : oculus, asks 2888 x 3088 per eye. SteamVR isn't your default Op
 the mod points X4 at it"; it now reads "SteamVR, headset connected. It recommends 2888 x 3088 per
 eye." Runtimes by the name a player knows; the headset named only when the runtime names it
 (WiVRn's "Meta Quest 3 on WiVRn"), not SteamVR's driver tag.
+
+## Take 423 — SCORED PASS (2026-11-08): F6 is X4's cinematic camera class, in every place
+
+A read-only survey (`X4VR_F6SURVEY`, removed after this take) logged, at every change, X4's scene
+camera (root+0x3e0), its class, the player camera's mode and the F6 rule's inputs. Patola: F6
+flying (pressed again for other shots, left with ESC), F2, F3 with a target, F1; docked in the pilot
+seat with the docked menu, F6 on and off; on foot through a teleporter, F6, ESC, the teleporter
+again.
+
+| State | scene camera class | player camera mode |
+|---|---|---|
+| flying, cockpit | 0x3b99f78 (the player camera's) | 0 |
+| F2, F3 | 0x3b99f78 | 2 |
+| the docked menu; walking; a teleporter's menu | 0x3b99f78 | 0 |
+| **F6 flying (97713-97749), docked (97867-97902), on foot (97938-97956)** | **0x3b99e18** | 0 |
+| the start menu, before a game is loaded | 0x3b99e18 | -1 (no player camera) |
+
+Take 357's gate failed because it asked whether the slot held *a* camera; it always does in game.
+Its class is the signal. **The rule now:** X4 draws through its cinematic camera (the scene camera's
+class isn't the player camera's, both present), with the HUD down and not paused. Compared, not
+matched to an address, so it needs nothing new on another build; read only where the external-view
+patch checked X4's root and its player-camera slot, and otherwise take 357's rule as before. The
+cursor stays raw in F6 even docked, where the DockedMenu keeps X4's full-screen flag up.
+
+## Take 424 — SCORED PASS (2026-11-08): F6's overlay full and sharp everywhere
+
+The new rule, SteamVR. `score_run.py` PASS: 3 cinematic periods (flying, docked, on foot), the
+layer on the twins each time; the cursor raw in F6, docked too. Patola: "In all cases the overlay
+was full size and crisp." F8 in F6 (X4's "cinematic camera", the flatscreen loses its borders) made
+our window slightly taller with the overlay unchanged; as on the flatscreen, nothing to change.
+The cursor's log said "OFF (no full-screen menu …)" in F6 even docked, with one up; F6 has a line of
+its own now.

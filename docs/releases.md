@@ -22,6 +22,8 @@ on the remote beside their `take-NNN-name` twins.
 
 ## Unreleased
 
+* **Fixed: F6's information overlay was half size when docked or on foot.** F6 is now recognised by
+  the camera X4 draws it through, so its overlay fills the window everywhere, as it did in flight.
 * **Fixed: the launcher didn't see a running SteamVR** unless SteamVR was your default OpenXR
   runtime: with no runtime file, it said "No VR runtime running" even with the headset connected.
   It now finds SteamVR's own manifest beside the running SteamVR, and points X4 at it. SteamVR

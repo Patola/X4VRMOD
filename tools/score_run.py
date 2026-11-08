@@ -4750,8 +4750,9 @@ def main(path):
 
     # --- the cinematic view's overlay at the full window (take 357) ---------
     #
-    # The injector says when F6 is up (the HUD down in the pilot seat with
-    # only TopLevelMenu open, held 0.3 s); the layer then binds each canvas
+    # The injector says when F6 is up (since take 423: X4 drawing through its
+    # cinematic camera with the HUD down; before, the HUD down in the pilot seat
+    # with only TopLevelMenu open; held 0.3 s); the layer then binds each canvas
     # pipeline's twin. Bound, not built: take 358's first attempt worked on a
     # quad the shipping line never submits.
     cv_on = [float(t) for t in re.findall(

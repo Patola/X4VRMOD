@@ -11932,12 +11932,19 @@ bool cursor_canvas() {
         // Take 342: X4's right-click menu, from X4's own table of open menus.
         const bool interact =
             s && s->interact_menu.load(std::memory_order_relaxed) != 0;
-        const int want = full ? 1 : foot ? 2 : centred ? 3 : interact ? 4 : 0;
-        static int said = -1;
+        // F6: X4's UI drawn as X4 laid it out, so the pointer is where X4
+        // hit-tests, even docked, where X4's DockedMenu keeps a full-screen
+        // menu up (take 423).
+        const bool cine = cinematic_ui_now();
+        const int want =
+            cine ? -1 : full ? 1 : foot ? 2 : centred ? 3 : interact ? 4 : 0;
+        static int said = -2;
         if (said != want) {
             said = want;
             X4VR_LOG("cursor canvas: AUTO — %s",
-                     want == 1 ? "ON (a full-screen menu is up: the cursor "
+                     want == -1 ? "OFF (F6: X4's UI drawn as X4 laid it out, so the "
+                                  "cursor at the raw pointer, where X4 hit-tests)"
+                     : want == 1 ? "ON (a full-screen menu is up: the cursor "
                                  "follows X4's UI)"
                      : want == 2
                          ? "ON (an on-foot menu has the pointer: the cursor "
@@ -11951,7 +11958,7 @@ bool cursor_canvas() {
                          : "OFF (no full-screen menu: the cursor at the raw "
                            "pointer, where X4 picks the world)");
         }
-        return want != 0;
+        return want > 0;
     }
     if (ab <= 0.0)
         return on;
