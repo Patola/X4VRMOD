@@ -25,7 +25,7 @@ jobs:
         run: >
           pacman -Syu --noconfirm --needed base-devel cmake git qt6-base vulkan-headers
           vulkan-icd-loader openxr python python-numpy python-pillow zlib zip unzip binutils
-          vulkan-swrast vulkan-validation-layers spirv-tools
+          vulkan-swrast vulkan-validation-layers spirv-tools gettext glibc-locales
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -73,7 +73,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends build-essential cmake git file dpkg-dev \
             qt6-base-dev libgl-dev libopengl-dev libvulkan-dev libopenxr-dev zlib1g-dev python3 \
-            python3-pil ca-certificates
+            python3-pil ca-certificates gettext
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -100,7 +100,7 @@ jobs:
         run: >
           dnf install -y --setopt=install_weak_deps=False gcc-c++ libstdc++-static cmake git rpm-build
           qt6-qtbase-devel vulkan-headers vulkan-loader-devel openxr-devel zlib-devel python3
-          python3-pillow findutils which
+          python3-pillow findutils which gettext
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -127,7 +127,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends build-essential cmake git zip \
             qt6-base-dev libgl-dev libopengl-dev libvulkan-dev libopenxr-dev zlib1g-dev python3 \
-            python3-pil ca-certificates
+            python3-pil ca-certificates gettext
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0

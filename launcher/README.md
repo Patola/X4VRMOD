@@ -15,7 +15,8 @@ the window come from `x4vr_test_launcher_gui --shots launcher/help`, the rest fr
                               --flat starts X4 by itself, a baseline with nothing of ours
     x4vrmod report            make a bug report to read and attach; nothing is sent
     x4vrmod launch-options    the lines to use for that
-    x4vrmod config set K V    eye, upscaler, ipd, fov, gamemode, game, env.NAME; `unset K` clears one
+    x4vrmod config set K V    eye, upscaler, ipd, fov, gamemode, language, game, env.NAME;
+                              `unset K` clears one
     x4vrmod uninstall         takes the mod out; --all also deletes the VR settings
     x4vrmod probe x4 [PATH]   X4's version and which of the mod's patches fit
     x4vrmod probe xr          ask the VR runtime
@@ -62,6 +63,20 @@ gpu row says so. It hasn't been played in a headset, and the window says that to
 **Other builds of X4.** `probe x4` and `doctor` find the code wherever this build keeps it
 (`common/x4vr_reloc.hpp`) before checking it. `x4vrmod probe x4 PATH --map` shows how far
 each block moved.
+
+**Languages.** The window and its help are in English, Brazilian Portuguese, French, Russian
+and German: the system's language to begin with, the Language list below GameMode after that
+(profile key `language`). Words are marked in the code with `tr_`/`trn_`/`N_` in `core/` and
+`qtr`/`qtrn` in `gui/` (`core/x4vr_i18n.hpp`); a sentence with values is one `%1`..`%9`
+template, so a language can reorder them. `tools/i18n-update.sh` collects them into
+`po/x4vrmod.pot` and merges that into each `po/<lang>.po`; the build compiles those with
+msgfmt. Each help page is `help/<lang>/index.html` with the English page's sections, and its
+pictures come from `x4vr_test_launcher_gui --shots launcher/help/<lang> --lang <lang>`. The `x4vrmod`
+command never sets a locale, so what it prints stays English for diagnostics, and a bug report
+is made in English on its own thread (`InEnglish`). Programs the window starts get the
+environment it started with, so the window's language doesn't leak into X4, WiVRn or Steam.
+`tests/run-i18n.sh` checks the catalogues; the window test checks every language fits.
+The translations began as a best-effort draft: corrections from players are the plan.
 
 **Probes** run in a child process with a timeout, so a broken VR runtime can't hang or
 crash the launcher. The layer and the injector are never loaded: their version is read

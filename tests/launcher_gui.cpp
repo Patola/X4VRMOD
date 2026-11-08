@@ -7,6 +7,11 @@
 //
 //   x4vr_test_launcher_gui              the checks
 //   x4vr_test_launcher_gui --shots DIR  also writes the help's pictures
+//   ... --shots DIR --lang CODE         the pictures in one language. The checks read
+//                                       English, so in another language they're printed
+//                                       and not counted: this is for the pictures.
+#include <QAbstractButton>
+#include <QAction>
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
@@ -20,6 +25,7 @@
 #include <QRegularExpression>
 #include <QTest>
 #include <QToolButton>
+#include <QTranslator>
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -30,43 +36,55 @@
 #include <vector>
 
 #include "dialogs.hpp"
+#include "i18n.hpp"
 #include "window.hpp"
 
 using namespace x4vr::launcher;
 using gui::Window;
 
 static int g_fail = 0;
+// --lang: the checks read English, so they're printed and not counted.
+static bool g_counted = true;
 static void check(bool ok, const std::string &what) {
     printf("%s  %s\n", ok ? "ok   " : "FAIL ", what.c_str());
-    if (!ok)
+    if (!ok && g_counted)
         g_fail++;
 }
 
-static Check row(const char *id, Status s, const char *title, const char *detail = "",
+// Titles and details are the core's words, so they go through its translations.
+static Check row(const char *id, Status s, const char *title, const std::string &detail = "",
                  const char *fix = "") {
     Check c;
     c.id = id;
     c.status = s;
-    c.title = title;
-    c.detail = detail;
+    c.title = tr_(title);
+    c.detail = detail.empty() ? detail : std::string(tr_(detail.c_str()));
     c.fix = fix;
     return c;
 }
 
-// The help shows pictures at this width, smoothly: its own scaling isn't.
+// The help shows pictures at this width, smoothly: its own scaling isn't. What a
+// hidden line frees is laid out by a posted event, which the window's own loop runs
+// before it paints, so the picture waits for it too.
 static void shot(QWidget &w, const QString &path) {
+    QApplication::processEvents();
     w.grab().scaledToWidth(640, Qt::SmoothTransformation).save(path);
 }
 
 static std::vector<Check> good_rows() {
-    return {row("x4", Status::Ok, "X4 found", "Steam, X4 9.00, build 23660954, /games/X4 Foundations"),
-            row("patches", Status::Ok, "The mod fits this X4", "all 10 features match its code"),
+    // As checks.cpp words them.
+    return {row("x4", Status::Ok, "X4 found",
+                fmt(tr_("%1, X4 %2, build %3"), {"Steam", "9.00", "23660954"}) + ", /games/X4 Foundations"),
+            row("patches", Status::Ok, "The mod fits this X4",
+                fmt(trn_("all %1 feature matches its code", "all %1 features match its code", 10), {"10"})),
             row("steam", Status::Ok, "Steam running"),
             row("running", Status::Ok, "X4 not running yet"),
             row("gamescope", Status::Ok, "gamescope installed", "3.17.0"),
-            row("vr", Status::Ok, "VR ready", "WiVRn, Meta Quest 3 on WiVRn, asks 2889 x 3026 per eye"),
-            row("mod", Status::Ok, "Mod installed", "v0.9.10, up to date"),
-            row("gpu", Status::Ok, "GPU capable", "Radeon RX 7900 XTX, Vulkan 1.4")};
+            row("vr", Status::Ok, "VR ready",
+                fmt(tr_("%1, %2. It recommends %3 x %4 per eye."),
+                    {"WiVRn", "Meta Quest 3 on WiVRn", "2889", "3026"})),
+            row("mod", Status::Ok, "Mod installed", fmt(tr_("%1, up to date"), {"v0.9.10"})),
+            row("gpu", Status::Ok, "GPU capable", fmt(tr_("%1, Vulkan %2"), {"Radeon RX 7900 XTX", "1.4"}))};
 }
 
 static void replace(std::vector<Check> &rows, const Check &c) {
@@ -110,7 +128,9 @@ static void test_play(Window &w, const QString &shots) {
         shot(w, shots + "/window-ready.png");
 
     replace(rows, row("patches", Status::Warn, "X4 build not supported yet",
-                      "These turn off: Clicking the cockpit HUD; The shadow fix.", "details"));
+                      fmt(tr_("These turn off: %1."),
+                          {std::string(tr_("Clicking the cockpit HUD")) + "; " + tr_("The shadow fix")}),
+                      "details"));
     w.showChecks(rows);
     check(play->isEnabled() && play->text() == "Play anyway", "amber: Play anyway");
     check(play->styleSheet().contains("#c67d00"), "...and amber");
@@ -127,15 +147,13 @@ static void test_play(Window &w, const QString &shots) {
 
     rows = good_rows();
     replace(rows, row("vr", Status::Block, "Headset not connected",
-                      "WiVRn is running but gives no answer, as it does until a headset connects. "
-                      "Connect from the WiVRn app in the headset.",
-                      "retry"));
+                      "Connect from the WiVRn app in the headset.", "retry"));
     replace(rows, row("mod", Status::Block, "Mod not installed",
                       "The x4vrmod extension isn't in X4's folder.", "install"));
     w.showChecks(rows);
     check(!play->isEnabled() && play->text() == "Play", "red: Play is greyed");
     check(play->styleSheet().isEmpty(), "...in the theme's own colours");
-    check(status->text().contains("2 things to fix first"), "...and counts them");
+    check(status->text().contains("2 pending actions"), "...and counts them");
     fix = w.findChild<QPushButton *>("fix-mod");
     check(fix && fix->isVisibleTo(&w) && fix->text().startsWith("Install"), "the mod's row offers Install");
     fix = w.findChild<QPushButton *>("fix-vr");
@@ -147,7 +165,7 @@ static void test_play(Window &w, const QString &shots) {
 
     replace(rows, good_rows()[5]);
     w.showChecks(rows);
-    check(status->text().contains("1 thing to fix first") && status->text().contains("Mod not installed"),
+    check(status->text().contains("1 pending action") && status->text().contains("Mod not installed"),
           "one left: it's named");
 
     // A GOG copy has no Steam row, and it mustn't linger from a Steam copy.
@@ -522,9 +540,9 @@ static void test_help(const std::string &helpDir) {
     check(pics && picCount >= 3, "every picture in the help exists");
     for (const char *id : {"x4", "patches", "steam", "running", "gamescope", "vr", "mod", "gpu"})
         check(anchors.count(QString("row-") + id) > 0, std::string("the ") + id + " row has a section");
-    for (const char *a : {"game", "eye", "headsets", "upscaler", "gamemode", "ipd", "play", "flatscreen", "launch",
-                          "install", "uninstall", "more", "wivrn", "troubleshooting", "codec", "input",
-                          "report"})
+    for (const char *a : {"game", "eye", "headsets", "upscaler", "gamemode", "language", "ipd", "play",
+                          "flatscreen", "launch", "install", "uninstall", "more", "wivrn", "troubleshooting",
+                          "codec", "input", "report"})
         check(anchors.count(a) > 0, std::string("help has a section on ") + a);
     check(html.contains("can't be undone"), "help says uninstall's settings can't be undone");
     for (const char *h : {"Quest 3", "Quest 3S", "Quest 2", "Valve Index", "Steam Frame", "HTC Vive"})
@@ -537,6 +555,155 @@ static void test_help(const std::string &helpDir) {
     check(html.contains("Debug log"), "the help explains the debug run");
     check(!html.contains("Lean in"), "the help doesn't mention the lean checkbox");
     check(!html.contains("<b>?</b>"), "or the ? buttons");
+
+    // Each language's page, help/<code>/index.html: the same sections, since the rows
+    // and buttons link to them by name, and pictures found as the help window finds
+    // them, in its folder first and then in help/.
+    for (const Language &l : kLanguages) {
+        if (!strcmp(l.code, "en"))
+            continue;
+        const std::string code = l.code;
+        const QString ldir = dir + "/" + l.code;
+        QFile lf(ldir + "/index.html");
+        if (!lf.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            check(false, code + ": the help has a page");
+            continue;
+        }
+        const QString lhtml = QString::fromUtf8(lf.readAll());
+        std::set<QString> lanchors;
+        auto ln = QRegularExpression("<a name=\"([^\"]+)\"").globalMatch(lhtml);
+        while (ln.hasNext())
+            lanchors.insert(ln.next().captured(1));
+        check(lanchors == anchors, code + ": the help has the same sections as the English");
+        bool llinks = true;
+        auto lh = QRegularExpression("href=\"#([^\"]+)\"").globalMatch(lhtml);
+        while (lh.hasNext())
+            llinks = llinks && lanchors.count(lh.next().captured(1));
+        check(llinks, code + ": every link has its section");
+        bool lpics = true;
+        int lcount = 0;
+        auto ls = QRegularExpression("<img src=\"([^\"]+)\"").globalMatch(lhtml);
+        while (ls.hasNext()) {
+            const QString s = ls.next().captured(1);
+            lcount++;
+            if (!QFile::exists(ldir + "/" + s) && !QFile::exists(dir + "/" + s)) {
+                lpics = false;
+                printf("      %s: no picture %s\n", l.code, qPrintable(s));
+            }
+        }
+        check(lpics && lcount == picCount, code + ": the same pictures, and each exists");
+        for (const char *h : {"Quest 3", "Quest 3S", "Valve Index", "Steam Frame", "AV1", "H.265", "x4vrmod config"})
+            check(lhtml.contains(h), code + ": the help still has " + h);
+        check(lhtml.contains(QRegularExpression("charset=\"?utf-8", QRegularExpression::CaseInsensitiveOption)),
+              code + ": the help says it's UTF-8");
+    }
+}
+
+// Every language in the window's 800 pixels: no button or checkbox narrower than its
+// words, nothing past the right edge. Translations run longer than English more often
+// than not, and the window doesn't grow.
+static void test_languages_fit(const std::string &home, const Layout &layout) {
+    QTranslator qt;
+    for (const Language &l : kLanguages) {
+        const std::string code = l.code;
+        if (!gui::apply_language(code, layout.locale_dir, qt)) {
+            printf("skip  %s: this system has no locale to show a translation under\n", l.code);
+            continue;
+        }
+        // Without its catalogue every language would fit, being English.
+        check(code == "en" || gui::qtr("Play") != "Play", code + ": the window is in it");
+        Window::Options o;
+        o.live = false;
+        Window w(home, o);
+        w.show();
+        // Every fix button at once, which is the widest the rows get.
+        auto rows = good_rows();
+        replace(rows, row("patches", Status::Warn, "X4 build not supported yet", "", "details"));
+        replace(rows, row("vr", Status::Block, "Headset not connected",
+                          "Connect from the WiVRn app in the headset.", "retry"));
+        replace(rows, row("mod", Status::Block, "Mod not installed",
+                          "The x4vrmod extension isn't in X4's folder.", "install"));
+        w.showChecks(rows);
+        QStringList cut;
+        for (QWidget *c : w.findChildren<QWidget *>()) {
+            auto *b = qobject_cast<QAbstractButton *>(c);
+            auto *box = qobject_cast<QComboBox *>(c);
+            if ((!b && !box) || !c->isVisibleTo(&w))
+                continue;
+            const int right = c->mapTo(&w, QPoint(c->width(), 0)).x();
+            // A list box shortens what it shows; a button can't.
+            if (right > w.width() || (b && c->width() < c->sizeHint().width()))
+                cut << (b ? b->text() : box->currentText());
+        }
+        check(cut.isEmpty() && w.width() == 800,
+              code + ": every button fits the window" +
+                  (cut.isEmpty() ? std::string() : ": " + cut.join(", ").toStdString()));
+    }
+    gui::apply_language("en", layout.locale_dir, qt);
+}
+
+// A bug report is for us to read: English with the window in Portuguese. The control is
+// the same checks made outside a report, which must come out Portuguese, or the language
+// wasn't on and the English proves nothing.
+static void test_report_in_english(const std::string &home, const std::string &game,
+                                   const Layout &layout) {
+    QTranslator qt;
+    if (!gui::apply_language("pt_BR", layout.locale_dir, qt)) {
+        printf("skip  the report in English: no locale here to show a translation under\n");
+        return;
+    }
+    CheckOptions co;
+    co.home = home;
+    co.game = game;
+    co.skip_vr = co.skip_gpu = true;
+    const std::vector<Check> rows = run_checks(co);
+    check(!rows.empty() && rows[0].title == "X4 encontrado",
+          "the control: outside a report, the checks are in Portuguese (" +
+              (rows.empty() ? std::string() : rows[0].title) + ")");
+    ReportOptions o;
+    o.home = home;
+    o.game = game;
+    o.note = "As luzes piscam na Manticore.";
+    const ReportResult r = make_report(o);
+    check(r.ok && r.summary.find("X4 found") != std::string::npos &&
+              r.summary.find("encontrado") == std::string::npos,
+          "a report made with the window in Portuguese is in English");
+    check(r.issue_url.find("Manticore") != std::string::npos, "...and the player's own words go in as written");
+    gui::apply_language("en", layout.locale_dir, qt);
+}
+
+// The Language list: each language in its own words, the window's own chosen, and a
+// choice kept and handed to main.cpp, which builds the window again in it.
+static void test_language_box(const std::string &home) {
+    std::string asked;
+    Window::Options o;
+    o.live = false;
+    o.languageChanged = [&asked](const std::string &code) { asked = code; };
+    Window w(home, o);
+    auto *box = w.findChild<QComboBox *>("language");
+    QStringList names;
+    for (int i = 0; box && i < box->count(); i++)
+        names << box->itemText(i);
+    check(names == QStringList({"English", "Português Brasileiro", "Français", "Русский", "Deutsch"}),
+          "the Language list names each language in itself: " + names.join(", ").toStdString());
+    check(box && box->currentData().toString() == QString::fromStdString(gui::current_language()),
+          "...with the window's own chosen");
+    check(box && box->isVisibleTo(&w) && !box->toolTip().isEmpty(), "...and it explains itself on hover");
+    box->setCurrentIndex(box->findData("de"));
+    check(asked == "de", "choosing Deutsch asks for the window again in it");
+    check(load_profile(profile_path(home)).get("language") == "de", "...and keeps the choice");
+    QAction *reset = nullptr;
+    if (auto *more = w.findChild<QPushButton *>("more"))
+        for (QAction *a : more->menu()->actions())
+            if (a->text() == gui::qtr("Reset to defaults..."))
+                reset = a;
+    check(reset, "More has Reset to defaults");
+    if (reset)
+        reset->trigger();
+    check(load_profile(profile_path(home)).get("language") == "de", "...which keeps the language");
+    Profile p = load_profile(profile_path(home));
+    p.values.erase("language");
+    save_profile(profile_path(home), p);
 }
 
 // A real worker thread and real checks, against the fake home.
@@ -558,11 +725,18 @@ static void test_live(const std::string &home, const std::string &game) {
 
 int main(int argc, char **argv) {
     QString shots, helpShot;
+    std::string lang;
     for (int i = 1; i + 1 < argc; i++) {
         if (!strcmp(argv[i], "--shots"))
             shots = argv[i + 1];
         if (!strcmp(argv[i], "--help-shot"))
             helpShot = argv[i + 1];
+        if (!strcmp(argv[i], "--lang"))
+            lang = argv[i + 1];
+    }
+    if (!lang.empty() && !is_language(lang)) {
+        printf("FAIL  --lang is one of en, pt_BR, fr, ru, de\n");
+        return 1;
     }
     setenv("QT_QPA_PLATFORM", "offscreen", 0);
     char tmpl[] = "/tmp/x4vr-gui-XXXXXX";
@@ -604,6 +778,16 @@ int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QApplication::setStyle("Fusion");
     const Layout layout = detect_layout(home);
+    QTranslator qtLang;
+    if (!lang.empty()) {
+        if (!gui::apply_language(lang, layout.locale_dir, qtLang)) {
+            printf("FAIL  no locale on this system shows %s\n", lang.c_str());
+            return 1;
+        }
+        g_counted = lang == "en";
+        if (!g_counted)
+            printf("--lang %s: the checks below read English, so they aren't counted\n", lang.c_str());
+    }
     {
         Window::Options o;
         o.live = false;
@@ -615,7 +799,8 @@ int main(int argc, char **argv) {
         // The help's pictures shouldn't carry a build number.
         if (!shots.isEmpty())
             if (auto *v = w.findChild<QLabel *>("version"))
-                v->setText("supports X4 9.00 - unofficial, not affiliated with Egosoft");
+                v->setText(gui::qtr("%1 - supports X4 %2 - unofficial, not affiliated with Egosoft")
+                               .arg("X4 VR Mod", "9.00"));
         test_eye_rule(w, home);
         test_play(w, shots);
         test_suggests_wivrn(w);
@@ -626,6 +811,11 @@ int main(int argc, char **argv) {
     test_launch_options(layout.help_dir);
     test_advanced();
     test_help(layout.help_dir);
+    if (lang.empty()) {
+        test_languages_fit(home, layout);
+        test_language_box(home);
+        test_report_in_english(home, gameDir + "/X4", layout);
+    }
     test_live(home, gameDir + "/X4");
     if (!helpShot.isEmpty()) {
         gui::HelpWindow h(layout.help_dir, nullptr);

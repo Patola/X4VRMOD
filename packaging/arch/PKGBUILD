@@ -8,8 +8,9 @@ url="https://github.com/Patola/X4VRMOD"
 license=('GPL-3.0-or-later')
 depends=('bash' 'gamescope' 'glibc' 'hicolor-icon-theme' 'libgcc' 'libstdc++' 'openxr'
          'qt6-base' 'vulkan-icd-loader' 'zlib')
-makedepends=('cmake' 'git' 'python' 'python-pillow' 'vulkan-headers')
-optdepends=('gamemode: the launcher offers it, for a few more frames per second')
+makedepends=('cmake' 'gettext' 'git' 'python' 'python-pillow' 'vulkan-headers')
+optdepends=('gamemode: the launcher offers it, for a few more frames per second'
+            "qt6-translations: Qt's own buttons in the launcher's language")
 source=("x4vrmod::git+https://github.com/Patola/X4VRMOD.git#tag=v${pkgver}")
 sha256sums=('SKIP')
 # A debug package for a game mod nobody debugs from a package, 12 MB beside 7.

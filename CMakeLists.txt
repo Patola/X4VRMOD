@@ -105,11 +105,11 @@ if(NOT DEFINED CPACK_DEBIAN_PACKAGE_SHLIBDEPS)
 endif()
 set(CPACK_DEBIAN_PACKAGE_DEPENDS "bash")
 set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "gamescope, libopenxr-loader1, libvulkan1, qt6-qpa-plugins")
-set(CPACK_DEBIAN_PACKAGE_SUGGESTS "gamemode")
+set(CPACK_DEBIAN_PACKAGE_SUGGESTS "gamemode, qt6-translations-l10n")
 set(CPACK_RPM_FILE_NAME RPM-DEFAULT)
 set(CPACK_RPM_PACKAGE_LICENSE "GPL-3.0-or-later WITH x4vrmod-linking-exception")
 set(CPACK_RPM_PACKAGE_REQUIRES "bash, gamescope, openxr-libs, vulkan-loader")
-set(CPACK_RPM_PACKAGE_SUGGESTS "gamemode")
+set(CPACK_RPM_PACKAGE_SUGGESTS "gamemode, qt6-qttranslations")
 # Not ours to claim: these directories belong to the system's own packages.
 set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
     /usr/share/applications /usr/share/icons /usr/share/icons/hicolor

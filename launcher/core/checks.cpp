@@ -2,6 +2,7 @@
 //
 // The checks behind the Play button, one per row of the window and one per line
 // of `x4vrmod doctor`. Everything here only reads.
+#include "x4vr_i18n.hpp"
 #include "x4vr_launcher.hpp"
 
 #include <dirent.h>
@@ -37,6 +38,7 @@ Layout detect_layout(const std::string &home) {
         l.injector = in + "/lib/libx4vr_inject.so";
         l.launch_script = in + "/launch/x4vr-launch.sh";
         l.help_dir = zip + "/help";
+        l.locale_dir = zip + "/locale";
         return l;
     }
     if (here == X4VRMOD_BUILD_DIR "/launcher" || here == X4VRMOD_BUILD_DIR "/tests") {
@@ -48,6 +50,7 @@ Layout detect_layout(const std::string &home) {
         l.launch_script = X4VRMOD_SOURCE_DIR "/launch/x4vr-launch.sh";
         l.deploy_script = X4VRMOD_SOURCE_DIR "/launch/deploy-extensions.sh";
         l.help_dir = X4VRMOD_SOURCE_DIR "/launcher/help";
+        l.locale_dir = X4VRMOD_BUILD_DIR "/locale";
         return l;
     }
     l.kind = LayoutKind::Package;
@@ -59,6 +62,7 @@ Layout detect_layout(const std::string &home) {
     l.launch_script = l.data_dir + "/launch/x4vr-launch.sh";
     l.deploy_script = l.data_dir + "/launch/deploy-extensions.sh";
     l.help_dir = l.data_dir + "/help";
+    l.locale_dir = l.data_dir + "/locale";
     return l;
 }
 
@@ -124,7 +128,7 @@ static Check check_patches_row(const Install &in) {
     ElfFile elf;
     if (!elf.open(in.exe)) {
         c.status = Status::Warn;
-        c.title = "Can't read X4's program";
+        c.title = tr_("Can't read X4's program");
         c.detail = in.exe;
         return c;
     }
@@ -136,24 +140,25 @@ static Check check_patches_row(const Install &in) {
             good++;
         } else {
             off += (off.empty() ? "" : "; ");
-            off += r.feature;
+            off += tr_(r.feature);
         }
     }
     const int v = read_x4_version(in.dir);
     const bool other_major = v >= 0 && v / 100 != kTestedX4Version / 100;
     if (!off.empty()) {
         c.status = Status::Warn;
-        c.title = "X4 build not supported yet";
-        c.detail = "These turn off: " + off + ".";
+        c.title = tr_("X4 build not supported yet");
+        c.detail = fmt(tr_("These turn off: %1."), {off});
         c.fix = "details";
     } else if (other_major) {
         c.status = Status::Warn;
-        c.title = "Not tested with X4 " + format_x4_version(v);
-        c.detail = "Every patch still fits, but this release was tested with X4 " +
-                   format_x4_version(kTestedX4Version) + ".";
+        c.title = fmt(tr_("Not tested with X4 %1"), {format_x4_version(v)});
+        c.detail = fmt(tr_("Every patch still fits, but this release was tested with X4 %1."),
+                       {format_x4_version(kTestedX4Version)});
     } else {
-        c.title = "The mod fits this X4";
-        c.detail = "all " + std::to_string(good) + " features match its code";
+        c.title = tr_("The mod fits this X4");
+        c.detail = fmt(trn_("all %1 feature matches its code", "all %1 features match its code", good),
+                       {std::to_string(good)});
     }
     return c;
 }
@@ -169,7 +174,7 @@ std::string wivrn_program() {
 
 // The window's button says the rest: WiVRn first, then SteamVR.
 static void no_runtime(Check &c) {
-    c.title = "No VR runtime running";
+    c.title = tr_("No VR runtime running");
     c.fix = "start-vr";
 }
 
@@ -211,41 +216,42 @@ Check vr_row(const ActiveRuntime &rt, const XrProbe &p) {
     c.status = Status::Block;
     const std::string who = runtime_short_name(!p.runtime.empty() ? p.runtime
                                                : !rt.name.empty() ? rt.name
-                                                                  : "The VR runtime");
+                                                                  : tr_("The VR runtime"));
     const bool steamvr = rt.steamvr || who == "SteamVR";
     switch (p.status) {
     case XrStatus::Ready: {
         c.status = Status::Ok;
-        c.title = "VR ready";
+        c.title = tr_("VR ready");
         // WiVRn names the headset ("Meta Quest 3 on WiVRn"); SteamVR names its driver
         // ("SteamVR/OpenXR : oculus"), which tells the player nothing.
         const bool named = !p.system.empty() && p.system.find("SteamVR") == std::string::npos;
-        c.detail = who + ", " + (named ? p.system : std::string("headset connected")) +
-                   ". It recommends " + std::to_string(p.eye_w) + " x " +
-                   std::to_string(p.eye_h) + " per eye.";
+        const std::string w = std::to_string(p.eye_w), h = std::to_string(p.eye_h);
+        c.detail = named ? fmt(tr_("%1, %2. It recommends %3 x %4 per eye."), {who, p.system, w, h})
+                         : fmt(tr_("%1, headset connected. It recommends %2 x %3 per eye."),
+                               {who, w, h});
         break;
     }
     case XrStatus::NoHeadset:
-        c.title = "Headset not connected";
-        c.detail = who + " is running, with no headset connected.";
+        c.title = tr_("Headset not connected");
+        c.detail = fmt(tr_("%1 is running, with no headset connected."), {who});
         c.fix = "retry";
         break;
     case XrStatus::NoRuntime:
         no_runtime(c);
         break;
     case XrStatus::NoLoader:
-        c.title = "OpenXR isn't installed";
-        c.detail = "Install the OpenXR loader from your package manager.";
+        c.title = tr_("OpenXR isn't installed");
+        c.detail = tr_("Install the OpenXR loader from your package manager.");
         break;
     case XrStatus::TimedOut:
         // WiVRn doesn't say "no headset": it answers nothing until one connects
         // (2026-11-05: 5 s of silence without, at once with).
         if (who.find("WiVRn") != std::string::npos) {
-            c.title = "Headset not connected";
-            c.detail = "Connect from the WiVRn app in the headset.";
+            c.title = tr_("Headset not connected");
+            c.detail = tr_("Connect from the WiVRn app in the headset.");
         } else {
-            c.title = "VR runtime not answering";
-            c.detail = who + " didn't answer in time.";
+            c.title = tr_("VR runtime not answering");
+            c.detail = fmt(tr_("%1 didn't answer in time."), {who});
         }
         c.fix = "retry";
         break;
@@ -254,13 +260,13 @@ Check vr_row(const ActiveRuntime &rt, const XrProbe &p) {
         // (2026-11-08, Steam Link before the Quest connected).
         if (steamvr && p.status == XrStatus::Failed &&
             p.detail.find("XR_ERROR_RUNTIME_FAILURE") != std::string::npos) {
-            c.title = "Headset not connected";
-            c.detail = "SteamVR is running and waiting for the headset. Connect it, then Retry.";
+            c.title = tr_("Headset not connected");
+            c.detail = tr_("SteamVR is running and waiting for the headset. Connect it, then Retry.");
             c.fix = "retry";
             break;
         }
-        c.title = "VR runtime not answering";
-        c.detail = who + " didn't start: " + p.detail;
+        c.title = tr_("VR runtime not answering");
+        c.detail = fmt(tr_("%1 didn't start: %2"), {who, p.detail});
         c.fix = "retry";
         break;
     }
@@ -274,13 +280,13 @@ static Check check_mod_row(const Layout &l, const Install &in) {
     c.id = "mod";
     c.status = Status::Block;
     c.fix = "install";
-    c.title = "Mod not installed";
+    c.title = tr_("Mod not installed");
     const std::string dest = in.dir + "/extensions/x4vrmod";
     const std::string t = read_text_file(l.layer_manifest, 64 * 1024);
     if (t.empty()) {
         // Nothing yet is the usual first start, and needs no explaining.
         if (is_dir(dest))
-            c.detail = "No Vulkan layer manifest at " + l.layer_manifest;
+            c.detail = fmt(tr_("No Vulkan layer manifest at %1"), {l.layer_manifest});
         return c;
     }
     const auto libs = json_strings(t, "library_path");
@@ -288,23 +294,23 @@ static Check check_mod_row(const Layout &l, const Install &in) {
     if (!lib.empty() && lib[0] != '/')
         lib = dir_name(l.layer_manifest) + "/" + lib;
     if (lib.empty() || !is_file(lib)) {
-        c.detail = "The Vulkan layer's manifest names a library that isn't there: " + lib;
+        c.detail = fmt(tr_("The Vulkan layer's manifest names a library that isn't there: %1"), {lib});
         return c;
     }
     if (!is_file(l.injector)) {
-        c.detail = "The injector isn't there: " + l.injector;
+        c.detail = fmt(tr_("The injector isn't there: %1"), {l.injector});
         return c;
     }
     const std::string lv = library_version(lib), iv = library_version(l.injector);
     if (lv != own_version() || iv != own_version()) {
-        c.title = "Mod out of date";
-        c.detail = "Layer " + (lv.empty() ? std::string("unknown") : lv) + ", injector " +
-                   (iv.empty() ? std::string("unknown") : iv) + ", this launcher " +
-                   own_version() + ".";
+        c.title = tr_("Mod out of date");
+        const std::string unknown = tr_("unknown");
+        c.detail = fmt(tr_("Layer %1, injector %2, this launcher %3."),
+                       {lv.empty() ? unknown : lv, iv.empty() ? unknown : iv, own_version()});
         return c;
     }
     if (!is_dir(dest)) {
-        c.detail = "The x4vrmod extension isn't in X4's folder.";
+        c.detail = tr_("The x4vrmod extension isn't in X4's folder.");
         return c;
     }
     // Installed once, the launch itself brings the extension up to date and removes the
@@ -312,11 +318,11 @@ static Check check_mod_row(const Layout &l, const Install &in) {
     // loading screen.
     c.status = Status::Ok;
     c.fix.clear();
-    c.title = "Mod installed";
+    c.title = tr_("Mod installed");
     bool current = same_tree(l.extension_dir, dest);
     for (const char *old : {"x4vrmod_lookaround", "x4vrmod_nosway", "x4vrmod_headlook"})
         current = current && !is_dir(in.dir + "/extensions/" + old);
-    c.detail = lv + (current ? ", up to date" : ", updates when you play");
+    c.detail = fmt(current ? tr_("%1, up to date") : tr_("%1, updates when you play"), {lv});
     return c;
 }
 
@@ -326,11 +332,11 @@ static Check check_gamescope_row() {
     const std::string gs = find_on_path("gamescope");
     if (gs.empty()) {
         c.status = Status::Block;
-        c.title = "gamescope isn't installed";
-        c.detail = "Install it from your package manager.";
+        c.title = tr_("gamescope isn't installed");
+        c.detail = tr_("Install it from your package manager.");
         return c;
     }
-    c.title = "gamescope installed";
+    c.title = tr_("gamescope installed");
     const ChildResult r = run_child({gs, "--version"}, 2000, true);
     static const char kV[] = "gamescope version ";
     const size_t at = r.out.find(kV);
@@ -357,23 +363,23 @@ static Check check_gpu_row() {
     const VulkanProbe p = vulkan_probe_child(8000);
     if (!p.ok) {
         c.status = Status::Block;
-        c.title = "Vulkan not working";
+        c.title = tr_("Vulkan not working");
         c.detail = p.detail;
         return c;
     }
     const GpuInfo *best = best_gpu(p);
     if (!best) {
         c.status = Status::Block;
-        c.title = "No GPU can run the mod";
-        c.detail = "It needs Vulkan 1.2 with multiview and at least 7 descriptor sets.";
+        c.title = tr_("No GPU can run the mod");
+        c.detail = tr_("It needs Vulkan 1.2 with multiview and at least 7 descriptor sets.");
         return c;
     }
-    c.title = "GPU capable";
-    c.detail = best->name + ", Vulkan " + std::to_string(best->api_major) + "." +
-               std::to_string(best->api_minor);
+    c.title = tr_("GPU capable");
+    c.detail = fmt(tr_("%1, Vulkan %2"),
+                   {best->name, std::to_string(best->api_major) + "." + std::to_string(best->api_minor)});
     c.dlss = best->rtx();
     if (c.dlss)
-        c.detail += ", DLSS available";
+        c.detail = fmt(tr_("%1, DLSS available"), {c.detail});
     return c;
 }
 
@@ -394,26 +400,30 @@ std::vector<Check> run_checks(const CheckOptions &o) {
         if (want.empty())
             want = load_profile(profile_path(home)).get("game");
         if (!want.empty()) {
-            x4.title = "X4 not found there";
+            x4.title = tr_("X4 not found there");
             x4.detail = classify_game_path(want).why;
         } else {
-            x4.title = "X4 not found";
-            x4.detail = "It isn't in Steam's libraries or the usual GOG folders. "
-                        "Choose its folder.";
+            x4.title = tr_("X4 not found");
+            x4.detail = tr_("It isn't in Steam's libraries or the usual GOG folders. "
+                            "Choose its folder.");
         }
     }
     const bool usable = have && in.kind == PathKind::Linux;
     if (have && !usable) {
-        x4.title = "This is the Windows version of X4";
+        x4.title = tr_("This is the Windows version of X4");
         x4.detail = proton_explanation();
     }
     if (usable) {
         const int v = read_x4_version(in.dir);
         x4.status = Status::Ok;
         x4.fix.clear();
-        x4.title = "X4 found";
-        x4.detail = std::string(store_name(in.store)) + ", X4 " + format_x4_version(v) +
-                    (in.buildid.empty() ? "" : ", build " + in.buildid) + ", " + in.dir;
+        x4.title = tr_("X4 found");
+        // The window cuts the row at ", /": the Game box already shows the folder.
+        x4.detail = (in.buildid.empty()
+                         ? fmt(tr_("%1, X4 %2"), {store_name(in.store), format_x4_version(v)})
+                         : fmt(tr_("%1, X4 %2, build %3"),
+                               {store_name(in.store), format_x4_version(v), in.buildid})) +
+                    ", " + in.dir;
     }
     out.push_back(x4);
 
@@ -424,11 +434,11 @@ std::vector<Check> run_checks(const CheckOptions &o) {
         Check c;
         c.id = "steam";
         if (steam_is_running(home)) {
-            c.title = "Steam running";
+            c.title = tr_("Steam running");
         } else {
             c.status = Status::Block;
-            c.title = "Steam isn't running";
-            c.detail = "The Steam version of X4 needs Steam open.";
+            c.title = tr_("Steam isn't running");
+            c.detail = tr_("The Steam version of X4 needs Steam open.");
             c.fix = "start-steam";
         }
         out.push_back(c);
@@ -439,10 +449,10 @@ std::vector<Check> run_checks(const CheckOptions &o) {
         c.id = "running";
         if (x4_is_running(usable ? in.exe : "")) {
             c.status = Status::Block;
-            c.title = "X4 is already running";
-            c.detail = "Close it first.";
+            c.title = tr_("X4 is already running");
+            c.detail = tr_("Close it first.");
         } else {
-            c.title = "X4 not running yet";
+            c.title = tr_("X4 not running yet");
         }
         out.push_back(c);
     }

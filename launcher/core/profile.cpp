@@ -2,6 +2,7 @@
 //
 // The player's settings, ~/.config/x4vrmod/profile.toml, and the one rule that
 // ties the eye size to the upscaler (docs/packaging-plan.md, decision 6).
+#include "x4vr_i18n.hpp"
 #include "x4vr_launcher.hpp"
 
 #include <unistd.h>
@@ -21,22 +22,22 @@ namespace x4vr::launcher {
 // size: nothing here can say what it renders.
 const std::vector<Upscaler> &upscalers() {
     static const std::vector<Upscaler> v = {
-        {"none", "None (full resolution)", 1.0},
-        {"dlss_auto", "DLSS Auto", 1.0, true},
-        {"dlss_dlaa", "DLSS DLAA (anti-aliasing only)", 1.0, true},
-        {"dlss_quality", "DLSS Quality", 1.5, true},
-        {"dlss_balanced", "DLSS Balanced", 1.72, true},
-        {"dlss_performance", "DLSS Performance", 2.0, true},
-        {"dlss_ultra_performance", "DLSS Ultra Performance", 3.0, true},
-        {"fsr_ultra_quality", "FSR 1 Ultra Quality", 1.3},
-        {"fsr_quality", "FSR 1 Quality", 1.5},
-        {"fsr_balanced", "FSR 1 Balanced", 1.7},
-        {"fsr_performance", "FSR 1 Performance", 2.0},
-        {"fsr3_native", "FSR 3 Native (anti-aliasing only)", 1.0},
-        {"fsr3_quality", "FSR 3 Quality", 1.5},
-        {"fsr3_balanced", "FSR 3 Balanced", 1.7},
-        {"fsr3_performance", "FSR 3 Performance", 2.0},
-        {"fsr3_ultra_performance", "FSR 3 Ultra Performance", 3.0},
+        {"none", N_("None (full resolution)"), 1.0},
+        {"dlss_auto", N_("DLSS Auto"), 1.0, true},
+        {"dlss_dlaa", N_("DLSS DLAA (anti-aliasing only)"), 1.0, true},
+        {"dlss_quality", N_("DLSS Quality"), 1.5, true},
+        {"dlss_balanced", N_("DLSS Balanced"), 1.72, true},
+        {"dlss_performance", N_("DLSS Performance"), 2.0, true},
+        {"dlss_ultra_performance", N_("DLSS Ultra Performance"), 3.0, true},
+        {"fsr_ultra_quality", N_("FSR 1 Ultra Quality"), 1.3},
+        {"fsr_quality", N_("FSR 1 Quality"), 1.5},
+        {"fsr_balanced", N_("FSR 1 Balanced"), 1.7},
+        {"fsr_performance", N_("FSR 1 Performance"), 2.0},
+        {"fsr3_native", N_("FSR 3 Native (anti-aliasing only)"), 1.0},
+        {"fsr3_quality", N_("FSR 3 Quality"), 1.5},
+        {"fsr3_balanced", N_("FSR 3 Balanced"), 1.7},
+        {"fsr3_performance", N_("FSR 3 Performance"), 2.0},
+        {"fsr3_ultra_performance", N_("FSR 3 Ultra Performance"), 3.0},
     };
     return v;
 }
@@ -44,8 +45,8 @@ const std::vector<Upscaler> &upscalers() {
 bool is_dlss(const std::string &mode) { return mode.rfind("dlss_", 0) == 0; }
 
 std::string upscaler_note(const std::string &mode) {
-    return is_dlss(mode) ? "DLSS hasn't been played in a headset yet. If an eye looks wrong, "
-                           "please report it."
+    return is_dlss(mode) ? tr_("DLSS hasn't been played in a headset yet. If an eye looks wrong, "
+                               "please report it.")
                          : "";
 }
 
@@ -58,10 +59,10 @@ std::string eye_note(int eye, bool steamvr) {
     std::string note;
     // docs/packaging-plan.md, Resolution: takes 376-378 and Patola, 2026-10-31.
     if (eye > 4068)
-        note = "Above 4068 the map's 3D view is flat, not in depth.";
+        note = tr_("Above 4068 the map's 3D view is flat, not in depth.");
     if (steamvr && eye > kAutoUpscaleAbove)
         note += std::string(note.empty() ? "" : " ") +
-                "At 4224 SteamVR has shown a jumbled picture. If you see that, go lower.";
+                tr_("At 4224 SteamVR has shown a jumbled picture. If you see that, go lower.");
     return note;
 }
 
@@ -86,7 +87,7 @@ std::string set_eye(EyeSettings &s, int eye) {
     if (large && !was_large && s.upscaler == "none") {
         s.upscaler = kAutoUpscaler;
         s.upscaler_auto = true;
-        return "FSR 1 Quality chosen for this size. Choose None for full resolution.";
+        return tr_("FSR 1 Quality chosen for this size. Choose None for full resolution.");
     }
     if (!large && was_large && s.upscaler_auto) {
         s.upscaler = "none";
@@ -239,10 +240,14 @@ std::string profile_set(Profile &p, const std::string &key, const std::string &v
                    "back to the headset's";
     } else if (key == "fov") {
         if (!number(0.5, 2.5))
-            return "error: fov is X4's field of view, like 1.4917";
+            return std::string("error: ") + tr_("fov is X4's field of view, like 1.4917");
     } else if (key == "gamemode") {
         if (value != "0" && value != "1")
             return "error: gamemode is 1 to use it, 0 not to";
+    } else if (key == "language") {
+        // The window's, not the game's: profile_env leaves it out.
+        if (!is_language(value))
+            return "error: language is one of en, pt_BR, fr, ru, de";
     } else if (key == "game") {
         const GamePath g = classify_game_path(value);
         if (g.kind == PathKind::Windows)
@@ -252,12 +257,13 @@ std::string profile_set(Profile &p, const std::string &key, const std::string &v
         p.values[key] = g.exe;
         return "";
     } else if (key.rfind("env.", 0) != 0 || key.size() <= 4) {
-        return "error: unknown setting (eye, upscaler, ipd, fov, gamemode, game, env.NAME)";
+        return "error: unknown setting (eye, upscaler, ipd, fov, gamemode, language, game, "
+               "env.NAME)";
     } else if (key[4] >= '0' && key[4] <= '9') {
-        return "error: not a variable name: " + key.substr(4);
+        return "error: " + fmt(tr_("not a variable name: %1"), {key.substr(4)});
     } else if (key.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
                                      "0123456789_", 4) != std::string::npos) {
-        return "error: not a variable name: " + key.substr(4);
+        return "error: " + fmt(tr_("not a variable name: %1"), {key.substr(4)});
     }
     p.values[key] = value;
     return "";

@@ -29,6 +29,7 @@ cp "$ROOT/launch/x4vr-launch.sh" "$ROOT/launch/x4vr-defaults.sh" \
    "$ROOT/launch/deploy-extensions.sh" "$ROOT/launch/defaults.conf" "$D/launch/"
 cp -r "$BUILD/extension/x4vrmod" "$D/extension/"
 [ -d "$ROOT/launcher/help" ] && cp -r "$ROOT/launcher/help" "$D/"
+[ -d "$BUILD/locale" ] && cp -r "$BUILD/locale" "$D/"
 cp "$ROOT/LICENSE" "$ROOT/LICENSE.exception" "$ROOT/README.md" "$ROOT/docs/releases.md" "$S/"
 printf 'version=%s\n' "$ver" > "$D/manifest"
 

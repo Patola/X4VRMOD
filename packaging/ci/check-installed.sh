@@ -11,6 +11,12 @@ for f in /usr/bin/x4vrmod /usr/bin/x4vrmod-launcher /usr/lib/x4vrmod/libVkLayer_
     /usr/share/applications/x4vrmod-launcher.desktop; do
     [ -e "$f" ] || { echo "missing: $f"; exit 1; }
 done
+# Each language: the window's words and its help.
+for l in pt_BR fr de ru; do
+    for f in /usr/share/x4vrmod/locale/$l/LC_MESSAGES/x4vrmod.mo /usr/share/x4vrmod/help/$l/index.html; do
+        [ -e "$f" ] || { echo "missing: $f"; exit 1; }
+    done
+done
 if ldd /usr/bin/x4vrmod-launcher | grep 'not found'; then
     exit 1
 fi

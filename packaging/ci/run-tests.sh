@@ -50,7 +50,7 @@ fi
 
 run check-exports tests/check-exports.sh "$BUILD/injector/libx4vr_inject.so"
 for s in census-scorer config-fork content-fork deploy-extensions dither-scorer \
-    extension-selectors launch-defaults launcher-install launcher-package launcher-x4-bytes \
+    extension-selectors i18n launch-defaults launcher-install launcher-package launcher-x4-bytes \
     make-extension pace-scorer plantid-scorer rfab-scorer watch-relay x4-call-guards; do
     run "$s" timeout 600 bash "tests/run-$s.sh"
 done

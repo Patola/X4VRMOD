@@ -4,6 +4,7 @@
 // data folder, because Steam launch options and the layer manifest need paths
 // that survive the unpacked folder moving; a package only needs the extension.
 // Uninstall removes what's ours by exact name and never anything else.
+#include "x4vr_i18n.hpp"
 #include "x4vr_launcher.hpp"
 
 #include <dirent.h>
@@ -71,8 +72,8 @@ Install choose_install(const std::string &home, const std::string &game, bool *f
 }
 
 const char *install_disclosure() {
-    return "X4 marks saves made with a non-Egosoft extension as modified; the mod's "
-           "extension is enabled only in VR sessions.";
+    return tr_("X4 marks saves made with a non-Egosoft extension as modified; the mod's "
+               "extension is enabled only in VR sessions.");
 }
 
 std::string menu_entry_path(const std::string &home) {
@@ -87,7 +88,7 @@ bool menu_entry_possible(const std::string &home) {
 ActionReport add_menu_entry(const std::string &home) {
     ActionReport r;
     if (!menu_entry_possible(home)) {
-        r.error = "Install the mod first: the menu needs the copy whose path stays.";
+        r.error = tr_("Install the mod first: the menu needs the copy whose path stays.");
         return r;
     }
     const std::string root = install_root_user(home), path = menu_entry_path(home);
@@ -95,7 +96,7 @@ ActionReport add_menu_entry(const std::string &home) {
     fs::create_directories(dir_name(path), ec);
     FILE *f = fopen(path.c_str(), "w");
     if (!f) {
-        r.error = "Couldn't write " + path;
+        r.error = fmt(tr_("Couldn't write %1"), {path});
         return r;
     }
     fprintf(f,
@@ -113,12 +114,12 @@ ActionReport add_menu_entry(const std::string &home) {
 ActionReport install_mod(const Install &x4, const std::string &home) {
     ActionReport r;
     if (x4.kind != PathKind::Linux) {
-        r.error = x4.kind == PathKind::Windows ? proton_explanation() : "X4 wasn't found.";
+        r.error = x4.kind == PathKind::Windows ? proton_explanation() : tr_("X4 wasn't found.");
         return r;
     }
     const Layout l = detect_layout(home);
     if (!is_file(l.deploy_script)) {
-        r.error = "This copy of the mod is incomplete: no " + l.deploy_script;
+        r.error = fmt(tr_("This copy of the mod is incomplete: no %1"), {l.deploy_script});
         return r;
     }
     std::vector<std::string> written;
@@ -132,7 +133,7 @@ ActionReport install_mod(const Install &x4, const std::string &home) {
             fs::create_directories(root, ec);
             fs::copy(l.data_dir, dest, fs::copy_options::recursive, ec);
             if (ec) {
-                r.error = "Couldn't copy the mod to " + dest + ": " + ec.message();
+                r.error = fmt(tr_("Couldn't copy the mod to %1: %2"), {dest, ec.message()});
                 return r;
             }
             for (const char *prog : {"x4vrmod", "x4vrmod-launcher"}) {
@@ -141,7 +142,7 @@ ActionReport install_mod(const Install &x4, const std::string &home) {
                     fs::copy_file(from, root + "/" + prog,
                                   fs::copy_options::overwrite_existing, ec);
                     if (ec) {
-                        r.error = "Couldn't copy " + from + ": " + ec.message();
+                        r.error = fmt(tr_("Couldn't copy %1: %2"), {from, ec.message()});
                         return r;
                     }
                 }
@@ -154,7 +155,7 @@ ActionReport install_mod(const Install &x4, const std::string &home) {
         const std::string token = "@X4VR_LAYER_LIB@";
         const size_t at = json.find(token);
         if (at == std::string::npos) {
-            r.error = "This copy of the mod is incomplete: no layer manifest template.";
+            r.error = tr_("This copy of the mod is incomplete: no layer manifest template.");
             return r;
         }
         json.replace(at, token.size(), dest + "/lib/libVkLayer_X4VR_core.so");
@@ -164,7 +165,7 @@ ActionReport install_mod(const Install &x4, const std::string &home) {
         if (!f || fputs(json.c_str(), f) < 0) {
             if (f)
                 fclose(f);
-            r.error = "Couldn't write " + man;
+            r.error = fmt(tr_("Couldn't write %1"), {man});
             return r;
         }
         fclose(f);
@@ -174,7 +175,7 @@ ActionReport install_mod(const Install &x4, const std::string &home) {
     // One deployer, the script a launch uses too. It removes the retired names.
     const ChildResult c = run_child({l.deploy_script, x4.dir}, 60000, true);
     if (!c.started || c.exit_code != 0) {
-        r.error = "Couldn't put the extension in X4's folder: " + c.out;
+        r.error = fmt(tr_("Couldn't put the extension in X4's folder: %1"), {c.out});
         return r;
     }
     r.log.push_back("Extension in place: " + x4.dir + "/extensions/x4vrmod");
@@ -188,7 +189,7 @@ ActionReport install_mod(const Install &x4, const std::string &home) {
             written.push_back(old);
     FILE *f = fopen(rec.c_str(), "w");
     if (!f) {
-        r.error = "Couldn't write " + rec;
+        r.error = fmt(tr_("Couldn't write %1"), {rec});
         return r;
     }
     fprintf(f, "{\n  \"version\": %s,\n  \"layout\": %s,\n  \"installed\": [\n",
@@ -240,7 +241,7 @@ UninstallPlan uninstall_plan(const std::string &home, bool with_settings) {
     add(menu_entry_path(home));
 
     if (l.kind == LayoutKind::Package)
-        p.note = "The package itself stays. Remove it with your package manager.";
+        p.note = tr_("The package itself stays. Remove it with your package manager.");
     if (!with_settings)
         return p;
 

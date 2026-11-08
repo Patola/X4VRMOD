@@ -5,6 +5,7 @@
 // own checks, the ones the injector makes in X4's memory at load, over the file
 // (docs/packaging-plan.md, decision 8). Each group is what its feature's call
 // site in x4vr_inject.cpp verifies before it patches.
+#include "x4vr_i18n.hpp"
 #include "x4vr_launcher.hpp"
 
 #include <fcntl.h>
@@ -214,34 +215,34 @@ std::vector<PatchResult> check_patches(const VaReader &read) {
     // camwrite_ready: hop 3 and the write sites.
     ok = camwatch::verify_hop3_sites(rd, &bad) &&
          camwrite::verify_write_sites(rd, &bad);
-    group("headlook", "Head tracking in the cockpit", ok, bad);
+    group("headlook", N_("Head tracking in the cockpit"), ok, bad);
 
     ok = foot::verify_null_exit_sites(rd, &bad);
-    group("foot", "Looking around while walking", ok, bad);
+    group("foot", N_("Looking around while walking"), ok, bad);
 
     ok = extview::verify_sites(rd, &bad) && extview::early_site_ok(&bad);
-    group("extview", "Head tracking in the external views (F2, F3, F4)", ok, bad);
+    group("extview", N_("Head tracking in the external views (F2, F3, F4)"), ok, bad);
 
     ok = uimouse::verify_sites(rd, &bad);
-    group("uimouse", "Clicking the cockpit HUD", ok, bad);
+    group("uimouse", N_("Clicking the cockpit HUD"), ok, bad);
 
     ok = steer::verify_sites(rd, &bad);
-    group("steer", "The steering target drawn in VR", ok, bad);
+    group("steer", N_("The steering target drawn in VR"), ok, bad);
 
     ok = aimpick::verify_sites(rd, &bad);
-    group("aimpick", "Aiming at where the steering target points", ok, bad);
+    group("aimpick", N_("Aiming at where the steering target points"), ok, bad);
 
     ok = menus::verify_sites(rd, &bad);
-    group("menus", "Menus lined up with the cursor", ok, bad);
+    group("menus", N_("Menus lined up with the cursor"), ok, bad);
 
     ok = csmfit::verify_sites(rd, &bad);
-    group("shadows", "The shadow fix", ok, bad);
+    group("shadows", N_("The shadow fix"), ok, bad);
 
     ok = loadart::verify_sites(rd, &bad);
-    group("loadart", "The mod's loading screen", ok, bad);
+    group("loadart", N_("The mod's loading screen"), ok, bad);
 
     ok = ngx::verify_sites(rd, &bad);
-    group("dlss", "DLSS in both eyes", ok, bad);
+    group("dlss", N_("DLSS in both eyes"), ok, bad);
 
     return out;
 }

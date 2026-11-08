@@ -1,0 +1,1284 @@
+# Russian translation of the X4 VR Mod launcher.
+# This file is distributed under the same license as the x4vrmod package.
+#
+# A first, best-effort translation. Corrections are welcome as pull requests
+# or as comments on an issue: https://github.com/Patola/X4VRMOD/issues
+msgid ""
+msgstr ""
+"Project-Id-Version: x4vrmod\n"
+"Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
+"POT-Creation-Date: 2026-11-08 20:02+0100\n"
+"PO-Revision-Date: 2026-11-08 17:00+0100\n"
+"Last-Translator: first draft, to be reviewed\n"
+"Language-Team: none\n"
+"Language: ru\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && "
+"n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "%1 didn't answer in time."
+msgstr "%1: нет ответа за отведённое время."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "%1 didn't start: %2"
+msgstr "%1: ошибка запуска: %2"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "%1 is running, with no headset connected."
+msgstr "%1: работает, но шлем не подключён."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "%1, %2. It recommends %3 x %4 per eye."
+msgstr "%1, %2. Рекомендуется %3 x %4 на глаз."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "%1, DLSS available"
+msgstr "%1, доступен DLSS"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "%1, Vulkan %2"
+msgstr "%1, Vulkan %2"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "%1, X4 %2"
+msgstr "%1, X4 %2"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "%1, X4 %2, build %3"
+msgstr "%1, X4 %2, сборка %3"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "%1, headset connected. It recommends %2 x %3 per eye."
+msgstr "%1, шлем подключён. Рекомендуется %2 x %3 на глаз."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "%1, up to date"
+msgstr "%1, актуальная версия"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "%1, updates when you play"
+msgstr "%1, обновится при запуске игры"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "Can't read X4's program"
+msgstr "Не удаётся прочитать программу X4"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "Close it first."
+msgstr "Сначала закройте его."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "Connect from the WiVRn app in the headset."
+msgstr "Подключитесь из приложения WiVRn в шлеме."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "Every patch still fits, but this release was tested with X4 %1."
+msgstr "Все патчи по-прежнему подходят, но этот выпуск проверялся с X4 %1."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "GPU capable"
+msgstr "Видеокарта подходит"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "Headset not connected"
+msgstr "Шлем не подключён"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "Install it from your package manager."
+msgstr "Установите его через менеджер пакетов."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "Install the OpenXR loader from your package manager."
+msgstr "Установите загрузчик OpenXR (OpenXR loader) через менеджер пакетов."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid ""
+"It isn't in Steam's libraries or the usual GOG folders. Choose its folder."
+msgstr ""
+"Его нет ни в библиотеках Steam, ни в обычных папках GOG. Укажите его папку."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "It needs Vulkan 1.2 with multiview and at least 7 descriptor sets."
+msgstr "Нужен Vulkan 1.2 с multiview и не менее 7 наборов дескрипторов."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "Layer %1, injector %2, this launcher %3."
+msgstr "Слой: %1, инжектор: %2, этот лаунчер: %3."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "Mod installed"
+msgstr "Мод установлен"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "Mod not installed"
+msgstr "Мод не установлен"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "Mod out of date"
+msgstr "Мод устарел"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "No GPU can run the mod"
+msgstr "Нет видеокарты, способной запустить мод"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "No VR runtime running"
+msgstr "VR-среда не запущена"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "No Vulkan layer manifest at %1"
+msgstr "Нет манифеста слоя Vulkan по пути %1"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "Not tested with X4 %1"
+msgstr "Не проверено с X4 %1"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "OpenXR isn't installed"
+msgstr "OpenXR не установлен"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "Steam isn't running"
+msgstr "Steam не запущен"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "Steam running"
+msgstr "Steam запущен"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "SteamVR is running and waiting for the headset. Connect it, then Retry."
+msgstr "SteamVR запущен и ждёт шлем. Подключите его и нажмите «Повторить»."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "The Steam version of X4 needs Steam open."
+msgstr "Для Steam-версии X4 нужен запущенный Steam."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "The VR runtime"
+msgstr "VR-среда"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "The Vulkan layer's manifest names a library that isn't there: %1"
+msgstr "Манифест слоя Vulkan указывает на отсутствующую библиотеку: %1"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "The injector isn't there: %1"
+msgstr "Инжектор не найден: %1"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "The mod fits this X4"
+msgstr "Мод подходит к этой версии X4"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "The x4vrmod extension isn't in X4's folder."
+msgstr "Расширения x4vrmod нет в папке X4."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "These turn off: %1."
+msgstr "Будут отключены: %1."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "This is the Windows version of X4"
+msgstr "Это версия X4 для Windows"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "VR ready"
+msgstr "VR готова"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "VR runtime not answering"
+msgstr "VR-среда не отвечает"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "Vulkan not working"
+msgstr "Vulkan не работает"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "X4 build not supported yet"
+msgstr "Эта сборка X4 пока не поддерживается"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "X4 found"
+msgstr "X4 найден"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "X4 is already running"
+msgstr "X4 уже запущен"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "X4 not found"
+msgstr "X4 не найден"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "X4 not found there"
+msgstr "X4 там не найден"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "X4 not running yet"
+msgstr "X4 ещё не запущен"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "all %1 feature matches its code"
+msgid_plural "all %1 features match its code"
+msgstr[0] "%1 функция совпадает с кодом игры"
+msgstr[1] "все %1 функции совпадают с кодом игры"
+msgstr[2] "все %1 функций совпадают с кодом игры"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "gamescope installed"
+msgstr "gamescope установлен"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "gamescope isn't installed"
+msgstr "gamescope не установлен"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "unknown"
+msgstr "неизвестно"
+
+#: launcher/core/discover.cpp
+#, qt-format
+msgid "Other"
+msgstr "Другое"
+
+#: launcher/core/discover.cpp
+#, qt-format
+msgid ""
+"This is the Windows version of X4, which runs through Proton. The mod works "
+"only with the Linux version: it's a Vulkan layer and a preloaded library "
+"that attach to the Linux program. On Steam, open X4's Properties, then "
+"Compatibility, and turn off forced compatibility so Steam downloads the "
+"Linux version."
+msgstr ""
+"Это версия X4 для Windows, она работает через Proton. Мод работает только с "
+"версией для Linux: это слой Vulkan и предзагружаемая библиотека, которые "
+"подключаются к программе для Linux. В Steam откройте «Свойства» X4, затем "
+"«Совместимость», и отключите принудительную совместимость, чтобы Steam "
+"скачал версию для Linux."
+
+#: launcher/core/discover.cpp
+#, qt-format
+msgid "no X4 program in that folder"
+msgstr "в этой папке нет программы X4"
+
+#: launcher/core/discover.cpp
+#, qt-format
+msgid "that isn't the X4 program"
+msgstr "это не программа X4"
+
+#: launcher/core/discover.cpp
+#, qt-format
+msgid "that path doesn't exist"
+msgstr "такого пути нет"
+
+#: launcher/core/discover.cpp
+#, qt-format
+msgid "that's a Linux program, but not one called X4"
+msgstr "это программа для Linux, но не X4"
+
+#: launcher/core/install.cpp
+#, qt-format
+msgid "Couldn't copy %1: %2"
+msgstr "Не удалось скопировать %1: %2"
+
+#: launcher/core/install.cpp
+#, qt-format
+msgid "Couldn't copy the mod to %1: %2"
+msgstr "Не удалось скопировать мод в %1: %2"
+
+#: launcher/core/install.cpp
+#, qt-format
+msgid "Couldn't put the extension in X4's folder: %1"
+msgstr "Не удалось поместить расширение в папку X4: %1"
+
+#: launcher/core/install.cpp launcher/gui/window.cpp
+#, qt-format
+msgid "Couldn't write %1"
+msgstr "Не удалось записать %1"
+
+#: launcher/core/install.cpp
+#, qt-format
+msgid "Install the mod first: the menu needs the copy whose path stays."
+msgstr "Сначала установите мод: меню нужна копия с постоянным путём."
+
+#: launcher/core/install.cpp
+#, qt-format
+msgid "The package itself stays. Remove it with your package manager."
+msgstr "Сам пакет останется. Удалите его через менеджер пакетов."
+
+#: launcher/core/install.cpp
+#, qt-format
+msgid "This copy of the mod is incomplete: no %1"
+msgstr "Эта копия мода неполная: нет %1"
+
+#: launcher/core/install.cpp
+#, qt-format
+msgid "This copy of the mod is incomplete: no layer manifest template."
+msgstr "Эта копия мода неполная: нет шаблона манифеста слоя."
+
+#: launcher/core/install.cpp
+#, qt-format
+msgid ""
+"X4 marks saves made with a non-Egosoft extension as modified; the mod's "
+"extension is enabled only in VR sessions."
+msgstr ""
+"X4 помечает как изменённые сохранения, сделанные с расширением не от "
+"Egosoft; расширение мода включается только в VR-сеансах."
+
+#: launcher/core/install.cpp
+#, qt-format
+msgid "X4 wasn't found."
+msgstr "X4 не найден."
+
+#: launcher/core/patches.cpp
+#, qt-format
+msgid "Aiming at where the steering target points"
+msgstr "Прицеливание туда, куда указывает маркер управления"
+
+#: launcher/core/patches.cpp
+#, qt-format
+msgid "Clicking the cockpit HUD"
+msgstr "Нажатия на HUD кабины"
+
+#: launcher/core/patches.cpp
+#, qt-format
+msgid "DLSS in both eyes"
+msgstr "DLSS для обоих глаз"
+
+#: launcher/core/patches.cpp
+#, qt-format
+msgid "Head tracking in the cockpit"
+msgstr "Отслеживание головы в кабине"
+
+#: launcher/core/patches.cpp
+#, qt-format
+msgid "Head tracking in the external views (F2, F3, F4)"
+msgstr "Отслеживание головы во внешних видах (F2, F3, F4)"
+
+#: launcher/core/patches.cpp
+#, qt-format
+msgid "Looking around while walking"
+msgstr "Обзор головой при ходьбе"
+
+#: launcher/core/patches.cpp
+#, qt-format
+msgid "Menus lined up with the cursor"
+msgstr "Меню, выровненные по курсору"
+
+#: launcher/core/patches.cpp
+#, qt-format
+msgid "The mod's loading screen"
+msgstr "Экран загрузки мода"
+
+#: launcher/core/patches.cpp
+#, qt-format
+msgid "The shadow fix"
+msgstr "Исправление теней"
+
+#: launcher/core/patches.cpp
+#, qt-format
+msgid "The steering target drawn in VR"
+msgstr "Маркер управления в VR"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "Above 4068 the map's 3D view is flat, not in depth."
+msgstr "Выше 4068 трёхмерный вид карты становится плоским, без глубины."
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "At 4224 SteamVR has shown a jumbled picture. If you see that, go lower."
+msgstr ""
+"При 4224 SteamVR уже показывал перемешанную картинку. Если увидите такое, "
+"уменьшите разрешение."
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "DLSS Auto"
+msgstr "DLSS Авто"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "DLSS Balanced"
+msgstr "DLSS Баланс"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "DLSS DLAA (anti-aliasing only)"
+msgstr "DLSS DLAA (только сглаживание)"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "DLSS Performance"
+msgstr "DLSS Производительность"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "DLSS Quality"
+msgstr "DLSS Качество"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "DLSS Ultra Performance"
+msgstr "DLSS Ультрапроизводительность"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid ""
+"DLSS hasn't been played in a headset yet. If an eye looks wrong, please "
+"report it."
+msgstr ""
+"С DLSS ещё не играли в шлеме. Если один глаз выглядит неправильно, сообщите, "
+"пожалуйста."
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "FSR 1 Balanced"
+msgstr "FSR 1 Баланс"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "FSR 1 Performance"
+msgstr "FSR 1 Производительность"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "FSR 1 Quality"
+msgstr "FSR 1 Качество"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "FSR 1 Quality chosen for this size. Choose None for full resolution."
+msgstr ""
+"Для этого размера выбран FSR 1 Качество. Выберите «Нет» для полного "
+"разрешения."
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "FSR 1 Ultra Quality"
+msgstr "FSR 1 Ультракачество"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "FSR 3 Balanced"
+msgstr "FSR 3 Баланс"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "FSR 3 Native (anti-aliasing only)"
+msgstr "FSR 3 Нативное (только сглаживание)"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "FSR 3 Performance"
+msgstr "FSR 3 Производительность"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "FSR 3 Quality"
+msgstr "FSR 3 Качество"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "FSR 3 Ultra Performance"
+msgstr "FSR 3 Ультрапроизводительность"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "None (full resolution)"
+msgstr "Нет (полное разрешение)"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "fov is X4's field of view, like 1.4917"
+msgstr "fov — это поле зрения X4, например 1.4917"
+
+#: launcher/core/profile.cpp
+#, qt-format
+msgid "not a variable name: %1"
+msgstr "недопустимое имя переменной: %1"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "%1, %2 MB"
+msgstr "%1, %2 МБ"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "%1, debug log, %2 MB"
+msgstr "%1, отладочный журнал, %2 МБ"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "<b>From Steam:</b> X4's launch options"
+msgstr "<b>Из Steam:</b> параметры запуска X4"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "<b>From a terminal:</b>"
+msgstr "<b>Из терминала:</b>"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"<b>It's over GitHub's 25 MB limit for an attachment.</b> Share it another "
+"way and put the link in the issue."
+msgstr ""
+"<b>Он больше лимита GitHub для вложений (25 МБ).</b> Поделитесь им другим "
+"способом и вставьте ссылку в issue."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"<b>Saved:</b> %1<br>Read it first if you like, with <b>Show the files</b>. "
+"<b>Open a GitHub issue</b> opens the page and selects this file in your file "
+"manager: drag it into the page, because GitHub doesn't let a program attach "
+"it. A short video helps with anything visual."
+msgstr ""
+"<b>Сохранено:</b> %1<br>При желании сначала просмотрите его кнопкой "
+"<b>Показать файлы</b>. <b>Открыть issue на GitHub</b> открывает страницу и "
+"выделяет этот файл в файловом менеджере: перетащите его на страницу, потому "
+"что GitHub не позволяет программам прикреплять файлы. Для всего визуального "
+"поможет короткое видео."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"<b>This can't be undone.</b> Your resolution and upscaler choices, and what "
+"you changed in X4 while in VR, are deleted:"
+msgstr ""
+"<b>Это нельзя отменить.</b> Ваш выбор разрешения и апскейлера, а также всё, "
+"что вы изменили в X4 в VR, будет удалено:"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "<b>What happened?</b>"
+msgstr "<b>Что произошло?</b>"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "<b>Which session?</b>"
+msgstr "<b>Какой сеанс?</b>"
+
+#: launcher/gui/dialogs.cpp launcher/gui/window.cpp
+#, qt-format
+msgid "Advanced"
+msgstr "Дополнительно"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Also delete my VR settings"
+msgstr "Также удалить мои настройки VR"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"Can you make it happen again? Tick <b>Debug log</b> beside Play, make it "
+"happen, then report that session. It logs much more, which often makes the "
+"difference."
+msgstr ""
+"Можете повторить? Отметьте <b>Отладочный журнал</b> рядом с «Играть», "
+"повторите проблему и сообщите об этом сеансе. Журнал будет гораздо "
+"подробнее, и это часто решает дело."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Copied"
+msgstr "Скопировано"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Copy"
+msgstr "Копировать"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Create report"
+msgstr "Создать отчёт"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"Extra environment variables, one <tt>NAME=value</tt> per line. They go to "
+"the game and the mod, for trying things a bug report asks for."
+msgstr ""
+"Дополнительные переменные окружения, по одной <tt>NAME=value</tt> в строке. "
+"Они передаются игре и моду, чтобы проверить то, о чём просят в отчёте об "
+"ошибке."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Field of view"
+msgstr "Поле зрения"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Help isn't installed with this copy of the mod."
+msgstr "Справка не установлена вместе с этой копией мода."
+
+#: launcher/gui/dialogs.cpp launcher/gui/window.cpp
+#, qt-format
+msgid "Launch options"
+msgstr "Параметры запуска"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"Leave it off unless you know you need it: the mod's default suits the "
+"headsets it was tried with."
+msgstr ""
+"Не включайте, если не уверены, что это нужно: значение мода по умолчанию "
+"подходит для шлемов, на которых его пробовали."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Making the report..."
+msgstr "Создаём отчёт..."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "No VR settings were found."
+msgstr "Настройки VR не найдены."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "No session log yet: X4 hasn't got that far"
+msgstr "Журнала сеанса пока нет: X4 до этого не дошёл"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Not NAME=value: %1"
+msgstr "Не в формате NAME=value: %1"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Nothing of the mod's is installed."
+msgstr "Ничего из мода не установлено."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Open a GitHub issue"
+msgstr "Открыть issue на GitHub"
+
+#: launcher/gui/dialogs.cpp launcher/gui/window.cpp
+#, qt-format
+msgid "Report a bug"
+msgstr "Сообщить об ошибке"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Show the files"
+msgstr "Показать файлы"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"Steam replaces %command% with its own command for X4, and the mod starts X4 "
+"with that. With the line set, Steam always starts X4 in VR. Clear it to play "
+"flat again."
+msgstr ""
+"Steam заменяет %command% своей командой для X4, и мод запускает X4 с ней. "
+"Пока строка задана, Steam всегда запускает X4 в VR. Очистите её, чтобы снова "
+"играть без VR."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"The Play button is one way to start the game. These are the others. All of "
+"them run the mod the same way, with your settings from this window."
+msgstr ""
+"Кнопка «Играть» — лишь один из способов запустить игру. Вот остальные. Все "
+"они запускают мод одинаково, с вашими настройками из этого окна."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"This makes a report you can read through, then attach to an issue on GitHub. "
+"<b>Nothing is sent by itself.</b> Your home folder, user name, computer name "
+"and Steam account number are taken out of it. The report itself is in "
+"English, for whoever reads it."
+msgstr ""
+"Здесь создаётся отчёт, который можно просмотреть, а затем приложить к issue "
+"на GitHub. <b>Ничего не отправляется само.</b> Ваша домашняя папка, имя "
+"пользователя, имя компьютера и номер аккаунта Steam из него удаляются. Сам "
+"отчёт на английском — для тех, кто будет его читать."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "This removes:"
+msgstr "Будет удалено:"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Uninstall"
+msgstr "Удалить"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Uninstall the mod"
+msgstr "Удалить мод"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "What you saw, and what you expected instead."
+msgstr "Что вы увидели и что ожидали увидеть вместо этого."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "X4 VR Mod help"
+msgstr "Справка X4 VR Mod"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "X4's saves and its own settings are never touched."
+msgstr "Сохранения X4 и его собственные настройки никогда не затрагиваются."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "radians"
+msgstr "рад"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "%1 (Windows version)"
+msgstr "%1 (версия для Windows)"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "%1 (default)"
+msgstr "%1 (по умолчанию)"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "%1 - nearest your headset"
+msgstr "%1 — ближе всего к вашему шлему"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "%1 - supports X4 %2 - unofficial, not affiliated with Egosoft"
+msgstr "%1 — поддерживает X4 %2 — неофициальный, не связан с Egosoft"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "%1 pending action"
+msgid_plural "%1 pending actions"
+msgstr[0] "Требуется действий: %1"
+msgstr[1] "Требуется действий: %1"
+msgstr[2] "Требуется действий: %1"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "1 pending action: %1"
+msgstr "Требуется действие: %1"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "About"
+msgstr "О программе"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "About X4 VR Mod"
+msgstr "О X4 VR Mod"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Add to application menu"
+msgstr "Добавить в меню приложений"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Advanced..."
+msgstr "Дополнительно..."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Application menu"
+msgstr "Меню приложений"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"Asked through OpenXR, without starting a VR session: is a runtime up, and is "
+"a headset connected?"
+msgstr ""
+"Проверяется через OpenXR, без запуска VR-сеанса: работает ли VR-среда и "
+"подключён ли шлем?"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"Back to the default eye resolution, upscaler, eye distance, lean and "
+"advanced settings? The game and the language you chose stay."
+msgstr ""
+"Вернуть по умолчанию разрешение на глаз, апскейлер, расстояние между "
+"глазами, наклон и дополнительные настройки? Выбранные игра и язык останутся."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Browse..."
+msgstr "Обзор..."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Checking..."
+msgstr "Проверка..."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Chosen: %1"
+msgstr "Выбрано: %1"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Couldn't run %1"
+msgstr "Не удалось запустить %1"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Couldn't save"
+msgstr "Не удалось сохранить"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Couldn't start"
+msgstr "Не удалось запустить"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Custom..."
+msgstr "Другое..."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"DLSS needs an NVIDIA RTX graphics card, so the upscaler is back to None."
+msgstr "Для DLSS нужна видеокарта NVIDIA RTX, поэтому апскейлер снова «Нет»."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Debug log"
+msgstr "Отладочный журнал"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Details"
+msgstr "Подробнее"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Eye resolution"
+msgstr "Разрешение на глаз"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"Feral GameMode gives the game priority over the rest of your system while it "
+"runs, which usually means a few more frames per second."
+msgstr ""
+"Feral GameMode даёт игре приоритет над остальной системой, пока она "
+"работает, обычно это добавляет несколько кадров в секунду."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Find X4's program yourself, if it isn't in the list."
+msgstr "Найдите программу X4 сами, если её нет в списке."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Find the program called X4"
+msgstr "Найдите программу X4"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Flatscreen"
+msgstr "Без VR"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Game"
+msgstr "Игра"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Help"
+msgstr "Справка"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "How to start the game with the mod from Steam or a terminal."
+msgstr "Как запустить игру с модом из Steam или терминала."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Install"
+msgstr "Установить"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Install failed"
+msgstr "Установка не удалась"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Install the mod"
+msgstr "Установить мод"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Install..."
+msgstr "Установить..."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "It can start, with something off. See the amber line."
+msgstr "Можно запустить, но что-то отключено. См. оранжевую строку."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Language"
+msgstr "Язык"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Last session: %1 min."
+msgstr "Последний сеанс: %1 мин."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Make a report to attach to a GitHub issue. Nothing is sent by itself."
+msgstr ""
+"Создайте отчёт, чтобы приложить его к issue на GitHub. Ничего не "
+"отправляется само."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "More"
+msgstr "Ещё"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Open logs"
+msgstr "Открыть журналы"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Pixels per eye (the eye is square):"
+msgstr "Пикселей на глаз (изображение квадратное):"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Play"
+msgstr "Играть"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Play anyway"
+msgstr "Всё равно играть"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Ready to play?"
+msgstr "Готово к игре?"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Renders %1 x %1."
+msgstr "Рендеринг %1 x %1."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Report a bug can send its debug log."
+msgstr "«Сообщить об ошибке» может приложить его отладочный журнал."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Reset"
+msgstr "Сбросить"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Reset to defaults"
+msgstr "Сбросить настройки"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Reset to defaults..."
+msgstr "Сбросить настройки..."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Retry"
+msgstr "Повторить"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"Some features change X4's code in memory, so each needs the exact code it "
+"was written for. Any that doesn't find it turns off by itself, and the game "
+"still runs."
+msgstr ""
+"Некоторые функции меняют код X4 в памяти, поэтому каждой нужен именно тот "
+"код, под который она написана. Функция, которая его не находит, отключается "
+"сама, а игра всё равно работает."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Start Steam"
+msgstr "Запустить Steam"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Start SteamVR"
+msgstr "Запустить SteamVR"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Start WiVRn"
+msgstr "Запустить WiVRn"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"Start X4 by itself, on your screen, without the mod, even with VR running. "
+"If something also goes wrong there, it isn't the mod."
+msgstr ""
+"Запускает X4 сам по себе, на экране, без мода, даже если VR работает. Если и "
+"так что-то не в порядке, дело не в моде."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "That isn't X4"
+msgstr "Это не X4"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "That's the Windows version"
+msgstr "Это версия для Windows"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "The Linux copy of X4 chosen above, and its version."
+msgstr "Выбранная выше Linux-копия X4 и её версия."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "The Steam version of X4 needs Steam open. A GOG copy doesn't."
+msgstr "Для Steam-версии X4 нужен запущенный Steam. Для копии GOG — нет."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "The game itself still runs. Help says more."
+msgstr "Сама игра всё равно запускается. Подробнее — в справке."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "The language of this window and its help. It starts as your system's."
+msgstr "Язык этого окна и справки. По умолчанию — язык системы."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"The mod draws both eyes in one pass, which needs Vulkan 1.2 and multiview."
+msgstr ""
+"Мод рисует оба глаза за один проход, для этого нужны Vulkan 1.2 и multiview."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"The mod's parts: what sits between X4 and your GPU to make the two eye "
+"images, loaded only for this game, and its X4 extension, which lets your "
+"head turn further and removes the camera sway."
+msgstr ""
+"Части мода: то, что стоит между X4 и видеокартой и создаёт изображения для "
+"обоих глаз (загружается только для этой игры), и его расширение для X4, "
+"которое позволяет дальше поворачивать голову и убирает покачивание камеры."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"The size of the image made for each eye. Larger is sharper, and your GPU "
+"draws it twice. It's chosen here because X4's own menu would break a running "
+"session."
+msgstr ""
+"Размер изображения для каждого глаза. Чем больше, тем чётче, и видеокарта "
+"рисует его дважды. Он выбирается здесь, потому что собственное меню X4 "
+"сломало бы идущий сеанс."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "The whole guide, with troubleshooting."
+msgstr "Полное руководство с решением проблем."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"This copies the mod to your home folder, registers its Vulkan layer, and "
+"puts its extension in X4's folder:"
+msgstr ""
+"Мод будет скопирован в вашу домашнюю папку, его слой Vulkan будет "
+"зарегистрирован, а расширение помещено в папку X4:"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "This puts the mod's extension in X4's folder:"
+msgstr "Расширение мода будет помещено в папку X4:"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"This run also logs what the mod is doing, for Report a bug. The game plays "
+"the same, and the log runs to tens of MB."
+msgstr ""
+"В этом запуске мод также записывает, что он делает, — для «Сообщить об "
+"ошибке». Игра идёт так же, а журнал занимает десятки МБ."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Uninstall failed"
+msgstr "Удаление не удалось"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Uninstall..."
+msgstr "Удалить..."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Upscaler"
+msgstr "Апскейлер"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "We won't start the game again if it's already running."
+msgstr "Мы не запускаем игру повторно, если она уже работает."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"Which copy of X4 to play. It must be the Linux version: the mod can't work "
+"with the Windows one under Proton."
+msgstr ""
+"Какую копию X4 запускать. Это должна быть версия для Linux: с версией для "
+"Windows под Proton мод работать не может."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"X4 VR Mod %1\n"
+"Supports X4: Foundations %2 on native Linux.\n"
+"\n"
+"An unofficial mod, not affiliated with or endorsed by Egosoft. X4: "
+"Foundations is Egosoft's.\n"
+"\n"
+"GPL-3.0-or-later with a linking exception."
+msgstr ""
+"X4 VR Mod %1\n"
+"Поддерживает X4: Foundations %2 в нативной версии для Linux.\n"
+"\n"
+"Неофициальный мод, не связанный с Egosoft и не одобренный ею. X4: "
+"Foundations принадлежит Egosoft.\n"
+"\n"
+"GPL-3.0-or-later с исключением для компоновки."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "X4 VR Mod is in your application menu."
+msgstr "X4 VR Mod добавлен в меню приложений."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "X4 by itself, without the mod."
+msgstr "X4 сам по себе, без мода."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"X4 draws a smaller image and enlarges it: faster, and a little less sharp. "
+"Above 3200 per eye, FSR 1 Quality is chosen for you, and you can choose None "
+"to undo that. DLSS is offered with an NVIDIA RTX graphics card."
+msgstr ""
+"X4 рисует изображение меньше и увеличивает его: быстрее и чуть менее чётко. "
+"Выше 3200 на глаз автоматически выбирается FSR 1 Качество, а выбор «Нет» это "
+"отменяет. DLSS предлагается с видеокартой NVIDIA RTX."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "X4 is running"
+msgstr "X4 запущен"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "X4 stopped right after starting. %1"
+msgstr "X4 остановился сразу после запуска. %1"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "X4 wasn't found: choose it with Browse"
+msgstr "X4 не найден: укажите его кнопкой «Обзор»"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"gamescope gives X4 a virtual screen sized for both eyes, whatever your "
+"desktop's resolution is."
+msgstr ""
+"gamescope даёт X4 виртуальный экран под размер обоих глаз, независимо от "
+"разрешения рабочего стола."

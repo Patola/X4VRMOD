@@ -8,6 +8,7 @@ add_library(x4vrmod_core STATIC
     core/profile.cpp
     core/install.cpp
     core/report.cpp
+    core/i18n.cpp
     ${X4VR_VERSION_FILE})
 add_dependencies(x4vrmod_core x4vr_version)
 target_include_directories(x4vrmod_core PUBLIC core)
@@ -24,6 +25,30 @@ if(TARGET OpenXR::headers OR OPENXR_HEADER_DIR)
     else()
         target_include_directories(x4vrmod_core PRIVATE ${OPENXR_HEADER_DIR})
     endif()
+endif()
+
+# The window's translations (core/x4vr_i18n.hpp): each po/<lang>.po compiled to
+# locale/<lang>/LC_MESSAGES/x4vrmod.mo beside the build's other data, installed with
+# the help, copied into the zip. Without msgfmt (gettext) the window is English only,
+# which a package mustn't be: packaging/ci/check-installed.sh and check-zip.sh look.
+find_program(MSGFMT msgfmt)
+if(MSGFMT)
+    file(GLOB X4VR_PO_FILES ${CMAKE_CURRENT_SOURCE_DIR}/po/*.po)
+    set(X4VR_MO_FILES)
+    foreach(po ${X4VR_PO_FILES})
+        get_filename_component(lang ${po} NAME_WE)
+        set(mo ${CMAKE_BINARY_DIR}/locale/${lang}/LC_MESSAGES/x4vrmod.mo)
+        add_custom_command(OUTPUT ${mo}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/locale/${lang}/LC_MESSAGES
+            COMMAND ${MSGFMT} --check -o ${mo} ${po}
+            DEPENDS ${po}
+            COMMENT "Translations: ${lang}")
+        list(APPEND X4VR_MO_FILES ${mo})
+    endforeach()
+    add_custom_target(x4vrmod_translations ALL DEPENDS ${X4VR_MO_FILES})
+    install(DIRECTORY ${CMAKE_BINARY_DIR}/locale DESTINATION share/x4vrmod)
+else()
+    message(WARNING "No msgfmt: the launcher's window is English only. Install gettext.")
 endif()
 
 add_executable(x4vrmod cli/main.cpp)

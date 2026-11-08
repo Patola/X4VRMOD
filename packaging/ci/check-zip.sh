@@ -16,6 +16,12 @@ for f in x4vrmod x4vrmod-launcher x4vrmod-data/manifest x4vrmod-data/lib/libVkLa
     x4vrmod-data/extension/x4vrmod/ext_01.cat; do
     [ -e "$U/$f" ] || { echo "missing: $f"; exit 1; }
 done
+# Each language: the window's words and its help.
+for l in pt_BR fr de ru; do
+    for f in x4vrmod-data/locale/$l/LC_MESSAGES/x4vrmod.mo x4vrmod-data/help/$l/index.html; do
+        [ -e "$U/$f" ] || { echo "missing: $f"; exit 1; }
+    done
+done
 out=$("$U/x4vrmod" doctor --no-vr 2>&1 || true)
 echo "$out"
 grep -q '(zip)' <<<"$out" || { echo "doctor doesn't know it's the zip"; exit 1; }

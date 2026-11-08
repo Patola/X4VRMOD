@@ -285,7 +285,7 @@ Egosoft):
     |----------------------------------------------------------------------|
     | [Help] [Launch options] [Report a bug] [More v]  [ ] Debug log [PLAY]|
     |                                                  [ ] Flatscreen      |
-    | v0.9.9 - supports X4 9.00 - unofficial...      1 thing to fix first  |
+    | v0.9.9 - supports X4 9.00 - unofficial...         1 pending action  |
     +----------------------------------------------------------------------+
 
 * **Play:** green "Play" when every condition is met; amber "Play anyway" when it
@@ -333,7 +333,9 @@ Egosoft):
   resolutions. Their numbers to be checked when it's written; the probe reports what
   the connected headset asks for (a Quest 3 on WiVRn: 2889 x 3026 per eye).
 * Later, not in the first version: waiting until the headset is worn (it needs an
-  OpenXR session), update checks, translations.
+  OpenXR session), update checks. Translations came after v0.9.10: gettext, the window
+  and its help in five languages, with the command and bug reports kept in English
+  (launcher/README.md, "Languages").
 
 ### Finding X4
 * **Steam:** `~/.steam/root/steamapps/libraryfolders.vdf` lists the libraries and

@@ -5,7 +5,6 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
-#include <QDesktopServices>
 #include <QDir>
 #include <QEvent>
 #include <QFile>
@@ -33,6 +32,7 @@
 #include <cmath>
 
 #include "dialogs.hpp"
+#include "i18n.hpp"
 
 namespace x4vr::launcher::gui {
 
@@ -81,26 +81,27 @@ QString tip(const QString &text) { return "<p>" + text.toHtmlEscaped() + "</p>";
 // What each row is for, on hover.
 QString rowTip(const std::string &id) {
     if (id == "x4")
-        return "The Linux copy of X4 chosen above, and its version.";
+        return qtr("The Linux copy of X4 chosen above, and its version.");
     if (id == "patches")
-        return "Some features change X4's code in memory, so each needs the exact code it was "
-               "written for. Any that doesn't find it turns off by itself, and the game still runs.";
+        return qtr("Some features change X4's code in memory, so each needs the exact code it was "
+                   "written for. Any that doesn't find it turns off by itself, and the game still "
+                   "runs.");
     if (id == "steam")
-        return "The Steam version of X4 needs Steam open. A GOG copy doesn't.";
+        return qtr("The Steam version of X4 needs Steam open. A GOG copy doesn't.");
     if (id == "running")
-        return "We won't start the game again if it's already running.";
+        return qtr("We won't start the game again if it's already running.");
     if (id == "gamescope")
-        return "gamescope gives X4 a virtual screen sized for both eyes, whatever your desktop's "
-               "resolution is.";
+        return qtr("gamescope gives X4 a virtual screen sized for both eyes, whatever your "
+                   "desktop's resolution is.");
     if (id == "vr")
-        return "Asked through OpenXR, without starting a VR session: is a runtime up, and is a "
-               "headset connected?";
+        return qtr("Asked through OpenXR, without starting a VR session: is a runtime up, and is "
+                   "a headset connected?");
     if (id == "mod")
-        return "The mod's parts: what sits between X4 and your GPU to make the two eye images, "
-               "loaded only for this game, and its X4 extension, which lets your head turn "
-               "further and removes the camera sway.";
+        return qtr("The mod's parts: what sits between X4 and your GPU to make the two eye "
+                   "images, loaded only for this game, and its X4 extension, which lets your head "
+                   "turn further and removes the camera sway.");
     if (id == "gpu")
-        return "The mod draws both eyes in one pass, which needs Vulkan 1.2 and multiview.";
+        return qtr("The mod draws both eyes in one pass, which needs Vulkan 1.2 and multiview.");
     return "";
 }
 
@@ -111,18 +112,18 @@ bool neededFlat(const std::string &id) {
 
 QString fixLabel(const std::string &fix) {
     if (fix == "install")
-        return "Install...";
+        return qtr("Install...");
     if (fix == "retry")
-        return "Retry";
+        return qtr("Retry");
     if (fix == "browse")
-        return "Browse...";
+        return qtr("Browse...");
     if (fix == "details")
-        return "Details";
+        return qtr("Details");
     if (fix == "start-steam")
-        return "Start Steam";
+        return qtr("Start Steam");
     // Only with neither WiVRn nor Steam to start: updateVrStart has the rest.
     if (fix == "start-vr")
-        return "Help";
+        return qtr("Help");
     return "";
 }
 
@@ -169,17 +170,18 @@ QWidget *Window::buildSettings() {
 
     m_eyeBox = new QComboBox(w);
     m_eyeBox->setObjectName("eye");
-    setting("Eye resolution", m_eyeBox,
-            "The size of the image made for each eye. Larger is sharper, and your GPU draws it "
-            "twice. It's chosen here because X4's own menu would break a running session.");
+    setting(qtr("Eye resolution"), m_eyeBox,
+            qtr("The size of the image made for each eye. Larger is sharper, and your GPU draws "
+                "it twice. It's chosen here because X4's own menu would break a running "
+                "session."));
     connect(m_eyeBox, &QComboBox::currentIndexChanged, this, [this] { eyeChosen(); });
 
     m_upBox = new QComboBox(w);
     m_upBox->setObjectName("upscaler");
-    setting("Upscaler", m_upBox,
-            "X4 draws a smaller image and enlarges it: faster, and a little less sharp. Above "
-            "3200 per eye, FSR 1 Quality is chosen for you, and you can choose None to undo that. "
-            "DLSS is offered with an NVIDIA RTX graphics card.");
+    setting(qtr("Upscaler"), m_upBox,
+            qtr("X4 draws a smaller image and enlarges it: faster, and a little less sharp. "
+                "Above 3200 per eye, FSR 1 Quality is chosen for you, and you can choose None to "
+                "undo that. DLSS is offered with an NVIDIA RTX graphics card."));
     connect(m_upBox, &QComboBox::currentIndexChanged, this, [this] { upscalerChosen(); });
 
     m_renders = new QLabel(w);
@@ -190,11 +192,24 @@ QWidget *Window::buildSettings() {
     v->addSpacing(4);
     m_gamemode = new QCheckBox("GameMode", w);
     m_gamemode->setObjectName("gamemode");
-    m_gamemode->setToolTip(tip("Feral GameMode gives the game priority over the rest of your "
-                               "system while it runs, which usually means a few more frames per "
-                               "second."));
+    m_gamemode->setToolTip(tip(qtr("Feral GameMode gives the game priority over the rest of "
+                                   "your system while it runs, which usually means a few more "
+                                   "frames per second.")));
     connect(m_gamemode, &QCheckBox::toggled, this, [this] { gamemodeToggled(); });
     v->addWidget(m_gamemode);
+
+    // Each language in its own words. Your system's to begin with; a choice here is
+    // kept, and the window is built again in it.
+    v->addSpacing(4);
+    m_langBox = new QComboBox(w);
+    m_langBox->setObjectName("language");
+    for (const Language &l : kLanguages)
+        m_langBox->addItem(QString::fromUtf8(l.name), QString(l.code));
+    m_langBox->setCurrentIndex(
+        std::max(0, m_langBox->findData(QString::fromStdString(current_language()))));
+    setting(qtr("Language"), m_langBox,
+            qtr("The language of this window and its help. It starts as your system's."));
+    connect(m_langBox, &QComboBox::currentIndexChanged, this, [this] { languageChosen(); });
     v->addStretch(1);
     return w;
 }
@@ -204,7 +219,7 @@ QWidget *Window::buildChecks() {
     auto *v = new QVBoxLayout(w);
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(4);
-    auto *heading = new QLabel("<b>Ready to play?</b>", w);
+    auto *heading = new QLabel("<b>" + qtr("Ready to play?").toHtmlEscaped() + "</b>", w);
     v->addWidget(heading);
     auto *grid = new QGridLayout;
     grid->setContentsMargins(0, 0, 0, 0);
@@ -283,9 +298,9 @@ void Window::buildUi() {
     v->setSpacing(8);
 
     auto *gameRow = new QHBoxLayout;
-    auto *gameLabel = new QLabel("Game", content);
-    const QString gameTip = tip("Which copy of X4 to play. It must be the Linux version: the mod "
-                                "can't work with the Windows one under Proton.");
+    auto *gameLabel = new QLabel(qtr("Game"), content);
+    const QString gameTip = tip(qtr("Which copy of X4 to play. It must be the Linux version: the "
+                                    "mod can't work with the Windows one under Proton."));
     gameLabel->setToolTip(gameTip);
     gameRow->addWidget(gameLabel);
     m_gameBox = new QComboBox(content);
@@ -294,9 +309,9 @@ void Window::buildUi() {
     m_gameBox->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_gameBox->setMinimumContentsLength(30);
     gameRow->addWidget(m_gameBox, 1);
-    auto *browseBtn = new QPushButton("Browse...", content);
+    auto *browseBtn = new QPushButton(qtr("Browse..."), content);
     browseBtn->setObjectName("browse");
-    browseBtn->setToolTip(tip("Find X4's program yourself, if it isn't in the list."));
+    browseBtn->setToolTip(tip(qtr("Find X4's program yourself, if it isn't in the list.")));
     gameRow->addWidget(browseBtn);
     v->addLayout(gameRow);
     connect(m_gameBox, &QComboBox::currentIndexChanged, this, [this] { gameChosen(); });
@@ -318,23 +333,24 @@ void Window::buildUi() {
     v->addWidget(hline);
 
     auto *bottom = new QHBoxLayout;
-    auto *helpBtn = new QPushButton("Help", content);
+    auto *helpBtn = new QPushButton(qtr("Help"), content);
     helpBtn->setObjectName("help");
-    helpBtn->setToolTip(tip("The whole guide, with troubleshooting."));
+    helpBtn->setToolTip(tip(qtr("The whole guide, with troubleshooting.")));
     connect(helpBtn, &QPushButton::clicked, this, [this] { openHelp(""); });
     bottom->addWidget(helpBtn, 0, Qt::AlignVCenter);
-    auto *launch = new QPushButton("Launch options", content);
+    auto *launch = new QPushButton(qtr("Launch options"), content);
     launch->setObjectName("launch-options");
-    launch->setToolTip(tip("How to start the game with the mod from Steam or a terminal."));
+    launch->setToolTip(tip(qtr("How to start the game with the mod from Steam or a terminal.")));
     connect(launch, &QPushButton::clicked, this, [this] { launchOptions(); });
     bottom->addWidget(launch, 0, Qt::AlignVCenter);
-    auto *bug = new QPushButton("Report a bug", content);
+    auto *bug = new QPushButton(qtr("Report a bug"), content);
     bug->setObjectName("report");
-    bug->setToolTip(tip("Make a report to attach to a GitHub issue. Nothing is sent by itself."));
+    bug->setToolTip(
+        tip(qtr("Make a report to attach to a GitHub issue. Nothing is sent by itself.")));
     connect(bug, &QPushButton::clicked, this, [this] { report(); });
     bottom->addWidget(bug, 0, Qt::AlignVCenter);
 
-    auto *more = new QPushButton("More", content);
+    auto *more = new QPushButton(qtr("More"), content);
     more->setObjectName("more");
     auto *menu = new QMenu(more);
     auto item = [this, menu](const QString &text, auto fn) {
@@ -342,15 +358,15 @@ void Window::buildUi() {
         connect(a, &QAction::triggered, this, fn);
         return a;
     };
-    item("Open logs", [this] { openLogs(); });
+    item(qtr("Open logs"), [this] { openLogs(); });
     if (m_layout.kind == LayoutKind::Zip)
-        m_menuAction = item("Add to application menu", [this] { addToMenu(); });
-    item("Advanced...", [this] { advanced(); });
-    item("Reset to defaults...", [this] { resetDefaults(); });
+        m_menuAction = item(qtr("Add to application menu"), [this] { addToMenu(); });
+    item(qtr("Advanced..."), [this] { advanced(); });
+    item(qtr("Reset to defaults..."), [this] { resetDefaults(); });
     menu->addSeparator();
-    item("Uninstall...", [this] { uninstall(); });
+    item(qtr("Uninstall..."), [this] { uninstall(); });
     menu->addSeparator();
-    item("About", [this] { about(); });
+    item(qtr("About"), [this] { about(); });
     more->setMenu(menu);
     bottom->addWidget(more, 0, Qt::AlignVCenter);
 
@@ -358,20 +374,20 @@ void Window::buildUi() {
 
     auto *options = new QVBoxLayout;
     options->setSpacing(2);
-    m_debug = new QCheckBox("Debug log", content);
+    m_debug = new QCheckBox(qtr("Debug log"), content);
     m_debug->setObjectName("debug");
-    m_debug->setToolTip(tip("This run also logs what the mod is doing, for Report a bug. The game "
-                            "plays the same, and the log runs to tens of MB."));
-    m_flat = new QCheckBox("Flatscreen", content);
+    m_debug->setToolTip(tip(qtr("This run also logs what the mod is doing, for Report a bug. The "
+                                "game plays the same, and the log runs to tens of MB.")));
+    m_flat = new QCheckBox(qtr("Flatscreen"), content);
     m_flat->setObjectName("flatscreen");
-    m_flat->setToolTip(tip("Start X4 by itself, on your screen, without the mod, even with VR "
-                           "running. If something also goes wrong there, it isn't the mod."));
+    m_flat->setToolTip(tip(qtr("Start X4 by itself, on your screen, without the mod, even with VR "
+                               "running. If something also goes wrong there, it isn't the mod.")));
     connect(m_flat, &QCheckBox::toggled, this, [this] { flatToggled(); });
     options->addWidget(m_debug);
     options->addWidget(m_flat);
     bottom->addLayout(options);
 
-    m_play = new QPushButton("Play", content);
+    m_play = new QPushButton(qtr("Play"), content);
     m_play->setObjectName("play");
     m_play->setMinimumSize(170, 50);
     QFont big = m_play->font();
@@ -382,7 +398,7 @@ void Window::buildUi() {
     bottom->addWidget(m_play);
     v->addLayout(bottom);
 
-    auto *version = new QLabel(QString("%1 - supports X4 %2 - unofficial, not affiliated with Egosoft")
+    auto *version = new QLabel(qtr("%1 - supports X4 %2 - unofficial, not affiliated with Egosoft")
                                    .arg(own_version())
                                    .arg(q(format_x4_version(kTestedX4Version))),
                                content);
@@ -414,7 +430,7 @@ void Window::reloadGames() {
     for (const Install &in : all) {
         QString text = QString("%1: %2").arg(store_name(in.store), shortPath(in.dir));
         if (in.kind == PathKind::Windows)
-            text += " (Windows version)";
+            text = qtr("%1 (Windows version)").arg(text);
         m_gameBox->addItem(text, q(in.exe));
     }
     std::string want = m_game.empty() ? m_profile.get("game") : m_game;
@@ -426,7 +442,7 @@ void Window::reloadGames() {
         if (at < 0) {
             const Install in = install_from_path(want);
             if (in.kind == PathKind::Linux) {
-                m_gameBox->addItem(QString("Chosen: %1").arg(shortPath(in.dir)), q(in.exe));
+                m_gameBox->addItem(qtr("Chosen: %1").arg(shortPath(in.dir)), q(in.exe));
                 at = m_gameBox->count() - 1;
             }
         }
@@ -434,7 +450,7 @@ void Window::reloadGames() {
             m_gameBox->setCurrentIndex(at);
     }
     if (m_gameBox->count() == 0)
-        m_gameBox->setPlaceholderText("X4 wasn't found: choose it with Browse");
+        m_gameBox->setPlaceholderText(qtr("X4 wasn't found: choose it with Browse"));
     m_game = m_gameBox->currentData().toString().toStdString();
     m_syncing = false;
 }
@@ -452,11 +468,11 @@ void Window::gameChosen() {
 void Window::chooseGame(const QString &path) {
     const GamePath g = classify_game_path(path.toStdString());
     if (g.kind == PathKind::Windows) {
-        message("That's the Windows version", proton_explanation(), true);
+        message(qtr("That's the Windows version"), proton_explanation(), true);
         return;
     }
     if (g.kind != PathKind::Linux) {
-        message("That isn't X4", q(g.why), true);
+        message(qtr("That isn't X4"), q(g.why), true);
         return;
     }
     m_game = g.exe;
@@ -470,7 +486,7 @@ void Window::browse() {
     const QString start = m_game.empty() ? q(m_home) : q(dir_name(m_game));
     // No filter: a name with no wildcard isn't a pattern to the desktop's file dialogs, so
     // "X4 (X4 X4.exe)" hid the very file. A Windows copy is explained by chooseGame.
-    const QString f = QFileDialog::getOpenFileName(this, "Find the program called X4", start);
+    const QString f = QFileDialog::getOpenFileName(this, qtr("Find the program called X4"), start);
     if (!f.isEmpty())
         chooseGame(f);
 }
@@ -489,9 +505,9 @@ void Window::syncSettings() {
     auto label = [&](int e) {
         QString t = QString("%1 x %1").arg(e);
         if (e == dflt)
-            t += " (default)";
+            t = qtr("%1 (default)").arg(t);
         if (e == nearest)
-            t += " - nearest your headset";
+            t = qtr("%1 - nearest your headset").arg(t);
         return t;
     };
     std::vector<int> sizes = eye_sizes();
@@ -501,7 +517,7 @@ void Window::syncSettings() {
     }
     for (int e : sizes)
         m_eyeBox->addItem(label(e), e);
-    m_eyeBox->addItem("Custom...", 0);
+    m_eyeBox->addItem(qtr("Custom..."), 0);
     m_eyeBox->setCurrentIndex(m_eyeBox->findData(m_eye.eye));
     fillUpscalers();
 
@@ -509,7 +525,7 @@ void Window::syncSettings() {
     const int size = render_size(m_eye.eye, m_eye.upscaler);
     QStringList lines;
     if (size != m_eye.eye)
-        lines << QString("Renders %1 x %1.").arg(size);
+        lines << qtr("Renders %1 x %1.").arg(size);
     if (!m_note.isEmpty())
         lines << m_note;
     const std::string en = eye_note(m_eye.eye, m_steamvr);
@@ -536,14 +552,14 @@ void Window::fillUpscalers() {
     m_upBox->clear();
     for (const Upscaler &u : upscalers())
         if (!u.dlss || offer)
-            m_upBox->addItem(u.label, QString(u.mode));
+            m_upBox->addItem(qtr(u.label), QString(u.mode));
     m_upBox->setCurrentIndex(m_upBox->findData(q(m_eye.upscaler)));
     m_syncing = was;
 }
 
 void Window::saveProfile() {
     if (!save_profile(profile_path(m_home), m_profile))
-        message("Couldn't save", q("Couldn't write " + profile_path(m_home)), true);
+        message(qtr("Couldn't save"), qtr("Couldn't write %1").arg(q(profile_path(m_home))), true);
 }
 
 void Window::eyeChosen() {
@@ -556,7 +572,7 @@ void Window::eyeChosen() {
             return;
         }
         bool ok = false;
-        v = QInputDialog::getInt(this, "Eye resolution", "Pixels per eye (the eye is square):",
+        v = QInputDialog::getInt(this, qtr("Eye resolution"), qtr("Pixels per eye (the eye is square):"),
                                  m_eye.eye, 256, 8192, 16, &ok);
         if (!ok) {
             syncSettings();
@@ -589,6 +605,16 @@ void Window::gamemodeToggled() {
     else
         m_profile.values.erase("gamemode");
     saveProfile();
+}
+
+void Window::languageChosen() {
+    const std::string code = m_langBox->currentData().toString().toStdString();
+    if (code == current_language())
+        return;
+    profile_set(m_profile, "language", code);
+    saveProfile();
+    if (m_opt.languageChanged)
+        m_opt.languageChanged(code);
 }
 
 void Window::flatToggled() {
@@ -682,7 +708,7 @@ void Window::applyChecks(const std::vector<Check> &rows, bool keepVr, bool keepG
         m_gpuAsked = true;
         m_rtx = gpu->second.dlss;
         if (!m_rtx && is_dlss(m_eye.upscaler)) {
-            m_note = "DLSS needs an NVIDIA RTX graphics card, so the upscaler is back to None.";
+            m_note = qtr("DLSS needs an NVIDIA RTX graphics card, so the upscaler is back to None.");
             set_upscaler(m_eye, "none");
             store_eye_settings(m_profile, m_eye);
             saveProfile();
@@ -764,9 +790,9 @@ void Window::updateVrStart(bool wanted) {
                 [this, program, args] { startProgram(program, args); });
     };
     if (!wivrn.isEmpty())
-        choice("Start WiVRn", wivrn, {});
+        choice(qtr("Start WiVRn"), wivrn, {});
     if (!steam.isEmpty())
-        choice("Start SteamVR", steam, {"steam://run/250820"});
+        choice(qtr("Start SteamVR"), steam, {"steam://run/250820"});
     if (!menu->actions().isEmpty())
         m_vrStart->setText(menu->actions().first()->text());
 }
@@ -776,8 +802,8 @@ void Window::startProgram(const QString &program, const QStringList &args) {
         m_lastLaunch = QStringList{program} + args;
         return;
     }
-    if (!QProcess::startDetached(program, args))
-        message("Couldn't start", "Couldn't run " + program, true);
+    if (!start_outside(program, args))
+        message(qtr("Couldn't start"), qtr("Couldn't run %1").arg(program), true);
     requestChecks(true);
 }
 
@@ -798,25 +824,28 @@ void Window::updatePlay() {
         }
     }
     const Status w = worst(rows);
-    QString text = "Play", colour, status;
+    QString text = qtr("Play"), colour, status;
     bool enabled = false;
+    // A new language builds a new window, which would lose the running game.
+    m_langBox->setEnabled(m_gamePid <= 0);
     if (m_gamePid > 0) {
-        text = "X4 is running";
+        text = qtr("X4 is running");
     } else if (rows.empty()) {
-        status = "Checking...";
+        status = qtr("Checking...");
     } else if (w == Status::Block) {
-        status = blockers == 1 ? QString("1 thing to fix first: %1").arg(q(first))
-                               : QString("%1 things to fix first").arg(blockers);
+        status = blockers == 1
+                     ? qtr("1 pending action: %1").arg(q(first))
+                     : qtrn("%1 pending action", "%1 pending actions", blockers).arg(blockers);
     } else if (w == Status::Warn) {
-        text = "Play anyway";
+        text = qtr("Play anyway");
         colour = "#c67d00";
         enabled = true;
-        status = "It can start, with something off. See the amber line.";
+        status = qtr("It can start, with something off. See the amber line.");
     } else {
         colour = "#2e9e4f";
         enabled = true;
         if (flat)
-            status = "X4 by itself, without the mod.";
+            status = qtr("X4 by itself, without the mod.");
     }
     if (status.isEmpty())
         status = m_lastSession;
@@ -878,11 +907,12 @@ void Window::play() {
     QProcess p;
     p.setProgram(q(cli_path()));
     p.setArguments(m_lastLaunch);
+    p.setProcessEnvironment(started_environment());
     p.setStandardOutputFile(m_outputFile);
     p.setStandardErrorFile(m_outputFile, QIODevice::Append);
     qint64 pid = 0;
     if (!p.startDetached(&pid)) {
-        message("Couldn't start", "Couldn't run " + q(cli_path()), true);
+        message(qtr("Couldn't start"), qtr("Couldn't run %1").arg(q(cli_path())), true);
         return;
     }
     m_gamePid = pid;
@@ -906,12 +936,12 @@ void Window::sessionEnded() {
         if (f.open(QIODevice::ReadOnly | QIODevice::Text))
             for (const QString &line : QString::fromUtf8(f.readAll()).split('\n', Qt::SkipEmptyParts))
                 last = line;
-        m_lastSession = "X4 stopped right after starting. " + last.left(160);
+        m_lastSession = qtr("X4 stopped right after starting. %1").arg(last.left(160));
     } else {
         const auto mins = std::max<long long>(1, secs / 60);
-        m_lastSession = QString("Last session: %1 min.").arg(mins);
+        m_lastSession = qtr("Last session: %1 min.").arg(mins);
         if (m_gameDebug)
-            m_lastSession += " Report a bug can send its debug log.";
+            m_lastSession += " " + qtr("Report a bug can send its debug log.");
     }
     updatePlay();
     requestChecks(true);
@@ -940,24 +970,25 @@ void Window::showDetails(const std::string &id) {
         return;
     QString text = q(it->second.detail);
     text.replace("; ", ";\n");
-    message(q(it->second.title), text + "\n\nThe game itself still runs. Help says more.", false);
+    message(q(it->second.title), text + "\n\n" + qtr("The game itself still runs. Help says more."),
+            false);
 }
 
 void Window::install() {
     bool found = false;
     const Install in = choose_install(m_home, m_game, &found);
     const QString what = m_layout.kind == LayoutKind::Zip
-                             ? "This copies the mod to your home folder, registers its Vulkan "
-                               "layer, and puts its extension in X4's folder:"
-                             : "This puts the mod's extension in X4's folder:";
-    if (!confirm("Install the mod",
-                 QString("%1\n%2\n\n%3").arg(what, q(in.dir), install_disclosure()), "Install"))
+                             ? qtr("This copies the mod to your home folder, registers its Vulkan "
+                                   "layer, and puts its extension in X4's folder:")
+                             : qtr("This puts the mod's extension in X4's folder:");
+    if (!confirm(qtr("Install the mod"),
+                 QString("%1\n%2\n\n%3").arg(what, q(in.dir), install_disclosure()), qtr("Install")))
         return;
     QApplication::setOverrideCursor(Qt::WaitCursor);
     const ActionReport r = install_mod(in, m_home);
     QApplication::restoreOverrideCursor();
     if (!r.ok)
-        message("Install failed", q(r.error), true);
+        message(qtr("Install failed"), q(r.error), true);
     requestChecks(false);
 }
 
@@ -971,7 +1002,7 @@ void Window::uninstall() {
     const ActionReport r = uninstall_apply(chosen);
     QApplication::restoreOverrideCursor();
     if (!r.ok)
-        message("Uninstall failed", q(r.error), true);
+        message(qtr("Uninstall failed"), q(r.error), true);
     if (d.alsoSettings()) {
         m_profile = load_profile(profile_path(m_home));
         m_eye = eye_settings(m_profile);
@@ -995,20 +1026,22 @@ void Window::advanced() {
             saveProfile();
             return;
         }
-        message("Advanced", err, true);
+        message(qtr("Advanced"), err, true);
     }
 }
 
 void Window::resetDefaults() {
-    if (!confirm("Reset to defaults",
-                 "Back to the default eye resolution, upscaler, eye distance, lean and advanced "
-                 "settings? The game you chose stays.",
-                 "Reset"))
+    if (!confirm(qtr("Reset to defaults"),
+                 qtr("Back to the default eye resolution, upscaler, eye distance, lean and "
+                     "advanced settings? The game and the language you chose stay."),
+                 qtr("Reset")))
         return;
-    const std::string game = m_profile.get("game");
+    const std::string game = m_profile.get("game"), language = m_profile.get("language");
     m_profile.values.clear();
     if (!game.empty())
         m_profile.values["game"] = game;
+    if (!language.empty())
+        m_profile.values["language"] = language;
     m_eye = eye_settings(m_profile);
     m_note.clear();
     saveProfile();
@@ -1017,25 +1050,26 @@ void Window::resetDefaults() {
 }
 
 void Window::about() {
-    message("About X4 VR Mod",
-            QString("X4 VR Mod %1\nSupports X4: Foundations %2 on native Linux.\n\n"
-                    "An unofficial mod, not affiliated with or endorsed by Egosoft. X4: "
-                    "Foundations is Egosoft's.\n\n"
-                    "GPL-3.0-or-later with a linking exception.\n"
-                    "https://github.com/Patola/X4VRMOD")
-                .arg(own_version(), q(format_x4_version(kTestedX4Version))),
+    message(qtr("About X4 VR Mod"),
+            qtr("X4 VR Mod %1\nSupports X4: Foundations %2 on native Linux.\n\n"
+                "An unofficial mod, not affiliated with or endorsed by Egosoft. X4: "
+                "Foundations is Egosoft's.\n\n"
+                "GPL-3.0-or-later with a linking exception.")
+                    .arg(own_version(), q(format_x4_version(kTestedX4Version))) +
+                "\nhttps://github.com/Patola/X4VRMOD",
             false);
 }
 
 void Window::addToMenu() {
     const ActionReport r = add_menu_entry(m_home);
-    message("Application menu", r.ok ? "X4 VR Mod is in your application menu." : q(r.error), !r.ok);
+    message(qtr("Application menu"), r.ok ? qtr("X4 VR Mod is in your application menu.") : q(r.error),
+            !r.ok);
 }
 
 void Window::openLogs() {
     const QString dir = q(log_dir(m_home));
     QDir().mkpath(dir);
-    QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+    open_outside(QUrl::fromLocalFile(dir));
 }
 
 void Window::report() {

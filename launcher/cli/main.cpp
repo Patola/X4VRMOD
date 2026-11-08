@@ -27,8 +27,9 @@ static void usage(FILE *f) {
             "      `x4vrmod run %%command%%`.\n"
             "  x4vrmod launch-options           the lines for Steam and a terminal\n"
             "  x4vrmod config [list | get KEY | set KEY VALUE | unset KEY]\n"
-            "      eye, upscaler, ipd, fov, gamemode, game, env.NAME. ipd overrides the\n"
-            "      headset's eye distance, in metres: 0.0635 is 63.5 mm\n"
+            "      eye, upscaler, ipd, fov, gamemode, language, game, env.NAME. ipd overrides\n"
+            "      the headset's eye distance, in metres: 0.0635 is 63.5 mm. language is the\n"
+            "      window's (en, pt_BR, fr, ru, de); this command's output stays English\n"
             "  x4vrmod locate [--all]           the X4 program that would run; --all: every copy found\n"
             "  x4vrmod probe xr [--verbose]     ask the VR runtime (always asks)\n"
             "  x4vrmod probe vulkan             what the GPUs offer\n"
@@ -67,7 +68,7 @@ static int cmd_doctor(int argc, char **argv) {
     else if (w == Status::Warn)
         printf("Play: amber, it can start with something lost.\n");
     else
-        printf("Play: grey, %d thing%s to fix first.\n", blocked, blocked == 1 ? "" : "s");
+        printf("Play: grey, %d pending action%s.\n", blocked, blocked == 1 ? "" : "s");
     return w == Status::Ok ? 0 : w == Status::Warn ? 1 : 2;
 }
 

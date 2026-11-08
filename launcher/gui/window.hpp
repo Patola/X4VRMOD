@@ -11,6 +11,7 @@
 #include <QWidget>
 
 #include <chrono>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -35,6 +36,9 @@ public:
         // False: no checks, timers, dialogs or launches, so a test can feed the rows
         // and read what the window would have done.
         bool live = true;
+        // The language pull-down changed: main.cpp applies it and builds the window
+        // again, which is how every text in it follows.
+        std::function<void(const std::string &code)> languageChanged;
     };
     Window(const std::string &home, const Options &options);
     ~Window() override;
@@ -78,6 +82,7 @@ private:
     void applyChecks(const std::vector<Check> &rows, bool keepVr, bool keepGpu);
     void fillUpscalers();
     void gamemodeToggled();
+    void languageChosen();
     void updateRow(const std::string &id);
     void updateVrStart(bool wanted);
     void startProgram(const QString &program, const QStringList &args);
@@ -115,6 +120,7 @@ private:
     QLabel *m_renders = nullptr, *m_status = nullptr;
     QCheckBox *m_debug = nullptr, *m_flat = nullptr;
     QCheckBox *m_gamemode = nullptr;
+    QComboBox *m_langBox = nullptr;
     QPushButton *m_play = nullptr;
     QToolButton *m_vrStart = nullptr;
     QString m_vrChoices;

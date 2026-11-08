@@ -2,6 +2,7 @@
 //
 // Finding X4: Steam from its own metadata, GOG from the usual places, and any
 // path the player points at, told apart by what the file is.
+#include "x4vr_i18n.hpp"
 #include "x4vr_launcher.hpp"
 
 #include <dirent.h>
@@ -311,7 +312,7 @@ static FileKind file_kind(const std::string &path) {
 GamePath classify_game_path(const std::string &path) {
     GamePath g;
     if (path.empty() || (!is_file(path) && !is_dir(path))) {
-        g.why = "that path doesn't exist";
+        g.why = tr_("that path doesn't exist");
         return g;
     }
     auto found = [&g](const std::string &exe, PathKind k) {
@@ -328,8 +329,8 @@ GamePath classify_game_path(const std::string &path) {
             return found(path, PathKind::Linux);
         g.kind = PathKind::NotX4;
         g.why = k == FileKind::LinuxX64
-                    ? "that's a Linux program, but not one called X4"
-                    : "that isn't the X4 program";
+                    ? tr_("that's a Linux program, but not one called X4")
+                    : tr_("that isn't the X4 program");
         return g;
     }
     for (const char *rel : {"X4", "game/X4"}) {
@@ -343,20 +344,20 @@ GamePath classify_game_path(const std::string &path) {
             return found(f, PathKind::Windows);
     }
     g.kind = PathKind::NotX4;
-    g.why = "no X4 program in that folder";
+    g.why = tr_("no X4 program in that folder");
     return g;
 }
 
 const char *proton_explanation() {
-    return "This is the Windows version of X4, which runs through Proton. The "
-           "mod works only with the Linux version: it's a Vulkan layer and a "
-           "preloaded library that attach to the Linux program. On Steam, open "
-           "X4's Properties, then Compatibility, and turn off forced "
-           "compatibility so Steam downloads the Linux version.";
+    return tr_("This is the Windows version of X4, which runs through Proton. The "
+               "mod works only with the Linux version: it's a Vulkan layer and a "
+               "preloaded library that attach to the Linux program. On Steam, open "
+               "X4's Properties, then Compatibility, and turn off forced "
+               "compatibility so Steam downloads the Linux version.");
 }
 
 const char *store_name(Store s) {
-    return s == Store::Steam ? "Steam" : s == Store::Gog ? "GOG" : "Other";
+    return s == Store::Steam ? "Steam" : s == Store::Gog ? "GOG" : tr_("Other");
 }
 
 Install install_from_path(const std::string &path) {

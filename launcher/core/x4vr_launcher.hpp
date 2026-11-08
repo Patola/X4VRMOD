@@ -209,6 +209,7 @@ struct Layout {
     std::string launch_script;  // x4vr-launch.sh, what `run` execs
     std::string deploy_script;  // deploy-extensions.sh, from what ships
     std::string help_dir;       // the window's help and artwork
+    std::string locale_dir;     // the window's translations, locale/<lang>/LC_MESSAGES
 };
 Layout detect_layout(const std::string &home);
 // The directory of this program, from /proc/self/exe.

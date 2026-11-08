@@ -22,6 +22,11 @@ on the remote beside their `take-NNN-name` twins.
 
 ## Unreleased
 
+* **The launcher speaks Brazilian Portuguese, French, Russian and German**, as well as English: the
+  window, its messages and its help. It starts in your system's language, and the Language list
+  below GameMode changes it. The translations are a first draft, and corrections are welcome as
+  pull requests or comments on an issue. Bug reports and the `x4vrmod` command stay in English,
+  so whoever reads them can; X4 keeps its own language.
 * **Fixed: F6's information overlay was half size when docked or on foot.** F6 is now recognised by
   the camera X4 draws it through, so its overlay fills the window everywhere, as it did in flight.
 * **Fixed: the launcher didn't see a running SteamVR** unless SteamVR was your default OpenXR

@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 
+#include "x4vr_i18n.hpp"
 #include "x4vr_launcher.hpp"
 
 namespace fs = std::filesystem;
@@ -238,6 +239,7 @@ static bool write_file(const std::string &path, const std::string &text) {
 }
 
 ReportResult make_report(const ReportOptions &o) {
+    const InEnglish english;
     ReportResult r;
     const std::string home = o.home.empty() ? home_dir() : o.home;
     const ScrubNames names = scrub_names(home);

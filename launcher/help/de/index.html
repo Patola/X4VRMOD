@@ -1,0 +1,349 @@
+<html><head><meta charset="utf-8"><title>Hilfe zu X4 VR Mod</title></head><body>
+<a name="top"></a>
+<h1>X4 VR Mod</h1>
+<p>Dieses Fenster findet X4: Foundations, richtet die Mod ein, sagt dir, ob alles bereit ist,
+und startet das Spiel in VR. Halte den Mauszeiger über ein beliebiges Element im Fenster, um eine
+kurze Erklärung zu sehen. Diese Seite enthält den Rest.</p>
+<p><a href="#start">Erste Schritte</a> |
+<a href="#game">Spiel</a> |
+<a href="#eye">Auflösung pro Auge</a> |
+<a href="#headsets">Einstellungen je Headset</a> |
+<a href="#upscaler">Upscaler</a> |
+<a href="#gamemode">GameMode</a> |
+<a href="#language">Sprache</a> |
+<a href="#ipd">Augenabstand</a> |
+<a href="#play">Spielen</a> |
+<a href="#flatscreen">Ohne VR</a> |
+<a href="#checklist">Die Checkliste</a> |
+<a href="#launch">Startoptionen</a> |
+<a href="#install">Installieren</a> |
+<a href="#uninstall">Deinstallieren</a> |
+<a href="#more">Mehr</a> |
+<a href="#wivrn">WiVRn oder SteamVR?</a> |
+<a href="#troubleshooting">Fehlerbehebung</a> |
+<a href="#report">Fehler melden</a></p>
+
+<a name="start"></a>
+<h2>Erste Schritte</h2>
+<ol>
+<li>Starte WiVRn und verbinde dein Headset. (<a href="#wivrn">Wir empfehlen WiVRn</a>; SteamVR
+funktioniert auch.)</li>
+<li>Hat die Checkliste einen Knopf <b>Installieren...</b>, klick darauf.</li>
+<li>Klick auf <b>Spielen</b>, sobald er grün wird.</li>
+</ol>
+<p><img src="window-ready.png"></p>
+<p>Die Checkliste aktualisiert sich selbst, du musst also nichts neu öffnen, nachdem du die
+Runtime gestartet oder das Headset verbunden hast.</p>
+
+<a name="game"></a>
+<h2>Spiel</h2>
+<p>Die Kopie von X4, die verwendet wird. Der Launcher fragt Steam, welche deiner Bibliotheken X4
+enthält, und schaut in Heroics Liste der GOG-Spiele und in <tt>~/GOG Games</tt>. Fehlt deine,
+klick auf <b>Durchsuchen...</b> und wähle das Programm namens <tt>X4</tt>.</p>
+<p><b>Es muss die Linux-Version sein.</b> Die Mod verändert das Linux-Programm von X4, während es
+läuft, und hängt sich über die Mechanismen von Linux selbst an seinen Vulkan-Renderer. Die
+Windows-Version unter Proton ist ein anderes Programm: Wählst du <tt>X4.exe</tt>, sagt dir der
+Launcher, dass das nicht funktionieren kann. Erzwingt Steam Proton für X4, schalte das in den
+Eigenschaften von X4 unter Kompatibilität aus und lass Steam die Linux-Version herunterladen.</p>
+<p><b>GOG:</b> Der Launcher findet sie, und alles funktioniert wie mit der Steam-Kopie. Wähle sie
+im Feld Spiel, wenn du beide hast.</p>
+
+<a name="eye"></a>
+<h2>Auflösung pro Auge</h2>
+<p>Die Größe des Bildes für jedes Auge. Das Auge ist hier immer quadratisch. Größer ist schärfer,
+und deine GPU muss es zweimal zeichnen, einmal pro Auge.</p>
+<p><b>Warum sie hier gewählt wird und nicht in X4:</b> Die Bilder der Mod und der Bildschirm von
+gamescope bekommen ihre Größe beim Start des Spiels, und X4 übernimmt die Wahl in seinem Menü
+sofort, was eine laufende Sitzung kaputt macht. Deshalb wird sie vor dem Start gewählt.</p>
+<p>Ist das Headset verbunden, markiert die Liste die Größe, die dem am nächsten kommt, was dein
+Headset verlangt. Das ist die Empfehlung der Runtime, die die Linsen schon berücksichtigt, und sie
+ist meist größer als das Display des Headsets.</p>
+<p>Über 4068 pro Auge ist die 3D-Ansicht der Karte flach statt räumlich, weil X4 große Bilder so im
+Speicher ablegt. Mit SteamVR hat 4224 schon ein verworrenes Bild gezeigt; wenn du das siehst, geh
+niedriger.</p>
+
+<a name="headsets"></a>
+<h3>Einstellungen je Headset</h3>
+<p>Ausgangspunkte, berechnet aus dem Display jedes Headsets. <b>Mittel</b> ist das scharfe Bild zum
+vollen Preis. <b>Niedrig</b> ist dieselbe Größe mit Upscaler, X4 zeichnet also weniger als die
+Hälfte der Pixel. <b>Hoch</b> ist ein größeres Bild mit Upscaler, X4 zeichnet also ungefähr so viel
+wie bei Mittel, und der Upscaler und das größere Bild kosten obendrauf etwas mehr.</p>
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><th>Headset</th><th>Display, pro Auge</th><th>Niedrig</th><th>Mittel</th><th>Hoch</th></tr>
+<tr><td>Meta Quest 3</td><td>2064 x 2208</td><td>2816 + FSR 1 Qualität</td><td>2816</td><td>4224 + FSR 1 Qualität</td></tr>
+<tr><td>Steam Frame</td><td>2160 x 2160</td><td>2816 + FSR 1 Qualität</td><td>2816</td><td>4224 + FSR 1 Qualität</td></tr>
+<tr><td>Pico 4</td><td>2160 x 2160</td><td>2816 + FSR 1 Qualität</td><td>2816</td><td>4224 + FSR 1 Qualität</td></tr>
+<tr><td>Meta Quest 3S</td><td>1832 x 1920</td><td>2400 + FSR 1 Qualität</td><td>2400</td><td>3600 + FSR 1 Qualität</td></tr>
+<tr><td>Meta Quest 2</td><td>1832 x 1920</td><td>2400 + FSR 1 Qualität</td><td>2400</td><td>3600 + FSR 1 Qualität</td></tr>
+<tr><td>Valve Index</td><td>1440 x 1600</td><td>2048 + FSR 1 Qualität</td><td>2048</td><td>3072 + FSR 1 Qualität</td></tr>
+<tr><td>HTC Vive Pro</td><td>1440 x 1600</td><td>2048 + FSR 1 Qualität</td><td>2048</td><td>3072 + FSR 1 Qualität</td></tr>
+<tr><td>HTC Vive</td><td>1080 x 1200</td><td>1600 + FSR 1 Qualität</td><td>1600</td><td>2400 + FSR 1 Qualität</td></tr>
+</table>
+<p><b>Gespielt wurden nur Mittel und Hoch auf der Quest 3</b>, mit WiVRn und einer Radeon RX 7900
+XTX. Der Rest ist dieselbe Regel, angewandt auf das jeweilige Display. Probierst du eines aus, ist
+das, was du herausfindest, in einem Fehlerbericht willkommen.</p>
+
+<a name="upscaler"></a>
+<h2>Upscaler</h2>
+<p>Ein Upscaler lässt X4 ein kleineres Bild zeichnen und vergrößert es, auf Kosten von etwas
+Schärfe. Ist einer an, zeigt „Rendert“ unter der Liste, wie groß X4 wirklich zeichnet.</p>
+<ul>
+<li><b>Keiner</b> zeichnet in voller Größe. Am schärfsten, und am meisten Arbeit.</li>
+<li><b>FSR 1</b> vergrößert jedes Bild für sich. Er ist der schnellere der beiden, um etwa 3,5 ms
+pro Bild bei 4224, und deshalb wird er für dich gewählt.</li>
+<li><b>FSR 3</b> nutzt auch frühere Bilder, was Kanten ruhiger macht, zu diesem Aufpreis.</li>
+<li><b>DLSS</b> ist von NVIDIA und steht nur mit einer NVIDIA-RTX-Grafikkarte in der Liste. Auto
+lässt X4 den Modus für deine Größe wählen, DLAA zeichnet in voller Größe und glättet nur die
+Kanten, und Qualität, Ausgewogen, Leistung und Ultra-Leistung zeichnen mit 1/1,5, 1/1,72, 1/2 und
+1/3. <b>Es wurde noch nie in einem Headset gespielt.</b> Ist ein Auge schwarz oder passen beide
+nicht zusammen, wähle einen anderen Upscaler und <a href="#report">melde es</a> bitte mit
+gesetztem Debug-Log.</li>
+</ul>
+<p><b>Die automatische Wahl:</b> Gehst du mit Keiner über 3200 pro Auge, wird FSR 1 Qualität
+gewählt, weil so viele Pixel zweimal zu zeichnen mehr ist, als die meisten GPUs flüssig schaffen.
+Ein Hinweis sagt das, und mit Keiner machst du es rückgängig. Eine Wahl, die du selbst getroffen
+hast, wird nie geändert, und zurück bei 3200 oder weniger kehrt der Launcher nur dann zu Keiner
+zurück, wenn er selbst gewählt hatte.</p>
+
+<a name="gamemode"></a>
+<h2>GameMode</h2>
+<p>Ist <a href="https://github.com/FeralInteractive/gamemode">Feral GameMode</a> installiert,
+erscheint dieses Kästchen. Mit Häkchen gibt es dem Spiel Vorrang vor dem Rest deines Systems,
+solange es läuft, was meist ein paar Bilder pro Sekunde mehr bringt. Es gilt, egal wie du das Spiel
+startest: Spielen, Ohne VR, die Startzeile von Steam oder ein Terminal. Ist es nicht installiert,
+erscheint das Kästchen nicht und nichts ändert sich.</p>
+
+<a name="language"></a>
+<h2>Sprache</h2>
+<p>Dieses Fenster und diese Hilfe starten in der Sprache deines Systems, wenn sie Englisch,
+brasilianisches Portugiesisch, Französisch, Russisch oder Deutsch ist, und sonst auf Englisch. Die
+Liste <b>Sprache</b> unter GameMode ändert das, und deine Wahl bleibt gespeichert. X4 selbst
+behält die Sprache, die du dafür in X4 oder in Steam gewählt hast.</p>
+<p>Die Übersetzungen sind ein erster Entwurf, nach bestem Wissen gemacht. Ist ein Wort falsch oder
+klingt es seltsam, sind Korrekturen als Pull Request oder als Kommentar in einem Issue willkommen.
+Ein Fehlerbericht und das, was der Befehl <tt>x4vrmod</tt> ausgibt, bleiben auf Englisch, damit
+alle, die sie lesen, sie verstehen.</p>
+
+<a name="ipd"></a>
+<h2>Augenabstand</h2>
+<p>Hier gibt es nichts einzustellen: Die Mod nimmt den Abstand deiner Augen vom Headset, ab dem
+ersten Bild. Drehst du am IPD-Regler des Headsets, folgt die Welt beim Spielen.</p>
+<p><b>Um ihn zu überschreiben,</b> wenn die Welt zu klein oder zu groß wirkt, gib deinen eigenen
+Abstand in Metern an. Ein Optiker oder eine Handy-App kann ihn messen. Er gilt ab dem nächsten
+Spielstart und bleibt, bis du ihn entfernst:</p>
+<pre>x4vrmod config set ipd 0.0635</pre>
+<p>Das sind 63,5 mm. Zurück zum Wert des Headsets:</p>
+<pre>x4vrmod config unset ipd</pre>
+<p>Solange ein eigener Wert gesetzt ist, folgt die Welt dem Regler des Headsets nicht mehr. Meldet
+das Headset einmal einen Abstand, den keine Augen haben können (außerhalb von 50 bis 80 mm), glaubt
+die Mod ihm nicht, behält den letzten guten oder sonst 64 mm und vermerkt das in ihrem Log.</p>
+
+<a name="play"></a>
+<h2>Der Knopf Spielen</h2>
+<p><b>Grünes „Spielen“:</b> Alles ist bereit.</p>
+<p><b>Orangefarbenes „Trotzdem spielen“:</b> Das Spiel kann starten, aber etwas wird nicht
+funktionieren. Die orangefarbene Zeile sagt, was. Das passiert vor allem nach einem Update von
+X4.</p>
+<p><img src="window-amber.png"></p>
+<p><b>Graues „Spielen“:</b> Es kann noch nicht starten. Eine rote Zeile sagt, warum, meist mit
+einem Knopf, der es behebt.</p>
+<p><img src="window-fix.png"></p>
+<p>Solange das Spiel läuft, steht auf dem Knopf „X4 läuft“, und der Launcher hält sich zurück.
+Danach sagt dir eine Zeile, wie die Sitzung gelaufen ist.</p>
+
+<a name="flatscreen"></a>
+<h3>Ohne VR</h3>
+<p>Setz das Häkchen bei <b>Ohne VR</b>, um X4 allein auf deinem Bildschirm zu starten, so wie es
+ohne die Mod startet, auch wenn VR läuft. Nichts von der Mod wird geladen und ihre Erweiterung
+bleibt aus, es gelten also deine eigenen Einstellungen und Spielstände, und die Zeilen, die nur für
+die Mod zählen, werden grau.</p>
+<p><img src="window-flat.png"></p>
+<p>Das ist eine Vergleichsbasis: Geht auch dort etwas schief, liegt es nicht an der Mod, und das in
+einem Fehlerbericht zu sagen, hilft sehr.</p>
+
+<a name="checklist"></a>
+<h2>Die Checkliste</h2>
+
+<a name="row-x4"></a>
+<h3>X4 gefunden</h3>
+<p>Der Launcher hat eine Linux-Kopie von X4 gefunden und ihre Version gelesen. Siehe
+<a href="#game">Spiel</a>, falls nicht.</p>
+
+<a name="row-patches"></a>
+<h3>Die Mod passt zu diesem X4</h3>
+<p>Mehrere Funktionen der Mod ändern den Code von X4 im Speicher und brauchen deshalb genau den
+Code, für den sie geschrieben wurden. Statt eine Prüfsumme zu vergleichen, die schon einen kleinen
+Hotfix ablehnen würde, der nichts von dem ändert, was wir anfassen, führt der Launcher die eigenen
+Prüfungen der Mod auf der Datei von X4 aus, Funktion für Funktion.</p>
+<p>Ist diese Zeile orange, schalten sich die aufgeführten Funktionen zur Sicherheit ab, und das
+Spiel läuft trotzdem. Warte nach einem Update von X4 auf eine neue Version der Mod, oder spiel ohne
+sie.</p>
+
+<a name="row-steam"></a>
+<h3>Steam läuft</h3>
+<p>Die Steam-Version von X4 braucht ein laufendes Steam, weil X4 es beim Start nach deinem Konto
+fragt. Eine GOG-Kopie braucht es nicht, und diese Zeile erscheint dann nicht.</p>
+
+<a name="row-running"></a>
+<h3>X4 läuft noch nicht</h3>
+<p>Die Mod muss vom Start von X4 an da sein, eine schon offene Kopie muss also zuerst geschlossen
+werden.</p>
+
+<a name="row-gamescope"></a>
+<h3>gamescope installiert</h3>
+<p>gamescope gibt X4 einen virtuellen Bildschirm in der Größe für beide Augen, egal welche
+Auflösung dein Desktop hat. Es ist ein eigenes Programm; installiere es aus den Paketen deiner
+Distribution.</p>
+
+<a name="row-vr"></a>
+<h3>VR bereit</h3>
+<p>Der Launcher fragt deine VR-Runtime kurz über OpenXR, ob ein Headset da ist, ohne eine
+VR-Sitzung zu starten, was verlässlicher ist, als nach laufenden Programmen zu suchen.</p>
+<ul>
+<li><b>Keine VR-Runtime läuft:</b> Der Knopf startet WiVRn, das <a href="#wivrn">wir
+empfehlen</a>, und sein Pfeil bietet SteamVR an. Der Launcher fragt kein SteamVR, das nicht läuft,
+weil die Frage einen Teil davon startet.</li>
+<li><b>Headset nicht verbunden:</b> Die Runtime läuft und hat kein Headset. Öffne bei WiVRn die
+WiVRn-App im Headset und verbinde dich.</li>
+</ul>
+
+<a name="row-mod"></a>
+<h3>Mod installiert</h3>
+<p>Die Teile der Mod, die <b>Installieren...</b> gemeinsam einrichtet. Einer sitzt zwischen X4 und
+deiner GPU und erzeugt die beiden Augenbilder, und er wird nur geladen, wenn die Mod ihn anfordert,
+sodass kein anderes Programm betroffen ist. Der andere ist eine kleine X4-Erweiterung im Ordner
+<tt>extensions</tt> von X4, die den Kopf weiter drehen lässt, als X4 es normalerweise erlaubt, und
+das Schwanken der Kamera entfernt. „Veraltet“ heißt, dass sie aus einer anderen Version stammen als
+dieser Launcher; <b>Installieren...</b> ersetzt sie.</p>
+
+<a name="row-gpu"></a>
+<h3>GPU geeignet</h3>
+<p>Die Mod zeichnet beide Augen in einem Durchgang mit einer Vulkan-Funktion namens Multiview und
+braucht Vulkan 1.2 und ein freies Descriptor-Set. Fast jede GPU der letzten Jahre hat das. Ist diese
+Zeile rot, aktualisiere zuerst deinen Grafiktreiber.</p>
+
+<a name="launch"></a>
+<h2>Startoptionen</h2>
+<p><b>Startoptionen</b> gibt dir die genaue Zeile für deine Kopie, mit einem Knopf Kopieren.
+Spielen ist der einfachste Weg, und diese sind für den Fall, dass du lieber über Steam oder ein
+Terminal startest. Beide starten die Mod wie Spielen, mit den Einstellungen aus diesem Fenster.</p>
+<p><img src="steam-launch-options.png" width="640"></p>
+<p>Steam ersetzt <tt>%command%</tt> durch seinen eigenen Befehl für X4, und <tt>x4vrmod run</tt>
+startet X4 mit diesem Befehl, er muss also da sein. Solange die Zeile gesetzt ist, startet Steam X4
+immer in VR; lösche sie, um wieder ohne VR zu spielen.</p>
+<p>Ist Steam so eingestellt, dass es X4 über Proton startet, verweigert die Zeile den Start und
+sagt, warum, denn die Mod funktioniert nur mit der Linux-Version. Mit einem als Flatpak
+installierten Steam funktioniert diese Zeile voraussichtlich nicht, weil die Mod und gamescope
+nicht in seiner Sandbox liegen.</p>
+
+<a name="install"></a>
+<h2>Installieren</h2>
+<p>Der Knopf <b>Installieren...</b> erscheint in der Zeile der Checkliste, die er behebt. Aus einem
+Zip installiert, kopiert er die Mod nach <tt>~/.local/share/x4vrmod</tt> und registriert ihren
+Vulkan-Layer nur für dich, sodass du den entpackten Ordner löschen kannst und die Startzeile von
+Steam weiter funktioniert. Aus einem Paket installiert, ist das schon da. In beiden Fällen legt er
+die Erweiterung in den X4-Ordner.</p>
+<p><b>Was das mit deinen Spielständen macht:</b> X4 markiert Spielstände, die mit einer Erweiterung
+von außerhalb Egosofts entstanden sind, als modifiziert. Die Erweiterung der Mod ist nur in
+VR-Sitzungen aktiv, Spielen ohne VR ist also nicht betroffen.</p>
+<p><b>Deine Einstellungen:</b> Die <tt>config.xml</tt> von X4 wird nie geschrieben. In VR führt die
+Mod eigene Kopien daneben, namens <tt>config-x4vrmod.xml</tt> und so weiter, sodass das, was du in
+VR änderst, in VR bleibt und dein Spiel ohne VR seine Einstellungen behält. Das Einzige, was sie
+nicht kopiert, ist die Skalierung der Oberfläche von X4, die sie mit 0,6 beginnt, weil X4s eigene
+1,0 in einem Headset zu groß ist. Du kannst sie weiterhin in den Optionen von X4 ändern.</p>
+
+<a name="uninstall"></a>
+<h2>Deinstallieren</h2>
+<p>Unter <b>Mehr</b>, damit man es nicht aus Versehen anklickt. Es listet alles auf, was es
+entfernen wird, bevor es das tut, und entfernt immer nur die eigenen Dateien der Mod. Die
+Spielstände und eigenen Einstellungen von X4 bleiben immer unangetastet.</p>
+<p><img src="uninstall.png"></p>
+<p>Das Kästchen <b>Auch meine VR-Einstellungen löschen</b> ist zunächst aus. Lass es aus, wenn du
+vielleicht zurückkommst. Mit Häkchen werden deine VR-Einstellungen in den Profilordnern von X4 und
+die Auswahl in diesem Fenster gelöscht, und <b>das lässt sich nicht rückgängig machen</b>.</p>
+<p>Ein Paket bleibt installiert, bis du es mit deiner Paketverwaltung entfernst.</p>
+
+<a name="more"></a>
+<h2>Mehr</h2>
+<p><b>Logs öffnen:</b> Jede Sitzung schreibt hier ihr eigenes Log, und die neuesten 20 werden
+behalten. Ein Fehlerbericht braucht das Log der Sitzung, in der etwas schiefging.</p>
+<p><b>Zum Anwendungsmenü hinzufügen:</b> für das Zip, sobald es installiert ist. Ein Paket hat seinen
+Eintrag schon.</p>
+<p><b>Erweitert:</b> das Sichtfeld von X4 und zusätzliche Umgebungsvariablen, um auszuprobieren,
+worum ein Fehlerbericht bittet. Zum Spielen brauchst du das nicht.</p>
+<p><b>Auf Standard zurücksetzen:</b> setzt die Einstellungen dieses Fensters auf ihre Standardwerte
+zurück und behält das gewählte Spiel und die Sprache.</p>
+<p><b>Über:</b> die Version und die Lizenz. Dies ist eine inoffizielle Mod, nicht mit Egosoft
+verbunden und nicht von Egosoft unterstützt.</p>
+
+<a name="wivrn"></a>
+<h2>WiVRn oder SteamVR?</h2>
+<p><b>Wir empfehlen WiVRn.</b> Auf demselben Headset liefert es ein klareres Bild als SteamVR, dessen
+Bild meist flüssig, aber unschärfer ist, und es lässt dich den <a href="#codec">Video-Codec</a>
+wählen. SteamVR hat außerdem bei 4224 pro Auge ein verworrenes Bild gezeigt, wo WiVRn sauber
+bleibt.</p>
+<p>WiVRn streamt zu eigenständigen Headsets wie der Quest und der Pico. Ein Headset, das per Kabel am
+PC hängt, wie eine Valve Index oder eine HTC Vive, streamt nicht und nutzt daher SteamVR.</p>
+
+<a name="troubleshooting"></a>
+<h2>Fehlerbehebung</h2>
+
+<a name="codec"></a>
+<h3>Das Bild ist unscharf, oder es ruckelt</h3>
+<p>Bei WiVRn macht der Video-Codec den größten Unterschied. Du wählst ihn in den Einstellungen von
+WiVRn.</p>
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><th>Codec</th><th>Was dich erwartet</th></tr>
+<tr><td><b>AV1, über VAAPI</b></td><td>Scheint der beste zu sein: ein klares Bild mit minimaler
+Latenz. Er braucht eine GPU, die AV1 kodieren kann.</td></tr>
+<tr><td>H.265</td><td>Ein sehr klares Bild, aber er fügt Latenz hinzu, die sich beim Spielen als
+Artefakte und Ruckeln zeigen kann.</td></tr>
+<tr><td>H.264</td><td>Effizient, aber unscharf.</td></tr>
+</table>
+<p>Bei SteamVR wird der Codec für dich gewählt. Meist ist das flüssig, aber im Vergleich zu WiVRn
+unscharf. Das ist einer der Gründe, warum <a href="#wivrn">wir WiVRn empfehlen</a>.</p>
+
+<a name="input"></a>
+<h3>Ein Controller oder ein HOTAS funktioniert nicht</h3>
+<p>Das liegt daran, dass das Steam-Overlay, das auch Steam Input übernimmt, nicht mit Wayland
+funktioniert. Das neuere 64-Bit-Steam, das auf dem Weg ist, könnte das irgendwann lösen.</p>
+
+<a name="jumbled"></a>
+<h3>Das Bild ist verworren</h3>
+<p>Das wurde mit SteamVR bei 4224 pro Auge gesehen. Wähle eine niedrigere
+<a href="#eye">Auflösung pro Auge</a>.</p>
+
+<a name="stopped"></a>
+<h3>X4 hört direkt nach dem Start auf</h3>
+<p>Die Zeile neben Spielen zeigt das Letzte, was der Start gesagt hat. Erklärt das nichts,
+<a href="#report">melde es</a>: Ein Bericht funktioniert auch dann, wenn das Spiel nie bis zu einem
+Log gekommen ist.</p>
+
+<a name="report"></a>
+<h2>Fehler melden</h2>
+<p>Fehlerberichte sind der Weg, wie die Mod besser wird, und der Launcher erledigt den Großteil der
+Arbeit:</p>
+<ol>
+<li>Klick auf <b>Fehler melden</b>.</li>
+<li>Wähle die Sitzung, in der es passiert ist, und beschreibe, was du gesehen hast.</li>
+<li>Klick auf <b>Bericht erstellen</b>, dann auf <b>GitHub-Issue öffnen</b>. Das öffnet die Seite und
+markiert die Datei des Berichts in deinem Dateimanager: Zieh sie in die Seite. Das ist der einzige
+Schritt, der dir bleibt, denn GitHub lässt kein Programm Dateien anhängen. Ein kurzes Video hilft
+bei allem Visuellen.</li>
+</ol>
+<p><img src="report.png"></p>
+<p><b>Kannst du es erneut auslösen, tu es mit einem Debug-Log.</b> Setz das Häkchen bei
+<b>Debug-Log</b> neben Spielen, lös es aus, beende das Spiel und melde diese Sitzung. Das Spiel läuft
+gleich, und das Log hält viel mehr von dem fest, was die Mod getan hat. Es wird mehrere Dutzend MB
+pro Sitzung groß, lass es also sonst aus; beim nächsten Öffnen dieses Fensters ist es wieder
+aus.</p>
+<p><b>Was in einem Bericht steht:</b> die Versionen der Mod und von X4, dein System, deine GPU und
+dein Headset, die Checkliste, deine Einstellungen, das Log der Sitzung und der Backtrace eines
+Absturzes, falls das System einen aufbewahrt hat. Es ist reiner Text, auf Englisch, und mit
+<b>Dateien zeigen</b> kannst du ihn lesen.</p>
+<p>Der Ladebildschirm in VR zeigt Version, Build und Datum der Mod in seiner Ecke. Das ist praktisch
+anzugeben, wenn du gar nicht erst bis zu einem Bericht kommst.</p>
+<p><b>Was herausgenommen wird:</b> dein Home-Ordner, dein Benutzername, dein Computername und deine
+Steam-Kontonummer. Nichts verlässt deinen Computer, außer du hängst es selbst an.</p>
+<p><a href="#top">Zurück nach oben</a></p>
+</body></html>
