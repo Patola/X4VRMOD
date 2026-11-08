@@ -101,6 +101,7 @@ blocks every frame.
 | The eye distance from the headset, following its dial | done | **`v0.9.10`** |
 | DLSS in both eyes (`X4VR_UPSCALE=dlss_*`) | not yet played in a headset | **`v0.9.10`** |
 | GameMode | done | **`v0.9.10`** |
+| Full-screen menus sharp to their edges when streaming (the streamer's sharp middle follows your gaze) | done | `take-420-menu-warp` |
 | The start menu as the whole scene (menu at its size in front, the 3D scene all around) | optional, future — not scheduled | — |
 | The desktop view optional while in the headset (est. 3–5% fps; [DESIGN.md](DESIGN.md#late-features-postponed-not-scheduled)) | late feature, postponed | — |
 | Volumetric nebula in stereo (Matrix #79B, CEO's Doubt) | done | **`v0.9.1`** |

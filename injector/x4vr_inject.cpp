@@ -5052,6 +5052,15 @@ static void dlss_report() {
         return;
     last = now;
     // Asked on X4's own thread, as its menus do.
+    //
+    // X4GUARD: GetDLSSOption
+    // X4GUARD: GetDLSSModeOption
+    // Both read X4's renderer
+    // through the global at 0x3daab80 unchecked, the pattern that crashed X4 on
+    // exit in takes 313 and 316 -- but only when passed true. Passed false, as
+    // here and only ever here, they read X4's settings object at a fixed
+    // address (0x4533ae0, and 0x4534940's mode table) and nothing X4 NULLs at
+    // shutdown; read from the 9.00 disassembly, 2026-11-08.
     static auto supported = (bool (*)())dlsym(RTLD_DEFAULT, "IsDLSSSupported");
     static auto on = (bool (*)(bool))dlsym(RTLD_DEFAULT, "GetDLSSOption");
     static auto mode = (const char *(*)(bool))dlsym(RTLD_DEFAULT, "GetDLSSModeOption");

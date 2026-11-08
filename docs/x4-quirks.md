@@ -29987,3 +29987,136 @@ is the byte at 0x4533ae0+0x1ad. `injector/x4vr_ngx.hpp` is built on all of this 
 outside the scorer's off-seat windows, and X4's camera there includes the body. Take 410's run
 read as "a cockpit menu stayed off-centre" at 66.49 degrees. The injector's centring line already
 says "off the pilot seat", and the scorer now reads it.
+
+## Takes 414-418 (2026-11-08): a menu sharp only in the middle is the streamer's foveation, held still
+
+Patola, under SteamVR: in the map the middle is very well defined and the parts near the borders
+are blurry, "like foveation applied to the panel only", and turning the head to them doesn't help.
+He has seen it for some time, take 387 included, and only now had the words.
+
+| Take | Setup | His eye | What it ruled out |
+|---|---|---|---|
+| 414 | SteamVR through Steam Link (`vrlink`), Quest 3 | a clear square in the map's middle, fixed to the map; things blur leaving it | not WiVRn alone |
+| 415 | WiVRn, default config | the same square | not SteamVR alone |
+| 416 | WiVRn, `"scale": 1.0` in the server's `config.json` | the same | nothing: see below |
+| 417 | WiVRn, 2816² | the same, in the same place, the middle softer | the mod's resolution, and the flat window's density |
+| 418 | WiVRn, the headset app's Foveated encoding at 0 | **crisp over the whole map** | the cause |
+
+**Two wrong turns, for the record.** First, the flat 74° window: seen with the head turned, a flat
+picture is packed sec²θ tighter at angle θ, and the runtime's 2x2 resampling would smear it. That
+predicted a gradual, roundish fade; he saw a square with a clear border, and at 2816² (take 417),
+where the packing stays near 1:1, the square stayed put. Second, a Steam Link theory that its
+sharp middle is pinned to the declared pose. That was right about the mechanism, but for every
+streamer, not Steam Link alone, and take 416 seemed to refute it only because the setting I gave
+was not the one that turns foveation off.
+
+**What it is (WiVRn's source, read 2026-11-08):**
+* `server/compositor/layer_squasher.cpp` builds the stream frame from the projection layer's own
+  pose and field, "so we avoid one resampling step", when the layer is for the frame being shown.
+* `server/compositor/foveation.cpp` foveates each axis separately, so the full-detail region is a
+  rectangle with a clear edge, and beside it the squeeze is sideways only. His video of take 416
+  (a Quest recording, `/dados/x4-map-blurriness-take416.mp4`) shows exactly that: Trinity Sanctum
+  III's name, panned from about 20° to about 30° right of the map's middle with the head still,
+  blurred along x only (2 px horizontal autocorrelation 0.71 to 0.84, vertical 0.52 to 0.53).
+* In WiVRn 26.9 the stream's size is a setting of the headset app (`client/configuration.cpp`,
+  `stream_scale`, default 0.5, 0.3 with eye tracking), shown as Video, Foveated encoding = (1 -
+  scale) x 100. The server's `"scale"` in the docs did nothing in take 416. The dashboard logs
+  (`~/.local/state/wivrn/wivrn-dashboard/server_logs_*`) show the size: 1472x1536 per eye on most
+  days, 2944x3072 once.
+* Steam Link foveates too, always, and SteamVR's compositor log says "Driver requests system layer
+  use app poses".
+
+In flight none of it shows: the mod declares where X4's camera points, which follows the head, so
+the sharp middle is where the player looks. In a full-screen menu the mod declares the still pose
+(that is what keeps the window still), so the sharp middle stayed on the map.
+
+The picture the mod hands over was never the problem: take 387's saved map frame,
+`/tmp/x4vr-t387-present-n8-layer0.png`, has its info panel's text near the window's corner as crisp
+as the middle, and it reaches the runtime by `vkCmdCopyImage`, byte for byte.
+
+## The full-screen menu warp (2026-11-08): the frozen frame, redrawn for the head
+
+`layer/x4vr_menu_warp.hpp`, the only path since take 420 (it had a knob, `X4VR_MENU_WARP`, for
+the A/Bs of takes 419 and 420). While the injector reports a full-screen menu up, the copy into the runtime's image becomes a pass that redraws X4's
+frame for the head's latest orientation, and the frame thread declares that orientation instead of
+the still one, at the same eye positions. Every pixel keeps its place in the room, so the window
+stays where it was, and the streamer's sharp middle is where the player looks.
+
+* **The turn** is conj(rendered) * head, a pure rotation about the eye, so exact at every depth:
+  the cockpit around the menu is right as well. The rendered orientation is the one the frame
+  thread declares for X4's frame (`warp_decl_q`), read before any warp is declared over it.
+* **The filter** (`menu_warp.frag`): per pixel, the mapping at its neighbours gives its footprint
+  in X4's image, and a box of up to 4x4 bilinear taps covers it, in linear light. One tap at 1:1,
+  at exactly the mapped point, snapped when float error leaves it a few ten-thousandths off: an
+  unturned frame comes out byte for byte. X4's eye image holds sRGB bytes in a UNORM image, so
+  texels are decoded, and the runtime's sRGB view encodes.
+* **The pose follows the image.** The composite says whether it warped (`vr_last_warped`); the
+  release makes that image's orientation live; the frame thread declares it for both eyes. An image
+  the composite copied instead is declared still, or the window would swing by the head's angle.
+* **A race it counts and cannot close:** a release between the frame thread reading the live pose
+  and `xrEndFrame` pairs one headset frame with the next image. Closing it needs a lock held across
+  `xrEndFrame`, which takes 298-302 forbid. Counted per menu as "possible race(s)", an upper bound.
+* For takes 419 and 420, `X4VR_MENU_WARP=ab` switched it on and off, at each full-screen menu and
+  then at each opening of the map, announced as a `milestone:` the watcher relays. Removed with the
+  knob after take 420.
+
+Tested with no headset: `tests/menu_warp_math.cpp` against plain trigonometry, with the poses
+swapped as the control; `tests/menu_warp_render.cpp` on lavapipe under validation (byte for byte
+unturned, a column where trigonometry puts it, every pixel within 1 of a CPU rendering, a
+one-pixel checkerboard minified to grey, which a one-tap shader fails); `tests/sbs_menu_warp.cpp`,
+the composite itself with a fake swapchain, copy then warp then copy on the same slot, which a
+missing barrier back to TRANSFER_SRC fails under validation.
+
+## Take 419 — PREDICTIONS (written before the run): the menu warp, A/B per menu
+
+The scorer's pointer rule failed takes 416 and 417 on a healthy pointer: the map opened before the
+recentre could run and no 6 s without a menu followed. It now needs 20 s without a full-screen menu
+after ARMED before it fails; takes 366-368, the dead cursor, had 209 s and more.
+
+* **P419.1 (the scorer):** `menu warp: armed (X4VR_MENU_WARP=ab)`; each menu's closing line, ON and
+  OFF alternating; every ON menu of 2 s or more redrawn and declared; no OFF menu redrawn.
+* **P419.2 (Patola's eye, within the run, foveation at its default):** with the warp ON the sharp
+  area follows his head; with it OFF it stays on the map's middle, as in takes 414-417. Nothing
+  else differs between the two: the window in the same place, the same size, no swimming.
+
+## Take 419 — SCORED PASS (2026-11-08): the warp works on WiVRn; the A/B switched on the wrong thing
+
+WiVRn with Foveated encoding back at its default, setup 5, `X4VR_MENU_WARP=ab`. `score_run.py`
+PASS: 6 menus ON, each redrawn and declared, turned up to 50.6 deg from the menu's middle; 5 OFF,
+none redrawn; the pointer recentred; GAMEPLAY 15.0 ms (66 fps).
+
+* **P419.1 — CONFIRMED.** **P419.2 — CONFIRMED**, Patola: "when it was on the map was clear and
+  with it off it was the situation as before. I felt no discomfort."
+* **Possible races: 486 of 7551 declared headset frames (6.4%), an upper bound.** 12% in the start
+  menu, where X4 drew at 60 fps, and 0.25% in the map at 22 fps: it scales with how often X4
+  releases an image, as a release landing inside the frame thread's ~2 ms window would. Each would
+  be off by the head's turn in one X4 frame; nothing was seen.
+* **The A/B was wrong, the warp was not** (Patola: it "falsely triggered with other kinds of mode
+  changes, specially after I sit on the pilot's chair"). It switched at every full-screen menu.
+  Sitting in the pilot seat while docked opens X4's `DockedMenu`, which X4 counts as full-screen,
+  so it switched with no map (menu #4, OFF); the flag then stayed up through docked menu, map,
+  docked menu and map, so those maps never switched; Esc and its closing then switched it every
+  second (#5 to #11). Its first two map openings (#2 OFF, #3 ON) were real and are the comparison.
+  **Fix:** the injector counts the map's openings (share `map_opened`, version 15) and the A/B
+  switches only there, logging periods ("period #N over after X s, ON (menus closed|the A/B
+  switched)"). `tests/menu_warp_math.cpp` replays this take's events.
+* The docked menu is right to be warped: X4's camera is centred and still there too ("HUD down in
+  the cockpit — X4's camera CENTRED").
+
+## Take 420 — SCORED PASS (2026-11-08): the warp works on Steam Link too; the only path now
+
+SteamVR through Steam Link to the Quest 3, setup 5, `X4VR_MENU_WARP=ab` switching at the map.
+`score_run.py` PASS: the map opened 5 times, ON OFF ON OFF ON; every ON period redrawn and declared,
+turned up to 35.0 deg; no OFF period redrawn; **0 possible races** of 4286 declared headset frames.
+
+Patola: "It was very clearly when it was on and it worked perfectly." He checked that Steam Link's
+foveation was still on: out of the corner of his eye the blur was where it should be, following
+his head. Seated in the pilot seat (the docked menu) it worked as well, and sitting no longer
+switched the A/B. The window stays put in space, as before; "it's just much crispier and clear
+now". **Under SteamVR the watcher's notifications don't reach him**: only WiVRn shows them in the
+headset, so a protocol can't pace by them there.
+
+**The warp is the only path now** (Patola's decision): the knob and its A/B are gone, and with them
+the injector's count of map openings (the share is back to version 14). Full-screen menus are
+copied still only if the warp's pipeline can't be built, which the scorer fails. From take 421, a
+VR run that made the runtime's swapchain must log "menu warp: armed".

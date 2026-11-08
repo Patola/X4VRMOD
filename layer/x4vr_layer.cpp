@@ -14465,6 +14465,25 @@ struct VrState {
     std::atomic<bool> ui_ready{false};
     std::atomic<bool> ui_failed{false};
     std::atomic<uint64_t> ui_released{0};
+    // The full-screen menu warp (layer/x4vr_menu_warp.hpp), across the two
+    // threads. The frame thread publishes the head's orientation and the one
+    // it declares for X4's frame; the present thread turns the frame by the
+    // difference and, at the release, makes the orientation that frame now
+    // has the one the frame thread declares. A mutex of its own, held for a
+    // copy and never across a call into the runtime.
+    std::mutex warp_mu;
+    float warp_head_q[4] = {0.f, 0.f, 0.f, 1.f};
+    float warp_decl_q[4] = {0.f, 0.f, 0.f, 1.f};
+    bool warp_head_ok = false, warp_decl_ok = false;
+    bool warp_pending = false;     // asked for the image being filled
+    float warp_pending_q[4] = {0.f, 0.f, 0.f, 1.f};
+    float warp_pending_deg = 0.f;
+    bool warp_live = false;        // what the latest released image carries
+    float warp_live_q[4] = {0.f, 0.f, 0.f, 1.f};
+    uint64_t warp_live_seq = 0;    // `released` after that release
+    float warp_max_deg = 0.f;      // over the current menu
+    std::atomic<uint64_t> warp_asked{0}, warp_done{0}, warp_declared{0},
+        warp_raced{0};
     // Task #57. Layer A's declared pose, which the UI quad now SHARES.
     //
     // Take 242 measured why they must be the same. The quad is a re-projection
@@ -14637,6 +14656,76 @@ void vr_report(const char *when); // defined below; the loop ticks through it
 // Returns true when a blit was requested, so the caller knows whether it owes a
 // release. On any failure it returns false and X4's frame proceeds untouched --
 // this path must never be able to stop the flatscreen game.
+// The full-screen menu warp's request for the image about to be filled
+// (layer/x4vr_menu_warp.hpp): while a full-screen menu is up, the turn from the
+// orientation X4's frame was rendered with to the head's, both as the frame
+// thread last published them. Logged by period, from the menus' opening to
+// their closing.
+static bool menu_warp_request(x4vr::MenuWarp::Params *out) {
+    const x4vr::Shared *sh = shared_state();
+    const bool up =
+        sh && sh->fullscreen_menu.load(std::memory_order_relaxed) != 0;
+    struct timespec ts {};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    const double now = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+    static bool was_up = false;
+    static uint64_t periods = 0, asked0 = 0, done0 = 0, declared0 = 0, raced0 = 0;
+    static double t_start = 0.0;
+    if (up && !was_up) {
+        periods++;
+        {
+            std::lock_guard<std::mutex> wl(g_vrs.warp_mu);
+            g_vrs.warp_max_deg = 0.f;
+        }
+        asked0 = g_vrs.warp_asked.load();
+        done0 = g_vrs.warp_done.load();
+        declared0 = g_vrs.warp_declared.load();
+        raced0 = g_vrs.warp_raced.load();
+        t_start = now;
+        X4VR_LOG("menu warp: period #%llu begins — a full-screen menu is up",
+                 (unsigned long long)periods);
+    } else if (!up && was_up) {
+        float max_deg = 0.f;
+        {
+            std::lock_guard<std::mutex> wl(g_vrs.warp_mu);
+            max_deg = g_vrs.warp_max_deg;
+        }
+        X4VR_LOG("menu warp: period #%llu over after %.1f s — "
+                 "%llu frame(s) asked, %llu redrawn, turned up to %.1f deg; "
+                 "%llu headset frame(s) declared with the head's orientation, "
+                 "%llu possible race(s)",
+                 (unsigned long long)periods, now - t_start,
+                 (unsigned long long)(g_vrs.warp_asked.load() - asked0),
+                 (unsigned long long)(g_vrs.warp_done.load() - done0), max_deg,
+                 (unsigned long long)(g_vrs.warp_declared.load() - declared0),
+                 (unsigned long long)(g_vrs.warp_raced.load() - raced0));
+    }
+    was_up = up;
+
+    bool asked = false;
+    std::lock_guard<std::mutex> wl(g_vrs.warp_mu);
+    if (up && g_vrs.warp_head_ok && g_vrs.warp_decl_ok) {
+        x4vr::warp_matrix(g_vrs.warp_decl_q, g_vrs.warp_head_q, out->m);
+        const OffAxisPair &oat = offaxis_target();
+        for (uint32_t e = 0; e < 2; e++) {
+            const XrFovf &f = oat.on ? oat.fov[e] : g_vr_fov;
+            out->src[e] = out->dst[e] = x4vr::warp_tan(
+                f.angleLeft, f.angleRight, f.angleUp, f.angleDown);
+        }
+        const float deg =
+            x4vr::warp_angle_deg(g_vrs.warp_decl_q, g_vrs.warp_head_q);
+        std::memcpy(g_vrs.warp_pending_q, g_vrs.warp_head_q,
+                    sizeof g_vrs.warp_pending_q);
+        g_vrs.warp_pending_deg = deg;
+        if (deg > g_vrs.warp_max_deg)
+            g_vrs.warp_max_deg = deg;
+        g_vrs.warp_asked.fetch_add(1, std::memory_order_relaxed);
+        asked = true;
+    }
+    g_vrs.warp_pending = asked;
+    return asked;
+}
+
 bool vr_begin_blit(VkSwapchainKHR x4sc) {
     if (!g_vr || g_vrs.sc_failed.load(std::memory_order_relaxed))
         return false;
@@ -14741,7 +14830,11 @@ bool vr_begin_blit(VkSwapchainKHR x4sc) {
             x4vr::xr::swapchain_release(g_vrs.sc);
         return false;
     }
-    g_sbs.request_vr_blit(g_vrs.sc.images[idx], eye, 2);
+    // While a full-screen menu is up, the copy becomes the menu warp.
+    x4vr::MenuWarp::Params warp;
+    const bool want_warp = menu_warp_request(&warp);
+    g_sbs.request_vr_blit(g_vrs.sc.images[idx], eye, 2, g_vrs.sc.format,
+                          want_warp ? &warp : nullptr);
 
     // ---- task #57 layer B ---------------------------------------------------
     //
@@ -14803,6 +14896,22 @@ void vr_finish_blit() {
     std::lock_guard<std::mutex> lock(g_vrs.sc_mu);
     x4vr::xr::swapchain_release(g_vrs.sc);
     g_vrs.released.fetch_add(1, std::memory_order_relaxed);
+    // The menu warp: the image just released carries the turn only if the
+    // composite recorded it. Otherwise it was copied still, and declaring the
+    // turn over it would swing the window by the head's angle.
+    {
+        const bool done = g_sbs.vr_last_warped();
+        std::lock_guard<std::mutex> wl(g_vrs.warp_mu);
+        const bool live = g_vrs.warp_pending && done;
+        g_vrs.warp_live = live;
+        if (live) {
+            std::memcpy(g_vrs.warp_live_q, g_vrs.warp_pending_q,
+                        sizeof g_vrs.warp_live_q);
+            g_vrs.warp_done.fetch_add(1, std::memory_order_relaxed);
+        }
+        g_vrs.warp_live_seq = g_vrs.released.load(std::memory_order_relaxed);
+        g_vrs.warp_pending = false;
+    }
     // Task #57. Released only when the composite was actually asked to fill it
     // -- request_ui_blit clears its handles as it records, so a non-zero blit
     // count is the acknowledgement. Releasing an image the composite skipped
@@ -14917,6 +15026,17 @@ void vr_thread() {
         XrView views[2] = {};
         XrViewStateFlags flags = 0;
         const bool have = x4vr::xr::locate_views(g_vrs.session, views, 2, &flags);
+        // The menu warp turns X4's still frame to this. views[0] is the head's
+        // orientation for the reason given where it is published below.
+        if (have) {
+            std::lock_guard<std::mutex> wl(g_vrs.warp_mu);
+            const auto &o = views[0].pose.orientation;
+            g_vrs.warp_head_q[0] = o.x;
+            g_vrs.warp_head_q[1] = o.y;
+            g_vrs.warp_head_q[2] = o.z;
+            g_vrs.warp_head_q[3] = o.w;
+            g_vrs.warp_head_ok = true;
+        }
         // Task #35 piece 2: capture the runtime's frusta on the FIRST located
         // frame, so the affine has them before X4 creates its first world
         // shader module. Take 163's timing says that is comfortable -- first
@@ -15279,6 +15399,18 @@ void vr_thread() {
         XrCompositionLayerQuad quad_ui = {};
         const XrCompositionLayerBaseHeader *layers[2] = {nullptr, nullptr};
         uint32_t layer_count = 0;
+        // The full-screen menu warp: whether the image the runtime will take
+        // was turned, and to what. Read once, like the camera below, so both
+        // eyes declare the same orientation.
+        bool warp_live = false;
+        float warp_q[4] = {0.f, 0.f, 0.f, 1.f};
+        uint64_t warp_seq = 0;
+        {
+            std::lock_guard<std::mutex> wl(g_vrs.warp_mu);
+            warp_live = g_vrs.warp_live;
+            std::memcpy(warp_q, g_vrs.warp_live_q, sizeof warp_q);
+            warp_seq = g_vrs.warp_live_seq;
+        }
         if (have && should_render && g_vrs.sc_ready.load() &&
             g_vrs.released.load() > 0) {
             // #75: X4's camera, read ONCE for this frame on this thread.
@@ -15482,6 +15614,13 @@ void vr_thread() {
                 g_vrs.last_decl_q[1] = q[1];
                 g_vrs.last_decl_q[2] = q[2];
                 g_vrs.last_decl_q[3] = q[3];
+                // The menu warp turns from THIS: the orientation X4's frame
+                // was rendered with, before any warp is declared over it.
+                if (e == 0) {
+                    std::lock_guard<std::mutex> wl(g_vrs.warp_mu);
+                    std::memcpy(g_vrs.warp_decl_q, q, sizeof q);
+                    g_vrs.warp_decl_ok = true;
+                }
                 if (e == 0 && poselog_enabled()) {
                     // **Task #75, at FULL rate and on ONE line.**
                     //
@@ -15667,6 +15806,19 @@ void vr_thread() {
                 // from the branch I happened to instrument; #75's
                 // declare_rendered_pos() and the plain runtime position are
                 // different points and either can be live.
+                // The menu warp's turn, declared over the rendered orientation:
+                // the image the runtime takes was redrawn for it. The position
+                // stays the rendered eye's, because a turn about the eye moves
+                // no eye.
+                if (warp_live) {
+                    pv[e].pose.orientation.x = warp_q[0];
+                    pv[e].pose.orientation.y = warp_q[1];
+                    pv[e].pose.orientation.z = warp_q[2];
+                    pv[e].pose.orientation.w = warp_q[3];
+                    if (e == 0)
+                        g_vrs.warp_declared.fetch_add(
+                            1, std::memory_order_relaxed);
+                }
                 if (e == 0) {
                     g_vrs.decl_x.store(pv[0].pose.position.x,
                                        std::memory_order_relaxed);
@@ -15914,6 +16066,24 @@ void vr_thread() {
         x4vr::xr::frame_end(g_vrs.session, layers, layer_count);
         if (layer_count)
             g_vrs.submitted.fetch_add(1, std::memory_order_relaxed);
+        // A release between reading the warp above and the runtime taking the
+        // image would pair this frame's declaration with the next image. No
+        // lock can close that without holding one across xrEndFrame, which
+        // this file forbids (takes 298-302), so it is counted instead.
+        // An upper bound: the release may also have come after the runtime
+        // took its image, which is harmless, and nothing here can tell which.
+        {
+            bool live_after = false;
+            uint64_t seq_after = 0;
+            {
+                std::lock_guard<std::mutex> wl(g_vrs.warp_mu);
+                live_after = g_vrs.warp_live;
+                seq_after = g_vrs.warp_live_seq;
+            }
+            if (layer_count && seq_after != warp_seq &&
+                (warp_live || live_after))
+                g_vrs.warp_raced.fetch_add(1, std::memory_order_relaxed);
+        }
         // Only now: a frame has been begun, located and ended, so the runtime
         // is demonstrably taking frames and the present thread may acquire.
         g_vrs.loop_live.store(true, std::memory_order_release);
@@ -16348,6 +16518,14 @@ void vr_report(const char *when) {
              (unsigned long long)g_vrs.released.load(),
              (unsigned long long)g_vrs.acquire_fail.load(),
              (unsigned long long)refused);
+    X4VR_LOG("menu warp (%s): %llu frame(s) asked, %llu redrawn "
+             "(%llu recorded), %llu headset frame(s) declared with the "
+             "head's orientation, %llu possible race(s)",
+             when, (unsigned long long)g_vrs.warp_asked.load(),
+             (unsigned long long)g_vrs.warp_done.load(),
+             (unsigned long long)g_sbs.vr_warped(),
+             (unsigned long long)g_vrs.warp_declared.load(),
+             (unsigned long long)g_vrs.warp_raced.load());
     // The DENOMINATOR for the line above, from the runtime rather than from
     // anyone's report of a headset setting. `blits` is new content per second;
     // divided by this it says how many of the headset's frames were a REPEAT,
@@ -16377,6 +16555,9 @@ void vr_shutdown() {
     // this runs from vkDestroyDevice, after X4 has stopped presenting.
     if (g_vrs.sc_ready.load()) {
         std::lock_guard<std::mutex> lock(g_vrs.sc_mu);
+        // The menu warp holds views on the runtime's images.
+        for (VkImage im : g_vrs.sc.images)
+            g_sbs.forget_target(im);
         x4vr::xr::swapchain_destroy(g_vrs.sc);
         g_vrs.sc_ready.store(false);
     }
@@ -16994,6 +17175,22 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
                 } else {
                     X4VR_LOG("cursor: could not resolve every entry point — "
                              "overlay off");
+                }
+            }
+            {
+                x4vr::CursorFns wf;
+#define RESOLVE(name) wf.name = (PFN_vk##name)gdpa(*out, "vk" #name);
+                X4VR_CURSOR_FNS(RESOLVE)
+#undef RESOLVE
+                if (wf.complete()) {
+                    g_sbs.configure_warp(wf);
+                    X4VR_LOG("menu warp: armed — a full-screen menu is "
+                             "redrawn for where the head points and declared "
+                             "there, so a streamer's sharp middle follows the "
+                             "gaze");
+                } else {
+                    X4VR_LOG("menu warp: could not resolve every entry point "
+                             "— full-screen menus are copied still");
                 }
             }
         } else {

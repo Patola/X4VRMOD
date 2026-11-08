@@ -4925,6 +4925,76 @@ def main(path):
     elif la_patched:
         print("loadart  patched; whether the picture is ours is Patola's to say")
 
+    # --- the full-screen menu warp (layer/x4vr_menu_warp.hpp) ---------------
+    #
+    # A full-screen menu redrawn for where the head points and declared there,
+    # so a streamer's foveated middle follows the gaze (takes 414-420). The only
+    # path since take 420, so gate on intent by the build: from take 421 a run
+    # that made the runtime's swapchain must have armed it. Takes 419 and 420
+    # ran it as an A/B (X4VR_MENU_WARP=ab, an arm per menu or per map), and
+    # their lines still read. A period of 2 s or more ON must have been
+    # redrawn AND declared; an OFF arm, neither. Whether the sharp area followed
+    # the head is Patola's to say.
+    mw_take = int((re.search(r"X4VR_TAKE=(\d+)", run or "") or
+                   re.match(r"(0)", "0")).group(1))
+    mw_val = (re.search(r"\bX4VR_MENU_WARP=(\S+)", run or "") or
+              re.match(r"()", "")).group(1)
+    mw_asked = (mw_val not in ("", "0")) or (
+        mw_take >= 421 and "layer   vr: swapchain " in text)
+    mw_armed = "menu warp: armed" in text
+    mw_failed = re.search(r"menu warp: could not (?:create the|resolve) ([^—]*)", text)
+    # Take 419: "full-screen menu #N down after X s, ON —"; take 420: "period
+    # #N over after X s, ON (menus closed) —"; since: "period #N over after X
+    # s —", which is ON.
+    mw_menus = [(n_, dur, arm or "ON", *rest) for n_, dur, arm, *rest in re.findall(
+        r"menu warp: (?:full-screen menu|period) #(\d+) (?:down|over) after "
+        r"([\d.]+) s(?:, (ON|OFF)(?: \([^)]*\))?)? — "
+        r"(\d+) frame\(s\) asked, (\d+) redrawn, turned up to ([\d.]+) deg; "
+        r"(\d+) headset frame\(s\) declared with the head's orientation, "
+        r"(\d+) possible race\(s\)", text)]
+    mw_maps = re.findall(r"milestone: map (\d+) opened, redraw (ON|OFF)", text)
+    if mw_asked and not mw_armed:
+        fails.append("the menu warp never armed"
+                     + (f" ({'X4VR_MENU_WARP=' + mw_val if mw_val else 'a VR run'})")
+                     + (f": could not {mw_failed.group(1).strip()}"
+                        if mw_failed else ""))
+    elif mw_failed and mw_asked:
+        fails.append("the menu warp could not "
+                     f"{mw_failed.group(1).strip()} — menus were copied still")
+    elif mw_val == "0" and (mw_armed or mw_menus):
+        fails.append("the menu warp acted in a run that did not ask for it")
+    if mw_armed or mw_menus:
+        print(f"menuwarp {len(mw_menus)} period(s) with full-screen menus up"
+              + (f", asked as {mw_val}" if mw_val else "")
+              + (f"; the map opened {len(mw_maps)} time(s): "
+                 + " ".join(a for _n, a in mw_maps) if mw_maps else ""))
+        on_decl = races = 0
+        for n_, dur, arm, asked, done, deg, decl, race in mw_menus:
+            dur_f = float(dur)
+            print(f"menuwarp   #{n_} {arm:3s} {dur_f:6.1f} s: {asked} asked, "
+                  f"{done} redrawn, turned up to {deg} deg, {decl} headset "
+                  f"frame(s) declared, {race} possible race(s)")
+            if arm == "ON":
+                on_decl += int(decl)
+                races += int(race)
+                if dur_f >= 2.0 and mw_asked and int(done) == 0:
+                    fails.append(f"menu warp: period #{n_} was ON for {dur_f:.1f} s "
+                                 f"and nothing was redrawn")
+                elif dur_f >= 2.0 and mw_asked and int(decl) == 0:
+                    fails.append(f"menu warp: period #{n_} was redrawn {done} "
+                                 f"time(s) and never declared with the head's "
+                                 f"orientation — the window would swing")
+            elif int(done) or int(decl):
+                fails.append(f"menu warp: period #{n_} was the A/B's OFF arm and "
+                             f"still got {done} redraw(s), {decl} declaration(s)")
+        if on_decl:
+            print(f"menuwarp   races: {races} of {on_decl} declared headset "
+                  f"frame(s) ({100.0 * races / on_decl:.2f}%) may have paired a "
+                  f"declaration with the next image — an upper bound")
+        if any(m[2] == "ON" for m in mw_menus):
+            print("menuwarp   whether the sharp area followed the head is "
+                  "Patola's to say")
+
     # --- 6DOF option B's check: how near the eye X4's UI draws sit ---------
     #
     # Banded view depths of the perspective UI draws (X4VR_DUMP_MATRICES).
@@ -5563,8 +5633,43 @@ def main(path):
     elif lr_arm and re.search(r"\bX4VR_HEADLOOK_WRITE=1\b", run or "") and \
             int((re.search(r"X4VR_TAKE=(\d+)", run or "") or
                  re.match(r"(0)", "0")).group(1)) >= 369:
-        fails.append("head-look armed but the pointer was never recentred "
-                     "after the load — the cursor starts outside the view")
+        # Only a run that gave it the chance. The injector recentres once X4's
+        # clock has run 2 s with no full-screen menu up, which in passing runs
+        # is the instant of the ARMED milestone. Takes 416 and 417 opened the
+        # map before it and never had 6 s without a menu again, and failed
+        # here on a healthy pointer; takes 366-368, the dead cursor, had 209 s
+        # and more. So a FAIL needs 20 s without one after ARMED.
+        t_arm = float(lr_arm.group(1))
+        lr_ev = [(float(t), k) for t, k in re.findall(
+            r"\[\s*([\d.]+)\]\s+inject\s+ui: full-screen menu (UP|DOWN)", text)]
+        lr_up = False
+        for t, k in lr_ev:
+            if t <= t_arm:
+                lr_up = k == "UP"
+        lr_start = None if lr_up else t_arm
+        lr_long = 0.0
+        for t, k in lr_ev:
+            if t <= t_arm:
+                continue
+            if k == "UP":
+                if lr_start is not None:
+                    lr_long = max(lr_long, t - lr_start)
+                    lr_start = None
+            elif lr_start is None:
+                lr_start = t
+        lr_ts = re.findall(r"^\[\s*([\d.]+)\]", text, re.M)
+        if lr_start is not None and lr_ts:
+            lr_long = max(lr_long, float(lr_ts[-1]) - lr_start)
+        if lr_long >= 20.0:
+            fails.append("head-look armed but the pointer was never recentred "
+                         "after the load — the cursor starts outside the view "
+                         f"({lr_long:.0f} s without a full-screen menu after "
+                         "ARMED)")
+        else:
+            print(f"pointer  not recentred, and not asked to be: after head-look "
+                  f"ARMED the longest stretch without a full-screen menu was "
+                  f"{lr_long:.1f} s, under the 20 s a FAIL needs (the recentre "
+                  f"waits for 2 s of X4's clock with no menu up)")
 
     # --- the FSR fix: X4's FSR in both eyes (take 380) ----------------------
     #

@@ -79,6 +79,18 @@ target_include_directories(x4vr_test_cursor_place PRIVATE ${Vulkan_INCLUDE_DIRS}
 add_executable(x4vr_test_cursor_render cursor_render.cpp)
 target_link_libraries(x4vr_test_cursor_render PRIVATE Vulkan::Vulkan)
 
+# The full-screen menu warp (layer/x4vr_menu_warp.hpp): its arithmetic against
+# plain trigonometry with no GPU, then the pass itself on one, under the
+# validation layer, against a CPU rendering of the same filter.
+add_executable(x4vr_test_menu_warp_math menu_warp_math.cpp)
+target_include_directories(x4vr_test_menu_warp_math PRIVATE ${Vulkan_INCLUDE_DIRS})
+add_executable(x4vr_test_menu_warp_render menu_warp_render.cpp)
+target_link_libraries(x4vr_test_menu_warp_render PRIVATE Vulkan::Vulkan)
+# ...and in the present-time composite, which moves X4's eye image between
+# layouts around it.
+add_executable(x4vr_test_sbs_menu_warp sbs_menu_warp.cpp)
+target_link_libraries(x4vr_test_sbs_menu_warp PRIVATE Vulkan::Vulkan)
+
 # The OpenXR bring-up, on a real GPU and a real runtime. Links libvulkan but
 # NOT libopenxr_loader: common/x4vr_xr.hpp dlopen()s the loader, because the
 # layer is injected into someone else's process and a missing DT_NEEDED there

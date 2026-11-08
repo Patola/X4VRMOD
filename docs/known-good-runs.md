@@ -1178,3 +1178,25 @@ CI's `.pkg.tar.zst` from run 42340791566 installed under `/usr`, Steam's launch 
 Steam Linux Runtime, the injector from `/usr/lib/x4vrmod` loaded there and the layer active on X4,
 a VR session on its device, 2646 seated ticks, lean on, 63.9 mm from the headset, libgamemodeauto in
 X4, and `env: argv = ./X4 -skipintro -nocputhrottle -nosoundthrottle`.
+
+## Take 419 (2026-11-08) — the full-screen menu warp on WiVRn, A/B (uncommitted, on 7ef2dff)
+
+`./launch/x4vr-launch.sh`, setup 5 with WiVRn, Foveated encoding at its default. `score_run.py` PASS,
+`/tmp/x4vr-take419.log`; Patola: with the warp on the map was clear, off as before, no discomfort.
+The A/B then switched at every full-screen menu (fixed after: only at the map).
+
+```
+X4VR_MENU_WARP=ab X4VR_TAKE=419 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=4000 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=8000 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=4000x4000 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_UPSCALE=fsr_quality X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_GAMEMODE=1 X4VR_STEER_PICK=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOADING_ART=1 X4VR_PROJ_INVPROJ=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take419.log X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+```
+
+## Take 420 (2026-11-08) — the full-screen menu warp on Steam Link, A/B; tagged `take-420-menu-warp`
+
+The same line under SteamVR through Steam Link, setup 5. `score_run.py` PASS, `/tmp/x4vr-take420.log`:
+the map opened 5 times, ON OFF ON OFF ON, no possible race. Patola: "very clearly when it was on and
+it worked perfectly"; the window stays put in space. The tagged code is this run's ON arm with the
+knob and its A/B removed: the warp is the only path, and the line below without `X4VR_MENU_WARP=ab`
+is its command.
+
+```
+X4VR_MENU_WARP=ab X4VR_TAKE=420 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=4000 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=8000 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=4000x4000 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_UPSCALE=fsr_quality X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_GAMEMODE=1 X4VR_STEER_PICK=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOADING_ART=1 X4VR_PROJ_INVPROJ=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take420.log X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+```

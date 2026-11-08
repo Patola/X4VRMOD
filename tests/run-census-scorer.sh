@@ -1754,8 +1754,22 @@ lra='[  999950.000] inject  milestone: head-look write ARMED — the view now fo
 lrr='[  999950.100] inject  pointer: recentred after the load from 1756,311 to 1408,1408 — X4'"'"'s start leaves it at the window'"'"'s edge, outside what the headset shows'
 { cat /tmp/census-lr-base.log; printf '%s\n' "$lra" "$lrr"; } > /tmp/census-lr-ok.log
 want "load-recentre: recentred -> reported" /tmp/census-lr-ok.log pointer "pointer recentred after 1 load(s): from 1756,311 (+0.1 s from head-look ARMED)"
-{ cat /tmp/census-lr-base.log; printf '%s\n' "$lra"; } > /tmp/census-lr-no.log
+# A FAIL needs a chance to recentre: 20 s after ARMED with no full-screen menu.
+# Here the log runs 30 s on with none.
+lrend='[  999980.000] layer   vr copy (periodic): swapchain=1 blits=900 released=900 acquire_failed=0 refused=0'
+{ cat /tmp/census-lr-base.log; printf '%s\n' "$lra" "$lrend"; } > /tmp/census-lr-no.log
 want "load-recentre: armed, never recentred -> FAIL" /tmp/census-lr-no.log "FAIL|  - " "the pointer was never recentred after the load"
+# Takes 416 and 417: the map opened before the recentre and stayed open; after
+# it, 5 s to the end. A healthy pointer, so a note and no FAIL.
+lrup='[  999949.500] inject  ui: full-screen menu UP — the cursor is drawn through the UI canvas'
+lrdown='[  999975.000] inject  ui: full-screen menu DOWN — the cursor is drawn at the raw pointer'
+{ cat /tmp/census-lr-base.log; printf '%s\n' "$lrup" "$lra" "$lrdown" "$lrend"; } > /tmp/census-lr-menu.log
+if python3 tools/score_run.py /tmp/census-lr-menu.log 2>&1 | grep -qF "never recentred after the load"; then
+    bad "load-recentre: a menu up from before ARMED, 5 s without one -> not failed"
+else
+    ok "load-recentre: a menu up from before ARMED, 5 s without one -> not failed"
+fi
+want "load-recentre: no chance -> says so" /tmp/census-lr-menu.log pointer "the longest stretch without a full-screen menu was 5.0 s"
 sed 's/env: run = /env: run = X4VR_TAKE=368 X4VR_HEADLOOK_WRITE=1 /' "$BASE" > /tmp/census-lr-old.log
 { cat /tmp/census-lr-old.log; printf '%s\n' "$lra"; } > /tmp/census-lr-old2.log
 if python3 tools/score_run.py /tmp/census-lr-old2.log 2>&1 | grep -qF "never recentred after the load"; then
@@ -2101,6 +2115,69 @@ else
 fi
 want "ffx: a log from before the fix -> not checked" /tmp/census-f3-base.log "ffx " "not checked: X4VR_UPSCALE=fsr3_balanced, but this log predates the FSR 3 fix"
 absent "ffx: not asked, no lines -> silent" "$BASE" "ffx "
+
+# The full-screen menu warp (layer/x4vr_menu_warp.hpp, takes 414-420): the only
+# path since take 420, so a VR run from take 421 must have armed it.
+for f in '"menu warp: armed — a full-screen menu is "' \
+    '"menu warp: period #%llu over after %.1f s — "' \
+    '"%llu frame(s) asked, %llu redrawn, turned up to %.1f deg; "' \
+    '"%llu headset frame(s) declared with the head'"'"'s orientation, "' \
+    '"%llu possible race(s)"'; do
+    if grep -qF -- "$f" layer/x4vr_layer.cpp; then
+        ok "menuwarp: the layer prints $f"
+    else
+        bad "menuwarp: the layer's format moved: $f"
+    fi
+done
+mwsc='[  999949.000] layer   vr: swapchain 4000x4000 x2 layers, 3 image(s), format 50 — X4'"'"'s eye image is 4000x4000 x2 format 44, so the copy is byte-preserving'
+sed 's/env: run = /env: run = X4VR_TAKE=421 /' "$BASE" > /tmp/census-mw-base.log
+printf '%s\n' "$mwsc" >> /tmp/census-mw-base.log
+mwa='[  999950.000] layer   menu warp: armed — a full-screen menu is redrawn for where the head points and declared there, so a streamer'"'"'s sharp middle follows the gaze'
+mwon='[  999970.000] layer   menu warp: period #1 over after 20.0 s — 600 frame(s) asked, 600 redrawn, turned up to 31.5 deg; 1440 headset frame(s) declared with the head'"'"'s orientation, 3 possible race(s)'
+{ cat /tmp/census-mw-base.log; printf '%s\n' "$mwa" "$mwon"; } > /tmp/census-mw-ok.log
+want "menuwarp: a period -> listed, as ON" /tmp/census-mw-ok.log menuwarp "#1 ON    20.0 s: 600 asked, 600 redrawn, turned up to 31.5 deg, 1440 headset frame(s) declared, 3 possible race(s)"
+want "menuwarp: ...and the races as a share" /tmp/census-mw-ok.log menuwarp "races: 3 of 1440 declared headset frame(s) (0.21%)"
+if python3 tools/score_run.py /tmp/census-mw-ok.log 2>&1 | grep -qE "^  - .*menu warp"; then
+    bad "menuwarp: a healthy period -> FAILs"
+else
+    ok "menuwarp: a healthy period -> no FAIL"
+fi
+want "menuwarp: a VR run from take 421, never armed -> FAIL" /tmp/census-mw-base.log "FAIL|  - " "the menu warp never armed (a VR run)"
+sed 's/env: run = /env: run = X4VR_TAKE=421 /' "$BASE" > /tmp/census-mw-flat.log
+absent "menuwarp: take 421 with no VR swapchain -> silent" /tmp/census-mw-flat.log menuwarp
+if python3 tools/score_run.py /tmp/census-mw-flat.log 2>&1 | grep -qE "^  - .*menu warp"; then
+    bad "menuwarp: take 421 with no VR swapchain -> FAILs"
+else
+    ok "menuwarp: take 421 with no VR swapchain -> no FAIL"
+fi
+mwnone='[  999970.000] layer   menu warp: period #1 over after 20.0 s — 600 frame(s) asked, 0 redrawn, turned up to 31.5 deg; 0 headset frame(s) declared with the head'"'"'s orientation, 0 possible race(s)'
+{ cat /tmp/census-mw-base.log; printf '%s\n' "$mwa" "$mwnone"; } > /tmp/census-mw-none.log
+want "menuwarp: 20 s, nothing redrawn -> FAIL" /tmp/census-mw-none.log "FAIL|  - " "menu warp: period #1 was ON for 20.0 s and nothing was redrawn"
+mwnodecl='[  999970.000] layer   menu warp: period #1 over after 20.0 s — 600 frame(s) asked, 600 redrawn, turned up to 31.5 deg; 0 headset frame(s) declared with the head'"'"'s orientation, 0 possible race(s)'
+{ cat /tmp/census-mw-base.log; printf '%s\n' "$mwa" "$mwnodecl"; } > /tmp/census-mw-nodecl.log
+want "menuwarp: redrawn, never declared -> FAIL" /tmp/census-mw-nodecl.log "FAIL|  - " "never declared with the head's orientation"
+mwbrief='[  999970.000] layer   menu warp: period #1 over after 0.6 s — 0 frame(s) asked, 0 redrawn, turned up to 0.0 deg; 0 headset frame(s) declared with the head'"'"'s orientation, 0 possible race(s)'
+{ cat /tmp/census-mw-base.log; printf '%s\n' "$mwa" "$mwbrief"; } > /tmp/census-mw-brief.log
+if python3 tools/score_run.py /tmp/census-mw-brief.log 2>&1 | grep -qE "^  - .*menu warp"; then
+    bad "menuwarp: a 0.6 s period, nothing redrawn -> FAILs"
+else
+    ok "menuwarp: a 0.6 s period, nothing redrawn -> no FAIL"
+fi
+# Takes 419 and 420 ran it as an A/B; their lines still read, and an OFF arm
+# that was redrawn still fails.
+sed 's/env: run = /env: run = X4VR_MENU_WARP=ab X4VR_TAKE=420 /' "$BASE" > /tmp/census-mw-ab.log
+mwaab='[  999950.000] layer   menu warp: armed (X4VR_MENU_WARP=ab) — a full-screen menu is redrawn for where the head points and declared there, so a streamer'"'"'s sharp middle follows the gaze'
+mw419='[  999960.000] layer   menu warp: full-screen menu #1 down after 9.0 s, ON — 270 frame(s) asked, 270 redrawn, turned up to 20.0 deg; 640 headset frame(s) declared with the head'"'"'s orientation, 1 possible race(s)'
+mw420='[  999970.000] layer   menu warp: period #2 over after 15.0 s, OFF (menus closed) — 0 frame(s) asked, 12 redrawn, turned up to 0.0 deg; 30 headset frame(s) declared with the head'"'"'s orientation, 0 possible race(s)'
+mwmap='[  999961.000] layer   milestone: map 2 opened, redraw OFF — the sharp area should stay in the map'"'"'s middle'
+{ cat /tmp/census-mw-ab.log; printf '%s\n' "$mwaab" "$mw419" "$mwmap" "$mw420"; } > /tmp/census-mw-ab2.log
+want "menuwarp: take 419's per-menu line -> read" /tmp/census-mw-ab2.log menuwarp "#1 ON     9.0 s: 270 asked, 270 redrawn"
+want "menuwarp: take 420's map openings -> listed" /tmp/census-mw-ab2.log menuwarp "the map opened 1 time(s): OFF"
+want "menuwarp: an A/B's OFF arm redrawn -> FAIL" /tmp/census-mw-ab2.log "FAIL|  - " "menu warp: period #2 was the A/B's OFF arm and still got 12 redraw(s)"
+sed 's/env: run = /env: run = X4VR_MENU_WARP=0 /' "$BASE" > /tmp/census-mw-off.log
+printf '%s\n' "$mwaab" "$mw419" >> /tmp/census-mw-off.log
+want "menuwarp: X4VR_MENU_WARP=0, and it acted -> FAIL" /tmp/census-mw-off.log "FAIL|  - " "the menu warp acted in a run that did not ask for it"
+absent "menuwarp: not asked, nothing -> silent" "$BASE" menuwarp
 
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

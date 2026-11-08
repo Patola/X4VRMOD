@@ -28,6 +28,7 @@
 
 #include "../common/x4vr_log.hpp"
 #include "x4vr_cursor_draw.hpp"
+#include "x4vr_menu_warp.hpp"
 
 namespace x4vr {
 
@@ -122,6 +123,20 @@ public:
         cursor_.configure(device_, fns, mem);
     }
 
+    // The full-screen menu warp (x4vr_menu_warp.hpp). The same entry points as
+    // the cursor's, and configured apart from it: the cursor is a knob of its
+    // own.
+    void configure_warp(const CursorFns &fns) {
+        std::lock_guard<std::mutex> lock(mu_);
+        warp_.configure(device_, fns);
+    }
+
+    // The runtime's image going away: the warp holds views on it.
+    void forget_target(VkImage image) {
+        std::lock_guard<std::mutex> lock(mu_);
+        warp_.forget(image);
+    }
+
     // Images X4 should be handed instead of the real swapchain's, or nullptr
     // if this chain is not virtualized.
     const std::vector<VkImage> *eye_images(VkSwapchainKHR sc) {
@@ -170,6 +185,10 @@ public:
     uint64_t ui_blits_ = 0, ui_refused_ = 0;
     VkExtent2D vr_extent_{};
     uint32_t vr_layers_ = 0;
+    VkFormat vr_format_ = VK_FORMAT_UNDEFINED;
+    bool vr_warp_on_ = false, vr_last_warped_ = false;
+    MenuWarp::Params vr_warp_;
+    uint64_t vr_warped_ = 0;
     // Counted so the log can say "the blit ran N times" rather than the caller
     // inferring it from the absence of a complaint.
     uint64_t vr_blits_ = 0, vr_refused_ = 0;
@@ -251,11 +270,34 @@ public:
     // Cleared as soon as it is recorded, so a caller that stops asking stops
     // paying, and a frame where the runtime had no image ready simply does not
     // ask.
-    void request_vr_blit(VkImage dst, VkExtent2D extent, uint32_t layers) {
+    //
+    // With `warp`, the copy becomes the full-screen menu warp, turned as it
+    // says; `format` is then the runtime image's, for the warp's views. A warp
+    // that cannot be recorded falls back to the copy, and vr_last_warped() says
+    // which one this frame got, because the pose the frame is declared with
+    // follows from it.
+    void request_vr_blit(VkImage dst, VkExtent2D extent, uint32_t layers,
+                         VkFormat format = VK_FORMAT_UNDEFINED,
+                         const MenuWarp::Params *warp = nullptr) {
         std::lock_guard<std::mutex> lock(mu_);
         vr_dst_ = dst;
         vr_extent_ = extent;
         vr_layers_ = layers;
+        vr_format_ = format;
+        // Until the composite records it: a frame it never reaches is not one
+        // it warped.
+        vr_last_warped_ = false;
+        vr_warp_on_ = warp != nullptr && format != VK_FORMAT_UNDEFINED;
+        if (warp)
+            vr_warp_ = *warp;
+    }
+    bool vr_last_warped() {
+        std::lock_guard<std::mutex> lock(mu_);
+        return vr_last_warped_;
+    }
+    uint64_t vr_warped() {
+        std::lock_guard<std::mutex> lock(mu_);
+        return vr_warped_;
     }
 
     void request_ui_blit(VkImage src, VkImage dst, VkExtent2D extent) {
@@ -580,45 +622,88 @@ public:
                                  vr_layers_, c.eye.width, c.eye.height,
                                  c.eye_layers);
                 } else {
-                    const uint32_t n =
-                        vr_layers_ < c.eye_layers ? vr_layers_ : c.eye_layers;
-                    VkImageMemoryBarrier vb{};
-                    vb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-                    vb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    vb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    vb.image = vr_dst_;
-                    vb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0,
-                                           n};
-                    // Entirely overwritten, so its previous contents and layout
-                    // do not matter.
-                    vb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    vb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                    vb.srcAccessMask = 0;
-                    vb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                    fns_.CmdPipelineBarrier(
-                        cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
-                        nullptr, 1, &vb);
-                    VkImageCopy vr{};
-                    vr.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, n};
-                    vr.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, n};
-                    vr.extent = {c.eye.width, c.eye.height, 1};
-                    fns_.CmdCopyImage(cb, src,
-                                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                      vr_dst_,
-                                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
-                                      &vr);
-                    vb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                    vb.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                    vb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                    vb.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-                    fns_.CmdPipelineBarrier(
-                        cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
-                        nullptr, 0, nullptr, 1, &vb);
+                    // A full-screen menu, redrawn for the head
+                    // (x4vr_menu_warp.hpp), when the caller asked and it can
+                    // be. It samples the eye image, so the eye image goes to
+                    // SHADER_READ_ONLY and back to TRANSFER_SRC for what
+                    // follows here, which expects it there.
+                    bool warped = false;
+                    if (vr_warp_on_ && warp_.ready()) {
+                        VkImageMemoryBarrier sb{};
+                        sb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                        sb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        sb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        sb.image = src;
+                        sb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1,
+                                               0, c.eye_layers};
+                        sb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                        sb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                        sb.srcAccessMask = 0;
+                        sb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                        fns_.CmdPipelineBarrier(
+                            cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
+                            nullptr, 0, nullptr, 1, &sb);
+                        warped = warp_.record(
+                            cb, {src, c.format, c.eye, c.eye_layers},
+                            {vr_dst_, vr_format_, vr_extent_, vr_layers_},
+                            vr_warp_);
+                        sb.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                        sb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                        sb.srcAccessMask = 0;
+                        sb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                        fns_.CmdPipelineBarrier(
+                            cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                            nullptr, 1, &sb);
+                    }
+                    vr_last_warped_ = warped;
+                    if (warped) {
+                        vr_warped_++;
+                    } else {
+                        const uint32_t n = vr_layers_ < c.eye_layers
+                                               ? vr_layers_
+                                               : c.eye_layers;
+                        VkImageMemoryBarrier vb{};
+                        vb.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                        vb.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        vb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        vb.image = vr_dst_;
+                        vb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1,
+                                               0, n};
+                        // Entirely overwritten, so its previous contents and
+                        // layout do not matter.
+                        vb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                        vb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                        vb.srcAccessMask = 0;
+                        vb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                        fns_.CmdPipelineBarrier(
+                            cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                            nullptr, 1, &vb);
+                        VkImageCopy vr{};
+                        vr.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0,
+                                             n};
+                        vr.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0,
+                                             n};
+                        vr.extent = {c.eye.width, c.eye.height, 1};
+                        fns_.CmdCopyImage(
+                            cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                            vr_dst_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                            &vr);
+                        vb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                        vb.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                        vb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                        vb.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                        fns_.CmdPipelineBarrier(
+                            cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
+                            nullptr, 0, nullptr, 1, &vb);
+                    }
                     vr_blits_++;
                 }
                 vr_dst_ = VK_NULL_HANDLE;
+                vr_warp_on_ = false;
             }
             // ---- task #57 layer B: the UI, staging -> its own swapchain ----
             //
@@ -751,8 +836,10 @@ public:
         if (device_ && fns_.DeviceWaitIdle)
             fns_.DeviceWaitIdle(device_);
         // Before the chains: the overlay's framebuffers and views are built on
-        // the eye images, and a view must not outlive the image it views.
+        // the eye images, and a view must not outlive the image it views. The
+        // warp's too.
         cursor_.shutdown();
+        warp_.shutdown();
         for (auto &kv : chains_)
             destroy_chain(kv.second);
         chains_.clear();
@@ -779,7 +866,10 @@ private:
                              : (ci.imageArrayLayers ? ci.imageArrayLayers : 1);
         ii.samples = VK_SAMPLE_COUNT_1_BIT;
         ii.tiling = VK_IMAGE_TILING_OPTIMAL;
-        ii.usage = ci.imageUsage | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        // SAMPLED for the full-screen menu warp, which reads the eye image
+        // where the copy into the runtime's image would.
+        ii.usage = ci.imageUsage | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                   VK_IMAGE_USAGE_SAMPLED_BIT;
         ii.sharingMode = ci.imageSharingMode;
         ii.queueFamilyIndexCount = ci.queueFamilyIndexCount;
         ii.pQueueFamilyIndices = ci.pQueueFamilyIndices;
@@ -831,8 +921,10 @@ private:
         // a resize destroys these images while the overlay still holds views
         // and framebuffers on them.
         for (VkImage im : c.eye_images)
-            if (im)
+            if (im) {
                 cursor_.forget(im);
+                warp_.forget(im);
+            }
         for (VkImage im : c.eye_images)
             if (im)
                 fns_.DestroyImage(device_, im, nullptr);
@@ -912,6 +1004,7 @@ private:
     VkPhysicalDeviceMemoryProperties mem_{};
     std::unordered_map<VkSwapchainKHR, Chain> chains_;
     CursorOverlay cursor_;
+    MenuWarp warp_;
     VkExtent2D cursor_eye_{}; // last non-zero eye cursor_report() saw
 };
 
