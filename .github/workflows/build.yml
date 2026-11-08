@@ -2,8 +2,9 @@
 #
 # Tests, and builds every package on the distribution it's for, because each links that
 # distribution's Qt. A tag vX.Y.Z also makes a draft release with all of them, to read and
-# publish by hand. Nothing here has X4 or a GPU: what needs X4 skips, and what drives the layer
-# runs on Mesa's software Vulkan (packaging/ci/run-tests.sh).
+# publish by hand; a release candidate's tag, vX.Y.Z-rcN, makes it a pre-release. Nothing here
+# has X4 or a GPU: what needs X4 skips, and what drives the layer runs on Mesa's software
+# Vulkan (packaging/ci/run-tests.sh).
 name: Build
 
 on:
@@ -164,5 +165,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tools/release-notes.py "$GITHUB_REF_NAME" > notes.md
-          gh release create "$GITHUB_REF_NAME" --draft --title "$GITHUB_REF_NAME" \
+          # A release candidate (v1.0.0-rc1) is a pre-release, so it isn't offered as the latest.
+          pre=$(case "$GITHUB_REF_NAME" in *-rc*) echo --prerelease ;; esac)
+          gh release create "$GITHUB_REF_NAME" --draft $pre --title "$GITHUB_REF_NAME" \
             --notes-file notes.md $(find artifacts -type f)

@@ -80,7 +80,7 @@ install(FILES README.md docs/releases.md DESTINATION share/doc/x4vrmod)
 # The .deb and .rpm (packaging/ci/package-cpack.sh; the zip and Arch's package have their own
 # ways). Each lists what it can't find by looking at what the programs link: gamescope, and the
 # OpenXR and Vulkan loaders, which are only dlopen'd. A tag's version is its own; between tags
-# it sorts after the last tag, like 0.9.9+16.ge052f4e.
+# it sorts after the last tag, like 0.9.9+16.ge052f4e, and before the next.
 execute_process(
     COMMAND git describe --tags --always --match "v[0-9]*"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
@@ -89,6 +89,9 @@ execute_process(
     ERROR_QUIET)
 string(REGEX REPLACE "^v" "" X4VR_PACKAGE_VERSION "${X4VR_DESCRIBE}")
 string(REGEX REPLACE "-([0-9]+)-g" "+\\1.g" X4VR_PACKAGE_VERSION "${X4VR_PACKAGE_VERSION}")
+# A release candidate, v1.0.0-rc1, sorts before its release only with "~": dpkg reads
+# 1.0.0-rc1 as newer than 1.0.0, and rpm refuses a "-" in a version.
+string(REGEX REPLACE "-(rc[0-9]+)" "~\\1" X4VR_PACKAGE_VERSION "${X4VR_PACKAGE_VERSION}")
 if(NOT X4VR_PACKAGE_VERSION MATCHES "^[0-9]")
     set(X4VR_PACKAGE_VERSION "0.0.0+${X4VR_PACKAGE_VERSION}")
 endif()

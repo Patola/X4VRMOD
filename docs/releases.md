@@ -20,7 +20,11 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
-## Unreleased
+## v1.0.0-rc1 — 2026-11-08 — Release candidate for 1.0: sharp menus when streaming, F6 everywhere, the launcher in five languages
+
+The first release candidate for 1.0. If nothing turns up that needs fixing, this is what 1.0
+will be; if something does, a second candidate comes first. Packages call it `1.0.0~rc1`
+(Arch: `1.0.0rc1`), which sorts before 1.0.0, so 1.0 will install over it as an upgrade.
 
 * **The launcher speaks Brazilian Portuguese, French, Russian and German**, as well as English: the
   window, its messages and its help. It starts in your system's language, and the Language list

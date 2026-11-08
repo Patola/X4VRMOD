@@ -11,7 +11,7 @@ Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
 **[docs/frame-analysis.md](docs/frame-analysis.md)**; the traps X4 sets for
 modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 
-> **Status: v0.9.10 — playable in VR** ([release notes](docs/releases.md)).
+> **Status: v1.0.0-rc1 — the release candidate for 1.0, playable in VR** ([release notes](docs/releases.md)).
 > X4 runs in VR with in-engine stereo (per-eye lighting), head-look and lean
 > in the cockpit, head-look on foot, the UI on a canvas at the angle X4
 > intended, every menu reachable and lined up with the cursor, and the
@@ -19,8 +19,9 @@ modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 > steering targets at its ring. The external views (F2/F3/F4) are the whole
 > scene too, and the cinematic view (F6) a steady window with its overlay
 > filling it. X4's upscalers, FSR 1 and FSR 3, work in both eyes
-> ([how to choose](#resolution-and-upscaling)). Next: packaging and a launcher
-> ([plan](docs/packaging-plan.md)). The start menu as the whole
+> ([how to choose](#resolution-and-upscaling)). A launcher, in five languages,
+> installs it and starts it ([install](#install)). Next: 1.0, once this release
+> candidate has been played on other people's machines. The start menu as the whole
 > scene is an optional future feature. An earlier proof of
 > concept using OpenTrack head-tracking + vkShade/SuperDepth3D depth-image
 > reconstruction is preserved
@@ -101,8 +102,8 @@ blocks every frame.
 | The eye distance from the headset, following its dial | done | **`v0.9.10`** |
 | DLSS in both eyes (`X4VR_UPSCALE=dlss_*`) | not yet played in a headset | **`v0.9.10`** |
 | GameMode | done | **`v0.9.10`** |
-| Full-screen menus sharp to their edges when streaming (the streamer's sharp middle follows your gaze) | done | `take-420-menu-warp` |
-| The launcher and its help in English, Brazilian Portuguese, French, Russian and German | first draft, corrections welcome | next release |
+| Full-screen menus sharp to their edges when streaming (the streamer's sharp middle follows your gaze) | done | **`v1.0.0-rc1`** |
+| The launcher and its help in English, Brazilian Portuguese, French, Russian and German | first draft, corrections welcome | **`v1.0.0-rc1`** |
 | The start menu as the whole scene (menu at its size in front, the 3D scene all around) | optional, future — not scheduled | — |
 | The desktop view optional while in the headset (est. 3–5% fps; [DESIGN.md](DESIGN.md#late-features-postponed-not-scheduled)) | late feature, postponed | — |
 | Volumetric nebula in stereo (Matrix #79B, CEO's Doubt) | done | **`v0.9.1`** |
