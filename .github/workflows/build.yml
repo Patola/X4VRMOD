@@ -21,11 +21,14 @@ jobs:
     runs-on: ubuntu-latest
     container: archlinux:latest
     steps:
+      # glibc-locales so the window can be shown in each language at all, and ttf-dejavu,
+      # the widest of the common fonts, so the window test measures their worst case: the
+      # image has no fonts, and with none the widths it measured meant nothing (0880a1d).
       - name: Install the tools
         run: >
           pacman -Syu --noconfirm --needed base-devel cmake git qt6-base vulkan-headers
           vulkan-icd-loader openxr python python-numpy python-pillow zlib zip unzip binutils
-          vulkan-swrast vulkan-validation-layers spirv-tools gettext glibc-locales
+          vulkan-swrast vulkan-validation-layers spirv-tools gettext glibc-locales ttf-dejavu
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0

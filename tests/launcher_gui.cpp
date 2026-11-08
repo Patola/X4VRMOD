@@ -17,6 +17,7 @@
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
+#include <QFontDatabase>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
@@ -599,10 +600,18 @@ static void test_help(const std::string &helpDir) {
     }
 }
 
-// Every language in the window's 800 pixels: no button or checkbox narrower than its
-// words, nothing past the right edge. Translations run longer than English more often
-// than not, and the window doesn't grow.
+// Every language at the sizes desktops use (Qt's offscreen default is 9 pt; KDE's is
+// 10, GNOME's and Ubuntu's 11): no button or checkbox narrower than its words, nothing
+// past the right edge, the banner across the window. The window grows past its 800
+// pixels for words that need it (Russian at 11 pt: 943 in Noto Sans, 1006 in DejaVu
+// Sans, the widest of the common fonts), up to 1100, which a 1366-pixel laptop screen
+// still shows whole: a translation that needs more must say it shorter.
 static void test_languages_fit(const std::string &home, const Layout &layout) {
+    if (QFontDatabase::families().isEmpty()) {
+        printf("skip  the languages' widths: this system has no fonts to measure words with\n");
+        return;
+    }
+    const QFont was = QApplication::font();
     QTranslator qt;
     for (const Language &l : kLanguages) {
         const std::string code = l.code;
@@ -612,32 +621,45 @@ static void test_languages_fit(const std::string &home, const Layout &layout) {
         }
         // Without its catalogue every language would fit, being English.
         check(code == "en" || gui::qtr("Play") != "Play", code + ": the window is in it");
-        Window::Options o;
-        o.live = false;
-        Window w(home, o);
-        w.show();
-        // Every fix button at once, which is the widest the rows get.
-        auto rows = good_rows();
-        replace(rows, row("patches", Status::Warn, "X4 build not supported yet", "", "details"));
-        replace(rows, row("vr", Status::Block, "Headset not connected",
-                          "Connect from the WiVRn app in the headset.", "retry"));
-        replace(rows, row("mod", Status::Block, "Mod not installed",
-                          "The x4vrmod extension isn't in X4's folder.", "install"));
-        w.showChecks(rows);
-        QStringList cut;
-        for (QWidget *c : w.findChildren<QWidget *>()) {
-            auto *b = qobject_cast<QAbstractButton *>(c);
-            auto *box = qobject_cast<QComboBox *>(c);
-            if ((!b && !box) || !c->isVisibleTo(&w))
-                continue;
-            const int right = c->mapTo(&w, QPoint(c->width(), 0)).x();
-            // A list box shortens what it shows; a button can't.
-            if (right > w.width() || (b && c->width() < c->sizeHint().width()))
-                cut << (b ? b->text() : box->currentText());
+        for (const qreal points : {was.pointSizeF(), 10.0, 11.0}) {
+            QFont f = was;
+            f.setPointSizeF(points);
+            QApplication::setFont(f);
+            Window::Options o;
+            o.live = false;
+            Window w(home, o);
+            w.show();
+            // Every fix button at once, which is the widest the rows get.
+            auto rows = good_rows();
+            replace(rows, row("patches", Status::Warn, "X4 build not supported yet", "", "details"));
+            replace(rows, row("vr", Status::Block, "Headset not connected",
+                              "Connect from the WiVRn app in the headset.", "retry"));
+            replace(rows, row("mod", Status::Block, "Mod not installed",
+                              "The x4vrmod extension isn't in X4's folder.", "install"));
+            w.showChecks(rows);
+            QApplication::processEvents();
+            QStringList cut;
+            for (QWidget *c : w.findChildren<QWidget *>()) {
+                auto *b = qobject_cast<QAbstractButton *>(c);
+                auto *box = qobject_cast<QComboBox *>(c);
+                if ((!b && !box) || !c->isVisibleTo(&w))
+                    continue;
+                const int right = c->mapTo(&w, QPoint(c->width(), 0)).x();
+                // A list box shortens what it shows; a button can't.
+                if (right > w.width() || (b && c->width() < c->sizeHint().width()))
+                    cut << (b ? b->text() : box->currentText());
+            }
+            auto *banner = w.findChild<QLabel *>("banner");
+            const bool across = banner && (banner->pixmap().isNull() ||
+                                           qRound(banner->pixmap().deviceIndependentSize().width()) ==
+                                               w.width());
+            check(cut.isEmpty() && w.width() >= 800 && w.width() <= 1100 && across,
+                  code + " at " + QString::number(points).toStdString() + " pt (" +
+                      QFontInfo(f).family().toStdString() + "): fits in " + std::to_string(w.width()) +
+                      " pixels, the banner across" +
+                      (cut.isEmpty() ? std::string() : "; cut: " + cut.join(", ").toStdString()));
         }
-        check(cut.isEmpty() && w.width() == 800,
-              code + ": every button fits the window" +
-                  (cut.isEmpty() ? std::string() : ": " + cut.join(", ").toStdString()));
+        QApplication::setFont(was);
     }
     gui::apply_language("en", layout.locale_dir, qt);
 }

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-08 20:02+0100\n"
+"POT-Creation-Date: 2026-11-08 23:37+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -981,6 +981,16 @@ msgstr ""
 
 #: launcher/gui/window.cpp
 #, qt-format
+msgid "Play anyway"
+msgstr ""
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "X4 is running"
+msgstr ""
+
+#: launcher/gui/window.cpp
+#, qt-format
 msgid "%1 - supports X4 %2 - unofficial, not affiliated with Egosoft"
 msgstr ""
 
@@ -1072,11 +1082,6 @@ msgstr ""
 
 #: launcher/gui/window.cpp
 #, qt-format
-msgid "X4 is running"
-msgstr ""
-
-#: launcher/gui/window.cpp
-#, qt-format
 msgid "Checking..."
 msgstr ""
 
@@ -1091,11 +1096,6 @@ msgid "%1 pending action"
 msgid_plural "%1 pending actions"
 msgstr[0] ""
 msgstr[1] ""
-
-#: launcher/gui/window.cpp
-#, qt-format
-msgid "Play anyway"
-msgstr ""
 
 #: launcher/gui/window.cpp
 #, qt-format

@@ -38,6 +38,9 @@ namespace x4vr::launcher::gui {
 
 namespace {
 
+// The window's width as designed. It grows only when its own words need more: a
+// translation, or a desktop font larger than the one it was drawn with (Russian in an
+// 11 pt font needs about 900).
 constexpr int kWidth = 800;
 // The rows' order: what a player fixes first comes first.
 const char *const kRowIds[] = {"x4", "patches", "steam", "running", "gamescope",
@@ -73,6 +76,15 @@ QPixmap statusIcon(Status s, qreal ratio) {
         p.drawLine(QPointF(11, 5), QPointF(5, 11));
     }
     return pm;
+}
+
+// Play's colours: green, amber, or the theme's own with none.
+QString playStyle(const QString &colour) {
+    return colour.isEmpty() ? QString()
+                            : QString("QPushButton{background:%1;color:white;border:none;"
+                                      "border-radius:6px;padding:6px 18px}"
+                                      "QPushButton:hover{background:%2}")
+                                  .arg(colour, QColor(colour).lighter(112).name());
 }
 
 // Rich text, so Qt wraps a long one.
@@ -138,7 +150,7 @@ Window::Window(const std::string &home, const Options &options)
     reloadGames();
     syncSettings();
     updatePlay();
-    fitHeight();
+    fitSize();
     if (m_opt.live) {
         m_timer = new QTimer(this);
         m_timer->setInterval(4000);
@@ -279,18 +291,13 @@ void Window::buildUi() {
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
-    auto *banner = new QLabel(this);
-    QPixmap art(q(m_layout.help_dir) + "/banner.png");
-    if (!art.isNull()) {
-        // The window's width, and whatever height the picture has at that width.
-        const qreal r = devicePixelRatioF();
-        QPixmap s = art.scaledToWidth(int(kWidth * r), Qt::SmoothTransformation);
-        s.setDevicePixelRatio(r);
-        banner->setPixmap(s);
-    } else {
-        banner->setText("<h1 style='margin:12px'>X4 VR Mod</h1>");
-    }
-    root->addWidget(banner);
+    m_banner = new QLabel(this);
+    m_banner->setObjectName("banner");
+    m_art = QPixmap(q(m_layout.help_dir) + "/banner.png");
+    if (m_art.isNull())
+        m_banner->setText("<h1 style='margin:12px'>X4 VR Mod</h1>");
+    drawBanner(kWidth);
+    root->addWidget(m_banner);
 
     auto *content = new QWidget(this);
     auto *v = new QVBoxLayout(content);
@@ -389,11 +396,22 @@ void Window::buildUi() {
 
     m_play = new QPushButton(qtr("Play"), content);
     m_play->setObjectName("play");
-    m_play->setMinimumSize(170, 50);
     QFont big = m_play->font();
     big.setBold(true);
     big.setPointSizeF(big.pointSizeF() * 1.35);
     m_play->setFont(big);
+    // As wide as the widest thing it can say, so the window keeps one width as it changes.
+    int playWidth = 170;
+    for (const auto &[text, colour] :
+         {std::pair{qtr("Play"), QString("#2e9e4f")}, {qtr("Play"), QString()},
+          {qtr("Play anyway"), QString("#c67d00")}, {qtr("X4 is running"), QString()}}) {
+        m_play->setText(text);
+        m_play->setStyleSheet(playStyle(colour));
+        playWidth = std::max(playWidth, m_play->sizeHint().width());
+    }
+    m_play->setText(qtr("Play"));
+    m_play->setStyleSheet(QString());
+    m_play->setMinimumSize(playWidth, 50);
     connect(m_play, &QPushButton::clicked, this, [this] { play(); });
     bottom->addWidget(m_play);
     v->addLayout(bottom);
@@ -583,7 +601,7 @@ void Window::eyeChosen() {
     store_eye_settings(m_profile, m_eye);
     saveProfile();
     syncSettings();
-    fitHeight();
+    fitSize();
 }
 
 void Window::upscalerChosen() {
@@ -594,7 +612,7 @@ void Window::upscalerChosen() {
     store_eye_settings(m_profile, m_eye);
     saveProfile();
     syncSettings();
-    fitHeight();
+    fitSize();
 }
 
 void Window::gamemodeToggled() {
@@ -626,7 +644,7 @@ void Window::flatToggled() {
     for (const char *id : kRowIds)
         updateRow(id);
     updatePlay();
-    fitHeight();
+    fitSize();
 }
 
 // ---------------------------------------------------------------------- checks
@@ -678,7 +696,7 @@ void Window::requestChecks(bool forceVr) {
                 applyChecks(rows, !ask, skipGpu);
                 if (steamvrChanged || asksChanged) {
                     syncSettings();
-                    fitHeight();
+                    fitSize();
                 }
                 if (m_again) {
                     const bool f = m_againForce;
@@ -718,7 +736,7 @@ void Window::applyChecks(const std::vector<Check> &rows, bool keepVr, bool keepG
     for (const char *id : kRowIds)
         updateRow(id);
     updatePlay();
-    fitHeight();
+    fitSize();
 }
 
 void Window::updateRow(const std::string &id) {
@@ -854,18 +872,31 @@ void Window::updatePlay() {
     m_status->setText(status);
     m_play->setText(text);
     m_play->setEnabled(enabled);
-    m_play->setStyleSheet(colour.isEmpty()
-                              ? QString()
-                              : QString("QPushButton{background:%1;color:white;border:none;"
-                                        "border-radius:6px;padding:6px 18px}"
-                                        "QPushButton:hover{background:%2}")
-                                    .arg(colour, QColor(colour).lighter(112).name()));
+    m_play->setStyleSheet(playStyle(colour));
 }
 
-void Window::fitHeight() {
+// The banner across the window, at whatever height the picture has at that width.
+void Window::drawBanner(int width) {
+    if (m_art.isNull())
+        return;
+    const qreal r = devicePixelRatioF();
+    QPixmap s = m_art.scaledToWidth(int(width * r), Qt::SmoothTransformation);
+    s.setDevicePixelRatio(r);
+    m_banner->setPixmap(s);
+}
+
+// kWidth, or wider when the window's words need it, and never narrower again, so it
+// doesn't jump as the rows change; then the height its rows take at that width.
+void Window::fitSize() {
     QLayout *l = layout();
     l->activate();
-    setFixedHeight(l->hasHeightForWidth() ? l->totalHeightForWidth(kWidth)
+    const int w = std::max({kWidth, width(), l->minimumSize().width()});
+    if (w != width()) {
+        drawBanner(w);
+        setFixedWidth(w);
+        l->activate();
+    }
+    setFixedHeight(l->hasHeightForWidth() ? l->totalHeightForWidth(w)
                                           : l->totalSizeHint().height());
 }
 
@@ -1046,7 +1077,7 @@ void Window::resetDefaults() {
     m_note.clear();
     saveProfile();
     syncSettings();
-    fitHeight();
+    fitSize();
 }
 
 void Window::about() {

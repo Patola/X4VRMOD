@@ -5,6 +5,7 @@
 // and the window can't disagree (docs/packaging-plan.md, Phase 3).
 #pragma once
 
+#include <QPixmap>
 #include <QPointer>
 #include <QString>
 #include <QStringList>
@@ -87,7 +88,8 @@ private:
     void updateVrStart(bool wanted);
     void startProgram(const QString &program, const QStringList &args);
     void updatePlay();
-    void fitHeight();
+    void fitSize();
+    void drawBanner(int width);
     void tick();
     void sessionEnded();
 
@@ -121,6 +123,8 @@ private:
     QCheckBox *m_debug = nullptr, *m_flat = nullptr;
     QCheckBox *m_gamemode = nullptr;
     QComboBox *m_langBox = nullptr;
+    QLabel *m_banner = nullptr;
+    QPixmap m_art;
     QPushButton *m_play = nullptr;
     QToolButton *m_vrStart = nullptr;
     QString m_vrChoices;
