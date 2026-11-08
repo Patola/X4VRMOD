@@ -196,20 +196,35 @@ static Check check_vr_row(const std::string &home, XrProbe *xr_out) {
     return vr_row(rt, p);
 }
 
+// What the player knows a runtime as: "SteamVR/OpenXR in Meta compatibility mode" is SteamVR,
+// "WiVRn 'ddcadff1'" is WiVRn.
+static std::string runtime_short_name(const std::string &name) {
+    for (const char *known : {"SteamVR", "WiVRn", "Monado", "ALVR"})
+        if (name.find(known) != std::string::npos)
+            return known;
+    return name;
+}
+
 Check vr_row(const ActiveRuntime &rt, const XrProbe &p) {
     Check c;
     c.id = "vr";
     c.status = Status::Block;
-    const std::string who = !p.runtime.empty() ? p.runtime
-                            : !rt.name.empty() ? rt.name
-                                               : "The VR runtime";
+    const std::string who = runtime_short_name(!p.runtime.empty() ? p.runtime
+                                               : !rt.name.empty() ? rt.name
+                                                                  : "The VR runtime");
+    const bool steamvr = rt.steamvr || who == "SteamVR";
     switch (p.status) {
-    case XrStatus::Ready:
+    case XrStatus::Ready: {
         c.status = Status::Ok;
         c.title = "VR ready";
-        c.detail = who + ", " + (p.system.empty() ? "headset" : p.system) + ", asks " +
-                   std::to_string(p.eye_w) + " x " + std::to_string(p.eye_h) + " per eye";
+        // WiVRn names the headset ("Meta Quest 3 on WiVRn"); SteamVR names its driver
+        // ("SteamVR/OpenXR : oculus"), which tells the player nothing.
+        const bool named = !p.system.empty() && p.system.find("SteamVR") == std::string::npos;
+        c.detail = who + ", " + (named ? p.system : std::string("headset connected")) +
+                   ". It recommends " + std::to_string(p.eye_w) + " x " +
+                   std::to_string(p.eye_h) + " per eye.";
         break;
+    }
     case XrStatus::NoHeadset:
         c.title = "Headset not connected";
         c.detail = who + " is running, with no headset connected.";
@@ -235,8 +250,17 @@ Check vr_row(const ActiveRuntime &rt, const XrProbe &p) {
         c.fix = "retry";
         break;
     default:
+        // SteamVR waiting for its headset refuses an instance with XR_ERROR_RUNTIME_FAILURE
+        // (2026-11-08, Steam Link before the Quest connected).
+        if (steamvr && p.status == XrStatus::Failed &&
+            p.detail.find("XR_ERROR_RUNTIME_FAILURE") != std::string::npos) {
+            c.title = "Headset not connected";
+            c.detail = "SteamVR is running and waiting for the headset. Connect it, then Retry.";
+            c.fix = "retry";
+            break;
+        }
         c.title = "VR runtime not answering";
-        c.detail = who + ": " + p.detail;
+        c.detail = who + " didn't start: " + p.detail;
         c.fix = "retry";
         break;
     }

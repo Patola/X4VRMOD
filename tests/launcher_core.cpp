@@ -382,7 +382,18 @@ static void test_runtime_file() {
     unsetenv("XDG_CONFIG_HOME");
     unsetenv("XR_RUNTIME_JSON");
     if (!is_file("/etc/openxr/1/active_runtime.json"))
-        check(active_runtime(h).path.empty(), "runtime: none (WiVRn off: the file is gone)");
+        check(active_runtime(h, false).path.empty(),
+              "runtime: none (WiVRn off: the file is gone)");
+    // SteamVR not made the default: its manifest beside the running vrserver.
+    put(h + "/SteamVR/steamxr_linux64.json",
+        "{\"runtime\": {\"name\": \"SteamVR\", \"library_path\": \"bin/linux64/vrclient.so\"}}");
+    check(steamvr_manifest_for(h + "/SteamVR/bin/linux64/vrserver") ==
+              h + "/SteamVR/steamxr_linux64.json",
+          "runtime: SteamVR's own manifest, from its vrserver");
+    check(steamvr_manifest_for(h + "/SteamVR/bin/linux64/vrmonitor").empty(),
+          "runtime: ...only from vrserver");
+    check(steamvr_manifest_for(h + "/Other/bin/linux64/vrserver").empty(),
+          "runtime: ...and only where the manifest is");
     put(h + "/.config/openxr/1/active_runtime.json",
         "{\"file_format_version\": \"1.0.0\", \"runtime\": {\"name\": \"WiVRn\", "
         "\"library_path\": \"/usr/lib/wivrn/libopenxr_wivrn.so\"}}");
@@ -599,6 +610,29 @@ static void test_vr_row() {
     c = vr_row(other, p);
     check(c.status == Status::Ok && c.detail.find("2889 x 3026") != std::string::npos,
           "ready names what the headset asks for");
+    check(c.detail.find("A Headset") != std::string::npos, "...and the headset WiVRn names");
+    // SteamVR through Steam Link (2026-11-08): its names, then waiting for the headset.
+    ActiveRuntime steam;
+    steam.name = "SteamVR";
+    steam.steamvr = true;
+    steam.fallback = true;
+    p.runtime = "SteamVR/OpenXR in Meta compatibility mode";
+    p.system = "SteamVR/OpenXR : oculus";
+    p.eye_w = 2888;
+    p.eye_h = 3088;
+    c = vr_row(steam, p);
+    check(c.detail == "SteamVR, headset connected. It recommends 2888 x 3088 per eye.",
+          "SteamVR ready reads plainly");
+    p.status = XrStatus::Failed;
+    p.runtime.clear();
+    p.system.clear();
+    p.detail = "xrCreateInstance: XR_ERROR_RUNTIME_FAILURE";
+    c = vr_row(steam, p);
+    check(c.title == "Headset not connected" && c.fix == "retry" &&
+              c.detail.find("SteamVR is running") != std::string::npos,
+          "SteamVR waiting for its headset reads as no headset");
+    c = vr_row(other, p);
+    check(c.title == "VR runtime not answering", "...another runtime's failure doesn't");
 }
 
 // X4 asks XDG_CONFIG_HOME, then HOME. The folder inside is the player's own.

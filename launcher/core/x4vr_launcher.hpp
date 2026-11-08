@@ -143,12 +143,22 @@ std::string reloc_report(const ElfFile &x4);
 // ----------------------------------------------------------------- the probes
 // Which OpenXR runtime is active, by the loader's search order. It is only a
 // file: nothing is loaded. WiVRn's exists only while WiVRn runs.
+//
+// With no file, a running SteamVR's own manifest, if `steamvr_fallback`:
+// SteamVR writes the file only when it is made the default OpenXR runtime, and
+// Patola had declined its prompt, so a SteamVR he started and connected read as
+// "No VR runtime running" (2026-11-08). `fallback` says so, and whoever
+// probes or starts X4 then sets XR_RUNTIME_JSON to `path`.
 struct ActiveRuntime {
     std::string path; // "" when there is none
     std::string name, library;
     bool steamvr = false;
+    bool fallback = false; // SteamVR's own manifest, not the loader's file
 };
-ActiveRuntime active_runtime(const std::string &home);
+ActiveRuntime active_runtime(const std::string &home, bool steamvr_fallback = true);
+// <SteamVR>/bin/linux64/vrserver -> <SteamVR>/steamxr_linux64.json, if it is
+// there; "" otherwise.
+std::string steamvr_manifest_for(const std::string &vrserver_exe);
 
 enum class XrStatus { Ready, NoLoader, NoRuntime, NoHeadset, Failed, TimedOut, NotRun };
 const char *xr_status_name(XrStatus s);

@@ -360,6 +360,11 @@ int main(int argc, char **argv) {
         const std::string what = argv[2];
         if (what == "xr") {
             const bool verbose = argc > 3 && !strcmp(argv[3], "--verbose");
+            // A SteamVR that isn't the default OpenXR runtime: point the loader
+            // at it, as `run` does for X4.
+            const ActiveRuntime rt = active_runtime(home_dir());
+            if (rt.fallback)
+                setenv("XR_RUNTIME_JSON", rt.path.c_str(), 1);
             const XrProbe p = xr_probe_here(verbose);
             fputs(xr_probe_format(p).c_str(), stdout);
             return p.status == XrStatus::Ready ? 0 : 2;

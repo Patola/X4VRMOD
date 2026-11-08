@@ -561,7 +561,29 @@ std::string format_x4_version(int v) {
 }
 
 // ----------------------------------------------------------------- the runtime
-ActiveRuntime active_runtime(const std::string &home) {
+static bool any_process(const std::function<bool(const std::string &)> &f);
+
+std::string steamvr_manifest_for(const std::string &vrserver_exe) {
+    if (base_name(vrserver_exe) != "vrserver")
+        return "";
+    const std::string m =
+        dir_name(dir_name(dir_name(vrserver_exe))) + "/steamxr_linux64.json";
+    return is_file(m) ? m : "";
+}
+
+static void read_runtime_manifest(const std::string &p, ActiveRuntime *rt) {
+    rt->path = p;
+    const std::string t = read_text_file(p, 64 * 1024);
+    const auto names = json_strings(t, "name");
+    const auto libs = json_strings(t, "library_path");
+    rt->name = names.empty() ? "" : names.front();
+    rt->library = libs.empty() ? "" : libs.front();
+    const std::string both = rt->name + " " + rt->library + " " + real_path(p);
+    rt->steamvr = both.find("SteamVR") != std::string::npos ||
+                  both.find("steamxr") != std::string::npos;
+}
+
+ActiveRuntime active_runtime(const std::string &home, bool steamvr_fallback) {
     ActiveRuntime rt;
     std::vector<std::string> tries;
     if (const char *e = getenv("XR_RUNTIME_JSON"))
@@ -580,16 +602,23 @@ ActiveRuntime active_runtime(const std::string &home) {
     for (const std::string &p : tries) {
         if (!is_file(p))
             continue;
-        rt.path = p;
-        const std::string t = read_text_file(p, 64 * 1024);
-        const auto names = json_strings(t, "name");
-        const auto libs = json_strings(t, "library_path");
-        rt.name = names.empty() ? "" : names.front();
-        rt.library = libs.empty() ? "" : libs.front();
-        const std::string both = rt.name + " " + rt.library + " " + real_path(p);
-        rt.steamvr = both.find("SteamVR") != std::string::npos ||
-                     both.find("steamxr") != std::string::npos;
-        break;
+        read_runtime_manifest(p, &rt);
+        return rt;
+    }
+    if (steamvr_fallback) {
+        std::string exe;
+        any_process([&exe](const std::string &e) {
+            if (base_name(e) != "vrserver")
+                return false;
+            exe = e;
+            return true;
+        });
+        const std::string m = steamvr_manifest_for(exe);
+        if (!m.empty()) {
+            read_runtime_manifest(m, &rt);
+            rt.steamvr = true;
+            rt.fallback = true;
+        }
     }
     return rt;
 }
