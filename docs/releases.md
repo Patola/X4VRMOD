@@ -22,12 +22,18 @@ on the remote beside their `take-NNN-name` twins.
 
 ## Unreleased
 
+* **Fixed: the launcher didn't see a running SteamVR** unless SteamVR was your default OpenXR
+  runtime: with no runtime file, it said "No VR runtime running" even with the headset connected.
+  It now finds SteamVR's own manifest beside the running SteamVR, and points X4 at it. SteamVR
+  waiting for its headset now reads "Headset not connected", not an OpenXR error code.
+
 * **Fixed: in the map and other full-screen menus, only a square in the middle was sharp** when
   streaming, through WiVRn with its foveated encoding on (the default) or through Steam Link.
   Streamers keep full detail only in the middle of their picture, and in a menu that middle stayed
   on the menu while you looked around. The mod now redraws full-screen menus for where you look,
   so the sharp area follows your gaze, and the menu stays where it was. Played on WiVRn and on
-  Steam Link (takes 419 and 420).
+  Steam Link (takes 419 and 420). The same goes for every view the mod holds still: F6, and menus
+  with the HUD down, on foot too.
 
 ## v0.9.10 — 2026-11-07 — GOG, a launcher window, DLSS, packages
 

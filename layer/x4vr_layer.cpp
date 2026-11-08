@@ -14475,6 +14475,10 @@ struct VrState {
     float warp_head_q[4] = {0.f, 0.f, 0.f, 1.f};
     float warp_decl_q[4] = {0.f, 0.f, 0.f, 1.f};
     bool warp_head_ok = false, warp_decl_ok = false;
+    // Head-look isn't driving X4's camera (the injector's cam_valid is 0), so
+    // the declaration is held while the head moves: menus, the HUD down, F6,
+    // on-foot menus. Take 421: F6 on foot had no full-screen menu and blurred.
+    bool warp_held = false;
     bool warp_pending = false;     // asked for the image being filled
     float warp_pending_q[4] = {0.f, 0.f, 0.f, 1.f};
     float warp_pending_deg = 0.f;
@@ -14656,15 +14660,22 @@ void vr_report(const char *when); // defined below; the loop ticks through it
 // Returns true when a blit was requested, so the caller knows whether it owes a
 // release. On any failure it returns false and X4's frame proceeds untouched --
 // this path must never be able to stop the flatscreen game.
-// The full-screen menu warp's request for the image about to be filled
-// (layer/x4vr_menu_warp.hpp): while a full-screen menu is up, the turn from the
+// The menu warp's request for the image about to be filled
+// (layer/x4vr_menu_warp.hpp): while the view is held still, the turn from the
 // orientation X4's frame was rendered with to the head's, both as the frame
-// thread last published them. Logged by period, from the menus' opening to
-// their closing.
+// thread last published them. Held: a full-screen menu is up, or head-look
+// isn't driving X4's camera (F6, the HUD down, on-foot menus; take 421 found F6
+// on foot blurred, with no full-screen menu). Logged by period.
 static bool menu_warp_request(x4vr::MenuWarp::Params *out) {
     const x4vr::Shared *sh = shared_state();
-    const bool up =
+    const bool full =
         sh && sh->fullscreen_menu.load(std::memory_order_relaxed) != 0;
+    bool held = false;
+    {
+        std::lock_guard<std::mutex> wl(g_vrs.warp_mu);
+        held = g_vrs.warp_held;
+    }
+    const bool up = full || held;
     struct timespec ts {};
     clock_gettime(CLOCK_MONOTONIC, &ts);
     const double now = (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
@@ -14682,8 +14693,9 @@ static bool menu_warp_request(x4vr::MenuWarp::Params *out) {
         declared0 = g_vrs.warp_declared.load();
         raced0 = g_vrs.warp_raced.load();
         t_start = now;
-        X4VR_LOG("menu warp: period #%llu begins — a full-screen menu is up",
-                 (unsigned long long)periods);
+        X4VR_LOG("menu warp: period #%llu begins — the view is held still (%s)",
+                 (unsigned long long)periods,
+                 full ? "a full-screen menu" : "head-look isn't driving X4's camera");
     } else if (!up && was_up) {
         float max_deg = 0.f;
         {
@@ -15620,6 +15632,7 @@ void vr_thread() {
                     std::lock_guard<std::mutex> wl(g_vrs.warp_mu);
                     std::memcpy(g_vrs.warp_decl_q, q, sizeof q);
                     g_vrs.warp_decl_ok = true;
+                    g_vrs.warp_held = linked && !valid;
                 }
                 if (e == 0 && poselog_enabled()) {
                     // **Task #75, at FULL rate and on ONE line.**

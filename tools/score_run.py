@@ -4964,7 +4964,7 @@ def main(path):
     elif mw_val == "0" and (mw_armed or mw_menus):
         fails.append("the menu warp acted in a run that did not ask for it")
     if mw_armed or mw_menus:
-        print(f"menuwarp {len(mw_menus)} period(s) with full-screen menus up"
+        print(f"menuwarp {len(mw_menus)} period(s) with the view held still"
               + (f", asked as {mw_val}" if mw_val else "")
               + (f"; the map opened {len(mw_maps)} time(s): "
                  + " ".join(a for _n, a in mw_maps) if mw_maps else ""))

@@ -30120,3 +30120,46 @@ headset, so a protocol can't pace by them there.
 the injector's count of map openings (the share is back to version 14). Full-screen menus are
 copied still only if the warp's pipeline can't be built, which the scorer fails. From take 421, a
 VR run that made the runtime's swapchain must log "menu warp: armed".
+
+## Take 421 — SCORED PASS (2026-11-08): F6 in three places; held views redrawn too
+
+SteamVR through Steam Link, setup 5, the shipping line. `score_run.py` PASS. F6 in each place:
+
+| Where | Patola | The log |
+|---|---|---|
+| flying, in the pilot seat | whole window, crisp | `ui: cinematic view ON` (37 s): X4's UI at full size |
+| docked, in the pilot seat | about half size, crisp | not recognised: X4's table holds `DockedMenu[full], TopLevelMenu`; the full-screen flag up, so the menu warp redrew it |
+| on foot | about half size, blurry | not recognised: off the seat (`menu with the HUD down OPEN off the pilot seat`); no full-screen flag, so no warp |
+
+**Two separate things.** Size: F6 counts as the cinematic view only in the pilot seat with X4's
+`TopLevelMenu` alone open (take 357's rule), so docked and on foot its overlay stays on the HUD's
+canvas, as the release notes have said of F6 on foot since v0.9.5. Blur: the warp keyed on X4's
+full-screen flag, and on foot there was none, so the streamer's sharp middle stayed pinned.
+
+**Fixed, the blur:** the warp now acts whenever the view is held still: a full-screen menu, or
+head-look not driving X4's camera (the injector's `cam_valid` is 0), published by the frame thread
+beside the declared orientation (`warp_held`). That covers F6 anywhere, the HUD down and on-foot
+menus. **Open, the size:** docked and on foot need an F6 signal; takes 355-357 showed X4's scene
+camera slot isn't one (it also holds a camera in F2-F4), and docked the menu table and the
+full-screen flag look the same with F6 as without.
+
+**Also from this session:** the launcher never saw a SteamVR that isn't the default OpenXR runtime
+(no `active_runtime.json`; Patola declined SteamVR's prompt). It now falls back to SteamVR's own
+manifest beside the running vrserver and points X4 at it with `XR_RUNTIME_JSON`.
+
+## Take 422 — SCORED PASS (2026-11-08): held views redrawn; F6's size still the rule's
+
+The same three F6 places under SteamVR. `score_run.py` PASS: 6 warp periods, 3 of them held views
+with no full-screen menu (`the view is held still (head-look isn't driving X4's camera)`), possible
+races 3 of 8794 declared headset frames. Patola: "on the three occasions the overlay was very sharp
+and clear, but small docked and on foot and only full size when flying." The blur is fixed; the
+size is take 357's F6 rule, still open.
+
+**The launcher's VR row, reworded** (Patola: both messages "awkward and confusing"). SteamVR waiting
+for its headset refuses an instance with `XR_ERROR_RUNTIME_FAILURE`, which read "SteamVR:
+xrCreateInstance: XR_ERROR_RUNTIME_FAILURE"; it now reads "Headset not connected — SteamVR is
+running and waiting for the headset". Ready read "SteamVR/OpenXR in Meta compatibility mode,
+SteamVR/OpenXR : oculus, asks 2888 x 3088 per eye. SteamVR isn't your default OpenXR runtime, so
+the mod points X4 at it"; it now reads "SteamVR, headset connected. It recommends 2888 x 3088 per
+eye." Runtimes by the name a player knows; the headset named only when the runtime names it
+(WiVRn's "Meta Quest 3 on WiVRn"), not SteamVR's driver tag.
