@@ -20,7 +20,15 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
-## Unreleased
+## v1.0.0-rc2 — 2026-11-09 — Second release candidate: the headset shows X4 loading, and the launcher warns about frame generators and overlays
+
+The second release candidate for 1.0, for what the first one's testing found: on an RTX 5090
+player's first start the headset stayed empty for a minute while X4 loaded, and the player stopped
+the game, with lsfg-vk loaded into X4 as well. Packages call it `1.0.0~rc2` (Arch: `1.0.0rc2`), which
+installs over rc1 as an upgrade and sorts before 1.0.0.
+
+Take the package named for your system: Arch, Ubuntu 24.04, Ubuntu 26.04, Debian 13 or Fedora,
+or the zip for anything else.
 
 * **The headset shows something while X4 loads.** The VR session is up seconds after X4 starts,
   and X4's first frame can be a minute later on a first start, while it reads its data and the
@@ -38,6 +46,8 @@ on the remote beside their `take-NNN-name` twins.
   its sandbox can't reach the mod, and it makes VR harder for every game. The launcher marks
   a copy of X4 that Steam's Flatpak installed, with a help section saying why and what to use
   instead, and `x4vrmod run` refuses it. It isn't planned for now, and may come if players ask.
+* **The Debug log option's tooltip says where its log goes**, and the help names the logs' folder,
+  `~/.local/state/x4vrmod/logs`.
 
 ## v1.0.0-rc1 — 2026-11-08 — Release candidate for 1.0: sharp menus when streaming, F6 everywhere, the launcher in five languages
 

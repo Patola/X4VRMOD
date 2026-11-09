@@ -11,7 +11,7 @@ Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
 **[docs/frame-analysis.md](docs/frame-analysis.md)**; the traps X4 sets for
 modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 
-> **Status: v1.0.0-rc1 — the release candidate for 1.0, playable in VR** ([release notes](docs/releases.md)).
+> **Status: v1.0.0-rc2 — the second release candidate for 1.0, playable in VR** ([release notes](docs/releases.md)).
 > X4 runs in VR with in-engine stereo (per-eye lighting), head-look and lean
 > in the cockpit, head-look on foot, the UI on a canvas at the angle X4
 > intended, every menu reachable and lined up with the cursor, and the
@@ -104,6 +104,8 @@ blocks every frame.
 | GameMode | done | **`v0.9.10`** |
 | Full-screen menus sharp to their edges when streaming (the streamer's sharp middle follows your gaze) | done | **`v1.0.0-rc1`** |
 | The launcher and its help in English, Brazilian Portuguese, French, Russian and German | first draft, corrections welcome | **`v1.0.0-rc1`** |
+| The headset shows the mod's picture and "X4 is loading" until X4 draws | done | **`v1.0.0-rc2`** |
+| The launcher warns about frame generators and overlays that would load into X4 | done | **`v1.0.0-rc2`** |
 | The start menu as the whole scene (menu at its size in front, the 3D scene all around) | optional, future — not scheduled | — |
 | The desktop view optional while in the headset (est. 3–5% fps; [DESIGN.md](DESIGN.md#late-features-postponed-not-scheduled)) | late feature, postponed | — |
 | Volumetric nebula in stereo (Matrix #79B, CEO's Doubt) | done | **`v0.9.1`** |
