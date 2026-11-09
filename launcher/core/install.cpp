@@ -375,9 +375,9 @@ std::string terminal_line(const std::string &home) {
 
 // One log per run, because the scorer refuses a file holding two sessions; the
 // newest twenty stay.
+// The window names this folder and the debug log's ending in Debug log's tooltip.
 static std::string new_log_path(const std::string &home, bool debug) {
-    const char *x = getenv("XDG_STATE_HOME");
-    const std::string dir = (x && *x ? std::string(x) : home + "/.local/state") + "/x4vrmod/logs";
+    const std::string dir = log_dir(home);
     std::error_code ec;
     fs::create_directories(dir, ec);
     std::vector<std::string> logs;

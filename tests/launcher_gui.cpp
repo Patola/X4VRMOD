@@ -192,6 +192,15 @@ static void test_play(Window &w, const QString &shots) {
     auto *debug = w.findChild<QCheckBox *>("debug");
     auto *flat = w.findChild<QCheckBox *>("flatscreen");
     check(debug && !debug->isChecked() && flat && !flat->isChecked(), "both checkboxes start off");
+    // Where its log goes: the folder `run` writes to, as the window shows paths, and the name.
+    {
+        const QString dir = QString::fromStdString(log_dir(home_dir()));
+        const QString home = QString::fromStdString(home_dir());
+        const QString shown = dir.startsWith(home + "/") ? "~" + dir.mid(home.size()) : dir;
+        check(debug && debug->toolTip().contains(shown.toHtmlEscaped()) &&
+                  debug->toolTip().contains("-debug.log"),
+              "Debug log's tooltip says where its log goes: " + shown.toStdString());
+    }
     debug->setChecked(true);
     w.play();
     check(w.lastLaunch() == QStringList({"run", "--debug", "--game", QString::fromStdString(w.gameExe())}),
@@ -777,6 +786,7 @@ int main(int argc, char **argv) {
     const std::string tmp = tmpl;
     const std::string home = tmp + "/home";
     unsetenv("XDG_CONFIG_HOME");
+    unsetenv("XDG_STATE_HOME"); // the logs, under the fake home like everything else
     unsetenv("X4VR_GAME");
     unsetenv("XR_RUNTIME_JSON");
     setenv("HOME", home.c_str(), 1);

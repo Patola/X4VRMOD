@@ -385,8 +385,12 @@ void Window::buildUi() {
     options->setSpacing(2);
     m_debug = new QCheckBox(qtr("Debug log"), content);
     m_debug->setObjectName("debug");
+    // Where it goes, which the window said nowhere else (Patola, 2026-11-09).
     m_debug->setToolTip(tip(qtr("This run also logs what the mod is doing, for Report a bug. The "
-                                "game plays the same, and the log runs to tens of MB.")));
+                                "game plays the same, and the log runs to tens of MB. It goes in "
+                                "%1, named for the date and ending in -debug.log; More, then "
+                                "Open logs, opens that folder.")
+                                .arg(shortPath(log_dir(m_home)))));
     m_flat = new QCheckBox(qtr("Flatscreen"), content);
     m_flat->setObjectName("flatscreen");
     m_flat->setToolTip(tip(qtr("Start X4 by itself, on your screen, without the mod, even with VR "
