@@ -1737,18 +1737,32 @@ inv_case "complog resolves the storage output" \
 # still be described by the module its pipeline was built from (the layer at
 # 409148f named the decoy, c1, with no resources). The first case says the
 # second can fail: the driver did reuse the handle.
-# Whether a driver hands a freed handle straight back is up to it, and with one that doesn't
-# (lavapipe) neither case can say anything.
-if env "VK_ADD_LAYER_PATH=$BUILD/layer" "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
-    X4VR_TEST_COMPUTE=fsr X4VR_COMPLOG=1 X4VR_TEST_REUSE=1 X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=3 \
-    X4VR_MV_INVENTORY=1 "$BIN" "$VS" "$FS" "$SF" 2>&1 | grep -q 'MODULE_HANDLE_REUSED=0'; then
-    echo "skip complog: module handle reused      this driver doesn't reuse handles"
+# Whether a driver hands a freed handle straight back is up to it, and lavapipe does so on
+# some runs and not others: so each run is judged by its own output, and the dispatch is
+# only checked in a run where the handle was reused. A run that asked whether the driver
+# reuses, then another that measured, once disagreed in CI (run 42591740692).
+reused=""
+for _try in 1 2 3; do
+    out=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" "VK_LOADER_LAYERS_ENABLE=VK_LAYER_X4VR_core" \
+        X4VR_TEST_COMPUTE=fsr X4VR_COMPLOG=1 X4VR_TEST_REUSE=1 X4VR_LOG= X4VR_MV=1 X4VR_MV_MASK=3 \
+        X4VR_MV_INVENTORY=1 "$BIN" "$VS" "$FS" "$SF" 2>&1)
+    if grep -q 'MODULE_HANDLE_REUSED=1' <<<"$out"; then
+        reused=$_try
+        break
+    fi
+done
+if [[ -z "$reused" ]]; then
+    echo "skip complog: module handle reused      the driver didn't reuse the handle in 3 runs"
 else
-    inv_case "complog: module handle reused" \
-        "MODULE_HANDLE_REUSED=1" X4VR_TEST_COMPUTE=fsr X4VR_COMPLOG=1 X4VR_TEST_REUSE=1
-    inv_case "...the dispatch keeps its own module" \
-        "comp: dispatch module c0 groups 4x4x1 direct | Pass@0.0" \
-        X4VR_TEST_COMPUTE=fsr X4VR_COMPLOG=1 X4VR_TEST_REUSE=1
+    printf 'ok   %-38s in run %s of 3\n' "complog: module handle reused" "$reused"
+    want="comp: dispatch module c0 groups 4x4x1 direct | Pass@0.0"
+    if grep -qF -- "$want" <<<"$out"; then
+        printf 'ok   %-38s %s\n' "...the dispatch keeps its own module" "$want"
+    else
+        printf 'FAIL %-38s no line matching "%s" in the run that reused it\n' \
+            "...the dispatch keeps its own module" "$want"
+        fails=$((fails + 1))
+    fi
 fi
 # The FSR fix (take 380): tests/fsr_bindless.comp has the resources of X4's
 # compiled FSR pass, read and written through the bindless tables. With the
