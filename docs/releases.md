@@ -20,6 +20,13 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
+## Unreleased
+
+* **Steam installed as a Flatpak is named as unsupported**, instead of failing without a word:
+  its sandbox can't reach the mod, and it makes VR harder for every game. The launcher marks
+  a copy of X4 that Steam's Flatpak installed, with a help section saying why and what to use
+  instead, and `x4vrmod run` refuses it. It isn't planned for now, and may come if players ask.
+
 ## v1.0.0-rc1 — 2026-11-08 — Release candidate for 1.0: sharp menus when streaming, F6 everywhere, the launcher in five languages
 
 The first release candidate for 1.0. If nothing turns up that needs fixing, this is what 1.0

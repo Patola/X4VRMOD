@@ -212,7 +212,34 @@ static void test_discover() {
                 "appmanifest_392160.acf",
             manifest("X4", "7"));
         put(h + "/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/X4/X4", elf);
-        check(discover_steam(h).size() == 1, "steam: Flatpak Steam");
+        const auto all = discover_steam(h);
+        check(all.size() == 1, "steam: Flatpak Steam");
+        check(!all.empty() && all[0].flatpak_steam, "steam: ...and its copy is known as Flatpak's");
+        check(install_from_path(h + "/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/"
+                                    "common/X4")
+                  .flatpak_steam,
+              "steam: a path inside Flatpak's folder is Flatpak's too");
+    }
+    {
+        // A library both Steams list is the native one's, which can run it; one only
+        // Flatpak's lists is Flatpak's, wherever it is.
+        const std::string h = g_tmp + "/h3b";
+        const std::string native = h + "/.local/share/Steam";
+        const std::string flat = h + "/.var/app/com.valvesoftware.Steam/.local/share/Steam";
+        const std::string shared = h + "/mnt/shared", only = h + "/mnt/flatpak-only";
+        put(native + "/steamapps/libraryfolders.vdf", library_vdf({native, shared}));
+        put(flat + "/steamapps/libraryfolders.vdf", library_vdf({flat, shared, only}));
+        put(shared + "/steamapps/appmanifest_392160.acf", manifest("X4 Shared", "1"));
+        put(shared + "/steamapps/common/X4 Shared/X4", elf);
+        put(only + "/steamapps/appmanifest_392160.acf", manifest("X4 Only", "2"));
+        put(only + "/steamapps/common/X4 Only/X4", elf);
+        const auto all = discover_steam(h);
+        const Install *s = nullptr, *o = nullptr;
+        for (const Install &in : all)
+            (in.dir.find("X4 Shared") != std::string::npos ? s : o) = &in;
+        check(all.size() == 2 && s && o, "steam: both copies, each once");
+        check(s && !s->flatpak_steam, "steam: the shared library is native Steam's");
+        check(o && o->flatpak_steam, "steam: the one only Flatpak lists is Flatpak's, outside its folder too");
     }
     {
         const std::string h = g_tmp + "/h4";
@@ -481,6 +508,25 @@ static void test_checks() {
           "checks: the Windows version blocks and explains");
     check(!row(v, "patches") && !row(v, "steam") && !row(v, "mod"),
           "checks: nothing is asked of a copy that can't run");
+
+    // Steam's Flatpak's copy: not supported, and it says so with the help's section.
+    {
+        CheckOptions f;
+        f.home = g_tmp + "/chk-flatpak";
+        f.skip_vr = f.skip_gpu = true;
+        const std::string fr = f.home + "/.var/app/com.valvesoftware.Steam/.local/share/Steam";
+        put(fr + "/steamapps/appmanifest_392160.acf", manifest("X4 Foundations", "3"));
+        put(fr + "/steamapps/common/X4 Foundations/X4", make_elf("libsteam_api.so"));
+        v = run_checks(f);
+        const Check *x = row(v, "x4");
+        check(x && x->status == Status::Block && x->fix == "help-flatpak" &&
+                  x->title.find("Flatpak") != std::string::npos,
+              "checks: Steam's Flatpak's copy blocks, naming it, with the help's section");
+        f.game = d + "/steam";
+        v = run_checks(f);
+        check(row(v, "x4") && row(v, "x4")->status == Status::Ok,
+              "checks: a copy that isn't Flatpak's is unaffected, with Flatpak Steam there too");
+    }
 
     o.game = d + "/nothing-here";
     v = run_checks(o);

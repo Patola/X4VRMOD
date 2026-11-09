@@ -145,7 +145,8 @@ shim, not the layer — see [docs/frame-analysis.md](docs/frame-analysis.md).
 Download a package or the zip from the
 [releases page](https://github.com/Patola/X4VRMOD/releases): Arch, Ubuntu 24.04, Ubuntu 26.04,
 Debian 13 and Fedora each have their own, named for the system, and the zip is for anything
-else. Then start `x4vrmod-launcher`, which shows what's
+else. Steam installed as a Flatpak isn't supported: its sandbox can't reach the mod, and it makes
+VR harder for every game. It isn't planned for now, and may come if players ask for it. Then start `x4vrmod-launcher`, which shows what's
 ready and what isn't. For the zip, unpack it and start it from that folder.
 
 ## Build & run

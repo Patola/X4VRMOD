@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-08 20:02+0100\n"
+"POT-Creation-Date: 2026-11-09 10:06+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -182,6 +182,11 @@ msgstr "Steam запущен"
 
 #: launcher/core/checks.cpp
 #, qt-format
+msgid "Steam's Flatpak isn't supported"
+msgstr "Steam в Flatpak не поддерживается"
+
+#: launcher/core/checks.cpp
+#, qt-format
 msgid "SteamVR is running and waiting for the headset. Connect it, then Retry."
 msgstr "SteamVR запущен и ждёт шлем. Подключите его и нажмите «Повторить»."
 
@@ -219,6 +224,15 @@ msgstr "Расширения x4vrmod нет в папке X4."
 #, qt-format
 msgid "These turn off: %1."
 msgstr "Будут отключены: %1."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid ""
+"This X4 is Steam's Flatpak copy, and the mod can't reach into that sandbox. "
+"Use Steam from your distribution's packages, or a GOG copy."
+msgstr ""
+"Это копия X4 из Steam в Flatpak, а мод не может проникнуть в эту песочницу. "
+"Используйте Steam из пакетов вашего дистрибутива или копию из GOG."
 
 #: launcher/core/checks.cpp
 #, qt-format

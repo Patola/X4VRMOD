@@ -425,6 +425,15 @@ std::vector<Check> run_checks(const CheckOptions &o) {
                                {store_name(in.store), format_x4_version(v), in.buildid})) +
                     ", " + in.dir;
     }
+    if (usable && in.flatpak_steam) {
+        // Its sandbox can't reach the mod's parts or gamescope, and VR in it is limited for
+        // every game. Not planned for now (docs/packaging-plan.md, "Steam's Flatpak").
+        x4.status = Status::Block;
+        x4.title = tr_("Steam's Flatpak isn't supported");
+        x4.detail = tr_("This X4 is Steam's Flatpak copy, and the mod can't reach into that "
+                        "sandbox. Use Steam from your distribution's packages, or a GOG copy.");
+        x4.fix = "help-flatpak";
+    }
     out.push_back(x4);
 
     if (usable)

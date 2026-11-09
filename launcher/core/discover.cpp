@@ -369,7 +369,12 @@ Install install_from_path(const std::string &path) {
     in.source = path;
     if (g.kind == PathKind::Linux)
         in.store = binary_needs_steam(g.exe) ? Store::Steam : Store::Gog;
+    in.flatpak_steam = !g.exe.empty() && in_flatpak_steam(real_path(g.exe));
     return in;
+}
+
+bool in_flatpak_steam(const std::string &path) {
+    return path.find("/.var/app/com.valvesoftware.Steam/") != std::string::npos;
 }
 
 std::vector<Install> discover_steam(const std::string &home) {
@@ -386,6 +391,8 @@ std::vector<Install> discover_steam(const std::string &home) {
         if (!is_dir(c + "/steamapps"))
             continue;
         const std::string root = real_path(c);
+        // After the native roots, so a library both list is the native one's.
+        const bool flatpak = in_flatpak_steam(root);
         if (std::find(seen_roots.begin(), seen_roots.end(), root) != seen_roots.end())
             continue;
         seen_roots.push_back(root);
@@ -433,6 +440,7 @@ std::vector<Install> discover_steam(const std::string &home) {
             in.dir = g.dir;
             in.buildid = st->get("buildid");
             in.source = acf;
+            in.flatpak_steam = flatpak;
             out.push_back(std::move(in));
         }
     }

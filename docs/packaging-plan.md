@@ -213,7 +213,7 @@ binary is missing.
   | Proton forced | Refused with the reason, and a notification, as there's no terminal |
   | Other wrappers in the line (`mangohud x4vrmod run %command%`) | Same code, not tried |
   | No X4 in the command | Run, taking the profile's copy, and it says so |
-  | Flatpak Steam | Not expected to work: gamescope and the mod's files aren't in its sandbox |
+  | Flatpak Steam | Not supported, and not planned for now ("Steam's Flatpak" below): the launcher marks its copy red and `run` refuses it |
 
 * **Started from Steam, X4 gets Play's options too** (Patola, 2026-11-07, after the logo in take
   404). `-skipintro -nocputhrottle -nosoundthrottle` go at the end of the chain, where
@@ -672,6 +672,43 @@ level with the mark key, instead of a take's full command line.
 * Changing X4's in-game resolution menu.
 * Frame generation.
 * Flatpak and AppImage.
+* Steam's Flatpak (below).
+
+## Steam's Flatpak (2026-11-09)
+
+Not supported, and not planned for now: Patola, 2026-11-09, as players who use VR on Linux
+are unlikely to choose a Steam that makes VR harder. It may change if players ask for it.
+What's built: a copy only Steam's Flatpak lists, or one inside its folder, is marked
+(`Install::flatpak_steam`); the checklist's X4 row is red with the help's "Steam's Flatpak"
+section, the Game box says "Steam (Flatpak)", and `run` refuses it, and refuses to run inside
+any Flatpak sandbox. A library both Steams list is native Steam's, which can run it.
+
+What was found, for whoever takes it up:
+
+* **The sandbox.** `com.valvesoftware.Steam` (Freedesktop 26.08) sees its own home,
+  `~/.var/app/com.valvesoftware.Steam`, persisted as `$HOME`, then music and pictures read-only,
+  `/mnt`, `/media` and `/run/media`; not the host's `/usr`, `~/.local` or `~/.config`. Tools and
+  Vulkan layers come in through extensions: `com.valvesoftware.Steam.Utility.*` (merging `bin`
+  and `share/vulkan/explicit_layer.d`) and `org.freedesktop.Platform.VulkanLayer.*`.
+* **Games** still run in the Steam Linux Runtime, created through Flatpak's sub-sandbox portal
+  (Flatpak 1.12 or later), as pressure-vessel can't create containers inside Flatpak.
+* **gamescope** is the extension `org.freedesktop.Platform.VulkanLayer.gamescope`, 3.17.0 for
+  26.08 (what the mod is tested with), at `/usr/lib/extensions/vulkan/gamescope/bin`.
+* **VR, for every game:** Flatpak apps reach only WiVRn's Flatpak build, with overrides
+  (WiVRn's README), not a distribution's WiVRn; SteamVR inside it runs at reduced performance
+  unless `setcap` is run on the host after each SteamVR update.
+
+What breaks in the mod's chain: the launch line runs inside the sandbox, where neither
+`/usr/bin/x4vrmod` nor `~/.local/share/x4vrmod` is; the window's profile and logs are in other
+folders than the sandbox's; gamescope isn't there; whether the sub-sandbox passes the preload
+and `VK_ADD_LAYER_PATH` the way the native container does (takes 404, 413) is unknown; Play
+starts X4 outside Steam, and a Steam copy can't reach Flatpak Steam's client (its own home and
+`/dev/shm`); the checklist's rows describe the host.
+
+Options, as estimated then: support with a copy of the mod inside Flatpak Steam's home and a
+launch line with its full path (3-5 days and takes, if the sub-sandbox passes the preload and
+the layer; one hour on a laptop with `X4VR_VR=0` answers that), or a Flathub extension,
+`com.valvesoftware.Steam.Utility.x4vrmod` (weeks, and a second packaging path).
 
 ## Order of work
 1. Phase 0: defaults flip, the `effective:` line, the scorer reading it.

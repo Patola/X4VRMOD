@@ -48,6 +48,15 @@ Eigenschaften von X4 unter Kompatibilität aus und lass Steam die Linux-Version 
 <p><b>GOG:</b> Der Launcher findet sie, und alles funktioniert wie mit der Steam-Kopie. Wähle sie
 im Feld Spiel, wenn du beide hast.</p>
 
+<a name="flatpak"></a>
+<h3>Steam als Flatpak</h3>
+<p>Ein als Flatpak installiertes Steam wird nicht unterstützt, und das ist vorerst nicht geplant.
+Seine Sandbox erreicht weder die Teile der Mod noch gamescope, und VR ist darin für jedes Spiel
+schwieriger: Es erreicht nur WiVRns eigenes Flatpak, und SteamVR läuft dort mit verminderter
+Leistung. Wenn Spieler danach fragen, kann sich das ändern; sag es in einem Issue.</p>
+<p>Der Launcher kennzeichnet eine Kopie von X4, die das Flatpak-Steam installiert hat. Nutze Steam
+aus den Paketen deiner Distribution oder eine GOG-Kopie, die kein Steam braucht.</p>
+
 <a name="eye"></a>
 <h2>Auflösung pro Auge</h2>
 <p>Die Größe des Bildes für jedes Auge. Das Auge ist hier immer quadratisch. Größer ist schärfer,
@@ -232,9 +241,8 @@ Terminal startest. Beide starten die Mod wie Spielen, mit den Einstellungen aus 
 startet X4 mit diesem Befehl, er muss also da sein. Solange die Zeile gesetzt ist, startet Steam X4
 immer in VR; lösche sie, um wieder ohne VR zu spielen.</p>
 <p>Ist Steam so eingestellt, dass es X4 über Proton startet, verweigert die Zeile den Start und
-sagt, warum, denn die Mod funktioniert nur mit der Linux-Version. Mit einem als Flatpak
-installierten Steam funktioniert diese Zeile voraussichtlich nicht, weil die Mod und gamescope
-nicht in seiner Sandbox liegen.</p>
+sagt, warum, denn die Mod funktioniert nur mit der Linux-Version. Ein als Flatpak
+installiertes Steam wird nicht unterstützt: siehe <a href="#flatpak">Steam als Flatpak</a>.</p>
 
 <a name="install"></a>
 <h2>Installieren</h2>

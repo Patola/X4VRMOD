@@ -341,7 +341,7 @@ int main(int argc, char **argv) {
     if (cmd == "locate") {
         if (argc > 2 && !strcmp(argv[2], "--all")) {
             for (const Install &in : discover_all(home_dir()))
-                printf("%s\t%s\t%s\n", store_name(in.store),
+                printf("%s\t%s\t%s\n", in.flatpak_steam ? "Steam (Flatpak)" : store_name(in.store),
                        in.kind == PathKind::Windows ? "windows" : "linux", in.exe.c_str());
             return 0;
         }

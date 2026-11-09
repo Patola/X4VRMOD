@@ -58,8 +58,12 @@ Install choose_install(const std::string &home, const std::string &game, bool *f
         if (in.kind == PathKind::Linux || in.kind == PathKind::Windows) {
             *found = true;
             for (const Install &d : discover_all(home))
-                if (real_path(d.exe) == real_path(in.exe) && !d.buildid.empty())
-                    in.buildid = d.buildid;
+                if (real_path(d.exe) == real_path(in.exe)) {
+                    if (!d.buildid.empty())
+                        in.buildid = d.buildid;
+                    // Listed only by Steam's Flatpak, wherever the library is.
+                    in.flatpak_steam = in.flatpak_steam || d.flatpak_steam;
+                }
         }
         return in;
     }
@@ -412,8 +416,19 @@ static void tell_player(const std::string &what, bool from_steam) {
         run_child({ns, "X4 VR Mod", what}, 2000, false);
 }
 
+// Diagnostics, so English, as everything `run` says.
+static const char kFlatpakSteam[] =
+    "this X4 is Steam's Flatpak copy, which the mod doesn't support: it can't reach into that "
+    "sandbox. Use Steam from your distribution's packages, or a GOG copy.";
+
 int run_mod(const std::string &home, const std::string &game,
             const std::vector<std::string> &command) {
+    // Started in a Flatpak sandbox, as Steam's Flatpak would by a copied path: nothing of
+    // the mod's, or gamescope, is in there.
+    if (is_file("/.flatpak-info")) {
+        tell_player(kFlatpakSteam, !command.empty());
+        return 2;
+    }
     const Layout l = detect_layout(home);
     if (!is_file(l.launch_script)) {
         tell_player("the mod isn't installed. Run: x4vrmod install", !command.empty());
@@ -436,6 +451,10 @@ int run_mod(const std::string &home, const std::string &game,
     }
     bool found = false;
     const Install in = choose_install(home, named, &found);
+    if (found && in.flatpak_steam) {
+        tell_player(kFlatpakSteam, !command.empty());
+        return 2;
+    }
     if (!command.empty() && !from_chain && found)
         fprintf(stderr, "x4vrmod: this command doesn't name an X4, so the mod takes it to be %s\n",
                 in.exe.c_str());

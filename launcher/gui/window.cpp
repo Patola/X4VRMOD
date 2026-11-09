@@ -134,7 +134,7 @@ QString fixLabel(const std::string &fix) {
     if (fix == "start-steam")
         return qtr("Start Steam");
     // Only with neither WiVRn nor Steam to start: updateVrStart has the rest.
-    if (fix == "start-vr")
+    if (fix == "start-vr" || fix == "help-flatpak")
         return qtr("Help");
     return "";
 }
@@ -446,7 +446,8 @@ void Window::reloadGames() {
     m_gameBox->clear();
     const std::vector<Install> all = discover_all(m_home);
     for (const Install &in : all) {
-        QString text = QString("%1: %2").arg(store_name(in.store), shortPath(in.dir));
+        const QString store = in.flatpak_steam ? QString("Steam (Flatpak)") : QString(store_name(in.store));
+        QString text = QString("%1: %2").arg(store, shortPath(in.dir));
         if (in.kind == PathKind::Windows)
             text = qtr("%1 (Windows version)").arg(text);
         m_gameBox->addItem(text, q(in.exe));
@@ -992,6 +993,8 @@ void Window::runFix(const std::string &id, const std::string &fix) {
         startProgram("steam", {});
     } else if (fix == "start-vr") {
         openHelp("wivrn");
+    } else if (fix == "help-flatpak") {
+        openHelp("flatpak");
     }
 }
 

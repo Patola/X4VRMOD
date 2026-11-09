@@ -231,6 +231,14 @@ PT=("$CH/steam-launch-wrapper" -- "$CH/reaper" SteamLaunch AppId=392160 -- "$CH/
 out=$(env -u X4VR_GAME X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $I run "${PT[@]}" 2>&1); rc=$?
 [ "$rc" != 0 ] && grep -qi 'proton\|linux version' <<<"$out" && ! grep -q '^ENTRY' <<<"$out" \
     && ok "Steam forcing Proton: refused, and it says why" || bad "proton chain, rc=$rc: $out"
+# Steam's Flatpak's copy: the mod can't reach into its sandbox, so nothing starts and it says why.
+FP="$H/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/X4 Foundations"
+mkdir -p "$FP" && cp "$G/X4" "$FP/X4"
+FC=("$CH/steam-launch-wrapper" -- "$CH/reaper" SteamLaunch AppId=392160 -- "$CH/rt/_v2-entry-point" --verb=waitforexitandrun -- "$FP/X4")
+out=$(env -u X4VR_GAME X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $I run "${FC[@]}" 2>&1); rc=$?
+[ "$rc" != 0 ] && grep -q "Flatpak" <<<"$out" && ! grep -q '^ENTRY\|^FAKE' <<<"$out" \
+    && ok "Steam's Flatpak's copy: refused, and it says why" || bad "flatpak copy, rc=$rc: $out"
+rm -rf "$H/.var"
 # A chain that names no X4: the profile's copy is assumed, and that's said.
 out=$(env -u X4VR_GAME X4VR_GAMESCOPE=0 X4VR_NO_INJECT=1 X4VR_NO_LAYER=1 X4VR_LOG= $I run "$CH/steam-launch-wrapper" -- /bin/true 2>&1); rc=$?
 [ "$rc" = 0 ] && grep -qF "doesn't name an X4" <<<"$out" && ok "a command naming no X4: run, and the assumption is said" || bad "no X4 named, rc=$rc: $out"

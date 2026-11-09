@@ -84,7 +84,13 @@ struct Install {
     std::string exe, dir;
     std::string buildid; // Steam only
     std::string source;  // where this came from, for the report
+    // Steam's Flatpak's copy: its sandbox can't reach the mod, so it isn't supported
+    // (docs/packaging-plan.md, "Steam's Flatpak"). A library both Steams list is the
+    // native one's, which can run it.
+    bool flatpak_steam = false;
 };
+// Whether a path is inside Steam's Flatpak's own folder.
+bool in_flatpak_steam(const std::string &path);
 std::vector<Install> discover_steam(const std::string &home);
 std::vector<Install> discover_gog(const std::string &home);
 // X4VR_GAME first, then Steam, then GOG, without duplicates.

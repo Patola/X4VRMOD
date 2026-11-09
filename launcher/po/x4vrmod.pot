@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-08 23:37+0100\n"
+"POT-Creation-Date: 2026-11-09 10:06+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -259,6 +259,18 @@ msgstr ""
 #: launcher/core/checks.cpp
 #, qt-format
 msgid "%1, X4 %2, build %3"
+msgstr ""
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "Steam's Flatpak isn't supported"
+msgstr ""
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid ""
+"This X4 is Steam's Flatpak copy, and the mod can't reach into that sandbox. "
+"Use Steam from your distribution's packages, or a GOG copy."
 msgstr ""
 
 #: launcher/core/checks.cpp

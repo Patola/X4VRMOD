@@ -161,6 +161,14 @@ static void test_play(Window &w, const QString &shots) {
     check(fix && fix->isVisibleTo(&w) && fix->text() == "Retry", "the VR row offers Retry");
     fix = w.findChild<QPushButton *>("fix-x4");
     check(fix && !fix->isVisibleTo(&w), "a good row offers nothing");
+    {
+        auto flat = rows;
+        replace(flat, row("x4", Status::Block, "Steam's Flatpak isn't supported", "", "help-flatpak"));
+        w.showChecks(flat);
+        check(fix && fix->isVisibleTo(&w) && fix->text() == "Help",
+              "Steam's Flatpak's copy: the row offers the help's section on it");
+        w.showChecks(rows);
+    }
     if (!shots.isEmpty())
         shot(w, shots + "/window-fix.png");
 
@@ -541,7 +549,7 @@ static void test_help(const std::string &helpDir) {
     check(pics && picCount >= 3, "every picture in the help exists");
     for (const char *id : {"x4", "patches", "steam", "running", "gamescope", "vr", "mod", "gpu"})
         check(anchors.count(QString("row-") + id) > 0, std::string("the ") + id + " row has a section");
-    for (const char *a : {"game", "eye", "headsets", "upscaler", "gamemode", "language", "ipd", "play",
+    for (const char *a : {"game", "flatpak", "eye", "headsets", "upscaler", "gamemode", "language", "ipd", "play",
                           "flatscreen", "launch", "install", "uninstall", "more", "wivrn", "troubleshooting",
                           "codec", "input", "report"})
         check(anchors.count(a) > 0, std::string("help has a section on ") + a);
