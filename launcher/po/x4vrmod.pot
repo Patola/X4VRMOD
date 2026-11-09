@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-09 23:00+0100\n"
+"POT-Creation-Date: 2026-11-09 22:22+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -193,6 +193,35 @@ msgstr ""
 #: launcher/core/checks.cpp
 #, qt-format
 msgid "gamescope installed"
+msgstr ""
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "it loads into every Vulkan program"
+msgstr ""
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "your environment turns it on"
+msgstr ""
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "X4's launch options in Steam turn it on"
+msgstr ""
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "%1 would load into X4"
+msgid_plural "%1 would load into X4"
+msgstr[0] ""
+msgstr[1] ""
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid ""
+"%1. Frame generators and overlays work on the flat picture X4 draws, not on "
+"what the headset shows: turn them off for X4."
 msgstr ""
 
 #: launcher/core/checks.cpp
@@ -825,6 +854,14 @@ msgstr ""
 #, qt-format
 msgid ""
 "The mod draws both eyes in one pass, which needs Vulkan 1.2 and multiview."
+msgstr ""
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"Frame generators such as lsfg-vk, and overlays and filters such as MangoHud "
+"and vkBasalt, work on the flat picture X4 draws, not on what the headset "
+"shows. Shown only when one would load into X4."
 msgstr ""
 
 #: launcher/gui/window.cpp

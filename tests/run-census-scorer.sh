@@ -2218,5 +2218,10 @@ plant /tmp/census-lp-fast.log '[  999940.000] layer   loading panel: not needed 
 want "loading: not needed -> said" /tmp/census-lp-fast.log loading "not needed"
 absent "loading: an older build, nothing -> silent" "$BASE" loading
 
+# Frame generators and overlays the layer found loaded into X4: said first, no FAIL.
+plant /tmp/census-others.log '[  999940.000] layer   others: loaded into X4 — lsfg-vk (a frame generator) from liblsfg-vk.so. They work on the flat picture X4 draws, not on what the headset shows; the launcher'"'"'s checklist says to turn them off for X4'
+want "others: lsfg-vk loaded -> said" /tmp/census-others.log others "loaded into X4: lsfg-vk (a frame generator) from liblsfg-vk.so"
+absent "others: none -> silent" "$BASE" others
+
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

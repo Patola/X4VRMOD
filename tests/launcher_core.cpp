@@ -477,6 +477,92 @@ static const Check *row(const std::vector<Check> &v, const char *id) {
     return nullptr;
 }
 
+// Frame generators and overlays that would load into X4: from the manifests, the
+// environment and X4's launch options in Steam. Under a fake home whose XDG folders
+// are the only ones looked in, besides /etc/vulkan, which holds none of these here.
+static void test_overlays() {
+    const std::string h = g_tmp + "/overlays";
+    const std::string data = h + "/.local/share/vulkan/implicit_layer.d";
+    const std::string sys = h + "/usr/share/vulkan/implicit_layer.d";
+    setenv("XDG_DATA_HOME", (h + "/.local/share").c_str(), 1);
+    setenv("XDG_DATA_DIRS", (h + "/usr/share").c_str(), 1);
+    setenv("XDG_CONFIG_HOME", (h + "/.config").c_str(), 1);
+    setenv("XDG_CONFIG_DIRS", (h + "/etc/xdg").c_str(), 1);
+    for (const char *v : {"MANGOHUD", "DISABLE_MANGOHUD", "ENABLE_VKBASALT", "VK_INSTANCE_LAYERS",
+                          "VK_LOADER_LAYERS_ENABLE", "VK_ADD_IMPLICIT_LAYER_PATH"})
+        unsetenv(v);
+    auto tools = [](const std::vector<UnwantedLayer> &u) {
+        std::string s;
+        for (const UnwantedLayer &x : u)
+            s += (s.empty() ? "" : ",") + x.tool;
+        return s;
+    };
+    mkdirs(data);
+    mkdirs(sys);
+    check(unwanted_layers(h, {}).empty(), "overlays: none installed, nothing said");
+    // MangoHud's own manifest: only with MANGOHUD=1.
+    put(sys + "/MangoHud.x86_64.json",
+        "{\n  \"file_format_version\" : \"1.0.0\",\n  \"layer\" : {\n"
+        "    \"name\": \"VK_LAYER_MANGOHUD_overlay_x86_64\",\n    \"type\": \"GLOBAL\",\n"
+        "    \"library_path\": \"/usr/lib/mangohud/libMangoHud.so\",\n"
+        "    \"enable_environment\": {\n      \"MANGOHUD\": \"1\"\n    },\n"
+        "    \"disable_environment\": {\n      \"DISABLE_MANGOHUD\": \"1\"\n    }\n  }\n}\n");
+    check(unwanted_layers(h, {}).empty(), "overlays: MangoHud installed, not turned on: nothing said");
+    setenv("MANGOHUD", "1", 1);
+    auto u = unwanted_layers(h, {});
+    check(tools(u) == "MangoHud" && u[0].why.find("environment") != std::string::npos &&
+              u[0].where == "MANGOHUD=1",
+          "overlays: MANGOHUD=1 in the environment: MangoHud, and why");
+    setenv("DISABLE_MANGOHUD", "1", 1);
+    check(unwanted_layers(h, {}).empty(), "overlays: ...and DISABLE_MANGOHUD=1 wins");
+    unsetenv("DISABLE_MANGOHUD");
+    unsetenv("MANGOHUD");
+    u = unwanted_layers(h, {"mangohud x4vrmod run %command%"});
+    check(tools(u) == "MangoHud" && u[0].why.find("launch options") != std::string::npos,
+          "overlays: mangohud in X4's launch options: MangoHud, from there");
+    check(unwanted_layers(h, {"DISABLE_MANGOHUD=1 x4vrmod run %command%"}).empty(),
+          "overlays: DISABLE_MANGOHUD=1 in the launch options isn't turning it on");
+    // lsfg-vk names no variable: it loads into everything.
+    put(data + "/VkLayer_LS_frame_generation.json",
+        "{\"file_format_version\":\"1.0.0\",\"layer\":{\"name\":\"VK_LAYER_LS_frame_generation\","
+        "\"type\":\"GLOBAL\",\"library_path\":\"../../../lib/liblsfg-vk.so\","
+        "\"api_version\":\"1.4.313\",\"implementation_version\":\"1\"}}");
+    u = unwanted_layers(h, {});
+    check(tools(u) == "lsfg-vk" && u[0].why.find("every Vulkan program") != std::string::npos &&
+              u[0].where == data + "/VkLayer_LS_frame_generation.json",
+          "overlays: lsfg-vk, which loads into every Vulkan program, and where its manifest is");
+    setenv("VK_INSTANCE_LAYERS", "VK_LAYER_MESA_overlay", 1);
+    check(tools(unwanted_layers(h, {"ENABLE_VKBASALT=1 %command%"})) ==
+              "lsfg-vk,vkBasalt,Mesa's overlay",
+          "overlays: several at once, each named once");
+    unsetenv("VK_INSTANCE_LAYERS");
+    // The row: amber, with the help's section, only when there is something.
+    CheckOptions o;
+    o.home = h;
+    o.skip_vr = o.skip_gpu = true;
+    const std::vector<Check> v = run_checks(o);
+    const Check *r = row(v, "overlays");
+    check(r && r->status == Status::Warn && r->fix == "help-overlays" &&
+              r->title.find("lsfg-vk") != std::string::npos &&
+              r->detail.find("every Vulkan program") != std::string::npos,
+          "overlays: the checklist's row is amber, names lsfg-vk and why, with the help's section");
+    remove((data + "/VkLayer_LS_frame_generation.json").c_str());
+    check(!row(run_checks(o), "overlays"), "overlays: with none, no row at all");
+    // X4's launch options, from Steam's own file.
+    put(h + "/.local/share/Steam/userdata/12345/config/localconfig.vdf",
+        "\"UserLocalConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"Valve\"\n\t\t{\n"
+        "\t\t\t\"Steam\"\n\t\t\t{\n\t\t\t\t\"apps\"\n\t\t\t\t{\n"
+        "\t\t\t\t\t\"863550\"\n\t\t\t\t\t{\n\t\t\t\t\t\t\"LaunchOptions\"\t\t\"not X4's\"\n\t\t\t\t\t}\n"
+        "\t\t\t\t\t\"392160\"\n\t\t\t\t\t{\n"
+        "\t\t\t\t\t\t\"LaunchOptions\"\t\t\"mangohud x4vrmod run %command%\"\n"
+        "\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n");
+    const std::vector<std::string> lo = x4_steam_launch_options(h);
+    check(lo.size() == 1 && lo[0] == "mangohud x4vrmod run %command%",
+          "overlays: X4's launch options read from Steam, and nobody else's");
+    for (const char *v2 : {"XDG_DATA_HOME", "XDG_DATA_DIRS", "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS"})
+        unsetenv(v2);
+}
+
 static void test_checks() {
     const std::string d = g_tmp + "/chk";
     put(d + "/gog/X4", make_elf("libc.so.6"));
@@ -1067,6 +1153,7 @@ int main() {
     test_library_version();
     test_layout();
     test_checks();
+    test_overlays();
     test_eye_rule();
     test_profile();
     test_vr_row();

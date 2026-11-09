@@ -307,6 +307,18 @@ câble, comme un Valve Index ou un HTC Vive, ne diffuse pas, et utilise donc Ste
 <a name="troubleshooting"></a>
 <h2>Dépannage</h2>
 
+<a name="overlays"></a>
+<h3>Générateurs d'images et overlays</h3>
+<p>Désactivez pour X4 en VR les générateurs d'images comme lsfg-vk (celui de Lossless Scaling), et
+les overlays et filtres comme MangoHud, vkBasalt et vkShade. Ils agissent sur l'image plate que
+dessine X4, alors que le mod envoie l'image de chaque œil au casque : au mieux ils n'y font rien, au
+pire ils ralentissent le jeu ou abîment l'image. Le runtime du casque fait déjà ce que ferait un
+générateur d'images, au rythme de votre tête.</p>
+<p>La liste de vérification prévient quand l'un d'eux se chargerait dans X4 : un qui se charge dans
+tous les programmes Vulkan, comme lsfg-vk, ou un que votre environnement ou les options de
+lancement de X4 dans Steam activent, comme <tt>mangohud</tt> dans la ligne de lancement. Ils
+peuvent rester installés pour d'autres jeux.</p>
+
 <a name="codec"></a>
 <h3>L'image est floue, ou saccade</h3>
 <p>Sur WiVRn, c'est le codec vidéo qui fait le plus de différence. Il se choisit dans les réglages

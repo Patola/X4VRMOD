@@ -23,6 +23,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <map>
+#include <mutex>
 #include <sstream>
 
 namespace x4vr::launcher {
@@ -371,6 +373,52 @@ Install install_from_path(const std::string &path) {
         in.store = binary_needs_steam(g.exe) ? Store::Steam : Store::Gog;
     in.flatpak_steam = !g.exe.empty() && in_flatpak_steam(real_path(g.exe));
     return in;
+}
+
+std::vector<std::string> x4_steam_launch_options(const std::string &home) {
+    // localconfig.vdf runs to megabytes and the checklist runs every few seconds:
+    // parsed again only when it changes.
+    struct Cached {
+        long long mtime = -1, size = -1;
+        std::string options;
+    };
+    static std::mutex mu;
+    static std::map<std::string, Cached> cache;
+    std::vector<std::string> out, seen;
+    for (const std::string &c : {home + "/.steam/root", home + "/.steam/steam",
+                                 home + "/.local/share/Steam"}) {
+        const std::string root = real_path(c);
+        if (!is_dir(root + "/userdata") ||
+            std::find(seen.begin(), seen.end(), root) != seen.end())
+            continue;
+        seen.push_back(root);
+        DIR *d = opendir((root + "/userdata").c_str());
+        if (!d)
+            continue;
+        while (const dirent *e = readdir(d)) {
+            const std::string f = root + "/userdata/" + e->d_name + "/config/localconfig.vdf";
+            struct stat st {};
+            if (e->d_name[0] == '.' || stat(f.c_str(), &st) != 0)
+                continue;
+            std::lock_guard<std::mutex> lock(mu);
+            Cached &k = cache[f];
+            if (k.mtime != (long long)st.st_mtime || k.size != (long long)st.st_size) {
+                k = Cached{(long long)st.st_mtime, (long long)st.st_size, ""};
+                VdfNode v;
+                if (parse_vdf(read_text_file(f, 64 * 1024 * 1024), &v)) {
+                    const VdfNode *n = v.find("UserLocalConfigStore");
+                    for (const char *step : {"Software", "Valve", "Steam", "apps", kSteamAppId})
+                        n = n ? n->find(step) : nullptr;
+                    if (n)
+                        k.options = n->get("LaunchOptions");
+                }
+            }
+            if (!k.options.empty())
+                out.push_back(k.options);
+        }
+        closedir(d);
+    }
+    return out;
 }
 
 bool in_flatpak_steam(const std::string &path) {

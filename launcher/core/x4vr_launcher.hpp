@@ -230,6 +230,21 @@ std::string cli_path();
 
 // ----------------------------------------------------------------- is it running
 bool steam_is_running(const std::string &home);
+
+// ------------------------------------------- frame generators and overlays
+// X4's launch options in Steam, from each user's localconfig.vdf (native Steam's).
+std::vector<std::string> x4_steam_launch_options(const std::string &home);
+// Frame generators and overlays that would load into X4: they work on the flat
+// picture X4 draws, not what the headset shows (lsfg-vk in the RTX 5090 report,
+// 2026-11-09). A Vulkan layer that loads by default, or one the environment or X4's
+// Steam launch options turn on.
+struct UnwantedLayer {
+    std::string tool;   // as people call it: lsfg-vk, MangoHud, vkBasalt
+    std::string why;    // loads everywhere, the environment, the launch options
+    std::string where;  // its manifest, or the setting that turns it on
+};
+std::vector<UnwantedLayer> unwanted_layers(const std::string &home,
+                                           const std::vector<std::string> &launch_options);
 bool steamvr_is_running();
 // Any process whose program is this file, or is called X4.
 bool x4_is_running(const std::string &exe);

@@ -8,6 +8,8 @@
 #include <dirent.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <cstring>
 
 // cmake/x4vr_version.cmake, as in the layer and the injector.
@@ -357,6 +359,180 @@ const GpuInfo *best_gpu(const VulkanProbe &p) {
 
 bool GpuInfo::rtx() const { return vendor == 0x10de && name.find("RTX") != std::string::npos; }
 
+// ---------------------------------------------- frame generators and overlays
+
+namespace {
+
+// What the mod warns about, by what its manifest or a launch line names. They work
+// on the flat picture X4 draws, which in VR is two eyes on their way to the headset.
+struct KnownLayer {
+    const char *tool;
+    std::vector<const char *> needles; // in a manifest's file, layer or library name
+};
+const KnownLayer kKnownLayers[] = {
+    {"lsfg-vk", {"lsfg", "frame_generation"}}, // a frame generator; loads everywhere
+    {"MangoHud", {"mangohud"}},                 // MANGOHUD=1, or the mangohud command
+    {"vkBasalt", {"vkbasalt"}},                 // ENABLE_VKBASALT=1
+    {"vkShade", {"vkshade"}},                   // ENABLE_VKSHADE=1, vkBasalt's kind
+    {"Mesa's overlay", {"mesa_overlay"}},       // VK_INSTANCE_LAYERS, by name
+};
+
+std::string lower(std::string s) {
+    for (char &c : s)
+        c = (char)std::tolower((unsigned char)c);
+    return s;
+}
+
+// `needle` named in `text`, not as part of a DISABLE_ setting, which turns it off.
+bool mentions(const std::string &text, const char *needle) {
+    const std::string t = lower(text);
+    for (size_t at = t.find(needle); at != std::string::npos; at = t.find(needle, at + 1))
+        if (at < 8 || t.compare(at - 8, 8, "disable_") != 0)
+            return true;
+    return false;
+}
+
+// The first key of the object after "key", as MANGOHUD in a manifest's
+// "enable_environment": {"MANGOHUD": "1"}; "" when there is none.
+std::string json_first_key_after(const std::string &t, const std::string &key) {
+    const size_t at = t.find("\"" + key + "\"");
+    if (at == std::string::npos)
+        return "";
+    const size_t open = t.find_first_not_of(" \t\r\n:", at + key.size() + 2);
+    if (open == std::string::npos || t[open] != '{')
+        return "";
+    const size_t q1 = t.find('"', open), q2 = q1 == std::string::npos ? q1 : t.find('"', q1 + 1);
+    const size_t close = t.find('}', open);
+    if (q2 == std::string::npos || (close != std::string::npos && close < q1))
+        return "";
+    return t.substr(q1 + 1, q2 - q1 - 1);
+}
+
+// Where the Vulkan loader finds implicit layers on Linux, in its order.
+std::vector<std::string> implicit_layer_dirs(const std::string &home) {
+    auto env = [](const char *n, const std::string &fallback) {
+        const char *v = getenv(n);
+        return std::string(v && *v ? v : fallback.c_str());
+    };
+    std::vector<std::string> dirs;
+    auto each = [&dirs](const std::string &list, const std::string &sub) {
+        for (size_t at = 0; at < list.size();) {
+            size_t end = list.find(':', at);
+            if (end == std::string::npos)
+                end = list.size();
+            if (end > at)
+                dirs.push_back(list.substr(at, end - at) + sub);
+            at = end + 1;
+        }
+    };
+    each(env("VK_ADD_IMPLICIT_LAYER_PATH", ""), "");
+    dirs.push_back(env("XDG_CONFIG_HOME", home + "/.config") + "/vulkan/implicit_layer.d");
+    each(env("XDG_CONFIG_DIRS", "/etc/xdg"), "/vulkan/implicit_layer.d");
+    dirs.push_back("/etc/vulkan/implicit_layer.d");
+    dirs.push_back(env("XDG_DATA_HOME", home + "/.local/share") + "/vulkan/implicit_layer.d");
+    each(env("XDG_DATA_DIRS", "/usr/local/share:/usr/share"), "/vulkan/implicit_layer.d");
+    return dirs;
+}
+
+} // namespace
+
+std::vector<UnwantedLayer> unwanted_layers(const std::string &home,
+                                           const std::vector<std::string> &launch_options) {
+    std::vector<UnwantedLayer> out;
+    auto have = [&out](const char *tool) {
+        for (const UnwantedLayer &u : out)
+            if (u.tool == tool)
+                return true;
+        return false;
+    };
+    auto turned_off = [&launch_options](const std::string &var) {
+        if (var.empty())
+            return false;
+        const char *v = getenv(var.c_str());
+        if (v && *v && strcmp(v, "0") != 0)
+            return true;
+        for (const std::string &o : launch_options)
+            if (o.find(var + "=1") != std::string::npos)
+                return true;
+        return false;
+    };
+    // The manifests: one that names no variable to turn it on loads into everything.
+    for (const std::string &dir : implicit_layer_dirs(home)) {
+        DIR *d = opendir(dir.c_str());
+        if (!d)
+            continue;
+        std::vector<std::string> files;
+        while (const dirent *e = readdir(d)) {
+            const std::string n = e->d_name;
+            if (n.size() > 5 && n.compare(n.size() - 5, 5, ".json") == 0)
+                files.push_back(n);
+        }
+        closedir(d);
+        std::sort(files.begin(), files.end());
+        for (const std::string &f : files) {
+            const std::string t = read_text_file(dir + "/" + f, 1 << 20);
+            std::string id = f;
+            for (const char *key : {"name", "library_path"})
+                for (const std::string &v : json_strings(t, key))
+                    id += " " + v;
+            for (const KnownLayer &k : kKnownLayers) {
+                bool match = false;
+                for (const char *n : k.needles)
+                    match = match || mentions(id, n);
+                if (!match || have(k.tool) ||
+                    turned_off(json_first_key_after(t, "disable_environment")))
+                    continue;
+                const std::string on = json_first_key_after(t, "enable_environment");
+                const char *onv = on.empty() ? nullptr : getenv(on.c_str());
+                if (on.empty())
+                    out.push_back({k.tool, tr_("it loads into every Vulkan program"),
+                                   dir + "/" + f});
+                else if (onv && *onv && strcmp(onv, "0") != 0)
+                    out.push_back({k.tool, tr_("your environment turns it on"),
+                                   on + "=" + onv});
+            }
+        }
+    }
+    // X4's launch options in Steam, and the environment naming one outright.
+    for (const KnownLayer &k : kKnownLayers) {
+        for (const std::string &o : launch_options) {
+            bool hit = false;
+            for (const char *n : k.needles)
+                hit = hit || mentions(o, n);
+            if (hit && !have(k.tool))
+                out.push_back({k.tool, tr_("X4's launch options in Steam turn it on"), o});
+        }
+        for (const char *var : {"VK_INSTANCE_LAYERS", "VK_LOADER_LAYERS_ENABLE"}) {
+            const char *v = getenv(var);
+            if (v && mentions(v, k.needles[0]) && !have(k.tool))
+                out.push_back({k.tool, tr_("your environment turns it on"),
+                               std::string(var) + "=" + v});
+        }
+    }
+    return out;
+}
+
+// Only when there's something to say: most players have none of these.
+static void add_overlays_row(const std::string &home, std::vector<Check> &out) {
+    const std::vector<UnwantedLayer> u = unwanted_layers(home, x4_steam_launch_options(home));
+    if (u.empty())
+        return;
+    Check c;
+    c.id = "overlays";
+    c.status = Status::Warn;
+    c.fix = "help-overlays";
+    std::string names, why;
+    for (const UnwantedLayer &x : u) {
+        names += (names.empty() ? "" : ", ") + x.tool;
+        why += (why.empty() ? "" : "; ") + x.tool + ": " + x.why;
+    }
+    c.title = fmt(trn_("%1 would load into X4", "%1 would load into X4", u.size()), {names});
+    c.detail = fmt(tr_("%1. Frame generators and overlays work on the flat picture X4 draws, "
+                       "not on what the headset shows: turn them off for X4."),
+                   {why});
+    out.push_back(c);
+}
+
 static Check check_gpu_row() {
     Check c;
     c.id = "gpu";
@@ -475,6 +651,7 @@ std::vector<Check> run_checks(const CheckOptions &o) {
         out.push_back(check_mod_row(l, in));
     if (!o.skip_gpu)
         out.push_back(check_gpu_row());
+    add_overlays_row(home, out);
     return out;
 }
 

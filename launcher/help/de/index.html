@@ -301,6 +301,18 @@ PC hängt, wie eine Valve Index oder eine HTC Vive, streamt nicht und nutzt dahe
 <a name="troubleshooting"></a>
 <h2>Fehlerbehebung</h2>
 
+<a name="overlays"></a>
+<h3>Frame-Generatoren und Overlays</h3>
+<p>Schalte Frame-Generatoren wie lsfg-vk (den von Lossless Scaling) und Overlays und Filter wie
+MangoHud, vkBasalt und vkShade für X4 ab, wenn du es in VR spielst. Sie arbeiten mit dem flachen
+Bild, das X4 zeichnet, während die Mod das Bild jedes Auges an das Headset schickt: Bestenfalls tun
+sie dort nichts, schlimmstenfalls machen sie das Spiel langsamer oder das Bild kaputt. Die Runtime
+des Headsets macht schon, was ein Frame-Generator tun würde, im Takt deines Kopfes.</p>
+<p>Die Checkliste warnt, wenn eines davon in X4 geladen würde: eines, das in jedes
+Vulkan-Programm geladen wird, wie lsfg-vk, oder eines, das deine Umgebung oder die Startoptionen
+von X4 in Steam einschalten, wie <tt>mangohud</tt> in der Startzeile. Für andere Spiele können sie
+installiert bleiben.</p>
+
 <a name="codec"></a>
 <h3>Das Bild ist unscharf, oder es ruckelt</h3>
 <p>Bei WiVRn macht der Video-Codec den größten Unterschied. Du wählst ihn in den Einstellungen von

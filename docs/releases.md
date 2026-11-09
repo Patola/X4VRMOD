@@ -27,6 +27,11 @@ on the remote beside their `take-NNN-name` twins.
   graphics driver prepares its shaders. The headset used to stay empty all that time, and a player
   stopped the game taking it for a hang. Now the mod's picture stands in front of you with "X4 is
   loading" in the launcher's language, until X4 draws steadily.
+* **The launcher warns about frame generators and overlays** that would load into X4, such as
+  lsfg-vk, MangoHud, vkBasalt and vkShade: they work on the flat picture X4 draws, not on what the
+  headset shows. An amber line names each and why it would load (it loads into every Vulkan
+  program, your environment turns it on, or X4's launch options in Steam do), and the help says
+  why to turn them off for X4. The mod's log names any it finds loaded, for bug reports.
 * **The launcher's language list is called "Launcher language"**, and its tooltip says X4 keeps
   the language chosen for it: "Language" alone looked as if it might change the game's too.
 * **Steam installed as a Flatpak is named as unsupported**, instead of failing without a word:

@@ -5046,6 +5046,16 @@ def main(path):
     elif "loading panel: off" in text:
         print("loading  off by request (X4VR_LOADING_PANEL=0)")
 
+    # --- frame generators and overlays loaded into X4 ----------------------
+    #
+    # Not the mod's fault and not a FAIL, but the first thing to know about a
+    # report: they work on the flat picture X4 draws, not on what the headset
+    # shows (an RTX 5090 player's lsfg-vk, 2026-11-09, seen only in gamescope's
+    # output then).
+    ot = re.search(r"others: loaded into X4 — (.*?)\. They work on", text)
+    if ot:
+        print(f"others   loaded into X4: {ot.group(1)} — ask the player to turn "
+              f"them off for X4 before reading anything else here")
 
     # --- 6DOF option B's check: how near the eye X4's UI draws sit ---------
     #

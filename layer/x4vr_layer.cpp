@@ -19,6 +19,7 @@
 #include <vulkan/vk_layer.h>
 
 #include <dlfcn.h>
+#include <link.h>
 
 #include <algorithm>
 #include <set>
@@ -16974,6 +16975,40 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateInstance(
              via_runtime ? " — with the OpenXR runtime's extensions merged in"
                          : "",
              x4vr_build_version());
+    // Frame generators and overlays loaded into X4 with us: they work on the flat
+    // picture X4 draws, not on what the headset shows. Said once, for the report:
+    // an RTX 5090 player's lsfg-vk showed only in gamescope's output (2026-11-09).
+    // The loader has loaded every layer of the chain by the time it calls ours.
+    if (g_active) {
+        std::string found;
+        dl_iterate_phdr(
+            [](dl_phdr_info *info, size_t, void *arg) {
+                static const struct {
+                    const char *needle, *tool;
+                } known[] = {{"lsfg", "lsfg-vk (a frame generator)"},
+                             {"mangohud", "MangoHud (an overlay)"},
+                             {"vkbasalt", "vkBasalt (a filter)"},
+                             {"vkshade", "vkShade (a filter)"},
+                             {"mesa_overlay", "Mesa's overlay"}};
+                std::string name = info->dlpi_name ? info->dlpi_name : "";
+                std::string low = name;
+                for (char &c : low)
+                    c = (char)tolower((unsigned char)c);
+                auto *out = static_cast<std::string *>(arg);
+                for (const auto &k : known)
+                    if (low.find(k.needle) != std::string::npos &&
+                        out->find(k.tool) == std::string::npos)
+                        *out += (out->empty() ? "" : ", ") + std::string(k.tool) + " from " +
+                                name.substr(name.rfind('/') + 1);
+                return 0;
+            },
+            &found);
+        if (!found.empty())
+            X4VR_LOG("others: loaded into X4 — %s. They work on the flat picture X4 "
+                     "draws, not on what the headset shows; the launcher's checklist "
+                     "says to turn them off for X4",
+                     found.c_str());
+    }
     // Which WSIs this process could possibly use. If a surface later reports
     // no preferred extent and only one *_surface extension is enabled, the
     // platform follows without any inference at all.

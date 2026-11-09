@@ -44,7 +44,7 @@ namespace {
 constexpr int kWidth = 800;
 // The rows' order: what a player fixes first comes first.
 const char *const kRowIds[] = {"x4", "patches", "steam", "running", "gamescope",
-                               "vr", "mod",     "gpu"};
+                               "vr", "mod",     "gpu",   "overlays"};
 
 QString q(const std::string &s) { return QString::fromStdString(s); }
 
@@ -114,6 +114,10 @@ QString rowTip(const std::string &id) {
                    "turn further and removes the camera sway.");
     if (id == "gpu")
         return qtr("The mod draws both eyes in one pass, which needs Vulkan 1.2 and multiview.");
+    if (id == "overlays")
+        return qtr("Frame generators such as lsfg-vk, and overlays and filters such as MangoHud "
+                   "and vkBasalt, work on the flat picture X4 draws, not on what the headset "
+                   "shows. Shown only when one would load into X4.");
     return "";
 }
 
@@ -134,7 +138,7 @@ QString fixLabel(const std::string &fix) {
     if (fix == "start-steam")
         return qtr("Start Steam");
     // Only with neither WiVRn nor Steam to start: updateVrStart has the rest.
-    if (fix == "start-vr" || fix == "help-flatpak")
+    if (fix == "start-vr" || fix == "help-flatpak" || fix == "help-overlays")
         return qtr("Help");
     return "";
 }
@@ -1001,6 +1005,8 @@ void Window::runFix(const std::string &id, const std::string &fix) {
         openHelp("wivrn");
     } else if (fix == "help-flatpak") {
         openHelp("flatpak");
+    } else if (fix == "help-overlays") {
+        openHelp("overlays");
     }
 }
 

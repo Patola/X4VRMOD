@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-09 23:00+0100\n"
+"POT-Creation-Date: 2026-11-09 22:22+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -31,6 +31,13 @@ msgstr "%1 n'a pas démarré : %2"
 #, qt-format
 msgid "%1 is running, with no headset connected."
 msgstr "%1 est lancé, sans casque connecté."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "%1 would load into X4"
+msgid_plural "%1 would load into X4"
+msgstr[0] "%1 se chargerait dans X4"
+msgstr[1] "%1 se chargeraient dans X4"
 
 #: launcher/core/checks.cpp
 #, qt-format
@@ -71,6 +78,15 @@ msgstr "%1, à jour"
 #, qt-format
 msgid "%1, updates when you play"
 msgstr "%1, mis à jour au lancement du jeu"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid ""
+"%1. Frame generators and overlays work on the flat picture X4 draws, not on "
+"what the headset shows: turn them off for X4."
+msgstr ""
+"%1. Les générateurs d'images et les overlays agissent sur l'image plate que "
+"dessine X4, pas sur ce que montre le casque : désactivez-les pour X4."
 
 #: launcher/core/checks.cpp
 #, qt-format
@@ -293,6 +309,11 @@ msgstr "X4 n'est pas encore lancé"
 
 #: launcher/core/checks.cpp
 #, qt-format
+msgid "X4's launch options in Steam turn it on"
+msgstr "les options de lancement de X4 dans Steam l'activent"
+
+#: launcher/core/checks.cpp
+#, qt-format
 msgid "all %1 feature matches its code"
 msgid_plural "all %1 features match its code"
 msgstr[0] "%1 fonction correspond au code du jeu"
@@ -310,8 +331,18 @@ msgstr "gamescope n'est pas installé"
 
 #: launcher/core/checks.cpp
 #, qt-format
+msgid "it loads into every Vulkan program"
+msgstr "il se charge dans tous les programmes Vulkan"
+
+#: launcher/core/checks.cpp
+#, qt-format
 msgid "unknown"
 msgstr "version inconnue"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "your environment turns it on"
+msgstr "votre environnement l'active"
 
 #: launcher/core/discover.cpp
 #, qt-format
@@ -989,6 +1020,17 @@ msgstr "Trouvez le programme nommé X4"
 #, qt-format
 msgid "Flatscreen"
 msgstr "Sans VR"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"Frame generators such as lsfg-vk, and overlays and filters such as MangoHud "
+"and vkBasalt, work on the flat picture X4 draws, not on what the headset "
+"shows. Shown only when one would load into X4."
+msgstr ""
+"Les générateurs d'images comme lsfg-vk, et les overlays et filtres comme "
+"MangoHud et vkBasalt, agissent sur l'image plate que dessine X4, pas sur ce "
+"que montre le casque. N'apparaît que si l'un d'eux se chargerait dans X4."
 
 #: launcher/gui/window.cpp
 #, qt-format

@@ -558,7 +558,7 @@ static void test_help(const std::string &helpDir) {
     check(pics && picCount >= 3, "every picture in the help exists");
     for (const char *id : {"x4", "patches", "steam", "running", "gamescope", "vr", "mod", "gpu"})
         check(anchors.count(QString("row-") + id) > 0, std::string("the ") + id + " row has a section");
-    for (const char *a : {"game", "flatpak", "eye", "headsets", "upscaler", "gamemode", "language", "ipd", "play",
+    for (const char *a : {"game", "flatpak", "overlays", "eye", "headsets", "upscaler", "gamemode", "language", "ipd", "play",
                           "flatscreen", "launch", "install", "uninstall", "more", "wivrn", "troubleshooting",
                           "codec", "input", "report"})
         check(anchors.count(a) > 0, std::string("help has a section on ") + a);

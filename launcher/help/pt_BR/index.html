@@ -304,6 +304,18 @@ ao PC, como um Valve Index ou um HTC Vive, não transmite, então usa o SteamVR.
 <a name="troubleshooting"></a>
 <h2>Solução de problemas</h2>
 
+<a name="overlays"></a>
+<h3>Geradores de quadros e overlays</h3>
+<p>Desative geradores de quadros como o lsfg-vk (o do Lossless Scaling), e overlays e filtros como
+o MangoHud, o vkBasalt e o vkShade, para o X4 quando jogar em VR. Eles atuam na imagem plana que o
+X4 desenha, enquanto o mod envia a imagem de cada olho para o headset: na melhor das hipóteses não
+fazem nada ali, e na pior deixam o jogo mais lento ou estragam a imagem. O runtime do headset já
+faz o que um gerador de quadros faria, acompanhando a sua cabeça.</p>
+<p>A lista de verificação avisa quando algum seria carregado no X4: um que é carregado em todo
+programa Vulkan, como o lsfg-vk, ou um que o seu ambiente ou as opções de inicialização do X4 na
+Steam ativam, como o <tt>mangohud</tt> na linha de inicialização. Eles podem continuar instalados
+para outros jogos.</p>
+
 <a name="codec"></a>
 <h3>A imagem está borrada, ou engasga</h3>
 <p>No WiVRn, o codec de vídeo é o que mais faz diferença. Você o escolhe nas configurações do

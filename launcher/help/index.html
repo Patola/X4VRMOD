@@ -297,6 +297,17 @@ PC, such as a Valve Index or an HTC Vive, doesn't stream, so it uses SteamVR.</p
 <a name="troubleshooting"></a>
 <h2>Troubleshooting</h2>
 
+<a name="overlays"></a>
+<h3>Frame generators and overlays</h3>
+<p>Turn off frame generators such as lsfg-vk (Lossless Scaling's), and overlays and filters such
+as MangoHud, vkBasalt and vkShade, for X4 when you play it in VR. They work on the flat picture X4
+draws, while the mod sends each eye's picture to the headset: at best they do nothing there, and at
+worst they slow the game down or break the picture. The headset's runtime already does what a
+frame generator would, in step with your head.</p>
+<p>The checklist warns when one would load into X4: one that loads into every Vulkan program, as
+lsfg-vk does, or one your environment or X4's launch options in Steam turn on, as
+<tt>mangohud</tt> in the launch line does. They can stay installed for other games.</p>
+
 <a name="codec"></a>
 <h3>The picture is blurry, or it stutters</h3>
 <p>On WiVRn, the video codec makes the most difference. You choose it in WiVRn's settings.</p>
