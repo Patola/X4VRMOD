@@ -26,6 +26,11 @@ The first release candidate for 1.0. If nothing turns up that needs fixing, this
 will be; if something does, a second candidate comes first. Packages call it `1.0.0~rc1`
 (Arch: `1.0.0rc1`), which sorts before 1.0.0, so 1.0 will install over it as an upgrade.
 
+Take the package named for your system: Arch, Ubuntu 24.04, Ubuntu 26.04, Debian 13 or Fedora,
+or the zip for anything else. **Ubuntu 26.04's was added the day after**, when a player found
+that 24.04's won't install there: 26.04's Qt 6.10 names its libraries without the "t64" that
+24.04's carry (`libqt6gui6`, not `libqt6gui6t64`). It's the same v1.0.0-rc1, built on 26.04.
+
 * **The launcher speaks Brazilian Portuguese, French, Russian and German**, as well as English: the
   window, its messages and its help. It starts in your system's language, and the Language list
   below GameMode changes it. The translations are a first draft, and corrections are welcome as

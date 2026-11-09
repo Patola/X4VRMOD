@@ -68,7 +68,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: ["ubuntu:24.04", "debian:13"]
+        # Each links its own Qt, under its own package names: 26.04's Qt 6.10 dropped the "t64"
+        # that 24.04's carry (libqt6gui6t64 is libqt6gui6), so 24.04's package can't install there.
+        image: ["ubuntu:24.04", "ubuntu:26.04", "debian:13"]
     runs-on: ubuntu-latest
     container: ${{ matrix.image }}
     steps:
