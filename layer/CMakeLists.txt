@@ -22,6 +22,31 @@ add_custom_command(TARGET x4vr_layer POST_BUILD
             --layer $<TARGET_FILE:x4vr_layer>
     VERBATIM)
 
+# The headset's loading panel: our art and each language's words, compiled in
+# (launcher/art, made by tools/make_vr_loading.py; cmake/x4vr_embed.cmake).
+set(X4VR_ART ${CMAKE_SOURCE_DIR}/launcher/art)
+set(X4VR_VR_LOADING_FILES
+    "kVrLoadingArt=${X4VR_ART}/loading-screen.png"
+    "kVrLoadingWords_en=${X4VR_ART}/vr-loading-en.png"
+    "kVrLoadingWords_pt_BR=${X4VR_ART}/vr-loading-pt_BR.png"
+    "kVrLoadingWords_fr=${X4VR_ART}/vr-loading-fr.png"
+    "kVrLoadingWords_ru=${X4VR_ART}/vr-loading-ru.png"
+    "kVrLoadingWords_de=${X4VR_ART}/vr-loading-de.png")
+set(X4VR_VR_LOADING_HPP ${CMAKE_CURRENT_BINARY_DIR}/generated/vr_loading_assets.hpp)
+set(X4VR_VR_LOADING_DEPS)
+foreach(pair IN LISTS X4VR_VR_LOADING_FILES)
+    string(REGEX REPLACE "^[^=]*=" "" path "${pair}")
+    list(APPEND X4VR_VR_LOADING_DEPS "${path}")
+endforeach()
+add_custom_command(OUTPUT ${X4VR_VR_LOADING_HPP}
+    COMMAND ${CMAKE_COMMAND} -DOUT=${X4VR_VR_LOADING_HPP}
+            "-DFILES=${X4VR_VR_LOADING_FILES}" -P ${CMAKE_SOURCE_DIR}/cmake/x4vr_embed.cmake
+    DEPENDS ${X4VR_VR_LOADING_DEPS} ${CMAKE_SOURCE_DIR}/cmake/x4vr_embed.cmake
+    COMMENT "The headset's loading panel"
+    VERBATIM)
+target_sources(x4vr_layer PRIVATE ${X4VR_VR_LOADING_HPP})
+target_include_directories(x4vr_layer PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+
 # OpenXR: headers at build time, loader dlopen'd at run time. The layer is
 # injected into X4's process, so a DT_NEEDED on libopenxr_loader would be X4
 # refusing to start on a machine without one -- not a graceful fall back to

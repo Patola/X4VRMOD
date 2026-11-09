@@ -475,8 +475,15 @@ int run_mod(const std::string &home, const std::string &game,
     }
     // An explicit environment variable wins over the profile, as it does over
     // the defaults table.
-    for (const auto &[k, v] : profile_env(load_profile(profile_path(home))))
+    const Profile prof = load_profile(profile_path(home));
+    for (const auto &[k, v] : profile_env(prof))
         setenv(k.c_str(), v.c_str(), 0);
+    // The headset's loading panel speaks the launcher's language: the window's
+    // choice, else the system's (layer/x4vr_loading_panel.hpp).
+    {
+        const std::string lang = prof.get("language");
+        setenv("X4VR_LANGUAGE", is_language(lang) ? lang.c_str() : system_language().c_str(), 0);
+    }
     if (l.kind != LayoutKind::Dev) {
         setenv("X4VR_LAYER_MANIFEST", l.layer_manifest.c_str(), 0);
         setenv("X4VR_INJECTOR", l.injector.c_str(), 0);

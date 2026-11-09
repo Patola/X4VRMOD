@@ -1,0 +1,7 @@
+# What tools/make_vr_loading.py drew, per language: tests/run-i18n.sh compares it
+# with launcher/po. Not to be edited: run the tool.
+en	X4 is loading	The first start can take a minute or two.
+pt_BR	O X4 está carregando	O primeiro início pode levar um ou dois minutos.
+fr	X4 se charge	Le premier démarrage peut prendre une ou deux minutes.
+ru	X4 загружается	Первый запуск может занять минуту-другую.
+de	X4 wird geladen	Der erste Start kann ein bis zwei Minuten dauern.

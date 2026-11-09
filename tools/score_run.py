@@ -4996,6 +4996,57 @@ def main(path):
             print("menuwarp   whether the sharp area followed the head is "
                   "Patola's to say")
 
+    # --- the headset's loading panel (layer/x4vr_loading_panel.hpp) --------
+    #
+    # What the headset shows until X4 draws: from the session's first rendered
+    # frame until X4's frames come at a pace. A first start of a minute with an
+    # empty headset read as a hang to an RTX 5090 player (2026-11-09). A run
+    # from a build that has it says what became of it: up then down, not
+    # needed, off, or NOT shown with why. NOT shown fails; so does a panel that
+    # stayed up while X4's frames reached the 120 at which it must come down.
+    # Up and never down with fewer is a run that ended before X4 drew.
+    lp_up = re.search(r"loading panel: up — our art and the words in (\S+), "
+                      r"(\d+)x(\d+), format (\d+)", text)
+    lp_down = re.search(r"loading panel: down — X4 is drawing steadily; it stood "
+                        r"([\d.]+) s, moved (\d+) time", text)
+    lp_not = re.search(r"loading panel: NOT shown — ([^;]*)", text)
+    lp_copies = [int(x) for x in re.findall(r"vr copy \(periodic\): swapchain=\d+ "
+                                            r"blits=\d+ released=(\d+)", text)]
+    # Each shape the runtime refused before one was taken (loading_shapes): the
+    # one taken differs from the last refused in one thing. WiVRn refuses the
+    # three one-layer shapes, because the layer doubles the image its client
+    # makes on X4's device (take 426), and takes the fourth.
+    lp_refused = re.findall(r"loading panel: the runtime refused (\d+x\d+ x\d+, "
+                            r"format \d+) — xrCreateSwapchain -> (\S+)", text)
+    lp_image = re.search(r"loading panel: up — .*?, format (\d+), in a (\d+x\d+ x\d+) "
+                         r"image \(try (\d+) of (\d+)\)", text)
+    for shape, res in lp_refused:
+        print(f"loading  the runtime refused {shape} ({res})")
+    if lp_refused and lp_image:
+        print(f"loading  ...and took {lp_image.group(2)}, format {lp_image.group(1)}, "
+              f"try {lp_image.group(3)} of {lp_image.group(4)}")
+    if lp_up:
+        lang_, w_, h_, fmt_ = lp_up.groups()
+        if lp_down:
+            print(f"loading  the panel stood {lp_down.group(1)} s, in {lang_} "
+                  f"({w_}x{h_}, format {fmt_}), moved {lp_down.group(2)} time(s), "
+                  f"and came down when X4 drew steadily")
+        else:
+            most = lp_copies[-1] if lp_copies else 0  # the count, as the run ended
+            print(f"loading  the panel went up in {lang_} and NEVER came down: X4 "
+                  f"sent {most} frame(s) for the headset")
+            if most >= 120:
+                fails.append(f"the loading panel stayed up through {most} X4 "
+                             f"frames: it comes down at 120 at the latest")
+        print("loading  whether it showed, and read well, is Patola's to say")
+    elif lp_not:
+        fails.append(f"the loading panel wasn't shown: {lp_not.group(1).strip()}")
+    elif "loading panel: not needed" in text:
+        print("loading  not needed: X4 drew before the headset showed anything")
+    elif "loading panel: off" in text:
+        print("loading  off by request (X4VR_LOADING_PANEL=0)")
+
+
     # --- 6DOF option B's check: how near the eye X4's UI draws sit ---------
     #
     # Banded view depths of the perspective UI draws (X4VR_DUMP_MATRICES).

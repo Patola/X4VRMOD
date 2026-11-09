@@ -61,6 +61,15 @@ private:
     locale_t m_c, m_was = (locale_t)0;
 };
 
+// What the headset shows while X4 loads, before its first frame. Marked here so
+// they are translated with everything else; tools/make_vr_loading.py draws each
+// language's into launcher/art/vr-loading-<code>.png, which the layer embeds.
+// Nothing in the launcher prints them.
+inline constexpr const char *kVrLoadingLines[] = {
+    N_("X4 is loading"),
+    N_("The first start can take a minute or two."),
+};
+
 // The languages the window offers, each named in itself, in Patola's order.
 struct Language {
     const char *code; // gettext's: en, pt_BR, fr, ru, de

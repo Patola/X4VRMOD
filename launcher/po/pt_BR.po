@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-09 21:50+0100\n"
+"POT-Creation-Date: 2026-11-09 23:00+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -574,6 +574,16 @@ msgstr "fov é o campo de visão do X4, como 1.4917"
 #, qt-format
 msgid "not a variable name: %1"
 msgstr "não é um nome de variável: %1"
+
+#: launcher/core/x4vr_i18n.hpp
+#, qt-format
+msgid "The first start can take a minute or two."
+msgstr "O primeiro início pode levar um ou dois minutos."
+
+#: launcher/core/x4vr_i18n.hpp
+#, qt-format
+msgid "X4 is loading"
+msgstr "O X4 está carregando"
 
 #: launcher/gui/dialogs.cpp
 #, qt-format

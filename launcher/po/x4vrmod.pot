@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-09 21:50+0100\n"
+"POT-Creation-Date: 2026-11-09 23:00+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -550,6 +550,16 @@ msgstr ""
 #: launcher/core/profile.cpp
 #, qt-format
 msgid "not a variable name: %1"
+msgstr ""
+
+#: launcher/core/x4vr_i18n.hpp
+#, qt-format
+msgid "X4 is loading"
+msgstr ""
+
+#: launcher/core/x4vr_i18n.hpp
+#, qt-format
+msgid "The first start can take a minute or two."
 msgstr ""
 
 #: launcher/gui/dialogs.cpp

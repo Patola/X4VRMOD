@@ -2179,5 +2179,44 @@ printf '%s\n' "$mwaab" "$mw419" >> /tmp/census-mw-off.log
 want "menuwarp: X4VR_MENU_WARP=0, and it acted -> FAIL" /tmp/census-mw-off.log "FAIL|  - " "the menu warp acted in a run that did not ask for it"
 absent "menuwarp: not asked, nothing -> silent" "$BASE" menuwarp
 
+# The headset's loading panel (layer/x4vr_loading_panel.hpp): up then down is
+# reported; up through 120 X4 frames, or not shown, fails; up and never down with
+# fewer frames is a run that ended before X4 drew, which isn't the panel's fault.
+lpup='[  999940.000] layer   loading panel: up — our art and the words in pt_BR, 738x520, format 43, 1.8 m ahead, until X4 draws steadily'
+lpdown='[  999963.400] layer   loading panel: down — X4 is drawing steadily; it stood 23.4 s, moved 1 time(s)'
+lpcopy='[  999990.000] layer   vr copy (periodic): swapchain=1 blits=4 released=%s acquire_failed=0 refused=0'
+plant /tmp/census-lp-ok.log "$lpup" "$lpdown" "$(printf "$lpcopy" 900)"
+want "loading: up then down -> how long it stood" /tmp/census-lp-ok.log loading "the panel stood 23.4 s, in pt_BR (738x520, format 43), moved 1 time(s)"
+plant /tmp/census-lp-stuck.log "$lpup" "$(printf "$lpcopy" 600)"
+want "loading: up through 600 X4 frames -> FAIL" /tmp/census-lp-stuck.log "FAIL|  - " "the loading panel stayed up through 600 X4 frames"
+plant /tmp/census-lp-early.log "$lpup" "$(printf "$lpcopy" 11)"
+want "loading: the run ended before X4 drew -> said" /tmp/census-lp-early.log loading "NEVER came down: X4 sent 11 frame(s)"
+if python3 tools/score_run.py /tmp/census-lp-early.log 2>&1 | grep -qE "^(FAIL|  - ) *the loading panel"; then
+    bad "loading: the run ended before X4 drew -> FAILs"
+else
+    ok "loading: the run ended before X4 drew -> no FAIL"
+fi
+plant /tmp/census-lp-not.log '[  999940.000] layer   loading panel: NOT shown — the runtime offers no 8-bit sRGB format; the headset is empty until X4 draws, as before'
+want "loading: not shown -> FAIL with why" /tmp/census-lp-not.log "FAIL|  - " "the loading panel wasn't shown: the runtime offers no 8-bit sRGB format"
+# A runtime that refuses the picture's own shape (WiVRn refuses three, take 426): each refusal
+# listed, the shape it took named, and the panel's own report unchanged.
+lpref='[  999939.000] layer   loading panel: the runtime refused 738x520 x1, format 43 — xrCreateSwapchain -> XR_ERROR_RUNTIME_FAILURE'
+lpup2='[  999940.000] layer   loading panel: up — our art and the words in pt_BR, 738x520, format 50, in a 738x520 x1 image (try 2 of 4), 1.8 m ahead, until X4 draws steadily'
+plant /tmp/census-lp-ref.log "$lpref" "$lpup2" "$lpdown" "$(printf "$lpcopy" 900)"
+want "loading: a refused shape -> listed" /tmp/census-lp-ref.log loading "the runtime refused 738x520 x1, format 43 (XR_ERROR_RUNTIME_FAILURE)"
+want "loading: ...and the shape taken" /tmp/census-lp-ref.log loading "...and took 738x520 x1, format 50, try 2 of 4"
+want "loading: ...and how long it stood" /tmp/census-lp-ref.log loading "the panel stood 23.4 s, in pt_BR (738x520, format 50), moved 1 time(s)"
+if python3 tools/score_run.py /tmp/census-lp-ref.log 2>&1 | grep -qE "^(FAIL|  - ) *the loading panel"; then
+    bad "loading: refused, then up -> FAILs"
+else
+    ok "loading: refused, then up -> no FAIL"
+fi
+absent "loading: nothing refused -> no refusal listed" /tmp/census-lp-ok.log "loading  the runtime refused"
+plant /tmp/census-lp-allref.log "$lpref" '[  999940.000] layer   loading panel: NOT shown — the runtime refused every shape tried (4), the last with xrCreateSwapchain -> XR_ERROR_RUNTIME_FAILURE; the headset is empty until X4 draws, as before'
+want "loading: every shape refused -> FAIL with why" /tmp/census-lp-allref.log "FAIL|  - " "the loading panel wasn't shown: the runtime refused every shape tried (4)"
+plant /tmp/census-lp-fast.log '[  999940.000] layer   loading panel: not needed — X4 drew before the headset showed anything'
+want "loading: not needed -> said" /tmp/census-lp-fast.log loading "not needed"
+absent "loading: an older build, nothing -> silent" "$BASE" loading
+
 if [ $fail -eq 0 ]; then echo; echo "all cases passed"; else echo; echo "FAILED"; fi
 exit $fail

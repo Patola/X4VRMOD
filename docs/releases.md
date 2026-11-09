@@ -22,6 +22,11 @@ on the remote beside their `take-NNN-name` twins.
 
 ## Unreleased
 
+* **The headset shows something while X4 loads.** The VR session is up seconds after X4 starts,
+  and X4's first frame can be a minute later on a first start, while it reads its data and the
+  graphics driver prepares its shaders. The headset used to stay empty all that time, and a player
+  stopped the game taking it for a hang. Now the mod's picture stands in front of you with "X4 is
+  loading" in the launcher's language, until X4 draws steadily.
 * **The launcher's language list is called "Launcher language"**, and its tooltip says X4 keeps
   the language chosen for it: "Language" alone looked as if it might change the game's too.
 * **Steam installed as a Flatpak is named as unsupported**, instead of failing without a word:

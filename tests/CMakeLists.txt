@@ -35,6 +35,15 @@ target_link_libraries(x4vr_test_share PRIVATE Threads::Threads)
 find_package(ZLIB REQUIRED)
 add_executable(x4vr_test_png_writer png_writer.cpp)
 target_link_libraries(x4vr_test_png_writer PRIVATE ZLIB::ZLIB)
+# common/x4vr_png.hpp's reader, which the layer's loading panel uses; Pillow is its
+# oracle in tests/run-png-reader.sh.
+add_executable(x4vr_test_png_reader png_reader.cpp)
+target_link_libraries(x4vr_test_png_reader PRIVATE ZLIB::ZLIB)
+# The headset's loading panel (layer/x4vr_loading_panel.hpp): language, picture,
+# placement, the gate, and on a GPU the upload. Self-checking.
+add_executable(x4vr_test_loading_panel loading_panel.cpp)
+target_link_libraries(x4vr_test_loading_panel PRIVATE ZLIB::ZLIB Vulkan::Vulkan)
+target_compile_definitions(x4vr_test_loading_panel PRIVATE X4VR_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # The injector's `env: run =` line must round-trip through a shell, because the
 # documented way to build the next take's command is to diff it against the

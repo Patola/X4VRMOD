@@ -51,6 +51,31 @@ for po in launcher/po/*.po; do
 done
 [ "${#langs[@]}" -ge 4 ] && ok "${#langs[@]} languages" || bad "only ${#langs[@]} languages"
 
+# The headset's loading panel draws two of these strings (launcher/art/vr-loading-*.png,
+# by tools/make_vr_loading.py): what it drew must still be what the catalogues say.
+drawn=$(grep -v '^#' launcher/art/vr-loading.txt)
+for l in en "${langs[@]}"; do
+    if [ "$l" = en ]; then
+        want=$(printf 'en\tX4 is loading\tThe first start can take a minute or two.')
+    else
+        want=$(python3 - "$l" <<'EOF2'
+import re, sys
+code = sys.argv[1]
+text = open(f"launcher/po/{code}.po", encoding="utf8").read()
+def tr(msgid):
+    m = re.search(r'^msgid "' + re.escape(msgid) + r'"\nmsgstr "(.*)"$', text, re.M)
+    return m.group(1) if m else "?"
+print(f"{code}\t{tr('X4 is loading')}\t{tr('The first start can take a minute or two.')}")
+EOF2
+)
+    fi
+    if grep -qxF "$want" <<<"$drawn"; then
+        ok "$l: the headset's loading panel says what the catalogue says"
+    else
+        bad "$l: the loading panel's words aren't the catalogue's; run tools/make_vr_loading.py"
+    fi
+done
+
 # A locale that shows a translation: gettext ignores LANGUAGE under C, and C.UTF-8 too.
 loc=$(locale -a 2>/dev/null | grep -iE '^(en_US|pt_BR|de_DE|fr_FR|ru_RU)\.utf-?8$' | head -1)
 msg="fov is X4's field of view, like 1.4917"

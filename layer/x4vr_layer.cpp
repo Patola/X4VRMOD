@@ -48,6 +48,8 @@
 #include "../common/x4vr_view.hpp"
 #include "../common/x4vr_immortal.hpp"
 #include "x4vr_sbs.hpp"
+#include "x4vr_loading_panel.hpp"
+#include "vr_loading_assets.hpp"
 #include "../common/x4vr_env.hpp"
 #include "../common/x4vr_share.hpp"
 #include "../common/x4vr_head6.hpp"
@@ -202,6 +204,10 @@ std::unordered_map<void *, DeviceData> &g_devices =
 // Phase 4a scaffolding, opt-in while both halves are still the same eye.
 // Flip the default once the halves are rendered per eye.
 x4vr::SbsCompositor &g_sbs = x4vr::immortal<x4vr::SbsCompositor>();
+// The headset's loading panel's one upload (x4vr_loading_panel.hpp), armed at
+// vkCreateDevice beside the composite.
+x4vr::LoadingUpload &g_loading = x4vr::immortal<x4vr::LoadingUpload>();
+x4vr::LoadingFns g_loading_fns;
 // Read through env_on because the injector mirrors this exact decision to
 // choose whether to hide the compositor's pointer. Two spellings of the same
 // rule is how they come to disagree.
@@ -14472,6 +14478,20 @@ struct VrState {
     std::atomic<bool> ui_ready{false};
     std::atomic<bool> ui_failed{false};
     std::atomic<uint64_t> ui_released{0};
+    // What the headset shows until X4 draws (x4vr_loading_panel.hpp): a quad of
+    // our art and words, from the session's first rendered frame until X4's
+    // frames come at a pace. The frame thread owns all of it but `load_busy`,
+    // which keeps X4's present thread out of the runtime while the one upload
+    // runs: vr_begin_blit checks it under sc_mu, which the upload takes to set it.
+    x4vr::xr::Swapchain load_sc;
+    uint32_t load_w = 0, load_h = 0; // the picture, in the top-left of load_sc's image
+    std::atomic<bool> load_busy{false};
+    bool load_tried = false, load_ok = false, load_gone = false;
+    x4vr::LoadingPlace load_place;
+    bool load_placed = false;
+    double load_up_at = 0.0;
+    uint32_t load_moves = 0;
+    x4vr::LoadingGate load_gate;
     // The full-screen menu warp (layer/x4vr_menu_warp.hpp), across the two
     // threads. The frame thread publishes the head's orientation and the one
     // it declares for X4's frame; the present thread turns the frame by the
@@ -14745,6 +14765,193 @@ static bool menu_warp_request(x4vr::MenuWarp::Params *out) {
     return asked;
 }
 
+// ---- the headset's loading panel (x4vr_loading_panel.hpp) ----------------
+
+static bool loading_panel_enabled() {
+    const char *e = getenv("X4VR_LOADING_PANEL");
+    return !(e && *e == '0');
+}
+
+// The words in the player's language, compiled in (layer/CMakeLists.txt).
+static const unsigned char *loading_words(const std::string &code, size_t *n) {
+#define X4VR_WORDS(c)                                                          \
+    if (code == #c) {                                                          \
+        *n = sizeof kVrLoadingWords_##c;                                       \
+        return kVrLoadingWords_##c;                                            \
+    }
+    X4VR_WORDS(pt_BR) X4VR_WORDS(fr) X4VR_WORDS(ru) X4VR_WORDS(de)
+#undef X4VR_WORDS
+    *n = sizeof kVrLoadingWords_en;
+    return kVrLoadingWords_en;
+}
+
+// The panel, once: a swapchain of the runtime's, the picture, one upload. Only
+// while X4's own copy into the runtime hasn't begun, so this thread is the one
+// talking to the runtime and its queue: vr_begin_blit waits out `load_busy`, and
+// sc_mu, which it holds to create its swapchain, is what this sets it under. No
+// lock is held across a call into the runtime.
+static bool loading_panel_build() {
+    {
+        std::lock_guard<std::mutex> lock(g_vrs.sc_mu);
+        if (g_vrs.sc_ready.load(std::memory_order_relaxed)) {
+            X4VR_LOG("loading panel: not needed — X4 drew before the headset "
+                     "showed anything");
+            return false;
+        }
+        g_vrs.load_busy.store(true, std::memory_order_release);
+    }
+    std::string why;
+    bool ok = false;
+    do {
+        if (!g_loading.ready()) {
+            why = "the layer couldn't resolve the Vulkan calls it needs";
+            break;
+        }
+        const std::string lang = x4vr::loading_language(
+            getenv("X4VR_LANGUAGE"), getenv("LANGUAGE"), getenv("LC_ALL"),
+            getenv("LC_MESSAGES"), getenv("LANG"));
+        size_t wn = 0;
+        const unsigned char *wb = loading_words(lang, &wn);
+        x4vr::png::Image art, words;
+        if (!x4vr::png::decode(kVrLoadingArt, sizeof kVrLoadingArt, &art) ||
+            !x4vr::png::decode(wb, wn, &words)) {
+            why = "its pictures didn't decode";
+            break;
+        }
+        // Any 8-bit sRGB: the picture's values are sRGB already, and only the
+        // byte order differs.
+        const VkFormat want[] = {VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB};
+        const VkFormat fmt = x4vr::xr::choose_format(g_vrs.session, want, 2, vr_say, nullptr);
+        if (fmt == VK_FORMAT_UNDEFINED) {
+            why = "the runtime offers no 8-bit sRGB format";
+            break;
+        }
+        uint32_t w = 0, h = 0;
+        {
+            std::vector<uint8_t> probe;
+            if (!x4vr::compose_loading_panel(art, words, false, &probe, &w, &h)) {
+                why = "its pictures don't fit together";
+                break;
+            }
+        }
+        // A refusal tries the next shape (x4vr_loading_panel.hpp says why);
+        // each refusal is logged with the runtime's answer.
+        const VkFormat eye_fmt =
+            x4vr::xr::choose_format(g_vrs.session, &want[1], 1, nullptr, nullptr) ==
+                    VK_FORMAT_B8G8R8A8_SRGB
+                ? VK_FORMAT_B8G8R8A8_SRGB
+                : fmt;
+        const std::vector<x4vr::LoadingShape> shapes =
+            x4vr::loading_shapes(fmt, eye_fmt, w, h);
+        const x4vr::LoadingShape *got = nullptr;
+        uint32_t tried = 0;
+        XrResult r = XR_SUCCESS;
+        for (const x4vr::LoadingShape &t : shapes) {
+            tried++;
+            r = x4vr::xr::swapchain_create(g_vrs.load_sc, g_vrs.session, t.fmt, t.w, t.h,
+                                           t.layers, 1);
+            if (r == XR_SUCCESS) {
+                got = &t;
+                break;
+            }
+            X4VR_LOG("loading panel: the runtime refused %ux%u x%u, format %d — "
+                     "xrCreateSwapchain -> %s",
+                     t.w, t.h, t.layers, (int)t.fmt, x4vr::xr::result_name(r));
+        }
+        if (!got) {
+            why = "the runtime refused every shape tried (" + std::to_string(tried) +
+                  "), the last with xrCreateSwapchain -> " + x4vr::xr::result_name(r);
+            break;
+        }
+        const uint32_t iw = got->w, ih = got->h;
+        std::vector<uint8_t> px;
+        if (!x4vr::compose_loading_panel(art, words, got->fmt == VK_FORMAT_B8G8R8A8_SRGB,
+                                         &px, &w, &h)) {
+            why = "its pictures don't fit together";
+            x4vr::xr::swapchain_destroy(g_vrs.load_sc);
+            break;
+        }
+        if (iw != w || ih != h)
+            px = x4vr::loading_pad(px, w, h, iw, ih);
+        uint32_t idx = 0;
+        if (!x4vr::xr::swapchain_acquire(g_vrs.load_sc, &idx) ||
+            idx >= g_vrs.load_sc.images.size()) {
+            why = "its image couldn't be acquired";
+            x4vr::xr::swapchain_destroy(g_vrs.load_sc);
+            break;
+        }
+        const bool up = g_loading.upload(
+            g_vrs.load_sc.images[idx], iw, ih, px, g_vrs.queue_family, g_vrs.queue_index,
+            [](VkQueue q, const VkSubmitInfo &si, VkFence f) {
+                VrQueueLock qlock; // the runtime's queue may be X4's (#36)
+                return g_loading_fns.QueueSubmit(q, 1, &si, f);
+            },
+            &why);
+        x4vr::xr::swapchain_release(g_vrs.load_sc);
+        if (!up) {
+            x4vr::xr::swapchain_destroy(g_vrs.load_sc);
+            break;
+        }
+        g_vrs.load_w = w;
+        g_vrs.load_h = h;
+        X4VR_LOG("loading panel: up — our art and the words in %s, %ux%u, format %d, "
+                 "in a %ux%u x%u image (try %u of %u), %.1f m ahead, until X4 draws "
+                 "steadily",
+                 lang.c_str(), w, h, (int)got->fmt, iw, ih, got->layers, tried,
+                 (uint32_t)shapes.size(), x4vr::kLoadingDistance);
+        ok = true;
+    } while (false);
+    g_vrs.load_busy.store(false, std::memory_order_release);
+    if (!ok)
+        X4VR_LOG("loading panel: NOT shown — %s; the headset is empty until X4 "
+                 "draws, as before",
+                 why.c_str());
+    return ok;
+}
+
+// Per headset frame that renders: whether the panel stands in for X4's image.
+// From the first such frame until X4's frames come at a pace (LoadingGate), then
+// never again, and its swapchain goes.
+static bool loading_panel_frame(const XrView *views) {
+    g_vrs.load_gate.observe(mono_now(), g_vrs.released.load(std::memory_order_relaxed));
+    if (g_vrs.load_gone)
+        return false;
+    if (g_vrs.load_gate.steady()) {
+        if (g_vrs.load_ok) {
+            X4VR_LOG("loading panel: down — X4 is drawing steadily; it stood %.1f s, "
+                     "moved %u time(s)",
+                     g_vrs.load_gate.steady_at() - g_vrs.load_up_at, g_vrs.load_moves);
+            x4vr::xr::swapchain_destroy(g_vrs.load_sc);
+        }
+        g_vrs.load_gone = true;
+        return false;
+    }
+    if (!g_vrs.load_tried) {
+        g_vrs.load_tried = true;
+        if (!loading_panel_enabled())
+            X4VR_LOG("loading panel: off (X4VR_LOADING_PANEL=0)");
+        else
+            g_vrs.load_ok = loading_panel_build();
+        g_vrs.load_up_at = mono_now();
+    }
+    if (!g_vrs.load_ok)
+        return false;
+    const float head[3] = {(views[0].pose.position.x + views[1].pose.position.x) * 0.5f,
+                           (views[0].pose.position.y + views[1].pose.position.y) * 0.5f,
+                           (views[0].pose.position.z + views[1].pose.position.z) * 0.5f};
+    const float q[4] = {views[0].pose.orientation.x, views[0].pose.orientation.y,
+                        views[0].pose.orientation.z, views[0].pose.orientation.w};
+    const float yaw = x4vr::loading_yaw(q);
+    if (!g_vrs.load_placed ||
+        x4vr::loading_yaw_apart(yaw, g_vrs.load_place.yaw) > x4vr::kLoadingRecentreDeg) {
+        if (g_vrs.load_placed)
+            g_vrs.load_moves++;
+        g_vrs.load_place = x4vr::loading_place(head, yaw, x4vr::kLoadingDistance);
+        g_vrs.load_placed = true;
+    }
+    return true;
+}
+
 bool vr_begin_blit(VkSwapchainKHR x4sc) {
     if (!g_vr || g_vrs.sc_failed.load(std::memory_order_relaxed))
         return false;
@@ -14766,6 +14973,10 @@ bool vr_begin_blit(VkSwapchainKHR x4sc) {
         return false; // mono: nothing stereo to send, and #2 owns that gap
 
     std::lock_guard<std::mutex> lock(g_vrs.sc_mu);
+    // The loading panel's one upload is talking to the runtime: this frame isn't
+    // copied, and the headset shows the panel anyway.
+    if (g_vrs.load_busy.load(std::memory_order_acquire))
+        return false;
     if (!g_vrs.sc_ready.load(std::memory_order_relaxed)) {
         // B8G8R8A8_SRGB first: it is X4's channel order, so the copy is a raw
         // byte copy. Probe run 3 measured the runtime offering it (format 50).
@@ -15418,6 +15629,9 @@ void vr_thread() {
         XrCompositionLayerQuad quad_ui = {};
         const XrCompositionLayerBaseHeader *layers[2] = {nullptr, nullptr};
         uint32_t layer_count = 0;
+        // The loading panel, instead of X4's image until X4 draws steadily.
+        XrCompositionLayerQuad quad_load = {};
+        const bool show_panel = have && should_render && loading_panel_frame(views);
         // The full-screen menu warp: whether the image the runtime will take
         // was turned, and to what. Read once, like the camera below, so both
         // eyes declare the same orientation.
@@ -15430,8 +15644,23 @@ void vr_thread() {
             std::memcpy(warp_q, g_vrs.warp_live_q, sizeof warp_q);
             warp_seq = g_vrs.warp_live_seq;
         }
-        if (have && should_render && g_vrs.sc_ready.load() &&
-            g_vrs.released.load() > 0) {
+        if (show_panel) {
+            const x4vr::LoadingPlace &lp = g_vrs.load_place;
+            quad_load.type = XR_TYPE_COMPOSITION_LAYER_QUAD;
+            quad_load.space = g_vrs.session.space;
+            quad_load.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+            quad_load.subImage.swapchain = g_vrs.load_sc.handle;
+            quad_load.subImage.imageRect = {
+                {0, 0}, {(int32_t)g_vrs.load_w, (int32_t)g_vrs.load_h}};
+            quad_load.pose.orientation = {lp.q[0], lp.q[1], lp.q[2], lp.q[3]};
+            quad_load.pose.position = {lp.pos[0], lp.pos[1], lp.pos[2]};
+            quad_load.size.width = x4vr::kLoadingWidth;
+            quad_load.size.height =
+                x4vr::kLoadingWidth * (float)g_vrs.load_h / (float)g_vrs.load_w;
+            layers[0] = (const XrCompositionLayerBaseHeader *)&quad_load;
+            layer_count = 1;
+        } else if (have && should_render && g_vrs.sc_ready.load() &&
+                   g_vrs.released.load() > 0) {
             // #75: X4's camera, read ONCE for this frame on this thread.
             //
             // Hoisted above the eye loop rather than cached inside it, because
@@ -17196,6 +17425,14 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
                     X4VR_LOG("cursor: could not resolve every entry point — "
                              "overlay off");
                 }
+            }
+            {
+                x4vr::LoadingFns lf;
+#define RESOLVE(name) lf.name = (PFN_vk##name)gdpa(*out, "vk" #name);
+                X4VR_LOADING_FNS(RESOLVE)
+#undef RESOLVE
+                g_loading_fns = lf;
+                g_loading.configure(*out, lf, mem);
             }
             {
                 x4vr::CursorFns wf;
