@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-09 10:06+0100\n"
+"POT-Creation-Date: 2026-11-09 11:51+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -882,12 +882,14 @@ msgstr ""
 
 #: launcher/gui/window.cpp
 #, qt-format
-msgid "Language"
+msgid "Launcher language"
 msgstr ""
 
 #: launcher/gui/window.cpp
 #, qt-format
-msgid "The language of this window and its help. It starts as your system's."
+msgid ""
+"The language of this window and its help, not the game's: X4 keeps the one "
+"you chose for it. It starts as your system's."
 msgstr ""
 
 #: launcher/gui/window.cpp

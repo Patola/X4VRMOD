@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-09 10:06+0100\n"
+"POT-Creation-Date: 2026-11-09 11:51+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -1023,13 +1023,13 @@ msgstr ""
 
 #: launcher/gui/window.cpp
 #, qt-format
-msgid "Language"
-msgstr "Langue"
+msgid "Last session: %1 min."
+msgstr "Dernière session : %1 min."
 
 #: launcher/gui/window.cpp
 #, qt-format
-msgid "Last session: %1 min."
-msgstr "Dernière session : %1 min."
+msgid "Launcher language"
+msgstr "Langue du lanceur"
 
 #: launcher/gui/window.cpp
 #, qt-format
@@ -1161,9 +1161,12 @@ msgstr "Le jeu lui-même tourne quand même. L'aide en dit plus."
 
 #: launcher/gui/window.cpp
 #, qt-format
-msgid "The language of this window and its help. It starts as your system's."
+msgid ""
+"The language of this window and its help, not the game's: X4 keeps the one "
+"you chose for it. It starts as your system's."
 msgstr ""
-"La langue de cette fenêtre et de son aide. Au départ, celle de votre système."
+"La langue de cette fenêtre et de son aide, pas celle du jeu : X4 garde celle "
+"que vous lui avez choisie. Au départ, celle de votre système."
 
 #: launcher/gui/window.cpp
 #, qt-format

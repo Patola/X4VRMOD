@@ -65,7 +65,7 @@ gpu row says so. It hasn't been played in a headset, and the window says that to
 each block moved.
 
 **Languages.** The window and its help are in English, Brazilian Portuguese, French, Russian
-and German: the system's language to begin with, the Language list below GameMode after that
+and German: the system's language to begin with, the Launcher language list below GameMode after that
 (profile key `language`). Words are marked in the code with `tr_`/`trn_`/`N_` in `core/` and
 `qtr`/`qtrn` in `gui/` (`core/x4vr_i18n.hpp`); a sentence with values is one `%1`..`%9`
 template, so a language can reorder them. `tools/i18n-update.sh` collects them into

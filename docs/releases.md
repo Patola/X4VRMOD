@@ -22,6 +22,8 @@ on the remote beside their `take-NNN-name` twins.
 
 ## Unreleased
 
+* **The launcher's language list is called "Launcher language"**, and its tooltip says X4 keeps
+  the language chosen for it: "Language" alone looked as if it might change the game's too.
 * **Steam installed as a Flatpak is named as unsupported**, instead of failing without a word:
   its sandbox can't reach the mod, and it makes VR harder for every game. The launcher marks
   a copy of X4 that Steam's Flatpak installed, with a help section saying why and what to use

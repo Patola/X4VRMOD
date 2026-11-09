@@ -219,8 +219,10 @@ QWidget *Window::buildSettings() {
         m_langBox->addItem(QString::fromUtf8(l.name), QString(l.code));
     m_langBox->setCurrentIndex(
         std::max(0, m_langBox->findData(QString::fromStdString(current_language()))));
-    setting(qtr("Language"), m_langBox,
-            qtr("The language of this window and its help. It starts as your system's."));
+    // The launcher's, as its name says, so nobody takes it for X4's.
+    setting(qtr("Launcher language"), m_langBox,
+            qtr("The language of this window and its help, not the game's: X4 keeps the one you "
+                "chose for it. It starts as your system's."));
     connect(m_langBox, &QComboBox::currentIndexChanged, this, [this] { languageChosen(); });
     v->addStretch(1);
     return w;

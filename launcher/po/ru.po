@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-09 10:06+0100\n"
+"POT-Creation-Date: 2026-11-09 11:51+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -1007,13 +1007,13 @@ msgstr "Можно запустить, но что-то отключено. См
 
 #: launcher/gui/window.cpp
 #, qt-format
-msgid "Language"
-msgstr "Язык"
+msgid "Last session: %1 min."
+msgstr "Последний сеанс: %1 мин."
 
 #: launcher/gui/window.cpp
 #, qt-format
-msgid "Last session: %1 min."
-msgstr "Последний сеанс: %1 мин."
+msgid "Launcher language"
+msgstr "Язык лаунчера"
 
 #: launcher/gui/window.cpp
 #, qt-format
@@ -1144,8 +1144,12 @@ msgstr "Сама игра всё равно запускается. Подроб
 
 #: launcher/gui/window.cpp
 #, qt-format
-msgid "The language of this window and its help. It starts as your system's."
-msgstr "Язык этого окна и справки. По умолчанию — язык системы."
+msgid ""
+"The language of this window and its help, not the game's: X4 keeps the one "
+"you chose for it. It starts as your system's."
+msgstr ""
+"Язык этого окна и справки, а не игры: X4 остаётся на выбранном для неё "
+"языке. По умолчанию — язык системы."
 
 #: launcher/gui/window.cpp
 #, qt-format
