@@ -13,7 +13,7 @@ modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 
 ![launcher screenshot](x4vrmod-launcher.png)
 
-[![Video Demonstration](x4vrvideo.png)](https://youtu.be/lyjp4NC8BW4)
+[![Video Demonstration](x4vrvideo.png)](https://youtu.be/peyWke7Wa-8)
 
 
 * **Easy to install, update and remove.** Packages for Arch, Ubuntu 24.04 and 26.04, Debian 13 and Fedora, plus a zip for anything else. Run the launcher and select the game's directory (if it's Steam, it's autodetected), then one button installs or updates the mod. Uninstalling lists what it will remove, then removes exactly that (the Vulkan layer and the X4 extension included), and can delete the mod's VR settings too. Your saves are never touched.
