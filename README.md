@@ -11,6 +11,42 @@ Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
 **[docs/frame-analysis.md](docs/frame-analysis.md)**; the traps X4 sets for
 modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 
+[launcher screenshot](x4vrmod-launcher.png)
+
+[video](https://youtu.be/peyWke7Wa-8)
+
+
+* **Easy to install, update and remove.** Packages for Arch, Ubuntu 24.04 and 26.04, Debian 13 and Fedora, plus a zip for anything else. Run the launcher and select the game's directory (if it's Steam, it's autodetected), then one button installs or updates the mod. Uninstalling lists what it will remove, then removes exactly that (the Vulkan layer and the X4 extension included), and can delete the mod's VR settings too. Your saves are never touched.
+* **A launcher that checks everything first**: X4, Steam, gamescope, the VR runtime and headset, the GPU, the mod itself. A list of pending actions says what's missing, and Play turns green when everything is in place. It warns about overlays and frame generators that would get in the way, and it comes with a short illustrated manual. The headset shows a loading screen while X4 starts.
+* **VR kept apart from your flat game.** In VR, X4 gets its own settings and controls, and your flat settings are never touched; both play the same savegames. Start VR from the launcher, from Steam's launch options or from a terminal, and the launcher's Flatscreen box runs plain X4.
+* **The launcher in English, Brazilian Portuguese, French, Russian and German**, including the help; these are the languages X4 has voice acting in. All of X4's 14 languages are planned for the future (but we'll need testers).
+* **True stereo from the engine.** Both eyes come from the same frame and the same game state, so there's no ghosting from eyes drawn a frame apart and no depth guessing. Shadows, volumetric nebulae and ship interiors hold up in stereo.
+* **X4's engine rewired from the inside.** Its shaders are patched to draw both eyes in one pass (Vulkan multiview), with each eye's projection built in, so the second eye's geometry adds no per-frame work. X4's own code is patched where it has to behave like a VR engine: cameras, walking, external views, aiming, menus and shadows. Every patch checks X4's bytes first and stays off if they don't match.
+* **6DOF head tracking.** Look around and lean in the cockpit; on foot your head looks while the mouse turns your body. It drives X4's own free-look camera, so hovering over and clicking things in the world still works. The eye distance follows your headset's IPD setting as you change it.
+* **The whole UI in VR.** The HUD stays fixed to the cockpit where X4 puts it, and you click it where you see it. Every menu (map, station builder, ship configuration, trading, dialogues) lines up with the pointer, and mouse steering aims at its ring.
+* **The mod's own cursor and mouse shim**: the pointer is drawn at the UI's depth in both eyes and clicks land where it appears.
+* **Sharp menus when streaming.** Full-screen menus are redrawn for where you look, so a streamer's sharp centre (WiVRn's foveated encoding, Steam Link) follows your eyes across the map.
+* **Stellar performance.** As this mode in practice reimplements X4's engine in VR, with no wasted draws or waiting periods, performance is as good as possible, with no frequency restrictions or oddities. You can have variable framerate with no issues and getting close to a busy station will not hang or desync your gameplay.
+* **External and cinematic views.** F2/F3/F4 become the whole scene, with your head turning the camera; F6 is a steady window with its overlay. Even the start menu is a stereoscopic window.
+* **X4's upscaling still works**: X4's FSR 1, FSR 3 and for NVIDIA RTX owners, DLSS, all chosen from the launcher.
+* **Compatibility with most regular extensions**: this mod actually carries only a small extension which changes cockpit camera's settings, so collisions or incompatibilities with other extensions and mods are unlikely. Reports are welcome!
+* **Debug logs and a one-click bug report**, cleaned of personal paths. Nothing is sent anywhere; you attach it yourself.
+
+**Needs:** X4: Foundations 9.00 (Steam or GOG) running natively on Arch, Ubuntu, Debian, Fedora or another distro; a Vulkan capable GPU; gamescope; and a headset on WiVRn or SteamVR (ALVR might also work). Played on a Quest 3 over WiVRn and Steam Link. **Not supported:** Running X4 through Proton, and Steam installed as a Flatpak. As it carries a small extension, X4 marks saves played with this mod as modified.
+
+Unofficial, not affiliated with Egosoft, open source (GPL-3.0): https://github.com/Patola/X4VRMOD · Release: https://github.com/Patola/X4VRMOD/releases/tag/v1.0.0-rc2
+
+It's a release candidate, so reports from other machines and headsets are what I need most. The launcher makes the bug report for you.
+
+**How it got here.** This is my fourth attempt, each one started from scratch. The earlier ones went the usual routes: SuperDepth3D's depth reconstruction, alternate-eye rendering, and OpenTrack for the head. I played them enough to know their limits: ghosting, a head that turned around the wrong point, gimbal lock, depth that broke up around the HUD, and a setup that fell apart easily. [Here's the first one](link-to-old-video), in June, to show how cumbersome it was. Those limits are why this one goes into the engine instead. To get to this point, it cost me upwards of 400h coding with AI plus about 80h of in-game testing and measurements distributed in 426 takes. The mod has more than 40,000 lines in C++ (excluding comments), 13,500+ lines in python and 5,000+ lines in shell script.
+
+**Future Plans** 
+* So some people could call this a "fake VR" mod because it doesn't use the **tracked controllers** and **Virtual Reality Inverse Kinematics (VRIK)** to infer the whole body, right? Right... FOR NOW. As this mod implements its own renderer, it is entire in the realm of possibility to add these, with floating panels, virtual controls, tactile hand interactions and complete body freedom. And indeed, it's issue 1 (Feature Request) on our issue tracker, with illustrated descriptions of what is planned: https://github.com/Patola/X4VRMOD/issues/1. But don't hold your breath: I expect this to be a very long endeavour, likely to take one year or more. When it's done, it will be a toggleable option: you will always have the option to play it on your controllers or keyboard and mouse.
+* Use of **frame generation** + **anti-lag** is being considered. Anti-lag is less effective in VR though.
+* Following this announcement, will also try and get this mod on the repository of most distributions, starting by the **AUR** from Arch.
+
+**Disclaimer**: Claude Code was used for code assistance, and also for helping creating the first draft of this post (which I altered substantially). Gemini was used for the X4VRMOD logo and artwork.
+
 > **Status: v1.0.0-rc3 — the third release candidate for 1.0, playable in VR** ([release notes](docs/releases.md)).
 > X4 runs in VR with in-engine stereo (per-eye lighting), head-look and lean
 > in the cockpit, head-look on foot, the UI on a canvas at the angle X4
