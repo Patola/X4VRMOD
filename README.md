@@ -11,7 +11,7 @@ Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
 **[docs/frame-analysis.md](docs/frame-analysis.md)**; the traps X4 sets for
 modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 
-[launcher screenshot](x4vrmod-launcher.png)
+[![launcher screenshot](x4vrmod-launcher.png)]
 
 [video](https://youtu.be/peyWke7Wa-8)
 
@@ -38,7 +38,7 @@ Unofficial, not affiliated with Egosoft, open source (GPL-3.0): https://github.c
 
 It's a release candidate, so reports from other machines and headsets are what I need most. The launcher makes the bug report for you.
 
-**How it got here.** This is my fourth attempt, each one started from scratch. The earlier ones went the usual routes: SuperDepth3D's depth reconstruction, alternate-eye rendering, and OpenTrack for the head. I played them enough to know their limits: ghosting, a head that turned around the wrong point, gimbal lock, depth that broke up around the HUD, and a setup that fell apart easily. [Here's the first one](link-to-old-video), in June, to show how cumbersome it was. Those limits are why this one goes into the engine instead. To get to this point, it cost me upwards of 400h coding with AI plus about 80h of in-game testing and measurements distributed in 426 takes. The mod has more than 40,000 lines in C++ (excluding comments), 13,500+ lines in python and 5,000+ lines in shell script.
+**How it got here.** This is my fourth attempt, each one started from scratch. The earlier ones went the usual routes: SuperDepth3D's depth reconstruction, alternate-eye rendering, and OpenTrack for the head. I played them enough to know their limits: ghosting, a head that turned around the wrong point, gimbal lock, depth that broke up around the HUD, and a setup that fell apart easily. [Here's the first one](https://youtu.be/lyjp4NC8BW4), in June, to show how cumbersome it was. Those limits are why this one goes into the engine instead. To get to this point, it cost me upwards of 400h coding with AI plus about 80h of in-game testing and measurements distributed in 426 takes. The mod has more than 40,000 lines in C++ (excluding comments), 13,500+ lines in python and 5,000+ lines in shell script.
 
 **Future Plans** 
 * So some people could call this a "fake VR" mod because it doesn't use the **tracked controllers** and **Virtual Reality Inverse Kinematics (VRIK)** to infer the whole body, right? Right... FOR NOW. As this mod implements its own renderer, it is entire in the realm of possibility to add these, with floating panels, virtual controls, tactile hand interactions and complete body freedom. And indeed, it's issue 1 (Feature Request) on our issue tracker, with illustrated descriptions of what is planned: https://github.com/Patola/X4VRMOD/issues/1. But don't hold your breath: I expect this to be a very long endeavour, likely to take one year or more. When it's done, it will be a toggleable option: you will always have the option to play it on your controllers or keyboard and mouse.
