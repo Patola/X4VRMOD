@@ -11,7 +11,7 @@ Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
 **[docs/frame-analysis.md](docs/frame-analysis.md)**; the traps X4 sets for
 modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 
-[![launcher screenshot](x4vrmod-launcher.png)]
+![launcher screenshot](x4vrmod-launcher.png)
 
 [video](https://youtu.be/peyWke7Wa-8)
 
